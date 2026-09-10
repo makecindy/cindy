@@ -7144,6 +7144,7 @@
     }
   },
   "bots": {
+    "settingsBack": "Back to Settings",
     "sidebar": {
       "newTaskWith": "Start a task with {{name}}"
     },
@@ -7277,7 +7278,7 @@
       "resume": "Resume teammate",
       "delete": "Delete permanently",
       "deleteTitle": "Permanently delete teammate",
-      "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
+      "deleteDescription": "Deleting {{name}} permanently removes the teammate’s profile, memory, working directory, channel connections and automated tasks. Task history and separate worktrees are retained.",
       "working": "Updating…",
       "actionFailed": "The action did not finish. Try again shortly.",
       "restart": "Restart teammate",
@@ -12213,6 +12214,11 @@
     "compression": "For condensing lengthy content."
   },
   "routines": {
+    "unsavedTitle": "Unsaved Changes",
+    "unsavedDescription": "Leaving will discard these changes to the routine.",
+    "discard": "Discard Changes",
+    "continueEditing": "Keep Editing",
+
     "title": "Routines",
     "add": "Add Routine",
     "back": "Back to Routines",

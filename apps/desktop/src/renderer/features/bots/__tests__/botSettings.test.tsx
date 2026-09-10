@@ -401,6 +401,7 @@ describe('Bot settings profile consolidation', () => {
 
   it('opens the managed advanced folder without exposing a second editor', async () => {
     renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.open' }));
     await waitFor(() => expect(mocks.openPath).toHaveBeenCalledWith('/managed/bots/bot-1'));
   });
@@ -408,16 +409,39 @@ describe('Bot settings profile consolidation', () => {
   it('shows the open-folder failure in place', async () => {
     mocks.openPath.mockResolvedValue({ success: false, error: 'missing' });
     renderSettings();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
     fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.open' }));
     expect((await screen.findByRole('alert')).textContent).toContain('missing');
   });
 
-  it('ignores retired tab deep links and keeps every setting on the same page', () => {
+  it('starts at grouped settings and opens real inner pages without exposing hidden inputs', async () => {
     renderSettings({}, 'settings=1&tab=growth');
-    expect(screen.queryByRole('tab')).toBeNull();
-    expect(screen.getByLabelText('bots.nameLabel')).toBeTruthy();
-    expect(screen.getByTestId('model-selector')).toBeTruthy();
-    expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
+    expect(screen.queryByRole('textbox')).toBeNull();
+    expect(screen.getByRole('button', { name: 'routines.title' })).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    expect(screen.getByRole('textbox', { name: 'bots.nameLabel' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'bots.profile.changeAvatar' })).toBeTruthy();
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'New name' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    await waitFor(() => expect(screen.getByRole('button', { name: 'bots.settingsTabs.model' })).toBeTruthy());
+    expect(mocks.updateBotProfile).toHaveBeenCalledWith('bot-1', { name: 'New name' });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsTabs.model' }));
+    expect(screen.getByRole('region', { name: 'bots.settingsTabs.model' })).toBeTruthy();
+    expect(screen.queryByRole('textbox', { name: 'bots.nameLabel' })).toBeNull();
+  });
+
+  it('keeps the current inner page and its draft when saving before navigation fails', async () => {
+    mocks.updateBotProfile.mockRejectedValue(new Error('offline'));
+    const beforeCloseRef = { current: null as (() => Promise<boolean>) | null };
+    render(<BotSettings bot={bot()} onBack={vi.fn()} onOpenSession={vi.fn()} beforeCloseRef={beforeCloseRef} />);
+    fireEvent.click(screen.getByRole('button', { name: 'bots.profile.title' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.nameLabel' }), { target: { value: 'Keep this draft' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' }));
+    await screen.findByRole('button', { name: 'bots.autosave.retry' });
+    expect((screen.getByRole('textbox', { name: 'bots.nameLabel' }) as HTMLInputElement).value).toBe('Keep this draft');
+    let allowed = true;
+    await act(async () => { allowed = await beforeCloseRef.current!(); });
+    expect(allowed).toBe(false);
   });
 
   it('does not duplicate the chat action inside the settings panel', () => {
@@ -544,6 +568,7 @@ describe('Bot settings unified autosave', () => {
   it('offers one recovery action only for a legacy profile with memory disabled', async () => {
     vi.useFakeTimers();
     renderSettings({ capabilities: capabilities({ memory: false }) });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.homeFolder.title' }));
     fireEvent.click(screen.getByRole('button', { name: 'bots.memoryRecovery.action' }));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(0);
@@ -560,7 +585,9 @@ describe('same-Bot capability updates while editing settings', () => {
     mocks.defaultModelChain = capabilities().modelChain;
   });
   async function openCapabilities() {
-    const details = screen.getByText('bots.capabilities.title').parentElement as HTMLDetailsElement;
+    const entry = screen.queryByRole('button', { name: 'bots.capabilities.title' });
+    if (entry) await act(async () => { fireEvent.click(entry); });
+    const details = screen.getByTestId('bot-capability-editor') as HTMLDetailsElement;
     await act(async () => {
       details.open = true;
       fireEvent(details, new Event('toggle'));
@@ -685,7 +712,7 @@ describe('same-Bot capability updates while editing settings', () => {
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { capabilities: { mcpServers: [] }, capabilityBaseline: { mcpServers: ['events'] } }));
     if (change === 'unavailable') expect(checkbox.disabled).toBe(true);
     else expect(screen.queryByRole('checkbox', { name: /events/ })).toBeNull();
-    const details = screen.getByText('bots.capabilities.title').parentElement as HTMLDetailsElement;
+    const details = screen.getByTestId('bot-capability-editor') as HTMLDetailsElement;
     await act(async () => { details.open = false; fireEvent(details, new Event('toggle')); });
     expect(off).toHaveBeenCalledOnce();
   });
@@ -702,7 +729,7 @@ describe('same-Bot capability updates while editing settings', () => {
     renderSettings();
     await openCapabilities();
     expect(screen.getByRole('checkbox', { name: 'old-skill' })).toBeTruthy();
-    const details = screen.getByText('bots.capabilities.title').parentElement as HTMLDetailsElement;
+    const details = screen.getByTestId('bot-capability-editor') as HTMLDetailsElement;
     await act(async () => { details.open = false; fireEvent(details, new Event('toggle')); });
     disk = ['new-skill'];
     await openCapabilities();
@@ -840,6 +867,7 @@ describe('same-Bot capability updates while editing settings', () => {
     expect((screen.getByLabelText('bots.nameLabel') as HTMLInputElement).value).toBe('Second name');
     await act(async () => { await vi.advanceTimersByTimeAsync(1600); });
     expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { name: 'Second name' });
+    await openCapabilities();
     expect((screen.getByRole('checkbox', { name: /release-check/ }) as HTMLInputElement).checked).toBe(true);
   });
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Clock3, Check, CircleAlert, Pause, Plus } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cronToHuman } from '@/features/scheduler/lib/cronToHuman';
@@ -13,6 +13,7 @@ import type {
 import { Button } from '@/components/ui/button';
 import { Input, Textarea } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
+import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import {
   DropdownMenu,
@@ -27,8 +28,20 @@ import {
 const menuClass = 'rounded-xl border-[var(--border-default)] bg-[var(--surface-elevated)] p-2';
 const rowClass = 'rounded-lg text-13 text-[var(--text-primary)] focus:bg-[var(--surface-hover)]';
 
-/** A teammate's standing instructions and OR-combined triggers, hosted in the standard sidebar. */
-export function BotRoutines({ botId }: { botId: string }) {
+/** A teammate's standing instructions and OR-combined triggers, shared by teammate settings and the task sidebar. */
+export function BotRoutines({
+  botId,
+  beforeLeaveRef,
+  embedded = false,
+}: {
+  embedded?: boolean;
+  botId: string;
+  beforeLeaveRef?: { current: (() => Promise<boolean>) | null };
+}) {
+  const { confirm } = useConfirmDialog();
+  const inFlight = useRef(false);
+  const [loading, setLoading] = useState(true);
+  const [reload, setReload] = useState(0);
   const { t, i18n } = useTranslation();
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [sources, setSources] = useState<RoutineSource[]>([]);
@@ -48,28 +61,36 @@ export function BotRoutines({ botId }: { botId: string }) {
   }, [botId]);
   useEffect(() => {
     let alive = true;
+    let request = 0;
     const load = () => {
+      const current = ++request;
       void Promise.all([
         window.electronAPI.routines.list(botId),
         window.electronAPI.routines.sources(),
       ])
         .then(([items, available]) => {
-          if (alive) {
+          if (alive && current === request) {
             setRoutines(items);
             setSources(available);
+            setError(false);
+            setLoading(false);
           }
         })
         .catch(() => {
-          if (alive) setError(true);
+          if (alive && current === request) {
+            setError(true);
+            setLoading(false);
+          }
         });
     };
+    setLoading(true);
     load();
     const unsubscribe = window.electronAPI.routines.onChanged(load);
     return () => {
       alive = false;
       unsubscribe();
     };
-  }, [botId]);
+  }, [botId, reload]);
   useEffect(() => {
     let alive = true;
     if (!selected || selected === 'new') {
@@ -92,8 +113,41 @@ export function BotRoutines({ botId }: { botId: string }) {
       alive = false;
       unsubscribe();
     };
-  }, [botId, selected]);
+  }, [botId, selected, reload]);
+  const editable = (value: RoutineInput) =>
+    JSON.stringify({
+      name: value.name,
+      prompt: value.prompt,
+      enabled: value.enabled,
+      triggers: value.triggers,
+    });
+  const saved = routines.find((item) => item.id === selected);
+  const dirty =
+    draft !== null &&
+    (saved
+      ? editable(draft) !== editable(saved)
+      : Boolean(draft.name || draft.prompt || draft.triggers.length));
+  const canLeave = useCallback(async () => {
+    if (inFlight.current) return false;
+    if (!dirty) return true;
+    return confirm({
+      presentation: 'standard',
+      title: t('routines.unsavedTitle'),
+      description: t('routines.unsavedDescription'),
+      confirmText: t('routines.discard'),
+      cancelText: t('routines.continueEditing'),
+    });
+  }, [dirty, confirm, t]);
+  useEffect(() => {
+    if (!beforeLeaveRef) return;
+    beforeLeaveRef.current = canLeave;
+    return () => {
+      beforeLeaveRef.current = null;
+    };
+  }, [beforeLeaveRef, canLeave]);
   const act = async (action: () => Promise<unknown>) => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setError(false);
     try {
@@ -102,11 +156,14 @@ export function BotRoutines({ botId }: { botId: string }) {
     } catch {
       setError(true);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
   const add = (trigger: RoutineTrigger) =>
-    setDraft((value) => (value ? { ...value, triggers: [...value.triggers, trigger] } : value));
+    setDraft((value) =>
+      value && !inFlight.current ? { ...value, triggers: [...value.triggers, trigger] } : value,
+    );
   const triggerSummary = (trigger: RoutineTrigger) => {
     if (trigger.kind === 'interval')
       return t('routines.everyMinutes', { count: trigger.intervalMs / 60_000 });
@@ -118,19 +175,31 @@ export function BotRoutines({ botId }: { botId: string }) {
   };
   const running = history.some((run) => run.status === 'running' || run.status === 'queued');
   return (
-    <section className="h-full overflow-y-auto bg-[var(--surface)] p-4 text-13 text-[var(--text-primary)]">
+    <section
+      className={
+        embedded
+          ? 'py-3 text-13 text-[var(--text-primary)]'
+          : 'h-full overflow-y-auto bg-[var(--surface)] p-4 text-13 text-[var(--text-primary)]'
+      }
+    >
       <div className="mb-5 flex items-center justify-between gap-2">
         {draft ? (
           <Button
             variant="secondary"
+            disabled={busy}
             onClick={() => {
-              setDraft(null);
-              setSelected(null);
-              setDeletePending(false);
+              void canLeave().then((allowed) => {
+                if (!allowed) return;
+                setDraft(null);
+                setSelected(null);
+                setDeletePending(false);
+              });
             }}
           >
             {t('routines.back')}
           </Button>
+        ) : embedded ? (
+          <span />
         ) : (
           <h2 className="font-medium">{t('routines.title')}</h2>
         )}
@@ -148,20 +217,31 @@ export function BotRoutines({ botId }: { botId: string }) {
         )}
       </div>
       {error && (
-        <p role="alert" className="mb-4 text-[var(--text-danger)]">
-          {t('routines.error')}
-        </p>
+        <div role="alert" className="mb-4 text-[var(--text-danger)]">
+          <p>{t('routines.error')}</p>
+          <Button
+            variant="secondary"
+            disabled={busy}
+            onClick={() => {
+              setError(false);
+              setReload((n) => n + 1);
+            }}
+          >
+            {t('bots.retry')}
+          </Button>
+        </div>
       )}
       {!draft ? (
         <div className="space-y-2">
-          {!routines.length && (
+          {loading ? <Spinner size={18} /> : null}
+          {!loading && !error && !routines.length && (
             <p className="text-[var(--text-secondary)]">{t('routines.empty')}</p>
           )}
           {routines.map((routine) => (
             <button
               key={routine.id}
               type="button"
-              className="flex w-full items-start gap-3 rounded-full px-3 py-2 text-left hover:bg-[var(--surface-hover)]"
+              className="flex min-h-12 w-full items-start gap-3 rounded-lg px-3 py-3 text-left hover:bg-[var(--surface-hover)]"
               onClick={() => {
                 setSelected(routine.id);
                 setDraft(structuredClone(routine));
@@ -184,7 +264,7 @@ export function BotRoutines({ botId }: { botId: string }) {
           ))}
         </div>
       ) : (
-        <div className="space-y-5">
+        <fieldset disabled={busy} className="min-w-0 space-y-5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <label className="flex items-center gap-2">
               <Switch
@@ -196,7 +276,13 @@ export function BotRoutines({ botId }: { botId: string }) {
             {selected !== 'new' && (
               <Button
                 variant="secondary"
-                disabled={busy || running}
+                disabled={
+                  busy ||
+                  running ||
+                  !draft.name.trim() ||
+                  !draft.prompt.trim() ||
+                  !draft.triggers.length
+                }
                 onClick={() =>
                   void act(async () => {
                     const saved = await window.electronAPI.routines.save(botId, draft, selected!);
@@ -431,7 +517,7 @@ export function BotRoutines({ botId }: { botId: string }) {
               </details>
             ))}
           </div>
-        </div>
+        </fieldset>
       )}
     </section>
   );

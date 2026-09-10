@@ -7142,6 +7142,7 @@
     }
   },
   "bots": {
+    "settingsBack": "返回设置",
     "sidebar": {
       "newTaskWith": "和{{name}}开个新任务"
     },
@@ -7275,7 +7276,7 @@
       "resume": "恢复伙伴",
       "delete": "永久删除",
       "deleteTitle": "永久删除伙伴",
-      "deleteDescription": "这会删掉 {{name}}：性格、已连的通道、定的日程都会没。删了找不回来。",
+      "deleteDescription": "删除 {{name}} 后，伙伴的资料、记忆、工作目录、通道连接与自动化任务将被移除，无法撤销。任务历史与独立 worktree会保留。",
       "working": "正在更新…",
       "actionFailed": "操作未完成，请稍后重试。",
       "restart": "重启伙伴",
@@ -12196,6 +12197,11 @@
     "compression": "用于精简冗长内容。"
   },
   "routines": {
+    "unsavedTitle": "尚有未保存的修改",
+    "unsavedDescription": "离开后会丢弃这次对例行任务的修改。",
+    "discard": "放弃修改",
+    "continueEditing": "继续编辑",
+
     "title": "例行任务",
     "add": "添加例行任务",
     "back": "返回例行任务",

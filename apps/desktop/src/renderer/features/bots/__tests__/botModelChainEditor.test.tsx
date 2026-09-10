@@ -3,8 +3,9 @@
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-const { modelSelectorProps, roster } = vi.hoisted(() => ({
+const { modelSelectorProps, roster, defaultModel } = vi.hoisted(() => ({
   modelSelectorProps: vi.fn(),
+  defaultModel: { model: 'default-model' },
   roster: { availableVendors: new Set(['cc', 'codex', 'pi']), loaded: true },
 }));
 
@@ -65,7 +66,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
 
 vi.mock('../botStore', () => ({
   getEffectiveBotModelSettings: () => ({
-    model: 'default-model',
+    model: defaultModel.model,
     providerId: null,
     effort: '',
     fastMode: false,
@@ -86,6 +87,7 @@ afterEach(() => {
   vi.clearAllMocks();
   roster.availableVendors = new Set(['cc', 'codex', 'pi']);
   roster.loaded = true;
+  defaultModel.model = 'default-model';
 });
 
 describe('BotModelChainEditor', () => {
@@ -348,4 +350,16 @@ describe('BotModelChainEditor', () => {
       },
     ]);
   });
+});
+
+it('allows explicitly choosing a backup when no valid default is available', () => {
+  defaultModel.model = '';
+  const primary = { harness: 'codex' as const, model: 'primary-model', providerId: 'openai', effort: 'medium', fastMode: false };
+  const change = vi.fn();
+  render(<BotModelChainEditor fallbackOnly value={[primary]} onChange={change} />);
+  expect(screen.queryByRole('button', { name: 'choose-official-codex-model' })).toBeNull();
+  fireEvent.click(screen.getByText('bots.modelChain.add'));
+  expect(change).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'choose-official-codex-model' }));
+  expect(change).toHaveBeenLastCalledWith([primary, { harness: 'codex', model: 'gpt-5.6-sol', providerId: 'openai', effort: 'medium', fastMode: true }]);
 });

@@ -97,44 +97,59 @@ describe('BotLifecycleSettings v1 actions', () => {
     expect(screen.queryByRole('status')).toBeNull();
   });
 
-  it('keeps recovery visible while history is collapsed and allows searching after expansion', async () => {
+  it('renders history search on its own settings page', async () => {
     render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} /></MemoryRouter>);
     const restart = screen.getByRole('button', { name: 'bots.lifecycle.restart' });
     expect(restart.closest('details')).toBeNull();
-    const history = screen.getByText('bots.historySearch.title').closest('details')!;
-    expect(history.open).toBe(false);
-    history.open = true;
+    expect(screen.getByRole('textbox', { name: 'bots.historySearch.title' })).toBeTruthy();
     fireEvent.change(screen.getByRole('textbox', { name: 'bots.historySearch.title' }), { target: { value: 'project' } });
     fireEvent.click(screen.getByRole('button', { name: 'bots.historySearch.search' }));
     await waitFor(() => expect(screen.getByText('bots.historySearch.empty')).toBeTruthy());
     expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledWith({ botId: 'bot-1', query: 'project', limit: 20 });
   });
 
-  it('offers pause while deletion stays in the teammate list', async () => {
+  it('offers deletion and restart without a pause action', async () => {
     render(
       <MemoryRouter>
         <BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} />
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText('bots.lifecycle.activeTitle')).toBeTruthy());
-    expect(screen.getByRole('button', { name: 'bots.lifecycle.pause' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'bots.lifecycle.delete' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'bots.lifecycle.pause' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'bots.lifecycle.deleteTitle' })).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.archive' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.restore' })).toBeNull();
   });
 
-  it('shows a legacy stopped Bot as read-only because deletion lives in the list', async () => {
+  it('allows deleting a legacy stopped teammate but does not offer restart', async () => {
     render(
       <MemoryRouter>
         <BotLifecycleSettings bot={bot('archived')} onOpenSession={vi.fn()} />
       </MemoryRouter>,
     );
 
-    await waitFor(() => expect(screen.getByText('bots.lifecycle.stoppedTitle')).toBeTruthy());
-    expect(screen.queryByRole('button', { name: 'bots.lifecycle.delete' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'bots.lifecycle.deleteTitle' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'bots.lifecycle.restart' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.pause' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.resume' })).toBeNull();
     expect(screen.queryByRole('button', { name: 'bots.lifecycle.restore' })).toBeNull();
   });
+});
+
+it('only deletes after confirmation and retains task history and independent worktrees', async () => {
+  const deleted = vi.fn();
+  render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} mode="actions" onDeleted={deleted} onOpenSession={vi.fn()} /></MemoryRouter>);
+  expect(screen.queryByRole('textbox')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.deleteTitle' }));
+  await screen.findByRole('dialog');
+  expect(runBotLifecycleAction).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.delete' }));
+  await waitFor(() => expect(deleted).toHaveBeenCalledWith('bot-1'));
+  expect(runBotLifecycleAction).toHaveBeenCalledWith({ botId: 'bot-1', action: 'delete', confirmName: 'Helper', keepTaskHistory: true, worktreeDisposition: 'retain' });
+});
+it('does not restart when a pending settings save cannot finish', async () => {
+  render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} mode="actions" beforeAction={async () => false} onOpenSession={vi.fn()} /></MemoryRouter>);
+  fireEvent.click(screen.getByRole('button', { name: 'bots.lifecycle.restart' }));
+  await waitFor(() => expect((screen.getByRole('button', { name: 'bots.lifecycle.restart' }) as HTMLButtonElement).disabled).toBe(false));
+  expect(runBotLifecycleAction).not.toHaveBeenCalled();
 });

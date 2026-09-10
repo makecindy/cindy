@@ -7142,6 +7142,7 @@
     }
   },
   "bots": {
+    "settingsBack": "設定に戻る",
     "sidebar": {
       "newTaskWith": "{{name}}と新しいタスクを始める"
     },
@@ -7275,7 +7276,7 @@
       "resume": "仲間を再開",
       "delete": "完全に削除",
       "deleteTitle": "仲間を完全に削除",
-      "deleteDescription": "{{name}} を削除します。性格・つないだチャネル・予定した実行がすべてなくなり、元に戻せません。",
+      "deleteDescription": "{{name}} を削除すると、プロフィール、記憶、作業ディレクトリ、チャンネル接続、自動化タスクが完全に削除されます。タスク履歴と独立したworktreeは保持されます。",
       "working": "更新中…",
       "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。",
       "restart": "チームメイトを再起動",
@@ -12196,6 +12197,11 @@
     "compression": "長い内容を短くまとめるために。"
   },
   "routines": {
+    "unsavedTitle": "未保存の変更があります",
+    "unsavedDescription": "戻ると、このルーチンへの変更が破棄されます。",
+    "discard": "変更を破棄",
+    "continueEditing": "編集を続ける",
+
     "title": "ルーティン",
     "add": "ルーティンを追加",
     "back": "ルーティンに戻る",

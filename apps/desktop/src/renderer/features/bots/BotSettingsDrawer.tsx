@@ -1,3 +1,4 @@
+import { useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { matchPath, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -18,7 +19,9 @@ export function BotSettingsDrawer() {
   const bot = bots.find((candidate) => candidate.id === match?.params.botId) ?? null;
   const open = searchParams.get('settings') === '1' && bot !== null;
 
-  const close = () => {
+  const closing = useRef(false);
+  const beforeCloseRef = useRef<(() => Promise<boolean>) | null>(null);
+  const performClose = () => {
     if (bot?.status === 'archived') {
       navigate('/bots', { replace: true });
       return;
@@ -31,6 +34,18 @@ export function BotSettingsDrawer() {
       },
       { replace: true },
     );
+  };
+
+  const close = () => {
+    if (closing.current) return;
+    closing.current = true;
+    void (beforeCloseRef.current?.() ?? Promise.resolve(true))
+      .then((allowed) => {
+        if (allowed) performClose();
+      })
+      .finally(() => {
+        closing.current = false;
+      });
   };
 
   if (!bot) return null;
@@ -58,8 +73,9 @@ export function BotSettingsDrawer() {
             <BotPronounProvider bot={bot}>
               <BotSettings
                 key={bot.id}
+                beforeCloseRef={beforeCloseRef}
                 bot={bot}
-                onBack={close}
+                onBack={performClose}
                 onOpenSession={(sessionId, searchJump) => {
                   const projection = bot.sessions.find((item) => item.id === sessionId);
                   const route =

@@ -7142,6 +7142,7 @@
     }
   },
   "bots": {
+    "settingsBack": "설정으로 돌아가기",
     "sidebar": {
       "newTaskWith": "{{name}}와(과) 새 작업 시작"
     },
@@ -7275,7 +7276,7 @@
       "resume": "동료 재개",
       "delete": "영구 삭제",
       "deleteTitle": "동료 영구 삭제",
-      "deleteDescription": "{{name}}을(를) 삭제합니다. 성격, 연결한 채널, 예약한 실행이 모두 사라지며 되돌릴 수 없어요.",
+      "deleteDescription": "{{name}}을(를) 삭제하면 프로필, 메모리, 작업 디렉터리, 채널 연결 및 자동화 작업이 영구적으로 삭제됩니다. 작업 기록과 별도의 worktree는 유지됩니다.",
       "working": "업데이트 중…",
       "actionFailed": "작업이 완료되지 않았습니다. 잠시 후 다시 시도하세요.",
       "restart": "팀원 다시 시작",
@@ -12196,6 +12197,11 @@
     "compression": "긴 내용을 간결하게 줄입니다."
   },
   "routines": {
+    "unsavedTitle": "저장하지 않은 변경 사항",
+    "unsavedDescription": "돌아가면 이 루틴의 변경 사항이 삭제됩니다.",
+    "discard": "변경 사항 버리기",
+    "continueEditing": "계속 편집",
+
     "title": "루틴",
     "add": "루틴 추가",
     "back": "루틴으로 돌아가기",
