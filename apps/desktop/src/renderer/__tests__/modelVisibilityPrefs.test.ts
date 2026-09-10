@@ -807,14 +807,36 @@ describe('compact model defaults upgrade', () => {
     expect(JSON.parse(memStorage.getItem(scopedKey)!)).toEqual({});
   });
 
-  it('does not auto-enable image models for existing accounts', async () => {
+  it('grandfathers existing image and video models when the media axis first appears', async () => {
     ownerClaim.profileOrigin = 'existing';
     const snapshot = {
       ...provider,
-      imageModels: [{ id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' }],
+      imageModels: [
+        { id: 'openai/gpt-image-2', name: 'GPT Image 2' },
+        { id: 'google/gemini-3-pro-image', name: 'Gemini 3 Pro Image' },
+        { id: 'openai/old-image', name: 'Old Image', defaultEnabled: false },
+      ],
+      videoModels: [{ id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' }],
     } as unknown as ProviderView;
     const prefs = await upgrade('owner-a', 1, snapshot);
-    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2.5-sunburst' })).toBe(false);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2' })).toBe(true);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'google/gemini-3-pro-image' })).toBe(true);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/old-image' })).toBe(false);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'xai/grok-imagine-video' })).toBe(true);
+
+    vi.resetModules();
+    const later = {
+      ...snapshot,
+      imageModels: [
+        ...(snapshot.imageModels ?? []),
+        { id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' },
+      ],
+    } as unknown as ProviderView;
+    const next = await upgrade('owner-a', 1, later);
+    expect(next.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2' })).toBe(true);
+    expect(next.isModelEnabled('claude-code', 'xd', { id: 'google/gemini-3-pro-image' })).toBe(true);
+    expect(next.isModelEnabled('claude-code', 'xd', { id: 'xai/grok-imagine-video' })).toBe(true);
+    expect(next.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2.5-sunburst' })).toBe(false);
   });
 
   it('initializes image and video display switches from catalog defaults', async () => {

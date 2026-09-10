@@ -538,9 +538,10 @@ export async function migrateModelVisibilityDefaults(
         const mediaModels = [...(provider.imageModels ?? []), ...(provider.videoModels ?? [])];
         if (mediaModels.length) {
           const mediaScope = JSON.stringify([provider.id, 'media']);
-          // Same contract as chat scopes: only first-run accounts snapshot catalog
-          // defaults. Existing accounts without a media axis must not auto-enable.
-          const initializeMedia = state.eligibleForDefaults && !next.scopes.includes(mediaScope);
+          // Media had no display switch before this axis. First time we see a
+          // provider's image/video list, grandfather current catalog defaults so
+          // existing accounts keep listing ready models. Later additions stay off.
+          const initializeMedia = !next.scopes.includes(mediaScope);
           const mediaAgent = provider.agents[0] ?? 'claude-code';
           for (const model of mediaModels) {
             const key = keyOf(mediaAgent, provider.id, model.id);
