@@ -1622,6 +1622,50 @@ describe('groupWorkRuns — work-group collapsing', () => {
     expect(findRestorableViewportItemIdx(visibleItems, 'seg-t1')).toBe(0);
   });
 
+  it('restores a completed group after an older activity joins the same turn', () => {
+    const tail = [mkAssistant('draft', 'Reading.'), mkTool('tool-later', 'Read'), mkAssistant('final', 'Done.')];
+    const previous = build([mkUser('user'), ...tail], false).find((item) => item.type === 'work_group')!;
+    const expanded = build([mkUser('user'), mkTool('tool-earlier', 'Bash'), ...tail], false);
+    expect(previous.key).toBe('work-summary-tool-later');
+    const index = findRestorableViewportItemIdx(expanded, previous.key);
+    expect(index).toBe(1);
+    expect(expanded[index].key).toBe('work-summary-tool-earlier');
+  });
+
+  it('restores an anchor to a nested deferred group without requiring loaded children', () => {
+    const group = build(
+      [mkUser('user'), mkTool('tool-earlier', 'Bash'), mkAssistant('final', 'Done.')], false,
+    ).find((item): item is Extract<RenderItem, { type: 'work_group' }> => item.type === 'work_group')!;
+    const deferred = { ...group, key: 'work-tool-later', children: [] };
+    const regrouped = { ...group, children: [deferred] };
+    expect(findRestorableViewportItemIdx([regrouped], 'work-summary-tool-later')).toBe(0);
+    expect(findRestorableViewportItemIdx([regrouped], 'work-summary-missing')).toBe(-1);
+  });
+
+  it.each(['work-rs_old-anchor', 'work-earlier|work-rs_old-anchor'])(
+    'restores a remote summary through its retained deferred identity: %s',
+    (key) => {
+      const group = build(
+        [mkUser('user'), mkTool('new-anchor', 'Bash'), mkAssistant('final', 'Done.')],
+        false,
+      ).find((item): item is Extract<RenderItem, { type: 'work_group' }> => item.type === 'work_group')!;
+      const child = {
+        ...group,
+        children: [],
+        deferred: {
+          key, expanded: false, loading: false, failed: false,
+          toggle: () => { throw new Error('Recovery must not load details'); },
+          retry: () => { throw new Error('Recovery must not load details'); },
+        },
+      };
+      const items = [{ ...group, children: [child] }];
+      expect(findRestorableViewportItemIdx(items, 'work-summary-rs_old-anchor')).toBe(0);
+      expect(findRestorableViewportItemIdx(items, 'work-rs_old-anchor')).toBe(0);
+      expect(findRestorableViewportItemIdx(items, 'work-summary-anchor')).toBe(-1);
+      expect(findRestorableViewportItemIdx(items, 'work-summary-missing')).toBe(-1);
+    },
+  );
+
   it('keeps completed prior turns folded while a later turn streams', () => {
     const items = build(
       [
