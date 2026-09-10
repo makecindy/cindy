@@ -31,6 +31,7 @@ import { useAnyGhostUnread } from '@/cindy-brain/ghostUnreadStore';
 import { GhostPanelRestoreEntry } from '@/cindy-brain/GhostPanelRestoreEntry';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { SidebarInlineSearch } from '@/features/cc-agent/sidebar/SidebarInlineSearch';
+import { SidebarIconButton } from './SidebarIconButton';
 import { useConversationSearchContext } from '@/features/cc-agent/sidebar/conversationSearchContext';
 import { GhostMainViewNavEntries } from './GhostMainViewNavEntries';
 
@@ -152,14 +153,12 @@ export function SidebarTopNav({
   if (section === 'rail') {
     return (
       <div className="flex shrink-0 justify-center px-2 pt-2 pb-1">
-        <button
-          type="button"
+        <SidebarIconButton
+          icon={BotsActionIcon}
+          label={botsActionLabel}
+          variant="rail"
           onClick={() => navigateToView(isBotsView ? 'cc-agent' : 'bots')}
-          className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--sidebar-nav-text)] transition-colors hover:bg-sidebar-item-hover"
-          aria-label={botsActionLabel}
-        >
-          <BotsActionIcon size={15} strokeWidth={1.8} />
-        </button>
+        />
       </div>
     );
   }
