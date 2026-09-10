@@ -5015,6 +5015,10 @@ function MarkdownBody({
     markdownImageCacheKey,
     onOpenPayload,
   ]);
+  const openMarkdownMedia = useCallback((url: string, title: string, kind: 'video') => {
+    if (!onOpenPayload) return;
+    onOpenPayload(buildMediaPayload({ kind, url, title, previewable: false }, title));
+  }, [onOpenPayload]);
   // Preserve the inline renderer while streaming or unrelated task metadata
   // changes; referenced task title changes still refresh every affected chip.
   const remoteSessions = useRemoteSessions();
@@ -5039,6 +5043,7 @@ function MarkdownBody({
         baseStyle,
         keyPrefix,
         onOpenImage: openMarkdownImage,
+        onOpenMedia: openMarkdownMedia,
         onOpenSessionLink,
         sessionReferenceDetails,
         sessionLinkTitles,
@@ -5048,7 +5053,7 @@ function MarkdownBody({
     ),
     // renderInline also reads translated fallback labels. Invalidate completed
     // memoized text blocks when useTranslation refreshes its bound translator.
-    [onOpenSessionLink, openMarkdownImage, sessionLinkTitles, sessionReferenceDetails, streaming, styles, t],
+    [onOpenSessionLink, openMarkdownImage, openMarkdownMedia, sessionLinkTitles, sessionReferenceDetails, streaming, styles, t],
   );
   const textRunGroupingOptions = Platform.OS === 'android'
     ? ANDROID_SELECTABLE_TEXT_RUN_GROUPING_OPTIONS
@@ -5566,6 +5571,7 @@ function renderInline(
     /** text_run 合并树里多个块共父,key 需要块级前缀防冲突。 */
     keyPrefix?: string;
     onOpenImage?: (url: string, alt?: string) => void;
+    onOpenMedia?: (url: string, title: string, kind: 'video') => void;
     onOpenPayload?: (payload: MessagePayload) => void;
     onOpenSessionLink?: (url: string) => void;
     sessionReferenceDetails?: Readonly<Record<string, string>>;
@@ -5591,6 +5597,21 @@ function renderInline(
     case 'text':
       return <SpanText key={spanKey(`text:${index}`)} style={ctx.baseStyle}>{inline.text}</SpanText>;
     case 'link': {
+      if (inline.managedMediaKind) {
+        const mediaKind = inline.managedMediaKind;
+        const openManagedMedia = ctx.onOpenMedia
+          ? () => ctx.onOpenMedia?.(inline.url, inline.text, mediaKind)
+          : undefined;
+        return (
+          <SpanText
+            key={spanKey(`media-link:${index}:${inline.url}`)}
+            onPress={openManagedMedia}
+            style={clickableInlineStyle(styles, openManagedMedia, ctx.baseStyle)}
+          >
+            {inline.text}
+          </SpanText>
+        );
+      }
       const session = parseSessionDeepLinkUrl(inline.url);
       if (session) {
         return (

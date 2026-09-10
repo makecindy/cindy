@@ -19,7 +19,7 @@ export type MobileMarkdownInline =
   // 普通正文,套等宽会让同一句里点亮/未点亮的路径在字体、底色、下划线三处齐变;作者
   // 手写且 label 像文件名的仍保留 chip(那是作者的排版意图)。见 DESIGN.md §14.5。
   // 与桌面 remarkLocalPathLinks 打的 data-bare-path 标记是同一件事的两端实现。
-  | { type: 'link'; text: string; url: string; bare?: true }
+  | { type: 'link'; text: string; url: string; bare?: true; managedMediaKind?: 'video' }
   | { type: 'strong'; text: string }
   | { type: 'emphasis'; text: string }
   | { type: 'code'; text: string }
@@ -1082,19 +1082,25 @@ function findNextInlineToken(
     // 兼容存量消息)session|project/(session 渲染成会话 chip;project 在
     // renderInline 里显示 label 纯文本,不落 Linking.openURL——桌面端粘贴
     // chip 化后会按 [标题](深链) 发送,不 tokenize 会把整段渲染成原始
-    // markdown 源码,review P1)。
+    // markdown 源码,review P1)。cindy-media 只收字节仓严格地址中的视频
+    // 后缀;由 managedMediaKind 让渲染层走既有媒体查看器/远端取件,绝不把
+    // 私有 scheme 交给 Linking.openURL。
     matchRegex(
       input,
       from,
       new RegExp(
-        `\\[([^\\]]+)\\]\\(((?:https?://|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/)[^)\\s]+)\\)`,
+        `\\[([^\\]]+)\\]\\(((?:https?://|(?:${DEEP_LINK_SCHEME_GROUP})://(?:session|project)/)[^)\\s]+|cindy-media://blobs/[0-9a-f]{64}\\.(?:mp4|webm|mov))\\)`,
         'g',
       ),
-      (match) => ({
-        type: 'link' as const,
-        text: match[1],
-        url: trimUrlPunctuation(match[2]),
-      }),
+      (match) => {
+        const url = trimUrlPunctuation(match[2]);
+        return {
+          type: 'link' as const,
+          text: match[1],
+          url,
+          ...(url.startsWith('cindy-media://') ? { managedMediaKind: 'video' as const } : {}),
+        };
+      },
     ),
     // 本地路径链接:[README.md](/abs/path/README.md:17) 这类模型高频输出形态。
     // URL 经 classifyChatPathLinkTarget 判形状(http/session 之外的路径形态才收),
