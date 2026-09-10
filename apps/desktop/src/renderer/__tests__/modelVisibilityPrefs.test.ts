@@ -35,6 +35,29 @@ class MemLocalStorage {
   }
 }
 
+// Model Chromium's Web Locks explicitly. The Node test runner may also expose
+// navigator.locks; that native implementation is not the renderer environment.
+class Locks {
+  chains = new Map<string, Promise<unknown>>();
+  request<T>(key: string, run: () => T | Promise<T>): Promise<T> {
+    const next = (this.chains.get(key) ?? Promise.resolve()).then(run);
+    this.chains.set(key, next.catch(() => undefined));
+    return next;
+  }
+  hold(key = 'xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a'): () => void {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    void this.request(key, () => held);
+    return release;
+  }
+  async settle(): Promise<void> {
+    for (let i = 0; i < 5; i += 1) {
+      await Promise.all([...this.chains.values()]);
+      await Promise.resolve();
+    }
+  }
+}
+
 let memStorage: MemLocalStorage;
 const syncModelVisibility = vi.fn(async () => undefined);
 const logToMain = vi.fn();
@@ -69,6 +92,7 @@ function setOwnerClaim(
 
 beforeEach(() => {
   memStorage = new MemLocalStorage();
+  vi.stubGlobal('navigator', { locks: new Locks() });
   syncModelVisibility.mockClear();
   logToMain.mockClear();
   setOwnerClaim('owner-a', 1);
@@ -250,26 +274,6 @@ describe('model visibility across renderer windows', () => {
 
   // Shared queue models Chromium's cross-renderer Web Locks. Separate module instances
   // share storage and the lock manager, but each retains its own owner/cache state.
-  class Locks {
-    chains = new Map<string, Promise<unknown>>();
-    request<T>(key: string, run: () => T | Promise<T>): Promise<T> {
-      const next = (this.chains.get(key) ?? Promise.resolve()).then(run);
-      this.chains.set(key, next.catch(() => undefined));
-      return next;
-    }
-    hold(key = initKey): () => void {
-      let release!: () => void;
-      const held = new Promise<void>((resolve) => { release = resolve; });
-      void this.request(key, () => held);
-      return release;
-    }
-    async settle(): Promise<void> {
-      for (let i = 0; i < 5; i += 1) {
-        await Promise.all([...this.chains.values()]);
-        await Promise.resolve();
-      }
-    }
-  }
   let locks: Locks;
   let handlers: Array<(event: StorageEvent) => void>;
 
