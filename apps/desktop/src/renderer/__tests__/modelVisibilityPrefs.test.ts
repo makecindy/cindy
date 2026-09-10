@@ -810,6 +810,18 @@ describe('modelVisibilityPrefs store', () => {
     expect(isModelEnabled('claude-code', 'xd', { id: 'claude-sonnet-4-6', defaultEnabled: true })).toBe(false);
   });
 
+  it('写入显式开关时清除对应的 Restore defaults 标记', async () => {
+    const module = await loadModuleForOwner();
+    expect(await module.resetModelVisibilities('xd', [{ agent: 'claude-code', modelId: 'claude-opus-4-8' }])).toBe(true);
+    expect(await module.setModelVisibility('claude-code', 'xd', 'claude-opus-4-8', false)).toBe(true);
+    const init = JSON.parse(memStorage.getItem('xdt:modelVisibilityPrefs:v1.initialization.owner.owner-a')!);
+    expect(init.followCatalogKeys).not.toContain('claude-code:xd:claude-opus-4-8');
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.owner-a', '{ not valid json');
+    vi.resetModules();
+    const restarted = await loadModuleForOwner();
+    expect(restarted.isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8', defaultEnabled: true })).toBe(false);
+  });
+
   it('owner-scoped 配置损坏时不把目录默认当成开启', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.owner-a', '{ not valid json');
     memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');

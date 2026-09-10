@@ -634,14 +634,24 @@ async function setVisibilityTargets(
     const map = load();
     let changed = false;
     const next = { ...map };
+    const keys: string[] = [];
     for (const { agent, modelId } of targets) {
       const k = keyOf(agent, providerId, modelId);
+      keys.push(k);
       if (next[k] !== enabled) {
         next[k] = enabled;
         changed = true;
       }
     }
-    return changed ? persist(next, context) : true;
+    const state = initialization ?? emptyInitialization();
+    const follows = new Set(state.followCatalogKeys);
+    let followChanged = false;
+    for (const key of keys) {
+      if (follows.delete(key)) followChanged = true;
+    }
+    if (followChanged && !saveInitialization({ ...state, followCatalogKeys: [...follows] })) return false;
+    if (!changed) return true;
+    return persist(next, context);
   });
 }
 
