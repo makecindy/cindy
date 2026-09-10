@@ -192,8 +192,8 @@ export function RemoteDesktopPanel({
           contentContainerStyle={styles.panelContent}
         >
           {children}
+          {footer && <View style={styles.panelFooter}>{footer}</View>}
         </ScrollView>
-        {footer && <View style={styles.panelFooter}>{footer}</View>}
       </View>
     </View>
   );
