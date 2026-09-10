@@ -68,6 +68,7 @@ const fixture = vi.hoisted(() => ({
   status: "online",
   appState: null as null | ((state: string) => void),
   crashed: null as null | (() => void),
+  webViewProps: null as null | Record<string, unknown>,
   retryPermissions: null as null | (() => void),
 }));
 vi.mock("react-native", async () => {
@@ -278,6 +279,7 @@ vi.mock("../PermissionGuide", () => ({
 }));
 vi.mock("react-native-webview", () => ({
   WebView: forwardRef((p: any, ref) => {
+    fixture.webViewProps = p;
     fixture.message = p.onMessage;
     fixture.crashed = p.onContentProcessDidTerminate;
     useImperativeHandle(ref, () => ({
@@ -313,6 +315,7 @@ beforeEach(() => {
   fixture.lockSupported = true;
   fixture.views = {};
   fixture.keyboardListeners = {};
+  fixture.webViewProps = null;
   vi.useFakeTimers();
   fixture.focused = true;
   fixture.status = "online";
@@ -377,6 +380,16 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  it("keeps iOS data detection disabled without passing its prop to Android", async () => {
+    await act(async () => {});
+    expect(fixture.webViewProps).toMatchObject({ dataDetectorTypes: "none" });
+
+    fixture.platform = "android";
+    await act(async () => root.render(<RemoteDesktopScreen />));
+
+    expect(fixture.webViewProps).not.toHaveProperty("dataDetectorTypes");
+  });
+
   it("fetches ICE configuration only through native auth and sends sanitized short-term credentials", async () => {
     await connect();
     const iceServers = [

@@ -1527,7 +1527,7 @@ export default function RemoteDesktopScreen() {
             hideKeyboardAccessoryView
             textInteractionEnabled={false}
             allowsLinkPreview={false}
-            dataDetectorTypes="none"
+            {...(Platform.OS === "ios" ? { dataDetectorTypes: "none" as const } : {})}
             javaScriptEnabled
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}
