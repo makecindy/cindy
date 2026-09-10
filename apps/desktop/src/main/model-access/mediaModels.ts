@@ -503,9 +503,16 @@ export async function listExecutableMediaModels(
     snapshot.models,
     undefined,
     options.includeDisabled ? undefined : readModelDisableOverrides(),
-  ).filter((model) =>
-    capabilities.every((capability) => supportsMediaCapability(model.modalities, capability)),
-  );
+  ).filter((model) => {
+    if (!capabilities.every((capability) => supportsMediaCapability(model.modalities, capability))) {
+      return false;
+    }
+    return isCatalogMediaModelVisible(
+      CINDY_AI_PROVIDER_ID,
+      model.id,
+      'defaultEnabled' in model ? model.defaultEnabled : undefined,
+    );
+  });
   const gatewayModels: ExecutableMediaModel[] = [];
   const unavailable: UnavailableMediaModel[] = [];
   for (const model of candidates) {

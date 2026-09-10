@@ -397,6 +397,13 @@ describe('listAvailableMediaModels', () => {
     await expect(
       listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
     ).resolves.toMatchObject({ models: [{ id: modelId }] });
+    resetExecutableMediaModelCache();
+    isCatalogMediaModelVisibleMock.mockImplementation(
+      (_providerId: string, id: string, _defaultEnabled?: boolean) => id !== modelId,
+    );
+    await expect(
+      listExecutableMediaModels(['image.generate'], { forceRefresh: true }),
+    ).resolves.toMatchObject({ models: [] });
     expect(
       isMediaModelExecutableForGuide(modelId, 'openai-images-v1', 'image.generate'),
     ).toBe(true);

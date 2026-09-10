@@ -3782,7 +3782,7 @@ async function getGhostConfigurableMediaModels(
     // carried image-provider models. Video providers are host-owned (the video
     // registry executes them), so add their local projection explicitly and do
     // not let an unavailable Gateway snapshot hide an otherwise ready xAI list.
-    const localVideoModels = type === 'video' ? listLocalProviderVideoModels() : [];
+    const localVideoModels = type === 'video' ? listLocalProviderVideoModels(true) : [];
     const availability = await loadPluginMediaAvailability(
       type,
       localVideoModels.length,
@@ -3793,6 +3793,12 @@ async function getGhostConfigurableMediaModels(
         models.findIndex(
           (candidate) => candidate.id === model.id && candidate.providerId === model.providerId,
         ) === index,
+    ).filter((model) =>
+      isCatalogMediaModelVisible(
+        model.providerId,
+        model.id,
+        'defaultEnabled' in model ? model.defaultEnabled : undefined,
+      ),
     );
     const candidates = selectExecutableCoreMediaModels(allModels, type);
     const models = isProviderBlindCoreArt(ghost)
