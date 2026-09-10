@@ -10998,7 +10998,7 @@ function ensureInitialMessages(sessionId: string): void {
             costUsd: session.totalCostUsd ?? s.agentStatus.costUsd,
             contextTokens: session.contextTokens || s.agentStatus.contextTokens,
             contextWindow: session.contextWindow || s.agentStatus.contextWindow,
-            contextWindowFromRuntime: session.contextWindow > 0 || s.agentStatus.contextWindowFromRuntime,
+            // Read projection can supply catalog metadata; only status events prove runtime origin.
           };
         }
         return Object.keys(updates).length > 0 ? { ...s, ...updates } : s;

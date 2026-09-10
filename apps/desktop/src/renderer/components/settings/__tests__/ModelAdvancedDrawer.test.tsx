@@ -65,7 +65,7 @@ const provider = {
   agents: ['codex', 'claude-code'],
   models: {},
 } as ProviderView;
-function drawer(primary = model, bridgeDefault = primary.defaultEffort, bridgeEfforts = primary.efforts) {
+function drawer(primary = model, bridgeDefault = primary.defaultEffort, bridgeEfforts = primary.efforts, source = provider) {
   const row = {
     id: primary.id,
     name: primary.name,
@@ -77,7 +77,7 @@ function drawer(primary = model, bridgeDefault = primary.defaultEffort, bridgeEf
   };
   return (
     <ModelAdvancedDrawer
-      provider={provider}
+      provider={source}
       row={row}
       open
       onOpenChange={vi.fn()}
@@ -99,7 +99,7 @@ beforeEach(() => {
 });
 
 describe('model advanced editor', () => {
-  it('rejects new 1K settings but accepts 10K without rewriting existing small overrides', () => {
+  it('rejects new small settings but accepts 100K without rewriting existing small overrides', () => {
     mocks.limit = 1_000;
     draw();
     const input = screen.getByRole('textbox') as HTMLInputElement;
@@ -111,15 +111,29 @@ describe('model advanced editor', () => {
     fireEvent.blur(input);
     expect(input.getAttribute('aria-invalid')).toBe('true');
     expect(mocks.setLimit).not.toHaveBeenCalled();
-    fireEvent.change(input, { target: { value: '10' } });
+    fireEvent.change(input, { target: { value: '99' } });
     fireEvent.blur(input);
-    expect(mocks.setLimit).toHaveBeenLastCalledWith(10_000);
+    expect(mocks.setLimit).not.toHaveBeenCalled();
+    fireEvent.change(input, { target: { value: '100' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(100_000);
     fireEvent.change(input, { target: { value: '1' } });
     fireEvent.blur(input);
     expect(mocks.setLimit).toHaveBeenCalledTimes(1);
   });
 
-  it.each([2_048, 4_096, 8_192])('keeps a small model with %s native tokens editable below 10K', (window) => {
+  it.each(['cindy-local-ollama', 'ollama', 'cindy-local-lmstudio'])('keeps %s editable at 1K even when the catalog advertises a large window', (id) => {
+    render(drawer(model, model.defaultEffort, model.efforts, { ...provider, id, source: 'user' }));
+    const input = screen.getByRole('textbox');
+    fireEvent.change(input, { target: { value: '4' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(4_000);
+    fireEvent.change(input, { target: { value: '1' } });
+    fireEvent.blur(input);
+    expect(mocks.setLimit).toHaveBeenLastCalledWith(1_000);
+  });
+
+  it.each([2_048, 4_096, 8_192, 32_768])('keeps a small model with %s native tokens editable below 100K', (window) => {
     draw({ ...model, contextWindow: window, contextWindowMax: window });
     const input = screen.getByRole('textbox');
     const floor = Math.floor(window / 1000);
