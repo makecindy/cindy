@@ -7179,6 +7179,7 @@
       "openFailed": "동료 폴더를 열 수 없습니다."
     },
     "profile": {
+      "title": "프로필",
       "changeAvatar": "아바타 변경",
       "avatarFailed": "아바타를 변경할 수 없습니다. 5MB 미만의 PNG, JPEG 또는 WebP 이미지를 선택하세요.",
       "summary": "자기소개",
@@ -7260,8 +7261,9 @@
       "empty": "일치하는 동료 기록이 없습니다."
     },
     "lifecycle": {
+      "restartHint": "답장이 오지 않나요?",
       "stoppedBots": "확인이 필요한 동료",
-      "title": "실행 상태 및 기록",
+      "title": "동료 관리",
       "description": "동료를 일시 중지하거나 재개하고 이전 메시지와 결과를 찾습니다.",
       "activeTitle": "동료 실행 중",
       "activeDescription": "메시지를 받고 백그라운드 작업을 실행하며 다른 동료에게 연락할 수 있습니다.",

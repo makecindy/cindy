@@ -7181,6 +7181,7 @@
       "openFailed": "The teammate folder could not be opened."
     },
     "profile": {
+      "title": "Profile",
       "changeAvatar": "Change avatar",
       "avatarFailed": "Couldn’t change the avatar. Choose a PNG, JPEG, or WebP image under 5 MB.",
       "summary": "Self-introduction",
@@ -7262,8 +7263,9 @@
       "empty": "No matching teammate history was found."
     },
     "lifecycle": {
+      "restartHint": "No reply yet?",
       "stoppedBots": "Teammates needing attention",
-      "title": "Activity and history",
+      "title": "Teammate Management",
       "description": "Pause or resume this teammate and find past messages and results.",
       "activeTitle": "Teammate is active",
       "activeDescription": "Can receive messages, run background tasks, and contact other teammates.",

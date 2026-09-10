@@ -385,6 +385,7 @@ describe('Bot settings profile consolidation', () => {
     expect(screen.getByText('bots.homeFolder.title')).toBeTruthy();
     expect(screen.getByTestId('model-selector')).toBeTruthy();
     expect(screen.getByTestId('bot-lifecycle-settings')).toBeTruthy();
+    expect(screen.getByTestId('bot-lifecycle-settings').closest('details')).toBeNull();
     expect(screen.queryByText('bots.settingsTabs.growth')).toBeNull();
     expect(screen.queryByText('bots.persona.adjustButton')).toBeNull();
     expect(screen.queryByRole('dialog')).toBeNull();

@@ -61,7 +61,7 @@ beforeEach(() => {
         bots: {
           health: vi.fn(async () => null),
           lifecycleEvents: vi.fn(async () => []),
-          searchHistory: vi.fn(async () => ({ sessions: [] })),
+          searchHistory: vi.fn(async () => ({ results: [] })),
         },
       },
     },
@@ -95,6 +95,19 @@ describe('BotLifecycleSettings v1 actions', () => {
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
     expect((screen.getByRole('button', { name: 'bots.lifecycle.restart' }) as HTMLButtonElement).disabled).toBe(false);
     expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('keeps recovery visible while history is collapsed and allows searching after expansion', async () => {
+    render(<MemoryRouter><BotLifecycleSettings bot={bot('active')} onOpenSession={vi.fn()} /></MemoryRouter>);
+    const restart = screen.getByRole('button', { name: 'bots.lifecycle.restart' });
+    expect(restart.closest('details')).toBeNull();
+    const history = screen.getByText('bots.historySearch.title').closest('details')!;
+    expect(history.open).toBe(false);
+    history.open = true;
+    fireEvent.change(screen.getByRole('textbox', { name: 'bots.historySearch.title' }), { target: { value: 'project' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.historySearch.search' }));
+    await waitFor(() => expect(screen.getByText('bots.historySearch.empty')).toBeTruthy());
+    expect(window.electronAPI.localDb.bots.searchHistory).toHaveBeenCalledWith({ botId: 'bot-1', query: 'project', limit: 20 });
   });
 
   it('offers pause while deletion stays in the teammate list', async () => {

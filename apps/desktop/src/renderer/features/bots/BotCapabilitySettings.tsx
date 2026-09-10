@@ -1,3 +1,4 @@
+import { ChevronDown } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useBotTranslation } from './botPronounContext';
 import {
@@ -137,15 +138,16 @@ export function BotCapabilitySettings({
   }, [open, catalogKey, bot.id, bot.canonicalSessionId, modelChainKey]);
   return (
     <details
-      className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]"
+      className="group border-t border-[var(--border-default)] pt-3"
       onToggle={(event) => {
         setOpen(event.currentTarget.open);
       }}
     >
-      <summary className="cursor-pointer px-4 py-3 text-12 font-medium text-[var(--text-secondary)]">
+      <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 py-2 text-13 text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
         {t('bots.capabilities.title')}
+        <ChevronDown size={15} aria-hidden className="shrink-0 group-open:rotate-180" />
       </summary>
-      <div className="space-y-4 border-t border-[var(--border-default)] p-4">
+      <div className="space-y-4 px-3 pt-4">
         <input
           aria-label={t('bots.capabilities.search')}
           placeholder={t('bots.capabilities.search')}

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { PauseCircle, PlayCircle, RotateCcw, Search, Settings2 } from 'lucide-react';
+import { PauseCircle, PlayCircle, RotateCcw, Search, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import type { ConversationSearchJump } from '../../../shared/conversationSearchJump';
@@ -7,7 +7,6 @@ import type { ConversationSearchResponse } from '../../../shared/conversationSea
 import type { BotProfile } from './botStore';
 import { runBotLifecycleAction } from './botStore';
 import { Button } from '@/components/ui/button';
-import { BotSettingsBlock } from './BotSettingsBlock';
 
 /**
  * User-facing Bot management only. Health counters, delivery queues, Routes and
@@ -78,14 +77,16 @@ export function BotLifecycleSettings({
   };
 
   return (
-    <BotSettingsBlock
-      icon={Settings2}
-      title={t('bots.lifecycle.title')}
-      hint={t('bots.lifecycle.description')}
+    <section
+      aria-label={t('bots.lifecycle.title')}
+      className="min-w-0 border-t border-[var(--border-default)] pt-5"
     >
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] p-4">
+      <h2 className="text-14 font-medium text-[var(--text-primary)]">
+        {t('bots.lifecycle.title')}
+      </h2>
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3">
         <div>
-          <p className="text-12 font-medium text-[var(--text-primary)]">
+          <p className="text-13 font-medium text-[var(--text-primary)]">
             {isArchived
               ? t('bots.lifecycle.stoppedTitle')
               : isPaused
@@ -102,34 +103,40 @@ export function BotLifecycleSettings({
         </div>
         <div className="flex flex-wrap justify-end gap-2">
           {!isArchived ? (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="lg"
               onClick={() => void runLifecycleAction(isPaused ? 'resume' : 'pause')}
               disabled={actionBusy !== null}
-              className="inline-flex h-9 items-center gap-2 rounded-full border border-[var(--border-default)] px-4 text-12 font-medium text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
             >
               {isPaused ? <PlayCircle size={15} /> : <PauseCircle size={15} />}
-              {actionBusy
+              {actionBusy === (isPaused ? 'resume' : 'pause')
                 ? t('bots.lifecycle.working')
                 : isPaused
                   ? t('bots.lifecycle.resume')
                   : t('bots.lifecycle.pause')}
-            </button>
+            </Button>
           ) : null}
         </div>
       </div>
 
       {!isArchived && !isPaused && bot.status !== 'deleting' ? (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] p-4">
-          <p className="min-w-0 flex-1 text-12 leading-5 text-[var(--text-secondary)]">
-            {t('bots.lifecycle.restartDescription')}
-          </p>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-x-4 gap-y-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+          <div className="min-w-0 flex-1 basis-48">
+            <p className="text-13 font-medium text-[var(--text-primary)]">
+              {t('bots.lifecycle.restartHint')}
+            </p>
+            <p className="mt-1 text-12 leading-5 text-[var(--text-secondary)]">
+              {t('bots.lifecycle.restartDescription')}
+            </p>
+          </div>
           <Button
             variant="secondary"
             size="lg"
             onClick={() => void runLifecycleAction('restart')}
             disabled={actionBusy !== null}
             aria-busy={actionBusy === 'restart'}
+            className="ml-auto shrink-0"
           >
             <RotateCcw size={15} aria-hidden />
             {t(actionBusy === 'restart' ? 'bots.lifecycle.restarting' : 'bots.lifecycle.restart')}
@@ -148,116 +155,120 @@ export function BotLifecycleSettings({
         </p>
       ) : null}
 
-      <div className="mt-4 rounded-xl border border-[var(--border-default)] p-4">
-        <p className="text-12 font-medium text-[var(--text-primary)]">
+      <details className="group mt-5">
+        <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 py-2 text-13 text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
           {t('bots.historySearch.title')}
-        </p>
-        <p className="mt-1 text-11 leading-5 text-[var(--text-tertiary)]">
-          {t('bots.historySearch.description')}
-        </p>
-        <form
-          className="mt-3 flex gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void searchHistory();
-          }}
-        >
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={t('bots.historySearch.placeholder')}
-            className="h-9 min-w-0 flex-1 rounded-lg border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
-          />
-          <button
-            type="submit"
-            disabled={searching || !query.trim()}
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-[var(--accent-cta-bg)] px-3 text-12 font-medium text-[var(--accent-pure-cta-fg)] disabled:opacity-50"
+          <ChevronDown size={15} aria-hidden className="shrink-0 group-open:rotate-180" />
+        </summary>
+        <div className="px-3 pt-3">
+          <p className="mt-1 text-11 leading-5 text-[var(--text-tertiary)]">
+            {t('bots.historySearch.description')}
+          </p>
+          <form
+            className="mt-3 flex gap-2"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void searchHistory();
+            }}
           >
-            <Search size={14} />
-            {searching ? t('bots.historySearch.searching') : t('bots.historySearch.search')}
-          </button>
-        </form>
-        {searchError ? (
-          <p className="mt-3 text-11 text-[var(--text-danger)]">{t('bots.historySearch.failed')}</p>
-        ) : searchResult ? (
-          searchResult.results.length === 0 ? (
-            <p className="mt-3 text-11 text-[var(--text-tertiary)]">
-              {t('bots.historySearch.empty')}
+            <input
+              aria-label={t('bots.historySearch.title')}
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder={t('bots.historySearch.placeholder')}
+              className="h-9 min-w-0 flex-1 rounded-full border border-[var(--border-default)] bg-[var(--surface)] px-3 text-12 text-[var(--text-primary)] outline-none focus:ring-2 focus:ring-[var(--focus-ring-soft)]"
+            />
+            <Button type="submit" variant="secondary" size="lg" disabled={searching || !query.trim()}>
+              <Search size={14} />
+              {searching ? t('bots.historySearch.searching') : t('bots.historySearch.search')}
+            </Button>
+          </form>
+          {searchError ? (
+            <p className="mt-3 text-11 text-[var(--text-danger)]">
+              {t('bots.historySearch.failed')}
+            </p>
+          ) : searchResult ? (
+            searchResult.results.length === 0 ? (
+              <p className="mt-3 text-11 text-[var(--text-tertiary)]">
+                {t('bots.historySearch.empty')}
+              </p>
+            ) : (
+              <div className="mt-3 flex flex-col gap-2">
+                {searchResult.results.map((item) => {
+                  const hit = item.contentHit;
+                  return (
+                    <button
+                      type="button"
+                      key={item.session.id}
+                      onClick={() =>
+                        onOpenSession(
+                          item.session.id,
+                          hit
+                            ? {
+                                kind: 'conversation-search',
+                                sessionId: item.session.id,
+                                messageId: hit.messageId,
+                                messageClientId: hit.messageClientId,
+                              }
+                            : undefined,
+                        )
+                      }
+                      className="rounded-xl border border-[var(--border-default)] px-3 py-2 text-left hover:bg-[var(--surface-hover)]"
+                    >
+                      <span className="block truncate text-13 font-medium text-[var(--text-primary)]">
+                        {item.session.title}
+                      </span>
+                      {hit ? (
+                        <span className="mt-1 line-clamp-2 block text-11 leading-5 text-[var(--text-secondary)]">
+                          {hit.preview}
+                        </span>
+                      ) : null}
+                      <span className="mt-1 block text-10 text-[var(--text-tertiary)]">
+                        {new Date(hit?.createdAt ?? item.session.updatedAt).toLocaleString()}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            )
+          ) : null}
+        </div>
+
+        <div className="mt-4 px-3">
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-13 font-medium text-[var(--text-primary)]">
+              {t('bots.historyTitle')}
+            </p>
+            <span className="text-11 text-[var(--text-tertiary)]">{archivedSessions.length}</span>
+          </div>
+          {archivedSessions.length === 0 ? (
+            <p className="mt-3 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-11 text-[var(--text-tertiary)]">
+              {t('bots.historyEmpty')}
             </p>
           ) : (
             <div className="mt-3 flex flex-col gap-2">
-              {searchResult.results.map((item) => {
-                const hit = item.contentHit;
-                return (
-                  <button
-                    type="button"
-                    key={item.session.id}
-                    onClick={() =>
-                      onOpenSession(
-                        item.session.id,
-                        hit
-                          ? {
-                              kind: 'conversation-search',
-                              sessionId: item.session.id,
-                              messageId: hit.messageId,
-                              messageClientId: hit.messageClientId,
-                            }
-                          : undefined,
-                      )
-                    }
-                    className="rounded-xl border border-[var(--border-default)] px-3 py-2 text-left hover:bg-[var(--surface-hover)]"
-                  >
-                    <span className="block truncate text-12 font-medium text-[var(--text-primary)]">
-                      {item.session.title}
+              {archivedSessions.map((item) => (
+                <button
+                  type="button"
+                  key={item.id}
+                  onClick={() => onOpenSession(item.id)}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-2 text-left hover:bg-[var(--surface-hover)]"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-12 text-[var(--text-primary)]">
+                      {item.title}
                     </span>
-                    {hit ? (
-                      <span className="mt-1 line-clamp-2 block text-11 leading-5 text-[var(--text-secondary)]">
-                        {hit.preview}
-                      </span>
-                    ) : null}
-                    <span className="mt-1 block text-10 text-[var(--text-tertiary)]">
-                      {new Date(hit?.createdAt ?? item.session.updatedAt).toLocaleString()}
+                    <span className="block text-10 text-[var(--text-tertiary)]">
+                      {new Date(item.updatedAt).toLocaleString()}
                     </span>
-                  </button>
-                );
-              })}
+                  </span>
+                  <span className="text-11 text-[var(--text-secondary)]">{t('bots.open')}</span>
+                </button>
+              ))}
             </div>
-          )
-        ) : null}
-      </div>
-
-      <div className="mt-4">
-        <div className="flex items-center justify-between gap-3">
-          <p className="text-12 font-medium text-[var(--text-primary)]">{t('bots.historyTitle')}</p>
-          <span className="text-11 text-[var(--text-tertiary)]">{archivedSessions.length}</span>
+          )}
         </div>
-        {archivedSessions.length === 0 ? (
-          <p className="mt-3 rounded-xl border border-dashed border-[var(--border-default)] px-3 py-3 text-11 text-[var(--text-tertiary)]">
-            {t('bots.historyEmpty')}
-          </p>
-        ) : (
-          <div className="mt-3 flex flex-col gap-2">
-            {archivedSessions.map((item) => (
-              <button
-                type="button"
-                key={item.id}
-                onClick={() => onOpenSession(item.id)}
-                className="flex items-center justify-between gap-3 rounded-xl border border-[var(--border-default)] px-3 py-2 text-left hover:bg-[var(--surface-hover)]"
-              >
-                <span className="min-w-0">
-                  <span className="block truncate text-12 text-[var(--text-primary)]">
-                    {item.title}
-                  </span>
-                  <span className="block text-10 text-[var(--text-tertiary)]">
-                    {new Date(item.updatedAt).toLocaleString()}
-                  </span>
-                </span>
-                <span className="text-11 text-[var(--text-secondary)]">{t('bots.open')}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
-    </BotSettingsBlock>
+      </details>
+    </section>
   );
 }

@@ -1,7 +1,7 @@
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
-import { Bot, Check, FolderOpen } from 'lucide-react';
+import { Bot, Check, ChevronDown, FolderOpen } from 'lucide-react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useBotTranslation } from './botPronounContext';
 
@@ -36,7 +36,12 @@ import { BotLifecycleSettings } from './BotLifecycleSettings';
 import { BotInvitationWelcome } from './BotInvitationWelcome';
 import { BotModelChainEditor } from './BotModelChainEditor';
 import { BotCapabilitySettings } from './BotCapabilitySettings';
-import { botSettingsChanges, normalizeBotSettingsPayload, reconcileBotSettingsDraft, type BotSettingsPayload } from './botSettingsAutosave';
+import {
+  botSettingsChanges,
+  normalizeBotSettingsPayload,
+  reconcileBotSettingsDraft,
+  type BotSettingsPayload,
+} from './botSettingsAutosave';
 import { useBotSettingsAutosave } from './useBotSettingsAutosave';
 
 const DAY_MS = 24 * 60 * 60 * 1_000;
@@ -226,8 +231,9 @@ export function BotSettings({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8 sm:px-7">
-      <div className="mx-auto flex w-full max-w-xl flex-col gap-5 pb-10">
-        <div className="flex min-h-5 items-center justify-end pt-1">
+      <div className="mx-auto flex w-full max-w-xl flex-col gap-6 pb-4">
+        <div className="flex min-h-5 items-center justify-between gap-3 pt-4">
+          <h2 className="text-14 font-medium text-[var(--text-primary)]">{t('bots.profile.title')}</h2>
           {autosave.status === 'saving' ? (
             <span
               role="status"
@@ -256,60 +262,65 @@ export function BotSettings({
           ) : null}
         </div>
 
-        <BotBasicProfileFields
-          value={{ name, description, avatar, avatarColor }}
-          avatarBusy={avatarBusy}
-          onChooseAvatar={() => void handleChooseAvatar()}
-          onChange={(next, kind) => {
-            setName(next.name);
-            setDescription(next.description);
-            setAvatar(next.avatar);
-            setAvatarColor(next.avatarColor);
-            autosave.onEdit(kind);
-          }}
-        />
-        {bot.invitation?.avatarSkipped ? (
-          <p className="text-12 text-[var(--text-tertiary)]">
-            {t('bots.invitation.avatarSkipped')}
-            <button
-              type="button"
-              onClick={() => {
-                setPortraitRetryFailed(false);
-                void retryBotInvitation(bot.id).catch(() => setPortraitRetryFailed(true));
-              }}
-              disabled={bot.invitation.stage === 'avatar'}
-              className="ml-2 text-[var(--text-primary)] underline underline-offset-2 disabled:opacity-50"
-            >
-              {t('commonUi.retry')}
-            </button>
-            {portraitRetryFailed ? (
-              <span role="alert">{t('bots.invitation.retryFailed')}</span>
-            ) : null}
-          </p>
-        ) : null}
-        {avatarError ? (
-          <p className="text-center text-11 text-[var(--text-danger)]" role="alert">
-            {t('bots.profile.avatarFailed')}
-          </p>
-        ) : null}
-
-        <details className="text-13 text-[var(--text-secondary)]">
-          <summary className="cursor-pointer py-2">{t('bots.profile.personality')}</summary>
-          <textarea
-            aria-label={t('bots.profile.personality')}
-            value={identitySource}
-            onChange={(event) => {
-              setIdentitySource(event.target.value);
-              autosave.onEdit('text');
+        <section aria-label={t('bots.profile.title')} className="flex min-w-0 flex-col gap-4">
+          <BotBasicProfileFields
+            value={{ name, description, avatar, avatarColor }}
+            avatarBusy={avatarBusy}
+            onChooseAvatar={() => void handleChooseAvatar()}
+            onChange={(next, kind) => {
+              setName(next.name);
+              setDescription(next.description);
+              setAvatar(next.avatar);
+              setAvatarColor(next.avatarColor);
+              autosave.onEdit(kind);
             }}
-            rows={6}
-            className="mt-2 w-full resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-3 text-13 leading-6 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
           />
-        </details>
+          {bot.invitation?.avatarSkipped ? (
+            <p className="text-12 text-[var(--text-tertiary)]">
+              {t('bots.invitation.avatarSkipped')}
+              <button
+                type="button"
+                onClick={() => {
+                  setPortraitRetryFailed(false);
+                  void retryBotInvitation(bot.id).catch(() => setPortraitRetryFailed(true));
+                }}
+                disabled={bot.invitation.stage === 'avatar'}
+                className="ml-2 text-[var(--text-primary)] underline underline-offset-2 disabled:opacity-50"
+              >
+                {t('commonUi.retry')}
+              </button>
+              {portraitRetryFailed ? (
+                <span role="alert">{t('bots.invitation.retryFailed')}</span>
+              ) : null}
+            </p>
+          ) : null}
+          {avatarError ? (
+            <p className="text-center text-11 text-[var(--text-danger)]" role="alert">
+              {t('bots.profile.avatarFailed')}
+            </p>
+          ) : null}
+
+          <details className="group text-13 text-[var(--text-secondary)]">
+            <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 py-2 outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
+              {t('bots.profile.personality')}
+              <ChevronDown size={15} aria-hidden className="shrink-0 group-open:rotate-180" />
+            </summary>
+            <textarea
+              aria-label={t('bots.profile.personality')}
+              value={identitySource}
+              onChange={(event) => {
+                setIdentitySource(event.target.value);
+                autosave.onEdit('text');
+              }}
+              rows={6}
+              className="mt-2 w-full resize-y rounded-lg border border-[var(--border-default)] bg-[var(--surface)] p-3 text-13 leading-6 text-[var(--text-primary)] outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+            />
+          </details>
+        </section>
 
         <section
           aria-label={t('bots.settingsTabs.model')}
-          className="min-w-0 border-t border-[var(--border-default)] pt-4"
+          className="min-w-0 border-t border-[var(--border-default)] pt-5"
         >
           <div data-testid="bot-model-controls" className="min-w-0">
             <BotModelChainEditor
@@ -349,6 +360,8 @@ export function BotSettings({
           </div>
         </section>
 
+        <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
+
         <BotCapabilitySettings
           bot={bot}
           capabilities={capabilities}
@@ -357,19 +370,22 @@ export function BotSettings({
             if (kind === 'skill') setSelectedSkills(values);
             setCapabilities((current) => ({
               ...current,
-              ...(kind === 'skill' ? { skillMode: 'allowlist' as const }
-                : kind === 'mcp' ? { mcpMode: 'allowlist' as const, mcpServers: values }
+              ...(kind === 'skill'
+                ? { skillMode: 'allowlist' as const }
+                : kind === 'mcp'
+                  ? { mcpMode: 'allowlist' as const, mcpServers: values }
                   : { toolsetMode: 'allowlist' as const, toolsets: values }),
             }));
             autosave.onEdit('instant');
           }}
         />
 
-        <details className="group rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]">
-          <summary className="cursor-pointer list-none px-4 py-3 text-12 font-medium text-[var(--text-secondary)] marker:content-none">
+        <details className="group border-t border-[var(--border-default)] pt-3">
+          <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 py-2 text-13 text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden">
             {t('bots.homeFolder.title')}
+            <ChevronDown size={15} aria-hidden className="shrink-0 group-open:rotate-180" />
           </summary>
-          <div className="border-t border-[var(--border-default)] p-4">
+          <div className="mt-4 flex flex-col gap-5 px-3">
             <div className="flex items-start gap-3">
               <FolderOpen size={16} className="mt-0.5 shrink-0 text-[var(--text-tertiary)]" />
               <div className="min-w-0 flex-1">
@@ -390,7 +406,7 @@ export function BotSettings({
                         setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
                     });
                   }}
-                  className="mt-3 h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+                  className="mt-3 h-9 rounded-full border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
                 >
                   {t('bots.homeFolder.open')}
                 </button>
@@ -398,7 +414,7 @@ export function BotSettings({
                   <button
                     type="button"
                     onClick={() => updateCapability('memory', true)}
-                    className="ml-2 mt-3 h-8 rounded-lg border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
+                    className="ml-2 mt-3 h-9 rounded-full border border-[var(--border-default)] px-3 text-11 text-[var(--text-primary)] hover:bg-[var(--surface-hover)]"
                   >
                     {t('bots.memoryRecovery.action')}
                   </button>
@@ -409,9 +425,6 @@ export function BotSettings({
                   </p>
                 ) : null}
               </div>
-            </div>
-            <div className="mt-4">
-              <BotLifecycleSettings bot={bot} onOpenSession={onOpenSession} />
             </div>
           </div>
         </details>

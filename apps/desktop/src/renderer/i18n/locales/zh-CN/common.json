@@ -7179,6 +7179,7 @@
       "openFailed": "无法打开伙伴文件夹。"
     },
     "profile": {
+      "title": "资料",
       "changeAvatar": "更换头像",
       "avatarFailed": "无法更换头像，请选择小于 5 MB 的 PNG、JPEG 或 WebP 图片。",
       "summary": "自我介绍",
@@ -7260,8 +7261,9 @@
       "empty": "没有找到匹配的伙伴历史。"
     },
     "lifecycle": {
+      "restartHint": "一直没有回复？",
       "stoppedBots": "需要处理的伙伴",
-      "title": "运行与历史",
+      "title": "伙伴管理",
       "description": "暂停或恢复伙伴，查找过去的消息和成果。",
       "activeTitle": "伙伴正在运行",
       "activeDescription": "可以接收消息、执行后台任务和联系其他伙伴。",

@@ -7179,6 +7179,7 @@
       "openFailed": "無法開啟夥伴資料夾。"
     },
     "profile": {
+      "title": "資料",
       "changeAvatar": "更換頭像",
       "avatarFailed": "無法更換頭像，請選擇小於 5 MB 的 PNG、JPEG 或 WebP 圖片。",
       "summary": "自我介紹",
@@ -7260,8 +7261,9 @@
       "empty": "找不到符合的夥伴歷史。"
     },
     "lifecycle": {
+      "restartHint": "一直沒有回覆？",
       "stoppedBots": "需要處理的夥伴",
-      "title": "執行與歷史",
+      "title": "夥伴管理",
       "description": "暫停或恢復夥伴，尋找過去的訊息與成果。",
       "activeTitle": "夥伴正在執行",
       "activeDescription": "可以接收訊息、執行背景任務並聯絡其他夥伴。",

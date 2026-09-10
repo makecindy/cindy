@@ -49,7 +49,7 @@ export function BotSettingsDrawer() {
                 {t('bots.settings')}
               </Dialog.Title>
               <Dialog.Close
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 aria-label={t('bots.close')}
               >
                 <X size={17} />
