@@ -159,6 +159,17 @@ afterEach(() => {
 });
 
 describe('BotsSidebar rail return', () => {
+  it.each(['/plugins', '/settings', '/bots-other'])('hides the retained return entry on %s', async (path) => {
+    mocks.collapsed = true;
+    const view = await renderSidebar();
+    expect(screen.getByRole('button', { name: 'sidebar.backToSessions' })).toBeTruthy();
+
+    // The slot retains the same element after the bots feature unregisters.
+    mocks.pathname = path;
+    view.rerender(<div>{mocks.registered.node}</div>);
+    expect(screen.queryByRole('button', { name: 'sidebar.backToSessions' })).toBeNull();
+  });
+
   it.each([
     '/cc-agent/session-1?remoteHostId=host-1#message-2',
     undefined,

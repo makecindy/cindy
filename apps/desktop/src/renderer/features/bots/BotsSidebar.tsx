@@ -10,7 +10,7 @@ import {
   Search,
   Trash2,
 } from 'lucide-react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
@@ -71,6 +71,7 @@ function BotsSidebarContent() {
   const { navigateToView } = useActiveMainView();
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { pathname } = useLocation();
   const { botId, sessionId, deviceId } = useParams();
   const remoteBots = useRemoteBots();
   const bots = useBotProfiles();
@@ -251,12 +252,14 @@ function BotsSidebarContent() {
   if (collapsed) {
     return (
       <div className="flex flex-col items-center gap-2 px-2 pt-3">
-        <SidebarIconButton
-          icon={ArrowLeft}
-          label={t('sidebar.backToSessions')}
-          variant="rail"
-          onClick={() => navigateToView('cc-agent')}
-        />
+        {(pathname === '/bots' || pathname.startsWith('/bots/')) && (
+          <SidebarIconButton
+            icon={ArrowLeft}
+            label={t('sidebar.backToSessions')}
+            variant="rail"
+            onClick={() => navigateToView('cc-agent')}
+          />
+        )}
         <BotCreateMenu compact />
       </div>
     );

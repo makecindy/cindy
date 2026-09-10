@@ -63,11 +63,15 @@ export function useActiveMainView() {
   // Per-view last full pathname — switching back to a tab restores its sub-route
   // (e.g. /cc-agent/<sessionId>, /skillhub/local/...) instead of dropping to the bare prefix.
   useEffect(() => {
+    if (
+      history.current.ignoredLocationKey !== undefined &&
+      history.current.ignoredLocationKey === location.key
+    ) return;
     if (matchedKey) {
       history.current.lastMatchedKey = matchedKey;
       history.current.paths[matchedKey] = location.pathname + location.search + location.hash;
     }
-  }, [history, matchedKey, location.pathname, location.search, location.hash]);
+  }, [history, matchedKey, location.key, location.pathname, location.search, location.hash]);
 
   const isGhostMainView = location.pathname === '/apps' || location.pathname.startsWith('/apps/');
   const activeKey: MainViewKey | null =

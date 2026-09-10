@@ -33,6 +33,7 @@ function NavigationHarness() {
       <output data-testid="location">{location.pathname + location.search + location.hash}</output>
       <button onClick={() => navigate('/bots/teammate-2')}>Open teammate</button>
       <button onClick={() => navigate('/plugins')}>Open plugins</button>
+      <button onClick={() => navigate('/cc-agent/new-owner-session?remoteHostId=new-host#message-3')}>Open task</button>
     </>
   );
 }
@@ -48,6 +49,34 @@ function Harness({ initialPath, owner = 'one' }: { initialPath: string; owner?: 
 }
 
 describe('Sidebar teammate return action', () => {
+  it('does not seed a new owner from the unchanged router entry', () => {
+    const oldPath = '/cc-agent/old-owner-session?remoteHostId=old-host#message-2';
+    function OwnerRouter({ owner }: { owner: string }) {
+      const location = useLocation();
+      return (
+        <MainViewHistoryProvider ownerKey={owner} locationKey={location.key}>
+          <NavigationHarness key={owner} />
+        </MainViewHistoryProvider>
+      );
+    }
+    function PersistentRouter({ owner }: { owner: string }) {
+      return <MemoryRouter initialEntries={[oldPath]}><OwnerRouter owner={owner} /></MemoryRouter>;
+    }
+    const view = render(<PersistentRouter owner="one" />);
+    view.rerender(<PersistentRouter owner="two" />);
+    expect(screen.getByTestId('location').textContent).toBe(oldPath);
+    fireEvent.click(screen.getByRole('button', { name: '伙伴' }));
+    fireEvent.click(screen.getByRole('button', { name: '返回任务' }));
+    expect(screen.getByTestId('location').textContent).toBe('/cc-agent');
+
+    const newPath = '/cc-agent/new-owner-session?remoteHostId=new-host#message-3';
+    fireEvent.click(screen.getByRole('button', { name: 'Open task' }));
+    view.rerender(<PersistentRouter owner="two" />);
+    fireEvent.click(screen.getByRole('button', { name: '伙伴' }));
+    fireEvent.click(screen.getByRole('button', { name: '返回任务' }));
+    expect(screen.getByTestId('location').textContent).toBe(newPath);
+  });
+
   it('changes the existing entry and restores both destinations across sidebar remounts', () => {
     const sessionPath = '/cc-agent/session-1?remoteHostId=host-1#message-2';
     render(<Harness initialPath={sessionPath} />);

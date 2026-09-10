@@ -133,7 +133,7 @@ function OwnerScopedRouter() {
   const { dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
   const ownerKey = `${dataOwnerId ?? 'signed-out'}:${dataOwnerRecoveryEpoch}`;
   return (
-    <MainViewHistoryProvider key={ownerKey}>
+    <MainViewHistoryProvider ownerKey={ownerKey} locationKey={router.state.location.key}>
       <RouterProvider key={ownerKey} router={router} />
     </MainViewHistoryProvider>
   );
