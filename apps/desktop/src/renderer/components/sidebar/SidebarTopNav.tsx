@@ -5,6 +5,7 @@
  * 最小化插件面板恢复入口(按需) / 搜索。
  *   - 新建 / 自动任务:项目(cc-agent)视图的动作 —— 在任意视图点击都跳回项目视图并执行。
  *   - Plugins:主视图切换(navigateToView),命中当前视图时高亮。
+ *   - 伙伴:原位切换为「返回任务」动作,随目标更换文案和图标,不显示选中高亮。
  *   - 搜索(SidebarInlineSearch):静息态与其余行同款「🔍 搜索」;hover / 聚焦
  *     就地展开成搜索框,结果由下方功能槽(CCAgentSidebarUpper)替换列表绘制。搜索状态经
  *     ConversationSearchProvider 的 context 共享(行在此、结果在功能槽,两者是兄弟子树)。
@@ -20,7 +21,7 @@
  */
 
 import { useCallback } from 'react';
-import { Bot, CirclePlus, Plug, Timer } from 'lucide-react';
+import { ArrowLeft, Bot, CirclePlus, Plug, Timer } from 'lucide-react';
 import { useNavigate, useMatch } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
@@ -127,24 +128,21 @@ export function SidebarTopNav({
       {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
     </button>
   ) : null;
+  const isBotsView = activeKey === 'bots';
+  const botsActionLabel = t(isBotsView ? 'sidebar.backToSessions' : 'sidebar.tabs.bots');
+  const BotsActionIcon = isBotsView ? ArrowLeft : Bot;
   const botsRow = showScrollable ? (
     <button
-      onClick={() => navigateToView('bots')}
-      className={cn(ROW_CLASS, activeKey === 'bots' && ROW_ACTIVE_CLASS)}
-      aria-label={t('sidebar.tabs.bots')}
-      aria-current={activeKey === 'bots' ? 'page' : undefined}
+      onClick={() => navigateToView(isBotsView ? 'cc-agent' : 'bots')}
+      className={ROW_CLASS}
+      aria-label={botsActionLabel}
     >
-      <Bot
+      <BotsActionIcon
         size={15}
         strokeWidth={1.8}
-        className={cn(
-          'shrink-0',
-          activeKey === 'bots'
-            ? 'text-sidebar-item-active-foreground'
-            : 'text-[var(--sidebar-nav-text)]',
-        )}
+        className="shrink-0 text-[var(--sidebar-nav-text)]"
       />
-      <span className="leading-none">{t('sidebar.tabs.bots')}</span>
+      <span className="leading-none">{botsActionLabel}</span>
     </button>
   ) : null;
   const mainViewRows = showScrollable ? <GhostMainViewNavEntries variant="row" /> : null;

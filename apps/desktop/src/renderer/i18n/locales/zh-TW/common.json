@@ -7069,6 +7069,7 @@
     }
   },
   "sidebar": {
+    "backToSessions": "返回任務",
     "vendorReadiness": {
       "loading": "正在檢查可用狀態",
       "ready": "已就緒",

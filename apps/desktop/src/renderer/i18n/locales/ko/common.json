@@ -7069,6 +7069,7 @@
     }
   },
   "sidebar": {
+    "backToSessions": "세션으로 돌아가기",
     "vendorReadiness": {
       "loading": "사용 가능 여부 확인 중",
       "ready": "준비됨",

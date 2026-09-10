@@ -7069,6 +7069,7 @@
     }
   },
   "sidebar": {
+    "backToSessions": "セッションに戻る",
     "vendorReadiness": {
       "loading": "利用可否を確認中",
       "ready": "準備完了",

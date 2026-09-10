@@ -7071,6 +7071,7 @@
     }
   },
   "sidebar": {
+    "backToSessions": "Back to sessions",
     "vendorReadiness": {
       "loading": "Checking availability",
       "ready": "Ready",
