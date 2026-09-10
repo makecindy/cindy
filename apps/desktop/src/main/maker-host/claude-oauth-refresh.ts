@@ -54,7 +54,7 @@ import {
   type ClaudeAiOAuth,
 } from './claude-credentials-store.js';
 import { bindNativeProviderAuth, isNativeProviderCredentialRejected, unbindNativeProviderAuth } from './nativeProviderAuthBinding.js';
-import { setProviderPresentation } from './provider-presentation-store.js';
+import { setProviderPresentation, restoreProviderPresentationAfterLogin } from './provider-presentation-store.js';
 import { desktopMakerLogger } from './logger-adapter.js';
 import { outboundFetch } from './outbound-fetch.js';
 
@@ -755,8 +755,7 @@ export function reconnectClaudeAiOAuth(): boolean {
   if (!oauth || isNativeProviderCredentialRejected('anthropic', claudeOAuthCredentialDigest(oauth))) return false;
   invalidateClaudeOAuthRefresh();
   bindNativeProviderAuth('anthropic', { sharedSystem: true });
-  try { setProviderPresentation('anthropic', { removed: false }); }
-  catch (error) { unbindNativeProviderAuth('anthropic', { revoked: true }); throw error; }
+  restoreProviderPresentationAfterLogin('anthropic');
   return true;
 }
 

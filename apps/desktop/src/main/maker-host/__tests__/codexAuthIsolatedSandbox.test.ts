@@ -471,7 +471,7 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
   });
 
-  it.each([false, true])('preserves native credentials across disconnect and reconnect (packaged=%s)', async (packaged) => {
+  it.each([false, true].flatMap(packaged => [false, true].map(failPresentation => ({ packaged, failPresentation }))))('preserves native credentials across reconnect (packaged=$packaged, display write fails=$failPresentation)', async ({ packaged, failPresentation }) => {
     const { codexHome, systemAuth, localAuth } = fixture();
     h.isPackaged = packaged;
     h.dataOwnerId = 'owner-a';
@@ -486,6 +486,13 @@ describe('dev 沙箱凭证隔离(XDT_ISOLATED_AUTH)', () => {
     await expect(restarted.getAccessToken()).resolves.toBeNull();
     expect(fs.readFileSync(systemAuth)).toEqual(before);
     expect(fs.readFileSync(localAuth)).toEqual(before);
+    if (failPresentation) {
+      const write = fs.writeFileSync;
+      vi.spyOn(fs, 'writeFileSync').mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+        if (String(args[0]).includes('local-codex-provider-prefs.json')) throw new Error('test disk full');
+        return write(...args);
+      });
+    }
     await expect(restarted.triggerLogin({ mode: 'local' })).resolves.toMatchObject({ authenticated: true });
     await expect(restarted.getAccessToken()).resolves.toBe('system-token');
     expect(fs.readFileSync(systemAuth)).toEqual(before);

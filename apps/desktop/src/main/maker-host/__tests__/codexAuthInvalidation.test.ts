@@ -115,7 +115,7 @@ it('compares Codex hard-link identities without Windows number precision collisi
   expect(haveSameStableFileIdentity({ dev: 7n, ino: 11n }, { dev: 7n, ino: 11n })).toBe(true);
 });
 
-it('does not chmod a system-shared auth file while finalizing login', async () => {
+it.each([false, true])('preserves successful shared login and native files when presentation write fails=%s', async (failPresentation) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-mode-'));
   dirs.push(root);
   h.userDataDir = path.join(root, 'user-data');
@@ -134,6 +134,14 @@ it('does not chmod a system-shared auth file while finalizing login', async () =
   fs.linkSync(systemAuth, localAuth);
   const { setProviderPresentation, readProviderPresentation } = await import('../provider-presentation-store.js');
   setProviderPresentation('openai', { name: 'My OpenAI', removed: true });
+  const nativeBefore = fs.readFileSync(systemAuth, 'utf8');
+  if (failPresentation) {
+    const write = fs.writeFileSync;
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+      if (String(args[0]).includes('local-codex-provider-prefs.json')) throw new Error('test disk full');
+      return write(...args);
+    });
+  }
   const chmod = vi.spyOn(fs.promises, 'chmod');
   const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
   const adapter = new DesktopCodexAuthAdapter();
@@ -144,7 +152,8 @@ it('does not chmod a system-shared auth file while finalizing login', async () =
   ).finishSuccessfulCodexLogin.bind(adapter);
 
   await expect(finishSuccessfulCodexLogin()).resolves.toMatchObject({ authenticated: true });
-  expect(readProviderPresentation('openai')).toEqual({ name: 'My OpenAI', removed: false });
+  expect(readProviderPresentation('openai')).toEqual({ name: 'My OpenAI', removed: failPresentation });
+  expect(fs.readFileSync(systemAuth, 'utf8')).toBe(nativeBefore);
   expect(chmod).not.toHaveBeenCalled();
   expect(fs.statSync(systemAuth).ino).toBe(fs.statSync(localAuth).ino);
 });

@@ -62,6 +62,14 @@ export function setProviderPresentation(providerId: string, patch: ProviderPrese
   }
 }
 export const readLocalCodexPresentation = () => readProviderPresentation('openai');
+/** Authentication is already committed; a display preference cannot reverse its result. */
+export function restoreProviderPresentationAfterLogin(providerId: string): void {
+  try {
+    setProviderPresentation(providerId, { removed: false });
+  } catch (error) {
+    log.warn('Failed to restore authenticated provider presentation', { providerId, error: String(error) });
+  }
+}
 /** Retain upgrade-era connections without resurrecting explicitly deleted rows. */
 export function retainInvalidatedProviderPresentation(providerId: string): void {
   try {

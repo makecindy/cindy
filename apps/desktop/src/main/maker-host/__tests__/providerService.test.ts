@@ -9,6 +9,21 @@ import { createProviderService } from '../provider-service.js';
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('keeps authenticated accounts visible despite a stale removal preference', async () => {
+    let connected = true;
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => connected, openai: () => connected, xai: () => false },
+      getProviderPresentation: (id) => ({ name: `My ${id}`, removed: true }),
+    });
+    for (const id of ['openai', 'anthropic']) {
+      expect((await svc.listProviders()).find(p => p.id === id)).toMatchObject({ id, name: `My ${id}`, connected: true, removed: false });
+    }
+    connected = false;
+    for (const id of ['openai', 'anthropic']) {
+      expect((await svc.listProviders()).find(p => p.id === id)).toMatchObject({ connected: false, removed: true });
+    }
+  });
   it('applies local presentation without changing provider identity or catalog', async () => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,

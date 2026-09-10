@@ -7,7 +7,7 @@ const h = vi.hoisted(() => ({
 }));
 
 vi.mock('../provider-presentation-store.js', () => ({
-  setLocalCodexProviderRemoved: h.setLocalCodexProviderRemoved,
+  restoreProviderPresentationAfterLogin: h.setLocalCodexProviderRemoved,
   retainInvalidatedProviderPresentation: vi.fn(),
 }));
 

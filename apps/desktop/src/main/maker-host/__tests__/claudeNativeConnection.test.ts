@@ -21,7 +21,9 @@ vi.mock('../nativeProviderAuthBinding.js', () => ({
   unbindNativeProviderAuth: h.unbind,
   isNativeProviderCredentialRejected: (_provider: string, digest: string) => digest === h.rejected,
 }));
-vi.mock('../provider-presentation-store.js', () => ({ setProviderPresentation: h.presentation }));
+vi.mock('../override-settings-file.js', () => ({ createOverrideSettingsFile: () => ({
+  invalidateIfChanged: vi.fn(), read: () => ({}), writePatch: h.presentation,
+}) }));
 import { claudeOAuthCredentialDigest, disconnectClaudeAiOAuth, reconnectClaudeAiOAuth } from '../claude-oauth-refresh.js';
 beforeEach(() => {
   vi.clearAllMocks();
@@ -44,7 +46,7 @@ it('disconnect and reconnect only change the Cindy binding, never native credent
   expect(h.unbind).toHaveBeenCalledWith('anthropic', { revoked: true });
   expect(reconnectClaudeAiOAuth()).toBe(true);
   expect(h.bind).toHaveBeenCalledWith('anthropic', { sharedSystem: true });
-  expect(h.presentation).toHaveBeenCalledWith('anthropic', { removed: false });
+  expect(h.presentation).toHaveBeenCalledWith({ providers: { anthropic: { removed: false } } });
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();
 });
@@ -53,12 +55,12 @@ it('cannot attach a native source with no credentials', () => {
   expect(reconnectClaudeAiOAuth()).toBe(false);
   expect(h.bind).not.toHaveBeenCalled();
 });
-it('revokes the Cindy binding if restoring the entry fails', () => {
+it('preserves successful authentication if restoring the entry fails', () => {
   h.presentation.mockImplementationOnce(() => {
     throw new Error('disk full');
   });
-  expect(() => reconnectClaudeAiOAuth()).toThrow('disk full');
-  expect(h.unbind).toHaveBeenCalledWith('anthropic', { revoked: true });
+  expect(reconnectClaudeAiOAuth()).toBe(true);
+  expect(h.unbind).not.toHaveBeenCalled();
   expect(h.write).not.toHaveBeenCalled();
   expect(h.clear).not.toHaveBeenCalled();
 });
