@@ -5,8 +5,8 @@
  * 背景:
  *   每个来源(provider)在某个 agent 下可能提供很多模型(XD 网关 Claude Code 有 20 个),
  *   用户本地全列出来会很长。设置 → 模型供应商 展开来源后,用户可逐个开关哪些模型显示。
- *   显式开关与新用户首次初始化的启用清单分开保存。既有账号不再跟随目录自动加模型；
- *   只有用户点名恢复默认的路线继续读取目录 defaultEnabled。
+ *   显式开关与目录 defaultEnabled 分开：没拨过的跟当前下发默认，拨过的升级也不清。
+ *   目录新增的默认开模型会显示出来；客户端不得把「没开关记录」做成全关。
  *
  * 为什么 key 必须带 agent:
  *   同一来源可同时服务多个 agent(XD = claude-code + codex),且两个 agent 下模型集不同、
@@ -15,7 +15,7 @@
  *
  * 与系统默认值的关系（configuration-and-overrides.md 模型可见性例外）:
  *   - 原 key 只记显式 override(布尔)，独立 owner key 保存一次性的初始化清单。
- *   - 新用户初始化后默认不再漂移；老用户缺少开关记录的路线不会被自动补开。
+ *   - 没拨过的路线跟随当前目录 defaultEnabled；手动开/关作为 override 跨升级保留。
  *   - 收藏、历史选择不能改变开关；恢复默认只授权点名路线跟随当前/未来目录。
  *   - 「全部开启 / 全部关闭」是显式批量动作 → 为当前 agent 该来源的每个模型写显式 override。
  *
@@ -235,9 +235,7 @@ async function withOwnerLock(
   }
 }
 function effectiveMap(map: VisibilityMap): VisibilityMap {
-  const defaults = { ...initialization?.defaults };
-  for (const key of initialization?.followCatalogKeys ?? []) delete defaults[key];
-  return { ...defaults, ...map };
+  return { ...map };
 }
 
 
@@ -390,8 +388,10 @@ function mirrorToMain(map: VisibilityMap): void {
   const generation = activeOwnerGeneration;
   const pending = !!ownerId && (activeOwnerMigrationPending
     || (mayInitializeDefaults && !initialization?.scopes.length));
-  const policy = ownerId ? { fallback: false as const,
-    followCatalogKeys: initialization?.followCatalogKeys ?? [], ...(pending ? { pending: true as const } : {}) } : undefined;
+  const policy = ownerId ? {
+    followCatalogKeys: initialization?.followCatalogKeys ?? [],
+    ...(pending ? { pending: true as const } : {}),
+  } : undefined;
   const snapshot = effectiveMap(map);
   const send = (attempt: number): void => {
     if (revision !== mirrorRevision || ownerId !== activeOwnerId || generation !== activeOwnerGeneration) return;
@@ -492,10 +492,9 @@ export async function setModelVisibilityOwner(
 }
 
 /**
- * Initialize a new profile's first nonempty provider/agent catalogs once. Existing profiles
- * keep their explicit switches; history/favorites never grant permission to enable a model.
- * Missing routes remain off. Baselines are separate from user overrides so customization
- * and Restore defaults retain their meaning. No remote catalog enters this path.
+ * Record first-seen provider/agent catalogs for restore-default and alias mapping.
+ * Visibility itself is override ?? current catalog defaultEnabled; this snapshot no longer
+ * hides models the catalog says should be on. History/favorites never write an on switch.
  */
 export async function migrateModelVisibilityDefaults(
   ownerId: string | null,
@@ -553,9 +552,8 @@ export async function migrateModelVisibilityDefaults(
 }
 
 /**
- * 该 (agent, 来源, 模型) 当前是否应显示:显式开关优先，其次初始化清单；未知路线关闭。
+ * 该 (agent, 来源, 模型) 当前是否应显示:显式开关优先，否则跟随当前目录 defaultEnabled。
  * model 至少需带 id + 可选 defaultEnabled(直接传 CatalogModel 即可)。
- * 只有首次新用户与明确恢复默认的路线读取目录默认值。
  */
 export function isModelEnabled(
   agent: AgentKind,
@@ -565,12 +563,7 @@ export function isModelEnabled(
   const key = keyOf(agent, providerId, model.id);
   const override = load()[key];
   if (override !== undefined) return override;
-  if (initialization?.followCatalogKeys.includes(key)) return isModelVisible(undefined, model.defaultEnabled);
-  if (initialization && (!mayInitializeDefaults || initialization.scopes.length > 0)) {
-    return initialization.defaults[key] ?? false;
-  }
-  return !activeOwnerId || (mayInitializeDefaults && !activeOwnerMigrationPending)
-    ? isModelVisible(undefined, model.defaultEnabled) : false;
+  return isModelVisible(undefined, model.defaultEnabled);
 }
 
 async function setVisibilityTargets(
