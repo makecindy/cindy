@@ -127,6 +127,35 @@ it.each(['onContentProcessDidTerminate', 'onRenderProcessGone'] as const)('rebui
   expect(onChangeDocument).toHaveBeenCalledTimes(1);
 });
 
+it('does not probe slow initial loading or discard pending focus', () => {
+  vi.useFakeTimers();
+  bridge.state = 'inactive';
+  const { ref, page, send } = mount();
+  act(() => ref.current?.focus());
+  appState('active');
+  act(() => vi.advanceTimersByTime(10000));
+  expect(page.ping).not.toHaveBeenCalled();
+  expect(bridge.mounts).toBe(1);
+  send({ type: 'ready' });
+  expect(page.focus).toHaveBeenCalledTimes(1);
+  appState('background'); appState('active');
+  expect(page.ping).toHaveBeenCalledTimes(1);
+});
+
+it('recovers a terminated initial load but does not probe the replacement before ready', () => {
+  vi.useFakeTimers();
+  const { page, send } = mount();
+  act(() => bridge.onContentProcessDidTerminate());
+  expect(bridge.mounts).toBe(2);
+  appState('background'); appState('active');
+  act(() => vi.advanceTimersByTime(10000));
+  expect(page.ping).not.toHaveBeenCalled();
+  expect(bridge.mounts).toBe(2);
+  send({ type: 'ready' });
+  appState('background'); appState('active');
+  expect(page.ping).toHaveBeenCalledTimes(1);
+});
+
 it('leaves a healthy editor and its focus untouched on foreground', () => {
   vi.useFakeTimers();
   const { page, send } = mount();

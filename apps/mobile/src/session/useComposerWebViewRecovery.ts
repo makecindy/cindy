@@ -3,15 +3,15 @@ import { AppState } from 'react-native';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 
 /** One probe per foreground transition; no polling or automatic retry loop. */
-export function useComposerWebViewRecovery(inject: (script: string) => void, invalidate: () => void) {
+export function useComposerWebViewRecovery(inject: (script: string) => void, invalidate: () => void, isReady: () => boolean) {
   const [generation, setGeneration] = useState(0);
   const current = useRef(0);
   const attempted = useRef(false);
   const terminated = useRef(false);
   const probe = useRef(0);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const callbacks = useRef({ inject, invalidate });
-  callbacks.current = { inject, invalidate };
+  const callbacks = useRef({ inject, invalidate, isReady });
+  callbacks.current = { inject, invalidate, isReady };
   const cancelProbe = useCallback(() => {
     if (timer.current !== null) clearTimeout(timer.current);
     timer.current = null;
@@ -54,6 +54,9 @@ export function useComposerWebViewRecovery(inject: (script: string) => void, inv
         recover('foreground-after-termination');
         return;
       }
+      // Initial loading and replacement loading are not evidence of a stalled editor.
+      // Explicit process termination above must still recover before the first ready.
+      if (!callbacks.current.isReady()) return;
       const id = probe.current;
       timer.current = setTimeout(() => recover('foreground-probe-timeout'), 3000);
       callbacks.current.inject(`window.cindyComposer.ping(${id});`);

@@ -161,7 +161,7 @@ export const ComposerRichInput = forwardRef<ComposerRichInputHandle, ComposerRic
       if (pendingUris.length > 0) void deleteComposerPastedImageUris(pendingUris);
       for (let i = 0; i < failedPastes; i += 1) onPasteImagesLoadFailed?.();
       onBlur?.();
-    });
+    }, () => readyRef.current);
     const { generation, current: currentGeneration } = recovery;
     const focusEditor = useCallback(() => {
       if (!readyRef.current) {
