@@ -117,7 +117,7 @@ import {
   resetGrokOAuthMemoryCache,
 } from './grok-oauth-login.js';
 import {
-  clearOpenAiMediaModels,
+  notifyOpenAiMediaCredentialChanged,
   refreshOpenAiMediaModels,
 } from './model-discovery/openai-media.js';
 import { clearXaiMediaModels } from './model-discovery/xai-media.js';
@@ -441,7 +441,7 @@ function handleProviderSecretsCleared(): void {
   clearDiscoveredProviderModels();
   clearXaiDiscoveredModels();
   clearXaiMediaModels();
-  clearOpenAiMediaModels();
+  notifyOpenAiMediaCredentialChanged();
 }
 
 /**
