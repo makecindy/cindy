@@ -3,6 +3,7 @@ import { resolve } from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { toRenderItemViewportSnapshot } from '../components/chat/MessageStream';
+import { viewportAnchorCorrection } from '../components/chat/messageViewportCompensation';
 import { detectScrollAnchoringApplied } from '../components/chat/scrollAnchoringDetect';
 
 const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8')
@@ -38,7 +39,7 @@ function run({ targetTop = 42, missing = false, loading = false, exact = false }
     },
     getBoundingClientRect: () => ({ top: 0 }),
   };
-  const target = { getBoundingClientRect: () => ({ top: 1058 + targetTop - top }) };
+  const target = { getBoundingClientRect: () => ({ top: 1058 + targetTop - top, height: 100 }) };
   const items = [{ key: 'anchor' }];
   const previousHeight = { current: 38313 };
   const bindings = {
@@ -62,6 +63,7 @@ function run({ targetTop = 42, missing = false, loading = false, exact = false }
     queryMessageElement: () => (exact && !missing ? target : null),
     toRenderItemViewportSnapshot,
     detectScrollAnchoringApplied,
+    viewportAnchorCorrection,
     beginProgrammaticScroll: vi.fn(() => 1),
     finishProgrammaticScroll: vi.fn(),
     requestAnimationFrame: vi.fn(),

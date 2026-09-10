@@ -12,6 +12,7 @@ import {
   isVisibleDeleteCompensationElement,
   pickDeleteCompensationAnchorKey,
   resolveDeleteCompensationLanding,
+  renderItemContainsClientId,
   toRenderItemViewportSnapshot,
 } from '../components/chat/MessageStream';
 import {
@@ -47,7 +48,6 @@ const helpers = source.statements.filter(
   (node) => ts.isFunctionDeclaration(node) && [
     'queryMessageElement',
     'queryVisibleAggregateContainer',
-    'renderItemContainsClientId',
     'renderItemKeyForClientId',
   ].includes(node.name?.text ?? ''),
 );
@@ -130,6 +130,7 @@ function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
     finishProgrammaticScroll: () => { programmaticScrollRef.current = false; },
     canCompensateMessageHeight,
     viewportAnchorCorrection,
+    renderItemContainsClientId,
     toRenderItemViewportSnapshot,
     consumePendingReanchorForAutoFollow,
     findRestorableViewportItemIdx,
@@ -148,6 +149,7 @@ function setup({ deleted = true, hidden = false, nativeShift = 0 } = {}) {
     restoringRef: ref(false),
     isNearBottomRef: ref(false),
     prevScrollHeightRef: ref(0),
+    prevScrollTopAtLoadRef: ref(0),
     saveRafRef: ref(null),
     scrollbarDragStartTopRef: ref(null),
     suppressHeightCompensationUntilRef: ref(0),
