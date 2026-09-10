@@ -239,7 +239,7 @@ const makeStyles = (colors: ThemeColors) =>
     },
     bottomPanel: {
       left: 0,
-      height: "72%",
+      height: "50%",
       borderTopRightRadius: radius.container,
     },
     sidePanel: { width: "48%", minWidth: 280, maxWidth: 360 },

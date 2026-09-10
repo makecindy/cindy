@@ -610,7 +610,7 @@ describe("remote desktop controls", () => {
       act(() => button("operations").click());
       const initial = fixture.views["remoteDesktop.panelSurface"].style;
       expect(initial.flat(Infinity)).toContainEqual(
-        expect.objectContaining({ height: "72%" }),
+        expect.objectContaining({ height: "50%" }),
       );
       expect(fixture.views["remoteDesktop.panelScroll"].style).toMatchObject({
         flex: 1,
