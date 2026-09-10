@@ -4924,12 +4924,11 @@ const registerIpcHandlers = () => {
     const result = await runGrokOAuthLogin();
     if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
     if (result.ok) {
-      const presentation = retainProviderPresentationAfterAuthChange('xai');
+      void retainProviderPresentationAfterAuthChange('xai');
       resetProviderModelAutoRefreshCooldowns('xai');
       // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
       // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
       await clearXaiSubscriptionUsageSnapshot();
-      await presentation;
       if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
       // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
       // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。

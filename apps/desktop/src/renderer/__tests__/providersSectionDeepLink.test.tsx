@@ -405,7 +405,7 @@ describe('ProvidersSection — 深链定位', () => {
     expect(window.electronAPI.builtinApiKeyRemove).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('OpenAI deletion revokes the legacy image key before hiding (failure=%s)', async (failure) => {
+  it.each(['none', 'restore', 'subscription', 'image-key'])('OpenAI deletion disconnects before revoking the legacy image key (failure=%s)', async (failure) => {
     codexAuthState.state = { kind: 'authenticated', authSource: 'oauth' };
     providersState.providers = [makeProvider('openai', {
       name: 'OpenAI', connected: true, agents: ['codex'], models: { codex: [] },
@@ -413,24 +413,32 @@ describe('ProvidersSection — 深链定位', () => {
     const events: string[] = [];
     vi.mocked(window.electronAPI.builtinApiKeyRemove).mockImplementationOnce(async () => {
       events.push('image-key');
-      if (failure) throw new Error('remove failed');
+      if (failure === 'image-key') throw new Error('remove failed');
     });
-    codexAuthActions.logout.mockImplementation(async () => { events.push('subscription'); });
+    codexAuthActions.logout.mockImplementation(async () => {
+      events.push('subscription');
+      if (failure === 'subscription') throw new Error('disconnect failed');
+    });
     vi.mocked(window.electronAPI.maker.setProviderPresentation).mockImplementation(async (input) => {
+      if (input.action === 'restore' && failure === 'restore') throw new Error('restore failed');
       if (input.action === 'remove') events.push('hide');
     });
     renderAt('?tab=providers&connect=openai');
     fireEvent.keyDown(await screen.findByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
     fireEvent.click(await screen.findByRole('menuitem', { name: 'settings.providers.custom.deleteAria' }));
-    if (failure) {
+    if (failure !== 'none') {
       await waitFor(() => expect(toastError).toHaveBeenCalledWith('settings.providers.custom.toast.deleteFailed'));
-      expect(events).toEqual(['image-key']);
+      expect(events).toEqual(failure === 'restore' ? [] : failure === 'subscription' ? ['subscription'] : ['subscription', 'image-key']);
     } else {
-      await waitFor(() => expect(events).toEqual(['image-key', 'subscription', 'hide']));
+      await waitFor(() => expect(events).toEqual(['subscription', 'image-key', 'hide']));
     }
-    expect(window.electronAPI.builtinApiKeyRemove).toHaveBeenCalledWith(
-      'openai-images', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }),
-    );
+    if (failure === 'restore' || failure === 'subscription') {
+      expect(window.electronAPI.builtinApiKeyRemove).not.toHaveBeenCalled();
+    } else {
+      expect(window.electronAPI.builtinApiKeyRemove).toHaveBeenCalledWith(
+        'openai-images', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }),
+      );
+    }
   });
 
   it.each([false, true])('busy disconnect retries only after explicit task interruption confirmation (%s)', async (interrupt) => {
