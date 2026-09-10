@@ -458,6 +458,7 @@ export function ModelAdvancedDrawer({
                       </div>
                       {provider.agents.map((agent) => {
                         const model = row.byAgent[agent];
+                        // Missing catalog membership proves no configured route, not upstream incompatibility.
                         const supported = Boolean(model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' }));
                         const protocol = protocols.forAgent(agent);
                         const compatibility = protocol?.mode === 'compatibility';
@@ -528,11 +529,11 @@ export function ModelAdvancedDrawer({
                               ) : (
                                 <Tip
                                   contentClassName="z-[10002]"
-                                  text={t('settings.providers.models.advanced.engineUnsupported')}
+                                  text={t('settings.providers.models.advanced.engineNotConfigured')}
                                 >
                                   <button
                                     type="button"
-                                    aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.models.advanced.engineUnsupported')}`}
+                                    aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.models.advanced.engineNotConfigured')}`}
                                     className="inline-flex rounded-full p-1"
                                   >
                                     <CircleHelp size={13} aria-hidden />

@@ -234,6 +234,15 @@ export function customProviderModelConfigFromCatalogModel(
 
 /** ProviderView → 编辑表单配置；必须无损保留所有非密钥路由/鉴权字段。 */
 export function providerViewToCustomProviderConfig(p: ProviderView): CustomProviderConfig {
+  if (p.auth.native) {
+    const native = p.auth.native;
+    return {
+      id: storedCustomProviderId(p.id), name: p.name, auth: { method: 'oauth', native },
+      runtimes: native === 'claude'
+        ? { 'claude-code': { baseUrl: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages', models: [] } }
+        : { codex: { baseUrl: native === 'codex' ? 'https://chatgpt.com/backend-api/codex' : 'https://api.x.ai/v1', wireProtocol: 'openai-responses', models: native === 'codex' ? (p.models.codex ?? []).map(model => customProviderModelConfigFromCatalogModel(model, 'codex')) : [] } },
+    };
+  }
   const runtimes: CustomProviderConfig['runtimes'] = {};
   for (const agent of p.agents) {
     const routing = p.routing[agent];

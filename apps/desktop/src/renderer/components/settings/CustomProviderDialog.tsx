@@ -1776,6 +1776,15 @@ export function CustomProviderDialog({
       reportFieldError('name', t('settings.providers.custom.errors.nameRequired'));
       return;
     }
+    if (initial?.auth?.native) {
+      setSaving(true);
+      try {
+        await updateCustomProvider({ ...initial, name: trimmedName }, {});
+        onSaved();
+      } catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
+      finally { setSaving(false); }
+      return;
+    }
     if (editing && authMode === 'apiKey' && !keyHydrationReady) {
       toast.info(t('settings.providers.custom.runtimeFill.loadingKeys'));
       return;
@@ -2341,6 +2350,7 @@ export function CustomProviderDialog({
           </div>
 
           {/* 鉴权形态：API 密钥 / OAuth / 无鉴权。 */}
+          {!initial?.auth?.native && <>
           <div className="flex flex-col gap-2">
             <FieldLabel>{t('settings.providers.custom.authMode.label')}</FieldLabel>
             <div className="flex flex-wrap gap-1.5">
@@ -3428,6 +3438,7 @@ export function CustomProviderDialog({
               </div>
             )}
           </div>
+          </>}
         </div>
 
         {/* Footer: only the save request owns this busy state. */}

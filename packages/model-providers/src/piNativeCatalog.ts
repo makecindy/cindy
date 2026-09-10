@@ -38,7 +38,9 @@ function portablePiApi(api: string | undefined): PiModelApi | undefined {
 }
 
 /**
- * Convert Pi's pinned native catalog into Cindy's Pi-only membership list.
+ * Convert Pi's pinned native catalog into a legacy/offline Pi declaration fallback.
+ * Explicit server declarations replace this public membership list; native transport
+ * compatibility is consumed separately by pi-host.
  *
  * The OpenAI subscription route keeps Cindy's `chatgpt/` identity prefix, while its native
  * `openai-codex-responses` transport remains in the raw snapshot for pi-host to materialize.

@@ -1298,8 +1298,13 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       resolver: ReturnType<typeof vi.fn>;
     } {
       const run = pendingSubagentRun({ toolName: 'write', input: { path: 'a.txt' } });
-      vi.spyOn(piSubagentRuns, 'listPiSubagentRuns').mockResolvedValue([run]);
-      vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories').mockResolvedValue(1);
+      // Navigation-close tests may still have a detached supervisor draining.
+      // Only this test's unique home owns the run and the captured write gate.
+      const root = piSubagentRuns.piSubagentRunRoot(agentHome, opts().sessionId);
+      vi.spyOn(piSubagentRuns, 'listPiSubagentRuns')
+        .mockImplementation(async candidate => candidate === root ? [run] : []);
+      vi.spyOn(piSubagentRuns, 'countPiSubagentRunDirectories')
+        .mockImplementation(async candidate => candidate === root ? 1 : 0);
       let openPublish!: () => void;
       let releasePublish!: () => void;
       const publishStarted = new Promise<void>((resolve) => { openPublish = resolve; });
@@ -1308,7 +1313,8 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       // Stands in for the helper's own multi-await stretch between the caller's
       // check and the mailbox write.
       vi.spyOn(piSubagentRuns, 'controlPiSubagentRuns').mockImplementation(
-        async (_root, _taskId, _action, options) => {
+        async (candidate, _taskId, _action, options) => {
+          if (candidate !== root) return 0;
           captured = (options as { beforeMailboxWrite?: () => boolean } | undefined)
             ?.beforeMailboxWrite;
           openPublish();
@@ -1329,17 +1335,26 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       vi.spyOn(piSubagentRuns, 'stopPiSubagentRunsForAccountBoundary').mockResolvedValue(true);
       const handle = await new PiAgent(buildDeps()).startSession(opts());
       handle.setInteractionResolver(fixture.resolver as never);
-
-      await fixture.publishStarted;
-      // Captured while the boundary is still down: it must answer "write".
-      expect(fixture.gate()?.()).toBe(true);
-
-      const closing = handle.close({ reason: 'account-boundary' });
-      // Same closure, after the flag went up. A snapshot would still say true,
-      // and the answer would land in a child's mailbox behind the sweep.
-      expect(fixture.gate()?.()).toBe(false);
-      fixture.releasePublish();
-      await closing;
+      let closing: Promise<void> | undefined;
+      let stalePublish: Promise<number> | undefined;
+      try {
+        await fixture.publishStarted;
+        // Captured while the boundary is still down: it must answer "write".
+        expect(fixture.gate()?.()).toBe(true);
+        // Reproduce a previous supervisor reaching the global mock late. Its
+        // still-open fence must not replace this handle's captured predicate.
+        stalePublish = piSubagentRuns.controlPiSubagentRuns(
+          piSubagentRuns.piSubagentRunRoot(path.join(agentHome, 'previous-test'), 's1'),
+          'tool-subagent-approval', 'approval', { beforeMailboxWrite: () => true },
+        );
+        closing = handle.close({ reason: 'account-boundary' });
+        // Same closure, after the flag went up. A snapshot would still say true.
+        expect(fixture.gate()?.()).toBe(false);
+      } finally {
+        fixture.releasePublish();
+        await stalePublish;
+        await (closing ?? handle.close({ reason: 'account-boundary' }));
+      }
     });
 
     it('does not start the stop sweep until the publish has left the write phase', async () => {
@@ -1354,13 +1369,16 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
       const handle = await new PiAgent(buildDeps()).startSession(opts());
       handle.setInteractionResolver(fixture.resolver as never);
 
-      await fixture.publishStarted;
-      const closing = handle.close({ reason: 'account-boundary' });
-      await new Promise((resolve) => setTimeout(resolve, 300));
-      expect(sweep).not.toHaveBeenCalled();
-
-      fixture.releasePublish();
-      await closing;
+      let closing: Promise<void> | undefined;
+      try {
+        await fixture.publishStarted;
+        closing = handle.close({ reason: 'account-boundary' });
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        expect(sweep).not.toHaveBeenCalled();
+      } finally {
+        fixture.releasePublish();
+        await (closing ?? handle.close({ reason: 'account-boundary' }));
+      }
       expect(sweep).toHaveBeenCalled();
     });
   });

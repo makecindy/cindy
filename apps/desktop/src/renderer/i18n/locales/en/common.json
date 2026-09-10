@@ -1492,6 +1492,10 @@
       },
       "pill": {
         "connected": "Connected",
+        "configured": "Configured",
+        "disconnected": "Not connected",
+        "connecting": "Connecting…",
+        "rename": "Rename",
         "suspended": "Disabled"
       },
       "button": {
@@ -1516,7 +1520,17 @@
         "reconnectRequired": "Reconnect Needed",
         "connect": "Connect ChatGPT",
         "reconnect": "Reconnect ChatGPT",
-        "cancelConnect": "Cancel Connection"
+        "cancelConnect": "Cancel Connection",
+        "accountSource": {
+          "local": "Local Codex account",
+          "oauth": "Independently signed-in account",
+          "unknown": "Existing OpenAI connection"
+        },
+        "useLocalAccount": "Use local Codex account",
+        "addIndependentAccount": "Sign in to a separate account",
+        "accountSourcesDescription": "Use your existing local Codex connection or sign in to a separately saved account. Both support the same features.",
+        "independentAccountDescription": "Sign in to a separately saved ChatGPT account, or connect with an API key.",
+        "localUnavailable": "No local connection is available to reuse. Existing provider accounts will not be replaced."
       },
       "xai": {
         "title": "xAI",
@@ -1525,7 +1539,7 @@
         "billingLabel": "SuperGrok subscription (direct)",
         "asset": {
           "weeklyTitle": "Weekly limit",
-          "weeklyUsed": "{{percent}}% used",
+          "weeklyRemaining": "{{percent}}% remaining",
           "resetsAt": "Resets {{at}}",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Open Grok usage"
@@ -1811,7 +1825,7 @@
         "subscription": "Subscription",
         "subscriptionProduct": "{{product}} Subscription",
         "noResults": "No matching models",
-        "capabilityNote": "Not available in {{agent}}",
+        "capabilityNote": "Not configured for {{agent}}",
         "refreshAria": "Refresh model list (additions only)",
         "refreshBuiltinAria": "Refresh Model List",
         "refreshingAria": "Refreshing model list…",
@@ -1887,6 +1901,7 @@
           "engines": "Engine support",
           "enginesHint": "Compatibility mode converts requests. It is off by default and can be enabled when needed.",
           "engineUnsupported": "Not supported",
+          "engineNotConfigured": "Not configured",
           "engineNoFast": "No Fast",
           "vision": {
             "vision": "Supported",
@@ -2069,7 +2084,7 @@
         "back": "← Back",
         "finish": "Finish",
         "cancel": "Cancel",
-        "useApiKey": "Use an API key instead",
+        "useApiKey": "API key connection",
         "metaOAuthOrApi": "Subscription (OAuth) · API key",
         "builtinApiKey": {
           "subtitle": "Connect with your own API key",
@@ -2222,27 +2237,15 @@
           "cancel": "Cancel"
         }
       },
-      "imagesKey": {
-        "label": "Image generation API key",
-        "placeholder": "Paste OpenAI platform API key",
-        "save": "Save",
-        "clear": "Clear",
-        "toast": {
-          "saved": "Image generation API key saved",
-          "saveFailed": "Failed to save image generation API key. Please try again.",
-          "cleared": "Image generation API key cleared",
-          "clearFailed": "Failed to clear image generation API key"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% used",
+        "percentRemaining": "{{percent}}% remaining",
         "resetsAt": "Resets {{at}}",
         "claudePlanFallback": "Claude subscription",
-        "claudeWeekly": "7-day window {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7-day window: {{percent}}% remaining",
+        "scopedModel": "{{model}}: {{percent}}% remaining",
         "openClaudeUsage": "Open usage page",
         "codexPlanFallback": "ChatGPT subscription",
-        "codexSecondary": "Secondary window {{percent}}%",
+        "codexSecondary": "Secondary window: {{percent}}% remaining",
         "codexResetCredits": "{{count}} limit reset credits"
       }
     },
@@ -5960,6 +5963,8 @@
     "modelWeeklyLabel": "{{model}} weekly",
     "usedPercent": "Used {{percent}}%",
     "remainingPercent": "Remaining {{percent}}%",
+    "resetIn": "Resets in {{duration}}",
+    "resetPending": "Awaiting reset update",
     "resetAt": "Resets {{at}}",
     "noWindows": "No quota window data available",
     "limitRejected": "Plan limit reached; requests may be rejected",

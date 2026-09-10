@@ -243,7 +243,7 @@ vi.mock('@/hooks/useDeviceProviders', () => ({
 const visibleModelsRef = vi.hoisted(() => ({ models: [] as unknown[] }));
 vi.mock('@/lib/providerModels', () => ({
   providerMonogram: (name: string) => name.slice(0, 1).toUpperCase(),
-  isChatBridgedCodexProvider: () => false,
+  isLocalOnlyProviderForAgent: () => false,
   filterChatBridgedCodexProviders: (providers: unknown[]) => providers,
   resolveVisibleModelAgentKind: ({ agentKind }: { agentKind: string | null }) =>
     agentKind ?? 'claude-code',
@@ -646,7 +646,7 @@ describe('ModelSelector provider groups', () => {
     expect(screen.queryByTestId('model-options-floating-panel')).toBeNull();
   });
 
-  it('reselects the connected fallback source when the stored source is disconnected', async () => {
+  it('does not mark another account selected when the stored source is disconnected', async () => {
     const modelId = 'claude-fable-5';
     const model = {
       id: modelId,
@@ -695,11 +695,12 @@ describe('ModelSelector provider groups', () => {
     const popover = screen.getByTestId('model-options-popover');
     const xdGroup = within(popover).getByRole('group', { name: 'Cindy AI' });
     const fallbackRow = within(xdGroup).getByRole('option', { name: /Fable 5/ });
-    expect(fallbackRow.getAttribute('aria-selected')).toBe('true');
+    expect(fallbackRow.getAttribute('aria-selected')).toBe('false');
 
     fireEvent.click(fallbackRow);
-    expect(onProviderChange).toHaveBeenCalledWith('xd', modelId, undefined);
-    expect(screen.getByRole('group', { name: /Fable 5/ })).toBeTruthy();
+    expect(onProviderChange).toHaveBeenCalledWith('xd', modelId, 'high');
+    // This is a new account selection, not a click on the currently selected row.
+    expect(screen.queryByRole('group', { name: /Fable 5/ })).toBeNull();
   });
 
   it('opens a selected provider configuration without persisting its derived effort', async () => {

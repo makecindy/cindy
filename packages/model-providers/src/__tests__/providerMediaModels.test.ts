@@ -62,6 +62,25 @@ function registry(mode: string): ModelRegistry {
 }
 
 describe('V4 media model metadata', () => {
+  it('resolves account media against public routes while preserving membership and override ids', () => {
+    const r = registry('image_generation');
+    r.models[0].routes = [{ providerId: 'openai', modelId: 'openai/model', agents: [],
+      forceOverrides: { name: 'Corrected' }, overrideReason: 'verified fixture' }];
+    const account: Provider = { ...shell, id: 'openai-a', source: 'user',
+      auth: { method: 'oauth', native: 'codex' },
+      imageModels: [{ id: 'openai-a/model', name: 'Old' }] };
+    const seen: string[] = [];
+    expect(projectProviderMediaModels(account, r, {
+      addDeclared: true,
+      userMetadata: (id) => { seen.push(id); return undefined; },
+    }).imageModels).toEqual([expect.objectContaining({ id: 'openai-a/model', name: 'Corrected' })]);
+    expect(seen).toEqual(['openai-a/model']);
+    expect(projectProviderMediaModels({ ...account, imageModels: [] }, r, { addDeclared: true }).imageModels).toEqual([]);
+    expect(projectProviderMediaModels(account, r, { userMetadata: () => ({ name: 'Mine' }) }).imageModels?.[0].name).toBe('Mine');
+    r.models[0].status = 'retired';
+    expect(projectProviderMediaModels(account, r).imageModels).toEqual([]);
+  });
+
   it.each(modes)(
     '%s parses, projects and stays out of chat selection',
     (mode) => {

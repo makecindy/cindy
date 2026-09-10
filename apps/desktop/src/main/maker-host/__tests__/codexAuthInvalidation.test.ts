@@ -2693,3 +2693,32 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 });
+
+
+describe('local Codex account display identity', () => {
+  it.each([
+    { legacyEmail: undefined, jwt: true, expected: 'local@example.test' },
+    { legacyEmail: 'legacy@example.test', jwt: true, expected: 'legacy@example.test' },
+    { legacyEmail: undefined, jwt: false, expected: undefined },
+  ])('reads safe identity without changing authentication ($expected)', async ({ legacyEmail, jwt, expected }) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-local-account-display-'));
+    dirs.push(root);
+    h.userDataDir = root;
+    h.dataOwnerId = 'display-owner';
+    const home = path.join(root, 'codex-home');
+    fs.mkdirSync(home, { recursive: true });
+    const claims = Buffer.from(JSON.stringify({ sub: 'subject', email: 'local@example.test' })).toString('base64url');
+    fs.writeFileSync(path.join(home, 'auth.json'), JSON.stringify({
+      account: legacyEmail ? { email: legacyEmail } : undefined,
+      tokens: { access_token: 'fixture-access', account_id: 'fixture-account', id_token: jwt ? `header.${claims}.signature` : 'invalid' },
+    }));
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    vi.spyOn(adapter, 'hasCodexOAuthLoginReadOnly').mockReturnValue(true);
+    const result = await adapter.readAccountPresentationState();
+    expect(result).toMatchObject({ authenticated: true, authSource: 'oauth' });
+    expect(result.identity).toBe(expected);
+    expect(JSON.stringify(result)).not.toContain('fixture-access');
+    expect(JSON.stringify(result)).not.toContain('signature');
+  });
+});

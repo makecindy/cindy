@@ -223,23 +223,45 @@ describe('ProvidersSection — 双栏管理', () => {
   it('dims GPT Image 2 without a ready image channel, independently of chat connection', async () => {
     providerSnapshotState.order = ['custom', 'xd'];
     providerSnapshotState.customConnected = true;
-    const view = render(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    const view = render(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
     await screen.findByRole('switch', { name: 'Custom model' });
     fireEvent.click(screen.getByRole('button', { name: 'newChat.modelSelector.category.image1' }));
     providerSnapshotState.customConnected = false;
-    view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    view.rerender(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
     const imageRow = () => screen.getByText('GPT Image 2').closest('div.group')!;
     expect(imageRow().classList.contains('opacity-55')).toBe(true);
-    expect(screen.getByText('GPT Image 2').getAttribute('style')).toBe(screen.getByText('Custom model').getAttribute('style'));
+    expect(screen.getByText('GPT Image 2').getAttribute('style')).toBe(
+      screen.getByText('Custom model').getAttribute('style'),
+    );
     providerSnapshotState.mediaReady = true;
-    view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    view.rerender(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
     expect(imageRow().classList.contains('opacity-55')).toBe(false);
-    expect(screen.getByRole('switch', { name: 'Custom model' }).getAttribute('aria-checked')).toBe('false');
+    expect(screen.getByRole('switch', { name: 'Custom model' }).getAttribute('aria-checked')).toBe(
+      'false',
+    );
     providerSnapshotState.mediaReady = false;
     providerSnapshotState.customConnected = true;
-    view.rerender(<MemoryRouter><ProvidersSection /></MemoryRouter>);
+    view.rerender(
+      <MemoryRouter>
+        <ProvidersSection />
+      </MemoryRouter>,
+    );
     expect(imageRow().classList.contains('opacity-55')).toBe(true);
-    expect(screen.getByRole('switch', { name: 'Custom model' }).getAttribute('aria-checked')).toBe('true');
+    expect(screen.getByRole('switch', { name: 'Custom model' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
   });
 
   it('keeps selections but blocks toggles when a connected source becomes unavailable', async () => {
@@ -288,10 +310,10 @@ describe('ProvidersSection — 双栏管理', () => {
     render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
     expect(requestAutoRefreshSpy).toHaveBeenCalledWith('providers-open');
 
-    // 详情头 + 左栏行都显示 xd 标题(默认选中第一行 = xd)。
+    // 左栏保留品牌翻译，详情头使用连接的实际显示名。
     expect(
       (await screen.findAllByText('settings.providers.xd.title')).length,
-    ).toBeGreaterThanOrEqual(2);
+    ).toBeGreaterThanOrEqual(1);
     // 详情标题的模型数/订阅标签必须在可用宽度内折行，不能溢出覆盖右侧连接操作。
     const identity = screen.getByTestId('provider-detail-identity');
     const metadata = screen.getByTestId('provider-detail-metadata');

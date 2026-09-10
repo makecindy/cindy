@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   BUNDLED_CATALOG,
+  buildUserProvider,
   type AgentKind,
   type Catalog,
   type CatalogModel,
@@ -24,6 +25,7 @@ import {
   setDiscoveredCodexModels,
   setXaiDiscoveredModels,
   setDiscoveredProviderMediaModels,
+  clearDiscoveredProviderModels,
 } from '../active-catalog.js';
 
 function openaiIds(agent: 'claude-code' | 'codex' | 'pi'): string[] {
@@ -87,10 +89,82 @@ function legacyCatalog(): Catalog {
 }
 
 describe('active-catalog discovered augment', () => {
+  it.each([
+    ['anthropic', 'claude', 'claude-sonnet-4-5', 'claude-sonnet-4-6'],
+    ['xai', 'xai', 'grok-4.5', 'grok-4.6'],
+  ] as const)('uses the same default selection for builtin and independent %s accounts', (id, native, oldId, newId) => {
+    const catalog = bundledWithoutRegistry();
+    const builtin = catalog.providers.find(provider => provider.id === id)!;
+    const models = [fake(oldId), fake(newId)].map(model => ({ ...model, group: id === 'anthropic' ? 'claude' : 'grok' }));
+    builtin.models = { codex: models, 'claude-code': models, pi: models };
+    const account = { ...builtin, id: `${id}-second`, source: 'user' as const,
+      auth: { method: 'oauth' as const, native } };
+    const api = { ...builtin, id: `${id}-api`, source: 'user' as const,
+      auth: { method: 'apiKey' as const } };
+    setActiveCatalog({ ...catalog, providers: [builtin, account, api] });
+    if (id === 'anthropic') setAnthropicDiscoveredModels(models);
+    const actual = getActiveCatalog();
+    for (const agent of ['codex', 'claude-code', 'pi'] as const) {
+      const listed = (providerId: string) => actual.providers.find(provider => provider.id === providerId)!.models[agent]!;
+      expect(listed(account.id).map(model => [model.id, model.defaultEnabled]))
+        .toEqual(listed(builtin.id).map(model => [model.id, model.defaultEnabled]));
+      for (const providerId of [builtin.id, account.id]) {
+        expect(listed(providerId).find(model => model.id === oldId)?.defaultEnabled,
+          `${providerId}/${agent}: ${listed(providerId).map(model => model.id).join(',')}`).toBe(false);
+        // Claude's Codex bridge is explicitly disabled by default; keep it disabled.
+        expect(listed(providerId).find(model => model.id === newId)?.defaultEnabled)
+          .toBe(!(id === 'anthropic' && agent === 'codex'));
+      }
+      expect(listed(api.id).find(model => model.id === oldId)?.defaultEnabled).toBe(true);
+    }
+  });
+  it('clears only the selected Grok account until the owner boundary is cleared', () => {
+    const account = buildUserProvider({
+      id: 'grok-second', name: 'Second Grok', auth: { method: 'oauth', native: 'xai' },
+      runtimes: {},
+    });
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, account] });
+    const ids = () => getActiveCatalog().providers.find(p => p.id === account.id)?.models.codex?.map(m => m.id);
+    setXaiDiscoveredModels([{ id: 'xai/grok-account-only' }], account.id);
+    expect(ids()).toContain('xai/grok-account-only');
+    setXaiDiscoveredModels(null);
+    expect(ids()).toContain('xai/grok-account-only');
+    setXaiDiscoveredModels(null, account.id);
+    expect(ids()).not.toContain('xai/grok-account-only');
+    setXaiDiscoveredModels([{ id: 'xai/grok-account-only' }], account.id);
+    clearDiscoveredProviderModels();
+    expect(ids()).not.toContain('xai/grok-account-only');
+  });
+  it('shares OpenAI protocol and Pi metadata with an independent account without sharing identity', () => {
+    const account = buildUserProvider({
+      id: 'openai-parity', name: 'Separate account', auth: { method: 'oauth', native: 'codex' },
+      runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    setActiveCatalog({ ...BUNDLED_CATALOG, providers: [...BUNDLED_CATALOG.providers, account] });
+    const catalog = getActiveCatalog();
+    const selected = catalog.providers.find(p => p.id === account.id)!;
+    const original = catalog.providers.find(p => p.id === 'openai')!;
+    for (const agent of ['codex', 'claude-code', 'pi'] as const) {
+      const id = agent === 'codex' ? 'gpt-5.6-luna' : 'chatgpt/gpt-5.6-luna';
+      const model = selected.models[agent]?.find(m => m.id === id);
+      expect(model?.nativeApi).toBe('openai-responses');
+      if (agent === 'pi') {
+        const baseline = original.models.pi?.find(m => m.id === id);
+        expect(model?.contextWindow).toBe(baseline?.contextWindow);
+        expect(model?.maxOutput).toBe(baseline?.maxOutput);
+        expect(model?.cost).toEqual(baseline?.cost);
+        expect(model?.defaultEffort).toBe(baseline?.defaultEffort);
+      }
+    }
+    expect(selected.id).toBe('openai-parity');
+    expect(selected.auth).toEqual({ method: 'oauth', native: 'codex' });
+  });
   afterEach(() => {
     // 复位全局状态,避免测试间串扰
     setActiveCatalog(BUNDLED_CATALOG);
+    clearDiscoveredProviderModels();
     setDiscoveredCodexModels([]);
+    setAnthropicDiscoveredModels([]);
     setXaiDiscoveredModels(null);
     setDiscoveredProviderMediaModels('xai', null);
   });
@@ -180,7 +254,7 @@ describe('active-catalog discovered augment', () => {
     expect(openaiIds('pi')).not.toContain('chatgpt/gpt-5.7');
   });
 
-  it('旧服务端缺少或下发空 Pi 数组时仍保留客户端原生名单', () => {
+  it('missing Pi declarations use fallback but explicit empty lists remove public Pi membership', () => {
     const expected = openaiIds('pi');
     const omitted = bundledWithoutRegistry();
     delete omitted.providers.find((provider) => provider.id === 'openai')!.models.pi;
@@ -190,7 +264,7 @@ describe('active-catalog discovered augment', () => {
     const empty = bundledWithoutRegistry();
     empty.providers.find((provider) => provider.id === 'openai')!.models.pi = [];
     setActiveCatalog(empty, { authorityCatalog: empty });
-    expect(openaiIds('pi')).toEqual(expected);
+    expect(openaiIds('pi')).toEqual([]);
   });
 
   it('明确的服务端 Pi 条目直接叠加本地目录，不依赖 Codex discovery', () => {
@@ -243,15 +317,12 @@ describe('active-catalog discovered augment', () => {
     });
   });
 
-  it('xAI account snapshot is authoritative and projects canonical ids per harness', () => {
+  it('xAI discovery augments public declarations and projects canonical ids per harness', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXaiDiscoveredModels([{ id: 'xai/grok-4.5' }, { id: 'xai/grok-4.6' }]);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    expect(xai?.models['claude-code']?.map((model) => model.id)).toEqual([
-      'xai/grok-4.5',
-      'xai/grok-4.6',
-    ]);
-    expect(xai?.models.codex?.map((model) => model.id)).toEqual(['xai/grok-4.5', 'xai/grok-4.6']);
+    expect(xai?.models['claude-code']?.map((model) => model.id)).toEqual(expect.arrayContaining(['xai/grok-4.5', 'xai/grok-4.6']));
+    expect(xai?.models.codex?.map((model) => model.id)).toEqual(expect.arrayContaining(['xai/grok-4.5', 'xai/grok-4.6']));
     expect(xai?.models.pi?.map((model) => model.id)).toEqual([
       'grok-4.3',
       'grok-4.5',
@@ -348,12 +419,13 @@ describe('active-catalog discovered augment', () => {
     });
   });
 
-  it('xAI account discovery can clear Claude/Codex without clearing independent Pi membership', () => {
+  it('empty xAI discovery cannot erase server-declared models', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXaiDiscoveredModels([]);
     const xai = getActiveCatalog().providers.find((provider) => provider.id === 'xai');
-    expect(xai?.models['claude-code']).toEqual([]);
-    expect(xai?.models.codex).toEqual([]);
+    for (const agent of ['claude-code', 'codex'] as const) {
+      expect(xai?.models[agent]?.map(model => model.id)).toContain('xai/grok-4.6');
+    }
     expect(xai?.models.pi?.map((model) => model.id)).toEqual([
       'grok-4.3',
       'grok-4.5',

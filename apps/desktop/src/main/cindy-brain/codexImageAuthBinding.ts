@@ -8,12 +8,13 @@
  */
 
 export interface CodexImageAuthBinding {
-  getAuth(): Promise<{ accessToken: string; accountId: string | null }>;
+  hasAuth?(providerId: string): boolean;
+  getAuth(providerId?: string): Promise<{ accessToken: string; accountId: string | null }>;
   onAuthFailure(failure: {
     status: number;
     body: string;
     failedAccessToken: string;
-  }): unknown | Promise<unknown>;
+  }, providerId?: string): unknown | Promise<unknown>;
 }
 
 let binding: CodexImageAuthBinding | null = null;

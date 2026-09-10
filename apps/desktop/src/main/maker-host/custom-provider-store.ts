@@ -387,6 +387,11 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
 function validateAuthSection(auth: unknown): ValidationResult {
   if (!auth || typeof auth !== 'object') return invalid('auth must be an object');
   const a = auth as Record<string, unknown>;
+  if (a.native !== undefined) {
+    return a.method === 'oauth' && ['codex', 'claude', 'xai'].includes(String(a.native)) && a.oauth === undefined
+      ? { ok: true }
+      : invalid('native subscription auth requires oauth method without a generic descriptor');
+  }
   if (a.method !== 'apiKey' && a.method !== 'oauth' && a.method !== 'none') {
     return invalid("auth.method must be 'apiKey' | 'oauth' | 'none'");
   }
@@ -534,6 +539,27 @@ export function validateCustomProviderConfig(
   }
   const rts = c.runtimes as Record<string, unknown>;
   const keys = Object.keys(rts);
+  const native = (c.auth as { native?: string } | undefined)?.native;
+  if (native === 'claude' || native === 'xai') {
+    const agent = native === 'claude' ? 'claude-code' : 'codex';
+    const route = rts[agent] as Record<string, unknown> | undefined;
+    const baseUrl = native === 'claude' ? 'https://api.anthropic.com' : 'https://api.x.ai/v1';
+    const wire = native === 'claude' ? 'anthropic-messages' : 'openai-responses';
+    if (keys.length !== 1 || !route || route.baseUrl !== baseUrl || route.wireProtocol !== wire
+      || route.headers || route.modelsUrl || route.requestPath
+      || !Array.isArray(route.models) || route.models.length !== 0) {
+      return invalid('native subscription accounts require their fixed runtime route and shared catalog');
+    }
+  }
+  if ((c.auth as { native?: string } | undefined)?.native === 'codex') {
+    const codex = rts.codex as Record<string, unknown> | undefined;
+    if (keys.length !== 1 || !codex || codex.baseUrl !== 'https://chatgpt.com/backend-api/codex'
+      || codex.headers || codex.modelsUrl || codex.requestPath
+      || codex.wireProtocol !== 'openai-responses'
+      || (Array.isArray(codex.models) && codex.models.some((model) => model?.route))) {
+      return invalid('native Codex accounts require the fixed Codex runtime route');
+    }
+  }
   if (keys.length === 0) return invalid('at least one runtime required');
   for (const k of keys) {
     if (!VALID_AGENTS.includes(k as AgentKind)) return invalid(`invalid runtime '${k}'`);
@@ -618,7 +644,9 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
   }
   const out: CustomProviderConfig = { id: config.id, name: config.name.trim(), runtimes };
   // auth 规整：apiKey（默认形态）不落 auth 字段；none / oauth 显式落盘。
-  if (config.auth?.method === 'oauth' && config.auth.oauth) {
+  if (config.auth?.method === 'oauth' && config.auth.native) {
+    out.auth = { method: 'oauth', native: config.auth.native };
+  } else if (config.auth?.method === 'oauth' && config.auth.oauth) {
     const d = config.auth.oauth;
     let oauth: OAuthProviderDescriptor;
     if (d.flow === 'device-code') {
@@ -935,7 +963,8 @@ export async function updateCustomProviderIfUnchanged(
       auth: nextConfig.auth ? JSON.stringify(nextConfig.auth) : null,
       updatedAt: nextUpdatedAt(now, existing.updatedAt),
     })
-    .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)));
+    .where(and(eq(customProviders.id, id), eq(customProviders.updatedAt, existing.updatedAt)))
+    .run();
   return result.changes === 1;
 }
 

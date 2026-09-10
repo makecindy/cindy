@@ -523,6 +523,20 @@ describe('providerViewToCustomProviderConfig Pi catalog metadata', () => {
 });
 
 describe('providerViewToCustomProviderConfig', () => {
+  it.each(['claude', 'xai'] as const)('preserves the %s account binding when renaming an all-Harness view', native => {
+    const id = `${native}-second`;
+    const config = providerViewToCustomProviderConfig({
+      id, name: 'My account', source: 'user', connected: true,
+      auth: { method: 'oauth', native }, agents: ['claude-code', 'codex', 'pi'], models: {}, routing: {},
+    });
+    const agent = native === 'claude' ? 'claude-code' : 'codex';
+    expect(config.id).toBe(id);
+    expect(config.name).toBe('My account');
+    expect(config.auth).toEqual({ method: 'oauth', native });
+    expect(Object.keys(config.runtimes)).toEqual([agent]);
+    expect(config.runtimes[agent]?.models).toEqual([]);
+    expect(config.runtimes[agent]?.baseUrl).toBe(native === 'claude' ? 'https://api.anthropic.com' : 'https://api.x.ai/v1');
+  });
   it('restores the stored id for a legacy custom xai runtime projection', () => {
     const provider = {
       id: 'custom:xai',

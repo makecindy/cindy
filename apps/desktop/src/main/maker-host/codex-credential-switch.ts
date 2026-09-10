@@ -1,8 +1,9 @@
+import { isOpenAiSubscriptionProvider, providerCatalogId } from '@cindy/model-providers';
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
   isCindyProviderCodexRemoteCompactionRoute,
-  resolveAgentCredentialMode,
+  resolveAgentCredentialMode as resolveBaseCredentialMode,
   type AgentCredentialMode,
   type AgentKind,
 } from '@cindy/maker-core';
@@ -17,6 +18,14 @@ import {
 import { crossesCodexAppliedCustomProviderIdentity } from './codex-custom-provider-route.js';
 import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
 import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
+import { getActiveCatalog } from './active-catalog.js';
+
+function resolveAgentCredentialMode(input: Parameters<typeof resolveBaseCredentialMode>[0]): AgentCredentialMode | undefined {
+  if (input.agentKind === 'codex' && getActiveCatalog().providers.some(
+    (provider) => provider.id === input.providerId && provider.auth.native === 'codex',
+  )) return 'oauth-bearer';
+  return resolveBaseCredentialMode(input);
+}
 
 export interface ShouldCloseSessionForCredentialSwitchInput {
   agentKind: AgentKind;
@@ -272,6 +281,16 @@ export function shouldCloseSessionForCredentialSwitch(
     input.agentKind === 'pi'
     && piProxyProviderIdentity(currentProviderId) !== piProxyProviderIdentity(nextProviderId)
   ) {
+    // Native ChatGPT accounts have independent startup provider blocks and placeholder
+    // credentials. Pi's verified set_model switches the live proxy/subagent identity;
+    // no account token is frozen in the process. Missing startup routes still fail
+    // before RPC inside Pi, preserving the old route and pending message.
+    const providers = getActiveCatalog().providers;
+    const current = providers.find(provider => provider.id === currentProviderId);
+    const next = providers.find(provider => provider.id === nextProviderId);
+    if (current && next && isOpenAiSubscriptionProvider(current) && isOpenAiSubscriptionProvider(next)) {
+      return false;
+    }
     return true;
   }
   const currentMode = resolveAgentCredentialMode({
@@ -285,14 +304,18 @@ export function shouldCloseSessionForCredentialSwitch(
     model: input.nextModel,
   });
 
-  // Tool Search 是 Claude 子进程的 spawn-time env。跨越上游 capability 边界时即使
-  // provider-oauth 凭证家族可复用，也必须重建本会话，不能把旧 flag 热切到新来源。
-  if (
-    input.agentKind === 'claude-code' &&
-    claudeToolSearchMode(currentProviderId, currentMode) !==
-      claudeToolSearchMode(nextProviderId, nextMode)
-  ) {
-    return true;
+  if (input.agentKind === 'claude-code') {
+    const providers = getActiveCatalog().providers;
+    const current = providers.find(provider => provider.id === currentProviderId);
+    const next = providers.find(provider => provider.id === nextProviderId);
+    // Native Claude tokens and account IDs are frozen in the spawn env. Equal
+    // credential families do not make two accounts interchangeable in a live process.
+    if (currentProviderId !== nextProviderId && [current, next].some(
+      provider => provider && providerCatalogId(provider) === 'anthropic',
+    )) return true;
+    // Tool Search is also spawn-time state, independent of the credential family.
+    if (claudeToolSearchMode(currentProviderId, currentMode, current?.auth.native) !==
+      claudeToolSearchMode(nextProviderId, nextMode, next?.auth.native)) return true;
   }
 
   // ── 远端压缩身份边界(codex, proxy-active)────────────────────────────────

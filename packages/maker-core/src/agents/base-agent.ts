@@ -450,6 +450,7 @@ export interface CodexLocalCredentialModeSwitchContext {
 }
 
 export interface RefreshLocalModelsOptions {
+  providerId?: string;
   /**
    * Bind model discovery to a specific local credential route.
    * Codex serves explicit routes from an isolated control-plane host so live
@@ -918,6 +919,7 @@ export interface AgentDeps {
     modelId: string,
     config: Record<string, unknown>,
     reportedUsableWindow: number | null,
+    codexHome?: string,
   ) => Promise<CodexContextWindowInfo | null>;
 
   /**
@@ -966,6 +968,9 @@ export interface AgentDeps {
   prepareCodexExtraSpawnConfig?: (
     providers: McpProvider[],
     ctx: {
+      providerId?: string;
+      codexHome?: string;
+      accountHostKey?: string;
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
       /** Original session request when the shared host was upgraded to a credential superset. */
@@ -985,6 +990,7 @@ export interface AgentDeps {
   resolveCodexSubagentRoutingSignature?: (
     providers: McpProvider[],
     ctx: {
+      providerId?: string;
       credentialMode?: AgentCredentialMode;
       hostPurpose?: 'control-plane' | 'review' | 'custom-context';
     },
@@ -1031,7 +1037,13 @@ export interface AgentDeps {
    */
   onCodexLocalModelsListed?: (
     models: readonly CodexModelListItem[],
+    providerId?: string,
   ) => void | Promise<void>;
+
+  /** Host-confirmed native account identity; ordinary custom API providers return false. */
+  isCodexAccountProvider?: (providerId?: string | null) => boolean;
+  /** Retire each local task's writer on close so native history can change accounts. */
+  isolateCodexAccountSessions?: boolean;
 
   /**
    * Host-owned lightweight reviewer for routes without a healthy vendor-native
@@ -1248,7 +1260,9 @@ export interface AgentDeps {
    *
    * 缺省 / no-op → 行为与改动前一致。
    */
-  prepareCodexResumeSession?: (threadId: string) => Promise<string | void>;
+  prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
+  recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
+  resolveCodexThreadStorageHome?: (threadId: string) => Promise<string | undefined>;
 
   /**
    * Codex 专用:把已拼好的产品级 system prompt 同步登记到 host 的 codex proxy registry。
@@ -2555,13 +2569,14 @@ export abstract class BaseAgent {
    * Read provider account rate limits without starting a model turn.
    * Codex implements this through the app-server control plane.
    */
-  async readAccountRateLimits(): Promise<AccountRateLimitsResponse> {
+  async readAccountRateLimits(_providerId?: string): Promise<AccountRateLimitsResponse> {
     return this.throwNotSupported('account:rate-limits:read', 'not-implemented');
   }
 
   /** Consume one banked provider reset credit without starting a model turn. */
   async consumeAccountRateLimitResetCredit(
     params: ConsumeAccountRateLimitResetCreditParams,
+    _providerId?: string,
   ): Promise<ConsumeAccountRateLimitResetCreditResponse> {
     void params;
     return this.throwNotSupported('account:rate-limit-reset:consume', 'not-implemented');

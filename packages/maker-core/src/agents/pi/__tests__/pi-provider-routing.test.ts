@@ -5836,4 +5836,44 @@ describe("Pi provider-aware model routing", () => {
     ).rejects.toThrow(/cannot use local path mentions/);
     await handle.close();
   });
+
+  it("switches ChatGPT accounts with exact parent and subagent routes and retains missing-target failures", async () => {
+    const model = "chatgpt/gpt-5.6-luna";
+    let resolveParent: (() => string | null | undefined) | undefined;
+    const subagentAccounts: Array<string | null | undefined> = [];
+    const deps = byomDeps(async () => ({
+      providers: ["openai", "account-b"].map(sourceProviderId => ({
+        id: `native-${sourceProviderId}`, sourceProviderId, name: sourceProviderId,
+        baseUrl: "http://127.0.0.1:9", api: "openai-codex-responses" as const,
+        headers: { "x-cindy-pi-provider-id": sourceProviderId,
+          "x-cindy-pi-session-id": "$CINDY_PI_SESSION_ID",
+          "x-cindy-pi-session-token": "$CINDY_PI_SESSION_TOKEN" },
+        models: [{ id: model, wireId: "gpt-5.6-luna", contextWindow: 200000, reasoning: false }],
+      })), env: {},
+    }), [{ id: model, displayName: "Luna", contextWindow: 200000, efforts: [], defaultEffort: null }]);
+    deps.registerPiProxySession = (_id, _token, resolveProvider, options) => {
+      if (options?.scope === "subagent-route") subagentAccounts.push(resolveProvider());
+      else resolveParent = resolveProvider;
+    };
+    const handle = await new PiAgent(deps).startSession({ sessionId: "native-accounts", workingDir: cwd,
+      model, providerId: "openai", effort: "low" });
+    const config = JSON.parse(readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR!, "models.json"), "utf8"));
+    expect(config.providers["native-openai"].headers["x-cindy-pi-provider-id"]).toBe("openai");
+    expect(config.providers["native-account-b"].headers["x-cindy-pi-provider-id"]).toBe("account-b");
+    expect(subagentAccounts).toEqual(expect.arrayContaining(["openai", "account-b"]));
+    for (const account of ["account-b", "openai"]) {
+      await handle.setModel!(model, { providerId: account });
+      expect(resolveParent?.()).toBe(account);
+      expect(captured.requests).toContainEqual({ type: "set_model", provider: `native-${account}`, modelId: "gpt-5.6-luna" });
+      const snapshot = JSON.parse(readFileSync(runtimeFileOf("subagent", "native-accounts"), "utf8"));
+      expect(snapshot.provider).toBe(`native-${account}`);
+      expect(snapshot.pending).not.toBe(true);
+    }
+    const requestsBefore = captured.requests.length;
+    await expect(handle.setModel!(model, { providerId: "not-in-startup" })).rejects.toThrow(/cannot serve/);
+    expect(captured.requests.length).toBe(requestsBefore);
+    expect(resolveParent?.()).toBe("openai");
+    await handle.close();
+  });
+
 });

@@ -1,3 +1,5 @@
+import { captureTurnUsageContext, type TurnUsageContext } from './turnUsageContext.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
 import type { AgentEvent, Session } from '@cindy/maker-core';
 
 import { createLogger } from '../logger.js';
@@ -5,13 +7,14 @@ import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { recordSessionTurnSpend } from '../sessionSpendBroadcaster.js';
 import { recordSchedulerTurnCost, recordTurnUsageOnMessage } from '../turnCostBroadcaster.js';
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
+import { isClaudeSubscriptionProviderId } from '../maker-host/subscription-account-auth.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
 import {
   getGatewayAccountCurrency,
   getGatewayModelPricingForModel,
 } from '../usage/modelPricing.js';
-import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
+import { getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../usage/referenceModelPricing.js';
 import {
   ClaudeOutputLagTimingGuard,
   computeModelUsageDeltas,
@@ -57,10 +60,10 @@ import {
 } from '../usageBroadcaster.js';
 import { broadcastSchedulerChanged } from './schedule.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { readClaudeSessionRoute } from '../maker-host/claude-session-route-registry.js';
 
 export interface RecordSessionClaudeTurnUsageDeps {
+  readonly turnUsageContextBySession: Map<string, TurnUsageContext>;
   readonly turnModelPromiseBySession: Map<string, Promise<string>>;
   readonly readSessionModelForUsage: (sessionId: string) => Promise<string>;
   readonly lastReportedModelUsageBySession: Map<string, Map<string, ModelUsageCumulative>>;
@@ -88,6 +91,8 @@ export function recordSessionClaudeTurnUsage(
   // (今日 / session / per-message / 按模型) 同源同值。
   // 守卫: index.ts:388 stream_end fallback / codex done 不带 total_cost_usd, typeof 检查会跳过。
   if (event.type === 'done' && event.source === 'claude-code') {
+    const turnContext = deps.turnUsageContextBySession.get(session.id) ?? captureTurnUsageContext(session.id);
+    deps.turnUsageContextBySession.delete(session.id);
     const modelPromise =
       deps.turnModelPromiseBySession.get(session.id) ?? deps.readSessionModelForUsage(session.id);
     deps.turnModelPromiseBySession.delete(session.id);
@@ -222,20 +227,16 @@ export function recordSessionClaudeTurnUsage(
       // 由同一份解析结果驱动。价格表走 main 端内存 + 磁盘缓存, stale 快返并后台刷新。
       const deltas = modelUsageDeltas ?? [];
       void (async () => {
-        const sessionProviderForBilling = getSessionProvider(session.id);
+        const sessionProviderForBilling = turnContext.providerId;
         const observedClaudeRoute =
           sessionProviderForBilling == null ? readClaudeSessionRoute(session.id) : null;
         const explicitProviderBillingRoute = billingRouteForExplicitProvider(
           sessionProviderForBilling,
-          sessionProviderForBilling
-            ? getActiveCatalog().providers.find(
-                (provider) => provider.id === sessionProviderForBilling,
-              )?.access?.kind
-            : null,
+          turnContext.accessKind,
         );
         const isClaudeSubscriptionSession =
           !session.remoteHostId &&
-          (sessionProviderForBilling === 'anthropic' ||
+          (turnContext.subscriptionKind === 'claude' ||
             (sessionProviderForBilling == null &&
               (observedClaudeRoute != null
                 ? observedClaudeRoute === 'subscription'
@@ -282,7 +283,9 @@ export function recordSessionClaudeTurnUsage(
             isClaudeSubscriptionValueRow || isBridgeSubscriptionRow
               ? computePriceQuoteTurnMoney(
                   m.deltas,
-                  getSubscriptionValuePriceFor('claude-code', m.model, pricing),
+                  (sessionProviderForBilling
+                    ? getCodexProviderSubscriptionValuePrice(sessionProviderForBilling, m.model, pricing, undefined, undefined, 'claude-code')
+                    : undefined) ?? getSubscriptionValuePriceFor('claude-code', m.model, pricing),
                   currentLedgerCurrency(),
                   m.segments,
                 )
@@ -428,18 +431,15 @@ export function recordSessionClaudeTurnUsage(
           await recordUsageOnly();
           return;
         }
-        const providerId = getSessionProvider(session.id);
+        const providerId = turnContext.providerId;
         const observedRoute = providerId == null ? readClaudeSessionRoute(session.id) : null;
         const explicitProviderRoute = billingRouteForExplicitProvider(
           providerId,
-          providerId
-            ? getActiveCatalog().providers.find((provider) => provider.id === providerId)?.access
-                ?.kind
-            : null,
+          turnContext.accessKind,
         );
         const route: BillingRoute = session.remoteHostId
           ? 'unknown'
-          : providerId === 'anthropic' || observedRoute === 'subscription'
+          : turnContext.subscriptionKind === 'claude' || observedRoute === 'subscription'
             ? 'subscription'
             : (explicitProviderRoute ?? (observedRoute === 'gateway' ? 'xd-gateway' : 'unknown'));
         // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
@@ -480,8 +480,9 @@ export function recordSessionClaudeTurnUsage(
     // chip 的订阅额度实时更新 —— bridge 轮不产生 codex account_usage 事件,须主动触发。
     void modelPromise
       .then((m) => {
-        if (m && m.startsWith(CHATGPT_MODEL_PREFIX)) triggerCodexAccountUsageRefresh();
-        if (m && isExclusiveXaiModelId(m)) triggerXaiSubscriptionUsageRefresh();
+        const providerId = turnContext.providerId;
+        if (m && m.startsWith(CHATGPT_MODEL_PREFIX) && (providerId == null || isOpenAiSubscriptionProviderId(providerId))) triggerCodexAccountUsageRefresh(providerId ?? undefined);
+        if (m && isExclusiveXaiModelId(m)) triggerXaiSubscriptionUsageRefresh(providerId ?? undefined);
       })
       .catch(() => {
         /* 模型解析失败: 跳过, 非致命 */
@@ -489,6 +490,6 @@ export function recordSessionClaudeTurnUsage(
     // Claude 订阅账号余量 (oauth/usage 端点) 同理 turn-done 触发一次 —— 节流 (180s) /
     // 429 退避 / 未连订阅 no-op 都在 reader 内部; turn 内的实时刷新由 proxy 旁路读
     // unified headers 兜住, 这里只负责把 scoped 分模型窗口等端点独有数据拉新。
-    triggerClaudeSubscriptionUsageRefresh();
+    triggerClaudeSubscriptionUsageRefresh(getSessionProvider(session.id) ?? undefined);
   }
 }

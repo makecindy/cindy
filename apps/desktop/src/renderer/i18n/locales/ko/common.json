@@ -1492,6 +1492,10 @@
       },
       "pill": {
         "connected": "연결됨",
+        "configured": "설정됨",
+        "disconnected": "연결되지 않음",
+        "connecting": "연결 중…",
+        "rename": "이름 변경",
         "suspended": "비활성화됨"
       },
       "button": {
@@ -1516,7 +1520,17 @@
         "reconnectRequired": "다시 연결 필요",
         "connect": "ChatGPT 연결",
         "reconnect": "ChatGPT 다시 연결",
-        "cancelConnect": "연결 취소"
+        "cancelConnect": "연결 취소",
+        "accountSource": {
+          "local": "로컬 Codex 계정",
+          "oauth": "별도로 로그인한 계정",
+          "unknown": "기존 OpenAI 연결"
+        },
+        "useLocalAccount": "로컬 Codex 계정 사용",
+        "addIndependentAccount": "별도 계정으로 로그인",
+        "accountSourcesDescription": "기존 로컬 Codex 연결을 사용하거나 별도로 저장되는 계정에 로그인하세요. 두 방식 모두 같은 기능을 지원합니다.",
+        "independentAccountDescription": "별도로 저장되는 ChatGPT 계정에 로그인하거나 API 키로 연결하세요.",
+        "localUnavailable": "재사용할 수 있는 로컬 연결이 없습니다. 기존 제공자의 계정은 변경되지 않습니다."
       },
       "xai": {
         "title": "xAI",
@@ -1525,7 +1539,7 @@
         "billingLabel": "SuperGrok 구독 직접 연결",
         "asset": {
           "weeklyTitle": "주간 한도",
-          "weeklyUsed": "{{percent}}% 사용됨",
+          "weeklyRemaining": "{{percent}}% 남음",
           "resetsAt": "{{at}} 초기화",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Grok 사용량 페이지 열기"
@@ -1810,7 +1824,7 @@
         "subscription": "구독",
         "subscriptionProduct": "{{product}} 구독",
         "noResults": "일치하는 모델 없음",
-        "capabilityNote": "{{agent}}에서는 사용 불가",
+        "capabilityNote": "{{agent}} 설정되지 않음",
         "refreshAria": "모델 목록 새로고침(추가만)",
         "refreshBuiltinAria": "모델 목록 새로고침",
         "refreshingAria": "모델 목록 새로고침 중…",
@@ -1886,6 +1900,7 @@
           "engines": "엔진 지원",
           "enginesHint": "호환 모드는 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
           "engineUnsupported": "지원 안 함",
+          "engineNotConfigured": "설정되지 않음",
           "engineNoFast": "Fast 없음",
           "vision": {
             "vision": "지원",
@@ -2221,27 +2236,15 @@
           "cancel": "취소"
         }
       },
-      "imagesKey": {
-        "label": "이미지 생성 API key",
-        "placeholder": "OpenAI 플랫폼 API key 붙여넣기",
-        "save": "저장",
-        "clear": "지우기",
-        "toast": {
-          "saved": "이미지 생성 API key를 저장했습니다",
-          "saveFailed": "이미지 생성 API key 저장에 실패했습니다. 다시 시도해 주세요",
-          "cleared": "이미지 생성 API key를 지웠습니다",
-          "clearFailed": "이미지 생성 API key 지우기에 실패했습니다"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% 사용",
+        "percentRemaining": "{{percent}}% 남음",
         "resetsAt": "{{at}} 초기화",
         "claudePlanFallback": "Claude 구독",
-        "claudeWeekly": "7일 창 {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7일 한도 {{percent}}% 남음",
+        "scopedModel": "{{model}} {{percent}}% 남음",
         "openClaudeUsage": "사용량 페이지 열기",
         "codexPlanFallback": "ChatGPT 구독",
-        "codexSecondary": "보조 창 {{percent}}%",
+        "codexSecondary": "보조 한도 {{percent}}% 남음",
         "codexResetCredits": "한도 초기화 크레딧 {{count}}장"
       }
     },
@@ -5958,6 +5961,8 @@
     "modelWeeklyLabel": "{{model}} 주간",
     "usedPercent": "사용 {{percent}}%",
     "remainingPercent": "남은 {{percent}}%",
+    "resetIn": "{{duration}} 후 초기화",
+    "resetPending": "초기화 정보 업데이트 대기 중",
     "resetAt": "{{at}} 재설정",
     "noWindows": "할당량 구간 데이터가 없습니다",
     "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
