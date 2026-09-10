@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  ArrowLeft,
   Bot,
   Copy,
   Eye,
@@ -27,6 +28,7 @@ import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
+import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import { useRemoteBots } from './useRemoteBots';
 import { remoteBotKey, isRemoteBotUnread } from './remoteBotRoster';
 import { BotConnectionStatus } from './BotConnectionStatus';
@@ -247,14 +249,12 @@ function BotsSidebarContent() {
   if (collapsed) {
     return (
       <div className="flex flex-col items-center gap-2 px-2 pt-3">
-        <button
-          type="button"
-          onClick={() => navigate('/bots')}
-          className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--sidebar-nav-text)] hover:bg-sidebar-item-hover"
-          aria-label={t('bots.title')}
-        >
-          <Bot size={16} />
-        </button>
+        <SidebarIconButton
+          icon={ArrowLeft}
+          label={t('sidebar.backToSessions')}
+          variant="rail"
+          onClick={() => navigate('/cc-agent')}
+        />
         <BotCreateMenu compact />
       </div>
     );

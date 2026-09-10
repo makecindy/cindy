@@ -151,6 +151,9 @@ export function SidebarTopNav({
     </button>
   ) : null;
   if (section === 'rail') {
+    // The bots feature owns the rail tile while its route is active. Reuse
+    // that tile for the return action instead of rendering a duplicate here.
+    if (isBotsView) return <></>;
     return (
       <div className="flex shrink-0 justify-center px-2 pt-2 pb-1">
         <SidebarIconButton
