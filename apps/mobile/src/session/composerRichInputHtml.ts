@@ -504,8 +504,13 @@ export function buildComposerRichInputHtml(config: ComposerRichInputConfig): str
   root.addEventListener('compositioncancel', () => { composing = false; notify(); });
   root.addEventListener('focus', () => post({ type: 'focus' }));
   // A resize-to-collapsed gesture blurs the WebView immediately. Flush any
-  // DOM edits that have not crossed the bridge yet before native changes state.
-  root.addEventListener('blur', () => { notify(); post({ type: 'blur' }); });
+  // settled DOM edits before native changes state. A pending paste has already
+  // deleted its selection; let commitPaste publish the completed replacement.
+  root.addEventListener('blur', () => {
+    const pendingPaste = Array.from(pasteMarkers.values()).some(({ marker }) => root.contains(marker));
+    if (!pendingPaste) notify();
+    post({ type: 'blur' });
+  });
   root.addEventListener('keydown', (event) => {
     const backward = event.key === 'Backspace';
     if (!backward && event.key !== 'Delete') return;

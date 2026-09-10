@@ -484,6 +484,61 @@ describe('mobile composer rich input HTML', () => {
       },
     });
     expect(legacyHtml).not.toContain('replaceChildren');
+    for (const finish of ['commit', 'replace-document']) {
+      windowStub.cindyComposer?.applyDocument({
+        version: 1,
+        nodes: [{ type: 'text', text: 'hello world' }],
+      }, true);
+      const selectedPasteRange = createRange();
+      selectedPasteRange.setStart(children[0], 5);
+      // Model replacing the selected suffix: Range.deleteContents mutates
+      // the DOM before native returns the asynchronously processed paste.
+      selectedPasteRange.deleteContents = () => { children[0].nodeValue = 'hello'; };
+      selection.addRange(selectedPasteRange);
+      const beforePaste = messages.length;
+      listeners.get('paste')?.({
+        clipboardData: { getData: () => ' replacement', items: [] },
+        preventDefault() {},
+      });
+      const requestId = finish === 'commit' ? '2' : '3';
+      const pasteRequest = { type: 'paste-text-request', requestId, text: ' replacement' };
+      expect(children[0].nodeValue).toBe('hello');
+      listeners.get('blur')?.();
+      expect(messages.slice(beforePaste)).toEqual([pasteRequest, { type: 'blur' }]);
+
+      if (finish === 'commit') {
+        windowStub.cindyComposer?.commitPaste(requestId, [{ type: 'text', text: ' replacement' }]);
+        expect(messages.slice(beforePaste)).toEqual([
+          pasteRequest,
+          { type: 'blur' },
+          {
+            type: 'change',
+            document: { version: 1, nodes: [{ type: 'text', text: 'hello replacement' }] },
+          },
+        ]);
+      } else {
+        // Replacing the document detaches the pending marker. Its late reply
+        // must neither overwrite the new draft nor block a later blur flush.
+        windowStub.cindyComposer?.applyDocument({
+          version: 1,
+          nodes: [{ type: 'text', text: 'new draft' }],
+        }, true);
+        children[0].nodeValue = 'new draft edited';
+        const beforeNewBlur = messages.length;
+        listeners.get('blur')?.();
+        expect(messages.slice(beforeNewBlur)).toEqual([
+          {
+            type: 'change',
+            document: { version: 1, nodes: [{ type: 'text', text: 'new draft edited' }] },
+          },
+          { type: 'blur' },
+        ]);
+        const beforeLatePaste = messages.length;
+        windowStub.cindyComposer?.commitPaste(requestId, [{ type: 'text', text: ' replacement' }]);
+        expect(messages).toHaveLength(beforeLatePaste);
+        expect(children[0].nodeValue).toBe('new draft edited');
+      }
+    }
     windowStub.cindyComposer?.applyDocument({
       version: 1,
       nodes: [
