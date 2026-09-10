@@ -1,3 +1,5 @@
+import { BUILTIN_PROVIDERS } from './builtin.js';
+import { providerMediaField } from "./providerMediaModels.js";
 import {
   expandedRegistryEntries,
   resolveModelMetadata,
@@ -284,6 +286,7 @@ function toCatalogModel(
   agent: AgentKind,
   modelRegistry: ModelRegistry | null | undefined,
   providerDefaults?: ModelMetadata,
+  metadataProviderId = providerId,
 ): CatalogModel {
   // 显式 runtime 能力优先：reasoning:true 才导出 efforts；false = 明确无思考档。
   // 字段缺省才走历史 fallback（Pi 空档 / 其它自定义 Provider 的 CUSTOM_EFFORTS）。
@@ -344,7 +347,7 @@ function toCatalogModel(
     providerDefaults
       ? resolveModelMetadata(
           modelRegistry ?? undefined,
-          providerId,
+          metadataProviderId,
           m.id,
           m.discoveredMetadata,
           pickModelMetadata(user),
@@ -371,7 +374,7 @@ function toRouting(
   requestPath: string | undefined,
   headers: Record<string, string> | undefined,
   headersState: "configured" | "unknown" | undefined,
-  strategy: "api-key-header" | "oauth-token" | "none",
+  strategy: "api-key-header" | "oauth-token" | "oauth-passthrough" | "provider-oauth-header" | "none",
   modelsUrl?: string,
   wireProtocol?: "anthropic-messages" | "openai-responses" | "openai-chat",
   piCatalogProviderId?: string,
@@ -380,7 +383,7 @@ function toRouting(
   const r: RoutingDescriptor = {
     upstream: baseUrl,
     authStrategy: strategy,
-    ...(agent === "codex" &&
+    ...(agent === "codex" && strategy !== "oauth-passthrough" &&
     (wireProtocol ?? defaultWireProtocol(agent)) === "openai-responses"
       ? { supportsResponsesCustomTools: false }
       : {}),
@@ -427,9 +430,11 @@ export function buildUserProvider(
   const runtimeProviderId = runtimeCustomProviderId(config.id);
   // OAuth 形态路由走 Runner Bearer；none 明确走无鉴权且由 host 剥凭证；缺省保持历史 API key。
   const oauth = config.auth?.method === "oauth" ? config.auth.oauth : undefined;
-  const isOAuth = oauth !== undefined;
+  const nativeCodex = config.auth?.method === "oauth" && config.auth.native === "codex";
+  const native = config.auth?.method === "oauth" ? config.auth.native : undefined;
+  const isOAuth = oauth !== undefined || !!native;
   const noAuth = config.auth?.method === "none";
-  const strategy = isOAuth ? "oauth-token" : noAuth ? "none" : "api-key-header";
+  const strategy = nativeCodex ? "oauth-passthrough" : native ? "provider-oauth-header" : isOAuth ? "oauth-token" : noAuth ? "none" : "api-key-header";
   const routing: Partial<Record<AgentKind, RoutingDescriptor>> = {};
   const models: Partial<Record<AgentKind, CatalogModel[]>> = {};
   const agents: AgentKind[] = [];
@@ -486,18 +491,74 @@ export function buildUserProvider(
           agent,
           options.modelRegistry,
           defaults,
+          nativeCodex ? 'openai' : undefined,
         ),
         ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
       };
     });
   }
+  if (native === 'claude' || native === 'xai') {
+    const identity = BUILTIN_PROVIDERS.find((provider) => provider.id === (native === 'claude' ? 'anthropic' : 'xai'))!;
+    return {
+      ...identity,
+      id: runtimeProviderId,
+      name: config.name,
+      source: 'user',
+      auth: { method: 'oauth', native },
+      routing: Object.fromEntries(Object.entries(identity.routing).map(([agent, route]) => [
+        agent, { ...route, authStrategy: 'provider-oauth-header' },
+      ])),
+      // Media remains explicitly bound to the original provider until it supports account selection.
+      imageModels: undefined,
+      imageDefaults: undefined,
+      videoModels: undefined,
+      videoDefaults: undefined,
+    };
+  }
+  if (nativeCodex) {
+    const identity = BUILTIN_PROVIDERS.find((provider) => provider.id === 'openai')!;
+    return {
+      ...identity,
+      id: runtimeProviderId,
+      name: config.name,
+      source: 'user',
+      auth: { method: 'oauth', native: 'codex' },
+      models: { ...identity.models, codex: models.codex ?? [] },
+      imageModels: identity.imageModels?.map((model) => ({ ...model, id: model.id.replace(/^openai\//, `${runtimeProviderId}/`) })),
+    };
+  }
+  const mediaLists: Partial<
+    Pick<
+      Provider,
+      "imageModels" | "videoModels" | "audioModels" | "embeddingModels"
+    >
+  > = {};
+  for (const [agent, list] of Object.entries(models)) {
+    for (const model of list ?? []) {
+      const field = providerMediaField(model.mode);
+      if (!field) continue;
+      const items = (mediaLists[field] ??= []);
+      if (!items.some((item) => item.id === model.id))
+        items.push({
+          ...pickModelMetadata(model),
+          id: model.id,
+          name: model.name,
+          mode: model.mode,
+          discoveredMetadata: model.discoveredMetadata,
+          sourceAgent: agent as AgentKind,
+          ...(model.modalities ? { modalities: model.modalities } : {}),
+          ...(model.description ? { description: model.description } : {}),
+        });
+    }
+  }
   return {
+    ...mediaLists,
     id: runtimeProviderId,
     name: config.name,
     source: "user",
     agents,
     auth: isOAuth
-      ? { method: "oauth", oauth }
+      ? { method: "oauth", ...(nativeCodex ? { native: "codex" as const } : { oauth }) }
       : noAuth
         ? { method: "none" }
         : { method: "apiKey" },

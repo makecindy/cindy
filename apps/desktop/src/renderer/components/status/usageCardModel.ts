@@ -5,7 +5,6 @@ import type { RateLimitSnapshot } from '@/hooks/useAccountUsage';
 import type { XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../shared/claudeSubscriptionUsage';
 import {
-  formatXaiProductLabel,
   isXaiWeeklyUsageCurrent,
   type XaiSubscriptionUsageSnapshot,
 } from '../../../shared/xaiSubscriptionUsage';
@@ -41,6 +40,35 @@ export interface UsageCardAccount {
   notices?: Array<{ text: string; tone: 'warn' | 'crit' }>;
   emptyText?: string;
   updatedAt?: number | null;
+}
+
+/** Compact surfaces lead with time remaining; round up to minutes and show
+ * at most two units. An elapsed timestamp awaits a new authoritative snapshot. */
+export function formatQuotaResetCountdown(
+  resetsAt: number | null | undefined,
+  nowMs: number,
+  t: TFunction,
+): string | null {
+  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
+  const remainingMs = resetsAt * 1000 - nowMs;
+  if (remainingMs <= 0) return t('quotaCard.resetPending');
+  const minutes = Math.ceil(remainingMs / 60_000);
+  const days = Math.floor(minutes / 1440);
+  const hours = Math.floor((minutes % 1440) / 60);
+  const remainder = minutes % 60;
+  const parts =
+    days > 0
+      ? [
+          `${days}${t('todaySpend.unit.day')}`,
+          ...(hours ? [`${hours}${t('todaySpend.unit.hour')}`] : []),
+        ]
+      : hours > 0
+        ? [
+            `${hours}${t('todaySpend.unit.hour')}`,
+            ...(remainder ? [`${remainder}${t('todaySpend.unit.minute')}`] : []),
+          ]
+        : [`${minutes}${t('todaySpend.unit.minute')}`];
+  return t('quotaCard.resetIn', { duration: parts.join(' ') });
 }
 
 export function formatQuotaResetAt(
@@ -79,7 +107,7 @@ export function buildClaudeUsageCard(
     paceWindowMinutes?: number,
   ) => {
     if (window && Number.isFinite(window.utilization))
-      windows.push({ key, title, window, paceWindowMinutes, showRemaining: key !== 'five-hour' });
+      windows.push({ key, title, window, paceWindowMinutes, showRemaining: true });
   };
   add('five-hour', t('quotaCard.fiveHourLabel'), snapshot.fiveHour);
   add('seven-day', t('quotaCard.weeklyLabel'), snapshot.sevenDay, 10_080);
@@ -134,7 +162,7 @@ export function buildCodexUsageCard(
     windows.push({
       key,
       title: quotaWindowLabel(window.windowMinutes, t),
-      showRemaining: window.windowMinutes === 10_080,
+      showRemaining: true,
       window: { utilization: window.usedPercent, resetsAt: window.resetsAt },
       paceWindowMinutes: window.windowMinutes === 10_080 ? 10_080 : undefined,
     });
@@ -206,14 +234,6 @@ export function buildXaiUsageCard(
       window: { utilization: weekly.creditUsagePercent, resetsAt: weekly.resetsAt },
       paceWindowMinutes: 10_080,
       detail: t('todaySpend.xai.accountWeeklyHint'),
-      breakdown: (weekly.productUsage ?? [])
-        .filter((product) => Number.isFinite(product.usagePercent))
-        .map((product) => ({
-          label: t('quotaCard.includedLabel', { name: formatXaiProductLabel(product.product) }),
-          value: t('quotaCard.usedPercent', {
-            percent: Math.round(Math.min(100, Math.max(0, product.usagePercent))),
-          }),
-        })),
     });
     if (
       typeof weekly.prepaidBalance === 'number' &&

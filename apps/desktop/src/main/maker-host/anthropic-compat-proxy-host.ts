@@ -47,6 +47,8 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
+import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
+import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 import {
   getPiNativeSubscriptionHandler,
   getResponsesBridgeHandler,
@@ -522,7 +524,7 @@ export function createModelRoutingTransform(): RoutingTransform {
           && piProviderId !== selectedPiProviderId
         ))
         || (!subagentRoute && (
-          (selectedPiProviderId === 'openai' || selectedPiProviderId === 'xai')
+          (isOpenAiSubscriptionProviderId(selectedPiProviderId) || isXaiSubscriptionProviderId(selectedPiProviderId))
           && piProviderId !== selectedPiProviderId
         ))
       )
@@ -549,7 +551,7 @@ export function createModelRoutingTransform(): RoutingTransform {
         },
       };
     }
-    if (piSessionId && (piProviderId === 'openai' || piProviderId === 'xai')) {
+    if (piSessionId && piProviderId && (isOpenAiSubscriptionProviderId(piProviderId) || isXaiSubscriptionProviderId(piProviderId))) {
       return {
         // PI has already built the provider-native request. The local handler
         // authenticates and forwards it; the xAI forwarder also restores its
@@ -626,9 +628,9 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (
       !piSessionId
       && isSubscriptionDirectRoute(wireModel)
-      && !(explicitCustomProvider && isExclusiveXaiModelId(wireModel) && !wireModel.startsWith(XAI_MODEL_PREFIX))
+      && !(explicitCustomProvider && !isXaiSubscriptionProviderId(selectedProviderId) && isExclusiveXaiModelId(wireModel) && !wireModel.startsWith(XAI_MODEL_PREFIX))
     ) {
-      const bridgeHandler = getResponsesBridgeHandler();
+      const bridgeHandler = getResponsesBridgeHandler((isOpenAiSubscriptionProviderId(selectedProviderId) || isXaiSubscriptionProviderId(selectedProviderId)) ? selectedProviderId! : undefined);
       if (!bridgeHandler) {
         if (isExclusiveXaiModelId(wireModel)) {
           log.warn('exclusive xAI model but responses handler unavailable; refusing default gateway', {

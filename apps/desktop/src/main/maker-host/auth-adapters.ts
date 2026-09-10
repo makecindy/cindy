@@ -1,3 +1,4 @@
+import { subscriptionAccountKind, subscriptionAccountState, readClaudeAccountOAuth, getValidClaudeAccountOAuth } from './subscription-account-auth.js';
 /**
  * apps/desktop/src/main/maker-host/auth-adapters.ts
  *
@@ -14,6 +15,7 @@
  */
 
 import { app, safeStorage } from 'electron';
+import { isCodexAccountProvider, codexAccountState, codexAccountHome, prepareCodexAccountHome, parseCodexAccountIdentity } from './codex-account-auth.js';
 import { createHash, timingSafeEqual } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
@@ -261,14 +263,15 @@ export function chatgptAccountIdFromIdToken(idToken: string): string | null {
  * app-server / CLI 负责（本函数只读当下值）；文件缺失 / 非 chatgpt 模式 / 解析失败 → null
  * （调用方据此跳过 codex 这条标题来源，不抛）。
  */
-function readCodexOneShotCredsFromDisk(): { accessToken: string; accountId: string } | null {
-  if (!isNativeProviderAuthBound('openai')) return null;
+function readCodexOneShotCredsFromDisk(providerId?: string): { accessToken: string; accountId: string } | null {
+  const independent = !!providerId && providerId !== 'openai';
+  if (independent ? !codexAccountState(providerId!).authenticated : !isNativeProviderAuthBound('openai')) return null;
   try {
-    const codexHome = getCodexHome();
+    const codexHome = independent ? codexAccountHome(providerId!) : getCodexHome();
     const authPath = path.join(codexHome, 'auth.json');
     // logout 的 durable marker 是提交点。Windows 文件锁可能让旧 auth.json 暂时残留，
     // oneShot 直读也必须服从同一断开语义，不能绕过 adapter 继续使用旧账号。
-    if (shouldSuppressLocalCodexAuth(codexHome, authPath)) return null;
+    if (!independent && shouldSuppressLocalCodexAuth(codexHome, authPath)) return null;
     const raw = fs.readFileSync(authPath, 'utf-8');
     const obj = JSON.parse(raw) as {
       tokens?: { access_token?: unknown; account_id?: unknown; id_token?: unknown };
@@ -619,6 +622,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
+    if (options?.providerId && subscriptionAccountKind(options.providerId)) return subscriptionAccountState(options.providerId);
     if (!safeStorage.isEncryptionAvailable()) {
       return { authenticated: false, errorReason: 'no_encryption' };
     }
@@ -688,7 +692,11 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
     await this.ensureSharedGlobalSkills();
     const env: Record<string, string> = {};
-    if (options?.credentialMode === 'gateway-key') {
+    if (options?.providerId && subscriptionAccountKind(options.providerId) === 'claude') {
+      const oauth = readClaudeAccountOAuth(options.providerId);
+      if (!oauth) throw new Error('Claude account requires login');
+      Object.assign(env, claudeOAuthSpawnEnv(oauth), { CINDY_CLAUDE_ACCOUNT_PROVIDER_ID: options.providerId });
+    } else if (options?.credentialMode === 'gateway-key') {
       const apiKey = readClaudeApiKey();
       if (apiKey) env.ANTHROPIC_API_KEY = apiKey;
     } else if (options?.credentialMode === 'provider-oauth') {
@@ -758,14 +766,17 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
    * 预算也会完成写回,cc 第二条恢复路 tengu_oauth_401_recovered_from_disk 能捡到),
    * 不把整个 turn 吊在一次慢网络上。
    */
-  async getFreshSubscriptionToken(staleToken?: string): Promise<string | null> {
+  async getFreshSubscriptionToken(staleToken?: string, providerId?: string): Promise<string | null> {
+    if (providerId && subscriptionAccountKind(providerId) !== 'claude') return null;
     const timeout = new Promise<null>((resolve) =>
       setTimeout(() => resolve(null), CLAUDE_OAUTH_CALLBACK_TIMEOUT_MS).unref?.(),
     );
     // staleToken = 该会话实际撞 401 的那枚(spawn 注入 / 上次回调返回)。库值已比它新
     // (后台预续期换代)时刷新器直接返回库值,不再消耗一次轮换 —— 防多个长会话对同
     // 一枚旧 token 群体 401 时串行连环旋转。
-    const refresh = getValidClaudeAiOAuth({ forceRefresh: true, staleToken }).then(
+    const refresh = (providerId
+      ? getValidClaudeAccountOAuth(providerId, { forceRefresh: true, staleToken })
+      : getValidClaudeAiOAuth({ forceRefresh: true, staleToken })).then(
       (oauth) => oauth?.accessToken ?? null,
     );
     return Promise.race([refresh, timeout]);
@@ -1473,6 +1484,7 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   async getState(options?: AuthAdapterOptions): Promise<AuthState> {
+    if (isCodexAccountProvider(options?.providerId)) return codexAccountState(options!.providerId!);
     const state = await this.readState({ credentialMode: options?.credentialMode });
     const stateWithWritePolicy = this.devOAuthWritesBlocked()
       ? { ...state, oauthWritesBlocked: true }
@@ -1748,7 +1760,11 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         expires_at?: unknown;
         tokens?: { access_token?: unknown };
       };
-      const identity = typeof obj.account?.email === 'string' ? obj.account.email : undefined;
+      // Display metadata only: use the same token claims as independently added accounts.
+      // Parsing a label must not change the authentication decision below.
+      const identity = typeof obj.account?.email === 'string' && obj.account.email.trim()
+        ? obj.account.email
+        : parseCodexAccountIdentity(raw)?.label;
       const expiresAt = typeof obj.expires_at === 'number' ? obj.expires_at : undefined;
       // authSource='oauth' 必须与 spawn fallback 的判定同源(hasCodexOAuthLogin =
       // auth.json 含 access_token,见下方 getAccessToken 的字段路径)。`codex login
@@ -2361,6 +2377,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
   }
 
   async getAuthEnv(options?: AuthAdapterOptions): Promise<Record<string, string>> {
+    if (isCodexAccountProvider(options?.providerId)) {
+      return { CODEX_HOME: await prepareCodexAccountHome(options!.providerId!) };
+    }
     this.ensureInvalidationMarkerLoaded();
     await this.ensureGlobalCodexAssets();
     // proxy 路线: codex 始终经 loopback proxy 出口, spawn 鉴权分两路(见 prepareCodexExtraSpawnConfig):
@@ -2416,6 +2435,19 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     return this.hasCodexOAuthLoginUnbound();
   }
 
+  /** Non-mutating account presentation for provider lists, including remote readers. */
+  async readAccountPresentationState(): Promise<AuthState> {
+    const credentialScope = this.readCodexCredentialScope();
+    if (!this.hasCodexOAuthLoginReadOnly()) return {
+      authenticated: false, credentialScope,
+      ...(this.oauthInvalidatedReason ? { errorReason: this.oauthInvalidatedReason } : {}),
+    };
+    const owner = getActiveAppSession().generation;
+    const state = await this.readLocalCodexAuthState();
+    if (getActiveAppSession().generation !== owner) return { authenticated: false };
+    return { ...state, credentialScope };
+  }
+
   /** Legacy upgrade probe; only used while claiming the first verified owner. */
   hasCodexOAuthLoginUnbound(): boolean {
     if (this.devReadOnlyDetached) return false;
@@ -2430,9 +2462,9 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     }
   }
 
-  readOneShotCreds(): { accessToken: string; accountId: string } | null {
-    if (this.devReadOnlyDetached) return null;
-    return readCodexOneShotCredsFromDisk();
+  readOneShotCreds(providerId?: string): { accessToken: string; accountId: string } | null {
+    if ((!providerId || providerId === 'openai') && this.devReadOnlyDetached) return null;
+    return readCodexOneShotCredsFromDisk(providerId);
   }
 
   /**
@@ -2442,7 +2474,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * token, and callers should only use it for short-lived OpenAI requests that
    * are covered by the active Codex login.
    */
-  async getAccessToken(): Promise<string | null> {
+  async getAccessToken(providerId?: string): Promise<string | null> {
+    if (providerId && providerId !== 'openai') return readCodexOneShotCredsFromDisk(providerId)?.accessToken ?? null;
     this.ensureInvalidationMarkerLoaded();
     if (this.oauthInvalidatedReason) {
       await this.clearStaleInvalidationIfSystemCodexChanged();
@@ -2477,7 +2510,8 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
    * tokens.account_id nor a chatgpt_account_id claim is present; JWT sub is a
    * user id, not a workspace id, and must not bind reset-credit operations.
    */
-  async getAccountId(): Promise<string | null> {
+  async getAccountId(providerId?: string): Promise<string | null> {
+    if (providerId && providerId !== 'openai') return readCodexOneShotCredsFromDisk(providerId)?.accountId ?? null;
     this.ensureInvalidationMarkerLoaded();
     if (this.oauthInvalidatedReason) {
       await this.clearStaleInvalidationIfSystemCodexChanged();
@@ -2502,8 +2536,14 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
     context?: {
       credentialGeneration?: string | null;
       credentialAttribution?: 'unproven';
+      providerId?: string;
     },
   ): Promise<void> {
+    if (context?.providerId && isCodexAccountProvider(context.providerId)) {
+      // The host retires itself. An unattributed failure cannot invalidate a
+      // newer credential committed by a concurrent login for this provider.
+      return;
+    }
     const capturedFingerprint = parseCodexCredentialGeneration(context?.credentialGeneration);
     if (this.devOAuthWritesBlocked()) {
       log.warn('codex auth invalidated in dev read-only mode; durable credentials unchanged', {
@@ -2793,6 +2833,7 @@ export const desktopCodexAuthAdapter = new DesktopCodexAuthAdapter();
 
 export function readCodexOneShotCreds(
   adapter: DesktopCodexAuthAdapter = desktopCodexAuthAdapter,
+  providerId?: string,
 ): { accessToken: string; accountId: string } | null {
-  return adapter.readOneShotCreds();
+  return adapter.readOneShotCreds(providerId);
 }

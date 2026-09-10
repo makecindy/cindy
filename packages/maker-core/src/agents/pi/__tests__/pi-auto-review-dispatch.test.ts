@@ -1076,15 +1076,54 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
         error: 'Pi 扩展操作失败。',
       });
       expect(String(response.value)).not.toContain(rawError);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(rawError);
       expect(warn).toHaveBeenCalledWith('pi extension mutation failed', {
         action: 'install',
         sessionId,
-        message: rawError,
       });
     } finally {
       await handle.close();
     }
   });
+
+  it.each(['failed', 'timed-out', 'unknown', 'cancelled', 'analysis-unavailable'] as const)(
+    'preserves the %s result through the real package tool handler', async (outcome) => {
+      const deps = buildDeps();
+      deps.mutatePiManagedPackage = vi.fn(async () => {
+        if (outcome === 'analysis-unavailable') return {
+          changed: true, projectionUnavailable: true,
+          diagnostics: [{ phase: 'cindy-analysis', outcome: 'failed', exitCode: 2,
+            reason: 'build-failed', recovery: 'check-build-dependencies', stderr: 'fake-private-output' }],
+        };
+        if (outcome === 'cancelled') throw new PiManagedPackageMutationCancelledError();
+        throw new PiManagedPackageMutationFailedError(true, 'native-command-failed', {
+          phase: 'native-command', outcome, exitCode: outcome === 'failed' ? 128 : null,
+          reason: 'unknown', recovery: 'inspect-state-before-retry',
+        });
+      });
+      const handle = await new PiAgent(deps).startSession({ sessionId: `diagnostic-${outcome}`, workingDir: cwd, model: 'm' });
+      try {
+        handle.setInteractionResolver?.(vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never);
+        fireManagedPackageRequest(`diagnostic-${outcome}`, 'install', 'npm:sample');
+        const response = await waitForResponse(`diagnostic-${outcome}`);
+        const result = JSON.parse(String(response.value));
+        if (outcome === 'analysis-unavailable') {
+          expect(result).toMatchObject({ ok: true, result: {
+            changed: true, projectionUnavailable: true,
+            diagnostics: [{ phase: 'cindy-analysis', exitCode: 2, recovery: 'check-build-dependencies' }],
+          } });
+          expect(String(response.value)).not.toContain('fake-private-output');
+        } else if (outcome === 'cancelled') {
+          expect(result).toMatchObject({ ok: false, cancelled: true });
+          expect(result).not.toHaveProperty('diagnostic');
+        } else {
+          expect(result).toMatchObject({ ok: false, mayHaveChangedState: true, diagnostic: { outcome } });
+        }
+      } finally {
+        await handle.close();
+      }
+    },
+  );
 
   it('fails closed when managed extension confirmation is denied or the callback fails', async () => {
     const mutatePiManagedPackage = vi.fn(async () => ({ changed: true }));
@@ -1700,6 +1739,91 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it.each([
+    ['command', true], ['command', false], ['command', undefined],
+    ['tool', true], ['tool', false], ['tool', undefined],
+  ] as const)('reports enablement only with package evidence: %s / %s', async (route, enabled) => {
+    const deps = buildDeps();
+    deps.getPiExtensionUiStrings = () => ({
+      confirm: 'Confirm', cancel: 'Cancel', mutationFailed: 'Failed',
+      mutationSuccess: {
+        install: 'Installed only', installEnabled: 'Installed and enabled',
+        update: 'Updated', remove: 'Removed',
+      },
+    });
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true, nativeCommandSucceeded: true,
+      ...(enabled === undefined
+        ? { projectionUnavailable: true }
+        : { affectedPackage: { source: 'npm:sample', enabled } }),
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: `visible-install-${route}-${enabled}`, workingDir: cwd, model: 'm',
+    });
+    const events = handle.events()[Symbol.asyncIterator]();
+    try {
+      if (route === 'command') {
+        await handle.send(
+          { type: 'user', content: 'pi install npm:sample' },
+          desktopCommandOptions('pi install npm:sample'),
+        );
+      } else {
+        handle.setInteractionResolver?.(
+          vi.fn(async () => ({ kind: 'permission', behavior: 'allow' })) as never,
+        );
+        fireManagedPackageRequest('visible-install', 'install', 'npm:sample');
+        expect(JSON.parse(String((await waitForResponse('visible-install')).value))).toMatchObject({ ok: true });
+      }
+      let receipt = '';
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const event = await events.next();
+        if (event.done) break;
+        const data = event.value.data as { text?: unknown };
+        if (event.value.type === 'text' && typeof data?.text === 'string' && data.text.includes('Installed')) {
+          receipt = data.text;
+          break;
+        }
+      }
+      expect(receipt.split('\n')[0]).toBe(enabled === true ? 'Installed and enabled' : 'Installed only');
+      expect(deps.mutatePiManagedPackage).toHaveBeenCalledOnce();
+    } finally {
+      await handle.close();
+    }
+  });
+
+  it.each([true, undefined])('explains missing install projection using native success evidence %s', async (nativeCommandSucceeded) => {
+    const deps = buildDeps();
+    deps.mutatePiManagedPackage = vi.fn(async () => ({
+      changed: true, projectionUnavailable: true,
+      ...(nativeCommandSucceeded ? { nativeCommandSucceeded } : {}),
+    }));
+    const handle = await new PiAgent(deps).startSession({
+      sessionId: 'managed-package-missing-projection', workingDir: cwd, model: 'm',
+    });
+    try {
+      captured.requests = [];
+      await handle.send(
+        { type: 'user', content: 'pi install npm:sample' },
+        desktopCommandOptions('pi install npm:sample'),
+      );
+      const prompt = String(captured.requests.find((request) => request.type === 'prompt')?.message);
+      expect(prompt).toContain('"projectionUnavailable":true');
+      expect(prompt).toContain('Do not run bash');
+      expect(deps.mutatePiManagedPackage).toHaveBeenCalledOnce();
+      if (nativeCommandSucceeded) {
+        expect(prompt).toContain('"nativeCommandSucceeded":true');
+        expect(prompt).toContain('The native Pi installation succeeded. Report installation success.');
+        expect(prompt).toContain('Cindy cannot currently confirm the enabled state');
+        expect(prompt).not.toContain('Cindy could not leave the extension installed and enabled');
+      } else {
+        expect(prompt).not.toContain('The native Pi installation succeeded.');
+        expect(prompt).toContain('Cindy could not leave the extension installed and enabled');
+      }
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('keeps direct native success while publishing bounded recovery on host failure', async () => {
     const deps = buildDeps();
     const warn = vi.fn();
@@ -1984,9 +2108,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       }
       expect(visibleReceipt).not.toContain(resolvedSource);
       expect(visibleReceipt).not.toContain(rawError);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(rawError);
       expect(warn).toHaveBeenCalledWith('exact Pi extension command failed', {
         action: 'install',
-        message: rawError,
       });
     } finally {
       await handle.close();
@@ -2237,9 +2361,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       }
       expect(visibleReceipt).toContain('Pi 扩展操作失败。');
       expect(visibleReceipt).not.toContain(rawError);
+      expect(JSON.stringify(warn.mock.calls)).not.toContain(rawError);
       expect(warn).toHaveBeenCalledWith('exact Pi extension command failed', {
         action: 'install',
-        message: rawError,
       });
     } finally {
       await handle.close();
@@ -2258,7 +2382,10 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       mutationSuccess: { install: '已安装', update: '已更新', remove: '已移除' },
     });
     deps.mutatePiManagedPackage = vi.fn(async () => {
-      throw new PiManagedPackageMutationFailedError(false, 'version-not-found');
+      throw new PiManagedPackageMutationFailedError(false, 'version-not-found', {
+        phase: 'native-command', outcome: 'failed', exitCode: 1,
+        reason: 'version-not-found', recovery: 'check-version',
+      });
     });
     const handle = await new PiAgent(deps).startSession({
       sessionId: 'managed-package-actionable-failure-session',
@@ -2276,6 +2403,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       );
       expect(prompt).toContain('没有找到这个版本。请选择可用版本后重试。');
       expect(prompt).not.toContain('ETARGET');
+      expect(prompt).toContain('"exitCode":1');
+      expect(prompt).toContain('"recovery":"check-version"');
     } finally {
       await handle.close();
     }

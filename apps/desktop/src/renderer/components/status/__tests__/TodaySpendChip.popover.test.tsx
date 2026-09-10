@@ -62,6 +62,7 @@ vi.mock('react-i18next', () => ({
         'quotaCard.usedPercent': '已用 {{percent}}%',
         'quotaCard.remainingPercent': '剩余 {{percent}}%',
         'quotaCard.resetAt': '{{at}} 重置',
+        'quotaCard.resetIn': '{{duration}}后重置',
         'quotaCard.turnCostUnavailable': '本轮费用暂无法估算',
         'quotaCard.tokenLabel': 'Token',
         'quotaCard.tokenBreakdown': '（输入 {{input}} · 输出 {{output}}）',
@@ -809,11 +810,11 @@ describe('TodaySpendChip Claude subscription popover', () => {
       within(card)
         .getAllByRole('progressbar')
         .map((bar) => bar.getAttribute('aria-valuenow')),
-    ).toEqual(['22', '52']);
+    ).toEqual(['78', '52']);
     expect(within(card).getByText('剩余 52%')).toBeTruthy();
   });
 
-  it('Grok 产品用量属于周限明细，不重复进度条或重置时间，过期后移除旧百分比', () => {
+  it('Grok 共享池只显示真实剩余周限，不将产品贡献伪装成独立额度，过期后移除旧百分比', () => {
     mocks.xaiSnapshot = {
       planLabel: 'SuperGrok Heavy',
       creditUsagePercent: 8,
@@ -826,9 +827,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
     );
     act(() => screen.getByRole('button', { name: '打开 Grok 用量页面' }).focus());
     expect(screen.getAllByRole('progressbar')).toHaveLength(1);
-    const breakdown = screen.getByTestId('quota-window-breakdown');
-    expect(within(breakdown).getByText('其中 Grok Build')).toBeTruthy();
-    expect(within(breakdown).getByText('已用 8%')).toBeTruthy();
+    expect(screen.queryByTestId('quota-window-breakdown')).toBeNull();
     expect(screen.getByRole('progressbar').getAttribute('aria-valuenow')).toBe('92');
     expect(screen.getByText('剩余 92%')).toBeTruthy();
     expect(screen.getAllByText(/重置$/)).toHaveLength(1);
@@ -885,6 +884,6 @@ describe('TodaySpendChip Claude subscription popover', () => {
     act(() => screen.getByRole('button', { name: '用量明细' }).focus());
     expect(
       screen.getAllByRole('progressbar').map((bar) => bar.getAttribute('aria-valuenow')),
-    ).toEqual(['20', '40']);
+    ).toEqual(['80', '60']);
   });
 });

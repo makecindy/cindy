@@ -178,6 +178,7 @@
       "restoreFailed": "기본 설정으로 복원하지 못했습니다"
     },
     "tabs": {
+      "storage": "저장 공간",
       "general": "일반",
       "billing": "사용량 및 결제",
       "usage": "사용 기록",
@@ -923,10 +924,25 @@
         "unknown": "알 수 없음"
       },
       "storage": {
+        "mediaSectionTitle": "미디어 파일",
+        "databaseSectionTitle": "데이터베이스",
+        "overviewTitle": "로컬 저장 공간",
+        "overviewDescription": "데이터베이스와 미디어 캐시는 이 컴퓨터에 저장됩니다. Cindy는 기록을 자동으로 삭제하지 않습니다.",
+        "mediaSectionHint": "별도로 관리하며 삭제하기 전에 내용을 확인하세요",
+        "databaseUsage": "사용량 {{size}}",
+        "databaseWarningNote": "먼저 검사한 다음 정리할 항목을 선택하세요. 검사만으로는 파일이 삭제되지 않습니다.",
+        "dbSizeWarningThresholdLabel": "데이터베이스 알림 기준",
+        "dbSizeWarningThresholdDescription": "데이터베이스가 이 크기(G)를 초과하면 정리 알림",
+        "dbSizeWarningThresholdInvalid": "알림 기준값을 1~1024 G 범위로 입력하세요.",
+        "dbSizeWarningSaveFailed": "데이터베이스 알림 설정을 저장하지 못했습니다. 다시 시도하세요.",
+        "dbSizeWarningDisableLabel": "다시 알리지 않기",
+        "dbSizeWarningDisableDescription": "사용하면 데이터베이스 공간 알림이 숨겨집니다.",
+        "unknown": "알 수 없음",
         "title": "저장 공간",
         "usageLabel": "미디어 사용량",
-        "usageValue": "{{size}}({{count}}개 파일, 캐시 {{cacheSize}} 포함)",
+        "usageValue": "{{size}} ({{count}}개 파일, 캐시 {{cacheSize}})",
         "statsFailed": "통계를 일시적으로 사용할 수 없습니다",
+        "refreshStatsButton": "저장 공간 사용량 새로 고침",
         "legacyUsage": "이전 버전 데이터(읽기 전용, 정리 대상 아님): {{size}}",
         "legacyImagesLabel": "이미지 캐시 디렉터리",
         "legacyImagesDescription": "Cindy는 이 디렉터리를 자동으로 검사하거나 정리하지 않습니다. 파일을 삭제하면 메시지 기록의 이미지가 표시되지 않을 수 있으므로 확인 후 작업해 주세요.",
@@ -1280,8 +1296,7 @@
             "manual": "수동"
           },
           "toast": {
-            "title": "사전에 자동 추가됨",
-            "titleMultiple": "{{count}}개 단어가 사전에 자동 추가됨",
+            "title": "사전에 추가됨",
             "termsSummary": "{{terms}} 외 총 {{count}}개",
             "automaticAdded": "사전에 자동 추가됨: {{term}}",
             "automaticAddedMultiple": "사전에 자동 추가됨: {{term}} 외 {{count}}개",
@@ -1480,6 +1495,10 @@
       },
       "pill": {
         "connected": "연결됨",
+        "configured": "설정됨",
+        "disconnected": "연결되지 않음",
+        "connecting": "연결 중…",
+        "rename": "이름 변경",
         "suspended": "비활성화됨"
       },
       "button": {
@@ -1504,7 +1523,17 @@
         "reconnectRequired": "다시 연결 필요",
         "connect": "ChatGPT 연결",
         "reconnect": "ChatGPT 다시 연결",
-        "cancelConnect": "연결 취소"
+        "cancelConnect": "연결 취소",
+        "accountSource": {
+          "local": "로컬 Codex 계정",
+          "oauth": "별도로 로그인한 계정",
+          "unknown": "기존 OpenAI 연결"
+        },
+        "useLocalAccount": "로컬 Codex 계정 사용",
+        "addIndependentAccount": "별도 계정으로 로그인",
+        "accountSourcesDescription": "기존 로컬 Codex 연결을 사용하거나 별도로 저장되는 계정에 로그인하세요. 두 방식 모두 같은 기능을 지원합니다.",
+        "independentAccountDescription": "별도로 저장되는 ChatGPT 계정에 로그인하거나 API 키로 연결하세요.",
+        "localUnavailable": "재사용할 수 있는 로컬 연결이 없습니다. 기존 제공자의 계정은 변경되지 않습니다."
       },
       "xai": {
         "title": "xAI",
@@ -1513,7 +1542,7 @@
         "billingLabel": "SuperGrok 구독 직접 연결",
         "asset": {
           "weeklyTitle": "주간 한도",
-          "weeklyUsed": "{{percent}}% 사용됨",
+          "weeklyRemaining": "{{percent}}% 남음",
           "resetsAt": "{{at}} 초기화",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "Grok 사용량 페이지 열기"
@@ -1601,6 +1630,7 @@
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "표시 이름",
           "modelContextWindowPlaceholder": "컨텍스트(tokens)",
+          "modelType": "모델 유형",
           "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
           "modelSupportsImageInput": "이미지 입력 지원",
           "modelSupportsImageInputHelp": "모델이 실제로 시각 입력을 지원할 때만 켜세요. 저장 후 새 Pi 작업부터 적용됩니다.",
@@ -1797,7 +1827,7 @@
         "subscription": "구독",
         "subscriptionProduct": "{{product}} 구독",
         "noResults": "일치하는 모델 없음",
-        "capabilityNote": "{{agent}}에서는 사용 불가",
+        "capabilityNote": "{{agent}} 설정되지 않음",
         "refreshAria": "모델 목록 새로고침(추가만)",
         "refreshBuiltinAria": "모델 목록 새로고침",
         "refreshingAria": "모델 목록 새로고침 중…",
@@ -1873,6 +1903,7 @@
           "engines": "엔진 지원",
           "enginesHint": "호환 모드는 요청을 변환합니다. 기본적으로 꺼져 있으며 필요할 때 켤 수 있습니다.",
           "engineUnsupported": "지원 안 함",
+          "engineNotConfigured": "설정되지 않음",
           "engineNoFast": "Fast 없음",
           "vision": {
             "vision": "지원",
@@ -2208,27 +2239,15 @@
           "cancel": "취소"
         }
       },
-      "imagesKey": {
-        "label": "이미지 생성 API key",
-        "placeholder": "OpenAI 플랫폼 API key 붙여넣기",
-        "save": "저장",
-        "clear": "지우기",
-        "toast": {
-          "saved": "이미지 생성 API key를 저장했습니다",
-          "saveFailed": "이미지 생성 API key 저장에 실패했습니다. 다시 시도해 주세요",
-          "cleared": "이미지 생성 API key를 지웠습니다",
-          "clearFailed": "이미지 생성 API key 지우기에 실패했습니다"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% 사용",
+        "percentRemaining": "{{percent}}% 남음",
         "resetsAt": "{{at}} 초기화",
         "claudePlanFallback": "Claude 구독",
-        "claudeWeekly": "7일 창 {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7일 한도 {{percent}}% 남음",
+        "scopedModel": "{{model}} {{percent}}% 남음",
         "openClaudeUsage": "사용량 페이지 열기",
         "codexPlanFallback": "ChatGPT 구독",
-        "codexSecondary": "보조 창 {{percent}}%",
+        "codexSecondary": "보조 한도 {{percent}}% 남음",
         "codexResetCredits": "한도 초기화 크레딧 {{count}}장"
       }
     },
@@ -3146,12 +3165,29 @@
       "runtimeUnknown": "{{packageName}}에는 Pi {{range}}가 필요하지만 현재 Cindy의 Pi 버전이 요구 사항을 충족하는지 확인할 수 없습니다.",
       "warning": {
         "no-resources": "이 확장에서 Pi 리소스를 찾지 못했습니다.",
+        "analysisIncomplete": "Pi 작업은 완료되었지만 Cindy의 후속 분석 또는 보조 빌드는 완료되지 않았습니다.",
         "inspection-failed": "Cindy가 설치된 내용을 검사하지 못했지만 이 때문에 비활성화하지 않습니다. Pi가 기본 방식으로 처리합니다.",
         "inspection-limit": "Cindy가 상세 분석 한도에서 추가 표시를 중단했습니다. 패키지는 Pi 기본 로더를 통해 계속 사용할 수 있습니다.",
         "unsupported-filter": "Cindy가 아직 이 Pi 리소스 필터를 표시할 수 없습니다. 패키지와 필터는 Pi가 기본 방식으로 처리합니다.",
         "unsafe-source": "저장된 소스에 자격 증명 또는 비공개 URL 매개변수가 포함되어 있습니다. Cindy는 이 화면에서 민감한 필드만 숨기며 Pi의 패키지 동작은 차단하지 않습니다."
       },
+      "recovery": {
+        "check-credentials": "소스의 인증 정보를 확인하세요.",
+        "check-permissions": "파일과 디렉터리 권한을 확인하세요.",
+        "check-network": "네트워크 연결을 확인하세요.",
+        "check-source": "패키지 이름 또는 저장소 주소를 확인하세요.",
+        "check-version": "요청한 패키지 버전을 확인하세요.",
+        "check-runtime": "Pi 실행 환경을 사용할 수 있는지 확인하세요.",
+        "free-disk-space": "디스크 공간을 확보하세요.",
+        "check-build-dependencies": "확장의 빌드 의존성을 확인하세요.",
+        "refresh-package-state": "확장 목록을 새로 고쳐 현재 상태를 확인하세요.",
+        "inspect-state-before-retry": "확장의 현재 상태를 확인한 후 완료되지 않은 단계를 다시 시도하세요."
+      },
       "failure": {
+        "commandFailed": "Pi 기본 패키지 명령이 실패했습니다.",
+        "commandNotStarted": "Pi 기본 패키지 명령을 시작하지 못했습니다.",
+        "commandTimedOut": "Pi 기본 패키지 명령의 시간이 초과되었습니다.",
+        "commandUnknown": "Pi 기본 패키지 명령의 결과를 확인할 수 없습니다.",
         "sourceUnavailable": "소스에 접근할 수 없습니다. 네트워크나 URL을 확인하거나 다른 소스로 다시 시도하세요.",
         "packageNotFound": "패키지를 찾지 못했습니다. 패키지 이름이나 저장소 URL을 확인하세요.",
         "versionNotFound": "해당 버전을 찾지 못했습니다. 사용 가능한 버전을 선택해 다시 시도하세요.",
@@ -5928,6 +5964,8 @@
     "modelWeeklyLabel": "{{model}} 주간",
     "usedPercent": "사용 {{percent}}%",
     "remainingPercent": "남은 {{percent}}%",
+    "resetIn": "{{duration}} 후 초기화",
+    "resetPending": "초기화 정보 업데이트 대기 중",
     "resetAt": "{{at}} 재설정",
     "noWindows": "할당량 구간 데이터가 없습니다",
     "limitRejected": "플랜 한도에 도달하여 요청이 거부될 수 있습니다",
@@ -7014,6 +7052,12 @@
       "binary-missing": "구성 요소를 사용할 수 없음"
     },
     "ariaLabel": "사이드바 네비게이션",
+    "databaseSizeWarning": {
+      "title": "데이터베이스가 많은 공간을 사용 중입니다",
+      "description": "데이터베이스는 약 {{size}}이며 {{threshold}} G를 초과했습니다. 저장 공간에서 정리하는 것이 좋습니다.",
+      "openSettings": "저장 공간 열기",
+      "disable": "다시 알리지 않기"
+    },
     "horizontalTabbarAria": "메인 뷰 전환",
     "tabs": {
       "projects": "프로젝트",
@@ -7691,6 +7735,7 @@
         "china": "중국",
         "image": "이미지",
         "video": "비디오",
+        "audio": "오디오 생성",
         "tts": "음성 합성",
         "stt": "음성 인식",
         "realtime": "실시간 음성",

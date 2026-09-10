@@ -232,23 +232,23 @@ export async function applyRuntimeSetModelChange(
   }
 
   if (
-    sess?.agentKind === 'codex' &&
+    (sess?.agentKind === 'codex' || sess?.agentKind === 'pi') &&
     !sess.remoteHostId &&
     !shouldCloseSession &&
     currentProviderId !== nextProviderId &&
     isSelfBusy()
   ) {
-    // 超集 host 可以跨来源复用，不代表 route 可以在 turn 中途热切。Codex 的一个
+    // Codex/Pi 可以复用已装配的账号路由，不代表 route 可以在 turn 中途热切。一个
     // turn 可能包含多次上游请求；立即改 provider store 会让后续工具回合带着旧
     // wire model 命中新来源，造成同 turn 跨计费，甚至因模型不受支持而 4xx。
     // 把 route/model 的生效边界固定在 turn 结束；pending 收口只关闭本 Session，
-    // shared host 保留，不重新 spawn app-server。
+    // 当前账号保持到回合边界，不能让工具续轮命中新账号。
     if (input.registerPendingCredentialSwitch) {
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
       });
-      logger?.info('set-model: Codex provider route switch deferred until turn end', {
+      logger?.info('set-model: provider route switch deferred until turn end', {
         sessionId,
         currentProviderId,
         nextProviderId,
@@ -259,17 +259,19 @@ export async function applyRuntimeSetModelChange(
     }
     throw new CredentialModeSwitchBusyError(
       [sessionId],
-      `Cannot switch Codex provider route while the session is busy: ${sessionId}`,
+      `Cannot switch provider route while the session is busy: ${sessionId}`,
     );
   }
 
   if (sess && (shouldCloseSession || requiresCodexThreadRelink)) {
     input.assertSessionCloseSupported?.();
     if (isSelfBusy() && input.registerPendingCredentialSwitch) {
+      // A required credential rebuild must also survive close failure: keeping
+      // the old process alive cannot be treated as applying the new account.
       await input.registerPendingCredentialSwitch(sessionId, {
         model,
         providerId: nextProviderId,
-        ...((input.forceSessionRebuild || modelSwitchRequiresRebuild) ? { forceSessionRebuild: true } : {}),
+        ...(shouldCloseSession ? { forceSessionRebuild: true } : {}),
       });
       logger?.info('set-model: session rebuild deferred until turn end', {
         sessionId,
@@ -319,7 +321,7 @@ export async function applyRuntimeSetModelChange(
         input.registerPendingCredentialSwitch(sessionId, {
           model,
           providerId: nextProviderId,
-          ...((input.forceSessionRebuild || modelSwitchRequiresRebuild) ? { forceSessionRebuild: true } : {}),
+          ...(shouldCloseSession ? { forceSessionRebuild: true } : {}),
         });
         logger?.info('set-model: credential switch deferred after busy race', {
           sessionId,

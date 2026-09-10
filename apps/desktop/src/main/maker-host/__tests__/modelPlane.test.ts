@@ -31,7 +31,7 @@ import {
   sanitizeModelCatalogOverrides,
   type ModelCatalogOverrides,
 } from '../model-plane/localCatalogOverrides.js';
-import { isRegistryTombstoneForConsumer } from '../model-plane/modelPlanePolicy.js';
+import { isRegistryTombstoneForConsumer, planRegistryRoots } from '../model-plane/modelPlanePolicy.js';
 
 type RegistryEntries = NonNullable<Catalog['modelRegistry']>['models'];
 
@@ -100,7 +100,13 @@ function withNativeMetadataAndDefaults(
     const nativeApi = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id);
     return {
       ...model,
-      ...(nativeApi === undefined ? {} : { nativeApi }),
+      ...(nativeApi === null ||
+      nativeApi === 'anthropic-messages' ||
+      nativeApi === 'openai-responses' ||
+      nativeApi === 'openai-completions' ||
+      nativeApi === 'google-generative-ai'
+        ? { nativeApi }
+        : {}),
       ...(defaults[providerId]?.includes(model.id) ? {} : { defaultEnabled: false }),
     };
   });
@@ -142,7 +148,7 @@ describe('registry presence 实体化', () => {
     }
   });
 
-  it('a loaded legacy Catalog cannot replace the local Pi membership baseline', () => {
+  it('an explicit empty Pi declaration clears Pi while legacy root arrays remain Registry projections', () => {
     const expected = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!expected) throw new Error('bundled catalog missing xai');
     // Root models consume Registry; Pi retains its independent native baseline.
@@ -158,7 +164,7 @@ describe('registry presence 实体化', () => {
         expect.objectContaining({ id: 'xai/grok-test', contextWindow: 500_000 }),
       ]);
     }
-    expect(models('xai', 'pi')).toEqual(withNativeMetadataAndDefaults('xai', expected.models.pi));
+    expect(models('xai', 'pi')).toEqual([]);
   });
 
   it('远端 Registry 宣告 GPT-6 只进入 Codex/Claude，不会自动加入 Pi', () => {
@@ -388,7 +394,7 @@ describe('registry presence 实体化', () => {
     expect(models('openai', 'codex')).toEqual([]);
   });
 
-  it('能力不完整的 route 单条隔离 + 告警,不拖垮其余', () => {
+  it('missing effort metadata retains declared models without inventing a level', () => {
     setActiveCatalog(
       baseCatalog([
         gpt6Entry({ efforts: undefined, defaultEffort: undefined }),
@@ -398,10 +404,26 @@ describe('registry presence 实体化', () => {
         }),
       ]),
     );
-    expect(models('openai', 'codex').map((m) => m.id)).toEqual(['gpt-6-mini']);
-    expect(getModelPlaneWarnings()).toMatchObject([
-      { providerId: 'openai', modelId: 'gpt-6', reason: expect.stringContaining('efforts') },
-    ]);
+    for (const agent of ['codex', 'claude-code'] as const) {
+      const id = agent === 'codex' ? 'gpt-6' : 'chatgpt/gpt-6';
+      expect(models('openai', agent).find(m => m.id === id))
+        .toMatchObject({ efforts: [], defaultEffort: null });
+    }
+    expect(getModelPlaneWarnings()).toEqual([]);
+  });
+
+  it.each([false, true])('missing inherits discovery; explicit empty clears it (%s)', (clear) => {
+    setDiscoveredCodexModels([{ id: 'gpt-6', name: 'Discovered', contextWindow: 400000,
+      efforts: ['low', 'high'], defaultEffort: 'high' }]);
+    setActiveCatalog(baseCatalog([gpt6Entry({
+      efforts: clear ? [] : undefined, defaultEffort: undefined,
+    })]));
+    for (const agent of ['codex', 'claude-code'] as const) {
+      const id = agent === 'codex' ? 'gpt-6' : 'chatgpt/gpt-6';
+      expect(models('openai', agent).find(m => m.id === id)).toMatchObject({
+        efforts: clear ? [] : ['low', 'high'], defaultEffort: clear ? null : 'high',
+      });
+    }
   });
 
   it('非法 effort token 整条隔离并告警,不能静默过滤成固定档模型', () => {
@@ -796,7 +818,8 @@ describe('本地 override(local 永远最高)', () => {
     const claude = models('xai', 'claude-code').find((m) => m.id === 'xai/grok-test');
     expect(claude).toMatchObject({ efforts: ['low', 'medium', 'high', 'xhigh'] });
     expect(models('xai', 'pi').find((m) => m.id === 'grok-test')).toBeUndefined();
-    expect(models('xai', 'pi').some((m) => m.id === 'grok-pi-only-fixture')).toBe(false);
+    expect(models('xai', 'pi').some((m) => m.id === 'grok-pi-only-fixture')).toBe(true);
+    expect(models('xai', 'codex').some((m) => m.id === 'grok-pi-only-fixture')).toBe(false);
   });
 
   it('本地 perAgent 也在 bridge 目标端生效,且不能写展示/status 字段', () => {
@@ -1018,46 +1041,108 @@ it('preserves the upstream maximum separately from per-harness recommended windo
   });
 });
 
-it.each([{ agents: undefined }, { agents: ['codex', 'pi'] }])('keeps Pi working defaults when a root addition declares agents $agents', ({ agents }) => {
-  const catalog = baseCatalog([gpt6Entry()]);
-  catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [{
-    id: 'gpt-6', name: 'Pi authority', contextWindow: 1_000_000,
-    efforts: ['medium'], defaultEffort: 'medium',
-  }];
-  setActiveCatalog(catalog, { authorityCatalog: catalog });
-  const additions = { 'openai:gpt-6': {
-    ...(agents ? { agents } : {}),
-    base: { name: 'Root addition', contextWindow: 450_000,
-      efforts: ['medium'], defaultEffort: 'medium' },
-  } };
-  setLocalCatalogOverrides(overridesOf({ additions }));
-  expect(models('openai', 'codex').find((model) => model.id === 'gpt-6'))
-    .toMatchObject({ name: 'Root addition', contextWindow: 450_000 });
-  expect(models('openai', 'pi').find((model) => model.id === 'chatgpt/gpt-6'))
-    .toMatchObject({ name: 'Pi authority', contextWindow: 272_000, contextWindowMax: 1_000_000 });
-  setLocalCatalogOverrides(overridesOf({ additions, patches: {
-    'openai:chatgpt/gpt-6': { agents: ['pi'], base: { contextWindow: 550_000 } },
-  } }));
-  expect(models('openai', 'pi').find((model) => model.id === 'chatgpt/gpt-6'))
-    .toMatchObject({ contextWindow: 550_000, contextWindowMax: 1_000_000 });
-});
+it.each([{ agents: undefined }, { agents: ['codex', 'pi'] }])(
+  'keeps Pi working defaults when a root addition declares agents $agents',
+  ({ agents }) => {
+    const catalog = baseCatalog([gpt6Entry()]);
+    catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [
+      {
+        id: 'gpt-6',
+        name: 'Pi authority',
+        contextWindow: 1_000_000,
+        efforts: ['medium'],
+        defaultEffort: 'medium',
+      },
+    ];
+    setActiveCatalog(catalog, { authorityCatalog: catalog });
+    const additions = {
+      'openai:gpt-6': {
+        ...(agents ? { agents } : {}),
+        base: {
+          name: 'Root addition',
+          contextWindow: 450_000,
+          efforts: ['medium'],
+          defaultEffort: 'medium',
+        },
+      },
+    };
+    setLocalCatalogOverrides(overridesOf({ additions }));
+    expect(models('openai', 'codex').find((model) => model.id === 'gpt-6')).toMatchObject({
+      name: 'Root addition',
+      contextWindow: 450_000,
+    });
+    expect(models('openai', 'pi').find((model) => model.id === 'chatgpt/gpt-6')).toMatchObject({
+      name: 'Pi authority',
+      contextWindow: 272_000,
+      contextWindowMax: 1_000_000,
+    });
+    setLocalCatalogOverrides(
+      overridesOf({
+        additions,
+        patches: {
+          'openai:chatgpt/gpt-6': { agents: ['pi'], base: { contextWindow: 550_000 } },
+        },
+      }),
+    );
+    expect(models('openai', 'pi').find((model) => model.id === 'chatgpt/gpt-6')).toMatchObject({
+      contextWindow: 550_000,
+      contextWindowMax: 1_000_000,
+    });
+  },
+);
 
 it('honors local working defaults and separate maximums in all three GPT harnesses', () => {
   setActiveCatalog(BUNDLED_CATALOG);
   for (const maximum of [900_000, 1_000_000]) {
-    setXdGatewayModels([{ id: 'gpt-context-default-test', name: 'Context test',
-      agents: ['claude-code', 'codex', 'pi'], contextWindow: maximum }]);
-    setLocalCatalogOverrides(overridesOf({ patches: { 'xd:gpt-context-default-test': {
-      perAgent: {
-        'claude-code': { contextWindow: 350_000 }, codex: { contextWindow: 450_000 }, pi: { contextWindow: 550_000 },
+    setXdGatewayModels([
+      {
+        id: 'gpt-context-default-test',
+        name: 'Context test',
+        agents: ['claude-code', 'codex', 'pi'],
+        contextWindow: maximum,
       },
-    } } }));
-    for (const [agent, window] of [['claude-code', 350_000], ['codex', 450_000], ['pi', 550_000]] as const) {
-      expect(models('xd', agent)[0]).toMatchObject({ contextWindow: window, contextWindowMax: maximum });
+    ]);
+    setLocalCatalogOverrides(
+      overridesOf({
+        patches: {
+          'xd:gpt-context-default-test': {
+            perAgent: {
+              'claude-code': { contextWindow: 350_000 },
+              codex: { contextWindow: 450_000 },
+              pi: { contextWindow: 550_000 },
+            },
+          },
+        },
+      }),
+    );
+    for (const [agent, window] of [
+      ['claude-code', 350_000],
+      ['codex', 450_000],
+      ['pi', 550_000],
+    ] as const) {
+      expect(models('xd', agent)[0]).toMatchObject({
+        contextWindow: window,
+        contextWindowMax: maximum,
+      });
     }
   }
   setLocalCatalogOverrides(EMPTY_MODEL_CATALOG_OVERRIDES);
   for (const agent of ['claude-code', 'codex', 'pi'] as const) {
-    expect(models('xd', agent)[0]).toMatchObject({ contextWindow: 272_000, contextWindowMax: 1_000_000 });
+    expect(models('xd', agent)[0]).toMatchObject({
+      contextWindow: 272_000,
+      contextWindowMax: 1_000_000,
+    });
   }
+});
+
+it('keeps V4 media routes out of chat root warnings without hiding invalid chat routes', () => {
+  const plan = planRegistryRoots({ schemaVersion: 4, updatedAt: '2026-09-09T00:00:00.000Z', models: [
+    ...['image_generation', 'video_generation', 'audio_generation', 'audio_speech', 'audio_transcription', 'realtime', 'embedding'].map((mode) => ({
+      id: `openai/${mode}`, name: mode, mode, status: 'active' as const,
+      routes: [{ providerId: 'openai', modelId: mode, agents: [] }],
+    })),
+    { id: 'openai/broken-chat', name: 'Broken Chat', mode: 'chat', status: 'active', routes: [{ providerId: 'openai', modelId: 'broken-chat', agents: [] }] },
+  ] });
+  expect(plan.roots.size).toBe(0);
+  expect(plan.warnings).toEqual([expect.objectContaining({ modelId: 'broken-chat', reason: 'route has no canonical root agent membership' })]);
 });

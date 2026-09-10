@@ -18,6 +18,7 @@ import WebSocket from 'ws';
 import {
   DeviceLinkClient,
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   MAKER_EVENT_BATCH_CHANNEL,
@@ -496,6 +497,7 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
  * 必须用同一份 —— 只在一处声明会让另一条路径静默降级(mobile 侧 review 实测过这个坑)。
  */
 const CONTROLLER_CAPABILITIES = [
+  CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   // 桌面控制桌面时同样收微批:批的收益是**relay 帧数**,只要有一个控制端不支持,
@@ -682,6 +684,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 下更激进的宽限会把「慢但活着」误判成死链,造成重连循环(mobile 用 10s×1 是因为
     // 手机端 TCP 半开假活远比桌面常见,桌面不照搬)。
     timing: { pingIntervalMs: 15_000 },
+    // peer ACK 耗尽时，幂等的 local-db 读请求交给 linkRecovery 快速重开并只重试一次；
+    // 写请求与长执行请求保持原有 in-flight 语义，避免重复副作用。
+    peerResetReadRetry: true,
   });
 
   responsivenessTracker = createResponsivenessTracker({
@@ -817,12 +822,13 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   // 入队与每次尝试都过同一个方向判据(见 hasOutboundControlIntent):只对本机
   // 确实在控制的设备重建,被控端方向的入站帧自然忽略。
   client.onReliableFrameBeforeLink((deviceId) => {
-    if (!hasOutboundControlIntent(deviceId)) return;
-    if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;
+    if (!hasOutboundControlIntent(deviceId)) return false;
+    if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return false;
     log.info(
       `re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`,
     );
     transportTimeoutReopen.trigger(deviceId);
+    return true;
   });
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     markControllerPresenceFresh(controllerPresenceFreshness, snap.deviceId);

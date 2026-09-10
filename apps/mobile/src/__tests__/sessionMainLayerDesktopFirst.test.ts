@@ -118,11 +118,12 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const staleOfferStart = resetSource.indexOf('if (!offer');
     const refresh = resetSource.indexOf('await refreshAccountUsage();', staleOfferStart);
     const sessionGuard = resetSource.indexOf(
-      'if (contextUsageSessionRef.current !== sessionId) return;',
+      'if (accountControlScopeRef.current !== accountControlScope) return;',
       refresh,
     );
     const alert = resetSource.indexOf("Alert.alert(t('session.screen.resetReconfirmTitle'), t('session.screen.resetOfferExpired'))", refresh);
 
+    expect(source).toContain('const accountControlScope = `${deviceId}\\0${sessionId}\\0${accountProviderId}`;');
     expect(refresh).toBeGreaterThan(-1);
     expect(sessionGuard).toBeGreaterThan(refresh);
     expect(alert).toBeGreaterThan(sessionGuard);

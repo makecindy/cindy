@@ -65,7 +65,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     overlayContentClassName?: string;
     selectedRowClickOpensConfiguration?: boolean;
     reselectEmitsChange?: boolean;
-    onProviderChange?: unknown;
+    onProviderChange?: (providerId: string | null) => void;
   }) => (
     <div
       data-testid="model-selector-content"
@@ -75,6 +75,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       )}
       data-reselect-emits-change={String(reselectEmitsChange === true)}
       data-provider-change={String(onProviderChange !== undefined)}
+      onClick={() => onProviderChange?.('openai')}
     />
   ),
   ModelIconMark: () => null,
@@ -99,7 +100,11 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: [] }),
+  useProviders: () => ({ providers: [{
+    id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'],
+    auth: { method: 'oauth' }, source: 'builtin', routing: { codex: {} },
+    models: { codex: [{ id: 'gpt-5.5', name: 'GPT', contextWindow: 272000, efforts: [] }] },
+  }] }),
 }));
 
 import { ModelEffortChip } from '@/features/scheduler/components/ScheduleChips';
@@ -114,6 +119,15 @@ beforeEach(() => {
 });
 
 describe('scheduler model popover overlay behavior', () => {
+  it('pins an explicitly selected native default instead of storing automatic selection', () => {
+    const onChangeProviderId = vi.fn();
+    render(<ModelEffortChip onSelect={vi.fn()} onFollowSession={vi.fn()}
+      agentKind="codex" modelValue="gpt-5.5"
+      onChangeModel={vi.fn()} effortValue="" onChangeEffort={vi.fn()}
+      providerId="" onChangeProviderId={onChangeProviderId} />);
+    fireEvent.click(screen.getByTestId('model-selector-content'));
+    expect(onChangeProviderId).toHaveBeenCalledWith('openai');
+  });
   it('keeps wheel events inside the model popover and raises nested model options above it', () => {
     const onOuterWheel = vi.fn();
 

@@ -1,3 +1,4 @@
+export { isRemoteTextDelta, readRemoteTextSnapshot, reconcileRemoteText, consumeRemoteSessionSync } from './remoteTextStream.js';
 export * from './historyView.js';
 export { projectHistoryView, isHistoryDetailTool, hasVisibleHistoryResult } from './historyViewProjection.js';
 export * from './historyViewController.js';

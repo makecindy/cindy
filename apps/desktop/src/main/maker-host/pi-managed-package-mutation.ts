@@ -1,6 +1,7 @@
+import { piPackageCommandDiagnostic, piPackageMutationFailureCategory } from './pi-package-diagnostic.js';
 import {
   PiManagedPackageMutationFailedError,
-  type PiManagedPackageMutationFailureCode,
+  PiManagedPackageMutationCancelledError,
   type PiManagedPackageMutationRequest,
 } from '@cindy/maker-core';
 
@@ -24,21 +25,6 @@ import {
 const log = createLogger('pi-managed-package-mutation');
 
 type ManagedMutationRequest = Pick<PiPackageMutationRequest, 'action' | 'source'>;
-
-function classifyMutationFailure(error: unknown): PiManagedPackageMutationFailureCode {
-  const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
-  if (message.includes('state is unavailable')) return 'state-unavailable';
-  if (/\betarget\b|no matching version|version[^\n]*not found/.test(message)) {
-    return 'version-not-found';
-  }
-  if (/\be404\b|package[^\n]*not found|repository[^\n]*not found|404 not found/.test(message)) {
-    return 'package-not-found';
-  }
-  if (/\benotfound\b|\beai_again\b|\beconnrefused\b|\betimedout\b|network|fetch failed|could not resolve host|unable to access/.test(message)) {
-    return 'source-unavailable';
-  }
-  return 'native-command-failed';
-}
 
 export interface PiManagedPackageMutationDeps {
   issueGrant(request: ManagedMutationRequest): PiPackageMutationGrant;
@@ -75,8 +61,10 @@ export async function mutateAuthorizedPiManagedPackage(
       ? deps.mutate(storeRequest, grant, hooks)
       : deps.mutate(storeRequest, grant));
   } catch (error) {
+    if (error instanceof PiManagedPackageMutationCancelledError) throw error;
+    const diagnostic = piPackageCommandDiagnostic(error);
+    const failureCode = piPackageMutationFailureCategory(error);
     const commandFailure = request.action === 'command' ? piNativeManagementFailure(error) : undefined;
-    const failureCode = classifyMutationFailure(error);
     const mayHaveChangedState = piPackageMutationMayHaveChangedState(error);
     // This wrapper can receive raw Pi/npm/Git stderr containing source
     // credentials. Persist only stable recovery metadata, never Error.message.
@@ -84,12 +72,14 @@ export async function mutateAuthorizedPiManagedPackage(
       action: request.action,
       failureCode,
       mayHaveChangedState,
+      ...(diagnostic ? { diagnostic } : {}),
       ...(commandFailure ? { commandFailure } : {}),
     });
     throw new PiManagedPackageMutationFailedError(
       mayHaveChangedState,
       failureCode,
       commandFailure,
+      diagnostic,
     );
   }
 }

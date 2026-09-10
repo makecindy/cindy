@@ -69,8 +69,15 @@ export {
   buildFilename,
   parseFilename,
   validateSlug,
+  SSH_SCOPE_KEY_PREFIX,
   type MemoryStorageMeta,
 } from './memory/storage.js';
+export {
+  resolveMemoryScopeKey,
+  __clearMemoryScopeKeyCacheForTests,
+  type GitProbe,
+  type ResolveMemoryScopeKeyDeps,
+} from './memory/scope-resolver.js';
 export { MemoryFts } from './memory/fts.js';
 export {
   MakerMemoryStore,

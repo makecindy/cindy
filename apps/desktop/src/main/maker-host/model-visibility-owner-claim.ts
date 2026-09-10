@@ -14,6 +14,7 @@ import { hasExclusiveSharedLegacyUserDataAccess } from '../ownerNamespaceMigrati
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { readBoundedFileNoFollowSync } from '../utils/readBoundedFile.js';
 import { MAKER_INVOKE } from '../maker-ipc/channels.js';
+import { ownerDatabasePath, readModelDefaultsProfileOrigin } from '../localDb/modelDefaultsProfile.js';
 import type { ModelVisibilityLegacyOwnerClaim } from '../../shared/modelVisibility.js';
 
 const MARKER_FILE = 'model-visibility-renderer-legacy-owner.v1.json';
@@ -112,6 +113,7 @@ export function claimLegacyModelVisibilityOwner(): ModelVisibilityLegacyOwnerCla
   return {
     ...stamp,
     canWriteOwnerScoped: true,
+    profileOrigin: readModelDefaultsProfileOrigin(ownerDatabasePath(app.getPath('userData'), stamp.dataOwnerId)),
     claimed,
     claimedByOtherOwner: state.kind === 'valid' && !claimed,
     canInitialize:

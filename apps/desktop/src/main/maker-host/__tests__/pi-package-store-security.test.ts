@@ -37,7 +37,9 @@ const runtime = vi.hoisted(() => ({
   fallbackCalls: [] as boolean[],
   fallbackError: undefined as Error | undefined,
   stderr: '',
-  exitCode: 0,
+  stdout: '',
+  exitCode: 0 as number | null,
+  spawnError: null as Error | null,
   spawns: [] as Array<{ args: string[]; env: Record<string, string | undefined>; detached?: boolean }>,
   holdMutationCommand: false,
   pendingClose: null as null | ((code: number) => void),
@@ -140,6 +142,10 @@ vi.mock('node:child_process', () => ({
       for (const handler of closeHandlers) handler(code);
     };
     queueMicrotask(() => {
+      if (runtime.spawnError) {
+        for (const handler of errorHandlers) handler(runtime.spawnError);
+        return;
+      }
       if (runtime.holdMutationCommand && !args.includes('list')) return;
       runtime.spawnHook?.(args);
       const outcome = args.includes('list') ? runtime.listOutcomes.shift() : undefined;
@@ -149,11 +155,14 @@ vi.mock('node:child_process', () => ({
         }
       }
       if (args.includes('--version')) for (const handler of stdoutHandlers) handler(Buffer.from(runtime.version));
+      if (!args.includes('list') && !args.includes('--version') && runtime.stdout) {
+        for (const handler of stdoutHandlers) handler(Buffer.from(runtime.stdout));
+      }
       const stderr = outcome?.stderr ?? runtime.stderr;
       if (stderr) {
         for (const handler of stderrHandlers) handler(Buffer.from(stderr));
       }
-      for (const handler of closeHandlers) handler(outcome?.exitCode ?? runtime.exitCode);
+      for (const handler of closeHandlers) handler((outcome?.exitCode ?? runtime.exitCode) as number);
     });
     return child;
   },
@@ -219,6 +228,8 @@ beforeEach(async () => {
   runtime.listOutput = '';
   runtime.listOutcomes = [];
   runtime.stderr = '';
+  runtime.stdout = '';
+  runtime.spawnError = null;
   runtime.exitCode = 0;
   runtime.fallbackCalls = [];
   runtime.fallbackError = undefined;
@@ -404,6 +415,10 @@ describe('Pi package executable-code boundary', () => {
         expect(settled).toBe(false);
         processRuntime.pendingTreeSettled?.();
         await expect(pending).rejects.toThrow(/timed out/);
+        const { piPackageCommandDiagnostic } = await import('../pi-package-diagnostic.js');
+        await pending.catch((error) => {
+          expect(piPackageCommandDiagnostic(error)).toMatchObject({ outcome: 'timed-out', exitCode: 1 });
+        });
       } finally {
         Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
       }
@@ -433,6 +448,8 @@ describe('Pi package executable-code boundary', () => {
         await pending;
         expect(failure).toBeInstanceOf(Error);
         expect((failure as Error).message).toMatch(/timed out/);
+        const { piPackageCommandDiagnostic } = await import('../pi-package-diagnostic.js');
+        expect(piPackageCommandDiagnostic(failure)).toMatchObject({ outcome: 'timed-out', exitCode: null });
       } finally {
         Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true });
       }
@@ -820,6 +837,30 @@ describe('Pi package executable-code boundary', () => {
     expect(generationDuringBuild).toBe(1);
     expect(runtimeFence).toHaveBeenNthCalledWith(1, 'commit');
     expect(runtimeFence).toHaveBeenNthCalledWith(2, 'post-build');
+  });
+
+  it.each(['install', 'update'] as const)('keeps native %s successful if post-build reinspection throws', async (action) => {
+    const { root, source } = await createPackage();
+    await fs.writeFile(path.join(root, 'package.json'), JSON.stringify({
+      name: 'generated-extension', version: '1.0.0',
+      pi: { extensions: ['./build/extension.js'] },
+      scripts: { build: 'node build.mjs' },
+    }));
+    runtime.spawnHook = (args) => {
+      if (args.at(-2) !== 'run' || args.at(-1) !== 'build') return;
+      const entry = path.join(root, 'build', 'extension.js');
+      mkdirSync(path.dirname(entry), { recursive: true });
+      writeFileSync(entry, 'export default function setup() {}');
+      runtime.listOutcomes.push({ stderr: 'post-build analysis token=fake-analysis-secret', exitCode: 1 });
+    };
+    const store = await import('../pi-package-store.js');
+    await expect(mutateAuthorized(store, { action, source })).resolves.toMatchObject({
+      changed: true, projectionUnavailable: true,
+      diagnostics: [{ phase: 'cindy-analysis', outcome: 'failed', exitCode: 1 }],
+    });
+    expect(runtime.spawns.some(({ args }) => args.at(-1) === 'build')).toBe(true);
+    expect(await store.resolveManagedPiNativePackagePaths()).toContain(root);
+    expect(JSON.stringify(loggerRuntime.warn.mock.calls)).not.toContain('fake-analysis-secret');
   });
 
   it.each([
@@ -4361,6 +4402,33 @@ describe('Pi package executable-code boundary', () => {
     const warnings = JSON.stringify(loggerRuntime.warn.mock.calls);
     expect(warnings).not.toContain('user:secret');
     expect(warnings).not.toContain('token=private');
+  });
+
+  it.each([
+    [1, 'failed'], [null, 'unknown'],
+  ] as const)('retains native exit %s without treating missing status as success', async (exitCode, outcome) => {
+    const store = await import('../pi-package-store.js');
+    const { piPackageCommandDiagnostic } = await import('../pi-package-diagnostic.js');
+    runtime.exitCode = exitCode;
+    runtime.stderr = 'npm warning token=fake-stderr-secret';
+    runtime.stdout = 'npm ERR! E401 Authorization: Bearer fake-stdout-secret';
+    const failure = await store.runPiPackageCommand(['install', 'npm:sample']).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(Error);
+    expect(piPackageCommandDiagnostic(failure)).toEqual({
+      command: 'install', phase: 'native-command', outcome, exitCode, nativeCode: 'E401',
+      reason: 'authentication', recovery: outcome === 'failed' ? 'check-credentials' : 'inspect-state-before-retry',
+    });
+    expect(JSON.stringify(piPackageCommandDiagnostic(failure))).not.toContain('secret');
+  });
+
+  it('distinguishes failure to spawn from a failed native command', async () => {
+    const store = await import('../pi-package-store.js');
+    const { piPackageCommandDiagnostic } = await import('../pi-package-diagnostic.js');
+    runtime.spawnError = new Error('spawn /private/runtime/pi ENOENT');
+    const failure = await store.runPiPackageCommand(['install', 'npm:sample']).catch((error: unknown) => error);
+    expect(piPackageCommandDiagnostic(failure)).toEqual({
+      command: 'install', phase: 'prepare', outcome: 'failed', reason: 'missing-executable', recovery: 'check-runtime', nativeCode: 'ENOENT',
+    });
   });
 
   it('redacts unsafe saved URLs from Pi package command failures', async () => {

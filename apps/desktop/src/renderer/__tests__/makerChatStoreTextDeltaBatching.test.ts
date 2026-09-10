@@ -511,6 +511,34 @@ const flushPromises = async () => {
 };
 
 describe('makerChatStore text delta batching', () => {
+  it('repairs remote text before new deltas and ignores a repair after durable takeover', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const send = (channel: string, payload: unknown, deviceId = 'device-1') => onRemotePush?.({ deviceId, channel, payload });
+    const text = (value: string) => ({ sessionId: SESSION_ID, persistId: 'assistant-1',
+      event: { type: 'text', data: { text: value, isFinal: false } } });
+    const repair = { ...text('prefix suffix'), event: { type: 'text', data: {
+      text: 'prefix suffix', isFinal: false, isFullText: true, createdAt: '2026-09-08T00:00:01Z',
+    } } };
+    send('maker:event', text(' suffix'));
+    send('maker:session-sync', repair);
+    send('maker:session-sync', repair);
+    send('maker:event', text(' tail'));
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'prefix suffix tail',
+        createdAt: '2026-09-08T00:00:01.000Z', isStreaming: true }),
+    ]);
+    send('maker:session-sync', { ...repair, event: { type: 'text', data: { text: 'wrong owner', isFullText: true, isFinal: false } } }, 'device-2');
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0].content).toBe('prefix suffix tail');
+    send('local-db:messages:created', { sessionId: SESSION_ID, message: {
+      id: 'db-id', clientId: 'assistant-1', role: 'assistant', content: 'durable answer', createdAt: '2026-09-08T00:00:01Z',
+    } });
+    send('maker:session-sync', repair);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'durable answer', isStreaming: false }),
+    ]);
+  });
+
   const MULTI_SESSION_IDS = Array.from({ length: 10 }, (_, i) => `${SESSION_ID}-multi-${i}`);
   const LRU_SESSION_IDS = Array.from({ length: 21 }, (_, i) => `${SESSION_ID}-lru-${i}`);
 
@@ -542,6 +570,21 @@ describe('makerChatStore text delta batching', () => {
     for (const sessionId of MULTI_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     for (const sessionId of LRU_SESSION_IDS) makerChatStore.purgeSession(sessionId);
     vi.useRealTimers();
+  });
+
+  it.each([false, true])('updates the SDK id mirror but persists only in the primary window (sidebar=%s)', async (sidebar) => {
+    Object.defineProperty(window, 'location', {
+      configurable: true,
+      value: { search: sidebar ? '?sidebarWindow=1' : '' },
+    });
+    const event = { sessionId: SESSION_ID, event: { type: 'session_id', source: 'claude-code', data: 'sdk-live-1' } };
+    onEvent?.(event);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(SESSION_ID).sdkSessionId).toBe('sdk-live-1');
+    onEvent?.(event);
+    await flushPromises();
+    expect(sessionService.update).toHaveBeenCalledTimes(sidebar ? 0 : 1);
+    if (!sidebar) expect(sessionService.update).toHaveBeenCalledWith(SESSION_ID, { sdkSessionId: 'sdk-live-1' });
   });
 
   it.each([true, false])('keeps the Pi reply through early persistence and history reload (DB first=%s)', async (dbFirst) => {
@@ -1723,6 +1766,119 @@ describe('makerChatStore text delta batching', () => {
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
       expect.objectContaining({ clientId: 'assistant-1', content: 'full answer', isStreaming: false }),
     ]);
+  });
+
+  it('replaces an in-flight prefix but preserves a durable item against a non-final snapshot', () => {
+    emitTextDelta('prefix', SESSION_ID, 'assistant-1');
+    vi.advanceTimersByTime(32);
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'codex',
+        data: { text: 'complete snapshot', isFinal: false, isFullText: true },
+      },
+      persistId: 'assistant-1',
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual([
+      expect.objectContaining({ clientId: 'assistant-1', content: 'complete snapshot', isStreaming: true }),
+    ]);
+
+    onDbMessageCreated?.({
+      sessionId: SESSION_ID,
+      message: { clientId: 'assistant-2', role: 'assistant', content: 'durable text', createdAt: new Date().toISOString() },
+    });
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'text', source: 'codex',
+        data: { text: 'late streaming snapshot', isFinal: false, isFullText: true },
+      },
+      persistId: 'assistant-2',
+    });
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(expect.arrayContaining([
+      expect.objectContaining({ clientId: 'assistant-2', content: 'durable text', isStreaming: false }),
+    ]));
+  });
+
+  it('merges current stream metadata from a remote full-text snapshot and preserves it when absent', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const pushText = (channel: string, text: string, agentMeta?: Record<string, unknown>) => {
+      onRemotePush?.({
+        deviceId: 'device-1', channel,
+        payload: {
+          sessionId: SESSION_ID, persistId: 'assistant-1',
+          event: {
+            type: 'text', source: 'codex', agentMeta,
+            data: { text, isFinal: false, isFullText: channel === 'maker:session-sync' },
+          },
+        },
+      });
+    };
+    pushText('maker:event', 'prefix');
+    vi.advanceTimersByTime(32);
+    // Leave a delta queued so the snapshot also exercises the batching boundary.
+    pushText('maker:event', ' queued');
+    pushText('maker:session-sync', 'complete snapshot', { model: 'old-model', botPrivateReply: true });
+    const agentMeta = {
+      model: 'updated-model', parentUuid: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+    };
+    // Metadata can change even when the authoritative text is identical.
+    pushText('maker:session-sync', 'complete snapshot', agentMeta);
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingClientId: 'assistant-1', streamingText: 'complete snapshot', lastAgentMeta: agentMeta,
+      messages: [expect.objectContaining({
+        clientId: 'assistant-1', content: 'complete snapshot', isStreaming: true,
+        model: 'updated-model', parentToolUseId: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+      })],
+    });
+
+    pushText('maker:session-sync', 'complete snapshot without metadata');
+    pushText('maker:event', ' tail');
+    vi.advanceTimersByTime(32);
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingText: 'complete snapshot without metadata tail', lastAgentMeta: agentMeta,
+      messages: [expect.objectContaining({
+        content: 'complete snapshot without metadata tail', model: 'updated-model',
+        parentToolUseId: 'parent-tool', turnCompleted: true, botPrivateReply: false,
+      })],
+    });
+  });
+
+  it('preserves durable text and newer stream metadata when an older snapshot arrives', () => {
+    remoteProjectsStore.pinSessionOrigin('device-1', SESSION_ID);
+    const pushText = (persistId: string, text: string, agentMeta: Record<string, unknown>, isFinal: boolean) => {
+      onRemotePush?.({
+        deviceId: 'device-1', channel: isFinal ? 'maker:event' : 'maker:session-sync',
+        payload: {
+          sessionId: SESSION_ID, persistId,
+          event: {
+            type: 'text', source: 'codex', agentMeta,
+            data: { text, isFinal, isFullText: true },
+          },
+        },
+      });
+    };
+    pushText('assistant-1', 'old answer', { model: 'old-model' }, true);
+    const currentMeta = { model: 'current-model', parentUuid: 'current-parent', botPrivateReply: false };
+    pushText('assistant-2', 'new answer', currentMeta, false);
+    pushText('assistant-2', 'new answer complete', currentMeta, false);
+    pushText('assistant-1', 'repaired old answer', {
+      model: 'repaired-model', parentUuid: 'old-parent', turnCompleted: true, botPrivateReply: true,
+    }, false);
+
+    expect(makerChatStore.getSnapshot(SESSION_ID)).toMatchObject({
+      streamingClientId: 'assistant-2', streamingText: 'new answer complete', lastAgentMeta: currentMeta,
+      messages: [
+        expect.objectContaining({
+          clientId: 'assistant-1', content: 'old answer', isStreaming: false,
+          model: 'old-model',
+        }),
+        expect.objectContaining({
+          clientId: 'assistant-2', content: 'new answer complete', isStreaming: true,
+          model: 'current-model', parentToolUseId: 'current-parent', botPrivateReply: false,
+        }),
+      ],
+    });
   });
 
   it('does not reset or duplicate thinking on a repeated start, including after its DB echo', () => {

@@ -1603,6 +1603,18 @@
       "note": "阿里云百炼与小米 MiMo 的外部订阅产品名称，四语统一保留官方英文写法；与 Coding Plan 是不同套餐和凭证类型，先登记为 proposed，避免供应商预设中混用产品名。"
     },
     {
+      "id": "model-category-audio",
+      "status": "proposed",
+      "en": "Audio Generation",
+      "translations": {
+        "zh-CN": "音频生成",
+        "zh-TW": "音訊生成",
+        "ja": "音声生成",
+        "ko": "오디오 생성"
+      },
+      "note": "V4 模型类型 audio_generation，包含通用声音生成；与 audio_speech 语音合成分别展示。"
+    },
+    {
       "id": "model-category-tts",
       "status": "proposed",
       "en": "Text to Speech",

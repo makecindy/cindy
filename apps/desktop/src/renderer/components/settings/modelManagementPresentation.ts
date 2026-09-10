@@ -33,6 +33,7 @@ export const MANAGEMENT_KIND_ORDER = [
   'chat',
   'image',
   'video',
+  'audio',
   'tts',
   'stt',
   'realtime',

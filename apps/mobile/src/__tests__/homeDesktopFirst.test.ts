@@ -421,7 +421,7 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('loadDeviceIdentityCache()');
     expect(source).toContain('reconcileDeviceIdentities(');
     expect(source).toContain('saveDeviceIdentityCache(result.cache)');
-    expect(source).toContain('loadDeviceSessionScheduleIndex(deviceId, invoke)');
+    expect(source).toContain('loadDeviceSessionScheduleIndex(deviceId, invoke,');
     expect(source).toContain('replaceSessionScheduleIndexEntries(');
     expect(source).toContain("invoke<unknown[]>(device.deviceId, 'maker:list-active', [");
     expect(source).toContain("{ summary: true }");
@@ -440,7 +440,8 @@ describe('mobile home desktop-first surface', () => {
     expect(source).toContain('if (version === 0) {');
     expect(source).toContain('scheduleEventVersionsRef.current.delete(deviceId)');
     expect(source).toContain("projection?.refresh.sessionIndex !== true && projection?.runPatch.status !== 'running'");
-    expect(source).toContain('force: projection.refresh.scheduleList === true');
+    expect(source).toContain('refreshDeviceScheduleIndex(deviceId, sessionIds);');
+    expect(source).not.toContain('force: projection.refresh.scheduleList');
     expect(source).toContain('scheduleIndex,');
     expect(source).toContain('const attention = item.pendingInteractionCount > 0');
     expect(source).toContain('|| (item.scheduleInfo?.unreadCount ?? 0) > 0');

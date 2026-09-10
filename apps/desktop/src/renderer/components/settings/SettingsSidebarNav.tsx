@@ -7,6 +7,7 @@ import {
   ChartColumn,
   CircleDollarSign,
   CircleHelp,
+  Database,
   FileUp,
   Info,
   Keyboard,
@@ -76,6 +77,7 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   'im-bot': MessageCircle,
   help: CircleHelp,
   about: Info,
+  storage: Database,
 };
 
 interface SettingsSidebarNavProps {

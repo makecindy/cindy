@@ -10,16 +10,29 @@ export interface ModelVisibilityLegacyOwnerClaim extends DataOwnerPushStamp {
   readonly claimedByOtherOwner: boolean;
   /** This process currently has exclusive access and may snapshot the legacy Renderer key. */
   readonly canInitialize: boolean;
+  /** Main's persistent profile-creation provenance; absent on older Main versions. */
+  readonly profileOrigin?: 'new' | 'existing' | 'pending' | 'adopted-local';
 }
 
 export function isModelVisibilityLegacyOwnerClaim(
   value: unknown,
 ): value is ModelVisibilityLegacyOwnerClaim {
+  const origin = (value as Partial<ModelVisibilityLegacyOwnerClaim> | null)?.profileOrigin;
   return (
     isDataOwnerPushStamp(value) &&
     typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).canWriteOwnerScoped === 'boolean' &&
     typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).claimed === 'boolean' &&
     typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).claimedByOtherOwner === 'boolean' &&
-    typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).canInitialize === 'boolean'
+    typeof (value as Partial<ModelVisibilityLegacyOwnerClaim>).canInitialize === 'boolean' &&
+    (origin === undefined || origin === 'new' || origin === 'existing' || origin === 'pending' || origin === 'adopted-local')
   );
+}
+
+/** Optional append-only IPC policy; omitted by older renderers. */
+export interface ModelVisibilityPolicy {
+  fallback: false;
+  /** Renderer still needs the catalog/legacy claim; this is not an effective snapshot. */
+  pending?: true;
+  /** Only an explicit Restore defaults action may follow future catalog defaults. */
+  followCatalogKeys: string[];
 }

@@ -3605,6 +3605,10 @@ interface ElectronAPI {
       error?: string;
       blobs: { totalCount: number; totalBytes: number; cacheCount: number; cacheBytes: number };
       legacy: { bytes: number; fileCount: number };
+      fixedCaches: {
+        legacyImages: { bytes: number; fileCount: number };
+        chatAttachments: { bytes: number; fileCount: number };
+      };
       deadDirs: Array<{
         name: string;
         exists: boolean;
@@ -4433,6 +4437,32 @@ interface ElectronAPI {
           };
         }
     >;
+    databaseSizeWarning: {
+      getSettings: () => Promise<{
+        thresholdGiB: number;
+        disabled: boolean;
+        isCustomized?: boolean;
+        defaultThresholdGiB: number;
+      }>;
+      setSettings: (settings: {
+        thresholdGiB?: number;
+        disabled?: boolean;
+      }) => Promise<{
+        thresholdGiB: number;
+        disabled: boolean;
+        isCustomized?: boolean;
+        defaultThresholdGiB: number;
+      }>;
+      resetSettings: () => Promise<{
+        thresholdGiB: number;
+        disabled: boolean;
+        isCustomized?: boolean;
+        defaultThresholdGiB: number;
+      }>;
+      getStatus: () => Promise<{ databaseBytes: number | null }>;
+      measure: () => Promise<{ databaseBytes: number | null }>;
+      onChanged: (callback: () => void) => () => void;
+    };
     maintenance: {
       scan: (
         input: import('../shared/localDbMaintenance').DbSlimmingScanInput,
@@ -5282,6 +5312,7 @@ interface ElectronAPI {
       dataOwnerId: string | null,
       ownerGeneration: number,
       map: Record<string, boolean>,
+      policy?: import('../shared/modelVisibility').ModelVisibilityPolicy,
     ) => Promise<void>;
     /** Resolve the stable local/cloud owner allowed to import the pre-account preference key. */
     claimLegacyModelVisibilityOwner: () => import('../shared/modelVisibility').ModelVisibilityLegacyOwnerClaim;
@@ -6323,9 +6354,9 @@ interface ElectronAPI {
         reasoningTokens?: number;
         cachedTokens?: number;
       }>;
-      getAccount: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown | null>;
+      getAccount: (agentKind: 'claude-code' | 'codex' | 'pi', providerId?: string) => Promise<unknown | null>;
       /** Codex app-server authoritative windows and banked reset-credit metadata. */
-      getCodexRateLimits: () => Promise<
+      getCodexRateLimits: (providerId?: string) => Promise<
         import('@cindy/maker-shared/device-link-contract').MobileCodexRateLimitsResult
       >;
       /** Cindy AI /models 下发的 XD 原生报价。 */
@@ -6389,6 +6420,7 @@ interface ElectronAPI {
           updatedAt?: number | null;
           accountId?: string | null;
         }) => void,
+        providerId?: string,
       ) => () => void;
       /** xAI(SuperGrok bridge)限流快照推送;字段与 main usageBroadcaster XaiRateLimitSnapshot 对齐。
        *  null = main 主动清空(xAI 登出 / 换账号,clearXaiRateLimitSnapshot)。 */
@@ -6403,8 +6435,14 @@ interface ElectronAPI {
           } | null,
         ) => void,
       ) => () => void;
-      getXaiSubscription: () => Promise<unknown | null>;
-      onXaiSubscriptionChanged: (cb: (payload: unknown) => void) => () => void;
+      /** Existing native Anthropic subscription snapshot (null means cleared). */
+      getClaudeSubscription: (providerId?: string) => Promise<import('../shared/claudeSubscriptionUsage').ClaudeSubscriptionUsageSnapshot | null>;
+      onClaudeSubscriptionChanged: (
+        cb: (snapshot: import('../shared/claudeSubscriptionUsage').ClaudeSubscriptionUsageSnapshot | null) => void,
+        providerId?: string,
+      ) => () => void;
+      getXaiSubscription: (providerId?: string) => Promise<unknown | null>;
+      onXaiSubscriptionChanged: (cb: (payload: unknown) => void, providerId?: string) => () => void;
     };
 
     /* ── 跨 Agent 工作区互转（双向，5 项独立判断；进度 step 通过 push 流转）── */

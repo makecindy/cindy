@@ -19,6 +19,7 @@ import { getActiveCatalog } from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
+import { readClaudeAccountOAuth } from './subscription-account-auth.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
@@ -170,7 +171,9 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
       ...claudeBehaviorFlagsForSpawn({
         credentialMode: ctx.credentialMode,
         providerId: ctx.sessionProviderId,
-        oauthConnected: hasClaudeAiOAuth,
+        nativeAuth: getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native,
+        oauthConnected: () => getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native === 'claude'
+          ? Boolean(readClaudeAccountOAuth(ctx.sessionProviderId!)?.accessToken) : hasClaudeAiOAuth(),
       }),
       // 工具链限核 env(agent 资源占用治理):只对本机 spawn 注入 —— 值按本机
       // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。

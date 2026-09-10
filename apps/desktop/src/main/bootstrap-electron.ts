@@ -1,3 +1,6 @@
+import { codexAccountState } from './maker-host/codex-account-auth.js';
+import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
+import { clearSubscriptionAccountDiscoveredModels, setSubscriptionAccountInvalidatedHandler } from './maker-host/subscription-account-auth.js';
 import { startWorktreeRecycleMaintenance, stopWorktreeRecycleMaintenance, auditRegisteredWorktrees } from './worktree/recycleMaintenance';
 import { requestWorktreeRecycle } from './worktree/managedRecycle';
 import { recycleSessionWorktreeForStatusChange } from './localDb/ipc/sessions';
@@ -304,9 +307,13 @@ import {
 } from './cindy-media/cindyMediaProtocol';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
-import { openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
+import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { openMakeToolsDirectory } from './cindy-make/toolsDirectory';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
+import {
+  collectDatabaseSizeWarningStatus,
+  type DatabaseSizeWarningStatus,
+} from './database-size-warning-status';
 import {
   getAllRegisteredDraftUrls,
   reportDraftUrls as registerWindowDraftUrls,
@@ -364,6 +371,15 @@ import {
   getDbClient,
   setCurrentDbClient,
 } from './localDb/client/current';
+import {
+  readDatabaseSizeWarningSettingsState,
+  parseDatabaseSizeWarningSettingsPatch,
+  writeDatabaseSizeWarningSettings,
+  resetDatabaseSizeWarningSettings,
+  DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+  getDatabaseSizeWarningSettingsFilePath,
+} from './database-size-warning-settings';
+import { createDatabaseSizeWarningSettingsWatcher } from './database-size-warning-settings-watcher.js';
 import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
 import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
 import {
@@ -545,6 +561,7 @@ import {
   finalizeCodexAfterAuthModeChange,
   readCodexRuntimeRoute,
   broadcastClaudeAuthStateChanged,
+  refreshSelectableModelsAndBroadcast,
   broadcastXaiAuthStateChanged,
   refreshProviderAccessAfterAuthChange,
   setProviderAccessRuntimeRefreshListener,
@@ -2400,6 +2417,7 @@ registerLayoutIpc();
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
 setCodexImageAuthBinding({
+  hasAuth: (providerId) => codexAccountState(providerId).authenticated,
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,
 });
@@ -4038,6 +4056,53 @@ let lastPluginMarketSyncAt = 0;
 let pluginMarketPeriodicSyncTimer: ReturnType<typeof setInterval> | null = null;
 const PLUGIN_MARKET_PERIODIC_SYNC_MS = 30 * 60 * 1000;
 
+let startupDatabaseSizeWarningStatus: DatabaseSizeWarningStatus = { databaseBytes: null };
+let startupDatabaseSizeWarningStatusChecked = false;
+let startupDatabaseSizeWarningOwnerScope: string | null = null;
+
+function collectCurrentDatabaseSizeWarningStatus(): DatabaseSizeWarningStatus {
+  return collectDatabaseSizeWarningStatus({
+    getCurrentDbPath: localDbGetCurrentDbPath,
+    getCurrentUserId: getCurrentDbClientUserId,
+    resolveDbPathForUser: getDbPathForUser,
+  });
+}
+
+function broadcastDatabaseSizeWarningChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('database-size-warning:changed');
+    }
+  }
+}
+
+const databaseSizeWarningSettingsWatcher = createDatabaseSizeWarningSettingsWatcher(() => {
+  broadcastDatabaseSizeWarningChanged();
+});
+
+app.once('will-quit', () => databaseSizeWarningSettingsWatcher.dispose());
+
+function rebindDatabaseSizeWarningSettingsWatcher(): void {
+  databaseSizeWarningSettingsWatcher.rebind(getDatabaseSizeWarningSettingsFilePath());
+}
+
+/** Capture the database size once after the first local DB startup completes. */
+function checkDatabaseSizeWarningAtStartup(): void {
+  const ownerScope = activeOwnerScopeKey();
+  if (
+    startupDatabaseSizeWarningStatusChecked &&
+    startupDatabaseSizeWarningOwnerScope === ownerScope
+  ) return;
+  startupDatabaseSizeWarningStatus = collectCurrentDatabaseSizeWarningStatus();
+  startupDatabaseSizeWarningStatusChecked = true;
+  startupDatabaseSizeWarningOwnerScope = ownerScope;
+  dbClientLog.info(
+    'database size warning startup check completed',
+    startupDatabaseSizeWarningStatus,
+  );
+  broadcastDatabaseSizeWarningChanged();
+}
+
 /** Run market discovery and automatic updates for the current stable owner. */
 function syncPluginMarketForActiveOwner(minIntervalMs = 0): void {
   const session = getActiveAppSession();
@@ -4073,6 +4138,48 @@ function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefi
 }
 
 const registerIpcHandlers = () => {
+  ipcMain.handle('database-size-warning:get-settings', (event) => {
+    assertTrustedAppRendererEvent(event);
+    const state = readDatabaseSizeWarningSettingsState();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
+  });
+  ipcMain.handle('database-size-warning:set-settings', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const parsed = parseDatabaseSizeWarningSettingsPatch(payload);
+    if ('error' in parsed) throwIpcError('INVALID_PARAMS', parsed.error);
+    await writeDatabaseSizeWarningSettings(parsed.patch);
+    const state = readDatabaseSizeWarningSettingsState();
+    broadcastDatabaseSizeWarningChanged();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
+  });
+  ipcMain.handle('database-size-warning:reset-settings', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    await resetDatabaseSizeWarningSettings();
+    const state = readDatabaseSizeWarningSettingsState();
+    broadcastDatabaseSizeWarningChanged();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
+  });
+  ipcMain.handle('database-size-warning:get-status', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return startupDatabaseSizeWarningStatus;
+  });
+  ipcMain.handle('database-size-warning:measure', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return collectCurrentDatabaseSizeWarningStatus();
+  });
+
   // Find the primary app window, skipping transient utility BrowserWindows like
   // the voice-input overlay (minimizable:false, maximizable:false). Electron's
   // BrowserWindow.getAllWindows() ordering is not guaranteed to be stable across
@@ -4775,7 +4882,21 @@ const registerIpcHandlers = () => {
 
   // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
-  setXaiAuthInvalidatedHandler(() => {
+  setSubscriptionAccountInvalidatedHandler((providerId) => {
+    const scope = activeOwnerScopeKey();
+    const broadcast = () => {
+      if (scope === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
+        refreshSelectableModelsAndBroadcast({ providerId });
+      }
+    };
+    void syncSubscriptionAccountUsage(providerId).then(broadcast, broadcast);
+  });
+  setXaiAuthInvalidatedHandler((providerId) => {
+    if (providerId !== 'xai') {
+      void clearSubscriptionAccountDiscoveredModels(providerId);
+      void syncSubscriptionAccountUsage(providerId).then(broadcastXaiAuthStateChanged, broadcastXaiAuthStateChanged);
+      return;
+    }
     resetProviderModelAutoRefreshCooldowns('xai');
     clearXaiDiscoveredModels();
     clearXaiMediaModels();
@@ -7604,11 +7725,16 @@ const registerIpcHandlers = () => {
           activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending(),
       };
     };
-    const withActiveChatAttachmentRoot = <T>(
+    const withActiveChatAttachmentRoot = async <T>(
       action: (rootDir: string, isCurrentOwner: () => boolean) => Promise<T>,
+      options: { allowOwnerChangeAfterAction?: boolean } = {},
     ): Promise<T> => {
       const { rootDir, isCurrentOwner } = captureActiveChatAttachmentRoot();
-      return action(rootDir, isCurrentOwner);
+      const result = await action(rootDir, isCurrentOwner);
+      if (!options.allowOwnerChangeAfterAction && !isCurrentOwner()) {
+        throwIpcError('PRECONDITION_FAILED', 'chat attachment directory owner changed');
+      }
+      return result;
     };
 
     // 各窗口草稿附件 URL 上报(composerDraftStore mutator 尾部推送;多窗口
@@ -7623,14 +7749,20 @@ const registerIpcHandlers = () => {
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
       openLegacyImagesDir: () => openFixedDirectory(imageCacheStore.getCacheRoot()),
       clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
+      getLegacyImagesDirStats: () => getFixedDirectoryStats(imageCacheStore.getCacheRoot()),
       openChatAttachmentsDir: () =>
         withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
           openFixedDirectory(rootDir, isCurrentOwner),
         ),
       clearChatAttachmentsDir: () =>
-        withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
-          clearFixedDirectory(rootDir, isCurrentOwner),
+        withActiveChatAttachmentRoot(
+          (rootDir, isCurrentOwner) => clearFixedDirectory(rootDir, isCurrentOwner),
+          { allowOwnerChangeAfterAction: true },
         ),
+      getChatAttachmentsDirStats: () =>
+        !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
+          ? Promise.resolve({ bytes: 0, fileCount: 0 })
+          : withActiveChatAttachmentRoot((rootDir) => getFixedDirectoryStats(rootDir)),
     });
     ipcMain.handle('cindy-media:storage-stats', () => storageHandlers.stats());
     ipcMain.handle('cindy-media:storage-scan', (_event, params: { draftUrls: string[] }) =>
@@ -8240,6 +8372,7 @@ app.on('ready', async () => {
   });
 
   registerIpcHandlers();
+  rebindDatabaseSizeWarningSettingsWatcher();
   startInputDeviceRuntime();
   startInputDevices();
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
@@ -8397,6 +8530,12 @@ app.on('ready', async () => {
       const dbClientTakeover = await ensureLifecycleDbClient(userId);
       logStartupPhase('db-client-takeover');
       if (dbClientTakeover.mode === 'failed' || dbClientTakeover.mode === 'skipped') {
+        // Do not expose the previous owner's startup snapshot after a failed
+        // takeover. A later successful takeover will capture a fresh snapshot.
+        startupDatabaseSizeWarningStatus = { databaseBytes: null };
+        startupDatabaseSizeWarningStatusChecked = false;
+        startupDatabaseSizeWarningOwnerScope = null;
+        broadcastDatabaseSizeWarningChanged();
         dbClientLog.warn('[DbClient] lifecycle client unavailable; skip db-client startup hooks', {
           userId,
           mode: dbClientTakeover.mode,
@@ -8412,6 +8551,7 @@ app.on('ready', async () => {
         }
         return;
       }
+      checkDatabaseSizeWarningAtStartup();
       // Bot recovery is owner-scoped and must start only after DbClient
       // takeover. registerMakerIpc also invokes this once its services exist,
       // covering both possible splash/login orderings without duplicate runs.

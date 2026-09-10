@@ -43,6 +43,7 @@ import {
   CONTROLLER_CAPABILITY_MAKER_EVENT_BATCH_V1,
   CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1,
   DEVICE_LINK_CAPABILITY_COMPACT_MESSAGE_HISTORY_V1,
+  DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   byteLength,
   DeviceLinkError,
   parseFsWatchTopic,
@@ -953,6 +954,13 @@ const makerEventBatchStages = new Map<string, MakerEventBatchStage>();
 // Bound live traffic before it enters the shared socket FIFO. Only opt-in
 // controllers can repair skipped deltas from the authoritative in-flight block.
 const MAKER_EVENT_WINDOW_SOFT_CAP = 16;
+// Recheck the existing repair stage promptly after the window drains. Waiting
+// two seconds here also suppresses healthy later deltas for those two seconds.
+// The peer/window gates still run before reading or sending any snapshot.
+const SESSION_SYNC_RETRY_MS = 250;
+// Keep the original pacing when reading/admitting a snapshot actually fails:
+// socket bytes or the authorization queue can be full even below the soft cap.
+const SESSION_SYNC_FAILURE_RETRY_MS = 2_000;
 function isNonFinalTextPush(payload: unknown): boolean {
   const event = (payload as { event?: { type?: unknown; data?: { isFinal?: unknown } } } | null)?.event;
   return event?.type === 'text' && event.data?.isFinal === false;
@@ -962,6 +970,7 @@ const sessionSyncStages = new Map<string, {
   sessions: Map<string, boolean>;
   timer: ReturnType<typeof setTimeout> | null;
   ownerStamp?: PushOwnerStamp;
+  startedAt: number;
 }>();
 
 function clearSessionSyncStage(dst: string): void {
@@ -970,18 +979,26 @@ function clearSessionSyncStage(dst: string): void {
   sessionSyncStages.delete(dst);
 }
 
-function stageSessionSync(dst: string, sessionId: string, historyRequired = true): void {
+function stageSessionSync(dst: string, sessionId: string, historyRequired = true, retryDelayMs = SESSION_SYNC_RETRY_MS): void {
   if (!subscriptions.controllerSupports(dst, CONTROLLER_CAPABILITY_SESSION_TEXT_SNAPSHOT_V1)) return;
   let stage = sessionSyncStages.get(dst);
   if (!stage) {
-    stage = { sessions: new Map(), timer: null, ownerStamp: broadcastTap.getSafeDataOwnerPushStamp?.() };
+    stage = { sessions: new Map(), timer: null, ownerStamp: broadcastTap.getSafeDataOwnerPushStamp?.(), startedAt: Date.now() };
     sessionSyncStages.set(dst, stage);
+    log.debug(`session sync repair queued to=${shortId(dst)}`
+      + ` queueDepth=${activeClient?.getReliableSendQueueDepth?.(dst) ?? 0}`
+      + ` writable=${activeClient?.canSendPush?.(dst) !== false}`);
   }
   stage.sessions.set(sessionId, historyRequired || stage.sessions.get(sessionId) === true);
   if (stage.sessions.size > SESSION_ACTIVITY_STAGE_MAX_KEYS) {
     stage.sessions.delete(stage.sessions.keys().next().value!);
   }
-  if (stage.timer) return;
+  if (stage.timer) {
+    if (retryDelayMs !== SESSION_SYNC_FAILURE_RETRY_MS) return;
+    // Flushing an older batch may have re-armed the fast check. A subsequent
+    // admission failure must retain the original, slower retry interval.
+    clearTimeout(stage.timer);
+  }
   stage.timer = setTimeout(() => {
     stage.timer = null;
     if (!activeClient || activeClient.getStatus() !== 'online'
@@ -1013,24 +1030,34 @@ function stageSessionSync(dst: string, sessionId: string, historyRequired = true
         let admissionFailed = false;
         sendBotCheckedPush(dst, SESSION_SYNC_CHANNEL, payload,
           (projected) => {
-            if (subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
-              activeClient?.sendPush(dst, SESSION_SYNC_CHANNEL, projected, ownerStamp);
+            if (activeClient && subscriptions.controllerHasTopic(dst, `session:${sid}`)) {
+              activeClient.sendPush(dst, SESSION_SYNC_CHANNEL, projected, ownerStamp);
+              // Admission is not delivery/ACK. Log once per admitted repair,
+              // never per retry or token, and never include the snapshot body.
+              log.debug(`session sync repair admitted to=${shortId(dst)}`
+                + ` session=${shortId(sid)} stageAgeMs=${Date.now() - stage.startedAt}`
+                + ` resyncRequired=${payload.resyncRequired}`);
             }
           },
           () => {
             admissionFailed = true;
-            stageSessionSync(dst, sid, payload.resyncRequired);
+            // A late authorization failure may belong to an already drained
+            // stage. Preserve a newer stage's fast timer while merging the work.
+            const currentStage = sessionSyncStages.get(dst);
+            stageSessionSync(dst, sid, payload.resyncRequired,
+              currentStage && currentStage !== stage ? SESSION_SYNC_RETRY_MS : SESSION_SYNC_FAILURE_RETRY_MS);
           });
         if (admissionFailed) break;
         stage.sessions.delete(sid);
       } catch {
+        stageSessionSync(dst, sid, stage.sessions.get(sid), SESSION_SYNC_FAILURE_RETRY_MS);
         break;
       }
     }
     const next = stage.sessions.entries().next().value;
     if (next) stageSessionSync(dst, next[0], next[1]);
     else clearSessionSyncStage(dst);
-  }, 2_000);
+  }, retryDelayMs);
   (stage.timer as unknown as { unref?: () => void }).unref?.();
 }
 
@@ -2249,6 +2276,7 @@ function handleLinkOpen(
     client.sendLinkAccept(src, requestId, {
       appVersion: app.getVersion(),
       allowlistHash: computeAllowlistHash(),
+      capabilities: [DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1],
     });
   } catch (err) {
     // 背压等瞬时失败:短退避重试(见 LINK_ACCEPT_RETRY_DELAYS_MS 注释),
@@ -2413,6 +2441,7 @@ async function handleInvoke(
   const releaseBusyLease = shouldAcquireRemoteInvokeBusyLease(src, payload)
     ? acquireRemoteInvokeBusyLease()
     : () => undefined;
+  const handlerStartedAt = Date.now();
   const executionPromise = Promise.resolve()
     .then(() => executeInvoke(src, payload))
     .catch((err): InvokeResultPayload => {
@@ -2442,6 +2471,12 @@ async function handleInvoke(
   let result: InvokeResultPayload;
   try {
     result = normalizeInvokeResultForWire(await resultPromise);
+    const executionWaitMs = Date.now() - handlerStartedAt;
+    if (executionWaitMs >= 1_000) {
+      log.debug(`remote invoke slow execution request=${shortId(requestId)} from=${shortId(src)}`
+        + ` channel=${payload && REMOTE_INVOKE_ALLOWLIST.has(payload.channel) ? payload.channel : 'unknown'}`
+        + ` executionWaitMs=${executionWaitMs} ok=${result.ok}`);
+    }
     if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
   } finally {
     if (inFlightRemoteInvokeResults.get(cacheKey) === inFlightEntry) {
@@ -2715,7 +2750,7 @@ function sendInvokeResultSafe(
     rememberRemoteInvokeResult(key, fingerprint, attempt.result);
   }
   if (attempt.sent) {
-    removeRemoteInvokeResultOutboxEntry(key);
+    removeRemoteInvokeResultOutboxEntry(key, true);
     return true;
   }
   return enqueueRemoteInvokeResult({
@@ -2831,15 +2866,20 @@ function enqueueRemoteInvokeResult(entry: QueuedRemoteInvokeResult): boolean {
   remoteInvokeResultOutboxBytes += entry.bytes;
   log.warn(
     `queued invoke-result after local send backpressure for ${entry.channel ?? '?'} ` +
-    `to ${shortId(entry.src)}`,
+    `to ${shortId(entry.src)} request=${shortId(entry.requestId)}` +
+    ` queueMessages=${remoteInvokeResultOutbox.size} queueBytes=${remoteInvokeResultOutboxBytes}`,
   );
   scheduleRemoteInvokeResultOutboxFlush();
   return true;
 }
 
-function removeRemoteInvokeResultOutboxEntry(key: string): void {
+function removeRemoteInvokeResultOutboxEntry(key: string, sent = false): void {
   const queued = remoteInvokeResultOutbox.get(key);
   if (!queued) return;
+  if (sent) {
+    log.info(`flushed queued invoke-result for ${queued.channel ?? '?'} to ${shortId(queued.src)}`
+      + ` request=${shortId(queued.requestId)} queuedMs=${Math.max(0, Date.now() - queued.queuedAt)}`);
+  }
   remoteInvokeResultOutbox.delete(key);
   remoteInvokeResultOutboxBytes -= queued.bytes;
   if (remoteInvokeResultOutbox.size === 0) clearRemoteInvokeResultOutboxTimer();
@@ -2914,7 +2954,7 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
     if (now - queued.queuedAt >= outboxEntryMaxAgeMs(queued.channel)) {
       log.warn(
         `dropping expired invoke-result outbox entry for ${queued.channel ?? '?'} ` +
-        `to ${shortId(queued.src)}`,
+        `to ${shortId(queued.src)} request=${shortId(queued.requestId)} queuedMs=${now - queued.queuedAt}`,
       );
       removeRemoteInvokeResultOutboxEntry(key);
       continue;
@@ -2954,10 +2994,7 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
       }
       continue;
     }
-    removeRemoteInvokeResultOutboxEntry(key);
-    log.info(
-      `flushed queued invoke-result for ${queued.channel ?? '?'} to ${shortId(queued.src)}`,
-    );
+    removeRemoteInvokeResultOutboxEntry(key, true);
   }
   if (remoteInvokeResultOutbox.size > 0) scheduleRemoteInvokeResultOutboxFlush();
 }

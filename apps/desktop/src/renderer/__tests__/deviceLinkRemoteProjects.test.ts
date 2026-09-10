@@ -82,6 +82,70 @@ describe('archived session retry backoff', () => {
 });
 
 describe('startRemoteSessionsReconciler', () => {
+  it('preserves failure backoff while a window is hidden', async () => {
+    vi.useFakeTimers();
+    let visible = true;
+    const refresh = vi.fn(async () => 'gave-up');
+    const backoff = createReconcileBackoff({ baseMs: 10_000, jitter: (ms) => ms });
+    const stop = startRemoteSessionsReconciler(
+      () => new Map([['dev-a', 'Mac A']]),
+      refresh,
+      1_000,
+      backoff,
+      () => visible,
+    );
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    visible = false;
+    await vi.advanceTimersByTimeAsync(2_000);
+    visible = true;
+    await vi.advanceTimersByTimeAsync(7_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(19_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(3);
+    stop();
+  });
+
+  it('pauses hidden window polling without duplicating pending requests on resume', async () => {
+    vi.useFakeTimers();
+    let visible = false;
+    let finish!: (result: string) => void;
+    const refresh = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finish = resolve;
+        }),
+    );
+    const stop = startRemoteSessionsReconciler(
+      () => new Map([['dev-a', 'Mac A']]),
+      refresh,
+      1_000,
+      undefined,
+      () => visible,
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(refresh).not.toHaveBeenCalled();
+    visible = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    visible = false;
+    await vi.advanceTimersByTimeAsync(10_000);
+    visible = true;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+    finish('ok');
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    stop();
+    finish('ok');
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+  });
+
   it('periodically refreshes every eligible device and stops cleanly', async () => {
     vi.useFakeTimers();
     const eligible = new Map([
@@ -142,9 +206,7 @@ describe('startRemoteSessionsReconciler', () => {
       ['dev-good', 'Mac Good'],
     ]);
     let badResult: string = 'gave-up';
-    const refresh = vi.fn(async (deviceId: string) =>
-      deviceId === 'dev-bad' ? badResult : 'ok',
-    );
+    const refresh = vi.fn(async (deviceId: string) => (deviceId === 'dev-bad' ? badResult : 'ok'));
     // 无抖动 + 假时钟,退避序列确定:失败 1 次后推迟 1s(=base),2 次后 2s,3 次后 4s…
     const backoff = createReconcileBackoff({
       baseMs: 1_000,
@@ -190,9 +252,10 @@ describe('startRemoteSessionsReconciler', () => {
     const eligible = new Map([['dev-slow', 'Mac Slow']]);
     let settle: ((r: string) => void) | null = null;
     const refresh = vi.fn(
-      () => new Promise<string>((resolve) => {
-        settle = resolve;
-      }),
+      () =>
+        new Promise<string>((resolve) => {
+          settle = resolve;
+        }),
     );
     const failures: string[] = [];
     const backoff = createReconcileBackoff({ baseMs: 1_000, maxMs: 8_000, jitter: (d) => d });

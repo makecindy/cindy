@@ -902,6 +902,9 @@ export function parseModelsListResponse(json: unknown): DiscoveredModel[] | null
       )
         ? { name }
         : {}),
+      mode: record.mode,
+      modalities: record.modalities,
+      officialDocs: record.officialDocs,
       description: record.description,
       group: record.group,
       contextWindow: typeof rawWindow === 'number' ? Math.floor(rawWindow) : undefined,

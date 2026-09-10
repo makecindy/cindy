@@ -1,7 +1,12 @@
+import type { TurnUsageContext } from './turnUsageContext.js';
 import { registerPluginListHandler } from './pluginListHandler.js';
 import { initializeBotAuthorizationHost } from './botAuthorizationHost.js';
 import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, commitBotAuthorizationInput, type BotAuthorizationInputGuard, getBotAuthorizationService } from './botAuthorizationService.js';
 import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
+import { refreshSubscriptionAccountModels } from '../maker-host/subscription-account-models.js';
+import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
+import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
+import { isCodexAccountProvider, codexAccountState, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
@@ -54,6 +59,7 @@ import {
   effectiveSourceIdForModel,
   findCatalogModel,
   storedCustomProviderId,
+  isLocalOnlyProviderForAgent,
 } from '@cindy/model-providers';
 import { createId } from '@paralleldrive/cuid2';
 import {
@@ -566,6 +572,7 @@ import {
 
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
+import { piPackageCommandDiagnostic } from '../maker-host/pi-package-diagnostic.js';
 import {
   runPiPackageListIpcBoundary,
   runPiPackageMutationIpcBoundary,
@@ -858,6 +865,7 @@ import { readSessionRuntimeFallbackSettings } from '../maker-host/session-runtim
 import {
   getModelVisibilityMirrorSnapshot,
   syncModelVisibilityMirrorForOwner,
+  waitForModelVisibilityMirror,
 } from '../maker-host/model-visibility-mirror.js';
 import {
   clearProviderDisableOverrides,
@@ -2803,8 +2811,8 @@ async function readSessionModelForUsage(sessionId: string): Promise<string> {
  * 只在第一次 isRunning:true 时写入,避免后续 progress status 在用户切模型后覆盖本轮归因。
  */
 const turnModelPromiseBySession = new Map<string, Promise<string>>();
-/** Pi request pricing variant captured at product-turn start. */
-const turnPiFastModeBySession = new Map<string, boolean>();
+/** Billing identity and Pi tariff captured at product-turn start. */
+const turnUsageContextBySession = new Map<string, TurnUsageContext>();
 
 /**
  * Zero-value marker for a future subscription turn that was deliberately not
@@ -4294,7 +4302,7 @@ function cleanupClosedSessionRuntime(session: WiredSession): void {
   lastReportedCostUsdBySession.delete(session.id);
   lastReportedModelUsageBySession.delete(session.id);
   turnModelPromiseBySession.delete(session.id);
-  turnPiFastModeBySession.delete(session.id);
+  turnUsageContextBySession.delete(session.id);
   productTurnWallClockTracker.clear(session.id);
   productTurnUsageTargetTracker.clear(session.id);
   claudeOutputLagTimingGuard.clear(session.id);
@@ -4386,8 +4394,8 @@ const sessionEventDependencies: SessionEventDependencies = {
   get readSessionModelForUsage() {
     return readSessionModelForUsage;
   },
-  get turnPiFastModeBySession() {
-    return turnPiFastModeBySession;
+  get turnUsageContextBySession() {
+    return turnUsageContextBySession;
   },
   get silentStopTurnLeaseGate() {
     return silentStopTurnLeaseGate;
@@ -4582,7 +4590,7 @@ let disposePiPackagesChangedBroadcast: (() => void) | null = null;
 export function registerModelVisibilitySyncIpc(): void {
   ipcMain.handle(
     MAKER_INVOKE.MODEL_VISIBILITY_SYNC,
-    async (event, dataOwnerId: unknown, ownerGeneration: unknown, map: unknown) => {
+    async (event, dataOwnerId: unknown, ownerGeneration: unknown, map: unknown, policy?: unknown) => {
       assertTrustedAppRendererEvent(event);
       syncModelVisibilityMirrorForOwner(
         map,
@@ -4592,6 +4600,7 @@ export function registerModelVisibilitySyncIpc(): void {
         () => {
           broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
         },
+        policy,
       );
     },
   );
@@ -5331,7 +5340,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
-    getModelVisibilityOverrides: () => getModelVisibilityMirrorSnapshot(),
+    getModelVisibilityOverrides: async (providers, trusted) => {
+      if (!trusted) await waitForModelVisibilityMirror();
+      return getModelVisibilityMirrorSnapshot(providers, trusted);
+    },
     refreshCatalog: () => refreshCustomProvidersIntoCatalog(),
     codexCustomProviderConfigSignature,
     hasAppliedCodexCustomProviderImageGeneration: (providerId) =>
@@ -5347,6 +5359,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         )
         .map((session) => session.id),
     prepareCodexCustomProviderHostChange: prepareCodexForCustomProviderHostChange,
+    retireCodexAccount,
     finalizeCodexCustomProviderHostChange: finalizeCodexAfterAuthModeChange,
     cancelCodexCustomProviderHostChange: cancelCodexAuthModeChange,
     beginRouteMutation: (providerId) => beginProviderRouteMutation(providerId),
@@ -5356,7 +5369,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     getProviderOrder: () => readProviderOrder(),
     listPresets: () => getActiveCatalog().presets ?? [],
     testConnection: (input) => testProviderConnection(input),
-    fetchModels: (spec) => fetchProviderModels(spec),
+    fetchModels: async (spec) => {
+      if (spec.savedProviderId && subscriptionAccountKind(spec.savedProviderId)) {
+        return { ok: await refreshSubscriptionAccountModels(spec.savedProviderId), models: [] };
+      }
+      if (isCodexAccountProvider(spec.savedProviderId)) {
+        const owner = getActiveAppSession();
+        if (spec.agent !== 'codex') throw new Error('Codex account model discovery requires Codex');
+        const applied = await maker.refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer', providerId: spec.savedProviderId! });
+        if (getActiveAppSession().generation !== owner.generation) throw new Error('Account changed during model discovery');
+        return { ok: applied, models: [] };
+      }
+      return fetchProviderModels(spec);
+    },
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
     assertTrustedSender: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
@@ -5449,6 +5474,46 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。
     oauthLogin: async (providerId, isCurrent) => {
+      if (subscriptionAccountKind(providerId)) {
+        const result = await loginSubscriptionAccount(providerId, isCurrent);
+        if (result.ok && isCurrent()) {
+          try { await refreshSubscriptionAccountModels(providerId); } catch { /* Static catalog remains usable. */ }
+          if (!isCurrent()) return result;
+          const previous = await getCustomProvider(providerId);
+          const identity = subscriptionAccountState(providerId).identity ?? providerId.slice(-8);
+          if (isCurrent() && previous && identity && result.firstLogin && ['Anthropic', 'Claude', 'xAI', 'Grok'].includes(previous.name)) {
+            await updateCustomProviderIfUnchanged(providerId, previous, { ...previous, name: `${previous.name} · ${identity}`.slice(0, 50) });
+            if (isCurrent()) await refreshCustomProvidersIntoCatalog();
+          }
+          if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        }
+        return result;
+      }
+      if (isCodexAccountProvider(providerId)) {
+        const owner = getActiveAppSession();
+        const current = () => isCurrent() && getActiveAppSession().generation === owner.generation;
+        const result = await loginCodexAccount(providerId, isCurrent);
+        if (result.ok && current()) {
+          const previous = await getCustomProvider(providerId);
+          if (!current()) return result;
+          const identity = codexAccountState(providerId).identity;
+          if (previous && identity && result.firstLogin && previous.name === 'OpenAI') {
+            const baseName = `OpenAI · ${identity}`.slice(0, 50);
+            const names = new Set(getActiveCatalog().providers.filter((provider) => provider.id !== providerId).map((provider) => provider.name));
+            let name = baseName;
+            for (let suffix = 2; names.has(name); suffix++) name = `${baseName} (${suffix})`;
+            await updateCustomProviderIfUnchanged(providerId, previous, { ...previous, name });
+            if (!current()) return result;
+            await refreshCustomProvidersIntoCatalog();
+          }
+          if (!current()) return result;
+          try { await maker.refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer', providerId }); }
+          catch { /* Login remains valid; model refresh can be retried without changing credentials. */ }
+          if (!current()) return result;
+          broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        }
+        return result;
+      }
       const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
       const oauth = provider?.auth.oauth;
       if (!provider || !oauth) throw new Error(`provider '${providerId}' has no oauth descriptor`);
@@ -5543,13 +5608,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     storeCustomProviderKey,
     removeCustomProviderKey,
     oauthLogout: async (providerId) => {
+      if (subscriptionAccountKind(providerId)) { logoutSubscriptionAccount(providerId); await syncSubscriptionAccountUsage(providerId); return; }
+      if (isCodexAccountProvider(providerId)) { await logoutCodexAccount(providerId); return; }
       if (!logoutGenericOAuth(storedCustomProviderId(providerId))) {
         throw new Error('failed to remove generic OAuth credentials');
       }
     },
-    oauthCancel: (providerId) => cancelGenericOAuthLogin(storedCustomProviderId(providerId)),
-    removeOAuthCredentials: (providerId) =>
-      removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId)),
+    oauthCancel: (providerId) => {
+      if (subscriptionAccountKind(providerId)) { cancelSubscriptionAccountLogin(providerId); return; }
+      if (isCodexAccountProvider(providerId)) cancelCodexAccountLogin(providerId);
+      else cancelGenericOAuthLogin(storedCustomProviderId(providerId));
+    },
+    removeOAuthCredentials: (providerId) => subscriptionAccountKind(providerId)
+      ? removeSubscriptionAccountCredentialsReversibly(providerId)
+      : isCodexAccountProvider(providerId)
+      ? removeCodexAccountCredentialsReversibly(providerId)
+      : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId)),
   });
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
@@ -5897,6 +5971,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         log.warn('Pi extension mutation failed', {
           action: request.action,
           failureCategory: piPackageMutationFailureCategory(error),
+          diagnostic: piPackageCommandDiagnostic(error),
           mayHaveChangedState: piPackageMutationMayHaveChangedState(error),
         });
       },
@@ -15277,6 +15352,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             persistedProviderKnown,
             getActiveCatalog().providers,
           );
+        }
+      }
+      if (runtimeStatus.remoteHostId) {
+        const targetId = effectiveProviderId === undefined ? currentProviderId : effectiveProviderId;
+        const target = getActiveCatalog().providers.find((provider) => provider.id === targetId);
+        if (target && isLocalOnlyProviderForAgent(target, dbToMakerAgentKind(runtimeStatus.agentKind))) {
+          throwIpcError('INVALID_PARAMS', 'This provider requires local execution');
         }
       }
       if (atomicSelection) {

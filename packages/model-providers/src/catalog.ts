@@ -10,6 +10,8 @@
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 
+import { projectProviderMediaModels } from './providerMediaModels.js';
+import { validModelMetadata } from './modelMetadataLayers.js';
 import { parseModelRegistry } from './modelAccessValidator.js';
 
 import { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
@@ -265,7 +267,7 @@ function validateOAuthDescriptor(p: Provider): void {
 }
 
 /** 轻量校验一个 provider。 */
-function validateProvider(p: Provider): void {
+function validateProvider(p: Provider, allowEmptyModalities = false): void {
   assert(typeof p.id === 'string' && p.id.length > 0, 'provider.id missing');
   // id 会被 host 直接拼进 safeStorage 键名/文件名（provider_oauth_<id> 等），
   // 必须限定 slug 字符集，防被投毒目录用 `../` 之类字符把凭证写出存储目录。
@@ -291,6 +293,7 @@ function validateProvider(p: Provider): void {
   const hasMediaModels =
     (Array.isArray(p.imageModels) && p.imageModels.length > 0) ||
     (Array.isArray(p.videoModels) && p.videoModels.length > 0) ||
+    (Array.isArray(p.audioModels) && p.audioModels.length > 0) ||
     (Array.isArray(p.embeddingModels) && p.embeddingModels.length > 0);
   assert(
     Array.isArray(p.agents) && (p.agents.length > 0 || hasMediaModels),
@@ -382,8 +385,8 @@ function validateProvider(p: Provider): void {
   // 媒体模型清单与默认选型(图像/视频同一套规则):
   // 清单 id/name 非空、id 不重复,不参与 agent/routing 约束(媒体模型不经
   // agent runtime);默认选型必须与清单配套且每个值指向在册 id。
-  validateMediaModels(p.id, 'imageModels', p.imageModels, 'imageDefaults', p.imageDefaults);
-  validateMediaModels(p.id, 'videoModels', p.videoModels, 'videoDefaults', p.videoDefaults);
+  validateMediaModels(p.id, 'imageModels', p.imageModels, 'imageDefaults', p.imageDefaults, allowEmptyModalities);
+  validateMediaModels(p.id, 'videoModels', p.videoModels, 'videoDefaults', p.videoDefaults, allowEmptyModalities);
   // 向量清单同一套规则(PR #1707 review):不校验的话,远端把 embeddingModels 写成
   // 对象、给重复/空 id、或让 embeddingDefaults 指向清单外型号,都能通过
   // parseCatalog();前一种随后在 deriveCindyMediaConfig 的 for...of 里抛错,被上层
@@ -394,7 +397,12 @@ function validateProvider(p: Provider): void {
     p.embeddingModels,
     'embeddingDefaults',
     p.embeddingDefaults,
+    allowEmptyModalities,
   );
+  validateMediaModels(p.id, 'audioModels', p.audioModels, 'audioDefaults', undefined, allowEmptyModalities);
+  for (const m of p.audioModels ?? []) {
+    assert(['audio_speech', 'audio_transcription', 'audio_generation', 'realtime'].includes(m.mode ?? ''), `provider '${p.id}' audio model '${m.id}' requires an audio mode`);
+  }
   validateAccess(p);
   validateOAuthDescriptor(p);
 }
@@ -408,9 +416,11 @@ function validateMediaModels(
     name: string;
     modalities?: { input: string[]; output: string[] };
     officialDocs?: string;
+    mode?: string;
   }> | undefined,
   defaultsField: string,
   defaults: { standard: string; draft?: string; best?: string } | undefined,
+  allowEmptyModalities = false,
 ): void {
   if (models !== undefined) {
     assert(Array.isArray(models), `provider '${providerId}' ${modelsField} must be an array`);
@@ -421,6 +431,7 @@ function validateMediaModels(
       assert(typeof m.name === 'string' && m.name.length > 0, `provider '${providerId}' ${modelsField} '${m.id}' missing name`);
       assert(!seen.has(m.id), `provider '${providerId}' ${modelsField} has duplicate id '${m.id}'`);
       seen.add(m.id);
+      assert(m.mode === undefined || validModelMetadata({ mode: m.mode }), `model '${m.id}' mode invalid`);
       if (m.modalities !== undefined) {
         assert(
           m.modalities && typeof m.modalities === 'object' && !Array.isArray(m.modalities),
@@ -429,7 +440,7 @@ function validateMediaModels(
         for (const key of ['input', 'output'] as const) {
           const values = m.modalities[key];
           assert(
-            Array.isArray(values) && values.length > 0 && values.length <= 16,
+            Array.isArray(values) && (allowEmptyModalities || values.length > 0) && values.length <= 16,
             `provider '${providerId}' ${modelsField} '${m.id}' modalities.${key} must be a non-empty bounded array`,
           );
           assert(
@@ -798,8 +809,6 @@ export function parseCatalog(input: string | unknown): Catalog {
   const catalog = obj as Catalog;
   assert(typeof catalog.version === 'string', 'catalog.version missing');
   assert(Array.isArray(catalog.providers) && catalog.providers.length > 0, 'catalog.providers missing/empty');
-  for (const p of catalog.providers) validateProvider(p);
-  validateModelConsistency(catalog);
   // presets 容错清洗（坏条目丢弃，不让预设错误拖垮整份目录）。
   const presets = sanitizePresets((catalog as { presets?: unknown }).presets);
   if (presets.length > 0) catalog.presets = presets;
@@ -809,11 +818,21 @@ export function parseCatalog(input: string | unknown): Catalog {
     assert(registry.ok, registry.ok ? '' : registry.error);
     catalog.modelRegistry = registry.value;
   }
+  // Validate authored lists before projection so malformed input cannot be repaired or crash mapping.
+  for (const provider of catalog.providers) {
+    for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const)
+      validateMediaModels(provider.id, field, provider[field], field === 'audioModels' ? '' : field.replace('Models', 'Defaults'),
+        field === 'imageModels' ? provider.imageDefaults : field === 'videoModels' ? provider.videoDefaults : field === 'embeddingModels' ? provider.embeddingDefaults : undefined, catalog.modelRegistry?.schemaVersion === 4);
+  }
+  const projected = { ...catalog, providers: catalog.providers.map((provider) =>
+    projectProviderMediaModels(provider, catalog.modelRegistry, { addDeclared: true })) };
+  for (const provider of projected.providers) validateProvider(provider, catalog.modelRegistry?.schemaVersion === 4);
+  validateModelConsistency(projected);
   // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
   // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。
   //
   // 刻意**不**原地替换 catalog.providers:入参可能就是 BUNDLED_CATALOG(共享的 import 对象),
   // 原地改会把标记悄悄写回那份共享目录 —— 既是跨调用方的副作用,也会让「bundled 自己有没有
   // 标记」这类断言变成假通过。
-  return { ...catalog, providers: catalog.providers.map(withVerifiedStaticWindows) };
+  return { ...projected, providers: projected.providers.map(withVerifiedStaticWindows) };
 }

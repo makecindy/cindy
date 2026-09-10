@@ -178,6 +178,7 @@
       "restoreFailed": "恢复默认设置失败"
     },
     "tabs": {
+      "storage": "存储空间",
       "general": "通用",
       "billing": "用量和计费",
       "usage": "用量历史",
@@ -923,10 +924,25 @@
         "unknown": "未知"
       },
       "storage": {
+        "mediaSectionTitle": "媒体文件",
+        "databaseSectionTitle": "数据库",
+        "overviewTitle": "本地存储空间",
+        "overviewDescription": "数据库和媒体缓存保存在这台电脑上，Cindy 不会自动删除历史记录。",
+        "mediaSectionHint": "单独管理；清理前请先确认内容",
+        "databaseUsage": "占用 {{size}}",
+        "databaseWarningNote": "请先扫描，再选择要清理的内容。扫描不会立即删除文件。",
+        "dbSizeWarningThresholdLabel": "数据库提醒阈值",
+        "dbSizeWarningThresholdDescription": "当数据库超过此大小（G）时提醒我清理",
+        "dbSizeWarningThresholdInvalid": "请输入 1 到 1024 G 之间的提醒阈值。",
+        "dbSizeWarningSaveFailed": "数据库提醒设置保存失败，请重试。",
+        "dbSizeWarningDisableLabel": "不再提醒",
+        "dbSizeWarningDisableDescription": "开启后将隐藏数据库空间提醒。",
+        "unknown": "未知",
         "title": "存储空间",
         "usageLabel": "媒体文件占用",
-        "usageValue": "{{size}}({{count}} 个文件，含缓存 {{cacheSize}})",
-        "statsFailed": "统计暂不可用",
+        "usageValue": "{{size}}（{{count}} 个文件，缓存 {{cacheSize}}）",
+        "statsFailed": "统计暂时不可用",
+        "refreshStatsButton": "刷新存储占用",
         "legacyUsage": "旧版本数据(只读，不参与清理)：{{size}}",
         "legacyImagesLabel": "图片缓存目录",
         "legacyImagesDescription": "Cindy 不会自动扫描或清理此目录。删除文件后，历史消息中的图片可能无法显示，请自行确认后操作。",
@@ -1280,8 +1296,7 @@
             "manual": "手动"
           },
           "toast": {
-            "title": "已自动加入词典",
-            "titleMultiple": "已自动加入 {{count}} 个词",
+            "title": "已加入词典",
             "termsSummary": "{{terms}} 等 {{count}} 个词",
             "automaticAdded": "已自动加入词典：{{term}}",
             "automaticAddedMultiple": "已自动加入词典：{{term}} 等 {{count}} 个词",
@@ -1480,6 +1495,10 @@
       },
       "pill": {
         "connected": "已连接",
+        "configured": "已配置",
+        "disconnected": "未连接",
+        "connecting": "正在连接…",
+        "rename": "重命名",
         "suspended": "已停用"
       },
       "button": {
@@ -1504,7 +1523,17 @@
         "reconnectRequired": "需要重新连接",
         "connect": "连接 ChatGPT",
         "reconnect": "重新连接 ChatGPT",
-        "cancelConnect": "取消连接"
+        "cancelConnect": "取消连接",
+        "accountSource": {
+          "local": "本机 Codex 账号",
+          "oauth": "独立登录账号",
+          "unknown": "现有 OpenAI 连接"
+        },
+        "useLocalAccount": "使用本机 Codex 账号",
+        "addIndependentAccount": "登录独立账号",
+        "accountSourcesDescription": "使用已有的本机 Codex 连接，或登录一个独立保存的账号。两种方式支持相同功能。",
+        "independentAccountDescription": "登录一个独立保存的 ChatGPT 账号，或使用 API key 接入。",
+        "localUnavailable": "当前没有可直接复用的本机连接。已有供应商绑定的账号不会被替换。"
       },
       "xai": {
         "title": "xAI",
@@ -1513,7 +1542,7 @@
         "billingLabel": "SuperGrok 订阅直连",
         "asset": {
           "weeklyTitle": "每周限额",
-          "weeklyUsed": "{{percent}}% 已使用",
+          "weeklyRemaining": "剩余 {{percent}}%",
           "resetsAt": "{{at}} 重置",
           "productLine": "{{product}} {{percent}}%",
           "openUsage": "打开 Grok 用量页面"
@@ -1601,6 +1630,7 @@
           "modelIdPlaceholder": "model-id",
           "modelNamePlaceholder": "显示名称",
           "modelContextWindowPlaceholder": "上下文(tokens)",
+          "modelType": "模型类型",
           "modelContextWindowTitle": "上下文窗口(tokens)。留空按 200K 保守默认；影响窗口显示与压缩阈值。",
           "modelSupportsImageInput": "支持图片输入",
           "modelSupportsImageInputHelp": "仅在该模型确实支持视觉输入时开启。保存后新建 Pi 任务生效。",
@@ -1797,7 +1827,7 @@
         "subscription": "订阅",
         "subscriptionProduct": "{{product}} 订阅",
         "noResults": "无匹配模型",
-        "capabilityNote": "不支持 {{agent}}",
+        "capabilityNote": "尚未配置 {{agent}}",
         "refreshAria": "刷新模型列表(仅新增，不改动现有)",
         "refreshBuiltinAria": "刷新模型列表",
         "refreshingAria": "正在刷新模型列表…",
@@ -1873,6 +1903,7 @@
           "engines": "引擎支持",
           "enginesHint": "兼容模式需要转换请求，默认关闭，可按需开启。",
           "engineUnsupported": "不支持",
+          "engineNotConfigured": "尚未配置",
           "engineNoFast": "无 Fast",
           "vision": {
             "vision": "支持",
@@ -2055,7 +2086,7 @@
         "back": "← 上一步",
         "finish": "完成添加",
         "cancel": "取消",
-        "useApiKey": "改用 API Key 接入",
+        "useApiKey": "API key 接入",
         "metaOAuthOrApi": "订阅授权 · API Key",
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 连接",
@@ -2208,27 +2239,15 @@
           "cancel": "取消"
         }
       },
-      "imagesKey": {
-        "label": "图像生成 API key",
-        "placeholder": "粘贴 OpenAI 平台 API key",
-        "save": "保存",
-        "clear": "清除",
-        "toast": {
-          "saved": "图像生成 API key 已保存",
-          "saveFailed": "保存图像生成 API key 失败，请重试",
-          "cleared": "已清除图像生成 API key",
-          "clearFailed": "清除图像生成 API key 失败"
-        }
-      },
       "usage": {
-        "percentUsed": "{{percent}}% 已使用",
+        "percentRemaining": "剩余 {{percent}}%",
         "resetsAt": "{{at}} 重置",
         "claudePlanFallback": "Claude 订阅",
-        "claudeWeekly": "7 天窗口 {{percent}}%",
-        "scopedModel": "{{model}} {{percent}}%",
+        "claudeWeekly": "7 天窗口剩余 {{percent}}%",
+        "scopedModel": "{{model}} 剩余 {{percent}}%",
         "openClaudeUsage": "打开用量页面",
         "codexPlanFallback": "ChatGPT 订阅",
-        "codexSecondary": "次级窗口 {{percent}}%",
+        "codexSecondary": "次级窗口剩余 {{percent}}%",
         "codexResetCredits": "限额重置券 {{count}} 张"
       }
     },
@@ -3146,12 +3165,29 @@
       "runtimeUnknown": "{{packageName}} 要求 Pi {{range}}，但 Cindy 无法确定当前 Pi 版本是否满足。",
       "warning": {
         "no-resources": "这个扩展没有发现 Pi 资源。",
+        "analysisIncomplete": "Pi 已完成操作，但 Cindy 的后续分析或辅助构建未完成",
         "inspection-failed": "Cindy 无法检查已安装内容，但不会因此停用；仍由 Pi 原生处理。",
         "inspection-limit": "Cindy 已达到详情分析上限并停止展示更多结果；包仍通过 Pi 原生加载。",
         "unsupported-filter": "Cindy 暂时无法展示这个 Pi 资源筛选配置；包和筛选仍由 Pi 原生处理。",
         "unsafe-source": "保存的来源包含凭证或私密 URL 参数。Cindy 仅在此处隐藏敏感字段，不会阻断 Pi 的包行为。"
       },
+      "recovery": {
+        "check-credentials": "请检查来源的凭证",
+        "check-permissions": "请检查文件和目录权限",
+        "check-network": "请检查网络连接",
+        "check-source": "请检查包名或仓库地址",
+        "check-version": "请检查请求的包版本",
+        "check-runtime": "请检查 Pi 运行环境是否可用",
+        "free-disk-space": "请释放磁盘空间",
+        "check-build-dependencies": "请检查扩展的构建依赖",
+        "refresh-package-state": "请刷新扩展列表，检查当前状态",
+        "inspect-state-before-retry": "请先检查扩展当前状态，再重试未完成的步骤"
+      },
       "failure": {
+        "commandFailed": "Pi 原生包命令失败",
+        "commandNotStarted": "Pi 原生包命令未能启动",
+        "commandTimedOut": "Pi 原生包命令已超时",
+        "commandUnknown": "尚无法确认 Pi 原生包命令的结果",
         "sourceUnavailable": "无法访问这个来源。请检查网络或地址，也可以换一个来源重试。",
         "packageNotFound": "没有找到这个包。请检查包名或仓库地址。",
         "versionNotFound": "没有找到这个版本。请选择可用版本后重试。",
@@ -5928,6 +5964,8 @@
     "modelWeeklyLabel": "{{model}} 周限",
     "usedPercent": "已用 {{percent}}%",
     "remainingPercent": "剩余 {{percent}}%",
+    "resetIn": "{{duration}}后重置",
+    "resetPending": "等待重置数据更新",
     "resetAt": "{{at}} 重置",
     "noWindows": "暂无配额窗口数据",
     "limitRejected": "已触发套餐限额，请求可能被拒绝",
@@ -7014,6 +7052,12 @@
       "binary-missing": "组件不可用"
     },
     "ariaLabel": "侧边栏导航",
+    "databaseSizeWarning": {
+      "title": "数据库占用空间较大",
+      "description": "数据库约占 {{size}}，已超过 {{threshold}} G。建议前往存储空间进行清理。",
+      "openSettings": "打开存储空间",
+      "disable": "不再提醒"
+    },
     "horizontalTabbarAria": "主区域视图切换",
     "tabs": {
       "projects": "项目",
@@ -7691,6 +7735,7 @@
         "china": "中国",
         "image": "图像",
         "video": "视频",
+        "audio": "音频生成",
         "tts": "语音合成",
         "stt": "语音转写",
         "realtime": "实时语音",

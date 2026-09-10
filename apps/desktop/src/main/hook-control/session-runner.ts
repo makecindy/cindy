@@ -223,13 +223,13 @@ async function resolveNewSessionConfig(
       : null;
   const preferredProviderId = workdirProviderId ?? resolved.providerId;
 
-  // 目录可用时始终把最终模型收敛到一个真实已连接、且确实提供它的来源。
-  // 目录读取失败才保留旧行为(**只**透传草稿来源, 不透传目录级来源 —— 后者未经
-  // 收窄校验, 降级窗口直接钉给会话会绕过连接态/供给校验; 数据不足不猜, 维持
-  // 加目录来源之前的降级语义, codex review)。
+  // 显式连接失效时不能将 null 再解释为默认账号；未指定连接才可选择默认来源。
   const providerId = providers
     ? effectiveSourceIdForModel(providers, preferredProviderId, resolved.model, resolved.agentKind)
-    : resolved.providerId;
+    : preferredProviderId;
+  if (providers && preferredProviderId && !providerId) {
+    throw new Error(`hook session route unavailable: selected provider "${preferredProviderId}" cannot serve model "${resolved.model}"`);
+  }
   // 停用收口(PR #744 review 第十、十四轮):两条路径都必须经宽松降级裁决 ——
   //   · 目录读取失败:冻结的 availableModels 不带停用标志、saved provider 未经校验,
   //     live 壳的目录故障分支 = override-only 保守裁决(只凭本地 override 文件判);
@@ -241,6 +241,9 @@ async function resolveNewSessionConfig(
   const lenient = providers
     ? resolveLenientRoute(providers, resolved.agentKind, resolved.model, providerId ?? null)
     : await resolveLenientSessionRoute(resolved.agentKind, resolved.model, providerId ?? null);
+  if (preferredProviderId && lenient.providerId !== preferredProviderId) {
+    throw new Error(`hook session route unavailable: selected provider "${preferredProviderId}" is unavailable`);
+  }
   if (!lenient.model) {
     throw new Error('hook session route unavailable: model disabled in settings');
   }

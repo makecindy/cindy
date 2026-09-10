@@ -9,8 +9,9 @@ export function requiresSessionLink(topics: readonly string[]): boolean {
 }
 
 /**
- * LINK_NOT_OPEN 由 DeviceLinkClient 在真正发帧前抛出，因此可先重开链路再重试一次。
- * 已经发出的请求或其它错误绝不重试，避免 enqueue / send 等写操作重复执行。
+ * LINK_NOT_OPEN 由 DeviceLinkClient 在真正发帧前抛出；PEER_RESET 只用于已经
+ * 明确标记为幂等读的请求。两者都先重开链路再重试一次，已经发出的写请求或其它
+ * 错误绝不重试，避免 enqueue / send 等写操作重复执行。
  */
 export async function invokeWithClosedLinkRecovery<T>(
   invoke: () => Promise<T>,
@@ -21,11 +22,12 @@ export async function invokeWithClosedLinkRecovery<T>(
   try {
     return await invoke();
   } catch (err) {
-    if (
-      !(err instanceof DeviceLinkError)
-      || err.code !== 'LINK_NOT_OPEN'
-      || err.inFlight === true
-    ) {
+    const retryable = err instanceof DeviceLinkError
+      && (
+        (err.code === 'LINK_NOT_OPEN' && err.inFlight !== true)
+        || (err.code === 'PEER_RESET' && err.inFlight === true)
+      );
+    if (!retryable) {
       throw err;
     }
   }

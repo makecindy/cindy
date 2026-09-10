@@ -11,6 +11,11 @@ const resolveProviderRouteDecision = vi.fn<(...args: unknown[]) => Promise<unkno
 const gatewayDefaultRouteDecision = vi.fn<(...args: unknown[]) => unknown>();
 const isProviderRouteMutationInProgress = vi.fn<(...args: unknown[]) => boolean>(() => false);
 
+// Account discovery persistence is outside this runtime/route fixture.
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
 vi.mock('../auth-adapters.js', () => ({ readClaudeApiKey: () => readClaudeApiKey() }));
 vi.mock('../claude-oauth-refresh.js', () => ({
   getClaudeAiOAuthForSpawn: () => getClaudeAiOAuthForSpawn(),

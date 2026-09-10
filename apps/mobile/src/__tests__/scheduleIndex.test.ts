@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { DeviceLinkError } from '@cindy/device-link';
 import type { MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { unresponsiveDevicesStore } from '@/device-link/unresponsiveDevicesStore';
 import {
@@ -6,10 +7,10 @@ import {
   invalidateOfflineScheduleIndexFailureFor,
   invalidateRunningSessionScheduleEntries,
   invalidateScheduleIndexForDevice,
-  invalidateTransientScheduleIndexFailureFor,
-  invalidateTransientScheduleIndexFailures,
+  invalidateScheduleIndexesAfterLinkRecovery,
   loadLightweightSessionScheduleIndex,
   loadSessionScheduleIndex,
+  loadSharedSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
   resetScheduleIndexThrottleForTesting,
@@ -17,6 +18,7 @@ import {
   SCHEDULE_INDEX_THROTTLE_TTL_MS,
 } from '@/session/scheduleIndex';
 import type { RemoteSessionScheduleInfo } from '@/session/sessionList';
+import { markSessionScheduleRunsRead } from '@/session/scheduleRunRead';
 
 function makerWithSchedules(
   listRuns: (scheduleId: string, limit?: number) => Promise<unknown>,
@@ -33,6 +35,160 @@ function makerWithSchedules(
 }
 
 describe('scheduleIndex', () => {
+  it.each([false, true])('peer recovery invalidates only its success or pending snapshot (pending=%s)', async (pending) => {
+    resetScheduleIndexThrottleForTesting();
+    let finish!: (value: Map<string, RemoteSessionScheduleInfo>) => void;
+    const fresh = new Map<string, RemoteSessionScheduleInfo>();
+    const loadA = vi.fn(async () => new Map<string, RemoteSessionScheduleInfo>());
+    const loadB = vi.fn().mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; })).mockResolvedValue(fresh);
+    const a = await loadSessionScheduleIndexThrottled('a', loadA);
+    const old = loadSessionScheduleIndexThrottled('b', loadB);
+    if (!pending) { finish(new Map()); await old; }
+    invalidateScheduleIndexesAfterLinkRecovery('b');
+    const next = loadSessionScheduleIndexThrottled('b', loadB);
+    if (pending) { expect(loadB).toHaveBeenCalledTimes(1); finish(new Map()); await old; }
+    expect(await next).toBe(fresh);
+    expect(loadB).toHaveBeenCalledTimes(2);
+    expect(await loadSessionScheduleIndexThrottled('a', loadA)).toBe(a);
+    expect(loadA).toHaveBeenCalledTimes(1);
+  });
+  it.each([false, true])('restores older running ownership from the same snapshot (lightweight=%s)', async (lightweight) => {
+    const schedules = [{ id: 'sched', name: 'run', status: 'active', targetSessionId: 'task' }];
+    const row = { scheduleId: 'sched', scheduleName: 'run', scheduleStatus: 'active', readAt: 1 };
+    const snapshot = {
+      runs: [
+        { ...row, runId: 'new', sessionId: 'task', status: 'success', firedAt: 20 },
+        { ...row, runId: 'old', status: 'running', firedAt: 10 },
+        { ...row, runId: 'unbound', status: 'running', firedAt: 5 },
+        { ...row, runId: 'historical', status: 'failed', firedAt: 3 },
+      ],
+      inflightPolicies: [
+        { runId: 'old', sessionId: 'task', silenced: false },
+        { runId: 'historical', sessionId: 'must-not-restore', silenced: false },
+      ],
+    };
+    const listRuns = vi.fn();
+    const maker = { schedule: { list: async () => schedules, listSidebarIndexRuns: async () => snapshot, listRuns } } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+    const index = lightweight
+      ? await loadLightweightSessionScheduleIndex('device', vi.fn().mockResolvedValue(snapshot))
+      : await loadSessionScheduleIndex(maker);
+    expect(index.get('task')).toMatchObject({ running: true, latestRunAt: 20, unreadCount: 0 });
+    expect(index.has('must-not-restore')).toBe(false);
+    expect(index.size).toBe(1);
+    expect(listRuns).not.toHaveBeenCalled();
+    // A policy can disappear as a run settles; never invent a missing binding.
+    snapshot.inflightPolicies = [];
+    const withoutPolicies = await loadSessionScheduleIndex(maker);
+    expect(withoutPolicies.get('task')?.running).toBe(false);
+    // Explicit row ownership wins, even when policy metadata disagrees.
+    snapshot.runs[1] = { ...snapshot.runs[1], sessionId: 'task' };
+    snapshot.inflightPolicies = [{ runId: 'old', sessionId: 'other', silenced: false }];
+    expect((await loadSessionScheduleIndex(maker)).get('task')?.running).toBe(true);
+    // Rebinding remains authoritative over both stored and recovered ownership.
+    schedules[0].targetSessionId = 'rebound';
+    expect((await loadSessionScheduleIndex(maker)).has('task')).toBe(false);
+  });
+  it.each([false, true])('lets joined visible consumers take over a blurred initiator (visible=%s)', async (visible) => {
+    vi.useFakeTimers();
+    resetScheduleIndexThrottleForTesting();
+    try {
+      let ownerActive = true;
+      let waitersActive = true;
+      let rejectFirst!: (error: Error) => void;
+      const list = vi.fn().mockImplementationOnce(() => new Promise((_resolve, reject) => { rejectFirst = reject; }))
+        .mockResolvedValue([{ id: 'sched-1', name: 'run', status: 'active', targetSessionId: 'task' }]);
+      const listRuns = vi.fn(async () => [{ id: 'run', sessionId: 'task', scheduleId: 'sched-1', status: 'failed', firedAt: 1 }]);
+      const markRunRead = vi.fn(async () => ({}));
+      const maker = { schedule: { list, listRuns, markRunRead } } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+      const first = loadSharedSessionScheduleIndex('handoff', maker, () => ownerActive);
+      const onIndex = vi.fn();
+      const task = markSessionScheduleRunsRead(maker, 'task', 'handoff', () => waitersActive, { onIndex });
+      const joined = loadSharedSessionScheduleIndex('handoff', maker, () => waitersActive);
+      const outcomes = Promise.allSettled([first, task, joined]);
+      ownerActive = false;
+      waitersActive = visible;
+      rejectFirst(new Error('[NOT_CONNECTED] offline'));
+      await vi.runAllTimersAsync();
+      const [ownerResult, taskResult, joinedResult] = await outcomes;
+      expect(ownerResult).toMatchObject({ status: 'rejected', reason: new Error('Schedule index consumer inactive') });
+      expect(taskResult.status).toBe(visible ? 'fulfilled' : 'rejected');
+      expect(joinedResult.status).toBe(visible ? 'fulfilled' : 'rejected');
+      if (taskResult.status === 'fulfilled') expect(taskResult.value).toEqual(['run']);
+      expect(list).toHaveBeenCalledTimes(visible ? 2 : 1);
+      expect(listRuns).toHaveBeenCalledTimes(visible ? 1 : 0);
+      expect(markRunRead).toHaveBeenCalledTimes(visible ? 1 : 0);
+      expect(onIndex).toHaveBeenCalledTimes(visible ? 1 : 0);
+      if (visible) expect(onIndex.mock.calls[0][0].get('task').latestFailedRun).toEqual({ runId: 'run', firedAt: 1 });
+    } finally {
+      resetScheduleIndexThrottleForTesting();
+      vi.useRealTimers();
+    }
+  });
+  it.each([false, true, 'structured', 'capability'])('shares complete schedule metadata and historical failures with legacy fallback=%s', async (legacy) => {
+    resetScheduleIndexThrottleForTesting();
+    const list = vi.fn(async () => [
+      { id: 'sched-1', name: 'run', status: 'active', targetSessionId: 'current' },
+      { id: 'zero', name: 'no runs', status: 'paused', targetSessionId: 'zero-task' },
+    ]);
+    const run = { runId: 'old-failure', scheduleId: 'sched-1', scheduleName: 'run', scheduleStatus: 'active',
+      sessionId: 'current', status: 'failed', firedAt: 1, readAt: 2 };
+    const listSidebarIndexRuns = vi.fn(async () => {
+      if (legacy === 'structured') throw new DeviceLinkError('CHANNEL_NOT_ALLOWED', "channel 'maker:schedule:list-sidebar-index-runs' not allowed remotely");
+      if (legacy === 'capability') throw Object.assign(new Error('Unsupported endpoint'), { code: 'UNSUPPORTED_CAPABILITY' });
+      if (legacy) throw new Error('[CHANNEL_NOT_ALLOWED] unsupported');
+      return { runs: [run, { ...run, runId: 'old-binding', sessionId: 'previous' }] };
+    });
+    const listRuns = vi.fn(async (id: string) => id === 'zero' ? [] : [{ ...run, id: run.runId }]);
+    const maker = { schedule: { list, listRuns, listSidebarIndexRuns } } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+    const [home, task] = await Promise.all([
+      loadSharedSessionScheduleIndex('shared-lightweight', maker),
+      loadSharedSessionScheduleIndex('shared-lightweight', maker),
+    ]);
+    expect(home).toBe(task);
+    expect(home.get('current')?.latestFailedRun).toEqual({ runId: 'old-failure', firedAt: 1 });
+    expect(home.has('previous')).toBe(false);
+    expect(home.get('zero-task')?.allSchedulesStopped).toBe(true);
+    expect(list).toHaveBeenCalledTimes(1);
+    expect(listSidebarIndexRuns).toHaveBeenCalledTimes(1);
+    expect(listRuns).toHaveBeenCalledTimes(legacy ? 2 : 0);
+    resetScheduleIndexThrottleForTesting();
+  });
+
+  it.each(['ACCESS_REVOKED', 'INVOKE_TIMEOUT'])('does not turn %s into a legacy scan', async (code) => {
+    const error = Object.assign(new Error('Request failed'), { code });
+    const listRuns = vi.fn();
+    const maker = { schedule: {
+      list: async () => [{ id: 'schedule', name: 'run', status: 'active' }],
+      listSidebarIndexRuns: async () => { throw error; },
+      listRuns,
+    } } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+    await expect(loadSessionScheduleIndex(maker)).rejects.toBe(error);
+    expect(listRuns).not.toHaveBeenCalled();
+  });
+
+  it('stops retries after blur without negative-caching cancellation for the next screen', async () => {
+    vi.useFakeTimers();
+    resetScheduleIndexThrottleForTesting();
+    try {
+      let active = true;
+      const list = vi.fn().mockRejectedValueOnce(new Error('[NOT_CONNECTED] offline')).mockResolvedValue([]);
+      const maker = { schedule: { list, listRuns: vi.fn() } } as unknown as Pick<MobileMakerTransport, 'schedule'>;
+      const first = loadSharedSessionScheduleIndex('blur-device', maker, () => active);
+      const rejected = expect(first).rejects.toThrow('consumer inactive');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(list).toHaveBeenCalledTimes(1);
+      active = false;
+      await vi.runAllTimersAsync();
+      await rejected;
+      expect(list).toHaveBeenCalledTimes(1);
+      await expect(loadSharedSessionScheduleIndex('blur-device', maker)).resolves.toEqual(new Map());
+      expect(list).toHaveBeenCalledTimes(2);
+    } finally {
+      resetScheduleIndexThrottleForTesting();
+      vi.useRealTimers();
+    }
+  });
+
   it('loads schedule unread and running metadata without failing the whole index on one bad schedule', async () => {
     const listRuns = vi.fn(async (scheduleId: string) => {
       if (scheduleId === 'broken') throw new Error('remote schedule runs unavailable');
@@ -304,7 +460,47 @@ describe('scheduleIndex', () => {
 });
 
 describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
-  it('TTL 内的重复触发复用同一在途/已完成 promise,不重复加载', async () => {
+  it('shares an in-flight scan even when network delay exceeds the success TTL', async () => {
+    resetScheduleIndexThrottleForTesting();
+    let finish!: (index: Map<string, RemoteSessionScheduleInfo>) => void;
+    const load = vi.fn(() => new Promise<Map<string, RemoteSessionScheduleInfo>>((resolve) => { finish = resolve; }));
+    let at = 0;
+    const options = { now: () => at };
+    const first = loadSessionScheduleIndexThrottled('dev-1', load, options);
+    at += SCHEDULE_INDEX_THROTTLE_TTL_MS * 2;
+    const joined = loadSessionScheduleIndexThrottled('dev-1', load, options);
+    expect(load).toHaveBeenCalledTimes(1);
+    finish(new Map());
+    await first;
+    expect(await joined).toBe(await first);
+    expect(loadSessionScheduleIndexThrottled('dev-1', load, options)).toBe(first);
+  });
+
+  it.each([[false, false], [true, false], [false, true], [true, true]].flatMap(([rejected, recovered]) =>
+    [false, true].map((early) => [rejected, recovered, early])))('coalesces invalidated scans after the old scan settles (rejected=%s, recovered=%s, joinedEarly=%s)', async (rejected, recovered, early) => {
+    resetScheduleIndexThrottleForTesting();
+    let finish!: (index: Map<string, RemoteSessionScheduleInfo>) => void;
+    let fail!: (error: Error) => void;
+    const fresh = new Map<string, RemoteSessionScheduleInfo>();
+    const load = vi.fn()
+      .mockImplementationOnce(() => new Promise((resolve, reject) => { finish = resolve; fail = reject; }))
+      .mockResolvedValue(fresh);
+    const old = loadSessionScheduleIndexThrottled('dev-1', load).catch(() => undefined);
+    const earlyWaiter = early ? loadSessionScheduleIndexThrottled('dev-1', load) : undefined;
+    if (recovered) invalidateScheduleIndexesAfterLinkRecovery();
+    else invalidateScheduleIndexForDevice('dev-1');
+    const home = loadSessionScheduleIndexThrottled('dev-1', load);
+    const task = loadSessionScheduleIndexThrottled('dev-1', load);
+    expect(load).toHaveBeenCalledTimes(1);
+    if (rejected) fail(new Error('old request failed')); else finish(new Map());
+    await old;
+    expect(await home).toBe(fresh);
+    expect(await task).toBe(fresh);
+    if (earlyWaiter) expect(await earlyWaiter).toBe(fresh);
+    expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('TTL 内的重复触发复用同一结果,不重复加载', async () => {
     resetScheduleIndexThrottleForTesting();
     const load = vi.fn(async () => new Map<string, RemoteSessionScheduleInfo>());
     let clock = 1000;
@@ -312,7 +508,7 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     const first = loadSessionScheduleIndexThrottled('dev-1', load, { now });
     clock += 5_000;
     const second = loadSessionScheduleIndexThrottled('dev-1', load, { now });
-    expect(second).toBe(first);
+    expect(await second).toBe(await first);
     expect(load).toHaveBeenCalledTimes(1);
     await first;
   });
@@ -420,7 +616,7 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     });
     expect(load).toHaveBeenCalledTimes(1);
     // 重连(rehydrate 开始)→ 瞬态负缓存失效 → 立即重拉
-    invalidateTransientScheduleIndexFailures();
+    invalidateScheduleIndexesAfterLinkRecovery();
     await expect(loadSessionScheduleIndexThrottled('dev-n', load, { now })).resolves.toBeInstanceOf(Map);
     expect(load).toHaveBeenCalledTimes(2);
     },
@@ -444,7 +640,7 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
     });
     await Promise.resolve();
 
-    invalidateTransientScheduleIndexFailureFor('dev-b');
+    invalidateScheduleIndexesAfterLinkRecovery('dev-b');
     await expect(loadSessionScheduleIndexThrottled('dev-a', loadA, { now })).rejects.toMatchObject({
       code: 'NOT_CONNECTED',
     });
@@ -465,8 +661,8 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
       code: 'DEVICE_OFFLINE',
     });
     await Promise.resolve();
-    // 全局重连钩子(NOT_CONNECTED 类专用)不清 DEVICE_OFFLINE 负缓存
-    invalidateTransientScheduleIndexFailures();
+    // 全局重连钩子保留逐设备的 DEVICE_OFFLINE 负缓存
+    invalidateScheduleIndexesAfterLinkRecovery();
     await expect(loadSessionScheduleIndexThrottled('dev-o', load, { now })).rejects.toMatchObject({
       code: 'DEVICE_OFFLINE',
     });
@@ -537,6 +733,8 @@ describe('loadSessionScheduleIndexThrottled (单飞 + TTL 节流)', () => {
         code: 'DEVICE_UNRESPONSIVE',
       });
       await Promise.resolve();
+      // Relay 恢复不代表目标设备响应恢复,仍复用熔断负缓存。
+      invalidateScheduleIndexesAfterLinkRecovery();
       // 熔断仍 open:失败 TTL 内复用负缓存,不压请求
       await expect(loadSessionScheduleIndexThrottled('dev-1', load, { now })).rejects.toMatchObject({
         code: 'DEVICE_UNRESPONSIVE',
