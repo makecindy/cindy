@@ -350,17 +350,10 @@ function migrateLegacyVisibility(ownerId: string, ownerGeneration: number): Migr
       return BLOCKED_MIGRATION;
     }
     if (legacyParsed.corrupt) {
-      // Don't import a broken legacy snapshot as an empty map. Keep a valid scoped
-      // namespace; if there is no scoped key yet, fail closed until storage is repaired.
-      if (window.localStorage.getItem(scopedKey) === null) {
-        mapCorrupt = true;
-        return BLOCKED_MIGRATION;
-      }
-      window.localStorage.setItem(migrationCompleteKey, '1');
-      return {
-        readyForWrites: window.localStorage.getItem(migrationCompleteKey) === '1',
-        migrationPending: false,
-      };
+      // Don't import a broken snapshot as empty, and don't mark complete just because
+      // the scoped key already has incremental writes from the deferred-import window.
+      mapCorrupt = true;
+      return { readyForWrites: true, migrationPending: true };
     }
     const legacy = legacyParsed.map;
     const scoped = scopedParsed.map;

@@ -779,6 +779,23 @@ describe('modelVisibilityPrefs store', () => {
     expect(isModelEnabled('claude-code', 'xd', { id: 'claude-opus-4-8' })).toBe(false);
   });
 
+  it('旧配置损坏时不因 scoped 增量而提交迁移完成', async () => {
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1', '{ not valid json');
+    setOwnerClaim('owner-a', 1, true, false);
+    ownerClaim.profileOrigin = 'existing';
+    const module = await loadModuleForOwner();
+    expect(await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
+    setOwnerClaim('owner-a', 1, true, true);
+    ownerClaim.profileOrigin = 'existing';
+    expect(await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a')).toBeNull();
+    expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6', defaultEnabled: true })).toBe(false);
+    memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({ 'codex:openai:gpt-5.6': false }));
+    expect(await module.setModelVisibility('codex', 'openai', 'gpt-5.5', false)).toBe(true);
+    expect(module.isModelEnabled('codex', 'openai', { id: 'gpt-5.6', defaultEnabled: true })).toBe(false);
+    expect(memStorage.getItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a')).toBe('1');
+  });
+
   it('owner-scoped 配置损坏时不把目录默认当成开启', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1.owner.owner-a', '{ not valid json');
     memStorage.setItem('xdt:modelVisibilityPrefs:v1.migration-complete.owner.owner-a', '1');
