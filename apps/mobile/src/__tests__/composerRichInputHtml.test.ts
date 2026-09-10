@@ -387,6 +387,24 @@ describe('mobile composer rich input HTML', () => {
       nodes: [{ type: 'text', text: 'hello world' }],
     }, true);
 
+    // Blur can happen before WebView delivers a final input event (for
+    // example when the resize handle collapses the composer). The blur hook
+    // must flush that DOM value before native receives the blur message.
+    children[0].nodeValue = 'draft flushed on blur';
+    const beforeBlur = messages.length;
+    listeners.get('blur')?.();
+    expect(messages.slice(beforeBlur)).toEqual([
+      {
+        type: 'change',
+        document: { version: 1, nodes: [{ type: 'text', text: 'draft flushed on blur' }] },
+      },
+      { type: 'blur' },
+    ]);
+    windowStub.cindyComposer?.applyDocument({
+      version: 1,
+      nodes: [{ type: 'text', text: 'hello world' }],
+    }, true);
+
     const pasteRange = createRange();
     pasteRange.setStart(children[0], String(children[0].nodeValue).length);
     selection.addRange(pasteRange);
