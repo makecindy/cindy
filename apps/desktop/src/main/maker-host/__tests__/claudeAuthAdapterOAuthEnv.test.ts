@@ -27,6 +27,12 @@ const h = vi.hoisted(() => ({
   canUseGateway: true,
   accounts: new Map<string, Record<string, unknown> | null>(),
   refreshAccount: vi.fn(),
+  retainPresentation: vi.fn(),
+}));
+
+vi.mock('../provider-presentation-store.js', () => ({
+  retainInvalidatedProviderPresentation: h.retainPresentation,
+  setLocalCodexProviderRemoved: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -269,7 +275,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     }
   });
 
-  it('invalidate:清凭证 + 失效刷新器 + 广播重登', async () => {
+  it('invalidate preserves native credentials and retains the provider before broadcasting', async () => {
     const mod = await import('../auth-adapters.js');
     const adapter = new mod.DesktopClaudeAuthAdapter();
     const broadcasts: string[] = [];
@@ -277,6 +283,7 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     await adapter.invalidate('claude_oauth_refresh_invalid_grant');
     expect(h.cleared).toBe(0);
     expect(h.revoked).toBe(true);
+    expect(h.retainPresentation).toHaveBeenCalledWith('anthropic');
     expect(h.refresherInvalidated).toBe(1);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
   });

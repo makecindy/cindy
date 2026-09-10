@@ -2124,6 +2124,17 @@ describe('provider:custom:* CRUD handlers', () => {
     ).resolves.toEqual({ ok: true });
     expect((await listCustomProviders())[0]?.name).toBe('Legacy custom xAI edited');
 
+    const beforeDisconnect = await getCustomProvider('xai');
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, 'custom:xai'),
+    ).resolves.toEqual({ ok: true });
+    expect(await getCustomProvider('xai')).toEqual(beforeDisconnect);
+    for (const agent of ['claude-code', 'codex', 'pi']) {
+      expect(deps.removeCustomProviderKey).toHaveBeenCalledWith('xai', agent);
+      expect(deps.removeCustomProviderHeaders).toHaveBeenCalledWith('xai', agent);
+      expect(deps.removeCustomProviderKey).not.toHaveBeenCalledWith('custom:xai', agent);
+    }
+
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'xai'),
     ).resolves.toEqual({ ok: true });

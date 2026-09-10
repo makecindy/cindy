@@ -18,6 +18,7 @@ const {
   readLocalCodexPresentation,
   renameLocalCodexProvider,
   setLocalCodexProviderRemoved,
+  retainInvalidatedProviderPresentation,
 } = await import('../provider-presentation-store.js');
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
@@ -53,4 +54,16 @@ it('keeps each native connection and local service name separate', () => {
   expect(readProviderPresentation('xai')).toEqual({ name: 'Grok', removed: true });
   expect(readProviderPresentation('ollama')).toEqual({ name: 'My machine' });
   expect(readLocalCodexPresentation()).toEqual({ name: 'My OpenAI', removed: false });
+});
+
+it.each(['anthropic', 'xai'])('retains invalidated legacy %s without reviving deleted entries', (id) => {
+  owner = `legacy-${id}`;
+  expect(readProviderPresentation(id)).toEqual({});
+  retainInvalidatedProviderPresentation(id);
+  expect(readProviderPresentation(id)).toEqual({ removed: false });
+  setProviderPresentation(id, { name: 'My account', removed: true });
+  retainInvalidatedProviderPresentation(id);
+  expect(readProviderPresentation(id)).toEqual({ name: 'My account', removed: true });
+  owner = `other-${id}`;
+  expect(readProviderPresentation(id)).toEqual({});
 });

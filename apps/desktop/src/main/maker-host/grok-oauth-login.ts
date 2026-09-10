@@ -30,6 +30,7 @@ import {
   type OAuthResultPageLang,
 } from '../oauthResultPage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { retainInvalidatedProviderPresentation } from './provider-presentation-store.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { genericOAuthSecretIo, getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -938,6 +939,7 @@ function createGrokAccount(providerId: string) {
           // 冷却不回滚 —— 这一路确实发出了刷新请求,轮换已经消耗掉了。
           log.warn('xai refresh_token 已被服务端作废,清空本机凭证并回落未登录');
         }
+        if (providerId === 'xai') retainInvalidatedProviderPresentation(providerId);
         logoutGrok();
         return 'logged_out';
       }

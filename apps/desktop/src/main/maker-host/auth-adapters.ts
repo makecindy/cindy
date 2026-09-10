@@ -1,4 +1,4 @@
-import { setLocalCodexProviderRemoved } from './provider-presentation-store.js';
+import { retainInvalidatedProviderPresentation, setLocalCodexProviderRemoved } from './provider-presentation-store.js';
 import { subscriptionAccountKind, subscriptionAccountState, readClaudeAccountOAuth, getValidClaudeAccountOAuth } from './subscription-account-auth.js';
 /**
  * apps/desktop/src/main/maker-host/auth-adapters.ts
@@ -567,6 +567,7 @@ export class DesktopClaudeAuthAdapter implements AuthAdapter {
     log.warn('claude auth invalidated', { reason });
     invalidateClaudeOAuthRefresh();
     unbindNativeProviderAuth('anthropic', { revoked: true });
+    retainInvalidatedProviderPresentation('anthropic');
     if (this.onInvalidatedBroadcast) {
       try {
         this.onInvalidatedBroadcast(reason);

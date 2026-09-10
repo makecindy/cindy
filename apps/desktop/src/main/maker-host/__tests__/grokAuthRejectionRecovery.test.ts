@@ -11,6 +11,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const retainPresentation = vi.hoisted(() => vi.fn());
+vi.mock('../provider-presentation-store.js', () => ({
+  retainInvalidatedProviderPresentation: retainPresentation,
+}));
+
 vi.mock('electron', () => ({
   shell: { openExternal: vi.fn() },
   app: {
@@ -100,6 +105,7 @@ function tokenResponse(status: number, body: unknown): Response {
 }
 
 beforeEach(() => {
+  retainPresentation.mockClear();
   store.clear();
   bound = true;
   resetGrokOAuthMemoryCache();
@@ -164,6 +170,7 @@ describe('recoverGrokAuthAfterRejection', () => {
 
     await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('logged_out');
     expect(readStored()).toBeNull();
+    expect(retainPresentation).toHaveBeenCalledWith('xai');
   });
 
   it('收口开始时凭证已换成别的账号 —— 不拿新凭证承担旧 token 的失败', async () => {
@@ -177,6 +184,7 @@ describe('recoverGrokAuthAfterRejection', () => {
     await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('superseded');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(readStored()?.access_token).toBe('another-account-token');
+    expect(retainPresentation).not.toHaveBeenCalled();
   });
 
   it('本地没有 refresh_token 时无从自愈,登出但不消耗冷却', async () => {

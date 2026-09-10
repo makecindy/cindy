@@ -2148,7 +2148,7 @@ export function registerProviderHandlers(
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, async (event, providerId: unknown, ownerScope?: unknown) => {
     assertTrustedProviderMutationSender(event);
     assertOptionalRequestedOwner(ownerScope);
-    const id = requireProviderId(providerId);
+    const id = storedCustomProviderId(requireProviderId(providerId));
     const owner = captureProviderOwnerSession();
     return withProviderConfigMutation(id, async (commitRouteMutation) => {
       assertProviderMutationOwner(owner);

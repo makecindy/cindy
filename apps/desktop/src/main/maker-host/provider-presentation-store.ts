@@ -19,6 +19,7 @@ function normalizePresentation(raw: unknown): ProviderPresentation {
     ...(typeof value.removed === 'boolean' ? { removed: value.removed } : {}),
   };
 }
+const log = desktopMakerLogger.child('provider-presentation');
 const store = createOverrideSettingsFile<PresentationFile>({
   // Preserve the original OpenAI preferences without a migration or duplicate source of truth.
   filePath: () => ownerScopedUserDataPath('local-codex-provider-prefs.json'),
@@ -36,7 +37,7 @@ const store = createOverrideSettingsFile<PresentationFile>({
       ),
     };
   },
-  log: desktopMakerLogger.child('provider-presentation'),
+  log,
   label: 'provider-presentation',
 });
 export function readProviderPresentation(providerId: string): ProviderPresentation {
@@ -61,6 +62,17 @@ export function setProviderPresentation(providerId: string, patch: ProviderPrese
   }
 }
 export const readLocalCodexPresentation = () => readProviderPresentation('openai');
+/** Retain upgrade-era connections without resurrecting explicitly deleted rows. */
+export function retainInvalidatedProviderPresentation(providerId: string): void {
+  try {
+    if (readProviderPresentation(providerId).removed === undefined) {
+      setProviderPresentation(providerId, { removed: false });
+    }
+  } catch (error) {
+    // Display preferences must not prevent credential invalidation or its broadcast.
+    log.warn('Failed to retain invalidated provider', { providerId, error: String(error) });
+  }
+}
 export const renameLocalCodexProvider = (name: string) =>
   setProviderPresentation('openai', { name });
 export const setLocalCodexProviderRemoved = (removed: boolean) =>
