@@ -22,7 +22,7 @@
 
 import { useCallback } from 'react';
 import { ArrowLeft, Bot, CirclePlus, Plug, Timer } from 'lucide-react';
-import { useNavigate, useMatch } from 'react-router-dom';
+import { useLocation, useNavigate, useMatch } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -53,7 +53,7 @@ const ROW_ACTIVE_CLASS =
  *   - 'scrollable':渲染其余行(自动任务 / 插件 / 按需恢复入口 / 搜索),由 cc-agent
  *     的侧栏滚动容器在列表最上方绘制。
  */
-export type SidebarTopNavSection = 'all' | 'pinned' | 'scrollable';
+export type SidebarTopNavSection = 'all' | 'pinned' | 'scrollable' | 'rail';
 
 export function SidebarTopNav({
   section = 'all',
@@ -62,6 +62,7 @@ export function SidebarTopNav({
 } = {}): React.ReactElement {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const location = useLocation();
   const { activeKey, navigateToView } = useActiveMainView();
   const onScheduleMatch = useMatch('/cc-agent/scheduled');
   const { search, allKnownProjects, openSignal } = useConversationSearchContext();
@@ -82,8 +83,8 @@ export function SidebarTopNav({
   // 用户在 plugins / 设置等视图输入搜索时,先切回 cc-agent 视图,结果才有处显示(同视图为 no-op)。
   const ensureConversationView = useCallback(() => navigateToView('cc-agent'), [navigateToView]);
 
-  const showPinned = section !== 'scrollable';
-  const showScrollable = section !== 'pinned';
+  const showPinned = section !== 'scrollable' && section !== 'rail';
+  const showScrollable = section !== 'pinned' && section !== 'rail';
   const pinSearch = section === 'scrollable' && search.query.trim().length > 0;
   const automationsRow = showScrollable ? (
     <button
@@ -128,7 +129,10 @@ export function SidebarTopNav({
       {hasGhostUnread && <AttentionDot size={6} className="ml-auto mr-0.5" />}
     </button>
   ) : null;
-  const isBotsView = activeKey === 'bots';
+  // `activeKey` is intentionally sticky for the other navigation rows, but this
+  // action must describe the actual destination. Settings and other auxiliary
+  // routes should continue to offer entry to Teammates, not a stale return.
+  const isBotsView = location.pathname === '/bots' || location.pathname.startsWith('/bots/');
   const botsActionLabel = t(isBotsView ? 'sidebar.backToSessions' : 'sidebar.tabs.bots');
   const BotsActionIcon = isBotsView ? ArrowLeft : Bot;
   const botsRow = showScrollable ? (
@@ -145,6 +149,20 @@ export function SidebarTopNav({
       <span className="leading-none">{botsActionLabel}</span>
     </button>
   ) : null;
+  if (section === 'rail') {
+    return (
+      <div className="flex shrink-0 justify-center px-2 pt-2 pb-1">
+        <button
+          type="button"
+          onClick={() => navigateToView(isBotsView ? 'cc-agent' : 'bots')}
+          className="flex h-8 w-8 items-center justify-center rounded-full text-[var(--sidebar-nav-text)] transition-colors hover:bg-sidebar-item-hover"
+          aria-label={botsActionLabel}
+        >
+          <BotsActionIcon size={15} strokeWidth={1.8} />
+        </button>
+      </div>
+    );
+  }
   const mainViewRows = showScrollable ? <GhostMainViewNavEntries variant="row" /> : null;
   const restoreRow = showScrollable ? (
     <GhostPanelRestoreEntry variant="row" className={ROW_CLASS} />
