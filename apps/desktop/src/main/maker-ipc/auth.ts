@@ -17,7 +17,7 @@ import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { clearChatgptBridgeCredentialCache } from '../maker-host/anthropic-responses-bridge-host.js';
 import { refreshDiscoveredCodexModels } from '../maker-host/createDesktopProviderService.js';
 import { requestCodexModelBackfill } from '../maker-host/index.js';
-import { notifyOpenAiMediaCredentialChanged } from '../maker-host/model-discovery/openai-media.js';
+import { syncOpenAiMediaAfterCodexAuthChange } from '../maker-host/model-discovery/openai-media.js';
 import { registerMakerAuthHandlers } from './authHandlers.js';
 import { createElectronIpcHandlerRegistry } from './electronIpcRegistry.js';
 
@@ -63,7 +63,7 @@ export function registerMakerAuthIpc(maker: Maker): void {
       if (authenticated && isCurrent()) {
         await requestCodexModelBackfill();
       }
-      notifyOpenAiMediaCredentialChanged();
+      syncOpenAiMediaAfterCodexAuthChange();
     },
   );
 

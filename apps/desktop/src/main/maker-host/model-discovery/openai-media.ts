@@ -374,10 +374,17 @@ export const clearOpenAiMediaModels = (): void => {
   discovery.clear();
 };
 
-/** Images API key store/remove/startup: drop the previous snapshot, then refresh if a Platform key remains. */
+/** Images API key store/remove: drop the previous snapshot, then refresh if a Platform key remains. */
 export function notifyOpenAiMediaCredentialChanged(): void {
   clearOpenAiMediaModels();
   if (imagesApiKey()) {
     void discovery.refresh();
+  }
+}
+
+/** Codex login/logout does not change the Images API key; keep a successful key snapshot. */
+export function syncOpenAiMediaAfterCodexAuthChange(): void {
+  if (!imagesApiKey()) {
+    clearOpenAiMediaModels();
   }
 }

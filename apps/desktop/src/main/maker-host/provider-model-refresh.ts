@@ -30,9 +30,16 @@ export async function refreshBuiltinProviderModels(
       }
       return;
     case 'openai': {
-      const chatApplied = await deps.refreshOpenAi();
+      let chatApplied = false;
+      let chatError: unknown;
+      try {
+        chatApplied = await deps.refreshOpenAi();
+      } catch (error) {
+        chatError = error;
+      }
       const mediaApplied = await deps.refreshOpenAiMedia();
       if (chatApplied || mediaApplied) return;
+      if (chatError) throw chatError;
       throw new Error('OpenAI model discovery did not apply to the current runtime');
     }
     case 'xai':

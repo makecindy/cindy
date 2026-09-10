@@ -52,6 +52,26 @@ describe('refreshBuiltinProviderModels', () => {
     await expect(
       refreshBuiltinProviderModels('openai', openaiBothMiss),
     ).rejects.toThrow(/OpenAI model discovery/);
+    const openaiChatThrowMediaHit = deps({
+      refreshOpenAi: vi.fn(async () => {
+        throw new Error('Codex control plane failed to start');
+      }),
+      refreshOpenAiMedia: vi.fn(async () => true),
+    });
+    await expect(
+      refreshBuiltinProviderModels('openai', openaiChatThrowMediaHit),
+    ).resolves.toBeUndefined();
+    expect(openaiChatThrowMediaHit.refreshOpenAiMedia).toHaveBeenCalledOnce();
+    const openaiChatThrowMediaMiss = deps({
+      refreshOpenAi: vi.fn(async () => {
+        throw new Error('Codex control plane failed to start');
+      }),
+      refreshOpenAiMedia: vi.fn(async () => false),
+    });
+    await expect(
+      refreshBuiltinProviderModels('openai', openaiChatThrowMediaMiss),
+    ).rejects.toThrow(/Codex control plane failed to start/);
+    expect(openaiChatThrowMediaMiss.refreshOpenAiMedia).toHaveBeenCalledOnce();
     const openaiMediaMiss = deps({ refreshOpenAiMedia: async () => false });
     await expect(refreshBuiltinProviderModels('openai', openaiMediaMiss)).resolves.toBeUndefined();
     expect(openaiMediaMiss.refreshOpenAi).toHaveBeenCalledOnce();
