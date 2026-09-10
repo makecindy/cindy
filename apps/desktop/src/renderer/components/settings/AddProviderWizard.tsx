@@ -22,7 +22,7 @@ import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
 import { createCustomProvider, deleteCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
-import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
+import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
@@ -492,6 +492,7 @@ export function AddProviderWizard({
         (p) =>
           p.source === 'builtin' &&
           p.auth.method === 'apiKey' &&
+          isBuiltinApiKeyProviderId(p.id) &&
           !hasRetainedBuiltinConnection(p) &&
           PROVIDER_MEDIA_FIELDS.some((field) => (p[field]?.length ?? 0) > 0),
       ),
@@ -1107,7 +1108,7 @@ export function AddProviderWizard({
   const handleSaveBuiltinApiKey = useCallback(async () => {
     if (!sel || sel.kind !== 'builtinApiKey') return;
     const id = sel.provider.id;
-    if (!(PROVIDER_SECRET_IDS as readonly string[]).includes(id)) {
+    if (!isBuiltinApiKeyProviderId(id)) {
       // 目录出现了未在 providerSecrets 登记的内置 API-key 供应商 = 数据/代码脱节,
       // 明确报错让问题在配置期暴露,不静默写错键。
       toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));

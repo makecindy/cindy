@@ -23,7 +23,7 @@ const {
 } = await import('../provider-presentation-store.js');
 afterAll(() => fs.rmSync(tmpDir, { recursive: true, force: true }));
 
-it.each(['openai', 'anthropic', 'xai', 'google'])('does not fail committed %s authentication when presentation cannot be written', (id) => {
+it.each(['openai', 'anthropic', 'xai', 'google', 'generic-oauth'])('does not fail committed %s authentication when presentation cannot be written', (id) => {
   owner = `failed-presentation-${id}`;
   const write = vi.spyOn(fs, 'writeFileSync').mockImplementation(() => { throw new Error('test readonly disk'); });
   try {
@@ -33,6 +33,14 @@ it.each(['openai', 'anthropic', 'xai', 'google'])('does not fail committed %s au
     write.mockRestore();
     owner = 'first';
   }
+});
+
+it('persists generic OAuth restoration after a removed connection logs in again', () => {
+  owner = 'generic-restoration';
+  setProviderPresentation('generic-oauth', { name: 'Work', removed: true });
+  retainProviderPresentationAfterAuthChange('generic-oauth');
+  expect(JSON.parse(fs.readFileSync(path.join(tmpDir, owner, 'local-codex-provider-prefs.json'), 'utf8')).providers['generic-oauth']).toEqual({ name: 'Work', removed: false });
+  owner = 'first';
 });
 
 it('persists the name across removal and reconnect, isolated by Cindy owner', () => {

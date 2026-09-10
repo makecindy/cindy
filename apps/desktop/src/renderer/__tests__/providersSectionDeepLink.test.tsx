@@ -140,7 +140,7 @@ function makeProvider(id: string, over?: Partial<ProviderView>): ProviderView {
     name: id,
     source: 'builtin',
     agents: ['claude-code'],
-    auth: { method: 'oauth' },
+    auth: { method: 'oauth', oauth: { authorizeUrl: 'https://auth.example.test/authorize', tokenUrl: 'https://auth.example.test/token', clientId: 'fixture', scopes: 'openid' } },
     routing: {},
     models: { 'claude-code': [] },
     connected: false,
@@ -445,6 +445,16 @@ describe('ProvidersSection — 深链定位', () => {
     await waitFor(() => expect(window.electronAPI.maker.providerOAuthLogout).toHaveBeenCalledTimes(interrupt ? 2 : 1));
     expect(confirmSpy).toHaveBeenLastCalledWith(expect.objectContaining({ description: 'settings.providers.custom.imageGenerationReload.description' }));
     if (interrupt) expect(window.electronAPI.maker.providerOAuthLogout).toHaveBeenLastCalledWith('fixture-oauth', expect.objectContaining({ dataOwnerId: 'owner', ownerGeneration: 1 }), { source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt' });
+  });
+
+  it.each(['none', 'managed', 'apiKey', 'oauth'] as const)('unsupported builtin %s has no connection or delete action', async (method) => {
+    providersState.providers = [makeProvider('unsupported-provider', { name: 'Unsupported', connected: true, auth: { method } as ProviderView['auth'] })];
+    renderAt('?tab=providers&connect=unsupported-provider');
+    fireEvent.keyDown(await screen.findByRole('button', { name: 'settings.providers.detail.moreActionsAria' }), { key: 'ArrowDown' });
+    expect(screen.queryByRole('menuitem', { name: 'settings.providers.custom.deleteAria' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'settings.providers.button.disconnect' })).toBeNull();
+    expect(await screen.findByRole('menuitem', { name: 'settings.providers.pill.rename' })).toBeTruthy();
+    expect(window.electronAPI.builtinApiKeyRemove).not.toHaveBeenCalled();
   });
 
   it.each(['disconnect', 'delete', 'delete-failed'])('generic builtin OAuth uses the OAuth bridge for %s', async (action) => {

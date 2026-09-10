@@ -1,4 +1,5 @@
 import type { TurnUsageContext } from './turnUsageContext.js';
+import { retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import { registerPluginListHandler } from './pluginListHandler.js';
 import { initializeBotAuthorizationHost } from './botAuthorizationHost.js';
 import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, commitBotAuthorizationInput, type BotAuthorizationInputGuard, getBotAuthorizationService } from './botAuthorizationService.js';
@@ -5602,7 +5603,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } catch {
           /* 发现失败保持纯静态目录，不影响登录结果 */
         }
-        if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        if (isCurrent()) {
+          if (provider.source === 'builtin') retainProviderPresentationAfterAuthChange(providerId);
+          broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        }
       }
       return { ...result, ...(rollbackCredentials ? { rollbackCredentials } : {}) };
     },

@@ -61,7 +61,7 @@ import {
 } from '@/lib/customProviders';
 import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
-import { PROVIDER_SECRET_IDS } from '../../../shared/providerSecrets';
+import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import type { CustomProviderUpdateOptions, CustomProviderUpdateResult } from '../../../shared/customProviderUpdate';
 
 import {
@@ -242,6 +242,13 @@ function BetaTag({ label }: { label: string }) {
 // ---------------------------------------------------------------------------
 
 type ProviderOwnerScope = { dataOwnerId: string | null; ownerGeneration: number };
+function supportsBuiltinConnectionManagement(provider: ProviderView): boolean {
+  return provider.source === 'builtin' && provider.id !== 'xd' && (
+    ['openai', 'anthropic', 'xai'].includes(provider.id) ||
+    (provider.auth.method === 'oauth' && !!provider.auth.oauth) ||
+    (provider.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(provider.id))
+  );
+}
 /** Reuse the image Host restart confirmation for settings mutations that remove its source. */
 function useProviderChangeConfirmation() {
   const { t } = useTranslation();
@@ -265,6 +272,7 @@ async function disconnectProvider(
   options?: CustomProviderUpdateOptions,
 ): Promise<CustomProviderUpdateResult | void> {
   if (provider.source === 'builtin') {
+    if (!supportsBuiltinConnectionManagement(provider)) throw new Error('Provider connection management is unavailable');
     // Keep the entry available for reconnect, even when the original source was auto-detected.
     await window.electronAPI.maker.setProviderPresentation({
       providerId: provider.id,
@@ -407,7 +415,7 @@ function DetailHeader({
   const canRename = !!provider && provider.id !== 'xd';
   const resolvedDelete =
     deleteAction ??
-    (provider?.source === 'builtin' && provider.id !== 'xd'
+    (provider && supportsBuiltinConnectionManagement(provider)
       ? {
           label: t('settings.providers.custom.deleteAria'),
           onClick: () => void management.removeBuiltin(),
@@ -2481,12 +2489,14 @@ export function ProvidersSection() {
     if (
       p.source === 'builtin' &&
       p.auth.method === 'apiKey' &&
-      (PROVIDER_SECRET_IDS as readonly string[]).includes(p.id)
+      isBuiltinApiKeyProviderId(p.id)
     ) {
       return <BuiltinApiKeyHeader key={p.id} provider={p} onChanged={refetch} />;
     }
-    if (p.source === 'builtin')
-      return <GenericOAuthHeader key={p.id} provider={p} onChanged={refetch} />;
+    if (p.source === 'builtin') {
+      if (supportsBuiltinConnectionManagement(p)) return <GenericOAuthHeader key={p.id} provider={p} onChanged={refetch} />;
+      return <DetailHeader icon={providerIcon(p, 18)} title={p.name} subtitle={providerSubtitleForDisplay(p, '')} provider={p} />;
+    }
     if (p.id === MANAGED_OLLAMA_PROVIDER_ID) {
       return <OllamaHeader provider={p} onDelete={() => void handleDeleteOllama()} />;
     }
