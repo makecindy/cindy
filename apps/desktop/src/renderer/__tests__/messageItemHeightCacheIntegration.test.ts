@@ -44,6 +44,7 @@ function setup(keys: string[], mountedKeys: string[], cached = { before: 100, ca
     useCallback: (callback: unknown) => callback,
     useLayoutEffect: (callback: () => void) => { restore = callback; },
     itemsRef: { current: items },
+    restoringRef: { current: true },
     restoreSnapshotRef: { current: { itemHeights: { width: 720, byKey: cached } } },
     visibleRenderItems: keys.map((key) => ({ key })),
     visibleRenderItemsRef: { current: keys.map((key) => ({ key })) },
@@ -59,12 +60,25 @@ function setup(keys: string[], mountedKeys: string[], cached = { before: 100, ca
   };
   const capture = new Function(...Object.keys(bindings), code)(...Object.values(bindings)) as
     (includeHeights?: boolean) => void;
-  return { capture, restore, save, elements };
+  return { capture, restore, save, elements, items, restoringRef: bindings.restoringRef };
 }
 
 afterEach(() => document.body.replaceChildren());
 
 describe('message item height cache DOM alignment', () => {
+  it('stops reading layout and rewriting estimates once the user takes over scrolling', () => {
+    const view = setup(['before', 'card', 'after'], ['before', 'card', 'after']);
+    view.restore();
+    expect(view.elements.get('after')!.style.containIntrinsicBlockSize).toBe('auto 600px');
+    view.restoringRef.current = false;
+    // A newer measurement must survive subsequent streaming render effects.
+    view.elements.get('after')!.style.containIntrinsicBlockSize = 'auto 800px';
+    const measure = vi.spyOn(view.items, 'getBoundingClientRect');
+    for (let batch = 0; batch < 3; batch++) view.restore();
+    expect(measure).not.toHaveBeenCalled();
+    expect(view.elements.get('after')!.style.containIntrinsicBlockSize).toBe('auto 800px');
+  });
+
   it.each(['before', 'card'])('does not cache shifted heights when %s renders no DOM', (missing) => {
     const view = setup(['before', 'card', 'after'], ['before', 'card', 'after'].filter((key) => key !== missing));
     view.capture(true);

@@ -3590,6 +3590,9 @@ export function MessageStream({
   // Remounting otherwise forgets the measured sizes and starts every row at
   // 240px, which can clamp scrollTop for one paint even with cached cards.
   useLayoutEffect(() => {
+    // The snapshot survives for this mount; streaming updates must stop seeding
+    // its old estimates once user intent has ended scroll restoration.
+    if (!restoringRef.current) return;
     const items = itemsRef.current;
     const sizes = restoreSnapshotRef.current?.itemHeights;
     if (!items || !sizes) return;
@@ -4633,10 +4636,12 @@ export function MessageStream({
   useEffect(() => {
     const content = contentRef.current;
     if (!content) return;
-    const onCardExpandToggle = (event: Event) => {
+    const onCardExpandToggle = (event: Event, preserveHeader = true) => {
       suppressHeightCompensationUntilRef.current = performance.now() + CARD_EXPAND_PIN_SUPPRESS_MS;
       restoringRef.current = false;
-      const header = event.target instanceof Element ? event.target.closest('button') : null;
+      const header = preserveHeader && event.target instanceof Element
+        ? event.target.closest('button')
+        : null;
       const container = scrollRef.current;
       disclosureAnchorRef.current = header && container
         ? {
@@ -4646,11 +4651,15 @@ export function MessageStream({
         : null;
       refreshViewportAnchor();
     };
-    // Work groups and other disclosure buttons also intentionally change height.
-    // Let the user open/close them, then keep the resulting reading position.
+    // All disclosures suppress auto-follow, but only opted-in headers stay fixed.
+    // A long-message footer moves down as text appears above it; following that
+    // button would scroll past the text the user just chose to read.
     const onDisclosureClick = (event: MouseEvent) => {
-      if (event.target instanceof Element && event.target.closest('button[aria-expanded]')) {
-        onCardExpandToggle(event);
+      const button = event.target instanceof Element
+        ? event.target.closest('button[aria-expanded]')
+        : null;
+      if (button) {
+        onCardExpandToggle(event, button.hasAttribute('data-scroll-disclosure-header'));
       }
     };
     content.addEventListener('click', onDisclosureClick, true);
