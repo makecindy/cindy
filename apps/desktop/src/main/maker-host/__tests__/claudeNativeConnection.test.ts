@@ -55,6 +55,17 @@ it('cannot attach a native source with no credentials', async () => {
   expect(await reconnectClaudeAiOAuth()).toBe(false);
   expect(h.bind).not.toHaveBeenCalled();
 });
+it('completes login synchronously while auxiliary presentation persistence is blocked', async () => {
+  let release!: () => void;
+  const pending = new Promise<void>((resolve) => { release = resolve; });
+  h.presentation.mockReturnValueOnce(pending);
+  expect(reconnectClaudeAiOAuth()).toBe(true);
+  expect(h.bind).toHaveBeenCalledWith('anthropic', { sharedSystem: true });
+  expect(h.presentation).toHaveBeenCalled();
+  expect(h.unbind).not.toHaveBeenCalled();
+  release();
+  await pending;
+});
 it('preserves successful authentication if restoring the entry fails', async () => {
   h.presentation.mockImplementationOnce(() => {
     throw new Error('disk full');
