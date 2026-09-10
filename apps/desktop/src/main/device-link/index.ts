@@ -42,6 +42,7 @@ import {
 } from '@cindy/device-link';
 import { DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL } from '@cindy/maker-shared/device-link-contract';
 import * as authManager from '../authManager';
+import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { getActiveDataOwnerPushStamp } from '../appSessionState.js';
 import { createLogger } from '../logger';
 import { onQuit } from '../lifecycle';
@@ -642,6 +643,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     return;
   }
 
+  remoteCredentialHost.currentToken = () => {
+    const membership = authManager.getCurrentUserId(), token = authManager.getAccessToken();
+    return membership && token ? { realm: authManager.getActiveAuthRealm(), membership, authDevice: authManager.getDeviceId(), token } : null;
+  };
   client = new DeviceLinkClient({
     getWsUrl: wsUrl,
     getToken: async () => {
@@ -1248,6 +1253,7 @@ export function getMobileNotifyGeneration(): number {
  * 同进程换账号登录还会把上一账号的控制端串到新账号。
  */
 function teardownActiveLink(): void {
+  remoteCredentialHost.dispose();
   stopNetworkWatch?.();
   stopNetworkWatch = null;
   if (!client || linkTornDown) return;

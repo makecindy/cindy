@@ -1,5 +1,11 @@
 import { useEffect, useState, type ReactNode } from "react";
-import { Platform, Pressable, StyleSheet, View } from "react-native";
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  View,
+} from "react-native";
 import SegmentedControl from "@expo/ui/community/segmented-control";
 import { Check, ChevronDown } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -162,22 +168,40 @@ export function RemoteDesktopDisplaySettings({
       style={styles.row}
       accessibilityRole="button"
       accessibilityState={{ expanded: nativeMenu ? undefined : expanded }}
+      accessibilityLabel={
+        failure
+          ? t("remoteDesktop.retrySettings")
+          : t("remoteDesktop.resolution")
+      }
     >
       <View style={{ flex: 1, gap: spacing.xs }}>
         <Text style={title}>{t("remoteDesktop.resolution")}</Text>
-        <Text style={hint}>
+        <Text style={hint} numberOfLines={1}>
           {!video.modesSupported
             ? t("remoteDesktop.settingUnsupported")
-            : loading
-              ? t("remoteDesktop.loadingSettings")
-              : failure
-                ? t("remoteDesktop.retrySettings")
-                : current
-                  ? modeLabel(current)
-                  : t("remoteDesktop.followComputer")}
+            : current
+              ? modeLabel(current)
+              : t("remoteDesktop.followComputer")}
         </Text>
       </View>
-      <ChevronDown size={iconSize.md} color={colors.textTertiary} />
+      <View
+        style={{
+          width: 24,
+          height: 24,
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        {loading || video.busy ? (
+          <ActivityIndicator
+            size="small"
+            color={colors.textTertiary}
+            accessibilityLabel={t("remoteDesktop.loadingSettings")}
+          />
+        ) : (
+          <ChevronDown size={iconSize.md} color={colors.textTertiary} />
+        )}
+      </View>
     </Pressable>
   );
   return (
@@ -228,10 +252,13 @@ export function RemoteDesktopDisplaySettings({
         ) : (
           resolutionTrigger
         )}
-        <Text style={hint}>{t("remoteDesktop.resolutionHint")}</Text>
-        {!controlling && (
-          <Text style={hint}>{t("remoteDesktop.resolutionControlHint")}</Text>
-        )}
+        <Text style={hint}>
+          {t(
+            controlling
+              ? "remoteDesktop.resolutionHint"
+              : "remoteDesktop.resolutionControlHint",
+          )}
+        </Text>
         {!nativeMenu &&
           expanded &&
           modes.map((mode) => (
@@ -252,6 +279,11 @@ export function RemoteDesktopDisplaySettings({
               )}
             </Pressable>
           ))}
+        {failure && (
+          <Text style={hint} accessibilityRole="alert">
+            {t("remoteDesktop.retrySettings")}
+          </Text>
+        )}
       </View>
       {!video.supported && (
         <Text style={hint}>{t("remoteDesktop.settingUnsupported")}</Text>

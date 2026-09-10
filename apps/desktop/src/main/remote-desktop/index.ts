@@ -14,6 +14,7 @@ import {
 } from 'electron';
 import { randomUUID } from 'node:crypto';
 import { loadDesktopIceServers } from './iceConfig';
+import { remoteCredentialHost } from './credentialHost';
 import {
   isDesktopPermission,
   REMOTE_DESKTOP_OFFER_BUDGET,
@@ -44,6 +45,8 @@ import {
   readDesktopDisplayModes,
   setDesktopDisplayMode,
   readDesktopInputPermission,
+  readDesktopLockState,
+  lockDesktopScreen,
   requestDesktopInputPermission,
 } from './inputHost';
 import { getDeepLinkMainWindow } from '../deepLink';
@@ -276,6 +279,24 @@ async function ice(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceRe
   return parseDesktopIceReply(result);
 }
 
+export async function requestRemoteDesktop(peer: string, value: unknown): Promise<unknown> {
+  const settings = readDeviceLinkSettings();
+  if (!settings.remoteControlEnabled || !settings.remoteDesktopEnabled || settings.revokedControllers.includes(peer))
+    throw new Error('DESKTOP_UNAVAILABLE');
+  if (process.platform === 'darwin' && value !== null && typeof value === 'object' && 'op' in value && value.op === 'credential' && 'version' in value && value.version === 1 && 'kind' in value) {
+    if (value.kind === 'status') return { version: 1, state: await readDesktopLockState() };
+    if (value.kind === 'prepare') {
+      const credentials = remoteCredentialHost.currentToken?.();
+      if (!credentials) throw new Error('CREDENTIAL_INVALID_IDENTITY');
+      const descriptor = await remoteCredentialHost.configure(credentials.realm, credentials.membership, credentials.authDevice, credentials.token);
+      return { version: 1, ready: true, descriptor };
+    }
+  }
+  return process.platform === 'darwin' && value !== null && typeof value === 'object' && 'op' in value && value.op === 'credential'
+    ? remoteCredentialHost.request(peer, value, body => remoteDesktop.request(peer, body))
+    : remoteDesktop.request(peer, value);
+}
+
 export const remoteDesktop = new RemoteDesktopController({
   authorized: (peer) => {
     const settings = readDeviceLinkSettings();
@@ -292,6 +313,7 @@ export const remoteDesktop = new RemoteDesktopController({
     return {
       version: 1,
       cursorOverlay: process.platform === 'darwin',
+      lockOnExit: process.platform === 'darwin',
       clipboardContent: process.platform === 'darwin' || process.platform === 'win32',
       clipboardText: process.platform === 'darwin' || process.platform === 'win32',
       videoSettings: true,
@@ -348,6 +370,12 @@ export const remoteDesktop = new RemoteDesktopController({
   startInput: (displayId) => input.start(displayId),
   input: (events) => input.input(events),
   stopInput: () => input.stop(),
+  ...(process.platform === 'darwin' ? {
+    lockScreen: async (isCurrent: () => boolean) => {
+      await input.release();
+      await lockDesktopScreen(isCurrent);
+    },
+  } : {}),
   offer,
   ice,
   stopVideo,

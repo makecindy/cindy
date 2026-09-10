@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Pressable, StyleSheet, View } from "react-native";
+import { Platform, Pressable, StyleSheet, View } from "react-native";
+import SegmentedControl from "@expo/ui/community/segmented-control";
 import {
   Check,
   ChevronDown,
@@ -8,9 +9,9 @@ import {
   RotateCw,
   Volume2,
   PictureInPicture2,
-  ChevronLeft,
   LogOut,
   Monitor,
+  Shield,
   type LucideIcon,
 } from "lucide-react-native";
 import { useTranslation } from "react-i18next";
@@ -20,8 +21,17 @@ import type {
   RemoteDesktopDisplayMode,
 } from "@cindy/device-link";
 import { RemoteDesktopDisplaySettings } from "./RemoteDesktopDisplaySettings";
+import {
+  RemoteDesktopSecuritySettings,
+  type RemoteDesktopSecuritySettingsProps,
+} from "./RemoteDesktopSecuritySettings";
 import { Text } from "@/components/AppText";
 import { MainWindowOptionButton } from "@/components/MobilePrimitives";
+import { RemoteDesktopActionButton } from "./RemoteDesktopActionButton";
+import {
+  NativePullDownMenu,
+  usesNativePullDownMenu,
+} from "@/platform/chrome/NativePullDownMenu";
 import { NativeSwitch } from "@/platform/chrome/NativeSwitch";
 import {
   fontWeight,
@@ -49,8 +59,14 @@ export function RemoteDesktopControls({
   onDisplay,
   presentation,
   video,
+  security,
+  page,
+  onPage,
 }: {
+  page: "controls" | "display" | "security";
+  onPage(page: "controls" | "display" | "security"): void;
   connected: boolean;
+  security?: RemoteDesktopSecuritySettingsProps;
   controlling: boolean;
   controlDisabled: boolean;
   inputMode: "touch" | "pointer";
@@ -80,12 +96,14 @@ export function RemoteDesktopControls({
   };
 }) {
   const { t } = useTranslation();
-  const { colors } = useTheme();
+  const { colors, mode: colorScheme } = useTheme();
   const styles = useThemedStyles(makeStyles);
   const [showDisplays, setShowDisplays] = useState(false);
-  const [displaySettings, setDisplaySettings] = useState(false);
+  const displaySettings = page === "display";
+  const securitySettings = page === "security";
   const currentDisplay = displays.find((display) => display.id === displayId);
   const canChooseDisplay = connected && displays.length > 1;
+  const nativeDisplayMenu = canChooseDisplay && usesNativePullDownMenu();
   const hint = !controlling ? "viewOnlyHint" : `${inputMode}Hint`;
   const displayLabel = (display: RemoteDesktopDisplay, index: number) =>
     display.name?.trim() ||
@@ -126,13 +144,16 @@ export function RemoteDesktopControls({
     },
   ];
 
+  if (securitySettings && security)
+    return <RemoteDesktopSecuritySettings {...security} />;
+
   return (
     <>
       {!displaySettings && (
         <View style={styles.quickActions}>
           {quickActions.map(
             ({ key, icon: Icon, onPress, disabled, selected }) => (
-              <Pressable
+              <RemoteDesktopActionButton
                 key={key}
                 testID={`remoteDesktop.${key}`}
                 accessibilityRole="button"
@@ -160,7 +181,7 @@ export function RemoteDesktopControls({
                 >
                   {t(`remoteDesktop.${key}`)}
                 </Text>
-              </Pressable>
+              </RemoteDesktopActionButton>
             ),
           )}
         </View>
@@ -171,75 +192,143 @@ export function RemoteDesktopControls({
           <Text style={styles.sectionTitle}>
             {t("remoteDesktop.inputMode")}
           </Text>
-          <View style={styles.segments}>
-            {(["touch", "pointer"] as const).map((value) => (
-              <MainWindowOptionButton
-                key={value}
-                label={t(`remoteDesktop.${value}`)}
-                testID={`remoteDesktop.${value}`}
-                variant="segmented"
-                density="default"
-                selected={inputMode === value}
-                disabled={!connected}
-                onPress={() => onInputMode(value)}
-                style={styles.segment}
-              />
-            ))}
+          {Platform.OS === "ios" ? (
+            <SegmentedControl
+              values={[t("remoteDesktop.touch"), t("remoteDesktop.pointer")]}
+              selectedIndex={inputMode === "touch" ? 0 : 1}
+              enabled={connected}
+              appearance={colorScheme}
+              style={{ height: 44 }}
+              onChange={({ nativeEvent }) => {
+                if (
+                  connected &&
+                  [0, 1].includes(nativeEvent.selectedSegmentIndex)
+                )
+                  onInputMode(
+                    nativeEvent.selectedSegmentIndex === 0
+                      ? "touch"
+                      : "pointer",
+                  );
+              }}
+            />
+          ) : (
+            <View style={styles.segments}>
+              {(["touch", "pointer"] as const).map((value) => (
+                <MainWindowOptionButton
+                  key={value}
+                  label={t(`remoteDesktop.${value}`)}
+                  testID={`remoteDesktop.${value}`}
+                  variant="segmented"
+                  density="default"
+                  selected={inputMode === value}
+                  disabled={!connected}
+                  onPress={() => onInputMode(value)}
+                  style={styles.segment}
+                />
+              ))}
+            </View>
+          )}
+          <View
+            testID="remoteDesktop.inputHintSlot"
+            style={{ overflow: "hidden" }}
+          >
+            {/* Each hidden variant measures at the full available width. A flex
+                row reserves their maximum height before the selected text paints,
+                including translations and Dynamic Type, without JS measurement. */}
+            <View
+              pointerEvents="none"
+              accessibilityElementsHidden
+              importantForAccessibility="no-hide-descendants"
+              style={{ flexDirection: "row", opacity: 0 }}
+            >
+              {["touchHint", "pointerHint", "viewOnlyHint"].map((key) => (
+                <Text
+                  key={key}
+                  style={[styles.hint, { width: "100%", flexShrink: 0 }]}
+                >
+                  {t(`remoteDesktop.${key}`)}
+                </Text>
+              ))}
+            </View>
+            <Text
+              style={[
+                styles.hint,
+                { position: "absolute", top: 0, left: 0, right: 0 },
+              ]}
+            >
+              {t(`remoteDesktop.${hint}`)}
+            </Text>
           </View>
-          <Text style={styles.hint}>{t(`remoteDesktop.${hint}`)}</Text>
           <View style={styles.row}>
             <Text style={[styles.rowTitle, styles.expand]}>
               {t("remoteDesktop.showMouseButtons")}
             </Text>
-            <NativeSwitch
-              accessibilityLabel={t("remoteDesktop.showMouseButtons")}
-              testID="remoteDesktop.showMouseButtons"
-              value={showMouseButtons}
-              onValueChange={onShowMouseButtons}
-            />
+            <View
+              style={{
+                width: 56,
+                minHeight: 44,
+                alignItems: "flex-end",
+                justifyContent: "center",
+              }}
+            >
+              <NativeSwitch
+                accessibilityLabel={t("remoteDesktop.showMouseButtons")}
+                testID="remoteDesktop.showMouseButtons"
+                value={showMouseButtons}
+                onValueChange={onShowMouseButtons}
+              />
+            </View>
           </View>
         </View>
       )}
-      {video.notice && (
-        <Text style={styles.hint} accessibilityRole="alert">
-          {video.notice}
-        </Text>
-      )}
       {!displaySettings && (
-        <Pressable
-          onPress={() => setDisplaySettings(true)}
-          style={styles.row}
-          accessibilityRole="button"
-        >
-          <Monitor size={iconSize.action} color={colors.textPrimary} />
-          <View style={styles.displayText}>
-            <Text style={styles.rowTitle}>
-              {t("remoteDesktop.displaySettings")}
-            </Text>
-            {currentDisplay && (
-              <Text style={styles.hint}>
-                {currentDisplay.width} × {currentDisplay.height}
+        <View style={styles.group}>
+          <Pressable
+            onPress={() => onPage("display")}
+            style={styles.row}
+            accessibilityRole="button"
+            accessibilityLabel={t("remoteDesktop.displaySettings")}
+            testID="remoteDesktop.displaySettings"
+          >
+            <Monitor size={iconSize.action} color={colors.textPrimary} />
+            <View style={styles.displayText}>
+              <Text style={styles.rowTitle}>
+                {t("remoteDesktop.displaySettings")}
               </Text>
-            )}
-          </View>
-          <ChevronRight size={iconSize.md} color={colors.textTertiary} />
-        </Pressable>
+              {currentDisplay && (
+                <Text style={styles.hint}>
+                  {currentDisplay.width} × {currentDisplay.height}
+                </Text>
+              )}
+            </View>
+            <ChevronRight size={iconSize.md} color={colors.textTertiary} />
+          </Pressable>
+          {security && (
+            <>
+              <View style={styles.divider} />
+              <Pressable
+                onPress={() => onPage("security")}
+                style={styles.row}
+                testID="remoteDesktop.security"
+                accessibilityRole="button"
+                accessibilityLabel={t("remoteDesktop.security")}
+              >
+                <Shield
+                  size={iconSize.lg}
+                  strokeWidth={iconStroke.regular}
+                  color={colors.textPrimary}
+                />
+                <Text style={[styles.rowTitle, styles.expand]}>
+                  {t("remoteDesktop.security")}
+                </Text>
+                <ChevronRight size={iconSize.md} color={colors.textTertiary} />
+              </Pressable>
+            </>
+          )}
+        </View>
       )}
       {displaySettings && (
         <>
-          <View style={styles.row}>
-            <Pressable
-              accessibilityRole="button"
-              accessibilityLabel={t("remoteDesktop.back")}
-              onPress={() => setDisplaySettings(false)}
-              style={{ padding: spacing.sm }}
-            >
-              <ChevronLeft size={iconSize.action} color={colors.textPrimary} />
-            </Pressable>
-            <Text style={styles.rowTitle}>
-              {t("remoteDesktop.displaySettings")}
-            </Text>
-          </View>
           <RemoteDesktopDisplaySettings
             key={displayId}
             video={video}
@@ -249,51 +338,83 @@ export function RemoteDesktopControls({
               <View>
                 {displays.length > 0 && (
                   <>
-                    <Pressable
-                      testID="remoteDesktop.display"
-                      accessibilityRole={canChooseDisplay ? "button" : "text"}
-                      accessibilityLabel={t("remoteDesktop.display")}
-                      accessibilityState={
-                        canChooseDisplay
-                          ? { expanded: showDisplays }
-                          : undefined
+                    <NativePullDownMenu
+                      actions={
+                        nativeDisplayMenu
+                          ? displays.map((display, index) => ({
+                              id: display.id,
+                              title: displayLabel(display, index),
+                              subtitle: `${display.width} × ${display.height}`,
+                              state:
+                                display.id === displayId
+                                  ? ("on" as const)
+                                  : ("off" as const),
+                            }))
+                          : []
                       }
-                      disabled={!canChooseDisplay}
-                      onPress={() => setShowDisplays(!showDisplays)}
-                      style={({ pressed }) => [
-                        styles.row,
-                        pressed && styles.pressed,
-                      ]}
+                      onAction={(id) => {
+                        if (
+                          canChooseDisplay &&
+                          id !== displayId &&
+                          displays.some((display) => display.id === id)
+                        )
+                          onDisplay(id);
+                      }}
                     >
-                      <Monitor
-                        size={iconSize.action}
-                        color={colors.textPrimary}
-                        strokeWidth={iconStroke.regular}
-                      />
-                      <View style={styles.displayText}>
-                        <Text style={styles.rowTitle}>
-                          {currentDisplay
-                            ? displayLabel(
-                                currentDisplay,
-                                displays.indexOf(currentDisplay),
-                              )
-                            : t("remoteDesktop.display")}
-                        </Text>
-                      </View>
-                      {canChooseDisplay &&
-                        (showDisplays ? (
-                          <ChevronDown
-                            size={iconSize.md}
-                            color={colors.textTertiary}
-                          />
-                        ) : (
-                          <ChevronRight
-                            size={iconSize.md}
-                            color={colors.textTertiary}
-                          />
-                        ))}
-                    </Pressable>
+                      <Pressable
+                        testID="remoteDesktop.display"
+                        accessibilityRole={canChooseDisplay ? "button" : "text"}
+                        accessibilityLabel={t("remoteDesktop.display")}
+                        accessibilityState={
+                          canChooseDisplay
+                            ? {
+                                expanded: nativeDisplayMenu
+                                  ? undefined
+                                  : showDisplays,
+                              }
+                            : undefined
+                        }
+                        disabled={!canChooseDisplay}
+                        onPress={() => {
+                          if (!nativeDisplayMenu)
+                            setShowDisplays(!showDisplays);
+                        }}
+                        style={({ pressed }) => [
+                          styles.row,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Monitor
+                          size={iconSize.action}
+                          color={colors.textPrimary}
+                          strokeWidth={iconStroke.regular}
+                        />
+                        <View style={styles.displayText}>
+                          <Text style={styles.rowTitle}>
+                            {currentDisplay
+                              ? displayLabel(
+                                  currentDisplay,
+                                  displays.indexOf(currentDisplay),
+                                )
+                              : t("remoteDesktop.display")}
+                          </Text>
+                        </View>
+                        {canChooseDisplay &&
+                          (showDisplays ? (
+                            <ChevronDown
+                              size={iconSize.md}
+                              color={colors.textTertiary}
+                            />
+                          ) : (
+                            <ChevronRight
+                              size={iconSize.md}
+                              color={colors.textTertiary}
+                            />
+                          ))}
+                      </Pressable>
+                    </NativePullDownMenu>
                     {canChooseDisplay &&
+                      !nativeDisplayMenu &&
                       showDisplays &&
                       displays.map((display, index) => (
                         <Pressable
@@ -335,6 +456,11 @@ export function RemoteDesktopControls({
           />
         </>
       )}
+      {video.notice && (
+        <Text style={styles.hint} accessibilityRole="alert">
+          {video.notice}
+        </Text>
+      )}
     </>
   );
 }
@@ -344,7 +470,7 @@ export function RemoteDesktopDisconnect({ onPress }: { onPress(): void }) {
   const { colors } = useTheme();
   const styles = useThemedStyles(makeStyles);
   return (
-    <Pressable
+    <RemoteDesktopActionButton
       testID="remoteDesktop.disconnect"
       accessibilityRole="button"
       accessibilityLabel={t("remoteDesktop.disconnect")}
@@ -359,7 +485,7 @@ export function RemoteDesktopDisconnect({ onPress }: { onPress(): void }) {
       <Text style={styles.disconnectLabel}>
         {t("remoteDesktop.disconnect")}
       </Text>
-    </Pressable>
+    </RemoteDesktopActionButton>
   );
 }
 

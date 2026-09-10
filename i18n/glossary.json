@@ -14,6 +14,19 @@
   ],
   "terms": [
     {
+      "id": "mac-login-password",
+      "status": "proposed",
+      "en": "Mac Login Password",
+      "translations": {
+        "zh-CN": "Mac 登录密码",
+        "zh-TW": "Mac 登入密碼",
+        "ja": "Mac のログインパスワード",
+        "ko": "Mac 로그인 암호"
+      },
+      "checkCase": false,
+      "note": "远程桌面原生密码表单中的 macOS 系统账户密码，区别于 Cindy 账号密码；密码不经过 JavaScript。"
+    },
+    {
       "id": "remote-desktop-lock-screen-control",
       "status": "proposed",
       "en": "Lock screen control",
@@ -2060,6 +2073,32 @@
         "ko": "트리거"
       },
       "note": "例行任务的时间或事件触发条件。"
+    },
+    {
+      "id": "auto-unlock-computer",
+      "status": "proposed",
+      "en": "Automatically unlock computer",
+      "translations": {
+        "zh-CN": "自动解锁电脑",
+        "zh-TW": "自動解鎖電腦",
+        "ja": "コンピューターを自動ロック解除",
+        "ko": "컴퓨터 자동 잠금 해제"
+      },
+      "checkCase": false,
+      "note": "远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。"
+    },
+    {
+      "id": "face-id-verification",
+      "status": "proposed",
+      "en": "Face ID verification",
+      "translations": {
+        "zh-CN": "Face ID 验证",
+        "zh-TW": "Face ID 驗證",
+        "ja": "Face ID 認証",
+        "ko": "Face ID 인증"
+      },
+      "checkCase": false,
+      "note": "远程桌面操作菜单的安全设置；仅用于可选的本机保存密码自动解锁。"
     }
   ]
 }

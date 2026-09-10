@@ -8,6 +8,11 @@ export interface MobileAuthOwnerGeneration {
   readonly generation: number;
 }
 
+const listeners = new Set<() => void>();
+export function subscribeMobileAuthOwner(listener: () => void): () => void {
+  listeners.add(listener); return () => { listeners.delete(listener); };
+}
+
 let current: MobileAuthOwnerGeneration = {
   accountId: '',
   accountKey: '',
@@ -27,6 +32,7 @@ export function setMobileAuthOwner(
     accountKey,
     generation: current.generation + 1,
   };
+  for (const listener of listeners) listener();
 }
 
 export function getMobileAuthOwner(): MobileAuthOwnerGeneration {

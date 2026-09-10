@@ -5,10 +5,8 @@
   "name": "cindy-desktop-linux",
   "documentNamespace": "https://cindy.app/spdx/desktop-linux/f50b1ffaaabe7683b25bbab0193449d1f3d86142ed23fe302c3dc623fe260c5f",
   "creationInfo": {
-    "created": "2026-09-02T19:21:04Z",
-    "creators": [
-      "Tool: scripts/generate-third-party-notices.mjs"
-    ]
+    "created": "2026-09-08T11:11:04Z",
+    "creators": ["Tool: scripts/generate-third-party-notices.mjs"]
   },
   "packages": [
     {

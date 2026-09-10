@@ -1,4 +1,9 @@
 {
+  "credentialPasswordRejected": "Mac 登入密碼驗證失敗，請重新輸入。",
+  "credentialCancelled": "已取消密碼驗證，準備好後可重新連線。",
+  "credentialIdentityChanged": "無法確認電腦身分，不會向未經驗證的裝置傳送密碼。",
+  "credentialExpired": "安全連線已過期，請重新連線並驗證。",
+  "credentialRequired": "請完成 Mac 密碼驗證後重新連線。如果無法驗證，請更新手機和電腦上的 Cindy。",
   "takeoverConnection": "接管連線",
   "connectionBusyTakeover": "已有其他裝置連線至此遠端桌面。接管連線後，上一台裝置會中斷。",
   "clipboard": "剪貼簿",
@@ -113,5 +118,18 @@
   "pipUnavailable": "目前無法開啟系統子母畫面，請保持 Cindy 在前景觀看。",
   "clipboardUnsupported": "暫不支援這種剪貼簿內容，請單獨複製一張圖片、文字或連結。檔案及應用程式專有格式暫時無法傳輸。",
   "clipboardTransferring": "正在傳輸剪貼簿內容…",
-  "nativeResolution": "原生"
+  "nativeResolution": "原生",
+  "credentialAccessibilityRequired": "請在 Mac 的系統設定 → 隱私權與安全性 → 輔助使用中允許 Cindy，再重新連線。",
+  "credentialUnlockUnavailable": "暫時無法安全解鎖這台 Mac。請在鎖定畫面選取你的帳號後重新連線；若仍失敗，請在電腦上手動解鎖。",
+  "security": "安全",
+  "autoUnlock": "自動解鎖電腦",
+  "autoUnlockHint": "在本機儲存這台 Mac 的登入密碼，連線時自動解鎖。",
+  "faceIdVerification": "Face ID 驗證",
+  "biometricVerification": "生物辨識驗證",
+  "biometricVerificationHint": "使用儲存的密碼前，驗證你的身分。",
+  "autoUnlockStorageHint": "密碼僅加密儲存在目前裝置。設定和密碼不會隨帳號同步。",
+  "autoUnlockUnavailable": "暫時無法自動解鎖。你仍可連線，並手動解鎖 Mac。",
+  "lockOnExit": "遠端結束後，被控端鎖定螢幕",
+  "lockOnExitHint": "離開遠端桌面時鎖定螢幕。重新連線或切換 App 不會觸發。",
+  "lockOnExitFailed": "無法確認電腦已鎖定螢幕，請檢查電腦狀態。"
 }
