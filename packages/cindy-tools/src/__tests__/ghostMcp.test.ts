@@ -1980,3 +1980,45 @@ describe('connect_account transport', () => {
     } finally { await client.close(); await server.close(); }
   });
 });
+
+describe('Cindy market MCP transport', () => {
+  it('keeps discovery, installation, account connection and execution separate', async () => {
+    const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+    const { InMemoryTransport } = await import('@modelcontextprotocol/sdk/inMemory.js');
+    const searchMarket = vi.fn(async () => ({ ok: true, items: [{ plugin_id: 'p1', release_id: 'r1', ghost_id: 'art' }] }));
+    const installMarket = vi.fn<NonNullable<CindyGhostsMcpDeps['installMarket']>>(async () => ({ ok: true, status: 'installed', ghost_id: 'art' }));
+    const connectAccount = vi.fn(async () => ({ ok: false, errorCode: 'SETUP_REQUIRED', requestId: 'card' }));
+    const callGhostTool = vi.fn(async () => ({ ok: true as const, result: 'image' }));
+    const server = createCindyGhostsMcpServer(fakeDeps({ searchMarket, installMarket, connectAccount, callGhostTool }));
+    const client = new Client({ name: 'market-test', version: '1' });
+    const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverTransport); await client.connect(clientTransport);
+    try {
+      const search = await client.callTool({ name: 'ghost_market_search', arguments: { query: ' image ' } });
+      expect(search.isError).not.toBe(true);
+      expect(searchMarket).toHaveBeenCalledWith('image');
+      expect(installMarket).not.toHaveBeenCalled();
+      const invalid = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1' } });
+      expect(invalid.isError).toBe(true);
+      expect(installMarket).not.toHaveBeenCalled();
+      const installed = await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1', release_id: 'r1' } });
+      expect(installed.isError).not.toBe(true);
+      expect(installMarket).toHaveBeenCalledWith({ pluginId: 'p1', releaseId: 'r1' }, expect.any(AbortSignal));
+      expect(connectAccount).not.toHaveBeenCalled();
+      expect(callGhostTool).not.toHaveBeenCalled();
+      await client.callTool({ name: 'ghost_info', arguments: { ghost_id: 'art' } });
+      await client.callTool({ name: 'connect_account', arguments: { kind: 'plugin', id: 'art' } });
+      expect(connectAccount).toHaveBeenCalledWith({ kind: 'plugin', id: 'art', reauthorize: undefined });
+      expect(callGhostTool).not.toHaveBeenCalled();
+      // Host authorization continuation retries the original work through the same gateway.
+      await client.callTool({ name: 'ghost_call', arguments: { ghost_id: 'art', tool: 'gen_image', args: {} } });
+      expect(callGhostTool).toHaveBeenCalledOnce();
+      installMarket.mockResolvedValueOnce({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+      expect((await client.callTool({ name: 'ghost_market_install', arguments: { plugin_id: 'p1', release_id: 'r1' } })).isError).toBe(true);
+      searchMarket.mockRejectedValueOnce(new Error('private-token'));
+      const failed = await client.callTool({ name: 'ghost_market_search', arguments: { query: 'image' } });
+      expect(failed.isError).toBe(true);
+      expect(JSON.stringify(failed)).not.toContain('private-token');
+    } finally { await client.close(); await server.close(); }
+  });
+});

@@ -1,3 +1,6 @@
+import { createPluginMarketAgentTools } from '../plugin-market/agentTools.js';
+import type { PluginMarketService } from '../plugin-market/service.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { getBotAuthorizationService } from '../maker-ipc/botAuthorizationService.js';
 import { isBotAuthorizationSession } from '../maker-ipc/botAuthorizationHost.js';
 /**
@@ -198,6 +201,7 @@ export interface ToolResultImageDescription {
 }
 
 export interface CindyGhostsHostDeps {
+  pluginMarket?: Pick<PluginMarketService, 'snapshot' | 'detail' | 'install'>;
   createMediaDownloadContext?: (sessionId: string, sessionInstanceId: string) => MediaDownloadContext | undefined;
   /** 当前 Desktop 版本；Forge scaffold 用它生成具体插件包的默认最低版本。 */
   getAppVersion?: () => string;
@@ -1389,7 +1393,49 @@ export function getCindyGhostsMcpDeps(
 ): CindyGhostsMcpDeps {
   const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
     getLiziMcpSessionContext() ?? sessionCtx;
+  const marketTools = hostDeps.pluginMarket && createPluginMarketAgentTools({
+    market: hostDeps.pluginMarket,
+    installedState: (ghostId) => {
+      const visibility = classifyGhostVisibility(ghostId, resolveSessionContext()?.workingDir ?? null, ghostVisibilityDeps);
+      return {
+        exists: getGhostManager().list().some(ghost => ghost.manifest.id === ghostId),
+        errorCode: visibility.ok ? null : visibility.errorCode,
+      };
+    },
+    captureRead: () => {
+      const owner = getActiveAppSession();
+      const assertCurrent = () => {
+        const current = getActiveAppSession();
+        if (isAppSessionBoundaryPending() || owner.generation !== current.generation ||
+            owner.mode !== current.mode || owner.dataOwnerId !== current.dataOwnerId) {
+          throwIpcError('PRECONDITION_FAILED', 'The active account changed during plugin discovery');
+        }
+      };
+      assertCurrent();
+      return assertCurrent;
+    },
+    captureInstall: (signal) => {
+      const context = resolveSessionContext();
+      const live = context?.sessionId && context.sessionInstanceId
+        ? hostDeps.getLiveSessionGrantState?.(context.sessionId, context.sessionInstanceId)
+        : null;
+      const assertCurrent = () => {
+        if (signal?.aborted || !live?.permissionMode || live.isCurrent?.() !== true ||
+            workdirWriteVerdict(live.permissionMode, false) === 'deny') {
+          throwIpcError('PERMISSION_DENIED', 'Plugin install requires a current writable task outside Plan mode');
+        }
+      };
+      assertCurrent();
+      const owner = captureGhostMutationOwnerForMcp();
+      const release = acquireGhostMutationLeaseForMcp(owner);
+      return { assertCurrent, release };
+    },
+  });
   return {
+    ...(marketTools ? {
+      searchMarket: (query: string) => marketTools.search(query),
+      installMarket: (request: { pluginId: string; releaseId: string }, signal?: AbortSignal) => marketTools.install(request, signal),
+    } : {}),
     connectAccount: async (target) => {
       const context = resolveSessionContext();
       const sessionId = ghostSetupInteractionSessionId(context);
