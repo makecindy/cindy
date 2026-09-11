@@ -344,7 +344,7 @@
     "worktreeBranchSaving": "Syncing the selected branch…",
     "worktreeBranchSyncFailed": "Could not confirm the saved source branch — retry the branch selection",
     "worktreeSettingsSaving": "Syncing the worktree setting…",
-    "worktreeSettingsSyncFailed": "Could not confirm the saved worktree setting — retry the toggle",
+    "worktreeSettingsSyncFailed": "Could not save the worktree default. You can still use this selection.",
     "worktreeBranchesRetry": "Could not load branches. Tap to retry",
     "worktreeDetecting": "Detecting environment…",
     "worktreeRecovering": "Reconnecting and retrying automatically…",
