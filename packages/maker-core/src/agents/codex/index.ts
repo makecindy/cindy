@@ -9999,6 +9999,7 @@ export class CodexAgent extends BaseAgent {
           0,
         ),
         cachedTokens: realTurnUsage.cacheRead,
+        cacheCreationTokens: realTurnUsage.cacheCreate,
         segments: realTurnUsageSegments,
         // With usage, exclude post-output finalization. Without usage, retain
         // the measured duration metadata (zero output cannot produce a rate).

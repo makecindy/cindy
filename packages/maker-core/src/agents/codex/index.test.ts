@@ -18241,6 +18241,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       completionTokens: 11,
       reasoningTokens: 5,
       cachedTokens: 15_000,
+      cacheCreationTokens: cacheWriteInputTokens ?? 0,
       segments: [
         {
           inputTokens: 50_000 - (cacheWriteInputTokens ?? 0),

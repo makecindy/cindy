@@ -47,13 +47,15 @@ describe('bundled model settings integrity', () => {
     expect(checked).toBeGreaterThan(0);
   });
 
-  it.each(['openai/gpt-6-astra', 'codex/gpt-6-astra', 'gpt-6-astra'])(
+  it.each(['gpt-6-astra', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna'].flatMap(
+    (model) => [`openai/${model}`, `codex/${model}`, model],
+  ))(
     'shows known tiers for Gateway %s without opening them', (id) => {
     setActiveCatalog(BUNDLED_CATALOG);
     setXdGatewayModels([{
-      id, name: 'GPT-6 Astra', mode: 'chat',
+      id, name: id, mode: 'chat',
       agents: ['codex', 'claude-code', 'pi'], contextWindow: 1_050_000,
-      maxOutputTokens: 128_000, efforts: ['medium', 'high', 'xhigh', 'max'],
+      maxOutputTokens: 128_000, efforts: ['medium', 'high', 'xhigh'],
       defaultEffort: 'medium', supportsFastMode: true,
     }], { authoritative: true });
     const gateway = getActiveCatalog().providers.find((provider) => provider.id === 'xd')!;
@@ -61,7 +63,7 @@ describe('bundled model settings integrity', () => {
       expect(gateway.models[agent]).toHaveLength(1);
       expect(gateway.models[agent]![0]).toMatchObject({
         contextWindow: 272_000, contextWindowMax: 1_050_000,
-        efforts: ['medium', 'high', 'xhigh', 'max'], defaultEffort: 'medium',
+        efforts: ['medium', 'high', 'xhigh'], defaultEffort: 'medium',
         displayEfforts: ['low', 'medium', 'high', 'xhigh', 'max'],
       });
     }

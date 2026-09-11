@@ -711,7 +711,8 @@ interface CodexUsageSnapshot {
   completionTokens: number;
   reasoningTokens: number;
   cachedTokens: number;
-  /** = prompt + completion + cached; reasoning is a diagnostic subset of completion */
+  cacheCreationTokens?: number;
+  /** = prompt + completion + cached + cacheCreation; reasoning is a diagnostic subset of completion */
   total: number;
 }
 
@@ -6365,6 +6366,7 @@ interface ElectronAPI {
         completionTokens?: number;
         reasoningTokens?: number;
         cachedTokens?: number;
+        cacheCreationTokens?: number;
       }>;
       getAccount: (agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build', providerId?: string) => Promise<unknown | null>;
       /** Codex app-server authoritative windows and banked reset-credit metadata. */
