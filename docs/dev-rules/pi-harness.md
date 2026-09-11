@@ -160,6 +160,9 @@ Full access 读/搜/bash 与原生对齐的需求正本见 [`pi-full-access-nati
 Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 [`pi-managed-commands.md`](pi-managed-commands.md)。
 
+扩展 UI 能力清单、RPC 静默过滤与设置兼容提示的统一合同见
+[`pi-extension-ui.md`](pi-extension-ui.md)。
+
 ## 4. 维护不变量(改动时不得破坏)
 
 1. **权限档从严到宽**:`capabilities.permissionModes` 必须 `[ask, auto, bypassPermissions]`
