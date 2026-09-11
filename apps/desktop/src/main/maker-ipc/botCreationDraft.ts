@@ -124,6 +124,13 @@ ${JSON.stringify({ skills, tools, previous: previous ? { ...previous, name: inpu
       signal: AbortSignal.timeout(100000),
       beforeDispatch: async (selection) => {
         assertOwner();
+        if (
+          selection.agentKind !== 'claude-code'
+          && selection.agentKind !== 'codex'
+          && selection.agentKind !== 'pi'
+        ) {
+          throwIpcError('BOT_CREATION_MODEL_UNAVAILABLE', 'Cindy 默认模型不可用，请先选择可用模型');
+        }
         assertEnabled(selection);
         return true;
       },

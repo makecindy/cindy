@@ -23,6 +23,11 @@ export function normalizeBotHarness(value: unknown): BotHarness {
   return value === 'codex' || value === 'pi' || value === 'claude' ? value : 'claude';
 }
 
+/** Map a New Maker vendor onto a Bot route harness. Grok Build is chat-only. */
+export function botHarnessFromMakerVendor(vendor: string): BotHarness {
+  return vendor === 'codex' || vendor === 'pi' ? vendor : 'claude';
+}
+
 export function normalizeBotModelRoute(value: unknown): BotModelRoute | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const record = value as Record<string, unknown>;

@@ -21,6 +21,7 @@ import type { BotCapabilityBaseline } from '../../../shared/botCapabilitySelecti
 import { NEW_BOT_DEFAULT_PERMISSIONS, normalizeBotPermissions } from './botCapabilityDefaults';
 import {
   BOT_MODEL_CHAIN_MAX,
+  botHarnessFromMakerVendor,
   normalizeBotHarness,
   normalizeBotModelChain,
   type BotHarness,
@@ -357,7 +358,7 @@ export function getEffectiveBotModelChain(
   return defaultBotModelChain({ providers: providers?.providers ?? [],
     isModelEnabled,
     preferredRoute: {
-      harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,
+      harness: botHarnessFromMakerVendor(draft.vendor),
       providerId: selected.providerId ?? null, model: selected.model,
       effort: selected.effort ?? '', fastMode: draft.fastModeByModel[selected.model] === true,
     },
