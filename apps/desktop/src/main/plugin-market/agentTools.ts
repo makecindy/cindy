@@ -82,7 +82,8 @@ export function createPluginMarketAgentTools(deps: PluginMarketAgentDeps) {
           expectedManifest: detail.manifest,
           allowSourceReplacement: false,
         }, assertCurrent);
-        authority.assertCurrent();
+        // Once committed, cancellation cannot turn the durable installation
+        // into a failure. The live check runs at package placement instead.
         return {
           ok: true, status: 'installed', ghost_id: result.ghost.manifest.id,
           name: result.ghost.manifest.name, version: result.ghost.manifest.version,

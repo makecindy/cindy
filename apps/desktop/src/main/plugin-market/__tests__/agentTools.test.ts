@@ -91,4 +91,18 @@ describe('Agent plugin discovery and installation', () => {
     expect(result).toMatchObject({ ok: false, errorCode: 'INSTALL_UNAVAILABLE' });
     expect(JSON.stringify(result)).not.toContain('private-token'); expect(h.release).toHaveBeenCalledOnce();
   });
+
+  it('reports a committed installation even if the task ends before the service returns', async () => {
+    const h = harness();
+    const install = h.market.install.getMockImplementation()!;
+    h.market.install.mockImplementation(async (...args) => {
+      const result = await install(...args);
+      h.state.current = false;
+      return result;
+    });
+    expect(await h.tools.install({ pluginId: 'catalog-id', releaseId: 'release-1' }))
+      .toMatchObject({ ok: true, status: 'installed', ghost_id: 'mail-suite' });
+    expect(h.state.installed).toBe(true);
+    expect(h.release).toHaveBeenCalledOnce();
+  });
 });
