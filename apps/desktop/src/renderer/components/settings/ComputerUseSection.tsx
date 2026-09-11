@@ -1229,6 +1229,13 @@ export function ComputerUseSection({
     !computerScreenRecordingGranted;
   const computerReady =
     computerStatus?.installed === true && isComputerPermissionReady(computerStatus);
+  // Browser/backend and computer probes can insert rows above the lower cards.
+  // Keep those lower controls inert until that initial geometry is settled so
+  // an async row cannot move an enabled action out from under the pointer.
+  const lowerControlsLayoutPending =
+    browserBackendKind === null
+    || (browserBackendKind === 'external' && availability === null)
+    || computerStatus === null;
   // Persisted opt-in and runtime readiness are separate states. Keeping an
   // unavailable enabled configuration checked lets the user turn it off
   // instead of forcing the only interaction back into onboarding.
@@ -1238,8 +1245,8 @@ export function ComputerUseSection({
     computerEnableIntentRef.current,
   );
   const computerSwitchDisabled =
-    computerEnabled === null
-    || computerStatus === null
+    lowerControlsLayoutPending
+    || computerEnabled === null
     || computerTogglePending
     || computerInstallPending
     || computerPermissionPending;
@@ -1660,7 +1667,7 @@ export function ComputerUseSection({
           </div>
           <Switch
             checked={androidEnabled ?? false}
-            disabled={androidEnabled === null || androidTogglePending}
+            disabled={lowerControlsLayoutPending || androidEnabled === null || androidTogglePending}
             onCheckedChange={handleToggleAndroid}
             aria-label={t('settings.computerUse.android.toggleAria')}
           />
@@ -1679,7 +1686,7 @@ export function ComputerUseSection({
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
-                  disabled={androidDevicePending || !androidStatus}
+                  disabled={lowerControlsLayoutPending || androidDevicePending || !androidStatus}
                   className={cn(ACTION_BUTTON_CLASS, 'max-w-[260px] px-2.5')}
                   aria-label={t('settings.computerUse.android.device.ariaLabel')}
                   title={configuredDefaultAndroidDevice ?? undefined}
@@ -1768,7 +1775,7 @@ export function ComputerUseSection({
             <button
               type="button"
               onClick={() => void handleRefreshAndroidStatus()}
-              disabled={androidStatusPending}
+              disabled={lowerControlsLayoutPending || androidStatusPending}
               className={ACTION_BUTTON_CLASS}
             >
               <RefreshCw size={12} className="shrink-0" />
@@ -1827,7 +1834,7 @@ export function ComputerUseSection({
                 setAndroidAdbPathDraft(event.target.value);
                 setAndroidAdbPathEdited(true);
               }}
-              disabled={androidAdbPathBusy}
+              disabled={lowerControlsLayoutPending || androidAdbPathBusy}
               placeholder={t('settings.computerUse.android.adb.placeholder')}
               aria-label={t('settings.computerUse.android.adb.pathAria')}
               className={cn(
@@ -1842,7 +1849,7 @@ export function ComputerUseSection({
             <button
               type="button"
               onClick={() => void handleSaveAndroidAdbPath()}
-              disabled={!androidAdbPathCanSave || androidAdbPathBusy}
+              disabled={lowerControlsLayoutPending || !androidAdbPathCanSave || androidAdbPathBusy}
               className={ACTION_BUTTON_CLASS}
             >
               {t('settings.computerUse.android.adb.save')}
@@ -1850,7 +1857,7 @@ export function ComputerUseSection({
             <button
               type="button"
               onClick={() => void handleUseDefaultAndroidAdbPath()}
-              disabled={androidAdbPathBusy}
+              disabled={lowerControlsLayoutPending || androidAdbPathBusy}
               className={ACTION_BUTTON_CLASS}
             >
               {t('settings.computerUse.android.adb.useDefault')}

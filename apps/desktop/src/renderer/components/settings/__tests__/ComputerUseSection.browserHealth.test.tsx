@@ -227,7 +227,9 @@ describe('ComputerUseSection browser backend health loading', () => {
 
   it('renders the base settings before browser status resolves', async () => {
     const browserStatus = deferred<BrowserAvailability>();
+    const computerStatus = deferred<ComputerDriverStatus>();
     api.getBrowserStatus.mockReturnValueOnce(browserStatus.promise);
+    api.getComputerStatus.mockReturnValueOnce(computerStatus.promise);
     api.getBackendState.mockResolvedValueOnce({ active: 'external' });
     api.getBackendHealth.mockResolvedValueOnce({
       active: 'external',
@@ -253,6 +255,16 @@ describe('ComputerUseSection browser backend health loading', () => {
       }),
     ).toBeTruthy();
     expect(screen.queryByText('settings.computerUse.browser.notDetected')).toBeNull();
+    expect(
+      (screen.getByRole('switch', {
+        name: 'settings.computerUse.directControl.toggleAria',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect(
+      (screen.getByRole('switch', {
+        name: 'settings.computerUse.android.toggleAria',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
 
     await act(async () => {
       browserStatus.resolve({
@@ -264,6 +276,28 @@ describe('ComputerUseSection browser backend health loading', () => {
     });
 
     expect(await screen.findByText('settings.computerUse.browser.notDetected')).toBeTruthy();
+    expect(
+      (screen.getByRole('switch', {
+        name: 'settings.computerUse.android.toggleAria',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    await act(async () => {
+      computerStatus.resolve(computerUnavailable);
+      await computerStatus.promise;
+    });
+    await waitFor(() =>
+      expect(
+        (screen.getByRole('switch', {
+          name: 'settings.computerUse.directControl.toggleAria',
+        }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(
+      (screen.getByRole('switch', {
+        name: 'settings.computerUse.android.toggleAria',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(false);
   });
 
   it('renders the Automation settings while the recoverable health probe is still pending', async () => {
