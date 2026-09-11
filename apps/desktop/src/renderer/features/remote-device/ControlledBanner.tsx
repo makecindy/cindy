@@ -14,7 +14,14 @@
  * 完整设备名 + 远程控制逻辑说明。
  */
 
-import { useCallback, useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Eye, MonitorOff, X } from 'lucide-react';
@@ -42,6 +49,37 @@ interface Controller {
 let cachedControllers: Controller[] = [];
 let pushSubscribed = false;
 const controllerListeners = new Set<(c: Controller[]) => void>();
+
+// 按实际挂载的内联提示让全局浮条退让，不猜路由（伙伴也复用聊天视图）。
+// 多个 pane / 路由过渡可短暂共存，必须等最后一个内联提示卸载才恢复兜底。
+const inlineBannerOwners = new Set<symbol>();
+const inlineBannerListeners = new Set<() => void>();
+const getInlineBannerSnapshot = () => inlineBannerOwners.size > 0;
+function subscribeInlineBanners(listener: () => void) {
+  inlineBannerListeners.add(listener);
+  return () => {
+    inlineBannerListeners.delete(listener);
+  };
+}
+
+function useInlineBannerPresence(inline: boolean): boolean {
+  const hasInlineBanner = useSyncExternalStore(
+    subscribeInlineBanners,
+    getInlineBannerSnapshot,
+    getInlineBannerSnapshot,
+  );
+  useLayoutEffect(() => {
+    if (!inline) return;
+    const owner = Symbol();
+    inlineBannerOwners.add(owner);
+    for (const listener of inlineBannerListeners) listener();
+    return () => {
+      inlineBannerOwners.delete(owner);
+      for (const listener of inlineBannerListeners) listener();
+    };
+  }, [inline]);
+  return hasInlineBanner;
+}
 
 // composer 被控提示的折叠状态只在当前 renderer 生命周期内保存,并严格按 sessionId
 // 分桶。它不是全局偏好,不写 localStorage / DB / 服务端;切换任务时直接读取对应桶,
@@ -75,6 +113,8 @@ export function __resetControlledBannerForTests(): void {
   controllerListeners.clear();
   collapsedComposerSessionIds.clear();
   collapsedComposerListeners.clear();
+  inlineBannerOwners.clear();
+  inlineBannerListeners.clear();
 }
 
 function emitControllers(next: Controller[]) {
@@ -138,8 +178,11 @@ export function ControlledBanner({
   const controllers = useControlledBy();
   const composerSessionId = placement === 'composer' ? sessionId : null;
   const composerCollapsed = useComposerCollapsed(composerSessionId);
+  const hasInlineBanner = useInlineBannerPresence(
+    placement !== 'floating' && controllers.length > 0,
+  );
 
-  if (controllers.length === 0) return null;
+  if (controllers.length === 0 || (placement === 'floating' && hasInlineBanner)) return null;
 
   const label =
     controllers.length === 1

@@ -470,6 +470,8 @@ export interface ProviderMediaModel extends Pick<
   modalities?: { input: string[]; output: string[] };
   officialDocs?: string;
   disabled?: boolean;
+  /** Follows the chat display axis: omitted/true is shown, false waits for an explicit switch. */
+  defaultEnabled?: boolean;
 }
 
 /** 供应商定义。 */

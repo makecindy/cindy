@@ -13,7 +13,13 @@
 | [design-rules/DESIGN.md](design-rules/DESIGN.md) | 设计规范 | authoritative | Desktop 与 Mobile 的视觉语言、Token、组件和交互约定 | — |
 | [dev-rules/README.md](./dev-rules/README.md) | 开发规则索引 | authoritative | Cindy 客户端工程规则 | — |
 | [environment-setup.md](./dev-rules/environment-setup.md) | 开发环境 | authoritative | 公共依赖、submodule 与首次安装 | — |
-| [model-catalog-maintenance.md](./dev-rules/model-catalog-maintenance.md) | 模型目录维护 | authoritative | Server 发布目录、客户端兜底、模型能力与参考价更新及运行验收 | — |
+| [model-catalog-maintenance.md](./dev-rules/model-catalog-maintenance.md) | 模型配置与下发入口 | authoritative | 架构、配置层级、修改位置、代码导航与发布验收 | — |
+| [model-metadata-precedence.md](./product-rules/model-metadata-precedence.md) | 模型资料合同 | authoritative | 继承、用户覆盖、多账号与成员语义 | — |
+| [local-model-selection.md](./product-rules/local-model-selection.md) | 本地模型规则 | authoritative | 包装、硬件、候选和推荐 | — |
+| [model-registry-v4-media.md](./model-registry-v4-media.md) | 媒体模型合同 | authoritative | 全类型资料与发布兼容条件 | — |
+| [model-catalog-runtime.md](./dev-rules/model-catalog-runtime.md) | 模型运行细则 | authoritative | 窗口、压缩、原生缓存与显示 | — |
+| [model-catalog.md](./examples/model-catalog.md) | 模型配置示例 | 参考 | 可校验的最小配置和维护场景 | — |
+| [model-catalog-history.md](./model-catalog-history.md) | 模型历史记录 | 参考 | 旧型号取舍与迁移记录，不代表当前发布状态 | — |
 | [desktop-development.md](./dev-rules/desktop-development.md) | Desktop 开发规则 | authoritative | Desktop 启动、重启与验证 | — |
 | [electron-security-and-process-boundaries.md](./dev-rules/electron-security-and-process-boundaries.md) | Electron 安全规则 | authoritative | Renderer、preload、BrowserWindow、WebView、IPC、CSP 与进程边界 | — |
 | [credentials-and-local-storage.md](./dev-rules/credentials-and-local-storage.md) | 本地数据安全规则 | authoritative | 凭证、用户持久数据、临时文件与测试目录 | — |

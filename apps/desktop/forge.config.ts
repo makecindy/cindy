@@ -1060,15 +1060,42 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
   fs.mkdirSync(destDir, { recursive: true });
   if (process.platform === 'darwin' && isMacForgePlatform(platform)) {
     const dest = path.join(destDir, 'cindy-macos-desktop-input');
-    buildSwiftHelperForForgeArch(
-      path.join(__dirname, 'native', 'remote-desktop', 'macos-input.swift'),
+    const inputBuild = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-input-build-'));
+    try {
+      const main = path.join(inputBuild, 'main.swift');
+      const caller = fs.readFileSync(path.resolve(__dirname, '../../packages/remote-credentials-native/Sources/DesktopNativeCaller/DesktopNativeCaller.swift'), 'utf8');
+      fs.writeFileSync(main, caller + '\n' + fs.readFileSync(path.join(__dirname, 'native', 'remote-desktop', 'macos-input.swift'), 'utf8'));
+      buildSwiftHelperForForgeArch(
+      main,
       dest,
       arch,
       MACOS_REMOTE_DESKTOP_INPUT_DEPLOYMENT_TARGET,
       [],
       'remote desktop input',
-    );
+      );
+    } finally { fs.rmSync(inputBuild, { recursive: true, force: true }); }
     fs.chmodSync(dest, 0o755);
+    const credentialBuild = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-credential-build-'));
+    try {
+      const root = path.resolve(__dirname, '../../packages/remote-credentials-native');
+      const outputs: string[] = [];
+      for (const target of swiftTargetTriplesForForgeArch(arch, 'macos12.0')) {
+        const args = ['build', '--package-path', root, '-c', 'release', '--product', 'cindy-macos-remote-credentials',
+          '--triple', target, '--scratch-path', path.join(credentialBuild, target)];
+        const compiled = spawnSync('swift', args, { stdio: 'inherit' });
+        if (compiled.error || compiled.status !== 0) throw new Error('Remote credentials native build failed');
+        const location = spawnSync('swift', [...args, '--show-bin-path'], { encoding: 'utf8' });
+        if (location.error || location.status !== 0) throw new Error('Remote credentials output unavailable');
+        outputs.push(path.join(location.stdout.trim(), 'cindy-macos-remote-credentials'));
+      }
+      const credential = path.join(destDir, 'cindy-macos-remote-credentials');
+      if (outputs.length === 1) fs.copyFileSync(outputs[0], credential);
+      else {
+        const result = spawnSync('lipo', ['-create', ...outputs, '-output', credential], { stdio: 'inherit' });
+        if (result.error || result.status !== 0) throw new Error('Remote credentials universal build failed');
+      }
+      fs.chmodSync(credential, 0o755);
+    } finally { fs.rmSync(credentialBuild, { recursive: true, force: true }); }
     const capture = path.join(destDir, 'cindy-macos-desktop-capture');
     const captureArch = arch === 'universal' ? ['-arch', 'arm64', '-arch', 'x86_64'] : ['-arch', arch === 'arm64' ? 'arm64' : 'x86_64'];
     const result = spawnSync('xcrun', ['clang', path.join(__dirname, 'native', 'remote-desktop', 'macos-capture.m'),

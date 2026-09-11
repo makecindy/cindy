@@ -9,6 +9,7 @@ import {
   normalizeSelectedMachineId,
   parseMachineSelection,
   selectVisibleSessions,
+  type MachineSelection,
   serializeMachineSelection,
   toggleMachineSelection,
 } from '@/features/device-link/selectedMachineStore';
@@ -51,8 +52,46 @@ function mkSession(id: string, deviceLinkDeviceId?: string): Session {
 }
 
 describe('selectVisibleSessions', () => {
+  afterEach(() => remoteProjectsStore.clear());
   const local = [mkSession('l1'), mkSession('l2')];
   const remote = [mkSession('r1', 'dev-a'), mkSession('r2', 'dev-a'), mkSession('r3', 'dev-b')];
+
+  it.each<{ selection: MachineSelection; expected: string[] }>([
+    { selection: MACHINE_ALL, expected: ['l1', 'l2', 'r1', 'r2', 'r3'] },
+    { selection: [MACHINE_LOCAL], expected: ['l1', 'l2'] },
+    { selection: ['dev-a'], expected: ['r1', 'r2'] },
+    { selection: [MACHINE_LOCAL, 'dev-a'], expected: ['l1', 'l2', 'r1', 'r2'] },
+  ])(
+    'excludes companion tasks from ordinary sidebar selection $selection',
+    ({ selection, expected }) => {
+      const bots = ['active', 'archived'].map((status) => ({
+        ...mkSession(`bot-${status}`, 'dev-a'),
+        source: 'bot' as const,
+        status: status as Session['status'],
+        model: 'gpt-6-astra',
+      }));
+      remoteProjectsStore.mergeDeviceSessions('dev-a', 'MacBook', [
+        ...remote.slice(0, 2),
+        bots[0]!,
+      ]);
+      remoteProjectsStore.mergeDeviceSessions('dev-a', 'MacBook', [bots[1]!], 'archived');
+      remoteProjectsStore.mergeDeviceSessions('dev-b', 'Other Mac', remote.slice(2));
+      const mirrored = remoteProjectsStore.getMergedRemoteSessions();
+      const locals = [...local, { ...mkSession('local-bot'), source: 'bot' as const }];
+      expect(selectVisibleSessions(locals, mirrored, selection).map((row) => row.id)).toEqual(
+        expected,
+      );
+      expect(
+        remoteProjectsStore.getDeviceSessions('dev-a').filter((row) => row.source === 'bot'),
+      ).toEqual(
+        expect.arrayContaining(
+          bots.map((bot) =>
+            expect.objectContaining({ id: bot.id, status: bot.status, model: 'gpt-6-astra' }),
+          ),
+        ),
+      );
+    },
+  );
 
   it('所有(默认)→ 本机 + 全部远程合并(顺序:本地在前)', () => {
     expect(selectVisibleSessions(local, remote, MACHINE_ALL).map((s) => s.id)).toEqual([

@@ -855,6 +855,30 @@ describe('none (无鉴权自定义代理 buildRouteDecision)', () => {
 });
 
 describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 key)', () => {
+  it('routes independent Claude accounts with their own bearer and removes the CLI API key', async () => {
+    setCustomProviders(['anthropic-a', 'anthropic-b'].map(id => buildUserProvider({
+      id, name: 'Claude subscription', auth: { method: 'oauth', native: 'claude' },
+      runtimes: { 'claude-code': { baseUrl: ANTHROPIC_DIRECT_UPSTREAM, models: [] } },
+    })));
+    const readToken = vi.fn(async (id: string) => `test-token-${id}`);
+    setProviderOAuthTokenReader(readToken);
+    for (const id of ['anthropic-a', 'anthropic-b', 'anthropic-a']) {
+      setSessionProvider('s-user', id);
+      expect(await resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'claude-opus-4-6')).toEqual({
+        upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+        headerOverride: { authorization: `Bearer test-token-${id}` },
+        headerDelete: ['x-api-key'],
+      });
+      expect(readToken).toHaveBeenLastCalledWith(id, 'claude-code');
+    }
+    setProviderOAuthTokenReader(() => null);
+    expect(await resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'claude-opus-4-6')).toMatchObject({
+      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+      headerOverride: { authorization: 'Bearer xdt-missing-provider-oauth-token' },
+      headerDelete: ['x-api-key'],
+    });
+  });
+
   it('routes A → B → A by connection id despite identical provider and model names', () => {
     setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
       id, name: 'Same provider', runtimes: { codex: {

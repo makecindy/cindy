@@ -21,6 +21,13 @@ export {
   type ResponsesCustomToolFunctionAdapter,
 } from './custom-tool-function-adapter.js';
 export {
+  chainResponseTransforms,
+  createResponsesNullArrayRepairTransform,
+  repairResponsesEventNullArrays,
+  repairResponsesItemNullArrays,
+  ResponsesNullArrayRepairTransform,
+} from './responses-null-array-repair.js';
+export {
   isResponsesImageContentPartType,
   isUnsupportedResponsesImageErrorPayload,
   UnsupportedResponsesFeatureError,

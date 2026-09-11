@@ -58,6 +58,7 @@ interface SystemCardProps {
     | 'cmd'
     | 'goal-complete'
     | 'goal-resumed'
+    | 'cindy-make-complete'
     | 'learn'
     | 'review'
     | 'auto-resume'
@@ -103,12 +104,15 @@ const codeClass = cn(
 );
 
 function HelpCard({ data }: { data?: Record<string, unknown> }) {
-  const commands = (data?.commands as Array<{ name: string; description?: string; source: string }>) ?? [];
+  const commands =
+    (data?.commands as Array<{ name: string; description?: string; source: string }>) ?? [];
   const desktopCmds = commands.filter((c) => c.source === 'desktop');
   const agentBuiltinCmds = commands.filter((c) => c.source === 'agent-builtin');
   const projectCmds = commands.filter((c) => c.source === 'user' || c.source === 'skill');
 
-  const renderCommandRows = (items: Array<{ name: string; description?: string; source: string }>) => (
+  const renderCommandRows = (
+    items: Array<{ name: string; description?: string; source: string }>,
+  ) => (
     <div className="flex flex-col gap-[2px]">
       {items.map((c) => (
         <div key={c.name} className={rowClass}>
@@ -131,7 +135,14 @@ function HelpCard({ data }: { data?: Record<string, unknown> }) {
       )}
       {projectCmds.length > 0 && (
         <>
-          <div className={cn(titleClass, (desktopCmds.length > 0 || agentBuiltinCmds.length > 0) && 'mt-3')}>Project Commands</div>
+          <div
+            className={cn(
+              titleClass,
+              (desktopCmds.length > 0 || agentBuiltinCmds.length > 0) && 'mt-3',
+            )}
+          >
+            Project Commands
+          </div>
           {renderCommandRows(projectCmds)}
         </>
       )}
@@ -163,9 +174,8 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
   const [expandedDetails, setExpandedDetails] = useState<Record<string, boolean>>({});
   // null = session not live / unsupported; undefined = still loading
   const rawUsage = data?.usage;
-  const usage = rawUsage === undefined || rawUsage === null || isContextUsageData(rawUsage)
-    ? rawUsage
-    : null;
+  const usage =
+    rawUsage === undefined || rawUsage === null || isContextUsageData(rawUsage) ? rawUsage : null;
   const error = typeof data?.error === 'string' ? data.error : '';
 
   if (usage === undefined) {
@@ -195,10 +205,17 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
     : [];
 
   const totalTokens = Math.max(0, finiteNumber(usage.totalTokens));
-  const rawMaxTokens = Math.max(finiteNumber(usage.rawMaxTokens) || finiteNumber(usage.maxTokens), 0);
-  const pct = rawMaxTokens > 0
-    ? Math.min(100, Math.max(0, finiteNumber(usage.percentage) || (totalTokens / rawMaxTokens) * 100))
-    : 0;
+  const rawMaxTokens = Math.max(
+    finiteNumber(usage.rawMaxTokens) || finiteNumber(usage.maxTokens),
+    0,
+  );
+  const pct =
+    rawMaxTokens > 0
+      ? Math.min(
+          100,
+          Math.max(0, finiteNumber(usage.percentage) || (totalTokens / rawMaxTokens) * 100),
+        )
+      : 0;
   const visibleCategories = categories.filter((cat) => finiteNumber(cat.tokens) > 0);
   const hasDetails =
     mcpTools.length > 0 ||
@@ -250,10 +267,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
       count: String(agents.length),
       content: (
         <ContextDetailSection
-          rows={agents.map((agent) => [
-            `${agent.agentType} · ${agent.source}`,
-            agent.tokens,
-          ])}
+          rows={agents.map((agent) => [`${agent.agentType} · ${agent.source}`, agent.tokens])}
           showZeroRows
         />
       ),
@@ -275,10 +289,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
               }),
               usage.skills.tokens,
             ],
-            ...skillFrontmatter.map((skill) => [
-              `${skill.name} · ${skill.source}`,
-              skill.tokens,
-            ] as [string, number]),
+            ...skillFrontmatter.map(
+              (skill) => [`${skill.name} · ${skill.source}`, skill.tokens] as [string, number],
+            ),
           ]}
           showZeroRows
         />
@@ -306,7 +319,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
       ),
     });
   }
-  const visibleDetailRows = detailRows.filter((row) => finiteNumber(row.tokens) > 0 || row.count !== '0');
+  const visibleDetailRows = detailRows.filter(
+    (row) => finiteNumber(row.tokens) > 0 || row.count !== '0',
+  );
 
   return (
     <div
@@ -320,9 +335,9 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         className="flex w-full items-center gap-2 text-left"
         onClick={() => setExpanded((prev) => !prev)}
         aria-expanded={expanded}
-        aria-label={expanded
-          ? t('chat.systemCard.context.collapse')
-          : t('chat.systemCard.context.expand')}
+        aria-label={
+          expanded ? t('chat.systemCard.context.collapse') : t('chat.systemCard.context.expand')
+        }
       >
         <Layers size={14} strokeWidth={1.8} className="shrink-0 text-[var(--msg-user-text)]" />
         <span className="min-w-0 flex-1 truncate text-15 font-medium">
@@ -349,17 +364,19 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
         className="mt-2 flex h-[7px] w-full overflow-hidden rounded-full bg-[var(--msg-tool-card-bg)]"
         aria-label={t('chat.systemCard.context.barAria')}
       >
-        {visibleCategories.filter((cat) => !cat.isDeferred).map((cat) => (
-          <div
-            key={cat.name}
-            className="h-full shrink-0"
-            style={{
-              width: `${rawMaxTokens > 0 ? Math.max((cat.tokens / rawMaxTokens) * 100, cat.tokens > 0 ? 0.6 : 0) : 0}%`,
-              backgroundColor: contextColor(cat),
-              opacity: cat.name === 'Free space' ? 0.24 : 1,
-            }}
-          />
-        ))}
+        {visibleCategories
+          .filter((cat) => !cat.isDeferred)
+          .map((cat) => (
+            <div
+              key={cat.name}
+              className="h-full shrink-0"
+              style={{
+                width: `${rawMaxTokens > 0 ? Math.max((cat.tokens / rawMaxTokens) * 100, cat.tokens > 0 ? 0.6 : 0) : 0}%`,
+                backgroundColor: contextColor(cat),
+                opacity: cat.name === 'Free space' ? 0.24 : 1,
+              }}
+            />
+          ))}
       </div>
 
       <Collapse open={expanded}>
@@ -372,7 +389,10 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
 
           <div className="flex flex-col gap-[5px]">
             {visibleCategories.map((cat) => (
-              <div key={cat.name} className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3">
+              <div
+                key={cat.name}
+                className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3"
+              >
                 <div className="flex min-w-0 items-center gap-1.5">
                   <span
                     className="h-2 w-2 shrink-0 rounded-[2px]"
@@ -420,7 +440,10 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                         <ChevronRight
                           size={11}
                           strokeWidth={1.8}
-                          className={cn('shrink-0 transition-transform', isDetailExpanded && 'rotate-90')}
+                          className={cn(
+                            'shrink-0 transition-transform',
+                            isDetailExpanded && 'rotate-90',
+                          )}
                         />
                         <span className="min-w-0 truncate">{row.label}</span>
                       </span>
@@ -440,11 +463,23 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                 <ContextDetailSection
                   title={t('chat.systemCard.context.messageBreakdown')}
                   rows={[
-                    [t('chat.systemCard.context.userMessages'), usage.messageBreakdown.userMessageTokens],
-                    [t('chat.systemCard.context.assistantMessages'), usage.messageBreakdown.assistantMessageTokens],
+                    [
+                      t('chat.systemCard.context.userMessages'),
+                      usage.messageBreakdown.userMessageTokens,
+                    ],
+                    [
+                      t('chat.systemCard.context.assistantMessages'),
+                      usage.messageBreakdown.assistantMessageTokens,
+                    ],
                     [t('chat.systemCard.context.toolCalls'), usage.messageBreakdown.toolCallTokens],
-                    [t('chat.systemCard.context.toolResults'), usage.messageBreakdown.toolResultTokens],
-                    [t('chat.systemCard.context.attachments'), usage.messageBreakdown.attachmentTokens],
+                    [
+                      t('chat.systemCard.context.toolResults'),
+                      usage.messageBreakdown.toolResultTokens,
+                    ],
+                    [
+                      t('chat.systemCard.context.attachments'),
+                      usage.messageBreakdown.attachmentTokens,
+                    ],
                   ]}
                 />
               )}
@@ -453,8 +488,14 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
                   title={t('chat.systemCard.context.apiUsage')}
                   rows={[
                     [t('chat.systemCard.context.inputTokens'), usage.apiUsage.input_tokens],
-                    [t('chat.systemCard.context.cacheCreate'), usage.apiUsage.cache_creation_input_tokens],
-                    [t('chat.systemCard.context.cacheRead'), usage.apiUsage.cache_read_input_tokens],
+                    [
+                      t('chat.systemCard.context.cacheCreate'),
+                      usage.apiUsage.cache_creation_input_tokens,
+                    ],
+                    [
+                      t('chat.systemCard.context.cacheRead'),
+                      usage.apiUsage.cache_read_input_tokens,
+                    ],
                     [t('chat.systemCard.context.outputTokens'), usage.apiUsage.output_tokens],
                   ]}
                 />
@@ -483,14 +524,16 @@ interface ContextUsageData {
   maxTokens: number;
   rawMaxTokens: number;
   percentage: number;
-  gridRows: Array<Array<{
-    color: string;
-    isFilled: boolean;
-    categoryName: string;
-    tokens: number;
-    percentage: number;
-    squareFullness: number;
-  }>>;
+  gridRows: Array<
+    Array<{
+      color: string;
+      isFilled: boolean;
+      categoryName: string;
+      tokens: number;
+      percentage: number;
+      squareFullness: number;
+    }>
+  >;
   model: string;
   memoryFiles: Array<{ path: string; type: string; tokens: number }>;
   mcpTools: Array<{ name: string; serverName: string; tokens: number; isLoaded?: boolean }>;
@@ -549,7 +592,8 @@ function contextColor(category: { name: string; color?: string }): string {
   const categoryName = category.name;
   if (categoryName === 'Free space') return 'var(--msg-tool-card-border)';
   if (isCssColor(category.color)) return category.color;
-  if (categoryName.includes('buffer') || categoryName.includes('deferred')) return 'var(--text-tertiary)';
+  if (categoryName.includes('buffer') || categoryName.includes('deferred'))
+    return 'var(--text-tertiary)';
   if (categoryName.includes('System prompt')) return 'var(--msg-user-text)';
   if (categoryName.includes('tools')) return 'var(--msg-tool-text)';
   if (categoryName.includes('Messages')) return 'var(--msg-tool-card-chevron)';
@@ -694,7 +738,8 @@ function CompactBoundaryCard({ data }: { data?: Record<string, unknown> }) {
   const stats: string[] = [];
   if (saved > 0) stats.push(t('chat.systemCard.compact.savedTokens', { tokens: fmtTokens(saved) }));
   if (durationMs > 0) stats.push(`${(durationMs / 1000).toFixed(1)}s`);
-  const triggerLabel = trigger === 'manual' ? t('chat.systemCard.compact.manual') : t('chat.systemCard.compact.auto');
+  const triggerLabel =
+    trigger === 'manual' ? t('chat.systemCard.compact.manual') : t('chat.systemCard.compact.auto');
 
   return (
     <div
@@ -736,7 +781,10 @@ function GoalCompleteCard({ data }: { data?: Record<string, unknown> }) {
   const turnsUsed = typeof data?.turnsUsed === 'number' ? data.turnsUsed : 0;
   const elapsedMs = typeof data?.elapsedMs === 'number' ? data.elapsedMs : 0;
   const reason = typeof data?.reason === 'string' ? data.reason : '';
-  const label = t('goal.complete.record', { turns: turnsUsed, duration: fmtGoalDuration(elapsedMs) });
+  const label = t('goal.complete.record', {
+    turns: turnsUsed,
+    duration: fmtGoalDuration(elapsedMs),
+  });
 
   return (
     <div
@@ -768,11 +816,13 @@ function GoalResumedCard({ data }: { data?: { kind?: string } }) {
   //     假恢复通知, 紧接着又是一次容量失败(review #844 codex P1)。
   // 存档里的 kind 仍是 'capacity-resumed'(已落库的卡片按这个值渲染), 只有文案改。
   const label =
-    data?.kind === 'capacity-resumed'
-      ? t('goal.capacityRetryNotice')
-      : t('goal.usageResumeNotice');
+    data?.kind === 'capacity-resumed' ? t('goal.capacityRetryNotice') : t('goal.usageResumeNotice');
   return (
-    <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
+    <div
+      className="flex w-full items-center gap-3 py-2 select-none"
+      role="separator"
+      aria-label={label}
+    >
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-11 text-muted-foreground tabular-nums">
         <Target size={12} className="shrink-0" />
@@ -864,7 +914,11 @@ function AutoResumeSeparator() {
   const { t } = useTranslation();
   const label = t('chat.systemCard.autoResumeSeparator.label');
   return (
-    <div className="flex w-full items-center gap-3 py-2 select-none" role="separator" aria-label={label}>
+    <div
+      className="flex w-full items-center gap-3 py-2 select-none"
+      role="separator"
+      aria-label={label}
+    >
       <div className="h-px flex-1 bg-[var(--msg-tool-card-border)]" />
       <div className="flex shrink-0 items-center gap-1.5 rounded-full border border-[var(--msg-tool-card-border)] bg-background/50 px-2.5 py-1 text-11 text-muted-foreground tabular-nums">
         <RefreshCw size={12} className="shrink-0" />
@@ -1209,6 +1263,64 @@ function ContextRebuildCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
+/**
+ * 个人版制作任务的完成卡片:Agent 调用 cindy_make.report_complete、本轮回复结束后由
+ * Main 落库。整块步骤卡片,与 /cindy-make 弹窗的三步卡同形态;第二阶段的核对、测试与
+ * 打包会作为后续步骤长在这张卡上,当前只有「修改源码」一步。内容全部是代码核实的事实
+ * (改动文件数、基准 commit、完成时间),不含模型自述。
+ */
+function CindyMakeCompleteCard({ data }: { data?: Record<string, unknown> }) {
+  const { t, i18n } = useTranslation();
+  const changedFiles = typeof data?.changedFiles === 'number' ? data.changedFiles : undefined;
+  const commit =
+    typeof data?.commit === 'string' && data.commit ? data.commit.slice(0, 12) : undefined;
+  const reportedAt = typeof data?.reportedAt === 'number' ? data.reportedAt : undefined;
+  const time =
+    reportedAt !== undefined
+      ? new Intl.DateTimeFormat(i18n?.resolvedLanguage ?? i18n?.language, {
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        }).format(reportedAt)
+      : undefined;
+  const branch = typeof data?.branch === 'string' && data.branch ? data.branch : undefined;
+  const meta = [
+    changedFiles !== undefined
+      ? t('cindyMake.complete.changedFiles', { count: changedFiles })
+      : null,
+    branch ? t('cindyMake.complete.branch', { branch }) : null,
+    commit ? t('cindyMake.complete.commit', { commit }) : null,
+    time ?? null,
+  ].filter((part): part is string => typeof part === 'string' && part.length > 0);
+
+  return (
+    <section
+      className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      aria-label={t('cindyMake.complete.title')}
+    >
+      <div className="flex items-start gap-3 px-4 py-4">
+        <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-[var(--surface-chip)]">
+          <Check size={18} className="text-[var(--status-success)]" aria-hidden />
+        </div>
+        <div className="min-w-0 flex-1">
+          <p className="text-16 font-medium">{t('cindyMake.complete.title')}</p>
+          <p className="mt-0.5 text-13 text-[var(--text-secondary)]">
+            {t('cindyMake.complete.description')}
+          </p>
+        </div>
+      </div>
+      <div className="border-t border-[var(--border-default)] px-4 py-3">
+        <p className="flex items-center gap-2 font-medium">
+          <Check size={14} className="shrink-0 text-[var(--status-success)]" aria-hidden />
+          <span>{t('cindyMake.complete.stepCode')}</span>
+        </p>
+        {meta.length > 0 && (
+          <p className="mt-1 pl-6 text-12 text-[var(--text-secondary)]">{meta.join(' · ')}</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 const REVIEW_FAILURE_I18N_KEY: Record<ReviewFailureCode, string> = {
   'no-visible-result': 'chat.systemCard.review.noResult',
   'reviewer-closed': 'chat.systemCard.review.failure.reviewerClosed',
@@ -1322,6 +1434,8 @@ export function SystemCard({
       return <GoalCompleteCard data={data} />;
     case 'goal-resumed':
       return <GoalResumedCard data={data as { kind?: string } | undefined} />;
+    case 'cindy-make-complete':
+      return <CindyMakeCompleteCard data={data} />;
     case 'auto-resume': {
       // 同一个卡类型承载两套自愈:带中断上下文的是本份的「重连」记录,没有的是 silent-stop
       // 的「已自动继续」分隔条 —— 后者保持原形态原文案,不被重连三态改写(copilot review)。

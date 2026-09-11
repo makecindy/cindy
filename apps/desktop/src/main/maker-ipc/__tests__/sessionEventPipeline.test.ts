@@ -430,35 +430,23 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
-  it('records context after status delivery and preserves Pi runtime context windows', async () => {
-    const h = harness();
-    Object.defineProperty(h.session, 'agentKind', { value: 'pi' });
-    effects.fn('resolveVerifiedContextWindow').mockReturnValue(99999);
-    h.emit(
-      event(
-        'status',
-        { isRunning: false, status: 'Done', contextTokens: 50, contextWindow: 12345 },
-        { source: 'pi' },
-      ),
-    );
-    ordered('broadcast', 'recordSessionContextSnapshot');
-    expect(effects.fn('recordSessionContextSnapshot')).toHaveBeenCalledWith('task', 50, 12345);
-    await h.dispose();
-  });
-
-  it('prefers the verified context window for a non-Pi session', async () => {
-    const h = harness();
-    effects.fn('resolveVerifiedContextWindow').mockReturnValue(99999);
-    h.emit(
-      event(
-        'status',
-        { isRunning: false, status: 'Done', contextTokens: 50, contextWindow: 12345 },
-        { source: 'claude-code' },
-      ),
-    );
-    expect(effects.fn('recordSessionContextSnapshot')).toHaveBeenCalledWith('task', 50, 99999);
-    await h.dispose();
-  });
+  it.each(['pi', 'claude-code', 'codex'] as const)(
+    'records the applied %s context after status delivery without catalog substitution',
+    async (agentKind) => {
+      const h = harness();
+      Object.defineProperty(h.session, 'agentKind', { value: agentKind });
+      effects.fn('resolveVerifiedContextWindow').mockReturnValue(1_050_000);
+      for (const contextWindow of [1_000, 32_000, 500_000]) {
+        h.emit(event('status', {
+          isRunning: false, status: 'Done', contextTokens: 6_000, contextWindow,
+        }, { source: agentKind }));
+        ordered('broadcast', 'recordSessionContextSnapshot');
+        expect(effects.fn('recordSessionContextSnapshot'))
+          .toHaveBeenLastCalledWith('task', 6_000, contextWindow);
+      }
+      await h.dispose();
+    },
+  );
 
   it('keeps a retryable error running without resetting persistence', async () => {
     const h = harness();

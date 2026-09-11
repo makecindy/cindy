@@ -3034,6 +3034,38 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('markDevicesOffline sweeps a wave with a single notification', () => {
+    const deviceIds = ['dev-a', 'dev-b', 'dev-c'];
+    deviceIds.forEach((id, i) => {
+      remoteSessionStore.setDeviceSessions(id, `Mac-${i}`, [session(`s-${id}`)]);
+    });
+    for (const id of deviceIds) {
+      pushMakerStatus(`s-${id}`, {
+        isRunning: true,
+        outputTokens: 12,
+        generationDurationMs: 400,
+        generationActive: true,
+        generationReliable: true,
+      });
+    }
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+
+    remoteSessionStore.markDevicesOffline(deviceIds);
+
+    // 整波只 notify 一轮;逐台 markDeviceOffline 会 notify N 轮,叠加 schedule
+    // store 的逐台失效后在设备多时击穿 React 嵌套上限(2026-09-10)。
+    expect(notify).toHaveBeenCalledTimes(1);
+    for (const id of deviceIds) {
+      expect(remoteSessionStore.isSessionMakerTurnRunning(`s-${id}`)).toBe(false);
+    }
+
+    // 清理已生效:同批重复离线无变化、静默。
+    remoteSessionStore.markDevicesOffline(deviceIds);
+    expect(notify).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
   it('still zeros leftover live metrics when a new turn starts without them', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     pushMakerStatus('s1', {

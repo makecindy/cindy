@@ -7,6 +7,12 @@ import {
 } from "../remoteDesktop";
 import { REMOTE_INVOKE_ALLOWLIST, PUSH_FORWARD_ALLOWLIST } from "../allowlist";
 describe("remote desktop wire boundary", () => {
+  it("preserves legacy stop and accepts only a boolean explicit lock request", () => {
+    expect(parseRemoteDesktopRequest({ op: "stop", lease: "a" })).toEqual({ op: "stop", lease: "a" });
+    expect(parseRemoteDesktopRequest({ op: "stop", lease: "a", lockScreen: true })).toEqual({ op: "stop", lease: "a", lockScreen: true });
+    for (const lockScreen of ["true", 1, null, {}])
+      expect(() => parseRemoteDesktopRequest({ op: "stop", lease: "a", lockScreen })).toThrow("INVALID_REQUEST");
+  });
   it("accepts old starts and validates the optional recovery flag", () => {
     expect(parseRemoteDesktopRequest({ op: "start", displayId: "1" })).toEqual({
       op: "start",

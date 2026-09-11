@@ -42,6 +42,20 @@ describe('Make upstream step', () => {
     checks: MAKE_DOCTOR_CHECK_IDS.map((id) => ({ id, status: 'passed' })),
     upstream: { status: 'notFound', items: [] },
   };
+  it('hides the numbered environment step when Settings renders the environment alone', () => {
+    render(
+      <MakeDoctorReportCard
+        report={ready}
+        showSteps={false}
+        showSource={false}
+        onStop={vi.fn()}
+        onRecheck={vi.fn()}
+      />,
+    );
+    expect(screen.queryByText('cindyMake.stepEnvironment')).toBeNull();
+    expect(screen.getByRole('button', { name: 'cindyMakeDoctor.details' })).toBeTruthy();
+  });
+
   it('keeps details left-aligned below environment and the three steps in execution order', () => {
     const choose = vi.fn();
     render(

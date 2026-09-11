@@ -889,8 +889,19 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
   return entries;
 }
 
+function remoteCredentialSwiftEntry() {
+  return bundledComponent({
+    name: "JOSESwift",
+    version: "3.0.0",
+    license: "Apache-2.0",
+    url: "https://github.com/airsidemobile/JOSESwift/tree/3.0.0",
+    licenseText: readBundledLicense("packages/remote-credentials-native/LICENSE.JOSESwift"),
+  });
+}
+
 function buildMacEntries() {
   return [
+    remoteCredentialSwiftEntry(),
     // agent-island Swift helper 中的 NotchShape 轮廓与 SpriteMascotConfig 皮肤
     // 参数改编自 Code Island(见 macos-agent-island-helper.swift 内注释)。
     bundledComponent({
@@ -932,6 +943,7 @@ function buildMobileEntries(apacheText, platform) {
   ];
   if (platform === "ios") {
     entries.push(
+      remoteCredentialSwiftEntry(),
       bundledComponent({
         name: "TapTapSDK/Core",
         version: "4.10.5",
@@ -942,6 +954,20 @@ function buildMobileEntries(apacheText, platform) {
     );
   } else {
     entries.push(
+      bundledComponent({
+        name: "com.nimbusds:nimbus-jose-jwt",
+        version: "10.9.1",
+        license: "Apache-2.0",
+        url: "https://bitbucket.org/connect2id/nimbus-jose-jwt",
+        licenseText: apacheText,
+      }),
+      bundledComponent({
+        name: "androidx.biometric:biometric",
+        version: "1.1.0",
+        license: "Apache-2.0",
+        url: "https://developer.android.com/jetpack/androidx/releases/biometric",
+        licenseText: apacheText,
+      }),
       bundledComponent({
         name: "com.taptap.sdk:tap-core and declared TapTap modules",
         version: "4.10.5",

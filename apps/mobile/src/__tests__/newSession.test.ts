@@ -1293,7 +1293,7 @@ describe('new session model', () => {
       model: 'claude-sonnet-4-6',
     }, 'Carol Mac')).toMatchObject({
       title: '准备创建并发送',
-      subtitle: '确认后会在被控设备创建任务，并把首条消息加入队列。',
+      subtitle: '确认后会在远程设备创建任务，并把首条消息加入队列。',
       details: [
         '设备：Carol Mac',
         '位置：对话工作区',

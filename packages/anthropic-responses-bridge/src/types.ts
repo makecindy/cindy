@@ -226,7 +226,7 @@ export interface BridgeProviderConfig {
    * 上游响应头里的 `x-ratelimit-*` 限流信息(标准 OpenAI 风格,api.x.ai 返回;codex 后端不返)。
    * 每个成功上游响应解析后回调一次;缺头 → 不回调。回调抛错被吞(不影响流转发)。
    */
-  onRateLimit?: (info: UpstreamRateLimitInfo) => void;
+  onRateLimit?: (info: UpstreamRateLimitInfo, requestHeaders: Readonly<Record<string, string>>) => void;
 }
 
 /** 上游 `x-ratelimit-*` 响应头解析结果(仅数值可解析的字段;全 undefined 时不回调)。 */

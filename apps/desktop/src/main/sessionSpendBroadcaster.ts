@@ -243,11 +243,12 @@ export async function recordSessionContextSnapshot(
   const ownerScope = captureOwnerScope();
   try {
     const db = getDbClient().drizzle;
-    const updates: { contextTokens: number; contextWindow?: number } = {
+    const updates: { contextTokens: number; contextWindow?: number; contextWindowRuntime?: number } = {
       contextTokens: Math.floor(contextTokens),
     };
     if (Number.isFinite(contextWindow) && contextWindow > 0) {
       updates.contextWindow = Math.floor(contextWindow);
+      updates.contextWindowRuntime = updates.contextWindow;
     }
     await db
       .update(sessions)

@@ -102,6 +102,25 @@ function columnNames(db: Database.Database, tableName: string): string[] {
 }
 
 describeMigrationReplay('migration replay', () => {
+  it('adds runtime provenance without certifying or changing legacy context values', () => {
+    const { db, cleanup } = createTempDb();
+    const stagedDir = mkdtempSync(path.join(tmpdir(), 'cindy-context-provenance-'));
+    try {
+      db.exec(`CREATE TABLE migration_meta (key TEXT PRIMARY KEY NOT NULL, value TEXT NOT NULL);
+        CREATE TABLE sessions (id TEXT PRIMARY KEY, context_tokens INTEGER, context_window INTEGER);
+        INSERT INTO sessions VALUES ('legacy', 140500, 1050000);`);
+      const migration = listMigrations(drizzleDir()).find((item) => item.fileName.endsWith('_context_window_runtime.sql'))!;
+      copyFileSync(migration.sqlPath, path.join(stagedDir, migration.fileName));
+      runMigrationReplay(db, { drizzleDir: stagedDir, currentVersion: migration.seq - 1 });
+      expect(db.prepare('SELECT * FROM sessions').get()).toEqual({
+        id: 'legacy', context_tokens: 140500, context_window: 1050000, context_window_runtime: null,
+      });
+    } finally {
+      rmSync(stagedDir, { recursive: true, force: true });
+      cleanup();
+    }
+  });
+
   it.each(['missing table', 'legacy table', 'existing column'] as const)(
     'replays the scheduled Harness migration safely with %s',
     (state) => {

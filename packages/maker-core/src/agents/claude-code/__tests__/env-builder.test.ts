@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import type { AuthAdapter, AuthAdapterOptions } from '../../../interfaces/auth-adapter.js';
 import type { AgentRuntimeConfig } from '../../../interfaces/runtime-config.js';
 import {
   EXPLORE_INHERIT_CAP_DISABLE_ENV,
@@ -107,6 +107,47 @@ describe('buildClaudeEnv', () => {
 
     expect(getAuthEnv).toHaveBeenCalledWith({ credentialMode: 'gateway-key' });
     expect(env.ANTHROPIC_API_KEY).toBe('key');
+  });
+
+  it.each(['local', 'remote'] as const)('passes the selected subscription account into %s auth', async (mode) => {
+    const getAuthEnv = vi.fn(async (options?: AuthAdapterOptions) => ({
+      CLAUDE_CODE_OAUTH_TOKEN: `test-token-${options?.providerId ?? 'wrong-account'}`,
+    }));
+    const auth = { ...createAuthAdapter(), getAuthEnv };
+    for (const providerId of ['anthropic-a', 'anthropic-b']) {
+      const env = await buildClaudeEnv(auth, {}, {
+        credentialMode: 'provider-oauth', sessionProviderId: providerId, mode,
+      });
+      expect(getAuthEnv).toHaveBeenLastCalledWith({ credentialMode: 'provider-oauth', providerId });
+      expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`test-token-${providerId}`);
+      expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+    }
+  });
+
+  it('keeps a remote gateway fallback independent of the selected subscription account', async () => {
+    const getAuthEnv = vi.fn(async (options?: AuthAdapterOptions): Promise<Record<string, string>> =>
+      options?.providerId
+        ? { CLAUDE_CODE_OAUTH_TOKEN: 'test-token-must-not-reach-gateway' }
+        : { ANTHROPIC_API_KEY: 'test-gateway-key' },
+    );
+    const env = await buildClaudeEnv({ ...createAuthAdapter(), getAuthEnv }, {}, {
+      credentialMode: 'gateway-key', sessionProviderId: 'anthropic-a', mode: 'remote',
+    });
+    expect(getAuthEnv).toHaveBeenCalledWith({ credentialMode: 'gateway-key' });
+    expect(env.ANTHROPIC_API_KEY).toBe('test-gateway-key');
+    expect(env.CLAUDE_CODE_OAUTH_TOKEN).toBeUndefined();
+  });
+
+  it('does not inherit another Claude account refresh identity from the parent process', async () => {
+    const previous = process.env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID;
+    process.env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID = 'anthropic-parent';
+    try {
+      const env = await buildClaudeEnv(createAuthAdapter({ CLAUDE_CODE_OAUTH_TOKEN: 'test-native-token' }), {});
+      expect(env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID;
+      else process.env.CINDY_CLAUDE_ACCOUNT_PROVIDER_ID = previous;
+    }
   });
 
   it('evaluates function-form behaviorFlags with the spawn route context', async () => {

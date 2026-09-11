@@ -44,9 +44,9 @@
     "viewOnly": "보기 전용",
     "upgrade": "컴퓨터의 Cindy를 업데이트하세요.",
     "disabled": "컴퓨터의 설정 → 원격 제어에서 원격 데스크톱을 켜주세요.",
-    "busy": "데스크톱 입력을 사용 중입니다. 다른 기기의 제어를 해제하거나 Agent 작업이 끝날 때까지 기다리세요.",
+    "busy": "다른 기기 또는 Agent가 컴퓨터를 사용 중입니다. 다른 기기에서 제어를 중지하거나 Agent의 작업이 끝날 때까지 기다리세요.",
     "connectionError": "연결이 종료되었습니다. 컴퓨터가 온라인인지 확인하고 다시 연결하세요.",
-    "releaseControl": "제어 해제",
+    "releaseControl": "제어 중지",
     "takeControl": "제어 시작",
     "pointer": "트랙패드",
     "touch": "터치",
@@ -1413,7 +1413,7 @@
           "description": "켜면 Codex가 구독 대신 모델 제공자의 Cindy AI Key를 사용합니다.",
           "noKey": "Cindy AI Key가 설정되지 않았습니다 — 모델 제공자에서 Cindy AI를 연결하세요",
           "noKeyDialog": {
-            "title": "API Key가 설정되지 않았습니다",
+            "title": "API key가 설정되지 않았습니다",
             "description": "API 모드는 Cindy AI Key를 재사용하지만 아직 설정되지 않았습니다. 모델 제공자에서 Cindy AI를 연결하면 활성화할 수 있습니다."
           },
           "badge": {
@@ -1431,25 +1431,25 @@
       "xai": {
         "logoutConfirm": {
           "title": "xAI(SuperGrok) 연결을 해제할까요?",
-          "description": "연결을 해제하면 이 기기에 저장된 xAI 인증 정보가 삭제됩니다. 다시 인증하기 전까지 Grok 모델을 선택한 세션은 사용할 수 없습니다.",
+          "description": "Cindy에서 이 Grok 구독을 사용할 수 없게 됩니다.",
           "confirm": "연결 해제",
           "cancel": "취소"
         },
         "toast": {
-          "loggedIn": "xAI(SuperGrok)에 로그인했습니다",
-          "loggedOut": "xAI 연결을 해제했습니다",
-          "loginFailed": "인증에 실패했습니다. 다시 시도해 주세요",
-          "logoutFailed": "연결 해제에 실패했습니다. 다시 시도해 주세요"
+          "loggedIn": "Grok에 로그인했습니다",
+          "loggedOut": "Grok 연결을 해제했습니다",
+          "loginFailed": "Grok에 로그인하지 못했습니다. 다시 시도하세요.",
+          "logoutFailed": "Grok 연결을 해제하지 못했습니다. 다시 시도하세요."
         }
       },
       "claude": {
         "subtitle": {
-          "authorizing": "인증 중(브라우저)…",
-          "authorized": "Claude.ai 구독 · 인증됨",
-          "unauthorized": "미인증 (「인증」을 클릭해 Claude.ai 로그인)"
+          "authorizing": "로그인 중…",
+          "authorized": "Claude 구독 · 연결됨",
+          "unauthorized": "연결 안 됨"
         },
         "button": {
-          "authorize": "인증"
+          "authorize": "로그인"
         },
         "badge": {
           "api": "● API",
@@ -1457,17 +1457,17 @@
         },
         "logoutConfirm": {
           "title": "Claude.ai 구독을 해제할까요?",
-          "description": "해제하면 이 기기의 Claude Code 로그인 자격 증명이 삭제됩니다(로컬 `claude` CLI도 함께 로그아웃됩니다). 현재 구독 모드라면 자동으로 Cindy AI로 되돌아갑니다. 복원하려면 다시 인증해야 합니다.",
-          "confirm": "해제",
+          "description": "Cindy에서 이 Claude 구독을 사용할 수 없게 됩니다.",
+          "confirm": "연결 해제",
           "cancel": "취소"
         },
         "toast": {
-          "loggedIn": "Claude.ai 구독에 로그인했습니다",
-          "loggedOut": "Claude.ai 구독을 해제했습니다",
-          "loginFailed": "인증에 실패했습니다. 다시 시도하세요",
-          "logoutFailed": "연결 해제에 실패했습니다. 다시 시도하세요",
+          "loggedIn": "Claude에 로그인했습니다",
+          "loggedOut": "Claude 연결을 해제했습니다",
+          "loginFailed": "Claude에 로그인하지 못했습니다. 다시 시도하세요.",
+          "logoutFailed": "Claude 연결을 해제하지 못했습니다. 다시 시도하세요.",
           "notSubscription": "이 계정에는 Claude 구독(Pro/Max)이 없어 구독 모드를 사용할 수 없습니다",
-          "needAuth": "먼저 Claude.ai에 로그인 인증하세요"
+          "needAuth": "먼저 Claude에 로그인하세요"
         },
         "apiMode": {
           "label": "API 모드 (Cindy AI 경유)",
@@ -1475,7 +1475,7 @@
           "toggleAria": "Claude API 모드 전환",
           "sharedKeyWarning": "Cindy AI와 Key를 공유 — API 모드를 꺼도 Claude 외 모델에는 Cindy AI가 필요합니다",
           "noKeyDialog": {
-            "title": "API Key가 설정되지 않음",
+            "title": "API key가 설정되지 않음",
             "description": "API 모드를 끄면(구독) Claude 외 모델(gpt / deepseek 등)에는 Cindy AI Key를 재사용하지만 아직 설정되지 않았습니다. 모델 제공자에서 Cindy AI를 연결하세요."
           },
           "toast": {
@@ -1499,11 +1499,12 @@
         "disconnected": "연결되지 않음",
         "connecting": "연결 중…",
         "rename": "이름 변경",
-        "suspended": "비활성화됨"
+        "suspended": "비활성화됨",
+        "unconfigured": "설정 안 됨"
       },
       "button": {
-        "authorize": "인증",
-        "logout": "로그아웃",
+        "authorize": "로그인",
+        "logout": "연결 해제",
         "connect": "연결",
         "disconnect": "연결 해제",
         "cancel": "취소",
@@ -1520,13 +1521,13 @@
         "title": "OpenAI",
         "subtitle": "하나의 ChatGPT 계정을 Codex와 Claude에서 함께 사용",
         "modelLabel": "GPT 모델",
-        "reconnectRequired": "다시 연결 필요",
-        "connect": "ChatGPT 연결",
-        "reconnect": "ChatGPT 다시 연결",
-        "cancelConnect": "연결 취소",
+        "reconnectRequired": "다시 로그인",
+        "connect": "로컬 Codex 계정 사용",
+        "reconnect": "다시 로그인",
+        "cancelConnect": "취소",
         "accountSource": {
           "local": "로컬 Codex 계정",
-          "oauth": "별도로 로그인한 계정",
+          "oauth": "별도 계정",
           "unknown": "기존 OpenAI 연결"
         },
         "useLocalAccount": "로컬 Codex 계정 사용",
@@ -1596,19 +1597,19 @@
       },
       "custom": {
         "tag": "사용자 지정",
-        "editAria": "편집",
+        "editAria": "연결 설정 편집",
         "deleteAria": "삭제",
         "save": "저장",
         "cancel": "취소",
         "dialog": {
           "createTitle": "사용자 지정 제공자 추가",
-          "editTitle": "사용자 지정 제공자 편집",
+          "editTitle": "연결 설정 편집",
           "desc": "OpenAI / Anthropic 호환 제공자를 구성합니다."
         },
         "imageGenerationReload": {
           "title": "Codex 다시 로드",
-          "description": "이 이미지 생성 설정을 저장하려면 Codex를 다시 로드해야 하며 현재 실행 중인 Codex 작업이 중단됩니다.",
-          "interrupt": "저장하고 중지",
+          "description": "이 변경 사항을 적용하려면 Codex를 다시 로드해야 하며 현재 실행 중인 Codex 작업이 중단됩니다.",
+          "interrupt": "계속하고 작업 중지",
           "cancel": "취소",
           "close": "닫기"
         },
@@ -1702,8 +1703,8 @@
           "deleteFailed": "삭제 실패"
         },
         "deleteConfirm": {
-          "title": "사용자 지정 제공자를 삭제할까요?",
-          "description": "\"{{name}}\"의 설정과 로컬에 저장된 키를 삭제합니다. 사용 중인 세션은 기본 소스로 되돌아갑니다.",
+          "title": "제공자를 삭제할까요?",
+          "description": "Cindy에서 “{{name}}”을 사용할 수 없게 됩니다. 메시지 기록은 유지되며 나중에 다시 추가할 수 있습니다.",
           "confirm": "삭제",
           "cancel": "취소"
         },
@@ -1734,10 +1735,10 @@
         "authMode": {
           "label": "인증 방식",
           "apiKey": "API 키",
-          "oauth": "OAuth 구독 인증",
+          "oauth": "구독 계정",
           "none": "인증 없음",
           "noneHelp": "로컬 또는 신뢰할 수 있는 자체 호스팅 프록시용입니다. Cindy는 전달 전에 CLI의 구독 자격 증명과 계정 헤더를 제거합니다.",
-          "oauthHelp": "OAuth 로그인을 제공하는 제공자용입니다. 브라우저 콜백 또는 기기 코드 방식을 선택하고 저장한 뒤 제공자 목록에서 인증하세요. 인증 정보는 이 기기에만 암호화되어 저장됩니다.",
+          "oauthHelp": "OAuth 로그인을 지원하는 제공자용입니다. 브라우저 또는 기기 코드 방식을 선택한 후 저장하고 제공자 목록에서 로그인하세요. 자격 증명은 이 기기에 저장됩니다.",
           "flowLabel": "OAuth 흐름",
           "flow": {
             "authorization-code": "브라우저 콜백 (PKCE)",
@@ -1750,7 +1751,7 @@
             "clientId": "Client ID",
             "scopes": "Scopes(공백 구분)"
           },
-          "modelsAutoNote": "모델 목록은 인증 완료 후 자동으로 가져오므로 직접 입력할 필요가 없습니다."
+          "modelsAutoNote": "로그인 후 사용 가능한 모델을 자동으로 가져옵니다"
         },
         "advanced": {
           "label": "고급 설정 (모델 / 요청 헤더)"
@@ -1840,7 +1841,7 @@
         "paymentRequired": "유료",
         "paymentUnlock": "유료로 잠금 해제",
         "enableModel": "이 모델 활성화",
-        "capabilityGroupHint": "대화 모델 선택에는 표시되지 않으며, 이미지 생성 등 기능에서만 사용됩니다.",
+        "capabilityGroupHint": "대화 모델 선택에는 표시되지 않습니다. 스위치로 이미지·영상 기능 노출을 제어합니다.",
         "accessWriteFailed": "변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.",
         "visibilityWriteFailed": "모델 표시 설정을 저장하지 못했습니다. 다시 시도해 주세요. 문제가 계속되면 Cindy를 다시 시작해 주세요.",
         "disabledGroup": "비활성화됨",
@@ -1924,7 +1925,7 @@
           "close": "닫기",
           "maxOutput": "최대 출력",
           "catalogCapabilities": "카탈로그에 명시된 기능",
-          "contextInvalid": "1–100,000 K 범위의 정수를 입력하세요.",
+          "contextInvalid": "{{min}}–100,000 K 범위의 정수를 입력하세요.",
           "contextWriteFailed": "저장되지 않았습니다. 다시 시도하세요.",
           "contextMixed": "실행 환경별 설정이 다릅니다. 변경하거나 초기화하면 모두에 적용됩니다.",
           "inputModalities": "입력 형식",
@@ -1978,24 +1979,24 @@
         }
       },
       "genericOAuth": {
-        "subtitle": "구독 인증 로그인 (OAuth)",
+        "subtitle": "구독 계정",
         "toast": {
           "loggedIn": "{{name}}에 로그인했습니다",
-          "loginFailed": "{{name}} 로그인에 실패했습니다. 다시 시도하세요",
-          "loggedOut": "{{name}}에서 로그아웃했습니다",
-          "logoutFailed": "{{name}} 로그아웃에 실패했습니다"
+          "loginFailed": "{{name}}에 로그인하지 못했습니다. 다시 시도하세요.",
+          "loggedOut": "{{name}} 연결을 해제했습니다",
+          "logoutFailed": "{{name}} 연결을 해제하지 못했습니다. 다시 시도하세요."
         },
         "logoutConfirm": {
-          "title": "{{name}}에서 로그아웃할까요?",
-          "description": "로그아웃하면 이 공급원의 모델을 사용할 수 없습니다. 언제든지 다시 로그인할 수 있습니다.",
-          "confirm": "로그아웃",
+          "title": "“{{name}}” 연결을 해제할까요?",
+          "description": "Cindy에서 “{{name}}”을 사용할 수 없게 됩니다. 제공자는 유지되며 나중에 다시 연결할 수 있습니다.",
+          "confirm": "연결 해제",
           "cancel": "취소"
         }
       },
       "addProvider": "제공자 추가",
       "detail": {
         "singleAgentNote": "{{agent}} 전용",
-        "emptyModels": "인증하면 사용 가능한 모델이 자동으로 검색됩니다",
+        "emptyModels": "로그인 후 사용 가능한 모델을 자동으로 가져옵니다",
         "emptyList": "왼쪽 아래 '제공자 추가'에서 첫 모델 소스를 연결하세요",
         "emptyModelsConnected": "연결됨 — 사용 가능한 모델을 검색하는 중입니다. 계속 비어 있으면 잠시 후 다시 시도해 주세요.",
         "discoveryFailed": {
@@ -2003,7 +2004,7 @@
           "timeout": "이 제공자 연결이 시간 초과되어 모델 목록을 가져오지 못했습니다. 네트워크를 확인한 후 다시 시도하세요.",
           "upstream": "이 제공자가 지금은 모델 목록을 반환할 수 없습니다. 잠시 후 다시 시도하세요.",
           "regionBlocked": "이 제공자는 현재 지역에서 서비스를 제공하지 않아 모델 목록을 가져오지 못했습니다. 다른 제공자를 사용하세요.",
-          "unauthorized": "이 제공자가 현재 인증을 거부하여 모델 목록을 가져오지 못했습니다. 연결을 해제한 후 다시 연결하세요.",
+          "unauthorized": "현재 로그인 또는 API key가 거부되어 모델 목록을 가져올 수 없습니다. 다시 로그인하거나 API key를 업데이트하세요.",
           "forbidden": "이 제공자가 요청을 거부하여 모델 목록을 가져오지 못했습니다. 프록시나 VPN을 사용 중이라면 출구를 바꾼 후 다시 시도하세요.",
           "rejected": "이 제공자가 요청을 거부하여 모델 목록을 가져오지 못했습니다. 잠시 후 다시 시도하거나 다른 제공자를 사용하세요.",
           "empty": "이 제공자가 사용 가능한 모델을 반환하지 않았습니다. 계정 권한을 확인한 후 다시 시도하세요."
@@ -2013,7 +2014,7 @@
           "timeout": "이 제공자 연결이 시간 초과되었습니다. 아래는 마지막으로 가져온 모델 목록입니다. 네트워크를 확인한 후 다시 시도하세요.",
           "upstream": "이 제공자가 지금은 모델 목록을 반환할 수 없습니다. 아래는 마지막으로 가져온 목록입니다. 잠시 후 다시 시도하세요.",
           "regionBlocked": "이 제공자는 현재 지역에서 서비스를 제공하지 않습니다. 아래는 마지막으로 가져온 모델 목록입니다. 다른 제공자를 사용하세요.",
-          "unauthorized": "이 제공자가 현재 인증을 거부했습니다. 아래는 마지막으로 가져온 모델 목록입니다. 연결을 해제한 후 다시 연결하세요.",
+          "unauthorized": "현재 로그인 또는 API key가 거부되었습니다. 아래는 이전 모델 목록입니다. 다시 로그인하거나 API key를 업데이트하세요.",
           "forbidden": "이 제공자가 요청을 거부했습니다. 아래는 마지막으로 가져온 모델 목록입니다. 프록시나 VPN을 사용 중이라면 출구를 바꾼 후 다시 시도하세요.",
           "rejected": "이 제공자가 요청을 거부했습니다. 아래는 마지막으로 가져온 목록입니다. 잠시 후 다시 시도하거나 다른 제공자를 사용하세요.",
           "empty": "이번에는 이 제공자가 사용 가능한 모델을 반환하지 않았습니다. 아래는 마지막으로 가져온 목록입니다. 계정 권한을 확인한 후 다시 시도하세요."
@@ -2023,8 +2024,8 @@
       },
       "detect": {
         "groupLabel": "이 기기에서 감지됨",
-        "action": "인증하기",
-        "hintLoggedIn": "{{cli}}이(가) 이 기기에 로그인되어 있습니다. 인증하여 바로 연결할 수 있습니다",
+        "action": "로컬 계정 사용",
+        "hintLoggedIn": "{{cli}}에 로그인되어 있습니다. 로컬 계정을 사용할 수 있습니다.",
         "hintInstalled": "이 기기에 {{cli}}이(가) 설치되어 있습니다"
       },
       "wizard": {
@@ -2037,21 +2038,21 @@
         "searchPlaceholder": "제공자 검색…",
         "groupRecommend": "추천",
         "groupDetectedLocal": "이 컴퓨터에서 감지됨",
-        "groupSubscription": "구독 인증",
+        "groupSubscription": "구독 계정",
         "recommendReason": {
           "has-local-models": "이 컴퓨터에 모델이 있음",
           "machine-capable": "이 컴퓨터에서 로컬 모델을 돌릴 수 있음",
-          "subscription": "구독 인증"
+          "subscription": "구독 계정"
         },
         "groupApiKey": "API 및 자체 호스팅 프록시 · 프리셋은 카탈로그와 함께 업데이트",
         "groupCustom": "사용자 지정",
-        "metaOAuth": "구독 인증",
-        "metaApiKey": "API 키",
+        "metaOAuth": "구독 계정",
+        "metaApiKey": "API key",
         "metaNoAuth": "로컬 / 자체 호스팅 · 인증 없음",
         "customTitle": "사용자 지정 엔드포인트",
         "customMeta": "OpenAI / Anthropic 호환 모델 소스를 연결",
-        "pickHint": "인증 방식은 제공자 정의에 따라 결정됩니다. OAuth 엔드포인트와 기본 URL은 프리셋에 포함되어 직접 입력할 필요가 없습니다.",
-        "oauthDesc": "브라우저에서 구독 인증을 완료합니다. API 키가 필요 없습니다",
+        "pickHint": "연결할 계정이나 서비스를 선택하세요.",
+        "oauthDesc": "브라우저에서 로그인합니다. API key는 필요하지 않습니다.",
         "deviceOAuthDesc": "일회용 기기 코드를 사용해 제공자 인증 페이지에서 인증하세요",
         "authorizeInBrowser": "브라우저에서 인증",
         "authorizeWithDeviceCode": "기기 코드 사용",
@@ -2063,8 +2064,8 @@
         "deviceCodeCopied": "기기 코드가 복사되었습니다",
         "deviceCodeCopyFailed": "기기 코드를 복사하지 못했습니다",
         "verificationPageOpenFailed": "인증 페이지를 열지 못했습니다",
-        "authorizedToast": "{{name}}에 연결되었습니다",
-        "authorizeFailed": "{{name}} 인증에 실패했습니다. 다시 시도해 주세요",
+        "authorizedToast": "{{name}}에 로그인했습니다",
+        "authorizeFailed": "{{name}}에 로그인하지 못했습니다. 다시 시도하세요.",
         "nameLabel": "표시 이름",
         "onlyAgentNote": "이 제공자는 {{agent}}만 지원합니다",
         "endpointLabel": "{{agent}} 기본 URL",
@@ -2087,7 +2088,7 @@
         "finish": "추가 완료",
         "cancel": "취소",
         "useApiKey": "API 키로 연결",
-        "metaOAuthOrApi": "구독 인증 · API 키",
+        "metaOAuthOrApi": "구독 계정 · API key",
         "builtinApiKey": {
           "subtitle": "내 API key로 연결",
           "note": "이 소스는 이미지 생성 모델을 제공하며 대화에는 참여하지 않습니다. API key는 이 기기에만 저장되며(시스템 키체인 암호화) 업로드되지 않습니다."
@@ -2223,7 +2224,7 @@
       },
       "builtinApiKey": {
         "subtitle": "API key 연결",
-        "replaceKey": "key 변경",
+        "replaceKey": "연결 설정 편집",
         "saveKey": "저장",
         "keyPlaceholder": "API key 붙여넣기",
         "toast": {
@@ -2234,7 +2235,7 @@
         },
         "disconnectConfirm": {
           "title": "{{name}} 연결을 해제할까요?",
-          "description": "연결을 해제하면 이 기기에 저장된 API key가 삭제되며 이 소스의 모델을 사용할 수 없게 됩니다. 언제든지 다시 추가할 수 있습니다.",
+          "description": "이 연결에 저장된 API key를 지웁니다. 제공자는 유지되며 API key를 입력하면 다시 사용할 수 있습니다.",
           "confirm": "연결 해제",
           "cancel": "취소"
         }
@@ -2249,6 +2250,10 @@
         "codexPlanFallback": "ChatGPT 구독",
         "codexSecondary": "보조 한도 {{percent}}% 남음",
         "codexResetCredits": "한도 초기화 크레딧 {{count}}장"
+      },
+      "localAccount": {
+        "useClaude": "로컬 Claude Code 계정 사용",
+        "unavailable": "사용 가능한 로컬 로그인이 없습니다. 해당 앱에 로그인하거나 별도 계정을 추가하세요."
       }
     },
     "experimental": {
@@ -5559,7 +5564,7 @@
       "title": "Cindy Make",
       "openToolsDir": "도구 폴더 열기",
       "source": {
-        "title": "소스 상태",
+        "title": "개인 버전 소스",
         "openDir": "소스 폴더 열기",
         "prepare": "소스 준비",
         "reset": "소스 정리",
@@ -5580,10 +5585,14 @@
         },
         "resetConfirm": {
           "title": "개인 소스를 정리할까요?",
-          "description": "Cindy가 관리하는 소스 디렉터리만 삭제합니다. 필요하면 나중에 소스를 다시 준비할 수 있습니다.",
+          "description": "Cindy가 관리하는 소스 디렉터리를 삭제합니다. 개인 버전 브랜치와 아직 패키징하지 않은 모든 변경도 함께 삭제됩니다. 필요하면 나중에 소스를 다시 준비할 수 있습니다.",
           "confirm": "소스 정리",
           "cancel": "취소"
-        }
+        },
+        "branch": "개인 버전 브랜치",
+        "baseCommit": "기준선",
+        "description": "개인 버전 Cindy의 소스 사본입니다. 개인 버전을 만들 때마다 개인 버전 브랜치에서 독립 작업 디렉터리를 만들고, 테스트를 통과한 변경을 여기로 병합합니다. 이 디렉터리 자체를 직접 수정하지는 않습니다.",
+        "stop": "중지"
       },
       "description": "아래 카드에서 이 컴퓨터의 환경을 확인하고 필요한 휴대용 도구를 설치할 수 있습니다. 네이티브 컴파일 도구가 없으면 공식 설치 안내를 표시합니다.",
       "checking": "환경 확인 중…",
@@ -7072,6 +7081,7 @@
     }
   },
   "sidebar": {
+    "backToSessions": "세션으로 돌아가기",
     "vendorReadiness": {
       "loading": "사용 가능 여부 확인 중",
       "ready": "준비됨",
@@ -7581,7 +7591,7 @@
       "chooseOne": "설정 방법을 하나 선택하세요",
       "restoreAria": "{{name}} 설정 펼치기",
       "minimizeAria": "{{name}} 설정 접기",
-      "completeOnDesktop": "제어 중인 데스크톱에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
+      "completeOnDesktop": "원격 컴퓨터에서 설정을 완료하세요. 이 카드는 자동으로 업데이트됩니다.",
       "cancel": "취소",
       "cancelling": "취소 중…",
       "retry": "다시 시도",
@@ -7968,7 +7978,7 @@
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "협업 모드가 비활성화되어 있습니다. 설정에서 활성화하세요.",
       "unavailableHint": "협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
-      "unsupportedRemoteHint": "제어 대상 기기의 버전이 오래되어 협업을 사용할 수 없습니다.",
+      "unsupportedRemoteHint": "원격 기기의 버전이 오래되어 협업을 사용할 수 없습니다.",
       "remoteContinueNotice": " 이 메시지는 단일 세션으로 계속 전송됩니다.",
       "handoffRecoveredMessage": "지난번 협업 시작이 중단되었습니다. 전송되지 않은 메시지를 입력창에 복원했습니다.",
       "handoffRecoveredGoal": "지난번 협업 시작이 중단되었습니다. 목표가 시작되지 않아 내용을 입력창에 복원했습니다.",
@@ -7989,19 +7999,19 @@
       "errors": {
         "INVALID_PARAMS": "선택한 모델 또는 협업 설정을 사용할 수 없습니다. 다시 선택한 후 재시도하세요.",
         "INVALID_PARAMS_CONTINUE": "선택한 모델 또는 협업 설정을 사용할 수 없습니다. 협업은 시작되지 않았고 이 메시지는 단일 세션으로 계속됩니다. 다시 선택한 후 재시도하세요.",
-        "INVALID_PARAMS_REMOTE": "제어 대상 기기가 선택한 모델 또는 협업 설정을 지원하지 않습니다. 해당 기기에서 사용할 수 있는 모델을 선택한 후 재시도하세요.",
+        "INVALID_PARAMS_REMOTE": "원격 기기가 선택한 모델 또는 협업 설정을 지원하지 않습니다. 해당 기기에서 사용할 수 있는 모델을 선택한 후 재시도하세요.",
         "NO_PROVIDER_FOR_AGENT": "이 기기에 해당 Agent용으로 연결된 모델 Provider가 없습니다. 설정에서 연결한 후 재시도하세요.",
         "NO_PROVIDER_FOR_AGENT_CONTINUE": "이 기기에 해당 Agent용으로 연결된 모델 Provider가 없습니다. 협업은 시작되지 않았고 이 메시지는 단일 세션으로 계속됩니다. 설정에서 연결한 후 재시도하세요.",
-        "NO_PROVIDER_FOR_AGENT_REMOTE": "제어 대상 기기에 해당 Agent용으로 연결된 모델 Provider가 없습니다. 제어 대상 기기에서 연결한 후 재시도하세요.",
+        "NO_PROVIDER_FOR_AGENT_REMOTE": "원격 기기에 해당 Agent용으로 연결된 모델 Provider가 없습니다. 원격 기기에서 연결한 후 재시도하세요.",
         "PROVIDER_ROUTE_UNAVAILABLE": "선택한 Provider와 모델의 경로를 현재 사용할 수 없습니다. 사용 가능한 모델 또는 Provider를 선택한 후 재시도하세요.",
         "PROVIDER_ROUTE_UNAVAILABLE_CONTINUE": "선택한 Provider와 모델의 경로를 현재 사용할 수 없습니다. 협업은 시작되지 않았고 이 메시지는 단일 세션으로 계속됩니다. 사용 가능한 모델 또는 Provider를 선택한 후 재시도하세요.",
-        "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "제어 대상 기기에서 선택한 Provider와 모델의 경로를 사용할 수 없습니다. 해당 기기에서 사용 가능한 경로를 선택한 후 재시도하세요.",
+        "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "원격 기기에서 선택한 Provider와 모델의 경로를 사용할 수 없습니다. 해당 기기에서 사용 가능한 경로를 선택한 후 재시도하세요.",
         "BUDGET_MODEL_REQUIRES_API_MODE": "이 Codex 모델을 사용하려면 API key가 필요합니다. 설정에서 구성한 뒤 다시 시도하세요.",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "이 Codex 모델을 사용하려면 API key가 필요합니다. 협업은 시작되지 않았고 이 메시지는 단일 세션으로 계속됩니다. 설정에서 구성한 뒤 다시 시도하세요.",
-        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "제어 대상 기기에 이 Codex 모델에 필요한 API key가 설정되어 있지 않습니다. 제어 대상 기기에서 설정한 후 재시도하세요.",
+        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "원격 기기에 이 Codex 모델에 필요한 API key가 설정되어 있지 않습니다. 원격 기기에서 설정한 후 재시도하세요.",
         "PRECONDITION_FAILED": "협업 모드가 비활성화되어 있거나 현재 세션에서 협업을 지원하지 않습니다.",
         "PRECONDITION_FAILED_CONTINUE": "협업이 시작되지 않았습니다. 단일 세션으로 계속합니다.",
-        "PRECONDITION_FAILED_REMOTE": "제어 중인 세션에서는 협업을 지원하지 않습니다."
+        "PRECONDITION_FAILED_REMOTE": "원격 세션에서는 협업을 지원하지 않습니다."
       }
     },
     "chatInput": {
@@ -9171,10 +9181,10 @@
       "runningTool": "{{tool}} 실행 중…"
     },
     "remoteSession": {
-      "reconnecting": "제어 대상 기기와 연결이 끊겼습니다. 다시 연결 중…",
-      "hostOffline": "제어 대상 기기가 오프라인이라 지금은 동기화할 수 없습니다",
-      "degraded": "제어 대상 기기와 연결이 불안정합니다. 자동으로 다시 시도 중…",
-      "actionsUnavailable": "제어 대상 기기를 사용할 수 없습니다. 다시 연결한 뒤 이 세션을 변경하세요.",
+      "reconnecting": "원격 기기와 연결이 끊겼습니다. 다시 연결 중…",
+      "hostOffline": "원격 기기가 오프라인이라 지금은 동기화할 수 없습니다",
+      "degraded": "원격 기기와 연결이 불안정합니다. 자동으로 다시 시도 중…",
+      "actionsUnavailable": "원격 기기를 사용할 수 없습니다. 다시 연결한 뒤 이 세션을 변경하세요.",
       "resync": "다시 동기화",
       "loading": "원격 기기에서 세션을 불러오는 중…",
       "suspectStall": "이 턴이 한동안 업데이트되지 않았습니다. 스트림이 끊겼을 수 있습니다",
@@ -9263,8 +9273,8 @@
       "modelSwitchedFastModeOff": "모델이 전환되었으며 Fast Mode가 비활성화되었습니다"
     },
     "remoteDesktopConfirmation": {
-      "title": "제어 대상 컴퓨터에서 확인이 필요합니다",
-      "description": "제어 대상 컴퓨터에서 Cindy를 열어 내용을 검토하고 응답하세요."
+      "title": "원격 컴퓨터에서 확인이 필요합니다",
+      "description": "원격 컴퓨터에서 Cindy를 열어 내용을 검토하고 응답하세요."
     },
     "handoff": {
       "card": {
@@ -9625,7 +9635,7 @@
         "switched": "세션 분기를 전환했습니다",
         "switchedWithDraft": "분기를 전환하고 원래 프롬프트를 입력창에 복원했습니다",
         "runningBlocked": "현재 턴이 끝난 후 분기를 전환할 수 있습니다.",
-        "remoteBlocked": "분기를 전환하기 전에 제어 중인 데스크톱을 다시 연결하거나 업데이트하세요.",
+        "remoteBlocked": "분기를 전환하기 전에 원격 컴퓨터를 다시 연결하거나 업데이트하세요.",
         "filesWarning": "전환은 대화 컨텍스트만 변경하며 작업 파일은 되돌리지 않습니다.",
         "summarize": "떠나는 분기 요약 생성(모델 사용)",
         "summaryFocus": "선택 사항: 요약 초점(예: 오류 처리 결론 유지)",
@@ -12396,7 +12406,8 @@
         "checking": "Git 및 소스 확인 중",
         "cloning": "소스 다운로드 중",
         "fetching": "저장소 새로 고침 중",
-        "checkingOut": "버전 전환 중"
+        "checkingOut": "버전 전환 중",
+        "preparingBranch": "개인 버전 브랜치 준비 중"
       },
       "ready": "소스가 준비되었습니다",
       "failed": "소스 준비 실패",
@@ -12404,12 +12415,14 @@
       "errors": {
         "unsupportedVersion": "현재 버전 형식은 지원되지 않습니다.",
         "tagNotFound": "현재 버전에 필요한 태그를 찾지 못했습니다.",
-        "dirty": "소스 디렉터리에 커밋되지 않은 변경이 있습니다.",
+        "dirty": "소스 디렉터리에 커밋되지 않은 변경이 있습니다. 설정�� Cindy Make에서 소스를 정리한 뒤 다시 시도하세요.",
         "gitFailed": "Git으로 소스를 준비하지 못했습니다.",
         "cancelled": "소스 준비가 중지되었습니다.",
         "localCommits": "소스에 업스트림에 포함되지 않은 로컬 커밋 또는 스태시가 있습니다. 정리하기 전에 보관하거나 백업하세요.",
         "environmentNotReady": "빌드 환경이 준비되지 않았습니다. 필요한 도구를 확인하세요.",
-        "gitUnavailable": "Git을 사용할 수 없습니다. 환경 카드에서 Git을 확인하고 설치한 후 다시 시도하세요."
+        "gitUnavailable": "Git을 사용할 수 없습니다. 환경 카드에서 Git을 확인하고 설치한 후 다시 시도하세요.",
+        "installFailed": "의존성 설치에 실패했습니다. 다시 시도하세요.",
+        "locked": "일부 파일이 다른 프로그램에서 사용 중이라 삭제할 수 없습니다. 해당 프로그램을 닫거나 Cindy를 다시 시작한 뒤 재시도하세요."
       },
       "gitProgress": {
         "counting": "개체 수 계산 중",
@@ -12418,7 +12431,9 @@
         "resolving": "델타 분석 중",
         "checkingOut": "파일 업데이트 중"
       },
-      "missing": "아직 소스가 준비되지 않았습니다"
+      "missing": "아직 소스가 준비되지 않았습니다",
+      "personalBranch": "개인 버전 브랜치 {{branch}}",
+      "baseCommit": "{{ref}} {{commit}} 기준"
     },
     "code": {
       "starting": "개인 버전 작업을 여는 중",
@@ -12426,7 +12441,18 @@
       "failed": "개인 버전 작업을 만들 수 없습니다",
       "start": "개인 버전 만들기",
       "open": "개인 버전 작업 열기",
-      "sendFailed": "요청을 보내지 못했습니다. 개인 버전 작업을 열어 다시 시도하세요"
+      "sendFailed": "요청을 보내지 못했습니다. 개인 버전 작업을 열어 다시 시도하세요",
+      "preparingWorkspace": "독립 작업 디렉터리를 만들고 의존성을 설치하는 중",
+      "workspace": "작업 디렉터리 {{branch}}"
+    },
+    "complete": {
+      "title": "개인 버전 수정이 완료되었습니다",
+      "description": "에이전트가 요청대로 소스 수정을 마쳤습니다.",
+      "stepCode": "소스 수정",
+      "changedFiles_one": "{{count}}개 파일 변경됨",
+      "changedFiles_other": "{{count}}개 파일 변경됨",
+      "commit": "{{commit}} 기준",
+      "branch": "{{branch}}에 커밋됨"
     }
   }
 }
