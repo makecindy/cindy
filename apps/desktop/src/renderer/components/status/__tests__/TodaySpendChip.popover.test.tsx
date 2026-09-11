@@ -126,6 +126,24 @@ vi.mock('@/hooks/useCodexRateLimits', () => ({
     refresh: mocks.refreshCodexRateLimits,
   }),
 }));
+// device-link 远程会话读被控端镜像 hook(#3789);本文件不铺隧道 API,镜像一律返回 null →
+// 远程会话只显示任务用量(与「不混入本机配额」的既有断言同义)。
+vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
+  useRemoteCodexAccountUsage: () => null,
+  requestRemoteCodexAccountRefresh: () => undefined,
+  useRemoteClaudeAccountUsage: () => null,
+  useRemoteXaiSubscriptionUsage: () => null,
+  requestRemoteXaiSubscriptionRefresh: () => undefined,
+  useRemoteXaiRateLimit: () => null,
+  selectRemoteCodexAccountUsage: () => null,
+}));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
+  useRemoteClaudeSubscriptionUsage: () => null,
+  requestRemoteClaudeSubscriptionRefresh: () => undefined,
+}));
+vi.mock('@/hooks/useRemoteClaudeSessionRoute', () => ({
+  useRemoteClaudeSessionRoute: () => null,
+}));
 vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({
   useXaiSubscriptionUsage: (enabled: boolean) => (enabled ? mocks.xaiSnapshot : null),
   requestXaiSubscriptionRefresh: vi.fn(),

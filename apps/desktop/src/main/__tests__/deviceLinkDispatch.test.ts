@@ -32,6 +32,8 @@ import {
   markRemoteSettingPersistedInsideHandler,
   runInvoke,
   setRemoteReviewInputGuard,
+  setRemoteClaudeSubscriptionUsageReader,
+  setRemoteXaiSubscriptionUsageReader,
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
   handleControllerOffline,
@@ -2747,5 +2749,33 @@ describe('远程 set-* 持久化回流', () => {
     registry.register('maker:set-model', () => undefined);
     const r = await runInvoke('ctrl-a', { channel: 'maker:set-model', args: ['sess-1', 'm'] });
     expect(r).toMatchObject({ ok: true });
+  });
+});
+
+
+describe('remote subscription data reads', () => {
+  it.each([
+    ['maker:usage:claude-subscription', setRemoteClaudeSubscriptionUsageReader],
+    ['maker:usage:xai-subscription', setRemoteXaiSubscriptionUsageReader],
+  ] as const)('%s uses the local reader with the selected account after authorization', async (channel, setReader) => {
+    const reader = vi.fn(async () => ({ fiveHour: { utilization: 12 } }));
+    const ipcHandler = vi.fn(() => { throw new Error('Untrusted synthetic sender'); });
+    registry.register(channel, ipcHandler);
+    setReader(reader);
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toEqual({
+      ok: true, result: { providerId: 'account-2', fiveHour: { utilization: 12 } },
+    });
+    expect(reader).toHaveBeenCalledWith('account-2');
+    expect(ipcHandler).not.toHaveBeenCalled();
+    reader.mockClear();
+    await expect(runInvoke('ctrl', { channel, args: [42] })).resolves.toMatchObject({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[INVALID_PARAMS]') } });
+    expect(reader).not.toHaveBeenCalled();
+    remoteControlEnabled = false;
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
+    expect(reader).not.toHaveBeenCalled();
+    remoteControlEnabled = true;
+    revokedControllers = ['ctrl'];
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
+    expect(reader).not.toHaveBeenCalled();
   });
 });
