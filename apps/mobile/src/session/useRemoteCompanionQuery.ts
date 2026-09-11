@@ -98,7 +98,9 @@ export function useRemoteCompanionQuery<T>(
                     identity,
                     binding,
                     value: statuses.map((status) =>
-                      status.ok ? status : (oldStatuses.get(prStatusKey(status)) ?? status),
+                      status.ok || status.reason === 'not-found'
+                        ? status
+                        : (oldStatuses.get(prStatusKey(status)) ?? status),
                     ) as T,
                     error: statuses.some((status) => !status.ok),
                   };

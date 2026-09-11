@@ -167,6 +167,9 @@ function createPrCacheStore(): PrCacheStore {
       const successful = new Map(successfulStatusSnapshots.get(sessionId));
       for (const result of results) {
         if (result.ok) successful.set(prStatusKey(result), result);
+        // A definitive missing/inaccessible PR invalidates its previous success,
+        // including after consumer remount or a later transient failure.
+        else if (result.reason === 'not-found') successful.delete(prStatusKey(result));
       }
       successfulStatusSnapshots.set(sessionId, successful);
       notify();

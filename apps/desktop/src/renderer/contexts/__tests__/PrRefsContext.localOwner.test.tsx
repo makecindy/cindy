@@ -335,3 +335,31 @@ it('marks rejected local push refresh stale and recovers through the existing fo
   unmount();
   focus.mockRestore();
 });
+
+it('invalidates confirmed PR status on not-found across remounts and later transient failures', async () => {
+  mocks.dataOwnerId = 'not-found-owner';
+  mocks.listAllPrRefs.mockResolvedValue([]);
+  const ref = { id: 'pr', sessionId: 'remote-child', owner: 'a', repo: 'b', prNumber: 1,
+    url: 'https://github.com/a/b/pull/1', firstSeenAt: 1, lastSeenAt: 1 };
+  let status: any = { ...ref, ok: true, status: 'merged' };
+  window.electronAPI = {
+    gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+    deviceLink: { invoke: vi.fn(async (_device: string, channel: string) =>
+      channel === 'git-context:pr-refs:list' ? [ref] : [status]) },
+  } as any;
+  const view = (visible: boolean) => <PrRefsProvider>{visible ? <StatusProbe /> : null}</PrRefsProvider>;
+  const { rerender, unmount } = render(view(true));
+  await screen.findByRole('button', { name: 'merged:fresh' });
+  for (const reason of ['not-found', 'fetch-failed', 'no-token']) {
+    status = { ...ref, ok: false, reason };
+    await act(async () => fireEvent.click(screen.getByRole('button')));
+    expect(screen.getByRole('button', { name: 'unknown:stale' })).toBeTruthy();
+    rerender(view(false));
+    rerender(view(true));
+    await screen.findByRole('button', { name: 'unknown:stale' });
+  }
+  status = { ...ref, ok: true, status: 'merged' };
+  await act(async () => fireEvent.click(screen.getByRole('button')));
+  expect(screen.getByRole('button', { name: 'merged:fresh' })).toBeTruthy();
+  unmount();
+});

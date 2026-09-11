@@ -424,6 +424,14 @@ it('keeps the last successful PR icon during an element failure and clears stale
     expect(node.querySelector('[data-testid="merged-pr"]')).not.toBeNull();
     expect(node.textContent).toContain('devices.companions.stale');
   }
+  for (const reason of ['not-found', 'fetch-failed', 'no-token']) {
+    result = { ...ref, ok: false, reason };
+    await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+    expect(node.querySelector('[data-testid="merged-pr"]')).toBeNull();
+  }
+  result = { ...ref, ok: true, status: 'merged' };
+  await act(async () => { await vi.advanceTimersByTimeAsync(90_000); });
+  expect(node.querySelector('[data-testid="merged-pr"]')).not.toBeNull();
   result = { ...ref, ok: true, status: 'open' };
   await act(async () => {
     await vi.advanceTimersByTimeAsync(90_000);
