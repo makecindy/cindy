@@ -4234,6 +4234,7 @@ const registerIpcHandlers = () => {
   // 系统级通知（CC Agent session 完成时弹出 / 可选飞书私聊）
   initNotificationService({
     getWindow: () => getWindow() ?? null,
+    assertTrustedSender: assertTrustedAppRendererEvent,
     feishuIm,
   });
   initWecomGroupNotificationIpc();

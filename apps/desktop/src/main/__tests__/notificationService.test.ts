@@ -24,7 +24,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-type IpcHandler = (event: unknown, payload: unknown) => Promise<void> | void;
+type IpcHandler = (event: unknown, ...args: unknown[]) => Promise<unknown> | unknown;
 
 // 捕获被注册的 IPC handlers。每个用例 freshModule 后重置。
 const registeredHandlers = new Map<string, IpcHandler>();
@@ -155,8 +155,9 @@ async function invokeHandler(payload: unknown): Promise<void> {
 /** mobile 分支是 fire-and-forget 的独立 async 块;断言它之前先把微任务队列排空。 */
 const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-const baseDeps = (feishuIm: FakeFeishuIM) => ({
+const baseDeps = (feishuIm: FakeFeishuIM, assertTrustedSender = vi.fn()) => ({
   getWindow: () => null,
+  assertTrustedSender,
   // 实参在主进程是 FeishuIM, 测试里用结构兼容的 fake 就够 — 仅访问
   // getOwnerOpenId / sendMarkdownText 两个方法。
   feishuIm: feishuIm as unknown as Parameters<
@@ -183,6 +184,18 @@ describe('notificationService — channels 分发', () => {
     expect(() => handler?.({}, 'false')).toThrow(
       'notification desktop enabled must be a boolean',
     );
+  });
+
+  it('sound coordination IPC validates the sender and sound kind', async () => {
+    const { initNotificationService } = await freshService();
+    const assertTrustedSender = vi.fn();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner'), assertTrustedSender));
+
+    const claim = registeredHandlers.get('notification:claim-session-event-sound');
+    expect(claim).toBeDefined();
+    expect(claim?.({}, 'done')).toMatchObject({ status: 'play' });
+    expect(assertTrustedSender).toHaveBeenCalledWith({});
+    expect(() => claim?.({}, 'unknown')).toThrow('invalid notification sound kind');
   });
 
   it('payload.channels 缺省 → 仅桌面 toast (默认契约,防御漏传)', async () => {

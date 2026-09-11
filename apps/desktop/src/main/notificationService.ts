@@ -23,7 +23,14 @@
  * 且额外要求 ownerOpenId 存在（TOFU 绑定前不发，只 warn）。
  */
 
-import { app, ipcMain, nativeImage, Notification, type BrowserWindow } from 'electron';
+import {
+  app,
+  ipcMain,
+  nativeImage,
+  Notification,
+  type BrowserWindow,
+  type IpcMainInvokeEvent,
+} from 'electron';
 import type { FeishuIM } from '@cindy/im';
 import * as path from 'node:path';
 
@@ -32,6 +39,12 @@ import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-lin
 import { latestMessageText } from './localDb/latestMessageText';
 import { drainPersistQueue } from './messagePersistBroadcaster';
 import { createLogger } from './logger';
+import {
+  claimNotificationSound,
+  settleNotificationSound,
+  type NotificationSoundKind,
+} from './notificationSoundCoordinator';
+import { requireBoolean, requireEnum, requireString } from './utils/ipcValidate';
 import {
   getSessionExternalNotificationText,
   getSessionNotificationBody,
@@ -140,6 +153,8 @@ export function showDesktopSessionEvent(
 
 export interface NotificationServiceDeps {
   getWindow: () => BrowserWindow | null;
+  /** Validate that an invoke came from a trusted Cindy top-level renderer. */
+  assertTrustedSender: (event: IpcMainInvokeEvent) => void;
   /**
    * 飞书 IM 实例,用于飞书通道发消息。来源与 scheduler-host/notifier.ts 相同
    * (main/im 模块单例),保证 owner openId 与卡片回执等行为一致。
@@ -148,7 +163,26 @@ export interface NotificationServiceDeps {
 }
 
 export function initNotificationService(deps: NotificationServiceDeps): void {
-  const { getWindow, feishuIm } = deps;
+  const { getWindow, feishuIm, assertTrustedSender } = deps;
+
+  ipcMain.handle('notification:claim-session-event-sound', (event, kind: unknown) => {
+    assertTrustedSender(event);
+    return claimNotificationSound(
+      requireEnum(kind, SESSION_EVENT_SOUND_KINDS, 'notification sound kind'),
+    );
+  });
+
+  ipcMain.handle(
+    'notification:settle-session-event-sound',
+    (event, kind: unknown, token: unknown, started: unknown): void => {
+      assertTrustedSender(event);
+      settleNotificationSound(
+        requireEnum(kind, SESSION_EVENT_SOUND_KINDS, 'notification sound kind'),
+        requireString(token, 'notification sound token'),
+        requireBoolean(started, 'notification sound started'),
+      );
+    },
+  );
 
   ipcMain.handle('notification:set-desktop-enabled', (_event, enabled: unknown) => {
     if (typeof enabled !== 'boolean') {
@@ -224,6 +258,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
 }
 
 const SESSION_EVENT_KINDS: ReadonlySet<string> = new Set(['done', 'error', 'needs-reply']);
+const SESSION_EVENT_SOUND_KINDS = ['done', 'error', 'needs-reply'] as const satisfies readonly NotificationSoundKind[];
 const SESSION_ID_MAX_LENGTH = 256;
 const SESSION_TITLE_MAX_LENGTH = 1024;
 

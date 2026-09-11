@@ -3536,6 +3536,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // kind: 'done' = 真正完成；'error' = 执行失败；'needs-reply' = 等用户回复 ask/permission/plan-review。
   // channels: 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
   // mobile = 手机推送(经 device-link relay 下发 APNs;桌面侧无独立开关,防打扰在 main 收口)。
+  notificationClaimSessionEventSound: (
+    kind: 'done' | 'error' | 'needs-reply',
+  ): Promise<{ status: 'play'; token: string } | { status: 'covered' }> =>
+    ipcRenderer.invoke('notification:claim-session-event-sound', kind),
+  notificationSettleSessionEventSound: (
+    kind: 'done' | 'error' | 'needs-reply',
+    token: string,
+    started: boolean,
+  ): Promise<void> =>
+    ipcRenderer.invoke('notification:settle-session-event-sound', kind, token, started),
   notificationShowSessionEvent: (payload: {
     sessionId: string;
     title: string;

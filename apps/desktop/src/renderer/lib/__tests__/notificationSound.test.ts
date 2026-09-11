@@ -44,6 +44,25 @@ describe('playSessionEventSound', () => {
     expect(audioHarness.pause).not.toHaveBeenCalled();
   });
 
+  it('uses the Main coordinator when the bridge is available', async () => {
+    audioHarness.play.mockResolvedValue(undefined);
+    const claim = vi
+      .fn()
+      .mockResolvedValueOnce({ status: 'play', token: 'token-1' })
+      .mockResolvedValueOnce({ status: 'covered' });
+    const settle = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('electronAPI', {
+      notificationClaimSessionEventSound: claim,
+      notificationSettleSessionEventSound: settle,
+    });
+
+    await expect(playSessionEventSound('done')).resolves.toBe(true);
+    await expect(playSessionEventSound('done')).resolves.toBe(true);
+    expect(claim).toHaveBeenCalledTimes(2);
+    expect(audioHarness.play).toHaveBeenCalledOnce();
+    expect(settle).toHaveBeenCalledWith('done', 'token-1', true);
+  });
+
   it('returns false when playback rejects', async () => {
     audioHarness.play.mockRejectedValue(new Error('autoplay denied'));
     await expect(playSessionEventSound('error')).resolves.toBe(false);

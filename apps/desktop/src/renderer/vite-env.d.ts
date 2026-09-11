@@ -2788,6 +2788,15 @@ interface ElectronAPI {
       sound?: boolean;
     };
   }) => Promise<void>;
+  /** Main-owned cross-Renderer sound cooldown coordinator. */
+  notificationClaimSessionEventSound?: (
+    kind: 'done' | 'error' | 'needs-reply',
+  ) => Promise<{ status: 'play'; token: string } | { status: 'covered' }>;
+  notificationSettleSessionEventSound?: (
+    kind: 'done' | 'error' | 'needs-reply',
+    token: string,
+    started: boolean,
+  ) => Promise<void>;
   /** Sync the renderer-owned global desktop-notification preference to main. */
   notificationSetDesktopEnabled?: (enabled: boolean) => Promise<{ ok: true }>;
   wecomGroupNotification: {

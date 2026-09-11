@@ -66,6 +66,46 @@ export async function playSessionEventSound(
   kind: SessionNotificationSoundKind,
   signal?: AbortSignal,
 ): Promise<boolean> {
+  const claimSound = window.electronAPI?.notificationClaimSessionEventSound;
+  const settleSound = window.electronAPI?.notificationSettleSessionEventSound;
+  if (claimSound && settleSound) {
+    return playSessionEventSoundWithMainCoordinator(kind, signal, claimSound, settleSound);
+  }
+
+  return playSessionEventSoundWithRendererCoordinator(kind, signal);
+}
+
+async function playSessionEventSoundWithMainCoordinator(
+  kind: SessionNotificationSoundKind,
+  signal: AbortSignal | undefined,
+  claimSound: NonNullable<Window['electronAPI']['notificationClaimSessionEventSound']>,
+  settleSound: NonNullable<Window['electronAPI']['notificationSettleSessionEventSound']>,
+): Promise<boolean> {
+  let claim: Awaited<ReturnType<typeof claimSound>>;
+  try {
+    claim = await claimSound(kind);
+  } catch (err) {
+    log.debug('notification sound coordination unavailable', err);
+    return false;
+  }
+  if (claim.status === 'covered') return true;
+  if (claim.status !== 'play' || typeof claim.token !== 'string') return false;
+
+  let started = false;
+  try {
+    started = await playSessionEventSoundInner(kind, signal);
+    return started;
+  } finally {
+    await settleSound(kind, claim.token, started).catch((err) => {
+      log.debug('notification sound coordination settle failed', err);
+    });
+  }
+}
+
+async function playSessionEventSoundWithRendererCoordinator(
+  kind: SessionNotificationSoundKind,
+  signal?: AbortSignal,
+): Promise<boolean> {
   // 冷却合并:刚为同类事件成功播过一声,本次视为已被覆盖——返回 true 让
   // 调用方照常静音其 toast(用户毫秒级前刚听过同一个音,不需要 OS 音再补)。
   // 只统计成功播放:上次失败不进入冷却,下次事件仍会重试(review P1 场景)。
