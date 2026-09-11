@@ -1,3 +1,4 @@
+import { getTelegramDeliveryBridge } from '../hook-control/telegramDelivery.js';
 import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import type { createBotCapabilityService } from '../maker-ipc/botCapabilityService.js';
 import { routineTools } from '../routines/service.js';
@@ -250,6 +251,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       logger: createLogger('mcp/cindy_slack'),
     },
     scheduler: {
+      telegramDelivery: { getBridge: getTelegramDeliveryBridge },
       getScheduler: () => getScheduler(),
       // 前置检查脚本统一安装服务:落盘路径/协议/自测与 UI「AI 生成」共用同一实现
       // (hook-script-generator)。lazy import:该链上有 electron app 依赖,且 maker

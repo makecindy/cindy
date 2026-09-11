@@ -23,6 +23,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 export interface HookBindingStore {
+  listKeys?(connectionId: string): string[];
   get(connectionId: string, externalKey: string): string | null;
   /**
    * 整行覆盖写。只在绑定真正变化时调用(新建会话、legacy 命名空间迁移、接管)——
@@ -89,6 +90,13 @@ export function createHookBindingStore(deps: {
   }
 
   return {
+    listKeys(connectionId) {
+      const ns: unknown = readAll()[connectionId];
+      if (!ns || typeof ns !== 'object' || Array.isArray(ns)) return [];
+      return Object.entries(ns).filter(([, row]) =>
+        row && typeof row === 'object' && typeof row.sessionId === 'string'
+      ).map(([key]) => key);
+    },
     get(connectionId, externalKey) {
       const ns: unknown = readAll()[connectionId];
       if (!ns || typeof ns !== 'object' || Array.isArray(ns)) return null;

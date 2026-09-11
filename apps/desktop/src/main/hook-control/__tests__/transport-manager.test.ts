@@ -14,6 +14,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
+  HOOK_FEATURE_MESSAGE_OPS,
+  makeMessageOpResult,
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
@@ -4068,5 +4070,47 @@ describe('多 workspace 绑定(multi-team)', () => {
       ),
     );
     await expect(promise).resolves.toEqual({ bound: true, prefs: [] });
+  });
+});
+
+
+describe('official Telegram scheduled message transport', () => {
+  it('uses the negotiated Telegram connection, matches real op receipts and gates on disconnect', async () => {
+    const { wss, url } = await startServer();
+    const key = 'telegram:dm:bot-1:telegram-user-1:g1';
+    const manager = makeManager(memoryStore({ url, enabled: false, telegramEnabled: true }), {
+      listTelegramDeliveryKeys: () => [key], toolTimeoutMs: 200,
+    });
+    cleanups.push(() => manager.dispose());
+    const connection = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [socket] = await connection;
+    const server = collectFrames(socket);
+    await server.waitFor('hello');
+    socket.send(serializeHookMessage(makeWelcome({ serverName: 'telegram-server', features: TELEGRAM_FEATURES })));
+    socket.send(serializeHookMessage(makeProviderBindState(TELEGRAM_CONFIRMED)));
+    await expect.poll(() => manager.telegramDeliveryStatus().connected).toBe(true);
+    expect(manager.telegramDeliveryStatus().supported).toBe(false);
+    socket.send(serializeHookMessage(makeWelcome({ serverName: 'telegram-server', features: [...TELEGRAM_FEATURES, HOOK_FEATURE_MESSAGE_OPS] })));
+    socket.send(serializeHookMessage(makeProviderBindState(TELEGRAM_CONFIRMED)));
+    await new Promise(resolve => setTimeout(resolve, 30));
+    expect(manager.telegramDeliveryStatus().supported).toBe(false); // msg-op-v1 is reaction-only on old servers
+    expect(await manager.sendTelegramDelivery({ opId: 'old-server', scope: { externalKey: key }, action: { kind: 'send', text: 'test' } })).toBeNull();
+    socket.send(serializeHookMessage(makeWelcome({ serverName: 'telegram-server', features: [...TELEGRAM_FEATURES, HOOK_FEATURE_MESSAGE_OPS, 'telegram-dm-send-v1', 'telegram-send-epoch:test-epoch'] })));
+    socket.send(serializeHookMessage(makeProviderBindState(TELEGRAM_CONFIRMED)));
+    await expect.poll(() => manager.telegramDeliveryStatus().supported).toBe(true);
+    expect(manager.telegramDeliveryStatus().target).toMatchObject({ externalKey: key, botName: 'cindy_example_bot' });
+    const payload = { opId: 'telegram-delivery:test', scope: { externalKey: key }, action: { kind: 'send' as const, text: '<b>test</b>', tier: 'html' as const, delivery: { bindingId: TELEGRAM_CONFIRMED.bindingId!, epoch: 'test-epoch', expiresAt: Date.now() + 60000 } } };
+    const sent = manager.sendTelegramDelivery(payload);
+    const frame = await server.waitFor('msg.op');
+    expect(frame.type === 'msg.op' ? frame.payload : null).toEqual(payload);
+    socket.send(serializeHookMessage(makeMessageOpResult({ opId: 'unrelated', ok: true, messageId: 'wrong' })));
+    socket.send(serializeHookMessage(makeMessageOpResult({ opId: payload.opId, ok: true, messageId: '42' })));
+    expect(await sent).toEqual({ opId: payload.opId, ok: true, messageId: '42' });
+    const interrupted = manager.sendTelegramDelivery({ ...payload, opId: 'telegram-delivery:interrupted' });
+    await manager.deactivateAccount();
+    expect(await interrupted).toBeNull();
+    expect(manager.telegramDeliveryStatus().connected).toBe(false);
+    expect(await manager.sendTelegramDelivery(payload)).toBeNull();
   });
 });

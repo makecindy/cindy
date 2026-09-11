@@ -226,6 +226,17 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  // External content is not covered by the scheduler server's blanket trust.
+  // Use the normal per-call policy (including Auto review / explicit Full Access),
+  // never infer consent from an agent-supplied run ID or tool description.
+  if (serverName === 'cindy_scheduler') {
+    const params = readJsonObject(toolParams);
+    if (toolName === 'schedule_telegram_send' ||
+        ((toolName === 'call_tool' || toolName === undefined) &&
+          (typeof params?.name !== 'string' || params.name === 'schedule_telegram_send'))) {
+      return 'prompt-each-time';
+    }
+  }
   if (serverName === 'cindy_contacts') {
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'

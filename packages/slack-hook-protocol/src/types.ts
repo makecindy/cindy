@@ -1331,6 +1331,9 @@ export const HOOK_FEATURE_TURN_DELIVERY = 'turn-delivery-v1';
  * 不在本轴的搬迁范围)。
  */
 export const HOOK_FEATURE_MESSAGE_OPS = 'msg-op-v1';
+/** Owner DM sends require both this feature and an instance-scoped epoch feature. */
+export const HOOK_FEATURE_TELEGRAM_DM_SEND = 'telegram-dm-send-v1';
+export const HOOK_TELEGRAM_SEND_EPOCH_PREFIX = 'telegram-send-epoch:';
 
 /** msg.op 的作用域: 服务端据此校验该设备是否有权操作这条 lane。 */
 export interface MessageOpScope {
@@ -1366,6 +1369,8 @@ export interface MessageOpScope {
 export type MessageOpAction =
   | {
       kind: 'send';
+      /** Required by telegram-dm-send-v1; expires within 60s. Never renew an uncertain send. */
+      delivery?: { bindingId: string; epoch: string; expiresAt: number };
       /** 已渲染的最终正文(客户端已分块; 服务端不再切)。 */
       text: string;
       /** 回复锚点: 目标渠道的原生 message id。 */
@@ -1440,7 +1445,37 @@ export interface MessageOpPayload {
  * 整个动词集只能发不能改。失败时 `error` 说明原因; `retryAfterMs` 非空表示
  * 服务端限速队列建议的等待(客户端据此排后续 op, 不自行加固定上限)。
  */
+export interface TelegramSentMessageEntity {
+  type: string;
+  offset: number;
+  length: number;
+  url?: string;
+  language?: string;
+  custom_emoji_id?: string;
+  user?: {
+    id: number | string;
+    is_bot?: boolean;
+    first_name: string;
+    last_name?: string;
+    username?: string;
+    language_code?: string;
+  };
+  unix_time?: number;
+  date_time_format?: string;
+}
+
+export interface TelegramSentMessage {
+  chatId: string;
+  text: string;
+  entities: TelegramSentMessageEntity[];
+  tier: 'html' | 'plain';
+}
+
 export interface MessageOpResultPayload {
+  /** Missing on legacy servers; callers must treat absent/unknown as uncertain. */
+  deliveryState?: 'sent' | 'not_sent' | 'unknown';
+  /** Actual Telegram response, never reconstructed from submitted HTML. */
+  sentMessage?: TelegramSentMessage;
   opId: string;
   ok: boolean;
   /** send / media 成功时渠道返回的 message id(media 相册返回首条)。 */

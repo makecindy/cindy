@@ -225,6 +225,16 @@ export interface RoutineToolService {
  * @cindy/maker-scheduler still has zero runtime deps per Phase 1).
  */
 export interface SchedulerMcpDeps {
+  /** Official hook bridge; fetched per call so logout/owner changes revoke access. */
+  telegramDelivery?: { getBridge(): {
+    status(): unknown;
+    receipt(idempotencyKey: string): unknown;
+    send(input: {
+      idempotencyKey: string;
+      target: { bindingId: string; principalId: string; principalName: string | null; externalKey: string; botId: string; botName: string | null };
+      text: string; tier: 'html' | 'plain'; sourceSha256: string; presentationSha256: string;
+    }): Promise<unknown>;
+  } | null };
   getScheduler(): import('@cindy/maker-scheduler').Scheduler;
   /**
    * 前置检查脚本(preRunHook)统一安装服务(host 注入,desktop 实现为

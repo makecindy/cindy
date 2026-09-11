@@ -14,12 +14,15 @@
  * 测试用内存 harness 直接驱动(规则 14); Electron 绑定在 ipc.ts 组装。
  */
 
+import { selectTelegramDeliveryTarget, type TelegramDeliveryStatus } from './telegramDelivery.js';
 import { randomUUID } from 'node:crypto';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
   DEFAULT_TELEGRAM_BEHAVIOR,
   HOOK_FEATURE_MESSAGE_OPS,
+  HOOK_FEATURE_TELEGRAM_DM_SEND,
+  HOOK_TELEGRAM_SEND_EPOCH_PREFIX,
   HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
@@ -48,6 +51,9 @@ import {
   makeQueryResponse,
   makeTaskAck,
   makeToolRequest,
+  makeMessageOp,
+  type MessageOpPayload,
+  type MessageOpResultPayload,
   type BindUpdatePayload,
   type GroupMessagePayload,
   type HelloInput,
@@ -183,6 +189,8 @@ export function telegramGroupMessageOwner(
 }
 
 export interface HookControlManagerDeps {
+  onTelegramDeliveryResult?: (result: MessageOpResultPayload) => void;
+  listTelegramDeliveryKeys?: (connectionId: string) => string[];
   store: SlackHookStore;
   /** Runtime capability gate; false stops the transport without changing user prefs/bindings. */
   isAvailable?: () => boolean;
@@ -262,6 +270,8 @@ export interface HookControlManagerDeps {
 }
 
 export interface HookControlManager {
+  telegramDeliveryStatus(): TelegramDeliveryStatus;
+  sendTelegramDelivery(payload: MessageOpPayload): Promise<MessageOpResultPayload | null>;
   /** 按当前配置 + 登录态同步连接(启动 / 开关 / 配置变更 / 登录态变化后调用)。 */
   sync(): void;
   /**
@@ -693,6 +703,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 只给 Telegram 声明: msg.op 目前只有 Telegram 的执行器, X 的渲染路径
       // 不接入(#1855 的红线之一)。
       HOOK_FEATURE_MESSAGE_OPS,
+      HOOK_FEATURE_TELEGRAM_DM_SEND,
       HOOK_FEATURE_SESSION_NEW,
     ],
     isEnabled: () => store.get().telegramEnabled,
@@ -936,6 +947,35 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
 
   function lifecycleAnnouncementEnabled(): boolean {
     return store.get().lifecycleAnnouncementOverride ?? DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT;
+  }
+
+  const pendingDeliveries = new Map<string, {
+    resolve: (result: MessageOpResultPayload | null) => void;
+    timer: ReturnType<typeof setTimeout>;
+  }>();
+  function drainDeliveries(): void {
+    for (const pending of pendingDeliveries.values()) {
+      clearTimeout(pending.timer);
+      pending.resolve(null);
+    }
+    pendingDeliveries.clear();
+  }
+  function telegramDeliveryStatus(): TelegramDeliveryStatus {
+    const lane = telegramLane;
+    const connected = accountActive && !disposed && isAvailable() && store.get().telegramEnabled &&
+      lane.status === 'connected' && lane.serverWelcomeReceived && !lane.awaitingStateSnapshot &&
+      laneCapabilityReady(lane);
+    const epochs = lane.serverFeatures.filter(f => f.startsWith(HOOK_TELEGRAM_SEND_EPOCH_PREFIX));
+    const sendEpoch = epochs.length === 1 ? epochs[0]!.slice(HOOK_TELEGRAM_SEND_EPOCH_PREFIX.length) : undefined;
+    const supported = connected && lane.serverFeatures.includes(HOOK_FEATURE_MESSAGE_OPS) &&
+      lane.serverFeatures.includes(HOOK_FEATURE_TELEGRAM_DM_SEND) && !!sendEpoch;
+    const target = connected && lane.binding?.state === 'confirmed'
+      ? selectTelegramDeliveryTarget(lane.binding, deps.listTelegramDeliveryKeys?.(dispatchId('telegram')) ?? [])
+      : null;
+    return { connected, supported, target, sendEpoch,
+      ...(!connected ? { code: 'HOOK_NOT_CONNECTED' } : !supported ? { code: 'SERVER_TOO_OLD' }
+        : !target ? { code: 'OWNER_DM_TARGET_UNAVAILABLE' } : {}),
+    };
   }
 
   function dispatchId(provider: HookProvider): string {
@@ -2181,6 +2221,16 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       return;
     }
     if (msg.type === 'msg.op.result') {
+      if (expectedProvider === 'telegram') {
+        deps.onTelegramDeliveryResult?.(msg.payload);
+        const pending = pendingDeliveries.get(msg.payload.opId);
+        if (pending) {
+          pendingDeliveries.delete(msg.payload.opId);
+          clearTimeout(pending.timer);
+          pending.resolve(msg.payload);
+          return;
+        }
+      }
       // 表情回执: 纯装饰动作的结果, 失败只记一行 —— 不重试也不影响任务本身。
       dispatcher?.onMessageOpResult(msg.payload);
       return;
@@ -2632,6 +2682,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   function stopLane(lane: NeutralProviderLane): void {
+    if (lane.config.provider === 'telegram') drainDeliveries();
     clearLaneBindWatchdog(lane);
     lane.openRequestId = null;
     lane.bindRequest = null;
@@ -2798,6 +2849,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         if (created === null || lane.transport !== created) return;
         lane.status = s;
         lane.lastError = err;
+        if (provider === 'telegram' && s !== 'connected') drainDeliveries();
         if (s !== 'connected' || !laneCapabilityReady(lane)) {
           dispatcher?.onDisconnected(dispatchId(provider));
           drainLanePendingPrefs(lane);
@@ -2938,6 +2990,30 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       }
       notifyStatus(toView());
       return true;
+    },
+    telegramDeliveryStatus,
+    sendTelegramDelivery(payload) {
+      const status = telegramDeliveryStatus();
+      if (!status.supported || !status.target ||
+          status.target.externalKey !== payload.scope.externalKey || payload.action.kind !== 'send' ||
+          payload.action.delivery?.epoch !== status.sendEpoch ||
+          payload.action.delivery?.bindingId !== status.target.bindingId) {
+        return Promise.resolve(null);
+      }
+      if (pendingDeliveries.has(payload.opId)) return Promise.resolve(null);
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          pendingDeliveries.delete(payload.opId);
+          resolve(null);
+        }, toolTimeoutMs ?? DEFAULT_TOOL_TIMEOUT_MS);
+        pendingDeliveries.set(payload.opId, { resolve, timer });
+        try {
+          if (telegramLane.transport?.send(makeMessageOp(payload))) return;
+        } catch { /* uncertain transport write: never claim non-delivery */ }
+        clearTimeout(timer);
+        pendingDeliveries.delete(payload.opId);
+        resolve(null);
+      });
     },
     callSlackTool(tool, args, teamId) {
       const fail = (code: string, message: string): Promise<HookSlackToolResult> =>

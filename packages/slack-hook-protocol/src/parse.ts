@@ -454,6 +454,14 @@ function validateMessageOp(p: Record<string, unknown>): string | null {
   const kind = action.kind;
   if (kind === 'send' || kind === 'edit') {
     if (typeof action.text !== 'string') return `msg.op.action.text must be a string`;
+    if (kind === 'send' && action.delivery !== undefined) {
+      const delivery = action.delivery;
+      if (!isPlainObject(delivery) || !isNonEmptyString(delivery.bindingId) ||
+          !isNonEmptyString(delivery.epoch) || !Number.isSafeInteger(delivery.expiresAt) ||
+          Number(delivery.expiresAt) <= 0) {
+        return 'msg.op.action.delivery requires bindingId, epoch and a positive safe integer expiresAt';
+      }
+    }
     if (kind === 'edit' && !isNonEmptyString(action.messageId)) {
       return 'msg.op.action.messageId must be a non-empty string';
     }
@@ -528,6 +536,33 @@ function validateMessageOpResult(p: Record<string, unknown>): string | null {
     (typeof p.retryAfterMs !== 'number' || !Number.isFinite(p.retryAfterMs) || p.retryAfterMs < 0)
   ) {
     return 'msg.op.result.retryAfterMs must be a non-negative finite number or null';
+  }
+  if (p.deliveryState !== undefined && !['sent', 'not_sent', 'unknown'].includes(String(p.deliveryState))) return 'invalid deliveryState';
+  if (p.sentMessage !== undefined) {
+    const m = p.sentMessage;
+    if (!isPlainObject(m) || !isNonEmptyString(m.chatId) || typeof m.text !== 'string' ||
+        !['html', 'plain'].includes(String(m.tier)) || !Array.isArray(m.entities)) return 'invalid sentMessage';
+    for (const e of m.entities) {
+      if (!isPlainObject(e) || !isNonEmptyString(e.type) || !Number.isSafeInteger(e.offset) ||
+          !Number.isSafeInteger(e.length) || Number(e.offset) < 0 || Number(e.length) <= 0 ||
+          Number(e.offset) + Number(e.length) > m.text.length ||
+          (e.url !== undefined && typeof e.url !== 'string') ||
+          (e.language !== undefined && typeof e.language !== 'string') ||
+          (e.custom_emoji_id !== undefined && !isNonEmptyString(e.custom_emoji_id)) ||
+          (e.unix_time !== undefined && !Number.isSafeInteger(e.unix_time)) ||
+          (e.date_time_format !== undefined && typeof e.date_time_format !== 'string')) return 'invalid sentMessage entity';
+      if (e.user !== undefined) {
+        const user = e.user;
+        if (!isPlainObject(user) ||
+            !(typeof user.id === 'number' ? Number.isSafeInteger(user.id) && user.id > 0
+              : typeof user.id === 'string' && /^[1-9]\d*$/.test(user.id)) ||
+            !isNonEmptyString(user.first_name) ||
+            (user.is_bot !== undefined && typeof user.is_bot !== 'boolean') ||
+            ['last_name', 'username', 'language_code'].some(key => user[key] !== undefined && typeof user[key] !== 'string')) {
+          return 'invalid sentMessage entity user';
+        }
+      }
+    }
   }
   return null;
 }
