@@ -714,6 +714,11 @@ export function ComputerUseSection({
     }
   }, [computerEnabled, refreshComputerPermissionStatus, t]);
 
+  const joinDriverUpdateRef = useRef(joinDriverUpdate);
+  useEffect(() => {
+    joinDriverUpdateRef.current = joinDriverUpdate;
+  }, [joinDriverUpdate]);
+
   useEffect(() => {
     if (!computerStatus?.installed || driverUpdateCheckedRef.current) return;
     driverUpdateCheckedRef.current = true;
@@ -728,7 +733,7 @@ export function ComputerUseSection({
           // 上次面板关闭前发起的更新还在 main 侧跑:恢复「更新中」态并以
           // join-only 语义重挂结果(安装恰好已完成时只读状态,不起新安装)。
           setDriverUpdatePending(true);
-          void joinDriverUpdate(true);
+          void joinDriverUpdateRef.current(true);
         }
       })
       .catch((err) => {
@@ -737,7 +742,7 @@ export function ComputerUseSection({
     return () => {
       cancelled = true;
     };
-  }, [computerStatus?.installed, joinDriverUpdate]);
+  }, [computerStatus?.installed]);
 
   const handleUpdateDriver = useCallback(() => {
     if (driverUpdatePending) return;
