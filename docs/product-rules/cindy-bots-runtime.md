@@ -203,6 +203,8 @@ harness + provider + model + effort + fastMode
   `control.state=pausing` 或 `stop_status=requested/unconfirmed` 不表示引擎已停；活跃执行仍在
   等工具或确认时如实报告，确认空闲才返回 `paused`。等待中的交互保持原 resolver，恢复后才允许回答。
   这些模式都只作用于调用伙伴拥有的后台任务；通用 Session control 类不因此开放给伙伴。
+  `check_session_task.control.last_stop_request` 保留最近一次优雅停止请求的时间、返回状态和轮次；
+  它是历史回执，实际是否停稳仍看 `stop_status`，重启不会重放停止请求或冻结下一轮。
 
 伙伴按工作量主动分工（2026-09-07 产品裁决）：
 

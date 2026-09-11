@@ -3386,13 +3386,16 @@ describe('Bot Session task end-to-end runtime', () => {
       };
     };
 
-    const abortSession = vi.fn(async () => undefined);
+    const abortSession = vi.fn(async (): Promise<void> => undefined);
     const steer = vi.fn(async () => options.steerUnsupported
       ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No same-turn steer' }
       : { ok: true as const, queuedMessageId: 'steered-message' });
     const stopTurn = vi.fn(async () => options.stopUnsupported
       ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No graceful stop' }
       : { ok: true as const, status: 'requested' as const });
+    const waitForInputBoundary = vi.fn(async () => undefined);
+    const preparePause = vi.fn(async () => undefined);
+    const flushInput = vi.fn(async () => undefined);
     const delegation = createBotDelegationService({
       prepareWorktree: options.prepareWorktree,
       taskQueue: options.taskQueue,
@@ -3400,10 +3403,10 @@ describe('Bot Session task end-to-end runtime', () => {
         steer, stop: stopTurn,
         isActive: (id: string) => pendingTurns.some((turn) => turn.sessionId === id && !turn.queued),
         holdInput: (id: string, held: boolean) => { if (held) heldInputs.add(id); else heldInputs.delete(id); },
-        waitForInputBoundary: async () => undefined,
-        preparePause: async () => undefined,
+        waitForInputBoundary,
+        preparePause,
         restoreInput: async () => undefined,
-        flushInput: async () => undefined,
+        flushInput,
         resumeInput: async () => undefined,
       } } : {}),
       readCallerRuntime: options.readCallerRuntime,
@@ -3461,7 +3464,7 @@ describe('Bot Session task end-to-end runtime', () => {
 
     return {
       delegation,
-      heldInputs, steer, stopTurn,
+      heldInputs, steer, stopTurn, waitForInputBoundary, preparePause, flushInput,
       abortSession,
       started,
       changed,
@@ -3852,6 +3855,85 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { unavailable.dispose(); }
   });
 
+  it('still publishes and dispatches a committed worktree task when its display snapshot fails', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ prepareWorktree: async () => ({ ok: true,
+      sessionId: 'snapshot-failure-session', workingDir: h.userDataDir }) });
+    h.sqlite!.exec("CREATE TEMP TRIGGER fail_worktree_snapshot BEFORE UPDATE OF worktree_path ON sessions BEGIN SELECT RAISE(FAIL, 'fixture snapshot unavailable'); END");
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1',
+        objective: 'Continue despite an unavailable display snapshot.', workingDir: h.userDataDir, useWorktree: true });
+      expect(result).toMatchObject({ ok: true, childSessionId: 'snapshot-failure-session' });
+      if (!result.ok) throw new Error('task failed');
+      expect(runtime.started.map(turn => turn.sessionId)).toEqual(['snapshot-failure-session']);
+      expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
+        .toMatchObject({ task: { status: 'running', working_dir: h.userDataDir } });
+      await runtime.settleChild(result.childSessionId, 'Finished.');
+      expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
+        .toMatchObject({ task: { status: 'completed' } });
+    } finally { h.sqlite!.exec('DROP TRIGGER fail_worktree_snapshot'); runtime.dispose(); }
+  });
+
+  it.each(['waitForInputBoundary', 'stopTurn', 'preparePause'] as const)('retries an uncertain pause after %s fails', async (stage) => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.' });
+      if (!task.ok) throw new Error('task failed');
+      runtime[stage].mockRejectedValueOnce(new Error('transient fixture failure'));
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause'))
+        .toMatchObject({ ok: false, errorCode: 'PAUSE_UNCONFIRMED' });
+      const before = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      runtime.advance(1_000);
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause'))
+        .toMatchObject({ ok: true, control: { state: 'pausing' } });
+      expect(runtime[stage]).toHaveBeenCalledTimes(2);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+      await runtime.settleChild(task.childSessionId, 'Stopped.');
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true });
+      const after = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      if (!before.ok || !after.ok) throw new Error('missing task');
+      expect(after.task.deadline_at).toBe(before.task.deadline_at! + 1_000);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['bot', 'parent'] as const)('serializes %s lifecycle cancellation with the held resume commit', async (scope) => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    let release!: () => void;
+    const boundary = new Promise<void>(resolve => { release = resolve; });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.' });
+      if (!task.ok) throw new Error('task failed');
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(task.childSessionId, 'Stopped.');
+      let atBoundary = false;
+      runtime.flushInput.mockImplementationOnce(async () => { atBoundary = true; await boundary; });
+      const resumed = runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' });
+      await vi.waitFor(() => expect(atBoundary).toBe(true));
+      let cancellationSettled = false;
+      const cancelled = (scope === 'bot'
+        ? runtime.delegation.cancelDelegationsForBot('bot-a')
+        : runtime.delegation.cancelDelegationsForParentSession('session-1'))
+        .then(result => { cancellationSettled = true; return result; });
+      await new Promise(resolve => setImmediate(resolve));
+      expect(cancellationSettled).toBe(false);
+      expect(h.sqlite!.prepare('SELECT status FROM bot_delegations WHERE id = ?').get(task.delegationId))
+        .toEqual({ status: 'waiting' });
+      // An abort awaiting its terminal callback must not deadlock with the lock.
+      runtime.abortSession.mockImplementationOnce(async () => runtime.settleChild(task.childSessionId, 'Cancelled.'));
+      release();
+      expect(await resumed).toMatchObject({ ok: true });
+      expect(await cancelled).toBe(1);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(false);
+      const count = runtime.started.length;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'NOT_PAUSED' });
+      expect(runtime.started).toHaveLength(count);
+    } finally { release(); runtime.dispose(); }
+  });
+
   it('routes owned queue edits through the shared consuming and sender guards and reports dispatch receipts', async () => {
     await seedPair();
     const item = (clientId: string, sender: string): AgentInputQueuedMessage => ({
@@ -4025,7 +4107,14 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(runtime.started).toHaveLength(1);
       expect(runtime.abortSession).not.toHaveBeenCalled();
       expect(await runtime.delegation.getSessionTask('session-1', started.delegationId))
-        .toMatchObject({ task: { status: 'running', completed_at: null } });
+        .toMatchObject({ task: { status: 'running', completed_at: null,
+          control: { last_stop_request: { requested_at: 10_000, status: 'requested' }, stop_status: 'unconfirmed' } } });
+      const restored = createDelegationRuntime({ taskControl: true });
+      try {
+        expect(await restored.delegation.getSessionTask('session-1', started.delegationId))
+          .toMatchObject({ task: { control: { last_stop_request: { status: 'requested' }, stop_status: 'stopped' } } });
+        expect(restored.stopTurn).not.toHaveBeenCalled();
+      } finally { restored.dispose(); }
     } finally { runtime.dispose(); }
   });
 

@@ -11,6 +11,7 @@ import type { BotsFinishDelegationResult } from '../localDb/client/tx/types.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import { createBotCanonicalSession } from '../localDb/ipc/bots.js';
 import { createMessage } from '../localDb/ipc/messages.js';
+import { setWorktreePathInDb } from '../localDb/ipc/sessions.js';
 import { sessionCreateToRow } from '../localDb/mapper.js';
 import {
   botDelegations,
@@ -1717,8 +1718,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           createdAt,
         },
       });
-      if (input.useWorktree) await getDbClient().drizzle.update(sessions)
-        .set({ worktreePath: input.session.workingDir }).where(eq(sessions.id, childSessionId));
+      // The worktree store and workingDir already own the binding. A failed
+      // display snapshot must not strand the committed task before dispatch.
+      if (input.useWorktree) await setWorktreePathInDb(childSessionId, input.session.workingDir);
       // The worker transaction yields: a permission switch may complete while
       // creation is pending. Never publish or start the stale Full Access child.
       if (!isCreationPermissionCurrent()) {
@@ -1965,25 +1967,41 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .sort((a, b) => b.depth - a.depth);
     let rootChanged = false;
     for (const row of affected) {
-      const changed = await updateTerminal({
-        delegationId: row.id,
-        status: 'cancelled',
-        lastError: reason,
-        abortChild: !(rootAlreadyAborted && row.id === currentRoot.id),
-      });
-      if (changed && !deliverRoot) {
-        // Lifecycle shutdown already owns the user-visible explanation. Mark
-        // its cancellation handled so restore cannot wake a paused/archived Bot.
-        await db
-          .update(botDelegations)
-          .set({ completionDeliveredAt: now(), updatedAt: now() })
-          .where(and(
-            eq(botDelegations.id, row.id),
-            eq(botDelegations.status, 'cancelled'),
-            isNull(botDelegations.completionDeliveredAt),
-          ));
-      }
-      rootChanged ||= row.id === currentRoot.id && changed !== null;
+      const cancelRow = async () => {
+        // Native abort may await its terminal callback. Keep that callback from
+        // waiting on the task operation that is itself awaiting this abort.
+        const wasHeld = !!row.childSessionId && heldSessionIds.has(row.childSessionId);
+        if (row.childSessionId) holdTaskInput(row.childSessionId, true);
+        let changed: Awaited<ReturnType<typeof updateTerminal>>;
+        try {
+          changed = await updateTerminal({
+            delegationId: row.id,
+            status: 'cancelled',
+            lastError: reason,
+            abortChild: !(rootAlreadyAborted && row.id === currentRoot.id),
+          });
+        } catch (error) {
+          if (row.childSessionId) holdTaskInput(row.childSessionId, wasHeld);
+          throw error;
+        }
+        if (row.childSessionId) holdTaskInput(row.childSessionId, false);
+        if (changed && !deliverRoot) {
+          // Lifecycle shutdown already owns the user-visible explanation. Mark
+          // its cancellation handled so restore cannot wake a paused/archived Bot.
+          await db
+            .update(botDelegations)
+            .set({ completionDeliveredAt: now(), updatedAt: now() })
+            .where(and(
+              eq(botDelegations.id, row.id),
+              eq(botDelegations.status, 'cancelled'),
+              isNull(botDelegations.completionDeliveredAt),
+            ));
+        }
+        rootChanged ||= row.id === currentRoot.id && changed !== null;
+      };
+      // Callers own the root lock; descendants use their own input boundary.
+      if (row.id === currentRoot.id) await cancelRow();
+      else await withTaskOperation(row.id, cancelRow);
     }
     if (deliverRoot && rootChanged) {
       await deliverCompletion({
@@ -2012,7 +2030,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       );
     let cancelled = 0;
     for (const root of roots) {
-      if (await cancelDelegationTree(root, reason, false)) cancelled += 1;
+      if (await withTaskOperation(root.id, () => cancelDelegationTree(root, reason, false))) cancelled += 1;
     }
     return cancelled;
   };
@@ -2037,7 +2055,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .orderBy(desc(botDelegations.depth), desc(botDelegations.createdAt));
     let cancelled = 0;
     for (const row of rows) {
-      if (await cancelDelegationTree(row, reason, false)) cancelled += 1;
+      if (await withTaskOperation(row.id, () => cancelDelegationTree(row, reason, false))) cancelled += 1;
     }
     return cancelled;
   };
@@ -2625,6 +2643,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         : isActiveDelegation(row.status as DelegationStatus) ? 'active' : 'terminal',
       paused_at: pause?.pausedAt ?? null,
       queue_held: !!pause || cancelling,
+      // Historical receipt only: request-stop never freezes or replays a turn.
+      last_stop_request: parseRecord(row.permissionSnapshotJson).taskStopRequest ?? null,
       stop_status: row.childSessionId && deps.taskControl
         ? (deps.taskControl.isActive(row.childSessionId) ? 'unconfirmed' : 'stopped') : 'unknown',
     };
@@ -2753,16 +2773,24 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       errorCode: 'UNSUPPORTED_CAPABILITY', message: 'Task control is unavailable in this runtime' };
     if (!isActiveDelegation(row.status as DelegationStatus)) return { ok: false as const,
       errorCode: 'ALREADY_TERMINAL', message: 'Task is already terminal' };
-    if (readTaskPause(row)) return { ok: true as const, childSessionId: row.childSessionId,
+    const existingPause = readTaskPause(row);
+    if (existingPause && mode === 'request-stop') return { ok: true as const, childSessionId: row.childSessionId,
       control: taskControlView(row) };
     if (mode === 'request-stop') {
       const result = await control.stop({ targetSessionId: row.childSessionId });
+      if (result.ok) {
+        await getDbClient().drizzle.update(botDelegations).set({
+          permissionSnapshotJson: JSON.stringify({ ...parseRecord(row.permissionSnapshotJson),
+            taskStopRequest: { requested_at: now(), status: result.status,
+              turn_generation: result.turnGeneration ?? null } }),
+        }).where(eq(botDelegations.id, row.id));
+      }
       return result.ok ? { ok: true as const, childSessionId: row.childSessionId,
         control: { state: result.status, queue_held: false } } : result;
     }
 
     const pending = pendingInteractions.get(row.id);
-    const pause: SessionTaskPause = { token: createId(),
+    const pause: SessionTaskPause = existingPause ?? { token: createId(),
       pausedAt: pending?.raisedAt ?? now(), previousStatus: row.status as SessionTaskPause['previousStatus'],
       interactionOnly: !!pending };
     holdTaskInput(row.childSessionId, true);
@@ -2781,14 +2809,16 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       persisted = true;
       await control.waitForInputBoundary(row.childSessionId);
       // Existing interaction wait is already a safe pause; keep its resolver for resume.
-      const result = pending || !control.isActive(row.childSessionId)
+      const result = (pending && pause.interactionOnly) || !control.isActive(row.childSessionId)
         ? { ok: true as const, status: 'no-active-turn' as const }
         : await control.stop({ targetSessionId: row.childSessionId });
       if (!result.ok) {
-        await getDbClient().drizzle.update(botDelegations).set({ permissionSnapshotJson: row.permissionSnapshotJson,
-          status: row.status }).where(and(eq(botDelegations.id, row.id),
-            inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES])));
-        holdTaskInput(row.childSessionId, false);
+        if (!existingPause) {
+          await getDbClient().drizzle.update(botDelegations).set({ permissionSnapshotJson: row.permissionSnapshotJson,
+            status: row.status }).where(and(eq(botDelegations.id, row.id),
+              inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES])));
+          holdTaskInput(row.childSessionId, false);
+        }
         return result;
       }
       await control.preparePause(row.childSessionId);
