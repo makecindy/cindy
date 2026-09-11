@@ -121,7 +121,9 @@ let pending: {
   reject(error: Error): void;
   timer: ReturnType<typeof setTimeout>;
 } | null = null;
-const input = new DesktopInputHost(() => remoteDesktop.stop());
+// A dead input helper or a refused injection is an input failure, not a session
+// failure: release control and keep the lease, capture and media running.
+const input = new DesktopInputHost(() => remoteDesktop.releaseControl());
 function stopVideo(): void {
   offerGeneration++;
   videoAttempt = undefined;

@@ -137,6 +137,35 @@ This harness does not validate WKWebView, Android WebView, carrier NAT, regional
 STUN availability, TURN relay performance or Windows native capture. Those need
 device/network verification before claiming a measured connection-success gain.
 
+## Input failure releases control (2026-09-11)
+
+Control is a lease-scoped capability, not the session itself. When the host can
+no longer inject input — the native helper died, it reported a failed injection,
+or its write path failed — it releases control and keeps everything else: the
+lease, the capture owner, the video track and the last picture. It does not call
+`stop()`, so an input fault can never surface as an ended desktop session.
+
+The viewer follows the host's control bit instead of rebuilding the session. A
+rejected input batch, a dropped stalled batch, a failed control request or a
+heartbeat that reports `controlling: false` all drop the phone to view only with
+the existing view-only hint and take-control action; media and lease identity are
+untouched. Taking control again restarts the native input helper on the same
+lease. Errors that do mean the lease is gone (`DESKTOP_LEASE_EXPIRED`,
+`DESKTOP_STOPPED`, revocation, an unsupported channel) still recover the session
+as before.
+
+This matters most on Windows, where the SendInput helper reports a failed
+injection as a helper failure whereas the macOS helper posts events without a
+result path. On Windows the helper now costs control only; whether a specific
+machine can inject at all (elevated foreground window, secure desktop, a session
+worker outside the interactive window station) is a separate, still unverified
+question, and the helper's `error` line does not yet carry a reason.
+
+Deterministic tests cover the controller release (lease, media and single-viewer
+arbitration retained; later input refused as view-only; control can be taken
+again), the desktop wiring that turns an input-host failure into a release rather
+than a stop, and the viewer paths that drop to view only without reconnecting.
+
 ## Authority and lifetime
 
 On macOS, enabling remote desktop automatically checks screen recording in the

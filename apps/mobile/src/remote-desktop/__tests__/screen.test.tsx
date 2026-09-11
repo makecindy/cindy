@@ -1634,6 +1634,61 @@ describe("remote desktop controls", () => {
     expect(sent().at(-1)).toEqual({ type: "mode", mode: "touch" });
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
   });
+  it("keeps the session and the picture when the host refuses an input batch", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "input"
+        ? Promise.reject(new Error("DESKTOP_VIEW_ONLY"))
+        : original(...args),
+    );
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "input",
+            epoch: "lease",
+            sequence: 1,
+            events: [{ kind: "button", button: 0, down: true, x: 0.5, y: 0.5 }],
+          }),
+        },
+      });
+    });
+    // The host retracted control: view only, no session rebuild.
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    act(() => button("operations").click());
+    expect(visibleInputHint()).toBe("remoteDesktop.viewOnlyHint");
+  });
+  it("follows the host to view only when its heartbeat stops counting this viewer as controlling", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "heartbeat"
+        ? Promise.resolve({ controlling: false })
+        : original(...args),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+    act(() => button("operations").click());
+    expect(visibleInputHint()).toBe("remoteDesktop.viewOnlyHint");
+  });
+  it("releases a stalled input batch instead of rebuilding the session", async () => {
+    await connect();
+    act(() => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
+        },
+      });
+    });
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
   it("shows virtual mouse buttons outside the panel and hides them while viewing only", async () => {
     await connect();
     act(() => button("operations").click());

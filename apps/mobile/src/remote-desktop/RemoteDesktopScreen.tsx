@@ -30,6 +30,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { connectionDiagnostics } from "./connectionDiagnostics";
+import { isControlLossError, remoteDesktopErrorCode } from "./controlFailure";
 import { transferClipboardContent } from "./clipboardTransfer";
 import * as Clipboard from "expo-clipboard";
 import { RemoteDesktopClipboardButton } from "./RemoteDesktopClipboardButton";
@@ -457,18 +458,10 @@ export default function RemoteDesktopScreen() {
     (cause: unknown) => {
       if (!alive.current) return;
       const message = cause instanceof Error ? cause.message : String(cause);
-      const code =
-        cause &&
-        typeof cause === "object" &&
-        "code" in cause &&
-        typeof cause.code === "string"
-          ? cause.code
-          : message.match(
-              /\b(?:DESKTOP|CHANNEL|DEVICE|INVOKE|REMOTE|ACCESS)_[A-Z_]+\b/,
-            )?.[0];
+      const code = remoteDesktopErrorCode(cause);
       // Keep diagnostics free of device names, input and signaling payloads.
       console.debug("[remote-desktop] connection failed", {
-        code: code && /^[A-Z_]+$/.test(code) ? code : "UNKNOWN",
+        code: code ?? "UNKNOWN",
       });
       const blocked =
         code === "ACCESS_REVOKED"
@@ -498,6 +491,25 @@ export default function RemoteDesktopScreen() {
     },
     [stop],
   );
+  /**
+   * The host owns the control bit. When it reports that this viewer no longer
+   * controls — input injection failed, the input helper went away, or control
+   * was retracted — drop to view only instead of rebuilding the session: the
+   * lease, the picture and the existing view-only hint all survive, and taking
+   * control again retries from where the user is.
+   */
+  const releaseControl = useCallback(() => {
+    const current = active.current;
+    if (!current?.controlling) return;
+    current.controlling = false;
+    heldKeys.current.clear();
+    send({ type: "control", enabled: false });
+    if (alive.current) {
+      setModifiers([]);
+      setKeyboard(false);
+      setLease({ ...current });
+    }
+  }, [send]);
   const connect = useCallback(
     async (displayId?: string, takeover = false) => {
       if (
@@ -750,7 +762,18 @@ export default function RemoteDesktopScreen() {
       )
         return;
       heartbeatBusy = current.lease;
-      void request({ op: "heartbeat", lease: current.lease })
+      void request<{ controlling: boolean }>({
+        op: "heartbeat",
+        lease: current.lease,
+      })
+        .then((result) => {
+          // The host owns the control bit. When it no longer counts this viewer
+          // as controlling — input injection failed, or control was retracted —
+          // follow it to view only instead of waiting for the next rejected tap.
+          if (active.current !== current || presentation.current) return;
+          if (current.controlling && result.controlling === false)
+            releaseControl();
+        })
         .catch((cause) => {
           // A missing reply does not prove renewal failed; the next interval
           // retries within the lease. Explicit host revocation still stops us.
@@ -850,7 +873,7 @@ export default function RemoteDesktopScreen() {
       clearInterval(metrics);
       stop();
     };
-  }, [request, fail, send, stop, pause]);
+  }, [request, fail, send, stop, pause, releaseControl]);
   useEffect(() => {
     // Route blur means leaving this desktop (including a native back swipe).
     // App background/inactive events use pause() without the exit flag.
@@ -1176,7 +1199,9 @@ export default function RemoteDesktopScreen() {
         break;
       }
       case "inputOverflow":
-        fail(new Error("DESKTOP_INPUT_UNAVAILABLE"));
+        // The viewer dropped a stalled batch. Input was already released there;
+        // mirror it here instead of tearing the session down for a lost tap.
+        releaseControl();
         break;
       case "input": {
         const ack = {
@@ -1203,7 +1228,11 @@ export default function RemoteDesktopScreen() {
           events: message.events,
         })
           .catch((cause) => {
-            if (active.current === current) fail(cause);
+            if (active.current !== current) return;
+            // A rejected batch means this viewer lost control, not that the
+            // desktop session ended: view only, keep the picture, no reconnect.
+            if (isControlLossError(cause)) releaseControl();
+            else fail(cause);
           })
           .finally(() => {
             if (inputBusy.current === current.lease) inputBusy.current = null;
@@ -1240,7 +1269,12 @@ export default function RemoteDesktopScreen() {
         setKeyboard(false);
       }
     } catch (cause) {
-      if (active.current === current) fail(cause);
+      if (active.current !== current) return;
+      // Taking control can fail because this computer cannot inject input right
+      // now. Stay in view only and let the user retry; a session rebuild would
+      // cost the picture and the lease for a control-only fault.
+      if (isControlLossError(cause)) releaseControl();
+      else fail(cause);
     } finally {
       if (alive.current) setBusy(false);
     }

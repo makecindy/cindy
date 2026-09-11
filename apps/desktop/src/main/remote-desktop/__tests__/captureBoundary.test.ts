@@ -16,6 +16,8 @@ const h = vi.hoisted(() => ({
   nativeFrame: vi.fn(async () => 'frame'),
   input: vi.fn(),
   viewHeartbeat: vi.fn(),
+  inputFailure: null as null | (() => void),
+  releaseControl: vi.fn(),
   iceConfig: vi.fn(async (): Promise<any[]> => [
     { urls: ['turn:relay.example.test:3478'], username: 'temporary', credential: 'test-only' },
   ]),
@@ -93,6 +95,9 @@ vi.mock('../controller', () => ({
     stopByUser() {
       this.stop();
     }
+    releaseControl() {
+      h.releaseControl();
+    }
     tick() {}
     input = h.input;
     viewHeartbeat = h.viewHeartbeat;
@@ -106,6 +111,9 @@ vi.mock('../nativeCapture', () => ({
 }));
 vi.mock('../inputHost', () => ({
   DesktopInputHost: class {
+    constructor(onFailure: () => void) {
+      h.inputFailure = onFailure;
+    }
     stop = vi.fn();
     input = vi.fn();
   },
@@ -162,6 +170,8 @@ beforeEach(() => {
   h.nativeFrame.mockClear();
   h.input.mockReset();
   h.viewHeartbeat.mockClear();
+  // The host is constructed once at module load; keep its captured callback.
+  h.releaseControl.mockClear();
   h.iceConfig.mockClear();
   registerRemoteDesktopIpc();
 });
@@ -292,6 +302,21 @@ it('drops view-only input without breaking heartbeats, but still rejects invalid
     h.input.mockImplementation(() => { throw new Error(reason); });
     expect(() => input(event(), 'lease', 2, [])).toThrow('PERMISSION_DENIED');
   }
+});
+
+it('turns an input-helper failure into a control release instead of a session stop', async () => {
+  const pending = offer();
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), h.owner.send.mock.calls[0][1].id, 'answer');
+  await pending;
+  expect(h.inputFailure).toBeTypeOf('function');
+  h.inputFailure?.();
+  // Input is a lease-scoped capability: the desktop session keeps its lease,
+  // its capture owner and its media when the helper dies.
+  expect(h.releaseControl).toHaveBeenCalledTimes(1);
+  expect(h.stop).not.toHaveBeenCalled();
+  expect(h.owner.dead).toBe(false);
 });
 
 it('retains the capture owner on ICE timeout and rejects old-owner replies after replacement', async () => {
