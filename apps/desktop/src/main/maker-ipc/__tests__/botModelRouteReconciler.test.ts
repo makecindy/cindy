@@ -115,3 +115,32 @@ describe('permanent Bot model selection', () => {
     expect(h.apply).not.toHaveBeenCalled();
   });
 });
+
+it('applies an explicit settings save immediately even while an earlier fallback is effective', async () => {
+  const h = harness();
+  h.state.hasRuntimeOverride = true;
+  await h.reconcile.profileChanged('canonical');
+  expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'luna', agentKind: 'codex' }), h.state.current);
+});
+it('finishes at the newest settings selection when another save arrives during switching', async () => {
+  const h = harness();
+  let finish!: () => void;
+  h.apply.mockImplementationOnce(() => new Promise<undefined>((resolve) => { finish = () => resolve(undefined); }));
+  const first = h.reconcile.profileChanged('canonical');
+  await vi.waitFor(() => expect(h.apply).toHaveBeenCalledOnce());
+  h.state.chain = [{ ...h.state.chain[0]!, model: 'newest-model' }];
+  h.state.hasRuntimeOverride = true;
+  const second = h.reconcile.profileChanged('canonical');
+  finish();
+  await Promise.all([first, second]);
+  expect(h.apply).toHaveBeenCalledTimes(2);
+  expect(h.apply).toHaveBeenLastCalledWith('canonical', expect.objectContaining({ model: 'newest-model' }), h.state.current);
+});
+it('selecting the current route cancels a different pending route instead of leaving it queued', async () => {
+  const h = harness();
+  h.state.chain = [{ harness: 'pi', model: 'glm', providerId: 'xd', effort: 'high', fastMode: false }];
+  h.state.next = { ...h.state.current, agentKind: 'codex', model: 'obsolete' };
+  h.state.hasRuntimeOverride = true;
+  await h.reconcile.profileChanged('canonical');
+  expect(h.apply).toHaveBeenCalledWith('canonical', h.state.current, h.state.current);
+});

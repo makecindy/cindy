@@ -42,6 +42,7 @@ import {
 import { extractMessagePreview, sessionCreateToRow, sessionToCamel } from '../mapper.js';
 import {
   botProfileContentChanged,
+  botProfileModelSelectionChanged,
   mergeBotProfileCapabilities,
   normalizeBotProfileModelChain,
 } from './botProfileVersioning.js';
@@ -1234,7 +1235,8 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
       )
     .limit(1);
     owner.assertCurrent();
-    if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId, 'profile');
+    if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId,
+      botProfileModelSelectionChanged(previous, normalizedNextConfig) ? 'model' : 'profile');
   }
   const profile = await readProfile(client, id);
   owner.assertCurrent();

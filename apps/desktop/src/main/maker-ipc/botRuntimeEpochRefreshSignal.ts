@@ -1,4 +1,4 @@
-export type BotRuntimeEpochRefreshReason = 'profile' | 'resource';
+export type BotRuntimeEpochRefreshReason = 'profile' | 'resource' | 'model';
 
 type BotRuntimeEpochRefreshRequest = (
   sessionId: string,
