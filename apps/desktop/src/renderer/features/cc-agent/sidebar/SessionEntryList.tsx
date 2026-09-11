@@ -23,6 +23,7 @@ import { useCollapsibleShowAll } from './hooks/useCollapsibleShowAll';
 import { SessionCard } from './SessionCard';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { mergeVisibleSessionReorder } from './sessionOrder';
 
 /** 条目是否为当前激活会话(group 命中其下任一会话)。 */
 function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): boolean {
@@ -213,38 +214,6 @@ export function SessionEntryList({
     [manualOrder, notifications, scheduleSessionIndex, sessions],
   );
 
-  const rows = <SessionEntryRows entries={entries} notifications={notifications} {...props} />;
-  if (manualOrder && onReorder) {
-    return (
-      <SortableList
-        items={entries.filter((entry): entry is Extract<SidebarSessionEntry, { kind: 'session' }> => entry.kind === 'session')}
-        getId={(entry) => entry.session.id}
-        onReorder={onReorder}
-        reducedMotion={reducedMotion}
-        // The row itself is the drag surface, so the title, preview, and
-        // empty center area all start the same long-press drag gesture.
-        handle="[data-sidebar-session-row]"
-        // Keep the dragged clone on the row's own active/normal colors. The
-        // generic sortable drag class paints a hover background on the outer
-        // wrapper and masks the session row's actual state.
-        dragClass="cc-agent-session-sortable-drag"
-        fallbackOnBody={false}
-        constrainToBounds
-        // Project-local ordering owns the whole session row. The data-no-drag
-        // marker is also used by split-pane DnD and must not disable reordering
-        // of the card body when that mode is active.
-        filter="button, input, textarea, select, a"
-        className="flex flex-col gap-0.5 session-order"
-        rowClassName="cc-agent-session-sortable-row"
-        renderItem={(entry) => <SessionEntryRows entries={[entry]} notifications={notifications} {...props} />}
-      />
-    );
-  }
-
-  if (!collapsible) {
-    return rows;
-  }
-
   // 对话段与项目内会话共用这套折叠:默认前 N 条 + 永远保留 24h 内活动 /
   // 需关注 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
   const { visibleEntries, isOverflowing, totalCount } = getSessionListCollapseView({
@@ -259,9 +228,49 @@ export function SessionEntryList({
     hasAttentionEntry: (entry) => entryHasAttention(entry, notifications),
   });
 
+  const rows = <SessionEntryRows entries={visibleEntries} notifications={notifications} {...props} />;
+  if (manualOrder && onReorder) {
+    const sortableEntries = visibleEntries.filter(
+      (entry): entry is Extract<SidebarSessionEntry, { kind: 'session' }> => entry.kind === 'session',
+    );
+    return (
+      <>
+        <SortableList
+          items={sortableEntries}
+          getId={(entry) => entry.session.id}
+          onReorder={(orderedIds) => onReorder(mergeVisibleSessionReorder(manualOrder, orderedIds))}
+          reducedMotion={reducedMotion}
+          handle="[data-sidebar-session-row]"
+          dragClass="cc-agent-session-sortable-drag"
+          fallbackOnBody={false}
+          constrainToBounds
+          filter="button, input, textarea, select, a"
+          className="flex flex-col gap-0.5 session-order"
+          rowClassName="cc-agent-session-sortable-row"
+          renderItem={(entry) => <SessionEntryRows entries={[entry]} notifications={notifications} {...props} />}
+        />
+        {isOverflowing && (
+          <button
+            type="button"
+            className={cn(
+              'flex h-6 w-full items-center justify-center rounded-full px-2 text-xs font-normal',
+              'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-sidebar-item-hover hover:text-foreground',
+              'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+            )}
+            onClick={() => setShowAll(true)}
+          >
+            {t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
+          </button>
+        )}
+      </>
+    );
+  }
+
+  if (!collapsible) return rows;
+
   return (
     <>
-      <SessionEntryRows entries={visibleEntries} notifications={notifications} {...props} />
+      {rows}
       {isOverflowing && (
         <button
           type="button"
