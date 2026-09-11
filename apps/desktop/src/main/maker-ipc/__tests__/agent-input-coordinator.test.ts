@@ -5279,6 +5279,27 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
   });
 
+
+  it('keeps restart input paused until a new composer message and never replays the interrupted turn', async () => {
+    const h = createHarness();
+    const sid = 'restart-next-message';
+    h.coordinator.enqueue(sid, makeItem('already-dispatched', 'interrupted turn'));
+    await flush();
+    h.coordinator.enqueue(sid, makeItem('waiting', 'unsent message'));
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true, resumeOnUserInput: true });
+    h.setRunning(false);
+    h.coordinator.onSessionClosed(sid);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).queuePaused).toBe(true);
+    h.coordinator.enqueue(sid, makeItem('new-user-message', 'continue'), { resumeRestorePausedQueue: true });
+    await flush();
+    expect(latestProjection(h.projections).queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'unsent message' });
+  });
+
   it('keeps the queue paused after Stop and drains after Continue plus Claude abort boundary', async () => {
     const h = createHarness();
     const sid = 'stop-claude';

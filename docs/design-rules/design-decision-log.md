@@ -627,3 +627,102 @@
   warning-accent 语义限定运行/警告状态表面,普通诊断事件标题不在其列。
 - R2 §4.3 Project_List 五点差异(2026-07-17 lead 裁决本轮不做,出处为设计阶段工作文件 `2026-07-17-r2-ui-specs.md` §4.3,不入仓库):① Project_List 三态拆分(active-task-pill / project-card / flat-list-row 不共用 `sidebar-item-active`);② 项目 header / list card 选中应中性底(`#312F2F`/`#F6F6F6`,非 `#DF0C27` 大红);③ 去 Project_List 选中组 `focus-ring-soft` 蓝 ring,改 card stroke `#DCDFE3`/`#434343`;④ 小箭头 `#A61629` 强调(非整行红底);⑤ 本轮收敛不扩战线,后续另开。
 - splash 渐变辉光层未实现(2026-07-18 backlog,待用户表态)。
+
+## 2026-09-11 DS-8 内置主题依据迁移
+
+本条只迁移既有依据，不批准改色。摘录自接管前 `4f03ea9a7b5f6425e517acd91071df6d397c6079` 的
+`apps/desktop/src/renderer/themes/builtin/*.ts`；原行尾 Token 说明继续随 DTCG `$description` 生成，
+以下跨 Token、分组和否决式决定保存在生成区外。现行规则以 `DESIGN.md §4/§10/§15` 为准，
+数值仍仅编辑 `packages/design-tokens/src/{reference,themes}`；兼容预期见
+`builtinThemesFreeze.test.ts` 与 `cindyThemes.test.ts`。旧常量名只用于解释历史角色，不能恢复为第二数值源。
+
+### atom-one-light
+
+> CREATE AGENT 卡片 / 顶部 pill / 分段开关 + composer pill(#607):
+> 卡片底与 surface 同值收敛(模板惯例),icon 圆底用 CHIP,send 走 tier1 反相 CTA。
+> 用 disabled(比 tertiary 更淡)而非 tertiary:亮色背景下 tertiary≈2.6:1,
+> 命中 docs/design-rules/cindy-design-system.md §4 禁用 Silver 的对比度,placeholder 需更淡才"读着像空"。
+
+### cindy-dark
+
+菜单行说明对应 model-item-hover，侧栏说明对应 surface-translucent-sidebar。
+“色阶改版”与“对侧入表”指 token-decision-table.md §9 及 cindyDecisionData.ts 的双边冻结；
+这些是历史分组依据，不授权将原 alias 改成固定色。
+
+> 下拉行 hover/选中底:必须比弹层面板(surface-elevated #312F2F)更亮才可见。
+> surface-hover(#2F2D2D)是为"压在页面底 #2A2828 上"调的,比抬起的面板还暗→行高亮隐形。
+> 故菜单行专用 token 单独抬亮一档(+12/通道),模型/权限/+ 三个菜单共用它,hover 统一可见。
+> 侧栏玻璃: 用户调参 2026-08-11(黑 5 度 85%)
+> ── 2026-08 色阶改版新增 override(原走注册表默认值,现按新阶梯定值;决策表 §9)──
+> ── 对侧入表锚定: 值 = 本侧此前的注册表解析原值(解析结果不变, 仅为决策表双边冻结)──
+
+### cindy-light
+
+菜单行说明对应 model-item-hover，侧栏说明对应 surface-translucent-sidebar。
+“色阶改版”与“对侧入表”指 token-decision-table.md §9 及 cindyDecisionData.ts 的双边冻结；
+这些是历史分组依据，不授权将原 alias 改成固定色。
+
+> 下拉行 hover/选中底:surface-hover(#F1F1F1)相对面板(#F8F8F8)只差 7,行高亮几乎看不清。
+> 菜单行专用 token 压深一档(-14/通道)使 hover 在面板上清晰,模型/权限/+ 三菜单共用。
+> 侧栏面: 独立压暗一档+85% 遮盖(用户调参 2026-08-17, 与深色对齐)
+> ── 2026-08 色阶改版新增 override(原走注册表默认值,现按新阶梯定值;决策表 §9)──
+> ── 对侧入表锚定: 值 = 本侧此前的注册表解析原值(解析结果不变, 仅为决策表双边冻结)──
+
+### eclipse
+
+> CREATE AGENT 卡片 / 顶部 pill / 分段开关 + composer pill(#607):
+> 卡片底与 surface 同值收敛(模板惯例),icon 圆底用 CHIP,send 走 tier1 反相 CTA。
+
+### github-dark
+
+> CREATE AGENT 卡片 / 顶部 pill / 分段开关 + composer pill(#607):
+> 卡片底与 surface 同值收敛(模板惯例),icon 圆底用 CHIP,send 走 tier1 反相 CTA。
+
+### material-ocean-hc
+
+> CREATE AGENT 卡片 / 顶部 pill / 分段开关 + composer pill(#607):
+> 卡片底与 surface 同值收敛(模板惯例),icon 圆底用 CHIP,send 走 tier1 反相 CTA。
+
+### monokai-pro
+
+> CREATE AGENT 卡片 / 顶部 pill / 分段开关 + composer pill(#607):
+> 卡片底与 surface 同值收敛(模板惯例),icon 圆底用 CHIP,send 走 tier1 反相 CTA。
+
+### one-dark-pro
+
+> CREATE AGENT 卡片 / 顶部 pill / 分段开关 + composer pill(#607):
+> 卡片底与 surface 同值收敛(模板惯例),icon 圆底用 CHIP,send 走 tier1 反相 CTA。
+
+### solarized-light
+
+旧常量角色：SURFACE_BG → surface（base3），CHIP_BG → surface-chip（base2），
+BORDER_BG → border-default，TEXT_PRIMARY/SECONDARY/TERTIARY → 对应 text 槽。
+下面的卡片说明对应 create-agent-control-* / create-agent-quick-card-*；placeholder 对应 text-placeholder。
+
+> base3
+> ELEVATED (Card 层) 与 Chip 同色 = base2。Solarized 官方只有两档色板,
+> docs/design-rules/cindy-design-system.md §2.54 也明文承认 Dark Mode 里 "Card layer color and chip color
+> collapse to the same value — both represent one step lifted off Surface"
+> 这里把同一惯例搬到 light 模式:Card 比 Surface 略深一档 (94% → 88% L,
+> 差 6%) 产生"下沉式抬起"视觉,与 macOS 浅色模式 input 类似。
+> base2 — Card / Chip / Hover / sidebar-active 同源
+> base2 加深,1px 分界
+> 中性灰,正文,刻意比 default-light 淡
+> label / desc
+> meta / 弱化
+> CREATE AGENT 快速开始卡片 / 顶部 pill / 分段开关(#607):
+> 卡片用 base2(CHIP)下沉式抬起,与 chat-input 同层;边框/文字走 tier1 同源常量。
+> hover 必须提亮到 base3(SURFACE):CHIP 与 HOVER 在本主题同值,沿用 HOVER 会让
+> 卡片 default/hover 同色、icon 圆底与卡片同色(codex P1 3671116833)。
+> icon 圆底 resting 提到 base3(SURFACE) 与 base2 卡片区分;hover 时卡片升到
+> base3、圆底由模板规则落回 base2(CHIP),两态均可分(codex P1 3671457570)。
+> send 不用 accent(green) 底:共享 send token 还渲染 10-12px 文本
+> (VoiceInputOverlay / SessionHandoffCard),白字仅
+> 3.20:1,不达 DESIGN.md §10 小字 4.5:1;回退 registry 反相中性(codex P1
+> 3671457561),故本主题不覆盖 send-btn-*。
+> 用 disabled(比 tertiary 更淡)而非 tertiary:亮色背景下 tertiary 偏深,
+> 命中 docs/design-rules/cindy-design-system.md §4 禁用 Silver 的对比度,placeholder 需更淡才"读着像空"。
+
+## 2026-09-11 DS-8 默认代码字体依据迁移
+
+接管前 globals.css 已明确：默认代码字体使用系统等宽字体（macOS 的 SF Mono 不以该字体名暴露给网页，实际命中 Menlo；Windows 命中 Consolas），CJK 显式回退 PingFang / 微软雅黑。JetBrains Mono 已降级为可选预设、不再是默认。DS-8 将这条依据保存在 reference/foundations.json 的 app-font-code-default.$description，字体家族、顺序和用户选字体逻辑均不变。DESIGN.md §3 的 JetBrains Mono 排版样本是历史设计样本，不能据此把默认代码字体改回 JetBrains Mono；当前默认来源为该 DTCG token，运行期字体选择仍由原适配器负责。

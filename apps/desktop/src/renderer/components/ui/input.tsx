@@ -58,9 +58,9 @@ const SIZE_STYLES: Record<
     trailingPaddingRight: 'pr-9',
   },
   lg: {
-    box: 'h-[40px] text-14',
-    paddingLeft: 'pl-[12px]',
-    paddingRight: 'pr-[12px]',
+    box: 'h-[var(--size-input-lg)] text-14',
+    paddingLeft: 'pl-[var(--space-input-lg)]',
+    paddingRight: 'pr-[var(--space-input-lg)]',
     trailingPaddingRight: 'pr-9',
   },
 };

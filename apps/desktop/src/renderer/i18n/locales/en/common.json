@@ -7159,6 +7159,7 @@
     }
   },
   "bots": {
+    "settingsBack": "Back to Settings",
     "sidebar": {
       "newTaskWith": "Start a task with {{name}}"
     },
@@ -7196,6 +7197,7 @@
       "openFailed": "The teammate folder could not be opened."
     },
     "profile": {
+      "title": "Profile",
       "changeAvatar": "Change avatar",
       "avatarFailed": "Couldn’t change the avatar. Choose a PNG, JPEG, or WebP image under 5 MB.",
       "summary": "Self-introduction",
@@ -7277,8 +7279,9 @@
       "empty": "No matching teammate history was found."
     },
     "lifecycle": {
+      "restartHint": "No reply yet?",
       "stoppedBots": "Teammates needing attention",
-      "title": "Activity and history",
+      "title": "Teammate Management",
       "description": "Pause or resume this teammate and find past messages and results.",
       "activeTitle": "Teammate is active",
       "activeDescription": "Can receive messages, run background tasks, and contact other teammates.",
@@ -7290,9 +7293,13 @@
       "resume": "Resume teammate",
       "delete": "Delete permanently",
       "deleteTitle": "Permanently delete teammate",
-      "deleteDescription": "This deletes {{name}} — the personality, the connected channels and the scheduled runs. It cannot be undone.",
+      "deleteDescription": "Deleting {{name}} permanently removes the teammate’s profile, memory, working directory, channel connections and automated tasks. Task history and separate worktrees are retained.",
       "working": "Updating…",
-      "actionFailed": "The action did not finish. Try again shortly."
+      "actionFailed": "The action did not finish. Try again shortly.",
+      "restart": "Restart teammate",
+      "restartDescription": "Stop the current run and prepare a fresh start. Conversation history, memories, and files are kept.",
+      "restarting": "Restarting…",
+      "restarted": "Restarted. Send a message to continue."
     },
     "backToChat": "Back to chat",
     "memoryRecovery": {
@@ -12246,6 +12253,11 @@
     "compression": "For condensing lengthy content."
   },
   "routines": {
+    "unsavedTitle": "Unsaved Changes",
+    "unsavedDescription": "Leaving will discard these changes to the routine.",
+    "discard": "Discard Changes",
+    "continueEditing": "Keep Editing",
+
     "title": "Routines",
     "add": "Add Routine",
     "back": "Back to Routines",

@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   assessRuntimeModelSwitchGate,
+  applyWithVerifiedModelWindow,
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
 } from '../runtimeModelSwitchGate';
@@ -213,74 +214,84 @@ describe('assessRuntimeModelSwitchGate', () => {
 });
 
 describe('buildDeferredRuntimeSelectionProfile', () => {
-  it('keeps the clicked high + Fast on the pending profile',
-    () => {
-      expect(
-        buildDeferredRuntimeSelectionProfile({
-          agentKind: 'claude-code',
-          model: 'claude-fable-5',
-          providerId: 'cindy',
-          atomicSelection: { effort: 'high', fastMode: true },
-          currentFastMode: false,
-        }),
-      ).toEqual({
+  it('keeps the clicked high + Fast on the pending profile', () => {
+    expect(
+      buildDeferredRuntimeSelectionProfile({
         agentKind: 'claude-code',
         model: 'claude-fable-5',
         providerId: 'cindy',
-        effort: 'high',
-        fastMode: true,
-      });
-    },
-  );
+        atomicSelection: { effort: 'high', fastMode: true },
+        currentFastMode: false,
+      }),
+    ).toEqual({
+      agentKind: 'claude-code',
+      model: 'claude-fable-5',
+      providerId: 'cindy',
+      effort: 'high',
+      fastMode: true,
+    });
+  });
 
-  it('no-rank model pending effort is null, not leftover high',
-    () => {
-      expect(
-        buildDeferredRuntimeSelectionProfile({
-          agentKind: 'claude-code',
-          model: 'local-llama',
-          providerId: 'custom:ollama',
-          atomicSelection: { effort: null, fastMode: false },
-          currentFastMode: true,
-        }).effort,
-      ).toBeNull();
-    },
-  );
+  it('no-rank model pending effort is null, not leftover high', () => {
+    expect(
+      buildDeferredRuntimeSelectionProfile({
+        agentKind: 'claude-code',
+        model: 'local-llama',
+        providerId: 'custom:ollama',
+        atomicSelection: { effort: null, fastMode: false },
+        currentFastMode: true,
+      }).effort,
+    ).toBeNull();
+  });
 
-  it('without atomic selection, Fast falls back to the live session, effort stays null',
-    () => {
-      expect(
-        buildDeferredRuntimeSelectionProfile({
-          agentKind: 'codex',
-          model: 'gpt-5.5',
-          providerId: 'openai',
-          currentFastMode: true,
-        }),
-      ).toMatchObject({ effort: null, fastMode: true });
-    },
-  );
+  it('without atomic selection, Fast falls back to the live session, effort stays null', () => {
+    expect(
+      buildDeferredRuntimeSelectionProfile({
+        agentKind: 'codex',
+        model: 'gpt-5.5',
+        providerId: 'openai',
+        currentFastMode: true,
+      }),
+    ).toMatchObject({ effort: null, fastMode: true });
+  });
 });
 
 describe('nextDeferredModelWindowRetry', () => {
-  it('idle settle with no extra confirmation is done',
-    () => {
-      expect(nextDeferredModelWindowRetry(false, undefined)).toEqual({ action: 'done' });
-    },
-  );
+  it('idle settle with no extra confirmation is done', () => {
+    expect(nextDeferredModelWindowRetry(false, undefined)).toEqual({ action: 'done' });
+  });
 
-  it('retries with the verified window instead of dropping the selection',
-    () => {
-      expect(nextDeferredModelWindowRetry(true, 200_000)).toEqual({
-        action: 'retry',
-        confirmedContextWindow: 200_000,
-      });
-    },
-  );
+  it('retries with the verified window instead of dropping the selection', () => {
+    expect(nextDeferredModelWindowRetry(true, 200_000)).toEqual({
+      action: 'retry',
+      confirmedContextWindow: 200_000,
+    });
+  });
 
-  it('cancels only when confirmation is required but no window was verified',
-    () => {
-      expect(nextDeferredModelWindowRetry(true, undefined)).toEqual({ action: 'cancel' });
-      expect(nextDeferredModelWindowRetry(true, 0)).toEqual({ action: 'cancel' });
-    },
-  );
+  it('cancels only when confirmation is required but no window was verified', () => {
+    expect(nextDeferredModelWindowRetry(true, undefined)).toEqual({ action: 'cancel' });
+    expect(nextDeferredModelWindowRetry(true, 0)).toEqual({ action: 'cancel' });
+  });
+});
+
+describe('saved model selection window recovery', () => {
+  it('retries with exactly the verified target window before reporting success', async () => {
+    const apply = vi
+      .fn()
+      .mockResolvedValueOnce({
+        contextWindowConfirmationRequired: 200_000,
+        contextTokensForConfirmation: 400_000,
+      })
+      .mockResolvedValueOnce({ applied: true });
+    await expect(applyWithVerifiedModelWindow(apply)).resolves.toEqual({ applied: true });
+    expect(apply.mock.calls).toEqual([[], [200_000]]);
+  });
+  it('does not guess unknown windows or loop if the verified window changes', async () => {
+    const unknown = vi.fn(async () => ({ contextTokensForConfirmation: 400_000 }));
+    await expect(applyWithVerifiedModelWindow(unknown)).rejects.toThrow('could not be verified');
+    expect(unknown).toHaveBeenCalledOnce();
+    const changed = vi.fn(async () => ({ contextWindowConfirmationRequired: 200_000 }));
+    await expect(applyWithVerifiedModelWindow(changed)).rejects.toThrow('changed during recovery');
+    expect(changed).toHaveBeenCalledTimes(2);
+  });
 });

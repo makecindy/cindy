@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createMemoryRouter, RouterProvider, useLocation } from 'react-router-dom';
+
+const guard = vi.hoisted(() => vi.fn(async () => true));
+beforeEach(() => guard.mockReset().mockResolvedValue(true));
 
 vi.mock('../botPronounContext', () => ({
   useBotTranslation: () => ({ t: (key: string) => key }),
@@ -15,21 +18,34 @@ vi.mock('../botStore', () => ({
   ],
 }));
 vi.mock('../BotsHomeView', async () => {
+  const { useEffect } = await import('react');
   const { Popover, PopoverTrigger, PopoverContent } =
     await import('../../../components/ui/popover');
   return {
-    BotSettings: () => (
-      <div data-testid="simple-bot-settings">
-        <Popover>
-          <PopoverTrigger>Choose model</PopoverTrigger>
-          <PopoverContent>
-            <div data-testid="model-list" style={{ overflowY: 'auto', height: 100 }}>
-              <button>Model row</button>
-            </div>
-          </PopoverContent>
-        </Popover>
-      </div>
-    ),
+    BotSettings: ({
+      beforeCloseRef,
+    }: {
+      beforeCloseRef: { current: (() => Promise<boolean>) | null };
+    }) => {
+      useEffect(() => {
+        beforeCloseRef.current = guard;
+        return () => {
+          beforeCloseRef.current = null;
+        };
+      }, [beforeCloseRef]);
+      return (
+        <div data-testid="simple-bot-settings">
+          <Popover>
+            <PopoverTrigger>Choose model</PopoverTrigger>
+            <PopoverContent>
+              <div data-testid="model-list" style={{ overflowY: 'auto', height: 100 }}>
+                <button>Model row</button>
+              </div>
+            </PopoverContent>
+          </Popover>
+        </div>
+      );
+    },
   };
 });
 
@@ -43,11 +59,53 @@ function LocationProbe() {
 afterEach(cleanup);
 
 describe('BotSettingsDrawer', () => {
+  it.each(['query', 'sidebar', 'back'])(
+    'protects drafts when %s navigation removes settings',
+    async (kind) => {
+      guard.mockResolvedValue(false);
+      const router = createMemoryRouter(
+        [
+          {
+            path: '*',
+            element: (
+              <>
+                <LocationProbe />
+                <BotSettingsDrawer />
+              </>
+            ),
+          },
+        ],
+        {
+          initialEntries: ['/bots/bot-1', '/bots/bot-1?settings=1'],
+          initialIndex: 1,
+        },
+      );
+      render(<RouterProvider router={router} />);
+      const destination = kind === 'back' ? -1 : kind === 'query' ? '/bots/bot-1' : '/cc-agent';
+      const leave = () =>
+        act(async () => {
+          if (typeof destination === 'number') await router.navigate(destination);
+          else await router.navigate(destination);
+        });
+      await leave();
+      await waitFor(() => expect(guard).toHaveBeenCalledOnce());
+      expect(screen.getByRole('dialog')).toBeTruthy();
+      expect(router.state.location.search).toBe('?settings=1');
+      guard.mockResolvedValue(true);
+      await leave();
+      await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+      expect(guard).toHaveBeenCalledTimes(2);
+      expect(router.state.location.pathname).toBe(kind === 'sidebar' ? '/cc-agent' : '/bots/bot-1');
+    },
+  );
+
   it('allows wheel events in portaled model lists while blocking background scrolling', async () => {
     render(
-      <MemoryRouter initialEntries={['/bots/bot-1?settings=1']}>
-        <BotSettingsDrawer />
-      </MemoryRouter>,
+      <RouterProvider
+        router={createMemoryRouter([{ path: '*', element: <BotSettingsDrawer /> }], {
+          initialEntries: ['/bots/bot-1?settings=1'],
+        })}
+      />,
     );
     fireEvent.click(screen.getByRole('button', { name: 'Choose model' }));
     const list = await screen.findByTestId('model-list');
@@ -80,20 +138,23 @@ describe('BotSettingsDrawer', () => {
 
   it('opens as a right half-window without replacing the current chat route', async () => {
     render(
-      <MemoryRouter initialEntries={['/bots/bot-1/session/chat-1?settings=1']}>
-        <Routes>
-          <Route
-            path="/bots/:botId/session/:sessionId"
-            element={
-              <>
-                <div data-testid="chat-underlay" />
-                <LocationProbe />
-                <BotSettingsDrawer />
-              </>
-            }
-          />
-        </Routes>
-      </MemoryRouter>,
+      <RouterProvider
+        router={createMemoryRouter(
+          [
+            {
+              path: '/bots/:botId/session/:sessionId',
+              element: (
+                <>
+                  <div data-testid="chat-underlay" />
+                  <LocationProbe />
+                  <BotSettingsDrawer />
+                </>
+              ),
+            },
+          ],
+          { initialEntries: ['/bots/bot-1/session/chat-1?settings=1'] },
+        )}
+      />,
     );
 
     const dialog = screen.getByRole('dialog');

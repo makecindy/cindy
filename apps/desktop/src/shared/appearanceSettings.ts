@@ -1,3 +1,5 @@
+import { DEFAULT_FONT_SIZES } from './generated/appearance-tokens';
+
 /**
  * Desktop appearance preferences shared by main, preload and renderer.
  *
@@ -24,8 +26,8 @@ export interface AppearanceSettings {
 export const DEFAULT_APPEARANCE_SETTINGS: AppearanceSettings = {
   uiFamily: '',
   codeFamily: '',
-  uiSize: 14,
-  codeSize: 14,
+  uiSize: DEFAULT_FONT_SIZES.uiSize,
+  codeSize: DEFAULT_FONT_SIZES.codeSize,
   windowZoom: 1,
 };
 

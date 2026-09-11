@@ -423,6 +423,7 @@ export function catalogSurfaces() {
         // MainLayout 根容器与侧栏的背景/token/模糊——全局基础样式是主窗口壳的
         // 实际生效样式源（其它 surface 消费同一文件时同样按各自入口登记）。
         'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
       ],
       routerPaths: [],
     },
@@ -727,6 +728,7 @@ export function catalogSurfaces() {
         // sidebar-window-entry.tsx 直接导入 globals.css，body/#root 基础样式与
         // 窗口专用规则在该窗口实际生效——独立窗口与主窗口共享同一全局样式源。
         'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
       ],
       routerPaths: ['/sidebar-window'],
       rendererEntryModules: { sidebarWindow: './sidebar-window-entry' },
@@ -745,6 +747,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/ghost-panel-window',
         // ghost-panel-window-entry.tsx 直接导入 globals.css（同侧栏窗理由）。
         'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
       ],
       routerPaths: ['/ghost-panel-window'],
       rendererEntryModules: { ghostPanelWindow: './ghost-panel-window-entry' },
@@ -763,6 +766,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/main/resource-usage-window',
         // resource-usage-entry.tsx 直接导入 globals.css（同侧栏窗理由）。
         'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
       ],
       routerPaths: [],
       rendererEntryModules: { resourceUsageWindow: './resource-usage-entry' },
@@ -781,6 +785,7 @@ export function catalogSurfaces() {
         'apps/desktop/src/renderer/voice-input/VoiceInputStatusNotice.tsx',
         'apps/desktop/src/main/voice-input/global.ts',
         'apps/desktop/src/renderer/styles/globals.css',
+        'apps/desktop/src/renderer/styles/generated/tokens.css',
       ],
       routerPaths: [],
       viewEntryComponents: { 'voice-input-overlay': 'VoiceInputOverlay' },

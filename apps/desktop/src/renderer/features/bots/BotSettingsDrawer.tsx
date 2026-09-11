@@ -1,6 +1,7 @@
+import { useEffect, useRef } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
-import { matchPath, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+import { matchPath, useBlocker, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { BotPronounProvider, useBotTranslation } from './botPronounContext';
 import { BotSettings } from './BotsHomeView';
@@ -18,7 +19,49 @@ export function BotSettingsDrawer() {
   const bot = bots.find((candidate) => candidate.id === match?.params.botId) ?? null;
   const open = searchParams.get('settings') === '1' && bot !== null;
 
-  const close = () => {
+  const allowNavigation = useRef(false);
+  const pendingGuard = useRef<Promise<boolean> | null>(null);
+  const beforeCloseRef = useRef<(() => Promise<boolean>) | null>(null);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => {
+    if (allowNavigation.current) {
+      allowNavigation.current = false;
+      return false;
+    }
+    return (
+      open &&
+      beforeCloseRef.current !== null &&
+      (currentLocation.pathname !== nextLocation.pathname ||
+        currentLocation.search !== nextLocation.search)
+    );
+  });
+  useEffect(() => {
+    if (blocker.state !== 'blocked') return;
+    let active = true;
+    const check =
+      pendingGuard.current ?? Promise.resolve().then(() => beforeCloseRef.current?.() ?? true);
+    pendingGuard.current = check;
+    void check
+      .then(
+        (allowed) => {
+          if (!active) return;
+          if (allowed) blocker.proceed();
+          else blocker.reset();
+        },
+        () => {
+          if (active) blocker.reset();
+        },
+      )
+      .finally(() => {
+        if (pendingGuard.current === check) pendingGuard.current = null;
+      });
+    return () => {
+      active = false;
+    };
+  }, [blocker]);
+
+  const performClose = (alreadyChecked = true) => {
+    // These callers already passed BotSettings' async save/draft guard.
+    allowNavigation.current = alreadyChecked;
     if (bot?.status === 'archived') {
       navigate('/bots', { replace: true });
       return;
@@ -32,6 +75,10 @@ export function BotSettingsDrawer() {
       { replace: true },
     );
   };
+
+  // Header, Escape and overlay dismissal take the same route guard as Back
+  // and sidebar navigation. BotSettings' own Back action already checked it.
+  const close = () => performClose(false);
 
   if (!bot) return null;
 
@@ -49,7 +96,7 @@ export function BotSettingsDrawer() {
                 {t('bots.settings')}
               </Dialog.Title>
               <Dialog.Close
-                className="flex h-8 w-8 items-center justify-center rounded-lg text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+                className="flex h-9 w-9 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
                 aria-label={t('bots.close')}
               >
                 <X size={17} />
@@ -58,8 +105,9 @@ export function BotSettingsDrawer() {
             <BotPronounProvider bot={bot}>
               <BotSettings
                 key={bot.id}
+                beforeCloseRef={beforeCloseRef}
                 bot={bot}
-                onBack={close}
+                onBack={performClose}
                 onOpenSession={(sessionId, searchJump) => {
                   const projection = bot.sessions.find((item) => item.id === sessionId);
                   const route =

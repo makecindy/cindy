@@ -1,0 +1,3831 @@
+{
+  "defaults": {
+    "surface": {
+      "light": "semantic.defaults.surface.light",
+      "dark": "semantic.defaults.surface.dark"
+    },
+    "surface-hsl": {
+      "light": "semantic.defaults.surface-hsl.light",
+      "dark": "semantic.defaults.surface-hsl.dark"
+    },
+    "surface-elevated": {
+      "light": "semantic.defaults.surface-elevated.light",
+      "dark": "semantic.defaults.surface-elevated.dark"
+    },
+    "surface-elevated-soft": {
+      "light": "semantic.defaults.surface-elevated-soft.light",
+      "dark": "semantic.defaults.surface-elevated-soft.dark"
+    },
+    "surface-card-ivory": {
+      "light": "semantic.defaults.surface-card-ivory.light",
+      "dark": "semantic.defaults.surface-card-ivory.dark"
+    },
+    "surface-chip": {
+      "light": "semantic.defaults.surface-chip.light",
+      "dark": "semantic.defaults.surface-chip.dark"
+    },
+    "surface-chip-alt": {
+      "light": "semantic.defaults.surface-chip-alt.light",
+      "dark": "semantic.defaults.surface-chip-alt.dark"
+    },
+    "surface-hover": {
+      "light": "semantic.defaults.surface-hover.light",
+      "dark": "semantic.defaults.surface-hover.dark"
+    },
+    "surface-hover-soft": {
+      "light": "semantic.defaults.surface-hover-soft.light",
+      "dark": "semantic.defaults.surface-hover-soft.dark"
+    },
+    "surface-hover-hsl": {
+      "light": "semantic.defaults.surface-hover-hsl.light",
+      "dark": "semantic.defaults.surface-hover-hsl.dark"
+    },
+    "surface-on-card": {
+      "light": "semantic.defaults.surface-on-card.light",
+      "dark": "semantic.defaults.surface-on-card.dark"
+    },
+    "panel-bg": {
+      "light": "component.defaults.panel-bg.light",
+      "dark": "component.defaults.panel-bg.dark"
+    },
+    "md-table-bg": {
+      "light": "semantic.defaults.md-table-bg.light",
+      "dark": "semantic.defaults.md-table-bg.dark"
+    },
+    "border-default": {
+      "light": "semantic.defaults.border-default.light",
+      "dark": "semantic.defaults.border-default.dark"
+    },
+    "border-default-hsl": {
+      "light": "semantic.defaults.border-default-hsl.light",
+      "dark": "semantic.defaults.border-default-hsl.dark"
+    },
+    "border-shadcn-hsl": {
+      "light": "semantic.defaults.border-shadcn-hsl.light",
+      "dark": "semantic.defaults.border-shadcn-hsl.dark"
+    },
+    "border-transparent-mixed": {
+      "light": "semantic.defaults.border-transparent-mixed.light",
+      "dark": "semantic.defaults.border-transparent-mixed.dark"
+    },
+    "board": {
+      "light": "component.defaults.board.light",
+      "dark": "component.defaults.board.dark"
+    },
+    "text-primary": {
+      "light": "semantic.defaults.text-primary.light",
+      "dark": "semantic.defaults.text-primary.dark"
+    },
+    "text-primary-on-dark": {
+      "light": "semantic.defaults.text-primary-on-dark.light",
+      "dark": "semantic.defaults.text-primary-on-dark.dark"
+    },
+    "text-primary-emphasis": {
+      "light": "semantic.defaults.text-primary-emphasis.light",
+      "dark": "semantic.defaults.text-primary-emphasis.dark"
+    },
+    "text-primary-inv": {
+      "light": "semantic.defaults.text-primary-inv.light",
+      "dark": "semantic.defaults.text-primary-inv.dark"
+    },
+    "text-primary-body-strong": {
+      "light": "semantic.defaults.text-primary-body-strong.light",
+      "dark": "semantic.defaults.text-primary-body-strong.dark"
+    },
+    "text-primary-hsl": {
+      "light": "semantic.defaults.text-primary-hsl.light",
+      "dark": "semantic.defaults.text-primary-hsl.dark"
+    },
+    "text-secondary": {
+      "light": "semantic.defaults.text-secondary.light",
+      "dark": "semantic.defaults.text-secondary.dark"
+    },
+    "text-secondary-cross": {
+      "light": "semantic.defaults.text-secondary-cross.light",
+      "dark": "semantic.defaults.text-secondary-cross.dark"
+    },
+    "text-secondary-mid": {
+      "light": "semantic.defaults.text-secondary-mid.light",
+      "dark": "semantic.defaults.text-secondary-mid.dark"
+    },
+    "text-tertiary": {
+      "light": "semantic.defaults.text-tertiary.light",
+      "dark": "semantic.defaults.text-tertiary.dark"
+    },
+    "text-tertiary-stone": {
+      "light": "semantic.defaults.text-tertiary-stone.light",
+      "dark": "semantic.defaults.text-tertiary-stone.dark"
+    },
+    "text-tertiary-mid": {
+      "light": "semantic.defaults.text-tertiary-mid.light",
+      "dark": "semantic.defaults.text-tertiary-mid.dark"
+    },
+    "text-tertiary-hsl": {
+      "light": "semantic.defaults.text-tertiary-hsl.light",
+      "dark": "semantic.defaults.text-tertiary-hsl.dark"
+    },
+    "text-disabled": {
+      "light": "semantic.defaults.text-disabled.light",
+      "dark": "semantic.defaults.text-disabled.dark"
+    },
+    "text-disabled-tertiary": {
+      "light": "semantic.defaults.text-disabled-tertiary.light",
+      "dark": "semantic.defaults.text-disabled-tertiary.dark"
+    },
+    "text-placeholder": {
+      "light": "semantic.defaults.text-placeholder.light",
+      "dark": "semantic.defaults.text-placeholder.dark"
+    },
+    "accent-cta-bg": {
+      "light": "semantic.defaults.accent-cta-bg.light",
+      "dark": "semantic.defaults.accent-cta-bg.dark"
+    },
+    "accent-cta-bg-pure": {
+      "light": "semantic.defaults.accent-cta-bg-pure.light",
+      "dark": "semantic.defaults.accent-cta-bg-pure.dark"
+    },
+    "accent-emphasis": {
+      "light": "semantic.defaults.accent-emphasis.light",
+      "dark": "semantic.defaults.accent-emphasis.dark"
+    },
+    "accent-soft": {
+      "light": "semantic.defaults.accent-soft.light",
+      "dark": "semantic.defaults.accent-soft.dark"
+    },
+    "accent-hover": {
+      "light": "semantic.defaults.accent-hover.light",
+      "dark": "semantic.defaults.accent-hover.dark"
+    },
+    "accent-pure-cta-fg": {
+      "light": "semantic.defaults.accent-pure-cta-fg.light",
+      "dark": "semantic.defaults.accent-pure-cta-fg.dark"
+    },
+    "error-flat": {
+      "light": "semantic.defaults.error-flat.light",
+      "dark": "semantic.defaults.error-flat.dark"
+    },
+    "warning-accent": {
+      "light": "semantic.defaults.warning-accent.light",
+      "dark": "semantic.defaults.warning-accent.dark"
+    },
+    "process-agent-task-icon": {
+      "light": "semantic.defaults.process-agent-task-icon.light",
+      "dark": "semantic.defaults.process-agent-task-icon.dark"
+    },
+    "process-agent-service-icon": {
+      "light": "semantic.defaults.process-agent-service-icon.light",
+      "dark": "semantic.defaults.process-agent-service-icon.dark"
+    },
+    "process-main-icon": {
+      "light": "semantic.defaults.process-main-icon.light",
+      "dark": "semantic.defaults.process-main-icon.dark"
+    },
+    "process-renderer-icon": {
+      "light": "semantic.defaults.process-renderer-icon.light",
+      "dark": "semantic.defaults.process-renderer-icon.dark"
+    },
+    "process-gpu-icon": {
+      "light": "semantic.defaults.process-gpu-icon.light",
+      "dark": "semantic.defaults.process-gpu-icon.dark"
+    },
+    "process-utility-icon": {
+      "light": "semantic.defaults.process-utility-icon.light",
+      "dark": "semantic.defaults.process-utility-icon.dark"
+    },
+    "usage-heatmap-high": {
+      "light": "component.defaults.usage-heatmap-high.light",
+      "dark": "component.defaults.usage-heatmap-high.dark"
+    },
+    "usage-model-1": {
+      "light": "semantic.defaults.usage-model-1.light",
+      "dark": "semantic.defaults.usage-model-1.dark"
+    },
+    "usage-model-2": {
+      "light": "semantic.defaults.usage-model-2.light",
+      "dark": "semantic.defaults.usage-model-2.dark"
+    },
+    "usage-model-3": {
+      "light": "semantic.defaults.usage-model-3.light",
+      "dark": "semantic.defaults.usage-model-3.dark"
+    },
+    "usage-model-4": {
+      "light": "semantic.defaults.usage-model-4.light",
+      "dark": "semantic.defaults.usage-model-4.dark"
+    },
+    "usage-model-5": {
+      "light": "semantic.defaults.usage-model-5.light",
+      "dark": "semantic.defaults.usage-model-5.dark"
+    },
+    "background": {
+      "light": "semantic.defaults.background.light",
+      "dark": "semantic.defaults.background.dark"
+    },
+    "foreground": {
+      "light": "component.defaults.foreground.light",
+      "dark": "component.defaults.foreground.dark"
+    },
+    "muted": {
+      "light": "semantic.defaults.muted.light",
+      "dark": "semantic.defaults.muted.dark"
+    },
+    "muted-foreground": {
+      "light": "semantic.defaults.muted-foreground.light",
+      "dark": "semantic.defaults.muted-foreground.dark"
+    },
+    "border": {
+      "light": "component.defaults.border.light",
+      "dark": "component.defaults.border.dark"
+    },
+    "input": {
+      "light": "component.defaults.input.light",
+      "dark": "component.defaults.input.dark"
+    },
+    "switch-track-off": {
+      "light": "component.defaults.switch-track-off.light",
+      "dark": "component.defaults.switch-track-off.dark"
+    },
+    "switch-thumb-off": {
+      "light": "component.defaults.switch-thumb-off.light",
+      "dark": "component.defaults.switch-thumb-off.dark"
+    },
+    "switch-disabled-opacity": {
+      "light": "semantic.defaults.switch-disabled-opacity.light",
+      "dark": "semantic.defaults.switch-disabled-opacity.dark"
+    },
+    "switch-disabled-thumb-opacity": {
+      "light": "semantic.defaults.switch-disabled-thumb-opacity.light",
+      "dark": "semantic.defaults.switch-disabled-thumb-opacity.dark"
+    },
+    "switch-track-on": {
+      "light": "component.defaults.switch-track-on.light",
+      "dark": "component.defaults.switch-track-on.dark"
+    },
+    "ring": {
+      "light": "component.defaults.ring.light",
+      "dark": "component.defaults.ring.dark"
+    },
+    "primary": {
+      "light": "component.defaults.primary.light",
+      "dark": "component.defaults.primary.dark"
+    },
+    "primary-foreground": {
+      "light": "semantic.defaults.primary-foreground.light",
+      "dark": "semantic.defaults.primary-foreground.dark"
+    },
+    "secondary": {
+      "light": "semantic.defaults.secondary.light",
+      "dark": "semantic.defaults.secondary.dark"
+    },
+    "secondary-foreground": {
+      "light": "component.defaults.secondary-foreground.light",
+      "dark": "component.defaults.secondary-foreground.dark"
+    },
+    "accent": {
+      "light": "semantic.defaults.accent.light",
+      "dark": "semantic.defaults.accent.dark"
+    },
+    "accent-foreground": {
+      "light": "component.defaults.accent-foreground.light",
+      "dark": "component.defaults.accent-foreground.dark"
+    },
+    "popover": {
+      "light": "semantic.defaults.popover.light",
+      "dark": "semantic.defaults.popover.dark"
+    },
+    "popover-foreground": {
+      "light": "component.defaults.popover-foreground.light",
+      "dark": "component.defaults.popover-foreground.dark"
+    },
+    "radius": {
+      "light": "semantic.defaults.radius.light",
+      "dark": null
+    },
+    "titlebar": {
+      "light": "component.defaults.titlebar.light",
+      "dark": "component.defaults.titlebar.dark"
+    },
+    "titlebar-border": {
+      "light": "component.defaults.titlebar-border.light",
+      "dark": "component.defaults.titlebar-border.dark"
+    },
+    "titlebar-icon": {
+      "light": "semantic.defaults.titlebar-icon.light",
+      "dark": "semantic.defaults.titlebar-icon.dark"
+    },
+    "titlebar-button-hover": {
+      "light": "component.defaults.titlebar-button-hover.light",
+      "dark": "component.defaults.titlebar-button-hover.dark"
+    },
+    "titlebar-control-hover": {
+      "light": "component.defaults.titlebar-control-hover.light",
+      "dark": "component.defaults.titlebar-control-hover.dark"
+    },
+    "splash-bg": {
+      "light": "semantic.defaults.splash-bg.light",
+      "dark": "semantic.defaults.splash-bg.dark"
+    },
+    "splash-text": {
+      "light": "semantic.defaults.splash-text.light",
+      "dark": "semantic.defaults.splash-text.dark"
+    },
+    "splash-text-muted": {
+      "light": "semantic.defaults.splash-text-muted.light",
+      "dark": "semantic.defaults.splash-text-muted.dark"
+    },
+    "splash-text-destructive": {
+      "light": "semantic.defaults.splash-text-destructive.light",
+      "dark": "semantic.defaults.splash-text-destructive.dark"
+    },
+    "splash-fade-duration": {
+      "light": "semantic.defaults.splash-fade-duration.light",
+      "dark": null
+    },
+    "splash-fade-easing": {
+      "light": "semantic.defaults.splash-fade-easing.light",
+      "dark": null
+    },
+    "destructive": {
+      "light": "semantic.defaults.destructive.light",
+      "dark": "semantic.defaults.destructive.dark"
+    },
+    "confirm-bg": {
+      "light": "semantic.defaults.confirm-bg.light",
+      "dark": "semantic.defaults.confirm-bg.dark"
+    },
+    "confirm-title": {
+      "light": "semantic.defaults.confirm-title.light",
+      "dark": "semantic.defaults.confirm-title.dark"
+    },
+    "confirm-desc": {
+      "light": "component.defaults.confirm-desc.light",
+      "dark": "component.defaults.confirm-desc.dark"
+    },
+    "confirm-btn-primary-bg": {
+      "light": "semantic.defaults.confirm-btn-primary-bg.light",
+      "dark": "semantic.defaults.confirm-btn-primary-bg.dark"
+    },
+    "confirm-btn-primary-text": {
+      "light": "semantic.defaults.confirm-btn-primary-text.light",
+      "dark": "semantic.defaults.confirm-btn-primary-text.dark"
+    },
+    "confirm-btn-primary-hover": {
+      "light": "component.defaults.confirm-btn-primary-hover.light",
+      "dark": "component.defaults.confirm-btn-primary-hover.dark"
+    },
+    "confirm-btn-secondary-text": {
+      "light": "semantic.defaults.confirm-btn-secondary-text.light",
+      "dark": "semantic.defaults.confirm-btn-secondary-text.dark"
+    },
+    "confirm-btn-secondary-border": {
+      "light": "semantic.defaults.confirm-btn-secondary-border.light",
+      "dark": "semantic.defaults.confirm-btn-secondary-border.dark"
+    },
+    "confirm-btn-secondary-hover": {
+      "light": "semantic.defaults.confirm-btn-secondary-hover.light",
+      "dark": "semantic.defaults.confirm-btn-secondary-hover.dark"
+    },
+    "sidebar": {
+      "light": "component.defaults.sidebar.light",
+      "dark": "component.defaults.sidebar.dark"
+    },
+    "sidebar-border": {
+      "light": "component.defaults.sidebar-border.light",
+      "dark": "component.defaults.sidebar-border.dark"
+    },
+    "sidebar-item-hover": {
+      "light": "component.defaults.sidebar-item-hover.light",
+      "dark": "component.defaults.sidebar-item-hover.dark"
+    },
+    "sidebar-item-active": {
+      "light": "semantic.defaults.sidebar-item-active.light",
+      "dark": "semantic.defaults.sidebar-item-active.dark"
+    },
+    "sidebar-item-active-foreground": {
+      "light": "component.defaults.sidebar-item-active-foreground.light",
+      "dark": "component.defaults.sidebar-item-active-foreground.dark"
+    },
+    "sidebar-item-active-border": {
+      "light": "component.defaults.sidebar-item-active-border.light",
+      "dark": "component.defaults.sidebar-item-active-border.dark"
+    },
+    "sidebar-search-bg": {
+      "light": "component.defaults.sidebar-search-bg.light",
+      "dark": "component.defaults.sidebar-search-bg.dark"
+    },
+    "sidebar-muted": {
+      "light": "component.defaults.sidebar-muted.light",
+      "dark": "component.defaults.sidebar-muted.dark"
+    },
+    "sidebar-action-icon": {
+      "light": "semantic.defaults.sidebar-action-icon.light",
+      "dark": "semantic.defaults.sidebar-action-icon.dark"
+    },
+    "search-match-bg": {
+      "light": "semantic.defaults.search-match-bg.light",
+      "dark": "semantic.defaults.search-match-bg.dark"
+    },
+    "search-match-fg": {
+      "light": "semantic.defaults.search-match-fg.light",
+      "dark": "semantic.defaults.search-match-fg.dark"
+    },
+    "update-btn-border": {
+      "light": "semantic.defaults.update-btn-border.light",
+      "dark": "semantic.defaults.update-btn-border.dark"
+    },
+    "update-btn-text": {
+      "light": "semantic.defaults.update-btn-text.light",
+      "dark": "semantic.defaults.update-btn-text.dark"
+    },
+    "update-btn-hover": {
+      "light": "semantic.defaults.update-btn-hover.light",
+      "dark": "semantic.defaults.update-btn-hover.dark"
+    },
+    "update-btn-bg": {
+      "light": "semantic.defaults.update-btn-bg.light",
+      "dark": "semantic.defaults.update-btn-bg.dark"
+    },
+    "content-area": {
+      "light": "component.defaults.content-area.light",
+      "dark": "component.defaults.content-area.dark"
+    },
+    "welcome-text": {
+      "light": "component.defaults.welcome-text.light",
+      "dark": "component.defaults.welcome-text.dark"
+    },
+    "login-bg-base": {
+      "light": "semantic.defaults.login-bg-base.light",
+      "dark": "semantic.defaults.login-bg-base.dark"
+    },
+    "login-panel-border": {
+      "light": "semantic.defaults.login-panel-border.light",
+      "dark": "semantic.defaults.login-panel-border.dark"
+    },
+    "login-link-pressed": {
+      "light": "semantic.defaults.login-link-pressed.light",
+      "dark": "semantic.defaults.login-link-pressed.dark"
+    },
+    "login-callback-card-bg": {
+      "light": "semantic.defaults.login-callback-card-bg.light",
+      "dark": "semantic.defaults.login-callback-card-bg.dark"
+    },
+    "login-callback-card-border": {
+      "light": "semantic.defaults.login-callback-card-border.light",
+      "dark": "semantic.defaults.login-callback-card-border.dark"
+    },
+    "login-callback-title": {
+      "light": "semantic.defaults.login-callback-title.light",
+      "dark": "semantic.defaults.login-callback-title.dark"
+    },
+    "login-callback-body": {
+      "light": "semantic.defaults.login-callback-body.light",
+      "dark": "semantic.defaults.login-callback-body.dark"
+    },
+    "login-callback-cta-bg": {
+      "light": "semantic.defaults.login-callback-cta-bg.light",
+      "dark": "semantic.defaults.login-callback-cta-bg.dark"
+    },
+    "login-callback-cta-border": {
+      "light": "semantic.defaults.login-callback-cta-border.light",
+      "dark": "semantic.defaults.login-callback-cta-border.dark"
+    },
+    "login-callback-cta-text": {
+      "light": "semantic.defaults.login-callback-cta-text.light",
+      "dark": "semantic.defaults.login-callback-cta-text.dark"
+    },
+    "login-panel-bg": {
+      "light": "semantic.defaults.login-panel-bg.light",
+      "dark": "semantic.defaults.login-panel-bg.dark"
+    },
+    "login-control-bg": {
+      "light": "semantic.defaults.login-control-bg.light",
+      "dark": "semantic.defaults.login-control-bg.dark"
+    },
+    "login-action-control-bg": {
+      "light": "semantic.defaults.login-action-control-bg.light",
+      "dark": "semantic.defaults.login-action-control-bg.dark"
+    },
+    "login-back-border": {
+      "light": "semantic.defaults.login-back-border.light",
+      "dark": "semantic.defaults.login-back-border.dark"
+    },
+    "login-control-border": {
+      "light": "semantic.defaults.login-control-border.light",
+      "dark": "semantic.defaults.login-control-border.dark"
+    },
+    "login-control-border-active": {
+      "light": "semantic.defaults.login-control-border-active.light",
+      "dark": "semantic.defaults.login-control-border-active.dark"
+    },
+    "login-control-border-disabled": {
+      "light": "semantic.defaults.login-control-border-disabled.light",
+      "dark": "semantic.defaults.login-control-border-disabled.dark"
+    },
+    "login-control-text": {
+      "light": "semantic.defaults.login-control-text.light",
+      "dark": "semantic.defaults.login-control-text.dark"
+    },
+    "login-control-placeholder": {
+      "light": "semantic.defaults.login-control-placeholder.light",
+      "dark": "semantic.defaults.login-control-placeholder.dark"
+    },
+    "login-title-text": {
+      "light": "semantic.defaults.login-title-text.light",
+      "dark": "semantic.defaults.login-title-text.dark"
+    },
+    "login-secondary-text": {
+      "light": "semantic.defaults.login-secondary-text.light",
+      "dark": "semantic.defaults.login-secondary-text.dark"
+    },
+    "login-primary-button-bg": {
+      "light": "semantic.defaults.login-primary-button-bg.light",
+      "dark": "semantic.defaults.login-primary-button-bg.dark"
+    },
+    "login-primary-button-border": {
+      "light": "semantic.defaults.login-primary-button-border.light",
+      "dark": "semantic.defaults.login-primary-button-border.dark"
+    },
+    "login-primary-button-text": {
+      "light": "semantic.defaults.login-primary-button-text.light",
+      "dark": "semantic.defaults.login-primary-button-text.dark"
+    },
+    "login-disabled-button-overlay": {
+      "light": "semantic.defaults.login-disabled-button-overlay.light",
+      "dark": "semantic.defaults.login-disabled-button-overlay.dark"
+    },
+    "login-disabled-button-bg": {
+      "light": "semantic.defaults.login-disabled-button-bg.light",
+      "dark": "semantic.defaults.login-disabled-button-bg.dark"
+    },
+    "login-disabled-button-text": {
+      "light": "semantic.defaults.login-disabled-button-text.light",
+      "dark": "semantic.defaults.login-disabled-button-text.dark"
+    },
+    "login-inverted-button-border": {
+      "light": "semantic.defaults.login-inverted-button-border.light",
+      "dark": "semantic.defaults.login-inverted-button-border.dark"
+    },
+    "login-link-text": {
+      "light": "semantic.defaults.login-link-text.light",
+      "dark": "semantic.defaults.login-link-text.dark"
+    },
+    "login-link-hover": {
+      "light": "semantic.defaults.login-link-hover.light",
+      "dark": "semantic.defaults.login-link-hover.dark"
+    },
+    "login-error-fg": {
+      "light": "semantic.defaults.login-error-fg.light",
+      "dark": "semantic.defaults.login-error-fg.dark"
+    },
+    "login-deletion-bubble-bg": {
+      "light": "semantic.defaults.login-deletion-bubble-bg.light",
+      "dark": "semantic.defaults.login-deletion-bubble-bg.dark"
+    },
+    "login-deletion-bubble-border": {
+      "light": "semantic.defaults.login-deletion-bubble-border.light",
+      "dark": "semantic.defaults.login-deletion-bubble-border.dark"
+    },
+    "login-splash-progress-track": {
+      "light": "semantic.defaults.login-splash-progress-track.light",
+      "dark": "semantic.defaults.login-splash-progress-track.dark"
+    },
+    "login-splash-progress-fill": {
+      "light": "semantic.defaults.login-splash-progress-fill.light",
+      "dark": "semantic.defaults.login-splash-progress-fill.dark"
+    },
+    "login-overlay-button-hover": {
+      "light": "semantic.defaults.login-overlay-button-hover.light",
+      "dark": "semantic.defaults.login-overlay-button-hover.dark"
+    },
+    "login-overlay-button-pressed": {
+      "light": "semantic.defaults.login-overlay-button-pressed.light",
+      "dark": "semantic.defaults.login-overlay-button-pressed.dark"
+    },
+    "login-overlay-back-hover": {
+      "light": "semantic.defaults.login-overlay-back-hover.light",
+      "dark": "semantic.defaults.login-overlay-back-hover.dark"
+    },
+    "login-overlay-back-pressed": {
+      "light": "semantic.defaults.login-overlay-back-pressed.light",
+      "dark": "semantic.defaults.login-overlay-back-pressed.dark"
+    },
+    "login-overlay-row-hover": {
+      "light": "semantic.defaults.login-overlay-row-hover.light",
+      "dark": "semantic.defaults.login-overlay-row-hover.dark"
+    },
+    "login-overlay-row-pressed": {
+      "light": "semantic.defaults.login-overlay-row-pressed.light",
+      "dark": "semantic.defaults.login-overlay-row-pressed.dark"
+    },
+    "login-overlay-input-hover": {
+      "light": "semantic.defaults.login-overlay-input-hover.light",
+      "dark": "semantic.defaults.login-overlay-input-hover.dark"
+    },
+    "login-loading-ring-track": {
+      "light": "semantic.defaults.login-loading-ring-track.light",
+      "dark": "semantic.defaults.login-loading-ring-track.dark"
+    },
+    "login-consent-radio-bg": {
+      "light": "semantic.defaults.login-consent-radio-bg.light",
+      "dark": "semantic.defaults.login-consent-radio-bg.dark"
+    },
+    "login-consent-radio-border": {
+      "light": "semantic.defaults.login-consent-radio-border.light",
+      "dark": "semantic.defaults.login-consent-radio-border.dark"
+    },
+    "login-consent-radio-checked-bg": {
+      "light": "semantic.defaults.login-consent-radio-checked-bg.light",
+      "dark": "semantic.defaults.login-consent-radio-checked-bg.dark"
+    },
+    "login-consent-radio-check": {
+      "light": "semantic.defaults.login-consent-radio-check.light",
+      "dark": "semantic.defaults.login-consent-radio-check.dark"
+    },
+    "login-consent-overlay": {
+      "light": "semantic.defaults.login-consent-overlay.light",
+      "dark": "semantic.defaults.login-consent-overlay.dark"
+    },
+    "login-secondary-button-bg": {
+      "light": "semantic.defaults.login-secondary-button-bg.light",
+      "dark": "semantic.defaults.login-secondary-button-bg.dark"
+    },
+    "login-secondary-button-border": {
+      "light": "semantic.defaults.login-secondary-button-border.light",
+      "dark": "semantic.defaults.login-secondary-button-border.dark"
+    },
+    "login-secondary-button-text": {
+      "light": "semantic.defaults.login-secondary-button-text.light",
+      "dark": "semantic.defaults.login-secondary-button-text.dark"
+    },
+    "login-overlay-secondary-hover": {
+      "light": "semantic.defaults.login-overlay-secondary-hover.light",
+      "dark": "semantic.defaults.login-overlay-secondary-hover.dark"
+    },
+    "login-overlay-secondary-pressed": {
+      "light": "semantic.defaults.login-overlay-secondary-pressed.light",
+      "dark": "semantic.defaults.login-overlay-secondary-pressed.dark"
+    },
+    "login-apple-circle-bg": {
+      "light": "semantic.defaults.login-apple-circle-bg.light",
+      "dark": "semantic.defaults.login-apple-circle-bg.dark"
+    },
+    "lightbox-cta-bg": {
+      "light": "component.defaults.lightbox-cta-bg.light",
+      "dark": "component.defaults.lightbox-cta-bg.dark"
+    },
+    "lightbox-cta-fg": {
+      "light": "component.defaults.lightbox-cta-fg.light",
+      "dark": "component.defaults.lightbox-cta-fg.dark"
+    },
+    "lightbox-cta-hover": {
+      "light": "component.defaults.lightbox-cta-hover.light",
+      "dark": "component.defaults.lightbox-cta-hover.dark"
+    },
+    "chat-input-bg": {
+      "light": "component.defaults.chat-input-bg.light",
+      "dark": "component.defaults.chat-input-bg.dark"
+    },
+    "chat-input-border": {
+      "light": "component.defaults.chat-input-border.light",
+      "dark": "component.defaults.chat-input-border.dark"
+    },
+    "chat-input-border-focus": {
+      "light": "component.defaults.chat-input-border-focus.light",
+      "dark": "component.defaults.chat-input-border-focus.dark"
+    },
+    "chat-input-text": {
+      "light": "semantic.defaults.chat-input-text.light",
+      "dark": "semantic.defaults.chat-input-text.dark"
+    },
+    "chat-input-placeholder": {
+      "light": "component.defaults.chat-input-placeholder.light",
+      "dark": "component.defaults.chat-input-placeholder.dark"
+    },
+    "file-chip-bg": {
+      "light": "semantic.defaults.file-chip-bg.light",
+      "dark": "semantic.defaults.file-chip-bg.dark"
+    },
+    "drop-overlay-bg": {
+      "light": "semantic.defaults.drop-overlay-bg.light",
+      "dark": "semantic.defaults.drop-overlay-bg.dark"
+    },
+    "drop-overlay-border": {
+      "light": "component.defaults.drop-overlay-border.light",
+      "dark": "component.defaults.drop-overlay-border.dark"
+    },
+    "tooltip-bg": {
+      "light": "semantic.defaults.tooltip-bg.light",
+      "dark": "semantic.defaults.tooltip-bg.dark"
+    },
+    "tooltip-text": {
+      "light": "semantic.defaults.tooltip-text.light",
+      "dark": "semantic.defaults.tooltip-text.dark"
+    },
+    "file-remove-bg": {
+      "light": "semantic.defaults.file-remove-bg.light",
+      "dark": "semantic.defaults.file-remove-bg.dark"
+    },
+    "file-badge-pdf": {
+      "light": "semantic.defaults.file-badge-pdf.light",
+      "dark": "semantic.defaults.file-badge-pdf.dark"
+    },
+    "file-badge-doc": {
+      "light": "semantic.defaults.file-badge-doc.light",
+      "dark": "semantic.defaults.file-badge-doc.dark"
+    },
+    "file-badge-sheet": {
+      "light": "semantic.defaults.file-badge-sheet.light",
+      "dark": "semantic.defaults.file-badge-sheet.dark"
+    },
+    "file-badge-slide": {
+      "light": "semantic.defaults.file-badge-slide.light",
+      "dark": "semantic.defaults.file-badge-slide.dark"
+    },
+    "file-badge-code": {
+      "light": "semantic.defaults.file-badge-code.light",
+      "dark": "semantic.defaults.file-badge-code.dark"
+    },
+    "file-badge-fg": {
+      "light": "semantic.defaults.file-badge-fg.light",
+      "dark": "semantic.defaults.file-badge-fg.dark"
+    },
+    "bot-avatar-red-bg": {
+      "light": "semantic.defaults.bot-avatar-red-bg.light",
+      "dark": "semantic.defaults.bot-avatar-red-bg.dark"
+    },
+    "bot-avatar-orange-bg": {
+      "light": "semantic.defaults.bot-avatar-orange-bg.light",
+      "dark": "semantic.defaults.bot-avatar-orange-bg.dark"
+    },
+    "bot-avatar-amber-bg": {
+      "light": "semantic.defaults.bot-avatar-amber-bg.light",
+      "dark": "semantic.defaults.bot-avatar-amber-bg.dark"
+    },
+    "bot-avatar-green-bg": {
+      "light": "semantic.defaults.bot-avatar-green-bg.light",
+      "dark": "semantic.defaults.bot-avatar-green-bg.dark"
+    },
+    "bot-avatar-teal-bg": {
+      "light": "semantic.defaults.bot-avatar-teal-bg.light",
+      "dark": "semantic.defaults.bot-avatar-teal-bg.dark"
+    },
+    "bot-avatar-blue-bg": {
+      "light": "semantic.defaults.bot-avatar-blue-bg.light",
+      "dark": "semantic.defaults.bot-avatar-blue-bg.dark"
+    },
+    "bot-avatar-violet-bg": {
+      "light": "semantic.defaults.bot-avatar-violet-bg.light",
+      "dark": "semantic.defaults.bot-avatar-violet-bg.dark"
+    },
+    "bot-avatar-pink-bg": {
+      "light": "semantic.defaults.bot-avatar-pink-bg.light",
+      "dark": "semantic.defaults.bot-avatar-pink-bg.dark"
+    },
+    "bot-avatar-graphite-bg": {
+      "light": "semantic.defaults.bot-avatar-graphite-bg.light",
+      "dark": "semantic.defaults.bot-avatar-graphite-bg.dark"
+    },
+    "bot-unread-bg": {
+      "light": "semantic.defaults.bot-unread-bg.light",
+      "dark": "semantic.defaults.bot-unread-bg.dark"
+    },
+    "bot-unread-fg": {
+      "light": "semantic.defaults.bot-unread-fg.light",
+      "dark": "semantic.defaults.bot-unread-fg.dark"
+    },
+    "chat-input-chip-bg": {
+      "light": "component.defaults.chat-input-chip-bg.light",
+      "dark": "component.defaults.chat-input-chip-bg.dark"
+    },
+    "chat-input-chip-border": {
+      "light": "semantic.defaults.chat-input-chip-border.light",
+      "dark": "semantic.defaults.chat-input-chip-border.dark"
+    },
+    "chat-input-chip-text": {
+      "light": "component.defaults.chat-input-chip-text.light",
+      "dark": "component.defaults.chat-input-chip-text.dark"
+    },
+    "chat-input-chip-icon": {
+      "light": "component.defaults.chat-input-chip-icon.light",
+      "dark": "component.defaults.chat-input-chip-icon.dark"
+    },
+    "cmd-palette-bg": {
+      "light": "component.defaults.cmd-palette-bg.light",
+      "dark": "component.defaults.cmd-palette-bg.dark"
+    },
+    "cmd-palette-border": {
+      "light": "component.defaults.cmd-palette-border.light",
+      "dark": "component.defaults.cmd-palette-border.dark"
+    },
+    "cmd-palette-item-hover": {
+      "light": "component.defaults.cmd-palette-item-hover.light",
+      "dark": "component.defaults.cmd-palette-item-hover.dark"
+    },
+    "cmd-palette-item-text": {
+      "light": "component.defaults.cmd-palette-item-text.light",
+      "dark": "component.defaults.cmd-palette-item-text.dark"
+    },
+    "cmd-palette-item-meta": {
+      "light": "component.defaults.cmd-palette-item-meta.light",
+      "dark": "component.defaults.cmd-palette-item-meta.dark"
+    },
+    "cmd-palette-item-icon": {
+      "light": "component.defaults.cmd-palette-item-icon.light",
+      "dark": "component.defaults.cmd-palette-item-icon.dark"
+    },
+    "cmd-palette-empty": {
+      "light": "component.defaults.cmd-palette-empty.light",
+      "dark": "component.defaults.cmd-palette-empty.dark"
+    },
+    "cmd-palette-tooltip-body": {
+      "light": "component.defaults.cmd-palette-tooltip-body.light",
+      "dark": "component.defaults.cmd-palette-tooltip-body.dark"
+    },
+    "send-btn-bg": {
+      "light": "component.defaults.send-btn-bg.light",
+      "dark": "component.defaults.send-btn-bg.dark"
+    },
+    "send-btn-icon": {
+      "light": "component.defaults.send-btn-icon.light",
+      "dark": "component.defaults.send-btn-icon.dark"
+    },
+    "send-btn-disabled-bg": {
+      "light": "component.defaults.send-btn-disabled-bg.light",
+      "dark": "component.defaults.send-btn-disabled-bg.dark"
+    },
+    "send-btn-disabled-icon": {
+      "light": "component.defaults.send-btn-disabled-icon.light",
+      "dark": "component.defaults.send-btn-disabled-icon.dark"
+    },
+    "send-btn-hover-bg": {
+      "light": "component.defaults.send-btn-hover-bg.light",
+      "dark": "component.defaults.send-btn-hover-bg.dark"
+    },
+    "send-btn-pressed-bg": {
+      "light": "component.defaults.send-btn-pressed-bg.light",
+      "dark": "component.defaults.send-btn-pressed-bg.dark"
+    },
+    "perm-code-bg": {
+      "light": "semantic.defaults.perm-code-bg.light",
+      "dark": "semantic.defaults.perm-code-bg.dark"
+    },
+    "perm-code-border": {
+      "light": "component.defaults.perm-code-border.light",
+      "dark": "component.defaults.perm-code-border.dark"
+    },
+    "perm-allow-btn-bg": {
+      "light": "semantic.defaults.perm-allow-btn-bg.light",
+      "dark": "semantic.defaults.perm-allow-btn-bg.dark"
+    },
+    "perm-allow-btn-text": {
+      "light": "semantic.defaults.perm-allow-btn-text.light",
+      "dark": "semantic.defaults.perm-allow-btn-text.dark"
+    },
+    "perm-allow-kbd-bg": {
+      "light": "semantic.defaults.perm-allow-kbd-bg.light",
+      "dark": "semantic.defaults.perm-allow-kbd-bg.dark"
+    },
+    "perm-allow-kbd-border": {
+      "light": "semantic.defaults.perm-allow-kbd-border.light",
+      "dark": "semantic.defaults.perm-allow-kbd-border.dark"
+    },
+    "model-trigger-hover": {
+      "light": "semantic.defaults.model-trigger-hover.light",
+      "dark": "semantic.defaults.model-trigger-hover.dark"
+    },
+    "model-trigger-text": {
+      "light": "component.defaults.model-trigger-text.light",
+      "dark": "component.defaults.model-trigger-text.dark"
+    },
+    "model-trigger-meta": {
+      "light": "component.defaults.model-trigger-meta.light",
+      "dark": "component.defaults.model-trigger-meta.dark"
+    },
+    "model-trigger-arrow": {
+      "light": "component.defaults.model-trigger-arrow.light",
+      "dark": "component.defaults.model-trigger-arrow.dark"
+    },
+    "thinking-body-text": {
+      "light": "component.defaults.thinking-body-text.light",
+      "dark": "component.defaults.thinking-body-text.dark"
+    },
+    "model-dropdown-bg": {
+      "light": "component.defaults.model-dropdown-bg.light",
+      "dark": "component.defaults.model-dropdown-bg.dark"
+    },
+    "model-dropdown-border": {
+      "light": "component.defaults.model-dropdown-border.light",
+      "dark": "component.defaults.model-dropdown-border.dark"
+    },
+    "model-item-hover": {
+      "light": "component.defaults.model-item-hover.light",
+      "dark": "component.defaults.model-item-hover.dark"
+    },
+    "model-item-text": {
+      "light": "component.defaults.model-item-text.light",
+      "dark": "component.defaults.model-item-text.dark"
+    },
+    "model-item-check": {
+      "light": "component.defaults.model-item-check.light",
+      "dark": "component.defaults.model-item-check.dark"
+    },
+    "model-item-desc": {
+      "light": "component.defaults.model-item-desc.light",
+      "dark": "component.defaults.model-item-desc.dark"
+    },
+    "model-section-label": {
+      "light": "component.defaults.model-section-label.light",
+      "dark": "component.defaults.model-section-label.dark"
+    },
+    "favorite-star": {
+      "light": "semantic.defaults.favorite-star.light",
+      "dark": "semantic.defaults.favorite-star.dark"
+    },
+    "effort-tier-minimal": {
+      "light": "semantic.defaults.effort-tier-minimal.light",
+      "dark": "semantic.defaults.effort-tier-minimal.dark"
+    },
+    "effort-tier-low": {
+      "light": "semantic.defaults.effort-tier-low.light",
+      "dark": "semantic.defaults.effort-tier-low.dark"
+    },
+    "effort-tier-medium": {
+      "light": "semantic.defaults.effort-tier-medium.light",
+      "dark": "semantic.defaults.effort-tier-medium.dark"
+    },
+    "effort-tier-high": {
+      "light": "semantic.defaults.effort-tier-high.light",
+      "dark": "semantic.defaults.effort-tier-high.dark"
+    },
+    "effort-tier-xhigh": {
+      "light": "semantic.defaults.effort-tier-xhigh.light",
+      "dark": "semantic.defaults.effort-tier-xhigh.dark"
+    },
+    "effort-tier-max": {
+      "light": "semantic.defaults.effort-tier-max.light",
+      "dark": "semantic.defaults.effort-tier-max.dark"
+    },
+    "effort-tier-ultra": {
+      "light": "semantic.defaults.effort-tier-ultra.light",
+      "dark": "semantic.defaults.effort-tier-ultra.dark"
+    },
+    "price-tier-t1": {
+      "light": "semantic.defaults.price-tier-t1.light",
+      "dark": "semantic.defaults.price-tier-t1.dark"
+    },
+    "price-tier-t2": {
+      "light": "semantic.defaults.price-tier-t2.light",
+      "dark": "semantic.defaults.price-tier-t2.dark"
+    },
+    "price-tier-t3": {
+      "light": "semantic.defaults.price-tier-t3.light",
+      "dark": "semantic.defaults.price-tier-t3.dark"
+    },
+    "fast-accent": {
+      "light": "semantic.defaults.fast-accent.light",
+      "dark": "semantic.defaults.fast-accent.dark"
+    },
+    "engine-badge-cc": {
+      "light": "semantic.defaults.engine-badge-cc.light",
+      "dark": "semantic.defaults.engine-badge-cc.dark"
+    },
+    "engine-badge-codex": {
+      "light": "semantic.defaults.engine-badge-codex.light",
+      "dark": "semantic.defaults.engine-badge-codex.dark"
+    },
+    "engine-badge-pi": {
+      "light": "semantic.defaults.engine-badge-pi.light",
+      "dark": "semantic.defaults.engine-badge-pi.dark"
+    },
+    "engine-badge-grok-build": {
+      "light": "semantic.defaults.engine-badge-grok-build.light",
+      "dark": "semantic.defaults.engine-badge-grok-build.dark"
+    },
+    "perm-item-selected-bg": {
+      "light": "semantic.defaults.perm-item-selected-bg.light",
+      "dark": "semantic.defaults.perm-item-selected-bg.dark"
+    },
+    "perm-auto-selected-text": {
+      "light": "semantic.defaults.perm-auto-selected-text.light",
+      "dark": "semantic.defaults.perm-auto-selected-text.dark"
+    },
+    "perm-bypass-selected-text": {
+      "light": "component.defaults.perm-bypass-selected-text.light",
+      "dark": "component.defaults.perm-bypass-selected-text.dark"
+    },
+    "folder-picker-bg": {
+      "light": "component.defaults.folder-picker-bg.light",
+      "dark": "component.defaults.folder-picker-bg.dark"
+    },
+    "folder-picker-border": {
+      "light": "component.defaults.folder-picker-border.light",
+      "dark": "component.defaults.folder-picker-border.dark"
+    },
+    "folder-item-hover": {
+      "light": "component.defaults.folder-item-hover.light",
+      "dark": "component.defaults.folder-item-hover.dark"
+    },
+    "folder-item-name": {
+      "light": "component.defaults.folder-item-name.light",
+      "dark": "component.defaults.folder-item-name.dark"
+    },
+    "folder-item-path": {
+      "light": "component.defaults.folder-item-path.light",
+      "dark": "component.defaults.folder-item-path.dark"
+    },
+    "folder-item-icon": {
+      "light": "component.defaults.folder-item-icon.light",
+      "dark": "component.defaults.folder-item-icon.dark"
+    },
+    "folder-label": {
+      "light": "component.defaults.folder-label.light",
+      "dark": "component.defaults.folder-label.dark"
+    },
+    "folder-btn-bg": {
+      "light": "component.defaults.folder-btn-bg.light",
+      "dark": "component.defaults.folder-btn-bg.dark"
+    },
+    "folder-btn-border": {
+      "light": "component.defaults.folder-btn-border.light",
+      "dark": "component.defaults.folder-btn-border.dark"
+    },
+    "folder-btn-text": {
+      "light": "component.defaults.folder-btn-text.light",
+      "dark": "component.defaults.folder-btn-text.dark"
+    },
+    "folder-btn-icon": {
+      "light": "component.defaults.folder-btn-icon.light",
+      "dark": "component.defaults.folder-btn-icon.dark"
+    },
+    "workingdir-text": {
+      "light": "component.defaults.workingdir-text.light",
+      "dark": "component.defaults.workingdir-text.dark"
+    },
+    "workingdir-icon": {
+      "light": "component.defaults.workingdir-icon.light",
+      "dark": "component.defaults.workingdir-icon.dark"
+    },
+    "fast-toggle-off": {
+      "light": "component.defaults.fast-toggle-off.light",
+      "dark": "component.defaults.fast-toggle-off.dark"
+    },
+    "fast-toggle-track": {
+      "light": "component.defaults.fast-toggle-track.light",
+      "dark": "component.defaults.fast-toggle-track.dark"
+    },
+    "chat-placeholder-text": {
+      "light": "component.defaults.chat-placeholder-text.light",
+      "dark": "component.defaults.chat-placeholder-text.dark"
+    },
+    "msg-user-bg": {
+      "light": "component.defaults.msg-user-bg.light",
+      "dark": "component.defaults.msg-user-bg.dark"
+    },
+    "msg-user-border": {
+      "light": "component.defaults.msg-user-border.light",
+      "dark": "component.defaults.msg-user-border.dark"
+    },
+    "msg-user-text": {
+      "light": "component.defaults.msg-user-text.light",
+      "dark": "component.defaults.msg-user-text.dark"
+    },
+    "msg-assistant-text": {
+      "light": "component.defaults.msg-assistant-text.light",
+      "dark": "component.defaults.msg-assistant-text.dark"
+    },
+    "msg-tool-text": {
+      "light": "component.defaults.msg-tool-text.light",
+      "dark": "component.defaults.msg-tool-text.dark"
+    },
+    "msg-code-block-bg": {
+      "light": "component.defaults.msg-code-block-bg.light",
+      "dark": "component.defaults.msg-code-block-bg.dark"
+    },
+    "msg-code-block-border": {
+      "light": "component.defaults.msg-code-block-border.light",
+      "dark": "component.defaults.msg-code-block-border.dark"
+    },
+    "msg-code-inline-bg": {
+      "light": "component.defaults.msg-code-inline-bg.light",
+      "dark": "component.defaults.msg-code-inline-bg.dark"
+    },
+    "msg-md-inline-code-bg": {
+      "light": "semantic.defaults.msg-md-inline-code-bg.light",
+      "dark": "semantic.defaults.msg-md-inline-code-bg.dark"
+    },
+    "msg-table-border": {
+      "light": "component.defaults.msg-table-border.light",
+      "dark": "component.defaults.msg-table-border.dark"
+    },
+    "msg-table-header-bg": {
+      "light": "component.defaults.msg-table-header-bg.light",
+      "dark": "component.defaults.msg-table-header-bg.dark"
+    },
+    "msg-blockquote-border": {
+      "light": "component.defaults.msg-blockquote-border.light",
+      "dark": "component.defaults.msg-blockquote-border.dark"
+    },
+    "msg-blockquote-text": {
+      "light": "component.defaults.msg-blockquote-text.light",
+      "dark": "component.defaults.msg-blockquote-text.dark"
+    },
+    "msg-hr-border": {
+      "light": "component.defaults.msg-hr-border.light",
+      "dark": "component.defaults.msg-hr-border.dark"
+    },
+    "msg-scrollbar": {
+      "light": "component.defaults.msg-scrollbar.light",
+      "dark": "component.defaults.msg-scrollbar.dark"
+    },
+    "msg-scrollbar-hover": {
+      "light": "semantic.defaults.msg-scrollbar-hover.light",
+      "dark": "semantic.defaults.msg-scrollbar-hover.dark"
+    },
+    "msg-cursor": {
+      "light": "component.defaults.msg-cursor.light",
+      "dark": "component.defaults.msg-cursor.dark"
+    },
+    "msg-link": {
+      "light": "semantic.defaults.msg-link.light",
+      "dark": "semantic.defaults.msg-link.dark"
+    },
+    "msg-tool-card-bg": {
+      "light": "component.defaults.msg-tool-card-bg.light",
+      "dark": "component.defaults.msg-tool-card-bg.dark"
+    },
+    "msg-tool-card-border": {
+      "light": "component.defaults.msg-tool-card-border.light",
+      "dark": "component.defaults.msg-tool-card-border.dark"
+    },
+    "msg-tool-card-chevron": {
+      "light": "component.defaults.msg-tool-card-chevron.light",
+      "dark": "component.defaults.msg-tool-card-chevron.dark"
+    },
+    "msg-tool-card-text": {
+      "light": "component.defaults.msg-tool-card-text.light",
+      "dark": "component.defaults.msg-tool-card-text.dark"
+    },
+    "todo-bar-track": {
+      "light": "component.defaults.todo-bar-track.light",
+      "dark": "component.defaults.todo-bar-track.dark"
+    },
+    "diff-del-fg": {
+      "light": "semantic.defaults.diff-del-fg.light",
+      "dark": "semantic.defaults.diff-del-fg.dark"
+    },
+    "diff-del-bg": {
+      "light": "semantic.defaults.diff-del-bg.light",
+      "dark": "semantic.defaults.diff-del-bg.dark"
+    },
+    "diff-del-emphasis": {
+      "light": "semantic.defaults.diff-del-emphasis.light",
+      "dark": "semantic.defaults.diff-del-emphasis.dark"
+    },
+    "diff-add-fg": {
+      "light": "semantic.defaults.diff-add-fg.light",
+      "dark": "semantic.defaults.diff-add-fg.dark"
+    },
+    "pr-open-on-light": {
+      "light": "semantic.defaults.pr-open-on-light.light",
+      "dark": "semantic.defaults.pr-open-on-light.dark"
+    },
+    "pr-open-on-dark": {
+      "light": "semantic.defaults.pr-open-on-dark.light",
+      "dark": "semantic.defaults.pr-open-on-dark.dark"
+    },
+    "diff-add-bg": {
+      "light": "semantic.defaults.diff-add-bg.light",
+      "dark": "semantic.defaults.diff-add-bg.dark"
+    },
+    "diff-add-emphasis": {
+      "light": "semantic.defaults.diff-add-emphasis.light",
+      "dark": "semantic.defaults.diff-add-emphasis.dark"
+    },
+    "diff-line-num": {
+      "light": "component.defaults.diff-line-num.light",
+      "dark": "component.defaults.diff-line-num.dark"
+    },
+    "info-700": {
+      "light": "semantic.defaults.info-700.light",
+      "dark": "semantic.defaults.info-700.dark"
+    },
+    "agent-actions-rail": {
+      "light": "semantic.defaults.agent-actions-rail.light",
+      "dark": "semantic.defaults.agent-actions-rail.dark"
+    },
+    "quota-bar-fill": {
+      "light": "component.defaults.quota-bar-fill.light",
+      "dark": "component.defaults.quota-bar-fill.dark"
+    },
+    "quota-bar-warn": {
+      "light": "component.defaults.quota-bar-warn.light",
+      "dark": "component.defaults.quota-bar-warn.dark"
+    },
+    "quota-bar-crit": {
+      "light": "component.defaults.quota-bar-crit.light",
+      "dark": "component.defaults.quota-bar-crit.dark"
+    },
+    "quota-bar-track": {
+      "light": "component.defaults.quota-bar-track.light",
+      "dark": "component.defaults.quota-bar-track.dark"
+    },
+    "status-bar-accent": {
+      "light": "component.defaults.status-bar-accent.light",
+      "dark": "component.defaults.status-bar-accent.dark"
+    },
+    "status-badge-fg": {
+      "light": "component.defaults.status-badge-fg.light",
+      "dark": "component.defaults.status-badge-fg.dark"
+    },
+    "surface-translucent-sidebar": {
+      "light": "component.defaults.surface-translucent-sidebar.light",
+      "dark": "component.defaults.surface-translucent-sidebar.dark"
+    },
+    "surface-translucent-main": {
+      "light": "component.defaults.surface-translucent-main.light",
+      "dark": "component.defaults.surface-translucent-main.dark"
+    },
+    "surface-translucent-overlay": {
+      "light": "component.defaults.surface-translucent-overlay.light",
+      "dark": "component.defaults.surface-translucent-overlay.dark"
+    },
+    "sidebar-search-input-bg": {
+      "light": "component.defaults.sidebar-search-input-bg.light",
+      "dark": "component.defaults.sidebar-search-input-bg.dark"
+    },
+    "composer-pill-bg": {
+      "light": "semantic.defaults.composer-pill-bg.light",
+      "dark": "semantic.defaults.composer-pill-bg.dark"
+    },
+    "composer-pill-icon": {
+      "light": "semantic.defaults.composer-pill-icon.light",
+      "dark": "semantic.defaults.composer-pill-icon.dark"
+    },
+    "status-bar-meta": {
+      "light": "component.defaults.status-bar-meta.light",
+      "dark": "component.defaults.status-bar-meta.dark"
+    },
+    "settings-bg": {
+      "light": "component.defaults.settings-bg.light",
+      "dark": "component.defaults.settings-bg.dark"
+    },
+    "settings-divider": {
+      "light": "component.defaults.settings-divider.light",
+      "dark": "component.defaults.settings-divider.dark"
+    },
+    "settings-back-icon": {
+      "light": "component.defaults.settings-back-icon.light",
+      "dark": "component.defaults.settings-back-icon.dark"
+    },
+    "settings-back-text": {
+      "light": "component.defaults.settings-back-text.light",
+      "dark": "component.defaults.settings-back-text.dark"
+    },
+    "settings-back-hover": {
+      "light": "component.defaults.settings-back-hover.light",
+      "dark": "component.defaults.settings-back-hover.dark"
+    },
+    "settings-menu-text": {
+      "light": "component.defaults.settings-menu-text.light",
+      "dark": "component.defaults.settings-menu-text.dark"
+    },
+    "settings-menu-text-selected": {
+      "light": "component.defaults.settings-menu-text-selected.light",
+      "dark": "component.defaults.settings-menu-text-selected.dark"
+    },
+    "settings-menu-bg-selected": {
+      "light": "semantic.defaults.settings-menu-bg-selected.light",
+      "dark": "semantic.defaults.settings-menu-bg-selected.dark"
+    },
+    "settings-menu-border-selected": {
+      "light": "component.defaults.settings-menu-border-selected.light",
+      "dark": "component.defaults.settings-menu-border-selected.dark"
+    },
+    "settings-menu-bg-hover": {
+      "light": "semantic.defaults.settings-menu-bg-hover.light",
+      "dark": "semantic.defaults.settings-menu-bg-hover.dark"
+    },
+    "settings-section-title": {
+      "light": "component.defaults.settings-section-title.light",
+      "dark": "component.defaults.settings-section-title.dark"
+    },
+    "settings-section-desc": {
+      "light": "component.defaults.settings-section-desc.light",
+      "dark": "component.defaults.settings-section-desc.dark"
+    },
+    "settings-section-sublabel": {
+      "light": "component.defaults.settings-section-sublabel.light",
+      "dark": "component.defaults.settings-section-sublabel.dark"
+    },
+    "settings-profile-card-bg": {
+      "light": "component.defaults.settings-profile-card-bg.light",
+      "dark": "component.defaults.settings-profile-card-bg.dark"
+    },
+    "settings-profile-card-border": {
+      "light": "component.defaults.settings-profile-card-border.light",
+      "dark": "component.defaults.settings-profile-card-border.dark"
+    },
+    "settings-profile-avatar-bg": {
+      "light": "component.defaults.settings-profile-avatar-bg.light",
+      "dark": "component.defaults.settings-profile-avatar-bg.dark"
+    },
+    "settings-profile-avatar-text": {
+      "light": "component.defaults.settings-profile-avatar-text.light",
+      "dark": "component.defaults.settings-profile-avatar-text.dark"
+    },
+    "settings-profile-name": {
+      "light": "component.defaults.settings-profile-name.light",
+      "dark": "component.defaults.settings-profile-name.dark"
+    },
+    "settings-input-bg": {
+      "light": "component.defaults.settings-input-bg.light",
+      "dark": "component.defaults.settings-input-bg.dark"
+    },
+    "settings-input-border": {
+      "light": "component.defaults.settings-input-border.light",
+      "dark": "component.defaults.settings-input-border.dark"
+    },
+    "settings-input-border-focus": {
+      "light": "component.defaults.settings-input-border-focus.light",
+      "dark": "component.defaults.settings-input-border-focus.dark"
+    },
+    "settings-input-text": {
+      "light": "component.defaults.settings-input-text.light",
+      "dark": "component.defaults.settings-input-text.dark"
+    },
+    "settings-input-placeholder": {
+      "light": "component.defaults.settings-input-placeholder.light",
+      "dark": "component.defaults.settings-input-placeholder.dark"
+    },
+    "settings-eye-icon": {
+      "light": "component.defaults.settings-eye-icon.light",
+      "dark": "component.defaults.settings-eye-icon.dark"
+    },
+    "settings-eye-icon-hover": {
+      "light": "component.defaults.settings-eye-icon-hover.light",
+      "dark": "component.defaults.settings-eye-icon-hover.dark"
+    },
+    "settings-trash-icon": {
+      "light": "component.defaults.settings-trash-icon.light",
+      "dark": "component.defaults.settings-trash-icon.dark"
+    },
+    "settings-trash-icon-hover": {
+      "light": "component.defaults.settings-trash-icon-hover.light",
+      "dark": "component.defaults.settings-trash-icon-hover.dark"
+    },
+    "settings-source-meta": {
+      "light": "component.defaults.settings-source-meta.light",
+      "dark": "component.defaults.settings-source-meta.dark"
+    },
+    "settings-source-link": {
+      "light": "semantic.defaults.settings-source-link.light",
+      "dark": "semantic.defaults.settings-source-link.dark"
+    },
+    "settings-error-text": {
+      "light": "component.defaults.settings-error-text.light",
+      "dark": "component.defaults.settings-error-text.dark"
+    },
+    "settings-badge-bg": {
+      "light": "component.defaults.settings-badge-bg.light",
+      "dark": "component.defaults.settings-badge-bg.dark"
+    },
+    "settings-badge-border": {
+      "light": "component.defaults.settings-badge-border.light",
+      "dark": "component.defaults.settings-badge-border.dark"
+    },
+    "settings-badge-needs-config": {
+      "light": "component.defaults.settings-badge-needs-config.light",
+      "dark": "component.defaults.settings-badge-needs-config.dark"
+    },
+    "settings-badge-saved": {
+      "light": "component.defaults.settings-badge-saved.light",
+      "dark": "component.defaults.settings-badge-saved.dark"
+    },
+    "settings-badge-connected": {
+      "light": "component.defaults.settings-badge-connected.light",
+      "dark": "component.defaults.settings-badge-connected.dark"
+    },
+    "settings-badge-connected-text": {
+      "light": "component.defaults.settings-badge-connected-text.light",
+      "dark": "component.defaults.settings-badge-connected-text.dark"
+    },
+    "settings-badge-error": {
+      "light": "component.defaults.settings-badge-error.light",
+      "dark": "component.defaults.settings-badge-error.dark"
+    },
+    "settings-btn-primary-bg": {
+      "light": "component.defaults.settings-btn-primary-bg.light",
+      "dark": "component.defaults.settings-btn-primary-bg.dark"
+    },
+    "settings-btn-primary-text": {
+      "light": "semantic.defaults.settings-btn-primary-text.light",
+      "dark": "semantic.defaults.settings-btn-primary-text.dark"
+    },
+    "settings-btn-primary-border": {
+      "light": "component.defaults.settings-btn-primary-border.light",
+      "dark": "component.defaults.settings-btn-primary-border.dark"
+    },
+    "settings-btn-primary-hover-bg": {
+      "light": "component.defaults.settings-btn-primary-hover-bg.light",
+      "dark": "component.defaults.settings-btn-primary-hover-bg.dark"
+    },
+    "settings-btn-secondary-bg": {
+      "light": "component.defaults.settings-btn-secondary-bg.light",
+      "dark": "component.defaults.settings-btn-secondary-bg.dark"
+    },
+    "settings-btn-secondary-text": {
+      "light": "component.defaults.settings-btn-secondary-text.light",
+      "dark": "component.defaults.settings-btn-secondary-text.dark"
+    },
+    "settings-btn-secondary-border": {
+      "light": "component.defaults.settings-btn-secondary-border.light",
+      "dark": "component.defaults.settings-btn-secondary-border.dark"
+    },
+    "settings-btn-secondary-hover-bg": {
+      "light": "semantic.defaults.settings-btn-secondary-hover-bg.light",
+      "dark": "semantic.defaults.settings-btn-secondary-hover-bg.dark"
+    },
+    "settings-theme-card-bg": {
+      "light": "component.defaults.settings-theme-card-bg.light",
+      "dark": "component.defaults.settings-theme-card-bg.dark"
+    },
+    "settings-theme-card-border": {
+      "light": "component.defaults.settings-theme-card-border.light",
+      "dark": "component.defaults.settings-theme-card-border.dark"
+    },
+    "settings-theme-preview-bg": {
+      "light": "component.defaults.settings-theme-preview-bg.light",
+      "dark": "component.defaults.settings-theme-preview-bg.dark"
+    },
+    "settings-theme-preview-border": {
+      "light": "component.defaults.settings-theme-preview-border.light",
+      "dark": "component.defaults.settings-theme-preview-border.dark"
+    },
+    "settings-theme-preview-border-active": {
+      "light": "component.defaults.settings-theme-preview-border-active.light",
+      "dark": "component.defaults.settings-theme-preview-border-active.dark"
+    },
+    "settings-theme-icon": {
+      "light": "component.defaults.settings-theme-icon.light",
+      "dark": "component.defaults.settings-theme-icon.dark"
+    },
+    "settings-theme-icon-active": {
+      "light": "component.defaults.settings-theme-icon-active.light",
+      "dark": "component.defaults.settings-theme-icon-active.dark"
+    },
+    "settings-theme-label": {
+      "light": "component.defaults.settings-theme-label.light",
+      "dark": "component.defaults.settings-theme-label.dark"
+    },
+    "settings-theme-label-active": {
+      "light": "component.defaults.settings-theme-label-active.light",
+      "dark": "component.defaults.settings-theme-label-active.dark"
+    },
+    "settings-theme-auto-light": {
+      "light": "semantic.defaults.settings-theme-auto-light.light",
+      "dark": "semantic.defaults.settings-theme-auto-light.dark"
+    },
+    "settings-theme-auto-dark": {
+      "light": "semantic.defaults.settings-theme-auto-dark.light",
+      "dark": "semantic.defaults.settings-theme-auto-dark.dark"
+    },
+    "settings-logout-bg": {
+      "light": "semantic.defaults.settings-logout-bg.light",
+      "dark": "semantic.defaults.settings-logout-bg.dark"
+    },
+    "settings-logout-border": {
+      "light": "component.defaults.settings-logout-border.light",
+      "dark": "component.defaults.settings-logout-border.dark"
+    },
+    "settings-logout-text": {
+      "light": "component.defaults.settings-logout-text.light",
+      "dark": "component.defaults.settings-logout-text.dark"
+    },
+    "settings-logout-icon": {
+      "light": "component.defaults.settings-logout-icon.light",
+      "dark": "component.defaults.settings-logout-icon.dark"
+    },
+    "settings-logout-hover-bg": {
+      "light": "component.defaults.settings-logout-hover-bg.light",
+      "dark": "component.defaults.settings-logout-hover-bg.dark"
+    },
+    "settings-integration-avatar-bg": {
+      "light": "semantic.defaults.settings-integration-avatar-bg.light",
+      "dark": "semantic.defaults.settings-integration-avatar-bg.dark"
+    },
+    "settings-integration-avatar-border": {
+      "light": "semantic.defaults.settings-integration-avatar-border.light",
+      "dark": "semantic.defaults.settings-integration-avatar-border.dark"
+    },
+    "settings-integration-avatar-icon": {
+      "light": "component.defaults.settings-integration-avatar-icon.light",
+      "dark": "component.defaults.settings-integration-avatar-icon.dark"
+    },
+    "settings-integration-subtitle": {
+      "light": "component.defaults.settings-integration-subtitle.light",
+      "dark": "component.defaults.settings-integration-subtitle.dark"
+    },
+    "settings-integration-warning": {
+      "light": "component.defaults.settings-integration-warning.light",
+      "dark": "component.defaults.settings-integration-warning.dark"
+    },
+    "remote-status-ready": {
+      "light": "semantic.defaults.remote-status-ready.light",
+      "dark": "semantic.defaults.remote-status-ready.dark"
+    },
+    "remote-status-progress": {
+      "light": "semantic.defaults.remote-status-progress.light",
+      "dark": "semantic.defaults.remote-status-progress.dark"
+    },
+    "remote-status-failed": {
+      "light": "semantic.defaults.remote-status-failed.light",
+      "dark": "semantic.defaults.remote-status-failed.dark"
+    },
+    "card-status-awaiting": {
+      "light": "semantic.defaults.card-status-awaiting.light",
+      "dark": "semantic.defaults.card-status-awaiting.dark"
+    },
+    "sidebar-draft-indicator": {
+      "light": "semantic.defaults.sidebar-draft-indicator.light",
+      "dark": "component.defaults.sidebar-draft-indicator.dark"
+    },
+    "card-status-error": {
+      "light": "semantic.defaults.card-status-error.light",
+      "dark": "semantic.defaults.card-status-error.dark"
+    },
+    "card-status-done": {
+      "light": "semantic.defaults.card-status-done.light",
+      "dark": "semantic.defaults.card-status-done.dark"
+    },
+    "completion-badge-fg": {
+      "light": "semantic.defaults.completion-badge-fg.light",
+      "dark": "semantic.defaults.completion-badge-fg.dark"
+    },
+    "remote-status-disconnected": {
+      "light": "component.defaults.remote-status-disconnected.light",
+      "dark": "component.defaults.remote-status-disconnected.dark"
+    },
+    "ask-card-bg": {
+      "light": "component.defaults.ask-card-bg.light",
+      "dark": "component.defaults.ask-card-bg.dark"
+    },
+    "ask-card-border": {
+      "light": "component.defaults.ask-card-border.light",
+      "dark": "component.defaults.ask-card-border.dark"
+    },
+    "ask-header-text": {
+      "light": "component.defaults.ask-header-text.light",
+      "dark": "component.defaults.ask-header-text.dark"
+    },
+    "ask-page-text": {
+      "light": "component.defaults.ask-page-text.light",
+      "dark": "component.defaults.ask-page-text.dark"
+    },
+    "ask-option-label": {
+      "light": "component.defaults.ask-option-label.light",
+      "dark": "component.defaults.ask-option-label.dark"
+    },
+    "ask-option-desc": {
+      "light": "component.defaults.ask-option-desc.light",
+      "dark": "component.defaults.ask-option-desc.dark"
+    },
+    "ask-option-custom": {
+      "light": "component.defaults.ask-option-custom.light",
+      "dark": "component.defaults.ask-option-custom.dark"
+    },
+    "ask-option-divider": {
+      "light": "component.defaults.ask-option-divider.light",
+      "dark": "component.defaults.ask-option-divider.dark"
+    },
+    "ask-option-border": {
+      "light": "component.defaults.ask-option-border.light",
+      "dark": "component.defaults.ask-option-border.dark"
+    },
+    "ask-badge-bg": {
+      "light": "component.defaults.ask-badge-bg.light",
+      "dark": "component.defaults.ask-badge-bg.dark"
+    },
+    "ask-badge-text": {
+      "light": "component.defaults.ask-badge-text.light",
+      "dark": "component.defaults.ask-badge-text.dark"
+    },
+    "ask-header-chip-bg": {
+      "light": "component.defaults.ask-header-chip-bg.light",
+      "dark": "component.defaults.ask-header-chip-bg.dark"
+    },
+    "ask-option-list-bg": {
+      "light": "component.defaults.ask-option-list-bg.light",
+      "dark": "component.defaults.ask-option-list-bg.dark"
+    },
+    "ask-input-bg": {
+      "light": "component.defaults.ask-input-bg.light",
+      "dark": "component.defaults.ask-input-bg.dark"
+    },
+    "ask-input-border": {
+      "light": "component.defaults.ask-input-border.light",
+      "dark": "component.defaults.ask-input-border.dark"
+    },
+    "ask-input-text": {
+      "light": "component.defaults.ask-input-text.light",
+      "dark": "component.defaults.ask-input-text.dark"
+    },
+    "ask-input-placeholder": {
+      "light": "component.defaults.ask-input-placeholder.light",
+      "dark": "component.defaults.ask-input-placeholder.dark"
+    },
+    "ask-send-bg": {
+      "light": "component.defaults.ask-send-bg.light",
+      "dark": "component.defaults.ask-send-bg.dark"
+    },
+    "ask-send-text": {
+      "light": "component.defaults.ask-send-text.light",
+      "dark": "component.defaults.ask-send-text.dark"
+    },
+    "ask-send-disabled-bg": {
+      "light": "component.defaults.ask-send-disabled-bg.light",
+      "dark": "component.defaults.ask-send-disabled-bg.dark"
+    },
+    "ask-send-disabled-text": {
+      "light": "component.defaults.ask-send-disabled-text.light",
+      "dark": "component.defaults.ask-send-disabled-text.dark"
+    },
+    "ask-answered-text": {
+      "light": "component.defaults.ask-answered-text.light",
+      "dark": "component.defaults.ask-answered-text.dark"
+    },
+    "ask-expired-text": {
+      "light": "component.defaults.ask-expired-text.light",
+      "dark": "component.defaults.ask-expired-text.dark"
+    },
+    "ask-option-hover": {
+      "light": "component.defaults.ask-option-hover.light",
+      "dark": "component.defaults.ask-option-hover.dark"
+    },
+    "ask-checkbox-border": {
+      "light": "semantic.defaults.ask-checkbox-border.light",
+      "dark": "semantic.defaults.ask-checkbox-border.dark"
+    },
+    "ask-checkbox-checked-bg": {
+      "light": "component.defaults.ask-checkbox-checked-bg.light",
+      "dark": "component.defaults.ask-checkbox-checked-bg.dark"
+    },
+    "ask-checkbox-checked-icon": {
+      "light": "component.defaults.ask-checkbox-checked-icon.light",
+      "dark": "component.defaults.ask-checkbox-checked-icon.dark"
+    },
+    "plan-card-bg": {
+      "light": "component.defaults.plan-card-bg.light",
+      "dark": "component.defaults.plan-card-bg.dark"
+    },
+    "plan-card-border": {
+      "light": "component.defaults.plan-card-border.light",
+      "dark": "component.defaults.plan-card-border.dark"
+    },
+    "plan-header-title": {
+      "light": "component.defaults.plan-header-title.light",
+      "dark": "component.defaults.plan-header-title.dark"
+    },
+    "plan-header-hint": {
+      "light": "component.defaults.plan-header-hint.light",
+      "dark": "component.defaults.plan-header-hint.dark"
+    },
+    "plan-header-divider": {
+      "light": "component.defaults.plan-header-divider.light",
+      "dark": "component.defaults.plan-header-divider.dark"
+    },
+    "plan-toolbar-btn-icon": {
+      "light": "component.defaults.plan-toolbar-btn-icon.light",
+      "dark": "component.defaults.plan-toolbar-btn-icon.dark"
+    },
+    "plan-toolbar-btn-hover-bg": {
+      "light": "semantic.defaults.plan-toolbar-btn-hover-bg.light",
+      "dark": "semantic.defaults.plan-toolbar-btn-hover-bg.dark"
+    },
+    "plan-outline-bg": {
+      "light": "component.defaults.plan-outline-bg.light",
+      "dark": "component.defaults.plan-outline-bg.dark"
+    },
+    "plan-outline-border": {
+      "light": "component.defaults.plan-outline-border.light",
+      "dark": "component.defaults.plan-outline-border.dark"
+    },
+    "plan-outline-label": {
+      "light": "component.defaults.plan-outline-label.light",
+      "dark": "component.defaults.plan-outline-label.dark"
+    },
+    "plan-outline-item-text": {
+      "light": "component.defaults.plan-outline-item-text.light",
+      "dark": "component.defaults.plan-outline-item-text.dark"
+    },
+    "plan-outline-active-bg": {
+      "light": "semantic.defaults.plan-outline-active-bg.light",
+      "dark": "semantic.defaults.plan-outline-active-bg.dark"
+    },
+    "plan-outline-active-text": {
+      "light": "component.defaults.plan-outline-active-text.light",
+      "dark": "component.defaults.plan-outline-active-text.dark"
+    },
+    "plan-content-bg": {
+      "light": "component.defaults.plan-content-bg.light",
+      "dark": "component.defaults.plan-content-bg.dark"
+    },
+    "plan-content-section": {
+      "light": "component.defaults.plan-content-section.light",
+      "dark": "component.defaults.plan-content-section.dark"
+    },
+    "plan-content-body": {
+      "light": "component.defaults.plan-content-body.light",
+      "dark": "component.defaults.plan-content-body.dark"
+    },
+    "plan-content-divider": {
+      "light": "component.defaults.plan-content-divider.light",
+      "dark": "component.defaults.plan-content-divider.dark"
+    },
+    "plan-edit-body": {
+      "light": "component.defaults.plan-edit-body.light",
+      "dark": "component.defaults.plan-edit-body.dark"
+    },
+    "plan-action-approve-text": {
+      "light": "component.defaults.plan-action-approve-text.light",
+      "dark": "component.defaults.plan-action-approve-text.dark"
+    },
+    "plan-action-approve-enter": {
+      "light": "component.defaults.plan-action-approve-enter.light",
+      "dark": "component.defaults.plan-action-approve-enter.dark"
+    },
+    "plan-action-row-divider": {
+      "light": "component.defaults.plan-action-row-divider.light",
+      "dark": "component.defaults.plan-action-row-divider.dark"
+    },
+    "plan-action-fb-icon": {
+      "light": "component.defaults.plan-action-fb-icon.light",
+      "dark": "component.defaults.plan-action-fb-icon.dark"
+    },
+    "plan-action-fb-placeholder": {
+      "light": "component.defaults.plan-action-fb-placeholder.light",
+      "dark": "component.defaults.plan-action-fb-placeholder.dark"
+    },
+    "plan-action-fb-text": {
+      "light": "component.defaults.plan-action-fb-text.light",
+      "dark": "component.defaults.plan-action-fb-text.dark"
+    },
+    "plan-action-row-hover-bg": {
+      "light": "component.defaults.plan-action-row-hover-bg.light",
+      "dark": "component.defaults.plan-action-row-hover-bg.dark"
+    },
+    "plan-action-approve-icon-bg": {
+      "light": "component.defaults.plan-action-approve-icon-bg.light",
+      "dark": "component.defaults.plan-action-approve-icon-bg.dark"
+    },
+    "plan-action-approve-icon-fg": {
+      "light": "semantic.defaults.plan-action-approve-icon-fg.light",
+      "dark": "semantic.defaults.plan-action-approve-icon-fg.dark"
+    },
+    "plan-min-title": {
+      "light": "component.defaults.plan-min-title.light",
+      "dark": "component.defaults.plan-min-title.dark"
+    },
+    "plan-min-icon": {
+      "light": "component.defaults.plan-min-icon.light",
+      "dark": "component.defaults.plan-min-icon.dark"
+    },
+    "plan-bubble-badge-bg": {
+      "light": "component.defaults.plan-bubble-badge-bg.light",
+      "dark": "component.defaults.plan-bubble-badge-bg.dark"
+    },
+    "plan-bubble-badge-text": {
+      "light": "component.defaults.plan-bubble-badge-text.light",
+      "dark": "component.defaults.plan-bubble-badge-text.dark"
+    },
+    "plan-bubble-body-text": {
+      "light": "component.defaults.plan-bubble-body-text.light",
+      "dark": "component.defaults.plan-bubble-body-text.dark"
+    },
+    "plan-bubble-summary-text": {
+      "light": "component.defaults.plan-bubble-summary-text.light",
+      "dark": "component.defaults.plan-bubble-summary-text.dark"
+    },
+    "color-primary": {
+      "light": "semantic.defaults.color-primary.light",
+      "dark": "semantic.defaults.color-primary.dark"
+    },
+    "color-neutral-300": {
+      "light": "component.defaults.color-neutral-300.light",
+      "dark": "component.defaults.color-neutral-300.dark"
+    },
+    "color-neutral-400": {
+      "light": "component.defaults.color-neutral-400.light",
+      "dark": "component.defaults.color-neutral-400.dark"
+    },
+    "color-error-600": {
+      "light": "component.defaults.color-error-600.light",
+      "dark": "component.defaults.color-error-600.dark"
+    },
+    "color-error-700": {
+      "light": "semantic.defaults.color-error-700.light",
+      "dark": "semantic.defaults.color-error-700.dark"
+    },
+    "focus-ring": {
+      "light": "semantic.defaults.focus-ring.light",
+      "dark": "semantic.defaults.focus-ring.dark"
+    },
+    "focus-ring-soft": {
+      "light": "semantic.defaults.focus-ring-soft.light",
+      "dark": "semantic.defaults.focus-ring-soft.dark"
+    },
+    "text-selection-bg": {
+      "light": "component.defaults.text-selection-bg.light",
+      "dark": "component.defaults.text-selection-bg.dark"
+    },
+    "overlay-modal": {
+      "light": "semantic.defaults.overlay-modal.light",
+      "dark": "semantic.defaults.overlay-modal.dark"
+    },
+    "overlay-lightbox": {
+      "light": "semantic.defaults.overlay-lightbox.light",
+      "dark": "semantic.defaults.overlay-lightbox.dark"
+    },
+    "lightbox-toolbar-bg": {
+      "light": "semantic.defaults.lightbox-toolbar-bg.light",
+      "dark": "semantic.defaults.lightbox-toolbar-bg.dark"
+    },
+    "lightbox-toolbar-border": {
+      "light": "semantic.defaults.lightbox-toolbar-border.light",
+      "dark": "semantic.defaults.lightbox-toolbar-border.dark"
+    },
+    "lightbox-toolbar-fg": {
+      "light": "semantic.defaults.lightbox-toolbar-fg.light",
+      "dark": "semantic.defaults.lightbox-toolbar-fg.dark"
+    },
+    "lightbox-toolbar-fg-hover": {
+      "light": "semantic.defaults.lightbox-toolbar-fg-hover.light",
+      "dark": "semantic.defaults.lightbox-toolbar-fg-hover.dark"
+    },
+    "lightbox-toolbar-hover-bg": {
+      "light": "semantic.defaults.lightbox-toolbar-hover-bg.light",
+      "dark": "semantic.defaults.lightbox-toolbar-hover-bg.dark"
+    },
+    "error-bg": {
+      "light": "semantic.defaults.error-bg.light",
+      "dark": "semantic.defaults.error-bg.dark"
+    },
+    "error-border": {
+      "light": "semantic.defaults.error-border.light",
+      "dark": "semantic.defaults.error-border.dark"
+    },
+    "error-fg": {
+      "light": "semantic.defaults.error-fg.light",
+      "dark": "semantic.defaults.error-fg.dark"
+    },
+    "error-fg-strong": {
+      "light": "semantic.defaults.error-fg-strong.light",
+      "dark": "semantic.defaults.error-fg-strong.dark"
+    },
+    "warning-bg-soft": {
+      "light": "semantic.defaults.warning-bg-soft.light",
+      "dark": "semantic.defaults.warning-bg-soft.dark"
+    },
+    "warning-fg": {
+      "light": "semantic.defaults.warning-fg.light",
+      "dark": "semantic.defaults.warning-fg.dark"
+    },
+    "text-danger": {
+      "light": "component.defaults.text-danger.light",
+      "dark": "component.defaults.text-danger.dark"
+    },
+    "danger-bg-soft": {
+      "light": "component.defaults.danger-bg-soft.light",
+      "dark": "component.defaults.danger-bg-soft.dark"
+    },
+    "status-info": {
+      "light": "component.defaults.status-info.light",
+      "dark": "component.defaults.status-info.dark"
+    },
+    "status-success": {
+      "light": "semantic.defaults.status-success.light",
+      "dark": "semantic.defaults.status-success.dark"
+    },
+    "upgrade-banner-bg": {
+      "light": "semantic.defaults.upgrade-banner-bg.light",
+      "dark": "semantic.defaults.upgrade-banner-bg.dark"
+    },
+    "upgrade-banner-border": {
+      "light": "semantic.defaults.upgrade-banner-border.light",
+      "dark": "semantic.defaults.upgrade-banner-border.dark"
+    },
+    "upgrade-banner-fg": {
+      "light": "semantic.defaults.upgrade-banner-fg.light",
+      "dark": "semantic.defaults.upgrade-banner-fg.dark"
+    },
+    "skillhub-review-pending-bg": {
+      "light": "semantic.defaults.skillhub-review-pending-bg.light",
+      "dark": "semantic.defaults.skillhub-review-pending-bg.dark"
+    },
+    "skillhub-review-pending-border": {
+      "light": "semantic.defaults.skillhub-review-pending-border.light",
+      "dark": "semantic.defaults.skillhub-review-pending-border.dark"
+    },
+    "skillhub-review-pending-fg": {
+      "light": "semantic.defaults.skillhub-review-pending-fg.light",
+      "dark": "semantic.defaults.skillhub-review-pending-fg.dark"
+    },
+    "skillhub-review-quarantine-bg": {
+      "light": "semantic.defaults.skillhub-review-quarantine-bg.light",
+      "dark": "semantic.defaults.skillhub-review-quarantine-bg.dark"
+    },
+    "skillhub-review-quarantine-border": {
+      "light": "semantic.defaults.skillhub-review-quarantine-border.light",
+      "dark": "semantic.defaults.skillhub-review-quarantine-border.dark"
+    },
+    "skillhub-review-quarantine-fg": {
+      "light": "semantic.defaults.skillhub-review-quarantine-fg.light",
+      "dark": "semantic.defaults.skillhub-review-quarantine-fg.dark"
+    },
+    "create-agent-control-bg": {
+      "light": "semantic.defaults.create-agent-control-bg.light",
+      "dark": "semantic.defaults.create-agent-control-bg.dark"
+    },
+    "create-agent-control-bg-hover": {
+      "light": "component.defaults.create-agent-control-bg-hover.light",
+      "dark": "semantic.defaults.create-agent-control-bg-hover.dark"
+    },
+    "create-agent-control-bg-pressed": {
+      "light": "component.defaults.create-agent-control-bg-pressed.light",
+      "dark": "semantic.defaults.create-agent-control-bg-pressed.dark"
+    },
+    "create-agent-control-border": {
+      "light": "semantic.defaults.create-agent-control-border.light",
+      "dark": "semantic.defaults.create-agent-control-border.dark"
+    },
+    "create-agent-control-text": {
+      "light": "semantic.defaults.create-agent-control-text.light",
+      "dark": "semantic.defaults.create-agent-control-text.dark"
+    },
+    "create-agent-control-icon": {
+      "light": "semantic.defaults.create-agent-control-icon.light",
+      "dark": "semantic.defaults.create-agent-control-icon.dark"
+    },
+    "create-agent-segment-track-bg": {
+      "light": "semantic.defaults.create-agent-segment-track-bg.light",
+      "dark": "semantic.defaults.create-agent-segment-track-bg.dark"
+    },
+    "create-agent-segment-inactive-text": {
+      "light": "semantic.defaults.create-agent-segment-inactive-text.light",
+      "dark": "semantic.defaults.create-agent-segment-inactive-text.dark"
+    },
+    "create-agent-send-bg": {
+      "light": "semantic.defaults.create-agent-send-bg.light",
+      "dark": "semantic.defaults.create-agent-send-bg.dark"
+    },
+    "create-agent-send-icon": {
+      "light": "semantic.defaults.create-agent-send-icon.light",
+      "dark": "semantic.defaults.create-agent-send-icon.dark"
+    },
+    "create-agent-send-bg-hover": {
+      "light": "semantic.defaults.create-agent-send-bg-hover.light",
+      "dark": "semantic.defaults.create-agent-send-bg-hover.dark"
+    },
+    "create-agent-send-bg-pressed": {
+      "light": "semantic.defaults.create-agent-send-bg-pressed.light",
+      "dark": "semantic.defaults.create-agent-send-bg-pressed.dark"
+    },
+    "create-agent-send-disabled-bg": {
+      "light": "semantic.defaults.create-agent-send-disabled-bg.light",
+      "dark": "semantic.defaults.create-agent-send-disabled-bg.dark"
+    },
+    "create-agent-send-disabled-icon": {
+      "light": "semantic.defaults.create-agent-send-disabled-icon.light",
+      "dark": "semantic.defaults.create-agent-send-disabled-icon.dark"
+    },
+    "create-agent-focus-ring": {
+      "light": "component.defaults.create-agent-focus-ring.light",
+      "dark": "component.defaults.create-agent-focus-ring.dark"
+    },
+    "create-agent-quick-card-bg": {
+      "light": "semantic.defaults.create-agent-quick-card-bg.light",
+      "dark": "semantic.defaults.create-agent-quick-card-bg.dark"
+    },
+    "create-agent-quick-card-border": {
+      "light": "semantic.defaults.create-agent-quick-card-border.light",
+      "dark": "semantic.defaults.create-agent-quick-card-border.dark"
+    },
+    "create-agent-quick-card-text": {
+      "light": "semantic.defaults.create-agent-quick-card-text.light",
+      "dark": "semantic.defaults.create-agent-quick-card-text.dark"
+    },
+    "create-agent-quick-card-icon-bg": {
+      "light": "semantic.defaults.create-agent-quick-card-icon-bg.light",
+      "dark": "semantic.defaults.create-agent-quick-card-icon-bg.dark"
+    },
+    "create-agent-quick-card-icon": {
+      "light": "semantic.defaults.create-agent-quick-card-icon.light",
+      "dark": "semantic.defaults.create-agent-quick-card-icon.dark"
+    },
+    "create-agent-quick-card-bg-hover": {
+      "light": "semantic.defaults.create-agent-quick-card-bg-hover.light",
+      "dark": "semantic.defaults.create-agent-quick-card-bg-hover.dark"
+    },
+    "create-agent-avatar-ring": {
+      "light": "semantic.defaults.create-agent-avatar-ring.light",
+      "dark": "semantic.defaults.create-agent-avatar-ring.dark"
+    },
+    "create-agent-avatar-glass-bg": {
+      "light": "semantic.defaults.create-agent-avatar-glass-bg.light",
+      "dark": "semantic.defaults.create-agent-avatar-glass-bg.dark"
+    },
+    "create-agent-avatar-inner-ring-start": {
+      "light": "semantic.defaults.create-agent-avatar-inner-ring-start.light",
+      "dark": "semantic.defaults.create-agent-avatar-inner-ring-start.dark"
+    },
+    "create-agent-avatar-inner-ring-end": {
+      "light": "semantic.defaults.create-agent-avatar-inner-ring-end.light",
+      "dark": "semantic.defaults.create-agent-avatar-inner-ring-end.dark"
+    },
+    "sidebar-nav-text": {
+      "light": "semantic.defaults.sidebar-nav-text.light",
+      "dark": "semantic.defaults.sidebar-nav-text.dark"
+    },
+    "sidebar-list-muted": {
+      "light": "semantic.defaults.sidebar-list-muted.light",
+      "dark": "semantic.defaults.sidebar-list-muted.dark"
+    },
+    "sidebar-user-card-bg": {
+      "light": "semantic.defaults.sidebar-user-card-bg.light",
+      "dark": "semantic.defaults.sidebar-user-card-bg.dark"
+    },
+    "sidebar-user-card-bg-hover": {
+      "light": "semantic.defaults.sidebar-user-card-bg-hover.light",
+      "dark": "semantic.defaults.sidebar-user-card-bg-hover.dark"
+    },
+    "sidebar-user-card-border": {
+      "light": "semantic.defaults.sidebar-user-card-border.light",
+      "dark": "semantic.defaults.sidebar-user-card-border.dark"
+    },
+    "sidebar-user-card-text": {
+      "light": "semantic.defaults.sidebar-user-card-text.light",
+      "dark": "semantic.defaults.sidebar-user-card-text.dark"
+    },
+    "caret-accent": {
+      "light": "component.defaults.caret-accent.light",
+      "dark": "component.defaults.caret-accent.dark"
+    },
+    "button-cta-hover": {
+      "light": "component.defaults.button-cta-hover.light",
+      "dark": "component.defaults.button-cta-hover.dark"
+    },
+    "shadow-soft-panel": {
+      "light": "semantic.defaults.shadow-soft-panel.light",
+      "dark": "semantic.defaults.shadow-soft-panel.dark"
+    },
+    "shadow-chip-raised": {
+      "light": "semantic.defaults.shadow-chip-raised.light",
+      "dark": "semantic.defaults.shadow-chip-raised.dark"
+    },
+    "shadow-menu": {
+      "light": "semantic.defaults.shadow-menu.light",
+      "dark": "semantic.defaults.shadow-menu.dark"
+    },
+    "confirm-shadow": {
+      "light": "component.defaults.confirm-shadow.light",
+      "dark": "component.defaults.confirm-shadow.dark"
+    },
+    "cmd-palette-shadow": {
+      "light": "component.defaults.cmd-palette-shadow.light",
+      "dark": "component.defaults.cmd-palette-shadow.dark"
+    }
+  },
+  "retained": {
+    "md-h1-fg": "CSS inherit: preserve text inheritance; no numeric DTCG value",
+    "md-h2-fg": "CSS inherit: preserve text inheritance; no numeric DTCG value",
+    "md-h3-fg": "CSS inherit: preserve text inheritance; no numeric DTCG value",
+    "md-h4-fg": "CSS inherit: preserve text inheritance; no numeric DTCG value",
+    "md-h5-fg": "CSS inherit: preserve text inheritance; no numeric DTCG value",
+    "md-h6-fg": "CSS inherit: preserve text inheritance; no numeric DTCG value",
+    "md-strong-fg": "CSS inherit: preserve text inheritance; no numeric DTCG value",
+    "login-bg-gradient-radial": "CSS none: preserve disabled gradient; no numeric DTCG value",
+    "login-bg-gradient-linear": "CSS none: preserve disabled gradient; no numeric DTCG value",
+    "login-brand-accent": "protected register-only singleton",
+    "login-brand-accent-pressed": "protected register-only singleton",
+    "chat-input-placeholder-subtle": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
+    "annotation-accent": "protected register-only singleton",
+    "settings-social-card-pressed-bg": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
+    "button-primary-hover": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
+    "button-primary-pressed": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
+    "button-secondary-hover": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
+    "button-secondary-pressed": "Runtime color-mix: retain theme-responsive mixing in the existing registration",
+    "button-cta-pressed": "Runtime color-mix: retain theme-responsive mixing in the existing registration"
+  },
+  "themes": {
+    "atom-one-light.ts": {
+      "tokens": {
+        "surface": "themes.atom-one-light.surface",
+        "surface-hsl": "themes.atom-one-light.surface-hsl",
+        "surface-elevated": "themes.atom-one-light.surface-elevated",
+        "surface-elevated-soft": "themes.atom-one-light.surface-elevated-soft",
+        "surface-card-ivory": "themes.atom-one-light.surface-card-ivory",
+        "surface-chip": "themes.atom-one-light.surface-chip",
+        "surface-chip-alt": "themes.atom-one-light.surface-chip-alt",
+        "surface-hover": "themes.atom-one-light.surface-hover",
+        "surface-hover-soft": "themes.atom-one-light.surface-hover-soft",
+        "surface-hover-hsl": "themes.atom-one-light.surface-hover-hsl",
+        "surface-on-card": "themes.atom-one-light.surface-on-card",
+        "border-default": "themes.atom-one-light.border-default",
+        "border-default-hsl": "themes.atom-one-light.border-default-hsl",
+        "border-shadcn-hsl": "themes.atom-one-light.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.atom-one-light.border-transparent-mixed",
+        "text-primary": "themes.atom-one-light.text-primary",
+        "text-primary-on-dark": "themes.atom-one-light.text-primary-on-dark",
+        "text-primary-emphasis": "themes.atom-one-light.text-primary-emphasis",
+        "text-primary-inv": "themes.atom-one-light.text-primary-inv",
+        "text-primary-body-strong": "themes.atom-one-light.text-primary-body-strong",
+        "text-primary-hsl": "themes.atom-one-light.text-primary-hsl",
+        "text-secondary": "themes.atom-one-light.text-secondary",
+        "text-secondary-cross": "themes.atom-one-light.text-secondary-cross",
+        "text-secondary-mid": "themes.atom-one-light.text-secondary-mid",
+        "text-tertiary": "themes.atom-one-light.text-tertiary",
+        "text-tertiary-stone": "themes.atom-one-light.text-tertiary-stone",
+        "text-tertiary-mid": "themes.atom-one-light.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.atom-one-light.text-tertiary-hsl",
+        "text-disabled": "themes.atom-one-light.text-disabled",
+        "text-disabled-tertiary": "themes.atom-one-light.text-disabled-tertiary",
+        "accent-cta-bg": "themes.atom-one-light.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.atom-one-light.accent-cta-bg-pure",
+        "accent-emphasis": "themes.atom-one-light.accent-emphasis",
+        "accent-soft": "themes.atom-one-light.accent-soft",
+        "accent-hover": "themes.atom-one-light.accent-hover",
+        "accent-pure-cta-fg": "themes.atom-one-light.accent-pure-cta-fg",
+        "switch-track-on": "themes.atom-one-light.switch-track-on",
+        "accent": "themes.atom-one-light.accent",
+        "agent-actions-rail": "themes.atom-one-light.agent-actions-rail",
+        "ask-checkbox-border": "themes.atom-one-light.ask-checkbox-border",
+        "background": "themes.atom-one-light.background",
+        "create-agent-control-bg": "themes.atom-one-light.create-agent-control-bg",
+        "create-agent-control-bg-hover": "themes.atom-one-light.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.atom-one-light.create-agent-control-bg-pressed",
+        "create-agent-control-border": "themes.atom-one-light.create-agent-control-border",
+        "create-agent-control-icon": "themes.atom-one-light.create-agent-control-icon",
+        "create-agent-control-text": "themes.atom-one-light.create-agent-control-text",
+        "create-agent-quick-card-bg": "themes.atom-one-light.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.atom-one-light.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.atom-one-light.create-agent-quick-card-border",
+        "create-agent-quick-card-icon": "themes.atom-one-light.create-agent-quick-card-icon",
+        "create-agent-quick-card-icon-bg": "themes.atom-one-light.create-agent-quick-card-icon-bg",
+        "create-agent-quick-card-text": "themes.atom-one-light.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.atom-one-light.create-agent-segment-inactive-text",
+        "create-agent-segment-track-bg": "themes.atom-one-light.create-agent-segment-track-bg",
+        "send-btn-bg": "themes.atom-one-light.send-btn-bg",
+        "send-btn-icon": "themes.atom-one-light.send-btn-icon",
+        "chat-input-chip-border": "themes.atom-one-light.chat-input-chip-border",
+        "chat-input-text": "themes.atom-one-light.chat-input-text",
+        "color-primary": "themes.atom-one-light.color-primary",
+        "confirm-bg": "themes.atom-one-light.confirm-bg",
+        "confirm-btn-primary-bg": "themes.atom-one-light.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.atom-one-light.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.atom-one-light.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.atom-one-light.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.atom-one-light.confirm-btn-secondary-text",
+        "confirm-title": "themes.atom-one-light.confirm-title",
+        "drop-overlay-bg": "themes.atom-one-light.drop-overlay-bg",
+        "file-chip-bg": "themes.atom-one-light.file-chip-bg",
+        "file-remove-bg": "themes.atom-one-light.file-remove-bg",
+        "info-700": "themes.atom-one-light.info-700",
+        "model-trigger-hover": "themes.atom-one-light.model-trigger-hover",
+        "msg-link": "themes.atom-one-light.msg-link",
+        "msg-scrollbar-hover": "themes.atom-one-light.msg-scrollbar-hover",
+        "muted": "themes.atom-one-light.muted",
+        "muted-foreground": "themes.atom-one-light.muted-foreground",
+        "perm-allow-btn-bg": "themes.atom-one-light.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.atom-one-light.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.atom-one-light.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.atom-one-light.perm-allow-kbd-border",
+        "perm-code-bg": "themes.atom-one-light.perm-code-bg",
+        "perm-item-selected-bg": "themes.atom-one-light.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.atom-one-light.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.atom-one-light.plan-toolbar-btn-hover-bg",
+        "popover": "themes.atom-one-light.popover",
+        "primary-foreground": "themes.atom-one-light.primary-foreground",
+        "search-match-fg": "themes.atom-one-light.search-match-fg",
+        "secondary": "themes.atom-one-light.secondary",
+        "settings-btn-primary-text": "themes.atom-one-light.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.atom-one-light.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.atom-one-light.text-placeholder",
+        "settings-integration-avatar-bg": "themes.atom-one-light.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.atom-one-light.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.atom-one-light.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.atom-one-light.settings-menu-bg-selected",
+        "settings-source-link": "themes.atom-one-light.settings-source-link",
+        "settings-theme-auto-dark": "themes.atom-one-light.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.atom-one-light.sidebar-action-icon",
+        "sidebar-item-active": "themes.atom-one-light.sidebar-item-active",
+        "splash-bg": "themes.atom-one-light.splash-bg",
+        "splash-text": "themes.atom-one-light.splash-text",
+        "splash-text-destructive": "themes.atom-one-light.splash-text-destructive",
+        "splash-text-muted": "themes.atom-one-light.splash-text-muted",
+        "titlebar-icon": "themes.atom-one-light.titlebar-icon",
+        "tooltip-bg": "themes.atom-one-light.tooltip-bg",
+        "tooltip-text": "themes.atom-one-light.tooltip-text",
+        "update-btn-border": "themes.atom-one-light.update-btn-border",
+        "update-btn-text": "themes.atom-one-light.update-btn-text"
+      },
+      "retained": {},
+      "type": "light"
+    },
+    "cindy-dark.ts": {
+      "tokens": {
+        "surface": "themes.cindy-dark.surface",
+        "surface-hsl": "themes.cindy-dark.surface-hsl",
+        "surface-elevated": "themes.cindy-dark.surface-elevated",
+        "surface-elevated-soft": "themes.cindy-dark.surface-elevated-soft",
+        "surface-card-ivory": "themes.cindy-dark.surface-card-ivory",
+        "surface-chip": "themes.cindy-dark.surface-chip",
+        "surface-chip-alt": "themes.cindy-dark.surface-chip-alt",
+        "surface-hover": "themes.cindy-dark.surface-hover",
+        "surface-hover-soft": "themes.cindy-dark.surface-hover-soft",
+        "surface-hover-hsl": "themes.cindy-dark.surface-hover-hsl",
+        "surface-on-card": "themes.cindy-dark.surface-on-card",
+        "switch-track-off": "themes.cindy-dark.switch-track-off",
+        "switch-track-on": "themes.cindy-dark.switch-track-on",
+        "status-badge-fg": "themes.cindy-dark.status-badge-fg",
+        "border-default": "themes.cindy-dark.border-default",
+        "border-default-hsl": "themes.cindy-dark.border-default-hsl",
+        "border-shadcn-hsl": "themes.cindy-dark.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.cindy-dark.border-transparent-mixed",
+        "text-primary": "themes.cindy-dark.text-primary",
+        "text-primary-on-dark": "themes.cindy-dark.text-primary-on-dark",
+        "text-primary-emphasis": "themes.cindy-dark.text-primary-emphasis",
+        "text-primary-inv": "themes.cindy-dark.text-primary-inv",
+        "text-primary-body-strong": "themes.cindy-dark.text-primary-body-strong",
+        "text-primary-hsl": "themes.cindy-dark.text-primary-hsl",
+        "text-secondary": "themes.cindy-dark.text-secondary",
+        "text-secondary-cross": "themes.cindy-dark.text-secondary-cross",
+        "text-secondary-mid": "themes.cindy-dark.text-secondary-mid",
+        "text-tertiary": "themes.cindy-dark.text-tertiary",
+        "text-tertiary-stone": "themes.cindy-dark.text-tertiary-stone",
+        "text-tertiary-mid": "themes.cindy-dark.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.cindy-dark.text-tertiary-hsl",
+        "text-disabled": "themes.cindy-dark.text-disabled",
+        "text-disabled-tertiary": "themes.cindy-dark.text-disabled-tertiary",
+        "accent-cta-bg": "themes.cindy-dark.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.cindy-dark.accent-cta-bg-pure",
+        "accent-emphasis": "themes.cindy-dark.accent-emphasis",
+        "accent-soft": "themes.cindy-dark.accent-soft",
+        "accent-hover": "themes.cindy-dark.accent-hover",
+        "accent-pure-cta-fg": "themes.cindy-dark.accent-pure-cta-fg",
+        "accent": "themes.cindy-dark.accent",
+        "agent-actions-rail": "themes.cindy-dark.agent-actions-rail",
+        "ask-checkbox-border": "themes.cindy-dark.ask-checkbox-border",
+        "ask-header-chip-bg": "themes.cindy-dark.ask-header-chip-bg",
+        "ask-send-disabled-bg": "themes.cindy-dark.ask-send-disabled-bg",
+        "ask-option-list-bg": "themes.cindy-dark.ask-option-list-bg",
+        "ask-option-hover": "themes.cindy-dark.ask-option-hover",
+        "background": "themes.cindy-dark.background",
+        "chat-input-bg": "themes.cindy-dark.chat-input-bg",
+        "chat-input-border-focus": "themes.cindy-dark.chat-input-border-focus",
+        "chat-input-chip-border": "themes.cindy-dark.chat-input-chip-border",
+        "chat-input-text": "themes.cindy-dark.chat-input-text",
+        "color-primary": "themes.cindy-dark.color-primary",
+        "caret-accent": "themes.cindy-dark.caret-accent",
+        "confirm-bg": "themes.cindy-dark.confirm-bg",
+        "confirm-btn-primary-bg": "themes.cindy-dark.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.cindy-dark.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.cindy-dark.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.cindy-dark.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.cindy-dark.confirm-btn-secondary-text",
+        "confirm-title": "themes.cindy-dark.confirm-title",
+        "file-chip-bg": "themes.cindy-dark.file-chip-bg",
+        "file-remove-bg": "themes.cindy-dark.file-remove-bg",
+        "info-700": "themes.cindy-dark.info-700",
+        "model-trigger-hover": "themes.cindy-dark.model-trigger-hover",
+        "model-item-hover": "themes.cindy-dark.model-item-hover",
+        "msg-link": "themes.cindy-dark.msg-link",
+        "msg-scrollbar-hover": "themes.cindy-dark.msg-scrollbar-hover",
+        "msg-user-bg": "themes.cindy-dark.msg-user-bg",
+        "muted": "themes.cindy-dark.muted",
+        "muted-foreground": "themes.cindy-dark.muted-foreground",
+        "perm-auto-selected-text": "themes.cindy-dark.perm-auto-selected-text",
+        "perm-allow-btn-bg": "themes.cindy-dark.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.cindy-dark.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.cindy-dark.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.cindy-dark.perm-allow-kbd-border",
+        "perm-code-bg": "themes.cindy-dark.perm-code-bg",
+        "perm-item-selected-bg": "themes.cindy-dark.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.cindy-dark.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.cindy-dark.plan-toolbar-btn-hover-bg",
+        "popover": "themes.cindy-dark.popover",
+        "primary-foreground": "themes.cindy-dark.primary-foreground",
+        "search-match-fg": "themes.cindy-dark.search-match-fg",
+        "secondary": "themes.cindy-dark.secondary",
+        "settings-btn-primary-text": "themes.cindy-dark.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.cindy-dark.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.cindy-dark.text-placeholder",
+        "settings-integration-avatar-bg": "themes.cindy-dark.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.cindy-dark.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.cindy-dark.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.cindy-dark.settings-menu-bg-selected",
+        "settings-source-link": "themes.cindy-dark.settings-source-link",
+        "settings-theme-auto-dark": "themes.cindy-dark.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.cindy-dark.sidebar-action-icon",
+        "cmd-palette-item-meta": "themes.cindy-dark.cmd-palette-item-meta",
+        "sidebar-item-active-foreground": "themes.cindy-dark.sidebar-item-active-foreground",
+        "sidebar-item-active-border": "themes.cindy-dark.sidebar-item-active-border",
+        "sidebar-item-active": "themes.cindy-dark.sidebar-item-active",
+        "splash-bg": "themes.cindy-dark.splash-bg",
+        "splash-text": "themes.cindy-dark.splash-text",
+        "splash-text-destructive": "themes.cindy-dark.splash-text-destructive",
+        "splash-text-muted": "themes.cindy-dark.splash-text-muted",
+        "titlebar-icon": "themes.cindy-dark.titlebar-icon",
+        "tooltip-bg": "themes.cindy-dark.tooltip-bg",
+        "tooltip-text": "themes.cindy-dark.tooltip-text",
+        "update-btn-border": "themes.cindy-dark.update-btn-border",
+        "update-btn-bg": "themes.cindy-dark.update-btn-bg",
+        "update-btn-text": "themes.cindy-dark.update-btn-text",
+        "update-btn-hover": "themes.cindy-dark.update-btn-hover",
+        "accent-foreground": "themes.cindy-dark.accent-foreground",
+        "panel-bg": "themes.cindy-dark.panel-bg",
+        "primary": "themes.cindy-dark.primary",
+        "ring": "themes.cindy-dark.ring",
+        "settings-theme-auto-light": "themes.cindy-dark.settings-theme-auto-light",
+        "foreground": "themes.cindy-dark.foreground",
+        "border": "themes.cindy-dark.border",
+        "input": "themes.cindy-dark.input",
+        "secondary-foreground": "themes.cindy-dark.secondary-foreground",
+        "popover-foreground": "themes.cindy-dark.popover-foreground",
+        "titlebar": "themes.cindy-dark.titlebar",
+        "titlebar-border": "themes.cindy-dark.titlebar-border",
+        "titlebar-button-hover": "themes.cindy-dark.titlebar-button-hover",
+        "titlebar-control-hover": "themes.cindy-dark.titlebar-control-hover",
+        "sidebar": "themes.cindy-dark.sidebar",
+        "sidebar-border": "themes.cindy-dark.sidebar-border",
+        "sidebar-item-hover": "themes.cindy-dark.sidebar-item-hover",
+        "sidebar-search-bg": "themes.cindy-dark.sidebar-search-bg",
+        "sidebar-search-input-bg": "themes.cindy-dark.sidebar-search-input-bg",
+        "sidebar-muted": "themes.cindy-dark.sidebar-muted",
+        "surface-translucent-main": "themes.cindy-dark.surface-translucent-main",
+        "surface-translucent-overlay": "themes.cindy-dark.surface-translucent-overlay",
+        "composer-pill-bg": "themes.cindy-dark.composer-pill-bg",
+        "composer-pill-icon": "themes.cindy-dark.composer-pill-icon",
+        "send-btn-bg": "themes.cindy-dark.send-btn-bg",
+        "send-btn-icon": "themes.cindy-dark.send-btn-icon",
+        "send-btn-disabled-bg": "themes.cindy-dark.send-btn-disabled-bg",
+        "send-btn-disabled-icon": "themes.cindy-dark.send-btn-disabled-icon",
+        "send-btn-hover-bg": "themes.cindy-dark.send-btn-hover-bg",
+        "send-btn-pressed-bg": "themes.cindy-dark.send-btn-pressed-bg",
+        "completion-badge-fg": "themes.cindy-dark.completion-badge-fg",
+        "create-agent-control-bg": "themes.cindy-dark.create-agent-control-bg",
+        "create-agent-control-bg-hover": "themes.cindy-dark.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.cindy-dark.create-agent-control-bg-pressed",
+        "create-agent-control-border": "themes.cindy-dark.create-agent-control-border",
+        "create-agent-quick-card-bg": "themes.cindy-dark.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.cindy-dark.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.cindy-dark.create-agent-quick-card-border",
+        "create-agent-quick-card-icon-bg": "themes.cindy-dark.create-agent-quick-card-icon-bg",
+        "create-agent-segment-track-bg": "themes.cindy-dark.create-agent-segment-track-bg",
+        "create-agent-send-disabled-bg": "themes.cindy-dark.create-agent-send-disabled-bg",
+        "create-agent-send-disabled-icon": "themes.cindy-dark.create-agent-send-disabled-icon",
+        "create-agent-send-icon": "themes.cindy-dark.create-agent-send-icon",
+        "md-table-bg": "themes.cindy-dark.md-table-bg",
+        "ask-badge-bg": "themes.cindy-dark.ask-badge-bg",
+        "cmd-palette-item-hover": "themes.cindy-dark.cmd-palette-item-hover",
+        "create-agent-control-icon": "themes.cindy-dark.create-agent-control-icon",
+        "create-agent-control-text": "themes.cindy-dark.create-agent-control-text",
+        "create-agent-quick-card-icon": "themes.cindy-dark.create-agent-quick-card-icon",
+        "create-agent-quick-card-text": "themes.cindy-dark.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.cindy-dark.create-agent-segment-inactive-text",
+        "settings-integration-avatar-border": "themes.cindy-dark.settings-integration-avatar-border",
+        "sidebar-list-muted": "themes.cindy-dark.sidebar-list-muted",
+        "sidebar-nav-text": "themes.cindy-dark.sidebar-nav-text",
+        "sidebar-user-card-bg-hover": "themes.cindy-dark.sidebar-user-card-bg-hover",
+        "sidebar-user-card-border": "themes.cindy-dark.sidebar-user-card-border",
+        "sidebar-user-card-text": "themes.cindy-dark.sidebar-user-card-text"
+      },
+      "retained": {
+        "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.dark"
+      },
+      "type": "dark"
+    },
+    "cindy-light.ts": {
+      "tokens": {
+        "surface": "themes.cindy-light.surface",
+        "surface-hsl": "themes.cindy-light.surface-hsl",
+        "surface-elevated": "themes.cindy-light.surface-elevated",
+        "surface-elevated-soft": "themes.cindy-light.surface-elevated-soft",
+        "surface-card-ivory": "themes.cindy-light.surface-card-ivory",
+        "surface-chip": "themes.cindy-light.surface-chip",
+        "surface-chip-alt": "themes.cindy-light.surface-chip-alt",
+        "surface-hover": "themes.cindy-light.surface-hover",
+        "surface-hover-soft": "themes.cindy-light.surface-hover-soft",
+        "surface-hover-hsl": "themes.cindy-light.surface-hover-hsl",
+        "surface-on-card": "themes.cindy-light.surface-on-card",
+        "switch-track-off": "themes.cindy-light.switch-track-off",
+        "switch-track-on": "themes.cindy-light.switch-track-on",
+        "status-badge-fg": "themes.cindy-light.status-badge-fg",
+        "border-default": "themes.cindy-light.border-default",
+        "border-default-hsl": "themes.cindy-light.border-default-hsl",
+        "border-shadcn-hsl": "themes.cindy-light.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.cindy-light.border-transparent-mixed",
+        "text-primary": "themes.cindy-light.text-primary",
+        "text-primary-on-dark": "themes.cindy-light.text-primary-on-dark",
+        "text-primary-emphasis": "themes.cindy-light.text-primary-emphasis",
+        "text-primary-inv": "themes.cindy-light.text-primary-inv",
+        "text-primary-body-strong": "themes.cindy-light.text-primary-body-strong",
+        "text-primary-hsl": "themes.cindy-light.text-primary-hsl",
+        "text-secondary": "themes.cindy-light.text-secondary",
+        "text-secondary-cross": "themes.cindy-light.text-secondary-cross",
+        "text-secondary-mid": "themes.cindy-light.text-secondary-mid",
+        "text-tertiary": "themes.cindy-light.text-tertiary",
+        "text-tertiary-stone": "themes.cindy-light.text-tertiary-stone",
+        "text-tertiary-mid": "themes.cindy-light.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.cindy-light.text-tertiary-hsl",
+        "text-disabled": "themes.cindy-light.text-disabled",
+        "text-disabled-tertiary": "themes.cindy-light.text-disabled-tertiary",
+        "accent-cta-bg": "themes.cindy-light.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.cindy-light.accent-cta-bg-pure",
+        "accent-emphasis": "themes.cindy-light.accent-emphasis",
+        "accent-soft": "themes.cindy-light.accent-soft",
+        "accent-hover": "themes.cindy-light.accent-hover",
+        "accent-pure-cta-fg": "themes.cindy-light.accent-pure-cta-fg",
+        "accent": "themes.cindy-light.accent",
+        "agent-actions-rail": "themes.cindy-light.agent-actions-rail",
+        "ask-checkbox-border": "themes.cindy-light.ask-checkbox-border",
+        "ask-option-list-bg": "themes.cindy-light.ask-option-list-bg",
+        "background": "themes.cindy-light.background",
+        "chat-input-bg": "themes.cindy-light.chat-input-bg",
+        "chat-input-border-focus": "themes.cindy-light.chat-input-border-focus",
+        "chat-input-chip-border": "themes.cindy-light.chat-input-chip-border",
+        "chat-input-text": "themes.cindy-light.chat-input-text",
+        "color-primary": "themes.cindy-light.color-primary",
+        "caret-accent": "themes.cindy-light.caret-accent",
+        "confirm-bg": "themes.cindy-light.confirm-bg",
+        "confirm-btn-primary-bg": "themes.cindy-light.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.cindy-light.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.cindy-light.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.cindy-light.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.cindy-light.confirm-btn-secondary-text",
+        "confirm-title": "themes.cindy-light.confirm-title",
+        "file-chip-bg": "themes.cindy-light.file-chip-bg",
+        "file-remove-bg": "themes.cindy-light.file-remove-bg",
+        "info-700": "themes.cindy-light.info-700",
+        "model-trigger-hover": "themes.cindy-light.model-trigger-hover",
+        "model-item-hover": "themes.cindy-light.model-item-hover",
+        "msg-link": "themes.cindy-light.msg-link",
+        "msg-scrollbar-hover": "themes.cindy-light.msg-scrollbar-hover",
+        "msg-user-bg": "themes.cindy-light.msg-user-bg",
+        "muted": "themes.cindy-light.muted",
+        "muted-foreground": "themes.cindy-light.muted-foreground",
+        "perm-auto-selected-text": "themes.cindy-light.perm-auto-selected-text",
+        "perm-allow-btn-bg": "themes.cindy-light.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.cindy-light.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.cindy-light.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.cindy-light.perm-allow-kbd-border",
+        "perm-code-bg": "themes.cindy-light.perm-code-bg",
+        "perm-item-selected-bg": "themes.cindy-light.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.cindy-light.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.cindy-light.plan-toolbar-btn-hover-bg",
+        "popover": "themes.cindy-light.popover",
+        "primary-foreground": "themes.cindy-light.primary-foreground",
+        "search-match-fg": "themes.cindy-light.search-match-fg",
+        "secondary": "themes.cindy-light.secondary",
+        "settings-btn-primary-text": "themes.cindy-light.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.cindy-light.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.cindy-light.text-placeholder",
+        "settings-integration-avatar-bg": "themes.cindy-light.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.cindy-light.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.cindy-light.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.cindy-light.settings-menu-bg-selected",
+        "settings-source-link": "themes.cindy-light.settings-source-link",
+        "settings-theme-auto-dark": "themes.cindy-light.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.cindy-light.sidebar-action-icon",
+        "cmd-palette-item-meta": "themes.cindy-light.cmd-palette-item-meta",
+        "sidebar-item-active-foreground": "themes.cindy-light.sidebar-item-active-foreground",
+        "sidebar-item-active-border": "themes.cindy-light.sidebar-item-active-border",
+        "sidebar-item-active": "themes.cindy-light.sidebar-item-active",
+        "splash-bg": "themes.cindy-light.splash-bg",
+        "splash-text": "themes.cindy-light.splash-text",
+        "splash-text-destructive": "themes.cindy-light.splash-text-destructive",
+        "splash-text-muted": "themes.cindy-light.splash-text-muted",
+        "titlebar-icon": "themes.cindy-light.titlebar-icon",
+        "tooltip-bg": "themes.cindy-light.tooltip-bg",
+        "tooltip-text": "themes.cindy-light.tooltip-text",
+        "update-btn-border": "themes.cindy-light.update-btn-border",
+        "update-btn-bg": "themes.cindy-light.update-btn-bg",
+        "update-btn-text": "themes.cindy-light.update-btn-text",
+        "update-btn-hover": "themes.cindy-light.update-btn-hover",
+        "accent-foreground": "themes.cindy-light.accent-foreground",
+        "panel-bg": "themes.cindy-light.panel-bg",
+        "primary": "themes.cindy-light.primary",
+        "ring": "themes.cindy-light.ring",
+        "settings-theme-auto-light": "themes.cindy-light.settings-theme-auto-light",
+        "foreground": "themes.cindy-light.foreground",
+        "border": "themes.cindy-light.border",
+        "input": "themes.cindy-light.input",
+        "secondary-foreground": "themes.cindy-light.secondary-foreground",
+        "popover-foreground": "themes.cindy-light.popover-foreground",
+        "titlebar": "themes.cindy-light.titlebar",
+        "titlebar-border": "themes.cindy-light.titlebar-border",
+        "titlebar-button-hover": "themes.cindy-light.titlebar-button-hover",
+        "titlebar-control-hover": "themes.cindy-light.titlebar-control-hover",
+        "sidebar": "themes.cindy-light.sidebar",
+        "sidebar-border": "themes.cindy-light.sidebar-border",
+        "sidebar-item-hover": "themes.cindy-light.sidebar-item-hover",
+        "sidebar-search-bg": "themes.cindy-light.sidebar-search-bg",
+        "sidebar-search-input-bg": "themes.cindy-light.sidebar-search-input-bg",
+        "sidebar-muted": "themes.cindy-light.sidebar-muted",
+        "surface-translucent-main": "themes.cindy-light.surface-translucent-main",
+        "surface-translucent-overlay": "themes.cindy-light.surface-translucent-overlay",
+        "composer-pill-bg": "themes.cindy-light.composer-pill-bg",
+        "composer-pill-icon": "themes.cindy-light.composer-pill-icon",
+        "send-btn-bg": "themes.cindy-light.send-btn-bg",
+        "send-btn-icon": "themes.cindy-light.send-btn-icon",
+        "send-btn-disabled-bg": "themes.cindy-light.send-btn-disabled-bg",
+        "send-btn-disabled-icon": "themes.cindy-light.send-btn-disabled-icon",
+        "send-btn-hover-bg": "themes.cindy-light.send-btn-hover-bg",
+        "send-btn-pressed-bg": "themes.cindy-light.send-btn-pressed-bg",
+        "ask-badge-bg": "themes.cindy-light.ask-badge-bg",
+        "ask-header-chip-bg": "themes.cindy-light.ask-header-chip-bg",
+        "cmd-palette-item-hover": "themes.cindy-light.cmd-palette-item-hover",
+        "create-agent-control-bg": "themes.cindy-light.create-agent-control-bg",
+        "create-agent-control-border": "themes.cindy-light.create-agent-control-border",
+        "create-agent-control-icon": "themes.cindy-light.create-agent-control-icon",
+        "create-agent-control-text": "themes.cindy-light.create-agent-control-text",
+        "create-agent-quick-card-bg": "themes.cindy-light.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.cindy-light.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.cindy-light.create-agent-quick-card-border",
+        "create-agent-quick-card-icon": "themes.cindy-light.create-agent-quick-card-icon",
+        "create-agent-quick-card-icon-bg": "themes.cindy-light.create-agent-quick-card-icon-bg",
+        "create-agent-quick-card-text": "themes.cindy-light.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.cindy-light.create-agent-segment-inactive-text",
+        "create-agent-segment-track-bg": "themes.cindy-light.create-agent-segment-track-bg",
+        "create-agent-send-disabled-bg": "themes.cindy-light.create-agent-send-disabled-bg",
+        "create-agent-send-disabled-icon": "themes.cindy-light.create-agent-send-disabled-icon",
+        "md-table-bg": "themes.cindy-light.md-table-bg",
+        "settings-integration-avatar-border": "themes.cindy-light.settings-integration-avatar-border",
+        "sidebar-list-muted": "themes.cindy-light.sidebar-list-muted",
+        "sidebar-nav-text": "themes.cindy-light.sidebar-nav-text",
+        "sidebar-user-card-bg-hover": "themes.cindy-light.sidebar-user-card-bg-hover",
+        "sidebar-user-card-border": "themes.cindy-light.sidebar-user-card-border",
+        "sidebar-user-card-text": "themes.cindy-light.sidebar-user-card-text",
+        "ask-option-hover": "themes.cindy-light.ask-option-hover",
+        "ask-send-disabled-bg": "themes.cindy-light.ask-send-disabled-bg",
+        "completion-badge-fg": "themes.cindy-light.completion-badge-fg",
+        "create-agent-control-bg-hover": "themes.cindy-light.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.cindy-light.create-agent-control-bg-pressed",
+        "create-agent-send-icon": "themes.cindy-light.create-agent-send-icon"
+      },
+      "retained": {
+        "surface-translucent-sidebar": "CINDY_ACRYLIC_WINDOW_BACKING.light"
+      },
+      "type": "light"
+    },
+    "default-dark.ts": {
+      "tokens": {
+        "perm-auto-selected-text": "themes.default-dark.perm-auto-selected-text"
+      },
+      "retained": {},
+      "type": "dark"
+    },
+    "default-light.ts": {
+      "tokens": {
+        "perm-auto-selected-text": "themes.default-light.perm-auto-selected-text"
+      },
+      "retained": {},
+      "type": "light"
+    },
+    "eclipse.ts": {
+      "tokens": {
+        "surface": "themes.eclipse.surface",
+        "surface-hsl": "themes.eclipse.surface-hsl",
+        "surface-elevated": "themes.eclipse.surface-elevated",
+        "surface-elevated-soft": "themes.eclipse.surface-elevated-soft",
+        "surface-card-ivory": "themes.eclipse.surface-card-ivory",
+        "surface-chip": "themes.eclipse.surface-chip",
+        "surface-chip-alt": "themes.eclipse.surface-chip-alt",
+        "surface-hover": "themes.eclipse.surface-hover",
+        "surface-hover-soft": "themes.eclipse.surface-hover-soft",
+        "surface-hover-hsl": "themes.eclipse.surface-hover-hsl",
+        "surface-on-card": "themes.eclipse.surface-on-card",
+        "border-default": "themes.eclipse.border-default",
+        "border-default-hsl": "themes.eclipse.border-default-hsl",
+        "border-shadcn-hsl": "themes.eclipse.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.eclipse.border-transparent-mixed",
+        "text-primary": "themes.eclipse.text-primary",
+        "text-primary-on-dark": "themes.eclipse.text-primary-on-dark",
+        "text-primary-emphasis": "themes.eclipse.text-primary-emphasis",
+        "text-primary-inv": "themes.eclipse.text-primary-inv",
+        "text-primary-body-strong": "themes.eclipse.text-primary-body-strong",
+        "text-primary-hsl": "themes.eclipse.text-primary-hsl",
+        "text-secondary": "themes.eclipse.text-secondary",
+        "text-secondary-cross": "themes.eclipse.text-secondary-cross",
+        "text-secondary-mid": "themes.eclipse.text-secondary-mid",
+        "text-tertiary": "themes.eclipse.text-tertiary",
+        "text-tertiary-stone": "themes.eclipse.text-tertiary-stone",
+        "text-tertiary-mid": "themes.eclipse.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.eclipse.text-tertiary-hsl",
+        "text-disabled": "themes.eclipse.text-disabled",
+        "text-disabled-tertiary": "themes.eclipse.text-disabled-tertiary",
+        "accent-cta-bg": "themes.eclipse.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.eclipse.accent-cta-bg-pure",
+        "accent-emphasis": "themes.eclipse.accent-emphasis",
+        "accent-soft": "themes.eclipse.accent-soft",
+        "accent-hover": "themes.eclipse.accent-hover",
+        "accent-pure-cta-fg": "themes.eclipse.accent-pure-cta-fg",
+        "switch-track-on": "themes.eclipse.switch-track-on",
+        "accent": "themes.eclipse.accent",
+        "agent-actions-rail": "themes.eclipse.agent-actions-rail",
+        "ask-checkbox-border": "themes.eclipse.ask-checkbox-border",
+        "background": "themes.eclipse.background",
+        "create-agent-control-bg": "themes.eclipse.create-agent-control-bg",
+        "create-agent-control-bg-hover": "themes.eclipse.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.eclipse.create-agent-control-bg-pressed",
+        "create-agent-control-border": "themes.eclipse.create-agent-control-border",
+        "create-agent-control-icon": "themes.eclipse.create-agent-control-icon",
+        "create-agent-control-text": "themes.eclipse.create-agent-control-text",
+        "create-agent-quick-card-bg": "themes.eclipse.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.eclipse.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.eclipse.create-agent-quick-card-border",
+        "create-agent-quick-card-icon": "themes.eclipse.create-agent-quick-card-icon",
+        "create-agent-quick-card-icon-bg": "themes.eclipse.create-agent-quick-card-icon-bg",
+        "create-agent-quick-card-text": "themes.eclipse.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.eclipse.create-agent-segment-inactive-text",
+        "create-agent-segment-track-bg": "themes.eclipse.create-agent-segment-track-bg",
+        "send-btn-bg": "themes.eclipse.send-btn-bg",
+        "send-btn-icon": "themes.eclipse.send-btn-icon",
+        "chat-input-chip-border": "themes.eclipse.chat-input-chip-border",
+        "chat-input-text": "themes.eclipse.chat-input-text",
+        "color-primary": "themes.eclipse.color-primary",
+        "confirm-bg": "themes.eclipse.confirm-bg",
+        "confirm-btn-primary-bg": "themes.eclipse.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.eclipse.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.eclipse.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.eclipse.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.eclipse.confirm-btn-secondary-text",
+        "confirm-title": "themes.eclipse.confirm-title",
+        "drop-overlay-bg": "themes.eclipse.drop-overlay-bg",
+        "file-chip-bg": "themes.eclipse.file-chip-bg",
+        "file-remove-bg": "themes.eclipse.file-remove-bg",
+        "info-700": "themes.eclipse.info-700",
+        "model-trigger-hover": "themes.eclipse.model-trigger-hover",
+        "msg-link": "themes.eclipse.msg-link",
+        "msg-scrollbar-hover": "themes.eclipse.msg-scrollbar-hover",
+        "muted": "themes.eclipse.muted",
+        "muted-foreground": "themes.eclipse.muted-foreground",
+        "perm-allow-btn-bg": "themes.eclipse.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.eclipse.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.eclipse.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.eclipse.perm-allow-kbd-border",
+        "perm-code-bg": "themes.eclipse.perm-code-bg",
+        "perm-item-selected-bg": "themes.eclipse.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.eclipse.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.eclipse.plan-toolbar-btn-hover-bg",
+        "popover": "themes.eclipse.popover",
+        "primary-foreground": "themes.eclipse.primary-foreground",
+        "search-match-fg": "themes.eclipse.search-match-fg",
+        "secondary": "themes.eclipse.secondary",
+        "settings-btn-primary-text": "themes.eclipse.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.eclipse.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.eclipse.text-placeholder",
+        "settings-integration-avatar-bg": "themes.eclipse.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.eclipse.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.eclipse.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.eclipse.settings-menu-bg-selected",
+        "settings-source-link": "themes.eclipse.settings-source-link",
+        "settings-theme-auto-dark": "themes.eclipse.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.eclipse.sidebar-action-icon",
+        "sidebar-item-active": "themes.eclipse.sidebar-item-active",
+        "splash-bg": "themes.eclipse.splash-bg",
+        "splash-text": "themes.eclipse.splash-text",
+        "splash-text-destructive": "themes.eclipse.splash-text-destructive",
+        "splash-text-muted": "themes.eclipse.splash-text-muted",
+        "titlebar-icon": "themes.eclipse.titlebar-icon",
+        "tooltip-bg": "themes.eclipse.tooltip-bg",
+        "tooltip-text": "themes.eclipse.tooltip-text",
+        "update-btn-border": "themes.eclipse.update-btn-border",
+        "update-btn-text": "themes.eclipse.update-btn-text"
+      },
+      "retained": {},
+      "type": "dark"
+    },
+    "github-dark.ts": {
+      "tokens": {
+        "surface": "themes.github-dark.surface",
+        "surface-hsl": "themes.github-dark.surface-hsl",
+        "surface-elevated": "themes.github-dark.surface-elevated",
+        "surface-elevated-soft": "themes.github-dark.surface-elevated-soft",
+        "surface-card-ivory": "themes.github-dark.surface-card-ivory",
+        "surface-chip": "themes.github-dark.surface-chip",
+        "surface-chip-alt": "themes.github-dark.surface-chip-alt",
+        "surface-hover": "themes.github-dark.surface-hover",
+        "surface-hover-soft": "themes.github-dark.surface-hover-soft",
+        "surface-hover-hsl": "themes.github-dark.surface-hover-hsl",
+        "surface-on-card": "themes.github-dark.surface-on-card",
+        "border-default": "themes.github-dark.border-default",
+        "border-default-hsl": "themes.github-dark.border-default-hsl",
+        "border-shadcn-hsl": "themes.github-dark.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.github-dark.border-transparent-mixed",
+        "text-primary": "themes.github-dark.text-primary",
+        "text-primary-on-dark": "themes.github-dark.text-primary-on-dark",
+        "text-primary-emphasis": "themes.github-dark.text-primary-emphasis",
+        "text-primary-inv": "themes.github-dark.text-primary-inv",
+        "text-primary-body-strong": "themes.github-dark.text-primary-body-strong",
+        "text-primary-hsl": "themes.github-dark.text-primary-hsl",
+        "text-secondary": "themes.github-dark.text-secondary",
+        "text-secondary-cross": "themes.github-dark.text-secondary-cross",
+        "text-secondary-mid": "themes.github-dark.text-secondary-mid",
+        "text-tertiary": "themes.github-dark.text-tertiary",
+        "text-tertiary-stone": "themes.github-dark.text-tertiary-stone",
+        "text-tertiary-mid": "themes.github-dark.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.github-dark.text-tertiary-hsl",
+        "text-disabled": "themes.github-dark.text-disabled",
+        "text-disabled-tertiary": "themes.github-dark.text-disabled-tertiary",
+        "accent-cta-bg": "themes.github-dark.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.github-dark.accent-cta-bg-pure",
+        "accent-emphasis": "themes.github-dark.accent-emphasis",
+        "accent-soft": "themes.github-dark.accent-soft",
+        "accent-hover": "themes.github-dark.accent-hover",
+        "accent-pure-cta-fg": "themes.github-dark.accent-pure-cta-fg",
+        "switch-track-on": "themes.github-dark.switch-track-on",
+        "status-badge-fg": "themes.github-dark.status-badge-fg",
+        "accent": "themes.github-dark.accent",
+        "agent-actions-rail": "themes.github-dark.agent-actions-rail",
+        "ask-checkbox-border": "themes.github-dark.ask-checkbox-border",
+        "background": "themes.github-dark.background",
+        "create-agent-control-bg": "themes.github-dark.create-agent-control-bg",
+        "create-agent-control-bg-hover": "themes.github-dark.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.github-dark.create-agent-control-bg-pressed",
+        "create-agent-control-border": "themes.github-dark.create-agent-control-border",
+        "create-agent-control-icon": "themes.github-dark.create-agent-control-icon",
+        "create-agent-control-text": "themes.github-dark.create-agent-control-text",
+        "create-agent-quick-card-bg": "themes.github-dark.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.github-dark.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.github-dark.create-agent-quick-card-border",
+        "create-agent-quick-card-icon": "themes.github-dark.create-agent-quick-card-icon",
+        "create-agent-quick-card-icon-bg": "themes.github-dark.create-agent-quick-card-icon-bg",
+        "create-agent-quick-card-text": "themes.github-dark.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.github-dark.create-agent-segment-inactive-text",
+        "create-agent-segment-track-bg": "themes.github-dark.create-agent-segment-track-bg",
+        "send-btn-bg": "themes.github-dark.send-btn-bg",
+        "send-btn-icon": "themes.github-dark.send-btn-icon",
+        "chat-input-chip-border": "themes.github-dark.chat-input-chip-border",
+        "chat-input-text": "themes.github-dark.chat-input-text",
+        "color-primary": "themes.github-dark.color-primary",
+        "confirm-bg": "themes.github-dark.confirm-bg",
+        "confirm-btn-primary-bg": "themes.github-dark.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.github-dark.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.github-dark.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.github-dark.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.github-dark.confirm-btn-secondary-text",
+        "confirm-title": "themes.github-dark.confirm-title",
+        "drop-overlay-bg": "themes.github-dark.drop-overlay-bg",
+        "file-chip-bg": "themes.github-dark.file-chip-bg",
+        "file-remove-bg": "themes.github-dark.file-remove-bg",
+        "info-700": "themes.github-dark.info-700",
+        "model-trigger-hover": "themes.github-dark.model-trigger-hover",
+        "msg-link": "themes.github-dark.msg-link",
+        "msg-scrollbar-hover": "themes.github-dark.msg-scrollbar-hover",
+        "muted": "themes.github-dark.muted",
+        "muted-foreground": "themes.github-dark.muted-foreground",
+        "perm-allow-btn-bg": "themes.github-dark.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.github-dark.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.github-dark.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.github-dark.perm-allow-kbd-border",
+        "perm-code-bg": "themes.github-dark.perm-code-bg",
+        "perm-item-selected-bg": "themes.github-dark.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.github-dark.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.github-dark.plan-toolbar-btn-hover-bg",
+        "popover": "themes.github-dark.popover",
+        "primary-foreground": "themes.github-dark.primary-foreground",
+        "search-match-fg": "themes.github-dark.search-match-fg",
+        "secondary": "themes.github-dark.secondary",
+        "settings-btn-primary-text": "themes.github-dark.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.github-dark.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.github-dark.text-placeholder",
+        "settings-integration-avatar-bg": "themes.github-dark.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.github-dark.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.github-dark.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.github-dark.settings-menu-bg-selected",
+        "settings-source-link": "themes.github-dark.settings-source-link",
+        "settings-theme-auto-dark": "themes.github-dark.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.github-dark.sidebar-action-icon",
+        "sidebar-item-active": "themes.github-dark.sidebar-item-active",
+        "splash-bg": "themes.github-dark.splash-bg",
+        "splash-text": "themes.github-dark.splash-text",
+        "splash-text-destructive": "themes.github-dark.splash-text-destructive",
+        "splash-text-muted": "themes.github-dark.splash-text-muted",
+        "titlebar-icon": "themes.github-dark.titlebar-icon",
+        "tooltip-bg": "themes.github-dark.tooltip-bg",
+        "tooltip-text": "themes.github-dark.tooltip-text",
+        "update-btn-border": "themes.github-dark.update-btn-border",
+        "update-btn-text": "themes.github-dark.update-btn-text"
+      },
+      "retained": {},
+      "type": "dark"
+    },
+    "material-ocean-hc.ts": {
+      "tokens": {
+        "surface": "themes.material-ocean-hc.surface",
+        "surface-hsl": "themes.material-ocean-hc.surface-hsl",
+        "surface-elevated": "themes.material-ocean-hc.surface-elevated",
+        "surface-elevated-soft": "themes.material-ocean-hc.surface-elevated-soft",
+        "surface-card-ivory": "themes.material-ocean-hc.surface-card-ivory",
+        "surface-chip": "themes.material-ocean-hc.surface-chip",
+        "surface-chip-alt": "themes.material-ocean-hc.surface-chip-alt",
+        "surface-hover": "themes.material-ocean-hc.surface-hover",
+        "surface-hover-soft": "themes.material-ocean-hc.surface-hover-soft",
+        "surface-hover-hsl": "themes.material-ocean-hc.surface-hover-hsl",
+        "surface-on-card": "themes.material-ocean-hc.surface-on-card",
+        "border-default": "themes.material-ocean-hc.border-default",
+        "border-default-hsl": "themes.material-ocean-hc.border-default-hsl",
+        "border-shadcn-hsl": "themes.material-ocean-hc.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.material-ocean-hc.border-transparent-mixed",
+        "text-primary": "themes.material-ocean-hc.text-primary",
+        "text-primary-on-dark": "themes.material-ocean-hc.text-primary-on-dark",
+        "text-primary-emphasis": "themes.material-ocean-hc.text-primary-emphasis",
+        "text-primary-inv": "themes.material-ocean-hc.text-primary-inv",
+        "text-primary-body-strong": "themes.material-ocean-hc.text-primary-body-strong",
+        "text-primary-hsl": "themes.material-ocean-hc.text-primary-hsl",
+        "text-secondary": "themes.material-ocean-hc.text-secondary",
+        "text-secondary-cross": "themes.material-ocean-hc.text-secondary-cross",
+        "text-secondary-mid": "themes.material-ocean-hc.text-secondary-mid",
+        "text-tertiary": "themes.material-ocean-hc.text-tertiary",
+        "text-tertiary-stone": "themes.material-ocean-hc.text-tertiary-stone",
+        "text-tertiary-mid": "themes.material-ocean-hc.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.material-ocean-hc.text-tertiary-hsl",
+        "text-disabled": "themes.material-ocean-hc.text-disabled",
+        "text-disabled-tertiary": "themes.material-ocean-hc.text-disabled-tertiary",
+        "accent-cta-bg": "themes.material-ocean-hc.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.material-ocean-hc.accent-cta-bg-pure",
+        "accent-emphasis": "themes.material-ocean-hc.accent-emphasis",
+        "accent-soft": "themes.material-ocean-hc.accent-soft",
+        "accent-hover": "themes.material-ocean-hc.accent-hover",
+        "accent-pure-cta-fg": "themes.material-ocean-hc.accent-pure-cta-fg",
+        "switch-track-on": "themes.material-ocean-hc.switch-track-on",
+        "accent": "themes.material-ocean-hc.accent",
+        "agent-actions-rail": "themes.material-ocean-hc.agent-actions-rail",
+        "ask-checkbox-border": "themes.material-ocean-hc.ask-checkbox-border",
+        "background": "themes.material-ocean-hc.background",
+        "create-agent-control-bg": "themes.material-ocean-hc.create-agent-control-bg",
+        "create-agent-control-bg-hover": "themes.material-ocean-hc.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.material-ocean-hc.create-agent-control-bg-pressed",
+        "create-agent-control-border": "themes.material-ocean-hc.create-agent-control-border",
+        "create-agent-control-icon": "themes.material-ocean-hc.create-agent-control-icon",
+        "create-agent-control-text": "themes.material-ocean-hc.create-agent-control-text",
+        "create-agent-quick-card-bg": "themes.material-ocean-hc.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.material-ocean-hc.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.material-ocean-hc.create-agent-quick-card-border",
+        "create-agent-quick-card-icon": "themes.material-ocean-hc.create-agent-quick-card-icon",
+        "create-agent-quick-card-icon-bg": "themes.material-ocean-hc.create-agent-quick-card-icon-bg",
+        "create-agent-quick-card-text": "themes.material-ocean-hc.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.material-ocean-hc.create-agent-segment-inactive-text",
+        "create-agent-segment-track-bg": "themes.material-ocean-hc.create-agent-segment-track-bg",
+        "send-btn-bg": "themes.material-ocean-hc.send-btn-bg",
+        "send-btn-icon": "themes.material-ocean-hc.send-btn-icon",
+        "chat-input-chip-border": "themes.material-ocean-hc.chat-input-chip-border",
+        "chat-input-text": "themes.material-ocean-hc.chat-input-text",
+        "color-primary": "themes.material-ocean-hc.color-primary",
+        "confirm-bg": "themes.material-ocean-hc.confirm-bg",
+        "confirm-btn-primary-bg": "themes.material-ocean-hc.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.material-ocean-hc.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.material-ocean-hc.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.material-ocean-hc.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.material-ocean-hc.confirm-btn-secondary-text",
+        "confirm-title": "themes.material-ocean-hc.confirm-title",
+        "drop-overlay-bg": "themes.material-ocean-hc.drop-overlay-bg",
+        "file-chip-bg": "themes.material-ocean-hc.file-chip-bg",
+        "file-remove-bg": "themes.material-ocean-hc.file-remove-bg",
+        "info-700": "themes.material-ocean-hc.info-700",
+        "model-trigger-hover": "themes.material-ocean-hc.model-trigger-hover",
+        "msg-link": "themes.material-ocean-hc.msg-link",
+        "msg-scrollbar-hover": "themes.material-ocean-hc.msg-scrollbar-hover",
+        "muted": "themes.material-ocean-hc.muted",
+        "muted-foreground": "themes.material-ocean-hc.muted-foreground",
+        "perm-allow-btn-bg": "themes.material-ocean-hc.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.material-ocean-hc.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.material-ocean-hc.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.material-ocean-hc.perm-allow-kbd-border",
+        "perm-code-bg": "themes.material-ocean-hc.perm-code-bg",
+        "perm-item-selected-bg": "themes.material-ocean-hc.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.material-ocean-hc.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.material-ocean-hc.plan-toolbar-btn-hover-bg",
+        "popover": "themes.material-ocean-hc.popover",
+        "primary-foreground": "themes.material-ocean-hc.primary-foreground",
+        "search-match-fg": "themes.material-ocean-hc.search-match-fg",
+        "secondary": "themes.material-ocean-hc.secondary",
+        "settings-btn-primary-text": "themes.material-ocean-hc.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.material-ocean-hc.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.material-ocean-hc.text-placeholder",
+        "settings-integration-avatar-bg": "themes.material-ocean-hc.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.material-ocean-hc.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.material-ocean-hc.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.material-ocean-hc.settings-menu-bg-selected",
+        "settings-source-link": "themes.material-ocean-hc.settings-source-link",
+        "settings-theme-auto-dark": "themes.material-ocean-hc.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.material-ocean-hc.sidebar-action-icon",
+        "sidebar-item-active": "themes.material-ocean-hc.sidebar-item-active",
+        "splash-bg": "themes.material-ocean-hc.splash-bg",
+        "splash-text": "themes.material-ocean-hc.splash-text",
+        "splash-text-destructive": "themes.material-ocean-hc.splash-text-destructive",
+        "splash-text-muted": "themes.material-ocean-hc.splash-text-muted",
+        "titlebar-icon": "themes.material-ocean-hc.titlebar-icon",
+        "tooltip-bg": "themes.material-ocean-hc.tooltip-bg",
+        "tooltip-text": "themes.material-ocean-hc.tooltip-text",
+        "update-btn-border": "themes.material-ocean-hc.update-btn-border",
+        "update-btn-text": "themes.material-ocean-hc.update-btn-text"
+      },
+      "retained": {},
+      "type": "dark"
+    },
+    "monokai-pro.ts": {
+      "tokens": {
+        "surface": "themes.monokai-pro.surface",
+        "surface-hsl": "themes.monokai-pro.surface-hsl",
+        "surface-elevated": "themes.monokai-pro.surface-elevated",
+        "surface-elevated-soft": "themes.monokai-pro.surface-elevated-soft",
+        "surface-card-ivory": "themes.monokai-pro.surface-card-ivory",
+        "surface-chip": "themes.monokai-pro.surface-chip",
+        "surface-chip-alt": "themes.monokai-pro.surface-chip-alt",
+        "surface-hover": "themes.monokai-pro.surface-hover",
+        "surface-hover-soft": "themes.monokai-pro.surface-hover-soft",
+        "surface-hover-hsl": "themes.monokai-pro.surface-hover-hsl",
+        "surface-on-card": "themes.monokai-pro.surface-on-card",
+        "border-default": "themes.monokai-pro.border-default",
+        "border-default-hsl": "themes.monokai-pro.border-default-hsl",
+        "border-shadcn-hsl": "themes.monokai-pro.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.monokai-pro.border-transparent-mixed",
+        "text-primary": "themes.monokai-pro.text-primary",
+        "text-primary-on-dark": "themes.monokai-pro.text-primary-on-dark",
+        "text-primary-emphasis": "themes.monokai-pro.text-primary-emphasis",
+        "text-primary-inv": "themes.monokai-pro.text-primary-inv",
+        "text-primary-body-strong": "themes.monokai-pro.text-primary-body-strong",
+        "text-primary-hsl": "themes.monokai-pro.text-primary-hsl",
+        "text-secondary": "themes.monokai-pro.text-secondary",
+        "text-secondary-cross": "themes.monokai-pro.text-secondary-cross",
+        "text-secondary-mid": "themes.monokai-pro.text-secondary-mid",
+        "text-tertiary": "themes.monokai-pro.text-tertiary",
+        "text-tertiary-stone": "themes.monokai-pro.text-tertiary-stone",
+        "text-tertiary-mid": "themes.monokai-pro.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.monokai-pro.text-tertiary-hsl",
+        "text-disabled": "themes.monokai-pro.text-disabled",
+        "text-disabled-tertiary": "themes.monokai-pro.text-disabled-tertiary",
+        "accent-cta-bg": "themes.monokai-pro.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.monokai-pro.accent-cta-bg-pure",
+        "accent-emphasis": "themes.monokai-pro.accent-emphasis",
+        "accent-soft": "themes.monokai-pro.accent-soft",
+        "accent-hover": "themes.monokai-pro.accent-hover",
+        "accent-pure-cta-fg": "themes.monokai-pro.accent-pure-cta-fg",
+        "switch-track-on": "themes.monokai-pro.switch-track-on",
+        "accent": "themes.monokai-pro.accent",
+        "agent-actions-rail": "themes.monokai-pro.agent-actions-rail",
+        "ask-checkbox-border": "themes.monokai-pro.ask-checkbox-border",
+        "background": "themes.monokai-pro.background",
+        "create-agent-control-bg": "themes.monokai-pro.create-agent-control-bg",
+        "create-agent-control-bg-hover": "themes.monokai-pro.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.monokai-pro.create-agent-control-bg-pressed",
+        "create-agent-control-border": "themes.monokai-pro.create-agent-control-border",
+        "create-agent-control-icon": "themes.monokai-pro.create-agent-control-icon",
+        "create-agent-control-text": "themes.monokai-pro.create-agent-control-text",
+        "create-agent-quick-card-bg": "themes.monokai-pro.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.monokai-pro.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.monokai-pro.create-agent-quick-card-border",
+        "create-agent-quick-card-icon": "themes.monokai-pro.create-agent-quick-card-icon",
+        "create-agent-quick-card-icon-bg": "themes.monokai-pro.create-agent-quick-card-icon-bg",
+        "create-agent-quick-card-text": "themes.monokai-pro.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.monokai-pro.create-agent-segment-inactive-text",
+        "create-agent-segment-track-bg": "themes.monokai-pro.create-agent-segment-track-bg",
+        "send-btn-bg": "themes.monokai-pro.send-btn-bg",
+        "send-btn-icon": "themes.monokai-pro.send-btn-icon",
+        "chat-input-chip-border": "themes.monokai-pro.chat-input-chip-border",
+        "chat-input-text": "themes.monokai-pro.chat-input-text",
+        "color-primary": "themes.monokai-pro.color-primary",
+        "confirm-bg": "themes.monokai-pro.confirm-bg",
+        "confirm-btn-primary-bg": "themes.monokai-pro.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.monokai-pro.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.monokai-pro.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.monokai-pro.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.monokai-pro.confirm-btn-secondary-text",
+        "confirm-title": "themes.monokai-pro.confirm-title",
+        "drop-overlay-bg": "themes.monokai-pro.drop-overlay-bg",
+        "file-chip-bg": "themes.monokai-pro.file-chip-bg",
+        "file-remove-bg": "themes.monokai-pro.file-remove-bg",
+        "info-700": "themes.monokai-pro.info-700",
+        "model-trigger-hover": "themes.monokai-pro.model-trigger-hover",
+        "msg-link": "themes.monokai-pro.msg-link",
+        "msg-scrollbar-hover": "themes.monokai-pro.msg-scrollbar-hover",
+        "muted": "themes.monokai-pro.muted",
+        "muted-foreground": "themes.monokai-pro.muted-foreground",
+        "perm-allow-btn-bg": "themes.monokai-pro.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.monokai-pro.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.monokai-pro.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.monokai-pro.perm-allow-kbd-border",
+        "perm-code-bg": "themes.monokai-pro.perm-code-bg",
+        "perm-item-selected-bg": "themes.monokai-pro.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.monokai-pro.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.monokai-pro.plan-toolbar-btn-hover-bg",
+        "popover": "themes.monokai-pro.popover",
+        "primary-foreground": "themes.monokai-pro.primary-foreground",
+        "search-match-fg": "themes.monokai-pro.search-match-fg",
+        "secondary": "themes.monokai-pro.secondary",
+        "settings-btn-primary-text": "themes.monokai-pro.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.monokai-pro.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.monokai-pro.text-placeholder",
+        "settings-integration-avatar-bg": "themes.monokai-pro.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.monokai-pro.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.monokai-pro.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.monokai-pro.settings-menu-bg-selected",
+        "settings-source-link": "themes.monokai-pro.settings-source-link",
+        "settings-theme-auto-dark": "themes.monokai-pro.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.monokai-pro.sidebar-action-icon",
+        "sidebar-item-active": "themes.monokai-pro.sidebar-item-active",
+        "splash-bg": "themes.monokai-pro.splash-bg",
+        "splash-text": "themes.monokai-pro.splash-text",
+        "splash-text-destructive": "themes.monokai-pro.splash-text-destructive",
+        "splash-text-muted": "themes.monokai-pro.splash-text-muted",
+        "titlebar-icon": "themes.monokai-pro.titlebar-icon",
+        "tooltip-bg": "themes.monokai-pro.tooltip-bg",
+        "tooltip-text": "themes.monokai-pro.tooltip-text",
+        "update-btn-border": "themes.monokai-pro.update-btn-border",
+        "update-btn-text": "themes.monokai-pro.update-btn-text"
+      },
+      "retained": {},
+      "type": "dark"
+    },
+    "one-dark-pro.ts": {
+      "tokens": {
+        "surface": "themes.one-dark-pro.surface",
+        "surface-hsl": "themes.one-dark-pro.surface-hsl",
+        "surface-elevated": "themes.one-dark-pro.surface-elevated",
+        "surface-elevated-soft": "themes.one-dark-pro.surface-elevated-soft",
+        "surface-card-ivory": "themes.one-dark-pro.surface-card-ivory",
+        "surface-chip": "themes.one-dark-pro.surface-chip",
+        "surface-chip-alt": "themes.one-dark-pro.surface-chip-alt",
+        "surface-hover": "themes.one-dark-pro.surface-hover",
+        "surface-hover-soft": "themes.one-dark-pro.surface-hover-soft",
+        "surface-hover-hsl": "themes.one-dark-pro.surface-hover-hsl",
+        "surface-on-card": "themes.one-dark-pro.surface-on-card",
+        "border-default": "themes.one-dark-pro.border-default",
+        "border-default-hsl": "themes.one-dark-pro.border-default-hsl",
+        "border-shadcn-hsl": "themes.one-dark-pro.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.one-dark-pro.border-transparent-mixed",
+        "text-primary": "themes.one-dark-pro.text-primary",
+        "text-primary-on-dark": "themes.one-dark-pro.text-primary-on-dark",
+        "text-primary-emphasis": "themes.one-dark-pro.text-primary-emphasis",
+        "text-primary-inv": "themes.one-dark-pro.text-primary-inv",
+        "text-primary-body-strong": "themes.one-dark-pro.text-primary-body-strong",
+        "text-primary-hsl": "themes.one-dark-pro.text-primary-hsl",
+        "text-secondary": "themes.one-dark-pro.text-secondary",
+        "text-secondary-cross": "themes.one-dark-pro.text-secondary-cross",
+        "text-secondary-mid": "themes.one-dark-pro.text-secondary-mid",
+        "text-tertiary": "themes.one-dark-pro.text-tertiary",
+        "text-tertiary-stone": "themes.one-dark-pro.text-tertiary-stone",
+        "text-tertiary-mid": "themes.one-dark-pro.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.one-dark-pro.text-tertiary-hsl",
+        "text-disabled": "themes.one-dark-pro.text-disabled",
+        "text-disabled-tertiary": "themes.one-dark-pro.text-disabled-tertiary",
+        "accent-cta-bg": "themes.one-dark-pro.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.one-dark-pro.accent-cta-bg-pure",
+        "accent-emphasis": "themes.one-dark-pro.accent-emphasis",
+        "accent-soft": "themes.one-dark-pro.accent-soft",
+        "accent-hover": "themes.one-dark-pro.accent-hover",
+        "accent-pure-cta-fg": "themes.one-dark-pro.accent-pure-cta-fg",
+        "switch-track-on": "themes.one-dark-pro.switch-track-on",
+        "accent": "themes.one-dark-pro.accent",
+        "agent-actions-rail": "themes.one-dark-pro.agent-actions-rail",
+        "ask-checkbox-border": "themes.one-dark-pro.ask-checkbox-border",
+        "background": "themes.one-dark-pro.background",
+        "create-agent-control-bg": "themes.one-dark-pro.create-agent-control-bg",
+        "create-agent-control-bg-hover": "themes.one-dark-pro.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.one-dark-pro.create-agent-control-bg-pressed",
+        "create-agent-control-border": "themes.one-dark-pro.create-agent-control-border",
+        "create-agent-control-icon": "themes.one-dark-pro.create-agent-control-icon",
+        "create-agent-control-text": "themes.one-dark-pro.create-agent-control-text",
+        "create-agent-quick-card-bg": "themes.one-dark-pro.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.one-dark-pro.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.one-dark-pro.create-agent-quick-card-border",
+        "create-agent-quick-card-icon": "themes.one-dark-pro.create-agent-quick-card-icon",
+        "create-agent-quick-card-icon-bg": "themes.one-dark-pro.create-agent-quick-card-icon-bg",
+        "create-agent-quick-card-text": "themes.one-dark-pro.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.one-dark-pro.create-agent-segment-inactive-text",
+        "create-agent-segment-track-bg": "themes.one-dark-pro.create-agent-segment-track-bg",
+        "send-btn-bg": "themes.one-dark-pro.send-btn-bg",
+        "send-btn-icon": "themes.one-dark-pro.send-btn-icon",
+        "chat-input-chip-border": "themes.one-dark-pro.chat-input-chip-border",
+        "chat-input-text": "themes.one-dark-pro.chat-input-text",
+        "color-primary": "themes.one-dark-pro.color-primary",
+        "confirm-bg": "themes.one-dark-pro.confirm-bg",
+        "confirm-btn-primary-bg": "themes.one-dark-pro.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.one-dark-pro.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.one-dark-pro.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.one-dark-pro.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.one-dark-pro.confirm-btn-secondary-text",
+        "confirm-title": "themes.one-dark-pro.confirm-title",
+        "drop-overlay-bg": "themes.one-dark-pro.drop-overlay-bg",
+        "file-chip-bg": "themes.one-dark-pro.file-chip-bg",
+        "file-remove-bg": "themes.one-dark-pro.file-remove-bg",
+        "info-700": "themes.one-dark-pro.info-700",
+        "model-trigger-hover": "themes.one-dark-pro.model-trigger-hover",
+        "msg-link": "themes.one-dark-pro.msg-link",
+        "msg-scrollbar-hover": "themes.one-dark-pro.msg-scrollbar-hover",
+        "muted": "themes.one-dark-pro.muted",
+        "muted-foreground": "themes.one-dark-pro.muted-foreground",
+        "perm-allow-btn-bg": "themes.one-dark-pro.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.one-dark-pro.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.one-dark-pro.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.one-dark-pro.perm-allow-kbd-border",
+        "perm-code-bg": "themes.one-dark-pro.perm-code-bg",
+        "perm-item-selected-bg": "themes.one-dark-pro.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.one-dark-pro.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.one-dark-pro.plan-toolbar-btn-hover-bg",
+        "popover": "themes.one-dark-pro.popover",
+        "primary-foreground": "themes.one-dark-pro.primary-foreground",
+        "search-match-fg": "themes.one-dark-pro.search-match-fg",
+        "secondary": "themes.one-dark-pro.secondary",
+        "settings-btn-primary-text": "themes.one-dark-pro.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.one-dark-pro.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.one-dark-pro.text-placeholder",
+        "settings-integration-avatar-bg": "themes.one-dark-pro.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.one-dark-pro.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.one-dark-pro.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.one-dark-pro.settings-menu-bg-selected",
+        "settings-source-link": "themes.one-dark-pro.settings-source-link",
+        "settings-theme-auto-dark": "themes.one-dark-pro.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.one-dark-pro.sidebar-action-icon",
+        "sidebar-item-active": "themes.one-dark-pro.sidebar-item-active",
+        "splash-bg": "themes.one-dark-pro.splash-bg",
+        "splash-text": "themes.one-dark-pro.splash-text",
+        "splash-text-destructive": "themes.one-dark-pro.splash-text-destructive",
+        "splash-text-muted": "themes.one-dark-pro.splash-text-muted",
+        "titlebar-icon": "themes.one-dark-pro.titlebar-icon",
+        "tooltip-bg": "themes.one-dark-pro.tooltip-bg",
+        "tooltip-text": "themes.one-dark-pro.tooltip-text",
+        "update-btn-border": "themes.one-dark-pro.update-btn-border",
+        "update-btn-text": "themes.one-dark-pro.update-btn-text"
+      },
+      "retained": {},
+      "type": "dark"
+    },
+    "solarized-light.ts": {
+      "tokens": {
+        "surface": "themes.solarized-light.surface",
+        "surface-hsl": "themes.solarized-light.surface-hsl",
+        "surface-elevated": "themes.solarized-light.surface-elevated",
+        "surface-elevated-soft": "themes.solarized-light.surface-elevated-soft",
+        "surface-card-ivory": "themes.solarized-light.surface-card-ivory",
+        "surface-chip": "themes.solarized-light.surface-chip",
+        "surface-chip-alt": "themes.solarized-light.surface-chip-alt",
+        "surface-hover": "themes.solarized-light.surface-hover",
+        "surface-hover-soft": "themes.solarized-light.surface-hover-soft",
+        "surface-hover-hsl": "themes.solarized-light.surface-hover-hsl",
+        "surface-on-card": "themes.solarized-light.surface-on-card",
+        "border-default": "themes.solarized-light.border-default",
+        "border-default-hsl": "themes.solarized-light.border-default-hsl",
+        "border-shadcn-hsl": "themes.solarized-light.border-shadcn-hsl",
+        "border-transparent-mixed": "themes.solarized-light.border-transparent-mixed",
+        "text-primary": "themes.solarized-light.text-primary",
+        "text-primary-on-dark": "themes.solarized-light.text-primary-on-dark",
+        "text-primary-emphasis": "themes.solarized-light.text-primary-emphasis",
+        "text-primary-inv": "themes.solarized-light.text-primary-inv",
+        "text-primary-body-strong": "themes.solarized-light.text-primary-body-strong",
+        "text-primary-hsl": "themes.solarized-light.text-primary-hsl",
+        "text-secondary": "themes.solarized-light.text-secondary",
+        "text-secondary-cross": "themes.solarized-light.text-secondary-cross",
+        "text-secondary-mid": "themes.solarized-light.text-secondary-mid",
+        "text-tertiary": "themes.solarized-light.text-tertiary",
+        "text-tertiary-stone": "themes.solarized-light.text-tertiary-stone",
+        "text-tertiary-mid": "themes.solarized-light.text-tertiary-mid",
+        "text-tertiary-hsl": "themes.solarized-light.text-tertiary-hsl",
+        "text-disabled": "themes.solarized-light.text-disabled",
+        "text-disabled-tertiary": "themes.solarized-light.text-disabled-tertiary",
+        "accent-cta-bg": "themes.solarized-light.accent-cta-bg",
+        "accent-cta-bg-pure": "themes.solarized-light.accent-cta-bg-pure",
+        "accent-emphasis": "themes.solarized-light.accent-emphasis",
+        "accent-soft": "themes.solarized-light.accent-soft",
+        "accent-hover": "themes.solarized-light.accent-hover",
+        "accent-pure-cta-fg": "themes.solarized-light.accent-pure-cta-fg",
+        "switch-track-on": "themes.solarized-light.switch-track-on",
+        "accent": "themes.solarized-light.accent",
+        "agent-actions-rail": "themes.solarized-light.agent-actions-rail",
+        "ask-checkbox-border": "themes.solarized-light.ask-checkbox-border",
+        "background": "themes.solarized-light.background",
+        "chat-input-bg": "themes.solarized-light.chat-input-bg",
+        "create-agent-control-bg": "themes.solarized-light.create-agent-control-bg",
+        "create-agent-control-bg-hover": "themes.solarized-light.create-agent-control-bg-hover",
+        "create-agent-control-bg-pressed": "themes.solarized-light.create-agent-control-bg-pressed",
+        "create-agent-control-border": "themes.solarized-light.create-agent-control-border",
+        "create-agent-control-icon": "themes.solarized-light.create-agent-control-icon",
+        "create-agent-control-text": "themes.solarized-light.create-agent-control-text",
+        "create-agent-quick-card-bg": "themes.solarized-light.create-agent-quick-card-bg",
+        "create-agent-quick-card-bg-hover": "themes.solarized-light.create-agent-quick-card-bg-hover",
+        "create-agent-quick-card-border": "themes.solarized-light.create-agent-quick-card-border",
+        "create-agent-quick-card-icon": "themes.solarized-light.create-agent-quick-card-icon",
+        "create-agent-quick-card-icon-bg": "themes.solarized-light.create-agent-quick-card-icon-bg",
+        "create-agent-quick-card-text": "themes.solarized-light.create-agent-quick-card-text",
+        "create-agent-segment-inactive-text": "themes.solarized-light.create-agent-segment-inactive-text",
+        "create-agent-segment-track-bg": "themes.solarized-light.create-agent-segment-track-bg",
+        "chat-input-chip-border": "themes.solarized-light.chat-input-chip-border",
+        "chat-input-text": "themes.solarized-light.chat-input-text",
+        "color-primary": "themes.solarized-light.color-primary",
+        "confirm-bg": "themes.solarized-light.confirm-bg",
+        "confirm-btn-primary-bg": "themes.solarized-light.confirm-btn-primary-bg",
+        "confirm-btn-primary-text": "themes.solarized-light.confirm-btn-primary-text",
+        "confirm-btn-secondary-border": "themes.solarized-light.confirm-btn-secondary-border",
+        "confirm-btn-secondary-hover": "themes.solarized-light.confirm-btn-secondary-hover",
+        "confirm-btn-secondary-text": "themes.solarized-light.confirm-btn-secondary-text",
+        "confirm-title": "themes.solarized-light.confirm-title",
+        "drop-overlay-bg": "themes.solarized-light.drop-overlay-bg",
+        "file-chip-bg": "themes.solarized-light.file-chip-bg",
+        "file-remove-bg": "themes.solarized-light.file-remove-bg",
+        "info-700": "themes.solarized-light.info-700",
+        "model-trigger-hover": "themes.solarized-light.model-trigger-hover",
+        "msg-link": "themes.solarized-light.msg-link",
+        "msg-scrollbar-hover": "themes.solarized-light.msg-scrollbar-hover",
+        "msg-user-bg": "themes.solarized-light.msg-user-bg",
+        "muted": "themes.solarized-light.muted",
+        "muted-foreground": "themes.solarized-light.muted-foreground",
+        "perm-auto-selected-text": "themes.solarized-light.perm-auto-selected-text",
+        "perm-allow-btn-bg": "themes.solarized-light.perm-allow-btn-bg",
+        "perm-allow-btn-text": "themes.solarized-light.perm-allow-btn-text",
+        "perm-allow-kbd-bg": "themes.solarized-light.perm-allow-kbd-bg",
+        "perm-allow-kbd-border": "themes.solarized-light.perm-allow-kbd-border",
+        "perm-code-bg": "themes.solarized-light.perm-code-bg",
+        "perm-item-selected-bg": "themes.solarized-light.perm-item-selected-bg",
+        "plan-outline-active-bg": "themes.solarized-light.plan-outline-active-bg",
+        "plan-toolbar-btn-hover-bg": "themes.solarized-light.plan-toolbar-btn-hover-bg",
+        "popover": "themes.solarized-light.popover",
+        "primary-foreground": "themes.solarized-light.primary-foreground",
+        "search-match-fg": "themes.solarized-light.search-match-fg",
+        "secondary": "themes.solarized-light.secondary",
+        "settings-btn-primary-text": "themes.solarized-light.settings-btn-primary-text",
+        "settings-btn-secondary-hover-bg": "themes.solarized-light.settings-btn-secondary-hover-bg",
+        "text-placeholder": "themes.solarized-light.text-placeholder",
+        "settings-integration-avatar-bg": "themes.solarized-light.settings-integration-avatar-bg",
+        "settings-logout-bg": "themes.solarized-light.settings-logout-bg",
+        "settings-menu-bg-hover": "themes.solarized-light.settings-menu-bg-hover",
+        "settings-menu-bg-selected": "themes.solarized-light.settings-menu-bg-selected",
+        "settings-source-link": "themes.solarized-light.settings-source-link",
+        "settings-theme-auto-dark": "themes.solarized-light.settings-theme-auto-dark",
+        "sidebar-action-icon": "themes.solarized-light.sidebar-action-icon",
+        "sidebar-item-active": "themes.solarized-light.sidebar-item-active",
+        "splash-bg": "themes.solarized-light.splash-bg",
+        "splash-text": "themes.solarized-light.splash-text",
+        "splash-text-destructive": "themes.solarized-light.splash-text-destructive",
+        "splash-text-muted": "themes.solarized-light.splash-text-muted",
+        "titlebar-icon": "themes.solarized-light.titlebar-icon",
+        "tooltip-bg": "themes.solarized-light.tooltip-bg",
+        "tooltip-text": "themes.solarized-light.tooltip-text",
+        "update-btn-border": "themes.solarized-light.update-btn-border",
+        "update-btn-text": "themes.solarized-light.update-btn-text"
+      },
+      "retained": {},
+      "type": "light"
+    }
+  },
+  "foundations": {
+    "css": {
+      "app-font-ui-default": "semantic.foundations.app-font-ui-default",
+      "app-font-code-default": "semantic.foundations.app-font-code-default",
+      "app-code-font-size": "semantic.foundations.app-code-font-size",
+      "app-ui-font-size": "semantic.foundations.app-ui-font-size",
+      "text-xs": "semantic.foundations.text-xs",
+      "text-sm": "semantic.foundations.text-sm",
+      "text-base": "semantic.foundations.text-base",
+      "text-lg": "semantic.foundations.text-lg",
+      "text-xl": "semantic.foundations.text-xl",
+      "text-2xl": "semantic.foundations.text-2xl",
+      "text-3xl": "semantic.foundations.text-3xl",
+      "text-4xl": "semantic.foundations.text-4xl",
+      "text-5xl": "semantic.foundations.text-5xl",
+      "text-xs-line-height": "semantic.foundations.text-xs-line-height",
+      "text-sm-line-height": "semantic.foundations.text-sm-line-height",
+      "text-base-line-height": "semantic.foundations.text-base-line-height",
+      "text-lg-line-height": "semantic.foundations.text-lg-line-height",
+      "text-xl-line-height": "semantic.foundations.text-xl-line-height",
+      "text-2xl-line-height": "semantic.foundations.text-2xl-line-height",
+      "text-3xl-line-height": "semantic.foundations.text-3xl-line-height",
+      "text-4xl-line-height": "semantic.foundations.text-4xl-line-height",
+      "text-5xl-line-height": "semantic.foundations.text-5xl-line-height",
+      "text-10": "semantic.foundations.text-10",
+      "text-11": "semantic.foundations.text-11",
+      "text-12": "semantic.foundations.text-12",
+      "text-13": "semantic.foundations.text-13",
+      "text-14": "semantic.foundations.text-14",
+      "text-15": "semantic.foundations.text-15",
+      "text-16": "semantic.foundations.text-16",
+      "text-18": "semantic.foundations.text-18",
+      "text-20": "semantic.foundations.text-20",
+      "text-24": "semantic.foundations.text-24",
+      "text-28": "semantic.foundations.text-28",
+      "motion-instant": "semantic.foundations.motion-instant",
+      "motion-fast": "semantic.foundations.motion-fast",
+      "motion-base": "semantic.foundations.motion-base",
+      "motion-enter": "semantic.foundations.motion-enter",
+      "motion-exit": "semantic.foundations.motion-exit",
+      "motion-spinner-cycle": "semantic.foundations.motion-spinner-cycle",
+      "motion-sidebar-title-marquee-per-viewport": "semantic.foundations.motion-sidebar-title-marquee-per-viewport",
+      "motion-ease-out": "semantic.foundations.motion-ease-out",
+      "motion-ease-in": "semantic.foundations.motion-ease-in",
+      "motion-ease-move": "semantic.foundations.motion-ease-move",
+      "space-0": "semantic.foundations.space-0",
+      "space-1": "semantic.foundations.space-1",
+      "space-2": "semantic.foundations.space-2",
+      "space-3": "semantic.foundations.space-3",
+      "space-4": "semantic.foundations.space-4",
+      "space-5": "semantic.foundations.space-5",
+      "space-6": "semantic.foundations.space-6",
+      "space-7": "semantic.foundations.space-7",
+      "space-8": "semantic.foundations.space-8",
+      "space-9": "semantic.foundations.space-9",
+      "space-10": "semantic.foundations.space-10",
+      "space-11": "semantic.foundations.space-11",
+      "space-12": "semantic.foundations.space-12",
+      "space-14": "semantic.foundations.space-14",
+      "space-16": "semantic.foundations.space-16",
+      "space-20": "semantic.foundations.space-20",
+      "space-24": "semantic.foundations.space-24",
+      "space-28": "semantic.foundations.space-28",
+      "space-32": "semantic.foundations.space-32",
+      "space-36": "semantic.foundations.space-36",
+      "space-40": "semantic.foundations.space-40",
+      "space-44": "semantic.foundations.space-44",
+      "space-48": "semantic.foundations.space-48",
+      "space-52": "semantic.foundations.space-52",
+      "space-56": "semantic.foundations.space-56",
+      "space-60": "semantic.foundations.space-60",
+      "space-64": "semantic.foundations.space-64",
+      "space-72": "semantic.foundations.space-72",
+      "space-80": "semantic.foundations.space-80",
+      "space-96": "semantic.foundations.space-96",
+      "space-px": "semantic.foundations.space-px",
+      "space-0_5": "semantic.foundations.space-0_5",
+      "space-1_5": "semantic.foundations.space-1_5",
+      "space-2_5": "semantic.foundations.space-2_5",
+      "space-3_5": "semantic.foundations.space-3_5",
+      "radius-none": "semantic.foundations.radius-none",
+      "radius-default": "semantic.foundations.radius-default",
+      "radius-xl": "semantic.foundations.radius-xl",
+      "radius-2xl": "semantic.foundations.radius-2xl",
+      "radius-3xl": "semantic.foundations.radius-3xl",
+      "radius-full": "semantic.foundations.radius-full",
+      "size-input-lg": "semantic.foundations.size-input-lg",
+      "space-input-lg": "semantic.foundations.space-input-lg",
+      "radius-offset-md": "semantic.foundations.radius-offset-md",
+      "radius-offset-sm": "semantic.foundations.radius-offset-sm",
+      "font-weight-normal": "semantic.foundations.font-weight-normal",
+      "font-weight-medium": "semantic.foundations.font-weight-medium",
+      "font-weight-semibold": "semantic.foundations.font-weight-semibold"
+    },
+    "numeric": {
+      "10": "semantic.foundations.text-10",
+      "11": "semantic.foundations.text-11",
+      "12": "semantic.foundations.text-12",
+      "13": "semantic.foundations.text-13",
+      "14": "semantic.foundations.text-14",
+      "15": "semantic.foundations.text-15",
+      "16": "semantic.foundations.text-16",
+      "18": "semantic.foundations.text-18",
+      "20": "semantic.foundations.text-20",
+      "24": "semantic.foundations.text-24",
+      "28": "semantic.foundations.text-28"
+    },
+    "text": {
+      "xs": "semantic.foundations.text-xs",
+      "sm": "semantic.foundations.text-sm",
+      "base": "semantic.foundations.text-base",
+      "lg": "semantic.foundations.text-lg",
+      "xl": "semantic.foundations.text-xl",
+      "2xl": "semantic.foundations.text-2xl",
+      "3xl": "semantic.foundations.text-3xl",
+      "4xl": "semantic.foundations.text-4xl",
+      "5xl": "semantic.foundations.text-5xl"
+    },
+    "lineHeight": {
+      "xs": "semantic.foundations.text-xs-line-height",
+      "sm": "semantic.foundations.text-sm-line-height",
+      "base": "semantic.foundations.text-base-line-height",
+      "lg": "semantic.foundations.text-lg-line-height",
+      "xl": "semantic.foundations.text-xl-line-height",
+      "2xl": "semantic.foundations.text-2xl-line-height",
+      "3xl": "semantic.foundations.text-3xl-line-height",
+      "4xl": "semantic.foundations.text-4xl-line-height",
+      "5xl": "semantic.foundations.text-5xl-line-height"
+    },
+    "spacing": {
+      "0": "semantic.foundations.space-0",
+      "1": "semantic.foundations.space-1",
+      "2": "semantic.foundations.space-2",
+      "3": "semantic.foundations.space-3",
+      "4": "semantic.foundations.space-4",
+      "5": "semantic.foundations.space-5",
+      "6": "semantic.foundations.space-6",
+      "7": "semantic.foundations.space-7",
+      "8": "semantic.foundations.space-8",
+      "9": "semantic.foundations.space-9",
+      "10": "semantic.foundations.space-10",
+      "11": "semantic.foundations.space-11",
+      "12": "semantic.foundations.space-12",
+      "14": "semantic.foundations.space-14",
+      "16": "semantic.foundations.space-16",
+      "20": "semantic.foundations.space-20",
+      "24": "semantic.foundations.space-24",
+      "28": "semantic.foundations.space-28",
+      "32": "semantic.foundations.space-32",
+      "36": "semantic.foundations.space-36",
+      "40": "semantic.foundations.space-40",
+      "44": "semantic.foundations.space-44",
+      "48": "semantic.foundations.space-48",
+      "52": "semantic.foundations.space-52",
+      "56": "semantic.foundations.space-56",
+      "60": "semantic.foundations.space-60",
+      "64": "semantic.foundations.space-64",
+      "72": "semantic.foundations.space-72",
+      "80": "semantic.foundations.space-80",
+      "96": "semantic.foundations.space-96",
+      "px": "semantic.foundations.space-px",
+      "0.5": "semantic.foundations.space-0_5",
+      "1.5": "semantic.foundations.space-1_5",
+      "2.5": "semantic.foundations.space-2_5",
+      "3.5": "semantic.foundations.space-3_5"
+    },
+    "radius": {
+      "none": "semantic.foundations.radius-none",
+      "DEFAULT": "semantic.foundations.radius-default",
+      "xl": "semantic.foundations.radius-xl",
+      "2xl": "semantic.foundations.radius-2xl",
+      "3xl": "semantic.foundations.radius-3xl",
+      "full": "semantic.foundations.radius-full"
+    },
+    "defaults": {
+      "codeSize": "semantic.foundations.app-code-font-size",
+      "uiSize": "semantic.foundations.app-ui-font-size"
+    },
+    "fontWeight": {
+      "normal": "semantic.foundations.font-weight-normal",
+      "medium": "semantic.foundations.font-weight-medium",
+      "semibold": "semantic.foundations.font-weight-semibold"
+    },
+    "motion": {
+      "instant": "semantic.foundations.motion-instant",
+      "fast": "semantic.foundations.motion-fast",
+      "base": "semantic.foundations.motion-base",
+      "enter": "semantic.foundations.motion-enter",
+      "exit": "semantic.foundations.motion-exit",
+      "spinner-cycle": "semantic.foundations.motion-spinner-cycle",
+      "sidebar-title-marquee-per-viewport": "semantic.foundations.motion-sidebar-title-marquee-per-viewport",
+      "ease-out": "semantic.foundations.motion-ease-out",
+      "ease-in": "semantic.foundations.motion-ease-in",
+      "ease-move": "semantic.foundations.motion-ease-move"
+    }
+  },
+  "documentation": {
+    "semanticColors": [
+      {
+        "id": "surface",
+        "category": "**Surface**",
+        "use": "Page Surface (hex form)"
+      },
+      {
+        "id": "surface-hsl",
+        "category": "",
+        "use": "Same, HSL triplet — consume via `hsl(var(--xxx))`"
+      },
+      {
+        "id": "surface-elevated",
+        "category": "",
+        "use": "Card lift / dialogs / popovers"
+      },
+      {
+        "id": "surface-elevated-soft",
+        "category": "",
+        "use": "Disabled-state Card"
+      },
+      {
+        "id": "surface-card-ivory",
+        "category": "",
+        "use": "Slightly warm ivory Card (Settings)"
+      },
+      {
+        "id": "surface-chip",
+        "category": "",
+        "use": "Chips / pills / selected rows"
+      },
+      {
+        "id": "surface-chip-alt",
+        "category": "",
+        "use": "Chip variant that collapses to Card in Dark"
+      },
+      {
+        "id": "surface-hover",
+        "category": "",
+        "use": "General hover bg"
+      },
+      {
+        "id": "surface-hover-soft",
+        "category": "",
+        "use": "Soft hover bg"
+      },
+      {
+        "id": "surface-hover-hsl",
+        "category": "",
+        "use": "Hover, HSL form"
+      },
+      {
+        "id": "surface-on-card",
+        "category": "",
+        "use": "Dark foreground on CTAs / checked icons"
+      },
+      {
+        "id": "border-default",
+        "category": "**Border**",
+        "use": "This spec's Board 1px border"
+      },
+      {
+        "id": "border-default-hsl",
+        "category": "",
+        "use": "Board, HSL form"
+      },
+      {
+        "id": "border-shadcn-hsl",
+        "category": "",
+        "use": "shadcn input/border HSL"
+      },
+      {
+        "id": "border-transparent-mixed",
+        "category": "",
+        "use": "Single-side borders (progress track etc.)"
+      },
+      {
+        "id": "text-primary",
+        "category": "**Text**",
+        "use": "Primary headings / body"
+      },
+      {
+        "id": "text-primary-hsl",
+        "category": "",
+        "use": "Primary, HSL form"
+      },
+      {
+        "id": "text-primary-on-dark",
+        "category": "",
+        "use": "Inverse text (stop-button icon etc.)"
+      },
+      {
+        "id": "text-primary-emphasis",
+        "category": "",
+        "use": "Plan emphasized primary text"
+      },
+      {
+        "id": "text-primary-inv",
+        "category": "",
+        "use": "Plan-action approve text"
+      },
+      {
+        "id": "text-primary-body-strong",
+        "category": "",
+        "use": "Plan content body, strong"
+      },
+      {
+        "id": "text-secondary",
+        "category": "",
+        "use": "Secondary text / icons"
+      },
+      {
+        "id": "text-secondary-cross",
+        "category": "",
+        "use": "Lighter cross-theme secondary"
+      },
+      {
+        "id": "text-secondary-mid",
+        "category": "",
+        "use": "Muted body text"
+      },
+      {
+        "id": "text-tertiary",
+        "category": "",
+        "use": "Placeholder / tertiary"
+      },
+      {
+        "id": "text-tertiary-stone",
+        "category": "",
+        "use": "Cross-theme Stone tertiary"
+      },
+      {
+        "id": "text-tertiary-mid",
+        "category": "",
+        "use": "Mid-gray tertiary"
+      },
+      {
+        "id": "text-tertiary-hsl",
+        "category": "",
+        "use": "Tertiary, HSL form"
+      },
+      {
+        "id": "text-disabled",
+        "category": "",
+        "use": "Disabled / failed"
+      },
+      {
+        "id": "text-disabled-tertiary",
+        "category": "",
+        "use": "Disabled placeholder variant"
+      },
+      {
+        "id": "text-placeholder",
+        "category": "",
+        "use": "Unified placeholder slot (lighter than tertiary — reads as empty); chat/ask/settings/plan-action-fb inputs all resolve here"
+      },
+      {
+        "id": "accent-cta-bg",
+        "category": "**Accent**",
+        "use": "Inverse CTA bg"
+      },
+      {
+        "id": "accent-cta-bg-pure",
+        "category": "",
+        "use": "Pure CTA bg"
+      },
+      {
+        "id": "accent-emphasis",
+        "category": "",
+        "use": "Settings primary button etc."
+      },
+      {
+        "id": "accent-soft",
+        "category": "",
+        "use": "Soft accent (folder button etc.)"
+      },
+      {
+        "id": "accent-hover",
+        "category": "",
+        "use": "CTA pressed/hover"
+      },
+      {
+        "id": "accent-pure-cta-fg",
+        "category": "",
+        "use": "Pure-inverse CTA text"
+      }
+    ],
+    "loginColors": [
+      {
+        "label": "`--login-panel-bg`",
+        "ids": [
+          "login-panel-bg"
+        ],
+        "use": "callback-card dark（as-built）"
+      },
+      {
+        "label": "`--login-panel-border`",
+        "ids": [
+          "login-panel-border"
+        ],
+        "use": "callback-card dark"
+      },
+      {
+        "label": "`--login-control-bg`（输入框底）",
+        "ids": [
+          "login-control-bg"
+        ],
+        "use": "figma `Dark_normal` 输入 symbol"
+      },
+      {
+        "label": "`--login-action-control-bg`（方式行 / 返回钮底）",
+        "ids": [
+          "login-action-control-bg"
+        ],
+        "use": "figma 549:850 / 549:897（暗色与输入框底分化，组件库更新 2026-07-23）"
+      },
+      {
+        "label": "`--login-back-border`（返回钮描边）",
+        "ids": [
+          "login-back-border"
+        ],
+        "use": "figma 549:897"
+      },
+      {
+        "label": "`--login-control-border`",
+        "ids": [
+          "login-control-border"
+        ],
+        "use": "figma `Dark_normal`"
+      },
+      {
+        "label": "`--login-control-border-active`（focus / filled）",
+        "ids": [
+          "login-control-border-active"
+        ],
+        "use": "figma `Dark_highlight`"
+      },
+      {
+        "label": "`--login-control-text`（输入填充字，Bold）",
+        "ids": [
+          "login-control-text"
+        ],
+        "use": "figma Dark 填充 / error 态"
+      },
+      {
+        "label": "`--login-control-placeholder`（空态字）",
+        "ids": [
+          "login-control-placeholder"
+        ],
+        "use": "figma Dark 空态"
+      },
+      {
+        "label": "`--login-title-text`",
+        "ids": [
+          "login-title-text"
+        ],
+        "use": "callback-title dark"
+      },
+      {
+        "label": "`--login-secondary-text`（副标题 / 倒计时）",
+        "ids": [
+          "login-secondary-text"
+        ],
+        "use": "两模式同值"
+      },
+      {
+        "label": "`--login-primary-button-bg`",
+        "ids": [
+          "login-primary-button-bg"
+        ],
+        "use": "figma `white_button` / callback-cta dark"
+      },
+      {
+        "label": "`--login-primary-button-border`",
+        "ids": [
+          "login-primary-button-border"
+        ],
+        "use": "同上"
+      },
+      {
+        "label": "`--login-primary-button-text`（Bold）",
+        "ids": [
+          "login-primary-button-text"
+        ],
+        "use": "同上"
+      },
+      {
+        "label": "`--login-link-text`（重发链接）",
+        "ids": [
+          "login-link-text"
+        ],
+        "use": "figma `dark_重新发送` symbol"
+      },
+      {
+        "label": "`--login-link-hover`",
+        "ids": [
+          "login-link-hover"
+        ],
+        "use": "推导值（无独立 dark hover symbol）"
+      },
+      {
+        "label": "`--login-link-pressed`",
+        "ids": [
+          "login-link-pressed"
+        ],
+        "use": "推导值"
+      },
+      {
+        "label": "`--login-disabled-button-overlay`",
+        "ids": [
+          "login-disabled-button-overlay"
+        ],
+        "use": "figma `white_button` Disable：disabled 两模式同构（见 §16.5）"
+      },
+      {
+        "label": "`--login-splash-progress-track` / `--login-splash-progress-fill`",
+        "ids": [
+          "login-splash-progress-track",
+          "login-splash-progress-fill"
+        ],
+        "use": "figma Dark symbol 核验"
+      },
+      {
+        "label": "`--login-loading-ring-track`（loading 环轨道）",
+        "ids": [
+          "login-loading-ring-track"
+        ],
+        "use": "18% 半透明环轨二态；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token）"
+      },
+      {
+        "label": "`--login-error-fg`",
+        "ids": [
+          "login-error-fg"
+        ],
+        "use": "语义豁免不变"
+      },
+      {
+        "label": "`--login-bg-base`（画布底）",
+        "ids": [
+          "login-bg-base"
+        ],
+        "use": "figma 532:585 暗色帧实测；两模式纯平定稿——暗色帧的双红晕层（532:588/589）曾按 1:1 几何落地，2026-07-24 实机走查拍板去除（亮色撤渐变=PR#104 拍板，两条决策相互独立）"
+      }
+    ]
+  },
+  "windowBacking": {
+    "light": "semantic.windowBacking.light",
+    "dark": "semantic.windowBacking.dark"
+  },
+  "bootstrapCss": [
+    "quota-bar-fill",
+    "quota-bar-warn",
+    "quota-bar-crit",
+    "quota-bar-track"
+  ]
+}

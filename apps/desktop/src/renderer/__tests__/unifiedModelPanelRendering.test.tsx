@@ -3956,3 +3956,59 @@ describe('settings configuration without shared memory', () => {
     expect(dismiss).not.toHaveBeenCalled();
   });
 });
+
+// Teammate settings must use this real picker, including the portaled config.
+vi.mock('@/hooks/useAvailableAgents', () => ({ useAvailableAgents: () => ({
+  availableVendors: new Set(['cc', 'codex', 'pi']), loaded: true,
+}) }));
+vi.mock('@/features/bots/botStore', () => ({ getEffectiveBotModelSettings: () => ({
+  model: 'claude-opus-5', providerId: 'anthropic', effort: 'medium', fastMode: false,
+}) }));
+vi.mock('@/features/bots/botPronounContext', () => ({ useBotTranslation: () => ({ t: (key: string) => key }) }));
+import { BotModelChainEditor } from '@/features/bots/BotModelChainEditor';
+
+describe('Teammate settings with the real model picker', () => {
+  it('opens the real config and saves the selected source, harness, effort and Fast as one route', async () => {
+    const change = vi.fn();
+    function Editor() {
+      const [routes, setRoutes] = React.useState<React.ComponentProps<typeof BotModelChainEditor>['value']>([{
+        harness: 'claude', providerId: 'anthropic', model: 'claude-opus-5', effort: 'medium', fastMode: false,
+      }]);
+      return <BotModelChainEditor value={routes} onChange={(next) => { change(next); setRoutes(next); }} />;
+    }
+    const view = render(<Editor />);
+    fireEvent.click(view.container.querySelector('button[aria-haspopup="listbox"]')!);
+    await screen.findByRole('listbox');
+    const flyout = await openRowFlyout('GPT-5.5');
+    const fast = await within(flyout).findByRole('button', { name: 'newChat.modelSelector.unified.fastTip' });
+    await act(async () => { fireEvent.click(fast); });
+    await act(async () => { fireEvent.keyDown(within(flyout).getByRole('slider'), { key: 'ArrowLeft' }); });
+    await act(async () => { fireEvent.click(within(rowFor('GPT-5.5')).getByText('GPT-5.5')); });
+    await waitFor(() => expect(change).toHaveBeenCalled());
+    expect(change).toHaveBeenLastCalledWith([expect.objectContaining({
+      harness: 'codex', providerId: 'xd', model: 'gpt-5.5', effort: 'low', fastMode: true,
+    })]);
+  });
+});
+
+it('teammate fallback exposes supported Harness choices and preserves the primary route', async () => {
+  const primary = { harness: 'claude' as const, providerId: 'anthropic', model: 'claude-opus-5', effort: 'medium', fastMode: false };
+  const change = vi.fn();
+  function Editor() {
+    const [routes, setRoutes] = React.useState<React.ComponentProps<typeof BotModelChainEditor>['value']>([primary, { ...primary, harness: 'codex', providerId: 'xd', model: 'gpt-5.5' }]);
+    return <BotModelChainEditor value={routes} onChange={(next) => { change(next); setRoutes(next); }} />;
+  }
+  const view = render(<Editor />);
+  const details = view.container.querySelector('details')!;
+  details.open = true;
+  fireEvent(details, new Event('toggle'));
+  fireEvent.click(details.querySelector('button[aria-haspopup="listbox"]')!);
+  await screen.findByRole('listbox');
+  const flyout = await openRowFlyout('GPT-5.6');
+  const cc = flyout.querySelector('[data-engine-capsule="cc"]') as HTMLElement;
+  const codex = flyout.querySelector('[data-engine-capsule="codex"]');
+  expect(cc).toBeTruthy(); expect(codex).toBeTruthy();
+  await act(async () => { fireEvent.click(cc); });
+  await act(async () => { fireEvent.click(within(rowFor('GPT-5.6')).getByText('GPT-5.6')); });
+  expect(change).toHaveBeenLastCalledWith([primary, expect.objectContaining({ harness: 'claude', providerId: 'openai', model: 'chatgpt/gpt-5.6' })]);
+});

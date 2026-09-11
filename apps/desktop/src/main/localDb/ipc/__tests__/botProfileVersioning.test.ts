@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   botProfileContentChanged,
+  botProfileModelSelectionChanged,
   mergeBotProfileCapabilities,
   normalizeBotProfileModelChain,
 } from '../botProfileVersioning';
@@ -102,4 +103,14 @@ describe('角色性别随档案存活', () => {
     });
     expect(next.gender).toBe('male');
   });
+});
+
+it('distinguishes model selections from identity and capability-only refreshes', () => {
+  const route = { harness: 'codex', model: 'model-a', providerId: 'openai', effort: 'medium', fastMode: false };
+  const previous = { modelChain: [route], modelChainOverride: [route], skills: [] };
+  expect(botProfileModelSelectionChanged(previous, { ...previous, skills: ['writing'] })).toBe(false);
+  expect(botProfileModelSelectionChanged(previous, { ...previous, modelChainOverride: null })).toBe(true);
+  for (const patch of [{ harness: 'pi' }, { model: 'model-b' }, { providerId: 'xd' }, { effort: 'high' }, { fastMode: true }]) {
+    expect(botProfileModelSelectionChanged(previous, { ...previous, modelChain: [{ ...route, ...patch }] })).toBe(true);
+  }
 });

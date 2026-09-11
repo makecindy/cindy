@@ -1,3 +1,5 @@
+import { colorRegistry } from '../themes/color-registry';
+import '../themes/colors';
 /**
  * textLightbox.test.ts
  * ---------------------------------------------------------------------------
@@ -82,9 +84,7 @@ describe('TextLightbox — F3 overlay style', () => {
   it('overlay background uses the lightbox overlay theme token', () => {
     // overlay 已迁到主题 token,避免组件内写死 rgba 颜色。
     expect(source).toContain("background: 'var(--overlay-lightbox)'");
-    expect(colorsSource).toMatch(
-      /registerColor\('overlay-lightbox'[\s\S]*light:\s*'rgba\(0, 0, 0, 0\.85\)'[\s\S]*dark:\s*'rgba\(0, 0, 0, 0\.85\)'/,
-    );
+    for (const mode of ['light', 'dark'] as const) expect(colorRegistry.resolveDefault('overlay-lightbox', mode)).toBe('rgba(0, 0, 0, 0.85)');
   });
 
   it('overlay is rendered via createPortal to document.body', () => {

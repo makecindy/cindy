@@ -7157,6 +7157,7 @@
     }
   },
   "bots": {
+    "settingsBack": "設定に戻る",
     "sidebar": {
       "newTaskWith": "{{name}}と新しいタスクを始める"
     },
@@ -7194,6 +7195,7 @@
       "openFailed": "仲間のフォルダを開けませんでした。"
     },
     "profile": {
+      "title": "プロフィール",
       "changeAvatar": "アバターを変更",
       "avatarFailed": "アバターを変更できませんでした。5 MB未満のPNG、JPEG、WebP画像を選択してください。",
       "summary": "自己紹介",
@@ -7275,8 +7277,9 @@
       "empty": "一致する仲間履歴はありません。"
     },
     "lifecycle": {
+      "restartHint": "返事が来ない場合",
       "stoppedBots": "対応が必要な仲間",
-      "title": "稼働状況と履歴",
+      "title": "仲間の管理",
       "description": "仲間を一時停止・再開し、過去のメッセージや成果を探せます。",
       "activeTitle": "仲間は稼働中です",
       "activeDescription": "メッセージの受信、バックグラウンドタスクの実行、他の仲間への連絡ができます。",
@@ -7288,9 +7291,13 @@
       "resume": "仲間を再開",
       "delete": "完全に削除",
       "deleteTitle": "仲間を完全に削除",
-      "deleteDescription": "{{name}} を削除します。性格・つないだチャネル・予定した実行がすべてなくなり、元に戻せません。",
+      "deleteDescription": "{{name}} を削除すると、プロフィール、記憶、作業ディレクトリ、チャンネル接続、自動化タスクが完全に削除されます。タスク履歴と独立したworktreeは保持されます。",
       "working": "更新中…",
-      "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。"
+      "actionFailed": "操作が完了しませんでした。しばらくしてから再試行してください。",
+      "restart": "チームメイトを再起動",
+      "restartDescription": "現在の実行を停止して再開の準備をします。会話履歴、メモリ、ファイルは保持されます。",
+      "restarting": "再起動中…",
+      "restarted": "再起動しました。メッセージを送信して続けられます。"
     },
     "backToChat": "チャットに戻る",
     "memoryRecovery": {
@@ -12229,6 +12236,11 @@
     "compression": "長い内容を短くまとめるために。"
   },
   "routines": {
+    "unsavedTitle": "未保存の変更があります",
+    "unsavedDescription": "戻ると、このルーチンへの変更が破棄されます。",
+    "discard": "変更を破棄",
+    "continueEditing": "編集を続ける",
+
     "title": "ルーティン",
     "add": "ルーティンを追加",
     "back": "ルーティンに戻る",

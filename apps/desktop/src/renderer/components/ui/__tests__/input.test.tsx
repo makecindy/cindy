@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 import { cleanup, render, screen } from '@testing-library/react';
 import { createRef } from 'react';
@@ -35,7 +37,8 @@ describe('Input', () => {
     rerender(<Input value="" onChange={() => {}} size="md" />);
     expect(inputClass()).toContain('h-9');
     rerender(<Input value="" onChange={() => {}} size="lg" />);
-    expect(inputClass()).toContain('h-[40px]');
+    expect(inputClass()).toContain('h-[var(--size-input-lg)]');
+    expect(readFileSync(resolve(__dirname, '../../../styles/generated/tokens.css'), 'utf8')).toContain('--size-input-lg: 40px;');
   });
 
   it('keeps ivory as an explicit white-panel variant', () => {

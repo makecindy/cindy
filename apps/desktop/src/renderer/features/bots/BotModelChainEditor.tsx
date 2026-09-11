@@ -57,6 +57,7 @@ export function BotModelChainEditor({
   const { t } = useBotTranslation();
   const { availableVendors, loaded } = useAvailableAgents();
   const [expanded, setExpanded] = useState(false);
+  const [pendingRoute, setPendingRoute] = useState<BotModelRoute | null>(null);
   const routes = value.slice(0, BOT_MODEL_CHAIN_MAX);
   // Picker content may be portaled outside a form's disabled fieldset.
   const onChange = (next: BotModelRoute[]) => {
@@ -70,8 +71,18 @@ export function BotModelChainEditor({
   const unifiedAgents = visibleVendors.map(agentKindFor);
 
   const replace = (index: number, patch: Partial<BotModelRoute>) => {
-    if (!remote && !loaded) return;
-    const editable = routes.length ? routes : [{ harness: 'pi' as const, model: '', providerId: null, effort: '', fastMode: false }];
+    if (disabled || (!remote && !loaded)) return;
+    if (pendingRoute && index === routes.length) {
+      const next = { ...pendingRoute, ...patch };
+      if (next.model && routes.length < BOT_MODEL_CHAIN_MAX) {
+        onChange([...routes, next]);
+        setPendingRoute(null);
+      } else setPendingRoute(next);
+      return;
+    }
+    const editable = routes.length
+      ? routes
+      : [{ harness: 'pi' as const, model: '', providerId: null, effort: '', fastMode: false }];
     onChange(editable.map((route, at) => (at === index ? { ...route, ...patch } : route)));
   };
   const move = (index: number, delta: -1 | 1) => {
@@ -82,7 +93,7 @@ export function BotModelChainEditor({
     onChange(next);
   };
   const add = () => {
-    if (routes.length >= BOT_MODEL_CHAIN_MAX) return;
+    if (disabled || pendingRoute || routes.length >= BOT_MODEL_CHAIN_MAX) return;
     const unused = visibleVendors.find(
       (vendor) => !routes.some((route) => vendorFor(route.harness) === vendor),
     );
@@ -90,6 +101,7 @@ export function BotModelChainEditor({
     if (!vendor) return;
     const route = defaultRoute(vendor);
     if (route.model) onChange([...routes, route]);
+    else setPendingRoute(route);
   };
 
   const picker = (route: BotModelRoute, index: number) => (
@@ -138,7 +150,10 @@ export function BotModelChainEditor({
         {label ? (
           <span className="shrink-0 text-12 text-[var(--text-secondary)]">{label}</span>
         ) : null}
-        {picker(routes[0] ?? { harness: 'pi', model: '', providerId: null, effort: '', fastMode: false }, 0)}
+        {picker(
+          routes[0] ?? { harness: 'pi', model: '', providerId: null, effort: '', fastMode: false },
+          0,
+        )}
       </div>
       <details
         className="mt-1 text-12 text-[var(--text-tertiary)]"
@@ -189,9 +204,27 @@ export function BotModelChainEditor({
                 </div>
               );
             })}
+            {pendingRoute && routes.length < BOT_MODEL_CHAIN_MAX ? (
+              <div className="flex min-w-0 items-center gap-2">
+                {picker(pendingRoute, routes.length)}
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setPendingRoute(null)}
+                  className="h-8 rounded-lg px-3 text-12"
+                >
+                  {t('bots.cancel')}
+                </button>
+              </div>
+            ) : null}
             <button
               type="button"
-              disabled={disabled || routes.length >= BOT_MODEL_CHAIN_MAX || visibleVendors.length === 0}
+              disabled={
+                disabled ||
+                pendingRoute !== null ||
+                routes.length >= BOT_MODEL_CHAIN_MAX ||
+                visibleVendors.length === 0
+              }
               onClick={add}
               className={cn(
                 'inline-flex h-8 items-center gap-2 rounded-full px-3 text-12',
@@ -205,7 +238,9 @@ export function BotModelChainEditor({
               <button
                 type="button"
                 disabled={disabled}
-                onClick={() => { if (!disabled) onRestoreDefault(); }}
+                onClick={() => {
+                  if (!disabled) onRestoreDefault();
+                }}
                 className="ml-2 h-8 rounded-full px-3 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]"
               >
                 {t('bots.model.restoreDefault')}
