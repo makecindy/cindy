@@ -41,10 +41,11 @@
  * 不进 React state,避免 setState 触发不必要的订阅者重渲。
  */
 
-import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 
 import { createLogger } from '@/lib/logger';
 import {
+  deviceSupportsRevealIgnoredDirs,
   fileBrowserApiFor,
   isDeviceTooOldError,
   onFileTreeEventFor,
@@ -107,6 +108,16 @@ export interface UseFileTreeReturn {
   initialLoading: boolean;
   /** root 加载失败标记(device-too-old = 对方设备版本过旧);见 store 注释。 */
   loadError: 'device-too-old' | 'load-failed' | null;
+  /**
+   * 「显示被忽略的目录」在当前会话是否真的生效:
+   *   - true  本地 / SSH / 支持该字段的被控端;
+   *   - false device-link 连到老 Desktop —— 它的 listDir 静默忽略这个字段,
+   *           开关看起来按下去了、树里什么也不变;
+   *   - null  device 会话首帧,能力探测还没回来(非 device 会话恒为 true)。
+   * 标题行据此把开关渲染成不可用 + 说明原因;树本身在 false 时已经按隐藏态
+   * 建 store(不向老端发一个无效字段)。
+   */
+  showIgnoredDirsSupported: boolean | null;
 
   toggleFolder: (relPath: string) => void;
   /** Collapse every folder back to root. Also clears persisted state. */
@@ -394,8 +405,9 @@ function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
 /** 首次挂载触发:initial fetch + 恢复 localStorage expanded + 启动 watcher。
  *  幂等:重复调用直接 no-op(refCount 已 >0)。 */
 async function initStore(store: FileTreeStore): Promise<void> {
-  // 恢复 localStorage 持久化的 expanded 集合(workdir 维度共享)。
-  const restored = loadExpandedSet(store.workdir);
+  // 恢复 localStorage 持久化的 expanded 集合(workdir × 视图模式共享,见
+  // expandedStore 的 scope 说明)。
+  const restored = loadExpandedSet(store.workdir, { showIgnoredDirs: store.showIgnoredDirs });
   const nextExpanded = new Set<string>([ROOT_KEY, ...restored]);
   store.snapshot = { ...store.snapshot, expanded: nextExpanded };
   emit(store);
@@ -459,7 +471,7 @@ function toggleFolder(store: FileTreeStore, relPath: string): void {
       void fetchDir(store, relPath);
     }
   }
-  saveExpandedSet(store.workdir, next);
+  saveExpandedSet(store.workdir, next, { showIgnoredDirs: store.showIgnoredDirs });
   store.snapshot = { ...store.snapshot, expanded: next };
   emit(store);
 }
@@ -470,7 +482,7 @@ function collapseAll(store: FileTreeStore): void {
   const nextEntries = new Map<string, readonly DirEntry[]>();
   const rootEntries = prevEntries.get(ROOT_KEY);
   if (rootEntries) nextEntries.set(ROOT_KEY, rootEntries);
-  saveExpandedSet(store.workdir, new Set());
+  saveExpandedSet(store.workdir, new Set(), { showIgnoredDirs: store.showIgnoredDirs });
   store.snapshot = {
     ...store.snapshot,
     expanded: nextExpanded,
@@ -495,7 +507,7 @@ async function expandToPath(store: FileTreeStore, relPath: string): Promise<void
   // 一次性写 expanded set
   const nextExpanded = new Set(store.snapshot.expanded);
   for (const a of ancestors) nextExpanded.add(a);
-  saveExpandedSet(store.workdir, nextExpanded);
+  saveExpandedSet(store.workdir, nextExpanded, { showIgnoredDirs: store.showIgnoredDirs });
   store.snapshot = { ...store.snapshot, expanded: nextExpanded };
   emit(store);
   // 未 cache 的祖先并行 fetch
@@ -513,11 +525,43 @@ export function useFileTree({
   docMode = false,
   showIgnoredDirs = false,
 }: UseFileTreeOptions): UseFileTreeReturn {
+  // device 会话:探测被控端是否支持 showIgnoredDirs。老端的 listDir 会静默忽略
+  // 这个字段 —— 开关看起来按下去了、树里什么也不变。
+  //
+  // 探到不支持就按“隐藏态”建 store(不给老端发无效字段),并把结论 expose 给
+  // 标题行(开关渲染成不可用 + 说明原因)。非 device 会话恒为 true。
+  const [deviceRevealSupported, setDeviceRevealSupported] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (!deviceId) {
+      setDeviceRevealSupported(null);
+      return;
+    }
+    let cancelled = false;
+    setDeviceRevealSupported(null);
+    void deviceSupportsRevealIgnoredDirs(deviceId, workdir).then((supported) => {
+      if (!cancelled) setDeviceRevealSupported(supported);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId, workdir]);
+
+  // 探测未返回时(device 首帧)沿用用户偏好:猜错只多一次重建,不会发出无法
+  // 兑现的用户可见承诺。
+  const effectiveShowIgnoredDirs = showIgnoredDirs && deviceRevealSupported !== false;
+
   // store 实例按 (workdir + options) 共享 —— 多个 hook 实例订阅同一份。
   // memo 用 dep 化 options,确保 workdir 切换会换 store。
   const store = useMemo(
-    () => getOrCreateStore({ workdir, remoteHostId, deviceId, hideMetaFiles, docMode, showIgnoredDirs }),
-    [workdir, remoteHostId, deviceId, hideMetaFiles, docMode, showIgnoredDirs],
+    () => getOrCreateStore({
+      workdir,
+      remoteHostId,
+      deviceId,
+      hideMetaFiles,
+      docMode,
+      showIgnoredDirs: effectiveShowIgnoredDirs,
+    }),
+    [workdir, remoteHostId, deviceId, hideMetaFiles, docMode, effectiveShowIgnoredDirs],
   );
 
   // ref-count 生命周期:首挂触发 init(initial fetch + start watch),最后离开
@@ -565,11 +609,13 @@ export function useFileTree({
       loadingPaths: snapshot.loadingPaths,
       initialLoading: snapshot.initialLoading,
       loadError: snapshot.loadError,
+      // 非 device 会话恒 true;device 会话见上面探测注释。
+      showIgnoredDirsSupported: deviceId ? deviceRevealSupported : true,
       toggleFolder: toggleFolderCb,
       collapseAll: collapseAllCb,
       refresh: refreshCb,
       expandToPath: expandToPathCb,
     }),
-    [snapshot, toggleFolderCb, collapseAllCb, refreshCb, expandToPathCb],
+    [snapshot, deviceId, deviceRevealSupported, toggleFolderCb, collapseAllCb, refreshCb, expandToPathCb],
   );
 }

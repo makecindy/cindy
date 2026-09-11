@@ -30,12 +30,14 @@ hover / pressed 表面）登记在 pill 档，`No 3px / 6px / 10px`；`§14.6` �
 
 ```
 pnpm --filter desktop run typecheck                    通过
-vitest FileTreeIgnoredDirsToggle.test.tsx              8 passed
-  （含新增几何守卫：两个宿主的标题行图标钮必须走共享常量、不得再自写圆角）
+vitest FileTreeIgnoredDirsToggle.test.tsx              12 passed
+  （含几何守卫与 aria-label 守卫：两个宿主的标题行图标钮必须走共享常量、必须带可访问名）
 vitest typographyDiscipline                            5 passed
-vitest useFileTree / useFileBrowserPreference          8 passed
+vitest useFileTree / useFileBrowserPreference          12 passed
+vitest expandedStore                                   3 passed（新增：展开态按 showIgnoredDirs 分片）
 node scripts/design-inventory.mjs                      已重新生成（49 surfaces）
 node scripts/hardcoded-color-audit.mjs                 新增硬编码颜色 0
+pnpm test:unit:related                                 通过（desktop 全量 + file-browser-core / remote-file-service）
 ```
 
 ## 真实 Desktop 构建内的实测值
@@ -61,6 +63,10 @@ RSB 文件浏览器（会话视图右栏）与 doc 模式侧栏（`#/cc-agent/fi
 
 ## 缺口登记
 
+- **unsupported 禁用态未实机目检**（评审修复轮新增）：该状态只在 device-link 连到不支持
+  `showIgnoredDirs` 的老 Desktop 时出现，本机无该环境。可见面为 `aria-disabled` +
+  `opacity-45` + `cursor-not-allowed`（与仓库内 `PermissionSelector` 禁用项同款），
+  行为（点击不改偏好、树按隐藏态建立）由单测锁定。
 - 远端 SSH 会话未实机验证（无可用远端环境）：远端 `listDir` 的开关透传与
   daemon 事件过滤只在单测层面覆盖，见 PR「未执行的验证」。
 - 截图未上传 PR：GitHub 图片附件端点依赖网页会话，需由人拖拽上传。本地路径
@@ -72,9 +78,13 @@ RSB 文件浏览器（会话视图右栏）与 doc 模式侧栏（`#/cc-agent/fi
 
 ## 采集版本源码 SHA-256
 
+哈希按文件内容的 LF 规范化形态计算（`sed 's/\r$//' <file> | sha256sum`，与 Git blob 一致）。
+下表已更新到**评审修复轮之后**的源码：默认态 / 按下态的实测值仍然适用（本轮只加 aria-label、
+unsupported 禁用态与展开态分片），unsupported 禁用态本身未实机目检（见「缺口登记」）。
+
 | 文件 | SHA-256 |
 | --- | --- |
 | `features/cc-agent/workdir-browse/fileTreeHeaderButtonClass.ts` | `9fedf81c4ce1120f241934ddcc72ae8f2373032cc467938ce5196ff85b1b93b8` |
-| `features/cc-agent/workdir-browse/FileTreeIgnoredDirsToggle.tsx` | `ea0a921dba0124610c50b39a8e37b4a562f1a51c5f398f5598ad69d5c7e70c15` |
-| `features/right-sidebar/plugins/file-browser/FileBrowserBody.tsx` | `0cfcec21574113dfe04478fd9393c612e3159323792d10c073aed21a21ea2884` |
-| `features/cc-agent/workdir-browse/WorkdirBrowseSidebar.tsx` | `c17356133a42cba50c777d57bab881cbf268d9ff84b5c045ab26ac02e0315aed` |
+| `features/cc-agent/workdir-browse/FileTreeIgnoredDirsToggle.tsx` | `de2b2070c559c3f82410761c34e35f84c6fb0cf62fcc78b2eff49b5991f69726` |
+| `features/right-sidebar/plugins/file-browser/FileBrowserBody.tsx` | `31dd114e80825405e1ef53a7af4fadb4ba716312a02d27f5af5b2ae6f8361562` |
+| `features/cc-agent/workdir-browse/WorkdirBrowseSidebar.tsx` | `096c4eeeb7bc754850b163bb03b4542b21f5bf7f32922a84335da2fffdc29b2b` |

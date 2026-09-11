@@ -651,6 +651,7 @@ function FileBrowserBodyWithWorkdir({
           onToggleSearch={handleToggleSearch}
           onCollapseAll={tree.collapseAll}
           onRefresh={handleRefresh}
+          ignoredDirsUnsupported={tree.showIgnoredDirsSupported === false}
         />
         {/* tree 模式:常驻文件名筛选输入框 + (筛选结果列表 / 文件树)。
             注:className 必须**只在隐藏时**加 `hidden`,**不能**同时写 `block` ——
@@ -744,12 +745,15 @@ function TreeHeader({
   onToggleSearch,
   onCollapseAll,
   onRefresh,
+  ignoredDirsUnsupported,
 }: {
   workdir: string;
   mode: TreeMode;
   onToggleSearch: () => void;
   onCollapseAll: () => void;
   onRefresh: () => void;
+  /** 被控端不支持「显示被忽略的目录」(老 Desktop):开关渲染成不可用 + 说明原因。 */
+  ignoredDirsUnsupported: boolean;
 }) {
   const { t } = useTranslation();
   // workdir basename:POSIX 用最后一段(/Users/sam/Documents/Cindy → Cindy);
@@ -768,6 +772,7 @@ function TreeHeader({
           <Tip text={t('ccAgent.workdirBrowse.searchPanel.exit')}>
             <button
               type="button"
+              aria-label={t('ccAgent.workdirBrowse.searchPanel.exit')}
               onClick={onToggleSearch}
               className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
             >
@@ -779,6 +784,7 @@ function TreeHeader({
             <Tip text={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}>
               <button
                 type="button"
+                aria-label={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}
                 onClick={onToggleSearch}
                 className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
               >
@@ -786,10 +792,11 @@ function TreeHeader({
               </button>
             </Tip>
             {/* 显示被忽略的目录 —— 紧跟搜索(两者都是“树里显示什么”)。 */}
-            <FileTreeIgnoredDirsToggle />
+            <FileTreeIgnoredDirsToggle unsupported={ignoredDirsUnsupported} />
             <Tip text={t('ccAgent.workdirBrowse.treeAction.collapseAll')}>
               <button
                 type="button"
+                aria-label={t('ccAgent.workdirBrowse.treeAction.collapseAll')}
                 onClick={onCollapseAll}
                 className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
               >
@@ -799,6 +806,7 @@ function TreeHeader({
             <Tip text={t('ccAgent.workdirBrowse.treeAction.refresh')}>
               <button
                 type="button"
+                aria-label={t('ccAgent.workdirBrowse.treeAction.refresh')}
                 onClick={onRefresh}
                 className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
               >

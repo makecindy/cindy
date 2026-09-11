@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     isDeviceTooOldError: vi.fn(() => false),
     listDir: vi.fn(),
     loadExpandedSet: vi.fn(() => new Set<string>()),
+    deviceSupportsRevealIgnoredDirs: vi.fn(async () => true),
     onFileTreeEventFor: vi.fn(
       (_deviceId: string | null | undefined, cb: (event: FileTreeEvent) => void) => {
         eventCallbacks.push(cb);
@@ -33,6 +34,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('@/lib/fileBrowserTransport', () => ({
+  deviceSupportsRevealIgnoredDirs: mocks.deviceSupportsRevealIgnoredDirs,
   fileBrowserApiFor: mocks.fileBrowserApiFor,
   isDeviceTooOldError: mocks.isDeviceTooOldError,
   onFileTreeEventFor: mocks.onFileTreeEventFor,
@@ -157,5 +159,86 @@ describe('useFileTree showIgnoredDirs option', () => {
     ).toEqual([false, true]);
     hidden.unmount();
     revealed.unmount();
+  });
+
+  /**
+   * 展开态持久化同样按开关分片:否则放行态展开过 node_modules / Library 后切回
+   * 隐藏态,init 会把它们当"已展开"并行 listDir(评审 P2)。
+   */
+  it('expanded 持久化按开关分片读取', async () => {
+    const hidden = renderHook(() => useFileTree({ workdir: '/workdir-scope' }));
+    await waitFor(() => expect(hidden.result.current.initialLoading).toBe(false));
+    expect(mocks.loadExpandedSet).toHaveBeenCalledWith('/workdir-scope', {
+      showIgnoredDirs: false,
+    });
+    hidden.unmount();
+
+    const revealed = renderHook(() =>
+      useFileTree({ workdir: '/workdir-scope', showIgnoredDirs: true }),
+    );
+    await waitFor(() => expect(revealed.result.current.initialLoading).toBe(false));
+    expect(mocks.loadExpandedSet).toHaveBeenCalledWith('/workdir-scope', {
+      showIgnoredDirs: true,
+    });
+    revealed.unmount();
+  });
+});
+
+/**
+ * device-link 能力探测:老被控端的 listDir 会静默忽略 showIgnoredDirs ——
+ * 开关看起来按下去了、树里什么也不变。探到不支持就按隐藏态建 store,并把结论
+ * expose 给标题行(禁用 + 说明原因)。
+ */
+describe('useFileTree device 的 showIgnoredDirs 能力探测', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.eventCallbacks.length = 0;
+    mocks.listDir.mockResolvedValue([]);
+    mocks.fileBrowserApiFor.mockReturnValue({ listDir: mocks.listDir });
+    mocks.deviceSupportsRevealIgnoredDirs.mockImplementation(async () => true);
+  });
+
+  it('老被控端:按隐藏态建 store,并 expose supported=false', async () => {
+    mocks.deviceSupportsRevealIgnoredDirs.mockImplementation(async () => false);
+    const view = renderHook(() =>
+      useFileTree({ workdir: '/workdir-old-device', deviceId: 'device-1', showIgnoredDirs: true }),
+    );
+    await waitFor(() => expect(view.result.current.showIgnoredDirsSupported).toBe(false));
+
+    expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenCalledWith(
+      'device-1',
+      '/workdir-old-device',
+    );
+    await waitFor(() =>
+      expect(mocks.listDir).toHaveBeenCalledWith(
+        expect.objectContaining({ showIgnoredDirs: false }),
+      ),
+    );
+    // 探测返回前可能已用偏好值乐观拉过一次;落定之后不能再发无效字段。
+    const calls = mocks.listDir.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls[calls.length - 1][0].showIgnoredDirs).toBe(false);
+    view.unmount();
+  });
+
+  it('支持的被控端:开关照常生效,supported=true', async () => {
+    const view = renderHook(() =>
+      useFileTree({ workdir: '/workdir-new-device', deviceId: 'device-2', showIgnoredDirs: true }),
+    );
+    await waitFor(() => expect(view.result.current.showIgnoredDirsSupported).toBe(true));
+    await waitFor(() =>
+      expect(mocks.listDir).toHaveBeenCalledWith(
+        expect.objectContaining({ showIgnoredDirs: true }),
+      ),
+    );
+    view.unmount();
+  });
+
+  it('本地会话不做探测,supported 恒为 true', async () => {
+    const view = renderHook(() => useFileTree({ workdir: '/workdir-local' }));
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    expect(view.result.current.showIgnoredDirsSupported).toBe(true);
+    expect(mocks.deviceSupportsRevealIgnoredDirs).not.toHaveBeenCalled();
+    view.unmount();
   });
 });

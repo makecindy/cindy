@@ -66,6 +66,35 @@ function deviceSupportsGzip(deviceId: string, workdir: string): Promise<boolean>
   return probe;
 }
 
+/**
+ * 被控端 listDir 是否支持 `showIgnoredDirs`(「显示被忽略的目录」)。
+ *
+ * 走同一个 `caps` op 但单独缓存:gzip 那份缓存带着「用出空写就永久降级」的
+ * 自愈语义,两件事互不牵连。老被控端没有 caps op → 确定性 false(负缓存),
+ * 网络类 reject 不缓存(下次重探)。
+ *
+ * 用途:标题行的开关在**被控端不支持**时不再装成可用(老端的 listDir 会静默
+ * 忽略这个字段,按下去树里什么也不变)。
+ */
+const deviceRevealCaps = new Map<string, Promise<boolean>>();
+
+export function deviceSupportsRevealIgnoredDirs(
+  deviceId: string,
+  workdir: string,
+): Promise<boolean> {
+  const cached = deviceRevealCaps.get(deviceId);
+  if (cached) return cached;
+  const probe = Promise.resolve()
+    .then(() => invokeOp<{ ok: boolean; showIgnoredDirs?: boolean }>(deviceId, 'caps', { workdir }))
+    .then((r) => r?.ok === true && r.showIgnoredDirs === true)
+    .catch(() => {
+      deviceRevealCaps.delete(deviceId);
+      return false;
+    });
+  deviceRevealCaps.set(deviceId, probe);
+  return probe;
+}
+
 export interface FileTreeEventPayload {
   workdir: string;
   type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir';

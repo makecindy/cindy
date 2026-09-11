@@ -18,6 +18,8 @@
  *   - 状态用 `aria-pressed` + 按压底色表达;图标随状态在 EyeOff / Eye 间切换
  *   - 文案遵循 DESIGN.md §14.6:说**下一步动作**(显示 / 隐藏),tooltip 与
  *     aria-label 一起变
+ *   - 被控端不支持时(device-link 连到老 Desktop,它的 listDir 静默忽略该字段):
+ *     控件呈现为不可用 + 说明原因,不装成"按下去就生效"的假开关
  */
 
 import { useTranslation } from 'react-i18next';
@@ -28,30 +30,54 @@ import { Tip } from '@/components/ui/tooltip';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { FILE_TREE_HEADER_ICON_BUTTON_CLASS } from './fileTreeHeaderButtonClass';
 
-export function FileTreeIgnoredDirsToggle() {
+export interface FileTreeIgnoredDirsToggleProps {
+  /**
+   * 当前会话的被控端不支持 `showIgnoredDirs`(老 Desktop 的 listDir 会静默
+   * 忽略该字段)。由 `useFileTree` 的 `showIgnoredDirsSupported === false` 传入。
+   */
+  unsupported?: boolean;
+}
+
+export function FileTreeIgnoredDirsToggle({
+  unsupported = false,
+}: FileTreeIgnoredDirsToggleProps) {
   const { t } = useTranslation();
   const { showIgnoredDirs, setShowIgnoredDirs } = useFileBrowserPreference();
 
+  // 不支持的老被控端:按「关」呈现 —— 这个视图里确实不会显示被忽略目录(tree
+  // 也按隐藏态建的 store),同时 label 说明原因。压着不动的按下态比禁用更容易
+  // 被误读为“已经打开了”。
+  const pressed = !unsupported && showIgnoredDirs;
+
   // §14.6:状态控件描述将要发生的动作。
-  const label = t(
-    showIgnoredDirs
-      ? 'ccAgent.workdirBrowse.treeAction.hideIgnoredDirs'
-      : 'ccAgent.workdirBrowse.treeAction.showIgnoredDirs',
-  );
+  const label = unsupported
+    ? t('ccAgent.workdirBrowse.treeAction.showIgnoredDirsUnsupported')
+    : t(
+        pressed
+          ? 'ccAgent.workdirBrowse.treeAction.hideIgnoredDirs'
+          : 'ccAgent.workdirBrowse.treeAction.showIgnoredDirs',
+      );
 
   return (
     <Tip text={label}>
       <button
         type="button"
-        aria-pressed={showIgnoredDirs}
+        aria-pressed={pressed}
         aria-label={label}
-        onClick={() => setShowIgnoredDirs(!showIgnoredDirs)}
+        // aria-disabled 而不走原生 disabled:原生 disabled 的按钮不派发鼠标事件,
+        // Radix tooltip 打不开 —— 用户就没有地方能看到“为什么不能按”。
+        aria-disabled={unsupported || undefined}
+        onClick={() => {
+          if (unsupported) return;
+          setShowIgnoredDirs(!showIgnoredDirs);
+        }}
         className={cn(
           FILE_TREE_HEADER_ICON_BUTTON_CLASS,
-          showIgnoredDirs && 'bg-sidebar-item-active text-sidebar-item-active-foreground',
+          pressed && 'bg-sidebar-item-active text-sidebar-item-active-foreground',
+          unsupported && 'cursor-not-allowed opacity-45 hover:bg-transparent',
         )}
       >
-        {showIgnoredDirs ? (
+        {pressed ? (
           <Eye size={14} strokeWidth={2} />
         ) : (
           <EyeOff size={14} strokeWidth={2} />

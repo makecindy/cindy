@@ -9754,7 +9754,8 @@
         "collapseAll": "모두 접기",
         "refresh": "새로 고침",
         "showIgnoredDirs": "무시된 디렉터리 표시",
-        "hideIgnoredDirs": "무시된 디렉터리 숨기기"
+        "hideIgnoredDirs": "무시된 디렉터리 숨기기",
+        "showIgnoredDirsUnsupported": "상대 기기의 {{appName}} 버전이 오래되어 무시된 디렉터리를 표시할 수 없습니다"
       },
       "treeMenu": {
         "newFile": "새 파일",

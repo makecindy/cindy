@@ -9769,7 +9769,8 @@
         "collapseAll": "Collapse all",
         "refresh": "Refresh",
         "showIgnoredDirs": "Show ignored directories",
-        "hideIgnoredDirs": "Hide ignored directories"
+        "hideIgnoredDirs": "Hide ignored directories",
+        "showIgnoredDirsUnsupported": "The remote device is running an older {{appName}} version that cannot show ignored directories"
       },
       "treeMenu": {
         "newFile": "New File",

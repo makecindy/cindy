@@ -96,7 +96,11 @@ describe('workdir browse remote safety', () => {
     expect(routeSource).toContain('deviceId={deviceId}');
     // sidebar 侧同理:树 / 文件名索引 / 搜索 / 增删改全部带 remoteHostId,
     // 且"显示所在文件夹"这类本机-only 菜单在 remote 下不可用。
-    expect(sidebarBrowseSource).toContain('useFileTree({ workdir, remoteHostId, deviceId,');
+    // useFileTree 的参数会被格式化折行,取调用块本身断言而不是整行文本。
+    const treeCall = sidebarBrowseSource.match(/useFileTree\(\{[^}]*\}/)?.[0] ?? '';
+    expect(treeCall).toContain('workdir');
+    expect(treeCall).toContain('remoteHostId');
+    expect(treeCall).toContain('deviceId');
     expect(sidebarBrowseSource).toContain('useProjectFileList(workdir, remoteHostId, deviceId, {');
     expect(sidebarBrowseSource).toContain('remoteHostId || deviceId ? undefined : handleRevealInFolder');
   });

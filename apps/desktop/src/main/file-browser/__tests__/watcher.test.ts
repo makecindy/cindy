@@ -173,6 +173,39 @@ describe('WatcherManager stop 宽限期', () => {
     expect(subscribeFn).toHaveBeenCalledTimes(2);
   });
 
+  /**
+   * 预过滤名单的「时机」回归:parcel 的 ignore 只在 subscribe 那一刻生效一次。
+   * node_modules / Library 经常在会话开始后才出现(npm install / Unity 导入),
+   * 当时不存在就漏掉 → 开关打开后这些目录被 matcher 放行,内部每个生成路径都
+   * 变成一条事件推过 watcher-host + IPC。ALWAYS 名单必须无条件注册。
+   */
+  it('ALWAYS 目录当前不存在也进 ignore 名单(开关打开时)', async () => {
+    const { manager, calls } = setup();
+    const workdir = path.join(path.sep, 'no-such-workdir-reveal');
+    await manager.start(makeWindow(), workdir, { showIgnoredDirs: true }, vi.fn());
+    expect(calls[0].ignore).toEqual(
+      expect.arrayContaining([
+        path.join(workdir, 'node_modules'),
+        path.join(workdir, 'Library'),
+        path.join(workdir, '.git'),
+      ]),
+    );
+    // 开关打开时 REVEALABLE 不预过滤 —— 它们本来就该推事件。
+    expect(calls[0].ignore).not.toContain(path.join(workdir, 'dist'));
+  });
+
+  it('开关关闭时同样无条件带上 ALWAYS(目录稍后才出现也不漏)', async () => {
+    const { manager, calls } = setup();
+    const workdir = path.join(path.sep, 'no-such-workdir-hidden');
+    await manager.start(makeWindow(), workdir, { showIgnoredDirs: false }, vi.fn());
+    expect(calls[0].ignore).toEqual(
+      expect.arrayContaining([
+        path.join(workdir, 'node_modules'),
+        path.join(workdir, 'Library'),
+      ]),
+    );
+  });
+
   it('不同 window 同 workdir 互不干扰(key 维度 window×workdir)', async () => {
     const { manager, subscribeFn, unsubscribe } = setup();
     await manager.start(makeWindow(1), 'D:/repo', {}, vi.fn());

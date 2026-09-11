@@ -154,15 +154,20 @@ const PREFILTER_REVEALABLE = [
  * node_modules) parcel 会自己沿父链判断 — 它内部用前缀匹配。
  */
 function buildIgnoreList(workdir: string, opts: { showIgnoredDirs: boolean }): string[] {
-  const names = opts.showIgnoredDirs
-    ? PREFILTER_ALWAYS
-    : [...PREFILTER_ALWAYS, ...PREFILTER_REVEALABLE];
-  const out: string[] = [];
-  for (const dir of names) {
-    const abs = path.join(workdir, dir);
-    // 不存在的目录传给 parcel 也无害, 但既然遍历是 sync stat 一下省得 native
-    // 层处理无效路径。
-    if (fs.existsSync(abs)) out.push(abs);
+  // ALWAYS 名单**无条件注册**,不做 existsSync 探测:parcel 的 ignore 只在
+  // subscribe 那一刻生效一次,而 node_modules / Library 常常在会话开始后才出现
+  // (npm install / Unity 导入)。当时不存在就漏掉,就再也没有第二次机会 ——
+  // 开关打开时这些目录被 matcher 放行,目录里每个生成路径都会一路推过
+  // watcher-host + IPC。不存在的路径传给 parcel 无害(它只做前缀比较)。
+  const out = PREFILTER_ALWAYS.map((dir) => path.join(workdir, dir));
+  // REVEALABLE 只在开关关闭时预过滤,且只挑当前存在的目录:开关打开后它们本
+  // 就该推事件;关闭时即使漏掉预过滤,parcel callback 里的 matcher 也会拦下
+  // (代价只是多一次 IPC)。
+  if (!opts.showIgnoredDirs) {
+    for (const dir of PREFILTER_REVEALABLE) {
+      const abs = path.join(workdir, dir);
+      if (fs.existsSync(abs)) out.push(abs);
+    }
   }
   return out;
 }

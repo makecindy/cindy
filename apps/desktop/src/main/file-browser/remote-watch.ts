@@ -70,7 +70,8 @@ export class RemoteWatchRegistry {
         .request(hostId, 'watchStart', watchOpts)
         .catch((err) => log.warn('watch replay failed', { hostId, workdir, error: String(err) }));
     });
-    this.entries.set(k, { offEvent, offReconnect });
+    const entry: RegistryEntry = { offEvent, offReconnect };
+    this.entries.set(k, entry);
 
     window.once('closed', () => {
       void this.stop(window.id, hostId, workdir);
@@ -80,8 +81,14 @@ export class RemoteWatchRegistry {
       await this.mgr.request(hostId, 'watchStart', watchOpts);
       log.info('remote watch started', { hostId, workdir, windowId: window.id });
     } catch (err) {
-      // 启动失败(host 不可达等):清掉注册,renderer 靠聚焦刷新兜底。
-      this.entries.delete(k);
+      // 启动失败(host 不可达等):清掉本次注册,renderer 靠聚焦刷新兜底。
+      //
+      // 只回收**本次 start 装上的那条**:切「显示被忽略的目录」会在同一个 key
+      // 上 stop→start,而两个 RPC 都是异步的。旧 start 若在新 start 装上替换
+      // 注册之后才 reject,无条件 delete 会把新注册变成孤儿 —— 之后 stop() 直接
+      // 提前返回,新注册的事件/重连 listener 泄漏,daemon 侧 watch 也不会停,
+      // 反复切换会累积重复订阅。
+      if (this.entries.get(k) === entry) this.entries.delete(k);
       offEvent();
       offReconnect();
       throw err;

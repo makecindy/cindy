@@ -26,6 +26,7 @@ import { _resetFileBrowserPreferenceForTests } from '@/hooks/useFileBrowserPrefe
 const KEY = 'fileBrowser.showIgnoredDirs';
 const SHOW_LABEL = 'ccAgent.workdirBrowse.treeAction.showIgnoredDirs';
 const HIDE_LABEL = 'ccAgent.workdirBrowse.treeAction.hideIgnoredDirs';
+const UNSUPPORTED_LABEL = 'ccAgent.workdirBrowse.treeAction.showIgnoredDirsUnsupported';
 
 function button(): HTMLElement {
   return screen.getByRole('button', { name: SHOW_LABEL });
@@ -76,6 +77,36 @@ describe('FileTreeIgnoredDirsToggle', () => {
       /(?:^|\s)bg-sidebar-item-active/,
     );
   });
+
+  /**
+   * 被控端不支持(device-link 连到老 Desktop,它的 listDir 会静默忽略
+   * showIgnoredDirs):开关不能装成"按下去就生效"。禁用 + 说明原因,并且点击
+   * 不改全局偏好。
+   */
+  describe('unsupported', () => {
+    it('压不下去:aria-disabled + pressed=false + 原因文案,点击不改偏好', () => {
+      render(<FileTreeIgnoredDirsToggle unsupported />);
+      const el = screen.getByRole('button', { name: UNSUPPORTED_LABEL });
+
+      expect(el.getAttribute('aria-disabled')).toBe('true');
+      expect(el.getAttribute('aria-pressed')).toBe('false');
+      expect(el.className).toContain('cursor-not-allowed');
+
+      fireEvent.click(el);
+      expect(localStorage.getItem(KEY)).toBeNull();
+    });
+
+    it('偏好已开启也按「关」展示(这个视图确实不会显示被忽略目录)', () => {
+      localStorage.setItem(KEY, 'true');
+      _resetFileBrowserPreferenceForTests();
+      render(<FileTreeIgnoredDirsToggle unsupported />);
+
+      const el = screen.getByRole('button', { name: UNSUPPORTED_LABEL });
+      expect(el.getAttribute('aria-pressed')).toBe('false');
+      // 全局偏好本身不被改写 —— 切回本地会话仍然是开着的。
+      expect(localStorage.getItem(KEY)).toBe('true');
+    });
+  });
 });
 
 /**
@@ -94,7 +125,8 @@ describe('FileTreeIgnoredDirsToggle 接线', () => {
 
   it.each(hosts)('%s 的标题行挂着开关,位置紧跟搜索按钮', (_name, segments) => {
     const source = readFileSync(resolve(__dirname, '..', '..', '..', '..', ...segments), 'utf8');
-    const toggleAt = source.indexOf('<FileTreeIgnoredDirsToggle />');
+    // 开关带 props(unsupported),只锁组件名出现的位置。
+    const toggleAt = source.indexOf('<FileTreeIgnoredDirsToggle');
     const searchAt = source.indexOf("'ccAgent.workdirBrowse.searchPanel.searchFiles'");
     const collapseAt = source.indexOf("'ccAgent.workdirBrowse.treeAction.collapseAll'");
 
@@ -116,5 +148,23 @@ describe('FileTreeIgnoredDirsToggle 接线', () => {
     expect(source).toContain('FILE_TREE_HEADER_ICON_BUTTON_CLASS');
     // 这行不再自己写圆角(只剩标题触发器与下拉项等非本行成员)。
     expect(source).not.toMatch(/className="flex size-5 items-center justify-center rounded-/);
+  });
+
+  /**
+   * 可访问名守卫(DESIGN.md §14.6):纯图标控件的交付合同是**可见 Tip + 本地化
+   * 可访问名**。本次统一圆角碰到了这排存量按钮,它们只有 Tip —— 屏幕阅读器只会
+   * 读出无名称的"按钮"。以后谁在这行新增/改动按钮,同样只能拿到带 aria-label 的形态。
+   */
+  it.each(hosts)('%s 的标题行图标钮都带本地化 aria-label', (_name, segments) => {
+    const source = readFileSync(resolve(__dirname, '..', '..', '..', '..', ...segments), 'utf8');
+    const buttons = source
+      .split('<button')
+      .slice(1)
+      .filter((block) => block.includes('FILE_TREE_HEADER_ICON_BUTTON_CLASS'));
+
+    expect(buttons.length).toBeGreaterThan(0);
+    for (const block of buttons) {
+      expect(block.slice(0, block.indexOf('className'))).toContain('aria-label');
+    }
   });
 });

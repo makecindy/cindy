@@ -620,7 +620,7 @@ export function WorkdirBrowseSidebar({
       // 文件夹 rename:把 expanded 持久化里所有 oldRel / oldRel/* 的条目改前缀。
       // 实时 expanded 集合不改 — 反正打开重命名后的新文件夹时会重新 fetch。
       if (entry.type === 'directory') {
-        const persisted = loadExpandedSet(workdir);
+        const persisted = loadExpandedSet(workdir, { showIgnoredDirs });
         let dirty = false;
         const next = new Set<string>();
         for (const p of persisted) {
@@ -634,10 +634,10 @@ export function WorkdirBrowseSidebar({
             next.add(p);
           }
         }
-        if (dirty) saveExpandedSet(workdir, next);
+        if (dirty) saveExpandedSet(workdir, next, { showIgnoredDirs });
       }
     },
-    [renamingPath, tree.entries, workdir, selectedPath, setSearchParams, t],
+    [renamingPath, tree.entries, workdir, showIgnoredDirs, selectedPath, setSearchParams, t],
   );
 
   // 右键 文件 → Copy File Path。Electron renderer 启用了 clipboard write,
@@ -754,6 +754,7 @@ export function WorkdirBrowseSidebar({
             <Tip text={t('ccAgent.workdirBrowse.searchPanel.exit')}>
               <button
                 type="button"
+                aria-label={t('ccAgent.workdirBrowse.searchPanel.exit')}
                 onClick={handleToggleSearchMode}
                 className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
               >
@@ -765,6 +766,7 @@ export function WorkdirBrowseSidebar({
               <Tip text={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}>
                 <button
                   type="button"
+                  aria-label={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}
                   onClick={handleToggleSearchMode}
                   className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
                 >
@@ -772,10 +774,11 @@ export function WorkdirBrowseSidebar({
                 </button>
               </Tip>
               {/* 显示被忽略的目录 —— 与 RSB 文件浏览器同一组件、同一位置。 */}
-              <FileTreeIgnoredDirsToggle />
+              <FileTreeIgnoredDirsToggle unsupported={tree.showIgnoredDirsSupported === false} />
               <Tip text={t('ccAgent.workdirBrowse.treeAction.collapseAll')}>
                 <button
                   type="button"
+                  aria-label={t('ccAgent.workdirBrowse.treeAction.collapseAll')}
                   onClick={handleCollapseAll}
                   className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
                 >
@@ -785,6 +788,7 @@ export function WorkdirBrowseSidebar({
               <Tip text={t('ccAgent.workdirBrowse.treeAction.refresh')}>
                 <button
                   type="button"
+                  aria-label={t('ccAgent.workdirBrowse.treeAction.refresh')}
                   onClick={handleRefresh}
                   className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
                 >
