@@ -120,6 +120,47 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ComputerUseSection browser backend health loading', () => {
+  it('renders the base settings before browser status resolves', async () => {
+    const browserStatus = deferred<BrowserAvailability>();
+    api.getBrowserStatus.mockReturnValueOnce(browserStatus.promise);
+    api.getBackendState.mockResolvedValueOnce({ active: 'external' });
+    api.getBackendHealth.mockResolvedValueOnce({
+      active: 'external',
+      status: 'ready',
+      canRecover: false,
+    });
+
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+
+    expect(screen.getByText('settings.computerUse.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.browser.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.directControl.title')).toBeTruthy();
+    expect(screen.getByText('settings.computerUse.android.title')).toBeTruthy();
+    expect(
+      (screen.getByRole('switch', {
+        name: 'settings.computerUse.browser.toggleAria',
+      }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+
+    expect(
+      await screen.findByRole('radio', {
+        name: 'settings.computerUse.browserBackend.external.title',
+      }),
+    ).toBeTruthy();
+    expect(screen.queryByText('settings.computerUse.browser.notDetected')).toBeNull();
+
+    await act(async () => {
+      browserStatus.resolve({
+        detected: false,
+        browserKind: null,
+        executablePath: null,
+      });
+      await browserStatus.promise;
+    });
+
+    expect(await screen.findByText('settings.computerUse.browser.notDetected')).toBeTruthy();
+  });
+
   it('renders the Automation settings while the recoverable health probe is still pending', async () => {
     const initialHealth = deferred<BrowserBackendHealth>();
     api.getBackendHealth.mockReturnValueOnce(initialHealth.promise);

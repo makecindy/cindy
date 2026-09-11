@@ -7,11 +7,11 @@
  *   - 未探测到时引导去 Chrome 官方下载页
  * 以及「直接操作电脑」能力 (cindy_computer MCP, machine-wide opt-in).
  *
- * 数据流 (规则 7: 先拉数据再渲染, 无 loading 闪屏):
- *   - mount → 并行拉 plugins.getState('browser', workingDir) (取 browser 开关态)
- *     + browser.status()。注意 browser 是 HOSTED_ELSEWHERE, 不在 plugins.list()
- *     里, 必须按 id 直接读单个状态, 否则 find() 永远 undefined。
- *   - 两者都到位后一次性渲染
+ * 数据流:
+ *   - mount → 立即渲染各卡片的基础 UI，并行拉取插件、浏览器、电脑与 backend 状态。
+ *   - 每项状态只解锁它所属的控件或详情；慢的进程/健康探测不阻塞整页首屏。
+ *   - browser 是 HOSTED_ELSEWHERE，不在 plugins.list() 里，必须按 id
+ *     直接读单个状态，否则 find() 永远 undefined。
  * 浏览器开关读写完全复用 builtin plugin IPC, 不新造持久化通道。
  */
 
@@ -468,58 +468,70 @@ export function ComputerUseSection({
         return { health: null, error };
       }
     })();
-    void (async () => {
-      const [browserState, computerState, avail, computer, backendState] = await Promise.all([
-        // `browser` is hidden from plugins.list() (HOSTED_ELSEWHERE), so read its
-        // enable state directly by id — list().find() would always be undefined
-        // and the toggle would wrongly reset to enabled on every remount.
-        window.electronAPI.maker.plugins.getState(BROWSER_PLUGIN_ID, workingDir).catch((err) => {
-          log.warn('plugins.getState(browser) failed', err);
-          return null;
-        }),
-        window.electronAPI.maker.plugins.getState(COMPUTER_PLUGIN_ID).catch((err) => {
-          log.warn('plugins.getState(computer) failed', err);
-          return null;
-        }),
-        window.electronAPI.maker.browser.status().catch((err) => {
-          log.warn('browser.status failed', err);
-          return { detected: false, browserKind: null, executablePath: null } as BrowserAvailability;
-        }),
-        // Entering Automation is the shared refresh boundary for every card.
-        // CuaDriver 0.12.2+ reports its own TCC state without opening the legacy
-        // grant flow. Bypass our prior-result cache so reopening this page
-        // reflects the latest settings without requiring a manual Recheck.
-        window.electronAPI.maker.computer.status({
-          forcePermissionProbe: true,
-          bypassPermissionProbeCache: true,
-          passivePermissionProbeOnly: true,
-        }).catch((err) => {
-          log.warn('computer.status failed', err);
-          return {
-            installed: false,
+    // Each base read owns its own render stage. A slow browser/process probe
+    // must not hold back already available plugin or backend state.
+    void window.electronAPI.maker.plugins.getState(BROWSER_PLUGIN_ID, workingDir)
+      .then((browserState) => {
+        if (!cancelled) setBrowserEnabled(browserState.effectiveEnabled);
+      })
+      .catch((err) => {
+        log.warn('plugins.getState(browser) failed', err);
+        if (!cancelled) setBrowserEnabled(true);
+      });
+    void window.electronAPI.maker.plugins.getState(COMPUTER_PLUGIN_ID)
+      .then((computerState) => {
+        if (!cancelled) setComputerEnabled(computerState.effectiveEnabled);
+      })
+      .catch((err) => {
+        log.warn('plugins.getState(computer) failed', err);
+        if (!cancelled) setComputerEnabled(false);
+      });
+    void window.electronAPI.maker.browser.status()
+      .then((avail) => {
+        if (!cancelled) setAvailability(avail);
+      })
+      .catch((err) => {
+        log.warn('browser.status failed', err);
+        if (!cancelled) {
+          setAvailability({
+            detected: false,
+            browserKind: null,
             executablePath: null,
-            version: null,
-            daemonRunning: false,
-            installCommand:
-              'cua-driver install instructions: https://cua.ai/docs/cua-driver',
-            docsUrl: 'https://cua.ai/docs/cua-driver',
-            error: String(err),
-          } as ComputerDriverStatus;
-        }),
-        window.electronAPI.browserBackend?.getState?.().catch((err) => {
-          log.warn('browserBackend.getState failed', err);
-          return null;
-        }) ?? Promise.resolve(null),
-      ]);
+          } as BrowserAvailability);
+        }
+      });
+    // Entering Automation is the shared refresh boundary for every card.
+    // CuaDriver 0.12.2+ reports its own TCC state without opening the legacy
+    // grant flow. Bypass our prior-result cache so reopening this page
+    // reflects the latest settings without requiring a manual Recheck.
+    void window.electronAPI.maker.computer.status({
+      forcePermissionProbe: true,
+      bypassPermissionProbeCache: true,
+      passivePermissionProbeOnly: true,
+    }).then((computer) => {
       if (cancelled) return;
-      // Browser keeps the builtin default-on behavior. Direct computer control
-      // reflects the persisted machine-wide opt-in; readiness is shown separately.
-      setBrowserEnabled(browserState ? browserState.effectiveEnabled : true);
-      const effectiveComputerEnabled = computerState ? computerState.effectiveEnabled : false;
-      setComputerEnabled(effectiveComputerEnabled);
-      setAvailability(avail);
       setComputerStatus(computer);
       log.debug('computer initial status loaded', getComputerPermissionLogSummary(computer));
+    }).catch((err) => {
+      log.warn('computer.status failed', err);
+      if (!cancelled) {
+        setComputerStatus({
+          installed: false,
+          executablePath: null,
+          version: null,
+          daemonRunning: false,
+          installCommand:
+            'cua-driver install instructions: https://cua.ai/docs/cua-driver',
+          docsUrl: 'https://cua.ai/docs/cua-driver',
+          error: String(err),
+        } as ComputerDriverStatus);
+      }
+    });
+    void (window.electronAPI.browserBackend?.getState?.().catch((err) => {
+      log.warn('browserBackend.getState failed', err);
+      return null;
+    }) ?? Promise.resolve(null)).then(async (backendState) => {
+      if (cancelled) return;
       // Phase 5: backend kind 拉不到时(老版本 preload / IPC 缺失)安全 fallback
       // 到 'external',保持现有 Chrome 探测 / 登录 UI 可见 — 总比因为 IPC 失败
       // 让卡片整张瘫成内置态强。
@@ -535,7 +547,7 @@ export function ComputerUseSection({
             ? browserBackendHealthFallback(activeBackend)
             : null,
       );
-    })();
+    });
     return () => {
       cancelled = true;
     };
@@ -1201,17 +1213,6 @@ export function ComputerUseSection({
     }
   }, [refreshComputerPermissionStatus, t]);
 
-  const automationViewLoading =
-    browserEnabled === null
-    || computerEnabled === null
-    || availability === null
-    || computerStatus === null;
-
-  // First render: blank until all reads land (no flash, rule 7).
-  if (automationViewLoading) {
-    return null;
-  }
-
   const computerAccessibilityGranted = isComputerAccessibilityPermissionReady(computerStatus);
   const computerScreenRecordingGranted = isComputerScreenRecordingPermissionReady(computerStatus);
   const computerAccessibilityPending = computerPermissionPending && !computerAccessibilityGranted;
@@ -1220,17 +1221,21 @@ export function ComputerUseSection({
     computerAccessibilityGranted &&
     !computerScreenRecordingGranted;
   const computerReady =
-    computerStatus.installed && isComputerPermissionReady(computerStatus);
+    computerStatus?.installed === true && isComputerPermissionReady(computerStatus);
   // Persisted opt-in and runtime readiness are separate states. Keeping an
   // unavailable enabled configuration checked lets the user turn it off
   // instead of forcing the only interaction back into onboarding.
   const computerSwitchChecked = getComputerPermissionSwitchChecked(
-    computerEnabled,
+    computerEnabled ?? false,
     computerTogglePending,
     computerEnableIntentRef.current,
   );
   const computerSwitchDisabled =
-    computerTogglePending || computerInstallPending || computerPermissionPending;
+    computerEnabled === null
+    || computerStatus === null
+    || computerTogglePending
+    || computerInstallPending
+    || computerPermissionPending;
 
   const configuredDefaultAndroidDevice =
     androidConfig?.value.defaultDeviceSerial
@@ -1313,8 +1318,8 @@ export function ComputerUseSection({
             </div>
           </div>
           <Switch
-            checked={browserEnabled}
-            disabled={togglePending}
+            checked={browserEnabled ?? false}
+            disabled={browserEnabled === null || togglePending}
             onCheckedChange={handleToggleBrowser}
             aria-label={t('settings.computerUse.browser.toggleAria')}
           />
@@ -1342,7 +1347,7 @@ export function ComputerUseSection({
         ) : null}
         {/* 只在 backend === 'external' 时展示 Chrome 探测 + 登录入口。内置 webview
             backend 用 Electron 自带 Chromium,这些 UI 对它都没有意义。 */}
-        {browserBackendKind === 'external' ? (
+        {browserBackendKind === 'external' && availability !== null ? (
           <div className="flex flex-wrap items-center justify-between gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-[14px]">
             <p className="min-w-0 text-12 leading-[1.5] text-[var(--settings-section-desc)]">
               {availability.detected
@@ -1370,7 +1375,7 @@ export function ComputerUseSection({
         ) : null}
       </div>
 
-      {browserBackendKind === 'external' && availability.detected ? (
+      {browserBackendKind === 'external' && availability?.detected ? (
         <p className="text-12 leading-[1.5] text-[var(--settings-section-desc)]">
           {t('settings.computerUse.browser.openForLoginHint')}
         </p>
@@ -1416,7 +1421,7 @@ export function ComputerUseSection({
           />
         </div>
         {/* Windows/Linux 没有 macOS TCC 权限,整块隐藏;安装进度改在下方状态行展示。 */}
-        {window.electronAPI.platform === 'darwin' ? (
+        {window.electronAPI.platform === 'darwin' && computerStatus !== null ? (
           <div className="border-t border-[var(--settings-theme-card-border)] px-4 py-4">
             <div className="flex items-center justify-between gap-3">
               <p className="text-13 font-medium text-[var(--settings-section-title)]">
@@ -1461,7 +1466,7 @@ export function ComputerUseSection({
                 }
                 onAction={() =>
                   void (
-                    computerStatus.installed
+                    computerStatus?.installed
                       ? handleOpenComputerPermission(
                           MAC_ACCESSIBILITY_SETTINGS_URL,
                           computerAccessibilityGranted,
@@ -1484,7 +1489,7 @@ export function ComputerUseSection({
                 }
                 onAction={() =>
                   void (
-                    computerStatus.installed
+                    computerStatus?.installed
                       ? handleOpenComputerPermission(
                           MAC_SCREEN_RECORDING_SETTINGS_URL,
                           computerScreenRecordingGranted,
@@ -1497,6 +1502,7 @@ export function ComputerUseSection({
           </div>
         ) : null}
 
+        {computerStatus !== null ? (
         <div className="relative border-t border-[var(--settings-theme-card-border)] px-4 py-2.5">
           <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
@@ -1586,6 +1592,7 @@ export function ComputerUseSection({
             </div>
           ) : null}
         </div>
+        ) : null}
 
         {computerDetailsOpen ? (
           <div className="flex flex-col gap-3 border-t border-[var(--settings-theme-card-border)] px-4 py-3.5">
