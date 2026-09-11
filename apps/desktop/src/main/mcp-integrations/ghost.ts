@@ -108,7 +108,6 @@ import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.j
 import { createForgeIconConverter } from './forgeIconConversion.js';
 import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
 import {
-  isFrozenBuiltinPluginAllowed,
   readAllowedBuiltinPluginIds,
 } from './codexBuiltinToolPolicy.js';
 import { t } from '../i18n.js';
@@ -1390,17 +1389,8 @@ export function getCindyGhostsMcpDeps(
 ): CindyGhostsMcpDeps {
   const resolveSessionContext = (): LiziMcpSessionContext | undefined =>
     getLiziMcpSessionContext() ?? sessionCtx;
-  const isGhostAllowedByFrozenProfile = (ghostId: string): boolean =>
-    isFrozenBuiltinPluginAllowed(resolveSessionContext()?.vendorOptions, ghostId);
-  const frozenProfileDenied = () => ({
-    ok: false as const,
-    errorCode: 'GHOST_DISABLED_IN_WORKDIR' as const,
-    message: '当前伙伴配置未启用该插件；不要重试，改用已授权能力，或让用户更新伙伴配置后再试。',
-  });
   return {
     connectAccount: async (target) => {
-      if (target.kind === 'plugin' && !isGhostAllowedByFrozenProfile(target.id))
-        return frozenProfileDenied();
       const context = resolveSessionContext();
       const sessionId = ghostSetupInteractionSessionId(context);
       if (!sessionId) return { ok: false, errorCode: 'NO_SESSION_CONTEXT' };
@@ -1477,8 +1467,7 @@ export function getCindyGhostsMcpDeps(
     //
     // 伙伴冻结 Toolset 只清空本花名册快照（不把全量插件写进工具描述）；
     // ghost_list / ghost_info / ghost_call 仍按实时可见性发现已装插件，
-    // 内置工具冻结名单不套到插件 ID。connect_account 对 plugin 目标另走
-    // 冻结门禁，避免未授权插件直接发卡。
+    // 内置工具冻结名单不套到插件 ID；授权卡同样由 Host 按实时插件可见性守门。
     getRosterItems() {
       const context = resolveSessionContext();
       const workdir = context?.workingDir;

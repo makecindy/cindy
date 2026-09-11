@@ -1273,7 +1273,7 @@ describe('远程交互接线不变式', () => {
 
   it('跨窗口 worktree 写穿只合并目标字段，main 镜像读取共享持久快照', () => {
     const src = read('App.tsx');
-    expect(src).toContain('const draft = getDraftForPreferenceSync();');
+    expect(src).toContain('const draft = getDraftForOwnerPreferenceSync(owner.dataOwnerId);');
     expect(src).toContain('setWorktreePreference(worktreeEnabled === true);');
     expect(src).not.toContain('patchDraft({ worktreeEnabled: worktreeEnabled === true });');
   });

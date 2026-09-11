@@ -7159,6 +7159,7 @@
     }
   },
   "bots": {
+    "creationName": "Name",
     "settingsBack": "Back to Settings",
     "sidebar": {
       "newTaskWith": "Start a task with {{name}}"
@@ -7166,28 +7167,7 @@
     "title": "Teammates",
     "add": "Add teammate",
     "createWizard": {
-      "createFailed": "The teammate could not be created. Try again.",
-      "templates": {
-        "cindy": {
-          "title": "Cindy Assistant",
-          "defaultName": "Cindy",
-          "defaultDescription": "I like bringing a little order to busy days and hearing fresh ideas. Writing, research, everyday odds and ends—let’s work through them together."
-        },
-        "dash": {
-          "title": "Dash, Company CEO",
-          "defaultName": "Dash",
-          "defaultDescription": "I’m curious about good products and good businesses. I enjoy thinking things through, talking about possibilities, and making a clear decision together."
-        },
-        "lizi": {
-          "title": "LiZi, Technical Director",
-          "defaultName": "LiZi",
-          "defaultDescription": "I enjoy taking tricky problems apart and turning ideas into something real. When we hit a snag, we’ll figure it out together."
-        },
-        "custom": {
-          "title": "Custom"
-        }
-      },
-      "chooseTemplate": "Who would you like to invite?"
+      "createFailed": "The teammate could not be created. Try again."
     },
     "homeFolder": {
       "title": "Advanced configuration",
@@ -7420,6 +7400,47 @@
       "toolset": "Built-in tools",
       "unavailable": "Unavailable",
       "empty": "No matching capabilities"
+    },
+    "guided": {
+      "title": "Create a teammate",
+      "reviewTitle": "Your new teammate",
+      "question": "Briefly describe your expectations.",
+      "placeholder": "For example, help me practice English through everyday conversation and thoughtful corrections.",
+      "generate": "Create teammate",
+      "generating": "Shaping your teammate…",
+      "generationFailed": "Could not generate your teammate. Your idea is still here; please try again.",
+      "modelRequired": "Select an available default model in Cindy first.",
+      "cindyDescription": "I can help you use Cindy, connect your tools, and get things done together.",
+      "cindySummary": "Manage Cindy, connect tools, and get things done.",
+      "openCindy": "Open Cindy",
+      "addCindy": "Add Cindy",
+      "done": "Done",
+      "editName": "Edit name",
+      "duplicateName": "That name is taken. Choose a name you can easily tell apart.",
+      "introduction": "About me",
+      "editIntroduction": "Edit introduction",
+      "refine": "Adjust teammate",
+      "refinePlaceholder": "What would you change? For example, less formal and a little more playful.",
+      "back": "Back",
+      "invite": "Invite teammate",
+      "portrait": "Portrait {{number}}",
+      "upload": "Upload image",
+      "generateAvatar": "Generate portrait",
+      "useAvatar": "Use this portrait",
+      "examples": {
+        "english": {
+          "label": "Practice English",
+          "prompt": "Practice English with me through everyday conversation. Be patient and correct unnatural expressions thoughtfully."
+        },
+        "ideas": {
+          "label": "Explore ideas",
+          "prompt": "An imaginative creative partner with opinions, helping me develop writing and product ideas into practical plans."
+        },
+        "life": {
+          "label": "Talk about life",
+          "prompt": "A warm, funny companion who listens to the little things in my life without rushing to give advice."
+        }
+      }
     }
   },
   "common": {

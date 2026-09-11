@@ -253,6 +253,8 @@ export interface RemoteAgentFileOps {
   listDir(dir: string): Promise<string[]>;
   /** Bounded UTF-8 read used for remote runtime metadata such as SKILL.md. */
   readFile(file: string, maxBytes?: number): Promise<string>;
+  /** Bounded UTF-8 tail for native history receipts; absent on older hosts. */
+  readFileTail?(file: string, maxBytes: number): Promise<string>;
   /** Hash the complete remote file without transferring its contents to the client. */
   sha256File(file: string): Promise<string>;
 }

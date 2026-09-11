@@ -5704,7 +5704,7 @@ export function ChatInput({
         };
         const restoreRemoteComposerAndRelease = () => {
           try {
-            restoreOptimisticallyClearedComposer();
+            if (sourceSessionId) restoreOptimisticallyClearedComposer();
           } finally {
             releaseRemoteComposerTransition();
           }
@@ -5713,15 +5713,21 @@ export function ChatInput({
         // the user bubble. Device-link already did this; local/SSH used to wait
         // until onSend resolved, so the same text sat in both the transcript
         // and the composer while enqueue / effort / slash / auth settled.
-        try {
-          clearSentComposer();
-        } catch (error) {
-          restoreRemoteComposerAndRelease();
-          throw error;
-        }
-        dispatchSendClearedKeysRef.current.add(sendInFlightKey);
-        if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
-          setAllowTypeDuringSend(true);
+        // Home owns the asynchronous creation handoff: onSend returns false
+        // while it is still creating the session, then clears the draft itself.
+        // Keep that draft intact instead of clearing and restoring it as though
+        // an existing-session send had failed.
+        if (sourceSessionId) {
+          try {
+            clearSentComposer();
+          } catch (error) {
+            restoreRemoteComposerAndRelease();
+            throw error;
+          }
+          dispatchSendClearedKeysRef.current.add(sendInFlightKey);
+          if (lockCurrentComposer && storageKeyForDraftRef.current === sourceStorageKey) {
+            setAllowTypeDuringSend(true);
+          }
         }
         if (
           optimisticallyClearRemoteComposer &&
@@ -5818,6 +5824,7 @@ export function ChatInput({
           restoreRemoteComposerAndRelease();
           return;
         }
+        if (!sourceSessionId) clearSentComposer();
         releaseRemoteComposerTransition();
         markRecentPluginUsage();
       } finally {

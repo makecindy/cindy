@@ -1,3 +1,4 @@
+import { getDataOwnerGeneration } from './contexts/dataOwnerGeneration';
 import { RouterProvider } from 'react-router-dom';
 
 import { useEffect } from 'react';
@@ -48,7 +49,8 @@ import {
 } from '@/lib/localCatalogSnapshot';
 import { useResyncAgentIslandSettingsAfterLogin } from '@/hooks/useAgentIslandSettings';
 import {
-  getDraftForPreferenceSync,
+  getDraftForOwnerPreferenceSync,
+  applyAppDefaultModelSelection,
   subscribeDraft,
   setEffortForModel,
   setFastModeForModel,
@@ -96,6 +98,73 @@ function LoginHandoffHost({ children }: { children: React.ReactNode }) {
   );
 }
 
+function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
+  // 多 renderer 的模块内存彼此独立；跨窗口通知必须从共享持久快照同步，避免旧窗口把
+  // 自己的 model / workingDir 等完整旧草稿覆盖进 main 缓存。
+  const owner = getDataOwnerGeneration();
+  const draft = getDraftForOwnerPreferenceSync(owner.dataOwnerId);
+  if (!draft) return;
+  const providerModelMemory = snapshotForSeed(owner.dataOwnerId);
+  if (!providerModelMemory) return;
+  const cc = draft.lastByVendor.cc;
+  window.electronAPI.syncDesktopCcPrefs({
+    model: cc.model,
+    effort: cc.effort,
+    permissionMode: cc.permissionMode,
+    fastMode: draft.fastModeByModel[cc.model] === true,
+    // /ctr 新建会话需要与模型配套的供应商路由；缺省会走隐式路由落到官方网关，
+    // 用户供应商专有的模型（如 deepseek-v4-pro）会被网关 400 拒绝。
+    providerId: cc.providerId ?? null,
+  });
+  // main 缓存两用途:① collab worker spawn 读 model/effort/fastMode;② device-link 远程
+  // 草稿镜像读全量(model/effort/fast/permission/source)+「是否显式选过模型」。故
+  // lastByVendor 覆盖 cc/codex/pi，并带上 permissionMode + providerId(worker spawn
+  // 不消费这两项,远程草稿镜像才用)。fire-and-forget。
+  const selected = draft.lastByVendor[draft.vendor];
+  window.electronAPI.syncNewMakerDraft({
+    ...(appDefaultModelRequestId ? { appDefaultModelRequestId } : {}),
+    ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
+    selectedRoute: {
+      harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,
+      providerId: selected.providerId ?? null,
+      model: selected.model,
+      effort: selected.effort ?? '',
+      fastMode: draft.fastModeByModel[selected.model] === true,
+    },
+    lastByVendor: {
+      cc: {
+        model: draft.lastByVendor.cc.model,
+        effort: draft.lastByVendor.cc.effort,
+        permissionMode: draft.lastByVendor.cc.permissionMode,
+        providerId: draft.lastByVendor.cc.providerId ?? null,
+      },
+      codex: {
+        model: draft.lastByVendor.codex.model,
+        effort: draft.lastByVendor.codex.effort,
+        permissionMode: draft.lastByVendor.codex.permissionMode,
+        providerId: draft.lastByVendor.codex.providerId ?? null,
+      },
+      pi: {
+        model: draft.lastByVendor.pi.model,
+        effort: draft.lastByVendor.pi.effort,
+        permissionMode: draft.lastByVendor.pi.permissionMode,
+        providerId: draft.lastByVendor.pi.providerId ?? null,
+      },
+    },
+    modelChosenByVendor: {
+      cc: draft.modelChosenByVendor.cc === true,
+      codex: draft.modelChosenByVendor.codex === true,
+      pi: draft.modelChosenByVendor.pi === true,
+    },
+    fastModeByModel: draft.fastModeByModel,
+    effortByModel: draft.effortByModel,
+    providerModelMemory,
+    // worktree 勾选记忆(vendor 无关根字段):远程草稿(手机 / 桌面控制端)播种用。
+    worktreeEnabled: draft.worktreeEnabled,
+  });
+
+}
+
 function MakerBootstrap() {
   const { isAuthenticated, dataOwnerId, dataOwnerRecoveryEpoch } = useAuth();
 
@@ -124,8 +193,11 @@ function MakerBootstrap() {
   // Auth 广播的多个 listener 没有顺序契约；等 AuthContext 提交新 owner 后再预热一次，
   // 保证 provider 快照与 capabilities 不会沿用或提交前一个 owner 的在途结果。
   useEffect(() => {
+    // Early fire-and-forget sends can precede maker IPC registration. Repeat only
+    // after the ready/owner boundary, using the same persisted preference snapshot.
+    syncNewMakerPrefs();
     void preloadLocalCatalogSnapshot();
-  }, [dataOwnerId]);
+  }, [dataOwnerId, dataOwnerRecoveryEpoch]);
   return null;
 }
 
@@ -161,58 +233,8 @@ export function App() {
     //  - syncDesktopCcPrefs: 给飞书接管新建 session 用 (仅 cc vendor)
     //  - syncNewMakerDraft: 给 collab mode spawn worker 用 (双 vendor + 按模型记忆)
     // 都是 ipcRenderer.send fire-and-forget; handler 在 createWindow 前已注册。
-    const syncPrefs = () => {
-      // 多 renderer 的模块内存彼此独立；跨窗口通知必须从共享持久快照同步，避免旧窗口把
-      // 自己的 model / workingDir 等完整旧草稿覆盖进 main 缓存。
-      const draft = getDraftForPreferenceSync();
-      const cc = draft.lastByVendor.cc;
-      window.electronAPI.syncDesktopCcPrefs({
-        model: cc.model,
-        effort: cc.effort,
-        permissionMode: cc.permissionMode,
-        fastMode: draft.fastModeByModel[cc.model] === true,
-        // /ctr 新建会话需要与模型配套的供应商路由；缺省会走隐式路由落到官方网关，
-        // 用户供应商专有的模型（如 deepseek-v4-pro）会被网关 400 拒绝。
-        providerId: cc.providerId ?? null,
-      });
-      // main 缓存两用途:① collab worker spawn 读 model/effort/fastMode;② device-link 远程
-      // 草稿镜像读全量(model/effort/fast/permission/source)+「是否显式选过模型」。故
-      // lastByVendor 覆盖 cc/codex/pi，并带上 permissionMode + providerId(worker spawn
-      // 不消费这两项,远程草稿镜像才用)。fire-and-forget。
-      window.electronAPI.syncNewMakerDraft({
-        lastByVendor: {
-          cc: {
-            model: draft.lastByVendor.cc.model,
-            effort: draft.lastByVendor.cc.effort,
-            permissionMode: draft.lastByVendor.cc.permissionMode,
-            providerId: draft.lastByVendor.cc.providerId ?? null,
-          },
-          codex: {
-            model: draft.lastByVendor.codex.model,
-            effort: draft.lastByVendor.codex.effort,
-            permissionMode: draft.lastByVendor.codex.permissionMode,
-            providerId: draft.lastByVendor.codex.providerId ?? null,
-          },
-          pi: {
-            model: draft.lastByVendor.pi.model,
-            effort: draft.lastByVendor.pi.effort,
-            permissionMode: draft.lastByVendor.pi.permissionMode,
-            providerId: draft.lastByVendor.pi.providerId ?? null,
-          },
-        },
-        modelChosenByVendor: {
-          cc: draft.modelChosenByVendor.cc === true,
-          codex: draft.modelChosenByVendor.codex === true,
-          pi: draft.modelChosenByVendor.pi === true,
-        },
-        fastModeByModel: draft.fastModeByModel,
-        effortByModel: draft.effortByModel,
-        // worktree 勾选记忆(vendor 无关根字段):远程草稿(手机 / 桌面控制端)播种用。
-        worktreeEnabled: draft.worktreeEnabled,
-      });
-    };
-    syncPrefs();
-    return subscribeDraft(syncPrefs);
+    syncNewMakerPrefs();
+    return subscribeDraft(syncNewMakerPrefs);
   }, []);
 
   // Worker 创建偏好的真源是 renderer localStorage；main 只缓存权限默认值供
@@ -240,7 +262,10 @@ export function App() {
   // 全局 effort/fast 预设(旧 newMakerDraft.effortByModel 已不再写非选中行,故必须单独镜像这一层)。
   // 启动推一次 + 变化增量推,fire-and-forget;无控制者订阅时 main 端转发近似 no-op。
   useEffect(() => {
-    const sync = () => window.electronAPI.syncProviderModelMemory(snapshotForSeed());
+    const sync = () => {
+      window.electronAPI.syncProviderModelMemory(snapshotForSeed());
+      syncNewMakerPrefs();
+    };
     sync();
     return subscribeProviderModelMemory(sync);
   }, []);
@@ -250,7 +275,16 @@ export function App() {
   // 通过 providerModelMemory 同步。写入触发上面的镜像 effect → NEW_MAKER_DRAFT_CHANGED 回流控制端。
   useEffect(() => {
     const offDraft = window.electronAPI.onMakerDraftPrefApply(
-      ({ agent, providerId, modelId, active, effort, fast, thinking, markModelChoice }) => {
+      ({ agent, providerId, modelId, active, effort, fast, thinking, markModelChoice, appDefaultSelection }) => {
+        if (appDefaultSelection) {
+          if (applyAppDefaultModelSelection(appDefaultSelection)) {
+            const route = appDefaultSelection.route;
+            setProviderModelChoice(agent, route.providerId ?? '', route.model, route.effort as Effort);
+            setProviderModelFast(agent, route.providerId ?? '', route.model, route.fastMode);
+            syncNewMakerPrefs(appDefaultSelection.requestId);
+          }
+          return;
+        }
         const vendor = agentKindToVendor(agent);
         if (active) {
           const patch =

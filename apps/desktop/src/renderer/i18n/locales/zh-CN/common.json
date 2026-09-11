@@ -7157,6 +7157,7 @@
     }
   },
   "bots": {
+    "creationName": "名字",
     "settingsBack": "返回设置",
     "sidebar": {
       "newTaskWith": "和{{name}}开个新任务"
@@ -7164,28 +7165,7 @@
     "title": "伙伴",
     "add": "添加伙伴",
     "createWizard": {
-      "createFailed": "无法创建伙伴，请重试。",
-      "templates": {
-        "cindy": {
-          "title": "Cindy 助理",
-          "defaultName": "Cindy",
-          "defaultDescription": "我喜欢把忙乱的日子理顺，也爱听新鲜想法。写作、资料和日常琐事，都可以一起聊聊。"
-        },
-        "dash": {
-          "title": "Dash 公司 CEO",
-          "defaultName": "Dash",
-          "defaultDescription": "我对好产品和好生意充满好奇，聊到有意思的方向会很投入。喜欢把事情想透，再一起做决定。"
-        },
-        "lizi": {
-          "title": "LiZi 技术总监",
-          "defaultName": "LiZi",
-          "defaultDescription": "我喜欢拆解难题，也享受把想法做成作品的过程。遇到棘手的问题，我们就一起找答案。"
-        },
-        "custom": {
-          "title": "自定义"
-        }
-      },
-      "chooseTemplate": "邀请谁"
+      "createFailed": "无法创建伙伴，请重试。"
     },
     "homeFolder": {
       "title": "高级配置",
@@ -7418,6 +7398,47 @@
       "toolset": "内置工具",
       "unavailable": "不可用",
       "empty": "没有匹配的能力"
+    },
+    "guided": {
+      "title": "创建伙伴",
+      "reviewTitle": "你的新伙伴",
+      "question": "简单描述一下你的期待",
+      "placeholder": "比如，陪我练英语，能聊生活，也能认真纠正我的表达。",
+      "generate": "生成伙伴",
+      "generating": "正在构思伙伴…",
+      "generationFailed": "暂时没能生成，请保留你的想法再试一次。",
+      "modelRequired": "请先在 Cindy 中选择可用的默认模型。",
+      "cindyDescription": "我会帮你使用 Cindy、连接工具，也会和你一起把事情做完。",
+      "cindySummary": "打理 Cindy，连接工具，把事情做完。",
+      "openCindy": "打开 Cindy",
+      "addCindy": "添加 Cindy",
+      "done": "完成",
+      "editName": "编辑名字",
+      "duplicateName": "已有同名伙伴，换一个更容易分辨的名字吧。",
+      "introduction": "自我介绍",
+      "editIntroduction": "编辑自我介绍",
+      "refine": "调整伙伴",
+      "refinePlaceholder": "还想改哪里？比如，少一点客套，多一点幽默。",
+      "back": "返回",
+      "invite": "邀请伙伴",
+      "portrait": "头像 {{number}}",
+      "upload": "上传图片",
+      "generateAvatar": "生成头像",
+      "useAvatar": "使用这张",
+      "examples": {
+        "english": {
+          "label": "练习英语",
+          "prompt": "陪我练英语，从日常话题开始，耐心但不敷衍，认真纠正不自然的表达。"
+        },
+        "ideas": {
+          "label": "一起想点子",
+          "prompt": "一个有想象力也有主见的创作伙伴，陪我讨论写作和产品点子，帮我把想法变成具体方案。"
+        },
+        "life": {
+          "label": "聊聊生活",
+          "prompt": "一个温暖、幽默的伙伴，愿意听我说生活中的小事，不急着给建议。"
+        }
+      }
     }
   },
   "common": {

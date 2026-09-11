@@ -750,23 +750,13 @@ describe('写路径 roundtrip(真实存储,tmp userData)', () => {
   });
 });
 
-describe('connect_account frozen plugin policy', () => {
-  it.each([
-    { __cindyAllowedBuiltinPluginIds: ['other'] },
-    { __cindyDisabledBuiltinPluginIds: ['art'] },
-  ])('rejects a disabled plugin before creating a card: %j', async (policy) => {
-    const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', policy);
-    await expect(deps.connectAccount!({ kind: 'plugin', id: 'art' })).resolves.toMatchObject({
-      ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-    });
-    expect(authorizationRequestMock).not.toHaveBeenCalled();
-  });
-
-  it('allows an enabled plugin and keeps Host login independent of plugin policy', async () => {
+describe('connect_account shares Host live plugin policy', () => {
+  it('passes dynamically discovered plugins to Host without treating builtin toolsets as plugin grants', async () => {
     const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
-      __cindyAllowedBuiltinPluginIds: ['art'],
+      __cindyAllowedBuiltinPluginIds: ['memory', 'xdt_helper'],
     });
     await deps.connectAccount!({ kind: 'plugin', id: 'art' });
+    expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', { kind: 'plugin', id: 'art' });
     await deps.connectAccount!({ kind: 'host', id: 'grok' });
     expect(authorizationRequestMock).toHaveBeenCalledTimes(2);
   });

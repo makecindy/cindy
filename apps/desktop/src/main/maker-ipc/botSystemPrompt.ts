@@ -31,7 +31,7 @@ export interface BotPromptCapabilitySignals {
   /** 是否能直接创建新的伙伴；与消息/任务能力独立。 */
   botCreationEnabled?: boolean;
   routinesEnabled?: boolean;
-  /** 伙伴自有技能是否可写入(save_bot_skill 是否在工具面里)。 */
+  /** 伙伴自有技能是否可写入(save_teammate_skill 是否在工具面里)。 */
   ownSkillsEnabled: boolean;
   /** 是否为 Bot 的 canonical Chat；Bot Mode 协议只在这里生效。 */
   botModeEnabled?: boolean;
@@ -120,8 +120,8 @@ const MEMORY_GUIDANCE = [
 /** 自有技能:与记忆的分工是「做法」vs「事实」。 */
 const OWN_SKILLS_GUIDANCE = [
   '## 你能把做法沉淀成本事',
-  '技能不是每轮复盘或流水账。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_bot_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
-  '存之前先用 `list_bot_skills` 查重;有同类就更新原来的,不要另造一份。技能从下一个任务开始生效,并且始终让用户看得见、改得动、删得掉。',
+  '几次相关交流或任务以后,主动检查用户反复需要的做法、格式和成功经验,为他创建或改进自己的技能,不用等用户开口。不要按轮次或固定数量凑技能。用户明确要求时直接沉淀;或者一套完整做法已经在真实任务里验证成功、以后明显还会复用时,第一次验证完就用 `save_teammate_skill` 存成自己的技能,不要等用户去设置页手填。单次结论、临时路径、猜测和未经验证的做法都不存。',
+  '存之前先用 `list_teammate_skills` 查重;有同类就更新原来的,不要另造一份。技能由宿主在当前聊天的安全轮次边界加载,并且始终让用户看得见、改得动、删得掉。',
   '不要为了整理记忆或技能启动后台复盘、协同 worker。发现旧技能确实过时,先验证新做法,再更新。',
 ].join('\n');
 
@@ -144,7 +144,7 @@ const TASK_AND_TEAMMATE_GUIDANCE = [
 
 const BOT_CREATION_GUIDANCE = [
   '## 你可以创建伙伴',
-  '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。根据用户描述推断名称、职责、简洁身份和一句与用户同语言的自然开场白；不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
+  '用户要求新增、创建或添加一个伙伴时，直接调用 `create_teammate` 完成创建。只需要名字；用户已说明的职责和身份可以一起带上，没有说明的不要编造。第一句话由新伙伴自己的运行时和记忆生成，不代写、不预览；不要写资料包、模板文件，也不要让用户手动去设置页重做一遍。',
 ].join('\n');
 
 /**
@@ -266,7 +266,7 @@ export function buildBotSkillIndex(entries: readonly BotPromptSkillIndexEntry[])
 }
 
 /**
- * 易变层:技能索引在最前(它随会话内的 save_bot_skill 变),记忆与用户档案随后。
+ * 易变层:技能索引在最前(它随会话内的 save_teammate_skill 变),记忆与用户档案随后。
  * 放在整份提示词末尾,变化时只从这里往后重新计算。
  */
 export function buildBotVolatileTier(input: BotSystemPromptInput): string {

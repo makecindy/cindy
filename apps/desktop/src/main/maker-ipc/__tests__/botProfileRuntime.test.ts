@@ -35,6 +35,12 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('You are Research helper');
   });
 
+  it('uses a legacy empty identity’s role without replacing an explicit SOUL', () => {
+    const description = '负责财务分析。';
+    expect(buildBotProfilePrompt({ displayName: 'Finance', identitySource: '  ', description })).toBe(description);
+    expect(buildBotProfilePrompt({ displayName: 'Finance', identitySource: 'User-authored SOUL', description })).toBe('User-authored SOUL');
+  });
+
   it('uses the same persisted default SOUL as the runtime fallback', () => {
     const soul = buildDefaultBotIdentity('Research helper');
     expect(
@@ -48,17 +54,20 @@ describe('Bot Profile runtime prompt', () => {
     expect(context).toContain('current SOUL and user profile');
     expect(context).toContain('execution engines, not your personal identity');
     expect(context).toContain('context compaction, restarts, and model changes');
-    expect(context).toContain('teammate’s model settings in Cindy');
+    expect(context).toContain('Use available host tools for model changes');
+    expect(context).toContain('Connecting a new model or signing in to a provider is managed in Cindy settings');
+    expect(context).not.toContain('direct the user to the teammate’s model settings');
+    expect(context).not.toContain('claim access to settings you cannot operate');
     expect(context).toContain('Do not present terminal-only slash commands');
   });
 
   it('uses direct Bot tools and avoids whole-surface discovery loops', () => {
     const prompt = buildBotCapabilityContextPrompt();
-    expect(prompt).toContain('You are running as a Cindy Bot');
-    expect(prompt).toContain('Use direct Bot tools');
-    expect(prompt).toContain('`find_bot_capabilities`');
-    expect(prompt).toContain('`set_bot_capability`');
-    expect(prompt).toContain('`cindy` (`ghost_list`, `ghost_info`, `ghost_call`)');
+    expect(prompt).toContain('You are a teammate with a durable profile');
+    expect(prompt).toContain('Use direct teammate tools');
+    expect(prompt).toContain('`find_teammate_capabilities`');
+    expect(prompt).toContain('`set_teammate_capability`');
+    expect(prompt).toContain('installed-plugin gateway (`ghost_list`, `ghost_info`, `ghost_call`)');
     expect(prompt).toContain('New mounts take effect next turn in this same task');
     expect(prompt).toContain('`start_session_task`');
     expect(prompt).toContain('proactively start independent tasks for coding and medium or large work');
@@ -69,7 +78,7 @@ describe('Bot Profile runtime prompt', () => {
     expect(prompt).toContain('do not repeatedly list the whole tool surface');
     expect(prompt).toContain('Completion returns automatically');
     expect(prompt).toContain('It is not a task and has no progress or cancellation');
-    expect(prompt).toContain('does not rewrite another Bot\'s identity');
+    expect(prompt).toContain('does not rewrite another teammate\'s identity');
     expect(prompt).toContain('offer either a message or a tracked Session task');
     expect(prompt).not.toContain('delegate_to_bot');
     expect(prompt).not.toContain('list_bot_delegations');
@@ -77,19 +86,19 @@ describe('Bot Profile runtime prompt', () => {
 
   it('does not advertise helper discovery or delegation when the target cannot mount it', () => {
     const prompt = buildBotCapabilityContextPrompt({ helperAvailable: false });
-    expect(prompt).toContain('durable Profile');
-    expect(prompt).toContain('not a diary of every turn');
+    expect(prompt).toContain('durable profile');
+    expect(prompt).toContain('Respect the user’s memory switch');
     expect(prompt).not.toContain('`list_tools`');
     expect(prompt).not.toContain('discover other available Bots');
     expect(prompt).not.toContain('`start_session_task`');
-    expect(prompt).not.toContain('`save_bot_skill`');
+    expect(prompt).not.toContain('`save_teammate_skill`');
     expect(prompt).not.toContain('ghost_list');
   });
 
   it('keeps helper capability tools when cindy is not on the remote tool surface', () => {
     const prompt = buildBotCapabilityContextPrompt({ helperAvailable: true, cindyAvailable: false });
-    expect(prompt).toContain('`find_bot_capabilities`');
-    expect(prompt).toContain('`set_bot_capability`');
+    expect(prompt).toContain('`find_teammate_capabilities`');
+    expect(prompt).toContain('`set_teammate_capability`');
     expect(prompt).toContain('`start_session_task`');
     expect(prompt).toContain('do not repeatedly list the whole tool surface');
     expect(prompt).not.toContain('ghost_list');
@@ -100,25 +109,25 @@ describe('Bot Profile runtime prompt', () => {
   it('keeps learned Skills deliberate instead of writing a diary of every turn', () => {
     const prompt = buildBotCapabilityContextPrompt();
     expect(prompt).toContain('Use a `learned-` name only for a stable reusable working habit');
-    expect(prompt).toContain('not a diary of every turn');
-    expect(prompt).toContain('instead of waiting for repetition');
-    expect(prompt).toContain('after that first verified success');
-    expect(prompt).toContain('Never start a background review worker');
+    expect(prompt).toContain('Respect the user’s memory switch');
+    expect(prompt).toContain('without waiting for a request to remember');
+    expect(prompt).toContain('One verified reusable success is enough');
+    expect(prompt).toContain('not an extra learning model or background review worker');
     expect(prompt).toContain('never for a one-off conclusion');
   });
 
   /**
-   * 批次 ζ:「TA 学会的」列的是**真技能**,来源是伙伴自己调 `save_bot_skill`。
+   * 批次 ζ:「TA 学会的」列的是**真技能**,来源是伙伴自己调 `save_teammate_skill`。
    * 这条约定掉了,技能就永远长不出来 —— 判断「这次做法值不值得沉淀」是语言理解
    * 问题,代码判不了(maker-core-and-agent-behavior.md §2 的分界)。
    */
   it('only saves a verified reusable workflow as a real Skill', () => {
     const prompt = buildBotCapabilityContextPrompt();
-    expect(prompt).toContain('`save_bot_skill`');
-    expect(prompt).toContain('`list_bot_skills`');
+    expect(prompt).toContain('`save_teammate_skill`');
+    expect(prompt).toContain('`list_teammate_skills`');
     expect(prompt).toContain('only after the workflow has succeeded');
     expect(prompt).toContain('reusable steps are known');
-    expect(prompt).toContain('mounted from the next task onward');
+    expect(prompt).toContain('at a safe turn boundary in this same chat');
   });
 
   it('keeps the same affirmative delegation guidance beside the default and every preset SOUL', () => {

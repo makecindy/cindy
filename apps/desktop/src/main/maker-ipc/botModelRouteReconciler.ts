@@ -1,3 +1,4 @@
+import { throwIpcError } from '../utils/ipcValidate.js';
 import type { AgentKind } from '@cindy/maker-core';
 import { normalizeBotModelChain, type BotModelRoute } from '../../shared/botModelChain.js';
 
@@ -13,6 +14,7 @@ interface BotRouteState {
   chain: BotModelRoute[];
   current: RuntimeRoute;
   hasRuntimeOverride: boolean;
+  followsCindyDefault?: boolean;
   next?: RuntimeRoute;
 }
 
@@ -23,8 +25,7 @@ function configuredRoute(
 ): RuntimeRoute | null {
   const key = JSON.stringify(chain);
   const isDraftChange = key !== JSON.stringify(state.chain);
-  if (!isDraftChange && state.hasRuntimeOverride && (previous === undefined || previous === key))
-    return null;
+  if (!state.followsCindyDefault && !isDraftChange && state.hasRuntimeOverride && (previous === undefined || previous === key)) return null;
   const primary = chain[0];
   if (!primary) return null;
   return {
@@ -36,12 +37,18 @@ function configuredRoute(
   };
 }
 
+function sameRoute(a: RuntimeRoute, b: RuntimeRoute): boolean {
+  return a.agentKind === b.agentKind && a.model === b.model && a.providerId === b.providerId
+    && a.effort === b.effort && a.fastMode === b.fastMode;
+}
+
 /** Apply the permanent profile through ordinary Session model/switch controls.
  * Fallback and Agent choices remain effective until the configured chain changes.
  * Background tasks keep their frozen route; the reader selects canonical tasks only.
  */
 export function createBotModelRouteReconciler(deps: {
   ownerEpoch(): string;
+  withSessionLock?<T>(sessionId: string, run: () => Promise<T>): Promise<T>;
   read(sessionId: string, purpose: 'apply' | 'preview'): Promise<BotRouteState | null>;
   apply(sessionId: string, route: RuntimeRoute, current: RuntimeRoute): Promise<void>;
 }) {
@@ -59,19 +66,23 @@ export function createBotModelRouteReconciler(deps: {
     }
     return epoch;
   };
-  const reconcile = async (sessionId: string): Promise<void> => {
+  const reconcile = async (sessionId: string, sessionLockHeld = false): Promise<void> => {
     const epoch = syncOwner();
     const existing = inFlight.get(sessionId);
-    if (existing) return existing;
-    const operation = (async () => {
+    if (existing && !sessionLockHeld) return existing;
+    const run = async () => {
       for (;;) {
         const revision = revisions.get(sessionId) ?? 0;
         const state = await deps.read(sessionId, 'apply');
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
-        if (!state?.chain.length) {
+        if (!state) {
           configured.delete(sessionId);
           return;
+        }
+        if (!state.chain.length) {
+          configured.delete(sessionId);
+          throwIpcError('PRECONDITION_FAILED', '请先选择已开启的伙伴模型');
         }
         const key = JSON.stringify(state.chain);
         const route = configuredRoute(state, configured.get(sessionId));
@@ -79,14 +90,8 @@ export function createBotModelRouteReconciler(deps: {
           configured.set(sessionId, key);
           return;
         }
-        const current = state.next ?? state.current;
-        if (
-          route.agentKind !== current.agentKind ||
-          route.model !== current.model ||
-          route.providerId !== current.providerId ||
-          route.effort !== current.effort ||
-          route.fastMode !== current.fastMode
-        ) {
+        const current = state.current;
+        if (!sameRoute(route, current) || (state.next && !sameRoute(route, state.next))) {
           try {
             await deps.apply(sessionId, route, state.current);
           } catch (error) {
@@ -103,7 +108,11 @@ export function createBotModelRouteReconciler(deps: {
         configured.set(sessionId, key);
         return;
       }
-    })();
+    };
+    // Read inside the ordinary send lock. An already-locked sender must not
+    // await an outside reconcile that is itself queued behind this sender.
+    if (sessionLockHeld) return run();
+    const operation = deps.withSessionLock ? deps.withSessionLock(sessionId, run) : run();
     inFlight.set(sessionId, operation);
     try {
       await operation;

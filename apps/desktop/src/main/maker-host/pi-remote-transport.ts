@@ -131,6 +131,18 @@ export async function resolveRemotePiBinaryPath(host: RemoteHost): Promise<strin
  * 删走 rm。pi 进程在远端读这些文件,host 侧必须把写/读/删落到远端机器。
  */
 export function createRemotePiFileOps(remoteHost: RemoteHost): PiRemoteFileOps {
+  async function readBounded(file: string, maxBytes: number, fromEnd: boolean): Promise<string> {
+    const boundedBytes = Math.max(1, Math.min(Math.trunc(maxBytes), 4_194_304));
+    const script = `P=${shellQuote(file)}; case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\$HOME}" != "$P" ] && P="\${H}\${P#\\$HOME}";; esac; [ -f "$P" ] || exit 44; ${fromEnd ? 'tail' : 'head'} -c ${boundedBytes} "$P"`;
+    const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
+      timeoutMs: 10_000,
+      label: 'agent-remote-read-file',
+    });
+    if (result.exitCode !== 0) {
+      throw new Error(`remote read failed (exit ${result.exitCode})`);
+    }
+    return result.stdout;
+  }
   return {
     async mkdirp(dir: string): Promise<void> {
       // 轮 22 CRITICAL:远端 agentHome 是字面 $HOME/... —— 必须用**远端** HOME
@@ -220,18 +232,8 @@ fi
       throw new Error('remote stat returned an invalid response');
     },
 
-    async readFile(file: string, maxBytes = 1_048_576): Promise<string> {
-      const boundedBytes = Math.max(1, Math.min(Math.trunc(maxBytes), 4_194_304));
-      const script = `P=${shellQuote(file)}; case "$P" in '$HOME'/*) H=$(printf '%s' "$HOME"); [ "\${P#\\$HOME}" != "$P" ] && P="\${H}\${P#\\$HOME}";; esac; [ -f "$P" ] || exit 44; head -c ${boundedBytes} "$P"`;
-      const result = await remoteHost.exec(`bash -c ${shellQuote(script)}`, {
-        timeoutMs: 10_000,
-        label: 'agent-remote-read-file',
-      });
-      if (result.exitCode !== 0) {
-        throw new Error(`remote read failed (exit ${result.exitCode})`);
-      }
-      return result.stdout;
-    },
+    readFile: (file, maxBytes = 1_048_576) => readBounded(file, maxBytes, false),
+    readFileTail: (file, maxBytes) => readBounded(file, maxBytes, true),
 
     async sha256File(file: string): Promise<string> {
       const script = [

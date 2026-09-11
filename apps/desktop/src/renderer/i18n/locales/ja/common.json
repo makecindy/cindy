@@ -7157,6 +7157,7 @@
     }
   },
   "bots": {
+    "creationName": "名前",
     "settingsBack": "設定に戻る",
     "sidebar": {
       "newTaskWith": "{{name}}と新しいタスクを始める"
@@ -7164,28 +7165,7 @@
     "title": "仲間",
     "add": "仲間を追加",
     "createWizard": {
-      "createFailed": "仲間を作成できませんでした。もう一度お試しください。",
-      "templates": {
-        "cindy": {
-          "title": "Cindy アシスタント",
-          "defaultName": "Cindy",
-          "defaultDescription": "忙しい毎日を少し整えることと、新しいアイデアを聞くことが好きです。文章も調べものも、日々のちょっとしたことも一緒に考えましょう。"
-        },
-        "dash": {
-          "title": "Dash 会社 CEO",
-          "defaultName": "Dash",
-          "defaultDescription": "よい製品やビジネスに興味津々です。可能性をじっくり話し合って、一緒に決めていくのが好きです。"
-        },
-        "lizi": {
-          "title": "LiZi 技術責任者",
-          "defaultName": "LiZi",
-          "defaultDescription": "難しい問題を解きほぐし、アイデアを形にするのが好きです。困ったときは一緒に答えを探しましょう。"
-        },
-        "custom": {
-          "title": "カスタム"
-        }
-      },
-      "chooseTemplate": "誰を招待しますか"
+      "createFailed": "仲間を作成できませんでした。もう一度お試しください。"
     },
     "homeFolder": {
       "title": "詳細設定",
@@ -7418,6 +7398,47 @@
       "toolset": "組み込みツール",
       "unavailable": "利用不可",
       "empty": "一致する機能はありません"
+    },
+    "guided": {
+      "title": "パートナーを作成",
+      "reviewTitle": "新しいパートナー",
+      "question": "期待することを簡単に書いてください。",
+      "placeholder": "例えば、日常の話をしながら英会話を練習して、表現を丁寧に直してほしい。",
+      "generate": "パートナーを生成",
+      "generating": "パートナーを考えています…",
+      "generationFailed": "生成できませんでした。入力内容は残っています。もう一度お試しください。",
+      "modelRequired": "まず Cindy で利用可能な既定のモデルを選択してください。",
+      "cindyDescription": "Cindy の使い方やツールの接続をお手伝いし、一緒にやり遂げます。",
+      "cindySummary": "Cindy の管理、ツールの接続、仕事のお手伝い。",
+      "openCindy": "Cindy を開く",
+      "addCindy": "Cindy を追加",
+      "done": "完了",
+      "editName": "名前を編集",
+      "duplicateName": "同じ名前のパートナーがいます。区別しやすい名前を選んでください。",
+      "introduction": "自己紹介",
+      "editIntroduction": "自己紹介を編集",
+      "refine": "パートナーを調整",
+      "refinePlaceholder": "何を変えたいですか？例えば、もっと気さくでユーモアのある感じに。",
+      "back": "戻る",
+      "invite": "パートナーを招待",
+      "portrait": "アバター {{number}}",
+      "upload": "画像をアップロード",
+      "generateAvatar": "アバターを生成",
+      "useAvatar": "この画像を使う",
+      "examples": {
+        "english": {
+          "label": "英会話の練習",
+          "prompt": "日常の会話で英語を練習したい。辛抱強く聞いて、不自然な表現を丁寧に直してほしい。"
+        },
+        "ideas": {
+          "label": "アイデアを考える",
+          "prompt": "想像力と自分の意見を持つ創作パートナー。文章や製品のアイデアを具体的な計画にしてほしい。"
+        },
+        "life": {
+          "label": "日々の話",
+          "prompt": "温かくユーモアがあり、すぐに助言せず日々の小さな話を聞いてくれるパートナー。"
+        }
+      }
     }
   },
   "common": {
