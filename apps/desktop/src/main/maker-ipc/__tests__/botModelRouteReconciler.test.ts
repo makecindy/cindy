@@ -144,3 +144,33 @@ it('selecting the current route cancels a different pending route instead of lea
   await h.reconcile.profileChanged('canonical');
   expect(h.apply).toHaveBeenCalledWith('canonical', h.state.current, h.state.current);
 });
+
+it('applies the latest saved selection even when the superseded switch fails', async () => {
+  const h = harness();
+  let fail!: (error: Error) => void;
+  h.apply.mockImplementationOnce(() => new Promise<undefined>((_resolve, reject) => { fail = reject; }));
+  const first = h.reconcile.profileChanged('canonical');
+  await vi.waitFor(() => expect(h.apply).toHaveBeenCalledOnce());
+  h.state.chain = [{ ...h.state.chain[0]!, model: 'working-model' }];
+  h.state.hasRuntimeOverride = true;
+  const second = h.reconcile.profileChanged('canonical');
+  fail(new Error('Old provider unavailable'));
+  await Promise.all([first, second]);
+  expect(h.apply).toHaveBeenCalledTimes(2);
+  expect(h.apply).toHaveBeenLastCalledWith('canonical', expect.objectContaining({ model: 'working-model' }), h.state.current);
+});
+
+it('does not retry a superseded failed switch after the account owner changes', async () => {
+  const h = harness();
+  let fail!: (error: Error) => void;
+  h.apply.mockImplementationOnce(() => new Promise<undefined>((_resolve, reject) => { fail = reject; }));
+  const first = h.reconcile.profileChanged('canonical');
+  await vi.waitFor(() => expect(h.apply).toHaveBeenCalledOnce());
+  h.state.chain = [{ ...h.state.chain[0]!, model: 'new-model' }];
+  const second = h.reconcile.profileChanged('canonical');
+  h.changeOwner();
+  const results = Promise.allSettled([first, second]);
+  fail(new Error('Old provider unavailable'));
+  expect((await results).map(result => result.status)).toEqual(['rejected', 'rejected']);
+  expect(h.apply).toHaveBeenCalledOnce();
+});

@@ -87,7 +87,16 @@ export function createBotModelRouteReconciler(deps: {
           route.effort !== current.effort ||
           route.fastMode !== current.fastMode
         ) {
-          await deps.apply(sessionId, route, state.current);
+          try {
+            await deps.apply(sessionId, route, state.current);
+          } catch (error) {
+            // A failed obsolete selection must not discard a newer explicit save.
+            // Re-read its route and runtime state; never retry the same failure
+            // indefinitely or continue applying after the account owner changes.
+            if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
+            if ((revisions.get(sessionId) ?? 0) !== revision) continue;
+            throw error;
+          }
         }
         if (deps.ownerEpoch() !== epoch) throw new Error('Bot model route owner changed');
         if ((revisions.get(sessionId) ?? 0) !== revision) continue;
