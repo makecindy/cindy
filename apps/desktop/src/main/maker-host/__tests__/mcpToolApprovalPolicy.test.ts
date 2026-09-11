@@ -50,6 +50,7 @@ describe('desktop Claude read-only allowlist', () => {
       'mcp__cindy__ghost_list',
       'mcp__cindy__ghost_info',
       'mcp__cindy__ghost_manual',
+      'mcp__cindy__ghost_market_search',
       'mcp__cindy__ghost_forge_guide',
       'mcp__cindy_browser__list_tools',
       'mcp__cindy_android__list_tools',
@@ -425,5 +426,13 @@ describe('desktop MCP approval policy', () => {
         toolParams: { name: 'browser', args: { action: 'navigate', url: 'https://example.com' } },
       }),
     ).toBe('auto-approve');
+  });
+});
+
+describe('Cindy market action authorization', () => {
+  it('allows catalog discovery but reviews each selected installation', () => {
+    expect(getDesktopMcpToolApprovalPolicy({serverName: 'cindy', toolName: 'ghost_market_search'})).toBe('auto-approve');
+    expect(getDesktopMcpToolApprovalPolicy({serverName: 'cindy', toolName: 'ghost_market_install'})).toBe('prompt-each-time');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy__ghost_market_install');
   });
 });

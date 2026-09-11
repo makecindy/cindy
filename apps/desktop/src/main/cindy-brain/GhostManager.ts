@@ -2593,6 +2593,8 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      /** Synchronous live-authority check immediately before publishing the staged package. */
+      beforePackagePlacement?: () => void;
     },
   ) {
     return this.runExclusiveMutation(() => this.installUnlocked(lizFilePath, opts));
@@ -2605,6 +2607,7 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      beforePackagePlacement?: () => void;
     },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
     // 装入初始启用态由调用方决定；缺省 true 保持既有调用方语义不变。
@@ -2694,6 +2697,15 @@ export class GhostManager {
         ...(clearBuiltinTombstoneOnCommit ? { clearBuiltinTombstone: true } : {}),
       });
       this.untrustedApprovals.add(this.isolationKey(manifest.id));
+      try {
+        opts?.beforePackagePlacement?.();
+      } catch (error) {
+        // No package bytes were published. Clear the prepared journal so a
+        // cancelled request cannot leave an installation waiting for recovery.
+        await this.receiptStore.clearPendingMutation(manifest.id);
+        this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+        throw error;
+      }
       await fs.promises.rename(stagingDir, finalDir);
       try {
         receipt = createGhostInstallReceipt({

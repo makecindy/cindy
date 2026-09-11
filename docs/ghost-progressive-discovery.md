@@ -95,6 +95,15 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 复用同账号已有插件。伙伴内置工具集的冻结名单不适用于插件 ID，插件仍由 §4 的实时可见性与
 调用授权守门。
 
+已安装插件无法满足请求时，伙伴经 `ghost_market_search` 查询 Cindy 服务端市场与用户配置的
+自定义市场；不以 Skill/MCP 搜索或模型供应商 Apps 市场代替。搜索只发现目录，不触发默认
+安装、更新、移除或账本修复。结果区分已装状态、实时可用性和来源不可用，失败不能解释为
+能力不存在。选定缺失插件后，`ghost_market_install` 绑定真实 plugin/release，复用现有
+安装事务与当前 Agent 操作授权；既有安装不重装、不启用、不换源。安装不等于登录，仍须
+经 `ghost_info` 与现有 `connect_account` / setup 链路连接，再续接原请求。宿主没有市场
+工具时如实说明并引导可信桌面插件页。实现见 `plugin-market/agentTools.ts`，回归覆盖
+`agentTools.test.ts`、市场 service 测试与 `ghostWorkdirGate.test.ts`。
+
 ### 3.3 快照语义
 
 - 花名册在**会话装配时求值一次，会话内恒定**——这是 prompt 前缀缓存安全的前提，
