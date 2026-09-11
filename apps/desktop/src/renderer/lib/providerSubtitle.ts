@@ -7,8 +7,10 @@ const AGENT_DISPLAY_LABELS: Record<AgentKind, string> = {
   'grok-build': 'Grok Build',
 };
 
+type ProviderSubtitleView = Pick<ProviderView, 'agents'> & Partial<Pick<ProviderView, 'id'>>;
+
 export function providerAgentSupportLabel(
-  provider?: Pick<ProviderView, 'id' | 'agents'> | null,
+  provider?: ProviderSubtitleView | null,
 ): string {
   if (!provider?.agents.length) return '';
   const agents = [...provider.agents];
@@ -21,7 +23,7 @@ export function providerAgentSupportLabel(
 }
 
 export function providerSubtitleForDisplay(
-  provider: Pick<ProviderView, 'id' | 'agents'> | null | undefined,
+  provider: ProviderSubtitleView | null | undefined,
   modelLabel: string,
   options?: {
     suffix?: string | null;
