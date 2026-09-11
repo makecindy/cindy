@@ -1,6 +1,7 @@
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
 import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-mirror';
 import Database from 'better-sqlite3';
+import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator';
 import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
 import { authorizeSessionQueueItem, rebuildSessionQueueItem } from '../../../maker-ipc/sessionControlService';
 import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
@@ -3244,6 +3245,8 @@ describe('Bot Session task end-to-end runtime', () => {
     prepareWorktree?: Parameters<typeof createBotDelegationService>[0]['prepareWorktree'];
     taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
     taskControl?: boolean;
+    queueSnapshots?: Map<string, AgentInputQueuedMessage[]>;
+    onNativeStarted?: (sessionId: string) => void;
     appliedOnResume?: () => string[];
     reconcileWorktree?: Parameters<typeof createBotDelegationService>[0]['reconcileWorktree'];
     stopUnsupported?: boolean;
@@ -3305,7 +3308,7 @@ describe('Bot Session task end-to-end runtime', () => {
      * dispatchBotSessionMessage → sendToSessionInternal）。判据顺序刻意与真机一致：
      * 任何一条在真机上会挡住会话启动的门，这里也必须挡住。
      */
-    const dispatch = vi.fn(async (params: {
+    const dispatchDirect = vi.fn(async (params: {
       targetSessionId: string;
       dispatcherSessionId?: string;
       message: string;
@@ -3391,7 +3394,57 @@ describe('Bot Session task end-to-end runtime', () => {
       };
     });
 
-    const abortSession = vi.fn(async (): Promise<void> => undefined);
+    // Use the production coordinator for resume durability tests. The normal
+    // dispatch fixture above deliberately models only the native send boundary.
+    const acceptedCallbacks = new Map<string, () => void | Promise<void>>();
+    const coordinator = options.queueSnapshots ? new AgentInputCoordinator({
+      isTurnRunning: id => pendingTurns.some(turn => turn.sessionId === id && !turn.queued),
+      hasPendingInteraction: () => false,
+      getAgentKind: () => 'pi',
+      getSdkSessionId: async () => undefined,
+      emitProjection: () => undefined,
+      steerToAgent: async () => undefined,
+      abortSession: async () => undefined,
+      persistQueueSnapshot: (id, items) => { options.queueSnapshots!.set(id, structuredClone(items)); },
+      loadQueueSnapshot: async id => options.queueSnapshots!.get(id) ?? [],
+      getPersistedClientIds: async (id, ids) => new Set(ids.filter(clientId => hasMessage(id, clientId))),
+      sendToAgent: async (id, _message, _opts, sendOpts) => {
+        const persisted = sendOpts.persistUserMessage;
+        if (!persisted) throw new Error('Missing coordinator user row');
+        writeMessage(id, persisted.clientId, 'user', persisted.content);
+        await persisted.onPersisted?.();
+        const row = readSession(id)!;
+        started.push({ sessionId: id, ...row });
+        h.sqlite!.prepare('UPDATE sessions SET active_turn_started_at = ? WHERE id = ?').run(currentTime, id);
+        pendingTurns.push({ sessionId: id, queued: false });
+        options.onNativeStarted?.(id);
+        return { kind: 'session-dispatch', source: 'fixture-native-turn', dispatched: true };
+      },
+      onAcceptedQueuedMessage: async (_id, item) => { await acceptedCallbacks.get(item.clientId)?.(); },
+    }) : undefined;
+    const dispatch = vi.fn(async (params: Parameters<typeof dispatchDirect>[0]) => {
+      if (coordinator) {
+        await coordinator.ensureQueueRestored(params.targetSessionId);
+        // Same admission decision as sendToSessionInternal, before any native
+        // send or persisted client-ID receipt exists.
+        if (coordinator.shouldQueueNewTurn(params.targetSessionId)) {
+          const clientId = params.clientId ?? `queued-${++seq}`;
+          if (params.onAccepted) acceptedCallbacks.set(clientId, params.onAccepted);
+          coordinator.enqueue(params.targetSessionId, {
+            clientId, text: params.message, persistedContent: params.persistedContent ?? params.message,
+            model: 'grok-4.5', effort: 'high', permissionMode: 'default', workingDir: h.userDataDir,
+            chatMessage: { clientId, role: 'user', content: params.message,
+              isStreaming: false, createdAt: new Date(currentTime).toISOString() },
+            createOpts: { agentKind: 'pi', workingDir: h.userDataDir, model: 'grok-4.5',
+              permissionMode: 'default', userPrompt: '', makerMemoryEnabled: false, displayReasoning: 'summarized' },
+          });
+          return { ok: true as const, targetSessionId: params.targetSessionId, wakeKind: 'queued' as const };
+        }
+      }
+      return dispatchDirect(params);
+    });
+
+    const abortSession = vi.fn(async (id: string): Promise<void> => { coordinator?.stop(id); });
     const steer = vi.fn<NonNullable<Parameters<typeof createBotDelegationService>[0]['taskControl']>['steer']>(async () => options.steerUnsupported
       ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No same-turn steer' }
       : { ok: true as const, queuedMessageId: 'steered-message' });
@@ -3412,13 +3465,14 @@ describe('Bot Session task end-to-end runtime', () => {
         isActive: (id: string) => pendingTurns.some((turn) => turn.sessionId === id && !turn.queued),
         holdInput: (id: string, held: boolean) => {
           if (held) heldInputs.add(id); else heldInputs.delete(id);
+          coordinator?.setExecutionPaused(id, held);
           return held ? [] : options.appliedOnResume?.() ?? [];
         },
         waitForInputBoundary,
         preparePause,
-        restoreInput: async () => undefined,
+        restoreInput: async id => { await coordinator?.ensureQueueRestored(id); },
         flushInput,
-        resumeInput: async () => undefined,
+        resumeInput: async id => { coordinator?.resume(id); },
       } } : {}),
       readCallerRuntime: options.readCallerRuntime,
       readCallerPermission: options.readCallerPermission,
@@ -3427,7 +3481,7 @@ describe('Bot Session task end-to-end runtime', () => {
       closeSession: vi.fn(async () => undefined),
       broadcastSessionCreated: vi.fn(),
       resolveInteraction: options.resolveInteraction,
-      hasPendingInput: (sessionId) => pendingTurns.some(
+      hasPendingInput: (sessionId) => coordinator?.hasPendingQueuedWork(sessionId) || pendingTurns.some(
         (turn) => turn.sessionId === sessionId && turn.queued,
       ),
       onChanged: (payload) => {
@@ -3466,6 +3520,7 @@ describe('Bot Session task end-to-end runtime', () => {
         `UPDATE sessions SET total_token_usage = total_token_usage + 100,
            last_turn_ended_at = ? WHERE id = ?`,
       ).run(currentTime, sessionId);
+      coordinator?.onTurnEvent(sessionId, 'done');
       await delegation.settleSession({
         childSessionId: sessionId,
         outcome: 'done',
@@ -3474,7 +3529,7 @@ describe('Bot Session task end-to-end runtime', () => {
     };
 
     return {
-      delegation,
+      delegation, coordinator,
       heldInputs, steer, stopTurn, waitForInputBoundary, preparePause, flushInput,
       dispatch,
       abortSession,
@@ -3484,6 +3539,7 @@ describe('Bot Session task end-to-end runtime', () => {
       settleChild,
       dispose: () => {
         delegation.dispose();
+        if (coordinator) for (const id of options.queueSnapshots!.keys()) coordinator.setExecutionPaused(id, true);
       },
       advance: (ms: number) => {
         currentTime += ms;
@@ -4193,7 +4249,7 @@ describe('Bot Session task end-to-end runtime', () => {
           restored.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }),
           restored.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }),
         ]);
-        expect(results.filter((result) => result.ok)).toHaveLength(1);
+        expect(results.filter((result) => result.ok)).toHaveLength(2); // Same resume receipt; only one dispatch.
         expect(restored.started.map((turn) => turn.sessionId)).toEqual([sessionId]);
         const after = await restored.delegation.getSessionTask('session-1', taskId);
         if (!before.ok || !after.ok) throw new Error('missing task');
@@ -4415,6 +4471,173 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(after.task.pendingInteraction).toBeNull();
       expect(runtime.started.filter((turn) => turn.sessionId === started.childSessionId)).toHaveLength(1);
     } finally { runtime.dispose(); }
+  });
+
+  /** Commit the real SQLite update, then lose only its worker acknowledgement. */
+  function loseResumeCommitReceipt(readbackUnavailable: boolean) {
+    const update = h.db!.update.bind(h.db!);
+    return vi.spyOn(h.db!, 'update').mockImplementation(table => {
+      const builder = update(table);
+      const set = builder.set.bind(builder);
+      builder.set = values => {
+        const query = set(values);
+        if (table === botDelegations && JSON.stringify(values).includes('taskResume')) {
+          const returning = query.returning.bind(query);
+          query.returning = (fields?: Parameters<typeof returning>[0]) => {
+            const result = fields ? returning(fields) : returning();
+            result.all();
+            if (readbackUnavailable) vi.spyOn(h.db!, 'select').mockImplementationOnce(() => {
+              throw new Error('fixture readback unavailable');
+            });
+            throw new Error('fixture commit acknowledgement lost');
+          };
+        }
+        return query;
+      };
+      return builder;
+    });
+  }
+
+  const flushTaskQueue = async () => {
+    for (let i = 0; i < 30; i++) await new Promise<void>(resolve => setImmediate(resolve));
+  };
+
+  it.each(['retry', 'restart', 'cancel'] as const)('retains an idle resume behind the real queue barrier on DB failure, then handles %s', async recovery => {
+    await seedPair();
+    const queueSnapshots = new Map<string, AgentInputQueuedMessage[]>();
+    const runtime = createDelegationRuntime({ taskControl: true, queueSnapshots });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Do each action once.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(task.childSessionId, 'Stopped before continuing.');
+      runtime.advance(1_000);
+      h.sqlite!.exec("CREATE TEMP TRIGGER fail_resume_commit BEFORE UPDATE OF permission_snapshot_json ON bot_delegations WHEN json_extract(NEW.permission_snapshot_json, '$.taskPause') IS NULL BEGIN SELECT RAISE(FAIL, 'fixture resume DB unavailable'); END");
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'RESUME_FAILED' });
+      await flushTaskQueue();
+      expect(runtime.started).toHaveLength(1);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+      expect(queueSnapshots.get(task.childSessionId)).toHaveLength(1);
+      const retainedId = queueSnapshots.get(task.childSessionId)![0].clientId;
+      expect(h.sqlite!.prepare('SELECT 1 FROM messages WHERE client_id = ?').get(retainedId)).toBeUndefined();
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { control: { state: 'paused' }, completed_at: null } });
+      h.sqlite!.exec('DROP TRIGGER fail_resume_commit');
+      if (recovery === 'cancel') {
+        expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true });
+        await flushTaskQueue();
+        expect(runtime.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(1);
+        expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: false });
+        expect(queueSnapshots.get(task.childSessionId) ?? []).toHaveLength(0);
+        return;
+      }
+      if (recovery === 'restart') {
+        runtime.dispose();
+        const restored = createDelegationRuntime({ taskControl: true, queueSnapshots, startTime: 12_000 });
+        try {
+          await restored.delegation.restore();
+          await flushTaskQueue();
+          expect(restored.started).toHaveLength(0);
+          expect(await restored.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+          await flushTaskQueue();
+          expect(restored.started).toHaveLength(1);
+          await restored.settleChild(task.childSessionId, 'Restored continuation completed.');
+          expect(await restored.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ task: { status: 'completed' } });
+        } finally { restored.dispose(); }
+        return;
+      }
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      await flushTaskQueue();
+      expect(runtime.started).toHaveLength(2);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(false);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      await flushTaskQueue();
+      expect(runtime.started).toHaveLength(2);
+      await runtime.settleChild(task.childSessionId, 'The resumed work is complete.');
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: 'completed', result: 'The resumed work is complete.' } });
+    } finally {
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_resume_commit');
+      runtime.dispose();
+    }
+  });
+
+  it('keeps a completion emitted immediately as the resume barrier opens', async () => {
+    await seedPair();
+    let childId = '';
+    let completion: Promise<void> | undefined;
+    const runtime = createDelegationRuntime({ taskControl: true, queueSnapshots: new Map(),
+      onNativeStarted: id => {
+        if (id === childId) completion = runtime.settleChild(id, 'Immediate resumed completion.');
+      },
+    });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish without duplication.' });
+      if (!task.ok) throw new Error('missing task');
+      childId = task.childSessionId;
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(childId, 'Stopped.');
+      runtime.advance(1_000);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      await flushTaskQueue();
+      expect(completion).toBeDefined();
+      await completion;
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: 'completed', result: 'Immediate resumed completion.' } });
+      expect(runtime.started.filter(turn => turn.sessionId === childId)).toHaveLength(2);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['readback', 'retry', 'restore', 'restart'] as const)('recovers a committed resume after receipt loss through %s without replaying work', async recovery => {
+    await seedPair();
+    const queueSnapshots = new Map<string, AgentInputQueuedMessage[]>();
+    const runtime = createDelegationRuntime({ taskControl: true, queueSnapshots });
+    let restored: ReturnType<typeof createDelegationRuntime> | undefined;
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Continue exactly once.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      await runtime.settleChild(task.childSessionId, 'Stopped.');
+      runtime.advance(1_000);
+      const fault = loseResumeCommitReceipt(recovery !== 'readback');
+      const result = await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' });
+      fault.mockRestore();
+      await flushTaskQueue();
+      expect(result).toMatchObject({ ok: recovery === 'readback' });
+      if (recovery !== 'readback') {
+        expect(runtime.started).toHaveLength(1);
+        expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+        expect(queueSnapshots.get(task.childSessionId)).toHaveLength(1);
+        expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+          .toMatchObject({ task: { control: { state: 'resuming', queue_held: true } } });
+      }
+      if (recovery === 'retry') {
+        expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      } else if (recovery === 'restore') {
+        await runtime.delegation.restore();
+      } else if (recovery === 'restart') {
+        runtime.dispose();
+        restored = createDelegationRuntime({ taskControl: true, queueSnapshots, startTime: 11_000 });
+        await restored.delegation.restore();
+      }
+      await flushTaskQueue();
+      const active = restored ?? runtime;
+      expect(active.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(restored ? 1 : 2);
+      const dispatchCount = active.dispatch.mock.calls.length;
+      expect(await active.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume', text: 'Different input' }))
+        .toMatchObject({ ok: false, errorCode: 'RESUME_INPUT_CHANGED' });
+      expect(await active.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' })).toMatchObject({ ok: true });
+      expect(active.dispatch).toHaveBeenCalledTimes(dispatchCount);
+      await active.settleChild(task.childSessionId, 'One completed continuation.');
+      expect(await active.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: 'completed', result: 'One completed continuation.' } });
+      const afterCompletion = createDelegationRuntime({ taskControl: true, queueSnapshots, startTime: 12_000 });
+      try {
+        await afterCompletion.delegation.restore();
+        expect(afterCompletion.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(0);
+      } finally { afterCompletion.dispose(); }
+    } finally { vi.restoreAllMocks(); restored?.dispose(); runtime.dispose(); }
   });
 
   it('uses native steer and graceful stop without queueing or finishing the task', async () => {

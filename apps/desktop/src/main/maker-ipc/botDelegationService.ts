@@ -2694,13 +2694,16 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const taskControlView = (row: DelegationRow) => {
     const pause = isActiveDelegation(row.status as DelegationStatus) ? readTaskPause(row) : null;
     const cancelling = isActiveDelegation(row.status as DelegationStatus) && parseRecord(row.permissionSnapshotJson).taskCancelRequested === true;
+    const resuming = !pause && isActiveDelegation(row.status as DelegationStatus)
+      && !!row.childSessionId && heldSessionIds.has(row.childSessionId)
+      && !!parseRecord(row.permissionSnapshotJson).taskResume;
     return {
-      state: cancelling ? 'cancelling' : pause
+      state: cancelling ? 'cancelling' : resuming ? 'resuming' : pause
         ? (row.childSessionId && deps.taskControl?.isActive(row.childSessionId)
           ? 'pausing' : 'paused')
         : isActiveDelegation(row.status as DelegationStatus) ? 'active' : 'terminal',
       paused_at: pause?.pausedAt ?? null,
-      queue_held: !!pause || cancelling,
+      queue_held: !!pause || cancelling || resuming,
       // Historical receipt only: request-stop never freezes or replays a turn.
       last_stop_request: parseRecord(row.permissionSnapshotJson).taskStopRequest ?? null,
       stop_status: row.childSessionId && deps.taskControl
@@ -2717,9 +2720,52 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     return paused;
   };
 
+  /** Release only a committed resume; repeat receipts never enqueue a second turn. */
+  const finishTaskResume = async (row: DelegationRow) => {
+    if (!row.childSessionId || !deps.taskControl) throw new Error('Missing task input control');
+    let status = row.status as DelegationStatus;
+    const control = deps.taskControl;
+    const pending = pendingInteractions.get(row.id);
+    if (pending) pending.raisedAt = row.updatedAt;
+    holdTaskInput(row.childSessionId, false);
+    if (pending?.decisionApplied) {
+      // Native settlement callbacks are serialized behind this operation. Apply
+      // their bookkeeping now using the synchronous resolver receipt.
+      await handleInteractionEndUnserialized(row.childSessionId, pending.request);
+      status = 'running';
+    }
+    const awaitingInteraction = pending && !pending.decisionApplied ? pending : null;
+    await control.resumeInput(row.childSessionId);
+    if (awaitingInteraction) await notifyRequesterOfInteraction(row, awaitingInteraction);
+    else {
+      const deadline = readDeadline(row.permissionSnapshotJson);
+      if (deadline !== null) scheduleTimeout(row.id, deadline);
+    }
+    emitChanged({ delegationId: row.id, parentSessionId: row.parentSessionId,
+      childSessionId: row.childSessionId, status,
+      pendingInteraction: awaitingInteraction ? pendingInteractionView(awaitingInteraction) : null });
+    return { ok: true as const, childSessionId: row.childSessionId, resumed: true,
+      delivery: awaitingInteraction ? 'awaiting-interaction' : pending?.decisionApplied ? 'interaction' : 'queued',
+      control: { state: 'active', queue_held: false } };
+  };
+
   const resumeTask = async (row: DelegationRow, text?: string) => {
     const pause = readTaskPause(row);
     const control = deps.taskControl;
+    const receipt = parseRecord(row.permissionSnapshotJson).taskResume as { token?: string; text?: string } | undefined;
+    if (!pause && receipt?.token && control && row.childSessionId && isActiveDelegation(row.status as DelegationStatus)) {
+      if ((text?.trim() ?? '') !== (receipt.text ?? '')) {
+        return { ok: false as const, errorCode: 'RESUME_INPUT_CHANGED', message: 'This pause has already resumed with different input' };
+      }
+      // A lost DB acknowledgement can leave the local barrier held even though
+      // the queue and resume are durable. Finish that transition without dispatch.
+      if (heldSessionIds.has(row.childSessionId)) {
+        await control.restoreInput(row.childSessionId);
+        return finishTaskResume(row);
+      }
+      return { ok: true as const, childSessionId: row.childSessionId, resumed: true,
+        delivery: 'accepted', control: taskControlView(row) };
+    }
     if (!pause || !control || !row.childSessionId || !isActiveDelegation(row.status as DelegationStatus)) {
       return { ok: false as const, errorCode: 'NOT_PAUSED', message: 'Task has no resumable pause' };
     }
@@ -2733,14 +2779,17 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     }
     const validation = await validateDispatchPlan(row);
     if (!validation.ok) return validation;
+    // Reassert the durable hold before restore/dispatch, including a cold caller.
+    holdTaskInput(row.childSessionId, true);
     await control.restoreInput(row.childSessionId);
     const resumedAt = now();
     const snapshot = parseRecord(extendDeadlineSnapshot(row.permissionSnapshotJson,
       Math.max(0, resumedAt - pause.pausedAt)) ?? row.permissionSnapshotJson);
     delete snapshot.taskPause;
     snapshot.taskResumedAt = resumedAt;
+    snapshot.taskResume = { token: pause.token, text: text?.trim() ?? '' };
     let status: DelegationStatus = pending ? 'waiting' : pause.previousStatus === 'queued' ? 'queued' : 'running';
-    if (pending) pending.raisedAt = resumedAt;
+
     // Enqueue behind the held boundary before clearing the durable pause.
     try {
       if (status === 'queued') {
@@ -2761,34 +2810,32 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return { ok: false as const, errorCode: 'RESUME_FAILED', message: error instanceof Error ? error.message : String(error) };
     }
     // Keep the input barrier until the durable transition and continuation enqueue are complete.
-    const [resumed] = await getDbClient().drizzle.update(botDelegations).set({ status,
-      permissionSnapshotJson: JSON.stringify(snapshot),
-      pendingInteractionJson: pending ? JSON.stringify(pendingInteractionView(pending)) : null,
-      updatedAt: resumedAt,
-    }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.permissionSnapshotJson, row.permissionSnapshotJson),
-      inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES])))
-      .returning({ id: botDelegations.id });
-    if (!resumed) return { ok: false as const, errorCode: 'SESSION_TASK_STATE_CHANGED', message: 'Task changed before resume committed' };
-    holdTaskInput(row.childSessionId, false);
-    if (pending?.decisionApplied) {
-      // Native settlement callbacks are serialized behind this operation. Apply
-      // their bookkeeping now using the synchronous resolver receipt.
-      await handleInteractionEndUnserialized(row.childSessionId, pending.request);
-      status = 'running';
+    try {
+      const [resumed] = await getDbClient().drizzle.update(botDelegations).set({ status,
+        permissionSnapshotJson: JSON.stringify(snapshot),
+        pendingInteractionJson: pending ? JSON.stringify(pendingInteractionView({ ...pending, raisedAt: resumedAt })) : null,
+        updatedAt: resumedAt,
+      }).where(and(eq(botDelegations.id, row.id), eq(botDelegations.permissionSnapshotJson, row.permissionSnapshotJson),
+        inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES])))
+        .returning({ id: botDelegations.id });
+      if (!resumed) throw new Error('Task changed before resume committed');
+    } catch (error) {
+      // SQLite can commit before the worker/RPC receipt fails. Only release the
+      // barrier after reading the exact committed snapshot; otherwise leave the
+      // durable queue and pause token intact for an explicit retry.
+      let current: DelegationRow | undefined;
+      try {
+        [current] = await getDbClient().drizzle.select().from(botDelegations)
+          .where(eq(botDelegations.id, row.id)).limit(1);
+      } catch { /* An unavailable readback is not a commit receipt. */ }
+      if (!current || current.permissionSnapshotJson !== JSON.stringify(snapshot)
+        || !isActiveDelegation(current.status as DelegationStatus)) {
+        return { ok: false as const, errorCode: 'RESUME_FAILED',
+          message: error instanceof Error ? error.message : String(error) };
+      }
+      status = current.status as DelegationStatus;
     }
-    const awaitingInteraction = pending && !pending.decisionApplied ? pending : null;
-    await control.resumeInput(row.childSessionId);
-    if (awaitingInteraction) await notifyRequesterOfInteraction(row, awaitingInteraction);
-    else {
-      const deadline = readDeadline(JSON.stringify(snapshot));
-      if (deadline !== null) scheduleTimeout(row.id, deadline);
-    }
-    emitChanged({ delegationId: row.id, parentSessionId: row.parentSessionId,
-      childSessionId: row.childSessionId, status,
-      pendingInteraction: awaitingInteraction ? pendingInteractionView(awaitingInteraction) : null });
-    return { ok: true as const, childSessionId: row.childSessionId, resumed: true,
-      delivery: awaitingInteraction ? 'awaiting-interaction' : pending?.decisionApplied ? 'interaction' : 'queued',
-      control: { state: 'active', queue_held: false } };
+    return finishTaskResume({ ...row, status, updatedAt: resumedAt, permissionSnapshotJson: JSON.stringify(snapshot) });
   };
 
   const messageSessionTask = (callerSessionId: string, taskId: string, input: SessionTaskMessage) =>
@@ -3059,6 +3106,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         }
         if (readTaskPause(row)) {
           if (row.childSessionId) holdTaskInput(row.childSessionId, true);
+          return;
+        }
+        if (row.childSessionId && heldSessionIds.has(row.childSessionId)
+          && parseRecord(row.permissionSnapshotJson).taskResume) {
+          await deps.taskControl?.restoreInput(row.childSessionId);
+          await finishTaskResume(row);
           return;
         }
         if (row.status === 'queued') {
