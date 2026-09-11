@@ -356,10 +356,12 @@ it('allows explicitly choosing a backup when no valid default is available', () 
   defaultModel.model = '';
   const primary = { harness: 'codex' as const, model: 'primary-model', providerId: 'openai', effort: 'medium', fastMode: false };
   const change = vi.fn();
-  render(<BotModelChainEditor fallbackOnly value={[primary]} onChange={change} />);
-  expect(screen.queryByRole('button', { name: 'choose-official-codex-model' })).toBeNull();
+  const view = render(<BotModelChainEditor value={[primary]} onChange={change} />);
+  const details = view.container.querySelector('details')!;
+  details.open = true;
+  fireEvent(details, new Event('toggle'));
   fireEvent.click(screen.getByText('bots.modelChain.add'));
   expect(change).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('button', { name: 'choose-official-codex-model' }));
+  fireEvent.click(within(details).getByRole('button', { name: 'choose-official-codex-model' }));
   expect(change).toHaveBeenLastCalledWith([primary, { harness: 'codex', model: 'gpt-5.6-sol', providerId: 'openai', effort: 'medium', fastMode: true }]);
 });

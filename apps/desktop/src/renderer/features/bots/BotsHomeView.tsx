@@ -122,7 +122,6 @@ export function BotSettings({
     | 'profile'
     | 'personality'
     | 'model'
-    | 'fallback'
     | 'capabilities'
     | 'history'
     | 'advanced'
@@ -130,21 +129,19 @@ export function BotSettings({
   >('home');
   const routineLeaveRef = useRef<(() => Promise<boolean>) | null>(null);
   const pageTitle =
-    page === 'fallback'
-      ? t('bots.modelChain.options', { count: Math.max(0, displayedModelChain.length - 1) })
-      : page === 'model'
-        ? t('bots.settingsTabs.model')
-        : page === 'routines'
-          ? t('routines.title')
-          : page === 'history'
-            ? t('bots.historySearch.title')
-            : page === 'advanced'
-              ? t('bots.homeFolder.title')
-              : page === 'capabilities'
-                ? t('bots.capabilities.title')
-                : page === 'personality'
-                  ? t('bots.profile.personality')
-                  : t('bots.profile.title');
+    page === 'model'
+      ? t('bots.settingsTabs.model')
+      : page === 'routines'
+        ? t('routines.title')
+        : page === 'history'
+          ? t('bots.historySearch.title')
+          : page === 'advanced'
+            ? t('bots.homeFolder.title')
+            : page === 'capabilities'
+              ? t('bots.capabilities.title')
+              : page === 'personality'
+                ? t('bots.profile.personality')
+                : t('bots.profile.title');
   const [folderError, setFolderError] = useState<string | null>(null);
   const avatarInFlight = useRef(false);
   const [avatarBusy, setAvatarBusy] = useState(false);
@@ -336,11 +333,6 @@ export function BotSettings({
     ['profile', Info, t('bots.profile.title')],
     ['personality', UserRound, t('bots.profile.personality')],
     ['model', Sparkles, t('bots.settingsTabs.model')],
-    [
-      'fallback',
-      Settings2,
-      t('bots.modelChain.options', { count: Math.max(0, displayedModelChain.length - 1) }),
-    ],
     ['capabilities', Settings2, t('bots.capabilities.title')],
     ['routines', Clock3, t('routines.title')],
     ['history', History, t('bots.historySearch.title')],
@@ -493,13 +485,12 @@ export function BotSettings({
           />
         </div>
         <section
-          hidden={page !== 'model' && page !== 'fallback'}
+          hidden={page !== 'model'}
           className="pt-3"
           aria-label={t('bots.settingsTabs.model')}
         >
           <div data-testid="bot-model-controls" className="min-w-0">
             <BotModelChainEditor
-              fallbackOnly={page === 'fallback'}
               label={t('bots.settingsTabs.model')}
               hiddenVendors={hiddenVendors}
               onRestoreDefault={() => {

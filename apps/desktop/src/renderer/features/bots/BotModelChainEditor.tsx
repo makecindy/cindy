@@ -39,9 +39,7 @@ export function BotModelChainEditor({
   label,
   onRestoreDefault,
   onNavigateToProviders,
-  fallbackOnly = false,
 }: {
-  fallbackOnly?: boolean;
   value: BotModelRoute[];
   onChange: (next: BotModelRoute[]) => void;
   disabled?: boolean;
@@ -138,7 +136,7 @@ export function BotModelChainEditor({
   );
   return (
     <div className="min-w-0" data-testid="bot-model-chain-editor">
-      <div hidden={fallbackOnly && routes.length > 0} className="flex min-w-0 items-center gap-3">
+      <div className="flex min-w-0 items-center gap-3">
         {label ? (
           <span className="shrink-0 text-12 text-[var(--text-secondary)]">{label}</span>
         ) : null}
@@ -148,14 +146,13 @@ export function BotModelChainEditor({
         )}
       </div>
       <details
-        open={fallbackOnly || undefined}
         className="mt-1 text-12 text-[var(--text-tertiary)]"
         onToggle={(event) => setExpanded(event.currentTarget.open)}
       >
-        <summary hidden={fallbackOnly} className="cursor-pointer py-2">
+        <summary className="cursor-pointer py-2">
           {t('bots.modelChain.options', { count: Math.max(0, routes.length - 1) })}
         </summary>
-        {expanded || fallbackOnly ? (
+        {expanded ? (
           <div className="space-y-2 pt-2">
             {routes.slice(1).map((route, fallbackIndex) => {
               const index = fallbackIndex + 1;
