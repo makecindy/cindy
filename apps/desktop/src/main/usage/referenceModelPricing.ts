@@ -66,7 +66,6 @@ export function getCodexProviderSubscriptionValuePrice(
   if (providerId === 'xd') return undefined;
   const effective = getModelPriceQuote(pricing, providerId, modelId, agent);
   if (effective?.source === 'user-override') {
-    if (at === undefined) return effective;
     return (
       mergeStoredModelPriceOverride(
         { providerId, agent, modelId: effective.modelId },
@@ -104,29 +103,9 @@ export function getClaudeSubscriptionValuePrice(
   at?: string | Date,
   overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
-  const effective = getModelPriceQuote(pricing, 'anthropic', modelId, 'claude-code');
-  if (effective?.source === 'user-override') {
-    if (at === undefined) return effective;
-    return (
-      mergeStoredModelPriceOverride(
-        { providerId: 'anthropic', agent: 'claude-code', modelId: effective.modelId },
-        providerReferencePriceQuote(
-          'anthropic',
-          effective.modelId,
-          getActiveCatalog().modelRegistry,
-          { agent: 'claude-code', at, officialOnly: true },
-        ),
-        overrides,
-      ) ?? effective
-    );
-  }
-  const reference = providerReferencePriceQuote(
-    'anthropic',
-    modelId,
-    getActiveCatalog().modelRegistry,
-    { agent: 'claude-code', at, officialOnly: true },
+  return getCodexProviderSubscriptionValuePrice(
+    'anthropic', modelId, pricing, at, overrides, 'claude-code',
   );
-  return reference ?? ((getActiveCatalog().modelRegistry?.schemaVersion ?? 0) < 5 && at === undefined ? effective : undefined);
 }
 
 export function getSubscriptionDirectValuePrice(
@@ -143,7 +122,7 @@ export function getSubscriptionDirectValuePrice(
   const effective = getModelPriceQuote(pricing, routingQuote.providerId, modelId, agent);
   const quote =
     effective?.source === 'user-override'
-      ? at === undefined || agent === undefined
+      ? agent === undefined
         ? effective
         : (mergeStoredModelPriceOverride(
             { providerId: effective.providerId, agent, modelId: effective.modelId },
