@@ -98,6 +98,10 @@ export interface BotDelegationServiceDeps {
     resumeInput(sessionId: string): Promise<void>;
   };
   discardUnusedWorktree?: (sessionId: string) => Promise<void>;
+  getWorktree?: (sessionId: string) => { path: string } | null;
+  withTransferredWorktree?: <T extends { reopened: boolean }>(
+    previousSessionId: string, sessionId: string, worktreePath: string, commit: () => Promise<T>,
+  ) => Promise<T>;
   prepareWorktree?: (workingDir: string) => Promise<{ ok: true; sessionId: string; workingDir: string } | { ok: false; message: string }>;
   taskQueue?: {
     inspect(sessionId: string, callerSessionId: string): Promise<Array<{ queuedMessageId: string; consuming: boolean; message: string }>>;
@@ -2295,6 +2299,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .select({
         title: sessions.title,
         workingDir: sessions.workingDir,
+        worktreePath: sessions.worktreePath,
         workspaceKind: sessions.workspaceKind,
         model: sessions.model,
         effort: sessions.effort,
@@ -2321,6 +2326,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       };
     }
 
+    const worktreePath = deps.getWorktree?.(row.childSessionId)?.path ?? oldChild.worktreePath;
     const reopenedAt = now();
     const deadlineAt = reopenedAt + Math.min(MAX_TIMEOUT_MS, oldPlan.limits.timeoutMs);
     const nextPlan: BotDelegationPlanSnapshot = {
@@ -2347,7 +2353,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
         source: 'bot-delegation',
       });
-      const reopened = await getDbClient().tx('bots.reopenDelegation', {
+      const commitReopen = () => getDbClient().tx('bots.reopenDelegation', {
         maxActiveChildren,
         delegationId: row.id,
         requestingBotId: callerBotId,
@@ -2377,7 +2383,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           updatedAt: reopenedAt,
         },
         reopenedAt,
+        worktreePath,
       });
+      if (worktreePath && !deps.withTransferredWorktree) {
+        throw new Error('Task worktree transfer is unavailable');
+      }
+      const reopened = worktreePath
+        ? await deps.withTransferredWorktree!(row.childSessionId, childSessionId, worktreePath, commitReopen)
+        : await commitReopen();
       if (!reopened.reopened) {
         await deliverCompletion({
           ...row,

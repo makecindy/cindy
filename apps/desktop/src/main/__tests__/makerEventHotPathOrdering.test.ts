@@ -383,7 +383,7 @@ describe('maker:event hot path ordering', () => {
     );
     expect(source).toContain('out.push({ request: entry.request, persistId: entry.persistId });');
     expect(source).toContain(
-      'taken.push({ requestId, request: entry.request, resolve: entry.resolve });',
+      'taken.push({ requestId, request: entry.request, resolve:',
     );
   });
 

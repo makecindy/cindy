@@ -3239,6 +3239,8 @@ describe('Bot Session task end-to-end runtime', () => {
   }
 
   function createDelegationRuntime(options: {
+    getWorktree?: Parameters<typeof createBotDelegationService>[0]['getWorktree'];
+    withTransferredWorktree?: Parameters<typeof createBotDelegationService>[0]['withTransferredWorktree'];
     prepareWorktree?: Parameters<typeof createBotDelegationService>[0]['prepareWorktree'];
     taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
     taskControl?: boolean;
@@ -3399,6 +3401,8 @@ describe('Bot Session task end-to-end runtime', () => {
     const flushInput = vi.fn(async () => undefined);
     const delegation = createBotDelegationService({
       prepareWorktree: options.prepareWorktree,
+      getWorktree: options.getWorktree,
+      withTransferredWorktree: options.withTransferredWorktree,
       taskQueue: options.taskQueue,
       ...(options.taskControl ? { taskControl: {
         steer, stop: stopTurn,
@@ -3855,6 +3859,52 @@ describe('Bot Session task end-to-end runtime', () => {
         .toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
       expect(unavailable.started).toHaveLength(0);
     } finally { unavailable.dispose(); }
+  });
+
+  it('commits the worktree snapshot for each continuation and leaves no child when that transaction fails', async () => {
+    await seedPair();
+    const workspace = join(h.userDataDir, 'continued-worktree');
+    mkdirSync(workspace, { recursive: true });
+    let owner = 'worktree-first';
+    const runtime = createDelegationRuntime({
+      prepareWorktree: async () => ({ ok: true, sessionId: owner, workingDir: workspace }),
+      getWorktree: id => id === owner ? { path: workspace } : null,
+      withTransferredWorktree: async (previous, next, worktreePath, commit) => {
+        expect(previous).toBe(owner);
+        expect(worktreePath).toBe(workspace);
+        const result = await commit();
+        if (result.reopened) owner = next;
+        return result;
+      },
+    });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Preserve files.', workingDir: h.userDataDir, useWorktree: true });
+      if (!task.ok) throw new Error('task failed');
+      await runtime.settleChild(owner, 'First result.');
+      // The manager remains authoritative even if the display snapshot is absent.
+      h.sqlite!.prepare('UPDATE sessions SET worktree_path = NULL WHERE id = ?').run(owner);
+      h.sqlite!.exec("CREATE TEMP TRIGGER fail_reopen_binding BEFORE UPDATE OF worktree_path ON sessions BEGIN SELECT RAISE(FAIL, 'fixture transfer failure'); END");
+      const before = h.sqlite!.prepare('SELECT COUNT(*) AS count FROM sessions').get();
+      const startedBeforeFailure = runtime.started.length;
+      await expect(runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'Continue.' })).rejects.toThrow('fixture transfer failure');
+      expect(h.sqlite!.prepare('SELECT COUNT(*) AS count FROM sessions').get()).toEqual(before);
+      expect(runtime.started).toHaveLength(startedBeforeFailure);
+      expect(owner).toBe('worktree-first');
+      h.sqlite!.exec('DROP TRIGGER fail_reopen_binding');
+      for (let round = 0; round < 2; round++) {
+        const previous = owner;
+        const resumed = await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'Continue.' });
+        expect(resumed).toMatchObject({ ok: true, resumed: true });
+        expect(owner).not.toBe(previous);
+        expect(h.sqlite!.prepare('SELECT working_dir AS cwd, worktree_path AS path FROM sessions WHERE id = ?').get(owner))
+          .toEqual({ cwd: normalizeWorkingDirForStorage(workspace), path: workspace });
+        expect(runtime.started.at(-1)?.sessionId).toBe(owner);
+        await runtime.settleChild(owner, 'Next result.');
+      }
+    } finally {
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_reopen_binding');
+      runtime.dispose();
+    }
   });
 
   it('still publishes and dispatches a committed worktree task when its display snapshot fails', async () => {

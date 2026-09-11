@@ -201,7 +201,9 @@ harness + provider + model + effort + fastMode
 - `stop_session_task`：`mode=cancel`（默认）终止任务；`mode=request-stop` 只请求当前轮优雅停止，
   不承诺冻结下一轮；`mode=pause` 持久暂停同一执行任务，保留未消费输入与剩余执行期限。
   `control.state=pausing` 或 `stop_status=requested/unconfirmed` 不表示引擎已停；活跃执行仍在
-  等工具或确认时如实报告，确认空闲才返回 `paused`。等待中的交互保持原 resolver，恢复后才允许回答。
+  等工具或确认时如实报告，确认空闲才返回 `paused`。等待中的交互保持原 resolver，恢复后才允许推进引擎。
+  交互迁移到 IM 后仍受同一暂停与取消边界约束；暂停期间收到的渠道回答或安全超时决定暂存，
+  恢复后只生效一次，取消优先撤销暂存回答。渠道卡片的回答状态不表示引擎已恢复。
   这些模式都只作用于调用伙伴拥有的后台任务；通用 Session control 类不因此开放给伙伴。
   `check_session_task.control.last_stop_request` 保留最近一次优雅停止请求的时间、返回状态和轮次；
   它是历史回执，实际是否停稳仍看 `stop_status`，重启不会重放停止请求或冻结下一轮。
@@ -251,6 +253,8 @@ Session 任务遵守同一套机制与呈现契约：
 - 项目执行显式传 `working_dir`，可用 `use_worktree=true` 在启动前复用现有 worktree 管理器
   完成独立分支、目录与 Session 绑定；失败不得落回共享目录。只在 Shell 中新建 worktree
   不会修改任务登记或运行时 cwd；`check_session_task` 返回实际登记目录与项目归属。
+  终态续接复用既有目录和分支，并将 worktree 管理器归属及数据库快照迁到新执行任务；
+  新执行登记失败时恢复原归属，不回收工作成果。
 - 补充输入返回 `queued_message_id`；`check_session_task` 返回调用 Session 自己投递的队列，
   可按消息 ID 查询 queued / consuming / dispatched / not-found / unavailable。队列恢复失败时
   保留任务状态和结果，单独返回 `queue_error=QUEUE_UNAVAILABLE`；无法核实的消息不能报 not-found。

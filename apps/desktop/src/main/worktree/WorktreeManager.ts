@@ -616,6 +616,37 @@ export function getForSession(sessionId: string): WorktreeMeta | null {
   return store.get(sessionId);
 }
 
+/** Move ownership with the child-session transaction; never copy or recycle files. */
+export async function withTransferredSession<T extends { reopened: boolean }>(
+  previousSessionId: string,
+  sessionId: string,
+  worktreePath: string,
+  commit: () => Promise<T>,
+): Promise<T> {
+  return withWorktreeRestoreMutation(previousSessionId, () =>
+    withWorktreeRestoreMutation(sessionId, () =>
+      withWorktreeResourceLock(worktreePath, async () => {
+        const previous = store.get(previousSessionId);
+        if (!previous || path.resolve(previous.path) !== path.resolve(worktreePath)
+          || store.get(sessionId)) {
+          throw new Error('Worktree ownership changed; restore the previous task before continuing');
+        }
+        await store.replace(previousSessionId, sessionId, { ...previous, sessionId });
+        let committed = false;
+        try {
+          const result = await commit();
+          committed = result.reopened;
+          return result;
+        } finally {
+          // A failed/CAS-lost DB transaction must leave the previous task owning
+          // its existing branch and files. No destructive "unused worktree" cleanup.
+          if (!committed) await store.replace(sessionId, previousSessionId, previous);
+        }
+      }),
+    ),
+  );
+}
+
 export function listAll(): WorktreeMeta[] {
   return store.getAll();
 }

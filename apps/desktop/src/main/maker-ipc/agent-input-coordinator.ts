@@ -2126,8 +2126,13 @@ export class AgentInputCoordinator {
 
     try {
       const referenceContexts = await this.resolveReferenceContexts(item);
-      if (!matchesExpectedTurn()) {
-        const latest = this.getState(sessionId);
+      // A pause/Stop can arrive while references are being prepared. Recheck
+      // before crossing the provider boundary, including direct UI/IM callers.
+      const current = this.getState(sessionId);
+      if (!matchesExpectedTurn() || current.queueInteractionLocks.length > 0
+        || current.queueAbortPending || inputBoundarySignal.aborted || steerAbort.signal.aborted
+        || !this.isCurrentSteerRequest(current, item.clientId, steerGeneration, steerRequestToken)) {
+        const latest = current;
         if (
           this.clearSteeringMarker(latest, item.clientId, {
             generation: steerGeneration,
@@ -3182,6 +3187,9 @@ export class AgentInputCoordinator {
   /** A durable owner-controlled pause survives ordinary queue Resume/Stop. */
   setExecutionPaused(sessionId: string, paused: boolean): void {
     this.setInteractionLock(sessionId, 'execution-pause', paused, { preserveOnStop: true });
+    // Propagate the hold through async normalization/authorization in the Host
+    // adapter and harness, including steers already admitted before the pause.
+    if (paused) this.abortSteerTransactions(sessionId);
   }
 
   setInteractionLock(

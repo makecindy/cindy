@@ -2277,6 +2277,9 @@ interface PendingInteractionEntry {
   timeoutId?: ReturnType<typeof setTimeout>;
   timeoutDeadlineAt?: number;
   timeoutRemainingMs?: number;
+  /** IM owns presentation/timeouts; Host retains the execution and cancellation boundary. */
+  migrated?: boolean;
+  deferredDecision?: InteractionDecision;
 }
 
 const pendingInteractionResolvers = new Map<string, PendingInteractionEntry>();
@@ -2419,7 +2422,7 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
 
 /** Permission safety time counts only while its owning task can accept input. */
 function schedulePendingPermissionTimeout(requestId: string, entry: PendingInteractionEntry): void {
-  if (entry.kind !== 'permission' || entry.timeoutId !== undefined
+  if (entry.migrated || entry.kind !== 'permission' || entry.timeoutId !== undefined
     || pendingInteractionResolvers.get(requestId) !== entry
     || agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
   const remaining = entry.timeoutRemainingMs ?? PERMISSION_INTERACTION_TIMEOUT_MS;
@@ -2441,7 +2444,12 @@ function schedulePendingPermissionTimeout(requestId: string, entry: PendingInter
 
 function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean): void {
   for (const [requestId, entry] of pendingInteractionResolvers) {
-    if (entry.sessionId !== sessionId || entry.kind !== 'permission') continue;
+    if (entry.sessionId !== sessionId) continue;
+    if (!paused && entry.deferredDecision) {
+      resolvePendingInteraction(requestId, entry.deferredDecision);
+      continue;
+    }
+    if (entry.kind !== 'permission') continue;
     if (paused) {
       if (entry.timeoutId === undefined) continue;
       clearTimeout(entry.timeoutId);
@@ -2475,7 +2483,7 @@ type PendingInteractionSnapshotEntry = {
 function getPendingInteractionsForSession(sessionId: string): PendingInteractionSnapshotEntry[] {
   const out: PendingInteractionSnapshotEntry[] = [];
   for (const entry of pendingInteractionResolvers.values()) {
-    if (entry.sessionId === sessionId)
+    if (entry.sessionId === sessionId && !entry.migrated)
       out.push({ request: entry.request, persistId: entry.persistId });
   }
   out.push(
@@ -2746,7 +2754,7 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
   resolve: (decision: InteractionDecision) => void;
 }> {
   const entries = Array.from(pendingInteractionResolvers.entries()).filter(
-    ([, entry]) => entry.sessionId === sessionId,
+    ([, entry]) => entry.sessionId === sessionId && !entry.migrated,
   );
   const taken: Array<{
     requestId: string;
@@ -2754,8 +2762,19 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
     resolve: (decision: InteractionDecision) => void;
   }> = [];
   for (const [requestId, entry] of entries) {
-    clearPendingInteraction(requestId);
-    taken.push({ requestId, request: entry.request, resolve: entry.resolve });
+    // Transfer the UI, never the raw engine resolver. Keep cancellation and pause
+    // ownership here even after the IM registry consumes its one-shot answer.
+    if (entry.timeoutId) clearTimeout(entry.timeoutId);
+    entry.timeoutId = undefined;
+    entry.migrated = true;
+    taken.push({ requestId, request: entry.request, resolve: decision => {
+      if (pendingInteractionResolvers.get(requestId) !== entry || entry.deferredDecision) return;
+      if (agentInputCoordinatorHolder?.isExecutionPaused(sessionId)) {
+        entry.deferredDecision = decision;
+        return;
+      }
+      resolvePendingInteraction(requestId, decision);
+    } });
     handleAgentIslandInteractionDismissed(entry.sessionId, requestId);
     // resolvedAs 省略 — renderer 行 1537 默认 'deny', UI 上只是关掉对话框,
     // 跟我们这里"搬走"语义一致(没真选 allow/deny)。
@@ -9300,6 +9319,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       flushInput: awaitAgentInputQueueSnapshotPersistence,
       resumeInput: async (id) => { inputCoordinator.resume(id); },
     },
+    getWorktree: worktreeManager.getForSession,
+    withTransferredWorktree: worktreeManager.withTransferredSession,
     discardUnusedWorktree: async sessionId => {
       const [row] = await getDbClient().drizzle.select({ id: sessions.id }).from(sessions)
         .where(eq(sessions.id, sessionId)).limit(1);

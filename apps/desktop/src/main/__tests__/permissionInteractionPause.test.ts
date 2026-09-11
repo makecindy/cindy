@@ -153,6 +153,55 @@ describe('permission timeout follows the task pause lifecycle', () => {
     expect(h.dismiss).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['permission', 'ask_user_question', 'plan_review'] as const)('defers a migrated %s answer until resume and ignores duplicates', async kind => {
+    const h = harness();
+    const p = h.request(kind, 'task', kind);
+    const [taken] = h.take('task');
+    expect(h.take('task')).toEqual([]);
+    h.hold('task', true);
+    const answer: InteractionDecision = kind === 'ask_user_question'
+      ? { kind, answers: { choice: 'yes' } }
+      : { kind, behavior: 'allow' };
+    taken.resolve(answer);
+    taken.resolve({ kind: 'permission', behavior: 'deny' });
+    await vi.advanceTimersByTimeAsync(30 * MINUTE);
+    expect(p.settled).not.toHaveBeenCalled();
+    expect(h.entries.size).toBe(1);
+    h.hold('task', false);
+    await p.promise;
+    expect(p.settled).toHaveBeenCalledExactlyOnceWith(answer);
+    taken.resolve(answer);
+    expect(h.entries.size).toBe(0);
+  });
+
+  it.each(['session_aborted', 'session_closed'])('cancels a deferred migrated answer on %s', async reason => {
+    const h = harness();
+    const p = h.request();
+    const [taken] = h.take('task');
+    h.hold('task', true);
+    taken.resolve({ kind: 'permission', behavior: 'allow' });
+    h.cleanup('task', reason);
+    h.cleanup('task', reason);
+    h.hold('task', false);
+    taken.resolve({ kind: 'permission', behavior: 'allow' });
+    await vi.advanceTimersByTimeAsync(30 * MINUTE);
+    expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'deny', reason });
+    expect(h.entries.size).toBe(0);
+  });
+
+  it('defers the migrated channel safety timeout until resume', async () => {
+    const h = harness();
+    const p = h.request();
+    const [taken] = h.take('task');
+    h.hold('task', true);
+    taken.resolve({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+    await vi.advanceTimersByTimeAsync(30 * MINUTE);
+    expect(p.settled).not.toHaveBeenCalled();
+    h.hold('task', false);
+    await p.promise;
+    expect(p.settled).toHaveBeenCalledExactlyOnceWith({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+  });
+
   it('keeps transferred permissions out of the Desktop timer lifecycle', async () => {
     const h = harness();
     const p = h.request();

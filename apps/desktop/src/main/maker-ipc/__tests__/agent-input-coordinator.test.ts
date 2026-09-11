@@ -6455,6 +6455,79 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.errorRetryText).toBeNull();
   });
 
+  it.each(['claude-code', 'codex', 'pi'] as const)('holds generic %s steer across pause, preparation and stop', async (agentKind) => {
+    const h = createHarness();
+    const sid = 'stable-control-steer';
+    h.setAgentKind(agentKind);
+    h.coordinator.enqueue(sid, makeItem('initial', 'work'));
+    await flush();
+    const generation = 0;
+    let allocatedIds = 0;
+    const live = {
+      agentKind, capabilities: { sameTurnSteer: { supported: true } },
+      isTurnRunning: () => true, getTurnGeneration: () => generation,
+      requestGracefulStop: vi.fn(), getTurnControlSnapshot: vi.fn(),
+    };
+    h.setTurnSessionIdentity(live);
+    const service = createSessionControlService({
+      sessionExists: async () => true, getLiveSession: () => live,
+      getSessionActivitySnapshot: vi.fn(), getSessionRuntimeDetails: vi.fn(), setSessionRuntime: vi.fn(),
+      assertExternalInputAllowed: async () => undefined,
+      createQueuedMessage: async ({ queuedMessageId, message, callerSessionId }) => makeItem(queuedMessageId, message, {
+        origin: { kind: 'session', senderSessionId: callerSessionId, displayText: message },
+      }),
+      steerQueuedMessage: (id, item, expected) => h.coordinator.steer(id, item, {
+        fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
+      }),
+      getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
+      createId: () => `unexpected-random-ID-${++allocatedIds}`,
+    });
+    const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
+    h.coordinator.setExecutionPaused(sid, true);
+    expect(await service.steerSession(input)).toMatchObject({ ok: false });
+    expect(await h.coordinator.steer(sid, makeItem('ui-steer', 'UI'))).toBe(false);
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    h.coordinator.setExecutionPaused(sid, false);
+    const screen = deferred<{ action: 'allow' }>();
+    h.setScreenUserMessage(() => screen.promise);
+    const preparing = service.steerSession(input);
+    await flush();
+    h.coordinator.setExecutionPaused(sid, true);
+    screen.resolve({ action: 'allow' });
+    expect(await preparing).toMatchObject({ ok: false });
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    await h.coordinator.stop(sid);
+    expect(h.coordinator.isExecutionPaused(sid)).toBe(true);
+    expect(await service.steerSession(input)).toMatchObject({ ok: false });
+    expect(h.steerToAgent).not.toHaveBeenCalled();
+    h.coordinator.setExecutionPaused(sid, false);
+    h.setRunning(true);
+    expect(await service.steerSession(input)).toMatchObject({ ok: true });
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it('propagates pause into a steer already preparing inside the Host adapter', async () => {
+    const h = createHarness();
+    const sid = 'pause-host-steer';
+    h.coordinator.enqueue(sid, makeItem('initial', 'work'));
+    await flush();
+    const preparing = deferred<void>();
+    const injected = vi.fn();
+    h.steerToAgent.mockImplementation(async (_id, _message, opts) => {
+      await preparing.promise;
+      opts?.signal?.throwIfAborted();
+      injected();
+    });
+    const pending = h.coordinator.steer(sid, makeItem('steer', 'urgent'), { fallbackToTurn: false });
+    await flush();
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    h.coordinator.setExecutionPaused(sid, true);
+    preparing.resolve();
+    expect(await pending).toBe(false);
+    expect(injected).not.toHaveBeenCalled();
+    expect(h.coordinator.isExecutionPaused(sid)).toBe(true);
+  });
+
   it.each(['claude-code', 'codex', 'pi'] as const)('deduplicates stable %s control IDs across native acceptance and the next turn', async (agentKind) => {
     const h = createHarness();
     const sid = 'stable-control-steer';

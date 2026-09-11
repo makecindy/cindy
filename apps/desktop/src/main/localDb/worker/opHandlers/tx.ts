@@ -820,6 +820,10 @@ function botsReopenDelegation(
     const session = asRecord(p.session, 'session');
     insertBotSession(db, session);
     const childSessionId = expectString(p.childSessionId, 'childSessionId');
+    if (p.worktreePath != null) {
+      db.prepare('UPDATE sessions SET worktree_path = ? WHERE id = ?')
+        .run(expectString(p.worktreePath, 'worktreePath'), childSessionId);
+    }
     if (targetBotId) {
       db.prepare(`INSERT INTO bot_session_links
         (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
