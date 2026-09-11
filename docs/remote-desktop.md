@@ -151,11 +151,15 @@ take-control genuinely restarts the helper instead of being skipped as "already
 controlling".
 
 The viewer follows the host's control bit instead of rebuilding the session. A
-rejected input batch, a dropped stalled batch, a failed control request or a
-heartbeat that reports `controlling: false` all drop the phone to view only with
-the existing view-only hint and take-control action; media and lease identity are
-untouched. Errors whose outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or a
-control request that collides with one still settling — change nothing: a batch
+rejected input batch, a failed control request or a heartbeat that reports
+`controlling: false` all drop the phone to view only with the existing view-only
+hint and take-control action; media and lease identity are untouched. A dropped
+stalled batch (WebView overflow) also asks the host to drop control: posting
+`control:false` to the WebView clears its queued release without flushing it, so
+only an explicit host `control enabled:false` (which stops the input helper and
+injects a native release) can let go of a held key or button. Errors whose
+outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or a control request that
+collides with one still settling — change nothing: a batch
 that may have been injected must not be answered with a release that discards its
 key-up, and the heartbeat still owns liveness. Errors that do mean the lease is
 gone (`DESKTOP_LEASE_EXPIRED`, `DESKTOP_STOPPED`, revocation, an unsupported

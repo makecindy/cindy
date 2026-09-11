@@ -1215,11 +1215,22 @@ export default function RemoteDesktopScreen() {
         });
         break;
       }
-      case "inputOverflow":
-        // The viewer dropped a stalled batch. Input was already released there;
-        // mirror it here instead of tearing the session down for a lost tap.
+      case "inputOverflow": {
+        // The viewer replaced a stalled queue with a release, then this handler
+        // posts control:false, which clears that release without flushing it.
+        // Tell the host to drop control (stopInput still injects a native
+        // release) so a held key/button cannot stay down while we view only.
         releaseControl();
+        void request({
+          op: "control",
+          lease: current.lease,
+          enabled: false,
+        }).catch((cause) => {
+          if (active.current !== current) return;
+          resolveControlFailure(cause);
+        });
         break;
+      }
       case "input": {
         const ack = {
           type: "ack",

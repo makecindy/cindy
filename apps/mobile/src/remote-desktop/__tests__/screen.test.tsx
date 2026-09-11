@@ -1703,7 +1703,7 @@ describe("remote desktop controls", () => {
   });
   it("releases a stalled input batch instead of rebuilding the session", async () => {
     await connect();
-    act(() => {
+    await act(async () => {
       fixture.message!({
         nativeEvent: {
           data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
@@ -1711,6 +1711,14 @@ describe("remote desktop controls", () => {
       });
     });
     expect(sent()).toContainEqual({ type: "control", enabled: false });
+    // The WebView overflow replaces pending with a release, then this handler
+    // posts control:false which clears that release without flushing it. The
+    // host must still drop control so a held key/button cannot stay down.
+    expect(requests()).toContainEqual({
+      op: "control",
+      lease: "lease",
+      enabled: false,
+    });
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
   });
