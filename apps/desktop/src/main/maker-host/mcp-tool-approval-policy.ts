@@ -52,6 +52,8 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   // 接受的存在性披露，只读元数据不因此回退为逐次审批或统一成 NOT_FOUND。
   'cindy::ghost_info',
   'cindy::ghost_manual',
+  // Query stays local; market discovery fetches catalog metadata without reconciliation.
+  'cindy::ghost_market_search',
   'cindy::ghost_forge_guide',
   'cindy_browser::list_tools',
   'cindy_android::list_tools',
@@ -226,6 +228,7 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   if (serverName === 'cindy_contacts') {
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'

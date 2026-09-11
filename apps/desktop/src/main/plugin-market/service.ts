@@ -347,6 +347,8 @@ interface CustomMarketDiscoveryProgress {
 }
 
 export interface PluginMarketSnapshotOptions {
+  /** Agent discovery must never install, update, remove or repair plugins. */
+  discoveryOnly?: boolean;
   /** Renderer 目录请求先返回；默认安装和稳定来源升级在同一 owner 上后台补做。 */
   deferReconciliation?: boolean;
   /** 延后对账完成（成功或失败）后通知 IPC 层刷新一次性提示。 */
@@ -708,7 +710,7 @@ export class PluginMarketService {
       requireSameMarketOwner(owner);
       const ledger = this.ledgerForOwner(owner);
       await this.ledgerMutation;
-      await this.backfillInstalledManifestIdentities(ledger, owner);
+      if (!options.discoveryOnly) await this.backfillInstalledManifestIdentities(ledger, owner);
       const reconcileCustomUpdates = async (): Promise<'completed' | 'failed'> => {
         const completed = await this.applyAutomaticUpgrades(
           [],
@@ -720,7 +722,7 @@ export class PluginMarketService {
         options.onDefaultReconciliationOutcome?.(outcome);
         return outcome;
       };
-      if (!options.deferReconciliation) await reconcileCustomUpdates();
+      if (!options.discoveryOnly && !options.deferReconciliation) await reconcileCustomUpdates();
       requireSameMarketOwner(owner);
       const snapshot: PluginMarketSnapshot = {
         items: this.projectCustomItems(customDiscovery.entries, this.localInstallSnapshot(ledger)),
@@ -728,7 +730,7 @@ export class PluginMarketService {
         customSourceNames,
         unavailableCustomSourceNames: customDiscovery.unavailableSourceNames,
       };
-      if (options.deferReconciliation) {
+      if (!options.discoveryOnly && options.deferReconciliation) {
         void Promise.resolve()
           .then(reconcileCustomUpdates)
           .catch((error) => {
@@ -772,16 +774,18 @@ export class PluginMarketService {
     }
 
     requireSameMarketOwner(owner);
-    this.rememberCurrentOrganization(currentOrganization);
     const ledger = this.ledgerForOwner(owner);
-    await this.backfillInstalledManifestIdentities(ledger, owner);
-    await this.adoptLegacyInstallations(plugins, ledger, owner);
-    await this.recoverDisconnectedMarketInstallations(plugins, ledger, owner);
-    await this.backfillOfficialCindyGithubTrust(ledger, owner);
-    // A snapshot is passive discovery: an empty runtime list can be caused by
-    // startup, an owner transition, or a transient filesystem view. Only an
-    // explicit uninstall may turn that absence into installed=false/opt-out.
-    await this.applyServerRemovals(removals, owner, ledger);
+    if (!options.discoveryOnly) {
+      this.rememberCurrentOrganization(currentOrganization);
+      await this.backfillInstalledManifestIdentities(ledger, owner);
+      await this.adoptLegacyInstallations(plugins, ledger, owner);
+      await this.recoverDisconnectedMarketInstallations(plugins, ledger, owner);
+      await this.backfillOfficialCindyGithubTrust(ledger, owner);
+      // A snapshot is passive discovery: an empty runtime list can be caused by
+      // startup, an owner transition, or a transient filesystem view. Only an
+      // explicit uninstall may turn that absence into installed=false/opt-out.
+      await this.applyServerRemovals(removals, owner, ledger);
+    }
     // Explicit uninstall completion is allowed to finish its physical removal
     // before its ledger write. Wait for queued ledger mutations before deciding
     // whether a default plugin should be installed again.
@@ -814,7 +818,7 @@ export class PluginMarketService {
       options.onDefaultReconciliationOutcome?.(outcome);
       return outcome;
     };
-    if (!options.deferReconciliation) await reconcileMarketInstallations();
+    if (!options.discoveryOnly && !options.deferReconciliation) await reconcileMarketInstallations();
     requireSameMarketOwner(owner);
     const local = this.localInstallSnapshot(ledger);
     const serverItems = plugins.map((plugin) => this.toItem(plugin, local));
@@ -828,7 +832,7 @@ export class PluginMarketService {
       customSourceNames,
       unavailableCustomSourceNames: customDiscovery.unavailableSourceNames,
     };
-    if (options.deferReconciliation) {
+    if (!options.discoveryOnly && options.deferReconciliation) {
       // 目录展示不等待默认插件下载；对账仍复用原有串行锁和 owner 校验。
       void Promise.resolve()
         .then(reconcileMarketInstallations)
@@ -1103,10 +1107,13 @@ export class PluginMarketService {
   async install(
     pluginId: string,
     options: PluginMarketInstallOptions,
+    /** Main-only caller authority, rechecked immediately before package placement. */
+    assertCurrent?: () => void,
   ): Promise<PluginMarketInstallResult> {
+    assertCurrent?.();
     const customRef = parseCustomMarketPluginId(pluginId);
     if (customRef) {
-      return this.customInstall(customRef, options);
+      return this.customInstall(customRef, options, false, captureMarketOwner(), assertCurrent);
     }
     if (!isValidPluginResourceId(pluginId)) {
       throwIpcError('INVALID_PARAMS', 'Invalid Plugin ID');
@@ -1145,6 +1152,7 @@ export class PluginMarketService {
       return this.installDetail(
         plugin,
         {
+          beforeCommitInLock: assertCurrent,
           expectedInstalled: Boolean(existing),
           ...(options.expectedInstalledApproval !== undefined
             ? { expectedInstalledApproval: options.expectedInstalledApproval }
@@ -1341,6 +1349,7 @@ export class PluginMarketService {
     options: PluginMarketInstallOptions,
     automatic = false,
     owner = captureMarketOwner(),
+    assertCurrent?: () => void,
   ): Promise<PluginMarketInstallResult> {
     if (options.expectedManifest === undefined) {
       throwIpcError(
@@ -1417,6 +1426,7 @@ export class PluginMarketService {
           expectedVersion: plugin.version,
           beforeCommit: async () => {
             requireSameMarketOwner(owner);
+            assertCurrent?.();
             if (automatic && isGhostBusy(plugin.ghostId)) {
               throw new SilentUpgradeBusyError('Plugin is busy');
             }
@@ -1467,6 +1477,7 @@ export class PluginMarketService {
           expectedInstalledApproval: options.expectedInstalledApproval,
           beforePackagePlacement: () => {
             requireSameMarketOwner(owner);
+            assertCurrent?.();
             if (automatic && isGhostBusy(plugin.ghostId)) {
               throw new SilentUpgradeBusyError('Plugin is busy');
             }
@@ -3005,4 +3016,11 @@ export class PluginMarketService {
     void current.then(cleanup, cleanup);
     return current;
   }
+}
+
+let serviceSingleton: PluginMarketService | null = null;
+
+/** One market service for UI, background reconciliation and Agent calls. */
+export function getPluginMarketService(): PluginMarketService {
+  return serviceSingleton ??= new PluginMarketService();
 }
