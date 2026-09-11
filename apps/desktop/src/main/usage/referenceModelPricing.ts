@@ -37,7 +37,7 @@ export function getReferenceModelPricing(): ModelPricingCatalog {
     if (provider.auth?.method !== 'oauth' || !provider.auth.native) continue;
     for (const [agent, models] of Object.entries(provider.models)) {
       for (const model of models ?? []) {
-        const quote = providerReferencePriceQuote(provider.id, model.id, registry, { agent: agent as AgentKind });
+        const quote = providerReferencePriceQuote(provider.id, model.id, registry, { agent: agent as AgentKind, officialOnly: true });
         if (quote) (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = quote;
       }
     }
@@ -74,7 +74,7 @@ export function getCodexProviderSubscriptionValuePrice(
           providerId,
           effective.modelId,
           getActiveCatalog().modelRegistry,
-          { agent, at },
+          { agent, at, officialOnly: true },
         ),
         overrides,
       ) ?? effective
@@ -84,9 +84,9 @@ export function getCodexProviderSubscriptionValuePrice(
     providerId,
     modelId,
     getActiveCatalog().modelRegistry,
-    { agent, at },
+    { agent, at, officialOnly: true },
   );
-  return reference ?? (at === undefined ? effective : undefined);
+  return reference ?? ((getActiveCatalog().modelRegistry?.schemaVersion ?? 0) < 5 && at === undefined ? effective : undefined);
 }
 
 export function getCodexSubscriptionValuePrice(
@@ -114,7 +114,7 @@ export function getClaudeSubscriptionValuePrice(
           'anthropic',
           effective.modelId,
           getActiveCatalog().modelRegistry,
-          { agent: 'claude-code', at },
+          { agent: 'claude-code', at, officialOnly: true },
         ),
         overrides,
       ) ?? effective
@@ -124,9 +124,9 @@ export function getClaudeSubscriptionValuePrice(
     'anthropic',
     modelId,
     getActiveCatalog().modelRegistry,
-    { agent: 'claude-code', at },
+    { agent: 'claude-code', at, officialOnly: true },
   );
-  return reference ?? (at === undefined ? effective : undefined);
+  return reference ?? ((getActiveCatalog().modelRegistry?.schemaVersion ?? 0) < 5 && at === undefined ? effective : undefined);
 }
 
 export function getSubscriptionDirectValuePrice(
@@ -150,6 +150,7 @@ export function getSubscriptionDirectValuePrice(
             providerReferencePriceQuote(effective.providerId, effective.modelId, registry, {
               agent,
               at,
+              officialOnly: true,
             }),
             overrides,
           ) ?? effective)

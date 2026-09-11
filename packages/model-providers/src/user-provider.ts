@@ -299,11 +299,11 @@ function toCatalogModel(
           ? []
           : (CUSTOM_EFFORTS[agent] ?? []);
   const registryEfforts =
-    m.reasoning !== undefined || modelRegistry?.schemaVersion === 4
+    m.reasoning !== undefined || (modelRegistry?.schemaVersion ?? 0) >= 4
       ? undefined
       : registryEffortMetadata(modelRegistry, m.id, agent);
   const supportsFastMode =
-    modelRegistry?.schemaVersion !== 4 &&
+    (modelRegistry?.schemaVersion ?? 0) < 4 &&
     registrySupportsFastMode(modelRegistry, m.id, agent);
   const effectiveEfforts = registryEfforts?.efforts ?? efforts;
   const defaultEffort =
@@ -342,7 +342,7 @@ function toCatalogModel(
   };
   const user = runtimeUserModelMetadata(m);
   const resolved =
-    modelRegistry?.schemaVersion === 4 ||
+    (modelRegistry?.schemaVersion ?? 0) >= 4 ||
     m.discoveredMetadata ||
     providerDefaults
       ? resolveModelMetadata(

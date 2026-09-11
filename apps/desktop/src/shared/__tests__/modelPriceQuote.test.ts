@@ -143,7 +143,8 @@ describe('registryPricingCatalog', () => {
 
   it.each(['fast', 'priority'] as const)('projects declared %s prices without inventing unavailable tariffs', (variant) => {
     const entry = structuredClone(BUNDLED_CATALOG.modelRegistry!.models.find((model) => model.id === 'openai/gpt-6-astra')!);
-    const prices = entry.routes[0]!.referencePrices!;
+    const prices = structuredClone(BUNDLED_CATALOG.modelRegistry!.baseModels!.find(model => model.id === entry.modelRef)!.referencePriceGroups![0].prices);
+    entry.routes[0]!.referencePrices = prices;
     prices.find((price) => price.variant === 'fast')!.variant = variant;
     const registry: ModelRegistry = { schemaVersion: 1, updatedAt: '2026-09-04T00:00:00Z', models: [entry] };
     const getQuote = (at = '2026-09-04') => providerReferencePriceQuote('openai', 'gpt-6-astra', registry, { at });
