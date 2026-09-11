@@ -519,7 +519,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
             };
           }
         },
-        getSessionTask: async ({ callerSessionId, taskId }) => {
+        getSessionTask: async ({ callerSessionId, taskId, queuedMessageId }) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
@@ -528,9 +528,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               message: 'Session task service not initialized',
             };
           }
-          return svc.getSessionTask(callerSessionId, taskId);
+          return svc.getSessionTask(callerSessionId, taskId, queuedMessageId);
         },
-        stopSessionTask: async ({ callerSessionId, taskId }) => {
+        stopSessionTask: async ({ callerSessionId, taskId, mode }) => {
           const svc = tryGetBotDelegationService();
           if (!svc) {
             return {
@@ -539,7 +539,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
               message: 'Session task service not initialized',
             };
           }
-          return svc.stopSessionTask(callerSessionId, taskId);
+          return svc.stopSessionTask(callerSessionId, taskId, mode);
         },
       },
       botMessaging: {

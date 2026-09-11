@@ -1,6 +1,9 @@
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
 import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-mirror';
 import Database from 'better-sqlite3';
+import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
+import { authorizeSessionQueueItem, rebuildSessionQueueItem } from '../../../maker-ipc/sessionControlService';
+import type { AgentInputQueuedMessage } from '../../../../shared/agentInputQueue';
 import type { ProviderView } from '@cindy/model-providers';
 import { createHash } from 'node:crypto';
 import { join, resolve } from 'node:path';
@@ -3235,6 +3238,11 @@ describe('Bot Session task end-to-end runtime', () => {
   }
 
   function createDelegationRuntime(options: {
+    prepareWorktree?: Parameters<typeof createBotDelegationService>[0]['prepareWorktree'];
+    taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
+    taskControl?: boolean;
+    stopUnsupported?: boolean;
+    steerUnsupported?: boolean;
     readCallerRuntime?: Parameters<typeof createBotDelegationService>[0]['readCallerRuntime'];
     readCallerPermission?: Parameters<typeof createBotDelegationService>[0]['readCallerPermission'];
     accountReady?: () => boolean;
@@ -3248,6 +3256,7 @@ describe('Bot Session task end-to-end runtime', () => {
     const accountReady = options.accountReady ?? (() => true);
     const started: StartedTurn[] = [];
     const pendingTurns: Array<{ sessionId: string; queued: boolean }> = [];
+    const heldInputs = new Set<string>();
     const changed: Array<{ delegationId: string; status: string }> = [];
     let currentTime = options.startTime ?? 10_000;
     let seq = 0;
@@ -3293,6 +3302,7 @@ describe('Bot Session task end-to-end runtime', () => {
      */
     const dispatch = async (params: {
       targetSessionId: string;
+      dispatcherSessionId?: string;
       message: string;
       persistedContent?: string;
       clientId?: string;
@@ -3363,6 +3373,8 @@ describe('Bot Session task end-to-end runtime', () => {
         'user',
         params.persistedContent ?? params.message,
       );
+      if (params.dispatcherSessionId) h.sqlite!.prepare('UPDATE messages SET agent_meta = ? WHERE session_id = ? AND client_id = ?')
+        .run(JSON.stringify({ origin: { kind: 'session', senderSessionId: params.dispatcherSessionId } }), params.targetSessionId, clientId);
       await params.onAccepted?.();
       h.sqlite!.prepare('UPDATE sessions SET active_turn_started_at = ? WHERE id = ?')
         .run(currentTime, params.targetSessionId);
@@ -3375,7 +3387,25 @@ describe('Bot Session task end-to-end runtime', () => {
     };
 
     const abortSession = vi.fn(async () => undefined);
+    const steer = vi.fn(async () => options.steerUnsupported
+      ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No same-turn steer' }
+      : { ok: true as const, queuedMessageId: 'steered-message' });
+    const stopTurn = vi.fn(async () => options.stopUnsupported
+      ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No graceful stop' }
+      : { ok: true as const, status: 'requested' as const });
     const delegation = createBotDelegationService({
+      prepareWorktree: options.prepareWorktree,
+      taskQueue: options.taskQueue,
+      ...(options.taskControl ? { taskControl: {
+        steer, stop: stopTurn,
+        isActive: (id: string) => pendingTurns.some((turn) => turn.sessionId === id && !turn.queued),
+        holdInput: (id: string, held: boolean) => { if (held) heldInputs.add(id); else heldInputs.delete(id); },
+        waitForInputBoundary: async () => undefined,
+        preparePause: async () => undefined,
+        restoreInput: async () => undefined,
+        flushInput: async () => undefined,
+        resumeInput: async () => undefined,
+      } } : {}),
       readCallerRuntime: options.readCallerRuntime,
       readCallerPermission: options.readCallerPermission,
       dispatch,
@@ -3431,6 +3461,7 @@ describe('Bot Session task end-to-end runtime', () => {
 
     return {
       delegation,
+      heldInputs, steer, stopTurn,
       abortSession,
       started,
       changed,
@@ -3797,6 +3828,274 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally {
       runtime.dispose();
     }
+  });
+
+  it('binds a prepared worktree before first dispatch and rejects unavailable isolation', async () => {
+    await seedPair();
+    const workspace = join(h.userDataDir, 'task-project-worktree');
+    mkdirSync(workspace, { recursive: true });
+    const runtime = createDelegationRuntime({ prepareWorktree: async () => ({ ok: true, sessionId: 'worktree-session', workingDir: workspace }) });
+    try {
+      const result = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Edit this project.', workingDir: h.userDataDir, useWorktree: true });
+      expect(result).toMatchObject({ ok: true, childSessionId: 'worktree-session' });
+      if (!result.ok) throw new Error('missing task');
+      expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
+        .toMatchObject({ task: { working_dir: workspace, workspace_kind: 'project' } });
+      expect(runtime.started[0].sessionId).toBe('worktree-session');
+      expect(h.sqlite!.prepare('SELECT worktree_path AS path FROM sessions WHERE id = ?').get('worktree-session')).toEqual({ path: workspace });
+    } finally { runtime.dispose(); }
+    const unavailable = createDelegationRuntime();
+    try {
+      expect(await unavailable.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Edit.', workingDir: workspace, useWorktree: true }))
+        .toMatchObject({ ok: false, errorCode: 'WORKTREE_UNAVAILABLE' });
+      expect(unavailable.started).toHaveLength(0);
+    } finally { unavailable.dispose(); }
+  });
+
+  it('routes owned queue edits through the shared consuming and sender guards and reports dispatch receipts', async () => {
+    await seedPair();
+    const item = (clientId: string, sender: string): AgentInputQueuedMessage => ({
+      clientId, text: 'before', persistedContent: 'before', model: 'model', effort: 'medium', permissionMode: 'default', workingDir: h.userDataDir,
+      chatMessage: { clientId, role: 'user', content: 'before' },
+      createOpts: { agentKind: 'codex', workingDir: h.userDataDir, model: 'model', effort: 'medium', permissionMode: 'default' },
+      origin: { kind: 'session', senderSessionId: sender, displayText: 'before' },
+    });
+    let queue = [item('mine', 'session-1'), item('foreign', 'other-session')];
+    const consumingClientIds: string[] = [];
+    const shared = createSessionQueueControlService({
+      getSnapshot: async () => ({ pendingQueue: queue, consumingClientIds }),
+      replaceQueuedMessage: (_id, clientId, next) => {
+        const index = queue.findIndex(item => item.clientId === clientId);
+        if (index < 0) return false;
+        queue[index] = next; return true;
+      },
+      removeQueuedMessage: (_id, clientId) => { queue = queue.filter(item => item.clientId !== clientId); return true; },
+    });
+    const runtime = createDelegationRuntime({ taskControl: true, taskQueue: {
+      inspect: async (_id, caller) => queue.filter(item => authorizeSessionQueueItem(item, caller).ok)
+        .map(item => ({ queuedMessageId: item.clientId, consuming: consumingClientIds.includes(item.clientId), message: item.text })),
+      update: params => shared.update({ sessionId: params.targetSessionId, queuedMessageId: params.queuedMessageId, message: params.message,
+        authorize: item => authorizeSessionQueueItem(item, params.callerSessionId), rebuild: rebuildSessionQueueItem }),
+      cancel: params => shared.cancel({ sessionId: params.targetSessionId, queuedMessageId: params.queuedMessageId,
+        authorize: item => authorizeSessionQueueItem(item, params.callerSessionId) }),
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish the report.' });
+      if (!task.ok) throw new Error('missing task');
+      const edit = (id: string) => runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'edit', queuedMessageId: id, text: 'revised' });
+      expect(await edit('foreign')).toMatchObject({ ok: false, errorCode: 'NOT_AUTHORIZED' });
+      expect(await edit('mine')).toMatchObject({ ok: true, delivery: 'queued' });
+      expect(queue[0].persistedContent).toBe('revised');
+      consumingClientIds.push('mine');
+      expect(await edit('mine')).toMatchObject({ ok: false, errorCode: 'MESSAGE_CONSUMING' });
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId, 'mine'))
+        .toMatchObject({ task: { queue: [{ queuedMessageId: 'mine', message: 'revised', consuming: true }], message_receipt: { state: 'consuming' } } });
+      consumingClientIds.length = 0;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'withdraw', queuedMessageId: 'mine' }))
+        .toMatchObject({ ok: true, delivery: 'withdrawn' });
+      expect(queue.map(item => item.clientId)).toEqual(['foreign']);
+      const message = await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'additional requirements' });
+      if (!message.ok || !('queuedMessageId' in message)) throw new Error('missing receipt');
+      expect(message.queuedMessageId).toEqual(expect.any(String));
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId, message.queuedMessageId))
+        .toMatchObject({ task: { message_receipt: { state: 'dispatched' } } });
+    } finally { runtime.dispose(); }
+  });
+
+  it('holds a paused execution through terminal events and restart, then resumes the same Session once', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Perform a non-repeatable action, then summarize.' });
+      if (!started.ok) throw new Error('task did not start');
+      const taskId = started.delegationId;
+      const sessionId = started.childSessionId;
+      const before = await runtime.delegation.getSessionTask('session-1', taskId);
+      expect(await runtime.delegation.stopSessionTask('session-1', taskId, 'pause'))
+        .toMatchObject({ ok: true, control: { state: 'pausing', queue_held: true, stop_status: 'requested' } });
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(await runtime.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      expect(await runtime.delegation.messageSessionTask('session-1', taskId, { kind: 'message', text: 'new' }))
+        .toMatchObject({ ok: false, errorCode: 'TASK_PAUSED' });
+      // An interaction arriving after stop was requested must not retract that stop.
+      const lateRequest = { kind: 'permission' as const, requestId: 'late-approval', toolName: 'write_file', input: {} };
+      await runtime.delegation.handleInteractionStart(sessionId, lateRequest);
+      expect(await runtime.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      await runtime.delegation.handleInteractionEnd(sessionId, lateRequest);
+      await runtime.settleChild(sessionId, 'Partial work already performed.');
+      expect(await runtime.delegation.getSessionTask('session-1', taskId))
+        .toMatchObject({ ok: true, task: { status: 'waiting', control: { state: 'paused' }, completed_at: null } });
+      expect(runtime.started.filter((turn) => turn.sessionId === 'session-1')).toHaveLength(0);
+      runtime.advance(120_000);
+      const startCount = runtime.started.length;
+      await runtime.delegation.restore();
+      expect(runtime.started).toHaveLength(startCount);
+      const restored = createDelegationRuntime({ taskControl: true, startTime: 130_000 });
+      try {
+        await restored.delegation.restore();
+        expect(restored.started).toHaveLength(0);
+        expect(restored.heldInputs.has(sessionId)).toBe(true);
+        const results = await Promise.all([
+          restored.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }),
+          restored.delegation.messageSessionTask('session-1', taskId, { kind: 'resume' }),
+        ]);
+        expect(results.filter((result) => result.ok)).toHaveLength(1);
+        expect(restored.started.map((turn) => turn.sessionId)).toEqual([sessionId]);
+        const after = await restored.delegation.getSessionTask('session-1', taskId);
+        if (!before.ok || !after.ok) throw new Error('missing task');
+        expect(after.task.deadline_at).toBe(before.task.deadline_at! + 120_000);
+        expect(after.task.session_id).toBe(sessionId);
+        const inputs = h.sqlite!.prepare("SELECT content FROM messages WHERE session_id = ? AND role = 'user' ORDER BY rowid").all(sessionId) as Array<{ content: string }>;
+        expect(inputs).toHaveLength(2);
+        expect(inputs[1].content).toContain('do not replay the original request');
+        await restored.settleChild(sessionId, 'Final result.');
+        expect(await restored.delegation.getSessionTask('session-1', taskId))
+          .toMatchObject({ ok: true, task: { status: 'completed', result: 'Final result.' } });
+        expect(restored.started.filter((turn) => turn.sessionId === 'session-1')).toHaveLength(1);
+      } finally { restored.dispose(); }
+    } finally { runtime.dispose(); }
+  });
+
+  it.each(['claude', 'codex', 'pi'])('keeps owned %s task steer distinct from queue and preserves denial', async (harness) => {
+    await seedPair({ harness });
+    const runtime = createDelegationRuntime({ taskControl: true, steerUnsupported: true });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish a report.' });
+      if (!started.ok) throw new Error('task did not start');
+      const count = runtime.started.length;
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId,
+        { kind: 'message', text: 'urgent', mode: 'steer' }))
+        .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+      expect(runtime.started).toHaveLength(count);
+      expect(await runtime.delegation.stopSessionTask(started.childSessionId, started.delegationId, 'pause'))
+        .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+      expect(runtime.stopTurn).not.toHaveBeenCalled();
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId,
+        { kind: 'message', text: 'next turn' }))
+        .toMatchObject({ ok: true, queued: true, delivery: 'queued' });
+    } finally { runtime.dispose(); }
+  });
+
+  it('pauses an interaction without resolving it, and accounts for the wait only once', async () => {
+    await seedPair();
+    const resolveInteraction = vi.fn(() => true);
+    const runtime = createDelegationRuntime({ taskControl: true, resolveInteraction });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Write the report after approval.' });
+      if (!started.ok) throw new Error('task did not start');
+      const request = { kind: 'permission' as const, requestId: 'held-approval', toolName: 'write_file', input: {} };
+      const before = await runtime.delegation.getSessionTask('session-1', started.delegationId);
+      await runtime.delegation.handleInteractionStart(started.childSessionId, request);
+      runtime.advance(10_000);
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'pause')).toMatchObject({ ok: true });
+      expect(runtime.stopTurn).not.toHaveBeenCalled();
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'approve' }))
+        .toMatchObject({ ok: false, errorCode: 'TASK_PAUSED' });
+      expect(resolveInteraction).not.toHaveBeenCalled();
+      runtime.advance(20_000);
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true, delivery: 'awaiting-interaction' });
+      runtime.advance(5_000);
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'approve' }))
+        .toMatchObject({ ok: true, delivery: 'interaction' });
+      expect(resolveInteraction).toHaveBeenCalledTimes(1);
+      await runtime.delegation.handleInteractionEnd(started.childSessionId, request);
+      const after = await runtime.delegation.getSessionTask('session-1', started.delegationId);
+      if (!before.ok || !after.ok) throw new Error('missing task');
+      expect(after.task.deadline_at).toBe(before.task.deadline_at! + 35_000);
+      expect(after.task.pendingInteraction).toBeNull();
+      expect(runtime.started.filter((turn) => turn.sessionId === started.childSessionId)).toHaveLength(1);
+    } finally { runtime.dispose(); }
+  });
+
+  it('uses native steer and graceful stop without queueing or finishing the task', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish.' });
+      if (!started.ok) throw new Error('task did not start');
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId,
+        { kind: 'message', text: 'Correct the current direction.', mode: 'steer' }))
+        .toMatchObject({ ok: true, delivery: 'same-turn', queued: false });
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'request-stop'))
+        .toMatchObject({ ok: true, control: { state: 'requested', queue_held: false } });
+      expect(runtime.stopTurn).toHaveBeenCalledWith({ targetSessionId: started.childSessionId });
+      expect(runtime.started).toHaveLength(1);
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(await runtime.delegation.getSessionTask('session-1', started.delegationId))
+        .toMatchObject({ task: { status: 'running', completed_at: null } });
+    } finally { runtime.dispose(); }
+  });
+
+  it.each([undefined, 'Use the revised requirements.'])('keeps a pre-dispatch pause durable with resume input %s, and cancel prevents resume', async (text) => {
+    await seedPair();
+    let transientUnavailable = true;
+    const runtime = createDelegationRuntime({ taskControl: true, transientUnavailable: () => transientUnavailable });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish when ready.' });
+      if (!started.ok) throw new Error('task did not start');
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'pause'))
+        .toMatchObject({ ok: true, control: { state: 'paused' } });
+      transientUnavailable = false;
+      // Paused time must not consume the initial dispatch deadline.
+      runtime.advance(24 * 60 * 60 * 1_000);
+      await runtime.delegation.restore();
+      expect(runtime.started).toHaveLength(0);
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'resume', text }))
+        .toMatchObject({ ok: true, childSessionId: started.childSessionId });
+      expect(runtime.started.map((turn) => turn.sessionId)).toEqual(text
+        ? [started.childSessionId, started.childSessionId] : [started.childSessionId]);
+      expect(await runtime.delegation.getSessionTask('session-1', started.delegationId)).toMatchObject({ task: { status: 'running' } });
+      await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'pause');
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId))
+        .toMatchObject({ ok: true, control: { state: 'cancelling', stop_status: 'unconfirmed' } });
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      await runtime.settleChild(started.childSessionId, 'Interrupted.');
+      expect(await runtime.delegation.getSessionTask('session-1', started.delegationId))
+        .toMatchObject({ ok: true, task: { status: 'cancelled', control: { stop_status: 'stopped' } } });
+      expect(await runtime.delegation.messageSessionTask('session-1', started.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: false, errorCode: 'NOT_PAUSED' });
+    } finally { runtime.dispose(); }
+  });
+
+  it('preserves cancellation across a late interaction end and host restore', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Wait for approval.' });
+      if (!task.ok) throw new Error('missing task');
+      const request = { kind: 'permission' as const, requestId: 'approval', toolName: 'write_file', input: {} };
+      await runtime.delegation.handleInteractionStart(task.childSessionId, request);
+      await runtime.delegation.stopSessionTask('session-1', task.delegationId);
+      runtime.advance(1_000);
+      await runtime.delegation.handleInteractionEnd(task.childSessionId, request);
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'must not run' }))
+        .toMatchObject({ ok: false, errorCode: 'STOP_UNCONFIRMED' });
+      const restored = createDelegationRuntime({ taskControl: true });
+      try {
+        await restored.delegation.restore();
+        expect(await restored.delegation.getSessionTask('session-1', task.delegationId))
+          .toMatchObject({ task: { status: 'cancelled', control: { stop_status: 'stopped' } } });
+        expect(restored.started.filter(turn => turn.sessionId === task.childSessionId)).toHaveLength(0);
+      } finally { restored.dispose(); }
+    } finally { runtime.dispose(); }
+  });
+
+  it('does not leave a durable hold when graceful stop is unsupported', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true, stopUnsupported: true });
+    try {
+      const started = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish.' });
+      if (!started.ok) throw new Error('task did not start');
+      expect(await runtime.delegation.stopSessionTask('session-1', started.delegationId, 'pause'))
+        .toMatchObject({ ok: false, errorCode: 'UNSUPPORTED_CAPABILITY' });
+      expect(runtime.heldInputs.size).toBe(0);
+      expect(await runtime.delegation.getSessionTask('session-1', started.delegationId))
+        .toMatchObject({ ok: true, task: { status: 'running', control: { queue_held: false } } });
+    } finally { runtime.dispose(); }
   });
 
   it('delivers every continued run once without reusing the previous completion receipt', async () => {

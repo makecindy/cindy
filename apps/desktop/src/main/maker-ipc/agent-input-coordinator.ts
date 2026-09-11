@@ -1434,7 +1434,8 @@ export class AgentInputCoordinator {
    * 等不来、存活探测又看到项还在,run 会永久挂 running(PR #972 review)。
    */
   isQueuePaused(sessionId: string): boolean {
-    return this.getState(sessionId).queuePaused;
+    const state = this.getState(sessionId);
+    return state.queuePaused || state.queueInteractionLocks.includes('execution-pause');
   }
 
   /**
@@ -3172,6 +3173,15 @@ export class AgentInputCoordinator {
     state.queueExpanded = expanded;
     this.emit(sessionId);
     return this.getProjection(sessionId);
+  }
+
+  isExecutionPaused(sessionId: string): boolean {
+    return this.getState(sessionId).queueInteractionLocks.includes('execution-pause');
+  }
+
+  /** A durable owner-controlled pause survives ordinary queue Resume/Stop. */
+  setExecutionPaused(sessionId: string, paused: boolean): void {
+    this.setInteractionLock(sessionId, 'execution-pause', paused, { preserveOnStop: true });
   }
 
   setInteractionLock(

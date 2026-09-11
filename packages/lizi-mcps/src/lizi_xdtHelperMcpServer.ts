@@ -117,6 +117,7 @@ interface SessionTaskCallbacks {
     contextRefs?: string[];
     title?: string;
     workingDir?: string;
+    useWorktree?: boolean;
     timeoutMs?: number;
   }): Promise<ControlResult<Record<string, unknown>, string>>;
   messageSessionTask(params: {
@@ -126,15 +127,20 @@ interface SessionTaskCallbacks {
       | { kind: 'approve' }
       | { kind: 'deny'; reason?: string }
       | { kind: 'answer'; answers: Record<string, string> }
-      | { kind: 'message'; text: string; idempotencyKey?: string };
+      | { kind: 'message'; text: string; idempotencyKey?: string; mode?: 'queue' | 'steer' }
+      | { kind: 'resume'; text?: string }
+      | { kind: 'edit'; queuedMessageId: string; text: string }
+      | { kind: 'withdraw'; queuedMessageId: string };
   }): Promise<ControlResult<Record<string, unknown>, string>>;
   getSessionTask(params: {
     callerSessionId: string;
     taskId: string;
+    queuedMessageId?: string;
   }): Promise<ControlResult<{ task: unknown }, string>>;
   stopSessionTask(params: {
     callerSessionId: string;
     taskId: string;
+    mode?: 'cancel' | 'request-stop' | 'pause';
   }): Promise<ControlResult<Record<string, unknown>, string>>;
 }
 
@@ -289,7 +295,7 @@ function registerStartSessionTaskEntry(
     name: 'start_session_task',
     category: 'bots',
     description: [
-      'Start one real independent Cindy Session task in the background.',
+      'Start one real independent Cindy Session task in the background. For project work, pass the actual project/worktree path in working_dir before starting. Set use_worktree=true to create and register an isolated worktree before runtime starts; failure never falls back to the shared directory; creating a worktree later in a shell does not relocate the registered Session. timeout_ms defaults to 1800000 (30 minutes), maximum 86400000 (24 hours); specify the needed budget at creation. Follow-up after timeout inherits the original budget, it does not extend it.',
       'Proactively use this for coding implementation and medium or large work: reading/modifying a project and running checks, multi-source research, multi-file processing, or complex analysis and deliverables. Do not wait for the user to request delegation or ask permission merely to start a task. Handle short simple questions, code explanations, small snippets, and single-step work yourself unless the user explicitly requests a separate task. Respect an explicit request to work inline.',
       'Pass the objective, constraints, known facts, relevant files, completed actions, and acceptance criteria in instruction; the task does not automatically inherit this chat. Do not duplicate its work. Review the returned result and follow up on the same task if needed.',
       "This never calls a Cindy Bot or any other teammate. Use send_to_agent for a bounded message to a named teammate.",
@@ -299,10 +305,11 @@ function registerStartSessionTaskEntry(
       instruction: z.string().min(1).max(12_000),
       title: z.string().min(1).max(120).optional(),
       working_dir: z.string().min(1).max(1_024).optional(),
+      use_worktree: z.boolean().optional(),
       context_refs: z.array(z.string().max(512)).max(32).optional(),
       timeout_ms: z.number().int().min(1_000).max(86_400_000).optional(),
     },
-    handler: async ({ instruction, title, working_dir, context_refs, timeout_ms }) => {
+    handler: async ({ instruction, title, working_dir, use_worktree, context_refs, timeout_ms }) => {
       const callerSessionId = resolveLiziMcpSessionContext(sessionCtx).sessionId;
       if (!callerSessionId) {
         return errorPayload('NOT_A_BOT_SESSION', '当前调用未绑定 Cindy 伙伴任务。');
@@ -313,6 +320,7 @@ function registerStartSessionTaskEntry(
         contextRefs: context_refs,
         title,
         workingDir: working_dir,
+        ...(use_worktree === undefined ? {} : { useWorktree: use_worktree }),
         timeoutMs: timeout_ms,
       });
       return result.ok
@@ -397,14 +405,15 @@ function registerSessionTaskControlEntries(
   registry.register({
     name: 'check_session_task',
     category: 'bots',
-    description: 'Read the current state and result of one Session task. Use only when the user asks for progress or the automatic completion return appears to be missing.',
-    inputShape: { task_id: z.string().min(1).max(128) },
-    handler: async ({ task_id }) => {
+    description: 'Read state, registered working_dir, stop confirmation and your own pending queue. Optional queued_message_id returns queued/consuming/dispatched/not-found; dispatched means accepted into host history, not proof the model acted on it. Use only when the user asks for progress or the automatic completion return appears to be missing.',
+    inputShape: { task_id: z.string().min(1).max(128), queued_message_id: z.string().min(1).max(256).optional() },
+    handler: async ({ task_id, queued_message_id }) => {
       const callerError = requireCaller();
       if (callerError) return callerError;
       const result = await deps.sessionTasks!.getSessionTask({
         callerSessionId: callerSessionId()!,
         taskId: task_id,
+        ...(queued_message_id ? { queuedMessageId: queued_message_id } : {}),
       });
       return result.ok
         ? okPayload({
@@ -420,13 +429,16 @@ function registerSessionTaskControlEntries(
     name: 'message_session_task',
     category: 'bots',
     description: [
-      'Send a follow-up to one Session task without starting another task.',
-      'Use message to add or correct instructions. Use decision or answers only when the task is waiting for that exact response.',
-      'A completed task resumes in a fresh execution of the same tracked task.',
+      'Send a follow-up to one Session task without starting another task. check_session_task includes your pending queue; edit/withdraw require its queued_message_id. Only your own unconsumed messages can be changed; consuming input is rejected. Absence from the pending queue does not prove the model acted on it.',
+      'mode=queue (default) adds input for the next turn when busy. mode=steer requires a running engine with same-turn steer; it never falls back to queue.',
+      'mode=resume releases a reversible pause on the same Session; optional message supplies new instructions, never replays the original request. Use decision or answers only for the exact pending interaction; if paused, resume first.',
+      'Ordinary queued input to a completed task starts a fresh execution of the same tracked task; mode=resume only releases a reversible pause.',
     ].join('\n'),
     inputShape: {
       task_id: z.string().min(1).max(128),
       message: z.string().min(1).max(4_000).optional(),
+      mode: z.enum(['queue', 'steer', 'resume', 'edit', 'withdraw']).optional(),
+      queued_message_id: z.string().min(1).max(256).optional(),
       decision: z.enum(['approve', 'deny']).optional(),
       answers: z.record(z.string(), z.string()).optional(),
       reason: z.string().max(4_000).optional(),
@@ -435,6 +447,8 @@ function registerSessionTaskControlEntries(
     handler: async ({
       task_id,
       message,
+      mode,
+      queued_message_id,
       decision,
       answers,
       reason,
@@ -442,21 +456,37 @@ function registerSessionTaskControlEntries(
     }) => {
       const callerError = requireCaller();
       if (callerError) return callerError;
+      if (mode === 'edit' || mode === 'withdraw') {
+        if (!queued_message_id || decision || answers || (mode === 'edit' ? !message?.trim() : !!message)) {
+          return errorPayload('INVALID_ARGS', 'edit requires queued_message_id and message; withdraw requires only queued_message_id.');
+        }
+        const result = await deps.sessionTasks!.messageSessionTask({ callerSessionId: callerSessionId()!, taskId: task_id,
+          reply: mode === 'edit' ? { kind: 'edit', queuedMessageId: queued_message_id, text: message!.trim() }
+            : { kind: 'withdraw', queuedMessageId: queued_message_id } });
+        return result.ok ? okPayload({ action: 'message_session_task', task_id, session_id: result.childSessionId,
+          queued_message_id: result.queuedMessageId, delivery: result.delivery, resumed: false }) : errorPayload(result.errorCode, result.message);
+      }
+      if (queued_message_id) return errorPayload('INVALID_ARGS', 'queued_message_id requires edit or withdraw mode.');
       const choices =
         Number(Boolean(message?.trim())) +
         Number(Boolean(decision)) +
         Number(Boolean(answers));
-      if (choices !== 1) {
+      if ((mode === 'resume' ? Boolean(decision || answers) : choices !== 1)
+        || (mode === 'steer' && !message?.trim())
+        || (mode && mode !== 'queue' && Boolean(decision || answers))) {
         return errorPayload(
           'INVALID_ARGS',
           'Provide exactly one of message, decision, or answers.',
         );
       }
-      const reply = message?.trim()
+      const reply = mode === 'resume'
+        ? { kind: 'resume' as const, ...(message?.trim() ? { text: message.trim() } : {}) }
+        : message?.trim()
         ? {
             kind: 'message' as const,
             text: message.trim(),
             idempotencyKey: idempotency_key,
+            ...(mode ? { mode: mode as 'queue' | 'steer' } : {}),
           }
         : decision === 'approve'
           ? { kind: 'approve' as const }
@@ -475,6 +505,9 @@ function registerSessionTaskControlEntries(
             session_id: result.childSessionId,
             resumed: result.resumed,
             ...(result.queued === undefined ? {} : { queued: result.queued }),
+            ...(result.delivery === undefined ? {} : { delivery: result.delivery }),
+            ...(result.queuedMessageId === undefined ? {} : { queued_message_id: result.queuedMessageId }),
+            ...(result.control === undefined ? {} : { control: result.control }),
           })
         : errorPayload(result.errorCode, result.message);
     },
@@ -483,20 +516,22 @@ function registerSessionTaskControlEntries(
   registry.register({
     name: 'stop_session_task',
     category: 'bots',
-    description: 'Stop one running Session task and its child tasks. Use only when the user asks to stop it or continuing would be unsafe.',
-    inputShape: { task_id: z.string().min(1).max(128) },
-    handler: async ({ task_id }) => {
+    description: 'mode=cancel (default) terminates the task. mode=request-stop requests graceful stop of the current turn only. mode=pause holds the same task and pending input until message_session_task(mode=resume); pausing/unconfirmed is not proof the engine stopped. Only control tasks owned by your teammate.',
+    inputShape: { task_id: z.string().min(1).max(128), mode: z.enum(['cancel', 'request-stop', 'pause']).optional() },
+    handler: async ({ task_id, mode }) => {
       const callerError = requireCaller();
       if (callerError) return callerError;
       const result = await deps.sessionTasks!.stopSessionTask({
         callerSessionId: callerSessionId()!,
         taskId: task_id,
+        ...(mode ? { mode } : {}),
       });
       return result.ok
         ? okPayload({
             action: 'stop_session_task',
             task_id,
             session_id: result.childSessionId,
+            ...(result.control === undefined ? {} : { control: result.control }),
           })
         : errorPayload(result.errorCode, result.message);
     },

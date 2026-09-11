@@ -52,6 +52,25 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
       origin: { kind: 'orca', senderLabel: 'Lead', displayText: text },
     });
 
+  it('holds even an empty task queue through enqueue, ordinary Resume and restored input', async () => {
+    const h = createHarness();
+    const sid = 'paused-task';
+    h.coordinator.setExecutionPaused(sid, true);
+    await h.coordinator.ensureQueueRestored(sid);
+    h.coordinator.enqueue(sid, makeItem('first', 'first'), { resumeRestorePausedQueue: true });
+    h.coordinator.enqueue(sid, makeItem('second', 'second'));
+    h.coordinator.resume(sid);
+    await flush();
+    expect(h.coordinator.isQueuePaused(sid)).toBe(true);
+    expect(h.coordinator.shouldQueueNewTurn(sid)).toBe(true);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+    expect(h.coordinator.getQueueControlSnapshot(sid).pendingQueue.map((item) => item.clientId)).toEqual(['first', 'second']);
+    h.coordinator.setExecutionPaused(sid, false);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'first' });
+  });
+
   it('forwards main-stamped device-link provenance from enqueue to send', async () => {
     const h = createHarness();
     const sid = 'device-link-lead';

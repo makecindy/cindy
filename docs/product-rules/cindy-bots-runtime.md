@@ -194,9 +194,15 @@ harness + provider + model + effort + fastMode
   停止或自动交付合同；对方可以在自己的正常 turn 里处理，并通过反向消息回答。
 - `check_session_task`：按 `task_id` 读取一条后台任务的实时状态，只在用户追问或自动回传疑似
   丢失时使用，不作为轮询机制。
-- `message_session_task`：按 `task_id` 给同一任务追加或修正要求，也负责回答它正在等待的权限、
-  提问或计划确认；不得为了补充一句话重复创建任务。
-- `stop_session_task`：按 `task_id` 停止这条后台任务。
+- `message_session_task`：按 `task_id` 给同一任务追加或修正要求；`mode=queue`（默认）在忙碌时
+  排到下一轮，`mode=steer` 只使用运行中引擎的 same-turn 插话，不支持或旧轮已结束时明确失败，
+  不偷偷降级排队。`mode=resume` 解除可恢复暂停，可附新指令；不重放原请求或已完成操作。
+  它也负责回答等待的权限、提问或计划确认；暂停时先恢复再回答，不为补充一句话重复建任务。
+- `stop_session_task`：`mode=cancel`（默认）终止任务；`mode=request-stop` 只请求当前轮优雅停止，
+  不承诺冻结下一轮；`mode=pause` 持久暂停同一执行任务，保留未消费输入与剩余执行期限。
+  `control.state=pausing` 或 `stop_status=requested/unconfirmed` 不表示引擎已停；活跃执行仍在
+  等工具或确认时如实报告，确认空闲才返回 `paused`。等待中的交互保持原 resolver，恢复后才允许回答。
+  这些模式都只作用于调用伙伴拥有的后台任务；通用 Session control 类不因此开放给伙伴。
 
 伙伴按工作量主动分工（2026-09-07 产品裁决）：
 
@@ -213,7 +219,11 @@ harness + provider + model + effort + fastMode
 Session 任务遵守同一套机制与呈现契约：
 
 - **统一状态机**：`queued → running ⇄ waiting → completed | failed | cancelled`。`waiting`
-  表示子任务正在等权限、答案或计划确认，不把“等人”误报成执行超时。
+  表示子任务正在等权限、答案、计划确认或显式恢复；显式暂停另有持久控制标记，
+  `check_session_task` 返回 `control` 区分暂停与交互等待，不把它们误报成执行超时。
+- **显式暂停恢复**：暂停先锁住输入，旧轮终态不交付完成回执；重启只恢复锁，不自动执行。
+  恢复保留同一任务 ID、执行 Session 和历史，有队列先消费队列，无队列才投一次去重续接指令。
+  旧轮停止未确认时拒绝恢复，禁止与迟到中断竞争；计时只补回实际等待时长。
 - **等待恢复**：等待事项的人话摘要、请求标识和开始时间随任务行持久化；Host 重启后先保持
   `waiting` 与暂停计时，子任务恢复成功才回到 `running`。旧进程的 resolver 不可复用，恢复的
   子任务仍需要决定时必须重新发出 interaction request，不能让一个失效按钮假装批准成功。
@@ -230,7 +240,19 @@ Session 任务遵守同一套机制与呈现契约：
   第二条消息。
 - **不静默丢失**：发起方的原父任务已被异常恢复流程替换时，完成信号改投该伙伴当前的
   canonical Session；只有伙伴本身已暂停 / 归档才放弃投递，此时卡片终态仍然可见。
-- Session 任务只创建一层子任务，受并发上限约束；超时是持久化的执行边界。
+- Session 任务只创建一层子任务，受并发上限约束；超时是持久化的执行边界。默认执行预算
+  30 分钟，创建时 `timeout_ms` 可指定至 24 小时；终态续接从新的开始时间按原预算计算，
+  普通补充不延长正在运行的期限。没有 Host 回读证据不得声称已延长。
+- 项目执行显式传 `working_dir`，可用 `use_worktree=true` 在启动前复用现有 worktree 管理器
+  完成独立分支、目录与 Session 绑定；失败不得落回共享目录。只在 Shell 中新建 worktree
+  不会修改任务登记或运行时 cwd；`check_session_task` 返回实际登记目录与项目归属。
+- 补充输入返回 `queued_message_id`；`check_session_task` 返回调用 Session 自己投递的队列，
+  可按消息 ID 查询 queued / consuming / dispatched / not-found。dispatched 仅指宿主历史接受，
+  不证明模型已执行要求。`message_session_task(mode=edit/withdraw)` 复用共享队列的发送方与
+  消费竞态校验；不得改他人输入，consuming 不能编辑撤回，缺失不能假称已消费。
+- 取消复用界面停止的输入协调器，清除未派发队列与自动续接。持久取消标记阻止再次投递；
+  `cancelling/unconfirmed` 不是已停，原生终态或状态回读确认空闲后才收口为 cancelled。
+  超时终态也必须检查旧引擎是否已停，仍活跃时不得通过续接启动第二份执行。
 
 `send_to_agent` 是另一条更轻的伙伴间通讯通道，不得伪装成任务：
 

@@ -2556,7 +2556,7 @@ function persistInteractionDecision(
 
 function resolvePendingInteraction(requestId: string, decision: InteractionDecision): boolean {
   const resolver = pendingInteractionResolvers.get(requestId);
-  if (!resolver) return false;
+  if (!resolver || agentInputCoordinatorHolder?.isExecutionPaused(resolver.sessionId)) return false;
   clearPendingInteraction(requestId);
   handleAgentIslandInteractionDismissed(resolver.sessionId, requestId);
   resolver.resolve(decision);
@@ -9075,6 +9075,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const dispatchBotSessionMessage = async (params: {
     targetSessionId: string;
+    dispatcherSessionId?: string;
     authorizationGuard?: BotAuthorizationInputGuard;
     message: string;
     persistedContent?: string;
@@ -9240,6 +9241,51 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   botDelegationServiceHolder?.dispose();
   botDelegationServiceHolder = createBotDelegationService({
+    taskControl: {
+      steer: (params) => sessionControlService.steerSession(params),
+      stop: (params) => sessionControlService.stopSessionTurn(params),
+      isActive: (id) => {
+        const session = maker.getSession(id);
+        return !!session && (session.isTurnRunning() || session.getTurnControlSnapshot().pendingInteractionCount > 0);
+      },
+      holdInput: (id, held) => inputCoordinator.setExecutionPaused(id, held),
+      // Wait for sends already admitted before the hold before sampling native activity.
+      waitForInputBoundary: (id) => withSendToSessionLock(id, async () => undefined),
+      preparePause: async (id) => {
+        resetAutomaticRecoveryForExplicitStop(id);
+        contextOverflowRolloverHolder?.cancelRecovery(id);
+        await pauseGoalBeforeExplicitStop(id);
+      },
+      restoreInput: (id) => inputCoordinator.ensureQueueRestored(id),
+      flushInput: awaitAgentInputQueueSnapshotPersistence,
+      resumeInput: async (id) => { inputCoordinator.resume(id); },
+    },
+    discardUnusedWorktree: async sessionId => {
+      const [row] = await getDbClient().drizzle.select({ id: sessions.id }).from(sessions)
+        .where(eq(sessions.id, sessionId)).limit(1);
+      if (!row) await worktreeManager.removeWorktreeForSession(sessionId);
+    },
+    prepareWorktree: async workingDir => {
+      const prepared = await prepareHandoffWorktree({
+        getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
+        detectCwd: worktreeManager.detectCwd, suggestName: worktreeManager.suggestName,
+        listBranches: worktreeManager.listBranches, resolveCommit: worktreeManager.revParseCommit,
+        createWorktree: worktreeManager.createWorktree, createId: () => randomUUID(),
+        resolveFreshSource: resolveFreshSourceBranch,
+      }, undefined, workingDir);
+      return prepared.ok ? { ok: true, sessionId: prepared.sessionId, workingDir: prepared.meta.path } : prepared;
+    },
+    taskQueue: {
+      inspect: async (id, callerSessionId) => {
+        await inputCoordinator.ensureQueueRestored(id);
+        if (!inputCoordinator.isQueueRestored(id)) throw new Error('Task queue restoration is incomplete');
+        return inputCoordinator.getQueueInspection(id)
+          .filter(item => item.source === 'session' && item.sourceLabel === callerSessionId)
+          .map(item => ({ queuedMessageId: item.queuedMessageId, consuming: item.consuming, message: item.content }));
+      },
+      update: params => sessionControlService.updateQueuedMessage(params),
+      cancel: params => sessionControlService.cancelQueuedMessage(params),
+    },
     readCallerPermission: (sessionId) => {
       const state = maker.getSession(sessionId)?.stablePermissionModeState;
       return state?.mode ? { mode: state.mode, generation: state.generation } : null;
@@ -9254,17 +9300,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fastMode: getSessionFastMode(sessionId),
       } : null;
     },
-    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
         persistedContent,
         clientId,
         onAccepted,
+        dispatcherSessionId,
       }),
     abortSession: (async (sessionId) => {
-      const session = maker.getSession(sessionId);
-      if (session?.isTurnRunning?.()) await session.abort();
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      resetAutomaticRecoveryForExplicitStop(sessionId);
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
+      await pauseGoalBeforeExplicitStop(sessionId);
+      inputCoordinator.stop(sessionId);
+      await awaitAgentInputQueueSnapshotPersistence(sessionId);
     }),
     closeSession: (sessionId) => maker.closeSession(sessionId),
     broadcastSessionCreated,
@@ -12021,6 +12072,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('NOT_FOUND', 'Session does not exist');
       }
       if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
+      if (inputCoordinator.isExecutionPaused(sessionId)) {
+        throwIpcError('PRECONDITION_FAILED', 'Task is paused; resume it before continuing');
+      }
       return sendToAgentAcceptedUnlocked(...args);
     });
   };
@@ -13133,7 +13187,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       signals: InterruptedTurnErrorSignals,
       item: AgentInputQueuedMessage,
     ) => {
-      if (!isInterruptedTurnError(signals)) return null;
+      if (!isInterruptedTurnError(signals) || inputCoordinator.isExecutionPaused(sessionId)) return null;
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
       if (decision.action !== 'resume') {
@@ -13604,7 +13658,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     persistQueueSnapshot: (sessionId, items) => saveAgentInputQueueSnapshot(sessionId, items),
     loadClearBoundary: async (sessionId) =>
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
-    loadQueueSnapshot: (sessionId) => loadAgentInputQueueSnapshot(sessionId),
+    loadQueueSnapshot: async (sessionId) => {
+      // Rehydrate durable task holds before any entry point can drain restored/new input.
+      await botDelegationServiceHolder?.restorePauseForSession(sessionId);
+      return loadAgentInputQueueSnapshot(sessionId);
+    },
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;
