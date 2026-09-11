@@ -39,8 +39,15 @@ export function useRemoteCompanionQuery<T>(
   const refresh = useCallback(() => setRevision((n) => n + 1), []);
   const currentBinding = useRef(binding);
   currentBinding.current = binding;
+  const lastRefresh = useRef({ binding, key: options.refreshKey });
   useFocusEffect(
     useCallback(() => {
+      const previous = lastRefresh.current;
+      lastRefresh.current = { binding, key: options.refreshKey };
+      if (previous.binding === binding && !Object.is(previous.key, options.refreshKey)) {
+        const entry = pending.get(binding);
+        if (entry) entry.invalidated = true;
+      }
       if (!deviceId || !online || options.enabled === false) return;
       let disposed = false;
       let timer: ReturnType<typeof setTimeout> | undefined;

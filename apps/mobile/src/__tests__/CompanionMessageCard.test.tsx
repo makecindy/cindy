@@ -337,3 +337,58 @@ it('drops an old child PR response after switching to a different task', async (
   expect(node.textContent).not.toContain('devices.companions.viewPr');
   expect(h.invoke).toHaveBeenCalledWith('home', 'git-context:pr-refs:list', ['other-child']);
 });
+
+it('rechecks an in-flight empty PR list when the same task completes', async () => {
+  vi.useFakeTimers();
+  let finish!: (value: unknown) => void;
+  let reads = 0;
+  let completed = false;
+  const ref = {
+    id: 'new-pr',
+    sessionId: 'child',
+    owner: 'a',
+    repo: 'b',
+    prNumber: 7,
+    url: 'https://github.com/a/b/pull/7',
+    firstSeenAt: 1,
+    lastSeenAt: 2,
+  };
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list') {
+      reads += 1;
+      if (reads === 1)
+        return await new Promise((resolve) => {
+          finish = resolve;
+        });
+      return [ref];
+    }
+    if (channel === 'git-context:pr-status') return [{ ...ref, ok: true, status: 'open' }];
+    return {
+      ok: true,
+      delegations: [
+        {
+          id: 'job',
+          childSessionId: 'child',
+          status: completed ? 'completed' : 'running',
+          updatedAt: completed ? 2 : 1,
+        },
+      ],
+    };
+  });
+  await render();
+  expect(reads).toBe(1);
+  completed = true;
+  await act(async () => {
+    h.changed('home', 'maker:bot-delegation:changed', { parentSessionId: 'parent' });
+    await vi.advanceTimersByTimeAsync(400);
+  });
+  expect(reads).toBe(1);
+  await act(async () => finish([]));
+  expect(reads).toBe(2);
+  const pr = [...node.querySelectorAll('button')].find(
+    (b) => b.textContent === 'devices.companions.viewPr',
+  );
+  expect(pr).toBeTruthy();
+  await act(async () => pr!.click());
+  expect(h.openURL).toHaveBeenCalledWith(ref.url);
+});
