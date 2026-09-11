@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Activity } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { Tip } from '@/components/ui/tooltip';
+import { Tooltip } from '@/components/ui/tooltip';
 import { formatRunningTokenCount } from './lib/runningTokenUsage';
 import {
   emptyRateHistory,
@@ -45,7 +45,8 @@ export function RunningTokenRatePopover({
   history: RateHistory;
 }) {
   const { t } = useTranslation();
-  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<'idle' | 'hover' | 'pinned' | 'dismissed'>('idle');
+  const open = mode === 'pinned';
   const samples = history.samples;
   const firstTime = samples[0]?.durationMs ?? 0;
   const span = (samples.at(-1)?.durationMs ?? 0) - firstTime;
@@ -123,23 +124,36 @@ export function RunningTokenRatePopover({
   const surface =
     'w-[440px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-menu)]';
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Tip
-          text={card}
-          side="top"
-          controlledOpen={open ? false : undefined}
-          contentClassName={`${surface} break-normal`}
+    <Popover open={open} onOpenChange={(next) => setMode(next ? 'pinned' : 'dismissed')}>
+      <Tooltip.Provider>
+        <Tooltip.Root
+          open={mode === 'hover'}
+          onOpenChange={(next) =>
+            setMode((current) =>
+              current === 'pinned' || current === 'dismissed' ? current : next ? 'hover' : 'idle',
+            )
+          }
         >
-          <button
-            type="button"
-            className="rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
-            aria-label={`${t('chat.runningStatus.currentRate')}: ${rateText}`}
-          >
-            {rateText}
-          </button>
-        </Tip>
-      </PopoverTrigger>
+          <PopoverTrigger asChild>
+            <Tooltip.Trigger asChild>
+              <button
+                type="button"
+                onPointerEnter={() =>
+                  setMode((current) => (current === 'dismissed' ? 'idle' : current))
+                }
+                onBlur={() => setMode((current) => (current === 'dismissed' ? 'idle' : current))}
+                className="inline-flex min-h-6 min-w-6 items-center justify-center rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
+                aria-label={`${t('chat.runningStatus.currentRate')}: ${rateText}`}
+              >
+                {rateText}
+              </button>
+            </Tooltip.Trigger>
+          </PopoverTrigger>
+          <Tooltip.Content side="top" className={`${surface} break-normal`}>
+            {card}
+          </Tooltip.Content>
+        </Tooltip.Root>
+      </Tooltip.Provider>
       <PopoverContent
         side="top"
         align="end"
