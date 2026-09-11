@@ -37,14 +37,12 @@ export function RunningTokenRatePopover({
   averageRate,
   outputTokens,
   history,
-  activityStatus,
 }: {
   rate: string | null;
   rateText: string;
   averageRate: string | null;
   outputTokens: number;
   history: RateHistory;
-  activityStatus: string;
 }) {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
@@ -95,7 +93,7 @@ export function RunningTokenRatePopover({
           )}
           {last && <circle cx={last.x} cy={last.y} r="2.5" fill="currentColor" />}
         </svg>
-        <dl className="col-start-3 row-start-1 row-span-2 self-center space-y-1 text-12 tabular-nums max-[460px]:col-span-2 max-[460px]:col-start-1 max-[460px]:row-start-2 max-[460px]:row-span-1 max-[460px]:justify-self-center">
+        <dl className="col-start-3 row-start-1 self-center space-y-1 text-12 tabular-nums max-[460px]:col-span-2 max-[460px]:col-start-1 max-[460px]:row-start-2 max-[460px]:justify-self-center">
           <div className="flex items-center gap-2">
             <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.averageRate')}</dt>
             <dd className="font-medium">
@@ -120,9 +118,6 @@ export function RunningTokenRatePopover({
           </div>
         </dl>
       </div>
-      <p className="col-span-2 col-start-1 row-start-2 text-12 leading-relaxed text-[var(--text-secondary)] max-[460px]:row-start-3">
-        {activityStatus}
-      </p>
     </div>
   );
   const surface =

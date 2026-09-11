@@ -4728,15 +4728,6 @@ export function CCAgentSessionView({
                   outputTokens={agentStatus.outputTokens ?? 0}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
                   generationReliable={agentStatus.generationReliable ?? true}
-                  activityStatus={
-                    pendingPermission
-                      ? t('ccAgent.sidebar.card.awaitingPermission')
-                      : pendingAskUser
-                        ? t('ccAgent.sidebar.card.awaitingQuestion')
-                        : pendingPluginSetup
-                          ? t('ccAgent.sidebar.card.awaitingPluginSetup')
-                          : undefined
-                  }
                   startedAt={agentStatus.startedAt}
                   visible={composerRuntimeVisible}
                   inputWidth={inputWidth}
@@ -5555,7 +5546,6 @@ function RunningStatusBar({
   outputTokens = 0,
   generationDurationMs = 0,
   generationReliable = true,
-  activityStatus,
   startedAt,
   visible,
   inputWidth,
@@ -5574,7 +5564,6 @@ function RunningStatusBar({
   outputTokens?: number;
   generationDurationMs?: number;
   generationReliable?: boolean;
-  activityStatus?: string;
   startedAt: number | null;
   visible: boolean;
   inputWidth?: CSSProperties['width'];
@@ -5867,7 +5856,6 @@ function RunningStatusBar({
                         averageRate={usageMeta.rate}
                         outputTokens={outputTokens}
                         history={rateHistory}
-                        activityStatus={activityStatus ?? displayStatus}
                       />
                     ) : (
                       <>

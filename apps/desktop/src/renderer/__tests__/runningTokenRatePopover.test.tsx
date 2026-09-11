@@ -10,7 +10,6 @@ afterEach(cleanup);
 it('pins the card on click and dismisses with Escape, returning focus to the speed', async () => {
   render(
     <RunningTokenRatePopover
-      activityStatus="正在执行工具"
       rate="100"
       rateText="100 tok/s"
       averageRate="110"
@@ -33,21 +32,4 @@ it('pins the card on click and dismisses with Escape, returning focus to the spe
   fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
   await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
   await waitFor(() => expect(document.activeElement).toBe(trigger));
-});
-
-it('updates actual activity while retaining the latest speed in a pinned card', () => {
-  const props = {
-    rate: '100',
-    rateText: '100 tok/s',
-    averageRate: '110',
-    outputTokens: 1000,
-    history: { startedAt: 1, baseline: null, peak: 100, samples: [] },
-  };
-  const { rerender } = render(<RunningTokenRatePopover {...props} activityStatus="正在执行工具" />);
-  fireEvent.click(screen.getByRole('button'));
-  expect(screen.getByRole('dialog').textContent).toContain('正在执行工具');
-  rerender(<RunningTokenRatePopover {...props} activityStatus="等待授权" />);
-  expect(screen.getByRole('dialog').textContent).toContain('等待授权');
-  expect(screen.getByRole('dialog').textContent).not.toContain('正在执行工具');
-  expect(screen.getByRole('button').textContent).toBe('100 tok/s');
 });
