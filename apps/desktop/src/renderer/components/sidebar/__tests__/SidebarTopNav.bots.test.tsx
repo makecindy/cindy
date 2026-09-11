@@ -49,6 +49,28 @@ function Harness({ initialPath, owner = 'one' }: { initialPath: string; owner?: 
 }
 
 describe('Sidebar teammate return action', () => {
+  it('keeps the previous task when visiting automations before teammates', () => {
+    const sessionPath = '/cc-agent/session-1?remoteHostId=host-1#message-2';
+    render(<Harness initialPath={sessionPath} />);
+    fireEvent.click(screen.getByRole('button', { name: 'ccAgent.layout.automations' }));
+    expect(screen.getByRole('button', { name: 'ccAgent.layout.automations' }).getAttribute('aria-current')).toBe('page');
+    fireEvent.click(screen.getByRole('button', { name: '伙伴' }));
+    fireEvent.click(screen.getByRole('button', { name: '返回任务' }));
+    expect(screen.getByTestId('location').textContent).toBe(sessionPath);
+    expect(screen.getByRole('button', { name: 'ccAgent.layout.automations' }).hasAttribute('aria-current')).toBe(false);
+  });
+
+  it.each(['/cc-agent/scheduled', '/cc-agent/scheduled/?filter=enabled#schedule-1'])(
+    'returns to the task index after entering teammates from %s without a previous task',
+    (initialPath) => {
+      render(<Harness initialPath={initialPath} />);
+      fireEvent.click(screen.getByRole('button', { name: '伙伴' }));
+      fireEvent.click(screen.getByRole('button', { name: '返回任务' }));
+      expect(screen.getByTestId('location').textContent).toBe('/cc-agent');
+      expect(screen.getByRole('button', { name: 'ccAgent.layout.automations' }).hasAttribute('aria-current')).toBe(false);
+    },
+  );
+
   it('does not seed a new owner from the unchanged router entry', () => {
     const oldPath = '/cc-agent/old-owner-session?remoteHostId=old-host#message-2';
     function OwnerRouter({ owner }: { owner: string }) {
