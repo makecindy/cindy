@@ -1756,6 +1756,49 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
   });
+  it("finishes a timed-out overflow release before taking control again", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    let falseAttempts = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "control" && req.enabled === false) {
+        falseAttempts += 1;
+        if (falseAttempts === 1)
+          return Promise.reject(
+            Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+          );
+        return Promise.resolve({ controlling: false });
+      }
+      if (req.op === "heartbeat")
+        return Promise.resolve({ controlling: true });
+      return original(...args);
+    });
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
+        },
+      });
+    });
+    expect(
+      requests().filter((r) => r.op === "control" && r.enabled === false),
+    ).toHaveLength(1);
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+    const controlOps = requests()
+      .filter((r) => r.op === "control")
+      .map((r) => r.enabled);
+    // Overflow timed out with pending release. Take control must finish that
+    // release (host stopInput) before asking to enable, so the helper restarts.
+    expect(controlOps).toEqual([true, false, false, true]);
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: true,
+    });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
   it("restores control when a take-control reply is lost but the host still holds it", async () => {
     await connect();
     act(() => button("operations").click());

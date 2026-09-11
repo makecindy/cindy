@@ -1338,6 +1338,18 @@ export default function RemoteDesktopScreen() {
       }
       send({ type: "control", enabled: false });
       const enabled = !current.controlling;
+      if (pendingHostControl.current === false && enabled) {
+        // Overflow timed out with an unconfirmed host release. Taking control
+        // first would skip stopInput while a key/button may still be held.
+        const released = await request<{ controlling: boolean }>({
+          op: "control",
+          lease: current.lease,
+          enabled: false,
+        });
+        if (active.current !== current) return;
+        applyConfirmedControl(current, released.controlling);
+        if (released.controlling) return;
+      }
       pendingHostControl.current = enabled;
       const result = await request<{ controlling: boolean }>({
         op: "control",

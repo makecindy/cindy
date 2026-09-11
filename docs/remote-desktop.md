@@ -163,7 +163,9 @@ heartbeat retries the release (or restores local control after a lost
 take-control reply) instead of ignoring a host-`true` while the phone stays
 view-only. A heartbeat that still reports view-only while `startInput()` is
 settling does not consume that pending take-control: only a later beat, after
-the transition, may reconcile. Errors whose outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or
+the transition, may reconcile. An unconfirmed overflow release stays
+authoritative until the host is view-only: taking control finishes that
+release (`stopInput`) before asking to enable, so the helper restarts. Errors whose outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or
 a control request that collides with one still settling — do not rebuild the
 session: a batch that may have been injected must not be answered with a
 release that discards its key-up, and the heartbeat still owns liveness. Errors
