@@ -482,8 +482,8 @@ it('does not mistake a contextual PR in the objective for the task result', asyn
   expect(screen.queryByRole('button', { name: 'bots.collab.viewPr' })).toBeNull();
 });
 
-it('offers every associated PR without opening an arbitrary first link', async () => {
-  mocks.prRefs = [associatedPr(1), associatedPr(2)];
+it('offers only the same three associated PRs as the task header', async () => {
+  mocks.prRefs = [1, 2, 3, 4, 5].map(associatedPr);
   listBotDelegations.mockResolvedValue({
     ok: true,
     delegations: [
@@ -496,6 +496,9 @@ it('offers every associated PR without opening an arbitrary first link', async (
   const button = await screen.findByRole('button', { name: 'bots.collab.viewPr' });
   fireEvent.keyDown(button, { key: 'Enter' });
   const choice = await screen.findByRole('menuitem', { name: 'a/b #2' });
+  expect(screen.getAllByRole('menuitem')).toHaveLength(3);
+  expect(screen.getByText('bots.collab.prCount:{"count":3}')).toBeTruthy();
+  expect(screen.queryByRole('menuitem', { name: 'a/b #4' })).toBeNull();
   expect(window.electronAPI.openExternal).not.toHaveBeenCalled();
   fireEvent.click(choice);
   expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://github.com/a/b/pull/2');

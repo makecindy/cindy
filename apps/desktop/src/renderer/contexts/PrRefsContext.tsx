@@ -86,7 +86,7 @@ interface PrCacheStore {
   setSessionRefs: (sessionId: string, refs: readonly SessionPrRef[]) => void;
   /** 批量落入指定会话的状态。同会话后写覆盖前写;跨会话互不干扰。 */
   applyStatuses: (sessionId: string, results: readonly PrStatusResult[]) => void;
-  hasRefreshError: (sessionId: string) => boolean;
+  hasRefreshError: (sessionId: string, channel?: 'refs' | 'statuses') => boolean;
   setRefreshError: (sessionId: string, channel: 'refs' | 'statuses', failed: boolean) => void;
   clearAll: () => void;
 }
@@ -171,8 +171,9 @@ function createPrCacheStore(): PrCacheStore {
       successfulStatusSnapshots.set(sessionId, successful);
       notify();
     },
-    hasRefreshError(sessionId) {
-      return (refreshErrors.get(sessionId)?.size ?? 0) > 0;
+    hasRefreshError(sessionId, channel) {
+      const errors = refreshErrors.get(sessionId);
+      return channel ? errors?.has(channel) === true : (errors?.size ?? 0) > 0;
     },
     setRefreshError(sessionId, channel, failed) {
       const errors = refreshErrors.get(sessionId) ?? new Set<'refs' | 'statuses'>();
@@ -352,12 +353,14 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
           const refs = await window.electronAPI.gitContext.listPrRefs(data.sessionId);
           if (cancelled) return;
           store.setSessionRefs(data.sessionId, refs);
+          store.setRefreshError(data.sessionId, 'refs', false);
           // 该会话有消费者在展示(顶栏/侧栏徽标)→ 引用变化后立即刷状态,
           // 不等 90s 周期(对齐顶栏旧行为:引用变化即时补状态)。
           if (refs.length > 0 && prConsumers.current.has(data.sessionId)) {
             fetchStatusesForRefs(data.sessionId, refs);
           }
         } catch (err) {
+          if (!cancelled) store.setRefreshError(data.sessionId, 'refs', true);
           log.warn('pr refs refresh failed', String(err));
         }
       })();
@@ -492,12 +495,13 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   }).current;
 
   const fetchRefsForLocalSession = useRef((sessionId: string) => {
-    // 启动全表已经命中的会话不必再打 IPC;缺席才按会话回退。
-    if (store.getRefs(sessionId).length > 0) return;
+    // 已有成功引用不重复读取；缺席或上次刷新失败时沿原有节拍补查。
+    const refsFailed = store.hasRefreshError(sessionId, 'refs');
+    if (store.getRefs(sessionId).length > 0 && !refsFailed) return;
     const gen = ownerGenRef.current;
     if (localRefsInFlight.current.get(sessionId) === gen) return;
     const fetchedAt = localRefsFetchedAt.current.get(sessionId);
-    if (fetchedAt !== undefined && Date.now() - fetchedAt < PR_STATUS_REFRESH_INTERVAL_MS - 5_000) {
+    if (!refsFailed && fetchedAt !== undefined && Date.now() - fetchedAt < PR_STATUS_REFRESH_INTERVAL_MS - 5_000) {
       return;
     }
     localRefsInFlight.current.set(sessionId, gen);
@@ -506,11 +510,13 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         const refs = await window.electronAPI.gitContext.listPrRefs(sessionId);
         if (gen !== ownerGenRef.current) return;
         localRefsFetchedAt.current.set(sessionId, Date.now());
+        store.setRefreshError(sessionId, 'refs', false);
         store.setSessionRefs(sessionId, refs);
         if (refs.length > 0 && prConsumers.current.has(sessionId)) {
           fetchStatusesForRefs(sessionId, refs);
         }
       } catch (err) {
+        if (gen === ownerGenRef.current) store.setRefreshError(sessionId, 'refs', true);
         log.warn('local pr refs fetch failed', String(err));
       } finally {
         if (localRefsInFlight.current.get(sessionId) === gen) {

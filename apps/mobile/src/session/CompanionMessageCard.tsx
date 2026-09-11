@@ -143,16 +143,14 @@ function CompanionTaskCard({
       refreshKey: row?.updatedAt,
     },
   );
-  const prs = Array.isArray(associated.value) ? associated.value : [];
+  const prs = Array.isArray(associated.value) ? associated.value.slice(0, MAX_STATUS_QUERIES) : [];
   const prStatuses = useRemoteCompanionQuery<PrStatusResult[]>(
     deviceId,
     'git-context:pr-status',
     [
       {
         sessionId: childSessionId,
-        queries: prs
-          .slice(0, MAX_STATUS_QUERIES)
-          .map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
+        queries: prs.map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
       },
     ],
     {

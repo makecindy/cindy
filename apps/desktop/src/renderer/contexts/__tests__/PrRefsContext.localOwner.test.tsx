@@ -293,3 +293,45 @@ it('keeps cached PR data stale until both rejected query channels recover, then 
   expect(screen.queryByText('1:1:stale')).toBeNull();
   unmount();
 });
+
+it('marks rejected local push refresh stale and recovers through the existing focus refresh', async () => {
+  const focus = vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+  mocks.dataOwnerId = 'local-refresh-owner';
+  const ref = { id: 'local-pr', sessionId: 'session-local', owner: 'a', repo: 'b', prNumber: 1,
+    url: 'https://github.com/a/b/pull/1', firstSeenAt: 1, lastSeenAt: 1 };
+  let changed!: (data: { sessionId: string }) => void;
+  let failed = false;
+  const listPrRefs = vi.fn(async () => {
+    if (failed) throw new Error('IPC unavailable');
+    return [ref];
+  });
+  window.electronAPI = { gitContext: {
+    listAllPrRefs: vi.fn(async () => [ref]),
+    listPrRefs,
+    getPrStatuses: vi.fn(async () => [{ ...ref, ok: true, status: 'merged' }]),
+    onPrRefsChanged: (callback: typeof changed) => { changed = callback; return () => {}; },
+  } } as any;
+  function Probe() {
+    const { registerPrConsumer } = usePrActions();
+    const { refreshError } = usePrStatuses('session-local');
+    const refs = usePrRefsForSession('session-local');
+    useEffect(() => registerPrConsumer('session-local'), [registerPrConsumer]);
+    return <span>{refs.length}:{refreshError ? 'stale' : 'fresh'}</span>;
+  }
+  const { unmount } = render(<PrRefsProvider><Probe /></PrRefsProvider>);
+  await screen.findByText('1:fresh');
+  failed = true;
+  await act(async () => changed({ sessionId: 'session-local' }));
+  expect(screen.getByText('1:stale')).toBeTruthy();
+  failed = false;
+  await act(async () => window.dispatchEvent(new Event('focus')));
+  expect(screen.getByText('1:fresh')).toBeTruthy();
+  failed = true;
+  await act(async () => changed({ sessionId: 'session-local' }));
+  expect(screen.getByText('1:stale')).toBeTruthy();
+  failed = false;
+  await act(async () => changed({ sessionId: 'session-local' }));
+  expect(screen.getByText('1:fresh')).toBeTruthy();
+  unmount();
+  focus.mockRestore();
+});

@@ -3,7 +3,7 @@ import { FileText, GitPullRequest, Megaphone, Square, TriangleAlert } from 'luci
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
-import { prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
+import { MAX_STATUS_QUERIES, prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
 import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { Button } from '@/components/ui/button';
@@ -108,7 +108,7 @@ function SessionTaskCardBody({
   const active = row ? isActiveDelegationStatus(row.status) : false;
   const childSessionId = row?.childSessionId ?? meta.childSessionId;
   const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
-  const pullRequests = usePrRefsForSession(childSessionId ?? '');
+  const pullRequests = usePrRefsForSession(childSessionId ?? '').slice(0, MAX_STATUS_QUERIES);
   const { statuses, successfulStatuses, refreshError } = usePrStatuses(childSessionId ?? '');
   useEffect(() => {
     if (!childSessionId) return;

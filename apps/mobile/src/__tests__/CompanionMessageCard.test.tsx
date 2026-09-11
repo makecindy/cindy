@@ -431,3 +431,25 @@ it('keeps the last successful PR icon during an element failure and clears stale
   expect(node.querySelector('[data-testid="merged-pr"]')).toBeNull();
   expect(node.textContent).not.toContain('devices.companions.stale');
 });
+
+it('limits the PR menu and status queries to the same three references as the task header', async () => {
+  const refs = [1, 2, 3, 4, 5].map((prNumber) => ({
+    id: String(prNumber), sessionId: 'child', owner: 'a', repo: 'b', prNumber,
+    url: `https://github.com/a/b/pull/${prNumber}`, firstSeenAt: 1, lastSeenAt: 1,
+  }));
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list') return refs;
+    if (channel === 'git-context:pr-status') return refs.slice(0, 3).map((ref) => ({ ...ref, ok: true, status: 'merged' }));
+    return { ok: true, delegations: [{ id: 'job', status: 'completed', title: 'Report', childSessionId: 'child' }] };
+  });
+  await render();
+  const pr = [...node.querySelectorAll('button')].find((b) => b.textContent === 'devices.companions.viewPr')!;
+  await act(async () => pr.click());
+  const choices = [...node.querySelectorAll('button')].filter((b) => b.textContent?.includes('a/b #'));
+  expect(choices.map((b) => b.textContent)).toEqual(['a/b #1', 'a/b #2', 'a/b #3']);
+  expect(h.invoke).toHaveBeenCalledWith('home', 'git-context:pr-status', [
+    { sessionId: 'child', queries: refs.slice(0, 3).map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })) },
+  ]);
+  await act(async () => choices[2].click());
+  expect(h.openURL).toHaveBeenCalledWith('https://github.com/a/b/pull/3');
+});
