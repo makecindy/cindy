@@ -937,6 +937,8 @@ export async function forkSessionAtMessage(
   }
   const forkContextTokens = normalizePositiveInt(initialContextTokens);
   const forkContextWindow = needsHistoryRecovery ? 0 : normalizePositiveInt(source.contextWindow);
+  const sameContextRoute = forkSource.agentKind === normalizeDbAgentKind(source.agentKind) &&
+    forkSource.model === source.model && forkSource.providerId === source.providerId;
 
   // 5. SQLite 事务：insert 新 session + bulk copy messages
   const now = Date.now();
@@ -979,6 +981,8 @@ export async function forkSessionAtMessage(
         totalCostUsd: 0,
         contextTokens: forkContextTokens,
         contextWindow: forkContextWindow,
+        contextWindowRuntime: sameContextRoute && forkContextWindow > 0 && source.contextWindowRuntime === forkContextWindow
+          ? forkContextWindow : null,
         fastMode: forkSource.agentKind === source.agentKind ? source.fastMode : false,
         clearedAt: null,
         pinnedAt: null,

@@ -1649,11 +1649,17 @@ export function buildPiSettingsJsonContent(
   contextWindow: number,
   piCompactionPct?: number,
   packages: readonly PiNativePackageEntry[] = [],
+  workingContextWindow?: number,
 ): string {
   const effectiveContextWindow = contextWindow > 0 ? contextWindow : 128_000;
-  const reserveTokens = piCompactionPct === undefined
+  // Pi also uses model.contextWindow to clamp request max_tokens (including a
+  // 4096-token safety margin). A small compaction budget must never shrink that
+  // request capacity. Express the budget through native reserveTokens instead.
+  const budget = workingContextWindow && workingContextWindow > 0
+    ? Math.min(workingContextWindow, effectiveContextWindow) : effectiveContextWindow;
+  const reserveTokens = piCompactionPct === undefined && budget === effectiveContextWindow
     ? undefined
-    : Math.max(1, Math.ceil(effectiveContextWindow * (1 - piCompactionPct / 100)));
+    : Math.max(1, Math.ceil(effectiveContextWindow - budget * ((piCompactionPct ?? 90) / 100)));
   return JSON.stringify({
     transport: 'sse',
     retry: {
@@ -2032,11 +2038,13 @@ export class PiAgent extends BaseAgent {
     contextWindow?: number,
     piCompactionPct?: number,
     packages: readonly PiNativePackageEntry[] = [],
+    workingContextWindow?: number,
   ): string {
     return buildPiSettingsJsonContent(
       contextWindow && contextWindow > 0 ? contextWindow : 128_000,
       piCompactionPct,
       packages,
+      workingContextWindow,
     );
   }
 
@@ -2056,6 +2064,7 @@ export class PiAgent extends BaseAgent {
     opts: {
       fileOps?: PiRemoteFileOps;
       contextWindow?: number;
+      workingContextWindow?: number;
       piCompactionPct?: number;
       packages?: readonly PiNativePackageEntry[];
       disabledSkills?: DisabledSkillLaunchSnapshot;
@@ -2065,6 +2074,7 @@ export class PiAgent extends BaseAgent {
       opts.contextWindow,
       opts.piCompactionPct,
       opts.packages,
+      opts.workingContextWindow,
     );
     if (opts.fileOps) return built;
     const readOrNull = async (file: string): Promise<string | null> => {
@@ -2096,6 +2106,7 @@ export class PiAgent extends BaseAgent {
     opts: {
       fileOps?: PiRemoteFileOps;
       contextWindow?: number;
+      workingContextWindow?: number;
       piCompactionPct?: number;
       packages?: readonly PiNativePackageEntry[];
       disabledSkills?: DisabledSkillLaunchSnapshot;
@@ -2132,6 +2143,7 @@ export class PiAgent extends BaseAgent {
       offlineValidationOnly?: boolean;
       /** Current model context window used to translate the Pi percentage setting. */
       contextWindow?: number;
+      workingContextWindow?: number;
       /** Session-frozen Pi auto-compact percentage. Do not re-read the live getter. */
       piCompactionPct?: number;
       /** Host-installed roots/specs for Pi's own package discovery. */
@@ -2234,8 +2246,9 @@ export class PiAgent extends BaseAgent {
           : {}),
         reasoning: m.efforts.length > 0,
         input: supportsImageInput ? ['text', 'image'] : ['text'],
-        // Model Access v3 requires this value; never replace the server limit with a client guess.
-        contextWindow: this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', m.id) ?? m.contextWindow,
+        // Keep request capacity at least as large as the catalog default. A
+        // smaller working budget is expressed by native compaction settings.
+        contextWindow: Math.max(m.contextWindow, this.deps.resolveModelContextLimit?.(gatewayProviderId ?? 'xd', m.id) ?? 0),
         maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : piMaxTokensFallback(m.contextWindow),
         // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
         cost: {
@@ -2275,8 +2288,10 @@ export class PiAgent extends BaseAgent {
       const nativeModels = (
         np.inheritModels ? np.models.filter((model) => model.api !== undefined || model.catalogAddition === true) : np.models
       ).map((m) => {
-        const contextWindow = this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, m.id)
-          ?? (m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000);
+        const contextWindow = Math.max(
+          m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
+          this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, m.id) ?? 0,
+        );
         return {
           id: m.wireId ?? m.id,
           name: m.name ?? m.id,
@@ -2302,12 +2317,12 @@ export class PiAgent extends BaseAgent {
         ...(np.api ? { api: np.api } : {}),
         // keyless(本机 Ollama 等)也要给 dummy key,否则 pi /model 不显示该模型。
         apiKey: np.apiKeyEnvVar ? `$${np.apiKeyEnvVar}` : 'pi-native-keyless',
-        // Preserve native protocol/compatibility metadata while applying Cindy's
-        // route default or explicit working window to inherited models as well.
+        // Preserve native protocol/compatibility metadata. Larger supported
+        // budgets may raise capacity; smaller budgets only change compaction.
         ...(np.inheritModels ? {
           modelOverrides: Object.fromEntries(np.models.flatMap((model) => {
-            const window = this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, model.id)
-              ?? model.contextWindow;
+            const window = Math.max(model.contextWindow ?? 0,
+              this.deps.resolveModelContextLimit?.(np.sourceProviderId ?? np.id, model.id) ?? 0);
             return typeof window === 'number' && Number.isSafeInteger(window) && window > 0
               ? [[model.wireId ?? model.id, { contextWindow: window }]] : [];
           })),
@@ -2598,9 +2613,13 @@ export class PiAgent extends BaseAgent {
         });
       }
     }
-    const startupContextWindow =
-      this.deps.resolveModelContextLimit?.(authProviderId, opts.model) ??
-      selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000;
+    const startupWorkingContextWindow = this.deps.resolveModelContextLimit?.(authProviderId, opts.model) ?? undefined;
+    const nativeModel = nativeProviders.find((provider) => provider.id === initialProvider)?.models
+      .find((model) => (model.wireId ?? model.id) === initialWireModel);
+    const startupContextWindow = Math.max(
+      nativeModel?.contextWindow ?? selectedRuntimeModel?.contextWindow ?? publicRuntimeModel?.contextWindow ?? 128_000,
+      startupWorkingContextWindow ?? 0,
+    );
 
     // 普通远端会话直连网关(remoteEndpoint),不生成本地 proxy token。只有显式声明
     // hostProxyForward 的 provider（当前为 xAI）仍通过 Desktop compat proxy：
@@ -2991,6 +3010,7 @@ export class PiAgent extends BaseAgent {
         fileOps,
         preview: true,
         contextWindow: startupContextWindow,
+        workingContextWindow: startupWorkingContextWindow,
         piCompactionPct: sessionPiAutoCompactPct,
       });
       configHome = joinRemotePosixPath(
@@ -3004,7 +3024,11 @@ export class PiAgent extends BaseAgent {
       nativeProviders,
       retainedRuntimeModel,
       authProviderId,
-      { remote, fileOps, contextWindow: startupContextWindow, piCompactionPct: sessionPiAutoCompactPct },
+      {
+        remote, fileOps, contextWindow: startupContextWindow,
+        workingContextWindow: startupWorkingContextWindow,
+        piCompactionPct: sessionPiAutoCompactPct,
+      },
     );
     const explicitlyRequestedGateway = isExplicitPiGatewayProviderId(opts.providerId);
     if (
@@ -3576,6 +3600,7 @@ export class PiAgent extends BaseAgent {
           nativePackagePaths = await this.deps.resolvePiNativePackagePaths();
           await this.writePiRuntimeSettings(configHome, {
             contextWindow: startupContextWindow,
+            workingContextWindow: startupWorkingContextWindow,
             piCompactionPct: sessionPiAutoCompactPct,
             packages: nativePackagePaths,
           });
@@ -3663,6 +3688,7 @@ export class PiAgent extends BaseAgent {
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     ctx.getPriceVariant = opts.getPriceVariant;
+    ctx.workingContextWindow = startupWorkingContextWindow;
     const contextModeRoot = findContextModePackageRoot([
       ...nativePackageRoots,
       ...managedPackageResources.packageRoots,
@@ -5817,6 +5843,7 @@ export class PiAgent extends BaseAgent {
           remote,
           fileOps,
           contextWindow: ctx.contextWindow || startupContextWindow,
+          workingContextWindow: ctx.workingContextWindow,
           piCompactionPct: sessionPiAutoCompactPct,
           packages: nativePackagePaths,
           disabledSkills: disabledSkillLaunch,
@@ -5897,6 +5924,7 @@ export class PiAgent extends BaseAgent {
             remote,
             fileOps,
             contextWindow: ctx.contextWindow || startupContextWindow,
+            workingContextWindow: ctx.workingContextWindow,
             piCompactionPct: sessionPiAutoCompactPct,
             packages: nativePackagePaths,
             disabledSkills: disabledSkillLaunch,
@@ -6217,6 +6245,7 @@ export class PiAgent extends BaseAgent {
           ?.contextWindow ??
         ctx.contextWindow;
       if (nextWindow > 0) ctx.contextWindow = nextWindow;
+      ctx.workingContextWindow = this.deps.resolveModelContextLimit?.(mutableProviderId, model) ?? undefined;
       // Always reload and read get_state after set_model. The catalog and even the
       // set_model response can disagree with the materialized runtime window; callers
       // must not decide whether to destroy native context until this verification ends.
@@ -6228,6 +6257,7 @@ export class PiAgent extends BaseAgent {
           await this.writePiRuntimeSettings(configHome, {
             fileOps,
             contextWindow: nextWindow,
+            workingContextWindow: ctx.workingContextWindow,
             piCompactionPct: sessionPiAutoCompactPct,
             packages: nativePackagePaths,
             disabledSkills: disabledSkillLaunch,
@@ -6284,6 +6314,7 @@ export class PiAgent extends BaseAgent {
             await this.writePiRuntimeSettings(configHome, {
               fileOps,
               contextWindow: verifiedWindow,
+              workingContextWindow: ctx.workingContextWindow,
               piCompactionPct: sessionPiAutoCompactPct,
               packages: nativePackagePaths,
               disabledSkills: disabledSkillLaunch,
@@ -6903,7 +6934,7 @@ export class PiAgent extends BaseAgent {
           id == null || id === 'xd' || id === PI_PROVIDER_ID ? PI_PROVIDER_ID : id;
         if (model !== mutableModel || contextSource(provider) !== contextSource(mutableProviderId)) return false;
         const window = deps.resolveModelContextLimit?.(provider, model);
-        return typeof window === 'number' && window > 0 && window !== ctx.contextWindow;
+        return (window ?? undefined) !== ctx.workingContextWindow;
       },
 
       async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
@@ -7214,7 +7245,7 @@ export class PiAgent extends BaseAgent {
           tree,
           messages: activePiHistoryFromTree(after.data, tree),
           contextTokens,
-          contextWindow,
+          contextWindow: usageSnapshotOf(ctx).contextWindow,
           ...(draftText ? { draftText } : {}),
         };
       },
@@ -7235,15 +7266,19 @@ export class PiAgent extends BaseAgent {
             | undefined
         )?.contextUsage;
         const totalTokens = typeof contextUsage?.tokens === 'number' && contextUsage.tokens >= 0 ? contextUsage.tokens : ctx.contextTokens;
-        const maxTokens =
+        const nativeCapacity =
           typeof contextUsage?.contextWindow === 'number' && contextUsage.contextWindow > 0
             ? contextUsage.contextWindow
             : ctx.contextWindow;
+        const maxTokens = ctx.workingContextWindow && ctx.workingContextWindow > 0
+          ? Math.min(ctx.workingContextWindow, nativeCapacity) : nativeCapacity;
         const percentage = maxTokens > 0 ? Math.min(100, (totalTokens / maxTokens) * 100) : 0;
         return {
           categories: [{ name: 'Messages', tokens: totalTokens, color: '#8b8b8b' }],
           totalTokens,
           maxTokens,
+          // Context cards and shared summaries use rawMaxTokens as their denominator.
+          // Pi has no separate usable-window reserve within the working budget.
           rawMaxTokens: maxTokens,
           percentage,
           gridRows: [],
@@ -8421,10 +8456,10 @@ export class PiAgent extends BaseAgent {
             proc.send({ type: 'extension_ui_response', id, cancelled: true });
             return;
           }
-          if (method === 'select' && !options.includes(answer)) {
-            proc.send({ type: 'extension_ui_response', id, cancelled: true });
-            return;
-          }
+          // Pi's RPC select contract only distinguishes cancelled from value and hands
+          // `value` back to the caller verbatim; Cindy's question card always offers a
+          // "type your own" entry, so a non-empty answer outside `options` is a real
+          // answer, not a cancel (#4273).
           context.recordUserClarification(question, answer);
           proc.send({ type: 'extension_ui_response', id, value: answer });
         })

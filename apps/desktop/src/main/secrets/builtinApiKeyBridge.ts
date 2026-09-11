@@ -11,25 +11,9 @@
  * - has 是查询:失败回 false 供 UI 按未配置渲染,只回存在性布尔。
  */
 
-import type { ProviderSecretId } from '../../shared/providerSecrets.js';
+import { isBuiltinApiKeyProviderId, type ProviderSecretId } from '../../shared/providerSecrets.js';
+export { isBuiltinApiKeyProviderId } from '../../shared/providerSecrets.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
-
-/**
- * 允许经本桥访问的内置 API-key 供应商(新增供应商时在此扩展)。
- * 模块私有:这是权限白名单,不导出可变引用(ReadonlySet 只是编译期约束,
- * 挡不住运行时 .add());外部只能经 isBuiltinApiKeyProviderId 查询。
- */
-const BUILTIN_API_KEY_PROVIDER_IDS: ReadonlySet<ProviderSecretId> = new Set<ProviderSecretId>([
-  'gemini',
-  'openai-images',
-]);
-
-/** 白名单查询(只读语义,供测试与未来调用方使用,不暴露集合本体)。 */
-export function isBuiltinApiKeyProviderId(providerId: unknown): providerId is ProviderSecretId {
-  return (
-    typeof providerId === 'string' && BUILTIN_API_KEY_PROVIDER_IDS.has(providerId as ProviderSecretId)
-  );
-}
 
 /**
  * 真实 API key 远短于此(gemini ~39 / OpenAI 平台 ~200 字符);上限挡的是被攻陷

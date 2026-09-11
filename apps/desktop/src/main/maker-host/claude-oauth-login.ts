@@ -269,6 +269,15 @@ let _currentListener: CallbackListener | null = null;
 let _currentAbort: AbortController | null = null;
 let _currentLoginKey: string | undefined;
 
+/** Local attachment uses the same cancellation boundary as browser login. */
+export function beginClaudeLocalLogin(loginKey?: string): AbortSignal {
+  cancelClaudeOAuthLogin();
+  _currentListener = null;
+  _currentLoginKey = loginKey;
+  _currentAbort = new AbortController();
+  return _currentAbort.signal;
+}
+
 export interface ClaudeOAuthLoginResult {
   ok: boolean;
   /** 失败原因(reason)— 'login_cancelled' / 'timeout' / 具体错误信息。 */

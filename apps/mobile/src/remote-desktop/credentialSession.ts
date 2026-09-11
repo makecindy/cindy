@@ -40,6 +40,8 @@ export function credentialErrorKey(error: unknown): string {
       ? String(error.code)
       : "";
   const text = `${code} ${String(error)}`;
+  if (text.includes("CREDENTIAL_DEVELOPMENT_SIGNING_REQUIRED"))
+    return "credentialSigningRequired";
   if (text.includes("CREDENTIAL_PASSWORD_REJECTED"))
     return "credentialPasswordRejected";
   if (text.includes("CREDENTIAL_CANCELLED")) return "credentialCancelled";
@@ -115,7 +117,12 @@ export class RemoteDesktopCredentialSession {
     invoke: Invoke,
     locale: string,
     theme: "light" | "dark",
-    unlock?: { setup: boolean; biometric: boolean; descriptor: string },
+    unlock?: {
+      setup: boolean;
+      biometric: boolean;
+      descriptor: string;
+      beforeAuthentication?: () => Promise<void>;
+    },
   ): Promise<void> {
     const native = remoteCredentials;
     if (!native) throw new Error("CREDENTIAL_NATIVE_UPGRADE_REQUIRED");
@@ -194,6 +201,11 @@ export class RemoteDesktopCredentialSession {
         throw error;
       }
     }
+    // Prepare the secure channel while capture starts, but do not request
+    // password/Face ID until the caller has shown this connection's first frame.
+    if (unlock?.beforeAuthentication)
+      await credentialStep("wait-for-first-frame", unlock.beforeAuthentication);
+    check();
     const state = this.state!;
     const ciphertext = await credentialStep("password-or-face-id", () =>
       state.pending

@@ -1311,6 +1311,51 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
+  it('passes a typed custom answer for a select dialog through and keeps an empty answer as cancel (#4273)', async () => {
+    const handle = await start();
+    const answers: Record<string, string> = {
+      'Pick a color': 'teal',
+      'Pick a size': '',
+    };
+    handle.setInteractionResolver(async (request) => {
+      if (request.kind !== 'ask_user_question') throw new Error(`unexpected interaction ${request.kind}`);
+      const question = request.questions[0]?.question ?? '';
+      expect(request.questions[0]?.options).toEqual([{ label: 'Red' }, { label: 'Blue' }]);
+      return { kind: 'ask_user_question', answers: { [question]: answers[question] ?? '' } };
+    });
+    try {
+      // The card's "type your own" entry yields an answer that is not one of `options`.
+      captured.onEvent!({
+        type: 'extension_ui_request',
+        id: 'select-custom',
+        method: 'select',
+        title: 'Pick a color',
+        options: ['Red', 'Blue'],
+      });
+      expect(await waitForResponse('select-custom')).toEqual({
+        type: 'extension_ui_response',
+        id: 'select-custom',
+        value: 'teal',
+      });
+
+      // An empty answer is still a skip/cancel, not a value.
+      captured.onEvent!({
+        type: 'extension_ui_request',
+        id: 'select-empty',
+        method: 'select',
+        title: 'Pick a size',
+        options: ['Red', 'Blue'],
+      });
+      expect(await waitForResponse('select-empty')).toEqual({
+        type: 'extension_ui_response',
+        id: 'select-empty',
+        cancelled: true,
+      });
+    } finally {
+      await handle.close();
+    }
+  });
+
   it('surfaces Pi UI requests that Cindy cannot safely adapt at runtime', async () => {
     const handle = await start();
     const events: Array<Record<string, unknown>> = [];

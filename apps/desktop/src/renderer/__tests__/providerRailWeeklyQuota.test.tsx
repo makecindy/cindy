@@ -98,6 +98,73 @@ describe('provider weekly quota identity and windows', () => {
 });
 
 describe('provider rail weekly remaining bars', () => {
+  it.each(['openai', 'anthropic', 'xai', 'independent'])(
+    'shows %s account identity without quota and updates it with the directory',
+    async (id) => {
+      const account = { source: 'local' as const, identity: 'first@example.test' };
+      const providers = [
+        provider(
+          id,
+          id === 'openai' ? { openAiAccount: account } : { subscriptionAccount: account },
+        ),
+      ];
+      const props = {
+        items: [{ kind: 'provider' as const, providerId: id }],
+        active: { kind: 'all' as const },
+        providers,
+        providerLabel: () => 'My provider',
+        onSelect: () => {},
+        localProviderUsage: false,
+      };
+      const { rerender } = render(<UnifiedModelRail {...props} />);
+      const button = screen.getByRole('button', { name: 'My provider · first@example.test' });
+      fireEvent.focus(button);
+      expect((await screen.findByRole('tooltip')).textContent).toBe(
+        'My provider · first@example.test',
+      );
+      account.identity = 'second@example.test';
+      rerender(<UnifiedModelRail {...props} />);
+      expect(screen.queryByRole('button', { name: /first@example/ })).toBeNull();
+      expect(
+        screen.getByRole('button', { name: 'My provider · second@example.test' }),
+      ).toBeTruthy();
+      expect(reads.codex).not.toHaveBeenCalled();
+      expect(reads.claude).not.toHaveBeenCalled();
+      expect(reads.xai).not.toHaveBeenCalled();
+    },
+  );
+  it.each([
+    ['OpenAI · user@example.test', 'user@example.test'],
+    ['OpenAI · user@example.test (2)', 'user@example.test'],
+    ['Anthropic · user@example.test', 'user@example.test'],
+    ['xAI · user@example.test', 'user@example.test'],
+    ['user@example.test', 'user@example.test'],
+    [
+      'OpenAI · very-long-account-name-for-display@example.test'.slice(0, 50),
+      'very-long-account-name-for-display@example.test',
+    ],
+    [
+      'OpenAI · very-long-account-name-for-display@example.test'.slice(0, 50) + ' (2)',
+      'very-long-account-name-for-display@example.test',
+    ],
+  ])(
+    'preserves existing account connection name %s without repeating identity',
+    async (name, identity) => {
+      render(
+        <UnifiedModelRail
+          items={[{ kind: 'provider', providerId: 'independent' }]}
+          active={{ kind: 'all' }}
+          providers={[
+            provider('independent', { name, openAiAccount: { source: 'oauth', identity } }),
+          ]}
+          providerLabel={() => name}
+          onSelect={() => {}}
+        />,
+      );
+      fireEvent.focus(screen.getByRole('button', { name }));
+      expect((await screen.findByRole('tooltip')).textContent).toBe(name);
+    },
+  );
   it('keeps two OpenAI accounts separate, preserves selection and updates remaining including zero', () => {
     let usedB = 79;
     reads.codex.mockImplementation((enabled, id) => ({

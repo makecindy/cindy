@@ -436,6 +436,8 @@ export function registerBuiltinDesktopCommands(
                   version: progress.target.version,
                   ref: progress.target.ref,
                   commit: progress.commit,
+                  branch: progress.branch,
+                  baseCommit: progress.baseCommit,
                   error: progress.error,
                   phase: progress.phase,
                   progress: progress.progress,
@@ -458,6 +460,8 @@ export function registerBuiltinDesktopCommands(
               version: result.target.version,
               ref: result.target.ref,
               commit: result.commit,
+              branch: result.branch,
+              baseCommit: result.baseCommit,
               error: result.error,
             },
           };

@@ -115,7 +115,7 @@ it('compares Codex hard-link identities without Windows number precision collisi
   expect(haveSameStableFileIdentity({ dev: 7n, ino: 11n }, { dev: 7n, ino: 11n })).toBe(true);
 });
 
-it('does not chmod a system-shared auth file while finalizing login', async () => {
+it.each([false, true])('preserves successful shared login and native files when presentation write fails=%s', async (failPresentation) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-codex-shared-mode-'));
   dirs.push(root);
   h.userDataDir = path.join(root, 'user-data');
@@ -132,6 +132,16 @@ it('does not chmod a system-shared auth file while finalizing login', async () =
     JSON.stringify({ tokens: { access_token: 'shared-token', account_id: 'acct-1' } }),
   );
   fs.linkSync(systemAuth, localAuth);
+  const { setProviderPresentation, readProviderPresentation } = await import('../provider-presentation-store.js');
+  await setProviderPresentation('openai', { name: 'My OpenAI', removed: true });
+  const nativeBefore = fs.readFileSync(systemAuth, 'utf8');
+  if (failPresentation) {
+    const write = fs.writeFileSync;
+    vi.spyOn(fs, 'writeFileSync').mockImplementation((...args: Parameters<typeof fs.writeFileSync>) => {
+      if (String(args[0]).includes('local-codex-provider-prefs.json')) throw new Error('test disk full');
+      return write(...args);
+    });
+  }
   const chmod = vi.spyOn(fs.promises, 'chmod');
   const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
   const adapter = new DesktopCodexAuthAdapter();
@@ -142,6 +152,8 @@ it('does not chmod a system-shared auth file while finalizing login', async () =
   ).finishSuccessfulCodexLogin.bind(adapter);
 
   await expect(finishSuccessfulCodexLogin()).resolves.toMatchObject({ authenticated: true });
+  expect(readProviderPresentation('openai')).toEqual({ name: 'My OpenAI', removed: failPresentation });
+  expect(fs.readFileSync(systemAuth, 'utf8')).toBe(nativeBefore);
   expect(chmod).not.toHaveBeenCalled();
   expect(fs.statSync(systemAuth).ino).toBe(fs.statSync(localAuth).ino);
 });
@@ -204,6 +216,59 @@ afterEach(() => {
 });
 
 describe('Codex system credential suppression marker', () => {
+  it.each(['pending-login', 'host-cleanup', 'cache-cleanup', 'owner-generation', 'new-owner-logout'])(
+    'does not revoke a replacement owner binding after %s yields', async (phase) => {
+      const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-logout-owner-'));
+      dirs.push(root);
+      h.userDataDir = path.join(root, 'user-data');
+      h.dataOwnerId = 'owner-a';
+      vi.spyOn(os, 'homedir').mockReturnValue(path.join(root, 'empty-home'));
+      const codexHome = path.join(h.userDataDir, 'codex-home');
+      const localAuth = path.join(codexHome, 'auth.json');
+      const bindingFile = path.join(h.userDataDir, 'native-provider-auth.json');
+      fs.mkdirSync(codexHome, { recursive: true });
+      fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'fixture-token' } }));
+      fs.writeFileSync(bindingFile, JSON.stringify({ openai: 'owner-a' }));
+      const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+      const adapter = new DesktopCodexAuthAdapter();
+      const gate = deferred();
+      const entered = deferred();
+      if (phase === 'pending-login') {
+        Object.defineProperty(adapter, 'pendingLogin', { value: { promise: gate.promise, cancelled: false } });
+        vi.spyOn(adapter, 'cancelLogin').mockImplementation(() => entered.resolve());
+      } else if (phase === 'cache-cleanup') {
+        const remove = fs.promises.rm.bind(fs.promises);
+        vi.spyOn(fs.promises, 'rm').mockImplementation(async (target, options) => {
+          await remove(target, options);
+          if (String(target) === path.join(codexHome, 'models_cache.json')) {
+            entered.resolve();
+            await gate.promise;
+          }
+        });
+      } else {
+        adapter.setOnLogoutSuccess(() => { entered.resolve(); return gate.promise; });
+      }
+      const logout = adapter.logout();
+      await entered.promise;
+      h.dataOwnerId = phase === 'owner-generation' ? 'owner-a' : 'owner-b';
+      h.sessionGeneration += 1;
+      const replacement = JSON.stringify({ openai: h.dataOwnerId, selfAuthorized: { openai: h.dataOwnerId } });
+      fs.writeFileSync(bindingFile, replacement);
+      const nextLogout = phase === 'new-owner-logout' ? adapter.logout() : null;
+      gate.resolve();
+      await logout;
+      if (nextLogout) {
+        await nextLogout;
+        expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({ revoked: { openai: h.dataOwnerId } });
+        expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8')).openai).toBeUndefined();
+      } else {
+        expect(fs.readFileSync(bindingFile, 'utf8')).toBe(replacement);
+      }
+      expect(JSON.parse(fs.readFileSync(localAuth, 'utf8')).tokens.access_token).toBe('fixture-token');
+      if (phase === 'pending-login') expect(fs.existsSync(getCodexAuthInvalidationMarkerPath(codexHome))).toBe(false);
+    },
+  );
+
   it('qualifies the Windows ACL principal when the machine and user names can collide', async () => {
     const { resolveWindowsAclPrincipal } = await import('../auth-adapters.js');
 
@@ -297,7 +362,7 @@ describe('Codex system credential suppression marker', () => {
     });
   });
 
-  it('cleans a matching local credential left by a crash after the disconnect marker committed', () => {
+  it('preserves a matching credential while restoring a committed disconnect', () => {
     const { codexHome, systemAuth, localAuth } = fixture();
     fs.mkdirSync(codexHome, { recursive: true });
     fs.writeFileSync(localAuth, JSON.stringify({ tokens: { access_token: 'old-local-token' } }));
@@ -315,7 +380,7 @@ describe('Codex system credential suppression marker', () => {
       suppressReconcile: true,
       invalidatedReason: null,
     });
-    expect(fs.existsSync(localAuth)).toBe(false);
+    expect(fs.existsSync(localAuth)).toBe(true);
   });
 
   it('suppresses a matching local credential after server-side token invalidation', () => {
@@ -992,9 +1057,7 @@ describe('Codex system credential suppression marker', () => {
     const adapter = new DesktopCodexAuthAdapter();
     const onLogoutSuccess = vi.fn().mockResolvedValue(undefined);
     adapter.setOnLogoutSuccess(onLogoutSuccess);
-    const rmSpy = vi
-      .spyOn(fs.promises, 'rm')
-      .mockRejectedValueOnce(new Error('EPERM: file is locked'));
+    const rmSpy = vi.spyOn(fs.promises, 'rm');
 
     await expect(adapter.logout()).resolves.toBeUndefined();
     expect(onLogoutSuccess).toHaveBeenCalledTimes(1);
@@ -1582,11 +1645,13 @@ describe('Codex system credential suppression marker', () => {
     const adapter = new DesktopCodexAuthAdapter();
     const cleanupGate = deferred();
     const broadcast = vi.fn().mockResolvedValue(undefined);
-    adapter.setOnLogoutSuccess(() => cleanupGate.promise);
+    const cleanup = vi.fn(() => cleanupGate.promise);
+    adapter.setOnLogoutSuccess(cleanup);
     adapter.setOnInvalidatedBroadcast(broadcast);
 
     const explicitLogout = adapter.logout();
-    await vi.waitFor(() => expect(fs.existsSync(localAuth)).toBe(false));
+    await vi.waitFor(() => expect(cleanup).toHaveBeenCalled());
+    expect(fs.existsSync(localAuth)).toBe(true);
     const invalidation = adapter.invalidate('token_invalidated');
     cleanupGate.resolve();
 

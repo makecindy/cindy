@@ -64,6 +64,7 @@ import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
@@ -1202,14 +1203,13 @@ export function registerSessionIpc(
 
         scheduleSessionListProjectionBackfill(mergedRows);
         return mergedRows.map((r) =>
-          projectSessionContextWindow(
-            sessionToCamel({
+          sessionToCamel(
+            projectSessionContextWindow({
               ...r.session,
               messageCount: r.messageCount,
               latestMessageExtract: r.latestMessageExtract,
               latestMessageRole: r.latestMessageRole,
-            }),
-            opts.resolveContextWindow,
+            }, opts.resolveContextWindow),
           ),
         );
       };
@@ -1294,18 +1294,18 @@ export function registerSessionIpc(
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(bodyObj.orcaRole)}`);
     }
-    if (bodyObj.source !== undefined) {
-      throwIpcError(
-        'UNSUPPORTED_CAPABILITY',
-        'Bot task creation is only available through the Bot lifecycle service',
-      );
-    }
     const workspaceKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
     const explicitWorkingDir =
       normalizeWorkingDirForStorage(
         typeof createBody?.workingDir === 'string' ? createBody.workingDir : null,
       ) ?? undefined;
+    assertRendererSessionSourceAllowed({
+      source: bodyObj.source,
+      workingDir: explicitWorkingDir,
+      remoteHostId: createBody?.remoteHostId,
+      userData: app.getPath('userData'),
+    });
     const workingDir =
       workspaceKind === 'dialogue' && !explicitWorkingDir
         ? ensureDialogueWorkspaceDir(id, now)
@@ -1489,7 +1489,7 @@ export function registerSessionIpc(
     const db = getDbClient().drizzle;
     const row = await selectSessionWithCount(db, sid);
     if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-    return projectSessionContextWindow(sessionToCamel(row), opts.resolveContextWindow);
+    return sessionToCamel(projectSessionContextWindow(row, opts.resolveContextWindow));
   });
 
   /**
@@ -2568,6 +2568,7 @@ function selectSessionUsageRows(
       | 'totalTokenUsage'
       | 'contextTokens'
       | 'contextWindow'
+      | 'contextWindowRuntime'
       | 'agentKind'
       | 'userSendAt'
       | 'updatedAt'
@@ -2583,6 +2584,7 @@ function selectSessionUsageRows(
       totalTokenUsage: sessions.totalTokenUsage,
       contextTokens: sessions.contextTokens,
       contextWindow: sessions.contextWindow,
+      contextWindowRuntime: sessions.contextWindowRuntime,
       agentKind: sessions.agentKind,
       userSendAt: sessions.userSendAt,
       updatedAt: sessions.updatedAt,

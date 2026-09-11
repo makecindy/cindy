@@ -28,7 +28,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from 'react';
-import { HistoryViewHandoff, renderHistoryView } from '@cindy/maker-shared/message-window';
+import { HistoryViewHandoff, renderHistoryView, historyPrefetchThreshold } from '@cindy/maker-shared/message-window';
 import { getRemoteHistoryView, type HistoryChatMessage } from '@/lib/makerChatStore';
 import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
@@ -360,6 +360,7 @@ import {
   shouldUnpinOnScrollbarDrag,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
+  isUpwardWheelIntent,
 } from './autoFollowIntent';
 import { countUnreadAdded } from './unreadCount';
 import {
@@ -1026,6 +1027,17 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  *   `agent_plan` item in the chat timeline. The composer capsule observes the
  *   latest inline card and only takes over after that card leaves the viewport.
  */
+function deferredWorkContainsClientId(
+  item: Extract<RenderItem, { type: 'work_group' }>,
+  clientId: string,
+): boolean {
+  return (
+    item.deferred?.key?.split('|').some(
+      (key) => key === `work-${clientId}` || key === `work-summary-${clientId}`,
+    ) ?? false
+  );
+}
+
 /**
  * 锚点丢失恢复:DB 加载更老历史 prepend 时,若新拉回的末尾是 tool_use 且当前
  * 首段 render item 是 tool_segment,segment 会向前合并吸收这些 toolCall —— 原
@@ -1050,7 +1062,10 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
 function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
   const dashIdx = lostKey.indexOf('-');
   if (dashIdx < 0) return -1;
-  const lostCid = lostKey.slice(dashIdx + 1);
+  // Completed groups have a compound prefix; the message id can itself contain dashes.
+  const lostCid = lostKey.startsWith('work-summary-')
+    ? lostKey.slice('work-summary-'.length)
+    : lostKey.slice(dashIdx + 1);
   if (!lostCid) return -1;
 
   for (let i = 0; i < items.length; i++) {
@@ -1073,8 +1088,16 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
     } else if (it.type === 'work_group') {
       // work_group 可能嵌套完成态时间线 — 老锚点(`seg-${cid}` /
       // `msg-${cid}` / `work-${cid}`)递归落到任一后代即由外组接住。
-      if (it.key === lostKey || it.key.endsWith(`-${lostCid}`)) return i;
-      if (renderItemContainsClientId(it, lostCid)) return i;
+      // Remote placeholders can merge and disappear from children; their original
+      // summary identities remain in deferred.key even when the visible key changes.
+      if (
+        it.key === lostKey ||
+        it.key === `work-${lostCid}` ||
+        it.key === `work-summary-${lostCid}` ||
+        deferredWorkContainsClientId(it, lostCid)
+      ) return i;
+      // Remote deferred groups retain their key before their children are loaded.
+      if (recoverLostAnchorIdx(it.children, lostKey) >= 0) return i;
     } else if (it.type !== 'fork_origin') {
       // tool_media / ghost_card:其 key 派生自 stable message clientId,精确后缀匹配
       if (it.key === lostKey || it.key.endsWith(`-${lostCid}`)) return i;
@@ -2282,7 +2305,7 @@ function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
   return collectDeleteAnchorClientIds(children);
 }
 
-function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
+export function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
   if (item.type === 'fork_origin') return false;
   if (item.type === 'message') return item.message.clientId === clientId;
   if (item.type === 'tool_segment')
@@ -2290,7 +2313,12 @@ function renderItemContainsClientId(item: RenderItem, clientId: string): boolean
   if (item.type === 'agent_task') return item.toolCall?.clientId === clientId;
   if (item.type === 'agent_plan') return item.sourceClientIds.includes(clientId);
   if (item.type === 'work_group') {
-    return item.children.some((child) => renderItemContainsClientId(child, clientId));
+    // Retained remote identities survive unloaded children; a group key alone
+    // does not prove that a previously rendered child still exists.
+    return (
+      deferredWorkContainsClientId(item, clientId) ||
+      item.children.some((child) => renderItemContainsClientId(child, clientId))
+    );
   }
   return item.key.endsWith(`-${clientId}`);
 }
@@ -3142,18 +3170,25 @@ export function MessageStream({
       const idx = visibleRenderItemsRef.current.findIndex((item) => item.key === key);
       const child =
         idx >= 0 ? (itemsRef.current?.children[idx] as HTMLElement | undefined) : undefined;
-      if (!container || !child) return;
+      if (!container || !child) return false;
       const delta = viewportAnchorCorrection(
         container.getBoundingClientRect().top,
         child.getBoundingClientRect().top,
         offset,
       );
-      if (delta === 0) return;
+      // 已按真实锚点保位（含零位移）时，不能再叠加同次布局的历史高度补偿。
+      // 仍在请求中的历史尚未进入 DOM，保留它的快照供返回后补偿。
+      if (!isLoadingMore) {
+        prevScrollHeightRef.current = 0;
+        prevScrollTopAtLoadRef.current = 0;
+      }
+      if (delta === 0) return true;
       const generation = beginProgrammaticScroll();
       container.scrollTop += delta;
       requestAnimationFrame(() => finishProgrammaticScroll(generation));
+      return true;
     },
-    [beginProgrammaticScroll, finishProgrammaticScroll],
+    [beginProgrammaticScroll, finishProgrammaticScroll, isLoadingMore],
   );
   const scrollMessageToViewportTop = useCallback(
     (clientId: string, offset: number) => {
@@ -3165,13 +3200,17 @@ export function MessageStream({
       const rect = target.getBoundingClientRect();
       if (rect.height <= 0) return false;
       const delta = viewportAnchorCorrection(container.getBoundingClientRect().top, rect.top, offset);
+      if (!isLoadingMore) {
+        prevScrollHeightRef.current = 0;
+        prevScrollTopAtLoadRef.current = 0;
+      }
       if (delta === 0) return true;
       const generation = beginProgrammaticScroll();
       container.scrollTop += delta;
       requestAnimationFrame(() => finishProgrammaticScroll(generation));
       return true;
     },
-    [beginProgrammaticScroll, finishProgrammaticScroll],
+    [beginProgrammaticScroll, finishProgrammaticScroll, isLoadingMore],
   );
   const restoreViewportSnapshot = useCallback(
     (snapshot: ViewportTopSnapshot, itemOffset = snapshot.offset): boolean => {
@@ -3185,8 +3224,7 @@ export function MessageStream({
       const itemSnapshot = toRenderItemViewportSnapshot(snapshot, itemOffset);
       lastViewportTopRef.current = itemSnapshot;
       if (visibleRenderItemsRef.current.some((item) => item.key === itemSnapshot.viewportTopKey)) {
-        scrollKeyToViewportTop(itemSnapshot.viewportTopKey, itemSnapshot.offset);
-        return true;
+        return scrollKeyToViewportTop(itemSnapshot.viewportTopKey, itemSnapshot.offset);
       }
       return false;
     },
@@ -4103,12 +4141,17 @@ export function MessageStream({
 
     const action = decideUserIntentFillAction({
       scrollTop: el.scrollTop,
+      triggerDistancePx: historyPrefetchThreshold(el.clientHeight),
       scrollHeight: el.scrollHeight,
       clientHeight: el.clientHeight,
       windowAtTop,
       hasMoreMessages: hasMoreMessages ?? false,
       isLoadingMore: (isLoadingMore ?? false) || userIntentLoadInFlightRef.current,
     });
+
+    // Input may arrive before the queued scroll snapshot frame. Capture the
+    // current reading position before expanding or starting a remote read.
+    if (action !== 'none') refreshViewportAnchor();
 
     switch (action) {
       case 'expand-window': {
@@ -4122,7 +4165,8 @@ export function MessageStream({
         userIntentLoadInFlightRef.current = true;
         prevScrollHeightRef.current = el.scrollHeight;
         prevScrollTopAtLoadRef.current = el.scrollTop;
-        onLoadMore();
+        const release = () => { userIntentLoadInFlightRef.current = false; };
+        void onLoadMore().then(release, release);
         return;
       }
       case 'none':
@@ -4135,6 +4179,7 @@ export function MessageStream({
     isLoadingMore,
     onLoadMore,
     expandWindow,
+    refreshViewportAnchor,
   ]);
   useEffect(() => {
     const root = scrollRef.current;
@@ -4142,8 +4187,11 @@ export function MessageStream({
     // wheel/touchstart 挂在 scroll 容器上(与上 chip 抑制对称)。容器不可滚时
     // 不会产生 scroll 事件,所以用户继续向上滚动的意图必须在这里接住。
     const onWheel = (event: WheelEvent) => {
+      // Chromium reports pinch/modified-wheel zoom as wheel events. Filter at
+      // the input boundary before navigation, follow-state or history effects.
+      if (event.ctrlKey || event.metaKey) return;
       clearChipJumpSuppression();
-      if (event.deltaY < 0) {
+      if (isUpwardWheelIntent(event)) {
         if (hasNestedScrollableAncestorThatCanScrollUp(root, event.target)) return;
         if (
           shouldUnpinOnWheel({
@@ -4755,6 +4803,11 @@ export function MessageStream({
     if (!el || isLoadingMore) return;
 
     if (prevScrollHeightRef.current > 0) {
+      // Remote details can settle while a page is loading, so total height is
+      // not the displacement of the message being read. Prefer its live DOM
+      // anchor; browser anchoring may already have preserved that position.
+      const snapshot = lastViewportTopRef.current;
+      if (!isNearBottomRef.current && snapshot && restoreViewportSnapshot(snapshot)) return;
       const newScrollHeight = el.scrollHeight;
       const delta = newScrollHeight - prevScrollHeightRef.current;
       // [mr-16 review #1] 判定从"scrollTop > snapshot + 8"收紧成"scrollTop 增量
@@ -4778,7 +4831,7 @@ export function MessageStream({
       prevScrollHeightRef.current = 0;
       prevScrollTopAtLoadRef.current = 0;
     }
-  }, [visibleRenderItems, isLoadingMore, beginProgrammaticScroll, finishProgrammaticScroll]);
+  }, [visibleRenderItems, isLoadingMore, beginProgrammaticScroll, finishProgrammaticScroll, restoreViewportSnapshot]);
 
   // ── 删除靠前 message 后的视口保位（#2289）──
   // 快照来自滚动/跳转落定；删除提交后再量会使 delta 恒为 0。贴底交给 pin-to-bottom。
@@ -5052,12 +5105,20 @@ export function MessageStream({
       prevScrollTopRef.current = el.scrollTop;
       return;
     }
+    const draggingUp = draggingScrollbar
+      && currentScrollTop < prevScrollTopRef.current - SCROLL_DIRECTION_DEAD_ZONE_PX;
     if (!programmaticScrollRef.current || draggingScrollbar) {
       // 用户手动滚动 = 接管浏览,退出「还原中」,后续恢复正常 auto-follow 判定。
       restoringRef.current = false;
       // 持续保存浏览位置（rAF 节流，DOM 必然存活），内含删除前快照刷新——纯滚动后
       // 快照停在陈旧 key 会让删除补偿失配。
-      if (saveRafRef.current === null) {
+      if (isLoadingMore || prevScrollHeightRef.current > 0) {
+        // A remote response can commit before the next rAF. Keep its restoration
+        // anchor at the user's latest position throughout the request.
+        if (saveRafRef.current !== null) cancelAnimationFrame(saveRafRef.current);
+        saveRafRef.current = null;
+        saveScrollSnapshot();
+      } else if (saveRafRef.current === null) {
         saveRafRef.current = requestAnimationFrame(() => {
           saveRafRef.current = null;
           saveScrollSnapshot();
@@ -5180,6 +5241,11 @@ export function MessageStream({
       });
     }
 
+    // Scrollbar drags share explicit-input prefetch, without also expanding below.
+    if (draggingUp) {
+      triggerUserIntentFill();
+      return;
+    }
     // 滚到顶 50px 内才触发后续加载逻辑(阈值与 decideUserIntentFillAction 的
     // "停在顶部"判定共用 TOP_HISTORY_TRIGGER_PX,两条路径合起来覆盖
     // "穿过顶部区间"与"停在顶部继续上滚"的完整触发面)
@@ -5215,6 +5281,7 @@ export function MessageStream({
     windowAtTop,
     expandWindow,
     saveScrollSnapshot,
+    triggerUserIntentFill,
     refreshViewportAnchor,
     finishProgrammaticScroll,
     windowCoversEnd,

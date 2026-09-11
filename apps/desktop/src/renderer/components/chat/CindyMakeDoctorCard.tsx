@@ -114,6 +114,7 @@ export function CindyMakeDoctorCard({
           : undefined
       }
       startingCode={startingCode}
+      startingPhase={data?.codeStartPhase === 'workspace' ? 'workspace' : 'session'}
       codeSessionError={data?.codeSessionError === true}
       onRecheck={() => recheck()}
       onStop={() => {
@@ -156,6 +157,8 @@ export function MakeDoctorReportCard({
   onStartCode,
   onOpenCode,
   startingCode = false,
+  startingPhase = 'session',
+  showSteps = true,
   codeSessionError = false,
   alwaysAllowRecheck = false,
   showSource = true,
@@ -172,6 +175,10 @@ export function MakeDoctorReportCard({
   onStartCode?: () => void;
   onOpenCode?: () => void;
   startingCode?: boolean;
+  /** Settings shows the environment on its own; the numbered step row belongs to the workflow. */
+  showSteps?: boolean;
+  /** Creating the task worktree (branch + dependency install) precedes creating the task. */
+  startingPhase?: 'workspace' | 'session';
   codeSessionError?: boolean;
   alwaysAllowRecheck?: boolean;
   showSource?: boolean;
@@ -263,7 +270,9 @@ export function MakeDoctorReportCard({
   const currentStatusKey =
     source?.status === 'ready' && decision === 'personal'
       ? startingCode
-        ? 'cindyMake.code.starting'
+        ? startingPhase === 'workspace'
+          ? 'cindyMake.code.preparingWorkspace'
+          : 'cindyMake.code.starting'
         : codeSessionError
           ? onOpenCode
             ? 'cindyMake.code.sendFailed'
@@ -325,10 +334,12 @@ export function MakeDoctorReportCard({
               <p className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">{request}</p>
             </div>
           )}
-          <p className="flex items-center gap-2 text-13 font-medium">
-            <StepStatusIcon state={environmentStepState} />
-            <span>{t('cindyMake.stepEnvironment')}</span>
-          </p>
+          {showSteps && (
+            <p className="flex items-center gap-2 text-13 font-medium">
+              <StepStatusIcon state={environmentStepState} />
+              <span>{t('cindyMake.stepEnvironment')}</span>
+            </p>
+          )}
           {details && (
             <>
               <p className="text-13 text-[var(--text-secondary)]">
@@ -462,10 +473,23 @@ export function MakeDoctorReportCard({
                       {source.path}
                     </p>
                   )}
-                  {source.commit && (
-                    <p className="break-all font-mono text-12 text-[var(--text-secondary)]">
-                      {source.commit}
+                  {source.branch ? (
+                    <p className="text-12 text-[var(--text-secondary)]">
+                      {t('cindyMake.source.personalBranch', { branch: source.branch })}
+                      {source.commit ? ` · ${source.commit.slice(0, 12)}` : ''}
+                      {source.baseCommit
+                        ? ` · ${t('cindyMake.source.baseCommit', {
+                            ref: source.ref ?? '',
+                            commit: source.baseCommit.slice(0, 12),
+                          })}`
+                        : ''}
                     </p>
+                  ) : (
+                    source.commit && (
+                      <p className="break-all font-mono text-12 text-[var(--text-secondary)]">
+                        {source.commit}
+                      </p>
+                    )
                   )}
                   {source.error && (
                     <p className="text-[var(--status-danger)]">
@@ -503,7 +527,11 @@ export function MakeDoctorReportCard({
                     </p>
                   ) : null}
                   {upstream.status === 'found' && (
-                    <ul className="divide-y divide-[var(--border-default)]">
+                    <ul
+                      // 列表区是弹窗里唯一的滚动区:高度封顶为 5 条收起的行(每行 44px),
+                      // 展开详情或条目更多时在列表内部滚动,弹窗本身不长出滚动条。
+                      className="max-h-[228px] overflow-y-auto overscroll-contain divide-y divide-[var(--border-default)]"
+                    >
                       {upstream.items.map((item) => (
                         <MakeUpstreamResult
                           key={`${report.runId}-${item.kind}-${item.number}`}

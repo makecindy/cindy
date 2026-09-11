@@ -271,6 +271,23 @@ afterEach(async () => {
 });
 
 describe('ClaudeCodeAgent runtime settings during rewind window', () => {
+  it('does not relabel an in-flight result with a newly saved budget', async () => {
+    let budget = 1_000;
+    const { handle, firstQuery } = await startRewindableSession({ resolveModelContextLimit: () => budget });
+    try {
+      budget = 32_000;
+      firstQuery.stream.emit({
+        type: 'result', subtype: 'success', stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 6_000, output_tokens: 10 },
+        modelUsage: { 'claude-opus-4-6': { contextWindow: 1_000_000 } },
+      });
+      await vi.waitFor(() => expect(handle.getUsageSnapshot().contextTokens).toBeGreaterThan(0));
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect(await handle.requiresModelSwitchRebuild?.('claude-opus-4-6')).toBe(true);
+    } finally { await handle.close(); }
+  });
+
   it('requires a history-preserving rebuild when the active route budget changes', async () => {
     let budget: number | null = 80_000;
     const { handle } = await startRewindableSession({ autoCompactThresholdPct: 90, resolveModelContextLimit: () => budget });

@@ -81,6 +81,7 @@ function deps(overrides: Partial<PiNativeSubscriptionHandlerDeps> = {}): PiNativ
     })) as PiNativeSubscriptionHandlerDeps['fetch'],
     getChatgptAuth: vi.fn(async () => ({ accessToken: 'host-openai-token', accountId: 'account-1' })),
     getGrokToken: vi.fn(async () => 'host-xai-token'),
+    peekGrokToken: vi.fn(() => 'host-xai-token'),
     invalidateChatgpt: vi.fn(async () => false),
     invalidateXai: vi.fn(async () => 'ignored' as const),
     recordXaiRateLimit: vi.fn(),
@@ -787,7 +788,7 @@ describe('PI native subscription forwarding', () => {
       remainingRequests: 9,
       limitTokens: undefined,
       remainingTokens: undefined,
-    });
+    }, 'xai');
   });
 
   it('labels pre-response xAI failures with the real provider and endpoint', async () => {
@@ -911,4 +912,22 @@ describe('PI native subscription forwarding', () => {
     expect(injected.fetch).not.toHaveBeenCalled();
     expect(res.status).toBe(404);
   });
+});
+
+it.each([false, true])('scopes independent Grok limits and drops stale token pushes without failing streaming (stale=%s)', async stale => {
+  const { setCustomProviderConfigs } = await import('../active-catalog.js');
+  setCustomProviderConfigs([{ id: 'xai-work', name: 'Work', auth: { method: 'oauth', native: 'xai' }, runtimes: {} }]);
+  try {
+    const injected = deps({
+      fetch: vi.fn(async () => new Response('stream ok', { status: 200, headers: { 'x-ratelimit-remaining-requests': '7' } })),
+      peekGrokToken: vi.fn(() => stale ? 'replacement-token' : 'host-xai-token'),
+    });
+    const handler = getPiNativeSubscriptionHandler('xai-work', 'session-work', injected);
+    const res = responseRecorder();
+    await handler({ rawBody: Buffer.from('{}'), parsedBody: {}, ctx: { method: 'POST', url: '/v1/responses', headers: {} }, res } as never);
+    expect(res.status).toBe(200);
+    expect(Buffer.concat(res.chunks).toString()).toBe('stream ok');
+    if (stale) expect(injected.recordXaiRateLimit).not.toHaveBeenCalled();
+    else expect(injected.recordXaiRateLimit).toHaveBeenCalledWith(expect.objectContaining({ remainingRequests: 7 }), 'xai-work');
+  } finally { setCustomProviderConfigs([]); }
 });

@@ -2953,6 +2953,64 @@ function recallParkedTaskUpdates(
   return recalled ?? prevMap;
 }
 
+/**
+ * `markDeviceOffline` / `markDevicesOffline` 共用的清扫主体:逐台执行离线清理,
+ * 返回是否有任何投影变化。调用方负责决定 emit 一次(批量)还是逐台 emit。
+ */
+function sweepDevicesOffline(deviceIds: readonly string[]): boolean {
+  let changed = false;
+  const idSet = new Set(deviceIds);
+  if (idSet.size === 0) return false;
+  // A first text delta can still be waiting in the 32ms batch before any session
+  // metadata/index exists. Flush batches from this transport first so they create a
+  // device-owned host anchor, then freeze that identity before reconnect metadata can
+  // bind it to a newer send round.
+  for (const [sessionId, batch] of [...pendingTextDeltaBatches]) {
+    if (batch.deviceId === undefined || !idSet.has(batch.deviceId)) continue;
+    changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
+    changed = clearStreamingAssistantPointer(sessionId) || changed;
+    changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, batch.deviceId) || changed;
+  }
+  for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
+    if (!idSet.has(indexedDeviceId)) continue;
+    if (sessionMessageSyncMarkers.delete(sessionId)) {
+      bumpMessageVersion(sessionId);
+      changed = true;
+    }
+    changed = livePlanSnapshots.delete(sessionId) || changed;
+    changed = pendingRefreshSessions.delete(sessionId) || changed;
+    changed = deletePendingInteractionState(sessionId) || changed;
+    // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
+    changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
+    changed = invalidateInputProjectionForOffline(sessionId) || changed;
+    bumpInputProjectionAuthorityEpoch(sessionId);
+    changed = deleteSessionLiveActivity(sessionId) || changed;
+    changed = sessionGoalStatus.delete(sessionId) || changed;
+    changed = sessionTaskUpdates.delete(sessionId) || changed;
+    changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
+    changed = sessionMakerActivityEpochs.delete(sessionId) || changed;
+    changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
+    changed = clearStreamingAssistantPointer(sessionId) || changed;
+    // The message window survives a soft offline transition, so both pending
+    // identities must survive too: one protects the live row during latest-window
+    // reconciliation, and the other lets a reconnecting authoritative user row
+    // restore question → reply order. Persisted reconciliation, explicit window
+    // invalidation, or actual device removal will retire them.
+    changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, indexedDeviceId) || changed;
+    changed = writeMakerTurnRunning(sessionId, false) || changed;
+    changed = writeSessionRunStatus(sessionId, EMPTY_SESSION_RUN_STATUS) || changed;
+  }
+  for (const [sessionId, pendingAnchors] of pendingHostAnchorLiveAssistantClientIds) {
+    for (const identity of pendingAnchors.values()) {
+      for (const deviceId of identity.deviceIds) {
+        if (!idSet.has(deviceId)) continue;
+        changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, deviceId) || changed;
+      }
+    }
+  }
+  return changed;
+}
+
 export const remoteSessionStore = {
   /** Coalesce notifications for one logically atomic remote snapshot. */
   batch<T>(work: () => T): T {
@@ -4807,51 +4865,18 @@ export const remoteSessionStore = {
    * 最新消息窗口,不会把断线前缓存误判为 fresh。
    */
   markDeviceOffline(deviceId: string): void {
-    let changed = false;
-    // A first text delta can still be waiting in the 32ms batch before any session
-    // metadata/index exists. Flush batches from this transport first so they create a
-    // device-owned host anchor, then freeze that identity before reconnect metadata can
-    // bind it to a newer send round.
-    for (const [sessionId, batch] of [...pendingTextDeltaBatches]) {
-      if (batch.deviceId !== deviceId) continue;
-      changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
-      changed = clearStreamingAssistantPointer(sessionId) || changed;
-      changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, deviceId) || changed;
-    }
-    for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
-      if (indexedDeviceId !== deviceId) continue;
-      if (sessionMessageSyncMarkers.delete(sessionId)) {
-        bumpMessageVersion(sessionId);
-        changed = true;
-      }
-      changed = livePlanSnapshots.delete(sessionId) || changed;
-      changed = pendingRefreshSessions.delete(sessionId) || changed;
-      changed = deletePendingInteractionState(sessionId) || changed;
-      // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
-      changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
-      changed = invalidateInputProjectionForOffline(sessionId) || changed;
-      bumpInputProjectionAuthorityEpoch(sessionId);
-      changed = deleteSessionLiveActivity(sessionId) || changed;
-      changed = sessionGoalStatus.delete(sessionId) || changed;
-      changed = sessionTaskUpdates.delete(sessionId) || changed;
-      changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
-      changed = sessionMakerActivityEpochs.delete(sessionId) || changed;
-      changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
-      changed = clearStreamingAssistantPointer(sessionId) || changed;
-      // The message window survives a soft offline transition, so both pending
-      // identities must survive too: one protects the live row during latest-window
-      // reconciliation, and the other lets a reconnecting authoritative user row
-      // restore question → reply order. Persisted reconciliation, explicit window
-      // invalidation, or actual device removal will retire them.
-      changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, deviceId) || changed;
-      changed = writeMakerTurnRunning(sessionId, false) || changed;
-      changed = writeSessionRunStatus(sessionId, EMPTY_SESSION_RUN_STATUS) || changed;
-    }
-    for (const [sessionId, pendingAnchors] of pendingHostAnchorLiveAssistantClientIds) {
-      if (![...pendingAnchors.values()].some((identity) => identity.deviceIds.has(deviceId))) continue;
-      changed = freezeUnboundPendingHostAnchorsForOffline(sessionId, deviceId) || changed;
-    }
-    if (changed) emit();
+    if (!sweepDevicesOffline([deviceId])) return;
+    emit();
+  },
+
+  /**
+   * 批量离线:同一波(如 presence 整批离线)只 emit 一次。逐台 markDeviceOffline
+   * 时每台各 notify 一轮,叠加 schedule store 的逐台失效,设备数超过 React 嵌套
+   * 更新上限即致命退出(2026-09-10 Android 冷启动,40/80 台隔离复现)。
+   */
+  markDevicesOffline(deviceIds: readonly string[]): void {
+    if (!sweepDevicesOffline(deviceIds)) return;
+    emit();
   },
 
   removeDevice(deviceId: string): void {

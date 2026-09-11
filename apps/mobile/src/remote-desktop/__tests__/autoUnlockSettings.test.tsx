@@ -21,8 +21,10 @@ const fixture = vi.hoisted(() => ({
   openLink: vi.fn(),
   ensure: vi.fn(),
   close: vi.fn(),
+  alert: vi.fn(),
 }));
 vi.mock("react-native", () => ({
+  Alert: { alert: fixture.alert },
   Platform: {
     get OS() {
       return fixture.platform;
@@ -60,8 +62,8 @@ vi.mock("../../../modules/cindy-remote-credentials/src", () => ({
     beginUnlock: vi.fn(),
   },
 }));
-vi.mock("../credentialSession", () => ({
-  credentialErrorKey: () => "credentialCancelled",
+vi.mock("../credentialSession", async (original) => ({
+  ...(await original<typeof import("../credentialSession")>()),
   RemoteDesktopCredentialSession: class {
     ensure = fixture.ensure;
     close = fixture.close;
@@ -99,6 +101,42 @@ it("does not perform any network or password operation when automatic unlock is 
   await act(async () => value.maybeUnlock());
   expect(fixture.invoke).not.toHaveBeenCalled();
   expect(fixture.ensure).not.toHaveBeenCalled();
+});
+it("shows an actionable signing error immediately when enabling automatic unlock fails", async () => {
+  fixture.invoke.mockRejectedValueOnce(
+    new Error("CREDENTIAL_DEVELOPMENT_SIGNING_REQUIRED private-test-detail"),
+  );
+  await act(async () => value.onAutoUnlock(true));
+  expect(fixture.alert).toHaveBeenCalledWith(
+    "remoteDesktop.autoUnlock",
+    "remoteDesktop.credentialSigningRequired",
+  );
+  expect(value.notice).toBe("remoteDesktop.credentialSigningRequired");
+  expect(value.autoUnlock).toBe(false);
+  expect(JSON.stringify(fixture.alert.mock.calls)).not.toContain(
+    "private-test-detail",
+  );
+});
+it("does not turn automatic retries into modal alerts", async () => {
+  fixture.settings.autoUnlock = true;
+  fixture.invoke
+    .mockResolvedValueOnce({ version: 1, state: "locked" })
+    .mockRejectedValueOnce(
+      new Error("CREDENTIAL_DEVELOPMENT_SIGNING_REQUIRED"),
+    );
+  await act(async () => value.maybeUnlock());
+  expect(value.notice).toBe("remoteDesktop.credentialSigningRequired");
+  expect(fixture.alert).not.toHaveBeenCalled();
+});
+it("shows Face ID setting failures without exposing native error details", async () => {
+  fixture.biometric.mockRejectedValueOnce(
+    new Error("native private-test-detail"),
+  );
+  await act(async () => value.onBiometricVerification(true));
+  expect(fixture.alert).toHaveBeenCalledWith(
+    "remoteDesktop.faceIdVerification",
+    "remoteDesktop.autoUnlockUnavailable",
+  );
 });
 it.each(["win32", "linux", undefined])(
   "does not access credentials for unsupported host %s",
@@ -194,7 +232,8 @@ it("does not start authentication when the screen loses focus during host prepar
     finish({ version: 1, ready: true, descriptor: "test-descriptor" });
     await pending;
   });
-  expect(fixture.configure).not.toHaveBeenCalled();
+  // Identity preparation started in parallel, but cancellation still prevents the prompt.
+  expect(fixture.configure).toHaveBeenCalledOnce();
   expect(fixture.ensure).not.toHaveBeenCalled();
 });
 it("uses the native password-only default when biometrics are unavailable", async () => {
@@ -328,4 +367,123 @@ it("preserves an explicit Face ID off choice when automatic unlock is enabled ag
   expect(value.autoUnlock).toBe(true);
   expect(value.biometricVerification).toBe(false);
   expect(fixture.biometric).not.toHaveBeenCalled();
+});
+
+it("lets a reconnect prepare after a cancelled pre-frame attempt without repeating a shown prompt", async () => {
+  fixture.settings.autoUnlock = true;
+  fixture.invoke.mockResolvedValue({
+    version: 1,
+    state: "locked",
+    ready: true,
+    descriptor: "test-descriptor",
+  });
+  const prompt = vi.fn();
+  fixture.ensure.mockImplementation(async (...args: any[]) => {
+    await args[4].beforeAuthentication();
+    prompt();
+  });
+  let cancel!: (error: Error) => void;
+  const frame = new Promise<void>((_resolve, reject) => {
+    cancel = reject;
+  });
+  let first!: Promise<void>, retry!: Promise<void>;
+  await act(async () => {
+    first = value.maybeUnlock(() => frame);
+  });
+  expect(fixture.ensure).toHaveBeenCalledTimes(1);
+  expect(prompt).not.toHaveBeenCalled();
+  await act(async () => {
+    retry = value.maybeUnlock(async () => {});
+  });
+  expect(fixture.ensure).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    cancel(new Error("CREDENTIAL_CANCELLED"));
+    await Promise.all([first, retry]);
+  });
+  expect(fixture.ensure).toHaveBeenCalledTimes(2);
+  expect(prompt).toHaveBeenCalledTimes(1);
+  expect(fixture.close).toHaveBeenCalledTimes(2);
+  await act(async () => value.maybeUnlock(async () => {}));
+  expect(fixture.ensure).toHaveBeenCalledTimes(2);
+});
+
+it("cancels a prepared prompt if the page loses focus before the first frame", async () => {
+  fixture.settings.autoUnlock = true;
+  fixture.invoke.mockResolvedValue({
+    version: 1,
+    state: "locked",
+    ready: true,
+    descriptor: "test-descriptor",
+  });
+  const prompt = vi.fn();
+  fixture.ensure.mockImplementation(async (...args: any[]) => {
+    await args[4].beforeAuthentication();
+    prompt();
+  });
+  let showFrame!: () => void;
+  const frame = new Promise<void>((resolve) => {
+    showFrame = resolve;
+  });
+  let pending!: Promise<void>;
+  await act(async () => {
+    pending = value.maybeUnlock(() => frame);
+  });
+  await act(async () => root.render(createElement(Probe, { active: false })));
+  await act(async () => {
+    showFrame();
+    await pending;
+  });
+  expect(prompt).not.toHaveBeenCalled();
+  expect(fixture.close).toHaveBeenCalled();
+});
+
+it("prepares phone identity while the host is still preparing", async () => {
+  fixture.settings.autoUnlock = true;
+  fixture.invoke.mockResolvedValueOnce({ version: 1, state: "locked" });
+  let finish!: (value: unknown) => void;
+  fixture.invoke.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  let operation!: Promise<void>;
+  await act(async () => {
+    operation = value.maybeUnlock();
+  });
+  expect(fixture.configure).toHaveBeenCalledOnce();
+  expect(fixture.ensure).not.toHaveBeenCalled();
+  await act(async () => {
+    finish({ version: 1, ready: true, descriptor: "test-descriptor" });
+    await operation;
+  });
+  expect(fixture.ensure).toHaveBeenCalledOnce();
+});
+
+it("drains native preparation after host failure before releasing the attempt", async () => {
+  fixture.settings.autoUnlock = true;
+  fixture.invoke.mockResolvedValueOnce({ version: 1, state: "locked" });
+  let finish!: () => void;
+  fixture.configure.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  fixture.invoke.mockRejectedValueOnce(new Error("CREDENTIAL_UNAVAILABLE"));
+  let operation!: Promise<void>;
+  let settled = false;
+  await act(async () => {
+    operation = value.maybeUnlock().then(() => {
+      settled = true;
+    });
+  });
+  expect(settled).toBe(false);
+  expect(fixture.ensure).not.toHaveBeenCalled();
+  await act(async () => {
+    finish();
+    await operation;
+  });
+  expect(settled).toBe(true);
+  expect(fixture.ensure).not.toHaveBeenCalled();
 });

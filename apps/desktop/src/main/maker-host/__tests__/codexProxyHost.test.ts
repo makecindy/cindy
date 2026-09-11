@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import { once } from 'node:events';
 import { WebSocket, WebSocketServer } from 'ws';
 import { createServer, request as httpRequest } from 'node:http';
+import { Transform } from 'node:stream';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
@@ -71,6 +72,8 @@ vi.mock('../../logger.js', () => ({
   getLogLevel: () => mockState.logLevel,
   getLogDir: () => mockState.logDir,
 }));
+
+vi.mock('../grok-oauth-login.js', async (importOriginal) => ({ ...await importOriginal<typeof import('../grok-oauth-login.js')>(), peekGrokAccessToken: () => 'fixture-xai-token' }));
 
 vi.mock('../../usageBroadcaster.js', () => ({
   recordXaiRateLimitSnapshot: mockState.recordXaiRateLimitSnapshot,
@@ -2945,6 +2948,86 @@ describe('codex proxy host', () => {
       host.unregister('session-bad-ids'); host.unregister('session-good-ids');
       await host.disposeCodexProxy();
       await new Promise<void>(resolve => wss.close(() => resolve()));
+      upstream.closeAllConnections();
+      await new Promise<void>(resolve => upstream.close(() => resolve()));
+    }
+  });
+
+  it('repairs null array fields in passthrough Responses SSE before Codex parses them (#4251)', async () => {
+    const host = await freshCodexProxyHost();
+    // Minimal reproduction from #4251: a third-party model behind the Responses passthrough
+    // serializes `reasoning.summary` / `message.content` as null, which Codex 0.153 rejects.
+    const upstreamEvents = [
+      { type: 'response.output_item.added', output_index: 0, item: { id: 'rs_1', type: 'reasoning', status: 'in_progress', summary: null } },
+      { type: 'response.output_item.added', output_index: 1, item: { id: 'msg_2', type: 'message', status: 'in_progress', role: 'assistant', content: null } },
+      { type: 'response.output_text.delta', item_id: 'msg_2', output_index: 1, content_index: 0, delta: '我查一下' },
+      { type: 'response.output_item.added', output_index: 2, item: { id: 'fc_3', type: 'function_call', status: 'in_progress', call_id: 'call_3', name: 'exec', arguments: '' } },
+      { type: 'response.function_call_arguments.done', item_id: 'fc_3', output_index: 2, arguments: JSON.stringify({ input: 'ls' }) },
+      { type: 'response.output_item.done', output_index: 2, item: { id: 'fc_3', type: 'function_call', status: 'completed', call_id: 'call_3', name: 'exec', arguments: JSON.stringify({ input: 'ls' }) } },
+      { type: 'response.completed', response: { id: 'resp_1', output: [
+        { id: 'rs_1', type: 'reasoning', summary: null },
+        { id: 'msg_2', type: 'message', role: 'assistant', content: null },
+      ], usage: { input_tokens: 1, output_tokens: 1 } } },
+    ];
+    const upstream = createServer(async (req, res) => {
+      for await (const chunk of req) void chunk;
+      res.writeHead(200, { 'content-type': 'text/event-stream', connection: 'close' });
+      for (const event of upstreamEvents) res.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+      res.end();
+    });
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const upstreamUrl = `http://127.0.0.1:${(upstream.address() as AddressInfo).port}`;
+    const actual = await vi.importActual<typeof import('@cindy/anthropic-compat-proxy')>('@cindy/anthropic-compat-proxy');
+    mockState.createAnthropicCompatProxy.mockImplementation((opts: Parameters<typeof actual.createAnthropicCompatProxy>[0]) =>
+      actual.createAnthropicCompatProxy({
+        ...opts,
+        upstream: upstreamUrl,
+        resolveOutboundProxy: () => null,
+        routingTransform: async (body, ctx) => ({ ...(await opts.routingTransform?.(body, ctx)), upstreamOverride: upstreamUrl }),
+      }),
+    );
+    host.setCodexProxyAuthInjection('oauth-bearer');
+    try {
+      await host.ensureCodexProxyReady();
+      const proxyUrl = host.getCodexProxyEndpoint()!;
+      const post = (body: Record<string, unknown>) => new Promise<string>((resolve, reject) => {
+        const req = httpRequest(proxyUrl + '/v1/responses', { method: 'POST', headers: { 'content-type': 'application/json' } }, res => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.once('end', () => resolve(Buffer.concat(chunks).toString('utf8')));
+        });
+        req.once('error', reject);
+        req.end(JSON.stringify(body));
+      });
+      const parse = (raw: string) => raw.split('\n\n').filter(Boolean).map(frame =>
+        JSON.parse(frame.split('\n').find(line => line.startsWith('data: '))!.slice(6)) as {
+          type: string; item?: Record<string, unknown>; response?: { output: Array<Record<string, unknown>> };
+        });
+
+      // Plain passthrough: only the repair stage is active.
+      const plain = parse(await post({ model: 'gpt-6', stream: true, input: [{ type: 'message', role: 'user', content: [{ type: 'input_text', text: 'hi' }] }] }));
+      expect(plain.map(event => event.type)).toEqual(upstreamEvents.map(event => event.type));
+      expect(plain[0]?.item).toEqual({ id: 'rs_1', type: 'reasoning', status: 'in_progress', summary: [] });
+      expect(plain[1]?.item).toEqual({ id: 'msg_2', type: 'message', status: 'in_progress', role: 'assistant', content: [] });
+      expect(plain[3]?.item).toEqual(upstreamEvents[3]!.item); // function_call passes through untouched
+      expect(plain[6]?.response?.output).toEqual([
+        { id: 'rs_1', type: 'reasoning', summary: [] },
+        { id: 'msg_2', type: 'message', role: 'assistant', content: [] },
+      ]);
+
+      // Wiring: the proxy-level transformResponse only wraps plain SSE bodies. Chaining with the
+      // exec custom-tool adapter is covered by the responses-chat-bridge unit tests.
+      const proxyOpts = mockState.createAnthropicCompatProxy.mock.calls[0]![0] as {
+        transformResponse: (ctx: Record<string, unknown>) => unknown;
+      };
+      const responseCtx = (contentType: string) => ({
+        reqId: 999, method: 'POST', url: '/v1/responses', upstreamBase: upstreamUrl, status: 200,
+        requestHeaders: {}, responseHeaders: { 'content-type': contentType }, requestBody: Buffer.alloc(0),
+      });
+      expect(proxyOpts.transformResponse(responseCtx('application/json'))).toBeNull();
+      expect(proxyOpts.transformResponse(responseCtx('text/event-stream'))).toBeInstanceOf(Transform);
+    } finally {
+      await host.disposeCodexProxy();
       upstream.closeAllConnections();
       await new Promise<void>(resolve => upstream.close(() => resolve()));
     }
@@ -6336,6 +6419,9 @@ describe('codex proxy host', () => {
 
   it('records xAI rate-limit headers from Codex proxy upstream responses', async () => {
     const host = await freshCodexProxyHost();
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    host.registerComposed('session-rate-xai', 'thread-xai', 'PRODUCT_PROMPT');
+    setSessionProvider('session-rate-xai', 'xai');
     mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
       url: 'http://127.0.0.1:43210',
       dispose: vi.fn(async () => undefined),
@@ -6351,6 +6437,7 @@ describe('codex proxy host', () => {
       upstreamBase: 'https://api.x.ai/v1',
       status: 200,
       requestHeaders: { 'thread-id': 'thread-xai' },
+      outboundHeaders: { authorization: 'Bearer fixture-xai-token' },
       responseHeaders: {
         'content-type': 'application/json',
         'x-ratelimit-limit-requests': '100',
@@ -6366,7 +6453,8 @@ describe('codex proxy host', () => {
       remainingRequests: 88,
       limitTokens: 1000000,
       remainingTokens: 900000,
-    });
+    }, 'xai');
+    clearSessionProvider('session-rate-xai');
   });
 
   it('observes streaming provider service_tier from response.completed SSE', async () => {

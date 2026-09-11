@@ -883,7 +883,7 @@ export function TodaySpendChip({
     providerId ?? 'openai',
   );
   // xAI 限流快照同为本机 main 抓的 —— 远程会话(SSH / device-link)同样抑制,回落价值估算。
-  const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession && (!providerId || providerId === 'xai'));
+  const xaiRateLimit = useXaiRateLimit(usesXaiQuotaForm && !isAnyRemoteSession, providerId ?? 'xai');
   const xaiSubscriptionUsage = useXaiSubscriptionUsage(usesXaiQuotaForm && !isAnyRemoteSession, providerId ?? 'xai');
   // 只有实际 Gateway 会话读取同一把 XD key 的 LiteLLM quota。订阅与自定义供应商
   // 均只展示各自的额度/本地会话统计，不读取 Model Access 账号配额。

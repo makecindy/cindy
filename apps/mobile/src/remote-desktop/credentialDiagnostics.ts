@@ -1,6 +1,7 @@
 import { mobileDebugLog } from "@/debug/mobileDebugLog";
 
 type Stage =
+  | "wait-for-first-frame"
   | "enable-face-id"
   | "change-face-id"
   | "scope"
@@ -18,6 +19,7 @@ type Stage =
   | "host-exchange"
   | "phone-reply-and-save";
 const codes = [
+  "CREDENTIAL_DEVELOPMENT_SIGNING_REQUIRED",
   "CREDENTIAL_INVALID_MESSAGE",
   "CREDENTIAL_INVALID_IDENTITY",
   "CREDENTIAL_UNAVAILABLE",

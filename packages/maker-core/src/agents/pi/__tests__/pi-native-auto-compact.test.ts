@@ -17,6 +17,7 @@ const knobs = vi.hoisted(() => ({
   runtimeProvider: "cindy",
   runtimeModel: "m",
   runtimeContextWindow: 200_000,
+  contextTokens: null as number | null,
   targetRuntimeContextWindow: 100_000,
   setModelReportsContextWindow: true,
   verifiedContextWindows: [] as number[],
@@ -58,6 +59,11 @@ vi.mock("../rpc-client.js", () => ({
       error?: string;
     }> {
       knobs.rpcCalls.push(cmd);
+      if (cmd.type === "get_session_stats" && knobs.contextTokens !== null) {
+        return { success: true, data: { contextUsage: {
+          tokens: knobs.contextTokens, contextWindow: knobs.runtimeContextWindow,
+        } } };
+      }
       if (cmd.type === "get_state") {
         return {
           success: true,
@@ -129,6 +135,10 @@ const noopLogger: Logger = {
 };
 
 describe("Pi native settings", () => {
+  it.each([1_000, 32_000, 200_000])('uses budget %s for compaction without shrinking request capacity', (budget) => {
+    const settings = JSON.parse(buildPiSettingsJsonContent(200_000, 90, [], budget));
+    expect(200_000 - settings.compaction.reserveTokens).toBe(budget * 0.9);
+  });
   it("maps the configured percentage to Pi reserve tokens", () => {
     const retry = {
       enabled: true,
@@ -168,6 +178,7 @@ describe("PiAgent native auto-compaction ownership", () => {
     knobs.runtimeProvider = "cindy";
     knobs.runtimeModel = "m";
     knobs.runtimeContextWindow = 200_000;
+    knobs.contextTokens = null;
     knobs.targetRuntimeContextWindow = 100_000;
     knobs.setModelReportsContextWindow = true;
     knobs.verifiedContextWindows = [];
@@ -181,6 +192,27 @@ describe("PiAgent native auto-compaction ownership", () => {
   afterEach(() => {
     rmSync(agentHome, { recursive: true, force: true });
     rmSync(cwd, { recursive: true, force: true });
+  });
+
+  it('keeps the applied small budget until native settings are reloaded', async () => {
+    let budget: number | null = 1_000;
+    const deps = buildDeps();
+    deps.resolveModelContextLimit = () => budget;
+    const handle = await new PiAgent(deps).startSession({ sessionId: 'small-budget', workingDir: cwd, model: 'm', providerId: 'xd' });
+    try {
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect((await handle.getContextUsage!()).maxTokens).toBe(1_000);
+      knobs.contextTokens = 6_000;
+      expect(await handle.getContextUsage!()).toMatchObject({
+        totalTokens: 6_000, maxTokens: 1_000, rawMaxTokens: 1_000, percentage: 100,
+      });
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(false);
+      budget = 32_000;
+      expect(handle.getUsageSnapshot().contextWindow).toBe(1_000);
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(true);
+      budget = null;
+      expect(await handle.requiresModelSwitchRebuild?.('m', { providerId: 'xd' })).toBe(true);
+    } finally { await handle.close(); }
   });
 
   it.each([null, 'xd', 'cindy'] as const)('refreshes gateway aliases from a %s source without changing routes', async (providerId) => {

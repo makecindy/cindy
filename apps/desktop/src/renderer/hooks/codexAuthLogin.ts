@@ -27,7 +27,7 @@ export type CodexLoginResult = {
 type CodexLoginStartedListener = () => void;
 
 type PendingCodexLogin = {
-  mode: 'browser' | 'device-code';
+  mode: 'browser' | 'device-code' | 'local';
   ownerId: string;
   promise: Promise<CodexLoginResult>;
 };
@@ -91,12 +91,12 @@ export function onCodexLoginStarted(listener: CodexLoginStartedListener): () => 
 }
 
 function invokeCodexLogin(
-  mode: 'browser' | 'device-code',
+  mode: 'browser' | 'device-code' | 'local',
   ownerId: string,
 ): Promise<CodexLoginResult> {
   return window.electronAPI.maker.auth.triggerLogin(
     'codex',
-    mode === 'device-code' ? { mode, ownerId } : { ownerId },
+    mode === 'browser' ? { ownerId } : { mode, ownerId },
   );
 }
 
@@ -106,7 +106,9 @@ function invokeCodexLogin(
  * main adapter 也会复用正在运行的 CLI 登录，但在 renderer 先合并可以避免设置页、
  * 会话横幅等入口重复发 IPC，并避免同一结果重复执行 main handler 的刷新与广播收尾。
  */
-function getOrStartCodexLogin(mode: 'browser' | 'device-code' = 'browser'): PendingCodexLogin {
+function getOrStartCodexLogin(
+  mode: 'browser' | 'device-code' | 'local' = 'browser',
+): PendingCodexLogin {
   if (pendingCodexLogin) {
     if (pendingCodexLogin.mode === mode) return pendingCodexLogin;
 
@@ -146,7 +148,7 @@ function getOrStartCodexLogin(mode: 'browser' | 'device-code' = 'browser'): Pend
 }
 
 export function triggerCodexLoginOnce(
-  mode: 'browser' | 'device-code' = 'browser',
+  mode: 'browser' | 'device-code' | 'local' = 'browser',
 ): Promise<CodexLoginResult> {
   return getOrStartCodexLogin(mode).promise;
 }
@@ -157,7 +159,9 @@ export function triggerCodexLoginOnce(
  * 同一 renderer 内多个显式入口会复用一个登录 promise；组件卸载时只有最后一个 owner
  * 才能取消它。lease 绑定具体 promise，因此旧模式的 cleanup 不会误杀已排队的新模式。
  */
-export function acquireCodexLogin(mode: 'browser' | 'device-code' = 'browser'): CodexLoginLease {
+export function acquireCodexLogin(
+  mode: 'browser' | 'device-code' | 'local' = 'browser',
+): CodexLoginLease {
   const pending = getOrStartCodexLogin(mode);
   const { ownerId, promise } = pending;
   let ownership = loginOwnership.get(promise);

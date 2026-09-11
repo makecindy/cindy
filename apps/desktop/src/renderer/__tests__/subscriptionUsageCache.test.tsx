@@ -180,3 +180,23 @@ describe('OpenAI quota during a deferred account switch', () => {
     expect(hook.result.current).toBeNull();
   });
 });
+
+it('isolates Grok instantaneous limits per connection and clears an unmounted account only', () => {
+  const pushes = new Map<string, (value: unknown) => void>();
+  vi.stubGlobal('electronAPI', { maker: { usage: {
+    onXaiRateLimitChanged: (cb: (value: unknown) => void, id: string) => { pushes.set(id, cb); return vi.fn(); },
+  } } });
+  const hook = renderHook(({ id }) => useXaiRateLimit(true, id), { initialProps: { id: 'xai-a' } });
+  const a = { remainingRequests: 12 };
+  act(() => pushes.get('xai-a')?.(a));
+  hook.rerender({ id: 'xai-b' });
+  expect(hook.result.current).toBeNull();
+  const b = { remainingRequests: 3 };
+  act(() => pushes.get('xai-b')?.(b));
+  act(() => pushes.get('xai-a')?.(null));
+  expect(hook.result.current).toBe(b);
+  hook.rerender({ id: 'xai-a' });
+  expect(hook.result.current).toBeNull();
+  hook.rerender({ id: 'xai-b' });
+  expect(hook.result.current).toBe(b);
+});

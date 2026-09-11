@@ -26,8 +26,13 @@ import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionU
 
 type Snapshot = ClaudeSubscriptionUsageSnapshot | XaiSubscriptionUsageSnapshot;
 let broadcast: (providerId: string, snapshot: Snapshot | null) => void = () => {};
-export function setSubscriptionAccountUsageBroadcaster(handler: typeof broadcast): void {
+let clearInstantUsage: (providerId: string) => void = () => {};
+export function setSubscriptionAccountUsageBroadcaster(
+  handler: typeof broadcast,
+  clear?: typeof clearInstantUsage,
+): void {
   broadcast = handler;
+  clearInstantUsage = clear ?? (() => {});
 }
 
 // These are display caches. Credentials stay in the host credential store, and
@@ -115,5 +120,6 @@ export function triggerSubscriptionAccountUsage(providerId: string): void {
   if (!isProviderRouteMutationInProgress(providerId)) reader(providerId)?.triggerRefresh();
 }
 export async function syncSubscriptionAccountUsage(providerId: string): Promise<void> {
+  if (subscriptionAccountKind(providerId) === 'xai') clearInstantUsage(providerId);
   await reader(providerId)?.syncForCredentialChange();
 }

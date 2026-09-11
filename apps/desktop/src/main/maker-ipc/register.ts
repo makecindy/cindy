@@ -1,10 +1,12 @@
 import type { TurnUsageContext } from './turnUsageContext.js';
+import { retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import { registerPluginListHandler } from './pluginListHandler.js';
 import { initializeBotAuthorizationHost } from './botAuthorizationHost.js';
 import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, commitBotAuthorizationInput, type BotAuthorizationInputGuard, getBotAuthorizationService } from './botAuthorizationService.js';
 import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
 import { refreshSubscriptionAccountModels } from '../maker-host/subscription-account-models.js';
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
+import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
 import { isCodexAccountProvider, codexAccountState, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
@@ -573,6 +575,8 @@ import {
 } from '../maker-host/pi-package-mutation-grant.js';
 
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import { applyPersistedCindyMakeMarker } from './cindyMakeSessionStart.js';
+import { CINDY_MAKE_SESSION_SOURCE } from '../../shared/cindyMakeSession.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
 import { piPackageCommandDiagnostic } from '../maker-host/pi-package-diagnostic.js';
 import {
@@ -5481,6 +5485,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (subscriptionAccountKind(providerId)) {
         const result = await loginSubscriptionAccount(providerId, isCurrent);
         if (result.ok && isCurrent()) {
+          if (subscriptionAccountKind(providerId) === 'xai') clearXaiRateLimitSnapshot(providerId);
           try { await refreshSubscriptionAccountModels(providerId); } catch { /* Static catalog remains usable. */ }
           if (!isCurrent()) return result;
           const previous = await getCustomProvider(providerId);
@@ -5604,7 +5609,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } catch {
           /* 发现失败保持纯静态目录，不影响登录结果 */
         }
-        if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        if (isCurrent()) {
+          if (provider.source === 'builtin') await retainProviderPresentationAfterAuthChange(providerId);
+          if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        }
       }
       return { ...result, ...(rollbackCredentials ? { rollbackCredentials } : {}) };
     },
@@ -5623,11 +5631,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (isCodexAccountProvider(providerId)) cancelCodexAccountLogin(providerId);
       else cancelGenericOAuthLogin(storedCustomProviderId(providerId));
     },
-    removeOAuthCredentials: (providerId) => subscriptionAccountKind(providerId)
-      ? removeSubscriptionAccountCredentialsReversibly(providerId)
-      : isCodexAccountProvider(providerId)
-      ? removeCodexAccountCredentialsReversibly(providerId)
-      : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId)),
+    removeOAuthCredentials: (providerId) => {
+      if (subscriptionAccountKind(providerId)) {
+        const restore = removeSubscriptionAccountCredentialsReversibly(providerId);
+        if (subscriptionAccountKind(providerId) === 'xai') clearXaiRateLimitSnapshot(providerId);
+        return restore;
+      }
+      return isCodexAccountProvider(providerId)
+        ? removeCodexAccountCredentialsReversibly(providerId)
+        : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId));
+    },
   });
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组
@@ -6415,6 +6428,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       o.fastMode = runtimeOverride.fastMode;
     }
     await applyPersistedReviewMode(o);
+    await applyPersistedCindyMakeMarker(o, readSessionSource);
     const didInjectOrcaInstructions = o.reviewMode === true ? false : applyOrcaInstructions(o);
     const didInjectProjectContext =
       o.reviewMode === true ? false : await applyProjectContextInjection(o);
@@ -11967,6 +11981,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
     // 后续所有 send,来源是逐次调用的属性。
     isMobileClientInvoke: () => isMobileControllerInvoke(),
+    // 个人版制作任务说明:按持久化的 sessions.source 判定,每次 send 现读,不信任
+    // 调用方自报;与手机说明同层(只进 wire 消息)。
+    isCindyMakeSession: async (sessionId) =>
+      (await readSessionSource(sessionId)) === CINDY_MAKE_SESSION_SOURCE,
     applyPendingAgentSwitch: (sessionId) =>
       applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId),
     prepareUnhealthySession: (sessionId) =>

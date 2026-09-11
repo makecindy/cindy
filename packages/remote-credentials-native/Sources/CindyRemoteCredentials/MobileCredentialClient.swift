@@ -222,7 +222,7 @@ public final class MobileCredentialClient {
     while let presented = presenter.presentedViewController { presenter = presented }
     defer { if session === state { form = nil } }
     let entered: (Data, Bool) = try await withCheckedThrowingContinuation { continuation in
-      let form = CredentialPasswordForm(labels: labels, account: account.name, target: state.remote.id, saveRequired: state.setup) {
+      let form = CredentialPasswordForm(labels: labels, account: account.name, saveRequired: state.setup) {
         continuation.resume(with: $0.mapError { $0 as Error })
       }
       form.overrideUserInterfaceStyle = theme == "dark" ? .dark : .light

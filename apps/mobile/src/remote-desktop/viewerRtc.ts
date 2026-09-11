@@ -4,6 +4,31 @@
 export const DESKTOP_RTC_SCRIPT = String.raw`
   let trickleIce=false,attemptId=null,retries=0,exchangeId=0;
   let configPending=false;
+  let videoPresented=false,videoFrameCallback=null,videoPaintCallback=null;
+  function cancelVideoHandoff(){
+    if(videoFrameCallback!==null)video.cancelVideoFrameCallback?.(videoFrameCallback);
+    if(videoPaintCallback!==null)cancelAnimationFrame(videoPaintCallback);
+    videoFrameCallback=videoPaintCallback=null;
+  }
+  function revealVideo(g){
+    post({type:'videoFrameReady',attemptId});
+    // Keep the JPEG decoded and painted as a backing layer. Promote the video
+    // only after its first frame; removing the image exposes WebKit repaint gaps.
+    videoPaintCallback=requestAnimationFrame(()=>{
+      if(g!==generation)return;
+      videoPaintCallback=requestAnimationFrame(()=>{
+        if(g!==generation)return;
+        videoPaintCallback=null;videoPresented=true;video.style.zIndex='2';
+        post({type:'streaming',attemptId});
+        post({type:'pipCapability',supported:!!(video.webkitSupportsPresentationMode?.('picture-in-picture')||document.pictureInPictureEnabled)});
+      });
+    });
+  }
+  function waitForVideoFrame(g){
+    if(g!==generation)return;
+    if(video.readyState>=2&&video.videoWidth>0&&video.videoHeight>0){revealVideo(g);return;}
+    videoPaintCallback=requestAnimationFrame(()=>waitForVideoFrame(g));
+  }
   let retryTimer=null,deadlineTimer=null,disconnectTimer=null,stableTimer=null,iceTimer=null,gatherTimer=null,gatherDone=null;
   let localCandidates=[],localAck=0,remoteAfter=0,icePending=null,remoteSeen=new Set(),exchangeUntil=0,remoteComplete=false;
   function clearRtcTimers(){
@@ -14,10 +39,11 @@ export const DESKTOP_RTC_SCRIPT = String.raw`
   function closeRtc(preserveFrame=true){
     configPending=false;
     if(preserveFrame)retainFrame();generation++;clearRtcTimers();
+    cancelVideoHandoff();videoPresented=false;
     localCandidates=[];localAck=remoteAfter=0;icePending=null;remoteSeen=new Set();attemptId=null;
     clearInterval(statsTimer);statsTimer=null;statsSample=null;
     if(dc)dc.close();if(pc)pc.close();pc=null;dc=null;
-    video.onplaying=null;video.srcObject=null;video.style.display='none';image.style.display='block';
+    video.onplaying=null;video.srcObject=null;video.style.display='none';video.style.zIndex='0';image.style.display='block';
     if(!preserveFrame)image.removeAttribute('src');
   }
   function failRtc(reason,canRetry=true){
@@ -98,7 +124,16 @@ export const DESKTOP_RTC_SCRIPT = String.raw`
         try{const stats=await rtc.getStats();if(g!==generation||pc!==rtc)return;const result=networkStats(stats,statsSample);statsSample=result.sample;post({type:'network',transport:result.transport,bytesPerSecond:result.bytesPerSecond,latencyMs:result.latencyMs});}catch{}finally{readingStats=false;}
       },1000);
       rtc.ontrack=e=>{if(g!==generation)return;video.srcObject=e.streams[0]||new MediaStream([e.track]);video.play().catch(()=>{});};
-      video.onplaying=()=>{if(g!==generation)return;video.style.display='block';image.style.display='none';post({type:'streaming',attemptId});post({type:'pipCapability',supported:!!(video.webkitSupportsPresentationMode?.('picture-in-picture')||document.pictureInPictureEnabled)});render();};
+      video.onplaying=()=>{
+        if(g!==generation||videoPresented||videoFrameCallback!==null||videoPaintCallback!==null)return;
+        video.style.display='block';render();
+        if(typeof video.requestVideoFrameCallback==='function'){
+          videoFrameCallback=video.requestVideoFrameCallback(()=>{
+            if(g!==generation)return;
+            videoFrameCallback=null;revealVideo(g);
+          });
+        }else waitForVideoFrame(g);
+      };
       rtc.onconnectionstatechange=()=>{
         if(g!==generation)return;
         if(['failed','closed'].includes(rtc.connectionState)){failRtc('transport');return;}
@@ -108,7 +143,7 @@ export const DESKTOP_RTC_SCRIPT = String.raw`
         }else if(rtc.connectionState==='connected'){
           clearTimeout(disconnectTimer);disconnectTimer=null;clearTimeout(deadlineTimer);
           if(!stableTimer)stableTimer=setTimeout(()=>{if(g===generation)retries=0;},net.stableMs);
-          if(video.style.display==='block')post({type:'streaming',attemptId});
+          if(videoPresented)post({type:'streaming',attemptId});
         }
       };
       await rtc.setLocalDescription(await rtc.createOffer());
