@@ -153,6 +153,7 @@
     "systemInstruction": "システム指令",
     "retrySend": "送信を再試行",
     "clearError": "エラーをクリア",
+    "noRetryContent": "再送信できる内容がありません。エラーをクリアして、もう一度入力してください。",
     "piImageInputUnsupported": "現在の Pi モデルでは画像入力が有効になっていません。画像に対応するモデルへ切り替えてください。カスタムモデルの場合は、プロバイダー設定で「画像入力に対応」を有効にしてから、新しい Pi タスクを開始してください。",
     "codexResumeNotReady": "Codex は現在このタスクを再開できません。しばらくしてからもう一度お試しください。",
     "credentialSwitchWait": "他の Codex タスクの終了を待っています。終了後に自動で送信します",

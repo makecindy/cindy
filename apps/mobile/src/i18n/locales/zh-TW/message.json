@@ -153,6 +153,7 @@
     "systemInstruction": "系統指令",
     "retrySend": "重試傳送",
     "clearError": "清除錯誤",
+    "noRetryContent": "沒有可重新傳送的內容，請清除錯誤後重新輸入。",
     "piImageInputUnsupported": "當前 Pi 模型未啟用圖片輸入。請切換到支援圖片的模型；如果這是自定義模型，請在供應商設定中開啟“支援圖片輸入”，然後新建 Pi 任務。",
     "codexResumeNotReady": "Codex 暫時無法恢復這個任務，請稍後重試",
     "credentialSwitchWait": "正在等待其它 Codex 任務結束，結束後自動傳送",

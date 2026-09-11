@@ -2331,10 +2331,13 @@ export default function SessionScreen() {
   // 会话参数未就绪(缓存种入 / 新建在途)时队列行仍只读:取消 / 编辑 / 插队都是打到
   // 被控端队列的 RPC,会话在那边可能还不存在。暂时断线则与 Desktop 一致继续允许
   // 尝试,失败由 runQueueAction 报错,不把连接恢复职责转嫁给用户。
-  const queueInlineReadOnlyReason = collaborationReadOnlyReason
-    ?? cacheSeededReason
+  const queueAvailabilityReason = cacheSeededReason
     ?? pendingCreationReason
     ?? (sessionOperationLayout.showQueue ? null : composerDisabledReason);
+  const queueInlineReadOnlyReason = collaborationReadOnlyReason ?? queueAvailabilityReason;
+  // 重试/清错属于输入恢复：Lead 能发消息，也应能恢复失败输入。
+  // 队列编辑和恢复整组队列仍沿用协作编排只读规则。
+  const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason;
   const showMessageHistory = sessionOperationLayout.messageHistoryMode === 'visible'
     || (sessionOperationLayout.messageHistoryMode === 'collapsed' && pendingHistoryExpanded);
   // 冷开即出壳:session 元信息还没回来,但不是真正不可用(离线/被撤销,看 remoteUnavailableReason)——
@@ -7277,10 +7280,12 @@ export default function SessionScreen() {
   }, [cancelQueueEdit, inputProjection.pendingQueue, queueEditing]);
 
   const retryQueueError = () => {
+    if (errorRecoveryReadOnlyReason || !inputProjection.errorRetryText) return;
     void runQueueAction(() => maker.input.retryLastError(sessionId));
   };
 
   const clearQueueError = () => {
+    if (errorRecoveryReadOnlyReason) return;
     void runQueueAction(() => maker.input.clearError(sessionId));
   };
 
@@ -9316,6 +9321,7 @@ export default function SessionScreen() {
                             不在这里,它们是消息流里的 pending_send 项。 */}
                         <InlineQueueSection
                           busy={queueBusy}
+                          errorRecoveryReadOnlyReason={errorRecoveryReadOnlyReason}
                           onClearError={clearQueueError}
                           onResume={resumeQueue}
                           onRetryError={retryQueueError}
