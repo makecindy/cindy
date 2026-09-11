@@ -413,6 +413,9 @@ export class Session {
   private permissionModeStateValue: PermissionModeState;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private permissionModeChangesInFlight = 0;
+  /** Invalidation only; the provider remains the sole owner of the live Plan flag. */
+  private planModeGeneration = 0;
+  private planModeChangesInFlight = 0;
   /** User/API permission changes, serialized separately so host restores cannot deadlock. */
   private externalPermissionModeChangeChain: Promise<void> = Promise.resolve();
   private externalPermissionModeChangesInFlight = 0;
@@ -1486,10 +1489,24 @@ export class Session {
     return this.permissionModeState;
   }
 
+  /** Host side effects must not use an unknown or in-flight Plan state. */
+  get stablePlanModeState(): { enabled: boolean; generation: number } | null {
+    if (this.status !== 'active' || this.terminationStarted || this.planModeChangesInFlight > 0) return null;
+    const enabled = this.capabilities.planMode?.supported
+      ? (this.handle.getExecutionPlanMode ? this.handle.getExecutionPlanMode() : this.getPlanMode())
+      : false;
+    return enabled === null ? null : { enabled, generation: this.planModeGeneration };
+  }
+
   /** Review a Host-side tool step without reconstructing or persisting another copy of user intent. */
   async reviewHostPermissionAction(action: ReviewableAction): Promise<AutoReviewDecision> {
     const permission = this.stablePermissionModeState;
     if (!permission) return { verdict: 'block', reason: 'Session permissions are changing or the task has closed.' };
+    const plan = this.stablePlanModeState;
+    if (!plan || plan.enabled || permission.mode === 'plan') {
+      return { verdict: 'block', reason: 'Plan mode is active or changing; Host side effects are not allowed.' };
+    }
+    if (permission.mode === 'bypassPermissions') return { verdict: 'allow' };
     if (permission.mode !== 'auto') return { verdict: 'ask' };
     // Host steps can belong to a still-active descendant after the foreground
     // turn finishes. Guard Session authority here; root-turn generation is not
@@ -1509,7 +1526,9 @@ export class Session {
       unsubscribe();
     }
     const current = this.stablePermissionModeState;
+    const currentPlan = this.stablePlanModeState;
     if (invalidated || !current || current.generation !== permission.generation
+      || !currentPlan || currentPlan.enabled || currentPlan.generation !== plan.generation
       || (turnControl?.gracefulStopState ?? 'none') !== gracefulStop
       || (this.turnControlState?.gracefulStopState ?? 'none') !== gracefulStop) {
       return { verdict: 'block', reason: 'Task or permissions changed; retry with the current scope.' };
@@ -1706,7 +1725,16 @@ export class Session {
     if (!this.handle.setPlanMode) {
       throw new NotSupportedError('planMode', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setPlanMode(enabled);
+    if (this.planModeChangesInFlight === 0 && this.getPlanMode() === enabled) return;
+    // Invalidate before awaiting the provider (Pi may queue its RPC). A switch
+    // back, or a failed switch, must not revive an earlier Host approval.
+    this.planModeGeneration += 1;
+    this.planModeChangesInFlight += 1;
+    try {
+      await this.handle.setPlanMode(enabled);
+    } finally {
+      this.planModeChangesInFlight -= 1;
+    }
   }
 
   getPlanMode(): boolean | null {

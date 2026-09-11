@@ -313,6 +313,7 @@ import {
 } from '../reviewer/reviewSourceLease.js';
 
 import { broadcastSubagentRunsChanged } from '../localDb/ipc/subagentRuns.js';
+import { resolveGhostFsSessionSnapshot } from './ghostFsSessionSnapshot.js';
 import { clearSubagentObservationRewindState } from '../subagentObservationRewindFence.js';
 import {
   applyAgentSwitchToSessionRow,
@@ -9568,7 +9569,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 的会话聚焦通道。注入方式与 setGhostAgentTurnRunner 同款倒置,避免
   // cindy-brain 反向依赖 maker-ipc / localDb 形成模块环。
   setGhostLibraryExtraDirSync(syncLibraryReadonlyExtraDir);
+  getGhostFsSlot().setSessionSnapshotResolver(async (sessionId, instanceId) =>
+    resolveGhostFsSessionSnapshot((id) => getMaker().getSession(id), sessionId, instanceId));
   setGhostWorkspaceSessionService({
+    captureSessionAuthorization: (sessionId, instanceId) => {
+      const snapshot = resolveGhostFsSessionSnapshot((id) => getMaker().getSession(id), sessionId, instanceId);
+      return snapshot && !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan'
+        ? snapshot.isCurrent ?? null : null;
+    },
     reviewPermissionAction: async (sessionId, instanceId, action) => {
       const session = getMaker().getSession(sessionId);
       if (!session || session.instanceId !== instanceId) {

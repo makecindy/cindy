@@ -293,6 +293,32 @@ describe('ClaudeCodeAgent plan mode', () => {
     await handle.close();
   });
 
+  it('Full Access cannot bypass an active one-shot Plan turn, but resumes after plan approval', async () => {
+    const { handle, queryOptions } = await startPlanSession(true, {}, 'bypassPermissions');
+    const resolver = vi.fn(async () => ({ kind: 'plan_review' as const, behavior: 'allow' as const }));
+    handle.setInteractionResolver(resolver);
+    await handle.send({ type: 'user', content: 'Plan the change.' });
+    expect(handle.getPlanMode?.()).toBe(false);
+    expect(handle.getExecutionPlanMode?.()).toBe(true);
+    for (const tool of ['Write', 'Bash', 'mcp__cindy__ghost_call']) {
+      expect(await queryOptions.canUseTool!(tool, {}, { toolUseID: `plan-${tool}` })).toMatchObject({ behavior: 'deny' });
+    }
+    expect(await queryOptions.canUseTool!('Read', {}, { toolUseID: 'plan-read' })).toMatchObject({ behavior: 'allow' });
+    expect(resolver).not.toHaveBeenCalled();
+    expect(await queryOptions.canUseTool!('ExitPlanMode', { plan: 'Apply the change.' }, { toolUseID: 'plan-exit' })).toMatchObject({ behavior: 'allow' });
+    expect(handle.getExecutionPlanMode?.()).toBe(false);
+    expect(await queryOptions.canUseTool!('Write', {}, { toolUseID: 'after-plan-write' })).toMatchObject({ behavior: 'allow' });
+    await handle.close();
+  });
+
+  it('arming the next Plan turn does not rewrite the current ordinary Full Access turn', async () => {
+    const { handle, queryOptions } = await startPlanSession(false, {}, 'bypassPermissions');
+    await handle.send({ type: 'user', content: 'Apply the approved change.' });
+    await handle.setPlanMode!(true);
+    expect(await queryOptions.canUseTool!('Write', {}, { toolUseID: 'current-write' })).toMatchObject({ behavior: 'allow' });
+    await handle.close();
+  });
+
   it('passes a session-stable copy of host-owned allowedTools to the local SDK query', async () => {
     const source = ['mcp__cindy__ghost_list', 'mcp__cindy_memory__list_tools'];
     const { handle, queryOptions } = await startPlanSession(false, {

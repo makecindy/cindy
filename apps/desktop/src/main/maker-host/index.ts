@@ -61,6 +61,7 @@ import { createMakeToolchainEnvironment } from '../cindy-make/toolchainEnvironme
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import { getWorkerLink, updateWorkerStatus } from '../localDb/orcaTeamStore.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
+import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
 import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
@@ -931,17 +932,13 @@ export function getMaker(): Maker {
         if (!sessionInstanceId) return null;
         const session = _maker?.getSession(sessionId);
         if (!session || session.instanceId !== sessionInstanceId) return null;
-        const permission = session.stablePermissionModeState;
-        if (!permission) return null;
+        const snapshot = resolveGhostFsSessionSnapshot((id) => _maker?.getSession(id), sessionId, sessionInstanceId);
         return {
-          permissionMode: permission.mode,
+          permissionMode: session.stablePermissionModeState?.mode ?? null,
           remoteHostId: session.remoteHostId,
-          reviewAction: async (action: import('@cindy/maker-core').ReviewableAction) => {
-            const decision = await session.reviewHostPermissionAction(action);
-            return _maker?.getSession(sessionId) === session
-              ? decision
-              : { verdict: 'block' as const, reason: 'The task instance changed during review.' };
-          },
+          isCurrent: () => !!snapshot && !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan'
+            && snapshot.isCurrent?.() === true,
+          reviewAction: snapshot?.reviewAction,
         };
       },
     };

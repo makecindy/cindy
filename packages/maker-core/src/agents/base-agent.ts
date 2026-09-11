@@ -2266,6 +2266,9 @@ export interface AgentSessionHandle {
   /** 当前 maker 进程内记录的计划模式状态；不支持的 agent 不实现。 */
   getPlanMode?(): boolean | null;
 
+  /** Execution authority, including an active one-shot Plan turn after the UI toggle is consumed. */
+  getExecutionPlanMode?(): boolean | null;
+
   /**
    * 把当前会话导出成 HTML 文件,返回写入的绝对路径。
    * `outputPath` 省略时由 agent 决定默认落盘位置。仅 Capabilities.sessionHtmlExport

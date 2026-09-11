@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, LayoutGrid, MoonStar } from 'lucide-react';
 import type { WebviewTag } from 'electron';
@@ -13,13 +13,11 @@ import {
   observeHostTheme,
 } from './ghostPanelTheme';
 import {
-  GHOST_SETTINGS_LAYOUT_REVISION,
-  loadGhostSettingsSnapshot,
-  saveGhostSettingsSnapshot,
-  snapshotMatchesContext,
-  snapshotMatchesWidth,
-  type GhostSettingsSnapshot,
-} from './ghostSettingsSnapshot';
+  GHOST_SETTINGS_HEIGHT_MIN,
+  GHOST_SETTINGS_HEIGHT_MAX,
+  loadGhostSettingsHeight,
+  saveGhostSettingsHeight,
+} from './ghostSettingsHeight';
 
 /**
  * 意识「自定义设置区」卡片(settingsHtml 渲染通道):设置页详情里
@@ -34,12 +32,9 @@ import {
  * 两次兜后到的布局/字体;声明了 settingsHeight 则固定该值,并保持作者布局
  * 完全不受宿主响应式规则干预。
  *
- * 视觉连续性(规则 7):guest 首帧不可能与宿主同帧(独立渲染进程,
- * attach→装载→绘制天然晚数帧)——追不平就贴快照:渲染稳定后把 guest 画面
- * capturePage 存起来(ghostSettingsSnapshot,跨 app 重启可用),下次进入
- * 首帧直接显示这张位图(高度也用它留位),webview 在图底下透明装载,主题
- * CSS 落地后撤图换真身——像素一致,肉眼无感。快照失配(首开 / 版本 / 主题 /
- * 宽度 / DPR 变化)时退回老路径:透明占位 + 一次性淡入,没有半成品帧。
+ * 重开时仅缓存高度留位,不保存或重放 guest 画面:昵称、账号状态、菜单等
+ * 都可能在尺寸不变时更新,旧截图不能冒充当前界面。每次挂载创建新 guest,
+ * 主题与布局注入完成后展示真实页面,卸载时销毁 guest 与所有宿主监听。
  * 凭证输入不在这里:input:'host' 凭证仍宿主渲染;input:'ghost' 凭证由本区
  * 收单后经 /secrets 只写通道入库,意识读不回明文。
  */
@@ -47,8 +42,8 @@ import {
 /** 量到内容高之前的占位高(透明期的留位,不是内容下限)。 */
 const AUTO_HEIGHT_PLACEHOLDER = 160;
 /** 量高结果的 clamp 区间:矮内容真收下去(48 兜非法/塌零),高内容 800 封顶。 */
-const AUTO_HEIGHT_MIN = 48;
-const AUTO_HEIGHT_MAX = 800;
+const AUTO_HEIGHT_MIN = GHOST_SETTINGS_HEIGHT_MIN;
+const AUTO_HEIGHT_MAX = GHOST_SETTINGS_HEIGHT_MAX;
 
 /**
  * 自适应高度设置 guest 的结构 CSS(dom-ready 注入,id 守卫幂等):
@@ -85,24 +80,6 @@ const AUTO_HEIGHT_MEASURE_SCRIPT = `(function(){var de=document.documentElement,
  * 只是"来量一下"的信号,不携带任何数据;高度永远由宿主自己 executeJavaScript 读。
  */
 const GHOST_SETTINGS_RESIZE_PING = '__xdt_ghost_settings_resize__';
-
-/** 揭示(webview opacity 1)到撤快照图的间隔:盖过 0.12s 淡入 + 一帧余量。 */
-const SNAPSHOT_SWAP_DELAY_MS = 180;
-/** 渲染稳定后到拍快照的静默期(等 measure / 字体 / 主题注入全部尘埃落定)。 */
-const SNAPSHOT_CAPTURE_DEBOUNCE_MS = 800;
-/**
- * 快照兜底撤图时限:贴图后 guest 迟迟到不了揭示点(装载失败 / attach 被拒 /
- * guest 挂起)就撤图退回透明占位——旧世界的这类失败是诚实的空白,绝不能让
- * 一张位图冒充活界面无限期骗人。
- */
-const SNAPSHOT_FAILSAFE_MS = 5000;
-
-/**
- * 自适应模式下各意识上次量得的高度(渲染进程会话级缓存):重开详情页时
- * 先按上次高度留位,首帧即终态,不再每次都从最小高再长一截。
- * 冷启动(本会话没量过)时退到持久化快照里的高度,再退占位高。
- */
-const lastMeasuredHeights = new Map<string, number>();
 
 /** 沉睡态提示(attach 闸只放行唤醒的意识,沉睡时不建 webview,否则必被拒成白屏)。 */
 function AsleepHint({ appearance }: { appearance: 'settings' | 'plugin' }): ReactNode {
@@ -175,40 +152,12 @@ function SettingsWebviewBody({
   const fixedHeight = manifest.settingsHeight;
   const buildSettingsThemeCss =
     appearance === 'plugin' ? buildGhostPluginSettingsThemeCss : buildGhostSettingsThemeCss;
-  // 首帧贴的快照(仅 mount 时决定一次;版本/主题/DPR 现场比对,宽度等布局后
-  // 由下方 layout effect 补验)。失配 = null,走透明占位 + 淡入的老路径。
-  const [snapshot, setSnapshot] = useState<GhostSettingsSnapshot | null>(() => {
-    const snap = loadGhostSettingsSnapshot(dataOwnerId, manifest.id);
-    if (!snap) return null;
-    const ctx = {
-      version: manifest.version,
-      themeCss: buildSettingsThemeCss(),
-      dpr: window.devicePixelRatio,
-    };
-    return snapshotMatchesContext(snap, ctx) ? snap : null;
-  });
-  // 自适应模式的量高结果;初值:本会话量高缓存 → 持久化快照高度(只认同
-  // 版本——换版后界面可能全变,旧高度不可信;主题/DPR 不影响布局高,不卡)
-  // → 占位高。前两级命中时首帧即终态,零跳变。固定高度声明时本状态不参与。
-  const [autoHeight, setAutoHeight] = useState(() => {
-    const cached = lastMeasuredHeights.get(`${dataOwnerId ?? ''}:${manifest.id}`);
-    if (cached !== undefined) return cached;
-    const snap = loadGhostSettingsSnapshot(dataOwnerId, manifest.id);
-    return snap && snap.version === manifest.version ? snap.height : AUTO_HEIGHT_PLACEHOLDER;
-  });
-
-  // 快照宽度校验只能等容器布局后做——放 layout effect(首次 paint 前同步跑),
-  // 失配在第一帧画出来之前就撤图,不会闪一张错位图。
-  useLayoutEffect(() => {
-    if (!snapshot) return;
-    const host = hostRef.current;
-    if (!host) return;
-    if (!snapshotMatchesWidth(snapshot, host.getBoundingClientRect().width)) {
-      setSnapshot(null);
-    }
-    // 仅首帧校验:后续容器宽度变化(拖窗口)时快照多半已撤;没撤也只是
-    // 位图被拉伸 180ms,随换真身消失,不值得挂 ResizeObserver。
-  }, []);
+  // 仅复用同 owner、同插件版本的高度;账号文字和菜单由新 guest 实时渲染。
+  const [autoHeight, setAutoHeight] = useState(
+    () =>
+      loadGhostSettingsHeight(dataOwnerId, manifest.id, manifest.version) ??
+      AUTO_HEIGHT_PLACEHOLDER,
+  );
 
   useEffect(() => {
     if (crashed || !settingsHtml) return;
@@ -217,95 +166,28 @@ function SettingsWebviewBody({
     const webview = document.createElement('webview') as WebviewTag;
     webview.setAttribute('partition', partitionClaim);
     webview.setAttribute('src', `${GHOST_SCHEME}://${manifest.id}/${settingsHtml}`);
-    // 先透明占位:guest 装载与主题注入完成前不露面(一次性淡入,非常驻动画)。
-    // 有快照时快照图盖在上层,这段透明期用户看到的就是"成品画面"。
-    webview.setAttribute(
-      'style',
-      'display:flex;flex:1 1 auto;width:100%;height:100%;opacity:0;transition:opacity 0.12s ease;',
-    );
+    // 先透明留位,主题与布局注入完成后直接展示真实页面,不覆盖历史画面。
+    webview.setAttribute('style', 'display:flex;flex:1 1 auto;width:100%;height:100%;opacity:0;');
     let disposed = false;
     let themeTimer: ReturnType<typeof setTimeout> | null = null;
-    let snapshotSwapTimer: ReturnType<typeof setTimeout> | null = null;
-    let captureTimer: ReturnType<typeof setTimeout> | null = null;
-    // 兜底撤图:超时未揭示(装载失败/挂起)就把快照图撤掉退回透明占位,
-    // 不让位图冒充活界面;正常揭示路径先行撤图后,这里触发是幂等 no-op。
-    const snapshotFailsafeTimer = setTimeout(() => {
-      if (!disposed) setSnapshot(null);
-    }, SNAPSHOT_FAILSAFE_MS);
     const measureTimers: Array<ReturnType<typeof setTimeout>> = [];
     // 状态机见 createGhostThemeInjector:换肤误触发去重、dom-ready 无条件重灌。
     // 基线用设置卡片色(buildGhostSettingsThemeCss),与宿主卡片无缝。
     const injector = createGhostThemeInjector(webview, buildSettingsThemeCss);
-    // 拍快照(debounce):等渲染尘埃落定后把 guest 画面存进快照缓存,给下次
-    // 进入贴首帧用。guest 内部滚动过(内容超 800 clamp)时跳过——快照永远
-    // 存"从头开始"的画面,与下次装载的初始滚动位一致。失败静默:快照只是
-    // 体验增强,拍不成不影响任何功能。
-    const scheduleCapture = () => {
-      if (captureTimer !== null) clearTimeout(captureTimer);
-      captureTimer = setTimeout(() => {
-        captureTimer = null;
-        void (async () => {
-          if (disposed) return;
-          try {
-            // 三道拍摄前置检查(一次往返,任一命中即跳过本次拍摄):
-            // ① guest 内部滚动过——快照永远存"从头开始"的画面(见上);
-            // ② 任一文本类输入框有未保存内容;③ 焦点落在可编辑元素上
-            // (input / textarea / contenteditable,正在输入中)。②③ 是凭证
-            // 泄漏防线:设置区就是意识收 API key 的地方,输入中的明文绝不能
-            // 以位图形式落进快照(localStorage 未加密)。宁可这次不拍(下次
-            // 进入退回淡入路径),不冒泄漏面。守卫跑在不受信 guest 里只防
-            // 意外不防恶意——恶意意识本来就能读到用户输进它页面的一切,
-            // 快照不为它新增任何能力。
-            const state: unknown = await webview.executeJavaScript(
-              '(function(){var s=window.scrollY||document.documentElement.scrollTop||0;var d=false;var els=document.querySelectorAll("input,textarea");for(var i=0;i<els.length;i++){var e=els[i];var t=(e.type||"").toLowerCase();if(t==="checkbox"||t==="radio"||t==="button"||t==="submit"||t==="range")continue;if(e.value){d=true;break}}var a=document.activeElement;if(a&&(a.tagName==="INPUT"||a.tagName==="TEXTAREA"||a.isContentEditable))d=true;return{scrolled:s>0,dirty:d}})()',
-            );
-            if (disposed) return;
-            const flags = state as { scrolled?: unknown; dirty?: unknown } | null;
-            if (!flags || flags.scrolled !== false || flags.dirty !== false) return;
-            const image = await webview.capturePage();
-            if (disposed) return;
-            const rect = host.getBoundingClientRect();
-            if (rect.width <= 0 || rect.height <= 0) return;
-            saveGhostSettingsSnapshot(dataOwnerId, manifest.id, {
-              dataUrl: image.toDataURL(),
-              width: rect.width,
-              height: rect.height,
-              dpr: window.devicePixelRatio,
-              themeCss: buildSettingsThemeCss(),
-              version: manifest.version,
-              layoutRevision: GHOST_SETTINGS_LAYOUT_REVISION,
-              capturedAt: Date.now(),
-            });
-          } catch {
-            // capturePage / executeJavaScript 在 guest 半途销毁等场景会抛,忽略。
-          }
-        })();
-      }, SNAPSHOT_CAPTURE_DEBOUNCE_MS);
-    };
     const scheduleInjectTheme = () => {
       if (themeTimer !== null) return;
       themeTimer = setTimeout(() => {
         themeTimer = null;
         if (disposed) return;
         injector.inject();
-        // 换肤后的画面是新配色,旧快照已失配——重新拍一张。
-        scheduleCapture();
       }, 50);
     };
-    // 淡入揭示(幂等):挂在 dom-ready 后首个 executeJavaScript 回程上——
+    // 揭示(幂等):挂在 dom-ready 后首个 executeJavaScript 回程上——
     // 同一 webContents 的 IPC 有序,该回程返回时 onDomReady 里先发的
-    // insertCSS 必已作用于 guest,首个可见帧就是成品样式。贴着快照时再等
-    // 一拍撤图(guest 与位图像素一致,交换无感);随后择机拍新快照。
+    // insertCSS 必已作用于 guest,首个可见帧就是成品样式。
     const reveal = () => {
       if (disposed) return;
       webview.style.opacity = '1';
-      if (snapshotSwapTimer === null) {
-        snapshotSwapTimer = setTimeout(() => {
-          snapshotSwapTimer = null;
-          if (!disposed) setSnapshot(null);
-        }, SNAPSHOT_SWAP_DELAY_MS);
-      }
-      scheduleCapture();
     };
     // 自适应量高:宿主主动 executeJavaScript 读 guest 文档高度(零桥模型
     // 不破——是嵌入方读,不是 guest 上行);返回值不受信,非数字丢弃、
@@ -318,7 +200,7 @@ function SettingsWebviewBody({
         .then((h: unknown) => {
           if (disposed || typeof h !== 'number' || !Number.isFinite(h)) return;
           const clamped = Math.max(AUTO_HEIGHT_MIN, Math.min(AUTO_HEIGHT_MAX, Math.ceil(h)));
-          lastMeasuredHeights.set(`${dataOwnerId ?? ''}:${manifest.id}`, clamped);
+          saveGhostSettingsHeight(dataOwnerId, manifest.id, manifest.version, clamped);
           setAutoHeight((cur) => (cur === clamped ? cur : clamped));
         })
         .catch(() => {})
@@ -338,8 +220,6 @@ function SettingsWebviewBody({
       resizeDebounce = setTimeout(() => {
         resizeDebounce = null;
         measure();
-        // 内容尺寸变了 = 画面变了,快照跟着刷新。
-        scheduleCapture();
       }, 80);
     };
     const onDomReady = () => {
@@ -370,33 +250,21 @@ function SettingsWebviewBody({
     const onGone = () => {
       if (!disposed) setCrashed(true);
     };
-    // 装载失败(资源缺失 / 供片闸拒绝等):立刻撤快照图,失败就诚实地空白,
-    // 与旧世界同款表现(errorCode -3 = ABORTED,导航中断不算失败;子资源
-    // 失败不撤——主文档还活着,交给 5s 兜底判生死)。
-    const onFailLoad = (event: Electron.DidFailLoadEvent) => {
-      if (disposed || event.errorCode === -3 || !event.isMainFrame) return;
-      setSnapshot(null);
-    };
     webview.addEventListener('dom-ready', onDomReady);
     webview.addEventListener('console-message', onConsoleMessage);
     webview.addEventListener('render-process-gone', onGone);
-    webview.addEventListener('did-fail-load', onFailLoad);
     const unobserveTheme = observeHostTheme(scheduleInjectTheme);
     host.appendChild(webview);
     return () => {
       disposed = true;
       injector.dispose();
       if (themeTimer !== null) clearTimeout(themeTimer);
-      if (snapshotSwapTimer !== null) clearTimeout(snapshotSwapTimer);
-      if (captureTimer !== null) clearTimeout(captureTimer);
-      clearTimeout(snapshotFailsafeTimer);
       for (const timer of measureTimers) clearTimeout(timer);
       unobserveTheme();
       if (resizeDebounce !== null) clearTimeout(resizeDebounce);
       webview.removeEventListener('dom-ready', onDomReady);
       webview.removeEventListener('console-message', onConsoleMessage);
       webview.removeEventListener('render-process-gone', onGone);
-      webview.removeEventListener('did-fail-load', onFailLoad);
       webview.remove();
     };
     // version 入依赖:原位更新换版后 webview 重挂载,设置区立刻跑新代码。
@@ -432,19 +300,7 @@ function SettingsWebviewBody({
         fixedHeight === undefined && 'overflow-hidden',
       )}
       style={{ height: fixedHeight ?? autoHeight }}
-    >
-      {/* 首帧快照(上层盖住透明装载期的 webview;pointer-events 穿透,撤图前
-          的点击落到底下已就绪的真身上)。webview 由 effect 手动 appendChild
-          进同一容器,React 只管理这张 img 的增删,互不干扰。 */}
-      {snapshot ? (
-        <img
-          src={snapshot.dataUrl}
-          alt=""
-          draggable={false}
-          className="pointer-events-none absolute inset-0 z-10 h-full w-full"
-        />
-      ) : null}
-    </div>
+    />
   );
 }
 
@@ -487,7 +343,7 @@ export function GhostSettingsWebview({
       </div>
       {ghost.enabled ? (
         <SettingsWebviewBody
-          key={ownerKey}
+          key={JSON.stringify([ownerKey, manifest.id, manifest.version])}
           ghost={ghost}
           appearance={appearance}
           dataOwnerId={dataOwnerId}

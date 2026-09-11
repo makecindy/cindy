@@ -6644,8 +6644,8 @@ export class CodexAgent extends BaseAgent {
       reviewing?: boolean;
       turnId: string | null;
       itemId?: string;
-      /** prompt-each-time 高风险审批: 宽松模式也必须弹 UI, dismissAllPending('allow') 不得放行 */
-      forcePrompt?: boolean;
+      /** 本轮来源/执行范围约束独立于 MCP 的逐次审批偏好。 */
+      turnPolicyForcePrompt?: boolean;
       /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
       unavailableHandoff?: boolean;
       onSystemDenied?: (reason: string) => void;
@@ -6921,20 +6921,19 @@ export class CodexAgent extends BaseAgent {
               : 'The permission confirmation could not be completed. No user rejection was received.';
           emitAutoReviewRuntimeNotice(`[${code}] ${text}`);
         };
-        let forcePrompt =
-          opts?.forcePrompt === true ||
-          (req.kind === 'permission' &&
-            forceTurnConfirmation(req.toolName, req.input));
+        const turnPolicyForcePrompt = req.kind === 'permission'
+          && forceTurnConfirmation(req.toolName, req.input);
+        let forcePrompt = opts?.forcePrompt === true || turnPolicyForcePrompt;
         let unavailableHandoff = false;
         let approvalRequest = req;
         // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
         // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
         // 再由 Cindy reviewer 静默裁决。
-        // forcePrompt 高风险 MCP inner tool
-        // retains its independent confirmation outside Auto.
+        // MCP 的逐次审批标记不能覆盖用户选择的 Full access。
+        // 独立的本轮执行范围约束仍由 turn policy 决定。
         if (
-          !forcePrompt &&
-          mutablePermissionMode === 'bypassPermissions'
+          mutablePermissionMode === 'bypassPermissions' &&
+          !turnPolicyForcePrompt
         ) {
           return Promise.resolve('accept');
         }
@@ -6987,7 +6986,14 @@ export class CodexAgent extends BaseAgent {
           // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
           // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
           const modeAfterReview = mutablePermissionMode as PermissionMode;
-          if (modeAfterReview === 'bypassPermissions') return 'accept';
+          if (modeAfterReview === 'bypassPermissions') {
+            if (turnPolicyForcePrompt) {
+              denialReason = formatPermissionDenial('system', 'Permission mode changed; retry within the authorized turn scope.');
+              reportMcpDenial('system');
+              return 'decline';
+            }
+            return 'accept';
+          }
           if (modeAfterReview !== 'auto') {
             forcePrompt = true;
           } else if (decision.verdict === 'allow') {
@@ -7025,7 +7031,7 @@ export class CodexAgent extends BaseAgent {
             settled: false,
             turnId,
             ...(opts?.itemId ? { itemId: opts.itemId } : {}),
-            forcePrompt,
+            turnPolicyForcePrompt,
             ...(unavailableHandoff ? { unavailableHandoff: true } : {}),
             onSystemDenied: (reason) => reportMcpDenial('system', reason, false),
           };
@@ -7081,7 +7087,7 @@ export class CodexAgent extends BaseAgent {
     /**
      * 强制 resolve 所有挂起的 approval, emit interaction_dismissed 让 UI 关 dialog。
      * 调用场景: setPermissionMode 切换 / close session。
-     *   - resolveAs='allow' (mode 切到 bypass; forcePrompt 仍 fail-closed): decision='accept'
+     *   - resolveAs='allow' (mode 切到 bypass): decision='accept'
      *   - resolveAs='deny'  (mode 切到 ask/auto 或 close): decision='decline'
      */
     function dismissAllPending(reason: string, resolveAs: 'allow' | 'deny', preserveReviewing = false): void {
@@ -7091,11 +7097,7 @@ export class CodexAgent extends BaseAgent {
         if (entry.settled || (preserveReviewing && entry.reviewing)) continue;
         entry.settled = true;
         pendingApprovals.delete(requestId);
-        // forcePrompt(prompt-each-time 高风险审批)不接受"切到宽松模式"的批量放行——
-        // 没拿到用户对这一次调用的明确确认就 fail-closed 拒绝, 与 awaitApprovalDecision
-        // 里宽松模式仍强制弹 UI 的语义一致。
-        const effectiveResolveAs: 'allow' | 'deny' =
-          resolveAs === 'allow' && entry.forcePrompt === true ? 'deny' : resolveAs;
+        const effectiveResolveAs = resolveAs === 'allow' && entry.turnPolicyForcePrompt ? 'deny' : resolveAs;
         if (effectiveResolveAs === 'deny') entry.onSystemDenied?.(reason);
         if (effectiveResolveAs === 'deny' && entry.unavailableHandoff && entry.kind !== 'mcpServerElicitation') {
           autoReviewConfirmUndeliveredNotice.notify();
@@ -8419,8 +8421,7 @@ export class CodexAgent extends BaseAgent {
               ? codexSessionApprovalSuggestions()
               : undefined,
         },
-        // prompt-each-time:Full access 也必须逐次弹 UI,否则高风险 inner tool
-        // (contacts delete/merge/系统回写)会被 awaitApprovalDecision 首分支静默放行。
+        // 逐次标记只限制 Ask/Auto 的授权记忆，不覆盖 Full access。
         {
           forcePrompt:
             turnPolicyForcePrompt || approvalPolicy === 'prompt-each-time',
@@ -13495,6 +13496,10 @@ export class CodexAgent extends BaseAgent {
 
       getPlanMode() {
         return mutablePlanMode;
+      },
+
+      getExecutionPlanMode() {
+        return mutablePlanMode || planCycleActive || currentTurnPlanModeActive;
       },
 
       async setFastMode(enabled: boolean) {

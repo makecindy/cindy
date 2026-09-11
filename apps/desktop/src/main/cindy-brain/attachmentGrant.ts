@@ -29,6 +29,8 @@ export interface ResolvedGrantSource {
 }
 
 export interface AttachmentGrantDeps {
+  /** 同一次审批的实时有效性；异步落仓期间失效后不得继续授予插件引用。 */
+  isCurrent?: () => boolean;
   /**
    * 附件地址 → 磁盘路径与 mime(越界/非法/账本闸不过一律 throw)。真身是
    * ghostAttachmentResolve + 总仓 blob 形态的账本出生闸(异步查账),故允许
@@ -74,6 +76,9 @@ export const MAX_GRANT_ONLY_ATTACHMENTS = 32;
  */
 export class GrantPolicyError extends Error {}
 
+export const GRANT_AUTHORIZATION_CHANGED_MESSAGE =
+  'Task or Plan permissions changed; retry with the current scope.';
+
 export type AttachmentGrantResult =
   | { ok: true; hashes: string[] }
   | { ok: false; message: string };
@@ -87,16 +92,19 @@ export async function grantAttachmentsToGhost(
   params: { ghostId: string; urls: string[]; maxCount?: number },
 ): Promise<AttachmentGrantResult> {
   const { ghostId, urls } = params;
+  const expired = () => deps.isCurrent?.() === false;
+  const denied = { ok: false as const, message: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
   const maxCount = params.maxCount ?? MAX_GRANT_ATTACHMENTS;
   if (urls.length === 0) return { ok: true, hashes: [] };
   if (urls.length > maxCount) {
     return { ok: false, message: `附件过多(单次上限 ${maxCount} 项)` };
   }
   // 两阶段:先整批解析(纯校验零副作用,最常见的"地址不对"在这里整批拒,
-  // 不留半批授权),再逐张落库(读盘/落仓/记账,中途失败仍整批报错;已写入
-  // 的授权行无害——那张图确实是用户随消息给出的,留着不构成越权)。
+  // 不留半批授权),再逐张落库。中途失败不返回部分指纹；先前在授权仍有效
+  // 时提交的引用不回滚，但失效后不再落仓、授权或把整批派发给插件。
   const resolved: ResolvedGrantSource[] = [];
   for (const url of urls) {
+    if (expired()) return denied;
     try {
       resolved.push(await deps.resolveImageUrl(url));
     } catch (err) {
@@ -118,8 +126,11 @@ export async function grantAttachmentsToGhost(
   const hashes: string[] = [];
   for (const r of resolved) {
     try {
+      if (expired()) return denied;
       const buffer = r.buffer ?? (await deps.readFile(r.absPath));
+      if (expired()) return denied;
       const written = await deps.writeBlob({ buffer, mimeType: r.mimeType });
+      if (expired()) return denied;
       await deps.recordBlob({
         hash: written.hash,
         ext: written.ext,
@@ -128,6 +139,7 @@ export async function grantAttachmentsToGhost(
         isCache: false,
       });
       const originKind = r.originKind ?? 'user';
+      if (expired()) return denied;
       await deps.addRef({
         hash: written.hash,
         // refKind 本身就是回退兼容边界:旧客户端只把 ghost-grant 当成人工
@@ -143,6 +155,7 @@ export async function grantAttachmentsToGhost(
       return { ok: false, message: `附件过户失败:${message}` };
     }
   }
+  if (expired()) return denied;
   deps.log?.info('ghost attachment grant: done', { ghostId, count: hashes.length });
   return { ok: true, hashes };
 }
