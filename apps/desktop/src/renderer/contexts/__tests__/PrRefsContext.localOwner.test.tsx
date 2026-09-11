@@ -18,7 +18,7 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }),
 }));
 
-import { PrRefsProvider, usePrRefsForSession, usePrActions } from '../PrRefsContext';
+import { PrRefsProvider, usePrRefsForSession, usePrActions, usePrStatuses } from '../PrRefsContext';
 
 function RefCount() {
   return <div>{usePrRefsForSession('session-local').length}</div>;
@@ -124,4 +124,61 @@ describe('remote task association invalidation', () => {
       ]);
     },
   );
+});
+
+function StatusProbe() {
+  const { statuses, successfulStatuses, fetchStatusesForSession } = usePrStatuses('remote-child');
+  const { registerPrConsumer } = usePrActions();
+  useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
+  const latest = statuses.get('a/b#1');
+  const confirmed = successfulStatuses.get('a/b#1');
+  return (
+    <button onClick={() => fetchStatusesForSession('remote-child')}>
+      {confirmed?.ok ? confirmed.status : 'unknown'}:{latest?.ok === false ? 'stale' : 'fresh'}
+    </button>
+  );
+}
+
+it('retains successful session status when a failure arrives while its consumer is unmounted', async () => {
+  let fail!: (value: unknown) => void;
+  let statusReads = 0;
+  const ref = {
+    id: 'pr',
+    sessionId: 'remote-child',
+    owner: 'a',
+    repo: 'b',
+    prNumber: 1,
+    url: 'https://github.com/a/b/pull/1',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  mocks.listAllPrRefs.mockResolvedValue([]);
+  const invoke = vi.fn(async (_device: string, channel: string) => {
+    if (channel === 'git-context:pr-refs:list') return [ref];
+    statusReads += 1;
+    if (statusReads === 1) return [{ ...ref, ok: true, status: 'merged' }];
+    if (statusReads === 2)
+      return await new Promise((resolve) => {
+        fail = resolve;
+      });
+    return [{ ...ref, ok: false, reason: 'fetch-failed' }];
+  });
+  window.electronAPI = {
+    gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+    deviceLink: { invoke },
+  } as any;
+  const view = (visible: boolean) => (
+    <PrRefsProvider>{visible ? <StatusProbe /> : null}</PrRefsProvider>
+  );
+  const { rerender, unmount } = render(view(true));
+  fireEvent.click(await screen.findByRole('button', { name: 'merged:fresh' }));
+  await waitFor(() => expect(statusReads).toBe(2));
+  rerender(view(false));
+  await act(async () => fail([{ ...ref, ok: false, reason: 'no-token' }]));
+  rerender(view(true));
+  expect(await screen.findByRole('button', { name: 'merged:stale' })).toBeTruthy();
+  mocks.dataOwnerId = 'another-owner';
+  rerender(view(true));
+  await waitFor(() => expect(screen.queryByRole('button', { name: 'merged:stale' })).toBeNull());
+  unmount();
 });

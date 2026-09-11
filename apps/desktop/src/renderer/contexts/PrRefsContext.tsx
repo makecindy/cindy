@@ -76,6 +76,7 @@ interface PrCacheStore {
   getStatus: (sessionId: string, key: string) => PrStatusResult | undefined;
   /** 单会话状态快照(该会话未变时引用稳定)。 */
   getStatusesForSession: (sessionId: string) => ReadonlyMap<string, PrStatusResult>;
+  getSuccessfulStatusesForSession: (sessionId: string) => ReadonlyMap<string, PrStatusResult>;
   /** 本地全量加载:整表替换,但保住 keep 判定为真的既有条目(远程先到的)与未变引用。 */
   mergeLocalRefs: (
     grouped: Map<string, SessionPrRef[]>,
@@ -92,6 +93,7 @@ function createPrCacheStore(): PrCacheStore {
   const refsBySession = new Map<string, SessionPrRef[]>();
   const statusesBySession = new Map<string, Map<string, PrStatusResult>>();
   const statusSnapshots = new Map<string, ReadonlyMap<string, PrStatusResult>>();
+  const successfulStatusSnapshots = new Map<string, ReadonlyMap<string, PrStatusResult>>();
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of listeners) listener();
@@ -111,6 +113,9 @@ function createPrCacheStore(): PrCacheStore {
     },
     getStatusesForSession(sessionId) {
       return statusSnapshots.get(sessionId) ?? EMPTY_STATUSES;
+    },
+    getSuccessfulStatusesForSession(sessionId) {
+      return successfulStatusSnapshots.get(sessionId) ?? EMPTY_STATUSES;
     },
     mergeLocalRefs(grouped, keep) {
       let changed = false;
@@ -156,6 +161,11 @@ function createPrCacheStore(): PrCacheStore {
       }
       if (!changed) return;
       statusSnapshots.set(sessionId, new Map(map));
+      const successful = new Map(successfulStatusSnapshots.get(sessionId));
+      for (const result of results) {
+        if (result.ok) successful.set(prStatusKey(result), result);
+      }
+      successfulStatusSnapshots.set(sessionId, successful);
       notify();
     },
     clearAll() {
@@ -163,6 +173,7 @@ function createPrCacheStore(): PrCacheStore {
       refsBySession.clear();
       statusesBySession.clear();
       statusSnapshots.clear();
+      successfulStatusSnapshots.clear();
       notify();
     },
   };
@@ -563,6 +574,8 @@ export function usePrStatus(sessionId: string, key: string): PrStatusResult | un
 interface PrStatusesContextValue {
   /** prStatusKey(ref) → 该会话的状态查询结果。 */
   statuses: ReadonlyMap<string, PrStatusResult>;
+  /** Last confirmed values survive consumer unmounts; raw failures remain in statuses. */
+  successfulStatuses: ReadonlyMap<string, PrStatusResult>;
   fetchStatusesForSession: (sessionId: string) => void;
 }
 
@@ -575,9 +588,14 @@ export function usePrStatuses(sessionId: string): PrStatusesContextValue {
     () => store.getStatusesForSession(sessionId),
     () => store.getStatusesForSession(sessionId),
   );
+  const successfulStatuses = useSyncExternalStore(
+    store.subscribe,
+    () => store.getSuccessfulStatusesForSession(sessionId),
+    () => store.getSuccessfulStatusesForSession(sessionId),
+  );
   return useMemo(
-    () => ({ statuses, fetchStatusesForSession }),
-    [statuses, fetchStatusesForSession],
+    () => ({ statuses, successfulStatuses, fetchStatusesForSession }),
+    [statuses, successfulStatuses, fetchStatusesForSession],
   );
 }
 
