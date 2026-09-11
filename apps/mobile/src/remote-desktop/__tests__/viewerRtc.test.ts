@@ -4,7 +4,7 @@ import { REMOTE_DESKTOP_NETWORK as net } from "@cindy/device-link";
 import { DESKTOP_RTC_SCRIPT } from "../viewerRtc";
 
 // Executes the exact static script embedded in WKWebView, with only RTC/DOM replaced.
-function viewer(trickle = true, autoConfig = true) {
+function viewer(trickle = true, autoConfig = true, frameCallback = true) {
   let api: any;
   const messages: any[] = [];
   const peers: any[] = [];
@@ -40,10 +40,24 @@ function viewer(trickle = true, autoConfig = true) {
       return new Map();
     }
   }
+  let callbackId = 0;
+  const videoFrames = new Map<number, () => void>();
+  const paints = new Map<number, () => void>();
   const video = {
-    style: { display: "none" },
+    style: { display: "none", zIndex: "0" },
     srcObject: null,
-    onplaying: null,
+    onplaying: null as null | (() => void),
+    readyState: 2,
+    videoWidth: 1920,
+    videoHeight: 1080,
+    requestVideoFrameCallback: frameCallback
+      ? (callback: () => void) => {
+          const id = ++callbackId;
+          videoFrames.set(id, callback);
+          return id;
+        }
+      : undefined,
+    cancelVideoFrameCallback: (id: number) => videoFrames.delete(id),
     play: async () => {},
   };
   const image = { style: { display: "block" }, removeAttribute() {} };
@@ -64,6 +78,12 @@ function viewer(trickle = true, autoConfig = true) {
     clearTimeout,
     setInterval,
     clearInterval,
+    requestAnimationFrame: (callback: () => void) => {
+      const id = ++callbackId;
+      paints.set(id, callback);
+      return id;
+    },
+    cancelAnimationFrame: (id: number) => paints.delete(id),
     retainFrame: retained,
     release,
     render() {},
@@ -93,6 +113,19 @@ function viewer(trickle = true, autoConfig = true) {
     messages,
     latest,
     video,
+    image,
+    videoFrames,
+    paints,
+    frame: () => {
+      const batch = [...videoFrames.values()];
+      videoFrames.clear();
+      batch.forEach((cb) => cb());
+    },
+    paint: () => {
+      const batch = [...paints.values()];
+      paints.clear();
+      batch.forEach((cb) => cb());
+    },
     retained,
     release,
     answer: async () => api.answer({ ...latest("offer"), sdp: "answer" }),
@@ -137,7 +170,10 @@ it("retains video on transient disconnection and cancels the grace timeout after
   const h = viewer();
   await h.api.start();
   await h.answer();
-  h.video.style.display = "block";
+  h.video.onplaying!();
+  h.frame();
+  h.paint();
+  h.paint();
   h.change("connected");
   h.change("disconnected");
   expect(h.latest("reconnecting")).toBeDefined();
@@ -323,4 +359,73 @@ it("never starts media after exit while credentials are pending", async () => {
   await vi.advanceTimersByTimeAsync(5000);
   expect(h.peers).toHaveLength(0);
   expect(vi.getTimerCount()).toBe(0);
+});
+
+it("keeps the screenshot backing when promoting the first video frame", async () => {
+  const h = viewer();
+  await h.api.start();
+  h.video.onplaying!();
+  h.video.onplaying!();
+  h.change("connected");
+  expect(h.video.style.display).toBe("block");
+  expect(h.video.style.zIndex).toBe("0");
+  expect(h.image.style.display).toBe("block");
+  expect(h.videoFrames.size).toBe(1);
+  expect(h.latest("streaming")).toBeUndefined();
+  h.frame();
+  h.paint();
+  expect(h.image.style.display).toBe("block");
+  expect(h.latest("pipCapability")).toBeUndefined();
+  h.paint();
+  expect(h.image.style.display).toBe("block");
+  expect(h.video.style.zIndex).toBe("2");
+  expect(h.messages.filter((m) => m.type === "streaming")).toHaveLength(1);
+  h.video.onplaying!();
+  expect(h.videoFrames.size).toBe(0);
+  h.api.stop();
+  expect(h.video.style.zIndex).toBe("0");
+  expect(h.image.style.display).toBe("block");
+});
+
+it.each(["frame", "paint"])(
+  "cancels a pending %s callback and ignores it after a new attempt",
+  async (phase) => {
+    const h = viewer();
+    await h.api.start();
+    h.video.onplaying!();
+    if (phase === "paint") h.frame();
+    const stale = [
+      ...(phase === "frame" ? h.videoFrames : h.paints).values(),
+    ][0];
+    await h.api.start();
+    expect(h.videoFrames.size).toBe(0);
+    expect(h.paints.size).toBe(0);
+    stale();
+    expect(h.paints.size).toBe(0);
+    expect(h.image.style.display).toBe("block");
+    expect(h.latest("streaming")).toBeUndefined();
+    h.api.stop();
+  },
+);
+
+it("waits for decoded dimensions before painting when video frame callbacks are unavailable", async () => {
+  const h = viewer(true, true, false);
+  await h.api.start();
+  h.video.readyState = 1;
+  h.video.videoWidth = 0;
+  h.video.onplaying!();
+  h.paint();
+  h.paint();
+  expect(h.image.style.display).toBe("block");
+  h.video.readyState = 2;
+  h.video.videoWidth = 1920;
+  h.paint();
+  h.paint();
+  expect(h.latest("streaming")).toBeUndefined();
+  h.paint();
+  expect(h.image.style.display).toBe("block");
+  expect(h.video.style.zIndex).toBe("2");
+  expect(h.latest("streaming")).toBeDefined();
+  h.api.stop();
+  expect(h.paints.size).toBe(0);
 });

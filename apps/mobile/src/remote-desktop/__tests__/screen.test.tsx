@@ -46,7 +46,7 @@ const fixture = vi.hoisted(() => ({
   lockSupported: true,
   alert: vi.fn(),
   resetUnlockAttempt: vi.fn(),
-  maybeUnlock: vi.fn(async () => {}),
+  maybeUnlock: vi.fn(async (_beforeAuthentication?: () => Promise<void>) => {}),
   hostPlatform: "darwin" as string | undefined,
   deviceId: "computer",
   getHost: (() => undefined) as () => string | undefined,
@@ -310,6 +310,7 @@ beforeEach(() => {
   fixture.deviceId = "computer";
   fixture.securityAutoUnlock = false;
   fixture.securityBusy = false;
+  fixture.maybeUnlock.mockReset().mockResolvedValue(undefined);
   fixture.themeMode = "light";
   fixture.lockOnExit = false;
   fixture.lockSupported = true;
@@ -819,6 +820,99 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "stop")).toEqual([
       { op: "stop", lease: "lease", lockScreen: true },
     ]);
+  });
+  it.each(["framePresented", "streaming"])(
+    "prepares authentication alongside capture and waits for %s before Face ID",
+    async (firstFrame) => {
+      let finishUnlock!: () => void;
+      const prompt = vi.fn();
+      fixture.maybeUnlock.mockImplementationOnce(
+        async (beforeAuthentication) => {
+          await beforeAuthentication!();
+          prompt();
+          await new Promise<void>((resolve) => {
+            finishUnlock = resolve;
+          });
+        },
+      );
+      await act(async () => {
+        fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+      });
+      expect(requests().filter((r) => r.op === "capabilities")).toHaveLength(1);
+      expect(requests().some((r) => r.op === "start")).toBe(true);
+      expect(sent().some((m) => m.type === "init")).toBe(true);
+      expect(fixture.maybeUnlock).toHaveBeenCalledTimes(1);
+      expect(prompt).not.toHaveBeenCalled();
+
+      await act(async () => {
+        fixture.message!({
+          nativeEvent: {
+            data: JSON.stringify({
+              type: firstFrame,
+              epoch: "lease",
+            }),
+          },
+        });
+      });
+      expect(fixture.maybeUnlock).toHaveBeenCalledTimes(1);
+      expect(prompt).toHaveBeenCalledTimes(1);
+      expect(
+        host.querySelector('[data-testid="remoteDesktop.connectingStatus"]'),
+      ).toBeNull();
+      const stops = requests().filter((r) => r.op === "stop").length;
+      await act(async () => {
+        AppState.currentState = "inactive";
+        fixture.appState!("inactive");
+        fixture.message!({
+          nativeEvent: { data: '{"type":"streaming","epoch":"lease"}' },
+        });
+        fixture.message!({
+          nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' },
+        });
+        await vi.advanceTimersByTimeAsync(3000);
+      });
+      expect(requests().some((r) => r.op === "heartbeat")).toBe(true);
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
+      expect(fixture.maybeUnlock).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        finishUnlock();
+        AppState.currentState = "active";
+        fixture.appState!("active");
+      });
+      expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+      expect(requests().filter((r) => r.op === "stop")).toHaveLength(stops);
+    },
+  );
+  it("does not unlock for a stale frame or a frame arriving after leaving", async () => {
+    const prompt = vi.fn();
+    let outcome!: Promise<string>;
+    fixture.maybeUnlock.mockImplementationOnce(async (beforeAuthentication) => {
+      outcome = beforeAuthentication!().then(
+        () => {
+          prompt();
+          return "shown";
+        },
+        (error: Error) => error.message,
+      );
+      await outcome;
+    });
+    await act(async () => {
+      fixture.message!({ nativeEvent: { data: '{"type":"ready"}' } });
+      fixture.message!({
+        nativeEvent: { data: '{"type":"framePresented","epoch":"old-lease"}' },
+      });
+    });
+    expect(fixture.maybeUnlock).toHaveBeenCalledTimes(1);
+    expect(prompt).not.toHaveBeenCalled();
+    fixture.focused = false;
+    await act(async () => root.render(<RemoteDesktopScreen />));
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: { data: '{"type":"framePresented","epoch":"lease"}' },
+      });
+    });
+    expect(await outcome).toBe("CREDENTIAL_CANCELLED");
+    expect(prompt).not.toHaveBeenCalled();
   });
   it("places optional unlock under Operation Security without gating the desktop", async () => {
     await connect();
