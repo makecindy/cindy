@@ -369,7 +369,8 @@ export function sessionCreateToRow(
          * create 由 renderer 透传用户在草稿里选定的来源,使新会话首个请求就走对供应商。
          */
         providerId?: string | null;
-        source?: 'bot';
+        /** Main-owned purposes only; the renderer create IPC validates which values it accepts. */
+        source?: 'bot' | 'cindy-make';
       }
     | undefined,
   now: number,

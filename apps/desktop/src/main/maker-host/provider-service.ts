@@ -72,6 +72,7 @@ export interface ProviderConnectionReaders {
 }
 
 export interface ProviderServiceDeps {
+  getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean };
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
   /** 连接状态判定器。 */
@@ -201,11 +202,14 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     }
     const subscriptionInfo = new Map<string, ProviderView['subscriptionAccount']>();
     if (deps.subscriptionAccountInfo) await Promise.all(catalog.providers
-      .filter(p => p.auth.native === 'claude' || p.auth.native === 'xai')
+      .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
-      ...provider, ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      // Deletion disconnects first. A live binding wins over a stale removed flag if
+      // restoring display preferences failed after authentication was committed.
+      ...(provider.connected ? { removed: false } : {}),
     })).map(
       (provider) =>
         media === undefined

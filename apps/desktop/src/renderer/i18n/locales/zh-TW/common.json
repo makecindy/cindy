@@ -1410,7 +1410,7 @@
           "description": "開啟後 Codex 不走訂閱，複用「模型供應商」裡的 Cindy AI Key。",
           "noKey": "未配置 Cindy AI Key，請在「模型供應商」裡連線 Cindy AI",
           "noKeyDialog": {
-            "title": "尚未配置 API Key",
+            "title": "尚未配置 API key",
             "description": "API 模式需要複用 Cindy AI Key，當前還沒有配置。前往「模型供應商」連線 Cindy AI 後即可開啟。"
           },
           "badge": {
@@ -1428,25 +1428,25 @@
       "xai": {
         "logoutConfirm": {
           "title": "斷開 xAI(SuperGrok)？",
-          "description": "斷開會清除本機儲存的 xAI 登入憑證；已選 Grok 模型的任務將無法呼叫，直到重新授權。",
-          "confirm": "斷開",
+          "description": "中斷後，Cindy 將無法使用這份 Grok 訂閱。",
+          "confirm": "中斷連線",
           "cancel": "取消"
         },
         "toast": {
-          "loggedIn": "已登入 xAI(SuperGrok)",
-          "loggedOut": "已斷開 xAI",
-          "loginFailed": "授權失敗，請重試",
-          "logoutFailed": "斷開失敗，請重試"
+          "loggedIn": "已登入 Grok",
+          "loggedOut": "已中斷 Grok 的連線",
+          "loginFailed": "Grok 登入失敗，請重試",
+          "logoutFailed": "Grok 中斷連線失敗，請重試"
         }
       },
       "claude": {
         "subtitle": {
-          "authorizing": "授權中（瀏覽器）…",
-          "authorized": "Claude.ai 訂閱 · 已授權",
-          "unauthorized": "未授權（點「授權」登入 Claude.ai）"
+          "authorizing": "登入中…",
+          "authorized": "Claude 訂閱 · 已連線",
+          "unauthorized": "未連線"
         },
         "button": {
-          "authorize": "授權"
+          "authorize": "登入"
         },
         "badge": {
           "api": "● API",
@@ -1454,17 +1454,17 @@
         },
         "logoutConfirm": {
           "title": "斷開 Claude.ai 訂閱？",
-          "description": "斷開會清除本機 Claude Code 的登入憑證（本地 `claude` 命令列也會一起登出）；若當前在訂閱模式會自動切回 Cindy AI。需要重新授權才能恢復。",
-          "confirm": "斷開",
+          "description": "中斷後，Cindy 將無法使用這份 Claude 訂閱。",
+          "confirm": "中斷連線",
           "cancel": "取消"
         },
         "toast": {
-          "loggedIn": "已登入 Claude.ai 訂閱",
-          "loggedOut": "已斷開 Claude.ai 訂閱",
-          "loginFailed": "授權失敗，請重試",
-          "logoutFailed": "斷開失敗，請重試",
+          "loggedIn": "已登入 Claude",
+          "loggedOut": "已中斷 Claude 的連線",
+          "loginFailed": "Claude 登入失敗，請重試",
+          "logoutFailed": "Claude 中斷連線失敗，請重試",
           "notSubscription": "該帳號沒有 Claude 訂閱（Pro/Max），無法走訂閱模式",
-          "needAuth": "請先授權登入 Claude.ai"
+          "needAuth": "請先登入 Claude"
         },
         "apiMode": {
           "label": "API 模式（走 Cindy AI）",
@@ -1472,7 +1472,7 @@
           "toggleAria": "切換 Claude API 模式",
           "sharedKeyWarning": "和 Cindy AI 共用一把 Key，關閉 API 模式後非 Claude 模型仍需 Cindy AI",
           "noKeyDialog": {
-            "title": "尚未配置 API Key",
+            "title": "尚未配置 API key",
             "description": "關閉 API 模式（走訂閱）後，非 Claude 模型（gpt / deepseek 等）仍需複用 Cindy AI Key，當前還沒有配置。前往「模型供應商」連線 Cindy AI 後即可。"
           },
           "toast": {
@@ -1496,11 +1496,12 @@
         "disconnected": "未連線",
         "connecting": "正在連線…",
         "rename": "重新命名",
-        "suspended": "已停用"
+        "suspended": "已停用",
+        "unconfigured": "未設定"
       },
       "button": {
-        "authorize": "授權",
-        "logout": "登出",
+        "authorize": "登入",
+        "logout": "中斷連線",
         "connect": "連線",
         "disconnect": "斷開",
         "cancel": "取消",
@@ -1517,13 +1518,13 @@
         "title": "OpenAI",
         "subtitle": "連線一個 ChatGPT 帳號，同時用於 Codex 和 Claude",
         "modelLabel": "GPT 模型",
-        "reconnectRequired": "需要重新連線",
-        "connect": "連線 ChatGPT",
-        "reconnect": "重新連線 ChatGPT",
-        "cancelConnect": "取消連線",
+        "reconnectRequired": "重新登入",
+        "connect": "使用本機 Codex 帳號",
+        "reconnect": "重新登入",
+        "cancelConnect": "取消",
         "accountSource": {
           "local": "本機 Codex 帳號",
-          "oauth": "獨立登入帳號",
+          "oauth": "獨立帳號",
           "unknown": "現有 OpenAI 連線"
         },
         "useLocalAccount": "使用本機 Codex 帳號",
@@ -1593,19 +1594,19 @@
       },
       "custom": {
         "tag": "自定義",
-        "editAria": "編輯",
+        "editAria": "編輯連線設定",
         "deleteAria": "刪除",
         "save": "儲存",
         "cancel": "取消",
         "dialog": {
           "createTitle": "新增自定義供應商",
-          "editTitle": "編輯自定義供應商",
+          "editTitle": "編輯連線設定",
           "desc": "配置與 OpenAI / Anthropic 相容的供應商。"
         },
         "imageGenerationReload": {
           "title": "重新載入 Codex",
-          "description": "儲存此圖片生成設定需要重新載入 Codex，並會中斷目前正在執行的 Codex 任務。",
-          "interrupt": "儲存並停止",
+          "description": "套用此變更需要重新載入 Codex，並會中斷目前正在執行的 Codex 任務。",
+          "interrupt": "繼續並停止任務",
           "cancel": "取消",
           "close": "關閉"
         },
@@ -1639,7 +1640,7 @@
           "runtimeSupportsImageGenerationEndpointsTitle": "介面要求",
           "runtimeSupportsImageGenerationEndpoints": "閘道必須處理以下請求：",
           "runtimeSupportsImageGenerationPermissionsTitle": "權限與失敗處理",
-          "runtimeSupportsImageGenerationPermissions": "目前的 API Key、帳號或使用者群組需有圖片模型權限。此開關只宣告閘道能力，不會自動開通上游權限。呼叫失敗時會顯示真實的上游錯誤，不會切換到其他圖片服務。",
+          "runtimeSupportsImageGenerationPermissions": "目前的 API key、帳號或使用者群組需有圖片模型權限。此開關只宣告閘道能力，不會自動開通上游權限。呼叫失敗時會顯示真實的上游錯誤，不會切換到其他圖片服務。",
           "modelSupportsReasoning": "支援推理",
           "modelSupportsReasoningHelp": "僅在該模型接受推理強度時開啟，並勾選它實際支援的所有檔位。儲存後，下一個 Pi Agent 會話生效。",
           "modelReasoningEfforts": "支援的推理強度",
@@ -1699,8 +1700,8 @@
           "deleteFailed": "刪除失敗"
         },
         "deleteConfirm": {
-          "title": "刪除自定義供應商？",
-          "description": "將刪除「{{name}}」的配置和本機儲存的金鑰，正在使用它的任務會回退到預設來源。",
+          "title": "刪除供應商？",
+          "description": "刪除後，Cindy 將無法再使用「{{name}}」。歷史訊息會保留，之後可以重新新增。",
           "confirm": "刪除",
           "cancel": "取消"
         },
@@ -1731,10 +1732,10 @@
         "authMode": {
           "label": "鑑權方式",
           "apiKey": "API 金鑰",
-          "oauth": "OAuth 訂閱授權",
+          "oauth": "訂閱帳號",
           "none": "無需鑑權",
           "noneHelp": "適用於本機或受信任的自託管 Proxy。Cindy 會移除 CLI 自帶的訂閱憑證和帳號頭，再把請求發往該端點。",
-          "oauthHelp": "適用於提供 OAuth 登入的供應商。可選擇瀏覽器回撥或裝置碼流程，儲存後從供應商列表發起授權。憑證僅加密儲存在本機。",
+          "oauthHelp": "適用於支援 OAuth 登入的供應商。可選擇瀏覽器或裝置碼登入，儲存後從供應商清單登入。憑證保存在本機。",
           "flowLabel": "OAuth 流程",
           "flow": {
             "authorization-code": "瀏覽器回撥（PKCE）",
@@ -1747,7 +1748,7 @@
             "clientId": "Client ID",
             "scopes": "Scopes（空格分隔）"
           },
-          "modelsAutoNote": "模型清單將在授權成功後自動獲取，無需手動填寫。"
+          "modelsAutoNote": "登入後自動取得可用模型"
         },
         "advanced": {
           "label": "高階配置（模型 / 請求頭）"
@@ -1975,24 +1976,24 @@
         }
       },
       "genericOAuth": {
-        "subtitle": "訂閱授權登入（OAuth）",
+        "subtitle": "訂閱帳號",
         "toast": {
-          "loggedIn": "{{name}} 登入成功",
+          "loggedIn": "已登入 {{name}}",
           "loginFailed": "{{name}} 登入失敗，請重試",
-          "loggedOut": "已退出 {{name}}",
-          "logoutFailed": "退出 {{name}} 失敗"
+          "loggedOut": "已中斷 {{name}} 的連線",
+          "logoutFailed": "{{name}} 中斷連線失敗，請重試"
         },
         "logoutConfirm": {
-          "title": "退出 {{name}}？",
-          "description": "退出後該來源的模型將不可用，可隨時重新登入。",
-          "confirm": "退出登入",
+          "title": "中斷「{{name}}」的連線？",
+          "description": "中斷後，Cindy 將無法使用「{{name}}」。供應商會保留，之後可以重新連線。",
+          "confirm": "中斷連線",
           "cancel": "取消"
         }
       },
       "addProvider": "新增供應商",
       "detail": {
         "singleAgentNote": "僅支援 {{agent}}",
-        "emptyModels": "授權後自動發現可用模型",
+        "emptyModels": "登入後自動取得可用模型",
         "emptyList": "點選左下角「新增供應商」接入你的第一個模型來源",
         "emptyModelsConnected": "已連線，正在自動發現可用模型；若持續為空，請稍後重試。",
         "discoveryFailed": {
@@ -2000,7 +2001,7 @@
           "timeout": "連線該供應商超時，因此拿不到模型列表。請檢查網路後重試。",
           "upstream": "該供應商暫時無法返回模型列表。請稍後重試。",
           "regionBlocked": "該供應商未在你當前所在地區提供服務，因此拿不到模型列表。你可以改用其它供應商。",
-          "unauthorized": "該供應商拒絕了當前授權，因此拿不到模型列表。請斷開後重新連線。",
+          "unauthorized": "目前登入或 API key 已遭供應商拒絕，無法取得模型清單。請重新登入或更新 API key。",
           "forbidden": "該供應商拒絕了這次請求，因此拿不到模型列表。若你正在使用 Proxy 或 VPN，請更換出口後重試。",
           "rejected": "該供應商拒絕了這次請求，因此拿不到模型列表。請稍後重試或改用其它供應商。",
           "empty": "該供應商沒有返回任何可用模型。請確認帳號權限後重試。"
@@ -2010,7 +2011,7 @@
           "timeout": "連線該供應商超時，下面是上次獲取的模型列表。請檢查網路後重試。",
           "upstream": "該供應商暫時無法返回模型列表，下面是上次獲取的結果。請稍後重試。",
           "regionBlocked": "該供應商未在你當前所在地區提供服務，下面是上次獲取的模型列表。你可以改用其它供應商。",
-          "unauthorized": "該供應商拒絕了當前授權，下面是上次獲取的模型列表。請斷開後重新連線。",
+          "unauthorized": "目前登入或 API key 已遭供應商拒絕，下方為上次取得的模型清單。請重新登入或更新 API key。",
           "forbidden": "該供應商拒絕了這次請求，下面是上次獲取的模型列表。若你正在使用 Proxy 或 VPN，請更換出口後重試。",
           "rejected": "該供應商拒絕了這次請求，下面是上次獲取的模型列表。請稍後重試或改用其它供應商。",
           "empty": "該供應商這次沒有返回任何可用模型，下面是上次獲取的列表。請確認帳號權限後重試。"
@@ -2020,8 +2021,8 @@
       },
       "detect": {
         "groupLabel": "檢測到本機 CLI",
-        "action": "去授權",
-        "hintLoggedIn": "檢測到 {{cli}} 已登入，可直接授權接入",
+        "action": "使用本機帳號",
+        "hintLoggedIn": "偵測到 {{cli}} 已登入，可使用本機帳號連線",
         "hintInstalled": "檢測到本機已安裝 {{cli}}"
       },
       "wizard": {
@@ -2034,21 +2035,21 @@
         "searchPlaceholder": "搜尋供應商…",
         "groupRecommend": "推薦",
         "groupDetectedLocal": "偵測到本機服務",
-        "groupSubscription": "訂閱授權",
+        "groupSubscription": "訂閱帳號",
         "recommendReason": {
           "has-local-models": "本機已有模型",
           "machine-capable": "這台電腦適合跑本機模型",
-          "subscription": "訂閱授權"
+          "subscription": "訂閱帳號"
         },
         "groupApiKey": "API 與自託管 Proxy · 預設隨目錄更新",
         "groupCustom": "自定義",
-        "metaOAuth": "訂閱授權",
-        "metaApiKey": "API Key",
+        "metaOAuth": "訂閱帳號",
+        "metaApiKey": "API key",
         "metaNoAuth": "本機 / 自託管 · 無需鑑權",
         "customTitle": "自定義端點",
         "customMeta": "接入任意 OpenAI / Anthropic 相容的模型來源",
-        "pickHint": "鑑權方式由供應商定義決定；OAuth 端點與基礎 URL 由預設攜帶，無需手填。",
-        "oauthDesc": "透過瀏覽器完成訂閱授權，無需 API Key",
+        "pickHint": "選擇要連線的帳號或服務。",
+        "oauthDesc": "在瀏覽器中登入帳號，無需 API key。",
         "deviceOAuthDesc": "使用一次性裝置碼，在供應商驗證頁面完成授權",
         "authorizeInBrowser": "在瀏覽器中授權",
         "authorizeWithDeviceCode": "使用裝置碼",
@@ -2060,8 +2061,8 @@
         "deviceCodeCopied": "裝置碼已複製",
         "deviceCodeCopyFailed": "裝置碼複製失敗",
         "verificationPageOpenFailed": "無法開啟驗證頁面",
-        "authorizedToast": "已連線「{{name}}」",
-        "authorizeFailed": "「{{name}}」授權失敗，請重試",
+        "authorizedToast": "已登入 {{name}}",
+        "authorizeFailed": "{{name}} 登入失敗，請重試",
         "nameLabel": "顯示名稱",
         "onlyAgentNote": "此供應商僅支援 {{agent}}",
         "endpointLabel": "{{agent}} 基礎 URL",
@@ -2084,7 +2085,7 @@
         "finish": "完成新增",
         "cancel": "取消",
         "useApiKey": "API key 接入",
-        "metaOAuthOrApi": "訂閱授權 · API Key",
+        "metaOAuthOrApi": "訂閱帳號 · API key",
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 連線",
           "note": "此來源提供影像生成模型，不參與對話。API key 僅儲存在本機（系統鑰匙串加密），不會上傳。"
@@ -2220,7 +2221,7 @@
       },
       "builtinApiKey": {
         "subtitle": "API key 連線",
-        "replaceKey": "更換 key",
+        "replaceKey": "編輯連線設定",
         "saveKey": "儲存",
         "keyPlaceholder": "貼上 API key",
         "toast": {
@@ -2231,7 +2232,7 @@
         },
         "disconnectConfirm": {
           "title": "斷開 {{name}}？",
-          "description": "斷開會刪除本機儲存的 API key，該來源的模型將不可用，可隨時重新新增。",
+          "description": "中斷會清除此連線儲存的 API key。供應商會保留，重新填寫 API key 後即可使用。",
           "confirm": "斷開",
           "cancel": "取消"
         }
@@ -2246,6 +2247,10 @@
         "codexPlanFallback": "ChatGPT 訂閱",
         "codexSecondary": "次級窗口剩餘 {{percent}}%",
         "codexResetCredits": "限額重設券 {{count}} 張"
+      },
+      "localAccount": {
+        "useClaude": "使用本機 Claude Code 帳號",
+        "unavailable": "找不到可用的本機登入，請先在對應應用程式登入，或新增獨立帳號。"
       }
     },
     "experimental": {
@@ -5556,7 +5561,7 @@
       "title": "Cindy Make",
       "openToolsDir": "打開工具目錄",
       "source": {
-        "title": "原始碼狀態",
+        "title": "個人版原始碼",
         "openDir": "開啟原始碼目錄",
         "prepare": "準備原始碼",
         "reset": "清理原始碼",
@@ -5577,10 +5582,14 @@
         },
         "resetConfirm": {
           "title": "清理個人原始碼？",
-          "description": "這只會刪除 Cindy 管理的原始碼目錄。清理後如需使用，請再次點擊準備原始碼。",
+          "description": "這會刪除 Cindy 管理的原始碼目錄，包括個人版分支和所有尚未打包的修改。清理後如需使用，請再次點擊準備原始碼。",
           "confirm": "清理原始碼",
           "cancel": "取消"
-        }
+        },
+        "branch": "個人版分支",
+        "baseCommit": "基線",
+        "description": "Cindy 個人版的原始碼副本。製作個人版時會從個人版分支建立獨立的開發目錄，修改經測試後合併回來；這個目錄本身不用來改程式碼。",
+        "stop": "停止"
       },
       "description": "下方卡片會檢查本機環境，並可安裝缺少的可攜工具。原生編譯工具缺失時會顯示官方下載指引。",
       "checking": "正在檢查環境…",
@@ -12402,7 +12411,8 @@
         "checking": "正在檢查 Git 和原始碼",
         "cloning": "正在下載原始碼",
         "fetching": "正在更新儲存庫",
-        "checkingOut": "正在切換版本"
+        "checkingOut": "正在切換版本",
+        "preparingBranch": "正在準備個人版分支"
       },
       "ready": "原始碼已準備好",
       "failed": "原始碼準備失敗",
@@ -12410,12 +12420,14 @@
       "errors": {
         "unsupportedVersion": "目前版本格式不受支援。",
         "tagNotFound": "目前版本所需的 tag 不存在。",
-        "dirty": "原始碼目錄有未提交變更，請處理後再重試。",
+        "dirty": "原始碼目錄有未提交改動。請在設定的 Cindy Make 裡清理原始碼後重試。",
         "gitFailed": "Git 無法準備原始碼目錄。",
         "cancelled": "原始碼準備已停止。",
         "localCommits": "原始碼中有尚未包含在上游的本機提交或暫存記錄，請保留或備份後再清理。",
         "environmentNotReady": "建置環境尚未就緒，請檢查所需工具。",
-        "gitUnavailable": "Git 無法使用，請先在環境卡片中檢查並安裝 Git，再重試。"
+        "gitUnavailable": "Git 無法使用，請先在環境卡片中檢查並安裝 Git，再重試。",
+        "installFailed": "相依套件安裝失敗，請重試。",
+        "locked": "部分檔案正被其他程式佔用，無法刪除。請關閉相關程式或重新啟動 Cindy 後重試。"
       },
       "gitProgress": {
         "counting": "正在統計物件",
@@ -12424,7 +12436,9 @@
         "resolving": "正在解析差異",
         "checkingOut": "正在更新檔案"
       },
-      "missing": "尚未準備原始碼"
+      "missing": "尚未準備原始碼",
+      "personalBranch": "個人版分支 {{branch}}",
+      "baseCommit": "基於 {{ref}} {{commit}}"
     },
     "code": {
       "starting": "正在開啟個人版任務",
@@ -12432,7 +12446,18 @@
       "failed": "個人版任務建立失敗",
       "start": "開始製作個人版",
       "open": "開啟個人版任務",
-      "sendFailed": "需求傳送失敗，請開啟個人版任務重試"
+      "sendFailed": "需求傳送失敗，請開啟個人版任務重試",
+      "preparingWorkspace": "正在建立獨立開發目錄並安裝相依套件",
+      "workspace": "開發目錄 {{branch}}"
+    },
+    "complete": {
+      "title": "個人版修改已完成",
+      "description": "Agent 已依你的需求完成原始碼修改。",
+      "stepCode": "修改原始碼",
+      "changedFiles_one": "{{count}} 個檔案有改動",
+      "changedFiles_other": "{{count}} 個檔案有改動",
+      "commit": "基於 {{commit}}",
+      "branch": "已提交到 {{branch}}"
     }
   }
 }

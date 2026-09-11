@@ -62,8 +62,14 @@ export interface MakeSourcePreparation {
   path: string;
   channel?: 'dev' | 'beta' | 'release';
   version?: string;
+  /** Upstream baseline ref (main or a version tag) that Cindy fetched. */
   ref?: string;
+  /** HEAD of the managed checkout, i.e. the personal baseline branch. */
   commit?: string;
+  /** Local branch holding the user's verified personal changes; every task branches from it. */
+  branch?: string;
+  /** Commit of the upstream baseline ref the personal branch was created from or last updated to. */
+  baseCommit?: string;
   error?:
     | 'unsupportedVersion'
     | 'tagNotFound'
@@ -72,9 +78,19 @@ export interface MakeSourcePreparation {
     | 'environmentNotReady'
     | 'gitUnavailable'
     | 'gitFailed'
+    | 'installFailed'
+    | 'locked'
     | 'cancelled';
-  phase?: 'checking' | 'cloning' | 'fetching' | 'checkingOut';
+  phase?: 'checking' | 'cloning' | 'fetching' | 'checkingOut' | 'preparingBranch';
   progress?: MakeSourceGitProgress;
+}
+
+/** A per-task worktree branched from the personal baseline; the code task's working directory. */
+export interface MakeTaskWorkspace {
+  path: string;
+  branch: string;
+  /** Personal baseline commit the task branch started from. */
+  baseCommit: string;
 }
 
 /** Git reports a separate percentage for each operation, not an overall download percentage. */
@@ -91,6 +107,8 @@ export interface MakeSourceStatus {
   version?: string;
   ref?: string;
   commit?: string;
+  branch?: string;
+  baseCommit?: string;
   error?: MakeSourcePreparation['error'];
   phase?: MakeSourcePreparation['phase'];
   progress?: MakeSourceGitProgress;

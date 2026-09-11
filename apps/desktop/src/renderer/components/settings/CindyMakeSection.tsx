@@ -16,7 +16,6 @@ export function CindyMakeSection() {
   const { t } = useTranslation();
   const { forceManagedTools, setForceManagedTools } = useCindyMakeSettings();
   const [report, setReport] = useState<MakeDoctorReport>();
-  const [sourceReport, setSourceReport] = useState<MakeDoctorReport>();
   const [checkVersion, setCheckVersion] = useState(0);
   const [runMode, setRunMode] = useState<'check' | 'prepare'>('check');
   const [runVersion, setRunVersion] = useState(0);
@@ -24,59 +23,55 @@ export function CindyMakeSection() {
     makeAction: 'prepare-source' | 'clear-source';
     forceManagedTools: boolean;
   }>();
+  // Source state is global (Main owns one shared job): the initial read returns
+  // live progress when something is running, and the broadcast keeps every
+  // window current whether Settings or the /cindy-make workflow started it.
   const [sourceStatus, setSourceStatus] = useState<MakeSourceStatus>();
   const [sourceRunPending, setSourceRunPending] = useState(false);
   const { confirm } = useConfirmDialog();
   useEffect(() => {
     let active = true;
+    const unsubscribe =
+      window.electronAPI.onCindyMakeSourceStatus?.((status) => {
+        if (!active) return;
+        setSourceStatus(status);
+        if (status.status !== 'preparing') setSourceRunPending(false);
+      }) ?? (() => {});
     Promise.resolve(window.electronAPI.getCindyMakeSourceStatus?.())
       .then((status) => {
-        if (active) setSourceStatus((current) => current ?? status);
+        if (active && status) setSourceStatus((current) => current ?? status);
       })
       .catch(() => undefined);
     return () => {
       active = false;
+      unsubscribe();
     };
   }, []);
   useEffect(() => {
-    const source = sourceReport?.source;
-    if (source) {
-      setSourceStatus({
-        status: source.status === 'pending' ? 'preparing' : source.status,
-        path: source.path,
-        channel: source.channel,
-        version: source.version,
-        ref: source.ref,
-        commit: source.commit,
-        error: source.error,
-        phase: source.phase,
-        progress: source.progress,
-      });
-    }
-    if (sourceReport && sourceReport.status !== 'running') {
-      setSourceRunPending(false);
-      if (!source && (sourceReport.status === 'failed' || sourceReport.status === 'cancelled')) {
-        const status = sourceReport.status;
-        setSourceStatus(
-          (current) =>
-            current && {
-              ...current,
-              status,
-              error: status === 'cancelled' ? 'cancelled' : 'gitFailed',
-              phase: undefined,
-              progress: undefined,
-            },
-        );
-      }
-    }
-  }, [sourceReport]);
-  useEffect(() => {
     if (!sourceRun) return;
     const controller = new AbortController();
-    startMakeDoctor(setSourceReport, undefined, 'cindy-make', {
-      ...sourceRun,
-      signal: controller.signal,
-    });
+    startMakeDoctor(
+      (sourceReport) => {
+        // Progress arrives through the global broadcast. This callback only
+        // catches a start that never reached Main (e.g. the IPC itself failed).
+        if (sourceReport.status === 'running' || sourceReport.source) return;
+        setSourceRunPending(false);
+        setSourceStatus((current) =>
+          current && current.status === 'preparing'
+            ? {
+                ...current,
+                status: sourceReport.status === 'cancelled' ? 'cancelled' : 'failed',
+                error: sourceReport.status === 'cancelled' ? 'cancelled' : 'gitFailed',
+                phase: undefined,
+                progress: undefined,
+              }
+            : current,
+        );
+      },
+      undefined,
+      'cindy-make',
+      { ...sourceRun, signal: controller.signal },
+    );
     return () => controller.abort();
   }, [sourceRun]);
   useEffect(() => {
@@ -92,6 +87,7 @@ export function CindyMakeSection() {
     );
     return () => controller.abort();
   }, [forceManagedTools, checkVersion, runMode, runVersion]);
+  const sourceBusy = sourceRunPending || sourceStatus?.status === 'preparing';
 
   return (
     <div className="flex flex-col gap-[18px]">
@@ -141,6 +137,7 @@ export function CindyMakeSection() {
         <MakeDoctorReportCard
           report={report}
           showSource={false}
+          showSteps={false}
           alwaysAllowRecheck
           onPrepare={() => {
             setRunMode('prepare');
@@ -173,14 +170,21 @@ export function CindyMakeSection() {
       {sourceStatus && (
         <CindyMakeSourceStatusCard
           status={sourceStatus}
-          preparing={sourceRunPending || sourceReport?.status === 'running'}
+          preparing={sourceBusy}
           onPrepare={() => {
-            if (sourceRunPending || sourceReport?.status === 'running') return;
+            if (sourceBusy) return;
             setSourceRunPending(true);
             setSourceRun({ makeAction: 'prepare-source', forceManagedTools });
           }}
+          onStop={() => {
+            void Promise.resolve(window.electronAPI.cancelCindyMakeSource?.())
+              .then((result) => {
+                if (result && !result.success) setSourceRunPending(false);
+              })
+              .catch(() => toast.error(t('cindyMakeDoctor.failed')));
+          }}
           onClear={async () => {
-            if (sourceRunPending || sourceReport?.status === 'running') return;
+            if (sourceBusy) return;
             const confirmed = await confirm({
               title: t('settings.cindyMake.source.resetConfirm.title'),
               description: t('settings.cindyMake.source.resetConfirm.description'),
@@ -202,11 +206,13 @@ function CindyMakeSourceStatusCard({
   status,
   preparing = false,
   onPrepare,
+  onStop,
   onClear,
 }: {
   status: MakeSourceStatus;
   preparing?: boolean;
   onPrepare?: () => void;
+  onStop?: () => void;
   onClear?: () => void | Promise<void>;
 }) {
   const { t } = useTranslation();
@@ -246,6 +252,9 @@ function CindyMakeSourceStatusCard({
       </div>
       {expanded && (
         <div className="space-y-3 border-t border-[var(--border-default)] px-4 py-3">
+          <p className="text-13 text-[var(--text-secondary)]">
+            {t('settings.cindyMake.source.description')}
+          </p>
           <dl className="grid gap-1 text-12 text-[var(--text-secondary)]">
             <div>
               <dt className="inline font-medium">{t('settings.cindyMake.source.path')}: </dt>
@@ -269,10 +278,27 @@ function CindyMakeSourceStatusCard({
                 <dd className="inline">{status.ref}</dd>
               </div>
             )}
+            {status.branch && (
+              <div>
+                <dt className="inline font-medium">{t('settings.cindyMake.source.branch')}: </dt>
+                <dd className="inline font-mono">{status.branch}</dd>
+              </div>
+            )}
             {status.commit && (
               <div>
                 <dt className="inline font-medium">{t('settings.cindyMake.source.commit')}: </dt>
                 <dd className="inline break-all font-mono">{status.commit}</dd>
+              </div>
+            )}
+            {status.baseCommit && (
+              <div>
+                <dt className="inline font-medium">
+                  {t('settings.cindyMake.source.baseCommit')}:{' '}
+                </dt>
+                <dd className="inline break-all font-mono">
+                  {status.ref ? `${status.ref} ` : ''}
+                  {status.baseCommit}
+                </dd>
               </div>
             )}
             {status.error && (
@@ -301,18 +327,23 @@ function CindyMakeSourceStatusCard({
           <Button variant="secondary" onClick={openSourceDir}>
             {t('settings.cindyMake.source.openDir')}
           </Button>
-          {onPrepare && (
-            <Button variant="secondary" disabled={preparing} onClick={onPrepare}>
+          {preparing && onStop && (
+            <Button variant="secondary" onClick={onStop}>
+              {t('settings.cindyMake.source.stop')}
+            </Button>
+          )}
+          {onPrepare && !preparing && (
+            <Button variant="secondary" onClick={onPrepare}>
               {t(
-                preparing
-                  ? 'settings.cindyMake.source.preparingAction'
-                  : status.status === 'ready'
-                    ? 'settings.cindyMake.source.update'
-                    : 'settings.cindyMake.source.prepare',
+                status.status === 'ready'
+                  ? 'settings.cindyMake.source.update'
+                  : 'settings.cindyMake.source.prepare',
               )}
             </Button>
           )}
-          {onClear && status.status === 'ready' && (
+          {/* A failed or cancelled preparation still leaves a checkout behind; clearing
+              it is the documented way out of a dirty tree, so the button must stay. */}
+          {onClear && !preparing && status.status !== 'missing' && (
             <Button variant="secondary" disabled={preparing} onClick={() => void onClear()}>
               {t('settings.cindyMake.source.reset')}
             </Button>

@@ -34,7 +34,7 @@ import { createResponsesHandler, type BridgeProviderConfig, type ResponsesBridge
 import { createMakerLogger } from './logger-adapter.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { outboundFetch } from './outbound-fetch.js';
-import { getGrokAccessToken } from './grok-oauth-login.js';
+import { getGrokAccessToken, peekGrokAccessToken } from './grok-oauth-login.js';
 import { invalidateXaiBridgeAuth } from './xai-auth-invalidation-host.js';
 import { chatgptAccountIdFromIdToken, desktopCodexAuthAdapter } from './auth-adapters.js';
 import { codexAccountHome, codexAccountState, invalidateCodexAccount, isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
@@ -356,7 +356,10 @@ function xaiProviderConfig(providerId = 'xai'): BridgeProviderConfig {
     }),
     // 周用量走 cli-chat-proxy billing,不在这条推理链上。这里只尽力抓 x-ratelimit-*
     // 作为 RPM/TPM 瞬时值;拿不到不影响账号周用量 chip。
-    onRateLimit: (info) => { if (providerId === 'xai') recordXaiRateLimitSnapshot(info); },
+    onRateLimit: (info, requestHeaders) => {
+      const token = bearerAccessTokenFromHeaders(requestHeaders);
+      if (!isAppSessionBoundaryPending() && token && token === peekGrokAccessToken(providerId)) recordXaiRateLimitSnapshot(info, providerId);
+    },
     // 上游判定 OAuth 凭证失效时收口本地登录态。缺这一步的话:token 被服务端提前作废后
     // 本地 expires_at 仍未到期 → 永不刷新 → 每次请求都 403,而「设置 → 模型供应商」还
     // 一直显示已连接,用户没有任何线索该去重连。
@@ -416,6 +419,7 @@ export interface PiNativeSubscriptionHandlerDeps {
   fetch: typeof outboundFetch;
   getChatgptAuth: typeof getChatgptBridgeAuth;
   getGrokToken: typeof getGrokAccessToken;
+  peekGrokToken: typeof peekGrokAccessToken;
   invalidateChatgpt: typeof invalidateChatgptBridgeAuth;
   invalidateXai: typeof invalidateXaiBridgeAuth;
   recordXaiRateLimit: typeof recordXaiRateLimitSnapshot;
@@ -425,6 +429,7 @@ const defaultPiNativeSubscriptionHandlerDeps: PiNativeSubscriptionHandlerDeps = 
   fetch: outboundFetch,
   getChatgptAuth: getChatgptBridgeAuth,
   getGrokToken: getGrokAccessToken,
+  peekGrokToken: peekGrokAccessToken,
   invalidateChatgpt: invalidateChatgptBridgeAuth,
   invalidateXai: invalidateXaiBridgeAuth,
   recordXaiRateLimit: recordXaiRateLimitSnapshot,
@@ -487,6 +492,7 @@ function finiteRateLimitHeader(headers: Headers, name: string): number | undefin
 function recordNativeXaiRateLimit(
   headers: Headers,
   record: typeof recordXaiRateLimitSnapshot,
+  providerId: string,
 ): void {
   const info = {
     limitRequests: finiteRateLimitHeader(headers, 'x-ratelimit-limit-requests'),
@@ -495,7 +501,7 @@ function recordNativeXaiRateLimit(
     remainingTokens: finiteRateLimitHeader(headers, 'x-ratelimit-remaining-tokens'),
   };
   if (Object.values(info).some((value) => value !== undefined)) {
-    record(info);
+    record(info, providerId);
   }
 }
 
@@ -795,8 +801,10 @@ export function getPiNativeSubscriptionHandler(
         body: new Uint8Array(outboundBody),
         signal: controller.signal,
       });
-      if (providerId === 'xai' && response.ok) {
-        recordNativeXaiRateLimit(response.headers, deps.recordXaiRateLimit);
+      if (isXaiSubscriptionProviderId(providerId) && response.ok && !isAppSessionBoundaryPending() && scopeAtStart === activeOwnerScopeKey()) {
+        try {
+          if (accessToken === deps.peekGrokToken(providerId)) recordNativeXaiRateLimit(response.headers, deps.recordXaiRateLimit, providerId);
+        } catch { /* Display-only; never interrupt successful forwarding. */ }
       }
       if (!response.ok) {
         const errorBody = Buffer.from(await response.arrayBuffer());

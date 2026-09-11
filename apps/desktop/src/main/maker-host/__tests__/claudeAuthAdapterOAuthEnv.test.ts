@@ -16,8 +16,11 @@ const h = vi.hoisted(() => ({
   oauth: null as Record<string, unknown> | null,
   gatewayKey: 'sk-xd-gateway' as string | null,
   cleared: 0,
+  revoked: false,
+  revocationFails: false,
   refresherInvalidated: 0,
-  invalidGrantHandler: null as (() => void) | null,
+  invalidGrantHandler: null as ((digest: string) => void) | null,
+  rejectedDigest: undefined as string | undefined,
   /** getValidClaudeAiOAuth 的可注入延迟(测回调超时用)。 */
   refreshDelayMs: 0,
   lastRefreshOpts: null as { staleToken?: string; forceRefresh?: boolean } | null,
@@ -26,6 +29,12 @@ const h = vi.hoisted(() => ({
   canUseGateway: true,
   accounts: new Map<string, Record<string, unknown> | null>(),
   refreshAccount: vi.fn(),
+  retainPresentation: vi.fn(),
+}));
+
+vi.mock('../provider-presentation-store.js', () => ({
+  retainInvalidatedProviderPresentation: h.retainPresentation,
+  retainProviderPresentationAfterAuthChange: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -41,6 +50,16 @@ vi.mock('@cindy/maker-core', () => ({}));
 
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: h.canUseGateway }),
+}));
+
+vi.mock('../nativeProviderAuthBinding.js', async (original) => ({
+  ...(await original<typeof import('../nativeProviderAuthBinding.js')>()),
+  isNativeProviderAuthRevoked: () => h.revoked,
+  unbindNativeProviderAuth: (_provider: string, opts?: { rejectedCredentialDigest?: string }) => {
+    if (h.revocationFails) throw new Error('binding write failed');
+    h.revoked = true;
+    h.rejectedDigest = opts?.rejectedCredentialDigest;
+  },
 }));
 
 vi.mock('../claude-credentials-store.js', () => ({
@@ -63,9 +82,9 @@ vi.mock('../claude-oauth-refresh.js', () => ({
   // disconnect = invalidate → clear(唯一断开入口,logout/IPC 都必须走它)
   disconnectClaudeAiOAuth: () => {
     h.refresherInvalidated += 1;
-    h.cleared += 1;
+    h.revoked = true;
   },
-  setClaudeOAuthInvalidGrantHandler: (handler: (() => void) | null) => {
+  setClaudeOAuthInvalidGrantHandler: (handler: ((digest: string) => void) | null) => {
     h.invalidGrantHandler = handler;
   },
 }));
@@ -107,6 +126,8 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     };
     h.gatewayKey = 'sk-xd-gateway';
     h.cleared = 0;
+    h.revoked = false;
+    h.revocationFails = false;
     h.refresherInvalidated = 0;
     h.refreshDelayMs = 0;
     h.encryptionAvailable = true;
@@ -259,26 +280,58 @@ describe('DesktopClaudeAuthAdapter.getAuthEnv — 订阅 OAuth env 注入', () =
     }
   });
 
-  it('invalidate:清凭证 + 失效刷新器 + 广播重登', async () => {
+  it('invalidate preserves native credentials and retains the provider before broadcasting', async () => {
     const mod = await import('../auth-adapters.js');
     const adapter = new mod.DesktopClaudeAuthAdapter();
     const broadcasts: string[] = [];
     adapter.setOnInvalidatedBroadcast((reason) => broadcasts.push(reason));
     await adapter.invalidate('claude_oauth_refresh_invalid_grant');
-    expect(h.cleared).toBe(1);
+    expect(h.cleared).toBe(0);
+    expect(h.revoked).toBe(true);
+    expect(h.retainPresentation).toHaveBeenCalledWith('anthropic');
     expect(h.refresherInvalidated).toBe(1);
     expect(broadcasts).toEqual(['claude_oauth_refresh_invalid_grant']);
+  });
+
+  it('broadcasts revocation before waiting for auxiliary presentation persistence', async () => {
+    const adapter = await makeAdapter();
+    let release!: () => void;
+    h.retainPresentation.mockReturnValueOnce(new Promise<void>((resolve) => { release = resolve; }));
+    const broadcast = vi.fn();
+    adapter.setOnInvalidatedBroadcast(broadcast);
+    const pending = adapter.invalidate('old-credential-rejected');
+    expect(broadcast).toHaveBeenCalledWith('old-credential-rejected');
+    h.revoked = false;
+    release();
+    await pending;
+    expect(broadcast).toHaveBeenCalledTimes(1);
+    expect(h.revoked).toBe(false);
   });
 
   it('构造期接线 invalid_grant handler(刷新模块通知 → invalidate 链路可达)', async () => {
     await makeAdapter();
     expect(typeof h.invalidGrantHandler).toBe('function');
+    h.invalidGrantHandler?.('a'.repeat(64));
+    expect(h.rejectedDigest).toBe('a'.repeat(64));
+    expect(h.cleared).toBe(0);
   });
 
-  it('logout(订阅在连):清凭证同时失效刷新器,防在途刷新复活凭证', async () => {
+  it('logout preserves native credentials and revokes Cindy access', async () => {
     const adapter = await makeAdapter();
     await adapter.logout();
-    expect(h.cleared).toBe(1);
+    expect(h.cleared).toBe(0);
+    expect(h.revoked).toBe(true);
     expect(h.refresherInvalidated).toBe(1);
+  });
+
+  it('still retains and broadcasts automatic invalidation when persistence fails', async () => {
+    const adapter = await makeAdapter();
+    const broadcast = vi.fn();
+    adapter.setOnInvalidatedBroadcast(broadcast);
+    h.revocationFails = true;
+    h.invalidGrantHandler?.('c'.repeat(64));
+    await vi.waitFor(() => expect(broadcast).toHaveBeenCalledWith('claude_oauth_refresh_invalid_grant'));
+    expect(h.retainPresentation).toHaveBeenCalledWith('anthropic');
+    expect(h.cleared).toBe(0);
   });
 });

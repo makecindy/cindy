@@ -53,6 +53,7 @@ export function useAutoUnlockSettings(
     pending = useRef(false),
     attempted = useRef(false);
   const epoch = useRef(0);
+  const changeSettled = useRef<Promise<void>>(Promise.resolve());
   const transaction = useRef<RemoteDesktopCredentialSession | null>(null);
   const owner = getMobileAuthOwner();
   useEffect(() => {
@@ -112,6 +113,7 @@ export function useAutoUnlockSettings(
     setup: boolean,
     biometric: boolean,
     requestBiometric = false,
+    beforeAuthentication?: () => Promise<void>,
   ) {
     const current = await credentialStep("scope", scope),
       token = await credentialStep("access-token", () => auth.getAccessToken());
@@ -123,25 +125,31 @@ export function useAutoUnlockSettings(
     };
     await credentialStep("open-link", () => link.openLink(target));
     current.check();
-    const ready = await credentialStep("host-prepare", () =>
-      invoke<{ version: number; ready: boolean; descriptor: string }>(
-        target,
-        REMOTE_DESKTOP_CHANNEL,
-        [{ op: "credential", version: 1, kind: "prepare", setup }],
-        { preSend: current.check },
+    // Both preparations must settle before allowing another authentication attempt.
+    // In particular, a host failure must not leave native configure running behind it.
+    const [hostPreparation, phonePreparation] = await Promise.allSettled([
+      credentialStep("host-prepare", () =>
+        invoke<{ version: number; ready: boolean; descriptor: string }>(
+          target,
+          REMOTE_DESKTOP_CHANNEL,
+          [{ op: "credential", version: 1, kind: "prepare", setup }],
+          { preSend: current.check },
+        ),
       ),
-    );
+      credentialStep("phone-configure", () =>
+        configureCredentialIdentity(token),
+      ),
+    ]);
     current.check();
+    if (hostPreparation.status === "rejected") throw hostPreparation.reason;
+    if (phonePreparation.status === "rejected") throw phonePreparation.reason;
+    const ready = hostPreparation.value;
     if (
       ready?.version !== 1 ||
       !ready.ready ||
       typeof ready.descriptor !== "string"
     )
       throw new Error("CREDENTIAL_UNAVAILABLE");
-    await credentialStep("phone-configure", () =>
-      configureCredentialIdentity(token),
-    );
-    current.check();
     const session = new RemoteDesktopCredentialSession();
     transaction.current = session;
     try {
@@ -149,6 +157,14 @@ export function useAutoUnlockSettings(
         setup,
         biometric,
         descriptor: ready.descriptor,
+        ...(beforeAuthentication
+          ? {
+              beforeAuthentication: async () => {
+                await beforeAuthentication();
+                current.check();
+              },
+            }
+          : {}),
       });
       current.check();
       if (setup) {
@@ -181,6 +197,10 @@ export function useAutoUnlockSettings(
     const generation = epoch.current;
     const actionOwner = getMobileAuthOwner();
     pending.current = true;
+    let settle!: () => void;
+    changeSettled.current = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
     setBusy(true);
     setNotice(null);
     try {
@@ -209,6 +229,7 @@ export function useAutoUnlockSettings(
         pending.current = false;
         if (mounted.current) setBusy(false);
       }
+      settle();
     }
   }
   return {
@@ -247,8 +268,13 @@ export function useAutoUnlockSettings(
     resetConnectionAttempt: () => {
       attempted.current = false;
     },
-    maybeUnlock: async () => {
+    maybeUnlock: async (beforeAuthentication?: () => Promise<void>) => {
+      const requestEpoch = epoch.current;
+      // A reconnect may arrive while its cancelled preparation is unwinding.
+      // Wait for cleanup instead of skipping that connection or overlapping native sessions.
+      if (pending.current) await changeSettled.current;
       if (
+        requestEpoch !== epoch.current ||
         !available ||
         !supportsAutoUnlock(getHostPlatform()) ||
         attempted.current ||
@@ -267,8 +293,23 @@ export function useAutoUnlockSettings(
         );
         current.check();
         if (status?.version !== 1 || status.state !== "locked") return;
-        attempted.current = true;
-        await change(() => authenticate(false, saved.biometricVerification));
+        if (!beforeAuthentication) attempted.current = true;
+        await change(() =>
+          authenticate(
+            false,
+            saved.biometricVerification,
+            false,
+            beforeAuthentication
+              ? async () => {
+                  await beforeAuthentication();
+                  current.check();
+                  // Preparation cancelled before the first frame must not consume
+                  // the one automatic prompt allowed for this connection attempt.
+                  attempted.current = true;
+                }
+              : undefined,
+          ),
+        );
       } catch {
         if (mounted.current)
           setNotice(t("remoteDesktop.autoUnlockUnavailable"));

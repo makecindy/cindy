@@ -15,10 +15,10 @@ export function remoteDesktopViewerHtml(
   const color = (v: string) =>
     /^#[0-9a-f]{3,8}$/i.test(v) ? v : "transparent";
   return `<!doctype html><html><head><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; media-src blob:; connect-src 'none'"><style>
-  *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:${color(surface)};touch-action:none;overscroll-behavior:none}#stage{position:absolute;inset:0;overflow:hidden;z-index:0}video,img{position:absolute;max-width:none;pointer-events:none;transform-origin:0 0}video{display:none}#cursor{position:absolute;z-index:2;width:18px;height:18px;border:2px solid ${color(foreground)};border-radius:50%;pointer-events:none;display:none;transform:translate(-50%,-50%)}
+  *{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:${color(surface)};touch-action:none;overscroll-behavior:none}#stage{position:absolute;inset:0;overflow:hidden;z-index:0}video,img{position:absolute;max-width:none;pointer-events:none;transform-origin:0 0}video{display:none;z-index:0}#cursor{position:absolute;z-index:3;width:18px;height:18px;border:2px solid ${color(foreground)};border-radius:50%;pointer-events:none;display:none;transform:translate(-50%,-50%)}
   #cursor-image{position:absolute;inset:0;width:100%;height:100%}
   #stage,#stage *{-webkit-user-select:none;user-select:none;-webkit-touch-callout:none;-webkit-user-drag:none}
-  video,img{border:0;outline:0}img:not([src]){visibility:hidden}
+  video,img{border:0;outline:0}#image{z-index:1}img:not([src]){visibility:hidden}
   :root{--surface:${color(surface)};--foreground:${color(foreground)}}
   #keyboard-input{position:absolute;left:0;bottom:0;width:1px;height:1px;opacity:.01;font-size:16px;pointer-events:none;border:0;padding:0;resize:none}
   #mouse-buttons{position:absolute;inset:0;pointer-events:none;display:none;color:var(--foreground);opacity:.85}
@@ -286,7 +286,7 @@ const VIEWER_SCRIPT = String.raw`
   // Keep one bounded frame in this document only; never persist desktop pixels.
   // Snapshot before detaching the track. A JPEG fallback already lives in image.
   function retainFrame(){
-    if(video.style.display!=='block'||video.readyState<2||!video.videoWidth||!video.videoHeight)return;
+    if(!videoPresented||video.style.display!=='block'||video.readyState<2||!video.videoWidth||!video.videoHeight)return;
     const canvas=document.createElement('canvas');
     try{const scale=Math.min(1,1280/Math.max(video.videoWidth,video.videoHeight));canvas.width=Math.max(1,Math.round(video.videoWidth*scale));canvas.height=Math.max(1,Math.round(video.videoHeight*scale));const context=canvas.getContext('2d');if(context){context.drawImage(video,0,0,canvas.width,canvas.height);image.src=canvas.toDataURL('image/jpeg',.7);}}catch{/* Keep the previous compatibility frame if WebKit cannot read video. */}finally{canvas.width=0;canvas.height=0;}
   }
@@ -311,7 +311,7 @@ const VIEWER_SCRIPT = String.raw`
       case 'keyboard':showKeyboard(message.enabled===true);break;
       case 'resume':if(video.srcObject)video.play().catch(()=>{});break;
       case 'releaseInput':release();break;
-      case 'theme':if(/^#[0-9a-f]{3,8}$/i.test(message.surface)){document.body.style.background=message.surface;document.documentElement.style.setProperty('--surface',message.surface);}if(/^#[0-9a-f]{3,8}$/i.test(message.foreground)){cursor.style.borderColor=message.foreground;document.documentElement.style.setProperty('--foreground',message.foreground);}break;
+      case 'theme':if(/^#[0-9a-f]{3,8}$/i.test(message.surface)){document.body.style.background=message.surface;document.documentElement.style.background=message.surface;document.documentElement.style.setProperty('--surface',message.surface);}if(/^#[0-9a-f]{3,8}$/i.test(message.foreground)){cursor.style.borderColor=message.foreground;document.documentElement.style.setProperty('--foreground',message.foreground);}break;
       case 'mouseButtons':if(Number.isFinite(message.bottomInset))viewportBottomInset=Math.max(0,Math.min(stage.clientHeight-1,message.bottomInset));if(Number.isFinite(message.leftInset)){const left=Math.max(0,Math.min(stage.clientWidth-1,message.leftInset));if(left!==viewportLeftInset){viewportLeftInset=left;settlePan();render();}}if(Number.isFinite(message.rightInset)){const inset=Math.max(0,Math.min(stage.clientWidth-1,message.rightInset));if(inset!==viewportRightInset){viewportRightInset=inset;settlePan();render();}}const keyboardInset=fillHeight&&message.keyboardOpen===true?viewportBottomInset:0;
         if(keyboardInset!==keyboardViewportInset){
           const wasOpen=keyboardViewportInset>0;keyboardViewportInset=keyboardInset;

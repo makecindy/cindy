@@ -2,7 +2,10 @@ import { spawn } from 'node:child_process';
 import type { MakeSourceGitProgress } from '../../shared/cindyMakeDoctor.js';
 
 export function parseSourceGitProgress(line: string): MakeSourceGitProgress | undefined {
-  const match = /(?:^|remote:\s*)(Counting objects|Compressing objects|Receiving objects|Resolving deltas|Updating files):\s+(\d{1,3})%/.exec(line.trim());
+  const match =
+    /(?:^|remote:\s*)(Counting objects|Compressing objects|Receiving objects|Resolving deltas|Updating files):\s+(\d{1,3})%/.exec(
+      line.trim(),
+    );
   if (!match || Number(match[2]) > 100) return undefined;
   const stages: Record<string, MakeSourceGitProgress['stage']> = {
     'Counting objects': 'counting',
@@ -60,17 +63,25 @@ export async function runSourceGit(
         const progress = parseSourceGitProgress(line);
         if (!progress) continue;
         latest = progress;
-        if (sent?.stage !== progress.stage || progress.percent === 100 || Date.now() - lastSent >= 200)
+        if (
+          sent?.stage !== progress.stage ||
+          progress.percent === 100 ||
+          Date.now() - lastSent >= 200
+        )
           publish();
       }
     });
-    child.on('error', () => { failed = true; });
+    child.on('error', () => {
+      failed = true;
+    });
     // Wait for close, including abort/error paths, before another operation can touch the checkout.
     child.on('close', (code) => {
       if (signal.aborted || failed || code !== 0) {
-        reject(Object.assign(new Error('Git source operation failed'), {
-          code: signal.aborted ? 'cancelled' : 'gitFailed',
-        }));
+        reject(
+          Object.assign(new Error('Git source operation failed'), {
+            code: signal.aborted ? 'cancelled' : 'gitFailed',
+          }),
+        );
         return;
       }
       latest = parseSourceGitProgress(stderrTail) ?? latest;

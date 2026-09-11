@@ -248,6 +248,8 @@ export const MAKER_INVOKE = {
    * Settings mutation: local trusted renderer only; deliberately excluded from the
    * device-link allowlist.
    */
+  PROVIDER_CUSTOM_DISCONNECT: 'maker:provider:custom:disconnect',
+  PROVIDER_PRESENTATION_SET: 'maker:provider:presentation:set',
   PROVIDER_ORDER_SET: 'maker:provider:order:set',
   /** Visual Settings UI only: read/write/reset a per-provider × runtime × model price estimate. */
   MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
