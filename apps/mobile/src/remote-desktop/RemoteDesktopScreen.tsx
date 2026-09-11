@@ -184,6 +184,7 @@ export default function RemoteDesktopScreen() {
   const exitLock = useRef(false);
   const leaving = useRef(false);
   const [isLeaving, setIsLeaving] = useState(false);
+  const [exitLockPending, setExitLockPending] = useState(false);
   const linkRef = useRef(link);
   linkRef.current = link;
   const { t } = useTranslation();
@@ -238,7 +239,7 @@ export default function RemoteDesktopScreen() {
   const connectionPending = !error && (!lease || !frameReady || !controlReady);
   const showConnectionStatus =
     !isLeaving && (connectionPending || (!error && status === "reconnecting"));
-  const showExitLockStatus = isLeaving && exitLock.current;
+  const showExitLockStatus = isLeaving && exitLockPending;
   const connectionLabel = t(
     showExitLockStatus
       ? "remoteDesktop.lockingOnExit"
@@ -405,6 +406,7 @@ export default function RemoteDesktopScreen() {
       void remotePresentation?.playback(false).catch(() => {});
       connecting.current = false;
       const previous = active.current;
+      setExitLockPending(Boolean(previous && exiting && exitLock.current));
       active.current = null;
       pendingVideoSettings.current = null;
       if (previous) pendingMediaOffers.current.delete(previous);
@@ -866,6 +868,7 @@ export default function RemoteDesktopScreen() {
     } else if (focused) {
       leaving.current = false;
       setIsLeaving(false);
+      setExitLockPending(false);
       if (!active.current) void connectRef.current();
     }
   }, [focused, pause, videoPreferencesLoaded]);
