@@ -195,10 +195,10 @@ describe('useFileTree showIgnoredDirs option', () => {
   /**
    * 切开关会换一份 store。新 store 若从空快照 + initialLoading 起步，FileTreeView
    * 会把整树替换成空白占位（本地 <300ms 连 spinner 都没有），视觉上闪一下；
-   * 「刷新」按钮原地 refetch 所以不闪。新 store 必须继承兄弟 store 的根列表，
-   * 等新 matcher 的数据回来再校正（子树缓存与展开态不跨 scope 继承，见下一条）。
+   * 「刷新」按钮原地 refetch 所以不闪。新 store 必须继承兄弟 store 的整棵可见树，
+   * 等新 matcher 的数据回来再整体替换（不是只借根列表，见下一条）。
    */
-  it('切开关继承根列表，不回到 initialLoading 空白', async () => {
+  it('切开关继承整棵可见树，不回到 initialLoading 空白', async () => {
     const hiddenEntries: readonly DirEntry[] = [
       { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
     ];
@@ -237,22 +237,32 @@ describe('useFileTree showIgnoredDirs option', () => {
   });
 
   /**
-   * 关开关方向不继承旧 scope 的展开集合与子树缓存：reveal 态展开过的
-   * node_modules 是 reveal-only 路径，带进 hidden store 会让它进入展开集合与
-   * warm 列表（hidden 侧要为它发 listDir，SSH 上可达数百个 RPC），并在根列表
-   * 回来前把被忽略的行显示出来。展开态按各自 scope 从 localStorage 恢复。
+   * 关开关的消失动作必须是一次性的：过渡期（hidden 数据还没回来）整棵树保持不动
+   * —— 包括展开态 —— 而不是先丢子行再丢父行（那是「从最子级逐级折叠」）。
+   * root 数据回来后才整体替换，并把借来的 reveal-only 展开位剪掉：hidden 树下
+   * node_modules 已不在 root 列表里，留着会随下次操作写进 hidden scope 的
+   * localStorage，下次启动白发一批 listDir。
    */
-  it('关开关不把 reveal-only 路径带进 hidden store', async () => {
+  it('关开关整树保持到数据回来，再一次性替换并剪掉 reveal-only 展开位', async () => {
     const revealedRoot: readonly DirEntry[] = [
       { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 1 },
     ];
-    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) =>
-      Promise.resolve(args.showIgnoredDirs ? revealedRoot : ([] as readonly DirEntry[])),
-    );
+    const revealedChild: readonly DirEntry[] = [
+      { name: 'pkg', relPath: 'node_modules/pkg', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    const hiddenRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) => {
+      if (args.showIgnoredDirs) {
+        return Promise.resolve(args.relPath === 'node_modules' ? revealedChild : revealedRoot);
+      }
+      return Promise.resolve(hiddenRoot);
+    });
 
     const view = renderHook(
       ({ reveal }: { reveal: boolean }) =>
-        useFileTree({ workdir: '/workdir-seed-filter', showIgnoredDirs: reveal }),
+        useFileTree({ workdir: '/workdir-seed-swap', showIgnoredDirs: reveal }),
       { initialProps: { reveal: true } },
     );
     await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
@@ -261,17 +271,70 @@ describe('useFileTree showIgnoredDirs option', () => {
     });
     expect(view.result.current.expanded.has('node_modules')).toBe(true);
 
+    // 过渡期：挂住 hidden 侧的 root listDir，模拟慢通道。
+    const pendingRoot = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementation((args: { showIgnoredDirs?: boolean }) => {
+      if (args.showIgnoredDirs) return Promise.resolve(revealedRoot);
+      return pendingRoot.promise;
+    });
     mocks.listDir.mockClear();
+
     await act(async () => {
       view.rerender({ reveal: false });
     });
-    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
 
-    // hidden store 不该继承 reveal-only 的展开态，也不该为它发 listDir。
+    // 数据还没回来：整棵树保持不动（含展开的子级），不是逐级折叠。
+    expect(view.result.current.initialLoading).toBe(false);
+    expect(view.result.current.entries.get('')).toEqual(revealedRoot);
+    expect(view.result.current.entries.get('node_modules')).toEqual(revealedChild);
+    expect(view.result.current.expanded.has('node_modules')).toBe(true);
+    // 过渡期不 warm 借来的子树 —— 不给被忽略路径白发 listDir。
+    const hiddenCalls = mocks.listDir.mock.calls.filter((c) => c[0].showIgnoredDirs === false);
+    expect(hiddenCalls.map((c) => c[0].relPath)).toEqual(['']);
+
+    await act(async () => {
+      pendingRoot.resolve(hiddenRoot);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.result.current.entries.get('')).toEqual(hiddenRoot));
+    // 整体替换完成：借来的 reveal-only 展开位被剪掉。
     expect(view.result.current.expanded.has('node_modules')).toBe(false);
-    expect(mocks.listDir).not.toHaveBeenCalledWith(
-      expect.objectContaining({ relPath: 'node_modules' }),
+
+    view.unmount();
+  });
+
+  /**
+   * 兄弟 store 还在首次 listDir 上（慢通道）时不能冒充「已加载」：没有可显示内容
+   * 就保持 initialLoading，否则 FileTreeView 会把空 rows 渲染成「此文件夹为空」
+   * 而不是延迟 loading 态。
+   */
+  it('兄弟 store 还没有首帧数据时保持 initialLoading', async () => {
+    const pendingReveal = deferred<readonly DirEntry[]>();
+    const pendingHidden = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementation((args: { showIgnoredDirs?: boolean }) =>
+      args.showIgnoredDirs ? pendingReveal.promise : pendingHidden.promise,
     );
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-seed-pending', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: true } },
+    );
+    expect(view.result.current.initialLoading).toBe(true);
+
+    await act(async () => {
+      view.rerender({ reveal: false });
+    });
+    // 兄弟 store 存在但没有可显示内容 → hidden 侧必须继续 loading。
+    expect(view.result.current.initialLoading).toBe(true);
+
+    await act(async () => {
+      pendingHidden.resolve([
+        { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+      ]);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
 
     view.unmount();
   });

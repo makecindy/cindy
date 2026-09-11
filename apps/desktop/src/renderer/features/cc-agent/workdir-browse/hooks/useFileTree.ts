@@ -237,37 +237,80 @@ function emit(store: FileTreeStore): void {
  * 空快照 + initialLoading 起步,FileTreeView 会把整棵树替换成占位(本地
  * <300ms 连 spinner 都没有,就是空白),视觉上闪一下;同一 workdir 的另一半
  * reveal scope 的 store 此刻通常还在表里 —— 旧 store 的 refCount 归零发生在
- * 本次 commit 的 effect cleanup,晚于 render 期间的 useMemo —— 借它的
- * **根目录列表**当首帧内容,新 matcher 的 listDir 回来后再原地校正。
+ * 本次 commit 的 effect cleanup,晚于 render 期间的 useMemo —— 借它
+ * **整棵可见的树**(entries + expanded)当首帧内容,新 matcher 的 listDir 回来
+ * 后再整体替换。
  *
- * 只借根列表,不借子树缓存与 expanded:那两者都带旧 matcher 的语义。reveal 态
- * 展开过 node_modules 时,把它们带进 hidden store 会让被忽略路径进入展开集合与
- * warm 列表(hidden 侧会给它们发 listDir,SSH 上可达数百个 RPC),并在根列表
- * 回来前把被忽略的行显示出来。展开态仍按各自 scope 从 localStorage 恢复
- * (expandedStore 的分片本意),不跨 scope 合并。
+ * 为什么整棵借、而不是只借根列表:只借根列表会把消失动作拆成两段 —— 子行先因
+ * expanded 掉落而消失(父行还在),root 数据回来再拿掉父行 —— 多级展开时看起来
+ * 就是「从最子级逐级折叠回去」。整棵借过来,关闭开关的动作是一次性的:树先保持
+ * 不动,数据回来整体切换。
+ *
+ * 代价是过渡窗口(reveal → hidden)里旧 matcher 的行还会短暂可见 —— 窗口就是
+ * 一次 listDir(本地 <12ms;慢通道到数据回来为止)。这是有意的取舍:全量、一次性
+ * 地消失,比先闪空再重建、或逐级折叠都更接近直觉。
+ *
+ * 借来的 expanded 是**过渡态**:initStore 不据此 warm(免得给被忽略路径白发
+ * listDir),root 数据回来时由 pruneExpandedForCurrentTree 按新树剪掉不可达路径
+ * —— 否则它们会落进 hidden scope 的 localStorage,下次启动白拉一批。
  *
  * 「刷新」按钮没有这个问题:它在同一份 store 上原地 refetch,从不经过空态。
  */
-function findRevealSiblingSeed(opts: Required<UseFileTreeOptions>): {
-  rootEntries: readonly DirEntry[] | null;
-  loadError: FileTreeStore['snapshot']['loadError'];
-} | null {
+function findRevealSiblingSnapshot(
+  opts: Required<UseFileTreeOptions>,
+): FileTreeStore['snapshot'] | null {
   const siblingKey = storeKey({ ...opts, showIgnoredDirs: !opts.showIgnoredDirs });
-  const sibling = stores.get(siblingKey);
-  if (!sibling) return null;
-  return {
-    rootEntries: sibling.snapshot.entries.get(ROOT_KEY) ?? null,
-    loadError: sibling.snapshot.loadError,
+  return stores.get(siblingKey)?.snapshot ?? null;
+}
+
+/**
+ * root 数据回来后,把「过渡期借来的、在当前树上不可达的展开路径」剪掉。
+ *
+ * 切开关时 seed 会把另一半 reveal scope 的整棵可见树带过来(见
+ * findRevealSiblingSnapshot)。hidden 树下 node_modules / Library 这类路径已经
+ * 不在 root 列表里,但它们的展开态还挂在 expanded 上 —— 留着会让用户在 hidden
+ * 态做下一次操作时把它们写进 hidden scope 的 localStorage,下次启动就白发一批
+ * listDir。逐级查父链:任一级不在对应父列表里即不可达。
+ *
+ * 查不到祖先列表(缓存被清 / 还没拉过)时保守保留 —— 宁可留一个 stale 展开位,
+ * 也不能把用户真实的展开态删掉。
+ */
+function pruneExpandedForCurrentTree(store: FileTreeStore): void {
+  if (!store.snapshot.entries.has(ROOT_KEY)) return;
+  const reachable = (relPath: string): boolean => {
+    const parts = relPath.split('/');
+    let parent = ROOT_KEY;
+    for (const part of parts) {
+      const list = store.snapshot.entries.get(parent);
+      if (!list) return true;
+      const child = parent === ROOT_KEY ? part : `${parent}/${part}`;
+      if (!list.some((entry) => entry.relPath === child)) return false;
+      parent = child;
+    }
+    return true;
   };
+  const next = new Set<string>();
+  let changed = false;
+  for (const relPath of store.snapshot.expanded) {
+    if (relPath === ROOT_KEY || reachable(relPath)) next.add(relPath);
+    else changed = true;
+  }
+  if (!changed) return;
+  store.snapshot = { ...store.snapshot, expanded: next };
+  emit(store);
 }
 
 function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
   const key = storeKey(opts);
   const existing = stores.get(key);
   if (existing) return existing;
-  // 切开关路径:借另一半 reveal scope 的根列表,第一帧就有内容可渲染,不经过
-  // initialLoading 空白;首次挂载(无兄弟 store)仍走原来的 loading 路径。
-  const seed = findRevealSiblingSeed(opts);
+  // 切开关路径:借另一半 reveal scope 的整棵树当首帧内容,不经过 initialLoading
+  // 空白;首次挂载(无兄弟 store)仍走原来的 loading 路径。
+  const seed = findRevealSiblingSnapshot(opts);
+  // 兄弟 store 可能还卡在首次 listDir 上(慢通道):没有可显示内容时不得冒充
+  // 「已加载」—— 否则 FileTreeView 会把 initialLoading:false + 空 rows 渲染成
+  // 「此文件夹为空」,而不是延迟 loading 态。终态错误可显示(渲染错误占位)。
+  const seedDisplayable = !!seed && (seed.entries.size > 0 || seed.loadError !== null);
   const store: FileTreeStore = {
     key,
     workdir: opts.workdir,
@@ -276,23 +319,24 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     hideMetaFiles: opts.hideMetaFiles,
     docMode: opts.docMode,
     showIgnoredDirs: opts.showIgnoredDirs,
-    snapshot: seed
-      ? {
-          entries: seed.rootEntries ? new Map([[ROOT_KEY, seed.rootEntries]]) : new Map(),
-          expanded: new Set([ROOT_KEY]),
-          // 新 store 自己还没有 in-flight 请求,seed 的 loadingPaths 不继承。
-          loadingPaths: new Set(),
-          initialLoading: false,
-          // 错误态一并继承:首帧直接是错误占位,而不是先闪一帧空树再变错误。
-          loadError: seed.loadError,
-        }
-      : {
-          entries: new Map(),
-          expanded: new Set([ROOT_KEY]),
-          loadingPaths: new Set(),
-          initialLoading: true,
-          loadError: null,
-        },
+    snapshot:
+      seedDisplayable && seed
+        ? {
+            entries: seed.entries,
+            expanded: seed.expanded,
+            // 新 store 自己还没有 in-flight 请求,seed 的 loadingPaths 不继承。
+            loadingPaths: new Set(),
+            initialLoading: false,
+            // 错误态一并继承:首帧直接是错误占位,而不是先闪一帧空树再变错误。
+            loadError: seed.loadError,
+          }
+        : {
+            entries: new Map(),
+            expanded: new Set([ROOT_KEY]),
+            loadingPaths: new Set(),
+            initialLoading: true,
+            loadError: null,
+          },
     tokens: new Map(),
     inFlight: new Map(),
     pendingEventParents: new Set(),
@@ -326,12 +370,18 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       store.snapshot = { ...store.snapshot, loadError: null };
     }
     // 结构等价 → 跳过 setEntries,避免子组件无意义重渲(参见函数顶部注释)。
+    // root 仍要 prune 一次:seed 的 root 可能与新 root 结构一致而展开态还是借的。
     const prevList = store.snapshot.entries.get(relPath);
-    if (prevList && entriesStructurallyEqual(prevList, list)) return;
+    if (prevList && entriesStructurallyEqual(prevList, list)) {
+      if (relPath === ROOT_KEY) pruneExpandedForCurrentTree(store);
+      return;
+    }
     const nextEntries = new Map(store.snapshot.entries);
     nextEntries.set(relPath, list);
     store.snapshot = { ...store.snapshot, entries: nextEntries };
     emit(store);
+    // 过渡期(seed)借来的展开态在新树里可能已不可达,root 数据落地即剪。
+    if (relPath === ROOT_KEY) pruneExpandedForCurrentTree(store);
   } catch (err) {
     log.warn(`listDir failed for ${relPath}`, err);
     // root 失败要可见:空树 + 无提示会被读成"项目是空的"。device-link 的
@@ -449,10 +499,11 @@ function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
  *  幂等:重复调用直接 no-op(refCount 已 >0)。 */
 async function initStore(store: FileTreeStore): Promise<void> {
   // 恢复 localStorage 持久化的 expanded 集合(workdir × 视图模式共享,见
-  // expandedStore 的 scope 说明)。分片是刻意的:两个 scope 各记自己的展开态,
-  // 不跨 scope 合并 —— 合并会把 reveal 态展开过的 node_modules 带进 hidden 态。
+  // expandedStore 的 scope 说明)。seed 带来的展开集合是过渡态(见
+  // findRevealSiblingSnapshot):先一并留着让整树平滑替换,root 数据回来时
+  // pruneExpandedForCurrentTree 按新树剪掉不可达路径。
   const restored = loadExpandedSet(store.workdir, { showIgnoredDirs: store.showIgnoredDirs });
-  const nextExpanded = new Set<string>([ROOT_KEY, ...restored]);
+  const nextExpanded = new Set<string>([ROOT_KEY, ...restored, ...store.snapshot.expanded]);
   store.snapshot = { ...store.snapshot, expanded: nextExpanded };
   emit(store);
 
@@ -476,6 +527,8 @@ async function initStore(store: FileTreeStore): Promise<void> {
 
   // Initial root fetch + 已 restore expanded 目录的并行 lazy fetch。每个 listDir
   // <12ms,即使 50 个 restored 也能在 <1s 内 warm 完。
+  // 只 warm restored:seed 带来的子树缓存是过渡显示用的旧数据,不去重拉 ——
+  // 重拉等于给被忽略路径白发 listDir,而它们本来就只活到 root 数据回来。
   await Promise.all([
     fetchDir(store, ROOT_KEY),
     ...[...restored].map((p) => fetchDir(store, p)),
