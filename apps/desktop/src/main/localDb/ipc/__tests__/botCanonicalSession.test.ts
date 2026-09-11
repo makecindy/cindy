@@ -3400,7 +3400,7 @@ describe('Bot Session task end-to-end runtime', () => {
       : { ok: true as const, status: 'requested' as const });
     const waitForInputBoundary = vi.fn(async () => undefined);
     const preparePause = vi.fn(async () => undefined);
-    const flushInput = vi.fn(async () => undefined);
+    const flushInput = vi.fn(async (): Promise<void> => undefined);
     const delegation = createBotDelegationService({
       prepareWorktree: options.prepareWorktree,
       getWorktree: options.getWorktree,
@@ -4023,7 +4023,7 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.dispose(); }
   });
 
-  it.each(['waitForInputBoundary', 'stopTurn', 'preparePause'] as const)('retries an uncertain pause after %s fails', async (stage) => {
+  it.each(['waitForInputBoundary', 'stopTurn', 'preparePause', 'flushInput'] as const)('retries an uncertain pause after %s fails', async (stage) => {
     await seedPair();
     const runtime = createDelegationRuntime({ taskControl: true });
     try {
@@ -4045,6 +4045,27 @@ describe('Bot Session task end-to-end runtime', () => {
       if (!before.ok || !after.ok) throw new Error('missing task');
       expect(after.task.deadline_at).toBe(before.task.deadline_at! + 1_000);
     } finally { runtime.dispose(); }
+  });
+
+  it('does not acknowledge pause until the retained input snapshot has finished writing', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    let release!: () => void;
+    const persisted = new Promise<void>(resolve => { release = resolve; });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Retain the supplement.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'queued supplement' });
+      runtime.flushInput.mockImplementationOnce(() => persisted);
+      let acknowledged = false;
+      const paused = runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause')
+        .then(result => { acknowledged = true; return result; });
+      await vi.waitFor(() => expect(runtime.flushInput).toHaveBeenCalledWith(task.childSessionId));
+      expect(acknowledged).toBe(false);
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(true);
+      release();
+      expect(await paused).toMatchObject({ ok: true });
+    } finally { release(); runtime.dispose(); }
   });
 
   it.each(['bot', 'parent'] as const)('serializes %s lifecycle cancellation with the held resume commit', async (scope) => {
@@ -4236,7 +4257,7 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_pause_write'); runtime.dispose(); }
   });
 
-  it('keeps queued recovery retryable after an unavailable worktree readback', async () => {
+  it.each(['queued', 'completed'] as const)('keeps %s recovery retryable after an unavailable worktree readback', async status => {
     await seedPair();
     let blocked = true;
     const reconcileWorktree = vi.fn(async () => { if (blocked) throw new Error('fixture reconciliation unavailable'); });
@@ -4244,15 +4265,95 @@ describe('Bot Session task end-to-end runtime', () => {
     try {
       const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Resume only after ownership readback.' });
       if (!task.ok) throw new Error('missing task');
-      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status: 'queued' } });
+      if (status === 'completed') h.sqlite!.prepare("UPDATE bot_delegations SET status = 'completed', result_summary = 'fixture finished' WHERE id = ?").run(task.delegationId);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status } });
       expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'continue' }))
         .toMatchObject({ ok: false, errorCode: 'WORKTREE_TRANSFER_PENDING' });
-      await runtime.delegation.restore();
-      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status: 'queued' } });
+      const { createBotRuntimeRestoreCoordinator } = await import('../../../maker-ipc/botRuntimeRestore');
+      const coordinator = createBotRuntimeRestoreCoordinator({
+        readDbIdentity: () => ({ userId: 'owner', clientEpoch: 1 }),
+        readServices: () => ({ directMessages: { restore: async () => undefined }, delegation: runtime.delegation }),
+        log: { warn: vi.fn() },
+      });
+      expect(await coordinator.restoreCurrentOwner()).toBe(false);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status } });
       blocked = false;
+      expect(await coordinator.restoreCurrentOwner()).toBe(true);
+      expect(await coordinator.restoreCurrentOwner()).toBe(true);
+      // A new owner epoch performs a real recovery pass; durable receipts must
+      // also prevent duplicate delivery when coordinator caching cannot help.
       await runtime.delegation.restore();
-      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status: 'running' } });
-      expect(runtime.dispatch.mock.calls.filter(([params]) => params.clientId === `bot-delegation-start:${task.delegationId}`)).toHaveLength(1);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status: status === 'queued' ? 'running' : 'completed' } });
+      expect(runtime.dispatch.mock.calls.filter(([params]) => params.clientId === `bot-delegation-start:${task.delegationId}`)).toHaveLength(status === 'queued' ? 1 : 0);
+      if (status === 'completed') {
+        expect((h.sqlite!.prepare('SELECT completion_delivered_at FROM bot_delegations WHERE id = ?').get(task.delegationId) as { completion_delivered_at: number | null }).completion_delivered_at).not.toBeNull();
+        expect(runtime.dispatch.mock.calls.filter(([params]) => params.targetSessionId === 'session-1')).toHaveLength(1);
+      }
+    } finally { runtime.dispose(); }
+  });
+
+  it.each([false, true])('retries the resume dispatch readback failure unless cancelled (%s)', async cancel => {
+    await seedPair();
+    vi.useFakeTimers();
+    let readbacks = 0;
+    let failReadback = false;
+    const runtime = createDelegationRuntime({ taskControl: true, reconcileWorktree: async () => {
+      if (failReadback && ++readbacks === 2) throw new Error('fixture second readback unavailable');
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Recover the interrupted turn.' });
+      if (!task.ok) throw new Error('missing task');
+      failReadback = true;
+      await runtime.delegation.restore();
+      const resumeCalls = () => runtime.dispatch.mock.calls.filter(([params]) => params.clientId?.startsWith(`bot-delegation-resume:${task.delegationId}:`));
+      expect(resumeCalls()).toHaveLength(0);
+      if (cancel) {
+        await runtime.delegation.stopSessionTask('session-1', task.delegationId);
+        await runtime.settleChild(task.childSessionId, 'Cancelled.');
+      }
+      runtime.advance(1_000);
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(resumeCalls()).toHaveLength(cancel ? 0 : 1);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ ok: true, task: { status: cancel ? 'cancelled' : 'running' } });
+    } finally { runtime.dispose(); vi.useRealTimers(); }
+  });
+
+  it('preserves other recovery progress and never dispatches a task cancelled between failed passes', async () => {
+    await seedPair();
+    let blockedSession: string | null = null;
+    let unavailable = true;
+    const runtime = createDelegationRuntime({ taskControl: true,
+      transientUnavailable: () => unavailable,
+      reconcileWorktree: async sessionId => {
+        if (sessionId === blockedSession) throw new Error('fixture reconciliation unavailable');
+      },
+    });
+    try {
+      const blocked = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Cancel before recovery.' });
+      const unaffected = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Recover the independent result.' });
+      if (!blocked.ok || !unaffected.ok) throw new Error('missing tasks');
+      blockedSession = blocked.childSessionId;
+      h.sqlite!.prepare("UPDATE bot_delegations SET status = 'completed', result_summary = 'fixture finished' WHERE id = ?").run(unaffected.delegationId);
+      const { createBotRuntimeRestoreCoordinator } = await import('../../../maker-ipc/botRuntimeRestore');
+      const coordinator = createBotRuntimeRestoreCoordinator({
+        readDbIdentity: () => ({ userId: 'owner', clientEpoch: 1 }),
+        readServices: () => ({ directMessages: { restore: async () => undefined }, delegation: runtime.delegation }),
+        log: { warn: vi.fn() },
+      });
+      // Let parent result delivery succeed while ownership blocks child startup.
+      unavailable = false;
+      runtime.dispatch.mockClear();
+      expect(await coordinator.restoreCurrentOwner()).toBe(false);
+      expect(runtime.dispatch.mock.calls.filter(([params]) => params.targetSessionId === 'session-1')).toHaveLength(1);
+      expect(await runtime.delegation.stopSessionTask('session-1', blocked.delegationId, 'cancel')).toMatchObject({ ok: true });
+      expect(runtime.heldInputs.has(blocked.childSessionId)).toBe(false);
+      blockedSession = null;
+      expect(await coordinator.restoreCurrentOwner()).toBe(true);
+      await runtime.delegation.restore();
+      expect(await runtime.delegation.getSessionTask('session-1', blocked.delegationId)).toMatchObject({ ok: true, task: { status: 'cancelled' } });
+      expect(runtime.dispatch.mock.calls.some(([params]) => params.targetSessionId === blocked.childSessionId)).toBe(false);
+      expect(runtime.dispatch.mock.calls.filter(([params]) => params.targetSessionId === 'session-1')).toHaveLength(2);
     } finally { runtime.dispose(); }
   });
 

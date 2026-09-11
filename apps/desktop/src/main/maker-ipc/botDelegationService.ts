@@ -1472,7 +1472,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
 
     const validation = await validateDispatchPlan(row);
     if (!validation.ok) {
-      if (validation.errorCode === 'WORKTREE_TRANSFER_PENDING') return;
+      if (validation.errorCode === 'WORKTREE_TRANSFER_PENDING') {
+        scheduleResumeRetry(row.id, attempt);
+        return;
+      }
       const lastError = `${validation.errorCode}: ${validation.message}`;
       const changed = await updateTerminal({
         delegationId: row.id,
@@ -1558,13 +1561,18 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       await failDelegationDispatch(row, `${verdict.errorCode}: ${verdict.message}`);
       return;
     }
+    scheduleResumeRetry(row.id, attempt);
+  }
+
+  function scheduleResumeRetry(delegationId: string, attempt: number): void {
+    clearRetryTimer(delegationId);
     const delay = Math.min(MAX_RETRY_DELAY_MS, 1_000 * 2 ** Math.min(attempt, 6));
     const timer = setTimeout(() => {
-      retryTimers.delete(row.id);
-      void withTaskOperation(row.id, () => resumeRunningDelegation(row.id, attempt + 1));
+      retryTimers.delete(delegationId);
+      void withTaskOperation(delegationId, () => resumeRunningDelegation(delegationId, attempt + 1));
     }, delay);
     timer.unref?.();
-    retryTimers.set(row.id, timer);
+    retryTimers.set(delegationId, timer);
   }
 
   /**
@@ -2898,6 +2906,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         return result;
       }
       await control.preparePause(row.childSessionId);
+      // Confirm the retained queue is durable before acknowledging the pause.
+      // A failed write keeps the pause/token for retry, just like uncertain stop.
+      await control.flushInput(row.childSessionId);
       clearTimer(row.id);
       clearRetryTimer(row.id);
       clearInteractionRetryTimer(row.id);
@@ -3009,6 +3020,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           isNull(botDelegations.completionDeliveredAt),
         ),
       ));
+    let reconciliationFailed = false;
     for (const persistedRow of rows) {
       await withTaskOperation(persistedRow.id, async () => {
         const [current] = await db.select().from(botDelegations)
@@ -3018,6 +3030,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         try { if (row.childSessionId) await deps.reconcileWorktree?.(row.childSessionId); }
         catch (error) {
           log.warn('Task worktree reconciliation deferred', { delegationId: row.id, error: String(error) });
+          reconciliationFailed = true;
           return;
         }
         if (!isActiveDelegation(row.status as DelegationStatus)) {
@@ -3059,6 +3072,9 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         }
       });
     }
+    // Preserve progress for unaffected tasks, but do not let the coordinator
+    // mark this owner epoch restored while a durable task is still blocked.
+    if (reconciliationFailed) throw new Error('Task worktree reconciliation pending');
   };
 
   const unregisterParentCancellation = registerBotDelegationParentCancellation(
