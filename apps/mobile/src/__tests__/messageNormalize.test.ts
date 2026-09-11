@@ -1347,6 +1347,23 @@ describe('normalizeRemoteMessages — /goal 持久记录与 plan_review 状态',
 
 
 describe('companion timeline', () => {
+  it.each([false, true])('keeps task instructions out of live/history display (source order: %s)', (preserveSourceOrder) => {
+    const content = '已向后台任务发送消息：读取 /workspace/project/AGENTS.md 并核对执行授权。';
+    const task = { v: 1, role: 'interjection', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Writer', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Write report' };
+    const legacy = message({ id: 'trace', role: 'assistant', content, agentMeta: { botCollaboration: task } });
+    const rows = normalizeRemoteMessages([
+      legacy,
+      message({ id: 'anchor', role: 'assistant', content, agentMeta: { botCollaboration: { ...task, role: 'delegation-request' } } }),
+      message({ id: 'user', role: 'user', content }),
+      message({ id: 'assistant', role: 'assistant', content }),
+      message({ id: 'invalid', role: 'assistant', content, agentMeta: { botCollaboration: { ...task, v: 2 } } }),
+    ], { preserveSourceOrder });
+    expect(rows.find(row => row.source.id === 'trace')).toMatchObject({ body: '', companion: { kind: 'task' } });
+    expect(rows.find(row => row.source.id === 'anchor')).toMatchObject({ body: '', companion: { kind: 'task' } });
+    for (const id of ['user', 'assistant', 'invalid']) expect(rows.find(row => row.source.id === id)?.body).toBe(content);
+    expect(legacy.content).toBe(content);
+  });
+
   it('preserves empty task anchors and private thread links for the mobile renderer', () => {
     const task = { v: 1, role: 'delegation-request', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Writer', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Write report' };
     const direct = { v: 1, threadId: 'private', viewerBotId: 'bot', peerBotId: 'peer', peerBotName: 'Dash', direction: 'sent', sequence: 1, preview: 'Discuss report' };

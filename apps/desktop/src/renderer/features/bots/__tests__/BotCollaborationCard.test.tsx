@@ -304,7 +304,7 @@ describe('BotSessionTaskCard', () => {
       />,
     );
     expect(screen.getByText(/bots\.collab\.messageSent/)).toBeTruthy();
-    expect(screen.getByText(/先别铺开，我只要三条。/)).toBeTruthy();
+    expect(screen.queryByText(/先别铺开，我只要三条。/)).toBeNull();
     expect(screen.queryByText('bots.collab.stopTask')).toBeNull();
   });
 

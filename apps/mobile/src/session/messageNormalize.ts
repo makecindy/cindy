@@ -232,12 +232,14 @@ export function normalizeRemoteMessages(
 
       const task = readBotCollaborationMeta(message.agentMeta?.botCollaboration);
       const direct = readBotDirectMessageMeta(message.agentMeta?.botDirectMessage);
-      if (task?.role === 'delegation-request' || task?.role === 'interjection' || direct) {
+      const isTaskTrace = task?.role === 'delegation-request' || task?.role === 'interjection';
+      if (isTaskTrace || direct) {
         result.push({
           key: messageNormalizeKey(message), source: message, kind: 'system', role: message.role,
-          label: 'companion', body: typeof message.content === 'string' ? message.content : '',
+          // Task traces are status-only, including legacy rows containing execution instructions.
+          label: 'companion', body: isTaskTrace ? '' : typeof message.content === 'string' ? message.content : '',
           align: 'agent', createdAt: message.createdAt,
-          companion: task && (task.role === 'delegation-request' || task.role === 'interjection')
+          companion: isTaskTrace
             ? { kind: 'task', meta: task } : { kind: 'direct', meta: direct! },
         });
         continue;
