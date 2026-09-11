@@ -90,7 +90,8 @@ export interface BotDelegationServiceDeps {
     stop(params: { targetSessionId: string }): Promise<SessionStopResult>;
     /** Includes native pending interactions and in-flight sends, not just visible streaming. */
     isActive(sessionId: string): boolean;
-    holdInput(sessionId: string, held: boolean): void;
+    /** IDs of decisions synchronously applied while releasing the pause. */
+    holdInput(sessionId: string, held: boolean): readonly string[] | void;
     waitForInputBoundary(sessionId: string): Promise<void>;
     preparePause(sessionId: string): Promise<void>;
     restoreInput(sessionId: string): Promise<void>;
@@ -99,8 +100,10 @@ export interface BotDelegationServiceDeps {
   };
   discardUnusedWorktree?: (sessionId: string) => Promise<void>;
   getWorktree?: (sessionId: string) => { path: string } | null;
+  reconcileWorktree?: (sessionId: string) => Promise<void>;
   withTransferredWorktree?: <T extends { reopened: boolean }>(
     previousSessionId: string, sessionId: string, worktreePath: string, commit: () => Promise<T>,
+    identity: { delegationId: string; requestingBotId: string },
   ) => Promise<T>;
   prepareWorktree?: (workingDir: string) => Promise<{ ok: true; sessionId: string; workingDir: string } | { ok: false; message: string }>;
   taskQueue?: {
@@ -316,7 +319,12 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
   const heldSessionIds = new Set<string>();
   const holdTaskInput = (sessionId: string, held: boolean) => {
     if (held) heldSessionIds.add(sessionId); else heldSessionIds.delete(sessionId);
-    deps.taskControl?.holdInput(sessionId, held);
+    const applied = deps.taskControl?.holdInput(sessionId, held);
+    if (applied?.length) {
+      for (const pending of pendingInteractions.values()) {
+        if (applied.includes(pending.requestId)) pending.decisionApplied = true;
+      }
+    }
   };
   const taskOperations = new Map<string, Promise<unknown>>();
   const withTaskOperation = async <T>(id: string, run: () => Promise<T>): Promise<T> => {
@@ -337,6 +345,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
    * summary and paused status are persisted on the delegation row. */
   const pendingInteractions = new Map<string, BotDelegationPendingInteraction & {
     request: InteractionRequest;
+    decisionApplied?: boolean;
   }>();
   const now = deps.now ?? Date.now;
   const createId = deps.createId ?? randomUUID;
@@ -999,12 +1008,15 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     pending: BotDelegationPendingInteraction & { request: InteractionRequest },
     attempt = 0,
   ): Promise<void> => {
-    if (pendingInteractions.get(row.id)?.requestId !== pending.requestId
+    const stillPending = () => pendingInteractions.get(row.id)?.requestId === pending.requestId
+      && !pendingInteractions.get(row.id)?.decisionApplied;
+    if (!stillPending()
       || (row.childSessionId && heldSessionIds.has(row.childSessionId))) return;
     const requesterSessionId = await requesterLiveSessionId(
       row.requestingBotId,
       row.parentSessionId,
     );
+    if (!stillPending() || (row.childSessionId && heldSessionIds.has(row.childSessionId))) return;
     const message = [
       `${UI_ACTION_TRIGGER_PREFIX}[任务需要你处理] task_id: ${row.id}`,
       `类型: ${pending.request.kind}`,
@@ -1180,6 +1192,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     if (!row.childSessionId) {
       return { ok: false, errorCode: 'CHILD_SESSION_MISSING', message: '后台任务不存在' };
     }
+    try { await deps.reconcileWorktree?.(row.childSessionId); }
+    catch { return { ok: false, errorCode: 'WORKTREE_TRANSFER_PENDING', message: 'Task worktree ownership is awaiting reconciliation' }; }
     const db = getDbClient().drizzle;
     const liveRequesterSessionId = await requesterLiveSessionId(
       row.requestingBotId,
@@ -1270,6 +1284,10 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     }
     const validation = await validateDispatchPlan(row);
     if (!validation.ok) {
+      if (validation.errorCode === 'WORKTREE_TRANSFER_PENDING') {
+        scheduleDispatchRetry(row.id, attempt, isCreationPermissionCurrent);
+        return { ok: false, status: 'queued', error: validation };
+      }
       await failDelegationDispatch(row, `${validation.errorCode}: ${validation.message}`);
       return { ok: false, status: 'failed' };
     }
@@ -1454,6 +1472,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
 
     const validation = await validateDispatchPlan(row);
     if (!validation.ok) {
+      if (validation.errorCode === 'WORKTREE_TRANSFER_PENDING') return;
       const lastError = `${validation.errorCode}: ${validation.message}`;
       const changed = await updateTerminal({
         delegationId: row.id,
@@ -2326,6 +2345,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       };
     }
 
+    await deps.reconcileWorktree?.(row.childSessionId);
     const worktreePath = deps.getWorktree?.(row.childSessionId)?.path ?? oldChild.worktreePath;
     const reopenedAt = now();
     const deadlineAt = reopenedAt + Math.min(MAX_TIMEOUT_MS, oldPlan.limits.timeoutMs);
@@ -2389,7 +2409,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         throw new Error('Task worktree transfer is unavailable');
       }
       const reopened = worktreePath
-        ? await deps.withTransferredWorktree!(row.childSessionId, childSessionId, worktreePath, commitReopen)
+        ? await deps.withTransferredWorktree!(row.childSessionId, childSessionId, worktreePath, commitReopen,
+          { delegationId: row.id, requestingBotId: callerBotId })
         : await commitReopen();
       if (!reopened.reopened) {
         await deliverCompletion({
@@ -2741,17 +2762,25 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       .returning({ id: botDelegations.id });
     if (!resumed) return { ok: false as const, errorCode: 'SESSION_TASK_STATE_CHANGED', message: 'Task changed before resume committed' };
     holdTaskInput(row.childSessionId, false);
+    if (pending?.decisionApplied) {
+      // Native settlement callbacks are serialized behind this operation. Apply
+      // their bookkeeping now using the synchronous resolver receipt.
+      await handleInteractionEndUnserialized(row.childSessionId, pending.request);
+      status = 'running';
+    }
+    const awaitingInteraction = pending && !pending.decisionApplied ? pending : null;
     await control.resumeInput(row.childSessionId);
-    if (pending) await notifyRequesterOfInteraction(row, pending);
+    if (awaitingInteraction) await notifyRequesterOfInteraction(row, awaitingInteraction);
     else {
       const deadline = readDeadline(JSON.stringify(snapshot));
       if (deadline !== null) scheduleTimeout(row.id, deadline);
     }
     emitChanged({ delegationId: row.id, parentSessionId: row.parentSessionId,
       childSessionId: row.childSessionId, status,
-      pendingInteraction: pending ? pendingInteractionView(pending) : null });
+      pendingInteraction: awaitingInteraction ? pendingInteractionView(awaitingInteraction) : null });
     return { ok: true as const, childSessionId: row.childSessionId, resumed: true,
-      delivery: pending ? 'awaiting-interaction' : 'queued', control: { state: 'active', queue_held: false } };
+      delivery: awaitingInteraction ? 'awaiting-interaction' : pending?.decisionApplied ? 'interaction' : 'queued',
+      control: { state: 'active', queue_held: false } };
   };
 
   const messageSessionTask = (callerSessionId: string, taskId: string, input: SessionTaskMessage) =>
@@ -2773,6 +2802,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         return result.ok ? { ...result, childSessionId: row.childSessionId, resumed: false,
           delivery: input.kind === 'edit' ? 'queued' : 'withdrawn' } : result;
       }
+      try { if (row.childSessionId) await deps.reconcileWorktree?.(row.childSessionId); }
+      catch { return { ok: false as const, errorCode: 'WORKTREE_TRANSFER_PENDING', message: 'Task worktree ownership is awaiting reconciliation' }; }
       if (input.kind === 'resume') return resumeTask(row, input.text);
       if (readTaskPause(row) && isActiveDelegation(row.status as DelegationStatus)) {
         return { ok: false as const, errorCode: 'TASK_PAUSED', message: 'Resume the task explicitly before sending input or answering an interaction' };
@@ -2984,6 +3015,11 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
           .where(eq(botDelegations.id, persistedRow.id)).limit(1);
         if (!current) return;
         const row = await repairDelegationParent(current);
+        try { if (row.childSessionId) await deps.reconcileWorktree?.(row.childSessionId); }
+        catch (error) {
+          log.warn('Task worktree reconciliation deferred', { delegationId: row.id, error: String(error) });
+          return;
+        }
         if (!isActiveDelegation(row.status as DelegationStatus)) {
           // Recreate the task-card anchor as well as the hidden wake after an
           // abnormal canonical replacement. The result must remain visible.

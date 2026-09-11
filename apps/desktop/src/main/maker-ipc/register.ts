@@ -2442,11 +2442,12 @@ function schedulePendingPermissionTimeout(requestId: string, entry: PendingInter
   }, remaining);
 }
 
-function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean): void {
+function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean): string[] {
+  const applied: string[] = [];
   for (const [requestId, entry] of pendingInteractionResolvers) {
     if (entry.sessionId !== sessionId) continue;
     if (!paused && entry.deferredDecision) {
-      resolvePendingInteraction(requestId, entry.deferredDecision);
+      if (resolvePendingInteraction(requestId, entry.deferredDecision)) applied.push(requestId);
       continue;
     }
     if (entry.kind !== 'permission') continue;
@@ -2460,6 +2461,7 @@ function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean)
       schedulePendingPermissionTimeout(requestId, entry);
     }
   }
+  return applied;
 }
 
 type RecoverableInteractionSnapshot =
@@ -9306,7 +9308,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       },
       holdInput: (id, held) => {
         inputCoordinator.setExecutionPaused(id, held);
-        setPendingInteractionTimeoutsPaused(id, held);
+        return setPendingInteractionTimeoutsPaused(id, held);
       },
       // Wait for sends already admitted before the hold before sampling native activity.
       waitForInputBoundary: (id) => withSendToSessionLock(id, async () => undefined),
@@ -9320,6 +9322,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       resumeInput: async (id) => { inputCoordinator.resume(id); },
     },
     getWorktree: worktreeManager.getForSession,
+    reconcileWorktree: worktreeManager.reconcileSessionTransfer,
     withTransferredWorktree: worktreeManager.withTransferredSession,
     discardUnusedWorktree: async sessionId => {
       const [row] = await getDbClient().drizzle.select({ id: sessions.id }).from(sessions)

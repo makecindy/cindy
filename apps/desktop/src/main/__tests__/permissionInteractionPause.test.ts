@@ -57,7 +57,7 @@ function harness() {
   };
   const runtime = new Function(...Object.keys(deps), compiled)(...Object.values(deps)) as {
     install: (session: { id: string }) => void;
-    hold: (id: string, held: boolean) => void;
+    hold: (id: string, held: boolean) => string[];
     answer: (id: string, decision: InteractionDecision) => boolean;
     cleanup: (id: string, reason: string) => void;
     take: (id: string) => Array<{ resolve: (decision: InteractionDecision) => void }>;
@@ -167,7 +167,8 @@ describe('permission timeout follows the task pause lifecycle', () => {
     await vi.advanceTimersByTimeAsync(30 * MINUTE);
     expect(p.settled).not.toHaveBeenCalled();
     expect(h.entries.size).toBe(1);
-    h.hold('task', false);
+    expect(h.hold('task', false)).toEqual([kind]);
+    expect(h.hold('task', false)).toEqual([]);
     await p.promise;
     expect(p.settled).toHaveBeenCalledExactlyOnceWith(answer);
     taken.resolve(answer);

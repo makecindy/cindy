@@ -3244,6 +3244,8 @@ describe('Bot Session task end-to-end runtime', () => {
     prepareWorktree?: Parameters<typeof createBotDelegationService>[0]['prepareWorktree'];
     taskQueue?: Parameters<typeof createBotDelegationService>[0]['taskQueue'];
     taskControl?: boolean;
+    appliedOnResume?: () => string[];
+    reconcileWorktree?: Parameters<typeof createBotDelegationService>[0]['reconcileWorktree'];
     stopUnsupported?: boolean;
     steerUnsupported?: boolean;
     readCallerRuntime?: Parameters<typeof createBotDelegationService>[0]['readCallerRuntime'];
@@ -3402,12 +3404,16 @@ describe('Bot Session task end-to-end runtime', () => {
     const delegation = createBotDelegationService({
       prepareWorktree: options.prepareWorktree,
       getWorktree: options.getWorktree,
+      reconcileWorktree: options.reconcileWorktree,
       withTransferredWorktree: options.withTransferredWorktree,
       taskQueue: options.taskQueue,
       ...(options.taskControl ? { taskControl: {
         steer, stop: stopTurn,
         isActive: (id: string) => pendingTurns.some((turn) => turn.sessionId === id && !turn.queued),
-        holdInput: (id: string, held: boolean) => { if (held) heldInputs.add(id); else heldInputs.delete(id); },
+        holdInput: (id: string, held: boolean) => {
+          if (held) heldInputs.add(id); else heldInputs.delete(id);
+          return held ? [] : options.appliedOnResume?.() ?? [];
+        },
         waitForInputBoundary,
         preparePause,
         restoreInput: async () => undefined,
@@ -4228,6 +4234,54 @@ describe('Bot Session task end-to-end runtime', () => {
         .toMatchObject({ ok: true, delivery: 'interaction' });
       expect(resolveInteraction).toHaveBeenCalledTimes(1);
     } finally { h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_pause_write'); runtime.dispose(); }
+  });
+
+  it('keeps queued recovery retryable after an unavailable worktree readback', async () => {
+    await seedPair();
+    let blocked = true;
+    const reconcileWorktree = vi.fn(async () => { if (blocked) throw new Error('fixture reconciliation unavailable'); });
+    const runtime = createDelegationRuntime({ taskControl: true, reconcileWorktree });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Resume only after ownership readback.' });
+      if (!task.ok) throw new Error('missing task');
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status: 'queued' } });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'message', text: 'continue' }))
+        .toMatchObject({ ok: false, errorCode: 'WORKTREE_TRANSFER_PENDING' });
+      await runtime.delegation.restore();
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status: 'queued' } });
+      blocked = false;
+      await runtime.delegation.restore();
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toMatchObject({ ok: true, task: { status: 'running' } });
+      expect(runtime.dispatch.mock.calls.filter(([params]) => params.clientId === `bot-delegation-start:${task.delegationId}`)).toHaveLength(1);
+    } finally { runtime.dispose(); }
+  });
+
+  it.each([false, true])('only renotifies an unresolved interaction on resume (applied IM answer: %s)', async applied => {
+    await seedPair();
+    let decisionApplied = false;
+    const runtime = createDelegationRuntime({ taskControl: true,
+      appliedOnResume: () => decisionApplied ? ['im-answer'] : [] });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Wait for an IM answer.' });
+      if (!task.ok) throw new Error('missing task');
+      const request = { kind: 'permission' as const, requestId: 'im-answer', toolName: 'write_file', input: {} };
+      await runtime.delegation.handleInteractionStart(task.childSessionId, request);
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause')).toMatchObject({ ok: true });
+      runtime.dispatch.mockClear();
+      decisionApplied = applied;
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true, delivery: applied ? 'interaction' : 'awaiting-interaction' });
+      const notifications = runtime.dispatch.mock.calls.filter(([params]) => params.clientId?.includes('bot-delegation-interaction:'));
+      expect(notifications).toHaveLength(applied ? 0 : 1);
+      const row = h.sqlite!.prepare('SELECT status, pending_interaction_json FROM bot_delegations WHERE id = ?').get(task.delegationId) as { status: string; pending_interaction_json: string | null };
+      expect(row.status).toBe(applied ? 'running' : 'waiting');
+      if (applied) {
+        expect(row.pending_interaction_json).toBeNull();
+        // The delayed native callback is harmless after synchronous bookkeeping.
+        await runtime.delegation.handleInteractionEnd(task.childSessionId, request);
+        expect(runtime.dispatch.mock.calls.filter(([params]) => params.clientId?.includes('bot-delegation-interaction:'))).toHaveLength(0);
+      }
+    } finally { runtime.dispose(); }
   });
 
   it('pauses an interaction without resolving it, and accounts for the wait only once', async () => {

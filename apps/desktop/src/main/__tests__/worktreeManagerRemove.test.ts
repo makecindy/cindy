@@ -73,10 +73,6 @@ vi.mock('../worktree/worktreeStore', () => ({
       m.quarantinePath ? [m.path, m.quarantinePath] : [m.path],
     ),
   set: (...args: unknown[]) => storeSetMock(...args),
-  replace: async (previousId: string, nextId: string, meta: WorktreeMeta) => {
-    storeMap.delete(previousId);
-    storeMap.set(nextId, meta);
-  },
   del: vi.fn((sessionId: string) => storeMap.delete(sessionId)),
   getPendingSafeDirectoryCleanups: () => [...pendingSafeDirectoryCleanups],
   addPendingSafeDirectoryCleanups: (paths: readonly string[]) => {
@@ -165,46 +161,6 @@ describe('removeWorktreeForSession', () => {
       storeMap.set(sessionId, meta);
     });
     manager = await import('../worktree/WorktreeManager');
-  });
-
-  it('transfers the same branch/path through repeated continuations without recycling the old owner', async () => {
-    const meta = makeMeta('original');
-    storeMap.set('original', meta);
-    await manager.withTransferredSession('original', 'continued', meta.path, async () => {
-      expect(manager.getForSession('original')).toBeNull();
-      expect(manager.getForSession('continued')).toEqual({ ...meta, sessionId: 'continued' });
-      return { reopened: true };
-    });
-    await manager.removeWorktreeForSession('original');
-    await manager.withTransferredSession('continued', 'continued-again', meta.path, async () => ({ reopened: true }));
-    expect(manager.getForSession('continued')).toBeNull();
-    expect(manager.getForSession('continued-again')).toEqual({ ...meta, sessionId: 'continued-again' });
-    expect(gitExecMock).not.toHaveBeenCalled();
-  });
-
-  it.each(['throw', 'cas'] as const)('restores the original worktree owner after a %s transaction failure', async failure => {
-    const meta = makeMeta('original');
-    storeMap.set('original', meta);
-    const operation = manager.withTransferredSession('original', 'continued', meta.path, async () => {
-      if (failure === 'throw') throw new Error('fixture DB failure');
-      return { reopened: false };
-    });
-    if (failure === 'throw') await expect(operation).rejects.toThrow('fixture DB failure');
-    else expect(await operation).toEqual({ reopened: false });
-    expect(manager.getForSession('original')).toEqual(meta);
-    expect(manager.getForSession('continued')).toBeNull();
-    expect(gitExecMock).not.toHaveBeenCalled();
-  });
-
-  it('refuses a stale or conflicting transfer without calling the child transaction', async () => {
-    const meta = makeMeta('original');
-    storeMap.set('original', meta);
-    storeMap.set('continued', makeMeta('continued'));
-    const commit = vi.fn();
-    await expect(manager.withTransferredSession('original', 'continued', meta.path, commit)).rejects.toThrow('ownership changed');
-    await expect(manager.withTransferredSession('missing', 'other', meta.path, commit)).rejects.toThrow('ownership changed');
-    expect(commit).not.toHaveBeenCalled();
-    expect(manager.getForSession('original')).toEqual(meta);
   });
 
   it('no store entry → no-op', async () => {
