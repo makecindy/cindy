@@ -27,7 +27,7 @@ afterEach(() => {
 });
 
 describe('OpenAI account catalog identity', () => {
-  it.each([false, true])('Pro/Cyber keep all Harness routes with old missing metadata (%s)', (oldSnapshot) => {
+  it.each([false, true])('Pro/Cyber keep all Harness routes and inherit available public tiers (old snapshot: %s)', (oldSnapshot) => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     const slugs = ['gpt-5.4-pro', 'gpt-5.5-pro', 'gpt-5.6-cyber'];
     if (oldSnapshot) {
@@ -46,7 +46,9 @@ describe('OpenAI account catalog identity', () => {
       for (const agent of ['codex', 'claude-code', 'pi'] as const) {
         for (const slug of slugs) {
           expect(entry(providerId, agent, agent === 'codex' ? slug : `chatgpt/${slug}`))
-            .toMatchObject({ efforts: [], defaultEffort: null });
+            .toMatchObject(oldSnapshot || slug === 'gpt-5.6-cyber'
+              ? { efforts: [], defaultEffort: null }
+              : { efforts: ['medium', 'high', 'xhigh'], defaultEffort: 'medium' });
         }
       }
     }

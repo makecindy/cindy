@@ -81,6 +81,7 @@ export interface AgentTodayUsage {
   completionTokens?: number;
   reasoningTokens?: number;
   cachedTokens?: number;
+  cacheCreationTokens?: number;
 }
 
 export interface RateLimitWindow {
@@ -197,6 +198,7 @@ interface CodexTokenSnapshot {
   completionTokens: number;
   reasoningTokens: number;
   cachedTokens: number;
+  cacheCreationTokens: number;
   total: number;
 }
 
@@ -209,6 +211,7 @@ function blankCodexSnapshot(): CodexTokenSnapshot {
     completionTokens: 0,
     reasoningTokens: 0,
     cachedTokens: 0,
+    cacheCreationTokens: 0,
     total: 0,
   };
 }
@@ -219,6 +222,7 @@ interface CodexTurnUsage {
   completionTokens?: number;
   reasoningTokens?: number;
   cachedTokens?: number;
+  cacheCreationTokens?: number;
 }
 
 /**
@@ -239,6 +243,7 @@ export function recordCodexTurnUsage(usage: unknown): void {
   const completionDelta = Number(u.completionTokens) || 0;
   const reasoningDelta = Number(u.reasoningTokens) || 0;
   const cachedDelta = Number(u.cachedTokens) || 0;
+  const cacheCreationDelta = Number(u.cacheCreationTokens) || 0;
 
   codexTodaySnapshot = {
     day: today,
@@ -246,7 +251,8 @@ export function recordCodexTurnUsage(usage: unknown): void {
     completionTokens: codexTodaySnapshot.completionTokens + completionDelta,
     reasoningTokens: codexTodaySnapshot.reasoningTokens + reasoningDelta,
     cachedTokens: codexTodaySnapshot.cachedTokens + cachedDelta,
-    total: codexTodaySnapshot.total + promptDelta + completionDelta + cachedDelta,
+    cacheCreationTokens: codexTodaySnapshot.cacheCreationTokens + cacheCreationDelta,
+    total: codexTodaySnapshot.total + promptDelta + completionDelta + cachedDelta + cacheCreationDelta,
   };
 
   broadcastCodexTokens(codexTodaySnapshot);
@@ -288,6 +294,7 @@ export async function readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTo
       completionTokens: s.completionTokens,
       reasoningTokens: s.reasoningTokens,
       cachedTokens: s.cachedTokens,
+      cacheCreationTokens: s.cacheCreationTokens,
     };
   }
   // 未知 agentKind: 返回空 snapshot (TS 完备性, 不抛错让 UI 优雅 fallback)

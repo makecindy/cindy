@@ -882,6 +882,47 @@ describe('usage through the production event pipeline', () => {
     effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
   }
 
+  it.each(['priced', 'missing-write-price', 'legacy-summary'] as const)(
+    'preserves Codex cache writes without guessing cost (%s)', async (mode) => {
+      const h = harness();
+      pricing(false);
+      const writes = mode === 'legacy-summary' ? 0 : 50;
+      const allTokens = { ...tokens, cacheCreateTokens: writes };
+      effects.fn('codexUsageToTokens').mockReturnValue(allTokens);
+      effects.fn('getModelPriceQuote').mockReturnValue({
+        providerId: 'xd', modelId: 'test-model', currency: 'USD', source: 'gateway',
+        inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 0.1,
+        ...(mode !== 'missing-write-price' ? { cacheCreatePerMtok: 1.25 } : {}),
+      });
+      h.emit(event('done', { usage: {
+        promptTokens: 100, completionTokens: 20, cachedTokens: 10,
+        ...(mode !== 'legacy-summary' ? { cacheCreationTokens: 50 } : {}),
+        segments: [{ ...segment, cacheCreateTokens: 50 }],
+      } }, { source: 'codex' }));
+      await microtasks();
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130 + writes);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+        inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10,
+        cacheCreateTokensDelta: writes,
+      }));
+      if (mode === 'priced') {
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          money: expect.objectContaining({ amount: 0.0002035 }),
+          turnUsageDetails: expect.objectContaining({ cacheCreateTokens: 50 }),
+        }));
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+          inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+        }));
+      } else {
+        expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+          turnUsageDetails: expect.objectContaining({ cacheCreateTokens: writes }),
+        }));
+      }
+      await h.dispose();
+    },
+  );
+
   it.each([
     ['codex', false],
     ['codex', true],

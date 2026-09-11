@@ -1,4 +1,7 @@
-import { expandedRegistryEntries } from "../modelMetadataLayers.js";
+import {
+  expandedRegistryEntries,
+  resolveModelMetadata,
+} from "../modelMetadataLayers.js";
 import { describe, expect, it } from "vitest";
 
 import modelRegistryJson from "../../catalog/model-registry.json" with { type: "json" };
@@ -54,6 +57,22 @@ function bandGroups(route: ModelRegistryRoute): ModelReferencePrice[][] {
 }
 
 describe("model registry data consistency", () => {
+  it("keeps the XD GLM middle-effort intent separate from public native tiers", () => {
+    expect(
+      resolveModelMetadata(rawRegistry, "new-supplier", "glm-5.3-flash"),
+    ).toMatchObject({ efforts: ["low", "high", "max"], defaultEffort: "high" });
+    expect(
+      resolveModelMetadata(rawRegistry, "xd", "z-ai/glm-5.3-flash", {
+        efforts: ["low", "medium", "high", "max"],
+      }),
+    ).toMatchObject({ defaultEffort: "medium" });
+    expect(
+      resolveModelMetadata(rawRegistry, "xd", "z-ai/glm-5.3-flash", {
+        efforts: [],
+      }),
+    ).toMatchObject({ efforts: [], defaultEffort: null });
+  });
+
   it("window / output declarations are positive and mutually sane", () => {
     for (const entry of registry.models) {
       if (entry.contextWindow !== undefined) {
@@ -170,6 +189,17 @@ describe("model registry data consistency", () => {
         for (const group of bandGroups(route)) {
           const top = group[group.length - 1]!;
           if (top.maxInputTokens === undefined) continue;
+          // Cyber's model page and consolidated pricing table disagree on long-input
+          // charges. Keep only the verified short quote; the calculator rejects
+          // requests outside this bound instead of extending that price silently.
+          if (
+            entry.id === "openai/gpt-5.6-cyber" &&
+            route.providerId === "openai"
+          ) {
+            expect(group).toHaveLength(1);
+            expect(top.maxInputTokens).toBe(272_001);
+            continue;
+          }
           for (const agent of route.agents) {
             const window = effectiveWindow(entry, agent);
             if (window === undefined) continue;

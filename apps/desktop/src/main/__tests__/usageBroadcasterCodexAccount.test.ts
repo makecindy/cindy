@@ -73,6 +73,17 @@ describe('codex account usage source slots', () => {
     mocks.broadcasts.length = 0;
   });
 
+  it('counts cache writes once in today usage and accepts older done events', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    broadcaster.recordCodexTurnUsage({ promptTokens: 100, completionTokens: 20,
+      reasoningTokens: 5, cachedTokens: 10, cacheCreationTokens: 50 });
+    broadcaster.recordCodexTurnUsage({ promptTokens: 10, completionTokens: 2, cachedTokens: 1 });
+    expect(await broadcaster.readAgentTodayUsage('codex')).toMatchObject({
+      totalTokens: 193, promptTokens: 110, completionTokens: 22,
+      reasoningTokens: 5, cachedTokens: 11, cacheCreationTokens: 50,
+    });
+  });
+
   it('keeps app-server windows when a WHAM snapshot arrives (no cross-source overwrite)', async () => {
     const broadcaster = await import('../usageBroadcaster');
 

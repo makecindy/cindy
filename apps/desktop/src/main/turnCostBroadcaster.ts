@@ -433,19 +433,20 @@ export async function recordSchedulerTurnCost(
 /**
  * Codex done.data.usage → computeGatewayTurnCost 的 TurnTokenDeltas 入参映射。
  * Provider 的 completionTokens 已包含 reasoning 子集，这里不再重复相加。
- * Codex 无 cache 写入概念, cacheCreateTokens 恒 0。
+ * 写缓存独立传递；旧版 done 未声明时按 0 兼容。
  */
 export function codexUsageToTokens(usage: {
   promptTokens?: number;
   completionTokens?: number;
   reasoningTokens?: number;
   cachedTokens?: number;
+  cacheCreationTokens?: number;
 }): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreateTokens: number } {
   return {
     inputTokens: usage.promptTokens || 0,
     outputTokens: usage.completionTokens || 0,
     cacheReadTokens: usage.cachedTokens || 0,
-    cacheCreateTokens: 0,
+    cacheCreateTokens: usage.cacheCreationTokens || 0,
   };
 }
 
