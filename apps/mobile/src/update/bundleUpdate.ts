@@ -64,7 +64,12 @@ export function shouldCheckBundleUpdate({
   return isSelfHosted && !isReviewMode && !isTestFlightBuild;
 }
 
-/** 校验并收窄 `/latest` 响应为 LatestReleaseRecord;字段缺失即返回 null(宁可不提示,不误导)。 */
+export function isSupportedBundleVersion(version: string): boolean {
+  return /^\d+(?:\.\d+)*$/.test(version)
+    && version.split('.').every((part) => Number.isSafeInteger(Number(part)));
+}
+
+/** 校验 `/latest` 响应;版本仅支持点分纯数字,字段缺失或格式非法返回 null(不误导)。 */
 export function parseLatestRelease(value: unknown): LatestReleaseRecord | null {
   if (!value || typeof value !== 'object') return null;
   const v = value as Record<string, unknown>;
@@ -72,8 +77,8 @@ export function parseLatestRelease(value: unknown): LatestReleaseRecord | null {
   const version = typeof v.version === 'string' ? v.version.trim() : '';
   const installUrl = typeof v.installUrl === 'string' ? v.installUrl.trim() : '';
   const itmsUrl = typeof v.itmsUrl === 'string' ? v.itmsUrl.trim() : '';
-  // 至少要有 runtimeVersion(判定门闸)+ 一个可跳转的安装地址。
-  if (!runtimeVersion || (!installUrl && !itmsUrl)) return null;
+  // 必须有 runtimeVersion、支持的 version 和一个可跳转的安装地址。
+  if (!runtimeVersion || !isSupportedBundleVersion(version) || (!installUrl && !itmsUrl)) return null;
   const record: LatestReleaseRecord = {
     version,
     buildNumber: (typeof v.buildNumber === 'string' || typeof v.buildNumber === 'number') ? v.buildNumber : '',
@@ -82,11 +87,15 @@ export function parseLatestRelease(value: unknown): LatestReleaseRecord | null {
     itmsUrl,
   };
   if (typeof v.releaseNotes === 'string') record.releaseNotes = v.releaseNotes;
-  if (typeof v.minVersion === 'string' && v.minVersion.trim()) record.minVersion = v.minVersion.trim();
+  if (typeof v.minVersion === 'string' && v.minVersion.trim()) {
+    const minVersion = v.minVersion.trim();
+    if (!isSupportedBundleVersion(minVersion)) return null;
+    record.minVersion = minVersion;
+  }
   return record;
 }
 
-/** 语义化版本比较:a<b → -1,a==b → 0,a>b → 1。非数字段按 0 处理。 */
+/** 比较已校验的点分纯数字版本:a<b → -1,a==b → 0,a>b → 1,缺失段按 0 处理。 */
 export function compareVersions(a: string, b: string): number {
   const pa = String(a).split('.').map((x) => Number(x));
   const pb = String(b).split('.').map((x) => Number(x));
@@ -106,7 +115,7 @@ export function compareVersions(a: string, b: string): number {
  *   服务端可以对某个已发布版本事后下发门槛,把同指纹的问题构建也挡住;
  *   反过来说,同 runtimeVersion 命中强更时 target.runtimeVersion 就等于当前值,
  *   消费方不得把它当作"换了指纹"的证据。
- * 拿不到当前 runtimeVersion(dev / expo-updates 未启用)、本机或服务端 version 缺失、
+ * 拿不到当前 runtimeVersion(dev / expo-updates 未启用)、版本字段缺失或不是点分纯数字、
  * 服务端版本不高于本机、`/latest` 无效 → 视为无整包更新,不影响独立的 JS OTA 通道。
  */
 export function evaluateBundleUpdate({
@@ -121,7 +130,7 @@ export function evaluateBundleUpdate({
   if (!current) return NO_UPDATE;
 
   const currentAppVersion = String(currentVersion ?? '').trim();
-  if (!currentAppVersion || !record.version) return NO_UPDATE;
+  if (!isSupportedBundleVersion(currentAppVersion)) return NO_UPDATE;
   if (compareVersions(record.version, currentAppVersion) <= 0) return NO_UPDATE;
 
   // 强更要求这条记录本身**能被满足**:

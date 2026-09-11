@@ -15,6 +15,17 @@ const VALID = {
   itmsUrl: 'itms-services://?action=download-manifest&url=https%3A%2F%2Fx%2Fplist%2F42',
 };
 
+const UNSUPPORTED_VERSIONS = [
+  '1.0.0-beta.1',
+  '1.0.0+build.1',
+  'v2.0.0',
+  '1..2',
+  '1.0.-1',
+  '1.0.1e2',
+  '1.0.Infinity',
+  '1.0.9007199254740992',
+];
+
 describe('shouldCheckBundleUpdate', () => {
   it.each([
     ['非自建分发', false, false, false, false],
@@ -45,6 +56,18 @@ describe('parseLatestRelease', () => {
     expect(parseLatestRelease(null)).toBeNull();
     expect(parseLatestRelease('x')).toBeNull();
   });
+
+  it.each(UNSUPPORTED_VERSIONS)('version=%s 不受支持 → 无效记录', (version) => {
+    expect(parseLatestRelease({ ...VALID, version })).toBeNull();
+  });
+
+  it.each(UNSUPPORTED_VERSIONS)('minVersion=%s 不受支持 → 无效记录', (minVersion) => {
+    expect(parseLatestRelease({ ...VALID, minVersion })).toBeNull();
+  });
+
+  it.each(['1', '1.2', '01.002.0003', '1.2.0.0', '1.0.9007199254740991'])('保留纯数字版本 %s 的兼容性', (version) => {
+    expect(parseLatestRelease({ ...VALID, version })?.version).toBe(version);
+  });
 });
 
 describe('compareVersions', () => {
@@ -56,6 +79,44 @@ describe('compareVersions', () => {
 });
 
 describe('evaluateBundleUpdate', () => {
+  it.each(UNSUPPORTED_VERSIONS)('服务端 version=%s 不受支持 → 不提示整包', (version) => {
+    const evaluation = evaluateBundleUpdate({
+      currentRuntimeVersion: 'rtv-old',
+      currentVersion: '1.0.0',
+      latest: { ...VALID, version },
+    });
+    expect(evaluation).toEqual({ needsUpdate: false, forced: false, target: null });
+  });
+
+  it.each(UNSUPPORTED_VERSIONS)('本机 currentVersion=%s 不受支持 → 不提示整包', (currentVersion) => {
+    const evaluation = evaluateBundleUpdate({
+      currentRuntimeVersion: 'rtv-old',
+      currentVersion,
+      latest: { ...VALID, minVersion: '1.2.0' },
+    });
+    expect(evaluation).toEqual({ needsUpdate: false, forced: false, target: null });
+  });
+
+  it.each(UNSUPPORTED_VERSIONS)('服务端 minVersion=%s 不受支持 → 不提示整包', (minVersion) => {
+    const evaluation = evaluateBundleUpdate({
+      currentRuntimeVersion: 'rtv-old',
+      currentVersion: '1.0.0',
+      latest: { ...VALID, minVersion },
+    });
+    expect(evaluation).toEqual({ needsUpdate: false, forced: false, target: null });
+  });
+
+  it('版本周围的空格不影响纯数字版本比较', () => {
+    const evaluation = evaluateBundleUpdate({
+      currentRuntimeVersion: 'rtv-old',
+      currentVersion: ' 1.1.0 ',
+      latest: { ...VALID, version: ' 1.2.0 ', minVersion: ' 1.1.0 ' },
+    });
+    expect(evaluation.needsUpdate).toBe(true);
+    expect(evaluation.forced).toBe(false);
+    expect(evaluation.target?.version).toBe('1.2.0');
+  });
+
   it('runtimeVersion 相同 → 无整包更新(交给 JS OTA)', () => {
     const r = evaluateBundleUpdate({ currentRuntimeVersion: 'rtv-new', currentVersion: '1.1.0', latest: VALID });
     expect(r.needsUpdate).toBe(false);
