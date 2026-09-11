@@ -157,13 +157,16 @@ hint and take-control action; media and lease identity are untouched. A dropped
 stalled batch (WebView overflow) also asks the host to drop control: posting
 `control:false` to the WebView clears its queued release without flushing it, so
 only an explicit host `control enabled:false` (which stops the input helper and
-injects a native release) can let go of a held key or button. Errors whose
-outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or a control request that
-collides with one still settling — change nothing: a batch
-that may have been injected must not be answered with a release that discards its
-key-up, and the heartbeat still owns liveness. Errors that do mean the lease is
-gone (`DESKTOP_LEASE_EXPIRED`, `DESKTOP_STOPPED`, revocation, an unsupported
-channel) still recover the session as before.
+injects a native release) can let go of a held key or button. If that host
+request times out, the viewer keeps the intended control bit and the next
+heartbeat retries the release (or restores local control after a lost
+take-control reply) instead of ignoring a host-`true` while the phone stays
+view-only. Errors whose outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or
+a control request that collides with one still settling — do not rebuild the
+session: a batch that may have been injected must not be answered with a
+release that discards its key-up, and the heartbeat still owns liveness. Errors
+that do mean the lease is gone (`DESKTOP_LEASE_EXPIRED`, `DESKTOP_STOPPED`,
+revocation, an unsupported channel) still recover the session as before.
 
 This matters most on Windows, where the SendInput helper reports a failed
 injection as a helper failure whereas the macOS helper posts events without a

@@ -1722,6 +1722,68 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
   });
+  it("retries a timed-out overflow release when the host still reports control", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "control" && req.enabled === false)
+        return Promise.reject(
+          Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+        );
+      if (req.op === "heartbeat")
+        return Promise.resolve({ controlling: true });
+      return original(...args);
+    });
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
+        },
+      });
+    });
+    const released = requests().filter(
+      (r) => r.op === "control" && r.enabled === false,
+    );
+    expect(released).toHaveLength(1);
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    // Local view-only is not proof the host dropped control; retry the release
+    // so a held key cannot stay down behind a view-only phone.
+    expect(
+      requests().filter((r) => r.op === "control" && r.enabled === false),
+    ).toHaveLength(2);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
+  it("restores control when a take-control reply is lost but the host still holds it", async () => {
+    await connect();
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "control" && req.enabled === true)
+        return Promise.reject(
+          Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+        );
+      if (req.op === "heartbeat")
+        return Promise.resolve({ controlling: true });
+      return original(...args);
+    });
+    await act(async () => button("viewOnly").click());
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: false,
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: true,
+    });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
   it("shows virtual mouse buttons outside the panel and hides them while viewing only", async () => {
     await connect();
     act(() => button("operations").click());

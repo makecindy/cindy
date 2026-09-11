@@ -204,6 +204,11 @@ export default function RemoteDesktopScreen() {
   ).current;
   const active = useRef<RemoteDesktopLease | null>(null);
   const wantsControl = useRef(true);
+  // Last control bit we asked the host for but have not confirmed. Overflow and
+  // take-control can time out after the local bit already moved; heartbeats use
+  // this to retry a release or restore local control instead of ignoring host-true.
+  const pendingHostControl = useRef<boolean | null>(null);
+  const controlInFlight = useRef(false);
   const recovery = useRef({
     enabled: true,
     at: 0,
@@ -401,6 +406,8 @@ export default function RemoteDesktopScreen() {
       presentationTimer.current = null;
       void remotePresentation?.playback(false).catch(() => {});
       connecting.current = false;
+      pendingHostControl.current = null;
+      controlInFlight.current = false;
       const previous = active.current;
       active.current = null;
       pendingVideoSettings.current = null;
@@ -527,6 +534,51 @@ export default function RemoteDesktopScreen() {
         fail(cause);
     }
   };
+  const applyConfirmedControl = (
+    current: RemoteDesktopLease,
+    controlling: boolean,
+  ) => {
+    pendingHostControl.current = null;
+    wantsControl.current = controlling;
+    if (current.controlling !== controlling) {
+      current.controlling = controlling;
+      if (!controlling) {
+        heldKeys.current.clear();
+        if (alive.current) {
+          setModifiers([]);
+          setKeyboard(false);
+        }
+      }
+      if (alive.current) setLease({ ...current });
+    }
+    send({ type: "control", enabled: controlling });
+  };
+  const requestHostControl = (
+    current: RemoteDesktopLease,
+    enabled: boolean,
+  ) => {
+    if (controlInFlight.current) return;
+    controlInFlight.current = true;
+    pendingHostControl.current = enabled;
+    void request<{ controlling: boolean }>({
+      op: "control",
+      lease: current.lease,
+      enabled,
+    })
+      .then((result) => {
+        if (active.current !== current) return;
+        applyConfirmedControl(current, result.controlling);
+      })
+      .catch((cause) => {
+        if (active.current !== current) return;
+        resolveControlFailure(cause);
+      })
+      .finally(() => {
+        if (active.current === current) controlInFlight.current = false;
+      });
+  };
+  const requestHostControlRef = useRef(requestHostControl);
+  requestHostControlRef.current = requestHostControl;
   const connect = useCallback(
     async (displayId?: string, takeover = false) => {
       if (
@@ -784,12 +836,21 @@ export default function RemoteDesktopScreen() {
         lease: current.lease,
       })
         .then((result) => {
-          // The host owns the control bit. When it no longer counts this viewer
-          // as controlling — input injection failed, or control was retracted —
-          // follow it to view only instead of waiting for the next rejected tap.
+          // The host owns the control bit. Follow it when it retracts control;
+          // when a local transition timed out, retry a release or restore the
+          // local bit so a held key cannot stay down behind a view-only phone.
           if (active.current !== current || presentation.current) return;
-          if (current.controlling && result.controlling === false)
-            releaseControl();
+          if (result.controlling === false) {
+            pendingHostControl.current = null;
+            if (current.controlling) releaseControl();
+            return;
+          }
+          if (pendingHostControl.current === false) {
+            requestHostControlRef.current(current, false);
+            return;
+          }
+          if (!current.controlling && pendingHostControl.current === true)
+            applyConfirmedControl(current, true);
         })
         .catch((cause) => {
           // A missing reply does not prove renewal failed; the next interval
@@ -1221,14 +1282,7 @@ export default function RemoteDesktopScreen() {
         // Tell the host to drop control (stopInput still injects a native
         // release) so a held key/button cannot stay down while we view only.
         releaseControl();
-        void request({
-          op: "control",
-          lease: current.lease,
-          enabled: false,
-        }).catch((cause) => {
-          if (active.current !== current) return;
-          resolveControlFailure(cause);
-        });
+        requestHostControl(current, false);
         break;
       }
       case "input": {
@@ -1269,36 +1323,32 @@ export default function RemoteDesktopScreen() {
   };
   const toggleControl = async () => {
     const current = active.current;
-    if (!current || busy) return;
+    if (!current || busy || controlInFlight.current) return;
     setBusy(true);
     setError(null);
+    controlInFlight.current = true;
     try {
       if (presentation.current) {
         presentation.current = false;
         send({ type: "presentation", enabled: false });
       }
       send({ type: "control", enabled: false });
+      const enabled = !current.controlling;
+      pendingHostControl.current = enabled;
       const result = await request<{ controlling: boolean }>({
         op: "control",
         lease: current.lease,
-        enabled: !current.controlling,
+        enabled,
       });
       if (active.current !== current) return;
-      wantsControl.current = result.controlling;
-      current.controlling = result.controlling;
-      setLease({ ...current });
-      send({ type: "control", enabled: result.controlling });
-      if (!result.controlling) {
-        heldKeys.current.clear();
-        setModifiers([]);
-        setKeyboard(false);
-      }
+      applyConfirmedControl(current, result.controlling);
     } catch (cause) {
       // Taking control can fail because this computer cannot inject input right
       // now. Stay in view only and let the user retry; a session rebuild would
       // cost the picture and the lease for a control-only fault.
       if (active.current === current) resolveControlFailure(cause);
     } finally {
+      controlInFlight.current = false;
       if (alive.current) setBusy(false);
     }
   };
