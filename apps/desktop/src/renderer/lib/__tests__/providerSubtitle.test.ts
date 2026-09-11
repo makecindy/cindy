@@ -24,6 +24,24 @@ describe('provider subtitle display', () => {
     ).toBe('Grok models · Claude Code / Codex · SuperGrok subscription (direct)');
   });
 
+  it('lists Grok Build on SuperGrok/xAI even though catalog agents omit it', () => {
+    expect(
+      providerAgentSupportLabel({
+        id: 'xai',
+        agents: ['claude-code', 'codex', 'pi'],
+      }),
+    ).toBe('Claude Code / Codex / Pi / Grok Build');
+    expect(
+      providerSubtitleForDisplay(
+        { id: 'xai', agents: ['claude-code', 'codex', 'pi'] },
+        'Grok models',
+        { suffix: 'SuperGrok subscription (direct)' },
+      ),
+    ).toBe(
+      'Grok models · Claude Code / Codex / Pi / Grok Build · SuperGrok subscription (direct)',
+    );
+  });
+
   it('falls back when provider data is not loaded yet', () => {
     expect(providerSubtitleForDisplay(undefined, 'Grok models', { fallback: 'legacy subtitle' }))
       .toBe('legacy subtitle');
