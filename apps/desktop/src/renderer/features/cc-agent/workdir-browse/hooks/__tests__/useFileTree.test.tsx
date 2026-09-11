@@ -191,6 +191,76 @@ describe('useFileTree showIgnoredDirs option', () => {
     });
     revealed.unmount();
   });
+
+  /**
+   * 切开关会换一份 store。新 store 若从空快照 + initialLoading 起步，FileTreeView
+   * 会把整树替换成空白占位（本地 <300ms 连 spinner 都没有），视觉上闪一下；
+   * 「刷新」按钮原地 refetch 所以不闪。新 store 必须继承兄弟 store 的快照，
+   * 等新 matcher 的数据回来再校正。
+   */
+  it('切开关继承旧树快照，不回到 initialLoading 空白', async () => {
+    const hiddenEntries: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    const revealedEntries: readonly DirEntry[] = [
+      { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 1 },
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    // 切开关后钩住新 matcher 的 listDir：验证“数据还没回来”的那一帧。
+    const pending = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementation((args: { showIgnoredDirs?: boolean }) =>
+      args.showIgnoredDirs ? pending.promise : Promise.resolve(hiddenEntries),
+    );
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-seed', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: false } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    expect(view.result.current.entries.get('')).toEqual(hiddenEntries);
+
+    await act(async () => {
+      view.rerender({ reveal: true });
+    });
+    // 新 matcher 的数据尚未回来：这一帧就该有 seed 的旧树且不在 loading。
+    expect(view.result.current.initialLoading).toBe(false);
+    expect(view.result.current.entries.get('')).toEqual(hiddenEntries);
+
+    await act(async () => {
+      pending.resolve(revealedEntries);
+      await Promise.resolve();
+    });
+    await waitFor(() => expect(view.result.current.entries.get('')).toEqual(revealedEntries));
+
+    view.unmount();
+  });
+
+  /**
+   * 展开态同样不能被切开关抹掉：新 scope 的 localStorage 可能没有记录，
+   * 但 seed 的 expanded 是当前可见的展开集合，应与之合并而非覆盖。
+   */
+  it('切开关保留已展开的目录，不折叠', async () => {
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-seed-expanded', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: false } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+
+    await act(async () => {
+      view.result.current.toggleFolder('src');
+    });
+    expect(view.result.current.expanded.has('src')).toBe(true);
+
+    await act(async () => {
+      view.rerender({ reveal: true });
+    });
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    expect(view.result.current.expanded.has('src')).toBe(true);
+
+    view.unmount();
+  });
 });
 
 /**

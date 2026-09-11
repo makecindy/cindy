@@ -232,10 +232,31 @@ function emit(store: FileTreeStore): void {
   for (const l of store.listeners) l();
 }
 
+/**
+ * 切换「显示被忽略的目录」会换一份 store(key 含 reveal 位),新 store 若从
+ * 空快照 + initialLoading 起步,FileTreeView 会把整棵树替换成占位(本地
+ * <300ms 连 spinner 都没有,就是空白),视觉上闪一下;同一 workdir 的另一半
+ * reveal scope 的 store 此刻通常还在表里 —— 旧 store 的 refCount 归零发生在
+ * 本次 commit 的 effect cleanup,晚于 render 期间的 useMemo —— 借它的快照当
+ * 初始视图,新 matcher 的 listDir 回来后再原地校正(initStore 会把 seed 的
+ * 全部目录重拉一遍)。
+ *
+ * 「刷新」按钮没有这个问题:它在同一份 store 上原地 refetch,从不经过空态。
+ */
+function findRevealSiblingSnapshot(
+  opts: Required<UseFileTreeOptions>,
+): FileTreeStore['snapshot'] | null {
+  const siblingKey = storeKey({ ...opts, showIgnoredDirs: !opts.showIgnoredDirs });
+  return stores.get(siblingKey)?.snapshot ?? null;
+}
+
 function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
   const key = storeKey(opts);
   const existing = stores.get(key);
   if (existing) return existing;
+  // 切开关路径:借另一半 reveal scope 的快照,第一帧就有树可渲染,不经过
+  // initialLoading 空白;首次挂载(无兄弟 store)仍走原来的 loading 路径。
+  const seed = findRevealSiblingSnapshot(opts);
   const store: FileTreeStore = {
     key,
     workdir: opts.workdir,
@@ -244,13 +265,23 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     hideMetaFiles: opts.hideMetaFiles,
     docMode: opts.docMode,
     showIgnoredDirs: opts.showIgnoredDirs,
-    snapshot: {
-      entries: new Map(),
-      expanded: new Set([ROOT_KEY]),
-      loadingPaths: new Set(),
-      initialLoading: true,
-      loadError: null,
-    },
+    snapshot: seed
+      ? {
+          entries: seed.entries,
+          expanded: seed.expanded,
+          // 新 store 自己还没有 in-flight 请求,seed 的 loadingPaths 不继承。
+          loadingPaths: new Set(),
+          initialLoading: false,
+          // 错误态一并继承:首帧直接是错误占位,而不是先闪一帧空树再变错误。
+          loadError: seed.loadError,
+        }
+      : {
+          entries: new Map(),
+          expanded: new Set([ROOT_KEY]),
+          loadingPaths: new Set(),
+          initialLoading: true,
+          loadError: null,
+        },
     tokens: new Map(),
     inFlight: new Map(),
     pendingEventParents: new Set(),
@@ -407,9 +438,10 @@ function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
  *  幂等:重复调用直接 no-op(refCount 已 >0)。 */
 async function initStore(store: FileTreeStore): Promise<void> {
   // 恢复 localStorage 持久化的 expanded 集合(workdir × 视图模式共享,见
-  // expandedStore 的 scope 说明)。
+  // expandedStore 的 scope 说明)。seed(另一半 reveal scope 的 store)带着
+  // 当前可见的展开集合 —— 并集合并,切开关时不把已展开的目录折叠掉。
   const restored = loadExpandedSet(store.workdir, { showIgnoredDirs: store.showIgnoredDirs });
-  const nextExpanded = new Set<string>([ROOT_KEY, ...restored]);
+  const nextExpanded = new Set<string>([ROOT_KEY, ...restored, ...store.snapshot.expanded]);
   store.snapshot = { ...store.snapshot, expanded: nextExpanded };
   emit(store);
 
@@ -433,9 +465,13 @@ async function initStore(store: FileTreeStore): Promise<void> {
 
   // Initial root fetch + 已 restore expanded 目录的并行 lazy fetch。每个 listDir
   // <12ms,即使 50 个 restored 也能在 <1s 内 warm 完。
+  // seed 路径再加一份:seed 的 entries 全是旧 matcher 拉的,全部重拉校正 ——
+  // 包括已收起但有缓存的目录,不然用户之后展开它会直接命中 stale 缓存。
+  const warmPaths = new Set<string>([...nextExpanded, ...store.snapshot.entries.keys()]);
+  warmPaths.delete(ROOT_KEY);
   await Promise.all([
     fetchDir(store, ROOT_KEY),
-    ...[...restored].map((p) => fetchDir(store, p)),
+    ...[...warmPaths].map((p) => fetchDir(store, p)),
   ]);
   store.snapshot = { ...store.snapshot, initialLoading: false };
   emit(store);
