@@ -12,6 +12,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BOT_TEMPLATE_PRESET_IDENTITIES } from '../../../../shared/botTemplatePreset';
+import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
 import { createBotModelRouteReconciler } from '../../../maker-ipc/botModelRouteReconciler';
 import type { BotModelRoute } from '../../../../shared/botModelChain';
 import type { AgentKind } from '@cindy/maker-core';
@@ -3843,7 +3844,7 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(result).toMatchObject({ ok: true, childSessionId: 'worktree-session' });
       if (!result.ok) throw new Error('missing task');
       expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
-        .toMatchObject({ task: { working_dir: workspace, workspace_kind: 'project' } });
+        .toMatchObject({ task: { working_dir: normalizeWorkingDirForStorage(workspace), workspace_kind: 'project' } });
       expect(runtime.started[0].sessionId).toBe('worktree-session');
       expect(h.sqlite!.prepare('SELECT worktree_path AS path FROM sessions WHERE id = ?').get('worktree-session')).toEqual({ path: workspace });
     } finally { runtime.dispose(); }
@@ -3867,7 +3868,7 @@ describe('Bot Session task end-to-end runtime', () => {
       if (!result.ok) throw new Error('task failed');
       expect(runtime.started.map(turn => turn.sessionId)).toEqual(['snapshot-failure-session']);
       expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
-        .toMatchObject({ task: { status: 'running', working_dir: h.userDataDir } });
+        .toMatchObject({ task: { status: 'running', working_dir: normalizeWorkingDirForStorage(h.userDataDir) } });
       await runtime.settleChild(result.childSessionId, 'Finished.');
       expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
         .toMatchObject({ task: { status: 'completed' } });
