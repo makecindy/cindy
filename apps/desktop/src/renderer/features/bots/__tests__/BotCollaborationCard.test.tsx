@@ -20,6 +20,7 @@ const mocks = vi.hoisted(() => ({
   prRefs: [] as any[],
   prStatuses: new Map(),
   registerPrConsumer: vi.fn(() => () => {}),
+  invalidateRemotePrRefs: vi.fn(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -32,7 +33,10 @@ vi.mock('react-i18next', () => ({
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
 vi.mock('@/contexts/PrRefsContext', () => ({
-  usePrActions: () => ({ registerPrConsumer: mocks.registerPrConsumer }),
+  usePrActions: () => ({
+    registerPrConsumer: mocks.registerPrConsumer,
+    invalidateRemotePrRefs: mocks.invalidateRemotePrRefs,
+  }),
   usePrRefsForSession: (id: string) => (id === 'child-1' ? mocks.prRefs : []),
   usePrStatuses: () => ({ statuses: mocks.prStatuses }),
 }));
@@ -106,6 +110,7 @@ beforeEach(() => {
   mocks.prRefs = [];
   mocks.prStatuses = new Map();
   mocks.registerPrConsumer.mockClear();
+  mocks.invalidateRemotePrRefs.mockClear();
   listeners = [];
   mocks.remoteBots = [];
   mocks.navigate.mockClear();
@@ -423,12 +428,16 @@ it('routes remote task reads, stop, child navigation and push refresh to the sam
     }),
   );
   expect(invoke).toHaveBeenCalledTimes(reads);
+  mocks.invalidateRemotePrRefs.mockClear();
   invoke.mockResolvedValue({
     ok: true,
-    delegations: [delegation('completed', { resultSummary: 'Remote done' })],
+    delegations: [
+      delegation('completed', { resultSummary: 'Remote done', updatedAt: Date.now() + 1 }),
+    ],
   });
   act(() => status({ status: 'online' }));
   await screen.findByText(/bots\.collab\.status\.completed/);
+  expect(mocks.invalidateRemotePrRefs).toHaveBeenCalledWith('child-1');
 });
 
 it('opens the child session associated PR even when the report contains another link', async () => {

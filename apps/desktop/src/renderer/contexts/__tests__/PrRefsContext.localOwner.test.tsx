@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { useEffect } from 'react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   dataOwnerId: 'local-v1' as string | null,
@@ -14,10 +15,10 @@ vi.mock('@/contexts/AuthContext', () => ({
 }));
 
 vi.mock('@/lib/logger', () => ({
-  createLogger: () => ({ warn: vi.fn() }),
+  createLogger: () => ({ warn: vi.fn(), debug: vi.fn() }),
 }));
 
-import { PrRefsProvider, usePrRefsForSession } from '../PrRefsContext';
+import { PrRefsProvider, usePrRefsForSession, usePrActions } from '../PrRefsContext';
 
 function RefCount() {
   return <div>{usePrRefsForSession('session-local').length}</div>;
@@ -60,4 +61,67 @@ describe('PrRefsProvider local owner', () => {
     expect(mocks.listAllPrRefs).toHaveBeenCalledOnce();
     expect(mocks.onPrRefsChanged).toHaveBeenCalledOnce();
   });
+});
+
+function RemoteRefs() {
+  const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
+  const refs = usePrRefsForSession('remote-child');
+  useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
+  return (
+    <button onClick={() => invalidateRemotePrRefs('remote-child')}>remote:{refs.length}</button>
+  );
+}
+
+describe('remote task association invalidation', () => {
+  afterEach(cleanup);
+  it.each([false, true])(
+    'refreshes empty refs without waiting for TTL (in flight: %s)',
+    async (inFlight) => {
+      let finish!: (value: unknown) => void;
+      let reads = 0;
+      const ref = {
+        id: 'pr',
+        sessionId: 'remote-child',
+        owner: 'a',
+        repo: 'b',
+        prNumber: 1,
+        url: 'https://github.com/a/b/pull/1',
+        firstSeenAt: 1,
+        lastSeenAt: 1,
+      };
+      mocks.listAllPrRefs.mockResolvedValue([]);
+      const invoke = vi.fn(async (_device: string, channel: string) => {
+        if (channel !== 'git-context:pr-refs:list') return [];
+        reads += 1;
+        if (reads === 1)
+          return inFlight
+            ? await new Promise((resolve) => {
+                finish = resolve;
+              })
+            : [];
+        return [ref];
+      });
+      window.electronAPI = {
+        gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+        deviceLink: { invoke },
+      } as any;
+      render(
+        <PrRefsProvider>
+          <RemoteRefs />
+        </PrRefsProvider>,
+      );
+      await waitFor(() => expect(reads).toBe(1));
+      fireEvent.click(screen.getByRole('button', { name: 'remote:0' }));
+      if (inFlight) {
+        fireEvent.click(screen.getByRole('button', { name: 'remote:0' }));
+        expect(reads).toBe(1);
+        await act(async () => finish([]));
+      }
+      expect(await screen.findByRole('button', { name: 'remote:1' })).toBeTruthy();
+      expect(reads).toBe(2);
+      expect(invoke).toHaveBeenCalledWith('home', 'git-context:pr-status', [
+        { sessionId: 'remote-child', queries: [{ owner: 'a', repo: 'b', prNumber: 1 }] },
+      ]);
+    },
+  );
 });

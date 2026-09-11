@@ -194,11 +194,14 @@ interface PrActionsContextValue {
   registerPrConsumer: (sessionId: string, deviceId?: string) => () => void;
   /** tip 打开时按需拉该会话前几条 PR 的状态(共享缓存,重复调用便宜)。 */
   fetchStatusesForSession: (sessionId: string) => void;
+  /** A task update invalidates only its remote association list, including an in-flight read. */
+  invalidateRemotePrRefs: (sessionId: string) => void;
 }
 
 const PrActionsContext = createContext<PrActionsContextValue>({
   registerPrConsumer: () => () => undefined,
   fetchStatusesForSession: () => undefined,
+  invalidateRemotePrRefs: () => undefined,
 });
 
 function groupBySession(rows: SessionPrRef[]): Map<string, SessionPrRef[]> {
@@ -235,6 +238,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   // 时序竞态就让该会话永远静默,置顶重挂载也救不回来。)
   const remoteRefsInFlight = useRef(new Map<string, number>());
   const remoteRefsFetchedAt = useRef(new Map<string, number>());
+  const remoteRefsInvalidated = useRef(new Set<string>());
   // 本机 / SSH 引用按会话回退:listAllPrRefs 有 2000 行上限,截断后的会话
   // 不会出现在启动缓存里。已注册消费者必须能走 listPrRefs(sessionId) 补齐,
   // 与远程 fetchRefsForRemoteSession 对称(2026-08-13 review P1)。
@@ -263,6 +267,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
       ownerGenRef.current += 1;
       store.clearAll();
       remoteRefsFetchedAt.current.clear();
+      remoteRefsInvalidated.current.clear();
       localRefsFetchedAt.current.clear();
       remoteDeviceBySession.current.clear();
     }
@@ -402,6 +407,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
     const fetchedAt = remoteRefsFetchedAt.current.get(sessionId);
     if (fetchedAt !== undefined && Date.now() - fetchedAt < PR_STATUS_REFRESH_INTERVAL_MS - 5_000)
       return;
+    remoteRefsInvalidated.current.delete(sessionId);
     remoteRefsInFlight.current.set(sessionId, gen);
     void (async () => {
       try {
@@ -412,6 +418,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         )) as SessionPrRef[];
         // owner 已切换:结果与簿记(时间戳会抑制新 owner 的重查)都不能落。
         if (gen !== ownerGenRef.current) return;
+        if (remoteRefsInvalidated.current.has(sessionId)) return;
         remoteRefsFetchedAt.current.set(sessionId, Date.now());
         log.debug('remote pr refs fetched', { sessionId, count: refs.length });
         store.setSessionRefs(sessionId, refs);
@@ -427,9 +434,21 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         // 身份匹配释放(同 inFlightSessions):旧代请求 settle 不得误删新代标记。
         if (remoteRefsInFlight.current.get(sessionId) === gen) {
           remoteRefsInFlight.current.delete(sessionId);
+          if (gen === ownerGenRef.current && remoteRefsInvalidated.current.delete(sessionId)) {
+            const consumer = prConsumers.current.get(sessionId);
+            if (consumer?.deviceId) fetchRefsForRemoteSession(sessionId, consumer.deviceId);
+          }
         }
       }
     })();
+  }).current;
+
+  const invalidateRemotePrRefs = useRef((sessionId: string) => {
+    const deviceId = prConsumers.current.get(sessionId)?.deviceId;
+    if (!deviceId) return;
+    remoteRefsFetchedAt.current.delete(sessionId);
+    remoteRefsInvalidated.current.add(sessionId);
+    fetchRefsForRemoteSession(sessionId, deviceId);
   }).current;
 
   const fetchRefsForLocalSession = useRef((sessionId: string) => {
@@ -510,8 +529,8 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
   }, [refreshConsumer]);
 
   const actionsValue = useMemo(
-    () => ({ registerPrConsumer, fetchStatusesForSession }),
-    [registerPrConsumer, fetchStatusesForSession],
+    () => ({ registerPrConsumer, fetchStatusesForSession, invalidateRemotePrRefs }),
+    [registerPrConsumer, fetchStatusesForSession, invalidateRemotePrRefs],
   );
 
   return (

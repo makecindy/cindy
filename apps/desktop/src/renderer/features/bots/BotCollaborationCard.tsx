@@ -107,13 +107,18 @@ function SessionTaskCardBody({
 
   const active = row ? isActiveDelegationStatus(row.status) : false;
   const childSessionId = row?.childSessionId ?? meta.childSessionId;
-  const { registerPrConsumer } = usePrActions();
+  const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
   const pullRequests = usePrRefsForSession(childSessionId ?? '');
   const { statuses } = usePrStatuses(childSessionId ?? '');
   useEffect(() => {
     if (!childSessionId) return;
     return registerPrConsumer(childSessionId, sourceDeviceId);
   }, [childSessionId, sourceDeviceId, registerPrConsumer]);
+  useEffect(() => {
+    if (childSessionId && sourceDeviceId && row?.updatedAt !== undefined) {
+      invalidateRemotePrRefs(childSessionId);
+    }
+  }, [childSessionId, sourceDeviceId, row?.updatedAt, invalidateRemotePrRefs]);
   const prIcon = (ref: (typeof pullRequests)[number]) => {
     const result = statuses.get(prStatusKey(ref));
     const kind = result?.ok ? result.status : null;
