@@ -3536,10 +3536,23 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // kind: 'done' = 真正完成；'error' = 执行失败；'needs-reply' = 等用户回复 ask/permission/plan-review。
   // channels: 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
   // mobile = 手机推送(经 device-link relay 下发 APNs;桌面侧无独立开关,防打扰在 main 收口)。
+  notificationClaimSessionEvent: (
+    sessionId: string,
+    kind: 'done' | 'error' | 'needs-reply',
+  ): Promise<{ status: 'deliver'; token: string } | { status: 'suppressed' }> =>
+    ipcRenderer.invoke('notification:claim-session-event', sessionId, kind),
   notificationClaimSessionEventSound: (
     kind: 'done' | 'error' | 'needs-reply',
-  ): Promise<{ status: 'play'; token: string } | { status: 'covered' }> =>
-    ipcRenderer.invoke('notification:claim-session-event-sound', kind),
+    deliveryToken?: string,
+  ): Promise<
+    { status: 'play'; token: string } | { status: 'covered' } | { status: 'suppressed' }
+  > =>
+    ipcRenderer.invoke('notification:claim-session-event-sound', kind, deliveryToken),
+  notificationWaitForSessionEventSoundFocus: (
+    kind: 'done' | 'error' | 'needs-reply',
+    token: string,
+  ): Promise<boolean> =>
+    ipcRenderer.invoke('notification:wait-session-event-sound-focus', kind, token),
   notificationSettleSessionEventSound: (
     kind: 'done' | 'error' | 'needs-reply',
     token: string,
@@ -3550,6 +3563,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     sessionId: string;
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
+    deliveryToken?: string;
     channels?: {
       desktop?: boolean;
       feishu?: boolean;

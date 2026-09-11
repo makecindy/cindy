@@ -65,11 +65,18 @@ export function resetNotificationSoundCooldownForTest(): void {
 export async function playSessionEventSound(
   kind: SessionNotificationSoundKind,
   signal?: AbortSignal,
+  deliveryToken?: string,
 ): Promise<boolean> {
   const claimSound = window.electronAPI?.notificationClaimSessionEventSound;
   const settleSound = window.electronAPI?.notificationSettleSessionEventSound;
   if (claimSound && settleSound) {
-    return playSessionEventSoundWithMainCoordinator(kind, signal, claimSound, settleSound);
+    return playSessionEventSoundWithMainCoordinator(
+      kind,
+      signal,
+      deliveryToken,
+      claimSound,
+      settleSound,
+    );
   }
 
   return playSessionEventSoundWithRendererCoordinator(kind, signal);
@@ -78,27 +85,42 @@ export async function playSessionEventSound(
 async function playSessionEventSoundWithMainCoordinator(
   kind: SessionNotificationSoundKind,
   signal: AbortSignal | undefined,
+  deliveryToken: string | undefined,
   claimSound: NonNullable<Window['electronAPI']['notificationClaimSessionEventSound']>,
   settleSound: NonNullable<Window['electronAPI']['notificationSettleSessionEventSound']>,
 ): Promise<boolean> {
   let claim: Awaited<ReturnType<typeof claimSound>>;
   try {
-    claim = await claimSound(kind);
+    claim = await claimSound(kind, deliveryToken);
   } catch (err) {
     log.debug('notification sound coordination unavailable', err);
     return false;
   }
   if (claim.status === 'covered') return true;
+  if (claim.status === 'suppressed') return false;
   if (claim.status !== 'play' || typeof claim.token !== 'string') return false;
 
   let started = false;
+  const appFocusController = new AbortController();
+  const abortForCaller = () => appFocusController.abort();
+  if (signal?.aborted) abortForCaller();
+  else signal?.addEventListener('abort', abortForCaller, { once: true });
+  const waitForAppFocus = window.electronAPI?.notificationWaitForSessionEventSoundFocus;
+  void waitForAppFocus?.(kind, claim.token)
+    .then((focused) => {
+      if (focused) appFocusController.abort();
+    })
+    .catch((err) => {
+      log.debug('notification app-focus coordination unavailable', err);
+    });
   try {
-    started = await playSessionEventSoundInner(kind, signal);
+    started = await playSessionEventSoundInner(kind, appFocusController.signal);
     return started;
   } finally {
     await settleSound(kind, claim.token, started).catch((err) => {
       log.debug('notification sound coordination settle failed', err);
     });
+    signal?.removeEventListener('abort', abortForCaller);
   }
 }
 

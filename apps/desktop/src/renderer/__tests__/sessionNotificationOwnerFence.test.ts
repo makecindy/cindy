@@ -13,12 +13,16 @@ describe('shared session notification owner fence', () => {
     const capture = notificationSource.indexOf(
       'ownerAtNotification: DataOwnerGeneration = getDataOwnerGeneration(),',
     );
-    const focusListener = notificationSource.indexOf(
-      "window.addEventListener('focus', abortPendingSound, { once: true });",
+    const deliveryClaim = notificationSource.indexOf(
+      'window.electronAPI.notificationClaimSessionEvent?.(',
       capture,
     );
+    const focusListener = notificationSource.indexOf(
+      "window.addEventListener('focus', abortPendingSound, { once: true });",
+      deliveryClaim,
+    );
     const soundAwait = notificationSource.indexOf(
-      'await playSessionEventSound(kind, focusAbortController.signal);',
+      'suppressSystemSound = await playSessionEventSound(',
       focusListener,
     );
     const preSoundOwnerFence = notificationSource.indexOf(
@@ -37,17 +41,14 @@ describe('shared session notification owner fence', () => {
       'if (!isDataOwnerGenerationCurrent(ownerAtNotification)) return;',
       focusFence,
     );
-    const markAttention = notificationSource.indexOf(
-      'window.electronAPI.notificationMarkSessionAttention(sessionId)',
-      ownerFence,
-    );
     const showNotification = notificationSource.indexOf(
       'window.electronAPI.notificationShowSessionEvent({',
-      markAttention,
+      ownerFence,
     );
 
     expect(capture).toBeGreaterThan(-1);
-    expect(focusListener).toBeGreaterThan(capture);
+    expect(deliveryClaim).toBeGreaterThan(capture);
+    expect(focusListener).toBeGreaterThan(deliveryClaim);
     expect(preSoundOwnerFence).toBeGreaterThan(focusListener);
     expect(preSoundOwnerFence).toBeLessThan(soundAwait);
     expect(ownerSubscription).toBeGreaterThan(focusListener);
@@ -55,7 +56,6 @@ describe('shared session notification owner fence', () => {
     expect(soundAwait).toBeGreaterThan(focusListener);
     expect(focusFence).toBeGreaterThan(soundAwait);
     expect(ownerFence).toBeGreaterThan(focusFence);
-    expect(markAttention).toBeGreaterThan(ownerFence);
-    expect(showNotification).toBeGreaterThan(markAttention);
+    expect(showNotification).toBeGreaterThan(ownerFence);
   });
 });

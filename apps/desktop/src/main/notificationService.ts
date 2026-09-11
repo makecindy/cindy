@@ -1,7 +1,7 @@
 /**
  * notificationService — 系统级桌面通知（CC Agent session 完成 / 待回复提醒）
  * ---------------------------------------------------------------------------
- * 主进程层。提供单一 IPC handler `notification:show-session-event`：
+ * 主进程层。统一负责通知事件认领、提示音协调与 `notification:show-session-event` 分发：
  *   - macOS / Linux / Windows：统一走 Electron 原生 `Notification`。
  *   - 点通知后把窗口拉到前台，并通过 `notification:focus-session` 把 sessionId
  *     广播给 renderer，由 renderer 路由跳转。
@@ -33,6 +33,7 @@ import {
 } from 'electron';
 import type { FeishuIM } from '@cindy/im';
 import * as path from 'node:path';
+import { performance } from 'node:perf_hooks';
 
 import { markSessionNeedsAttention } from './appBadgeService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from './device-link';
@@ -87,6 +88,8 @@ interface ShowSessionEventPayload {
   sessionId: string;
   title: string;
   kind: SessionEventKind;
+  /** Main-issued token that makes one broadcast renderer the sole delivery owner. */
+  deliveryToken?: string;
   /**
    * 渠道偏好。renderer 侧 gate 后填入,缺省时按"仅桌面"兼容,防御漏传——
    * 当前唯一 invoke 调用方 CCAgentSidebarUpper.tsx 总是显式传 channels,
@@ -109,6 +112,125 @@ interface ShowSessionEventPayload {
 // 时就回收掉，导致 click handler 丢失甚至触发异常事件。用 Set 持引用，等
 // close/click 后再 release。
 const liveNotifications = new Set<Notification>();
+
+const SESSION_EVENT_DELIVERY_RESERVATION_MS = 2_000;
+const SESSION_EVENT_DELIVERY_DEDUPE_MS = 5_000;
+const SESSION_EVENT_DELIVERY_TOKEN_MAX_LENGTH = 128;
+let nextSessionEventDeliveryToken = 0;
+const pendingSessionEventDeliveries = new Map<
+  string,
+  { token: string; kind: SessionEventKind; expiresAt: number }
+>();
+const recentSessionEventDeliveries = new Map<string, number>();
+
+type PendingSoundFocusWait = {
+  kind: NotificationSoundKind;
+  promise: Promise<boolean>;
+  resolve: (focused: boolean) => void;
+  cleanupTimer: ReturnType<typeof setTimeout>;
+};
+const pendingSoundFocusWaits = new Map<string, PendingSoundFocusWait>();
+
+function sessionEventDeliveryKey(sessionId: string, kind: SessionEventKind): string {
+  return `${sessionId}\u0000${kind}`;
+}
+
+function cleanupSessionEventDeliveries(now: number): void {
+  for (const [key, reservation] of pendingSessionEventDeliveries) {
+    if (reservation.expiresAt <= now) pendingSessionEventDeliveries.delete(key);
+  }
+  for (const [key, deliveredAt] of recentSessionEventDeliveries) {
+    if (now - deliveredAt >= SESSION_EVENT_DELIVERY_DEDUPE_MS) {
+      recentSessionEventDeliveries.delete(key);
+    }
+  }
+}
+
+function suppressPendingSessionEventDeliveries(now = performance.now()): void {
+  for (const key of pendingSessionEventDeliveries.keys()) {
+    recentSessionEventDeliveries.set(key, now);
+  }
+  pendingSessionEventDeliveries.clear();
+}
+
+function claimSessionEventDelivery(
+  sessionId: string,
+  kind: SessionEventKind,
+  now = performance.now(),
+): { status: 'deliver'; token: string } | { status: 'suppressed' } {
+  cleanupSessionEventDeliveries(now);
+  const key = sessionEventDeliveryKey(sessionId, kind);
+  if (pendingSessionEventDeliveries.has(key) || recentSessionEventDeliveries.has(key)) {
+    return { status: 'suppressed' };
+  }
+  const token = `notification-delivery-${++nextSessionEventDeliveryToken}`;
+  pendingSessionEventDeliveries.set(key, {
+    token,
+    kind,
+    expiresAt: now + SESSION_EVENT_DELIVERY_RESERVATION_MS,
+  });
+  return { status: 'deliver', token };
+}
+
+function consumeSessionEventDelivery(
+  sessionId: string,
+  kind: SessionEventKind,
+  token: string,
+  now = performance.now(),
+): boolean {
+  cleanupSessionEventDeliveries(now);
+  const key = sessionEventDeliveryKey(sessionId, kind);
+  const reservation = pendingSessionEventDeliveries.get(key);
+  if (!reservation || reservation.token !== token) return false;
+  pendingSessionEventDeliveries.delete(key);
+  recentSessionEventDeliveries.set(key, now);
+  return true;
+}
+
+function hasPendingSessionEventDeliveryToken(token: string, kind: SessionEventKind): boolean {
+  cleanupSessionEventDeliveries(performance.now());
+  return [...pendingSessionEventDeliveries.values()].some(
+    (reservation) => reservation.token === token && reservation.kind === kind,
+  );
+}
+
+function trackSoundFocusWait(kind: NotificationSoundKind, token: string): void {
+  let resolveFocus!: (focused: boolean) => void;
+  const promise = new Promise<boolean>((resolve) => {
+    resolveFocus = resolve;
+  });
+  const cleanupTimer = setTimeout(() => {
+    const pending = pendingSoundFocusWaits.get(token);
+    if (!pending) return;
+    pendingSoundFocusWaits.delete(token);
+    pending.resolve(false);
+  }, 2_000);
+  cleanupTimer.unref?.();
+  pendingSoundFocusWaits.set(token, {
+    kind,
+    promise,
+    resolve: resolveFocus,
+    cleanupTimer,
+  });
+}
+
+function settleSoundFocusWait(token: string, focused: boolean): void {
+  const pending = pendingSoundFocusWaits.get(token);
+  if (!pending) return;
+  pending.resolve(focused);
+  if (!focused) {
+    clearTimeout(pending.cleanupTimer);
+    pendingSoundFocusWaits.delete(token);
+  }
+}
+
+function waitForSoundFocus(kind: NotificationSoundKind, token: string): Promise<boolean> {
+  const pending = pendingSoundFocusWaits.get(token);
+  // A missing reservation can only be stale or cancelled; fail closed so a
+  // delayed renderer cannot start sound after Cindy regained focus.
+  if (!pending || pending.kind !== kind) return Promise.resolve(true);
+  return pending.promise;
+}
 
 /**
  * 把窗口拉到前台并广播 sessionId 给 renderer 路由跳转。
@@ -153,6 +275,8 @@ export function showDesktopSessionEvent(
 
 export interface NotificationServiceDeps {
   getWindow: () => BrowserWindow | null;
+  /** Main-owned application focus, across every Cindy content window. */
+  isAppFocused: () => boolean;
   /** Validate that an invoke came from a trusted Cindy top-level renderer. */
   assertTrustedSender: (event: IpcMainInvokeEvent) => void;
   /**
@@ -163,24 +287,77 @@ export interface NotificationServiceDeps {
 }
 
 export function initNotificationService(deps: NotificationServiceDeps): void {
-  const { getWindow, feishuIm, assertTrustedSender } = deps;
+  const { getWindow, feishuIm, assertTrustedSender, isAppFocused } = deps;
 
-  ipcMain.handle('notification:claim-session-event-sound', (event, kind: unknown) => {
-    assertTrustedSender(event);
-    return claimNotificationSound(
-      requireEnum(kind, SESSION_EVENT_SOUND_KINDS, 'notification sound kind'),
-    );
+  app.on('browser-window-focus', () => {
+    if (!isAppFocused()) return;
+    suppressPendingSessionEventDeliveries();
+    for (const [token, pending] of pendingSoundFocusWaits) {
+      settleNotificationSound(pending.kind, token, false);
+      settleSoundFocusWait(token, true);
+    }
   });
+
+  ipcMain.handle(
+    'notification:claim-session-event',
+    (event, sessionId: unknown, kind: unknown) => {
+      assertTrustedSender(event);
+      const safeSessionId = requireString(sessionId, 'notification session id');
+      const safeKind = requireEnum(kind, SESSION_EVENT_SOUND_KINDS, 'notification event kind');
+      if (safeSessionId.length === 0 || safeSessionId.length > SESSION_ID_MAX_LENGTH) {
+        throw new TypeError('invalid notification session id');
+      }
+      if (isAppFocused()) {
+        recentSessionEventDeliveries.set(
+          sessionEventDeliveryKey(safeSessionId, safeKind),
+          performance.now(),
+        );
+        return { status: 'suppressed' as const };
+      }
+      return claimSessionEventDelivery(safeSessionId, safeKind);
+    },
+  );
+
+  ipcMain.handle('notification:claim-session-event-sound', (event, kind: unknown, deliveryToken: unknown) => {
+    assertTrustedSender(event);
+    const safeKind = requireEnum(kind, SESSION_EVENT_SOUND_KINDS, 'notification sound kind');
+    if (deliveryToken !== undefined) {
+      const safeDeliveryToken = requireString(deliveryToken, 'notification delivery token');
+      if (
+        safeDeliveryToken.length > SESSION_EVENT_DELIVERY_TOKEN_MAX_LENGTH ||
+        !hasPendingSessionEventDeliveryToken(safeDeliveryToken, safeKind)
+      ) {
+        return { status: 'suppressed' as const };
+      }
+    }
+    if (isAppFocused()) return { status: 'suppressed' as const };
+    const claim = claimNotificationSound(safeKind);
+    if (claim.status === 'play') trackSoundFocusWait(safeKind, claim.token);
+    return claim;
+  });
+
+  ipcMain.handle(
+    'notification:wait-session-event-sound-focus',
+    (event, kind: unknown, token: unknown): Promise<boolean> => {
+      assertTrustedSender(event);
+      return waitForSoundFocus(
+        requireEnum(kind, SESSION_EVENT_SOUND_KINDS, 'notification sound kind'),
+        requireString(token, 'notification sound token'),
+      );
+    },
+  );
 
   ipcMain.handle(
     'notification:settle-session-event-sound',
     (event, kind: unknown, token: unknown, started: unknown): void => {
       assertTrustedSender(event);
+      const safeToken = requireString(token, 'notification sound token');
       settleNotificationSound(
         requireEnum(kind, SESSION_EVENT_SOUND_KINDS, 'notification sound kind'),
-        requireString(token, 'notification sound token'),
+        safeToken,
         requireBoolean(started, 'notification sound started'),
       );
+      settleSoundFocusWait(safeToken, false);
     },
   );
 
@@ -194,13 +371,24 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
 
   ipcMain.handle(
     'notification:show-session-event',
-    async (_event, payload: ShowSessionEventPayload): Promise<void> => {
+    async (event, payload: ShowSessionEventPayload): Promise<void> => {
+      assertTrustedSender(event);
       // renderer payload 不可信:mobile 通道会把 title/kind 送出本机(经 relay/APNs),
       // main 必须做运行时形状校验,TS 类型不算(electron-security 规则)。正文摘要
       // 不来自 renderer(main 侧读库),relay 有 per-user 频控、main 侧另有 5s
       // 去重与「被远程观看则不推」收口。
       assertValidSessionEventPayload(payload);
-      const { sessionId, title, kind, channels } = payload;
+      const { sessionId, title, kind, channels, deliveryToken } = payload;
+      if (isAppFocused()) {
+        recentSessionEventDeliveries.set(sessionEventDeliveryKey(sessionId, kind), performance.now());
+        return;
+      }
+      if (
+        deliveryToken !== undefined &&
+        !consumeSessionEventDelivery(sessionId, kind, deliveryToken)
+      ) {
+        return;
+      }
       // 兜底：title 为空（极早期 session 还没生成标题）也别炸，用 sessionId 前 8 位顶上。
       const safeTitle = title?.trim() || sessionId.slice(0, 8);
 
@@ -277,6 +465,10 @@ function assertValidSessionEventPayload(
     p.title.length > SESSION_TITLE_MAX_LENGTH ||
     typeof p.kind !== 'string' ||
     !SESSION_EVENT_KINDS.has(p.kind) ||
+    (p.deliveryToken !== undefined &&
+      (typeof p.deliveryToken !== 'string' ||
+        p.deliveryToken.length === 0 ||
+        p.deliveryToken.length > SESSION_EVENT_DELIVERY_TOKEN_MAX_LENGTH)) ||
     (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null)) ||
     (p.channels?.sound !== undefined && typeof p.channels.sound !== 'boolean')
   ) {

@@ -38,8 +38,13 @@ vi.mock('@/lib/notificationSound', () => ({
   playSessionEventSound: sound.play,
 }));
 
-const markAttention = vi.fn(() => Promise.resolve());
 const showSessionEvent = vi.fn(() => Promise.resolve());
+const claimSessionEvent = vi.fn<
+  (
+    sessionId: string,
+    kind: string,
+  ) => Promise<{ status: 'deliver'; token: string } | { status: 'suppressed' }>
+>(async () => ({ status: 'deliver', token: 'delivery-1' }));
 
 describe('shared session event notifications', () => {
   beforeEach(() => {
@@ -53,7 +58,7 @@ describe('shared session event notifications', () => {
     dataOwnerGenerationTesting.reset();
     vi.spyOn(document, 'hasFocus').mockReturnValue(false);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
-      notificationMarkSessionAttention: markAttention,
+      notificationClaimSessionEvent: claimSessionEvent,
       notificationShowSessionEvent: showSessionEvent,
       localDb: { bots: { list: vi.fn(async () => []) } },
     };
@@ -68,11 +73,12 @@ describe('shared session event notifications', () => {
 
     await sendSessionEventNotification('session-1', 'LiZi · 修复登录', 'needs-reply');
 
-    expect(markAttention).toHaveBeenCalledWith('session-1');
+    expect(claimSessionEvent).toHaveBeenCalledWith('session-1', 'needs-reply');
     expect(showSessionEvent).toHaveBeenCalledWith({
       sessionId: 'session-1',
       title: 'LiZi · 修复登录',
       kind: 'needs-reply',
+      deliveryToken: 'delivery-1',
       channels: { desktop: true, feishu: true, mobile: true, sound: true },
     });
   });
@@ -97,7 +103,7 @@ describe('shared session event notifications', () => {
 
     void sendSessionEventNotification('session-3', 'Dash', 'error');
 
-    expect(markAttention).not.toHaveBeenCalled();
+    expect(claimSessionEvent).not.toHaveBeenCalled();
     expect(showSessionEvent).not.toHaveBeenCalled();
   });
 
@@ -124,6 +130,15 @@ describe('shared session event notifications', () => {
       'done',
       ownerAtNotification,
     );
+
+    expect(sound.play).not.toHaveBeenCalled();
+    expect(showSessionEvent).not.toHaveBeenCalled();
+  });
+
+  it('lets Main suppress a duplicate broadcast before sound or delivery', async () => {
+    claimSessionEvent.mockResolvedValueOnce({ status: 'suppressed' });
+
+    await sendSessionEventNotification('session-duplicate', 'Cindy', 'done');
 
     expect(sound.play).not.toHaveBeenCalled();
     expect(showSessionEvent).not.toHaveBeenCalled();

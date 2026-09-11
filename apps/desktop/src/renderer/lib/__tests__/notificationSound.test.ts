@@ -63,6 +63,32 @@ describe('playSessionEventSound', () => {
     expect(settle).toHaveBeenCalledWith('done', 'token-1', true);
   });
 
+  it('stops pending playback when Main reports another Cindy window focused', async () => {
+    audioHarness.play.mockReturnValue(new Promise<void>(() => undefined));
+    let reportFocused!: (focused: boolean) => void;
+    const settle = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal('electronAPI', {
+      notificationClaimSessionEventSound: vi
+        .fn()
+        .mockResolvedValue({ status: 'play', token: 'token-focus' }),
+      notificationWaitForSessionEventSoundFocus: vi.fn(
+        () =>
+          new Promise<boolean>((resolve) => {
+            reportFocused = resolve;
+          }),
+      ),
+      notificationSettleSessionEventSound: settle,
+    });
+
+    const result = playSessionEventSound('done');
+    await vi.waitFor(() => expect(reportFocused).toBeTypeOf('function'));
+    reportFocused(true);
+
+    await expect(result).resolves.toBe(false);
+    expect(audioHarness.pause).toHaveBeenCalledOnce();
+    expect(settle).toHaveBeenCalledWith('done', 'token-focus', false);
+  });
+
   it('returns false when playback rejects', async () => {
     audioHarness.play.mockRejectedValue(new Error('autoplay denied'));
     await expect(playSessionEventSound('error')).resolves.toBe(false);

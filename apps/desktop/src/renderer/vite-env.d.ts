@@ -2772,6 +2772,8 @@ interface ElectronAPI {
     sessionId: string;
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
+    /** Main-issued ownership token; prevents duplicate delivery across windows. */
+    deliveryToken?: string;
     /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /
@@ -2788,10 +2790,23 @@ interface ElectronAPI {
       sound?: boolean;
     };
   }) => Promise<void>;
+  /** Claim sole delivery ownership for a broadcast session event. */
+  notificationClaimSessionEvent?: (
+    sessionId: string,
+    kind: 'done' | 'error' | 'needs-reply',
+  ) => Promise<{ status: 'deliver'; token: string } | { status: 'suppressed' }>;
   /** Main-owned cross-Renderer sound cooldown coordinator. */
   notificationClaimSessionEventSound?: (
     kind: 'done' | 'error' | 'needs-reply',
-  ) => Promise<{ status: 'play'; token: string } | { status: 'covered' }>;
+    deliveryToken?: string,
+  ) => Promise<
+    { status: 'play'; token: string } | { status: 'covered' } | { status: 'suppressed' }
+  >;
+  /** Resolves true when any Cindy content window focuses during this sound claim. */
+  notificationWaitForSessionEventSoundFocus?: (
+    kind: 'done' | 'error' | 'needs-reply',
+    token: string,
+  ) => Promise<boolean>;
   notificationSettleSessionEventSound?: (
     kind: 'done' | 'error' | 'needs-reply',
     token: string,

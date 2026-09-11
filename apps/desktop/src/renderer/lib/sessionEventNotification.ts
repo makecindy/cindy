@@ -53,6 +53,14 @@ export function sendSessionEventNotification(
   const soundRequested = getSoundNotificationsEnabled() && !islandActive;
 
   const send = async (): Promise<void> => {
+    const deliveryClaim = await window.electronAPI.notificationClaimSessionEvent?.(
+      sessionId,
+      kind,
+    );
+    if (deliveryClaim?.status === 'suppressed') return;
+    const deliveryToken = deliveryClaim?.status === 'deliver' ? deliveryClaim.token : undefined;
+    if (!isDataOwnerGenerationCurrent(ownerAtNotification)) return;
+
     // The local sound may wait for autoplay permission or resource startup. Abort
     // it when the user returns to Cindy, then suppress the whole external event.
     let suppressSystemSound = false;
@@ -65,7 +73,11 @@ export function sendSessionEventNotification(
         // Recheck after installing the cancellation hooks so an account switch
         // cannot start the old owner's sound at this async boundary.
         if (!isDataOwnerGenerationCurrent(ownerAtNotification)) return;
-        suppressSystemSound = await playSessionEventSound(kind, focusAbortController.signal);
+        suppressSystemSound = await playSessionEventSound(
+          kind,
+          focusAbortController.signal,
+          deliveryToken,
+        );
       } finally {
         window.removeEventListener('focus', abortPendingSound);
         unsubscribeOwnerChange();
@@ -77,11 +89,11 @@ export function sendSessionEventNotification(
     if (typeof document !== 'undefined' && document.hasFocus()) return;
     if (!isDataOwnerGenerationCurrent(ownerAtNotification)) return;
 
-    void window.electronAPI.notificationMarkSessionAttention(sessionId);
     void window.electronAPI.notificationShowSessionEvent({
       sessionId,
       title,
       kind,
+      ...(deliveryToken ? { deliveryToken } : {}),
       channels: {
         desktop: desktopEnabled,
         feishu: feishuEnabled,
