@@ -9,6 +9,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./contacts-sync-worker": "./src/contacts/sync/worker-api.ts",
+    "./pi-extension-ui": "./src/agents/pi/extension-ui-capabilities.ts",
     "./pi-subagent-runs": "./src/agents/pi/pi-subagent-runs.ts",
     "./grok-build": "./src/agents/grok-build/index.ts"
   },

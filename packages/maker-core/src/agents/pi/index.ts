@@ -1,3 +1,4 @@
+import { getPiExtensionUiCapability } from './extension-ui-capabilities.js';
 import { parsePiManagementArgs, parsePiManagementText } from './managed-command.js';
 import { snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDisabledSkillLaunchPaths, type DisabledSkillLaunchSnapshot } from '../shared/skill-activation.js';
 /**
@@ -4639,7 +4640,6 @@ export class PiAgent extends BaseAgent {
     let piAgentLifecycleSequence = 0;
     let activeExtensionCommandNotifications: string[] | null = null;
     const doctorCommandActivity = new DoctorCommandActivity();
-    const unsupportedExtensionUiMethods = new Set<string>();
     const runtimeCapabilityListeners = new Set<(manifest: PiRuntimeCapabilityManifest | undefined) => void>();
     const notifyRuntimeCapabilityListener = (
       listener: (manifest: PiRuntimeCapabilityManifest | undefined) => void,
@@ -5180,22 +5180,6 @@ export class PiAgent extends BaseAgent {
                 queue.push({
                   type: 'text',
                   data: { text, isFinal: false },
-                  source: 'pi',
-                });
-              },
-              notifyUnsupportedExtensionUi: (method, reason) => {
-                const key = `${method}:${reason}`;
-                if (unsupportedExtensionUiMethods.has(key)) return;
-                unsupportedExtensionUiMethods.add(key);
-                queue.push({
-                  type: 'text',
-                  data: {
-                    text:
-                      reason === 'timed-dialog'
-                        ? `This Pi extension requested a timed ${method} dialog, which Cindy cannot keep synchronized. The dialog was cancelled.`
-                        : `This Pi extension requested the Pi UI feature “${method}”, which Cindy cannot display. That UI request was ignored.`,
-                    isFinal: false,
-                  },
                   source: 'pi',
                 });
               },
@@ -7609,7 +7593,6 @@ export class PiAgent extends BaseAgent {
         runId: string,
       ) => Promise<boolean>;
       emitExtensionNotification: (message: string, event?: PiRpcEvent) => void;
-      notifyUnsupportedExtensionUi: (method: string, reason: 'unsupported-ui' | 'timed-dialog') => void;
       /**
        * 把一张挂起的权限卡登记进会话级表,返回注销函数。档位切换 / 关闭会话时由
        * `dismissAllPendingPrompts` 强制 settle,避免放宽档位后调用仍卡在失效的卡上。
@@ -7634,7 +7617,7 @@ export class PiAgent extends BaseAgent {
     const id = typeof event.id === 'string' ? event.id : undefined;
     if (!id) return;
 
-    if (method === 'notify') {
+    if (getPiExtensionUiCapability(method)?.handling === 'notification') {
       const message = typeof event.message === 'string' ? event.message.trim() : '';
       if (!message) return;
       // Pi RPC has no toast surface. Preserve the extension's only visible
@@ -8371,8 +8354,7 @@ export class PiAgent extends BaseAgent {
       return;
     }
 
-    const isDialog = method === 'select' || method === 'confirm' || method === 'input' || method === 'editor';
-    if (isDialog) {
+    if (getPiExtensionUiCapability(method)?.handling === 'dialog') {
       const context = getPermissionCtx();
       const timeout = typeof event.timeout === 'number' && Number.isFinite(event.timeout) ? event.timeout : undefined;
       if (timeout !== undefined) {
@@ -8380,13 +8362,11 @@ export class PiAgent extends BaseAgent {
           method,
           timeout,
         });
-        context.notifyUnsupportedExtensionUi(method, 'timed-dialog');
         proc.send({ type: 'extension_ui_response', id, cancelled: true });
         return;
       }
       if (!context.resolver) {
         this.deps.logger.warn('pi extension dialog has no interaction resolver', { method });
-        context.notifyUnsupportedExtensionUi(method, 'unsupported-ui');
         proc.send({ type: 'extension_ui_response', id, cancelled: true });
         return;
       }
@@ -8402,7 +8382,6 @@ export class PiAgent extends BaseAgent {
           })
         : [];
       if (method === 'select' && options.length === 0) {
-        context.notifyUnsupportedExtensionUi(method, 'unsupported-ui');
         proc.send({ type: 'extension_ui_response', id, cancelled: true });
         return;
       }
@@ -8473,6 +8452,8 @@ export class PiAgent extends BaseAgent {
       return;
     }
 
-    getPermissionCtx().notifyUnsupportedExtensionUi(method || 'unknown', 'unsupported-ui');
+    // Unsupported display requests (including future RPC UI methods) are
+    // intentionally ignored. Compatibility belongs in Settings, never in the
+    // transcript. Pi already handles native TUI-only stubs inside its process.
   }
 }
