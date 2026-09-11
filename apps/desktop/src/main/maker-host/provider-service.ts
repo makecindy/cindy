@@ -202,7 +202,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     }
     const subscriptionInfo = new Map<string, ProviderView['subscriptionAccount']>();
     if (deps.subscriptionAccountInfo) await Promise.all(catalog.providers
-      .filter(p => p.auth.native === 'claude' || p.auth.native === 'xai')
+      .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
       .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
     return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
       ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
