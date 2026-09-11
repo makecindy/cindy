@@ -236,6 +236,32 @@ describe("bundled catalog validity (dynamic-first contract)", () => {
     });
   });
 
+  it("openai ships GPT Image 2.5 plus previous GPT Image 2", () => {
+    expect(provider("openai").imageModels).toEqual([
+      {
+        id: "openai/gpt-image-2.5-sunburst",
+        name: "GPT Image 2.5 Sunburst",
+        mode: "image_generation",
+        nativeApi: "openai-images",
+        modalities: { input: ["text", "image"], output: ["image"] },
+      },
+      {
+        id: "openai/gpt-image-2.5-flare",
+        name: "GPT Image 2.5 Flare",
+        mode: "image_generation",
+        nativeApi: "openai-images",
+        modalities: { input: ["text", "image"], output: ["image"] },
+      },
+      {
+        id: "openai/gpt-image-2",
+        name: "GPT Image 2",
+        mode: "image_generation",
+        nativeApi: "openai-images",
+        modalities: { input: ["text", "image"], output: ["image"] },
+      },
+    ]);
+  });
+
   it("xai ships both Grok Imagine subscription image models", () => {
     expect(provider("xai").imageModels).toEqual([
       { id: "xai/grok-imagine-image", name: "Grok Imagine Image", mode: "image_generation", nativeApi: "openai-images", modalities: { input: ["text", "image"], output: ["image"] } },

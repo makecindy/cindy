@@ -169,6 +169,7 @@ function ThinkingActivityRow({
       data-live-work-activity="thinking"
       data-message-client-id={activity.key}
       data-work-thinking-expandable={canExpand ? 'true' : 'false'}
+      data-scroll-disclosure-header=""
       disabled={!canExpand}
       aria-expanded={canExpand ? expanded : undefined}
       onClick={() => setExpanded((value) => !value)}
@@ -384,6 +385,7 @@ export function WorkGroupBlock({
         <button
           type="button"
           onClick={canToggle ? onToggle : undefined}
+          data-scroll-disclosure-header=""
           disabled={!canToggle}
           className={cn(
             'flex w-full items-center gap-[6px] py-[2px]',

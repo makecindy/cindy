@@ -1,6 +1,6 @@
 {
   "schemaVersion": 4,
-  "updatedAt": "2026-09-09T20:55:00.000Z",
+  "updatedAt": "2026-09-10T06:40:00.000Z",
   "models": [
     {
       "id": "openai/gpt-5.6-sol",
@@ -2951,6 +2951,36 @@
       "modelRef": "xd/tencent-hy4-preview"
     },
     {
+      "id": "openai/gpt-image-2.5-sunburst",
+      "name": "GPT Image 2.5 Sunburst",
+      "modelRef": "openai/gpt-image-2.5-sunburst",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.5-sunburst",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
+      "id": "openai/gpt-image-2.5-flare",
+      "name": "GPT Image 2.5 Flare",
+      "modelRef": "openai/gpt-image-2.5-flare",
+      "mode": "image_generation",
+      "status": "active",
+      "routes": [
+        {
+          "providerId": "openai",
+          "modelId": "openai/gpt-image-2.5-flare",
+          "agents": []
+        }
+      ],
+      "nativeApi": "openai-images"
+    },
+    {
       "id": "openai/gpt-image-2",
       "name": "GPT Image 2",
       "modelRef": "openai/gpt-image-2",
@@ -4330,6 +4360,30 @@
       "aliases": [],
       "defaults": {
         "name": "Qwen3.8 Flash-Next"
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.5-sunburst",
+      "aliases": ["gpt-image-2.5-sunburst"],
+      "defaults": {
+        "name": "GPT Image 2.5 Sunburst",
+        "mode": "image_generation",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["image"]
+        }
+      }
+    },
+    {
+      "id": "openai/gpt-image-2.5-flare",
+      "aliases": ["gpt-image-2.5-flare"],
+      "defaults": {
+        "name": "GPT Image 2.5 Flare",
+        "mode": "image_generation",
+        "modalities": {
+          "input": ["text", "image"],
+          "output": ["image"]
+        }
       }
     },
     {

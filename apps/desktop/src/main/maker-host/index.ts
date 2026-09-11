@@ -99,6 +99,7 @@ import {
   getCodexHome,
   readClaudeApiKey,
 } from './auth-adapters.js';
+import { syncOpenAiMediaAfterCodexAuthChange } from './model-discovery/openai-media.js';
 import {
   desktopSessionStorage,
   readCodexHistoryHasProductPrompt,
@@ -2964,6 +2965,7 @@ export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
   // 「已登录 + models_cache 还没落盘」——必须排在上面的 cache 重读之后,否则被空快照覆盖。
   resetCodexModelBackfillState();
   await requestCodexModelBackfill();
+  syncOpenAiMediaAfterCodexAuthChange();
   await broadcastCodexAuthStateChanged();
 }
 

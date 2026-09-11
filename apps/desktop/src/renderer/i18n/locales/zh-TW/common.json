@@ -44,9 +44,9 @@
     "viewOnly": "僅檢視",
     "upgrade": "請升級電腦端 Cindy 後使用遠端桌面。",
     "disabled": "請在電腦端的設定 → 遠端控制中開啟遠端桌面。",
-    "busy": "桌面輸入正在使用中。請讓其他裝置釋放控制，或等待 Agent 操作結束。",
+    "busy": "其他裝置或 Agent 正在操作電腦。請先停止其他裝置的操作，或等待 Agent 操作結束。",
     "connectionError": "連線已結束。請檢查電腦是否在線，然後重新連線。",
-    "releaseControl": "釋放控制",
+    "releaseControl": "停止操作",
     "takeControl": "接管操作",
     "pointer": "觸控板",
     "touch": "觸控",
@@ -1410,7 +1410,7 @@
           "description": "開啟後 Codex 不走訂閱，複用「模型供應商」裡的 Cindy AI Key。",
           "noKey": "未配置 Cindy AI Key，請在「模型供應商」裡連線 Cindy AI",
           "noKeyDialog": {
-            "title": "尚未配置 API Key",
+            "title": "尚未配置 API key",
             "description": "API 模式需要複用 Cindy AI Key，當前還沒有配置。前往「模型供應商」連線 Cindy AI 後即可開啟。"
           },
           "badge": {
@@ -1428,25 +1428,25 @@
       "xai": {
         "logoutConfirm": {
           "title": "斷開 xAI(SuperGrok)？",
-          "description": "斷開會清除本機儲存的 xAI 登入憑證；已選 Grok 模型的任務將無法呼叫，直到重新授權。",
-          "confirm": "斷開",
+          "description": "中斷後，Cindy 將無法使用這份 Grok 訂閱。",
+          "confirm": "中斷連線",
           "cancel": "取消"
         },
         "toast": {
-          "loggedIn": "已登入 xAI(SuperGrok)",
-          "loggedOut": "已斷開 xAI",
-          "loginFailed": "授權失敗，請重試",
-          "logoutFailed": "斷開失敗，請重試"
+          "loggedIn": "已登入 Grok",
+          "loggedOut": "已中斷 Grok 的連線",
+          "loginFailed": "Grok 登入失敗，請重試",
+          "logoutFailed": "Grok 中斷連線失敗，請重試"
         }
       },
       "claude": {
         "subtitle": {
-          "authorizing": "授權中（瀏覽器）…",
-          "authorized": "Claude.ai 訂閱 · 已授權",
-          "unauthorized": "未授權（點「授權」登入 Claude.ai）"
+          "authorizing": "登入中…",
+          "authorized": "Claude 訂閱 · 已連線",
+          "unauthorized": "未連線"
         },
         "button": {
-          "authorize": "授權"
+          "authorize": "登入"
         },
         "badge": {
           "api": "● API",
@@ -1454,17 +1454,17 @@
         },
         "logoutConfirm": {
           "title": "斷開 Claude.ai 訂閱？",
-          "description": "斷開會清除本機 Claude Code 的登入憑證（本地 `claude` 命令列也會一起登出）；若當前在訂閱模式會自動切回 Cindy AI。需要重新授權才能恢復。",
-          "confirm": "斷開",
+          "description": "中斷後，Cindy 將無法使用這份 Claude 訂閱。",
+          "confirm": "中斷連線",
           "cancel": "取消"
         },
         "toast": {
-          "loggedIn": "已登入 Claude.ai 訂閱",
-          "loggedOut": "已斷開 Claude.ai 訂閱",
-          "loginFailed": "授權失敗，請重試",
-          "logoutFailed": "斷開失敗，請重試",
+          "loggedIn": "已登入 Claude",
+          "loggedOut": "已中斷 Claude 的連線",
+          "loginFailed": "Claude 登入失敗，請重試",
+          "logoutFailed": "Claude 中斷連線失敗，請重試",
           "notSubscription": "該帳號沒有 Claude 訂閱（Pro/Max），無法走訂閱模式",
-          "needAuth": "請先授權登入 Claude.ai"
+          "needAuth": "請先登入 Claude"
         },
         "apiMode": {
           "label": "API 模式（走 Cindy AI）",
@@ -1472,7 +1472,7 @@
           "toggleAria": "切換 Claude API 模式",
           "sharedKeyWarning": "和 Cindy AI 共用一把 Key，關閉 API 模式後非 Claude 模型仍需 Cindy AI",
           "noKeyDialog": {
-            "title": "尚未配置 API Key",
+            "title": "尚未配置 API key",
             "description": "關閉 API 模式（走訂閱）後，非 Claude 模型（gpt / deepseek 等）仍需複用 Cindy AI Key，當前還沒有配置。前往「模型供應商」連線 Cindy AI 後即可。"
           },
           "toast": {
@@ -1496,11 +1496,12 @@
         "disconnected": "未連線",
         "connecting": "正在連線…",
         "rename": "重新命名",
-        "suspended": "已停用"
+        "suspended": "已停用",
+        "unconfigured": "未設定"
       },
       "button": {
-        "authorize": "授權",
-        "logout": "登出",
+        "authorize": "登入",
+        "logout": "中斷連線",
         "connect": "連線",
         "disconnect": "斷開",
         "cancel": "取消",
@@ -1517,13 +1518,13 @@
         "title": "OpenAI",
         "subtitle": "連線一個 ChatGPT 帳號，同時用於 Codex 和 Claude",
         "modelLabel": "GPT 模型",
-        "reconnectRequired": "需要重新連線",
-        "connect": "連線 ChatGPT",
-        "reconnect": "重新連線 ChatGPT",
-        "cancelConnect": "取消連線",
+        "reconnectRequired": "重新登入",
+        "connect": "使用本機 Codex 帳號",
+        "reconnect": "重新登入",
+        "cancelConnect": "取消",
         "accountSource": {
           "local": "本機 Codex 帳號",
-          "oauth": "獨立登入帳號",
+          "oauth": "獨立帳號",
           "unknown": "現有 OpenAI 連線"
         },
         "useLocalAccount": "使用本機 Codex 帳號",
@@ -1593,19 +1594,19 @@
       },
       "custom": {
         "tag": "自定義",
-        "editAria": "編輯",
+        "editAria": "編輯連線設定",
         "deleteAria": "刪除",
         "save": "儲存",
         "cancel": "取消",
         "dialog": {
           "createTitle": "新增自定義供應商",
-          "editTitle": "編輯自定義供應商",
+          "editTitle": "編輯連線設定",
           "desc": "配置與 OpenAI / Anthropic 相容的供應商。"
         },
         "imageGenerationReload": {
           "title": "重新載入 Codex",
-          "description": "儲存此圖片生成設定需要重新載入 Codex，並會中斷目前正在執行的 Codex 任務。",
-          "interrupt": "儲存並停止",
+          "description": "套用此變更需要重新載入 Codex，並會中斷目前正在執行的 Codex 任務。",
+          "interrupt": "繼續並停止任務",
           "cancel": "取消",
           "close": "關閉"
         },
@@ -1639,7 +1640,7 @@
           "runtimeSupportsImageGenerationEndpointsTitle": "介面要求",
           "runtimeSupportsImageGenerationEndpoints": "閘道必須處理以下請求：",
           "runtimeSupportsImageGenerationPermissionsTitle": "權限與失敗處理",
-          "runtimeSupportsImageGenerationPermissions": "目前的 API Key、帳號或使用者群組需有圖片模型權限。此開關只宣告閘道能力，不會自動開通上游權限。呼叫失敗時會顯示真實的上游錯誤，不會切換到其他圖片服務。",
+          "runtimeSupportsImageGenerationPermissions": "目前的 API key、帳號或使用者群組需有圖片模型權限。此開關只宣告閘道能力，不會自動開通上游權限。呼叫失敗時會顯示真實的上游錯誤，不會切換到其他圖片服務。",
           "modelSupportsReasoning": "支援推理",
           "modelSupportsReasoningHelp": "僅在該模型接受推理強度時開啟，並勾選它實際支援的所有檔位。儲存後，下一個 Pi Agent 會話生效。",
           "modelReasoningEfforts": "支援的推理強度",
@@ -1699,8 +1700,8 @@
           "deleteFailed": "刪除失敗"
         },
         "deleteConfirm": {
-          "title": "刪除自定義供應商？",
-          "description": "將刪除「{{name}}」的配置和本機儲存的金鑰，正在使用它的任務會回退到預設來源。",
+          "title": "刪除供應商？",
+          "description": "刪除後，Cindy 將無法再使用「{{name}}」。歷史訊息會保留，之後可以重新新增。",
           "confirm": "刪除",
           "cancel": "取消"
         },
@@ -1731,10 +1732,10 @@
         "authMode": {
           "label": "鑑權方式",
           "apiKey": "API 金鑰",
-          "oauth": "OAuth 訂閱授權",
+          "oauth": "訂閱帳號",
           "none": "無需鑑權",
           "noneHelp": "適用於本機或受信任的自託管 Proxy。Cindy 會移除 CLI 自帶的訂閱憑證和帳號頭，再把請求發往該端點。",
-          "oauthHelp": "適用於提供 OAuth 登入的供應商。可選擇瀏覽器回撥或裝置碼流程，儲存後從供應商列表發起授權。憑證僅加密儲存在本機。",
+          "oauthHelp": "適用於支援 OAuth 登入的供應商。可選擇瀏覽器或裝置碼登入，儲存後從供應商清單登入。憑證保存在本機。",
           "flowLabel": "OAuth 流程",
           "flow": {
             "authorization-code": "瀏覽器回撥（PKCE）",
@@ -1747,7 +1748,7 @@
             "clientId": "Client ID",
             "scopes": "Scopes（空格分隔）"
           },
-          "modelsAutoNote": "模型清單將在授權成功後自動獲取，無需手動填寫。"
+          "modelsAutoNote": "登入後自動取得可用模型"
         },
         "advanced": {
           "label": "高階配置（模型 / 請求頭）"
@@ -1837,7 +1838,7 @@
         "paymentRequired": "付費",
         "paymentUnlock": "付費解鎖",
         "enableModel": "啟用此模型",
-        "capabilityGroupHint": "不會出現在對話模型選擇中，僅供影像生成等功能使用",
+        "capabilityGroupHint": "不會出現在對話模型選擇中；開關控制影像、影片等功能是否列出",
         "accessWriteFailed": "停用設定未能儲存，請重試",
         "visibilityWriteFailed": "模型顯示設定未能儲存，請重試；如果仍然失敗，請重新啟動 Cindy。",
         "disabledGroup": "已停用",
@@ -1921,7 +1922,7 @@
           "close": "關閉",
           "maxOutput": "最大輸出",
           "catalogCapabilities": "目錄宣告的能力",
-          "contextInvalid": "請輸入 1–100,000 K 的整數。",
+          "contextInvalid": "請輸入 {{min}}–100,000 K 的整數。",
           "contextWriteFailed": "未儲存，請重試。",
           "contextMixed": "現有引擎設定不同；修改或恢復預設將套用至所有引擎。",
           "inputModalities": "輸入類型",
@@ -1975,24 +1976,24 @@
         }
       },
       "genericOAuth": {
-        "subtitle": "訂閱授權登入（OAuth）",
+        "subtitle": "訂閱帳號",
         "toast": {
-          "loggedIn": "{{name}} 登入成功",
+          "loggedIn": "已登入 {{name}}",
           "loginFailed": "{{name}} 登入失敗，請重試",
-          "loggedOut": "已退出 {{name}}",
-          "logoutFailed": "退出 {{name}} 失敗"
+          "loggedOut": "已中斷 {{name}} 的連線",
+          "logoutFailed": "{{name}} 中斷連線失敗，請重試"
         },
         "logoutConfirm": {
-          "title": "退出 {{name}}？",
-          "description": "退出後該來源的模型將不可用，可隨時重新登入。",
-          "confirm": "退出登入",
+          "title": "中斷「{{name}}」的連線？",
+          "description": "中斷後，Cindy 將無法使用「{{name}}」。供應商會保留，之後可以重新連線。",
+          "confirm": "中斷連線",
           "cancel": "取消"
         }
       },
       "addProvider": "新增供應商",
       "detail": {
         "singleAgentNote": "僅支援 {{agent}}",
-        "emptyModels": "授權後自動發現可用模型",
+        "emptyModels": "登入後自動取得可用模型",
         "emptyList": "點選左下角「新增供應商」接入你的第一個模型來源",
         "emptyModelsConnected": "已連線，正在自動發現可用模型；若持續為空，請稍後重試。",
         "discoveryFailed": {
@@ -2000,7 +2001,7 @@
           "timeout": "連線該供應商超時，因此拿不到模型列表。請檢查網路後重試。",
           "upstream": "該供應商暫時無法返回模型列表。請稍後重試。",
           "regionBlocked": "該供應商未在你當前所在地區提供服務，因此拿不到模型列表。你可以改用其它供應商。",
-          "unauthorized": "該供應商拒絕了當前授權，因此拿不到模型列表。請斷開後重新連線。",
+          "unauthorized": "目前登入或 API key 已遭供應商拒絕，無法取得模型清單。請重新登入或更新 API key。",
           "forbidden": "該供應商拒絕了這次請求，因此拿不到模型列表。若你正在使用 Proxy 或 VPN，請更換出口後重試。",
           "rejected": "該供應商拒絕了這次請求，因此拿不到模型列表。請稍後重試或改用其它供應商。",
           "empty": "該供應商沒有返回任何可用模型。請確認帳號權限後重試。"
@@ -2010,7 +2011,7 @@
           "timeout": "連線該供應商超時，下面是上次獲取的模型列表。請檢查網路後重試。",
           "upstream": "該供應商暫時無法返回模型列表，下面是上次獲取的結果。請稍後重試。",
           "regionBlocked": "該供應商未在你當前所在地區提供服務，下面是上次獲取的模型列表。你可以改用其它供應商。",
-          "unauthorized": "該供應商拒絕了當前授權，下面是上次獲取的模型列表。請斷開後重新連線。",
+          "unauthorized": "目前登入或 API key 已遭供應商拒絕，下方為上次取得的模型清單。請重新登入或更新 API key。",
           "forbidden": "該供應商拒絕了這次請求，下面是上次獲取的模型列表。若你正在使用 Proxy 或 VPN，請更換出口後重試。",
           "rejected": "該供應商拒絕了這次請求，下面是上次獲取的模型列表。請稍後重試或改用其它供應商。",
           "empty": "該供應商這次沒有返回任何可用模型，下面是上次獲取的列表。請確認帳號權限後重試。"
@@ -2020,8 +2021,8 @@
       },
       "detect": {
         "groupLabel": "檢測到本機 CLI",
-        "action": "去授權",
-        "hintLoggedIn": "檢測到 {{cli}} 已登入，可直接授權接入",
+        "action": "使用本機帳號",
+        "hintLoggedIn": "偵測到 {{cli}} 已登入，可使用本機帳號連線",
         "hintInstalled": "檢測到本機已安裝 {{cli}}"
       },
       "wizard": {
@@ -2034,21 +2035,21 @@
         "searchPlaceholder": "搜尋供應商…",
         "groupRecommend": "推薦",
         "groupDetectedLocal": "偵測到本機服務",
-        "groupSubscription": "訂閱授權",
+        "groupSubscription": "訂閱帳號",
         "recommendReason": {
           "has-local-models": "本機已有模型",
           "machine-capable": "這台電腦適合跑本機模型",
-          "subscription": "訂閱授權"
+          "subscription": "訂閱帳號"
         },
         "groupApiKey": "API 與自託管 Proxy · 預設隨目錄更新",
         "groupCustom": "自定義",
-        "metaOAuth": "訂閱授權",
-        "metaApiKey": "API Key",
+        "metaOAuth": "訂閱帳號",
+        "metaApiKey": "API key",
         "metaNoAuth": "本機 / 自託管 · 無需鑑權",
         "customTitle": "自定義端點",
         "customMeta": "接入任意 OpenAI / Anthropic 相容的模型來源",
-        "pickHint": "鑑權方式由供應商定義決定；OAuth 端點與基礎 URL 由預設攜帶，無需手填。",
-        "oauthDesc": "透過瀏覽器完成訂閱授權，無需 API Key",
+        "pickHint": "選擇要連線的帳號或服務。",
+        "oauthDesc": "在瀏覽器中登入帳號，無需 API key。",
         "deviceOAuthDesc": "使用一次性裝置碼，在供應商驗證頁面完成授權",
         "authorizeInBrowser": "在瀏覽器中授權",
         "authorizeWithDeviceCode": "使用裝置碼",
@@ -2060,8 +2061,8 @@
         "deviceCodeCopied": "裝置碼已複製",
         "deviceCodeCopyFailed": "裝置碼複製失敗",
         "verificationPageOpenFailed": "無法開啟驗證頁面",
-        "authorizedToast": "已連線「{{name}}」",
-        "authorizeFailed": "「{{name}}」授權失敗，請重試",
+        "authorizedToast": "已登入 {{name}}",
+        "authorizeFailed": "{{name}} 登入失敗，請重試",
         "nameLabel": "顯示名稱",
         "onlyAgentNote": "此供應商僅支援 {{agent}}",
         "endpointLabel": "{{agent}} 基礎 URL",
@@ -2084,7 +2085,7 @@
         "finish": "完成新增",
         "cancel": "取消",
         "useApiKey": "API key 接入",
-        "metaOAuthOrApi": "訂閱授權 · API Key",
+        "metaOAuthOrApi": "訂閱帳號 · API key",
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 連線",
           "note": "此來源提供影像生成模型，不參與對話。API key 僅儲存在本機（系統鑰匙串加密），不會上傳。"
@@ -2220,7 +2221,7 @@
       },
       "builtinApiKey": {
         "subtitle": "API key 連線",
-        "replaceKey": "更換 key",
+        "replaceKey": "編輯連線設定",
         "saveKey": "儲存",
         "keyPlaceholder": "貼上 API key",
         "toast": {
@@ -2231,7 +2232,7 @@
         },
         "disconnectConfirm": {
           "title": "斷開 {{name}}？",
-          "description": "斷開會刪除本機儲存的 API key，該來源的模型將不可用，可隨時重新新增。",
+          "description": "中斷會清除此連線儲存的 API key。供應商會保留，重新填寫 API key 後即可使用。",
           "confirm": "斷開",
           "cancel": "取消"
         }
@@ -2246,6 +2247,10 @@
         "codexPlanFallback": "ChatGPT 訂閱",
         "codexSecondary": "次級窗口剩餘 {{percent}}%",
         "codexResetCredits": "限額重設券 {{count}} 張"
+      },
+      "localAccount": {
+        "useClaude": "使用本機 Claude Code 帳號",
+        "unavailable": "找不到可用的本機登入，請先在對應應用程式登入，或新增獨立帳號。"
       }
     },
     "experimental": {
@@ -3259,13 +3264,13 @@
         "resetToDefault": "恢復預設",
         "toggleFailed": "切換瀏覽器目標失敗",
         "health": {
-          "ready": "內建瀏覽器控制端已連線。",
+          "ready": "內建瀏覽器已連線。",
           "error": "內建瀏覽器連線異常：{{reason}}。點選「恢復瀏覽器」重建控制連線。",
           "reasons": {
             "disposing": "上一次關閉尚未完成",
             "hostUnavailable": "內建瀏覽器介面尚未就緒或連線已中斷",
-            "startFailed": "新的控制端未能啟動",
-            "statusFailed": "控制端狀態檢查失敗",
+            "startFailed": "瀏覽器連線未能啟動",
+            "statusFailed": "無法檢查瀏覽器連線狀態",
             "recoveryFailed": "控制連線未能重建"
           },
           "reconnect": "重新連線瀏覽器",
@@ -3551,7 +3556,7 @@
         "controlIt": "我控制它",
         "allowInbound": "允許它控制本機",
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
-        "peerControlOff": "對方未開啟被控",
+        "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
         "controllingThisMac": "正在控制本機"
       },
@@ -3828,7 +3833,7 @@
       "title": "裝置互聯",
       "description": "同一飛書帳號登入的裝置可以互相發現；開啟「允許控制」後，你的其它裝置可以遠端連線本機的 {{appName}}。",
       "allowControl": "允許同帳號裝置控制本機",
-      "allowControlHint": "開啟後，使用同一帳號登入的其它裝置無需逐次確認即可控制本機；本機會顯示被控狀態，可隨時斷開。",
+      "allowControlHint": "開啟後，使用同一帳號登入的其它裝置無需逐次確認即可控制本機；本機會顯示遠端控制提示，可隨時斷開。",
       "keepAwake": "保持電腦喚醒",
       "keepAwakeHint": "開啟後本機不會進入休眠，後臺的 Agent 與定時任務可持續執行(仍可關閉顯示器 / 鎖屏)。",
       "linkStatus": {
@@ -3866,7 +3871,7 @@
       },
       "toast": {
         "enabled": "已允許同帳號裝置控制本機",
-        "disabled": "已關閉被控",
+        "disabled": "已關閉遠端控制",
         "toggleFailed": "切換開關失敗",
         "controlEnabled": "已開啟對該裝置的控制",
         "controlDisabled": "已關閉對該裝置的控制",
@@ -3880,7 +3885,7 @@
         "deleteFailed": "刪除失敗",
         "disconnected": "已斷開所有遠端連線",
         "disconnectFailed": "斷開遠端連線失敗",
-        "remoteSessionEnded": "被控裝置已結束該遠端任務"
+        "remoteSessionEnded": "遠端裝置已結束該遠端任務"
       },
       "control": "控制",
       "standbyHint": "本機另一 Cindy 例項正在使用遠端連線。關閉它後，本例項會自動接管。"
@@ -5622,8 +5627,8 @@
     "controlledTooltip": "另一臺登入同帳號的裝置正在遠端控制本機。你可以撤銷其訪問權限。",
     "revokeAccess": "撤銷權限",
     "viewControllers": "檢視",
-    "collapseControlledNotice": "收起被控提示",
-    "expandControlledNotice": "展開被控提示：{{label}}",
+    "collapseControlledNotice": "收起遠端控制提示",
+    "expandControlledNotice": "展開遠端控制提示：{{label}}",
     "versionMismatch": "對方版本不一致，部分功能可能受限"
   },
   "accountDeletion": {
@@ -6606,9 +6611,9 @@
       },
       "remote": {
         "deviceTooOldTitle": "對方設備版本過舊",
-        "deviceTooOldDesc": "對方設備的 {{appName}} 版本過舊，暫不支援遠端審查，請升級被控設備後重試。",
+        "deviceTooOldDesc": "對方設備的 {{appName}} 版本過舊，暫不支援遠端審查，請升級遠端裝置後重試。",
         "oversizeTitle": "改動資料過大",
-        "oversizeDesc": "該視圖的改動超過裝置互聯單次傳輸上限，請在被控設備上檢視。"
+        "oversizeDesc": "該視圖的改動超過裝置互聯單次傳輸上限，請在遠端裝置上檢視。"
       },
       "unmodifiedLines_one": "{{count}} 行未改動",
       "unmodifiedLines_other": "{{count}} 行未改動",
@@ -7069,6 +7074,7 @@
     }
   },
   "sidebar": {
+    "backToSessions": "返回任務",
     "vendorReadiness": {
       "loading": "正在檢查可用狀態",
       "ready": "已就緒",
@@ -7578,7 +7584,7 @@
       "chooseOne": "選擇一種配置方式",
       "restoreAria": "展開 {{name}} 設定",
       "minimizeAria": "收起 {{name}} 設定",
-      "completeOnDesktop": "請在被控桌面完成設定，本卡片會自動更新狀態。",
+      "completeOnDesktop": "請在遠端電腦完成設定，本卡片會自動更新狀態。",
       "cancel": "取消",
       "cancelling": "正在取消…",
       "retry": "重試",
@@ -7660,7 +7666,7 @@
     },
     "addRemoteProject": {
       "title": "新增遠端專案",
-      "hint": "選擇一臺已連線的遠端主機或被控裝置，並選擇此專案的資料夾。",
+      "hint": "選擇一臺已連線的遠端主機或遠端裝置，並選擇此專案的資料夾。",
       "host": "遠端主機 / 裝置",
       "sourceGroupSsh": "遠端主機 (SSH)",
       "sourceGroupDevice": "我的裝置",
@@ -7669,8 +7675,8 @@
       "refresh": "重新整理",
       "add": "新增專案",
       "cancel": "取消",
-      "empty": "請先在「設定 → 遠端連線」連線一臺被控裝置，或在「設定 → 遠端機器」新增 SSH 主機。",
-      "emptyPiSshFiltered": "Pi 僅在本地執行，這裡不顯示 SSH 主機。請在「設定 → 遠端連線」連線一臺被控裝置，或切換到 Claude / Codex 以使用 SSH 主機。",
+      "empty": "請先在「設定 → 遠端連線」連線一臺遠端裝置，或在「設定 → 遠端機器」新增 SSH 主機。",
+      "emptyPiSshFiltered": "Pi 僅在本地執行，這裡不顯示 SSH 主機。請在「設定 → 遠端連線」連線一臺遠端裝置，或切換到 Claude / Codex 以使用 SSH 主機。",
       "loading": "載入中…",
       "noSubdirs": "此目錄下沒有子資料夾",
       "doubleClickHint": "雙擊進入此資料夾",
@@ -7965,7 +7971,7 @@
       "openHint": "召集 Worker 協作",
       "disabledHint": "協同模式已關閉，請在設定中重新啟用",
       "unavailableHint": "暫時無法確認協同設定，請稍後重試",
-      "unsupportedRemoteHint": "被控裝置的版本過舊，暫不支援協同",
+      "unsupportedRemoteHint": "遠端裝置的版本過舊，暫不支援協同",
       "remoteContinueNotice": "本條訊息仍會以單任務繼續傳送。",
       "handoffRecoveredMessage": "上次開啟協同時被中斷，未發出的訊息已恢復到輸入框",
       "handoffRecoveredGoal": "上次開啟協同時被中斷，目標未啟動，內容已恢復到輸入框",
@@ -7986,19 +7992,19 @@
       "errors": {
         "INVALID_PARAMS": "所選模型或協同配置已不可用，請重新選擇後重試。",
         "INVALID_PARAMS_CONTINUE": "所選模型或協同配置已不可用；協同未開啟，已改為單任務繼續。請重新選擇後重試。",
-        "INVALID_PARAMS_REMOTE": "被控裝置不支援所選模型或協同配置。請改選該裝置支援的模型後重試。",
+        "INVALID_PARAMS_REMOTE": "遠端裝置不支援所選模型或協同配置。請改選該裝置支援的模型後重試。",
         "NO_PROVIDER_FOR_AGENT": "當前裝置沒有為該 Agent 連線可用的模型供應商。請先在設定中完成連線。",
         "NO_PROVIDER_FOR_AGENT_CONTINUE": "當前裝置沒有為該 Agent 連線可用的模型供應商；協同未開啟，已改為單任務繼續。請先在設定中完成連線。",
-        "NO_PROVIDER_FOR_AGENT_REMOTE": "被控裝置沒有為該 Agent 連線可用的模型供應商。請在被控裝置上完成連線後重試。",
+        "NO_PROVIDER_FOR_AGENT_REMOTE": "遠端裝置沒有為該 Agent 連線可用的模型供應商。請在遠端裝置上完成連線後重試。",
         "PROVIDER_ROUTE_UNAVAILABLE": "所選模型與供應商的精確路由當前不可用，請改選可用的模型或供應商後重試。",
         "PROVIDER_ROUTE_UNAVAILABLE_CONTINUE": "所選模型與供應商的精確路由當前不可用；協同未開啟，已改為單任務繼續。請改選可用的模型或供應商後重試。",
-        "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "被控裝置上的所選模型與供應商精確路由當前不可用，請改選該裝置可用的路由後重試。",
+        "PROVIDER_ROUTE_UNAVAILABLE_REMOTE": "遠端裝置上的所選模型與供應商精確路由當前不可用，請改選該裝置可用的路由後重試。",
         "BUDGET_MODEL_REQUIRES_API_MODE": "此 Codex 模型需要先在設定中配置 API key 才能使用。請配置後重試。",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "此 Codex 模型需要先在設定中配置 API key；協同未開啟，已改為單任務繼續。請配置 API key 後重試。",
-        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "被控裝置尚未配置此 Codex 模型所需的 API key。請在被控裝置上配置後重試。",
+        "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "遠端裝置尚未配置此 Codex 模型所需的 API key。請在遠端裝置上配置後重試。",
         "PRECONDITION_FAILED": "協同模式已關閉，或當前任務暫不支援協同。",
         "PRECONDITION_FAILED_CONTINUE": "協同模式未開啟，已改為單任務繼續。",
-        "PRECONDITION_FAILED_REMOTE": "被控任務不支援協同。"
+        "PRECONDITION_FAILED_REMOTE": "遠端任務不支援協同。"
       }
     },
     "chatInput": {
@@ -9168,12 +9174,12 @@
       "runningTool": "{{tool}} 執行中…"
     },
     "remoteSession": {
-      "reconnecting": "與被控裝置的連線中斷，正在重連…",
-      "hostOffline": "被控裝置已離線，暫時無法同步",
-      "degraded": "與被控裝置的連線不穩定，正在自動重試…",
-      "actionsUnavailable": "被控裝置暫不可用，恢復連線後才能修改該任務",
+      "reconnecting": "與遠端裝置的連線中斷，正在重連…",
+      "hostOffline": "遠端裝置已離線，暫時無法同步",
+      "degraded": "與遠端裝置的連線不穩定，正在自動重試…",
+      "actionsUnavailable": "遠端裝置暫不可用，恢復連線後才能修改該任務",
       "resync": "重新同步",
-      "loading": "正在從被控裝置載入任務…",
+      "loading": "正在從遠端裝置載入任務…",
       "suspectStall": "本輪長時間無更新，可能已斷流",
       "finalizeStuck": "結束本輪",
       "issue": {
@@ -9260,8 +9266,8 @@
       "modelSwitchedFastModeOff": "已切換模型，Fast Mode 已關閉"
     },
     "remoteDesktopConfirmation": {
-      "title": "需要在受控電腦上確認",
-      "description": "請在受控電腦上開啟 Cindy，查看並處理這項確認。"
+      "title": "需要在遠端電腦上確認",
+      "description": "請在遠端電腦上開啟 Cindy，查看並處理這項確認。"
     },
     "handoff": {
       "card": {
@@ -9622,7 +9628,7 @@
         "switched": "已切換任務分支",
         "switchedWithDraft": "已切換分支，原問題已放回輸入框",
         "runningBlocked": "當前輪結束後才能切換任務分支。",
-        "remoteBlocked": "請先重連或升級被控桌面端，再切換分支。",
+        "remoteBlocked": "請先重連或升級遠端電腦上的 Cindy，再切換分支。",
         "filesWarning": "切換隻改變對話上下文，不會回滾工作區檔案。",
         "summarize": "離開當前分支時生成摘要（會呼叫模型）",
         "summaryFocus": "可選：摘要重點，例如保留錯誤處理結論",
@@ -11529,13 +11535,13 @@
       "piBinaryMissingTitle": "Pi 元件未就緒",
       "piBinaryMissingDescription": "Pi 元件尚未準備好，暫時無法使用這個功能。請稍後重試，或前往「模型供應商」檢查 Pi 連線狀態。",
       "goToSettings": "前往設定",
-      "remoteCodexBinaryMissingTitle": "被控端 Codex 元件未就緒",
-      "remotePiBinaryMissingTitle": "被控端 Pi 元件未就緒",
-      "remoteAuthDescription": "需要在被控裝置「{{device}}」上完成配置後，才能在這裡新建並執行任務。請在該裝置上配置後重試。",
-      "remoteCodexNoSourceTitle": "被控端 Codex 暫無可用來源",
-      "remoteCodexNoSourceDescription": "被控裝置「{{device}}」尚未連線 Codex 可用的模型來源，無法在這裡新建並執行任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」登入 OpenAI 或連線其他來源後重試。",
-      "remoteCcNoSourceTitle": "被控端 Claude 暫無可用來源",
-      "remoteCcNoSourceDescription": "被控裝置「{{device}}」尚未連線可用的 Claude 模型來源，無法在這裡新建並執行任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」連線來源後重試。",
+      "remoteCodexBinaryMissingTitle": "遠端電腦 Codex 元件未就緒",
+      "remotePiBinaryMissingTitle": "遠端電腦 Pi 元件未就緒",
+      "remoteAuthDescription": "需要在遠端裝置「{{device}}」上完成配置後，才能在這裡新建並執行任務。請在該裝置上配置後重試。",
+      "remoteCodexNoSourceTitle": "遠端電腦 Codex 暫無可用來源",
+      "remoteCodexNoSourceDescription": "遠端裝置「{{device}}」尚未連線 Codex 可用的模型來源，無法在這裡新建並執行任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」登入 OpenAI 或連線其他來源後重試。",
+      "remoteCcNoSourceTitle": "遠端電腦 Claude 暫無可用來源",
+      "remoteCcNoSourceDescription": "遠端裝置「{{device}}」尚未連線可用的 Claude 模型來源，無法在這裡新建並執行任務。請在該裝置上開啟 {{appName}}，在「設定 → 模型供應商」連線來源後重試。",
       "gotIt": "知道了"
     },
     "fileTypes": {
@@ -11655,7 +11661,7 @@
   },
   "commands": {
     "toast": {
-      "remoteUnsupported": "對方裝置的應用版本過舊，暫不支援在遠端任務使用此命令，請先升級被控裝置的 {{appName}}"
+      "remoteUnsupported": "對方裝置的應用版本過舊，暫不支援在遠端任務使用此命令，請先升級遠端裝置的 {{appName}}"
     }
   },
   "goal": {

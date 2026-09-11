@@ -67,7 +67,8 @@ import {
   type ProviderLogoRouting,
 } from '@cindy/model-providers/branding';
 import { app } from 'electron';
-import { remoteDesktop } from '../remote-desktop';
+import { remoteDesktop, requestRemoteDesktop } from '../remote-desktop';
+import { remoteCredentialHost } from '../remote-desktop/credentialHost';
 import { REMOTE_DESKTOP_CHANNEL } from '@cindy/device-link';
 import type { DeviceLinkClient } from '@cindy/device-link';
 import { isDeferredHistoryPush, deferredToolBoundary } from './historyViewPush';
@@ -1966,6 +1967,7 @@ export function dropAllControllers(
   reason: 'user' | 'toggle-off' | 'shutdown',
 ): void {
   remoteDesktop.stop();
+  void remoteCredentialHost.closeAll().catch(() => remoteCredentialHost.dispose());
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
@@ -2025,6 +2027,7 @@ function deactivateControllerState(
   let changed = false;
   changed = acceptedLinkControllers.delete(deviceId) || changed;
   remoteDesktop.stop(deviceId);
+  void remoteCredentialHost.close(deviceId).catch(() => remoteCredentialHost.dispose());
   changed = controllerConnectionEpochByDevice.delete(deviceId) || changed;
   changed = controllerLinkGenerationByDevice.delete(deviceId) || changed;
   changed = reportedControllerNameByDevice.has(deviceId) || changed;
@@ -2154,6 +2157,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       }
       clearRemoteInvokeStateFor(src);
       remoteDesktop.stop(src);
+      void remoteCredentialHost.close(src).catch(() => remoteCredentialHost.dispose());
       offlinePushQueue.clear(src);
       const deactivated = deactivateControllerState(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
@@ -3401,7 +3405,7 @@ export async function runInvoke(
   }
 
   if (payload.channel === REMOTE_DESKTOP_CHANNEL) {
-    try { return { ok: true, result: await remoteDesktop.request(src, payload.args?.[0]) }; }
+    try { return { ok: true, result: await requestRemoteDesktop(src, payload.args?.[0]) }; }
     catch (error) { return { ok: false, error: { code: 'IPC_ERROR', message: error instanceof Error ? error.message : 'DESKTOP_UNAVAILABLE' } }; }
   }
 

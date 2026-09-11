@@ -157,7 +157,7 @@ describe('useCodexAuth lifecycle', () => {
     expect(result.current.state).toEqual({ kind: 'unauthenticated' });
   });
 
-  it('blocks Dev logout without hiding the shared OpenAI login', async () => {
+  it('disconnects Cindy in Dev while retaining the browser login write guard', async () => {
     const auth = installAuthApi(async () => undefined);
     auth.getState.mockResolvedValueOnce({
       authenticated: true,
@@ -176,9 +176,9 @@ describe('useCodexAuth lifecycle', () => {
     await act(async () => {
       await result.current.logout();
     });
-    expect(auth.logout).not.toHaveBeenCalled();
+    expect(auth.logout).toHaveBeenCalledWith('codex');
     expect(result.current.state).toMatchObject({
-      kind: 'authenticated',
+      kind: 'unauthenticated',
       oauthWritesBlocked: true,
     });
 
@@ -193,6 +193,18 @@ describe('useCodexAuth lifecycle', () => {
     });
     await expect(result.current.triggerLogin()).resolves.toBe('blocked');
     expect(auth.triggerLogin).not.toHaveBeenCalled();
+    auth.triggerLogin.mockResolvedValueOnce({
+      authenticated: true,
+      authSource: 'oauth',
+      credentialScope: 'system-shared',
+    });
+    await act(async () => {
+      await expect(result.current.triggerLogin('local')).resolves.toBe('authenticated');
+    });
+    expect(auth.triggerLogin).toHaveBeenCalledWith(
+      'codex',
+      expect.objectContaining({ mode: 'local' }),
+    );
   });
 
   it('refreshes to disconnected when cleanup fails after the marker committed', async () => {

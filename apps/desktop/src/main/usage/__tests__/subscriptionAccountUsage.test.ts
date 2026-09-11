@@ -64,6 +64,8 @@ describe('subscription provider quota isolation', () => {
     async (kind) => {
       const a = `${kind}-a`,
         b = `${kind}-b`;
+      const clearInstant = vi.fn();
+      setSubscriptionAccountUsageBroadcaster(() => {}, clearInstant);
       state.tokens.set(a, 'test-token-a');
       state.tokens.set(b, 'test-token-b');
       const fetch = kind === 'claude' ? state.fetchClaude : state.fetchXai;
@@ -76,6 +78,8 @@ describe('subscription provider quota isolation', () => {
       expect(await readSubscriptionAccountUsage(b)).toMatchObject({ updatedAt: 2 });
       state.tokens.delete(a);
       await syncSubscriptionAccountUsage(a);
+      if (kind === 'xai') expect(clearInstant).toHaveBeenCalledExactlyOnceWith(a);
+      else expect(clearInstant).not.toHaveBeenCalled();
       expect(await readSubscriptionAccountUsage(a)).toBeNull();
       expect(await readSubscriptionAccountUsage(b)).toMatchObject({ updatedAt: 2 });
     },

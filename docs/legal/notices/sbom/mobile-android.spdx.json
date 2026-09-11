@@ -3,14 +3,32 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-mobile-android",
-  "documentNamespace": "https://cindy.app/spdx/mobile-android/279afe096f67e06278533b0141e4ec9be3d49bf89bbd4ecc0eebb430433efbb9",
+  "documentNamespace": "https://cindy.app/spdx/mobile-android/dd75db18ed7f49134892bf750cfad168c898c5f8a0456a20e38bfc7667c2120f",
   "creationInfo": {
-    "created": "2026-09-02T19:21:04Z",
-    "creators": [
-      "Tool: scripts/generate-third-party-notices.mjs"
-    ]
+    "created": "2026-09-08T11:11:04Z",
+    "creators": ["Tool: scripts/generate-third-party-notices.mjs"]
   },
   "packages": [
+    {
+      "name": "androidx.biometric:biometric",
+      "SPDXID": "SPDXRef-Package-6f75599db059a549",
+      "versionInfo": "1.1.0",
+      "downloadLocation": "https://developer.android.com/jetpack/androidx/releases/biometric",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "com.nimbusds:nimbus-jose-jwt",
+      "SPDXID": "SPDXRef-Package-222113c8e8549c78",
+      "versionInfo": "10.9.1",
+      "downloadLocation": "https://bitbucket.org/connect2id/nimbus-jose-jwt",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION"
+    },
     {
       "name": "com.taptap.sdk:tap-core and declared TapTap modules",
       "SPDXID": "SPDXRef-Package-a7c06f99e5a4cd74",
@@ -5148,6 +5166,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/expo-modules-jsi@57.0.6"
+        }
+      ]
+    },
+    {
+      "name": "expo-network",
+      "SPDXID": "SPDXRef-Package-e4dede772258e5bd",
+      "versionInfo": "57.0.1",
+      "downloadLocation": "https://github.com/expo/expo",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/expo-network@57.0.1"
         }
       ]
     },
@@ -10426,6 +10461,16 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-6f75599db059a549"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-222113c8e8549c78"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-a7c06f99e5a4cd74"
     },
     {
@@ -11942,6 +11987,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-bf533b3e2ed3f7f5"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e4dede772258e5bd"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

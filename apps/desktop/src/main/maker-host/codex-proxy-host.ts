@@ -1,4 +1,7 @@
-import { isClaudeSubscriptionProviderId } from './subscription-account-auth.js';
+import { peekGrokAccessToken } from './grok-oauth-login.js';
+import { bearerAccessTokenFromHeaders } from './chatgpt-bridge-auth-invalidation.js';
+import { isAppSessionBoundaryPending } from '../appSessionState.js';
+import { isClaudeSubscriptionProviderId, isXaiSubscriptionProviderId } from './subscription-account-auth.js';
 /**
  * Desktop 端 codex-proxy 生命周期管理 ——
  *
@@ -41,7 +44,9 @@ import {
 } from '@cindy/anthropic-compat-proxy';
 import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-controller.js';
 import {
+  chainResponseTransforms,
   createResponsesCustomToolFunctionAdapter,
+  createResponsesNullArrayRepairTransform,
   normalizeResponsesToolItemIds,
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
@@ -2568,7 +2573,11 @@ function isXaiUpstream(upstreamBase: string): boolean {
 
 function maybeRecordXaiRateLimit(ctx: ResponseObserverCtx): void {
   if (ctx.status < 200 || ctx.status >= 300) return;
-  if (!isXaiUpstream(ctx.upstreamBase)) return;
+  if (!isXaiUpstream(ctx.upstreamBase) || isAppSessionBoundaryPending()) return;
+  const { providerId } = providerContextForRequest(ctx.requestHeaders, readRequestMeta(ctx.requestBody).model ?? '');
+  if (!providerId || !isXaiSubscriptionProviderId(providerId)) return;
+  const token = bearerAccessTokenFromHeaders(ctx.outboundHeaders ?? ctx.requestHeaders);
+  if (!token || token !== peekGrokAccessToken(providerId)) return;
   const info = {
     limitRequests: numericHeader(ctx.responseHeaders, 'x-ratelimit-limit-requests'),
     remainingRequests: numericHeader(ctx.responseHeaders, 'x-ratelimit-remaining-requests'),
@@ -2576,7 +2585,7 @@ function maybeRecordXaiRateLimit(ctx: ResponseObserverCtx): void {
     remainingTokens: numericHeader(ctx.responseHeaders, 'x-ratelimit-remaining-tokens'),
   };
   if (Object.values(info).every((v) => v === undefined)) return;
-  recordXaiRateLimitSnapshot(info);
+  recordXaiRateLimitSnapshot(info, providerId);
 }
 
 function tryReadSseEvent(line: string): { event: string | null; data: Record<string, unknown> | null } | null {
@@ -2595,7 +2604,7 @@ function tryReadSseEvent(line: string): { event: string | null; data: Record<str
 
 function createCodexResponseObserver(): ResponseObserver {
   return (ctx) => {
-    maybeRecordXaiRateLimit(ctx);
+    try { maybeRecordXaiRateLimit(ctx); } catch { /* Display-only; preserve successful responses. */ }
     if (ctx.method !== 'POST') return null;
     const path = ctx.url.split('?', 1)[0] ?? ctx.url;
     if (!path.endsWith('/responses') && path !== '/responses') return null;
@@ -3396,10 +3405,18 @@ function createCodexProxyHandle(
       return path.kind !== 'not-custom-provider-route'
         && !(path.kind === 'route' && path.pathKind === 'responses');
     },
-    transformResponse: (ctx) => execAdapter.createResponseTransform(ctx.reqId, {
-      contentType: ctx.responseHeaders['content-type'] ?? '',
-      contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',
-    }),
+    transformResponse: (ctx) => {
+      const response = {
+        contentType: ctx.responseHeaders['content-type'] ?? '',
+        contentEncoding: ctx.responseHeaders['content-encoding'] ?? '',
+      };
+      // Repair runs first so items with `null` arrays reach the custom-tool adapter (and Codex)
+      // as valid ResponseItems (#4251). The adapter keeps its own compressed/MIME rejections.
+      return chainResponseTransforms(
+        createResponsesNullArrayRepairTransform(response),
+        execAdapter.createResponseTransform(ctx.reqId, response),
+      );
+    },
     // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
     // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
     routingTransform: withCodexUpstreamRecording(

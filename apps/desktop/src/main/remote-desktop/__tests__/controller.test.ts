@@ -40,6 +40,62 @@ function harness() {
   };
 }
 describe('remote desktop authority and lifecycle', () => {
+  it('locks only on explicit owner exit and blocks takeover until lock completes', async () => {
+    const h = harness(), first = await h.start();
+    let finish!: () => void;
+    h.deps.lockScreen = vi.fn(async current => {
+      expect(current()).toBe(true);
+      await new Promise<void>(resolve => { finish = resolve; });
+    });
+    await expect(h.controller.request('other', { op: 'stop', lease: first.lease, lockScreen: true })).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+    expect(h.deps.lockScreen).not.toHaveBeenCalled();
+    const locking = h.controller.request('phone', { op: 'stop', lease: first.lease, lockScreen: true });
+    await expect(h.controller.request('other', { op: 'start', displayId: '1', takeover: true })).rejects.toThrow('DESKTOP_BUSY');
+    finish();
+    await expect(locking).resolves.toEqual({ ok: true });
+    expect(h.deps.lockScreen).toHaveBeenCalledTimes(1);
+    await expect(h.controller.request('phone', { op: 'stop', lease: first.lease, lockScreen: true })).rejects.toThrow('DESKTOP_LEASE_EXPIRED');
+    const second = await h.start();
+    await h.controller.request('phone', { op: 'stop', lease: second.lease });
+    expect(h.deps.lockScreen).toHaveBeenCalledTimes(1);
+  });
+  it('invalidates delayed lock preparation after revocation and reports lock failure', async () => {
+    const h = harness(), first = await h.start();
+    let finish!: () => void;
+    h.deps.lockScreen = async current => {
+      await new Promise<void>(resolve => { finish = resolve; });
+      expect(current()).toBe(false);
+      throw new Error('DESKTOP_LOCK_FAILED');
+    };
+    const pending = h.controller.request('phone', { op: 'stop', lease: first.lease, lockScreen: true });
+    h.revoke(); finish();
+    await expect(pending).rejects.toThrow('DESKTOP_LOCK_FAILED');
+    expect(h.controller.state).toBeNull();
+  });
+  it.each(['stop', 'expiry', 'revoke', 'account'])('cancels an in-flight lock on %s without cancelling for another peer', async reason => {
+    const h = harness();
+    let account = 'first';
+    h.deps.authenticationSession = () => account;
+    const first = await h.start();
+    let signal!: AbortSignal;
+    h.deps.lockScreen = async (_current, cancellation) => {
+      signal = cancellation;
+      await new Promise<void>((_resolve, reject) => {
+        cancellation.addEventListener('abort', () => reject(new Error('cancelled')), { once: true });
+      });
+    };
+    const pending = h.controller.request('phone', { op: 'stop', lease: first.lease, lockScreen: true });
+    const rejected = expect(pending).rejects.toThrow('cancelled');
+    h.controller.stop('other');
+    expect(signal.aborted).toBe(false);
+    if (reason === 'stop') h.controller.stop('phone');
+    if (reason === 'expiry') { h.advance(120000); h.controller.tick(); }
+    if (reason === 'revoke') { h.revoke(); h.controller.tick(); }
+    if (reason === 'account') { account = 'second'; h.controller.tick(); }
+    expect(signal.aborted).toBe(true);
+    await rejected;
+    expect(h.controller.state).toBeNull();
+  });
   it('releases a stalled fallback frame for another peer without stopping its lease', async () => {
     vi.useFakeTimers();
     try {

@@ -25,7 +25,7 @@ export type CodexUiState = (
   | { kind: 'unauthenticated' }
   | {
       kind: 'login-pending';
-      mode: 'browser' | 'device-code';
+      mode: 'browser' | 'device-code' | 'local';
       deviceCode?: { verificationUrl: string; userCode: string };
     }
   | {
@@ -73,7 +73,7 @@ type CodexAuthMachineEvent =
   | { type: 'state-changed'; result: CodexLoginResult }
   | {
       type: 'login-pending';
-      mode: 'browser' | 'device-code';
+      mode: 'browser' | 'device-code' | 'local';
       deviceCode?: { verificationUrl: string; userCode: string };
     }
   | { type: 'login-progress-error'; message: string }
@@ -434,7 +434,7 @@ export function verifyCodexAuthRecovery(
  * 观察型 useCodexAuth 实例不会获得 lease，因此卸载时不会取消别的窗口发起的登录。
  */
 export function useOwnedCodexLogin(): (
-  mode?: 'browser' | 'device-code',
+  mode?: 'browser' | 'device-code' | 'local',
 ) => Promise<CodexLoginResult> {
   const leasesRef = useRef(new Set<CodexLoginLease>());
   const mountedRef = useRef(true);
@@ -450,7 +450,7 @@ export function useOwnedCodexLogin(): (
     };
   }, []);
 
-  return useCallback((mode: 'browser' | 'device-code' = 'browser') => {
+  return useCallback((mode: 'browser' | 'device-code' | 'local' = 'browser') => {
     if (!mountedRef.current) {
       return Promise.resolve({
         authenticated: false,
@@ -777,10 +777,10 @@ export function useCodexAuth(options?: {
   }, [enabled, machine.ui.kind, refresh]);
 
   const triggerLogin = useCallback(
-    async (mode: 'browser' | 'device-code' = 'browser'): Promise<CodexLoginOutcome> => {
+    async (mode: 'browser' | 'device-code' | 'local' = 'browser'): Promise<CodexLoginOutcome> => {
       const observerEpoch = observerEpochRef.current;
       if (!isObserverActive(observerEpoch)) return 'cancelled';
-      if (machineRef.current.ui.oauthWritesBlocked) return 'blocked';
+      if (mode !== 'local' && machineRef.current.ui.oauthWritesBlocked) return 'blocked';
       transition({ type: 'login-pending', mode });
       try {
         const result = await triggerOwnedLogin(mode);
@@ -838,10 +838,6 @@ export function useCodexAuth(options?: {
   }, [transition, verifyRecoveredState]);
 
   const logout = useCallback(async () => {
-    // Dev read-only means the shared OpenAI login remains usable but cannot be
-    // disconnected from this process. Avoid sending a no-op logout to Main and
-    // then incorrectly projecting the local UI as unauthenticated.
-    if (machineRef.current.ui.oauthWritesBlocked) return;
     invalidatePendingCodexLogin();
     try {
       await window.electronAPI.maker.auth.logout(AGENT_KIND);

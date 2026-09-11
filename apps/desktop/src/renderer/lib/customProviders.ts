@@ -332,6 +332,8 @@ export async function updateCustomProvider(
 }
 
 /** 删除：main 在同一 provider mutation queue 内清配置与所有凭证。 */
-export async function deleteCustomProvider(providerId: string): Promise<void> {
-  await window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId));
+export async function deleteCustomProvider(providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> {
+  if (options !== undefined) return window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId), ownerScope, options);
+  if (ownerScope === undefined) return window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId));
+  return window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId), ownerScope);
 }

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
-import type { ReactElement } from 'react';
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode, type ReactElement } from 'react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ControlledBanner, __resetControlledBannerForTests } from '../ControlledBanner';
@@ -102,5 +102,68 @@ describe('ControlledBanner composer collapse state', () => {
     expect(
       screen.getByRole('button', { name: 'remoteDevice.collapseControlledNotice' }),
     ).toBeTruthy();
+  });
+});
+
+describe('ControlledBanner floating fallback', () => {
+  it('yields to a mounted composer, including its collapsed indicator, and returns after unmount', async () => {
+    const fallback = render(<ControlledBanner />);
+    await screen.findByText('Controlled by iPhone');
+
+    const composer = render(<ControlledBanner placement="composer" sessionId="bot-session" />);
+    expect(screen.getAllByText('Controlled by iPhone')).toHaveLength(1);
+    expect(fallback.container.childElementCount).toBe(0);
+
+    fireEvent.click(screen.getByRole('button', { name: 'remoteDevice.collapseControlledNotice' }));
+    expect(screen.queryByText('Controlled by iPhone')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Expand: Controlled by iPhone' })).toBeTruthy();
+    expect(fallback.container.childElementCount).toBe(0);
+
+    composer.unmount();
+    expect(screen.getAllByText('Controlled by iPhone')).toHaveLength(1);
+    expect(fallback.container.childElementCount).toBe(1);
+  });
+
+  it('waits for the last inline owner and survives StrictMode effect replay', async () => {
+    const fallback = render(<ControlledBanner />);
+    await screen.findByText('Controlled by iPhone');
+    const first = render(
+      <StrictMode>
+        <ControlledBanner placement="composer" sessionId="first" />
+      </StrictMode>,
+    );
+    const second = render(<ControlledBanner placement="inline" />);
+    expect(fallback.container.childElementCount).toBe(0);
+
+    first.unmount();
+    expect(fallback.container.childElementCount).toBe(0);
+    second.unmount();
+    expect(fallback.container.childElementCount).toBe(1);
+  });
+
+  it('handles placement changes without retaining a stale owner', async () => {
+    const view = render(<ControlledBanner placement="composer" sessionId="session" />);
+    await screen.findByText('Controlled by iPhone');
+    view.rerender(<ControlledBanner />);
+    expect(screen.getAllByText('Controlled by iPhone')).toHaveLength(1);
+    view.rerender(<ControlledBanner placement="inline" />);
+    expect(screen.getAllByText('Controlled by iPhone')).toHaveLength(1);
+    view.unmount();
+    render(<ControlledBanner />);
+    expect(screen.getAllByText('Controlled by iPhone')).toHaveLength(1);
+  });
+
+  it('shows neither surface after disconnect and restores only the composer on reconnect', async () => {
+    const fallback = render(<ControlledBanner />);
+    render(<ControlledBanner placement="composer" sessionId="session" />);
+    await screen.findByText('Controlled by iPhone');
+    const onControlledState = vi.mocked(window.electronAPI.deviceLink.onControlledState);
+    expect(onControlledState).toHaveBeenCalledTimes(1);
+    const push = onControlledState.mock.calls[0][0];
+    act(() => push({ controllers: [] }));
+    expect(document.querySelector('[data-controlled-banner-chip]')).toBeNull();
+    act(() => push({ controllers: [{ deviceId: 'iphone', name: 'iPhone' }] }));
+    expect(screen.getAllByText('Controlled by iPhone')).toHaveLength(1);
+    expect(fallback.container.childElementCount).toBe(0);
   });
 });

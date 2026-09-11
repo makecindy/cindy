@@ -117,12 +117,16 @@
         "usage": { "label": "사용량", "a11y": "작업 사용량 보기" },
         "files": { "label": "파일", "a11y": "원격 파일 탐색" },
         "queue": { "label": "대기열", "a11y": "대기열 패널 열기" },
-        "search": { "label": "검색", "openA11y": "메시지 검색", "closeA11y": "메시지 검색 닫기" }
+        "search": {
+          "label": "검색",
+          "openA11y": "메시지 검색",
+          "closeA11y": "메시지 검색 닫기"
+        }
       },
       "disabled": {
         "files": "이 작업에는 원격 작업 디렉터리가 없어 파일을 탐색할 수 없습니다.",
         "search": "검색할 메시지가 아직 없습니다.",
-        "queueUnavailable": "제어 중인 컴퓨터를 일시적으로 사용할 수 없습니다. 다시 동기화한 후 대기열을 확인하세요.",
+        "queueUnavailable": "원격 컴퓨터를 일시적으로 사용할 수 없습니다. 다시 동기화한 후 대기열을 확인하세요.",
         "queuePending": "먼저 보류 중인 요청을 처리하세요. 완료되면 대기열 패널을 사용할 수 있습니다.",
         "queuePausedEmpty": "대기열이 일시 중지되었지만 다시 시작할 메시지가 없습니다.",
         "queueEmpty": "대기열에 메시지가 없습니다.",
@@ -288,11 +292,11 @@
     "enterProjectPath": "컴퓨터의 프로젝트 경로를 입력하세요.",
     "enterModel": "모델을 입력하세요.",
     "enterFirstMessageOrAttachment": "첫 메시지를 입력하거나 첨부를 추가하세요.",
-    "noSessionIdReturned": "컴퓨터에서 새 세션 ID를 반환하지 않았습니다.",
-    "sessionIdNotAdopted": "컴퓨터가 미리 생성된 세션 ID를 사용하지 않았습니다(컴퓨터 버전 이상). 컴퓨터를 업데이트한 후 다시 시도하세요.",
+    "noSessionIdReturned": "원격 컴퓨터에서 새 세션이 생성되었는지 확인할 수 없습니다. 다시 동기화하여 확인하세요.",
+    "sessionIdNotAdopted": "원격 컴퓨터의 Cindy 버전이 호환되지 않습니다. 업데이트한 후 다시 시도하세요.",
     "firstMessageMissingConfirm": "첫 메시지가 전송되지 않았습니다. 내용이 입력창에 복원되었습니다. 보내기 전에 이 메시지가 세션에 없는지 확인하세요.",
     "firstMessageUnconfirmed": "첫 메시지의 전송 상태를 확인할 수 없습니다. 내용이 입력창에 복원되었습니다. 보내기 전에 이 메시지가 이미 세션에 있는지 확인하세요.",
-    "selectControlledDevice": "제어할 기기 선택",
+    "selectControlledDevice": "원격 기기 선택",
     "selectDeviceNamed": "기기 {{name}} 선택",
     "selectAgent": "에이전트 선택",
     "switchToAgent": "{{label}}(으)로 전환",

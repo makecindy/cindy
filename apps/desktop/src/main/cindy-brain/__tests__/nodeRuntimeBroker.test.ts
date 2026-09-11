@@ -11,6 +11,7 @@ import {
   createUtilityNodeWorkerProcess,
   GhostNodeRuntimeBroker,
   type NodeWorkerStartupObservation,
+  type NodeWorkerStartupState,
   type NodeWorkerProcess,
 } from '../nodeRuntimeBroker';
 
@@ -64,6 +65,64 @@ class FakeNodeProcess extends EventEmitter {
     this.killed = true;
     queueMicrotask(() => this.emit('exit', null, signal ?? 'SIGTERM'));
     return true;
+  }
+}
+
+class DiagnosticFakeNodeProcess extends FakeNodeProcess {
+  startupState: {
+    messageCount: number;
+    readySeen: boolean;
+    adapterReady: boolean;
+  } = { messageCount: 0, readySeen: false, adapterReady: false };
+
+  readStartupState() {
+    return this.startupState;
+  }
+}
+
+class ThrowingDiagnosticKilledProcess extends DiagnosticFakeNodeProcess {
+  constructor(
+    onMessage?: (message: Record<string, unknown>) => void,
+    emitSpawn = true,
+  ) {
+    super(onMessage, emitSpawn);
+    Object.defineProperty(this, 'killed', {
+      configurable: true,
+      get: () => {
+        throw new Error('adapter killed state unavailable');
+      },
+      set: () => undefined,
+    });
+  }
+}
+
+class ThrowingDiagnosticStateProcess extends FakeNodeProcess {
+  readStartupState(): never {
+    throw new Error('diagnostic state unavailable');
+  }
+}
+
+class ThrowingDiagnosticPropertyProcess extends FakeNodeProcess {
+  readStartupState(): NodeWorkerStartupState {
+    return {
+      get messageCount() {
+        throw new Error('message count unavailable');
+      },
+      readySeen: true,
+      get adapterReady() {
+        throw new Error('adapter ready unavailable');
+      },
+    } as unknown as NodeWorkerStartupState;
+  }
+}
+
+class InvalidDiagnosticStateProcess extends FakeNodeProcess {
+  readStartupState(): NodeWorkerStartupState {
+    return {
+      messageCount: -1,
+      readySeen: 'yes',
+      adapterReady: 1,
+    } as unknown as NodeWorkerStartupState;
   }
 }
 
@@ -291,6 +350,11 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     child.emit('message', { type: 'ready' });
     expect(spawned).toHaveBeenCalledTimes(1);
     expect(stages.map(({ stage }) => stage)).toEqual(['utility-process-spawned']);
+    expect(worker.readStartupState?.()).toEqual({
+      messageCount: 1,
+      readySeen: true,
+      adapterReady: true,
+    });
     // 2026-07-23 起普通 worker 就绪后保留一条消息听筒——它只承载引导层的
     // 子进程控制帧(childSpawn),形状由 broker 严格把关;非控制帧仍然没有
     // 任何消费面(下面的 stdin 断言即证明正式通信面仍是 stdio)。
@@ -644,7 +708,7 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
   it('native spawn 已观测但 ready 未观测时只记录两级 observed metadata', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost();
-    const child = new FakeNodeProcess(undefined, false);
+    const child = new DiagnosticFakeNodeProcess(undefined, false);
     const warn = vi.fn();
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
@@ -660,12 +724,15 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
       stage: 'utility-process-spawned',
       pid: 1234,
     });
+    child.startupState = { messageCount: 2, readySeen: false, adapterReady: false };
     await vi.advanceTimersByTimeAsync(10_000);
     await expect(pending).resolves.toEqual({
       ok: false,
       errorCode: 'PROCESS_START_FAILED',
       message: 'Node 工作进程启动超时',
     });
+    child.startupState = { messageCount: 99, readySeen: true, adapterReady: true };
+    child.emit('message', { type: 'ready' });
     expect(warn).toHaveBeenCalledWith('ghost node start attempt failed', {
       ghostId: 'node-ghost',
       entry: 'node/worker.cjs',
@@ -677,6 +744,10 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
       pid: 1234,
       error: 'startup-timeout',
       observedTimeoutClass: 'native-observed-ready-not-observed',
+      messageCount: 2,
+      readySeen: false,
+      adapterReady: false,
+      adapterKilledAtDeadline: false,
     });
     expect(JSON.stringify(warn.mock.calls)).not.toContain('/fake/node-ghost');
     expect(JSON.stringify(warn.mock.calls)).not.toContain('echo');
@@ -909,7 +980,7 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
   it('native spawn 未观测时不给出 UtilityProcess 未创建的因果结论', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost();
-    const child = new FakeNodeProcess(undefined, false);
+    const child = new DiagnosticFakeNodeProcess(undefined, false);
     const warn = vi.fn();
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
@@ -917,7 +988,10 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
       log: { info: vi.fn(), warn },
     });
 
-    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    const pending = broker.handleRequest(
+      'node-ghost',
+      rpcRequest('timeout', { forbiddenUserContent: 'timeout-request-sentinel' }),
+    );
     await vi.advanceTimersByTimeAsync(10_000);
     await expect(pending).resolves.toEqual({
       ok: false,
@@ -930,8 +1004,32 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
         error: 'startup-timeout',
         observedTimeoutClass: 'native-not-observed',
         observedStagesAtDeadline: [],
+        messageCount: 0,
+        readySeen: false,
+        adapterReady: false,
+        adapterKilledAtDeadline: false,
       }),
     );
+    const warningMeta = warn.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(Object.keys(warningMeta).sort()).toEqual(
+      [
+        'adapterReady',
+        'appRunId',
+        'attempt',
+        'attemptId',
+        'entry',
+        'error',
+        'ghostId',
+        'messageCount',
+        'observedStagesAtDeadline',
+        'observedTimeoutClass',
+        'outcome',
+        'pid',
+        'adapterKilledAtDeadline',
+        'readySeen',
+      ].sort(),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('timeout-request-sentinel');
     const attemptWarnings = warn.mock.calls.filter(
       ([message]) => message === 'ghost node start attempt failed',
     );
@@ -962,6 +1060,125 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
       message: 'Node 工作进程启动超时',
     });
     expect(child.killed).toBe(true);
+  });
+
+  it('启动事实 getter 抛错时只降级未知，不影响超时收口', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new ThrowingDiagnosticStateProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        messageCount: 'unknown',
+        readySeen: 'unknown',
+        adapterReady: 'unknown',
+        adapterKilledAtDeadline: false,
+      }),
+    );
+    expect(child.killed).toBe(true);
+  });
+
+  it('启动事实属性 getter 抛错时各字段独立降级 unknown，仍精确超时收口', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new ThrowingDiagnosticPropertyProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        messageCount: 'unknown',
+        readySeen: true,
+        adapterReady: 'unknown',
+      }),
+    );
+  });
+
+  it('非法启动事实字段只记录 unknown，不影响原有超时收口', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new InvalidDiagnosticStateProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        messageCount: 'unknown',
+        readySeen: 'unknown',
+        adapterReady: 'unknown',
+      }),
+    );
+  });
+
+  it('adapter killed getter 抛错时只记录 unknown，不影响超时收口', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new ThrowingDiagnosticKilledProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        messageCount: 0,
+        readySeen: false,
+        adapterReady: false,
+        adapterKilledAtDeadline: 'unknown',
+      }),
+    );
   });
 
   it('每次 attempt 只读一次粗粒度上下文，getter 异常安全降级', async () => {
@@ -1140,6 +1357,13 @@ describe('nodeRuntimeBroker · 启动瞬时失败重试(2026-07-24)', () => {
         outcome: 'failed',
       }),
     );
+    const failedMeta = warn.mock.calls.find(
+      ([message]) => message === 'ghost node start attempt failed',
+    )?.[1] as Record<string, unknown> | undefined;
+    expect(failedMeta).not.toHaveProperty('messageCount');
+    expect(failedMeta).not.toHaveProperty('readySeen');
+    expect(failedMeta).not.toHaveProperty('adapterReady');
+    expect(failedMeta).not.toHaveProperty('adapterKilledAtDeadline');
     const failedAttemptWarnings = warn.mock.calls.filter(
       ([message]) => message === 'ghost node start attempt failed',
     );

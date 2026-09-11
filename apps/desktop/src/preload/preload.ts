@@ -778,6 +778,7 @@ const fanOutMakerUsageClaudeAccount = createIpcFanOut('usage:claude-account-chan
 const fanOutMakerUsageCodexProviderAccount = createIpcFanOut('usage:codex-provider-account-changed');
 const fanOutSubscriptionProviderAccount = createIpcFanOut('usage:subscription-provider-account-changed');
 const fanOutMakerUsageCodexAccount = createIpcFanOut('usage:codex-account-changed'); // Codex 订阅用量
+const fanOutMakerUsageXaiProviderRateLimit = createIpcFanOut('usage:xai-provider-rate-limit-changed');
 const fanOutMakerUsageXaiRateLimit = createIpcFanOut('usage:xai-rate-limit-changed'); // xAI bridge 限流快照
 const fanOutMakerUsageClaudeSubscription = createIpcFanOut('usage:claude-subscription-changed'); // Claude 订阅余量
 const fanOutMakerUsageXaiSubscription = createIpcFanOut('usage:xai-subscription-changed'); // SuperGrok 周用量
@@ -1977,8 +1978,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('builtin-api-key-has', providerId),
   builtinApiKeyStore: (providerId: string, value: string): Promise<void> =>
     ipcRenderer.invoke('builtin-api-key-store', providerId, value),
-  builtinApiKeyRemove: (providerId: string): Promise<void> =>
-    ipcRenderer.invoke('builtin-api-key-remove', providerId),
+  builtinApiKeyRemove: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<void> =>
+    ipcRenderer.invoke('builtin-api-key-remove', providerId, ownerScope),
 
   // ── 网关凭据自动下发(model-access,shared/modelAccess.ts) ──
   modelAccess: {
@@ -5605,6 +5606,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:get-workflow-progress', sessionId, taskId),
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
+    setProviderPresentation: (input: { providerId?: string; action: 'rename' | 'remove' | 'restore'; name?: string; dataOwnerId: string | null; ownerGeneration: number }): Promise<void> => ipcRenderer.invoke('maker:provider:presentation:set', input),
     listProviders: (): Promise<{
       dataOwnerId: string | null;
       ownerGeneration: number;
@@ -5635,8 +5637,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: CustomProviderUpdateOptions,
     ): Promise<CustomProviderUpdateResult> =>
       ipcRenderer.invoke('maker:provider:custom:update', config, keys, options),
-    deleteCustomProvider: (providerId: string): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:provider:custom:delete', providerId),
+    disconnectCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> => ipcRenderer.invoke('maker:provider:custom:disconnect', providerId, ownerScope, options),
+    deleteCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> =>
+      ipcRenderer.invoke('maker:provider:custom:delete', providerId, ownerScope, options),
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
     listProviderPresets: (): Promise<{
       presets: import('@cindy/model-providers').ProviderPreset[];
@@ -5823,8 +5826,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: { ownerId?: string },
     ): Promise<{ ok: boolean; reason?: string }> =>
       ipcRenderer.invoke('maker:provider:oauth:login', providerId, options),
-    providerOAuthLogout: (providerId: string): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:provider:oauth:logout', providerId),
+    providerOAuthLogout: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> =>
+      ipcRenderer.invoke('maker:provider:oauth:logout', providerId, ownerScope, options),
     providerOAuthCancel: (
       providerId: string,
       options?: { releaseOwner?: boolean; ownerId?: string },
@@ -6808,23 +6811,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:claude-session-route:get', sessionId),
     onClaudeSessionRouteChanged: fanOutMakerClaudeSessionRouteChanged,
 
-    // Claude.ai 订阅 OAuth 登录(浏览器流程,凭证落系统 ~/.claude,与本地 claude 共用)。
-    // 与鉴权模式开关正交。LOGIN 拉浏览器、成功写凭证;LOGOUT 清凭证(同时登出本地 claude);
-    // CANCEL 取消进行中登录;STATUS 回 { authorized }。
+    // 本机 Claude 连接只管理 Cindy 使用许可，不修改系统凭证。
+    // 可选 loginKey 将取消限定到对应尝试；省略时兼容已有调用。
     claudeOAuthStatus: (): Promise<{ authorized: boolean }> =>
       ipcRenderer.invoke('maker:claude-oauth:status'),
-    claudeOAuthLogin: (): Promise<{ ok: boolean; authorized: boolean; reason?: string }> =>
-      ipcRenderer.invoke('maker:claude-oauth:login'),
-    claudeOAuthLogout: (): Promise<{ authorized: boolean }> =>
-      ipcRenderer.invoke('maker:claude-oauth:logout'),
-    claudeOAuthCancel: (): Promise<{ authorized: boolean }> =>
-      ipcRenderer.invoke('maker:claude-oauth:cancel'),
+    claudeOAuthLogin: (loginKey?: string): Promise<{ ok: boolean; authorized: boolean; reason?: string }> =>
+      ipcRenderer.invoke('maker:claude-oauth:login', loginKey),
+    claudeOAuthLogout: (ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<{ authorized: boolean }> =>
+      ipcRenderer.invoke('maker:claude-oauth:logout', ownerScope),
+    claudeOAuthCancel: (loginKey?: string): Promise<{ authorized: boolean }> =>
+      ipcRenderer.invoke('maker:claude-oauth:cancel', loginKey),
 
     // xAI(SuperGrok 订阅)OAuth —— 与 claudeOAuth* 同形态。
     xaiOAuthLogin: (): Promise<{ ok: boolean; authorized: boolean; reason?: string }> =>
       ipcRenderer.invoke('maker:xai-oauth:login'),
-    xaiOAuthLogout: (): Promise<{ authorized: boolean }> =>
-      ipcRenderer.invoke('maker:xai-oauth:logout'),
+    xaiOAuthLogout: (ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<{ authorized: boolean }> =>
+      ipcRenderer.invoke('maker:xai-oauth:logout', ownerScope),
     xaiOAuthCancel: (): Promise<{ authorized: boolean }> =>
       ipcRenderer.invoke('maker:xai-oauth:cancel'),
 
@@ -7056,14 +7058,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke('maker:auth:get-state', agentKind),
       triggerLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi',
-        options?: { mode?: 'browser' | 'device-code'; ownerId?: string },
+        options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string },
       ): Promise<unknown> => ipcRenderer.invoke('maker:auth:trigger-login', agentKind, options),
       cancelLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi',
         options?: { releaseOwner?: boolean; ownerId?: string },
       ): Promise<void> => ipcRenderer.invoke('maker:auth:cancel-login', agentKind, options),
-      logout: (agentKind: 'claude-code' | 'codex' | 'pi'): Promise<void> =>
-        ipcRenderer.invoke('maker:auth:logout', agentKind),
+      logout: (agentKind: 'claude-code' | 'codex' | 'pi', ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<void> =>
+        ipcRenderer.invoke('maker:auth:logout', agentKind, ownerScope),
       onStateChanged: fanOutMakerAuthStateChanged,
       onLoginProgress: fanOutMakerAuthLoginProgress,
     },
@@ -7124,7 +7126,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
           if (scoped?.providerId === providerId) cb(scoped.snapshot);
         }),
       /** xAI(SuperGrok bridge)限流快照推送 (bridge 每个成功上游响应解析 x-ratelimit-* 后推送)。 */
-      onXaiRateLimitChanged: fanOutMakerUsageXaiRateLimit,
+      onXaiRateLimitChanged: (cb: (payload: unknown) => void, providerId = 'xai') =>
+        providerId === 'xai' ? fanOutMakerUsageXaiRateLimit(cb) : fanOutMakerUsageXaiProviderRateLimit((payload: unknown) => {
+          const scoped = payload as { providerId?: string; snapshot?: unknown };
+          if (scoped?.providerId === providerId) cb(scoped.snapshot);
+        }),
       /** Claude 订阅余量推送 (端点后台刷新 / proxy 旁路 headers 更新时推送)。 */
       onClaudeSubscriptionChanged: (cb: (payload: unknown) => void, providerId = 'anthropic') =>
         providerId === 'anthropic' ? fanOutMakerUsageClaudeSubscription(cb) : fanOutSubscriptionProviderAccount((payload: unknown) => {

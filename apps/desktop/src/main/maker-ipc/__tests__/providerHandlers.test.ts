@@ -8,7 +8,7 @@ import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelR
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
 import * as schema from '../../localDb/schema.js';
-import { getCustomProvider, listCustomProviders } from '../../maker-host/custom-provider-store.js';
+import { createCustomProvider, getCustomProvider, listCustomProviders } from '../../maker-host/custom-provider-store.js';
 import { codexCustomProviderConfigSignature } from '../../maker-host/codex-custom-provider-route.js';
 import {
   beginProviderRouteMutation,
@@ -1529,6 +1529,7 @@ describe('provider:custom:* CRUD handlers', () => {
     mountDb();
     const harness = new IpcHarness();
     const finalize = vi.fn(async () => {});
+    const broadcastChanged = vi.fn();
     const refreshCatalog = vi
       .fn<() => Promise<void>>()
       .mockResolvedValueOnce(undefined)
@@ -1538,6 +1539,7 @@ describe('provider:custom:* CRUD handlers', () => {
       makeDeps({
         beginRouteMutation: beginProviderRouteMutation,
         refreshCatalog,
+        broadcastChanged,
         finalizeCodexCustomProviderHostChange: finalize,
       }),
     );
@@ -1553,12 +1555,13 @@ describe('provider:custom:* CRUD handlers', () => {
           codex: { ...config.runtimes.codex!, requestPath: '/replacement-responses' },
         },
       }),
-    ).rejects.toThrow('catalog refresh failed');
+    ).resolves.toEqual({ ok: true });
     expect((await getCustomProvider(config.id))?.runtimes.codex?.requestPath).toBe(
       '/replacement-responses',
     );
     expect(getProviderRouteCredentialRevision(config.id)).not.toBe(oldRevision);
     expect(finalize).toHaveBeenCalledTimes(2);
+    expect(broadcastChanged).toHaveBeenCalledTimes(2);
   });
 
   it('never revives an old dispatch generation after deleting and recreating the same Provider id', async () => {
@@ -2123,6 +2126,17 @@ describe('provider:custom:* CRUD handlers', () => {
       }),
     ).resolves.toEqual({ ok: true });
     expect((await listCustomProviders())[0]?.name).toBe('Legacy custom xAI edited');
+
+    const beforeDisconnect = await getCustomProvider('xai');
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, 'custom:xai'),
+    ).resolves.toEqual({ ok: true });
+    expect(await getCustomProvider('xai')).toEqual(beforeDisconnect);
+    for (const agent of ['claude-code', 'codex', 'pi']) {
+      expect(deps.removeCustomProviderKey).toHaveBeenCalledWith('xai', agent);
+      expect(deps.removeCustomProviderHeaders).toHaveBeenCalledWith('xai', agent);
+      expect(deps.removeCustomProviderKey).not.toHaveBeenCalledWith('custom:xai', agent);
+    }
 
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, 'xai'),
@@ -3428,6 +3442,23 @@ describe('provider:oauth mutation ordering', () => {
     expect(calls).toEqual(['cancel', 'logout']);
   });
 
+  it('does not invalidate an ongoing login when logout only asks for busy confirmation', async () => {
+    const harness = new IpcHarness();
+    let finish!: (result: { ok: boolean }) => void;
+    const login = vi.fn(() => new Promise<{ ok: boolean }>(resolve => { finish = resolve; }));
+    const deps = makeDeps({ oauthLogin: login,
+      hasAppliedCodexCustomProviderImageGeneration: () => true,
+      listBusyLocalCodexSessionIds: () => ['busy-task'],
+    });
+    registerProviderHandlers(harness, deps);
+    const pending = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter');
+    await vi.waitFor(() => expect(login).toHaveBeenCalledOnce());
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, 'openrouter', undefined, { source: 'manual-settings' })).resolves.toMatchObject({ ok: false, confirmationRequired: 'codex-image-generation-reload' });
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    finish({ ok: true });
+    await expect(pending).resolves.toEqual({ ok: true });
+  });
+
   it('encodes credential deletion failures as an IPC INTERNAL error', async () => {
     const harness = new IpcHarness();
     registerProviderHandlers(
@@ -3809,5 +3840,147 @@ describe('model context limit IPC', () => {
     registerProviderHandlers(harness, deps);
     await expect(harness.invoke(MAKER_INVOKE.MODEL_CONTEXT_LIMIT_SET, primary, 500_000, stamp)).rejects.toThrow();
     expect(deps.writeModelContextLimit).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('provider connection management', () => {
+  it.each(['private-provider', 'cindy-local-ollama'])('broadcasts committed %s rename despite catalog failure without changing credentials or Host', async (id) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config = { ...validConfig, id };
+    await createCustomProvider(config);
+    const before = await getCustomProvider(id);
+    const deps = makeDeps({
+      listProviders: async () => [{ id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      refreshCatalog: vi.fn(async () => { throw new Error('catalog unavailable'); }),
+    });
+    registerProviderHandlers(harness, deps);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, {
+      providerId: id, action: 'rename', name: 'New name', dataOwnerId: 'owner-a', ownerGeneration: 1,
+    })).resolves.toBeUndefined();
+    expect(await getCustomProvider(id)).toEqual({ ...before, name: 'New name' });
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(deps.finalizeCodexCustomProviderHostChange).not.toHaveBeenCalled();
+  });
+  it('stores managed Ollama rename with its configuration and drops it when deleting and readding', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config = { ...validConfig, id: 'cindy-local-ollama', name: 'Ollama' };
+    await createCustomProvider(config);
+    registerProviderHandlers(harness, makeDeps({
+      listProviders: async () => [{ id: config.id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+    }));
+    await harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, { providerId: config.id, action: 'rename', name: 'My local models', dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    expect((await getCustomProvider(config.id))?.name).toBe('My local models');
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, config.id);
+    await createCustomProvider(config);
+    expect((await getCustomProvider(config.id))?.name).toBe('Ollama');
+  });
+  it('renames only the stored name and preserves runtimes, models and credentials', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const config: CustomProviderConfig = { ...validConfig };
+    const deps = makeDeps({ listProviders: async () => [{ id: config.id, source: 'user' } as ProviderView],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }) });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config);
+    const before = await getCustomProvider(config.id);
+    vi.mocked(deps.oauthCancel).mockClear();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_PRESENTATION_SET, { providerId: config.id, action: 'rename', name: 'Work account', dataOwnerId: 'owner-a', ownerGeneration: 1 });
+    expect(await getCustomProvider(config.id)).toEqual({ ...before, name: 'Work account' });
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+  });
+
+  it.each([MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT])('requires busy Host confirmation before %s changes credentials', async (channel) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listBusyLocalCodexSessionIds: () => ['busy-task'],
+      hasAppliedCodexCustomProviderImageGeneration: () => true,
+    });
+    registerProviderHandlers(harness, deps);
+    const config = imageProviderConfig('disconnect-image-provider');
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, { codex: 'fixture-key' });
+    vi.mocked(deps.prepareCodexCustomProviderHostChange!).mockClear();
+    vi.mocked(deps.oauthCancel).mockClear();
+    vi.mocked(deps.removeCustomProviderKey).mockClear();
+    await expect(harness.invoke(channel, config.id, undefined, { source: 'manual-settings' })).resolves.toEqual({
+      ok: false, confirmationRequired: 'codex-image-generation-reload', busyCount: 1,
+    });
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+    expect(await getCustomProvider(config.id)).not.toBeNull();
+    await expect(harness.invoke(channel, config.id, undefined, {
+      source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt',
+    })).resolves.toEqual({ ok: true });
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+  });
+
+  it.each([MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT])('reports committed %s and broadcasts despite catalog refresh failure', async (channel) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      beginRouteMutation: beginProviderRouteMutation,
+      hasAppliedCodexCustomProviderImageGeneration: () => true,
+    });
+    registerProviderHandlers(harness, deps);
+    const config = imageProviderConfig('committed-catalog-failure');
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, config, { codex: 'fixture-key' });
+    const oldRevision = getProviderRouteCredentialRevision(config.id);
+    vi.mocked(deps.refreshCatalog).mockRejectedValueOnce(new Error('catalog refresh failed'));
+    vi.mocked(deps.broadcastChanged).mockClear();
+    vi.mocked(deps.finalizeCodexCustomProviderHostChange!).mockClear();
+
+    await expect(harness.invoke(channel, config.id)).resolves.toEqual({ ok: true });
+    expect(getProviderRouteCredentialRevision(config.id)).not.toBe(oldRevision);
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+    expect(deps.finalizeCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+    if (channel === MAKER_INVOKE.PROVIDER_CUSTOM_DELETE) {
+      expect(await getCustomProvider(config.id)).toBeNull();
+    } else {
+      expect(await getCustomProvider(config.id)).not.toBeNull();
+    }
+    if (channel === MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT) {
+      expect(deps.oauthLogout).toHaveBeenCalledWith(config.id);
+    } else {
+      expect(deps.removeCustomProviderKey).toHaveBeenCalledWith(config.id, 'codex');
+    }
+  });
+
+  it('disconnects all API runtime credentials while retaining connection configuration', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps();
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig, { codex: 'fixture-key' });
+    const before = await getCustomProvider(validConfig.id);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, validConfig.id);
+    expect(await getCustomProvider(validConfig.id)).toEqual(before);
+    for (const agent of ['claude-code', 'codex', 'pi']) {
+      expect(deps.removeCustomProviderKey).toHaveBeenCalledWith(validConfig.id, agent);
+      expect(deps.removeCustomProviderHeaders).toHaveBeenCalledWith(validConfig.id, agent);
+    }
+    expect(deps.oauthLogout).not.toHaveBeenCalled();
+  });
+
+  it.each([MAKER_INVOKE.PROVIDER_CUSTOM_DISCONNECT, MAKER_INVOKE.PROVIDER_CUSTOM_DELETE, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT])('rejects stale confirmation owner before %s mutates anything', async (channel) => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({ currentOwnerSession: () => ({ dataOwnerId: 'owner-b', generation: 2 }) });
+    registerProviderHandlers(harness, deps);
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, validConfig);
+    const before = await getCustomProvider(validConfig.id);
+    await expect(harness.invoke(channel, validConfig.id, { dataOwnerId: 'owner-a', ownerGeneration: 1 }, { source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt' })).rejects.toThrow('active account changed');
+    expect(await getCustomProvider(validConfig.id)).toEqual(before);
+    expect(deps.oauthLogout).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
   });
 });

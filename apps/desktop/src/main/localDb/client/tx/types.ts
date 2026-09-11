@@ -150,6 +150,7 @@ export interface ForkSessionArgs {
     totalCostUsd: number;
     contextTokens: number;
     contextWindow: number;
+    contextWindowRuntime?: number | null;
     fastMode: boolean | number;
     clearedAt: number | null;
     pinnedAt: number | null;

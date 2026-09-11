@@ -18,10 +18,20 @@ import type { XaiRateLimitSnapshot } from '../../shared/xaiRateLimit';
 import { createSubscriptionUsageCache } from './subscriptionUsageCache';
 export type { XaiRateLimitSnapshot };
 
-// Push-only: keep the upstream RPM/TPM lifetime; no polling or persistence.
-const usageCache = createSubscriptionUsageCache<XaiRateLimitSnapshot>(() => ({
-  subscribe: window.electronAPI?.maker?.usage?.onXaiRateLimitChanged,
-}));
-export function useXaiRateLimit(enabled: boolean): XaiRateLimitSnapshot | null {
-  return usageCache.useSnapshot(enabled);
+// Push-only, scoped exactly like the subscription quota cache; no polling or persistence.
+const caches = new Map<
+  string,
+  ReturnType<typeof createSubscriptionUsageCache<XaiRateLimitSnapshot>>
+>();
+export function useXaiRateLimit(enabled: boolean, providerId = 'xai'): XaiRateLimitSnapshot | null {
+  let cache = caches.get(providerId);
+  if (!cache) {
+    cache = createSubscriptionUsageCache<XaiRateLimitSnapshot>(() => ({
+      subscribe: window.electronAPI?.maker?.usage?.onXaiRateLimitChanged
+        ? (cb) => window.electronAPI.maker.usage.onXaiRateLimitChanged(cb, providerId)
+        : undefined,
+    }));
+    caches.set(providerId, cache);
+  }
+  return cache.useSnapshot(enabled);
 }

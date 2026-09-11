@@ -675,6 +675,8 @@ export interface AgentStatus {
   contextTokens: number;
   /** Context window size from SDK modelUsage (0 = not yet known). */
   contextWindow: number;
+  /** Model-picker metadata is replaceable until a runtime snapshot arrives. */
+  contextWindowFromRuntime?: boolean;
   isRunning: boolean;
   startedAt: number | null;
   /** Turn-cumulative output tokens for live TPS. */
@@ -6753,6 +6755,7 @@ function applyBackgroundStatus(
       : rawStatus;
   let contextTokens = state.agentStatus.contextTokens;
   let contextWindow = state.agentStatus.contextWindow;
+  let contextWindowFromRuntime = state.agentStatus.contextWindowFromRuntime;
   if (
     typeof data.contextWindow === 'number' &&
     data.contextWindow > 0 &&
@@ -6761,6 +6764,7 @@ function applyBackgroundStatus(
   ) {
     contextTokens = data.contextTokens;
     contextWindow = data.contextWindow;
+    contextWindowFromRuntime = true;
   }
   return {
     ...state,
@@ -6769,6 +6773,7 @@ function applyBackgroundStatus(
       status,
       contextTokens,
       contextWindow,
+      contextWindowFromRuntime,
     },
   };
 }
@@ -6885,6 +6890,7 @@ function handleStatusUpdate(
       costUsd: cu,
       contextTokens: ct,
       contextWindow: cw,
+      contextWindowFromRuntime: hasContextSnapshot || state.agentStatus.contextWindowFromRuntime,
       isRunning: update.isRunning,
       startedAt,
       ...mergeLiveGenerationStatus(isTurnStart, update, state.agentStatus),
@@ -10992,6 +10998,7 @@ function ensureInitialMessages(sessionId: string): void {
             costUsd: session.totalCostUsd ?? s.agentStatus.costUsd,
             contextTokens: session.contextTokens || s.agentStatus.contextTokens,
             contextWindow: session.contextWindow || s.agentStatus.contextWindow,
+            // Read projection can supply catalog metadata; only status events prove runtime origin.
           };
         }
         return Object.keys(updates).length > 0 ? { ...s, ...updates } : s;
@@ -16222,8 +16229,10 @@ function setContextWindow(sessionId: string, contextWindow: number | undefined):
     return;
   const nextContextWindow = Math.floor(contextWindow);
   setState(sessionId, (s) => {
-    // Model-selection metadata must not overwrite Codex's native usage snapshot.
-    if (s.agentKind === 'codex') return s;
+    // Model-selection metadata cannot relabel usage from an applied runtime budget.
+    // Keep Codex unknown until its native total is read, even before its first turn.
+    if (s.agentKind === 'codex' || s.agentStatus.contextWindowFromRuntime ||
+        s.agentStatus.contextTokens > 0) return s;
     if (s.agentStatus.contextWindow === nextContextWindow) return s;
     return {
       ...s,

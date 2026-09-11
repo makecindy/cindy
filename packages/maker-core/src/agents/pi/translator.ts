@@ -97,6 +97,8 @@ export interface PiTranslateContext {
   getPriceVariant?: () => 'standard' | 'priority';
   /** get_state 拿到的 contextWindow(模型切换时更新)。 */
   contextWindow: number;
+  /** Applied compaction budget; separate from the native request capacity. */
+  workingContextWindow?: number;
   /** turn 内累计 input+output;turn 结束 reset。 */
   turnTokens: number;
   /** turn 内 usage 分量累计(did-turn-end / ghost 订阅上报用);agent_start reset。 */
@@ -347,7 +349,8 @@ export function usageSnapshotOf(ctx: PiTranslateContext): UsageSnapshot {
     {
       tokenUsage: ctx.turnTokens,
       contextTokens: ctx.contextTokens,
-      contextWindow: ctx.contextWindow,
+      contextWindow: ctx.workingContextWindow && ctx.workingContextWindow > 0
+        ? Math.min(ctx.workingContextWindow, ctx.contextWindow) : ctx.contextWindow,
       costUsd: ctx.costUsd,
     },
     {

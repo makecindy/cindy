@@ -969,6 +969,36 @@ describe('compact model defaults upgrade', () => {
     expect(JSON.parse(memStorage.getItem(scopedKey)!)).toEqual({});
   });
 
+  it('follows catalog defaults for image and video display switches', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const snapshot = {
+      ...provider,
+      imageModels: [
+        { id: 'openai/gpt-image-2.5-sunburst', name: 'GPT Image 2.5 Sunburst' },
+        { id: 'openai/gpt-image-2', name: 'GPT Image 2' },
+        { id: 'openai/old-image', name: 'Old Image', defaultEnabled: false },
+      ],
+      videoModels: [{ id: 'xai/grok-imagine-video', name: 'Grok Imagine Video' }],
+    } as unknown as ProviderView;
+    const prefs = await upgrade('owner-a', 1, snapshot);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2.5-sunburst' })).toBe(true);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2' })).toBe(true);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'openai/old-image', defaultEnabled: false })).toBe(false);
+    expect(prefs.isModelEnabled('claude-code', 'xd', { id: 'xai/grok-imagine-video' })).toBe(true);
+
+    vi.resetModules();
+    const later = {
+      ...snapshot,
+      imageModels: [
+        ...(snapshot.imageModels ?? []),
+        { id: 'openai/gpt-image-3', name: 'Image 3' },
+      ],
+    } as unknown as ProviderView;
+    const next = await upgrade('owner-a', 1, later);
+    expect(next.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-2' })).toBe(true);
+    expect(next.isModelEnabled('claude-code', 'xd', { id: 'openai/gpt-image-3' })).toBe(true);
+  });
+
   it('preserves old on/off switches without treating history or favorites as switches', async () => {
     memStorage.setItem('xdt:modelVisibilityPrefs:v1', JSON.stringify({
       'claude-code:xd:chatgpt/fable-5': true,

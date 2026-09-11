@@ -9,6 +9,45 @@ import { createProviderService } from '../provider-service.js';
 const bundledCatalog = () => BUNDLED_CATALOG;
 
 describe('createProviderService', () => {
+  it('uses managed provider configuration names instead of stale presentation overrides', async () => {
+    const provider = buildUserProvider({
+      id: 'cindy-local-ollama', name: 'Ollama', auth: { method: 'none' },
+      runtimes: { codex: { baseUrl: 'http://localhost:11434/v1', models: [] } },
+    }, { modelRegistry: BUNDLED_CATALOG.modelRegistry });
+    const svc = createProviderService({
+      getCatalog: () => ({ ...BUNDLED_CATALOG, providers: [provider] }),
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getProviderPresentation: () => ({ name: 'Deleted name', removed: true }),
+    });
+    expect((await svc.listProviders())[0]).toMatchObject({ id: 'cindy-local-ollama', name: 'Ollama' });
+  });
+  it('keeps authenticated accounts visible despite a stale removal preference', async () => {
+    let connected = true;
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => connected, openai: () => connected, xai: () => false },
+      getProviderPresentation: (id) => ({ name: `My ${id}`, removed: true }),
+    });
+    for (const id of ['openai', 'anthropic']) {
+      expect((await svc.listProviders()).find(p => p.id === id)).toMatchObject({ id, name: `My ${id}`, connected: true, removed: false });
+    }
+    connected = false;
+    for (const id of ['openai', 'anthropic']) {
+      expect((await svc.listProviders()).find(p => p.id === id)).toMatchObject({ connected: false, removed: true });
+    }
+  });
+  it('applies local presentation without changing provider identity or catalog', async () => {
+    const svc = createProviderService({
+      getCatalog: bundledCatalog,
+      connection: { xd: () => false, anthropic: () => false, openai: () => false, xai: () => false },
+      getProviderPresentation: (id) => id === 'openai' ? { name: 'Personal OpenAI', removed: true } : {},
+    });
+    const providers = await svc.listProviders();
+    expect(providers.find((p) => p.id === 'openai')).toMatchObject({ id: 'openai', name: 'Personal OpenAI', removed: true });
+    expect(providers.find((p) => p.id === 'anthropic')?.removed).toBeUndefined();
+    expect(providers.map((p) => p.id)).toEqual(BUNDLED_CATALOG.providers.map((p) => p.id));
+  });
+
   it('keeps media readiness separate from subscription authorization and scopes it by provider', async () => {
     let media = [{ providerId: 'openai', id: 'gpt-image-2' }];
     const svc = createProviderService({

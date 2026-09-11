@@ -14,7 +14,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps, RemoteClaudeRoute } from '../../base-agent.js';
-import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import type { AuthAdapter, AuthAdapterOptions } from '../../../interfaces/auth-adapter.js';
 import type { PermissionMode } from '../../../types/common.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -739,6 +739,60 @@ describe('ClaudeCodeAgent plan mode', () => {
       }),
     }));
     await handle.close();
+  });
+
+  it('keeps independent Claude accounts bound through startup and SDK token refresh', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockImplementation(() => createFakeQuery());
+    const accounts = ['anthropic-a', 'anthropic-b'];
+    const auth: AuthAdapter = {
+      ...createDeps().auth,
+      getState: vi.fn(async (options?: AuthAdapterOptions) => ({
+        authenticated: accounts.includes(options?.providerId ?? ''),
+        authSource: 'oauth' as const,
+      })),
+      getAuthEnv: vi.fn(async (options?: AuthAdapterOptions) => ({
+        CLAUDE_CODE_OAUTH_TOKEN: `test-token-${options?.providerId}`,
+        CINDY_CLAUDE_ACCOUNT_PROVIDER_ID: options?.providerId ?? '',
+      })),
+      getFreshSubscriptionToken: vi.fn(async (_staleToken, providerId) => `test-refreshed-${providerId}`),
+    };
+    const agent = new ClaudeCodeAgent(createDeps({ auth }));
+    const handles = [];
+    try {
+      for (const providerId of accounts) {
+        handles.push(await agent.startSession({
+          sessionId: `session-${providerId}`, model: 'claude-opus-4-6', providerId,
+          workingDir, permissionMode: 'acceptEdits',
+        }));
+        expect(auth.getState).toHaveBeenLastCalledWith({ credentialMode: 'provider-oauth', providerId });
+        expect(auth.getAuthEnv).toHaveBeenLastCalledWith({ credentialMode: 'provider-oauth', providerId });
+      }
+      // Refresh A after B has started: a global/current account fallback would select B here.
+      for (let i = 0; i < accounts.length; i += 1) {
+        const options = sdkMock.query.mock.calls[i][0].options;
+        expect(options.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`test-token-${accounts[i]}`);
+        expect(options.env.ANTHROPIC_API_KEY).toBeUndefined();
+        await expect(options.getOAuthToken()).resolves.toBe(`test-refreshed-${accounts[i]}`);
+        expect(auth.getFreshSubscriptionToken).toHaveBeenLastCalledWith(`test-token-${accounts[i]}`, accounts[i]);
+        expect(options.env.CLAUDE_CODE_OAUTH_TOKEN).toBe(`test-refreshed-${accounts[i]}`);
+      }
+    } finally {
+      await Promise.all(handles.map(handle => handle.close()));
+    }
+  });
+
+  it('rejects a disconnected independent Claude account before creating the SDK process', async () => {
+    const getState = vi.fn(async () => ({ authenticated: false }));
+    const agent = new ClaudeCodeAgent(createDeps({ auth: { ...createDeps().auth, getState } }));
+    await expect(agent.startSession({
+      sessionId: 'session-disconnected-account', model: 'claude-opus-4-6',
+      providerId: 'anthropic-disconnected', workingDir: await makeTempDir(), permissionMode: 'acceptEdits',
+    })).rejects.toThrow('not authenticated');
+    expect(getState).toHaveBeenCalledWith({ credentialMode: 'provider-oauth', providerId: 'anthropic-disconnected' });
+    expect(sdkMock.query).not.toHaveBeenCalled();
   });
 
   it('passes the local session provider into spawn-time behavior flags', async () => {
