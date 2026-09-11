@@ -115,3 +115,43 @@ export type BotDelegationInterjectResult =
       queued: boolean;
     }
   | { ok: false; errorCode: string; message: string };
+
+/**
+ * Place a task anchor after its initiating explanation, preserving identity and all
+ * other message order. Hidden user triggers are boundaries too: a finished task
+ * must never migrate beneath the later completion reply. Each card follows the
+ * next visible explanation in its own turn; without one, it stays where it was.
+ */
+export function placeBotTaskCardsAfterIntroduction<T>(
+  messages: readonly T[],
+  classify: (message: T) => 'boundary' | 'task' | 'prose' | 'other',
+): T[] {
+  const output: T[] = [];
+  let turn: T[] = [];
+  const flush = () => {
+    // Match anchors to the nearest following prose, rather than the first prose
+    // of the turn: "I'll take a look" before dispatch is not its launch report.
+    let nextProse = -1;
+    const movable = new Set<number>();
+    for (let index = turn.length - 1; index >= 0; index -= 1) {
+      const kind = classify(turn[index]);
+      if (kind === 'prose') nextProse = index;
+      else if (kind === 'task' && nextProse >= 0) movable.add(index);
+    }
+    const pending: T[] = [];
+    for (let index = 0; index < turn.length; index += 1) {
+      if (movable.has(index)) pending.push(turn[index]);
+      else {
+        output.push(turn[index]);
+        if (classify(turn[index]) === 'prose') output.push(...pending.splice(0));
+      }
+    }
+    turn = [];
+  };
+  for (const message of messages) {
+    if (classify(message) === 'boundary') flush();
+    turn.push(message);
+  }
+  flush();
+  return output;
+}

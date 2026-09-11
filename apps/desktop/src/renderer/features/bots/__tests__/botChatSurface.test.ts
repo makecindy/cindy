@@ -55,9 +55,11 @@ describe('消息流的头像挂载', () => {
 
   it('只有 assistant 分支挂头像', () => {
     expect(messageStream).toContain('return withAssistantAvatar(\n        assistantAvatar,');
-    // 全文只有「定义 + 一处调用」两次出现:user 气泡、工具卡、工作组里的中间
-    // 过程文字都不经过它。
-    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(2);
+    // Assistant text shows the avatar; the single task anchor reserves the same
+    // space invisibly. User messages and internal tool/work cards still bypass it.
+    expect(messageStream.match(/withAssistantAvatar\(/g)?.length).toBe(3);
+    expect(messageStream).toContain("simplifiedBotConversation && message.systemCardType === 'bot-session-task'");
+    expect(messageStream).toContain('<span aria-hidden="true" className="invisible">{assistantAvatar}</span>');
   });
 });
 

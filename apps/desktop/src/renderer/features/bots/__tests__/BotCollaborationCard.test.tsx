@@ -14,7 +14,16 @@ import type {
 } from '../../../../shared/botDelegation';
 import type { BotCollaborationMeta } from '../../../../shared/botCollaboration';
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn(), remoteBots: [] as any[] }));
+const mocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  remoteBots: [] as any[],
+  prRefs: [] as any[],
+  successfulPrStatuses: new Map(),
+  refreshError: false,
+  prStatuses: new Map(),
+  registerPrConsumer: vi.fn(() => () => {}),
+  invalidateRemotePrRefs: vi.fn(),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -25,6 +34,28 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
+vi.mock('@/contexts/PrRefsContext', () => ({
+  usePrActions: () => ({
+    registerPrConsumer: mocks.registerPrConsumer,
+    invalidateRemotePrRefs: mocks.invalidateRemotePrRefs,
+  }),
+  usePrRefsForSession: (id: string) => (id === 'child-1' ? mocks.prRefs : []),
+  usePrStatuses: () => ({
+    statuses: mocks.prStatuses,
+    refreshError: mocks.refreshError,
+    successfulStatuses: mocks.successfulPrStatuses,
+  }),
+}));
+const associatedPr = (n: number) => ({
+  id: `pr-${n}`,
+  sessionId: 'child-1',
+  owner: 'a',
+  repo: 'b',
+  prNumber: n,
+  url: `https://github.com/a/b/pull/${n}`,
+  firstSeenAt: 1,
+  lastSeenAt: 1,
+});
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 const SESSION_ID = 'parent-session-1';
@@ -82,6 +113,11 @@ let listBotDelegations: ReturnType<typeof vi.fn>;
 let cancelBotDelegation: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  mocks.successfulPrStatuses = new Map();
+  mocks.prRefs = [];
+  mocks.prStatuses = new Map();
+  mocks.registerPrConsumer.mockClear();
+  mocks.invalidateRemotePrRefs.mockClear();
   listeners = [];
   mocks.remoteBots = [];
   mocks.navigate.mockClear();
@@ -96,6 +132,7 @@ beforeEach(() => {
     configurable: true,
     writable: true,
     value: {
+      openExternal: vi.fn().mockResolvedValue({ success: true }),
       maker: {
         listBotDelegations: (...args: unknown[]) => listBotDelegations(...args),
         cancelBotDelegation: (...args: unknown[]) => cancelBotDelegation(...args),
@@ -115,6 +152,7 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   remoteProjectsStore.clear();
+  remoteProjectsStore.__resetPinnedOriginsForTest();
   __resetStickySessionOriginForTest();
   __resetBotDelegationLiveForTest();
 });
@@ -133,14 +171,15 @@ describe('BotSessionTaskCard', () => {
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
 
-    expect(screen.getByText('bots.collab.backgroundTask')).toBeTruthy();
+    expect(screen.queryByText('bots.collab.backgroundTask')).toBeNull();
     await waitFor(() => expect(screen.getByText(/bots\.collab\.status\.running/)).toBeTruthy());
     expect(screen.getByText('bots.collab.stopTask')).toBeTruthy();
   });
 
   it('ignores historical target-side task mirrors', () => {
     const { container } = render(
-      <BotSessionTaskCard data={{
+      <BotSessionTaskCard
+        data={{
           ...meta({ role: 'guest-request' }),
         }}
         sessionId={SESSION_ID}
@@ -152,16 +191,22 @@ describe('BotSessionTaskCard', () => {
 
   it('does not roll a completed card back when an older running snapshot arrives late', async () => {
     let finishOldRead!: (value: unknown) => void;
-    listBotDelegations.mockImplementationOnce(() => new Promise((resolve) => {
-      finishOldRead = resolve;
-    }));
+    listBotDelegations.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishOldRead = resolve;
+        }),
+    );
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
     listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
     await act(async () => {
-      for (const listener of listeners) listener({
-        delegationId: DELEGATION_ID, parentSessionId: SESSION_ID,
-        childSessionId: 'child-1', status: 'completed',
-      });
+      for (const listener of listeners)
+        listener({
+          delegationId: DELEGATION_ID,
+          parentSessionId: SESSION_ID,
+          childSessionId: 'child-1',
+          status: 'completed',
+        });
     });
     await screen.findByText(/bots\.collab\.status\.completed/);
     await act(async () => {
@@ -202,7 +247,7 @@ describe('BotSessionTaskCard', () => {
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/child-1');
   });
 
-  it('shows the returned result directly on the task card', async () => {
+  it('keeps the full returned report out of the compact task card', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
       delegations: [
@@ -213,7 +258,8 @@ describe('BotSessionTaskCard', () => {
       ],
     });
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
-    expect(await screen.findByText(/三条结论/)).toBeTruthy();
+    await screen.findByText(/bots\.collab\.status\.completed/);
+    expect(screen.queryByText(/三条结论/)).toBeNull();
   });
 
   it('reports a stopped delegation as stopped, not as a failure', async () => {
@@ -289,7 +335,7 @@ describe('BotSessionTaskCard', () => {
     await waitFor(() => expect(listBotDelegations).toHaveBeenCalledTimes(2));
 
     expect(screen.getByText(/bots\.collab\.status\.completed/)).toBeTruthy();
-    expect(screen.getByText('已经交付。')).toBeTruthy();
+    expect(screen.getByText('bots.collab.stale')).toBeTruthy();
     expect(screen.queryByText(/bots\.collab\.status\.unknown/)).toBeNull();
   });
   /*
@@ -321,16 +367,18 @@ describe('BotSessionTaskCard', () => {
 
     expect(screen.getByText(/bots\.collab\.status\.queued/)).toBeTruthy();
     expect(screen.queryByText(/bots\.collab\.status\.unknown/)).toBeNull();
-    expect(container.querySelector('.animate-pulse')).not.toBeNull();
+    expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 
   it('reports a new failed + TIMEOUT task as timed out, not as a failure', async () => {
     listBotDelegations.mockResolvedValue({
       ok: true,
-      delegations: [delegation('timed-out', {
-        completedAt: Date.now(),
-        lastError: 'TIMEOUT: exceeded the deadline',
-      })],
+      delegations: [
+        delegation('timed-out', {
+          completedAt: Date.now(),
+          lastError: 'TIMEOUT: exceeded the deadline',
+        }),
+      ],
     });
     render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
 
@@ -339,33 +387,231 @@ describe('BotSessionTaskCard', () => {
   });
 });
 
-
 it('routes remote task reads, stop, child navigation and push refresh to the same Mac', async () => {
   mocks.remoteBots = [{ deviceId: 'home', online: true }];
   remoteProjectsStore.pinSessionOrigin('home', SESSION_ID);
   let push!: (value: any, stamp?: any) => void;
   let status!: (value: any) => void;
-  const invoke = vi.fn(async (_device: string, channel: string) => channel === 'maker:bot-delegations:list'
-    ? { ok: true, delegations: [delegation('running')] } : { ok: true });
+  const invoke = vi.fn(async (_device: string, channel: string) =>
+    channel === 'maker:bot-delegations:list'
+      ? { ok: true, delegations: [delegation('running', { updatedAt: 1_000 })] }
+      : { ok: true },
+  );
   window.electronAPI.deviceLink = {
-    invoke, onRemotePush: (fn: any) => { push = fn; return () => {}; },
-    onStatusChanged: (fn: any) => { status = fn; return () => {}; },
+    invoke,
+    onRemotePush: (fn: any) => {
+      push = fn;
+      return () => {};
+    },
+    onStatusChanged: (fn: any) => {
+      status = fn;
+      return () => {};
+    },
   } as any;
   render(<BotSessionTaskCard sessionId={SESSION_ID} data={meta() as any} />);
   const stop = await screen.findByRole('button', { name: 'bots.collab.stopTask' });
+  expect(mocks.registerPrConsumer).toHaveBeenCalledWith('child-1', 'home');
   expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-delegations:list', [SESSION_ID]);
   expect(listBotDelegations).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'bots.collab.watchWork' }));
   expect(remoteProjectsStore.getSessionDeviceId('child-1')).toBe('home');
   // Even when reconnect clears the transient registry, stop must never hit the local maker.
   remoteProjectsStore.clear();
+  remoteProjectsStore.__resetPinnedOriginsForTest();
   fireEvent.click(stop);
-  await waitFor(() => expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-delegation:cancel', [SESSION_ID, DELEGATION_ID]));
+  await waitFor(() =>
+    expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-delegation:cancel', [
+      SESSION_ID,
+      DELEGATION_ID,
+    ]),
+  );
   expect(cancelBotDelegation).not.toHaveBeenCalled();
   const reads = invoke.mock.calls.length;
-  act(() => push({ deviceId: 'office', channel: 'maker:bot-delegation:changed', payload: { parentSessionId: SESSION_ID } }));
+  act(() =>
+    push({
+      deviceId: 'office',
+      channel: 'maker:bot-delegation:changed',
+      payload: { parentSessionId: SESSION_ID },
+    }),
+  );
   expect(invoke).toHaveBeenCalledTimes(reads);
-  invoke.mockResolvedValue({ ok: true, delegations: [delegation('completed', { resultSummary: 'Remote done' })] });
+  mocks.invalidateRemotePrRefs.mockClear();
+  invoke.mockResolvedValue({
+    ok: true,
+    delegations: [
+      delegation('completed', { resultSummary: 'Remote done', updatedAt: 2_000 }),
+    ],
+  });
   act(() => status({ status: 'online' }));
-  await screen.findByText('Remote done');
+  await screen.findByText(/bots\.collab\.status\.completed/);
+  await waitFor(() => expect(mocks.invalidateRemotePrRefs).toHaveBeenCalledWith('child-1'));
+});
+
+it('opens the child session associated PR even when the report contains another link', async () => {
+  mocks.prRefs = [associatedPr(733)];
+  listBotDelegations.mockResolvedValue({
+    ok: true,
+    delegations: [
+      delegation('completed', {
+        resultSummary:
+          '## Deliverables\n[PR](https://github.com/MakeCindy/Cindy/pull/733/files)\n/private/report.md',
+        artifacts: [{ path: '/private/report.md', status: 'added' }],
+      }),
+    ],
+  });
+  const { container } = render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+  const pr = await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  const task = screen.getByRole('button', { name: 'bots.collab.watchWork' });
+  expect(pr.className).toBe(task.className);
+  expect(pr.className).toContain('h-8');
+  expect(container.textContent).not.toContain('/private/report.md');
+  expect(container.textContent).not.toContain('## Deliverables');
+  fireEvent.click(pr);
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://github.com/a/b/pull/733');
+});
+
+it('does not mistake a contextual PR in the objective for the task result', async () => {
+  listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
+  render(
+    <BotSessionTaskCard
+      data={{ ...meta({ objective: 'Compare https://github.com/a/b/pull/1' }) }}
+      sessionId={SESSION_ID}
+    />,
+  );
+  await screen.findByText(/bots\.collab\.status\.completed/);
+  expect(screen.queryByRole('button', { name: 'bots.collab.viewPr' })).toBeNull();
+});
+
+it('offers only the same three associated PRs as the task header', async () => {
+  mocks.prRefs = [1, 2, 3, 4, 5].map(associatedPr);
+  listBotDelegations.mockResolvedValue({
+    ok: true,
+    delegations: [
+      delegation('completed', {
+        resultSummary: 'https://github.com/a/b/pull/1 https://github.com/a/b/pull/2',
+      }),
+    ],
+  });
+  render(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+  const button = await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  fireEvent.keyDown(button, { key: 'Enter' });
+  const choice = await screen.findByRole('menuitem', { name: 'a/b #2' });
+  expect(screen.getAllByRole('menuitem')).toHaveLength(3);
+  expect(screen.getByText('bots.collab.prCount:{"count":3}')).toBeTruthy();
+  expect(screen.queryByRole('menuitem', { name: 'a/b #4' })).toBeNull();
+  expect(window.electronAPI.openExternal).not.toHaveBeenCalled();
+  fireEvent.click(choice);
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://github.com/a/b/pull/2');
+});
+
+it('subscribes to the child session PR state and updates its icon without enlarging actions', async () => {
+  mocks.prRefs = [associatedPr(4)];
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'open' }]]);
+  listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
+  const { rerender, container } = render(
+    <BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />,
+  );
+  await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  expect(mocks.registerPrConsumer).toHaveBeenCalledWith('child-1', undefined);
+  const button = screen.getByRole('button', { name: 'bots.collab.viewPr' });
+  const before = button.className;
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'merged' }]]);
+  rerender(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+  expect(container.querySelector('.lucide-git-merge')).not.toBeNull();
+  expect(button.className).toBe(before);
+});
+
+it('shows stale details on a rejected query while retaining the confirmed icon and button', async () => {
+  mocks.prRefs = [associatedPr(4)];
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'merged' }]]);
+  listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
+  const view = () => <BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />;
+  const { rerender, container } = render(view());
+  const button = await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  const classes = button.className;
+  mocks.refreshError = true;
+  rerender(view());
+  expect(screen.getByText('bots.collab.stale')).toBeTruthy();
+  expect(container.querySelector('.lucide-git-merge')).not.toBeNull();
+  expect(button.className).toBe(classes);
+  mocks.refreshError = false;
+  rerender(view());
+  expect(screen.queryByText('bots.collab.stale')).toBeNull();
+});
+
+it('renders confirmed shared PR icons on failures and clears them when the shared cache resets', async () => {
+  mocks.prRefs = [associatedPr(4)];
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'merged' }]]);
+  listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
+  const view = () => <BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />;
+  const { rerender, container } = render(view());
+  await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  mocks.successfulPrStatuses = new Map(mocks.prStatuses);
+  for (const reason of ['fetch-failed', 'no-token']) {
+    mocks.prStatuses = new Map([['a/b#4', { ok: false, reason }]]);
+    rerender(view());
+    expect(container.querySelector('.lucide-git-merge')).not.toBeNull();
+    expect(screen.getByText('bots.collab.stale')).toBeTruthy();
+  }
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'closed' }]]);
+  rerender(view());
+  expect(container.querySelector('.lucide-git-pull-request-closed')).not.toBeNull();
+  expect(screen.queryByText('bots.collab.stale')).toBeNull();
+  mocks.successfulPrStatuses = new Map();
+  mocks.prStatuses = new Map([['a/b#4', { ok: false, reason: 'no-token' }]]);
+  rerender(view());
+  expect(container.querySelector('.lucide-git-pull-request-closed')).toBeNull();
+});
+
+it('subscribes only visible task cards and retains cached PR actions outside the viewport', async () => {
+  const observers: Array<{ callback: IntersectionObserverCallback; disconnect: ReturnType<typeof vi.fn> }> = [];
+  vi.stubGlobal('IntersectionObserver', class {
+    disconnect = vi.fn();
+    observe = vi.fn();
+    constructor(callback: IntersectionObserverCallback) {
+      observers.push({ callback, disconnect: this.disconnect });
+    }
+  });
+  const release = vi.fn();
+  mocks.registerPrConsumer.mockImplementation(() => release);
+  mocks.remoteBots = [{ deviceId: 'home', online: true }];
+  remoteProjectsStore.pinSessionOrigin('home', SESSION_ID);
+  mocks.prRefs = [associatedPr(1)];
+  window.electronAPI.deviceLink = {
+    invoke: vi.fn(async () => ({ ok: true, delegations: [delegation('completed', { updatedAt: 1_000 })] })),
+    onRemotePush: () => () => {},
+    onStatusChanged: () => () => {},
+  } as any;
+  const view = render(<>
+    <BotSessionTaskCard sessionId={SESSION_ID} data={{ ...meta() }} />
+    <BotSessionTaskCard sessionId={SESSION_ID} data={{ ...meta() }} />
+  </>);
+  try {
+    await screen.findAllByRole('button', { name: 'bots.collab.viewPr' });
+    expect(observers).toHaveLength(2);
+    expect(mocks.registerPrConsumer).not.toHaveBeenCalled();
+    expect(mocks.invalidateRemotePrRefs).not.toHaveBeenCalled();
+    const report = (index: number, visible: boolean) => act(() => {
+      observers[index].callback([{ isIntersecting: visible, intersectionRatio: visible ? 1 : 0 } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+    report(0, true);
+    expect(mocks.registerPrConsumer).toHaveBeenCalledTimes(1);
+    expect(mocks.registerPrConsumer).toHaveBeenCalledWith('child-1', 'home');
+    expect(mocks.invalidateRemotePrRefs).toHaveBeenCalledTimes(1);
+    report(0, false);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('button', { name: 'bots.collab.viewPr' })).toHaveLength(2);
+    report(1, true);
+    expect(mocks.registerPrConsumer).toHaveBeenCalledTimes(2);
+    report(1, false);
+    report(0, true);
+    expect(mocks.registerPrConsumer).toHaveBeenCalledTimes(3);
+    view.unmount();
+    expect(release).toHaveBeenCalledTimes(3);
+    expect(observers.every((observer) => observer.disconnect.mock.calls.length === 1)).toBe(true);
+  } finally {
+    view.unmount();
+    mocks.registerPrConsumer.mockImplementation(() => () => {});
+    vi.unstubAllGlobals();
+  }
 });

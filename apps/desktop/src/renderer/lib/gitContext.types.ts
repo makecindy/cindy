@@ -34,48 +34,9 @@ export interface SessionGitDirResult {
   source: GitContextDirSource;
 }
 
-/** session 关联的一条 PR 引用(session_pr_refs 行)。 */
-export interface SessionPrRef {
-  id: string;
-  sessionId: string;
-  owner: string;
-  repo: string;
-  prNumber: number;
-  url: string;
-  firstSeenAt: number;
-  lastSeenAt: number;
-}
-
-export type PrStatusKind = 'open' | 'draft' | 'merged' | 'closed';
-
-/** git-context:pr-status 单条结果。 */
-export type PrStatusResult =
-  | {
-      ok: true;
-      owner: string;
-      repo: string;
-      prNumber: number;
-      status: PrStatusKind;
-      title: string;
-      htmlUrl: string;
-      /** PR 源分支名(GitHub `head.ref`);徽标拿不到本地工作目录时兜底显示分支。 */
-      branch: string;
-      /** 未解决 review thread 数;null = 查询失败 / token 不支持 GraphQL。 */
-      unresolvedCount: number | null;
-    }
-  | {
-      ok: false;
-      owner: string;
-      repo: string;
-      prNumber: number;
-      reason: PrStatusFailureReason;
-    };
-
-/**
- * 镜像 main/git-context/prStatusService.ts 的 PrStatusFailureReason:
- *   gh-missing / gh-not-logged-in = 本机 gh 缺失 / 未登录,徽标点击引导 Agent 处理
- *   no-token  = 拿不到 token 且不给原因(device-link 远端结果、gh 子进程超时)
- *   not-found = 404;fetch-failed = 网络等其它错误
- */
-export type PrStatusFailureReason =
-  'gh-missing' | 'gh-not-logged-in' | 'no-token' | 'not-found' | 'fetch-failed';
+export type {
+  SessionPrRef,
+  PrStatusKind,
+  PrStatusResult,
+  PrStatusFailureReason,
+} from '@cindy/maker-shared';

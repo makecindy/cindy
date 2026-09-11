@@ -2168,3 +2168,24 @@ describe('focus scroll takeover keys', () => {
     expect(shouldHandleNavigationKey('Enter', null)).toBe(false);
   });
 });
+
+it('places the same Bot task card after its introduction and keeps it through streaming completion replies', () => {
+  const task: ChatMessage = { ...mkAssistant('task-card', ''), systemCardType: 'bot-session-task' };
+  const messages = [mkUser('start'), task, mkAssistant('intro', 'Started'),
+    { ...mkUser('finished-trigger'), isSyntheticTrigger: true }, mkAssistant('done', 'Done')];
+  const project = (streaming: boolean) => simplifyBotRenderItems(
+    buildRenderItems(messages, undefined, undefined, { botSessionId: 'bot' }).items, streaming,
+  ).flatMap((item) => item.type === 'message' ? [item.message.clientId] : []);
+  expect(project(true)).toEqual(['start', 'intro', 'task-card', 'done']);
+  expect(project(false).filter((id) => id !== 'finished-trigger')).toEqual(['start', 'intro', 'task-card', 'done']);
+});
+
+it.each(['steer', 'new', 'completion'])('keeps task introduction pairing within the actual turn: %s', (kind) => {
+  const task: ChatMessage = { ...mkAssistant('task-card', ''), systemCardType: 'bot-session-task' };
+  const interruption = { ...mkUser('interruption'), ...(kind === 'steer' ? { delivery: 'steer' as const } : {}),
+    ...(kind === 'completion' ? { isSyntheticTrigger: true } : {}) };
+  const items = buildRenderItems([mkUser('start'), task, interruption, mkAssistant('intro', 'Started')],
+    undefined, undefined, { botSessionId: 'bot' }).items;
+  const ids = items.flatMap((item) => item.type === 'message' ? [item.message.clientId] : []);
+  expect(ids.indexOf('task-card') > ids.indexOf('intro')).toBe(kind === 'steer');
+});
