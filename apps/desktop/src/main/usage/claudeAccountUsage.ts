@@ -44,6 +44,7 @@ import { BrowserWindow } from 'electron';
 
 import type { MoneyCurrency } from '../../shared/regionalMoney';
 import { getAuthState } from '../authManager';
+import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { createLogger } from '../logger';
 import { readClaudeApiKey } from '../maker-host/auth-adapters';
 import { outboundFetch } from '../maker-host/outbound-fetch';
@@ -307,4 +308,7 @@ function broadcast(payload: ClaudeAccountUsageSnapshot): void {
       win.webContents.send(USAGE_CLAUDE_ACCOUNT_CHANGED, payload);
     }
   }
+  // device-link:控制端远程网关形态会话 chip 镜像被控端 daily/monthly 配额
+  // (刷新自带 10s 节流 + turn-done 触发,低频;无 active 链路时 O(1) no-op)。
+  tapWindowBroadcast(USAGE_CLAUDE_ACCOUNT_CHANGED, payload);
 }

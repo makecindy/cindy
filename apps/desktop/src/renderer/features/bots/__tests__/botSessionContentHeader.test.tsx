@@ -8,8 +8,6 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const navigate = vi.fn();
-const openRoutines = vi.hoisted(() => vi.fn());
-vi.mock('../../right-sidebar/lib/openRoutinesTab', () => ({ openRoutinesTab: openRoutines }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'en' } }),
@@ -38,7 +36,7 @@ afterEach(() => {
 
 describe('BotSessionContentHeader', () => {
   it('leaves the header whitespace in the native window drag region', () => {
-    render(<BotSessionContentHeader bot={bot} sessionId="sess-1" />);
+    render(<BotSessionContentHeader bot={bot} />);
 
     expect(appRegionOf(screen.getByTestId('bot-session-content-header'))).toBe('');
     expect(appRegionOf(screen.getByTitle('bots.settings'))).toBe('no-drag');
@@ -46,7 +44,7 @@ describe('BotSessionContentHeader', () => {
   });
 
   it('opens settings from either the name lockup or the gear button', () => {
-    render(<BotSessionContentHeader bot={bot} sessionId="sess-1" />);
+    render(<BotSessionContentHeader bot={bot} />);
 
     fireEvent.click(screen.getByTitle('bots.settings'));
     expect(navigate).toHaveBeenCalledWith('/bots/bot-1/session/sess-1?settings=1');
@@ -55,23 +53,22 @@ describe('BotSessionContentHeader', () => {
     expect(navigate).toHaveBeenCalledTimes(2);
   });
 
-  it('opens routines from an icon in the right-hand controls', () => {
-    render(<BotSessionContentHeader bot={bot} sessionId="sess-1" />);
-    const button = screen.getByRole('button', { name: 'routines.title' });
-    expect(button.textContent).toBe('');
-    expect(button.querySelector('svg')).toBeTruthy();
-    expect(button.parentElement?.className).toContain('ml-auto');
-    fireEvent.click(button);
-    expect(openRoutines).toHaveBeenCalledWith('sess-1', 'bot-1');
+  it('keeps routine management out of the chat header', () => {
+    render(<BotSessionContentHeader bot={bot} />);
+    expect(screen.queryByRole('button', { name: 'routines.title' })).toBeNull();
+    expect(screen.getAllByRole('button')).toHaveLength(2);
   });
 
-  it('renders without a session id', () => {
-    render(<BotSessionContentHeader bot={bot} sessionId={null} />);
-    expect(screen.getByText('小可')).toBeTruthy();
+  it('keeps remote teammate identity read-only without local settings or routine controls', () => {
+    render(<BotSessionContentHeader bot={{ ...bot, deviceId: 'remote-1', deviceName: 'Office' }} />);
+    expect(screen.getByRole('button', { name: '小可' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByRole('button', { name: 'bots.settings' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'routines.title' })).toBeNull();
+    expect(screen.getByText('Office')).toBeTruthy();
   });
 
   it('keeps every colour on semantic tokens so both modes come out right', () => {
-    render(<BotSessionContentHeader bot={bot} sessionId="sess-1" />);
+    render(<BotSessionContentHeader bot={bot} />);
     const className = screen.getByLabelText('bots.settings').className;
     expect(className).toMatch(/text-\[var\(--text-tertiary\)\]/);
     expect(className).toMatch(/hover:bg-\[var\(--surface-hover\)\]/);
