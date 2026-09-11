@@ -1800,6 +1800,7 @@ function ListRow({
   sortable: boolean;
 }) {
   const { t } = useTranslation();
+  const management = useProviderManagement(provider);
   const [ollamaLive, setOllamaLive] = useState<boolean | null>(null);
   useEffect(() => {
     if (provider.id !== MANAGED_OLLAMA_PROVIDER_ID) return;
@@ -1853,6 +1854,7 @@ function ListRow({
         <button
           type="button"
           onClick={onSelect}
+          onDoubleClick={provider.id === 'xd' ? undefined : () => void management.rename()}
           aria-current={selected}
           className="flex min-w-0 flex-1 items-center gap-2.5 py-2 pl-3 pr-2.5 text-left"
         >

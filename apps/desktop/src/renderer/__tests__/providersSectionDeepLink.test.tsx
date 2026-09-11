@@ -297,6 +297,52 @@ describe('ProvidersSection — 深链定位', () => {
     expect(customDialogSpy).not.toHaveBeenCalled();
   });
 
+  it('renames an account when its sidebar row is double-clicked', async () => {
+    providersState.providers = [
+      makeProvider('openai-work', {
+        name: 'Work account',
+        source: 'user',
+        agents: ['codex'],
+        connected: true,
+        auth: { method: 'oauth', native: 'codex' },
+        models: { codex: [] },
+      }),
+    ];
+    renderAt('?tab=providers');
+
+    fireEvent.doubleClick(await screen.findByRole('button', { name: /Work account/ }));
+
+    await waitFor(() => expect(confirmSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'settings.providers.pill.rename' }),
+    ));
+    await waitFor(() => expect(window.electronAPI.maker.setProviderPresentation).toHaveBeenCalledWith(
+      {
+        providerId: 'openai-work',
+        action: 'rename',
+        name: 'Work account',
+        dataOwnerId: 'owner',
+        ownerGeneration: 1,
+      },
+    ));
+  });
+
+  it('does not offer double-click rename for Cindy AI', async () => {
+    providersState.providers = [makeProvider('xd', {
+      name: 'Cindy AI',
+      auth: { method: 'managed' } as ProviderView['auth'],
+      agents: ['claude-code', 'codex'],
+      models: { 'claude-code': [], codex: [] },
+    })];
+    renderAt('?tab=providers');
+
+    fireEvent.doubleClick(
+      await screen.findByRole('button', { name: 'settings.providers.xd.title' }),
+    );
+
+    expect(confirmSpy).not.toHaveBeenCalled();
+    expect(window.electronAPI.maker.setProviderPresentation).not.toHaveBeenCalled();
+  });
+
   it('API key presence is configured rather than authenticated', async () => {
     providersState.providers = [
       makeProvider('api-work', {
