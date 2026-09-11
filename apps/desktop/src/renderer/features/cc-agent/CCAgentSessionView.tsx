@@ -234,6 +234,7 @@ import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/li
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
 import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
+import { RunningTokenRatePopover, useRunningTokenRateHistory } from './RunningTokenRatePopover';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
 import { listActiveRunsForSession } from '@/features/learn/useLearnRun';
@@ -4727,6 +4728,15 @@ export function CCAgentSessionView({
                   outputTokens={agentStatus.outputTokens ?? 0}
                   generationDurationMs={agentStatus.generationDurationMs ?? 0}
                   generationReliable={agentStatus.generationReliable ?? true}
+                  activityStatus={
+                    pendingPermission
+                      ? t('ccAgent.sidebar.card.awaitingPermission')
+                      : pendingAskUser
+                        ? t('ccAgent.sidebar.card.awaitingQuestion')
+                        : pendingPluginSetup
+                          ? t('ccAgent.sidebar.card.awaitingPluginSetup')
+                          : undefined
+                  }
                   startedAt={agentStatus.startedAt}
                   visible={composerRuntimeVisible}
                   inputWidth={inputWidth}
@@ -5545,6 +5555,7 @@ function RunningStatusBar({
   outputTokens = 0,
   generationDurationMs = 0,
   generationReliable = true,
+  activityStatus,
   startedAt,
   visible,
   inputWidth,
@@ -5563,6 +5574,7 @@ function RunningStatusBar({
   outputTokens?: number;
   generationDurationMs?: number;
   generationReliable?: boolean;
+  activityStatus?: string;
   startedAt: number | null;
   visible: boolean;
   inputWidth?: CSSProperties['width'];
@@ -5721,15 +5733,21 @@ function RunningStatusBar({
   const tokenCountText = t('chat.runningStatus.tokenCount', {
     tokens: formatRunningTokenCount(animatedTokens),
   });
-  const tokenCountTipText = t('chat.messageActionBar.turnTokens', {
-    tokens: formatRunningTokenCount(animatedTokens),
+  const rateHistory = useRunningTokenRateHistory({
+    startedAt,
+    outputTokens,
+    generationDurationMs,
+    generationReliable:
+      generationReliable && !sideTaskRunning && !backgroundTasksRunning && !workflowWaiting,
   });
+  const latestRate = rateHistory.samples.at(-1)?.rate;
+  const latestRateText = latestRate !== undefined ? latestRate.toFixed(1) : null;
   const rateText =
-    usageMeta.kind === 'rate' ? t('chat.runningStatus.tokenRate', { rate: usageMeta.rate }) : null;
-  const rateTipText = [
-    t('chat.runningStatus.tokenRateDescription'),
-    ...(tokenUsage > 0 ? [tokenCountTipText] : []),
-  ].join('\n');
+    usageMeta.kind === 'rate'
+      ? latestRateText !== null
+        ? t('chat.runningStatus.tokenRate', { rate: latestRateText })
+        : t('chat.runningStatus.waitingSample')
+      : null;
 
   // 淡入淡出/隐藏占位样式 —— 同时作用于左(状态)、右(elapsed/tokens)两段。
   // visibility:hidden 只隐藏不收高,让 linger / fade 阶段稳定;淡出结束后整个
@@ -5841,12 +5859,16 @@ function RunningStatusBar({
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                       &middot;
                     </span>
-                    {rateText ? (
-                      <Tip text={rateTipText} side="top" contentClassName="whitespace-pre-line">
-                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                          {rateText}
-                        </span>
-                      </Tip>
+                    {rateText && usageMeta.kind === 'rate' ? (
+                      <RunningTokenRatePopover
+                        key={startedAt}
+                        rate={latestRateText}
+                        rateText={rateText}
+                        averageRate={usageMeta.rate}
+                        outputTokens={outputTokens}
+                        history={rateHistory}
+                        activityStatus={activityStatus ?? displayStatus}
+                      />
                     ) : (
                       <>
                         <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
