@@ -1,3 +1,4 @@
+import { ChevronDown } from 'lucide-react';
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import { useBotTranslation } from './botPronounContext';
 import {
@@ -25,15 +26,21 @@ export function BotCapabilitySettings({
   capabilities,
   skills,
   onChange,
+  expanded,
 }: {
+  expanded?: boolean;
   bot: BotProfile;
   capabilities: BotCapabilities;
   skills: string[];
   onChange: (kind: Kind, values: string[]) => void;
 }) {
   const { t } = useBotTranslation();
-  const [catalog, setCatalog] = useState<{ key: string; entries: Partial<Record<Kind, Entry[]>> }>({ key: '', entries: {} });
-  const [open, setOpen] = useState(false);
+  const [catalog, setCatalog] = useState<{ key: string; entries: Partial<Record<Kind, Entry[]>> }>({
+    key: '',
+    entries: {},
+  });
+  const [localOpen, setOpen] = useState(false);
+  const open = expanded ?? localOpen;
   const [revision, setRevision] = useState(0);
   const requestRef = useRef(0);
   const [busy, setBusy] = useState(false);
@@ -43,11 +50,18 @@ export function BotCapabilitySettings({
   // Followed defaults can change when providers / available harnesses change, even
   // if the local profile still holds the previous modelChain snapshot.
   useSyncExternalStore(subscribeBotGlobalModel, () => JSON.stringify(getEffectiveBotModelChain()));
-  const modelChain = capabilities.modelChainOverride === null
-    ? getEffectiveBotModelChain()
-    : capabilities.modelChain;
+  const modelChain =
+    capabilities.modelChainOverride === null
+      ? getEffectiveBotModelChain()
+      : capabilities.modelChain;
   const modelChainKey = JSON.stringify(modelChain);
-  const catalogKey = JSON.stringify([bot.id, bot.canonicalSessionId, modelChainKey, revision, open]);
+  const catalogKey = JSON.stringify([
+    bot.id,
+    bot.canonicalSessionId,
+    modelChainKey,
+    revision,
+    open,
+  ]);
   // Invalidate during render as well as effect cleanup: stale checkboxes must never stay selectable.
   const entries = catalog.key === catalogKey ? catalog.entries : {};
   const refresh = useCallback(() => {
@@ -59,15 +73,34 @@ export function BotCapabilitySettings({
     if (!open) return;
     const changed = (sessionId: string, patch: Partial<Session>) => {
       if (sessionId !== bot.canonicalSessionId) return;
-      if (['agentKind', 'model', 'providerId', 'effort', 'fastMode', 'runtimeGeneration',
-        'runtimeEffective', 'runtimePending', 'workingDir', 'remoteHostId'].some((key) => key in patch)) refresh();
+      if (
+        [
+          'agentKind',
+          'model',
+          'providerId',
+          'effort',
+          'fastMode',
+          'runtimeGeneration',
+          'runtimeEffective',
+          'runtimePending',
+          'workingDir',
+          'remoteHostId',
+        ].some((key) => key in patch)
+      )
+        refresh();
     };
     const offLocal = onPatch(changed);
-    const offPush = window.electronAPI.localDb?.sessionsPush?.onPatched(({ sessionId, patch }, stamp) => {
-      if (isDataOwnerPushCurrent(stamp)) changed(sessionId, patch);
-    });
+    const offPush = window.electronAPI.localDb?.sessionsPush?.onPatched(
+      ({ sessionId, patch }, stamp) => {
+        if (isDataOwnerPushCurrent(stamp)) changed(sessionId, patch);
+      },
+    );
     const offMcp = window.electronAPI.maker.onMcpChanged(refresh);
-    return () => { offLocal(); offPush?.(); offMcp(); };
+    return () => {
+      offLocal();
+      offPush?.();
+      offMcp();
+    };
   }, [open, bot.canonicalSessionId, refresh]);
 
   useEffect(() => {
@@ -84,8 +117,12 @@ export function BotCapabilitySettings({
         if (!isCurrent()) return;
         const api = window.electronAPI.maker;
         const mcpResult = await api.listCustomMcpServers({
-          agentKind: session.runtimePending?.profile.agentKind ?? session.runtimeEffective?.agentKind
-            ?? (session.agentKind === 'codex' || session.agentKind === 'pi' ? session.agentKind : 'claude-code'),
+          agentKind:
+            session.runtimePending?.profile.agentKind ??
+            session.runtimeEffective?.agentKind ??
+            (session.agentKind === 'codex' || session.agentKind === 'pi'
+              ? session.agentKind
+              : 'claude-code'),
           botSessionId: bot.canonicalSessionId,
           modelChain: JSON.parse(modelChainKey),
         });
@@ -99,7 +136,9 @@ export function BotCapabilitySettings({
             remoteHostId: session.remoteHostId ?? undefined,
           }),
           api.plugins.list(session.workingDir ?? undefined, true, {
-            botId: bot.id, agentKind, remoteHostId: session.remoteHostId,
+            botId: bot.id,
+            agentKind,
+            remoteHostId: session.remoteHostId,
           }),
         ]);
         if (!isCurrent()) return;
@@ -133,19 +172,27 @@ export function BotCapabilitySettings({
       }
     };
     void load();
-    return () => { requestRef.current += 1; };
+    return () => {
+      requestRef.current += 1;
+    };
   }, [open, catalogKey, bot.id, bot.canonicalSessionId, modelChainKey]);
   return (
     <details
-      className="rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)]"
+      data-testid="bot-capability-editor"
+      open={open}
+      className="group border-t border-[var(--border-default)] pt-3"
       onToggle={(event) => {
-        setOpen(event.currentTarget.open);
+        if (expanded === undefined) setOpen(event.currentTarget.open);
       }}
     >
-      <summary className="cursor-pointer px-4 py-3 text-12 font-medium text-[var(--text-secondary)]">
+      <summary
+        hidden={expanded}
+        className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-full px-3 py-2 text-13 text-[var(--text-secondary)] outline-none hover:bg-[var(--surface-hover)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] [&::-webkit-details-marker]:hidden"
+      >
         {t('bots.capabilities.title')}
+        <ChevronDown size={15} aria-hidden className="shrink-0 group-open:rotate-180" />
       </summary>
-      <div className="space-y-4 border-t border-[var(--border-default)] p-4">
+      <div className="space-y-4 px-3 pt-4">
         <input
           aria-label={t('bots.capabilities.search')}
           placeholder={t('bots.capabilities.search')}

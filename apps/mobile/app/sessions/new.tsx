@@ -389,7 +389,6 @@ interface WorktreeCreateIntentSnapshot {
   target: { deviceId: string; workingDir: string };
   eligibility: NewSessionWorktreeEligibility;
   sourceBranch: string;
-  preferenceSyncKey: string;
   branchPreferenceKey: string;
   branchPreferenceSyncKey: string;
 }
@@ -472,7 +471,14 @@ export default function NewRemoteSessionScreen() {
   const selectedDeviceLabel = selectedDeviceOption?.name || selectedDeviceName || selectedDeviceId || t('session.new.selectDevice');
   const maker = useMobileMakerTransport(selectedDeviceId);
   const worktreePreference = useRemoteNewMakerWorktreePreference(selectedDeviceId);
-  const worktreeEnabled = worktreePreference.enabled;
+  // Defaults are advisory. A choice made in this draft wins over later host pushes.
+  const worktreeChoicesRef = useRef(new Map<string, boolean>());
+  const [, setWorktreeChoiceVersion] = useState(0);
+  const worktreeEnabled = (selectedDeviceId
+    ? worktreeChoicesRef.current.get(selectedDeviceId)
+    : undefined) ?? worktreePreference.enabled;
+  const worktreeEnabledRef = useRef(worktreeEnabled);
+  worktreeEnabledRef.current = worktreeEnabled;
   const sessions = useRemoteSessions();
   const recentWorkspaces = useMemo(
     () => buildRecentWorkspaceOptions(
@@ -570,15 +576,9 @@ export default function NewRemoteSessionScreen() {
   const worktreeSourceBranchRef = useRef('HEAD');
   const worktreeSeedSeqRef = useRef(0);
   const [worktreeSeedRetryNonce, setWorktreeSeedRetryNonce] = useState(0);
-  const [worktreePreferenceReadyKey, setWorktreePreferenceReadyKey] = useState<string | null>(null);
-  const worktreePreferenceReadyKeyRef = useRef<string | null>(null);
   const worktreePreferenceSyncKeyRef = useRef('');
-  const worktreePreferenceAuthorityReadRef = useRef<{ syncKey: string; revision: number } | null>(
-    null,
-  );
   const worktreePreferenceWriteSeqRef = useRef(0);
-  // State updates are batched; this synchronous target fence closes the
-  // OFF→ON/ON→OFF then immediate Create gap before React renders the spinner.
+  // Serialize writes of the next default independently of the current draft.
   const worktreePreferenceWriteTargetRef = useRef<string | null>(null);
   const [worktreePreferenceSavingDeviceId, setWorktreePreferenceSavingDeviceId] =
     useState<string | null>(null);
@@ -1183,27 +1183,16 @@ export default function NewRemoteSessionScreen() {
       worktreePreferenceSavingDeviceId === selectedDeviceId
       || worktreePreferenceWriteTargetRef.current === selectedDeviceId
     );
+  const worktreePreferenceAwaitingEcho =
+    worktreePreferenceTransactionRef.current?.status === 'reconciling';
   const worktreePreferenceSyncKey = selectedDeviceId
     ? `${selectedDeviceId}\u0000${connectionEpoch}\u0000${presenceVersion}`
     : '';
   worktreePreferenceSyncKeyRef.current = worktreePreferenceSyncKey;
-  const worktreePreferenceReady = worktreePreferenceSyncKey.length > 0
-    && worktreePreferenceReadyKey === worktreePreferenceSyncKey
-    && worktreePreferenceReadyKeyRef.current === worktreePreferenceSyncKey;
   const worktreePreferenceAuthorityUnknown = selectedDeviceId != null
     && worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId);
   const worktreeApplicable = draft.workspaceKind === 'project'
     && draft.workingDir.trim().length > 0;
-  // ineligible(2026-08-07 裁决):确认目录不合格时无需等偏好就绪——反正不会
-  // 创建 worktree,GET 在途不应卡住普通会话创建。
-  const worktreePreferenceCreateBlocked = worktreeApplicable
-    && selectedDeviceId != null
-    && worktreeEligibility.status !== 'ineligible'
-    && (
-      worktreePreferenceSaving
-      || worktreePreferenceAuthorityUnknown
-      || !worktreePreferenceReady
-    );
   // host preference 虽然持久化，连接代次仍属于权威读取 identity：桌面重启/重连后
   // 即使 deviceId/repo 没变，也重新 GET，不能只相信手机内存里的旧快照。
   const worktreeBranchPreferenceSyncKey = worktreeBranchPreferenceKey
@@ -1223,7 +1212,6 @@ export default function NewRemoteSessionScreen() {
   const worktreeToggleDisabled =
     creating
     || worktreePreferenceSaving
-    || (!worktreePreferenceReady && !worktreePreferenceAuthorityUnknown)
     || (worktreeEligibility.status !== 'eligible' && !worktreeEnabled);
   // 分支区与 checkbox 是两条独立轴：OFF 时也可先选源分支；保存 checkbox 偏好在途
   // 同样不影响只读的分支枚举。只有目标尚不具备 worktree 资格或创建在途时禁用。
@@ -1234,31 +1222,33 @@ export default function NewRemoteSessionScreen() {
   const worktreeBranchSheetVisible = worktreeBranchSheetOpen
     && worktreeEligibility.status === 'eligible'
     && worktreeBranchListMatchesTarget;
-  // 勾选展示 = 工作端记忆**原样直出**(2026-07-29 用户裁决:状态只属于用户,系统不做
-  // 视觉折叠);项目目标资格不满足时显示 caption 并阻止创建，不能静默降级普通目录。
+  // 2026-09-11: show this draft's explicit choice, otherwise the last host mirror.
+  // Eligibility failures still cannot silently downgrade an enabled worktree.
   const worktreeChecked = worktreeEnabled;
   const worktreeCaptionKey = worktreeEligibilityCaptionKey(worktreeEligibility);
   const worktreeCreateBlocked = shouldBlockNewSessionCreateForWorktree({
     applicable: worktreeApplicable,
     enabled: worktreeEnabled,
     eligibility: worktreeEligibility,
-    preferenceSaving: worktreePreferenceSaving,
+    // Saving a default does not change the explicit parameters of this request.
+    preferenceSaving: false,
   })
-    || worktreePreferenceCreateBlocked
-    || (worktreeEnabled && worktreeBranchPreferenceSaving)
-    || (worktreeEnabled
-      && worktreeEligibility.status === 'eligible'
-      && (!worktreeBranchPreferenceReady || worktreeBranchPreferenceError));
+    || (worktreeEnabled && (
+      worktreeBranchPreferenceSaving
+      || (worktreeEligibility.status === 'eligible' && !worktreeBranchPreferenceReady)
+      || (worktreeBranchPreferenceTransactionRef.current?.key === worktreeBranchPreferenceKey
+        && worktreeBranchPreferenceTransactionRef.current.status === 'unknown')
+    ));
   const worktreeControlCaptionKey = worktreeCaptionKey
     ?? (worktreePreferenceAuthorityUnknown ? 'session.new.worktreeSettingsSyncFailed' : null)
-    ?? (worktreePreferenceCreateBlocked ? 'session.new.worktreeSettingsSaving' : null)
+    ?? (worktreePreferenceSaving ? 'session.new.worktreeSettingsSaving' : null)
     ?? (worktreeBranchPreferenceError ? 'session.new.worktreeBranchSyncFailed' : null);
-  const resolveWorktreePreferenceGateErrorKey = useCallback(() => (
-    selectedDeviceId != null
-      && worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
-      ? 'session.new.worktreeSettingsSyncFailed'
-      : 'session.new.worktreeSettingsSaving'
-  ), [selectedDeviceId]);
+  const resolveWorktreeCreateErrorKey = useCallback(() => (
+    worktreeEligibilityCaptionKey(worktreeEligibilityRef.current)
+      ?? (worktreeBranchPreferenceError
+        ? 'session.new.worktreeBranchSyncFailed'
+        : 'session.new.worktreeBranchSaving')
+  ), [worktreeBranchPreferenceError]);
 
   useLayoutEffect(() => {
     worktreePreferenceRenderedRef.current = {
@@ -1279,7 +1269,7 @@ export default function NewRemoteSessionScreen() {
       worktreePreferenceWriteTargetRef.current = null;
     }
     setWorktreePreferenceSavingDeviceId(null);
-  }, [selectedDeviceId, worktreePreference.enabled, worktreePreference.revision]);
+  }, [selectedDeviceId, worktreePreference.enabled, worktreePreference.revision, worktreePreferenceAwaitingEcho]);
 
   useEffect(() => {
     if (!selectedDeviceId) return;
@@ -1312,7 +1302,7 @@ export default function NewRemoteSessionScreen() {
     ) return;
     worktreePreferenceAuthorityUnknownByDeviceRef.current.delete(selectedDeviceId);
     setWorktreePreferenceAuthorityVersion((value) => value + 1);
-  }, [selectedDeviceId, worktreePreference.enabled, worktreePreference.revision]);
+  }, [selectedDeviceId, worktreePreference.enabled, worktreePreference.revision, worktreePreferenceAwaitingEcho]);
 
   const settleRenderedWorktreeBranchTransaction = useCallback((
     key: string,
@@ -1362,13 +1352,10 @@ export default function NewRemoteSessionScreen() {
       : '';
     return {
       applicable: target.deviceId.length > 0 && target.workingDir.trim().length > 0,
-      enabled: target.deviceId
-        ? remoteSessionStore.getNewMakerWorktreePreference(target.deviceId).enabled
-        : false,
+      enabled: worktreeEnabledRef.current,
       target,
       eligibility,
       sourceBranch: worktreeSourceBranchRef.current,
-      preferenceSyncKey: worktreePreferenceSyncKeyRef.current,
       branchPreferenceKey,
       branchPreferenceSyncKey: worktreeBranchPreferenceSyncKeyRef.current,
     };
@@ -1389,19 +1376,12 @@ export default function NewRemoteSessionScreen() {
     // 但快照不能替代实时状态:await 期间同目标可能被重探回 probing/eligible/
     // detect-failed,旧 ineligible 快照必须复核 live ref 仍为 ineligible 才放行,
     // 否则回到 fail closed(探测未定不等于确认不合格)。
+    if (!intent.enabled) return true;
     if (intent.eligibility.status === 'ineligible') {
       return worktreeEligibilityRef.current.status === 'ineligible';
     }
-    if (
-      worktreePreferenceSyncKeyRef.current !== intent.preferenceSyncKey
-      || worktreePreferenceReadyKeyRef.current !== intent.preferenceSyncKey
-      || worktreePreferenceWriteTargetRef.current === intent.target.deviceId
-      || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(intent.target.deviceId)
-    ) return false;
-    const currentEnabled = remoteSessionStore
-      .getNewMakerWorktreePreference(intent.target.deviceId).enabled;
-    if (currentEnabled !== intent.enabled) return false;
-    if (!intent.enabled) return true;
+    // The click captures the displayed choice. Background defaults and persistence
+    // ACKs cannot invalidate an already submitted request.
     // ineligible 已在前面提前返回,此处只可能是 eligible(2026-08-07 裁决)。
     if (intent.eligibility.status !== 'eligible') return false;
     // 与 ineligible 快照同理:eligible 快照也必须复核 live 资格仍是同一 repo 的
@@ -1411,20 +1391,11 @@ export default function NewRemoteSessionScreen() {
       currentEligibility.status !== 'eligible'
       || currentEligibility.baseRepo !== intent.eligibility.baseRepo
     ) return false;
-    const currentStoredBranch = remoteSessionStore.getNewMakerWorktreeBranchPreference(
-      intent.target.deviceId,
-      currentEligibility.baseRepo,
-    );
-    const currentSourceBranch = isValidWorktreeBranchPreferenceSnapshot(
-      currentStoredBranch,
-      currentEligibility.baseRepo,
-    )
-      ? currentStoredBranch.sourceBranch
-      : worktreeSourceBranchRef.current;
-    if (currentSourceBranch !== intent.sourceBranch) return false;
     const branchTransaction = worktreeBranchPreferenceTransactionRef.current;
-    return worktreeBranchPreferenceSyncKeyRef.current === intent.branchPreferenceSyncKey
-      && worktreeBranchPreferenceReadyKeyRef.current === intent.branchPreferenceSyncKey
+    // A missing branch snapshot may only be a pending read, not host consent
+    // to use the detected branch. Checkbox defaults remain independent.
+    return worktreeBranchPreferenceReadyKeyRef.current === intent.branchPreferenceSyncKey
+      && worktreeBranchPreferenceSyncKeyRef.current === intent.branchPreferenceSyncKey
       && worktreeBranchPreferenceWriteTargetRef.current !== intent.branchPreferenceKey
       && !(
         branchTransaction?.key === intent.branchPreferenceKey
@@ -2825,32 +2796,18 @@ export default function NewRemoteSessionScreen() {
   // 全新设备在 store 中没有镜像时本来就是默认未勾选,无需失败路径代替宿主写值。
   const worktreeSeedAgentKindRef = useRef(draft.agentKind);
   worktreeSeedAgentKindRef.current = draft.agentKind;
-  // 资格探测完成后才有这个标记。它只用于「缺字段时能不能把老被控端当 ready」,
-  // 不能进本 effect 依赖:选目录会让探测结果换代,cleanup 会把还在飞的 GET 取消掉,
-  // 合格目录上偏好门一直不放行,发送按钮就灰着还没提示。
+  // Read the host capability through a ref: probing a different directory must
+  // not cancel a device-wide defaults request. Old hosts need no missing-field retry.
   const worktreeHostSupportsRecoveryKeyDiscardRef = useRef(worktreeHostSupportsRecoveryKeyDiscard);
   worktreeHostSupportsRecoveryKeyDiscardRef.current = worktreeHostSupportsRecoveryKeyDiscard;
   useEffect(() => {
     const seq = ++worktreeSeedSeqRef.current;
     const syncKey = worktreePreferenceSyncKey;
-    const previousRead = worktreePreferenceAuthorityReadRef.current;
-    if (previousRead?.syncKey !== syncKey) {
-      worktreePreferenceReadyKeyRef.current = null;
-      setWorktreePreferenceReadyKey(null);
-    }
     if (!selectedDeviceId || !syncKey || deviceLinkStatus !== 'online') return undefined;
     const preferenceRevisionAtStart =
       remoteSessionStore.getNewMakerWorktreePreference(selectedDeviceId).revision;
-    worktreePreferenceAuthorityReadRef.current = {
-      syncKey,
-      revision: preferenceRevisionAtStart,
-    };
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | null = null;
-    const markReady = () => {
-      worktreePreferenceReadyKeyRef.current = syncKey;
-      setWorktreePreferenceReadyKey(syncKey);
-    };
     const scheduleRetry = () => {
       if (retryTimer) return;
       retryTimer = setTimeout(() => {
@@ -2876,8 +2833,7 @@ export default function NewRemoteSessionScreen() {
         ) return;
         const classification = classifyWorktreePreferenceSeed(defaults);
         if (classification.status === 'ready') {
-          // Store revision + committed render jointly release the ready gate via
-          // the observer below; do not expose the old checkbox value in-between.
+          // Update only the host mirror. Explicit draft choices remain separate.
           remoteSessionStore.setNewMakerWorktreePreference(
             selectedDeviceId,
             classification.enabled,
@@ -2890,8 +2846,7 @@ export default function NewRemoteSessionScreen() {
         ) {
           // Old hosts cannot persist this preference and also lack the recovery
           // capability marker. A new host can transiently return `{}` before its
-          // renderer cache arrives, so missing alone must never authorize OFF.
-          markReady();
+          // renderer cache arrives; keep the last mirror and retry in that case.
           return;
         }
         scheduleRetry();
@@ -2903,11 +2858,9 @@ export default function NewRemoteSessionScreen() {
           || worktreePreferenceSyncKeyRef.current !== syncKey
         ) return;
         if (isWorktreeChannelNotAllowedError(error)) {
-          markReady();
           return;
         }
-        // Timeout/offline/unknown failures cannot authorize the default OFF.
-        // Keep both Create and Goal fail-closed and retry on this same link.
+        // A failed defaults read leaves the displayed value usable for creation.
         scheduleRetry();
       });
     return () => {
@@ -2925,41 +2878,40 @@ export default function NewRemoteSessionScreen() {
     openLink,
   ]);
 
-  // A same-value push is still authoritative: the store deliberately advances
-  // revision for it. Only an observation newer than this connection/read start
-  // may release the initial checkbox authority gate.
+  // Saving the next default is independent of using this draft's explicit choice.
+  // An accepted write may never echo back; release the control after 10 seconds.
   useEffect(() => {
-    const read = worktreePreferenceAuthorityReadRef.current;
-    if (
-      !read
-      || !worktreePreferenceSyncKey
-      || read.syncKey !== worktreePreferenceSyncKey
-      || worktreePreference.revision <= read.revision
-    ) return;
-    worktreePreferenceReadyKeyRef.current = worktreePreferenceSyncKey;
-    setWorktreePreferenceReadyKey(worktreePreferenceSyncKey);
-  }, [worktreePreference.revision, worktreePreferenceSyncKey]);
+    if (!worktreePreferenceSavingDeviceId || !worktreePreferenceAwaitingEcho) return;
+    const transaction = worktreePreferenceTransactionRef.current;
+    const timer = setTimeout(() => {
+      if (!transaction || worktreePreferenceTransactionRef.current !== transaction) return;
+      worktreePreferenceAuthorityUnknownByDeviceRef.current.set(transaction.deviceId, {
+        enabled: transaction.enabled,
+        revisionAtStart: transaction.revisionAtStart,
+      });
+      worktreePreferenceTransactionRef.current = null;
+      worktreePreferenceWriteTargetRef.current = null;
+      setWorktreePreferenceSavingDeviceId(null);
+      setWorktreePreferenceAuthorityVersion((value) => value + 1);
+    }, 10_000);
+    return () => clearTimeout(timer);
+  }, [worktreePreferenceSavingDeviceId, worktreePreferenceAwaitingEcho]);
 
   // 用户显式点击开关:先写工作端,工作端接受后才更新手机内存镜像。
   // 资格不满足导致的禁用不会走到这里 —— 环境因素不抹掉用户偏好;
   // 写入失败也不在手机上制造一份假的持久状态。
   const toggleWorktree = useCallback(() => {
-    const pendingAuthority = selectedDeviceId
-      ? worktreePreferenceAuthorityUnknownByDeviceRef.current.get(selectedDeviceId)
-      : undefined;
     if (
       creatingRef.current
       || !selectedDeviceId
       || worktreePreferenceSaving
       || worktreePreferenceWriteTargetRef.current === selectedDeviceId
-      || (
-        worktreePreferenceReadyKeyRef.current !== worktreePreferenceSyncKeyRef.current
-        && !pendingAuthority
-      )
     ) return;
     const targetDeviceId = selectedDeviceId;
-    const next = pendingAuthority?.enabled
-      ?? !remoteSessionStore.getNewMakerWorktreePreference(targetDeviceId).enabled;
+    const next = !worktreeEnabledRef.current;
+    worktreeChoicesRef.current.set(targetDeviceId, next);
+    worktreeEnabledRef.current = next;
+    setWorktreeChoiceVersion((value) => value + 1);
     // 播种在途回包不得覆盖用户显式选择(seq 作废旧回包)。
     worktreeSeedSeqRef.current += 1;
     const preferenceRevisionAtStart =
@@ -2976,9 +2928,18 @@ export default function NewRemoteSessionScreen() {
       revisionAtStart: preferenceRevisionAtStart,
       status: 'writing',
     };
+    // Switching devices may replace a write that is still awaiting ACK/echo.
+    // Preserve its uncertainty in the existing per-device reconciliation map.
+    const previousTransaction = worktreePreferenceTransactionRef.current;
+    if (previousTransaction && previousTransaction.deviceId !== targetDeviceId) {
+      worktreePreferenceAuthorityUnknownByDeviceRef.current.set(previousTransaction.deviceId, {
+        enabled: previousTransaction.enabled,
+        revisionAtStart: previousTransaction.revisionAtStart,
+      });
+      setWorktreePreferenceAuthorityVersion((value) => value + 1);
+    }
     worktreePreferenceTransactionRef.current = transaction;
-    // Set before the first await so an immediate Create/Goal press cannot read
-    // the previous checkbox state from a stale render closure.
+    // Serialize preference writes; Create/Goal use the synchronous draft choice above.
     worktreePreferenceWriteTargetRef.current = targetDeviceId;
     setWorktreePreferenceSavingDeviceId(targetDeviceId);
     const releaseWrite = () => {
@@ -3040,8 +3001,7 @@ export default function NewRemoteSessionScreen() {
         });
         if (worktreePreferenceWriteSeqRef.current !== writeSeq) return;
         if (outcome === 'accepted') {
-          // Main only acknowledged the broadcast. Keep both Create paths
-          // closed until renderer persistence returns through push or GET.
+          // Main acknowledged the broadcast; track persistence separately from creation.
           transaction.status = 'reconciling';
           setWorktreeSeedRetryNonce((value) => value + 1);
         }
@@ -3053,9 +3013,8 @@ export default function NewRemoteSessionScreen() {
           releaseWrite();
           return;
         }
-        // Lost ACK / disconnect may have committed remotely. Reconcile via
-        // push/GET; both Create and Goal remain blocked, while checkbox retry
-        // stays available once the active write spinner is released.
+        // Lost ACK / disconnect may have committed remotely. Reconcile the default
+        // via push/GET, while the explicit draft choice remains usable.
         markAuthorityUnknown();
       }
     })();
@@ -3487,9 +3446,7 @@ export default function NewRemoteSessionScreen() {
     <Pressable
       accessibilityLabel={creating ? t('session.new.creatingSession') : t('session.new.createAndSend')}
       accessibilityHint={createValidation
-        ?? (worktreePreferenceSaving
-          ? t('session.new.worktreeSettingsSaving')
-          : worktreeBranchPreferenceSaving
+        ?? (worktreeBranchPreferenceSaving
             ? t('session.new.worktreeBranchSaving')
             : worktreeCreateBlocked && worktreeControlCaptionKey
               ? t(worktreeControlCaptionKey)
@@ -3498,7 +3455,6 @@ export default function NewRemoteSessionScreen() {
       accessibilityState={{
         busy: creating
           || voiceIsProcessing
-          || worktreePreferenceSaving
           || worktreeBranchPreferenceSaving
           || undefined,
         disabled: !canCreate || undefined,
@@ -4082,40 +4038,9 @@ export default function NewRemoteSessionScreen() {
       setError(t('session.menu.aiRenameOffline'));
       return;
     }
-    if (
-      worktreeApplicable
-      && worktreeEligibility.status !== 'ineligible'
-      && (
-        worktreePreferenceWriteTargetRef.current === selectedDeviceId
-        || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
-        || worktreePreferenceReadyKeyRef.current !== worktreePreferenceSyncKeyRef.current
-      )
-    ) {
-      setError(t(resolveWorktreePreferenceGateErrorKey()));
-      return;
-    }
-    if (
-      worktreeEnabled
-      && (
-        worktreeBranchPreferenceWriteTargetRef.current === worktreeBranchPreferenceKey
-        || (
-          worktreeEligibility.status === 'eligible'
-          && worktreeBranchPreferenceReadyKeyRef.current !== worktreeBranchPreferenceSyncKey
-        )
-      )
-    ) {
-      setError(t('session.new.worktreeBranchSaving'));
-      return;
-    }
-    if (worktreeCreateBlocked) {
-      setError(worktreeCaptionKey
-        ? t(worktreeCaptionKey)
-        : t(resolveWorktreePreferenceGateErrorKey()));
-      return;
-    }
     const worktreeIntent = captureWorktreeCreateIntent();
     if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-      setError(t(resolveWorktreePreferenceGateErrorKey()));
+      setError(t(resolveWorktreeCreateErrorKey()));
       return;
     }
     creatingRef.current = true;
@@ -4228,7 +4153,7 @@ export default function NewRemoteSessionScreen() {
           return;
         }
         if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-          setError(t(resolveWorktreePreferenceGateErrorKey()));
+          setError(t(resolveWorktreeCreateErrorKey()));
           return;
         }
       }
@@ -4295,7 +4220,7 @@ export default function NewRemoteSessionScreen() {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-            setError(t(resolveWorktreePreferenceGateErrorKey()));
+            setError(t(resolveWorktreeCreateErrorKey()));
             return;
           }
           const recoveryKey = createNewSessionId();
@@ -4336,7 +4261,7 @@ export default function NewRemoteSessionScreen() {
               recoveryKey,
               createdAt,
             });
-            setError(t(resolveWorktreePreferenceGateErrorKey()));
+            setError(t(resolveWorktreeCreateErrorKey()));
             return;
           }
           const createRequest = buildWorktreeCreateRequest({
@@ -4624,7 +4549,7 @@ export default function NewRemoteSessionScreen() {
     worktreeEnabled,
     captureWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
-    resolveWorktreePreferenceGateErrorKey,
+    resolveWorktreeCreateErrorKey,
   ]);
 
   // 目标模式建会话(对齐桌面 handleCreateGoal):createSession → goal.set(被控端落
@@ -4645,42 +4570,9 @@ export default function NewRemoteSessionScreen() {
       setGoalError(t('session.new.enterModel'));
       return;
     }
-    if (
-      worktreeApplicable
-      && worktreeEligibility.status !== 'ineligible'
-      && (
-        worktreePreferenceWriteTargetRef.current === selectedDeviceId
-        || worktreePreferenceAuthorityUnknownByDeviceRef.current.has(selectedDeviceId)
-        || worktreePreferenceReadyKeyRef.current !== worktreePreferenceSyncKeyRef.current
-      )
-    ) {
-      setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
-      return;
-    }
-    if (
-      worktreeEnabled
-      && (
-        worktreeBranchPreferenceWriteTargetRef.current === worktreeBranchPreferenceKey
-        || (
-          worktreeEligibility.status === 'eligible'
-          && worktreeBranchPreferenceReadyKeyRef.current !== worktreeBranchPreferenceSyncKey
-        )
-      )
-    ) {
-      setGoalError(t('session.new.worktreeBranchSaving'));
-      return;
-    }
-    // Goal 与普通创建共享同一 Worktree 门禁。分支偏好和 checkbox 仍是
-    // 独立轴：OFF 时直接走 base repo，ON 时必须等偏好/资格确认完成。
-    if (worktreeCreateBlocked) {
-      setGoalError(worktreeCaptionKey
-        ? t(worktreeCaptionKey)
-        : t(resolveWorktreePreferenceGateErrorKey()));
-      return;
-    }
     const worktreeIntent = captureWorktreeCreateIntent();
     if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-      setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
+      setGoalError(t(resolveWorktreeCreateErrorKey()));
       return;
     }
     // ㉙ 设备守卫入口(独立 review P1-1 + busy 泄漏):快照取自闭包 selectedDeviceId,
@@ -4814,7 +4706,7 @@ export default function NewRemoteSessionScreen() {
           return;
         }
         if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-          setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
+          setGoalError(t(resolveWorktreeCreateErrorKey()));
           return;
         }
       }
@@ -4839,7 +4731,7 @@ export default function NewRemoteSessionScreen() {
           if (!isCurrentOwner()) return;
           if (!ensureDeviceAlive()) return;
           if (!isWorktreeCreateIntentCurrent(worktreeIntent)) {
-            setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
+            setGoalError(t(resolveWorktreeCreateErrorKey()));
             return;
           }
           const recoveryKey = createNewSessionId();
@@ -4875,7 +4767,7 @@ export default function NewRemoteSessionScreen() {
               recoveryKey,
               createdAt,
             });
-            setGoalError(t(resolveWorktreePreferenceGateErrorKey()));
+            setGoalError(t(resolveWorktreeCreateErrorKey()));
             return;
           }
           const createRequest = buildWorktreeCreateRequest({
@@ -5398,7 +5290,7 @@ export default function NewRemoteSessionScreen() {
     worktreeEnabled,
     captureWorktreeCreateIntent,
     isWorktreeCreateIntentCurrent,
-    resolveWorktreePreferenceGateErrorKey,
+    resolveWorktreeCreateErrorKey,
   ]);
 
   return (
@@ -6091,16 +5983,9 @@ export default function NewRemoteSessionScreen() {
           <ContextSheetGoalCreateForm
             busy={goalBusy}
             disabled={worktreeCreateBlocked}
-            disabledHint={worktreePreferenceSaving
-              ? t('session.new.worktreeSettingsSaving')
-              : worktreeBranchPreferenceSaving
-                || (worktreeEnabled
-                  && worktreeEligibility.status === 'eligible'
-                  && !worktreeBranchPreferenceReady)
-                ? t('session.new.worktreeBranchSaving')
-                : worktreeControlCaptionKey
-                  ? t(worktreeControlCaptionKey)
-                  : undefined}
+            disabledHint={worktreeCreateBlocked && worktreeControlCaptionKey
+              ? t(worktreeControlCaptionKey)
+              : undefined}
             error={goalError}
             initial={draft.firstMessage.trim() ? { objective: draft.firstMessage.trim() } : undefined}
             onSetGoal={(input) => void createGoalSession(input)}

@@ -7155,6 +7155,7 @@
     }
   },
   "bots": {
+    "settingsBack": "返回设置",
     "sidebar": {
       "newTaskWith": "和{{name}}开个新任务"
     },
@@ -7192,6 +7193,7 @@
       "openFailed": "无法打开伙伴文件夹。"
     },
     "profile": {
+      "title": "资料",
       "changeAvatar": "更换头像",
       "avatarFailed": "无法更换头像，请选择小于 5 MB 的 PNG、JPEG 或 WebP 图片。",
       "summary": "自我介绍",
@@ -7273,8 +7275,9 @@
       "empty": "没有找到匹配的伙伴历史。"
     },
     "lifecycle": {
+      "restartHint": "一直没有回复？",
       "stoppedBots": "需要处理的伙伴",
-      "title": "运行与历史",
+      "title": "伙伴管理",
       "description": "暂停或恢复伙伴，查找过去的消息和成果。",
       "activeTitle": "伙伴正在运行",
       "activeDescription": "可以接收消息、执行后台任务和联系其他伙伴。",
@@ -7286,9 +7289,13 @@
       "resume": "恢复伙伴",
       "delete": "永久删除",
       "deleteTitle": "永久删除伙伴",
-      "deleteDescription": "这会删掉 {{name}}：性格、已连的通道、定的日程都会没。删了找不回来。",
+      "deleteDescription": "删除 {{name}} 后，伙伴的资料、记忆、工作目录、通道连接与自动化任务将被移除，无法撤销。任务历史与独立 worktree会保留。",
       "working": "正在更新…",
-      "actionFailed": "操作未完成，请稍后重试。"
+      "actionFailed": "操作未完成，请稍后重试。",
+      "restart": "重启伙伴",
+      "restartDescription": "停止当前运行并重新准备，保留对话记录、记忆和文件。",
+      "restarting": "正在重启…",
+      "restarted": "已重启，发送消息即可继续。"
     },
     "backToChat": "返回对话",
     "memoryRecovery": {
@@ -12203,6 +12210,11 @@
     "compression": "用于精简冗长内容。"
   },
   "routines": {
+    "unsavedTitle": "尚有未保存的修改",
+    "unsavedDescription": "离开后会丢弃这次对例行任务的修改。",
+    "discard": "放弃修改",
+    "continueEditing": "继续编辑",
+
     "title": "例行任务",
     "add": "添加例行任务",
     "back": "返回例行任务",

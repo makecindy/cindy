@@ -440,8 +440,10 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   prepareUnhealthySession(sessionId: string): Promise<boolean>;
   prepareNativeSessionRecovery(
     sessionId: string,
-    target: NativeSessionRecoveryTarget,
+    // null is an explicit Bot restart: keep its route, including before the first native handle.
+    target: NativeSessionRecoveryTarget | null,
     assertCanCommit: () => void,
+    signal?: AbortSignal,
   ): Promise<void>;
   prepareModelWindowSwitch(
     sessionId: string,
@@ -908,20 +910,36 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
   };
 
   return {
-    async prepareNativeSessionRecovery(sessionId, target, assertCanCommit) {
+    async prepareNativeSessionRecovery(sessionId, target, assertCanCommit, signal) {
       if (inFlight.has(sessionId)) throw new Error('Native session recovery is already in progress');
       inFlight.set(sessionId, undefined);
       try {
         await deps.withCloseSuppressed(sessionId, async () => {
           await deps.drainPersistQueue();
           const row = await deps.getSessionRow(sessionId);
-          if (!row?.sdkSessionId || row.status === 'deleted' || row.remoteHostId) {
+          if (!row || row.status === 'deleted' ||
+              (target ? (!row.sdkSessionId || row.remoteHostId) : (row.source !== 'bot' || row.status !== 'active'))) {
             throw new Error('Native session recovery source is unavailable');
           }
           const generation = deps.readPendingHandoffGeneration?.(sessionId);
-          const source = (await deps.listMessages(sessionId)).filter((message) => message.role !== 'error');
+          let source = (await deps.listMessages(sessionId)).filter((message) => message.role !== 'error');
           if (source.length === 0 && row.contextTokens !== 0) {
             throw new Error('Cindy history is unavailable for native session recovery');
+          }
+          assertCanCommit();
+          const live = deps.getLiveSession(sessionId);
+          if (target && live?.isTurnRunning()) {
+            throw new Error('Native session recovery cannot interrupt a running turn');
+          }
+          // Manual restart closes the broken runtime without asking it to compact.
+          if (live) await deps.closeSession(sessionId);
+          assertCanCommit();
+          if (!target) {
+            // Include any last output persisted while the old runtime was stopping.
+            await deps.drainPersistQueue();
+            assertCanCommit();
+            source = (await deps.listMessages(sessionId)).filter((message) => message.role !== 'error');
+            assertCanCommit();
           }
           const handoff = buildHandoffText(source, {
             fromLabel: engineLabelForOverflow(row.agentKind),
@@ -929,22 +947,19 @@ export function createContextOverflowRollover(deps: ContextOverflowRolloverDeps)
             sessionId,
             reason: 'native-session-recovery',
           });
-          assertCanCommit();
-          const live = deps.getLiveSession(sessionId);
-          if (live?.isTurnRunning()) throw new Error('Native session recovery cannot interrupt a running turn');
-          if (live) await deps.closeSession(sessionId);
-          assertCanCommit();
           // Durable handoff, SDK reset and complete target route succeed or fail together.
           // No user turn or tool call is replayed by this control-plane operation.
-          await deps.commitRebuild(sessionId, handoff, {
+          const commitArgs: Parameters<ContextOverflowRolloverDeps['commitRebuild']> = [sessionId, handoff, {
             reason: 'native-session-recovery',
             sourceUserClientId: [...source].reverse().find((message) => message.role === 'user')?.clientId ?? null,
             sourceAgentKind: normalizeOverflowDbAgentKind(row.agentKind),
             sourceModel: row.model ?? null,
             sourceProviderId: row.providerId ?? null,
             expectedClearedAt: row.clearedAt,
-            replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId },
-          });
+            ...(target ? { replacementRoute: { ...target, expectedSdkSessionId: row.sdkSessionId! } } : {}),
+          }];
+          if (signal) commitArgs[3] = signal;
+          await deps.commitRebuild(...commitArgs);
           deps.setPendingHandoff(sessionId, handoff, generation);
           deps.onRebuilt?.(sessionId);
         });

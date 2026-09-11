@@ -104,6 +104,7 @@ import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js
 import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 
 import {
+  applyWithVerifiedModelWindow,
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
   planUserRuntimeModelSwitch,
@@ -405,10 +406,12 @@ import {
   createBotDirectMessageService,
   type BotDirectMessageService,
 } from './botDirectMessageService.js';
+import { restartBotRuntime } from './botRuntimeRestart.js';
 import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import { updateBotRoutineLifecycle } from '../routines/service.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
+  refreshBotRuntimeAfterModelSelection,
   replaceBotRuntimeAfterPreflight,
   type BotCompactBoundary,
   type BotCompactRuntimeRefreshOutcome,
@@ -2868,6 +2871,9 @@ import {
   sendToSessionLocks,
   trackSendToSessionLockRun,
   withSendToSessionLock,
+  withSessionRestartLock,
+  waitForSendToSessionLock,
+  assertSessionNotRestarting,
 } from './sendToSessionLock.js';
 export { acquireSendToSessionLock, hasSendToSessionLock, withSendToSessionLock };
 
@@ -6686,6 +6692,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return 'not-bot';
       }
 
+      // Only a canonical Bot may eagerly settle a settings switch. The ordinary
+      // task picker retains its existing next-send semantics. Do not rebuild
+      // from the pre-switch row or close a healthy runtime after a failed switch.
+      if (agentSwitchDeps.pendingSwitches?.get(expectedSession.id)) {
+        await applyPendingAgentSwitchIfIdle(agentSwitchDeps, expectedSession.id, { bootstrapAfterSwitch: true });
+        return agentSwitchDeps.pendingSwitches?.get(expectedSession.id) ? 'deferred' : 'not-bot';
+      }
+
       const createOpts = buildCreateOptsWithStderr({
         id: expectedSession.id,
         agentKind: dbToMakerAgentKind(row.agentKind),
@@ -6780,26 +6794,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     });
   };
-
-  configureBotRuntimeEpochRefreshRequest((sessionId, reason) => {
-    const live = getMakerIfReady()?.getSession(sessionId) as WiredSession | undefined;
-    if (!live) return;
-    botCompactRuntimeRefreshCoordinator.noteBoundary(live);
-    void botCompactRuntimeRefreshCoordinator.attempt(live).then((outcome) => {
-      if (outcome === 'refreshed') {
-        log.info('Bot runtime capability epoch refreshed', { sessionId, reason });
-      }
-    }).catch((error) => {
-      // Profile/resource writes must not create an unhandled rejection. The
-      // refresh coordinator preflights before close, so the current healthy
-      // runtime stays alive and the next send retries the same epoch check.
-      log.warn('Bot runtime capability epoch refresh failed', {
-        sessionId,
-        reason,
-        error: error instanceof Error ? error.message : String(error),
-      });
-    });
-  });
 
   async function refreshBotCapabilityEpochBeforeSend(
     live: WiredSession,
@@ -8709,8 +8703,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
 
+    assertSessionNotRestarting(targetSessionId);
     const prev = sendToSessionLocks.get(targetSessionId);
-    const waitPrev = prev ? prev.catch(() => undefined) : Promise.resolve();
+    const waitPrev = waitForSendToSessionLock(targetSessionId, prev);
     // lockStage 只为 sendToSessionLock 的泄漏告警服务:标出临界区内当前挂在哪个
     // await 上,日志即可直接定位挂点(PR #2829 QA:回执 deliver 挂死 64 分钟零线索)。
     let lockStage = 'resolve-session-meta+row';
@@ -9318,6 +9313,30 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   registerBotLifecycleHandlers({
     maker,
+    restartRuntime: async (sessionId, assertOwnerCurrent) => {
+      const recovery = contextOverflowRolloverHolder;
+      if (!recovery) throwIpcError('PRECONDITION_FAILED', 'Bot recovery is not ready');
+      await restartBotRuntime(sessionId, assertOwnerCurrent, {
+        stopInput: (id) => {
+          // Save the visible partial reply before abort/close clears the stream buffers.
+          flushAssistantBlock(id);
+          flushOrphanToolResults(id, null);
+          resetAutomaticRecoveryForExplicitStop(id);
+          recovery.cancelRecovery(id);
+          // Cancel sends/retries before waiting for their serialization lock.
+          // Preserve queued user input, paused until the user explicitly resumes it.
+          agentInputCoordinatorHolder?.stop(id, { keepQueue: true, pauseQueue: true, resumeOnUserInput: true });
+        },
+        withSessionLock: withSessionRestartLock,
+        rebuild: async (id, assertCurrent, signal) => {
+          await pauseGoalBeforeExplicitStop(id);
+          assertCurrent();
+          cleanupPendingInteractionsForSession(id, 'session_closed');
+          await recovery.prepareNativeSessionRecovery(id, null, assertCurrent, signal);
+        },
+        onClosed: (id) => agentInputCoordinatorHolder?.onSessionClosed(id),
+      });
+    },
     getDelegationService: () => botDelegationServiceHolder,
     onPaused: (botId) => updateBotRoutineLifecycle(botId, 'pause'),
     onResumed: (botId) => updateBotRoutineLifecycle(botId, 'resume'),
@@ -10892,6 +10911,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (!row) return null;
       const chain = await readEffectiveBotModelChain(JSON.parse(row.capabilitiesJson));
       const control = getSessionRuntimeControlSnapshot(sessionId);
+      const intent = agentSwitchPending.get(sessionId);
       const live = maker.getSession(sessionId);
       return {
         chain,
@@ -10903,31 +10923,69 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           effort: (live ? getSessionEffort(sessionId) : row.effort) ?? null,
           fastMode: live ? getSessionFastMode(sessionId) : !!row.fastMode,
         },
-        hasRuntimeOverride: control.effectiveOverride !== null || control.pending !== null,
-        next: control.pending?.profile ?? control.effectiveOverride ?? undefined,
+        hasRuntimeOverride: control.effectiveOverride !== null || control.pending !== null || !!intent,
+        next: intent ? { agentKind: intent.targetAgentKind, model: intent.model,
+          providerId: intent.providerId ?? null, effort: intent.effort ?? null, fastMode: intent.fastMode ?? false }
+          : control.pending?.profile ?? control.effectiveOverride ?? undefined,
       };
     },
     apply: async (sessionId, route, current) => {
-      if (route.agentKind !== current.agentKind) {
-        // Register the ordinary switch intent. Its existing send transaction
-        // parks the native binding and hands history to the chosen harness.
-        await withSendToSessionLock(sessionId, () => performSessionAgentSwitch(agentSwitchDeps, {
-          sessionId,
-          targetAgentKind: route.agentKind,
-          model: route.model,
-          providerId: route.providerId,
-          effort: route.effort,
-          fastMode: route.fastMode,
-        }));
-      } else {
-        const result = await applySessionRuntimeSelection(sessionId, route.model, route.providerId,
-          { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode },
-          { source: 'user', deferWhileRunning: true });
-        if (runtimeSelectionRequiresModelWindowConfirmation(result)) {
-          throwIpcError('PRECONDITION_FAILED', 'Model context window confirmation is required');
+      await withSendToSessionLock(sessionId, async () => {
+        if (route.agentKind !== current.agentKind) {
+          await performSessionAgentSwitch(agentSwitchDeps, {
+            sessionId, targetAgentKind: route.agentKind, model: route.model,
+            providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
+          });
+        } else {
+          await applyWithVerifiedModelWindow((confirmedContextWindow) =>
+            applySessionRuntimeSelection(sessionId, route.model, route.providerId,
+              { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode,
+                ...(confirmedContextWindow === undefined ? {} : { confirmedContextWindow }) },
+              { source: 'user', deferWhileRunning: true, sessionLockHeld: true }));
         }
-      }
+        // Consume the same model/Harness intent as the normal send path. Its
+        // verified window protection and history handoff also apply here; a Bot
+        // settings save need not wait for a second user message. Busy runtimes
+        // retain their intent for the existing safe-boundary coordinator.
+        const live = maker.getSession(sessionId) as WiredSession | undefined;
+        if (!live?.isTurnRunning() && (live?.listBackgroundTasks().length ?? 0) === 0
+          && !hasPendingAgentInteractionForSession(sessionId)) {
+          await applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId, { bootstrapAfterSwitch: true });
+        }
+      });
     },
+  });
+
+  configureBotRuntimeEpochRefreshRequest((sessionId, reason) => {
+    void (async () => {
+      const refresh = (live: WiredSession) => {
+        botCompactRuntimeRefreshCoordinator.noteBoundary(live);
+        return botCompactRuntimeRefreshCoordinator.attempt(live);
+      };
+      if (reason === 'model') {
+        return refreshBotRuntimeAfterModelSelection({
+          current: () => getMakerIfReady()?.getSession(sessionId) as WiredSession | undefined,
+          select: () => reconcileBotModelRoute.profileChanged(sessionId),
+          refresh,
+        });
+      }
+      const live = getMakerIfReady()?.getSession(sessionId) as WiredSession | undefined;
+      if (!live) return 'not-bot';
+      return refresh(live);
+    })().then((outcome) => {
+      if (outcome === 'refreshed') {
+        log.info('Bot runtime capability epoch refreshed', { sessionId, reason });
+      }
+    }).catch((error) => {
+      // Profile/resource writes must not create an unhandled rejection. The
+      // refresh coordinator preflights before close, so the current healthy
+      // runtime stays alive and the next send retries the same epoch check.
+      log.warn('Bot runtime capability epoch refresh failed', {
+        sessionId,
+        reason,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    });
   });
 
   setBotCapabilityAgentKindResolver(async (sessionId, chain) =>

@@ -2,10 +2,12 @@ export const WINDOWS_BACKDROP_MATERIALS = ['acrylic', 'mica', 'tabbed', 'none'] 
 
 export type WindowsBackdropMaterial = (typeof WINDOWS_BACKDROP_MATERIALS)[number];
 
+// BEGIN GENERATED DS-8: window-backing
 export const CINDY_ACRYLIC_WINDOW_BACKING = {
   light: 'rgba(238, 238, 233, 0.85)',
   dark: 'rgba(5, 5, 5, 0.85)',
 } as const;
+// END GENERATED DS-8: window-backing
 
 export const WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL =
   'window-backdrop-material:changed';

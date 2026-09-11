@@ -52,14 +52,14 @@ Process gates 要求）仍走 §11 登记的 `hardcoded-color-exemptions.json` �
 | 真相 | 载体 | 负责 | 不负责 |
 | --- | --- | --- | --- |
 | 规则真相 | [`DESIGN.md`](./DESIGN.md) | 设计原则、MUST/SHOULD/NEVER、组件使用时机、豁免登记 | 不再人工维护精确数值总表（见 §11 处置表对 `DESIGN.md §10 Tier-1` 表与 `§16.1` 表的过渡安排） |
-| 数值真相 | 现阶段：Desktop 颜色默认值 → `apps/desktop/src/renderer/themes/colors.ts`，内置主题显式覆盖 → 同目录 `builtin/*.ts`，用户主题覆盖继续按原加载合同消费；Desktop 非颜色（字号/行高/动效时长与曲线等）现行仍分散在 `apps/desktop/src/renderer/styles/globals.css`（`--text-*`、`--motion-*`）与 `apps/desktop/tailwind.config.ts`（`fontSize`/`borderRadius` 映射），以及 `hooks/useFontSettings.ts` 的字号缩放和组件局部样式，尚未收拢；Mobile 共享颜色与非颜色数值在 `apps/mobile/src/theme/tokens.ts`，局部几何仍有消费者/平台适配中的静态常数。目标阶段：适用静态值在 DS-8（Desktop）/ DS-10（Mobile）收拢进 `packages/design-tokens` 标准 DTCG JSON；平台覆盖同源，保护 singleton 逐项登记，动态计算仍留代码（见 §3） | 每个 Token 的唯一取值 | 不承载运行时派生值（见 §3.4） |
-| 台账真相 | `docs/design-rules/design-inventory.md`（DS-2a 已建立，schema 见 §2.1；Mobile 发现待 DS-7） | 生产可达 UI 范围、每个 surface 的迁移状态与保护标签 | 不保存截图与历史日志（证据外置，见 §6） |
+| 数值真相 | Desktop 已接管族：`packages/design-tokens/src/{reference,semantic,component,themes}` DTCG；`desktop-bindings.json` 登记输出与保留边界。Mobile 未接管族、运行期计算和用户主题仍沿原权威 | Terrazzo 2.7.1 生成颜色/内置覆盖、通用排版/间距/圆角/尺寸/动效、shared 默认字号与背板、DESIGN 精确摘要 | 不决定新观感、不改变用户配置或 Mobile 方案 |
+| 台账真相 | `docs/design-rules/design-inventory.md`（DS-2a 已建立，schema 见 §2.1；Mobile 入口已由 DS-7 纳入） | 生产可达 UI 范围、每个 surface 的迁移状态与保护标签 | 不保存截图与历史日志（证据外置，见 §6） |
 | 视觉真相 | 真实运行的 Desktop / Mobile 截图 | 视觉验收的唯一依据 | SSR / 静态渲染样张（含 UI 设计哨兵产物）不得充当 |
 
 在 `packages/design-tokens` 建立并完成生产生成切换（路线图 DS-8）**之前**，`colors.ts`
 仍是 Desktop **颜色**数值权威——这与 `DESIGN.md §10`「`colors.ts` itself is the only
 authoritative inventory」的现行表述一致（该句本身也限定在颜色 Token 登记范围内），本合同
-不提前改变它；Desktop 非颜色数值的现行来源见上表。当前 Token 包从冻结 fixture 生成影子字典，尚无生产消费者。接管按族登记：DS-8 交付 Desktop 的颜色与非颜色生成消费链，DS-10 才接管 Mobile；未切换族继续沿用原权威，不可提前宣称已统一。完整转换与双端样本合同见 [Token README](../../packages/design-tokens/README.md)。
+不提前改变它；Desktop 非颜色数值的现行来源见上表。DS-8 本地候选已建立 DTCG→Terrazzo→Desktop 生产链；fixture 仅作独立预期。实际范围、保留项与验证状态见 Token README 和唯一主计划。接管按族登记：DS-8 交付 Desktop 的颜色与非颜色生成消费链，DS-10 才接管 Mobile；未切换族继续沿用原权威，不可提前宣称已统一。完整转换与双端样本合同见 [Token README](../../packages/design-tokens/README.md)。
 
 ### 2.1 台账 schema（现行生成与人工维护合同）
 
@@ -86,7 +86,7 @@ protected 标签、目标道路、下一动作
 
 ### 3.1 目标层级（DTCG）
 
-`packages/design-tokens`（DS-3 已建影子层，零运行时接线；DS-8 接管 Desktop，DS-10 接管 Mobile）采用标准 DTCG JSON，三层：
+`packages/design-tokens`（DS-8 已接 Desktop 构建期生成，产品运行时不依赖此包；Mobile 尚未接管）采用标准 DTCG JSON，三层：
 
 ```text
 reference   原始值：色阶、字号、字重、间距、圆角、动效时长
@@ -135,7 +135,7 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 
 | 工具 | 决定 | 理由 |
 | --- | --- | --- |
-| Terrazzo（锁 2.7.1） | **采用**，但推迟到生产生成切换 PR 才安装 | 没有真实消费者不引工具；校验与生成必须共用同一 DTCG 解析器 |
+| Terrazzo（锁 2.7.1） | **采用**，DS-8 已锁定 CLI/parser 同一版本作为构建依赖 | 没有真实消费者不引工具；校验与生成必须共用同一 DTCG 解析器 |
 | Style Dictionary | **不采用** | 与 Terrazzo 并存即两个 DTCG 解析器，会制造最难发现的双份真相 |
 | Storybook | **不建** | 未来若引入，必须复用同一份真实 scenario 数据，不得另造假组件样例 |
 | Impeccable 等通用 UI audit | 仅人工触发 | 不进 CI、不自动改码、不得用通用规则推翻 Cindy 已确认的 Inter 与 pill-first 裁决 |
@@ -213,13 +213,14 @@ Primitive 与 Pattern 默认只绑定 semantic 角色。只有品牌表达、兼
 3. 没有标准替代道路时不上阻断级门禁——先报告模式运行并用历史 PR 回放验证误报率，
    再升级阻断；门禁错误信息必须包含文件、行号与推荐改法。
 
-### DS-7 首批接线（2026-09-10 提交候选，尚未合入）
+### DS-7 首批接线（2026-09-10，已合并 #4215）
 
 复用 `client-ci` 的 `verify-checks → verify`，增量运行 `pnpm check:design-colors` 与
 `pnpm check:design-inventory`。`hardcoded-color-audit.test.mjs` 验证脚本入口、真实 CLI
 失败及两个汇总的 success/failure/cancelled/skipped 行为。实时 required 另作带时间的只读
-核对，不能由单测替代；DCO 是外部 App，不制造本地同名 workflow。完整证据、固定
-历史回放与复现命令见 [DS-7 证据](../design-evidence/2026-09-10/ds7-guards.md)。
+核对，不能由单测替代；DCO 是外部 App，不制造本地同名 workflow。
+
+DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，最终 head `cdaef3f80f3d8466d1bbd3338c615b6f55dff4c8`，合并提交 `4f03ea9a7b5f6425e517acd91071df6d397c6079`。历史回放与复现命令见 [DS-7 证据](../design-evidence/2026-09-10/ds7-guards.md)。旧 JSON 绑定当时脚本 hash，最终脚本有 3/4 变化，不能当作最终版本重跑通过证明；合并后 20 张阻断预期复核均相符，#3920/#4076/#4164 报告计数变化。原证据不覆盖；本次 DS-8 的颜色检查使用实际 base→worktree，不变更来源识别或豁免。
 
 | 规则 | 候选方式 | 维护与升级边界 |
 | --- | --- | --- |
@@ -294,14 +295,14 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 
 | 资产 | 现定位 | 去向 |
 | --- | --- | --- |
-| `scripts/hardcoded-color-audit.mjs` + `scripts/hardcoded-color-exemptions.json` | 新增行颜色审计、共享 matcher 与窄例外 | DS-7 候选已扩展报告/精确位置/候选扫描，范围与回退见 §8；DS-12 按证据扩大成熟范围，不另造平行系统 |
+| `scripts/hardcoded-color-audit.mjs` + `scripts/hardcoded-color-exemptions.json` | 新增行颜色审计、共享 matcher 与窄例外 | DS-7 已合入报告/精确位置/候选扫描，范围与回退见 §8；DS-12 按证据扩大成熟范围，不另造平行系统 |
 | `scripts/check-pr-design-basis.mjs` | UI PR 设计依据校验 | DS-7 / DS-12 按成熟范围复用；UI 路径定义抽成唯一来源供其共读，证据锚点校验若确有需要在其上扩展；现有字段检查不代表视觉质量审核 |
 | `scripts/brand-terminology-guard.mjs` | 品牌术语门禁 | 保持现状，不受本计划影响 |
 | `.github/PULL_REQUEST_TEMPLATE.md` | PR 模板（UI 变化 + 设计规范引用字段） | DS-7 / DS-12 若需证据锚点检查，随对应门禁同步模板，不单为记账另拆 PR |
 | `apps/mobile/scripts/visual-baseline-check.mjs` + `apps/mobile/e2e/maestro/` | Mobile 视觉基线与流程 | DS-10 Mobile 接管复用并扩展；不建第二套 baseline 工具 |
 | `docs/design-rules/token-decision-table.md` | 登录改版 token 决策记录（其自身已声明非现行清单） | 维持决策档案定位，非数值真相 |
 | `docs/design-rules/design-decision-log.md` | 全局设计决策史台账 | 维持只增不改；治理裁决（含 §10 待裁决项）关闭后在此归档 |
-| `DESIGN.md §10` Tier-1 slot 表 | 现行 Tier-1 registry（人工维护） | DS-8 对应族生产接管时由 `packages/design-tokens` 同一流程生成的机器摘要替代；此前维持人工维护现状 |
+| `DESIGN.md §10` Tier-1 slot 表 | DS-8 GENERATED 精确值摘要（用途与规则人工维护） | DS-8 同一 Terrazzo 流程生成，不再人工编辑表中数值 |
 | `DESIGN.md §16.1` 登录 token 表 | 登录域现行 token 清单（人工维护） | 同上 |
 | UI 设计哨兵（插件仓） | SSR 抽取式扫描工具 | 仅用于发现组件、统计硬编码、定位代码与观察迁移进度；其样张不得充当视觉证据（§2 视觉真相行） |
 
@@ -329,8 +330,8 @@ DS-4/4b 尚有公开附件交接与完整设置页/部分状态证据缺口，DS
 | DS-4b | 设置输入旧主题局部覆盖兼容收口 | 零视觉兼容修复 | [#4010](https://github.com/makecindy/cindy/pull/4010)，2026-09-06 合入；只覆盖设置封装，未完成全仓 alias 收口 |
 | DS-5 | 对齐执行路线、数值权威、双端语义与待决合同；仅文档及必要台账静态说明 | 零视觉 | [#4022](https://github.com/makecindy/cindy/pull/4022)，2026-09-07 已合入 |
 | DS-6 | 完整设置表单、第二消费者与普通确认复用；按真实需求补 FormField / loading，附使用说明、真实状态证据与独立贡献者首轮试用 | 有意可见 | [#4135](https://github.com/makecindy/cindy/pull/4135) 已合入（head `62472f559c` / merge `6559d2610a`）；已实现 FormField / loading、两个消费者和指定普通确认；用户测试版手动审核通过。工程验证、G2 与公开附件分别见[证据索引](../design-evidence/2026-09-08/ds6-forms.md)，不把 PR 交付等同目标全部验收 |
-| DS-7 | 复用守卫，成熟写法先报告/反例/历史回放后阻断；增量发现 Mobile 入口；未成熟范围继续报告 | CI 门禁 | 本地候选：20 张历史报告回放与正反例完成，成熟颜色增量接 verify，Mobile 入口纳入同一台账；[证据](../design-evidence/2026-09-10/ds7-guards.md)。待管理员 §8 审核及实际合入 |
-| DS-8 | Desktop 颜色与排版、间距、圆角/尺寸、动效的 DTCG → 生成 → 生产消费链；旧主题与动态/保护边界逐族验证，结束影子阶段 | 零视觉接管 | 待 DS-7；有新观感须独立归类，不能混入等值接管 |
+| DS-7 | 复用守卫，成熟写法先报告/反例/历史回放后阻断；增量发现 Mobile 入口；未成熟范围继续报告 | CI 门禁 | 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)：成熟颜色增量接 verify，Mobile 入口纳入同一台账；[历史证据](../design-evidence/2026-09-10/ds7-guards.md) 的版本边界见 §8。DS-7 当次双审豁免不延续至后续批次 |
+| DS-8 | Desktop 颜色与排版、间距、圆角/尺寸、动效的 DTCG → 生成 → 生产消费链；旧主题与动态/保护边界逐族验证，结束影子阶段 | 零视觉接管 | DS-8 本地候选；有新观感须独立归类，不能混入等值接管 |
 | DS-9 | 工具、推理、消息、代码、附件的完整聊天呈现；按台账核验 Orca、定时任务、文件、Bots、主布局、登录、浮层、宿主插件 UI、辅助/原生入口的继承与残余去向 | 有意可见 | 待 DS-8；不依赖 Mobile，Permission 仍隔离；延期须有理由、负责人和复查日期 |
 | DS-10 | Mobile 接入同一数值源，保留平台静态覆盖与运行期适配，分别验证 iOS/Android | 零视觉接管 | 在 DS-9 后交付，数值接管依赖 DS-8；以实际 fingerprint 判断冷更（§4），新视觉单独归类 |
 | DS-11 | Desktop / Mobile 授权确认呈现，按已关闭的三项设计决定实施，权限含义、默认、顺序与审批生命周期保持 | 有意可见 | 待 DS-10 且 §10 Permission 三项关闭；关闭前相关文件不得进入迁移 diff |

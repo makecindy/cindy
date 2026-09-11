@@ -124,9 +124,7 @@ export function buildDeferredRuntimeSelectionProfile<
 }
 
 export type DeferredModelWindowRetry =
-  | { action: 'done' }
-  | { action: 'retry'; confirmedContextWindow: number }
-  | { action: 'cancel' };
+  { action: 'done' } | { action: 'retry'; confirmedContextWindow: number } | { action: 'cancel' };
 
 /** 延期选择在空闲结算时若仍要换窗确认:带着核实窗口再 apply,缺窗口才取消。 */
 export function nextDeferredModelWindowRetry(
@@ -134,7 +132,11 @@ export function nextDeferredModelWindowRetry(
   confirmedWindow: number | undefined,
 ): DeferredModelWindowRetry {
   if (!confirmationRequired) return { action: 'done' };
-  if (typeof confirmedWindow === 'number' && Number.isFinite(confirmedWindow) && confirmedWindow > 0) {
+  if (
+    typeof confirmedWindow === 'number' &&
+    Number.isFinite(confirmedWindow) &&
+    confirmedWindow > 0
+  ) {
     return { action: 'retry', confirmedContextWindow: confirmedWindow };
   }
   return { action: 'cancel' };
@@ -203,4 +205,27 @@ export function planUserRuntimeModelSwitch(input: {
     return { outcome: 'defer', skipRebuild: gate.skipRebuild, selection, pendingProfile };
   }
   return { outcome: 'hot-apply', skipRebuild: gate.skipRebuild, selection, pendingProfile };
+}
+
+/** Complete an already-selected route using the host-verified handoff window. */
+export async function applyWithVerifiedModelWindow<
+  T extends {
+    contextWindowConfirmationRequired?: number;
+    contextTokensForConfirmation?: number;
+  },
+>(apply: (confirmedContextWindow?: number) => Promise<T>): Promise<T> {
+  const requiresConfirmation = (result: T) =>
+    result.contextWindowConfirmationRequired !== undefined ||
+    result.contextTokensForConfirmation !== undefined;
+  let result = await apply();
+  const next = nextDeferredModelWindowRetry(
+    requiresConfirmation(result),
+    result.contextWindowConfirmationRequired,
+  );
+  if (next.action === 'cancel') throw new Error('Model window could not be verified for recovery');
+  if (next.action === 'retry') {
+    result = await apply(next.confirmedContextWindow);
+    if (requiresConfirmation(result)) throw new Error('Model window changed during recovery');
+  }
+  return result;
 }

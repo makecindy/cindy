@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -6,7 +6,7 @@ import { useTranslation } from 'react-i18next';
 import type { BotProfile } from './botStore';
 import { runBotLifecycleAction } from './botStore';
 
-/** Destructive confirmation owned by the roster, where teammate deletion lives. */
+/** Shared destructive confirmation for the roster and teammate settings. */
 export function BotDeleteDialog({
   bot,
   onOpenChange,
@@ -17,6 +17,7 @@ export function BotDeleteDialog({
   onDeleted: (botId: string) => void;
 }) {
   const { t } = useTranslation();
+  const inFlight = useRef(false);
   const [busy, setBusy] = useState(false);
   const [failed, setFailed] = useState(false);
 
@@ -27,6 +28,8 @@ export function BotDeleteDialog({
   if (!bot) return null;
 
   const deleteBot = async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setBusy(true);
     setFailed(false);
     try {
@@ -42,6 +45,7 @@ export function BotDeleteDialog({
     } catch {
       setFailed(true);
     } finally {
+      inFlight.current = false;
       setBusy(false);
     }
   };
