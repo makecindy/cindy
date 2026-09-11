@@ -18,6 +18,7 @@ import { physicalWorktreeKey, withWorktreeResourceLock } from '../worktree/resou
 
 describe('worktree runtime evidence and physical locks', () => {
   let worktree: string;
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
   beforeEach(async () => {
     state.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worktree-runtime-'));
     worktree = path.join(state.root, 'repo', '.cindy-worktrees', 'one');
@@ -27,6 +28,7 @@ describe('worktree runtime evidence and physical locks', () => {
     readIdentity.mockReset().mockResolvedValue(null);
   });
   afterEach(async () => {
+    Object.defineProperty(process, 'platform', platformDescriptor);
     vi.restoreAllMocks();
     await fs.rm(state.root, { recursive: true, force: true });
   });
@@ -110,6 +112,54 @@ describe('worktree runtime evidence and physical locks', () => {
     vi.spyOn(process, 'kill').mockReturnValue(true);
     readIdentity.mockResolvedValue({ startedAtMs: 99_000, executablePath: process.execPath });
     expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  describe('POSIX SingletonLock PID reuse', () => {
+    const raw = JSON.stringify({ pid: 4242, startedAtMs: 10_000 });
+    const identity = { startedAtMs: 100_000, executablePath: '/usr/bin/other' };
+    beforeEach(async () => {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'darwin' });
+      await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'), raw);
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      vi.spyOn(fs, 'readlink').mockResolvedValue('hostname-4242');
+      readIdentity.mockResolvedValue(identity);
+    });
+
+    it.each(['darwin', 'linux'])('ignores a proven reused lock PID on %s while retaining detached-child leases', async (platform) => {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+      const root = path.join(state.root, 'worktree-runtime-leases');
+      await fs.mkdir(root);
+      await fs.writeFile(path.join(root, `4242-${'a'.repeat(64)}.json`),
+        JSON.stringify({ version: 1, pid: 4242, path: worktree }));
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set([worktree]));
+      expect(await fs.readFile(path.join(state.root, '.dev-instances', '4242.json'), 'utf8')).toBe(raw);
+    });
+
+    it('still blocks an unrelated live lock PID without reuse evidence', async () => {
+      vi.mocked(fs.readlink).mockResolvedValue('hostname-4343');
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+
+    it.each([null, { ...identity, executablePath: '/opt/Cindy.app/Contents/MacOS/Cindy' }])
+      ('does not waive the lock when identity becomes unavailable or a runtime replaces the process: %j', async (latest) => {
+        readIdentity.mockResolvedValueOnce(identity).mockResolvedValueOnce(latest);
+        expect(await readWorktreeRuntimePaths()).toBeNull();
+      });
+
+    it('does not waive a lock whose target changes during revalidation', async () => {
+      vi.mocked(fs.readlink).mockResolvedValueOnce('hostname-4242').mockResolvedValueOnce('hostname-4343');
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+
+    it.each(['replace', 'remove'])('does not waive the lock when its instance registration changes: %s', async (change) => {
+      readIdentity.mockResolvedValueOnce(identity).mockImplementationOnce(async () => {
+        const file = path.join(state.root, '.dev-instances', '4242.json');
+        if (change === 'remove') await fs.unlink(file);
+        else await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: 200_000 }));
+        return identity;
+      });
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
   });
 
   it('keeps a replacement Cindy protective before its new registration is published', async () => {

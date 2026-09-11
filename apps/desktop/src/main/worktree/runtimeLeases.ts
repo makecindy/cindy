@@ -126,6 +126,7 @@ export async function readWorktreeRuntimePaths(): Promise<Set<string> | null> {
   const registry = path.join(app.getPath('userData'), '.dev-instances');
   const names = new Set((await fs.readdir(registry)).map((name) => name.replace(/\.bak$/, '')));
   const compatiblePids = new Set([process.pid]);
+  const reusedInstanceRecords = new Map<number, string>();
   const readRecord = async (name: string): Promise<string> => {
     try { return await fs.readFile(path.join(registry, name), 'utf8'); } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
@@ -148,7 +149,10 @@ export async function readWorktreeRuntimePaths(): Promise<Set<string> | null> {
         // A replacement instance may have registered while the OS query ran.
         if (await readRecord(name) !== raw) return null;
         if (!pidMayBeAlive(pid)) continue;
-        if (identity && isReusedDesktopInstancePid(record, identity)) continue;
+        if (identity && isReusedDesktopInstancePid(record, identity)) {
+          reusedInstanceRecords.set(pid, raw);
+          continue;
+        }
       }
       if (record.worktreeLeaseProtocol !== 1 || record.pid !== pid) return null;
       compatiblePids.add(pid);
@@ -162,7 +166,22 @@ export async function readWorktreeRuntimePaths(): Promise<Set<string> | null> {
       const match = /-(\d+)$/.exec(target);
       if (!match) return null;
       const pid = Number(match[1]);
-      if (pidMayBeAlive(pid) && !compatiblePids.has(pid)) return null;
+      if (pidMayBeAlive(pid) && !compatiblePids.has(pid)) {
+        const raw = reusedInstanceRecords.get(pid);
+        if (!raw) return null;
+        // A stale SingletonLock can reference the same reused PID as an old
+        // registration. Revalidate before waiving it: another runtime or lock
+        // owner may have appeared since the registry scan. Child leases below
+        // remain independent protection, even when this lock is proven stale.
+        try {
+          const identity = await readDesktopProcessIdentity(pid);
+          if (!identity || !isReusedDesktopInstancePid(JSON.parse(raw), identity)
+            || await readRecord(`${pid}.json`) !== raw
+            || await fs.readlink(path.join(app.getPath('userData'), 'SingletonLock')) !== target) return null;
+        } catch {
+          return null;
+        }
+      }
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
     }
