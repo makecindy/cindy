@@ -5,6 +5,7 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { DevProfileKind } from './devCliFlags.js';
 import { withLocalProfileMigrationStartupBarrier } from './localProfileDataMigration.js';
 import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
+import { readDesktopProcessIdentity, type DesktopProcessIdentity } from './desktopProcessIdentity.js';
 
 export type DesktopDevMode = 'remote' | 'local' | 'unknown';
 export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
@@ -25,6 +26,8 @@ export interface DesktopDevInstanceRecord {
   instanceId: string;
   pid: number;
   startedAtMs: number;
+  /** Optional for legacy readers/writers; absence never claims that a PID is stale. */
+  processIdentity?: DesktopProcessIdentity;
   updatedAtMs: number;
   rootDir: string;
   commit: string | null;
@@ -131,12 +134,14 @@ export async function beginDesktopDevInstance(
   startupSettled = false;
   const pid = options.pid ?? process.pid;
   const startedAtMs = options.startedAtMs ?? Date.now();
+  const processIdentity = await readDesktopProcessIdentity(pid);
   const record: DesktopDevInstanceRecord = {
     schemaVersion: 1,
     worktreeLeaseProtocol: 1,
     instanceId: options.instanceId ?? randomUUID(),
     pid,
     startedAtMs,
+    ...(processIdentity ? { processIdentity } : {}),
     updatedAtMs: startedAtMs,
     rootDir: path.resolve(options.rootDir),
     commit: options.commit ?? null,

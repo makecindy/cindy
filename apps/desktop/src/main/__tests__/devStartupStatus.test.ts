@@ -14,6 +14,9 @@ import {
 } from '../devStartupStatus.js';
 import { withLocalProfileMigrationStartupBarrier } from '../localProfileDataMigration.js';
 
+const readIdentity = vi.hoisted(() => vi.fn());
+vi.mock('../desktopProcessIdentity.js', () => ({ readDesktopProcessIdentity: readIdentity }));
+
 describe('devStartupStatus', () => {
   let tempDir: string;
   let statusPath: string;
@@ -24,6 +27,7 @@ describe('devStartupStatus', () => {
     statusPath = path.join(tempDir, 'startup.json');
     process.env.XDT_DESKTOP_DEV_STARTUP_STATUS_FILE = statusPath;
     cleanup = null;
+    readIdentity.mockReset().mockResolvedValue(null);
   });
 
   afterEach(() => {
@@ -73,6 +77,29 @@ describe('devStartupStatus', () => {
       region: 'cn',
       passive: true,
     });
+  });
+
+  it('persists OS process identity through readiness updates', async () => {
+    const identity = { startedAtMs: 50, executablePath: path.join(tempDir, 'Cindy') };
+    readIdentity.mockResolvedValue(identity);
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir, dbFilePrefix: 'cindy', rootDir: tempDir,
+      passive: false, isolated: false, pid: 4242, startedAtMs: 100,
+    });
+    markDesktopDevWindowReady();
+    markDesktopDevReady();
+    expect(JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8')))
+      .toMatchObject({ processIdentity: identity, startedAtMs: 100, state: 'ready' });
+  });
+
+  it('still registers when OS identity is unavailable without inventing an identity', async () => {
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir, dbFilePrefix: 'cindy', rootDir: tempDir,
+      passive: false, isolated: false, pid: 4242,
+    });
+    const record = JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8'));
+    expect(record.pid).toBe(4242);
+    expect(record).not.toHaveProperty('processIdentity');
   });
 
   it('supports application readiness arriving before ready-to-show', async () => {

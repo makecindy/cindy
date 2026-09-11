@@ -6,6 +6,7 @@ import { app } from 'electron';
 import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { isManagedWorktreeDirectoryName } from '../../shared/managedWorktreePaths';
 import { notifyWorktreeRecycleOpportunity } from './recycleEvents';
+import { isReusedDesktopInstancePid, readDesktopProcessIdentity } from '../desktopProcessIdentity';
 
 function runtimeRoot(): string {
   return path.join(app.getPath('userData'), 'worktree-runtime-leases');
@@ -125,18 +126,30 @@ export async function readWorktreeRuntimePaths(): Promise<Set<string> | null> {
   const registry = path.join(app.getPath('userData'), '.dev-instances');
   const names = new Set((await fs.readdir(registry)).map((name) => name.replace(/\.bak$/, '')));
   const compatiblePids = new Set([process.pid]);
+  const readRecord = async (name: string): Promise<string> => {
+    try { return await fs.readFile(path.join(registry, name), 'utf8'); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+      return fs.readFile(path.join(registry, `${name}.bak`), 'utf8');
+    }
+  };
   for (const name of names) {
     const match = /^(\d+)\.json$/.exec(name);
     if (!match) continue;
     const pid = Number(match[1]);
     if (pid === process.pid || !pidMayBeAlive(pid)) continue;
     try {
-      let raw: string;
-      try { raw = await fs.readFile(path.join(registry, name), 'utf8'); } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        raw = await fs.readFile(path.join(registry, `${name}.bak`), 'utf8');
-      }
+      const raw = await readRecord(name);
       const record = JSON.parse(raw);
+      if (!record || record.pid !== pid) return null;
+      // Only unsupported instances can block the entire lease view. Do not add
+      // an OS subprocess per compatible instance to the normal recycle path.
+      if (record.worktreeLeaseProtocol !== 1) {
+        const identity = await readDesktopProcessIdentity(pid);
+        // A replacement instance may have registered while the OS query ran.
+        if (await readRecord(name) !== raw) return null;
+        if (!pidMayBeAlive(pid)) continue;
+        if (identity && isReusedDesktopInstancePid(record, identity)) continue;
+      }
       if (record.worktreeLeaseProtocol !== 1 || record.pid !== pid) return null;
       compatiblePids.add(pid);
     } catch {
