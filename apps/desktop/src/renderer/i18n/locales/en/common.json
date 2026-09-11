@@ -9767,7 +9767,9 @@
       "treeLoading": "Loading files…",
       "treeAction": {
         "collapseAll": "Collapse all",
-        "refresh": "Refresh"
+        "refresh": "Refresh",
+        "showIgnoredDirs": "Show ignored directories",
+        "hideIgnoredDirs": "Hide ignored directories"
       },
       "treeMenu": {
         "newFile": "New File",

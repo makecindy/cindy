@@ -9752,7 +9752,9 @@
       "treeLoading": "파일 불러오는 중…",
       "treeAction": {
         "collapseAll": "모두 접기",
-        "refresh": "새로 고침"
+        "refresh": "새로 고침",
+        "showIgnoredDirs": "무시된 디렉터리 표시",
+        "hideIgnoredDirs": "무시된 디렉터리 숨기기"
       },
       "treeMenu": {
         "newFile": "새 파일",

@@ -43,11 +43,19 @@ export class RemoteWatchRegistry {
     window: BrowserWindow,
     hostId: string,
     workdir: string,
-    opts: { hideMetaFiles?: boolean },
+    opts: { hideMetaFiles?: boolean; showIgnoredDirs?: boolean },
     onEvent: (event: FileTreeEvent) => void,
   ): Promise<void> {
     const k = this.key(window.id, hostId, workdir);
     if (this.entries.has(k)) return;
+
+    // daemon 侧 watchStart 拿的是同一组过滤开关:开关变了由 renderer 的 store
+    // 重建驱动 stop→start(daemon 自身也会在选项变化时重建 matcher)。
+    const watchOpts = {
+      workdir,
+      hideMetaFiles: opts.hideMetaFiles ?? true,
+      showIgnoredDirs: opts.showIgnoredDirs === true,
+    };
 
     const offEvent = this.mgr.onHostEvent(hostId, (evt) => {
       if (evt.event !== 'fileTree') return;
@@ -59,7 +67,7 @@ export class RemoteWatchRegistry {
     // daemon 断链重建后 watch 状态随进程消失;重连成功即重放 watchStart。
     const offReconnect = this.mgr.onHostConnected(hostId, () => {
       void this.mgr
-        .request(hostId, 'watchStart', { workdir, hideMetaFiles: opts.hideMetaFiles ?? true })
+        .request(hostId, 'watchStart', watchOpts)
         .catch((err) => log.warn('watch replay failed', { hostId, workdir, error: String(err) }));
     });
     this.entries.set(k, { offEvent, offReconnect });
@@ -69,10 +77,7 @@ export class RemoteWatchRegistry {
     });
 
     try {
-      await this.mgr.request(hostId, 'watchStart', {
-        workdir,
-        hideMetaFiles: opts.hideMetaFiles ?? true,
-      });
+      await this.mgr.request(hostId, 'watchStart', watchOpts);
       log.info('remote watch started', { hostId, workdir, windowId: window.id });
     } catch (err) {
       // 启动失败(host 不可达等):清掉注册,renderer 靠聚焦刷新兜底。

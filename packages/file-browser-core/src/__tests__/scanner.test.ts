@@ -304,3 +304,37 @@ describe('readFile binary detection', () => {
     }
   });
 });
+
+describe('file-browser scanner builtin ignore tiers', () => {
+  /**
+   * 回归:用户在文件树里右键新建 `build` 这类目录后看不到它、且刷新无效
+   * (2026-09 用户报告)。根因是 BUILTIN_IGNORE 无差别隐藏构建产物目录。
+   * 现在内置清单分两层,`showIgnoredDirs` 放行可放开的那一层。
+   */
+  it('hides a freshly created build/ dir by default, shows it with showIgnoredDirs', async () => {
+    const { loadIgnoreMatcher, listDir, __clearCacheForTesting } = await import('../index');
+    __clearCacheForTesting();
+    const workdir = await mkdtemp(path.join(os.tmpdir(), 'fb-builtin-'));
+    try {
+      await createFolder(workdir, 'build');
+      await createFolder(workdir, 'src');
+
+      const hiddenMatcher = await loadIgnoreMatcher(workdir, {
+        hideMetaFiles: true,
+        honorVcsIgnore: false,
+      });
+      const hidden = await listDir(workdir, '', hiddenMatcher, { docMode: false });
+      expect(hidden.map((e) => e.name)).toEqual(['src']);
+
+      const revealMatcher = await loadIgnoreMatcher(workdir, {
+        hideMetaFiles: true,
+        honorVcsIgnore: false,
+        showIgnoredDirs: true,
+      });
+      const revealed = await listDir(workdir, '', revealMatcher, { docMode: false });
+      expect(revealed.map((e) => e.name)).toEqual(['build', 'src']);
+    } finally {
+      await rm(workdir, { recursive: true, force: true });
+    }
+  });
+});

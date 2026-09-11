@@ -34,12 +34,24 @@ const log = scopedLogger('file-browser/ignore');
  * Folder names (last path segment) that should never be walked into,
  * regardless of vcs ignore files. Patterns are folder-name-only (no globs)
  * because `ignore` lib treats them as "match anywhere in the path".
+ *
+ * 分两层,因为「用户看得见的工程目录」和「纯噪音」不是一回事:
+ *   - ALWAYS:VCS 元数据与 OS 垃圾 —— 任何设置下都不列、不递归。
+ *   - REVEALABLE:依赖 / 构建产物 / 缓存 / IDE 缓存 —— 默认隐藏(Unity 的
+ *     Library 之类目录动辄数十万条,默认列出会让文件树不可用),但用户可在
+ *     设置里开「显示被忽略的目录」放行。
  */
-const BUILTIN_IGNORE = [
-  // VCS
+const BUILTIN_IGNORE_ALWAYS = [
+  // VCS metadata: never part of the project's own file tree.
   '.git/',
   '.svn/',
   '.hg/',
+  // OS junk
+  '.DS_Store',
+  'Thumbs.db',
+];
+
+const BUILTIN_IGNORE_REVEALABLE = [
   // Package managers
   'node_modules/',
   '__pycache__/',
@@ -50,9 +62,6 @@ const BUILTIN_IGNORE = [
   '.vs/',
   '.idea/',
   '.vscode-test/',
-  // OS junk
-  '.DS_Store',
-  'Thumbs.db',
   // Generic build outputs
   'dist/',
   'build/',
@@ -72,8 +81,8 @@ const BUILTIN_IGNORE = [
   // .meta files (Unity per-asset metadata) — rendered behind a "show meta"
   // user toggle; defaulting to hidden cuts ~47% of typical Unity entries.
   // Toggle is honored by Matcher.shouldShowMeta below.
-  // Note: NOT added to BUILTIN_IGNORE here — handled separately because it's
-  // user-toggleable per session.
+  // Note: NOT added here — handled separately because it's user-toggleable
+  // per session via `hideMetaFiles`.
 ];
 
 export interface Matcher {
@@ -99,8 +108,13 @@ interface CacheEntry {
 const cache = new Map<string, CacheEntry>();
 const inflight = new Map<string, Promise<Matcher>>();
 
-function cacheKey(workdir: string, hideMetaFiles: boolean, honorVcsIgnore: boolean): string {
-  return `${workdir} ${hideMetaFiles ? '1' : '0'} ${honorVcsIgnore ? 'vcs' : 'tree'}`;
+function cacheKey(
+  workdir: string,
+  hideMetaFiles: boolean,
+  honorVcsIgnore: boolean,
+  showIgnoredDirs: boolean,
+): string {
+  return `${workdir} ${hideMetaFiles ? '1' : '0'} ${honorVcsIgnore ? 'vcs' : 'tree'}${showIgnoredDirs ? ' reveal' : ''}`;
 }
 
 /**
@@ -119,11 +133,22 @@ function cacheKey(workdir: string, hideMetaFiles: boolean, honorVcsIgnore: boole
  */
 export async function loadIgnoreMatcher(
   workdir: string,
-  opts: { hideMetaFiles?: boolean; honorVcsIgnore?: boolean } = {},
+  opts: {
+    hideMetaFiles?: boolean;
+    honorVcsIgnore?: boolean;
+    /**
+     * 用户开关「显示被忽略的目录」:true 时放行 BUILTIN_IGNORE_REVEALABLE
+     * (依赖 / 构建产物 / 缓存 / IDE 缓存)。默认 false = 保持历史行为。
+     * 只影响内置清单,VCS 元数据与 OS 垃圾永远隐藏,`*.meta` 仍由
+     * hideMetaFiles 单独决定。
+     */
+    showIgnoredDirs?: boolean;
+  } = {},
 ): Promise<Matcher> {
   const hideMetaFiles = opts.hideMetaFiles ?? true;
   const honorVcsIgnore = opts.honorVcsIgnore ?? true;
-  const key = cacheKey(workdir, hideMetaFiles, honorVcsIgnore);
+  const showIgnoredDirs = opts.showIgnoredDirs ?? false;
+  const key = cacheKey(workdir, hideMetaFiles, honorVcsIgnore, showIgnoredDirs);
 
   const pending = inflight.get(key);
   if (pending) return pending;
@@ -133,7 +158,7 @@ export async function loadIgnoreMatcher(
     if (cached && (await isCacheFresh(workdir, cached))) {
       return cached.matcher;
     }
-    const built = await buildMatcher(workdir, hideMetaFiles, honorVcsIgnore);
+    const built = await buildMatcher(workdir, hideMetaFiles, honorVcsIgnore, showIgnoredDirs);
     cache.set(key, built);
     return built.matcher;
   })();
@@ -181,9 +206,11 @@ async function buildMatcher(
   workdir: string,
   hideMetaFiles: boolean,
   honorVcsIgnore: boolean,
+  showIgnoredDirs: boolean,
 ): Promise<CacheEntry> {
   const ig = ignoreLib();
-  ig.add(BUILTIN_IGNORE);
+  ig.add(BUILTIN_IGNORE_ALWAYS);
+  if (!showIgnoredDirs) ig.add(BUILTIN_IGNORE_REVEALABLE);
 
   let sourceName: string | null = honorVcsIgnore ? null : VCS_IGNORE_DISABLED_SOURCE;
   let sourceMtimeMs = 0;

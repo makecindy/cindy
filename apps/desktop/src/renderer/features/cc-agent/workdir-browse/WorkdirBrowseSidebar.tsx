@@ -43,7 +43,9 @@ import { useFileTree, type DirEntry } from './hooks/useFileTree';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { useConfirmSwitchAwayIfDirty } from './hooks/useConfirmSwitchAwayIfDirty';
 import { useProjectFileList } from './hooks/useProjectFileList';
+import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { FileTreeView, type FileTreeViewHandle, type PendingCreate } from './FileTreeView';
+import { FileTreeIgnoredDirsToggle } from './FileTreeIgnoredDirsToggle';
 import { useRevealFileInTree } from './hooks/useRevealFileInTree';
 import { FileFilterInput } from './FileFilterInput';
 import { FilterResultList } from './FilterResultList';
@@ -217,7 +219,18 @@ export function WorkdirBrowseSidebar({
   // 要递归扫一遍判断 "有没有 doc 文件"(即使 sibling 已经并行,顶层走完一轮
   // 仍然有感知)。先放开让用户看全部文件,等 hasDocDescendant 加缓存或换成
   // 流式增量返回再启用。scanner.ts 的过滤逻辑保留,改回 true 即可恢复。
-  const tree = useFileTree({ workdir, remoteHostId, deviceId, hideMetaFiles: true, docMode: false });
+  //
+  // showIgnoredDirs 来自设置页「显示被忽略的目录」开关(默认关):打开后
+  // build / dist / out / node_modules 等被内置清单隐藏的目录会出现在树里。
+  const { showIgnoredDirs } = useFileBrowserPreference();
+  const tree = useFileTree({
+    workdir,
+    remoteHostId,
+    deviceId,
+    hideMetaFiles: true,
+    docMode: false,
+    showIgnoredDirs,
+  });
 
   // 文件名筛选 query —— tree 模式下用,独立于内容搜索。空 query 显示文件树,有
   // 内容显示筛选结果列表。workdir 切换时自动清空(下方 useEffect)。
@@ -757,6 +770,8 @@ export function WorkdirBrowseSidebar({
                   <Search size={14} strokeWidth={2} />
                 </button>
               </Tip>
+              {/* 显示被忽略的目录 —— 与 RSB 文件浏览器同一组件、同一位置。 */}
+              <FileTreeIgnoredDirsToggle />
               <Tip text={t('ccAgent.workdirBrowse.treeAction.collapseAll')}>
                 <button
                   type="button"

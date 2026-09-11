@@ -36,7 +36,7 @@ import type {
 export const FILE_SERVICE_SCHEMA_VERSION = 2;
 
 /** 人读 bundle 版本(probe / 日志用),行为变化时手动 bump。 */
-export const FILE_SERVICE_BUNDLE_VERSION = '0.2.4';
+export const FILE_SERVICE_BUNDLE_VERSION = '0.2.5';
 
 /* ============================== 帧 ============================== */
 
@@ -132,7 +132,17 @@ export interface FsRpcMethods {
     };
   };
   listDir: {
-    params: { workdir: string; relPath?: string; hideMetaFiles?: boolean; docMode?: boolean };
+    params: {
+      workdir: string;
+      relPath?: string;
+      hideMetaFiles?: boolean;
+      docMode?: boolean;
+      /**
+       * 控制端「显示被忽略的目录」开关。可选 / append-only:老 daemon 忽略未知
+       * 字段 → 维持隐藏语义(拿不到放行,但不会报错)。
+       */
+      showIgnoredDirs?: boolean;
+    };
     result: { entries: DirEntry[] };
   };
   readFile: {
@@ -194,7 +204,7 @@ export interface FsRpcMethods {
     result: { ok: true };
   };
   watchStart: {
-    params: { workdir: string; hideMetaFiles?: boolean };
+    params: { workdir: string; hideMetaFiles?: boolean; showIgnoredDirs?: boolean };
     result: { ok: true };
   };
   watchStop: {

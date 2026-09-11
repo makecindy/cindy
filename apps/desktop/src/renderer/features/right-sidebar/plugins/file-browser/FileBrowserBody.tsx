@@ -34,6 +34,7 @@ import { ChevronsDownUp, FolderX, RefreshCw, Search, X as XIcon } from 'lucide-r
 
 import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
+import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
@@ -57,6 +58,7 @@ import { useConfirmSwitchAwayIfDirty } from '@/features/cc-agent/workdir-browse/
 import { useProjectFileList } from '@/features/cc-agent/workdir-browse/hooks/useProjectFileList';
 import { useRevealFileInTree } from '@/features/cc-agent/workdir-browse/hooks/useRevealFileInTree';
 import { SearchPanel } from '@/features/cc-agent/workdir-browse/search/SearchPanel';
+import { FileTreeIgnoredDirsToggle } from '@/features/cc-agent/workdir-browse/FileTreeIgnoredDirsToggle';
 import { useProjectSearch } from '@/features/cc-agent/workdir-browse/search/hooks/useProjectSearch';
 import { FileFilterInput } from '@/features/cc-agent/workdir-browse/FileFilterInput';
 import { FilterResultList } from '@/features/cc-agent/workdir-browse/FilterResultList';
@@ -137,7 +139,11 @@ function FileBrowserBodyWithWorkdir({
   );
   const remoteHostId = deviceId ? null : ctx.remoteHostId;
   const isRemote = Boolean(remoteHostId) || Boolean(deviceId);
-  const tree = useFileTree({ workdir, hideMetaFiles: true, remoteHostId, deviceId });
+  // 设置页「显示被忽略的目录」开关(默认关)。进 useFileTree 的 store key →
+  // 切换开关会换一份 store,listDir 与 watcher 都用新 matcher 重建,
+  // 目录列表立即重新拉取(不需要用户手动刷新)。
+  const { showIgnoredDirs } = useFileBrowserPreference();
+  const tree = useFileTree({ workdir, hideMetaFiles: true, remoteHostId, deviceId, showIgnoredDirs });
   const fileContent = useFileContent(workdir, state.selectedFilePath, remoteHostId, deviceId);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
   const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
@@ -778,6 +784,8 @@ function TreeHeader({
                 <Search size={14} strokeWidth={2} />
               </button>
             </Tip>
+            {/* 显示被忽略的目录 —— 紧跟搜索(两者都是“树里显示什么”)。 */}
+            <FileTreeIgnoredDirsToggle />
             <Tip text={t('ccAgent.workdirBrowse.treeAction.collapseAll')}>
               <button
                 type="button"

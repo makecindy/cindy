@@ -202,7 +202,18 @@ export function deviceSearchCollect(
  */
 export async function startWatchFor(
   deviceId: string | null | undefined,
-  params: { workdir: string; remoteHostId?: string | null; hideMetaFiles?: boolean },
+  params: {
+    workdir: string;
+    remoteHostId?: string | null;
+    hideMetaFiles?: boolean;
+    /**
+     * 「显示被忽略的目录」:本地 / SSH 分支下发到 matcher 与 watcher;
+     * **device 分支不传**——被控端的 watch 由 `fs-watch:<workdir>` topic
+     * 订阅驱动,订阅载荷里没有过滤开关(与 hideMetaFiles 同款限制),
+     * 所以被控端 watcher 仍用默认过滤:目录能列出、内部改动不推事件。
+     */
+    showIgnoredDirs?: boolean;
+  },
 ): Promise<void> {
   if (!deviceId) {
     await window.electronAPI.fileBrowser.startWatch(params);

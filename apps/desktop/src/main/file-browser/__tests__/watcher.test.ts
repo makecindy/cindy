@@ -154,6 +154,20 @@ describe('WatcherManager stop 宽限期', () => {
     expect(subscribeFn).toHaveBeenCalledTimes(2);
   });
 
+  it('showIgnoredDirs 变化同样触发重建,相同则复用', async () => {
+    const { manager, subscribeFn, unsubscribe } = setup();
+    const win = makeWindow();
+    await manager.start(win, 'D:/repo', { showIgnoredDirs: false }, vi.fn());
+    // 同值重复 start:仍在宽限内,直接复用不重建。
+    await manager.start(win, 'D:/repo', { showIgnoredDirs: false }, vi.fn());
+    expect(subscribeFn).toHaveBeenCalledTimes(1);
+    expect(unsubscribe).not.toHaveBeenCalled();
+
+    await manager.start(win, 'D:/repo', { showIgnoredDirs: true }, vi.fn());
+    expect(unsubscribe).toHaveBeenCalledTimes(1);
+    expect(subscribeFn).toHaveBeenCalledTimes(2);
+  });
+
   it('不同 window 同 workdir 互不干扰(key 维度 window×workdir)', async () => {
     const { manager, subscribeFn, unsubscribe } = setup();
     await manager.start(makeWindow(1), 'D:/repo', {}, vi.fn());

@@ -132,3 +132,72 @@ describe('loadIgnoreMatcher cache + inflight', () => {
     }
   });
 });
+
+describe('loadIgnoreMatcher 内置忽略分层 (showIgnoredDirs)', () => {
+  let workdir: string;
+
+  beforeEach(async () => {
+    __clearCacheForTesting();
+    workdir = await makeWorkdir();
+  });
+
+  afterEach(async () => {
+    await fs.rm(workdir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  it('默认隐藏依赖 / 构建产物 / 缓存目录', async () => {
+    const matcher = await loadIgnoreMatcher(workdir, { honorVcsIgnore: false });
+    for (const dir of ['build', 'dist', 'out', 'bin', 'obj', 'target', 'vendor', 'Temp', 'Logs']) {
+      expect(matcher.ignores(`${dir}/`, true), dir).toBe(true);
+    }
+  });
+
+  it('showIgnoredDirs 放行依赖 / 构建产物 / 缓存目录', async () => {
+    const matcher = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      showIgnoredDirs: true,
+    });
+    for (const dir of ['build', 'dist', 'out', 'bin', 'obj', 'target', 'vendor', 'Temp']) {
+      expect(matcher.ignores(`${dir}/`, true), dir).toBe(false);
+    }
+    expect(matcher.ignores('node_modules/', true)).toBe(false);
+    expect(matcher.ignores('Library/', true)).toBe(false);
+  });
+
+  it('VCS 元数据 / OS 垃圾不受开关影响', async () => {
+    const matcher = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      showIgnoredDirs: true,
+    });
+    expect(matcher.ignores('.git/', true)).toBe(true);
+    expect(matcher.ignores('.git/config', false)).toBe(true);
+    expect(matcher.ignores('.DS_Store', false)).toBe(true);
+  });
+
+  it('*.meta 仍只由 hideMetaFiles 决定,与开关正交', async () => {
+    const revealKeepMeta = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      hideMetaFiles: false,
+      showIgnoredDirs: true,
+    });
+    expect(revealKeepMeta.ignores('Foo.cs.meta', false)).toBe(false);
+
+    const revealHideMeta = await loadIgnoreMatcher(workdir, {
+      honorVcsIgnore: false,
+      hideMetaFiles: true,
+      showIgnoredDirs: true,
+    });
+    expect(revealHideMeta.ignores('Foo.cs.meta', false)).toBe(true);
+  });
+
+  it('两个开关值分别缓存(互不污染)', async () => {
+    const off = await loadIgnoreMatcher(workdir, { honorVcsIgnore: false });
+    const on = await loadIgnoreMatcher(workdir, { honorVcsIgnore: false, showIgnoredDirs: true });
+    expect(on).not.toBe(off);
+    // 再次取用各自命中自己的缓存条目。
+    expect(await loadIgnoreMatcher(workdir, { honorVcsIgnore: false })).toBe(off);
+    expect(
+      await loadIgnoreMatcher(workdir, { honorVcsIgnore: false, showIgnoredDirs: true }),
+    ).toBe(on);
+  });
+});

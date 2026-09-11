@@ -28,6 +28,12 @@
  *      复杂 glob (e.g. *.log, build-*) — 与 listDir 路径共享同一份 matcher
  *      保证一致性。
  *
+ * 与「显示被忽略的目录」(showIgnoredDirs)开关的关系:开关控制的是**是否把内置
+ * 隐藏目录当普通目录对待**。打开后 matcher 不再躲藏 dist / build / Temp 这类目录,
+ * 并且第 1 层预过滤也只保留 PREFILTER_ALWAYS(依赖与 Unity 资源缓存:原生 watch
+ * 这些目录的代价是另一个量级,而且没有实时性需求)—— 即开关打开后,绝大部分被
+ * 忽略目录里的改动会推事件;只有 node_modules / Library 内部仍不推。
+ *
  * Event mapping: parcel's create/update/delete → 旧的 add/change/unlink。
  *   下游 (useFileTree / useFileContent) 不区分 file vs dir, 所以 'addDir' /
  *   'unlinkDir' 这两个旧 type 保留在 union 里但不再发出。
@@ -92,6 +98,8 @@ interface WatcherEntry {
   handle: WatcherHostSubscription | null;
   matcher: Matcher;
   hideMetaFiles: boolean;
+  /** 建订阅时生效的「显示被忽略的目录」开关;变了走完整重建。 */
+  showIgnoredDirs: boolean;
   /**
    * 间接引用:订阅回调通过此字段路由事件,宽限期复活时 start() 更新引用
    * 即可让新组件实例收到事件,无需触碰 native 订阅。
@@ -111,11 +119,21 @@ interface WatcherEntry {
  *
  * 注意: 这里只剪"目录名命中" 的 case; *.log / build-* 这种 glob 仍由
  * callback 内的 matcher 兜底。
+ *
+ * ALWAYS 是"即使开关打开也不看"的目录:.git 与 OS 垃圾之外,只有
+ * node_modules / Library —— 它们要么条目数十万、要么需要真正的依赖分析,
+ * 原生递归 watch 的代价与收益不成比例(开关打开时它们会出现在文件树里,但
+ * 内部改动不推事件,手动刷新可见)。其余目录随「显示被忽略的目录」放行。
  */
-const PREFILTER_DIRS = [
+const PREFILTER_ALWAYS = [
   '.git',
-  'node_modules',
-  'Library', // Unity
+  '.svn',
+  '.hg',
+  'node_modules', // JS/TS 依赖
+  'Library', // Unity 资源缓存
+];
+
+const PREFILTER_REVEALABLE = [
   'Temp', // Unity
   'Logs', // Unity
   'obj', // .NET
@@ -129,13 +147,16 @@ const PREFILTER_DIRS = [
 ];
 
 /**
- * 把 PREFILTER_DIRS 展成"工作区根下直接命中"的绝对路径列表 (parcel 的
+ * 把预过滤名单展成"工作区根下直接命中"的绝对路径列表 (parcel 的
  * ignore 选项要求路径而非 glob)。子目录里同名目录(e.g. nested
  * node_modules) parcel 会自己沿父链判断 — 它内部用前缀匹配。
  */
-function buildIgnoreList(workdir: string): string[] {
+function buildIgnoreList(workdir: string, opts: { showIgnoredDirs: boolean }): string[] {
+  const names = opts.showIgnoredDirs
+    ? PREFILTER_ALWAYS
+    : [...PREFILTER_ALWAYS, ...PREFILTER_REVEALABLE];
   const out: string[] = [];
-  for (const dir of PREFILTER_DIRS) {
+  for (const dir of names) {
     const abs = path.join(workdir, dir);
     // 不存在的目录传给 parcel 也无害, 但既然遍历是 sync stat 一下省得 native
     // 层处理无效路径。
@@ -192,11 +213,12 @@ export class WatcherManager {
   async start(
     window: BrowserWindow,
     workdir: string,
-    opts: { hideMetaFiles?: boolean },
+    opts: { hideMetaFiles?: boolean; showIgnoredDirs?: boolean },
     onEvent: (event: FileTreeEvent) => void,
   ): Promise<void> {
     const k = this.key(window.id, workdir);
     const hideMetaFiles = opts.hideMetaFiles ?? true;
+    const showIgnoredDirs = opts.showIgnoredDirs === true;
     await this.enqueue(k, async () => {
       const existing = this.entries.get(k);
       if (existing) {
@@ -211,13 +233,16 @@ export class WatcherManager {
         // 不同的 onEvent 上下文(如不同组件实例);通过 entry.onEvent 间接路由保证
         // 新调用方能收到后续事件。
         existing.onEvent = onEvent;
-        if (existing.hideMetaFiles === hideMetaFiles) {
+        if (
+          existing.hideMetaFiles === hideMetaFiles &&
+          existing.showIgnoredDirs === showIgnoredDirs
+        ) {
           return;
         }
         // 过滤选项变了:走完整重建(先拆后建,串行链保证不交错)
         await this.doStop(k, { onlyIfScheduled: false });
       }
-      await this.doStart(window, workdir, k, hideMetaFiles, onEvent);
+      await this.doStart(window, workdir, k, hideMetaFiles, showIgnoredDirs, onEvent);
     });
   }
 
@@ -255,19 +280,25 @@ export class WatcherManager {
     workdir: string,
     k: string,
     hideMetaFiles: boolean,
+    showIgnoredDirs: boolean,
     onEvent: (event: FileTreeEvent) => void,
   ): Promise<void> {
     if (this.entries.has(k)) {
       log.debug(`watcher already running for ${k}`);
       return;
     }
-    const matcher = await loadIgnoreMatcher(workdir, { hideMetaFiles, honorVcsIgnore: false });
-    const ignore = buildIgnoreList(workdir);
+    const matcher = await loadIgnoreMatcher(workdir, {
+      hideMetaFiles,
+      honorVcsIgnore: false,
+      showIgnoredDirs,
+    });
+    const ignore = buildIgnoreList(workdir, { showIgnoredDirs });
 
     const entry: WatcherEntry = {
       handle: null,
       matcher,
       hideMetaFiles,
+      showIgnoredDirs,
       onEvent,
       state: 'active',
       graceTimer: null,

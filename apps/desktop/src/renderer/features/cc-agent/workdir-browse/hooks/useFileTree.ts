@@ -86,6 +86,14 @@ interface UseFileTreeOptions {
    * new/deleted doc file can change which dirs appear at any depth above).
    */
   docMode?: boolean;
+  /**
+   * 用户开关「显示被忽略的目录」:列出依赖 / 构建产物 / 缓存目录
+   * (build / dist / out / node_modules / Library ...)。
+   *
+   * 进 store key:切换开关会换一份 store(listDir 与 watcher 都用新 matcher
+   * 重建),已展开目录的缓存在新 store 里重建。
+   */
+  showIgnoredDirs?: boolean;
 }
 
 export interface UseFileTreeReturn {
@@ -163,6 +171,7 @@ interface FileTreeStore {
   readonly deviceId: string | null;
   readonly hideMetaFiles: boolean;
   readonly docMode: boolean;
+  readonly showIgnoredDirs: boolean;
   snapshot: {
     entries: ReadonlyMap<string, readonly DirEntry[]>;
     expanded: ReadonlySet<string>;
@@ -203,7 +212,8 @@ const stores = new Map<string, FileTreeStore>();
 function storeKey(opts: Required<UseFileTreeOptions>): string {
   const remote = opts.remoteHostId ? `::remote=${opts.remoteHostId}` : '';
   const device = opts.deviceId ? `::device=${opts.deviceId}` : '';
-  return `${opts.workdir}::doc=${opts.docMode}::hideMeta=${opts.hideMetaFiles}${remote}${device}`;
+  const reveal = opts.showIgnoredDirs ? '::reveal' : '';
+  return `${opts.workdir}::doc=${opts.docMode}::hideMeta=${opts.hideMetaFiles}${reveal}${remote}${device}`;
 }
 
 function emit(store: FileTreeStore): void {
@@ -221,6 +231,7 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     deviceId: opts.deviceId,
     hideMetaFiles: opts.hideMetaFiles,
     docMode: opts.docMode,
+    showIgnoredDirs: opts.showIgnoredDirs,
     snapshot: {
       entries: new Map(),
       expanded: new Set([ROOT_KEY]),
@@ -254,6 +265,7 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
       relPath,
       hideMetaFiles: store.hideMetaFiles,
       docMode: store.docMode,
+      showIgnoredDirs: store.showIgnoredDirs,
     });
     if (store.tokens.get(relPath) !== myToken) return; // stale
     if (store.snapshot.loadError) {
@@ -397,6 +409,7 @@ async function initStore(store: FileTreeStore): Promise<void> {
       workdir: store.workdir,
       remoteHostId: store.remoteHostId,
       hideMetaFiles: store.hideMetaFiles,
+      showIgnoredDirs: store.showIgnoredDirs,
     }).catch((err) => log.warn('startWatch failed', err));
 
     store.watcherOff = onFileTreeEventFor(store.deviceId, (event) => {
@@ -498,12 +511,13 @@ export function useFileTree({
   deviceId = null,
   hideMetaFiles = true,
   docMode = false,
+  showIgnoredDirs = false,
 }: UseFileTreeOptions): UseFileTreeReturn {
   // store 实例按 (workdir + options) 共享 —— 多个 hook 实例订阅同一份。
   // memo 用 dep 化 options,确保 workdir 切换会换 store。
   const store = useMemo(
-    () => getOrCreateStore({ workdir, remoteHostId, deviceId, hideMetaFiles, docMode }),
-    [workdir, remoteHostId, deviceId, hideMetaFiles, docMode],
+    () => getOrCreateStore({ workdir, remoteHostId, deviceId, hideMetaFiles, docMode, showIgnoredDirs }),
+    [workdir, remoteHostId, deviceId, hideMetaFiles, docMode, showIgnoredDirs],
   );
 
   // ref-count 生命周期:首挂触发 init(initial fetch + start watch),最后离开

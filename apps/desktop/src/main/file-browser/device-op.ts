@@ -156,6 +156,13 @@ interface RemoteOpArgs {
   acceptGzip?: boolean;
   hideMetaFiles?: boolean;
   docMode?: boolean;
+  /**
+   * 「显示被忽略的目录」开关(控制端下发的视图偏好)。listDir 生效;
+   * device-link 的 watch 不走本 op(控制端订阅 topic 触发),那边仍是
+   * hideMetaFiles:true 的默认过滤 —— 打开开关后这些目录在被控端可见，
+   * 但内部改动不会有实时事件(手动刷新可见)。
+   */
+  showIgnoredDirs?: boolean;
   cap?: number;
   query?: string;
   caseSensitive?: boolean;
@@ -427,6 +434,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
           relPath: args.relPath ?? '',
           hideMetaFiles: args.hideMetaFiles ?? true,
           docMode: args.docMode,
+          showIgnoredDirs: args.showIgnoredDirs === true,
         });
         return entries;
       }
@@ -495,6 +503,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       const matcher = await loadIgnoreMatcher(workdir, {
         hideMetaFiles: args.hideMetaFiles ?? true,
         honorVcsIgnore: false,
+        showIgnoredDirs: args.showIgnoredDirs === true,
       });
       return listDir(workdir, args.relPath ?? '', matcher, { docMode: args.docMode });
     }

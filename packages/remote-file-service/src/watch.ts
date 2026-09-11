@@ -17,6 +17,9 @@
  *
  * 生命周期:per-workdir 单 watcher(重复 watchStart 幂等);stdin EOF /
  * watchStop 时 close。事件经注入的 emit 回调发 `fileTree` 帧。
+ *
+ * 注:自带过滤器(ignore matcher / .xdt-tmp)在 watchStart 时就固定下来,
+ * 控制端改开关后需要先 watchStop 再 watchStart 才能换 matcher。
  */
 
 import { watch as fsWatch, promises as fs, type FSWatcher } from 'node:fs';
@@ -40,6 +43,9 @@ export interface RemoteFileTreeEvent {
 interface WatchEntry {
   watcher: FSWatcher;
   matcher: Matcher;
+  /** 建 watcher 时生效的过滤开关;变了要重建 matcher(fs.watch 本身不变)。 */
+  hideMetaFiles: boolean;
+  showIgnoredDirs: boolean;
   /** coalesce 缓冲:key = `${type}::${relPath}`。 */
   pending: Map<string, RemoteFileTreeEvent>;
   flushTimer: NodeJS.Timeout | null;
@@ -63,12 +69,25 @@ export class WorkdirWatchManager {
     this.emit = emit;
   }
 
-  /** 幂等启动。matcher 加载失败 / fs.watch 抛错向上冒(RPC 返回 OPERATION_FAILED)。 */
-  async start(workdir: string, opts: { hideMetaFiles?: boolean } = {}): Promise<void> {
-    if (this.entries.has(workdir)) return;
+  /** 幂等启动。matcher 加载失败 / fs.watch 抛错向上冒(RPC 返回 OPERATION_FAILED)。
+   *  已存在同 workdir 的 watcher 时:过滤开关不同则重建(控制端改了「显示被忽略
+   *  的目录」后无需先 stop,重启守护进程也不必同步状态)。 */
+  async start(
+    workdir: string,
+    opts: { hideMetaFiles?: boolean; showIgnoredDirs?: boolean } = {},
+  ): Promise<void> {
+    const hideMetaFiles = opts.hideMetaFiles ?? true;
+    const showIgnoredDirs = opts.showIgnoredDirs === true;
+    const existing = this.entries.get(workdir);
+    if (existing) {
+      if (existing.hideMetaFiles === hideMetaFiles && existing.showIgnoredDirs === showIgnoredDirs) {
+        return;
+      }
+      this.stop(workdir);
+    }
     const inflight = this.starting.get(workdir);
     if (inflight) return inflight;
-    const run = this.startInner(workdir, opts);
+    const run = this.startInner(workdir, { hideMetaFiles, showIgnoredDirs });
     this.starting.set(workdir, run);
     try {
       await run;
@@ -78,13 +97,24 @@ export class WorkdirWatchManager {
     }
   }
 
-  private async startInner(workdir: string, opts: { hideMetaFiles?: boolean }): Promise<void> {
+  private async startInner(
+    workdir: string,
+    opts: { hideMetaFiles: boolean; showIgnoredDirs: boolean },
+  ): Promise<void> {
     const matcher = await loadIgnoreMatcher(workdir, {
-      hideMetaFiles: opts.hideMetaFiles ?? true,
+      hideMetaFiles: opts.hideMetaFiles,
       honorVcsIgnore: false,
+      showIgnoredDirs: opts.showIgnoredDirs,
     });
 
-    const entry: WatchEntry = { watcher: null as unknown as FSWatcher, matcher, pending: new Map(), flushTimer: null };
+    const entry: WatchEntry = {
+      watcher: null as unknown as FSWatcher,
+      matcher,
+      hideMetaFiles: opts.hideMetaFiles,
+      showIgnoredDirs: opts.showIgnoredDirs,
+      pending: new Map(),
+      flushTimer: null,
+    };
     const watcher = fsWatch(workdir, { recursive: true }, (eventType, filename) => {
       // filename 偶发 null(平台边缘情况),无法定位目标 — 丢弃,聚焦刷新兜底。
       if (!filename) return;

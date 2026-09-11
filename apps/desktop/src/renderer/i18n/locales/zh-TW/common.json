@@ -9752,7 +9752,9 @@
       "treeLoading": "正在載入檔案…",
       "treeAction": {
         "collapseAll": "收起所有",
-        "refresh": "重新整理"
+        "refresh": "重新整理",
+        "showIgnoredDirs": "顯示被忽略的目錄",
+        "hideIgnoredDirs": "隱藏被忽略的目錄"
       },
       "treeMenu": {
         "newFile": "新建檔案",

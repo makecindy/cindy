@@ -140,6 +140,7 @@ export function runFileService(
       const matcher = await loadIgnoreMatcher(workdir, {
         hideMetaFiles: p?.hideMetaFiles ?? true,
         honorVcsIgnore: false,
+        showIgnoredDirs: p?.showIgnoredDirs === true,
       });
       const entries = await listDir(workdir, p?.relPath ?? '', matcher, {
         docMode: p?.docMode,
@@ -206,6 +207,7 @@ export function runFileService(
     watchStart: async (p) => {
       await watchManager.start(requireString(p?.workdir, 'workdir'), {
         hideMetaFiles: p?.hideMetaFiles ?? true,
+        showIgnoredDirs: p?.showIgnoredDirs === true,
       });
       return { ok: true as const };
     },

@@ -115,3 +115,47 @@ describe('useFileTree refresh scheduling', () => {
     view.unmount();
   });
 });
+
+/**
+ * 「显示被忽略的目录」开关:作为 store key 的一部分,不同取值必须拿到各自
+ * 的 store 与 listDir / watch 参数,不能互相污染。
+ */
+describe('useFileTree showIgnoredDirs option', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.eventCallbacks.length = 0;
+    mocks.listDir.mockResolvedValue([]);
+    mocks.fileBrowserApiFor.mockReturnValue({ listDir: mocks.listDir });
+  });
+
+  it('listDir / startWatch 带上开关值', async () => {
+    const view = renderHook(() =>
+      useFileTree({ workdir: '/workdir-reveal', showIgnoredDirs: true }),
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    expect(mocks.listDir).toHaveBeenCalledWith(
+      expect.objectContaining({ workdir: '/workdir-reveal', showIgnoredDirs: true }),
+    );
+    expect(mocks.startWatchFor).toHaveBeenCalledWith(
+      null,
+      expect.objectContaining({ workdir: '/workdir-reveal', showIgnoredDirs: true }),
+    );
+    view.unmount();
+  });
+
+  it('开关不同 = 两份独立 store(互不共用 entries)', async () => {
+    const hidden = renderHook(() => useFileTree({ workdir: '/workdir-split' }));
+    const revealed = renderHook(() =>
+      useFileTree({ workdir: '/workdir-split', showIgnoredDirs: true }),
+    );
+    await waitFor(() => expect(hidden.result.current.initialLoading).toBe(false));
+    await waitFor(() => expect(revealed.result.current.initialLoading).toBe(false));
+    // 两个 store 各自拉了一次根目录。
+    expect(mocks.listDir).toHaveBeenCalledTimes(2);
+    expect(
+      mocks.listDir.mock.calls.map((c) => c[0].showIgnoredDirs),
+    ).toEqual([false, true]);
+    hidden.unmount();
+    revealed.unmount();
+  });
+});
