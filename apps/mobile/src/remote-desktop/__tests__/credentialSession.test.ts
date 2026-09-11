@@ -79,6 +79,54 @@ describe("native credential session coordination", () => {
       "exchange",
     ]);
   });
+  it.each(["frame", "cancel", "close", "owner"])(
+    "prepares the channel before the first-frame gate and handles %s",
+    async (outcome) => {
+      fixture.native.beginUnlock.mockResolvedValue({
+        handle: "local",
+        offer: "signed-offer",
+      });
+      const session = new RemoteDesktopCredentialSession();
+      let release!: () => void;
+      let cancel!: (error: Error) => void;
+      const frame = new Promise<void>((resolve, reject) => {
+        release = resolve;
+        cancel = reject;
+      });
+      const beforeAuthentication = vi.fn(() => frame);
+      const result = session
+        .ensure("computer", invoke, "en", "dark", {
+          setup: false,
+          biometric: true,
+          descriptor: "public-descriptor",
+          beforeAuthentication,
+        })
+        .then(
+          () => "authenticated",
+          (error: Error) => error.message,
+        );
+      await vi.waitFor(() =>
+        expect(beforeAuthentication).toHaveBeenCalledTimes(1),
+      );
+      expect(invoke.mock.calls.map((call) => call[2][0].kind)).toEqual([
+        "open",
+        "exchange",
+      ]);
+      expect(fixture.native.password).not.toHaveBeenCalled();
+      if (outcome === "close") session.close();
+      if (outcome === "owner")
+        fixture.owner = { ...fixture.owner, generation: 2 };
+      if (outcome === "cancel") cancel(new Error("CREDENTIAL_CANCELLED"));
+      else release();
+      expect(await result).toBe(
+        outcome === "frame" ? "authenticated" : "CREDENTIAL_CANCELLED",
+      );
+      expect(fixture.native.password).toHaveBeenCalledTimes(
+        outcome === "frame" ? 1 : 0,
+      );
+      session.close();
+    },
+  );
   it("passes only public descriptors over the existing connection during local pairing", async () => {
     fixture.native.beginUnlock.mockResolvedValue({
       handle: "local",

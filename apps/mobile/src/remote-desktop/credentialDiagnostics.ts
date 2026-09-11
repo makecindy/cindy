@@ -1,6 +1,7 @@
 import { mobileDebugLog } from "@/debug/mobileDebugLog";
 
 type Stage =
+  | "wait-for-first-frame"
   | "enable-face-id"
   | "change-face-id"
   | "scope"

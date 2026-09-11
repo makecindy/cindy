@@ -1,0 +1,20 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { setMobileDebugSink } from "@/debug/mobileDebugLog";
+import { connectionDiagnostics } from "../connectionDiagnostics";
+afterEach(() => setMobileDebugSink(undefined));
+it("records elapsed milestones once and ignores callbacks after stop", () => {
+  const sink = vi.fn();
+  setMobileDebugSink(sink);
+  let now = 100;
+  const mark = connectionDiagnostics(2, () => now);
+  mark("connect");
+  now = 150;
+  mark("screenshot-presented");
+  mark("screenshot-presented");
+  now = 190;
+  mark("stopped");
+  mark("video-presented");
+  expect(sink).toHaveBeenCalledTimes(3);
+  expect(JSON.stringify(sink.mock.calls)).toContain('"elapsedMs":50');
+  expect(JSON.stringify(sink.mock.calls)).not.toContain("video-presented");
+});

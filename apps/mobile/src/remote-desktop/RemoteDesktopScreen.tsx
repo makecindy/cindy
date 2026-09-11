@@ -29,6 +29,7 @@ import {
 } from "expo-router";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
+import { connectionDiagnostics } from "./connectionDiagnostics";
 import { transferClipboardContent } from "./clipboardTransfer";
 import * as Clipboard from "expo-clipboard";
 import { RemoteDesktopClipboardButton } from "./RemoteDesktopClipboardButton";
@@ -210,6 +211,7 @@ export default function RemoteDesktopScreen() {
     resuming: false,
   });
   const generation = useRef(0);
+  const timing = useRef<ReturnType<typeof connectionDiagnostics> | null>(null);
   const alive = useRef(true);
   const connecting = useRef(false);
   const ready = useRef(false);
@@ -223,6 +225,7 @@ export default function RemoteDesktopScreen() {
   });
   const [network, setNetwork] = useState<DesktopNetworkStats | null>(null);
   const frameBusy = useRef<string | null>(null);
+  const unlockFrame = useRef<((presented: boolean) => void) | null>(null);
   const inputBusy = useRef<string | null>(null);
   const [lease, setLease] = useState<RemoteDesktopLease | null>(null);
   exitLock.current =
@@ -387,7 +390,11 @@ export default function RemoteDesktopScreen() {
 
   const stop = useCallback(
     (preserveFrame = false, exiting = false) => {
+      timing.current?.("stopped");
+      timing.current = null;
       generation.current++;
+      unlockFrame.current?.(false);
+      unlockFrame.current = null;
       presentation.current = false;
       if (presentationTimer.current) clearTimeout(presentationTimer.current);
       presentationTimer.current = null;
@@ -509,29 +516,22 @@ export default function RemoteDesktopScreen() {
       if (displayId) recovery.current.resuming = false; // Explicit display selection.
       connecting.current = true;
       const current = generation.current;
+      const mark = connectionDiagnostics(current);
+      timing.current = mark;
+      mark("connect");
       setError(null);
       setStatus(recovery.current.at ? "reconnecting" : "connecting");
       try {
         await linkRef.current.openLink(deviceId);
         if (current !== generation.current) return;
-        let result = await request<RemoteDesktopCapabilities>({
+        mark("link-ready");
+        const result = await request<RemoteDesktopCapabilities>({
           op: "capabilities",
         });
         if (current !== generation.current) return;
+        mark("capabilities");
         if (result?.version !== 1) throw new Error("CHANNEL_NOT_ALLOWED");
-        // Publish host eligibility synchronously before native credential work;
-        // React may not have rendered the capability response yet.
         capsRef.current = { deviceId, value: result };
-        if (result.enabled && supportsAutoUnlock(result.platform)) {
-          await securityRef.current.maybeUnlock();
-          if (current !== generation.current) return;
-          result = await request<RemoteDesktopCapabilities>({
-            op: "capabilities",
-          });
-          if (current !== generation.current) return;
-          if (result?.version !== 1) throw new Error("CHANNEL_NOT_ALLOWED");
-          capsRef.current = { deviceId, value: result };
-        }
         setHostCaps({ deviceId, value: result });
         if (!result.enabled) throw new Error("DESKTOP_DISABLED");
         if (recovery.current.resuming && !result.automaticReconnect)
@@ -541,6 +541,20 @@ export default function RemoteDesktopScreen() {
             (d) => d.id === (displayId ?? recovery.current.displayId),
           ) ?? result.displays[0];
         if (!display) throw new Error("DESKTOP_DISPLAY_MISSING");
+        if (supportsAutoUnlock(result.platform)) {
+          const firstFrame = new Promise<boolean>((resolve) => {
+            unlockFrame.current = resolve;
+          });
+          void securityRef.current.maybeUnlock(async () => {
+            if (
+              !(await firstFrame) ||
+              current !== generation.current ||
+              !focusedRef.current ||
+              !recovery.current.enabled
+            )
+              throw new Error("CREDENTIAL_CANCELLED");
+          });
+        }
         recovery.current.displayId = display.id;
         const resuming = recovery.current.resuming;
         // The host may start successfully even when its reply is lost.
@@ -558,6 +572,7 @@ export default function RemoteDesktopScreen() {
           void request({ op: "stop", lease: next.lease }).catch(() => {});
           return;
         }
+        mark("capture-started");
         active.current = next;
         receiveWindow.current = {
           since: Date.now(),
@@ -607,6 +622,7 @@ export default function RemoteDesktopScreen() {
           setLease({ ...next });
           send({ type: "control", enabled: control.controlling });
         }
+        mark("control-ready");
         setControlReady(true);
       } catch (cause) {
         if (current === generation.current) fail(cause);
@@ -628,6 +644,19 @@ export default function RemoteDesktopScreen() {
   );
   const connectRef = useRef(connect);
   connectRef.current = connect;
+  useEffect(() => {
+    // Authentication preparation is already running; only the native prompt
+    // waits for a frame from this lease. stop() releases cancelled waiters.
+    if (
+      frameReady &&
+      focused &&
+      lease &&
+      active.current?.lease === lease.lease
+    ) {
+      unlockFrame.current?.(true);
+      unlockFrame.current = null;
+    }
+  }, [frameReady, focused, lease?.lease]);
   const pause = useCallback(
     (exiting = false) => {
       void stop(true, exiting);
@@ -1098,7 +1127,12 @@ export default function RemoteDesktopScreen() {
         setOperations(true);
         if (AppState.currentState === "background") pause();
         break;
+      case "videoFrameReady":
+        if (mediaAttempt.current === message.attemptId)
+          timing.current?.("video-frame-ready");
+        break;
       case "streaming":
+        timing.current?.("video-presented");
         setFrameReady(true);
         setSettingBusy(false);
         recovery.current.delay = 1000;
@@ -1107,6 +1141,7 @@ export default function RemoteDesktopScreen() {
         setStatus("live");
         break;
       case "framePresented":
+        timing.current?.("screenshot-presented");
         setFrameReady(true);
         break;
       case "fallback":
@@ -1527,7 +1562,9 @@ export default function RemoteDesktopScreen() {
             hideKeyboardAccessoryView
             textInteractionEnabled={false}
             allowsLinkPreview={false}
-            {...(Platform.OS === "ios" ? { dataDetectorTypes: "none" as const } : {})}
+            {...(Platform.OS === "ios"
+              ? { dataDetectorTypes: "none" as const }
+              : {})}
             javaScriptEnabled
             allowsInlineMediaPlayback
             mediaPlaybackRequiresUserAction={false}
