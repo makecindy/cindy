@@ -1512,7 +1512,9 @@ export function buildRenderItems(
   allMessages = allMessages.filter((message) => message.systemCardData?.modalOnly !== true);
   if (opts?.botSessionId) {
     allMessages = placeBotTaskCardsAfterIntroduction(allMessages, (message) => {
-      if (message.role === 'user') return 'boundary';
+      if (message.role === 'user') {
+        return message.delivery !== 'steer' || message.isSyntheticTrigger ? 'boundary' : 'other';
+      }
       if (isSubagentInternalMessage(message)) return 'other';
       if (message.systemCardType === 'bot-session-task') return 'task';
       return message.role === 'assistant' && !message.systemCardType && message.content.trim()

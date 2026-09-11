@@ -238,3 +238,58 @@ it('queries the latest PRs after the previous reference status request settles',
   expect(queries).toEqual([[1], [3]]);
   unmount();
 });
+
+it('keeps cached PR data stale until both rejected query channels recover, then clears on owner change', async () => {
+  mocks.dataOwnerId = 'query-owner';
+  mocks.listAllPrRefs.mockResolvedValue([]);
+  const ref = { id: 'pr', sessionId: 'remote-child', owner: 'a', repo: 'b', prNumber: 1,
+    url: 'https://github.com/a/b/pull/1', firstSeenAt: 1, lastSeenAt: 1 };
+  let refsFail = false;
+  let statusesFail = false;
+  window.electronAPI = {
+    gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+    deviceLink: { invoke: vi.fn(async (_device: string, channel: string) => {
+      if (channel === 'git-context:pr-refs:list') {
+        if (refsFail) throw new Error('tunnel timeout');
+        return [ref];
+      }
+      if (statusesFail) throw new Error('tunnel timeout');
+      return [{ ...ref, ok: true, status: 'merged' }];
+    }) },
+  } as any;
+  function Probe() {
+    const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
+    const { successfulStatuses, refreshError, fetchStatusesForSession } = usePrStatuses('remote-child');
+    const refs = usePrRefsForSession('remote-child');
+    const other = usePrStatuses('other-session');
+    useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
+    return <div>
+      <span>{refs.length}:{successfulStatuses.size}:{refreshError ? 'stale' : 'fresh'}</span>
+      <span>other:{String(other.refreshError)}</span>
+      <button onClick={() => invalidateRemotePrRefs('remote-child')}>refs</button>
+      <button onClick={() => fetchStatusesForSession('remote-child')}>statuses</button>
+    </div>;
+  }
+  const view = () => <PrRefsProvider><Probe /></PrRefsProvider>;
+  const { rerender, unmount } = render(view());
+  await screen.findByText('1:1:fresh');
+  statusesFail = true;
+  await act(async () => fireEvent.click(screen.getByText('statuses')));
+  expect(screen.getByText('1:1:stale')).toBeTruthy();
+  refsFail = true;
+  await act(async () => fireEvent.click(screen.getByText('refs')));
+  expect(screen.getByText('1:1:stale')).toBeTruthy();
+  expect(screen.getByText('other:false')).toBeTruthy();
+  statusesFail = false;
+  await act(async () => fireEvent.click(screen.getByText('statuses')));
+  expect(screen.getByText('1:1:stale')).toBeTruthy();
+  refsFail = false;
+  await act(async () => fireEvent.click(screen.getByText('refs')));
+  expect(screen.getByText('1:1:fresh')).toBeTruthy();
+  refsFail = true;
+  await act(async () => fireEvent.click(screen.getByText('refs')));
+  mocks.dataOwnerId = 'new-query-owner';
+  rerender(view());
+  expect(screen.queryByText('1:1:stale')).toBeNull();
+  unmount();
+});

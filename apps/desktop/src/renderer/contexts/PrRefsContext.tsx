@@ -86,6 +86,8 @@ interface PrCacheStore {
   setSessionRefs: (sessionId: string, refs: readonly SessionPrRef[]) => void;
   /** 批量落入指定会话的状态。同会话后写覆盖前写;跨会话互不干扰。 */
   applyStatuses: (sessionId: string, results: readonly PrStatusResult[]) => void;
+  hasRefreshError: (sessionId: string) => boolean;
+  setRefreshError: (sessionId: string, channel: 'refs' | 'statuses', failed: boolean) => void;
   clearAll: () => void;
 }
 
@@ -94,6 +96,7 @@ function createPrCacheStore(): PrCacheStore {
   const statusesBySession = new Map<string, Map<string, PrStatusResult>>();
   const statusSnapshots = new Map<string, ReadonlyMap<string, PrStatusResult>>();
   const successfulStatusSnapshots = new Map<string, ReadonlyMap<string, PrStatusResult>>();
+  const refreshErrors = new Map<string, Set<'refs' | 'statuses'>>();
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of listeners) listener();
@@ -168,8 +171,21 @@ function createPrCacheStore(): PrCacheStore {
       successfulStatusSnapshots.set(sessionId, successful);
       notify();
     },
+    hasRefreshError(sessionId) {
+      return (refreshErrors.get(sessionId)?.size ?? 0) > 0;
+    },
+    setRefreshError(sessionId, channel, failed) {
+      const errors = refreshErrors.get(sessionId) ?? new Set<'refs' | 'statuses'>();
+      if (errors.has(channel) === failed) return;
+      if (failed) errors.add(channel);
+      else errors.delete(channel);
+      if (errors.size) refreshErrors.set(sessionId, errors);
+      else refreshErrors.delete(sessionId);
+      notify();
+    },
     clearAll() {
-      if (refsBySession.size === 0 && statusesBySession.size === 0) return;
+      if (refsBySession.size === 0 && statusesBySession.size === 0 && refreshErrors.size === 0) return;
+      refreshErrors.clear();
       refsBySession.clear();
       statusesBySession.clear();
       statusSnapshots.clear();
@@ -385,7 +401,9 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (gen !== ownerGenRef.current) return; // owner 已切换:旧账号结果整体丢弃
         if (!Array.isArray(results)) return;
         store.applyStatuses(sessionId, results);
+        store.setRefreshError(sessionId, 'statuses', false);
       } catch (err) {
+        if (gen === ownerGenRef.current) store.setRefreshError(sessionId, 'statuses', true);
         log.warn('pr statuses fetch failed', String(err));
       } finally {
         // 身份匹配释放:标记可能已被新代请求覆盖,旧请求 settle 不得误删。
@@ -438,6 +456,7 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         if (gen !== ownerGenRef.current) return;
         if (remoteRefsInvalidated.current.has(sessionId)) return;
         remoteRefsFetchedAt.current.set(sessionId, Date.now());
+        store.setRefreshError(sessionId, 'refs', false);
         log.debug('remote pr refs fetched', { sessionId, count: refs.length });
         store.setSessionRefs(sessionId, refs);
         // 该会话仍有消费者在展示 → 引用到位后立即补状态,不等 90s 周期
@@ -447,6 +466,9 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         }
       } catch (err) {
         // 断链/超时:不写时间戳,下个刷新周期(或行重挂载)立即重试。
+        if (gen === ownerGenRef.current && !remoteRefsInvalidated.current.has(sessionId)) {
+          store.setRefreshError(sessionId, 'refs', true);
+        }
         log.warn('remote pr refs fetch failed', String(err));
       } finally {
         // 身份匹配释放(同 inFlightSessions):旧代请求 settle 不得误删新代标记。
@@ -579,6 +601,7 @@ export function usePrStatus(sessionId: string, key: string): PrStatusResult | un
 }
 
 interface PrStatusesContextValue {
+  refreshError: boolean;
   /** prStatusKey(ref) → 该会话的状态查询结果。 */
   statuses: ReadonlyMap<string, PrStatusResult>;
   /** Last confirmed values survive consumer unmounts; raw failures remain in statuses. */
@@ -600,9 +623,14 @@ export function usePrStatuses(sessionId: string): PrStatusesContextValue {
     () => store.getSuccessfulStatusesForSession(sessionId),
     () => store.getSuccessfulStatusesForSession(sessionId),
   );
+  const refreshError = useSyncExternalStore(
+    store.subscribe,
+    () => store.hasRefreshError(sessionId),
+    () => store.hasRefreshError(sessionId),
+  );
   return useMemo(
-    () => ({ statuses, successfulStatuses, fetchStatusesForSession }),
-    [statuses, successfulStatuses, fetchStatusesForSession],
+    () => ({ statuses, successfulStatuses, refreshError, fetchStatusesForSession }),
+    [statuses, successfulStatuses, refreshError, fetchStatusesForSession],
   );
 }
 

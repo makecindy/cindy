@@ -19,6 +19,7 @@ const mocks = vi.hoisted(() => ({
   remoteBots: [] as any[],
   prRefs: [] as any[],
   successfulPrStatuses: new Map(),
+  refreshError: false,
   prStatuses: new Map(),
   registerPrConsumer: vi.fn(() => () => {}),
   invalidateRemotePrRefs: vi.fn(),
@@ -41,6 +42,7 @@ vi.mock('@/contexts/PrRefsContext', () => ({
   usePrRefsForSession: (id: string) => (id === 'child-1' ? mocks.prRefs : []),
   usePrStatuses: () => ({
     statuses: mocks.prStatuses,
+    refreshError: mocks.refreshError,
     successfulStatuses: mocks.successfulPrStatuses,
   }),
 }));
@@ -514,6 +516,24 @@ it('subscribes to the child session PR state and updates its icon without enlarg
   rerender(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
   expect(container.querySelector('.lucide-git-merge')).not.toBeNull();
   expect(button.className).toBe(before);
+});
+
+it('shows stale details on a rejected query while retaining the confirmed icon and button', async () => {
+  mocks.prRefs = [associatedPr(4)];
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'merged' }]]);
+  listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
+  const view = () => <BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />;
+  const { rerender, container } = render(view());
+  const button = await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  const classes = button.className;
+  mocks.refreshError = true;
+  rerender(view());
+  expect(screen.getByText('bots.collab.stale')).toBeTruthy();
+  expect(container.querySelector('.lucide-git-merge')).not.toBeNull();
+  expect(button.className).toBe(classes);
+  mocks.refreshError = false;
+  rerender(view());
+  expect(screen.queryByText('bots.collab.stale')).toBeNull();
 });
 
 it('renders confirmed shared PR icons on failures and clears them when the shared cache resets', async () => {

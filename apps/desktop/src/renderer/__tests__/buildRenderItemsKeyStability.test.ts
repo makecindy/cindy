@@ -2179,3 +2179,13 @@ it('places the same Bot task card after its introduction and keeps it through st
   expect(project(true)).toEqual(['start', 'intro', 'task-card', 'done']);
   expect(project(false).filter((id) => id !== 'finished-trigger')).toEqual(['start', 'intro', 'task-card', 'done']);
 });
+
+it.each(['steer', 'new', 'completion'])('keeps task introduction pairing within the actual turn: %s', (kind) => {
+  const task: ChatMessage = { ...mkAssistant('task-card', ''), systemCardType: 'bot-session-task' };
+  const interruption = { ...mkUser('interruption'), ...(kind === 'steer' ? { delivery: 'steer' as const } : {}),
+    ...(kind === 'completion' ? { isSyntheticTrigger: true } : {}) };
+  const items = buildRenderItems([mkUser('start'), task, interruption, mkAssistant('intro', 'Started')],
+    undefined, undefined, { botSessionId: 'bot' }).items;
+  const ids = items.flatMap((item) => item.type === 'message' ? [item.message.clientId] : []);
+  expect(ids.indexOf('task-card') > ids.indexOf('intro')).toBe(kind === 'steer');
+});

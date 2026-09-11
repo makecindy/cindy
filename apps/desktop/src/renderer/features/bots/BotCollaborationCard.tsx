@@ -109,7 +109,7 @@ function SessionTaskCardBody({
   const childSessionId = row?.childSessionId ?? meta.childSessionId;
   const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
   const pullRequests = usePrRefsForSession(childSessionId ?? '');
-  const { statuses, successfulStatuses } = usePrStatuses(childSessionId ?? '');
+  const { statuses, successfulStatuses, refreshError } = usePrStatuses(childSessionId ?? '');
   useEffect(() => {
     if (!childSessionId) return;
     return registerPrConsumer(childSessionId, sourceDeviceId);
@@ -249,7 +249,7 @@ function SessionTaskCardBody({
           <span>{t('bots.collab.prCount', { count: pullRequests.length })}</span>
         ) : null}
       </div>
-      {(stale ||
+      {(stale || refreshError ||
         !online ||
         pullRequests.some((ref) => statuses.get(prStatusKey(ref))?.ok === false)) &&
       row ? (

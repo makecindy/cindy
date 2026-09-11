@@ -200,7 +200,10 @@ export function normalizeRemoteMessages(
   const sorted = placeBotTaskCardsAfterIntroduction(
     options.preserveSourceOrder ? messages : sortMessagesByCreatedAt(messages),
     (message) => {
-      if (message.role === 'user') return 'boundary';
+      if (message.role === 'user') {
+        return message.agentMeta?.delivery !== 'steer' || message.agentMeta?.synthetic
+          ? 'boundary' : 'other';
+      }
       if (message.role !== 'assistant' || message.agentMeta?.parentUuid || message.systemCardType)
         return 'other';
       const task = readBotCollaborationMeta(message.agentMeta?.botCollaboration);
