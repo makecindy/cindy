@@ -198,6 +198,13 @@ Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.
 System audio and explicit clipboard transfers are supported when advertised by the host. Virtual displays and remote power-on are not included. The phone keyboard sends committed text directly; the computer keyboard supplies modifiers and special keys.
 
+The Windows input helper reports a failed call on the single output line its host
+already treats as "input failed": `error send_input <status>` when Win32 rejects
+an injection, and `error input_desktop <status>` when the desktop binding fails,
+with the Win32 status of the failing call. The line carries no coordinates and no
+typed text, and both consumers (Main's output watch and the SYSTEM service
+worker's failure watch) still classify it by the same rules as before.
+
 Unit tests cover peer/lease isolation, expiry, revocation during asynchronous
 capture, start/stop races, input replay, human/Agent exclusion, portrait/landscape
 geometry, keyboard resize, inline viewer parsing, two-finger gestures, and reconnect.
