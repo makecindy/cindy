@@ -408,6 +408,7 @@ import { registerBotLifecycleHandlers } from './botLifecycleService.js';
 import { updateBotRoutineLifecycle } from '../routines/service.js';
 import {
   createBotCompactRuntimeRefreshCoordinator,
+  refreshBotRuntimeAfterModelSelection,
   replaceBotRuntimeAfterPreflight,
   type BotCompactBoundary,
   type BotCompactRuntimeRefreshOutcome,
@@ -10939,11 +10940,20 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   configureBotRuntimeEpochRefreshRequest((sessionId, reason) => {
     void (async () => {
-      if (reason === 'model') await reconcileBotModelRoute.profileChanged(sessionId);
+      const refresh = (live: WiredSession) => {
+        botCompactRuntimeRefreshCoordinator.noteBoundary(live);
+        return botCompactRuntimeRefreshCoordinator.attempt(live);
+      };
+      if (reason === 'model') {
+        return refreshBotRuntimeAfterModelSelection({
+          current: () => getMakerIfReady()?.getSession(sessionId) as WiredSession | undefined,
+          select: () => reconcileBotModelRoute.profileChanged(sessionId),
+          refresh,
+        });
+      }
       const live = getMakerIfReady()?.getSession(sessionId) as WiredSession | undefined;
       if (!live) return 'not-bot';
-      botCompactRuntimeRefreshCoordinator.noteBoundary(live);
-      return botCompactRuntimeRefreshCoordinator.attempt(live);
+      return refresh(live);
     })().then((outcome) => {
       if (outcome === 'refreshed') {
         log.info('Bot runtime capability epoch refreshed', { sessionId, reason });
