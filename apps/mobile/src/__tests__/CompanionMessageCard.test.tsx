@@ -392,3 +392,42 @@ it('rechecks an in-flight empty PR list when the same task completes', async () 
   await act(async () => pr!.click());
   expect(h.openURL).toHaveBeenCalledWith(ref.url);
 });
+
+it('keeps the last successful PR icon during an element failure and clears stale on recovery', async () => {
+  vi.useFakeTimers();
+  const ref = {
+    id: 'pr',
+    sessionId: 'child',
+    owner: 'a',
+    repo: 'b',
+    prNumber: 7,
+    url: 'https://github.com/a/b/pull/7',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  let result: any = { ...ref, ok: true, status: 'merged' };
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list') return [ref];
+    if (channel === 'git-context:pr-status') return [result];
+    return {
+      ok: true,
+      delegations: [{ id: 'job', childSessionId: 'child', status: 'completed', updatedAt: 1 }],
+    };
+  });
+  await render();
+  expect(node.querySelector('[data-testid="merged-pr"]')).not.toBeNull();
+  for (const reason of ['fetch-failed', 'no-token']) {
+    result = { ...ref, ok: false, reason };
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(90_000);
+    });
+    expect(node.querySelector('[data-testid="merged-pr"]')).not.toBeNull();
+    expect(node.textContent).toContain('devices.companions.stale');
+  }
+  result = { ...ref, ok: true, status: 'open' };
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(90_000);
+  });
+  expect(node.querySelector('[data-testid="merged-pr"]')).toBeNull();
+  expect(node.textContent).not.toContain('devices.companions.stale');
+});

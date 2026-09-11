@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from 'react';
+import { prStatusKey, type PrStatusResult } from '@cindy/maker-shared';
 import { AppState } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { useAuth } from '@/auth/AuthContext';
@@ -84,16 +85,31 @@ export function useRemoteCompanionQuery<T>(
               // A transport or logical failure is not an empty successful snapshot.
               const failed =
                 value && typeof value === 'object' && 'ok' in value && value.ok === false;
-              setState((previous) => ({
-                identity,
-                binding,
-                value: failed
-                  ? previous.identity === identity
-                    ? previous.value
-                    : null
-                  : (value as T),
-                error: Boolean(failed),
-              }));
+              setState((previous) => {
+                const prior = previous.identity === identity ? previous.value : null;
+                if (channel === 'git-context:pr-status' && Array.isArray(value)) {
+                  const oldStatuses = new Map(
+                    (Array.isArray(prior) ? (prior as PrStatusResult[]) : [])
+                      .filter((status) => status.ok)
+                      .map((status) => [prStatusKey(status), status]),
+                  );
+                  const statuses = value as PrStatusResult[];
+                  return {
+                    identity,
+                    binding,
+                    value: statuses.map((status) =>
+                      status.ok ? status : (oldStatuses.get(prStatusKey(status)) ?? status),
+                    ) as T,
+                    error: statuses.some((status) => !status.ok),
+                  };
+                }
+                return {
+                  identity,
+                  binding,
+                  value: failed ? prior : (value as T),
+                  error: Boolean(failed),
+                };
+              });
             }
           })
           .catch(() => {
