@@ -17422,8 +17422,8 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             : ('bot-session-task' as const),
         systemCardData: {
           ...collaboration,
-          // 插话卡要显示催的是哪句话；锚点卡正文为空。
-          text: typeof m.content === 'string' ? m.content : '',
+          // 旧记录可能含完整执行指令；实时与历史都只投影任务状态，不修改原记录。
+          text: '',
         },
       };
     }

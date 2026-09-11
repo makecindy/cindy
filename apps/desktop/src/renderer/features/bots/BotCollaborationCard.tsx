@@ -77,9 +77,6 @@ export function BotSessionTaskMessageTrace({ data }: Pick<Props, 'data'>) {
       <Megaphone size={13} className="mt-[3px] shrink-0" aria-hidden="true" />
       <span className="min-w-0">
         {t('bots.collab.messageSent')}
-        {parsed.text ? (
-          <span className="text-[var(--text-secondary)]">{`：${parsed.text}`}</span>
-        ) : null}
       </span>
     </div>
   );
