@@ -146,7 +146,11 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
   结算 usage；只有原子挂在该终态边界上的显式 continuation claim 才能挡住产品结束。
   Codex `functions.exec` yield 没有协议级 execution handle（cell / wait 活在
   `codex-rs` daemon），近期检测只能是 adapter 内、用真实 rollout fixture 锁死的启发式，
-  用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。无 `id`／`call_id`
+  用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。
+  `commandExecution` 带数字 `exitCode` 时，结构化退出结果优先于正文：即使 stdout
+  完整复刻 running 状态头，也不得铸造 claim；不能仅凭 `status: completed` 排除
+  没有退出码的旧版 yield 包装。实现与回归见 `agents/codex/yielded-exec-cell.ts`
+  及其测试（均位于 `packages/maker-core/src/`）。无 `id`／`call_id`
   的 item 只认 `itemCompleted` 快照：`itemUpdated` 不得入账，不得给匿名条目发明身份。
   无 yield marker 的 nameless 完成不得清匿名桶；匿名 `wait` 若按 `cell_id` 结算了其中一个
   cell，只从匿名桶拿掉该 cell，不得清空仍在跑的其它匿名 cell。同 turn 或续段里
@@ -154,8 +158,11 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
   再铸 claim，也不得报 lost-handle。Plan Mode 审批只在产品终态跑：存在 awaiting
   yield claim 时不得把空计划当循环结束，也不得在 SDK `turn/completed` 上提前挂审批；
   origin 已产出的计划挂在 claim 上，续段结算后再审。禁止把 `last_agent_message == null` 或开场白当结算
-  判据；cell 跨 turn 存活性未证实前，续段失败必须诚实报 lost-handle，不得 replay 原请求
-  或重跑已执行命令。续段 claim 一旦挡住产品结束，所有非重试终态错误路径（不限
+  判据；空续段或重试耗尽只证明未取回结果，统一报 `yield-continuation-incomplete`，
+  不得推断 cell 丢失或由跨 turn 导致。用户错误不带 cell 编号，原因和编号保留在诊断日志。
+  真实 `not found` 也可能来自重复等待已消费的 cell，不等同于底层命令丢失；
+  已结算 cell 不因后续重复等待失败而重新入账。不得 replay 原请求或重跑已执行命令。
+  续段 claim 一旦挡住产品结束，所有非重试终态错误路径（不限
   transport）都必须同步结算它，不能只推 Done 而让 `isTurnRunning()` 仍为 true。
   续段 `turn/start` 已被服务端接受后若本地取消，必须先凭响应里的 turn id 落墓碑并
   best-effort interrupt，再抛/返回取消；`wait` 仍输出 running marker 视为 cell

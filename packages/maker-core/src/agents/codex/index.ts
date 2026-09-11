@@ -3599,7 +3599,7 @@ export class CodexAgent extends BaseAgent {
       releaseSettledYieldContinuationClaim(claim);
     };
     const emitYieldContinuationFailure = (opts: {
-      reason: 'yield-continuation-start-failed' | 'yield-continuation-lost-handle';
+      reason: 'yield-continuation-start-failed' | 'yield-continuation-incomplete';
       message: string;
       cells: YieldedExecCell[];
       detail?: string;
@@ -3607,7 +3607,7 @@ export class CodexAgent extends BaseAgent {
       log.warn(
         opts.reason === 'yield-continuation-start-failed'
           ? 'yield continuation turn failed to start'
-          : 'yield continuation lost exec cell',
+          : 'yield continuation did not retrieve execution results',
         {
           reason: opts.reason,
           ...(opts.detail ? { detail: opts.detail } : {}),
@@ -3646,10 +3646,12 @@ export class CodexAgent extends BaseAgent {
         detail: String(error),
       });
     };
-    const emitYieldContinuationLostHandle = (cells: YieldedExecCell[], reason: string): void => {
+    // Missing progress or exhausted retries do not prove a handle was lost.
+    // Even not-found can mean a completed cell was already consumed.
+    const emitYieldContinuationIncomplete = (cells: YieldedExecCell[], reason: string): void => {
       emitYieldContinuationFailure({
-        reason: 'yield-continuation-lost-handle',
-        message: `Foreground exec cell ${cells.map((cell) => cell.cellId).join(', ')} was lost after the previous turn completed.`,
+        reason: 'yield-continuation-incomplete',
+        message: 'Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.',
         cells,
         detail: reason,
       });
@@ -10197,7 +10199,7 @@ export class CodexAgent extends BaseAgent {
           // product terminal, not a lost handle.
           flushYieldContinuationIdleWaiters();
         } else if (yieldedCells.length === 0 || retryCount >= YIELD_CONTINUATION_MAX_ATTEMPTS) {
-          emitYieldContinuationLostHandle(
+          emitYieldContinuationIncomplete(
             outstandingCells,
             yieldedCells.length === 0 ? 'empty_completion' : 'retry_exhausted',
           );

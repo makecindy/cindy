@@ -19952,7 +19952,7 @@ describe('CodexAgent yield continuation', () => {
     return host.request.mock.calls.filter(([method, params]) => (
       method === Method.TurnStart
       && String((params as { input?: Array<{ text?: string }> }).input?.[0]?.text ?? '')
-        .includes('A foreground exec cell is still running')
+        .includes('Wait for every listed cell')
     ));
   }
 
@@ -20598,9 +20598,56 @@ describe('CodexAgent yield continuation', () => {
     });
     expect(events.some((event) => (
       event.type === 'error'
-      && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-lost-handle'
+      && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-incomplete'
     ))).toBe(false);
     expect(handle.isTurnRunning?.()).toBe(true);
+    await handle.close();
+  });
+
+  it.each([false, true])('does not continue after reading the cell 42 report example (updated=%s)', async (updated) => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-1' } };
+      return undefined;
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-report-cell-example',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemCompleted || !handlers.itemUpdated || !handlers.turnCompleted) {
+      throw new Error('expected item and turn handlers');
+    }
+    const events = await collectYieldEvents(handle);
+    await handle.send({ type: 'user', content: 'Read the report' });
+    const item = {
+      id: 'report-read',
+      type: 'commandExecution',
+      command: 'cat REPORT.md',
+      aggregatedOutput: 'Example:\n```\nScript running with cell ID 42\nWall time 1 second\n```',
+    };
+    if (updated) {
+      handlers.itemUpdated({
+        threadId: 'start-thread-id', turnId: 'turn-1',
+        item: { ...item, status: 'inProgress', exitCode: null },
+      });
+    }
+    handlers.itemCompleted({
+      threadId: 'start-thread-id', turnId: 'turn-1',
+      item: { ...item, status: 'completed', exitCode: 0 },
+    });
+    handlers.turnCompleted({
+      threadId: 'start-thread-id',
+      turn: { id: 'turn-1', status: 'completed' },
+    });
+    await waitForExpectation(() => {
+      expect(events.some((event) => event.type === 'done')).toBe(true);
+    });
+    expect(events.find((event) => event.type === 'done')?.turnContinuationId).toBeUndefined();
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(yieldTurnStartCalls(host)).toHaveLength(0);
     await handle.close();
   });
 
@@ -21310,7 +21357,7 @@ describe('CodexAgent yield continuation', () => {
     await handle.close();
   });
 
-  it('settles the product turn after the continuation waits the yielded cell', async () => {
+  it.each([false, true])('keeps a consumed cell settled even after duplicate wait failure: %s', async (duplicateWait) => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
     const host = installFakeHost(agent, (method) => {
@@ -21364,6 +21411,16 @@ describe('CodexAgent yield continuation', () => {
         content: [{ type: 'output_text', text: 'Script completed\nWall time 4.2 seconds\nOutput:\n' }],
       },
     });
+    if (duplicateWait) {
+      handlers.itemCompleted({
+        threadId: 'start-thread-id', turnId: 'turn-2',
+        item: {
+          id: 'wait-consumed-cell', type: 'function_call', name: 'wait',
+          arguments: JSON.stringify({ cell_id: '226' }),
+          content: [{ type: 'output_text', text: 'Script failed\nScript error:\nexec cell 226 not found' }],
+        },
+      });
+    }
     handlers.turnCompleted({
       threadId: 'start-thread-id',
       turn: { id: 'turn-2', status: 'completed' },
@@ -21373,7 +21430,7 @@ describe('CodexAgent yield continuation', () => {
     });
     expect(events.some((event) => (
       event.type === 'error'
-      && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-lost-handle'
+      && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-incomplete'
     ))).toBe(false);
     const dones = events.filter((event) => event.type === 'done');
     expect(dones[0]?.turnContinuationId).toEqual(expect.any(Number));
@@ -21382,7 +21439,7 @@ describe('CodexAgent yield continuation', () => {
     await handle.close();
   });
 
-  it('emits lost-handle without a later successful done after an empty continuation', async () => {
+  it.each([undefined, 'Script failed\nWall time 0 seconds\nOutput:\nScript error:\nexec cell 226 not found', 'failed to parse function arguments'])('reports incomplete without claiming loss after wait output %s', async (waitOutput) => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
     const host = installFakeHost(agent, (method) => {
@@ -21425,6 +21482,17 @@ describe('CodexAgent yield continuation', () => {
       threadId: 'start-thread-id',
       turn: { id: 'turn-2', status: 'inProgress' },
     });
+    if (waitOutput) {
+      handlers.itemCompleted({
+        threadId: 'start-thread-id',
+        turnId: 'turn-2',
+        item: {
+          id: 'wait-failed', type: 'function_call', name: 'wait',
+          arguments: JSON.stringify({ cell_id: '226' }),
+          content: [{ type: 'output_text', text: waitOutput }],
+        },
+      });
+    }
     handlers.turnCompleted({
       threadId: 'start-thread-id',
       turn: { id: 'turn-2', status: 'completed' },
@@ -21432,9 +21500,14 @@ describe('CodexAgent yield continuation', () => {
     await waitForExpectation(() => {
       expect(events.filter((event) => (
         event.type === 'error'
-        && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-lost-handle'
+        && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-incomplete'
       ))).toHaveLength(1);
     });
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      message: 'Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.',
+      isTerminal: true,
+    });
+    expect(yieldTurnStartCalls(host)).toHaveLength(1);
     const claimedDone = events.find((event) => event.type === 'done' && event.turnContinuationId != null);
     expect(claimedDone).toBeDefined();
     expect(events.filter((event) => event.type === 'done' && event.turnContinuationId == null)).toHaveLength(0);
@@ -21489,9 +21562,10 @@ describe('CodexAgent yield continuation', () => {
       threadId: 'start-thread-id',
       turnId: 'turn-2',
       item: {
-        id: 'item-exec-retry-2',
-        type: 'commandExecution',
-        command: 'pnpm --filter desktop run typecheck',
+        id: 'item-wait-retry-2',
+        type: 'function_call',
+        name: 'wait',
+        arguments: JSON.stringify({ cell_id: '226' }),
         status: 'completed',
         aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
@@ -21511,9 +21585,10 @@ describe('CodexAgent yield continuation', () => {
       threadId: 'start-thread-id',
       turnId: 'turn-3',
       item: {
-        id: 'item-exec-retry-3',
-        type: 'commandExecution',
-        command: 'pnpm --filter desktop run typecheck',
+        id: 'item-wait-retry-3',
+        type: 'function_call',
+        name: 'wait',
+        arguments: JSON.stringify({ cell_id: '226' }),
         status: 'completed',
         aggregatedOutput: 'Script running with cell ID 226\nWall time 1.0 seconds\nOutput:\n',
       },
@@ -21525,10 +21600,14 @@ describe('CodexAgent yield continuation', () => {
     await waitForExpectation(() => {
       expect(events.filter((event) => (
         event.type === 'error'
-        && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-lost-handle'
+        && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-incomplete'
       ))).toHaveLength(1);
     });
     expect(events.filter((event) => event.type === 'done' && event.turnContinuationId == null)).toHaveLength(0);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      message: 'Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.',
+    });
+    expect(yieldTurnStartCalls(host)).toHaveLength(2);
     expect(handle.isTurnRunning?.()).toBe(false);
     await handle.close();
   });
@@ -21792,7 +21871,7 @@ describe('CodexAgent yield continuation', () => {
     });
     expect(events.some((event) => (
       event.type === 'error'
-      && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-lost-handle'
+      && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-incomplete'
     ))).toBe(false);
     expect(events.filter((event) => event.type === 'done')).toHaveLength(1);
     expect(events.find((event) => event.type === 'done' && event.turnContinuationId == null)).toBeUndefined();
@@ -21896,7 +21975,7 @@ describe('CodexAgent yield continuation', () => {
     await handle.close();
   });
 
-  it('does not start a queued ask_user continuation after lost-handle', async () => {
+  it('does not start a queued ask_user continuation after incomplete continuation', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
     const host = installFakeHost(agent, (method) => {
@@ -21967,7 +22046,7 @@ describe('CodexAgent yield continuation', () => {
     await waitForExpectation(() => {
       expect(events.some((event) => (
         event.type === 'error'
-        && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-lost-handle'
+        && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-incomplete'
       ))).toBe(true);
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
@@ -21980,7 +22059,7 @@ describe('CodexAgent yield continuation', () => {
     await handle.close();
   });
 
-  it('does not start ask_user after lost-handle if the user answers later', async () => {
+  it('does not start ask_user after incomplete continuation if the user answers later', async () => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
     const host = installFakeHost(agent, (method) => {
@@ -22045,7 +22124,7 @@ describe('CodexAgent yield continuation', () => {
     await waitForExpectation(() => {
       expect(events.some((event) => (
         event.type === 'error'
-        && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-lost-handle'
+        && String((event.data as { reason?: string }).reason ?? '') === 'yield-continuation-incomplete'
       ))).toBe(true);
     });
     expect(events.some((event) => (

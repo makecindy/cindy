@@ -11524,6 +11524,7 @@
       "qrExpired": "二維碼已過期，請重新開始",
       "registrationFailed": "建立失敗，請稍後重試",
       "silentStopExhausted": "模型連續多次返回空響應，自動續跑已暫停。點選「繼續」恢復任務。",
+      "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
       "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以直接傳送下一則訊息繼續。",
       "permissionTightenInterruptFailed": "收緊權限時未能停止正在執行的任務，它可能會繼續免確認執行直到結束；如有需要請手動停止。",
       "codexAutoReviewUnavailable": "自動審批暫時不可用，當前操作已阻止並切換為預設權限。請重試，需要時會詢問你。",
