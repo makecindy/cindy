@@ -16,7 +16,7 @@ describe('DS-3 · 零接线守卫', () => {
     expect(findRuntimeImportsOfDesignTokens(repoRoot)).toEqual([]);
   }, 60_000); // 全仓扫描（数千文件 × 剥除层复核），Windows CI 慢盘需余量
 
-  it('本包 package.json 不被任何 workspace 声明为依赖，且不装 token 工具', () => {
+  it('本包 package.json 不被任何 workspace 声明为依赖，且工具仅为锁定的 Terrazzo 构建依赖', () => {
     const pkg = JSON.parse(
       readFileSync(new URL('../../package.json', import.meta.url), 'utf8'),
     ) as {
@@ -30,10 +30,10 @@ describe('DS-3 · 零接线守卫', () => {
       ...(pkg.dependencies ?? {}),
       ...(pkg.devDependencies ?? {}),
     };
-    expect(Object.keys(deps).sort()).toEqual(['@types/node', 'typescript', 'vitest']);
-    expect(Object.keys(deps).some((name) => /terrazzo|style-dictionary/i.test(name))).toBe(
-      false,
-    );
+    expect(Object.keys(deps).sort()).toEqual(['@terrazzo/cli', '@terrazzo/parser', '@types/node', 'typescript', 'vitest']);
+    expect(deps['@terrazzo/cli']).toBe('2.7.1');
+    expect(deps['@terrazzo/parser']).toBe('2.7.1');
+    expect(Object.keys(deps).some(name => /style-dictionary/i.test(name))).toBe(false);
   });
 
   it('自证伪：每一种非法接线形态都必须被探测器命中', () => {

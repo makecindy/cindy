@@ -54,6 +54,16 @@ function readRouter() {
   return fs.readFileSync(ROUTER_PATH, 'utf8');
 }
 
+test('DS-8: every desktop globals.css surface includes its generated token stylesheet', () => {
+  const { surfaces } = buildGeneratedSurfaces(ROOT);
+  const consumers = surfaces.filter(surface => surface.platform === 'desktop'
+    && surface.styleSources.includes('apps/desktop/src/renderer/styles/globals.css'));
+  assert.equal(consumers.length, 5);
+  for (const surface of consumers) {
+    assert.ok(surface.styleSources.includes('apps/desktop/src/renderer/styles/generated/tokens.css'), surface.id);
+  }
+});
+
 function tinySurface(id = 'desktop.test.surface') {
   return {
     id,

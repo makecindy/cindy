@@ -7,7 +7,7 @@ export type BotProfileLifecycleStatus =
   | 'archived'
   | 'deleting';
 
-export type BotLifecycleAction = 'pause' | 'resume' | 'delete';
+export type BotLifecycleAction = 'pause' | 'resume' | 'restart' | 'delete';
 
 export type BotWorktreeDisposition = 'recycle' | 'retain';
 

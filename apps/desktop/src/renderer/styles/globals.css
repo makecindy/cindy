@@ -1,3 +1,4 @@
+@import './generated/tokens.css';
 @import 'highlight.js/styles/github.css' layer(hljs-light);
 
 /* biome-ignore lint/suspicious/noUnknownAtRules: Tailwind directives are expanded by PostCSS. */
@@ -8,84 +9,7 @@
 @tailwind utilities;
 
 @layer base {
-  :root {
-    --app-font-ui-default:
-      'Inter Variable', Inter, -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Hiragino Sans GB',
-      'HarmonyOS Sans SC', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Noto Sans CJK SC',
-      'Source Han Sans SC', 'Segoe UI', Roboto, sans-serif;
-    /* 默认代码字体使用系统等宽字体(mac 上 SF Mono 不对网页暴露字体名,
-       实际命中 Menlo;Win 命中 Consolas)。JetBrains Mono 已降级为可选预设、不再是
-       默认。CJK 显式回退 PingFang/雅黑,保证代码块中英混排统一等宽。 */
-    --app-font-code-default:
-      ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Monaco, Consolas, 'Liberation Mono',
-      'Courier New', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei',
-      'Noto Sans CJK SC', 'Source Han Sans SC', monospace;
-    /* 代码字号体系基础:本期已接入块级代码缩放、内联不缩放、紧凑栏 -1px 补偿。
-       Phase 2 会接 UI 字号(uiSize 已预留),并把下面手写转义的 compact 规则
-       收敛成统一 compact-delta 机制。 */
-    --app-code-font-size: 14px;
-    --app-ui-font-size: 14px;
-    --text-xs: 12px;
-    --text-sm: 14px;
-    --text-base: 16px;
-    --text-lg: 18px;
-    --text-xl: 20px;
-    --text-2xl: 24px;
-    --text-3xl: 30px;
-    --text-4xl: 36px;
-    --text-5xl: 48px;
-    --text-xs-line-height: 16px;
-    --text-sm-line-height: 20px;
-    --text-base-line-height: 24px;
-    --text-lg-line-height: 28px;
-    --text-xl-line-height: 28px;
-    --text-2xl-line-height: 32px;
-    --text-3xl-line-height: 36px;
-    --text-4xl-line-height: 40px;
-    --text-5xl-line-height: 48px;
-    /* DESIGN.md §3 的 numeric 字号白名单默认值。运行时会由
-       useFontSettings 按用户 UI 缩放覆写；档位须与 tailwind.config.ts、
-       UI_TEXT_TOKEN_SIZES、tailwind-merge 字号组保持权威来源与消费端一致。 */
-    --text-10: 10px;
-    --text-11: 11px;
-    --text-12: 12px;
-    --text-13: 13px;
-    --text-14: 14px;
-    --text-15: 15px;
-    --text-16: 16px;
-    --text-18: 18px;
-    --text-20: 20px;
-    --text-24: 24px;
-    --text-28: 28px;
-
-    /* Motion token(全局动效档位,规范见 DESIGN.md §14.4):新增过渡/动画一律
-       引用这些 token,不要再各处硬编码时长和 cubic-bezier。5 档交互时长 +
-       spinner 语义循环例外、侧栏标题阅读例外 + 3 条曲线,与三档圆角同一哲学。 */
-    --motion-instant: 80ms; /* hover 即时反馈、轻浮层退场 */
-    --motion-fast: 150ms; /* 颜色/透明度状态切换、轻浮层入场(§14.4 功能性过渡上限) */
-    --motion-base: 200ms; /* 尺寸变化:展开折叠、面板收展 */
-    --motion-enter: 250ms; /* 重浮层(弹窗)入场 */
-    --motion-exit: 150ms; /* 重浮层(弹窗)退场 */
-    --motion-spinner-cycle: 1000ms; /* 功能性 loading spinner 完整一圈(§14.4 窄例外) */
-    --motion-sidebar-title-marquee-per-viewport: 2400ms; /* 溢出标题每个可视宽度的阅读时长(§14.4 窄例外) */
-    --motion-ease-out: cubic-bezier(0.16, 1, 0.3, 1); /* 入场/展开 */
-    --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
-    --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
-
-    /* Claude 额度条的首帧 alias 与 ColorRegistry 一致：只复用已批准语义槽。 */
-    --quota-bar-fill: var(--text-secondary);
-    --quota-bar-warn: var(--warning-fg);
-    --quota-bar-crit: var(--error-flat);
-    --quota-bar-track: var(--surface-chip);
-  }
-
-  .dark {
-    --quota-bar-fill: var(--text-secondary);
-    --quota-bar-warn: var(--warning-fg);
-    --quota-bar-crit: var(--error-flat);
-    --quota-bar-track: var(--surface-chip);
-  }
-
+  /* Static defaults and quota bootstrap aliases: generated/tokens.css. */
   body {
     -webkit-user-select: text;
     user-select: text;

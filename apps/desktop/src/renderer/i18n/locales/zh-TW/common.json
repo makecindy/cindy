@@ -7152,6 +7152,7 @@
     }
   },
   "bots": {
+    "settingsBack": "返回設定",
     "sidebar": {
       "newTaskWith": "和{{name}}開個新任務"
     },
@@ -7189,6 +7190,7 @@
       "openFailed": "無法開啟夥伴資料夾。"
     },
     "profile": {
+      "title": "資料",
       "changeAvatar": "更換頭像",
       "avatarFailed": "無法更換頭像，請選擇小於 5 MB 的 PNG、JPEG 或 WebP 圖片。",
       "summary": "自我介紹",
@@ -7270,8 +7272,9 @@
       "empty": "找不到符合的夥伴歷史。"
     },
     "lifecycle": {
+      "restartHint": "一直沒有回覆？",
       "stoppedBots": "需要處理的夥伴",
-      "title": "執行與歷史",
+      "title": "夥伴管理",
       "description": "暫停或恢復夥伴，尋找過去的訊息與成果。",
       "activeTitle": "夥伴正在執行",
       "activeDescription": "可以接收訊息、執行背景任務並聯絡其他夥伴。",
@@ -7283,9 +7286,13 @@
       "resume": "恢復夥伴",
       "delete": "永久刪除",
       "deleteTitle": "永久刪除夥伴",
-      "deleteDescription": "這會刪掉 {{name}}：個性、已連的通道、排定的行程都會消失。刪了找不回來。",
+      "deleteDescription": "刪除 {{name}} 後，夥伴的資料、記憶、工作目錄、通道連線與自動化任務將被移除，無法復原。任務歷史與獨立 worktree會保留。",
       "working": "正在更新…",
-      "actionFailed": "操作未完成，請稍後重試。"
+      "actionFailed": "操作未完成，請稍後重試。",
+      "restart": "重新啟動夥伴",
+      "restartDescription": "停止目前執行並重新準備，保留對話記錄、記憶和檔案。",
+      "restarting": "正在重新啟動…",
+      "restarted": "已重新啟動，傳送訊息即可繼續。"
     },
     "backToChat": "返回對話",
     "memoryRecovery": {
@@ -12208,6 +12215,11 @@
     "compression": "用於精簡冗長內容。"
   },
   "routines": {
+    "unsavedTitle": "尚有未儲存的修改",
+    "unsavedDescription": "離開後會捨棄這次對例行任務的修改。",
+    "discard": "放棄修改",
+    "continueEditing": "繼續編輯",
+
     "title": "例行任務",
     "add": "新增例行任務",
     "back": "返回例行任務",

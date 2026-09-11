@@ -1,75 +1,57 @@
 # @cindy/design-tokens
 
-Cindy 设计 token 的 **DTCG 影子层**（reference → semantic → component）。
+Desktop 已接管设计数值的 DTCG 编辑源。Terrazzo **2.7.1** 在构建期校验并生成；产品运行时只读取生成的本地子集，**不 import 此包或生成器**。Mobile 保持原实现与原生输入，尚未接管。
 
-本包只是字典，**零运行时接线**：Desktop / Mobile / 任何产品 package 都不得依赖它。Desktop 生产生成切换在路线图 **DS-8**，Mobile 在 **DS-10**；切换前各端仍从原生产源取值，本包的当前色值必须与 DS-2b 冻结快照逐值一致。标准组件已经存在不代表本包已被生产消费。
+## 修改与生成
 
-## 弃坑条款
+1. 在 `src/reference/` 修改标准 DTCG 值，或在 `src/semantic/`、`src/component/`、`src/themes/` 调整已批准的角色关系。`desktop-bindings.json` 只登记输出映射、保留项和文档用途，不存第二份数值。
+2. 运行 `pnpm --filter @cindy/design-tokens generate`。同一 Terrazzo parse/build 流程生成全部输出及 DESIGN §3/§10/§16.1 已接管的精确摘要；品牌保护项单独保留，不读取测试 fixture。
+3. 运行 `pnpm --filter @cindy/design-tokens generate -- --check`（或包脚本 `check:generated`）、本包测试、Desktop 冻结/主题/字号测试与适用门禁。生成两次必须稳定；缺文件、手改或过期输出失败。
+4. 本次迁移不改冻结预期。有意改风格仍须按治理合同交真实证据与设计批准，批准后显式更新独立预期；不能通过重跑生成器自动刷新 fixture。
 
-治理合同 §7：影子包在约定复查期内没有真实消费者时应删除。
+`src/{build-layers,snapshot,dtcg}.ts` 保留 DS-3 历史导入/测试 oracle；不在生产生成器依赖图中。`classification.json` 是冻结基线的历史分类，不再把其中“候选/未建模”误读为当前接管状态；当前逐项范围以 `desktop-bindings.json` 为准。
 
-- **复查日期：2026-11-01**
-- DS-4 / [#3920](https://github.com/makecindy/cindy/pull/3920) 已合入，薄 component 层随 Button 建立；DS-4b / [#4010](https://github.com/makecindy/cindy/pull/4010) 已合入，仅恢复设置输入局部主题覆盖，不代表全仓 alias 已收口。零运行时接线红线仍到 DS-8。
-- 届时若仍无生产生成切换且无人维护，按治理合同 §7 评估是否删除
+## 源与消费者
 
-## 当前数据源
-
-影子字典分类与建层的唯一数据源是 DS-2b 冻结快照：
-
-`apps/desktop/src/renderer/themes/__tests__/fixtures/desktop-color-defaults.json`
-
-不重新解析 `colors.ts`。重新生成：在本包目录执行 `pnpm generate`（脚本 `src/generate.ts`）。连续两次生成必须字节一致。守卫测试会核对。
-
-## 三层
-
-| 层 | 路径 | 内容 |
+| 唯一编辑源 | 生成输出 | 实际消费者 |
 | --- | --- | --- |
-| reference | `src/reference/color.json` | semantic / component 角色实际引用的原始色值（不铺全色板） |
-| semantic | `src/semantic/color.json` | DESIGN.md §10 Tier-1 的 surface / border / text / accent 四族 + status 语义；每个角色 light/dark = 冻结快照现值 |
-| component | `src/component/color.json` | DS-4 起随消费组件建立。**刻意很薄**：DS-4 的 Button hover / pressed 是 `color-mix` 运行期派生值（暗色下 `--surface-hover` 与 `--surface-chip` 同值，alias 会让悬停不可见），按治理合同 §3.4 只在 `classification.json` 登记、不建模；本层只收 `button-cta-hover` 这类能落回 semantic 的纯 alias |
+| reference/color + semantic/color + component/color | `themes/colors.ts` 的 GENERATED defaults 区 | 原注册 API/顺序/描述，主题解析，Button/Input、Diff、图表等全部旧 ID 消费者；同源生成额度条 CSS 首帧别名，不留手写副本 |
+| reference/themes + themes/builtin | 11 个 `builtin/*.ts` 的 GENERATED theme 区 | 原主题身份、声明模式与加载 API；logo 等资源仍在适配层 |
+| reference/shared + semantic/shared | `shared/windowBackdrop.ts` 的 GENERATED 区 | 主题与窗口共用的 CINDY 背板，原模块依赖不变 |
+| reference/foundations + semantic/foundations | `styles/generated/tokens.css`、`token-mappings.ts`、`tailwind.config.ts` GENERATED 区 | globals 实际导入；通用字号/行高/字体/字重、spacing 尺度、圆角、标准 Input 尺寸、motion 与默认 transition |
+| 同上默认字号 | `shared/generated/appearance-tokens.ts` | main/preload/renderer 共用 appearanceSettings；不改偏好限值、归一化与存储 |
 
-依赖单向：component → semantic → reference。不装 Terrazzo（DS-8）。
+构建专用 Tailwind 映射原位生成到配置文件，运行期只输出缩放/合并所需映射。旧 xl..5xl 配置保留缩放能力，源码仍禁止新增这些字号类；没有扩大排版或 DS-7 颜色豁免。
 
-色值一律用标准 DTCG 颜色对象（`$type: "color"` + `{colorSpace, components[, alpha]}`）：
-HSL triplet（`60 12.5% 97%`）→ `{"colorSpace":"hsl","components":[60,12.5,97]}`；
-hex / rgba / transparent → srgb 分量（0–1）+ 可选 alpha。不用自定义 `$type`
-（`"other"` 不是标准 DTCG 类型——Terrazzo 2.7.1 实测会静默丢弃这类 token，
-DS-8 接线时无法生成 CSS 变量；裸 triplet 字符串也会被解析成黑色）。
+Effort/price 静态表也由 colors.ts 生成并导出，`effortTierColors.ts` import/re-export 并保留原插值、钳制、未知档回退。依赖变为单向 effort→colors→registry；独立导入会初始化无 DOM 的 registry，模块缓存保证重复导入不重注册。low/minimal/t1、max/ultra 及各档 Light/Dark 通过同一 reference 取值。
 
-加严保护值按治理合同 §1.1 标记 **protected**，分两种 mode：Tier-1 slot（U2 二级信息色 `text-secondary` / `text-secondary-cross`）按 §3.2「名称与用途延续」**照常 semantic 建模** + protected 元数据——保护限制的是改值须经裁决，不是禁止迁移；Tier-3 singleton（`annotation-accent`、CINDY 皮肤族品牌红 `login-brand-accent` / `login-brand-accent-pressed`）按「保留原位，逐项裁决，默认不动」只登记、不建模。皮肤族其余值在 cindy-light/dark 主题 override 里，不在本快照默认值中。
+## 兼容与类型
 
-语义豁免色（DESIGN.md §10 theme-invariant 族：`destructive` / `error-*` / `warning-*` / `focus-ring*`）与 protected 不同：**照常 semantic 建模**，但在 `classification.json` 携带 `exemption` 元数据（外部主题不可覆盖、跨主题恒定）。DS-8 生成主题入口时据此区分可覆写 semantic 与必须保留原值的豁免族；治理合同 §3.2 要求 Tier-3 豁免色按此迁移。DESIGN.md §10 豁免表其余未建模项（`diff-*` / `login-error-fg` 等）进 shadow 层时再登记。
+- 标准类型：color、dimension（px/rem）、number、duration、cubicBezier、fontFamily、fontWeight、shadow。null 在模式绑定中显式保留，dark:null 继续走原 light 回退。
+- 数值层单向：component→semantic→reference；内置主题覆盖只引用 reference/semantic。遗留 CSS alias 的直接目标及 var/hsl 包装由扩展元数据保留；Terrazzo 的终值用于校验，输出继续是符号引用。守卫核验符号目标与 DTCG 目标连接，不能把它们全部固化成 hex。
+- `com.cindy.desktop` 格式元数据只记录大小写、精度、透明度/阴影语法，不存第二份值；`com.cindy.governance` 保留保护与语义豁免标签。保护标签限制改值，不放宽主题导入或颜色门禁。
+- **历史 HSL 不按名称纠正**：Light text-primary 是 #262626，其 HSL 是 `0 0% 9%`；Dark surface-hover 是 #3c3c3a，其 HSL 是 `60 2% 17%`。它们不是精确同色。本批保留全部实际 triplet/alpha/小数格式；新导入仍遵守 DESIGN §10 的精确换算，CINDY twin/格式冻结照旧。
+- 用户 `colors.radius`、局部/全局覆盖、未知 ID、导入、重复加载、磁盘字节与原主题顺序均保留。生成不读写用户主题目录。
 
-## 生产接管合同（目标，尚未接线）
+## 已接管与保留
 
-当前生产数值权威与影子字典须分开理解：
+基线为 **541 ID / 11 内置主题**。当前 522 注册项接管，19 项原位保留：7 个 Markdown `inherit`、2 个登录背景 `none`、7 个 color-mix 运行期表达式，以及 annotation-accent / login-brand-accent / login-brand-accent-pressed 三个 register-only 保护 singleton。静态阴影、透明度、radius 和 splash 动效已建模，不能统称动态值漏掉。
 
-| 范围 | 当前上游 | 接管边界 |
-| --- | --- | --- |
-| Desktop 颜色 | [colors.ts](../../apps/desktop/src/renderer/themes/colors.ts) 默认注册 + [builtin](../../apps/desktop/src/renderer/themes/builtin/) 内置主题覆盖；用户主题按 [theme-service.ts](../../apps/desktop/src/renderer/themes/theme-service.ts) 优先读取本地显式值 | DS-8 逐族接管默认值与需要集中维护的内置静态覆盖，保留旧 ID、默认 alias 与局部覆盖作用域；不覆盖用户主题或回写磁盘 |
-| Desktop 非颜色 | [globals.css](../../apps/desktop/src/renderer/styles/globals.css)、[tailwind.config.ts](../../apps/desktop/tailwind.config.ts)、[useFontSettings.ts](../../apps/desktop/src/renderer/hooks/useFontSettings.ts) 及实际组件局部样式 | DS-8 将真实需要的排版、间距、圆角/尺寸、动效静态值纳入现有三层；字号缩放、compact、color-mix 等运行期计算留代码 |
-| Mobile 颜色 / 非颜色 | [tokens.ts](../../apps/mobile/src/theme/tokens.ts)，[ThemeProvider.tsx](../../apps/mobile/src/theme/ThemeProvider.tsx) 选模式；局部布局与平台字体/计算仍在消费者和适配文件 | DS-10 从同一 DTCG 生成共享语义 + Mobile 静态覆盖；`tokens.ts` 只留现有 API / 适配，不手写另一份同义数值 |
-| 影子字典 | DS-2b `desktop-color-defaults.json` fixture → `src/generate.ts` → 当前三层 JSON | DS-8 接管族改为 DTCG 上游，fixture 退为独立回归预期，禁止继续从测试快照反向生成生产真相 |
+动态模型 OKLCH 配色、effort 插值、字体选择/缩放/compact、reduced-motion、Diff 测量/Worker/缓存、数据几何及业务计时继续留在原代码。通用 Tailwind 尺度已接源，不代表所有局部任意值、第三方编辑器/终端/登录画布几何或各业务组件已完成设计迁移；这些保持现有登记与后续批次边界，不新增标准档位。
 
-转换须在同一批的真实消费链完成：逐族记录旧源、DTCG 唯一可编辑源、输出、消费者和未切换项。已接管族的旧手写源改为适配/生成消费；未切换族继续保留原权威，保护 singleton 必须逐项说明保留原因，不宣称已全量集中。
+## 验证、回退与交接
 
-- 当前零接线守卫继续运行，本批不删改。DS-8 按实际接管范围，将对应的“不得消费”断言转换为生成新鲜度、逐值/逐主题一致、真实加载至组件消费和旧 ID/局部覆盖/加载幂等/磁盘不变断言；未接管范围仍禁止提前接线。DS-10 同样只转换 Mobile 对应边界，不能一次删除所有零接线保护。
-- Terrazzo 继续锁 **2.7.1**，到 DS-8 有生产输出时才安装；同一 DTCG 解析/生成流程，不并装第二套 Token 工具。
-- 生成文件不可手改；DESIGN 中精确值摘要也由同一流程更新明确标记的区域，规则说明仍人工维护。下表仅说明落点，当前未新建这些目录。
+生产测试在没有 fixture 的临时仓副本生成两次，逐输出注入缺失/手改/过期反例，并验证真实源改值进入输出。Desktop 独立冻结继续从实际 registry/builtin 提取；主题兼容、字号、模块加载与运行矩阵分别验证，不把静态测试称作实机通过。
 
-| 消费者 | 拟定输出 / 职责 | 阶段 |
-| --- | --- | --- |
-| Desktop ColorRegistry | `apps/desktop/src/renderer/themes/generated/` 提供默认/内置静态数据，原注册与主题加载 API 保留；内置覆盖源拟放本包 `src/themes/` | DS-8 |
-| CSS 非颜色变量 | `apps/desktop/src/renderer/styles/generated/tokens.css`；颜色仍由主题加载器注入，避免两处手写 | DS-8 |
-| Tailwind / 字号缩放 | `styles/generated/token-mappings.ts` 提供数值子集；现有 Tailwind 色名继续映射主题 CSS 变量 | DS-8 |
-| Mobile TS | `apps/mobile/src/theme/generated/tokens.ts`；本包 `src/platforms/mobile/` 维护必要静态平台覆盖，单向引用共享用途角色，不强加包依赖 | DS-10 |
-| DESIGN 机器摘要 | §10 Tier-1 与 §16.1 登录表、需要展示的非颜色摘要由同一流程生成 | DS-8 对应族接管时 |
+SC-01—12、实机证据、未测平台和人工审核状态持续登记在桌面唯一主计划；截图不入 Git。DS-8 为本地候选，未提交/发布；DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，合并提交 `4f03ea9a7b5f6425e517acd91071df6d397c6079`。旧 DS-6/7 附件不能充当本版本证据。
 
-Mobile 是否触发冷更，以实际 runtime fingerprint 输入变化为准，**不能仅因使用 TS 生成子集就宣称必然冷更，也不能预先宣称一定没有冷更**。若改变指纹，按 [Mobile 冷更边界](../../docs/dev-rules/mobile-development.md) 和治理 §4 单列高风险改动，经指定把关人针对冷更明确确认后才能合并。
+回退须整体恢复 DS-8 源/生成物/消费者及过渡守卫，保留上游工作；不回写用户数据或只抽掉生成源。G1 仅完成 Desktop 阶段；DS-9 另行授权，Mobile 新方案明确后再定消费接口。原影子层 2026-11-01 复查改为检查实际维护与消费情况，不取消维护责任。
 
-## 双端语义样本（源码核对，角色拟定）
+## DS-5 历史双端样本（非未来 Mobile 合同）
 
-采样：**2026-09-07，main `36638ff33ca8b28e259b247a47054a696d6c4ee4`**。本节是用途与消费链合同，不是精确值维护表；源码数值仍以上述现行上游为准。未启动 Desktop / iOS / Android，Light/Dark 实机均未验证；不将源码核对算作视觉验收。
+以下是 DS-5 时点的取样。Mobile 正在重构，目录、布局与 API 仅供追溯，不约束新方案；平台源与共享角色须待新方案明确后共同确认。旧行号可能已漂移，应读取当前代码。
+
+采样：**2026-09-07，main `36638ff33ca8b28e259b247a47054a696d6c4ee4`**。本节保留当时用途与消费链采样，不是未来 Mobile API 合同或精确值维护表；源码数值仍以上述现行上游为准。未启动 Desktop / iOS / Android，Light/Dark 实机均未验证；不将源码核对算作视觉验收。
 
 生产链已穿透：
 
@@ -95,22 +77,3 @@ Mobile 是否触发冷更，以实际 runtime fingerprint 输入变化为准，*
 | 用户 / 助手正文 `message.user.text` / `message.assistant.text` | UserMessage:1551 → `msg-user-text`，AssistantMessage:324 → `msg-assistant-text`；colors:1255/1259 默认都 alias `text-primary` | MessageRenderer:7698 → `colors.textPrimary`（用户/助手共用正文样式） | 共享正文用途，D 两个局部覆盖必须各自保留，不能抬升为全局或删除；DS-8 接源、DS-9 核真实消费、DS-10 接 M |
 | 正文排版 `typography.messageBody` | UserMessage:1550 / AssistantMessage:323 → `text-15 leading-[1.6]`，受用户字号和 compact（globals:330）影响 | MessageRenderer:7698 → `typeScale.bodyLarge/lineHeight.bodyLarge`（当前 17/26） | 共享用途 + 平台静态覆盖与缩放；用途一致不等于像素一致，DS-8/10 等值接管，DS-9 验证 D 长文与流式 |
 | 行内代码 `message.inlineCode.text` / `.surface` / `typography.inlineCode` | 仅助手 MarkdownRenderer:285/1785 → 继承正文颜色，`msg-md-inline-code-bg`、`font-mono text-14`、局部圆角；上游 colors:1301 / Tailwind fontFamily | MessageRenderer:7964—7974 → `chatInlineCodeText`、`typeScale.code/lineHeight.code`、[monoFont](../../apps/mobile/src/theme/monoFont.ts)，有意无底色 | 用途共享、外观/字体平台覆盖；M 原生嵌套 Text 圆角限制已有代码说明。DS-9 保留 D 局部色、DS-10 保留 M 无底色；改观感须先裁决，字体平台选择仍在代码 |
-
-### 平台覆盖的唯一来源与责任
-
-上述每个需保持 Mobile 静态差异的候选角色，拟在同一 DTCG 的 `src/platforms/mobile/` 下以 `platform.mobile.<上述角色 ID>` 登记覆盖关系（例如 `platform.mobile.typography.messageBody`、`platform.mobile.composer.border`），单向引用共享用途角色，再生成 Mobile 子集；共享角色不反向依赖平台层。现有 DTCG key 风格/旧 ID 不改名，新角色最终命名与类型随 DS-8/10 建模核对。这些 **候选 ID 尚不存在**，表中当前代码是采样依据，不是第二份未来可编辑源。
-
-DS-10 至少逐项登记：输入/正文/行内代码排版、输入框/发送几何与触控、输入背景/外边框/光标、可用与禁用发送色和透明度；各项记录引用的共享角色、覆盖理由、唯一源与输出。行内代码无底色、无独立焦点描边、鼠标态无对应原生态等“没有该效果”的平台行为留代码登记，不能为了填满 Token 表制造数值。`radius.micro/control` 的用途不能机械对应 Desktop 三档。
-
-静态与动态须分开：composerTextMetrics:30/36 的基础 padding/offset、触控尺寸与断点等静态常数是平台覆盖候选，DS-10 纳入唯一上游；:45—55 的平台选择、加减计算，以及屏宽/展开状态的分支留代码，不能以“平台适配”为由永久手写第二份静态值。主题切换通过 ComposerRichInput:128—145/175—177 的 `setConfig` → HTML:92—98 更新 CSS 变量，不重建初始 HTML。
-
-运行期适配仍留代码：主题选择/注入、color-mix、字号缩放/compact、iOS/Android 字体选择与输入光学 padding、hairline、展开与屏幕触控布局。工程责任由相应 DS-8/10 执行者在开工时认领，视觉决定由用户/设计师作出；本次核对人为 DS-5 执行者 Codex，未据此认领长期 surface owner。未决与最晚阻塞阶段集中见 [治理 §10](../../docs/design-rules/design-governance.md#10-待裁决登记)，保留平台差异即可推进等值接管，新增外观不得静默批准。
-
-## 分类登记
-
-`src/classification.json` 覆盖冻结快照全部 id，四类互斥完备：
-
-1. **literal** — 直接数值，reference 层候选
-2. **alias** — `var(--…)` / `hsl(var(--…))`，semantic/component 候选
-3. **hsl-triplet** — `-hsl` 后缀族，与对应 hex 必须指同一颜色（DS-8 起由生成器保证）
-4. **runtime-derived-or-protected** — 运行期计算值、非颜色、双模式不全、加严保护值；只登记存在、负责人与去向，不建模

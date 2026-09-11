@@ -39,3 +39,12 @@ packages/browser-control-runtime/src/_generated/** linguist-generated=true
 apps/mobile/scripts/release-*.mjs export-ignore
 apps/mobile/scripts/release-*.sh export-ignore
 apps/mobile/scripts/promote-*.mjs export-ignore
+
+# DTCG generated whole files / marked regions: stable bytes on Windows as well.
+apps/desktop/src/renderer/themes/colors.ts text eol=lf
+apps/desktop/src/renderer/themes/builtin/*.ts text eol=lf
+apps/desktop/src/renderer/styles/generated/* text eol=lf
+apps/desktop/src/shared/generated/appearance-tokens.ts text eol=lf
+apps/desktop/src/shared/windowBackdrop.ts text eol=lf
+apps/desktop/tailwind.config.ts text eol=lf
+docs/design-rules/DESIGN.md text eol=lf

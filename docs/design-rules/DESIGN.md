@@ -113,6 +113,8 @@ _Dark Mode text uses softened neutrals to reduce eye strain: **Soft Gray** (`#d4
 - **Display / Body / UI**: `Inter`, with fallbacks: `system-ui, -apple-system, "Segoe UI", sans-serif`
 - **Monospace**: `JetBrains Mono`, with fallbacks: `ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace`
 
+> Desktop default clarification: JetBrains Mono below is an optional preset and a historical typography sample. The shipped default uses the system monospace stack from `reference/foundations.json` → `app-font-code-default`, with the existing CJK fallbacks. DS-8 preserves that stack and user font selection; see [the recorded decision](./design-decision-log.md#2026-09-11-ds-8-默认代码字体依据迁移).
+
 _Note: The entire interface uses a single sans font — Inter — for both display headlines and body text. Inter is chosen for (a) its neutral, geometric character that stays out of the way, (b) its excellent legibility at small sizes, and (c) its wide availability in both web and design tooling. A single font keeps the hierarchy clean — separation comes from size and weight, not typeface contrast._
 
 ### Hierarchy
@@ -158,10 +160,12 @@ _Positioning note: the Display / Section Heading / Sub-heading rows are conceptu
 
 ### 桌面 UI 字号白名单(2026-08,issue #1505)
 
+<!-- BEGIN GENERATED DS-8: numeric-type -->
 - **UI 段:{10, 11, 12, 13, 14, 15, 16}px;标题 / 内容段:{18, 20, 24, 28}px。** 下限 10px —— 9px 及以下禁止(再小就不是文字是纹理)。
+<!-- END GENERATED DS-8: numeric-type -->
 - **下限约束的是「开发者写死的档位」,不约束运行期缩放结果。** 用户可把 UI 字号设到 `appearanceSettings.uiSize` 允许的最小值 12（默认 14）,`useFontSettings` 按 `uiSize / 14` 缩放并 `Math.round`,此时 `--text-10` 与 `--text-11` 都会算成 9px（两档在该设置下失去区分）。这是用户主动选择的整体缩小,不是违反下限;守卫也只检查源码里写的档位,不检查运行期计算值。**若要保住 10px 视觉下限,应在字号设置侧（提高 `uiSize` 下限或改缩放曲线）解决,而不是往白名单里加更小的档位。**
 - **写法**:一律用 `tailwind.config.ts` 的 `text-<n>` token 类(映射 `--text-<n>` 变量;doc 紧凑模式与后续字号缩放能力都挂在这层变量上,任意值类会静默漏掉这些机制)。语义类 `text-xs / text-sm / text-base / text-lg` 只收编存量(等值 12 / 14 / 16 / 18)；源码侧禁止使用 `text-xl` 及以上语义档位（由守卫拦截），配置侧 `theme.extend.fontSize` 的 `xl..5xl` 遗留项不在本轮删除范围，避免删除后静默回退到 Tailwind 内置固定值、失去用户字号缩放；其清理另行处理。**禁止新增任意值 `text-[Npx]`(含一切小数)与白名单外档位**;需要新档先改本表与权威来源，再进组件。
-- **镜像约定（已成立，由 #1553 完成）**：四个权威来源必须同步：本表（规范正本）与以下三处代码——`apps/desktop/tailwind.config.ts` 的 `fontSize`（类名可用性与变量映射；漏掉则 `text-<n>` 类根本不存在）、`apps/desktop/src/renderer/styles/globals.css` 的静态 `--text-<n>` 默认值（漏掉则变量未定义并回退到继承值）、`apps/desktop/src/renderer/hooks/useFontSettings.ts` 的 `UI_TEXT_TOKEN_SIZES` 运行时生效值（含用户字号缩放；漏掉则该档位不随用户设置缩放，反向漏则会写出已删档位的陈旧变量）。另有一个消费端需保持一致：`apps/desktop/src/renderer/lib/utils.ts` 的 tailwind-merge `classGroups['font-size']` 负责类名去重，不产生字号值；漏登记会让 `cn()` 合并两个字号类失效，两个类会同时留在 DOM 上。该消费端单独做一致性校验，不计入四个权威来源镜像。同一 hook 的 `SCALED_TAILWIND_TOKENS` 负责语义类运行时缩放，需与 Tailwind 语义类映射保持同步，但不改变本白名单的具体档位。PR4 的守卫按四个权威来源做镜像断言，并单独校验消费端一致性。
+- **单源约定（DS-8）**：DTCG 为已接管族的唯一编辑源；同一 Terrazzo 流程生成本节摘要、CSS 默认值及 Tailwind/字号 hook/class merge 的映射。`useFontSettings` 保留原缩放计算，shared 默认字号只引用无 DOM 的生成子集。生成新鲜度与独立白名单、实际缩放测试共同保护此链，不再手动同步多份数值。
 - 品牌画布域(登录 / Splash 家族等设计 px 坐标系表面)不映射本白名单:字面量只允许进画布常量文件(`loginDesignTokens.ts` 的地位,对齐手机端 `loginSkinLayout.ts`)**或下表登记的自包含品牌页生成器**(`oauthResultPage.ts` 整页由 main 侧生成,其内嵌 raw CSS 即该页的常量载体),组件消费端照常受守卫扫描。
 
 ### 排版豁免登记表(2026-08,issue #1505)
@@ -546,7 +550,7 @@ Cindy Desktop manages color with a **VSCode-style ColorRegistry + theme-override
 Source: `apps/desktop/src/renderer/themes/`
 
 - `color-registry.ts` — the `ColorRegistry` singleton and the `registerColor(id, defaults, description)` API
-- `colors.ts` — registers every token, organized "semantic slots first, aliases and singletons after" (counts drift constantly — **`colors.ts` itself is the only authoritative inventory**; this document does not track totals)
+- `colors.ts` — registers every token, organized "semantic slots first, aliases and singletons after" (counts drift constantly — **the registration API in `colors.ts` is the live inventory; generated defaults are edited in `packages/design-tokens/src`**; this document does not track totals)
 - `theme-service.ts` — `applyTheme(theme)` serializes all tokens into `:root{}` and injects `<style id="theme-vars">`
 - `builtin/` — built-in theme objects (`cindy-light.ts` / `cindy-dark.ts` / `eclipse.ts` / `default-light.ts` / `default-dark.ts` and the community palettes)
 - `registry.ts` — the `builtinThemes` registry + `listThemesByType('light' | 'dark')`
@@ -555,47 +559,49 @@ Theme switching: `useTheme.ts` provides `theme` (System / Light / Dark mode) plu
 
 ### Token Tiers
 
-**Tier 1 — Semantic slots**: the core cross-context slots; when adding a theme, this tier is the main override battleground. The table below lists every slot exhaustively — it IS the Tier-1 registry.
+**Tier 1 — Semantic slots**: the core cross-context slots; when adding a theme, this tier is the main override battleground. The exact-value summary below is generated from the Desktop DTCG source. Registry IDs and usages remain the compatibility contract.
 
-| Category    | Slot                         | Default Light  | Default Dark | Primary use                                                                                                                 |
-| ----------- | ---------------------------- | -------------- | ------------ | --------------------------------------------------------------------------------------------------------------------------- |
-| **Surface** | `--surface`                  | `#f8f8f6`      | `#1f1f1e`    | Page Surface (hex form)                                                                                                     |
-|             | `--surface-hsl`              | `60 12.5% 97%` | `60 2% 12%`  | Same, HSL triplet — consume via `hsl(var(--xxx))`                                                                           |
-|             | `--surface-elevated`         | `#ffffff`      | `#2c2c2a`    | Card lift / dialogs / popovers                                                                                              |
-|             | `--surface-elevated-soft`    | `#e5e5e5`      | `#2c2c2a`    | Disabled-state Card                                                                                                         |
-|             | `--surface-card-ivory`       | `#faf9f5`      | `#2c2c2a`    | Slightly warm ivory Card (Settings)                                                                                         |
-|             | `--surface-chip`             | `#e5e5e5`      | `#3c3c3a`    | Chips / pills / selected rows                                                                                               |
-|             | `--surface-chip-alt`         | `#e5e5e5`      | `#2c2c2a`    | Chip variant that collapses to Card in Dark                                                                                 |
-|             | `--surface-hover`            | `#e5e5e5`      | `#3c3c3a`    | General hover bg                                                                                                            |
-|             | `--surface-hover-soft`       | `#f8f8f6`      | `#3c3c3a`    | Soft hover bg                                                                                                               |
-|             | `--surface-hover-hsl`        | `0 0% 90%`     | `60 2% 17%`  | Hover, HSL form                                                                                                             |
-|             | `--surface-on-card`          | `#ffffff`      | `#1f1f1e`    | Dark foreground on CTAs / checked icons                                                                                     |
-| **Border**  | `--border-default`           | `#d7d7d4`      | `#3c3c3a`    | This spec's Board 1px border                                                                                                |
-|             | `--border-default-hsl`       | `60 3% 84%`    | `60 2% 23%`  | Board, HSL form                                                                                                             |
-|             | `--border-shadcn-hsl`        | `0 0% 90%`     | `30 4% 28%`  | shadcn input/border HSL                                                                                                     |
-|             | `--border-transparent-mixed` | `transparent`  | `#3c3c3a`    | Single-side borders (progress track etc.)                                                                                   |
-| **Text**    | `--text-primary`             | `#262626`      | `#d4d4d4`    | Primary headings / body                                                                                                     |
-|             | `--text-primary-hsl`         | `0 0% 9%`      | `0 0% 83%`   | Primary, HSL form                                                                                                           |
-|             | `--text-primary-on-dark`     | `#262626`      | `#ffffff`    | Inverse text (stop-button icon etc.)                                                                                        |
-|             | `--text-primary-emphasis`    | `#1a1a1a`      | `#d4d4d4`    | Plan emphasized primary text                                                                                                |
-|             | `--text-primary-inv`         | `#1a1a1a`      | `#ffffff`    | Plan-action approve text                                                                                                    |
-|             | `--text-primary-body-strong` | `#525252`      | `#d4d4d4`    | Plan content body, strong                                                                                                   |
-|             | `--text-secondary`           | `#737373`      | `#a3a3a3`    | Secondary text / icons                                                                                                      |
-|             | `--text-secondary-cross`     | `#a3a3a3`      | `#a3a3a3`    | Lighter cross-theme secondary                                                                                               |
-|             | `--text-secondary-mid`       | `#525252`      | `#a3a3a3`    | Muted body text                                                                                                             |
-|             | `--text-tertiary`            | `#a3a3a3`      | `#737373`    | Placeholder / tertiary                                                                                                      |
-|             | `--text-tertiary-stone`      | `#737373`      | `#737373`    | Cross-theme Stone tertiary                                                                                                  |
-|             | `--text-tertiary-mid`        | `#525252`      | `#737373`    | Mid-gray tertiary                                                                                                           |
-|             | `--text-tertiary-hsl`        | `0 0% 45%`     | `0 0% 45%`   | Tertiary, HSL form                                                                                                          |
-|             | `--text-disabled`            | `#d4d4d4`      | `#525252`    | Disabled / failed                                                                                                           |
-|             | `--text-disabled-tertiary`   | `#a3a3a3`      | `#737373`    | Disabled placeholder variant                                                                                                |
-|             | `--text-placeholder`         | `#c4c4c4`      | `#525252`    | Unified placeholder slot (lighter than tertiary — reads as empty); chat/ask/settings/plan-action-fb inputs all resolve here |
-| **Accent**  | `--accent-cta-bg`            | `#262626`      | `#ffffff`    | Inverse CTA bg                                                                                                              |
-|             | `--accent-cta-bg-pure`       | `#000000`      | `#ffffff`    | Pure CTA bg                                                                                                                 |
-|             | `--accent-emphasis`          | `#262626`      | `#d4d4d4`    | Settings primary button etc.                                                                                                |
-|             | `--accent-soft`              | `#262626`      | `#ffffff`    | Soft accent (folder button etc.)                                                                                            |
-|             | `--accent-hover`             | `#262626`      | `#e5e5e5`    | CTA pressed/hover                                                                                                           |
-|             | `--accent-pure-cta-fg`       | `#ffffff`      | `#000000`    | Pure-inverse CTA text                                                                                                       |
+<!-- BEGIN GENERATED DS-8: semantic-colors -->
+| Category | Slot | Default Light | Default Dark | Primary use |
+| --- | --- | --- | --- | --- |
+| **Surface** | `--surface` | `#f8f8f6` | `#1f1f1e` | Page Surface (hex form) |
+|  | `--surface-hsl` | `60 12.5% 97%` | `60 2% 12%` | Same, HSL triplet — consume via `hsl(var(--xxx))` |
+|  | `--surface-elevated` | `#ffffff` | `#2c2c2a` | Card lift / dialogs / popovers |
+|  | `--surface-elevated-soft` | `#e5e5e5` | `#2c2c2a` | Disabled-state Card |
+|  | `--surface-card-ivory` | `#faf9f5` | `#2c2c2a` | Slightly warm ivory Card (Settings) |
+|  | `--surface-chip` | `#e5e5e5` | `#3c3c3a` | Chips / pills / selected rows |
+|  | `--surface-chip-alt` | `#e5e5e5` | `#2c2c2a` | Chip variant that collapses to Card in Dark |
+|  | `--surface-hover` | `#e5e5e5` | `#3c3c3a` | General hover bg |
+|  | `--surface-hover-soft` | `#f8f8f6` | `#3c3c3a` | Soft hover bg |
+|  | `--surface-hover-hsl` | `0 0% 90%` | `60 2% 17%` | Hover, HSL form |
+|  | `--surface-on-card` | `#ffffff` | `#1f1f1e` | Dark foreground on CTAs / checked icons |
+| **Border** | `--border-default` | `#d7d7d4` | `#3c3c3a` | This spec's Board 1px border |
+|  | `--border-default-hsl` | `60 3% 84%` | `60 2% 23%` | Board, HSL form |
+|  | `--border-shadcn-hsl` | `0 0% 90%` | `30 4% 28%` | shadcn input/border HSL |
+|  | `--border-transparent-mixed` | `transparent` | `#3c3c3a` | Single-side borders (progress track etc.) |
+| **Text** | `--text-primary` | `#262626` | `#d4d4d4` | Primary headings / body |
+|  | `--text-primary-hsl` | `0 0% 9%` | `0 0% 83%` | Primary, HSL form |
+|  | `--text-primary-on-dark` | `#262626` | `#ffffff` | Inverse text (stop-button icon etc.) |
+|  | `--text-primary-emphasis` | `#1a1a1a` | `#d4d4d4` | Plan emphasized primary text |
+|  | `--text-primary-inv` | `#1a1a1a` | `#ffffff` | Plan-action approve text |
+|  | `--text-primary-body-strong` | `#525252` | `#d4d4d4` | Plan content body, strong |
+|  | `--text-secondary` | `#737373` | `#a3a3a3` | Secondary text / icons |
+|  | `--text-secondary-cross` | `#a3a3a3` | `#a3a3a3` | Lighter cross-theme secondary |
+|  | `--text-secondary-mid` | `#525252` | `#a3a3a3` | Muted body text |
+|  | `--text-tertiary` | `#a3a3a3` | `#737373` | Placeholder / tertiary |
+|  | `--text-tertiary-stone` | `#737373` | `#737373` | Cross-theme Stone tertiary |
+|  | `--text-tertiary-mid` | `#525252` | `#737373` | Mid-gray tertiary |
+|  | `--text-tertiary-hsl` | `0 0% 45%` | `0 0% 45%` | Tertiary, HSL form |
+|  | `--text-disabled` | `#d4d4d4` | `#525252` | Disabled / failed |
+|  | `--text-disabled-tertiary` | `#a3a3a3` | `#737373` | Disabled placeholder variant |
+|  | `--text-placeholder` | `#c4c4c4` | `#525252` | Unified placeholder slot (lighter than tertiary — reads as empty); chat/ask/settings/plan-action-fb inputs all resolve here |
+| **Accent** | `--accent-cta-bg` | `#262626` | `#ffffff` | Inverse CTA bg |
+|  | `--accent-cta-bg-pure` | `#000000` | `#ffffff` | Pure CTA bg |
+|  | `--accent-emphasis` | `#262626` | `#d4d4d4` | Settings primary button etc. |
+|  | `--accent-soft` | `#262626` | `#ffffff` | Soft accent (folder button etc.) |
+|  | `--accent-hover` | `#262626` | `#e5e5e5` | CTA pressed/hover |
+|  | `--accent-pure-cta-fg` | `#ffffff` | `#000000` | Pure-inverse CTA text |
+<!-- END GENERATED DS-8: semantic-colors -->
 
 **Tier 2 — Aliases**: the many component-scoped tokens (`--cmd-palette-bg`, `--msg-tool-card-text`, `--settings-input-border`, …) whose defaults resolve to `var(--slot)`. The browser forward-resolves automatically; components are unaware — **keep consuming the alias names directly**.
 
@@ -1450,31 +1456,34 @@ The execution rulebook for subsequent desktop / mobile UI updates. Sources: the 
 - **品牌红 `#DF0C27` 在登录画布内只用于区域徽标（旧称 Global pill，见 §16.3）与字标红元素等品牌 accent，跨模式不变**；画布外仅有 §15.10 登记的 Mobile Beta 渠道状态徽标例外。**禁止作页面背景**（wave4 改判，见 `token-decision-table §3` 对 `#df0c27` 的语义判定），不渗入面板内部（呼应 §15.10 红色边界）。画布底走 `--login-bg-base`（亮 `#EDEDED` / 深 `#1F1F1E`），红只经 `--login-brand-accent` 消费。错误红 `#D91F37` 同样跨模式不变（语义豁免，呼应 §10 豁免族）。
 - **`--login-*` 调色板双态目标值** —— token 已注册于 `apps/desktop/src/renderer/themes/colors.ts`（dark 槽位当前为 light 占位值）。下表为深色实现的目标规格，经 Figma 组件库 Dark symbol 逐个核验；实现 PR 须将 dark 槽位更新为本表 dark 列的值：
 
-| token                                                            | light                   | dark                     | 核验源                                                                                                                                                              |
-| ---------------------------------------------------------------- | ----------------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--login-panel-bg`                                               | `#FBFBFB`               | `#312F2F`                | callback-card dark（as-built）                                                                                                                                      |
-| `--login-panel-border`                                           | `#D4D4D4`               | `#434343`                | callback-card dark                                                                                                                                                  |
-| `--login-control-bg`（输入框底）                                 | `#EEEEEE`               | `#2C2A2A`                | figma `Dark_normal` 输入 symbol                                                                                                                                     |
-| `--login-action-control-bg`（方式行 / 返回钮底）                 | `#EEEEEE`               | `#2A2828`                | figma 549:850 / 549:897（暗色与输入框底分化，组件库更新 2026-07-23）                                                                                                |
-| `--login-back-border`（返回钮描边）                              | `#FFFFFF`               | `#434343`                | figma 549:897                                                                                                                                                       |
-| `--login-control-border`                                         | `#D4D4D4`               | `#434343`                | figma `Dark_normal`                                                                                                                                                 |
-| `--login-control-border-active`（focus / filled）                | `#2A2828`               | `#EEEEEE`                | figma `Dark_highlight`                                                                                                                                              |
-| `--login-control-text`（输入填充字，Bold）                       | `#252222`               | `#EEEEEE`                | figma Dark 填充 / error 态                                                                                                                                          |
-| `--login-control-placeholder`（空态字）                          | `#D4D4D4`               | `#6F6F6F`                | figma Dark 空态                                                                                                                                                     |
-| `--login-title-text`                                             | `#252222`               | `#D4D4D4`                | callback-title dark                                                                                                                                                 |
-| `--login-secondary-text`（副标题 / 倒计时）                      | `#6F6F6F`               | `#6F6F6F`                | 两模式同值                                                                                                                                                          |
-| `--login-primary-button-bg`                                      | `#2A2828`               | `#EEEEEE`                | figma `white_button` / callback-cta dark                                                                                                                            |
-| `--login-primary-button-border`                                  | `#434343`               | `#FFFFFF`                | 同上                                                                                                                                                                |
-| `--login-primary-button-text`（Bold）                            | `#D4D4D4`               | `#2A2828`                | 同上                                                                                                                                                                |
-| `--login-link-text`（重发链接）                                  | `#2A2828`               | `#EEEEEE`                | figma `dark_重新发送` symbol                                                                                                                                        |
-| `--login-link-hover`                                             | `#4A4848`               | `#A8A8A8`                | 推导值（无独立 dark hover symbol）                                                                                                                                  |
-| `--login-link-pressed`                                           | `#1A1818`               | `#C0BEBE`                | 推导值                                                                                                                                                              |
-| `--login-disabled-button-overlay`                                | `rgba(255,255,255,0.7)` | 同 light                 | figma `white_button` Disable：disabled 两模式同构（见 §16.5）                                                                                                       |
-| `--login-splash-progress-track` / `--login-splash-progress-fill` | `#D9D9D9` / `#252222`   | `#434343` / `#D4D4D4`    | figma Dark symbol 核验                                                                                                                                              |
-| `--login-loading-ring-track`（loading 环轨道）                   | `rgba(42,40,40,0.18)`   | `rgba(212,212,212,0.18)` | 18% 半透明环轨二态；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token）                                             |
-| `--login-error-fg`                                               | `#D91F37`               | `#D91F37`                | 语义豁免不变                                                                                                                                                        |
-| `--login-brand-accent` / `--login-brand-accent-pressed`          | `#DF0C27` / `#A61629`   | 同 light                 | 品牌红不变                                                                                                                                                          |
-| `--login-bg-base`（画布底）                                      | `#EDEDED`               | `#1F1F1E`                | figma 532:585 暗色帧实测；两模式纯平定稿——暗色帧的双红晕层（532:588/589）曾按 1:1 几何落地，2026-07-24 实机走查拍板去除（亮色撤渐变=PR#104 拍板，两条决策相互独立） |
+<!-- BEGIN GENERATED DS-8: login-colors -->
+| token | light | dark | 核验源 |
+| --- | --- | --- | --- |
+| `--login-panel-bg` | `#FBFBFB` | `#312F2F` | callback-card dark（as-built） |
+| `--login-panel-border` | `#D4D4D4` | `#434343` | callback-card dark |
+| `--login-control-bg`（输入框底） | `#EEEEEE` | `#2C2A2A` | figma `Dark_normal` 输入 symbol |
+| `--login-action-control-bg`（方式行 / 返回钮底） | `#EEEEEE` | `#2A2828` | figma 549:850 / 549:897（暗色与输入框底分化，组件库更新 2026-07-23） |
+| `--login-back-border`（返回钮描边） | `#FFFFFF` | `#434343` | figma 549:897 |
+| `--login-control-border` | `#D4D4D4` | `#434343` | figma `Dark_normal` |
+| `--login-control-border-active`（focus / filled） | `#2A2828` | `#EEEEEE` | figma `Dark_highlight` |
+| `--login-control-text`（输入填充字，Bold） | `#252222` | `#EEEEEE` | figma Dark 填充 / error 态 |
+| `--login-control-placeholder`（空态字） | `#D4D4D4` | `#6F6F6F` | figma Dark 空态 |
+| `--login-title-text` | `#252222` | `#D4D4D4` | callback-title dark |
+| `--login-secondary-text`（副标题 / 倒计时） | `#6F6F6F` | `#6F6F6F` | 两模式同值 |
+| `--login-primary-button-bg` | `#2A2828` | `#EEEEEE` | figma `white_button` / callback-cta dark |
+| `--login-primary-button-border` | `#434343` | `#FFFFFF` | 同上 |
+| `--login-primary-button-text`（Bold） | `#D4D4D4` | `#2A2828` | 同上 |
+| `--login-link-text`（重发链接） | `#2A2828` | `#EEEEEE` | figma `dark_重新发送` symbol |
+| `--login-link-hover` | `#4A4848` | `#A8A8A8` | 推导值（无独立 dark hover symbol） |
+| `--login-link-pressed` | `#1A1818` | `#C0BEBE` | 推导值 |
+| `--login-disabled-button-overlay` | `rgba(255, 255, 255, 0.7)` | `rgba(255, 255, 255, 0.7)` | figma `white_button` Disable：disabled 两模式同构（见 §16.5） |
+| `--login-splash-progress-track` / `--login-splash-progress-fill` | `#D9D9D9` / `#252222` | `#434343` / `#D4D4D4` | figma Dark symbol 核验 |
+| `--login-loading-ring-track`（loading 环轨道） | `rgba(42, 40, 40, 0.18)` | `rgba(212, 212, 212, 0.18)` | 18% 半透明环轨二态；登录页 LoginLoadingRing 与 Splash 转圈环共用（Splash 侧自暗色实现 PR 起由字面 rgba 收敛至本 token） |
+| `--login-error-fg` | `#D91F37` | `#D91F37` | 语义豁免不变 |
+| `--login-bg-base`（画布底） | `#EDEDED` | `#1F1F1E` | figma 532:585 暗色帧实测；两模式纯平定稿——暗色帧的双红晕层（532:588/589）曾按 1:1 几何落地，2026-07-24 实机走查拍板去除（亮色撤渐变=PR#104 拍板，两条决策相互独立） |
+<!-- END GENERATED DS-8: login-colors -->
+
+品牌保护项 `--login-brand-accent` / `--login-brand-accent-pressed` 仍按原决定保留 `#DF0C27` / `#A61629`，两模式相同；尚未接管，不由本表生成。上表已接管行从 DTCG 自动生成，核验源说明保留原批准依据。
 
 余下 token（`-control-border-disabled` / `-inverted-button-border` / `-callback-*` 等）的**亮色**值与 callback 族**双态**值见 `token-decision-table §3`、`figma-component-spec §1.1`（注意：这两份外部 spec 只覆盖亮色 + callback 族 dark，**登录主皮 dark 值以本表为权威**，原※推导值已经 Figma 组件库核验确认，本表为目标规格）；深色反相机制与 3 处组件改动见 §16.5。
 
