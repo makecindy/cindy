@@ -526,27 +526,29 @@ export function BotSettings({
             />
           </div>
         </section>
-        <div hidden={page !== 'capabilities'}>
-          {' '}
-          <BotCapabilitySettings
-            expanded={page === 'capabilities'}
-            bot={bot}
-            capabilities={capabilities}
-            skills={selectedSkills}
-            onChange={(kind, values) => {
-              if (kind === 'skill') setSelectedSkills(values);
-              setCapabilities((current) => ({
-                ...current,
-                ...(kind === 'skill'
-                  ? { skillMode: 'allowlist' as const }
-                  : kind === 'mcp'
-                    ? { mcpMode: 'allowlist' as const, mcpServers: values }
-                    : { toolsetMode: 'allowlist' as const, toolsets: values }),
-              }));
-              autosave.onEdit('instant');
-            }}
-          />
-        </div>
+        {page === 'capabilities' && (
+          <div>
+            {' '}
+            <BotCapabilitySettings
+              expanded={page === 'capabilities'}
+              bot={bot}
+              capabilities={capabilities}
+              skills={selectedSkills}
+              onChange={(kind, values) => {
+                if (kind === 'skill') setSelectedSkills(values);
+                setCapabilities((current) => ({
+                  ...current,
+                  ...(kind === 'skill'
+                    ? { skillMode: 'allowlist' as const }
+                    : kind === 'mcp'
+                      ? { mcpMode: 'allowlist' as const, mcpServers: values }
+                      : { toolsetMode: 'allowlist' as const, toolsets: values }),
+                }));
+                autosave.onEdit('instant');
+              }}
+            />
+          </div>
+        )}
         {page === 'history' ? (
           <BotLifecycleSettings
             bot={bot}

@@ -26,7 +26,7 @@ export function BotCapabilitySettings({
   capabilities,
   skills,
   onChange,
-  expanded = false,
+  expanded,
 }: {
   expanded?: boolean;
   bot: BotProfile;
@@ -39,10 +39,8 @@ export function BotCapabilitySettings({
     key: '',
     entries: {},
   });
-  const [open, setOpen] = useState(expanded);
-  useEffect(() => {
-    if (expanded) setOpen(true);
-  }, [expanded]);
+  const [localOpen, setOpen] = useState(false);
+  const open = expanded ?? localOpen;
   const [revision, setRevision] = useState(0);
   const requestRef = useRef(0);
   const [busy, setBusy] = useState(false);
@@ -181,10 +179,10 @@ export function BotCapabilitySettings({
   return (
     <details
       data-testid="bot-capability-editor"
-      open={expanded || undefined}
+      open={open}
       className="group border-t border-[var(--border-default)] pt-3"
       onToggle={(event) => {
-        setOpen(event.currentTarget.open);
+        if (expanded === undefined) setOpen(event.currentTarget.open);
       }}
     >
       <summary

@@ -34,7 +34,9 @@ export async function restartBotRuntime(
     await Promise.race([operation, timeout]);
   } finally {
     clearTimeout(timer);
-    // If the deadline won, the original close keeps its workspace-preservation
-    // scope until it settles. assertCurrent forbids a late handoff/DB rebuild.
+    // If the deadline wins, withSessionRestartLock keeps the session fenced
+    // until rebuild settles. New work fails promptly; no watchdog can admit
+    // a replacement while native close still runs. assertCurrent forbids
+    // a late handoff/DB rebuild.
   }
 }

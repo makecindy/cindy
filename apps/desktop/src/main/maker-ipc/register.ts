@@ -104,6 +104,7 @@ import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js
 import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 
 import {
+  applyWithVerifiedModelWindow,
   buildDeferredRuntimeSelectionProfile,
   nextDeferredModelWindowRetry,
   planUserRuntimeModelSwitch,
@@ -2870,6 +2871,9 @@ import {
   sendToSessionLocks,
   trackSendToSessionLockRun,
   withSendToSessionLock,
+  withSessionRestartLock,
+  waitForSendToSessionLock,
+  assertSessionNotRestarting,
 } from './sendToSessionLock.js';
 export { acquireSendToSessionLock, hasSendToSessionLock, withSendToSessionLock };
 
@@ -8699,8 +8703,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     }
 
+    assertSessionNotRestarting(targetSessionId);
     const prev = sendToSessionLocks.get(targetSessionId);
-    const waitPrev = prev ? prev.catch(() => undefined) : Promise.resolve();
+    const waitPrev = waitForSendToSessionLock(targetSessionId, prev);
     // lockStage 只为 sendToSessionLock 的泄漏告警服务:标出临界区内当前挂在哪个
     // await 上,日志即可直接定位挂点(PR #2829 QA:回执 deliver 挂死 64 分钟零线索)。
     let lockStage = 'resolve-session-meta+row';
@@ -9320,9 +9325,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           recovery.cancelRecovery(id);
           // Cancel sends/retries before waiting for their serialization lock.
           // Preserve queued user input, paused until the user explicitly resumes it.
-          agentInputCoordinatorHolder?.stop(id, { keepQueue: true, pauseQueue: true });
+          agentInputCoordinatorHolder?.stop(id, { keepQueue: true, pauseQueue: true, resumeOnUserInput: true });
         },
-        withSessionLock: withSendToSessionLock,
+        withSessionLock: withSessionRestartLock,
         rebuild: async (id, assertCurrent, signal) => {
           await pauseGoalBeforeExplicitStop(id);
           assertCurrent();
@@ -10932,12 +10937,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             providerId: route.providerId, effort: route.effort, fastMode: route.fastMode,
           });
         } else {
-          const result = await applySessionRuntimeSelection(sessionId, route.model, route.providerId,
-            { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode },
-            { source: 'user', deferWhileRunning: true, sessionLockHeld: true });
-          if (runtimeSelectionRequiresModelWindowConfirmation(result)) {
-            throwIpcError('PRECONDITION_FAILED', 'Model context window confirmation is required');
-          }
+          await applyWithVerifiedModelWindow((confirmedContextWindow) =>
+            applySessionRuntimeSelection(sessionId, route.model, route.providerId,
+              { effort: route.effort as SessionRuntimeProfile['effort'], fastMode: route.fastMode,
+                ...(confirmedContextWindow === undefined ? {} : { confirmedContextWindow }) },
+              { source: 'user', deferWhileRunning: true, sessionLockHeld: true }));
         }
         // Consume the same model/Harness intent as the normal send path. Its
         // verified window protection and history handoff also apply here; a Bot

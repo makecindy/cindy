@@ -712,8 +712,8 @@ describe('same-Bot capability updates while editing settings', () => {
     await waitFor(() => expect(mocks.updateBotProfile).toHaveBeenLastCalledWith('bot-1', { capabilities: { mcpServers: [] }, capabilityBaseline: { mcpServers: ['events'] } }));
     if (change === 'unavailable') expect(checkbox.disabled).toBe(true);
     else expect(screen.queryByRole('checkbox', { name: /events/ })).toBeNull();
-    const details = screen.getByTestId('bot-capability-editor') as HTMLDetailsElement;
-    await act(async () => { details.open = false; fireEvent(details, new Event('toggle')); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' })); });
+    expect(screen.queryByTestId('bot-capability-editor')).toBeNull();
     expect(off).toHaveBeenCalledOnce();
   });
 
@@ -729,8 +729,8 @@ describe('same-Bot capability updates while editing settings', () => {
     renderSettings();
     await openCapabilities();
     expect(screen.getByRole('checkbox', { name: 'old-skill' })).toBeTruthy();
-    const details = screen.getByTestId('bot-capability-editor') as HTMLDetailsElement;
-    await act(async () => { details.open = false; fireEvent(details, new Event('toggle')); });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'bots.settingsBack' })); });
+    expect(screen.queryByTestId('bot-capability-editor')).toBeNull();
     disk = ['new-skill'];
     await openCapabilities();
     expect(screen.queryByRole('checkbox', { name: 'old-skill' })).toBeNull();
