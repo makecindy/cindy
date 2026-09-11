@@ -301,3 +301,25 @@ it('settles an authoritative echo that arrives before the apply response', async
   expect(h.state.worktreePreferenceSaving).toBe(false);
   expect(h.state.worktreePreferenceAuthorityUnknown).toBe(false);
 });
+
+it.each(['writing', 'reconciling'])('retains device A uncertainty when device B replaces a %s write', async (phase) => {
+  const h = mount(false);
+  act(() => h.state.toggleWorktree());
+  if (phase === 'reconciling') await act(async () => { h.write.resolve(); });
+  const secondWrite = deferred<void>();
+  h.bindings.maker.applyNewMakerWorktreePref = vi.fn(() => secondWrite.promise);
+  h.bindings.selectedDeviceId = `other-${h.deviceId}`;
+  h.render();
+  act(() => h.state.toggleWorktree());
+  h.bindings.selectedDeviceId = h.deviceId;
+  h.render();
+  expect(h.state.worktreeEnabled).toBe(true);
+  expect(h.state.worktreePreferenceAuthorityUnknown).toBe(true);
+  expect(h.state.create()?.enabled).toBe(true);
+  expect(h.state.createGoalSession()?.enabled).toBe(true);
+  await act(async () => { h.write.resolve(); });
+  expect(h.state.worktreePreferenceAuthorityUnknown).toBe(true);
+  await act(async () => { remoteSessionStore.setNewMakerWorktreePreference(h.deviceId, true); });
+  expect(h.state.worktreePreferenceAuthorityUnknown).toBe(false);
+  expect(h.state.worktreeEnabled).toBe(true);
+});

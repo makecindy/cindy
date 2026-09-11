@@ -2928,6 +2928,16 @@ export default function NewRemoteSessionScreen() {
       revisionAtStart: preferenceRevisionAtStart,
       status: 'writing',
     };
+    // Switching devices may replace a write that is still awaiting ACK/echo.
+    // Preserve its uncertainty in the existing per-device reconciliation map.
+    const previousTransaction = worktreePreferenceTransactionRef.current;
+    if (previousTransaction && previousTransaction.deviceId !== targetDeviceId) {
+      worktreePreferenceAuthorityUnknownByDeviceRef.current.set(previousTransaction.deviceId, {
+        enabled: previousTransaction.enabled,
+        revisionAtStart: previousTransaction.revisionAtStart,
+      });
+      setWorktreePreferenceAuthorityVersion((value) => value + 1);
+    }
     worktreePreferenceTransactionRef.current = transaction;
     // Serialize preference writes; Create/Goal use the synchronous draft choice above.
     worktreePreferenceWriteTargetRef.current = targetDeviceId;
