@@ -5566,7 +5566,7 @@
       "title": "Cindy Make",
       "openToolsDir": "도구 폴더 열기",
       "source": {
-        "title": "소스 상태",
+        "title": "개인 버전 소스",
         "openDir": "소스 폴더 열기",
         "prepare": "소스 준비",
         "reset": "소스 정리",
@@ -5587,10 +5587,14 @@
         },
         "resetConfirm": {
           "title": "개인 소스를 정리할까요?",
-          "description": "Cindy가 관리하는 소스 디렉터리만 삭제합니다. 필요하면 나중에 소스를 다시 준비할 수 있습니다.",
+          "description": "Cindy가 관리하는 소스 디렉터리를 삭제합니다. 개인 버전 브랜치와 아직 패키징하지 않은 모든 변경도 함께 삭제됩니다. 필요하면 나중에 소스를 다시 준비할 수 있습니다.",
           "confirm": "소스 정리",
           "cancel": "취소"
-        }
+        },
+        "branch": "개인 버전 브랜치",
+        "baseCommit": "기준선",
+        "description": "개인 버전 Cindy의 소스 사본입니다. 개인 버전을 만들 때마다 개인 버전 브랜치에서 독립 작업 디렉터리를 만들고, 테스트를 통과한 변경을 여기로 병합합니다. 이 디렉터리 자체를 직접 수정하지는 않습니다.",
+        "stop": "중지"
       },
       "description": "아래 카드에서 이 컴퓨터의 환경을 확인하고 필요한 휴대용 도구를 설치할 수 있습니다. 네이티브 컴파일 도구가 없으면 공식 설치 안내를 표시합니다.",
       "checking": "환경 확인 중…",
@@ -12428,7 +12432,8 @@
         "checking": "Git 및 소스 확인 중",
         "cloning": "소스 다운로드 중",
         "fetching": "저장소 새로 고침 중",
-        "checkingOut": "버전 전환 중"
+        "checkingOut": "버전 전환 중",
+        "preparingBranch": "개인 버전 브랜치 준비 중"
       },
       "ready": "소스가 준비되었습니다",
       "failed": "소스 준비 실패",
@@ -12436,12 +12441,14 @@
       "errors": {
         "unsupportedVersion": "현재 버전 형식은 지원되지 않습니다.",
         "tagNotFound": "현재 버전에 필요한 태그를 찾지 못했습니다.",
-        "dirty": "소스 디렉터리에 커밋되지 않은 변경이 있습니다.",
+        "dirty": "소스 디렉터리에 커밋되지 않은 변경이 있습니다. 설정�� Cindy Make에서 소스를 정리한 뒤 다시 시도하세요.",
         "gitFailed": "Git으로 소스를 준비하지 못했습니다.",
         "cancelled": "소스 준비가 중지되었습니다.",
         "localCommits": "소스에 업스트림에 포함되지 않은 로컬 커밋 또는 스태시가 있습니다. 정리하기 전에 보관하거나 백업하세요.",
         "environmentNotReady": "빌드 환경이 준비되지 않았습니다. 필요한 도구를 확인하세요.",
-        "gitUnavailable": "Git을 사용할 수 없습니다. 환경 카드에서 Git을 확인하고 설치한 후 다시 시도하세요."
+        "gitUnavailable": "Git을 사용할 수 없습니다. 환경 카드에서 Git을 확인하고 설치한 후 다시 시도하세요.",
+        "installFailed": "의존성 설치에 실패했습니다. 다시 시도하세요.",
+        "locked": "일부 파일이 다른 프로그램에서 사용 중이라 삭제할 수 없습니다. 해당 프로그램을 닫거나 Cindy를 다시 시작한 뒤 재시도하세요."
       },
       "gitProgress": {
         "counting": "개체 수 계산 중",
@@ -12450,7 +12457,9 @@
         "resolving": "델타 분석 중",
         "checkingOut": "파일 업데이트 중"
       },
-      "missing": "아직 소스가 준비되지 않았습니다"
+      "missing": "아직 소스가 준비되지 않았습니다",
+      "personalBranch": "개인 버전 브랜치 {{branch}}",
+      "baseCommit": "{{ref}} {{commit}} 기준"
     },
     "code": {
       "starting": "개인 버전 작업을 여는 중",
@@ -12458,7 +12467,18 @@
       "failed": "개인 버전 작업을 만들 수 없습니다",
       "start": "개인 버전 만들기",
       "open": "개인 버전 작업 열기",
-      "sendFailed": "요청을 보내지 못했습니다. 개인 버전 작업을 열어 다시 시도하세요"
+      "sendFailed": "요청을 보내지 못했습니다. 개인 버전 작업을 열어 다시 시도하세요",
+      "preparingWorkspace": "독립 작업 디렉터리를 만들고 의존성을 설치하는 중",
+      "workspace": "작업 디렉터리 {{branch}}"
+    },
+    "complete": {
+      "title": "개인 버전 수정이 완료되었습니다",
+      "description": "에이전트가 요청대로 소스 수정을 마쳤습니다.",
+      "stepCode": "소스 수정",
+      "changedFiles_one": "{{count}}개 파일 변경됨",
+      "changedFiles_other": "{{count}}개 파일 변경됨",
+      "commit": "{{commit}} 기준",
+      "branch": "{{branch}}에 커밋됨"
     }
   }
 }

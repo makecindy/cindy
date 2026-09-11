@@ -54,6 +54,15 @@ describe('/cindy-make-doctor command', () => {
     await expect(
       command.execute({ senderWebContentsId: 2, doctorRunId: 'second' }),
     ).rejects.toThrow('already running');
+    // A source-only run is global and may coexist with tool provisioning: it is
+    // not rejected as busy but runs to its own outcome (unavailable here, so failed).
+    await expect(
+      command.execute({
+        senderWebContentsId: 2,
+        doctorRunId: 'source',
+        makeAction: 'prepare-source',
+      }),
+    ).resolves.toMatchObject({ doctorReport: { runId: 'source', status: 'failed' } });
     finish({ runId: 'first', mode: 'prepare', status: 'completed', checks: [] } as never);
     await expect(pending).resolves.toMatchObject({ doctorReport: { mode: 'prepare' } });
   });

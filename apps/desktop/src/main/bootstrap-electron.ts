@@ -310,7 +310,16 @@ import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
 import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
 import { openMakeSourceDirectory, openMakeToolsDirectory } from './cindy-make/toolsDirectory';
-import { makeSourceRoot, readCindySourceStatus } from './cindy-make/sourcePreparation.js';
+import {
+  cancelCindySourcePreparation,
+  makeSourceRoot,
+  readCurrentCindySourceStatus,
+  subscribeCindySourceStatus,
+} from './cindy-make/sourcePreparation.js';
+import { broadcastCindyMakeSourceStatus } from './cindy-make/sourceStatusBroadcast.js';
+import { CINDY_MAKE_RUN_ID_PATTERN } from './cindy-make/sourcePaths.js';
+import { prepareCindyMakeWorkspace } from './cindy-make/taskWorkspace.js';
+import { createMakeToolchainEnvironment } from './cindy-make/toolchainEnvironment.js';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
 import {
   collectDatabaseSizeWarningStatus,
@@ -7317,7 +7326,13 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('app:get-cindy-make-source-status', async (event) => {
     assertTrustedAppRendererEvent(event);
-    return readCindySourceStatus(makeSourceRoot(app.getPath('userData')));
+    return readCurrentCindySourceStatus(makeSourceRoot(app.getPath('userData')));
+  });
+  // 源码准备是全局单例:进度广播给所有窗口,任意窗口都能停止它。
+  subscribeCindySourceStatus(broadcastCindyMakeSourceStatus);
+  ipcMain.handle('app:cancel-cindy-make-source', async (event): Promise<{ success: boolean }> => {
+    assertTrustedAppRendererEvent(event);
+    return { success: cancelCindySourcePreparation() };
   });
 
   ipcMain.handle(
@@ -7329,6 +7344,37 @@ const registerIpcHandlers = () => {
       });
     },
   );
+
+  // 个人版制作任务的独立开发目录:从个人版基线建任务分支 + worktree 并安装依赖。
+  // 只认 runId 形状;路径全部由 main 从 userData 派生,renderer 只拿回结果。
+  ipcMain.handle('app:prepare-cindy-make-workspace', async (event, rawRunId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof rawRunId !== 'string' || !CINDY_MAKE_RUN_ID_PATTERN.test(rawRunId)) {
+      throwIpcError('INVALID_PARAMS', 'invalid Cindy Make run id');
+    }
+    const userData = app.getPath('userData');
+    const env = await createMakeToolchainEnvironment(userData);
+    try {
+      return await prepareCindyMakeWorkspace(userData, rawRunId, AbortSignal.timeout(20 * 60_000), {
+        processEnvironment: env.processEnvironment(),
+      });
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      createSchedulerLogger('cindy-make').warn('workspace preparation failed', {
+        runId: rawRunId,
+        code,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError(
+        code === 'environmentNotReady' ? 'PRECONDITION_FAILED' : 'INTERNAL',
+        code === 'installFailed'
+          ? 'Cindy Make workspace dependency install failed'
+          : code === 'environmentNotReady'
+            ? 'Cindy Make source is not prepared'
+            : 'Cindy Make workspace preparation failed',
+      );
+    }
+  });
 
   // ── Native clipboard helpers (media:copy-to-clipboard) ──
   //

@@ -35,7 +35,10 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
     options?: { clearOnly?: boolean },
   ) => Promise<MakeDoctorReport>;
 }): DesktopCommandDefinition {
-  const active = new Map<string, { sender: number; controller: AbortController }>();
+  const active = new Map<
+    string,
+    { sender: number; controller: AbortController; source: boolean }
+  >();
   const name = deps.name ?? 'cindy-make-doctor';
   return {
     name,
@@ -79,12 +82,22 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
       if (ctx.doctorAction !== undefined) {
         if (ctx.doctorAction !== 'cancel') throwIpcError('INVALID_PARAMS', 'Invalid doctor action');
         const run = active.get(runId);
-        if (run && run.sender !== ctx.senderWebContentsId)
+        // Source operations are global (Settings and the workflow share one job), so
+        // any trusted window may stop them; diagnostics stay private to their window.
+        if (run && !run.source && run.sender !== ctx.senderWebContentsId)
           throwIpcError('INVALID_PARAMS', 'Doctor run belongs to another window');
         run?.controller.abort();
         return { success: true };
       }
-      if (active.has(runId) || active.size >= (name === 'cindy-make' ? 1 : 4))
+      const sourceRun = ctx.makeAction !== undefined;
+      // Tool provisioning must not run twice at once. Source-only runs may start
+      // alongside it: sourcePreparation attaches them to one shared job.
+      const toolRuns = [...active.values()].filter((run) => !run.source).length;
+      if (
+        active.has(runId) ||
+        active.size >= 4 ||
+        (name === 'cindy-make' && !sourceRun && toolRuns >= 1)
+      )
         throwIpcError('DEVICE_BUSY', 'Doctor is already running');
       const controller = new AbortController();
       // Presence (including empty text) distinguishes the chat workflow from Settings preparation.
@@ -94,7 +107,7 @@ export function createMakeDoctorCommand<T extends MakeDoctorEnvironment>(deps: {
         () => controller.abort('timeout'),
         name === 'cindy-make' ? 20 * 60_000 : 60_000,
       );
-      active.set(runId, { sender: ctx.senderWebContentsId!, controller });
+      active.set(runId, { sender: ctx.senderWebContentsId!, controller, source: sourceRun });
       let latest: MakeDoctorReport = {
         ...initialDoctorReport(runId, '', ''),
         mode: name === 'cindy-make' ? 'prepare' : 'check',

@@ -180,6 +180,12 @@ export interface CcMeta {
    */
   goalNotice?: 'usage-resumed' | 'capacity-resumed';
 
+  /**
+   * Host-side marker:个人版制作任务里 Agent 调用 cindy_make.report_complete 后落的
+   * 完成记录(role:'assistant' + 空 content)。renderer 渲成完成卡片,不进 prompt。
+   */
+  cindyMakeCompletion?: import('../../shared/cindyMakeSession').CindyMakeCompletionMeta;
+
   /** /review 创建的独立只读审查任务及其来源卡状态。 */
   reviewRun?: ReviewRunMeta;
 

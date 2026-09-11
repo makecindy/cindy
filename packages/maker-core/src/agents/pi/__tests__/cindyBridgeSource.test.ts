@@ -420,6 +420,19 @@ describe('cindy-bridge extension source', () => {
     expect((await run).details).toEqual({ answers: { 'Continue?': 'No' }, cancelled: false });
   });
 
+  it('returns a typed answer outside the options as a real answer, not a cancel (#4273)', async () => {
+    const tool = loadQuestionTool();
+    const result = await tool.execute('q', {
+      questions: [
+        { question: 'Continue?', options: ['Yes', 'No'] },
+        { question: 'Which color?', options: ['Red', 'Blue'] },
+      ],
+    }, undefined, undefined, {
+      ui: { select: async (_title: string, options: string[]) => (options.includes('Yes') ? 'No' : 'teal') },
+    });
+    expect(result.details).toEqual({ answers: { 'Continue?': 'No', 'Which color?': 'teal' }, cancelled: false });
+  });
+
   it('reports cancellation without fabricating a choice and validates all questions before showing UI', async () => {
     const tool = loadQuestionTool();
     const ctx = { ui: { input: async () => undefined } };

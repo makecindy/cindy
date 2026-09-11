@@ -8,6 +8,7 @@ import { sessionsStore } from './sessionsStore';
 import { startMakeDoctor } from './cindyMakeDoctor';
 import type { MakeDoctorReport, MakeUpstreamDecision } from '../../shared/cindyMakeDoctor';
 import type { CindyMakeInvocation } from './cindyMakeCommand';
+import { CINDY_MAKE_SESSION_SOURCE } from '../../shared/cindyMakeSession';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { plainTextToTiptapDoc, saveDraft } from './composerDraftStore';
 
@@ -58,9 +59,17 @@ export function startMakeCodeSession(sessionId: string, runId: string): Promise<
       const profile = origin.runtimeEffective;
       const agentKind =
         profile?.agentKind === 'claude-code' ? 'cc' : (profile?.agentKind ?? origin.agentKind);
+      // Each task works in its own worktree branched from the personal baseline;
+      // the managed checkout itself is never a task's working directory.
+      update({ codeStartPhase: 'workspace' });
+      const workspace = await window.electronAPI.prepareCindyMakeWorkspace(runId);
+      if (!isCurrent()) return null;
+      update({ codeStartPhase: 'session', codeWorkspace: workspace });
       const session = await sessionService.create({
-        workingDir: source.path,
+        workingDir: workspace.path,
         workspaceKind: 'project',
+        // Persisted purpose: Main hydrates the cindy_make tool and task note from it.
+        source: CINDY_MAKE_SESSION_SOURCE,
         agentKind,
         model: profile?.model ?? origin.model,
         effort: profile ? (profile.effort ?? '') : origin.effort,
@@ -86,18 +95,18 @@ export function startMakeCodeSession(sessionId: string, runId: string): Promise<
         session.model,
         session.effort,
         session.permissionMode,
-        source.path,
+        workspace.path,
       );
       if (!accepted && isCurrent()) {
         saveDraft(session.id, { text: plainTextToTiptapDoc(request), attachments: [] });
-        update({ codeSessionError: true });
+        update({ codeSessionError: true, codeStartPhase: undefined });
       }
       return isCurrent() ? session.id : null;
     } catch {
       if (createdId && isCurrent()) {
         saveDraft(createdId, { text: plainTextToTiptapDoc(request), attachments: [] });
       }
-      update({ codeSessionError: true });
+      update({ codeSessionError: true, codeStartPhase: undefined });
       return isCurrent() ? createdId : null;
     }
   };

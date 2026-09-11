@@ -5568,7 +5568,7 @@
       "title": "Cindy Make",
       "openToolsDir": "Open tools folder",
       "source": {
-        "title": "Source checkout",
+        "title": "Personal build source",
         "openDir": "Open source folder",
         "prepare": "Prepare source",
         "reset": "Clear source",
@@ -5589,10 +5589,14 @@
         },
         "resetConfirm": {
           "title": "Clear personal source?",
-          "description": "This removes the managed checkout only. You can prepare the source again afterward.",
+          "description": "This removes the managed checkout, including the personal branch and every change not yet packaged. You can prepare the source again afterward.",
           "confirm": "Clear source",
           "cancel": "Cancel"
-        }
+        },
+        "branch": "Personal branch",
+        "baseCommit": "Baseline",
+        "description": "The source copy behind your personal Cindy build. Each build task gets its own workspace branched from the personal branch, and tested changes merge back; this folder itself is never edited directly.",
+        "stop": "Stop"
       },
       "description": "The card below checks this computer and lets you install missing portable tools. Native compiler prerequisites show an official installation guide.",
       "checking": "Checking environment…",
@@ -12445,7 +12449,8 @@
         "checking": "Checking Git and source",
         "cloning": "Downloading source",
         "fetching": "Refreshing repository",
-        "checkingOut": "Selecting version"
+        "checkingOut": "Selecting version",
+        "preparingBranch": "Preparing personal branch"
       },
       "ready": "Source is ready",
       "failed": "Source preparation failed",
@@ -12453,12 +12458,14 @@
       "errors": {
         "unsupportedVersion": "This build version is not supported.",
         "tagNotFound": "The required version tag was not found.",
-        "dirty": "The managed source folder has local changes. Commit or remove them before retrying.",
+        "dirty": "The source checkout has uncommitted changes. Clear the source under Settings → Cindy Make and retry.",
         "gitFailed": "Git could not prepare the source checkout.",
         "cancelled": "Source preparation stopped.",
         "localCommits": "The source contains local commits or stashes not included upstream. Keep or back them up before clearing.",
         "environmentNotReady": "The build environment is not ready. Check the required tools.",
-        "gitUnavailable": "Git is unavailable. Check and install Git in the environment card, then retry."
+        "gitUnavailable": "Git is unavailable. Check and install Git in the environment card, then retry.",
+        "installFailed": "Dependency install failed. Please retry.",
+        "locked": "Some files are in use by another program and could not be removed. Close it or restart Cindy, then retry."
       },
       "gitProgress": {
         "counting": "Counting objects",
@@ -12467,7 +12474,9 @@
         "resolving": "Resolving deltas",
         "checkingOut": "Updating files"
       },
-      "missing": "No source is prepared"
+      "missing": "No source is prepared",
+      "personalBranch": "Personal branch {{branch}}",
+      "baseCommit": "Based on {{ref}} {{commit}}"
     },
     "code": {
       "starting": "Opening personal build task",
@@ -12475,7 +12484,18 @@
       "failed": "Could not create personal build task",
       "start": "Start personal build",
       "open": "Open personal build task",
-      "sendFailed": "Could not send the request to the personal build task"
+      "sendFailed": "Could not send the request to the personal build task",
+      "preparingWorkspace": "Creating an isolated workspace and installing dependencies",
+      "workspace": "Workspace {{branch}}"
+    },
+    "complete": {
+      "title": "Personal build changes complete",
+      "description": "The agent has finished changing the source as you asked.",
+      "stepCode": "Change source",
+      "changedFiles_one": "{{count}} file changed",
+      "changedFiles_other": "{{count}} files changed",
+      "commit": "Based on {{commit}}",
+      "branch": "Committed to {{branch}}"
     }
   }
 }

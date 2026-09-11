@@ -366,6 +366,14 @@ export interface PiExtraSpawnConfigContext {
 
 export type CodexSubagentRoutingProfile = 'default' | 'configured' | 'oauth-default' | 'smart';
 
+/**
+ * Session facts the host may consult when building per-thread MCP config
+ * overrides (e.g. hiding a session-purpose server from ordinary threads).
+ */
+export interface CodexSessionMcpConfigInput {
+  vendorOptions?: Record<string, unknown>;
+}
+
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
@@ -403,7 +411,10 @@ export interface CodexExtraSpawnConfig {
    * config only supplies the unbound base URL; thread/start|resume must add the
    * opaque route identity for the concrete Session using this callback.
    */
-  buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
+  buildSessionMcpConfig?: (
+    sessionInstanceId: string,
+    session?: CodexSessionMcpConfigInput,
+  ) => Record<string, unknown>;
   codexProxyActive?: boolean;
   /**
    * ChatGPT 订阅直连的内部 OpenAI transport identity，仅 oauth-bearer spawn 下发。

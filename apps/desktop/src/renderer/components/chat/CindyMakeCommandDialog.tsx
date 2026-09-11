@@ -64,7 +64,7 @@ export function CindyMakeCommandDialog({
         <Dialog.Content
           ref={contentRef}
           tabIndex={-1}
-          className="fixed left-1/2 top-1/2 z-[10001] max-h-[min(88vh,760px)] w-[min(720px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] shadow-xl outline-none"
+          className="fixed left-1/2 top-1/2 z-[10001] max-h-[min(88vh,860px)] w-[min(720px,calc(100vw-32px))] -translate-x-1/2 -translate-y-1/2 overflow-y-auto overscroll-contain rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] shadow-xl outline-none"
           onOpenAutoFocus={(event) => {
             event.preventDefault();
             contentRef.current?.focus();

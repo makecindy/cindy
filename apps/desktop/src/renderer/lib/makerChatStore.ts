@@ -503,6 +503,8 @@ export interface ChatMessage {
     | 'cmd'
     | 'goal-complete'
     | 'goal-resumed'
+    /** 个人版制作任务的完成记录,由持久化的 agentMeta.cindyMakeCompletion 派生,重开仍在。 */
+    | 'cindy-make-complete'
     | 'learn'
     | 'review'
     | 'auto-resume'
@@ -17546,6 +17548,17 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         isStreaming: false,
         systemCardType: 'goal-complete' as const,
         systemCardData: { ...m.agentMeta.goalCompletion },
+      };
+    }
+    // 个人版制作任务完成记录:同 goal-complete,从持久 agentMeta 派生成完成卡片。
+    if (m.role === 'assistant' && m.agentMeta?.cindyMakeCompletion) {
+      return {
+        clientId: m.clientId,
+        role: m.role,
+        content: '',
+        isStreaming: false,
+        systemCardType: 'cindy-make-complete' as const,
+        systemCardData: { ...m.agentMeta.cindyMakeCompletion },
       };
     }
     // /goal 提示记录(usageLimited 到点自动续跑)→ 'goal-resumed' system card,同上派生。

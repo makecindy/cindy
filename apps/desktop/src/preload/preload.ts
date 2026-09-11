@@ -3811,6 +3811,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   openCindyMakeSourceDir: (): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('app:open-cindy-make-source-dir'),
 
+  // Global source preparation state: pushed to every window, whoever started it.
+  onCindyMakeSourceStatus: (
+    listener: (status: import('../shared/cindyMakeDoctor').MakeSourceStatus) => void,
+  ): (() => void) => {
+    const wrapped = (
+      _event: Electron.IpcRendererEvent,
+      status: import('../shared/cindyMakeDoctor').MakeSourceStatus,
+    ) => listener(status);
+    ipcRenderer.on('cindy-make:source-status', wrapped);
+    return () => ipcRenderer.removeListener('cindy-make:source-status', wrapped);
+  },
+  cancelCindyMakeSource: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('app:cancel-cindy-make-source'),
+
+  // Create the per-task worktree (branch off the personal baseline + install deps).
+  prepareCindyMakeWorkspace: (
+    runId: string,
+  ): Promise<import('../shared/cindyMakeDoctor').MakeTaskWorkspace> =>
+    ipcRenderer.invoke('app:prepare-cindy-make-workspace', runId),
+
   // ── 客户端日志上报(Settings → About)──
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
   // 判定,renderer 只消费结论。上传编号由 main 生成并回传,用户报障时口述给我们。

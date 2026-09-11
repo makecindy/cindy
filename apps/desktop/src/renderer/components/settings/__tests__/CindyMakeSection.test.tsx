@@ -20,11 +20,19 @@ type Result = Awaited<ReturnType<NonNullable<Api>['executeDesktopCommand']>>;
 
 function harness() {
   const listeners = new Set<Listener>();
+  const sourceListeners = new Set<(status: MakeSourceStatus) => void>();
   const runs = new Map<string, (result: Result) => void>();
   const api = {
     openCindyMakeToolsDir: vi.fn(async () => ({ success: true })),
     getCindyMakeSourceStatus: vi.fn(async () => undefined as MakeSourceStatus | undefined),
     openCindyMakeSourceDir: vi.fn(async () => ({ success: true })),
+    onCindyMakeSourceStatus: (listener: (status: MakeSourceStatus) => void) => {
+      sourceListeners.add(listener);
+      return () => {
+        sourceListeners.delete(listener);
+      };
+    },
+    cancelCindyMakeSource: vi.fn(async () => ({ success: true })),
     onDesktopCommandTriggered: (listener: Listener) => {
       listeners.add(listener);
       return () => {
@@ -43,8 +51,16 @@ function harness() {
     openCindyMakeToolsDir: api.openCindyMakeToolsDir,
     getCindyMakeSourceStatus: api.getCindyMakeSourceStatus,
     openCindyMakeSourceDir: api.openCindyMakeSourceDir,
+    onCindyMakeSourceStatus: api.onCindyMakeSourceStatus,
+    cancelCindyMakeSource: api.cancelCindyMakeSource,
   });
   const starts = () => api.executeDesktopCommand.mock.calls.filter(([, ctx]) => !ctx.doctorAction);
+  /** Main's global source broadcast, whichever window or workflow drives the job. */
+  const pushSource = async (status: MakeSourceStatus) => {
+    await act(async () => {
+      for (const listener of sourceListeners) listener(status);
+    });
+  };
   const complete = async (
     runId: string,
     version: string,
@@ -61,7 +77,7 @@ function harness() {
       runs.get(runId)!({ success: true, doctorReport: report });
     });
   };
-  return { api, starts, complete, listeners };
+  return { api, starts, complete, listeners, pushSource };
 }
 
 beforeEach(() => {
@@ -125,6 +141,8 @@ describe('Settings > Cindy Make', () => {
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: h.api.openCindyMakeSourceDir,
+      onCindyMakeSourceStatus: h.api.onCindyMakeSourceStatus,
+      cancelCindyMakeSource: h.api.cancelCindyMakeSource,
     });
     render(<CindyMakeSection />);
     await waitFor(() => expect(screen.getByText('0123456789abcdef')).toBeTruthy());
@@ -150,6 +168,55 @@ describe('Settings > Cindy Make', () => {
     expect(h.api.openCindyMakeSourceDir).toHaveBeenCalledTimes(1);
   });
 
+  it('shows a source job started elsewhere and stops it from Settings', async () => {
+    const h = harness();
+    h.api.getCindyMakeSourceStatus.mockResolvedValue({
+      status: 'preparing',
+      path: 'C:\\managed\\source',
+      ref: 'main',
+      phase: 'cloning',
+    });
+    render(<CindyMakeSection />);
+    const sourceCard = await screen.findByRole('region', {
+      name: 'settings.cindyMake.source.title',
+    });
+    expect(within(sourceCard).getByText(/cindyMake.source.phase.cloning/)).toBeTruthy();
+    expect(within(sourceCard).queryByText('settings.cindyMake.source.prepare')).toBeNull();
+    expect(within(sourceCard).queryByText('settings.cindyMake.source.reset')).toBeNull();
+    fireEvent.click(within(sourceCard).getByText('settings.cindyMake.source.stop'));
+    expect(h.api.cancelCindyMakeSource).toHaveBeenCalledTimes(1);
+    // Settings itself never started a doctor run for this job.
+    expect(h.starts().filter(([name]) => name === 'cindy-make')).toHaveLength(0);
+    await h.pushSource({ status: 'cancelled', path: 'C:\\managed\\source', error: 'cancelled' });
+    expect(within(sourceCard).getByText('settings.cindyMake.source.prepare')).toBeTruthy();
+    expect(within(sourceCard).getByText('settings.cindyMake.source.reset')).toBeTruthy();
+  });
+
+  it('keeps the clear action for a failed checkout so a dirty tree has a way out', async () => {
+    const h = harness();
+    const source: MakeSourceStatus = {
+      status: 'failed',
+      path: 'C:\\Users\\test\\cindy-make\\source',
+      channel: 'dev',
+      version: '0.0.0-dev',
+      ref: 'main',
+      error: 'dirty',
+    };
+    h.api.getCindyMakeSourceStatus = vi.fn(async () => source);
+    vi.stubGlobal('electronAPI', {
+      maker: h.api,
+      openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
+      getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
+      openCindyMakeSourceDir: vi.fn(async () => ({ success: true })),
+      onCindyMakeSourceStatus: h.api.onCindyMakeSourceStatus,
+      cancelCindyMakeSource: h.api.cancelCindyMakeSource,
+    });
+    render(<CindyMakeSection />);
+    await waitFor(() => expect(screen.getByText('cindyMake.source.errors.dirty')).toBeTruthy());
+    const sourceCard = screen.getByRole('region', { name: 'settings.cindyMake.source.title' });
+    expect(within(sourceCard).getByText('settings.cindyMake.source.reset')).toBeTruthy();
+  });
+
   it('prepares missing source and updates an existing source through the shared Make action', async () => {
     const h = harness();
     const source: MakeSourceStatus = {
@@ -162,11 +229,13 @@ describe('Settings > Cindy Make', () => {
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: h.api.openCindyMakeSourceDir,
+      onCindyMakeSourceStatus: h.api.onCindyMakeSourceStatus,
+      cancelCindyMakeSource: h.api.cancelCindyMakeSource,
     });
     render(<CindyMakeSection />);
     await waitFor(() => expect(screen.getByText('settings.cindyMake.source.prepare')).toBeTruthy());
     fireEvent.click(screen.getByText('settings.cindyMake.source.prepare'));
-    expect(screen.getByText('settings.cindyMake.source.preparingAction')).toBeTruthy();
+    expect(screen.getByText('settings.cindyMake.source.stop')).toBeTruthy();
     expect(h.starts()).toHaveLength(2);
     expect(h.starts()[1][0]).toBe('cindy-make');
     expect(h.starts()[1][1].makeAction).toBe('prepare-source');
@@ -179,6 +248,8 @@ describe('Settings > Cindy Make', () => {
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: h.api.openCindyMakeSourceDir,
+      onCindyMakeSourceStatus: h.api.onCindyMakeSourceStatus,
+      cancelCindyMakeSource: h.api.cancelCindyMakeSource,
     });
     render(<CindyMakeSection />);
     await waitFor(() => expect(screen.getByText('settings.cindyMake.source.update')).toBeTruthy());
@@ -203,6 +274,8 @@ describe('Settings > Cindy Make', () => {
       openCindyMakeToolsDir: h.api.openCindyMakeToolsDir,
       getCindyMakeSourceStatus: h.api.getCindyMakeSourceStatus,
       openCindyMakeSourceDir: h.api.openCindyMakeSourceDir,
+      onCindyMakeSourceStatus: h.api.onCindyMakeSourceStatus,
+      cancelCindyMakeSource: h.api.cancelCindyMakeSource,
     });
     render(<CindyMakeSection />);
     await waitFor(() => expect(screen.getByText('settings.cindyMake.source.reset')).toBeTruthy());
@@ -225,41 +298,18 @@ describe('Settings > Cindy Make', () => {
     const previousEnvironment = environmentCard.textContent;
     const sourceCard = screen.getByRole('region', { name: 'settings.cindyMake.source.title' });
     fireEvent.click(within(sourceCard).getByText('settings.cindyMake.source.update'));
-    const runId = h.starts()[1][1].doctorRunId!;
     expect(environmentCard.textContent).toBe(previousEnvironment);
-    const publishSource = async (report: Partial<MakeDoctorReport>) => {
-      await act(async () => {
-        for (const listener of h.listeners)
-          listener({
-            command: 'cindy-make',
-            doctorReport: {
-              runId,
-              platform: 'win32',
-              arch: 'x64',
-              mode: 'prepare',
-              checks: [],
-              status: 'running',
-              ...report,
-            },
-          });
-      });
-    };
-    await publishSource({
-      source: {
-        ...source,
-        status: 'preparing',
-        phase: 'fetching',
-        progress: { stage: 'receiving', percent: 43 },
-      },
+    await h.pushSource({
+      ...source,
+      status: 'preparing',
+      phase: 'fetching',
+      progress: { stage: 'receiving', percent: 43 },
     });
     expect(within(sourceCard).queryByRole('progressbar')).toBeNull();
     expect(within(sourceCard).getByText('cindyMake.source.gitProgress.receiving')).toBeTruthy();
     expect(within(sourceCard).getByText(/cindyMake.source.phase.fetching/)).toBeTruthy();
     expect(environmentCard.textContent).toBe(previousEnvironment);
-    await publishSource({
-      status: 'failed',
-      source: { ...source, status: 'failed', error: 'gitUnavailable' },
-    });
+    await h.pushSource({ ...source, status: 'failed', error: 'gitUnavailable' });
     expect(within(sourceCard).getByText('cindyMake.source.errors.gitUnavailable')).toBeTruthy();
     expect(within(sourceCard).queryByRole('progressbar')).toBeNull();
     expect(environmentCard.textContent).toBe(previousEnvironment);
@@ -271,7 +321,7 @@ describe('Settings > Cindy Make', () => {
         .slice(1)
         .every(([name, ctx]) => name === 'cindy-make' && ctx.makeAction === 'prepare-source'),
     ).toBe(true);
-    expect(within(sourceCard).getByText('settings.cindyMake.source.preparingAction')).toBeTruthy();
+    expect(within(sourceCard).getByText('settings.cindyMake.source.stop')).toBeTruthy();
     expect(environmentCard.textContent).toBe(previousEnvironment);
   });
 
@@ -293,7 +343,7 @@ describe('Settings > Cindy Make', () => {
       within(screen.getByRole('region', { name: 'cindyMakeDoctor.title' })).getByRole('status')
         .textContent,
     ).toContain('cindyMakeDoctor.passed');
-    expect(screen.getByText('settings.cindyMake.source.preparingAction')).toBeTruthy();
+    expect(screen.getByText('settings.cindyMake.source.stop')).toBeTruthy();
     fireEvent.click(screen.getByText('cindyMakeDoctor.recheck'));
     expect(h.starts()).toHaveLength(3);
     expect(h.starts()[2][0]).toBe('cindy-make-doctor');

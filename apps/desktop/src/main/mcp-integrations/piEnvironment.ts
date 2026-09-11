@@ -53,6 +53,10 @@ import {
   readAllowedBuiltinPluginIds,
   readDisabledBuiltinPluginIds,
 } from './codexBuiltinToolPolicy.js';
+import {
+  CINDY_MAKE_MCP_SERVER_NAME,
+  isCindyMakeVendorOptions,
+} from '../../shared/cindyMakeSession.js';
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
 // 直接取 plugins 模块的 registry 单例,不经 maker-host/index.ts —— 后者 import pi-host,
 // 从 mcp-integrations 反向 import 会成环。
@@ -189,6 +193,11 @@ export async function getPiExtraSpawnConfig(
   const capabilityGated = (servers: NonNullable<PiExtraSpawnConfig['mcpBridge']>['servers']) =>
     servers.filter((server) => {
       if (server.name === 'cindy_memory' && sessionCtx?.memoryEnabled !== true) return false;
+      // Cindy Make 个人版工具只给带标记的任务;匿名会话与普通任务一律不见(fail-closed)。
+      if (
+        server.name === CINDY_MAKE_MCP_SERVER_NAME
+        && !isCindyMakeVendorOptions(sessionCtx?.vendorOptions)
+      ) return false;
       if (!isBotMcpServerAllowed(sessionCtx?.botMcpPolicy, server.name)) return false;
       if (!collabEnabled && REMOTE_COLLAB_SERVER_NAMES.has(server.name)) return false;
       // Custom HTTP MCPs are `s.remote` and skip the SSH URL rewriter. Desktop

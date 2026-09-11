@@ -28,6 +28,7 @@ import {
   CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
   CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
 } from '../codexBuiltinToolPolicy.js';
+import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession.js';
 import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
@@ -344,6 +345,32 @@ describe('piEnvironment per-session identity', () => {
 
     expect(config?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
     config?.disposeSessionCtx?.();
+  });
+
+  it('exposes cindy_make only to a Session carrying the Cindy Make marker', async () => {
+    const providers = [makeProvider('cindy_make'), makeProvider('custom_probe')];
+    const ordinary = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-ordinary',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    expect(ordinary?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
+    ordinary?.disposeSessionCtx?.();
+
+    const anonymous = await getPiExtraSpawnConfig(providers, noopLogger());
+    expect(anonymous?.mcpBridge?.servers.map((server) => server.name)).toEqual(['custom_probe']);
+    anonymous?.disposeSessionCtx?.();
+
+    const make = await getPiExtraSpawnConfig(providers, noopLogger(), {
+      sessionId: 'pi-make',
+      workingDir: '/cindy-make/source',
+      vendorOptions: { [CINDY_MAKE_VENDOR_OPTION_KEY]: true },
+    });
+    expect(make?.mcpBridge?.servers.map((server) => server.name)).toEqual([
+      'cindy_make',
+      'custom_probe',
+    ]);
+    make?.disposeSessionCtx?.();
   });
 
   it('omits a stable built-in server when the frozen Bot Toolset disables it', async () => {

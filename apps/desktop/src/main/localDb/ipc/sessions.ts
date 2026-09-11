@@ -69,6 +69,7 @@ import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from '../agentIslandSessionPatch';
@@ -1299,18 +1300,18 @@ export function registerSessionIpc(
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(bodyObj.orcaRole)}`);
     }
-    if (bodyObj.source !== undefined) {
-      throwIpcError(
-        'UNSUPPORTED_CAPABILITY',
-        'Bot task creation is only available through the Bot lifecycle service',
-      );
-    }
     const workspaceKind =
       (createBody?.workspaceKind as 'project' | 'dialogue' | undefined) ?? 'project';
     const explicitWorkingDir =
       normalizeWorkingDirForStorage(
         typeof createBody?.workingDir === 'string' ? createBody.workingDir : null,
       ) ?? undefined;
+    assertRendererSessionSourceAllowed({
+      source: bodyObj.source,
+      workingDir: explicitWorkingDir,
+      remoteHostId: createBody?.remoteHostId,
+      userData: app.getPath('userData'),
+    });
     const workingDir =
       workspaceKind === 'dialogue' && !explicitWorkingDir
         ? ensureDialogueWorkspaceDir(id, now)

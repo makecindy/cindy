@@ -26,7 +26,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type { Logger } from '../../../interfaces/logger.js';
-import type { CodexSubagentRoutingProfile } from '../../base-agent.js';
+import type { CodexSessionMcpConfigInput, CodexSubagentRoutingProfile } from '../../base-agent.js';
 import { AppServerClient } from './client.js';
 import type { Transport } from './transport.js';
 import {
@@ -287,7 +287,10 @@ export interface AppServerHostOptions {
     responseModels: readonly string[];
   }>;
   /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
-  buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
+  buildSessionMcpConfig?: (
+    sessionInstanceId: string,
+    session?: CodexSessionMcpConfigInput,
+  ) => Record<string, unknown>;
   /** Cindy-side fallback used only when a subagent's actual model is not reported. */
   subagentModelFallback?: string;
   /** Frozen provider/model/effort identity for the configured locked subagent route. */
@@ -512,9 +515,12 @@ export class AppServerHost {
    * Anonymous/legacy callers keep the spawn-level unbound URLs, which preserves
    * ordinary MCP compatibility while permission-sensitive tools fail closed.
    */
-  getSessionMcpConfig(sessionInstanceId?: string): Record<string, unknown> {
+  getSessionMcpConfig(
+    sessionInstanceId?: string,
+    session?: CodexSessionMcpConfigInput,
+  ): Record<string, unknown> {
     if (!sessionInstanceId || !this.opts.buildSessionMcpConfig) return {};
-    return this.opts.buildSessionMcpConfig(sessionInstanceId);
+    return this.opts.buildSessionMcpConfig(sessionInstanceId, session);
   }
 
   /** Display metadata only; observed thread model always wins. */

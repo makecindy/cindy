@@ -2106,6 +2106,41 @@ describe('mobile client prompt note', () => {
   });
 });
 
+describe('Cindy Make task note', () => {
+  it('annotates the wire message of a cindy-make task but persists the original text', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      isCindyMakeSession: vi.fn(async () => true),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', '修复消息流闪烁', undefined, {
+      persistUserMessage: { clientId: 'make-1', content: '修复消息流闪烁' },
+    });
+
+    const sent = vi.mocked(session.send).mock.calls[0]?.[0];
+    expect(sent).toEqual(expect.stringMatching(/^\[任务说明\]/));
+    expect(sent).toEqual(expect.stringContaining('report_complete'));
+    expect(sent).toEqual(expect.stringMatching(/\n\n修复消息流闪烁$/));
+    expect(vi.mocked(deps.createDbMessage).mock.calls[0]?.[1].content).toBe('修复消息流闪烁');
+  });
+
+  it('leaves ordinary tasks and native commands untouched', async () => {
+    const session = createSession({ agentKind: 'claude-code' });
+    const isCindyMakeSession = vi.fn(async (sessionId: string) => sessionId === 'session-1');
+    const { deps } = createDeps({ getSession: vi.fn(() => session), isCindyMakeSession });
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted('session-1', '/compact');
+    expect(session.send).toHaveBeenCalledWith('/compact', expect.anything());
+
+    isCindyMakeSession.mockResolvedValue(false);
+    await transaction.sendToAgentAccepted('session-1', 'hello');
+    expect(session.send).toHaveBeenLastCalledWith('hello', expect.anything());
+  });
+});
+
 describe('session-agent-switch handoff injection', () => {
   it('keeps authored text beside a quote without inheriting the quote or an old grant', async () => {
     const { deps, session } = createDeps({ readAutoReviewHistory: vi.fn(async () => []) });

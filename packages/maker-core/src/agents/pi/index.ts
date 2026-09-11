@@ -8456,10 +8456,10 @@ export class PiAgent extends BaseAgent {
             proc.send({ type: 'extension_ui_response', id, cancelled: true });
             return;
           }
-          if (method === 'select' && !options.includes(answer)) {
-            proc.send({ type: 'extension_ui_response', id, cancelled: true });
-            return;
-          }
+          // Pi's RPC select contract only distinguishes cancelled from value and hands
+          // `value` back to the caller verbatim; Cindy's question card always offers a
+          // "type your own" entry, so a non-empty answer outside `options` is a real
+          // answer, not a cancel (#4273).
           context.recordUserClarification(question, answer);
           proc.send({ type: 'extension_ui_response', id, value: answer });
         })
