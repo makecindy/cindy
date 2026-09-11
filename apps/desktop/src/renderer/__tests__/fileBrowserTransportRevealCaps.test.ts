@@ -86,4 +86,25 @@ describe('deviceSupportsRevealIgnoredDirs', () => {
     await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo')).resolves.toBe(true);
     expect(invokeMock).toHaveBeenCalledTimes(2);
   });
+
+  it('肯定结论按连接代次失效:重连后重探(被控端被回滚到老端也能纠正)', async () => {
+    const deviceId = freshDevice();
+    invokeMock.mockResolvedValue({ ok: true, showIgnoredDirs: true });
+
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo', 0)).resolves.toBe(
+      true,
+    );
+    // 同代次命中缓存,不重复探测。
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo', 0)).resolves.toBe(
+      true,
+    );
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+
+    // 重连(代次 +1):旧结论作废,重新问 —— 设备此时已被回滚成中间版本。
+    invokeMock.mockResolvedValue({ ok: true, gzip: true });
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo', 1)).resolves.toBe(
+      false,
+    );
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+  });
 });

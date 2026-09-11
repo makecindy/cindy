@@ -237,26 +237,37 @@ function emit(store: FileTreeStore): void {
  * 空快照 + initialLoading 起步,FileTreeView 会把整棵树替换成占位(本地
  * <300ms 连 spinner 都没有,就是空白),视觉上闪一下;同一 workdir 的另一半
  * reveal scope 的 store 此刻通常还在表里 —— 旧 store 的 refCount 归零发生在
- * 本次 commit 的 effect cleanup,晚于 render 期间的 useMemo —— 借它的快照当
- * 初始视图,新 matcher 的 listDir 回来后再原地校正(initStore 会把 seed 的
- * 全部目录重拉一遍)。
+ * 本次 commit 的 effect cleanup,晚于 render 期间的 useMemo —— 借它的
+ * **根目录列表**当首帧内容,新 matcher 的 listDir 回来后再原地校正。
+ *
+ * 只借根列表,不借子树缓存与 expanded:那两者都带旧 matcher 的语义。reveal 态
+ * 展开过 node_modules 时,把它们带进 hidden store 会让被忽略路径进入展开集合与
+ * warm 列表(hidden 侧会给它们发 listDir,SSH 上可达数百个 RPC),并在根列表
+ * 回来前把被忽略的行显示出来。展开态仍按各自 scope 从 localStorage 恢复
+ * (expandedStore 的分片本意),不跨 scope 合并。
  *
  * 「刷新」按钮没有这个问题:它在同一份 store 上原地 refetch,从不经过空态。
  */
-function findRevealSiblingSnapshot(
-  opts: Required<UseFileTreeOptions>,
-): FileTreeStore['snapshot'] | null {
+function findRevealSiblingSeed(opts: Required<UseFileTreeOptions>): {
+  rootEntries: readonly DirEntry[] | null;
+  loadError: FileTreeStore['snapshot']['loadError'];
+} | null {
   const siblingKey = storeKey({ ...opts, showIgnoredDirs: !opts.showIgnoredDirs });
-  return stores.get(siblingKey)?.snapshot ?? null;
+  const sibling = stores.get(siblingKey);
+  if (!sibling) return null;
+  return {
+    rootEntries: sibling.snapshot.entries.get(ROOT_KEY) ?? null,
+    loadError: sibling.snapshot.loadError,
+  };
 }
 
 function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
   const key = storeKey(opts);
   const existing = stores.get(key);
   if (existing) return existing;
-  // 切开关路径:借另一半 reveal scope 的快照,第一帧就有树可渲染,不经过
+  // 切开关路径:借另一半 reveal scope 的根列表,第一帧就有内容可渲染,不经过
   // initialLoading 空白;首次挂载(无兄弟 store)仍走原来的 loading 路径。
-  const seed = findRevealSiblingSnapshot(opts);
+  const seed = findRevealSiblingSeed(opts);
   const store: FileTreeStore = {
     key,
     workdir: opts.workdir,
@@ -267,8 +278,8 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     showIgnoredDirs: opts.showIgnoredDirs,
     snapshot: seed
       ? {
-          entries: seed.entries,
-          expanded: seed.expanded,
+          entries: seed.rootEntries ? new Map([[ROOT_KEY, seed.rootEntries]]) : new Map(),
+          expanded: new Set([ROOT_KEY]),
           // 新 store 自己还没有 in-flight 请求,seed 的 loadingPaths 不继承。
           loadingPaths: new Set(),
           initialLoading: false,
@@ -438,10 +449,10 @@ function queueEventRefresh(store: FileTreeStore, eventRelPath: string): void {
  *  幂等:重复调用直接 no-op(refCount 已 >0)。 */
 async function initStore(store: FileTreeStore): Promise<void> {
   // 恢复 localStorage 持久化的 expanded 集合(workdir × 视图模式共享,见
-  // expandedStore 的 scope 说明)。seed(另一半 reveal scope 的 store)带着
-  // 当前可见的展开集合 —— 并集合并,切开关时不把已展开的目录折叠掉。
+  // expandedStore 的 scope 说明)。分片是刻意的:两个 scope 各记自己的展开态,
+  // 不跨 scope 合并 —— 合并会把 reveal 态展开过的 node_modules 带进 hidden 态。
   const restored = loadExpandedSet(store.workdir, { showIgnoredDirs: store.showIgnoredDirs });
-  const nextExpanded = new Set<string>([ROOT_KEY, ...restored, ...store.snapshot.expanded]);
+  const nextExpanded = new Set<string>([ROOT_KEY, ...restored]);
   store.snapshot = { ...store.snapshot, expanded: nextExpanded };
   emit(store);
 
@@ -465,13 +476,9 @@ async function initStore(store: FileTreeStore): Promise<void> {
 
   // Initial root fetch + 已 restore expanded 目录的并行 lazy fetch。每个 listDir
   // <12ms,即使 50 个 restored 也能在 <1s 内 warm 完。
-  // seed 路径再加一份:seed 的 entries 全是旧 matcher 拉的,全部重拉校正 ——
-  // 包括已收起但有缓存的目录,不然用户之后展开它会直接命中 stale 缓存。
-  const warmPaths = new Set<string>([...nextExpanded, ...store.snapshot.entries.keys()]);
-  warmPaths.delete(ROOT_KEY);
   await Promise.all([
     fetchDir(store, ROOT_KEY),
-    ...[...warmPaths].map((p) => fetchDir(store, p)),
+    ...[...restored].map((p) => fetchDir(store, p)),
   ]);
   store.snapshot = { ...store.snapshot, initialLoading: false };
   emit(store);
@@ -586,13 +593,15 @@ export function useFileTree({
       setDeviceRevealSupported(null);
     }
     let cancelled = false;
-    void deviceSupportsRevealIgnoredDirs(deviceId, workdir).then((supported) => {
-      if (cancelled) return;
-      // null = 瞬态失败:保持现状(首帧仍是「未知」,已有结论也不推翻),
-      // 等下一次 reconnectEpoch 或重新挂载时再问一次。
-      if (supported === null) return;
-      setDeviceRevealSupported(supported);
-    });
+    void deviceSupportsRevealIgnoredDirs(deviceId, workdir, revealReconnectEpoch).then(
+      (supported) => {
+        if (cancelled) return;
+        // null = 瞬态失败:保持现状(首帧仍是「未知」,已有结论也不推翻),
+        // 等下一次 reconnectEpoch 或重新挂载时再问一次。
+        if (supported === null) return;
+        setDeviceRevealSupported(supported);
+      },
+    );
     return () => {
       cancelled = true;
     };

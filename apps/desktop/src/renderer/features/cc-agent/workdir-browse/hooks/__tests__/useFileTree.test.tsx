@@ -195,10 +195,10 @@ describe('useFileTree showIgnoredDirs option', () => {
   /**
    * 切开关会换一份 store。新 store 若从空快照 + initialLoading 起步，FileTreeView
    * 会把整树替换成空白占位（本地 <300ms 连 spinner 都没有），视觉上闪一下；
-   * 「刷新」按钮原地 refetch 所以不闪。新 store 必须继承兄弟 store 的快照，
-   * 等新 matcher 的数据回来再校正。
+   * 「刷新」按钮原地 refetch 所以不闪。新 store 必须继承兄弟 store 的根列表，
+   * 等新 matcher 的数据回来再校正（子树缓存与展开态不跨 scope 继承，见下一条）。
    */
-  it('切开关继承旧树快照，不回到 initialLoading 空白', async () => {
+  it('切开关继承根列表，不回到 initialLoading 空白', async () => {
     const hiddenEntries: readonly DirEntry[] = [
       { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
     ];
@@ -237,27 +237,41 @@ describe('useFileTree showIgnoredDirs option', () => {
   });
 
   /**
-   * 展开态同样不能被切开关抹掉：新 scope 的 localStorage 可能没有记录，
-   * 但 seed 的 expanded 是当前可见的展开集合，应与之合并而非覆盖。
+   * 关开关方向不继承旧 scope 的展开集合与子树缓存：reveal 态展开过的
+   * node_modules 是 reveal-only 路径，带进 hidden store 会让它进入展开集合与
+   * warm 列表（hidden 侧要为它发 listDir，SSH 上可达数百个 RPC），并在根列表
+   * 回来前把被忽略的行显示出来。展开态按各自 scope 从 localStorage 恢复。
    */
-  it('切开关保留已展开的目录，不折叠', async () => {
+  it('关开关不把 reveal-only 路径带进 hidden store', async () => {
+    const revealedRoot: readonly DirEntry[] = [
+      { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) =>
+      Promise.resolve(args.showIgnoredDirs ? revealedRoot : ([] as readonly DirEntry[])),
+    );
+
     const view = renderHook(
       ({ reveal }: { reveal: boolean }) =>
-        useFileTree({ workdir: '/workdir-seed-expanded', showIgnoredDirs: reveal }),
-      { initialProps: { reveal: false } },
+        useFileTree({ workdir: '/workdir-seed-filter', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: true } },
     );
     await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
-
     await act(async () => {
-      view.result.current.toggleFolder('src');
+      view.result.current.toggleFolder('node_modules');
     });
-    expect(view.result.current.expanded.has('src')).toBe(true);
+    expect(view.result.current.expanded.has('node_modules')).toBe(true);
 
+    mocks.listDir.mockClear();
     await act(async () => {
-      view.rerender({ reveal: true });
+      view.rerender({ reveal: false });
     });
     await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
-    expect(view.result.current.expanded.has('src')).toBe(true);
+
+    // hidden store 不该继承 reveal-only 的展开态，也不该为它发 listDir。
+    expect(view.result.current.expanded.has('node_modules')).toBe(false);
+    expect(mocks.listDir).not.toHaveBeenCalledWith(
+      expect.objectContaining({ relPath: 'node_modules' }),
+    );
 
     view.unmount();
   });
@@ -288,6 +302,7 @@ describe('useFileTree device 的 showIgnoredDirs 能力探测', () => {
     expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenCalledWith(
       'device-1',
       '/workdir-old-device',
+      0,
     );
     await waitFor(() =>
       expect(mocks.listDir).toHaveBeenCalledWith(
@@ -348,6 +363,12 @@ describe('useFileTree device 的 showIgnoredDirs 能力探测', () => {
     view.rerender();
     await waitFor(() => expect(view.result.current.showIgnoredDirsSupported).toBe(true));
     expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenCalledTimes(2);
+    // 重连后那次探测带上新代次 —— 缓存按代次失效(设备被回滚到老端也能纠正)。
+    expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenLastCalledWith(
+      'device-flaky',
+      '/workdir-flaky',
+      1,
+    );
     view.unmount();
   });
 

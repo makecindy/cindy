@@ -40,7 +40,6 @@
  */
 
 import path from 'node:path';
-import * as fs from 'node:fs';
 import type { BrowserWindow } from 'electron';
 
 import {
@@ -118,9 +117,8 @@ interface WatcherEntry {
 
 /**
  * 预过滤目录 — 这些目录名一旦出现在路径里, OS watcher 直接跳过,不再向
- * callback 推任何事件。和 ignore.ts 的 BUILTIN_IGNORE 思路一致, 但 parcel
- * 的 ignore 接受的是路径(不是 glob), 所以这里用绝对路径 + 工作区内常见命中
- * 位置一次性穷举。比靠 callback 内过滤省一次 IPC + 一次 matcher 调用。
+ * callback 推任何事件。和 ignore.ts 的 BUILTIN_IGNORE 思路一致。比靠
+ * callback 内过滤省一次 IPC + 一次 matcher 调用。
  *
  * 注意: 这里只剪"目录名命中" 的 case; *.log / build-* 这种 glob 仍由
  * callback 内的 matcher 兜底。
@@ -149,27 +147,33 @@ const PREFILTER_REVEALABLE = [
 ];
 
 /**
- * 把预过滤名单展成"工作区根下直接命中"的绝对路径列表 (parcel 的
- * ignore 选项要求路径而非 glob)。子目录里同名目录(e.g. nested
- * node_modules) parcel 会自己沿父链判断 — 它内部用前缀匹配。
+ * 名单 → parcel ignore glob。
+ *
+ * @parcel/watcher 的 ignore 数组吃两种形态:非 glob 走 `ignorePaths`(相对
+ * workdir resolve 成绝对路径,**前缀**比较),glob 走 picomatch 正则。前缀形态
+ * 只认“工作区根下直接命中”—— 实测(2.5.6, win32)`nested/node_modules/x` 不是
+ * `/workdir/node_modules` 的后代,一条事件都拦不住,monorepo
+ * (`packages/foo/node_modules`)与嵌套 Unity 工程(`client/Library`)全量漏过去。
+ * 所以统一发 glob:`**\/<name>/**` 覆盖任意层级。
+ *
+ * 末尾的 `/**` 不能省:目录名要连内部条目一起匹配,`**\/<name>` 只匹配目录自身
+ * (实测)。将来名单里若出现文件项(如 .DS_Store),要另用不带后缀的形态。
  */
-function buildIgnoreList(workdir: string, opts: { showIgnoredDirs: boolean }): string[] {
-  // ALWAYS 名单**无条件注册**,不做 existsSync 探测:parcel 的 ignore 只在
+const ignoreGlobsForDirs = (names: readonly string[]): string[] =>
+  names.map((name) => `**/${name}/**`);
+
+function buildIgnoreList(opts: { showIgnoredDirs: boolean }): string[] {
+  // ALWAYS 名单**无条件注册**,不做存在性探测:parcel 的 ignore 只在
   // subscribe 那一刻生效一次,而 node_modules / Library 常常在会话开始后才出现
   // (npm install / Unity 导入)。当时不存在就漏掉,就再也没有第二次机会 ——
   // 开关打开时这些目录被 matcher 放行,目录里每个生成路径都会一路推过
-  // watcher-host + IPC。不存在的路径传给 parcel 无害(它只做前缀比较)。
-  const out = PREFILTER_ALWAYS.map((dir) => path.join(workdir, dir));
-  // REVEALABLE 只在开关关闭时预过滤,且只挑当前存在的目录:开关打开后它们本
-  // 就该推事件;关闭时即使漏掉预过滤,parcel callback 里的 matcher 也会拦下
-  // (代价只是多一次 IPC)。
-  if (!opts.showIgnoredDirs) {
-    for (const dir of PREFILTER_REVEALABLE) {
-      const abs = path.join(workdir, dir);
-      if (fs.existsSync(abs)) out.push(abs);
-    }
-  }
-  return out;
+  // watcher-host + IPC。glob 不存在的目录只是永不命中,无副作用。
+  const always = ignoreGlobsForDirs(PREFILTER_ALWAYS);
+  // REVEALABLE 只在开关关闭时预过滤:开关打开后它们本来就该推事件;关闭时
+  // 即使漏掉预过滤,callback 里的 matcher 也会拦下(代价只是多一次 IPC)。
+  return opts.showIgnoredDirs
+    ? always
+    : [...always, ...ignoreGlobsForDirs(PREFILTER_REVEALABLE)];
 }
 
 /**
@@ -299,7 +303,7 @@ export class WatcherManager {
       honorVcsIgnore: false,
       showIgnoredDirs,
     });
-    const ignore = buildIgnoreList(workdir, { showIgnoredDirs });
+    const ignore = buildIgnoreList({ showIgnoredDirs });
 
     const entry: WatcherEntry = {
       handle: null,

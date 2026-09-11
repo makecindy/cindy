@@ -76,34 +76,51 @@ function deviceSupportsGzip(deviceId: string, workdir: string): Promise<boolean>
  * channel，invoke 会被快速拒回 `CHANNEL_NOT_ALLOWED`（确定性）；隧道不可达 /
  * 重连中的 reject 与之不同，属于瞬态。
  *
- * 缓存：**只缓存肯定结论 `true`**。`false`（老端）不留在缓存里 —— 被控端在一次
- * 掉线期间升级是真实场景，缓存会把它钉在「不支持」直到重启；重探一次只是一个被
- * 快速拒绝的 invoke，代价可忽略。瞬态 `null` 同样不缓存，由调用方在连接恢复后重探。
+ * 缓存：**只缓存肯定结论 `true`**,且带**连接代次**(重连后失效重探 —— 设备被
+ * 回滚到老 Desktop 时 deviceId 不变,不带代次会一直命中旧结论)。`false`（老端）
+ * 不留在缓存里 —— 被控端在一次掉线期间升级是真实场景，缓存会把它钉在「不支持」
+ * 直到重启；重探一次只是一个被快速拒绝的 invoke，代价可忽略。瞬态 `null` 同样
+ * 不缓存，由调用方在连接恢复后重探。
  *
  * 与 gzip 那份缓存分开：后者带着「用出空写就永久降级」的自愈语义，两件事互不牵连。
  */
-const deviceRevealCaps = new Map<string, Promise<boolean | null>>();
+const deviceRevealCaps = new Map<
+  string,
+  { epoch: number; probe: Promise<boolean | null> }
+>();
+
+/** 只回收「本次探测装上的那条」:同 deviceId 可能已因更新的代次换上新的 probe。 */
+function evictRevealCapsIfCurrent(deviceId: string, epoch: number): void {
+  if (deviceRevealCaps.get(deviceId)?.epoch === epoch) deviceRevealCaps.delete(deviceId);
+}
 
 export function deviceSupportsRevealIgnoredDirs(
   deviceId: string,
   workdir: string,
+  /**
+   * 连接代次(`useDeviceLinkReconnectEpoch`):重连 / 被控端恢复 online 时自增。
+   * 肯定结论只在本代次内有效 —— 设备被回滚到老 Desktop 时 deviceId 不变,不带
+   * 代次的缓存会让重连后的重探直接命中旧 promise,开关保持可按而 listDir 靜默
+   * 忽略该字段,直到 controller 重启。
+   */
+  reconnectEpoch = 0,
 ): Promise<boolean | null> {
   const cached = deviceRevealCaps.get(deviceId);
-  if (cached) return cached;
+  if (cached && cached.epoch === reconnectEpoch) return cached.probe;
   const probe = Promise.resolve()
     .then(() => invokeOp<{ ok: boolean; showIgnoredDirs?: boolean }>(deviceId, 'caps', { workdir }))
     .then((r) => {
       const supported = r?.ok === true && r.showIgnoredDirs === true;
       // 只留肯定结论；「不支持」下次重新问（被控端可能已升级）。
-      if (!supported) deviceRevealCaps.delete(deviceId);
+      if (!supported) evictRevealCapsIfCurrent(deviceId, reconnectEpoch);
       return supported;
     })
     .catch((err: unknown) => {
-      deviceRevealCaps.delete(deviceId);
+      evictRevealCapsIfCurrent(deviceId, reconnectEpoch);
       if (isDeviceTooOldError(err)) return false; // 老端：确定性不支持
       return null; // 瞬态：不落定，等连接恢复重探
     });
-  deviceRevealCaps.set(deviceId, probe);
+  deviceRevealCaps.set(deviceId, { epoch: reconnectEpoch, probe });
   return probe;
 }
 
