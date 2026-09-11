@@ -562,3 +562,56 @@ it('renders confirmed shared PR icons on failures and clears them when the share
   rerender(view());
   expect(container.querySelector('.lucide-git-pull-request-closed')).toBeNull();
 });
+
+it('subscribes only visible task cards and retains cached PR actions outside the viewport', async () => {
+  const observers: Array<{ callback: IntersectionObserverCallback; disconnect: ReturnType<typeof vi.fn> }> = [];
+  vi.stubGlobal('IntersectionObserver', class {
+    disconnect = vi.fn();
+    observe = vi.fn();
+    constructor(callback: IntersectionObserverCallback) {
+      observers.push({ callback, disconnect: this.disconnect });
+    }
+  });
+  const release = vi.fn();
+  mocks.registerPrConsumer.mockImplementation(() => release);
+  mocks.remoteBots = [{ deviceId: 'home', online: true }];
+  remoteProjectsStore.pinSessionOrigin('home', SESSION_ID);
+  mocks.prRefs = [associatedPr(1)];
+  window.electronAPI.deviceLink = {
+    invoke: vi.fn(async () => ({ ok: true, delegations: [delegation('completed', { updatedAt: 1_000 })] })),
+    onRemotePush: () => () => {},
+    onStatusChanged: () => () => {},
+  } as any;
+  const view = render(<>
+    <BotSessionTaskCard sessionId={SESSION_ID} data={{ ...meta() }} />
+    <BotSessionTaskCard sessionId={SESSION_ID} data={{ ...meta() }} />
+  </>);
+  try {
+    await screen.findAllByRole('button', { name: 'bots.collab.viewPr' });
+    expect(observers).toHaveLength(2);
+    expect(mocks.registerPrConsumer).not.toHaveBeenCalled();
+    expect(mocks.invalidateRemotePrRefs).not.toHaveBeenCalled();
+    const report = (index: number, visible: boolean) => act(() => {
+      observers[index].callback([{ isIntersecting: visible, intersectionRatio: visible ? 1 : 0 } as IntersectionObserverEntry], {} as IntersectionObserver);
+    });
+    report(0, true);
+    expect(mocks.registerPrConsumer).toHaveBeenCalledTimes(1);
+    expect(mocks.registerPrConsumer).toHaveBeenCalledWith('child-1', 'home');
+    expect(mocks.invalidateRemotePrRefs).toHaveBeenCalledTimes(1);
+    report(0, false);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(screen.getAllByRole('button', { name: 'bots.collab.viewPr' })).toHaveLength(2);
+    report(1, true);
+    expect(mocks.registerPrConsumer).toHaveBeenCalledTimes(2);
+    report(1, false);
+    report(0, true);
+    expect(mocks.registerPrConsumer).toHaveBeenCalledTimes(3);
+    view.unmount();
+    expect(release).toHaveBeenCalledTimes(3);
+    expect(observers.every((observer) => observer.disconnect.mock.calls.length === 1)).toBe(true);
+  } finally {
+    view.unmount();
+    mocks.registerPrConsumer.mockImplementation(() => () => {});
+    vi.unstubAllGlobals();
+  }
+});

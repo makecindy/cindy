@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
 import { MAX_STATUS_QUERIES, prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
+import { useElementVisible } from '@/cindy-brain/ghostUnreadStore';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
 import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { Button } from '@/components/ui/button';
@@ -105,20 +106,21 @@ function SessionTaskCardBody({
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
+  const { ref: observeCard, visible } = useElementVisible();
   const active = row ? isActiveDelegationStatus(row.status) : false;
   const childSessionId = row?.childSessionId ?? meta.childSessionId;
   const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
   const pullRequests = usePrRefsForSession(childSessionId ?? '').slice(0, MAX_STATUS_QUERIES);
   const { statuses, successfulStatuses, refreshError } = usePrStatuses(childSessionId ?? '');
   useEffect(() => {
-    if (!childSessionId) return;
+    if (!visible || !childSessionId) return;
     return registerPrConsumer(childSessionId, sourceDeviceId);
-  }, [childSessionId, sourceDeviceId, registerPrConsumer]);
+  }, [visible, childSessionId, sourceDeviceId, registerPrConsumer]);
   useEffect(() => {
-    if (childSessionId && sourceDeviceId && row?.updatedAt !== undefined) {
+    if (visible && childSessionId && sourceDeviceId && row?.updatedAt !== undefined) {
       invalidateRemotePrRefs(childSessionId);
     }
-  }, [childSessionId, sourceDeviceId, row?.updatedAt, invalidateRemotePrRefs]);
+  }, [visible, childSessionId, sourceDeviceId, row?.updatedAt, invalidateRemotePrRefs]);
   const prIcon = (ref: (typeof pullRequests)[number]) => {
     const result = statuses.get(prStatusKey(ref));
     const confirmed = result?.ok ? result : successfulStatuses.get(prStatusKey(ref));
@@ -220,7 +222,7 @@ function SessionTaskCardBody({
   );
 
   return (
-    <div className="my-2 w-full max-w-[560px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-12">
+    <div ref={observeCard} className="my-2 w-full max-w-[560px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-12">
       <div className="flex items-start gap-3">
         <div
           title={taskTitle}
