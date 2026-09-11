@@ -124,14 +124,15 @@ ${JSON.stringify({ skills, tools, previous: previous ? { ...previous, name: inpu
       signal: AbortSignal.timeout(100000),
       beforeDispatch: async (selection) => {
         assertOwner();
-        if (
-          selection.agentKind !== 'claude-code'
-          && selection.agentKind !== 'codex'
-          && selection.agentKind !== 'pi'
-        ) {
+        const agentKind = selection.agentKind;
+        if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
           throwIpcError('BOT_CREATION_MODEL_UNAVAILABLE', 'Cindy 默认模型不可用，请先选择可用模型');
         }
-        assertEnabled(selection);
+        assertEnabled({
+          agentKind,
+          providerId: selection.providerId,
+          model: selection.model,
+        });
         return true;
       },
     });
