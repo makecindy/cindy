@@ -593,15 +593,15 @@ export function useFileTree({
       setDeviceRevealSupported(null);
     }
     let cancelled = false;
-    void deviceSupportsRevealIgnoredDirs(deviceId, workdir, revealReconnectEpoch).then(
-      (supported) => {
-        if (cancelled) return;
-        // null = 瞬态失败:保持现状(首帧仍是「未知」,已有结论也不推翻),
-        // 等下一次 reconnectEpoch 或重新挂载时再问一次。
-        if (supported === null) return;
-        setDeviceRevealSupported(supported);
-      },
-    );
+    // reconnectEpoch 在这里只负责「何时重问」;缓存代次由 transport 自己按全局
+    // reconnect 流记账 —— hook 卸载期间的重连它也能看到(见 fileBrowserTransport)。
+    void deviceSupportsRevealIgnoredDirs(deviceId, workdir).then((supported) => {
+      if (cancelled) return;
+      // null = 瞬态失败:保持现状(首帧仍是「未知」,已有结论也不推翻),
+      // 等下一次 reconnectEpoch 或重新挂载时再问一次。
+      if (supported === null) return;
+      setDeviceRevealSupported(supported);
+    });
     return () => {
       cancelled = true;
     };

@@ -302,7 +302,6 @@ describe('useFileTree device 的 showIgnoredDirs 能力探测', () => {
     expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenCalledWith(
       'device-1',
       '/workdir-old-device',
-      0,
     );
     await waitFor(() =>
       expect(mocks.listDir).toHaveBeenCalledWith(
@@ -362,13 +361,9 @@ describe('useFileTree device 的 showIgnoredDirs 能力探测', () => {
     mocks.reconnectEpoch.current = 1;
     view.rerender();
     await waitFor(() => expect(view.result.current.showIgnoredDirsSupported).toBe(true));
+    // 重连代次驱动的「重问」;缓存是否命中由 transport 自己按全局 reconnect 流记账
+    // (不依赖 hook 生命周期,见 fileBrowserTransport 的进程级重连代次)。
     expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenCalledTimes(2);
-    // 重连后那次探测带上新代次 —— 缓存按代次失效(设备被回滚到老端也能纠正)。
-    expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenLastCalledWith(
-      'device-flaky',
-      '/workdir-flaky',
-      1,
-    );
     view.unmount();
   });
 

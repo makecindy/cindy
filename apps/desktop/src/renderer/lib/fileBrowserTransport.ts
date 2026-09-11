@@ -76,51 +76,80 @@ function deviceSupportsGzip(deviceId: string, workdir: string): Promise<boolean>
  * channel，invoke 会被快速拒回 `CHANNEL_NOT_ALLOWED`（确定性）；隧道不可达 /
  * 重连中的 reject 与之不同，属于瞬态。
  *
- * 缓存：**只缓存肯定结论 `true`**,且带**连接代次**(重连后失效重探 —— 设备被
- * 回滚到老 Desktop 时 deviceId 不变,不带代次会一直命中旧结论)。`false`（老端）
+ * 缓存：**只缓存肯定结论 `true`**,且带**进程级重连代次**(见下)。`false`（老端）
  * 不留在缓存里 —— 被控端在一次掉线期间升级是真实场景，缓存会把它钉在「不支持」
  * 直到重启；重探一次只是一个被快速拒绝的 invoke，代价可忽略。瞬态 `null` 同样
  * 不缓存，由调用方在连接恢复后重探。
  *
  * 与 gzip 那份缓存分开：后者带着「用出空写就永久降级」的自愈语义，两件事互不牵连。
  */
+
+/**
+ * 进程级重连代次。
+ *
+ * 不能拿 hook 局的 `useDeviceLinkReconnectEpoch` 当缓存依据:它是 `useState(0)`
+ * 起步的 hook 局部计数器,只观察**挂载期间**的事件 —— 面板卸载 →(此时设备重连 /
+ * 被回滚,没有任何 hook 看得到)→ 面板重挂载时新实例又从 0 开始,进程内的缓存却
+ * 还留着上一代的肯定结论,于是跳过 caps RPC、开关一直可按。
+ *
+ * 所以缓存自己订阅全局 reconnect 流:模块级订阅不随面板生命周期起落(惰性建立
+ * 于首次调用;测试环境没有 deviceLink 时静默跳过,代次恒 0)。任何设备恢复 online
+ * 或 relay 恢复 online 都让整表代次作废 —— 重探一次 caps 很便宜,不值得按 deviceId
+ * 精细区分。订阅故意常驻:它本身就是「面板不在时也要记账」的那只耳朵。
+ */
+let reconnectGeneration = 0;
+let reconnectSubscribed = false;
+
+function ensureReconnectSubscription(): void {
+  if (reconnectSubscribed) return;
+  const api = window.electronAPI?.deviceLink;
+  if (!api?.onPresenceChanged || !api.onStatusChanged) return;
+  reconnectSubscribed = true;
+  const bump = (): void => {
+    reconnectGeneration += 1;
+  };
+  api.onPresenceChanged((snapshot) => {
+    if (snapshot.online) bump();
+  });
+  api.onStatusChanged(({ status }) => {
+    if (status === 'online') bump();
+  });
+}
+
 const deviceRevealCaps = new Map<
   string,
-  { epoch: number; probe: Promise<boolean | null> }
+  { generation: number; probe: Promise<boolean | null> }
 >();
 
 /** 只回收「本次探测装上的那条」:同 deviceId 可能已因更新的代次换上新的 probe。 */
-function evictRevealCapsIfCurrent(deviceId: string, epoch: number): void {
-  if (deviceRevealCaps.get(deviceId)?.epoch === epoch) deviceRevealCaps.delete(deviceId);
+function evictRevealCapsIfCurrent(deviceId: string, generation: number): void {
+  if (deviceRevealCaps.get(deviceId)?.generation === generation) {
+    deviceRevealCaps.delete(deviceId);
+  }
 }
 
 export function deviceSupportsRevealIgnoredDirs(
   deviceId: string,
   workdir: string,
-  /**
-   * 连接代次(`useDeviceLinkReconnectEpoch`):重连 / 被控端恢复 online 时自增。
-   * 肯定结论只在本代次内有效 —— 设备被回滚到老 Desktop 时 deviceId 不变,不带
-   * 代次的缓存会让重连后的重探直接命中旧 promise,开关保持可按而 listDir 靜默
-   * 忽略该字段,直到 controller 重启。
-   */
-  reconnectEpoch = 0,
 ): Promise<boolean | null> {
+  ensureReconnectSubscription();
   const cached = deviceRevealCaps.get(deviceId);
-  if (cached && cached.epoch === reconnectEpoch) return cached.probe;
+  if (cached && cached.generation === reconnectGeneration) return cached.probe;
+  const probeGeneration = reconnectGeneration;
   const probe = Promise.resolve()
     .then(() => invokeOp<{ ok: boolean; showIgnoredDirs?: boolean }>(deviceId, 'caps', { workdir }))
     .then((r) => {
       const supported = r?.ok === true && r.showIgnoredDirs === true;
       // 只留肯定结论；「不支持」下次重新问（被控端可能已升级）。
-      if (!supported) evictRevealCapsIfCurrent(deviceId, reconnectEpoch);
+      if (!supported) evictRevealCapsIfCurrent(deviceId, probeGeneration);
       return supported;
     })
     .catch((err: unknown) => {
-      evictRevealCapsIfCurrent(deviceId, reconnectEpoch);
+      evictRevealCapsIfCurrent(deviceId, probeGeneration);
       if (isDeviceTooOldError(err)) return false; // 老端：确定性不支持
       return null; // 瞬态：不落定，等连接恢复重探
     });
-  deviceRevealCaps.set(deviceId, { epoch: reconnectEpoch, probe });
+  deviceRevealCaps.set(deviceId, { generation: probeGeneration, probe });
   return probe;
 }
 

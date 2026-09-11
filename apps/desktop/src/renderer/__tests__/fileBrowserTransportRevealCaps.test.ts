@@ -19,11 +19,36 @@ type InvokeMock = ReturnType<typeof vi.fn>;
 
 let invokeMock: InvokeMock;
 let transport: typeof import('../lib/fileBrowserTransport');
+/** 模块级 reconnect 订阅注册进来的回调:测试用它们模拟「没有任何 hook 观察」期间的重连。 */
+let presenceCallbacks: Array<(snapshot: { deviceId: string; online: boolean }) => void>;
+let statusCallbacks: Array<(payload: { status: string }) => void>;
 
 beforeEach(async () => {
+  // 模块级重连代次与订阅标志要按测试隔离(否则第一个测试的订阅会跨用例残留)。
+  vi.resetModules();
   invokeMock = vi.fn();
+  presenceCallbacks = [];
+  statusCallbacks = [];
   vi.stubGlobal('window', {
-    electronAPI: { deviceLink: { invoke: invokeMock } },
+    electronAPI: {
+      deviceLink: {
+        invoke: invokeMock,
+        onPresenceChanged: (cb: (snapshot: { deviceId: string; online: boolean }) => void) => {
+          presenceCallbacks.push(cb);
+          return () => {
+            const index = presenceCallbacks.indexOf(cb);
+            if (index >= 0) presenceCallbacks.splice(index, 1);
+          };
+        },
+        onStatusChanged: (cb: (payload: { status: string }) => void) => {
+          statusCallbacks.push(cb);
+          return () => {
+            const index = statusCallbacks.indexOf(cb);
+            if (index >= 0) statusCallbacks.splice(index, 1);
+          };
+        },
+      },
+    },
   });
   transport = await import('../lib/fileBrowserTransport');
 });
@@ -87,24 +112,47 @@ describe('deviceSupportsRevealIgnoredDirs', () => {
     expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 
-  it('肯定结论按连接代次失效:重连后重探(被控端被回滚到老端也能纠正)', async () => {
+  /**
+   * 重连代次必须是**进程级**的:面板卸载 →(没有任何 hook 观察)→ 重挂载时
+   * hook 局计数器又从 0 开始。拿 hook 局代次当缓存 key 的话,下面这步缓存里的
+   * 旧肯定结论会被误用 —— 开关对着已回滚的老端一直可按。所以缓存自己订阅全局
+   * reconnect 流拿代次。
+   */
+  it('重连(即使没有任何 hook 观察)作废肯定结论缓存', async () => {
     const deviceId = freshDevice();
     invokeMock.mockResolvedValue({ ok: true, showIgnoredDirs: true });
 
-    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo', 0)).resolves.toBe(
-      true,
-    );
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo')).resolves.toBe(true);
     // 同代次命中缓存,不重复探测。
-    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo', 0)).resolves.toBe(
-      true,
-    );
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo')).resolves.toBe(true);
     expect(invokeMock).toHaveBeenCalledTimes(1);
+    // 模块级订阅已惰性建立。
+    expect(presenceCallbacks.length).toBe(1);
 
-    // 重连(代次 +1):旧结论作废,重新问 —— 设备此时已被回滚成中间版本。
+    // 设备被回滚成中间版本 + 重连:订阅侧只看到一次 online 事件(非 hook 驱动)。
     invokeMock.mockResolvedValue({ ok: true, gzip: true });
-    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo', 1)).resolves.toBe(
-      false,
-    );
+    presenceCallbacks[0]({ deviceId, online: true });
+
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo')).resolves.toBe(false);
+    expect(invokeMock).toHaveBeenCalledTimes(2);
+
+    // 已落定的否定结论本就不缓存 —— 下一次仍然重新问。
+    invokeMock.mockResolvedValue({ ok: true, showIgnoredDirs: true });
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo')).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledTimes(3);
+  });
+
+  it('relay 恢复 online 同样作废缓存', async () => {
+    const deviceId = freshDevice();
+    invokeMock.mockResolvedValue({ ok: true, showIgnoredDirs: true });
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo')).resolves.toBe(true);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+    expect(statusCallbacks.length).toBe(1);
+
+    invokeMock.mockResolvedValue({ ok: true, gzip: true });
+    statusCallbacks[0]({ status: 'online' });
+
+    await expect(transport.deviceSupportsRevealIgnoredDirs(deviceId, '/repo')).resolves.toBe(false);
     expect(invokeMock).toHaveBeenCalledTimes(2);
   });
 });
