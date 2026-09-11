@@ -182,3 +182,59 @@ it('retains successful session status when a failure arrives while its consumer 
   await waitFor(() => expect(screen.queryByRole('button', { name: 'merged:stale' })).toBeNull());
   unmount();
 });
+
+it('queries the latest PRs after the previous reference status request settles', async () => {
+  let finish!: (value: unknown) => void;
+  let latestNumber = 1;
+  const queries: number[][] = [];
+  const ref = (n: number) => ({
+    id: `pr-${n}`,
+    sessionId: 'remote-child',
+    owner: 'a',
+    repo: 'b',
+    prNumber: n,
+    url: `https://github.com/a/b/pull/${n}`,
+    firstSeenAt: 1,
+    lastSeenAt: n,
+  });
+  mocks.listAllPrRefs.mockResolvedValue([]);
+  const invoke = vi.fn(async (_device: string, channel: string, args: any[]) => {
+    if (channel === 'git-context:pr-refs:list') return [ref(latestNumber)];
+    queries.push(args[0].queries.map((q: any) => q.prNumber));
+    if (queries.length === 1)
+      return await new Promise((resolve) => {
+        finish = resolve;
+      });
+    return [{ ...ref(latestNumber), ok: true, status: 'merged' }];
+  });
+  window.electronAPI = {
+    gitContext: { listAllPrRefs: mocks.listAllPrRefs, onPrRefsChanged: mocks.onPrRefsChanged },
+    deviceLink: { invoke },
+  } as any;
+  function Probe() {
+    const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
+    const { statuses } = usePrStatuses('remote-child');
+    useEffect(() => registerPrConsumer('remote-child', 'home'), [registerPrConsumer]);
+    const result = statuses.get('a/b#3');
+    return (
+      <button onClick={() => invalidateRemotePrRefs('remote-child')}>
+        {result?.ok ? result.status : 'pending'}
+      </button>
+    );
+  }
+  const { unmount } = render(
+    <PrRefsProvider>
+      <Probe />
+    </PrRefsProvider>,
+  );
+  await waitFor(() => expect(queries).toEqual([[1]]));
+  for (const n of [2, 3]) {
+    latestNumber = n;
+    await act(async () => fireEvent.click(screen.getByRole('button', { name: 'pending' })));
+  }
+  expect(queries).toEqual([[1]]);
+  await act(async () => finish([{ ...ref(1), ok: true, status: 'open' }]));
+  expect(await screen.findByRole('button', { name: 'merged' })).toBeTruthy();
+  expect(queries).toEqual([[1], [3]]);
+  unmount();
+});

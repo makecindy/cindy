@@ -391,6 +391,13 @@ export function PrRefsProvider({ children }: { children: ReactNode }) {
         // 身份匹配释放:标记可能已被新代请求覆盖,旧请求 settle 不得误删。
         if (inFlightSessions.current.get(sessionId) === gen) {
           inFlightSessions.current.delete(sessionId);
+          if (gen === ownerGenRef.current && prConsumers.current.has(sessionId)) {
+            const latest = store.getRefs(sessionId).slice(0, MAX_STATUS_QUERIES);
+            const requested = new Set(refs.map(prStatusKey));
+            if (latest.some((ref) => !requested.has(prStatusKey(ref)))) {
+              fetchStatusesForRefs(sessionId, latest);
+            }
+          }
         }
       }
     })();
