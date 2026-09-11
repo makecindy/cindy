@@ -14,11 +14,13 @@
     "start": "node dist/cli.js",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "format": "prettier --write src/"
   },
   "dependencies": {
     "chalk": "^5.4.0",
     "commander": "^12.1.0",
+    "cross-spawn": "^7.0.6",
     "gray-matter": "^4.0.3",
     "ignore": "^5.3.2",
     "js-yaml": "^4.1.0",
@@ -30,11 +32,13 @@
     "@types/js-yaml": "^4.0.9",
     "@types/micromatch": "^4.0.9",
     "@types/node": "^22.0.0",
+    "@types/cross-spawn": "^6.0.6",
     "eslint": "^9.0.0",
     "eslint-config-prettier": "^9.1.0",
     "prettier": "^3.4.2",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
+    "vitest": "^3.2.4",
     "typescript-eslint": "^8.0.0"
   }
 }

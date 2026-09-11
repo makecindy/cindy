@@ -346,6 +346,8 @@ describe('Pi package executable-code boundary', () => {
   });
 
   it('keeps the maximum package roster projection bounded', async () => {
+    // 本用例验证字段与总字节上限，固定时钟，避免磁盘负载触发独立的检查时长预算。
+    vi.useFakeTimers({ toFake: ['Date'] });
     const entries: string[] = ['User packages:'];
     for (let index = 0; index < 128; index += 1) {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-pi-package-roster-pkg-'));

@@ -334,7 +334,7 @@ small_diff_threshold:
   lines: 200
 
 # Adapter
-agent: claude-code              # MVP 仅支持 claude-code，未来 codex / custom
+agent: claude-code              # 支持 claude-code（默认）或 codex；custom 待做
 agent_options:
   timeout: 120                  # 秒，超时杀进程
   # model: opus                 # 可选，传给 claude --model
@@ -345,7 +345,9 @@ agent_options:
 
 ## Adapter（LLM 怎么被调）
 
-MVP 内置一个 adapter：`claude-code`。
+内置 `claude-code` 和 `codex` 两个 adapter。默认仍为 `claude-code`。
+
+### Claude Code
 
 **机制**：在子进程里 `spawn('claude', ['-p', '--output-format', 'text'])`，prompt 通过 stdin 喂入，结果从 stdout 读出。
 
@@ -359,7 +361,30 @@ MVP 内置一个 adapter：`claude-code`。
 - 超时 → 杀子进程报错
 - 任何失败 → 该 module 标 stale，update 继续处理后面的 ID
 
-后续可按 `src/adapters/types.ts` 的接口增加 `codex` / `custom` adapter。
+### Codex
+
+只使用 Codex 的用户可以在 `.cindy/project-knowledge/config.yaml` 中切换维护工具：
+
+```yaml
+agent: codex
+agent_options:
+  timeout: 300                 # update 超时秒数；未配置时为 300
+  refreshTimeout: 600          # refresh 超时秒数；未配置时为 600
+  # model: your-model         # 可选；不配置时沿用 Codex CLI 的模型设置
+  # command: /path/to/codex   # 可选；默认从 PATH 查找，也支持 Windows .cmd 路径
+```
+
+先安装并登录 [Codex CLI](https://developers.openai.com/codex/cli/)。在仓库所在机器上确认 `codex exec --help` 支持 `--json`、`--sandbox`、`--ephemeral` 和 `--output-last-message`，然后运行 `project-context refresh --all` 或小 diff 的 `project-context update`。CLI 自己读取登录与配置，project-context 不复制凭证，也不自动安装或登录。
+
+两条命令都从仓库根目录启动 `codex exec`，请求通过 stdin 传入。refresh 让 Agent 读取、搜索源码；update 将旧知识和 diff 交给 Agent 更新。执行采用 `read-only` sandbox 和 `approval_policy="never"`，不能弹出审批等待。只读 sandbox 限制本地命令，不代表为用户配置的所有 MCP 服务提供只读权限；维护所用 Codex 配置应只启用可信的只读工具。
+
+宿主同时要求退出码为 0、出现 `turn.completed` 且没有 `turn.failed`，再从 `--output-last-message` 文件读取最终正文。JSONL 中的过程文字和工具输出不写入知识文件。正文必须以 Markdown 标题开头、不包含 frontmatter 或全文代码围栏、保留旧正文的二级章节（支持最多三个前导空格）。`## 是什么` 的首段必须是 TOC 可消费的文字摘要，不能以代码围栏代替；演进备忘的既有内容必须原样保留，只允许在末尾追加。这些校验不保证知识事实正确。单条事件和最终正文限制为 1 MiB。
+
+命令缺失、失败终态、超时、空结果或校验失败时，沿用现有流程保留旧正文并标记 stale，可用 `refresh --stale` 重试。原始 CLI 诊断不写入 stale 原因。执行结束清理本次临时输出；超时会尝试回收本次进程树（POSIX 进程组 / Windows taskkill）。Windows 包装器若先退出并留下脱离进程树的后台任务，taskkill 无法保证回收，因此自定义 command 应以前台方式运行 CLI。`--check-only` 不启动 Agent，`auto_update: false` 仍冻结维护（refresh 可显式 `--force`）。
+
+这是独立知识维护 CLI 的能力：Desktop 的 TOC 消费格式保持兼容；SSH 仓库应在远端运行已登录的 Codex CLI；没有新增手机入口或 Desktop 安装流程。后续可按 `src/adapters/types.ts` 接口增加 `custom` adapter。
+
+**验证**：`pnpm --filter project-context test` 使用模拟 CLI 事件与临时 Git 仓库，覆盖输出契约、失败恢复、冻结和 check-only；不会启动真实模型或读取 Codex 凭证。真实 Codex 源码探索需另行手工验证，不能用模拟测试代替。
 
 ---
 
@@ -461,7 +486,7 @@ node packages/project-context/dist/cli.js refresh --all
 
 - `init --bootstrap` 接收 flag 但暂未真扫 concerns（**注：填模块正文用 `refresh --all`，bootstrap 只是用来发现新 concerns**，Phase 2）
 - `inject` 命令未单独封装（用 query 拼即可）
-- 仅 `claude-code` adapter；codex / custom 待做
+- `custom` adapter 待做；已支持 `claude-code` / `codex`
 - `depends_on` 字段写入但 query 不做扩展（一跳）
 - 没有 token budget 排序
 - 没有"跨进程更稳的锁"——`.cindy/project-knowledge/.lock` 是简单文件锁，崩溃时可能残留（手动删）

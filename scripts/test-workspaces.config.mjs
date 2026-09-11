@@ -315,7 +315,7 @@ export default {
         },
       },
     },
-    noCollectableWorkspace('project-context', 'packages/project-context'),
+    requiredUnitWorkspace('project-context', 'packages/project-context'),
     requiredUnitWorkspace('@cindy/remote-file-service', 'packages/remote-file-service'),
     requiredUnitWorkspace('@cindy/voice-input-core', 'packages/voice-input-core'),
     requiredUnitWorkspace('@cindy/wechat-ilink', 'packages/wechat-ilink'),

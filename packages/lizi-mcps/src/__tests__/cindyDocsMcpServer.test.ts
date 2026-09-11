@@ -24,7 +24,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import ExcelJS from 'exceljs';
 import JSZip from 'jszip';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCindyDocsMcpServer } from '../cindy_docsMcpServer.js';
 import {
@@ -879,9 +879,13 @@ describe('make_pptx', () => {
   });
 });
 
-describe('read_sheet', () => {
-  it('读回自己刚生成的 xlsx,支持按名与按序号选表', async () => {
-    const client = await connect();
+describe('read_sheet 读取生成的工作簿', () => {
+  let fixtureDir: string;
+  let client: Client;
+  // 工作簿只生成一次；每个独立读取场景保持默认超时，避免累计多次 worker 启动时间。
+  beforeAll(async () => {
+    fixtureDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-sheet-selection-'));
+    client = await connect({}, sessionCtx({ workingDir: fixtureDir }));
     await callTool(client, 'make_xlsx', {
       sheets: [
         { name: 'S1', header: ['a', 'b'], rows: [[1, 2]] },
@@ -890,6 +894,13 @@ describe('read_sheet', () => {
       outPath: 'r.xlsx',
     });
 
+  });
+  afterAll(async () => {
+    await client?.close();
+    if (fixtureDir) await fs.rm(fixtureDir, { recursive: true, force: true });
+  });
+
+  it('默认读取首表并返回工作表清单', async () => {
     const first = await callTool(client, 'read_sheet', { path: 'r.xlsx' });
     expect(first.ok).toBe(true);
     expect(first.sheet).toBe('S1');
@@ -899,24 +910,34 @@ describe('read_sheet', () => {
       [1, 2],
     ]);
     expect(first.truncated).toBe(false);
+  });
 
+  it('按名称读取工作表', async () => {
     expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 'S2' })).rows).toEqual([
       ['c'],
       ['x'],
     ]);
+  });
+  it('按序号读取工作表', async () => {
     expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 2 })).sheet).toBe('S2');
+  });
 
+  it('不存在的名称返回错误及可用工作表提示', async () => {
     const missing = await callTool(client, 'read_sheet', {
       path: 'r.xlsx',
       sheet: '不存在',
     });
     expect(missing.errorCode).toBe('SHEET_NOT_FOUND');
     expect((missing.data as Record<string, string>).hint).toContain('S1');
+  });
+  it('不存在的序号返回错误', async () => {
     expect((await callTool(client, 'read_sheet', { path: 'r.xlsx', sheet: 9 })).errorCode).toBe(
       'SHEET_NOT_FOUND',
     );
   });
+});
 
+describe('read_sheet', () => {
   it('读 csv / tsv,引号与跨行字段保真', async () => {
     const client = await connect();
     await fs.writeFile(

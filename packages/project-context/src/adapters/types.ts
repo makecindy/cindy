@@ -1,4 +1,6 @@
 export interface RewriteInput {
+  /** 仓库根目录；可选以保持现有 adapter 调用兼容。 */
+  cwd?: string;
   /** Full .md content (including frontmatter) of the existing knowledge file. */
   oldContent: string;
   /** Unified-diff text for the change being applied. */
