@@ -405,7 +405,7 @@ function registerSessionTaskControlEntries(
   registry.register({
     name: 'check_session_task',
     category: 'bots',
-    description: 'Read state, registered working_dir, stop confirmation and your own pending queue. Optional queued_message_id returns queued/consuming/dispatched/not-found; dispatched means accepted into host history, not proof the model acted on it. Use only when the user asks for progress or the automatic completion return appears to be missing.',
+    description: 'Read state, registered working_dir, stop confirmation and your own pending queue. Optional queued_message_id returns queued/consuming/dispatched/not-found/unavailable. Queue restoration failure preserves task state and result with queue_error=QUEUE_UNAVAILABLE; dispatched means accepted into host history, not proof the model acted on it. Use only when the user asks for progress or the automatic completion return appears to be missing.',
     inputShape: { task_id: z.string().min(1).max(128), queued_message_id: z.string().min(1).max(256).optional() },
     handler: async ({ task_id, queued_message_id }) => {
       const callerError = requireCaller();
@@ -430,7 +430,7 @@ function registerSessionTaskControlEntries(
     category: 'bots',
     description: [
       'Send a follow-up to one Session task without starting another task. check_session_task includes your pending queue; edit/withdraw require its queued_message_id. Only your own unconsumed messages can be changed; consuming input is rejected. Absence from the pending queue does not prove the model acted on it.',
-      'mode=queue (default) adds input for the next turn when busy. mode=steer requires a running engine with same-turn steer; it never falls back to queue.',
+      'mode=queue (default) adds input for the next turn when busy. mode=steer requires a running engine with same-turn steer; it never falls back to queue. Reuse idempotency_key when retrying the same steer from this Session to avoid duplicate injection.',
       'mode=resume releases a reversible pause on the same Session; optional message supplies new instructions, never replays the original request. Use decision or answers only for the exact pending interaction; if paused, resume first.',
       'Ordinary queued input to a completed task starts a fresh execution of the same tracked task; mode=resume only releases a reversible pause.',
     ].join('\n'),

@@ -251,11 +251,11 @@ describe("cindy_helper MCP server", () => {
 
       for (const mode of ['queue', 'steer', 'resume']) {
         await client.callTool({ name: 'call_tool', arguments: { name: 'message_session_task', args: {
-          task_id: 'session-task-1', mode, ...(mode === 'resume' ? {} : { message: 'follow up' }),
+          task_id: 'session-task-1', mode, ...(mode === 'resume' ? {} : { message: 'follow up', idempotency_key: 'retry-key' }),
         } } });
         expect(messageSessionTask).toHaveBeenLastCalledWith({
           callerSessionId: 'bot-parent-session', taskId: 'session-task-1',
-          reply: mode === 'resume' ? { kind: 'resume' } : { kind: 'message', text: 'follow up', mode },
+          reply: mode === 'resume' ? { kind: 'resume' } : { kind: 'message', text: 'follow up', mode, idempotencyKey: 'retry-key' },
         });
       }
       for (const mode of ['edit', 'withdraw']) {

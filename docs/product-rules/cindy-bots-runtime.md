@@ -249,9 +249,14 @@ Session 任务遵守同一套机制与呈现契约：
   完成独立分支、目录与 Session 绑定；失败不得落回共享目录。只在 Shell 中新建 worktree
   不会修改任务登记或运行时 cwd；`check_session_task` 返回实际登记目录与项目归属。
 - 补充输入返回 `queued_message_id`；`check_session_task` 返回调用 Session 自己投递的队列，
-  可按消息 ID 查询 queued / consuming / dispatched / not-found。dispatched 仅指宿主历史接受，
+  可按消息 ID 查询 queued / consuming / dispatched / not-found / unavailable。队列恢复失败时
+  保留任务状态和结果，单独返回 `queue_error=QUEUE_UNAVAILABLE`；无法核实的消息不能报 not-found。
+  dispatched 仅指宿主历史接受，
   不证明模型已执行要求。`message_session_task(mode=edit/withdraw)` 复用共享队列的发送方与
   消费竞态校验；不得改他人输入，consuming 不能编辑撤回，缺失不能假称已消费。
+- `mode=steer` 的 `idempotency_key` 在同一调用 Session、同一后台任务内生成稳定消息 ID，
+  复用输入协调器去重；已落库的回执在运行时重建后仍可查询，不把旧插话重新注入新轮。
+  原生接受后的落库失败依赖协调器的有界近期去重窗口；进程崩溃且回执未落库时不能保证恰好一次。
 - 取消复用界面停止的输入协调器，清除未派发队列与自动续接。持久取消标记阻止再次投递；
   `cancelling/unconfirmed` 不是已停，原生终态或状态回读确认空闲后才收口为 cancelled。
   超时终态也必须检查旧引擎是否已停，仍活跃时不得通过续接启动第二份执行。

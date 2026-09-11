@@ -7,7 +7,7 @@ import {
   type OrcaTeamServiceDeps,
   type OrcaWorkerRecordSnapshot,
 } from '../orcaTeamService.js';
-import { rebuildSessionQueueItem } from '../sessionControlService.js';
+import { createSessionControlService, rebuildSessionQueueItem } from '../sessionControlService.js';
 import type {
   AgentInputCoordinatorDeps,
   AgentInputHostSendFailureCode,
@@ -6453,6 +6453,51 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.toolLoop).toBeUndefined();
     expect(projection.recovery).toBeNull();
     expect(projection.errorRetryText).toBeNull();
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('deduplicates stable %s control IDs across native acceptance and the next turn', async (agentKind) => {
+    const h = createHarness();
+    const sid = 'stable-control-steer';
+    h.setAgentKind(agentKind);
+    h.coordinator.enqueue(sid, makeItem('initial', 'work'));
+    await flush();
+    let generation = 0;
+    let allocatedIds = 0;
+    const live = {
+      agentKind, capabilities: { sameTurnSteer: { supported: true } },
+      isTurnRunning: () => true, getTurnGeneration: () => generation,
+      requestGracefulStop: vi.fn(), getTurnControlSnapshot: vi.fn(),
+    };
+    h.setTurnSessionIdentity(live);
+    const service = createSessionControlService({
+      sessionExists: async () => true, getLiveSession: () => live,
+      getSessionActivitySnapshot: vi.fn(), getSessionRuntimeDetails: vi.fn(), setSessionRuntime: vi.fn(),
+      assertExternalInputAllowed: async () => undefined,
+      createQueuedMessage: async ({ queuedMessageId, message, callerSessionId }) => makeItem(queuedMessageId, message, {
+        origin: { kind: 'session', senderSessionId: callerSessionId, displayText: message },
+      }),
+      steerQueuedMessage: (id, item, expected) => h.coordinator.steer(id, item, {
+        fallbackToTurn: false, expectedTurnSession: expected.session, expectedTurnGeneration: expected.turnGeneration,
+      }),
+      getQueueSnapshot: vi.fn(), replaceQueuedMessage: vi.fn(), removeQueuedMessage: vi.fn(),
+      createId: () => `unexpected-random-ID-${++allocatedIds}`,
+    });
+    const input = { callerSessionId: 'caller', targetSessionId: sid, message: 'urgent', queuedMessageId: 'stable-ID' };
+    // Native acceptance succeeds even if its subsequent history write fails.
+    mocks.createMessage.mockRejectedValueOnce(new Error('fixture history unavailable'));
+    const firstReceipt = await service.steerSession(input);
+    const retryReceipt = await service.steerSession(input);
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(firstReceipt).toEqual({ ok: true, queuedMessageId: 'stable-ID' });
+    expect(retryReceipt).toEqual(firstReceipt);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    generation = 1;
+    h.setTurnGeneration(generation);
+    h.setRunning(true);
+    expect(await service.steerSession(input)).toEqual({ ok: true, queuedMessageId: 'stable-ID' });
+    expect(h.steerToAgent).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
   it('deduplicates an accepted steer after persistence and terminal failure', async () => {

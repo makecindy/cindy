@@ -3387,7 +3387,7 @@ describe('Bot Session task end-to-end runtime', () => {
     };
 
     const abortSession = vi.fn(async (): Promise<void> => undefined);
-    const steer = vi.fn(async () => options.steerUnsupported
+    const steer = vi.fn<NonNullable<Parameters<typeof createBotDelegationService>[0]['taskControl']>['steer']>(async () => options.steerUnsupported
       ? { ok: false as const, errorCode: 'UNSUPPORTED_CAPABILITY' as const, message: 'No same-turn steer' }
       : { ok: true as const, queuedMessageId: 'steered-message' });
     const stopTurn = vi.fn(async () => options.stopUnsupported
@@ -3872,6 +3872,97 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(await runtime.delegation.getSessionTask('session-1', result.delegationId))
         .toMatchObject({ task: { status: 'completed' } });
     } finally { h.sqlite!.exec('DROP TRIGGER fail_worktree_snapshot'); runtime.dispose(); }
+  });
+
+  it.each(['running', 'queued', 'paused'] as const)('preserves the %s input and timers when cancellation intent cannot be persisted', async (state) => {
+    await seedPair();
+    vi.useFakeTimers();
+    let unavailable = state === 'queued';
+    const runtime = createDelegationRuntime({ taskControl: true, transientUnavailable: () => unavailable });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.', timeoutMs: 10_000 });
+      if (!task.ok) throw new Error('task failed');
+      if (state === 'paused') await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      const before = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      h.sqlite!.exec("CREATE TEMP TRIGGER fail_cancel_intent BEFORE UPDATE OF permission_snapshot_json ON bot_delegations WHEN json_extract(NEW.permission_snapshot_json, '$.taskCancelRequested') = 1 BEGIN SELECT RAISE(FAIL, 'fixture cancel unavailable'); END");
+      await expect(runtime.delegation.stopSessionTask('session-1', task.delegationId)).rejects.toThrow();
+      h.sqlite!.exec('DROP TRIGGER fail_cancel_intent');
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(state === 'paused');
+      expect(runtime.abortSession).not.toHaveBeenCalled();
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toEqual(before);
+      if (state === 'queued') {
+        unavailable = false;
+        runtime.advance(1_000);
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(runtime.started.map(turn => turn.sessionId)).toContain(task.childSessionId);
+      }
+      runtime.advance(10_000);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId))
+        .toMatchObject({ task: { status: state === 'paused' ? 'waiting' : 'timed-out' } });
+    } finally {
+      h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_cancel_intent');
+      runtime.dispose();
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['running', 'completed', 'failed'] as const)('retains %s status and receipts when queue restoration fails', async (state) => {
+    await seedPair();
+    const inspect = vi.fn(async () => { throw new Error('Task queue restoration is incomplete'); });
+    const runtime = createDelegationRuntime({ taskControl: true, taskQueue: {
+      inspect, update: vi.fn(), cancel: vi.fn(),
+    } });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.' });
+      if (!task.ok) throw new Error('task failed');
+      const sent = await runtime.delegation.messageSessionTask('session-1', task.delegationId,
+        { kind: 'message', text: 'additional requirement', idempotencyKey: 'receipt' });
+      if (!sent.ok || !('queuedMessageId' in sent)) throw new Error('missing receipt');
+      if (state !== 'running') h.sqlite!.prepare('UPDATE bot_delegations SET status = ?, result_summary = ?, last_error = ? WHERE id = ?')
+        .run(state, 'Saved result', state === 'failed' ? 'FIXTURE: Saved error' : null, task.delegationId);
+      for (const messageId of [undefined, 'missing', sent.queuedMessageId]) {
+        const result = await runtime.delegation.getSessionTask('session-1', task.delegationId, messageId);
+        expect(result).toMatchObject({ ok: true, task: { status: state, queue: null, queue_error: 'QUEUE_UNAVAILABLE' } });
+        if (!result.ok) throw new Error('missing task');
+        if (state !== 'running') expect(result.task.result).toBe('Saved result');
+        if (state === 'failed') expect(result.task.error).toBe('Saved error');
+        expect(result.task.message_receipt).toEqual(messageId ? {
+          queued_message_id: messageId, state: messageId === sent.queuedMessageId ? 'dispatched' : 'unavailable',
+        } : undefined);
+      }
+    } finally { runtime.dispose(); }
+  });
+
+  it('keeps steer IDs stable and reuses persisted receipts after runtime replacement', async () => {
+    await seedPair();
+    const runtime = createDelegationRuntime({ taskControl: true });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Finish safely.' });
+      if (!task.ok) throw new Error('task failed');
+      const input = { kind: 'message' as const, text: 'urgent', mode: 'steer' as const, idempotencyKey: 'retry:完整/key' };
+      await runtime.delegation.messageSessionTask('session-1', task.delegationId, input);
+      await runtime.delegation.messageSessionTask('session-1', task.delegationId, input);
+      const calls = runtime.steer.mock.calls;
+      const id = calls[0][0].queuedMessageId;
+      if (!id) throw new Error('missing stable ID');
+      expect(id).toEqual(expect.stringMatching(/^bot-task-steer:[a-f0-9]{64}$/));
+      expect(calls[1][0].queuedMessageId).toBe(id);
+      await runtime.delegation.messageSessionTask('session-1', task.delegationId, { ...input, idempotencyKey: 'retry完整key' });
+      expect(calls[2][0].queuedMessageId).not.toBe(id);
+      h.sqlite!.prepare('INSERT INTO messages (id, client_id, session_id, role, content, created_at, agent_meta) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .run('accepted-steer', id, task.childSessionId, 'user', input.text, 10_000,
+          JSON.stringify({ origin: { kind: 'session', senderSessionId: 'session-1' } }));
+      const restored = createDelegationRuntime({ taskControl: true });
+      try {
+        expect(await restored.delegation.messageSessionTask('session-1', task.delegationId, input))
+          .toMatchObject({ ok: true, delivery: 'same-turn', queuedMessageId: id });
+        expect(restored.steer).not.toHaveBeenCalled();
+        expect(restored.started).toHaveLength(0);
+        expect(await restored.delegation.messageSessionTask('session-2', task.delegationId, input))
+          .toMatchObject({ ok: false, errorCode: 'NOT_A_BOT_SESSION' });
+      } finally { restored.dispose(); }
+    } finally { runtime.dispose(); }
   });
 
   it.each(['waitForInputBoundary', 'stopTurn', 'preparePause'] as const)('retries an uncertain pause after %s fails', async (stage) => {

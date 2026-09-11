@@ -1,6 +1,6 @@
 import { existsSync, statSync } from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { app } from 'electron';
 import { and, desc, eq, inArray, isNull, or, sql } from 'drizzle-orm';
@@ -86,7 +86,7 @@ export interface BotDelegationServiceDeps {
   }) => Promise<DispatchResult>;
   abortSession: (sessionId: string) => Promise<void>;
   taskControl?: {
-    steer(params: { callerSessionId: string; targetSessionId: string; message: string }): Promise<SessionSteerResult>;
+    steer(params: { callerSessionId: string; targetSessionId: string; message: string; queuedMessageId?: string }): Promise<SessionSteerResult>;
     stop(params: { targetSessionId: string }): Promise<SessionStopResult>;
     /** Includes native pending interactions and in-flight sends, not just visible streaming. */
     isActive(sessionId: string): boolean;
@@ -2089,12 +2089,14 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     }
     if (row.childSessionId) {
       if (deps.taskControl) {
-        holdTaskInput(row.childSessionId, true);
-        clearTimer(row.id);
-        clearRetryTimer(row.id);
+        // Commit intent before changing the input/timer boundary. A failed write
+        // must leave the running (or already paused) task exactly as it was.
         await getDbClient().drizzle.update(botDelegations).set({
           permissionSnapshotJson: JSON.stringify({ ...parseRecord(row.permissionSnapshotJson), taskCancelRequested: true }),
         }).where(eq(botDelegations.id, row.id));
+        holdTaskInput(row.childSessionId, true);
+        clearTimer(row.id);
+        clearRetryTimer(row.id);
         await deps.taskControl.waitForInputBoundary(row.childSessionId);
       }
       try {
@@ -2593,16 +2595,29 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         .where(eq(sessions.id, row.childSessionId))
         .limit(1)
       : [];
-    const queue = row.childSessionId && deps.taskQueue ? await deps.taskQueue.inspect(row.childSessionId, callerSessionId) : null;
+    let queue: Awaited<ReturnType<NonNullable<BotDelegationServiceDeps['taskQueue']>['inspect']>> | null = null;
+    let queueError: 'QUEUE_UNAVAILABLE' | undefined;
+    if (row.childSessionId && deps.taskQueue) {
+      try {
+        queue = await deps.taskQueue.inspect(row.childSessionId, callerSessionId);
+      } catch {
+        // Queue restoration is diagnostic; it must not hide a task's result.
+        queueError = 'QUEUE_UNAVAILABLE';
+      }
+    }
     let messageReceipt: { queued_message_id: string; state: string } | undefined;
     if (queuedMessageId && row.childSessionId) {
       const queued = queue?.find(item => item.queuedMessageId === queuedMessageId);
-      let state = queued ? (queued.consuming ? 'consuming' : 'queued') : 'not-found';
+      let state = queued ? (queued.consuming ? 'consuming' : 'queued') : queue === null ? 'unavailable' : 'not-found';
       if (!queued) {
-        const [sent] = await getDbClient().drizzle.select({ agentMeta: messages.agentMeta }).from(messages)
-          .where(and(eq(messages.sessionId, row.childSessionId), eq(messages.clientId, queuedMessageId), isNull(messages.rewindAt))).limit(1);
-        const origin = parseRecord(sent?.agentMeta).origin as { kind?: string; senderSessionId?: string } | undefined;
-        if (origin?.kind === 'session' && origin.senderSessionId === callerSessionId) state = 'dispatched';
+        try {
+          const [sent] = await getDbClient().drizzle.select({ agentMeta: messages.agentMeta }).from(messages)
+            .where(and(eq(messages.sessionId, row.childSessionId), eq(messages.clientId, queuedMessageId), isNull(messages.rewindAt))).limit(1);
+          const origin = parseRecord(sent?.agentMeta).origin as { kind?: string; senderSessionId?: string } | undefined;
+          if (origin?.kind === 'session' && origin.senderSessionId === callerSessionId) state = 'dispatched';
+        } catch {
+          state = 'unavailable';
+        }
       }
       messageReceipt = { queued_message_id: queuedMessageId, state };
     }
@@ -2616,6 +2631,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         working_dir: child?.workingDir ?? null,
         workspace_kind: child?.workspaceKind ?? null,
         queue,
+        queue_error: queueError,
         message_receipt: messageReceipt,
         title: child?.title || row.objective.trim().split('\n')[0]?.slice(0, 120) || 'Background task',
         objective: row.objective,
@@ -2752,8 +2768,23 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         if (!deps.taskControl || !row.childSessionId || !isActiveDelegation(row.status as DelegationStatus)) {
           return { ok: false as const, errorCode: 'NO_ACTIVE_TURN', message: 'Task has no steerable turn' };
         }
+        // Keep the caller/task/key identity stable across retries and turns.
+        // Do not strip characters or truncate keys into accidental collisions.
+        const queuedMessageId = input.idempotencyKey === undefined ? undefined
+          : `bot-task-steer:${createHash('sha256').update(JSON.stringify([callerSessionId, taskId, input.idempotencyKey])).digest('hex')}`;
+        if (queuedMessageId) {
+          const [sent] = await getDbClient().drizzle.select({ agentMeta: messages.agentMeta }).from(messages)
+            .where(and(eq(messages.sessionId, row.childSessionId), eq(messages.clientId, queuedMessageId), isNull(messages.rewindAt))).limit(1);
+          const origin = parseRecord(sent?.agentMeta).origin as { kind?: string; senderSessionId?: string } | undefined;
+          if (origin?.kind === 'session' && origin.senderSessionId === callerSessionId) {
+            return { ok: true as const, childSessionId: row.childSessionId,
+              resumed: false, queued: false, delivery: 'same-turn', queuedMessageId };
+          }
+        }
+        // The coordinator deduplicates in-flight and accepted IDs even when
+        // persistence failed after native acceptance. Persisted rows cover restore.
         const result = await deps.taskControl.steer({ callerSessionId,
-          targetSessionId: row.childSessionId, message: input.text });
+          targetSessionId: row.childSessionId, message: input.text, queuedMessageId });
         return result.ok ? { ok: true as const, childSessionId: row.childSessionId,
           resumed: false, queued: false, delivery: 'same-turn', queuedMessageId: result.queuedMessageId } : result;
       }

@@ -165,6 +165,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       callerSessionId: string;
       targetSessionId: string;
       message: string;
+      /** Host-owned stable ID; the input coordinator owns acceptance deduplication. */
+      queuedMessageId?: string;
     }): Promise<SessionSteerResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
@@ -196,7 +198,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         };
       }
       const turnGeneration = live.getTurnGeneration();
-      const queuedMessageId = deps.createId();
+      const queuedMessageId = params.queuedMessageId ?? deps.createId();
       const item = await deps.createQueuedMessage({
         ...params,
         queuedMessageId,
