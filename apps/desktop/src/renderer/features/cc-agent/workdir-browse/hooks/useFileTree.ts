@@ -248,25 +248,32 @@ const HIDDEN_VIEW_DIR_NAMES = new Set(
 );
 
 /**
- * 关开关的首帧过滤:把 reveal 态根列表里「隐藏态会被忽略」的一级目录行拿掉。
+ * 关开关的首帧过滤:把 reveal 态树里「隐藏态会被忽略」的目录行**逐列表**拿掉
+ * —— 不只是根列表。被忽略目录可能嵌在已展开的普通目录下面
+ * (`packages/foo/node_modules`):只滤根列表的话它会一直挂在展开的父目录下,
+ * 而 pruneExpandedForCurrentTree 会拿**过期的 reveal 子列表**当可达性依据、
+ * 把它判成可达,于是永久保留到手动刷新。
  *
- * 不这样做的话,关开关后 node_modules / build 这些行要等新 matcher 的 root 数据
- * 回来才消失 —— 慢通道(SSH / device-link)下是数秒的「开关关了却还看得见」。
- * 子树缓存与展开集合不动:父行一旦不在根列表里,flattenTree 就不会走到它下面,
- * 整棵子树在同一帧一起不可达 —— 「整体一次性消失」的观感不受影响。
+ * 逐列表过滤同时修好 prune 的判据:父列表里已经没有那一行,可达性自然为假。
+ * 子树缓存与展开集合整体不动(不可达的分支本来就不渲染,被剪掉的只是展开位),
+ * 不重拉任何目录 —— 「整体一次性消失」的观感不变。
+ *
+ * 只覆盖内置名单:`.gitignore` / `.p4ignore` 的自定义条目 renderer 拿不到
+ * (不读盘),要等新 matcher 的数据回来才消失。
  */
-function filterSeedRootForHiddenView(
+function filterSeedTreeForHiddenView(
   entries: ReadonlyMap<string, readonly DirEntry[]>,
 ): ReadonlyMap<string, readonly DirEntry[]> {
-  const root = entries.get(ROOT_KEY);
-  if (!root) return entries;
-  const filtered = root.filter(
-    (entry) => !(entry.type === 'directory' && HIDDEN_VIEW_DIR_NAMES.has(entry.name)),
-  );
-  if (filtered.length === root.length) return entries;
-  const next = new Map(entries);
-  next.set(ROOT_KEY, filtered);
-  return next;
+  let changed = false;
+  const next = new Map<string, readonly DirEntry[]>();
+  for (const [dir, list] of entries) {
+    const filtered = list.filter(
+      (entry) => !(entry.type === 'directory' && HIDDEN_VIEW_DIR_NAMES.has(entry.name)),
+    );
+    if (filtered.length !== list.length) changed = true;
+    next.set(dir, filtered.length === list.length ? list : filtered);
+  }
+  return changed ? next : entries;
 }
 
 /**
@@ -360,10 +367,10 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
       seedDisplayable && seed
         ? {
             // 关开关的首帧就滤掉内置忽略目录(避免慢通道下它们在新数据回来前
-            // 还挂在「已隐藏」的视图里),见 filterSeedRootForHiddenView。
+            // 还挂在「已隐藏」的视图里),见 filterSeedTreeForHiddenView。
             entries: opts.showIgnoredDirs
               ? seed.entries
-              : filterSeedRootForHiddenView(seed.entries),
+              : filterSeedTreeForHiddenView(seed.entries),
             expanded: seed.expanded,
             // 新 store 自己还没有 in-flight 请求,seed 的 loadingPaths 不继承。
             loadingPaths: new Set(),

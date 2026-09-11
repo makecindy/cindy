@@ -340,6 +340,67 @@ describe('useFileTree showIgnoredDirs option', () => {
   });
 
   /**
+   * 评审 P1：被忽略目录嵌在已展开的普通目录下时（`packages/foo/node_modules`），
+   * 只滤根列表的实现会把它一直留在展开的父目录下 —— 而且 prune 拿过期的 reveal
+   * 子列表判可达性，会把它保留到手动刷新。逐列表过滤后：首帧就不渲染它，prune 也
+   * 按新判据把它从展开集合里剪掉，同时不重拉任何目录。
+   */
+  it('关开关首帧滤掉展开父目录下的嵌套被忽略目录,prune 不再把它当可达', async () => {
+    const dir = (name: string, relPath: string): DirEntry => ({
+      name,
+      relPath,
+      type: 'directory',
+      size: 0,
+      mtimeMs: 1,
+    });
+    const revealedRoot = [dir('packages', 'packages')];
+    const revealedPackages = [dir('foo', 'packages/foo'), dir('node_modules', 'packages/node_modules')];
+    const revealedFoo = [dir('src', 'packages/foo/src'), dir('node_modules', 'packages/foo/node_modules')];
+
+    const pendingRoot = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) => {
+      if (!args.showIgnoredDirs) return pendingRoot.promise;
+      if (args.relPath === 'packages') return Promise.resolve(revealedPackages);
+      if (args.relPath === 'packages/foo') return Promise.resolve(revealedFoo);
+      return Promise.resolve(revealedRoot);
+    });
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-nested-filter', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: true } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    await act(async () => {
+      view.result.current.toggleFolder('packages');
+    });
+    await waitFor(() => expect(view.result.current.entries.get('packages')).toBeDefined());
+    await act(async () => {
+      view.result.current.toggleFolder('packages/foo');
+    });
+    await waitFor(() => expect(view.result.current.entries.get('packages/foo')).toBeDefined());
+
+    await act(async () => {
+      view.rerender({ reveal: false });
+    });
+
+    // 首帧：两层列表里的 node_modules 行都不再渲染。
+    expect(view.result.current.entries.get('packages')?.map((e) => e.name)).toEqual(['foo']);
+    expect(view.result.current.entries.get('packages/foo')?.map((e) => e.name)).toEqual(['src']);
+
+    // root 数据回来后：prune 按过滤后的父列表判可达性，剪掉折叠位。
+    await act(async () => {
+      pendingRoot.resolve(revealedRoot);
+      await Promise.resolve();
+    });
+    expect(view.result.current.expanded.has('packages/node_modules')).toBe(false);
+    expect(view.result.current.expanded.has('packages/foo/node_modules')).toBe(false);
+    expect(view.result.current.expanded.has('packages/foo')).toBe(true);
+
+    view.unmount();
+  });
+
+  /**
    * 兄弟 store 还在首次 listDir 上（慢通道）时不能冒充「已加载」：没有可显示内容
    * 就保持 initialLoading，否则 FileTreeView 会把空 rows 渲染成「此文件夹为空」
    * 而不是延迟 loading 态。
