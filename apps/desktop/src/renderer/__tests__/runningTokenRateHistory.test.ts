@@ -106,3 +106,21 @@ describe('running speed history', () => {
     expect(history.peak).toBe(1000);
   });
 });
+
+it('records final usage without losing the completed turn identity, then resets on a new turn', () => {
+  const active = recordRunningTokenRate(begin(), {
+    ...input,
+    outputTokens: 100,
+    generationDurationMs: 1000,
+  });
+  const terminal = recordRunningTokenRate(active, {
+    ...input,
+    startedAt: null,
+    outputTokens: 150,
+    generationDurationMs: 2000,
+  });
+  expect(terminal.startedAt).toBe(1);
+  expect(terminal.samples.map((sample) => sample.rate)).toEqual([100, 50]);
+  expect(terminal.peak).toBe(100);
+  expect(recordRunningTokenRate(terminal, { ...input, startedAt: 2 }).samples).toEqual([]);
+});

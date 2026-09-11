@@ -25,7 +25,10 @@ export function recordRunningTokenRate(
     generationReliable: boolean;
   },
 ): RateHistory {
-  const { startedAt, outputTokens, generationDurationMs, generationReliable } = input;
+  const { outputTokens, generationDurationMs, generationReliable } = input;
+  // Terminal status clears startedAt before the status bar finishes its linger/fade.
+  // Keep its identity so a final paired usage report can still be recorded.
+  const startedAt = input.startedAt ?? history.startedAt;
   const previous = history.baseline;
   const reset =
     history.startedAt !== startedAt ||

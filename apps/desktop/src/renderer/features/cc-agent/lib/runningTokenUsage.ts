@@ -1,9 +1,7 @@
 import { formatOutputTokenRateValue } from '@/lib/turnUsageTooltip';
 
 export function formatRunningTokenCount(tokenUsage: number): string {
-  return tokenUsage >= 1000
-    ? `${(tokenUsage / 1000).toFixed(1)}k`
-    : `${tokenUsage}`;
+  return tokenUsage >= 1000 ? `${(tokenUsage / 1000).toFixed(1)}k` : `${tokenUsage}`;
 }
 
 export function formatLiveOutputTokenRate(
@@ -16,9 +14,7 @@ export function formatLiveOutputTokenRate(
 }
 
 export type RunningUsageMeta =
-  | { kind: 'rate'; rate: string }
-  | { kind: 'tokens' }
-  | { kind: 'none' };
+  { kind: 'rate'; rate: string } | { kind: 'tokens' } | { kind: 'none' };
 
 /**
  * Live status prefers generation-only TPS when the harness can prove it.
@@ -40,4 +36,9 @@ export function resolveRunningUsageMeta(input: {
   if (rate) return { kind: 'rate', rate };
   if (input.tokenUsage > 0) return { kind: 'tokens' };
   return { kind: 'none' };
+}
+
+/** Keep recent and peak rates consistent with the cumulative rate's low-speed threshold. */
+export function formatRecentOutputTokenRate(rate: number): string | null {
+  return rate === 0 ? '0' : formatOutputTokenRateValue(rate, 1000);
 }

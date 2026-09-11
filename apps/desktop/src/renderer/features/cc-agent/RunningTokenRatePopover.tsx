@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Activity } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip } from '@/components/ui/tooltip';
-import { formatRunningTokenCount } from './lib/runningTokenUsage';
+import { formatRecentOutputTokenRate, formatRunningTokenCount } from './lib/runningTokenUsage';
 import {
   emptyRateHistory,
   recordRunningTokenRate,
@@ -28,7 +28,9 @@ export function useRunningTokenRateHistory(input: {
       }),
     );
   }, [startedAt, outputTokens, generationDurationMs, generationReliable]);
-  return history.startedAt === startedAt ? history : emptyRateHistory(startedAt);
+  return startedAt === null || history.startedAt === startedAt
+    ? history
+    : emptyRateHistory(startedAt);
 }
 
 export function RunningTokenRatePopover({
@@ -113,7 +115,9 @@ export function RunningTokenRatePopover({
             <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.observedPeak')}</dt>
             <dd className="font-medium">
               {history.peak > 0
-                ? t('chat.runningStatus.tokenRate', { rate: history.peak.toFixed(1) })
+                ? t('chat.runningStatus.tokenRate', {
+                    rate: formatRecentOutputTokenRate(history.peak),
+                  })
                 : '—'}
             </dd>
           </div>

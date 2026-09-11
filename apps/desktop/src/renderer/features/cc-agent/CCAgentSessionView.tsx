@@ -233,7 +233,11 @@ import { isRemoteSessionWriteBlocked } from './lib/remoteSessionWriteGuard';
 import { getModelById, getDefaultModelForVendor, getModelsForVendor } from '@/lib/modelDefinitions';
 import { resolveDisplayContextWindow } from '@/lib/contextWindow';
 import { resolveSessionContextWindow } from '../../../shared/sessionContextWindow';
-import { formatRunningTokenCount, resolveRunningUsageMeta } from './lib/runningTokenUsage';
+import {
+  formatRecentOutputTokenRate,
+  formatRunningTokenCount,
+  resolveRunningUsageMeta,
+} from './lib/runningTokenUsage';
 import { RunningTokenRatePopover, useRunningTokenRateHistory } from './RunningTokenRatePopover';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import { extractIpcError } from '@/utils/ipcError';
@@ -5727,10 +5731,14 @@ function RunningStatusBar({
     outputTokens,
     generationDurationMs,
     generationReliable:
-      generationReliable && !sideTaskRunning && !backgroundTasksRunning && !workflowWaiting,
+      generationReliable &&
+      !isHidden &&
+      !sideTaskRunning &&
+      !backgroundTasksRunning &&
+      !workflowWaiting,
   });
   const latestRate = rateHistory.samples.at(-1)?.rate;
-  const latestRateText = latestRate !== undefined ? latestRate.toFixed(1) : null;
+  const latestRateText = latestRate !== undefined ? formatRecentOutputTokenRate(latestRate) : null;
   const rateText =
     usageMeta.kind === 'rate'
       ? latestRateText !== null
@@ -5850,7 +5858,7 @@ function RunningStatusBar({
                     </span>
                     {rateText && usageMeta.kind === 'rate' ? (
                       <RunningTokenRatePopover
-                        key={startedAt}
+                        key={rateHistory.startedAt}
                         rate={latestRateText}
                         rateText={rateText}
                         averageRate={usageMeta.rate}

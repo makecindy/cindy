@@ -2,7 +2,10 @@
 import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { RunningTokenRatePopover } from '@/features/cc-agent/RunningTokenRatePopover';
+import {
+  RunningTokenRatePopover,
+  useRunningTokenRateHistory,
+} from '@/features/cc-agent/RunningTokenRatePopover';
 
 vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
 afterEach(cleanup);
@@ -73,3 +76,44 @@ it.each(['Escape', 'outside', 'trigger'] as const)(
     await screen.findByRole('tooltip');
   },
 );
+
+it('keeps a pinned card and final samples through completion, resetting for a new turn', async () => {
+  function Harness({
+    startedAt,
+    outputTokens,
+    generationDurationMs,
+  }: {
+    startedAt: number | null;
+    outputTokens: number;
+    generationDurationMs: number;
+  }) {
+    const history = useRunningTokenRateHistory({
+      startedAt,
+      outputTokens,
+      generationDurationMs,
+      generationReliable: true,
+    });
+    return (
+      <RunningTokenRatePopover
+        key={history.startedAt}
+        rate={String(history.samples.at(-1)?.rate ?? '')}
+        rateText="speed"
+        averageRate="75"
+        outputTokens={outputTokens}
+        history={history}
+      />
+    );
+  }
+  const { rerender } = render(<Harness startedAt={1} outputTokens={0} generationDurationMs={0} />);
+  rerender(<Harness startedAt={1} outputTokens={100} generationDurationMs={1000} />);
+  const trigger = screen.getByRole('button');
+  fireEvent.click(trigger);
+  const dialog = screen.getByRole('dialog');
+  rerender(<Harness startedAt={null} outputTokens={150} generationDurationMs={2000} />);
+  expect(screen.getByRole('dialog')).toBe(dialog);
+  expect(screen.getByRole('button')).toBe(trigger);
+  expect(dialog.textContent).toContain('50');
+  expect(screen.getByRole('img').querySelectorAll('path')).toHaveLength(3);
+  rerender(<Harness startedAt={2} outputTokens={0} generationDurationMs={0} />);
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+});
