@@ -7,7 +7,16 @@ import { subscribeRemoteBotChanges, useDeviceLink } from '@/device-link/DeviceLi
 const pending = new Map<string, { promise: Promise<unknown>; invalidated: boolean }>();
 
 /** Share concurrent list reads between cards; responses never outlive their account/link. */
-export function useRemoteCompanionQuery<T>(deviceId: string, channel: string, args: string[]) {
+export function useRemoteCompanionQuery<T>(
+  deviceId: string,
+  channel: string,
+  args: unknown[],
+  options: {
+    enabled?: boolean;
+    refreshIntervalMs?: number;
+    refreshKey?: number;
+  } = {},
+) {
   const link = useDeviceLink();
   const { accountGeneration } = useAuth();
   const argsKey = JSON.stringify(args);
@@ -32,7 +41,7 @@ export function useRemoteCompanionQuery<T>(deviceId: string, channel: string, ar
   currentBinding.current = binding;
   useFocusEffect(
     useCallback(() => {
-      if (!deviceId || !online) return;
+      if (!deviceId || !online || options.enabled === false) return;
       let disposed = false;
       let timer: ReturnType<typeof setTimeout> | undefined;
       let generation = 0;
@@ -91,14 +100,21 @@ export function useRemoteCompanionQuery<T>(deviceId: string, channel: string, ar
           });
       };
       load();
+      const interval = options.refreshIntervalMs
+        ? setInterval(load, options.refreshIntervalMs)
+        : undefined;
       const unsubscribe = subscribeRemoteBotChanges((source, changedChannel, payload) => {
         if (source !== deviceId || !payload || typeof payload !== 'object') return;
-        const row = payload as { parentSessionId?: string; threadId?: string };
+        const row = payload as {
+          parentSessionId?: string;
+          threadId?: string;
+        };
         const relevant =
           channel === 'maker:bot-delegations:list'
             ? changedChannel === 'maker:bot-delegation:changed' &&
               row.parentSessionId === JSON.parse(argsKey)[0]
-            : changedChannel === 'maker:bot-direct-message:changed' &&
+            : channel === 'maker:bot-direct-message-thread:get' &&
+              changedChannel === 'maker:bot-direct-message:changed' &&
               row.threadId === JSON.parse(argsKey)[0];
         if (!relevant) return;
         const entry = pending.get(binding);
@@ -118,11 +134,24 @@ export function useRemoteCompanionQuery<T>(deviceId: string, channel: string, ar
         unsubscribe();
         appState.remove();
         if (timer) clearTimeout(timer);
+        if (interval) clearInterval(interval);
       };
-    }, [argsKey, binding, channel, deviceId, identity, link.invoke, online, revision]),
+    }, [
+      argsKey,
+      binding,
+      channel,
+      deviceId,
+      identity,
+      link.invoke,
+      online,
+      revision,
+      options.enabled,
+      options.refreshIntervalMs,
+      options.refreshKey,
+    ]),
   );
   return {
-    value: state.identity === identity ? state.value : null,
+    value: options.enabled !== false && state.identity === identity ? state.value : null,
     error: state.identity === identity && (state.error || state.binding !== binding),
     online,
     refresh,

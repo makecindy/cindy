@@ -3,7 +3,9 @@ import { FileText, GitPullRequest, Megaphone, Square, TriangleAlert } from 'luci
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
-import { extractPrRefs } from '@cindy/maker-shared';
+import { prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
+import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
+import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -105,6 +107,25 @@ function SessionTaskCardBody({
 
   const active = row ? isActiveDelegationStatus(row.status) : false;
   const childSessionId = row?.childSessionId ?? meta.childSessionId;
+  const { registerPrConsumer } = usePrActions();
+  const pullRequests = usePrRefsForSession(childSessionId ?? '');
+  const { statuses } = usePrStatuses(childSessionId ?? '');
+  useEffect(() => {
+    if (!childSessionId) return;
+    return registerPrConsumer(childSessionId, sourceDeviceId);
+  }, [childSessionId, sourceDeviceId, registerPrConsumer]);
+  const prIcon = (ref: (typeof pullRequests)[number]) => {
+    const result = statuses.get(prStatusKey(ref));
+    const kind = result?.ok ? result.status : null;
+    const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
+    return (
+      <Icon
+        size={14}
+        aria-hidden="true"
+        style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }}
+      />
+    );
+  };
 
   // 只在还在干活时起秒级 tick，收拢后不再空转。
   useEffect(() => {
@@ -166,9 +187,6 @@ function SessionTaskCardBody({
   const taskTitle =
     row?.title || meta.objective.trim().split('\n')[0] || t('bots.collab.backgroundTask');
   const artifacts = row?.artifacts ?? [];
-  // Only the child's returned result supplies links. The objective can mention an
-  // unrelated PR as context, and task completion says nothing about PR merge state.
-  const pullRequests = extractPrRefs(row?.resultSummary ?? '');
   const actionClass = 'w-full min-w-[104px] gap-1.5 px-3';
   const openPr = (url: string) => {
     setActionError(null);
@@ -184,9 +202,13 @@ function SessionTaskCardBody({
       variant="secondary"
       size="md"
       className={actionClass}
-      onClick={pullRequests.length === 1 ? () => openPr(pullRequests[0].url) : undefined}
+      onClick={pullRequests.length === 1 ? () => openPr(sessionPrUrl(pullRequests[0])) : undefined}
     >
-      <GitPullRequest size={14} aria-hidden="true" />
+      {pullRequests.length === 1 ? (
+        prIcon(pullRequests[0])
+      ) : (
+        <GitPullRequest size={14} aria-hidden="true" />
+      )}
       {t('bots.collab.viewPr')}
     </Button>
   );
@@ -221,7 +243,10 @@ function SessionTaskCardBody({
           <span>{t('bots.collab.prCount', { count: pullRequests.length })}</span>
         ) : null}
       </div>
-      {(stale || !online) && row ? (
+      {(stale ||
+        !online ||
+        pullRequests.some((ref) => statuses.get(prStatusKey(ref))?.ok === false)) &&
+      row ? (
         <p className="mt-1.5 flex items-center gap-1.5 text-[var(--text-tertiary)]">
           <TriangleAlert size={13} aria-hidden="true" />
           {t('bots.collab.stale')}
@@ -253,8 +278,8 @@ function SessionTaskCardBody({
               <DropdownMenuTrigger asChild>{prButton}</DropdownMenuTrigger>
               <DropdownMenuContent align="start">
                 {pullRequests.map((pr) => (
-                  <DropdownMenuItem key={pr.url} onSelect={() => openPr(pr.url)}>
-                    {pr.owner}/{pr.repo} #{pr.prNumber}
+                  <DropdownMenuItem key={pr.url} onSelect={() => openPr(sessionPrUrl(pr))}>
+                    {prIcon(pr)} {pr.owner}/{pr.repo} #{pr.prNumber}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>

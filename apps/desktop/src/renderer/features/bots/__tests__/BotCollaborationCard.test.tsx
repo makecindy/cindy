@@ -14,7 +14,13 @@ import type {
 } from '../../../../shared/botDelegation';
 import type { BotCollaborationMeta } from '../../../../shared/botCollaboration';
 
-const mocks = vi.hoisted(() => ({ navigate: vi.fn(), remoteBots: [] as any[] }));
+const mocks = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  remoteBots: [] as any[],
+  prRefs: [] as any[],
+  prStatuses: new Map(),
+  registerPrConsumer: vi.fn(() => () => {}),
+}));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -25,6 +31,21 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
+vi.mock('@/contexts/PrRefsContext', () => ({
+  usePrActions: () => ({ registerPrConsumer: mocks.registerPrConsumer }),
+  usePrRefsForSession: (id: string) => (id === 'child-1' ? mocks.prRefs : []),
+  usePrStatuses: () => ({ statuses: mocks.prStatuses }),
+}));
+const associatedPr = (n: number) => ({
+  id: `pr-${n}`,
+  sessionId: 'child-1',
+  owner: 'a',
+  repo: 'b',
+  prNumber: n,
+  url: `https://github.com/a/b/pull/${n}`,
+  firstSeenAt: 1,
+  lastSeenAt: 1,
+});
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 const SESSION_ID = 'parent-session-1';
@@ -82,6 +103,9 @@ let listBotDelegations: ReturnType<typeof vi.fn>;
 let cancelBotDelegation: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  mocks.prRefs = [];
+  mocks.prStatuses = new Map();
+  mocks.registerPrConsumer.mockClear();
   listeners = [];
   mocks.remoteBots = [];
   mocks.navigate.mockClear();
@@ -374,6 +398,7 @@ it('routes remote task reads, stop, child navigation and push refresh to the sam
   } as any;
   render(<BotSessionTaskCard sessionId={SESSION_ID} data={meta() as any} />);
   const stop = await screen.findByRole('button', { name: 'bots.collab.stopTask' });
+  expect(mocks.registerPrConsumer).toHaveBeenCalledWith('child-1', 'home');
   expect(invoke).toHaveBeenCalledWith('home', 'maker:bot-delegations:list', [SESSION_ID]);
   expect(listBotDelegations).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: 'bots.collab.watchWork' }));
@@ -406,7 +431,8 @@ it('routes remote task reads, stop, child navigation and push refresh to the sam
   await screen.findByText(/bots\.collab\.status\.completed/);
 });
 
-it('opens a returned PR with the same small secondary control as opening the task', async () => {
+it('opens the child session associated PR even when the report contains another link', async () => {
+  mocks.prRefs = [associatedPr(733)];
   listBotDelegations.mockResolvedValue({
     ok: true,
     delegations: [
@@ -425,9 +451,7 @@ it('opens a returned PR with the same small secondary control as opening the tas
   expect(container.textContent).not.toContain('/private/report.md');
   expect(container.textContent).not.toContain('## Deliverables');
   fireEvent.click(pr);
-  expect(window.electronAPI.openExternal).toHaveBeenCalledWith(
-    'https://github.com/makecindy/cindy/pull/733',
-  );
+  expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://github.com/a/b/pull/733');
 });
 
 it('does not mistake a contextual PR in the objective for the task result', async () => {
@@ -442,7 +466,8 @@ it('does not mistake a contextual PR in the objective for the task result', asyn
   expect(screen.queryByRole('button', { name: 'bots.collab.viewPr' })).toBeNull();
 });
 
-it('offers every returned PR without opening an arbitrary first link', async () => {
+it('offers every associated PR without opening an arbitrary first link', async () => {
+  mocks.prRefs = [associatedPr(1), associatedPr(2)];
   listBotDelegations.mockResolvedValue({
     ok: true,
     delegations: [
@@ -458,4 +483,21 @@ it('offers every returned PR without opening an arbitrary first link', async () 
   expect(window.electronAPI.openExternal).not.toHaveBeenCalled();
   fireEvent.click(choice);
   expect(window.electronAPI.openExternal).toHaveBeenCalledWith('https://github.com/a/b/pull/2');
+});
+
+it('subscribes to the child session PR state and updates its icon without enlarging actions', async () => {
+  mocks.prRefs = [associatedPr(4)];
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'open' }]]);
+  listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('running')] });
+  const { rerender, container } = render(
+    <BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />,
+  );
+  await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  expect(mocks.registerPrConsumer).toHaveBeenCalledWith('child-1', undefined);
+  const button = screen.getByRole('button', { name: 'bots.collab.viewPr' });
+  const before = button.className;
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'merged' }]]);
+  rerender(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
+  expect(container.querySelector('.lucide-git-merge')).not.toBeNull();
+  expect(button.className).toBe(before);
 });

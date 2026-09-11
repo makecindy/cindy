@@ -1,8 +1,22 @@
 import { useEffect, useState } from 'react';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { Linking, Pressable, StyleSheet, View } from 'react-native';
-import { FileText, GitPullRequest, Square } from 'lucide-react-native';
-import { extractPrRefs } from '@cindy/maker-shared';
+import {
+  FileText,
+  GitPullRequest,
+  GitMerge,
+  GitPullRequestClosed,
+  GitPullRequestDraft,
+  Square,
+} from 'lucide-react-native';
+import {
+  MAX_STATUS_QUERIES,
+  PR_STATUS_REFRESH_INTERVAL_MS,
+  prStatusKey,
+  sessionPrUrl,
+  type SessionPrRef,
+  type PrStatusResult,
+} from '@cindy/maker-shared';
 import { useTranslation } from 'react-i18next';
 import type {
   BotDelegationListResult,
@@ -49,7 +63,11 @@ export function CompanionMessageCard({ message }: { message: NormalizedRemoteMes
       onPress={() =>
         router.push({
           pathname: '/companions/direct/[threadId]',
-          params: { deviceId, threadId: meta.threadId, botId: meta.viewerBotId },
+          params: {
+            deviceId,
+            threadId: meta.threadId,
+            botId: meta.viewerBotId,
+          },
         })
       }
     >
@@ -108,12 +126,66 @@ function CompanionTaskCard({
       : seconds < 60
         ? t('devices.companions.duration.seconds', { n: seconds })
         : seconds < 3600
-          ? t('devices.companions.duration.minutes', { n: Math.floor(seconds / 60) })
+          ? t('devices.companions.duration.minutes', {
+              n: Math.floor(seconds / 60),
+            })
           : t('devices.companions.duration.hoursMinutes', {
               h: Math.floor(seconds / 3600),
               m: Math.floor(seconds / 60) % 60,
             });
-  const prs = extractPrRefs(row?.resultSummary ?? '');
+  const associated = useRemoteCompanionQuery<SessionPrRef[]>(
+    deviceId,
+    'git-context:pr-refs:list',
+    [childSessionId],
+    {
+      enabled: Boolean(childSessionId),
+      refreshIntervalMs: PR_STATUS_REFRESH_INTERVAL_MS,
+      refreshKey: row?.updatedAt,
+    },
+  );
+  const prs = Array.isArray(associated.value) ? associated.value : [];
+  const prStatuses = useRemoteCompanionQuery<PrStatusResult[]>(
+    deviceId,
+    'git-context:pr-status',
+    [
+      {
+        sessionId: childSessionId,
+        queries: prs
+          .slice(0, MAX_STATUS_QUERIES)
+          .map(({ owner, repo, prNumber }) => ({ owner, repo, prNumber })),
+      },
+    ],
+    {
+      enabled: Boolean(childSessionId) && prs.length > 0,
+      refreshIntervalMs: PR_STATUS_REFRESH_INTERVAL_MS,
+    },
+  );
+  const prIcon = (ref: SessionPrRef) => {
+    const result = Array.isArray(prStatuses.value)
+      ? prStatuses.value.find((s) => prStatusKey(s) === prStatusKey(ref))
+      : undefined;
+    const kind = result?.ok ? result.status : null;
+    const Icon =
+      kind === 'merged'
+        ? GitMerge
+        : kind === 'closed'
+          ? GitPullRequestClosed
+          : kind === 'draft'
+            ? GitPullRequestDraft
+            : GitPullRequest;
+    return (
+      <Icon
+        size={iconSize.sm}
+        color={
+          kind === 'open'
+            ? colors.statusDone
+            : kind === 'closed'
+              ? colors.statusError
+              : colors.textSecondary
+        }
+      />
+    );
+  };
   const openPr = (url: string) => {
     setShowPrs(false);
     setActionFailed(false);
@@ -157,7 +229,9 @@ function CompanionTaskCard({
         {duration ? <Text style={styles.note}>{duration}</Text> : null}
         {(row?.artifacts?.length ?? 0) > 0 ? (
           <Text style={styles.note}>
-            {t('devices.companions.artifactCount', { count: row!.artifacts.length })}
+            {t('devices.companions.artifactCount', {
+              count: row!.artifacts.length,
+            })}
           </Text>
         ) : null}
         {prs.length === 1 ? (
@@ -168,7 +242,12 @@ function CompanionTaskCard({
           <Text style={styles.note}>{t('devices.companions.prCount', { count: prs.length })}</Text>
         ) : null}
       </View>
-      {(!online || error) && row ? (
+      {(!online ||
+        error ||
+        associated.error ||
+        prStatuses.error ||
+        (Array.isArray(prStatuses.value) && prStatuses.value.some((status) => !status.ok))) &&
+      row ? (
         <Text style={styles.note}>{t('devices.companions.stale')}</Text>
       ) : !online ? (
         <Text style={styles.note}>{t('devices.resources.hostOffline')}</Text>
@@ -189,7 +268,7 @@ function CompanionTaskCard({
             accessibilityRole="button"
             accessibilityState={prs.length > 1 ? { expanded: showPrs } : undefined}
             style={styles.touchTarget}
-            onPress={() => (prs.length === 1 ? openPr(prs[0].url) : setShowPrs(!showPrs))}
+            onPress={() => (prs.length === 1 ? openPr(sessionPrUrl(prs[0])) : setShowPrs(!showPrs))}
           >
             {({ pressed }) => (
               <View
@@ -198,9 +277,17 @@ function CompanionTaskCard({
                     Math.max(width, Math.ceil(event.nativeEvent.layout.width)),
                   )
                 }
-                style={[styles.action, { minWidth: actionWidth }, pressed && mobileInteractionStyles.pressed]}
+                style={[
+                  styles.action,
+                  { minWidth: actionWidth },
+                  pressed && mobileInteractionStyles.pressed,
+                ]}
               >
-                <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />
+                {prs.length === 1 ? (
+                  prIcon(prs[0])
+                ) : (
+                  <GitPullRequest size={iconSize.sm} color={colors.textPrimary} />
+                )}
                 <Text style={styles.actionLabel}>{t('devices.companions.viewPr')}</Text>
               </View>
             )}
@@ -224,7 +311,11 @@ function CompanionTaskCard({
                     Math.max(width, Math.ceil(event.nativeEvent.layout.width)),
                   )
                 }
-                style={[styles.action, { minWidth: actionWidth }, pressed && mobileInteractionStyles.pressed]}
+                style={[
+                  styles.action,
+                  { minWidth: actionWidth },
+                  pressed && mobileInteractionStyles.pressed,
+                ]}
               >
                 <FileText size={iconSize.sm} color={colors.textPrimary} />
                 <Text style={styles.actionLabel}>{t('devices.companions.openTask')}</Text>
@@ -246,7 +337,11 @@ function CompanionTaskCard({
                     Math.max(width, Math.ceil(event.nativeEvent.layout.width)),
                   )
                 }
-                style={[styles.action, { minWidth: actionWidth }, pressed && mobileInteractionStyles.pressed]}
+                style={[
+                  styles.action,
+                  { minWidth: actionWidth },
+                  pressed && mobileInteractionStyles.pressed,
+                ]}
               >
                 <Square size={iconSize.sm} color={colors.textPrimary} />
                 <Text style={styles.actionLabel}>{t('devices.companions.stopTask')}</Text>
@@ -269,8 +364,9 @@ function CompanionTaskCard({
               key={pr.url}
               accessibilityRole="link"
               style={styles.prOption}
-              onPress={() => openPr(pr.url)}
+              onPress={() => openPr(sessionPrUrl(pr))}
             >
+              {prIcon(pr)}
               <Text style={styles.note}>
                 {pr.owner}/{pr.repo} #{pr.prNumber}
               </Text>

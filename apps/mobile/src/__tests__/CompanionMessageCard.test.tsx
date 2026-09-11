@@ -10,10 +10,14 @@ const h = vi.hoisted(() => ({
   status: 'online',
   accountGeneration: 1,
   epoch: 1,
+  listeners: new Set<any>(),
 }));
 vi.mock('react-native', () => ({
   Linking: { openURL: h.openURL },
-  AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+  AppState: {
+    currentState: 'active',
+    addEventListener: () => ({ remove() {} }),
+  },
   View: ({ children }: any) => createElement('div', {}, children),
   Pressable: ({ children, onPress, disabled }: any) =>
     createElement(
@@ -28,15 +32,23 @@ vi.mock('expo-router', () => ({
   useLocalSearchParams: () => ({ deviceId: 'home' }),
   useRouter: () => ({ push: h.push }),
 }));
-vi.mock('react-i18next', () => ({ useTranslation: () => ({ t: (key: string) => key }) }));
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({ t: (key: string) => key }),
+}));
 vi.mock('@/components/AppText', () => ({
   Text: ({ children }: any) => createElement('span', {}, children),
 }));
-vi.mock('@/theme', () => ({ useThemedStyles: () => ({}), useTheme: () => ({ colors: {} }) }));
+vi.mock('@/theme', () => ({
+  useThemedStyles: () => ({}),
+  useTheme: () => ({ colors: {} }),
+}));
 vi.mock('lucide-react-native', () => ({
   FileText: () => null,
   GitPullRequest: () => null,
   Square: () => null,
+  GitMerge: () => createElement('i', { 'data-testid': 'merged-pr' }),
+  GitPullRequestClosed: () => null,
+  GitPullRequestDraft: () => null,
 }));
 vi.mock('@/auth/AuthContext', () => ({
   useAuth: () => ({ accountGeneration: h.accountGeneration }),
@@ -49,9 +61,12 @@ vi.mock('@/device-link/DeviceLinkContext', () => ({
     getPresenceAvailability: () => true,
   }),
   subscribeRemoteBotChanges: (fn: any) => {
-    h.changed = fn;
+    h.listeners.add(fn);
+    h.changed = (...args: any[]) => {
+      for (const listener of h.listeners) listener(...args);
+    };
     return () => {
-      h.changed = null;
+      h.listeners.delete(fn);
     };
   },
 }));
@@ -79,6 +94,7 @@ beforeEach(() => {
   node = document.createElement('div');
   document.body.append(node);
   root = createRoot(node);
+  h.listeners.clear();
   h.accountGeneration = 1;
   h.epoch = 1;
   h.status = 'online';
@@ -87,7 +103,14 @@ beforeEach(() => {
   h.openURL.mockReset().mockResolvedValue(undefined);
   h.invoke.mockResolvedValue({
     ok: true,
-    delegations: [{ id: 'job', status: 'running', title: 'Report', childSessionId: 'child' }],
+    delegations: [
+      {
+        id: 'job',
+        status: 'running',
+        title: 'Report',
+        childSessionId: 'child',
+      },
+    ],
   });
 });
 afterEach(async () => {
@@ -117,16 +140,25 @@ it('ignores another peer push and refreshes the actual task to completed', async
   h.invoke.mockResolvedValue({
     ok: true,
     delegations: [
-      { id: 'job', status: 'completed', title: 'Report', resultSummary: 'Report finished' },
+      {
+        id: 'job',
+        status: 'completed',
+        title: 'Report',
+        resultSummary: 'Report finished',
+      },
     ],
   });
   await act(async () => {
-    h.changed('office', 'maker:bot-delegation:changed', { parentSessionId: 'parent' });
+    h.changed('office', 'maker:bot-delegation:changed', {
+      parentSessionId: 'parent',
+    });
     await vi.advanceTimersByTimeAsync(400);
   });
-  expect(h.invoke).toHaveBeenCalledTimes(1);
+  expect(h.invoke.mock.calls.filter((c) => c[1] === 'maker:bot-delegations:list')).toHaveLength(1);
   await act(async () => {
-    h.changed('home', 'maker:bot-delegation:changed', { parentSessionId: 'parent' });
+    h.changed('home', 'maker:bot-delegation:changed', {
+      parentSessionId: 'parent',
+    });
     await vi.advanceTimersByTimeAsync(400);
   });
   expect(node.textContent).not.toContain('Report finished');
@@ -172,23 +204,136 @@ it('keeps the last successful task across a failed refresh and reconnection, but
   await render();
   expect(node.textContent).not.toContain('devices.companions.status.running');
 });
-it('opens only returned PRs and keeps the full report out of the card', async () => {
+it('opens the child session associated PR and consumes its status without needing a report link', async () => {
+  const ref = {
+    id: 'pr3',
+    sessionId: 'child',
+    owner: 'a',
+    repo: 'b',
+    prNumber: 3,
+    url: 'https://github.com/a/b/pull/3',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list') return [ref];
+    if (channel === 'git-context:pr-status') return [{ ...ref, ok: true, status: 'merged' }];
+    return {
+      ok: true,
+      delegations: [
+        {
+          id: 'job',
+          status: 'completed',
+          title: 'Report',
+          childSessionId: 'child',
+          resultSummary: 'No PR URL here',
+        },
+      ],
+    };
+  });
+  await render();
+  expect(h.invoke).toHaveBeenCalledWith('home', 'git-context:pr-refs:list', ['child']);
+  expect(h.invoke).toHaveBeenCalledWith('home', 'git-context:pr-status', [
+    { sessionId: 'child', queries: [{ owner: 'a', repo: 'b', prNumber: 3 }] },
+  ]);
+  expect(node.querySelector('[data-testid="merged-pr"]')).not.toBeNull();
+  const pr = [...node.querySelectorAll('button')].find(
+    (b) => b.textContent === 'devices.companions.viewPr',
+  )!;
+  await act(async () => pr.click());
+  expect(h.openURL).toHaveBeenCalledWith('https://github.com/a/b/pull/3');
+});
+
+it('does not derive PRs from task output and does not query a missing child', async () => {
   h.invoke.mockResolvedValue({
     ok: true,
     delegations: [
       {
         id: 'job',
         status: 'completed',
-        title: 'Report',
-        resultSummary: '## Deliverables\nhttps://github.com/a/b/pull/3/files',
+        resultSummary: 'https://github.com/a/b/pull/9',
       },
     ],
   });
+  const withoutChild = {
+    ...message,
+    companion: {
+      ...message.companion!,
+      meta: { ...(message.companion as any).meta, childSessionId: null },
+    },
+  } as NormalizedRemoteMessage;
+  await act(async () =>
+    root.render(createElement(CompanionMessageCard, { message: withoutChild })),
+  );
+  expect(node.textContent).not.toContain('devices.companions.viewPr');
+  expect(h.invoke.mock.calls.every((c) => c[1] === 'maker:bot-delegations:list')).toBe(true);
+});
+
+it('refreshes associated PR state only while mounted and never replays task actions', async () => {
+  vi.useFakeTimers();
+  const ref = {
+    id: 'pr5',
+    sessionId: 'child',
+    owner: 'a',
+    repo: 'b',
+    prNumber: 5,
+    url: 'https://github.com/a/b/pull/5',
+    firstSeenAt: 1,
+    lastSeenAt: 1,
+  };
+  let status = 'open';
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list') return [ref];
+    if (channel === 'git-context:pr-status') return [{ ...ref, ok: true, status }];
+    return { ok: true, delegations: [{ id: 'job', status: 'completed', childSessionId: 'child' }] };
+  });
   await render();
-  expect(node.textContent).not.toContain('## Deliverables');
-  const pr = [...node.querySelectorAll('button')].find(
-    (b) => b.textContent === 'devices.companions.viewPr',
-  )!;
-  await act(async () => pr.click());
-  expect(h.openURL).toHaveBeenCalledWith('https://github.com/a/b/pull/3');
+  expect(node.querySelector('[data-testid="merged-pr"]')).toBeNull();
+  status = 'merged';
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(90_000);
+  });
+  expect(node.querySelector('[data-testid="merged-pr"]')).not.toBeNull();
+  expect(
+    h.invoke.mock.calls.every((c) =>
+      ['maker:bot-delegations:list', 'git-context:pr-refs:list', 'git-context:pr-status'].includes(
+        c[1],
+      ),
+    ),
+  ).toBe(true);
+  await act(async () => root.render(null));
+  const reads = h.invoke.mock.calls.length;
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(90_000);
+  });
+  expect(h.invoke).toHaveBeenCalledTimes(reads);
+});
+
+it('drops an old child PR response after switching to a different task', async () => {
+  let finish!: (value: unknown) => void;
+  h.invoke.mockImplementation(async (_device, channel) => {
+    if (channel === 'git-context:pr-refs:list')
+      return await new Promise((resolve) => {
+        finish = resolve;
+      });
+    return { ok: true, delegations: [] };
+  });
+  await render();
+  h.invoke.mockImplementation(async (_device, channel) =>
+    channel === 'git-context:pr-refs:list' ? [] : { ok: true, delegations: [] },
+  );
+  const other = {
+    ...message,
+    companion: {
+      ...message.companion!,
+      meta: { ...(message.companion as any).meta, childSessionId: 'other-child' },
+    },
+  } as NormalizedRemoteMessage;
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: other })));
+  await act(async () =>
+    finish([{ id: 'old', sessionId: 'child', owner: 'private', repo: 'old', prNumber: 1 }]),
+  );
+  expect(node.textContent).not.toContain('private');
+  expect(node.textContent).not.toContain('devices.companions.viewPr');
+  expect(h.invoke).toHaveBeenCalledWith('home', 'git-context:pr-refs:list', ['other-child']);
 });
