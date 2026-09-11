@@ -394,7 +394,7 @@ it('routes remote task reads, stop, child navigation and push refresh to the sam
   let status!: (value: any) => void;
   const invoke = vi.fn(async (_device: string, channel: string) =>
     channel === 'maker:bot-delegations:list'
-      ? { ok: true, delegations: [delegation('running')] }
+      ? { ok: true, delegations: [delegation('running', { updatedAt: 1_000 })] }
       : { ok: true },
   );
   window.electronAPI.deviceLink = {
@@ -439,12 +439,12 @@ it('routes remote task reads, stop, child navigation and push refresh to the sam
   invoke.mockResolvedValue({
     ok: true,
     delegations: [
-      delegation('completed', { resultSummary: 'Remote done', updatedAt: Date.now() + 1 }),
+      delegation('completed', { resultSummary: 'Remote done', updatedAt: 2_000 }),
     ],
   });
   act(() => status({ status: 'online' }));
   await screen.findByText(/bots\.collab\.status\.completed/);
-  expect(mocks.invalidateRemotePrRefs).toHaveBeenCalledWith('child-1');
+  await waitFor(() => expect(mocks.invalidateRemotePrRefs).toHaveBeenCalledWith('child-1'));
 });
 
 it('opens the child session associated PR even when the report contains another link', async () => {
