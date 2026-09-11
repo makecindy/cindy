@@ -71,7 +71,10 @@ describe('RemoteWatchRegistry 失败清理', () => {
 
     // 替换注册仍在册:stop 能拆掉它,并给 daemon 发 watchStop。
     await registry.stop(win.id, 'host-1', '/repo');
-    expect(request).toHaveBeenCalledWith('host-1', 'watchStop', { workdir: '/repo' });
+    expect(request).toHaveBeenCalledWith('host-1', 'watchStop', {
+      workdir: '/repo',
+      consumerId: 'desktop-tree',
+    });
     // 旧注册自己装的那对 listener:stop 拆一次 + 迟到失败清理一次。
     expect(eventOffs[0]).toHaveBeenCalledTimes(2);
     expect(reconnectOffs[0]).toHaveBeenCalledTimes(2);

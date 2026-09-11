@@ -809,7 +809,9 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   };
   const stopWatch = (): void => {
     disposeListeners();
-    void mgr.request(hostId, 'watchStop', { workdir }).catch(() => undefined);
+    void mgr
+      .request(hostId, 'watchStop', { workdir, consumerId: 'device-link' })
+      .catch(() => undefined);
   };
   const isRegistered = (): boolean => sshWatchOffs.get(workdir) === stopWatch;
   const disposeStaleWatch = (): void => {
@@ -840,7 +842,14 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
       return false;
     }
     try {
-      await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
+      // consumerId:daemon 把这里的隐藏态需求与 desktop 文件树(可能开着「显示
+      // 被忽略的目录」)的需求分开登记、取可见性并集 —— 否则后到的一方会把对方
+      // 的 matcher 覆盖掉,desktop 仍列着 build / dist 却收不到它们的事件。
+      await mgr.request(hostId, 'watchStart', {
+        workdir,
+        hideMetaFiles: true,
+        consumerId: 'device-link',
+      });
     } catch (err) {
       if (!isCurrent()) disposeStaleWatch();
       throw err;

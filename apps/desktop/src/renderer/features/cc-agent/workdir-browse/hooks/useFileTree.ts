@@ -54,6 +54,10 @@ import {
   stopWatchFor,
 } from '@/lib/fileBrowserTransport';
 import { loadExpandedSet, saveExpandedSet } from '../lib/expandedStore';
+import {
+  BUILTIN_IGNORE_ALWAYS,
+  BUILTIN_IGNORE_REVEALABLE,
+} from '../../../../../shared/ignoreNames';
 
 const log = createLogger('useFileTree');
 
@@ -233,6 +237,39 @@ function emit(store: FileTreeStore): void {
 }
 
 /**
+ * 隐藏态会忽略的一级目录名。名单从 @cindy/file-browser-core/ignoreNames 单源
+ * 导入(经 shared 转发),只覆盖内置项 —— `.gitignore` / `.p4ignore` 里的自定义
+ * 条目 renderer 拿不到,要等新 matcher 的数据回来才消失。
+ */
+const HIDDEN_VIEW_DIR_NAMES = new Set(
+  [...BUILTIN_IGNORE_ALWAYS, ...BUILTIN_IGNORE_REVEALABLE]
+    .filter((name) => name.endsWith('/'))
+    .map((name) => name.slice(0, -1)),
+);
+
+/**
+ * 关开关的首帧过滤:把 reveal 态根列表里「隐藏态会被忽略」的一级目录行拿掉。
+ *
+ * 不这样做的话,关开关后 node_modules / build 这些行要等新 matcher 的 root 数据
+ * 回来才消失 —— 慢通道(SSH / device-link)下是数秒的「开关关了却还看得见」。
+ * 子树缓存与展开集合不动:父行一旦不在根列表里,flattenTree 就不会走到它下面,
+ * 整棵子树在同一帧一起不可达 —— 「整体一次性消失」的观感不受影响。
+ */
+function filterSeedRootForHiddenView(
+  entries: ReadonlyMap<string, readonly DirEntry[]>,
+): ReadonlyMap<string, readonly DirEntry[]> {
+  const root = entries.get(ROOT_KEY);
+  if (!root) return entries;
+  const filtered = root.filter(
+    (entry) => !(entry.type === 'directory' && HIDDEN_VIEW_DIR_NAMES.has(entry.name)),
+  );
+  if (filtered.length === root.length) return entries;
+  const next = new Map(entries);
+  next.set(ROOT_KEY, filtered);
+  return next;
+}
+
+/**
  * 切换「显示被忽略的目录」会换一份 store(key 含 reveal 位),新 store 若从
  * 空快照 + initialLoading 起步,FileTreeView 会把整棵树替换成占位(本地
  * <300ms 连 spinner 都没有,就是空白),视觉上闪一下;同一 workdir 的另一半
@@ -322,7 +359,11 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     snapshot:
       seedDisplayable && seed
         ? {
-            entries: seed.entries,
+            // 关开关的首帧就滤掉内置忽略目录(避免慢通道下它们在新数据回来前
+            // 还挂在「已隐藏」的视图里),见 filterSeedRootForHiddenView。
+            entries: opts.showIgnoredDirs
+              ? seed.entries
+              : filterSeedRootForHiddenView(seed.entries),
             expanded: seed.expanded,
             // 新 store 自己还没有 in-flight 请求,seed 的 loadingPaths 不继承。
             loadingPaths: new Set(),

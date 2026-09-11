@@ -237,14 +237,49 @@ describe('useFileTree showIgnoredDirs option', () => {
   });
 
   /**
-   * 关开关的消失动作必须是一次性的：过渡期（hidden 数据还没回来）整棵树保持不动
-   * —— 包括展开态 —— 而不是先丢子行再丢父行（那是「从最子级逐级折叠」）。
-   * root 数据回来后才整体替换，并把借来的 reveal-only 展开位剪掉：hidden 树下
+   * 关开关的首帧就要滤掉内置忽略目录:慢通道下不能等新 matcher 的数据回来,
+   * 否则「开关关了却还看得见 node_modules」会持续数秒。子树缓存与展开集合不
+   * 动(父行不在根列表里 → 整棵子树同帧不可达,与「一次性消失」一致)。
+   */
+  it('关开关首帧就滤掉被忽略目录,不等新数据', async () => {
+    const revealedRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+      { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 1 },
+      { name: 'README.md', relPath: 'README.md', type: 'file', size: 10, mtimeMs: 1 },
+    ];
+    const pendingRoot = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementation((args: { showIgnoredDirs?: boolean }) =>
+      args.showIgnoredDirs ? Promise.resolve(revealedRoot) : pendingRoot.promise,
+    );
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-seed-filter', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: true } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+
+    await act(async () => {
+      view.rerender({ reveal: false });
+    });
+
+    // 数据还没回来,但被忽略目录已不在根列表;其余行照旧。
+    expect(view.result.current.entries.get('')?.map((e) => e.name)).toEqual(['src', 'README.md']);
+
+    view.unmount();
+  });
+
+  /**
+   * 关开关的消失动作必须是一次性的：过渡期（hidden 数据还没回来）树保持不动
+   * —— 展开态与子树缓存都还在 —— 而不是先丢子行再丢父行（那是「从最子级逐级
+   * 折叠」）；被忽略的一级目录行由首帧过滤直接拿掉（见上一条），剩下的部分等
+   * root 数据回来整体替换，并把借来的 reveal-only 展开位剪掉：hidden 树下
    * node_modules 已不在 root 列表里，留着会随下次操作写进 hidden scope 的
    * localStorage，下次启动白发一批 listDir。
    */
   it('关开关整树保持到数据回来，再一次性替换并剪掉 reveal-only 展开位', async () => {
     const revealedRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
       { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 1 },
     ];
     const revealedChild: readonly DirEntry[] = [
@@ -283,9 +318,10 @@ describe('useFileTree showIgnoredDirs option', () => {
       view.rerender({ reveal: false });
     });
 
-    // 数据还没回来：整棵树保持不动（含展开的子级），不是逐级折叠。
+    // 数据还没回来：被忽略行已由首帧过滤拿掉，子树缓存与展开态保持不动
+    // （树其余部分不重新挂载，不是逐级折叠）。
     expect(view.result.current.initialLoading).toBe(false);
-    expect(view.result.current.entries.get('')).toEqual(revealedRoot);
+    expect(view.result.current.entries.get('')?.map((e) => e.name)).toEqual(['src']);
     expect(view.result.current.entries.get('node_modules')).toEqual(revealedChild);
     expect(view.result.current.expanded.has('node_modules')).toBe(true);
     // 过渡期不 warm 借来的子树 —— 不给被忽略路径白发 listDir。

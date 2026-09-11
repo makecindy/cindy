@@ -205,4 +205,53 @@ describe('WorkdirWatchManager 过滤开关', () => {
     expect(await fireEvent(h.created[0], 'change', 'hidden/x.ts')).toHaveLength(0);
     manager.stopAll();
   });
+
+  /**
+   * 评审 P2:同一 workdir 会被两个消费方同时订阅 —— desktop 文件树(可开着
+   * 「显示被忽略的目录」)与 device-link 控制端(默认隐藏)。watcher 只能有一份
+   * matcher,必须取可见性并集;后到的隐藏态请求不能把先到的 reveal 覆盖掉,
+   * 否则 desktop 仍列着 build / dist,却再也收不到它们的事件。
+   */
+  it('多消费者取可见性并集:后到的隐藏态需求不覆盖先到的 reveal', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    await manager.start('/repo', { hideMetaFiles: true }, 'device-link');
+
+    // 并集仍是 reveal:不重建原生 watcher。
+    expect(h.created).toHaveLength(1);
+    expect(h.created[0].closed).toBe(false);
+    expect(h.matcherOpts).toHaveLength(1);
+    expect(h.matcherOpts[0]).toMatchObject({ showIgnoredDirs: true });
+    manager.stopAll();
+  });
+
+  it('部分消费者 stop:按剩余并集收敛,收窄为隐藏且 watcher 仍在', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    await manager.start('/repo', { showIgnoredDirs: false }, 'device-link');
+    expect(h.created).toHaveLength(1);
+
+    manager.stop('/repo', 'desktop-tree');
+    await new Promise((resolve) => setTimeout(resolve, 0)); // 等异步 reconcile
+
+    expect(h.created).toHaveLength(2);
+    expect(h.created[0].closed).toBe(true);
+    expect(h.created[1].closed).toBe(false);
+    expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(false);
+    manager.stopAll();
+  });
+
+  it('最后一个消费者 stop 才拆 watcher', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    await manager.start('/repo', { showIgnoredDirs: true }, 'device-link');
+
+    manager.stop('/repo', 'desktop-tree');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(h.created.every((c) => c.closed)).toBe(false); // 并集没变:watcher 留着
+
+    manager.stop('/repo', 'device-link');
+    expect(h.created.every((c) => c.closed)).toBe(true);
+    manager.stopAll();
+  });
 });

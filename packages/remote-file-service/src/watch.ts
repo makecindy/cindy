@@ -19,11 +19,14 @@
  * watchStop 时 close。事件经注入的 emit 回调发 `fileTree` 帧。
  *
  * 注:自带过滤器(ignore matcher / .xdt-tmp)在 watchStart 时就固定下来,
- * 控制端改开关后需要先 watchStop 再 watchStart 才能换 matcher;而**同一 workdir
- * 会被多个消费方请求**(desktop 的 SSH 文件浏览器 / device-link 的 fs-watch
- * topic),选项是 per-workdir 的,所以以最后一次请求为准 —— start() 会收敛到
- * 「最后一次被请求的选项」,不会把新选项丢掉、也不会在 stop+start 交达时留下
- * 没有 watcher 的空档。
+ * 控制端改开关后需要先 watchStop 再 watchStart 才能换 matcher。
+ *
+ * 同一 workdir 会被**多个消费方**请求(desktop 的 SSH 文件浏览器、device-link
+ * 的 fs-watch topic)。每个消费方用 consumerId 登记自己的过滤需求,watcher 取
+ * 全部消费者的**可见性并集** —— 否则后到的一方(控制端默认隐藏)会把前一方的
+ * reveal matcher 覆盖掉:desktop 仍列着 build / dist,它们的改动却永远没有
+ * 事件。多推的帧由订阅端按各自视图忽略,代价远小于静默丢事件。任一消费者在,
+ * watcher 就不拆;最后一个 stop 才关。选项变化由 start() / stop() 收敛。
  */
 
 import { watch as fsWatch, promises as fs, type FSWatcher } from 'node:fs';
@@ -94,8 +97,12 @@ export class WorkdirWatchManager {
   /** 启动窗口内收到 stop 的 workdir:startInner 完成时不装 watcher(装完即拆),
    *  否则快速开关文件浏览会留下无人再来 stop 的孤儿原生 watcher。 */
   private readonly stopDuringStart = new Set<string>();
-  /** 该 workdir 最后一次被请求的过滤选项:start() 每轮重读它收敛。 */
-  private readonly desired = new Map<string, WatchFilterOptions>();
+  /** 每个 workdir 的消费者 → 该消费者的过滤需求。watcher 只此一份,选项取全部
+   *  消费者的可见性并集(见 effectiveOptions);start() / stop() 每轮重读它收敛。 */
+  private readonly desired = new Map<string, Map<string, WatchFilterOptions>>();
+
+  /** 没带 consumerId 的调用方(旧控制端 / 内部调用)归到这个默认消费者。 */
+  private static readonly DEFAULT_CONSUMER = 'default';
   private readonly emit: (event: RemoteFileTreeEvent) => void;
 
   constructor(emit: (event: RemoteFileTreeEvent) => void) {
@@ -108,15 +115,25 @@ export class WorkdirWatchManager {
   async start(
     workdir: string,
     opts: { hideMetaFiles?: boolean; showIgnoredDirs?: boolean } = {},
+    consumerId: string = WorkdirWatchManager.DEFAULT_CONSUMER,
   ): Promise<void> {
-    this.desired.set(workdir, normalizeWatchOptions(opts));
-    // 收敛到「最后一次被请求的选项」。为什么不直接 piggyback 启动中的 promise:
-    // 启动窗口内到达的 stop 会给 stopDuringStart 打标记让那个 watcher 自拆,
-    // 而带新选项的 start 如果只是复用旧 promise,就会既丢掉新选项、又因为标记
-    // 留下「没有 watcher」的空档(两个 RPC 都报 success)。这里每轮重读 desired,
-    // 所以两种中途变化都在下一轮收敛。
-    // 终止性:每轮要么直接确认返回、要么推进一次真实的 startInner;desired 只
-    // 会被更新的请求改写或被 stop 删除,并发调用者数量有限 —— 循环次数以此封顶。
+    const consumers = this.desired.get(workdir) ?? new Map<string, WatchFilterOptions>();
+    consumers.set(consumerId, normalizeWatchOptions(opts));
+    this.desired.set(workdir, consumers);
+    await this.reconcile(workdir);
+  }
+
+  /**
+   * 收敛到「当前所有消费者的可见性并集」。为什么不直接 piggyback 启动中的
+   * promise:启动窗口内到达的 stop 会给 stopDuringStart 打标记让那个 watcher
+   * 自拆,而带新选项的 start 如果只是复用旧 promise,就会既丢掉新选项、又因为
+   * 标记留下「没有 watcher」的空档(两个 RPC 都报 success)。这里每轮重读
+   * desired,所以两种中途变化都在下一轮收敛。
+   *
+   * 终止性:每轮要么直接确认返回、要么推进一次真实的 startInner;desired 只会
+   * 被更新的请求改写或被 stop 删除,并发调用者数量有限 —— 循环次数以此封顶。
+   */
+  private async reconcile(workdir: string): Promise<void> {
     for (;;) {
       const inflight = this.starting.get(workdir);
       if (inflight) {
@@ -125,8 +142,8 @@ export class WorkdirWatchManager {
         await inflight;
         continue;
       }
-      const want = this.desired.get(workdir);
-      if (!want) return; // 期间被 stop:意图已撤
+      const want = this.effectiveOptions(workdir);
+      if (!want) return; // 期间所有消费者都 stop:意图已撤
       const existing = this.entries.get(workdir);
       if (existing) {
         if (sameWatchOptions(existing, want)) return;
@@ -141,6 +158,22 @@ export class WorkdirWatchManager {
         this.stopDuringStart.delete(workdir);
       }
     }
+  }
+
+  /**
+   * 全部消费者的可见性并集:任一消费者要看被忽略目录 / `.meta`,watcher 就得
+   * 放行它们(推给各订阅端后由各自的视图忽略)。没有消费者时返回 null。
+   */
+  private effectiveOptions(workdir: string): WatchFilterOptions | null {
+    const consumers = this.desired.get(workdir);
+    if (!consumers || consumers.size === 0) return null;
+    let showIgnoredDirs = false;
+    let showMetaFiles = false;
+    for (const opts of consumers.values()) {
+      if (opts.showIgnoredDirs) showIgnoredDirs = true;
+      if (!opts.hideMetaFiles) showMetaFiles = true;
+    }
+    return { showIgnoredDirs, hideMetaFiles: !showMetaFiles };
   }
 
   private async startInner(workdir: string, opts: WatchFilterOptions): Promise<void> {
@@ -183,9 +216,23 @@ export class WorkdirWatchManager {
     log.info('watch started', workdir);
   }
 
-  stop(workdir: string): void {
+  stop(workdir: string, consumerId: string = WorkdirWatchManager.DEFAULT_CONSUMER): void {
+    const consumers = this.desired.get(workdir);
+    if (consumers) {
+      consumers.delete(consumerId);
+      if (consumers.size > 0) {
+        // 还有别的消费者:按剩余并集收敛(可能收窄,需要重建 matcher)。这里是
+        // sync 的 RPC handler,重建异步进行 —— RPC 语义是「撤销本消费者的
+        // 需求」,不承诺 watcher 在返回前已重建完。失败只记日志:订阅端各自有
+        // 重连 replay / 聚焦刷新兜底。
+        void this.reconcile(workdir).catch((err) =>
+          log.warn('watch reconcile after partial stop failed', workdir, String(err)),
+        );
+        return;
+      }
+      this.desired.delete(workdir);
+    }
     // 撤销意图:收敛循环读到 desired 缺失即结束(piggyback 的新 start 会写回)。
-    this.desired.delete(workdir);
     // 还在启动窗口:打标记让 startInner 完成时自拆(entries 里此刻还没有它)。
     if (this.starting.has(workdir)) this.stopDuringStart.add(workdir);
     this.closeEntry(workdir);

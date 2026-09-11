@@ -27,75 +27,20 @@ import path from 'node:path';
 import ignoreLib from 'ignore';
 
 import { scopedLogger } from './logging.js';
+import {
+  BUILTIN_IGNORE_ALWAYS,
+  BUILTIN_IGNORE_REVEALABLE,
+  WATCH_ALWAYS_IGNORE,
+} from './ignoreNames.js';
+
+// 名单真源在 ignoreNames.ts(desktop renderer 也消费同一份);这里 re-export
+// 保持既有 API —— 包内与 daemon 都直接取 WATCH_ALWAYS_IGNORE。
+export { WATCH_ALWAYS_IGNORE } from './ignoreNames.js';
 
 const log = scopedLogger('file-browser/ignore');
 
-/**
- * Folder names (last path segment) that should never be walked into,
- * regardless of vcs ignore files. Patterns are folder-name-only (no globs)
- * because `ignore` lib treats them as "match anywhere in the path".
- *
- * 分两层,因为「用户看得见的工程目录」和「纯噪音」不是一回事:
- *   - ALWAYS:VCS 元数据与 OS 垃圾 —— 任何设置下都不列、不递归。
- *   - REVEALABLE:依赖 / 构建产物 / 缓存 / IDE 缓存 —— 默认隐藏(Unity 的
- *     Library 之类目录动辄数十万条,默认列出会让文件树不可用),但用户可在
- *     设置里开「显示被忽略的目录」放行。
- */
-const BUILTIN_IGNORE_ALWAYS = [
-  // VCS metadata: never part of the project's own file tree.
-  '.git/',
-  '.svn/',
-  '.hg/',
-  // OS junk
-  '.DS_Store',
-  'Thumbs.db',
-];
-
-const BUILTIN_IGNORE_REVEALABLE = [
-  // Package managers
-  'node_modules/',
-  '__pycache__/',
-  'vendor/',
-  '.venv/',
-  '.cache/',
-  // Editor / IDE caches
-  '.vs/',
-  '.idea/',
-  '.vscode-test/',
-  // Generic build outputs
-  'dist/',
-  'build/',
-  'out/',
-  '.next/',
-  'target/',
-  'bin/',
-  'obj/',
-  // Unity-specific (huge caches; .gitignore usually has them but be defensive)
-  'Library/',
-  'Temp/',
-  'Logs/',
-  'UserSettings/',
-  // Project-internal generated dirs (seen on real Unity workdirs)
-  'AssetDepotOutput/',
-  'ChuangXiangEditorCache/',
-  // .meta files (Unity per-asset metadata) — rendered behind a "show meta"
-  // user toggle; defaulting to hidden cuts ~47% of typical Unity entries.
-  // Toggle is honored by Matcher.shouldShowMeta below.
-  // Note: NOT added here — handled separately because it's user-toggleable
-  // per session via `hideMetaFiles`.
-];
-
-/**
- * 「可以列出、但不实时 watch」的目录名 —— 与 BUILTIN_IGNORE_REVEALABLE 正交的
- * 一层:即使开了「显示被忽略的目录」(它们会出现在文件树里),事件侧也要丢掉
- * 它们内部的改动。
- *
- * 理由:node_modules 动辄数十万条目,Unity 的 Library 需要真正的资源依赖分析
- * ——原生递归 watch 的代价与收益不成比例,手动刷新已够用。两个宿主的**事件**
- * 过滤都必须吃这份清单(desktop 的 parcel 预过滤 + daemon 的事件过滤),但
- * **列目录不看它**(listDir 只问 BUILTIN_IGNORE_*)。
- */
-export const WATCH_ALWAYS_IGNORE = ['node_modules', 'Library'] as const;
+// 名单定义已搬到 ignoreNames.ts(desktop renderer 也消费同一份);本文件只留
+// matcher 逻辑。
 
 export interface Matcher {
   /**

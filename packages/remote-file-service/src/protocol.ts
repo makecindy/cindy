@@ -203,12 +203,23 @@ export interface FsRpcMethods {
     params: { searchId: string };
     result: { ok: true };
   };
+  /**
+   * 订阅某个 workdir 的文件事件。`consumerId` 标识订阅方(desktop 文件树 /
+   * device-link 被控端 watch),可选 —— 老调用方缺省即归到默认消费者。
+   * 同一 workdir 的多个消费者各自登记过滤需求,daemon 取**可见性并集**
+   * (见 WorkdirWatchManager),不会互相覆盖 matcher。
+   */
   watchStart: {
-    params: { workdir: string; hideMetaFiles?: boolean; showIgnoredDirs?: boolean };
+    params: {
+      workdir: string;
+      hideMetaFiles?: boolean;
+      showIgnoredDirs?: boolean;
+      consumerId?: string;
+    };
     result: { ok: true };
   };
   watchStop: {
-    params: { workdir: string };
+    params: { workdir: string; consumerId?: string };
     result: { ok: true };
   };
 }

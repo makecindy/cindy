@@ -21,6 +21,13 @@ import type { FileTreeEvent } from './watcher.js';
 
 const log = createLogger('file-browser/remote-watch');
 
+/**
+ * daemon 侧的消费者身份。同一 (host, workdir) 会被 device-link 的 fs-watch 同时
+ * 订阅(被控端把它转发给控制端);两边各自登记过滤需求,daemon 取可见性并集,
+ * 而不是后到的 watchStart 把先到的 matcher 覆盖掉。
+ */
+const WATCH_CONSUMER_ID = 'desktop-tree';
+
 interface RegistryEntry {
   offEvent: () => void;
   offReconnect: () => void;
@@ -55,6 +62,7 @@ export class RemoteWatchRegistry {
       workdir,
       hideMetaFiles: opts.hideMetaFiles ?? true,
       showIgnoredDirs: opts.showIgnoredDirs === true,
+      consumerId: WATCH_CONSUMER_ID,
     };
 
     const offEvent = this.mgr.onHostEvent(hostId, (evt) => {
@@ -110,7 +118,7 @@ export class RemoteWatchRegistry {
     });
     if (!stillWatching) {
       await this.mgr
-        .request(hostId, 'watchStop', { workdir })
+        .request(hostId, 'watchStop', { workdir, consumerId: WATCH_CONSUMER_ID })
         .catch(() => undefined); // 通道断了 daemon 也没了,无孤儿
     }
     log.info('remote watch stopped', { hostId, workdir, windowId });
