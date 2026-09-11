@@ -2112,7 +2112,7 @@ interface ElectronAPI {
   /** 内置 API-key 供应商专用 IPC(查/写/删,永不回读明文;对应 MAIN_ONLY 键)。mutation 失败抛统一 IPC 错误。 */
   builtinApiKeyHas: (providerId: string) => Promise<boolean>;
   builtinApiKeyStore: (providerId: string, value: string) => Promise<void>;
-  builtinApiKeyRemove: (providerId: string) => Promise<void>;
+  builtinApiKeyRemove: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => Promise<void>;
   /** CC 网络调试日志开关 (admin experimental). main 端 mutate process.env.XDT_CC_DEBUG_NET。 */
   ccSetDebugNet: (enabled: boolean) => Promise<{ ok: true }>;
   /** 网关凭据自动下发(model-access,类型见 shared/modelAccess.ts)。 */
@@ -5076,6 +5076,7 @@ interface ElectronAPI {
     ) => Promise<import('../shared/workflow-progress').WorkflowProgress | null>;
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
+    setProviderPresentation: (input: { providerId?: string; action: 'rename' | 'remove' | 'restore'; name?: string; dataOwnerId: string | null; ownerGeneration: number }) => Promise<void>;
     listProviders: () => Promise<{
       dataOwnerId: string | null;
       ownerGeneration: number;
@@ -5102,7 +5103,8 @@ interface ElectronAPI {
       keys: Partial<Record<'claude-code' | 'codex' | 'pi' | 'grok-build', string>>,
       options?: CustomProviderUpdateOptions,
     ) => Promise<CustomProviderUpdateResult>;
-    deleteCustomProvider: (providerId: string) => Promise<{ ok: true }>;
+    disconnectCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions) => Promise<CustomProviderUpdateResult>;
+    deleteCustomProvider: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions) => Promise<CustomProviderUpdateResult>;
     localModelStatus: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
     localModelStart: () => Promise<import('../shared/localModelRuntime').LocalRuntimeStatus>;
     localModelList: () => Promise<{
@@ -5230,7 +5232,7 @@ interface ElectronAPI {
       providerId: string,
       options?: { ownerId?: string },
     ) => Promise<{ ok: boolean; reason?: string }>;
-    providerOAuthLogout: (providerId: string) => Promise<{ ok: true }>;
+    providerOAuthLogout: (providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions) => Promise<CustomProviderUpdateResult>;
     providerOAuthCancel: (
       providerId: string,
       options?: { releaseOwner?: boolean; ownerId?: string },
@@ -6168,16 +6170,16 @@ interface ElectronAPI {
 
     /** Claude.ai 订阅 OAuth 登录状态(系统 ~/.claude 凭证库是否有 OAuth 登录) */
     claudeOAuthStatus: () => Promise<{ authorized: boolean }>;
-    /** 拉起浏览器 OAuth 登录 Claude.ai 订阅;成功写凭证。reason 在失败时给出(cancelled/timeout/...) */
-    claudeOAuthLogin: () => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
-    /** 登出 Claude.ai 订阅(⚠️ 同时清本地 claude 的登录凭证) */
-    claudeOAuthLogout: () => Promise<{ authorized: boolean }>;
-    /** 取消进行中的浏览器 OAuth 登录流 */
-    claudeOAuthCancel: () => Promise<{ authorized: boolean }>;
+    /** 连接本机 Claude 订阅；loginKey 用于限定取消范围。 */
+    claudeOAuthLogin: (loginKey?: string) => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
+    /** 断开 Cindy 使用许可，保留本机 Claude 凭证。 */
+    claudeOAuthLogout: (ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => Promise<{ authorized: boolean }>;
+    /** 取消对应登录尝试。 */
+    claudeOAuthCancel: (loginKey?: string) => Promise<{ authorized: boolean }>;
     /** 拉起浏览器 OAuth 登录 xAI(SuperGrok 订阅);成功写 safeStorage。reason 在失败时给出 */
     xaiOAuthLogin: () => Promise<{ ok: boolean; authorized: boolean; reason?: string }>;
     /** 登出 xAI(清本机 safeStorage 的 xai 凭证) */
-    xaiOAuthLogout: () => Promise<{ authorized: boolean }>;
+    xaiOAuthLogout: (ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => Promise<{ authorized: boolean }>;
     /** 取消进行中的 xAI 浏览器 OAuth 登录流 */
     xaiOAuthCancel: () => Promise<{ authorized: boolean }>;
 
@@ -6299,13 +6301,13 @@ interface ElectronAPI {
       getState: (agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build') => Promise<CodexAuthState>;
       triggerLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build',
-        options?: { mode?: 'browser' | 'device-code'; ownerId?: string },
+        options?: { mode?: 'browser' | 'device-code' | 'local'; ownerId?: string },
       ) => Promise<CodexAuthState>;
       cancelLogin: (
         agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build',
         options?: { releaseOwner?: boolean; ownerId?: string },
       ) => Promise<void>;
-      logout: (agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build') => Promise<void>;
+      logout: (agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build', ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => Promise<void>;
       onStateChanged: (
         cb: (s: { agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build' } & CodexAuthState) => void,
       ) => () => void;
@@ -6313,7 +6315,7 @@ interface ElectronAPI {
         cb: (p: {
           agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build';
           phase: string;
-          mode?: 'browser' | 'device-code';
+          mode?: 'browser' | 'device-code' | 'local';
           detail?: string;
           verificationUrl?: string;
           userCode?: string;
@@ -6430,6 +6432,7 @@ interface ElectronAPI {
             updatedAt: number;
           } | null,
         ) => void,
+        providerId?: string,
       ) => () => void;
       /** Existing native Anthropic subscription snapshot (null means cleared). */
       getClaudeSubscription: (providerId?: string) => Promise<import('../shared/claudeSubscriptionUsage').ClaudeSubscriptionUsageSnapshot | null>;

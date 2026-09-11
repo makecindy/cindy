@@ -11,6 +11,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const retainPresentation = vi.hoisted(() => vi.fn());
+vi.mock('../provider-presentation-store.js', () => ({
+  retainInvalidatedProviderPresentation: retainPresentation,
+}));
+
 vi.mock('electron', () => ({
   shell: { openExternal: vi.fn() },
   app: {
@@ -100,6 +105,7 @@ function tokenResponse(status: number, body: unknown): Response {
 }
 
 beforeEach(() => {
+  retainPresentation.mockClear();
   store.clear();
   bound = true;
   resetGrokOAuthMemoryCache();
@@ -111,6 +117,16 @@ afterEach(() => {
 });
 
 describe('recoverGrokAuthAfterRejection', () => {
+  it('does not report stale logout after credentials change during presentation persistence', async () => {
+    seedCredentials({ refresh_token: undefined });
+    retainPresentation.mockImplementationOnce(async () => {
+      bound = true;
+      seedCredentials({ access_token: 'new-login-token' });
+      resetGrokOAuthMemoryCache();
+    });
+    await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('superseded');
+    expect(peekGrokAccessToken()).toBe('new-login-token');
+  });
   it('refresh and logout affect only the selected account', async () => {
     seedCredentials();
     store.set('xai-second', JSON.stringify({ access_token: 'second-token', refresh_token: 'second-refresh', expires_at: Date.now() + 3600_000 }));
@@ -164,6 +180,7 @@ describe('recoverGrokAuthAfterRejection', () => {
 
     await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('logged_out');
     expect(readStored()).toBeNull();
+    expect(retainPresentation).toHaveBeenCalledWith('xai');
   });
 
   it('收口开始时凭证已换成别的账号 —— 不拿新凭证承担旧 token 的失败', async () => {
@@ -177,6 +194,7 @@ describe('recoverGrokAuthAfterRejection', () => {
     await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('superseded');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(readStored()?.access_token).toBe('another-account-token');
+    expect(retainPresentation).not.toHaveBeenCalled();
   });
 
   it('本地没有 refresh_token 时无从自愈,登出但不消耗冷却', async () => {

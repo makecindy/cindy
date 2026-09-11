@@ -786,11 +786,12 @@ function createCodexUsageStore(providerId: string) {
 export type { XaiRateLimitSnapshot } from '../shared/xaiRateLimit';
 
 /** bridge onRateLimit 回调入口:广播 renderer(renderer 侧 hook 自带模块级缓存,无拉取端点)。 */
-export function recordXaiRateLimitSnapshot(info: Omit<XaiRateLimitSnapshot, 'updatedAt'>): void {
+export function recordXaiRateLimitSnapshot(info: Omit<XaiRateLimitSnapshot, 'updatedAt'>, providerId = 'xai'): void {
   const snapshot: XaiRateLimitSnapshot = { ...info, updatedAt: Date.now() };
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, snapshot);
+    if (isTrustedAppRendererWindow(win)) {
+      if (providerId === 'xai') win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, snapshot);
+      else win.webContents.send('usage:xai-provider-rate-limit-changed', { providerId, snapshot });
     }
   }
 }
@@ -799,10 +800,11 @@ export function recordXaiRateLimitSnapshot(info: Omit<XaiRateLimitSnapshot, 'upd
  * 清空 xAI 限流快照(广播 null)。xAI 登出 / 重新登录(可能换账号)时调用 ——
  * 快照是账号级的,登出后没有下一个成功响应来覆盖,不清会让旧账号的余量一直挂在 chip 上。
  */
-export function clearXaiRateLimitSnapshot(): void {
+export function clearXaiRateLimitSnapshot(providerId = 'xai'): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) {
-      win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, null);
+    if (isTrustedAppRendererWindow(win)) {
+      if (providerId === 'xai') win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, null);
+      else win.webContents.send('usage:xai-provider-rate-limit-changed', { providerId, snapshot: null });
     }
   }
 }

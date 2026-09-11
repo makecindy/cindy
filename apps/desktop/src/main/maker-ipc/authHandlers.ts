@@ -8,6 +8,7 @@
 import type { AgentKind, AgentLoginMode, AuthState, Maker } from '@cindy/maker-core';
 
 import { optionalEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import { activeOwnerScopeKey, getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import { requireAgentKind } from './agentKindGate.js';
@@ -18,7 +19,7 @@ const log = createLogger('maker-ipc:authHandlers');
 /** main → renderer 的 push 广播能力。 */
 export type MakerIpcBroadcast = (channel: string, payload: unknown) => void;
 
-const AGENT_LOGIN_MODES = ['browser', 'device-code'] as const satisfies readonly AgentLoginMode[];
+const AGENT_LOGIN_MODES = ['browser', 'device-code', 'local'] as const satisfies readonly AgentLoginMode[];
 const MAX_LOGIN_PROGRESS_CHARS = 16_384;
 const LOGIN_OWNER_ID_PATTERN = /^[A-Za-z0-9._:-]{1,128}$/;
 const ANSI_SEQUENCE = new RegExp(
@@ -511,13 +512,22 @@ export function registerMakerAuthHandlers(
     await cancelLoginOperation(kind, activeOperation);
   });
 
-  registry.handle(MAKER_INVOKE.AUTH_LOGOUT, async (_e, agentKind: unknown): Promise<void> => {
+  registry.handle(MAKER_INVOKE.AUTH_LOGOUT, async (_e, agentKind: unknown, ownerScope: unknown): Promise<void> => {
+    if (ownerScope !== undefined) {
+      const scope = requireObject(ownerScope, 'ownerScope');
+      const current = getActiveAppSession();
+      if (isAppSessionBoundaryPending() || scope.dataOwnerId !== current.dataOwnerId || scope.ownerGeneration !== current.generation) {
+        throwIpcError('INVALID_PARAMS', 'Provider owner changed');
+      }
+    }
     const kind = requireAgentKind(agentKind);
     const activeOperation = activeLoginOperations.get(kind);
     if (activeOperation) activeOperation.acceptingOwners = false;
     clearOwnersForKind(kind);
     const generation = beginMutation(kind);
-    const isCurrent = (): boolean => isMutationCurrent(kind, generation);
+    const capturedOwner = activeOwnerScopeKey();
+    const isCurrent = (): boolean => isMutationCurrent(kind, generation)
+      && !isAppSessionBoundaryPending() && activeOwnerScopeKey() === capturedOwner;
     const finalization = (async (): Promise<void> => {
       try {
         await maker.logoutAgent(kind);
@@ -555,8 +565,8 @@ function requireLoginOptions(
 ): { mode: AgentLoginMode; ownerId?: string } {
   const options = value === undefined ? {} : requireObject(value, 'options');
   const mode = optionalEnum(options.mode, AGENT_LOGIN_MODES, 'login mode') ?? 'browser';
-  if (agentKind !== 'codex' && mode === 'device-code') {
-    throwIpcError('INVALID_PARAMS', 'device-code login is only supported by codex');
+  if (agentKind !== 'codex' && mode !== 'browser') {
+    throwIpcError('INVALID_PARAMS', 'This login mode is only supported by codex');
   }
   const ownerId = requireLoginOwnerId(options.ownerId);
   if (agentKind !== 'codex' && ownerId) {

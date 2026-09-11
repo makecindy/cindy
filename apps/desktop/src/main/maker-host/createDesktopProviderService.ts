@@ -1,3 +1,4 @@
+import { readProviderPresentation } from './provider-presentation-store.js';
 import { filterLegacyGptContextProfiles } from './legacy-context-profiles.js';
 import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionProviderId, getValidClaudeAccountOAuth, resetSubscriptionAccountCaches } from './subscription-account-auth.js';
 /**
@@ -990,6 +991,7 @@ export function getDesktopProviderService(): ProviderService {
   }
   if (singleton) return singleton;
   singleton = createProviderService({
+    getProviderPresentation: readProviderPresentation,
     getCatalog: getDesktopSelectableCatalog,
     connection: {
       xd: () => getAppCapabilities().canUseCindyGateway && readClaudeApiKey() != null,

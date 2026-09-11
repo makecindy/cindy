@@ -925,6 +925,26 @@ describe('AddProviderWizard — preset 直达', () => {
   });
 });
 
+it.each(['apiKey', 'oauth'] as const)('keeps retained single-instance %s connections out of the add list across disconnect and delete', async (method) => {
+  const provider = {
+    ...anthropicProvider, id: 'gemini', name: 'Single Connection', agents: [], models: {},
+    auth: { method, oauth: { kind: 'native' } },
+    audioModels: [{ id: 'media', name: 'Media' }],
+  } as unknown as ProviderView;
+  const props = { onOpenCustomForm: vi.fn(), onClose: vi.fn(), onDone: vi.fn() };
+  const view = render(<AddProviderWizard {...props} providers={[provider]} />);
+  expect(await screen.findByText('Single Connection')).toBeTruthy();
+  for (const state of [
+    { connected: true, removed: false },
+    { connected: false, removed: false },
+    { connected: false, removed: true },
+    { connected: true, removed: false },
+  ]) {
+    view.rerender(<AddProviderWizard {...props} providers={[{ ...provider, ...state }]} />);
+    expect(screen.queryByText('Single Connection') !== null).toBe(state.removed);
+  }
+});
+
 it.each(['audioModels', 'embeddingModels'] as const)('opens key setup for a disconnected media-only builtin with %s', async (field) => {
   const mediaProvider = {
     ...anthropicProvider, id: 'gemini', name: 'Media Only', agents: [], models: {},

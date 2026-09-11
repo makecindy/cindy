@@ -1,10 +1,12 @@
 import type { TurnUsageContext } from './turnUsageContext.js';
+import { retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import { registerPluginListHandler } from './pluginListHandler.js';
 import { initializeBotAuthorizationHost } from './botAuthorizationHost.js';
 import { resolveBotAuthorizationDelivery, buildBotAuthorizationContinuation, commitBotAuthorizationInput, type BotAuthorizationInputGuard, getBotAuthorizationService } from './botAuthorizationService.js';
 import { registerSessionSetModelHandler } from './sessionSetModelHandler.js';
 import { refreshSubscriptionAccountModels } from '../maker-host/subscription-account-models.js';
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
+import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
 import { isCodexAccountProvider, codexAccountState, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
@@ -5478,6 +5480,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (subscriptionAccountKind(providerId)) {
         const result = await loginSubscriptionAccount(providerId, isCurrent);
         if (result.ok && isCurrent()) {
+          if (subscriptionAccountKind(providerId) === 'xai') clearXaiRateLimitSnapshot(providerId);
           try { await refreshSubscriptionAccountModels(providerId); } catch { /* Static catalog remains usable. */ }
           if (!isCurrent()) return result;
           const previous = await getCustomProvider(providerId);
@@ -5601,7 +5604,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         } catch {
           /* 发现失败保持纯静态目录，不影响登录结果 */
         }
-        if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        if (isCurrent()) {
+          if (provider.source === 'builtin') await retainProviderPresentationAfterAuthChange(providerId);
+          if (isCurrent()) broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
+        }
       }
       return { ...result, ...(rollbackCredentials ? { rollbackCredentials } : {}) };
     },
@@ -5620,11 +5626,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (isCodexAccountProvider(providerId)) cancelCodexAccountLogin(providerId);
       else cancelGenericOAuthLogin(storedCustomProviderId(providerId));
     },
-    removeOAuthCredentials: (providerId) => subscriptionAccountKind(providerId)
-      ? removeSubscriptionAccountCredentialsReversibly(providerId)
-      : isCodexAccountProvider(providerId)
-      ? removeCodexAccountCredentialsReversibly(providerId)
-      : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId)),
+    removeOAuthCredentials: (providerId) => {
+      if (subscriptionAccountKind(providerId)) {
+        const restore = removeSubscriptionAccountCredentialsReversibly(providerId);
+        if (subscriptionAccountKind(providerId) === 'xai') clearXaiRateLimitSnapshot(providerId);
+        return restore;
+      }
+      return isCodexAccountProvider(providerId)
+        ? removeCodexAccountCredentialsReversibly(providerId)
+        : removeGenericOAuthCredentialsReversibly(storedCustomProviderId(providerId));
+    },
   });
 
   // 自定义 MCP 服务器 CRUD —— CRUD 成功后刷新三个 agent 的 mcpProviders 数组

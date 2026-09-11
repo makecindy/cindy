@@ -458,7 +458,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       const rateLimit = parseRateLimitHeaders(upstream.headers);
       if (rateLimit) {
         try {
-          provider.onRateLimit(rateLimit);
+          provider.onRateLimit(rateLimit, providerHeaders);
         } catch {
           /* 回调异常不影响流转发 */
         }

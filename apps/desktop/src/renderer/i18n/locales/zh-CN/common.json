@@ -1395,7 +1395,7 @@
       "codex": {
         "logoutConfirm": {
           "title": "断开 ChatGPT 账号？",
-          "description": "断开后，{{appName}} 将无法在 Codex 和 Claude 中使用这份 ChatGPT 订阅。系统 Codex CLI 的登录不受影响。",
+          "description": "断开后，{{appName}} 将无法使用这份 ChatGPT 订阅。",
           "confirm": "断开 ChatGPT",
           "cancel": "取消"
         },
@@ -1410,7 +1410,7 @@
           "description": "开启后 Codex 不走订阅，复用「模型供应商」里的 Cindy AI Key。",
           "noKey": "未配置 Cindy AI Key，请在「模型供应商」里连接 Cindy AI",
           "noKeyDialog": {
-            "title": "尚未配置 API Key",
+            "title": "尚未配置 API key",
             "description": "API 模式需要复用 Cindy AI Key，当前还没有配置。前往「模型供应商」连接 Cindy AI 后即可开启。"
           },
           "badge": {
@@ -1428,25 +1428,25 @@
       "xai": {
         "logoutConfirm": {
           "title": "断开 xAI(SuperGrok)？",
-          "description": "断开会清除本机保存的 xAI 登录凭证；已选 Grok 模型的任务将无法调用，直到重新授权。",
+          "description": "断开后，Cindy 将无法使用这份 Grok 订阅。",
           "confirm": "断开",
           "cancel": "取消"
         },
         "toast": {
-          "loggedIn": "已登录 xAI(SuperGrok)",
-          "loggedOut": "已断开 xAI",
-          "loginFailed": "授权失败，请重试",
-          "logoutFailed": "断开失败，请重试"
+          "loggedIn": "已登录 Grok",
+          "loggedOut": "已断开 Grok",
+          "loginFailed": "Grok 登录失败，请重试",
+          "logoutFailed": "Grok 断开失败，请重试"
         }
       },
       "claude": {
         "subtitle": {
-          "authorizing": "授权中（浏览器）…",
-          "authorized": "Claude.ai 订阅 · 已授权",
-          "unauthorized": "未授权（点「授权」登录 Claude.ai）"
+          "authorizing": "登录中…",
+          "authorized": "Claude 订阅 · 已连接",
+          "unauthorized": "未连接"
         },
         "button": {
-          "authorize": "授权"
+          "authorize": "登录"
         },
         "badge": {
           "api": "● API",
@@ -1454,17 +1454,17 @@
         },
         "logoutConfirm": {
           "title": "断开 Claude.ai 订阅？",
-          "description": "断开会清除本机 Claude Code 的登录凭证（本地 `claude` 命令行也会一起登出）；若当前在订阅模式会自动切回 Cindy AI。需要重新授权才能恢复。",
+          "description": "断开后，Cindy 将无法使用这份 Claude 订阅。",
           "confirm": "断开",
           "cancel": "取消"
         },
         "toast": {
-          "loggedIn": "已登录 Claude.ai 订阅",
-          "loggedOut": "已断开 Claude.ai 订阅",
-          "loginFailed": "授权失败，请重试",
-          "logoutFailed": "断开失败，请重试",
+          "loggedIn": "已登录 Claude",
+          "loggedOut": "已断开 Claude",
+          "loginFailed": "Claude 登录失败，请重试",
+          "logoutFailed": "Claude 断开失败，请重试",
           "notSubscription": "该账号没有 Claude 订阅（Pro/Max），无法走订阅模式",
-          "needAuth": "请先授权登录 Claude.ai"
+          "needAuth": "请先登录 Claude"
         },
         "apiMode": {
           "label": "API 模式（走 Cindy AI）",
@@ -1472,7 +1472,7 @@
           "toggleAria": "切换 Claude API 模式",
           "sharedKeyWarning": "和 Cindy AI 共用一把 Key，关闭 API 模式后非 Claude 模型仍需 Cindy AI",
           "noKeyDialog": {
-            "title": "尚未配置 API Key",
+            "title": "尚未配置 API key",
             "description": "关闭 API 模式（走订阅）后，非 Claude 模型（gpt / deepseek 等）仍需复用 Cindy AI Key，当前还没有配置。前往「模型供应商」连接 Cindy AI 后即可。"
           },
           "toast": {
@@ -1496,11 +1496,12 @@
         "disconnected": "未连接",
         "connecting": "正在连接…",
         "rename": "重命名",
-        "suspended": "已停用"
+        "suspended": "已停用",
+        "unconfigured": "未配置"
       },
       "button": {
-        "authorize": "授权",
-        "logout": "登出",
+        "authorize": "登录",
+        "logout": "断开",
         "connect": "连接",
         "disconnect": "断开",
         "cancel": "取消",
@@ -1517,13 +1518,13 @@
         "title": "OpenAI",
         "subtitle": "连接一个 ChatGPT 账号，同时用于 Codex 和 Claude",
         "modelLabel": "GPT 模型",
-        "reconnectRequired": "需要重新连接",
-        "connect": "连接 ChatGPT",
-        "reconnect": "重新连接 ChatGPT",
-        "cancelConnect": "取消连接",
+        "reconnectRequired": "重新登录",
+        "connect": "使用本机 Codex 账号",
+        "reconnect": "重新登录",
+        "cancelConnect": "取消",
         "accountSource": {
           "local": "本机 Codex 账号",
-          "oauth": "独立登录账号",
+          "oauth": "独立账号",
           "unknown": "现有 OpenAI 连接"
         },
         "useLocalAccount": "使用本机 Codex 账号",
@@ -1593,19 +1594,19 @@
       },
       "custom": {
         "tag": "自定义",
-        "editAria": "编辑",
+        "editAria": "编辑连接设置",
         "deleteAria": "删除",
         "save": "保存",
         "cancel": "取消",
         "dialog": {
           "createTitle": "添加自定义供应商",
-          "editTitle": "编辑自定义供应商",
+          "editTitle": "编辑连接设置",
           "desc": "配置与 OpenAI / Anthropic 兼容的供应商。"
         },
         "imageGenerationReload": {
           "title": "重新加载 Codex",
-          "description": "保存此图片生成配置需要重新加载 Codex，并会中断当前正在执行的 Codex 任务。",
-          "interrupt": "保存并停止",
+          "description": "应用此更改需要重新加载 Codex，并会中断当前正在执行的 Codex 任务。",
+          "interrupt": "继续并停止任务",
           "cancel": "取消",
           "close": "关闭"
         },
@@ -1639,7 +1640,7 @@
           "runtimeSupportsImageGenerationEndpointsTitle": "接口要求",
           "runtimeSupportsImageGenerationEndpoints": "网关必须处理以下请求：",
           "runtimeSupportsImageGenerationPermissionsTitle": "权限与失败处理",
-          "runtimeSupportsImageGenerationPermissions": "当前 API Key、账号或用户组需有图片模型权限。此开关只声明网关能力，不会自动开通上游权限。调用失败时会显示真实上游错误，不会切换到其他图片服务。",
+          "runtimeSupportsImageGenerationPermissions": "当前 API key、账号或用户组需有图片模型权限。此开关只声明网关能力，不会自动开通上游权限。调用失败时会显示真实上游错误，不会切换到其他图片服务。",
           "modelSupportsReasoning": "支持推理",
           "modelSupportsReasoningHelp": "仅在该模型接受推理强度时开启，并勾选它实际支持的所有档位。保存后，下一个 Pi Agent 会话生效。",
           "modelReasoningEfforts": "支持的推理强度",
@@ -1699,8 +1700,8 @@
           "deleteFailed": "删除失败"
         },
         "deleteConfirm": {
-          "title": "删除自定义供应商？",
-          "description": "将删除「{{name}}」的配置和本机保存的密钥，正在使用它的任务会回退到默认来源。",
+          "title": "删除供应商？",
+          "description": "删除后，Cindy 将无法再使用「{{name}}」。历史消息会保留，之后可以重新添加。",
           "confirm": "删除",
           "cancel": "取消"
         },
@@ -1731,10 +1732,10 @@
         "authMode": {
           "label": "鉴权方式",
           "apiKey": "API 密钥",
-          "oauth": "OAuth 订阅授权",
+          "oauth": "订阅账号",
           "none": "无需鉴权",
           "noneHelp": "适用于本机或受信任的自托管 Proxy。Cindy 会移除 CLI 自带的订阅凭证和账号头，再把请求发往该端点。",
-          "oauthHelp": "适用于提供 OAuth 登录的供应商。可选择浏览器回调或设备码流程，保存后从供应商列表发起授权。凭证仅加密存储在本机。",
+          "oauthHelp": "适用于支持 OAuth 登录的供应商。可选择浏览器或设备码登录，保存后从供应商列表发起登录。凭证保存在本机。",
           "flowLabel": "OAuth 流程",
           "flow": {
             "authorization-code": "浏览器回调（PKCE）",
@@ -1747,7 +1748,7 @@
             "clientId": "Client ID",
             "scopes": "Scopes（空格分隔）"
           },
-          "modelsAutoNote": "模型清单将在授权成功后自动获取，无需手动填写。"
+          "modelsAutoNote": "登录后自动获取可用模型"
         },
         "advanced": {
           "label": "高级配置（模型 / 请求头）"
@@ -1975,24 +1976,24 @@
         }
       },
       "genericOAuth": {
-        "subtitle": "订阅授权登录（OAuth）",
+        "subtitle": "订阅账号",
         "toast": {
-          "loggedIn": "{{name}} 登录成功",
+          "loggedIn": "已登录 {{name}}",
           "loginFailed": "{{name}} 登录失败，请重试",
-          "loggedOut": "已退出 {{name}}",
-          "logoutFailed": "退出 {{name}} 失败"
+          "loggedOut": "已断开 {{name}}",
+          "logoutFailed": "{{name}} 断开失败，请重试"
         },
         "logoutConfirm": {
-          "title": "退出 {{name}}？",
-          "description": "退出后该来源的模型将不可用，可随时重新登录。",
-          "confirm": "退出登录",
+          "title": "断开「{{name}}」？",
+          "description": "断开后，Cindy 将无法使用「{{name}}」。供应商会保留，之后可以重新连接。",
+          "confirm": "断开",
           "cancel": "取消"
         }
       },
       "addProvider": "添加供应商",
       "detail": {
         "singleAgentNote": "仅支持 {{agent}}",
-        "emptyModels": "授权后自动发现可用模型",
+        "emptyModels": "登录后自动获取可用模型",
         "emptyList": "点击左下角「添加供应商」接入你的第一个模型来源",
         "emptyModelsConnected": "已连接，正在自动发现可用模型；若持续为空，请稍后重试。",
         "discoveryFailed": {
@@ -2000,7 +2001,7 @@
           "timeout": "连接该供应商超时，因此拿不到模型列表。请检查网络后重试。",
           "upstream": "该供应商暂时无法返回模型列表。请稍后重试。",
           "regionBlocked": "该供应商未在你当前所在地区提供服务，因此拿不到模型列表。你可以改用其它供应商。",
-          "unauthorized": "该供应商拒绝了当前授权，因此拿不到模型列表。请断开后重新连接。",
+          "unauthorized": "当前登录或 API key 已被供应商拒绝，无法获取模型列表。请重新登录或更新 API key。",
           "forbidden": "该供应商拒绝了这次请求，因此拿不到模型列表。若你正在使用 Proxy 或 VPN，请更换出口后重试。",
           "rejected": "该供应商拒绝了这次请求，因此拿不到模型列表。请稍后重试或改用其它供应商。",
           "empty": "该供应商没有返回任何可用模型。请确认账号权限后重试。"
@@ -2010,7 +2011,7 @@
           "timeout": "连接该供应商超时，下面是上次获取的模型列表。请检查网络后重试。",
           "upstream": "该供应商暂时无法返回模型列表，下面是上次获取的结果。请稍后重试。",
           "regionBlocked": "该供应商未在你当前所在地区提供服务，下面是上次获取的模型列表。你可以改用其它供应商。",
-          "unauthorized": "该供应商拒绝了当前授权，下面是上次获取的模型列表。请断开后重新连接。",
+          "unauthorized": "当前登录或 API key 已被供应商拒绝，下面是上次获取的模型列表。请重新登录或更新 API key。",
           "forbidden": "该供应商拒绝了这次请求，下面是上次获取的模型列表。若你正在使用 Proxy 或 VPN，请更换出口后重试。",
           "rejected": "该供应商拒绝了这次请求，下面是上次获取的模型列表。请稍后重试或改用其它供应商。",
           "empty": "该供应商这次没有返回任何可用模型，下面是上次获取的列表。请确认账号权限后重试。"
@@ -2020,8 +2021,8 @@
       },
       "detect": {
         "groupLabel": "检测到本机 CLI",
-        "action": "去授权",
-        "hintLoggedIn": "检测到 {{cli}} 已登录，可直接授权接入",
+        "action": "使用本机账号",
+        "hintLoggedIn": "检测到 {{cli}} 已登录，可使用本机账号接入",
         "hintInstalled": "检测到本机已安装 {{cli}}"
       },
       "wizard": {
@@ -2034,21 +2035,21 @@
         "searchPlaceholder": "搜索供应商…",
         "groupRecommend": "推荐",
         "groupDetectedLocal": "检测到本机服务",
-        "groupSubscription": "订阅授权",
+        "groupSubscription": "订阅账号",
         "recommendReason": {
           "has-local-models": "本机已有模型",
           "machine-capable": "这台电脑适合跑本机模型",
-          "subscription": "订阅授权"
+          "subscription": "订阅账号"
         },
         "groupApiKey": "API 与自托管 Proxy · 预设随目录更新",
         "groupCustom": "自定义",
-        "metaOAuth": "订阅授权",
-        "metaApiKey": "API Key",
+        "metaOAuth": "订阅账号",
+        "metaApiKey": "API key",
         "metaNoAuth": "本机 / 自托管 · 无需鉴权",
         "customTitle": "自定义端点",
         "customMeta": "接入任意 OpenAI / Anthropic 兼容的模型来源",
-        "pickHint": "鉴权方式由供应商定义决定；OAuth 端点与基础 URL 由预设携带，无需手填。",
-        "oauthDesc": "通过浏览器完成订阅授权，无需 API Key",
+        "pickHint": "选择你要连接的账号或服务。",
+        "oauthDesc": "在浏览器中登录账号，无需 API key。",
         "deviceOAuthDesc": "使用一次性设备码，在供应商验证页面完成授权",
         "authorizeInBrowser": "在浏览器中授权",
         "authorizeWithDeviceCode": "使用设备码",
@@ -2060,8 +2061,8 @@
         "deviceCodeCopied": "设备码已复制",
         "deviceCodeCopyFailed": "设备码复制失败",
         "verificationPageOpenFailed": "无法打开验证页面",
-        "authorizedToast": "已连接「{{name}}」",
-        "authorizeFailed": "「{{name}}」授权失败，请重试",
+        "authorizedToast": "已登录 {{name}}",
+        "authorizeFailed": "{{name}} 登录失败，请重试",
         "nameLabel": "显示名称",
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
         "endpointLabel": "{{agent}} 基础 URL",
@@ -2084,7 +2085,7 @@
         "finish": "完成添加",
         "cancel": "取消",
         "useApiKey": "API key 接入",
-        "metaOAuthOrApi": "订阅授权 · API Key",
+        "metaOAuthOrApi": "订阅账号 · API key",
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 连接",
           "note": "此来源提供图像生成模型，不参与对话。API key 仅保存在本机（系统钥匙串加密），不会上传。"
@@ -2220,7 +2221,7 @@
       },
       "builtinApiKey": {
         "subtitle": "API key 连接",
-        "replaceKey": "更换 key",
+        "replaceKey": "编辑连接设置",
         "saveKey": "保存",
         "keyPlaceholder": "粘贴 API key",
         "toast": {
@@ -2231,7 +2232,7 @@
         },
         "disconnectConfirm": {
           "title": "断开 {{name}}？",
-          "description": "断开会删除本机保存的 API key，该来源的模型将不可用，可随时重新添加。",
+          "description": "断开会清除这份连接保存的 API key。供应商会保留，重新填写 API key 后即可使用。",
           "confirm": "断开",
           "cancel": "取消"
         }
@@ -2246,6 +2247,10 @@
         "codexPlanFallback": "ChatGPT 订阅",
         "codexSecondary": "次级窗口剩余 {{percent}}%",
         "codexResetCredits": "限额重置券 {{count}} 张"
+      },
+      "localAccount": {
+        "useClaude": "使用本机 Claude Code 账号",
+        "unavailable": "未找到可用的本机登录，请先在对应应用中登录，或添加独立账号。"
       }
     },
     "experimental": {

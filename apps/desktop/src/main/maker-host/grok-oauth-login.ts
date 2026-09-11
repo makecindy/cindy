@@ -30,6 +30,7 @@ import {
   type OAuthResultPageLang,
 } from '../oauthResultPage.js';
 import { desktopMakerLogger } from './logger-adapter.js';
+import { retainInvalidatedProviderPresentation } from './provider-presentation-store.js';
 import { outboundFetch } from './outbound-fetch.js';
 import { genericOAuthSecretIo, getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
@@ -939,6 +940,9 @@ function createGrokAccount(providerId: string) {
           log.warn('xai refresh_token 已被服务端作废,清空本机凭证并回落未登录');
         }
         logoutGrok();
+        const loggedOutGeneration = getGrokOAuthCredentialGeneration();
+        if (providerId === 'xai') await retainInvalidatedProviderPresentation(providerId);
+        if (!currentScope() || loggedOutGeneration !== getGrokOAuthCredentialGeneration()) return 'superseded';
         return 'logged_out';
       }
       default:

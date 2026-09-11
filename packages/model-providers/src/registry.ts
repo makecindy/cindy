@@ -96,6 +96,8 @@ export type ModelDiscoveryFailureState = Partial<
 
 /** 供应商 + 连接状态。 */
 export interface ProviderView extends Provider {
+  /** Definition remains available for adding a removed local connection again. */
+  removed?: boolean;
   subscriptionAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };
   /** Public account identity and credential origin, never credential material. */
   openAiAccount?: { source: 'local' | 'oauth' | 'unknown'; identity?: string; reconnectRequired?: boolean };

@@ -1395,7 +1395,7 @@
       "codex": {
         "logoutConfirm": {
           "title": "Disconnect ChatGPT Account?",
-          "description": "{{appName}} will stop using this ChatGPT subscription in Codex and Claude. Your system Codex CLI sign-in stays unchanged.",
+          "description": "After disconnecting, {{appName}} will no longer be able to use this ChatGPT subscription.",
           "confirm": "Disconnect ChatGPT",
           "cancel": "Cancel"
         },
@@ -1410,7 +1410,7 @@
           "description": "When on, Codex uses the Cindy AI key from Model Providers instead of your subscription.",
           "noKey": "No Cindy AI key configured — connect Cindy AI in Model Providers",
           "noKeyDialog": {
-            "title": "API Key not configured",
+            "title": "API key not configured",
             "description": "API mode reuses the Cindy AI key, which is not set yet. Connect Cindy AI in Model Providers to enable API mode."
           },
           "badge": {
@@ -1428,25 +1428,25 @@
       "xai": {
         "logoutConfirm": {
           "title": "Disconnect xAI (SuperGrok)?",
-          "description": "Disconnecting clears the xAI credentials stored on this machine; sessions using Grok models won't work until you re-authorize.",
+          "description": "Cindy will no longer use this Grok subscription.",
           "confirm": "Disconnect",
           "cancel": "Cancel"
         },
         "toast": {
-          "loggedIn": "Signed in to xAI (SuperGrok)",
-          "loggedOut": "Disconnected from xAI",
-          "loginFailed": "Authorization failed, please retry",
-          "logoutFailed": "Disconnect failed, please retry"
+          "loggedIn": "Signed in to Grok",
+          "loggedOut": "Disconnected Grok",
+          "loginFailed": "Could not sign in to Grok. Try again.",
+          "logoutFailed": "Could not disconnect Grok. Try again."
         }
       },
       "claude": {
         "subtitle": {
-          "authorizing": "Authorizing (browser)…",
-          "authorized": "Claude.ai subscription · Authorized",
-          "unauthorized": "Not authorized (click Authorize to sign in to Claude.ai)"
+          "authorizing": "Signing in…",
+          "authorized": "Claude subscription · Connected",
+          "unauthorized": "Not connected"
         },
         "button": {
-          "authorize": "Authorize"
+          "authorize": "Sign in"
         },
         "badge": {
           "api": "● API",
@@ -1454,17 +1454,17 @@
         },
         "logoutConfirm": {
           "title": "Disconnect Claude.ai subscription?",
-          "description": "Disconnecting clears this machine's Claude Code login credential (your local `claude` CLI is signed out too); if you're currently in subscription mode it falls back to Cindy AI. You'll need to authorize again to restore it.",
+          "description": "Cindy will no longer use this Claude subscription.",
           "confirm": "Disconnect",
           "cancel": "Cancel"
         },
         "toast": {
-          "loggedIn": "Signed in to Claude.ai subscription",
-          "loggedOut": "Claude.ai subscription disconnected",
-          "loginFailed": "Authorization failed, please retry",
-          "logoutFailed": "Disconnect failed, please retry",
+          "loggedIn": "Signed in to Claude",
+          "loggedOut": "Disconnected Claude",
+          "loginFailed": "Could not sign in to Claude. Try again.",
+          "logoutFailed": "Could not disconnect Claude. Try again.",
           "notSubscription": "This account has no Claude subscription (Pro/Max); subscription mode is unavailable",
-          "needAuth": "Authorize and sign in to Claude.ai first"
+          "needAuth": "Sign in to Claude first"
         },
         "apiMode": {
           "label": "API mode (via Cindy AI)",
@@ -1472,7 +1472,7 @@
           "toggleAria": "Toggle Claude API mode",
           "sharedKeyWarning": "Shares one key with Cindy AI — with API mode off, non-Claude models still need Cindy AI",
           "noKeyDialog": {
-            "title": "No API Key configured",
+            "title": "No API key configured",
             "description": "With API mode off (subscription), non-Claude models (gpt / deepseek, etc.) still reuse the Cindy AI key, which is not configured yet. Connect Cindy AI in Model Providers to continue."
           },
           "toast": {
@@ -1496,11 +1496,12 @@
         "disconnected": "Not connected",
         "connecting": "Connecting…",
         "rename": "Rename",
-        "suspended": "Disabled"
+        "suspended": "Disabled",
+        "unconfigured": "Not configured"
       },
       "button": {
-        "authorize": "Authorize",
-        "logout": "Sign out",
+        "authorize": "Sign in",
+        "logout": "Disconnect",
         "connect": "Connect",
         "disconnect": "Disconnect",
         "cancel": "Cancel",
@@ -1517,13 +1518,13 @@
         "title": "OpenAI",
         "subtitle": "Connect one ChatGPT account for both Codex and Claude",
         "modelLabel": "GPT models",
-        "reconnectRequired": "Reconnect Needed",
-        "connect": "Connect ChatGPT",
-        "reconnect": "Reconnect ChatGPT",
-        "cancelConnect": "Cancel Connection",
+        "reconnectRequired": "Sign in again",
+        "connect": "Use local Codex account",
+        "reconnect": "Sign in again",
+        "cancelConnect": "Cancel",
         "accountSource": {
           "local": "Local Codex account",
-          "oauth": "Independently signed-in account",
+          "oauth": "Separate account",
           "unknown": "Existing OpenAI connection"
         },
         "useLocalAccount": "Use local Codex account",
@@ -1593,19 +1594,19 @@
       },
       "custom": {
         "tag": "Custom",
-        "editAria": "Edit",
+        "editAria": "Edit connection settings",
         "deleteAria": "Delete",
         "save": "Save",
         "cancel": "Cancel",
         "dialog": {
           "createTitle": "Add a custom provider",
-          "editTitle": "Edit custom provider",
+          "editTitle": "Edit connection settings",
           "desc": "Configure an OpenAI / Anthropic-compatible provider."
         },
         "imageGenerationReload": {
           "title": "Reload Codex",
-          "description": "Saving this image generation configuration requires reloading Codex and will interrupt the Codex tasks currently in progress.",
-          "interrupt": "Save and stop",
+          "description": "Applying this change requires reloading Codex and will interrupt the Codex tasks currently in progress.",
+          "interrupt": "Continue and stop tasks",
           "cancel": "Cancel",
           "close": "Close"
         },
@@ -1699,8 +1700,8 @@
           "deleteFailed": "Delete failed"
         },
         "deleteConfirm": {
-          "title": "Delete custom provider?",
-          "description": "This removes the config for \"{{name}}\" and its locally stored key. Sessions using it fall back to the default source.",
+          "title": "Delete provider?",
+          "description": "Cindy will no longer use “{{name}}”. Message history is kept, and you can add the provider again later.",
           "confirm": "Delete",
           "cancel": "Cancel"
         },
@@ -1731,10 +1732,10 @@
         "authMode": {
           "label": "Authentication",
           "apiKey": "API key",
-          "oauth": "OAuth subscription",
+          "oauth": "Subscription account",
           "none": "No authentication",
           "noneHelp": "For local or trusted self-hosted proxies. Cindy removes the CLI's subscription credentials and account headers before forwarding requests.",
-          "oauthHelp": "For providers offering OAuth sign-in. Choose a browser callback or device code flow, then authorize from the provider list. Credentials are stored encrypted on this device only.",
+          "oauthHelp": "For providers that support OAuth sign-in. Choose a browser or device-code flow, then sign in from the provider list after saving. Credentials stay on this device.",
           "flowLabel": "OAuth flow",
           "flow": {
             "authorization-code": "Browser callback (PKCE)",
@@ -1747,7 +1748,7 @@
             "clientId": "Client ID",
             "scopes": "Scopes (space-separated)"
           },
-          "modelsAutoNote": "The model list is fetched automatically after you authorize — no manual entry needed."
+          "modelsAutoNote": "Available models are discovered after sign-in"
         },
         "advanced": {
           "label": "Advanced (models / headers)"
@@ -1976,24 +1977,24 @@
         }
       },
       "genericOAuth": {
-        "subtitle": "Subscription sign-in (OAuth)",
+        "subtitle": "Subscription account",
         "toast": {
           "loggedIn": "Signed in to {{name}}",
-          "loginFailed": "Failed to sign in to {{name}}. Please try again",
-          "loggedOut": "Signed out of {{name}}",
-          "logoutFailed": "Failed to sign out of {{name}}"
+          "loginFailed": "Could not sign in to {{name}}. Try again.",
+          "loggedOut": "Disconnected {{name}}",
+          "logoutFailed": "Could not disconnect {{name}}. Try again."
         },
         "logoutConfirm": {
-          "title": "Sign out of {{name}}?",
-          "description": "Models from this source will be unavailable after signing out. You can sign in again anytime.",
-          "confirm": "Sign out",
+          "title": "Disconnect “{{name}}”?",
+          "description": "Cindy will no longer use “{{name}}”. The provider is kept so you can reconnect later.",
+          "confirm": "Disconnect",
           "cancel": "Cancel"
         }
       },
       "addProvider": "Add provider",
       "detail": {
         "singleAgentNote": "{{agent}} only",
-        "emptyModels": "Models are discovered automatically after you authorize",
+        "emptyModels": "Available models are discovered after sign-in",
         "emptyList": "Click \"Add provider\" below to connect your first model source",
         "emptyModelsConnected": "Connected — discovering available models. If it stays empty, try again shortly.",
         "discoveryFailed": {
@@ -2001,7 +2002,7 @@
           "timeout": "Connection to this provider timed out, so its model list is unavailable. Check your network, then retry.",
           "upstream": "This provider can't return its model list right now. Try again later.",
           "regionBlocked": "This provider doesn't offer service in your current region, so its model list is unavailable. You can use a different provider instead.",
-          "unauthorized": "This provider rejected the current authorization, so its model list is unavailable. Disconnect and connect again.",
+          "unauthorized": "This provider rejected the current login or API key, so its model list is unavailable. Sign in again or update the API key.",
           "forbidden": "This provider refused the request, so its model list is unavailable. If you're on a proxy or VPN, switch exits and retry.",
           "rejected": "This provider refused the request, so its model list is unavailable. Try again later, or use a different provider.",
           "empty": "This provider returned no usable models. Check your account's access, then retry."
@@ -2011,7 +2012,7 @@
           "timeout": "Connection to this provider timed out. The list below is from the last successful refresh. Check your network, then retry.",
           "upstream": "This provider can't return its model list right now. The list below is from the last successful refresh. Try again later.",
           "regionBlocked": "This provider doesn't offer service in your current region. The list below is from the last successful refresh. You can use a different provider instead.",
-          "unauthorized": "This provider rejected the current authorization. The list below is from the last successful refresh. Disconnect and connect again.",
+          "unauthorized": "This provider rejected the current login or API key. The last model list is shown below. Sign in again or update the API key.",
           "forbidden": "This provider refused the request. The list below is from the last successful refresh. If you're on a proxy or VPN, switch exits and retry.",
           "rejected": "This provider refused the request. The list below is from the last successful refresh. Try again later, or use a different provider.",
           "empty": "This provider returned no usable models this time. The list below is from the last successful refresh. Check your account's access, then retry."
@@ -2021,8 +2022,8 @@
       },
       "detect": {
         "groupLabel": "Detected on this device",
-        "action": "Authorize",
-        "hintLoggedIn": "{{cli}} is signed in on this device — authorize to connect",
+        "action": "Use local account",
+        "hintLoggedIn": "{{cli}} is signed in. You can use the local account.",
         "hintInstalled": "{{cli}} is installed on this device"
       },
       "wizard": {
@@ -2035,21 +2036,21 @@
         "searchPlaceholder": "Search providers…",
         "groupRecommend": "Recommended",
         "groupDetectedLocal": "Detected on this computer",
-        "groupSubscription": "Subscription sign-in",
+        "groupSubscription": "Subscription account",
         "recommendReason": {
           "has-local-models": "Models already on this computer",
           "machine-capable": "This computer can run a local model",
-          "subscription": "Subscription sign-in"
+          "subscription": "Subscription account"
         },
         "groupApiKey": "API and self-hosted proxies · presets update with the catalog",
         "groupCustom": "Custom",
-        "metaOAuth": "Subscription (OAuth)",
+        "metaOAuth": "Subscription account",
         "metaApiKey": "API key",
         "metaNoAuth": "Local / self-hosted · no authentication",
         "customTitle": "Custom endpoint",
         "customMeta": "Connect any OpenAI / Anthropic compatible source",
-        "pickHint": "The sign-in method is defined by each provider; OAuth endpoints and base URLs come from presets — nothing to fill in by hand.",
-        "oauthDesc": "Authorize your subscription in the browser — no API key needed",
+        "pickHint": "Choose the account or service to connect.",
+        "oauthDesc": "Sign in through your browser. No API key required.",
         "deviceOAuthDesc": "Authorize on the provider's verification page with a one-time device code",
         "authorizeInBrowser": "Authorize in browser",
         "authorizeWithDeviceCode": "Use device code",
@@ -2061,8 +2062,8 @@
         "deviceCodeCopied": "Device code copied",
         "deviceCodeCopyFailed": "Couldn't copy the device code",
         "verificationPageOpenFailed": "Couldn't open the verification page",
-        "authorizedToast": "Connected {{name}}",
-        "authorizeFailed": "Failed to authorize {{name}}. Please try again",
+        "authorizedToast": "Signed in to {{name}}",
+        "authorizeFailed": "Could not sign in to {{name}}. Try again.",
         "nameLabel": "Display name",
         "onlyAgentNote": "This provider only supports {{agent}}",
         "endpointLabel": "{{agent}} base URL",
@@ -2085,7 +2086,7 @@
         "finish": "Finish",
         "cancel": "Cancel",
         "useApiKey": "API key connection",
-        "metaOAuthOrApi": "Subscription (OAuth) · API key",
+        "metaOAuthOrApi": "Subscription account · API key",
         "builtinApiKey": {
           "subtitle": "Connect with your own API key",
           "note": "This source provides image generation models and does not join chats. The API key is stored only on this device (encrypted by the system keychain) and never uploaded."
@@ -2221,7 +2222,7 @@
       },
       "builtinApiKey": {
         "subtitle": "API key connection",
-        "replaceKey": "Replace key",
+        "replaceKey": "Edit connection settings",
         "saveKey": "Save",
         "keyPlaceholder": "Paste API key",
         "toast": {
@@ -2232,7 +2233,7 @@
         },
         "disconnectConfirm": {
           "title": "Disconnect {{name}}?",
-          "description": "Disconnecting deletes the API key stored on this device. Models from this source become unavailable; you can add it again anytime.",
+          "description": "The API key saved for this connection will be cleared. The provider is kept; enter an API key to use it again.",
           "confirm": "Disconnect",
           "cancel": "Cancel"
         }
@@ -2247,6 +2248,10 @@
         "codexPlanFallback": "ChatGPT subscription",
         "codexSecondary": "Secondary window: {{percent}}% remaining",
         "codexResetCredits": "{{count}} limit reset credits"
+      },
+      "localAccount": {
+        "useClaude": "Use local Claude Code account",
+        "unavailable": "No local sign-in is available. Sign in to the source app or add a separate account."
       }
     },
     "experimental": {
