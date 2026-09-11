@@ -11,6 +11,7 @@ const api = vi.hoisted(() => ({
   getBrowserStatus: vi.fn(),
   getComputerStatus: vi.fn(),
   checkComputerUpdate: vi.fn(),
+  updateComputerDriver: vi.fn(),
   getAndroidConfig: vi.fn(),
   getAndroidStatus: vi.fn(),
   getBackendState: vi.fn(),
@@ -63,6 +64,12 @@ beforeEach(() => {
   });
   api.getComputerStatus.mockResolvedValue(computerUnavailable);
   api.checkComputerUpdate.mockResolvedValue({ updateAvailable: false, updating: false });
+  api.updateComputerDriver.mockResolvedValue({
+    ok: true,
+    stdout: '',
+    stderr: '',
+    status: computerUnavailable,
+  });
   api.getAndroidConfig.mockResolvedValue({
     value: { defaultDeviceSerial: null, adbPathOverride: null },
     defaults: { defaultDeviceSerial: null, adbPathOverride: null },
@@ -101,6 +108,7 @@ beforeEach(() => {
           onPermissionGuideCancelled: vi.fn(() => () => undefined),
           onUpdateProgress: vi.fn(() => () => undefined),
           checkUpdate: api.checkComputerUpdate,
+          updateDriver: api.updateComputerDriver,
         },
         android: {
           getConfig: api.getAndroidConfig,
@@ -122,6 +130,63 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ComputerUseSection browser backend health loading', () => {
+  it('waits for computer plugin state before joining an in-flight driver update', async () => {
+    const computerStatus = deferred<ComputerDriverStatus>();
+    const computerPluginState = deferred<{ effectiveEnabled: boolean }>();
+    const driverUpdate = deferred<ComputerDriverInstallResult>();
+    api.getComputerStatus.mockReturnValueOnce(computerStatus.promise);
+    api.getPluginState.mockImplementation((id: string) =>
+      id === 'computer'
+        ? computerPluginState.promise
+        : Promise.resolve({ effectiveEnabled: id === 'browser' }),
+    );
+    api.checkComputerUpdate.mockResolvedValueOnce({
+      updateAvailable: false,
+      updating: true,
+      currentVersion: '0.12.2',
+      latestVersion: '0.12.3',
+    });
+    api.updateComputerDriver.mockReturnValueOnce(driverUpdate.promise);
+
+    render(<ComputerUseSection workingDir="/tmp/project" />);
+
+    await act(async () => {
+      computerStatus.resolve({
+        ...computerUnavailable,
+        installed: true,
+        version: '0.12.2',
+      });
+      await computerStatus.promise;
+    });
+    expect(api.checkComputerUpdate).not.toHaveBeenCalled();
+
+    await act(async () => {
+      computerPluginState.resolve({ effectiveEnabled: true });
+      await computerPluginState.promise;
+    });
+    await waitFor(() => expect(api.updateComputerDriver).toHaveBeenCalledWith({ joinOnly: true }));
+
+    await act(async () => {
+      driverUpdate.resolve({
+        ok: true,
+        stdout: '',
+        stderr: '',
+        status: {
+          ...computerUnavailable,
+          installed: true,
+          permissionState: {
+            platform: 'linux',
+            required: true,
+            status: 'missing',
+            canGrant: false,
+          },
+        },
+      });
+      await driverUpdate.promise;
+    });
+    await waitFor(() => expect(api.setPluginEnabled).toHaveBeenCalledWith('computer', false));
+  });
+
   it('keeps the initial driver update result when plugin state resolves later', async () => {
     const computerPluginState = deferred<{ effectiveEnabled: boolean }>();
     const driverUpdate = deferred<ComputerDriverUpdateCheck>();
@@ -139,11 +204,11 @@ describe('ComputerUseSection browser backend health loading', () => {
 
     render(<ComputerUseSection workingDir="/tmp/project" />);
 
-    await waitFor(() => expect(api.checkComputerUpdate).toHaveBeenCalledTimes(1));
     await act(async () => {
       computerPluginState.resolve({ effectiveEnabled: false });
       await computerPluginState.promise;
     });
+    await waitFor(() => expect(api.checkComputerUpdate).toHaveBeenCalledTimes(1));
     await act(async () => {
       driverUpdate.resolve({
         updateAvailable: true,

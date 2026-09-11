@@ -719,8 +719,10 @@ export function ComputerUseSection({
     joinDriverUpdateRef.current = joinDriverUpdate;
   }, [joinDriverUpdate]);
 
+  const computerEnabledResolved = computerEnabled !== null;
   useEffect(() => {
-    if (!computerStatus?.installed || driverUpdateCheckedRef.current) return;
+    if (!computerStatus?.installed || !computerEnabledResolved || driverUpdateCheckedRef.current)
+      return;
     driverUpdateCheckedRef.current = true;
     let cancelled = false;
     void window.electronAPI.maker.computer
@@ -742,7 +744,7 @@ export function ComputerUseSection({
     return () => {
       cancelled = true;
     };
-  }, [computerStatus?.installed]);
+  }, [computerEnabledResolved, computerStatus?.installed]);
 
   const handleUpdateDriver = useCallback(() => {
     if (driverUpdatePending) return;
