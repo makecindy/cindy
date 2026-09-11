@@ -58,3 +58,14 @@ export function reorderSessionIds(
   next.splice(Math.max(0, Math.min(newIndex, next.length)), 0, movedId);
   return next;
 }
+
+export function mergeVisibleSessionReorder(
+  previous: readonly string[],
+  visibleOrder: readonly string[],
+): string[] {
+  const visibleIds = new Set(visibleOrder);
+  let visibleIndex = 0;
+  return previous.map((id) =>
+    visibleIds.has(id) ? visibleOrder[visibleIndex++] ?? id : id,
+  );
+}

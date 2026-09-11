@@ -814,10 +814,14 @@ export function ProjectsSection({
     dialogues.length > 0 ||
     filter.isFilterActive;
 
-  const renderProjectNode = (project: ProjectNodeData): ReactNode => (
-    <ProjectNode
-      key={project.projectKey}
-      project={project}
+  const renderProjectNode = (project: ProjectNodeData): ReactNode => {
+    const fullProject =
+      allKnownProjects.find((candidate) => candidate.projectKey === project.projectKey) ?? project;
+    return (
+      <ProjectNode
+        key={project.projectKey}
+        project={fullProject}
+        displaySessions={project.sessions}
       statusFilter={filter.status}
       isCollapsed={collapsed.has(project.projectKey)}
       collapsedAttentionTone={
@@ -853,10 +857,11 @@ export function ProjectsSection({
       linkingCodexProject={linkingCodexProject === project.projectKey}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
-      manualSessionOrder={sessionOrderFor(project)}
-      onSessionReorder={(orderedIds) => handleSessionReorder(project, orderedIds)}
-    />
-  );
+      manualSessionOrder={sessionOrderFor(fullProject)}
+      onSessionReorder={(orderedIds) => handleSessionReorder(fullProject, orderedIds)}
+      />
+    );
+  };
 
   // 散排任务行 / 自动任务组 / 「对话」组行。散排行与自动任务组带来源标签(hover);
   // 对话组行 = 可折叠的分组头 + 组内会话(折叠上限与对话段旧口径一致)。dialogueGroupKey 标识

@@ -589,7 +589,10 @@ export const ProjectNode = memo(function ProjectNode({
           展开/收起走 SectionCollapse 高度动画；「显示全部」在收起动画结束后复位。
           data-no-drag: 拦截 SortableList 默认 filter,阻止"鼠标落在子 session 上按下"
           被父层 ProjectsSection SortableList 当成"拖动整个 ProjectNode"的起点。
-          SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。 */}
+          SessionItem 的 root 是 role="button" 而非 <button> 标签,默认 filter 拦不下来。
+          这段是历史背景；当前组件不再在项目容器上设置 data-no-drag。 */}
+      {/* Session rows use their own conditional split-pane drag isolation; this project
+          container intentionally does not mark the whole subtree as non-draggable. */}
       <SectionCollapse collapsed={isCollapsed}>
         {/* pb-1.5:展开块与下一个项目标题之间的间距(4px 树 gap + 6px = 10px),
             大于会话行间距(gap-0.5),让项目块之间有分组呼吸(参考 Codex,2026-07 定稿)。 */}
