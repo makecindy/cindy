@@ -336,7 +336,7 @@ import {
   type QueueEditTextState,
 } from '@/session/inputProjection';
 import {
-  appendPendingSendItems,
+  mergePendingSendItems,
   buildPendingSendItems,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
@@ -1505,14 +1505,27 @@ export default function SessionScreen() {
   // 还没有答案(弱网可达数秒,且失败会回滚摘除气泡),徽标必须是转圈而不是「排入
   // 队尾」——后者是已确认入队的语义。成功 / 回滚 / 转失败任一落定即移除。
   const [sendingQueueClientIds, setSendingQueueClientIds] = useState<ReadonlySet<string>>(new Set());
+  // Ordering evidence stays through the settling phase, after the sending badge
+  // clears. Scope it to the page's session; never compare the phone clock to the host.
+  const [sendBaselineState, setSendBaselineState] = useState<{
+    sessionId: string;
+    byClientId: ReadonlyMap<string, string | null>;
+  }>(() => ({ sessionId, byClientId: new Map() }));
+  if (sendBaselineState.sessionId !== sessionId) {
+    setSendBaselineState({ sessionId, byClientId: new Map() });
+  }
   const markQueueItemSending = useCallback((clientId: string) => {
+    const userSendAt = remoteSessionStore.getSessions().find((item) => item.id === sessionId)?.userSendAt ?? null;
+    setSendBaselineState((current) => current.sessionId !== sessionId ? current : {
+      sessionId, byClientId: new Map([...current.byClientId, [clientId, userSendAt]]),
+    });
     setSendingQueueClientIds((current) => {
       if (current.has(clientId)) return current;
       const next = new Set(current);
       next.add(clientId);
       return next;
     });
-  }, []);
+  }, [sessionId]);
   const clearQueueItemSending = useCallback((clientId: string) => {
     setSendingQueueClientIds((current) => {
       if (!current.has(clientId)) return current;
@@ -5719,12 +5732,23 @@ export default function SessionScreen() {
     ],
   );
   const messageListItems = useMemo(
-    () => appendPendingSendItems(renderItems, pendingSendItems),
-    [pendingSendItems, renderItems],
+    () => mergePendingSendItems(
+      renderItems, pendingSendItems, currentSession?.userSendAt,
+      sendBaselineState.sessionId === sessionId ? sendBaselineState.byClientId : new Map(),
+    ),
+    [currentSession?.userSendAt, pendingSendItems, renderItems, sendBaselineState, sessionId],
   );
+  useEffect(() => {
+    const pendingIds = new Set(pendingSendItems.map((item) => item.clientId));
+    setSendBaselineState((current) => {
+      if (current !== sendBaselineState || current.sessionId !== sessionId) return current;
+      const kept = new Map([...current.byClientId].filter(([id]) => pendingIds.has(id)));
+      return kept.size === current.byClientId.size ? current : { sessionId, byClientId: kept };
+    });
+  }, [pendingSendItems, sendBaselineState, sessionId]);
   const messageListStructureKey = useMemo(
     () => ({}),
-    [pendingSendItems, renderItemsStructureKey],
+    [currentSession?.userSendAt, pendingSendItems, renderItemsStructureKey, sendBaselineState],
   );
   const shareExpandableBlockIds = useMemo(
     () => (shareSelectionActive ? collectConversationShareBlockIds(messageListItems) : []),

@@ -6,19 +6,22 @@
  * 重新出现」。改成消息流项后靠两点保证连续:key 与正式消息一致(`message-${clientId}`)、
  * 已回流的 clientId 立刻不再产出气泡(避免同一句话双显)。
  */
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { formatQuoteForSend } from '@cindy/maker-shared/chat-quotes';
 import {
   appendPendingSendItems,
   buildMobileMessageListExtraData,
   buildPendingSendItems,
   isPendingSendItemSelected,
+  mergePendingSendItems,
   pendingSendItemKey,
   pendingSendSpins,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
 import type { MobileOutboxDisplayItem } from '@/session/sessionOutbox';
-import type { QueuedRemoteMessage } from '@/session/types';
+import type { QueuedRemoteMessage, RemoteMessage } from '@/session/types';
+import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
 
 const NO_IDS: ReadonlySet<string> = new Set();
 const NO_PRESENTATION: ReadonlyMap<string, { actions: MobilePendingSendActions; hint: string | null }> = new Map();
@@ -92,6 +95,102 @@ describe('appendPendingSendItems', () => {
     const rendered = [{ key: pendingSendItemKey('sent') }];
     expect(appendPendingSendItems(rendered, [])).toBe(rendered);
     expect(appendPendingSendItems(rendered, build({ queue: [queued('sent')] }))).toBe(rendered);
+  });
+});
+
+describe('reply before user echo', () => {
+  const sessionId = 'reply-order';
+  const userSendAt = '2026-07-30T00:00:02.000Z';
+  function row(clientId: string, role: RemoteMessage['role'], createdAt: string): RemoteMessage {
+    return { id: clientId, clientId, sessionId, role, createdAt,
+      content: role === 'user' ? { text: 'Continue' } : 'Reply', toolUseId: null, agentMeta: null };
+  }
+  function push(message: RemoteMessage) {
+    remoteSessionStore.applyRemotePush('dev', 'local-db:messages:created', { sessionId, message });
+  }
+  function render(
+    pending: ReturnType<typeof build>,
+    boundary: string | null = userSendAt,
+    baselines: ReadonlyMap<string, string | null> = new Map([['sent', '2026-07-30T00:00:00.000Z']]),
+  ) {
+    return mergePendingSendItems(buildMobileMessageRenderItems(
+      remoteSessionStore.getMessages(sessionId), { isSessionStreaming: true },
+    ), pending, boundary, baselines);
+  }
+  afterEach(() => { remoteSessionStore.clear(); vi.useRealTimers(); });
+
+  it.each(['settling', 'sending'])('keeps the %s bubble before an early reply and replaces it in place', (phase) => {
+    push(row('old-user', 'user', '2026-07-30T00:00:00.000Z'));
+    push(row('old-reply', 'assistant', '2026-07-30T00:00:01.000Z'));
+    const pending = build({
+      settling: phase === 'settling' ? [queued('sent')] : [],
+      queue: phase === 'sending' ? [queued('sent'), queued('next')] : [queued('next')],
+      sendingClientIds: new Set(phase === 'sending' ? ['sent'] : []),
+      outbox: [outboxItem('upload', { attachmentCount: 1, uploadedCount: 0 })],
+    });
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    const before = render(pending);
+    expect(before.map((item) => item.key)).toEqual([
+      'message-old-user', 'message-old-reply', 'message-sent', 'message-reply', 'message-next', 'message-upload',
+    ]);
+    expect(before[2]).toBe(pending[0]);
+    push(row('sent', 'user', userSendAt));
+    // Deliberately keep the stale pending snapshot: no duplicate or position change.
+    expect(render(pending).map((item) => item.key)).toEqual(before.map((item) => item.key));
+    expect(render(pending)[2].type).toBe('message');
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    expect(render(pending).map((item) => item.key)).toEqual(before.map((item) => item.key));
+  });
+
+  it('keeps streaming deltas behind the pending user without consulting the phone clock', () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2030-01-01'));
+    const pending = build({ settling: [queued('sent')] });
+    remoteSessionStore.applyRemotePush('dev', 'maker:event', {
+      sessionId, persistId: 'reply', event: { type: 'text', data: { text: 'Reply', isFinal: false } },
+    });
+    vi.advanceTimersByTime(100);
+    expect(render(pending).map((item) => item.key)).toEqual(['message-sent', 'message-reply']);
+    push(row('sent', 'user', userSendAt));
+    expect(render(pending).map((item) => item.key)).toEqual(['message-sent', 'message-reply']);
+  });
+
+  it('places the boundary before folded work, not just before reply text', () => {
+    push({ ...row('thinking', 'thinking', userSendAt), content: { thinking: 'Thinking' } });
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    const items = render(build({ settling: [queued('sent')] }));
+    expect(items[0].key).toBe('message-sent');
+    expect(items.at(-1)?.key).toBe('message-reply');
+  });
+
+  it('leaves a follow-up behind the current response when the current user is already visible', () => {
+    push(row('current', 'user', userSendAt));
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    const pending = build({ queue: [queued('next')], sendingClientIds: new Set(['next']) });
+    expect(render(pending).map((item) => item.key)).toEqual(['message-current', 'message-reply', 'message-next']);
+  });
+
+  it('does not promote a queued follow-up or an unsent outbox entry into the current turn', () => {
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    const pending = build({ queue: [queued('next')], outbox: [outboxItem('local')] });
+    expect(render(pending).map((item) => item.key)).toEqual(['message-reply', 'message-next', 'message-local']);
+  });
+
+  it('does not invent a boundary from missing or invalid host metadata', () => {
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    const pending = build({ settling: [queued('sent')] });
+    for (const boundary of [null, 'invalid']) {
+      expect(render(pending, boundary).map((item) => item.key)).toEqual(['message-reply', 'message-sent']);
+    }
+  });
+
+  it('does not mistake an unloaded old user row for the message just sent', () => {
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    const pending = build({ queue: [queued('sent')], sendingClientIds: new Set(['sent']) });
+    for (const baselines of [new Map<string, string | null>(), new Map([['sent', userSendAt]])]) {
+      expect(render(pending, userSendAt, baselines).map((item) => item.key))
+        .toEqual(['message-reply', 'message-sent']);
+    }
   });
 });
 

@@ -12,8 +12,8 @@
  * 进了 data 之后:与正式消息同容器、同 key(`message-${clientId}`)、同一处位置,回流就是
  * 同一个列表位置上的内容替换 —— 原地变实,零跳动;listData 也不再为空,居中占位自然不出现。
  *
- * 顺序契约(与原 footer 一致):落定中(已出队、等回流)在前,排队中居中,本地 outbox 在后
- * —— outbox 是最晚发出的。
+ * 未派发条目保持队列 / outbox 顺序。已派发但缺少正式回流的气泡，按主机本轮
+ * userSendAt 放在回复之前，不能简单追加到回复后面。
  */
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
 import {
@@ -28,6 +28,7 @@ import {
 } from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
 import type { GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
+import type { MobileMessageRenderItem, MobileWorkChildItem } from '@/session/messageRenderModel';
 
 export type MobilePendingSendPhase =
   /** 已确认入队,等被控端派发。 */
@@ -117,6 +118,60 @@ export function appendPendingSendItems<T extends { key: string }>(
   const renderedKeys = new Set(rendered.map((item) => item.key));
   const remaining = pending.filter((item) => !renderedKeys.has(item.key));
   return remaining.length === 0 ? rendered : [...rendered, ...remaining];
+}
+
+/**
+ * The host's current user boundary can arrive before its persisted user row. Keep
+ * that row's settling bubble before the reply, including folded work, until the
+ * echo replaces it. Queued follow-ups and local uploads still belong at the tail.
+ * Compare only host timestamps: a phone's enqueue time is not a host ordering fact.
+ */
+export function mergePendingSendItems(
+  rendered: readonly MobileMessageRenderItem[],
+  pending: readonly MobilePendingSendItem[],
+  userSendAt: string | null | undefined,
+  sendBaselines: ReadonlyMap<string, string | null>,
+): readonly MobileMessageRenderItem[] {
+  const appended = appendPendingSendItems(rendered, pending);
+  if (appended === rendered || !userSendAt) return appended;
+  const boundary = Date.parse(userSendAt);
+  if (!Number.isFinite(boundary)) return appended;
+  // A visible current user already supplies the turn boundary. Never move a new
+  // send in front of the response to an earlier, already displayed message.
+  if (rendered.some((item) => item.type === 'message'
+    && item.message.source.role === 'user'
+    && Date.parse(item.message.source.createdAt) >= boundary)) return appended;
+  const waiting = appended.slice(rendered.length) as MobilePendingSendItem[];
+  const candidate = waiting.find((item) => item.phase === 'settling')
+    ?? waiting.find((item) => item.phase === 'sending' && item.queueIndex === 1);
+  if (!candidate) return appended;
+  // The current user may simply be outside the loaded history window. A local
+  // send must have observed an older host turn before we associate it with this
+  // boundary; otherwise we'd move a follow-up in front of the ongoing reply.
+  if (!sendBaselines.has(candidate.clientId)) return appended;
+  const baseline = sendBaselines.get(candidate.clientId);
+  if (baseline && !(Date.parse(baseline) < boundary)) return appended;
+  const replyIndex = rendered.findIndex((item) => renderItemStartsAt(item) >= boundary);
+  if (replyIndex < 0) return appended;
+  return [
+    ...rendered.slice(0, replyIndex), candidate, ...rendered.slice(replyIndex),
+    ...waiting.filter((item) => item !== candidate),
+  ];
+}
+
+function renderItemStartsAt(item: MobileMessageRenderItem | MobileWorkChildItem): number {
+  switch (item.type) {
+    case 'message':
+    case 'thinking': return Date.parse(item.message.source.createdAt);
+    case 'tool_group':
+    case 'tool_media': return Date.parse(item.tools[0]?.source.createdAt ?? '');
+    case 'todo':
+    case 'agent_task': return Date.parse(item.createdAt);
+    case 'work_group': return item.startedAtMs
+      ?? (item.children.length > 0 ? renderItemStartsAt(item.children[0]) : NaN);
+    case 'subagent_group': return item.childItems.length > 0 ? renderItemStartsAt(item.childItems[0]) : NaN;
+    default: return NaN;
+  }
 }
 
 /**
