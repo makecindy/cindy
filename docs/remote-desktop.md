@@ -145,14 +145,21 @@ or its write path failed — it releases control and keeps everything else: the
 lease, the capture owner, the video track and the last picture. It does not call
 `stop()`, so an input fault can never surface as an ended desktop session.
 
+The host also releases control when its own input path refuses a batch before
+injecting anything, so the two sides cannot disagree about who controls: a later
+take-control genuinely restarts the helper instead of being skipped as "already
+controlling".
+
 The viewer follows the host's control bit instead of rebuilding the session. A
 rejected input batch, a dropped stalled batch, a failed control request or a
 heartbeat that reports `controlling: false` all drop the phone to view only with
 the existing view-only hint and take-control action; media and lease identity are
-untouched. Taking control again restarts the native input helper on the same
-lease. Errors that do mean the lease is gone (`DESKTOP_LEASE_EXPIRED`,
-`DESKTOP_STOPPED`, revocation, an unsupported channel) still recover the session
-as before.
+untouched. Errors whose outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or a
+control request that collides with one still settling — change nothing: a batch
+that may have been injected must not be answered with a release that discards its
+key-up, and the heartbeat still owns liveness. Errors that do mean the lease is
+gone (`DESKTOP_LEASE_EXPIRED`, `DESKTOP_STOPPED`, revocation, an unsupported
+channel) still recover the session as before.
 
 This matters most on Windows, where the SendInput helper reports a failed
 injection as a helper failure whereas the macOS helper posts events without a
@@ -163,8 +170,9 @@ question, and the helper's `error` line does not yet carry a reason.
 
 Deterministic tests cover the controller release (lease, media and single-viewer
 arbitration retained; later input refused as view-only; control can be taken
-again), the desktop wiring that turns an input-host failure into a release rather
-than a stop, and the viewer paths that drop to view only without reconnecting.
+again), the desktop wiring that turns a refused or failed input batch into a
+release rather than a stop, the failure classification (release, unknown outcome,
+rebuild), and the viewer paths that drop to view only without reconnecting.
 
 ## Authority and lifetime
 

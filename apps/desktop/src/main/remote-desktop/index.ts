@@ -370,7 +370,18 @@ export const remoteDesktop = new RemoteDesktopController({
   displayModes: readDesktopDisplayModes,
   resolution: setDesktopDisplayMode,
   startInput: (displayId) => input.start(displayId),
-  input: (events) => input.input(events),
+  input: (events) => {
+    try {
+      input.input(events);
+    } catch (error) {
+      // The input host refused before injecting anything (helper gone, or this
+      // lease's display is unavailable). Release control so the host and the
+      // viewer agree, and so taking control again genuinely restarts the
+      // helper instead of being skipped as "already controlling".
+      remoteDesktop.releaseControl();
+      throw error;
+    }
+  },
   stopInput: () => input.stop(),
   ...(process.platform === 'darwin' ? {
     lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {

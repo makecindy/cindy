@@ -1661,6 +1661,31 @@ describe("remote desktop controls", () => {
     act(() => button("operations").click());
     expect(visibleInputHint()).toBe("remoteDesktop.viewOnlyHint");
   });
+  it("keeps control and the session when an input reply is lost", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "input"
+        ? Promise.reject(Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }))
+        : original(...args),
+    );
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "input",
+            epoch: "lease",
+            sequence: 1,
+            events: [{ kind: "key", code: "KeyA", down: true }],
+          }),
+        },
+      });
+    });
+    // The batch may have been injected: releasing here would drop its key-up.
+    expect(sent()).not.toContainEqual({ type: "control", enabled: false });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
   it("follows the host to view only when its heartbeat stops counting this viewer as controlling", async () => {
     await connect();
     const original = fixture.invoke.getMockImplementation()!;

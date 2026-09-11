@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
   viewHeartbeat: vi.fn(),
   inputFailure: null as null | (() => void),
   releaseControl: vi.fn(),
+  hostInput: vi.fn(),
   iceConfig: vi.fn(async (): Promise<any[]> => [
     { urls: ['turn:relay.example.test:3478'], username: 'temporary', credential: 'test-only' },
   ]),
@@ -115,7 +116,7 @@ vi.mock('../inputHost', () => ({
       h.inputFailure = onFailure;
     }
     stop = vi.fn();
-    input = vi.fn();
+    input = h.hostInput;
   },
   readDesktopDisplayModes: vi.fn(),
   setDesktopDisplayMode: vi.fn(),
@@ -172,6 +173,7 @@ beforeEach(() => {
   h.viewHeartbeat.mockClear();
   // The host is constructed once at module load; keep its captured callback.
   h.releaseControl.mockClear();
+  h.hostInput.mockReset();
   h.iceConfig.mockClear();
   registerRemoteDesktopIpc();
 });
@@ -317,6 +319,17 @@ it('turns an input-helper failure into a control release instead of a session st
   expect(h.releaseControl).toHaveBeenCalledTimes(1);
   expect(h.stop).not.toHaveBeenCalled();
   expect(h.owner.dead).toBe(false);
+});
+
+it('releases control when the input host refuses a batch before injecting it', () => {
+  h.hostInput.mockImplementationOnce(() => {
+    throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+  });
+  // The refusal still reaches its caller, but control no longer stays set: a
+  // later take-control must actually restart the helper.
+  expect(() => h.deps.input([{ kind: 'release' }])).toThrow('DESKTOP_INPUT_UNAVAILABLE');
+  expect(h.releaseControl).toHaveBeenCalledTimes(1);
+  expect(h.stop).not.toHaveBeenCalled();
 });
 
 it('retains the capture owner on ICE timeout and rejects old-owner replies after replacement', async () => {

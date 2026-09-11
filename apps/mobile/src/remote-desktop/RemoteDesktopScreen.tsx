@@ -30,7 +30,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { connectionDiagnostics } from "./connectionDiagnostics";
-import { isControlLossError, remoteDesktopErrorCode } from "./controlFailure";
+import { controlFailureAction, remoteDesktopErrorCode } from "./controlFailure";
 import { transferClipboardContent } from "./clipboardTransfer";
 import * as Clipboard from "expo-clipboard";
 import { RemoteDesktopClipboardButton } from "./RemoteDesktopClipboardButton";
@@ -510,6 +510,23 @@ export default function RemoteDesktopScreen() {
       setLease({ ...current });
     }
   }, [send]);
+  /**
+   * Route a failed input or control request by its blast radius: a control-only
+   * fault drops to view only, an unknown outcome keeps everything as it is, and
+   * anything else rebuilds the session. Sitting next to the two actions it
+   * chooses between keeps the three call sites from drifting apart.
+   */
+  const resolveControlFailure = (cause: unknown) => {
+    switch (controlFailureAction(cause)) {
+      case "release":
+        releaseControl();
+        break;
+      case "ignore":
+        break;
+      default:
+        fail(cause);
+    }
+  };
   const connect = useCallback(
     async (displayId?: string, takeover = false) => {
       if (
@@ -1229,10 +1246,7 @@ export default function RemoteDesktopScreen() {
         })
           .catch((cause) => {
             if (active.current !== current) return;
-            // A rejected batch means this viewer lost control, not that the
-            // desktop session ended: view only, keep the picture, no reconnect.
-            if (isControlLossError(cause)) releaseControl();
-            else fail(cause);
+            resolveControlFailure(cause);
           })
           .finally(() => {
             if (inputBusy.current === current.lease) inputBusy.current = null;
@@ -1269,12 +1283,10 @@ export default function RemoteDesktopScreen() {
         setKeyboard(false);
       }
     } catch (cause) {
-      if (active.current !== current) return;
       // Taking control can fail because this computer cannot inject input right
       // now. Stay in view only and let the user retry; a session rebuild would
       // cost the picture and the lease for a control-only fault.
-      if (isControlLossError(cause)) releaseControl();
-      else fail(cause);
+      if (active.current === current) resolveControlFailure(cause);
     } finally {
       if (alive.current) setBusy(false);
     }

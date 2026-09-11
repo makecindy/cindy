@@ -1,5 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { isControlLossError, remoteDesktopErrorCode } from "../controlFailure";
+import {
+  controlFailureAction,
+  remoteDesktopErrorCode,
+} from "../controlFailure";
 
 describe("remote desktop control failure classification", () => {
   it("reads the code from the error field before falling back to the message", () => {
@@ -14,14 +17,20 @@ describe("remote desktop control failure classification", () => {
     expect(remoteDesktopErrorCode(new Error("network down"))).toBeUndefined();
     expect(remoteDesktopErrorCode(undefined)).toBeUndefined();
   });
-  it.each([
-    "DESKTOP_VIEW_ONLY",
-    "DESKTOP_INPUT_UNAVAILABLE",
-    "DESKTOP_INPUT_BUSY",
-    "INVOKE_TIMEOUT",
-  ])("treats %s as lost control rather than a dead session", (code) => {
-    expect(isControlLossError(new Error(code))).toBe(true);
-  });
+  it.each(["DESKTOP_VIEW_ONLY", "DESKTOP_INPUT_UNAVAILABLE"])(
+    "releases control for %s without rebuilding the session",
+    (code) => {
+      expect(controlFailureAction(new Error(code))).toBe("release");
+    },
+  );
+  it.each(["INVOKE_TIMEOUT", "DESKTOP_INPUT_BUSY"])(
+    "keeps the current state for the unknown outcome %s",
+    (code) => {
+      // A lost reply does not prove the host released control, and a batch that
+      // was injected must not be answered with a release that drops its key-up.
+      expect(controlFailureAction(new Error(code))).toBe("ignore");
+    },
+  );
   it.each([
     "DESKTOP_LEASE_EXPIRED",
     "DESKTOP_STOPPED",
@@ -30,6 +39,10 @@ describe("remote desktop control failure classification", () => {
     "CHANNEL_NOT_ALLOWED",
     "DESKTOP_VIDEO_UNAVAILABLE",
   ])("still rebuilds the session for %s", (code) => {
-    expect(isControlLossError(new Error(code))).toBe(false);
+    expect(controlFailureAction(new Error(code))).toBe("rebuild");
+  });
+  it("rebuilds when there is no usable code at all", () => {
+    expect(controlFailureAction(new Error("network down"))).toBe("rebuild");
+    expect(controlFailureAction(undefined)).toBe("rebuild");
   });
 });
