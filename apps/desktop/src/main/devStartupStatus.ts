@@ -134,14 +134,12 @@ export async function beginDesktopDevInstance(
   startupSettled = false;
   const pid = options.pid ?? process.pid;
   const startedAtMs = options.startedAtMs ?? Date.now();
-  const processIdentity = await readDesktopProcessIdentity(pid);
   const record: DesktopDevInstanceRecord = {
     schemaVersion: 1,
     worktreeLeaseProtocol: 1,
     instanceId: options.instanceId ?? randomUUID(),
     pid,
     startedAtMs,
-    ...(processIdentity ? { processIdentity } : {}),
     updatedAtMs: startedAtMs,
     rootDir: path.resolve(options.rootDir),
     commit: options.commit ?? null,
@@ -171,6 +169,21 @@ export async function beginDesktopDevInstance(
     });
     throw error;
   }
+
+  // bootstrap-electron is loaded after registration and must install privileged
+  // schemes before Electron's ready event. Never await an OS subprocess here.
+  // Identity is optional evidence: enrich only the instance we still own, using
+  // its latest readiness state, and never resurrect a record removed on exit.
+  void readDesktopProcessIdentity(pid).then((identity) => {
+    const current = trackedInstance;
+    if (!identity || current?.record.instanceId !== record.instanceId) return;
+    if (readJson(filePath)?.instanceId !== record.instanceId) return;
+    const updated = { ...current.record, processIdentity: identity };
+    atomicWriteJson(filePath, updated);
+    trackedInstance = { filePath, record: updated };
+  }).catch(() => {
+    // Failure to enrich must not affect startup or weaken legacy PID checks.
+  });
 
   return () => {
     if (trackedInstance?.record.instanceId === record.instanceId) trackedInstance = null;

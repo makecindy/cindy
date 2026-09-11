@@ -92,6 +92,61 @@ describe('devStartupStatus', () => {
       .toMatchObject({ processIdentity: identity, startedAtMs: 100, state: 'ready' });
   });
 
+  it('does not delay bootstrap for OS identity and preserves readiness on late enrichment', async () => {
+    const identity = { startedAtMs: 50, executablePath: path.join(tempDir, 'Cindy') };
+    let resolveIdentity!: (value: typeof identity) => void;
+    const pending = new Promise<typeof identity>((resolve) => { resolveIdentity = resolve; });
+    readIdentity.mockReturnValue(pending);
+    // Must settle while the OS query is still pending, before bootstrap can
+    // register its pre-ready protocols. Awaiting the probe here would deadlock.
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir, dbFilePrefix: 'cindy', rootDir: tempDir,
+      passive: false, isolated: false, pid: 4242,
+    });
+    const file = path.join(tempDir, '.dev-instances', '4242.json');
+    expect(JSON.parse(fs.readFileSync(file, 'utf8'))).not.toHaveProperty('processIdentity');
+    markDesktopDevWindowReady();
+    markDesktopDevReady();
+    resolveIdentity(identity);
+    await pending;
+    expect(JSON.parse(fs.readFileSync(file, 'utf8')))
+      .toMatchObject({ state: 'ready', processIdentity: identity });
+  });
+
+  it('does not recreate the registration when an identity query completes after exit', async () => {
+    let resolveIdentity!: (value: { startedAtMs: number; executablePath: string }) => void;
+    const pending = new Promise<{ startedAtMs: number; executablePath: string }>((resolve) => { resolveIdentity = resolve; });
+    readIdentity.mockReturnValue(pending);
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir, dbFilePrefix: 'cindy', rootDir: tempDir,
+      passive: false, isolated: false, pid: 4242,
+    });
+    cleanup();
+    resolveIdentity({ startedAtMs: 50, executablePath: path.join(tempDir, 'Cindy') });
+    await pending;
+    expect(fs.existsSync(path.join(tempDir, '.dev-instances', '4242.json'))).toBe(false);
+  });
+
+  it('does not overwrite a replacement instance with a late identity result', async () => {
+    let resolveIdentity!: (value: { startedAtMs: number; executablePath: string }) => void;
+    const pending = new Promise<{ startedAtMs: number; executablePath: string }>((resolve) => { resolveIdentity = resolve; });
+    readIdentity.mockReturnValueOnce(pending);
+    const oldCleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir, dbFilePrefix: 'cindy', rootDir: tempDir,
+      passive: false, isolated: false, pid: 4242, instanceId: 'old',
+    });
+    cleanup = await beginDesktopDevInstance({
+      userDataDir: tempDir, dbFilePrefix: 'cindy', rootDir: tempDir,
+      passive: false, isolated: false, pid: 4242, instanceId: 'replacement',
+    });
+    resolveIdentity({ startedAtMs: 50, executablePath: path.join(tempDir, 'old-Cindy') });
+    await pending;
+    oldCleanup();
+    const record = JSON.parse(fs.readFileSync(path.join(tempDir, '.dev-instances', '4242.json'), 'utf8'));
+    expect(record.instanceId).toBe('replacement');
+    expect(record).not.toHaveProperty('processIdentity');
+  });
+
   it('still registers when OS identity is unavailable without inventing an identity', async () => {
     cleanup = await beginDesktopDevInstance({
       userDataDir: tempDir, dbFilePrefix: 'cindy', rootDir: tempDir,
