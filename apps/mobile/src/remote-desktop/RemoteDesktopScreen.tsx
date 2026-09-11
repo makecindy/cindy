@@ -841,6 +841,10 @@ export default function RemoteDesktopScreen() {
           // local bit so a held key cannot stay down behind a view-only phone.
           if (active.current !== current || presentation.current) return;
           if (result.controlling === false) {
+            // startInput can still be settling while this heartbeat was in
+            // flight. Clearing a pending take-control here would leave later
+            // host-true beats with nothing to restore after a lost reply.
+            if (pendingHostControl.current === true) return;
             pendingHostControl.current = null;
             if (current.controlling) releaseControl();
             return;

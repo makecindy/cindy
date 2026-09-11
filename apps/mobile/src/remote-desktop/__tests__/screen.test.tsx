@@ -1784,6 +1784,45 @@ describe("remote desktop controls", () => {
     expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
     expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
   });
+  it("keeps a take-control intent when a settling heartbeat still reports view-only", async () => {
+    await connect();
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+    const original = fixture.invoke.getMockImplementation()!;
+    let rejectTakeControl: ((cause: unknown) => void) | undefined;
+    let heartbeats = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "control" && req.enabled === true) {
+        return new Promise((_, reject) => {
+          rejectTakeControl = reject;
+        });
+      }
+      if (req.op === "heartbeat") {
+        heartbeats += 1;
+        // startInput is still settling on the first beat; the host only
+        // reports control after the lost take-control reply.
+        return Promise.resolve({ controlling: heartbeats > 1 });
+      }
+      return original(...args);
+    });
+    act(() => button("viewOnly").click());
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    await act(async () => {
+      rejectTakeControl!(
+        Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+      );
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    // A heartbeat issued while startInput was settling must not consume the
+    // pending take-control; after the reply is lost, host-true still restores.
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: true,
+    });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
   it("shows virtual mouse buttons outside the panel and hides them while viewing only", async () => {
     await connect();
     act(() => button("operations").click());
