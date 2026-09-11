@@ -43,7 +43,12 @@ import path from 'node:path';
 import * as fs from 'node:fs';
 import type { BrowserWindow } from 'electron';
 
-import { loadIgnoreMatcher, XDT_TMP_SUFFIX, type Matcher } from '@cindy/file-browser-core';
+import {
+  loadIgnoreMatcher,
+  WATCH_ALWAYS_IGNORE,
+  XDT_TMP_SUFFIX,
+  type Matcher,
+} from '@cindy/file-browser-core';
 
 import { createLogger } from '../logger.js';
 import type { WatchedFsEvent } from '../watcher-host/protocol.js';
@@ -124,14 +129,11 @@ interface WatcherEntry {
  * node_modules / Library —— 它们要么条目数十万、要么需要真正的依赖分析,
  * 原生递归 watch 的代价与收益不成比例(开关打开时它们会出现在文件树里,但
  * 内部改动不推事件,手动刷新可见)。其余目录随「显示被忽略的目录」放行。
+ *
+ * node_modules / Library 的名单单源在 file-browser-core 的 WATCH_ALWAYS_IGNORE
+ * ——远端 daemon 的事件过滤吃同一份,两侧不会各自漂移。
  */
-const PREFILTER_ALWAYS = [
-  '.git',
-  '.svn',
-  '.hg',
-  'node_modules', // JS/TS 依赖
-  'Library', // Unity 资源缓存
-];
+const PREFILTER_ALWAYS: string[] = ['.git', '.svn', '.hg', ...WATCH_ALWAYS_IGNORE];
 
 const PREFILTER_REVEALABLE = [
   'Temp', // Unity

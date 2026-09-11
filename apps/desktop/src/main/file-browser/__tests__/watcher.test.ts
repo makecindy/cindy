@@ -20,10 +20,15 @@ const h = vi.hoisted(() => ({
   matcherIgnores: vi.fn((_rel: string, _isDir: boolean) => false),
 }));
 
-vi.mock('@cindy/file-browser-core', () => ({
-  XDT_TMP_SUFFIX: '.xdt-tmp',
-  loadIgnoreMatcher: vi.fn(async () => ({ ignores: h.matcherIgnores })),
-}));
+vi.mock('@cindy/file-browser-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/file-browser-core')>();
+  return {
+    XDT_TMP_SUFFIX: actual.XDT_TMP_SUFFIX,
+    // 预过滤名单的真名单(单源),loadIgnoreMatcher 太真(要读盘)才被替换。
+    WATCH_ALWAYS_IGNORE: actual.WATCH_ALWAYS_IGNORE,
+    loadIgnoreMatcher: vi.fn(async () => ({ ignores: h.matcherIgnores })),
+  };
+});
 
 import { WatcherManager, type WatcherSubscribeFn } from '../watcher';
 import type { WatchedFsEvent } from '../../watcher-host/protocol';

@@ -85,6 +85,18 @@ const BUILTIN_IGNORE_REVEALABLE = [
   // per session via `hideMetaFiles`.
 ];
 
+/**
+ * 「可以列出、但不实时 watch」的目录名 —— 与 BUILTIN_IGNORE_REVEALABLE 正交的
+ * 一层:即使开了「显示被忽略的目录」(它们会出现在文件树里),事件侧也要丢掉
+ * 它们内部的改动。
+ *
+ * 理由:node_modules 动辄数十万条目,Unity 的 Library 需要真正的资源依赖分析
+ * ——原生递归 watch 的代价与收益不成比例,手动刷新已够用。两个宿主的**事件**
+ * 过滤都必须吃这份清单(desktop 的 parcel 预过滤 + daemon 的事件过滤),但
+ * **列目录不看它**(listDir 只问 BUILTIN_IGNORE_*)。
+ */
+export const WATCH_ALWAYS_IGNORE = ['node_modules', 'Library'] as const;
+
 export interface Matcher {
   /**
    * @param relPath  workdir-relative path with `/` separators, no leading slash
@@ -93,6 +105,32 @@ export interface Matcher {
    * @returns true if the entry should be hidden from the tree
    */
   ignores(relPath: string, isDir: boolean): boolean;
+}
+
+/**
+ * 事件侧的恒真过滤层:只吃 BUILTIN_IGNORE_ALWAYS + WATCH_ALWAYS_IGNORE,不读
+ * `.gitignore`、不随 showIgnoredDirs 变化。
+ *
+ * 用途:daemon 的 watcher 需要在「开关打开后仍然不推事件」的方向上兜底 —— 它
+ * 没有 desktop 侧的 parcel 预过滤层可用,`fs.watch recursive` 照样把这些目录的
+ * 事件推上来,只能自己丢。
+ *
+ * 目录模式(`Library/`)对 `ignore` 库是「匹配该名字的目录及其全部后代」,且与
+ * BUILTIN_IGNORE_* 一样是「路径任意位置命中」,所以 `Assets/Library/x` 也算了
+ * (`src/node_modules/a.js` 同理) —— 与文件树的隐藏口径保持一致。
+ *
+ * 无 workdir 依赖(不读盘),可以当成常量用。
+ */
+export function createEventIgnoreMatcher(): Matcher {
+  const ig = ignoreLib();
+  ig.add(BUILTIN_IGNORE_ALWAYS);
+  ig.add(WATCH_ALWAYS_IGNORE.map((name) => `${name}/`));
+  return {
+    ignores(relPath: string, isDir: boolean): boolean {
+      const normalized = isDir && !relPath.endsWith('/') ? `${relPath}/` : relPath;
+      return ig.ignores(normalized);
+    },
+  };
 }
 
 const VCS_IGNORE_DISABLED_SOURCE = '__vcs-disabled';

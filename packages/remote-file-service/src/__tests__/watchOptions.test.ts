@@ -5,14 +5,21 @@
  * watcher 在 watchStart 时就把 matcher 固定下来,所以:
  *   - 重复 watchStart 且开关未变 → 幂等,不重建原生 watcher;
  *   - 开关变了 → 必须重建 matcher(否则控制端改了开关、watch 仍按旧规则过滤,
- *     目录能列出来但内部改动永远没有事件)。
+ *     目录能列出来但内部改动永远没有事件);
+ *   - 启动窗口内到达的 stop + 带新选项的 start → 必须收敛到新选项,且不能
+ *     留下「没有 watcher」的空档(两个 RPC 都报 success 的静默失效);
+ *   - node_modules / Library 内部改动永远不推事件(事件侧恒真层):fs.watch
+ *     recursive 会把它们照单全推,daemon 侧没有 desktop 的 parcel 预过滤兜底。
  *
- * 这里用假 `watch` + 假 loadIgnoreMatcher 锁定这两个语义,不依赖真实 fs 事件
+ * 这里用假 `watch` + 假 loadIgnoreMatcher 锁定这些语义,不依赖真实 fs 事件
  * (真机 Windows / Node 24 的 recursive fs.watch 本身有原生断言崩溃,见
- * rpc.test.ts 的 watchStart 用例)。
+ * rpc.test.ts 的 watchStart 用例)。事件侧恒真层用**真实现**(纯函数、不读盘),
+ * 只有真正要读盘的 loadIgnoreMatcher 被替换掉。
  */
 
 import { describe, expect, it, vi, beforeEach } from 'vitest';
+
+type FsWatchCallback = (eventType: string, filename: string | null) => void;
 
 interface FakeWatcher {
   on: (event: string, cb: (err: Error | null, filename: string | null) => void) => void;
@@ -20,14 +27,21 @@ interface FakeWatcher {
 }
 
 const h = vi.hoisted(() => {
-  const created: Array<{ dir: string; watcher: FakeWatcher; closed: boolean }> = [];
+  const created: Array<{
+    dir: string;
+    watcher: FakeWatcher;
+    closed: boolean;
+    cb: FsWatchCallback | null;
+  }> = [];
   return {
     created,
     /** loadIgnoreMatcher 收到的选项(按调用顺序)。 */
     matcherOpts: [] as Array<Record<string, unknown>>,
-    watchSpy: vi.fn((dir: string) => {
+    /** 门闩:非空时下一次 loadIgnoreMatcher 等它放行(模拟读盘未完成)。 */
+    gate: null as Promise<void> | null,
+    watchSpy: vi.fn((dir: string, _opts: unknown, cb: FsWatchCallback) => {
       const watcher: FakeWatcher = { on: vi.fn(), close: vi.fn() };
-      const record = { dir, watcher, closed: false };
+      const record = { dir, watcher, closed: false, cb };
       (watcher.close as unknown as ReturnType<typeof vi.fn>).mockImplementation(() => {
         record.closed = true;
       });
@@ -42,22 +56,50 @@ vi.mock('node:fs', async (importOriginal) => {
   return { ...actual, watch: h.watchSpy };
 });
 
-vi.mock('@cindy/file-browser-core', () => ({
-  XDT_TMP_SUFFIX: '.xdt-tmp',
-  scopedLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-  loadIgnoreMatcher: vi.fn(async (_workdir: string, opts: Record<string, unknown>) => {
-    h.matcherOpts.push(opts);
-    return { ignores: () => false };
-  }),
-}));
+vi.mock('@cindy/file-browser-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@cindy/file-browser-core')>();
+  return {
+    // 恒真层 / 后缀常量用真实现:前者的匹配语义(目录模式含后代)正是被测目标。
+    createEventIgnoreMatcher: actual.createEventIgnoreMatcher,
+    WATCH_ALWAYS_IGNORE: actual.WATCH_ALWAYS_IGNORE,
+    XDT_TMP_SUFFIX: actual.XDT_TMP_SUFFIX,
+    scopedLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+    loadIgnoreMatcher: vi.fn(async (_workdir: string, opts: Record<string, unknown>) => {
+      h.matcherOpts.push(opts);
+      const gate = h.gate;
+      if (gate) {
+        h.gate = null;
+        await gate;
+      }
+      // 工作区 matcher 由测试单独控制(真实现要读盘)。
+      return { ignores: (rel: string) => rel.startsWith('hidden/') };
+    }),
+  };
+});
 
 import { WorkdirWatchManager } from '../watch';
+import type { RemoteFileTreeEvent } from '../watch';
+
+/** 触发一次原生事件,并等 coalesce 窗口(50ms)把批次吐出来。 */
+async function fireEvent(
+  record: (typeof h.created)[number],
+  eventType: string,
+  filename: string,
+): Promise<RemoteFileTreeEvent[]> {
+  record.cb?.(eventType, filename);
+  await new Promise((resolve) => setTimeout(resolve, 120));
+  return emitted;
+}
+
+let emitted: RemoteFileTreeEvent[] = [];
 
 describe('WorkdirWatchManager 过滤开关', () => {
   beforeEach(() => {
     h.created.length = 0;
     h.matcherOpts.length = 0;
+    h.gate = null;
     h.watchSpy.mockClear();
+    emitted = [];
   });
 
   it('同 workdir 同选项重复 start 幂等,不重建原生 watcher', async () => {
@@ -86,6 +128,81 @@ describe('WorkdirWatchManager 过滤开关', () => {
     const manager = new WorkdirWatchManager(() => {});
     await manager.start('/repo', {});
     expect(h.matcherOpts[0]).toMatchObject({ hideMetaFiles: true, showIgnoredDirs: false });
+    manager.stopAll();
+  });
+
+  /**
+   * 竞态回归(评审 P1):控制端切开关时 renderer 是「先 stop 再带新选项 start」。
+   * 若首个 watchStart 的 matcher 还在加载中,旧实现会复用那个 promise —— 新选项
+   * 被丢掉,而 stop 打的 stopDuringStart 标记又让那个 watcher 自拆,最终两边都
+   * 报 success 却**没有 watcher**。现在必须收敛到新选项。
+   */
+  it('启动窗口内 stop + 带新选项 start:收敛到新选项且留下活着的 watcher', async () => {
+    const manager = new WorkdirWatchManager((event) => emitted.push(event));
+    let release = (): void => {};
+    h.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = manager.start('/repo', { showIgnoredDirs: false });
+    // 启动未落地:此刻 stop(renderer 的 effect cleanup)再 start(新选项)。
+    const stopped = Promise.resolve(manager.stop('/repo'));
+    const second = manager.start('/repo', { showIgnoredDirs: true });
+
+    release();
+    await Promise.all([first, stopped, second]);
+
+    // 旧实现:只建 1 个且已关 → 覆盖「没有 watcher」。新实现:旧的自拆,新的活着。
+    expect(h.created).toHaveLength(2);
+    expect(h.created[0].closed).toBe(true);
+    expect(h.created[1].closed).toBe(false);
+    expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(true);
+
+    // 新 watcher 是活的:事件能按新 matcher 推出来。
+    const emittedEvents = await fireEvent(h.created[1], 'change', 'build/app.js');
+    expect(emittedEvents.some((e) => e.relPath === 'build/app.js')).toBe(true);
+    manager.stopAll();
+  });
+
+  it('启动窗口内 stop 后没有新 start:不留 watcher,也不复活', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    let release = (): void => {};
+    h.gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const first = manager.start('/repo', { showIgnoredDirs: true });
+    manager.stop('/repo');
+    release();
+    await first;
+
+    expect(h.created.every((c) => c.closed)).toBe(true);
+    manager.stopAll();
+  });
+
+  /**
+   * 评审 P1:开关打开后 daemon 曾把 node_modules / Library 也放行给事件过滤,
+   * fs.watch recursive 会把装依赖 / Unity 导入的每个路径都推成 fileTree 帧过
+   * SSH。事件侧必须保留恒真层(与 desktop 的 PREFILTER_ALWAYS 同名单)。
+   */
+  it('开关打开也不推 node_modules / Library 的事件,但放行 build / dist', async () => {
+    const manager = new WorkdirWatchManager((event) => emitted.push(event));
+    await manager.start('/repo', { showIgnoredDirs: true });
+    const record = h.created[0];
+
+    for (const rel of ['node_modules/react/index.js', 'Library/ScriptAssemblies/a.dll']) {
+      expect(await fireEvent(record, 'change', rel), rel).toHaveLength(0);
+    }
+    // 正对照:开关要放行的构建产物仍然推事件(否则这个开关在远端等于没生效)。
+    const buildEvents = await fireEvent(record, 'change', 'build/app.js');
+    expect(buildEvents.map((e) => e.relPath)).toEqual(['build/app.js']);
+    manager.stopAll();
+  });
+
+  it('工作区 matcher 仍然生效(hidden/ 前缀被丢)', async () => {
+    const manager = new WorkdirWatchManager((event) => emitted.push(event));
+    await manager.start('/repo', { showIgnoredDirs: true });
+    expect(await fireEvent(h.created[0], 'change', 'hidden/x.ts')).toHaveLength(0);
     manager.stopAll();
   });
 });

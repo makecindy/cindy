@@ -12,7 +12,7 @@ import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { __clearCacheForTesting, loadIgnoreMatcher } from '../ignore';
+import { __clearCacheForTesting, createEventIgnoreMatcher, loadIgnoreMatcher } from '../ignore';
 
 async function makeWorkdir(gitignore?: string): Promise<string> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'ignore-test-'));
@@ -199,5 +199,45 @@ describe('loadIgnoreMatcher 内置忽略分层 (showIgnoredDirs)', () => {
     expect(
       await loadIgnoreMatcher(workdir, { honorVcsIgnore: false, showIgnoredDirs: true }),
     ).toBe(on);
+  });
+});
+
+/**
+ * 事件侧的恒真层。这一层和 listDir 的口径必须**故意不同**:开关打开后
+ * node_modules / Library 可以列出来,但内部改动永远不推事件(daemon
+ * WorkdirWatchManager 靠它挡住 SSH 上的事件洪水)。
+ */
+describe('createEventIgnoreMatcher(事件侧恒真层)', () => {
+  it('不论开关如何都挡掉依赖 / Unity 资源缓存,包含其后代与嵌套同名目录', () => {
+    const matcher = createEventIgnoreMatcher();
+    // 目录本身、目录内文件、任意深度的同名目录都算 —— 与
+    // BUILTIN_IGNORE_* 的「路径任意位置命中」口径一致。
+    for (const rel of [
+      'node_modules/',
+      'node_modules/react/index.js',
+      'packages/app/node_modules/react/index.js',
+      'Library/',
+      'Library/ScriptAssemblies/Assembly-CSharp.dll',
+      'Assets/Library/foo.prefab',
+    ]) {
+      expect(matcher.ignores(rel, rel.endsWith('/')), rel).toBe(true);
+    }
+  });
+
+  it('不误伤开关要放行的构建产物与普通目录', () => {
+    const matcher = createEventIgnoreMatcher();
+    // build / dist / Temp 这类目录**不在**这一层:开关打开时它们的改动要推事件。
+    for (const rel of ['build/app.js', 'dist/index.html', 'Temp/x', 'src/index.ts']) {
+      expect(matcher.ignores(rel, false), rel).toBe(false);
+    }
+    // 名字相近但不同名的不算(子串不算命中)。
+    expect(matcher.ignores('myLibrary/a', false)).toBe(false);
+    expect(matcher.ignores('node_modules_backup/a', false)).toBe(false);
+  });
+
+  it('VCS 元数据与 OS 垃圾也挡', () => {
+    const matcher = createEventIgnoreMatcher();
+    expect(matcher.ignores('.git/config', false)).toBe(true);
+    expect(matcher.ignores('.DS_Store', false)).toBe(true);
   });
 });

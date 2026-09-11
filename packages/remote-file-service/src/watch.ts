@@ -19,12 +19,17 @@
  * watchStop 时 close。事件经注入的 emit 回调发 `fileTree` 帧。
  *
  * 注:自带过滤器(ignore matcher / .xdt-tmp)在 watchStart 时就固定下来,
- * 控制端改开关后需要先 watchStop 再 watchStart 才能换 matcher。
+ * 控制端改开关后需要先 watchStop 再 watchStart 才能换 matcher;而**同一 workdir
+ * 会被多个消费方请求**(desktop 的 SSH 文件浏览器 / device-link 的 fs-watch
+ * topic),选项是 per-workdir 的,所以以最后一次请求为准 —— start() 会收敛到
+ * 「最后一次被请求的选项」,不会把新选项丢掉、也不会在 stop+start 交达时留下
+ * 没有 watcher 的空档。
  */
 
 import { watch as fsWatch, promises as fs, type FSWatcher } from 'node:fs';
 import path from 'node:path';
 import {
+  createEventIgnoreMatcher,
   loadIgnoreMatcher,
   scopedLogger,
   XDT_TMP_SUFFIX,
@@ -32,6 +37,15 @@ import {
 } from '@cindy/file-browser-core';
 
 const log = scopedLogger('file-service/watch');
+
+/**
+ * 「即使开关打开也不推事件」的恒真层(node_modules / Library / VCS / OS 垃圾)。
+ * 与 desktop 本地 watcher 的 PREFILTER_ALWAYS 同一份名单(单源:
+ * file-browser-core 的 WATCH_ALWAYS_IGNORE),因为 fs.watch recursive 会把
+ * 这些目录的事件照单全推上来 —— 没有这层兜底,`npm install` 或 Unity 导入会在
+ * SSH + IPC 上打出一串与路径数同阶的 fileTree 帧。容器依赖 workdir,常量即可。
+ */
+const eventAlwaysIgnore = createEventIgnoreMatcher();
 
 export interface RemoteFileTreeEvent {
   workdir: string;
@@ -51,6 +65,23 @@ interface WatchEntry {
   flushTimer: NodeJS.Timeout | null;
 }
 
+/** 决定 watcher 过滤行为的选项(不含 workdir)。 */
+interface WatchFilterOptions {
+  hideMetaFiles: boolean;
+  showIgnoredDirs: boolean;
+}
+
+function normalizeWatchOptions(opts: {
+  hideMetaFiles?: boolean;
+  showIgnoredDirs?: boolean;
+}): WatchFilterOptions {
+  return { hideMetaFiles: opts.hideMetaFiles ?? true, showIgnoredDirs: opts.showIgnoredDirs === true };
+}
+
+function sameWatchOptions(a: WatchFilterOptions, b: WatchFilterOptions): boolean {
+  return a.hideMetaFiles === b.hideMetaFiles && a.showIgnoredDirs === b.showIgnoredDirs;
+}
+
 const COALESCE_MS = 50;
 
 export class WorkdirWatchManager {
@@ -63,6 +94,8 @@ export class WorkdirWatchManager {
   /** 启动窗口内收到 stop 的 workdir:startInner 完成时不装 watcher(装完即拆),
    *  否则快速开关文件浏览会留下无人再来 stop 的孤儿原生 watcher。 */
   private readonly stopDuringStart = new Set<string>();
+  /** 该 workdir 最后一次被请求的过滤选项:start() 每轮重读它收敛。 */
+  private readonly desired = new Map<string, WatchFilterOptions>();
   private readonly emit: (event: RemoteFileTreeEvent) => void;
 
   constructor(emit: (event: RemoteFileTreeEvent) => void) {
@@ -76,31 +109,41 @@ export class WorkdirWatchManager {
     workdir: string,
     opts: { hideMetaFiles?: boolean; showIgnoredDirs?: boolean } = {},
   ): Promise<void> {
-    const hideMetaFiles = opts.hideMetaFiles ?? true;
-    const showIgnoredDirs = opts.showIgnoredDirs === true;
-    const existing = this.entries.get(workdir);
-    if (existing) {
-      if (existing.hideMetaFiles === hideMetaFiles && existing.showIgnoredDirs === showIgnoredDirs) {
-        return;
+    this.desired.set(workdir, normalizeWatchOptions(opts));
+    // 收敛到「最后一次被请求的选项」。为什么不直接 piggyback 启动中的 promise:
+    // 启动窗口内到达的 stop 会给 stopDuringStart 打标记让那个 watcher 自拆,
+    // 而带新选项的 start 如果只是复用旧 promise,就会既丢掉新选项、又因为标记
+    // 留下「没有 watcher」的空档(两个 RPC 都报 success)。这里每轮重读 desired,
+    // 所以两种中途变化都在下一轮收敛。
+    // 终止性:每轮要么直接确认返回、要么推进一次真实的 startInner;desired 只
+    // 会被更新的请求改写或被 stop 删除,并发调用者数量有限 —— 循环次数以此封顶。
+    for (;;) {
+      const inflight = this.starting.get(workdir);
+      if (inflight) {
+        // 前一轮可能用了已被覆盖的旧选项,也可能因期间到来的 stop 自拆 ——
+        // 都交给下一轮。它的失败由发起它的 caller 冒走,这里不吞也不重试。
+        await inflight;
+        continue;
       }
-      this.stop(workdir);
-    }
-    const inflight = this.starting.get(workdir);
-    if (inflight) return inflight;
-    const run = this.startInner(workdir, { hideMetaFiles, showIgnoredDirs });
-    this.starting.set(workdir, run);
-    try {
-      await run;
-    } finally {
-      this.starting.delete(workdir);
-      this.stopDuringStart.delete(workdir);
+      const want = this.desired.get(workdir);
+      if (!want) return; // 期间被 stop:意图已撤
+      const existing = this.entries.get(workdir);
+      if (existing) {
+        if (sameWatchOptions(existing, want)) return;
+        this.closeEntry(workdir); // 选项变了:拆掉重建(不能走 stop(),它会撤销 desired)
+      }
+      const run = this.startInner(workdir, want);
+      this.starting.set(workdir, run);
+      try {
+        await run;
+      } finally {
+        this.starting.delete(workdir);
+        this.stopDuringStart.delete(workdir);
+      }
     }
   }
 
-  private async startInner(
-    workdir: string,
-    opts: { hideMetaFiles: boolean; showIgnoredDirs: boolean },
-  ): Promise<void> {
+  private async startInner(workdir: string, opts: WatchFilterOptions): Promise<void> {
     const matcher = await loadIgnoreMatcher(workdir, {
       hideMetaFiles: opts.hideMetaFiles,
       honorVcsIgnore: false,
@@ -141,8 +184,15 @@ export class WorkdirWatchManager {
   }
 
   stop(workdir: string): void {
+    // 撤销意图:收敛循环读到 desired 缺失即结束(piggyback 的新 start 会写回)。
+    this.desired.delete(workdir);
     // 还在启动窗口:打标记让 startInner 完成时自拆(entries 里此刻还没有它)。
     if (this.starting.has(workdir)) this.stopDuringStart.add(workdir);
+    this.closeEntry(workdir);
+  }
+
+  /** 拆掉已就位的 watcher。不碰 desired —— 选项变化重建时由调用方决定意图。 */
+  private closeEntry(workdir: string): void {
     const entry = this.entries.get(workdir);
     if (!entry) return;
     this.entries.delete(workdir);
@@ -156,8 +206,10 @@ export class WorkdirWatchManager {
   }
 
   stopAll(): void {
+    // 全部意图撤销:启动中的 workdir 也要让收敛循环看到「没有 desired」而结束。
+    this.desired.clear();
     for (const workdir of [...this.starting.keys()]) this.stopDuringStart.add(workdir);
-    for (const workdir of [...this.entries.keys()]) this.stop(workdir);
+    for (const workdir of [...this.entries.keys()]) this.closeEntry(workdir);
   }
 
   private async handleRaw(
@@ -169,8 +221,11 @@ export class WorkdirWatchManager {
     const relPath = rawFilename.split(path.sep).join('/');
     if (relPath === '' || relPath.startsWith('..')) return;
     if (relPath.endsWith(XDT_TMP_SUFFIX)) return;
-    // matcher 不知道路径是 file 还是 dir,双查任一命中即丢(同 desktop watcher)。
-    if (entry.matcher.ignores(relPath, false) && entry.matcher.ignores(relPath, true)) return;
+  /** matcher 不知道路径是 file 还是 dir,双查任一命中即丢(同 desktop watcher)。 */
+  if (entry.matcher.ignores(relPath, false) && entry.matcher.ignores(relPath, true)) return;
+  // 开关打开也永远不推的目录(node_modules / Library):按目录语义查一次就够,
+  // 目录模式命中即包含其后代,不用再试 file 解释。
+  if (eventAlwaysIgnore.ignores(relPath, true)) return;
 
     let type: RemoteFileTreeEvent['type'];
     if (eventType === 'change') {
