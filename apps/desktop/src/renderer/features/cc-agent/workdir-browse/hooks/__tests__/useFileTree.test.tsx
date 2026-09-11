@@ -17,7 +17,11 @@ const mocks = vi.hoisted(() => {
     isDeviceTooOldError: vi.fn(() => false),
     listDir: vi.fn(),
     loadExpandedSet: vi.fn(() => new Set<string>()),
-    deviceSupportsRevealIgnoredDirs: vi.fn(async () => true),
+    deviceSupportsRevealIgnoredDirs: vi.fn(
+      async (): Promise<boolean | null> => true,
+    ),
+    /** 重连代次:测试里改这个值 + rerender 就能驱动重探。 */
+    reconnectEpoch: { current: 0 },
     onFileTreeEventFor: vi.fn(
       (_deviceId: string | null | undefined, cb: (event: FileTreeEvent) => void) => {
         eventCallbacks.push(cb);
@@ -44,6 +48,11 @@ vi.mock('@/lib/fileBrowserTransport', () => ({
 
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ warn: vi.fn() }),
+}));
+
+// jsdom 里没有 window.electronAPI,真实 hook 会去订阅 presence —— 用可变代次替身。
+vi.mock('@/features/device-link/useDeviceLinkReconnectEpoch', () => ({
+  useDeviceLinkReconnectEpoch: () => mocks.reconnectEpoch.current,
 }));
 
 vi.mock('../../lib/expandedStore', () => ({
@@ -196,6 +205,7 @@ describe('useFileTree device 的 showIgnoredDirs 能力探测', () => {
     mocks.listDir.mockResolvedValue([]);
     mocks.fileBrowserApiFor.mockReturnValue({ listDir: mocks.listDir });
     mocks.deviceSupportsRevealIgnoredDirs.mockImplementation(async () => true);
+    mocks.reconnectEpoch.current = 0;
   });
 
   it('老被控端:按隐藏态建 store,并 expose supported=false', async () => {
@@ -239,6 +249,56 @@ describe('useFileTree device 的 showIgnoredDirs 能力探测', () => {
     await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
     expect(view.result.current.showIgnoredDirsSupported).toBe(true);
     expect(mocks.deviceSupportsRevealIgnoredDirs).not.toHaveBeenCalled();
+    view.unmount();
+  });
+
+  /**
+   * 瞬态失败(隧道不可达 / 重连中)不能被当成「对方版本过旧」:那会把开关错误地
+   * 禁用并显示升级提示，而连接恢复后也不会自愈。保持「未知」(不禁用) + 由
+   * 重连代次驱动重探。
+   */
+  it('瞬态失败保持未知并在重连后重探', async () => {
+    mocks.reconnectEpoch.current = 0;
+    mocks.deviceSupportsRevealIgnoredDirs.mockImplementation(async () => null);
+    const view = renderHook(() =>
+      useFileTree({ workdir: '/workdir-flaky', deviceId: 'device-flaky', showIgnoredDirs: true }),
+    );
+    await waitFor(() => expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenCalledTimes(1));
+    expect(view.result.current.showIgnoredDirsSupported).toBe(null);
+    // 未知 = 不禁用：树仍按用户偏好(开)建 store。
+    await waitFor(() =>
+      expect(mocks.listDir).toHaveBeenCalledWith(
+        expect.objectContaining({ showIgnoredDirs: true }),
+      ),
+    );
+
+    // 连接恢复 → 重连代次自增 → 重新探测并落定。
+    mocks.deviceSupportsRevealIgnoredDirs.mockImplementation(async () => true);
+    mocks.reconnectEpoch.current = 1;
+    view.rerender();
+    await waitFor(() => expect(view.result.current.showIgnoredDirsSupported).toBe(true));
+    expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenCalledTimes(2);
+    view.unmount();
+  });
+
+  it('已定的「不支持」不会被重连代次重置成未知(开关不闪)', async () => {
+    mocks.reconnectEpoch.current = 0;
+    mocks.deviceSupportsRevealIgnoredDirs.mockImplementation(async () => false);
+    const view = renderHook(() =>
+      useFileTree({ workdir: '/workdir-old2', deviceId: 'device-old2', showIgnoredDirs: true }),
+    );
+    await waitFor(() => expect(view.result.current.showIgnoredDirsSupported).toBe(false));
+
+    mocks.reconnectEpoch.current = 1;
+    view.rerender();
+    await waitFor(() => expect(mocks.deviceSupportsRevealIgnoredDirs).toHaveBeenCalledTimes(2));
+    expect(view.result.current.showIgnoredDirsSupported).toBe(false);
+
+    // 旧端升级后重连 → 结论改成支持。
+    mocks.deviceSupportsRevealIgnoredDirs.mockImplementation(async () => true);
+    mocks.reconnectEpoch.current = 2;
+    view.rerender();
+    await waitFor(() => expect(view.result.current.showIgnoredDirsSupported).toBe(true));
     view.unmount();
   });
 });

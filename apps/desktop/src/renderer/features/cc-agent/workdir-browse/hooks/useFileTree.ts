@@ -41,9 +41,10 @@
  * 不进 React state,避免 setState 触发不必要的订阅者重渲。
  */
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 
 import { createLogger } from '@/lib/logger';
+import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
 import {
   deviceSupportsRevealIgnoredDirs,
   fileBrowserApiFor,
@@ -530,21 +531,36 @@ export function useFileTree({
   //
   // 探到不支持就按“隐藏态”建 store(不给老端发无效字段),并把结论 expose 给
   // 标题行(开关渲染成不可用 + 说明原因)。非 device 会话恒为 true。
+  //
+  // 瞬态失败(隧道不可达 / 重连中)保持「未知」而不是落定成 false:把一次网络抖动
+  // 显示成「对方版本过旧」并把开关禁掉,连接恢复后也不会自愈。重探由
+  // reconnectEpoch 驱动 —— relay 或目标设备恢复 online 时它自增。
+  const revealReconnectEpoch = useDeviceLinkReconnectEpoch(deviceId ?? undefined);
   const [deviceRevealSupported, setDeviceRevealSupported] = useState<boolean | null>(null);
+  /** 上次探测结论归属的设备;换设备不留用旧结论(重连不清,避免开关闪一下)。 */
+  const revealProbedDeviceRef = useRef<string | null>(null);
   useEffect(() => {
     if (!deviceId) {
+      revealProbedDeviceRef.current = null;
       setDeviceRevealSupported(null);
       return;
     }
+    if (revealProbedDeviceRef.current !== deviceId) {
+      revealProbedDeviceRef.current = deviceId;
+      setDeviceRevealSupported(null);
+    }
     let cancelled = false;
-    setDeviceRevealSupported(null);
     void deviceSupportsRevealIgnoredDirs(deviceId, workdir).then((supported) => {
-      if (!cancelled) setDeviceRevealSupported(supported);
+      if (cancelled) return;
+      // null = 瞬态失败:保持现状(首帧仍是「未知」,已有结论也不推翻),
+      // 等下一次 reconnectEpoch 或重新挂载时再问一次。
+      if (supported === null) return;
+      setDeviceRevealSupported(supported);
     });
     return () => {
       cancelled = true;
     };
-  }, [deviceId, workdir]);
+  }, [deviceId, workdir, revealReconnectEpoch]);
 
   // 探测未返回时(device 首帧)沿用用户偏好:猜错只多一次重建,不会发出无法
   // 兑现的用户可见承诺。

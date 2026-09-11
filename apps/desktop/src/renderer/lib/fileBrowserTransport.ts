@@ -69,27 +69,39 @@ function deviceSupportsGzip(deviceId: string, workdir: string): Promise<boolean>
 /**
  * 被控端 listDir 是否支持 `showIgnoredDirs`(「显示被忽略的目录」)。
  *
- * 走同一个 `caps` op 但单独缓存:gzip 那份缓存带着「用出空写就永久降级」的
- * 自愈语义,两件事互不牵连。老被控端没有 caps op → 确定性 false(负缓存),
- * 网络类 reject 不缓存(下次重探)。
+ * **三态**:`true` / `false` = 已探定的结论;`null` = 未知(瞬态失败) —— 调用方据此
+ * 保持「还没结论」，不要把一次网络抖动落定成「对方版本过旧」并用它把开关禁用掉。
  *
- * 用途:标题行的开关在**被控端不支持**时不再装成可用(老端的 listDir 会静默
- * 忽略这个字段,按下去树里什么也不变)。
+ * 区分确定性「不支持」与瞬态失败：老被控端根本没有 `file-browser:remote-op`
+ * channel，invoke 会被快速拒回 `CHANNEL_NOT_ALLOWED`（确定性）；隧道不可达 /
+ * 重连中的 reject 与之不同，属于瞬态。
+ *
+ * 缓存：**只缓存肯定结论 `true`**。`false`（老端）不留在缓存里 —— 被控端在一次
+ * 掉线期间升级是真实场景，缓存会把它钉在「不支持」直到重启；重探一次只是一个被
+ * 快速拒绝的 invoke，代价可忽略。瞬态 `null` 同样不缓存，由调用方在连接恢复后重探。
+ *
+ * 与 gzip 那份缓存分开：后者带着「用出空写就永久降级」的自愈语义，两件事互不牵连。
  */
-const deviceRevealCaps = new Map<string, Promise<boolean>>();
+const deviceRevealCaps = new Map<string, Promise<boolean | null>>();
 
 export function deviceSupportsRevealIgnoredDirs(
   deviceId: string,
   workdir: string,
-): Promise<boolean> {
+): Promise<boolean | null> {
   const cached = deviceRevealCaps.get(deviceId);
   if (cached) return cached;
   const probe = Promise.resolve()
     .then(() => invokeOp<{ ok: boolean; showIgnoredDirs?: boolean }>(deviceId, 'caps', { workdir }))
-    .then((r) => r?.ok === true && r.showIgnoredDirs === true)
-    .catch(() => {
+    .then((r) => {
+      const supported = r?.ok === true && r.showIgnoredDirs === true;
+      // 只留肯定结论；「不支持」下次重新问（被控端可能已升级）。
+      if (!supported) deviceRevealCaps.delete(deviceId);
+      return supported;
+    })
+    .catch((err: unknown) => {
       deviceRevealCaps.delete(deviceId);
-      return false;
+      if (isDeviceTooOldError(err)) return false; // 老端：确定性不支持
+      return null; // 瞬态：不落定，等连接恢复重探
     });
   deviceRevealCaps.set(deviceId, probe);
   return probe;
