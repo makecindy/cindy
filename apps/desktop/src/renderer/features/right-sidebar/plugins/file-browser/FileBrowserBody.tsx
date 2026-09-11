@@ -59,6 +59,7 @@ import { useProjectFileList } from '@/features/cc-agent/workdir-browse/hooks/use
 import { useRevealFileInTree } from '@/features/cc-agent/workdir-browse/hooks/useRevealFileInTree';
 import { SearchPanel } from '@/features/cc-agent/workdir-browse/search/SearchPanel';
 import { FileTreeIgnoredDirsToggle } from '@/features/cc-agent/workdir-browse/FileTreeIgnoredDirsToggle';
+import { FILE_TREE_HEADER_ICON_BUTTON_CLASS } from '@/features/cc-agent/workdir-browse/fileTreeHeaderButtonClass';
 import { useProjectSearch } from '@/features/cc-agent/workdir-browse/search/hooks/useProjectSearch';
 import { FileFilterInput } from '@/features/cc-agent/workdir-browse/FileFilterInput';
 import { FilterResultList } from '@/features/cc-agent/workdir-browse/FilterResultList';
@@ -735,7 +736,7 @@ function FileBrowserBodyWithWorkdir({
  * 视觉对齐 doc 模式 WorkdirBrowseSidebar(参考 L570-678):
  *   - 整行 pt-2 pb-1 pl-3 pr-2(窄栏比 doc 模式 pl-6 pr-3 紧)
  *   - 标题 text-sm font-semibold text-foreground
- *   - icon 按钮 size-5 rounded-md hover:bg-sidebar-item-active text-sidebar-action-icon
+ *   - icon 按钮 size-5 rounded-full hover:bg-sidebar-item-active text-sidebar-action-icon(与同排四个动作共用 FILE_TREE_HEADER_ICON_BUTTON_CLASS,DESIGN.md §5 控件框 pill 档)
  */
 function TreeHeader({
   workdir,
@@ -768,7 +769,7 @@ function TreeHeader({
             <button
               type="button"
               onClick={onToggleSearch}
-              className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+              className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
             >
               <XIcon size={14} strokeWidth={2} />
             </button>
@@ -779,7 +780,7 @@ function TreeHeader({
               <button
                 type="button"
                 onClick={onToggleSearch}
-                className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+                className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
               >
                 <Search size={14} strokeWidth={2} />
               </button>
@@ -790,7 +791,7 @@ function TreeHeader({
               <button
                 type="button"
                 onClick={onCollapseAll}
-                className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+                className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
               >
                 <ChevronsDownUp size={14} strokeWidth={2} />
               </button>
@@ -799,7 +800,7 @@ function TreeHeader({
               <button
                 type="button"
                 onClick={onRefresh}
-                className="flex size-5 items-center justify-center rounded-md text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground"
+                className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
               >
                 <RefreshCw size={14} strokeWidth={2} />
               </button>

@@ -13,8 +13,8 @@
  *
  * 形态对齐同级按钮与既有先例(ReviewTabBody 的文件树显隐开关):
  *   - size-5 + 图标 14,与同排三个按钮同几何,不改变标题行节奏
- *   - 圆角走 DESIGN.md §5 的 pill 档(控件框 = pill);同排三个存量按钮的 6px
- *     圆角不在本 PR 迁移范围(治理合同 §13.3 增量适用)
+ *   - 圆角走 DESIGN.md §5 的 pill 档(控件框 = pill);整行四个按钮共用
+ *     fileTreeHeaderButtonClass 里的同一份类名,不再各写一份
  *   - 状态用 `aria-pressed` + 按压底色表达;图标随状态在 EyeOff / Eye 间切换
  *   - 文案遵循 DESIGN.md §14.6:说**下一步动作**(显示 / 隐藏),tooltip 与
  *     aria-label 一起变
@@ -26,6 +26,7 @@ import { Eye, EyeOff } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
+import { FILE_TREE_HEADER_ICON_BUTTON_CLASS } from './fileTreeHeaderButtonClass';
 
 export function FileTreeIgnoredDirsToggle() {
   const { t } = useTranslation();
@@ -46,8 +47,7 @@ export function FileTreeIgnoredDirsToggle() {
         aria-label={label}
         onClick={() => setShowIgnoredDirs(!showIgnoredDirs)}
         className={cn(
-          'flex size-5 items-center justify-center rounded-full text-sidebar-action-icon',
-          'hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
+          FILE_TREE_HEADER_ICON_BUTTON_CLASS,
           showIgnoredDirs && 'bg-sidebar-item-active text-sidebar-item-active-foreground',
         )}
       >

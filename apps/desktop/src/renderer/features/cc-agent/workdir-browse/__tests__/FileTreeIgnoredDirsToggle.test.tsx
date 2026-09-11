@@ -104,4 +104,17 @@ describe('FileTreeIgnoredDirsToggle 接线', () => {
     expect(toggleAt).toBeGreaterThan(searchAt);
     expect(toggleAt).toBeLessThan(collapseAt);
   });
+
+  /**
+   * 几何守卫:这行里的每个图标钮都拿共享常量,不各自写圆角。
+   *
+   * 起因:开关最初只给自己写了 pill,三个存量按钮各自写 `rounded-md`(6px),
+   * 同一行就出现两种圆角。以后无论谁在这行加按钮,只能拿到同一个值。
+   */
+  it.each(hosts)('%s 的标题行图标钮全部走共享类名常量', (_name, segments) => {
+    const source = readFileSync(resolve(__dirname, '..', '..', '..', '..', ...segments), 'utf8');
+    expect(source).toContain('FILE_TREE_HEADER_ICON_BUTTON_CLASS');
+    // 这行不再自己写圆角(只剩标题触发器与下拉项等非本行成员)。
+    expect(source).not.toMatch(/className="flex size-5 items-center justify-center rounded-/);
+  });
 });
