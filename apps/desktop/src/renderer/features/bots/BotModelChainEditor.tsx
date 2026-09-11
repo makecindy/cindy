@@ -125,7 +125,6 @@ export function BotModelChainEditor({
         configurationEnabled
         unifiedPanel
         unifiedAgents={unifiedAgents}
-        unifiedSelectionPolicy="official"
         onUnifiedSelect={(selection) => {
           const engine = selection.engine;
           if (engine !== 'cc' && engine !== 'codex' && engine !== 'pi') return;

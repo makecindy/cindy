@@ -288,7 +288,7 @@ describe('BotModelChainEditor', () => {
     expect(onChange).toHaveBeenLastCalledWith([{ ...route, effort: 'high' }, fallback]);
     fireEvent.click(screen.getByText('enable-fast-mode'));
     expect(onChange).toHaveBeenLastCalledWith([{ ...route, fastMode: true }, fallback]);
-    expect(modelSelectorProps.mock.calls[0]?.[0].unifiedSelectionPolicy).toBe('official');
+    expect(modelSelectorProps.mock.calls[0]?.[0].unifiedSelectionPolicy).toBeUndefined();
   });
 
   it('atomically stores the official harness, provider, model, effort, and fast mode', () => {
