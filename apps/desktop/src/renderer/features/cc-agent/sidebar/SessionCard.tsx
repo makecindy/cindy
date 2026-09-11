@@ -323,6 +323,7 @@ export const SessionCard = memo(function SessionCard({
     inSortableContainer: true,
     sortableDragBlocked: false,
     nativeSortable: false,
+    projectSessionOrder: false,
   });
   useEffect(() => {
     const card = cardRef.current;
@@ -330,10 +331,11 @@ export const SessionCard = memo(function SessionCard({
       inSortableContainer: Boolean(card?.closest('[data-sortable-id]')),
       sortableDragBlocked: Boolean(card?.closest('[data-no-drag]')),
       nativeSortable: Boolean(card?.closest('[data-sortable-native-dnd]')),
+      projectSessionOrder: Boolean(card?.closest('[data-sortable-session-order]')),
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
-  const splitDragEnabled = isSplitGroupDragSource({
+  const splitDragEnabled = !dragContainerState.projectSessionOrder && isSplitGroupDragSource({
     editing: isEditing,
     orcaRole: session.orcaRole,
     ...dragContainerState,
@@ -623,7 +625,7 @@ export const SessionCard = memo(function SessionCard({
   );
 
   return (
-    <div
+      <div
       ref={cardRef}
       data-session-id={session.id}
       // 多选范围选取靠 getVisibleSidebarSessionIds 扫 [data-sidebar-session-row][data-session-id];

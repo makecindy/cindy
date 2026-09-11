@@ -616,6 +616,7 @@ export const SessionItem = memo(function SessionItem({
     inSortableContainer: true,
     sortableDragBlocked: false,
     nativeSortable: false,
+    projectSessionOrder: false,
   });
   useEffect(() => {
     const row = rowRef.current;
@@ -623,10 +624,11 @@ export const SessionItem = memo(function SessionItem({
       inSortableContainer: Boolean(row?.closest('[data-sortable-id]')),
       sortableDragBlocked: Boolean(row?.closest('[data-no-drag]')),
       nativeSortable: Boolean(row?.closest('[data-sortable-native-dnd]')),
+      projectSessionOrder: Boolean(row?.closest('[data-sortable-session-order]')),
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
-  const splitDragEnabled = isSplitGroupDragSource({
+  const splitDragEnabled = !dragContainerState.projectSessionOrder && isSplitGroupDragSource({
     editing: isEditing,
     orcaRole: session.orcaRole,
     ...dragContainerState,

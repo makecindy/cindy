@@ -21,6 +21,8 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import { useCollapsibleShowAll } from './hooks/useCollapsibleShowAll';
 import { SessionCard } from './SessionCard';
+import { SortableList } from '@/components/sidebar/SortableList';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 
 /** 条目是否为当前激活会话(group 命中其下任一会话)。 */
 function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): boolean {
@@ -76,6 +78,9 @@ export interface SessionEntryListProps {
    * 场景传 false 关掉顶线;真正的列表首行(置顶段 / 项目内会话)保持默认。
    */
   showFirstDivider?: boolean;
+  /** Project-local manual ordering. When set, automation grouping is bypassed so every session is draggable. */
+  manualOrder?: readonly string[];
+  onReorder?: (orderedIds: string[]) => void;
 }
 
 export interface SessionEntryRowsProps extends Omit<
@@ -194,17 +199,50 @@ export function SessionEntryList({
   collapseLimit,
   disableCollapse = false,
   sectionCollapsed = false,
+  manualOrder,
+  onReorder,
   ...props
 }: SessionEntryListProps) {
   const { t } = useTranslation();
+  const reducedMotion = useReducedMotion();
   const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
   const entries = useMemo(
-    () => groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
-    [notifications, scheduleSessionIndex, sessions],
+    () => manualOrder
+      ? manualOrder.map((id) => sessions.find((session) => session.id === id)).filter((session): session is Session => session != null).map((session) => ({ kind: 'session' as const, session }))
+      : groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
+    [manualOrder, notifications, scheduleSessionIndex, sessions],
   );
 
+  const rows = <SessionEntryRows entries={entries} notifications={notifications} {...props} />;
+  if (manualOrder && onReorder) {
+    return (
+      <SortableList
+        items={entries.filter((entry): entry is Extract<SidebarSessionEntry, { kind: 'session' }> => entry.kind === 'session')}
+        getId={(entry) => entry.session.id}
+        onReorder={onReorder}
+        reducedMotion={reducedMotion}
+        // The row itself is the drag surface, so the title, preview, and
+        // empty center area all start the same long-press drag gesture.
+        handle="[data-sidebar-session-row]"
+        // Keep the dragged clone on the row's own active/normal colors. The
+        // generic sortable drag class paints a hover background on the outer
+        // wrapper and masks the session row's actual state.
+        dragClass="cc-agent-session-sortable-drag"
+        fallbackOnBody={false}
+        constrainToBounds
+        // Project-local ordering owns the whole session row. The data-no-drag
+        // marker is also used by split-pane DnD and must not disable reordering
+        // of the card body when that mode is active.
+        filter="button, input, textarea, select, a"
+        className="flex flex-col gap-0.5 session-order"
+        rowClassName="cc-agent-session-sortable-row"
+        renderItem={(entry) => <SessionEntryRows entries={[entry]} notifications={notifications} {...props} />}
+      />
+    );
+  }
+
   if (!collapsible) {
-    return <SessionEntryRows entries={entries} notifications={notifications} {...props} />;
+    return rows;
   }
 
   // 对话段与项目内会话共用这套折叠:默认前 N 条 + 永远保留 24h 内活动 /
