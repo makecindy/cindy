@@ -14,6 +14,8 @@ import {
   buildPendingSendItems,
   isPendingSendItemSelected,
   mergePendingSendItems,
+  reconcilePendingSendOrder,
+  type PendingSendOrder,
   pendingSendItemKey,
   pendingSendSpins,
   type MobilePendingSendActions,
@@ -115,7 +117,7 @@ describe('reply before user echo', () => {
   ) {
     return mergePendingSendItems(buildMobileMessageRenderItems(
       remoteSessionStore.getMessages(sessionId), { isSessionStreaming: true },
-    ), pending, boundary, baselines);
+    ), pending, boundary, new Map([...baselines].map(([id, baseline]) => [id, { baseline }])));
   }
   afterEach(() => { remoteSessionStore.clear(); vi.useRealTimers(); });
 
@@ -156,11 +158,70 @@ describe('reply before user echo', () => {
   });
 
   it('places the boundary before folded work, not just before reply text', () => {
-    push({ ...row('thinking', 'thinking', userSendAt), content: { thinking: 'Thinking' } });
+    push(row('old-user', 'user', '2026-07-30T00:00:00.000Z'));
+    push(row('old-reply', 'assistant', '2026-07-30T00:00:01.000Z'));
+    push({ ...row('thinking', 'thinking', userSendAt), content: { text: 'Thinking' } });
     push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
     const items = render(build({ settling: [queued('sent')] }));
-    expect(items[0].key).toBe('message-sent');
+    const work = items.find((item) => item.type === 'work_group');
+    expect(work?.startedAtMs).toBeLessThan(Date.parse(userSendAt));
+    expect(items[2].key).toBe('message-sent');
+    expect(items[3]).toBe(work);
     expect(items.at(-1)?.key).toBe('message-reply');
+  });
+
+  it('skips a foreign settling item without blocking the matching local send', () => {
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    const pending = build({ settling: [queued('foreign'), queued('sent')] });
+    expect(render(pending).map((item) => item.key))
+      .toEqual(['message-sent', 'message-reply', 'message-foreign']);
+  });
+
+  it.each(['first', 'second'])('keeps both turn positions when the %s echo arrives first', (firstEcho) => {
+    const secondBoundary = '2026-07-30T00:00:04.000Z';
+    let pending = build({ settling: [queued('sent'), queued('second')] });
+    let order: ReadonlyMap<string, PendingSendOrder> = new Map([
+      ['sent', { baseline: '2026-07-30T00:00:00.000Z' }],
+      ['second', { baseline: userSendAt }],
+    ]);
+    const draw = (boundary = secondBoundary) => {
+      order = reconcilePendingSendOrder(order, pending, boundary);
+      return mergePendingSendItems(buildMobileMessageRenderItems(
+        remoteSessionStore.getMessages(sessionId), { isSessionStreaming: true },
+      ), pending, boundary, order).map((item) => item.key);
+    };
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    push(row('second-reply', 'assistant', '2026-07-30T00:00:05.000Z'));
+    const expected = ['message-sent', 'message-reply', 'message-second', 'message-second-reply'];
+    expect(draw()).toEqual(expected);
+    const echoedId = firstEcho === 'first' ? 'sent' : 'second';
+    push(row(echoedId, 'user', echoedId === 'sent' ? userSendAt : secondBoundary));
+    expect(draw()).toEqual(expected); // stale pending snapshot still deduplicates
+    pending = pending.filter((item) => item.clientId !== echoedId);
+    expect(draw()).toEqual(expected); // pruning the later baseline must not move the older bubble
+    expect(order.has(echoedId)).toBe(false);
+    expect(draw('2026-07-30T00:00:06.000Z')).toEqual(expected);
+    const remaining = echoedId === 'sent' ? 'second' : 'sent';
+    push(row(remaining, 'user', remaining === 'sent' ? userSendAt : secondBoundary));
+    expect(draw()).toEqual(expected);
+    expect(reconcilePendingSendOrder(order, [], secondBoundary).size).toBe(0);
+  });
+
+  it('pins an observed turn before a later send starts and never assigns queued work early', () => {
+    let order: ReadonlyMap<string, PendingSendOrder> = new Map([['sent', { baseline: null }]]);
+    let pending = build({ settling: [queued('sent')] });
+    order = reconcilePendingSendOrder(order, pending, userSendAt);
+    expect(order.get('sent')?.boundary).toBe(Date.parse(userSendAt));
+    order = new Map([...order, ['next', { baseline: userSendAt }]]);
+    pending = build({ settling: [queued('sent')], queue: [queued('next')] });
+    const nextBoundary = '2026-07-30T00:00:04.000Z';
+    order = reconcilePendingSendOrder(order, pending, nextBoundary);
+    expect(order.get('sent')?.boundary).toBe(Date.parse(userSendAt));
+    expect(order.get('next')?.boundary).toBeUndefined();
+    pending = build({ settling: [queued('sent'), queued('next')] });
+    order = reconcilePendingSendOrder(order, pending, nextBoundary);
+    expect(order.get('next')?.boundary).toBe(Date.parse(nextBoundary));
+    expect(reconcilePendingSendOrder(order, pending, nextBoundary)).toBe(order);
   });
 
   it('leaves a follow-up behind the current response when the current user is already visible', () => {
@@ -168,6 +229,29 @@ describe('reply before user echo', () => {
     push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
     const pending = build({ queue: [queued('next')], sendingClientIds: new Set(['next']) });
     expect(render(pending).map((item) => item.key)).toEqual(['message-current', 'message-reply', 'message-next']);
+  });
+
+  it('does not assign the same observed turn to two sends with the same baseline', () => {
+    let order: ReadonlyMap<string, PendingSendOrder> = new Map([
+      ['sent', { baseline: null }], ['next', { baseline: null }],
+    ]);
+    let pending = build({ settling: [queued('sent'), queued('next')] });
+    order = reconcilePendingSendOrder(order, pending, userSendAt);
+    expect(order.get('sent')?.boundary).toBe(Date.parse(userSendAt));
+    expect(order.get('next')?.boundary).toBeUndefined();
+    push(row('sent', 'user', userSendAt));
+    pending = pending.filter((item) => item.clientId !== 'sent');
+    order = reconcilePendingSendOrder(order, pending, userSendAt);
+    order = reconcilePendingSendOrder(order, pending, userSendAt);
+    expect(order.get('next')?.boundary).toBeUndefined();
+    const secondBoundary = '2026-07-30T00:00:04.000Z';
+    order = reconcilePendingSendOrder(order, pending, secondBoundary);
+    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
+    push(row('next-reply', 'assistant', '2026-07-30T00:00:05.000Z'));
+    expect(mergePendingSendItems(buildMobileMessageRenderItems(
+      remoteSessionStore.getMessages(sessionId), { isSessionStreaming: true },
+    ), pending, secondBoundary, order).map((item) => item.key))
+      .toEqual(['message-sent', 'message-reply', 'message-next', 'message-next-reply']);
   });
 
   it('does not promote a queued follow-up or an unsent outbox entry into the current turn', () => {

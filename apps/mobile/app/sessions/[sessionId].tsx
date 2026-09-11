@@ -337,6 +337,8 @@ import {
 } from '@/session/inputProjection';
 import {
   mergePendingSendItems,
+  reconcilePendingSendOrder,
+  type PendingSendOrder,
   buildPendingSendItems,
   type MobilePendingSendActions,
 } from '@/session/pendingSendItems';
@@ -1509,7 +1511,7 @@ export default function SessionScreen() {
   // clears. Scope it to the page's session; never compare the phone clock to the host.
   const [sendBaselineState, setSendBaselineState] = useState<{
     sessionId: string;
-    byClientId: ReadonlyMap<string, string | null>;
+    byClientId: ReadonlyMap<string, PendingSendOrder>;
   }>(() => ({ sessionId, byClientId: new Map() }));
   if (sendBaselineState.sessionId !== sessionId) {
     setSendBaselineState({ sessionId, byClientId: new Map() });
@@ -1517,7 +1519,7 @@ export default function SessionScreen() {
   const markQueueItemSending = useCallback((clientId: string) => {
     const userSendAt = remoteSessionStore.getSessions().find((item) => item.id === sessionId)?.userSendAt ?? null;
     setSendBaselineState((current) => current.sessionId !== sessionId ? current : {
-      sessionId, byClientId: new Map([...current.byClientId, [clientId, userSendAt]]),
+      sessionId, byClientId: new Map([...current.byClientId, [clientId, { baseline: userSendAt }]]),
     });
     setSendingQueueClientIds((current) => {
       if (current.has(clientId)) return current;
@@ -5731,21 +5733,23 @@ export default function SessionScreen() {
       settlingItemsForRender,
     ],
   );
+  const sendOrder = useMemo(() => reconcilePendingSendOrder(
+    sendBaselineState.sessionId === sessionId ? sendBaselineState.byClientId : new Map(),
+    pendingSendItems, currentSession?.userSendAt,
+  ), [sendBaselineState, sessionId, pendingSendItems, currentSession?.userSendAt]);
   const messageListItems = useMemo(
     () => mergePendingSendItems(
       renderItems, pendingSendItems, currentSession?.userSendAt,
-      sendBaselineState.sessionId === sessionId ? sendBaselineState.byClientId : new Map(),
+      sendOrder,
     ),
-    [currentSession?.userSendAt, pendingSendItems, renderItems, sendBaselineState, sessionId],
+    [currentSession?.userSendAt, pendingSendItems, renderItems, sendOrder],
   );
   useEffect(() => {
-    const pendingIds = new Set(pendingSendItems.map((item) => item.clientId));
     setSendBaselineState((current) => {
       if (current !== sendBaselineState || current.sessionId !== sessionId) return current;
-      const kept = new Map([...current.byClientId].filter(([id]) => pendingIds.has(id)));
-      return kept.size === current.byClientId.size ? current : { sessionId, byClientId: kept };
+      return sendOrder === current.byClientId ? current : { sessionId, byClientId: sendOrder };
     });
-  }, [pendingSendItems, sendBaselineState, sessionId]);
+  }, [sendOrder, sendBaselineState, sessionId]);
   const messageListStructureKey = useMemo(
     () => ({}),
     [currentSession?.userSendAt, pendingSendItems, renderItemsStructureKey, sendBaselineState],

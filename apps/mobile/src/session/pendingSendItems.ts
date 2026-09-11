@@ -126,37 +126,71 @@ export function appendPendingSendItems<T extends { key: string }>(
  * echo replaces it. Queued follow-ups and local uploads still belong at the tail.
  * Compare only host timestamps: a phone's enqueue time is not a host ordering fact.
  */
+export interface PendingSendOrder {
+  baseline: string | null;
+  /** Once observed, this send's host boundary must not follow later turns. */
+  boundary?: number;
+}
+
+/** Resolve all sends before pruning: a later send's baseline identifies the
+ * preceding turn even when both user echoes are still missing. */
+export function reconcilePendingSendOrder(
+  order: ReadonlyMap<string, PendingSendOrder>,
+  pending: readonly MobilePendingSendItem[],
+  userSendAt: string | null | undefined,
+): ReadonlyMap<string, PendingSendOrder> {
+  const boundaries = [...new Set([
+    Date.parse(userSendAt ?? ''),
+    ...[...order.values()].flatMap((entry) => [Date.parse(entry.baseline ?? ''), entry.boundary ?? NaN]),
+  ].filter(Number.isFinite))].sort((a, b) => a - b);
+  const assigned = new Set([...order.values()].map((entry) => entry.boundary));
+  const next = new Map<string, PendingSendOrder>();
+  for (const item of pending) {
+    const entry = order.get(item.clientId);
+    if (!entry) continue;
+    const baseline = entry.baseline === null ? -Infinity : Date.parse(entry.baseline);
+    const boundary = entry.boundary ?? (isDispatchedPending(item)
+      ? boundaries.find((value) => value > baseline && !assigned.has(value)) : undefined);
+    if (boundary !== undefined) assigned.add(boundary);
+    // Preserve the lower bound when an earlier echo is pruned. Otherwise a
+    // waiting send could claim that same turn on the next render.
+    const claimed = boundary === undefined ? boundaries.filter((value) => assigned.has(value) && value > baseline).at(-1) : undefined;
+    const nextBaseline = claimed === undefined ? entry.baseline : new Date(claimed).toISOString();
+    next.set(item.clientId, boundary === entry.boundary && nextBaseline === entry.baseline
+      ? entry : { baseline: nextBaseline, boundary });
+  }
+  return next.size === order.size && [...next].every(([id, entry]) => order.get(id) === entry)
+    ? order : next;
+}
+
+function isDispatchedPending(item: MobilePendingSendItem): boolean {
+  return item.phase === 'settling' || (item.phase === 'sending' && item.queueIndex === 1);
+}
+
 export function mergePendingSendItems(
   rendered: readonly MobileMessageRenderItem[],
   pending: readonly MobilePendingSendItem[],
   userSendAt: string | null | undefined,
-  sendBaselines: ReadonlyMap<string, string | null>,
+  sendOrder: ReadonlyMap<string, PendingSendOrder>,
 ): readonly MobileMessageRenderItem[] {
   const appended = appendPendingSendItems(rendered, pending);
-  if (appended === rendered || !userSendAt) return appended;
-  const boundary = Date.parse(userSendAt);
-  if (!Number.isFinite(boundary)) return appended;
-  // A visible current user already supplies the turn boundary. Never move a new
-  // send in front of the response to an earlier, already displayed message.
-  if (rendered.some((item) => item.type === 'message'
-    && item.message.source.role === 'user'
-    && Date.parse(item.message.source.createdAt) >= boundary)) return appended;
+  if (appended === rendered) return appended;
+  const order = reconcilePendingSendOrder(sendOrder, pending, userSendAt);
   const waiting = appended.slice(rendered.length) as MobilePendingSendItem[];
-  const candidate = waiting.find((item) => item.phase === 'settling')
-    ?? waiting.find((item) => item.phase === 'sending' && item.queueIndex === 1);
-  if (!candidate) return appended;
-  // The current user may simply be outside the loaded history window. A local
-  // send must have observed an older host turn before we associate it with this
-  // boundary; otherwise we'd move a follow-up in front of the ongoing reply.
-  if (!sendBaselines.has(candidate.clientId)) return appended;
-  const baseline = sendBaselines.get(candidate.clientId);
-  if (baseline && !(Date.parse(baseline) < boundary)) return appended;
-  const replyIndex = rendered.findIndex((item) => renderItemStartsAt(item) >= boundary);
-  if (replyIndex < 0) return appended;
-  return [
-    ...rendered.slice(0, replyIndex), candidate, ...rendered.slice(replyIndex),
-    ...waiting.filter((item) => item !== candidate),
-  ];
+  const insertions = new Map<number, MobilePendingSendItem[]>();
+  const tail: MobilePendingSendItem[] = [];
+  for (const item of waiting) {
+    const boundary = order.get(item.clientId)?.boundary;
+    const replyIndex = boundary !== undefined && isDispatchedPending(item)
+      ? rendered.findIndex((row) => renderItemStartsAt(row) >= boundary) : -1;
+    const firstRow = rendered[replyIndex];
+    // An existing user boundary needs no placeholder. A later user must not
+    // suppress an earlier bubble when its own response is already visible.
+    if (replyIndex < 0 || (firstRow.type === 'message' && firstRow.message.source.role === 'user')) tail.push(item);
+    else insertions.set(replyIndex, [...(insertions.get(replyIndex) ?? []), item]);
+  }
+  return insertions.size === 0 ? appended
+    : [...rendered.flatMap((item, index) => [...(insertions.get(index) ?? []), item]), ...tail];
 }
 
 function renderItemStartsAt(item: MobileMessageRenderItem | MobileWorkChildItem): number {
@@ -167,8 +201,7 @@ function renderItemStartsAt(item: MobileMessageRenderItem | MobileWorkChildItem)
     case 'tool_media': return Date.parse(item.tools[0]?.source.createdAt ?? '');
     case 'todo':
     case 'agent_task': return Date.parse(item.createdAt);
-    case 'work_group': return item.startedAtMs
-      ?? (item.children.length > 0 ? renderItemStartsAt(item.children[0]) : NaN);
+    case 'work_group': return item.children.length > 0 ? renderItemStartsAt(item.children[0]) : NaN;
     case 'subagent_group': return item.childItems.length > 0 ? renderItemStartsAt(item.childItems[0]) : NaN;
     default: return NaN;
   }
