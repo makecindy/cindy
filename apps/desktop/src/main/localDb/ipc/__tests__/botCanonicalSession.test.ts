@@ -3291,7 +3291,7 @@ describe('Bot Session task end-to-end runtime', () => {
      * dispatchBotSessionMessage → sendToSessionInternal）。判据顺序刻意与真机一致：
      * 任何一条在真机上会挡住会话启动的门，这里也必须挡住。
      */
-    const dispatch = async (params: {
+    const dispatch = vi.fn(async (params: {
       targetSessionId: string;
       message: string;
       persistedContent?: string;
@@ -3372,7 +3372,7 @@ describe('Bot Session task end-to-end runtime', () => {
         targetSessionId: params.targetSessionId,
         wakeKind: queuedBehindRunningTurn ? 'queued' as const : 'resumed' as const,
       };
-    };
+    });
 
     const abortSession = vi.fn(async () => undefined);
     const delegation = createBotDelegationService({
@@ -3431,6 +3431,7 @@ describe('Bot Session task end-to-end runtime', () => {
 
     return {
       delegation,
+      dispatch,
       abortSession,
       started,
       changed,
@@ -3866,13 +3867,36 @@ describe('Bot Session task end-to-end runtime', () => {
       expect(started.ok).toBe(true);
       if (!started.ok) return;
 
+      const instruction = '补充：最后必须带风险清单。\n读取 /workspace/project/AGENTS.md 并核对执行授权。';
       await expect(
         runtime.delegation.messageSessionTask('session-1', started.delegationId, {
           kind: 'message',
-          text: '补充：最后必须带风险清单。',
+          text: instruction,
           idempotencyKey: 'follow-up-1',
         }),
       ).resolves.toMatchObject({ ok: true, queued: true, resumed: false });
+
+      const childClientId = `bot-delegation-interject:${started.delegationId}:follow-up-1`;
+      expect(runtime.dispatch).toHaveBeenCalledWith(expect.objectContaining({
+        targetSessionId: started.childSessionId,
+        clientId: childClientId,
+        message: `[来自 发起方伙伴 的补充]\n\n${instruction}`,
+        persistedContent: `[来自 发起方伙伴 的补充]\n\n${instruction}`,
+      }));
+      const readMessage = (sessionId: string, clientId: string) => h.sqlite!.prepare(
+        'SELECT role, content, agent_meta AS agentMeta FROM messages WHERE session_id = ? AND client_id = ?',
+      ).get(sessionId, clientId) as { role: string; content: string; agentMeta: string };
+      expect(readMessage(started.childSessionId, childClientId).content).toContain(instruction);
+      const trace = readMessage('session-1', `bot-delegation-interject-mirror:${started.delegationId}:follow-up-1`);
+      expect(trace).toMatchObject({ role: 'assistant', content: '' });
+      expect(JSON.parse(trace.agentMeta).botCollaboration.role).toBe('interjection');
+      expect(readMessage('session-1', `bot-delegation-request:${started.delegationId}`).content).toBe('');
+      // Status queries return context to the caller without appending it to the timeline.
+      const timelineBeforeCheck = h.sqlite!.prepare("SELECT * FROM messages WHERE session_id = 'session-1'").all();
+      await expect(runtime.delegation.getSessionTask('session-1', started.delegationId)).resolves.toMatchObject({
+        ok: true, task: { status: 'running', objective: '先整理一版方案。' },
+      });
+      expect(h.sqlite!.prepare("SELECT * FROM messages WHERE session_id = 'session-1'").all()).toEqual(timelineBeforeCheck);
 
       await runtime.runPendingTurns();
       await expect(

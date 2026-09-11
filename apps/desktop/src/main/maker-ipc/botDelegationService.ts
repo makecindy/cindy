@@ -2080,13 +2080,13 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         message: dispatched?.message ?? '消息未能送达后台任务',
       };
     }
-    // 发起方视角的留痕：补过什么，重开会话仍在。写不进去不回滚投递
-    // ——话已经送到了，回滚只会让两边记账不一致。
+    // 父任务只留发送状态；完整指令已经投递并保存在子任务，不再复制到主聊天。
+    // 写不进去不回滚投递——话已经送到了，回滚只会让两边记账不一致。
     await persistTimelineMessage({
       sessionId: callerSessionId,
       clientId: BOT_DELEGATION_CLIENT_ID.interjectionMirror(delegationId, token),
       role: 'assistant',
-      content: trimmed,
+      content: '',
       createdAt: now(),
       agentMeta: {
         botCollaboration: await collaborationMeta(row, 'interjection'),
