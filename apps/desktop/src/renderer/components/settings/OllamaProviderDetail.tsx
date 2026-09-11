@@ -236,14 +236,20 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
     pendingPulls.current.add(key);
     upsertPull({ name, status: 'starting', phase: 'starting', done: false });
     try {
-      const result = await window.electronAPI.maker.localModelPull(name);
-      pendingPulls.current.delete(key);
+      let result;
+      try {
+        result = await window.electronAPI.maker.localModelPull(name);
+      } finally {
+        // Release only this IPC's guard, before awaiting a refresh that may
+        // outlive a resumed download. Never clear another call's guard later.
+        pendingPulls.current.delete(key);
+      }
       if (result.stopped) {
-        await refresh();
+        await refresh().catch(() => undefined);
         return;
       }
       upsertPull({ name, status: 'success', phase: 'success', percent: 100, done: true });
-      await refresh();
+      await refresh().catch(() => undefined);
       onChanged();
       toast.success(t('settings.providers.local.added'));
     } catch (error) {
@@ -264,8 +270,6 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
           ? t('settings.providers.local.conflict')
           : t(`settings.providers.local.pullError.${kind ?? 'generic'}`),
       );
-    } finally {
-      pendingPulls.current.delete(key);
     }
   };
 

@@ -46,10 +46,12 @@ const snapshot = (pulls: LocalModelPullProgress[] = []) => ({
 });
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((r) => {
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((r, fail) => {
     resolve = r;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 let onProgress: (value: LocalModelPullProgress) => void;
 let onCatalog: () => void;
@@ -142,6 +144,31 @@ describe('Ollama download snapshot ordering', () => {
     fireEvent.click(download());
     await act(async () => onCatalog());
     expect(screen.getByTestId('progress').textContent).toBe('starting');
+  });
+
+  it.each([false, true])('keeps the resumed pull guarded after the old refresh (fails=%s)', async (fails) => {
+    await mount();
+    const first = deferred<{ stopped: boolean }>();
+    pull.mockReturnValueOnce(first.promise);
+    fireEvent.click(download());
+    act(() => onProgress({ ...progress(25, 'paused'), done: true }));
+    const old = deferred<ReturnType<typeof snapshot>>();
+    list.mockReturnValueOnce(old.promise);
+    await act(async () => first.resolve({ stopped: true }));
+    // Resume while the old call is still awaiting its post-stop list refresh.
+    const input = document.querySelector('#ollama-manual-download')!;
+    fireEvent.change(input, { target: { value: 'test' } });
+    const manual = screen.getAllByText(downloadLabel).at(-1)!;
+    fireEvent.click(manual);
+    expect(pull).toHaveBeenCalledTimes(2);
+    act(() => onProgress(progress(40)));
+    await act(async () => {
+      if (fails) old.reject(new Error('list unavailable'));
+      else old.resolve(snapshot([progress(25, 'paused')]));
+    });
+    fireEvent.click(manual);
+    expect(pull).toHaveBeenCalledTimes(2);
+    expect(screen.getByTestId('progress').textContent).toBe('40');
   });
 
   it('dispatches once when the same model is submitted twice', async () => {
