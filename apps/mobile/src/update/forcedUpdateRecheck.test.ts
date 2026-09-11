@@ -241,6 +241,35 @@ describe('createForcedUpdateRechecker 解除判定', () => {
     expect(deps.onCleared).not.toHaveBeenCalled();
   });
 
+  it.each(['3.0.0-beta.1', '3.0.0+build.1', 'v3.0.0', '3..0'])('目标 version=%s 不受支持 → 维持阻断', async (version) => {
+    const deps = makeDeps({
+      fetchLatest: vi.fn(async () => latestRecord({ version, minVersion: undefined })),
+      getHeldTarget: () => ({ version: '2.0.0' }),
+    });
+    await expect(runOnce(deps)).resolves.toBe('error');
+    expect(deps.onCleared).not.toHaveBeenCalled();
+    expect(deps.onStillForced).not.toHaveBeenCalled();
+  });
+
+  it.each(['3.0.0-beta.1', '3.0.0+build.1', 'v3.0.0', '3..0'])('本机 version=%s 不受支持 → 维持阻断', async (version) => {
+    const deps = makeDeps({
+      fetchLatest: vi.fn(async () => latestRecord({ minVersion: undefined })),
+      getCurrentVersion: () => version,
+    });
+    await expect(runOnce(deps)).resolves.toBe('error');
+    expect(deps.onCleared).not.toHaveBeenCalled();
+    expect(deps.onStillForced).not.toHaveBeenCalled();
+  });
+
+  it.each(['2.0.0-beta.1', '2.0.0+build.1', 'v2.0.0'])('minVersion=%s 不受支持 → 维持阻断且不更新目标', async (minVersion) => {
+    const deps = makeDeps({
+      fetchLatest: vi.fn(async () => latestRecord({ minVersion })),
+    });
+    await expect(runOnce(deps)).resolves.toBe('error');
+    expect(deps.onCleared).not.toHaveBeenCalled();
+    expect(deps.onStillForced).not.toHaveBeenCalled();
+  });
+
   it('同版本记录撤回门槛(最常见的撤回形态)→ 正常解除', async () => {
     const deps = makeDeps({
       fetchLatest: vi.fn(async () => latestRecord({ version: '2.0.0', minVersion: undefined })),
