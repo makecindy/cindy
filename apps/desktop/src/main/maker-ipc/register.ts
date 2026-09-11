@@ -2275,6 +2275,8 @@ interface PendingInteractionEntry {
    */
   persistId?: string;
   timeoutId?: ReturnType<typeof setTimeout>;
+  timeoutDeadlineAt?: number;
+  timeoutRemainingMs?: number;
 }
 
 const pendingInteractionResolvers = new Map<string, PendingInteractionEntry>();
@@ -2413,6 +2415,43 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
   pendingInteractionResolvers.delete(requestId);
   if (entry.timeoutId) clearTimeout(entry.timeoutId);
   return entry;
+}
+
+/** Permission safety time counts only while its owning task can accept input. */
+function schedulePendingPermissionTimeout(requestId: string, entry: PendingInteractionEntry): void {
+  if (entry.kind !== 'permission' || entry.timeoutId !== undefined
+    || pendingInteractionResolvers.get(requestId) !== entry
+    || agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
+  const remaining = entry.timeoutRemainingMs ?? PERMISSION_INTERACTION_TIMEOUT_MS;
+  entry.timeoutDeadlineAt = Date.now() + remaining;
+  entry.timeoutId = setTimeout(() => {
+    if (pendingInteractionResolvers.get(requestId) !== entry) return;
+    entry.timeoutId = undefined;
+    entry.timeoutRemainingMs = 0;
+    entry.timeoutDeadlineAt = undefined;
+    // Also guard an already-due callback at the pause boundary.
+    if (agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
+    const pending = clearPendingInteraction(requestId);
+    if (!pending) return;
+    handleAgentIslandInteractionDismissed(entry.sessionId, requestId);
+    pending.resolve({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+    dismissRendererInteraction(pending, requestId, 'timeout', 'deny');
+  }, remaining);
+}
+
+function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean): void {
+  for (const [requestId, entry] of pendingInteractionResolvers) {
+    if (entry.sessionId !== sessionId || entry.kind !== 'permission') continue;
+    if (paused) {
+      if (entry.timeoutId === undefined) continue;
+      clearTimeout(entry.timeoutId);
+      entry.timeoutId = undefined;
+      entry.timeoutRemainingMs = Math.max(0, (entry.timeoutDeadlineAt ?? Date.now()) - Date.now());
+      entry.timeoutDeadlineAt = undefined;
+    } else {
+      schedulePendingPermissionTimeout(requestId, entry);
+    }
+  }
 }
 
 type RecoverableInteractionSnapshot =
@@ -3990,18 +4029,10 @@ export function installDesktopInteractionListener(session: {
         request: boundaryRequest,
         persistId: interactionPersistId ?? undefined,
       };
-      if (req.kind === 'permission') {
-        entry.timeoutId = setTimeout(() => {
-          const pending = clearPendingInteraction(req.requestId);
-          if (!pending) return;
-          handleAgentIslandInteractionDismissed(session.id, req.requestId);
-          pending.resolve({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
-          dismissRendererInteraction(pending, req.requestId, 'timeout', 'deny');
-        }, PERMISSION_INTERACTION_TIMEOUT_MS);
-      }
       // 必须先登记 pending,再广播。否则 renderer / device-link 回得太快会打到
       // 「no pending resolver」,确认卡看起来没反应,Codex 最终却记成用户拒绝。
       pendingInteractionResolvers.set(req.requestId, entry);
+      schedulePendingPermissionTimeout(req.requestId, entry);
       broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId: session.id,
         request: boundaryRequest,
@@ -9254,7 +9285,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const session = maker.getSession(id);
         return !!session && (session.isTurnRunning() || session.getTurnControlSnapshot().pendingInteractionCount > 0);
       },
-      holdInput: (id, held) => inputCoordinator.setExecutionPaused(id, held),
+      holdInput: (id, held) => {
+        inputCoordinator.setExecutionPaused(id, held);
+        setPendingInteractionTimeoutsPaused(id, held);
+      },
       // Wait for sends already admitted before the hold before sampling native activity.
       waitForInputBoundary: (id) => withSendToSessionLock(id, async () => undefined),
       preparePause: async (id) => {

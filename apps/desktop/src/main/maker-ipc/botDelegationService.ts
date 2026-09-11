@@ -2824,6 +2824,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
     const pause: SessionTaskPause = existingPause ?? { token: createId(),
       pausedAt: pending?.raisedAt ?? now(), previousStatus: row.status as SessionTaskPause['previousStatus'],
       interactionOnly: !!pending };
+    const wasHeld = !!existingPause || heldSessionIds.has(row.childSessionId);
     holdTaskInput(row.childSessionId, true);
     const snapshot = JSON.stringify({ ...parseRecord(row.permissionSnapshotJson), taskPause: pause });
     let persisted = false;
@@ -2834,7 +2835,7 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
         inArray(botDelegations.status, [...ACTIVE_DELEGATION_STATUSES])))
         .returning({ id: botDelegations.id });
       if (!paused) {
-        holdTaskInput(row.childSessionId, false);
+        holdTaskInput(row.childSessionId, wasHeld);
         return { ok: false as const, errorCode: 'SESSION_TASK_STATE_CHANGED', message: 'Task changed before pause committed' };
       }
       persisted = true;
@@ -2861,7 +2862,8 @@ export function createBotDelegationService(deps: BotDelegationServiceDeps) {
       return { ok: true as const, childSessionId: row.childSessionId,
         control: { ...taskControlView({ ...row, permissionSnapshotJson: snapshot }), stop_status: result.status } };
     } catch (error) {
-      if (!persisted) holdTaskInput(row.childSessionId, false);
+      // A failed retry cannot release an already durable pause or its permission timer.
+      if (!persisted) holdTaskInput(row.childSessionId, wasHeld);
       // Once persisted, a failed/uncertain stop keeps the hold for an explicit safe retry.
       return { ok: false as const, errorCode: 'PAUSE_UNCONFIRMED',
         message: error instanceof Error ? error.message : String(error) };

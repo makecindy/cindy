@@ -4152,6 +4152,33 @@ describe('Bot Session task end-to-end runtime', () => {
     } finally { runtime.dispose(); }
   });
 
+  it.each([false, true])('preserves the permission input boundary after a failed pause write (already paused: %s)', async alreadyPaused => {
+    await seedPair();
+    const resolveInteraction = vi.fn(() => true);
+    const runtime = createDelegationRuntime({ taskControl: true, resolveInteraction });
+    try {
+      const task = await runtime.delegation.startSessionTask({ callerSessionId: 'session-1', objective: 'Wait for approval.' });
+      if (!task.ok) throw new Error('missing task');
+      await runtime.delegation.handleInteractionStart(task.childSessionId,
+        { kind: 'permission', requestId: 'pause-write-permission', toolName: 'write_file', input: {} });
+      if (alreadyPaused) await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause');
+      const before = await runtime.delegation.getSessionTask('session-1', task.delegationId);
+      h.sqlite!.exec("CREATE TEMP TRIGGER fail_pause_write BEFORE UPDATE OF permission_snapshot_json ON bot_delegations BEGIN SELECT RAISE(FAIL, 'fixture pause unavailable'); END");
+      expect(await runtime.delegation.stopSessionTask('session-1', task.delegationId, 'pause'))
+        .toMatchObject({ ok: false, errorCode: 'PAUSE_UNCONFIRMED' });
+      expect(runtime.heldInputs.has(task.childSessionId)).toBe(alreadyPaused);
+      expect(await runtime.delegation.getSessionTask('session-1', task.delegationId)).toEqual(before);
+      expect(resolveInteraction).not.toHaveBeenCalled();
+      expect(runtime.stopTurn).not.toHaveBeenCalled();
+      h.sqlite!.exec('DROP TRIGGER fail_pause_write');
+      if (alreadyPaused) expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'resume' }))
+        .toMatchObject({ ok: true, delivery: 'awaiting-interaction' });
+      expect(await runtime.delegation.messageSessionTask('session-1', task.delegationId, { kind: 'approve' }))
+        .toMatchObject({ ok: true, delivery: 'interaction' });
+      expect(resolveInteraction).toHaveBeenCalledTimes(1);
+    } finally { h.sqlite!.exec('DROP TRIGGER IF EXISTS fail_pause_write'); runtime.dispose(); }
+  });
+
   it('pauses an interaction without resolving it, and accounts for the wait only once', async () => {
     await seedPair();
     const resolveInteraction = vi.fn(() => true);
