@@ -714,6 +714,7 @@ export interface BotsCreateDelegationArgs {
 }
 
 export interface BotsReopenDelegationArgs {
+  worktreePath?: string | null;
   maxActiveChildren: number;
   delegationId: string;
   requestingBotId: string;

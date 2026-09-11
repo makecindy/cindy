@@ -2276,6 +2276,11 @@ interface PendingInteractionEntry {
    */
   persistId?: string;
   timeoutId?: ReturnType<typeof setTimeout>;
+  timeoutDeadlineAt?: number;
+  timeoutRemainingMs?: number;
+  /** IM owns presentation/timeouts; Host retains the execution and cancellation boundary. */
+  migrated?: boolean;
+  deferredDecision?: InteractionDecision;
 }
 
 const pendingInteractionResolvers = new Map<string, PendingInteractionEntry>();
@@ -2416,6 +2421,50 @@ function clearPendingInteraction(requestId: string): PendingInteractionEntry | n
   return entry;
 }
 
+/** Permission safety time counts only while its owning task can accept input. */
+function schedulePendingPermissionTimeout(requestId: string, entry: PendingInteractionEntry): void {
+  if (entry.migrated || entry.kind !== 'permission' || entry.timeoutId !== undefined
+    || pendingInteractionResolvers.get(requestId) !== entry
+    || agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
+  const remaining = entry.timeoutRemainingMs ?? PERMISSION_INTERACTION_TIMEOUT_MS;
+  entry.timeoutDeadlineAt = Date.now() + remaining;
+  entry.timeoutId = setTimeout(() => {
+    if (pendingInteractionResolvers.get(requestId) !== entry) return;
+    entry.timeoutId = undefined;
+    entry.timeoutRemainingMs = 0;
+    entry.timeoutDeadlineAt = undefined;
+    // Also guard an already-due callback at the pause boundary.
+    if (agentInputCoordinatorHolder?.isExecutionPaused(entry.sessionId)) return;
+    const pending = clearPendingInteraction(requestId);
+    if (!pending) return;
+    handleAgentIslandInteractionDismissed(entry.sessionId, requestId);
+    pending.resolve({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
+    dismissRendererInteraction(pending, requestId, 'timeout', 'deny');
+  }, remaining);
+}
+
+function setPendingInteractionTimeoutsPaused(sessionId: string, paused: boolean): string[] {
+  const applied: string[] = [];
+  for (const [requestId, entry] of pendingInteractionResolvers) {
+    if (entry.sessionId !== sessionId) continue;
+    if (!paused && entry.deferredDecision) {
+      if (resolvePendingInteraction(requestId, entry.deferredDecision)) applied.push(requestId);
+      continue;
+    }
+    if (entry.kind !== 'permission') continue;
+    if (paused) {
+      if (entry.timeoutId === undefined) continue;
+      clearTimeout(entry.timeoutId);
+      entry.timeoutId = undefined;
+      entry.timeoutRemainingMs = Math.max(0, (entry.timeoutDeadlineAt ?? Date.now()) - Date.now());
+      entry.timeoutDeadlineAt = undefined;
+    } else {
+      schedulePendingPermissionTimeout(requestId, entry);
+    }
+  }
+  return applied;
+}
+
 type RecoverableInteractionSnapshot =
   | InteractionRequest
   | GhostSetupInteractionSnapshot
@@ -2437,7 +2486,7 @@ type PendingInteractionSnapshotEntry = {
 function getPendingInteractionsForSession(sessionId: string): PendingInteractionSnapshotEntry[] {
   const out: PendingInteractionSnapshotEntry[] = [];
   for (const entry of pendingInteractionResolvers.values()) {
-    if (entry.sessionId === sessionId)
+    if (entry.sessionId === sessionId && !entry.migrated)
       out.push({ request: entry.request, persistId: entry.persistId });
   }
   out.push(
@@ -2559,7 +2608,7 @@ function persistInteractionDecision(
 
 function resolvePendingInteraction(requestId: string, decision: InteractionDecision): boolean {
   const resolver = pendingInteractionResolvers.get(requestId);
-  if (!resolver) return false;
+  if (!resolver || agentInputCoordinatorHolder?.isExecutionPaused(resolver.sessionId)) return false;
   clearPendingInteraction(requestId);
   handleAgentIslandInteractionDismissed(resolver.sessionId, requestId);
   resolver.resolve(decision);
@@ -2708,7 +2757,7 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
   resolve: (decision: InteractionDecision) => void;
 }> {
   const entries = Array.from(pendingInteractionResolvers.entries()).filter(
-    ([, entry]) => entry.sessionId === sessionId,
+    ([, entry]) => entry.sessionId === sessionId && !entry.migrated,
   );
   const taken: Array<{
     requestId: string;
@@ -2716,8 +2765,19 @@ export function takePendingInteractionsForSession(sessionId: string): Array<{
     resolve: (decision: InteractionDecision) => void;
   }> = [];
   for (const [requestId, entry] of entries) {
-    clearPendingInteraction(requestId);
-    taken.push({ requestId, request: entry.request, resolve: entry.resolve });
+    // Transfer the UI, never the raw engine resolver. Keep cancellation and pause
+    // ownership here even after the IM registry consumes its one-shot answer.
+    if (entry.timeoutId) clearTimeout(entry.timeoutId);
+    entry.timeoutId = undefined;
+    entry.migrated = true;
+    taken.push({ requestId, request: entry.request, resolve: decision => {
+      if (pendingInteractionResolvers.get(requestId) !== entry || entry.deferredDecision) return;
+      if (agentInputCoordinatorHolder?.isExecutionPaused(sessionId)) {
+        entry.deferredDecision = decision;
+        return;
+      }
+      resolvePendingInteraction(requestId, decision);
+    } });
     handleAgentIslandInteractionDismissed(entry.sessionId, requestId);
     // resolvedAs 省略 — renderer 行 1537 默认 'deny', UI 上只是关掉对话框,
     // 跟我们这里"搬走"语义一致(没真选 allow/deny)。
@@ -3991,18 +4051,10 @@ export function installDesktopInteractionListener(session: {
         request: boundaryRequest,
         persistId: interactionPersistId ?? undefined,
       };
-      if (req.kind === 'permission') {
-        entry.timeoutId = setTimeout(() => {
-          const pending = clearPendingInteraction(req.requestId);
-          if (!pending) return;
-          handleAgentIslandInteractionDismissed(session.id, req.requestId);
-          pending.resolve({ kind: 'permission', behavior: 'deny', reason: 'timeout' });
-          dismissRendererInteraction(pending, req.requestId, 'timeout', 'deny');
-        }, PERMISSION_INTERACTION_TIMEOUT_MS);
-      }
       // 必须先登记 pending,再广播。否则 renderer / device-link 回得太快会打到
       // 「no pending resolver」,确认卡看起来没反应,Codex 最终却记成用户拒绝。
       pendingInteractionResolvers.set(req.requestId, entry);
+      schedulePendingPermissionTimeout(req.requestId, entry);
       broadcastToAllWindows(MAKER_PUSH.INTERACTION_REQUEST, {
         sessionId: session.id,
         request: boundaryRequest,
@@ -9084,6 +9136,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   const dispatchBotSessionMessage = async (params: {
     targetSessionId: string;
+    dispatcherSessionId?: string;
     authorizationGuard?: BotAuthorizationInputGuard;
     message: string;
     persistedContent?: string;
@@ -9249,6 +9302,57 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   botDelegationServiceHolder?.dispose();
   botDelegationServiceHolder = createBotDelegationService({
+    taskControl: {
+      steer: (params) => sessionControlService.steerSession(params),
+      stop: (params) => sessionControlService.stopSessionTurn(params),
+      isActive: (id) => {
+        const session = maker.getSession(id);
+        return !!session && (session.isTurnRunning() || session.getTurnControlSnapshot().pendingInteractionCount > 0);
+      },
+      holdInput: (id, held) => {
+        inputCoordinator.setExecutionPaused(id, held);
+        return setPendingInteractionTimeoutsPaused(id, held);
+      },
+      // Wait for sends already admitted before the hold before sampling native activity.
+      waitForInputBoundary: (id) => withSendToSessionLock(id, async () => undefined),
+      preparePause: async (id) => {
+        resetAutomaticRecoveryForExplicitStop(id);
+        contextOverflowRolloverHolder?.cancelRecovery(id);
+        await pauseGoalBeforeExplicitStop(id);
+      },
+      restoreInput: (id) => inputCoordinator.ensureQueueRestored(id),
+      flushInput: awaitAgentInputQueueSnapshotPersistence,
+      resumeInput: async (id) => { inputCoordinator.resume(id); },
+    },
+    getWorktree: worktreeManager.getForSession,
+    reconcileWorktree: worktreeManager.reconcileSessionTransfer,
+    withTransferredWorktree: worktreeManager.withTransferredSession,
+    discardUnusedWorktree: async sessionId => {
+      const [row] = await getDbClient().drizzle.select({ id: sessions.id }).from(sessions)
+        .where(eq(sessions.id, sessionId)).limit(1);
+      if (!row) await worktreeManager.removeWorktreeForSession(sessionId);
+    },
+    prepareWorktree: async workingDir => {
+      const prepared = await prepareHandoffWorktree({
+        getForSession: worktreeManager.getForSession, listAll: worktreeManager.listAll,
+        detectCwd: worktreeManager.detectCwd, suggestName: worktreeManager.suggestName,
+        listBranches: worktreeManager.listBranches, resolveCommit: worktreeManager.revParseCommit,
+        createWorktree: worktreeManager.createWorktree, createId: () => randomUUID(),
+        resolveFreshSource: resolveFreshSourceBranch,
+      }, undefined, workingDir);
+      return prepared.ok ? { ok: true, sessionId: prepared.sessionId, workingDir: prepared.meta.path } : prepared;
+    },
+    taskQueue: {
+      inspect: async (id, callerSessionId) => {
+        await inputCoordinator.ensureQueueRestored(id);
+        if (!inputCoordinator.isQueueRestored(id)) throw new Error('Task queue restoration is incomplete');
+        return inputCoordinator.getQueueInspection(id)
+          .filter(item => item.source === 'session' && item.sourceLabel === callerSessionId)
+          .map(item => ({ queuedMessageId: item.queuedMessageId, consuming: item.consuming, message: item.content }));
+      },
+      update: params => sessionControlService.updateQueuedMessage(params),
+      cancel: params => sessionControlService.cancelQueuedMessage(params),
+    },
     readCallerPermission: (sessionId) => {
       const state = maker.getSession(sessionId)?.stablePermissionModeState;
       return state?.mode ? { mode: state.mode, generation: state.generation } : null;
@@ -9263,17 +9367,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         fastMode: getSessionFastMode(sessionId),
       } : null;
     },
-    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted }) =>
+    dispatch: ({ targetSessionId, message, persistedContent, clientId, onAccepted, dispatcherSessionId }) =>
       dispatchBotSessionMessage({
         targetSessionId,
         message,
         persistedContent,
         clientId,
         onAccepted,
+        dispatcherSessionId,
       }),
     abortSession: (async (sessionId) => {
-      const session = maker.getSession(sessionId);
-      if (session?.isTurnRunning?.()) await session.abort();
+      await inputCoordinator.ensureQueueRestored(sessionId);
+      resetAutomaticRecoveryForExplicitStop(sessionId);
+      contextOverflowRolloverHolder?.cancelRecovery(sessionId);
+      await pauseGoalBeforeExplicitStop(sessionId);
+      inputCoordinator.stop(sessionId);
+      await awaitAgentInputQueueSnapshotPersistence(sessionId);
     }),
     closeSession: (sessionId) => maker.closeSession(sessionId),
     broadcastSessionCreated,
@@ -12030,6 +12139,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         throwIpcError('NOT_FOUND', 'Session does not exist');
       }
       if (blocked) throwIpcError('PRECONDITION_FAILED', blocked);
+      if (inputCoordinator.isExecutionPaused(sessionId)) {
+        throwIpcError('PRECONDITION_FAILED', 'Task is paused; resume it before continuing');
+      }
       return sendToAgentAcceptedUnlocked(...args);
     });
   };
@@ -13144,7 +13256,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       signals: InterruptedTurnErrorSignals,
       item: AgentInputQueuedMessage,
     ) => {
-      if (!isInterruptedTurnError(signals)) return null;
+      if (!isInterruptedTurnError(signals) || inputCoordinator.isExecutionPaused(sessionId)) return null;
       const erroredAt = Date.now();
       const decision = interruptedTurnAutoResumeGuard.onInterruptedTurn(sessionId, erroredAt);
       if (decision.action !== 'resume') {
@@ -13615,7 +13727,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     persistQueueSnapshot: (sessionId, items) => saveAgentInputQueueSnapshot(sessionId, items),
     loadClearBoundary: async (sessionId) =>
       (await getSessionRowSnapshotStrict(sessionId))?.clearedAt,
-    loadQueueSnapshot: (sessionId) => loadAgentInputQueueSnapshot(sessionId),
+    loadQueueSnapshot: async (sessionId) => {
+      // Rehydrate durable task holds before any entry point can drain restored/new input.
+      await botDelegationServiceHolder?.restorePauseForSession(sessionId);
+      return loadAgentInputQueueSnapshot(sessionId);
+    },
     getPersistedClientIds: getPersistedInputClientIds,
   });
   agentInputCoordinatorHolder = inputCoordinator;

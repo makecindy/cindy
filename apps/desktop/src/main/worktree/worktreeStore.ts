@@ -213,9 +213,14 @@ export async function replace(
   previousSessionId: string,
   sessionId: string,
   meta: WorktreeMeta,
+  expected?: WorktreeMeta,
 ): Promise<void> {
   if (!sessionId) throw new Error('worktreeStore.replace: sessionId is required');
   await mutateRegistry((map) => {
+    if (expected && (JSON.stringify(map[previousSessionId]) !== JSON.stringify(expected)
+      || (previousSessionId !== sessionId && map[sessionId]))) {
+      throw new Error('Worktree ownership changed during transfer');
+    }
     if (previousSessionId && previousSessionId !== sessionId) delete map[previousSessionId];
     map[sessionId] = meta;
   });

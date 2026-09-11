@@ -27,7 +27,7 @@ export interface ManagedRecycleOptions {
 /** Pool reset is destructive too: preserve the old generation before clean/reset. */
 export async function checkpointWorktreeForReuse(meta: WorktreeMeta): Promise<void> {
   const current = store.get(meta.sessionId);
-  if (!current || worktreeGeneration(current) !== worktreeGeneration(meta) || await hasOtherGeneration(meta)) throw new Error('pooled generation changed');
+  if (!current || current.pendingSessionTransfer || worktreeGeneration(current) !== worktreeGeneration(meta) || await hasOtherGeneration(meta)) throw new Error('pooled generation changed');
   await assertManagedResourcePath(meta, store.getAllPaths());
   await assertWorktreeGitIdentity(meta);
   if (hasLiveSessionReference(meta, await loadLiveSessionPathKeys({ contextPath: meta.path }))) {
@@ -91,6 +91,7 @@ export async function recycleManagedWorktree(meta: WorktreeMeta, options: Manage
 async function recycleManagedWorktreeInSlot(meta: WorktreeMeta, options: ManagedRecycleOptions): Promise<boolean> {
   return withWorktreeResourceLock(meta.path, () => withLegacyWorktreeRuntimeGuard(async (legacyGuardHeld) => {
     const registered = store.get(meta.sessionId);
+    if (registered?.pendingSessionTransfer) return false;
     if (registered && worktreeGeneration(registered) !== worktreeGeneration(meta)) return false;
     if (await hasOtherGeneration(meta)) return false;
     let record = await readRecycleRecord(meta.path);
