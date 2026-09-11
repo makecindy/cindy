@@ -1235,6 +1235,7 @@ export default function NewRemoteSessionScreen() {
   })
     || (worktreeEnabled && (
       worktreeBranchPreferenceSaving
+      || (worktreeEligibility.status === 'eligible' && !worktreeBranchPreferenceReady)
       || (worktreeBranchPreferenceTransactionRef.current?.key === worktreeBranchPreferenceKey
         && worktreeBranchPreferenceTransactionRef.current.status === 'unknown')
     ));
@@ -1244,8 +1245,10 @@ export default function NewRemoteSessionScreen() {
     ?? (worktreeBranchPreferenceError ? 'session.new.worktreeBranchSyncFailed' : null);
   const resolveWorktreeCreateErrorKey = useCallback(() => (
     worktreeEligibilityCaptionKey(worktreeEligibilityRef.current)
-      ?? 'session.new.worktreeBranchSaving'
-  ), []);
+      ?? (worktreeBranchPreferenceError
+        ? 'session.new.worktreeBranchSyncFailed'
+        : 'session.new.worktreeBranchSaving')
+  ), [worktreeBranchPreferenceError]);
 
   useLayoutEffect(() => {
     worktreePreferenceRenderedRef.current = {
@@ -1389,7 +1392,10 @@ export default function NewRemoteSessionScreen() {
       || currentEligibility.baseRepo !== intent.eligibility.baseRepo
     ) return false;
     const branchTransaction = worktreeBranchPreferenceTransactionRef.current;
-    return worktreeBranchPreferenceSyncKeyRef.current === intent.branchPreferenceSyncKey
+    // A missing branch snapshot may only be a pending read, not host consent
+    // to use the detected branch. Checkbox defaults remain independent.
+    return worktreeBranchPreferenceReadyKeyRef.current === intent.branchPreferenceSyncKey
+      && worktreeBranchPreferenceSyncKeyRef.current === intent.branchPreferenceSyncKey
       && worktreeBranchPreferenceWriteTargetRef.current !== intent.branchPreferenceKey
       && !(
         branchTransaction?.key === intent.branchPreferenceKey

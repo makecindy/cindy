@@ -85,6 +85,7 @@ const bindingsNames = [
   'selectedDeviceId', 'connectionEpoch', 'presenceVersion', 'deviceLinkStatus', 'deviceLinkStatusRef',
   'creating', 'creatingRef', 'draft', 'maker', 'openLink', 'worktreeEligibility',
   'worktreeHostSupportsRecoveryKeyDiscard', 'worktreeBranchPreferenceSaving',
+  'worktreeBranchPreferenceReady', 'worktreeBranchPreferenceReadyKeyRef',
   'worktreeBranchPreferenceError', 'worktreeBranchPreferenceKey', 'worktreeBranchPreferenceSyncKey',
   'worktreeBranchPreferenceSyncKeyRef', 'worktreeBranchPreferenceWriteTargetRef',
   'worktreeBranchPreferenceTransactionRef', 'worktreeBranchTargetRef',
@@ -142,6 +143,8 @@ function mount(remembered?: boolean) {
     openLink: vi.fn(async () => {}), worktreeEligibility: eligibility as NewSessionWorktreeEligibility,
     worktreeHostSupportsRecoveryKeyDiscard: true,
     worktreeBranchPreferenceSaving: false, worktreeBranchPreferenceError: false,
+    worktreeBranchPreferenceReady: true,
+    worktreeBranchPreferenceReadyKeyRef: { current: 'branch-generation' as string | null },
     worktreeBranchPreferenceKey: `${deviceId}\0/repo`, worktreeBranchPreferenceSyncKey: 'branch-generation',
     worktreeBranchPreferenceSyncKeyRef: { current: 'branch-generation' },
     worktreeBranchPreferenceWriteTargetRef: { current: null as string | null },
@@ -211,6 +214,36 @@ for (const entry of ['create', 'createGoalSession'] as const) {
       expect(intent.enabled).toBe(false);
       expect(h.state.isWorktreeCreateIntentCurrent(intent)).toBe(true);
       expect(h.state[entry]()?.enabled).toBe(true);
+    });
+
+    it('waits for the source branch after project selection or reconnect, but OFF remains usable', () => {
+      const h = mount(true);
+      h.bindings.worktreeBranchPreferenceReady = false;
+      h.bindings.worktreeBranchPreferenceReadyKeyRef.current = null;
+      h.render();
+      expect(h.state.worktreeCreateBlocked).toBe(true);
+      expect(h.state[entry]()).toBeUndefined();
+      h.bindings.worktreeBranchPreferenceError = true;
+      h.render();
+      expect(h.state[entry]()).toBeUndefined();
+      expect(entry === 'create' ? h.bindings.setError : h.bindings.setGoalError)
+        .toHaveBeenLastCalledWith('session.new.worktreeBranchSyncFailed');
+      let intent: Intent | undefined;
+      act(() => { h.state.toggleWorktree(); intent = h.state[entry](); });
+      expect(intent?.enabled).toBe(false);
+    });
+
+    it('captures the confirmed host branch instead of the temporary detected branch', () => {
+      const h = mount(true);
+      h.bindings.worktreeBranchPreferenceReady = false;
+      h.bindings.worktreeBranchPreferenceReadyKeyRef.current = null;
+      h.render();
+      expect(h.state[entry]()).toBeUndefined();
+      h.bindings.worktreeSourceBranchRef.current = 'release';
+      h.bindings.worktreeBranchPreferenceReady = true;
+      h.bindings.worktreeBranchPreferenceReadyKeyRef.current = 'branch-generation';
+      h.render();
+      expect(h.state[entry]()?.sourceBranch).toBe('release');
     });
 
     it('keeps genuine eligibility and explicit branch-write failures blocking an enabled worktree', () => {
