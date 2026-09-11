@@ -39,6 +39,8 @@ import { sanitizeGhostNoticeText } from './notifySlot.js';
 
 /** 会话判重/创建/聚焦服务(maker-ipc 初始化完成后经 setter 注入)。 */
 export interface WorkspaceSessionService {
+  /** Capture live authority once; queued creation and late confirmations must revalidate it. */
+  captureSessionAuthorization?(sessionId: string, instanceId?: string): (() => boolean) | null;
   reviewPermissionAction?(sessionId: string, instanceId: string, action: ReviewableAction): Promise<AutoReviewDecision>;
   /**
    * 按目录判重:命中返回已有 active 会话 id(口径 = 侧边栏"同一工作区",
@@ -200,7 +202,12 @@ export class GhostWorkspaceSlot {
           '本次调用没有会话语境,无法向用户弹确认卡;请改用 mode:"pick" 让用户亲自选目录',
         );
       }
+      const authorization = service.captureSessionAuthorization?.(ctx.sessionId, ctx.sessionInstanceId);
+      if (service.captureSessionAuthorization && !authorization) {
+        return fail('PERMISSION_DENIED', 'The originating task cannot authorize this workspace operation.');
+      }
       callIsCurrent = () => {
+        if (authorization && !authorization()) return false;
         const current = this.deps.resolveCallContext(request.callId as string);
         return current?.ghostId === ctx.ghostId && current?.sessionId === ctx.sessionId
           && current?.sessionInstanceId === ctx.sessionInstanceId;

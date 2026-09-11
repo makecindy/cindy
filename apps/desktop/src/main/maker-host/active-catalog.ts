@@ -357,7 +357,7 @@ function preserveNonGrok46DiscoveryEfforts(
   models: readonly CatalogModel[],
   discovered: readonly XaiDiscoveredModel[],
 ): CatalogModel[] {
-  if ((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion === 4) return [...models];
+  if (((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion ?? 0) >= 4) return [...models];
   const byId = new Map(discovered.map((entry) => [entry.id, entry]));
   return models.map((model) => {
     const entry = byId.get(model.id) ?? byId.get(`xai/${model.id}`);
@@ -836,7 +836,7 @@ function assembleRoot(
     });
   }
   const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
-  if (registry?.schemaVersion === 4) {
+  if ((registry?.schemaVersion ?? 0) >= 4) {
     const live = new Map(models.map((model) => [model.id, model]));
     out = out.map((model) => {
       const upstream = live.get(model.id);
@@ -874,7 +874,7 @@ function applyLayeredConsumer(
 ): CatalogModel {
   const overlaid = applyRegistryConsumerOverlay(model, providerId, agent, model.id, plan);
   const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
-  return registry?.schemaVersion === 4
+  return (registry?.schemaVersion ?? 0) >= 4
     ? applyModelMetadata(
         overlaid,
         resolveModelMetadata(
@@ -1188,7 +1188,7 @@ function computeMerged(): Catalog {
             ...(model.contextWindowMax !== undefined
               ? { contextWindowMax: model.contextWindowMax }
               : {}),
-            ...((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion !== 4 &&
+            ...(((base ?? BUNDLED_CATALOG).modelRegistry?.schemaVersion ?? 0) < 4 &&
             model.supportsFastMode === false
               ? { supportsFastMode: false }
               : {}),
@@ -1374,7 +1374,7 @@ function computeMerged(): Catalog {
         ]);
         const registryDefault = registryEntry ? modelDefaultEffort(registryEntry) : undefined;
         const intent =
-          b.modelRegistry?.schemaVersion === 4
+          (b.modelRegistry?.schemaVersion ?? 0) >= 4
             ? (ov.defaultEffort ?? gm.defaultEffort ?? defaultEffortForCapabilities(efforts))
             : registryDefault !== undefined
               ? registryDefault
@@ -1495,7 +1495,7 @@ function computeMerged(): Catalog {
                 )?.entry
               : undefined;
           const intent =
-            b.modelRegistry?.schemaVersion !== 4 && entry ? modelDefaultEffort(entry) : undefined;
+            (b.modelRegistry?.schemaVersion ?? 0) < 4 && entry ? modelDefaultEffort(entry) : undefined;
           const defaultEffort =
             intent !== undefined
               ? model.efforts.length === 0
@@ -1582,7 +1582,7 @@ function computeMerged(): Catalog {
           let next = model;
           const metadataProviderId = providerCatalogId(provider);
           if (
-            b.modelRegistry?.schemaVersion === 4 &&
+            (b.modelRegistry?.schemaVersion ?? 0) >= 4 &&
             (provider.source !== 'user' || !!provider.auth.native) &&
             (provider.id === 'xd' || agent === 'pi')
           ) {

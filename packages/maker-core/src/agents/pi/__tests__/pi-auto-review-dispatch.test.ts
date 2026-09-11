@@ -4783,10 +4783,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   /**
-   * 放宽档位不得替用户批准他还没表态的**高风险**调用:prompt-each-time 的挂起卡在切到
-   * Full access 时仍按 fail-closed 拒绝(与 CC / Codex 的 forcePrompt 语义一致)。
+   * MCP 逐次审批不能覆盖 Full access；已挂起的操作审批也按新档位结算。
    */
-  it('keeps a pending prompt-each-time card fail-closed even when the mode widens', async () => {
+  it('allows a pending prompt-each-time card when switching to Full access', async () => {
     const handle = await start('ask', undefined, false, {
       serverNames: ['cindy_ssh'],
       policy: () => 'prompt-each-time',
@@ -4800,7 +4799,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(await waitForResponse('r27')).toEqual({
       type: 'extension_ui_response',
       id: 'r27',
-      confirmed: false,
+      confirmed: true,
     });
   });
 
@@ -4814,8 +4813,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       policy: () => 'prompt-each-time',
     });
     handle.setInteractionResolver?.(async () => {
-      // 用户点「拒绝」的同一时刻切到 Full access。
-      await handle.setPermissionMode?.('bypassPermissions');
       return { kind: 'permission', behavior: 'deny' } as never;
     });
     firePermissionRequest('r25', 'mcp__cindy_ssh__ssh_exec', {
@@ -4826,6 +4823,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       id: 'r25',
       confirmed: false,
     });
+    await handle.setPermissionMode?.('bypassPermissions');
+    expect(await waitForResponse('r25')).toMatchObject({ confirmed: false });
   });
 
   /**

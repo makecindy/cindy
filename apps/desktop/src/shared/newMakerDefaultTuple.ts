@@ -95,14 +95,17 @@ function matchingModel(
   modelIds: readonly string[],
   requireNewSessionDefault = false,
   requireImageInput = false,
+  enabled?: (agent: AgentKind, providerId: string, model: { id: string; defaultEnabled?: boolean }) => boolean,
 ) {
   const models = provider.models[agent] ?? [];
-  return modelIds
-    .map((id) => models.find((model) => model.id === id))
+  const preferred = modelIds.map((id) => models.find((model) => model.id === id));
+  // Once the owner has an enabled list, a disabled factory recommendation must
+  // yield to another enabled model from this source, never bypass that list.
+  return (enabled ? [...preferred, ...models] : preferred)
     .find(
       (model) =>
         model !== undefined &&
-        model.defaultEnabled !== false &&
+        (enabled ? enabled(agent, provider.id, model) : model.defaultEnabled !== false) &&
         (!requireNewSessionDefault || model.newSessionDefault?.includes(agent) === true) &&
         (!requireImageInput || supportsImageInput(model)) &&
         isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
@@ -120,6 +123,7 @@ export function resolveNewMakerDefaultTuples(args: {
   providersLoading: boolean;
   availableAgents: ReadonlySet<MakerVendor>;
   availableAgentsLoaded: boolean;
+  isModelEnabled?: (agent: AgentKind, providerId: string, model: { id: string; defaultEnabled?: boolean }) => boolean;
 }): NewMakerDefaultTuple[] {
   const { providers, providersLoading, availableAgents, availableAgentsLoaded } = args;
   if (providersLoading || !availableAgentsLoaded) return [];
@@ -145,6 +149,7 @@ export function resolveNewMakerDefaultTuples(args: {
         policy.modelIds,
         policy.requireNewSessionDefault,
         policy.requireImageInput,
+        args.isModelEnabled,
       );
       if (!model) continue;
       tuples.push({

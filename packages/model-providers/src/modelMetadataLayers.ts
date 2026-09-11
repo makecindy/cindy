@@ -4,6 +4,7 @@ import type {
   ModelRegistryEntry,
   ModelRegistryRoute,
   ModelEffort,
+  ModelReferencePriceGroup,
 } from "./modelAccessBean.js";
 
 /** Data only. Membership, credentials, routing and billed prices never inherit. */
@@ -25,6 +26,8 @@ export interface BaseModel {
   id: string;
   aliases: string[];
   defaults: ModelMetadata;
+  /** V5 manufacturer reference tariffs; never actual account billing. */
+  referencePriceGroups?: ModelReferencePriceGroup[];
 }
 export const MODEL_METADATA_FIELDS = [
   "mode",
@@ -429,4 +432,23 @@ export function runtimeUserModelMetadata(
       ? { defaultEffort: m.reasoningDefaultEffort }
       : {}),
   });
+}
+
+/** Select a whole tariff; missing cache fields never borrow from another source. */
+export function referencePricesForRoute(
+  registry: ModelRegistry,
+  entry: ModelRegistryEntry,
+  route: ModelRegistryRoute,
+  officialOnly = false,
+) {
+  // Before V5 the official tariff lived on the route.
+  if (
+    registry.schemaVersion < 5 ||
+    (!officialOnly && route.referencePrices !== undefined)
+  )
+    return route.referencePrices;
+  if (!entry.modelRef || !route.referencePriceGroup) return undefined;
+  return findBaseModel(registry, entry.modelRef)?.referencePriceGroups?.find(
+    (group) => group.id === route.referencePriceGroup,
+  )?.prices;
 }

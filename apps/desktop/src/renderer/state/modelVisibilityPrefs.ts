@@ -217,17 +217,22 @@ async function withOwnerLock(
       cache, initialization, mayInitializeDefaults, activeOwnerReadyForWrites, activeOwnerMigrationPending, mapCorrupt, adoptionSourceCorrupt,
     ]);
     const before = snapshot();
+    let completed = false;
     try {
       adoptLocalModelVisibility(ownerId);
       readOwnerState(ownerId);
-      return operation();
+      completed = operation();
+      return completed;
     } catch (error) {
       activeOwnerReadyForWrites = false;
       activeOwnerMigrationPending = true;
       throw error;
     } finally {
+      // A no-op catalog/owner refresh must still deliver the effective table:
+      // Main may have cleared its mirror at startup while this persisted table
+      // was already current. Main deduplicates unchanged snapshots.
+      if (completed || snapshot() !== before) mirrorToMain(cache ?? {});
       if (snapshot() !== before) {
-        mirrorToMain(cache ?? {});
         version += 1;
         for (const listener of listeners) listener();
       }
@@ -499,7 +504,7 @@ function subscribe(cb: () => void): () => void {
   };
 }
 
-function getVersion(): number {
+export function getModelVisibilityVersion(): number {
   return version;
 }
 
@@ -796,7 +801,7 @@ export function isModelVisibilityCustomized(agent: AgentKind, providerId: string
  * 开关变更后自动重算(计数 / 过滤后的模型列表)。
  */
 export function useModelVisibilityVersion(): number {
-  return useSyncExternalStore(subscribe, getVersion, getVersion);
+  return useSyncExternalStore(subscribe, getModelVisibilityVersion, getModelVisibilityVersion);
 }
 
 /** 测试用 —— 重置缓存 + 清 localStorage(其它代码不应调用)。 */

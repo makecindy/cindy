@@ -8,6 +8,8 @@
  */
 
 import { app } from 'electron';
+import { collectTeammateGuideMount } from './teammateGuideStore.js';
+import { requestBotRuntimeEpochRefresh } from './botRuntimeEpochRefreshSignal.js';
 import { and, eq } from 'drizzle-orm';
 
 import { migrateBotSkillsIntoProfileFolder } from './botProfileFolder.js';
@@ -56,8 +58,9 @@ export interface BotSkillServiceDeps {
   userDataDir?: string;
   ownerScopeKey?: () => string;
   ownerBoundaryPending?: () => boolean;
+  requestRefresh?: typeof requestBotRuntimeEpochRefresh;
   resolveBotId?: (callerSessionId: string) => Promise<
-    | { ok: true; botId: string }
+    | { ok: true; botId: string; canonicalSessionId?: string | null }
     | { ok: false; errorCode: string; message: string }
   >;
 }
@@ -116,14 +119,16 @@ async function skillHomeOf(
 }
 
 async function defaultResolveBotId(callerSessionId: string): Promise<
-  { ok: true; botId: string } | { ok: false; errorCode: string; message: string }
+  { ok: true; botId: string; canonicalSessionId: string | null } | { ok: false; errorCode: string; message: string }
 > {
   const db = getDbClient().drizzle;
   const [row] = await db
     .select({
       botId: botSessionLinks.botId,
+      canonicalSessionId: botProfiles.canonicalSessionId,
       role: botSessionLinks.role,
       sessionStatus: sessions.status,
+      remoteHostId: sessions.remoteHostId,
       profileStatus: botProfiles.status,
       linkArchivedAt: botSessionLinks.archivedAt,
     })
@@ -141,7 +146,13 @@ async function defaultResolveBotId(callerSessionId: string): Promise<
   if (row.role !== 'canonical' && row.role !== 'delegation') {
     return { ok: false, errorCode: 'BOT_SESSION_READ_ONLY', message: '当前 Bot 历史任务为只读状态' };
   }
-  return { ok: true, botId: row.botId };
+  // Runtime hydration cannot mount the local personal shelf on an SSH host.
+  // Reject before migration/read/write and before refreshing the local canonical.
+  // Device-link callers executing on this desktop still have no remoteHostId.
+  if (row.remoteHostId) {
+    return { ok: false, errorCode: 'REMOTE_SKILLS_UNAVAILABLE', message: '当前远端任务尚未挂载伙伴自有 Skill 存储，不能读取或保存本机 Skill，也不能承诺远端生效' };
+  }
+  return { ok: true, botId: row.botId, canonicalSessionId: row.canonicalSessionId };
 }
 
 function storeError(cause: unknown): { ok: false; errorCode: string; message: string } {
@@ -158,9 +169,8 @@ function storeError(cause: unknown): { ok: false; errorCode: string; message: st
 /**
  * 伙伴把一次做法沉淀成技能(新建或更新同名技能)。
  *
- * 写完**当前会话不会立刻多出一个可调用技能** —— harness 的技能面在 spawn 时冻结。
- * 返回值里的 `effective: 'next-session'` 就是这件事的诚实说明,让模型不要转头去
- * 调一个还没挂上的技能。
+ * 工具面在 spawn 时冻结。保存后请求宿主在安全轮次边界刷新同一个主任务，
+ * 不打断当前轮、授权卡或后台工作；未配置刷新桥的宿主仍诚实返回 next-session。
  */
 export async function saveBotSkillForSession(
   params: { callerSessionId: string; name: string; description: string; body: string; slug?: string },
@@ -169,7 +179,7 @@ export async function saveBotSkillForSession(
   BotSkillResult<{
     skill: BotSkillWireSummary;
     created: boolean;
-    effective: 'next-session';
+    effective: 'next-turn' | 'next-session';
   }>
 > {
   try {
@@ -184,10 +194,14 @@ export async function saveBotSkillForSession(
       ...(params.slug ? { slug: params.slug } : {}),
     });
     assertOwnerBoundary(deps, boundary);
+    const refreshed = await (deps.requestRefresh ?? requestBotRuntimeEpochRefresh)(
+      owner.canonicalSessionId ?? params.callerSessionId, 'resource',
+    );
+    assertOwnerBoundary(deps, boundary);
     return {
       ok: true,
       created,
-      effective: 'next-session',
+      effective: refreshed ? 'next-turn' : 'next-session',
       skill: {
         slug: record.slug,
         name: record.name,
@@ -272,14 +286,17 @@ export async function collectBotOwnSkillMounts(
   deps: BotSkillServiceDeps = {},
 ): Promise<{
   pluginRoot: string;
+  baseline: Awaited<ReturnType<typeof collectTeammateGuideMount>>;
   skills: { name: string; description: string; path: string; filePath: string }[];
 }> {
   const boundary = captureOwnerBoundary(deps);
   const userDataDir = await skillHomeOf(deps, botId, boundary);
   const skills = await listBotSkills(userDataDir, botId);
+  const baseline = await collectTeammateGuideMount(userDataDir);
   assertOwnerBoundary(deps, boundary);
   return {
     pluginRoot: botSkillRootDir(userDataDir, botId),
+    baseline,
     skills: skills.map((item) => ({
       name: item.name,
       description: item.description,

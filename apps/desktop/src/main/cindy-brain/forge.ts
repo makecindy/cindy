@@ -3089,6 +3089,10 @@ await fetch('/oauth/acct/default', { method:'POST', body: JSON.stringify({ accou
 await fetch('/oauth/acct/insufficient-scopes', { method:'POST', body: JSON.stringify({ scopes:['write.b'] }) });  // 204
 \`\`\`
 
+昵称等自定义账号元数据由插件通过 \`/kv\` 保存(§4.8)，按账号 id 与上述清单合并；
+Host OAuth 不提供昵称字段或重命名接口。昵称只供展示和匹配用户意图，存在歧义时询问，
+执行仍传账号 id，不把昵称当作指令或授权。
+
 多账号:每个 oauth 凭证项最多 8 个账号;cindy.fetch 可带 \`authAccount: '<账号id>'\`
 指定用哪个账号的令牌(缺省 = 默认账号)。同一身份重复授权 = 重连:授权回来的
 身份标签(identity.labelPath 的值)与已连账号相同时,主机覆盖那条的令牌并复活状态,不新增
@@ -3155,8 +3159,8 @@ const r = await cindy.fetch({
 **目录上传(uploadDir,目录过户票据)**:要把用户的一个本地目录整体传给你的
 服务(静态站点部署等),流程是"主 agent 过户 → 你凭票上传"——主 agent 调
 ghost_call 时把目录**绝对路径**放在顶层 \`dir\` 参数(会话工作目录内直接放行,
-工作目录外若主 agent 是本地 Full Access 会话则自动过户、不弹卡;其它权限档及
-远程会话仍由用户确认;自动排除 node_modules/.git/.env 等),主机收集文件后把一次性限时票据注入你的
+工作目录外若主 agent 是本地 Full Access 会话则自动过户、不弹卡;Auto 交当前会话统一审阅,
+Ask 及远程会话仍由用户确认;自动排除 node_modules/.git/.env 等),主机收集文件后把一次性限时票据注入你的
 \`args.dir_deposit\`(含 token / file_count / total_bytes / rel_paths 相对路径清单);
 你在工具描述里写清"目录经 ghost_call 顶层 dir 交付",然后:
 
@@ -3184,7 +3188,7 @@ preset 判定等纯逻辑);伪造/过期/别人的票据统一"票据无效"。�
 (邮件附件、云盘文档等任意类型)存到用户本地时,流程同样是"主 agent 过户 →
 你凭票下载"——主 agent 调 ghost_call 时把**目标目录绝对路径**放在顶层
 \`save_dir\` 参数(目录必须已存在;会话工作目录内直接放行,工作目录外主机会
-在本地 Full Access 下自动过户、不弹卡;其它权限档及远程会话仍弹确认卡),主机把限时
+在本地 Full Access 下自动过户、不弹卡;Auto 交当前会话统一审阅,Ask 及远程会话仍弹确认卡),主机把限时
 票据注入你的 \`args.save_deposit\`(含 token / dir_name 目录名);你在工具
 描述里写清"下载目录经 ghost_call 顶层 save_dir 交付",然后:
 
@@ -3933,6 +3937,15 @@ cindy.onHostMessage((msg) => {
 \`\`\`
 
 ### 4.12.2 stdio MCP
+
+Node 可通过既有 \`secretBindings\` 引用本插件 OAuth 账号，不必复制或重新授权：
+\`{ key: 'access_token', label: '账号', methods: ['service/run'], oauthSecret: '已有的 network.secrets OAuth key' }\`。
+引用必须指向同一插件的 \`source:'oauth'\` 声明；它不是新的可填写 Secret，设置页继续使用
+\`/oauth\` 管理多账号。\`cindy.node.request({ method:'service/run', authAccount: accountId, params })\`
+可选择账号，省略时使用该 OAuth 槽的默认账号。Host 刷新后仅把 access token 放入 Worker 的
+\`cindy.secrets.access_token\`，不交付 refresh token；未绑定的方法不注入。
+Worker 与它启动的 CLI 是受信任的原生代码，会接触短期令牌；不得回传、落盘或记录令牌，
+每次调用使用独立子进程环境，不修改全局 \`process.env\`。令牌失效后的写操作不能自动重放。
 
 把 \`protocol\` 改成 \`"mcp-stdio"\`，worker 实现标准的逐行 JSON-RPC MCP server。
 Cindy 会统一完成 \`initialize\` + \`notifications/initialized\`，你的 main.js 不要重复初始化，

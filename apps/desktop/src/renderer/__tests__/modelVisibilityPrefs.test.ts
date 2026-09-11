@@ -1040,6 +1040,20 @@ describe('compact model defaults upgrade', () => {
     expect(restarted.isModelEnabled('pi', 'xd', { id: 'fable-5', defaultEnabled: false })).toBe(false);
   });
 
+  it('resends the effective enabled table on a no-op catalog refresh after Main loses its mirror', async () => {
+    ownerClaim.profileOrigin = 'existing';
+    const prefs = await upgrade();
+    await prefs.setModelVisibility('pi', 'xd', 'gemini', true);
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    const before = memStorage.getItem(scopedKey);
+    syncModelVisibility.mockClear();
+    await prefs.migrateModelVisibilityDefaults('owner-a', 1, [provider]);
+    expect(memStorage.getItem(scopedKey)).toBe(before);
+    expect(syncModelVisibility).toHaveBeenCalledWith('owner-a', 1,
+      expect.objectContaining({ 'pi:xd:gemini': true }),
+      expect.not.objectContaining({ pending: true }));
+  });
+
   it('waits for Main profile creation before writing migration artifacts or consuming defaults', async () => {
     ownerClaim.profileOrigin = 'pending';
     const prefs = await upgrade();

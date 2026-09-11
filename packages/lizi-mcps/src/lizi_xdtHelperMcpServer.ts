@@ -625,7 +625,7 @@ export function createXdtHelperMcpServer(
     // Bot-specific memory, Skills, messaging, delegation and durable notes all
     // live in this single category. Cindy-wide history/control/feedback/handoff
     // stay out of the Bot's discovery loop.
-    if (surface === 'bot') return new Set(['bots']);
+    if (surface === 'bot') return new Set(['bots', 'cindy']);
     return remoteBotOnly || surface === 'restricted' ? new Set() : defaultCategories;
   };
 

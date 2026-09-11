@@ -15,7 +15,15 @@ import {
 } from '../botStore';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { getCachedProvidersSnapshot } from '@/lib/providersSnapshotStore';
+import { getDataOwnerGeneration, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { getPersistedVendorModel } from '@/state/newMakerDraft';
+
+vi.mock('@/state/newMakerDraft', async (importOriginal) => ({
+  ...await importOriginal<typeof import('@/state/newMakerDraft')>(),
+  getDraftForPreferenceSync: () => ({ vendor: 'pi', lastByVendor: { pi: {
+    model: 'z-ai/glm-5.3-flash', providerId: 'xd', effort: 'high',
+  } }, fastModeByModel: {} }),
+}));
 
 vi.mock('@/hooks/useAvailableAgents', () => ({ getCachedAvailableVendors: () => new Set(['cc', 'codex', 'pi']) }));
 
@@ -138,7 +146,7 @@ describe('bot profile store', () => {
     });
   });
 
-  it('defaults new Bots to Pi GLM-5.3-Flash when it is selectable', () => {
+  it('uses Cindy selected default when it is selectable', () => {
     const bot = addBotProfile({ name: 'Pi Bot', description: '' });
     createdIds.push(bot.id);
 
@@ -150,7 +158,7 @@ describe('bot profile store', () => {
     });
   });
 
-  it('selects connected client defaults when GLM-5.3-Flash is unavailable', () => {
+  it('does not replace an unavailable Cindy default with another connected model', async () => {
     setProviders([
       piProvider(
         'openai',
@@ -164,15 +172,8 @@ describe('bot profile store', () => {
       piProvider('xd', false, [piModel('z-ai/glm-5.3-flash')]),
     ]);
 
-    const bot = addBotProfile({ name: 'Fallback Bot', description: '' });
-    createdIds.push(bot.id);
-
-    expect(bot.capabilities).toMatchObject({
-      harness: 'pi',
-      model: 'chatgpt/gpt-5.6-sol',
-      providerId: 'openai',
-      effort: 'medium',
-    });
+    await expect(addBotProfileAndWait({ name: 'Needs default', description: '' }))
+      .rejects.toBeInstanceOf(BotModelSelectionRequiredError);
   });
 
   it('does not create an empty profile when a connected source has no recommended model', async () => {
@@ -241,13 +242,21 @@ describe('bot profile store', () => {
     }
   });
 
-  it('duplicates identity, capabilities, Skills, and appearance without copying chat ownership', async () => {
+  it('returns the original Cindy instead of cloning a renamed preset', async () => {
+    const cindy = addBotProfile({ name: 'Renamed assistant', description: '', templateId: 'cindy' });
+    createdIds.push(cindy.id);
+    const count = getBotProfiles().length;
+    expect(await duplicateBotProfile(cindy.id)).toBe(cindy);
+    expect(getBotProfiles()).toHaveLength(count);
+  });
+
+  it.each(['🔎', `cindy-media://blobs/${'a'.repeat(64)}.png`])('duplicates identity and appearance %s without copying chat ownership', async avatar => {
     const source = addBotProfile({
       name: 'Researcher',
       description: 'Find evidence',
       identitySource: '# SOUL\nResearch carefully.',
       userContextSource: '# USER\nChris',
-      avatar: '🔎',
+      avatar,
       avatarColor: 'blue',
       skills: ['web-research'],
       capabilities: { permissions: 'trusted' },
@@ -270,7 +279,7 @@ describe('bot profile store', () => {
     }));
     const storage = new Map<string, string>();
     vi.stubGlobal('window', {
-      electronAPI: { localDb: { bots: { create } } },
+      electronAPI: { localDb: { bots: { create } }, readCachedImageAsBase64: vi.fn(async () => ({ base64: 'iVBORw0KGgo=', mimeType: 'image/png' })) },
       localStorage: {
         getItem: (key: string) => storage.get(key) ?? null,
         setItem: (key: string, value: string) => storage.set(key, value),
@@ -285,7 +294,7 @@ describe('bot profile store', () => {
         description: 'Find evidence',
         identitySource: '# SOUL\nResearch carefully.',
         userContextSource: '# USER\nChris',
-        avatar: '🔎',
+        avatar,
         avatarColor: 'blue',
         skills: ['web-research'],
         hiddenAt: null,
@@ -295,6 +304,7 @@ describe('bot profile store', () => {
       expect(copy.canonicalSessionId).toBeUndefined();
       expect(create).toHaveBeenCalledWith(expect.objectContaining({
         name: 'Researcher-2',
+        ...(avatar.startsWith('cindy-media:') ? { avatarImageBase64: 'iVBORw0KGgo=' } : {}),
         identitySource: '# SOUL\nResearch carefully.',
         capabilities: expect.objectContaining({ permissions: 'trusted' }),
       }));
@@ -303,9 +313,31 @@ describe('bot profile store', () => {
     }
   });
 
-  it('replaces the optimistic Bot with the authoritative profile returned by main', async () => {
-    const create = vi.fn(async (input: { id: string }) => ({
-      id: input.id,
+  it.each(['read failure', 'empty image', 'owner switch'])('does not create an avatar-less duplicate after %s', async failure => {
+    const source = addBotProfile({ name: 'Portrait', description: '', avatar: `cindy-media://blobs/${'b'.repeat(64)}.png` });
+    createdIds.push(source.id);
+    const before = getBotProfiles().length;
+    const owner = getDataOwnerGeneration();
+    const create = vi.fn();
+    vi.stubGlobal('window', { electronAPI: { localDb: { bots: { create } }, readCachedImageAsBase64: async () => {
+      if (failure === 'read failure') throw new Error('missing image');
+      if (failure === 'empty image') return { base64: '', mimeType: 'image/png' };
+      setDataOwnerGeneration('another-account');
+      return { base64: 'iVBORw0KGgo=', mimeType: 'image/png' };
+    } } });
+    try {
+      await expect(duplicateBotProfile(source.id)).rejects.toThrow();
+      expect(create).not.toHaveBeenCalled();
+      expect(getBotProfiles()).toHaveLength(failure === 'owner switch' ? 0 : before);
+    } finally {
+      setDataOwnerGeneration(owner.dataOwnerId, owner.generation);
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('replaces the optimistic Bot with the authoritative profile and stable ID returned by main', async () => {
+    const create = vi.fn(async (_input: { id: string }) => ({
+      id: 'existing-cindy',
       name: 'Hermes identity bot',
       description: 'Authoritative profile',
       identitySource: '# SOUL\nYou are the real Bot identity.',
@@ -347,6 +379,8 @@ describe('bot profile store', () => {
         templateId: 'lizi',
       });
       createdIds.push(bot.id);
+      expect(bot.id).toBe('existing-cindy');
+      expect(getBotProfiles().some(item => item.id === create.mock.calls[0]![0].id)).toBe(false);
       expect(bot).toMatchObject({
         name: 'Hermes identity bot',
         identitySource: '# SOUL\nYou are the real Bot identity.',

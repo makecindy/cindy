@@ -761,22 +761,12 @@ export function clearProviderModelFast(agent: AgentKind, providerId: string, mod
  * 用于 renderer → main 缓存和 device-link 控制端镜像被控设备的全局模型预设。
  * 深拷贝,调用方拿到的快照不随后续本地改动变化。
  */
-export function snapshotForSeed(): Record<
-  string,
-  {
-    effortByModel: Record<string, Effort>;
-    fastByModel: Record<string, boolean>;
-    thinkingByModel: Record<string, boolean>;
-  }
-> {
-  const out: Record<
-    string,
-    {
-      effortByModel: Record<string, Effort>;
-      fastByModel: Record<string, boolean>;
-      thinkingByModel: Record<string, boolean>;
-    }
-  > = {};
+type ModelMemorySeed = Record<string, Pick<ProviderMemory, 'effortByModel' | 'fastByModel' | 'thinkingByModel'>>;
+export function snapshotForSeed(): ModelMemorySeed;
+export function snapshotForSeed(expectedOwner: string | null): ModelMemorySeed | null;
+export function snapshotForSeed(expectedOwner?: string | null): ModelMemorySeed | null {
+  if (expectedOwner !== undefined && activeDataOwnerId !== expectedOwner) return null;
+  const out: ModelMemorySeed = {};
   for (const [k, slot] of Object.entries(load())) {
     out[k] = {
       effortByModel: { ...slot.effortByModel },

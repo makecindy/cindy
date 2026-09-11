@@ -253,6 +253,8 @@ export interface RemoteAgentFileOps {
   listDir(dir: string): Promise<string[]>;
   /** Bounded UTF-8 read used for remote runtime metadata such as SKILL.md. */
   readFile(file: string, maxBytes?: number): Promise<string>;
+  /** Bounded UTF-8 tail for native history receipts; absent on older hosts. */
+  readFileTail?(file: string, maxBytes: number): Promise<string>;
   /** Hash the complete remote file without transferring its contents to the client. */
   sha256File(file: string): Promise<string>;
 }
@@ -2265,6 +2267,9 @@ export interface AgentSessionHandle {
 
   /** 当前 maker 进程内记录的计划模式状态；不支持的 agent 不实现。 */
   getPlanMode?(): boolean | null;
+
+  /** Execution authority, including an active one-shot Plan turn after the UI toggle is consumed. */
+  getExecutionPlanMode?(): boolean | null;
 
   /**
    * 把当前会话导出成 HTML 文件,返回写入的绝对路径。

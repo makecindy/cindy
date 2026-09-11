@@ -32,10 +32,12 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   与 Claude Code／Codex 一致，Pi 会话的 Full Access 也会让插件 `ghost_call` 的
   `attachments`／`dir`／`save_dir` 在 Host 侧免去额外过户确认；实现必须现读活跃 Session
   的稳定状态并同时匹配其 runtime instance identity；权限切换或关闭在途、远程／缺会话／
-  实例不匹配／查询失败均 fail closed，且不得扩到 workspace、Setup、安装／更新、OAuth、
-  Secret／凭证等其它授权面。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
+  实例不匹配／查询失败均 fail closed。工作区草稿、工作目录写入和媒体路径揭示等操作审批
+  同样沿用会话权限；MCP 逐次审批标记不得覆盖 Full Access。Setup、OAuth、Secret 的信息
+  输入与安装／更新策略保持原边界。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
   注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏
   instance，使 Full Access 自动交接保持 fail closed。
+  会话审批及切档回归见 [pi-auto-review-dispatch.test.ts](../../packages/maker-core/src/agents/pi/__tests__/pi-auto-review-dispatch.test.ts)。
 - **MCP 桥**:`piEnvironment.ts` 把 in-process MCP providers 暴露成 localhost streamable-HTTP，
   并把用户显式配置的外部 HTTP / Streamable HTTP MCP 作为 direct remote server 装入；旧式
   SSE transport 不在此链支持（但 Streamable HTTP 的 SSE response framing 受支持）。外部 URL

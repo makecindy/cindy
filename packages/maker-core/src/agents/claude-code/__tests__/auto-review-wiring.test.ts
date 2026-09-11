@@ -847,6 +847,26 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     await next.handle.close();
   });
 
+  it.each([false, true])('Auto to Full access retains turn scope without restoring MCP forced prompts (%s)', async (restricted) => {
+    let release!: (decision: { verdict: 'allow' }) => void;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      reviewer, mcpProviderNames: ['cindy'], mcpToolApprovalPolicy: () => 'prompt-each-time',
+    });
+    await handle.send({ type: 'user', content: 'Send the approved report.' }, restricted ? {
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true,
+      },
+    } : undefined);
+    const pending = canUseTool('mcp__cindy__ghost_call', { tool: 'send', args: {} }, { toolUseID: 'scope-switch' });
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.setPermissionMode!('bypassPermissions');
+    release({ verdict: 'allow' });
+    expect(await pending).toMatchObject({ behavior: restricted ? 'deny' : 'allow' });
+    expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
   it('reviewer allow → proceeds silently without hitting the resolver', async () => {
     const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
       reviewVerdict: 'allow',

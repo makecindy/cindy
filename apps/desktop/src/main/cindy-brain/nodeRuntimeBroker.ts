@@ -145,6 +145,10 @@ export interface GhostNodeRuntimeBrokerDeps {
    * 未保存或保险库不可用。调用方不得记录返回值。
    */
   readSecret?: (ghostId: string, secretKey: string) => string | null;
+  /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
+  resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
+    { ok: true; accessToken: string } | { ok: false; error: string }
+  >;
   spawnProcess?: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
   spawnChildProcess?: (
@@ -324,7 +328,7 @@ interface WorkerEntry {
   hardKillTimer: NodeJS.Timeout | null;
   mcpInitPromise: Promise<void> | null;
   stopping: boolean;
-  /** 曾发给本 worker 的凭证明文(退出诊断脱敏用;settleExit 后立即清空)。 */
+  /** 曾发给本 worker 的凭证明文(stderr 及退出诊断脱敏用;settleExit 后立即清空)。 */
   exposedSecretValues: Set<string>;
   /** exit 后 stderr drain 用:非 null 表示进程已退出、正在等待管道排空。 */
   exitDrain: {
@@ -795,10 +799,22 @@ export class GhostNodeRuntimeBroker {
     // getGhost 确认插件当前已启用——这是按需插件的"后更新/重启边界",
     // 清除 stop() 留下的停止标记,使按需进程可以恢复启动。
     this.stoppedGhosts.delete(ghostId);
+    const requestGeneration = this.stopGeneration.get(ghostId) ?? 0;
+    const requestManifest = JSON.stringify(ghost.manifest);
+    const requestStillCurrent = (): boolean => {
+      const current = this.deps.getGhost(ghostId);
+      return !this.destroyed && current?.enabled === true
+        && (this.stopGeneration.get(ghostId) ?? 0) === requestGeneration
+        && JSON.stringify(current.manifest) === requestManifest;
+    };
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return errorResult('INVALID_REQUEST', 'node-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.authAccount !== undefined &&
+      (typeof request.authAccount !== 'string' || request.authAccount.length === 0 || request.authAccount.length > 64)) {
+      return errorResult('INVALID_REQUEST', 'authAccount 必须是 1–64 字符的账号 id');
+    }
     if (request.type !== 'node-request') {
       return errorResult('INVALID_REQUEST', '请求类型必须是 node-request');
     }
@@ -885,7 +901,28 @@ export class GhostNodeRuntimeBroker {
             clearHostSecrets(hostSecrets);
             return errorResult('PERMISSION_DENIED', 'Plugin owner boundary is not stable');
           }
-          const value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+          let value: string | null;
+          if (binding.oauthSecret !== undefined) {
+            const source = ghost.manifest.network?.secrets?.find((s) => s.key === binding.oauthSecret);
+            if (source?.source !== 'oauth' || !source.oauth || !this.deps.resolveOauthSecret) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('PERMISSION_DENIED', 'Node OAuth 凭证声明无效或当前客户端不支持');
+            }
+            const resolved = await this.deps.resolveOauthSecret(
+              ghostId, binding.oauthSecret, request.authAccount as string | undefined,
+            );
+            if (!requestStillCurrent() || !this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('PERMISSION_DENIED', 'Plugin owner boundary is not stable');
+            }
+            if (!resolved.ok) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('PERMISSION_DENIED', '账号不可用，请在插件详情页检查授权');
+            }
+            value = resolved.accessToken;
+          } else {
+            value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+          }
           if (value === null) {
             clearHostSecrets(hostSecrets);
             return errorResult(
@@ -909,6 +946,10 @@ export class GhostNodeRuntimeBroker {
     try {
       entry = await this.ensureWorker(ghost, entryRel, ownerScopeSnapshot);
       this.assertOwnerScopeUsable(ghostId, ownerScopeSnapshot);
+      if (!requestStillCurrent()) {
+        clearHostSecrets(hostSecrets);
+        return errorResult('PERMISSION_DENIED', '插件已停止或更新，请重新发起调用');
+      }
     } catch (error) {
       clearHostSecrets(hostSecrets);
       if (error instanceof WorkerStartError && error.ownerBoundary) {
@@ -933,6 +974,7 @@ export class GhostNodeRuntimeBroker {
         }
       }
       if (hostSecrets) {
+        if (!requestStillCurrent()) return errorResult('PERMISSION_DENIED', '插件已停止或更新，请重新发起调用');
         for (const v of Object.values(hostSecrets)) {
           if (v) entry.exposedSecretValues.add(v);
         }
@@ -1231,6 +1273,7 @@ export class GhostNodeRuntimeBroker {
 
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
+    this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
     this.stoppedGhosts.add(ghostId);
     for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
       this.stopStartingChild(starting);
@@ -1426,6 +1469,8 @@ export class GhostNodeRuntimeBroker {
 
   /** stop(ghostId) 置入:在途重试检测到后立即中止,不继续拉新进程。 */
   private readonly stoppedGhosts = new Set<string>();
+  /** 阻止刷新 OAuth 令牌期间跨停用/升级边界交付旧调用。 */
+  private readonly stopGeneration = new Map<string, number>();
 
   /** 每次 handleExit 递增,settleExit 仅在世代未推进时发布 crashed。 */
   private readonly exitGen = new Map<string, number>();
@@ -1667,12 +1712,15 @@ export class GhostNodeRuntimeBroker {
     child.onControl?.((message) => this.handleWorkerControl(entry, message));
     child.stdout.on('data', (chunk) => this.handleStdout(entry, chunk));
     child.stderr.on('data', (chunk) => {
-      const decoded = entry.stderrDecoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+      // stop/排空结算已清掉令牌集合，不能把迟到输出当作无凭据的新进程日志。
+      if (entry.stopping || (this.workers.get(key) !== entry && !entry.exitDrain)) return;
+      const decoded = this.redactStderrChunk(entry,
+        entry.stderrDecoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk));
       if (entry.startupPhase && entry.startupStderr.length < STARTUP_STDERR_CAP) {
         entry.startupStderr = (entry.startupStderr + decoded).slice(0, STARTUP_STDERR_CAP);
       }
       // 按段带时间戳截存,退出时只取回看窗口内的段,不让老日志被新 chunk 携带。
-      entry.stderrSegments.push({ text: decoded, at: this.now() });
+      if (decoded) entry.stderrSegments.push({ text: decoded, at: this.now() });
       entry.stderrTotalChars += decoded.length;
       // 总量控制:保留尾部 EXIT_STDERR_CAP 字符——部分裁剪最老段的头部。
       if (entry.stderrTotalChars > EXIT_STDERR_CAP) {
@@ -2139,14 +2187,14 @@ export class GhostNodeRuntimeBroker {
     this.clearTimer(entry.exitDrain.timer);
     entry.exitDrain = null;
     // flush stderrDecoder 残留字节(多字节字符被切在最后一个 chunk 边界时)
-    const tail = entry.stderrDecoder.end();
+    const tail = this.redactStderrChunk(entry, entry.stderrDecoder.end());
     if (tail) {
       entry.stderrSegments.push({ text: tail, at: this.now() });
       entry.stderrTotalChars += tail.length;
     }
     const ghostId = entry.ghost.manifest.id;
     const exitHint = this.exitStderrHint(entry, exitedAt);
-    const detail = `${error?.message ?? `code=${code}, signal=${signal ?? 'none'}`}${
+    const detail = `${this.redactSecrets(entry, error?.message ?? `code=${code}, signal=${signal ?? 'none'}`)}${
       exitHint ? `:${exitHint}` : ''
     }`;
     for (const pending of entry.pending.values()) {
@@ -2219,6 +2267,13 @@ export class GhostNodeRuntimeBroker {
       if (text.includes(secret)) text = text.replaceAll(secret, '[REDACTED]');
     }
     return text;
+  }
+
+  private redactStderrChunk(entry: WorkerEntry, chunk: string): string {
+    // 接收过凭据的 Worker 可能打印截断、分块或编码后的令牌，字符串匹配
+    // 无法保证安全。整个 stderr 不落日志/诊断缓存，仅保留输出发生的标记；
+    // 未注入凭据的 Worker 保留原始诊断，RPC 返回结果不受影响。
+    return chunk && entry.exposedSecretValues.size > 0 ? '[REDACTED]' : chunk;
   }
 
   private scheduleIdleStop(entry: WorkerEntry): void {

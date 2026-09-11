@@ -1766,7 +1766,75 @@ describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
     const message = (result as { message?: string }).message ?? '';
     expect(message).toContain('[REDACTED]');
     expect(message).not.toContain('sk-secret-token-12345');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('sk-secret-token-12345');
   });
+
+  it.each([
+    'whole', 'split', 'truncated-log', 'partial-at-exit', 'after-stop', 'after-drain',
+    'partial-newline', 'partial-space', 'partial-single-chunk', 'ordinary-after-injection',
+  ] as const)(
+    'OAuth stderr %s 在主日志及退出诊断中都不泄露令牌', async (scenario) => {
+      const ghost = fakeGhost();
+      ghost.manifest.network = { hosts: ['example.test'], secrets: [{
+        key: 'mail_account', label: 'Mail', source: 'oauth',
+        inject: { header: 'Authorization', format: 'Bearer {value}' },
+        oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+      }] };
+      ghost.manifest.node!.secretBindings = [{ key: 'token', label: 'Mail', methods: ['slow'], oauthSecret: 'mail_account' }];
+      const tokens = ['ya29.fake-access-token-account-A-abcdefgh', 'ya29.fake-access-token-account-B-ijklmnop'];
+      let child!: FakeNodeProcess;
+      const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+      const sendToGhost = vi.fn();
+      const broker = new GhostNodeRuntimeBroker({
+        getGhost: () => ghost, log, sendToGhost,
+        resolveOauthSecret: async (_ghost, _key, account) => ({ ok: true, accessToken: tokens[account === 'b' ? 1 : 0] }),
+        spawnProcess: () => (child = new FakeNodeProcess()),
+      });
+      try {
+        const first = broker.handleRequest('node-ghost', { ...rpcRequest('slow'), authAccount: 'a' });
+        const second = broker.handleRequest('node-ghost', { ...rpcRequest('slow'), authAccount: 'b' });
+        await vi.waitFor(() => expect(child?.received).toHaveLength(2));
+        const token = tokens[0];
+        if (scenario === 'whole' || scenario === 'truncated-log') {
+          child.stderr.write(`${scenario === 'truncated-log' ? 'x'.repeat(4050) : ''}Error: ${token} ${tokens[1]}\n`);
+        } else if (scenario === 'partial-single-chunk') {
+          child.stderr.write(`Error: ${token.slice(0, 18)}\n`);
+        } else if (scenario === 'ordinary-after-injection') {
+          child.stderr.write('ordinary diagnostic after receiving credentials\n');
+        } else if (scenario === 'after-drain') {
+          child.emit('exit', 1, null);
+          // 不发 end，让生产的有界 drain 兜底先结算、清理令牌集合。
+          await Promise.all([first, second]);
+          child.stderr.write(`Error: ${token}\n`);
+        } else {
+          child.stderr.write(`Error: ${token.slice(0, 18)}`);
+          if (scenario === 'after-stop') broker.stop('node-ghost');
+          if (scenario === 'partial-newline' || scenario === 'partial-space') {
+            child.stderr.write(scenario === 'partial-newline' ? '\n' : ' ');
+          } else if (scenario !== 'partial-at-exit') {
+            child.stderr.write(`${token.slice(18)} ${tokens[1]}\n`);
+          }
+        }
+        if (scenario !== 'after-drain') child.emit('exit', 1, null);
+        child.stderr.end();
+        const results = await Promise.all([first, second]);
+        const allOutput = JSON.stringify([log.warn.mock.calls, log.info.mock.calls, log.debug.mock.calls, sendToGhost.mock.calls, results]);
+        // 同时检查 logger 真正收到的参数，不能只 stringify mock 函数本身。
+        const stderrText = log.warn.mock.calls
+          .filter(([message]) => message === 'ghost node stderr')
+          .map(([, meta]) => meta.text).join('');
+        for (const secret of tokens) {
+          expect(allOutput).not.toContain(secret);
+          expect(stderrText).not.toContain(secret);
+        }
+        expect(allOutput).not.toContain(token.slice(0, 18));
+        expect(allOutput).not.toContain('ordinary diagnostic after receiving credentials');
+        if (scenario !== 'after-stop' && scenario !== 'after-drain') expect(allOutput).toContain('[REDACTED]');
+      } finally {
+        broker.destroyAll();
+      }
+    },
+  );
 });
 
 describe('nodeRuntimeBroker · 权限与协议', () => {
@@ -1781,6 +1849,86 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
       errorCode: 'PERMISSION_DENIED',
     });
     expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('OAuth 注入按插件与显式账号解析，且不读取静态 Secret', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.network = { hosts: ['example.test'], secrets: [{
+      key: 'mail_account', label: 'Mail', source: 'oauth',
+      inject: { header: 'Authorization', format: 'Bearer {value}' },
+      oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+    }] };
+    ghost.manifest.node!.secretBindings = [{
+      key: 'access_token', label: 'Mail', methods: ['mail/run'], oauthSecret: 'mail_account',
+    }];
+    let child!: ReturnType<typeof makeAutoReplyProcess>;
+    const readSecret = vi.fn();
+    const resolveOauthSecret = vi.fn(async (_id: string, _key: string, account?: string) => ({
+      ok: true as const, accessToken: `fake-token-${account ?? 'default'}`,
+    }));
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost, readSecret, resolveOauthSecret,
+      // OAuth 解析先异步完成，再创建假进程，避免 spawn 在宿主监听前发出。
+      spawnProcess: () => (child = makeAutoReplyProcess()),
+    });
+    try {
+      await broker.handleRequest('node-ghost', { ...rpcRequest('mail/run'), authAccount: 'account-a' });
+      await broker.handleRequest('node-ghost', { ...rpcRequest('mail/run'), authAccount: 'account-b' });
+      await broker.handleRequest('node-ghost', rpcRequest('mail/run'));
+      await broker.handleRequest('node-ghost', rpcRequest('mail/schema'));
+      expect(resolveOauthSecret.mock.calls).toEqual([
+        ['node-ghost', 'mail_account', 'account-a'],
+        ['node-ghost', 'mail_account', 'account-b'],
+        ['node-ghost', 'mail_account', undefined],
+      ]);
+      expect(readSecret).not.toHaveBeenCalled();
+      expect(child.received[0]).toMatchObject({ cindy: { secrets: { access_token: 'fake-token-account-a' } } });
+      expect(child.received[1]).toMatchObject({ cindy: { secrets: { access_token: 'fake-token-account-b' } } });
+      expect(child.received[3]).not.toHaveProperty('cindy');
+    } finally { broker.destroyAll(); }
+  });
+
+  it('OAuth 无可用账号时不启动 Worker、不回退到静态凭据', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.network = { hosts: ['example.test'], secrets: [{
+      key: 'mail_account', label: 'Mail', source: 'oauth',
+      inject: { header: 'Authorization', format: 'Bearer {value}' },
+      oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+    }] };
+    ghost.manifest.node!.secretBindings = [{
+      key: 'access_token', label: 'Mail', methods: ['mail/run'], oauthSecret: 'mail_account',
+    }];
+    const spawnProcess = vi.fn();
+    const readSecret = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost, readSecret, spawnProcess,
+      resolveOauthSecret: async () => ({ ok: false, error: 'NO_ACCOUNT' }),
+    });
+    const result = await broker.handleRequest('node-ghost', rpcRequest('mail/run'));
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(readSecret).not.toHaveBeenCalled();
+    expect(spawnProcess).not.toHaveBeenCalled();
+    broker.destroyAll();
+  });
+
+  it('OAuth 刷新跨越停用再启用时不把旧调用交给新 Worker', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.network = { hosts: ['example.test'], secrets: [{
+      key: 'mail_account', label: 'Mail', source: 'oauth',
+      inject: { header: 'Authorization', format: 'Bearer {value}' },
+      oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+    }] };
+    ghost.manifest.node!.secretBindings = [{ key: 'access_token', label: 'Mail', methods: ['run'], oauthSecret: 'mail_account' }];
+    let finish!: (value: { ok: true; accessToken: string }) => void;
+    const token = new Promise<{ ok: true; accessToken: string }>((resolve) => { finish = resolve; });
+    const spawnProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess, resolveOauthSecret: () => token });
+    const request = broker.handleRequest('node-ghost', rpcRequest('run'));
+    broker.stop('node-ghost');
+    finish({ ok: true, accessToken: 'fake-token' });
+    expect(await request).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(spawnProcess).not.toHaveBeenCalled();
+    broker.destroyAll();
   });
 
   it('只在清单绑定的方法中把 safeStorage 凭证注入 Worker 保留字段', async () => {

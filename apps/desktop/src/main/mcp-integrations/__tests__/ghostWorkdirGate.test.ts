@@ -17,6 +17,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import type { AttachmentGrantDeps } from '../../cindy-brain/attachmentGrant';
 import type {
   GhostSetupEnsureRequest,
   GhostSetupEnsureResult,
@@ -192,8 +193,8 @@ vi.mock('../../cindy-brain/ghostSetupCoordinator.js', () => ({
   }),
 }));
 // 以下依赖在本测试路径上不会被触达,但 import 副作用重,一律断开。
-vi.mock('../../cindy-brain/attachmentGrant.js', () => ({
-  GrantPolicyError: class extends Error {},
+vi.mock('../../cindy-brain/attachmentGrant.js', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../../cindy-brain/attachmentGrant.js')>(),
   grantAttachmentsToGhost: grantAttachmentsMock,
   MAX_GRANT_ATTACHMENTS: 4,
   MAX_GRANT_ONLY_ATTACHMENTS: 32,
@@ -749,23 +750,13 @@ describe('写路径 roundtrip(真实存储,tmp userData)', () => {
   });
 });
 
-describe('connect_account frozen plugin policy', () => {
-  it.each([
-    { __cindyAllowedBuiltinPluginIds: ['other'] },
-    { __cindyDisabledBuiltinPluginIds: ['art'] },
-  ])('rejects a disabled plugin before creating a card: %j', async (policy) => {
-    const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', policy);
-    await expect(deps.connectAccount!({ kind: 'plugin', id: 'art' })).resolves.toMatchObject({
-      ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR',
-    });
-    expect(authorizationRequestMock).not.toHaveBeenCalled();
-  });
-
-  it('allows an enabled plugin and keeps Host login independent of plugin policy', async () => {
+describe('connect_account shares Host live plugin policy', () => {
+  it('passes dynamically discovered plugins to Host without treating builtin toolsets as plugin grants', async () => {
     const deps = makeDeps('claude-code', 'bot-session', 'bot-instance', {
-      __cindyAllowedBuiltinPluginIds: ['art'],
+      __cindyAllowedBuiltinPluginIds: ['memory', 'xdt_helper'],
     });
     await deps.connectAccount!({ kind: 'plugin', id: 'art' });
+    expect(authorizationRequestMock).toHaveBeenCalledWith('bot-session', { kind: 'plugin', id: 'art' });
     await deps.connectAccount!({ kind: 'host', id: 'grok' });
     expect(authorizationRequestMock).toHaveBeenCalledTimes(2);
   });
@@ -2122,6 +2113,141 @@ describe('Full Access 插件文件交接', () => {
 
 
 describe('Host Auto review', () => {
+  it.each(['bypassPermissions', 'auto', 'ask'].flatMap((permissionMode) =>
+    [false, true].map((grantOnly) => ({ permissionMode, grantOnly })),
+  ))('$permissionMode / grant_only=$grantOnly 在最终授权记账前再次复核', async ({ permissionMode, grantOnly }) => {
+    let current = true;
+    let granting = false;
+    const file = path.join(outsideDir, 'late-ledger.png');
+    fs.writeFileSync(file, 'late-ledger');
+    liveGrantStateMock.mockReturnValue({ permissionMode, remoteHostId: null,
+      isCurrent: () => current, reviewAction: async () => ({ verdict: 'allow' }),
+    });
+    ledgerHasRefMock.mockImplementation(async () => {
+      if (granting) current = false;
+      return false;
+    });
+    const actual = await vi.importActual<typeof import('../../cindy-brain/attachmentGrant')>('../../cindy-brain/attachmentGrant');
+    grantAttachmentsMock.mockImplementationOnce((deps: AttachmentGrantDeps, params) => {
+      granting = true;
+      return actual.grantAttachmentsToGhost({ ...deps,
+        writeBlob: async () => ({ hash: 'a'.repeat(64), ext: '.png', mimeType: 'image/png', bytes: 11 }),
+        recordBlob: async () => {},
+      }, params);
+    });
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file], grantOnly });
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('permissions changed') });
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['dir', 'saveDir'] as const)('%s 在 Full 返回与票据签发之间失效时拒绝', async (lane) => {
+    let current = true;
+    liveGrantStateMock.mockImplementation(() => {
+      queueMicrotask(() => { current = false; });
+      return { permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => current };
+    });
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, [lane]: outsideDir });
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('permissions changed') });
+    expect(dirDepositMock).not.toHaveBeenCalled();
+    expect(saveDepositMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it.each((['claude-code', 'codex', 'pi'] as const).flatMap((agentKind) =>
+    (['attachments', 'dir', 'saveDir'] as const).map((lane) => ({ agentKind, lane })),
+  ))('$agentKind 的 $lane 在派发前失效不能交给插件', async ({ agentKind, lane }) => {
+    let current = true;
+    const file = path.join(outsideDir, 'late-dispatch.png');
+    fs.writeFileSync(file, 'late-dispatch');
+    listMock.mockReturnValue([chipGhost('art', ['tool', 'session-context'])]);
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => current });
+    sessionSnapshotMock.mockImplementationOnce(async () => {
+      current = false;
+      return { workingDir: WORKDIR, permissionMode: 'auto', planModeEnabled: true, remoteHostId: null };
+    });
+    const result = await makeDeps(agentKind).callGhostTool({ ghostId: 'art', tool: 'run', args: {},
+      ...(lane === 'attachments' ? { attachments: [file] } : { [lane]: outsideDir }),
+    });
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('permissions changed') });
+    expect(sessionSnapshotMock).toHaveBeenCalledOnce();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('后一个目录取得新授权，不能替换同一请求中已失效的先前授权', async () => {
+    let generation = 0;
+    liveGrantStateMock.mockImplementation(() => {
+      const captured = generation++;
+      return { permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => generation === captured + 1 };
+    });
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {}, dir: outsideDir, saveDir: outsideDir });
+    expect(result).toMatchObject({ ok: false, message: expect.stringContaining('permissions changed') });
+    expect(dirDepositMock).toHaveBeenCalledOnce();
+    expect(saveDepositMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['bypassPermissions', 'auto', 'ask'] as const)('%s rejects media reveal and file handoff with unavailable Plan authority', async (permissionMode) => {
+    liveGrantStateMock.mockReturnValue({ permissionMode, remoteHostId: null, isCurrent: () => false });
+    const file = path.join(outsideDir, `plan-${permissionMode}.png`);
+    fs.writeFileSync(file, 'png');
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: file, mime_type: 'image/png' });
+    const deps = makeDeps('claude-code', `plan-${permissionMode}`);
+    expect(await deps.callMedia?.({ action: 'resolve_local_path', url })).toMatchObject({ ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED' });
+    expect(await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file] })).toMatchObject({ ok: false });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['auto', 'ask'] as const)('%s cannot return media or hand off files after captured authority changes during approval', async (permissionMode) => {
+    const file = path.join(outsideDir, `late-plan-${permissionMode}.png`);
+    fs.writeFileSync(file, 'png');
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: file, mime_type: 'image/png' });
+    for (const kind of ['media', 'handoff']) {
+      let current = true;
+      liveGrantStateMock.mockReturnValue({ permissionMode, remoteHostId: null, isCurrent: () => current,
+        reviewAction: async () => { current = false; return { verdict: 'allow' }; },
+      });
+      confirmRequestMock.mockImplementation(async () => { current = false; return { confirmed: true, allowDirs: false }; });
+      const deps = makeDeps('pi', `late-plan-${permissionMode}-${kind}`);
+      const result = kind === 'media'
+        ? await deps.callMedia?.({ action: 'resolve_local_path', url })
+        : await deps.callGhostTool({ ghostId: 'art', tool: 'run', args: {}, attachments: [file] });
+      expect(result).toMatchObject({ ok: false });
+      expect(result).not.toHaveProperty('local_path');
+    }
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('rechecks media authority at the final path return after the Full Access shortcut', async () => {
+    let current = true;
+    liveGrantStateMock.mockImplementation(() => {
+      queueMicrotask(() => { current = false; });
+      return { permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => current };
+    });
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: process.execPath, mime_type: 'image/png' });
+    expect(await makeDeps('codex', 'late-full-media').callMedia?.({ action: 'resolve_local_path', url })).toMatchObject({ ok: false, errorCode: 'LOCAL_PATH_REVEAL_DENIED' });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+  });
+
+  it.each(['claude-code', 'codex', 'pi'] as const)('%s media reveal follows Full access and a later switch to Ask', async (agentKind) => {
+    let permissionMode = 'bypassPermissions';
+    const reviewAction = vi.fn();
+    liveGrantStateMock.mockImplementation(() => ({ permissionMode, remoteHostId: null, reviewAction }));
+    const url = `cindy-media://blobs/${'a'.repeat(64)}.png`;
+    callCindyMediaMock.mockResolvedValue({ ok: true, url, local_path: process.execPath, mime_type: 'image/png' });
+    const deps = makeDeps(agentKind, 'full-media');
+    expect(await deps.callMedia?.({ action: 'resolve_local_path', url })).toMatchObject({ ok: true });
+    expect(confirmRequestMock).not.toHaveBeenCalled();
+    expect(reviewAction).not.toHaveBeenCalled();
+    permissionMode = 'ask';
+    await deps.callMedia?.({ action: 'resolve_local_path', url });
+    expect(confirmRequestMock).toHaveBeenCalledOnce();
+  });
+
   it.each(['lookup', 'review'] as const)('media %s failure falls back to real confirmation', async (failure) => {
     const reviewAction = vi.fn(async () => { throw new Error('review unavailable'); });
     liveGrantStateMock.mockImplementation(() => {

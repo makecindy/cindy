@@ -5,22 +5,30 @@ import path from 'node:path';
 
 const state = vi.hoisted(() => ({ root: '' }));
 const notify = vi.hoisted(() => vi.fn());
+const readIdentity = vi.hoisted(() => vi.fn());
 vi.mock('electron', () => ({ app: { getPath: () => state.root } }));
 vi.mock('../worktree/recycleEvents', () => ({ notifyWorktreeRecycleOpportunity: notify }));
+vi.mock('../desktopProcessIdentity', async (importOriginal) => ({
+  ...await importOriginal<typeof import('../desktopProcessIdentity')>(),
+  readDesktopProcessIdentity: readIdentity,
+}));
 
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease, readWorktreeRuntimePaths, retryPendingWorktreeRuntimeLeaseReleases } from '../worktree/runtimeLeases';
 import { physicalWorktreeKey, withWorktreeResourceLock } from '../worktree/resourceLock';
 
 describe('worktree runtime evidence and physical locks', () => {
   let worktree: string;
+  const platformDescriptor = Object.getOwnPropertyDescriptor(process, 'platform')!;
   beforeEach(async () => {
     state.root = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-worktree-runtime-'));
     worktree = path.join(state.root, 'repo', '.cindy-worktrees', 'one');
     await fs.mkdir(path.join(worktree, 'src'), { recursive: true });
     await fs.mkdir(path.join(state.root, '.dev-instances'));
     notify.mockClear();
+    readIdentity.mockReset().mockResolvedValue(null);
   });
   afterEach(async () => {
+    Object.defineProperty(process, 'platform', platformDescriptor);
     vi.restoreAllMocks();
     await fs.rm(state.root, { recursive: true, force: true });
   });
@@ -82,6 +90,121 @@ describe('worktree runtime evidence and physical locks', () => {
     await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'), JSON.stringify({ pid: 4242, worktreeLeaseProtocol: 1 }));
     await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json.bak'), JSON.stringify({ pid: 4242 }));
     expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+    expect(readIdentity).not.toHaveBeenCalled();
+  });
+
+  it('ignores a legacy registration whose PID was reused, but keeps its detached-child lease', async () => {
+    const lease = (await acquireWorktreeRuntimeLease('one', worktree))!;
+    const file = path.join(state.root, '.dev-instances', '4242.json');
+    const raw = JSON.stringify({ pid: 4242, startedAtMs: 10_000 });
+    await fs.writeFile(file, raw);
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockResolvedValue({ startedAtMs: 100_000, executablePath: path.join(state.root, 'chrome.exe') });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set([await physicalWorktreeKey(worktree)]));
+    expect(await fs.readFile(file, 'utf8')).toBe(raw);
+    await releaseWorktreeRuntimeLease(lease);
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+  });
+
+  it('keeps a real legacy Cindy instance protective', async () => {
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'),
+      JSON.stringify({ pid: 4242, startedAtMs: 100_000 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockResolvedValue({ startedAtMs: 99_000, executablePath: process.execPath });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  describe('POSIX SingletonLock PID reuse', () => {
+    const raw = JSON.stringify({ pid: 4242, startedAtMs: 10_000 });
+    const identity = { startedAtMs: 100_000, executablePath: '/usr/bin/other' };
+    beforeEach(async () => {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: 'darwin' });
+      await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'), raw);
+      vi.spyOn(process, 'kill').mockReturnValue(true);
+      vi.spyOn(fs, 'readlink').mockResolvedValue('hostname-4242');
+      readIdentity.mockResolvedValue(identity);
+    });
+
+    it.each(['darwin', 'linux'])('ignores a proven reused lock PID on %s while retaining detached-child leases', async (platform) => {
+      Object.defineProperty(process, 'platform', { ...platformDescriptor, value: platform });
+      const root = path.join(state.root, 'worktree-runtime-leases');
+      await fs.mkdir(root);
+      await fs.writeFile(path.join(root, `4242-${'a'.repeat(64)}.json`),
+        JSON.stringify({ version: 1, pid: 4242, path: worktree }));
+      expect(await readWorktreeRuntimePaths()).toEqual(new Set([worktree]));
+      expect(await fs.readFile(path.join(state.root, '.dev-instances', '4242.json'), 'utf8')).toBe(raw);
+    });
+
+    it('still blocks an unrelated live lock PID without reuse evidence', async () => {
+      vi.mocked(fs.readlink).mockResolvedValue('hostname-4343');
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+
+    it.each([null, { ...identity, executablePath: '/opt/Cindy.app/Contents/MacOS/Cindy' }])
+      ('does not waive the lock when identity becomes unavailable or a runtime replaces the process: %j', async (latest) => {
+        readIdentity.mockResolvedValueOnce(identity).mockResolvedValueOnce(latest);
+        expect(await readWorktreeRuntimePaths()).toBeNull();
+      });
+
+    it('does not waive a lock whose target changes during revalidation', async () => {
+      vi.mocked(fs.readlink).mockResolvedValueOnce('hostname-4242').mockResolvedValueOnce('hostname-4343');
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+
+    it.each(['replace', 'remove'])('does not waive the lock when its instance registration changes: %s', async (change) => {
+      readIdentity.mockResolvedValueOnce(identity).mockImplementationOnce(async () => {
+        const file = path.join(state.root, '.dev-instances', '4242.json');
+        if (change === 'remove') await fs.unlink(file);
+        else await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: 200_000 }));
+        return identity;
+      });
+      expect(await readWorktreeRuntimePaths()).toBeNull();
+    });
+  });
+
+  it('keeps a replacement Cindy protective before its new registration is published', async () => {
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'),
+      JSON.stringify({ pid: 4242, startedAtMs: 1 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockResolvedValue({ startedAtMs: 100_000, executablePath: path.join(state.root, 'Cindy.exe') });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('preserves when process identity is unavailable even for a very old registration', async () => {
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'),
+      JSON.stringify({ pid: 4242, startedAtMs: 1 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('rechecks liveness when the process exits during the identity query', async () => {
+    await fs.writeFile(path.join(state.root, '.dev-instances', '4242.json'), JSON.stringify({ pid: 4242 }));
+    vi.spyOn(process, 'kill').mockReturnValueOnce(true).mockImplementation(() => {
+      throw Object.assign(new Error('exited'), { code: 'ESRCH' });
+    });
+    expect(await readWorktreeRuntimePaths()).toEqual(new Set());
+  });
+
+  it('does not apply stale evidence after another instance replaces the registry record', async () => {
+    const file = path.join(state.root, '.dev-instances', '4242.json');
+    await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: 10_000 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockImplementation(async () => {
+      await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: 200_000 }));
+      return { startedAtMs: 100_000, executablePath: path.join(state.root, 'chrome.exe') };
+    });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
+  });
+
+  it('does not trust a backup after a new primary registration appears during the probe', async () => {
+    const file = path.join(state.root, '.dev-instances', '4242.json');
+    await fs.writeFile(`${file}.bak`, JSON.stringify({ pid: 4242, startedAtMs: 10_000 }));
+    vi.spyOn(process, 'kill').mockReturnValue(true);
+    readIdentity.mockImplementation(async () => {
+      await fs.writeFile(file, JSON.stringify({ pid: 4242, startedAtMs: 200_000 }));
+      return { startedAtMs: 100_000, executablePath: path.join(state.root, 'chrome.exe') };
+    });
+    expect(await readWorktreeRuntimePaths()).toBeNull();
   });
 
   it('does not mistake an unreadable live lease for a stopped runtime', async () => {

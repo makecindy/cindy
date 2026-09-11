@@ -1,3 +1,4 @@
+import { botRosterLabel } from '../../../shared/botCreation';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
@@ -408,9 +409,9 @@ function BotsSidebarContent() {
                             'min-w-0 flex-1 truncate text-14 leading-5',
                             unread > 0 ? 'font-medium' : 'font-normal',
                           )}
-                          title={bot.name}
+                          title={botRosterLabel(bot, bots)}
                         >
-                          {bot.name}
+                          {botRosterLabel(bot, bots)}
                         </span>
                         {/* 权限模式仍不在聊天列表挂警告；这里仅显示 Hermes 风格、
                             已持久化且需要用户处理的运行失败。 */}
@@ -513,17 +514,21 @@ function BotsSidebarContent() {
                         <EyeOff size={14} className="mr-2" />
                         {t('bots.list.hide')}
                       </DropdownMenuItem>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        onSelect={() => {
-                          void duplicateBotProfile(bot.id).then((copy) =>
-                            navigate(`/bots/${copy.id}`),
-                          );
-                        }}
-                      >
-                        <Copy size={14} className="mr-2" />
-                        {t('bots.list.duplicate')}
-                      </DropdownMenuItem>
+                      {bot.templateId !== 'cindy' && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem
+                            onSelect={() => {
+                              void duplicateBotProfile(bot.id).then((copy) =>
+                                navigate(`/bots/${copy.id}`),
+                              );
+                            }}
+                          >
+                            <Copy size={14} className="mr-2" />
+                            {t('bots.list.duplicate')}
+                          </DropdownMenuItem>
+                        </>
+                      )}
                       <DropdownMenuSeparator />
                       <DropdownMenuItem
                         className="text-[var(--text-danger)] focus:text-[var(--text-danger)]"
@@ -561,7 +566,7 @@ function BotsSidebarContent() {
                         >
                           <BotAvatar bot={bot} size="sm" />
                           <span className="min-w-0 flex-1 truncate text-13 font-medium">
-                            {bot.name}
+                            {botRosterLabel(bot, bots)}
                           </span>
                         </button>
                         <button
@@ -611,9 +616,9 @@ function BotsSidebarContent() {
                         <BotAvatar bot={bot} size="sm" className="opacity-70" />
                         <span
                           className="min-w-0 flex-1 truncate text-13 font-medium"
-                          title={bot.name}
+                          title={botRosterLabel(bot, bots)}
                         >
-                          {bot.name}
+                          {botRosterLabel(bot, bots)}
                         </span>
                       </button>
                       <button

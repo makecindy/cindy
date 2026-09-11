@@ -2401,6 +2401,9 @@ interface ElectronAPI {
   }) => void;
 
   syncNewMakerDraft: (snapshot: {
+    appDefaultModelRequestId?: string;
+    ownerStamp: import('../shared/dataOwnerPush').DataOwnerPushStamp;
+    selectedRoute?: import('../shared/botModelChain').BotModelRoute;
     lastByVendor: Partial<
       Record<
         'cc' | 'codex' | 'pi',
@@ -2411,6 +2414,10 @@ interface ElectronAPI {
     modelChosenByVendor: Partial<Record<'cc' | 'codex' | 'pi', boolean>>;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
+    providerModelMemory?: Record<string, {
+      effortByModel: Record<string, string>;
+      fastByModel: Record<string, boolean>;
+    }>;
     /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */
     worktreeEnabled: boolean;
   }) => void;
@@ -2441,6 +2448,7 @@ interface ElectronAPI {
   /** 被控端本地 main → 自身 renderer:控制端写穿的草稿「模型 effort/fast」pref(调本地 setter)。 */
   onMakerDraftPrefApply: (
     cb: (payload: {
+      appDefaultSelection?: import('../shared/appDefaultModelSelection').AppDefaultModelSelection;
       agent: 'claude-code' | 'codex' | 'pi';
       providerId: string;
       modelId: string;
@@ -4610,6 +4618,8 @@ interface ElectronAPI {
       }>;
       list: (body?: { lastReadAtByBotId?: Record<string, number> }) => Promise<unknown[]>;
       get: (botId: string) => Promise<unknown>;
+      generateDraft: (body: import('../shared/botCreation').BotCreationRequest) => Promise<import('../shared/botCreation').BotCreationDraft>;
+      generateAvatar: (token: string) => Promise<{ avatarImageBase64: string }>;
       chooseAvatar: (body: { botId: string }) => Promise<{
         canceled: boolean;
         profile?: unknown;

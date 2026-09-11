@@ -593,6 +593,10 @@ export interface BotsUpdateProfileArgs {
   capabilitiesJson: string;
   profileContentChanged: boolean;
   expectedCurrentVersion: number;
+  /** Avatar-only edits do not advance the profile version; migrations also compare the address. */
+  expectedAvatar?: string;
+  /** Storage-only compatibility changes must not reorder the teammate list. */
+  preserveUpdatedAt?: boolean;
   /** Inserted and made authoritative in the same tx as the avatar address. */
   botAvatarRef?: { id: string; hash: string; createdAt: number };
   clearBotAvatarRefs?: boolean;

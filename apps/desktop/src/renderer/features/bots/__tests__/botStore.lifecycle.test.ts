@@ -2,17 +2,18 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/state/newMakerDraft', () => ({
-  getDraft: () => ({
+vi.mock('@/state/newMakerDraft', () => {
+  const snapshot = () => ({
+    vendor: 'cc',
     lastByVendor: {
       cc: { model: '', providerId: null, effort: '', fastMode: false },
       codex: { model: '', providerId: null, effort: '', fastMode: false },
       pi: { model: '', providerId: null, effort: '', fastMode: false },
     },
     fastModeByModel: {},
-  }),
-  getPersistedVendorModel: () => '',
-}));
+  });
+  return { getDraft: snapshot, getDraftForPreferenceSync: snapshot, getPersistedVendorModel: () => '' };
+});
 
 vi.mock('@/lib/modelDefinitions', () => ({
   getDefaultModelForVendor: () => ({ id: 'claude-sonnet-4-6', defaultEffort: 'medium' }),

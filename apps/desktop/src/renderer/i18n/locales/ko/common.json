@@ -7152,6 +7152,7 @@
     }
   },
   "bots": {
+    "creationName": "이름",
     "settingsBack": "설정으로 돌아가기",
     "sidebar": {
       "newTaskWith": "{{name}}와(과) 새 작업 시작"
@@ -7159,28 +7160,7 @@
     "title": "동료",
     "add": "동료 추가",
     "createWizard": {
-      "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요.",
-      "templates": {
-        "cindy": {
-          "title": "Cindy 어시스턴트",
-          "defaultName": "Cindy",
-          "defaultDescription": "바쁜 일상을 정리하고 새로운 아이디어를 듣는 것을 좋아해요. 글쓰기부터 자료, 소소한 일까지 함께 이야기해 봐요."
-        },
-        "dash": {
-          "title": "Dash 회사 CEO",
-          "defaultName": "Dash",
-          "defaultDescription": "좋은 제품과 사업에 호기심이 많아요. 가능성을 깊이 생각하고 함께 결정을 내리는 것을 좋아해요."
-        },
-        "lizi": {
-          "title": "LiZi 엔지니어링 총괄",
-          "defaultName": "LiZi",
-          "defaultDescription": "어려운 문제를 풀고 아이디어를 실제로 만드는 것을 좋아해요. 막히는 일이 있으면 함께 답을 찾아봐요."
-        },
-        "custom": {
-          "title": "사용자 지정"
-        }
-      },
-      "chooseTemplate": "누구를 초대할까요?"
+      "createFailed": "동료를 만들 수 없습니다. 다시 시도하세요."
     },
     "homeFolder": {
       "title": "고급 설정",
@@ -7413,6 +7393,47 @@
       "toolset": "기본 제공 도구",
       "unavailable": "사용 불가",
       "empty": "일치하는 기능이 없습니다"
+    },
+    "guided": {
+      "title": "파트너 만들기",
+      "reviewTitle": "새로운 파트너",
+      "question": "기대하는 점을 간단히 적어 주세요.",
+      "placeholder": "예를 들어, 일상 대화로 영어를 연습하고 표현도 꼼꼼하게 교정받고 싶어요.",
+      "generate": "파트너 생성",
+      "generating": "파트너를 구상하고 있어요…",
+      "generationFailed": "생성하지 못했습니다. 입력 내용은 남아 있으니 다시 시도해 주세요.",
+      "modelRequired": "먼저 Cindy에서 사용 가능한 기본 모델을 선택해 주세요.",
+      "cindyDescription": "Cindy 사용과 도구 연결을 도와드리고 함께 일을 마무리할게요.",
+      "cindySummary": "Cindy 관리, 도구 연결, 일 마무리.",
+      "openCindy": "Cindy 열기",
+      "addCindy": "Cindy 추가",
+      "done": "완료",
+      "editName": "이름 편집",
+      "duplicateName": "같은 이름의 파트너가 있습니다. 구분하기 쉬운 이름을 선택해 주세요.",
+      "introduction": "자기소개",
+      "editIntroduction": "자기소개 편집",
+      "refine": "파트너 조정",
+      "refinePlaceholder": "어떤 점을 바꿀까요? 예를 들어, 조금 더 편하고 유머 있게.",
+      "back": "뒤로",
+      "invite": "파트너 초대",
+      "portrait": "프로필 사진 {{number}}",
+      "upload": "이미지 업로드",
+      "generateAvatar": "프로필 사진 생성",
+      "useAvatar": "이 사진 사용",
+      "examples": {
+        "english": {
+          "label": "영어 연습",
+          "prompt": "일상 대화로 영어를 연습하고 싶어요. 인내심 있게 듣고 부자연스러운 표현을 꼼꼼히 교정해 주세요."
+        },
+        "ideas": {
+          "label": "아이디어 나누기",
+          "prompt": "상상력과 주관을 갖춘 창작 파트너. 글쓰기와 제품 아이디어를 구체적인 계획으로 발전시키고 싶어요."
+        },
+        "life": {
+          "label": "일상 이야기",
+          "prompt": "따뜻하고 유머 있는 파트너. 성급하게 조언하기보다 일상의 작은 이야기를 들어줬으면 해요."
+        }
+      }
     }
   },
   "common": {
