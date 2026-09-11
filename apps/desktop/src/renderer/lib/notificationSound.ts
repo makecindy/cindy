@@ -37,6 +37,8 @@ export const NOTIFICATION_SOUND_START_TIMEOUT_MS = 500;
  */
 export const SESSION_SOUND_COOLDOWN_MS = 1_500;
 
+// performance.now() is monotonic for the lifetime of the renderer, unlike Date.now(),
+// which can jump backwards when the system clock is corrected.
 const lastPlayedAtByKind = new Map<SessionNotificationSoundKind, number>();
 /**
  * 进行中的同 kind 播放尝试(review P2):进入函数时**同步登记**,让同一批
@@ -67,9 +69,13 @@ export async function playSessionEventSound(
   // 冷却合并:刚为同类事件成功播过一声,本次视为已被覆盖——返回 true 让
   // 调用方照常静音其 toast(用户毫秒级前刚听过同一个音,不需要 OS 音再补)。
   // 只统计成功播放:上次失败不进入冷却,下次事件仍会重试(review P1 场景)。
-  const now = Date.now();
-  const lastPlayedAt = lastPlayedAtByKind.get(kind) ?? 0;
-  if (now - lastPlayedAt < SESSION_SOUND_COOLDOWN_MS) {
+  const now = performance.now();
+  const lastPlayedAt = lastPlayedAtByKind.get(kind);
+  if (
+    lastPlayedAt !== undefined &&
+    now >= lastPlayedAt &&
+    now - lastPlayedAt < SESSION_SOUND_COOLDOWN_MS
+  ) {
     return true;
   }
   // 同批并发合并(review P2):登记必须发生在任何 await 之前——并发调用在
@@ -131,7 +137,7 @@ async function playSessionEventSoundInner(
       return false;
     }
     // 只有真实开始播放才进入冷却;超时/中止的失败不占用冷却窗口。
-    lastPlayedAtByKind.set(kind, Date.now());
+    lastPlayedAtByKind.set(kind, performance.now());
     return started;
   } catch (err) {
     stopAudio();

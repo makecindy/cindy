@@ -122,4 +122,15 @@ describe('playSessionEventSound', () => {
     await expect(playSessionEventSound('done')).resolves.toBe(true);
     expect(audioHarness.play).toHaveBeenCalledTimes(2);
   });
+
+  it('does not let a wall-clock rollback extend the cooldown', async () => {
+    audioHarness.play.mockResolvedValue(undefined);
+    await expect(playSessionEventSound('done')).resolves.toBe(true);
+
+    await vi.advanceTimersByTimeAsync(SESSION_SOUND_COOLDOWN_MS + 1);
+    vi.setSystemTime(new Date(Date.now() - 60_000));
+
+    await expect(playSessionEventSound('done')).resolves.toBe(true);
+    expect(audioHarness.play).toHaveBeenCalledTimes(2);
+  });
 });
