@@ -1,9 +1,10 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FileText, GitPullRequest, Megaphone, Square, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 
-import { prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
+import { prStatusKey, sessionPrUrl, type PrStatusKind } from '@cindy/maker-shared';
+import { useAuth } from '@/contexts/AuthContext';
 import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
 import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
 import { Button } from '@/components/ui/button';
@@ -110,6 +111,34 @@ function SessionTaskCardBody({
   const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
   const pullRequests = usePrRefsForSession(childSessionId ?? '');
   const { statuses } = usePrStatuses(childSessionId ?? '');
+  const { dataOwnerId } = useAuth();
+  const prIdentity = JSON.stringify([dataOwnerId, sourceDeviceId, childSessionId]);
+  const successfulPrKinds = useRef<{
+    identity: string;
+    kinds: Map<string, PrStatusKind>;
+    snapshot: typeof statuses;
+  }>({
+    identity: prIdentity,
+    kinds: new Map(),
+    snapshot: statuses,
+  });
+  useEffect(() => {
+    const previous = successfulPrKinds.current;
+    const kinds = new Map<string, PrStatusKind>();
+    const belongsToPreviousOwner =
+      previous.identity !== prIdentity && previous.snapshot === statuses;
+    for (const ref of belongsToPreviousOwner ? [] : pullRequests) {
+      const key = prStatusKey(ref);
+      const result = statuses.get(key);
+      const kind = result?.ok
+        ? result.status
+        : previous.identity === prIdentity
+          ? previous.kinds.get(key)
+          : undefined;
+      if (kind) kinds.set(key, kind);
+    }
+    successfulPrKinds.current = { identity: prIdentity, kinds, snapshot: statuses };
+  }, [prIdentity, pullRequests, statuses]);
   useEffect(() => {
     if (!childSessionId) return;
     return registerPrConsumer(childSessionId, sourceDeviceId);
@@ -121,7 +150,11 @@ function SessionTaskCardBody({
   }, [childSessionId, sourceDeviceId, row?.updatedAt, invalidateRemotePrRefs]);
   const prIcon = (ref: (typeof pullRequests)[number]) => {
     const result = statuses.get(prStatusKey(ref));
-    const kind = result?.ok ? result.status : null;
+    const kind = result?.ok
+      ? result.status
+      : successfulPrKinds.current.identity === prIdentity
+        ? successfulPrKinds.current.kinds.get(prStatusKey(ref))
+        : undefined;
     const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
     return (
       <Icon

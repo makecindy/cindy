@@ -18,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   remoteBots: [] as any[],
   prRefs: [] as any[],
+  dataOwnerId: 'owner-1',
   prStatuses: new Map(),
   registerPrConsumer: vi.fn(() => () => {}),
   invalidateRemotePrRefs: vi.fn(),
@@ -32,6 +33,7 @@ vi.mock('react-i18next', () => ({
 }));
 vi.mock('@/lib/remoteDataOwnerPushFence', () => ({ isDeviceLinkRemotePushCurrent: () => true }));
 vi.mock('../useRemoteBots', () => ({ useRemoteBots: () => mocks.remoteBots }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({ dataOwnerId: mocks.dataOwnerId }) }));
 vi.mock('@/contexts/PrRefsContext', () => ({
   usePrActions: () => ({
     registerPrConsumer: mocks.registerPrConsumer,
@@ -107,6 +109,7 @@ let listBotDelegations: ReturnType<typeof vi.fn>;
 let cancelBotDelegation: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  mocks.dataOwnerId = 'owner-1';
   mocks.prRefs = [];
   mocks.prStatuses = new Map();
   mocks.registerPrConsumer.mockClear();
@@ -509,4 +512,29 @@ it('subscribes to the child session PR state and updates its icon without enlarg
   rerender(<BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />);
   expect(container.querySelector('.lucide-git-merge')).not.toBeNull();
   expect(button.className).toBe(before);
+});
+
+it('retains confirmed PR icons on failures, recovers, and isolates a different owner', async () => {
+  mocks.prRefs = [associatedPr(4)];
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'merged' }]]);
+  listBotDelegations.mockResolvedValue({ ok: true, delegations: [delegation('completed')] });
+  const view = () => <BotSessionTaskCard data={{ ...meta() }} sessionId={SESSION_ID} />;
+  const { rerender, container } = render(view());
+  await screen.findByRole('button', { name: 'bots.collab.viewPr' });
+  for (const reason of ['fetch-failed', 'no-token']) {
+    mocks.prStatuses = new Map([['a/b#4', { ok: false, reason }]]);
+    rerender(view());
+    expect(container.querySelector('.lucide-git-merge')).not.toBeNull();
+    expect(screen.getByText('bots.collab.stale')).toBeTruthy();
+  }
+  mocks.prStatuses = new Map([['a/b#4', { ok: true, status: 'closed' }]]);
+  rerender(view());
+  expect(container.querySelector('.lucide-git-pull-request-closed')).not.toBeNull();
+  expect(screen.queryByText('bots.collab.stale')).toBeNull();
+  mocks.dataOwnerId = 'owner-2';
+  // The provider clears its old snapshot after the owner render. Never retain it as new-owner data.
+  rerender(view());
+  mocks.prStatuses = new Map([['a/b#4', { ok: false, reason: 'no-token' }]]);
+  rerender(view());
+  expect(container.querySelector('.lucide-git-pull-request-closed')).toBeNull();
 });
