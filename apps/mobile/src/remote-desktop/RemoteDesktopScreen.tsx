@@ -859,8 +859,15 @@ export default function RemoteDesktopScreen() {
   useEffect(() => {
     // Route blur means leaving this desktop (including a native back swipe).
     // App background/inactive events use pause() without the exit flag.
-    if (!focused && !presentation.current) pause(true);
-    else if (!active.current) void connectRef.current();
+    if (!focused && !presentation.current) {
+      leaving.current = true;
+      setIsLeaving(true);
+      pause(true);
+    } else if (focused) {
+      leaving.current = false;
+      setIsLeaving(false);
+      if (!active.current) void connectRef.current();
+    }
   }, [focused, pause, videoPreferencesLoaded]);
   useEffect(() => {
     send({
