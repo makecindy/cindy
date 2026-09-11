@@ -136,7 +136,7 @@ describe('BotSettingsDrawer', () => {
     expect(backgroundWheel.defaultPrevented).toBe(true);
   });
 
-  it('opens as a right half-window without replacing the current chat route', async () => {
+  it('opens as a compact right drawer without replacing the current chat route', async () => {
     render(
       <RouterProvider
         router={createMemoryRouter(
@@ -159,7 +159,8 @@ describe('BotSettingsDrawer', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog.className).toContain('right-0');
-    expect(dialog.className).toContain('lg:w-1/2');
+    expect(dialog.className).toContain('w-full');
+    expect(dialog.className).toContain('max-w-md');
     expect(screen.getByTestId('chat-underlay')).toBeTruthy();
     expect(screen.getByTestId('simple-bot-settings')).toBeTruthy();
 
