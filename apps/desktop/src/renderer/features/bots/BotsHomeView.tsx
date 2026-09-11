@@ -340,9 +340,9 @@ export function BotSettings({
     ['advanced', FolderOpen, t('bots.homeFolder.title')],
   ] as const;
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8 sm:px-7">
+    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8">
       <div className="mx-auto w-full max-w-xl">
-        <div className="flex min-h-12 items-center justify-between gap-3">
+        <div className="flex min-h-12 flex-wrap items-center justify-between gap-3">
           {page !== 'home' ? (
             <div className="flex min-w-0 items-center gap-2">
               <button
