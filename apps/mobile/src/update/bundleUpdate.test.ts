@@ -69,6 +69,34 @@ describe('evaluateBundleUpdate', () => {
     expect(r.target?.itmsUrl).toBe(VALID.itmsUrl);
   });
 
+  it.each([
+    ['0.1.4', 'rtv-old', undefined],
+    ['0.1.4', 'rtv-new', undefined],
+    ['0.1.5', 'rtv-old', undefined],
+    ['0.1.5', 'rtv-new', undefined],
+    ['0.1.5.0', 'rtv-old', undefined],
+    ['0.1.4', 'rtv-old', '0.1.6'],
+    ['0.1.5', 'rtv-old', '0.1.6'],
+  ])('本机 0.1.5 忽略服务端 version=%s / runtime=%s / minVersion=%s 的整包', (version, runtimeVersion, minVersion) => {
+    const evaluation = evaluateBundleUpdate({
+      currentRuntimeVersion: 'rtv-new',
+      currentVersion: '0.1.5',
+      latest: { ...VALID, version, runtimeVersion, minVersion, buildNumber: 9999999999 },
+    });
+    expect(evaluation).toEqual({ needsUpdate: false, forced: false, target: null });
+  });
+
+  it('更高的多位 patch 版本 → 普通整包更新(按数值而非字符串比较)', () => {
+    const evaluation = evaluateBundleUpdate({
+      currentRuntimeVersion: 'rtv-old',
+      currentVersion: '0.1.9',
+      latest: { ...VALID, version: '0.1.10' },
+    });
+    expect(evaluation.needsUpdate).toBe(true);
+    expect(evaluation.forced).toBe(false);
+    expect(evaluation.target?.version).toBe('0.1.10');
+  });
+
   it('minVersion 高于当前 → 强制', () => {
     const r = evaluateBundleUpdate({
       currentRuntimeVersion: 'rtv-old',
@@ -82,9 +110,10 @@ describe('evaluateBundleUpdate', () => {
   it('minVersion 不高于当前 → 不强制', () => {
     const r = evaluateBundleUpdate({
       currentRuntimeVersion: 'rtv-old',
-      currentVersion: '1.2.0',
-      latest: { ...VALID, minVersion: '1.2.0' },
+      currentVersion: '1.1.0',
+      latest: { ...VALID, minVersion: '1.1.0' },
     });
+    expect(r.needsUpdate).toBe(true);
     expect(r.forced).toBe(false);
   });
 
@@ -105,23 +134,20 @@ describe('evaluateBundleUpdate', () => {
   it('runtimeVersion 相同且不低于 minVersion → 无更新', () => {
     const r = evaluateBundleUpdate({
       currentRuntimeVersion: 'rtv-new',
-      currentVersion: '1.2.0',
-      latest: { ...VALID, minVersion: '1.2.0' },
+      currentVersion: '1.1.0',
+      latest: { ...VALID, minVersion: '1.1.0' },
     });
     expect(r.needsUpdate).toBe(false);
     expect(r.target).toBeNull();
   });
 
-  it('record 缺 version 但带 minVersion → 不强更(退化成普通提示,不造无法自愈的阻断)', () => {
-    // 无目标版本就无法证明"装上它能解除阻断",阻断态的自愈也失去比较基准。
-    // 发布链侧 assertMinVersionUsable 已保证有 minVersion 必有 version,这里是客户端兜底。
-    const r = evaluateBundleUpdate({
+  it.each([undefined, null, '', '   '])('record version=%s → 不提示(无法证明服务端版本更高)', (version) => {
+    const evaluation = evaluateBundleUpdate({
       currentRuntimeVersion: 'rtv-old',
       currentVersion: '1.0.0',
-      latest: { ...VALID, version: '', minVersion: '1.2.0' },
+      latest: { ...VALID, version, minVersion: '1.2.0' },
     });
-    expect(r.forced).toBe(false);
-    expect(r.needsUpdate).toBe(true); // runtimeVersion 不同 → 仍是可跳过的普通更新
+    expect(evaluation).toEqual({ needsUpdate: false, forced: false, target: null });
   });
 
   it('minVersion 高于该记录自己的 version → 不强更(装完仍低于门槛,阻断屏会没有出口)', () => {
@@ -144,14 +170,13 @@ describe('evaluateBundleUpdate', () => {
     expect(r.forced).toBe(true);
   });
 
-  it('缺 currentVersion → 不强更(无法比较,fail-open)', () => {
-    const r = evaluateBundleUpdate({
-      currentRuntimeVersion: 'rtv-new',
-      currentVersion: null,
+  it.each([undefined, null, '', '   '])('currentVersion=%s → 不提示(无法比较,fail-open)', (currentVersion) => {
+    const evaluation = evaluateBundleUpdate({
+      currentRuntimeVersion: 'rtv-old',
+      currentVersion,
       latest: { ...VALID, minVersion: '1.2.0' },
     });
-    expect(r.needsUpdate).toBe(false);
-    expect(r.forced).toBe(false);
+    expect(evaluation).toEqual({ needsUpdate: false, forced: false, target: null });
   });
 
   it('拿不到当前 runtimeVersion(dev / 未启用)→ 无更新', () => {

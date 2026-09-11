@@ -2,9 +2,9 @@
 //
 // 背景:
 // - expo-updates 只感知"我这个 runtimeVersion 有没有新 JS OTA",不会告知"有更高 runtimeVersion 的整包"。
-// - 所以整包发现靠独立的 `/latest` 通道 + 客户端比对 runtimeVersion:
-//     · latest.runtimeVersion === 当前 runtimeVersion → 无需整包(JS OTA 通道会处理);
-//     · 不同 → 原生层变了,JS OTA 覆盖不到 → 引导用户打开 release record 的正常安装入口。
+// - 所以整包发现靠独立的 `/latest` 通道,先确认服务端 version 高于当前原生版本:
+//     · 服务端版本不高于当前版本 → 不提示整包,不影响独立的 JS OTA 通道;
+//     · 版本更高时比对 runtimeVersion:相同交给 JS OTA,不同则引导打开正常安装入口。
 // - minVersion(可选)用于强制更新:当前 version 低于它则阻断使用、只留"去更新"。
 //   强更判定**不经过 runtimeVersion 门闸**:门槛由服务端按 version 下发,同 runtimeVersion
 //   的旧构建也必须能被强更(否则"发布链写了 minVersion 却对同指纹装机无效")。
@@ -22,7 +22,7 @@ export interface LatestReleaseRecord {
 }
 
 export interface BundleUpdateEvaluation {
-  /** 是否有整包更新(runtimeVersion 与当前不一致)。 */
+  /** 是否有整包更新(服务端版本更高,且 runtimeVersion 不同或命中强更)。 */
   needsUpdate: boolean;
   /** 是否强制(needsUpdate 且当前 version < minVersion)。 */
   forced: boolean;
@@ -100,14 +100,14 @@ export function compareVersions(a: string, b: string): number {
 }
 
 /**
- * 判定是否需要引导整包更新。两条独立信号:
+ * 判定是否需要引导整包更新。服务端 version 必须高于当前原生 version,再检查两条信号:
  * - runtimeVersion 不一致 → 有整包更新(可跳过的普通提示);
  * - 当前 version < minVersion → 强更,**与 runtimeVersion 是否一致无关**。
  *   服务端可以对某个已发布版本事后下发门槛,把同指纹的问题构建也挡住;
  *   反过来说,同 runtimeVersion 命中强更时 target.runtimeVersion 就等于当前值,
  *   消费方不得把它当作"换了指纹"的证据。
- * 拿不到当前 runtimeVersion(dev / expo-updates 未启用)、拿不到当前 version 或
- * `/latest` 无效 → 一律视为无更新(比不出来就不挡人,fail-open)。
+ * 拿不到当前 runtimeVersion(dev / expo-updates 未启用)、本机或服务端 version 缺失、
+ * 服务端版本不高于本机、`/latest` 无效 → 视为无整包更新,不影响独立的 JS OTA 通道。
  */
 export function evaluateBundleUpdate({
   currentRuntimeVersion,
@@ -120,18 +120,18 @@ export function evaluateBundleUpdate({
   const current = String(currentRuntimeVersion ?? '').trim();
   if (!current) return NO_UPDATE;
 
+  const currentAppVersion = String(currentVersion ?? '').trim();
+  if (!currentAppVersion || !record.version) return NO_UPDATE;
+  if (compareVersions(record.version, currentAppVersion) <= 0) return NO_UPDATE;
+
   // 强更要求这条记录本身**能被满足**:
-  // - 带 version:拿不到目标版本就无法证明"装上它就能解除阻断"(阻断态自愈全靠这个
-  //   可比较的版本,见 forcedUpdateRecheck 的新鲜度门);
   // - minVersion ≤ version:否则唯一提供的安装目标仍低于门槛,用户装完照旧被强更,
   //   阻断屏成了没有出口的死屋,只能等运维改指针。
-  // 发布链侧 assertMinVersionUsable 已经保证这两条,这里是客户端兜底(手工改过的 / 历史
+  // 发布链侧 assertMinVersionUsable 已经保证门槛可满足,这里是客户端兜底(手工改过的 / 历史
   // 遗留的指针也不能把人关死):记录不自洽时退化成可跳过的普通更新提示。
   const forced = Boolean(
     record.minVersion &&
-    record.version &&
-    currentVersion &&
-    compareVersions(String(currentVersion), record.minVersion) < 0 &&
+    compareVersions(currentAppVersion, record.minVersion) < 0 &&
     compareVersions(record.version, record.minVersion) >= 0,
   );
 
