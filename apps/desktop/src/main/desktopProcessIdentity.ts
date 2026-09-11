@@ -47,11 +47,24 @@ export async function readDesktopProcessIdentity(
         ['-NoProfile', '-NonInteractive', '-WindowStyle', 'Hidden', '-Command', script], options);
       identity = JSON.parse(stdout);
     } else {
-      const { stdout } = await runCommand('ps', ['-ww', '-p', String(pid), '-o', 'lstart=', '-o', 'comm='],
-        { ...options, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC0' } });
+      const psArgs = ['-ww', '-p', String(pid), '-o', 'lstart=', '-o', 'comm='];
+      const psOptions = { ...options, env: { ...process.env, LC_ALL: 'C', TZ: 'UTC0' } };
+      const { stdout } = await runCommand('ps', psArgs, psOptions);
       const match = /^(\w{3}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/.exec(stdout.trim());
       if (!match) return null;
-      identity = { startedAtMs: Date.parse(`${match[1]} UTC`), executablePath: match[2] };
+      let executablePath = match[2];
+      if (platform === 'linux') {
+        // procps comm is a name, not a path. Read the kernel executable link,
+        // then recheck ps so an observed process change cannot mix identities.
+        const executable = await runCommand('readlink', ['--', `/proc/${pid}/exe`], options);
+        executablePath = executable.stdout.replace(/\n$/, '');
+        // Deleted executables carry a kernel suffix that could hide a runtime
+        // name from the protection checks. Treat that evidence as unknown.
+        if (executablePath.endsWith(' (deleted)')) return null;
+        const after = await runCommand('ps', psArgs, psOptions);
+        if (after.stdout !== stdout) return null;
+      }
+      identity = { startedAtMs: Date.parse(`${match[1]} UTC`), executablePath };
     }
     return validIdentity(identity, platform) ? identity : null;
   } catch {

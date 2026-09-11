@@ -46,11 +46,54 @@ describe('desktop process identity probes', () => {
     }));
   });
 
-  it('keeps truncated POSIX executable evidence unknown', async () => {
-    expect(await readDesktopProcessIdentity(4242, 'linux', async () => ({
+  it('keeps truncated macOS executable evidence unknown', async () => {
+    expect(await readDesktopProcessIdentity(4242, 'darwin', async () => ({
       stdout: 'Fri Sep 11 08:00:00 2026 Cindy',
     }))).toBeNull();
   });
+
+  it.each(['/usr/bin/sleep', '/opt/Other App/other'])
+    ('reads Linux executable paths from procfs when procps only returns a name: %s', async (executablePath) => {
+      const ps = 'Fri Sep 11 08:00:00 2026 sleep\n';
+      const run = vi.fn().mockResolvedValueOnce({ stdout: ps })
+        .mockResolvedValueOnce({ stdout: `${executablePath}\n` }).mockResolvedValueOnce({ stdout: ps });
+      const identity = await readDesktopProcessIdentity(4242, 'linux', run);
+      expect(identity).toEqual({ startedAtMs: Date.parse('2026-09-11T08:00:00Z'), executablePath });
+      expect(run).toHaveBeenNthCalledWith(2, 'readlink', ['--', '/proc/4242/exe'],
+        expect.objectContaining({ timeout: 5_000, maxBuffer: 16 * 1024 }));
+      expect(isReusedDesktopInstancePid({ startedAtMs: 1 }, identity!, 'linux')).toBe(true);
+    });
+
+  it.each(['/usr/bin/node', '/opt/cindy/electron'])
+    ('still protects a Linux runtime identified through procfs: %s', async (executablePath) => {
+      const run = vi.fn().mockResolvedValue({ stdout: 'Fri Sep 11 08:00:00 2026 runtime\n' })
+        .mockResolvedValueOnce({ stdout: 'Fri Sep 11 08:00:00 2026 runtime\n' })
+        .mockResolvedValueOnce({ stdout: `${executablePath}\n` });
+      const identity = await readDesktopProcessIdentity(4242, 'linux', run);
+      expect(identity).not.toBeNull();
+      expect(isReusedDesktopInstancePid({ startedAtMs: 1 }, identity!, 'linux')).toBe(false);
+    });
+
+  it.each(['', 'sleep\n', '/usr/bin/node (deleted)\n'])
+    ('keeps unusable Linux executable evidence unknown: %j', async (executable) => {
+      const ps = 'Fri Sep 11 08:00:00 2026 sleep\n';
+      const run = vi.fn().mockResolvedValue({ stdout: ps })
+        .mockResolvedValueOnce({ stdout: ps }).mockResolvedValueOnce({ stdout: executable });
+      expect(await readDesktopProcessIdentity(4242, 'linux', run)).toBeNull();
+    });
+
+  it.each(['EACCES', 'ENOENT', 'timeout'])('keeps failed Linux executable queries unknown: %s', async (reason) => {
+    const run = vi.fn().mockResolvedValueOnce({ stdout: 'Fri Sep 11 08:00:00 2026 sleep\n' })
+      .mockRejectedValueOnce(new Error(reason));
+    expect(await readDesktopProcessIdentity(4242, 'linux', run)).toBeNull();
+  });
+
+  it.each(['', 'Fri Sep 11 08:01:00 2026 sleep\n', 'Fri Sep 11 08:00:00 2026 node\n'])
+    ('rejects Linux identity if the process disappears or changes during the query: %j', async (after) => {
+      const run = vi.fn().mockResolvedValueOnce({ stdout: 'Fri Sep 11 08:00:00 2026 sleep\n' })
+        .mockResolvedValueOnce({ stdout: '/usr/bin/sleep\n' }).mockResolvedValueOnce({ stdout: after });
+      expect(await readDesktopProcessIdentity(4242, 'linux', run)).toBeNull();
+    });
 });
 
 describe('PID reuse evidence', () => {
