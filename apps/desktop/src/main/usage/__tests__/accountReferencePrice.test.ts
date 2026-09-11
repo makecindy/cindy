@@ -76,3 +76,23 @@ it.each(['pi', 'claude-code'] as const)('uses account overrides before public pr
       .toEqual({ ...base, providerId, modelId: model });
   }
 });
+
+it('values subscriptions from manufacturer prices even when the supplier publishes a different tariff', () => {
+  const registry = BUNDLED_CATALOG.modelRegistry!;
+  const entry = registry.models.find(model => model.id === 'openai/gpt-5.6-luna')!;
+  const route = entry.routes[0];
+  const original = route.referencePrices;
+  const official = registry.baseModels!.find(model => model.id === entry.modelRef)!.referencePriceGroups![0].prices;
+  try {
+    route.referencePrices = official.map(price => ({ ...price, inputPerMtok: 999, cacheWritePerMtok: undefined }));
+    expect(accountReferencePriceQuote('openai-account', 'gpt-5.6-luna', registry)?.inputPerMtok).toBe(999);
+    for (const agent of ['codex', 'claude-code', 'pi'] as const) {
+      expect(getCodexProviderSubscriptionValuePrice('openai-account', 'gpt-5.6-luna', {}, '2026-09-11', undefined, agent))
+        .toMatchObject({ inputPerMtok: 0.2, cacheCreatePerMtok: 0.25, providerId: 'openai-account' });
+    }
+    expect(getCodexProviderSubscriptionValuePrice('xd', 'openai/gpt-5.6-luna', {})).toBeUndefined();
+  } finally {
+    if (original === undefined) delete route.referencePrices;
+    else route.referencePrices = original;
+  }
+});

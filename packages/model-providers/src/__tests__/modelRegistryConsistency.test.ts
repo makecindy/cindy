@@ -1,5 +1,6 @@
 import {
   expandedRegistryEntries,
+  referencePricesForRoute,
   resolveModelMetadata,
 } from "../modelMetadataLayers.js";
 import { describe, expect, it } from "vitest";
@@ -41,9 +42,13 @@ function effectiveWindow(
 }
 
 /** 按 (currency, variant, effectiveFrom) 分组 —— 组内 band 构成一条完整价格轴。 */
-function bandGroups(route: ModelRegistryRoute): ModelReferencePrice[][] {
+function bandGroups(
+  entry: ModelRegistryEntry,
+  route: ModelRegistryRoute,
+): ModelReferencePrice[][] {
   const groups = new Map<string, ModelReferencePrice[]>();
-  for (const price of route.referencePrices ?? []) {
+  for (const price of referencePricesForRoute(rawRegistry, entry, route) ??
+    []) {
     const key = `${price.currency}|${price.variant}|${price.effectiveFrom}`;
     const group = groups.get(key);
     if (group) group.push(price);
@@ -115,7 +120,7 @@ describe("model registry data consistency", () => {
   it("price bands tile the input axis without gaps or overlaps", () => {
     for (const entry of registry.models) {
       for (const route of entry.routes) {
-        for (const group of bandGroups(route)) {
+        for (const group of bandGroups(entry, route)) {
           const label = `${entry.id} @ ${route.providerId}`;
           // 第一条必须从 0 起 —— 否则低输入段无价可循
           expect(
@@ -150,7 +155,7 @@ describe("model registry data consistency", () => {
     ]);
     for (const entry of registry.models) {
       for (const route of entry.routes) {
-        for (const group of bandGroups(route)) {
+        for (const group of bandGroups(entry, route)) {
           for (const band of group) {
             const lo = band.minInputTokens ?? 0;
             if (lo === 0) continue;
@@ -186,7 +191,7 @@ describe("model registry data consistency", () => {
     // 要么窗口虚高(#1429 主形态),要么漏了长上下文价档 —— 两者都必须在数据层修。
     for (const entry of registry.models) {
       for (const route of entry.routes) {
-        for (const group of bandGroups(route)) {
+        for (const group of bandGroups(entry, route)) {
           const top = group[group.length - 1]!;
           if (top.maxInputTokens === undefined) continue;
           // Cyber's model page and consolidated pricing table disagree on long-input

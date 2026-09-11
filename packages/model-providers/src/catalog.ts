@@ -822,11 +822,11 @@ export function parseCatalog(input: string | unknown): Catalog {
   for (const provider of catalog.providers) {
     for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const)
       validateMediaModels(provider.id, field, provider[field], field === 'audioModels' ? '' : field.replace('Models', 'Defaults'),
-        field === 'imageModels' ? provider.imageDefaults : field === 'videoModels' ? provider.videoDefaults : field === 'embeddingModels' ? provider.embeddingDefaults : undefined, catalog.modelRegistry?.schemaVersion === 4);
+        field === 'imageModels' ? provider.imageDefaults : field === 'videoModels' ? provider.videoDefaults : field === 'embeddingModels' ? provider.embeddingDefaults : undefined, (catalog.modelRegistry?.schemaVersion ?? 0) >= 4);
   }
   const projected = { ...catalog, providers: catalog.providers.map((provider) =>
     projectProviderMediaModels(provider, catalog.modelRegistry, { addDeclared: true })) };
-  for (const provider of projected.providers) validateProvider(provider, catalog.modelRegistry?.schemaVersion === 4);
+  for (const provider of projected.providers) validateProvider(provider, (catalog.modelRegistry?.schemaVersion ?? 0) >= 4);
   validateModelConsistency(projected);
   // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
   // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。

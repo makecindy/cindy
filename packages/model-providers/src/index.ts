@@ -94,6 +94,7 @@ export {
   findModelRegistryRoute,
   resolveModelNativeApi,
   resolveModelReferencePrice,
+  resolveBaseModelReferencePrice,
 } from "./modelRegistry.js";
 export { modelRegistryCanonicalJson } from "./modelRegistryCanonical.js";
 export {
@@ -104,6 +105,8 @@ export {
 export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,
+  ResolveBaseModelReferencePriceOptions,
+  ModelReferencePriceSelection,
   ModelRegistryRevisionRelation,
   ModelRegistrySnapshotDecision,
 } from "./modelRegistry.js";

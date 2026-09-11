@@ -56,6 +56,7 @@ export const MODEL_REGISTRY_LEGACY_SCHEMA_VERSION = 1 as const;
 export const MODEL_REGISTRY_SCHEMA_VERSION = 2 as const;
 export const MODEL_REGISTRY_V3_SCHEMA_VERSION = 3 as const;
 export const MODEL_REGISTRY_V4_SCHEMA_VERSION = 4 as const;
+export const MODEL_REGISTRY_V5_SCHEMA_VERSION = 5 as const;
 export const MODEL_NATIVE_APIS = [
   "anthropic-messages",
   "openai-responses",
@@ -107,7 +108,15 @@ export interface ModelReferencePrice {
   source: ModelReferencePriceSource;
 }
 
+/** A manufacturer's tariff for a named market, independent of any reseller. */
+export interface ModelReferencePriceGroup {
+  id: string;
+  prices: ModelReferencePrice[];
+}
+
 export interface ModelRegistryRoute {
+  /** V5: explicitly selects a tariff on the entry's public model. */
+  referencePriceGroup?: string;
   defaults?: ModelMetadata;
   forceOverrides?: ModelMetadata;
   overrideReason?: string;
@@ -185,7 +194,8 @@ export interface ModelRegistry extends ModelRegistryBase {
     | typeof MODEL_REGISTRY_LEGACY_SCHEMA_VERSION
     | typeof MODEL_REGISTRY_SCHEMA_VERSION
     | typeof MODEL_REGISTRY_V3_SCHEMA_VERSION
-    | typeof MODEL_REGISTRY_V4_SCHEMA_VERSION;
+    | typeof MODEL_REGISTRY_V4_SCHEMA_VERSION
+    | typeof MODEL_REGISTRY_V5_SCHEMA_VERSION;
   baseModels?: BaseModel[];
   localModels?: LocalModelCatalog;
   models: ModelRegistryEntry[];
