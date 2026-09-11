@@ -20,6 +20,7 @@ describe('Ollama list refresh convergence', () => {
   let provider: CustomProviderConfig;
   let toolsSupported: boolean;
   let tagsFail: boolean;
+  let offline: boolean;
   const model = 'test-tools:latest';
   const pausedPullStore = {
     read: async () => null,
@@ -37,6 +38,7 @@ describe('Ollama list refresh convergence', () => {
       totalmem: () => 128 * 1024 ** 3,
       pausedPullStore,
       fetchImpl: async (url) => {
+        if (offline) throw new TypeError('fetch failed');
         if (String(url).endsWith('/api/tags')) {
           if (tagsFail) throw new Error('temporarily unavailable');
           return new Response(JSON.stringify({ models: [{ name: model, size: 1024 }] }));
@@ -57,6 +59,7 @@ describe('Ollama list refresh convergence', () => {
     provider = buildEmptyManagedOllamaProvider();
     toolsSupported = true;
     tagsFail = false;
+    offline = false;
     vi.mocked(getCustomProvider).mockImplementation(async () => provider);
     vi.mocked(updateCustomProvider).mockImplementation(async (_id, next) => {
       // Persistence reconstructs objects in its own key order. Compare values,
@@ -126,6 +129,38 @@ describe('Ollama list refresh convergence', () => {
     expect((await service.list()).catalogDirty).toBe(false);
     expect(updateCustomProvider).toHaveBeenCalledTimes(1);
   });
+
+  it.each(['offline', 'tags failure'])(
+    'keeps legacy models Pi-only during %s until capabilities are known',
+    async (failure) => {
+      const legacyModel = { id: model, name: 'Existing model', contextWindow: 32_768 };
+      provider.runtimes = {
+        pi: { ...provider.runtimes.pi!, models: [legacyModel] },
+      };
+      offline = failure === 'offline';
+      tagsFail = failure === 'tags failure';
+      const service = makeService();
+      expect((await service.list()).catalogDirty).toBe(true);
+      expect(provider.runtimes.pi?.models).toEqual([legacyModel]);
+      expect(provider.runtimes['claude-code']?.models).toEqual([]);
+      expect(provider.runtimes.codex?.models).toEqual([]);
+      expect((await service.list()).catalogDirty).toBe(false);
+      expect(updateCustomProvider).toHaveBeenCalledTimes(1);
+
+      offline = false;
+      tagsFail = false;
+      toolsSupported = false;
+      await service.list();
+      expect(provider.runtimes.pi?.models.map((entry) => entry.id)).toEqual([model]);
+      expect(provider.runtimes['claude-code']?.models).toEqual([]);
+      expect(provider.runtimes.codex?.models).toEqual([]);
+      toolsSupported = true;
+      expect((await service.list()).catalogDirty).toBe(true);
+      expect(provider.runtimes['claude-code']?.models.map((entry) => entry.id)).toEqual([model]);
+      expect(provider.runtimes.codex?.models.map((entry) => entry.id)).toEqual([model]);
+      expect((await service.list()).catalogDirty).toBe(false);
+    },
+  );
 
   it('reports a legacy migration even if the subsequent upsert is unchanged', async () => {
     provider.runtimes = { pi: provider.runtimes.pi! };

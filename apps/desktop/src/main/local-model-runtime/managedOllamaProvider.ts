@@ -187,10 +187,10 @@ export function migrateManagedOllamaProvider(
     ...existing,
     runtimes: {
       pi: emptyPiRuntime(piModels),
-      'claude-code': emptyClaudeRuntime(
-        piModels.map((model) => toAgentModel(model, 'claude-code')),
-      ),
-      codex: emptyCodexRuntime(piModels.map((model) => toAgentModel(model, 'codex'))),
+      // Migration has no capability evidence. Imports populate coding runtimes
+      // only after probing each model; offline legacy models remain Pi-only.
+      'claude-code': emptyClaudeRuntime(),
+      codex: emptyCodexRuntime(),
     },
   };
 }
