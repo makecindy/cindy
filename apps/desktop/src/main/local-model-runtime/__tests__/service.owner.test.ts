@@ -5,8 +5,8 @@ vi.mock('../managedOllamaProvider.js', async (importOriginal) => {
   return {
     ...actual,
     readManagedOllamaProvider: vi.fn(async () => actual.buildEmptyManagedOllamaProvider()),
-    syncManagedOllamaAgentProjections: vi.fn(async (_agents, opts) => {
-      if (opts?.stillActive && !opts.stillActive()) return false;
+    migrateManagedOllamaOnCatalogLoad: vi.fn(async (stillActive) => {
+      if (stillActive && !stillActive()) return false;
       return false;
     }),
     upsertManagedOllamaModel: vi.fn(async (_model, _agents, opts) => {
@@ -31,7 +31,7 @@ vi.mock('../managedOllamaProvider.js', async (importOriginal) => {
 import { createLocalModelService, OwnerChangedError } from '../service.js';
 import {
   readManagedOllamaProvider,
-  syncManagedOllamaAgentProjections,
+  migrateManagedOllamaOnCatalogLoad,
   upsertManagedOllamaModel,
   upsertManagedOllamaModels,
 } from '../managedOllamaProvider.js';
@@ -68,7 +68,7 @@ describe('owner change during pull', () => {
     vi.mocked(upsertManagedOllamaModel).mockClear();
     vi.mocked(upsertManagedOllamaModels).mockClear();
     vi.mocked(readManagedOllamaProvider).mockClear();
-    vi.mocked(syncManagedOllamaAgentProjections).mockClear();
+    vi.mocked(migrateManagedOllamaOnCatalogLoad).mockClear();
   });
 
   it('does not upsert or import a pull finished after the account switched', async () => {
@@ -132,7 +132,7 @@ describe('owner change during pull', () => {
     expect(upsertManagedOllamaModels).not.toHaveBeenCalled();
   });
 
-  it('passes the captured owner into projection sync during list', async () => {
+  it('passes the captured owner into legacy migration during list', async () => {
     const service = createLocalModelService({
       fetchImpl: readyFetch(),
     });
@@ -140,11 +140,8 @@ describe('owner change during pull', () => {
       owner: { dataOwnerId: 'alice', generation: 1 },
       ownerStillActive: () => false,
     });
-    expect(syncManagedOllamaAgentProjections).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({ stillActive: expect.any(Function) }),
-    );
-    const opts = vi.mocked(syncManagedOllamaAgentProjections).mock.calls[0]?.[1];
-    expect(opts?.stillActive?.()).toBe(false);
+    expect(migrateManagedOllamaOnCatalogLoad).toHaveBeenCalledWith(expect.any(Function));
+    const opts = vi.mocked(migrateManagedOllamaOnCatalogLoad).mock.calls[0]?.[0];
+    expect(opts?.()).toBe(false);
   });
 });

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Pause, Play, X } from 'lucide-react';
 
@@ -14,6 +14,7 @@ import type {
   LocalRuntimeStatus,
 } from '../../../shared/localModelRuntime';
 import {
+  canonicalOllamaModelRef,
   classifyOllamaPullError,
   filterCuratedOllamaModels,
   isHfMlxPullName,
@@ -125,42 +126,64 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
   const [busy, setBusy] = useState(false);
   const [pulls, setPulls] = useState<Record<string, LocalModelPullProgress>>({});
 
-  const replaceListedPulls = useCallback((items: readonly LocalModelPullProgress[]) => {
-    setPulls((current) => {
-      const next: Record<string, LocalModelPullProgress> = {};
-      for (const item of items) {
-        if (item.phase === 'cancelled' || item.phase === 'success') continue;
-        next[item.name] = item;
-      }
-      for (const [name, item] of Object.entries(current)) {
-        if (!next[name] && item.phase === 'error') next[name] = item;
-      }
-      return next;
-    });
-  }, []);
+  const refreshGeneration = useRef(0);
+  const progressRevision = useRef(0);
+  const statusRevision = useRef(0);
+  const updatedPulls = useRef(new Map<string, number>());
+  const pendingPulls = useRef(new Set<string>());
+
+  const replaceListedPulls = useCallback(
+    (items: readonly LocalModelPullProgress[], since: number) => {
+      setPulls((current) => {
+        const next: Record<string, LocalModelPullProgress> = {};
+        for (const item of items) {
+          if (item.phase === 'cancelled' || item.phase === 'success') continue;
+          next[canonicalOllamaModelRef(item.name)] = item;
+        }
+        for (const [name, item] of Object.entries(current)) {
+          if (!next[name] && item.phase === 'error') next[name] = item;
+        }
+        // A slow list response must not undo progress, start, pause or completion
+        // events received after that request began. Keep terminal deletions too.
+        for (const [name, revision] of updatedPulls.current) {
+          if (revision <= since && !pendingPulls.current.has(name)) continue;
+          if (current[name]) next[name] = current[name];
+          else delete next[name];
+        }
+        return next;
+      });
+    },
+    [],
+  );
 
   const upsertPull = useCallback((item: LocalModelPullProgress) => {
+    const name = canonicalOllamaModelRef(item.name);
+    updatedPulls.current.set(name, ++progressRevision.current);
     setPulls((current) => {
       if (item.phase === 'cancelled' || item.phase === 'success') {
-        if (!(item.name in current)) return current;
+        if (!(name in current)) return current;
         const next = { ...current };
-        delete next[item.name];
+        delete next[name];
         return next;
       }
-      return { ...current, [item.name]: item };
+      return { ...current, [name]: item };
     });
   }, []);
 
   const refresh = useCallback(async () => {
+    const generation = ++refreshGeneration.current;
+    const since = progressRevision.current;
+    const statusSince = statusRevision.current;
     const result = await window.electronAPI.maker.localModelList();
-    setStatus(result.status);
+    if (generation !== refreshGeneration.current) return;
+    if (statusSince === statusRevision.current) setStatus(result.status);
     setModels(result.models);
     setCatalog(result.catalog ?? []);
     setFeatured(result.featured ?? []);
     setMemoryGb(result.memoryGb ?? 0);
     setRecommendReason(result.recommendReason ?? 'unknown');
     setAppleSilicon(result.appleSilicon === true);
-    replaceListedPulls(result.pulls ?? []);
+    replaceListedPulls(result.pulls ?? [], since);
     if (result.catalogDirty) onChanged();
   }, [onChanged, replaceListedPulls]);
 
@@ -170,12 +193,14 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
       void refresh().catch(() => undefined);
     });
     const offStatus = window.electronAPI.maker.onLocalModelStatus((next) => {
+      statusRevision.current += 1;
       setStatus(next as LocalRuntimeStatus);
     });
     const offPull = window.electronAPI.maker.onLocalModelPullProgress((next) => {
       upsertPull(next as LocalModelPullProgress);
     });
     return () => {
+      refreshGeneration.current += 1;
       offCatalog();
       offStatus();
       offPull();
@@ -206,9 +231,13 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
       toast.error(t('settings.providers.local.pullError.not-gguf'));
       return;
     }
+    const key = canonicalOllamaModelRef(name);
+    if (pendingPulls.current.has(key)) return;
+    pendingPulls.current.add(key);
     upsertPull({ name, status: 'starting', phase: 'starting', done: false });
     try {
       const result = await window.electronAPI.maker.localModelPull(name);
+      pendingPulls.current.delete(key);
       if (result.stopped) {
         await refresh();
         return;
@@ -235,12 +264,14 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
           ? t('settings.providers.local.conflict')
           : t(`settings.providers.local.pullError.${kind ?? 'generic'}`),
       );
+    } finally {
+      pendingPulls.current.delete(key);
     }
   };
 
   const handleAbort = async (reason: 'pause' | 'cancel', name: string) => {
     try {
-      const current = pulls[name];
+      const current = pulls[canonicalOllamaModelRef(name)];
       if (reason === 'cancel' && current?.phase === 'paused') {
         await window.electronAPI.maker.localModelDiscardPaused(name);
       } else {
@@ -284,7 +315,7 @@ export function OllamaProviderDetail({ onChanged }: { onChanged: () => void }) {
 
   const renderCatalogCard = (entry: CuratedOllamaModel) => {
     const installed = models.some((model) => ollamaModelRefsEqual(model.name, entry.libraryName));
-    const pull = pulls[entry.libraryName];
+    const pull = pulls[canonicalOllamaModelRef(entry.libraryName)];
     const pulling = Boolean(pull && (!pull.done || pull.phase === 'paused'));
     const failed = pull?.phase === 'error';
     if (!searching && installed && !pulling && !failed) return null;
