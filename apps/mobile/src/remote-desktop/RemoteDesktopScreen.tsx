@@ -183,6 +183,7 @@ export default function RemoteDesktopScreen() {
     useLockOnExitPreference(deviceId);
   const exitLock = useRef(false);
   const leaving = useRef(false);
+  const [isLeaving, setIsLeaving] = useState(false);
   const linkRef = useRef(link);
   linkRef.current = link;
   const { t } = useTranslation();
@@ -236,11 +237,14 @@ export default function RemoteDesktopScreen() {
   const [controlReady, setControlReady] = useState(false);
   const connectionPending = !error && (!lease || !frameReady || !controlReady);
   const showConnectionStatus =
-    connectionPending || (!error && status === "reconnecting");
+    !isLeaving && (connectionPending || (!error && status === "reconnecting"));
+  const showExitLockStatus = isLeaving && exitLock.current;
   const connectionLabel = t(
-    recovery.current.at || status === "reconnecting"
-      ? "remoteDesktop.reconnecting"
-      : "remoteDesktop.connecting",
+    showExitLockStatus
+      ? "remoteDesktop.lockingOnExit"
+      : recovery.current.at || status === "reconnecting"
+        ? "remoteDesktop.reconnecting"
+        : "remoteDesktop.connecting",
   );
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
@@ -670,6 +674,7 @@ export default function RemoteDesktopScreen() {
   const leave = async () => {
     if (leaving.current) return;
     leaving.current = true;
+    setIsLeaving(true);
     recovery.current.enabled = false;
     Keyboard.dismiss();
     const ending = stop(false, true);
@@ -1580,7 +1585,9 @@ export default function RemoteDesktopScreen() {
             style={styles.webview}
             testID="remoteDesktop.viewer"
           />
-          {(showConnectionStatus || (!lease && error)) && (
+          {(showConnectionStatus ||
+            showExitLockStatus ||
+            (!lease && error)) && (
             <View
               pointerEvents="box-none"
               style={[
@@ -1588,7 +1595,7 @@ export default function RemoteDesktopScreen() {
                 { top: edgePadding.paddingTop + spacing.xs + 44 + spacing.lg },
               ]}
             >
-              {showConnectionStatus ? (
+              {showConnectionStatus || showExitLockStatus ? (
                 <View
                   style={styles.connectionBadge}
                   accessibilityRole="progressbar"
