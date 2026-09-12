@@ -33,6 +33,8 @@
 
 import {
   forwardRef,
+  memo,
+  useCallback,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -232,6 +234,25 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     [tree.entries, tree.expanded, pendingCreate],
   );
 
+  // 稳定引用：每行的 memo 依赖它。用 ref 转发到最新实现，依赖数组留空 —— 这个
+  // 回调的语义是「用当前 props 打开菜单」，不是「捕获首次 props」；直接
+  // useCallback([hasContextActions]) 会连锁要求把 canOpenEntry* / hasContextActions
+  // 一起 useCallback 化。
+  const contextMenuRef = useRef<(entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) => void>(
+    () => {},
+  );
+  contextMenuRef.current = (entry, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!hasContextActions(entry)) return;
+    setMenu({ pos: { x: e.clientX, y: e.clientY }, entry });
+  };
+  const handleRowContextMenu = useCallback(
+    (entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) =>
+      contextMenuRef.current(entry, e),
+    [],
+  );
+
   // 单个 dropdown 实例,通过虚拟 trigger 在右键位置显示。同一时间只可能有
   // 一个右键菜单打开,把状态提到 view 顶层而不是每行一个,避免 N 个
   // DropdownMenu 实例的额外开销。
@@ -348,12 +369,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
             onToggleFolder={tree.toggleFolder}
             onSelectFile={onSelectFile}
             onPreviewImage={onPreviewImage}
-            onContextMenu={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-              if (!hasContextActions(entry)) return;
-              setMenu({ pos: { x: e.clientX, y: e.clientY }, entry });
-            }}
+            onContextMenu={handleRowContextMenu}
           />
         );
       })}
@@ -560,10 +576,13 @@ interface FileTreeRowProps {
   onToggleFolder: (relPath: string) => void;
   onSelectFile: (relPath: string) => void;
   onPreviewImage?: (entry: DirEntry) => void;
-  onContextMenu: (e: React.MouseEvent) => void;
+  /** 稳定回调（entry 由行内回传）。行组件已 memo，父组件传内联箭头会让 memo
+   *  全部失效 —— node_modules 展开时每次 store 更新都会重渲染全部行，几百行
+   *  足以让 renderer 主线程卡住（dev 实测「界面无响应」）。 */
+  onContextMenu: (entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
-function FileTreeRow({
+const FileTreeRow = memo(function FileTreeRow({
   entry,
   depth,
   selected,
@@ -596,6 +615,9 @@ function FileTreeRow({
     else onSelectFile(entry.relPath);
   };
 
+  // 行内回传 entry，父组件因此能传稳定引用（memo 才生效）。
+  const handleContextMenu = (e: React.MouseEvent<HTMLDivElement>) => onContextMenu(entry, e);
+
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
     e.dataTransfer.effectAllowed = 'copy';
     e.dataTransfer.setData(
@@ -615,7 +637,7 @@ function FileTreeRow({
     <div
       draggable
       onClick={handleClick}
-      onContextMenu={onContextMenu}
+      onContextMenu={handleContextMenu}
       onDragStart={handleDragStart}
       style={rowStyle}
       // data-relpath:让 FileTreeView 的 imperative scrollToPath 能 querySelector
@@ -692,7 +714,7 @@ function FileTreeRow({
       ) : null}
     </div>
   );
-}
+});
 
 interface PendingInputRowProps {
   pending: PendingCreate;
