@@ -71,7 +71,25 @@ Claude Code／Codex／Pi 的强制换窗线
 `danger`／`overflow` 的本机会话先走同一套 `context_rebuild` bounded handoff，再落目标
 route，不能 resume 旧原生窗口。
 Codex 跨凭证时先按目标来源 resume 同一个原生线程，不因 `ordinal` / `history_base` 或来源
-变化而 fork、改写历史或交接。普通加密推理失败继续使用现有 HTTP 透明重试；只有上游明确
+变化而 fork、改写历史或交接。本地恢复与分叉必须同时固定该线程的原生历史根
+（`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
+仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
+凭证、代理路由和模型目录仍按本轮选中账号准备，不能把历史根写回全局账号配置。
+跨历史根的原生进程从启动参数要求 `cli_auth_credentials_store="ephemeral"`，清除继承的
+原生身份环境变量；OAuth 通过独立的 external-auth adapter 在进程内安装目标账号 token，
+网关与第三方 OAuth 继续使用既有代理认证。所有跨根进程在分发任务前检查生效的临时凭证
+配置；每次重连重新认证，刷新必须匹配冻结的 owner、host 代次及账号，且不能复用刚被
+拒绝的 token。owner 切换 pending 期间，即使 owner key 尚未提交变化，也必须在异步认证
+读取前后拒绝提供 token。刷新有超时，失败走正常错误路径，不切回历史所属账号。
+该 adapter 依赖 Codex 实验性的 `chatgptAuthTokens` 协议，0.145.0 已支持该协议且通过
+真实登录及 401 刷新契约验证，不能把 0.153.4 当作协议最低版本。更换原生运行时前必须
+用目标二进制运行 `CINDY_CODEX_TEST_BINARY=<绝对路径> pnpm --filter @cindy/maker-core exec
+vitest run src/agents/codex/app-server/external-auth.native.test.ts`，覆盖分页祖先、归档、
+分叉、重连、实际请求身份和 401 刷新。测试只用临时历史、假凭证和本地 HTTP 服务。
+管理员 requirements 可能覆盖 CLI 临时凭证设置：客户端可阻止后续任务，但启动后的
+配置检查不能证明原生初始化阶段从未读取历史根中的认证；不得声称具备这一保证，
+也不得自行复制上游策略加载器或改写用户认证文件规避策略。
+普通加密推理失败继续使用现有 HTTP 透明重试；只有上游明确
 拒绝且请求里仅剩不可剥除的压缩块密文时，proxy 才标记
 `CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE`，交给既有 compact 失败恢复流程。
 裸 `invalid_encrypted_content`、网络错误和切换来源本身都不足以触发该恢复；保留同一用户消息

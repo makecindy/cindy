@@ -7,8 +7,9 @@
  * 可删除),drain 派发(onAccepted)后沿用既有 run 结果捕获/通知链路。
  *
  * 覆盖:
- *  - 撞忙 → enqueuePrompt(text 带静默协议后缀 / persistedContent 是原始 prompt /
- *    origin=scheduler),不直发 session.send、不自行 createMessage
+ *  - 撞忙 → enqueuePrompt(text 带 firedAt 上下文和静默协议后缀 /
+ *    persistedContent 是原始 prompt / origin=scheduler),不直发 session.send、
+ *    不自行 createMessage
  *  - accepted → 等 turn done → success run 带 resultText
  *  - 同 schedule 已有排队项 → 顺延(deferred),不重复入队
  *  - 排队项被丢弃(用户删除)→ run 以含 aborted 的错误收尾
@@ -321,7 +322,8 @@ function createQueueHarness(opts: {
         if (opts.enqueueRetry) return { retry: true as const };
         if (opts.enqueueDuplicate) return { duplicate: true as const };
         enqueueCalls.push(req);
-        if (opts.acceptBeforeEnqueueResolves) await req.onAccepted({ permissionMode: 'ask', planMode: false });
+        if (opts.acceptBeforeEnqueueResolves)
+          await req.onAccepted({ permissionMode: 'ask', planMode: false });
         return { clientId: `client-${enqueueCalls.length}` };
       }),
       removeQueuedPrompt: (sessionId, clientId) => {
@@ -452,34 +454,72 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     mocks.setSessionProvider.mockImplementationOnce((_sessionId, providerId) => {
       mocks.getSessionProvider.mockReturnValue(providerId);
     });
-    const providers: ProviderView[] = [{
-      id: 'selected', name: 'Selected', connected: true, agents: ['pi'],
-      source: 'user', auth: { method: 'apiKey' },
-      routing: { pi: { upstream: 'https://selected.invalid/v1', authStrategy: 'none', wireProtocol: 'openai-responses' } },
-      models: { pi: [{ id: 'shared-model', name: 'Shared', mode: 'chat', contextWindow: 128_000, efforts: ['high'],
-        defaultEffort: 'high', supportsFastMode: false }] },
-    }];
-    const resolveModelSelection = vi.fn<NonNullable<MakerScheduleRunnerDeps['resolveModelSelection']>>(
-      async (choice) => resolveScheduledModelSelection(choice, providers),
-    );
+    const providers: ProviderView[] = [
+      {
+        id: 'selected',
+        name: 'Selected',
+        connected: true,
+        agents: ['pi'],
+        source: 'user',
+        auth: { method: 'apiKey' },
+        routing: {
+          pi: {
+            upstream: 'https://selected.invalid/v1',
+            authStrategy: 'none',
+            wireProtocol: 'openai-responses',
+          },
+        },
+        models: {
+          pi: [
+            {
+              id: 'shared-model',
+              name: 'Shared',
+              mode: 'chat',
+              contextWindow: 128_000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+              supportsFastMode: false,
+            },
+          ],
+        },
+      },
+    ];
+    const resolveModelSelection = vi.fn<
+      NonNullable<MakerScheduleRunnerDeps['resolveModelSelection']>
+    >(async (choice) => resolveScheduledModelSelection(choice, providers));
     const checkModelRoute = vi.fn<NonNullable<MakerScheduleRunnerDeps['checkModelRoute']>>(
       async () => ({ kind: 'pass' }),
     );
     const queue = createQueueHarness({ busy: false });
     const { runner, maker, notifier } = createRunnerHarness(h.session, queue.deps, {
-      resolveModelSelection, checkModelRoute,
+      resolveModelSelection,
+      checkModelRoute,
     });
     vi.mocked(maker.isSessionAlive).mockReturnValue(false);
-    const schedule = heartbeatSchedule({ targetSessionId: undefined, workingDir: '/work',
-      agentKind: 'pi', modelAgentKind: 'pi', model: 'shared-model', fastMode: true });
+    const schedule = heartbeatSchedule({
+      targetSessionId: undefined,
+      workingDir: '/work',
+      agentKind: 'pi',
+      modelAgentKind: 'pi',
+      model: 'shared-model',
+      fastMode: true,
+    });
     const saved = structuredClone(schedule);
     const fire = runner.fire(schedule, createFireContext());
     const result = fire.catch((error: unknown) => error);
     await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
-    expect(resolveModelSelection).toHaveBeenCalledWith(expect.objectContaining({ providerId: null }));
-    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
-      agentKind: 'pi', model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: false,
-    }));
+    expect(resolveModelSelection).toHaveBeenCalledWith(
+      expect.objectContaining({ providerId: null }),
+    );
+    expect(maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'pi',
+        model: 'shared-model',
+        providerId: 'selected',
+        effort: 'high',
+        fastMode: false,
+      }),
+    );
     // A fresh handle was already created on this route. The store and queue
     // baseline must agree before acceptance checks for credential changes.
     expect(mocks.setSessionProvider).toHaveBeenLastCalledWith(SESSION_ID, 'selected');
@@ -490,7 +530,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(checkModelRoute).toHaveBeenLastCalledWith('pi', 'shared-model', 'selected');
     expect(mocks.setSessionProvider).toHaveBeenLastCalledWith(SESSION_ID, 'selected');
     expect(mocks.backfillSessionMeta.mock.calls.at(-1)?.[2]).toMatchObject({
-      providerId: 'selected', effort: 'high', fastMode: false,
+      providerId: 'selected',
+      effort: 'high',
+      fastMode: false,
     });
     await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
     h.emit({ type: 'done', data: {}, source: 'pi' });
@@ -512,31 +554,50 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const queue = createQueueHarness({ busy: false });
     const release = vi.fn();
     const { runner, maker } = createRunnerHarness(h.session, queue.deps, {
-      metaModel: 'shared-model', metaEffort: 'ultra', metaFastMode: true,
+      metaModel: 'shared-model',
+      metaEffort: 'ultra',
+      metaFastMode: true,
       availableModels: [{ id: 'shared-model', efforts: ['low'], defaultEffort: 'low' }],
-      acquirePendingAgentSwitch: async () => ({ release, selection: {
-        model: 'shared-model', providerId: 'selected', ...axes,
-      } }),
+      acquirePendingAgentSwitch: async () => ({
+        release,
+        selection: {
+          model: 'shared-model',
+          providerId: 'selected',
+          ...axes,
+        },
+      }),
     });
-    const schedule = heartbeatSchedule({ agentKind: axes.agentKind, modelAgentKind: axes.agentKind,
-      model: 'shared-model', effort: 'ultra', fastMode: true });
+    const schedule = heartbeatSchedule({
+      agentKind: axes.agentKind,
+      modelAgentKind: axes.agentKind,
+      model: 'shared-model',
+      effort: 'ultra',
+      fastMode: true,
+    });
     const saved = structuredClone(schedule);
     const fire = runner.fire(schedule, createFireContext());
     await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
     expect(release).toHaveBeenCalledTimes(1);
-    expect(maker.createSession).toHaveBeenCalledWith(expect.objectContaining({
-      effort: axes.effort ?? undefined, fastMode: axes.fastMode, providerId: 'selected',
-    }));
+    expect(maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        effort: axes.effort ?? undefined,
+        fastMode: axes.fastMode,
+        providerId: 'selected',
+      }),
+    );
     h.setEffort.mockClear();
     mocks.setSessionFastMode.mockClear();
     await queue.accept();
-    if (axes.agentKind === 'pi') expect(mocks.setSessionFastMode).toHaveBeenLastCalledWith(SESSION_ID, axes.fastMode);
+    if (axes.agentKind === 'pi')
+      expect(mocks.setSessionFastMode).toHaveBeenLastCalledWith(SESSION_ID, axes.fastMode);
     else expect(setFastMode).toHaveBeenLastCalledWith(axes.fastMode);
     expect(mocks.setSessionEffort).toHaveBeenLastCalledWith(SESSION_ID, axes.effort);
     if (axes.effort) expect(h.setEffort).toHaveBeenLastCalledWith(axes.effort);
     else expect(h.setEffort).not.toHaveBeenCalled();
     expect(mocks.backfillSessionMeta.mock.calls.at(-1)?.[2]).toMatchObject({
-      effort: axes.effort ?? undefined, fastMode: axes.fastMode, providerId: 'selected',
+      effort: axes.effort ?? undefined,
+      fastMode: axes.fastMode,
+      providerId: 'selected',
     });
     await vi.waitFor(() => expect(h.listenerCount()).toBe(1));
     h.emit({ type: 'done', data: {}, source: 'pi' });
@@ -545,20 +606,37 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
   });
 
   it.each(['harness-changed', 'effort-failed', 'fast-failed'] as const)(
-    'blocks queued dispatch if the resolved selection cannot be honored (%s)', async (failure) => {
+    'blocks queued dispatch if the resolved selection cannot be honored (%s)',
+    async (failure) => {
       const h = createSessionHarness(async () => ({ accepted: true }));
       const setFastMode = vi.fn(async () => {});
       Object.assign(h.session, { agentKind: 'codex', model: 'shared-model', setFastMode });
       mocks.getSessionProvider.mockReturnValue('selected');
       const queue = createQueueHarness({ busy: false });
       const { runner } = createRunnerHarness(h.session, queue.deps, {
-        metaModel: 'shared-model', metaEffort: 'high',
-        acquirePendingAgentSwitch: async () => ({ release: vi.fn(), selection: {
-          agentKind: 'codex', model: 'shared-model', providerId: 'selected', effort: 'high', fastMode: false,
-        } }),
+        metaModel: 'shared-model',
+        metaEffort: 'high',
+        acquirePendingAgentSwitch: async () => ({
+          release: vi.fn(),
+          selection: {
+            agentKind: 'codex',
+            model: 'shared-model',
+            providerId: 'selected',
+            effort: 'high',
+            fastMode: false,
+          },
+        }),
       });
-      const fire = runner.fire(heartbeatSchedule({ agentKind: 'codex', modelAgentKind: 'codex',
-        model: 'shared-model', effort: 'ultra', fastMode: true }), createFireContext());
+      const fire = runner.fire(
+        heartbeatSchedule({
+          agentKind: 'codex',
+          modelAgentKind: 'codex',
+          model: 'shared-model',
+          effort: 'ultra',
+          fastMode: true,
+        }),
+        createFireContext(),
+      );
       const result = fire.catch((error: unknown) => error);
       await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
       if (failure === 'harness-changed') Object.assign(h.session, { agentKind: 'pi' });
@@ -571,37 +649,58 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     },
   );
 
-  it.each(['permission', 'plan', 'switching', 'missing', 'replaced'])('defers queued routine acceptance after %s changes and runs with a fresh snapshot', async (change) => {
-    const h = createSessionHarness(async () => ({ accepted: true }));
-    const queue = createQueueHarness({ busy: true });
-    const f = createRunnerHarness(h.session, queue.deps);
-    const ctx = { ...createFireContext(), deferToCaller: true };
-    const fire = f.runner.fire(heartbeatSchedule({ source: 'bot', manual: true }), ctx);
-    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
-    const queuedPermissions = { permissionMode: change === 'permission' || change === 'replaced' ? 'bypassPermissions' : 'ask', planMode: false };
-    const currentPlan = change === 'plan';
-    mocks.getSessionFsSnapshot.mockResolvedValue(change === 'missing' ? null : { permissionMode: 'ask', planModeEnabled: currentPlan });
-    if (change === 'switching') Object.assign(h.session, { stablePermissionModeState: null });
-    let acceptedSession = h;
-    if (change === 'replaced') {
-      acceptedSession = createSessionHarness(async () => ({ accepted: true }));
-      f.replaceLiveSession(acceptedSession.session);
-    }
-    await queue.accept(queuedPermissions);
-    expect(await fire).toMatchObject({ deferred: true });
-    expect(acceptedSession.session.abort).toHaveBeenCalledOnce();
-    expect(ctx.onTurnActive).not.toHaveBeenCalled();
-    expect(f.notifier.notify).not.toHaveBeenCalled();
-    expect(acceptedSession.listenerCount()).toBe(0);
+  it.each(['permission', 'plan', 'switching', 'missing', 'replaced'])(
+    'defers queued routine acceptance after %s changes and runs with a fresh snapshot',
+    async (change) => {
+      const h = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true });
+      const f = createRunnerHarness(h.session, queue.deps);
+      const ctx = { ...createFireContext(), deferToCaller: true };
+      const fire = f.runner.fire(heartbeatSchedule({ source: 'bot', manual: true }), ctx);
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(1));
+      const queuedPermissions = {
+        permissionMode:
+          change === 'permission' || change === 'replaced' ? 'bypassPermissions' : 'ask',
+        planMode: false,
+      };
+      const currentPlan = change === 'plan';
+      mocks.getSessionFsSnapshot.mockResolvedValue(
+        change === 'missing' ? null : { permissionMode: 'ask', planModeEnabled: currentPlan },
+      );
+      if (change === 'switching') Object.assign(h.session, { stablePermissionModeState: null });
+      let acceptedSession = h;
+      if (change === 'replaced') {
+        acceptedSession = createSessionHarness(async () => ({ accepted: true }));
+        f.replaceLiveSession(acceptedSession.session);
+      }
+      await queue.accept(queuedPermissions);
+      expect(await fire).toMatchObject({ deferred: true });
+      expect(acceptedSession.session.abort).toHaveBeenCalledOnce();
+      expect(ctx.onTurnActive).not.toHaveBeenCalled();
+      expect(f.notifier.notify).not.toHaveBeenCalled();
+      expect(acceptedSession.listenerCount()).toBe(0);
 
-    Object.assign(acceptedSession.session, { stablePermissionModeState: { mode: 'ask', generation: 1 } });
-    mocks.getSessionFsSnapshot.mockResolvedValue({ permissionMode: 'ask', planModeEnabled: currentPlan });
-    const retry = f.runner.fire(heartbeatSchedule({ source: 'bot', manual: true }), { ...createFireContext(), deferToCaller: true });
-    await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(2));
-    await queue.accept({ permissionMode: 'ask', planMode: currentPlan });
-    acceptedSession.emit({ type: 'done', data: {}, turnOrigin: SCHEDULER_TURN_ORIGIN } as AgentEvent);
-    expect(await retry).not.toMatchObject({ deferred: true });
-  });
+      Object.assign(acceptedSession.session, {
+        stablePermissionModeState: { mode: 'ask', generation: 1 },
+      });
+      mocks.getSessionFsSnapshot.mockResolvedValue({
+        permissionMode: 'ask',
+        planModeEnabled: currentPlan,
+      });
+      const retry = f.runner.fire(heartbeatSchedule({ source: 'bot', manual: true }), {
+        ...createFireContext(),
+        deferToCaller: true,
+      });
+      await vi.waitFor(() => expect(queue.enqueueCalls).toHaveLength(2));
+      await queue.accept({ permissionMode: 'ask', planMode: currentPlan });
+      acceptedSession.emit({
+        type: 'done',
+        data: {},
+        turnOrigin: SCHEDULER_TURN_ORIGIN,
+      } as AgentEvent);
+      expect(await retry).not.toMatchObject({ deferred: true });
+    },
+  );
 
   it('defers a queued routine when its live session disappears before acceptance', async () => {
     const h = createSessionHarness(async () => ({ accepted: true }));
@@ -634,63 +733,71 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(f.notifier.notify).not.toHaveBeenCalled();
   });
 
-  it.each(['user', 'bot'] as const)('%s enqueues without direct send and preserves routine plan mode', async (source) => {
-    const harness = createSessionHarness(async () => ({ accepted: true }));
-    const queue = createQueueHarness({ busy: true });
-    const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
+  it.each(['user', 'bot'] as const)(
+    '%s enqueues without direct send and preserves routine plan mode',
+    async (source) => {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true });
+      const { runner, notifier } = createRunnerHarness(harness.session, queue.deps);
 
-    const firePromise = runner.fire(heartbeatSchedule({ source }), createFireContext());
+      const firePromise = runner.fire(heartbeatSchedule({ source }), createFireContext());
 
-    // 入队参数:发送正文带静默协议后缀,落库/展示用原始 prompt,origin=scheduler。
-    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
-    const req = queue.enqueueCalls[0]!;
-    expect(req.sessionId).toBe(SESSION_ID);
-    expect(req.text).toContain('PR #971 heartbeat prompt');
-    expect(req.text).toContain('[Silent scheduled run]');
-    expect(req.inheritTargetPlanMode).toBe(source === 'bot' ? true : undefined);
-    expect(req.persistedContent).toContain('PR #971 heartbeat prompt');
-    if (source === 'user') expect(req.persistedContent).toBe('PR #971 heartbeat prompt');
-    else expect(req.persistedContent).not.toBe('PR #971 heartbeat prompt');
-    expect(req.origin).toEqual({
-      kind: 'scheduler',
-      scheduleId: 'schedule-hb',
-      scheduleName: 'PR #971 心跳',
-      runId: 'run-q1',
-    });
-    // 不直发、不自行落库(coordinator drain 负责)。
-    expect(harness.send).not.toHaveBeenCalled();
-    expect(mocks.createMessage).not.toHaveBeenCalled();
-    // 排队等待仍属于当前 Desktop turn，不能被未来的 scheduler turn
-    // 提前标成 headless，否则当前 turn 的插件设置卡会被错误抑制。
-    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
+      // 入队参数:发送正文带 firedAt 上下文与静默协议后缀,落库/展示用原始
+      // prompt,origin=scheduler。
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      const req = queue.enqueueCalls[0]!;
+      expect(req.sessionId).toBe(SESSION_ID);
+      expect(req.text).toContain('PR #971 heartbeat prompt');
+      expect(req.text).toContain('[Scheduled run context]');
+      expect(req.text).toContain('firedAtEpochMs: 1700000000100');
+      expect(req.text).toContain('firedAtUtc: 2023-11-14T22:13:20.100Z');
+      expect(req.text).toContain('firedAtInScheduleTimezone: 2023-11-15T06:13:20[Asia/Hong_Kong]');
+      expect(req.text).toContain('[Silent scheduled run]');
+      expect(req.inheritTargetPlanMode).toBe(source === 'bot' ? true : undefined);
+      expect(req.persistedContent).toContain('PR #971 heartbeat prompt');
+      if (source === 'user') expect(req.persistedContent).toBe('PR #971 heartbeat prompt');
+      else expect(req.persistedContent).not.toBe('PR #971 heartbeat prompt');
+      expect(req.origin).toEqual({
+        kind: 'scheduler',
+        scheduleId: 'schedule-hb',
+        scheduleName: 'PR #971 心跳',
+        runId: 'run-q1',
+      });
+      // 不直发、不自行落库(coordinator drain 负责)。
+      expect(harness.send).not.toHaveBeenCalled();
+      expect(mocks.createMessage).not.toHaveBeenCalled();
+      // 排队等待仍属于当前 Desktop turn，不能被未来的 scheduler turn
+      // 提前标成 headless，否则当前 turn 的插件设置卡会被错误抑制。
+      expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
 
-    // drain 派发 → runner 挂 turn 监听 → done 收尾。
-    await queue.accept();
-    expect(harness.setVendorOptions).toHaveBeenCalledWith({
-      [SCHEDULER_RUN_ID_VENDOR_OPTION]: 'run-q1',
-    });
-    await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
-    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(true);
-    harness.emit({
-      type: 'text',
-      data: { text: 'heartbeat summary', isFinal: true },
-      source: 'claude-code',
-    });
-    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+      // drain 派发 → runner 挂 turn 监听 → done 收尾。
+      await queue.accept();
+      expect(harness.setVendorOptions).toHaveBeenCalledWith({
+        [SCHEDULER_RUN_ID_VENDOR_OPTION]: 'run-q1',
+      });
+      await vi.waitFor(() => expect(harness.listenerCount()).toBe(1));
+      expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(true);
+      harness.emit({
+        type: 'text',
+        data: { text: 'heartbeat summary', isFinal: true },
+        source: 'claude-code',
+      });
+      harness.emit({ type: 'done', data: {}, source: 'claude-code' });
 
-    const result = await firePromise;
-    expect(result.sessionId).toBe(SESSION_ID);
-    expect(result.resultText).toBe('heartbeat summary');
-    // listener 已摘干净,不泄漏。
-    expect(harness.listenerCount()).toBe(0);
-    expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
-    expect(harness.setVendorOptions).toHaveBeenLastCalledWith({
-      [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined,
-    });
-    expect(harness.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
-    // 收尾通知照常(未静默场景)。
-    expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
-  });
+      const result = await firePromise;
+      expect(result.sessionId).toBe(SESSION_ID);
+      expect(result.resultText).toBe('heartbeat summary');
+      // listener 已摘干净,不泄漏。
+      expect(harness.listenerCount()).toBe(0);
+      expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
+      expect(harness.setVendorOptions).toHaveBeenLastCalledWith({
+        [SCHEDULER_RUN_ID_VENDOR_OPTION]: undefined,
+      });
+      expect(harness.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
+      // 收尾通知照常(未静默场景)。
+      expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
+    },
+  );
 
   it('ignores events from a user turn or a different scheduler run', async () => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
@@ -1451,19 +1558,22 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.send).not.toHaveBeenCalled();
   });
 
-  it.each([false, true])('manual busy dispatch defers only when the caller owns retries: %s', async (deferToCaller) => {
-    const harness = createSessionHarness(async () => ({ accepted: true }));
-    const queue = createQueueHarness({ busy: true, hasQueued: true });
-    const { runner } = createRunnerHarness(harness.session, queue.deps);
-    const result = runner.fire(
-      heartbeatSchedule({ manual: true, source: 'bot' }),
-      { ...createFireContext(), deferToCaller },
-    );
-    if (deferToCaller) await expect(result).resolves.toMatchObject({ deferred: true });
-    else await expect(result).rejects.toThrow('HEARTBEAT_ALREADY_QUEUED');
-    expect(queue.enqueueCalls).toHaveLength(0);
-    expect(harness.send).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    'manual busy dispatch defers only when the caller owns retries: %s',
+    async (deferToCaller) => {
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true, hasQueued: true });
+      const { runner } = createRunnerHarness(harness.session, queue.deps);
+      const result = runner.fire(heartbeatSchedule({ manual: true, source: 'bot' }), {
+        ...createFireContext(),
+        deferToCaller,
+      });
+      if (deferToCaller) await expect(result).resolves.toMatchObject({ deferred: true });
+      else await expect(result).rejects.toThrow('HEARTBEAT_ALREADY_QUEUED');
+      expect(queue.enqueueCalls).toHaveLength(0);
+      expect(harness.send).not.toHaveBeenCalled();
+    },
+  );
 
   it('settles the run as aborted-style failure when the queued prompt is discarded', async () => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
@@ -1820,7 +1930,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
     await queue.accept();
 
-    await expect(firePromise).rejects.toThrow(/requires SuperGrok \(xAI\) or an explicitly selected custom source/);
+    await expect(firePromise).rejects.toThrow(
+      /requires SuperGrok \(xAI\) or an explicitly selected custom source/,
+    );
     await expect(firePromise).rejects.not.toThrow(/disabled in settings/);
     await expect(firePromise).rejects.toThrow(/\(exclusive-source-unavailable\)/);
   });

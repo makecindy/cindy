@@ -33,10 +33,10 @@ export class CodexThreadLocations {
     return value.path;
   }
 
-  async readStorageHome(
+  async readStorage(
     threadId: string,
     legacy?: { home: string; prepare: (threadId: string) => Promise<string | undefined> },
-  ): Promise<string | undefined> {
+  ): Promise<{ historyHome: string; sqliteHome: string } | undefined> {
     const rollout = await this.read(threadId);
     if (!rollout) {
       // Pre-multi-account threads have no location record. Resolve their native
@@ -44,18 +44,16 @@ export class CodexThreadLocations {
       const legacyRollout = await legacy?.prepare(threadId);
       if (!legacy || !legacyRollout) return;
       await this.record(threadId, legacyRollout, legacy.home);
-      return legacy.home;
+      return { historyHome: historyHomeForRollout(legacyRollout), sqliteHome: legacy.home };
     }
     const value = JSON.parse(await fs.readFile(this.file(threadId), 'utf8'));
     if (value.sqliteHome !== undefined) {
       if (typeof value.sqliteHome !== 'string' || !path.isAbsolute(value.sqliteHome)) throw new Error('Invalid Codex history storage');
-      return value.sqliteHome;
+      return { historyHome: historyHomeForRollout(rollout), sqliteHome: value.sqliteHome };
     }
     // Compatibility with locations written before native database ownership was recorded.
-    for (let dir = path.dirname(rollout); path.dirname(dir) !== dir; dir = path.dirname(dir)) {
-      if (['sessions', 'archived_sessions'].includes(path.basename(dir))) return path.dirname(dir);
-    }
-    throw new Error('Codex history storage is unavailable');
+    const historyHome = historyHomeForRollout(rollout);
+    return { historyHome, sqliteHome: historyHome };
   }
 
   async record(threadId: string, rolloutPath: string, sqliteHome?: string): Promise<void> {
@@ -72,4 +70,11 @@ export class CodexThreadLocations {
       await fs.rm(temporary, { force: true });
     }
   }
+}
+
+function historyHomeForRollout(rollout: string): string {
+  for (let dir = path.dirname(rollout); path.dirname(dir) !== dir; dir = path.dirname(dir)) {
+    if (['sessions', 'archived_sessions'].includes(path.basename(dir))) return path.dirname(dir);
+  }
+  throw new Error('Codex history storage is unavailable');
 }
