@@ -391,6 +391,9 @@ importers:
       node-pty:
         specifier: ^1.0.0
         version: 1.1.0
+      ogg-opus-decoder:
+        specifier: 1.7.5
+        version: 1.7.5
       pdfjs-dist:
         specifier: ^5.7.284
         version: 5.7.284
@@ -2611,6 +2614,9 @@ packages:
     engines: {node: '>=18'}
     cpu: [x64]
     os: [win32]
+
+  '@eshaz/web-worker@1.2.2':
+    resolution: {integrity: sha512-WxXiHFmD9u/owrzempiDlBB1ZYqiLnm9s6aPc8AlFQalq2tKmqdmMr9GXOupDgzXtqnBipj8Un0gkIm7Sjf8mw==}
 
   '@eslint-community/eslint-utils@4.9.1':
     resolution: {integrity: sha512-phrYmNiYppR7znFEdqgfWHXR6NCkZEK7hwWDHZUjit/2/U0r6XvkDl0SYnoM51Hq7FhCGdLDT6zxCCOY1hexsQ==}
@@ -5032,6 +5038,12 @@ packages:
   '@vscode/sudo-prompt@9.3.2':
     resolution: {integrity: sha512-gcXoCN00METUNFeQOFJ+C9xUI0DKB+0EGMVg7wbVYRHBw2Eq3fKisDZOkRdOz3kqXRKOENMfShPOmypw1/8nOw==}
 
+  '@wasm-audio-decoders/common@9.0.7':
+    resolution: {integrity: sha512-WRaUuWSKV7pkttBygml/a6dIEpatq2nnZGFIoPTc5yPLkxL6Wk4YaslPM98OPQvWacvNZ+Py9xROGDtrFBDzag==}
+
+  '@wasm-audio-decoders/opus-ml@0.0.3':
+    resolution: {integrity: sha512-SEeTmk0eb3q5etJA/NHCRWW6BivTx9tqvNTmG0kg2ynuATEQRUZnwQE6Ibvl1BBvqIGHqI57+qyJMWmJBwb5XQ==}
+
   '@webassemblyjs/ast@1.14.1':
     resolution: {integrity: sha512-nuBEDgQfm1ccRp/8bCQrx1frohyufl4JlbMMZ4P1wpeOfDhF6FQkxZJ1b/e+PLwr6X1Nhw6OLme5usuBWYBvuQ==}
 
@@ -5731,6 +5743,9 @@ packages:
   cn-font-split@6.0.3:
     resolution: {integrity: sha512-j1fDT78CTxsCNql93wbzoHYfxYb+tRC4RuDVm7Q5GHdtSO4aB75x0ggbEZfKXEBkH8vtXCHe2LoqKAfXLJekjA==}
     hasBin: true
+
+  codec-parser@2.5.0:
+    resolution: {integrity: sha512-Ru9t80fV8B0ZiixQl8xhMTLru+dzuis/KQld32/x5T/+3LwZb0/YvQdSKytX9JqCnRdiupvAvyYJINKrXieziQ==}
 
   color-convert@1.9.3:
     resolution: {integrity: sha512-QfAUtd+vFdAtFQcC8CCyYt1fYWxSqAiK2cSD6zDB8N3cpsEBAvRxp9zOGg6G/SHHJYAT88/az/IuDGALsNVbGg==}
@@ -9034,6 +9049,9 @@ packages:
     resolution: {integrity: sha512-XrsrhT5sybtKI6wakr2SPOlGZWWYbUXZ7a0jT8/QOeAPau+1X/bSegNe5YR75oJmEZQbKningirmGOEJCIk61Q==}
     engines: {node: '>=12.20.0'}
 
+  ogg-opus-decoder@1.7.5:
+    resolution: {integrity: sha512-08WfRbuBBew1H63PqQ3zj2B/J0Eh9ISfNOTi+Dk6vuXmkBGSx8BiPJGOJ470EYeKezTa7/GhOAwHe3XlXwOZMw==}
+
   on-finished@2.3.0:
     resolution: {integrity: sha512-ikqdkGAAyf/X/gPhXGvfgAytDZtDbr+bkNUJ0N9h5MI/dmdgCs3l6hoHrcUv41sRKew3jIwrp4qQDXiK99Utww==}
     engines: {node: '>= 0.8'}
@@ -9064,6 +9082,9 @@ packages:
   optionator@0.9.4:
     resolution: {integrity: sha512-6IpQ7mKUxRcZNLIObR0hz7lxsapSSIYNZJwXPGeF0mTVqGKFIXj1DQcMoT22S3ROcLyY/rz0PWaWZ9ayWmad9g==}
     engines: {node: '>= 0.8.0'}
+
+  opus-decoder@0.7.12:
+    resolution: {integrity: sha512-6zpHFDi/MhYvMwyYiuJPqJ2lcRkfm7wHblSvT3lUtx/kLvHkunoe/rhTn1dLKxqVGLeQj3gQi7CnR0N2p3RuOg==}
 
   ora@3.4.0:
     resolution: {integrity: sha512-eNwHudNbO1folBP3JsZ19v9azXWtQZjICdr3Q0TDPIaeBQ3mXLrh54wM+er0+hSp+dWKf+Z8KM58CYzEyIYxYg==}
@@ -10110,6 +10131,9 @@ packages:
 
   simple-swizzle@0.2.4:
     resolution: {integrity: sha512-nAu1WFPQSMNr2Zn9PGSZK9AGn4t/y97lEm+MXTtUDwfP0ksAIX4nO+6ruD9Jwut4C49SB1Ws+fbXsm/yScWOHw==}
+
+  simple-yenc@1.0.4:
+    resolution: {integrity: sha512-5gvxpSd79e9a3V4QDYUqnqxeD4HGlhCakVpb6gMnDD7lexJggSBJRBO5h52y/iJrdXRilX9UCuDaIJhSWm5OWw==}
 
   sisteransi@1.0.5:
     resolution: {integrity: sha512-bLGGlR1QxBcynn2d5YmDX4MGjlZvy2MRBDRNHLJ8VI6l6+9FUiyTFNJ0IveOSP0bcXgVDPRcfGqA0pjaqUpfVg==}
@@ -12570,6 +12594,8 @@ snapshots:
 
   '@esbuild/win32-x64@0.28.1':
     optional: true
+
+  '@eshaz/web-worker@1.2.2': {}
 
   '@eslint-community/eslint-utils@4.9.1(eslint@9.39.5(jiti@1.21.7))':
     dependencies:
@@ -15362,6 +15388,15 @@ snapshots:
 
   '@vscode/sudo-prompt@9.3.2': {}
 
+  '@wasm-audio-decoders/common@9.0.7':
+    dependencies:
+      '@eshaz/web-worker': 1.2.2
+      simple-yenc: 1.0.4
+
+  '@wasm-audio-decoders/opus-ml@0.0.3':
+    dependencies:
+      '@wasm-audio-decoders/common': 9.0.7
+
   '@webassemblyjs/ast@1.14.1':
     dependencies:
       '@webassemblyjs/helper-numbers': 1.13.2
@@ -16222,6 +16257,8 @@ snapshots:
     transitivePeerDependencies:
       - '@emnapi/core'
       - '@emnapi/runtime'
+
+  codec-parser@2.5.0: {}
 
   color-convert@1.9.3:
     dependencies:
@@ -20155,6 +20192,13 @@ snapshots:
 
   obug@2.2.1: {}
 
+  ogg-opus-decoder@1.7.5:
+    dependencies:
+      '@wasm-audio-decoders/common': 9.0.7
+      '@wasm-audio-decoders/opus-ml': 0.0.3
+      codec-parser: 2.5.0
+      opus-decoder: 0.7.12
+
   on-finished@2.3.0:
     dependencies:
       ee-first: 1.1.1
@@ -20190,6 +20234,10 @@ snapshots:
       prelude-ls: 1.2.1
       type-check: 0.4.0
       word-wrap: 1.2.5
+
+  opus-decoder@0.7.12:
+    dependencies:
+      '@wasm-audio-decoders/common': 9.0.7
 
   ora@3.4.0:
     dependencies:
@@ -21482,6 +21530,8 @@ snapshots:
   simple-swizzle@0.2.4:
     dependencies:
       is-arrayish: 0.3.4
+
+  simple-yenc@1.0.4: {}
 
   sisteransi@1.0.5: {}
 

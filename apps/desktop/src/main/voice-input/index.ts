@@ -22,6 +22,7 @@ import {
   type VoiceTimelineEvent,
 } from '@cindy/voice-input-core';
 import { createLogger } from '../logger.js';
+import { decodeRecordedOpus, transcribeRecordedPcm } from './recordedAudio.js';
 import {
   isProviderModelRouteDisabled,
   isUtilityRouteDisabled,
@@ -1829,6 +1830,36 @@ async function createVoiceInputProvider(
   }
 
   throw new Error(`Unsupported voice input ASR provider ${provider}.`);
+}
+
+/** Passport uses the user's selected microphone service and model, including realtime ASR. */
+export async function transcribeVoiceInputOpus(
+  bytes: Uint8Array,
+  sourceLanguage?: string,
+): Promise<VoiceInputAudioFileTranscriptionResult> {
+  const owner = activeOwnerScopeKey();
+  const selection = readActiveVoiceInputModelSelection('passport-recording');
+  const signature = voiceInputModelSelectionSignature(selection);
+  const isCurrent = (): boolean => owner === activeOwnerScopeKey() &&
+    signature === voiceInputModelSelectionSignature(getVoiceInputModelSelection());
+  const provider = selection.asrProvider;
+  const profile = getVoiceInputAsrProfile(provider);
+  const model = resolveVoiceInputProviderModel(provider);
+  const managed = !isVoiceInputByokMode();
+  if (!managed && isAsrProfileRouteDisabled(profile)) {
+    throw new Error('voice ASR provider disabled in settings');
+  }
+  const readiness = await getAsrProfileCredentialReadiness(profile);
+  if (!readiness.ok) throw new Error(readiness.error);
+  const pcm = await decodeRecordedOpus(bytes);
+  if (!isCurrent()) throw new Error('Voice recording configuration changed');
+  const language = resolveAsrLanguageHint(sourceLanguage);
+  const context = managed ? new CindyVoiceRunContext(language, undefined) : undefined;
+  log.info('recorded audio transcription started', { provider, serviceMode: managed ? 'cindy' : 'byok' });
+  const asr = await createVoiceInputProvider(provider, language, context);
+  const text = await transcribeRecordedPcm(pcm, asr, isCurrent);
+  log.info('recorded audio transcription completed', { provider });
+  return { text, provider, model };
 }
 
 /**

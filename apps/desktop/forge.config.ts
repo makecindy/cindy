@@ -1122,6 +1122,19 @@ function buildRemoteDesktopInput(platform: ForgePlatform, arch: ForgeArch): void
   }
 }
 
+function buildMacPassportHelper(platform: ForgePlatform, arch: ForgeArch): void {
+  if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
+  const src = path.join(__dirname, 'native', 'passport', 'passport.swift');
+  const dir = path.join(__dirname, 'resources', 'tools', 'passport');
+  fs.mkdirSync(dir, { recursive: true });
+  const dest = path.join(dir, 'cindy-passport');
+  buildSwiftHelperForForgeArch(src, dest, arch, '12.0',
+    ['-framework', 'AppKit', '-framework', 'CoreBluetooth',
+      '-Xlinker', '-sectcreate', '-Xlinker', '__TEXT', '-Xlinker', '__info_plist',
+      '-Xlinker', path.join(path.dirname(src), 'Info.plist')], 'Passport BLE helper');
+  fs.chmodSync(dest, 0o755);
+}
+
 function buildMacXboxGamepadHelper(platform: ForgePlatform, arch: ForgeArch): void {
   if (process.platform !== 'darwin' || !isMacForgePlatform(platform)) return;
   const src = path.join(__dirname, 'native', 'xbox-gamepad', 'macos-xbox-gamepad-helper.swift');
@@ -1509,6 +1522,7 @@ const config: ForgeConfig = {
     //
     //   Windows / Linux 完全忽略此字段。
     extendInfo: {
+      NSBluetoothAlwaysUsageDescription: 'Connect your Cindy Passport to display task status.',
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
       NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       // agent 会话中访问受 TCC 保护的目录(桌面/文稿/下载)时，macOS 需要这些声明才能向
@@ -1578,6 +1592,7 @@ const config: ForgeConfig = {
     // helper bundles also need the usage description for macOS TCC to register
     // the packaged app correctly in Privacy & Security > Microphone.
     extendHelperInfo: {
+      NSBluetoothAlwaysUsageDescription: 'Connect your Cindy Passport to display task status.',
       NSMicrophoneUsageDescription: 'This app needs access to the microphone for voice input.',
       NSAudioCaptureUsageDescription: 'Share computer audio with your connected remote desktop.',
       NSDesktopFolderUsageDescription:
@@ -1647,6 +1662,7 @@ const config: ForgeConfig = {
       buildMacIOSSimulatorHelper(platform, arch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
       buildMacXboxGamepadHelper(platform, arch);
+      buildMacPassportHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);
       buildMacAgentIslandHelper(platform, arch);
       buildMacComputerPermissionGuideHelper(platform, arch);
