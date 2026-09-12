@@ -63,7 +63,50 @@
     "sendText": "텍스트 전송",
     "keys": "키",
     "showDesktop": "데스크톱",
-    "allWindows": "모든 창"
+    "allWindows": "모든 창",
+    "reconnecting": "다시 연결 중…",
+    "connectionBusy": "다른 기기가 이 원격 데스크톱에 연결되어 있습니다. 해당 기기에서 원격 데스크톱을 종료한 후 다시 연결하세요.",
+    "takeoverConnection": "연결 넘겨받기",
+    "connectionBusyTakeover": "다른 기기가 연결되어 있습니다. 연결을 넘겨받으면 해당 기기의 연결이 끊어집니다.",
+    "remoteDisabled": "컴퓨터에서 원격 제어가 꺼져 있습니다.",
+    "accessRevoked": "이 컴퓨터에 대한 접근 권한이 취소되었습니다.",
+    "directConnection": "컴퓨터에 직접 연결",
+    "videoRelay": "서버 영상 중계",
+    "screenshotRelay": "서버 스크린샷 중계",
+    "shortcut": {
+      "open": "원격 데스크톱 열기",
+      "checking": "원격 데스크톱 확인 중…",
+      "opening": "원격 데스크톱 여는 중…",
+      "unavailable": "원격 데스크톱에 연결할 수 없습니다: {{reason}}",
+      "offline": "이 컴퓨터는 오프라인입니다.",
+      "controlDisabled": "원격 제어 설정에서 이 컴퓨터의 제어를 허용하세요.",
+      "unsupported": "이 기기는 원격 데스크톱을 지원하지 않습니다.",
+      "checkFailed": "컴퓨터 상태를 확인하지 못했습니다. 마우스를 다시 올려 재시도하세요.",
+      "noDisplay": "이 컴퓨터에 사용 가능한 디스플레이가 없습니다."
+    },
+    "viewer": {
+      "settings": "조작",
+      "sound": "소리",
+      "fullscreen": "전체 화면",
+      "exitFullscreen": "전체 화면 종료",
+      "fps": "프레임 속도",
+      "quality": "화질",
+      "automatic": "자동",
+      "smooth": "원활",
+      "balanced": "균형",
+      "clear": "선명",
+      "resolution": "컴퓨터 해상도",
+      "clipboardFailed": "텍스트를 전송할 수 없습니다. 제어 권한을 확인하고 내용을 16,384자 이내로 줄이세요.",
+      "settingsFailed": "디스플레이 설정을 변경할 수 없습니다.",
+      "inputHint": "화면을 클릭하여 입력하세요. Ctrl+Alt+Esc로 키보드 포커스를 해제하고 Cmd/Ctrl+W로 이 창을 닫습니다.",
+      "controlPending": "제어 권한을 가져오는 중…",
+      "controlRequired": "보기 전용입니다. 클립보드와 데스크톱 작업을 사용하려면 제어 권한을 가져오세요.",
+      "confirmDisconnect": "이 컴퓨터와의 연결을 끊을까요?",
+      "confirmDisconnectHint": "원격 데스크톱 연결이 종료됩니다. 컴퓨터의 앱은 계속 실행됩니다.",
+      "disconnectFailed": "연결을 끊지 못했습니다. 다시 시도하세요.",
+      "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 컴퓨터 간에 텍스트를 복사하고 붙여넣으세요. 이미지와 파일은 아직 지원하지 않습니다.",
+      "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "매개변수가 잘못되었습니다. 확인 후 다시 시도하세요.",
@@ -3598,7 +3641,7 @@
         "allowInboundAria": "{{name}}이(가) 본 기기를 제어하도록 허용할지 전환",
         "peerControlOff": "상대방이 제어를 허용하지 않음",
         "masterOffHint": "먼저 위의 메인 스위치를 켜세요",
-        "controllingThisMac": "본 기기를 제어 중"
+        "controllingThisMac": "Cindy에 연결됨"
       },
       "toast": {
         "revoked": "이 기기의 액세스 권한을 철회했습니다",
@@ -5666,9 +5709,9 @@
       "requestChanges": "수정 요청",
       "planFeedbackPlaceholder": "피드백(선택)"
     },
-    "controlledBy": "{{name}} 가 제어 중",
-    "controlledByMultiple": "{{count}}대 기기가 제어 중",
-    "controlledTooltip": "같은 계정으로 로그인한 다른 기기가 이 기기를 원격 제어하고 있습니다. 접근 권한을 철회할 수 있습니다.",
+    "controlledBy": "{{name}}이(가) Cindy에 연결됨",
+    "controlledByMultiple": "기기 {{count}}대가 Cindy에 연결됨",
+    "controlledTooltip": "Cindy 세션에 연결된 기기입니다. 이 수는 데스크톱 마우스와 키보드를 제어하는 기기 수가 아닙니다. 접근 권한을 철회할 수 있습니다.",
     "revokeAccess": "권한 철회",
     "viewControllers": "보기",
     "collapseControlledNotice": "원격 제어 알림 접기",
@@ -7983,7 +8026,9 @@
       "loading": "브랜치 불러오는 중…",
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
-      "sourceTooltip": "worktree 소스 브랜치"
+      "sourceTooltip": "worktree 소스 브랜치",
+      "searchPlaceholder": "브랜치 검색",
+      "noMatch": "일치하는 브랜치가 없습니다"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",

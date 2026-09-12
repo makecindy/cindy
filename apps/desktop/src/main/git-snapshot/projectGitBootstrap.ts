@@ -64,7 +64,7 @@ export async function ensureProjectGitInitialized(
     return { status: 'skipped', reason: skipReason };
   }
 
-  const workingDir = path.resolve(request.workingDir!.trim());
+  const workingDir = path.resolve(request.workingDir!);
   return withProjectBootstrapQueue(workingDir, () =>
     ensureProjectGitInitializedInner({ ...request, workingDir }),
   );

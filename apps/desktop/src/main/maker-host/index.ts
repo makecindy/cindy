@@ -908,7 +908,7 @@ export function getMaker(): Maker {
     const pluginRegistry = createPluginRegistry();
 
     const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
-      const workingDir = context?.workingDir?.trim() || null;
+      const workingDir = context?.workingDir?.trim() ? context.workingDir : null;
       // Product access is the installed plugin (enable + workdir disable).
       // Leftover Tools-page `builtinTools['ios-simulator']` must not gate runtime.
       return getIOSSimulatorPluginAccessDecision(workingDir);

@@ -419,6 +419,22 @@ describe('production Session event pipeline', () => {
     await h.dispose();
   });
 
+  // #4349: the Host recovery notice reaches Desktop through the dedicated
+  // onRuntimeRecovery channel but shares handleSessionEvent with turn text. It is
+  // persisted and broadcast, yet must not be captured as an Orca worker result.
+  it('keeps a Host runtime-recovery notice out of Orca worker capture while still persisting it', async () => {
+    const h = harness();
+    const data = { isFinal: true, text: 'restart-cindy-to-refresh-packages' };
+    h.emit(event('text', data, { source: 'pi', runtimeRecovery: true }));
+    expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).not.toHaveBeenCalled();
+    // Still persisted (with the localized notice text) for the transcript.
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    // Ordinary worker text is still captured.
+    h.emit(event('text', { isFinal: true, text: 'real worker reply' }, { source: 'pi' }));
+    expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).toHaveBeenCalledWith('task', 'real worker reply', { isFinal: true });
+    await h.dispose();
+  });
+
   it('preserves ordinary Pi text without the Host recovery marker', async () => {
     const h = harness();
     const data = { isFinal: true, text: 'partial: restart-cindy-to-refresh-packages' };

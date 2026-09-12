@@ -34,7 +34,11 @@ export function persistSessionStreamEvent(
   let resolvedContent: string | undefined;
   if (event.type === 'text') {
     const td = event.data as { text?: unknown; isFinal?: unknown; isFullText?: unknown } | null;
-    if (typeof td?.text === 'string') {
+    // A Host runtime-recovery notice (#4349) is not the worker's reply: it is
+    // persisted and broadcast like any assistant text below, but must never be
+    // captured as an Orca worker result. Otherwise an error terminal that lacks
+    // finalText could fall back to the localized recovery prompt as the "result".
+    if (typeof td?.text === 'string' && event.runtimeRecovery !== true) {
       deps.orcaTeamServiceForEvents?.captureWorkerText(session.id, td.text, {
         isFinal: td.isFinal === true,
       });
