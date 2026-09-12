@@ -183,6 +183,8 @@ export default function RemoteDesktopScreen() {
     useLockOnExitPreference(deviceId);
   const exitLock = useRef(false);
   const leaving = useRef(false);
+  const [isLeaving, setIsLeaving] = useState(false);
+  const [exitLockPending, setExitLockPending] = useState(false);
   const linkRef = useRef(link);
   linkRef.current = link;
   const { t } = useTranslation();
@@ -236,11 +238,14 @@ export default function RemoteDesktopScreen() {
   const [controlReady, setControlReady] = useState(false);
   const connectionPending = !error && (!lease || !frameReady || !controlReady);
   const showConnectionStatus =
-    connectionPending || (!error && status === "reconnecting");
+    !isLeaving && (connectionPending || (!error && status === "reconnecting"));
+  const showExitLockStatus = isLeaving && exitLockPending;
   const connectionLabel = t(
-    recovery.current.at || status === "reconnecting"
-      ? "remoteDesktop.reconnecting"
-      : "remoteDesktop.connecting",
+    showExitLockStatus
+      ? "remoteDesktop.lockingOnExit"
+      : recovery.current.at || status === "reconnecting"
+        ? "remoteDesktop.reconnecting"
+        : "remoteDesktop.connecting",
   );
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
@@ -401,6 +406,7 @@ export default function RemoteDesktopScreen() {
       void remotePresentation?.playback(false).catch(() => {});
       connecting.current = false;
       const previous = active.current;
+      setExitLockPending(Boolean(previous && exiting && exitLock.current));
       active.current = null;
       pendingVideoSettings.current = null;
       if (previous) pendingMediaOffers.current.delete(previous);
@@ -670,6 +676,7 @@ export default function RemoteDesktopScreen() {
   const leave = async () => {
     if (leaving.current) return;
     leaving.current = true;
+    setIsLeaving(true);
     recovery.current.enabled = false;
     Keyboard.dismiss();
     const ending = stop(false, true);
@@ -854,8 +861,16 @@ export default function RemoteDesktopScreen() {
   useEffect(() => {
     // Route blur means leaving this desktop (including a native back swipe).
     // App background/inactive events use pause() without the exit flag.
-    if (!focused && !presentation.current) pause(true);
-    else if (!active.current) void connectRef.current();
+    if (!focused && !presentation.current) {
+      leaving.current = true;
+      setIsLeaving(true);
+      pause(true);
+    } else if (focused) {
+      leaving.current = false;
+      setIsLeaving(false);
+      setExitLockPending(false);
+      if (!active.current) void connectRef.current();
+    }
   }, [focused, pause, videoPreferencesLoaded]);
   useEffect(() => {
     send({
@@ -1580,7 +1595,9 @@ export default function RemoteDesktopScreen() {
             style={styles.webview}
             testID="remoteDesktop.viewer"
           />
-          {(showConnectionStatus || (!lease && error)) && (
+          {(showConnectionStatus ||
+            showExitLockStatus ||
+            (!lease && error)) && (
             <View
               pointerEvents="box-none"
               style={[
@@ -1588,7 +1605,7 @@ export default function RemoteDesktopScreen() {
                 { top: edgePadding.paddingTop + spacing.xs + 44 + spacing.lg },
               ]}
             >
-              {showConnectionStatus ? (
+              {showConnectionStatus || showExitLockStatus ? (
                 <View
                   style={styles.connectionBadge}
                   accessibilityRole="progressbar"
