@@ -1,3 +1,5 @@
+import { RemoteTaskSuggestions } from '@/session/RemoteTaskSuggestions';
+import { countHomeSuggestionSessions, remoteTaskSuggestionsMode, type RemoteTaskSuggestionId } from '@/session/remoteTaskSuggestionsModel';
 import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
 import { canBrowseMobileHomeDevice } from '@/session/mobileHome';
 import { useFocusEffect, useIsFocused } from 'expo-router';
@@ -1894,6 +1896,17 @@ function HomeScreenContent() {
   // 首次 loadHome 落地前(含失败态)FAB 只认 live 设备:缓存画出的会话会让 primaryDevice 合成出
   // 「可用」项,但缓存设备不能当 live 设备直接开新会话——列表先画出来,新建入口等 live 数据。
   const newSessionDisabled = !home.primaryDevice || (!initialHomeSettled && !hasOpenableLiveDevice);
+  const taskSuggestionsMode = remoteTaskSuggestionsMode({
+    sessionCount: countHomeSuggestionSessions(home,
+      shouldReplaceListWithSearchResults(searchQuery, indexedSearch.status) ? indexedSearch.results : undefined),
+    totalSessionCount: home.overview.all,
+    hasSearchOrFilter: !!searchQuery.trim() || indexedSearch.activeFilterCount > 0 || statusFilter !== 'active',
+    // Cached/offline lists and in-flight searches must not look ready to start work.
+    ready: !initialHomeLoading && !initialHomeError && !connectionError
+      && indexedSearch.status !== 'searching' && !newSessionDisabled
+      && deviceModels.some((device) => device.canOpen
+        && device.deviceId === (selectedDeviceId ?? home.primaryDevice?.deviceId)),
+  });
   const newSessionDeviceOptions = useMemo(
     () => deviceModels
       .filter((item) => item.canOpen)
@@ -1937,7 +1950,7 @@ function HomeScreenContent() {
     });
   }, [guardedPush, priorityContext, swipeRegistry, t]);
 
-  const openNewSession = useCallback((project?: MobileHomeProjectGroup) => {
+  const openNewSession = useCallback((project?: MobileHomeProjectGroup, suggestion?: RemoteTaskSuggestionId) => {
     const deviceId = project?.deviceId ?? home.primaryDevice?.deviceId;
     const deviceName = project?.deviceName ?? home.primaryDevice?.label ?? deviceId ?? '';
     if (!deviceId) {
@@ -1950,6 +1963,7 @@ function HomeScreenContent() {
         deviceId,
         deviceName,
         deviceOptions: serializeNewSessionDeviceOptions(newSessionDeviceOptions),
+        ...(suggestion ? { suggestion } : {}),
         ...(project?.workingDir ? { workingDir: project.workingDir } : {}),
         // 列表正筛选某台电脑时,新建默认跟随这台电脑(显式指定,盖过"上次选择"的
         // 记忆);"所有对话"下不带标记,新建页回落 newSessionPreferences 的记忆设备。
@@ -2685,6 +2699,9 @@ function HomeScreenContent() {
               testID="home.remoteAccessGuide"
               title={emptyStateTitle}
             />
+          ) : taskSuggestionsMode === 'empty' ? (
+            <RemoteTaskSuggestions mode="empty" onNewSession={() => openNewSession()}
+              onSelect={(id) => openNewSession(undefined, id)} />
           ) : (
             <MainWindowEmptyState
               centered
@@ -2699,6 +2716,10 @@ function HomeScreenContent() {
             />
           )
         }
+        ListFooterComponent={taskSuggestionsMode === 'footer' ? (
+          <RemoteTaskSuggestions mode="footer" onNewSession={() => openNewSession()}
+            onSelect={(id) => openNewSession(undefined, id)} />
+        ) : null}
         renderItem={renderHomeRow}
       />
 

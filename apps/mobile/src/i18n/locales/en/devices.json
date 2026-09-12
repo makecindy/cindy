@@ -182,6 +182,49 @@
     }
   },
   "list": {
+    "taskSuggestions": {
+      "connected": "Computer connected",
+      "title": "Away from your computer?\nYou can still get started.",
+      "copy": "Ask Cindy to work on your computer, and check progress from your phone.",
+      "footerTitle": "What can your computer help with next?",
+      "footerCopy": "Start a new task and follow its progress here.",
+      "newTask": "New task",
+      "tryThese": "Try a new task",
+      "shuffle": "Show more ideas",
+      "syncHint": "Tasks started on your computer will appear here too.",
+      "items": {
+        "findFile": {
+          "label": "Find a file on your computer",
+          "hint": "No need to go back and look for it",
+          "prompt": "Help me find a file on this computer. First ask for keywords in its name, its type, or roughly when it was modified, then search and list possible matches."
+        },
+        "computerStatus": {
+          "label": "See how busy your computer is",
+          "hint": "Check activity and resource usage",
+          "prompt": "Check the CPU, memory, and disk usage on this computer, identify resource-heavy programs, and summarize in plain language."
+        },
+        "projectProgress": {
+          "label": "Catch up on a project",
+          "hint": "Review recent changes and remaining work",
+          "prompt": "Help me catch up on a project on this computer. First let me choose the project, then review recent changes and outstanding work and give me a short summary."
+        },
+        "downloads": {
+          "label": "See what is in Downloads",
+          "hint": "Take stock before organizing",
+          "prompt": "Review the files in this computer’s Downloads folder, summarize them by type and date, and suggest how to organize them. Do not move or delete files yet."
+        },
+        "summarizeDocument": {
+          "label": "Summarize a long document",
+          "hint": "Get the key points on your phone",
+          "prompt": "Summarize a document on this computer. First ask for its file name or location, then extract the key points, conclusions, and action items."
+        },
+        "storageUsage": {
+          "label": "Find what is using disk space",
+          "hint": "Locate large files and folders",
+          "prompt": "Analyze disk usage on this computer, list the largest folders and files, and suggest ways to organize them. Do not delete anything yet."
+        }
+      }
+    },
     "thisComputer": "This device",
     "allConversations": "All Sessions",
     "syncFailed": "Sync failed",

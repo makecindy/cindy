@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { isRemoteTaskSuggestionId } from '@/session/remoteTaskSuggestionsModel';
+import { i18n } from '@/i18n';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, createElement, useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -78,6 +80,7 @@ const bindingNames = [
   'useState', 'useRef', 'useMemo', 'useEffect', 'useCallback', 'DEFAULT_NEW_SESSION_DRAFT',
   'pickNewSessionDefaultDevice', 'buildRecentWorkspaceOptions', 'pickInitialNewSessionWorkspace',
   'routeDeviceId', 'routeDeviceName', 'routeDeviceFallback', 'routeDeviceExplicit', 'deviceOptions',
+  'isRemoteTaskSuggestionId', 'params', 't',
   'initialWorkingDir', 'visualInitialDraft', 'sessions', 'readNewSessionPreferences',
   'saveNewSessionPreferences', 'drainStashedNewSessionDraft', 'loadBrowsePath', 'setDevicePickerOpen',
   'setAttachments', 'setAttachmentError', 'setBrowseOpen', 'setBrowseError',
@@ -102,12 +105,13 @@ Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root | undefined;
 afterEach(() => { act(() => root?.unmount()); root = undefined; });
 
-function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: NewSessionWorkspaceKind } = {}) {
+function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: NewSessionWorkspaceKind; suggestion?: string } = {}) {
   let resolveRead!: (value: NewSessionStoredPreferences) => void;
   const pendingRead = new Promise<NewSessionStoredPreferences>((resolve) => { resolveRead = resolve; });
   const deviceOptions = [{ deviceId: 'a', name: 'A' }, { deviceId: 'b', name: 'B' }];
   const initialWorkingDir = options.initialWorkingDir ?? null;
   const bindings = {
+    isRemoteTaskSuggestionId, params: { suggestion: options.suggestion }, t: i18n.getFixedT('zh-CN'),
     useState, useRef, useMemo, useEffect, useCallback, DEFAULT_NEW_SESSION_DRAFT,
     pickNewSessionDefaultDevice, buildRecentWorkspaceOptions,
     pickInitialNewSessionWorkspace: vi.fn(pickInitialNewSessionWorkspace),
@@ -158,6 +162,22 @@ function mountWorkspace(options: { initialWorkingDir?: string; restoredKind?: Ne
 }
 
 describe('new session workspace page effects', () => {
+  it('prefills a recommendation and preserves it when device/workspace defaults arrive', async () => {
+    const page = mountWorkspace({ suggestion: 'findFile' });
+    const prompt = i18n.t('devices.list.taskSuggestions.items.findFile.prompt', { lng: 'zh-CN' });
+    expect(page.current.draft.firstMessage).toBe(prompt);
+    expect(page.current.firstMessageSelection).toEqual({ start: prompt.length, end: prompt.length });
+    await page.resolvePreferences('project', 'b');
+    expect(page.current.draft.firstMessage).toBe(prompt);
+  });
+
+  it('leaves an unknown recommendation empty and keeps recovery drafts authoritative', async () => {
+    const page = mountWorkspace({ suggestion: 'unknown' });
+    expect(page.current.draft.firstMessage).toBe(DEFAULT_NEW_SESSION_DRAFT.firstMessage);
+    await page.resolvePreferences('dialogue');
+    expect(page.current.draft.firstMessage).toBe(DEFAULT_NEW_SESSION_DRAFT.firstMessage);
+  });
+
   it('keeps choices for both devices made before the stored preferences arrive', async () => {
     const page = mountWorkspace();
     act(() => page.current.selectRecentProject(' /manual/a '));
@@ -180,7 +200,7 @@ describe('new session workspace page effects', () => {
   });
 
   it.each(['project', 'dialogue'] as const)('preserves a restored %s draft over a late default', async (kind) => {
-    const page = mountWorkspace({ restoredKind: kind });
+    const page = mountWorkspace({ restoredKind: kind, suggestion: 'findFile' });
     await page.resolvePreferences(kind === 'project' ? 'dialogue' : 'project', 'b');
     expect(page.current.draft).toMatchObject({ workspaceKind: kind,
       workingDir: kind === 'project' ? '/restored/project' : '' });
