@@ -1,3 +1,4 @@
+import { captureImContext } from '../../shared/imMessageSource';
 /**
  * hook-control/session-runner.ts
  * ---------------------------------------------------------------------------
@@ -1231,7 +1232,18 @@ export function createMakerHookSessionRunner(deps: {
               clientId: turnChangeAnchorClientId,
               role: 'user',
               content: userMessageContent,
-              agentMeta: { origin, ...(req.source ? { hookSource: req.source } : {}) },
+              agentMeta: {
+                origin,
+                ...(req.source
+                  ? {
+                      hookSource: {
+                        ...req.source,
+                        contextSnapshot:
+                          req.contextSnapshot ?? captureImContext({ groupPrefix: req.prompt }),
+                      },
+                    }
+                  : {}),
+              },
             });
             await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
             turnChangeSetStarted = true;

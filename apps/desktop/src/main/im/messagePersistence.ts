@@ -24,13 +24,19 @@ import { createId } from '@paralleldrive/cuid2';
 
 import type { IMAttachment } from '@cindy/im';
 
-import { createMessage } from '../localDb/ipc/messages';
+import {
+  createMessage,
+  patchMessageAgentMeta,
+  broadcastMessageAgentMetaUpdate,
+} from '../localDb/ipc/messages';
+import { enqueueDurableWrite } from '../messagePersistBroadcaster';
+import type { ImMessageSource } from '../../shared/imMessageSource';
 import { createLogger } from '../logger';
 
 const log = createLogger('im:msg-persist');
 
 /**
- * Persist a feishu (or future IM) user message to the local messages table.
+ * Persist any local IM user message, or enrich its already-visible early row.
  *
  * content shape 对齐 desktop renderer 写 user 的方式:
  *   - 纯文本: content = string
@@ -43,23 +49,37 @@ export async function persistUserMessage(args: {
   sessionId: string;
   text: string;
   attachments?: readonly IMAttachment[];
+  source?: ImMessageSource;
+  /** Only use a pre-persisted row belonging to this session. Never reinsert it. */
+  existingClientId?: string;
 }): Promise<{ clientId: string } | null> {
   const { sessionId, text, attachments = [] } = args;
-  const clientId = createId();
+  const clientId = args.existingClientId ?? createId();
   const content = buildPersistedUserContent(text, attachments);
 
   try {
+    if (args.existingClientId) {
+      if (args.source) {
+        await enqueueDurableWrite('im-context-snapshot', async (ownerScope) => {
+          const patched = await patchMessageAgentMeta(sessionId, clientId, {
+            hookSource: args.source,
+          });
+          if (!patched) throw new Error('Pre-persisted IM message no longer exists');
+          await broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
+        });
+      }
+      return { clientId };
+    }
     await createMessage(sessionId, {
       clientId,
       role: 'user',
       content,
+      ...(args.source ? { agentMeta: { hookSource: args.source } } : {}),
     });
     return { clientId };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    log.warn(
-      `persistUserMessage failed (non-fatal) sessionId=...${sessionId.slice(-8)}: ${msg}`,
-    );
+    log.warn(`persistUserMessage failed (non-fatal) sessionId=...${sessionId.slice(-8)}: ${msg}`);
     return null;
   }
 }

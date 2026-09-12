@@ -1978,7 +1978,8 @@ describe('dispatcher 核心语义', () => {
     const { d } = makeDispatcher({
       runner: fr.runner,
       buildContextPrefix: async (payload) => ({
-        prefix: '<group_chat_context>背景</group_chat_context>',
+        prefix: '<group_chat_context>\n[群里最近的消息]\n[A] 背景\n第二行\n</group_chat_context>\n',
+        messageCount: 1,
         commit: () => {
           committed.push(payload.requestId);
         },
@@ -2005,6 +2006,10 @@ describe('dispatcher 核心语义', () => {
     expect(fr.calls).toHaveLength(2);
     await fr.calls[1]?.onProviderAccepted?.();
     expect(committed).toEqual(['running', 'queued-b']);
+    for (const call of fr.calls) {
+      expect(call.contextSnapshot).toEqual({ groupContext: '[A] 背景\n第二行', groupMessageCount: 1 });
+      expect(call.prompt).toContain('[A] 背景\n第二行');
+    }
 
     fr.finish({ finalText: 'queued b done' });
     await tick();

@@ -65,6 +65,7 @@ import {
 import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
+import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
@@ -147,6 +148,8 @@ export interface HookContinuationWatchRequest {
 }
 
 export interface HookRunRequest {
+  /** Local display snapshot; not part of the server wire protocol. */
+  contextSnapshot?: ImContextSnapshot;
   sessionId: string;
   /**
    * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
@@ -273,6 +276,7 @@ export interface HookDispatcherDeps {
    */
   buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
     prefix: string;
+    messageCount?: number;
     commit: (
       guard?: () => boolean | Promise<boolean>,
     ) =>
@@ -2311,11 +2315,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
+        let groupMessageCount: number | undefined;
         let commitContextCursor: ContextCursorCommit | undefined;
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
             contextPrefix = assembly.prefix;
+            groupMessageCount = assembly.messageCount;
             commitContextCursor = assembly.commit;
           } catch (error) {
             log.warn(`group context prefix failed, dispatching without it: ${String(error)}`);
@@ -2345,6 +2351,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             ...resolved.run,
             ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
+            contextSnapshot: captureImContext({
+              groupPrefix: contextPrefix || resolved.run.prompt,
+              groupMessageCount: contextPrefix ? groupMessageCount : undefined,
+            }),
             ...(source ? { source } : {}),
             ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
           },

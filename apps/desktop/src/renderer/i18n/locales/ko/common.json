@@ -9052,6 +9052,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}}에서",
+      "attachedContext": "이 메시지에 첨부된 컨텍스트",
+      "attachedContextCount": "이 메시지에 첨부된 컨텍스트 ({{count}})",
+      "groupBackgroundCount": "그룹 채팅 배경 ({{count}})",
+      "referencedMessages": "참조 메시지 ({{count}})",
+      "referencedContext": "참조 메시지",
+      "groupBackground": "그룹 채팅 배경",
       "viewThread": "스레드 컨텍스트 보기 ({{count}})"
     },
     "rewind": {

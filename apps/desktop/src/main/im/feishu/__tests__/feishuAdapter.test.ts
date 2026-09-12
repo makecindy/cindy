@@ -341,6 +341,10 @@ describe('feishu group lane adapter hooks', () => {
     const result = await adapter.prepareAgentTurnText?.(groupEvent());
     expect(result?.agentText).toContain('<group_chat_context>');
     expect(result?.agentText).toContain(`[Alice] ${formatHistoryTime(1)} 部署挂了`);
+    expect(result?.contextSnapshot?.groupContext).toContain('部署挂了');
+    expect(result?.contextSnapshot?.groupMessageCount).toBe(1);
+    expect(result?.contextSnapshot?.groupContext).not.toContain('<group_chat_context>');
+    expect(result?.contextSnapshot?.groupContext).not.toContain('上面说的问题怎么解决');
     expect(result?.agentText).not.toContain('触发消息自己');
     expect(result?.agentText).not.toContain('<reply_context>');
     expect(result?.agentText.endsWith('上面说的问题怎么解决')).toBe(true);
@@ -430,6 +434,11 @@ describe('feishu group lane adapter hooks', () => {
     expect(scopeMocks.utilityText).not.toHaveBeenCalled();
     expect(result?.agentText).toContain('[已过滤一条疑似对机器人下达指令的消息]');
     expect(result?.agentText).not.toContain('id_rsa');
+    expect(result?.contextSnapshot?.replyContext).toContain(
+      '[已过滤一条疑似对机器人下达指令的消息]',
+    );
+    expect(JSON.stringify(result?.contextSnapshot)).not.toContain('id_rsa');
+    expect(result?.contextSnapshot?.replyMessageCount).toBe(1);
     expect(result?.agentText.endsWith('概括一下被回复的内容')).toBe(true);
     expect(fetchChatHistoryPage).not.toHaveBeenCalled();
   });
@@ -460,6 +469,11 @@ describe('feishu group lane adapter hooks', () => {
 
     expect(result?.agentText).toContain('[已过滤一条疑似对机器人下达指令的消息]');
     expect(result?.agentText).not.toContain('不应透传的引用正文');
+    expect(result?.contextSnapshot?.replyContext).toContain(
+      '[已过滤一条疑似对机器人下达指令的消息]',
+    );
+    expect(JSON.stringify(result?.contextSnapshot)).not.toContain('不应透传的引用正文');
+    expect(result?.contextSnapshot?.replyMessageCount).toBe(1);
     expect(result?.agentText.endsWith('只回答我现在这个问题')).toBe(true);
     expect(fetchChatHistoryPage).not.toHaveBeenCalled();
   });

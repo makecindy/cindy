@@ -9058,6 +9058,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · from {{platform}}",
+      "attachedContext": "Context attached to this message",
+      "attachedContextCount": "Context attached to this message ({{count}})",
+      "groupBackgroundCount": "Group chat background ({{count}})",
+      "referencedMessages": "Referenced messages ({{count}})",
+      "referencedContext": "Referenced messages",
+      "groupBackground": "Group chat background",
       "viewThread": "View thread context ({{count}})"
     },
     "rewind": {

@@ -9052,6 +9052,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · 来自 {{platform}}",
+      "attachedContext": "本条附带的上下文",
+      "attachedContextCount": "本条附带的上下文（{{count}}）",
+      "groupBackgroundCount": "群聊背景（{{count}}）",
+      "referencedMessages": "引用消息（{{count}}）",
+      "referencedContext": "引用消息",
+      "groupBackground": "群聊背景",
       "viewThread": "查看 thread 上下文 ({{count}})"
     },
     "rewind": {

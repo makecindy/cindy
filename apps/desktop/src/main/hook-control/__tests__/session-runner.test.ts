@@ -549,6 +549,27 @@ describe('真正要跑的那个 live session 的目录也要过映射', () => {
 });
 
 describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () => {
+  it('persists the local producer snapshot and its accurate count without changing prompt', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const contextSnapshot = { groupContext: '[Alice] first\nsecond line', groupMessageCount: 1 };
+    await runner.run(baseReq({ prompt: 'original prompt', source: { im: 'slack' }, contextSnapshot }));
+    expect(h.createMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      content: 'original prompt',
+      agentMeta: expect.objectContaining({ hookSource: { im: 'slack', contextSnapshot } }),
+    }));
+  });
+  it.each(['telegram', 'slack', 'x', 'future'])('saves the same attached context metadata for %s hooks', async (im) => {
+    const runner = createMakerHookSessionRunner({ log });
+    const prompt = '<group_chat_context>\n[群里最近的消息]\n[Alice] background\n</group_chat_context>\nTechnical guidance\nquestion';
+    const source = { im, userText: 'question', threadContext: [{ author: 'Bob', text: 'quote' }] };
+    await runner.run(baseReq({ prompt, source }));
+    expect(h.createMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      content: prompt,
+      agentMeta: expect.objectContaining({ hookSource: {
+        ...source, contextSnapshot: { groupContext: '[Alice] background' },
+      } }),
+    }));
+  });
   it('createOnly materializes and broadcasts a task without a synthetic user turn', async () => {
     const runner = createMakerHookSessionRunner({ log });
 

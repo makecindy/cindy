@@ -1,3 +1,4 @@
+import { createLocalImSource, type ImContextSnapshot } from '../../../shared/imMessageSource';
 /**
  * main/im/shared/turnRunner.ts
  * ---------------------------------------------------------------------------
@@ -276,6 +277,7 @@ interface TurnState {
  * state.queue(否则会被当成 queue[0] 抢走正在跑的 turn 的事件流)。
  */
 interface QueuedSend {
+  contextSnapshot?: ImContextSnapshot;
   turn: TurnState;
   userMessage: UserMessage;
   rowId: string;
@@ -377,6 +379,7 @@ type DefaultRouteTargetResolution =
   | { target: null; missingAuth: ImAuthRouteStatus & { agentKind: AgentKind; model: string } };
 
 export interface ImRunAgentTurnArgs {
+  contextSnapshot?: ImContextSnapshot;
   botContextId: string;
   userId: string;
   /** 渠道 message id of the user's incoming message — used for emoji ack. */
@@ -899,6 +902,7 @@ export function createTurnRunner(
     }
 
     const item: QueuedSend = {
+      contextSnapshot: args.contextSnapshot,
       turn,
       // contextAttachments 只进模型消息(跟在用户自己附件后面), 不进
       // item.attachments —— persistUserMessage 落库的只有触发用户发的附件。
@@ -1185,25 +1189,25 @@ export function createTurnRunner(
           // 复用那条记录, 不再写第二条。sessionId 必须相符 —— 拼装期间路由若换到
           // 别的 session(/new 重置等), 那份预落库不属于本轮, 照常自己落一条。
           const prePersisted =
-            item.prePersistedUserMessage?.sessionId === rowId
-              ? item.prePersistedUserMessage
-              : null;
+            item.prePersistedUserMessage?.sessionId === rowId ? item.prePersistedUserMessage : null;
           // 受保护群的触发消息不进会话存档 —— 正文与附件都不落。turn 照常跑,
           // agent 拿得到内容; 只是这一轮的输入不留在长期记录里。
           const persisted = item.protectedContent
             ? null
-            : (prePersisted ??
-              (await persistUserMessage({
+            : await persistUserMessage({
                 sessionId: rowId,
                 text: item.text,
                 attachments: item.attachments,
-              })));
+                source: createLocalImSource(channel, item.text, item.contextSnapshot),
+                existingClientId: prePersisted?.clientId,
+              });
           await adapter.onUserMessagePersisted?.({
             sessionId: rowId,
             userMessageId: item.turn.userMessageId,
             persisted: persisted !== null,
           });
           if (persisted) {
+            item.prePersistedUserMessage = { sessionId: rowId, clientId: persisted.clientId };
             await beginTurnChangeSetAtDispatch(state.makerSession, persisted.clientId);
             turnChangeSetStarted = true;
           }
@@ -3488,6 +3492,7 @@ export function createTurnRunner(
     const persisted = await persistUserMessage({
       sessionId,
       text: args.text,
+      source: createLocalImSource(channel, args.text),
       ...(args.attachments ? { attachments: args.attachments } : {}),
     });
     if (!persisted) return null;

@@ -1,3 +1,4 @@
+import { captureImContext } from '../../../shared/imMessageSource';
 /**
  * main/im/feishu/adapter.ts
  * ---------------------------------------------------------------------------
@@ -361,8 +362,10 @@ export function buildFeishuAdapter(
               ...(event.replyContext.isBot ? { isBot: true } : {}),
             }
           : event.replyContext;
+        const replyPrefix = buildFeishuReplyContextBlock(safeReply);
         return {
-          agentText: `${buildFeishuReplyContextBlock(safeReply)}${event.text}`,
+          agentText: `${replyPrefix}${event.text}`,
+          contextSnapshot: captureImContext({ replyPrefix, replyMessageCount: 1 }),
         };
       }
       // 群主流 @ 开新话题: 上下文取数 lane 与路由 lane 分离(见
@@ -393,6 +396,10 @@ export function buildFeishuAdapter(
       if (!built) return null;
       return {
         agentText: `${built.prefix}${event.text}`,
+        contextSnapshot: captureImContext({
+          groupPrefix: built.prefix,
+          groupMessageCount: built.messageCount,
+        }),
         ...(built.contextAttachments.length > 0
           ? { contextAttachments: built.contextAttachments }
           : {}),

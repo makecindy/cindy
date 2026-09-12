@@ -9051,6 +9051,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · 來自 {{platform}}",
+      "attachedContext": "這則訊息附帶的上下文",
+      "attachedContextCount": "這則訊息附帶的上下文（{{count}}）",
+      "groupBackgroundCount": "群組背景（{{count}}）",
+      "referencedMessages": "引用訊息（{{count}}）",
+      "referencedContext": "引用訊息",
+      "groupBackground": "群組背景",
       "viewThread": "檢視 thread 上下文 ({{count}})"
     },
     "rewind": {

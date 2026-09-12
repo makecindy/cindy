@@ -9052,6 +9052,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}} から",
+      "attachedContext": "このメッセージに添付されたコンテキスト",
+      "attachedContextCount": "このメッセージに添付されたコンテキスト（{{count}}）",
+      "groupBackgroundCount": "グループチャットの背景（{{count}}）",
+      "referencedMessages": "参照メッセージ（{{count}}）",
+      "referencedContext": "参照メッセージ",
+      "groupBackground": "グループチャットの背景",
       "viewThread": "スレッドの文脈を見る ({{count}})"
     },
     "rewind": {
