@@ -310,7 +310,7 @@ export function __resetAvailableAgentsCacheForTest(): void {
 export function useModelPickerAgents(current: RuntimeAgentKind, deviceId?: string | null): readonly RuntimeAgentKind[] | undefined {
   const { availableVendors, loaded } = useAvailableAgents(deviceId);
   if (!loaded) return undefined;
-  return (['claude-code', 'codex', 'pi'] as const).filter(
+  return (['claude-code', 'codex', 'pi', 'grok-build'] as const).filter(
     (agent) => agent === current || availableVendors.has(toVendor(agent)),
   );
 }

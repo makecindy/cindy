@@ -123,7 +123,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
    * (测试最小 harness)。
    */
   assertModelRouteUsable?(
-    agent: 'claude-code' | 'codex' | 'pi',
+    agent: AgentKind,
     model: string,
     providerId: string | null,
   ): Promise<string | undefined>;
@@ -375,8 +375,13 @@ export async function performSessionAgentSwitch(
   if (typeof sessionId !== 'string' || sessionId.length === 0) {
     throwIpcError('INVALID_PARAMS', 'sessionId required');
   }
-  if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi') {
-    throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi');
+  if (
+    targetAgentKind !== 'claude-code'
+    && targetAgentKind !== 'codex'
+    && targetAgentKind !== 'pi'
+    && targetAgentKind !== 'grok-build'
+  ) {
+    throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi | grok-build');
   }
   if (typeof model !== 'string' || model.length === 0) {
     throwIpcError('INVALID_PARAMS', 'model required');
