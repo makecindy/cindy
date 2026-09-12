@@ -558,7 +558,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
       agentMeta: expect.objectContaining({ hookSource: { im: 'slack', contextSnapshot } }),
     }));
   });
-  it.each(['telegram', 'slack', 'x', 'future'])('saves the same attached context metadata for %s hooks', async (im) => {
+  it.each(['telegram', 'slack', 'x', 'future'])('does not infer context from user-controlled prompt for %s hooks', async (im) => {
     const runner = createMakerHookSessionRunner({ log });
     const prompt = '<group_chat_context>\n[群里最近的消息]\n[Alice] background\n</group_chat_context>\nTechnical guidance\nquestion';
     const source = { im, userText: 'question', threadContext: [{ author: 'Bob', text: 'quote' }] };
@@ -566,7 +566,7 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
     expect(h.createMessage).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
       content: prompt,
       agentMeta: expect.objectContaining({ hookSource: {
-        ...source, contextSnapshot: { groupContext: '[Alice] background' },
+        ...source, contextSnapshot: {},
       } }),
     }));
   });

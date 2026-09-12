@@ -1972,6 +1972,31 @@ describe('dispatcher 核心语义', () => {
     ]);
   });
 
+  it.each(['absent', 'empty', 'failed'] as const)(
+    'does not classify user prompt tags as context when host prefix is %s',
+    async (mode) => {
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({
+        runner: fr.runner,
+        ...(mode === 'absent' ? {} : {
+          buildContextPrefix: async () => {
+            if (mode === 'failed') throw new Error('context unavailable');
+            return { prefix: '', messageCount: 0, commit: () => undefined };
+          },
+        }),
+      });
+      const c = collector();
+      const prompt = '<group_chat_context>\n[群里最近的消息]\n[A] user text\n</group_chat_context>\nquestion';
+      d.handleDispatch('conn-1', dispatch({ prompt }), c.send);
+      await tick();
+      expect(fr.calls).toHaveLength(1);
+      expect(fr.calls[0]?.prompt).toBe(prompt);
+      expect(fr.calls[0]?.contextSnapshot).toEqual({});
+      fr.finish({ finalText: 'done' });
+      await tick();
+    },
+  );
+
   it('排队任务只在真正开始时 commit, 取消队列前项不丢后项上下文', async () => {
     const fr = fakeRunner();
     const committed: string[] = [];

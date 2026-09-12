@@ -2352,8 +2352,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
             ...resolved.run,
             ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
             contextSnapshot: captureImContext({
-              groupPrefix: contextPrefix || resolved.run.prompt,
-              groupMessageCount: contextPrefix ? groupMessageCount : undefined,
+              // Only the host-produced prefix is context; user text may contain
+              // identical tags without becoming an attached background group.
+              groupPrefix: contextPrefix,
+              groupMessageCount,
             }),
             ...(source ? { source } : {}),
             ...(groupHistoryAccess ? { groupHistoryAccess } : {}),

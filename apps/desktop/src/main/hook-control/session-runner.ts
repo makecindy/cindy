@@ -1,4 +1,3 @@
-import { captureImContext } from '../../shared/imMessageSource';
 /**
  * hook-control/session-runner.ts
  * ---------------------------------------------------------------------------
@@ -1238,8 +1237,9 @@ export function createMakerHookSessionRunner(deps: {
                   ? {
                       hookSource: {
                         ...req.source,
-                        contextSnapshot:
-                          req.contextSnapshot ?? captureImContext({ groupPrefix: req.prompt }),
+                        // New messages only persist producer-supplied context.
+                        // Legacy prompt projection belongs to the read path.
+                        contextSnapshot: req.contextSnapshot ?? {},
                       },
                     }
                   : {}),
