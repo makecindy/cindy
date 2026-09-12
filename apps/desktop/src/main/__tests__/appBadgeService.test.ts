@@ -234,6 +234,29 @@ describe('appBadgeService', () => {
     expect(service.getAttentionCount()).toBe(1);
   });
 
+  it.each(['darwin', 'win32'] as const)(
+    'bounds projected totals before mutation on %s',
+    async (platform) => {
+      const service = await freshService(platform);
+      const event = { sender: mainWebContents };
+      await publish(event, 10_000);
+      setBadgeCount.mockClear();
+      setOverlayIcon.mockClear();
+      for (const count of [10_001, Number.MAX_SAFE_INTEGER]) {
+        await expect(publish(event, count, ['rejected-id'])).rejects.toMatchObject({
+          code: 'INVALID_PARAMS',
+        });
+        expect(service.getAttentionCount()).toBe(10_000);
+      }
+      expect(setBadgeCount).not.toHaveBeenCalled();
+      expect(setOverlayIcon).not.toHaveBeenCalled();
+      service.markSessionNeedsAttention('rejected-id');
+      expect(service.getAttentionCount()).toBe(10_001); // Rejected snapshots cannot retain catalog IDs.
+      await publish(event, 0, []);
+      expect(service.getAttentionCount()).toBe(1); // Directory-external attention remains independent.
+    },
+  );
+
   it('clears the previous owner total until the new owner publishes its inventory', async () => {
     const service = await freshService();
     await publish({ sender: mainWebContents }, 3);

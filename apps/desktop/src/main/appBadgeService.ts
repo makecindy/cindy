@@ -55,8 +55,13 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
       count?: unknown;
       sessionIds?: unknown;
     };
-    if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
-      throwIpcError('INVALID_PARAMS', 'App attention count must be a non-negative safe integer');
+    if (
+      typeof count !== 'number' ||
+      !Number.isSafeInteger(count) ||
+      count < 0 ||
+      count > MAX_SNAPSHOT_SESSION_IDS
+    ) {
+      throwIpcError('INVALID_PARAMS', 'App attention count exceeds the supported inventory range');
     }
     if (!Array.isArray(sessionIds) || sessionIds.length > MAX_SNAPSHOT_SESSION_IDS) {
       throwIpcError('INVALID_PARAMS', 'App attention snapshot requires session IDs');
