@@ -62,6 +62,8 @@ function imLabel(im: string): string {
       return 'X';
     case 'feishu':
       return 'Feishu';
+    case 'lark':
+      return 'Lark';
     default:
       return im;
   }

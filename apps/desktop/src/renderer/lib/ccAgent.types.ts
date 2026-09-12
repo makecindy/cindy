@@ -127,6 +127,8 @@ export interface CcMeta {
    * (userText 为卡片正文, 与发给 agent 的完整 prompt 分离)。
    */
   hookSource?: ImMessageSource;
+  /** Local IM metadata stays separate so older clients retain ordinary user actions. */
+  imSource?: ImMessageSource;
 
   /** 历史 per-turn USD；新数据以 turnCost 为区域金额事实。 */
   turnCostUsd?: number;

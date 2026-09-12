@@ -182,6 +182,12 @@ describe('HookTaskCard attached context', () => {
     expect(screen.queryByRole('button')).toBeNull();
   });
 
+  it('attributes Lark messages to Lark rather than the internal Feishu channel', () => {
+    const { container } = render(<HookTaskCard im="lark" userText="问题" />);
+    expect(container.textContent).toContain('Lark');
+    expect(container.textContent).not.toContain('Feishu');
+  });
+
   it.each([
     'telegram',
     'slack',

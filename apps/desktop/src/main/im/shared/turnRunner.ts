@@ -1198,7 +1198,11 @@ export function createTurnRunner(
                 sessionId: rowId,
                 text: item.text,
                 attachments: item.attachments,
-                source: createLocalImSource(channel, item.text, item.contextSnapshot),
+                source: createLocalImSource(
+                  adapter.messageSourceIm?.() ?? channel,
+                  item.text,
+                  item.contextSnapshot,
+                ),
                 existingClientId: prePersisted?.clientId,
               });
           await adapter.onUserMessagePersisted?.({
@@ -3492,7 +3496,7 @@ export function createTurnRunner(
     const persisted = await persistUserMessage({
       sessionId,
       text: args.text,
-      source: createLocalImSource(channel, args.text),
+      source: createLocalImSource(adapter.messageSourceIm?.() ?? channel, args.text),
       ...(args.attachments ? { attachments: args.attachments } : {}),
     });
     if (!persisted) return null;

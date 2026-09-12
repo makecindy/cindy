@@ -17441,7 +17441,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const origin = m.agentMeta?.origin;
       const delivery = m.agentMeta?.delivery;
       const goalObjective = m.agentMeta?.goalObjective;
-      const hookSource = m.agentMeta?.hookSource;
+      // Both ingress paths share the Desktop card, but local IM must not opt
+      // older Mobile clients into legacy Hook/system-card semantics.
+      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource;
       return {
         clientId: m.clientId,
         role: m.role,

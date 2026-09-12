@@ -138,6 +138,8 @@ export interface ImSessionNamespace {
  */
 export interface ImChannelAdapter {
   channel: ImChannelName;
+  /** Selected display service; defaults to channel without changing routing identity. */
+  messageSourceIm?(): string;
   /** 所有渠道共有的文本收发能力；富卡片能力由 output.kind 显式收窄。 */
   im: TextChannelIM;
   /** Terminal output strategy; existing channels use rich-card. */

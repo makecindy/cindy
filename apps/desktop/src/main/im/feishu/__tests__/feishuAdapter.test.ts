@@ -137,6 +137,16 @@ describe('feishu ImChannelAdapter characterization', () => {
     expect(adapter.sessions.source).toBe('feishu');
   });
 
+  it.each(['feishu', 'lark'] as const)(
+    'persists the selected %s service without changing routing',
+    (service) => {
+      getService.mockReturnValueOnce(service);
+      expect(adapter.messageSourceIm?.()).toBe(service);
+      expect(adapter.channel).toBe('feishu');
+      expect(adapter.sessions.source).toBe('feishu');
+    },
+  );
+
   it('权限模式不兼容提示在发送时跟随当前语言', () => {
     const originalLocale = getResolvedMainLocale();
     const copy = adapter.ui.error?.permissionModeUnsupported;

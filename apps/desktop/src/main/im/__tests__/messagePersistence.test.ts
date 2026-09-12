@@ -39,7 +39,7 @@ describe('shared IM context persistence', () => {
         expect.objectContaining({
           role: 'user',
           content: 'question',
-          agentMeta: { hookSource: source },
+          agentMeta: { imSource: source },
         }),
       );
       expect(patchMessageAgentMeta).not.toHaveBeenCalled();
@@ -57,7 +57,7 @@ describe('shared IM context persistence', () => {
       }),
     ).toEqual({ clientId: 'early' });
     expect(createMessage).not.toHaveBeenCalled();
-    expect(patchMessageAgentMeta).toHaveBeenCalledWith('session', 'early', { hookSource: source });
+    expect(patchMessageAgentMeta).toHaveBeenCalledWith('session', 'early', { imSource: source });
     expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
       'session',
       'early',

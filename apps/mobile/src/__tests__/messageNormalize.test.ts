@@ -7,6 +7,7 @@ import {
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
 import { buildMobileMessageCopyText } from '@/session/messageActions';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
+import { isShareableMessage } from '@/session/shareSelectionStore';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
 import {
   MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES,
@@ -1129,6 +1130,29 @@ describe('normalizeRemoteMessages', () => {
       ['assistant-ignored', undefined],
     ]);
   });
+
+  it.each(['telegram', 'slack', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
+    'ignores additive local %s context metadata and retains ordinary user presentation',
+    (im) => {
+      const text = 'a'.repeat(20_100);
+      const url = 'https://example.invalid/image.png';
+      const [item] = normalizeRemoteMessages([message({
+        id: 'local-im',
+        role: 'user',
+        content: { text, images: [{ url, originalName: 'image.png' }] },
+        agentMeta: {
+          imSource: {
+            im, userText: text, contentFormat: 'user-text',
+            contextSnapshot: { groupContext: 'background', groupMessageCount: 1 },
+          },
+        },
+      })]);
+      expect(item).toMatchObject({ body: text, kind: 'user', align: 'user' });
+      expect(item.hookSource).toBeUndefined();
+      expect(item.attachments).toEqual(expect.arrayContaining([expect.objectContaining({ uri: url })]));
+      expect(isShareableMessage(item)).toBe(true);
+    },
+  );
 
   it('normalizes Telegram hook source into a left-aligned Cindy card payload', () => {
     const [item, unknown] = normalizeRemoteMessages([

@@ -242,6 +242,7 @@ export function buildFeishuAdapter(
         : '[飞书·群] ';
   return {
     channel: 'feishu',
+    messageSourceIm: () => feishuIm.getService(),
     im: feishuIm,
     output: { kind: 'rich-card', im: feishuIm },
     config,

@@ -62,7 +62,7 @@ export async function persistUserMessage(args: {
       if (args.source) {
         return await enqueueDurableWrite('im-context-snapshot', async (ownerScope) => {
           const patched = await patchMessageAgentMeta(sessionId, clientId, {
-            hookSource: args.source,
+            imSource: args.source,
           });
           // A confirmed deletion is different from a failed enrichment: never
           // recreate the row or start a turn change set against a missing row.
@@ -77,7 +77,7 @@ export async function persistUserMessage(args: {
       clientId,
       role: 'user',
       content,
-      ...(args.source ? { agentMeta: { hookSource: args.source } } : {}),
+      ...(args.source ? { agentMeta: { imSource: args.source } } : {}),
     });
     return { clientId };
   } catch (err) {
