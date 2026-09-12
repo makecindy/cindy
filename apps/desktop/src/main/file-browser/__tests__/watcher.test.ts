@@ -184,10 +184,17 @@ describe('WatcherManager stop 宽限期', () => {
     const workdir = path.join(path.sep, 'no-such-workdir-reveal');
     await manager.start(makeWindow(), workdir, { showIgnoredDirs: true }, vi.fn());
     expect(calls[0].ignore).toEqual(
-      expect.arrayContaining(['**/node_modules/**', '**/Library/**', '**/.git/**']),
+      expect.arrayContaining([
+        '**/node_modules/*',
+        '**/node_modules/**/*',
+        '**/Library/*',
+        '**/Library/**/*',
+        '**/.git/*',
+        '**/.git/**/*',
+      ]),
     );
     // 开关打开时 REVEALABLE 不预过滤 —— 它们本来就该推事件。
-    expect(calls[0].ignore).not.toContain('**/dist/**');
+    expect(calls[0].ignore).not.toContain('**/dist/*');
   });
 
   it('开关关闭时同样无条件带上 ALWAYS(目录稍后才出现也不漏)', async () => {
@@ -196,27 +203,35 @@ describe('WatcherManager stop 宽限期', () => {
     await manager.start(makeWindow(), workdir, { showIgnoredDirs: false }, vi.fn());
     expect(calls[0].ignore).toEqual(
       expect.arrayContaining([
-        '**/node_modules/**',
-        '**/Library/**',
-        '**/dist/**',
+        '**/node_modules/*',
+        '**/node_modules/**/*',
+        '**/Library/*',
+        '**/Library/**/*',
+        '**/dist/*',
+        '**/dist/**/*',
       ]),
     );
   });
 
   /**
-   * 预过滤名单的「层级」回归:名单必须发 glob,不能发根级绝对路径。
-   * @parcel/watcher 对非 glob 项走 `ignorePaths` 前缀比较 ——
-   * `nested/node_modules/x` 不是 `/workdir/node_modules` 的后代,monorepo
-   * (`packages/foo/node_modules`)与嵌套 Unity 工程(`client/Library`)会整目录
-   * 漏过去,开关打开时每个生成文件都是一条事件推过 watcher-host + IPC。
-   * glob 形态与层级无关,这里锁住这个形态(实测 2.5.6/win32:前缀形态零命中,
-   * `**\/<name>/**` 全层级命中)。
+   * 预过滤名单的形态回归：两个约束必须同时成立。
+   *  1. 层级：必须发 glob，不能发根级绝对路径 —— @parcel/watcher 对非 glob 项
+   *     走 `ignorePaths` 前缀比较，`nested/node_modules/x` 不是
+   *     `/workdir/node_modules` 的后代，monorepo / 嵌套 Unity 工程整目录漏过去。
+   *  2. 自身：`**\/<name>/**` 会把**目录自身**的事件也吞掉（探针实测 2.5.6/win32：
+   *     mkdir node_modules 一条事件都没有），开关打开时新建 / 删除 / 改名都看不到。
+   *     拆成一级内容与深层内容两条形态（目录自身不匹配）后，事件保留、
+   *     两级内容仍都忽略。
    */
-  it('预过滤用 glob 覆盖任意层级(不是根级绝对路径)', async () => {
+  it('预过滤用 glob 覆盖任意层级,且不吞目录自身事件', async () => {
     const { manager, calls } = setup();
     await manager.start(makeWindow(), 'D:/repo', { showIgnoredDirs: false }, vi.fn());
-    expect(calls[0].ignore).toContain('**/node_modules/**');
-    expect(calls[0].ignore).toContain('**/Library/**');
+    expect(calls[0].ignore).toContain('**/node_modules/*');
+    expect(calls[0].ignore).toContain('**/node_modules/**/*');
+    expect(calls[0].ignore).toContain('**/Library/*');
+    expect(calls[0].ignore).toContain('**/Library/**/*');
+    // 旧形态（吞目录自身事件）不得回潮。
+    expect(calls[0].ignore).not.toContain('**/node_modules/**');
     expect(calls[0].ignore).not.toContain(path.join('D:/repo', 'node_modules'));
   });
 

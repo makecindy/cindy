@@ -154,13 +154,20 @@ const PREFILTER_REVEALABLE = [
  * 只认“工作区根下直接命中”—— 实测(2.5.6, win32)`nested/node_modules/x` 不是
  * `/workdir/node_modules` 的后代,一条事件都拦不住,monorepo
  * (`packages/foo/node_modules`)与嵌套 Unity 工程(`client/Library`)全量漏过去。
- * 所以统一发 glob:`**\/<name>/**` 覆盖任意层级。
+ * 所以统一发 glob。
  *
- * 末尾的 `/**` 不能省:目录名要连内部条目一起匹配,`**\/<name>` 只匹配目录自身
- * (实测)。将来名单里若出现文件项(如 .DS_Store),要另用不带后缀的形态。
+ * 每个目录发**两条**`**\/<name>/*` 与 `**\/<name>/**\/*`,而不是一条
+ * `**\/<name>/**` —— 后者把**目录自身**的事件也吞掉(实测:mkdir node_modules
+ * 一条事件都没有),于是开关打开时新建 / 删除 / 改名 node_modules / Library 都
+ * 不会让 renderer refetch 父目录,那一行缺失或陈旧到手动刷新(评审 P1;daemon
+ * 侧同一裁决见 watch.ts 的 isInsideAlwaysIgnoredDir)。两条形态下:目录自身不
+ * 匹配 → 事件保留;一级与深层内容都匹配 → 仍不监听(也不会进入子目录)。
+ *
+ * 将来名单里若出现**文件**项(如 .DS_Store),要另发不带后缀的 `**\/<name>`
+ * —— 文件没有“内部”,套用同一对形态会让它自己漏出去。
  */
 const ignoreGlobsForDirs = (names: readonly string[]): string[] =>
-  names.map((name) => `**/${name}/**`);
+  names.flatMap((name) => [`**/${name}/*`, `**/${name}/**/*`]);
 
 function buildIgnoreList(opts: { showIgnoredDirs: boolean }): string[] {
   // ALWAYS 名单**无条件注册**,不做存在性探测:parcel 的 ignore 只在
