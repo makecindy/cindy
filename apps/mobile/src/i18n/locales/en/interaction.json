@@ -57,6 +57,7 @@
     "collapsedHint": "Tap to answer",
     "selectAnswer": "Select answer {{label}}",
     "submittingHint": "Sending the decision to your computer. Don't submit again.",
+    "decisionNotAccepted": "Your response was not accepted. Please try again.",
     "customAnswerInputAccessibility": "Enter a custom answer",
     "customAnswerPlaceholder": "Enter another answer",
     "customAnswerButtonText": "Enter another answer…",

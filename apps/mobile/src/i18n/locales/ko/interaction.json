@@ -57,6 +57,7 @@
     "collapsedHint": "탭하여 답변",
     "selectAnswer": "답변 {{label}} 선택",
     "submittingHint": "결정을 컴퓨터로 전송 중입니다. 중복 제출하지 마세요.",
+    "decisionNotAccepted": "응답을 제출하지 못했습니다. 다시 시도하세요.",
     "customAnswerInputAccessibility": "사용자 지정 답변 입력",
     "customAnswerPlaceholder": "다른 답변 입력",
     "customAnswerButtonText": "다른 답변 입력…",

@@ -1484,6 +1484,41 @@
     "providers": {
       "title": "模型供应商",
       "subtitle": "选择模型时的来源。每个来源提供它支持的模型与计费方式，可按任务分别切换。",
+      "import": {
+        "title": "导入模型供应商",
+        "destination": "导入到",
+        "newConnection": "新建连接",
+        "keyOnly": "只更换本次提供的 API Key，保留已有模型、路由和其他设置。",
+        "modelsPending": "{{name}} 已配置，但未能获取模型列表。请在供应商设置中重试。",
+        "busyWarning": "此次变更需要重载本机 Codex 服务，可能中断 {{count}} 个正在运行的任务。是否继续？",
+        "close": "关闭供应商导入",
+        "loadFailed": "这个供应商导入链接无效或已经过期。",
+        "confirmFailed": "导入失败，请检查链接或接口地址后重试。",
+        "oauthFailed": "供应商已添加，但授权未完成。可以再次尝试授权。",
+        "done": "已导入 {{name}}",
+        "oauthDone": "已添加并授权 {{name}}",
+        "cancel": "取消",
+        "create": "导入供应商",
+        "update": "更新供应商",
+        "replaceKey": "替换 API Key",
+        "addAndAuthorize": "添加并授权",
+        "retryOAuth": "重新尝试授权",
+        "harnesses": "各 Harness 配置",
+        "fetchAfterConfirm": "确认后获取模型列表",
+        "modelCount": "{{count}} 个模型",
+        "keyIncluded": "已包含 API Key（内容已隐藏）",
+        "headers": "请求头：{{names}}（值已隐藏）",
+        "oauthHosts": "授权：{{authorizeHost}} · Token 交换：{{tokenHost}}",
+        "browserAuthorizationInProgress": "请在刚刚打开的浏览器窗口中完成授权。",
+        "replaceWarning": "本次提供的 API Key 将替换所选连接的密钥。",
+        "confirmNote": "点击确认前不会保存任何内容，也不会访问供应商接口。",
+        "authorizationPendingNote": "供应商已添加，但授权尚未完成。你可以在这里重试或取消授权。",
+        "action": {
+          "create": "将在本机新建供应商 {{name}}。",
+          "update": "将更新已有供应商 {{name}}。",
+          "replace-key": "将替换 {{name}} 在本机保存的 API Key。"
+        }
+      },
       "order": {
         "hint": "拖动排序",
         "handle": "调整 {{provider}} 顺序，当前第 {{position}} 项，共 {{total}} 项。使用方向键移动。",
@@ -3195,6 +3230,7 @@
         "packageNotFound": "没有找到这个包。请检查包名或仓库地址。",
         "versionNotFound": "没有找到这个版本。请选择可用版本后重试。",
         "stateUnavailable": "Cindy 无法读取 Pi 扩展状态。请重启 Cindy 后重试。",
+        "runtimeRetirementFailed": "Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。",
         "runtimeConvergencePartial": "Pi 扩展更改已保存，但部分本机 Pi 任务可能仍在运行旧扩展。请重启 Cindy 后再使用 Pi。",
         "nativeCommandFailed": "Pi 原生包命令失败。请检查来源或版本后重试。"
       },
@@ -8564,7 +8600,9 @@
       "dismissTitle": "关闭此中断提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "此前有定时任务未完成，可查看运行记录。",
+      "text": "此前有自动运行失败。",
+      "precheck": "自动检查暂时受阻。",
+      "rateLimited": "自动检查暂时受阻：请求限流。",
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {
@@ -9408,7 +9446,7 @@
       "createProjectFailed": "新建项目失败",
       "projectsToggleExpand": "展开所有项目任务",
       "projectsToggleCollapse": "收起所有项目任务",
-      "filterAria": "侧边栏显示设置（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
+      "filterAria": "侧边栏显示设置（状态：{{status}}，Harness：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
       "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
@@ -9424,10 +9462,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "按项目分组",
+        "project": "按项目",
         "flat": "平铺",
-        "device": "按设备分组",
-        "dialogue": "对话归为一组"
+        "device": "按设备",
+        "dialogue": "按对话"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -9460,14 +9498,14 @@
         "priority": "等你处理的排在最前，然后是未读、运行中，其余按时间"
       },
       "filterStatusHeading": "状态",
-      "filterAgentHeading": "Agent",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活跃",
       "filterGroupByHeading": "分组",
       "filterSortByHeading": "排序",
       "filterTaskSortHeading": "任务排序",
-      "filterProjectOrderHeading": "项目顺序",
+      "filterProjectOrderHeading": "项目排序",
       "filterProjectOrder": {
-        "activity": "跟随任务排序",
+        "activity": "跟随任务",
         "custom": "手动"
       },
       "filterProjectOrderTip": {
@@ -9714,7 +9752,23 @@
         "projects": "项目",
         "dialogues": "对话"
       },
-      "railNavCount": "{{count}} 个任务"
+      "railNavCount": "{{count}} 个任务",
+      "groupSummary": {
+        "project": "项目",
+        "dialogue": "对话",
+        "device": "设备"
+      },
+      "taskStatusHeading": "任务状态",
+      "taskStatus": {
+        "active": "活跃",
+        "archived": "已归档",
+        "all": "全部"
+      },
+      "sortTaskBy": {
+        "priority": "按优先级",
+        "activity": "按最近活动",
+        "created": "按创建时间"
+      }
     },
     "rename": {
       "aiRename": "用 AI 重新命名",
@@ -10314,7 +10368,7 @@
         "enable": "启用",
         "tooltip": "任务触发时先执行该脚本：退出码 0 放行本轮；退出码 2 跳过本轮（不启动 Agent、不消耗 token）；脚本报错或超时将阻止执行并记录失败结果。脚本在任务工作目录下执行，Windows 上请写显式解释器（如 node check.mjs）。",
         "infoAria": "查看前置检查规则",
-        "protocol": "脚本写法：结束时退出码 0 = 本轮执行任务，退出码 2 = 本轮跳过（不消耗用量）；其他退出码、报错或超时会阻止执行",
+        "protocol": "脚本写法：结束时退出码 0 = 本轮执行任务，退出码 2 = 本轮跳过（不消耗用量）；其他退出码、报错或超时会阻止执行。检查完整成功后（包括正常无事可做），在 exit 0/2 前向 stdout 单独输出一行 CINDY_PRECHECK_OK，仅恢复此前的检查告警，不恢复执行失败；限流退避或检查不完整时不要输出。",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "测试",
         "testing": "测试中…",
@@ -12245,7 +12299,6 @@
     "unsavedDescription": "离开后会丢弃这次对例行任务的修改。",
     "discard": "放弃修改",
     "continueEditing": "继续编辑",
-
     "title": "例行任务",
     "add": "添加例行任务",
     "back": "返回例行任务",

@@ -3284,10 +3284,11 @@ describe('remoteSessionStore', () => {
     expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
   });
 
-  it('keeps the product turn running across claimed mobile continuation boundaries', () => {
+  it.each(['ask_user_question', 'plan_review'])('keeps the product running while %s awaits confirmation across an SDK boundary', (kind) => {
     vi.useFakeTimers();
     try {
       pushMakerStatus('s1', { isRunning: true });
+      remoteSessionStore.setPendingInteractions('s1', [{ request: { kind, requestId: 'human-1' } }]);
       pushMakerText('s1', 'persist-1', 'first segment', false);
       vi.runOnlyPendingTimers();
 
@@ -3305,16 +3306,21 @@ describe('remoteSessionStore', () => {
       });
 
       expect(remoteSessionStore.isSessionRunning('s1')).toBe(true);
+      expect(remoteSessionStore.getPendingInteractions('s1')).toHaveLength(1);
       expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(true);
       expect(remoteSessionStore.getSessionRunStatus('s1').startedAt).not.toBeNull();
       expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).toBe(true);
 
+      remoteSessionStore.applyRemotePush('dev-1', 'maker:interaction-dismissed', {
+        sessionId: 's1', requestId: 'human-1', resolvedAs: 'allow',
+      });
       remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
         sessionId: 's1',
         event: { type: 'done', data: {} },
       });
 
       expect(remoteSessionStore.isSessionRunning('s1')).toBe(false);
+      expect(remoteSessionStore.getPendingInteractions('s1')).toHaveLength(0);
       expect(remoteSessionStore.isSessionMakerTurnRunning('s1')).toBe(false);
       expect(remoteSessionStore.getMessages('s1')[0]?.agentMeta?.isStreaming).not.toBe(true);
     } finally {

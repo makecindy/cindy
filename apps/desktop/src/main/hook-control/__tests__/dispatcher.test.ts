@@ -7,6 +7,10 @@
 import path from 'node:path';
 
 import { describe, expect, it, vi } from 'vitest';
+import { Session, type AgentEvent, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
+import { observeHookTurn } from '../turnObserver';
+import { bindRuntimeRecoveryNotice } from '../../im/shared/runtimeRecoveryNotice';
+import { setMainLocale } from '../../i18n';
 
 import {
   HOOK_FEATURE_MESSAGE_OPS,
@@ -239,6 +243,112 @@ function makeDispatcher(overrides?: {
   });
   return { d, bindings, fr };
 }
+
+describe('post-terminal runtime recovery delivery', () => {
+  it.each([
+    ['en', 'Pi extensions could not be refreshed. Restart Cindy before using Pi again.'],
+    ['zh-CN', 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。'],
+    ['zh-TW', 'Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。'],
+    ['ja', 'Pi 拡張機能を更新できませんでした。Pi を再び使用する前に Cindy を再起動してください。'],
+    ['ko', 'Pi 확장을 새로 고치지 못했습니다. Pi를 다시 사용하기 전에 Cindy를 다시 시작하세요.'],
+  ] as const)('delivers localized %s recovery after the observer unsubscribes, without replay', async (locale, expected) => {
+    setMainLocale(locale);
+    let terminal!: () => void;
+    const terminalReady = new Promise<void>(resolve => { terminal = resolve; });
+    let end!: () => void;
+    const ended = new Promise<void>(resolve => { end = resolve; });
+    let failClose!: () => void;
+    const closeReady = new Promise<void>(resolve => { failClose = resolve; });
+    let running = false;
+    const handle = {
+      id: 'pi', agentKind: 'pi', model: 'm',
+      send: vi.fn(async () => { running = true; }),
+      close: vi.fn(async () => { await closeReady; throw new Error('exit unconfirmed'); }),
+      isTurnRunning: () => running, setInteractionResolver() {},
+      async *events() {
+        await terminalReady;
+        yield { type: 'text', source: 'pi', data: { text: 'saved result', isFinal: true } } as AgentEvent;
+        running = false;
+        yield { type: 'done', source: 'pi', data: { status: 'completed' } } as AgentEvent;
+        await ended;
+      },
+    } as unknown as AgentSessionHandle;
+    const logger = { ...noopLog, debug() {}, trace() {}, error() {}, fatal() {}, child() { return this; } };
+    const session = new Session({ id: 'task', agentKind: 'pi', workDir: WS_DIR,
+      handle, capabilities: {} as Capabilities, logger, turnStallMs: 0 });
+    let delivery: Promise<boolean> | undefined;
+    const noticeResult = vi.fn();
+    const run = vi.fn(async (req: HookRunRequest): Promise<HookRunOutcome> => {
+      const observer = observeHookTurn(session, { onSilentStopSettled: () => () => {}, log: noopLog });
+      await session.send(req.prompt, { beforeProviderStart: () => {
+        bindRuntimeRecoveryNotice(session, text => {
+          delivery = req.onRuntimeRecovery!(text);
+          void delivery.then(noticeResult);
+          return delivery;
+        }, noopLog);
+      } });
+      await session.closeAfterCurrentTurn({ failureEvent: () => ({ type: 'text', data: {
+        text: 'restart-cindy-to-refresh-packages', isFinal: true,
+      } }) });
+      terminal();
+      await observer.finished;
+      return { status: 'ok', finalText: observer.finalText(), errorMessage: null, durationMs: 1 };
+    });
+    const { d } = makeDispatcher({ runner: { isBusy: () => false, inspect: async () => null, run } });
+    const c = collector();
+    d.onConnected('conn-1', c.send, [HOOK_FEATURE_MESSAGE_OPS]);
+    try {
+      d.handleDispatch('conn-1', telegramDispatch(), c.send);
+      await vi.waitFor(() => expect(c.ofType('turn.end')).toHaveLength(1));
+      expect(c.ofType('turn.end')[0]?.payload).toMatchObject({ status: 'ok', finalText: 'saved result' });
+      failClose();
+      await vi.waitFor(() => expect(session.getStatus()).toBe('error'));
+      const notices = c.ofType('msg.op').filter(m => m.payload.action.kind === 'send');
+      expect(notices).toHaveLength(1);
+      expect(notices[0]?.payload).toMatchObject({ scope: { externalKey: telegramDispatch().externalKey },
+        action: { kind: 'send', text: expected } });
+      expect(JSON.stringify(notices)).not.toContain('restart-cindy-to-refresh-packages');
+      expect(notices[0]?.payload.requestId).toBeUndefined();
+      expect(noticeResult).not.toHaveBeenCalled(); // Socket send is not channel delivery.
+      d.onMessageOpResult({ opId: notices[0]!.payload.opId, ok: true, messageId: 'notice-1' });
+      await expect(delivery).resolves.toBe(true);
+      d.onMessageOpResult({ opId: notices[0]!.payload.opId, ok: true, messageId: 'notice-1' });
+      expect(c.ofType('turn.end')).toHaveLength(1);
+      expect(handle.send).toHaveBeenCalledOnce();
+      expect(run).toHaveBeenCalledOnce();
+    } finally {
+      failClose();
+      vi.mocked(handle.close).mockImplementation(async () => { end(); });
+      await session.close().catch(() => session.close());
+      d.dispose();
+      setMainLocale('en');
+    }
+  });
+
+  it.each(['unsupported', 'offline', 'account-changed', 'rejected', 'timeout'] as const)(
+    'does not claim delivery or rewrite success when %s', async (failure) => {
+      const { d, fr } = makeDispatcher();
+      const c = collector();
+      d.onConnected('conn-1', c.send, failure === 'unsupported' ? [] : [HOOK_FEATURE_MESSAGE_OPS]);
+      d.handleDispatch('conn-1', telegramDispatch(), c.send);
+      await tick();
+      fr.finish();
+      await tick();
+      if (failure === 'offline') d.onDisconnected('conn-1');
+      if (failure === 'account-changed') await d.deactivateAccount();
+      if (failure === 'timeout') vi.useFakeTimers();
+      try {
+        const pending = fr.calls[0]!.onRuntimeRecovery!('restart-cindy-to-refresh-packages');
+        const notice = c.ofType('msg.op').find(m => m.payload.action.kind === 'send');
+        if (failure === 'rejected') d.onMessageOpResult({ opId: notice!.payload.opId, ok: false });
+        if (failure === 'timeout') await vi.advanceTimersByTimeAsync(10_000);
+        await expect(pending).resolves.toBe(false);
+        expect(c.ofType('turn.end')).toHaveLength(1);
+        expect(fr.calls).toHaveLength(1);
+      } finally { d.dispose(); vi.useRealTimers(); }
+    },
+  );
+});
 
 describe('isPathWithin', () => {
   it('相等 / 子目录 / 外部路径', () => {

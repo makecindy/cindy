@@ -3859,7 +3859,8 @@ describe('Pi package executable-code boundary', () => {
       });
       await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
         localPi,
-        'requested',
+        'runtime-refresh',
+        expect.objectContaining({ afterCurrentTurn: true }),
       ));
       expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
     } finally {
@@ -3915,7 +3916,8 @@ describe('Pi package executable-code boundary', () => {
       });
       await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
         localPi,
-        'requested',
+        'runtime-refresh',
+        expect.objectContaining({ afterCurrentTurn: true }),
       ));
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(originListener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
@@ -4158,14 +4160,23 @@ describe('Pi package executable-code boundary', () => {
 
       await vi.waitFor(() => expect(closeSessionIfCurrent).toHaveBeenCalledWith(
         localPi,
-        'requested',
+        'runtime-refresh',
+        expect.objectContaining({ afterCurrentTurn: true }),
       ), { timeout: 2_000 });
       await new Promise((resolve) => setTimeout(resolve, 300));
       expect(originListener.mock.calls.filter(([origin]) => origin === 'external-runtime')).toHaveLength(1);
       expect(maker.advanceLocalPiPackageRuntimeGeneration).toHaveBeenCalledOnce();
       expect(closeSessionIfCurrent).toHaveBeenCalledTimes(1);
-      expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(remotePi, 'requested');
-      expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(reviewPi, 'requested');
+      expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(
+        remotePi,
+        'runtime-refresh',
+        expect.anything(),
+      );
+      expect(closeSessionIfCurrent).not.toHaveBeenCalledWith(
+        reviewPi,
+        'runtime-refresh',
+        expect.anything(),
+      );
     } finally {
       releaseInitialReads();
       unsubscribe();
