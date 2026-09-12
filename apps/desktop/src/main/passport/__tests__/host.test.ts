@@ -214,6 +214,31 @@ describe('Passport host transcription boundary', () => {
 
     expect(mocks.spawn).toHaveBeenCalledTimes(2);
   });
+  it('clears the prior owner snapshot before a resumed helper is ready', async () => {
+    const oldChild = mocks.spawn.mock.results[0].value;
+    host.suspendTaskSlots();
+    mocks.owner = 'owner-b';
+    mocks.catalog.mockImplementation(() => new Promise(() => {}));
+    oldChild.emit('exit', 0, null);
+    await host.resumeTaskSlots();
+    await flush();
+    const nextChild = mocks.spawn.mock.results.at(-1)!.value;
+    nextChild.stdout.emit('data', '{"kind":"ready"}\n');
+    await flush();
+    const frame = Buffer.from(nextChild.stdin.write.mock.calls.at(-1)![0].trim(), 'base64');
+    expect(frame[3]).toBe(0);
+    expect(frame.toString()).not.toContain('task');
+  });
+  it('recovers from a voice configuration rejection without staying in transcription', async () => {
+    mocks.asr.mockRejectedValueOnce(new Error('Voice recording configuration changed'));
+    record();
+    await flush();
+    expect(mocks.ipc.get('passport:state')!({}).voice).toBe('error');
+    record();
+    await flush();
+    expect(mocks.asr).toHaveBeenCalledTimes(2);
+    expect(mocks.ipc.get('passport:state')!({}).voice).toBe('draft');
+  });
   it('restarts an unexpectedly exited helper with bounded backoff', async () => {
     const firstChild = mocks.spawn.mock.results[0].value;
     firstChild.emit('exit', 1, null);

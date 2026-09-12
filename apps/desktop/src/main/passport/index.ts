@@ -441,6 +441,7 @@ export function registerPassportInputDevice(): void {
       generation++;
       cancelRestart();
       resetHelperState();
+      controller.update([]);
       void requestChildStop();
     },
     retryMs: 500,
@@ -450,7 +451,7 @@ export function registerPassportInputDevice(): void {
     cancelRestart(); restartAttempt = 0;
     if (timer) clearInterval(timer); timer = null;
     catalogReader.clear();
-    controller.reset(); history.clear(); activity = []; voice.reset(); pending = null; reading = null; voiceRevision++;
+    controller.reset(); controller.update([]); history.clear(); activity = []; voice.reset(); pending = null; reading = null; voiceRevision++;
     voiceTaskId = ''; voiceState = 'idle'; devices = []; bluetooth = 0;
     const childDone = requestChildStop();
     if (!child) void ownership.stop();
