@@ -127,7 +127,10 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
 `codex_reconnect_stalled` 同类，进入 interrupted-turn 自动续跑；自动续跑对这三类
 **只发 CONTINUE 指令，绝不克隆原始用户 prompt**（turn 已被 accept，克隆会重放已执行的
 工具副作用）。Claude rewind / cancellation bridge 的 `/compact` 位于真实用户输入之前，
-其超时使用 `bridge_upstream_response_idle_timeout`，不进入该自动续跑白名单；保持既有
+Claude idle 超时使用 `bridge_upstream_response_idle_timeout`；共享 Session stall 同步查询
+handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`。两者不进入
+该自动续跑白名单；查询复用 Claude 唯一的 `bridgeStateActive()`，包含 compact result 后
+到下一 SDK 消息前的间隙，不新增桥接状态。保持既有
 清队列、保留重建目标与人工重试行为，不能对尚未执行的用户输入发送 CONTINUE。
 引用内容解析等异步准备仍属于未派发态；完成后复核 active 身份，再在真正调用 send 前
 标记 sendStarted，迟到的准备结果不得发送或修改已经交给 replacement 的项。

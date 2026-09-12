@@ -6962,6 +6962,8 @@ export class ClaudeCodeAgent extends BaseAgent {
 
       // ── Rewind (Stage 2 C2) ────────────────────────────────────────────────
 
+      isPreparingUserTurn: bridgeStateActive,
+
       isTurnRunning(): boolean {
         // 前台 result/done 到后台 wake 任务自动续 turn 之间，SDK 会短暂把
         // turnInFlight 清成 false，但从产品/Session 视角 Agent 仍未执行结束。

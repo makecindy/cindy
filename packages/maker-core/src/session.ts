@@ -2862,7 +2862,9 @@ export class Session {
           '(upstream, tools and the agent subprocess were all silent); ' +
           'it was interrupted automatically. You can send the next message to continue.',
         isTerminal: true,
-        reason: 'turn_no_event_timeout',
+        reason: this.handle.isPreparingUserTurn?.()
+          ? 'bridge_turn_no_event_timeout'
+          : 'turn_no_event_timeout',
         turnStallMs: this.turnStallMs,
         lastEventType: this.lastEventType,
         msSinceLastEvent,

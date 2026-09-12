@@ -20,6 +20,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
+import { Session } from '../../../session.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { AgentEvent } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
@@ -1829,6 +1830,44 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
 
     await handle.close();
   });
+
+  it.each(['compact-running', 'between-turns', 'user-running'] as const)(
+    'shared stall distinguishes the bridge from user execution: %s', async (phase) => {
+      const { agent, handle, firstQuery } = await startRewindableSession({ autoCompactThresholdPct: 50 });
+      firstQuery.stream.emit({ type: 'stream_event', event: {
+        type: 'message_delta', usage: { input_tokens: 400_000, output_tokens: 0 },
+      } });
+      await handle.commitRewindFiles?.('user-uuid-1', 'assistant-uuid-1');
+      await handle.setModel?.('claude-sonnet-5');
+      const query = createFakeQuery();
+      sdkMock.query.mockReturnValue(query);
+      const session = new Session({ id: 'bridge-stall', agentKind: 'claude-code',
+        workDir: '/repo', handle, capabilities: agent.capabilities,
+        logger: createNoopLogger(), turnStallMs: 200 });
+      const events: AgentEvent[] = [];
+      session.onEvent((event) => events.push(event));
+      try {
+        await session.send('execute the original instruction');
+        if (phase !== 'compact-running') {
+          query.stream.emit({ type: 'result', stop_reason: 'end_turn',
+            total_cost_usd: 0, usage: { input_tokens: 0, output_tokens: 0 } });
+        }
+        if (phase === 'user-running') {
+          query.stream.emit({ type: 'stream_event', event: { type: 'message_start',
+            message: { id: 'real-user-turn', role: 'assistant', content: [],
+              usage: { input_tokens: 0, output_tokens: 0 } } } });
+        }
+        await vi.waitFor(() => expect(events).toContainEqual(expect.objectContaining({
+          type: 'error', data: expect.objectContaining({ reason: phase === 'user-running'
+            ? 'turn_no_event_timeout' : 'bridge_turn_no_event_timeout' }),
+        })), { timeout: 2000 });
+        if (phase !== 'user-running') {
+          expect(query.close).toHaveBeenCalled();
+          expect(query.interrupt).not.toHaveBeenCalled();
+        }
+      } finally { await session.close(); }
+    },
+  );
 
   it('upstream-idle watchdog during bridge closes query and rebuilds from rewind point', async () => {
     // 反馈原型 (Codex review 3535664420 / 3536509277): watchdog 是**直接 push eventQueue**
