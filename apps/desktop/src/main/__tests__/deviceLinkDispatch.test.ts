@@ -1240,6 +1240,32 @@ describe('被控端控制链路生命周期', () => {
     ]));
   });
 
+  it('sessions:get 写后回读不并入已有查询', async () => {
+    remoteControlEnabled = true;
+    const resolvers: Array<(value: unknown) => void> = [];
+    const handler = vi.fn(() => new Promise<unknown>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    registry.register('local-db:sessions:get', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = { channel: 'local-db:sessions:get', args: ['sess-1'] };
+    feed({ v: 1, kind: 'invoke', id: 'get-stale', src: 'ctrl-a', payload });
+    feed({ v: 1, kind: 'invoke', id: 'get-after-write', src: 'ctrl-a', payload });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    resolvers[0]?.({ id: 'sess-1', model: 'old' });
+    resolvers[1]?.({ id: 'sess-1', model: 'new' });
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'get-stale' || call.requestId === 'get-after-write',
+      )).toHaveLength(2);
+    });
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: 'get-stale', payload: { ok: true, result: { id: 'sess-1', model: 'old' } } }),
+      expect.objectContaining({ requestId: 'get-after-write', payload: { ok: true, result: { id: 'sess-1', model: 'new' } } }),
+    ]));
+  });
+
   it('显式 link-close 后丢弃旧世代晚到 IPC 结果，快速重开也不串进新链路', async () => {
     remoteControlEnabled = true;
     let resolveInvoke: ((value: string[]) => void) | undefined;

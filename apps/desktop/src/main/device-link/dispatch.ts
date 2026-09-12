@@ -612,7 +612,8 @@ const REMOTE_INVOKE_IN_FLIGHT_LIMIT = 64;
  */
 const COALESCE_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
-  'local-db:sessions:get',
+  // sessions:get 是写后权威回读（mobile 设置失败恢复会复用同一参数），
+  // 不能并进仍停在投影 await 的写前查询。
   'maker:get-capabilities',
   'maker:provider:list',
   'maker:git-safety:get',
