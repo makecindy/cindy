@@ -9722,9 +9722,9 @@
       },
       "taskStatusHeading": "任务状态",
       "taskStatus": {
-        "active": "活跃任务",
-        "archived": "已归档任务",
-        "all": "全部任务"
+        "active": "活跃",
+        "archived": "已归档",
+        "all": "全部"
       },
       "sortTaskBy": {
         "priority": "按优先级",

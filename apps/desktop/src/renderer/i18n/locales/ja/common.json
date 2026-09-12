@@ -9722,9 +9722,9 @@
       },
       "taskStatusHeading": "セッションの状態",
       "taskStatus": {
-        "active": "アクティブなセッション",
-        "archived": "アーカイブ済みセッション",
-        "all": "すべてのセッション"
+        "active": "アクティブ",
+        "archived": "アーカイブ済み",
+        "all": "すべて"
       },
       "sortTaskBy": {
         "priority": "優先度順",

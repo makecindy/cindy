@@ -9722,9 +9722,9 @@
       },
       "taskStatusHeading": "세션 상태",
       "taskStatus": {
-        "active": "활성 세션",
-        "archived": "보관된 세션",
-        "all": "모든 세션"
+        "active": "활성",
+        "archived": "보관됨",
+        "all": "전체"
       },
       "sortTaskBy": {
         "priority": "우선순위순",

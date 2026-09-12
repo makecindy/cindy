@@ -9737,9 +9737,9 @@
       },
       "taskStatusHeading": "Session status",
       "taskStatus": {
-        "active": "Active sessions",
-        "archived": "Archived sessions",
-        "all": "All sessions"
+        "active": "Active",
+        "archived": "Archived",
+        "all": "All"
       },
       "sortTaskBy": {
         "priority": "By priority",
