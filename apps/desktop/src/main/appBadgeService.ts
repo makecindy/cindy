@@ -14,11 +14,15 @@ import { getActiveAppSession } from './appSessionState';
 import { isDataOwnerPushStamp } from '../shared/dataOwnerPush';
 
 const log = createLogger('appBadgeService');
+// 普通本地桶各限 1,000；给多设备目录留余量，同时约束单包与跨包累计内存。
+const MAX_SNAPSHOT_SESSION_IDS = 10_000;
+const MAX_SESSION_ID_LENGTH = 512;
+const MAX_RETAINED_SESSION_IDS = 100_000;
 const attentionSessionIds = new Set<string>();
 // 侧栏就绪后目录内任务按当前状态计数；事件集合补齐伙伴等目录外任务，并服务灵动岛。
 // 首份投影前保留事件计数，避免 renderer 尚未挂载时漏掉后台提醒。
 let projectedAttentionCount: number | null = null;
-let projectedSessionIds = new Set<string>();
+const projectedSessionIds = new Set<string>();
 
 // channel 常量与 intent 类型的正本在 shared/sessionAttention.ts(preload fan-out /
 // renderer store 同源引用);这里 re-export 维持 main 侧既有引用面。
@@ -54,11 +58,13 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
     if (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 0) {
       throwIpcError('INVALID_PARAMS', 'App attention count must be a non-negative safe integer');
     }
-    if (
-      !Array.isArray(sessionIds) ||
-      !sessionIds.every((id) => typeof id === 'string' && id.length > 0)
-    ) {
+    if (!Array.isArray(sessionIds) || sessionIds.length > MAX_SNAPSHOT_SESSION_IDS) {
       throwIpcError('INVALID_PARAMS', 'App attention snapshot requires session IDs');
+    }
+    for (const id of sessionIds) {
+      if (typeof id !== 'string' || id.length === 0 || id.length > MAX_SESSION_ID_LENGTH) {
+        throwIpcError('INVALID_PARAMS', 'App attention snapshot contains an invalid session ID');
+      }
     }
     const owner = getActiveAppSession();
     if (
@@ -67,10 +73,18 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
       owner.dataOwnerId === null
     )
       return;
+    const uniqueSessionIds = new Set<string>(sessionIds);
+    let retainedSize = projectedSessionIds.size;
+    for (const id of uniqueSessionIds) {
+      if (!projectedSessionIds.has(id)) retainedSize += 1;
+    }
+    if (retainedSize > MAX_RETAINED_SESSION_IDS) {
+      throwIpcError('INVALID_PARAMS', 'App attention snapshot exceeds retained session ID limit');
+    }
     const previousCount = getAttentionCount();
     projectedAttentionCount = count;
     // 曾进入普通目录的任务始终归投影管理，删除/断连后不能被旧通知重新计入。
-    for (const sessionId of sessionIds) projectedSessionIds.add(sessionId);
+    for (const sessionId of uniqueSessionIds) projectedSessionIds.add(sessionId);
     if (getAttentionCount() !== previousCount) applyBadge();
   });
   ipcMain.handle(

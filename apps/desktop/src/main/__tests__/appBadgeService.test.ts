@@ -175,6 +175,33 @@ describe('appBadgeService', () => {
     expect(setBadgeCount).not.toHaveBeenCalled();
   });
 
+  it('rejects oversized snapshots atomically and bounds repeated batches', async () => {
+    const service = await freshService();
+    const event = { sender: mainWebContents };
+    await publish(event, 3, []);
+    for (const ids of [Array(10_001).fill('id'), ['x'.repeat(513)]]) {
+      await expect(publish(event, 99, ids)).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+      expect(service.getAttentionCount()).toBe(3);
+    }
+    const ids = Array.from({ length: 10_000 }, (_, index) => `id-${index}`);
+    for (let batch = 0; batch < 10; batch++) {
+      await publish(
+        event,
+        3,
+        ids.map((id) => `${batch}-${id}`),
+      );
+    }
+    // 重复 ID 不占额外累计预算；满额后仍可刷新已有目录和总数。
+    await publish(event, 4, ['0-id-0', '0-id-0']);
+    await expect(publish(event, 99, ['new-id'])).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
+    expect(service.getAttentionCount()).toBe(4);
+    service.markSessionNeedsAttention('new-id');
+    expect(service.getAttentionCount()).toBe(5); // 被拒投影没有部分写入目录。
+    service.clearAllSessionAttention();
+    await publish(event, 1, ['x'.repeat(512)]);
+    expect(service.getAttentionCount()).toBe(1);
+  });
+
   it('clears the previous owner total until the new owner publishes its inventory', async () => {
     const service = await freshService();
     await publish({ sender: mainWebContents }, 3);
