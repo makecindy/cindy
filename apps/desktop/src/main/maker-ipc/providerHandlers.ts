@@ -1,4 +1,4 @@
-import { setProviderPresentation } from '../maker-host/provider-presentation-store.js';
+import { setProviderPresentation, retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 /**
  * provider:* IPC handlers。
  *
@@ -89,6 +89,7 @@ import {
 } from '../provider-import/providerImport.js';
 import {
   builtinApiKeyStore,
+  builtinApiKeyPresentationId,
   type BuiltinApiKeyBridgeDeps,
 } from '../secrets/builtinApiKeyBridge.js';
 import type {
@@ -1210,8 +1211,15 @@ export function registerProviderHandlers(
           if (!deps.builtinApiKeyDeps)
             throwIpcError('INTERNAL', 'built-in API-key bridge unavailable');
           builtinApiKeyStore(deps.builtinApiKeyDeps, draft.provider, draft.apiKey);
+          // Credential commit is final even if display refresh fails or the user cancels.
           finishProviderImportConfirm(importId as string, true);
-          return { ok: true, providerId: draft.provider, authMethod: 'apiKey' };
+          const visibleProviderId = builtinApiKeyPresentationId(draft.provider);
+          await retainProviderPresentationAfterAuthChange(visibleProviderId);
+          const currentOwner = providerImportScope();
+          if (currentOwner.dataOwnerId === ownerAtIngress.dataOwnerId && currentOwner.generation === ownerAtIngress.generation) {
+            deps.broadcastChanged();
+          }
+          return { ok: true, providerId: visibleProviderId, authMethod: 'apiKey' };
         }
 
         const options: CustomProviderUpdateOptions = {

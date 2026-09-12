@@ -745,6 +745,7 @@ import {
   builtinApiKeyHas,
   builtinApiKeyRemove,
   builtinApiKeyStore,
+  builtinApiKeyPresentationId,
   type BuiltinApiKeyBridgeDeps,
 } from './secrets/builtinApiKeyBridge.js';
 import {
@@ -5598,7 +5599,7 @@ const registerIpcHandlers = () => {
     ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       builtinApiKeyStore(builtinApiKeyDeps, providerId, value);
-      await retainProviderPresentationAfterAuthChange(providerId as string);
+      await retainProviderPresentationAfterAuthChange(builtinApiKeyPresentationId(providerId as string));
     },
   );
 
@@ -5609,7 +5610,7 @@ const registerIpcHandlers = () => {
       const active = getActiveAppSession();
       if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       builtinApiKeyRemove(builtinApiKeyDeps, providerId);
-      await retainProviderPresentationAfterAuthChange(providerId as string);
+      await retainProviderPresentationAfterAuthChange(builtinApiKeyPresentationId(providerId as string));
     },
   );
 

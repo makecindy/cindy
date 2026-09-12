@@ -29,6 +29,7 @@ import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
+import * as providerPresentation from '../../maker-host/provider-presentation-store.js';
 import { IpcHarness } from './helpers/ipcHarness.js';
 
 /** 最小 ProviderView 桩（只放断言要用的字段；handler 不解读结构，原样透传）。 */
@@ -174,6 +175,7 @@ function createProviderImportId(payload: unknown): string {
 }
 
 afterEach(() => {
+  vi.restoreAllMocks();
   clearProviderImportDraftsForTest();
   if (client) clearCurrentDbClient(client);
   raw?.close();
@@ -1029,6 +1031,8 @@ describe('provider:custom:* CRUD handlers', () => {
     'imports %s into its own built-in key slot only after confirmation',
     async (provider) => {
       mountDb();
+      const retain = vi.spyOn(providerPresentation, 'retainProviderPresentationAfterAuthChange').mockResolvedValue();
+      const visibleId = provider === 'openai-images' ? 'openai' : provider;
       const harness = new IpcHarness();
       const bridge = {
         store: {
@@ -1039,7 +1043,8 @@ describe('provider:custom:* CRUD handlers', () => {
         onKeyChanged: vi.fn(),
         logError: vi.fn(),
       };
-      registerProviderHandlers(harness, makeDeps({ builtinApiKeyDeps: bridge }));
+      const deps = makeDeps({ builtinApiKeyDeps: bridge });
+      registerProviderHandlers(harness, deps);
       const importId = createProviderImportId({
         kind: 'builtin',
         provider,
@@ -1048,11 +1053,50 @@ describe('provider:custom:* CRUD handlers', () => {
       const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId) as ProviderImportPreview;
       expect(preview.providerId).toBe(provider);
       expect(bridge.store.set).not.toHaveBeenCalled();
+      expect(retain).not.toHaveBeenCalled();
       await expect(
         harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId),
-      ).resolves.toMatchObject({ ok: true, providerId: provider });
+      ).resolves.toMatchObject({ ok: true, providerId: visibleId });
       expect(bridge.store.set).toHaveBeenCalledExactlyOnceWith(provider, 'fixture-builtin-key');
       expect(bridge.onKeyChanged).toHaveBeenCalledExactlyOnceWith(provider);
+      expect(retain).toHaveBeenCalledExactlyOnceWith(visibleId);
+      expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+      retain.mockRestore();
+    },
+  );
+
+  it.each(['cancel', 'owner-change', 'write-failure'])(
+    'keeps builtin credential commit final across %s during presentation refresh', async (action) => {
+      mountDb();
+      const harness = new IpcHarness();
+      let finish!: () => void;
+      const retain = vi.spyOn(providerPresentation, 'retainProviderPresentationAfterAuthChange')
+        .mockImplementation(() => new Promise<void>((resolve) => { finish = resolve; }));
+      const owner = { dataOwnerId: 'test-user', generation: 1 };
+      const bridge = {
+        store: { set: vi.fn(() => action !== 'write-failure'), remove: vi.fn(() => ({ success: true })), has: vi.fn(() => false) },
+        onKeyChanged: vi.fn(), logError: vi.fn(),
+      };
+      const deps = makeDeps({ builtinApiKeyDeps: bridge, currentOwnerSession: () => ({ ...owner }) });
+      registerProviderHandlers(harness, deps);
+      const id = createProviderImportId({ kind: 'builtin', provider: 'openai-images', apiKey: 'fake-key' });
+      await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, id);
+      const confirming = harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, id);
+      if (action === 'write-failure') {
+        await expect(confirming).rejects.toThrow(/INTERNAL/);
+        expect(retain).not.toHaveBeenCalled();
+        expect(deps.broadcastChanged).not.toHaveBeenCalled();
+        return;
+      }
+      await vi.waitFor(() => expect(retain).toHaveBeenCalledExactlyOnceWith('openai'));
+      expect(deps.broadcastChanged).not.toHaveBeenCalled();
+      if (action === 'cancel') await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CANCEL, id);
+      else owner.generation++;
+      finish();
+      await expect(confirming).resolves.toMatchObject({ ok: true, providerId: 'openai' });
+      expect(deps.broadcastChanged).toHaveBeenCalledTimes(action === 'cancel' ? 1 : 0);
+      await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, id)).rejects.toThrow(/INVALID_PARAMS/);
+      expect(bridge.store.set).toHaveBeenCalledOnce();
     },
   );
 
