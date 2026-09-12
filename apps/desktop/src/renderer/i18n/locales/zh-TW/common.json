@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "需要關注的任務：{{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "鎖定畫面控制",
     "windowsready": "已為本次執行的 Cindy 啟用。重新啟動 Cindy 後需要再次由管理員授權。",

@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "対応が必要なタスク：{{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "ロック画面の操作",
     "windowsready": "現在の Cindy で有効です。Cindy を再起動すると管理者の再承認が必要です。",
