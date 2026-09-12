@@ -66,6 +66,7 @@ function assertQueueOwner(owner: CurrentDbClientSnapshot) {
 const pendingCancellations = new Map<string, Set<string>>();
 // Keep successful cancellations in memory too: a concurrent enqueue's final SELECT may
 // have completed just before the tombstone committed, while its continuation is still queued.
+// This is a replay fence, not evidence that cancellation beat an existing user row.
 const cancelledDeliveryIds = new Map<string, Set<string>>();
 const queueKey = (owner: CurrentDbClientSnapshot, sid: string) => `${owner.clientEpoch}:${sid}`;
 async function flushCancellations(owner: CurrentDbClientSnapshot, sessionId: string) {
@@ -137,15 +138,23 @@ export async function awaitAgentInputQueueSnapshotPersistence(sessionId: string)
 }
 
 /** Seal cancellation before the following queue snapshot can forget its delivery ID. */
-export async function saveCancelledInputDelivery(sessionId: string, clientId: string): Promise<void> {
-  const key = queueKey(queueOwner(), sessionId);
+export async function saveCancelledInputDelivery(sessionId: string, clientId: string): Promise<boolean> {
+  const owner = queueOwner();
+  const key = queueKey(owner, sessionId);
   const intents = pendingCancellations.get(key) ?? new Set<string>();
   intents.add(clientId);
   pendingCancellations.set(key, intents);
   const cancelled = cancelledDeliveryIds.get(key) ?? new Set<string>();
   cancelled.add(clientId);
   cancelledDeliveryIds.set(key, cancelled);
-  return chainWrite(sessionId, async () => undefined);
+  await chainWrite(sessionId, async () => undefined);
+  // After restart this namespace may already belong to executed history. INSERT
+  // ... ON CONFLICT DO NOTHING succeeding does not prove cancellation won.
+  const rows = await owner.client.drizzle.select({ role: messages.role }).from(messages)
+    .where(and(eq(messages.sessionId, sessionId), eq(messages.clientId, clientId)));
+  assertQueueOwner(owner);
+  if (!rows[0]) throw new Error('Input delivery cancellation unavailable');
+  return rows[0].role === 'message_tombstone';
 }
 
 /** Queue ownership and terminal history share the existing durable clientId namespace. */

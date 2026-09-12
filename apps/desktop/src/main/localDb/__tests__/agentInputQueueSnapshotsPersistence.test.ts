@@ -284,6 +284,47 @@ describe('agent input queue snapshot durability boundary', () => {
     expect(hasInputDeliveryCancellation('cancel-retry', 'cancelled-id')).toBe(true);
     await expect(awaitAgentInputQueueSnapshotPersistence('cancel-retry')).resolves.toBeUndefined();
   });
+  it.each(['user', 'rewound-user', 'message_tombstone', 'absent'])('only confirms cancellation when its durable namespace is sealed: %s', async (existing) => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec('CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, content TEXT, rewind_at INTEGER, UNIQUE(session_id, client_id))');
+    const sid = `cancel-conflict-${existing}`;
+    const cid = 'same-client-id';
+    if (existing !== 'absent') sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?)')
+      .run(sid, cid, existing === 'rewound-user' ? 'user' : existing, 'original', existing === 'rewound-user' ? 1 : null);
+    mocks.getDbClient.mockReturnValue({ drizzle: {
+      insert: () => ({ values: (row: Record<string, unknown>) => ({ onConflictDoNothing: async () => {
+        sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING')
+          .run(row.sessionId, row.clientId, row.role, row.content, row.rewindAt);
+      } }) }),
+      select: () => ({ from: () => ({ where: async () => sqlite.prepare('SELECT role FROM messages WHERE session_id = ? AND client_id = ?').all(sid, cid) }) }),
+    } });
+    try {
+      const expected = existing === 'absent' || existing === 'message_tombstone';
+      // Register synchronously to stop a late enqueue while the durable claim is checked.
+      const cancellation = saveCancelledInputDelivery(sid, cid);
+      expect(hasInputDeliveryCancellation(sid, cid)).toBe(true);
+      expect(await cancellation).toBe(expected);
+      // The replay fence stays closed even when executed history beat cancellation.
+      expect(hasInputDeliveryCancellation(sid, cid)).toBe(true);
+      // A repeated cancellation has the same answer and never replaces executed content.
+      expect(await saveCancelledInputDelivery(sid, cid)).toBe(expected);
+      expect(sqlite.prepare('SELECT content FROM messages').get()).toEqual({ content: existing === 'absent' ? 'null' : 'original' });
+    } finally { sqlite.close(); }
+  });
+  it.each(['missing', 'read-error'])('does not acknowledge an unverified cancellation and can retry: %s', async (failure) => {
+    const where = vi.fn();
+    if (failure === 'missing') where.mockResolvedValueOnce([]);
+    else where.mockRejectedValueOnce(new Error('db unavailable'));
+    where.mockResolvedValue([{ role: 'message_tombstone' }]);
+    mocks.getDbClient.mockReturnValue({ drizzle: {
+      insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
+      select: () => ({ from: () => ({ where }) }),
+    } });
+    const sid = `cancel-unverified-${failure}`;
+    await expect(saveCancelledInputDelivery(sid, 'id')).rejects.toThrow();
+    expect(hasInputDeliveryCancellation(sid, 'id')).toBe(true);
+    await expect(saveCancelledInputDelivery(sid, 'id')).resolves.toBe(true);
+  });
   it('fences queued writes at an account switch without writing to the next account', async () => {
     const gate = deferred<void>();
     const first = installDb({ write: () => gate.promise });

@@ -15133,12 +15133,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // Register the intent and remove synchronously before drain can take a pending item.
       const cancellation = durable ? saveCancelledInputDelivery(sid, cid) : undefined;
       const result = inputCoordinator.remove(sid, cid);
-      await cancellation;
+      const inputDeliveryCancelled = await cancellation;
       await awaitAgentInputQueueSnapshotPersistence(sid);
       if (!inputCoordinator.hasPendingQueuedWork(sid)) {
         getAgentIslandService()?.notifyQueueEmptied(sid);
       }
-      return durable ? { ...result, inputDeliveryCancelled: true } : result;
+      return durable ? { ...result, inputDeliveryCancelled: inputDeliveryCancelled === true } : result;
     },
   );
 
