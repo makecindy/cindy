@@ -581,8 +581,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     }
 
     // Explicit retirement is checked before hooks: a broken external check must not
-    // keep an archived task's heartbeat alive. Persistent automations still rebind.
-    if (schedule.targetSessionId && !schedule.persistentSession) {
+    // keep an archived task's heartbeat alive. Persistent automations still rebind;
+    // bot routines retain their service-owned canonical-session lifecycle.
+    if (schedule.source !== 'bot' && schedule.targetSessionId && !schedule.persistentSession) {
       const target = await getSessionRowSnapshot(schedule.targetSessionId);
       if (target?.status === 'archived' || target?.status === 'deleted') {
         return this.retireHeartbeat(schedule, ctx, target.status);
@@ -764,7 +765,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // resumeSessionId / heartbeatWorkingDir / heartbeatModel 仍是 undefined,
           // 下方 workingDir 解析自然走 schedule.workingDir + schedule.useWorktree 分支
         } else {
-          if (row?.status === 'archived' || row?.status === 'deleted') {
+          if (schedule.source !== 'bot' && (row?.status === 'archived' || row?.status === 'deleted')) {
             return this.retireHeartbeat(schedule, ctx, row.status);
           }
           const errMsg = `target session not available (${row?.status ?? 'missing'})`;

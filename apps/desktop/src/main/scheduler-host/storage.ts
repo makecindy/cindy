@@ -642,11 +642,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       firedAt: scheduleRuns.firedAt,
       failureRecovered: failureRecoveredSql('schedule_runs'),
       failureKind: sql<'precheck' | 'rate-limit' | 'execution'>`CASE
-        WHEN json_valid(${scheduleRuns.preRunHookResult}) THEN CASE
-          WHEN json_extract(${scheduleRuns.preRunHookResult}, '$.decision') = 'block' THEN CASE
+        WHEN CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
+          THEN json_extract(${scheduleRuns.preRunHookResult}, '$.decision') = 'block' ELSE 0 END THEN CASE
             WHEN lower(json_extract(${scheduleRuns.preRunHookResult}, '$.stderr')) LIKE '%rate limit%'
               THEN 'rate-limit' ELSE 'precheck' END
-          ELSE 'execution' END
+        WHEN substr(${scheduleRuns.errorMsg}, 1, 12) = 'pre-run hook' THEN 'precheck'
         ELSE 'execution' END`,
     };
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([

@@ -2,6 +2,7 @@ import { useEffect, useState, type CSSProperties } from 'react';
 import { AlertCircle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { scheduleFailureMessageKey } from '@cindy/maker-shared/schedule-model';
 import {
@@ -94,10 +95,10 @@ function FailedScheduleNotice({
       <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
         {t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`)}
         {onViewHistory && (
-          <button type="button" onClick={onViewHistory} data-split-pane-route-action=""
-            className="ml-2 rounded-full px-2 py-1 underline hover:bg-[var(--button-primary-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]">
+          <Button variant="secondary" size="md" onClick={onViewHistory}
+            data-split-pane-route-action="" className="ml-2">
             {t('chat.unreadFailedScheduleBanner.viewHistory')}
-          </button>
+          </Button>
         )}
       </span>
       <Tip text={t('chat.unreadFailedScheduleBanner.dismissTitle')}>

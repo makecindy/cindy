@@ -513,6 +513,21 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     } finally { harness.close(); }
   });
 
+  it.each([null, '{broken', '{}', '{"decision":"skip"}'])('classifies legacy precheck errors when hook metadata is %s', async (hookJson) => {
+    const harness = createStorageHarness();
+    try {
+      harness.db.run(sql`INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at)
+        VALUES ('legacy-check-session', 'Check', 'desktop', 'dialogue', 1, 1)`);
+      await harness.storage.insert(baseSchedule());
+      await harness.storage.insertRun({ id: 'legacy-check', scheduleId: 'sch-1', firedAt: 1,
+        status: 'failed', sessionId: 'legacy-check-session', errorMsg: 'pre-run hook blocked: unavailable' });
+      harness.db.run(sql`UPDATE schedule_runs SET pre_run_hook_result = ${hookJson} WHERE id = 'legacy-check'`);
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual([
+        expect.objectContaining({ runId: 'legacy-check', failureKind: 'precheck' }),
+      ]);
+    } finally { harness.close(); }
+  });
+
   it('keeps renamed legacy aliases from the latest-session projection', async () => {
     const harness = createStorageHarness();
     const schedule = baseSchedule({

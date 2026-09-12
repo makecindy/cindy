@@ -453,6 +453,22 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
+  it.each(['archived', 'deleted'])('keeps unavailable %s bot targets in the routine failure lifecycle', async (status) => {
+    const order: string[] = [];
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const acquirePendingAgentSwitch = vi.fn(async () => () => { order.push('release'); });
+    const { runner, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
+    notifier.notify.mockImplementation(async () => { order.push('notify'); });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status, userSendAt: null, providerId: null });
+    const pause = vi.fn(async () => { order.push('pause'); throw new Error('Schedule not found: schedule-1'); });
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(baseSchedule({ source: 'bot', manual: true, targetSessionId: 'scheduler-session' }),
+      createFireContext())).rejects.toThrow(`target session not available (${status})`);
+    expect(order).toEqual(['release', 'pause', 'notify']);
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
   it('captures the scheduler git baseline after the user row exists and aborts it when send is rejected', async () => {
     const order: string[] = [];
     let releaseBaseline: (() => void) | undefined;
