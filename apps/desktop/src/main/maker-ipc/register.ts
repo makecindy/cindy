@@ -540,6 +540,7 @@ import {
   ensureRemoteHostReady,
   getRemoteSshPool,
   broadcastSilentInstallStatus,
+  probeRemoteWorkingDirectory,
 } from '../remote-ssh/index.js';
 import { recordSessionContextSnapshot } from '../sessionSpendBroadcaster.js';
 
@@ -10586,7 +10587,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     resolveWorkerWorkingDir: async (dir, lead) => {
       let resolved: string;
       if (lead.remoteHostId) {
-        const { probeRemoteWorkingDirectory } = await import('../remote-ssh/index.js');
         resolved = await probeRemoteWorkingDirectory(lead.remoteHostId, dir);
       } else {
         resolved = await realpathWorkingDirectory(dir);

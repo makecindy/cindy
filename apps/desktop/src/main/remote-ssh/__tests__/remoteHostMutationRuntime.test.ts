@@ -130,6 +130,7 @@ vi.mock('../../maker-host/index.js', () => ({
 
 import {
   getRemoteSshPool,
+  probeRemoteWorkingDirectory,
   registerRemoteSshIpc,
   REMOTE_SSH_INVOKE,
 } from '../index.js';
@@ -206,6 +207,24 @@ beforeEach(async () => {
 });
 
 describe('remote SSH mutation runtime semantics', () => {
+  it('preserves trailing whitespace in a resolved Worker directory', async () => {
+    await getRemoteSshPool().hydrate([host('worker-dir')]);
+    const remote = getRemoteSshPool().get('worker-dir')!;
+    const status = vi.spyOn(remote, 'getStatus').mockReturnValue('ready');
+    const exec = vi.spyOn(remote, 'exec').mockResolvedValue({
+      exitCode: 0, signal: null, stdout: 'dir /remote/project \n', stderr: '',
+    });
+    try {
+      await expect(probeRemoteWorkingDirectory('worker-dir', '/remote/project '))
+        .resolves.toBe('/remote/project ');
+      expect(exec).toHaveBeenCalledWith(expect.stringContaining("'/remote/project '"),
+        expect.objectContaining({ timeoutMs: 10_000 }));
+    } finally {
+      exec.mockRestore();
+      status.mockRestore();
+    }
+  });
+
   it('returns a cold-start diagnostic instead of making the host list look valid and empty', () => {
     expect(initialListResult).toMatchObject({
       hosts: [],

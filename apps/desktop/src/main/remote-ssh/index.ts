@@ -2108,7 +2108,9 @@ fi
   if (result.exitCode !== 0) {
     throw new Error(`bash exit=${result.exitCode}: ${result.stderr.trim().slice(0, 200) || '(no stderr)'}`);
   }
-  const line = result.stdout.trim().split(/\r?\n/).pop() ?? '';
+  // Remove only the protocol terminator: trailing spaces belong to the path.
+  const line = result.stdout.replace(/\r?\n$/, '');
+  if (/[\r\n]/.test(line)) throw new Error('unexpected multiline stat output');
   // Allow spaces in the resolved path — only split on the first space.
   const spaceIdx = line.indexOf(' ');
   if (spaceIdx < 0) {

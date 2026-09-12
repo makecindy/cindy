@@ -687,7 +687,7 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
 
     let workingDir = lead.workingDir ?? '';
     if (params.workingDir !== undefined) {
-      const requested = typeof params.workingDir === 'string' ? params.workingDir.trim() : '';
+      const requested = typeof params.workingDir === 'string' ? params.workingDir : '';
       const paths = lead.remoteHostId ? path.posix : path;
       if (!requested || requested.length > 4096 || requested.includes('\0') || !paths.isAbsolute(requested)) {
         return { ok: false, errorCode: 'INVALID_PARAMS', message: 'working_dir must be an existing absolute directory on the Worker host' };

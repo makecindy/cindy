@@ -21,14 +21,13 @@ export function resolveLocalCollabPolicyWorkingDir(
   workspaceKind: string | null | undefined,
   isManagedDialogueWorkspace: (workingDir: string) => boolean,
 ): string | undefined {
-  const normalizedWorkingDir = workingDir.trim();
   if (
-    normalizedWorkingDir === '' ||
-    (workspaceKind === 'dialogue' && isManagedDialogueWorkspace(normalizedWorkingDir))
+    workingDir.trim() === '' ||
+    (workspaceKind === 'dialogue' && isManagedDialogueWorkspace(workingDir))
   ) {
     return undefined;
   }
-  return normalizedWorkingDir;
+  return workingDir;
 }
 
 /**
@@ -52,7 +51,7 @@ export function assertCollabProjectEnabled(
   isPluginEnabled: (pluginId: 'collab', workingDir?: string) => boolean,
   isManagedDialogueWorkspace: (workingDir: string) => boolean,
 ): void {
-  const workingDir = typeof context.workingDir === 'string' ? context.workingDir.trim() : null;
+  const workingDir = typeof context.workingDir === 'string' ? context.workingDir : null;
   if (context.workspaceKind !== 'project' && context.workspaceKind !== 'dialogue') {
     throwIpcError(
       'PRECONDITION_FAILED',
@@ -61,7 +60,7 @@ export function assertCollabProjectEnabled(
   }
   // 正常 dialogue 在 createSession 时已经拿到 app 托管的运行目录。这里仍要求非空,
   // 防止损坏/legacy 行把空 cwd 带进 Worker bootstrap;区别只在它不参与项目级策略查询。
-  if (workingDir === null || workingDir === '') {
+  if (workingDir === null || workingDir.trim() === '') {
     throwIpcError('PRECONDITION_FAILED', 'collaboration requires a session working directory');
   }
 

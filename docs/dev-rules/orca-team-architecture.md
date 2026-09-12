@@ -213,7 +213,11 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 bootstrap 和首条任务派发之前校验并绑定，项目上下文与 agent 进程使用同一目录。
 本机目录解析真实路径并检查目录及协同开关；SSH 目录通过继承的 remoteHostId 在远端校验，
 不拿本机文件系统判断远端路径。无效目录或目标项目禁用协同时返回错误，不回退到 Lead
-目录，也不创建 Worker。该参数不创建目录或 Git worktree，不改变供应商、模型与权限继承。
+目录，也不创建 Worker。路径按原样解析，不裁剪目录名中的空格。该参数不创建目录或
+Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
+显式 `working_dir` 的单个或批量 MCP 调用走现有会话审批：Full Access 直接执行，Auto
+审阅用户授权，Ask 使用现有确认；不得被可信 server 或缓存的 server 授权直接放行。
+省略时保持原有静默继承；审批缺少工具名或参数证据时不静默放行。无需新增 UI。
 
 ### 协同运行时行为契约
 

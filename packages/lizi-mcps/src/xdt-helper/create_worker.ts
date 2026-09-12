@@ -103,7 +103,7 @@ export const createWorkerSpecSchema = z.object({
     .min(1)
     .optional()
     .describe('可选, 创建后立即派给 worker 的第一条消息'),
-  working_dir: z.string().trim().min(1).max(4096).optional()
+  working_dir: z.string().min(1).max(4096).refine((value) => value.trim().length > 0).optional()
     .describe('可选，Worker 所在主机上已存在的绝对工作目录；省略则继承 Lead。创建前校验并绑定，失败不回退；不创建目录或 Git worktree。'),
 }).strict();
 

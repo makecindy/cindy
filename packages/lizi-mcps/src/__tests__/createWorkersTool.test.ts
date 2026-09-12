@@ -61,10 +61,10 @@ describe('create_workers tool', () => {
     const registry = setup(createWorker);
     await registry.call('create_workers', { workers: [
       { ...worker(1), working_dir: '/tmp/first' },
-      { ...worker(2), working_dir: '/tmp/second with spaces' },
+      { ...worker(2), working_dir: '/tmp/second with spaces ' },
     ] });
     expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({ workingDir: '/tmp/first' }));
-    expect(createWorker).toHaveBeenNthCalledWith(2, expect.objectContaining({ workingDir: '/tmp/second with spaces' }));
+    expect(createWorker).toHaveBeenNthCalledWith(2, expect.objectContaining({ workingDir: '/tmp/second with spaces ' }));
   });
 
   it('routes multi-worker requests to one deterministic batch tool', () => {

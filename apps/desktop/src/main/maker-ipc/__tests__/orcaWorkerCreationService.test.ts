@@ -195,8 +195,8 @@ describe('Orca worker working directory', () => {
   };
 
   it('binds the resolved directory before bootstrap (dispatch belongs to lifecycle)', async () => {
-    const requested = path.resolve('candidate link');
-    const resolved = path.resolve('candidate real');
+    const requested = path.resolve('candidate link ');
+    const resolved = path.resolve('candidate real ');
     const { deps, service } = createDeps({
       resolveWorkerWorkingDir: vi.fn(async () => resolved),
     });
