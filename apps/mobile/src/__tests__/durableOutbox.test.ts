@@ -247,6 +247,20 @@ describe("durable mobile outbox ownership", () => {
 });
 
 describe("app-owned delivery and reconciliation", () => {
+  it.each([true, false])("persists creation Plan=%s on the input before enqueue", async (planModeArm) => {
+    const { store, runner, deps } = await setup();
+    const record = message();
+    record.creation = {
+      draft: { agentKind: 'claude-code', workspaceKind: 'project', workingDir: '/repo',
+        model: 'test', providerId: null, effort: 'medium', permissionMode: 'ask',
+        fastMode: false, firstMessage: record.item.text },
+      deviceName: 'Mac', planModeArm, restorePermissionMode: null,
+    };
+    await store.add(record);
+    await runner.run();
+    expect(deps.enqueue.mock.calls[0]?.[0].prepared?.createOpts.planMode).toBe(planModeArm);
+    expect(store.getSnapshot()[0]?.prepared?.createOpts.planMode).toBe(planModeArm);
+  });
   it("sends without a page and keeps display ownership until history confirms the message", async () => {
     const { store, runner, deps } = await setup();
     await store.add(message());

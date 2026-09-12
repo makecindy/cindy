@@ -68,6 +68,25 @@ function installDb(
 }
 
 describe('agent input queue snapshot durability boundary', () => {
+  it('rejects through Promise handlers when the database owner is unavailable', async () => {
+    mocks.getDbClient.mockImplementation(() => { throw new Error('DbClient not ready'); });
+    try {
+      const operations = [
+        () => saveAgentInputQueueSnapshot('owner-unavailable', [queued()]),
+        () => saveCancelledInputDelivery('owner-unavailable', 'client-1'),
+        () => awaitAgentInputQueueSnapshotPersistence('owner-unavailable'),
+        () => readInputDeliveryReceipts('owner-unavailable', ['client-1']),
+      ];
+      for (const operation of operations) {
+        const cleanup = vi.fn();
+        await operation().catch(cleanup);
+        expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({ message: 'DbClient not ready' }));
+      }
+    } finally {
+      mocks.getDbClient.mockReset();
+    }
+  });
+
   it('waits for the current session write and resolves after the DB operation', async () => {
     const gate = deferred<void>();
     const { onConflictDoUpdate } = installDb({ write: () => gate.promise });

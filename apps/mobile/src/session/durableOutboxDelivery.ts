@@ -186,6 +186,10 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         await update({
           prepared: {
             ...prepared,
+            // Snapshot Plan on this input, never arm the session during preparation.
+            ...(record.creation ? {
+              createOpts: { ...prepared.createOpts, planMode: record.creation.planModeArm },
+            } : {}),
             ...(projection.inputDeliveryVersion === 1
               ? { durableDelivery: true }
               : {}),

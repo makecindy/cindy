@@ -500,6 +500,7 @@
     "authGateHint": "{{agent}} 在这台电脑上还没有已连接的模型供应商，发送会失败。请在电脑端 {{appName}} 的「设置 → 模型供应商」完成配置。"
   },
   "outbox": {
+    "legacyPlanRecovery": "这台电脑暂不支持在计划模式下恢复待发消息。请关闭计划模式，或更新电脑上的 Cindy 后重试",
     "creationRecoveryRequired": "请先重试创建任务，再删除首条消息；这条消息还保存着后续消息所需的任务恢复信息。",
     "confirmationRequired": "电脑暂时无法确认是否收到这条消息。请核对消息记录，或更新电脑上的 Cindy 后重试。",
     "taskCleared": "发送后，这个任务已被清空。消息仍保存在手机上，请核对后处理。",

@@ -86,7 +86,7 @@ async function flushCancellations(owner: CurrentDbClientSnapshot, sessionId: str
 export function hasInputDeliveryCancellation(sessionId: string, clientId: string): boolean {
   return cancelledDeliveryIds.get(queueKey(queueOwner(), sessionId))?.has(clientId) === true;
 }
-function chainWrite(sessionId: string, op: (owner: CurrentDbClientSnapshot) => Promise<void>): Promise<void> {
+async function chainWrite(sessionId: string, op: (owner: CurrentDbClientSnapshot) => Promise<void>): Promise<void> {
   const owner = queueOwner();
   const sid = sessionId;
   sessionId = queueKey(owner, sid);
@@ -132,12 +132,12 @@ function chainWrite(sessionId: string, op: (owner: CurrentDbClientSnapshot) => P
  * later writes are chained after it and are not silently skipped.  A session
  * with no pending write is already at the latest known durable boundary.
  */
-export function awaitAgentInputQueueSnapshotPersistence(sessionId: string): Promise<void> {
+export async function awaitAgentInputQueueSnapshotPersistence(sessionId: string): Promise<void> {
   return _latestWriteResults.get(queueKey(queueOwner(), sessionId)) ?? Promise.resolve();
 }
 
 /** Seal cancellation before the following queue snapshot can forget its delivery ID. */
-export function saveCancelledInputDelivery(sessionId: string, clientId: string): Promise<void> {
+export async function saveCancelledInputDelivery(sessionId: string, clientId: string): Promise<void> {
   const key = queueKey(queueOwner(), sessionId);
   const intents = pendingCancellations.get(key) ?? new Set<string>();
   intents.add(clientId);

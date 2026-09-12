@@ -189,14 +189,6 @@ export function MobileOutboxBridge() {
         if (!session?.workingDir)
           throw new Error(i18n.t("session.screen.missingWorkingDir"));
         const item = r.item;
-        if (r.creation?.planModeArm)
-          await maker(r).setPlanMode(r.item.sessionId, true);
-        if (r.creation?.restorePermissionMode)
-          await maker(r).setPermissionMode(
-            r.item.sessionId,
-            item.permissionModeAtSend,
-          );
-        guard();
         const rebuilt = buildQueuedTextMessage(
           { ...session, permissionMode: item.permissionModeAtSend },
           item.text,
@@ -290,14 +282,6 @@ export function MobileOutboxBridge() {
             authority,
           });
         return found;
-      },
-      accepted: async (r) => {
-        if (r.creation?.restorePermissionMode) {
-          await maker(r).setPermissionMode(
-            r.item.sessionId,
-            r.creation.restorePermissionMode,
-          );
-        }
       },
       cleanup: removeOutboxFiles,
       mediaFailed: (error) =>

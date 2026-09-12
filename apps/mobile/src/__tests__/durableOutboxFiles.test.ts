@@ -6,7 +6,7 @@ import type {
 const fs = vi.hoisted(() => ({
   documentDirectory: "file:///sandbox/Documents/",
   makeDirectoryAsync: vi.fn(async () => {}),
-  copyAsync: vi.fn(async () => {}),
+  copyAsync: vi.fn(async (_options: { from: string; to: string }) => {}),
   getInfoAsync: vi.fn(async () => ({
     exists: true,
     isDirectory: false,
@@ -19,6 +19,7 @@ import {
   durableOutboxDirectory,
   durableOutboxUploadUri,
   retainOutboxFile,
+  removeRetainedOutboxFiles,
 } from "../session/durableOutboxFiles";
 const record = {
   accountId: "owner/../a",
@@ -61,6 +62,13 @@ describe("outbox-owned attachment bytes", () => {
     await expect(retainOutboxFile(record, 0, source)).rejects.toThrow(
       "OUTBOX_FILE_COPY_FAILED",
     );
+    expect(fs.deleteAsync).toHaveBeenCalledWith(fs.copyAsync.mock.calls[0]?.[0].to, { idempotent: true });
+  });
+  it("rolls back new copies without deleting older recovery files in the same directory", async () => {
+    const upload = await retainOutboxFile(record, 0, source);
+    await removeRetainedOutboxFiles({ ...record, uploads: [upload] });
+    expect(fs.deleteAsync).toHaveBeenCalledTimes(1);
+    expect(fs.deleteAsync).toHaveBeenCalledWith(durableOutboxUploadUri(record, upload), { idempotent: true });
   });
   it("uses relative filenames so a sandbox path change after restore does not break attachments", () => {
     const upload = { fileName: "slot-0.jpg" } as DurableUpload;

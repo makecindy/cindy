@@ -5911,7 +5911,8 @@ export default function SessionScreen() {
           };
           for (let slot = 0; slot < readyAttachments.length; slot++) {
             const source = getUploadedSource(readyAttachments[slot].id);
-            if (source) record.uploads.push(await retainOutboxFile(record, slot, source));
+            if (!source) throw new Error(t('session.screen.attachmentsNotCarriedBack', { count: 1 }));
+            record.uploads.push(await retainOutboxFile(record, slot, source));
           }
           for (const { localId, source } of pendingSources) {
             record.uploads.push(await retainOutboxFile(record, item.slotByLocalId[localId]!, source));

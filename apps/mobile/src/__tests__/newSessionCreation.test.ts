@@ -925,13 +925,14 @@ describe('newSessionCreation pipeline', () => {
   });
   it('hands the persisted first message to the outbox without issuing a competing enqueue', async () => {
     const maker = makeMaker();
-    const params = makeParams('durable-first', maker, { firstMessageClientId: 'persisted-first-id' });
+    const params = makeParams('durable-first', maker, { firstMessageClientId: 'persisted-first-id', planModeArm: true });
     const handoff = vi.fn(async () => undefined);
     params.transport.handoffFirstMessage = handoff;
     startNewSessionCreation(params);
     await flushPipeline();
     expect(handoff).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'persisted-first-id', text: DRAFT.firstMessage }));
     expect(maker.input.enqueue).not.toHaveBeenCalled();
+    expect(maker.setPlanMode).not.toHaveBeenCalled();
     expect(getNewSessionCreationTask('durable-first')).toBeNull();
     expect(remoteSessionStore.getSessions().find((session) => session.id === 'durable-first')?.pendingLocalCreation).toBe(false);
   });

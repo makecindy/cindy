@@ -40,17 +40,28 @@ export async function retainOutboxFile(
     intermediates: true,
   });
   const target = durableOutboxUploadUri(record, upload);
-  await FileSystem.copyAsync({ from: source.uri, to: target });
-  const stat = await FileSystem.getInfoAsync(target);
-  if (
-    !stat.exists ||
-    stat.isDirectory ||
-    stat.size <= 0 ||
-    (source.size > 0 && stat.size !== source.size)
-  ) {
-    throw new Error("OUTBOX_FILE_COPY_FAILED");
+  try {
+    await FileSystem.copyAsync({ from: source.uri, to: target });
+    const stat = await FileSystem.getInfoAsync(target);
+    if (
+      !stat.exists ||
+      stat.isDirectory ||
+      stat.size <= 0 ||
+      (source.size > 0 && stat.size !== source.size)
+    ) {
+      throw new Error("OUTBOX_FILE_COPY_FAILED");
+    }
+    return { ...upload, size: stat.size };
+  } catch (error) {
+    await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => undefined);
+    throw error;
   }
-  return { ...upload, size: stat.size };
+}
+/** Roll back only this revision's copies; recovery may share the directory with older bytes. */
+export async function removeRetainedOutboxFiles(record: DurableOutboxRecord): Promise<void> {
+  await Promise.all(record.uploads.map((upload) =>
+    FileSystem.deleteAsync(durableOutboxUploadUri(record, upload), { idempotent: true }),
+  ));
 }
 export async function removeOutboxFiles(
   record: DurableOutboxRecord,

@@ -504,6 +504,7 @@
     "authGateHint": "{{agent}} has no connected model provider on this computer, so sending will fail. Set it up in {{appName}} on the computer under Settings → Model Providers."
   },
   "outbox": {
+    "legacyPlanRecovery": "This computer cannot restore saved messages in Plan mode. Turn off Plan mode or update Cindy on the computer, then retry.",
     "creationRecoveryRequired": "Retry creating this task before deleting its first message. That message keeps the recovery details for your later messages.",
     "confirmationRequired": "This computer cannot confirm whether the message was received. Check its history or update Cindy before retrying.",
     "taskCleared": "This task was cleared after you sent the message. The saved message has been kept for you to review.",

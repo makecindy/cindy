@@ -988,7 +988,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
       freshSession = null;
     }
 
-    if (params.planModeArm) {
+    if (params.planModeArm && !params.transport.handoffFirstMessage) {
       // 新协议:入队首条消息前武装计划模式,失败降级为普通发送(对齐原 create())。
       assertTaskOwnerCurrent(task);
       try {
