@@ -82,10 +82,11 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
       throwIpcError('INVALID_PARAMS', 'App attention snapshot exceeds retained session ID limit');
     }
     const previousCount = getAttentionCount();
+    const isFirstProjection = projectedAttentionCount === null;
     projectedAttentionCount = count;
     // 曾进入普通目录的任务始终归投影管理，删除/断连后不能被旧通知重新计入。
     for (const sessionId of uniqueSessionIds) projectedSessionIds.add(sessionId);
-    if (getAttentionCount() !== previousCount) applyBadge();
+    if (isFirstProjection || getAttentionCount() !== previousCount) applyBadge();
   });
   ipcMain.handle(
     'notification:mark-session-attention',
@@ -146,7 +147,7 @@ function broadcastSessionAttentionCleared(
 
 export function clearAllSessionAttention(): void {
   attentionSessionIds.clear();
-  projectedAttentionCount = 0;
+  projectedAttentionCount = null;
   projectedSessionIds.clear();
   applyBadge();
 }

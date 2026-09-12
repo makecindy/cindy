@@ -13,6 +13,7 @@ const onSessionAttentionCleared = vi.fn();
 const webContentsSend = vi.fn();
 const originalPlatform = process.platform;
 const mainWebContents = {};
+let windowReady = true;
 const assertTrustedAppRendererEvent = vi.fn();
 const overlayIcon = {};
 const createWindowsBadgeIcon = vi.fn((count: number) => (count > 0 ? overlayIcon : null));
@@ -74,12 +75,14 @@ async function freshService(platform: NodeJS.Platform = 'darwin') {
   const service = await import('../appBadgeService');
   service.initAppBadgeService({
     getWindow: () =>
-      ({
-        isDestroyed: () => false,
-        webContents: mainWebContents,
-        flashFrame,
-        setOverlayIcon,
-      }) as never,
+      windowReady
+        ? ({
+            isDestroyed: () => false,
+            webContents: mainWebContents,
+            flashFrame,
+            setOverlayIcon,
+          } as never)
+        : null,
     onSessionAttentionMarked,
     onSessionAttentionCleared,
   });
@@ -93,6 +96,7 @@ async function freshService(platform: NodeJS.Platform = 'darwin') {
 }
 
 beforeEach(() => {
+  windowReady = true;
   badgeDescription = 'Tasks needing attention: {{count}}';
   owner = { dataOwnerId: 'owner-a', generation: 1 };
   createWindowsBadgeIcon.mockClear();
@@ -112,6 +116,32 @@ afterEach(() => {
 });
 
 describe('appBadgeService', () => {
+  it.each([
+    [false, 0],
+    [false, 1],
+    [true, 0],
+    [true, 1],
+  ] as const)(
+    'installs the first Windows projection after reset=%s with unchanged count=%s',
+    async (reset, count) => {
+      windowReady = false;
+      const service = await freshService('win32');
+      if (reset) service.clearAllSessionAttention();
+      if (count) service.markSessionNeedsAttention('early-task');
+      expect(service.getAttentionCount()).toBe(count);
+      expect(setOverlayIcon).not.toHaveBeenCalled();
+      windowReady = true;
+      await publish({ sender: mainWebContents }, count, ['early-task']);
+      expect(setOverlayIcon).toHaveBeenCalledTimes(1);
+      expect(setOverlayIcon).toHaveBeenLastCalledWith(
+        count ? overlayIcon : null,
+        count ? 'Tasks needing attention: 1' : '',
+      );
+      await publish({ sender: mainWebContents }, count, ['early-task']);
+      expect(setOverlayIcon).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it('uses the current total without treating a snapshot as an acknowledgement', async () => {
     const service = await freshService();
     const event = { sender: mainWebContents };
