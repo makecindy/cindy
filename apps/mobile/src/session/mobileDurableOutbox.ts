@@ -12,7 +12,7 @@ export function getCurrentMobileOutboxRecords(): readonly DurableOutboxRecord[] 
   const key = getMobileAuthOwner().accountKey;
   return mobileDurableOutbox.getSnapshot().filter((record) => record.accountId === key);
 }
-/** Call only for confirmed cancellation or durably superseded upload references. */
+/** Call only for confirmed cancellation, superseded references, or an upload never handed to the ledger. */
 export function discardOutboxUploads(
   record: DurableOutboxRecord,
   owner: MobileAuthOwnerGeneration,

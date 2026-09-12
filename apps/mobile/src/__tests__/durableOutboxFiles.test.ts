@@ -19,6 +19,7 @@ import {
   durableOutboxDirectory,
   durableOutboxUploadUri,
   retainOutboxFile,
+  retainComposerAttachmentFile,
   removeRetainedOutboxFiles,
 } from "../session/durableOutboxFiles";
 const record = {
@@ -44,6 +45,20 @@ beforeEach(() => {
   });
 });
 describe("outbox-owned attachment bytes", () => {
+  it('keeps composer PUT bytes outside evictable caches and verifies the copy', async () => {
+    const target = await retainComposerAttachmentFile('composer/owner', 'file/id', source.uri, source.size);
+    expect(target).toBe('file:///sandbox/Documents/outbox-attachment-stage/composer%2Fowner/file%2Fid');
+    expect(fs.copyAsync).toHaveBeenCalledWith({ from: source.uri, to: target });
+    expect(fs.getInfoAsync).toHaveBeenCalledWith(target);
+  });
+  it('removes partial composer copies and refuses cache fallback', async () => {
+    fs.copyAsync.mockRejectedValueOnce(new Error('disk full'));
+    await expect(retainComposerAttachmentFile('owner', 'id', source.uri, source.size)).rejects.toThrow('disk full');
+    expect(fs.deleteAsync).toHaveBeenCalledWith('file:///sandbox/Documents/outbox-attachment-stage/owner/id', { idempotent: true });
+    fs.documentDirectory = '';
+    await expect(retainComposerAttachmentFile('owner', 'id', source.uri, source.size)).rejects.toThrow('OUTBOX_STORAGE_UNAVAILABLE');
+    expect(fs.copyAsync).toHaveBeenCalledOnce();
+  });
   it("copies and verifies the full attachment before handing ownership to a record", async () => {
     const upload = await retainOutboxFile(record, 0, source);
     expect(fs.copyAsync).toHaveBeenCalledWith({

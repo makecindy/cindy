@@ -18,6 +18,7 @@ import { useTranslation } from 'react-i18next';
 import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
+import { retainComposerAttachmentFile } from './durableOutboxFiles';
 import * as ImagePicker from 'expo-image-picker';
 import { formatRemoteError } from '@/device-link/remoteStatus';
 import { canBrowsePhotoLibraryDirectly } from '@/session/photoLibraryPolicy';
@@ -316,11 +317,7 @@ export function useMobileLocalAttachments(
       if (!isActive()) return;
       // Keep the actual PUT bytes for all file kinds until the composer hands them off.
       // Thumbnail caches are evictable and cannot be the only source of an unsent attachment.
-      if (!FileSystem.cacheDirectory) throw new Error('OUTBOX_STORAGE_UNAVAILABLE');
-      const stageDir = `${FileSystem.cacheDirectory}outbox-attachment-stage/${stagingOwnerRef.current}/`;
-      await FileSystem.makeDirectoryAsync(stageDir, { intermediates: true });
-      const stageUri = stageDir + encodeURIComponent(attachment.id);
-      await FileSystem.copyAsync({ from: uploadedUri, to: stageUri });
+      const stageUri = await retainComposerAttachmentFile(stagingOwnerRef.current, attachment.id, uploadedUri, attachment.size);
       stagingUrisRef.current.add(stageUri);
       if (!isActive()) {
         await FileSystem.deleteAsync(stageUri, { idempotent: true });

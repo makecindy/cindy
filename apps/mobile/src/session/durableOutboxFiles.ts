@@ -40,18 +40,32 @@ export async function retainOutboxFile(
     intermediates: true,
   });
   const target = durableOutboxUploadUri(record, upload);
+  return { ...upload, size: await copyRetainedBytes(source.uri, target, source.size) };
+}
+
+/** Composer-owned PUT bytes must survive OS cache eviction until outbox handoff or disposal. */
+export async function retainComposerAttachmentFile(owner: string, attachmentId: string, uri: string, size: number): Promise<string> {
+  if (!FileSystem.documentDirectory) throw new Error('OUTBOX_STORAGE_UNAVAILABLE');
+  const directory = `${FileSystem.documentDirectory}outbox-attachment-stage/${segment(owner)}/`;
+  await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
+  const target = directory + segment(attachmentId);
+  await copyRetainedBytes(uri, target, size);
+  return target;
+}
+
+async function copyRetainedBytes(uri: string, target: string, size: number): Promise<number> {
   try {
-    await FileSystem.copyAsync({ from: source.uri, to: target });
+    await FileSystem.copyAsync({ from: uri, to: target });
     const stat = await FileSystem.getInfoAsync(target);
     if (
       !stat.exists ||
       stat.isDirectory ||
       stat.size <= 0 ||
-      (source.size > 0 && stat.size !== source.size)
+      (size > 0 && stat.size !== size)
     ) {
       throw new Error("OUTBOX_FILE_COPY_FAILED");
     }
-    return { ...upload, size: stat.size };
+    return stat.size;
   } catch (error) {
     await FileSystem.deleteAsync(target, { idempotent: true }).catch(() => undefined);
     throw error;

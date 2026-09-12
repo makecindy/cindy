@@ -503,6 +503,27 @@ describe("app-owned delivery and reconciliation", () => {
     ]);
     expect(store.getSnapshot()[0]?.item.attachmentSlots[0]?.id).toBe("file-1");
   });
+  it.each(['disk-failure', 'late-upload', 'success'] as const)('settles upload ownership after %s', async (outcome) => {
+    const { store, deps, storage, runner } = await setup();
+    await store.add({ ...message(), uploads: [{ slot: 0, fileName: 'file.png', name: 'file.png', kind: 'image', size: 1 }],
+      item: { ...message().item, attachmentSlots: [null] } });
+    const attachment = await deps.upload();
+    deps.upload.mockClear();
+    deps.upload.mockImplementationOnce(async () => {
+      if (outcome === 'late-upload') runner.stop();
+      return attachment;
+    });
+    if (outcome === 'disk-failure') vi.spyOn(storage, 'setItem').mockRejectedValueOnce(new Error('disk full'));
+    await runner.run();
+    if (outcome === 'success') {
+      expect(deps.discardUploads).not.toHaveBeenCalled();
+      expect(deps.enqueue).toHaveBeenCalledOnce();
+    } else {
+      expect(deps.discardUploads).toHaveBeenCalledWith(expect.anything(), [attachment]);
+      expect(deps.enqueue).not.toHaveBeenCalled();
+      expect(store.getSnapshot()[0]?.item.attachmentSlots).toEqual([null]);
+    }
+  });
   it('retains superseded references when replacing the ledger fails, then only discards upload-backed slots', async () => {
     const { store, deps, storage, runner } = await setup();
     const old = await deps.upload();

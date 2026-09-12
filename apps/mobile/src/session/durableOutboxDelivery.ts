@@ -173,21 +173,28 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         for (const upload of record.uploads) {
           if (record.item.attachmentSlots[upload.slot]) continue;
           const attachment = await deps.upload(record, upload);
-          if (!current(record)) return;
-          await update({
-            item: {
-              ...record.item,
-              attachmentSlots: record.item.attachmentSlots.map((old, slot) =>
-                slot === upload.slot ? attachment : old,
-              ),
-              waitingIds: record.item.waitingIds.filter(
-                (localId) => record.item.slotByLocalId[localId] !== upload.slot,
-              ),
-              failedIds: record.item.failedIds.filter(
-                (localId) => record.item.slotByLocalId[localId] !== upload.slot,
-              ),
-            },
-          });
+          let retained = false;
+          try {
+            if (!current(record)) return;
+            await update({
+              item: {
+                ...record.item,
+                attachmentSlots: record.item.attachmentSlots.map((old, slot) =>
+                  slot === upload.slot ? attachment : old,
+                ),
+                waitingIds: record.item.waitingIds.filter(
+                  (localId) => record.item.slotByLocalId[localId] !== upload.slot,
+                ),
+                failedIds: record.item.failedIds.filter(
+                  (localId) => record.item.slotByLocalId[localId] !== upload.slot,
+                ),
+              },
+            });
+            retained = true;
+          } finally {
+            // Until the ledger owns it, this attempt owns the remote object, including late completion.
+            if (!retained) deps.discardUploads(record, [attachment]);
+          }
         }
         const prepared = await deps.prepare(record);
         if (!current(record)) return;

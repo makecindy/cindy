@@ -1393,6 +1393,7 @@ export default function SessionScreen() {
     for (const attachment of editing?.stashedAttachments ?? []) {
       attachmentsById.set(attachment.id, attachment);
     }
+    releaseUploadedSources([...attachmentsById.keys()]);
     attachmentsRef.current = [];
     setAttachments([]);
     setAttachmentPreviews({});
@@ -6906,8 +6907,9 @@ export default function SessionScreen() {
       discardMobileUploadedAttachment(attachment, { getToken: () => auth.getAccessToken() });
       discardedIds.add(attachment.id);
     }
+    releaseUploadedSources([...discardedIds]);
     return discardedIds;
-  }, [auth, sessionId]);
+  }, [auth, sessionId, releaseUploadedSources]);
 
   const discardQueueEditTransientAttachments = useCallback((
     editing: QueueEditingState,

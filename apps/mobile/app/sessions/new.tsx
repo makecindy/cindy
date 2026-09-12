@@ -1721,6 +1721,7 @@ export default function NewRemoteSessionScreen() {
     // 在途上传同样作废(codex review R10):不取消的话它们完成后会经 onUploaded 把
     // 上一台电脑期间选的附件塞进新电脑的草稿;丢弃后由控制器在完成时回收 OSS 对象。
     discardAllPendingUploads();
+    releaseUploadedSources(attachments.map((attachment) => attachment.id));
     setAttachments([]);
     setMediaAssetAttachments({});
     setAttachmentPreviews({});
