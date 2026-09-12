@@ -128,6 +128,12 @@ export interface FileTreeViewProps {
   onRename?: (entry: DirEntry) => void;
   /** Inline 输入态:有值时在 parentRel 下方插临时行。 */
   pendingCreate?: PendingCreate | null;
+  /** 宿主是否处于激活状态。false = **不渲染行**（RSB 多标签的隐藏 tab）:
+   *  每行有图标 + i18n + DOM 创建成本,node_modules 展开后单棵树上千行 ——
+   *  隐藏 tab 并行渲染会把展开的主线程阻塞翻倍（实测 1373 行/树 ≈ 350ms，
+   *  两棵树 ≈ 570-740ms）。数据层在父组件（useFileTree 的 store / watcher),
+   *  这里只是不产出 DOM。不传 = 始终渲染（doc 侧栏等单宿主场景）。 */
+  active?: boolean;
   /** 用户敲了非空 name + 回车 / 失焦时调用。 */
   onPendingSubmit?: (name: string) => void;
   /** Esc / 空内容失焦 / 父层主动取消。 */
@@ -225,6 +231,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     renamingPath,
     onRenameSubmit,
     onRenameCancel,
+    active,
   },
   ref,
 ) {
@@ -301,6 +308,13 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     }),
     [],
   );
+
+  // 非激活 tab 不渲染行:RSB 多标签是 keep-alive(同时挂载、CSS hidden 切换),
+  // 而每行(图标 + i18n wrapper + DOM)实测约 0.25ms —— node_modules 展开后单棵树
+  // 就有上千行,两份并行渲染把展开的主线程阻塞直接翻倍。数据层(useFileTree 的
+  // store / watcher / 展开态持久化)都在父组件,这里只是不产出 DOM;切回来时按
+  // 当前 store 一次性渲染,不重新拉盘、不丢展开态。
+  if (active === false) return null;
 
   if (tree.initialLoading) {
     // 本地首个 listDir <50ms,门控内保持空白(规则 7);远程慢通道超过阈值

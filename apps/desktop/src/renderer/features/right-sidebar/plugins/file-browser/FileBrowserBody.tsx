@@ -109,14 +109,19 @@ const BODY_MIN_RESERVE = 100;
 interface FileBrowserBodyProps {
   state: FileBrowserState;
   ctx: TabKindHostContext;
+  /** 宿主 tab 是否激活（PluginBodyHost 传入）。隐藏 tab 下不渲染文件树 DOM，
+   *  避免多标签 keep-alive 时并行渲染上千行（见 FileTreeView 的 active）。 */
+  active?: boolean;
 }
 
-export function FileBrowserBody({ state, ctx }: FileBrowserBodyProps) {
+export function FileBrowserBody({ state, ctx, active }: FileBrowserBodyProps) {
   const { workdir } = ctx;
   if (!workdir) {
     return <NoWorkdirPlaceholder />;
   }
-  return <FileBrowserBodyWithWorkdir state={state} ctx={ctx} workdir={workdir} />;
+  return (
+    <FileBrowserBodyWithWorkdir state={state} ctx={ctx} workdir={workdir} active={active} />
+  );
 }
 
 /**
@@ -128,6 +133,7 @@ function FileBrowserBodyWithWorkdir({
   state,
   ctx,
   workdir,
+  active,
 }: FileBrowserBodyProps & { workdir: string }) {
   const { t } = useTranslation();
   // 会话归属三路:local / SSH(remoteHostId)/ device-link(deviceId)。
@@ -679,6 +685,7 @@ function FileBrowserBodyWithWorkdir({
               <FileTreeView
                 ref={fileTreeRef}
                 tree={tree}
+                active={active}
                 selectedPath={state.selectedFilePath}
                 onSelectFile={handleSelectFile}
                 onPreviewImage={handlePreviewImage}
