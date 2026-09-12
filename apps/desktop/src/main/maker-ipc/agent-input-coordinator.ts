@@ -3693,6 +3693,14 @@ export class AgentInputCoordinator {
       this.emit(sessionId);
       return;
     }
+    // An active pre-send item was already charged by the requeue helper above.
+    // Only items that were still queued at close need charging here, including
+    // closes before the next drain and while an abort boundary is released.
+    if (opts?.preserveAutoResumeIntent && !preserveUndispatchedAutoResume) {
+      for (const item of state.pendingQueue.filter((queued) => queued.autoResume)) {
+        this.abandonAutoResumeAfterTransientFailure(sessionId, state, item, 'unexpected-close');
+      }
+    }
     state.activeTurn = null;
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;

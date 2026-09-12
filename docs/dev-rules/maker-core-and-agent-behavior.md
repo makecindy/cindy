@@ -143,7 +143,8 @@ recovery 或再入队的 undispatched finalize。确认失败且 attemptToken �
 attemptToken 把 lease 绑到新 Session，或在 coordinator / guard / book 仍一致且队里 /
 live schedule 仍活着时继续 preserve。预算内不能 discard 或只留人工 recovery，也不能清掉
 sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计入同一份三次派发预算，
-包括发送前与发送确认失败的窗口；等待发送结果本身不重复计数，耗尽后恢复原错误并停止交棒。
+包括尚在 pendingQueue、已取出但尚未发送、以及发送确认失败的窗口；一次 close 不能对
+刚放回队列的 active 项重复计数。等待发送结果本身不重复计数，耗尽后恢复原错误并停止交棒。
 用户显式关闭 / 停止仍取消。连续失败上限与人工介入周期硬上限止损，额度耗尽才把 Continue 交还用户。
 
 

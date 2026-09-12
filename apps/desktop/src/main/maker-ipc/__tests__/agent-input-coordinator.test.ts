@@ -11712,6 +11712,54 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     },
   );
 
+  it.each(['pre-send-close', 'session-running'] as const)(
+    '队列态 replacement 连续关闭沿用 %s 已消费的预算', async (entry) => {
+      vi.useFakeTimers();
+      const h = createHarness();
+      const sid = `queued-auto-close-${entry}`;
+      const takeover = { ...TAKEOVER_INFO, reason: 'upstream_response_idle_timeout' };
+      h.setResumableTurnErrorTakeover(takeover);
+      h.setHasAssistantProgressAfter(async () => false);
+      await failAfterDispatch(h, sid);
+      const started = deferred<void>();
+      const release = deferred<void>();
+      if (entry === 'pre-send-close') {
+        h.getSdkSessionId.mockImplementationOnce(async () => {
+          started.resolve();
+          await release.promise;
+          return 'sdk-session';
+        });
+      } else {
+        h.sendToAgent.mockImplementationOnce(async () =>
+          hostSendFailure('SESSION_RUNNING', '[SESSION_RUNNING] busy'),
+        );
+      }
+      await h.coordinator.autoRetryLastError(sid, takeover.sessionTotal);
+      if (entry === 'pre-send-close') {
+        await started.promise;
+        h.coordinator.onSessionClosed(sid, { preserveAutoResumeIntent: true });
+      } else {
+        await flush();
+      }
+      // Both entry paths have spent one attempt and returned CONTINUE to the
+      // queue. Close replacements synchronously before the scheduled drain.
+      expect(latestProjection(h.projections).pendingQueue.some((item) => item.autoResume)).toBe(true);
+      h.coordinator.onSessionClosed(sid, { preserveAutoResumeIntent: true });
+      expect(h.onDiscardedQueuedMessage).not.toHaveBeenCalled();
+      h.coordinator.onSessionClosed(sid, { preserveAutoResumeIntent: true });
+      expect(h.onDiscardedQueuedMessage).toHaveBeenCalledTimes(1);
+      expect(h.coordinator.hasQueuedAutoResume(sid)).toBe(false);
+      // The host owns final token settlement; this harness spies on that
+      // boundary rather than installing register.ts's bookkeeping callback.
+      expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(sid, expect.objectContaining({
+        autoResume: true, autoResumeInfo: expect.objectContaining({ sessionTotal: takeover.sessionTotal }),
+      }));
+      release.resolve();
+      await flush();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(entry === 'pre-send-close' ? 1 : 2);
+    },
+  );
+
   it('CONTINUE sendStarted 后 unexpected close 且 TurnDispatchUnconfirmedError 不得二次派发', async () => {
     const h = createHarness();
     const sid = 'idle-timeout-send-started-then-unconfirmed-must-not-replay';
