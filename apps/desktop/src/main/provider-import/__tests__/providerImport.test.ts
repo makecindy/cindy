@@ -75,6 +75,39 @@ afterEach(() => {
 });
 
 describe('provider import URL parsing', () => {
+  it.each(['Bad Header', 'Foo:Bar', 'X-\u0000-Key', 'X-中文'])(
+    'rejects invalid HTTP header names before creating a draft: %j', (name) => {
+      expect(createProviderImportDraftFromRest(importRest(customPayload({
+        endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', headers: { [name]: 'fake-value' } }],
+      })))).toBeNull();
+    },
+  );
+
+  it.each(['\u0000', '\u0001', '\u000b', '\r', '\n', '\u007f', '中文'])(
+    'rejects invalid header values through custom headers and every API-key entry: %j', (invalid) => {
+      const value = `fake-${invalid}-key`;
+      const endpoint = { protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1' };
+      const payloads = [
+        customPayload({ endpoints: [{ ...endpoint, headers: { 'X-Test': value } }] }),
+        customPayload({ auth: { method: 'apiKey', apiKey: value } }),
+        customPayload({ endpoints: [{ ...endpoint, apiKey: value }] }),
+        { kind: 'preset', preset: 'demo', apiKey: value },
+        { kind: 'builtin', provider: 'gemini', apiKey: value },
+        { kind: 'builtin', provider: 'openai-images', apiKey: value },
+      ];
+      for (const payload of payloads) {
+        expect(createProviderImportDraftFromRest(importRest(payload))).toBeNull();
+      }
+    },
+  );
+
+  it('preserves valid header token punctuation, tabs and Latin-1 values', () => {
+    createDraft(customPayload({ endpoints: [{
+      protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1',
+      headers: { "X-Test!#$%&'*+-.^_`|~": 'fake\tvalue-é', 'X-Empty': '' },
+    }] }));
+  });
+
   it.each(['authorization-code', 'device-code'])('rejects OAuth credential spelling variants in %s extra params', (flow) => {
     const keys = ['access_token', 'client_assertion', 'client_secret', 'device_code', 'id_token', 'refresh_token', 'password', 'assertion', 'code', 'token'];
     for (const key of keys) {

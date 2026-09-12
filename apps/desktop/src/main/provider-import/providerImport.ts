@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { validateHeaderName, validateHeaderValue } from 'node:http';
 import { isLoopbackProviderUrl } from '@cindy/model-providers';
 
 import type {
@@ -192,6 +193,34 @@ function parsePublicOAuthParams(
   return params;
 }
 
+function assertHttpHeaderValue(value: string, label: string): void {
+  try {
+    validateHeaderValue('X-Provider-Import', value);
+  } catch {
+    // Validator errors must never expose imported credential values.
+    fail(`${label} contains an invalid HTTP header value`);
+  }
+}
+
+function parseApiKey(value: unknown, label: string, max: number): string {
+  const key = boundedString(value, label, max);
+  assertHttpHeaderValue(key, label);
+  return key;
+}
+
+function parseHttpHeaders(value: unknown, label: string): Record<string, string> {
+  const headers = parseStringRecord(value, label, MAX_HEADERS_PER_ENDPOINT)!;
+  for (const [name, headerValue] of Object.entries(headers)) {
+    try {
+      validateHeaderName(name);
+    } catch {
+      fail(`${label} contains an invalid HTTP header name`);
+    }
+    assertHttpHeaderValue(headerValue, label);
+  }
+  return headers;
+}
+
 function parseModel(value: unknown, label: string): ProviderRuntimeModelConfig {
   if (typeof value === 'string') {
     const id = boundedString(value, label, 256);
@@ -300,7 +329,7 @@ function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
   }
   let apiKey: string | undefined;
   if (endpoint.apiKey !== undefined)
-    apiKey = boundedString(endpoint.apiKey, `${label}.apiKey`, MAX_API_KEY_LENGTH);
+    apiKey = parseApiKey(endpoint.apiKey, `${label}.apiKey`, MAX_API_KEY_LENGTH);
   const baseUrl = httpUrl(endpoint.baseUrl, `${label}.baseUrl`, false, true);
   const modelsUrl = endpoint.modelsUrl !== undefined
     ? httpUrl(endpoint.modelsUrl, `${label}.modelsUrl`, false, true)
@@ -317,11 +346,7 @@ function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
     ...(requestPath ? { requestPath } : {}),
     ...(endpoint.headers !== undefined
       ? {
-          headers: parseStringRecord(
-            endpoint.headers,
-            `${label}.headers`,
-            MAX_HEADERS_PER_ENDPOINT,
-          ),
+          headers: parseHttpHeaders(endpoint.headers, `${label}.headers`),
         }
       : {}),
     ...(apiKey ? { apiKey } : {}),
@@ -452,7 +477,7 @@ function parsePayload(value: unknown): ProviderImportDraft {
     return {
       kind: 'builtin',
       provider: input.provider,
-      apiKey: boundedString(input.apiKey, 'data.apiKey', MAX_BUILTIN_API_KEY_LENGTH),
+      apiKey: parseApiKey(input.apiKey, 'data.apiKey', MAX_BUILTIN_API_KEY_LENGTH),
     };
   }
   if (input.kind === 'preset') {
@@ -460,7 +485,7 @@ function parsePayload(value: unknown): ProviderImportDraft {
     return {
       kind: 'custom',
       presetId: boundedString(input.preset, 'data.preset', 128),
-      presetApiKey: boundedString(input.apiKey, 'data.apiKey', MAX_API_KEY_LENGTH),
+      presetApiKey: parseApiKey(input.apiKey, 'data.apiKey', MAX_API_KEY_LENGTH),
       config: { id: `import-${randomUUID().slice(0, 8)}`, name: 'Import', runtimes: {} },
       keys: {},
     };
@@ -500,7 +525,7 @@ function parsePayload(value: unknown): ProviderImportDraft {
   if (authInput.method === 'apiKey') {
     exactFields(authInput, ['method', 'apiKey'], 'auth');
     if (authInput.apiKey !== undefined)
-      sharedApiKey = boundedString(authInput.apiKey, 'auth.apiKey', MAX_API_KEY_LENGTH);
+      sharedApiKey = parseApiKey(authInput.apiKey, 'auth.apiKey', MAX_API_KEY_LENGTH);
     auth = { method: 'apiKey' };
   } else if (authInput.method === 'none') {
     exactFields(authInput, ['method'], 'auth');
