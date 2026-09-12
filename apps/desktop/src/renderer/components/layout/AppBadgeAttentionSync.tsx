@@ -25,9 +25,15 @@ const log = createLogger('AppBadgeAttentionSync');
 export function AppBadgeAttentionSync() {
   useAuth();
   const owner = getDataOwnerGeneration();
-  const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'all' });
+  const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'active' });
+  // all 桶保留已归档目录 ID 用于通知去重；不能让它的历史上限挤掉 active 桶。
+  const history = useCCSessions({ includeArchived: 'all' });
   const remoteSessions = useRemoteProjectSessions();
   const allSessions = useMemo(() => [...sessions, ...remoteSessions], [sessions, remoteSessions]);
+  const catalogSessionIds = useMemo(
+    () => [...new Set([...allSessions, ...history.sessions].map((session) => session.id))],
+    [allSessions, history.sessions],
+  );
   const localSchedules = usePublishedAutomationScheduleSessionIndex();
   const remoteSchedules = useRemoteScheduleIndex();
   const attentionKinds = useSessionAttentionKinds();
@@ -56,11 +62,11 @@ export function AppBadgeAttentionSync() {
     runningSessionIds: displayRunningSessionIds,
   });
   useEffect(() => {
-    if (isLoading || error) return;
+    if (isLoading || error || history.isLoading || history.error) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
         count,
-        sessionIds: allSessions.map((session) => session.id),
+        sessionIds: catalogSessionIds,
         dataOwnerId: owner.dataOwnerId,
         ownerGeneration: owner.generation,
       })
@@ -68,6 +74,6 @@ export function AppBadgeAttentionSync() {
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, isLoading, error, allSessions, owner]);
+  }, [count, isLoading, error, history.isLoading, history.error, catalogSessionIds, owner]);
   return null;
 }

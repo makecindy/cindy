@@ -162,6 +162,13 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
   交给模型自由发挥，会引入不可复现的行为漂移，属于本规则明确禁止的做法。
 - **产品 turn 未结算不得结束。** provider `turn/completed` 可以立刻给 SDK turn 落墓碑并
   结算 usage；只有原子挂在该终态边界上的显式 continuation claim 才能挡住产品结束。
+  Codex 提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束
+  SDK turn，但不能触发完成通知、队列收口或协作任务完成。人工等待使用独立 claim，
+  复用 `turnContinuationId`，不能塞进 yield claim 造成回答续跑等待自身。计划审阅必须
+  在发布边界前登记；回答／批准后沿原意图续跑，取消／Stop 单次结束且不重复结算 usage。
+  起跑回执之前到达的终态先缓冲再核对归属；失败只能走失败终态，不能先以取消回调
+  触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
+  与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
   Codex `functions.exec` yield 没有协议级 execution handle（cell / wait 活在
   `codex-rs` daemon），近期检测只能是 adapter 内、用真实 rollout fixture 锁死的启发式，
   用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。
@@ -173,7 +180,7 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
   无 yield marker 的 nameless 完成不得清匿名桶；匿名 `wait` 若按 `cell_id` 结算了其中一个
   cell，只从匿名桶拿掉该 cell，不得清空仍在跑的其它匿名 cell。同 turn 或续段里
   后续 `wait` 输出 `Script completed` / `Script terminated` 后视为该 cell 已结算，不得
-  再铸 claim，也不得报 lost-handle。Plan Mode 审批只在产品终态跑：存在 awaiting
+  再铸 claim，也不得报 lost-handle。Plan Mode 审批只在执行段结算后跑：存在 awaiting
   yield claim 时不得把空计划当循环结束，也不得在 SDK `turn/completed` 上提前挂审批；
   origin 已产出的计划挂在 claim 上，续段结算后再审。禁止把 `last_agent_message == null` 或开场白当结算
   判据；空续段或重试耗尽只证明未取回结果，统一报 `yield-continuation-incomplete`，

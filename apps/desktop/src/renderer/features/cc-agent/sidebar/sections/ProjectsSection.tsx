@@ -77,7 +77,7 @@ import {
   type MainListEntry,
   type ViewedPriorityHoldState,
 } from '../../lib/mainListModel';
-import type { BotGroupNode } from '../../lib/projectGrouping';
+import { projectKeyComparisonKey, type BotGroupNode } from '../../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgencySet } from '../../contexts/SessionAttentionUrgencyContext';
@@ -289,6 +289,11 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const localPlatform = window.electronAPI.platform;
+  const projectComparisonKey = useCallback(
+    (projectKey: string) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+    [localPlatform],
+  );
   const reducedMotion = useReducedMotion();
   const selectedMachineForOrder = useEffectiveSelectedMachineId();
   const localHostProjectOrder = useLocalHostProjectOrder();
@@ -341,8 +346,8 @@ export function ProjectsSection({
           ? remoteHostProjectOrders.orders.get(scope.deviceId)
           : undefined;
       const persistViewer = (order: readonly string[]) => {
-        const fullOrder = normalizeManualProjectOrder(filter.manualProjectOrder, projectKeysForOrderBaseline);
-        const merged = mergeVisibleReorder(fullOrder, order);
+        const fullOrder = normalizeManualProjectOrder(filter.manualProjectOrder, projectKeysForOrderBaseline, localPlatform);
+        const merged = mergeVisibleReorder(fullOrder, order, projectComparisonKey);
         filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
         if (filter.projectOrder !== 'custom') filter.setProjectOrder('custom');
       };
@@ -351,8 +356,9 @@ export function ProjectsSection({
         const fullOrder = normalizeManualProjectOrder(
           localHostProjectOrder.snapshot.manualProjectOrder,
           localKeys,
+          localPlatform,
         );
-        const next = mergeVisibleReorder(fullOrder, visibleNewOrder);
+        const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
         void localHostProjectOrder.apply({
           manualProjectOrder: next,
           projectOrder: 'custom',
@@ -368,8 +374,8 @@ export function ProjectsSection({
           deviceId,
           remoteHostProjectOrders.orders.get(deviceId),
         ) ?? [];
-        const fullOrder = normalizeManualProjectOrder(current, remoteKeys);
-        const next = mergeVisibleReorder(fullOrder, visibleNewOrder);
+        const fullOrder = normalizeManualProjectOrder(current, remoteKeys, localPlatform);
+        const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
         void remoteHostProjectOrders.apply(deviceId, {
           manualProjectOrder: next,
           projectOrder: 'custom',
@@ -386,6 +392,8 @@ export function ProjectsSection({
       projectKeysForOrderBaseline,
       remoteHostProjectOrders,
       selectedMachineForOrder,
+      localPlatform,
+      projectComparisonKey,
     ],
   );
 
@@ -610,10 +618,10 @@ export function ProjectsSection({
     const keys = preCustomVisualKeysRef.current;
     if (keys.length === 0) return;
     filter.setManualProjectOrder(
-      snapshotManualProjectOrder(keys, projectKeysForOrderBaseline),
+      snapshotManualProjectOrder(keys, projectKeysForOrderBaseline, localPlatform),
       projectKeysForOrderBaseline,
     );
-  }, [filter, projectKeysForOrderBaseline]);
+  }, [filter, projectKeysForOrderBaseline, localPlatform]);
 
   const deviceSections = useMemo<MainListDeviceSection[]>(() => {
     if (!deviceGroupingActive) return [{ deviceId: null, entries: [...visibleMixedEntries] }];

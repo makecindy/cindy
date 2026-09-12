@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
   sessions: ['a', 'b', 'c'].map((id) => ({ id, status: 'active' })),
+  history: null as { id: string; status: string }[] | null,
   remoteSessions: [] as { id: string; status: string }[],
   attention: new Map<string, string>([
     ['a', 'done'],
@@ -31,7 +32,12 @@ vi.mock('@/features/cc-agent/hooks/useOrcaLeadWorkerMap', () => ({
 }));
 
 vi.mock('@/hooks/useCCSessions', () => ({
-  useCCSessions: () => ({ sessions: state.sessions, isLoading: state.isLoading, error: null }),
+  useCCSessions: (options: { includeArchived: string }) => ({
+    sessions:
+      options.includeArchived === 'all' ? (state.history ?? state.sessions) : state.sessions,
+    isLoading: state.isLoading,
+    error: null,
+  }),
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => state.remoteSessions,
@@ -59,6 +65,7 @@ afterEach(() => {
   vi.unstubAllGlobals();
   state.publish.mockClear();
   state.isLoading = false;
+  state.history = null;
   state.remoteSessions = [];
   state.running = new Map();
   state.starting = new Set();
@@ -72,6 +79,20 @@ afterEach(() => {
 });
 
 describe('app badge projection lifecycle', () => {
+  it('retains active attention when archived history fills the all bucket', () => {
+    vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
+    state.history = Array.from({ length: 1000 }, (_, index) => ({
+      id: `archived-${index}`,
+      status: 'archived',
+    }));
+    state.attention.set('archived-0', 'done');
+    render(<AppBadgeAttentionSync />);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
+    const projection = state.publish.mock.calls.at(-1)?.[0];
+    expect(projection.sessionIds).toHaveLength(1003);
+    expect(projection.sessionIds).toEqual(expect.arrayContaining(['a', 'b', 'c', 'archived-0']));
+  });
+
   it('includes remote leads when projecting active workers', () => {
     vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
     state.remoteSessions = [{ id: 'remote-lead', status: 'active' }];

@@ -103,6 +103,7 @@ import {
   type QuotaHoverCardTurnUsage,
 } from './QuotaHoverCard';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
+import { quotaFullCelebrations } from './quotaFullCelebrations';
 import {
   buildClaudeUsageCard,
   buildCodexUsageCard,
@@ -782,8 +783,9 @@ export function TodaySpendChip({
   const { providers: localQuotaProviders } = useProviders();
   const { providers: deviceQuotaProviders } = useDeviceProviders(deviceLinkDeviceId ?? undefined);
   const quotaProviders = isDeviceLinkRemote ? deviceQuotaProviders : localQuotaProviders;
-  const selectedQuotaProvider = quotaProviders.find(provider => provider.id === providerId);
-  const isClaudeAccount = providerId === 'anthropic' || selectedQuotaProvider?.auth?.native === 'claude';
+  const selectedQuotaProvider = quotaProviders.find((provider) => provider.id === providerId);
+  const isClaudeAccount =
+    providerId === 'anthropic' || selectedQuotaProvider?.auth?.native === 'claude';
   const isXaiAccount = providerId === 'xai' || selectedQuotaProvider?.auth?.native === 'xai';
   // Remote provider ids belong to the controlled device. Reuse its existing provider
   // catalog (also used by the model selector), never the controller's same-named account.
@@ -821,7 +823,9 @@ export function TodaySpendChip({
   //   - chatgpt/ → 与 codex 同一 ChatGPT 账户,复用 codex 订阅 chip 形态(限额窗口 + 价值估算);
   //   - xai/    → SuperGrok 账号周用量(cli-chat-proxy billing) + 尽力显示限流头。
   // 优先级高于 Claude 订阅形态(model 前缀决定实际消耗的额度)。
-  const isOpenAiAccount = providerId === 'openai' || isOpenAiSubscriptionProvider(quotaProviders.find((provider) => provider.id === providerId));
+  const isOpenAiAccount =
+    providerId === 'openai' ||
+    isOpenAiSubscriptionProvider(quotaProviders.find((provider) => provider.id === providerId));
   const isChatgptBridge =
     (vendorKey === 'cc' || vendorKey === 'pi') &&
     (providerId == null || isOpenAiAccount) &&
@@ -976,7 +980,10 @@ export function TodaySpendChip({
     usesXaiQuotaForm && !isAnyRemoteSession,
     providerId ?? 'xai',
   );
-  const remoteXaiSubscriptionUsage = useRemoteXaiSubscriptionUsage(remoteXaiDeviceId, providerId ?? 'xai');
+  const remoteXaiSubscriptionUsage = useRemoteXaiSubscriptionUsage(
+    remoteXaiDeviceId,
+    providerId ?? 'xai',
+  );
   const xaiSubscriptionUsage = isDeviceLinkRemote
     ? remoteXaiSubscriptionUsage
     : localXaiSubscriptionUsage;
@@ -999,7 +1006,9 @@ export function TodaySpendChip({
     providerId ?? 'anthropic',
   );
   const remoteClaudeSubscriptionUsage = useRemoteClaudeSubscriptionUsage(
-    isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge ? (deviceLinkDeviceId ?? null) : null,
+    isDeviceLinkRemoteClaudeSubscription && !isSubscriptionBridge
+      ? (deviceLinkDeviceId ?? null)
+      : null,
     providerId ?? 'anthropic',
   );
   const claudeSubscriptionUsage = isDeviceLinkRemote
@@ -1247,31 +1256,37 @@ export function TodaySpendChip({
     );
   });
 
-  // 揭晓仪式: 重置滚动动画启动的上升沿放一次撒花粒子(QuotaResetConfetti,
-  // DESIGN §14.4 sanctioned 豁免) —— 与 0%→100% 数字滚动同一瞬间开始,
-  // 锚点取正在揭晓的窗口段元素(兜底 chip 容器)。
+  // 礼花按供应商共享去重，不依赖任务组件的挂载或数字滚动状态。
   const chipRef = React.useRef<HTMLDivElement | null>(null);
-  const celebratingKey = rollupA?.celebrating
-    ? (windowSlotA?.key ?? null)
-    : rollupB?.celebrating
-      ? (windowSlotB?.key ?? null)
-      : null;
-  const prevCelebratingRef = React.useRef(false);
+  const celebrationProvider = JSON.stringify([
+    isDeviceLinkRemote ? deviceLinkDeviceId : 'local',
+    providerId ?? (usesCodexQuotaForm ? 'openai' : usesXaiQuotaForm ? 'xai' : 'anthropic'),
+  ]);
+  const quotaSnapshotUpdatedAt = usesCodexQuotaForm
+    ? accountUsage?.updatedAt
+    : usesXaiQuotaForm
+      ? xaiSubscriptionUsage?.updatedAt
+      : claudeSubscriptionUsage?.updatedAt;
   const [confettiBurst, setConfettiBurst] = React.useState<{
     nonce: number;
     anchor: HTMLElement;
   } | null>(null);
   React.useEffect(() => {
-    const celebrating = celebratingKey !== null;
-    if (celebrating && !prevCelebratingRef.current) {
-      const anchor =
-        (celebratingKey ? segmentElsRef.current[celebratingKey] : null) ?? chipRef.current;
-      if (anchor) {
-        setConfettiBurst((prev) => ({ nonce: (prev?.nonce ?? 0) + 1, anchor }));
-      }
-    }
-    prevCelebratingRef.current = celebrating;
-  }, [celebratingKey]);
+    if (!chipRef.current) return;
+    const key = quotaFullCelebrations.observe(
+      celebrationProvider,
+      chipWindows,
+      quotaSnapshotUpdatedAt,
+    );
+    if (
+      key === null ||
+      (typeof window.matchMedia === 'function' &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches)
+    )
+      return;
+    const anchor = segmentElsRef.current[key] ?? chipRef.current;
+    setConfettiBurst((prev) => ({ nonce: (prev?.nonce ?? 0) + 1, anchor }));
+  });
 
   // 窗口 reset 时点列表以值签名 memo —— chipWindows 数组身份每次渲染都变
   // (含滚动动画的每一帧), 直接进 tick effect 依赖会让定时器反复重建。
@@ -1321,13 +1336,15 @@ export function TodaySpendChip({
     // 本机催本机(按所选供应商账号,#4197);不得拿本机通道替远程会话催刷(账号不同)。
     if (isChatgptBridge || (isDeviceLinkRemote && usesCodexQuotaForm)) {
       if (isDeviceLinkRemote) {
-        if (deviceLinkDeviceId) requestRemoteCodexAccountRefresh(deviceLinkDeviceId, providerId ?? 'openai');
+        if (deviceLinkDeviceId)
+          requestRemoteCodexAccountRefresh(deviceLinkDeviceId, providerId ?? 'openai');
       } else {
         requestCodexAccountRefresh(providerId ?? undefined);
       }
     } else if (usesXaiQuotaForm) {
       if (isDeviceLinkRemote) {
-        if (deviceLinkDeviceId) requestRemoteXaiSubscriptionRefresh(deviceLinkDeviceId, providerId ?? 'xai');
+        if (deviceLinkDeviceId)
+          requestRemoteXaiSubscriptionRefresh(deviceLinkDeviceId, providerId ?? 'xai');
       } else {
         requestXaiSubscriptionRefresh(providerId ?? 'xai');
       }

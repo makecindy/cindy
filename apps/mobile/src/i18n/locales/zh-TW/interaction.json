@@ -57,6 +57,7 @@
     "collapsedHint": "點開回答",
     "selectAnswer": "選擇回答 {{label}}",
     "submittingHint": "正在把決定回傳到電腦端，請不要重複提交。",
+    "decisionNotAccepted": "未能提交，請重試。",
     "customAnswerInputAccessibility": "輸入自定義回答",
     "customAnswerPlaceholder": "輸入其他回答",
     "customAnswerButtonText": "輸入其他回答…",

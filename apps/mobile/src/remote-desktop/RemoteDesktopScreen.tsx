@@ -1726,6 +1726,12 @@ export default function RemoteDesktopScreen() {
               style={[
                 styles.connectionStatus,
                 { top: edgePadding.paddingTop + spacing.xs + 44 + spacing.lg },
+                error === "permissionHint" && {
+                  bottom:
+                    (landscape ? insets.bottom : toolbarSize.height) +
+                    spacing.md,
+                  right: (landscape ? toolbarSize.width : 0) + spacing.md,
+                },
               ]}
             >
               {showConnectionStatus || showExitLockStatus ? (
@@ -1764,12 +1770,14 @@ export default function RemoteDesktopScreen() {
                   retry,
                 )}
               {error === "permissionHint" && focused && (
-                <PermissionGuide
-                  key={deviceId}
-                  initial={caps?.permissions}
-                  request={request}
-                  reconnect={retry}
-                />
+                <ScrollView style={{ flex: 1 }}>
+                  <PermissionGuide
+                    key={deviceId}
+                    initial={caps?.permissions}
+                    request={request}
+                    reconnect={retry}
+                  />
+                </ScrollView>
               )}
             </View>
           )}

@@ -259,7 +259,7 @@ export function isPlanReviewResolveBusy(input: { busy: boolean }): boolean {
 
 /** resolveInteraction 依赖的最小 transport 面(便于单测注入 fake)。 */
 export interface InteractionResolveTransport {
-  resolveInteraction(requestId: string, decision: Record<string, unknown>): Promise<void>;
+  resolveInteraction(requestId: string, decision: Record<string, unknown>): Promise<{ accepted: boolean } | void>;
   getPendingInteractions(sessionId: string): Promise<readonly PendingInteractionLike[]>;
 }
 
@@ -283,10 +283,11 @@ function isRetryableResolveTransportError(err: unknown): boolean {
  * - NOT_CONNECTED / BACKPRESSURE 自动带退避重试。注意 NOT_CONNECTED 不保证未送达(断连时
  *   in-flight invoke 会被批量 reject 成 NOT_CONNECTED),但 resolve 重发是安全的:
  *   交互请求在被控端是一次性的,已解决的 requestId 再收到 resolve 只会被拒,
- *   不会重复执行决定,被拒后走下方权威查证按成功收敛——与 enqueue(追加语义,
+ *   不会重复执行决定——与 enqueue(追加语义,
  *   盲重会双入队)有本质区别。BACKPRESSURE 要么在本地发送前拒绝,要么由被控端
  *   admission 明确拒绝执行,同样可安全重试。
- * - 其余失败(超时 / ack 丢失 / 对已解决请求的重复提交被拒)以被控端 pending
+ * - 明确的 accepted:false 不视为成功,交由调用方恢复卡片与草稿。
+ * - 传输异常(超时 / ack 丢失 / 老端抛错)以被控端 pending
  *   列表为权威分辨:该 requestId 已不在列表 → 决定已生效,按成功收敛(面板正常
  *   关闭,而不是留给用户一个会诱发二次提交的错误态);仍在列表或查询失败 →
  *   抛原始错误,面板保持可重试。
@@ -301,9 +302,9 @@ export async function resolveInteractionResilient(
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let lastErr: unknown;
   for (let attempt = 0; attempt <= RESOLVE_TRANSIENT_SEND_RETRIES; attempt++) {
+    let receipt: { accepted: boolean } | void;
     try {
-      await transport.resolveInteraction(requestId, decision);
-      return;
+      receipt = await transport.resolveInteraction(requestId, decision);
     } catch (err) {
       lastErr = err;
       if (attempt < RESOLVE_TRANSIENT_SEND_RETRIES && isRetryableResolveTransportError(err)) {
@@ -312,6 +313,11 @@ export async function resolveInteractionResilient(
       }
       break;
     }
+    // An explicit refusal is not a lost acknowledgement: absence from the
+    // pending list cannot prove that this answer won. Restore the card/draft
+    // through the caller's existing error path. Older Hosts returned void.
+    if (receipt?.accepted === false) throw new Error(i18n.t('interaction.panel.decisionNotAccepted'));
+    return;
   }
   try {
     const pending = await transport.getPendingInteractions(sessionId);
