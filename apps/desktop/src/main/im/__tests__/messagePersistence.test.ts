@@ -15,6 +15,7 @@ vi.mock('../../logger', () => ({
 }));
 
 import { buildPersistedUserContent, persistUserMessage } from '../messagePersistence';
+import { enqueueDurableWrite } from '../../messagePersistBroadcaster';
 import {
   createMessage,
   patchMessageAgentMeta,
@@ -75,6 +76,58 @@ describe('shared IM context persistence', () => {
       }),
     ).toBeNull();
     expect(createMessage).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+  });
+
+  it.each(['queue', 'patch', 'broadcast'] as const)(
+    'preserves the early row identity when context enrichment fails at %s',
+    async (failure) => {
+      const error = new Error('enrichment unavailable');
+      if (failure === 'queue') vi.mocked(enqueueDurableWrite).mockRejectedValueOnce(error);
+      if (failure === 'patch') vi.mocked(patchMessageAgentMeta).mockRejectedValueOnce(error);
+      if (failure === 'broadcast') {
+        vi.mocked(broadcastMessageAgentMetaUpdate).mockRejectedValueOnce(error);
+      }
+
+      expect(
+        await persistUserMessage({
+          sessionId: 'session',
+          text: 'question',
+          source: { im: 'wechat', contextSnapshot: { groupContext: 'safe text' } },
+          existingClientId: 'early',
+        }),
+      ).toEqual({ clientId: 'early' });
+      expect(createMessage).not.toHaveBeenCalled();
+      expect(patchMessageAgentMeta).toHaveBeenCalledTimes(failure === 'queue' ? 0 : 1);
+      expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledTimes(
+        failure === 'broadcast' ? 1 : 0,
+      );
+    },
+  );
+
+  it('does not report an unpersisted new row as saved when its insert fails', async () => {
+    vi.mocked(createMessage).mockRejectedValueOnce(new Error('insert failed'));
+    expect(
+      await persistUserMessage({ sessionId: 'session', text: 'question', source: { im: 'slack' } }),
+    ).toBeNull();
+    expect(patchMessageAgentMeta).not.toHaveBeenCalled();
+    expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('does not resume an early row after the queue cancels work at an account boundary', async () => {
+    vi.mocked(enqueueDurableWrite).mockRejectedValueOnce(
+      Object.assign(new Error('owner changed'), { code: 'OWNER_SCOPE_SUPERSEDED' }),
+    );
+    expect(
+      await persistUserMessage({
+        sessionId: 'session',
+        text: 'question',
+        source: { im: 'wechat' },
+        existingClientId: 'old-owner-row',
+      }),
+    ).toBeNull();
+    expect(createMessage).not.toHaveBeenCalled();
+    expect(patchMessageAgentMeta).not.toHaveBeenCalled();
     expect(broadcastMessageAgentMetaUpdate).not.toHaveBeenCalled();
   });
 });

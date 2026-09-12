@@ -60,12 +60,15 @@ export async function persistUserMessage(args: {
   try {
     if (args.existingClientId) {
       if (args.source) {
-        await enqueueDurableWrite('im-context-snapshot', async (ownerScope) => {
+        return await enqueueDurableWrite('im-context-snapshot', async (ownerScope) => {
           const patched = await patchMessageAgentMeta(sessionId, clientId, {
             hookSource: args.source,
           });
-          if (!patched) throw new Error('Pre-persisted IM message no longer exists');
+          // A confirmed deletion is different from a failed enrichment: never
+          // recreate the row or start a turn change set against a missing row.
+          if (!patched) return null;
           await broadcastMessageAgentMetaUpdate(sessionId, clientId, ownerScope);
+          return { clientId };
         });
       }
       return { clientId };
@@ -78,9 +81,16 @@ export async function persistUserMessage(args: {
     });
     return { clientId };
   } catch (err) {
+    // The queue cancels old-owner work at an account boundary. Unlike an
+    // enrichment failure, cancellation must not resume old-owner side effects.
+    if (err && typeof err === 'object' && 'code' in err && err.code === 'OWNER_SCOPE_SUPERSEDED') {
+      return null;
+    }
     const msg = err instanceof Error ? err.message : String(err);
     log.warn(`persistUserMessage failed (non-fatal) sessionId=...${sessionId.slice(-8)}: ${msg}`);
-    return null;
+    // Enrichment (including its broadcast) cannot undo an earlier durable
+    // insert. Keep its identity for attachment promotion and the turn anchor.
+    return args.existingClientId ? { clientId } : null;
   }
 }
 
