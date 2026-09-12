@@ -1234,6 +1234,8 @@ describe('provider:custom:* CRUD handlers', () => {
         authMethod: 'apiKey',
         apiKey: 'sk-main-only',
         headers: { 'X-Tenant': 'tenant-secret' },
+        redirect: 'error',
+        responseByteLimit: 1024 * 1024,
       }),
     );
     const saved = await listCustomProviders();
@@ -1243,10 +1245,15 @@ describe('provider:custom:* CRUD handlers', () => {
     ]);
   });
 
-  it('saves the connection and key when discovery fails, reporting models pending without exposing secrets', async () => {
+  it.each([
+    { ok: false, models: [] },
+    { ok: true, models: Array.from({ length: 257 }, (_, i) => ({ id: `m${i}`, name: 'Model' })) },
+    { ok: true, models: [{ id: 'x'.repeat(257), name: 'Model' }] },
+    { ok: true, models: [{ id: 'model', name: 'x'.repeat(257) }] },
+  ])('saves only the connection and key when discovery fails or exceeds bounds ($models.length models)', async (fetched) => {
     mountDb();
     const harness = new IpcHarness();
-    const deps = makeDeps({ fetchModels: vi.fn(async () => ({ ok: false, models: [] })) });
+    const deps = makeDeps({ fetchModels: vi.fn(async () => fetched) });
     registerProviderHandlers(harness, deps);
     const importId = createProviderImportId({
       kind: 'custom',

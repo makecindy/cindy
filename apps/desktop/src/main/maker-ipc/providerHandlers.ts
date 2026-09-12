@@ -81,6 +81,7 @@ import type {
 } from '../maker-host/provider-diagnostics.js';
 import {
   beginProviderImportConfirm,
+  assertProviderImportModels,
   importKeysForCurrentConfig,
   cancelProviderImport,
   finishProviderImportConfirm,
@@ -1262,10 +1263,13 @@ export function registerProviderHandlers(
                 modelsUrl: runtime.modelsUrl ?? null,
                 apiKey: draft.keys[agent] ?? null,
                 headers: runtime.headers,
+                redirect: 'error',
+                responseByteLimit: 1024 * 1024,
               });
-              if (fetched.ok && fetched.models?.length)
+              if (fetched.ok && fetched.models?.length) {
+                assertProviderImportModels(fetched.models);
                 config.runtimes[agent] = { ...runtime, models: fetched.models };
-              else modelsPending = true;
+              } else modelsPending = true;
             } catch {
               modelsPending = true;
             }

@@ -287,6 +287,14 @@ type ParsedEndpoint = {
   apiKey?: string;
 };
 
+/** Discovery is untrusted input too: apply the same count and core model field bounds. */
+export function assertProviderImportModels(models: readonly { id: string; name: string; contextWindow?: number }[]): void {
+  if (models.length > MAX_MODELS_PER_ENDPOINT) fail('models must be a bounded array');
+  for (const model of models) {
+    parseModel({ id: model.id, name: model.name, ...(model.contextWindow !== undefined ? { contextWindow: model.contextWindow } : {}) }, 'models');
+  }
+}
+
 function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
   const label = `endpoints[${index}]`;
   const endpoint = object(value, label);

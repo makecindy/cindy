@@ -23,6 +23,8 @@ cindy://provider/import?v=1&data=<base64url(UTF-8 JSON)>
 
 无需模型清单。用户确认后 Cindy 获取模型；获取失败仍保存连接和 Key，并提示去供应商设置重试。可提供 `models: ["model-id"]` 避免获取，或使用 `{ "id": "model-id", "name": "Display name" }`。
 
+导入确认中的 API Key / 免鉴权模型获取不跟随 HTTP 重定向，请提供最终端点。成功响应最多读取 1 MiB，错误响应最多 16 KiB；获取的模型每端点最多 256 个，ID 和名称各最多 256 字符。超限视为获取失败，不保存该模型清单，仍保留已确认的连接和 Key。后续手动刷新与 OAuth 登录复用原有流程，不属于此导入获取限制的覆盖范围。
+
 浏览器 JavaScript（`payload` 为上面的对象）：
 
 ```js
