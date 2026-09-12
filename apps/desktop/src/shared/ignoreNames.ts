@@ -15,4 +15,5 @@
 export {
   BUILTIN_IGNORE_ALWAYS,
   BUILTIN_IGNORE_REVEALABLE,
+  REVEALABLE_IGNORE_DIR_NAMES,
 } from '@cindy/file-browser-core/ignoreNames';

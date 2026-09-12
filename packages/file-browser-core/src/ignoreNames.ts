@@ -86,3 +86,16 @@ export const BUILTIN_IGNORE_REVEALABLE = [
  * **列目录不看它**(listDir 只问 BUILTIN_IGNORE_*)。
  */
 export const WATCH_ALWAYS_IGNORE = ['node_modules', 'Library'] as const;
+
+/**
+ * `BUILTIN_IGNORE_REVEALABLE` 的目录名集合（去掉名单里的尾斜杠）。用于判断某个
+ * relPath 是否落在「只有 reveal 态才可见」的目录内部 —— 事件侧按可见性分流时需要
+ * 它（见 desktop `device-op.ts` 的 device-link 转发）。
+ *
+ * 与 `WATCH_ALWAYS_IGNORE` 的分工：后者是「永远不 watch 内部」的一层（daemon 不会
+ * 发它们的事件）；本集合是「隐藏态不可见、reveal 态可见」的一层 —— daemon 在并集
+ * matcher 下会发它们的事件，订阅方要自己按自己的可见性滤。
+ */
+export const REVEALABLE_IGNORE_DIR_NAMES: ReadonlySet<string> = new Set(
+  BUILTIN_IGNORE_REVEALABLE.map((name) => name.replace(/\/$/, '')),
+);

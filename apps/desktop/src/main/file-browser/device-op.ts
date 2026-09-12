@@ -58,6 +58,7 @@ import {
   parseFsWatchTopic,
   type PushOwnerStamp,
 } from '@cindy/device-link';
+import { REVEALABLE_IGNORE_DIR_NAMES } from '../../shared/ignoreNames';
 import { WorkdirWatchManager } from '@cindy/remote-file-service';
 
 import { createLogger } from '../logger.js';
@@ -716,6 +717,12 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
   }
 }
 
+/** relPath 是否落在「隐藏态不可见、只有开着『显示被忽略的目录』才看得见」的
+ *  目录内部。用于 device-link 转发前按自己的可见性过滤 daemon 的并集事件流。 */
+function isInsideRevealableIgnoreDir(relPath: string): boolean {
+  return relPath.split('/').some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment));
+}
+
 function scheduleFsWatchReconcile(workdir: string): void {
   const timer = setTimeout(() => {
     // timer 排队后可能再次 release；reconcile 只消费当前意图，绝不重新
@@ -794,9 +801,18 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   const hostId = exec.hostId;
   const offEvent = mgr.onHostEvent(hostId, (evt) => {
     if (evt.event !== 'fileTree') return;
-    const data = evt.data as { workdir: string };
+    const data = evt.data as { workdir: string; relPath?: string };
     if (data.workdir !== workdir) return;
     if (!fsWatchDesired.has(workdir)) return;
+    // device-link 订阅的是**隐藏态**视图,而 daemon 侧的 watcher 用的是与 desktop
+    // 文件树(可能开着「显示被忽略的目录」)并集后的 matcher —— dist / build / Temp
+    // 这类目录内部的事件也会发过来。不在这里按 device-link 自己的可见性再滤一道,
+    // 一次构建就会把成千上万条控制器根本不会显示的事件推过共享 relay(聚合背压
+    // → 断连)(评审 P1)。
+    // 注:恒真忽略(BUILTIN_IGNORE_ALWAYS)与「不 watch 内部」(node_modules /
+    // Library)两层 daemon 自己就不发;`.gitignore` 自定义条目要在 daemon 侧才有
+    // matcher,这里判不了,不在本层职责。
+    if (typeof data.relPath === 'string' && isInsideRevealableIgnoreDir(data.relPath)) return;
     pushToTopicSubscribers(FILE_BROWSER_EVENT_CHANNEL, evt.data, ownerStamp);
   });
   let listenersDisposed = false;

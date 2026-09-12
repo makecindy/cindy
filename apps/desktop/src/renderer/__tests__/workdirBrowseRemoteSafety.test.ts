@@ -235,8 +235,27 @@ describe('workdir browse remote safety', () => {
     expect(fileContentSource).toContain('if (!workdir || !relPath)');
   });
 
-  it('persists expanded-set rename under the effective reveal scope', () => {
-    // device-link 老被控端不支持「显示被忽略的目录」时，useFileTree 会退回隐藏态
+  it('文件树标题图标钮带可见的键盘焦点环', () => {
+    // G3 全局规则把非输入元素的 outline 一律去掉了(focus-visible:outline-none 必
+    // 自配):纯图标钮若不自带环,键盘 Tab 时就没有任何可见焦点指示 —— 包括新增的
+    // 「显示被忽略的目录」开关(评审 P1)。
+    const source = readFileSync(
+      resolve(
+        __dirname,
+        '..',
+        'features',
+        'cc-agent',
+        'workdir-browse',
+        'fileTreeHeaderButtonClass.ts',
+      ),
+      'utf8',
+    );
+    expect(source).toContain('focus-visible:outline-none');
+    expect(source).toContain('focus-visible:ring-2');
+    expect(source).toContain('focus-visible:ring-[var(--focus-ring)]');
+  });
+
+  it('persists expanded-set rename under the effective reveal scope', () => {    // device-link 老被控端不支持「显示被忽略的目录」时，useFileTree 会退回隐藏态
     // store；rename 迁移若仍按用户偏好写 reveal scope，迁移会落在不生效的那一格
     // （隐藏 scope 仍存旧路径，面板重挂载后请求已不存在的目录、新目录展开态丢失）。
     expect(sidebarBrowseSource).toContain(

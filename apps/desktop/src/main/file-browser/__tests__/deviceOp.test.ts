@@ -805,6 +805,45 @@ describe('file-browser device-op', () => {
     onFsWatchReleased(sshWorkdir);
   });
 
+  /**
+   * 评审 P1：device-link 订阅的是**隐藏态**视图，而 daemon 的 watcher 用的是与
+   * desktop 文件树（可能开着「显示被忽略的目录」）并集后的 matcher —— dist / build
+   * 这类目录内部的事件也会发过来。转发前必须按 device-link 自己的可见性滤一道，
+   * 否则一次构建会把成千上万条控制器根本不会显示的帧推过 relay。
+   */
+  it('watch: SSH 转发前按 device-link 的隐藏态可见性过滤被忽略目录事件', async () => {
+    const sshWorkdir = '/remote/home/user/reveal-union-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    sshRequestMock.mockImplementation(() => Promise.resolve({ ok: true }));
+
+    await onFsWatchSubscribed(sshWorkdir);
+    const handler = sshListenerState.hostEventHandlers.at(-1);
+
+    // 隐藏态不可见的目录内部事件：一律丢弃（一级与嵌套层都要管）。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'dist/bundle.js' },
+    });
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'add', relPath: 'packages/foo/build/out.map' },
+    });
+    expect(pushSpy).not.toHaveBeenCalled();
+
+    // 普通路径照常转发。
+    const visible = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'src/app.ts' },
+    };
+    handler?.(visible);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, visible.data, {
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 7,
+    });
+    onFsWatchReleased(sshWorkdir);
+  });
+
   it('watch: a second release cancels an already scheduled SSH reconcile', async () => {
     const sshWorkdir = '/remote/home/user/cancel-retry-watch';
     guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
