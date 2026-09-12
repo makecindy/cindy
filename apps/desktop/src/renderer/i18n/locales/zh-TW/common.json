@@ -10314,7 +10314,7 @@
         "enable": "啟用",
         "tooltip": "任務觸發時先執行該指令碼：退出碼 0 放行本輪；退出碼 2 跳過本輪（不啟動 Agent、不消耗 token）；指令碼報錯或超時將阻止執行並記錄失敗結果。指令碼在任務工作目錄下執行，Windows 上請寫顯式直譯器（如 node check.mjs）。",
         "infoAria": "檢視前置檢查規則",
-        "protocol": "指令碼寫法：結束時退出碼 0 = 本輪執行任務，退出碼 2 = 本輪跳過（不消耗用量）；其他退出碼、報錯或超時會阻止執行",
+        "protocol": "指令碼寫法：結束時退出碼 0 = 本輪執行任務，退出碼 2 = 本輪跳過（不消耗用量）；其他退出碼、報錯或超時會阻止執行。檢查完整成功後（包括正常無事可做），在 exit 0/2 前向 stdout 單獨輸出一行 CINDY_PRECHECK_OK，僅恢復先前的檢查警告，不恢復執行失敗；限流退避或檢查不完整時不要輸出。",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "測試",
         "testing": "測試中…",

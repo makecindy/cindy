@@ -10329,7 +10329,7 @@
         "enable": "Enable",
         "tooltip": "Runs this script when the task fires: exit code 0 lets the round proceed; exit code 2 skips this round (no agent started, no tokens used); script errors or timeouts block the run and record a failure. The script runs in the task's working directory; on Windows use an explicit interpreter (e.g. node check.mjs).",
         "infoAria": "View pre-run check rules",
-        "protocol": "How to write it: exit code 0 = run the task this round, exit code 2 = skip this round (no usage cost); other exit codes, errors, or timeouts block the run",
+        "protocol": "How to write it: exit code 0 = run the task this round, exit code 2 = skip this round (no usage cost); other exit codes, errors, or timeouts block the run. After a complete successful check, including a normal no-work skip, print CINDY_PRECHECK_OK on its own stdout line before exit 0 or 2. This clears earlier precheck warnings only, not execution failures. Do not print it during rate-limit backoff or incomplete checks.",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "Test",
         "testing": "Testing…",

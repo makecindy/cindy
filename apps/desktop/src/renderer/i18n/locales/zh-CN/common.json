@@ -10314,7 +10314,7 @@
         "enable": "启用",
         "tooltip": "任务触发时先执行该脚本：退出码 0 放行本轮；退出码 2 跳过本轮（不启动 Agent、不消耗 token）；脚本报错或超时将阻止执行并记录失败结果。脚本在任务工作目录下执行，Windows 上请写显式解释器（如 node check.mjs）。",
         "infoAria": "查看前置检查规则",
-        "protocol": "脚本写法：结束时退出码 0 = 本轮执行任务，退出码 2 = 本轮跳过（不消耗用量）；其他退出码、报错或超时会阻止执行",
+        "protocol": "脚本写法：结束时退出码 0 = 本轮执行任务，退出码 2 = 本轮跳过（不消耗用量）；其他退出码、报错或超时会阻止执行。检查完整成功后（包括正常无事可做），在 exit 0/2 前向 stdout 单独输出一行 CINDY_PRECHECK_OK，仅恢复此前的检查告警，不恢复执行失败；限流退避或检查不完整时不要输出。",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "测试",
         "testing": "测试中…",
