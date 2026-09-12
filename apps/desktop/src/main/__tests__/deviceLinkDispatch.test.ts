@@ -185,6 +185,20 @@ describe('runInvoke 双层校验', () => {
     });
   });
 
+  it('DB worker 队列打满时远程 listing 回 BACKPRESSURE', async () => {
+    registry.register('local-db:sessions:list', () => {
+      throw new Error('db worker RPC queue overloaded: op="rawAll" inFlight=128 queued=512');
+    });
+    const r = await runInvoke('ctrl', { channel: 'local-db:sessions:list', args: [1, 'all'] });
+    expect(r).toMatchObject({
+      ok: false,
+      error: {
+        code: 'BACKPRESSURE',
+        message: expect.stringContaining('db worker RPC queue overloaded'),
+      },
+    });
+  });
+
   it('handler 不存在(未注册)→ IPC_ERROR NOT_FOUND', async () => {
     const r = await runInvoke('ctrl', { channel: 'maker:create-session', args: [] });
     expect(r).toMatchObject({ ok: false, error: { code: 'IPC_ERROR' } });
@@ -1108,6 +1122,53 @@ describe('被控端控制链路生命周期', () => {
     expect(payload.ok).toBe(true);
     expect(payload.result.some((message) => message.clientId === 'anchor')).toBe(true);
     expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('同一控制端相同 listing 并发只执行一次并把结果复用到各 requestId', async () => {
+    remoteControlEnabled = true;
+    let resolveList: ((value: unknown[]) => void) | undefined;
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolveList = resolve;
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = {
+      channel: 'local-db:sessions:list',
+      args: [20, 'all', { includePinned: true }],
+    };
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'list-1',
+      src: 'ctrl-a',
+      payload,
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'list-2',
+      src: 'ctrl-a',
+      payload,
+    });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    resolveList?.([{ id: 's1' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'list-1' || call.requestId === 'list-2',
+      )).toHaveLength(2);
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        requestId: 'list-1',
+        payload: { ok: true, result: [{ id: 's1' }] },
+      }),
+      expect.objectContaining({
+        requestId: 'list-2',
+        payload: { ok: true, result: [{ id: 's1' }] },
+      }),
+    ]));
   });
 
   it('显式 link-close 后丢弃旧世代晚到 IPC 结果，快速重开也不串进新链路', async () => {

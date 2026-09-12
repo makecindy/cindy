@@ -4054,6 +4054,13 @@ export class DeviceLinkClient {
     resume: ReliableResumePlan,
   ): void {
     const previousConfirmation = peer.pendingLinkConfirmation;
+    // 同 stream 重复 open：发送方向已经 ready 时绝不能再打回 awaiting-confirm，
+    // 否则 ACK/重试被暂停，pending 只涨不消，对端超时后再 open，形成死循环。
+    if (resume.duplicateOpen && this.isPeerSendReady(peer)) {
+      if (peer.pending.size > 0) this.ensureRetryTimer(dst);
+      this.logRecoverySend(dst, peer, 'link-replay', true);
+      return;
+    }
     if (previousConfirmation?.timer) {
       clearTimeout(previousConfirmation.timer);
     }
