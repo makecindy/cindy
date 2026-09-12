@@ -8,6 +8,7 @@ export interface ProviderImportRuntimePreview {
   willFetchModels: boolean;
   hasApiKey: boolean;
   headerNames: string[];
+  modelsUrl?: string;
 }
 
 export interface ProviderImportPreview {
@@ -19,6 +20,7 @@ export interface ProviderImportPreview {
   providerId: string;
   existingProviderName?: string;
   runtimes: ProviderImportRuntimePreview[];
+  updateTargets: { id: string; name: string }[];
   oauth?: {
     flow: 'authorization-code' | 'device-code';
     authorizeHost: string;
@@ -26,8 +28,11 @@ export interface ProviderImportPreview {
   };
 }
 
-export interface ProviderImportConfirmResult {
-  ok: true;
-  providerId: string;
-  authMethod: 'apiKey' | 'oauth' | 'none';
-}
+export type ProviderImportConfirmResult =
+  | {
+      ok: true;
+      providerId: string;
+      authMethod: 'apiKey' | 'oauth' | 'none';
+      modelsPending?: boolean;
+    }
+  | Extract<import('./customProviderUpdate').CustomProviderUpdateResult, { ok: false }>;

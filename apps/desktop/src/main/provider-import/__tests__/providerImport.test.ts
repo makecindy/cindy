@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderView } from '@cindy/model-providers';
+import type { ProviderPreset, ProviderView } from '@cindy/model-providers';
 
 import {
   beginProviderImportConfirm,
@@ -75,6 +75,82 @@ afterEach(() => {
 });
 
 describe('provider import URL parsing', () => {
+  it('materializes catalog presets using the wizard runtime mapping without freezing model defaults', () => {
+    const preset: ProviderPreset = {
+      id: 'catalog-demo',
+      name: 'Catalog Demo',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://api.acme.test/v1',
+          wireProtocol: 'openai-responses',
+          requestPath: '/responses',
+          supportsImageGeneration: true,
+          modelsUrl: 'https://api.acme.test/v1/models',
+          headers: { 'X-Tenant': 'catalog-header' },
+          models: [{ id: 'm1', name: 'M1', contextWindow: 12345 }],
+        },
+        pi: {
+          baseUrl: 'https://api.acme.test/v1',
+          wireProtocol: 'openai-chat',
+          piCatalogProviderId: 'acme',
+          models: [{ id: 'm1', name: 'M1', piApi: 'openai-completions' }],
+        },
+      },
+    };
+    const importId = createDraft({ kind: 'preset', preset: preset.id, apiKey: 'preset-secret' });
+    const preview = previewProviderImport(importId, SCOPE, [], undefined, [preset]);
+    expect(preview).toMatchObject({
+      name: preset.name,
+      action: 'create',
+      runtimes: [
+        { agent: 'codex', hasApiKey: true, modelsUrl: preset.runtimes.codex!.modelsUrl },
+        { agent: 'pi', hasApiKey: true },
+      ],
+    });
+    expect(JSON.stringify(preview)).not.toMatch(/preset-secret|catalog-header/);
+    const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+    expect(draft).toMatchObject({
+      kind: 'custom',
+      keys: { codex: 'preset-secret', pi: 'preset-secret' },
+      config: {
+        runtimes: {
+          codex: {
+            catalogPresetId: preset.id,
+            supportsImageGeneration: true,
+            requestPath: '/responses',
+            models: [{ id: 'm1', name: 'M1', discoveredMetadata: {} }],
+          },
+          pi: {
+            catalogPresetId: preset.id,
+            piCatalogProviderId: 'acme',
+            models: [{ piApi: 'openai-completions' }],
+          },
+        },
+      },
+    });
+    if (draft.kind === 'custom')
+      expect(draft.config.runtimes.codex!.models[0]).not.toHaveProperty('contextWindow');
+  });
+
+  it('rejects missing and no-auth presets instead of silently importing a key into another connection', () => {
+    const importId = createDraft({ kind: 'preset', preset: 'missing', apiKey: 'fixture-key' });
+    expect(() => previewProviderImport(importId, SCOPE, [])).toThrow(/unsupported API-key preset/);
+    expect(() =>
+      previewProviderImport(importId, SCOPE, [], undefined, [
+        { id: 'missing', name: 'Local', authMethod: 'none', runtimes: {} },
+      ]),
+    ).toThrow(/unsupported API-key preset/);
+  });
+
+  it('keeps two imports of the same vendor independent, including when the vendor supplies an id', () => {
+    const payload = customPayload({ id: 'vendor' });
+    const first = previewProviderImport(createDraft(payload), SCOPE, []);
+    const second = previewProviderImport(createDraft(payload), SCOPE, []);
+    expect(first.providerId).not.toBe(second.providerId);
+    expect(first.action).toBe('create');
+    expect(second.action).toBe('create');
+  });
+
   it('accepts the compact vendor-facing custom API-key shape', () => {
     const importId = createDraft(customPayload());
 
@@ -85,7 +161,7 @@ describe('provider import URL parsing', () => {
       name: 'Acme AI',
       authMethod: 'apiKey',
       action: 'create',
-      providerId: 'acme-ai',
+      providerId: expect.stringMatching(/^acme-ai-[0-9a-f]{8}$/),
     });
     expect(preview.runtimes).toEqual([
       {
@@ -114,17 +190,22 @@ describe('provider import URL parsing', () => {
     expect(serialized).not.toContain('tenant-secret');
   });
 
-  it('accepts the only built-in API-key slot on the explicit allowlist', () => {
-    const importId = createDraft({ kind: 'builtin', provider: 'gemini', apiKey: 'gemini-secret' });
+  it.each([
+    ['gemini', 'Google Gemini'],
+    ['openai-images', 'OpenAI Images'],
+  ])('accepts the built-in API-key slot %s', (provider, name) => {
+    const importId = createDraft({ kind: 'builtin', provider, apiKey: 'builtin-secret' });
 
     expect(previewProviderImport(importId, SCOPE, [])).toEqual({
       importId,
       kind: 'builtin',
-      name: 'Google Gemini',
+      name,
+      existingProviderName: name,
       authMethod: 'apiKey',
       action: 'replace-key',
-      providerId: 'gemini',
+      providerId: provider,
       runtimes: [],
+      updateTargets: [],
     });
   });
 
@@ -159,7 +240,7 @@ describe('provider import URL parsing', () => {
     });
   });
 
-  it('recognizes an existing custom provider by its normalized runtime endpoint', () => {
+  it('offers matching connections but creates a new connection unless the user selects one', () => {
     const importId = createDraft(
       customPayload({
         endpoints: [
@@ -181,6 +262,11 @@ describe('provider import URL parsing', () => {
     );
 
     expect(previewProviderImport(importId, SCOPE, [existing])).toMatchObject({
+      action: 'create',
+      providerId: expect.stringMatching(/^acme-ai-/),
+      updateTargets: [{ id: existing.id, name: existing.name }],
+    });
+    expect(previewProviderImport(importId, SCOPE, [existing], existing.id)).toMatchObject({
       action: 'update',
       providerId: 'my-local-acme',
       existingProviderName: 'My Local Acme',
@@ -209,8 +295,13 @@ describe('provider import URL parsing', () => {
       'https://api.acme.test/v1',
     );
 
-    expect(() => previewProviderImport(importId, SCOPE, [existing])).toThrow(
-      'does not match the existing provider endpoints',
+    expect(previewProviderImport(importId, SCOPE, [existing])).toMatchObject({
+      action: 'create',
+      providerId: expect.stringMatching(/^existing-provider-/),
+      updateTargets: [],
+    });
+    expect(() => previewProviderImport(importId, SCOPE, [existing], existing.id)).toThrow(
+      'selected connection is not compatible',
     );
   });
 
@@ -444,6 +535,49 @@ describe('provider import URL parsing', () => {
 });
 
 describe('provider import draft lifecycle', () => {
+  it('requires previewing the exact update target and refuses disappeared or changed targets', () => {
+    const importId = createDraft(
+      customPayload({
+        endpoints: [
+          { protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', targets: ['codex'] },
+        ],
+      }),
+    );
+    const first = existingCustomProvider(
+      'account-one',
+      'One',
+      'codex',
+      'openai-chat',
+      'https://api.acme.test/v1',
+    );
+    const second = { ...first, id: 'account-two', name: 'Two' };
+    const providers = [first, second];
+    expect(previewProviderImport(importId, SCOPE, providers).updateTargets).toHaveLength(2);
+    expect(() => beginProviderImportConfirm(importId, SCOPE, providers, first.id)).toThrow(
+      /provider list changed/,
+    );
+    previewProviderImport(importId, SCOPE, providers, first.id);
+    expect(() => beginProviderImportConfirm(importId, SCOPE, providers, second.id)).toThrow(
+      /provider list changed/,
+    );
+    expect(() => beginProviderImportConfirm(importId, SCOPE, [second], first.id)).toThrow(
+      /not compatible/,
+    );
+    expect(
+      beginProviderImportConfirm(importId, SCOPE, providers, first.id).resolution,
+    ).toMatchObject({ action: 'update', providerId: first.id });
+  });
+
+  it('does not cancel a write already confirmed by the user', () => {
+    const importId = createDraft(customPayload());
+    previewProviderImport(importId, SCOPE, []);
+    beginProviderImportConfirm(importId, SCOPE, []);
+    cancelProviderImport(importId);
+    expect(() => beginProviderImportConfirm(importId, SCOPE, [])).toThrow(/already running/);
+    finishProviderImportConfirm(importId, true);
+    expect(() => previewProviderImport(importId, SCOPE, [])).toThrow(/expired/);
+  });
+
   it('requires the same account generation at confirmation time', () => {
     const importId = createDraft(customPayload());
     previewProviderImport(importId, SCOPE, []);
@@ -457,9 +591,9 @@ describe('provider import draft lifecycle', () => {
     const importId = createDraft(customPayload());
     expect(() => beginProviderImportConfirm(importId, SCOPE, [])).toThrow(/preview this import/);
 
-    previewProviderImport(importId, SCOPE, []);
+    const preview = previewProviderImport(importId, SCOPE, []);
     expect(beginProviderImportConfirm(importId, SCOPE, [])).toMatchObject({
-      resolution: { action: 'create', providerId: 'acme-ai' },
+      resolution: { action: 'create', providerId: preview.providerId },
     });
     expect(() => beginProviderImportConfirm(importId, SCOPE, [])).toThrow(/already running/);
   });
@@ -492,7 +626,7 @@ describe('provider import draft lifecycle', () => {
     expect(() => previewProviderImport(importId, SCOPE, [])).toThrow(/expired or was already used/);
   });
 
-  it('forces a fresh preview when the matching provider set changes', () => {
+  it('does not switch a new import to update when another matching connection appears', () => {
     const payload = customPayload({
       endpoints: [
         {
@@ -504,7 +638,7 @@ describe('provider import draft lifecycle', () => {
       ],
     });
     const importId = createDraft(payload);
-    previewProviderImport(importId, SCOPE, []);
+    const preview = previewProviderImport(importId, SCOPE, []);
     const appeared = existingCustomProvider(
       'appeared-later',
       'Appeared Later',
@@ -513,8 +647,8 @@ describe('provider import draft lifecycle', () => {
       'https://api.acme.test/v1',
     );
 
-    expect(() => beginProviderImportConfirm(importId, SCOPE, [appeared])).toThrow(
-      /provider list changed/,
-    );
+    expect(beginProviderImportConfirm(importId, SCOPE, [appeared])).toMatchObject({
+      resolution: { action: 'create', providerId: preview.providerId },
+    });
   });
 });

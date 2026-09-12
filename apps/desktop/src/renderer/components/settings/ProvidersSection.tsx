@@ -2896,6 +2896,7 @@ export function ProvidersSection() {
 
       {providerImportId && (
         <ProviderImportDialog
+          key={`${dataOwnerId}:${ownerGeneration}:${providerImportId}`}
           importId={providerImportId}
           onClose={closeProviderImport}
           onDone={finishProviderImport}

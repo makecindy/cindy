@@ -1486,6 +1486,11 @@
       "subtitle": "选择模型时的来源。每个来源提供它支持的模型与计费方式，可按任务分别切换。",
       "import": {
         "title": "导入模型供应商",
+        "destination": "导入到",
+        "newConnection": "新建连接",
+        "keyOnly": "只更换本次提供的 API Key，保留已有模型、路由和其他设置。",
+        "modelsPending": "{{name}} 已配置，但未能获取模型列表。请在供应商设置中重试。",
+        "busyWarning": "此次变更需要重载本机 Codex 服务，可能中断 {{count}} 个正在运行的任务。是否继续？",
         "close": "关闭供应商导入",
         "loadFailed": "这个供应商导入链接无效或已经过期。",
         "confirmFailed": "导入失败，请检查链接或接口地址后重试。",
@@ -1505,7 +1510,7 @@
         "headers": "请求头：{{names}}（值已隐藏）",
         "oauthHosts": "授权：{{authorizeHost}} · Token 交换：{{tokenHost}}",
         "browserAuthorizationInProgress": "请在刚刚打开的浏览器窗口中完成授权。",
-        "replaceWarning": "确认后会替换上方所示的现有本地配置或凭证。",
+        "replaceWarning": "本次提供的 API Key 将替换所选连接的密钥。",
         "confirmNote": "点击确认前不会保存任何内容，也不会访问供应商接口。",
         "authorizationPendingNote": "供应商已添加，但授权尚未完成。你可以在这里重试或取消授权。",
         "action": {

@@ -5872,12 +5872,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:provider:oauth:cancel', providerId, options),
     previewProviderImport: (
       importId: string,
+      targetProviderId?: string,
     ): Promise<import('../shared/providerImport').ProviderImportPreview> =>
-      ipcRenderer.invoke('maker:provider:import:preview', importId),
+      ipcRenderer.invoke('maker:provider:import:preview', importId, targetProviderId),
     confirmProviderImport: (
       importId: string,
+      targetProviderId?: string,
+      interrupt?: true,
     ): Promise<import('../shared/providerImport').ProviderImportConfirmResult> =>
-      ipcRenderer.invoke('maker:provider:import:confirm', importId),
+      ipcRenderer.invoke('maker:provider:import:confirm', importId, targetProviderId, interrupt),
     cancelProviderImport: (importId: string): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:import:cancel', importId),
     onProviderOAuthProgress: fanOutMakerProviderOAuthProgress,

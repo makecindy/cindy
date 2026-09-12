@@ -1,13 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
-import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, KeyRound, Loader2, ShieldCheck } from 'lucide-react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { toast } from '@/lib/toast';
-import { cn } from '@/lib/utils';
+import { ConfirmDialog } from '@/components/ui/confirm-dialog';
 import type { ProviderImportPreview } from '../../../shared/providerImport';
-import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 
 interface ProviderImportDialogProps {
   importId: string;
@@ -15,293 +12,275 @@ interface ProviderImportDialogProps {
   onDone: (providerId: string) => void;
 }
 
-function harnessLabel(agent: ProviderImportPreview['runtimes'][number]['agent']): string {
-  if (agent === 'claude-code') return 'Claude Code';
-  if (agent === 'codex') return 'Codex';
-  return 'Pi';
-}
-
+/** A secret-free review surface. Mutations and credentials remain in Main. */
 export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImportDialogProps) {
   const { t } = useTranslation();
   const [preview, setPreview] = useState<ProviderImportPreview | null>(null);
+  const previewRef = useRef<ProviderImportPreview | null>(null);
+  const [target, setTarget] = useState('');
   const [loading, setLoading] = useState(true);
-  const [confirming, setConfirming] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const [busyCount, setBusyCount] = useState<number | null>(null);
+  const [createdId, setCreatedId] = useState<string | null>(null);
   const [authorizing, setAuthorizing] = useState(false);
-  const [createdProviderId, setCreatedProviderId] = useState<string | null>(null);
-  const confirmingRef = useRef(false);
+  const authorizingRef = useRef(false);
+  const alive = useRef(true);
   const oauth = useProviderOAuthDeviceCode(
     preview?.authMethod === 'oauth' ? preview.providerId : null,
   );
 
   useEffect(() => {
+    alive.current = true;
+    return () => {
+      alive.current = false;
+    };
+  }, [importId]);
+
+  useEffect(() => {
     let cancelled = false;
+    previewRef.current = null;
     setLoading(true);
     void window.electronAPI.maker
-      .previewProviderImport(importId)
+      .previewProviderImport(importId, target || undefined)
       .then((value) => {
-        if (!cancelled) setPreview(value);
+        if (!cancelled && alive.current) {
+          previewRef.current = value;
+          setPreview(value);
+        }
       })
       .catch(() => {
-        if (!cancelled) toast.error(t('settings.providers.import.loadFailed'));
-        if (!cancelled) onClose();
+        if (!cancelled && alive.current) {
+          toast.error(t('settings.providers.import.loadFailed'));
+          onClose();
+        }
       })
       .finally(() => {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && alive.current) setLoading(false);
       });
     return () => {
       cancelled = true;
     };
-  }, [importId, onClose, t]);
+  }, [importId, target, onClose, t]);
 
-  const cancel = useCallback(() => {
-    // Do not interrupt the short config/credential transaction. Once the provider is created,
-    // OAuth is an independently cancellable operation and the dialog must remain dismissible.
-    if (confirmingRef.current) return;
+  function cancel() {
+    if (savingRef.current || !alive.current) return;
+    alive.current = false;
     oauth.cancelOwnedLogin();
-    if (!createdProviderId) {
-      void window.electronAPI.maker.cancelProviderImport(importId).catch(() => undefined);
-    }
+    void window.electronAPI.maker.cancelProviderImport(importId).catch(() => undefined);
     onClose();
-  }, [createdProviderId, importId, oauth, onClose]);
+  }
 
-  const loginOAuth = useCallback(
-    async (providerId: string): Promise<boolean> => {
-      oauth.clearDeviceCode();
-      const ownership = oauth.beginOwnedLogin();
-      setAuthorizing(true);
-      try {
-        const result = await window.electronAPI.maker.providerOAuthLogin(providerId, {
-          ownerId: ownership.ownerId,
-        });
-        if (!result.ok) {
-          toast.error(t('settings.providers.import.oauthFailed'));
-          return false;
-        }
-        ownership.finish();
-        return true;
-      } catch {
-        toast.error(t('settings.providers.import.oauthFailed'));
-        return false;
-      } finally {
-        setAuthorizing(false);
-      }
-    },
-    [oauth, t],
-  );
-
-  const confirmImport = useCallback(async () => {
-    if (!preview || confirmingRef.current || authorizing) return;
+  async function login(providerId: string, name: string) {
+    if (authorizingRef.current) return;
+    authorizingRef.current = true;
+    setAuthorizing(true);
+    const ownership = oauth.beginOwnedLogin();
     try {
-      if (createdProviderId) {
-        if (await loginOAuth(createdProviderId)) {
-          toast.success(t('settings.providers.import.oauthDone', { name: preview.name }));
-          onDone(createdProviderId);
-        }
-        return;
-      }
-      confirmingRef.current = true;
-      setConfirming(true);
-      const result = await window.electronAPI.maker.confirmProviderImport(importId);
-      confirmingRef.current = false;
-      setConfirming(false);
-      if (result.authMethod === 'oauth') {
-        setCreatedProviderId(result.providerId);
-        if (await loginOAuth(result.providerId)) {
-          toast.success(t('settings.providers.import.oauthDone', { name: preview.name }));
-          onDone(result.providerId);
-        }
-        return;
-      }
-      toast.success(t('settings.providers.import.done', { name: preview.name }));
-      onDone(result.providerId);
+      const result = await window.electronAPI.maker.providerOAuthLogin(providerId, {
+        ownerId: ownership.ownerId,
+      });
+      if (!alive.current) return;
+      if (result.ok) {
+        ownership.finish();
+        toast.success(t('settings.providers.import.oauthDone', { name }));
+        onDone(providerId);
+      } else toast.error(t('settings.providers.import.oauthFailed'));
     } catch {
-      toast.error(t('settings.providers.import.confirmFailed'));
+      if (alive.current) toast.error(t('settings.providers.import.oauthFailed'));
     } finally {
-      confirmingRef.current = false;
-      setConfirming(false);
+      authorizingRef.current = false;
+      if (alive.current) setAuthorizing(false);
     }
-  }, [authorizing, createdProviderId, importId, loginOAuth, onDone, preview, t]);
+  }
 
-  const actionLabel = preview
-    ? preview.authMethod === 'oauth'
-      ? createdProviderId
-        ? t('settings.providers.import.retryOAuth')
-        : t('settings.providers.import.addAndAuthorize')
-      : preview.action === 'replace-key'
-        ? t('settings.providers.import.replaceKey')
-        : preview.action === 'update'
-          ? t('settings.providers.import.update')
-          : t('settings.providers.import.create')
-    : t('settings.providers.import.create');
+  async function confirm(interrupt?: true) {
+    const review = previewRef.current;
+    if (!review || savingRef.current || authorizingRef.current || !alive.current) return;
+    savingRef.current = true;
+    setSaving(true);
+    try {
+      if (createdId) {
+        // Keep AlertDialog.Action's synchronous close from cancelling the retry.
+        await Promise.resolve();
+        savingRef.current = false;
+        setSaving(false);
+        if (alive.current) await login(createdId, review.name);
+        return;
+      }
+      const result = await window.electronAPI.maker.confirmProviderImport(
+        importId,
+        target || undefined,
+        interrupt,
+      );
+      if (!alive.current) return;
+      if (!result.ok) {
+        setBusyCount(result.busyCount);
+        return;
+      }
+      setBusyCount(null);
+      if (result.authMethod === 'oauth') {
+        setCreatedId(result.providerId);
+        // Saving and OAuth have separate lifetimes; failed/cancelled login retains the connection.
+        savingRef.current = false;
+        setSaving(false);
+        await login(result.providerId, review.name);
+      } else {
+        toast.success(
+          t(
+            result.modelsPending
+              ? 'settings.providers.import.modelsPending'
+              : 'settings.providers.import.done',
+            { name: review.name },
+          ),
+        );
+        onDone(result.providerId);
+      }
+    } catch {
+      if (alive.current) toast.error(t('settings.providers.import.confirmFailed'));
+    } finally {
+      savingRef.current = false;
+      if (alive.current) setSaving(false);
+    }
+  }
+
+  const action = createdId
+    ? 'retryOAuth'
+    : preview?.authMethod === 'oauth'
+      ? 'addAndAuthorize'
+      : preview?.action === 'replace-key' || preview?.action === 'update'
+        ? 'replaceKey'
+        : 'create';
 
   return (
-    <Dialog.Root open onOpenChange={(open) => !open && cancel()}>
-      <Dialog.Portal>
-        <Dialog.Overlay
-          className="fixed inset-0 z-[10001] bg-[var(--overlay-modal)]"
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        />
-        <Dialog.Content
-          aria-describedby={undefined}
-          onPointerDownOutside={(event) => {
-            if (confirmingRef.current) event.preventDefault();
-          }}
-          onEscapeKeyDown={(event) => {
-            if (confirmingRef.current) event.preventDefault();
-          }}
-          className={cn(
-            'fixed left-1/2 top-1/2 z-[10001] -translate-x-1/2 -translate-y-1/2',
-            'flex max-h-[78vh] w-[600px] max-w-[92vw] flex-col overflow-hidden rounded-xl',
-            'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
-          )}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
-        >
-          <header className="flex shrink-0 items-center justify-between py-3.5 pl-5 pr-3.5">
-            <Dialog.Title className="text-15 font-medium text-[var(--settings-section-title)]">
-              {t('settings.providers.import.title')}
-            </Dialog.Title>
-          </header>
-
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-5">
-            {loading && (
-              <div className="flex min-h-32 items-center justify-center text-[var(--settings-section-desc)]">
-                <span className="inline-flex animate-spin motion-reduce:animate-none">
-                  <Loader2 size={20} />
-                </span>
-              </div>
-            )}
-
-            {preview && (
-              <>
-                <div className="flex items-start gap-3 rounded-xl border border-[var(--settings-theme-card-border)] bg-[var(--settings-input-bg)] p-3.5">
-                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-[var(--surface-hover)] text-[var(--settings-section-title)]">
-                    {preview.authMethod === 'oauth' ? (
-                      <ShieldCheck size={17} />
-                    ) : (
-                      <KeyRound size={17} />
-                    )}
+    <>
+      <ConfirmDialog
+        presentation="standard"
+        open={busyCount === null}
+        maxWidth={600}
+        onOpenChange={(open) => {
+          if (!open) cancel();
+        }}
+        title={t('settings.providers.import.title')}
+        description={t(
+          createdId
+            ? 'settings.providers.import.authorizationPendingNote'
+            : 'settings.providers.import.confirmNote',
+        )}
+        confirmText={t(`settings.providers.import.${action}`)}
+        cancelText={t('settings.providers.import.cancel')}
+        confirmDisabled={loading || !preview || authorizing}
+        loading={saving}
+        onConfirm={() => void confirm()}
+        onCancel={cancel}
+        contentSelectable
+        content={
+          preview && !loading ? (
+            <div className="flex flex-col gap-3 text-13 text-[var(--text-primary)]">
+              <p className="font-medium">{preview.name}</p>
+              {!createdId && preview.updateTargets.length > 0 && (
+                <label className="flex flex-col gap-2">
+                  {t('settings.providers.import.destination')}
+                  <select
+                    aria-label={t('settings.providers.import.destination')}
+                    value={target}
+                    disabled={saving}
+                    className="h-9 rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-3 text-[var(--text-primary)]"
+                    onChange={(event) => {
+                      previewRef.current = null;
+                      setLoading(true);
+                      setTarget(event.target.value);
+                    }}
+                  >
+                    <option value="">{t('settings.providers.import.newConnection')}</option>
+                    {preview.updateTargets.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {item.name} · {item.id}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              )}
+              <p>
+                {t(`settings.providers.import.action.${preview.action}`, {
+                  name: preview.existingProviderName ?? preview.name,
+                })}
+              </p>
+              {(preview.action === 'update' || preview.action === 'replace-key') && (
+                <p>{t('settings.providers.import.keyOnly')}</p>
+              )}
+              {preview.kind === 'builtin' && <p>{t('settings.providers.import.keyIncluded')}</p>}
+              {preview.runtimes.map((runtime) => (
+                <div
+                  key={runtime.agent}
+                  className="rounded-xl border border-[var(--border-default)] p-3"
+                >
+                  <div>
+                    {runtime.agent === 'claude-code'
+                      ? 'Claude Code'
+                      : runtime.agent === 'codex'
+                        ? 'Codex'
+                        : 'Pi'}{' '}
+                    · {runtime.protocol}
                   </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="truncate text-14 font-medium text-[var(--settings-section-title)]">
-                      {preview.name}
+                  <div className="break-all text-[var(--text-secondary)]">{runtime.baseUrl}</div>
+                  {runtime.modelsUrl && preview.action === 'create' && (
+                    <div className="break-all text-[var(--text-secondary)]">
+                      {runtime.modelsUrl}
                     </div>
-                    <div className="mt-1 text-12 text-[var(--settings-section-desc)]">
-                      {t(`settings.providers.import.action.${preview.action}`, {
-                        name: preview.existingProviderName ?? preview.name,
-                      })}
-                    </div>
-                  </div>
-                </div>
-
-                {(preview.action === 'update' || preview.action === 'replace-key') && (
-                  <div className="flex gap-2 rounded-lg bg-[var(--warning-bg-soft)] px-3 py-2.5 text-12 leading-[1.5] text-[var(--settings-section-title)]">
-                    <AlertTriangle size={15} className="mt-0.5 shrink-0" />
-                    <span>{t('settings.providers.import.replaceWarning')}</span>
-                  </div>
-                )}
-
-                {preview.runtimes.length > 0 && (
-                  <div className="flex flex-col gap-2">
-                    <span className="text-12 font-medium text-[var(--settings-section-title)]">
-                      {t('settings.providers.import.harnesses')}
-                    </span>
-                    <div className="overflow-hidden rounded-lg border border-[var(--settings-theme-card-border)]">
-                      {preview.runtimes.map((runtime) => (
-                        <div
-                          key={runtime.agent}
-                          className="flex flex-col gap-1 border-b border-[var(--settings-theme-card-border)] px-3 py-2.5 last:border-b-0"
-                        >
-                          <div className="flex items-center justify-between gap-3">
-                            <span className="text-13 font-medium text-[var(--settings-section-title)]">
-                              {harnessLabel(runtime.agent)}
-                            </span>
-                            <span className="text-11 text-[var(--settings-section-desc)]">
-                              {runtime.protocol}
-                            </span>
-                          </div>
-                          <span className="break-all text-11 text-[var(--settings-section-desc)]">
-                            {runtime.baseUrl}
-                          </span>
-                          <span className="text-11 text-[var(--settings-section-desc)]">
-                            {runtime.willFetchModels
-                              ? t('settings.providers.import.fetchAfterConfirm')
-                              : t('settings.providers.import.modelCount', {
-                                  count: runtime.modelCount,
-                                })}
-                            {runtime.hasApiKey
-                              ? ` · ${t('settings.providers.import.keyIncluded')}`
-                              : ''}
-                            {runtime.headerNames.length > 0
-                              ? ` · ${t('settings.providers.import.headers', { names: runtime.headerNames.join(', ') })}`
-                              : ''}
-                          </span>
+                  )}
+                  {runtime.hasApiKey && <div>{t('settings.providers.import.keyIncluded')}</div>}
+                  {preview.action === 'create' && (
+                    <>
+                      <div>
+                        {runtime.willFetchModels
+                          ? t('settings.providers.import.fetchAfterConfirm')
+                          : t('settings.providers.import.modelCount', {
+                              count: runtime.modelCount,
+                            })}
+                      </div>
+                      {runtime.headerNames.length > 0 && (
+                        <div>
+                          {t('settings.providers.import.headers', {
+                            names: runtime.headerNames.join(', '),
+                          })}
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-
-                {preview.oauth && (
-                  <div className="rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5 text-12 text-[var(--settings-section-desc)]">
-                    {t('settings.providers.import.oauthHosts', {
-                      authorizeHost: preview.oauth.authorizeHost,
-                      tokenHost: preview.oauth.tokenHost,
-                    })}
-                  </div>
-                )}
-
-                {preview.authMethod === 'oauth' &&
-                  authorizing &&
-                  preview.oauth?.flow === 'device-code' && (
-                    <OAuthDeviceCodeCard deviceCode={oauth.deviceCode} />
+                      )}
+                    </>
                   )}
-
-                {preview.authMethod === 'oauth' &&
-                  authorizing &&
-                  preview.oauth?.flow === 'authorization-code' && (
-                    <div className="flex items-center gap-2 rounded-lg border border-[var(--settings-theme-card-border)] px-3 py-2.5 text-12 text-[var(--settings-section-desc)]">
-                      <span className="inline-flex animate-spin motion-reduce:animate-none">
-                        <Loader2 size={14} />
-                      </span>
-                      <span>{t('settings.providers.import.browserAuthorizationInProgress')}</span>
-                    </div>
-                  )}
-
-                <p className="flex items-start gap-2 text-11 leading-[1.5] text-[var(--settings-section-desc)]">
-                  <Check size={13} className="mt-0.5 shrink-0" />
-                  {createdProviderId
-                    ? t('settings.providers.import.authorizationPendingNote')
-                    : t('settings.providers.import.confirmNote')}
-                </p>
-
-                <div className="flex justify-end gap-2">
-                  <button
-                    type="button"
-                    onClick={cancel}
-                    disabled={confirming}
-                    className="h-8 rounded-lg border border-[var(--settings-btn-secondary-border)] px-3.5 text-13 font-medium text-[var(--settings-btn-secondary-text)] hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:opacity-40"
-                  >
-                    {t('settings.providers.import.cancel')}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void confirmImport()}
-                    disabled={confirming || authorizing}
-                    className="flex h-8 items-center gap-1.5 rounded-lg bg-[var(--accent-cta-bg)] px-3.5 text-13 font-medium text-[var(--accent-pure-cta-fg)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)] disabled:opacity-40"
-                  >
-                    {(confirming || authorizing) && (
-                      <span className="inline-flex animate-spin motion-reduce:animate-none">
-                        <Loader2 size={13} />
-                      </span>
-                    )}
-                    {actionLabel}
-                  </button>
                 </div>
-              </>
-            )}
-          </div>
-        </Dialog.Content>
-      </Dialog.Portal>
-    </Dialog.Root>
+              ))}
+              {preview.oauth && <p>{t('settings.providers.import.oauthHosts', preview.oauth)}</p>}
+              {authorizing && preview.oauth?.flow === 'device-code' && (
+                <OAuthDeviceCodeCard deviceCode={oauth.deviceCode} />
+              )}
+              {authorizing && preview.oauth?.flow === 'authorization-code' && (
+                <>
+                  <p>{t('settings.providers.import.browserAuthorizationInProgress')}</p>
+                  {oauth.browserUrl && <OAuthBrowserLink url={oauth.browserUrl} />}
+                </>
+              )}
+            </div>
+          ) : undefined
+        }
+      />
+      <ConfirmDialog
+        presentation="standard"
+        open={busyCount !== null}
+        zIndex={10002}
+        onOpenChange={(open) => {
+          if (!open && !savingRef.current) setBusyCount(null);
+        }}
+        title={t('settings.providers.custom.imageGenerationReload.title')}
+        description={t('settings.providers.import.busyWarning', { count: busyCount ?? 0 })}
+        confirmText={t('settings.providers.custom.imageGenerationReload.interrupt')}
+        confirmVariant="destructive"
+        loading={saving}
+        onCancel={() => {
+          if (!savingRef.current) setBusyCount(null);
+        }}
+        onConfirm={() => void confirm(true)}
+      />
+    </>
   );
 }

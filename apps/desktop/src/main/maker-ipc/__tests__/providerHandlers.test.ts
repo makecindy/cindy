@@ -4,6 +4,7 @@ import { afterEach, describe, it, expect, vi } from 'vitest';
 
 import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
+import type { ProviderImportPreview } from '../../../shared/providerImport.js';
 import { BUILTIN_REFRESHABLE_PROVIDER_IDS } from '../../../shared/providerModelRefresh.js';
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../../localDb/client/current.js';
@@ -978,23 +979,219 @@ describe('provider:models-auto-refresh handler', () => {
 });
 
 describe('provider OAuth sender boundary', () => {
-  it.each([false, true])('rejects all OAuth mutations before side effects (missing guard=%s)', async (missing) => {
-    const harness = new IpcHarness();
-    const guard = vi.fn(() => { throwIpcError('PERMISSION_DENIED', 'untrusted sender'); });
-    const deps = makeDeps({ assertTrustedSender: missing ? undefined : guard });
-    registerProviderHandlers(harness, deps);
-    for (const channel of [MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT, MAKER_INVOKE.PROVIDER_OAUTH_CANCEL]) {
-      await expect(harness.invokeFrom(123, channel, 'openai-account')).rejects.toThrow(/PERMISSION_DENIED/);
-    }
-    if (!missing) expect(guard).toHaveBeenCalledTimes(3);
-    expect(deps.oauthLogin).not.toHaveBeenCalled();
-    expect(deps.oauthLogout).not.toHaveBeenCalled();
-    expect(deps.oauthCancel).not.toHaveBeenCalled();
-    expect(deps.beginRouteMutation).not.toHaveBeenCalled();
-  });
+  it.each([false, true])(
+    'rejects all OAuth mutations before side effects (missing guard=%s)',
+    async (missing) => {
+      const harness = new IpcHarness();
+      const guard = vi.fn(() => {
+        throwIpcError('PERMISSION_DENIED', 'untrusted sender');
+      });
+      const deps = makeDeps({ assertTrustedSender: missing ? undefined : guard });
+      registerProviderHandlers(harness, deps);
+      for (const channel of [
+        MAKER_INVOKE.PROVIDER_OAUTH_LOGIN,
+        MAKER_INVOKE.PROVIDER_OAUTH_LOGOUT,
+        MAKER_INVOKE.PROVIDER_OAUTH_CANCEL,
+      ]) {
+        await expect(harness.invokeFrom(123, channel, 'openai-account')).rejects.toThrow(
+          /PERMISSION_DENIED/,
+        );
+      }
+      if (!missing) expect(guard).toHaveBeenCalledTimes(3);
+      expect(deps.oauthLogin).not.toHaveBeenCalled();
+      expect(deps.oauthLogout).not.toHaveBeenCalled();
+      expect(deps.oauthCancel).not.toHaveBeenCalled();
+      expect(deps.beginRouteMutation).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('provider:custom:* CRUD handlers', () => {
+  it('consumes an import whose save succeeded even if post-commit runtime refresh fails', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listPresets: () => [{ id: 'refresh-fails', name: 'Saved Import', runtimes: imageProviderConfig('unused').runtimes }],
+      finalizeCodexCustomProviderHostChange: vi.fn(async () => { throw new Error('cache refresh failed'); }),
+    });
+    registerProviderHandlers(harness, deps);
+    const importId = createProviderImportId({ kind: 'preset', preset: 'refresh-fails', apiKey: 'fixture-key' });
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId) as ProviderImportPreview;
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId)).resolves.toMatchObject({ ok: true, providerId: preview.providerId });
+    expect(await getCustomProvider(preview.providerId)).not.toBeNull();
+    expect(deps.broadcastChanged).toHaveBeenCalled();
+    expect(deps.cancelCodexCustomProviderHostChange).toHaveBeenCalled();
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId)).rejects.toThrow(/INVALID_PARAMS/);
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledOnce();
+  });
+
+  it.each(['gemini', 'openai-images'])(
+    'imports %s into its own built-in key slot only after confirmation',
+    async (provider) => {
+      mountDb();
+      const harness = new IpcHarness();
+      const bridge = {
+        store: {
+          set: vi.fn(() => true),
+          remove: vi.fn(() => ({ success: true })),
+          has: vi.fn(() => false),
+        },
+        onKeyChanged: vi.fn(),
+        logError: vi.fn(),
+      };
+      registerProviderHandlers(harness, makeDeps({ builtinApiKeyDeps: bridge }));
+      const importId = createProviderImportId({
+        kind: 'builtin',
+        provider,
+        apiKey: 'fixture-builtin-key',
+      });
+      const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId) as ProviderImportPreview;
+      expect(preview.providerId).toBe(provider);
+      expect(bridge.store.set).not.toHaveBeenCalled();
+      await expect(
+        harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId),
+      ).resolves.toMatchObject({ ok: true, providerId: provider });
+      expect(bridge.store.set).toHaveBeenCalledExactlyOnceWith(provider, 'fixture-builtin-key');
+      expect(bridge.onKeyChanged).toHaveBeenCalledExactlyOnceWith(provider);
+    },
+  );
+
+  it('updates only the selected connection keys, preserving models, other harnesses and encrypted headers', async () => {
+    mountDb();
+    const existing: CustomProviderConfig = {
+      id: 'my-connection',
+      name: 'My tuned account',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://vendor.example.test/v1',
+          wireProtocol: 'openai-chat',
+          catalogPresetId: 'catalog-origin',
+          models: [{ id: 'keep-model', name: 'Tuned', contextWindow: 4321 }],
+        },
+        'claude-code': {
+          baseUrl: 'https://other.example.test',
+          models: [{ id: 'keep-claude', name: 'Claude' }],
+        },
+      },
+    };
+    await createCustomProvider(existing);
+    const original = await getCustomProvider(existing.id);
+    const view = {
+      id: existing.id,
+      name: existing.name,
+      source: 'user',
+      auth: { method: 'apiKey' },
+      routing: {
+        codex: { upstream: existing.runtimes.codex!.baseUrl, wireProtocol: 'openai-chat' },
+      },
+    } as ProviderView;
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviders: async () => [view],
+      readCustomProviderKeyForMutation: vi.fn(() => 'old-key'),
+      readCustomProviderHeadersForMutation: vi.fn(() => ({ 'X-Keep': 'old-header' })),
+    });
+    registerProviderHandlers(harness, deps);
+    const importId = createProviderImportId({
+      kind: 'custom',
+      id: existing.id,
+      name: 'Vendor name',
+      auth: { method: 'apiKey', apiKey: 'replacement-key' },
+      endpoints: [
+        {
+          protocol: 'openai-chat',
+          baseUrl: existing.runtimes.codex!.baseUrl,
+          targets: ['codex'],
+          models: ['do-not-import'],
+          headers: { 'X-Replace': 'do-not-import' },
+        },
+      ],
+    });
+    expect(await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId)).toMatchObject({
+      action: 'create',
+    });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId, existing.id);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId, existing.id),
+    ).resolves.toMatchObject({ ok: true, providerId: existing.id });
+    const updated = await getCustomProvider(existing.id);
+    expect(updated).toMatchObject({ name: original!.name, runtimes: original!.runtimes });
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledExactlyOnceWith(
+      existing.id,
+      'codex',
+      'replacement-key',
+    );
+    expect(deps.storeCustomProviderHeaders).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderHeaders).not.toHaveBeenCalled();
+    expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.oauthCancel).not.toHaveBeenCalled();
+    expect(deps.fetchModels).not.toHaveBeenCalled();
+  });
+
+  it('requires separate busy-Codex consent and reuses the normal hard-stop sequence on retry', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listBusyLocalCodexSessionIds: () => ['busy-session'],
+      listPresets: () => [
+        {
+          id: 'busy-preset',
+          name: 'Busy Import',
+          runtimes: imageProviderConfig('unused').runtimes,
+        },
+      ],
+    });
+    registerProviderHandlers(harness, deps);
+    const importId = createProviderImportId({
+      kind: 'preset',
+      preset: 'busy-preset',
+      apiKey: 'fixture-key',
+    });
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId) as ProviderImportPreview;
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId)).resolves.toEqual({
+      ok: false,
+      confirmationRequired: 'codex-image-generation-reload',
+      busyCount: 1,
+    });
+    expect(await listCustomProviders()).toEqual([]);
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(deps.prepareCodexCustomProviderHostChange).not.toHaveBeenCalled();
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId, undefined, true),
+    ).resolves.toMatchObject({ ok: true, providerId: preview.providerId });
+    expect(deps.prepareCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+    expect(deps.finalizeCodexCustomProviderHostChange).toHaveBeenCalledOnce();
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledOnce();
+  });
+
+  it('rejects a changed account after model discovery and writes no credentials or configuration', async () => {
+    mountDb();
+    const harness = new IpcHarness();
+    let owner = { dataOwnerId: 'test-user', generation: 1 };
+    const deps = makeDeps({
+      currentOwnerSession: () => owner,
+      fetchModels: vi.fn(async () => {
+        owner = { dataOwnerId: 'other-owner', generation: 2 };
+        setCurrentDbClient(client!, 'other-owner');
+        return { ok: true, models: [{ id: 'm1', name: 'M1' }] };
+      }),
+    });
+    registerProviderHandlers(harness, deps);
+    const importId = createProviderImportId({
+      kind: 'custom',
+      name: 'Owner Bound',
+      auth: { method: 'apiKey', apiKey: 'fixture-key' },
+      endpoints: [{ protocol: 'openai-responses', baseUrl: 'https://vendor.example.test/v1' }],
+    });
+    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId);
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId)).rejects.toThrow(
+      /owner|account/i,
+    );
+    expect(deps.storeCustomProviderKey).not.toHaveBeenCalled();
+    expect(await listCustomProviders()).toEqual([]);
+  });
+
   it('does not fetch or persist an import until confirmation, then fetches omitted models in Main', async () => {
     mountDb();
     const harness = new IpcHarness();
@@ -1019,7 +1216,7 @@ describe('provider:custom:* CRUD handlers', () => {
       ],
     });
 
-    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId);
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId) as ProviderImportPreview;
     expect(preview).toMatchObject({
       authMethod: 'apiKey',
       runtimes: [{ agent: 'codex', modelCount: 0, willFetchModels: true, hasApiKey: true }],
@@ -1028,7 +1225,7 @@ describe('provider:custom:* CRUD handlers', () => {
     expect(await listCustomProviders()).toEqual([]);
 
     const result = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId);
-    expect(result).toEqual({ ok: true, providerId: 'deferred-models', authMethod: 'apiKey' });
+    expect(result).toEqual({ ok: true, providerId: preview.providerId, authMethod: 'apiKey' });
     expect(fetchModels).toHaveBeenCalledOnce();
     expect(fetchModels).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1046,7 +1243,7 @@ describe('provider:custom:* CRUD handlers', () => {
     ]);
   });
 
-  it('keeps the import draft and does not write when confirmed model discovery fails', async () => {
+  it('saves the connection and key when discovery fails, reporting models pending without exposing secrets', async () => {
     mountDb();
     const harness = new IpcHarness();
     const deps = makeDeps({ fetchModels: vi.fn(async () => ({ ok: false, models: [] })) });
@@ -1063,16 +1260,25 @@ describe('provider:custom:* CRUD handlers', () => {
         },
       ],
     });
-    await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId);
+    const preview = await harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId) as ProviderImportPreview;
 
-    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId)).rejects.toThrow(
-      /PRECONDITION_FAILED/,
-    );
-    expect(await listCustomProviders()).toEqual([]);
-    // Failure is retryable: a fresh preview of the same opaque import id still works.
-    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId)).resolves.toMatchObject({
-      name: 'Discovery Fails',
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_CONFIRM, importId)).resolves.toEqual({
+      ok: true,
+      providerId: preview.providerId,
+      authMethod: 'apiKey',
+      modelsPending: true,
     });
+    expect(await listCustomProviders()).toMatchObject([
+      { id: preview.providerId, runtimes: { codex: { models: [] } } },
+    ]);
+    expect(deps.storeCustomProviderKey).toHaveBeenCalledWith(
+      preview.providerId,
+      'codex',
+      'sk-main-only',
+    );
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_IMPORT_PREVIEW, importId)).rejects.toThrow(
+      /invalid or expired/,
+    );
   });
 
   it('rejects credential-mutating CRUD before parsing or touching secrets for an untrusted sender', async () => {

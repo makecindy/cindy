@@ -1486,6 +1486,11 @@
       "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 세션별로 전환할 수 있습니다.",
       "import": {
         "title": "제공자 가져오기",
+        "destination": "가져올 대상",
+        "newConnection": "새 연결 만들기",
+        "keyOnly": "이번에 제공한 API Key만 변경합니다. 기존 모델, 경로 및 기타 설정은 유지됩니다.",
+        "modelsPending": "{{name}} 설정을 저장했지만 모델 목록을 가져오지 못했습니다. 제공자 설정에서 다시 시도하세요.",
+        "busyWarning": "이 변경에는 로컬 Codex 서비스 다시 로드가 필요하며 실행 중인 세션 {{count}}개가 중단될 수 있습니다. 계속할까요?",
         "close": "제공자 가져오기 닫기",
         "loadFailed": "이 제공자 가져오기 링크가 잘못되었거나 만료되었습니다.",
         "confirmFailed": "제공자를 가져오지 못했습니다. 링크 또는 엔드포인트를 확인하고 다시 시도하세요.",
@@ -1505,7 +1510,7 @@
         "headers": "헤더: {{names}}(값 숨김)",
         "oauthHosts": "인증: {{authorizeHost}} · Token 교환: {{tokenHost}}",
         "browserAuthorizationInProgress": "방금 열린 브라우저 창에서 인증을 완료하세요.",
-        "replaceWarning": "확인하면 위에 표시된 기존 로컬 구성 또는 자격 증명이 교체됩니다.",
+        "replaceWarning": "이번에 제공한 API Key로 선택한 연결의 키를 교체합니다.",
         "confirmNote": "확인하기 전에는 아무것도 저장하지 않으며 제공자 엔드포인트에 접근하지 않습니다.",
         "authorizationPendingNote": "제공자가 추가되었지만 인증이 아직 완료되지 않았습니다. 여기서 다시 시도하거나 취소할 수 있습니다.",
         "action": {

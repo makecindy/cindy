@@ -5266,10 +5266,13 @@ interface ElectronAPI {
     ) => Promise<{ ok: true }>;
     previewProviderImport: (
       importId: string,
-    ) => Promise<import('./shared/providerImport').ProviderImportPreview>;
+      targetProviderId?: string,
+    ) => Promise<import('../shared/providerImport').ProviderImportPreview>;
     confirmProviderImport: (
       importId: string,
-    ) => Promise<import('./shared/providerImport').ProviderImportConfirmResult>;
+      targetProviderId?: string,
+      interrupt?: true,
+    ) => Promise<import('../shared/providerImport').ProviderImportConfirmResult>;
     cancelProviderImport: (importId: string) => Promise<{ ok: true }>;
     onProviderOAuthProgress: (
       cb: (progress: {

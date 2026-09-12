@@ -15,12 +15,20 @@ import type {
   PiReasoningEffort,
   ProviderRuntimeModelConfig,
   ProviderView,
+  ProviderPreset,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
 import type {
   ProviderImportPreview,
   ProviderImportRuntimePreview,
 } from '../../shared/providerImport.js';
+import { isBuiltinApiKeyProviderId, type ProviderSecretId } from '../../shared/providerSecrets.js';
+import {
+  MANAGED_LMSTUDIO_PROVIDER_ID,
+  MANAGED_OLLAMA_PROVIDER_ID,
+} from '../../shared/localModelRuntime.js';
+import { configuredPresetAgents } from '../../shared/piRuntimeInitialization.js';
+import { presetConnectionRuntime } from '../../shared/presetConnectionRuntime.js';
 
 const IMPORT_TTL_MS = 10 * 60_000;
 const MAX_URL_LENGTH = 32 * 1024;
@@ -63,10 +71,11 @@ const FORBIDDEN_OAUTH_IMPORT_PARAM_KEYS = new Set([
 type ProviderImportScope = { dataOwnerId: string | null; generation: number };
 
 export type ProviderImportDraft =
-  | { kind: 'builtin'; provider: 'gemini'; apiKey: string }
+  | { kind: 'builtin'; provider: ProviderSecretId; apiKey: string }
   | {
       kind: 'custom';
-      explicitId: boolean;
+      presetId?: string;
+      presetApiKey?: string;
       config: CustomProviderConfig;
       keys: Partial<Record<AgentKind, string>>;
     };
@@ -429,11 +438,21 @@ function parsePayload(value: unknown): ProviderImportDraft {
   const input = object(value, 'data');
   if (input.kind === 'builtin') {
     exactFields(input, ['kind', 'provider', 'apiKey'], 'data');
-    if (input.provider !== 'gemini') fail('only the built-in Gemini API-key slot can be imported');
+    if (!isBuiltinApiKeyProviderId(input.provider)) fail('unsupported built-in API-key slot');
     return {
       kind: 'builtin',
-      provider: 'gemini',
+      provider: input.provider,
       apiKey: boundedString(input.apiKey, 'data.apiKey', MAX_BUILTIN_API_KEY_LENGTH),
+    };
+  }
+  if (input.kind === 'preset') {
+    exactFields(input, ['kind', 'preset', 'apiKey'], 'data');
+    return {
+      kind: 'custom',
+      presetId: boundedString(input.preset, 'data.preset', 128),
+      presetApiKey: boundedString(input.apiKey, 'data.apiKey', MAX_API_KEY_LENGTH),
+      config: { id: `import-${randomUUID().slice(0, 8)}`, name: 'Import', runtimes: {} },
+      keys: {},
     };
   }
   if (input.kind !== 'custom') fail('data.kind is unsupported');
@@ -442,7 +461,19 @@ function parsePayload(value: unknown): ProviderImportDraft {
   const explicitId = input.id !== undefined;
   const id = explicitId ? boundedString(input.id, 'data.id', 40) : slugFromName(name);
   if (!PROVIDER_ID_RE.test(id)) fail('data.id must be a lowercase provider slug');
-  if (['anthropic', 'openai', 'xai', 'xd', 'cindy', 'gemini', 'openai-images'].includes(id)) {
+  if (
+    [
+      'anthropic',
+      'openai',
+      'xai',
+      'xd',
+      'cindy',
+      'gemini',
+      'openai-images',
+      MANAGED_OLLAMA_PROVIDER_ID,
+      MANAGED_LMSTUDIO_PROVIDER_ID,
+    ].includes(id)
+  ) {
     fail('data.id is reserved');
   }
   const authInput =
@@ -495,9 +526,11 @@ function parsePayload(value: unknown): ProviderImportDraft {
     // Generic OAuth credentials are held by Cindy's OAuth runner and Pi does not consume them.
     // Keep the compact vendor format useful by omitting Pi from implicit defaults; an explicit
     // Pi target remains an error so a vendor cannot accidentally advertise an unusable runtime.
-    const targets = endpoint.targets ?? defaultTargets(endpoint.protocol).filter(
-      (target) => auth?.method !== 'oauth' || target !== 'pi',
-    );
+    const targets =
+      endpoint.targets ??
+      defaultTargets(endpoint.protocol).filter(
+        (target) => auth?.method !== 'oauth' || target !== 'pi',
+      );
     for (const target of targets) {
       if (target === 'claude-code' && endpoint.protocol !== 'anthropic-messages') {
         fail('Claude Code only supports anthropic-messages endpoints');
@@ -540,7 +573,12 @@ function parsePayload(value: unknown): ProviderImportDraft {
     const key = selected.apiKey ?? sharedApiKey;
     if (auth?.method === 'apiKey' && key) keys[agent] = key;
   }
-  return { kind: 'custom', explicitId, config: { id, name, auth, runtimes }, keys };
+  // A vendor slug is a naming hint, never the identity of an existing local account.
+  return {
+    kind: 'custom',
+    config: { id: `${id.slice(0, 24)}-${randomUUID().slice(0, 8)}`, name, auth, runtimes },
+    keys,
+  };
 }
 
 function decodeBase64Url(value: string): string {
@@ -578,7 +616,7 @@ export function createProviderImportDraftFromRest(rest: string): string | null {
   try {
     const draft = parsePayload(JSON.parse(decodeBase64Url(encoded)));
     if (draft.kind === 'custom' && draft.config.auth?.method === 'oauth') {
-      const discovery = draft.config.auth.oauth.modelsDiscoveryUrl;
+      const discovery = draft.config.auth.oauth?.modelsDiscoveryUrl;
       if (discovery) {
         const runtimeUrls = Object.values(draft.config.runtimes).map((runtime) => runtime!.baseUrl);
         if (runtimeUrls.some((baseUrl) => new URL(baseUrl).origin !== new URL(discovery).origin)) {
@@ -598,102 +636,123 @@ export function createProviderImportDraftFromRest(rest: string): string | null {
 
 function normalizedUrl(value: string): string {
   try {
-    const url = new URL(value);
-    url.hash = '';
-    url.search = '';
-    return url.toString().replace(/\/$/, '');
+    return new URL(value).toString().replace(/\/$/, '');
   } catch {
     return value.trim().replace(/\/$/, '');
   }
 }
 
-function runtimeSignatureFromConfig(config: CustomProviderConfig): string {
-  return AGENTS.flatMap((agent) => {
-    const runtime = config.runtimes[agent];
-    return runtime
-      ? [
-          [
-            agent,
-            runtime.wireProtocol ?? '',
-            normalizedUrl(runtime.baseUrl),
-            runtime.requestPath ?? '',
-            normalizedUrl(runtime.modelsUrl ?? ''),
-            Object.keys(runtime.headers ?? {})
-              .map((name) => name.toLowerCase())
-              .sort()
-              .join(','),
-          ].join('\n'),
-        ]
-      : [];
-  })
-    .sort()
-    .join('\n---\n');
+/** Only credentials for the same explicitly selected destinations may be replaced. */
+export function importKeysForCurrentConfig(
+  draft: ProviderImportDraft,
+  current: CustomProviderConfig,
+): void {
+  if (
+    draft.kind !== 'custom' ||
+    (draft.config.auth?.method ?? 'apiKey') !== 'apiKey' ||
+    (current.auth?.method ?? 'apiKey') !== 'apiKey' ||
+    [MANAGED_OLLAMA_PROVIDER_ID, MANAGED_LMSTUDIO_PROVIDER_ID].includes(current.id)
+  )
+    fail('connection cannot receive imported keys');
+  const agents = AGENTS.filter((agent) => draft.keys[agent]);
+  if (!agents.length) fail('no API keys to update');
+  for (const agent of agents) {
+    const incoming = draft.config.runtimes[agent]!;
+    const existing = current.runtimes[agent];
+    const protocol = (value: typeof existing) =>
+      value?.wireProtocol ?? (agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses');
+    if (
+      !existing ||
+      normalizedUrl(incoming.baseUrl) !== normalizedUrl(existing.baseUrl) ||
+      protocol(incoming) !== protocol(existing) ||
+      (incoming.requestPath ?? '') !== (existing.requestPath ?? '')
+    )
+      fail('connection destinations changed');
+  }
 }
 
-function runtimeSignatureFromProvider(provider: ProviderView): string {
-  return AGENTS.flatMap((agent) => {
+function canUpdate(draft: ProviderImportDraft, provider: ProviderView): boolean {
+  if (provider.source !== 'user') return false;
+  const runtimes: CustomProviderConfig['runtimes'] = {};
+  for (const agent of AGENTS) {
     const route = provider.routing[agent];
-    return route
-      ? [
-          [
-            agent,
-            route.wireProtocol ?? '',
-            normalizedUrl(route.upstream),
-            route.requestPath ?? '',
-            normalizedUrl(route.modelsUrl ?? ''),
-            Object.keys(route.headerOverride ?? {})
-              .map((name) => name.toLowerCase())
-              .sort()
-              .join(','),
-          ].join('\n'),
-        ]
-      : [];
-  })
-    .sort()
-    .join('\n---\n');
+    if (route)
+      runtimes[agent] = {
+        baseUrl: route.upstream,
+        wireProtocol: route.wireProtocol,
+        requestPath: route.requestPath,
+        models: [],
+      };
+  }
+  try {
+    importKeysForCurrentConfig(draft, {
+      id: provider.id,
+      name: provider.name,
+      auth: { method: provider.auth.method },
+      runtimes,
+    } as CustomProviderConfig);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function resolveDraft(
   draft: ProviderImportDraft,
   providers: readonly ProviderView[],
+  target?: unknown,
 ): ProviderImportResolution {
+  if (target !== undefined && (typeof target !== 'string' || !target || target.length > 128))
+    fail('invalid target connection');
   if (draft.kind === 'builtin') {
+    if (target !== undefined) fail('built-in key target is fixed');
     const provider = providers.find((candidate) => candidate.id === draft.provider);
     return {
       action: 'replace-key',
       providerId: draft.provider,
-      ...(provider ? { existingProviderName: provider.name } : {}),
+      existingProviderName:
+        provider?.name ?? (draft.provider === 'gemini' ? 'Google Gemini' : 'OpenAI Images'),
     };
   }
-  const byDesiredId = providers.find((provider) => provider.id === draft.config.id);
-  if (draft.explicitId && byDesiredId) {
-    if (byDesiredId.source !== 'user') fail('the requested provider id is reserved');
-    if (runtimeSignatureFromProvider(byDesiredId) !== runtimeSignatureFromConfig(draft.config)) {
-      fail('the requested provider id does not match the existing provider endpoints');
-    }
-    return { action: 'update', providerId: byDesiredId.id, existingProviderName: byDesiredId.name };
+  if (target !== undefined) {
+    const provider = providers.find((candidate) => candidate.id === target);
+    if (!provider || !canUpdate(draft, provider)) fail('selected connection is not compatible');
+    return { action: 'update', providerId: provider.id, existingProviderName: provider.name };
   }
-  const signature = runtimeSignatureFromConfig(draft.config);
-  const matches = providers.filter(
-    (provider) =>
-      provider.source === 'user' && runtimeSignatureFromProvider(provider) === signature,
-  );
-  if (matches.length > 1) fail('multiple existing providers match this import');
-  if (matches[0])
-    return { action: 'update', providerId: matches[0].id, existingProviderName: matches[0].name };
-  const ids = new Set(providers.map((provider) => provider.id));
-  let id = draft.config.id;
-  if (ids.has(id)) {
-    const base = id.slice(0, 34) || 'provider';
-    for (let suffix = 2; suffix < 10_000; suffix += 1) {
-      const candidate = `${base}-${suffix}`.slice(0, 40);
-      if (!ids.has(candidate)) {
-        id = candidate;
-        break;
-      }
-    }
+  if (providers.some((provider) => provider.id === draft.config.id))
+    fail('new connection ID is already in use');
+  return { action: 'create', providerId: draft.config.id };
+}
+
+/** Resolve public catalog IDs locally once, then freeze exactly what the user reviews. */
+function materializePreset(record: DraftRecord, presets: readonly ProviderPreset[]): void {
+  const draft = record.draft;
+  if (draft.kind !== 'custom' || !draft.presetId) return;
+  const preset = presets.find((candidate) => candidate.id === draft.presetId);
+  if (!preset || preset.authMethod === 'none') fail('unsupported API-key preset');
+  const runtimes: CustomProviderConfig['runtimes'] = {};
+  for (const agent of configuredPresetAgents(preset)) {
+    const rt = preset.runtimes[agent]!;
+    runtimes[agent] = presetConnectionRuntime(
+      preset,
+      agent,
+      rt.models.map((model) => ({
+        id: model.id,
+        name: model.name,
+        discoveredMetadata: {},
+        ...(model.mode ? { mode: model.mode } : {}),
+        ...(model.modalities ? { modalities: model.modalities } : {}),
+        ...(model.officialDocs ? { officialDocs: model.officialDocs } : {}),
+        ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
+        ...(model.route ? { route: model.route } : {}),
+      })),
+    );
+    draft.keys[agent] = draft.presetApiKey!;
   }
-  return { action: 'create', providerId: id };
+  if (!Object.keys(runtimes).length) fail('preset has no supported runtimes');
+  draft.config = { id: draft.config.id, name: preset.name, runtimes };
+  delete draft.presetId;
+  delete draft.presetApiKey;
 }
 
 function sameScope(a: ProviderImportScope | undefined, b: ProviderImportScope): boolean {
@@ -713,10 +772,14 @@ export function previewProviderImport(
   importId: unknown,
   scope: ProviderImportScope,
   providers: readonly ProviderView[],
+  target?: unknown,
+  presets: readonly ProviderPreset[] = [],
 ): ProviderImportPreview {
   const record = requireRecord(importId);
   if (record.scope && !sameScope(record.scope, scope)) fail('the active account changed');
-  const resolution = resolveDraft(record.draft, providers);
+  if (record.confirming) fail('provider import confirmation is already running');
+  materializePreset(record, presets);
+  const resolution = resolveDraft(record.draft, providers, target);
   record.scope = { ...scope };
   record.resolution = resolution;
   const draft = record.draft;
@@ -728,6 +791,7 @@ export function previewProviderImport(
       authMethod: 'apiKey',
       ...resolution,
       runtimes: [],
+      updateTargets: [],
     };
   }
   const authMethod = draft.config.auth?.method ?? 'apiKey';
@@ -742,7 +806,9 @@ export function previewProviderImport(
           (agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses'),
         baseUrl: runtime.baseUrl,
         modelCount: runtime.models.length,
-        willFetchModels: authMethod !== 'oauth' && runtime.models.length === 0,
+        willFetchModels:
+          resolution.action === 'create' && authMethod !== 'oauth' && runtime.models.length === 0,
+        ...(runtime.modelsUrl ? { modelsUrl: runtime.modelsUrl } : {}),
         hasApiKey: Boolean(draft.keys[agent]),
         headerNames: Object.keys(runtime.headers ?? {}).sort(),
       },
@@ -756,6 +822,9 @@ export function previewProviderImport(
     authMethod,
     ...resolution,
     runtimes,
+    updateTargets: providers
+      .filter((provider) => canUpdate(draft, provider))
+      .map(({ id, name }) => ({ id, name })),
     ...(oauth
       ? {
           oauth: {
@@ -774,12 +843,13 @@ export function beginProviderImportConfirm(
   importId: unknown,
   scope: ProviderImportScope,
   providers: readonly ProviderView[],
+  target?: unknown,
 ): { draft: ProviderImportDraft; resolution: ProviderImportResolution } {
   const record = requireRecord(importId);
   if (record.scope && !sameScope(record.scope, scope)) fail('the active account changed');
   if (!record.scope || !record.resolution) fail('preview this import again before confirming');
   if (record.confirming) fail('provider import confirmation is already running');
-  const latest = resolveDraft(record.draft, providers);
+  const latest = resolveDraft(record.draft, providers, target);
   if (JSON.stringify(latest) !== JSON.stringify(record.resolution))
     fail('provider list changed; preview the import again');
   record.confirming = true;
@@ -794,7 +864,7 @@ export function finishProviderImportConfirm(importId: string, succeeded: boolean
 }
 
 export function cancelProviderImport(importId: unknown): void {
-  if (typeof importId === 'string') drafts.delete(importId);
+  if (typeof importId === 'string' && !drafts.get(importId)?.confirming) drafts.delete(importId);
 }
 
 /** Test-only reset for deterministic isolation. */

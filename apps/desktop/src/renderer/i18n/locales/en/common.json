@@ -1486,6 +1486,11 @@
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
       "import": {
         "title": "Import provider",
+        "destination": "Import destination",
+        "newConnection": "Create a new connection",
+        "keyOnly": "Only the supplied API keys will change. Existing models, routes and other settings stay unchanged.",
+        "modelsPending": "{{name}} is configured, but models could not be fetched. Retry in provider settings.",
+        "busyWarning": "This change requires reloading the local Codex service and may interrupt {{count}} running sessions. Continue?",
         "close": "Close provider import",
         "loadFailed": "This provider import link is invalid or has expired.",
         "confirmFailed": "The provider could not be imported. Check the link or endpoint and try again.",
@@ -1505,7 +1510,7 @@
         "headers": "Headers: {{names}} (values hidden)",
         "oauthHosts": "Authorization: {{authorizeHost}} · Token exchange: {{tokenHost}}",
         "browserAuthorizationInProgress": "Complete authorization in the browser window that just opened.",
-        "replaceWarning": "Confirming will replace the existing local configuration or credential shown above.",
+        "replaceWarning": "The supplied API keys will replace those on the selected connection.",
         "confirmNote": "Nothing is saved and no provider endpoint is contacted until you confirm.",
         "authorizationPendingNote": "The provider was added. Authorization is still pending; you can retry or cancel it here.",
         "action": {
