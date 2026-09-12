@@ -306,7 +306,9 @@ describe("remote desktop viewport", () => {
     expect(v.elements.image.style.width).toBe("400px");
     expect(parseFloat(v.elements.image.style.top)).toBeGreaterThan(0);
   });
-  it.each([1, 2])("keeps landscape scale %sx and centers the cursor above keyboard overlays", (scale) => {
+  it.each([
+    [1, .1], [1, .5], [1, .9], [2, .1], [2, .5], [2, .9],
+  ])("keeps landscape scale %sx with minimal horizontal movement for cursor %s", (scale, cursorX) => {
     const v = viewer();
     v.elements.stage.clientWidth = 800;
     v.elements.stage.clientHeight = 400;
@@ -322,20 +324,31 @@ describe("remote desktop viewport", () => {
       v.pointer("pointerup", 2, 500, 200);
     }
     v.send({ type: "frame", jpeg: "", cursor: {
-      x: .9, y: .85, width: 18, height: 18, hotX: 9, hotY: 9,
+      x: cursorX, y: .85, width: 18, height: 18, hotX: 9, hotY: 9,
       visible: true, png: "iVBORw0KGgo=",
     } });
+    v.send({ type: "mouseButtons", keyboardOpen: false, bottomInset: 0, leftInset: 50, rightInset: 80 });
+    for (let i = 0; i < 30; i++) v.frame();
     const width = v.elements.image.style.width;
     expect(parseFloat(v.elements.image.style.height)).toBeCloseTo(400 * scale);
+    // Removing the toolbar before the keyboard has a measured height must not shift the image.
+    const originalLeft = v.elements.image.style.left;
+    v.send({ type: "mouseButtons", keyboardOpen: true, bottomInset: 0, leftInset: 50, rightInset: 0 });
+    expect(parseFloat(v.elements.image.style.left)).toBeCloseTo(parseFloat(originalLeft));
     // Header, computer keyboard, phone keyboard, and closing the keyboard.
     for (const bottomInset of [60, 260, 300, 0]) {
-      v.send({ type: "mouseButtons", keyboardOpen: bottomInset > 0, bottomInset, leftInset: 50, rightInset: 0 });
+      const previousLeft = parseFloat(v.elements.image.style.left);
+      const previousCursorX = previousLeft + cursorX * parseFloat(width);
+      const rightInset = bottomInset > 0 ? 0 : 80;
+      const expectedCursorX = Math.max(67, Math.min(800 - rightInset - 17, previousCursorX));
+      v.send({ type: "mouseButtons", keyboardOpen: bottomInset > 0, bottomInset, leftInset: 50, rightInset });
       v.blur();
       for (let i = 0; i < 30; i++) v.frame();
       const image = v.elements.image.style;
       expect(image.width).toBe(width);
       expect(parseFloat(image.height)).toBeCloseTo(400 * scale);
-      expect(parseFloat(image.left) + .9 * parseFloat(image.width)).toBeCloseTo(425);
+      expect(parseFloat(image.left) + cursorX * parseFloat(image.width)).toBeCloseTo(expectedCursorX);
+      expect(parseFloat(image.left)).toBeCloseTo(previousLeft + expectedCursorX - previousCursorX);
       expect(parseFloat(image.top) + .85 * parseFloat(image.height)).toBeCloseTo((400 - bottomInset) / 2);
     }
   });
