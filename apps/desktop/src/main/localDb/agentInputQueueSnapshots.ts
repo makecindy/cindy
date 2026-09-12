@@ -173,10 +173,11 @@ export async function readInputDeliveryReceipts(
   const snapshots = await owner.client.drizzle.select({ payload: agentInputQueueSnapshots.payload })
     .from(agentInputQueueSnapshots).where(eq(agentInputQueueSnapshots.sessionId, sessionId));
   const raw: unknown = snapshots[0] ? JSON.parse(snapshots[0].payload) : [];
-  if (!Array.isArray(raw) || raw.some((item) => !isRestorableQueuedMessage(item))) {
+  if (!Array.isArray(raw)) {
     throw new Error('Input delivery snapshot unavailable');
   }
-  const pending = new Set(raw.map((item) => item.clientId));
+  // Match restoration's per-entry validation without rewriting the durable snapshot.
+  const pending = new Set(raw.filter(isRestorableQueuedMessage).map((item) => item.clientId));
   const rows = await owner.client.drizzle.select({
     clientId: messages.clientId, role: messages.role, rewindAt: messages.rewindAt,
   }).from(messages).where(and(eq(messages.sessionId, sessionId), inArray(messages.clientId, clientIds)));

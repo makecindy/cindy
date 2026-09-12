@@ -1,4 +1,5 @@
 import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
@@ -15,6 +16,7 @@ import {
   AgentInputQueueSnapshotTooLargeError,
   awaitAgentInputQueueSnapshotPersistence,
   loadAgentInputQueueSnapshotCounts,
+  loadAgentInputQueueSnapshot,
   saveAgentInputQueueSnapshot,
   saveCancelledInputDelivery,
   hasInputDeliveryCancellation,
@@ -68,6 +70,32 @@ function installDb(
 }
 
 describe('agent input queue snapshot durability boundary', () => {
+  it.each([false, true])('matches restoration when a persisted array contains malformed rows (all malformed: %s)', async (allMalformed) => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER);
+    `);
+    const sid = `receipt-malformed-${allMalformed}`;
+    const good = allMalformed ? [] : [queued('pending', 'valid'), queued('accepted', 'history')];
+    const payload = JSON.stringify([...good, null, 'legacy row', { clientId: 'bad' }, { clientId: 'removed' }]);
+    sqlite.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?, ?)').run(sid, payload, 1);
+    sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?)').run(sid, 'history', 'user', null);
+    sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?)').run(sid, 'removed', 'message_tombstone', 1);
+    mocks.getDbClient.mockReturnValue({ drizzle: drizzle(sqlite) });
+    try {
+      expect((await loadAgentInputQueueSnapshot(sid)).map((item) => item.clientId)).toEqual(good.map((item) => item.clientId));
+      const expected = [
+        { clientId: 'valid', state: allMalformed ? 'unknown' : 'pending' },
+        { clientId: 'bad', state: 'unknown' },
+        { clientId: 'history', state: 'accepted' },
+        { clientId: 'removed', state: 'removed' },
+      ];
+      await expect(readInputDeliveryReceipts(sid, expected.map((item) => item.clientId))).resolves.toEqual(expected);
+      await expect(readInputDeliveryReceipts(sid, ['bad'])).resolves.toEqual([{ clientId: 'bad', state: 'unknown' }]);
+      expect(sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots').get()).toEqual({ payload });
+    } finally { sqlite.close(); }
+  });
   it.each(['settled', 'pending', 'receipt-retry'] as const)('does not let %s cancellation replace a failed snapshot boundary', async (timing) => {
     const sid = `snapshot-cancel-${timing}`;
     const failure = new Error('snapshot failed');
@@ -383,8 +411,8 @@ describe('agent input queue snapshot durability boundary', () => {
     ]);
     expect(events).toEqual(['queue', 'history']);
   });
-  it('does not report unknown when the delivery snapshot is corrupt or its database read fails', async () => {
-    const where = vi.fn().mockResolvedValue([{ payload: '{invalid' }]);
+  it.each(['{invalid', '{}', 'null'])('does not report unknown when the delivery snapshot is corrupt (%s) or its database read fails', async (payload) => {
+    const where = vi.fn().mockResolvedValue([{ payload }]);
     mocks.getDbClient.mockReturnValue({ drizzle: { select: () => ({ from: () => ({ where }) }) } });
     await expect(readInputDeliveryReceipts('receipt-invalid', ['id-a'])).rejects.toThrow();
     where.mockRejectedValueOnce(new Error('db unavailable'));
