@@ -5921,8 +5921,7 @@ export default function SessionScreen() {
           committed = true;
           handoff.release(true);
           // Durable ownership precedes clearing the composer or deleting annotation sources.
-          if (!isMobileAuthOwnerCurrent(ownerAtSend)) return;
-          if (!sendScopeStillAlive()) {
+          if (!isMobileAuthOwnerCurrent(ownerAtSend) || !sendScopeStillAlive()) {
             const stored = readComposerDocumentDraftSync(sessionId);
             if (stored && composerDocumentsEqual(stored, documentBeforeSend)) {
               saveComposerDraft(sessionId, '');
