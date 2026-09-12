@@ -189,11 +189,16 @@ function applyCountBadge(count: number): void {
   }
 }
 
-function applyWindowsBadge(count: number): void {
+/** 语言变化只刷新现有角标，不重新触发任务栏闪烁。 */
+export function refreshAppBadgeLocalization(): void {
+  if (process.platform === 'win32') applyWindowsBadge(getAttentionCount(), false);
+}
+
+function applyWindowsBadge(count: number, updateFlash = true): void {
   const win = getWindow?.();
   if (!win || win.isDestroyed()) return;
   try {
-    win.flashFrame(count > 0);
+    if (updateFlash) win.flashFrame(count > 0);
     win.setOverlayIcon(
       createWindowsBadgeIcon(count),
       count > 0 ? t('appBadge.attentionCount').replace('{{count}}', String(count)) : '',

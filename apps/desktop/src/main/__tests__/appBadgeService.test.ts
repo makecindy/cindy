@@ -16,6 +16,7 @@ const mainWebContents = {};
 const assertTrustedAppRendererEvent = vi.fn();
 const overlayIcon = {};
 const createWindowsBadgeIcon = vi.fn((count: number) => (count > 0 ? overlayIcon : null));
+let badgeDescription = 'Tasks needing attention: {{count}}';
 let owner = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
 vi.mock('../appSessionState', () => ({ getActiveAppSession: () => owner }));
 
@@ -34,7 +35,7 @@ function publish(
 }
 
 vi.mock('../windowsBadgeIcon', () => ({ createWindowsBadgeIcon }));
-vi.mock('../i18n', () => ({ t: () => 'Tasks needing attention: {{count}}' }));
+vi.mock('../i18n', () => ({ t: () => badgeDescription }));
 
 vi.mock('../security/trustedAppRenderer', () => ({ assertTrustedAppRendererEvent }));
 
@@ -92,6 +93,7 @@ async function freshService(platform: NodeJS.Platform = 'darwin') {
 }
 
 beforeEach(() => {
+  badgeDescription = 'Tasks needing attention: {{count}}';
   owner = { dataOwnerId: 'owner-a', generation: 1 };
   createWindowsBadgeIcon.mockClear();
   assertTrustedAppRendererEvent.mockReset();
@@ -286,6 +288,22 @@ describe('appBadgeService', () => {
     expect(setOverlayIcon).toHaveBeenNthCalledWith(1, overlayIcon, 'Tasks needing attention: 1');
     expect(flashFrame).toHaveBeenLastCalledWith(false);
     expect(setOverlayIcon).toHaveBeenLastCalledWith(null, '');
+  });
+
+  it('refreshes Windows descriptions without changing attention or flashing again', async () => {
+    const service = await freshService('win32');
+    await publish({ sender: mainWebContents }, 3);
+    flashFrame.mockClear();
+    badgeDescription = '需要关注的任务：{{count}}';
+    service.refreshAppBadgeLocalization();
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, '需要关注的任务：3');
+    expect(service.getAttentionCount()).toBe(3);
+    expect(flashFrame).not.toHaveBeenCalled();
+    await publish({ sender: mainWebContents }, 0);
+    flashFrame.mockClear();
+    service.refreshAppBadgeLocalization();
+    expect(setOverlayIcon).toHaveBeenLastCalledWith(null, '');
+    expect(flashFrame).not.toHaveBeenCalled();
   });
 
   it('Windows uses the projected total and keeps exact counts in the description', async () => {

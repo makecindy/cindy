@@ -467,7 +467,11 @@ import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
-import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
+import {
+  initAppBadgeService,
+  clearAllSessionAttention,
+  refreshAppBadgeLocalization,
+} from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -2967,6 +2971,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  refreshAppBadgeLocalization();
   resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
   ghostPanelWindowsController.setLocale(currentApplicationMenuLocale);
