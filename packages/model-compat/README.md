@@ -57,8 +57,8 @@ of upstream's generic conversion, with reverse transforms applied in reverse ord
 
 `src/upstream-profiles.json` contains compatibility declarations extracted statically from all
 92 entries in the pinned upstream registry. No upstream registry code or credential code is
-executed. Matching requires exact URL origin and path boundaries. Equal endpoint identities that
-cannot be distinguished are left unresolved, rather than choosing an account/provider by name.
+executed. Matching requires exact URL origin and path boundaries. Equal endpoint profiles are narrowed by the declared auth mode when available; profiles with
+identical transport policies share compatibility rules. Conflicting policies remain unresolved.
 Unclassified gateways retain Cindy's existing route-specific rules; they do not inherit every
 patch for models with a familiar name.
 

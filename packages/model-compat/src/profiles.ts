@@ -25,6 +25,18 @@ function servesEndpoint(base: string, actual: string): boolean {
   } catch { return false; }
 }
 
+// Compare every transport declaration, ignoring only account identity metadata.
+// Sort object keys because registry declarations need not use identical key order.
+function policySignature(profile: ProviderCompatibilityProfile): string {
+  const canonical = (value: unknown): unknown => {
+    if (Array.isArray(value)) return value.map(canonical);
+    if (!isPlainObject(value)) return value;
+    return Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])]));
+  };
+  const policy = Object.fromEntries(Object.entries(profile).filter(([key]) => key !== 'id' && key !== 'authKind'));
+  return JSON.stringify(canonical(policy));
+}
+
 /** Upstream provider declarations are compatibility data only: they never add accounts or models. */
 export function resolveProviderCompatibilityProfile(route: CompatibilityRoute): ProviderCompatibilityProfile | null {
   // OpenCodex's xAI OAuth transport rewrites the public registry base to this exact
@@ -34,9 +46,17 @@ export function resolveProviderCompatibilityProfile(route: CompatibilityRoute): 
   }
   const matches = (profiles as ProviderCompatibilityProfile[]).filter(profile => servesEndpoint(profile.baseUrl, route.upstreamBase));
   matches.sort((a, b) => b.baseUrl.length - a.baseUrl.length);
-  // Multiple provider identities at the same endpoint cannot be resolved by the model label alone.
-  if (matches.length > 1 && matches[0]!.baseUrl === matches[1]!.baseUrl) return null;
-  return matches[0] ?? null;
+  if (!matches.length) return null;
+  let candidates = matches.filter(profile => profile.baseUrl === matches[0]!.baseUrl);
+  const authKind = route.authMode === 'api-key' ? 'key' : route.authMode;
+  if (authKind) {
+    const authenticated = candidates.filter(profile => profile.authKind === authKind);
+    if (authenticated.length) candidates = authenticated;
+  }
+  const first = candidates[0]!;
+  // Duplicate account profiles with the same wire contract share the same patches.
+  // Truly conflicting declarations remain unresolved; never guess from a model name.
+  return candidates.every(profile => policySignature(profile) === policySignature(first)) ? first : null;
 }
 
 /** OpenCodex uses exact model membership, with a colon variant falling back to its base. */

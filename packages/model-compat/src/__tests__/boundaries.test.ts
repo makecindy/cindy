@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { resolveProviderCompatibilityProfile } from '../profiles';
 import { createCodexResponsesCompatibilityAdapter, prepareResponsesCompatibility, normalizeProviderRequest, chatCompatibilityCapabilities, sanitizeXaiTools } from '../index';
 
 describe('protocol data boundaries', () => {
@@ -90,4 +91,25 @@ it('cleans both xAI tool catalogs without retaining a removed top-level declarat
 it('preserves an explicit native Chat reasoning disable when no provider wire map overrides it', () => {
   const input = { model: 'gpt-5.4', reasoning_effort: 'none' };
   expect(normalizeProviderRequest(input, { harness: 'codex', protocol: 'openai-chat', upstreamBase: 'https://api.openai.com/v1', model: input.model })).toEqual(input);
+});
+
+describe('same-endpoint provider profiles', () => {
+  const kimi = { harness: 'codex' as const, protocol: 'openai-chat' as const, upstreamBase: 'https://api.kimi.com/coding/v1', model: 'k3[1m]' };
+  it.each([undefined, 'oauth', 'api-key'] as const)('applies Kimi wire fixes with auth mode %s', authMode => {
+    const route = { ...kimi, authMode };
+    const body = { model: 'k3[1m]', temperature: 0.7, top_p: 0.9, frequency_penalty: 1, presence_penalty: 1, reasoning_effort: 'high', messages: [] };
+    expect(normalizeProviderRequest(body, route)).toEqual({ model: 'k3', messages: [] });
+    expect(chatCompatibilityCapabilities(route)).toMatchObject({ reasoningHistoryField: 'reasoning_content', toolCallReasoningPlaceholder: true });
+    expect(resolveProviderCompatibilityProfile(route)?.id).toBe(authMode === 'api-key' ? 'kimi-code' : 'kimi');
+  });
+  it('shares identical key profiles and preserves explicit bridge overrides', () => {
+    const route = { ...kimi, upstreamBase: 'https://api.fireworks.ai/inference/v1', authMode: 'api-key' as const };
+    expect(resolveProviderCompatibilityProfile(route)).not.toBeNull();
+    expect(chatCompatibilityCapabilities(kimi, { toolCallReasoningPlaceholder: false }).toolCallReasoningPlaceholder).toBe(false);
+  });
+  it('does not guess between conflicting policies or match a lookalike endpoint', () => {
+    expect(resolveProviderCompatibilityProfile({ ...kimi, upstreamBase: 'https://opencode.ai/zen/v1', authMode: 'api-key' })).toBeNull();
+    expect(resolveProviderCompatibilityProfile({ ...kimi, upstreamBase: 'https://api.kimi.com/coding/v10' })).toBeNull();
+    expect(resolveProviderCompatibilityProfile({ ...kimi, upstreamBase: 'https://api.kimi.com.example/coding/v1' })).toBeNull();
+  });
 });
