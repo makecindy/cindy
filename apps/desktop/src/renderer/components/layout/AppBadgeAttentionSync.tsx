@@ -1,4 +1,4 @@
-import { useEffect, useSyncExternalStore } from 'react';
+import { useEffect, useMemo, useSyncExternalStore } from 'react';
 
 import {
   getRemoteSessionActivity,
@@ -17,6 +17,7 @@ import { createLogger } from '@/lib/logger';
 import { countAppAttention } from '@/features/cc-agent/lib/appAttentionCount';
 import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useAuth } from '@/contexts/AuthContext';
+import { useSessionDisplayRunningState } from '@/features/cc-agent/hooks/useSessionDisplayRunningState';
 
 const log = createLogger('AppBadgeAttentionSync');
 
@@ -26,6 +27,7 @@ export function AppBadgeAttentionSync() {
   const owner = getDataOwnerGeneration();
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'all' });
   const remoteSessions = useRemoteProjectSessions();
+  const allSessions = useMemo(() => [...sessions, ...remoteSessions], [sessions, remoteSessions]);
   const localSchedules = usePublishedAutomationScheduleSessionIndex();
   const remoteSchedules = useRemoteScheduleIndex();
   const attentionKinds = useSessionAttentionKinds();
@@ -36,21 +38,29 @@ export function AppBadgeAttentionSync() {
     makerChatStore.getRunningSnapshot,
     makerChatStore.getRunningSnapshot,
   );
+  const runningSessionIds = useMemo(
+    () => new Set([...running].filter(([, info]) => info.isRunning).map(([id]) => id)),
+    [running],
+  );
+  const { displayRunningSessionIds } = useSessionDisplayRunningState(
+    allSessions,
+    runningSessionIds,
+  );
   const count = countAppAttention({
-    sessions: [...sessions, ...remoteSessions],
+    sessions: allSessions,
     localSchedules,
     remoteSchedules,
     attentionKinds,
     localActivities,
     getRemoteActivity: getRemoteSessionActivity,
-    runningSessionIds: new Set([...running].filter(([, info]) => info.isRunning).map(([id]) => id)),
+    runningSessionIds: displayRunningSessionIds,
   });
   useEffect(() => {
     if (isLoading || error) return;
     void window.electronAPI
       .notificationSetAppAttentionCount({
         count,
-        sessionIds: [...sessions, ...remoteSessions].map((session) => session.id),
+        sessionIds: allSessions.map((session) => session.id),
         dataOwnerId: owner.dataOwnerId,
         ownerGeneration: owner.generation,
       })
@@ -58,6 +68,6 @@ export function AppBadgeAttentionSync() {
         log.warn('failed to update app attention count', err);
       });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, isLoading, error, sessions, remoteSessions, owner]);
+  }, [count, isLoading, error, allSessions, owner]);
   return null;
 }
