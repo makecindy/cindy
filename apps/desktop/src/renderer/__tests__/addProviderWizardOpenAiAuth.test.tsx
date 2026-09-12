@@ -138,6 +138,11 @@ type ProviderOAuthProgress = {
   verificationUrl: string;
   userCode: string;
   expiresAt: number;
+} | {
+  providerId: string;
+  ownerId: string;
+  phase: 'browser-url';
+  url: string | null;
 };
 let providerOAuthProgressListener: ((progress: ProviderOAuthProgress) => void) | null = null;
 
@@ -228,9 +233,32 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     expect(deleteAccount).toHaveBeenCalledExactlyOnceWith(accountId);
     expect(onDone).not.toHaveBeenCalled();
   });
+  it.each(['cancel', 'finish'])('reopens the pending independent account only on click and clears on %s', async (end) => {
+    let finish!: (value: { ok: boolean }) => void;
+    providerOAuthLogin.mockReturnValue(new Promise(resolve => { finish = resolve; }));
+    const openExternal = vi.fn(async () => ({ success: true }));
+    window.electronAPI.openExternal = openExternal;
+    render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
+      entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+    fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
+    await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledOnce());
+    const [providerId, { ownerId }] = providerOAuthLogin.mock.calls[0];
+    const url = 'https://auth.openai.com/oauth/authorize?state=fake';
+    act(() => providerOAuthProgressListener?.({ providerId, ownerId, phase: 'browser-url', url }));
+    const reopen = screen.getByRole('button', { name: 'settings.providers.genericOAuth.reopenLoginPage' });
+    expect(openExternal).not.toHaveBeenCalled();
+    fireEvent.click(reopen);
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith(url);
+    if (end === 'cancel') fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
+    await act(async () => finish({ ok: true }));
+    act(() => providerOAuthProgressListener?.({ providerId, ownerId, phase: 'browser-url', url }));
+    expect(screen.queryByRole('button', { name: 'settings.providers.genericOAuth.reopenLoginPage' })).toBeNull();
+  });
   it('keeps the retry account when the cancelled login succeeds later', async () => {
     let finishOld!: (value: { ok: boolean }) => void;
+    let finishNew!: (value: { ok: boolean }) => void;
     providerOAuthLogin.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }));
+    providerOAuthLogin.mockReturnValueOnce(new Promise(resolve => { finishNew = resolve; }));
     const onDone = vi.fn();
     render(<AddProviderWizard providers={[OPENAI_PROVIDER]}
       entry={{ kind: 'builtin', providerId: 'openai' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={onDone} />);
@@ -239,12 +267,17 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     const oldId = providerOAuthLogin.mock.calls[0][0];
     fireEvent.click(screen.getByText('settings.providers.wizard.cancel'));
     fireEvent.click(screen.getByText('settings.providers.openai.addIndependentAccount'));
-    await waitFor(() => expect(onDone).toHaveBeenCalledTimes(1));
-    const newId = providerOAuthLogin.mock.calls[1][0];
+    await waitFor(() => expect(providerOAuthLogin).toHaveBeenCalledTimes(2));
+    const [newId, { ownerId }] = providerOAuthLogin.mock.calls[1];
     expect(newId).not.toBe(oldId);
-    expect(onDone).toHaveBeenCalledWith(newId);
+    act(() => providerOAuthProgressListener?.({ providerId: newId, ownerId, phase: 'browser-url', url: 'https://auth.openai.com/authorize?retry=1' }));
     await act(async () => { finishOld({ ok: true }); });
     expect(deleteAccount).toHaveBeenCalledExactlyOnceWith(oldId);
+    expect(screen.getByRole('button', { name: 'settings.providers.genericOAuth.reopenLoginPage' })).toBeTruthy();
+    expect(screen.getByText('settings.providers.wizard.cancel')).toBeTruthy();
+    expect(onDone).not.toHaveBeenCalled();
+    await act(async () => { finishNew({ ok: true }); });
+    expect(onDone).toHaveBeenCalledWith(newId);
     expect(onDone).toHaveBeenCalledTimes(1);
   });
   it.each(['anthropic', 'xai'])('cancels only the pending independent %s authorization', async id => {

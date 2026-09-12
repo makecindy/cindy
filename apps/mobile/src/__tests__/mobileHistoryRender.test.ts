@@ -31,6 +31,28 @@ function harness(rows: RemoteMessage[], streaming = false) {
 }
 
 describe('remote history preserves original folding', () => {
+  it.each([0, 2_000_000_000_000])('keeps a local send before an early reply with phone time %s', async (phoneTime) => {
+    const rows = [row(0, 'user', 'Earlier'), row(1, 'assistant', 'Done')];
+    const { view } = harness(rows);
+    await view.refresh();
+    const sent = { ...row(2, 'user', 'Continue'), createdAt: new Date(phoneTime).toISOString() };
+    const reply = { ...row(3, 'assistant', 'Reply'), agentMeta: { isStreaming: true } };
+    const render = (user: RemoteMessage) => buildMobileHistoryRenderItems({
+      view, snapshot: view.getSnapshot(), messages: [...rows.slice(0, 2), user, reply],
+      streaming: true, sessionId: 'session', localUserClientIds: new Set([sent.clientId]),
+    });
+    const expected = ['message-client-0', 'message-client-1', 'message-client-2', 'message-client-3'];
+    expect(render(sent).map((item) => item.key)).toEqual(expected);
+    // Durable push before the history refresh must replace the local body, not
+    // drop the row or append it after its response.
+    const echo = row(2, 'user', 'Confirmed');
+    expect(render(echo).map((item) => item.key)).toEqual(expected);
+    rows.push(echo, row(3, 'assistant', 'Reply'));
+    await view.refresh();
+    expect(render(echo).map((item) => item.key)).toEqual(expected);
+    view.setActive(false);
+  });
+
   it('clips retained detail bodies when a visible media tool splits the old range', async () => {
     const rows = [row(0, 'user', 'Work'), call(1), row(2, 'tool_result', 'ok', 'tool-1'), thought(3),
       call(4), row(5, 'tool_result', 'pending', 'tool-4'), thought(6), call(7), row(8, 'tool_result', 'ok', 'tool-7'), row(9, 'assistant', 'Done')];

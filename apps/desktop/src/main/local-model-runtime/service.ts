@@ -49,7 +49,7 @@ import { probeOllamaStatus, startOfficialOllamaApp } from './ollamaRuntime.js';
 import {
   ensureManagedOllamaProvider,
   managedOllamaRemovalGeneration,
-  syncManagedOllamaAgentProjections,
+  migrateManagedOllamaOnCatalogLoad,
   readManagedOllamaProvider,
   removeManagedOllamaModel,
   toPlainRuntimeModel,
@@ -467,10 +467,11 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     const pulls = visiblePulls(await rememberedPaused());
     const pull = pulls[0] ?? null;
     const pausedPull = pulls.find((item) => item.phase === 'paused') ?? null;
-    const catalogDirty = await syncManagedOllamaAgentProjections(
-      resolveManagedOllamaAgents({ version: current.version }),
-      { stillActive: opts?.ownerStillActive },
-    ).catch(() => false);
+    // Preserve existing agent membership until per-model capabilities are probed.
+    // Version alone has no tools evidence and would remove then re-add coding models.
+    const catalogDirty = await migrateManagedOllamaOnCatalogLoad(opts?.ownerStillActive).catch(
+      () => false,
+    );
     const detectedLocalPresetIds = await detectedLocalPresetIdsPromise;
     if (current.kind !== 'ready' && current.kind !== 'pulling') {
       return {
@@ -855,7 +856,7 @@ export function createLocalModelService(deps: LocalModelServiceDeps = {}): Local
     if (result.ok) {
       for (const tag of named) clearUnclaimed(tag.name);
     }
-    return result.ok;
+    return result.ok && result.changed === true;
   }
 
   function keepPullNames(): string[] {

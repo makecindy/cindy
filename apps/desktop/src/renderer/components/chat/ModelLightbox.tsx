@@ -20,10 +20,13 @@
  *   - Esc closes; click on overlay background closes; click on the model
  *     itself does NOT close (we need rotate/zoom gestures without dismissing)
  *   - Right-click → 打开模型 / 打开模型所在目录
+ *   - Focus: FocusScope moves focus into the overlay on open, traps Tab
+ *     inside, and returns focus to the pre-open element on unmount.
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { FocusScope } from '@radix-ui/react-focus-scope';
 import { Box, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
@@ -76,6 +79,8 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
     source.kind === 'local' ? toLocalFileUrl(source.absPath) : source.url,
   );
   const modelViewerRef = useRef<HTMLElement | null>(null);
+  // FocusScope 挂载焦点的落点:overlay 根(tabIndex=-1 由 FocusScope 合入)。
+  const overlayRef = useRef<HTMLDivElement | null>(null);
   // "open" / "reveal" 正在执行时禁用菜单, 避免重复点击。Mirror ChatImageView。
   const [modelPending, setModelPending] = useState<'open' | 'reveal' | null>(null);
 
@@ -186,7 +191,23 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
   }
 
   const overlay = (
+    // FocusScope(trapped+loop):键盘打开后焦点进入弹窗并圈禁,Tab 不穿过被
+    // 遮挡的聊天控件。挂载焦点给 overlay 根(全局 outline:none 不闪全屏焦
+    // 点框),Tab 下一站是 backdrop 关闭按钮;卸载时 FocusScope 默认把焦点
+    // 还给打开前的元素(ChatImageView 键盘路径 = 预览触发器)。handleClose
+    // 里既有的 blur 仍保留——点进模型后 model-viewer shadow DOM 的焦点框
+    // 要在淡出前先灭掉。
+    <FocusScope
+      asChild
+      trapped
+      loop
+      onMountAutoFocus={(event) => {
+        event.preventDefault();
+        overlayRef.current?.focus();
+      }}
+    >
     <div
+      ref={overlayRef}
       style={{
         position: 'fixed',
         inset: 0,
@@ -334,6 +355,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
+    </FocusScope>
   );
 
   return createPortal(overlay, document.body);

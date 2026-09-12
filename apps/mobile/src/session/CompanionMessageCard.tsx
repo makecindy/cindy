@@ -52,7 +52,6 @@ export function CompanionMessageCard({ message }: { message: NormalizedRemoteMes
     return (
       <Text style={styles.note}>
         {t('devices.companions.messageSent')}
-        {message.body ? ` · ${message.body}` : ''}
       </Text>
     );
   const meta = card.meta;

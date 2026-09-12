@@ -308,6 +308,18 @@ describe('session control domain service', () => {
     ).resolves.toMatchObject({ ok: false, errorCode: 'NO_ACTIVE_TURN' });
   });
 
+  it('passes a stable host steer ID to the coordinator without allocating a replacement', async () => {
+    const { deps, service } = setup();
+    const params = { callerSessionId: 'caller', targetSessionId: 'target', message: 'urgent', queuedMessageId: 'stable-steer' };
+    expect(await service.steerSession(params)).toEqual({ ok: true, queuedMessageId: 'stable-steer' });
+    expect(await service.steerSession(params)).toEqual({ ok: true, queuedMessageId: 'stable-steer' });
+    expect(deps.createId).not.toHaveBeenCalled();
+    expect(deps.createQueuedMessage).toHaveBeenNthCalledWith(1, params);
+    expect(deps.createQueuedMessage).toHaveBeenNthCalledWith(2, params);
+    expect(deps.steerQueuedMessage).toHaveBeenLastCalledWith('target',
+      expect.objectContaining({ clientId: 'stable-steer' }), expect.any(Object));
+  });
+
   it('rejects when the original turn changes while the control message is being built', async () => {
     const generationRace = setup();
     const generationGate = deferred<AgentInputQueuedMessage>();

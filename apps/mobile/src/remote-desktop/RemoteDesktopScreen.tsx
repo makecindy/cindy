@@ -30,6 +30,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { connectionDiagnostics } from "./connectionDiagnostics";
+import { controlFailureAction, remoteDesktopErrorCode } from "./controlFailure";
 import { transferClipboardContent } from "./clipboardTransfer";
 import * as Clipboard from "expo-clipboard";
 import { RemoteDesktopClipboardButton } from "./RemoteDesktopClipboardButton";
@@ -183,6 +184,8 @@ export default function RemoteDesktopScreen() {
     useLockOnExitPreference(deviceId);
   const exitLock = useRef(false);
   const leaving = useRef(false);
+  const [isLeaving, setIsLeaving] = useState(false);
+  const [exitLockPending, setExitLockPending] = useState(false);
   const linkRef = useRef(link);
   linkRef.current = link;
   const { t } = useTranslation();
@@ -203,6 +206,11 @@ export default function RemoteDesktopScreen() {
   ).current;
   const active = useRef<RemoteDesktopLease | null>(null);
   const wantsControl = useRef(true);
+  // Last control bit we asked the host for but have not confirmed. Overflow and
+  // take-control can time out after the local bit already moved; heartbeats use
+  // this to retry a release or restore local control instead of ignoring host-true.
+  const pendingHostControl = useRef<boolean | null>(null);
+  const controlInFlight = useRef(false);
   const recovery = useRef({
     enabled: true,
     at: 0,
@@ -236,11 +244,14 @@ export default function RemoteDesktopScreen() {
   const [controlReady, setControlReady] = useState(false);
   const connectionPending = !error && (!lease || !frameReady || !controlReady);
   const showConnectionStatus =
-    connectionPending || (!error && status === "reconnecting");
+    !isLeaving && (connectionPending || (!error && status === "reconnecting"));
+  const showExitLockStatus = isLeaving && exitLockPending;
   const connectionLabel = t(
-    recovery.current.at || status === "reconnecting"
-      ? "remoteDesktop.reconnecting"
-      : "remoteDesktop.connecting",
+    showExitLockStatus
+      ? "remoteDesktop.lockingOnExit"
+      : recovery.current.at || status === "reconnecting"
+        ? "remoteDesktop.reconnecting"
+        : "remoteDesktop.connecting",
   );
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
@@ -400,7 +411,10 @@ export default function RemoteDesktopScreen() {
       presentationTimer.current = null;
       void remotePresentation?.playback(false).catch(() => {});
       connecting.current = false;
+      pendingHostControl.current = null;
+      controlInFlight.current = false;
       const previous = active.current;
+      setExitLockPending(Boolean(previous && exiting && exitLock.current));
       active.current = null;
       pendingVideoSettings.current = null;
       if (previous) pendingMediaOffers.current.delete(previous);
@@ -457,18 +471,10 @@ export default function RemoteDesktopScreen() {
     (cause: unknown) => {
       if (!alive.current) return;
       const message = cause instanceof Error ? cause.message : String(cause);
-      const code =
-        cause &&
-        typeof cause === "object" &&
-        "code" in cause &&
-        typeof cause.code === "string"
-          ? cause.code
-          : message.match(
-              /\b(?:DESKTOP|CHANNEL|DEVICE|INVOKE|REMOTE|ACCESS)_[A-Z_]+\b/,
-            )?.[0];
+      const code = remoteDesktopErrorCode(cause);
       // Keep diagnostics free of device names, input and signaling payloads.
       console.debug("[remote-desktop] connection failed", {
-        code: code && /^[A-Z_]+$/.test(code) ? code : "UNKNOWN",
+        code: code ?? "UNKNOWN",
       });
       const blocked =
         code === "ACCESS_REVOKED"
@@ -498,6 +504,87 @@ export default function RemoteDesktopScreen() {
     },
     [stop],
   );
+  /**
+   * The host owns the control bit. When it reports that this viewer no longer
+   * controls — input injection failed, the input helper went away, or control
+   * was retracted — drop to view only instead of rebuilding the session: the
+   * lease, the picture and the existing view-only hint all survive, and taking
+   * control again retries from where the user is.
+   */
+  const releaseControl = useCallback(() => {
+    const current = active.current;
+    if (!current?.controlling) return;
+    current.controlling = false;
+    heldKeys.current.clear();
+    send({ type: "control", enabled: false });
+    if (alive.current) {
+      setModifiers([]);
+      setKeyboard(false);
+      setLease({ ...current });
+    }
+  }, [send]);
+  /**
+   * Route a failed input or control request by its blast radius: a control-only
+   * fault drops to view only, an unknown outcome keeps everything as it is, and
+   * anything else rebuilds the session. Sitting next to the two actions it
+   * chooses between keeps the three call sites from drifting apart.
+   */
+  const resolveControlFailure = (cause: unknown) => {
+    switch (controlFailureAction(cause)) {
+      case "release":
+        releaseControl();
+        break;
+      case "ignore":
+        break;
+      default:
+        fail(cause);
+    }
+  };
+  const applyConfirmedControl = (
+    current: RemoteDesktopLease,
+    controlling: boolean,
+  ) => {
+    pendingHostControl.current = null;
+    wantsControl.current = controlling;
+    if (current.controlling !== controlling) {
+      current.controlling = controlling;
+      if (!controlling) {
+        heldKeys.current.clear();
+        if (alive.current) {
+          setModifiers([]);
+          setKeyboard(false);
+        }
+      }
+      if (alive.current) setLease({ ...current });
+    }
+    send({ type: "control", enabled: controlling });
+  };
+  const requestHostControl = (
+    current: RemoteDesktopLease,
+    enabled: boolean,
+  ) => {
+    if (controlInFlight.current) return;
+    controlInFlight.current = true;
+    pendingHostControl.current = enabled;
+    void request<{ controlling: boolean }>({
+      op: "control",
+      lease: current.lease,
+      enabled,
+    })
+      .then((result) => {
+        if (active.current !== current) return;
+        applyConfirmedControl(current, result.controlling);
+      })
+      .catch((cause) => {
+        if (active.current !== current) return;
+        resolveControlFailure(cause);
+      })
+      .finally(() => {
+        if (active.current === current) controlInFlight.current = false;
+      });
+  };
+  const requestHostControlRef = useRef(requestHostControl);
+  requestHostControlRef.current = requestHostControl;
   const connect = useCallback(
     async (displayId?: string, takeover = false) => {
       if (
@@ -670,6 +757,7 @@ export default function RemoteDesktopScreen() {
   const leave = async () => {
     if (leaving.current) return;
     leaving.current = true;
+    setIsLeaving(true);
     recovery.current.enabled = false;
     Keyboard.dismiss();
     const ending = stop(false, true);
@@ -750,7 +838,31 @@ export default function RemoteDesktopScreen() {
       )
         return;
       heartbeatBusy = current.lease;
-      void request({ op: "heartbeat", lease: current.lease })
+      void request<{ controlling: boolean }>({
+        op: "heartbeat",
+        lease: current.lease,
+      })
+        .then((result) => {
+          // The host owns the control bit. Follow it when it retracts control;
+          // when a local transition timed out, retry a release or restore the
+          // local bit so a held key cannot stay down behind a view-only phone.
+          if (active.current !== current || presentation.current) return;
+          if (result.controlling === false) {
+            // startInput can still be settling while this heartbeat was in
+            // flight. Clearing a pending take-control here would leave later
+            // host-true beats with nothing to restore after a lost reply.
+            if (pendingHostControl.current === true) return;
+            pendingHostControl.current = null;
+            if (current.controlling) releaseControl();
+            return;
+          }
+          if (pendingHostControl.current === false) {
+            requestHostControlRef.current(current, false);
+            return;
+          }
+          if (!current.controlling && pendingHostControl.current === true)
+            applyConfirmedControl(current, true);
+        })
         .catch((cause) => {
           // A missing reply does not prove renewal failed; the next interval
           // retries within the lease. Explicit host revocation still stops us.
@@ -850,12 +962,20 @@ export default function RemoteDesktopScreen() {
       clearInterval(metrics);
       stop();
     };
-  }, [request, fail, send, stop, pause]);
+  }, [request, fail, send, stop, pause, releaseControl]);
   useEffect(() => {
     // Route blur means leaving this desktop (including a native back swipe).
     // App background/inactive events use pause() without the exit flag.
-    if (!focused && !presentation.current) pause(true);
-    else if (!active.current) void connectRef.current();
+    if (!focused && !presentation.current) {
+      leaving.current = true;
+      setIsLeaving(true);
+      pause(true);
+    } else if (focused) {
+      leaving.current = false;
+      setIsLeaving(false);
+      setExitLockPending(false);
+      if (!active.current) void connectRef.current();
+    }
   }, [focused, pause, videoPreferencesLoaded]);
   useEffect(() => {
     send({
@@ -1175,9 +1295,15 @@ export default function RemoteDesktopScreen() {
         });
         break;
       }
-      case "inputOverflow":
-        fail(new Error("DESKTOP_INPUT_UNAVAILABLE"));
+      case "inputOverflow": {
+        // The viewer replaced a stalled queue with a release, then this handler
+        // posts control:false, which clears that release without flushing it.
+        // Tell the host to drop control (stopInput still injects a native
+        // release) so a held key/button cannot stay down while we view only.
+        releaseControl();
+        requestHostControl(current, false);
         break;
+      }
       case "input": {
         const ack = {
           type: "ack",
@@ -1203,7 +1329,8 @@ export default function RemoteDesktopScreen() {
           events: message.events,
         })
           .catch((cause) => {
-            if (active.current === current) fail(cause);
+            if (active.current !== current) return;
+            resolveControlFailure(cause);
           })
           .finally(() => {
             if (inputBusy.current === current.lease) inputBusy.current = null;
@@ -1215,33 +1342,44 @@ export default function RemoteDesktopScreen() {
   };
   const toggleControl = async () => {
     const current = active.current;
-    if (!current || busy) return;
+    if (!current || busy || controlInFlight.current) return;
     setBusy(true);
     setError(null);
+    controlInFlight.current = true;
     try {
       if (presentation.current) {
         presentation.current = false;
         send({ type: "presentation", enabled: false });
       }
       send({ type: "control", enabled: false });
+      const enabled = !current.controlling;
+      if (pendingHostControl.current === false && enabled) {
+        // Overflow timed out with an unconfirmed host release. Taking control
+        // first would skip stopInput while a key/button may still be held.
+        const released = await request<{ controlling: boolean }>({
+          op: "control",
+          lease: current.lease,
+          enabled: false,
+        });
+        if (active.current !== current) return;
+        applyConfirmedControl(current, released.controlling);
+        if (released.controlling) return;
+      }
+      pendingHostControl.current = enabled;
       const result = await request<{ controlling: boolean }>({
         op: "control",
         lease: current.lease,
-        enabled: !current.controlling,
+        enabled,
       });
       if (active.current !== current) return;
-      wantsControl.current = result.controlling;
-      current.controlling = result.controlling;
-      setLease({ ...current });
-      send({ type: "control", enabled: result.controlling });
-      if (!result.controlling) {
-        heldKeys.current.clear();
-        setModifiers([]);
-        setKeyboard(false);
-      }
+      applyConfirmedControl(current, result.controlling);
     } catch (cause) {
-      if (active.current === current) fail(cause);
+      // Taking control can fail because this computer cannot inject input right
+      // now. Stay in view only and let the user retry; a session rebuild would
+      // cost the picture and the lease for a control-only fault.
+      if (active.current === current) resolveControlFailure(cause);
     } finally {
+      controlInFlight.current = false;
       if (alive.current) setBusy(false);
     }
   };
@@ -1580,7 +1718,9 @@ export default function RemoteDesktopScreen() {
             style={styles.webview}
             testID="remoteDesktop.viewer"
           />
-          {(showConnectionStatus || (!lease && error)) && (
+          {(showConnectionStatus ||
+            showExitLockStatus ||
+            (!lease && error)) && (
             <View
               pointerEvents="box-none"
               style={[
@@ -1588,7 +1728,7 @@ export default function RemoteDesktopScreen() {
                 { top: edgePadding.paddingTop + spacing.xs + 44 + spacing.lg },
               ]}
             >
-              {showConnectionStatus ? (
+              {showConnectionStatus || showExitLockStatus ? (
                 <View
                   style={styles.connectionBadge}
                   accessibilityRole="progressbar"

@@ -83,7 +83,7 @@ import type {
   ProviderModelsFetchResult,
   ProviderModelsFetchSpec,
 } from '../maker-host/provider-model-fetch.js';
-import { MAKER_INVOKE } from './channels.js';
+import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 
 const log = createLogger('maker-ipc:provider');
@@ -95,6 +95,7 @@ type RuntimeKeys = Partial<Record<AgentKind, string>>;
 
 type ProviderOAuthRendererSender = {
   readonly id: number;
+  send?: (channel: string, payload: unknown) => void;
   once?: (event: 'destroyed', listener: () => void) => unknown;
   removeListener?: (event: 'destroyed', listener: () => void) => unknown;
 };
@@ -306,10 +307,13 @@ export interface ProviderHandlerDeps {
   oauthLogin(
     providerId: string,
     isCurrent: () => boolean,
+    onBrowserUrl?: (url: string | null) => void,
   ): Promise<{
     ok: boolean;
     reason?: string;
     rollbackCredentials?: () => boolean;
+    /** Publish identity/model changes only after the login is accepted, outside rollback. */
+    afterCommit?: () => Promise<void>;
   }>;
   oauthLogout(providerId: string): Promise<void>;
   oauthCancel(providerId: string): void;
@@ -2128,10 +2132,24 @@ export function registerProviderHandlers(
           ownerAtIngress,
         );
         codexHostPrepared = preparation.prepared;
-        const result = await deps.oauthLogin(id, () => isOAuthMutationCurrent(id, generation));
+        const result = await deps.oauthLogin(id, () => isOAuthMutationCurrent(id, generation), (url) => {
+          // Only the initiating local renderer gets this ephemeral authorization URL.
+          if (!ownerId || !sender || !isOAuthMutationCurrent(id, generation) ||
+              !providerMutationOwnerMatches(ownerAtIngress)) return;
+          try {
+            sender.send?.(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+              providerId: id, ownerId, phase: 'browser-url', url,
+            });
+          } catch { /* A closed renderer must not interrupt credential cleanup. */ }
+        });
         if (isOAuthMutationCurrent(id, generation)) {
           if (result.ok) {
             finishRouteMutation.commit?.();
+            try {
+              await result.afterCommit?.();
+            } catch {
+              log.warn('provider presentation refresh failed after committed OAuth login');
+            }
             if (codexHostPrepared) {
               if (!deps.finalizeCodexCustomProviderHostChange) {
                 throwIpcError('INTERNAL', 'local Codex Host reload is unavailable');

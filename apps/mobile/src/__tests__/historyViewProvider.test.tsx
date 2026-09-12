@@ -20,11 +20,23 @@ const auth = vi.hoisted(() => ({
   apiFetch: vi.fn(async () => ({ devices: [] })),
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
+const networkEvents = vi.hoisted(() => ({
+  state: 'active',
+  app: (_next: string) => {},
+  network: (_next: { type: string; isConnected: boolean; isInternetReachable: boolean }) => {},
+}));
 vi.mock('react-native', () => ({
   Platform: { OS: 'android' },
-  AppState: { currentState: 'active', addEventListener: () => ({ remove() {} }) },
+  AppState: {
+    get currentState() { return networkEvents.state; },
+    addEventListener: (_event: string, listener: typeof networkEvents.app) => {
+      networkEvents.app = listener; return { remove() {} };
+    },
+  },
 }));
-vi.mock('expo-network', () => ({ addNetworkStateListener: () => ({ remove() {} }) }));
+vi.mock('expo-network', () => ({ addNetworkStateListener: (listener: typeof networkEvents.network) => {
+  networkEvents.network = listener; return { remove() {} };
+} }));
 vi.mock('expo-secure-store', () => ({
   getItemAsync: vi.fn(async () => null), setItemAsync: vi.fn(async () => {}), deleteItemAsync: vi.fn(async () => {}),
 }));
@@ -48,6 +60,8 @@ const transport = vi.hoisted(() => {
     invoke = vi.fn(async () => ({ ok: true, result: 'history page' }));
     start = vi.fn();
     stop = vi.fn();
+    connectNow = vi.fn();
+    notifyNetworkChanged = vi.fn();
     getStatus = () => this.status;
     isOutboundExplicitlyClosed = () => false;
     // No background recovery owner; each test explicitly starts the fresh read.
@@ -89,12 +103,47 @@ async function readHistory() {
 }
 
 beforeEach(async () => {
+  networkEvents.state = 'active';
   auth.accountGeneration = 1;
   transport.clients.length = 0;
   root = createRoot(document.createElement('div'));
   await act(async () => render());
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+describe('Provider network recovery priority', () => {
+  const wifi = { type: 'WIFI', isConnected: true, isInternetReachable: true };
+  it('coalesces equal hints but expedites transport changes and offline recovery', async () => {
+    const client = transport.clients[0];
+    await act(async () => {
+      networkEvents.network(wifi);
+      networkEvents.network(wifi);
+      networkEvents.network({ ...wifi, type: 'CELLULAR' });
+      networkEvents.network({ type: 'NONE', isConnected: false, isInternetReachable: false });
+      networkEvents.network(wifi);
+    });
+    expect(client.notifyNetworkChanged.mock.calls).toEqual([
+      [{ urgent: false }], [{ urgent: false }], [{ urgent: true }], [{ urgent: true }],
+    ]);
+  });
+
+  it.each(['online', 'stopped', 'connecting'] as const)('recovers immediately from background with a %s connection', async (status) => {
+    const client = transport.clients[0];
+    client.status = status;
+    await act(async () => {
+      networkEvents.state = 'background'; networkEvents.app('background');
+      networkEvents.network(wifi);
+    });
+    expect(client.notifyNetworkChanged).not.toHaveBeenCalled();
+    await act(async () => {
+      networkEvents.state = 'active'; networkEvents.app('active');
+    });
+    expect(client.connectNow).toHaveBeenCalledWith('appstate-active', { overrideCongestionCooldown: true });
+    if (status === 'online') expect(client.notifyNetworkChanged).toHaveBeenCalledWith({ urgent: true });
+    else expect(client.notifyNetworkChanged).not.toHaveBeenCalled();
+    expect(client.stop).not.toHaveBeenCalled();
+  });
+});
 
 describe('Provider history handshake lifetime', () => {
   it.each(['presence', 'reconnect', 'peer reset', 'account switch'] as const)(

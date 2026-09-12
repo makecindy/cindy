@@ -115,8 +115,9 @@
 
 ### 3.1 安装与自动更新
 
-- 首次安装只来自四种明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
-  `ghost_forge_install`、用户点击某个市场条目的安装，或服务端为当前 owner 下发
+- 首次安装只来自明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
+  `ghost_forge_install`、用户点击某个市场条目的安装、当前 Agent 按用户请求与既有操作授权
+  调用 `ghost_market_install` 安装选定的缺失插件，或服务端为当前 owner 下发
   `defaultInstall`。安装成功默认启用；插件声明哪些能力不改变
   安装动作是否需要确认，因为安装不设能力确认弹窗。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，

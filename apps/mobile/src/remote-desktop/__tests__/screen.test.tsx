@@ -1634,6 +1634,238 @@ describe("remote desktop controls", () => {
     expect(sent().at(-1)).toEqual({ type: "mode", mode: "touch" });
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
   });
+  it("keeps the session and the picture when the host refuses an input batch", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "input"
+        ? Promise.reject(new Error("DESKTOP_VIEW_ONLY"))
+        : original(...args),
+    );
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "input",
+            epoch: "lease",
+            sequence: 1,
+            events: [{ kind: "button", button: 0, down: true, x: 0.5, y: 0.5 }],
+          }),
+        },
+      });
+    });
+    // The host retracted control: view only, no session rebuild.
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    act(() => button("operations").click());
+    expect(visibleInputHint()).toBe("remoteDesktop.viewOnlyHint");
+  });
+  it("keeps control and the session when an input reply is lost", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "input"
+        ? Promise.reject(Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }))
+        : original(...args),
+    );
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "input",
+            epoch: "lease",
+            sequence: 1,
+            events: [{ kind: "key", code: "KeyA", down: true }],
+          }),
+        },
+      });
+    });
+    // The batch may have been injected: releasing here would drop its key-up.
+    expect(sent()).not.toContainEqual({ type: "control", enabled: false });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
+  it("follows the host to view only when its heartbeat stops counting this viewer as controlling", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "heartbeat"
+        ? Promise.resolve({ controlling: false })
+        : original(...args),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+    act(() => button("operations").click());
+    expect(visibleInputHint()).toBe("remoteDesktop.viewOnlyHint");
+  });
+  it("releases a stalled input batch instead of rebuilding the session", async () => {
+    await connect();
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
+        },
+      });
+    });
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    // The WebView overflow replaces pending with a release, then this handler
+    // posts control:false which clears that release without flushing it. The
+    // host must still drop control so a held key/button cannot stay down.
+    expect(requests()).toContainEqual({
+      op: "control",
+      lease: "lease",
+      enabled: false,
+    });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
+  it("retries a timed-out overflow release when the host still reports control", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "control" && req.enabled === false)
+        return Promise.reject(
+          Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+        );
+      if (req.op === "heartbeat")
+        return Promise.resolve({ controlling: true });
+      return original(...args);
+    });
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
+        },
+      });
+    });
+    const released = requests().filter(
+      (r) => r.op === "control" && r.enabled === false,
+    );
+    expect(released).toHaveLength(1);
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    // Local view-only is not proof the host dropped control; retry the release
+    // so a held key cannot stay down behind a view-only phone.
+    expect(
+      requests().filter((r) => r.op === "control" && r.enabled === false),
+    ).toHaveLength(2);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
+  it("finishes a timed-out overflow release before taking control again", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    let falseAttempts = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "control" && req.enabled === false) {
+        falseAttempts += 1;
+        if (falseAttempts === 1)
+          return Promise.reject(
+            Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+          );
+        return Promise.resolve({ controlling: false });
+      }
+      if (req.op === "heartbeat")
+        return Promise.resolve({ controlling: true });
+      return original(...args);
+    });
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({ type: "inputOverflow", epoch: "lease" }),
+        },
+      });
+    });
+    expect(
+      requests().filter((r) => r.op === "control" && r.enabled === false),
+    ).toHaveLength(1);
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+    const controlOps = requests()
+      .filter((r) => r.op === "control")
+      .map((r) => r.enabled);
+    // Overflow timed out with pending release. Take control must finish that
+    // release (host stopInput) before asking to enable, so the helper restarts.
+    expect(controlOps).toEqual([true, false, false, true]);
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: true,
+    });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
+  it("restores control when a take-control reply is lost but the host still holds it", async () => {
+    await connect();
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "control" && req.enabled === true)
+        return Promise.reject(
+          Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+        );
+      if (req.op === "heartbeat")
+        return Promise.resolve({ controlling: true });
+      return original(...args);
+    });
+    await act(async () => button("viewOnly").click());
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: false,
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: true,
+    });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
+  it("keeps a take-control intent when a settling heartbeat still reports view-only", async () => {
+    await connect();
+    act(() => button("operations").click());
+    await act(async () => button("viewOnly").click());
+    const original = fixture.invoke.getMockImplementation()!;
+    let rejectTakeControl: ((cause: unknown) => void) | undefined;
+    let heartbeats = 0;
+    fixture.invoke.mockImplementation((...args) => {
+      const req = args[2][0];
+      if (req.op === "control" && req.enabled === true) {
+        return new Promise((_, reject) => {
+          rejectTakeControl = reject;
+        });
+      }
+      if (req.op === "heartbeat") {
+        heartbeats += 1;
+        // startInput is still settling on the first beat; the host only
+        // reports control after the lost take-control reply.
+        return Promise.resolve({ controlling: heartbeats > 1 });
+      }
+      return original(...args);
+    });
+    act(() => button("viewOnly").click());
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    await act(async () => {
+      rejectTakeControl!(
+        Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+      );
+    });
+    await act(async () => vi.advanceTimersByTimeAsync(3000));
+    // A heartbeat issued while startInput was settling must not consume the
+    // pending take-control; after the reply is lost, host-true still restores.
+    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+      type: "control",
+      enabled: true,
+    });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(host.textContent).not.toContain("remoteDesktop.reconnecting");
+  });
   it("shows virtual mouse buttons outside the panel and hides them while viewing only", async () => {
     await connect();
     act(() => button("operations").click());

@@ -461,3 +461,14 @@ it('limits the PR menu and status queries to the same three references as the ta
   await act(async () => choices[2].click());
   expect(h.openURL).toHaveBeenCalledWith('https://github.com/a/b/pull/3');
 });
+
+it('shows only delivery status even when a legacy task trace contains full instructions', async () => {
+  const trace = {
+    ...message,
+    body: '读取 /workspace/project/AGENTS.md 并核对执行授权。',
+    companion: { kind: 'task', meta: { ...message.companion!.meta, role: 'interjection' } },
+  } as NormalizedRemoteMessage;
+  await act(async () => root.render(createElement(CompanionMessageCard, { message: trace })));
+  expect(node.textContent).toBe('devices.companions.messageSent');
+  expect(h.invoke).not.toHaveBeenCalled();
+});

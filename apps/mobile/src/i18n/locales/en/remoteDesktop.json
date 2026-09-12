@@ -56,6 +56,7 @@
   "connect": "Connect",
   "connecting": "Connecting…",
   "reconnecting": "Reconnecting…",
+  "lockingOnExit": "Locking computer…",
   "disconnected": "Disconnected",
   "compatibility": "Compatibility mode · lower frame rate",
   "live": "Live",

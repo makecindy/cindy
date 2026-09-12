@@ -210,6 +210,7 @@ describe("cindy_helper MCP server", () => {
         await client.callTool({ name: "call_tool", arguments: { name: "start_session_task", args: {
             title: "Build the demo",
             working_dir: "/repo",
+            use_worktree: true,
             instruction: "Build and verify a standalone HTML demo.",
           } } }),
       );
@@ -227,6 +228,7 @@ describe("cindy_helper MCP server", () => {
           objective: "Build and verify a standalone HTML demo.",
           title: "Build the demo",
           workingDir: "/repo",
+          useWorktree: true,
         }),
       );
 
@@ -246,6 +248,31 @@ describe("cindy_helper MCP server", () => {
         taskId: "session-task-1",
         reply: { kind: "approve" },
       });
+
+      for (const mode of ['queue', 'steer', 'resume']) {
+        await client.callTool({ name: 'call_tool', arguments: { name: 'message_session_task', args: {
+          task_id: 'session-task-1', mode, ...(mode === 'resume' ? {} : { message: 'follow up', idempotency_key: 'retry-key' }),
+        } } });
+        expect(messageSessionTask).toHaveBeenLastCalledWith({
+          callerSessionId: 'bot-parent-session', taskId: 'session-task-1',
+          reply: mode === 'resume' ? { kind: 'resume' } : { kind: 'message', text: 'follow up', mode, idempotencyKey: 'retry-key' },
+        });
+      }
+      for (const mode of ['edit', 'withdraw']) {
+        await client.callTool({ name: 'call_tool', arguments: { name: 'message_session_task', args: {
+          task_id: 'session-task-1', mode, queued_message_id: 'mine', ...(mode === 'edit' ? { message: 'revised' } : {}),
+        } } });
+        expect(messageSessionTask).toHaveBeenLastCalledWith({ callerSessionId: 'bot-parent-session', taskId: 'session-task-1',
+          reply: { kind: mode, queuedMessageId: 'mine', ...(mode === 'edit' ? { text: 'revised' } : {}) } });
+      }
+      const invalid = parsePayload(await client.callTool({ name: 'call_tool', arguments: {
+        name: 'message_session_task', args: { task_id: 'session-task-1', mode: 'steer', decision: 'approve' },
+      } }));
+      expect(invalid).toMatchObject({ ok: false });
+      for (const mode of ['pause', 'request-stop']) {
+        await client.callTool({ name: 'call_tool', arguments: { name: 'stop_session_task', args: { task_id: 'session-task-1', mode } } });
+        expect(stopSessionTask).toHaveBeenLastCalledWith({ callerSessionId: 'bot-parent-session', taskId: 'session-task-1', mode });
+      }
 
       const taskStatus = parsePayload(
         await client.callTool({ name: "call_tool", arguments: { name: "check_session_task", args: { task_id: "session-task-1" } } }),

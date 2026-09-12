@@ -17,7 +17,8 @@
  * variant 的尺寸 / 边框沿用与 image 同款,以后调样式只用动一处。
  */
 
-import { useState } from 'react';
+import { CHAT_FOCUS_CLASS } from './chatChrome';
+import { useRef, useState } from 'react';
 import { Play, FolderOpen, VideoOff, Copy } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
@@ -57,13 +58,14 @@ const VARIANT_STYLES: Record<
     // min(40vh, 420px) 防竖版视频占半屏。与 ChatImageView 保持一致。
     style: { maxWidth: 'min(100%, 50vw, 480px)', maxHeight: 'min(40vh, 420px)', height: 'auto' },
     className:
-      'rounded-[12px] border border-[var(--msg-tool-card-border)] object-contain',
+      'rounded-xl border border-[var(--msg-tool-card-border)] object-contain',
   },
 };
 
 export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoViewProps) {
   const { t } = useTranslation();
   const [lightboxOpen, setLightboxOpen] = useState(false);
+  const previewTriggerRef = useRef<HTMLDivElement>(null);
   const [errored, setErrored] = useState(false);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   // 远程会话改写到 cindy-remote-media://(OSS range 流式);本地原样。下游统一用 displaySrc。
@@ -101,9 +103,22 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
           <video> preload=metadata 让 chromium 自动渲染首帧作为封面,
           NOT 挂 controls — 用户一点就走 lightbox 大图播放。 */}
       <div
+        ref={previewTriggerRef}
         // self-start 与 ChatImageView tool-output 同理:防止 MessageStream 的
         // flex-col 包裹层把容器拉宽到超过 <video> 实际宽度(点击区/边框错位)。
-        className="relative inline-block self-start cursor-pointer hover:opacity-90 transition-opacity"
+        className={cn(
+          'relative inline-block self-start rounded-xl cursor-pointer hover:opacity-90 transition-opacity motion-reduce:transition-none',
+          CHAT_FOCUS_CLASS,
+        )}
+        role="button"
+        aria-label={filename}
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            event.currentTarget.click();
+          }
+        }}
         style={{ maxWidth: style.maxWidth, maxHeight: style.maxHeight }}
         onClick={() => setLightboxOpen(true)}
         onContextMenu={(e) => {
@@ -179,7 +194,13 @@ export function ChatVideoView({ src, filename, variant, sessionId }: ChatVideoVi
         </DropdownMenu>
       ) : null}
       {lightboxOpen && (
-        <VideoLightbox src={displaySrc} onClose={() => setLightboxOpen(false)} />
+        <VideoLightbox
+          src={displaySrc}
+          onClose={() => {
+            setLightboxOpen(false);
+            previewTriggerRef.current?.focus({ preventScroll: true });
+          }}
+        />
       )}
     </>
   );
@@ -195,7 +216,7 @@ function VideoMissingPlaceholder({ filename }: VideoMissingPlaceholderProps) {
     <div
       className={cn(
         'flex flex-col items-center justify-center gap-2',
-        'rounded-[12px] border border-dashed',
+        'rounded-xl border border-dashed',
         'border-[var(--border)] bg-[var(--muted)]',
         'p-4 text-[var(--muted-foreground)]',
       )}

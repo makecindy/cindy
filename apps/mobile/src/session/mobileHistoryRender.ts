@@ -10,12 +10,14 @@ export function buildMobileHistoryRenderItems(options: {
   streaming: boolean;
   sessionId: string;
   pendingHandoff?: ReadonlySet<string>;
+  localUserClientIds?: ReadonlySet<string>;
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>;
 }): MobileMessageRenderItem[] {
   return renderHistoryView<RemoteMessage, MobileMessageRenderItem>({
     view: options.view, snapshot: options.snapshot, liveMessages: options.messages,
     isLive: (row) => row.agentMeta?.isStreaming === true,
     pendingHandoff: options.pendingHandoff,
+    isLocalUser: (row) => options.localUserClientIds?.has(row.clientId) === true,
     streaming: options.streaming,
     build: (rows, streaming) => buildMobileMessageRenderItems(rows, {
       isSessionStreaming: streaming, sessionId: options.sessionId, preserveSourceOrder: true,

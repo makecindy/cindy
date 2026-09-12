@@ -17,6 +17,7 @@
  * the backdrop and Esc close.
  */
 
+import { CHAT_LIGHTBOX_ICON_BUTTON_CLASS, CHAT_FOCUS_CLASS } from './chatChrome';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Copy, ExternalLink, FileText, Folder, TriangleAlert, X } from 'lucide-react';
@@ -405,7 +406,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
       <div
         data-text-lightbox-card
         className={cn(
-          'cursor-auto flex flex-col overflow-hidden rounded-[12px]',
+          'cursor-auto flex flex-col overflow-hidden rounded-xl',
           'border border-[var(--msg-tool-card-border)]',
           'bg-[var(--msg-tool-card-bg)]',
         )}
@@ -435,7 +436,8 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 onClick={copyPath}
                 className={cn(
                   'flex items-center gap-2 min-w-0',
-                  'rounded-[6px] px-1 -mx-1 py-0.5',
+                  'rounded-full px-1 -mx-1 py-0.5',
+                  CHAT_FOCUS_CLASS,
                   'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
                   'text-left cursor-pointer',
                 )}
@@ -484,14 +486,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 <button
                   type="button"
                   onClick={showInFolder}
+                  aria-label={remoteOrigin ? t('chat.remoteFile.revealLocalCopy') : t('chat.lightbox.openInExplorer')}
                   disabled={!localActionsReady}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'transition-colors',
-                    localActionsReady
-                      ? 'hover:bg-[var(--msg-code-inline-bg)] cursor-pointer'
-                      : 'opacity-40 cursor-not-allowed',
-                  )}
+                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
                 >
                   <Folder size={18} className="text-[var(--msg-tool-card-chevron)]" />
                 </button>
@@ -505,14 +502,9 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 <button
                   type="button"
                   onClick={copyContent}
+                  aria-label={t('chat.textLightbox.copyAll')}
                   disabled={loadState.phase !== 'ready'}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'transition-colors cursor-pointer',
-                    loadState.phase === 'ready'
-                      ? 'hover:bg-[var(--msg-code-inline-bg)]'
-                      : 'opacity-40 cursor-not-allowed',
-                  )}
+                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
                 >
                   <Copy size={18} className="text-[var(--msg-tool-card-chevron)]" />
                 </button>
@@ -526,11 +518,8 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
                 <button
                   type="button"
                   onClick={handleClose}
-                  className={cn(
-                    'flex h-8 w-8 items-center justify-center rounded-[6px]',
-                    'hover:bg-[var(--msg-code-inline-bg)] transition-colors',
-                    'cursor-pointer',
-                  )}
+                  aria-label={t('chat.lightbox.close')}
+                  className={CHAT_LIGHTBOX_ICON_BUTTON_CLASS}
                 >
                   <X size={20} className="text-[var(--msg-tool-card-chevron)]" />
                 </button>

@@ -56,6 +56,7 @@
   "connect": "连接",
   "connecting": "连接中…",
   "reconnecting": "正在重新连接…",
+  "lockingOnExit": "正在锁定电脑…",
   "disconnected": "已断开",
   "compatibility": "兼容模式 · 帧率较低",
   "live": "实时画面",

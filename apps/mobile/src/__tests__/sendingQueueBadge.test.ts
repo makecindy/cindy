@@ -37,7 +37,13 @@ describe('mobile sending queue badge', () => {
 
     expect(source).toContain('sendingClientIds: sendingQueueBadgeClientIds,');
     // 直发路径与 outbox 交接路径各 mark 一次,各自在 finally 收掉。
-    expect(source.match(/markQueueItemSending\(queued\.clientId\);/g)).toHaveLength(2);
+    expect(source.match(/markQueueItemSending\(queued\);/g)).toHaveLength(2);
+    // Both send entries reserve the user slot before publishing the optimistic
+    // queue (and before enqueue can deliver an assistant event).
+    expect(source.match(/markQueueItemSending\(queued\);\s+remoteSessionStore\.setInputProjectionOptimistically/g)).toHaveLength(2);
+    // Only enqueue reserves a slot; queue recovery must not infer a boundary
+    // from either current messages or a previous committed render.
+    expect(source.match(/appendOptimisticUserMessage\(/g)).toHaveLength(1);
     expect(source.match(/clearQueueItemSending\(queued\.clientId\);/g)).toHaveLength(2);
     expect(source).toContain('} finally {\n        // 成功、对账认定已入队、回滚 throw 三条路径都算「不再在途」');
     // 新建会话乐观管线在跑时,首条消息同样是「已上屏未确认」。

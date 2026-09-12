@@ -155,7 +155,7 @@ describe('network change probes', () => {
       h.client.notifyNetworkChanged();
       await vi.advanceTimersByTimeAsync(250);
       h.client.notifyNetworkChanged();
-      await vi.advanceTimersByTimeAsync(499);
+      await vi.advanceTimersByTimeAsync(249);
       expect(socket.sent.filter((e) => e.kind === 'ping')).toHaveLength(0);
       await vi.advanceTimersByTimeAsync(1);
       expect(socket.sent.filter((e) => e.kind === 'ping')).toHaveLength(1);
@@ -208,6 +208,121 @@ describe('network change probes', () => {
       h.client.stop();
       await vi.advanceTimersByTimeAsync(10_000);
       expect(h.sockets).toHaveLength(3);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('bounds repeated hints after a successful probe (post-hint traffic=%s)', async (traffic) => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      h.client.notifyNetworkChanged(); await vi.advanceTimersByTimeAsync(500);
+      socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      // A route can die just after success without changing its Wi-Fi label.
+      for (let i = 0; i < 29; i++) {
+        await vi.advanceTimersByTimeAsync(100);
+        h.client.notifyNetworkChanged();
+      }
+      expect(socket.sent.filter(e => e.kind === 'ping')).toHaveLength(1);
+      if (traffic) {
+        await vi.advanceTimersByTimeAsync(1);
+        socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      }
+      await vi.advanceTimersByTimeAsync(traffic ? 99 : 100);
+      expect(socket.sent.filter(e => e.kind === 'ping')).toHaveLength(traffic ? 1 : 2);
+      if (!traffic) {
+        await vi.advanceTimersByTimeAsync(15_000);
+        expect(h.sockets).toHaveLength(2);
+      } else expect(h.sockets).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('expedites a queued probe on foreground or explicit route change without waiting for cooldown', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      h.client.notifyNetworkChanged(); await vi.advanceTimersByTimeAsync(500);
+      socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(1);
+      h.client.notifyNetworkChanged();
+      h.client.notifyNetworkChanged({ urgent: true });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(socket.sent.filter(e => e.kind === 'ping')).toHaveLength(2);
+      // Even urgent hints must not restart an in-flight probe's failure deadline.
+      await vi.advanceTimersByTimeAsync(14_000);
+      h.client.notifyNetworkChanged({ urgent: true });
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(h.sockets).toHaveLength(2);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('does not let continuous hints starve the initial probe', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      for (let i = 0; i < 5; i++) {
+        h.client.notifyNetworkChanged();
+        await vi.advanceTimersByTimeAsync(100);
+      }
+      expect(socket.sent.filter(e => e.kind === 'ping')).toHaveLength(1);
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('keeps a second peer and its in-flight request alive while the first peer stops ACKing', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: {
+      pingIntervalMs: 60_000, requestTimeoutMs: 30_000, transportRetryIntervalMs: 60_000,
+    } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      for (const peer of ['dev-b', 'dev-c']) {
+        const linked = establishInboundReliableLink(h, `stream-${peer}`, 1, peer);
+        await vi.advanceTimersByTimeAsync(0); await linked;
+      }
+      h.client.sendPush('dev-b', 'maker:event', { waitingForAck: true });
+      const pending = h.client.invoke('dev-c', { channel: 'local-db:sessions:list', args: [] });
+      const request = socket.sent.filter(e => e.kind === 'invoke' && e.dst === 'dev-c').at(-1)!;
+      h.client.notifyNetworkChanged({ urgent: true });
+      await vi.advanceTimersByTimeAsync(14_000);
+      // A peer's valid response proves relay health even without pong or ACKs from dev-b.
+      encodeReliableFrames({
+        v: PROTOCOL_VERSION, kind: 'invoke-result', src: 'dev-c', id: request.id,
+        payload: { ok: true, result: ['healthy'] },
+      }, 'stream-dev-c', 1).forEach(frame => socket.push(frame));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(pending).resolves.toMatchObject({ result: ['healthy'] });
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(h.sockets).toHaveLength(1);
+      expect(socket.closed).toBeNull();
+      expect(socket.sent.filter(e => e.kind === 'link-close')).toHaveLength(0);
+      h.client.sendPush('dev-c', 'maker:event', { stillLinked: true });
+      expect(socket.sent.at(-1)).toMatchObject({ kind: 'push', dst: 'dev-c' });
+    } finally { h.client.stop(); vi.useRealTimers(); }
+  });
+
+  it('clears a deferred hint and its cooldown when the connection is stopped', async () => {
+    vi.useFakeTimers();
+    const h = makeHarness({ timing: { pingIntervalMs: 60_000 } });
+    try {
+      h.client.start(); await vi.advanceTimersByTimeAsync(0);
+      const old = h.current(); old.ack();
+      h.client.notifyNetworkChanged(); await vi.advanceTimersByTimeAsync(500);
+      old.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      h.client.notifyNetworkChanged();
+      h.client.stop();
+      h.client.connectNow('appstate-active'); await vi.advanceTimersByTimeAsync(0);
+      const socket = h.current(); socket.ack();
+      h.client.notifyNetworkChanged(); await vi.advanceTimersByTimeAsync(500);
+      expect(socket.sent.filter(e => e.kind === 'ping')).toHaveLength(1);
+      socket.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+      await vi.advanceTimersByTimeAsync(3_000);
+      expect(socket.sent.filter(e => e.kind === 'ping')).toHaveLength(1);
     } finally { h.client.stop(); vi.useRealTimers(); }
   });
 });

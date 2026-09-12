@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type RefObject } from 'react';
 
 export interface ProviderOAuthDeviceCode {
   verificationUrl: string;
@@ -39,15 +39,18 @@ function nextProviderOAuthOwnerId(): string {
  */
 export function useProviderOAuthDeviceCode(
   providerId: string | null,
-  options?: { observeProgress?: boolean },
+  options?: { observeProgress?: boolean; browserLoginRef?: RefObject<OwnedProviderOAuthLogin | null> },
 ) {
   const observeProgress = options?.observeProgress ?? true;
   const [deviceCode, setDeviceCode] = useState<ProviderOAuthDeviceCode | null>(null);
   const ownedLoginRef = useRef<OwnedProviderOAuthLogin | null>(null);
+  const browserLoginRef = options?.browserLoginRef ?? ownedLoginRef;
+  const [browserUrl, setBrowserUrl] = useState<string | null>(null);
 
   const releaseOwnedLogin = useCallback((owned: OwnedProviderOAuthLogin) => {
     if (ownedLoginRef.current !== owned) return;
     ownedLoginRef.current = null;
+    setBrowserUrl(null);
     try {
       void Promise.resolve(
         window.electronAPI.maker.providerOAuthCancel(owned.providerId, {
@@ -62,9 +65,16 @@ export function useProviderOAuthDeviceCode(
 
   useEffect(() => {
     setDeviceCode(null);
-    if (!providerId) return undefined;
+    setBrowserUrl(null);
     const unsubscribe = observeProgress
       ? window.electronAPI.maker.onProviderOAuthProgress((progress) => {
+          if (progress.phase === 'browser-url') {
+            const owned = browserLoginRef.current;
+            if (owned?.providerId === progress.providerId && owned.ownerId === progress.ownerId) {
+              setBrowserUrl(progress.url);
+            }
+            return;
+          }
           if (progress.providerId !== providerId || progress.phase !== 'device-code') return;
           setDeviceCode({
             verificationUrl: progress.verificationUrl,
@@ -78,18 +88,22 @@ export function useProviderOAuthDeviceCode(
       const owned = ownedLoginRef.current;
       if (owned?.providerId === providerId) releaseOwnedLogin(owned);
     };
-  }, [observeProgress, providerId, releaseOwnedLogin]);
+  }, [browserLoginRef, observeProgress, providerId, releaseOwnedLogin]);
 
   const beginOwnedLogin = useCallback(() => {
     if (!providerId) return { ownerId: undefined, finish: () => undefined };
     const previous = ownedLoginRef.current;
     if (previous) releaseOwnedLogin(previous);
     const owned = { providerId, ownerId: nextProviderOAuthOwnerId() };
+    setBrowserUrl(null);
     ownedLoginRef.current = owned;
     return {
       ownerId: owned.ownerId,
       finish: () => {
-        if (ownedLoginRef.current === owned) ownedLoginRef.current = null;
+        if (ownedLoginRef.current === owned) {
+          ownedLoginRef.current = null;
+          setBrowserUrl(null);
+        }
       },
     };
   }, [providerId, releaseOwnedLogin]);
@@ -97,6 +111,9 @@ export function useProviderOAuthDeviceCode(
     const owned = ownedLoginRef.current;
     if (owned) releaseOwnedLogin(owned);
   }, [releaseOwnedLogin]);
-  const clearDeviceCode = useCallback(() => setDeviceCode(null), []);
-  return { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin };
+  const clearDeviceCode = useCallback(() => {
+    setDeviceCode(null);
+    setBrowserUrl(null);
+  }, []);
+  return { deviceCode, browserUrl, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin };
 }
