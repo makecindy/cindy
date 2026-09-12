@@ -123,24 +123,29 @@ describe('reply before user echo', () => {
   }
   afterEach(() => { remoteSessionStore.clear(); vi.useRealTimers(); });
 
-  it('promotes a busy send when reconnect delivers its reply and empty queue together', () => {
+  it.each([false, true])('leaves unreserved busy sends to authoritative history (separate renders: %s)', (separateRenders) => {
     push(row('current', 'user', 0));
     push(row('current-reply', 'assistant', 1));
     const previousQueue = [queued('sent')];
-    const committedMessages = remoteSessionStore.getMessages(sessionId);
-    // No reservation while busy. Both events arrive before the next UI commit.
+    // Busy sends keep the existing pending tail, without claiming a turn slot.
     expect(render(build({ queue: previousQueue }), []).at(-1)?.key).toBe('message-sent');
     push(row('next-reply', 'assistant', 3));
+    if (separateRenders) {
+      expect(render(build({ queue: previousQueue }), []).map((item) => item.key)).toEqual([
+        'message-current', 'message-current-reply', 'message-next-reply', 'message-sent',
+      ]);
+    }
     const settling = computeVanishedQueueItems({
       previous: previousQueue, current: [], previousSteeringClientIds: NO_IDS,
       currentSteeringClientIds: NO_IDS, hiddenClientIds: NO_IDS, locallyRemovedClientIds: NO_IDS,
     });
-    const slots = settling.reduce<readonly OptimisticUserMessage[]>((items, item) =>
-      appendOptimisticUserMessage(items, committedMessages, item, sessionId), []);
-    const expected = ['message-current', 'message-current-reply', 'message-sent', 'message-next-reply'];
-    expect(render(build({ settling }), slots).map((item) => item.key)).toEqual(expected);
+    expect(render(build({ settling }), []).map((item) => item.key)).toEqual([
+      'message-current', 'message-current-reply', 'message-next-reply', 'message-sent',
+    ]);
     push(row('sent', 'user', 2));
-    expect(render(build({ settling }), slots).map((item) => item.key)).toEqual(expected);
+    expect(render(build({ settling }), []).map((item) => item.key)).toEqual([
+      'message-current', 'message-current-reply', 'message-sent', 'message-next-reply',
+    ]);
   });
 
   it('invalidates the streaming prefix when a local user introduces a new turn boundary', () => {

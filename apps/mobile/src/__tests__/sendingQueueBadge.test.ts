@@ -41,10 +41,9 @@ describe('mobile sending queue badge', () => {
     // Both send entries reserve the user slot before publishing the optimistic
     // queue (and before enqueue can deliver an assistant event).
     expect(source.match(/markQueueItemSending\(queued\);\s+remoteSessionStore\.setInputProjectionOptimistically/g)).toHaveLength(2);
-    // A coalesced reply/queue update must not supply its own predecessor set.
-    expect(source).toContain('appendOptimisticUserMessage(items, beforeDispatch, item, sessionId)');
-    expect(source).toContain('? previousRenderItemsRef.current.messages : []');
-    expect(source).toContain('messages,\n      items: renderWindow.items,');
+    // Only enqueue reserves a slot; queue recovery must not infer a boundary
+    // from either current messages or a previous committed render.
+    expect(source.match(/appendOptimisticUserMessage\(/g)).toHaveLength(1);
     expect(source.match(/clearQueueItemSending\(queued\.clientId\);/g)).toHaveLength(2);
     expect(source).toContain('} finally {\n        // 成功、对账认定已入队、回滚 throw 三条路径都算「不再在途」');
     // 新建会话乐观管线在跑时,首条消息同样是「已上屏未确认」。

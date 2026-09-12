@@ -1522,8 +1522,8 @@ export default function SessionScreen() {
     const clientId = queued.clientId;
     const projection = remoteSessionStore.getInputProjection(sessionId);
     const source = remoteSessionStore.getMessages(sessionId);
-    // Match Desktop's idle-send placement. A busy turn's follow-up remains in
-    // the queue until the existing dispatch/settling projection promotes it.
+    // Match Desktop's idle-send placement. Busy follow-ups retain the existing
+    // pending tail until authoritative history supplies their transcript row.
     const busy = projection.pendingQueue.length > 0 || projection.steeringQueueClientIds.length > 0
       || projection.queueAbortPending || remoteSessionStore.isSessionRunning(sessionId)
       || remoteSessionStore.getPendingInteractions(sessionId).length > 0
@@ -4225,7 +4225,6 @@ export default function SessionScreen() {
   }, [messageStructureChangedIndexes, messageStructureToken, messages, sessionId]);
   const previousRenderItemsRef = useRef<{
     sessionId: string;
-    messages: readonly RemoteMessage[];
     items: readonly MobileMessageRenderItem[];
     prefix: MobileStreamingRenderPrefixCache | null;
   } | null>(null);
@@ -4239,20 +4238,13 @@ export default function SessionScreen() {
       ...inputProjection.pendingQueue.filter((item) => sendingQueueClientIds.has(item.clientId)).map((item) => item.clientId),
       ...settlingItemsForRender.map((item) => item.clientId),
     ]);
-    let items = reconcileOptimisticUserMessages(
+    // Only the enqueue path can reserve a transcript position. A vanished
+    // busy queue has no reliable local turn boundary: history and projection
+    // can arrive in either order, across any number of committed renders.
+    return reconcileOptimisticUserMessages(
       optimisticUserState.sessionId === sessionId ? optimisticUserState.items : [],
       messages, activeIds, confirmedUserClientIds,
     );
-    for (const item of settlingItemsForRender) {
-      if (!confirmedUserClientIds.has(item.clientId)) {
-        // On reconnect the first render can contain both the reply and the
-        // vanished queue. Anchor to the last committed frame, not that reply.
-        const beforeDispatch = previousRenderItemsRef.current?.sessionId === sessionId
-          ? previousRenderItemsRef.current.messages : [];
-        items = appendOptimisticUserMessage(items, beforeDispatch, item, sessionId);
-      }
-    }
-    return items;
   }, [optimisticUserState, sessionId, messages, inputProjection.pendingQueue,
     sendingQueueClientIds, settlingItemsForRender, confirmedUserClientIds]);
   if (optimisticUserState.sessionId === sessionId && optimisticUsers !== optimisticUserState.items) {
@@ -4357,11 +4349,10 @@ export default function SessionScreen() {
     }
     previousRenderItemsRef.current = {
       sessionId,
-      messages,
       items: renderWindow.items,
       prefix: renderWindow.prefix,
     };
-  }, [messages, renderWindow.items, renderWindow.prefix, sessionId]);
+  }, [renderWindow.items, renderWindow.prefix, sessionId]);
   // Known stale entry content bypasses the quiet delay; routine sync stays subtle.
   const showSyncingIndicator = !showConnectionBanner && !showCachedHistoryNotice
     && (loading || historyView.snapshot.loading || status === 'connecting' || contentRecoveryState === 'syncing');
