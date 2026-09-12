@@ -1,19 +1,12 @@
 import { useEffect, useRef, useState } from "react";
-import { AppState, Pressable, StyleSheet, View } from "react-native";
+import { AppState } from "react-native";
 import { useTranslation } from "react-i18next";
 import {
   desktopPermissionReady,
   type RemoteDesktopPermissions,
   type RemoteDesktopRequest,
 } from "@cindy/device-link";
-import { Text } from "@/components/AppText";
-import {
-  spacing,
-  radius,
-  typeScale,
-  useThemedStyles,
-  type ThemeColors,
-} from "@/theme";
+import { PermissionGuideView } from "./PermissionGuideView";
 
 export function PermissionGuide({
   initial,
@@ -25,7 +18,6 @@ export function PermissionGuide({
   reconnect(): void;
 }) {
   const { t } = useTranslation();
-  const styles = useThemedStyles(makeStyles);
   const [status, setStatus] = useState(initial);
   const [pending, setPending] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
@@ -90,86 +82,45 @@ export function PermissionGuide({
     desktopPermissionReady(status.screenRecording) &&
     desktopPermissionReady(status.accessibility);
   return (
-    <View style={styles.panel}>
-      <Text style={styles.text}>
-        {t(
-          ready
-            ? "remoteDesktop.permissionsReady"
-            : "remoteDesktop.permissionsIntro",
-        )}
-      </Text>
-      {status &&
-        (["screenRecording", "accessibility"] as const).map((permission) => (
-          <View style={styles.row} key={permission}>
-            <Text style={styles.text}>{t(`remoteDesktop.${permission}`)}</Text>
-            <Text style={styles.caption}>
-              {t(
-                desktopPermissionReady(status[permission])
-                  ? "remoteDesktop.permissionGranted"
-                  : status[permission] === "unknown"
-                    ? "remoteDesktop.permissionUnknown"
-                    : "remoteDesktop.permissionMissing",
-              )}
-            </Text>
-          </View>
-        ))}
-      <View style={styles.actions}>
-        {status && !ready && (
-          <Pressable
-            accessibilityRole="button"
-            disabled={pending}
-            onPress={() => {
-              void guide();
-            }}
-            style={styles.button}
-          >
-            <Text style={styles.text}>
-              {t(
-                pending
-                  ? "remoteDesktop.permissionChecking"
-                  : "remoteDesktop.openGuideOnComputer",
-              )}
-            </Text>
-          </Pressable>
-        )}
-        <Pressable
-          accessibilityRole="button"
-          onPress={reconnect}
-          style={styles.button}
-        >
-          <Text style={styles.text}>
-            {t("remoteDesktop.reconnectAfterPermissions")}
-          </Text>
-        </Pressable>
-      </View>
-      {notice && (
-        <Text accessibilityRole="alert" style={styles.caption}>
-          {t(`remoteDesktop.${notice}`)}
-        </Text>
+    <PermissionGuideView
+      title={t("remoteDesktop.permissionsTitle")}
+      intro={t(
+        ready
+          ? "remoteDesktop.permissionsReady"
+          : "remoteDesktop.permissionsIntro",
       )}
-    </View>
+      rows={
+        status
+          ? (["screenRecording", "accessibility"] as const).map(
+              (permission) => ({
+                label: t(`remoteDesktop.${permission}`),
+                value: t(
+                  desktopPermissionReady(status[permission])
+                    ? "remoteDesktop.permissionGranted"
+                    : status[permission] === "unknown"
+                      ? "remoteDesktop.permissionUnknown"
+                      : "remoteDesktop.permissionMissing",
+                ),
+              }),
+            )
+          : []
+      }
+      guideLabel={
+        status && !ready
+          ? t(
+              pending
+                ? "remoteDesktop.permissionChecking"
+                : "remoteDesktop.openGuideOnComputer",
+            )
+          : undefined
+      }
+      pending={pending}
+      onGuide={() => {
+        void guide();
+      }}
+      reconnectLabel={t("remoteDesktop.reconnectAfterPermissions")}
+      onReconnect={reconnect}
+      notice={notice ? t(`remoteDesktop.${notice}`) : undefined}
+    />
   );
 }
-const makeStyles = (colors: ThemeColors) =>
-  StyleSheet.create({
-    panel: {
-      padding: spacing.md,
-      gap: spacing.sm,
-      backgroundColor: colors.surface,
-    },
-    row: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      gap: spacing.sm,
-    },
-    actions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
-    button: {
-      minHeight: 44,
-      justifyContent: "center",
-      paddingHorizontal: spacing.md,
-      borderRadius: radius.control,
-      backgroundColor: colors.surfaceElevated,
-    },
-    text: { fontSize: typeScale.body, color: colors.textPrimary },
-    caption: { fontSize: typeScale.caption, color: colors.textSecondary },
-  });
