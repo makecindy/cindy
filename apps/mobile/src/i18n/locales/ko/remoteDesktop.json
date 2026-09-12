@@ -1,4 +1,16 @@
 {
+  "hostDisconnected": "컴퓨터에서 원격 데스크톱 연결을 종료했습니다.",
+  "privacyScreen": "컴퓨터 프라이버시 화면",
+  "privacyScreenHint": "컴퓨터 화면을 가립니다. 컴퓨터에서 클릭하거나 키를 누른 뒤 확인하면 연결이 끊어집니다. 종료 시 잠금 설정도 적용됩니다.",
+  "privacyActive": "프라이버시 화면이 켜져 있습니다. 컴퓨터에서 클릭하거나 키를 누른 뒤 확인하면 연결이 끊어집니다. 종료 시 잠금 설정도 적용됩니다.",
+  "privacyFailed": "프라이버시 화면을 켜지 못했습니다. 컴퓨터 화면이 여전히 보일 수 있습니다.",
+  "clipboardSync": "클립보드 동기화",
+  "clipboardSyncHint": "앱이 전면에 있을 때 텍스트, 이미지, 서식 있는 텍스트를 양방향으로 동기화합니다. iPhone에서 붙여넣기 권한을 요청하면 허용해 주세요.",
+  "clipboardSyncConflict": "양쪽 클립보드가 변경되어 각각의 내용을 유지했습니다. 어느 기기에서든 다시 복사하면 동기화됩니다.",
+  "clipboardSyncFailed": "동기화가 일시적으로 실패했습니다. 자동으로 재시도하며 설정은 켜진 상태로 유지됩니다.",
+  "clipboardSyncSkipped": "현재 콘텐츠를 동기화할 수 없어 건너뛰었습니다. 붙여넣기 권한을 확인하거나 텍스트 또는 이미지를 복사한 후 다시 시도해 주세요.",
+  "clipboardSyncPermission": "동기화가 일시 중지되었습니다. 붙여넣기를 허용한 후 다시 시도해 주세요. 설정은 켜진 상태로 유지됩니다.",
+  "clipboardSyncRetry": "동기화 재시도",
   "credentialSigningRequired": "Mac 개발 버전에 서명 설정이 없습니다. Mac에서 서명을 설정하고 Cindy를 다시 시작한 후 다시 시도해 주세요.",
   "credentialPasswordRejected": "Mac 로그인 암호를 확인하지 못했습니다. 다시 입력해 주세요.",
   "credentialCancelled": "암호 확인을 취소했습니다. 준비되면 다시 연결해 주세요.",
@@ -133,5 +145,8 @@
   "autoUnlockUnavailable": "자동 잠금 해제를 사용할 수 없습니다. 연결한 뒤 Mac을 수동으로 잠금 해제할 수 있습니다.",
   "lockOnExit": "종료 시 컴퓨터 잠금",
   "lockOnExitHint": "원격 데스크톱을 종료하면 잠급니다. 재연결이나 앱 전환 시에는 잠그지 않습니다.",
-  "lockOnExitFailed": "컴퓨터가 잠겼는지 확인하지 못했습니다. 컴퓨터 상태를 확인해 주세요."
+  "lockOnExitFailed": "컴퓨터가 잠겼는지 확인하지 못했습니다. 컴퓨터 상태를 확인해 주세요.",
+  "hostMute": "원격 컴퓨터 음소거",
+  "hostMuteHint": "연결 중 원격 컴퓨터의 소리를 음소거합니다",
+  "hostMuteFailed": "원격 컴퓨터의 음소거 상태를 변경할 수 없습니다"
 }

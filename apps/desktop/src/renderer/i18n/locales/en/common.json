@@ -1,4 +1,12 @@
 {
+  "privacyExit": {
+    "status": "This computer is being remotely controlled through Cindy",
+    "hint": "Click or press any key to disconnect…",
+    "title": "Disconnect remote desktop?",
+    "detail": "This will end remote control and restore this computer’s screen. The computer will lock if lock on exit is enabled.",
+    "cancel": "Keep connected",
+    "disconnect": "Disconnect"
+  },
   "appBadge": {
     "attentionCount": "Tasks needing attention: {{count}}"
   },

@@ -1,4 +1,16 @@
 {
+  "hostDisconnected": "电脑已主动断开远程桌面连接。",
+  "privacyScreen": "电脑防窥",
+  "privacyScreenHint": "遮住电脑屏幕。在电脑上点击鼠标或按键，确认后断开连接，并按设置锁屏。",
+  "privacyActive": "防窥已开启。在电脑上点击鼠标或按键，确认后断开连接，并按设置锁屏。",
+  "privacyFailed": "未能开启防窥，电脑屏幕可能仍可见。",
+  "clipboardSync": "剪贴板同步",
+  "clipboardSyncHint": "前台双向同步文字、图片和富文本。iPhone 如请求粘贴权限，请允许。",
+  "clipboardSyncConflict": "两端剪贴板都发生了变化，已分别保留。请在任一设备上重新复制以同步。",
+  "clipboardSyncFailed": "同步暂时失败，正在自动重试。开关保持开启。",
+  "clipboardSyncSkipped": "当前内容无法同步，已跳过。请检查粘贴权限，或复制文字、图片后重试。",
+  "clipboardSyncPermission": "同步已暂停，请允许粘贴权限后重试。开关保持开启。",
+  "clipboardSyncRetry": "重试同步",
   "credentialSigningRequired": "Mac 上的开发版缺少签名配置。请在 Mac 上配置签名并重新启动 Cindy，然后重试。",
   "credentialPasswordRejected": "Mac 登录密码验证失败，请重新输入。",
   "credentialCancelled": "已取消密码验证，准备好后可重新连接。",
@@ -133,5 +145,8 @@
   "autoUnlockUnavailable": "暂时无法自动解锁。你仍可连接，并手动解锁 Mac。",
   "lockOnExit": "退出后锁定电脑",
   "lockOnExitHint": "退出远程桌面时锁屏。重连或切换 App 不会触发。",
-  "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。"
+  "lockOnExitFailed": "未能确认电脑已锁屏，请检查电脑的锁屏状态。",
+  "hostMute": "被控端静音",
+  "hostMuteHint": "连接期间将被控电脑静音",
+  "hostMuteFailed": "无法修改被控端静音状态"
 }

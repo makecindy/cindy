@@ -1,4 +1,12 @@
 {
+  "privacyExit": {
+    "status": "正在通过 Cindy 被远程控制",
+    "hint": "点击屏幕或按任意键，确认后断开连接",
+    "title": "断开远程桌面连接？",
+    "detail": "这将结束远程控制并恢复电脑屏幕。如果已开启退出时锁屏，电脑也会锁屏。",
+    "cancel": "保持连接",
+    "disconnect": "断开连接"
+  },
   "appBadge": {
     "attentionCount": "需要关注的任务：{{count}}"
   },

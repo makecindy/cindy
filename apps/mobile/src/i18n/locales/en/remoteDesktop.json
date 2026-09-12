@@ -1,4 +1,16 @@
 {
+  "hostDisconnected": "The computer ended the remote desktop connection.",
+  "privacyScreen": "Computer privacy screen",
+  "privacyScreenHint": "Cover the computer’s screens. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
+  "privacyActive": "Privacy screen is on. Click or press a key on the computer, then confirm to disconnect. Lock on exit applies if enabled.",
+  "privacyFailed": "Privacy screen could not be enabled. The computer’s screens may still be visible.",
+  "clipboardSync": "Clipboard sync",
+  "clipboardSyncHint": "Sync text, images and rich text both ways while in the foreground. Allow paste access if iPhone asks.",
+  "clipboardSyncConflict": "Both clipboards changed. Both copies were kept. Copy again on either device to sync.",
+  "clipboardSyncFailed": "Sync temporarily failed. Retrying automatically; your setting stays on.",
+  "clipboardSyncSkipped": "This content could not be synced and was skipped. Check paste access, or copy text or an image to try again.",
+  "clipboardSyncPermission": "Sync is paused. Allow paste access, then retry. Your setting stays on.",
+  "clipboardSyncRetry": "Retry sync",
   "credentialSigningRequired": "The Mac development build is missing its signing configuration. Restart Cindy on the Mac with signing configured, then try again.",
   "credentialPasswordRejected": "The Mac login password was not accepted. Enter it again.",
   "credentialCancelled": "Password verification was cancelled. Tap reconnect when you are ready.",
@@ -133,5 +145,8 @@
   "autoUnlockUnavailable": "Automatic unlock is unavailable. You can still connect and unlock the Mac manually.",
   "lockOnExit": "Lock Computer on Exit",
   "lockOnExitHint": "Locks when you leave remote desktop. Reconnecting or switching apps does not lock the computer.",
-  "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended."
+  "lockOnExitFailed": "Could not confirm that the computer locked. Check the computer before leaving it unattended.",
+  "hostMute": "Mute controlled computer",
+  "hostMuteHint": "Mute the controlled computer while connected",
+  "hostMuteFailed": "Unable to change controlled computer mute state"
 }

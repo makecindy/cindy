@@ -13,6 +13,7 @@ import {
   type DesktopCapturerSource,
 } from 'electron';
 import { randomUUID } from 'node:crypto';
+import { release as osRelease } from 'node:os';
 import { loadDesktopIceServers } from './iceConfig';
 import { remoteCredentialHost } from './credentialHost';
 import {
@@ -39,12 +40,15 @@ import { desktopCaptureSource, enumerateDesktopSources } from './captureSource';
 import { encodeDesktopFrame, encodeNativeRelayFrame } from './frame';
 import { transferDesktopClipboard, transferDesktopClipboardContent } from './clipboard';
 import { NativeDesktopCapture } from './nativeCapture';
+import { PrivacyScreen } from './privacyScreen';
+import { systemAudioMuteGuard } from '../voice-input/SystemAudioMuteGuard.js';
 import { readWindowsDesktopSupport, configureWindowsDesktopSupport } from './windowsHost';
 import {
   DesktopInputHost,
   readDesktopDisplayModes,
   setDesktopDisplayMode,
   readDesktopInputPermission,
+  readDesktopClipboardVersion,
   readDesktopLockState,
   lockDesktopScreen,
   requestDesktopInputPermission,
@@ -67,10 +71,11 @@ const permissions = new RemoteDesktopPermissionsService({
     if (permission === 'accessibility') await requestDesktopInputPermission(isCurrent, signal);
     else
       await enumerateDesktopSources(
-        () => desktopCapturer.getSources({
-          types: ['screen'],
-          thumbnailSize: { width: 0, height: 0 },
-        }),
+        () =>
+          desktopCapturer.getSources({
+            types: ['screen'],
+            thumbnailSize: { width: 0, height: 0 },
+          }),
         REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
       );
   },
@@ -93,6 +98,19 @@ const permissions = new RemoteDesktopPermissionsService({
 let host: WebContents | null = null;
 const captureWindow = new DesktopCaptureWindow(() => remoteDesktop.stop());
 const nativeCapture = new NativeDesktopCapture();
+const privacyScreen = new PrivacyScreen(
+  (ids) => nativeCapture.setExcludedWindows(ids),
+  () => {
+    void remoteDesktop
+      .stopPrivacyByUser()
+      .catch((error) => console.error('[remote-desktop] privacy exit lock failed', error));
+  },
+);
+const supportsPrivacyScreen =
+  (process.platform === 'darwin' &&
+    typeof process.getSystemVersion === 'function' &&
+    Number(process.getSystemVersion().split('.')[0]) >= 14) ||
+  (process.platform === 'win32' && Number(osRelease().split('.')[2]) >= 19041);
 let displayAwake: number | null = null;
 let nativeDisplay: string | null = null;
 let windowsAvailable = false;
@@ -183,7 +201,10 @@ async function offer(
       nativeAvailable ||=
         process.platform === 'win32' && (await readWindowsDesktopSupport()) === 'ready';
       try {
-        const available = await sources(false, nativeAvailable ? 2000 : REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs);
+        const available = await sources(
+          false,
+          nativeAvailable ? 2000 : REMOTE_DESKTOP_OFFER_BUDGET.sourcesMs,
+        );
         source = desktopCaptureSource(available, lease.display.id, screen.getAllDisplays());
       } catch (error) {
         // A locked macOS session can reject Chromium's source enumeration even
@@ -283,19 +304,41 @@ async function ice(request: RemoteDesktopIceRequest): Promise<RemoteDesktopIceRe
 
 export async function requestRemoteDesktop(peer: string, value: unknown): Promise<unknown> {
   const settings = readDeviceLinkSettings();
-  if (!settings.remoteControlEnabled || !settings.remoteDesktopEnabled || settings.revokedControllers.includes(peer))
+  if (
+    !settings.remoteControlEnabled ||
+    !settings.remoteDesktopEnabled ||
+    settings.revokedControllers.includes(peer)
+  )
     throw new Error('DESKTOP_UNAVAILABLE');
-  if (process.platform === 'darwin' && value !== null && typeof value === 'object' && 'op' in value && value.op === 'credential' && 'version' in value && value.version === 1 && 'kind' in value) {
+  if (
+    process.platform === 'darwin' &&
+    value !== null &&
+    typeof value === 'object' &&
+    'op' in value &&
+    value.op === 'credential' &&
+    'version' in value &&
+    value.version === 1 &&
+    'kind' in value
+  ) {
     if (value.kind === 'status') return { version: 1, state: await readDesktopLockState() };
     if (value.kind === 'prepare') {
       const credentials = remoteCredentialHost.currentToken?.();
       if (!credentials) throw new Error('CREDENTIAL_INVALID_IDENTITY');
-      const descriptor = await remoteCredentialHost.configure(credentials.realm, credentials.membership, credentials.authDevice, credentials.token);
+      const descriptor = await remoteCredentialHost.configure(
+        credentials.realm,
+        credentials.membership,
+        credentials.authDevice,
+        credentials.token,
+      );
       return { version: 1, ready: true, descriptor };
     }
   }
-  return process.platform === 'darwin' && value !== null && typeof value === 'object' && 'op' in value && value.op === 'credential'
-    ? remoteCredentialHost.request(peer, value, body => remoteDesktop.request(peer, body))
+  return process.platform === 'darwin' &&
+    value !== null &&
+    typeof value === 'object' &&
+    'op' in value &&
+    value.op === 'credential'
+    ? remoteCredentialHost.request(peer, value, (body) => remoteDesktop.request(peer, body))
     : remoteDesktop.request(peer, value);
 }
 
@@ -317,6 +360,10 @@ export const remoteDesktop = new RemoteDesktopController({
       cursorOverlay: process.platform === 'darwin',
       lockOnExit: process.platform === 'darwin',
       clipboardContent: process.platform === 'darwin' || process.platform === 'win32',
+      clipboardSync: process.platform === 'darwin' || process.platform === 'win32',
+      clipboardInline: process.platform === 'darwin' || process.platform === 'win32',
+      privacyScreen: supportsPrivacyScreen,
+      hostMute: process.platform === 'darwin' || process.platform === 'win32',
       clipboardText: process.platform === 'darwin' || process.platform === 'win32',
       videoSettings: true,
       trickleIce: true,
@@ -365,8 +412,50 @@ export const remoteDesktop = new RemoteDesktopController({
   },
   clipboard: (action, text, isCurrent) =>
     transferDesktopClipboard(action, text, isCurrent, (events) => input.input(events)),
-  clipboardContent: (action, content, isCurrent) =>
-    transferDesktopClipboardContent(action, content, isCurrent, (events) => input.input(events)),
+  clipboardContent: (action, content, isCurrent, options) =>
+    transferDesktopClipboardContent(
+      action,
+      content,
+      isCurrent,
+      (events) => input.input(events),
+      options,
+    ),
+  // Poll counters even for nonportable items; the content read owns format validation.
+  clipboardVersion: () => readDesktopClipboardVersion(),
+  privacyScreen: async (enabled, current) => {
+    if (!supportsPrivacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+    if (enabled && process.platform === 'darwin' && videoLease && nativeDisplay) {
+      nativeOverlay = true;
+      await privacyScreen.set(true, current);
+      try {
+        await nativeCapture.preparePrivacy(nativeDisplay, nativeSettings);
+      } catch (error) {
+        privacyScreen.stop();
+        throw error;
+      }
+      if (!current()) {
+        privacyScreen.stop();
+        throw new Error('DESKTOP_LEASE_EXPIRED');
+      }
+      return;
+    }
+    await privacyScreen.set(enabled, current);
+    if (!enabled || process.platform === 'win32') return;
+    const deadline = Date.now() + 4500;
+    while (current() && !nativeCapture.privacyReady && Date.now() < deadline)
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+    if (!nativeCapture.privacyReady) {
+      privacyScreen.stop();
+      throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
+    }
+  },
+  stopPrivacyScreen: () => privacyScreen.stop(),
+  hostMute: async (enabled) => {
+    if (enabled) await systemAudioMuteGuard.mute(0xc1d0);
+    else await systemAudioMuteGuard.restore(0xc1d0);
+  },
+  stopHostMute: () => void systemAudioMuteGuard.restore(0xc1d0),
   displayModes: readDesktopDisplayModes,
   resolution: setDesktopDisplayMode,
   startInput: (displayId) => input.start(displayId),
@@ -383,12 +472,14 @@ export const remoteDesktop = new RemoteDesktopController({
     }
   },
   stopInput: () => input.stop(),
-  ...(process.platform === 'darwin' ? {
-    lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
-      await input.release();
-      await lockDesktopScreen(isCurrent, signal);
-    },
-  } : {}),
+  ...(process.platform === 'darwin'
+    ? {
+        lockScreen: async (isCurrent: () => boolean, signal: AbortSignal) => {
+          await input.release();
+          await lockDesktopScreen(isCurrent, signal);
+        },
+      }
+    : {}),
   offer,
   ice,
   stopVideo,
@@ -404,7 +495,9 @@ export const remoteDesktop = new RemoteDesktopController({
   },
 });
 
-export function registerRemoteDesktopIpc(isVoiceInputOwner?: Parameters<typeof denyAppDesktopCapture>[1]): void {
+export function registerRemoteDesktopIpc(
+  isVoiceInputOwner?: Parameters<typeof denyAppDesktopCapture>[1],
+): void {
   denyAppDesktopCapture(session.defaultSession, isVoiceInputOwner);
   const timer = setInterval(() => remoteDesktop.tick(), 1000);
   timer.unref();
@@ -416,6 +509,7 @@ export function registerRemoteDesktopIpc(isVoiceInputOwner?: Parameters<typeof d
   screen.on('display-removed', (_event, display) => {
     if (String(display.id) === remoteDesktop.displayId) remoteDesktop.stop();
   });
+  screen.on('display-added', () => remoteDesktop.stop());
   screen.on('display-metrics-changed', (_event, display, metrics) => {
     // Work-area changes (lock screen, Dock/menu bar, display wake) do not
     // change whole-screen input coordinates and must not terminate the lease.
