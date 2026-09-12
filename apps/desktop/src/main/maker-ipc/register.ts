@@ -236,7 +236,7 @@ import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './
 import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, findSimilarWorkingDirectory } from '../workdir-probe-host/index.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
-  awaitAgentInputQueueSnapshotPersistence,
+  awaitAgentInputQueueSnapshotPersistence as awaitQueuedSnapshotWrite,
   loadAgentInputQueueSnapshot,
   loadAgentInputQueueSnapshotCounts,
   saveAgentInputQueueSnapshot,
@@ -13345,6 +13345,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   };
 
+  async function awaitAgentInputQueueSnapshotPersistence(sessionId: string): Promise<void> {
+    inputCoordinator.retryQueueSnapshotPersistence(sessionId);
+    await awaitQueuedSnapshotWrite(sessionId);
+  }
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -14621,6 +14626,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (deliveryClientIds) await inputCoordinator.ensureQueueRestored(sid);
     else await inputCoordinator.ensureQueueRestored(sid).catch(() => undefined);
     assertRemoteInputClearNotInFlight(sid, remote);
+    if (deliveryClientIds) await awaitAgentInputQueueSnapshotPersistence(sid);
     const deliveryReceipts = deliveryClientIds
       ? await readInputDeliveryReceipts(sid, deliveryClientIds)
       : undefined;
