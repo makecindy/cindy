@@ -31,7 +31,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('remoteUnavailableReason: composerRemoteUnavailableReason,');
     expect(source).toContain('describeRemoteComposerBlockingError(connectionError)');
     // 会话尚未在被控端建成时,队列行(取消 / 编辑 / 插队)仍然只读。
-    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason\n    ?? cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueAvailabilityReason = cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason ?? queueAvailabilityReason');
+    expect(source).toContain('const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason');
   });
 
   it('matches Desktop control behavior during a transient disconnect', () => {

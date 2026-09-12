@@ -88,7 +88,9 @@ describe('mobile session main layer desktop-first noise budget', () => {
     // 输入框换成只读卡片,而它们只表示还不能 enqueue。composer 保持可用,发送改走 outbox
     // 排队(见 optimisticSessionComposer.test.ts),这两条理由只留给队列行操作。
     expect(source).toContain('      readOnlyReason: composerReadOnlyReason,\n');
-    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason\n    ?? cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueAvailabilityReason = cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason ?? queueAvailabilityReason');
+    expect(source).toContain('const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason');
     expect(source).toContain('readOnlyReason={composerReadOnlyReason}');
     // header notice:协作会话(可聊天的 Lead)显示协作标签而非"只读模式"。
     expect(source).toContain('const collaborationLabel = sessionCollaborationLabel(session);');

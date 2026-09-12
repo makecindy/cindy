@@ -41,6 +41,7 @@ export interface InlineQueueSectionProps {
   projection: InputProjection;
   busy?: boolean;
   readOnlyReason?: string | null;
+  errorRecoveryReadOnlyReason: string | null;
   onResume(): void;
   onRetryError(): void;
   onClearError(): void;
@@ -50,6 +51,7 @@ export function InlineQueueSection({
   projection,
   busy,
   readOnlyReason,
+  errorRecoveryReadOnlyReason,
   onResume,
   onRetryError,
   onClearError,
@@ -65,6 +67,10 @@ export function InlineQueueSection({
   if (!hasBanner) return null;
 
   const controlsDisabled = busy || !!readOnlyReason;
+  const errorDisabledReason = errorRecoveryReadOnlyReason
+    || (busy ? t('message.queuePresentation.row.busy') : null);
+  const retryDisabledReason = errorDisabledReason
+    || (!projection.errorRetryText ? t('message.queue.noRetryContent') : null);
   const localizedAgentError = localizeAgentError(
     projection.errorReason,
     projection.toolLoop ?? null,
@@ -88,19 +94,26 @@ export function InlineQueueSection({
           <View style={styles.errorActions}>
             <ActionPill
               busy={busy}
-              disabled={controlsDisabled || !projection.errorRetryText}
+              disabled={!!retryDisabledReason}
+              disabledReason={retryDisabledReason}
               label={t('message.queue.retrySend')}
               onPress={onRetryError}
               testID="queue.inline.retryButton"
             />
             <ActionPill
               busy={busy}
-              disabled={controlsDisabled}
+              disabled={!!errorDisabledReason}
+              disabledReason={errorDisabledReason}
               label={t('message.queue.clearError')}
               onPress={onClearError}
               testID="queue.inline.clearErrorButton"
             />
           </View>
+          {retryDisabledReason ? (
+            <Text style={styles.disabledHint} testID="queue.inline.errorDisabledReason">
+              {retryDisabledReason}
+            </Text>
+          ) : null}
         </View>
       ) : null}
 
@@ -250,6 +263,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     padding: spacing.md,
   },
   errorText: { color: colors.errorText, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  disabledHint: { color: colors.textSecondary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
   errorActions: { flexDirection: 'row', flexWrap: 'wrap', gap: spacing.sm },
   actionPill: {
     alignItems: 'center',

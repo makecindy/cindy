@@ -693,6 +693,8 @@ export class DeviceLinkClient {
   private networkChangeTimer: ReturnType<typeof setTimeout> | null = null;
   private networkProbeTimer: ReturnType<typeof setTimeout> | null = null;
   private networkProbeStartedAt = 0;
+  private networkChangeHintedAt = 0;
+  private networkProbeNextAllowedAt = 0;
   private connectionStartedAt = 0;
   /** 当前连接的代号,用于丢弃过期 socket 的事件回调 */
   private connEpoch = 0;
@@ -852,11 +854,19 @@ export class DeviceLinkClient {
 
   /** Network changes are hints, not proof of failure. Probe the shared relay,
    * never an individual peer; any valid inbound frame keeps the socket alive.
-   * Repeated hints coalesce and cannot extend an already running probe. */
-  notifyNetworkChanged(): void {
+   * Repeated hints coalesce without postponing detection indefinitely. Foreground
+   * and explicit network transitions bypass the successful-probe cooldown. */
+  notifyNetworkChanged(options?: { urgent?: boolean }): void {
     if (this.stopped || this.networkProbeTimer) return;
-    const hintedAt = this.monotonicNow();
-    if (this.networkChangeTimer) clearTimeout(this.networkChangeTimer);
+    this.networkChangeHintedAt = this.monotonicNow();
+    if (this.networkChangeTimer) {
+      if (!options?.urgent) return;
+      clearTimeout(this.networkChangeTimer);
+    }
+    const delay = options?.urgent ? 0 : Math.max(
+      500,
+      this.networkProbeNextAllowedAt - this.networkChangeHintedAt,
+    );
     this.networkChangeTimer = setTimeout(() => {
       this.networkChangeTimer = null;
       if (this.stopped) return;
@@ -867,7 +877,7 @@ export class DeviceLinkClient {
       }
       // Activity after the latest hint already proves this relay is reachable.
       // Do not compare Wi-Fi labels: switching access points can keep them equal.
-      if (this.lastInboundAt > hintedAt) return;
+      if (this.lastInboundAt > this.networkChangeHintedAt) return;
       const epoch = this.connEpoch;
       const socket = this.ws;
       const startedAt = this.monotonicNow();
@@ -888,7 +898,7 @@ export class DeviceLinkClient {
         // to settle the same bounded probe rather than tearing down immediately.
         this.log.debug('network probe send deferred; waiting for inbound activity');
       }
-    }, 500);
+    }, delay);
   }
 
   private clearNetworkProbe(): void {
@@ -896,6 +906,7 @@ export class DeviceLinkClient {
     if (this.networkProbeTimer) clearTimeout(this.networkProbeTimer);
     this.networkChangeTimer = null;
     this.networkProbeTimer = null;
+    this.networkProbeNextAllowedAt = 0;
   }
 
   /**
@@ -2045,6 +2056,7 @@ export class DeviceLinkClient {
       if (this.networkProbeTimer) {
         clearTimeout(this.networkProbeTimer);
         this.networkProbeTimer = null;
+        this.networkProbeNextAllowedAt = this.lastInboundAt + 3_000;
         this.log.debug(`network probe confirmed relay activity (elapsedMs=${Math.max(0, this.lastInboundAt - this.networkProbeStartedAt)})`);
       }
     }
