@@ -120,7 +120,44 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 
 Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
 不得用 `remote compaction v2` 文案驱动恢复动作。普通 timeout、纯文本大历史和网络失败
-不得进入这套压缩，也不得进入自动续跑死循环。
+不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
+心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`
+只有包含实质文字才刷新；仅空白、Unicode 格式字符或控制字符不算进展，原事件仍无损传递。
+这两类超时与
+`codex_reconnect_stalled` 同类，进入 interrupted-turn 自动续跑；自动续跑对这三类
+**只发 CONTINUE 指令，绝不克隆原始用户 prompt**（turn 已被 accept，克隆会重放已执行的
+工具副作用）。Claude rewind / cancellation bridge 的 `/compact` 位于真实用户输入之前，
+Claude idle 超时使用 `bridge_upstream_response_idle_timeout`；共享 Session stall 同步查询
+handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`。两者不进入
+该自动续跑白名单；查询复用 Claude 唯一的 `bridgeStateActive()`，包含 compact result 后
+到下一 SDK 消息前的间隙，不新增桥接状态。保持既有
+清队列、保留重建目标与人工重试行为，不能对尚未执行的用户输入发送 CONTINUE。
+引用内容解析等异步准备仍属于未派发态；完成后复核 active 身份，再在真正调用 send 前
+标记 sendStarted，迟到的准备结果不得发送或修改已经交给 replacement 的项。
+自动 CONTINUE 保留原请求的 Plan 与权限选项；超时恢复不等于 ExitPlanMode 批准，
+不得强制 planMode=false。若原计划已批准后执行失败，缺少可靠的审批周期记录时仍保守
+保留原 Plan 选项，可能重新进入计划模式；不为避免重入新增审批状态。人工 Retry 沿用
+既有合成 UI 动作策略，本自动恢复修复不调整该策略。
+退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
+或 interrupt ACK 失败而 `unexpected` close 时，必须用实例 + attemptToken 精确保留交棒，
+不得 teardown 已批准的自动续跑——包括 timer 已 fire、CONTINUE 已因 SESSION_RUNNING
+回队、CONTINUE 已进入 drain 但尚未 vendor dispatch、以及 CONTINUE 已 sendStarted 但
+send outcome 尚未返回的窗口。尚未 sendStarted 的未派发项必须重新入队再唤醒 replacement；
+send 已开始则等真实 outcome——vendor 已 accept 必须 commit、禁止二次 CONTINUE；
+`TurnDispatchUnconfirmedError`（adapter 已发出请求但无法确定 provider 是否 accept）
+不得自动再发 CONTINUE，按可能已 accept 提交本次 attempt，并结算 AutoResumeBookkeeping
+（pendingOutcome=failed、丢弃 suppressed、rollback guard）；不得走会补落旧错误、恢复
+recovery 或再入队的 undispatched finalize。确认失败且 attemptToken 仍匹配才重新入队。
+显式关闭 / 停止已清 token 后，sendStarted 且已落库的隐藏 CONTINUE 必须丢弃，不得落成
+可重试 recovery。unexpected close 的 preserve 只认三类 CONTINUE-only reason
+（stall / idle / reconnect-stall）；generic clone-原文 retry fail-closed 不交棒。
+连续 replacement `unexpected` close 时 WeakMap lease 可能已随旧实例消失，必须按同一
+attemptToken 把 lease 绑到新 Session，或在 coordinator / guard / book 仍一致且队里 /
+live schedule 仍活着时继续 preserve。预算内不能 discard 或只留人工 recovery，也不能清掉
+sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计入同一份三次派发预算，
+包括尚在 pendingQueue、已取出但尚未发送、以及发送确认失败的窗口；一次 close 不能对
+刚放回队列的 active 项重复计数。等待发送结果本身不重复计数，耗尽后恢复原错误并停止交棒。
+用户显式关闭 / 停止仍取消。连续失败上限与人工介入周期硬上限止损，额度耗尽才把 Continue 交还用户。
 
 
 > **适用范围与增量原则**：Agent 能力归属（下节 1）与代码优先确定性（下节 2）按增量

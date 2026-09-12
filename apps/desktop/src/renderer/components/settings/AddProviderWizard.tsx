@@ -25,6 +25,7 @@ import { createCustomProvider, deleteCustomProvider, type RuntimeKeys } from '@/
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
+import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   isLocalRuntimeBetaProviderId,
@@ -1193,19 +1194,12 @@ export function AddProviderWizard({
             };
           });
         if (agentModels.length === 0) continue;
-        runtimes[agent] = {
-          catalogPresetId: preset.id,
-          baseUrl: presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
-          ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
-          ...(rt.requestPath ? { requestPath: rt.requestPath } : {}),
-          ...(agent === 'codex' && rt.supportsImageGeneration === true
-            ? { supportsImageGeneration: true }
-            : {}),
-          models: agentModels,
-          ...(rt.headers ? { headers: rt.headers } : {}),
-          ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
-          ...(rt.piCatalogProviderId ? { piCatalogProviderId: rt.piCatalogProviderId } : {}),
-        };
+        runtimes[agent] = presetConnectionRuntime(
+          preset,
+          agent,
+          agentModels,
+          presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
+        );
         if (preset.authMethod !== 'none') {
           const k = apiKey.trim();
           if (k) keys[agent] = k;

@@ -381,6 +381,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
     this.scheduler = scheduler;
   }
 
+  private async retireHeartbeat(schedule: Schedule, ctx: FireContext, status: string): Promise<FireResult> {
+    // Keep history; pausing is idempotent and must not abort this settling run.
+    await this.scheduler?.pause(schedule.id, { exemptRunId: ctx.runId });
+    return { sessionId: '', skipped: true, resultText: `Heartbeat stopped: target session ${status}` };
+  }
+
   /**
    * Keep the scheduler's authoritative run id in the host-owned session
    * context for the lifetime of the actual turn, including auto-resume
@@ -574,7 +580,17 @@ export class MakerScheduleRunner implements ScheduleRunner {
       throw new Error(errMsg);
     }
 
-    // 1.5 前置检查脚本(Pre-run Hook):放在一切查询 / worktree 创建 / session 创建
+    // Explicit retirement is checked before hooks: a broken external check must not
+    // keep an archived task's heartbeat alive. Persistent automations still rebind;
+    // bot routines retain their service-owned canonical-session lifecycle.
+    if (schedule.source !== 'bot' && schedule.targetSessionId && !schedule.persistentSession) {
+      const target = await getSessionRowSnapshot(schedule.targetSessionId);
+      if (target?.status === 'archived' || target?.status === 'deleted') {
+        return this.retireHeartbeat(schedule, ctx, target.status);
+      }
+    }
+
+    // 1.5 前置检查脚本(Pre-run Hook):放在 worktree 创建 / session 创建
     // 之前 —— 被拦截的轮次除了跑一个脚本什么都不做,零 token 零副作用。
     // exit 0 放行;exit 2 跳过(写留痕消息后返回 skipped,engine 落 'skipped' run);
     // 其它退出码 / 超时 / spawn 失败 fail-closed：持久化检查结果并阻止 agent。
@@ -749,6 +765,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // resumeSessionId / heartbeatWorkingDir / heartbeatModel 仍是 undefined,
           // 下方 workingDir 解析自然走 schedule.workingDir + schedule.useWorktree 分支
         } else {
+          if (schedule.source !== 'bot' && (row?.status === 'archived' || row?.status === 'deleted')) {
+            return this.retireHeartbeat(schedule, ctx, row.status);
+          }
           const errMsg = `target session not available (${row?.status ?? 'missing'})`;
           // exemptRunId=本轮自己:pause 会 abortInflightAndWait,本 run 已在
           // inflight 注册,不豁免会 abort 自己的 signal 并白等 5s 超时才返回。

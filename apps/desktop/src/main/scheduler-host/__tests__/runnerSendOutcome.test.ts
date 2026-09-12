@@ -419,7 +419,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
-  it('releases the heartbeat route lock before reporting an archived target', async () => {
+  it.each([false, true])('retires an archived target and releases an acquired lock (racing=%s)', async (racing) => {
     const order: string[] = [];
     const h = createSessionHarness(async () => ({ accepted: true }));
     const releaseAgentSwitchLock = vi.fn(() => {
@@ -435,16 +435,37 @@ describe('MakerScheduleRunner send outcome policy', () => {
       userSendAt: null,
       providerId: null,
     });
+    if (racing) mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active', userSendAt: null, providerId: null });
+    const pause = vi.fn(async () => { order.push('pause'); });
+    runner.attachScheduler({ pause } as never);
 
     await expect(
       runner.fire(
         baseSchedule({ targetSessionId: 'scheduler-session' }),
         createFireContext(),
       ),
-    ).rejects.toThrow(/target session not available/);
+    ).resolves.toMatchObject({ skipped: true });
 
-    expect(order).toEqual(['release', 'notify']);
-    expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(racing ? ['release', 'pause'] : ['pause']);
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(racing ? 1 : 0);
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
+    expect(notifier.notify).not.toHaveBeenCalled();
+    expect(h.send).not.toHaveBeenCalled();
+  });
+
+  it.each(['archived', 'deleted'])('keeps unavailable %s bot targets in the routine failure lifecycle', async (status) => {
+    const order: string[] = [];
+    const h = createSessionHarness(async () => ({ accepted: true }));
+    const acquirePendingAgentSwitch = vi.fn(async () => () => { order.push('release'); });
+    const { runner, notifier } = createRunnerHarness(h.session, { acquirePendingAgentSwitch });
+    notifier.notify.mockImplementation(async () => { order.push('notify'); });
+    mocks.getSessionRowSnapshot.mockResolvedValue({ status, userSendAt: null, providerId: null });
+    const pause = vi.fn(async () => { order.push('pause'); throw new Error('Schedule not found: schedule-1'); });
+    runner.attachScheduler({ pause } as never);
+    await expect(runner.fire(baseSchedule({ source: 'bot', manual: true, targetSessionId: 'scheduler-session' }),
+      createFireContext())).rejects.toThrow(`target session not available (${status})`);
+    expect(order).toEqual(['release', 'pause', 'notify']);
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
     expect(h.send).not.toHaveBeenCalled();
   });
 

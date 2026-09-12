@@ -1487,6 +1487,41 @@
     "providers": {
       "title": "모델 제공자",
       "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 세션별로 전환할 수 있습니다.",
+      "import": {
+        "title": "제공자 가져오기",
+        "destination": "가져올 대상",
+        "newConnection": "새 연결 만들기",
+        "keyOnly": "이번에 제공한 API Key만 변경합니다. 기존 모델, 경로 및 기타 설정은 유지됩니다.",
+        "modelsPending": "{{name}} 설정을 저장했지만 모델 목록을 가져오지 못했습니다. 제공자 설정에서 다시 시도하세요.",
+        "busyWarning": "이 변경에는 로컬 Codex 서비스 다시 로드가 필요하며 실행 중인 세션 {{count}}개가 중단될 수 있습니다. 계속할까요?",
+        "close": "제공자 가져오기 닫기",
+        "loadFailed": "이 제공자 가져오기 링크가 잘못되었거나 만료되었습니다.",
+        "confirmFailed": "제공자를 가져오지 못했습니다. 링크 또는 엔드포인트를 확인하고 다시 시도하세요.",
+        "oauthFailed": "제공자는 추가되었지만 인증이 완료되지 않았습니다. 인증을 다시 시도하세요.",
+        "done": "{{name}} 가져오기 완료",
+        "oauthDone": "{{name}} 추가 및 인증 완료",
+        "cancel": "취소",
+        "create": "제공자 가져오기",
+        "update": "제공자 업데이트",
+        "replaceKey": "API Key 교체",
+        "addAndAuthorize": "추가 및 인증",
+        "retryOAuth": "인증 다시 시도",
+        "harnesses": "Harness 구성",
+        "fetchAfterConfirm": "확인 후 모델 목록을 가져옵니다",
+        "modelCount": "모델 {{count}}개",
+        "keyIncluded": "API Key 포함(내용 숨김)",
+        "headers": "헤더: {{names}}(값 숨김)",
+        "oauthHosts": "인증: {{authorizeHost}} · Token 교환: {{tokenHost}}",
+        "browserAuthorizationInProgress": "방금 열린 브라우저 창에서 인증을 완료하세요.",
+        "replaceWarning": "이번에 제공한 API Key로 선택한 연결의 키를 교체합니다.",
+        "confirmNote": "확인하기 전에는 아무것도 저장하지 않으며 제공자 엔드포인트에 접근하지 않습니다.",
+        "authorizationPendingNote": "제공자가 추가되었지만 인증이 아직 완료되지 않았습니다. 여기서 다시 시도하거나 취소할 수 있습니다.",
+        "action": {
+          "create": "로컬에 새 제공자 {{name}}을(를) 만듭니다.",
+          "update": "기존 제공자 {{name}}을(를) 업데이트합니다.",
+          "replace-key": "{{name}}에 로컬로 저장된 API Key를 교체합니다."
+        }
+      },
       "order": {
         "hint": "드래그하여 순서 변경",
         "handle": "{{provider}} 순서를 변경합니다. 현재 {{total}}개 중 {{position}}번째입니다. 화살표 키로 이동할 수 있습니다.",
@@ -8568,7 +8603,9 @@
       "dismissTitle": "이 중단 알림 닫기"
     },
     "unreadFailedScheduleBanner": {
-      "text": "완료되지 않은 예약 실행이 있습니다. 실행 기록을 확인하세요.",
+      "text": "실패한 자동 실행이 있습니다.",
+      "precheck": "자동 확인이 일시적으로 차단되었습니다.",
+      "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {
@@ -10331,7 +10368,7 @@
         "enable": "사용",
         "tooltip": "작업이 트리거될 때 이 스크립트를 먼저 실행합니다. 종료 코드 0이면 이번 회차를 진행하고, 종료 코드 2면 이번 회차를 건너뜁니다(Agent를 시작하지 않고 토큰도 사용하지 않음). 스크립트 오류나 시간 초과 시에는 실행을 차단하고 실패 결과를 기록합니다. 스크립트는 작업 디렉터리에서 실행됩니다. Windows에서는 명시적 인터프리터(예: node check.mjs)를 사용하세요.",
         "infoAria": "사전 검사 규칙 보기",
-        "protocol": "스크립트 작성 규칙: 종료 코드 0 = 이번 회차 실행, 종료 코드 2 = 이번 회차 건너뜀(사용량 소모 없음). 그 외 종료 코드, 오류, 시간 초과는 실행을 차단합니다",
+        "protocol": "스크립트 작성 규칙: 종료 코드 0 = 이번 회차 실행, 종료 코드 2 = 이번 회차 건너뜀(사용량 소모 없음). 그 외 종료 코드, 오류, 시간 초과는 실행을 차단합니다. 확인이 완전히 성공한 경우(처리할 내용이 없어 건너뛰는 경우 포함), exit 0/2 전에 stdout의 별도 줄에 CINDY_PRECHECK_OK를 출력하세요. 이전 사전 확인 경고만 해제하며 실행 실패는 해제하지 않습니다. 요청 제한으로 대기 중이거나 확인이 불완전한 경우에는 출력하지 마세요.",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "테스트",
         "testing": "테스트 중…",

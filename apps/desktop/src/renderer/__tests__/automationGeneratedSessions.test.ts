@@ -537,8 +537,8 @@ describe('automation-generated sessions', () => {
     expect(sessionViewSource).toContain(
       'useReadFailedScheduleRuns(unreadFailedScheduleRunIds, viewVisible && historyLoaded, remoteDeviceId ?? undefined)',
     );
-    expect(bannerSource).toContain("t('chat.unreadFailedScheduleBanner.text')");
-    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有定时任务未完成，可查看运行记录。');
+    expect(bannerSource).toContain('scheduleFailureMessageKey(latestFailedRun)');
+    expect(zh.chat.unreadFailedScheduleBanner.text).toBe('此前有自动运行失败。');
     expect(sessionViewSource).toContain('latestFailedRun={scheduleSessionInfo.latestFailedRun}');
   });
 
