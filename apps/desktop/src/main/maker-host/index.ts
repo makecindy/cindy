@@ -1649,7 +1649,7 @@ export function getMaker(): Maker {
         }
         const browserCompanion = isControlPlane || isReview
           ? null
-          : await prepareCodexBrowserCompanion({ codexHome: effectiveCodexHome });
+          : await prepareCodexBrowserCompanion({ codexHome: ctx.runtimeCodexHome ?? effectiveCodexHome });
         const browserCompanionSpawnConfig =
           resolveCodexBrowserCompanionSpawnConfig(browserCompanion);
         mcpExtraArgs.push(...browserCompanionSpawnConfig.extraArgs);

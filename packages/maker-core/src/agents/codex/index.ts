@@ -2800,6 +2800,7 @@ export class CodexAgent extends BaseAgent {
               remoteHostId,
               ...(providerId ? { providerId } : {}),
               ...(key.startsWith('local-account:') ? { codexHome: env.CODEX_HOME } : {}),
+              ...(!remoteHostId && historyHome ? { runtimeCodexHome: historyHome } : {}),
               ...(key.startsWith('local-account:') ? { accountHostKey: `${key}:${generation}` } : {}),
               credentialMode: spawnCredentialMode,
               ...(spawnCredentialMode !== credentialMode

@@ -386,6 +386,7 @@ describe('CodexAgent spawn configuration', () => {
       expect(createdStdioOptions[0].env).toMatchObject({ CODEX_HOME: historyHome, XDT_CODEX_API_KEY: 'selected-gateway' });
       expect(createdStdioOptions[0].extraArgs).toContain(`sqlite_home=${JSON.stringify(sqliteHome)}`);
       expect(createdStdioOptions[0].extraArgs).toContain('cli_auth_credentials_store="ephemeral"');
+      expect(prepare.mock.calls[0][1]).toMatchObject({ runtimeCodexHome: historyHome });
       if (mode === 'oauth-bearer') {
         expect(prepare.mock.calls[0][1]).toMatchObject({ codexHome: credentialHome, providerId: 'account-b' });
         expect(readTokens).toHaveBeenCalledTimes(1);

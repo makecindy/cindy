@@ -987,6 +987,8 @@ export interface AgentDeps {
     ctx: {
       providerId?: string;
       codexHome?: string;
+      /** Actual native config/history root; credential/catalog preparation keeps codexHome above. */
+      runtimeCodexHome?: string;
       accountHostKey?: string;
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;

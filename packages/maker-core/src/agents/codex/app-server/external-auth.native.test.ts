@@ -7,7 +7,7 @@ import { createServer, type Server } from 'node:http';
 import { afterEach, describe, expect, it } from 'vitest';
 import { AppServerHost } from './host.js';
 import { createStdioTransport } from './stdioTransport.js';
-import { useCodexHistoryHome } from './external-auth.js';
+import { useCodexHistoryHome, type CodexExternalAuth } from './external-auth.js';
 import type { Logger } from '../../../interfaces/logger.js';
 
 const binaryPath = process.env.CINDY_CODEX_TEST_BINARY;
@@ -25,7 +25,7 @@ afterEach(async () => {
 });
 
 function fakeTokens(account: string, revision = 'initial') {
-  const payload = Buffer.from(JSON.stringify({ email: `${account}@example.invalid`, revision,
+  const payload = Buffer.from(JSON.stringify({ email: `${account}@example.invalid`, revision, exp: 4102444800,
     'https://api.openai.com/auth': { chatgpt_account_id: account, chatgpt_plan_type: 'pro' } })).toString('base64url');
   return { accessToken: `test.${payload}.not-a-signature`, chatgptAccountId: account, chatgptPlanType: 'pro' };
 }
@@ -37,7 +37,17 @@ async function fixture(archivedParent = false, testRefresh = false) {
   const credentialHome = path.join(root, 'account-b');
   await fs.mkdir(credentialHome);
   const wireRequests: Array<{ authorization: string | undefined; account: string | string[] | undefined }> = [];
-  const server = createServer((request, response) => {
+  const refreshRequests: unknown[] = [];
+  const server = createServer(async (request, response) => {
+    if (request.method === 'POST' && request.url === '/oauth/token') {
+      let body = '';
+      for await (const chunk of request) body += chunk;
+      refreshRequests.push(JSON.parse(body));
+      const token = fakeTokens('account-b', 'refreshed').accessToken;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ id_token: token, access_token: token, refresh_token: 'fixture-refresh-b2' }));
+      return;
+    }
     if (request.method === 'POST' && request.url?.endsWith('/responses')) {
       wireRequests.push({ authorization: request.headers.authorization, account: request.headers['chatgpt-account-id'] });
       request.resume();
@@ -85,17 +95,18 @@ async function fixture(archivedParent = false, testRefresh = false) {
   const oldAuth = 'history owner credential sentinel -- never read or replace';
   await fs.writeFile(path.join(historyHome, 'auth.json'), oldAuth);
   const authStat = await fs.stat(path.join(historyHome, 'auth.json'));
-  function host(home: string, account?: string) {
+  function host(home: string, account?: string, managed = false, externalAuth?: CodexExternalAuth) {
     const env = useCodexHistoryHome({ PATH: process.env.PATH ?? '',
       ...(process.env.SystemRoot ? { SystemRoot: process.env.SystemRoot } : {}),
-      HOME: root, USERPROFILE: root, TMPDIR: root }, home);
+      HOME: root, USERPROFILE: root, TMPDIR: root,
+      CODEX_REFRESH_TOKEN_URL_OVERRIDE: `${baseUrl}/oauth/token` }, home);
     const instance = new AppServerHost({
       logger, clientInfo: { name: 'cindy-contract-test', version: '0.0.0' },
-      ...(account ? { externalAuth: { readTokens: async (refresh: boolean) => fakeTokens(account, refresh ? 'refreshed' : 'initial') } } : {}),
+      ...(!managed && account ? { externalAuth: externalAuth ?? { readTokens: async (refresh: boolean) => fakeTokens(account, refresh ? 'refreshed' : 'initial') } } : {}),
       createTransport: () => createStdioTransport({ binaryPath: binaryPath!, cwd: root, env,
         extraArgs: ['--disable', 'plugins', '--disable', 'remote_plugin',
           '-c', `sqlite_home=${JSON.stringify(historyHome)}`,
-          '-c', 'cli_auth_credentials_store="ephemeral"', '-c', 'model_provider="probe"',
+          '-c', `cli_auth_credentials_store="${managed ? 'file' : 'ephemeral'}"`, '-c', 'model_provider="probe"',
           '-c', 'model_providers.probe.name="Probe"', '-c', `model_providers.probe.base_url=${JSON.stringify(baseUrl)}`,
           '-c', 'model_providers.probe.wire_api="responses"', '-c', `model_providers.probe.requires_openai_auth=${Boolean(account)}`,
           '-c', `chatgpt_base_url=${JSON.stringify(baseUrl)}`],
@@ -110,13 +121,13 @@ async function fixture(archivedParent = false, testRefresh = false) {
       approvalPolicy: 'never', sandbox: 'read-only',
     }, { timeoutMs: 15_000 });
   }
-  async function assertOriginals() {
+  async function assertOriginals(managed = false) {
     expect(await fs.readFile(parent.file, 'utf8')).toBe(parent.text);
     expect(await fs.readFile(path.join(historyHome, 'auth.json'), 'utf8')).toBe(oldAuth);
     expect((await fs.stat(path.join(historyHome, 'auth.json'))).mtimeMs).toBe(authStat.mtimeMs);
-    await expect(fs.stat(path.join(credentialHome, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+    if (!managed) await expect(fs.stat(path.join(credentialHome, 'auth.json'))).rejects.toMatchObject({ code: 'ENOENT' });
   }
-  return { root, historyHome, credentialHome, parent, child, rollout, host, resume, assertOriginals, wireRequests };
+  return { root, historyHome, credentialHome, parent, child, rollout, host, resume, assertOriginals, wireRequests, refreshRequests };
 }
 
 describe.skipIf(!binaryPath)('real Codex history/account isolation contract', () => {
@@ -173,9 +184,20 @@ describe.skipIf(!binaryPath)('real Codex history/account isolation contract', ()
     await f.assertOriginals();
   }, 30_000);
 
-  it('sends only the selected account on the wire and refreshes it after a native 401', async () => {
+  it('refreshes managed credentials on disk after a native 401 even before natural expiry', async () => {
     const f = await fixture(false, true);
-    const host = f.host(f.historyHome, 'account-b');
+    const authPath = path.join(f.credentialHome, 'auth.json');
+    const initial = fakeTokens('account-b').accessToken;
+    // A freshly written managed login must still force-refresh after a rejected request.
+    await fs.writeFile(authPath, JSON.stringify({ auth_mode: 'chatgpt', OPENAI_API_KEY: null,
+      tokens: { id_token: initial, access_token: initial, refresh_token: 'fixture-refresh-b', account_id: 'account-b' },
+      last_refresh: new Date().toISOString() }));
+    const accountHost = f.host(f.credentialHome, 'account-b', true);
+    const host = f.host(f.historyHome, 'account-b', false, { readTokens: async refresh => {
+      if (refresh) await accountHost.request('account/read', { refreshToken: true }, { timeoutMs: 8_000 });
+      const credentials = JSON.parse(await fs.readFile(authPath, 'utf8'));
+      return { accessToken: credentials.tokens.access_token, chatgptAccountId: credentials.tokens.account_id };
+    } });
     await f.resume(host);
     let completed!: (value: unknown) => void;
     const completion = new Promise(resolve => { completed = resolve; });
@@ -187,7 +209,11 @@ describe.skipIf(!binaryPath)('real Codex history/account isolation contract', ()
         { authorization: `Bearer ${fakeTokens('account-b').accessToken}`, account: 'account-b' },
         { authorization: `Bearer ${fakeTokens('account-b', 'refreshed').accessToken}`, account: 'account-b' },
       ]);
-      await f.assertOriginals();
+      expect(f.refreshRequests).toEqual([expect.objectContaining({ grant_type: 'refresh_token', refresh_token: 'fixture-refresh-b' })]);
+      expect(JSON.parse(await fs.readFile(authPath, 'utf8')).tokens).toMatchObject({
+        access_token: fakeTokens('account-b', 'refreshed').accessToken, refresh_token: 'fixture-refresh-b2', account_id: 'account-b',
+      });
+      await f.assertOriginals(true);
     } finally {
       await subscription.release();
     }
