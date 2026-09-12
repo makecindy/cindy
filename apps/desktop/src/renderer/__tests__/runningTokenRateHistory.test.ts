@@ -56,16 +56,18 @@ describe('running speed history', () => {
       outputTokens: 100,
       generationDurationMs: 1000,
     });
-    expect(recordRunningTokenRate(first, { ...input, startedAt: 2 }).samples).toEqual([]);
+    const newTurn = recordRunningTokenRate(first, { ...input, startedAt: 2 });
+    expect(newTurn.samples).toEqual(first.samples);
+    expect(newTurn.latestRate).toBeNull();
     expect(
       recordRunningTokenRate(first, { ...input, outputTokens: 50, generationDurationMs: 500 })
         .samples,
-    ).toEqual([]);
+    ).toEqual(first.samples);
     expect(
       recordRunningTokenRate(first, { ...input, generationReliable: false }).baseline,
     ).toBeNull();
     expect(recordRunningTokenRate(first, { ...input, generationDurationMs: NaN }).samples).toEqual(
-      [],
+      first.samples,
     );
   });
 
@@ -89,7 +91,7 @@ describe('running speed history', () => {
     expect(next.samples.at(-1)?.rate).toBe(50);
   });
 
-  it('bounds samples and retains the observed interval peak', () => {
+  it('bounds samples and excludes evicted samples from the observed peak', () => {
     let history = recordRunningTokenRate(begin(), {
       ...input,
       outputTokens: 1000,
@@ -102,12 +104,13 @@ describe('running speed history', () => {
         generationDurationMs: n * 1000,
       });
     }
-    expect(history.samples).toHaveLength(120);
-    expect(history.peak).toBe(1000);
+    expect(history.samples).toHaveLength(60);
+    expect(history.peak).toBe(1);
+    expect(history.samples[0].durationMs).toBe(141000);
   });
 });
 
-it('records final usage without losing the completed turn identity, then resets on a new turn', () => {
+it('records final usage and appends the next turn on a continuous generation timeline', () => {
   const active = recordRunningTokenRate(begin(), {
     ...input,
     outputTokens: 100,
@@ -122,5 +125,44 @@ it('records final usage without losing the completed turn identity, then resets 
   expect(terminal.startedAt).toBe(1);
   expect(terminal.samples.map((sample) => sample.rate)).toEqual([100, 50]);
   expect(terminal.peak).toBe(100);
-  expect(recordRunningTokenRate(terminal, { ...input, startedAt: 2 }).samples).toEqual([]);
+  const newTurn = recordRunningTokenRate(terminal, { ...input, startedAt: 2 });
+  expect(newTurn.samples).toEqual(terminal.samples);
+  expect(newTurn.latestRate).toBeNull();
+  const next = recordRunningTokenRate(newTurn, {
+    ...input,
+    startedAt: 2,
+    outputTokens: 20,
+    generationDurationMs: 500,
+  });
+  expect(next.samples.map((sample) => sample.rate)).toEqual([100, 50, 40]);
+  expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000, 2000, 2500]);
+  expect(next.latestRate).toBe(40);
+});
+
+it('retains the chart while hidden or unreliable, then measures only new paired reports', () => {
+  const active = recordRunningTokenRate(begin(), {
+    ...input,
+    outputTokens: 100,
+    generationDurationMs: 1000,
+  });
+  const hidden = recordRunningTokenRate(active, {
+    ...input,
+    startedAt: null,
+    generationReliable: false,
+  });
+  expect(hidden.samples).toEqual(active.samples);
+  expect(hidden.latestRate).toBeNull();
+  const resumed = recordRunningTokenRate(hidden, {
+    ...input,
+    outputTokens: 500,
+    generationDurationMs: 10000,
+  });
+  expect(resumed.samples).toEqual(active.samples);
+  const next = recordRunningTokenRate(resumed, {
+    ...input,
+    outputTokens: 550,
+    generationDurationMs: 11000,
+  });
+  expect(next.samples.map((sample) => sample.rate)).toEqual([100, 50]);
+  expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000, 2000]);
 });

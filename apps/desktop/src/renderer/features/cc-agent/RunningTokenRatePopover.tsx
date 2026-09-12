@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Activity } from 'lucide-react';
+import { Activity, X } from 'lucide-react';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Tooltip } from '@/components/ui/tooltip';
 import { formatRecentOutputTokenRate, formatRunningTokenCount } from './lib/runningTokenUsage';
@@ -30,25 +30,30 @@ export function useRunningTokenRateHistory(input: {
   }, [startedAt, outputTokens, generationDurationMs, generationReliable]);
   return startedAt === null || history.startedAt === startedAt
     ? history
-    : emptyRateHistory(startedAt);
+    : { ...history, startedAt, baseline: null, latestRate: null };
 }
 
 export function RunningTokenRatePopover({
+  elapsedText,
   rate,
   rateText,
   averageRate,
   outputTokens,
   history,
+  onPinnedChange,
 }: {
+  elapsedText: string;
   rate: string | null;
   rateText: string;
   averageRate: string | null;
   outputTokens: number;
   history: RateHistory;
+  onPinnedChange?: (pinned: boolean) => void;
 }) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<'idle' | 'hover' | 'pinned' | 'dismissed'>('idle');
   const open = mode === 'pinned';
+  useEffect(() => onPinnedChange?.(open), [open, onPinnedChange]);
   const samples = history.samples;
   const firstTime = samples[0]?.durationMs ?? 0;
   const span = (samples.at(-1)?.durationMs ?? 0) - firstTime;
@@ -62,7 +67,7 @@ export function RunningTokenRatePopover({
   const card = (
     <div
       aria-description={t('chat.runningStatus.tokenRateDescription')}
-      className="grid grid-cols-[max-content_128px_minmax(0,1fr)] gap-x-4 gap-y-2 max-[460px]:grid-cols-[minmax(0,1fr)_128px]"
+      className="grid grid-cols-[minmax(0,1fr)_128px] gap-x-3 gap-y-3"
     >
       <div className="contents">
         <div className="col-start-1 row-start-1 min-w-0 self-center">
@@ -96,7 +101,7 @@ export function RunningTokenRatePopover({
           )}
           {last && <circle cx={last.x} cy={last.y} r="2.5" fill="currentColor" />}
         </svg>
-        <dl className="col-start-3 row-start-1 self-center space-y-1 text-12 tabular-nums max-[460px]:col-span-2 max-[460px]:col-start-1 max-[460px]:row-start-2 max-[460px]:justify-self-center">
+        <dl className="col-span-2 col-start-1 row-start-2 grid grid-cols-3 gap-2 text-12 tabular-nums [&>div]:flex-col [&>div]:items-start [&>div]:gap-1">
           <div className="flex items-center gap-2">
             <dt className="text-[var(--text-secondary)]">{t('chat.runningStatus.averageRate')}</dt>
             <dd className="font-medium">
@@ -126,9 +131,14 @@ export function RunningTokenRatePopover({
     </div>
   );
   const surface =
-    'w-[440px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-menu)]';
+    'w-[320px] max-w-[calc(100vw-32px)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-[var(--text-primary)] shadow-[var(--shadow-menu)]';
   return (
-    <Popover open={open} onOpenChange={(next) => setMode(next ? 'pinned' : 'dismissed')}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        if (next) setMode('pinned');
+      }}
+    >
       <Tooltip.Provider>
         <Tooltip.Root
           open={mode === 'hover'}
@@ -146,10 +156,12 @@ export function RunningTokenRatePopover({
                   setMode((current) => (current === 'dismissed' ? 'idle' : current))
                 }
                 onBlur={() => setMode((current) => (current === 'dismissed' ? 'idle' : current))}
-                className="inline-flex min-h-6 min-w-6 items-center justify-center rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
-                aria-label={`${t('chat.runningStatus.currentRate')}: ${rateText}`}
+                className="inline-flex min-h-6 min-w-6 items-center justify-center gap-[6px] whitespace-nowrap rounded-full px-1 text-13 font-medium tabular-nums text-[var(--status-bar-meta)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
+                aria-label={`${elapsedText} · ${t('chat.runningStatus.currentRate')}: ${rateText}`}
               >
-                {rateText}
+                <span>{elapsedText}</span>
+                <span aria-hidden="true">&middot;</span>
+                <span>{rateText}</span>
               </button>
             </Tooltip.Trigger>
           </PopoverTrigger>
@@ -164,7 +176,22 @@ export function RunningTokenRatePopover({
         sideOffset={8}
         className={surface}
         aria-label={t('chat.runningStatus.rateHistory')}
+        onInteractOutside={(event) => event.preventDefault()}
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+          setMode('dismissed');
+        }}
       >
+        <div className="mb-1 flex justify-end">
+          <button
+            type="button"
+            aria-label={t('titleBar.close')}
+            onClick={() => setMode('dismissed')}
+            className="inline-flex size-6 items-center justify-center rounded-full text-[var(--text-secondary)] hover:bg-[var(--button-secondary-hover)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--text-secondary)]"
+          >
+            <X size={14} aria-hidden="true" />
+          </button>
+        </div>
         {card}
       </PopoverContent>
     </Popover>

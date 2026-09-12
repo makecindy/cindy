@@ -5610,6 +5610,7 @@ function RunningStatusBar({
   // component returns null below so the composer does not retain an empty line.
   const [showContent, setShowContent] = useState(visible);
   const [fading, setFading] = useState(false);
+  const [ratePanelPinned, setRatePanelPinned] = useState(false);
 
   useEffect(() => {
     if (visible) {
@@ -5737,8 +5738,8 @@ function RunningStatusBar({
       !backgroundTasksRunning &&
       !workflowWaiting,
   });
-  const latestRate = rateHistory.samples.at(-1)?.rate;
-  const latestRateText = latestRate !== undefined ? formatRecentOutputTokenRate(latestRate) : null;
+  const latestRate = rateHistory.latestRate;
+  const latestRateText = latestRate !== null ? formatRecentOutputTokenRate(latestRate) : null;
   const rateText =
     usageMeta.kind === 'rate'
       ? latestRateText !== null
@@ -5755,9 +5756,17 @@ function RunningStatusBar({
     transition: isHidden ? 'none' : `opacity ${STATUS_BAR_FADE_MS}ms ease-out`,
     pointerEvents: isHidden ? 'none' : 'auto',
   };
+  const showRatePanel =
+    ratePanelPinned ||
+    (!workflowWaiting &&
+      !sideTaskRunning &&
+      !backgroundTasksRunning &&
+      Boolean(rateText) &&
+      usageMeta.kind === 'rate');
+  // A pinned panel keeps its anchor mounted through idle and subsequent turns.
   // 空闲后真正收起,不再给输入框上方留下固定空行。overlay 的 ResizeObserver 会在
   // DOM 尺寸变化后补齐 MessageStream 的 bottomPadding,因此不靠硬编码高度制造跳变。
-  if (isHidden && !rightLeadingSlot) return null;
+  if (isHidden && !rightLeadingSlot && !ratePanelPinned) return null;
 
   // 两段式布局:左(运行状态) / 右(elapsed·tokens)。
   // - 左段 min-w-0(可收缩):status 并非短枚举 —— turn-start 文案带用户名(可含中文长句)、
@@ -5816,13 +5825,24 @@ function RunningStatusBar({
           走 LLM, 显示残留 token 计数会误导用户以为也耗了 token。 */}
       <div className="flex min-w-0 items-center justify-self-end gap-2">
         {rightLeadingSlot}
-        {!isHidden && (
+        {(!isHidden || ratePanelPinned) && (
           <div
             data-running-status-meta="true"
             className="flex min-w-0 items-center gap-[6px]"
-            style={fadeStyle}
-            aria-hidden={isHidden}
+            style={ratePanelPinned ? undefined : fadeStyle}
+            aria-hidden={isHidden && !ratePanelPinned}
           >
+            {showRatePanel && (
+              <RunningTokenRatePopover
+                elapsedText={elapsedText}
+                rate={latestRateText}
+                rateText={rateText ?? t('chat.runningStatus.waitingSample')}
+                averageRate={usageMeta.kind === 'rate' ? usageMeta.rate : null}
+                outputTokens={outputTokens}
+                history={rateHistory}
+                onPinnedChange={setRatePanelPinned}
+              />
+            )}
             {backgroundTasksRunning ? (
               // 后台子任务模式:elapsed 是上一轮 turn 的残留计时、tokens 是残留计数,
               // 都不成立 —— 整段换成「全部停止」入口(原横幅唯一操作,横幅已删)。
@@ -5846,7 +5866,7 @@ function RunningStatusBar({
                   ? t('chat.backgroundActivity.stopping')
                   : t('chat.backgroundActivity.stopAll')}
               </button>
-            ) : workflowWaiting ? null : (
+            ) : workflowWaiting || showRatePanel ? null : (
               <>
                 <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                   {elapsedText}
@@ -5856,23 +5876,10 @@ function RunningStatusBar({
                     <span className="text-13 font-medium text-[var(--status-bar-meta)]">
                       &middot;
                     </span>
-                    {rateText && usageMeta.kind === 'rate' ? (
-                      <RunningTokenRatePopover
-                        key={rateHistory.startedAt}
-                        rate={latestRateText}
-                        rateText={rateText}
-                        averageRate={usageMeta.rate}
-                        outputTokens={outputTokens}
-                        history={rateHistory}
-                      />
-                    ) : (
-                      <>
-                        <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
-                        <span className="text-13 font-medium text-[var(--status-bar-meta)]">
-                          {tokenCountText}
-                        </span>
-                      </>
-                    )}
+                    <ArrowDown size={13} className="shrink-0 text-[var(--status-bar-meta)]" />
+                    <span className="text-13 font-medium text-[var(--status-bar-meta)]">
+                      {tokenCountText}
+                    </span>
                   </>
                 )}
               </>

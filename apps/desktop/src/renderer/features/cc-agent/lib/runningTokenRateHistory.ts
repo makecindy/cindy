@@ -1,4 +1,5 @@
 export interface RateSample {
+  /** Cumulative measured generation time across turns, excluding unmeasured gaps. */
   durationMs: number;
   outputTokens: number;
   rate: number;
@@ -9,11 +10,14 @@ export interface RateHistory {
   baseline: { durationMs: number; outputTokens: number } | null;
   samples: RateSample[];
   peak: number;
+  latestRate: number | null;
 }
 
 export function emptyRateHistory(startedAt: number | null): RateHistory {
-  return { startedAt, baseline: null, samples: [], peak: 0 };
+  return { startedAt, baseline: null, samples: [], peak: 0, latestRate: null };
 }
+
+const MAX_RATE_SAMPLES = 60;
 
 /** Real usage reports are sparse: this is the latest measured interval, not an instantaneous rate. */
 export function recordRunningTokenRate(
@@ -34,7 +38,8 @@ export function recordRunningTokenRate(
     history.startedAt !== startedAt ||
     (previous !== null &&
       (generationDurationMs < previous.durationMs || outputTokens < previous.outputTokens));
-  const current = reset ? emptyRateHistory(startedAt) : history;
+  // Reset only the measurement baseline; completed intervals remain in the chart.
+  const current = reset ? { ...history, startedAt, baseline: null, latestRate: null } : history;
   if (
     !generationReliable ||
     startedAt === null ||
@@ -43,7 +48,9 @@ export function recordRunningTokenRate(
     outputTokens < 0 ||
     generationDurationMs < 0
   ) {
-    return current.baseline || current.samples.length ? emptyRateHistory(startedAt) : current;
+    return current.baseline || current.latestRate !== null
+      ? { ...current, baseline: null, latestRate: null }
+      : current;
   }
   const baseline = { durationMs: generationDurationMs, outputTokens };
   if (!current.baseline) {
@@ -59,10 +66,19 @@ export function recordRunningTokenRate(
   }
   const rate = (tokenDelta * 1000) / durationDelta;
   if (!Number.isFinite(rate)) return { ...current, baseline };
+  const samples = [
+    ...current.samples.slice(-(MAX_RATE_SAMPLES - 1)),
+    {
+      durationMs: (current.samples.at(-1)?.durationMs ?? 0) + durationDelta,
+      outputTokens,
+      rate,
+    },
+  ];
   return {
     startedAt,
     baseline,
-    samples: [...current.samples.slice(-119), { ...baseline, rate }],
-    peak: Math.max(current.peak, rate),
+    samples,
+    peak: Math.max(...samples.map((sample) => sample.rate)),
+    latestRate: rate,
   };
 }
