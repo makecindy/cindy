@@ -4,8 +4,8 @@ import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
-import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, discardOutboxUploads } from '@/session/mobileDurableOutbox';
-import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles } from '@/session/durableOutboxFiles';
+import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, cleanupOutboxResources } from '@/session/mobileDurableOutbox';
+import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
 import { observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
@@ -5429,8 +5429,7 @@ export default function SessionScreen() {
     const remove = async () => {
       if (!record.prepared) {
         await mobileDurableOutbox.remove(record);
-        await removeOutboxFiles(record);
-        discardOutboxUploads(record, owner, () => auth.getAccessToken());
+        await cleanupOutboxResources(record, owner, () => auth.getAccessToken(), true);
       } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
     };
     void remove().catch((err) => {
@@ -5911,6 +5910,7 @@ export default function SessionScreen() {
           };
           for (let slot = 0; slot < readyAttachments.length; slot++) {
             const source = getUploadedSource(readyAttachments[slot].id);
+            if (!source && !outboxAttachmentNeedsLocalBytes(readyAttachments[slot])) continue;
             if (!source) throw new Error(t('session.screen.attachmentsNotCarriedBack', { count: 1 }));
             record.uploads.push(await retainOutboxFile(record, slot, source));
           }

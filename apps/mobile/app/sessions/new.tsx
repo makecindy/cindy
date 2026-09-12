@@ -1,5 +1,5 @@
 import { mobileDurableOutbox, holdDurableOutboxCreation, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
-import { retainOutboxFile, durableOutboxUploadUri, removeRetainedOutboxFiles } from '@/session/durableOutboxFiles';
+import { retainOutboxFile, durableOutboxUploadUri, removeRetainedOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
 import { buildOutboxItem, createOutboxClientId } from '@/session/sessionOutbox';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
@@ -4433,7 +4433,7 @@ export default function NewRemoteSessionScreen() {
             else if (recovering && oldUpload) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, {
               ...oldUpload, uri: durableOutboxUploadUri(recovering, oldUpload),
             }));
-            else throw new Error(t('session.screen.attachmentsNotCarriedBack', { count: 1 }));
+            else if (outboxAttachmentNeedsLocalBytes(attachment)) throw new Error(t('session.screen.attachmentsNotCarriedBack', { count: 1 }));
           }
           if (!isCurrentOwner() || !ensureDeviceAlive()) return;
           if (recovering) {

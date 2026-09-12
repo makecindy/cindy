@@ -24,10 +24,11 @@ import {
   mobileDurableOutbox,
   isDurableOutboxCreationHeld,
   discardOutboxUploads,
+  cleanupOutboxResources,
 } from "./mobileDurableOutbox";
 import {
   durableOutboxUploadUri,
-  removeOutboxFiles,
+  initializeComposerAttachmentStage,
 } from "./durableOutboxFiles";
 import {
   uploadMobileAttachmentFromFile,
@@ -57,6 +58,11 @@ export function MobileOutboxBridge() {
     typeof createDurableOutboxDelivery
   > | null>(null);
   useEffect(() => {
+    try {
+      initializeComposerAttachmentStage();
+    } catch {
+      // A later retain retries before writing; stage cleanup must not block existing outbox delivery.
+    }
     let active = true;
     const isCurrent = () =>
       active &&
@@ -286,10 +292,7 @@ export function MobileOutboxBridge() {
           });
         return found;
       },
-      cleanup: async (record, cancelled) => {
-        await removeOutboxFiles(record);
-        if (cancelled) discardOutboxUploads(record, owner, () => latest.current.auth.getAccessToken());
-      },
+      cleanup: (record, cancelled) => cleanupOutboxResources(record, owner, () => latest.current.auth.getAccessToken(), cancelled),
       discardUploads: (record, attachments) => discardOutboxUploads(record, owner, () => latest.current.auth.getAccessToken(), attachments),
       mediaFailed: (error) =>
         formatRemoteError(error).includes("DEVICE_LINK_MEDIA_TRANSFER_FAILED"),

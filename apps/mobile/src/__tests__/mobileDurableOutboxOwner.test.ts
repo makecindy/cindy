@@ -2,16 +2,16 @@ import { beforeEach, expect, it, vi } from 'vitest';
 import { getMobileAuthOwner, setMobileAuthOwner } from '../auth/authOwnerGeneration';
 import type { DurableOutboxRecord } from '../session/durableOutbox';
 
-const mocks = vi.hoisted(() => ({ discard: vi.fn(), data: new Map<string, string>() }));
+const mocks = vi.hoisted(() => ({ discard: vi.fn(), removeFiles: vi.fn(async () => {}), data: new Map<string, string>() }));
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
   getAllKeys: async () => [...mocks.data.keys()],
   getItem: async (key: string) => mocks.data.get(key) ?? null,
   setItem: async (key: string, value: string) => { mocks.data.set(key, value); },
   removeItem: async (key: string) => { mocks.data.delete(key); },
 } }));
-vi.mock('../session/durableOutboxFiles', () => ({ durableOutboxUploadUri: vi.fn() }));
+vi.mock('../session/durableOutboxFiles', () => ({ durableOutboxUploadUri: vi.fn(), removeOutboxFiles: mocks.removeFiles }));
 vi.mock('../session/mobileAttachmentUpload', () => ({ discardMobileUploadedAttachment: mocks.discard }));
-import { discardOutboxUploads, getCurrentMobileOutboxRecords, mobileDurableOutbox } from '../session/mobileDurableOutbox';
+import { cleanupOutboxResources, discardOutboxUploads, getCurrentMobileOutboxRecords, mobileDurableOutbox } from '../session/mobileDurableOutbox';
 
 function record(): DurableOutboxRecord {
   return { version: 1, accountId: getMobileAuthOwner().accountKey, deviceId: 'mac', createdAt: 1,
@@ -27,8 +27,22 @@ beforeEach(async () => {
   setMobileAuthOwner(null);
   mocks.data.clear();
   mocks.discard.mockReset();
+  mocks.removeFiles.mockReset();
   setMobileAuthOwner('alice', 'global');
   await mobileDurableOutbox.activate(getMobileAuthOwner().accountKey);
+});
+
+it('still disposes confirmed-cancelled uploads when local deletion rejects', async () => {
+  mocks.removeFiles.mockRejectedValueOnce(new Error('filesystem unavailable'));
+  await expect(cleanupOutboxResources(record(), getMobileAuthOwner(), async () => 'token', true)).rejects.toThrow('filesystem unavailable');
+  expect(mocks.discard).toHaveBeenCalledOnce();
+  expect(await mocks.discard.mock.calls[0]![1].getToken()).toBe('token');
+});
+
+it('never disposes host-owned uploads even when local deletion rejects', async () => {
+  mocks.removeFiles.mockRejectedValueOnce(new Error('filesystem unavailable'));
+  await expect(cleanupOutboxResources(record(), getMobileAuthOwner(), async () => 'token', false)).rejects.toThrow('filesystem unavailable');
+  expect(mocks.discard).not.toHaveBeenCalled();
 });
 
 it('hides the old realm ledger synchronously before the bridge activates the new owner', async () => {

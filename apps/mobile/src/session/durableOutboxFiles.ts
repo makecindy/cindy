@@ -1,6 +1,13 @@
 import * as FileSystem from "expo-file-system/legacy";
+import { Directory } from "expo-file-system";
 import type { DurableOutboxRecord, DurableUpload } from "./durableOutbox";
 import type { MobileLocalAttachmentUploadCandidate } from "./mobileLocalAttachmentUpload";
+import { isAttachmentOssRef } from './attachmentOssRef';
+
+/** Desktop path references already have their source on the controlled device. */
+export function outboxAttachmentNeedsLocalBytes(attachment: { path: string }): boolean {
+  return isAttachmentOssRef(attachment.path);
+}
 
 function segment(value: string): string {
   return encodeURIComponent(value).replace(/\./g, "%2E");
@@ -43,9 +50,21 @@ export async function retainOutboxFile(
   return { ...upload, size: await copyRetainedBytes(source.uri, target, source.size) };
 }
 
+/** Keep the once marker across Fast Refresh: mounted composers can still own stage files. */
+const runtime = globalThis as typeof globalThis & { __cindyOutboxStageInitialized?: boolean };
+export function initializeComposerAttachmentStage(): void {
+  if (runtime.__cindyOutboxStageInitialized) return;
+  if (!FileSystem.documentDirectory) throw new Error('OUTBOX_STORAGE_UNAVAILABLE');
+  const directory = new Directory(`${FileSystem.documentDirectory}outbox-attachment-stage/`);
+  // No await: old-runtime cleanup must finish before any current composer may write.
+  if (directory.exists) directory.delete();
+  runtime.__cindyOutboxStageInitialized = true;
+}
+
 /** Composer-owned PUT bytes must survive OS cache eviction until outbox handoff or disposal. */
 export async function retainComposerAttachmentFile(owner: string, attachmentId: string, uri: string, size: number): Promise<string> {
   if (!FileSystem.documentDirectory) throw new Error('OUTBOX_STORAGE_UNAVAILABLE');
+  initializeComposerAttachmentStage();
   const directory = `${FileSystem.documentDirectory}outbox-attachment-stage/${segment(owner)}/`;
   await FileSystem.makeDirectoryAsync(directory, { intermediates: true });
   const target = directory + segment(attachmentId);
