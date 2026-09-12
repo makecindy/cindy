@@ -48,9 +48,10 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { createLogger } from '@/lib/logger';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import type { DataOwnerPushStamp } from '../../../../shared/dataOwnerPush';
-import type {
-  SidebarPinnedOrderMutation,
-  SidebarSettingsSnapshot,
+import {
+  sidebarPinnedEntryComparisonKey,
+  type SidebarPinnedOrderMutation,
+  type SidebarSettingsSnapshot,
 } from '../../../../shared/sidebarSettings';
 
 import {
@@ -449,7 +450,11 @@ export function useSidebarFilter(
       });
       setManualProjectOrderState((prev) => {
         if (prev.length === 0) return prev;
-        const next = normalizeManualProjectOrder(prev, activeWorkingDirs);
+        const next = normalizeManualProjectOrder(
+          prev,
+          activeWorkingDirs,
+          window.electronAPI.platform,
+        );
         if (next.length === prev.length && next.every((wd, index) => wd === prev[index]))
           return prev;
         persistManualProjectOrder(next, ownerId);
@@ -514,7 +519,11 @@ export function useSidebarFilter(
   const setManualProjectOrder = useCallback(
     (order: readonly string[], activeWorkingDirs: readonly string[]) => {
       setManualProjectOrderState((prev) => {
-        const next = normalizeManualProjectOrder(order, activeWorkingDirs);
+        const next = normalizeManualProjectOrder(
+          order,
+          activeWorkingDirs,
+          window.electronAPI.platform,
+        );
         if (next.length === prev.length && next.every((wd, index) => wd === prev[index]))
           return prev;
         persistManualProjectOrder(next, ownerId);
@@ -527,7 +536,10 @@ export function useSidebarFilter(
   const setManualPinnedOrder = useCallback(
     (order: readonly string[], activeEntryIds: readonly string[], baseOrder: readonly string[]) =>
       updatePinnedOrder(
-        () => normalizeManualPinnedOrder(order, activeEntryIds),
+        () =>
+          normalizeManualPinnedOrder(order, activeEntryIds, (entryId) =>
+            sidebarPinnedEntryComparisonKey(entryId, window.electronAPI.platform),
+          ),
         (_latestOrder, nextOrder) => ({
           kind: 'reorder',
           baseOrder: Array.from(baseOrder),
@@ -540,10 +552,19 @@ export function useSidebarFilter(
   const promotePin = useCallback(
     (entryId: string) =>
       updatePinnedOrder(
-        (prev) =>
-          prev[0] === entryId
-            ? Array.from(prev)
-            : [entryId, ...prev.filter((id) => id !== entryId)],
+        (prev) => {
+          const identity = sidebarPinnedEntryComparisonKey(
+            entryId,
+            window.electronAPI.platform,
+          );
+          return [
+            entryId,
+            ...prev.filter(
+              (id) =>
+                sidebarPinnedEntryComparisonKey(id, window.electronAPI.platform) !== identity,
+            ),
+          ];
+        },
         () => ({ kind: 'promote', entryId }),
       ),
     [updatePinnedOrder],
@@ -552,7 +573,15 @@ export function useSidebarFilter(
   const removePin = useCallback(
     (entryId: string) =>
       updatePinnedOrder(
-        (prev) => (prev.includes(entryId) ? prev.filter((id) => id !== entryId) : Array.from(prev)),
+        (prev) => {
+          const identity = sidebarPinnedEntryComparisonKey(
+            entryId,
+            window.electronAPI.platform,
+          );
+          return prev.filter(
+            (id) => sidebarPinnedEntryComparisonKey(id, window.electronAPI.platform) !== identity,
+          );
+        },
         () => ({ kind: 'remove', entryId }),
       ),
     [updatePinnedOrder],

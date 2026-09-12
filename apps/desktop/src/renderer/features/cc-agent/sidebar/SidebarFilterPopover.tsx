@@ -603,9 +603,10 @@ export function SidebarFilterPopover({
             而 DropdownMenuContent 基础样式带 overflow-hidden 且无 max-height,
             超出部分会被**静默切掉**(实机:最上面的「分组」整段不见)。渲染进程
             画不到 BrowserWindow 外面,所以这里按 Radix 给出的可用高度收口并允许
-            纵向滚动——滚动容器放内层(与下方项目列表同款做法),不与 content 的
+            纵向滚动；禁止横向滚动，避免分隔线的负边距撑出底部滚动条占位。
+            滚动容器放内层(与下方项目列表同款做法),不与 content 的
             overflow-hidden 抢同一属性。减 0.75rem 让出 content 的 p-1 与边框。 */}
-        <div className="max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-y-auto">
+        <div className="max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-x-hidden overflow-y-auto">
           <MenuSubRow
             label={t('ccAgent.sidebar.filterGroupByHeading')}
             value={groupByValue}

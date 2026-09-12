@@ -1484,6 +1484,41 @@
     "providers": {
       "title": "模型供應商",
       "subtitle": "選擇模型時的來源。每個來源提供它支援的模型與計費方式，可按任務分別切換。",
+      "import": {
+        "title": "匯入模型供應商",
+        "destination": "匯入至",
+        "newConnection": "建立新連線",
+        "keyOnly": "只更換本次提供的 API Key，保留既有模型、路由和其他設定。",
+        "modelsPending": "{{name}} 已設定，但無法取得模型清單。請在供應商設定中重試。",
+        "busyWarning": "此次變更需要重新載入本機 Codex 服務，可能中斷 {{count}} 個執行中的任務。是否繼續？",
+        "close": "關閉供應商匯入",
+        "loadFailed": "這個供應商匯入連結無效或已經過期。",
+        "confirmFailed": "匯入失敗，請檢查連結或介面位址後再試一次。",
+        "oauthFailed": "供應商已新增，但授權尚未完成。可以再次嘗試授權。",
+        "done": "已匯入 {{name}}",
+        "oauthDone": "已新增並授權 {{name}}",
+        "cancel": "取消",
+        "create": "匯入供應商",
+        "update": "更新供應商",
+        "replaceKey": "取代 API Key",
+        "addAndAuthorize": "新增並授權",
+        "retryOAuth": "重新嘗試授權",
+        "harnesses": "各 Harness 設定",
+        "fetchAfterConfirm": "確認後取得模型清單",
+        "modelCount": "{{count}} 個模型",
+        "keyIncluded": "已包含 API Key（內容已隱藏）",
+        "headers": "請求標頭：{{names}}（值已隱藏）",
+        "oauthHosts": "授權：{{authorizeHost}} · Token 交換：{{tokenHost}}",
+        "browserAuthorizationInProgress": "請在剛剛開啟的瀏覽器視窗中完成授權。",
+        "replaceWarning": "本次提供的 API Key 將取代所選連線的金鑰。",
+        "confirmNote": "點擊確認前不會儲存任何內容，也不會存取供應商介面。",
+        "authorizationPendingNote": "供應商已新增，但授權尚未完成。你可以在這裡重試或取消授權。",
+        "action": {
+          "create": "將在本機新增供應商 {{name}}。",
+          "update": "將更新現有供應商 {{name}}。",
+          "replace-key": "將取代 {{name}} 在本機儲存的 API Key。"
+        }
+      },
       "order": {
         "hint": "拖動排序",
         "handle": "調整 {{provider}} 順序，當前第 {{position}} 項，共 {{total}} 項。使用方向鍵移動。",
@@ -7945,7 +7980,9 @@
       "loading": "載入分支中…",
       "loadFailed": "分支列表載入失敗，點此重試",
       "currentTooltip": "當前分支",
-      "sourceTooltip": "worktree 源分支"
+      "sourceTooltip": "worktree 源分支",
+      "searchPlaceholder": "搜尋分支",
+      "noMatch": "無匹配分支"
     },
     "folderPicker": {
       "selectFolder": "選擇資料夾",
@@ -8564,7 +8601,9 @@
       "dismissTitle": "關閉此中斷提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "先前有定時任務未完成，可查看執行記錄。",
+      "text": "先前有自動執行失敗。",
+      "precheck": "自動檢查暫時受阻。",
+      "rateLimited": "自動檢查暫時受阻：請求限流。",
       "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {
@@ -10333,7 +10372,7 @@
         "enable": "啟用",
         "tooltip": "任務觸發時先執行該指令碼：退出碼 0 放行本輪；退出碼 2 跳過本輪（不啟動 Agent、不消耗 token）；指令碼報錯或超時將阻止執行並記錄失敗結果。指令碼在任務工作目錄下執行，Windows 上請寫顯式直譯器（如 node check.mjs）。",
         "infoAria": "檢視前置檢查規則",
-        "protocol": "指令碼寫法：結束時退出碼 0 = 本輪執行任務，退出碼 2 = 本輪跳過（不消耗用量）；其他退出碼、報錯或超時會阻止執行",
+        "protocol": "指令碼寫法：結束時退出碼 0 = 本輪執行任務，退出碼 2 = 本輪跳過（不消耗用量）；其他退出碼、報錯或超時會阻止執行。檢查完整成功後（包括正常無事可做），在 exit 0/2 前向 stdout 單獨輸出一行 CINDY_PRECHECK_OK，僅恢復先前的檢查警告，不恢復執行失敗；限流退避或檢查不完整時不要輸出。",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "測試",
         "testing": "測試中…",

@@ -25,6 +25,38 @@ function fakeResponse(status: number, body: string): Response {
   return new Response(body, { status, headers: { 'content-type': 'application/json' } });
 }
 
+describe('import discovery limits', () => {
+  it('passes redirect rejection with all credentials to the transport', async () => {
+    const fetcher = vi.fn(async (_url, init) => {
+      expect(init.redirect).toBe('error');
+      expect(init.headers).toMatchObject({ 'x-api-key': 'sk-test', 'x-secret': 'fake-secret' });
+      throw new TypeError('redirect rejected');
+    });
+    expect(await fetchProviderModels(spec({ redirect: 'error', headers: { 'X-Secret': 'fake-secret' } }), fetcher)).toMatchObject({ ok: false });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
+  it.each([200, 400])('cancels oversized streamed %i responses even with a false content length', async (status) => {
+    const cancel = vi.fn();
+    const body = new ReadableStream<Uint8Array>({
+      pull(controller) { controller.enqueue(new Uint8Array(9)); },
+      cancel,
+    });
+    const response = new Response(body, { status, headers: { 'content-length': '1' } });
+    const result = await fetchProviderModels(spec({ responseByteLimit: 16 }), vi.fn(async () => response));
+    expect(result.ok).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+  });
+
+  it('rejects oversized declared bodies without reading and accepts bounded JSON', async () => {
+    const cancel = vi.fn();
+    const response = new Response(new ReadableStream({ cancel }), { headers: { 'content-length': '100' } });
+    expect((await fetchProviderModels(spec({ responseByteLimit: 32 }), vi.fn(async () => response))).ok).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(await fetchProviderModels(spec({ responseByteLimit: 32 }), vi.fn(async () => fakeResponse(200, '{"data":["model"]}')))).toMatchObject({ ok: true, models: [{ id: 'model' }] });
+  });
+});
+
 describe('buildModelsFetchRequest', () => {
   it.each(
     (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>

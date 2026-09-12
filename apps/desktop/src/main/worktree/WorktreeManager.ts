@@ -33,6 +33,7 @@ import {
   globalSafeDirectoryLockPath,
   safeDirectorySpellings,
 } from './gitExec';
+import { gitPathOutput } from './gitPathOutput';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
@@ -413,15 +414,15 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
       cwd,
       CWD_PROBE_GIT_OPTS,
     );
-    const lines = stdout.trim().split(/\r?\n/);
+    const lines = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
     if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
       const [root, branch, gitDir, commonDir] = lines;
       return {
         isGitRepo: true,
-        isInsideWorktree: path.resolve(cwd, gitDir.trim()) !== path.resolve(cwd, commonDir.trim()),
+        isInsideWorktree: path.resolve(cwd, gitDir) !== path.resolve(cwd, commonDir),
         gitInstalled: true,
         supportsRecoveryKeyDiscard: true,
-        repoRoot: path.resolve(root.trim()),
+        repoRoot: path.resolve(root),
         ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
       };
     }
@@ -452,7 +453,7 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
   // 2. rev-parse --show-toplevel: 拿 repo 根
   try {
     const { stdout } = await gitExec(['rev-parse', '--show-toplevel'], cwd, CWD_PROBE_GIT_OPTS);
-    const toplevel = stdout.trim();
+    const toplevel = gitPathOutput(stdout);
     if (toplevel) {
       out.isGitRepo = true;
       out.repoRoot = path.resolve(toplevel);
@@ -495,8 +496,8 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
     if (commonDirResult.status === 'rejected') throw commonDirResult.reason;
     const gitDirRaw = gitDirResult.value.stdout;
     const gitCommonDirRaw = commonDirResult.value.stdout;
-    const gitDir = path.resolve(cwd, gitDirRaw.trim());
-    const gitCommonDir = path.resolve(cwd, gitCommonDirRaw.trim());
+    const gitDir = path.resolve(cwd, gitPathOutput(gitDirRaw));
+    const gitCommonDir = path.resolve(cwd, gitPathOutput(gitCommonDirRaw));
     if (gitDir && gitCommonDir && gitDir !== gitCommonDir) {
       out.isInsideWorktree = true;
     }

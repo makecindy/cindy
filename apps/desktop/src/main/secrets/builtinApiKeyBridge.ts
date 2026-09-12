@@ -21,6 +21,11 @@ import { throwIpcError } from '../utils/ipcValidate.js';
  */
 export const BUILTIN_API_KEY_MAX_LENGTH = 1024;
 
+/** Secret slots can belong to a differently named visible provider row. */
+export function builtinApiKeyPresentationId(providerId: string): string {
+  return providerId === 'openai-images' ? 'openai' : providerId;
+}
+
 /** 依赖注入面:providerSecretStore 的读写切片 + key 变更广播 + 统一日志。 */
 export interface BuiltinApiKeyBridgeDeps {
   store: {

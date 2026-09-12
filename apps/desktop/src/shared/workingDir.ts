@@ -20,12 +20,12 @@ import { getManagedWorktreeBasePath } from './managedWorktreePaths';
  */
 export function normalizeWorkingDirForStorage(raw: string | null | undefined): string | null {
   if (raw == null) return null;
-  const trimmed = String(raw).trim();
-  if (trimmed === '') return null;
+  const path = String(raw);
+  if (path.trim() === '') return null;
 
-  const withoutLongPathPrefix = stripWindowsLongPathPrefix(trimmed);
+  const withoutLongPathPrefix = stripWindowsLongPathPrefix(path);
   const outNeedsWindowsSeparatorRewrite =
-    isWindowsPathLike(trimmed) || isWindowsPathLike(withoutLongPathPrefix);
+    isWindowsPathLike(path) || isWindowsPathLike(withoutLongPathPrefix);
   let out = outNeedsWindowsSeparatorRewrite
     ? withoutLongPathPrefix.replace(/\\/g, '/')
     : withoutLongPathPrefix;

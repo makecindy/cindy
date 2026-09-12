@@ -647,7 +647,7 @@ export interface MobileMakerTransport {
   resolveInteraction(
     requestId: string,
     decision: Record<string, unknown>,
-  ): Promise<void>;
+  ): Promise<{ accepted: boolean } | void>;
   getContextUsage(
     sessionId: string,
     createOpts?: Record<string, unknown>,

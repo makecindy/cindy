@@ -1,5 +1,6 @@
 import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { configureAppDefaultModelSelection } from './appDefaultModelControl.js';
+import type { BuiltinApiKeyBridgeDeps } from '../secrets/builtinApiKeyBridge.js';
 import { setBotInvitationWelcomeDispatch } from './botInvitation.js';
 import type { TurnUsageContext } from './turnUsageContext.js';
 import { retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
@@ -541,6 +542,7 @@ import {
   ensureRemoteHostReady,
   getRemoteSshPool,
   broadcastSilentInstallStatus,
+  probeRemoteWorkingDirectory,
 } from '../remote-ssh/index.js';
 import { recordSessionContextSnapshot } from '../sessionSpendBroadcaster.js';
 
@@ -1048,8 +1050,10 @@ import {
 } from './autoResumeBookkeeping.js';
 import {
   InterruptedTurnAutoResumeGuard,
+  isAcceptedTurnContinuationOnlyReason,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
+  shouldPreserveWaitingContinuationOnlyAutoResume,
   type InterruptedTurnErrorSignals,
 } from './interruptedTurnAutoResume.js';
 import { readInterruptedTurnAutoResumeSettings } from '../maker-host/interrupted-turn-auto-resume-store.js';
@@ -1304,12 +1308,16 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
 });
 
 /**
- * A Codex reconnect-stall retry is scheduled against the current runtime
- * Session, but that provider may close/rebuild the exact instance before the
+ * Continuation-only auto-retry is scheduled against the current runtime
+ * Session, but stall abort recovery, terminal-error drain, or a Codex
+ * interrupt ACK failure may close/rebuild that exact instance before the
  * backoff timer fires. Bind the lease to the instance, not only sessionId:
  * a replacement Session can otherwise inherit a late close callback.
+ *
+ * Only `unexpected` closes preserve the lease. User-requested close/stop
+ * still cancel via teardown.
  */
-const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();
+const pendingContinuationOnlyAutoResumeRebuilds = new WeakMap<Session, number>();
 const pendingSessionRuntimeFallbackRebuilds = new WeakMap<Session, number>();
 
 /**
@@ -1874,6 +1882,7 @@ interface OrcaCollabService {
     fast?: boolean;
     workerPermissionMode?: OrcaWorkerPermissionMode;
     label: string;
+    workingDir?: string;
     initialTask?: string;
   }) => Promise<
     | {
@@ -3177,24 +3186,50 @@ function getWiredSessionCloseReason(session: WiredSession) {
 }
 
 /**
- * Preserve only the narrow provider-rebuild handoff window for an interrupted
- * Codex reconnect stall. Every check is deliberately instance- and token-
- * scoped so a user close, a later retry, or an already-running callback cannot
- * resurrect the old business session.
+ * Preserve the provider-rebuild handoff window for continuation-only
+ * auto-retry (stall / idle / reconnect-stall). Every check is instance- and
+ * token-scoped so a user close or a later retry cannot resurrect the old
+ * business session. An in-flight callback / queued CONTINUE still belongs to
+ * this attempt and must survive unexpected close.
  */
-function shouldPreserveCodexReconnectStalledAutoResume(
+function bindContinuationOnlyAutoResumeLease(session: Session): void {
+  const coordinator = agentInputCoordinatorHolder;
+  const token = coordinator?.getAutoResumeAttemptToken(session.id);
+  if (
+    typeof token !== 'number' ||
+    coordinator?.isContinuationOnlyAutoResume(session.id) !== true ||
+    !interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, token) ||
+    !autoResumeBookkeeping.isCurrentAttempt(session.id, token)
+  ) {
+    return;
+  }
+  pendingContinuationOnlyAutoResumeRebuilds.set(session, token);
+}
+
+function shouldPreserveContinuationOnlyAutoResume(
   session: WiredSession,
   closeReason: ReturnType<typeof getWiredSessionCloseReason>,
 ): boolean {
-  const attemptToken = pendingCodexReconnectStalledRebuilds.get(session);
-  if (attemptToken === undefined) return false;
-  if (closeReason !== 'unexpected') return false;
-  if (!interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)) return false;
-  if (!autoResumeBookkeeping.isCurrentAttempt(session.id, attemptToken)) return false;
   const coordinator = agentInputCoordinatorHolder;
-  if (!coordinator || !coordinator.isAutoResumePending(session.id)) return false;
-  if (coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken) return false;
-  return autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken);
+  const coordinatorAttemptToken = coordinator?.getAutoResumeAttemptToken(session.id);
+  const leasedAttemptToken = pendingContinuationOnlyAutoResumeRebuilds.get(session);
+  const attemptToken =
+    leasedAttemptToken ??
+    (typeof coordinatorAttemptToken === 'number' ? coordinatorAttemptToken : undefined);
+  return shouldPreserveWaitingContinuationOnlyAutoResume({
+    closeReason,
+    leasedAttemptToken,
+    guardIsCurrentAttempt:
+      attemptToken !== undefined &&
+      interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken),
+    bookIsCurrentAttempt:
+      attemptToken !== undefined && autoResumeBookkeeping.isCurrentAttempt(session.id, attemptToken),
+    coordinatorAttemptToken,
+    hasLiveSchedule:
+      attemptToken !== undefined && autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken),
+    hasQueuedAutoResume: Boolean(coordinator?.hasQueuedAutoResume(session.id)),
+    isContinuationOnly: coordinator?.isContinuationOnlyAutoResume(session.id) === true,
+  });
 }
 
 /**
@@ -4310,6 +4345,7 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
   },
   onBind: (session: WiredSession) => {
     advanceSessionTurnBoundaryGeneration(session.id);
+    bindContinuationOnlyAutoResumeLease(session);
   },
   broadcastStatus: (session: WiredSession, status) => {
     broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
@@ -4318,16 +4354,16 @@ const sessionBindings = createSessionBindingLifecycle<WiredSession, WiredSession
     const closeReason = getWiredSessionCloseReason(session);
     const closedDirectAbortBoundary = getDirectAbortBoundaryForClosingSession(session.id, session);
     const preserveAutoResumeIntent =
-      shouldPreserveCodexReconnectStalledAutoResume(session, closeReason) ||
+      shouldPreserveContinuationOnlyAutoResume(session, closeReason) ||
       shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason);
-    pendingCodexReconnectStalledRebuilds.delete(session);
+    pendingContinuationOnlyAutoResumeRebuilds.delete(session);
     return { closeReason, closedDirectAbortBoundary, preserveAutoResumeIntent };
   },
   cleanupClosedSession: (session: WiredSession, context) => {
     runSessionCloseCleanup(context.preserveAutoResumeIntent, {
       cleanupInteractions: () => cleanupPendingInteractionsForSession(session.id, 'session_closed'),
       preserveAutoResume: () => {
-        log.info('preserving scheduled Codex reconnect-stall auto-resume across provider rebuild', {
+        log.info('preserving scheduled continuation-only auto-resume across provider rebuild', {
           sessionId: session.id,
           attemptToken: agentInputCoordinatorHolder?.getAutoResumeAttemptToken(session.id),
           closeReason: context.closeReason,
@@ -4652,6 +4688,8 @@ async function confirmReviewExternalArtifacts(
 }
 
 export interface RegisterMakerIpcOptions {
+  /** Reuse the normal settings save notifications, including credential-generation invalidation. */
+  builtinApiKeyDeps: BuiltinApiKeyBridgeDeps;
   onAnySessionTurnKeepaliveChange?: (isRunning: boolean) => void;
   /** 由 bootstrap 注入，避免 maker-ipc → model-access → maker-host 的循环依赖。 */
   refreshXdGatewayModels(): Promise<void>;
@@ -5451,6 +5489,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
       return fetchProviderModels(spec);
     },
+    builtinApiKeyDeps: options.builtinApiKeyDeps,
     // 重新发现会用订阅凭证发起真实上游请求，限主页面 sender（子 frame / WebView 拒绝）。
     assertTrustedSender: (event) =>
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]),
@@ -5616,6 +5655,17 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           for (const agent of provider.agents) {
             if (!isCurrent()) break;
             const upstream = provider.routing[agent]?.upstream;
+            if (
+              oauth.modelsDiscoveryUrl &&
+              (!upstream ||
+                new URL(oauth.modelsDiscoveryUrl).origin !== new URL(upstream).origin)
+            ) {
+              // The descriptor is user/provider data, but the discovery request carries a
+              // Bearer token. Never let an explicit discovery URL collect credentials outside
+              // the runtime's own origin. Imported descriptors are rejected earlier; this is
+              // the same fail-closed guard for existing catalog entries.
+              continue;
+            }
             const url =
               oauth.modelsDiscoveryUrl ?? (upstream ? deriveModelsDiscoveryUrl(upstream) : null);
             if (!url) continue;
@@ -10607,6 +10657,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     getWorkerDefaults: getWorkerDefaultsFromNewMaker,
     getWorkerPermissionMode: getWorkerPermissionModeFromCreationPrefs,
+    resolveWorkerWorkingDir: async (dir, lead) => {
+      let resolved: string;
+      if (lead.remoteHostId) {
+        resolved = await probeRemoteWorkingDirectory(lead.remoteHostId, dir);
+      } else {
+        resolved = await realpathWorkingDirectory(dir);
+        if (!(await statWorkingDirectory(resolved)).isDirectory()) throw new Error('Not a directory');
+      }
+      assertCollabProjectEnabled(
+        { ...lead, workingDir: resolved, workspaceKind: 'project' },
+        (pluginId, workingDir) => getPluginRegistry().isEnabled(pluginId, workingDir),
+        () => false,
+      );
+      return resolved;
+    },
     getAvailableModels: (agent) => maker.getCapabilities(agent).availableModels,
     getProviderRoutingContext,
     readClaudeApiKey,
@@ -13358,10 +13423,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (schedulerRunId) {
         beginSchedulerAutoResume(sessionId, schedulerRunId, decision.attemptToken);
       }
-      if (signals.reason === 'codex_reconnect_stalled') {
+      if (isAcceptedTurnContinuationOnlyReason(signals.reason)) {
         const runtimeSession = getStableSessionForTurnBoundary(sessionId);
         if (runtimeSession) {
-          pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);
+          pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);
         }
       }
       // 排期的撤旧、补落与令牌都在 AutoResumeBookkeeping.schedule 里(带单测),这里只给
@@ -13438,6 +13503,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // (「重新连接中 attempt/maxAttempts」+ 展开详情里的原因与会话累计)。
       return {
         ...(signals.message !== undefined ? { error: signals.message } : {}),
+        ...(typeof signals.reason === 'string' && signals.reason.length > 0
+          ? { reason: signals.reason }
+          : {}),
         attempt: decision.attempt,
         maxAttempts: decision.maxAttempts,
         sessionTotal: decision.sessionTotal,
@@ -13673,6 +13741,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ...(isPiPromptRpcTimeoutError({ message }) ? { reason: 'pi-prompt-timeout' } : {}),
         },
         null,
+      );
+    },
+    onUnconfirmedAutoResumeTurn: (sessionId, item) => {
+      const attemptToken = autoResumeAttemptToken(item);
+      if (attemptToken === null) return;
+      autoResumeBookkeeping.abandonUnconfirmedPersistedResume(
+        sessionId,
+        attemptToken,
+        item.clientId,
       );
     },
     onPersistedSendRejected: (sessionId, message) => {

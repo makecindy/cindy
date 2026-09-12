@@ -126,7 +126,7 @@ function installElectronBridge(): void {
         generateTitle: vi.fn(async () => ({ title: 't' })),
         getPendingInteractions,
         setPlanMode: vi.fn(async () => {}),
-        resolveInteraction: vi.fn(async () => {}),
+        resolveInteraction: vi.fn(async () => ({ accepted: true })),
         abortSession: vi.fn(async () => {}),
         closeSession: vi.fn(async () => {}),
         listActive: vi.fn(async () => []),
@@ -570,13 +570,14 @@ describe('cancelPlanReview(取消本次审阅)', () => {
     makerChatStore.purgeSession(SESSION_ID);
   });
 
-  it('关卡片、气泡标 cancelled, 决策发 deny + dismissed', () => {
+  it('关卡片、气泡标 cancelled, 决策发 deny + dismissed', async () => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
     emitPlanReviewRequest('pr-cancel');
     emitDone('codex');
     expect(makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview?.requestId).toBe('pr-cancel');
 
     makerChatStore.cancelPlanReview(SESSION_ID, 'pr-cancel');
+    await new Promise((resolve) => setTimeout(resolve, 0));
 
     const snap = makerChatStore.getSnapshot(SESSION_ID);
     expect(snap.pendingPlanReview).toBeNull();

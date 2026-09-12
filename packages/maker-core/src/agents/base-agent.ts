@@ -2361,6 +2361,11 @@ export interface AgentSessionHandle {
    * 默认实现为 false (capability 缺失时 host 不该问)。
    */
   isTurnRunning?(): boolean;
+  /** A provider-owned preparatory turn still precedes the accepted user input.
+   * Host timeouts must not resume it with a generic CONTINUE. Read synchronously
+   * before abort clears the provider's existing preparation state.
+   */
+  isPreparingUserTurn?(): boolean;
 }
 
 export abstract class BaseAgent {

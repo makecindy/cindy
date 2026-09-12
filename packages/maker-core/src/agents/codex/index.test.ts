@@ -684,6 +684,7 @@ function installFakeHost(
   agent: CodexAgent,
   requestImpl?: (method: string, params: unknown) => Promise<unknown> | unknown,
   opts: {
+    connectionId?: string;
     codexProxyActive?: boolean;
     codexBrowserUseAvailable?: boolean;
     codexBrowserUseVersion?: string;
@@ -840,7 +841,7 @@ function installFakeHost(
     getSubagentRoute,
     getObservedSubagentIdentity,
     getOpenAiWebSocketsEnabled,
-    getConnectionId: () => 'test-connection',
+    getConnectionId: () => opts.connectionId ?? 'test-connection',
     getThreadHandlers: () => threadHandlers,
     // 0.145 不给 spawn 子线程发 thread/started,session 层改为从 spawn item 主动
     // 登记血缘;fake 里只记录调用,路由行为由 host.test.ts 的真 transport 覆盖。
@@ -16565,7 +16566,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       seen(req);
       expect(req).toMatchObject({
         kind: 'ask_user_question',
-        requestId: 'req-user-input',
+        requestId: 'codex:test-connection:req-user-input',
         questions: [
           {
             question: 'Which mode should Codex use?',
@@ -16653,7 +16654,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     handle.setInteractionResolver(async (req) => {
       expect(req).toMatchObject({
         kind: 'permission',
-        requestId: 'req-tool-input',
+        requestId: 'codex:test-connection:req-tool-input',
         toolName: 'mcp:third_party:block_contacts',
         metadata: { userInputKind: 'tool_side_effect' },
       });
@@ -18824,7 +18825,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       requestCount += 1;
       expect(req).toMatchObject({
         kind: 'ask_user_question',
-        requestId: 'req-dynamic',
+        requestId: 'codex:test-connection:req-dynamic',
         toolUseId: 'dynamic-call-1',
       });
       return pendingDecision.promise;
@@ -19054,8 +19055,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     handle.setInteractionResolver(async (req) => {
       if (req.kind !== 'ask_user_question') throw new Error('expected ask_user_question');
       requestCount += 1;
-      if (req.requestId === 'req-first') return firstDecision.promise;
-      if (req.requestId === 'req-second') return secondDecision.promise;
+      if (req.requestId === 'codex:test-connection:req-first') return firstDecision.promise;
+      if (req.requestId === 'codex:test-connection:req-second') return secondDecision.promise;
       return {
         kind: 'ask_user_question',
         answers: { [req.questions[0]?.question ?? '']: 'Unexpected repeat' },
@@ -19106,6 +19107,58 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it.each(['native', 'dynamic'] as const)('isolates two %s questions with RPC id 0 across connections', async (kind) => {
+    // Model Desktop's shared request registry. Each Host may independently
+    // start numbering at zero; answering B must leave A available after done.
+    const registry = new Map<string, (decision: InteractionDecision) => void>();
+    const fixtures = await Promise.all(['first', 'second'].map(async (connectionId) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, undefined, { connectionId });
+      const handle = await agent.startSession({
+        sessionId: `collision-${connectionId}`, model: 'gpt-5.4', workingDir: '/repo',
+      });
+      handle.setInteractionResolver((request) => new Promise((resolve) => {
+        registry.set(request.requestId, resolve);
+      }));
+      const handlers = host.getThreadHandlers()!;
+      const response = kind === 'native'
+        ? handlers.requestUserInput!({
+            threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'question',
+            questions: [{ id: 'q', header: 'Choose', question: 'Choose?', isOther: false, isSecret: false, options: null }],
+          }, { requestId: 0 })
+        : handlers.dynamicToolCall!({
+            threadId: 'start-thread-id', turnId: 'turn-1', callId: 'question',
+            namespace: 'cindy', tool: 'ask_user_question',
+            arguments: { questions: [{ id: 'q', header: 'Choose', question: 'Choose?' }] },
+          }, { requestId: 0 });
+      return { handle, host, handlers, response };
+    }));
+    try {
+      await waitForExpectation(() => expect(registry.size).toBe(2));
+      const keys = [...registry.keys()];
+      const firstKey = keys.find((key) => key.includes('first'))!;
+      const secondKey = keys.find((key) => key.includes('second'))!;
+      expect(firstKey).not.toBe(secondKey);
+      const events = await collectAgentEvents(fixtures[0].handle);
+      fixtures[0].handlers.turnCompleted?.({
+        threadId: 'start-thread-id', turn: { id: 'turn-1', status: 'completed' },
+      });
+      await fixtures[0].response;
+      await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+      expect(events.filter((event) => event.type === 'interaction_dismissed')).toEqual([]);
+      registry.get(secondKey)!({ kind: 'ask_user_question', answers: { 'Choose?': 'B' } });
+      registry.delete(secondKey);
+      await expect(fixtures[1].response).resolves.toEqual(kind === 'native'
+        ? { answers: { q: { answers: ['B'] } } }
+        : { success: true, contentItems: [{ type: 'inputText', text: JSON.stringify({ q: { answers: ['B'] } }) }] });
+      expect(registry.has(firstKey)).toBe(true);
+      registry.get(firstKey)!({ kind: 'ask_user_question', answers: { 'Choose?': 'A' } });
+      await waitForExpectation(() => expect(askUserTurnStartCalls(fixtures[0].host)).toHaveLength(1));
+    } finally {
+      await Promise.all(fixtures.map(({ handle }) => handle.close()));
+    }
+  });
+
   it('cancels pending user input when serverRequest/resolved arrives', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
@@ -19122,7 +19175,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     let requestCount = 0;
     handle.setInteractionResolver(async (req) => {
       requestCount += 1;
-      return req.requestId === 'req-resolved'
+      return req.requestId === 'codex:test-connection:req-resolved'
         ? cancelledDecision.promise
         : retryDecision.promise;
     });
@@ -19148,7 +19201,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await expect(nextEvent(iterator)).resolves.toMatchObject({
       type: 'interaction_dismissed',
       data: {
-        requestId: 'req-resolved',
+        requestId: 'codex:test-connection:req-resolved',
         reason: 'server_request_resolved',
         resolvedAs: 'deny',
       },
@@ -19277,7 +19330,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     let requestCount = 0;
     handle.setInteractionResolver(async (req) => {
       requestCount += 1;
-      return req.requestId === 'req-owner'
+      return req.requestId === 'codex:test-connection:req-owner'
         ? ownerDecision.promise
         : joinedDecision.promise;
     });
@@ -19319,7 +19372,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await expect(nextEvent(iterator)).resolves.toMatchObject({
       type: 'interaction_dismissed',
       data: {
-        requestId: 'req-owner',
+        requestId: 'codex:test-connection:req-owner',
         reason: 'server_request_resolved',
         resolvedAs: 'deny',
       },
@@ -19459,7 +19512,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       await waitForExpectation(() => {
         expect(debug).toHaveBeenCalledWith(
           'joined duplicate same-turn user input request cancelled',
-          { requestId: 'req-joined', turnId: 'turn-1' },
+          { requestId: 'codex:test-connection:req-joined', turnId: 'turn-1' },
         );
       });
     }
@@ -19479,6 +19532,132 @@ describe('CodexAgent MCP thread context hooks', () => {
     })();
     return events;
   }
+
+  async function pendingHumanProduct(kind: 'native' | 'dynamic' | 'plan', followupStart?: () => Promise<unknown>) {
+    const agent = new CodexAgent(createDeps());
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method !== Method.TurnStart) return undefined;
+      turnSeq += 1;
+      if (turnSeq === 2 && followupStart) return followupStart();
+      return { turn: { id: `human-turn-${turnSeq}` } };
+    });
+    const handle = await agent.startSession({ sessionId: `human-${kind}`, model: 'gpt-5.4',
+      workingDir: '/repo', planMode: kind === 'plan' });
+    const decision = deferred<InteractionDecision>();
+    handle.setInteractionResolver(async () => decision.promise);
+    const events = await collectAgentEvents(handle);
+    await handle.send({ type: 'user', content: 'Do the work after confirmation' });
+    const handlers = host.getThreadHandlers()!;
+    const base = { threadId: 'start-thread-id', turnId: 'human-turn-1' };
+    if (kind === 'plan') {
+      handlers.itemCompleted?.({ ...base, item: { type: 'plan', id: 'plan-1', text: '1. Make the change' } });
+    } else if (kind === 'native') {
+      void handlers.requestUserInput?.({ ...base, itemId: 'ask-1',
+        questions: [{ id: 'choice', header: 'Scope', question: 'Proceed?', options: [{ label: 'Yes' }] }] },
+      { requestId: 0 });
+    } else {
+      void handlers.dynamicToolCall?.({ ...base, callId: 'ask-1', namespace: 'cindy', tool: 'ask_user_question',
+        arguments: { questions: [{ question: 'Proceed?', options: [{ label: 'Yes' }] }] } }, { requestId: 0 });
+    }
+    // Independent progress remains visible while the answer is pending.
+    handlers.itemCompleted?.({ ...base,
+      item: { type: 'agentMessage', id: 'progress-1', text: 'Existing tests checked.', phase: 'commentary' } });
+    handlers.turnCompleted?.({ threadId: base.threadId, turn: { id: base.turnId, status: 'completed' } });
+    await waitForExpectation(() => expect(events.some((event) => event.type === 'done')).toBe(true));
+    const boundary = events.find((event) => event.type === 'done')!;
+    expect(boundary.turnContinuationId).toEqual(expect.any(Number));
+    expect(handle.beginTurnContinuationWait?.(boundary.turnContinuationId)).toBe('awaiting');
+    expect(handle.isTurnRunning?.()).toBe(true);
+    expect(events.some((event) => event.type === 'text' && JSON.stringify(event.data).includes('Existing tests checked.'))).toBe(true);
+    return { handle, host, handlers, decision, events };
+  }
+
+  it.each(['native', 'dynamic', 'plan'] as const)('%s pending confirmation retains the product until its follow-up finishes', async (kind) => {
+    const { handle, host, handlers, decision, events } = await pendingHumanProduct(kind);
+    expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(0);
+    decision.resolve(kind === 'plan' ? { kind: 'plan_review', behavior: 'allow' }
+      : { kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+    await vi.waitFor(() => expect(askUserTurnStartCalls(host)).toHaveLength(2));
+    expect(handle.isTurnRunning?.()).toBe(true);
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'human-turn-2', status: 'completed' } });
+    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1));
+    expect(handle.isTurnRunning?.()).toBe(false);
+    // Duplicate provider completion cannot generate a second product terminal.
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'human-turn-2', status: 'completed' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it.each(['native', 'dynamic', 'plan'] as const)('%s cancellation ends the product once without replaying SDK usage', async (kind) => {
+    const { handle, host, decision, events } = await pendingHumanProduct(kind);
+    decision.resolve(kind === 'plan' ? { kind: 'plan_review', behavior: 'deny', dismissed: true }
+      : { kind: 'ask_user_question', answers: {}, dismissed: true });
+    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1));
+    expect(events.filter((event) => event.type === 'done' && event.data.usage)).toHaveLength(1);
+    expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    await handle.close();
+  });
+
+  it.each(['abort', 'graceful', 'close'] as const)('supports %s while only a confirmation remains and ignores late approval', async (action) => {
+    const { handle, host, decision, events } = await pendingHumanProduct('plan');
+    if (action === 'abort') await handle.abort();
+    else if (action === 'graceful') await handle.requestGracefulStop?.();
+    else await handle.close();
+    expect(handle.isTurnRunning?.()).toBe(false);
+    decision.resolve({ kind: 'plan_review', behavior: 'allow' });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(askUserTurnStartCalls(host)).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(action === 'close' ? 0 : 1);
+    await handle.close();
+  });
+
+  it('keeps a human continuation result that completes before its start acknowledgement', async () => {
+    const start = deferred<unknown>();
+    const { handle, host, handlers, decision, events } = await pendingHumanProduct('dynamic', () => start.promise);
+    decision.resolve({ kind: 'ask_user_question', answers: { 'Proceed?': 'Yes' } });
+    await vi.waitFor(() => expect(askUserTurnStartCalls(host)).toHaveLength(2));
+    handlers.tokenUsageUpdated?.({ threadId: 'start-thread-id', turnId: 'human-turn-2', tokenUsage: {
+      total: { totalTokens: 100, inputTokens: 80, outputTokens: 20, cachedInputTokens: 0 },
+      last: { totalTokens: 100, inputTokens: 80, outputTokens: 20, cachedInputTokens: 0 },
+    } });
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'human-turn-2', status: 'completed' } });
+    start.resolve({ turn: { id: 'human-turn-2' } });
+    await waitForExpectation(() => expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1));
+    expect(events.find((event) => event.type === 'done' && event.data.raw?.id === 'human-turn-2')?.data.usage)
+      .toMatchObject({ promptTokens: 80, completionTokens: 20 });
+    expect(handle.isTurnRunning?.()).toBe(false);
+    await handle.close();
+  });
+
+  it('does not signal successful cancellation before a human continuation start failure', async () => {
+    const { handle, decision, events } = await pendingHumanProduct('plan', async () => { throw new Error('stale host'); });
+    const changed = vi.fn();
+    handle.onTurnContinuationChange?.(changed);
+    decision.resolve({ kind: 'plan_review', behavior: 'allow' });
+    await waitForExpectation(() => expect(events.some((event) => event.type === 'error')).toBe(true));
+    expect(changed.mock.calls.some(([, state]) => state === 'cancelled')).toBe(false);
+    expect(handle.isTurnRunning?.()).toBe(false);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    await handle.close();
+  });
+
+  it('stops a human continuation whose start acknowledgement is still pending', async () => {
+    const start = deferred<unknown>();
+    const { handle, host, handlers, decision, events } = await pendingHumanProduct('plan', () => start.promise);
+    decision.resolve({ kind: 'plan_review', behavior: 'allow' });
+    await vi.waitFor(() => expect(askUserTurnStartCalls(host)).toHaveLength(2));
+    await handle.abort();
+    start.resolve({ turn: { id: 'human-turn-2' } });
+    await waitForExpectation(() => expect(handle.isTurnRunning?.()).toBe(false));
+    handlers.turnCompleted?.({ threadId: 'start-thread-id', turn: { id: 'human-turn-2', status: 'interrupted' } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(events.filter((event) => event.type === 'done' && event.turnContinuationId === undefined)).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+    await handle.close();
+  });
 
   it('does not dismiss a pending ask_user on successful turn completion and continues once after the answer', async () => {
     const agent = new CodexAgent(createDeps());
@@ -19563,8 +19742,8 @@ describe('CodexAgent MCP thread context hooks', () => {
     const lastDecision = deferred<InteractionDecision>();
     handle.setInteractionResolver(async (req) => {
       if (req.kind !== 'ask_user_question') throw new Error('expected ask_user_question');
-      if (req.requestId === 'req-ask-first') return firstDecision.promise;
-      if (req.requestId === 'req-ask-last') return lastDecision.promise;
+      if (req.requestId === 'codex:test-connection:req-ask-first') return firstDecision.promise;
+      if (req.requestId === 'codex:test-connection:req-ask-last') return lastDecision.promise;
       throw new Error(`unexpected request ${req.requestId}`);
     });
     const events = await collectAgentEvents(handle);
@@ -19593,13 +19772,13 @@ describe('CodexAgent MCP thread context hooks', () => {
     await waitForExpectation(() => {
       expect(events.some((event) => (
         event.type === 'interaction_dismissed'
-        && (event.data as { requestId?: string }).requestId === 'req-ask-first'
+        && (event.data as { requestId?: string }).requestId === 'codex:test-connection:req-ask-first'
         && (event.data as { reason?: string }).reason === 'superseded'
       ))).toBe(true);
     });
     expect(events.filter((event) => (
       event.type === 'interaction_dismissed'
-      && (event.data as { requestId?: string }).requestId === 'req-ask-last'
+      && (event.data as { requestId?: string }).requestId === 'codex:test-connection:req-ask-last'
     ))).toEqual([]);
 
     firstDecision.resolve({
@@ -19706,7 +19885,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await waitForExpectation(() => {
       expect(events.some((event) => (
         event.type === 'interaction_dismissed'
-        && (event.data as { requestId?: string }).requestId === 'req-ask-fail'
+        && (event.data as { requestId?: string }).requestId === 'codex:test-connection:req-ask-fail'
       ))).toBe(true);
     });
 
@@ -22217,7 +22396,7 @@ describe('CodexAgent yield continuation', () => {
     });
     expect(events.some((event) => (
       event.type === 'interaction_dismissed'
-      && (event.data as { requestId?: string }).requestId === 'req-ask-late'
+      && (event.data as { requestId?: string }).requestId === 'codex:test-connection:req-ask-late'
     ))).toBe(true);
     ownerDecision.resolve({
       kind: 'ask_user_question',
@@ -28738,6 +28917,95 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
     }
   });
 
+  it('status 用量心跳不重置 idle:自动续跑后的 zombie running 能被收口', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const host = installIdleHost(agent);
+      const handle = await startIdleSession(agent, 'session-idle-usage-heartbeat');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      for (let i = 1; i <= 5; i++) {
+        await vi.advanceTimersByTimeAsync(500);
+        handlers.tokenUsageUpdated?.({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          tokenUsage: {
+            total: {
+              totalTokens: 100 * i,
+              inputTokens: 80 * i,
+              outputTokens: 20 * i,
+              cachedInputTokens: 0,
+            },
+            last: {
+              totalTokens: 100 * i,
+              inputTokens: 80 * i,
+              outputTokens: 20 * i,
+              cachedInputTokens: 0,
+            },
+          },
+        } as never);
+        await vi.advanceTimersByTimeAsync(0);
+      }
+
+      expect(seen.filter((ev) => ev.type === 'status').length).toBeGreaterThan(1);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1 - 5 * 500);
+
+      const terminal = seen.find(
+        (ev) =>
+          ev.type === 'error' &&
+          (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+      );
+      expect(terminal).toBeDefined();
+      expect((terminal!.data as { isTerminal?: boolean }).isTerminal).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each(['agentMessageDelta', 'reasoningTextDelta'] as const)(
+    '%s 的不可见内容不刷新 idle，真实内容仍刷新',
+    async (handlerName) => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installIdleHost(agent);
+        const handle = await startIdleSession(agent, `session-idle-${handlerName}`);
+        const seen = collectEvents(handle);
+        await handle.send({ type: 'user', content: 'go' });
+        const handlers = host.getThreadHandlers();
+        if (!handlers) throw new Error('expected thread handlers');
+        handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+        const emitDelta = (delta: string) => handlers[handlerName]?.({
+          threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'output-1', delta,
+        } as never);
+
+        await vi.advanceTimersByTimeAsync(IDLE_MS - 1_000);
+        emitDelta('real progress');
+        await vi.advanceTimersByTimeAsync(1_001);
+        expect(seen.some((event) => event.type === 'error')).toBe(false);
+
+        for (const delta of [' \t\n', '\u200B\u2060', '\x00\x1b']) {
+          await vi.advanceTimersByTimeAsync(10_000);
+          emitDelta(delta);
+        }
+        await vi.advanceTimersByTimeAsync(IDLE_MS - 31_000);
+        expect(seen).toContainEqual(expect.objectContaining({
+          type: 'error', data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+        }));
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('graceful stop interrupt 被拒绝后重新武装同一 turn 的 idle watchdog', async () => {
     vi.useFakeTimers();
     try {
@@ -29067,7 +29335,49 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
             (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
         ),
       ).toBe(true);
-      // 关键:本地 turn 状态必须已收干净,不等 interrupt 的结果
+      // 自动续跑可能已经排期：ACK 前必须保持 busy，避免新 turn 撞上旧 transport。
+      expect(handle.isTurnRunning?.()).toBe(true);
+      await vi.advanceTimersByTimeAsync(10_000 * 2 + 10);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('普通 idle timeout 在 interrupt ACK 前保持 busy', async () => {
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      let turnSeq = 0;
+      let resolveInterrupt: ((value: unknown) => void) | undefined;
+      const interruptPromise = new Promise((resolve) => {
+        resolveInterrupt = resolve;
+      });
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+        if (method === Method.TurnInterrupt) return interruptPromise as never;
+        return undefined;
+      });
+      const handle = await startIdleSession(agent, 'session-idle-defer-busy');
+      const seen = collectEvents(handle);
+      await handle.send({ type: 'user', content: 'go' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers) throw new Error('expected thread handlers');
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+
+      await vi.advanceTimersByTimeAsync(IDLE_MS + 1);
+      expect(
+        seen.some(
+          (ev) =>
+            ev.type === 'error' &&
+            (ev.data as { reason?: string } | null)?.reason === 'upstream_response_idle_timeout',
+        ),
+      ).toBe(true);
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      resolveInterrupt?.({});
+      await vi.advanceTimersByTimeAsync(0);
       expect(handle.isTurnRunning?.()).toBe(false);
       await handle.close();
     } finally {
@@ -29076,11 +29386,10 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
   });
 
   it('interrupt 始终不 ack → 作废 host(否则坏 daemon 会被下一条 send 复用)', async () => {
-    // watchdog 会先合成一次本地 turn 收口好让会话立刻可发,代价是 isTurnRunning() 变
-    // false —— Session 层的 recoverIfTurnStillRunning 正以它为判据,于是会认为"中断
-    // 生效了、会话仍可用"而放过这个 host。若中断其实从未被确认,这个已经哑火整个阈值
-    // 周期的 app-server 就留给下一条 send 复用:要么再超时,要么撞上服务端那个还在跑
-    // 的 turn(review #944 第五轮 P1)。确诊不可用就自己 close,让上层重建。
+    // watchdog 先推终态 error 但延后本地收口,直到两次 interrupt ACK 都超时才 close /
+    // 退役 host。ACK 前保持 isTurnRunning()=true,自动续跑不会撞上还在 interrupt 的
+    // 旧 transport;ACK 失败后 close 让上层重建,避免把已经哑火整个阈值周期的
+    // app-server 留给下一条 send(review #944 第五轮 P1)。
     vi.useFakeTimers();
     try {
       const agent = new CodexAgent(createDeps());

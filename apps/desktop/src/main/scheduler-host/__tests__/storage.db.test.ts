@@ -138,6 +138,7 @@ const SCHEDULER_DDL = [
       manual INTEGER NOT NULL DEFAULT 0,
       interval_ms INTEGER,
       agent_kind TEXT NOT NULL,
+      model_agent_kind TEXT,
       model TEXT,
       provider_id TEXT,
       effort TEXT,
@@ -478,6 +479,70 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     } finally {
       harness.close();
     }
+  });
+
+  it('recovers warnings per automation without erasing unread history; healthy skips only recover checks', async () => {
+    const harness = createStorageHarness();
+    try {
+      harness.db.run(sql`INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at)
+        VALUES ('recovery-session', 'Recovery', 'desktop', 'dialogue', 1, 1)`);
+      await harness.storage.insert(baseSchedule({ id: 'recovery-a' }));
+      await harness.storage.insert(baseSchedule({ id: 'recovery-b' }));
+      const hook = { status: 'failed', decision: 'block', exitCode: 1, durationMs: 1,
+        stdout: '', stderr: 'API rate limit already exceeded', stdoutTruncated: false,
+        stderrTruncated: false, timedOut: false, aborted: false } as const;
+      const insert = (id: string, scheduleId: string, firedAt: number, status: ScheduleRun['status'], extra: Partial<ScheduleRun> = {}) =>
+        harness.storage.insertRun({ id, scheduleId, firedAt, status, sessionId: 'recovery-session', ...extra });
+      await insert('execution-a', 'recovery-a', 1, 'failed', { readAt: 2 });
+      await insert('check-b', 'recovery-b', 3, 'failed', { preRunHookResult: hook });
+      const before = await harness.storage.listSidebarIndexRuns();
+      expect(before.find((r) => r.runId === 'check-b')).toMatchObject({ failureKind: 'rate-limit', failureRecovered: false });
+      await insert('backoff-b', 'recovery-b', 4, 'skipped');
+      expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'check-b')?.failureRecovered).toBe(false);
+      await insert('healthy-b', 'recovery-b', 5, 'skipped', { preRunHookResult: { ...hook, status: 'skipped', decision: 'skip', exitCode: 2, checkSucceeded: true } });
+      const recovered = await harness.storage.listSidebarIndexRuns();
+      expect(recovered.find((r) => r.runId === 'check-b')).toMatchObject({ status: 'failed', readAt: undefined, failureRecovered: true });
+      expect(recovered.find((r) => r.runId === 'execution-a')?.failureRecovered).toBe(false);
+      await insert('healthy-a', 'recovery-a', 6, 'skipped', { preRunHookResult: { ...hook, status: 'skipped', decision: 'skip', exitCode: 2, checkSucceeded: true } });
+      expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'execution-a')).toBeDefined();
+      await insert('success-a', 'recovery-a', 7, 'success', { readAt: 8 });
+      expect((await harness.storage.listSidebarIndexRuns()).some((r) => r.runId === 'execution-a')).toBe(false);
+      expect((await harness.storage.listRuns('recovery-a', 50)).some((r) => r.id === 'execution-a')).toBe(true);
+      await insert('new-a', 'recovery-a', 9, 'failed');
+      expect((await harness.storage.listSidebarIndexRuns()).find((r) => r.runId === 'new-a')).toMatchObject({ failureRecovered: false, failureKind: 'execution' });
+    } finally { harness.close(); }
+  });
+
+  it.each([null, '{broken', '{}', '{"decision":"skip"}'])('classifies and recovers legacy precheck errors when hook metadata is %s', async (hookJson) => {
+    const harness = createStorageHarness();
+    try {
+      harness.db.run(sql`INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at)
+        VALUES ('legacy-check-session', 'Check', 'desktop', 'dialogue', 1, 1)`);
+      await harness.storage.insert(baseSchedule());
+      await harness.storage.insertRun({ id: 'legacy-check', scheduleId: 'sch-1', firedAt: 1,
+        status: 'failed', sessionId: 'legacy-check-session', errorMsg: 'pre-run hook blocked: unavailable' });
+      harness.db.run(sql`UPDATE schedule_runs SET pre_run_hook_result = ${hookJson} WHERE id = 'legacy-check'`);
+      expect(await harness.storage.listSidebarIndexRuns()).toEqual([
+        expect.objectContaining({ runId: 'legacy-check', failureKind: 'precheck' }),
+      ]);
+      await harness.storage.insertRun({ id: 'execution', scheduleId: 'sch-1', firedAt: 2,
+        status: 'failed', sessionId: 'legacy-check-session', errorMsg: 'agent failed' });
+      await harness.storage.insertRun({ id: 'healthy', scheduleId: 'sch-1', firedAt: 3, status: 'skipped',
+        preRunHookResult: { status: 'skipped', decision: 'skip', exitCode: 2, durationMs: 1,
+          stdout: 'CINDY_PRECHECK_OK', stderr: '', stdoutTruncated: false, stderrTruncated: false,
+          timedOut: false, aborted: false, checkSucceeded: true } });
+      const rows = await harness.storage.listSidebarIndexRuns();
+      expect(rows.find((r) => r.runId === 'legacy-check')).toMatchObject({ failureRecovered: true, readAt: undefined });
+      expect(rows.find((r) => r.runId === 'execution')).toMatchObject({ failureRecovered: false });
+      await harness.storage.updateRun('legacy-check', { readAt: 4 });
+      await harness.storage.updateRun('execution', { readAt: 4 });
+      await harness.storage.insertRun({ id: 'latest', scheduleId: 'sch-1', firedAt: 5,
+        status: 'skipped', sessionId: 'legacy-check-session', readAt: 6 });
+      const readRows = await harness.storage.listSidebarIndexRuns();
+      expect(readRows.some((r) => r.runId === 'legacy-check')).toBe(false);
+      expect(readRows.some((r) => r.runId === 'execution')).toBe(true);
+      expect((await harness.storage.listRuns('sch-1', 50)).some((r) => r.id === 'legacy-check')).toBe(true);
+    } finally { harness.close(); }
   });
 
   it('keeps renamed legacy aliases from the latest-session projection', async () => {

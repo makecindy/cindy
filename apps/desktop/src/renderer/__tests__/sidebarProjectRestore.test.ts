@@ -102,6 +102,85 @@ describe('collectRestorableProjectKeys', () => {
 
     expect(Array.from(keys)).toEqual([PROJECT_KEY]);
   });
+
+  it('restores a persistent project with no visible tasks', async () => {
+    const keys = collectRestorableProjectKeys({
+      sessions: [],
+      persistentLocalProjects: [
+        {
+          workingDir: '/workspace/cindy',
+          lastUsedAt: '2026-08-02T08:00:00.000Z',
+          knownAgentKinds: [],
+        },
+      ],
+      lastActivityCutoff: null,
+      pinnedProjectKeys: new Set(),
+      vendorPredicate: null,
+      localPlatform: 'linux',
+    });
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreHiddenProjectIfPresent({
+        projectKey: PROJECT_KEY,
+        wasHiddenAtPickerOpen: true,
+        setProjectHidden: vi.fn().mockResolvedValue(true),
+        getCurrentProjectKeys: () => keys,
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('applies activity and vendor filters to unpinned persistent projects', () => {
+    const persistentLocalProjects = [
+      {
+        workingDir: '/workspace/cindy',
+        lastUsedAt: '2026-01-01T00:00:00.000Z',
+        knownAgentKinds: ['cc'],
+      },
+    ];
+
+    expect(
+      collectRestorableProjectKeys({
+        sessions: [],
+        persistentLocalProjects,
+        lastActivityCutoff: Date.parse('2026-08-01T00:00:00.000Z'),
+        pinnedProjectKeys: new Set(),
+        vendorPredicate: null,
+      }).has(PROJECT_KEY),
+    ).toBe(false);
+    expect(
+      collectRestorableProjectKeys({
+        sessions: [],
+        persistentLocalProjects,
+        lastActivityCutoff: null,
+        pinnedProjectKeys: new Set(),
+        vendorPredicate: (session) => session.agentKind === 'codex',
+      }).has(PROJECT_KEY),
+    ).toBe(false);
+  });
+
+  it('lets a pinned persistent project bypass activity and vendor filters', () => {
+    const keys = collectRestorableProjectKeys({
+      sessions: [],
+      persistentLocalProjects: [
+        {
+          workingDir: 'C:/Workspace/Cindy',
+          lastUsedAt: '2026-01-01T00:00:00.000Z',
+          knownAgentKinds: ['cc'],
+        },
+      ],
+      lastActivityCutoff: Date.parse('2026-08-01T00:00:00.000Z'),
+      pinnedProjectKeys: new Set(['local:c:/workspace/cindy']),
+      vendorPredicate: (session) => session.agentKind === 'codex',
+      localPlatform: 'win32',
+    });
+
+    expect(Array.from(keys)).toEqual(['local:C:/Workspace/Cindy']);
+  });
 });
 
 describe('restoreHiddenProjectIfPresent', () => {

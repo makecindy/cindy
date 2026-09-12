@@ -39,6 +39,7 @@ import {
   setChatEmbeddingSettingsOwner,
 } from '@/lib/chatEmbeddingStore';
 import { sessionsStore } from '@/lib/sessionsStore';
+import { recentWorkdirsStore } from '@/lib/recentWorkdirsStore';
 import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setModelEnginePrefsOwner } from '@/state/modelEnginePrefs';
@@ -118,6 +119,7 @@ function publishDataOwnerGeneration(dataOwnerId: string | null, ownerGeneration?
     cancelRemoteOptimisticSendsForDataOwnerBoundary();
   }
   setDataOwnerGeneration(dataOwnerId, ownerGeneration);
+  recentWorkdirsStore.setDataOwner(getDataOwnerGeneration());
   setSelectedMachineOwner(dataOwnerId);
   if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
 }
