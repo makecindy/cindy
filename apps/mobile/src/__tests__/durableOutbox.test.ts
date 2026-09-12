@@ -126,6 +126,52 @@ async function setup(storage = disk()) {
 }
 
 describe("durable mobile outbox ownership", () => {
+  it.each(['keys', 'item', 'json'] as const)('retries failed %s loading through ready and add without losing persisted work', async (failure) => {
+    const storage = disk();
+    const seed = createDurableOutbox(storage);
+    await seed.activate('alice');
+    await seed.add(message());
+    const readKeys = vi.spyOn(storage, 'getAllKeys');
+    const readItem = vi.spyOn(storage, 'getItem');
+    if (failure === 'keys') readKeys.mockRejectedValueOnce(new Error('busy'));
+    if (failure === 'item') readItem.mockRejectedValueOnce(new Error('busy'));
+    if (failure === 'json') readItem.mockResolvedValueOnce('{broken');
+    const store = createDurableOutbox(storage);
+    await expect(store.activate('alice')).rejects.toThrow();
+    expect(store.getSnapshot()).toEqual([]);
+    const loading = store.ready();
+    expect(store.activate('alice')).toBe(loading);
+    await Promise.all([loading, store.add({ ...message('id-2'), createdAt: 2 })]);
+    expect(store.getSnapshot().map((r) => r.item.clientId)).toEqual(['id-1', 'id-2']);
+    expect(readKeys).toHaveBeenCalledTimes(2);
+  });
+  it('keeps corrupt storage intact across retries and does not allow add to overwrite it', async () => {
+    const storage = disk();
+    const key = 'cindy.mobile.outbox.v1.alice/mac-a/session-a/id-1';
+    storage.data.set(key, '{broken');
+    const store = createDurableOutbox(storage);
+    await expect(store.activate('alice')).rejects.toThrow();
+    await expect(store.add(message())).rejects.toThrow();
+    await expect(store.ready()).rejects.toThrow();
+    expect(storage.data.get(key)).toBe('{broken');
+    expect(store.getSnapshot()).toEqual([]);
+  });
+  it('does not let an old activation failure invalidate the new account loading', async () => {
+    const storage = disk();
+    const pending = deferred<readonly string[]>();
+    const keys = vi.spyOn(storage, 'getAllKeys').mockImplementationOnce(() => pending.promise);
+    vi.spyOn(storage, 'getItem').mockRejectedValueOnce(new Error('old account read failed'));
+    const store = createDurableOutbox(storage);
+    const old = store.activate('alice');
+    const rejected = expect(old).rejects.toThrow('old account read failed');
+    const next = store.activate('bob');
+    pending.resolve(['cindy.mobile.outbox.v1.alice/mac-a/session-a/id-1']);
+    await rejected;
+    await next;
+    await store.ready();
+    expect(store.getAccountId()).toBe('bob');
+    expect(keys).toHaveBeenCalledTimes(2);
+  });
   it('reconfirms a cancellation tombstone after its first response is lost', async () => {
     const { store, runner, deps } = await setup();
     await store.add({ ...message(), state: 'confirming', cancelRequested: true,

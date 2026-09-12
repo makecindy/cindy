@@ -69,6 +69,7 @@ export function createDurableOutbox(storage: OutboxStorage) {
   let records: readonly DurableOutboxRecord[] = EMPTY;
   let writes: Promise<unknown> = Promise.resolve();
   let ready: Promise<void> = Promise.resolve();
+  let activationFailed = false;
   const listeners = new Set<() => void>();
   const emit = () => {
     for (const listener of listeners) listener();
@@ -88,7 +89,7 @@ export function createDurableOutbox(storage: OutboxStorage) {
     adding = false,
   ): Promise<DurableOutboxRecord | null> => {
     const epoch = generation;
-    await ready;
+    await store.ready();
     return serialize(async () => {
       assertOwner(record.accountId, epoch);
       const current = records.find((r) => keyFor(r) === keyFor(record));
@@ -108,7 +109,7 @@ export function createDurableOutbox(storage: OutboxStorage) {
       return next;
     });
   };
-  return {
+  const store = {
     subscribe(listener: () => void) {
       listeners.add(listener);
       return () => {
@@ -118,9 +119,10 @@ export function createDurableOutbox(storage: OutboxStorage) {
     getSnapshot: () => records,
     getAccountId: () => accountId,
     activate(owner: string): Promise<void> {
-      if (owner === accountId) return ready;
+      if (owner === accountId && !activationFailed) return ready;
       accountId = owner;
       const epoch = ++generation;
+      activationFailed = false;
       records = EMPTY;
       emit();
       ready = serialize(async () => {
@@ -160,13 +162,16 @@ export function createDurableOutbox(storage: OutboxStorage) {
         assertOwner(owner, epoch);
         records = loaded.sort((a, b) => a.createdAt - b.createdAt);
         emit();
+      }).catch((error: unknown) => {
+        if (owner === accountId && epoch === generation) activationFailed = true;
+        throw error;
       });
       return ready;
     },
     async add(record: DurableOutboxRecord) {
       if (!record.accountId || !record.deviceId)
         throw new Error("OUTBOX_OWNER_REQUIRED");
-      await ready;
+      await store.ready();
       if (records.some((r) => keyFor(r) === keyFor(record)))
         throw new Error("OUTBOX_DUPLICATE_ID");
       await mutate(record, record, true);
@@ -182,8 +187,9 @@ export function createDurableOutbox(storage: OutboxStorage) {
         deviceId: record.deviceId,
       }) as Promise<DurableOutboxRecord>,
     remove: (record: DurableOutboxRecord) => mutate(record, null),
-    ready: () => ready,
+    ready: (): Promise<void> => store.activate(accountId),
   };
+  return store;
 }
 
 export type DurableOutboxStore = ReturnType<typeof createDurableOutbox>;
