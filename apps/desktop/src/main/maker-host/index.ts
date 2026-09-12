@@ -1913,9 +1913,9 @@ export function getMaker(): Maker {
       createCodexAuthTokenReader: (providerId) => {
         const ownerScope = activeOwnerScopeKey();
         return async () => {
-          if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
           const state = await desktopCodexAuthAdapter.getState({ credentialMode: 'oauth-bearer', providerId });
-          if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
           const credentials = state.authenticated ? desktopCodexAuthAdapter.readOneShotCreds(providerId) : null;
           if (!credentials) throw new Error('Codex account credentials are unavailable');
           return { accessToken: credentials.accessToken, chatgptAccountId: credentials.accountId };
