@@ -96,6 +96,7 @@ vi.mock('electron', () => ({
 vi.mock('@cindy/maker-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/maker-core')>();
   return {
+    Session: actual.Session,
     isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isAutoReviewConfirmUndeliveredNotice: actual.isAutoReviewConfirmUndeliveredNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
@@ -323,7 +324,7 @@ vi.mock('../../maker-host/index.js', () => ({
 }));
 
 import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
-import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
+import { MAIN_OWNED_SEND_CONTEXT, Session, type AgentSessionHandle, type Capabilities } from '@cindy/maker-core';
 import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
@@ -404,6 +405,55 @@ beforeEach(() => {
 });
 
 describe('hook session 精确接管边界', () => {
+  it.each([false, true])('keeps post-terminal recovery bound to the exact Pi instance (replaced=%s)', async (replaced) => {
+    let terminal!: () => void;
+    const ready = new Promise<void>(resolve => { terminal = resolve; });
+    let end!: () => void;
+    const ended = new Promise<void>(resolve => { end = resolve; });
+    let failClose!: () => void;
+    const closeReady = new Promise<void>(resolve => { failClose = resolve; });
+    let running = false;
+    const handle = {
+      id: 'pi', agentKind: 'pi', model: 'm',
+      send: vi.fn(async () => { running = true; }),
+      close: vi.fn(async () => { await closeReady; throw new Error('exit unconfirmed'); }),
+      isTurnRunning: () => running, setInteractionResolver() {},
+      async *events() {
+        await ready;
+        yield { type: 'text', source: 'pi', data: { text: 'saved result', isFinal: true } } as AgentEvent;
+        running = false;
+        yield { type: 'done', source: 'pi', data: { status: 'completed' } } as AgentEvent;
+        await ended;
+      },
+    } as unknown as AgentSessionHandle;
+    const logger = { ...log, debug() {}, trace() {}, error() {}, fatal() {}, child() { return this; } };
+    const session = new Session({ id: 'sess-new', agentKind: 'pi', workDir: 'D:/repo',
+      handle, capabilities: {} as Capabilities, logger, turnStallMs: 0 });
+    fakeMaker.createSession.mockResolvedValueOnce(session as never);
+    fakeMaker.getSession.mockReturnValue(session);
+    const onRuntimeRecovery = vi.fn(async () => true);
+    try {
+      const result = createMakerHookSessionRunner({ log }).run(baseReq({ onRuntimeRecovery,
+        workingDir: 'D:/repo', laneKind: 'group', source: { im: 'telegram' } }));
+      await vi.waitFor(() => expect(handle.send).toHaveBeenCalledOnce());
+      await session.closeAfterCurrentTurn({ failureEvent: () => ({ type: 'text', data: {
+        text: 'restart-cindy-to-refresh-packages', isFinal: true,
+      } }) });
+      terminal();
+      await expect(result).resolves.toMatchObject({ status: 'ok', finalText: 'saved result' });
+      if (replaced) fakeMaker.getSession.mockReturnValue(makeFakeSession(session.id));
+      failClose();
+      await vi.waitFor(() => expect(session.getStatus()).toBe('error'));
+      expect(onRuntimeRecovery).toHaveBeenCalledTimes(replaced ? 0 : 1);
+      expect(handle.send).toHaveBeenCalledOnce();
+    } finally {
+      failClose(); terminal();
+      vi.mocked(handle.close).mockImplementation(async () => { end(); });
+      await session.close().catch(() => session.close());
+      fakeMaker.getSession.mockReset();
+    }
+  });
+
   it('inspect 的数据库读取失败向上抛出, 不伪装成不存在', async () => {
     const { getSessionRowSnapshotStrict } = await import('../../localDb/ipc/sessions.js');
     vi.mocked(getSessionRowSnapshotStrict).mockRejectedValueOnce(new Error('database unavailable'));

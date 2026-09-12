@@ -1,9 +1,12 @@
+import { CHAT_COLOR_TRANSITION_CLASS } from './chatChrome';
+
 /**
  * Compact activity-row chrome shared by tool rows, work-group thinking rows,
  * and system interruption rows. Mixed lists must share one trailing-triangle
  * slot, one hover lift, and one radius — two languages in the same column
  * read as drift. Radius is DESIGN.md §5 inner-control 8px. Do not use the
- * lg radius utility: it compiles to an undefined theme variable and is dropped.
+ * lg radius utility here: it follows user radius; this inner surface has a fixed
+ * radius under the existing local-theme contract.
  */
 
 /** Compact row surface radius. Pair with padding on the clickable row. */
@@ -15,7 +18,7 @@ export const ACTIVITY_ROW_HOVER_SURFACE_CLASS = 'hover:bg-[var(--msg-code-inline
 /** Color hover. DESIGN.md §14.4: new transitions must cite motion tokens;
  *  `transition-colors` alone uses Tailwind's hardcoded duration/easing. */
 export const ACTIVITY_ROW_COLOR_TRANSITION_CLASS =
-  'transition-colors duration-[var(--motion-fast,150ms)] ease-[var(--motion-ease-out)]';
+  CHAT_COLOR_TRANSITION_CLASS;
 
 /** Fixed 18×18 trailing chevron slot. Always reserve the column; hover paints
  *  the small rounded well behind the glyph (`group-hover` on the row). */

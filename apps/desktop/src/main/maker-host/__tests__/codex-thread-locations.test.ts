@@ -23,11 +23,11 @@ describe('native thread locations across accounts', () => {
     await fs.mkdir(path.dirname(rollout), { recursive: true });
     await fs.writeFile(rollout, 'history');
     await locations.record('thread-a', rollout);
-    expect(await locations.readStorageHome('thread-a')).toBe(home);
+    expect(await locations.readStorage('thread-a')).toEqual({ historyHome: home, sqliteHome: home });
     await locations.record('thread-a', rollout, home);
     const reopened = new CodexThreadLocations(path.join(root, 'owner', 'locations'));
-    expect(await reopened.readStorageHome('thread-a')).toBe(home);
-    expect(await reopened.readStorageHome('unknown')).toBeUndefined();
+    expect(await reopened.readStorage('thread-a')).toEqual({ historyHome: home, sqliteHome: home });
+    expect(await reopened.readStorage('unknown')).toBeUndefined();
     expect(await fs.readFile(rollout, 'utf8')).toBe('history');
   });
   it('resolves unindexed legacy history before account host startup and remembers its native home', async () => {
@@ -37,20 +37,20 @@ describe('native thread locations across accounts', () => {
     await fs.mkdir(path.dirname(rollout), { recursive: true });
     await fs.writeFile(rollout, 'old native history\n');
     const prepare = vi.fn().mockResolvedValue(rollout);
-    expect(await locations.readStorageHome('old-thread', { home, prepare })).toBe(home);
+    expect(await locations.readStorage('old-thread', { home, prepare })).toEqual({ historyHome: home, sqliteHome: home });
     expect(prepare).toHaveBeenCalledWith('old-thread');
     expect(await locations.read('old-thread')).toBe(rollout);
-    expect(await locations.readStorageHome('old-thread', { home, prepare })).toBe(home);
+    expect(await locations.readStorage('old-thread', { home, prepare })).toEqual({ historyHome: home, sqliteHome: home });
     expect(prepare).toHaveBeenCalledTimes(1);
     expect(await fs.readFile(rollout, 'utf8')).toBe('old native history\n');
     await fs.rm(rollout);
-    await expect(locations.readStorageHome('old-thread', { home, prepare })).rejects.toThrow();
+    await expect(locations.readStorage('old-thread', { home, prepare })).rejects.toThrow();
     expect(prepare).toHaveBeenCalledTimes(1);
   });
   it('does not invent a storage home when legacy preparation finds no history', async () => {
     const { root, locations } = await fixture();
     const prepare = vi.fn().mockResolvedValue(undefined);
-    expect(await locations.readStorageHome('missing', { home: root, prepare })).toBeUndefined();
+    expect(await locations.readStorage('missing', { home: root, prepare })).toBeUndefined();
     expect(await locations.read('missing')).toBeUndefined();
   });
 
@@ -63,6 +63,16 @@ describe('native thread locations across accounts', () => {
     await fs.appendFile(accountBPath!, 'turn B\n');
     const reopened = new CodexThreadLocations(path.join(root, 'owner', 'locations'));
     expect(await fs.readFile((await reopened.read('thread-1'))!, 'utf8')).toBe('turn A\nturn B\n');
+  });
+  it('distinguishes archived rollout ownership from an independently configured database home', async () => {
+    const { root, locations } = await fixture();
+    const historyHome = path.join(root, 'history-a');
+    const sqliteHome = path.join(root, 'database-a');
+    const rollout = path.join(historyHome, 'archived_sessions', 'rollout.jsonl');
+    await fs.mkdir(path.dirname(rollout), { recursive: true });
+    await fs.writeFile(rollout, JSON.stringify({ type: 'session_meta', payload: { id: 'archived' } }));
+    await locations.record('archived', rollout, sqliteHome);
+    expect(await locations.readStorage('archived')).toEqual({ historyHome, sqliteHome });
   });
   it('never falls back to an older rollout after the canonical path disappears', async () => {
     const { root, locations } = await fixture();

@@ -2067,6 +2067,7 @@ async function statRemotePath(
   host: RemoteHost,
   inputPath: string,
 ): Promise<{ kind: 'dir' | 'file' | 'missing'; resolvedPath: string }> {
+  if (/[\r\n\0]/.test(inputPath)) throw new Error('Remote path contains unsupported control characters');
   // 归一化为绝对路径:
   // - 存在的目录 → cd && pwd -P (展开 symlink 与相对路径,与 daemon cwd 契约一致)
   // - 存在的文件 → parent cd && pwd -P + basename
@@ -2079,28 +2080,38 @@ case "$1" in
   '~'|'~/'*) p="$HOME${'$'}{1:1}" ;;
   *)         p="$1" ;;
 esac
+case "$p" in
+  *$'\\r'*|*$'\\n'*) exit 64 ;;
+esac
 abs_for() {
   local target="$1"
   if [ -d "$target" ]; then
-    (cd "$target" && pwd -P)
+    (cd -P -- "$target" && printf '%s' "$PWD")
   else
     local parent base
     parent="$(dirname -- "$target")"
     base="$(basename -- "$target")"
     if [ -d "$parent" ]; then
-      printf '%s/%s' "$(cd "$parent" && pwd -P)" "$base"
+      (cd -P -- "$parent" && printf '%s/%s' "$PWD" "$base")
     else
       printf '%s' "$target"
     fi
   fi
 }
 if [ -d "$p" ]; then
-  printf 'dir %s\\n' "$(abs_for "$p")"
+  kind=dir
 elif [ -e "$p" ]; then
-  printf 'file %s\\n' "$(abs_for "$p")"
+  kind=file
 else
-  printf 'missing %s\\n' "$(abs_for "$p")"
+  kind=missing
 fi
+# Preserve trailing newlines until validation, including symlink targets.
+resolved="$(abs_for "$p" && printf '.')" || exit 64
+resolved="${'$'}{resolved%.}"
+case "$resolved" in
+  *$'\\r'*|*$'\\n'*) exit 64 ;;
+esac
+printf '%s %s\\n' "$kind" "$resolved"
 `;
   const result = await host.exec(
     `bash -c ${shellQuoteSh(script)} _ ${shellQuoteSh(inputPath)}`,

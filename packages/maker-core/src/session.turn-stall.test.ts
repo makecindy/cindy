@@ -124,6 +124,64 @@ function createSession(
 }
 
 describe('Session turn stall watchdog', () => {
+  it('closes an idle missing-terminal turn when stall abort never returns', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle({ abortHangs: true });
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((event) => seen.push(event));
+      await session.send('perform a side effect');
+      stub.endTurn();
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(seen).toContainEqual(expect.objectContaining({ type: 'error',
+        data: expect.objectContaining({ reason: 'turn_no_event_timeout', isTerminal: true }) }));
+      expect(stub.abort).toHaveBeenCalledTimes(1);
+      expect(session.getStatus()).toBe('aborting');
+      // A paired leftover done would clear the 250ms terminal-error drain. The
+      // hung abort must still force close this diagnosed generation.
+      stub.pushEvent({ type: 'done', data: {}, source: 'claude-code' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(session.getStatus()).toBe('aborting');
+      await vi.advanceTimersByTimeAsync(STALL_ABORT_RECOVERY_GRACE_MS + 1);
+      expect(session.getStatus()).toBe('closed');
+      expect(stub.handle.send).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('times out an accepted turn even if the provider went idle without delivering its terminal', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((event) => seen.push(event));
+      await session.send('perform a side effect');
+      stub.endTurn();
+      await vi.advanceTimersByTimeAsync(STALL_MS + 1);
+      expect(seen).toContainEqual(expect.objectContaining({ type: 'error',
+        data: expect.objectContaining({ reason: 'turn_no_event_timeout', isTerminal: true }) }));
+      expect(stub.handle.send).toHaveBeenCalledOnce();
+      await session.close();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('settles Stop with a missing terminal as cancelled even when abort flips the provider idle', async () => {
+    vi.useFakeTimers();
+    try {
+      const stub = createStubHandle();
+      const session = createSession(stub);
+      const seen: AgentEvent[] = [];
+      session.onEvent((event) => seen.push(event));
+      await session.send('work');
+      await session.abort();
+      await vi.advanceTimersByTimeAsync(MANUAL_ABORT_RECOVERY_GRACE_MS + 1);
+      expect(session.getStatus()).toBe('closed');
+      expect(seen).toEqual([expect.objectContaining({ type: 'done', data: { status: 'cancelled' } })]);
+      expect(stub.handle.send).toHaveBeenCalledOnce();
+    } finally { vi.useRealTimers(); }
+  });
+
   it('turn 零事件超阈值 → 推终态 error 并中断 turn', async () => {
     vi.useFakeTimers();
     try {

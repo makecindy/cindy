@@ -213,6 +213,7 @@ Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强
 bootstrap 和首条任务派发之前校验并绑定，项目上下文与 agent 进程使用同一目录。
 本机目录解析真实路径并检查目录及协同开关；SSH 目录通过继承的 remoteHostId 在远端校验，
 探测前复用该主机的就绪/重连入口，不触碰其他主机；解析保留 shell 前置输出兼容与路径空格，
+SSH 行协议不接受含 CR/LF 的输入或物理路径（含 symlink 目标），拒绝后不绑定其他目录。
 不拿本机文件系统判断远端路径。无效目录或目标项目禁用协同时返回错误，不回退到 Lead
 目录，也不创建 Worker。路径解析与会话落库均保留目录名中的空格。策略查询统一将 Cindy
 托管 worktree 映射到 base repo，但运行目录与落库目录仍为实际 worktree；用户自建 worktree

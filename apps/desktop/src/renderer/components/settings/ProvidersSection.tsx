@@ -88,7 +88,7 @@ import {
   MANAGED_LMSTUDIO_PROVIDER_ID,
   MANAGED_OLLAMA_PROVIDER_ID,
 } from '../../../shared/localModelRuntime';
-import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
@@ -1000,8 +1000,8 @@ function GenericOAuthHeader({
     [],
   );
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
-    useProviderOAuthDeviceCode(provider.id, { observeProgress: deviceFlow });
+  const { deviceCode, browserUrl, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
+    useProviderOAuthDeviceCode(provider.id, { observeProgress: deviceFlow || provider.auth.native === 'codex' });
 
   const handleLogin = useCallback(async () => {
     const attempt = ++loginAttempt.current;
@@ -1094,7 +1094,8 @@ function GenericOAuthHeader({
           disabled: busy,
         };
   const detail =
-    loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined;
+    loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} />
+      : loggingIn && browserUrl ? <OAuthBrowserLink url={browserUrl} /> : undefined;
 
   return (
     <DetailHeader

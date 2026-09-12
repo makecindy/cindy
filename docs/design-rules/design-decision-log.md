@@ -12,6 +12,8 @@
 
 ## 2026-09
 
+- **09-12** **侧栏整理菜单收为子菜单**——用户逐轮确认 HTML 后授权实施：一级为分组、任务排序、项目排序、任务状态、筛选、显示、任务信息，右侧均显示当前选择。任务排序直接并列优先级、最近活动、创建时间；优先级列首不改变默认值。筛选维度名为 Harness，补 Pi；任务状态独立于内容筛选的计数和重置。所有菜单行配图标，分组入口按真实侧栏的组标题与缩进任务行绘制，取代网格及 FolderTree 候选。替代旧菜单的平铺区块、嵌套时间排序及部分行刻意无图标的处理。现行行为见 `docs/product-rules/sidebar-redesign-plan.md §3`，实现为 `SidebarFilterPopover.tsx`；本条记录设计批准，不代表客户端实机验收通过。
+
 - **09-09** **用量历史 pi 标记改为青绿**——所有者试用后认为 Codex 蓝色与 pi 紫色不易区分，指定 pi 改用青绿。仅用量历史 harness 表的 pi 三处标记改为 `--usage-model-1`，随 Light/Dark 使用已有青绿值；Claude 陶土橙和 Codex 蓝色保留。替代本日上一条 pi 紫色选择，不修改全局 `--engine-badge-pi` 或模型配色。
 
 - **09-09** **用量历史 harness 改用已有引擎身份色**——所有者要求 Claude 品牌偏橙、Codex 蓝色，pi 可自选但不用红色。替代本日早先的青绿 / 靛蓝 / 琥珀方案：复用 `--engine-badge-cc` / `--engine-badge-codex` / `--engine-badge-pi`，分别为陶土橙 / 蓝 / 紫；三种标记位置同步，沿用这些身份 Token 的 Light/Dark 固定值合同。仅扩展这些既有 Token 在用量历史 Agent/harness 表中的消费范围，不改 Token 值、模型配色或其他功能。当前规则见 `usage-history-charts.md`。
@@ -726,3 +728,12 @@ BORDER_BG → border-default，TEXT_PRIMARY/SECONDARY/TERTIARY → 对应 text �
 ## 2026-09-11 DS-8 默认代码字体依据迁移
 
 接管前 globals.css 已明确：默认代码字体使用系统等宽字体（macOS 的 SF Mono 不以该字体名暴露给网页，实际命中 Menlo；Windows 命中 Consolas），CJK 显式回退 PingFang / 微软雅黑。JetBrains Mono 已降级为可选预设、不再是默认。DS-8 将这条依据保存在 reference/foundations.json 的 app-font-code-default.$description，字体家族、顺序和用户选字体逻辑均不变。DESIGN.md §3 的 JetBrains Mono 排版样本是历史设计样本，不能据此把默认代码字体改回 JetBrains Mono；当前默认来源为该 DTCG token，运行期字体选择仍由原适配器负责。
+
+
+## 2026-09-11 · DS-9 Desktop 范围与授权呈现
+
+- **决定人：用户/设计师。** 用户将本期余项合为 DS-9（桌面聊天、跨入口、桌面授权）与 DS-10（成熟保护、维护、最终验收），Mobile 以后独立做；内部工序不另编号或拆批。
+- 在隔离 Electron 中以真实 PermissionPrompt 制作现状/主次降低/宽松密度对照，可切换默认与 CINDY Light/Dark、窄栏；按钮回调为受控记录，不执行命令。用户分别明确选择“允许一次突出”“保持中性”“沿用当前密度”。
+- Desktop Allow once 沿用 perm-allow 局部色为主，其余为次；没有可信风险字段，不从命令名或 autoReviewUnavailable 推断高风险；保留输入区内的位置、信息顺序与密度。已有胶囊按钮、键帽 4px 决定直接实施，不重投票。授权含义、默认、顺序、快捷键、提交与恢复行为不变，Mobile 对应视觉决定后续独立处理。
+- 同批聊天按 DESIGN §5 / §14 复用现有数值链、消息与活动行呈现，补图标 Tip、键盘可见焦点、代码与附件操作一致性；业务状态仍由原组件持有。
+- 用户授权交付到本地实现与视觉测试环境，并明确免本地双审；此记录不表示提交、合并或最终人工视觉已验收。实施证据见 `docs/design-evidence/2026-09-11/ds9-desktop-core.md`。

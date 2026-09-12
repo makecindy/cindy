@@ -188,6 +188,11 @@ export interface AgentEvent {
   /** Session.instanceId of the incarnation that dequeued this event. Host-only. */
   sessionInstanceId?: string;
   /**
+   * Host-only recovery notice, independent of the already completed product turn.
+   * Session delivers it on `onRuntimeRecovery`, never on product `onEvent`.
+   */
+  runtimeRecovery?: true;
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later

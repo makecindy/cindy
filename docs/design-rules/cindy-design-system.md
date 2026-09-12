@@ -8,7 +8,7 @@ DS-6 已随 [#4135](https://github.com/makecindy/cindy/pull/4135) 合入（head 
 
 DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)。入口：[规则范围与回退](./design-governance.md#8-治理接线纪律)、[固定历史回放、注入和接线证据](../design-evidence/2026-09-10/ds7-guards.md)。新增颜色可用 `pnpm check:design-colors --base-ref <基线> --worktree` 检查；只报告用 `pnpm report:design-colors`。main 已启用该接线；历史采证版本与最终合并事实见治理 §8。
 
-> 2026-09-10：DS-8 本地候选，静态颜色/主题与通用基础已接 DTCG→Terrazzo；实机验收及 SC 状态以唯一主计划为准。DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，旧附件不冒充 DS-8 证据。
+> 2026-09-11：DS-8 已合并 [#4268](https://github.com/makecindy/cindy/pull/4268)，Desktop 静态数值已接 DTCG→Terrazzo。当前 DS-9 整理桌面聊天、跨入口与授权，DS-10 做保护、维护与最终验收；Mobile 留待独立阶段。工程、人工与平台验收分别记录。
 
 ## 文档索引
 
@@ -36,7 +36,8 @@ DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)。入口：
 1. 先读 [DESIGN.md](./DESIGN.md) 的适用视觉/组件规则，再读 [治理合同](./design-governance.md) §4 兼容、§6 证据、§7/8 风险与门禁；当前顺序及目标验收见 §12。
 2. 在 [inventory](./design-inventory.md) 找实际入口、保护合同与人工下一动作；没认领的 owner 仍是 unassigned，按实际工作认领，不能把共享组件已被引用当成整页迁移完成。
 3. 复用现有 [Button](../../apps/desktop/src/renderer/components/ui/button.tsx)、[Input / Textarea](../../apps/desktop/src/renderer/components/ui/input.tsx)；设置旧局部覆盖使用 [SettingsTextInput](../../apps/desktop/src/renderer/components/settings/SettingsTextInput.tsx)。表单字段的 label / hint / 错误组合用 [FormField](../../apps/desktop/src/renderer/components/ui/form-field.tsx)，保存期间的防重复反馈用 Button 的 loading 状态（均已随 DS-6 提供，用法见上方「DS-6 表单贡献入口」）。
-4. 需要改设计值时读 [Token README](../../packages/design-tokens/README.md)：Desktop 已接管族从 DTCG 生成到原生产入口；同源维护方法与保留清单在该处。Mobile 接口待新重构方案明确后共同确认，DS-10 再接管；新观感先查治理 §10 待决项，不因数值相同而删除局部主题覆盖。
+4. 聊天复用 [chatChrome](../../apps/desktop/src/renderer/components/chat/chatChrome.ts) 与 [activityRowChrome](../../apps/desktop/src/renderer/components/chat/activityRowChrome.ts)：共用正文/代码排版、图标动作与行反馈，原调用方保留状态、回调及局部主题 alias。完整场景与局限见 [DS-9 证据](../design-evidence/2026-09-11/ds9-desktop-core.md)。
+5. 需要改设计值时读 [Token README](../../packages/design-tokens/README.md)：Desktop 已接管族从 DTCG 生成到原生产入口；同源维护方法与保留清单在该处。Mobile 接口待新重构方案明确后共同确认，以后独立接管；新观感先查治理 §10 待决项，不因数值相同而删除局部主题覆盖。
 
 以上仓内入口即可开始贡献；无需访问个人桌面记录。此阅读路径检查不代替 G2 的独立贡献者试用。
 

@@ -57,6 +57,7 @@ export type SessionRuntimeSetResult =
   | {
       ok: true;
       status: 'applied' | 'deferred';
+      effectiveBoundary?: 'next_send';
       generation: number;
       effectiveProfile: SessionRuntimeProfile;
       pendingMutation: PendingSessionRuntimeMutation | null;
@@ -86,6 +87,7 @@ export interface SessionControlServiceDeps {
     targetSessionId: string;
     expectedGeneration?: number;
     patch: {
+      harness?: AgentKind;
       model?: string;
       providerId?: string | null;
       effort?: Effort;
@@ -280,6 +282,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       targetSessionId: string;
       expectedGeneration?: number;
       patch: {
+        harness?: AgentKind;
         model?: string;
         providerId?: string | null;
         effort?: Effort;

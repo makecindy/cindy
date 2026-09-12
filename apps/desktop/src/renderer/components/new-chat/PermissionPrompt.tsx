@@ -21,6 +21,7 @@ import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
 
@@ -76,6 +77,23 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
     (suggestion as Record<string, unknown>).destination === 'session'
   );
 }
+
+// Button supplies geometry, focus and disabled behavior. Permission keeps its
+// historic local aliases (including a separately themed Allow once action).
+// DS-9: user chose existing emphasis, neutral information and current density.
+const actionClass = 'h-auto min-h-9 max-w-full gap-2 px-3 py-1.5';
+const secondaryActionClass = cn(
+  actionClass,
+  'border-[var(--chat-input-border)] bg-transparent text-[var(--chat-input-text)]',
+  'enabled:hover:bg-[var(--perm-code-bg)]',
+  'enabled:active:bg-[color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
+);
+const allowActionClass = cn(
+  actionClass,
+  'border-[var(--chat-input-border)] bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
+  'enabled:hover:bg-[color-mix(in_srgb,var(--perm-allow-btn-bg)_90%,var(--perm-allow-btn-text))]',
+  'enabled:active:bg-[color-mix(in_srgb,var(--perm-allow-btn-bg)_80%,var(--perm-allow-btn-text))]',
+);
 
 // ---------------------------------------------------------------------------
 // Component
@@ -168,7 +186,7 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
   return (
     <div
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border p-4',
+        'w-full max-w-[914px] rounded-xl border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
@@ -213,22 +231,18 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
       )}
       <div className="mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
         {/* Deny */}
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="lg"
           onClick={handleDeny}
           disabled={submitting}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)] bg-transparent',
-            'text-13 font-medium text-[var(--chat-input-text)]',
-            'transition-colors hover:bg-[var(--perm-code-bg)]',
-          )}
+          className={secondaryActionClass}
         >
           <span>{t(isMediaDownload ? 'newChat.mediaDownload.defer' : 'agentIsland.native.deny')}</span>
           <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
           </kbd>
-        </button>
+        </Button>
 
         {canAlwaysAllowForSession && (
           // 有具体规则就把范围写进按钮(`本对话都允许 Bash(curl:*)`),没有则退回原文案。
@@ -245,17 +259,12 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
             side="top"
             contentClassName="max-w-[320px] whitespace-pre-line break-all text-left"
           >
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="lg"
               onClick={handleAlwaysAllow}
               disabled={submitting}
-              className={cn(
-                // max-w:规则可能很长(完整命令串),截断后完整内容看 tooltip。
-                'flex min-w-0 max-w-[460px] items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-                'border-[var(--chat-input-border)] bg-transparent',
-                'text-13 font-medium text-[var(--chat-input-text)]',
-                'transition-colors hover:bg-[var(--perm-code-bg)]',
-              )}
+              className={cn(secondaryActionClass, 'min-w-0 max-w-[min(100%,460px)]')}
             >
               <span className="min-w-0 truncate">
                 {allowScope
@@ -268,28 +277,23 @@ export function PermissionPrompt({ permission, onRespond, companion }: Permissio
               <kbd className="-ml-1 shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
                 Enter
               </kbd>
-            </button>
+            </Button>
           </Tip>
         )}
 
         {/* Allow once (primary) */}
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="lg"
           onClick={handleAllowOnce}
           disabled={submitting}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)]',
-            'bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-            'text-13 font-medium',
-            'transition-colors hover:opacity-90',
-          )}
+          className={allowActionClass}
         >
           <span>{t(isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
           <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             Enter
           </kbd>
-        </button>
+        </Button>
       </div>
     </div>
   );
