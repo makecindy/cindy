@@ -795,6 +795,7 @@ export interface MobileMakerTransport {
       relPath: string,
       signal?: AbortSignal,
       beforeInvoke?: () => Promise<unknown>,
+      options?: { stream?: boolean },
     ): Promise<MobileRemoteMediaFetchResult>;
     caps(workdir: string): Promise<FileBrowserCapsResult>;
     /** 返回裸 entries(unknown),消费方用 normalizeRemoteOpDirEntries 归一化。 */
@@ -1181,7 +1182,7 @@ export function createMobileMakerTransport({
     },
     fileBrowser: {
       cacheScope: JSON.stringify([fileOwner.accountKey, deviceId]),
-      readBytes: async (workdir, relPath, signal, beforeInvoke) => {
+      readBytes: async (workdir, relPath, signal, beforeInvoke, options) => {
         assertFileReadActive(signal);
         const retryOp = <T>(args: Record<string, unknown>) =>
           withTransientRemoteRetry(async () => {
@@ -1206,7 +1207,7 @@ export function createMobileMakerTransport({
         assertFileReadActive(signal);
         if (!reference.ok)
           throw new Error(reference.message ?? "FILE_READ_FAILED");
-        return fetchMedia(reference.url, { signal }, fallback, false);
+        return fetchMedia(reference.url, { signal }, fallback, options?.stream ?? false);
       },
       caps: (workdir) =>
         call("file-browser:remote-op", [{ op: "caps", workdir }]),

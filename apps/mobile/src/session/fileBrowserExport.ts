@@ -12,6 +12,8 @@ import type { MobileRemoteMediaPresignResult } from "@/session/remoteMedia";
 import { peerMediaUri, peerMediaExpiry } from "@/device-link/peerFileRegistry";
 
 export interface ExportRemoteFileDeps {
+  /** Playback URLs must not reuse short-lived full-file peer results. */
+  stream?: boolean;
   maker: Pick<MobileMakerTransport, "fileBrowser">;
   deviceId: string;
   openLink: (deviceId: string) => Promise<unknown>;
@@ -26,7 +28,8 @@ export async function exportRemoteFileToUrl(
   relPath: string,
   mtimeMs: number,
 ): Promise<string> {
-  const scope = deps.maker.fileBrowser.cacheScope ?? deps.deviceId;
+  const ownerScope = deps.maker.fileBrowser.cacheScope ?? deps.deviceId;
+  const scope = JSON.stringify([ownerScope, deps.stream === true ? "stream" : "file"]);
   const cached = getCachedExportUrl(scope, workdir, relPath, mtimeMs);
   if (cached) return cached;
   const abort = new AbortController();
@@ -42,6 +45,7 @@ export async function exportRemoteFileToUrl(
       relPath,
       abort.signal,
       () => deps.openLink(deps.deviceId),
+      { stream: deps.stream === true },
     );
     check();
     if (abort.signal.aborted) throw new Error(i18n.t("files.export.leftPage"));

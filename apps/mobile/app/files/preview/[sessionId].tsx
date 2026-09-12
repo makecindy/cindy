@@ -369,12 +369,12 @@ export default function RemoteFilePreviewScreen() {
    * 外路径一律拒绝),relPath/mtime 参数此时被忽略。
    */
   const exportToUrl = useCallback(
-    (relPath: string, mtimeMs: number): Promise<string> => {
+    (relPath: string, mtimeMs: number, stream = true): Promise<string> => {
       if (singleAbsPath) {
-        return fetchRemoteAbsFileToUrl({ maker, deviceId, openLink, presignGet }, singleAbsPath);
+        return fetchRemoteAbsFileToUrl({ maker, deviceId, openLink, presignGet, stream }, singleAbsPath);
       }
       return exportRemoteFileToUrl(
-        { maker, deviceId, openLink, presignGet, isCancelled: () => unmountedRef.current },
+        { maker, deviceId, openLink, presignGet, stream, isCancelled: () => unmountedRef.current },
         workdir,
         relPath,
         mtimeMs,
@@ -433,7 +433,7 @@ export default function RemoteFilePreviewScreen() {
     if (busyLabel) return;
     setBusyLabel(t('files.preview.exporting'));
     try {
-      const url = await exportToUrl(item.relPath, item.mtimeMs);
+      const url = await exportToUrl(item.relPath, item.mtimeMs, false);
       // 传原始文件名:分享单按真实扩展名识别类型(PDF/视频等非图片 mime 不在
       // extOfMime 映射里,不带名字会落成 .img 让接收方无法预览)。
       const mime = shareMimeForFileName(item.name);
