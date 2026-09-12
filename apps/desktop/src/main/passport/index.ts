@@ -299,8 +299,12 @@ export function registerPassportInputDevice(): void {
   };
   const scheduleRestart = (reason: string): void => {
     if (!wanted || !ownership.isOwner() || restartTimer) return;
+    if (restartAttempt >= PASSPORT_HELPER_RESTART_DELAYS_MS.length) {
+      log.warn('Passport helper restart limit reached; disable and enable the accessory to retry');
+      return;
+    }
     const delay = PASSPORT_HELPER_RESTART_DELAYS_MS[Math.min(restartAttempt, PASSPORT_HELPER_RESTART_DELAYS_MS.length - 1)];
-    restartAttempt = Math.min(restartAttempt + 1, PASSPORT_HELPER_RESTART_DELAYS_MS.length - 1);
+    restartAttempt++;
     log.warn(`Passport helper ${reason}; retrying in ${delay}ms`);
     restartTimer = setTimeout(() => {
       restartTimer = null;
@@ -337,6 +341,7 @@ export function registerPassportInputDevice(): void {
       const next = spawn(executable, [profile], { stdio: ['pipe', 'pipe', 'pipe'] });
       child = next;
       expectedExitChild = null;
+      const launchedAt = Date.now();
       let exited = false;
       let failure = false;
       let resolveChildExit!: () => void;
@@ -366,6 +371,7 @@ export function registerPassportInputDevice(): void {
           return;
         }
         resetHelperState();
+        if (Date.now() - launchedAt >= 60_000) restartAttempt = 0;
         if (wanted && ownership.isOwner()) scheduleRestart(failure ? 'failed' : 'exited');
       };
       let buffer = '';
@@ -392,7 +398,6 @@ export function registerPassportInputDevice(): void {
           const previousVersion = controller.connectionVersion;
           controller.handle(line);
           if (helperKind === 'ready') {
-            restartAttempt = 0;
             cancelRestart();
           }
           if (previousVersion !== controller.connectionVersion) {

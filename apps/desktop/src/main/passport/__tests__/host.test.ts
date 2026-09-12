@@ -238,6 +238,7 @@ describe('Passport host transcription boundary', () => {
 
     const stable = mocks.spawn.mock.results[2].value;
     stable.stdout.emit('data', '{"kind":"ready"}\n');
+    await vi.advanceTimersByTimeAsync(60_000);
     await flush();
     stable.emit('exit', 1, null);
     await flush();
@@ -246,6 +247,24 @@ describe('Passport host transcription boundary', () => {
     await vi.advanceTimersByTimeAsync(1);
     await flush();
     expect(mocks.spawn).toHaveBeenCalledTimes(4);
+  });
+  it('stops retrying repeated short-lived helpers and allows an explicit restart', async () => {
+    for (const delay of [3_000, 6_000, 12_000, 24_000, 30_000]) {
+      const child = mocks.spawn.mock.results.at(-1)!.value;
+      child.stdout.emit('data', '{"kind":"ready"}\n');
+      child.emit('exit', 1, null);
+      await vi.advanceTimersByTimeAsync(delay);
+      await flush();
+    }
+    expect(mocks.spawn).toHaveBeenCalledTimes(6);
+    mocks.spawn.mock.results.at(-1)!.value.emit('exit', 1, null);
+    await vi.advanceTimersByTimeAsync(120_000);
+    await flush();
+    expect(mocks.spawn).toHaveBeenCalledTimes(6);
+    host.suspendTaskSlots();
+    await host.resumeTaskSlots();
+    await flush();
+    expect(mocks.spawn).toHaveBeenCalledTimes(7);
   });
   it.each(['owner', 'disconnect', 'archive'])('discards late transcription after %s', async (boundary) => {
     let finish!: (value: { text: string }) => void;

@@ -37,3 +37,5 @@ Ogg Opus positions use the fixed 48 kHz clock: each 40 ms packet advances 1,920 
 Host tests and builds do not prove physical recording quality, no-PSRAM memory headroom, permissions, reconnect or Chinese display quality. These require the updated board firmware and manual acceptance. No physical flashing is performed by the build.
 
 Device controls use TX notifications: `version=2:u8, action:u8, taskId:40 bytes, recordingToken:u32LE` (46 bytes, ATT MTU at least 49). Actions 1–6 are open, previous page, next page, re-record, confirm and cancel. Review actions must match the task and recording token. Snapshot status uses `draft:<8-hex-token>` for review, `retry:<8-hex-token>` for rejected sends, `asr:<8-hex-token>` during transcription and `error:<8-hex-token>` on transcription failure. Tokens are not displayed on the device. Reply pages carry `[page/count]` followed by three short rows. Update firmware and desktop together.
+
+Unexpected helper exits retry up to five times with increasing delays. A helper that runs for at least one minute resets the retry budget. After repeated startup failures, disable and re-enable the accessory to retry.
