@@ -665,7 +665,7 @@ describe('远程机器切换入口并入 SidebarTopNav(置顶段上方,固定不
     // 渲染进程画不到窗口外:菜单高度按 Radix 可用高度收口 + 纵向滚动,
     // 否则 content 的 overflow-hidden 会把超出部分静默切掉(实机丢过「分组」整段)。
     expect(filterSource).toContain(
-      'max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-y-auto',
+      'max-h-[calc(var(--radix-dropdown-menu-content-available-height)-0.75rem)] overflow-x-hidden overflow-y-auto',
     );
     expect(filterSource).toContain('collisionPadding={8}');
   });
