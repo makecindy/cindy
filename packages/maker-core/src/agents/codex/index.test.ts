@@ -258,6 +258,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
   const createdTransports: MockCodexTransport[] = [];
   const createdStdioOptions: Array<{
     extraArgs?: string[];
+    env?: Record<string, string>;
     onProcessSpawned?: (pid: number) => void | (() => void);
   }> = [];
   return { MockCodexTransport, createdTransports, createdStdioOptions };
@@ -266,6 +267,7 @@ const { MockCodexTransport, createdTransports, createdStdioOptions } = vi.hoiste
 vi.mock('./app-server/stdioTransport.js', () => ({
   createStdioTransport: (opts: {
     extraArgs?: string[];
+    env?: Record<string, string>;
     onProcessSpawned?: (pid: number) => void | (() => void);
   }) => {
     createdStdioOptions.push(opts);
@@ -358,6 +360,86 @@ function createDeps(
 }
 
 describe('CodexAgent spawn configuration', () => {
+  it.each(['oauth-bearer', 'gateway-key'] as const)('separates canonical history from target credentials (%s)', async mode => {
+    const credentialHome = path.resolve(os.tmpdir(), 'target-account-fixture');
+    const historyHome = path.resolve(os.tmpdir(), 'original-history-fixture');
+    const sqliteHome = path.resolve(os.tmpdir(), 'original-database-fixture');
+    const tokens = { accessToken: 'test-target-token', chatgptAccountId: 'target-account' };
+    const readTokens = vi.fn(async () => tokens);
+    const prepare = vi.fn<NonNullable<AgentDeps['prepareCodexExtraSpawnConfig']>>(async () => ({ extraArgs: ['-c', 'model_catalog_json="target-catalog.json"'], extraEnv: {}, codexProxyActive: true }));
+    const deps = createDeps({}, { prepareCodexExtraSpawnConfig: prepare,
+      isCodexAccountProvider: id => id === 'account-b',
+      createCodexAuthTokenReader: () => readTokens,
+      resolveCodexThreadStorage: async () => ({ historyHome, sqliteHome }),
+    });
+    deps.auth.getState = async () => ({ authenticated: true, authSource: mode === 'oauth-bearer' ? 'oauth' : 'api-key' });
+    deps.auth.getAuthEnv = async () => ({ CODEX_HOME: credentialHome, XDT_CODEX_API_KEY: 'selected-gateway' });
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse('initialize', { result: { userAgent: 'mock-codex', codexHome: historyHome } });
+      transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral' } } });
+      transport.setMockResponse('account/login/start', { result: { type: 'chatgptAuthTokens' } });
+    };
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'cross-home', resumeSessionId: '0199ae4e-d6b0-7755-a755-66754cd7a847',
+        providerId: mode === 'oauth-bearer' ? 'account-b' : 'xd', model: 'gpt-5.4', workingDir: os.tmpdir() });
+      expect(createdStdioOptions[0].env).toMatchObject({ CODEX_HOME: historyHome, XDT_CODEX_API_KEY: 'selected-gateway' });
+      expect(createdStdioOptions[0].extraArgs).toContain(`sqlite_home=${JSON.stringify(sqliteHome)}`);
+      expect(createdStdioOptions[0].extraArgs).toContain('cli_auth_credentials_store="ephemeral"');
+      if (mode === 'oauth-bearer') {
+        expect(prepare.mock.calls[0][1]).toMatchObject({ codexHome: credentialHome, providerId: 'account-b' });
+        expect(readTokens).toHaveBeenCalledTimes(1);
+        const methods = createdTransports[0].lines.map(line => JSON.parse(line).method);
+        expect(methods).toContain('thread/resume');
+        expect(methods.indexOf('thread/resume')).toBeGreaterThan(methods.indexOf('account/login/start'));
+      } else {
+        expect(readTokens).not.toHaveBeenCalled();
+        expect(createdTransports[0].lines.some(line => JSON.parse(line).method === 'account/login/start')).toBe(false);
+      }
+      await handle.close();
+    } finally {
+      await agent.forceDisposeLocalHostForAuthChange('test cleanup');
+    }
+  });
+
+  it('refreshes external credentials through the target managed account host without recursive login', async () => {
+    const credentialHome = path.resolve(os.tmpdir(), 'target-account-fixture');
+    const historyHome = path.resolve(os.tmpdir(), 'original-history-fixture');
+    const initial = { accessToken: 'test-old-token', chatgptAccountId: 'target-account' };
+    const updated = { ...initial, accessToken: 'test-new-token' };
+    const readTokens = vi.fn().mockResolvedValueOnce(initial).mockResolvedValueOnce(initial).mockResolvedValue(updated);
+    const deps = createDeps({}, { isCodexAccountProvider: id => id === 'account-b',
+      createCodexAuthTokenReader: () => readTokens,
+      resolveCodexThreadStorage: async () => ({ historyHome, sqliteHome: historyHome }),
+    });
+    deps.auth.getState = async () => ({ authenticated: true, authSource: 'oauth' });
+    deps.auth.getAuthEnv = async () => ({ CODEX_HOME: credentialHome });
+    MockCodexTransport.onCreate = transport => {
+      transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral' } } });
+      transport.setMockResponse('account/login/start', { result: { type: 'chatgptAuthTokens' } });
+      transport.setMockResponse('account/read', { result: {} });
+    };
+    const agent = new CodexAgent(deps);
+    try {
+      const handle = await agent.startSession({ sessionId: 'cross-home-refresh', resumeSessionId: 'source',
+        providerId: 'account-b', model: 'gpt-5.4', workingDir: os.tmpdir() });
+      const taskTransport = createdTransports[0];
+      taskTransport.emitMockLine({ id: 'refresh-account', method: 'account/chatgptAuthTokens/refresh',
+        params: { reason: 'unauthorized', previousAccountId: 'target-account' } });
+      await vi.waitFor(() => expect(taskTransport.lines.map(line => JSON.parse(line)))
+        .toContainEqual({ id: 'refresh-account', result: updated }));
+      expect(createdStdioOptions[1].env?.CODEX_HOME).toBe(credentialHome);
+      expect(createdStdioOptions[1].extraArgs).not.toContain('cli_auth_credentials_store="ephemeral"');
+      expect(createdTransports[1].lines.some(line => JSON.parse(line).method === 'account/login/start')).toBe(false);
+      expect(createdTransports[1].lines.map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({
+        method: 'account/read', params: { refreshToken: true },
+      }));
+      await handle.close();
+    } finally {
+      await agent.forceDisposeLocalHostForAuthChange('test cleanup');
+    }
+  });
+
   it('keeps host-enforced plugin disabling when dynamic spawn preparation fails', async () => {
     const prepareCodexExtraSpawnConfig = vi.fn(async () => {
       throw new Error('bridge unavailable');
@@ -8860,7 +8942,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         const prepare = vi.fn(async () => source);
         const recordLocation = vi.fn(async () => {});
         const agent = new CodexAgent(createDeps({}, { prepareCodexResumeSession: prepare,
-          resolveCodexThreadStorageHome: async () => dir, recordCodexThreadLocation: recordLocation }));
+          resolveCodexThreadStorage: async () => ({ historyHome: dir, sqliteHome: dir }), recordCodexThreadLocation: recordLocation }));
         const host = installFakeHost(agent, (method, raw) => {
           if (method === 'thread/read') throw new Error(`thread not loaded: ${threadId}`);
           if (method === Method.ThreadResume) return { thread: { id: threadId, path: source }, model: 'gpt-5.6-luna', modelProvider: (raw as { modelProvider?: string }).modelProvider };
@@ -22809,20 +22891,20 @@ describe('CodexAgent.forkSdkSession', () => {
     const recordCodexThreadLocation = vi.fn(async () => {});
     const agent = new CodexAgent(createDeps({}, {
       isCodexAccountProvider: (id) => id === 'account-b',
-      resolveCodexThreadStorageHome: async () => '/account-a',
+      resolveCodexThreadStorage: async () => ({ historyHome: '/account-a', sqliteHome: '/account-a' }),
       prepareCodexResumeSession: async () => '/account-a/sessions/source.jsonl',
       recordCodexThreadLocation,
     }));
     const host = installFakeHost(agent, method => {
       if (method === Method.ThreadTurnsList) {
         expect(host.getHost).toHaveBeenCalledWith(undefined, 'oauth-bearer',
-          expect.objectContaining({ providerId: 'account-b', sqliteHome: '/account-a' }));
+          expect.objectContaining({ providerId: 'account-b', sqliteHome: '/account-a', historyHome: '/account-a' }));
         return { data: [{ id: 'boundary', status: 'completed', startedAt: 100 }], nextCursor: null };
       }
       if (method === Method.ThreadFork) return {
-        thread: { id: 'child', path: '/account-b/sessions/child.jsonl' },
+        thread: { id: 'child', path: '/account-a/sessions/child.jsonl' },
       };
-    }, { userAgent: 'mock-codex/0.153.4', codexHome: '/account-b' });
+    }, { userAgent: 'mock-codex/0.153.4', codexHome: '/account-a' });
     await expect(agent.forkSdkSession({
       sourceSdkSessionId: 'source', upToMessageId: undefined,
       providerId: 'account-b', tailTurnsToDrop: 1, forkAtTimestampMs: 110_123,
@@ -22830,7 +22912,7 @@ describe('CodexAgent.forkSdkSession', () => {
     expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
       path: '/account-a/sessions/source.jsonl', lastTurnId: 'boundary',
     }));
-    expect(recordCodexThreadLocation).toHaveBeenCalledWith('child', '/account-a', '/account-b/sessions/child.jsonl');
+    expect(recordCodexThreadLocation).toHaveBeenCalledWith('child', '/account-a', '/account-a/sessions/child.jsonl');
   });
 
   it('forks failed paginated history without rollback when no UI anchor was saved', async () => {
@@ -29321,6 +29403,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     agent: CodexAgent,
     interruptHangs = false,
     interruptAck?: Promise<unknown>,
+    codexHome?: string,
   ) {
     let turnSeq = 0;
     return installFakeHost(agent, (method) => {
@@ -29330,7 +29413,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         return interruptHangs ? new Promise<never>(() => {}) : {};
       }
       return undefined;
-    });
+    }, { codexHome });
   }
 
   async function startReconnectTurn(
@@ -29338,8 +29421,9 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     sessionId: string,
     interruptAck?: Promise<unknown>,
     signal?: AbortSignal,
+    codexHome?: string,
   ) {
-    const host = installReconnectHost(agent, false, interruptAck);
+    const host = installReconnectHost(agent, false, interruptAck, codexHome);
     const handle = await agent.startSession({ sessionId, model: 'gpt-5.4', workingDir: '/repo' });
     const seen: AgentEvent[] = [];
     void (async () => {
@@ -29405,14 +29489,15 @@ describe('CodexAgent reconnect-stall watchdog', () => {
   ].flatMap((scenario) => [
     { ...scenario, releaseFailure: undefined as boolean | undefined },
     ...(scenario.rejectAck ? [false, true].map((releaseFailure) => ({ ...scenario, releaseFailure })) : []),
-  ]))('settles oversized recovery: %j', async ({ cancelled, completion, rejectAck, releaseFailure }) => {
+  ]))('settles oversized recovery without a global account home: %j', async ({ cancelled, completion, rejectAck, releaseFailure }) => {
     vi.useFakeTimers();
     const agent = new CodexAgent(createDeps());
     const proto = Object.getPrototypeOf(agent) as {
       findRolloutPath: (id: string) => Promise<string>;
       hasLocalCodexHome: () => boolean;
     };
-    const localHome = vi.spyOn(proto, 'hasLocalCodexHome').mockReturnValue(true);
+    // Cold resume has a session history home but must not populate the global account cache.
+    const localHome = vi.spyOn(proto, 'hasLocalCodexHome').mockReturnValue(false);
     const find = vi.spyOn(proto, 'findRolloutPath').mockResolvedValue('/tmp/mock-oversized.jsonl');
     const measure = vi.spyOn(await import('./rollout-sanitize.js'), 'measureRolloutLiveTailStats')
       .mockResolvedValue({
@@ -29430,7 +29515,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
       const cancellation = new AbortController();
       const retire = vi.spyOn(agent as unknown as { retireHostKey: (...args: unknown[]) => Promise<void> },
         'retireHostKey').mockResolvedValue(undefined);
-      const { host, handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized', ack, cancellation.signal);
+      const { host, handle, handlers, seen } = await startReconnectTurn(agent, 'session-reconnect-oversized', ack, cancellation.signal, '/tmp/session-history-home');
       const releasing = deferred<void>();
       const release = host.subscribeThread.mock.results[0]?.value.release;
       if (releaseFailure !== undefined) release.mockImplementationOnce(() => releasing.promise);

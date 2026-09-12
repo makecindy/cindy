@@ -1900,12 +1900,26 @@ export function getMaker(): Maker {
         const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
         return await locations.read(threadId) ?? await prepareExternalCodexSessionForResume(threadId);
       },
-      resolveCodexThreadStorageHome: async (threadId) => {
+      resolveCodexThreadStorage: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return;
-        return new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations')).readStorageHome(threadId, {
+        const ownerScope = activeOwnerScopeKey();
+        const storage = await new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations')).readStorage(threadId, {
           home: getCodexHome(),
           prepare: prepareExternalCodexSessionForResume,
         });
+        if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex history owner changed during preparation');
+        return storage;
+      },
+      createCodexAuthTokenReader: (providerId) => {
+        const ownerScope = activeOwnerScopeKey();
+        return async () => {
+          if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          const state = await desktopCodexAuthAdapter.getState({ credentialMode: 'oauth-bearer', providerId });
+          if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          const credentials = state.authenticated ? desktopCodexAuthAdapter.readOneShotCreds(providerId) : null;
+          if (!credentials) throw new Error('Codex account credentials are unavailable');
+          return { accessToken: credentials.accessToken, chatgptAccountId: credentials.accountId };
+        };
       },
       recordCodexThreadLocation: async (threadId, storageHome, rolloutPath) => {
         if (!rolloutPath || !getActiveAppSession().dataOwnerId) return;

@@ -191,6 +191,7 @@ import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
 import { AppServerRequestTimeoutError } from './app-server/client.js';
+import { useCodexHistoryHome, type CodexExternalAuth } from './app-server/external-auth.js';
 import {
   isTerminalRateLimitRetryExhaustion,
   TERMINAL_RATE_LIMIT_RETRY_MAX_ATTEMPTS,
@@ -2292,6 +2293,7 @@ export class CodexAgent extends BaseAgent {
       customContextModel?: string;
       customContextWindow?: number;
       sqliteHome?: string;
+      historyHome?: string;
     } = {},
   ): Promise<AppServerHost> {
     const key = opts.keyOverride ?? (opts.providerId ? `local-account:${opts.providerId}` : hostKey(remoteHostId));
@@ -2496,6 +2498,7 @@ export class CodexAgent extends BaseAgent {
         opts.customContextWindow,
         opts.providerId,
         opts.sqliteHome,
+        opts.historyHome,
       ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
@@ -2534,14 +2537,16 @@ export class CodexAgent extends BaseAgent {
   }
 
   /** Start the local OAuth host used by non-model account control-plane RPCs. */
-  private async getStartedAccountHost(providerId?: string): Promise<AppServerHost> {
+  private async getStartedAccountHost(providerId?: string, startupTimeoutMs?: number): Promise<AppServerHost> {
     const credentialMode = 'oauth-bearer';
     const host = await this.getHost(undefined, credentialMode, {
       providerId,
       keyOverride: providerId ? `local-account:${providerId}:control-plane` : localControlPlaneHostKey(credentialMode),
       hostPurpose: 'control-plane',
     });
-    const init = await host.ensureStarted();
+    const init = startupTimeoutMs
+      ? await host.ensureStartedWithTimeout(startupTimeoutMs, 'account token refresh')
+      : await host.ensureStarted();
     if (init.codexHome && !providerId) this.codexHome = init.codexHome;
     return host;
   }
@@ -2675,6 +2680,7 @@ export class CodexAgent extends BaseAgent {
     customContextWindow?: number,
     providerId?: string,
     sqliteHome?: string,
+    historyHome?: string,
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -2748,6 +2754,10 @@ export class CodexAgent extends BaseAgent {
     let codexOpenAiWebSocketsEnabled = true;
     let codexSubagentRoutingProfile: CodexExtraSpawnConfig['codexSubagentRoutingProfile'] = 'default';
     let hostRetirementCleanup: CodexExtraSpawnConfig['onHostRetired'];
+    // Capture the owner/account reader before any asynchronous authentication work.
+    const readAccountTokens = !remoteHostId && historyHome
+      ? this.deps.createCodexAuthTokenReader?.(providerId)
+      : undefined;
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -2888,6 +2898,37 @@ export class CodexAgent extends BaseAgent {
       break;
     }
     if (!remoteHostId && sqliteHome) extraArgs.push('-c', `sqlite_home=${JSON.stringify(sqliteHome)}`);
+    let externalAuth: CodexExternalAuth | undefined;
+    const requireEphemeralAuth = !remoteHostId && !!historyHome && path.resolve(historyHome) !== path.resolve(env.CODEX_HOME ?? '');
+    if (requireEphemeralAuth) {
+      // Extra spawn configuration above intentionally uses the TARGET credential
+      // home (proxy auth, model catalogs and account controls). Only the native
+      // runtime uses the canonical history home, including lineage/writer locks.
+      env = useCodexHistoryHome(env, historyHome!);
+      extraArgs.push('-c', 'cli_auth_credentials_store="ephemeral"');
+      if (effectiveMode === 'oauth-bearer') {
+        if (!readAccountTokens) {
+          await hostRetirementCleanup?.();
+          throw new Error('Codex account authentication bridge is unavailable');
+        }
+        externalAuth = {
+          readTokens: async (refresh, staleAccessToken) => {
+            assertCurrentGeneration('external authentication');
+            // Validate scope before opening a native credential control-plane host.
+            let tokens = await readAccountTokens();
+            assertCurrentGeneration('external authentication scope');
+            if (refresh && tokens.accessToken === staleAccessToken) {
+              const accountHost = await this.getStartedAccountHost(providerId, 8_000);
+              assertCurrentGeneration('account token refresh');
+              await accountHost.request('account/read', { refreshToken: true }, { timeoutMs: 8_000 });
+              tokens = await readAccountTokens();
+            }
+            assertCurrentGeneration('external authentication result');
+            return tokens;
+          },
+        };
+      }
+    }
     if (baseExtraArgs.length > 0) {
       this.deps.logger.info('Codex plugin runtime disabled for local app-server', {
         plugins: false,
@@ -2939,6 +2980,8 @@ export class CodexAgent extends BaseAgent {
 
     const host = new AppServerHost({
       createTransport,
+      externalAuth,
+      requireEphemeralAuth,
       logger: this.deps.logger,
       // 自报名只进 codex app-server 的 userAgent 展示串,无门控消费
       // (2026-07-17 随品牌翻转改 cindy;上游 gating 走 originator,与此无关)。
@@ -4495,11 +4538,12 @@ export class CodexAgent extends BaseAgent {
       : usesCustomContextHost
         ? localCustomContextHostKey(sid)
         : hostKey(opts.remoteHostId);
-    const sessionSqliteHome = !opts.remoteHostId && opts.resumeSessionId
-      ? await this.deps.resolveCodexThreadStorageHome?.(opts.resumeSessionId)
+    const sessionStorage = !opts.remoteHostId && opts.resumeSessionId
+      ? await this.deps.resolveCodexThreadStorage?.(opts.resumeSessionId)
       : undefined;
+    const sessionSqliteHome = sessionStorage?.sqliteHome;
     const currentHostKey = (accountSessionHost ? `local-account:${accountProviderId ?? 'openai'}:session:${sid}` : baseSessionHostKey)
-      + (sessionSqliteHome ? `:storage:${sessionSqliteHome}` : '');
+      + (sessionStorage ? `:storage:${sessionSqliteHome}:history:${sessionStorage.historyHome}` : '');
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
       if (opts.remoteHostId || releaseHostBindingLease) return;
@@ -4519,6 +4563,7 @@ export class CodexAgent extends BaseAgent {
       return await this.getHost(opts.remoteHostId, credentialMode, {
         ...(accountProviderId ? { providerId: accountProviderId } : {}),
         ...(sessionSqliteHome ? { sqliteHome: sessionSqliteHome } : {}),
+        ...(sessionStorage ? { historyHome: sessionStorage.historyHome } : {}),
         ...(accountSessionHost || reviewMode || usesCustomContextHost || sessionSqliteHome ? { keyOverride: currentHostKey } : {}),
         ignoreBindingLeases: 1,
         ...(reviewMode
@@ -4601,7 +4646,7 @@ export class CodexAgent extends BaseAgent {
       throw error;
     }
     const sessionCodexHome = initResp.codexHome ?? null;
-    if (initResp.codexHome && !accountProviderId) this.codexHome = initResp.codexHome;
+    if (initResp.codexHome && !accountProviderId && !sessionStorage) this.codexHome = initResp.codexHome;
     // reviewer 路由的凭证模式判定: 远程 daemon 用的是 auth sync 推过去的
     // 同一份订阅凭证, reviewer 调用发生在 daemon 本地 — 订阅下走 daemon →
     // chatgpt.com 直连, 与本地订阅同构 (远端出网由用户网络或 agent-proxy
@@ -7641,7 +7686,8 @@ export class CodexAgent extends BaseAgent {
             message,
           });
         };
-        if (!stalledThreadId || opts.remoteHostId || !stallAgent.hasLocalCodexHome()) {
+        if (!stalledThreadId || opts.remoteHostId ||
+          (!sessionRolloutPath && !sessionCodexHome && !stallAgent.hasLocalCodexHome())) {
           emitStalled('codex_reconnect_stalled', stalledMessage);
           return;
         }
@@ -13813,12 +13859,14 @@ export class CodexAgent extends BaseAgent {
       }
       // ID-only turn queries must use the source thread's index even when the
       // account supplying credentials has changed. Keep the child in that index.
-      const forkSqliteHome = await this.deps.resolveCodexThreadStorageHome?.(opts.sourceSdkSessionId);
+      const forkStorage = await this.deps.resolveCodexThreadStorage?.(opts.sourceSdkSessionId);
+      const forkSqliteHome = forkStorage?.sqliteHome;
       stage = 'host-create';
       const host = await this.getHost(undefined, forkCredentialMode, {
         keyOverride: forkHostKey,
         ...(forkAccountId ? { providerId: forkAccountId } : {}),
         ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
+        ...(forkStorage ? { historyHome: forkStorage.historyHome } : {}),
         hostPurpose: 'control-plane',
       }).catch((error) => {
         // This is the outgoing source's offline fork host, not a target send.
@@ -13834,7 +13882,7 @@ export class CodexAgent extends BaseAgent {
       // Child rollout discovery scans this.codexHome. The fork host may be
       // the first host started by this process, so hydrate it here.
       const forkCodexHome = initResp.codexHome ?? undefined;
-      if (forkCodexHome && !forkAccountId) this.codexHome = forkCodexHome;
+      if (forkCodexHome && !forkAccountId && !forkStorage) this.codexHome = forkCodexHome;
       // Imported Codex threads may still live under another CODEX_HOME. Resume
       // already asks the desktop host to link/adopt their state and rollout;
       // fork must cross the same preparation boundary before thread/fork or the
