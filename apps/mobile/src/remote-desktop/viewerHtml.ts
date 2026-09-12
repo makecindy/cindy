@@ -86,6 +86,7 @@ const VIEWER_SCRIPT = String.raw`
   const clamp=(v)=>Math.max(0,Math.min(1,v));
   let fillHeight=false;
   let panAnimation=null,viewportRightInset=0,viewportLeftInset=0,viewportBottomInset=0,keyboardViewportInset=0;
+  let keyboardViewportOpen=false;
   let cursorNeedsEntry=true,manualViewMoved=false,followRest=null;
   // Insets guide centering and pan limits without clipping the full-screen
   // video surface or adding an opaque strip beside the Dynamic Island.
@@ -313,25 +314,31 @@ const VIEWER_SCRIPT = String.raw`
       case 'releaseInput':release();break;
       case 'theme':if(/^#[0-9a-f]{3,8}$/i.test(message.surface)){document.body.style.background=message.surface;document.documentElement.style.background=message.surface;document.documentElement.style.setProperty('--surface',message.surface);}if(/^#[0-9a-f]{3,8}$/i.test(message.foreground)){cursor.style.borderColor=message.foreground;document.documentElement.style.setProperty('--foreground',message.foreground);}break;
       case 'mouseButtons':{
-        const before=layout(),keepHorizontal=fillHeight&&(message.keyboardOpen===true||keyboardViewportInset>0);
+        const before=layout(),keyboardOpen=fillHeight&&message.keyboardOpen===true;
+        const keepHorizontal=fillHeight&&(keyboardOpen||keyboardViewportOpen);
+        // Opening is observable before the native keyboard has a measured height.
+        keyboardViewportOpen=keyboardOpen;
         let sideInsetsChanged=false;
         if(Number.isFinite(message.bottomInset))viewportBottomInset=Math.max(0,Math.min(stage.clientHeight-1,message.bottomInset));
         if(Number.isFinite(message.leftInset)){const inset=Math.max(0,Math.min(stage.clientWidth-1,message.leftInset));sideInsetsChanged=sideInsetsChanged||inset!==viewportLeftInset;viewportLeftInset=inset;}
         if(Number.isFinite(message.rightInset)){const inset=Math.max(0,Math.min(stage.clientWidth-1,message.rightInset));sideInsetsChanged=sideInsetsChanged||inset!==viewportRightInset;viewportRightInset=inset;}
         // Hiding the side toolbar changes the viewport center. Keep the image's
         // actual horizontal position instead of following that center sideways.
-        if(keepHorizontal){const r=layout();place(before.x,r.y,r);}
-        const keyboardInset=fillHeight&&message.keyboardOpen===true?viewportBottomInset:0;
+        if(keepHorizontal){stopPanAnimation();const r=layout();place(before.x,r.y,r);}
+        const keyboardInset=keyboardOpen?viewportBottomInset:0;
         if(keyboardInset!==keyboardViewportInset){
           const wasOpen=keyboardViewportInset>0;keyboardViewportInset=keyboardInset;
           if(fillHeight&&(keyboardInset>0||wasOpen)){
-            stopPanAnimation();const r=layout(),v=cursorViewport(),x=r.x+cx*r.width;
-            // Center vertically; move sideways only enough to expose the cursor.
-            place(r.x+bounded(x,v.minX,v.maxX)-x,(v.minY+v.maxY)/2-cy*r.height,r);
+            const r=layout(),v=cursorViewport();
+            place(r.x,(v.minY+v.maxY)/2-cy*r.height,r);
             cursorNeedsEntry=false;manualViewMoved=false;
           }
         }
-        if(keepHorizontal){followRest={fx,fy,zoom};render();}
+        if(keepHorizontal){
+          // Restoring the toolbar can cover the cursor even after a zero-height opening.
+          if(!keyboardOpen||keyboardInset>0){const r=layout(),v=cursorViewport(),x=r.x+cx*r.width;place(r.x+bounded(x,v.minX,v.maxX)-x,r.y,r);}
+          followRest={fx,fy,zoom};render();
+        }
         else if(sideInsetsChanged){settlePan();render();}
         if(!message.enabled){for(const button of heldMouse.keys())queue({kind:'button',button,down:false,x:cx,y:cy});heldMouse.clear();resetWheel();flush();}for(const [edge,value] of [['bottom',message.bottomInset],['right',message.rightInset]])if(Number.isFinite(value)&&value>=0&&value<=4096)mouseButtons.style[edge]=value+'px';showMouseButtons=message.enabled===true;for(const name of ['left','right','wheel'])if(typeof message.labels?.[name]==='string')document.getElementById('mouse-'+name).setAttribute('aria-label',message.labels[name]);updateMouseButtons();break;
       }

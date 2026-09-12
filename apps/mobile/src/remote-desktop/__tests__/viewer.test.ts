@@ -358,6 +358,22 @@ describe("remote desktop viewport", () => {
     v.send({ type: "mouseButtons", keyboardOpen: true, bottomInset: 260 });
     expect(v.elements.image.style).toEqual(before);
   });
+  it("preserves horizontal position when the keyboard closes before measurement", () => {
+    const v = viewer();
+    v.elements.stage.clientWidth = 800;
+    v.elements.stage.clientHeight = 400;
+    v.send({ type: "init", epoch: "quick-keyboard", width: 1920, height: 1080, fillHeight: true });
+    v.send({ type: "mouseButtons", keyboardOpen: false, bottomInset: 0, leftInset: 50, rightInset: 80 });
+    const before = { ...v.elements.image.style };
+    for (let i = 0; i < 2; i++) {
+      v.send({ type: "mouseButtons", keyboardOpen: true, bottomInset: 0, leftInset: 50, rightInset: 0 });
+      v.send({ type: "mouseButtons", keyboardOpen: false, bottomInset: 0, leftInset: 50, rightInset: 80 });
+      expect(v.elements.image.style).toEqual(before);
+      v.blur();
+      for (let j = 0; j < 30; j++) v.frame();
+      expect(v.elements.image.style).toEqual(before);
+    }
+  });
   it("initializes when the native engine cannot serialize function source", () => {
     const stringify = vi
       .spyOn(Function.prototype, "toString")
