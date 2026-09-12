@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
+import { __testing as ownerTesting, setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { QuotaFullCelebrations } from '../quotaFullCelebrations';
 
 const slot = (remainingPercent: number, resetsAtMs: number | null = null, key = 'primary') => ({
@@ -6,8 +7,9 @@ const slot = (remainingPercent: number, resetsAtMs: number | null = null, key = 
   remainingPercent,
   resetsAtMs,
   resetPending: false,
-  celebrationSlot: key === 'weekly' ? 'secondary' : 'primary',
 });
+
+afterEach(() => ownerTesting.reset());
 
 describe('QuotaFullCelebrations', () => {
   it('celebrates first full observation, but not repeated task mounts or source changes', () => {
@@ -16,6 +18,28 @@ describe('QuotaFullCelebrations', () => {
     expect(history.observe('openai', [])).toBeNull();
     expect(history.observe('openai', [slot(100, null, 'another-session-source')])).toBeNull();
     expect(history.observe('anthropic', [slot(100)])).toBe('primary');
+  });
+
+  it('isolates login owners while preserving history across same-owner generation changes', () => {
+    setDataOwnerGeneration('owner-a', 1);
+    const history = new QuotaFullCelebrations();
+    expect(history.observe('openai', [slot(100)], 9000)).toBe('primary');
+    setDataOwnerGeneration('owner-a', 2);
+    expect(history.observe('openai', [slot(100)], 9001)).toBeNull();
+    setDataOwnerGeneration('owner-b', 3);
+    expect(history.observe('openai', [slot(100)], 1000)).toBe('primary');
+    history.observe('openai', [slot(50)], 2000);
+    expect(history.observe('openai', [slot(100)], 3000)).toBe('primary');
+  });
+
+  it('does not mistake switching model quota buckets for recovery', () => {
+    const history = new QuotaFullCelebrations();
+    history.observe('openai', [slot(50, null, 'bucket-a')], 1000);
+    expect(history.observe('openai', [slot(100, null, 'bucket-b')], 2000)).toBe('bucket-b');
+    history.observe('openai', [slot(50, null, 'bucket-a')], 3000);
+    expect(history.observe('openai', [slot(100, null, 'bucket-b')], 4000)).toBeNull();
+    expect(history.observe('openai', [slot(100, null, 'bucket-c')], 5000)).toBeNull();
+    expect(history.observe('openai', [slot(100, null, 'bucket-a')], 6000)).toBe('bucket-a');
   });
 
   it('requires 100 and rearms after consumption without requiring a deadline', () => {
