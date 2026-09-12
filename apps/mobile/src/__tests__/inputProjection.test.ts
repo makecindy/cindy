@@ -405,6 +405,12 @@ describe('inputProjection', () => {
     );
   });
 
+  it('localizes incomplete execution without exposing the host cell diagnostic', () => {
+    expect(localizeAgentError('yield-continuation-incomplete', null)).toBe(
+      i18n.t('session.tail.executionResultUnavailable'),
+    );
+  });
+
   it('localizes live tool-loop errors instead of rendering the host message', () => {
     const localized = localizeAgentError(
       'tool_use_loop_detected',

@@ -50,6 +50,7 @@ export function localizeAgentError(
   reason: unknown,
   toolLoop: MobileToolLoopErrorDetails | null,
 ): string | null {
+  if (reason === 'yield-continuation-incomplete') return i18n.t('session.tail.executionResultUnavailable');
   if (reason === 'output-limit') return i18n.t('session.tail.outputLimit');
   if (reason !== 'tool_use_loop_detected') return null;
   if (!toolLoop) return i18n.t('session.tail.toolUseLoopDetected');
