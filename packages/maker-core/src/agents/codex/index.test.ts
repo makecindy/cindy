@@ -28790,6 +28790,43 @@ describe('CodexAgent upstream-response-idle watchdog', () => {
     }
   });
 
+  it.each(['agentMessageDelta', 'reasoningTextDelta'] as const)(
+    '%s 的不可见内容不刷新 idle，真实内容仍刷新',
+    async (handlerName) => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installIdleHost(agent);
+        const handle = await startIdleSession(agent, `session-idle-${handlerName}`);
+        const seen = collectEvents(handle);
+        await handle.send({ type: 'user', content: 'go' });
+        const handlers = host.getThreadHandlers();
+        if (!handlers) throw new Error('expected thread handlers');
+        handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-1' } } as never);
+        const emitDelta = (delta: string) => handlers[handlerName]?.({
+          threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'output-1', delta,
+        } as never);
+
+        await vi.advanceTimersByTimeAsync(IDLE_MS - 1_000);
+        emitDelta('real progress');
+        await vi.advanceTimersByTimeAsync(1_001);
+        expect(seen.some((event) => event.type === 'error')).toBe(false);
+
+        for (const delta of [' \t\n', '\u200B\u2060', '\x00\x1b']) {
+          await vi.advanceTimersByTimeAsync(10_000);
+          emitDelta(delta);
+        }
+        await vi.advanceTimersByTimeAsync(IDLE_MS - 31_000);
+        expect(seen).toContainEqual(expect.objectContaining({
+          type: 'error', data: expect.objectContaining({ reason: 'upstream_response_idle_timeout' }),
+        }));
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
   it('graceful stop interrupt 被拒绝后重新武装同一 turn 的 idle watchdog', async () => {
     vi.useFakeTimers();
     try {

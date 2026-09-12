@@ -121,7 +121,9 @@ Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume �
 Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
 不得用 `remote compaction v2` 文案驱动恢复动作。普通 timeout、纯文本大历史和网络失败
 不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
-心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。这两类超时与
+心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`
+只有包含实质文字才刷新；仅空白、Unicode 格式字符或控制字符不算进展，原事件仍无损传递。
+这两类超时与
 `codex_reconnect_stalled` 同类，进入 interrupted-turn 自动续跑；自动续跑对这三类
 **只发 CONTINUE 指令，绝不克隆原始用户 prompt**（turn 已被 accept，克隆会重放已执行的
 工具副作用）。退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain

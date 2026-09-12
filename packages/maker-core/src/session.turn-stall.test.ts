@@ -228,7 +228,13 @@ describe('Session turn stall watchdog', () => {
     }
   });
 
-  it('status 用量心跳不重置计时:自动续跑后的 zombie running 能被收口', async () => {
+  it.each([
+    { type: 'status', data: { status: 'Working…', isRunning: true, inputTokens: 1 } },
+    { type: 'text', data: { text: ' \t\n' } },
+    { type: 'text', data: { text: '\u200B\u2060' } },
+    { type: 'thinking', data: { text: ' \t\n' } },
+    { type: 'thinking', data: { text: '\u200B\u2060' } },
+  ] as AgentEvent[])('无进展帧不重置计时: $type $data', async (event) => {
     vi.useFakeTimers();
     try {
       const stub = createStubHandle();
@@ -239,11 +245,7 @@ describe('Session turn stall watchdog', () => {
       await session.send('go');
       for (let i = 0; i < 5; i++) {
         await vi.advanceTimersByTimeAsync(STALL_MS - 1_000);
-        stub.pushEvent({
-          type: 'status',
-          data: { status: 'Working…', isRunning: true, inputTokens: i + 1 },
-          source: 'codex',
-        } as AgentEvent);
+        stub.pushEvent({ ...event, source: 'codex' });
         await vi.advanceTimersByTimeAsync(0);
       }
 

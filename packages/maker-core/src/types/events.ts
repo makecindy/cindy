@@ -255,6 +255,12 @@ const TURN_WATCHDOG_LIVENESS_TYPES = new Set<AgentEventType>([
 
 export function isTurnWatchdogLivenessEvent(event: AgentEvent): boolean {
   if (event.turnScope === 'background') return false;
+  if (event.type === 'text' || event.type === 'thinking') {
+    const text = isRecord(event.data) ? event.data.text : undefined;
+    // Match Desktop's visible-text semantics: whitespace, format and control
+    // characters alone are not progress. Keep the original event untouched.
+    return typeof text === 'string' && /[^\s\p{Cf}\p{Cc}]/u.test(text);
+  }
   return TURN_WATCHDOG_LIVENESS_TYPES.has(event.type);
 }
 

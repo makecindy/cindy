@@ -41,13 +41,23 @@ describe('isTurnWatchdogLivenessEvent', () => {
 
   it('counts product activity as liveness', () => {
     expect(isTurnWatchdogLivenessEvent({ type: 'text', data: { text: 'hi' } })).toBe(true);
-    expect(isTurnWatchdogLivenessEvent({ type: 'thinking', data: {} })).toBe(true);
+    expect(isTurnWatchdogLivenessEvent({ type: 'thinking', data: { text: 'reasoning' } })).toBe(true);
     expect(isTurnWatchdogLivenessEvent({ type: 'tool_use', data: {} })).toBe(true);
     expect(isTurnWatchdogLivenessEvent({ type: 'tool_result', data: {} })).toBe(true);
     expect(isTurnWatchdogLivenessEvent({ type: 'tool_result_full', data: {} })).toBe(true);
     expect(isTurnWatchdogLivenessEvent({ type: 'agent_task_update', data: {} })).toBe(true);
     expect(isTurnWatchdogLivenessEvent({ type: 'image', data: {} })).toBe(true);
     expect(isTurnWatchdogLivenessEvent({ type: 'interaction_request', data: {} })).toBe(true);
+  });
+
+  it.each(['text', 'thinking'] as const)('requires substantive %s payloads', (type) => {
+    for (const text of [undefined, null, 42, '', ' \t\n', '\u200B\u200C\u200D\u2060\u00AD', '\x00\x1b', '\uFEFF']) {
+      expect(isTurnWatchdogLivenessEvent({ type, data: { text } })).toBe(false);
+    }
+    expect(isTurnWatchdogLivenessEvent({ type, data: null })).toBe(false);
+    for (const text of ['答案', ' . ', '\u200Bthinking\u200D', '👩‍💻']) {
+      expect(isTurnWatchdogLivenessEvent({ type, data: { text } })).toBe(true);
+    }
   });
 
   it('excludes terminals, diagnostics, and retryable errors', () => {
