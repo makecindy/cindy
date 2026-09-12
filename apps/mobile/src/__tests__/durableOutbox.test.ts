@@ -375,6 +375,43 @@ describe("durable mobile outbox ownership", () => {
 });
 
 describe("app-owned delivery and reconciliation", () => {
+  it.each(['legacy', 'legacy-prepared'] as const)('keeps %s enqueue success uncertain across restart until history confirms it', async (host) => {
+    const first = await setup();
+    const legacy = { pendingQueue: [] } as unknown as DeliveryProjection;
+    if (host === 'legacy') first.deps.projection.mockResolvedValue(legacy);
+    first.deps.enqueue.mockResolvedValue(legacy);
+    await first.store.add(host === 'legacy' ? message() : { ...message(), retrySafe: false,
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    await first.runner.run();
+    expect(first.store.getSnapshot()[0]).toMatchObject({ state: 'confirming', error: 'check receipt' });
+    first.runner.stop();
+    const second = await setup(first.storage);
+    second.deps.projection.mockResolvedValue(legacy);
+    await second.runner.run();
+    expect(second.store.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'check receipt' });
+    expect(second.deps.enqueue).not.toHaveBeenCalled();
+    expect(second.deps.cleanup).not.toHaveBeenCalled();
+    second.deps.history.mockResolvedValue(true);
+    second.runner.wake();
+    await second.runner.run();
+    expect(second.store.getSnapshot()).toEqual([]);
+    expect(second.deps.cleanup).toHaveBeenCalledOnce();
+  });
+  it.each(['sending', 'host-owned'] as const)('never promotes legacy pending or restored %s to durable ownership', async (state) => {
+    const { store, deps, runner } = await setup();
+    await store.add({ ...message(), state, retrySafe: false, clearBoundaryMs: null,
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    await store.add({ ...message('id-2'), createdAt: 2 });
+    deps.projection.mockResolvedValue({ pendingQueue: [{ clientId: 'id-1' }], clearBoundaryMs: null } as unknown as DeliveryProjection);
+    await runner.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'confirming', error: 'check receipt' });
+    deps.projection.mockResolvedValue({ pendingQueue: [], clearBoundaryMs: 123 } as unknown as DeliveryProjection);
+    runner.wake();
+    await runner.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', error: 'task cleared' });
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cleanup).not.toHaveBeenCalled();
+  });
   it.each([true, false])("persists creation Plan=%s on the input before enqueue", async (planModeArm) => {
     const { store, runner, deps } = await setup();
     const record = message();
