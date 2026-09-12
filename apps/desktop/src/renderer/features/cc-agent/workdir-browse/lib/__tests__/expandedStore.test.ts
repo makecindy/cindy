@@ -26,6 +26,27 @@ describe('expandedStore 按 showIgnoredDirs 分片', () => {
     ]);
   });
 
+  /**
+   * 评审 P1：旧实现用 `::reveal` 裸后缀，workdir 以 `::reveal` 结尾时（如
+   * `/srv/project::reveal`）它的隐藏键恰好等于 `/srv/project` 的 reveal 键，两个
+   * 项目的展开态互相覆盖。新键用不可打印的 NUL 分隔（POSIX 路径不允许含 NUL）。
+   */
+  it('workdir 以 ::reveal 结尾时不与截断后的 reveal scope 撞键', () => {
+    saveExpandedSet('/srv/project::reveal', new Set(['a']));
+    saveExpandedSet('/srv/project', new Set(['b']), { showIgnoredDirs: true });
+
+    expect([...loadExpandedSet('/srv/project::reveal')]).toEqual(['a']);
+    expect([...loadExpandedSet('/srv/project', { showIgnoredDirs: true })]).toEqual(['b']);
+  });
+
+  it('读取回退旧版 ::reveal 键,升级不丢展开态', () => {
+    localStorage.setItem(
+      'cc-agent.workdirBrowse.expandedFolders.v1',
+      JSON.stringify({ '/repo::reveal': ['node_modules'] }),
+    );
+    expect([...loadExpandedSet('/repo', { showIgnoredDirs: true })]).toEqual(['node_modules']);
+  });
+
   it('隐藏态沿用历史键:升级后原有展开态不丢', () => {
     saveExpandedSet('/repo', new Set(['Assets/Scripts']));
 

@@ -37,6 +37,8 @@ const h = vi.hoisted(() => {
     created,
     /** loadIgnoreMatcher 收到的选项(按调用顺序)。 */
     matcherOpts: [] as Array<Record<string, unknown>>,
+    /** 非零时接下来 N 次 loadIgnoreMatcher 直接 reject(模拟挂载不可用)。 */
+    failNext: 0,
     /** 门闩:非空时下一次 loadIgnoreMatcher 等它放行(模拟读盘未完成)。 */
     gate: null as Promise<void> | null,
     watchSpy: vi.fn((dir: string, _opts: unknown, cb: FsWatchCallback) => {
@@ -66,6 +68,10 @@ vi.mock('@cindy/file-browser-core', async (importOriginal) => {
     scopedLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
     loadIgnoreMatcher: vi.fn(async (_workdir: string, opts: Record<string, unknown>) => {
       h.matcherOpts.push(opts);
+      if (h.failNext > 0) {
+        h.failNext -= 1;
+        throw new Error('matcher load failed');
+      }
       const gate = h.gate;
       if (gate) {
         h.gate = null;
@@ -97,6 +103,7 @@ describe('WorkdirWatchManager 过滤开关', () => {
   beforeEach(() => {
     h.created.length = 0;
     h.matcherOpts.length = 0;
+    h.failNext = 0;
     h.gate = null;
     h.watchSpy.mockClear();
     emitted = [];
@@ -326,6 +333,35 @@ describe('WorkdirWatchManager 过滤开关', () => {
       await vi.advanceTimersByTimeAsync(600);
       expect(h.created.length).toBeGreaterThanOrEqual(2);
       expect(h.created.at(-1)?.closed).toBe(false);
+      manager.stopAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * 评审 P1：回滚后的恢复也失败时同样要退避重试 —— 只记日志的话，原有消费者会在
+   * 「选项变化 → 拆旧 watcher → 重建失败 → 回滚恢复意图」之后既没有 watcher、也没
+   * 有定时器再收敛。
+   */
+  it('回滚后的恢复失败:退避重试直到恢复', async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new WorkdirWatchManager(() => {});
+      await manager.start('/repo', {}, 'desktop-tree'); // 已生效的隐藏态 watcher
+      expect(h.created).toHaveLength(1);
+
+      // 改选项（并集变化 → 拆旧重建）失败，且回滚后的恢复也失败。
+      h.failNext = 2;
+      await expect(
+        manager.start('/repo', { showIgnoredDirs: true }, 'device-link'),
+      ).rejects.toThrow('matcher load failed');
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 只剩 desktop-tree（隐藏）的意图 —— 靠退避重试把它的 watcher 建回来。
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.created.at(-1)?.closed).toBe(false);
+      expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(false);
       manager.stopAll();
     } finally {
       vi.useRealTimers();

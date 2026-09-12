@@ -201,10 +201,14 @@ export class WorkdirWatchManager {
       }
       // 回滚改变了并集,而且失败可能就在「选项变化 → closeEntry 拆掉旧 watcher →
       // startInner 失败」之后:原有消费者此刻没有 watcher。按恢复后的意图再收敛
-      // 一次,否则它会静默失去直播,只能等自己重连或用户手动刷新。
-      void this.reconcile(workdir).catch((rerr) =>
-        log.warn('watch reconcile after rollback failed', workdir, String(rerr)),
-      );
+      // 一次;这次也失败(挂载仍不可用)就走**带退避的重试** —— 只记日志会让原消费
+      // 者静默失去直播,直到下一次显式 start / stop 或 daemon 重连(评审 P1)。
+      void this.reconcile(workdir)
+        .then(() => this.retryAttempts.delete(workdir))
+        .catch((rerr) => {
+          log.warn('watch reconcile after rollback failed', workdir, String(rerr));
+          this.scheduleReconcileRetry(workdir);
+        });
       throw err;
     }
   }
