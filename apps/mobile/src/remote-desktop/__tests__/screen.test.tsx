@@ -28,6 +28,7 @@ vi.mock("../useAutoUnlockSettings", () => ({
   },
 }));
 vi.mock("../useLockOnExitPreference", () => ({
+  useRemoteDesktopPreference: () => [false, vi.fn(), true],
   useLockOnExitPreference: () => [
     fixture.lockOnExit,
     (value: boolean) => {
@@ -2281,5 +2282,11 @@ describe("remote desktop controls", () => {
     await act(async () => vi.advanceTimersByTimeAsync(30_000));
     expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
     expect(button("back").disabled).toBe(false);
+    if (error === "DESKTOP_STOPPED") {
+      expect(fixture.alert).toHaveBeenCalledWith(
+        "remoteDesktop.disconnected",
+        "remoteDesktop.hostDisconnected",
+      );
+    }
   });
 });

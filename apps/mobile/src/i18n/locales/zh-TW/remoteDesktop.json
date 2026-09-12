@@ -1,4 +1,16 @@
 {
+  "hostDisconnected": "電腦已主動中斷遠端桌面連線。",
+  "privacyScreen": "電腦防窺",
+  "privacyScreenHint": "遮住電腦螢幕。在電腦上點擊滑鼠或按鍵，確認後中斷連線，並依設定鎖定螢幕。",
+  "privacyActive": "防窺已開啟。在電腦上點擊滑鼠或按鍵，確認後中斷連線，並依設定鎖定螢幕。",
+  "privacyFailed": "無法開啟防窺，電腦螢幕可能仍可見。",
+  "clipboardSync": "剪貼簿同步",
+  "clipboardSyncHint": "在前景雙向同步文字、圖片和格式文字。iPhone 若請求貼上權限，請允許。",
+  "clipboardSyncConflict": "兩端剪貼簿都發生了變更，已分別保留。請在任一裝置上重新複製以同步。",
+  "clipboardSyncFailed": "同步暫時失敗，正在自動重試。開關保持開啟。",
+  "clipboardSyncSkipped": "目前內容無法同步，已略過。請檢查貼上權限，或複製文字、圖片後重試。",
+  "clipboardSyncPermission": "同步已暫停，請允許貼上權限後重試。開關保持開啟。",
+  "clipboardSyncRetry": "重試同步",
   "credentialSigningRequired": "Mac 上的開發版缺少簽名設定。請在 Mac 上設定簽名並重新啟動 Cindy，然後重試。",
   "credentialPasswordRejected": "Mac 登入密碼驗證失敗，請重新輸入。",
   "credentialCancelled": "已取消密碼驗證，準備好後可重新連線。",
@@ -133,5 +145,8 @@
   "autoUnlockUnavailable": "暫時無法自動解鎖。你仍可連線，並手動解鎖 Mac。",
   "lockOnExit": "退出後鎖定電腦",
   "lockOnExitHint": "離開遠端桌面時鎖定螢幕。重新連線或切換 App 不會觸發。",
-  "lockOnExitFailed": "無法確認電腦已鎖定螢幕，請檢查電腦狀態。"
+  "lockOnExitFailed": "無法確認電腦已鎖定螢幕，請檢查電腦狀態。",
+  "hostMute": "被控端靜音",
+  "hostMuteHint": "連線期間將被控電腦靜音",
+  "hostMuteFailed": "無法修改被控端靜音狀態"
 }
