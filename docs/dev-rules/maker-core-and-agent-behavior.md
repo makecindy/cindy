@@ -134,6 +134,10 @@ handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`
 清队列、保留重建目标与人工重试行为，不能对尚未执行的用户输入发送 CONTINUE。
 引用内容解析等异步准备仍属于未派发态；完成后复核 active 身份，再在真正调用 send 前
 标记 sendStarted，迟到的准备结果不得发送或修改已经交给 replacement 的项。
+自动 CONTINUE 保留原请求的 Plan 与权限选项；超时恢复不等于 ExitPlanMode 批准，
+不得强制 planMode=false。若原计划已批准后执行失败，缺少可靠的审批周期记录时仍保守
+保留原 Plan 选项，可能重新进入计划模式；不为避免重入新增审批状态。人工 Retry 沿用
+既有合成 UI 动作策略，本自动恢复修复不调整该策略。
 退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
 或 interrupt ACK 失败而 `unexpected` close 时，必须用实例 + attemptToken 精确保留交棒，
 不得 teardown 已批准的自动续跑——包括 timer 已 fire、CONTINUE 已因 SESSION_RUNNING

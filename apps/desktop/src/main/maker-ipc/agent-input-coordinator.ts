@@ -2815,10 +2815,11 @@ export class AgentInputCoordinator {
           // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
           // 一并误藏(窗口从更早的行一直铺到本条)。
           supersedesUserClientId: undefined,
-          // 合成续跑指令显式普通执行:原消息若带 planMode=true,原样克隆会把隐藏
-          // 指令路由进计划模式而不是立刻续跑(review P2)。与 sendUiTrigger 的
-          // 合成 UI 动作同语义 —— planMode 强制 false。
-          createOpts: { ...recovery.item.createOpts, planMode: false },
+          // 自动恢复不是计划批准：保留原 Plan/权限选项，不能因隐藏 CONTINUE
+          // 降到 Full access。人工 Retry 仍沿用既有合成 UI 动作策略。
+          createOpts: opts?.auto
+            ? { ...recovery.item.createOpts }
+            : { ...recovery.item.createOpts, planMode: false },
           chatMessage: {
             clientId,
             role: 'user',

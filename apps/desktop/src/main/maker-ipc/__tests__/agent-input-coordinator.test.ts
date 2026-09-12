@@ -11420,13 +11420,22 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });
 
-  it('watchdog timeout 即使零产出也只发续跑指令,不克隆原文', async () => {
+  it.each([
+    ['turn_no_event_timeout', false, true],
+    ['upstream_response_idle_timeout', false, true],
+    ['codex_reconnect_stalled', true, true],
+    ['turn_no_event_timeout', true, false],
+    ['upstream_response_idle_timeout', true, undefined],
+    ['empty-response', true, true],
+  ] as const)('watchdog timeout 保留原计划模式：%s progress=%s plan=%s', async (reason, progress, planMode) => {
     const h = createHarness();
     const sid = 'auto-retry-timeout-continue-only';
-    const takeover = { ...TAKEOVER_INFO, reason: 'turn_no_event_timeout' };
+    const takeover = { ...TAKEOVER_INFO, reason };
     h.setResumableTurnErrorTakeover(takeover);
-    h.setHasAssistantProgressAfter(async () => false);
-    await failAfterDispatch(h, sid);
+    h.setHasAssistantProgressAfter(async () => progress);
+    const original = makeItem('q-first', 'original long task');
+    original.createOpts = { ...original.createOpts, permissionMode: 'bypassPermissions', planMode };
+    await failAfterDispatch(h, sid, original);
 
     await expect(
       h.coordinator.autoRetryLastError(sid, takeover.sessionTotal),
@@ -11439,6 +11448,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       content: CONTINUE_AFTER_ERROR_PROMPT,
     });
     expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
+    expect(h.sendToAgent.mock.calls[1]?.[2]).toMatchObject({ planMode, permissionMode: 'bypassPermissions' });
     expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]).toEqual(
       expect.objectContaining({
         autoResume: true,
@@ -11469,7 +11479,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const takeover = { ...TAKEOVER_INFO, reason: 'upstream_response_idle_timeout' };
     h.setResumableTurnErrorTakeover(takeover);
     h.setHasAssistantProgressAfter(async () => false);
-    await failAfterDispatch(h, sid);
+    const original = makeItem('q-first', 'original long task');
+    original.createOpts = { ...original.createOpts, planMode: true };
+    await failAfterDispatch(h, sid, original);
 
     h.coordinator.onSessionClosed(sid, { preserveAutoResumeIntent: true });
     await flush();
@@ -11485,6 +11497,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       type: 'user',
       content: CONTINUE_AFTER_ERROR_PROMPT,
     });
+    expect(h.sendToAgent.mock.calls[1]?.[2]?.planMode).toBe(true);
   });
 
   it('CONTINUE 撞 SESSION_RUNNING 后 unexpected close 仍唤醒隐藏续跑', async () => {
