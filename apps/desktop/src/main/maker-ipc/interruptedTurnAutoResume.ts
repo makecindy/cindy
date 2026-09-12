@@ -59,6 +59,20 @@ const STREAM_TRUNCATION_PATTERN =
   /connection closed mid-response|response above may be incomplete|stream (?:closed|ended|interrupted) (?:unexpectedly|mid-response)/i;
 
 /**
+ * Inference gateways may return 503 while every OAuth account is cooling down.
+ * This is not a transient transport failure: replaying the same turn immediately
+ * only asks the same exhausted account pool again, so it must stay out of the
+ * automatic resume allowlist below.
+ */
+const OAUTH_ACCOUNT_POOL_UNAVAILABLE_PATTERN = /\bno available oauth accounts\b/i;
+
+function isOAuthAccountPoolUnavailableError(signals: InterruptedTurnErrorSignals): boolean {
+  if (signals.errorStatus !== undefined && signals.errorStatus !== 503) return false;
+  return typeof signals.message === 'string' &&
+    OAUTH_ACCOUNT_POOL_UNAVAILABLE_PATTERN.test(signals.message);
+}
+
+/**
  * SSE 流被中途切断（Claude Code 形态）。三层收紧后才看文案：
  *  - 没有 HTTP 状态码：上游给了状态码说明它**应答过**，不是流被切断。
  *  - SDK tag 必须是 `server_error`：把 `authentication_failed` / `rate_limit` /
@@ -105,6 +119,9 @@ function isStreamTruncationError(signals: InterruptedTurnErrorSignals): boolean 
  * 状态码，网络 errno 也没有 SDK tag。收紧只对第 1 类成立。
  */
 export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): boolean {
+  // This is a deliberate exception to the broad 503/network allowlist. Check it
+  // first so a future stable reason cannot accidentally re-enable auto-resume.
+  if (isOAuthAccountPoolUnavailableError(signals)) return false;
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
   // 例外先行：`upstream-overload` 是**已归类为可重试**的 reason，它本身就是比文案更可靠的
   // 权威判据（结构化优先于文案，与 overload-error.ts 的论证同源），直接放行、不再看文案。

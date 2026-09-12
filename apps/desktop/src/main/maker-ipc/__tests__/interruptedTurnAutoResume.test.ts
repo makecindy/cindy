@@ -165,6 +165,39 @@ describe('isInterruptedTurnError', () => {
     );
   });
 
+  it('does not auto-resume when the inference gateway has no available OAuth accounts', () => {
+    const exact =
+      'API Error: 503 {"error":"No available OAuth accounts in pool","detail":"No available OAuth accounts: 12 cooling down."}';
+    expect(isInterruptedTurnError({ message: exact, errorStatus: 503 })).toBe(false);
+    expect(
+      isInterruptedTurnError({
+        message: '503 Service Unavailable: No available OAuth accounts: 12 cooling down.',
+      }),
+    ).toBe(false);
+    // A stable reason must not override this non-retryable provider signal.
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream-overload',
+        message: 'No available OAuth accounts in pool',
+        errorStatus: 503,
+      }),
+    ).toBe(false);
+  });
+
+  it('does not broaden the OAuth-pool exception to a different HTTP status', () => {
+    expect(
+      isInterruptedTurnError({
+        message: 'No available OAuth accounts in pool',
+        errorStatus: 400,
+      }),
+    ).toBe(false);
+    expect(
+      isInterruptedTurnError({
+        message: 'No available OAuth accounts in pool',
+      }),
+    ).toBe(false);
+  });
+
   // 第三类:上游没容量。与 #844 的分工靠「本 turn 有没有产出」划清(见判定函数注释),
   // 零产出的容量拒绝由 Codex 侧重投,本份只在已有产出时接手,两者互斥。
   it('accepts capacity / overload failures', () => {
