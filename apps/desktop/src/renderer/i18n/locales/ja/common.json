@@ -9408,7 +9408,7 @@
       "createProjectFailed": "プロジェクトの作成に失敗しました",
       "projectsToggleExpand": "すべてのプロジェクトセッションを展開",
       "projectsToggleCollapse": "すべてのプロジェクトセッションを折りたたむ",
-      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Agent：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
+      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Harness：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
       "organizeSidebar": "サイドバー表示設定",
       "filterAllText": "すべて",
       "filterSelectedProjects": "{{count}} 件選択",
@@ -9424,10 +9424,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "プロジェクトでグループ化",
+        "project": "プロジェクト別",
         "flat": "フラット表示",
-        "device": "デバイスでグループ化",
-        "dialogue": "チャットをまとめる"
+        "device": "デバイス別",
+        "dialogue": "チャット別"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイスグループを使えません",
       "deviceGroup": {
@@ -9460,14 +9460,14 @@
         "priority": "要対応を最上位に、次に未読、実行中、残りは時間順"
       },
       "filterStatusHeading": "ステータス",
-      "filterAgentHeading": "エージェント",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最終アクティビティ",
       "filterGroupByHeading": "グループ",
       "filterSortByHeading": "並び替え",
       "filterTaskSortHeading": "セッション順",
-      "filterProjectOrderHeading": "プロジェクト順",
+      "filterProjectOrderHeading": "プロジェクトの並び順",
       "filterProjectOrder": {
-        "activity": "セッションの並び順に従う",
+        "activity": "セッションに従う",
         "custom": "手動"
       },
       "filterProjectOrderTip": {
@@ -9714,7 +9714,23 @@
         "projects": "プロジェクト",
         "dialogues": "チャット"
       },
-      "railNavCount": "{{count}} 件のセッション"
+      "railNavCount": "{{count}} 件のセッション",
+      "groupSummary": {
+        "project": "プロジェクト",
+        "dialogue": "チャット",
+        "device": "デバイス"
+      },
+      "taskStatusHeading": "セッションの状態",
+      "taskStatus": {
+        "active": "アクティブなセッション",
+        "archived": "アーカイブ済みセッション",
+        "all": "すべてのセッション"
+      },
+      "sortTaskBy": {
+        "priority": "優先度順",
+        "activity": "最近のアクティビティ順",
+        "created": "作成日時順"
+      }
     },
     "rename": {
       "aiRename": "AIで名前を再生成",
@@ -12242,7 +12258,6 @@
     "unsavedDescription": "戻ると、このルーチンへの変更が破棄されます。",
     "discard": "変更を破棄",
     "continueEditing": "編集を続ける",
-
     "title": "ルーティン",
     "add": "ルーティンを追加",
     "back": "ルーティンに戻る",

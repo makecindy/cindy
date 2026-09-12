@@ -12,6 +12,8 @@
 
 ## 2026-09
 
+- **09-12** **侧栏整理菜单收为子菜单**——用户逐轮确认 HTML 后授权实施：一级为分组、任务排序、项目排序、任务状态、筛选、显示、任务信息，右侧均显示当前选择。任务排序直接并列优先级、最近活动、创建时间；优先级列首不改变默认值。筛选维度名为 Harness，补 Pi；任务状态独立于内容筛选的计数和重置。所有菜单行配图标，分组入口按真实侧栏的组标题与缩进任务行绘制，取代网格及 FolderTree 候选。替代旧菜单的平铺区块、嵌套时间排序及部分行刻意无图标的处理。现行行为见 `docs/product-rules/sidebar-redesign-plan.md §3`，实现为 `SidebarFilterPopover.tsx`；本条记录设计批准，不代表客户端实机验收通过。
+
 - **09-09** **用量历史 pi 标记改为青绿**——所有者试用后认为 Codex 蓝色与 pi 紫色不易区分，指定 pi 改用青绿。仅用量历史 harness 表的 pi 三处标记改为 `--usage-model-1`，随 Light/Dark 使用已有青绿值；Claude 陶土橙和 Codex 蓝色保留。替代本日上一条 pi 紫色选择，不修改全局 `--engine-badge-pi` 或模型配色。
 
 - **09-09** **用量历史 harness 改用已有引擎身份色**——所有者要求 Claude 品牌偏橙、Codex 蓝色，pi 可自选但不用红色。替代本日早先的青绿 / 靛蓝 / 琥珀方案：复用 `--engine-badge-cc` / `--engine-badge-codex` / `--engine-badge-pi`，分别为陶土橙 / 蓝 / 紫；三种标记位置同步，沿用这些身份 Token 的 Light/Dark 固定值合同。仅扩展这些既有 Token 在用量历史 Agent/harness 表中的消费范围，不改 Token 值、模型配色或其他功能。当前规则见 `usage-history-charts.md`。

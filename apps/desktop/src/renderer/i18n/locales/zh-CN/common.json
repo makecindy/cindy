@@ -9408,7 +9408,7 @@
       "createProjectFailed": "新建项目失败",
       "projectsToggleExpand": "展开所有项目任务",
       "projectsToggleCollapse": "收起所有项目任务",
-      "filterAria": "侧边栏显示设置（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
+      "filterAria": "侧边栏显示设置（状态：{{status}}，Harness：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
       "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
@@ -9424,10 +9424,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "按项目分组",
+        "project": "按项目",
         "flat": "平铺",
-        "device": "按设备分组",
-        "dialogue": "对话归为一组"
+        "device": "按设备",
+        "dialogue": "按对话"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -9460,14 +9460,14 @@
         "priority": "等你处理的排在最前，然后是未读、运行中，其余按时间"
       },
       "filterStatusHeading": "状态",
-      "filterAgentHeading": "Agent",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活跃",
       "filterGroupByHeading": "分组",
       "filterSortByHeading": "排序",
       "filterTaskSortHeading": "任务排序",
-      "filterProjectOrderHeading": "项目顺序",
+      "filterProjectOrderHeading": "项目排序",
       "filterProjectOrder": {
-        "activity": "跟随任务排序",
+        "activity": "跟随任务",
         "custom": "手动"
       },
       "filterProjectOrderTip": {
@@ -9714,7 +9714,23 @@
         "projects": "项目",
         "dialogues": "对话"
       },
-      "railNavCount": "{{count}} 个任务"
+      "railNavCount": "{{count}} 个任务",
+      "groupSummary": {
+        "project": "项目",
+        "dialogue": "对话",
+        "device": "设备"
+      },
+      "taskStatusHeading": "任务状态",
+      "taskStatus": {
+        "active": "活跃任务",
+        "archived": "已归档任务",
+        "all": "全部任务"
+      },
+      "sortTaskBy": {
+        "priority": "按优先级",
+        "activity": "按最近活动",
+        "created": "按创建时间"
+      }
     },
     "rename": {
       "aiRename": "用 AI 重新命名",
@@ -12242,7 +12258,6 @@
     "unsavedDescription": "离开后会丢弃这次对例行任务的修改。",
     "discard": "放弃修改",
     "continueEditing": "继续编辑",
-
     "title": "例行任务",
     "add": "添加例行任务",
     "back": "返回例行任务",

@@ -9423,7 +9423,7 @@
       "createProjectFailed": "Failed to create project",
       "projectsToggleExpand": "Expand all project sessions",
       "projectsToggleCollapse": "Collapse all project sessions",
-      "filterAria": "Sidebar display settings (Status: {{status}}, Vendor: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
+      "filterAria": "Sidebar display settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
       "organizeSidebar": "Sidebar display settings",
       "filterAllText": "all",
       "filterSelectedProjects": "{{count}} selected",
@@ -9439,10 +9439,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "Group by project",
+        "project": "By project",
         "flat": "Flat list",
-        "device": "Group by device",
-        "dialogue": "Group chats together"
+        "device": "By device",
+        "dialogue": "By chat"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -9475,14 +9475,14 @@
         "priority": "Waiting on you first, then unread, then running, then by time"
       },
       "filterStatusHeading": "Status",
-      "filterAgentHeading": "Agent",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Last activity",
       "filterGroupByHeading": "Group by",
       "filterSortByHeading": "Sort by",
       "filterTaskSortHeading": "Session sort",
-      "filterProjectOrderHeading": "Project order",
+      "filterProjectOrderHeading": "Project sorting",
       "filterProjectOrder": {
-        "activity": "Follow Session Sorting",
+        "activity": "Follow sessions",
         "custom": "Manual"
       },
       "filterProjectOrderTip": {
@@ -9729,7 +9729,23 @@
         "projects": "Projects",
         "dialogues": "Chats"
       },
-      "railNavCount": "{{count}} sessions"
+      "railNavCount": "{{count}} sessions",
+      "groupSummary": {
+        "project": "Project",
+        "dialogue": "Chat",
+        "device": "Device"
+      },
+      "taskStatusHeading": "Session status",
+      "taskStatus": {
+        "active": "Active sessions",
+        "archived": "Archived sessions",
+        "all": "All sessions"
+      },
+      "sortTaskBy": {
+        "priority": "By priority",
+        "activity": "By recent activity",
+        "created": "By creation time"
+      }
     },
     "rename": {
       "aiRename": "Rename with AI",
@@ -12259,7 +12275,6 @@
     "unsavedDescription": "Leaving will discard these changes to the routine.",
     "discard": "Discard Changes",
     "continueEditing": "Keep Editing",
-
     "title": "Routines",
     "add": "Add Routine",
     "back": "Back to Routines",
