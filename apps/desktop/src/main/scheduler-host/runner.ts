@@ -3041,7 +3041,8 @@ function buildScheduledRunContextInstruction(
       .filter((part) => part.type !== 'literal')
       .map((part) => [part.type, part.value]),
   );
-  const firedAtInScheduleTimezone = `${zonedParts.year}-${zonedParts.month}-${zonedParts.day}T${zonedParts.hour}:${zonedParts.minute}:${zonedParts.second}[${schedule.timezone}]`;
+  const hour = zonedParts.hour === '24' ? '00' : zonedParts.hour;
+  const firedAtInScheduleTimezone = `${zonedParts.year}-${zonedParts.month}-${zonedParts.day}T${hour}:${zonedParts.minute}:${zonedParts.second}[${schedule.timezone}]`;
   return [
     '',
     '',

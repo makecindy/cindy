@@ -385,6 +385,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       prompt: 'Find appointments for the next seven days',
     });
     const cases = [
+      ['2026-09-26T12:00:00.000Z', '2026-09-27T00:00:00[Pacific/Auckland]'],
       ['2026-09-26T13:59:59.123Z', '2026-09-27T01:59:59[Pacific/Auckland]'],
       ['2026-09-26T14:00:00.456Z', '2026-09-27T03:00:00[Pacific/Auckland]'],
     ];
