@@ -1977,6 +1977,7 @@
       },
       "genericOAuth": {
         "subtitle": "订阅账号",
+        "reopenLoginPage": "重新打开登录页",
         "toast": {
           "loggedIn": "已登录 {{name}}",
           "loginFailed": "{{name}} 登录失败，请重试",

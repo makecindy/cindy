@@ -5269,6 +5269,11 @@ interface ElectronAPI {
         verificationUrl: string;
         userCode: string;
         expiresAt: number;
+      } | {
+        providerId: string;
+        ownerId: string;
+        phase: 'browser-url';
+        url: string | null;
       }) => void,
     ) => () => void;
     /** 自定义供应商上游错误订阅（返回 off）；code 走 providerError.* i18n。 */
