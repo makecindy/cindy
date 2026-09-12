@@ -4,6 +4,7 @@ import { createDurableOutbox, type DurableOutboxRecord } from "./durableOutbox";
 import { durableOutboxUploadUri } from "./durableOutboxFiles";
 import { outboxItemAttachments, type MobileOutboxItem } from "./sessionOutbox";
 import { discardMobileUploadedAttachment } from "./mobileAttachmentUpload";
+import type { RemoteSerializedAttachment } from "./types";
 
 export const mobileDurableOutbox = createDurableOutbox(AsyncStorage);
 /** Hide old-owner rows even before the bridge's React effect activates the next ledger. */
@@ -11,14 +12,15 @@ export function getCurrentMobileOutboxRecords(): readonly DurableOutboxRecord[] 
   const key = getMobileAuthOwner().accountKey;
   return mobileDurableOutbox.getSnapshot().filter((record) => record.accountId === key);
 }
-/** Only call after local cancellation or an explicit durable cancellation acknowledgement. */
-export function discardCancelledOutboxUploads(
+/** Call only for confirmed cancellation or durably superseded upload references. */
+export function discardOutboxUploads(
   record: DurableOutboxRecord,
   owner: MobileAuthOwnerGeneration,
   getToken: () => Promise<string | null>,
+  attachments: readonly RemoteSerializedAttachment[] = outboxItemAttachments(record.item),
 ): void {
   if (record.accountId !== owner.accountKey) return;
-  for (const attachment of outboxItemAttachments(record.item)) {
+  for (const attachment of attachments) {
     discardMobileUploadedAttachment(attachment, { getToken: async () => {
       if (!isMobileAuthOwnerCurrent(owner)) return null;
       const token = await getToken();

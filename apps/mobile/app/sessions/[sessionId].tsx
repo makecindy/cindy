@@ -4,7 +4,7 @@ import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
-import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, discardCancelledOutboxUploads } from '@/session/mobileDurableOutbox';
+import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, discardOutboxUploads } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles } from '@/session/durableOutboxFiles';
 import { observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
@@ -5429,7 +5429,7 @@ export default function SessionScreen() {
       if (!record.prepared) {
         await mobileDurableOutbox.remove(record);
         await removeOutboxFiles(record);
-        discardCancelledOutboxUploads(record, owner, () => auth.getAccessToken());
+        discardOutboxUploads(record, owner, () => auth.getAccessToken());
       } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
     };
     void remove().catch((err) => {

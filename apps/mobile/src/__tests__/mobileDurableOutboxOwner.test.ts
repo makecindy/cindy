@@ -11,7 +11,7 @@ vi.mock('@react-native-async-storage/async-storage', () => ({ default: {
 } }));
 vi.mock('../session/durableOutboxFiles', () => ({ durableOutboxUploadUri: vi.fn() }));
 vi.mock('../session/mobileAttachmentUpload', () => ({ discardMobileUploadedAttachment: mocks.discard }));
-import { discardCancelledOutboxUploads, getCurrentMobileOutboxRecords, mobileDurableOutbox } from '../session/mobileDurableOutbox';
+import { discardOutboxUploads, getCurrentMobileOutboxRecords, mobileDurableOutbox } from '../session/mobileDurableOutbox';
 
 function record(): DurableOutboxRecord {
   return { version: 1, accountId: getMobileAuthOwner().accountKey, deviceId: 'mac', createdAt: 1,
@@ -43,7 +43,7 @@ it('does not use a token that arrives after a same-membership realm switch', asy
   let resolve!: (token: string) => void;
   const token = new Promise<string>((done) => { resolve = done; });
   const getToken = vi.fn(() => token);
-  discardCancelledOutboxUploads(record(), getMobileAuthOwner(), getToken);
+  discardOutboxUploads(record(), getMobileAuthOwner(), getToken);
   const readToken = mocks.discard.mock.calls[0]![1].getToken as () => Promise<string | null>;
   const pending = readToken();
   setMobileAuthOwner('alice', 'cn');
@@ -55,9 +55,9 @@ it('does not use a token that arrives after a same-membership realm switch', asy
 
 it('uses the current owner token for confirmed cancellation and refuses a different owner record', async () => {
   const own = record();
-  discardCancelledOutboxUploads(own, getMobileAuthOwner(), async () => 'token');
+  discardOutboxUploads(own, getMobileAuthOwner(), async () => 'token');
   expect(await mocks.discard.mock.calls[0]![1].getToken()).toBe('token');
   setMobileAuthOwner('alice', 'cn');
-  discardCancelledOutboxUploads(own, getMobileAuthOwner(), async () => 'other-token');
+  discardOutboxUploads(own, getMobileAuthOwner(), async () => 'other-token');
   expect(mocks.discard).toHaveBeenCalledOnce();
 });

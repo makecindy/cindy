@@ -503,6 +503,8 @@ export default function NewRemoteSessionScreen() {
     workingDir: initialWorkingDir ?? '',
   });
   const firstMessageRef = useRef(draft.firstMessage);
+  const [planModeDraftOn, setPlanModeDraftOn] = useState(false);
+  const prePlanPermissionModeRef = useRef<string | null>(null);
   const firstMessageSelectionRef = useRef({ start: draft.firstMessage.length, end: draft.firstMessage.length });
   const [firstMessageSelection, setFirstMessageSelection] = useState(firstMessageSelectionRef.current);
   const [creating, setCreating] = useState(false);
@@ -618,6 +620,23 @@ export default function NewRemoteSessionScreen() {
   // (创建期间发出的消息可能超出单条上限,装不下的只能丢,但不能静默丢,review P1)。
   // 声明在 attachmentError 之后:notice 就落在附件错误行上。
   const outboxRecoveryRef = useRef<DurableOutboxRecord | null>(null);
+  const restoreCreationDraft = useCallback((recovered: NewSessionDraft, files: RemoteSerializedAttachment[], plan?: { enabled: boolean; restorePermissionMode: string | null }) => {
+    userTouchedWorkspaceRef.current = true;
+    userTouchedRuntimeRef.current = true;
+    appliedPermissionMemoryRef.current = true;
+    runtimeActionSeqRef.current += 1;
+    firstMessageRef.current = recovered.firstMessage;
+    const selection = { start: recovered.firstMessage.length, end: recovered.firstMessage.length };
+    firstMessageSelectionRef.current = selection;
+    setFirstMessageSelection(selection);
+    attachmentsRef.current = files;
+    setAttachments(files);
+    if (plan) {
+      setPlanModeDraftOn(plan.enabled);
+      prePlanPermissionModeRef.current = plan.restorePermissionMode;
+    }
+    setDraft(recovered);
+  }, []);
   const leaveForeignOutboxRecovery = useCallback(() => {
     const record = outboxRecoveryRef.current;
     if (!record || record.accountId === getMobileAuthOwner().accountKey) return false;
@@ -637,31 +656,21 @@ export default function NewRemoteSessionScreen() {
       if (!record?.creation || record.prepared) return;
       restored = true;
       outboxRecoveryRef.current = record;
-      userTouchedWorkspaceRef.current = true;
       userTouchedDeviceRef.current = true;
-      setDraft(record.creation.draft);
-      setAttachments(record.item.attachmentSlots.filter((a): a is RemoteSerializedAttachment => a !== null));
+      restoreCreationDraft(record.creation.draft,
+        record.item.attachmentSlots.filter((a): a is RemoteSerializedAttachment => a !== null),
+        { enabled: record.creation.planModeArm, restorePermissionMode: record.creation.restorePermissionMode });
       setSelectedDeviceId(record.deviceId);
       setSelectedDeviceName(record.creation.deviceName);
     };
     const unsubscribe = mobileDurableOutbox.subscribe(restore);
     void mobileDurableOutbox.ready().then(restore);
     return () => { active = false; unsubscribe(); };
-  }, [params.recoverySessionId, outboxOwner, leaveForeignOutboxRecovery]);
+  }, [params.recoverySessionId, outboxOwner, leaveForeignOutboxRecovery, restoreCreationDraft]);
   useEffect(() => {
     const stashed = drainStashedNewSessionDraft();
     if (!stashed) return;
-    // 返回编辑沿用草稿的工作区，不能被随后加载的全局默认覆盖。
-    userTouchedWorkspaceRef.current = true;
-    firstMessageRef.current = stashed.draft.firstMessage;
-    const restoredSelection = {
-      start: stashed.draft.firstMessage.length,
-      end: stashed.draft.firstMessage.length,
-    };
-    firstMessageSelectionRef.current = restoredSelection;
-    setFirstMessageSelection(restoredSelection);
-    setDraft(stashed.draft);
-    setAttachments([...stashed.attachments]);
+    restoreCreationDraft(stashed.draft, [...stashed.attachments]);
     if (stashed.notice) setAttachmentError(stashed.notice);
     if (stashed.deviceId) {
       userTouchedDeviceRef.current = true;
@@ -944,6 +953,7 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     const storedAgentKind = newSessionPreferences?.agentKind;
     if (!newSessionPreferencesLoaded || !storedAgentKind) return;
+    if (userTouchedRuntimeRef.current) return;
     if (appliedStoredAgentRef.current === storedAgentKind) return;
     const expectedDeviceId = preferredDefaultDevice?.deviceId ?? '';
     if (expectedDeviceId && selectedDeviceId !== expectedDeviceId) return;
@@ -1032,10 +1042,11 @@ export default function NewRemoteSessionScreen() {
     const remembered = newSessionPreferences?.permissionModeByAgent[draft.agentKind];
     if (!remembered || remembered === draft.permissionMode) return;
     let cancelled = false;
+    const seqAtTrigger = runtimeActionSeqRef.current;
     void confirmFullAccessChange(draft.permissionMode, remembered, {
       restoringRememberedChoice: true,
     }).then((confirmed) => {
-      if (cancelled || !confirmed) return;
+      if (cancelled || !confirmed || seqAtTrigger !== runtimeActionSeqRef.current) return;
       setDraft((current) => ({ ...current, permissionMode: remembered }));
     });
     return () => {
@@ -1148,7 +1159,6 @@ export default function NewRemoteSessionScreen() {
   );
   // 权限按钮 / 权限下拉不体现 plan(对齐桌面 PR#494 / Cursor):计划模式激活时展示
   // 进入前的底层权限档(无记录时回退首个非 plan 档),激活态由 composer 的 PlanModeChip 表达。
-  const prePlanPermissionModeRef = useRef<string | null>(null);
   const displayPermissionMode = draft.permissionMode === 'plan'
     ? ((prePlanPermissionModeRef.current && prePlanPermissionModeRef.current !== 'plan')
       ? prePlanPermissionModeRef.current
@@ -4034,11 +4044,10 @@ export default function NewRemoteSessionScreen() {
   //  - 新协议(capabilities.planMode.supported):本地布尔草稿态,创建会话后经
   //    maker:set-plan-mode 武装首条消息,消耗由被控端执行;不污染 draft.permissionMode。
   //  - 老被控端兼容(permissionModes 仍含 'plan'):沿用草稿 permissionMode 切换 + 创建后恢复。
-  // prePlanPermissionModeRef 声明在 displayPermissionMode 计算处(权限按钮展示需要)。
+  // Plan 草稿与底层权限快照由恢复入口一并回填。
   const planModeCapability = runtimeOptions.planModeSupported;
   const legacyPlanSupported = runtimeOptions.permissionOptions.some((option) => option.id === 'plan');
   const planModeSupported = planModeCapability || legacyPlanSupported;
-  const [planModeDraftOn, setPlanModeDraftOn] = useState(false);
   const planModeOn = planModeCapability ? planModeDraftOn : draft.permissionMode === 'plan';
   const togglePlanMode = useCallback((next: boolean) => {
     if (planModeCapability) {

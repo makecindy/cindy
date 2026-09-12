@@ -107,6 +107,7 @@ async function setup(storage = disk()) {
     history: vi.fn(async () => false),
     applyProjection: vi.fn(),
     cleanup: vi.fn(async () => {}),
+    discardUploads: vi.fn(),
     retryable: () => true,
     describe: () => "offline",
     confirmationMessage: "check receipt",
@@ -494,11 +495,32 @@ describe("app-owned delivery and reconciliation", () => {
     runner.wake();
     await runner.run();
     expect(deps.upload).toHaveBeenCalledOnce();
+    expect(deps.discardUploads).toHaveBeenCalledWith(expect.objectContaining({ refreshUploads: false }), [record.item.attachmentSlots[0]]);
+    expect(deps.discardUploads.mock.invocationCallOrder[0]).toBeLessThan(deps.upload.mock.invocationCallOrder[0]!);
     expect(deps.enqueue.mock.calls.map(([r]) => r.prepared?.clientId)).toEqual([
       "id-1",
       "id-1",
     ]);
     expect(store.getSnapshot()[0]?.item.attachmentSlots[0]?.id).toBe("file-1");
+  });
+  it('retains superseded references when replacing the ledger fails, then only discards upload-backed slots', async () => {
+    const { store, deps, storage, runner } = await setup();
+    const old = await deps.upload();
+    const unchanged = { ...old, id: 'not-replaced', path: 'other' };
+    await store.add({ ...message(), refreshUploads: true, prepared: { clientId: 'id-1' } as QueuedRemoteMessage,
+      uploads: [{ slot: 0, fileName: 'file.png', name: 'file.png', kind: 'image', size: 1 }],
+      item: { ...message().item, attachmentSlots: [old, unchanged] } });
+    deps.upload.mockClear();
+    const write = vi.spyOn(storage, 'setItem').mockRejectedValueOnce(new Error('disk full'));
+    await runner.run();
+    expect(deps.discardUploads).not.toHaveBeenCalled();
+    expect(deps.upload).not.toHaveBeenCalled();
+    expect(store.getSnapshot()[0]?.item.attachmentSlots).toEqual([old, unchanged]);
+    write.mockRestore();
+    runner.wake();
+    await runner.run();
+    expect(deps.discardUploads).toHaveBeenCalledWith(expect.anything(), [old]);
+    expect(store.getSnapshot()[0]?.item.attachmentSlots[1]).toEqual(unchanged);
   });
   it("persists the first creation message as the FIFO barrier across restart", async () => {
     const first = await setup();

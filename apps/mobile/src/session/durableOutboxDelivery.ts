@@ -30,6 +30,7 @@ export interface DurableOutboxDeliveryDeps {
     projection: InputProjection,
   ): void;
   cleanup(record: DurableOutboxRecord, cancelled: boolean): Promise<void>;
+  discardUploads(record: DurableOutboxRecord, attachments: RemoteSerializedAttachment[]): void;
   accepted?(record: DurableOutboxRecord): Promise<void>;
   mediaFailed?(error: unknown): boolean;
   retryable(error: unknown): boolean;
@@ -151,6 +152,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         return;
       }
       if (record.refreshUploads && record.uploads.length) {
+        const superseded = record.item.attachmentSlots.filter((attachment, slot): attachment is RemoteSerializedAttachment =>
+          attachment !== null && record.uploads.some((upload) => upload.slot === slot));
         await update({
           template: record.prepared ?? record.template,
           prepared: undefined,
@@ -162,6 +165,9 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
             ),
           },
         });
+        if (!current(record)) return;
+        // Commit the replacement boundary first: a failed ledger write still owns the old references.
+        deps.discardUploads(record, superseded);
       }
       if (!record.prepared) {
         for (const upload of record.uploads) {

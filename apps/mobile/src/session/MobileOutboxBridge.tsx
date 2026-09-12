@@ -23,7 +23,7 @@ import {
 import {
   mobileDurableOutbox,
   isDurableOutboxCreationHeld,
-  discardCancelledOutboxUploads,
+  discardOutboxUploads,
 } from "./mobileDurableOutbox";
 import {
   durableOutboxUploadUri,
@@ -287,8 +287,9 @@ export function MobileOutboxBridge() {
       },
       cleanup: async (record, cancelled) => {
         await removeOutboxFiles(record);
-        if (cancelled) discardCancelledOutboxUploads(record, owner, () => latest.current.auth.getAccessToken());
+        if (cancelled) discardOutboxUploads(record, owner, () => latest.current.auth.getAccessToken());
       },
+      discardUploads: (record, attachments) => discardOutboxUploads(record, owner, () => latest.current.auth.getAccessToken(), attachments),
       mediaFailed: (error) =>
         formatRemoteError(error).includes("DEVICE_LINK_MEDIA_TRANSFER_FAILED"),
       retryable: (error) =>
