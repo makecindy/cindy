@@ -122,7 +122,7 @@ describe('appBadgeService', () => {
     [true, 0],
     [true, 1],
   ] as const)(
-    'installs the first Windows projection after reset=%s with unchanged count=%s',
+    'replays Windows attention on window readiness without a projection after reset=%s count=%s',
     async (reset, count) => {
       windowReady = false;
       const service = await freshService('win32');
@@ -131,7 +131,7 @@ describe('appBadgeService', () => {
       expect(service.getAttentionCount()).toBe(count);
       expect(setOverlayIcon).not.toHaveBeenCalled();
       windowReady = true;
-      await publish({ sender: mainWebContents }, count, ['early-task']);
+      service.refreshWindowsAppBadge();
       expect(setOverlayIcon).toHaveBeenCalledTimes(1);
       expect(setOverlayIcon).toHaveBeenLastCalledWith(
         count ? overlayIcon : null,
@@ -348,13 +348,13 @@ describe('appBadgeService', () => {
     await publish({ sender: mainWebContents }, 3);
     flashFrame.mockClear();
     badgeDescription = '需要关注的任务：{{count}}';
-    service.refreshAppBadgeLocalization();
+    service.refreshWindowsAppBadge();
     expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, '需要关注的任务：3');
     expect(service.getAttentionCount()).toBe(3);
     expect(flashFrame).not.toHaveBeenCalled();
     await publish({ sender: mainWebContents }, 0);
     flashFrame.mockClear();
-    service.refreshAppBadgeLocalization();
+    service.refreshWindowsAppBadge();
     expect(setOverlayIcon).toHaveBeenLastCalledWith(null, '');
     expect(flashFrame).not.toHaveBeenCalled();
   });

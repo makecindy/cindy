@@ -470,7 +470,7 @@ import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProce
 import {
   initAppBadgeService,
   clearAllSessionAttention,
-  refreshAppBadgeLocalization,
+  refreshWindowsAppBadge,
 } from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
@@ -2978,7 +2978,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
-  refreshAppBadgeLocalization();
+  refreshWindowsAppBadge();
   resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
   remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
@@ -3896,6 +3896,7 @@ const createWindow = () => {
     showMainWindowAndRestoreFullscreen(mainWindow, {
       restoreFullscreen: shouldRestoreMacFullscreen,
     });
+    refreshWindowsAppBadge();
     if (!app.isPackaged) markDesktopDevWindowReady();
     void runComputerUseSmokeIfRequested();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、

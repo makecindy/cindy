@@ -87,11 +87,10 @@ export function initAppBadgeService(deps: AppBadgeServiceDeps): void {
       throwIpcError('INVALID_PARAMS', 'App attention snapshot exceeds retained session ID limit');
     }
     const previousCount = getAttentionCount();
-    const isFirstProjection = projectedAttentionCount === null;
     projectedAttentionCount = count;
     // 曾进入普通目录的任务始终归投影管理，删除/断连后不能被旧通知重新计入。
     for (const sessionId of uniqueSessionIds) projectedSessionIds.add(sessionId);
-    if (isFirstProjection || getAttentionCount() !== previousCount) applyBadge();
+    if (getAttentionCount() !== previousCount) applyBadge();
   });
   ipcMain.handle(
     'notification:mark-session-attention',
@@ -152,7 +151,7 @@ function broadcastSessionAttentionCleared(
 
 export function clearAllSessionAttention(): void {
   attentionSessionIds.clear();
-  projectedAttentionCount = null;
+  projectedAttentionCount = 0;
   projectedSessionIds.clear();
   applyBadge();
 }
@@ -195,8 +194,8 @@ function applyCountBadge(count: number): void {
   }
 }
 
-/** 语言变化只刷新现有角标，不重新触发任务栏闪烁。 */
-export function refreshAppBadgeLocalization(): void {
+/** 窗口就绪或语言变化时重绘当前角标，不依赖目录投影，也不重新触发闪烁。 */
+export function refreshWindowsAppBadge(): void {
   if (process.platform === 'win32') applyWindowsBadge(getAttentionCount(), false);
 }
 
