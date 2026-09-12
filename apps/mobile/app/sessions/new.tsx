@@ -88,6 +88,7 @@ import {
 } from '@/session/attachments';
 import { useAuth } from '@/auth/AuthContext';
 import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUpload';
+import { discardNewSessionUploadedAttachments } from '@/session/newSessionAttachmentCleanup';
 import { goBackGuarded } from '@/utils/backGuard';
 import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
@@ -682,13 +683,14 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => subscribeMobileAuthOwner(() => {
     // Switching accounts invalidates both queued uploads and already received
     // attachments, synchronously, before a new account can send this draft.
+    discardNewSessionUploadedAttachments(attachmentsRef.current, auth.getAccessToken);
     discardAllPendingUploads();
     attachmentsRef.current = [];
     setAttachments([]);
     setAttachmentPreviews({});
     setMediaAssetAttachments({});
     setAttachmentError(null);
-  }), [discardAllPendingUploads]);
+  }), [auth.getAccessToken, discardAllPendingUploads]);
   const incomingShareBatch = useIncomingShareBatch();
   const isShareTargetFocused = useIsFocused();
   useEffect(() => {

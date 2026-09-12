@@ -29,13 +29,20 @@ export function IncomingShareBridge() {
       if (!active) return;
       stopWatchingAccount = watchIncomingShareAccount(sharing, initialOwner);
       const refresh = () => {
-        // Older development clients lack the native App Group. Inbound sharing
-        // must not prevent startup. Local files need no async/network resolver.
-        try {
-          receiveIncomingShare(sharing);
-        } catch {
-          // Inbound sharing is unavailable in this native binary.
-        }
+        void import('@/session/incomingShareCleanup')
+          .then(({ cleanupExpiredIncomingShares }) => cleanupExpiredIncomingShares())
+          .catch(() => undefined)
+          .then(() => {
+            if (!active) return;
+            // Sweep before staging, so an expired native copy cannot start a new
+            // upload concurrently with deletion. Missing copies use the existing
+            // upload error path; the user can share the original again.
+            try {
+              receiveIncomingShare(sharing);
+            } catch {
+              // Inbound sharing is unavailable in older native binaries.
+            }
+          });
       };
       subscriptions = [
         AppState.addEventListener('change', (state) => { if (state === 'active') refresh(); }),
