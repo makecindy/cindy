@@ -178,6 +178,36 @@ describe('installContentSecurityPolicy', () => {
     };
   }
 
+  it.each(['', '?mode=files'])('protects the packaged capture document %s', (query) => {
+    const s = fakeSession();
+    const ctx = { ...PROD_CTX, desktopCapture: true };
+    installContentSecurityPolicy(s as never, ctx);
+    const result = s.invoke({ resourceType: 'mainFrame', url: `cindy-desktop-capture://capture/index.html${query}`, responseHeaders: {} });
+    expect(result.responseHeaders?.['Content-Security-Policy']).toEqual([buildContentSecurityPolicy(ctx)]);
+    expect(result.responseHeaders?.['Content-Security-Policy']?.[0]).toContain("connect-src 'none'");
+  });
+
+  it.each([
+    'cindy-desktop-capture://capture/index.html?mode=unknown',
+    'cindy-desktop-capture://capture/index.html?mode=files&other=1',
+    'cindy-desktop-capture://capture/other.html?mode=files',
+    'cindy-desktop-capture://capture.evil/index.html?mode=files',
+  ])('does not broaden the capture document allowlist to %s', (url) => {
+    const s = fakeSession();
+    installContentSecurityPolicy(s as never, { ...PROD_CTX, desktopCapture: true });
+    expect(s.invoke({ resourceType: 'mainFrame', url, responseHeaders: {} })).toEqual({});
+  });
+
+  it('keeps capture URLs scoped to the capture session and main frame', () => {
+    const url = 'cindy-desktop-capture://capture/index.html?mode=files';
+    const app = fakeSession();
+    installContentSecurityPolicy(app as never, PROD_CTX);
+    expect(app.invoke({ resourceType: 'mainFrame', url, responseHeaders: {} })).toEqual({});
+    const capture = fakeSession();
+    installContentSecurityPolicy(capture as never, { ...PROD_CTX, desktopCapture: true });
+    expect(capture.invoke({ resourceType: 'script', url, responseHeaders: {} })).toEqual({});
+  });
+
   it('is idempotent: a second install on the same session does NOT re-register the listener', () => {
     const s = fakeSession();
     installContentSecurityPolicy(s as never, PROD_CTX);
