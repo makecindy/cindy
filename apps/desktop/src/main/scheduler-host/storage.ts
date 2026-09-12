@@ -49,6 +49,18 @@ import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
 
+/** SQL counterpart of classifyScheduleFailure, shared by display and recovery. */
+function failureKindSql(alias: 'failed' | 'schedule_runs') {
+  const row = sql.raw(alias);
+  return sql<'precheck' | 'rate-limit' | 'execution'>`CASE
+    WHEN CASE WHEN json_valid(${row}.pre_run_hook_result)
+      THEN json_extract(${row}.pre_run_hook_result, '$.decision') = 'block' ELSE 0 END THEN CASE
+        WHEN lower(json_extract(${row}.pre_run_hook_result, '$.stderr')) LIKE '%rate limit%'
+          THEN 'rate-limit' ELSE 'precheck' END
+    WHEN substr(${row}.error_msg, 1, 12) = 'pre-run hook' THEN 'precheck'
+    ELSE 'execution' END`;
+}
+
 /** A success only recovers failures belonging to the same automation. */
 function failureRecoveredSql(alias: 'failed' | 'schedule_runs') {
   const row = sql.raw(alias);
@@ -57,8 +69,7 @@ function failureRecoveredSql(alias: 'failed' | 'schedule_runs') {
     WHERE recovered.schedule_id = ${row}.schedule_id
       AND recovered.fired_at >= ${row}.fired_at
       AND (recovered.status = 'success' OR (
-        CASE WHEN json_valid(${row}.pre_run_hook_result)
-          THEN json_extract(${row}.pre_run_hook_result, '$.decision') = 'block' ELSE 0 END
+        ${failureKindSql(alias)} != 'execution'
         AND recovered.status IN ('skipped', 'success', 'failed')
         AND CASE WHEN json_valid(recovered.pre_run_hook_result)
           THEN json_extract(recovered.pre_run_hook_result, '$.checkSucceeded') = 1 ELSE 0 END
@@ -641,13 +652,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
       failureRecovered: failureRecoveredSql('schedule_runs'),
-      failureKind: sql<'precheck' | 'rate-limit' | 'execution'>`CASE
-        WHEN CASE WHEN json_valid(${scheduleRuns.preRunHookResult})
-          THEN json_extract(${scheduleRuns.preRunHookResult}, '$.decision') = 'block' ELSE 0 END THEN CASE
-            WHEN lower(json_extract(${scheduleRuns.preRunHookResult}, '$.stderr')) LIKE '%rate limit%'
-              THEN 'rate-limit' ELSE 'precheck' END
-        WHEN substr(${scheduleRuns.errorMsg}, 1, 12) = 'pre-run hook' THEN 'precheck'
-        ELSE 'execution' END`,
+      failureKind: failureKindSql('schedule_runs'),
     };
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db

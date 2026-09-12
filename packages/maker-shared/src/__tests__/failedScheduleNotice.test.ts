@@ -41,6 +41,25 @@ describe('historical schedule failure notice', () => {
       preRunHookResult: { decision: 'skip', checkSucceeded: true } });
     expect([...activeScheduleFailures(rows)]).toEqual(['execution']);
   });
+  it('uses the displayed classification to recover legacy and projected checks only', () => {
+    const variants: Partial<RemoteScheduleRun>[] = [
+      { errorMsg: 'pre-run hook blocked' },
+      { errorMsg: 'pre-run hook blocked', preRunHookResult: {} },
+      { errorMsg: 'pre-run hook blocked', preRunHookResult: { decision: 'skip' } },
+      { failureKind: 'precheck' },
+      { failureKind: 'rate-limit' },
+    ];
+    const rows: RemoteScheduleRun[] = variants.map((extra, i) => ({
+      id: `legacy-${i}`, scheduleId: 'a', status: 'failed', firedAt: 1, ...extra,
+    }));
+    rows.push({ id: 'execution', scheduleId: 'a', status: 'failed', firedAt: 2, errorMsg: 'agent failed' },
+      { id: 'projected-execution', scheduleId: 'a', status: 'failed', firedAt: 2,
+        failureKind: 'execution', errorMsg: 'pre-run hook blocked' });
+    expect(activeScheduleFailures(rows).size).toBe(7);
+    rows.push({ id: 'healthy', scheduleId: 'a', status: 'skipped', firedAt: 3,
+      preRunHookResult: { decision: 'skip', checkSucceeded: true } });
+    expect([...activeScheduleFailures(rows)]).toEqual(['execution', 'projected-execution']);
+  });
   it.each(['readOnly', 'tailError', 'interrupted', 'continuationPending', 'error', 'credentialWait', 'streaming', 'running'])(
     'yields to %s', (field) => {
       expect(shouldShowFailedScheduleNotice(visible)).toBe(true);

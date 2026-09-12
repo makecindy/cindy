@@ -638,7 +638,7 @@ export function activeScheduleFailures(runs: readonly RemoteScheduleRun[]): Set<
   return new Set(runs.filter((run) => {
     if (!isFailedScheduleRun(run) || run.failureRecovered === true) return false;
     const success = successes.get(run.scheduleId);
-    const check = run.preRunHookResult?.decision === 'block' ? checks.get(run.scheduleId) : undefined;
+    const check = classifyScheduleFailure(run) !== 'execution' ? checks.get(run.scheduleId) : undefined;
     return ![success, check].some((recovered) => recovered
       && compareFailedScheduleRuns(recovered, { runId: run.id, firedAt: toMillis(run.firedAt) }) > 0);
   }).map((run) => run.id));

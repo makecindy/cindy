@@ -513,7 +513,7 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     } finally { harness.close(); }
   });
 
-  it.each([null, '{broken', '{}', '{"decision":"skip"}'])('classifies legacy precheck errors when hook metadata is %s', async (hookJson) => {
+  it.each([null, '{broken', '{}', '{"decision":"skip"}'])('classifies and recovers legacy precheck errors when hook metadata is %s', async (hookJson) => {
     const harness = createStorageHarness();
     try {
       harness.db.run(sql`INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at)
@@ -525,6 +525,23 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
       expect(await harness.storage.listSidebarIndexRuns()).toEqual([
         expect.objectContaining({ runId: 'legacy-check', failureKind: 'precheck' }),
       ]);
+      await harness.storage.insertRun({ id: 'execution', scheduleId: 'sch-1', firedAt: 2,
+        status: 'failed', sessionId: 'legacy-check-session', errorMsg: 'agent failed' });
+      await harness.storage.insertRun({ id: 'healthy', scheduleId: 'sch-1', firedAt: 3, status: 'skipped',
+        preRunHookResult: { status: 'skipped', decision: 'skip', exitCode: 2, durationMs: 1,
+          stdout: 'CINDY_PRECHECK_OK', stderr: '', stdoutTruncated: false, stderrTruncated: false,
+          timedOut: false, aborted: false, checkSucceeded: true } });
+      const rows = await harness.storage.listSidebarIndexRuns();
+      expect(rows.find((r) => r.runId === 'legacy-check')).toMatchObject({ failureRecovered: true, readAt: undefined });
+      expect(rows.find((r) => r.runId === 'execution')).toMatchObject({ failureRecovered: false });
+      await harness.storage.updateRun('legacy-check', { readAt: 4 });
+      await harness.storage.updateRun('execution', { readAt: 4 });
+      await harness.storage.insertRun({ id: 'latest', scheduleId: 'sch-1', firedAt: 5,
+        status: 'skipped', sessionId: 'legacy-check-session', readAt: 6 });
+      const readRows = await harness.storage.listSidebarIndexRuns();
+      expect(readRows.some((r) => r.runId === 'legacy-check')).toBe(false);
+      expect(readRows.some((r) => r.runId === 'execution')).toBe(true);
+      expect((await harness.storage.listRuns('sch-1', 50)).some((r) => r.id === 'legacy-check')).toBe(true);
     } finally { harness.close(); }
   });
 
