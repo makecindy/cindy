@@ -149,8 +149,10 @@ send 已开始则等真实 outcome——vendor 已 accept 必须 commit、禁止
 （pendingOutcome=failed、丢弃 suppressed、rollback guard）；不得走会补落旧错误、恢复
 recovery 或再入队的 undispatched finalize。确认失败且 attemptToken 仍匹配才重新入队。
 显式关闭 / 停止已清 token 后，sendStarted 且已落库的隐藏 CONTINUE 必须丢弃，不得落成
-可重试 recovery。unexpected close 的 preserve 只认三类 CONTINUE-only reason
-（stall / idle / reconnect-stall）；generic clone-原文 retry fail-closed 不交棒。
+可重试 recovery。unexpected close 的 preserve 只认四类 CONTINUE-only reason
+（stall / idle / reconnect-stall / compact transport interrupted）；generic clone-原文 retry
+fail-closed 不交棒。压缩期间的传输结果不明既不能触发本地摘要 fallback，也不能重放原始
+请求；自动续跑与人工 Retry 都只发 CONTINUE，保留已被上游接受的 turn 边界。
 连续 replacement `unexpected` close 时 WeakMap lease 可能已随旧实例消失，必须按同一
 attemptToken 把 lease 绑到新 Session，或在 coordinator / guard / book 仍一致且队里 /
 live schedule 仍活着时继续 preserve。预算内不能 discard 或只留人工 recovery，也不能清掉

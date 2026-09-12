@@ -161,6 +161,7 @@ import {
   readCodexSubagentSpawnRegistration,
   type CodexRuntimeState,
 } from './translator.js';
+import { CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON } from './compaction-transport-interrupt.js';
 import {
   createSubagentLiveCardTracker,
   type SubagentLiveCardUpdate,
@@ -9925,6 +9926,13 @@ export class CodexAgent extends BaseAgent {
      * turn/completed 驱动。这样无论 error / completed / turn-start response
      * 如何乱序，都只有一个执行入口。
      */
+    const isUncertainCompactionTransportFailure = (error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined): boolean => {
+      const text = `${error?.message ?? ''}\n${typeof error?.additionalDetails === 'string' ? error.additionalDetails : ''}`;
+      const tag = codexErrorInfoTag(error?.codexErrorInfo);
+      return tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
+        || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
+    };
+
     const canRecoverRemoteCompaction = (deadTurnId: string, error: { message?: string; additionalDetails?: unknown; codexErrorInfo?: CodexErrorInfo | null } | null | undefined): boolean => {
       if (!localSummaryProvider || !threadModelProvider || !hostUsesCodexProxy || threadModelProvider === localSummaryProvider) return false;
       if (threadModelProvider !== host.getCindyRemoteCompactionProviderId?.()
@@ -9952,9 +9960,7 @@ export class CodexAgent extends BaseAgent {
         ? info.httpConnectionFailed.httpStatusCode ?? textStatus
         : textStatus;
       const rejectedRequest = [400, 404, 405, 422, 500, 501, 502, 503].includes(httpStatus ?? 0);
-      const uncertainTransport = tag === 'responseStreamDisconnected' || tag === 'responseStreamConnectionFailed'
-        || /timeout|timed out|ECONNRESET|ECONNREFUSED|ENOTFOUND|connection reset|network error|stream disconnected/i.test(text);
-      return !uncertainTransport
+      return !isUncertainCompactionTransportFailure(error)
         && !isAuthRelatedErrorMessage(text)
         && ((rejectedRequest && !signals.usageLimit) || compactRateLimit)
         && !isRemoteCompactEncryptedContentError(text);
@@ -9966,10 +9972,13 @@ export class CodexAgent extends BaseAgent {
     ): boolean => {
       const state = overloadRetry;
       const summaryRecovery = canRecoverRemoteCompaction(deadTurnId, error);
+      const compactionTransportUnknown =
+        compactingTurnIds.has(deadTurnId) && isUncertainCompactionTransportFailure(error);
       if (
         !deadTurnId
         || !state
         || closed
+        || compactionTransportUnknown
         || state.automaticRecoveryAttempted
         || state.isCancelled()
         || state.timer !== null
@@ -12249,9 +12258,18 @@ export class CodexAgent extends BaseAgent {
         // 服务过载(模型容量不足)时接管重投：translator 命中 capacity 才回调，
         // 拿到进度就把错误透成非终止状态，本函数随后跳过 Done 收口。
         let turnReplayRetryScheduled = false;
+        const terminalTurnId = effectiveParams.turnId || currentTurnId;
+        const compactionTransportInterrupted =
+          isTerminalError &&
+          terminalTurnId !== null &&
+          compactingTurnIds.has(terminalTurnId) &&
+          (isTransportError || isUncertainCompactionTransportFailure(effectiveParams.error));
         translateErrorNotification(effectiveParams, eventQueue, {
           rt: translatorRt,
           log,
+          ...(compactionTransportInterrupted
+            ? { errorReasonOverride: CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON }
+            : {}),
           tryTakeOverOverload: () => {
             // 只接管 app-server 本来就不重试的容量拒绝(原始 willRetry !== true)。
             // TurnRetryTracker 把持续 retry 升级成终态的那条路径不接管：那说明
@@ -12288,7 +12306,6 @@ export class CodexAgent extends BaseAgent {
         });
         // 与 translator 的 terminal 判定保持一致：willRetry=false 或缺省都视为终态。
         if (!isTerminalError) return;
-        const terminalTurnId = effectiveParams.turnId || currentTurnId;
         if (turnReplayRetryScheduled) {
           // 死掉的 turn **必须**落墓碑：app-server 随后还会为它发正常的
           // turn/completed(failed)，没有墓碑 handleTurnCompleted 就会 emit terminal

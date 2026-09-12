@@ -1,4 +1,8 @@
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/maker-core';
+import {
+  AUTO_REVIEW_SOURCE_CONTENT,
+  AUTO_REVIEW_USER_INTENT,
+  CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON,
+} from '@cindy/maker-core';
 /**
  * AgentInputCoordinator — main 侧排队输入事务协调器。
  *
@@ -2711,9 +2715,9 @@ export class AgentInputCoordinator {
     let progressKnown = false;
     const previousAutoResumeInfo = opts?.auto ? state.autoResumePending : null;
     const attemptToken = opts?.auto ? (opts.attemptToken ?? null) : null;
-    const continuationOnly = Boolean(
-      opts?.auto && isAcceptedTurnContinuationOnlyReason(previousAutoResumeInfo?.reason),
-    );
+    const continuationOnly = opts?.auto
+      ? isAcceptedTurnContinuationOnlyReason(previousAutoResumeInfo?.reason)
+      : state.errorReason === CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON;
     let continueText = CONTINUE_AFTER_ERROR_PROMPT;
     let recoveryCheckpoint: RecoveryCheckpoint | undefined;
     if (recovery.kind === 'active-turn') {
