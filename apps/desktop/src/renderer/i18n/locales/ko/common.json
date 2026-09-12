@@ -3195,6 +3195,7 @@
         "packageNotFound": "패키지를 찾지 못했습니다. 패키지 이름이나 저장소 URL을 확인하세요.",
         "versionNotFound": "해당 버전을 찾지 못했습니다. 사용 가능한 버전을 선택해 다시 시도하세요.",
         "stateUnavailable": "Cindy가 Pi 확장 상태를 읽지 못했습니다. Cindy를 다시 시작한 뒤 다시 시도하세요.",
+        "runtimeRetirementFailed": "Pi 확장을 새로 고치지 못했습니다. Pi를 다시 사용하기 전에 Cindy를 다시 시작하세요.",
         "runtimeConvergencePartial": "Pi 확장 변경 사항은 저장되었지만 일부 로컬 Pi 작업에서 이전 확장이 계속 실행 중일 수 있습니다. Pi를 다시 사용하기 전에 Cindy를 다시 시작하세요.",
         "nativeCommandFailed": "Pi 기본 패키지 명령에 실패했습니다. 소스나 버전을 확인한 뒤 다시 시도하세요."
       },
@@ -9413,7 +9414,7 @@
       "createProjectFailed": "프로젝트 생성 실패",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
-      "filterAria": "사이드바 표시 설정(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
+      "filterAria": "사이드바 표시 설정(상태: {{status}}, Harness: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
       "organizeSidebar": "사이드바 표시 설정",
       "filterAllText": "전체",
       "filterSelectedProjects": "{{count}}개 선택됨",
@@ -9429,10 +9430,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "프로젝트별 그룹",
+        "project": "프로젝트별",
         "flat": "평면 목록",
-        "device": "기기별 그룹",
-        "dialogue": "대화 묶기"
+        "device": "기기별",
+        "dialogue": "대화별"
       },
       "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
       "deviceGroup": {
@@ -9465,14 +9466,14 @@
         "priority": "확인이 필요한 항목 먼저, 다음 읽지 않음, 실행 중, 나머지는 시간순"
       },
       "filterStatusHeading": "상태",
-      "filterAgentHeading": "에이전트",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "최근 활동",
       "filterGroupByHeading": "그룹",
       "filterSortByHeading": "정렬",
       "filterTaskSortHeading": "세션 정렬",
-      "filterProjectOrderHeading": "프로젝트 순서",
+      "filterProjectOrderHeading": "프로젝트 정렬",
       "filterProjectOrder": {
-        "activity": "세션 정렬 따르기",
+        "activity": "세션 따르기",
         "custom": "수동"
       },
       "filterProjectOrderTip": {
@@ -9719,7 +9720,23 @@
         "projects": "프로젝트",
         "dialogues": "대화"
       },
-      "railNavCount": "세션 {{count}}개"
+      "railNavCount": "세션 {{count}}개",
+      "groupSummary": {
+        "project": "프로젝트",
+        "dialogue": "대화",
+        "device": "기기"
+      },
+      "taskStatusHeading": "세션 상태",
+      "taskStatus": {
+        "active": "활성",
+        "archived": "보관됨",
+        "all": "전체"
+      },
+      "sortTaskBy": {
+        "priority": "우선순위순",
+        "activity": "최근 활동순",
+        "created": "생성 시간순"
+      }
     },
     "rename": {
       "aiRename": "AI로 이름 다시 짓기",
@@ -12247,7 +12264,6 @@
     "unsavedDescription": "돌아가면 이 루틴의 변경 사항이 삭제됩니다.",
     "discard": "변경 사항 버리기",
     "continueEditing": "계속 편집",
-
     "title": "루틴",
     "add": "루틴 추가",
     "back": "루틴으로 돌아가기",

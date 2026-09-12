@@ -159,7 +159,7 @@ export interface UseSidebarFilterReturn {
    * 调用幂等。
    */
   gc: (activeWorkingDirs: readonly string[]) => void;
-  /** M41: 设置 vendor 筛选（'all' | 'cc' | 'codex'），持久化到 localStorage。 */
+  /** 设置 Harness 筛选，持久化到已有 vendor localStorage 键。 */
   setVendor: (v: FilterVendor) => void;
   /** 设置最近活跃范围，持久化到 localStorage。 */
   setLastActivity: (lastActivity: FilterLastActivity) => void;
@@ -173,7 +173,7 @@ export interface UseSidebarFilterReturn {
   setSortBy: (sortBy: FilterSortBy) => void;
   /** 设置项目行顺序，持久化到 localStorage。 */
   setProjectOrder: (projectOrder: FilterProjectOrder) => void;
-  /** 一键重置内容筛选（status/projects/vendor/lastActivity）回默认。 */
+  /** 重置项目 / Harness / 最近活跃筛选；保留独立的任务状态与展示偏好。 */
   resetContentFilters: () => void;
   /** 直接替换 Project 手动排序顺序，持久化到 localStorage。 */
   setManualProjectOrder: (order: readonly string[], activeWorkingDirs: readonly string[]) => void;
@@ -442,11 +442,7 @@ export function useSidebarFilter(
   const gc = useCallback(
     (activeWorkingDirs: readonly string[]) => {
       setProjectsState((prev) => {
-        const next = gcProjectsAgainstActive(
-          prev,
-          activeWorkingDirs,
-          window.electronAPI.platform,
-        );
+        const next = gcProjectsAgainstActive(prev, activeWorkingDirs, window.electronAPI.platform);
         if (next === prev) return prev;
         persistProjects(next, ownerId);
         return next;
@@ -504,8 +500,6 @@ export function useSidebarFilter(
   }, []);
 
   const resetContentFilters = useCallback(() => {
-    setStatusState('active');
-    persistStatus('active');
     setProjectsState((prev) => {
       if (prev === 'all') return prev;
       persistProjects('all', ownerId);

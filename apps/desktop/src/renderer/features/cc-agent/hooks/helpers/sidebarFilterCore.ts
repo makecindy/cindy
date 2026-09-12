@@ -52,8 +52,8 @@ export type FilterStatus = 'active' | 'archived' | 'all';
 export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
-/** M41: vendor filter — 'all' = 全部；'cc' = 仅 Claude；'codex' = 仅 Codex。 */
-export type FilterVendor = 'all' | 'cc' | 'codex';
+/** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
+export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
@@ -268,7 +268,7 @@ export function removeProjectsFromFilter(
 
 /* ============================== vendor load/persist ============================== */
 
-const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex']);
+const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi']);
 
 export function loadVendor(): FilterVendor {
   const storage = safeStorage();
@@ -457,7 +457,11 @@ export function persistLastActivity(lastActivity: FilterLastActivity): void {
 
 /* ============================== sortBy load/persist ============================== */
 
-const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>(['recency', 'created', 'priority']);
+const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>([
+  'recency',
+  'created',
+  'priority',
+]);
 const PROJECT_ORDER_VALUES: ReadonlySet<string> = new Set<FilterProjectOrder>([
   'activity',
   'custom',
@@ -854,18 +858,14 @@ function normalizeFilterEntry(raw: unknown): string | null {
   return normalizeProjectKey(raw);
 }
 
-function normalizeFilterProjectList(
-  values: readonly unknown[],
-  localPlatform?: string,
-): string[] {
+function normalizeFilterProjectList(values: readonly unknown[], localPlatform?: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = normalizeFilterEntry(value);
     if (!key) continue;
-    const identity = localPlatform == null
-      ? key
-      : (projectFilterEntryIdentity(key, localPlatform) ?? key);
+    const identity =
+      localPlatform == null ? key : (projectFilterEntryIdentity(key, localPlatform) ?? key);
     if (seen.has(identity)) continue;
     seen.add(identity);
     out.push(key);

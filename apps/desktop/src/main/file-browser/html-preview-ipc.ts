@@ -11,7 +11,6 @@ import {
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getSensitiveMediaBlocklist, isPathAllowedAgainst } from '../filePathPolicy.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
-import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { createLogger } from '../logger.js';
 import {
@@ -89,10 +88,8 @@ export function registerHtmlPreviewIpc(remote: RemoteSource): void {
           }
           if (!isCurrent()) throw new Error('PREVIEW_CANCELLED');
           if (mime) {
-            const refCompensationScope = captureMediaRefCompensationScope(scope.ownerScopeKey);
             const assertStillValid = () => {
               if (!isCurrent()) throw new Error('PREVIEW_CANCELLED');
-              refCompensationScope.assertStillValid();
             };
             await ingestMedia(
               {
@@ -100,15 +97,9 @@ export function registerHtmlPreviewIpc(remote: RemoteSource): void {
                 mimeType: mime,
                 isCache: true,
                 assertStillValid,
-                refCompensationScope,
-                refs: [
-                  {
-                    refKind: 'integration-cache',
-                    refId: `html-preview:${JSON.stringify(args.origin)}:${args.absPath}:${path.basename(dest)}`,
-                    originKind: 'integration',
-                    originId: 'html-preview',
-                  },
-                ],
+                // The server owns dest, not the managed blob. Cache eviction cannot
+                // interrupt this snapshot, so it needs no persistent business ref.
+                refs: [],
               },
               db,
             );

@@ -3195,6 +3195,7 @@
         "packageNotFound": "找不到這個套件。請檢查套件名稱或儲存庫網址。",
         "versionNotFound": "找不到這個版本。請選擇可用版本後重試。",
         "stateUnavailable": "Cindy 無法讀取 Pi 擴充功能狀態。請重新啟動 Cindy 後重試。",
+        "runtimeRetirementFailed": "Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。",
         "runtimeConvergencePartial": "Pi 擴充功能變更已儲存，但部分本機 Pi 任務可能仍在執行舊擴充功能。請重新啟動 Cindy 後再使用 Pi。",
         "nativeCommandFailed": "Pi 原生套件命令失敗。請檢查來源或版本後重試。"
       },
@@ -9413,7 +9414,7 @@
       "createProjectFailed": "新建專案失敗",
       "projectsToggleExpand": "展開所有專案任務",
       "projectsToggleCollapse": "收起所有專案任務",
-      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Agent：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
+      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Harness：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
       "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
@@ -9429,10 +9430,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "按專案分組",
+        "project": "按專案",
         "flat": "平鋪",
-        "device": "按裝置分組",
-        "dialogue": "對話歸為一組"
+        "device": "按裝置",
+        "dialogue": "按對話"
       },
       "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
       "deviceGroup": {
@@ -9465,14 +9466,14 @@
         "priority": "等你處理的排在最前，然後是未讀、執行中，其餘按時間"
       },
       "filterStatusHeading": "狀態",
-      "filterAgentHeading": "Agent",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活躍",
       "filterGroupByHeading": "分組",
       "filterSortByHeading": "排序",
       "filterTaskSortHeading": "任務排序",
-      "filterProjectOrderHeading": "專案順序",
+      "filterProjectOrderHeading": "專案排序",
       "filterProjectOrder": {
-        "activity": "跟隨任務排序",
+        "activity": "跟隨任務",
         "custom": "手動"
       },
       "filterProjectOrderTip": {
@@ -9719,7 +9720,23 @@
         "projects": "專案",
         "dialogues": "對話"
       },
-      "railNavCount": "{{count}} 個任務"
+      "railNavCount": "{{count}} 個任務",
+      "groupSummary": {
+        "project": "專案",
+        "dialogue": "對話",
+        "device": "裝置"
+      },
+      "taskStatusHeading": "任務狀態",
+      "taskStatus": {
+        "active": "活躍",
+        "archived": "已歸檔",
+        "all": "全部"
+      },
+      "sortTaskBy": {
+        "priority": "按優先級",
+        "activity": "按最近活動",
+        "created": "按建立時間"
+      }
     },
     "rename": {
       "aiRename": "用 AI 重新命名",
@@ -12247,7 +12264,6 @@
     "unsavedDescription": "離開後會捨棄這次對例行任務的修改。",
     "discard": "放棄修改",
     "continueEditing": "繼續編輯",
-
     "title": "例行任務",
     "add": "新增例行任務",
     "back": "返回例行任務",

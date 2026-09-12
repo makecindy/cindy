@@ -169,7 +169,7 @@ import {
 import { buildPiAgent } from './pi-host.js';
 import {
   captureLocalPiPackageRuntimeInvalidationSnapshot,
-  invalidateLocalPiPackageRuntimeSnapshot,
+  settleLocalPiPackageRuntimeSnapshot,
   type PiPackageRuntimeInvalidationSnapshot,
 } from './pi-package-runtime-invalidation.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
@@ -2198,9 +2198,8 @@ export function getMaker(): Maker {
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       // Fence in-flight startups at the durable package edge, but do not close
-      // the current caller before maker-core queues its host-owned receipt and
-      // sends the extension response. The settled callback below retires only
-      // the exact local runtimes captured at the mutation's latest byte edge.
+      // the current caller. The settled callback requests retirement of the
+      // captured runtimes only after their current product turns settle.
       onPiManagedPackageMutationCommitted: async (phase = 'commit') => {
         const maker = _maker;
         if (!maker) return;
@@ -2214,7 +2213,7 @@ export function getMaker(): Maker {
           pendingPiPackageRuntimeSnapshots.push(snapshot);
         }
       },
-      onPiManagedPackageMutationSettled: async (callerSessionId, publishOutcome) => {
+      onPiManagedPackageMutationSettled: async (callerSessionId, publishOutcome, createRetirementFailureEvent) => {
         const partial = () => publishOutcome({
           runtimeConvergence: 'partial',
           recoveryAction: 'restart-cindy-to-refresh-packages',
@@ -2225,34 +2224,9 @@ export function getMaker(): Maker {
           partial();
           return;
         }
-        const callerEntries = snapshot.entries.filter(({ session }) => session.id === callerSessionId);
-        const siblingEntries = snapshot.entries.filter(({ session }) => session.id !== callerSessionId);
-        let siblingFailed = false;
-        try {
-          const siblingResult = await invalidateLocalPiPackageRuntimeSnapshot(
-            maker,
-            { entries: siblingEntries },
-          );
-          siblingFailed = siblingResult.failedSessionIds.length > 0;
-        } catch {
-          siblingFailed = true;
-        }
-        const initiallyPartial = siblingFailed
-          || callerEntries.length === 0
-          || callerEntries.some(({ metadataFailed }) => metadataFailed);
-        if (initiallyPartial) partial();
-        else publishOutcome({ runtimeConvergence: 'complete' });
-
-        if (callerEntries.length === 0) return;
-        try {
-          const callerResult = await invalidateLocalPiPackageRuntimeSnapshot(
-            maker,
-            { entries: callerEntries },
-          );
-          if (!initiallyPartial && callerResult.failedSessionIds.length > 0) partial();
-        } catch {
-          if (!initiallyPartial) partial();
-        }
+        // The receipt has been sent, not necessarily consumed by Pi. Keep the
+        // caller and busy siblings alive until their owned turn settles.
+        await settleLocalPiPackageRuntimeSnapshot(maker, snapshot, callerSessionId, publishOutcome, createRetirementFailureEvent);
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。

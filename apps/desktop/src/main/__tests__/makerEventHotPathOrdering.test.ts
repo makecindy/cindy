@@ -9,6 +9,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ScriptTarget, transpileModule } from 'typescript';
+import type { AgentEvent } from '@cindy/maker-core';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -23,6 +25,30 @@ const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts'
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it.each([undefined, null, { text: 'Restart Cindy before using Pi again.', isFinal: true }])(
+    'strips Host recovery metadata from the boundary copy with data %j',
+    (data) => {
+      // Execute the actual boundary function without booting Desktop/register side effects.
+      const start = source.indexOf('function redactEventForRenderer');
+      const code = source.slice(start, source.indexOf('\nfunction ', start + 1));
+      const js = transpileModule(code, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText;
+      const redact = new Function(`${js}; return redactEventForRenderer;`)() as
+        (event: AgentEvent) => AgentEvent;
+      const original: AgentEvent = {
+        type: 'text', source: 'pi', data, runtimeRecovery: true,
+        sessionInstanceId: 'runtime', sessionTurnGeneration: 7,
+      };
+      const boundary = redact(original);
+      expect(boundary).toEqual({ type: 'text', source: 'pi', data });
+      expect(original.runtimeRecovery).toBe(true);
+      expect(original.sessionInstanceId).toBe('runtime');
+      expect(original.sessionTurnGeneration).toBe(7);
+      expect(boundary).not.toBe(original);
+    },
+  );
+
   it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
     const redactor = source.slice(
       source.indexOf('function redactEventForRenderer'),
@@ -52,6 +78,7 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toMatch(
       /registration\.disposers\.push\(\s*session\.onEvent\(\(event: AgentEvent\) => \{/,
     );
+    expect(wireSessionSource).toContain('session.onRuntimeRecovery(emitWiredSessionEvent)');
     expectOrder(
       wireSessionSource,
       'sessionBindings.attachStatusListener(registration);',
@@ -117,7 +144,7 @@ describe('maker:event hot path ordering', () => {
     expectOrder(
       continuation,
       'productTurnWallClockTracker.preserveForContinuation(session.id);',
-      'const sendResult = await session.send(',
+      'const sendResult = await session.sendHostTurnContinuation(',
     );
   });
 

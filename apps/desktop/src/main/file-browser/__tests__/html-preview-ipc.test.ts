@@ -8,7 +8,6 @@ const mocks = vi.hoisted(() => ({
   ingest: vi.fn(),
   current: true,
   db: {},
-  compensation: { assertStillValid: vi.fn() },
 }));
 vi.mock('electron', () => ({ ipcMain: { handle: mocks.handle } }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({
@@ -16,9 +15,6 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 }));
 vi.mock('../../logger.js', () => ({ createLogger: () => ({ warn: vi.fn() }) }));
 vi.mock('../../cindy-media/ingest.js', () => ({ ingestMedia: mocks.ingest }));
-vi.mock('../../cindy-media/refCompensationJournal.js', () => ({
-  captureMediaRefCompensationScope: () => mocks.compensation,
-}));
 vi.mock('../../device-link/broadcast-tap.js', () => ({
   captureDataOwnerBroadcastScope: () => ({ ownerScopeKey: 'owner-a:1' }),
   isDataOwnerBroadcastScopeCurrent: () => mocks.current,
@@ -89,7 +85,7 @@ it('checks the full manifest budget before starting downloads', async () => {
   });
   expect(read).not.toHaveBeenCalled();
 });
-it('passes the captured owner guard and compensation scope through media ingestion', async () => {
+it('passes the captured owner guard through reference-free cache ingestion', async () => {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-preview-owner-test-'));
   try {
     await fs.writeFile(path.join(dir, 'index.html'), '');
@@ -97,9 +93,9 @@ it('passes the captured owner guard and compensation scope through media ingesti
     await fs.writeFile(path.join(dir, 'image.png'), png);
     mocks.ingest.mockImplementationOnce(async (params, db) => {
       expect(db).toBe(mocks.db);
-      expect(params.refCompensationScope).toBe(mocks.compensation);
+      expect(params.refs).toEqual([]);
+      expect(params.isCache).toBe(true);
       params.assertStillValid();
-      expect(mocks.compensation.assertStillValid).toHaveBeenCalled();
       // The real ingest helper calls this guard after each asynchronous write/ref operation.
       await Promise.resolve();
       mocks.current = false;
@@ -120,6 +116,43 @@ it('passes the captured owner guard and compensation scope through media ingesti
       code: 'BROWSER_FILE_OPEN_FAILED',
     });
     expect(mocks.ingest).toHaveBeenCalledTimes(1);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+it('serves independent media after cache loss without refs across failure and retries', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-preview-ref-test-'));
+  const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  try {
+    await fs.writeFile(path.join(dir, 'index.html'), '');
+    await fs.writeFile(path.join(dir, 'image.png'), png);
+    let fail = true;
+    mocks.ingest.mockImplementation(async (params) => {
+      expect(params.refs).toEqual([]);
+      expect(params.isCache).toBe(true);
+      if (fail) { fail = false; throw new Error('cache write failed'); }
+      // A reclaimed managed blob is deliberately unavailable; HTTP must use dest.
+      return { url: 'cindy-media://blobs/unavailable.png', refIds: [] };
+    });
+    registerHtmlPreviewIpc({
+      list: async () => ['index.html', 'image.png'].map((name) => ({
+        name, relPath: name, type: 'file' as const,
+        size: name === 'image.png' ? png.length : 0, mtimeMs: 0,
+      })),
+      read: async (_args, _root, entry) => path.join(dir, entry.relPath),
+    });
+    const open = mocks.handle.mock.calls[0][1];
+    await expect(open({}, args)).rejects.toMatchObject({ code: 'BROWSER_FILE_OPEN_FAILED' });
+    for (let i = 0; i < 3; i++) {
+      const { url } = await open({}, args);
+      const bootstrap = await fetch(url, { redirect: 'manual' });
+      const cookie = bootstrap.headers.get('set-cookie')!.split(';')[0];
+      await bootstrap.body?.cancel();
+      const response = await fetch(new URL('/image.png', url), { headers: { cookie } });
+      expect(response.status).toBe(200);
+      expect(Buffer.from(await response.arrayBuffer())).toEqual(png);
+    }
+    expect(mocks.ingest).toHaveBeenCalledTimes(4);
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

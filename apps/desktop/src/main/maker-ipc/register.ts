@@ -1,3 +1,4 @@
+import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { configureAppDefaultModelSelection } from './appDefaultModelControl.js';
 import { setBotInvitationWelcomeDispatch } from './botInvitation.js';
 import type { TurnUsageContext } from './turnUsageContext.js';
@@ -4104,10 +4105,14 @@ async function settleSilentStopDone(
   sessionId: string,
   reason: 'exhausted' | 'skip' | 'send-failed',
   turnLeaseId: string,
+  runtime: NonNullable<ReturnType<Maker['getSession']>>,
+  generation: number,
 ): Promise<void> {
   silentStopTurnLeaseGate.settle(sessionId, turnLeaseId);
   try {
-    if (!(await sessionTurnLeaseTracker.markTurnEndedAndCheckIdle(sessionId, turnLeaseId))) {
+    if (!(await sessionTurnLeaseTracker.markTurnEndedAndCheckIdle(
+      sessionId, turnLeaseId, () => runtime.settleHostTurnContinuation(generation),
+    ))) {
       log.debug('ignored stale silent-stop settle after a newer turn started', {
         sessionId,
         turnLeaseId,
@@ -4176,6 +4181,7 @@ async function handleSilentStopTurnEnd(
   turnLeaseId: string,
   turnOrigin?: SendOrigin,
 ): Promise<void> {
+  const generation = session.getTurnGeneration();
   if (!silentStopTurnLeaseGate.claim(session.id, turnLeaseId)) {
     log.debug('ignored superseded silent-stop decision timer', {
       sessionId: session.id,
@@ -4187,7 +4193,7 @@ async function handleSilentStopTurnEnd(
     log.debug('silent-stop auto-resume skipped — coordinator has queued work', {
       sessionId: session.id,
     });
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId);
+    await settleSilentStopDone(session.id, 'skip', turnLeaseId, session, generation);
     return;
   }
   const decision = silentStopAutoResumeGuard.onSilentStop(session.id, doneAt);
@@ -4197,10 +4203,11 @@ async function handleSilentStopTurnEnd(
       // Mark it before send(), which may synchronously emit status events.
       productTurnWallClockTracker.preserveForContinuation(session.id);
       const clientId = randomUUID();
-      const sendResult = await session.send(
+      const sendResult = await session.sendHostTurnContinuation(
         { type: 'user', content: SILENT_STOP_RESUME_PROMPT },
         {
           origin: turnOrigin,
+          onDispatching: () => advanceRuntimeRecoveryNotice(session),
           onAccepted: async () => {
             await createDbMessage(session.id, {
               clientId,
@@ -4241,7 +4248,7 @@ async function handleSilentStopTurnEnd(
           reason: outcome.reason,
         });
         await surfaceSilentStopExhaustedBanner(session.id);
-        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+        await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
       } else {
         log.info('silent-stop auto-resume dispatched', { sessionId: session.id });
       }
@@ -4252,16 +4259,16 @@ async function handleSilentStopTurnEnd(
         error: err instanceof Error ? err.message : String(err),
       });
       await surfaceSilentStopExhaustedBanner(session.id);
-      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+      await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
     }
     return;
   }
   if (decision.action === 'exhausted') {
     await surfaceSilentStopExhaustedBanner(session.id);
-    await settleSilentStopDone(session.id, 'exhausted', turnLeaseId);
+    await settleSilentStopDone(session.id, 'exhausted', turnLeaseId, session, generation);
   }
   if (decision.action === 'skip') {
-    await settleSilentStopDone(session.id, 'skip', turnLeaseId);
+    await settleSilentStopDone(session.id, 'skip', turnLeaseId, session, generation);
   }
 }
 
@@ -4564,11 +4571,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
 
   // 转发事件到所有 window。interaction_dismissed 单独走专用 channel,
   // 让 renderer chat store 不必扫所有 vendor-raw 找它。
-  registration.disposers.push(
-    session.onEvent((event: AgentEvent) => {
-      handleSessionEvent(sessionEventDependencies, session, event);
-    }),
-  );
+  // Host recovery is a dedicated Session channel so Orca/Learn product
+  // listeners never treat it as turn text; Desktop persist/broadcast still
+  // consumes the localized notice.
+  const emitWiredSessionEvent = (event: AgentEvent) => {
+    handleSessionEvent(sessionEventDependencies, session, event);
+  };
+  registration.disposers.push(session.onEvent(emitWiredSessionEvent));
+  registration.disposers.push(session.onRuntimeRecovery(emitWiredSessionEvent));
   sessionBindings.attachStatusListener(registration);
 
   // 注入 interaction listener (permission/ask/plan 三合一,renderer 按 kind 弹不同 UI)
@@ -5988,7 +5998,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           if (runtimesInvalidated && phase === 'commit') return;
           runtimesInvalidated = true;
           try {
-            const invalidation = await invalidateLocalPiPackageRuntimes(maker);
+            const invalidation = await invalidateLocalPiPackageRuntimes(maker, {
+              afterCurrentTurn: request.action !== 'remove'
+                && !(request.action === 'set-enabled' && request.enabled === false),
+              failureEvent: () => ({
+                type: 'text', source: 'pi',
+                data: { isFinal: true, text: t('settings.piPackages.failure.runtimeRetirementFailed') },
+              }),
+            });
             if (invalidation.failedSessionIds.length > 0) {
               runtimeConvergencePartial = true;
               log.warn('Pi package changed but some local runtimes did not close', {
@@ -18013,6 +18030,7 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
   delete rendererEvent.backgroundTurnStartedAt;
   delete rendererEvent.sessionTurnGeneration;
   delete rendererEvent.sessionInstanceId;
+  delete rendererEvent.runtimeRecovery;
   if (!event.data || typeof event.data !== 'object') return rendererEvent;
 
   const data = event.data as Record<string, unknown>;
