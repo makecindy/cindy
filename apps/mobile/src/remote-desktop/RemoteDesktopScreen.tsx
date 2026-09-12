@@ -1770,7 +1770,7 @@ export default function RemoteDesktopScreen() {
                   retry,
                 )}
               {error === "permissionHint" && focused && (
-                <ScrollView>
+                <ScrollView style={{ flex: 1 }}>
                   <PermissionGuide
                     key={deviceId}
                     initial={caps?.permissions}
