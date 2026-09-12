@@ -1,5 +1,12 @@
 import { clipboard, nativeImage } from 'electron';
-import { REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS, type DesktopInput, type RemoteClipboardContent, parseClipboardContent, CLIPBOARD_MAX_CHARS } from '@cindy/device-link';
+import { createHash } from 'node:crypto';
+import {
+  REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS,
+  type DesktopInput,
+  type RemoteClipboardContent,
+  parseClipboardContent,
+  CLIPBOARD_MAX_CHARS,
+} from '@cindy/device-link';
 import { readDesktopClipboardVersion, readDesktopSelection } from './inputHost';
 
 /** Explicit selection/text transfer. No background sync, logging or persistence. */
@@ -56,23 +63,29 @@ export async function transferDesktopClipboardContent(
   content: RemoteClipboardContent | undefined,
   isCurrent: () => boolean,
   input: (events: DesktopInput[]) => void,
-): Promise<RemoteClipboardContent | void> {
-  const check = () => { if (!isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED'); };
+  options?: { sync?: boolean; version?: string },
+): Promise<RemoteClipboardContent | { version: string } | void> {
+  const check = () => {
+    if (!isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
+  };
   check();
-  input([{ kind: 'release' }]);
+  if (!options?.sync) input([{ kind: 'release' }]);
   if (action === 'copy') {
-    const selected = await readDesktopSelection(true);
+    const selected = options?.sync ? null : await readDesktopSelection(true);
     check();
     if (selected) return { text: selected };
     const before = await readDesktopClipboardVersion(true);
     check();
+    if (options?.version && before !== options.version)
+      throw new Error('DESKTOP_CLIPBOARD_CHANGED');
     const formats = clipboard.availableFormats();
     // A file-backed image may also expose a portable bitmap. Never read the
     // file flavor or dereference its path; a file alone remains unsupported.
-    const fileBacked = formats.some((format) => /file-url|filenames|hdrop|filecontents|filegroupdescriptor|uri-list/i.test(format));
+    const fileBacked = formats.some((format) =>
+      /file-url|filenames|hdrop|filecontents|filegroupdescriptor|uri-list/i.test(format),
+    );
     const image = clipboard.readImage();
-    if (fileBacked && image.isEmpty())
-      throw new Error('CLIPBOARD_UNSUPPORTED');
+    if (fileBacked && image.isEmpty()) throw new Error('CLIPBOARD_UNSUPPORTED');
     const snapshot: RemoteClipboardContent = {};
     // File-manager text/HTML can be a local path rather than image content.
     const text = fileBacked ? '' : clipboard.readText();
@@ -89,7 +102,8 @@ export async function transferDesktopClipboardContent(
     const after = await readDesktopClipboardVersion(true);
     check();
     if (before !== after) throw new Error('DESKTOP_CLIPBOARD_CHANGED');
-    if (!Object.keys(snapshot).length) throw new Error(formats.length ? 'CLIPBOARD_UNSUPPORTED' : 'CLIPBOARD_EMPTY');
+    if (!Object.keys(snapshot).length)
+      throw new Error(formats.length ? 'CLIPBOARD_UNSUPPORTED' : 'CLIPBOARD_EMPTY');
     const json = JSON.stringify(snapshot);
     if (json.length > CLIPBOARD_MAX_CHARS) throw new Error('CLIPBOARD_TOO_LONG');
     return parseClipboardContent(json);
@@ -105,18 +119,40 @@ export async function transferDesktopClipboardContent(
     image = nativeImage.createFromBuffer(bytes);
     if (image.isEmpty()) throw new Error('CLIPBOARD_UNSUPPORTED');
   }
-  await readDesktopClipboardVersion();
+  const version = await readDesktopClipboardVersion();
   check();
+  if (options?.version && version !== options.version) throw new Error('DESKTOP_CLIPBOARD_CHANGED');
   clipboard.write({
     ...(value.text || value.url ? { text: value.text || value.url } : {}),
     ...(value.html ? { html: value.html } : {}),
     ...(value.rtf ? { rtf: value.rtf } : {}),
     ...(image ? { image } : {}),
   });
-  if ((image && clipboard.readImage().isEmpty()) ||
-      (value.text && clipboard.readText() !== value.text))
+  if (
+    (image && clipboard.readImage().isEmpty()) ||
+    (value.text && clipboard.readText() !== value.text)
+  )
     throw new Error('DESKTOP_CLIPBOARD_WRITE_FAILED');
   check();
+  if (options?.sync) {
+    const fingerprint = () =>
+      createHash('sha256')
+        .update(
+          JSON.stringify([
+            clipboard.availableFormats(),
+            clipboard.readText(),
+            clipboard.readHTML(),
+            clipboard.readRTF(),
+          ]),
+        )
+        .update(clipboard.readImage().toPNG())
+        .digest('hex');
+    const written = fingerprint();
+    const version = await readDesktopClipboardVersion(true);
+    check();
+    if (fingerprint() !== written) throw new Error('DESKTOP_CLIPBOARD_CHANGED');
+    return { version };
+  }
   const modifier = process.platform === 'darwin' ? 'MetaLeft' : 'ControlLeft';
   input([
     { kind: 'release' },

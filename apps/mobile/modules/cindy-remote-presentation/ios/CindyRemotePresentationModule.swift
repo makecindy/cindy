@@ -7,6 +7,18 @@ public class CindyRemotePresentationModule: Module {
   private var previousAudio: (AVAudioSession.Category, AVAudioSession.Mode, AVAudioSession.CategoryOptions)?
   public func definition() -> ModuleDefinition {
     Name("CindyRemotePresentation")
+    AsyncFunction("clipboardVersion") { () -> String in
+      try RemoteClipboard.foreground()
+      return String(UIPasteboard.general.changeCount)
+    }.runOnQueue(.main)
+    AsyncFunction("syncClipboard") { (json: String, version: String) -> String in
+      try RemoteClipboard.foreground()
+      guard String(UIPasteboard.general.changeCount) == version else {
+        throw RemoteClipboard.failure("CLIPBOARD_CHANGED")
+      }
+      try RemoteClipboard.write(json, expectedVersion: version)
+      return String(UIPasteboard.general.changeCount)
+    }.runOnQueue(.main)
     AsyncFunction("readClipboard") { () -> String in
       try RemoteClipboard.read()
     }.runOnQueue(.main)
@@ -120,7 +132,7 @@ enum RemoteClipboard {
     return json
   }
 
-  static func write(_ json: String) throws {
+  static func write(_ json: String, expectedVersion: String? = nil) throws {
     try foreground()
     guard RemoteClipboardSize.accepts(json) else { throw failure("CLIPBOARD_TOO_LONG") }
     guard let data = json.data(using: .utf8),
@@ -148,6 +160,9 @@ enum RemoteClipboard {
       item["public.png"] = png
     }
     try foreground()
+    if let expectedVersion = expectedVersion, String(UIPasteboard.general.changeCount) != expectedVersion {
+      throw failure("CLIPBOARD_CHANGED")
+    }
     UIPasteboard.general.setItems([item], options: [:])
   }
 }
