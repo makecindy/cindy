@@ -142,6 +142,7 @@ export async function fetchRemoteAbsFileOnce(
    * 流量与磁盘已经花掉了(review P2)。老被控端忽略这两个参数,故手机侧判断照旧保留。
    */
   constraints?: RemoteMediaFetchConstraints | null,
+  signal?: AbortSignal,
 ): Promise<MobileResolvedRemoteMedia> {
   return withTransientRemoteRetry(async () => {
     await deps.openLink(deps.deviceId);
@@ -149,7 +150,7 @@ export async function fetchRemoteAbsFileOnce(
     return resolveMobileRemoteMedia(
       { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh, constraints) },
       { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
-      onOssKey ? { onOssKey } : undefined,
+      onOssKey || signal ? { onOssKey, signal } : undefined,
     );
   });
 }

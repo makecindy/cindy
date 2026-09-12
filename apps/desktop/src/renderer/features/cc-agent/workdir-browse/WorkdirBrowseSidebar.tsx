@@ -21,6 +21,8 @@
  * the Projects view, this component unmounts, watcher closes.
  */
 
+import { openHtmlFileByPreference } from '@/components/chat/useOpenWithMenu';
+import { resolveSessionFileOrigin } from '@/lib/sessionFileOrigin';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { ArrowLeft, Check, ChevronDown, ChevronsDownUp, RefreshCw, Search, X as XIcon } from 'lucide-react';
@@ -37,7 +39,6 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { createLogger } from '@/lib/logger';
-import { extractIpcError, mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 import { useFileTree, type DirEntry } from './hooks/useFileTree';
 import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
@@ -51,10 +52,6 @@ import { FILTER_RESULT_LIMIT, filterFiles } from './lib/filterFiles';
 import { loadSelectedFile, saveSelectedFile } from './lib/selectedFileStore';
 import { loadExpandedSet, saveExpandedSet } from './lib/expandedStore';
 import { clearFileScroll } from './lib/fileScrollStore';
-import {
-  openUrlInSidebarBrowser,
-  pathToFileUrl,
-} from '@/features/right-sidebar/lib/openInSidebarBrowser';
 import {
   addTab as storeAddTab,
   removeTab as storeRemoveTab,
@@ -489,43 +486,36 @@ export function WorkdirBrowseSidebar({
 
   const handleOpenInSidebarBrowser = useCallback(
     async (entry: DirEntry) => {
-      const abs = toOsAbsolutePath(workdir, entry.relPath);
-      try {
-        await openUrlInSidebarBrowser(sessionId, pathToFileUrl(abs));
-      } catch (err) {
-        log.warn('open in sidebar browser failed', { relPath: entry.relPath, error: String(err) });
-        toast.error(t('chat.markdownRenderer.openInSidebarFailed'));
-      }
+      await openHtmlFileByPreference(
+        sessionId,
+        toOsAbsolutePath(workdir, entry.relPath),
+        t,
+        {
+          origin: resolveSessionFileOrigin(deviceId ?? undefined, remoteHostId),
+          workingDir: workdir,
+        },
+        'sidebar',
+      );
     },
-    [sessionId, workdir, t],
+    [sessionId, workdir, deviceId, remoteHostId, t],
   );
 
   const handleOpenInBrowser = useCallback(
     async (entry: DirEntry) => {
-      const abs = toOsAbsolutePath(workdir, entry.relPath);
-      try {
-        await window.electronAPI.openFileInBrowser(abs);
-      } catch (error) {
-        log.warn('open in browser failed', {
-          relPath: entry.relPath,
-          errorCode: extractIpcError(error)?.code ?? 'unknown',
-        });
-        toast.error(
-          t(
-            mapIpcErrorToI18nKey(error, {
-              namespace: 'chat.markdownRenderer',
-              fallback: 'chat.markdownRenderer.openInBrowserFailed',
-            }),
-          ),
-        );
-      }
+      await openHtmlFileByPreference(
+        sessionId,
+        toOsAbsolutePath(workdir, entry.relPath),
+        t,
+        {
+          origin: resolveSessionFileOrigin(deviceId ?? undefined, remoteHostId),
+          workingDir: workdir,
+        },
+        'external',
+      );
     },
-    [workdir, t],
+    [sessionId, workdir, deviceId, remoteHostId, t],
   );
 
-  // 右键 文件/文件夹 → 重命名。进入 inline 编辑态;真正的 IPC + 副作用清理
-  // 在 handleRenameSubmit 里跑(回车 / 失焦后)。
-  // 同时关掉 pendingCreate 防止两个编辑态同屏(用户先开新建再去 rename 别人的情况)。
   const handleRename = useCallback((entry: DirEntry) => {
     setPendingCreate(null);
     setRenamingPath(entry.relPath);
@@ -815,8 +805,8 @@ export function WorkdirBrowseSidebar({
               onDeleteFile={handleDeleteFile}
               onCopyFilePath={handleCopyFilePath}
               onRevealInFolder={remoteHostId || deviceId ? undefined : handleRevealInFolder}
-              onOpenInSidebarBrowser={remoteHostId || deviceId ? undefined : handleOpenInSidebarBrowser}
-              onOpenInBrowser={remoteHostId || deviceId ? undefined : handleOpenInBrowser}
+              onOpenInSidebarBrowser={handleOpenInSidebarBrowser}
+              onOpenInBrowser={handleOpenInBrowser}
               onRename={handleRename}
               pendingCreate={pendingCreate}
               onPendingSubmit={handlePendingSubmit}

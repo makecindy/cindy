@@ -41,7 +41,7 @@ export async function downloadRemoteMediaShareTemp(
     } else {
       target = new File(dir, `share-${unique}.${extOfMime(mimeType)}`);
     }
-    const file = await File.downloadFileAsync(url, target, { idempotent: true });
+    const file = url.startsWith('file://') ? (new File(url).copy(target), target) : await File.downloadFileAsync(url, target, { idempotent: true });
     return (file.size ?? 0) > 0 ? file.uri : null;
   } catch {
     return null; // 分享失败由调用方兜底提示
@@ -82,7 +82,7 @@ export async function withDownloadedRemoteMediaFile<T>(
     dir.create({ intermediates: true, idempotent: true });
     const unique = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     target = new File(dir, `res-${unique}.${extOfMime(mimeType)}`);
-    const file = await File.downloadFileAsync(url, target, { idempotent: true });
+    const file = url.startsWith('file://') ? (new File(url).copy(target), target) : await File.downloadFileAsync(url, target, { idempotent: true });
     const size = file.size ?? 0;
     if (size <= 0 || size > maxBytes) return null;
     return await read(file);
@@ -158,7 +158,7 @@ export function createExpoRemoteMediaDiskCacheIO(): RemoteMediaDiskCacheIO {
       // 保留旧条目继续离线可看)。残留的 .dl.tmp 由 init 对账当孤儿清掉。
       const tmp = new File(dir, `${name}.dl.tmp`);
       try {
-        const downloaded = await File.downloadFileAsync(url, tmp, { idempotent: true });
+        const downloaded = url.startsWith('file://') ? (new File(url).copy(tmp), tmp) : await File.downloadFileAsync(url, tmp, { idempotent: true });
         const size = downloaded.size ?? 0;
         if (size <= 0) {
           if (tmp.exists) tmp.delete();

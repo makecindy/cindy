@@ -155,6 +155,8 @@ interface RemoteOpArgs {
   /** readFile:控制端声明可接受 gzip 编码返回(老被控端忽略此字段,无害)。 */
   acceptGzip?: boolean;
   hideMetaFiles?: boolean;
+  includeIgnored?: boolean;
+  maxEntries?: number;
   docMode?: boolean;
   cap?: number;
   query?: string;
@@ -365,7 +367,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   // 这个分支,会走到 default 返回 `unknown op: caps`——控制端把它当确定性
   // 的"不支持压缩"信号(见 fileBrowserTransport 的 caps 缓存)。
   if (args.op === 'caps') {
-    return { ok: true as const, gzip: true as const };
+    return { ok: true as const, gzip: true as const, completeDirectoryListing: true as const };
   }
   const guardResult = await checkRemoteWorkingDir(args.workdir);
   if (!guardResult.allowed && guardResult.reason === 'invalid') {
@@ -427,6 +429,8 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
           relPath: args.relPath ?? '',
           hideMetaFiles: args.hideMetaFiles ?? true,
           docMode: args.docMode,
+          includeIgnored: args.includeIgnored,
+          maxEntries: args.maxEntries,
         });
         return entries;
       }
@@ -492,11 +496,14 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   // —— 本地执行(被控端自身 fs)——
   switch (args.op) {
     case 'listDir': {
-      const matcher = await loadIgnoreMatcher(workdir, {
+      const matcher = args.includeIgnored === true ? null : await loadIgnoreMatcher(workdir, {
         hideMetaFiles: args.hideMetaFiles ?? true,
         honorVcsIgnore: false,
       });
-      return listDir(workdir, args.relPath ?? '', matcher, { docMode: args.docMode });
+      return listDir(workdir, args.relPath ?? '', matcher, {
+        docMode: args.includeIgnored === true ? false : args.docMode,
+        maxEntries: args.maxEntries,
+      });
     }
     case 'readFile': {
       try {

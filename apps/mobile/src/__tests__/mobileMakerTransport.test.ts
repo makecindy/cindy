@@ -674,6 +674,7 @@ describe('mobile maker transport', () => {
 
     await maker.fileBrowser.caps(wd);
     await maker.fileBrowser.listDir(wd, 'apps/mobile');
+    await maker.fileBrowser.listDir(wd, 'dist', { includeIgnored: true, maxEntries: 2000 });
     await maker.fileBrowser.readFile(wd, 'AGENTS.md', { acceptGzip: true });
     await maker.fileBrowser.readFile(wd, 'AGENTS.md');
     await maker.fileBrowser.listAllFiles(wd, 20000);
@@ -682,10 +683,11 @@ describe('mobile maker transport', () => {
     await maker.fileBrowser.exportFileStart(wd, 'big.bin');
     await maker.fileBrowser.exportFileStatus(wd, 'exp_1');
 
-    expect(calls.map((call) => call.channel)).toEqual(Array(9).fill('file-browser:remote-op'));
+    expect(calls.map((call) => call.channel)).toEqual(Array(10).fill('file-browser:remote-op'));
     expect(calls.map((call) => call.args)).toEqual([
       [{ op: 'caps', workdir: wd }],
       [{ op: 'listDir', workdir: wd, relPath: 'apps/mobile' }],
+      [{ op: 'listDir', workdir: wd, relPath: 'dist', includeIgnored: true, maxEntries: 2000 }],
       [{ op: 'readFile', workdir: wd, relPath: 'AGENTS.md', acceptGzip: true }],
       [{ op: 'readFile', workdir: wd, relPath: 'AGENTS.md' }],
       [{ op: 'listAllFiles', workdir: wd, cap: 20000 }],

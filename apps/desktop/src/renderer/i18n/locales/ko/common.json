@@ -8684,6 +8684,11 @@
       "closeHint": "또는 배경을 클릭해 닫기"
     },
     "remoteFile": {
+      "previewFailed": "웹 미리보기를 준비하지 못했습니다. 디렉터리와 연결을 확인한 후 다시 시도하세요.",
+      "previewNotFound": "HTML 파일을 찾을 수 없습니다. 파일이 존재하는지 확인하세요.",
+      "previewFetching": "웹 미리보기 준비 중…",
+      "previewTooLarge": "미리보기 제한(항목 2,000개, 100 MB 또는 열린 미리보기 8개)을 초과했습니다. 더 작은 디렉터리를 사용하거나 Cindy를 다시 시작한 후 재시도하세요.",
+      "previewUnsupported": "디렉터리를 미리 보려면 원격 기기의 Cindy를 업데이트하세요.",
       "fetching": "원격에서 파일을 가져오는 중…",
       "fetchFailed": "원격에서 파일을 가져오지 못했습니다",
       "notFound": "원격에 파일이 없습니다",

@@ -23,7 +23,7 @@ import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 
 import { toast } from '@/lib/toast';
-import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { extractIpcError } from '@/utils/ipcError';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -31,15 +31,10 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import {
-  openUrlInSidebarBrowser,
-  pathToFileUrl,
-} from '@/features/right-sidebar/lib/openInSidebarBrowser';
-import {
-  getLinkOpenPreference,
-  getLinkOpenPreferenceForUrl,
-} from '@/hooks/useLinkOpenPreference';
+import { openUrlInSidebarBrowser } from '@/features/right-sidebar/lib/openInSidebarBrowser';
+import { getLinkOpenPreference, getLinkOpenPreferenceForUrl } from '@/hooks/useLinkOpenPreference';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
+import type { SessionFileOrigin } from '@/lib/sessionFileOrigin';
 
 /** 左键"按偏好直开"只对浏览器"作为页面渲染"有意义的 html 家族生效;其余本地
  *  文件保持原有"点击即预览"。右键菜单的 BROWSER_OPENABLE_EXTS 也收敛到
@@ -72,27 +67,42 @@ export async function openUrlByPreference(
   if (!res.success) toast.error(t('chat.markdownRenderer.openLinkFailed'));
 }
 
-/** 本地 html 文件左键:走内部网页偏好(sidebar → file:// 进内置;external → 系统浏览器)。 */
+/** HTML 目录快照通过本机 HTTP 打开，内置和系统浏览器共用内部网页偏好。 */
 export async function openHtmlFileByPreference(
   sessionId: string,
   absPath: string,
   t: TFunction,
+  context: { origin: SessionFileOrigin; workingDir: string } = {
+    origin: { kind: 'local' },
+    workingDir: '',
+  },
+  target?: 'sidebar' | 'external',
 ): Promise<void> {
-  if (getLinkOpenPreference('local') === 'sidebar') {
-    await openInSidebar(sessionId, pathToFileUrl(absPath), t);
-    return;
-  }
+  let loading: string | null = null;
+  const delayed = setTimeout(() => {
+    loading = toast.warning(t('chat.remoteFile.previewFetching'), { duration: 120_000 });
+  }, 600);
   try {
-    await window.electronAPI.openFileInBrowser(absPath);
+    const result = await window.electronAPI.fileBrowser.previewHtml({
+      origin: context.origin,
+      workdir: context.workingDir,
+      absPath,
+    });
+    if ((target ?? getLinkOpenPreference('local')) === 'sidebar' && sessionId) {
+      await openInSidebar(sessionId, result.url, t);
+    } else {
+      const opened = await window.electronAPI.openExternal(result.url);
+      if (!opened.success) toast.error(t('chat.markdownRenderer.openInBrowserFailed'));
+    }
   } catch (error) {
-    toast.error(
-      t(
-        mapIpcErrorToI18nKey(error, {
-          namespace: 'chat.markdownRenderer',
-          fallback: 'chat.markdownRenderer.openInBrowserFailed',
-        }),
-      ),
-    );
+    const code = extractIpcError(error)?.code;
+    const key = code === 'HTML_PREVIEW_TOO_LARGE' ? 'previewTooLarge'
+      : code === 'HTML_PREVIEW_UNSUPPORTED' ? 'previewUnsupported'
+      : code === 'NOT_FOUND' ? 'previewNotFound' : 'previewFailed';
+    toast.error(t(`chat.remoteFile.${key}`));
+  } finally {
+    clearTimeout(delayed);
+    if (loading) toast.dismiss(loading);
   }
 }
 

@@ -16,6 +16,9 @@ vi.mock('electron', () => ({
 }));
 vi.mock('@cindy/device-link', () => ({ DL_MEDIA_FETCH_CHANNEL: 'device-link:media:fetch' }));
 
+const tryPeerFile = vi.hoisted(() => vi.fn());
+vi.mock('../filePeer', () => ({ tryPeerFile }));
+
 const remoteInvoke = vi.hoisted(() => vi.fn());
 vi.mock('../index', () => ({ remoteInvoke }));
 
@@ -75,6 +78,7 @@ const URL_VID = buildRemoteMediaUrl({ kind: 'device', deviceId: 'dev-1' }, 'xdt-
 
 beforeEach(() => {
   vi.clearAllMocks();
+  tryPeerFile.mockResolvedValue(null);
   lookup.mockReturnValue(undefined);
   evictEntry.mockReturnValue(true); // 默认无 in-flight 消费者,可逐出
   // 默认:本机字节仓不命中(readFile ENOENT)→ cindy-media 用例照走远程管线
@@ -87,6 +91,28 @@ beforeEach(() => {
 });
 
 describe('handleRemoteMedia', () => {
+  it('peer image enters the existing cache and releases its temporary file without OSS', async () => {
+    const bytes = Buffer.from([1, 2, 3]);
+    const dispose = vi.fn(async () => {});
+    tryPeerFile.mockResolvedValue({ path: '/tmp/peer-image', size: 3, mimeType: 'image/png', dispose });
+    fsReadFile.mockResolvedValue(bytes);
+    recordLocal.mockReturnValue({ kind: 'local', bytes, mimeType: 'image/png' });
+    const response = await handleRemoteMedia(URL_IMG, null);
+    expect(response.status).toBe(200);
+    expect(Buffer.from(await response.arrayBuffer())).toEqual(bytes);
+    expect(dispose).toHaveBeenCalledOnce();
+    expect(remoteInvoke).not.toHaveBeenCalled();
+    expect(downloadToBuffer).not.toHaveBeenCalled();
+  });
+
+  it('releases peer staging even when reading the completed file fails', async () => {
+    const dispose = vi.fn(async () => {});
+    tryPeerFile.mockResolvedValue({ path: '/tmp/peer-image', size: 3, mimeType: 'image/png', dispose });
+    const response = await handleRemoteMedia(URL_IMG, null);
+    expect(response.status).toBe(502);
+    expect(dispose).toHaveBeenCalledOnce();
+  });
+
   it('畸形 URL → 400', async () => {
     const r = await handleRemoteMedia('not-a-remote-media-url', null);
     expect(r.status).toBe(400);

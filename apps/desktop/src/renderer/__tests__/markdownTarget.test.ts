@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   classifyInlineCodeTarget,
@@ -77,6 +77,34 @@ describe('classifyMarkdownLinkTarget', () => {
       kind: 'audio',
       href: 'xdt-audio://local/?path=%2Ftmp%2Fa.mp3',
     });
+  });
+
+  it('routes xdt HTML files through file resolution, preserving encoded path characters', () => {
+    for (const [url, filePath] of [
+      ['xdt-file:///Users/cindy/preview/index.html', '/Users/cindy/preview/index.html'],
+      ['xdt-file://open?path=%2Ftmp%2Fa%2520b.html', '/tmp/a%20b.html'],
+      ['xdt-file:///C:/preview/index.html', 'C:/preview/index.html'],
+    ]) {
+      expect(classifyMarkdownLinkTarget(url)).toMatchObject({
+        kind: 'local-candidate',
+        href: filePath,
+        localKind: 'text',
+      });
+    }
+  });
+
+  it('preserves triple-slash paths without relying on the host custom-scheme URL parser', () => {
+    const parser = vi.spyOn(globalThis, 'URL').mockImplementation(() => {
+      throw new Error('Host URL parser must not reinterpret an explicit file path');
+    });
+    try {
+      expect(classifyMarkdownLinkTarget('xdt-file:///Users/test/a%20b.html')).toMatchObject({
+        kind: 'local-candidate', href: '/Users/test/a b.html',
+      });
+      expect(parser).not.toHaveBeenCalled();
+    } finally {
+      parser.mockRestore();
+    }
   });
 
   it('routes xdt image/file URLs as direct image preview targets', () => {

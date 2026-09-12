@@ -58,7 +58,7 @@ import { useOpenWithMenu } from '../useOpenWithMenu';
 
 function ActionProbe() {
   const menu = useFileChipContextMenu({
-    getAbsPath: () => '/repo/src/App.tsx',
+    getAbsPath: () => '/repo/src/index.html',
     sidebarOpenSessionId: 'worker-a',
   });
   return (
@@ -117,7 +117,12 @@ function wrapper(children: ReactNode) {
 }
 
 describe('sidebar-embedded action target', () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: {
+      fileBrowser: { previewHtml: vi.fn(async () => ({ ok: true, url: 'http://127.0.0.1:12345/preview/' })) },
+    } });
+  });
 
   it('opens file-browser and web-browser tabs in the visible Lead bucket', async () => {
     render(wrapper(<ActionProbe />));
@@ -125,7 +130,7 @@ describe('sidebar-embedded action target', () => {
     fireEvent.click(screen.getByText('open-menu'));
     fireEvent.click(screen.getByText('chat.markdownRenderer.openInSidebarFileBrowser'));
     await waitFor(() =>
-      expect(openFileInSidebarFileBrowser).toHaveBeenCalledWith('lead-a', 'src/App.tsx'),
+      expect(openFileInSidebarFileBrowser).toHaveBeenCalledWith('lead-a', 'src/index.html'),
     );
 
     fireEvent.click(screen.getByText('open-menu'));
@@ -133,7 +138,7 @@ describe('sidebar-embedded action target', () => {
     await waitFor(() =>
       expect(openUrlInSidebarBrowser).toHaveBeenCalledWith(
         'lead-a',
-        'file:///repo/src/App.tsx',
+        'http://127.0.0.1:12345/preview/',
       ),
     );
   });

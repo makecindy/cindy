@@ -64,6 +64,15 @@ export const HTML_PREVIEW_CSP = [
 
 const CSP_META = `<meta http-equiv="Content-Security-Policy" content="${HTML_PREVIEW_CSP}">`;
 
+/** HTTP snapshots can load their own static assets, but no other origin. */
+export const HTML_SNAPSHOT_CSP = HTML_PREVIEW_CSP
+  .replace('img-src data:', "img-src 'self' data:")
+  .replace('media-src data:', "media-src 'self' data:")
+  .replace('font-src data:', "font-src 'self' data:")
+  .replace("style-src 'unsafe-inline' data:", "style-src 'self' 'unsafe-inline' data:")
+  .replace("script-src 'unsafe-inline' data:", "script-src 'self' 'unsafe-inline' data:")
+  .replace("connect-src 'none'", "connect-src 'self'");
+
 /**
  * 设备与 WebRTC 面的剥离脚本 —— **必须是文档里第一段脚本**。
  *
@@ -199,4 +208,10 @@ export function withHtmlPreviewCsp(html: string): string {
   // BOM 前移:它必须留在文档最前面,否则会成为游离字符。
   if (html.charCodeAt(0) === 0xfeff) return `\uFEFF${CSP_PROLOG}${html.slice(1)}`;
   return `${CSP_PROLOG}${html}`;
+}
+
+/** Every HTML in a snapshot is guarded before the native listener can serve it. */
+export function withSnapshotHtmlCsp(html: string): string {
+  const prolog = `<!doctype html><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="${HTML_SNAPSHOT_CSP}">${DEVICE_SURFACE_GUARD}`;
+  return html.charCodeAt(0) === 0xfeff ? `\uFEFF${prolog}${html.slice(1)}` : `${prolog}${html}`;
 }

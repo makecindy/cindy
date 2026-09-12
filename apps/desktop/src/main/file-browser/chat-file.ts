@@ -1,3 +1,4 @@
+import { copyFile } from 'node:fs/promises';
 /**
  * chat-file.ts — 聊天流文件类交互的远程取回编排(`maker:chat-file:fetch` 的业务体)。
  * ---------------------------------------------------------------------------
@@ -59,6 +60,7 @@ export interface ChatFileStat {
 
 /** 可注入依赖(单测替换;生产默认值见 index.ts 注册处)。 */
 export interface ChatFileDeps {
+  peerFile?(device: string, url: string): Promise<{ path: string; size: number; dispose(): Promise<void> } | null>;
   /** SSH:file-service stat(workdir 相对路径)。 */
   sshStat(hostId: string, workdir: string, relPath: string): Promise<ChatFileStat>;
   /** device:被控端 stat(FILE_BROWSER_REMOTE_OP_CHANNEL op:'stat')。 */
@@ -258,6 +260,15 @@ export async function fetchChatFile(
   let uploadedKey: string | null = null;
   let consumed = false;
   try {
+    const direct = await deps.peerFile?.(origin.deviceId, buildDevicePathUrl(absPath));
+    if (direct) {
+      try {
+        const cachePath = await deps.fetchToCache({ ...identity, size: direct.size }, async (dest, progress) => {
+          await copyFile(direct.path, dest); progress(direct.size, direct.size);
+        }, onProgress);
+        return { ok: true, cachePath, stale: false, size: direct.size };
+      } finally { await direct.dispose(); }
+    }
     const fetched = await deps.deviceMediaFetch(origin.deviceId, buildDevicePathUrl(absPath));
     uploadedKey = fetched.ossKey;
     const cachePath = await deps.fetchToCache(

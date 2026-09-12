@@ -171,6 +171,15 @@ describe('file-browser device-op', () => {
     ).rejects.toThrow(/REMOTE_WORKDIR_NOT_FOUND/);
   });
 
+  it('uses the same listDir for complete listings without changing legacy filtering', async () => {
+    await mkdir(path.join(workdir, 'dist'));
+    await fsWriteFile(path.join(workdir, '.env'), 'fixture');
+    const filtered = await handleRemoteOp({ op: 'listDir', workdir }) as Array<{ name: string }>;
+    const all = await handleRemoteOp({ op: 'listDir', workdir, includeIgnored: true, docMode: true }) as Array<{ name: string }>;
+    expect(filtered.map(e => e.name)).not.toContain('dist');
+    expect(all.map(e => e.name)).toEqual(expect.arrayContaining(['dist', '.env']));
+  });
+
   it('local listDir / readFile / stat match local handler shapes', async () => {
     const entries = (await handleRemoteOp({ op: 'listDir', workdir })) as Array<{ name: string }>;
     expect(entries.map((e) => e.name)).toContain('src');
@@ -294,7 +303,7 @@ describe('file-browser device-op', () => {
     dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
     sshRequestMock.mockResolvedValue({ entries: [{ name: 'r.ts' }] });
 
-    const entries = (await handleRemoteOp({ op: 'listDir', workdir: sshWorkdir })) as Array<{
+    const entries = (await handleRemoteOp({ op: 'listDir', workdir: sshWorkdir, includeIgnored: true, maxEntries: 2000 })) as Array<{
       name: string;
     }>;
     expect(entries.map((e) => e.name)).toEqual(['r.ts']);
@@ -303,6 +312,8 @@ describe('file-browser device-op', () => {
       relPath: '',
       hideMetaFiles: true,
       docMode: undefined,
+      includeIgnored: true,
+      maxEntries: 2000,
     });
   });
 
@@ -829,7 +840,7 @@ describe('file-browser device-op', () => {
 
   it('caps op advertises gzip; unknown op stays a deterministic negative signal', async () => {
     // caps 与 workdir 无关,guard 之前处理——guard 拒绝也不影响探测。
-    expect(await handleRemoteOp({ op: 'caps', workdir })).toEqual({ ok: true, gzip: true });
+    expect(await handleRemoteOp({ op: 'caps', workdir })).toEqual({ ok: true, gzip: true, completeDirectoryListing: true });
     // 控制端把 unknown op 当"老端不支持压缩"的确定性负信号,形状不能漂。
     expect(await handleRemoteOp({ op: 'nope', workdir })).toEqual({
       ok: false,

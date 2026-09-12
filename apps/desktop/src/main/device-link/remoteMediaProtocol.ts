@@ -1,3 +1,4 @@
+import { tryPeerFile } from './filePeer';
 /**
  * remoteMediaProtocol.ts — 控制端 `cindy-remote-media://` 自定义 scheme(入方向媒体)。
  * ---------------------------------------------------------------------------
@@ -108,7 +109,11 @@ async function ensureEntry(deviceId: string, origUrl: string): Promise<RemoteMed
 }
 
 /** 向被控端 invoke media:fetch。skipCache 强制其绕过图片上传去重缓存(悬空 key 自愈)。 */
-async function invokeMediaFetch(deviceId: string, origUrl: string, skipCache: boolean): Promise<MediaFetchResult> {
+async function invokeMediaFetch(
+  deviceId: string,
+  origUrl: string,
+  skipCache: boolean,
+): Promise<MediaFetchResult> {
   const payload = skipCache ? { url: origUrl, skipCache: true } : { url: origUrl };
   const res = await remoteInvoke(deviceId, DL_MEDIA_FETCH_CHANNEL, [payload]);
   if (!res.ok) {
@@ -131,15 +136,34 @@ async function downloadLocalEntry(
   }
 }
 
-function toEntry(deviceId: string, origUrl: string, fetched: MediaFetchResult): Promise<RemoteMediaEntry> {
+function toEntry(
+  deviceId: string,
+  origUrl: string,
+  fetched: MediaFetchResult,
+): Promise<RemoteMediaEntry> {
   if (isStreamable(fetched.mimeType) || fetched.size > LOCAL_BUFFER_MAX) {
     // 视频/音频,或任意大文件(> 64MiB):OSS 保活,按 range 流式取,不整下进内存。
-    return Promise.resolve(cache.recordStream(deviceId, origUrl, fetched.ossKey, fetched.mimeType, fetched.size));
+    return Promise.resolve(
+      cache.recordStream(deviceId, origUrl, fetched.ossKey, fetched.mimeType, fetched.size),
+    );
   }
   return downloadLocalEntry(deviceId, origUrl, fetched);
 }
 
 async function fetchAndCache(deviceId: string, origUrl: string): Promise<RemoteMediaEntry> {
+  if (!origUrl.startsWith('xdt-video:') && !origUrl.startsWith('xdt-audio:')) {
+    const direct = await tryPeerFile(deviceId, origUrl, remoteInvoke);
+    if (direct) {
+      try {
+        if (direct.size <= LOCAL_BUFFER_MAX && !isStreamable(direct.mimeType)) {
+          const bytes = await fs.readFile(direct.path);
+          return cache.recordLocal(deviceId, origUrl, bytes, direct.mimeType);
+        }
+      } finally {
+        await direct.dispose();
+      }
+    }
+  }
   const fetched = await invokeMediaFetch(deviceId, origUrl, false);
   try {
     return await toEntry(deviceId, origUrl, fetched);
@@ -153,13 +177,19 @@ async function fetchAndCache(deviceId: string, origUrl: string): Promise<RemoteM
 }
 
 /** local 条目:从内存字节切片服务(支持 range 206 / 整文件 200)。 */
-function serveLocal(entry: { bytes: Buffer; mimeType: string }, rangeHeader: string | null): Response {
+function serveLocal(
+  entry: { bytes: Buffer; mimeType: string },
+  rangeHeader: string | null,
+): Response {
   const buffer = entry.bytes;
   const totalSize = buffer.byteLength;
   const range = parseRangeHeader(rangeHeader, totalSize);
   if (range) {
     const slice = buffer.subarray(range.start, range.end + 1);
-    const body = slice.buffer.slice(slice.byteOffset, slice.byteOffset + slice.byteLength) as ArrayBuffer;
+    const body = slice.buffer.slice(
+      slice.byteOffset,
+      slice.byteOffset + slice.byteLength,
+    ) as ArrayBuffer;
     return new Response(body, {
       status: 206,
       headers: {
@@ -171,7 +201,10 @@ function serveLocal(entry: { bytes: Buffer; mimeType: string }, rangeHeader: str
       },
     });
   }
-  const body = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer;
+  const body = buffer.buffer.slice(
+    buffer.byteOffset,
+    buffer.byteOffset + buffer.byteLength,
+  ) as ArrayBuffer;
   return new Response(body, {
     status: 200,
     headers: {
@@ -187,7 +220,10 @@ function serveLocal(entry: { bytes: Buffer; mimeType: string }, rangeHeader: str
  * 包装上游 body 流:在流读完 / 出错 / 被取消时回调 onEnd 一次(用于 release in-flight 计数)。
  * <video> 的长连接 range 请求生命周期 = 这个流的生命周期,故 onEnd 即「本次服务结束」。
  */
-function trackStreamEnd(src: ReadableStream<Uint8Array>, onEnd: () => void): ReadableStream<Uint8Array> {
+function trackStreamEnd(
+  src: ReadableStream<Uint8Array>,
+  onEnd: () => void,
+): ReadableStream<Uint8Array> {
   const reader = src.getReader();
   let ended = false;
   const fire = (): void => {
@@ -297,8 +333,8 @@ async function handleRemoteMedia(
       // 大文件的 key 都是新鲜上传,首开失败多为瞬时错误,skipCache 也绕不了任何
       // 缓存——自愈 = 整个大文件白重传,保持原 502/重试语义。
       if (
-        !parsed.origUrl.startsWith('xdt-image://')
-        && !parsed.origUrl.startsWith('cindy-media://')
+        !parsed.origUrl.startsWith('xdt-image://') &&
+        !parsed.origUrl.startsWith('cindy-media://')
       ) {
         throw err;
       }
@@ -323,7 +359,9 @@ async function handleRemoteMedia(
         }
         throw err;
       }
-      log.warn(`stream open failed for oversized non-AV media, retrying with skipCache: ${String(err)}`);
+      log.warn(
+        `stream open failed for oversized non-AV media, retrying with skipCache: ${String(err)}`,
+      );
       // 自愈重取登记进同一 inflight map(逐出与登记在同一同步 tick 内完成,不暴露
       // cache miss 窗口):否则窗口期的并发请求会发起**不带 skipCache** 的普通取件,
       // 被控端去重缓存可能把同一把 stale key 再记回缓存、覆盖掉新对象。

@@ -302,19 +302,8 @@ function GeneratedFileChip({
       return;
     }
     if (htmlWithSession) {
-      if (remoteOrigin) {
-        const cachePath = await fetchChatFileWithToasts(
-          remoteOrigin,
-          fileCtx.workingDir,
-          file.path,
-        );
-        if (cachePath && sidebarTargetSessionId) {
-          await openHtmlFileByPreference(sidebarTargetSessionId, cachePath, t);
-        }
-        return;
-      }
       if (sidebarTargetSessionId) {
-        await openHtmlFileByPreference(sidebarTargetSessionId, file.path, t);
+        await openHtmlFileByPreference(sidebarTargetSessionId, file.path, t, fileCtx);
       }
       return;
     }

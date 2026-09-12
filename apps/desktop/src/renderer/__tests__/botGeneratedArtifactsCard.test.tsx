@@ -118,6 +118,7 @@ describe('伙伴成果卡', () => {
         'bot-session',
         '/bot/workspace/猫岛邮局-logo-方案.html',
         expect.any(Function),
+        expect.objectContaining({ origin: { kind: 'local' } }),
       );
     });
     expect(screen.queryByTestId('text-lightbox')).toBeNull();

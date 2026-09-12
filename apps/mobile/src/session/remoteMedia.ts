@@ -1,3 +1,4 @@
+import { peerMediaUri, peerMediaExpiry } from '@/device-link/peerFileRegistry';
 import type { NormalizedToolMedia } from '@/session/messageNormalize';
 import {
   isPayloadDesktopLocalMediaUrl,
@@ -34,11 +35,12 @@ export interface MobileResolvedRemoteMedia {
 }
 
 export interface MobileRemoteMediaResolverDeps {
-  fetchRemoteMedia(url: string, opts?: { skipCache?: boolean; thumbnail?: boolean }): Promise<MobileRemoteMediaFetchResult>;
+  fetchRemoteMedia(url: string, opts?: { skipCache?: boolean; thumbnail?: boolean; signal?: AbortSignal }): Promise<MobileRemoteMediaFetchResult>;
   presignGet(ossKey: string): Promise<MobileRemoteMediaPresignResult>;
 }
 
 export interface MobileRemoteMediaResolveOptions {
+  signal?: AbortSignal;
   /** 强制被控端绕过上传去重缓存(上次的 ossKey 已悬空时的自愈路径)。 */
   skipCache?: boolean;
   /** 只要聊天列表缩略图:被控端缩 1024px webp inline 回包;老被控端回落原图。 */
@@ -138,6 +140,7 @@ export async function resolveMobileRemoteMedia(
     throw new Error(i18n.t('composer.attachments.notFetchableMedia'));
   }
   const fetchOpts = {
+    ...(opts?.signal ? { signal: opts.signal } : {}),
     ...(opts?.skipCache ? { skipCache: true } : {}),
     ...(opts?.thumbnail ? { thumbnail: true } : {}),
   };
@@ -145,6 +148,9 @@ export async function resolveMobileRemoteMedia(
     media.url,
     Object.keys(fetchOpts).length > 0 ? fetchOpts : undefined,
   );
+  const local = peerMediaUri(fetched);
+  if (local) return { url: local, ossKey: '', size: fetched.size, mimeType: fetched.mimeType,
+    expiresAt: peerMediaExpiry(fetched)!, previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType) };
   // inline 缩略图回包:字节已随 invoke 帧到手,无 OSS 对象,跳过 presign。
   // url 先给 data URI 保证任何情况下可渲染;宿主(会话屏)会把字节落盘并换成 file://。
   if (isValidInlineResult(fetched)) {

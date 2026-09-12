@@ -8690,6 +8690,11 @@
       "closeHint": "or click backdrop to close"
     },
     "remoteFile": {
+      "previewFailed": "Could not prepare the web preview. Check the directory and connection, then try again.",
+      "previewNotFound": "The HTML file was not found. Check that it still exists.",
+      "previewFetching": "Preparing Web Preview…",
+      "previewTooLarge": "The preview exceeds the limit (2,000 entries, 100 MB, or 8 open previews). Use a smaller directory or close Cindy and retry.",
+      "previewUnsupported": "Update Cindy on the remote device to preview this directory.",
       "fetching": "Fetching file from remote…",
       "fetchFailed": "Failed to fetch file from remote",
       "notFound": "File not found on remote",

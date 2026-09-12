@@ -22,3 +22,7 @@ export * from './remoteDesktopIce.js';
 export * from './remoteDesktopIceConfig.js';
 export * from './remoteClipboard.js';
 export * from './remoteCursor.js';
+export * from './filePeer.js';
+export * from './filePeerRuntime.js';
+
+export { FILE_PEER_RUNTIME_SOURCE } from './filePeerRuntimeSource.js';

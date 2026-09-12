@@ -1,3 +1,4 @@
+import { tryMobilePeerFile } from './peerFileRegistry';
 import type {
   ConversationSearchRequest,
   ConversationSearchResponse,
@@ -199,6 +200,7 @@ export interface RemoteTextFilePreviewResult {
 export interface FileBrowserCapsResult {
   ok: boolean;
   gzip?: boolean;
+  completeDirectoryListing?: boolean;
   /** 老被控端对未知 op 返回 {ok:false,message:'unknown op: caps'}。 */
   message?: string;
 }
@@ -533,7 +535,7 @@ export interface MobileMakerTransport {
     opts: { workingDir?: string; forceReload?: boolean; sessionId?: string },
   ): Promise<MobileAgentSkillListResult>;
   scanAtResources(agentKind: MobileAgentKind, opts: { workingDir: string; cap?: number; query?: string }): Promise<MobileAtResourceScanResult>;
-  fetchRemoteMedia(url: string, opts?: { skipCache?: boolean; thumbnail?: boolean }): Promise<MobileRemoteMediaFetchResult>;
+  fetchRemoteMedia(url: string, opts?: { skipCache?: boolean; thumbnail?: boolean; signal?: AbortSignal }): Promise<MobileRemoteMediaFetchResult>;
   transcribeVoice(input: MobileVoiceTranscribeRequest): Promise<MobileVoiceTranscribeResult>;
   recordVoiceDictionaryLearning(input: MobileVoiceDictionaryLearningRequest): Promise<MobileVoiceDictionaryLearningResult>;
   /**
@@ -638,7 +640,7 @@ export interface MobileMakerTransport {
   fileBrowser: {
     caps(workdir: string): Promise<FileBrowserCapsResult>;
     /** 返回裸 entries(unknown),消费方用 normalizeRemoteOpDirEntries 归一化。 */
-    listDir(workdir: string, relPath: string): Promise<unknown>;
+    listDir(workdir: string, relPath: string, opts?: { includeIgnored?: boolean; maxEntries?: number }): Promise<unknown>;
     readFile(workdir: string, relPath: string, opts?: { acceptGzip?: boolean }): Promise<FileBrowserReadFileResult>;
     listAllFiles(workdir: string, cap?: number): Promise<FileBrowserListAllFilesResult>;
     /** ripgrep 内容搜索(被控端 searchCollect,一次性收集,上限被控端封顶 500)。 */
@@ -786,14 +788,17 @@ export function createMobileMakerTransport({
     // skipCache:上次拿到的 ossKey 已悬空(对象被删)时,强制被控端绕过上传去重缓存重传。
     // thumbnail:聊天列表只要缩略图,被控端缩到 1024px webp inline 回包(老被控端
     // 不识别该字段,回落原图 ossKey,消费方两种回包都兼容)。
-    fetchRemoteMedia: (url, opts) => call(
-      DEVICE_LINK_MEDIA_FETCH_CHANNEL,
-      [{
-        url,
+    fetchRemoteMedia: async (url, opts) => {
+      if (!opts?.thumbnail) {
+        const peer = await tryMobilePeerFile(deviceId, url, opts?.signal);
+        if (peer) return peer;
+      }
+      if (opts?.signal?.aborted) throw new Error('FILE_PEER_CANCELLED');
+      return call(DEVICE_LINK_MEDIA_FETCH_CHANNEL, [{ url,
         ...(opts?.skipCache ? { skipCache: true } : {}),
         ...(opts?.thumbnail ? { thumbnail: true } : {}),
-      }],
-    ),
+      }]);
+    },
     transcribeVoice: (input) => call(DEVICE_LINK_VOICE_TRANSCRIBE_CHANNEL, [input]),
     recordVoiceDictionaryLearning: (input) => call(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL, [input]),
     getVoiceDictionary: () => call(DEVICE_LINK_VOICE_DICTIONARY_GET_CHANNEL, []),
@@ -882,8 +887,8 @@ export function createMobileMakerTransport({
     },
     fileBrowser: {
       caps: (workdir) => call('file-browser:remote-op', [{ op: 'caps', workdir }]),
-      listDir: (workdir, relPath) =>
-        call('file-browser:remote-op', [{ op: 'listDir', workdir, relPath }]),
+      listDir: (workdir, relPath, opts) =>
+        call('file-browser:remote-op', [{ op: 'listDir', workdir, relPath, ...opts }]),
       readFile: (workdir, relPath, opts) =>
         call('file-browser:remote-op', [
           { op: 'readFile', workdir, relPath, ...(opts?.acceptGzip ? { acceptGzip: true } : {}) },

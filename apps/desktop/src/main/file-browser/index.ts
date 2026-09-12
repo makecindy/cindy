@@ -1,3 +1,4 @@
+import { tryPeerFile } from '../device-link/filePeer';
 /**
  * registerFileBrowserIpc — main-side handlers for the workdir file-browser.
  *
@@ -43,13 +44,15 @@ import { getRipgrepBinaryPath } from '../maker-host/runtime-configs.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
 import { fetchRemoteFileToCache, findStaleCached, isInsideCacheDir, putCachedContent, sweepCacheOnStartup } from './remote-file-cache.js';
-import { fetchChatFile, statChatFile, type ChatFileDeps, type ChatFileFetchArgs } from './chat-file.js';
+import { fetchChatFile, statChatFile, type ChatFileDeps, type ChatFileFetchArgs, buildDevicePathUrl } from './chat-file.js';
 import { isTransientDeviceExportStatusError } from './device-export-status-error.js';
 import { makeSshChunkExecutor } from './ssh-media.js';
 import { getRemoteFileBrowser } from './remote-deps.js';
 import { getRemoteWatchRegistry } from './remote-watch.js';
 import { throwRemoteFsIpcError } from './remote.js';
 import { watcherManager, type FileTreeEvent } from './watcher.js';
+import { registerHtmlPreviewIpc } from './html-preview-ipc.js';
+import { toWorkdirRel } from '../../shared/workdirPath.js';
 
 const log = createLogger('file-browser/ipc');
 
@@ -97,6 +100,8 @@ interface RemoteRoutedArgs {
 }
 
 interface ListDirArgs extends RemoteRoutedArgs {
+  /** Bypass presentation filters; does not bypass filesystem access checks. */
+  includeIgnored?: boolean;
   workdir: string;
   /** workdir-relative POSIX path; '' for root */
   relPath?: string;
@@ -181,6 +186,18 @@ async function fetchRemoteBigFile(
         mtimeMs: args.mtimeMs,
       },
       async (destPath, progress) => {
+        if (args.size <= 100 * 1024 * 1024) {
+          const source = args.workdir.replace(/[\\/]$/, '') + '/' + args.relPath;
+          const direct = await tryPeerFile(deviceId, buildDevicePathUrl(source) + '&baseDir=' + encodeURIComponent(args.workdir) + '&maxBytes=' + Math.max(1, args.size), remoteInvoke);
+          if (direct) {
+            try {
+              if (direct.size !== args.size) throw new Error('REMOTE_FILE_CHANGED');
+              await fsPromises.copyFile(direct.path, destPath);
+              progress(args.size, args.size, 'download');
+              return;
+            } finally { await direct.dispose(); }
+          }
+        }
         // 两段式:Start 立即回 transferId(上传在被控端后台跑,2GB 分钟级,
         // 单次 invoke 的 30s 超时罩不住),轮询 Status 到终态再下载。
         progress(0, args.size);
@@ -278,6 +295,49 @@ export function registerFileBrowserIpc(): void {
   // file-browser-core 是宿主无关的共享包(也跑在远端 file-service daemon 里),
   // 日志设施由宿主注入——desktop 侧接统一 logger(规则 12),scope 与抽包前一致。
   setFileBrowserCoreLoggerFactory(createLogger);
+  registerHtmlPreviewIpc({
+    list: async (args, root, relPath) => {
+      if (args.origin.kind === 'device') {
+        if (!relPath) {
+          const caps = await deviceOpInvoke<{ completeDirectoryListing?: boolean }>(
+            args.origin.deviceId, { op: 'caps', workdir: root },
+          );
+          if (caps?.completeDirectoryListing !== true)
+            throw new Error('COMPLETE_DIRECTORY_LISTING_UNSUPPORTED');
+        }
+        return deviceOpInvoke<import('@cindy/file-browser-core').DirEntry[]>(
+          args.origin.deviceId,
+          { op: 'listDir', workdir: root, relPath, includeIgnored: true, maxEntries: 2000 },
+        );
+      }
+      if (args.origin.kind !== 'ssh') throw new Error('BAD_ARGS');
+      // Preserve the original SSH workdir boundary before treating the HTML parent as a root.
+      await getRemoteFileBrowser().request(args.origin.remoteHostId, 'stat', {
+        workdir: args.workdir,
+        relPath: toWorkdirRel(args.workdir, args.absPath)!,
+      });
+      return (
+        await getRemoteFileBrowser().request(args.origin.remoteHostId, 'listDir', {
+          workdir: root,
+          relPath,
+          includeIgnored: true,
+          maxEntries: 2000,
+        })
+      ).entries;
+    },
+    read: (args, root, entry) =>
+      fetchRemoteBigFile(
+        {
+          workdir: root,
+          relPath: entry.relPath,
+          size: entry.size,
+          mtimeMs: entry.mtimeMs,
+          deviceId: args.origin.kind === 'device' ? args.origin.deviceId : undefined,
+          remoteHostId: args.origin.kind === 'ssh' ? args.origin.remoteHostId : undefined,
+        },
+        () => {},
+      ),
+  });
 
   // 缓存启动清扫(残留 .part + 超容量 LRU),异步不阻塞注册。
   void sweepCacheOnStartup();
@@ -344,6 +404,7 @@ export function registerFileBrowserIpc(): void {
   // 进度沿用 FILE_BROWSER_PUSH.TRANSFER,relPath 键固定用原始 absPath(renderer
   // 不做 abs→rel,单一实现点在 main;订阅方按 absPath 过滤)。
   const chatFileDeps: ChatFileDeps = {
+    peerFile: (device, url) => tryPeerFile(device, url, remoteInvoke),
     sshStat: (hostId, workdir, relPath) =>
       getRemoteFileBrowser().request(hostId, 'stat', { workdir, relPath }) as Promise<{
         type: 'file' | 'directory';
@@ -488,6 +549,7 @@ export function registerFileBrowserIpc(): void {
             relPath: args.relPath ?? '',
             hideMetaFiles: args.hideMetaFiles ?? true,
             docMode: args.docMode,
+            includeIgnored: args.includeIgnored,
           });
           return entries;
         } catch (err) {
@@ -495,12 +557,12 @@ export function registerFileBrowserIpc(): void {
           throwRemoteFsIpcError(err);
         }
       }
-      const matcher = await loadIgnoreMatcher(args.workdir, {
+      const matcher = args.includeIgnored === true ? null : await loadIgnoreMatcher(args.workdir, {
         hideMetaFiles: args.hideMetaFiles ?? true,
         honorVcsIgnore: false,
       });
       return listDir(args.workdir, args.relPath ?? '', matcher, {
-        docMode: args.docMode,
+        docMode: args.includeIgnored === true ? false : args.docMode,
       });
     },
   );

@@ -264,7 +264,32 @@ export function classifyMarkdownLinkTarget(
 ): MarkdownTarget {
   // sandbox: 前缀在进任何 scheme 判定前先剥掉——它只是 LLM 对本地路径的一种
   // 拼写习惯,剥完后与作者直写 `[x](C:/…)` 走同一条链路(含存在性校验)。
-  const raw = normalizeSandboxHref(href?.trim() ?? '');
+  let raw = normalizeSandboxHref(href?.trim() ?? '');
+  // File links use the same existence/type/opening path as ordinary absolute references.
+  if (raw.startsWith('xdt-file://')) {
+    try {
+      // Electron registers this as a standard scheme: Chromium's URL parser
+      // turns xdt-file:///Users/... into a URL whose host is "Users". Preserve
+      // the explicit absolute-path spelling before invoking that parser.
+      let filePath = raw.startsWith('xdt-file:///')
+        ? decodeURIComponent(raw.slice('xdt-file://'.length).split(/[?#]/, 1)[0])
+        : null;
+      if (!filePath) {
+        const url = new URL(raw);
+        filePath = url.searchParams.get('path');
+        if (!filePath && !url.hostname) filePath = decodeURIComponent(url.pathname);
+      }
+      if (filePath && /^\/[A-Za-z]:\//.test(filePath)) filePath = filePath.slice(1);
+      if (
+        filePath &&
+        !/\.(png|jpe?g|gif|webp|svg|bmp|ico)$/i.test(filePath) &&
+        (filePath.startsWith('/') || WINDOWS_ABSOLUTE_PATH_RE.test(filePath))
+      )
+        raw = filePath;
+    } catch {
+      /* Preserve legacy unparseable URLs. */
+    }
+  }
   if (!raw) return { kind: 'plain-text', href: raw, reason: 'empty' };
 
   if (raw.startsWith('#')) return { kind: 'anchor', id: decodeAnchorId(raw.slice(1)), href: raw };

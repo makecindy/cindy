@@ -1,0 +1,9 @@
+{
+  "platforms": ["apple", "android"],
+  "apple": {
+    "modules": ["CindyHtmlPreviewModule"]
+  },
+  "android": {
+    "modules": ["expo.modules.cindyhtmlpreview.CindyHtmlPreviewModule"]
+  }
+}
