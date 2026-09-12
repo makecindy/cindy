@@ -137,6 +137,54 @@ This harness does not validate WKWebView, Android WebView, carrier NAT, regional
 STUN availability, TURN relay performance or Windows native capture. Those need
 device/network verification before claiming a measured connection-success gain.
 
+## Input failure releases control (2026-09-11)
+
+Control is a lease-scoped capability, not the session itself. When the host can
+no longer inject input — the native helper died, it reported a failed injection,
+or its write path failed — it releases control and keeps everything else: the
+lease, the capture owner, the video track and the last picture. It does not call
+`stop()`, so an input fault can never surface as an ended desktop session.
+
+The host also releases control when its own input path refuses a batch before
+injecting anything, so the two sides cannot disagree about who controls: a later
+take-control genuinely restarts the helper instead of being skipped as "already
+controlling".
+
+The viewer follows the host's control bit instead of rebuilding the session. A
+rejected input batch, a failed control request or a heartbeat that reports
+`controlling: false` all drop the phone to view only with the existing view-only
+hint and take-control action; media and lease identity are untouched. A dropped
+stalled batch (WebView overflow) also asks the host to drop control: posting
+`control:false` to the WebView clears its queued release without flushing it, so
+only an explicit host `control enabled:false` (which stops the input helper and
+injects a native release) can let go of a held key or button. If that host
+request times out, the viewer keeps the intended control bit and the next
+heartbeat retries the release (or restores local control after a lost
+take-control reply) instead of ignoring a host-`true` while the phone stays
+view-only. A heartbeat that still reports view-only while `startInput()` is
+settling does not consume that pending take-control: only a later beat, after
+the transition, may reconcile. An unconfirmed overflow release stays
+authoritative until the host is view-only: taking control finishes that
+release (`stopInput`) before asking to enable, so the helper restarts. Errors whose outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or
+a control request that collides with one still settling — do not rebuild the
+session: a batch that may have been injected must not be answered with a
+release that discards its key-up, and the heartbeat still owns liveness. Errors
+that do mean the lease is gone (`DESKTOP_LEASE_EXPIRED`, `DESKTOP_STOPPED`,
+revocation, an unsupported channel) still recover the session as before.
+
+This matters most on Windows, where the SendInput helper reports a failed
+injection as a helper failure whereas the macOS helper posts events without a
+result path. On Windows the helper now costs control only; whether a specific
+machine can inject at all (elevated foreground window, secure desktop, a session
+worker outside the interactive window station) is a separate, still unverified
+question, and the helper's `error` line does not yet carry a reason.
+
+Deterministic tests cover the controller release (lease, media and single-viewer
+arbitration retained; later input refused as view-only; control can be taken
+again), the desktop wiring that turns a refused or failed input batch into a
+release rather than a stop, the failure classification (release, unknown outcome,
+rebuild), and the viewer paths that drop to view only without reconnecting.
+
 ## Authority and lifetime
 
 On macOS, enabling remote desktop automatically checks screen recording in the
@@ -197,6 +245,13 @@ currently offers viewing only. Neither helper bypasses OS security boundaries:
 Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.
 System audio and explicit clipboard transfers are supported when advertised by the host. Virtual displays and remote power-on are not included. The phone keyboard sends committed text directly; the computer keyboard supplies modifiers and special keys.
+
+The Windows input helper reports a failed call on the single output line its host
+already treats as "input failed": `error send_input <status>` when Win32 rejects
+an injection, and `error input_desktop <status>` when the desktop binding fails,
+with the Win32 status of the failing call. The line carries no coordinates and no
+typed text, and both consumers (Main's output watch and the SYSTEM service
+worker's failure watch) still classify it by the same rules as before.
 
 Unit tests cover peer/lease isolation, expiry, revocation during asynchronous
 capture, start/stop races, input replay, human/Agent exclusion, portrait/landscape

@@ -153,7 +153,6 @@ describe('desktop MCP approval policy', () => {
       'cindy_scheduler',
       'cindy_memory',
       'cindy_helper',
-      'cindy_orca',
       // worker → lead 回报通道:执行边界在工具内部 fail-closed, 逐次弹窗
       // 会让远端 daemon 等审批超时断链。
       'orca_worker_bridge',
@@ -434,5 +433,43 @@ describe('Cindy market action authorization', () => {
     expect(getDesktopMcpToolApprovalPolicy({serverName: 'cindy', toolName: 'ghost_market_search'})).toBe('auto-approve');
     expect(getDesktopMcpToolApprovalPolicy({serverName: 'cindy', toolName: 'ghost_market_install'})).toBe('prompt-each-time');
     expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy__ghost_market_install');
+  });
+});
+
+describe('Orca Worker directory authorization', () => {
+  const policy = (toolName: string | undefined, toolParams?: unknown) =>
+    getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_orca', toolName, toolParams });
+
+  it('reviews every explicit root, including batch entries and JSON payloads', () => {
+    for (const working_dir of ['/private/project', '/remote/project ', '', null]) {
+      for (const [name, params] of [
+        ['create_worker', { working_dir }],
+        ['create_workers', { workers: [{ label: 'inherits' }, { working_dir }] }],
+      ] as const) {
+        expect(policy(name, params)).toBe('prompt-each-time');
+        expect(policy(name, JSON.stringify(params))).toBe('prompt-each-time');
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_orca__create_worker');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_orca__create_workers');
+  });
+
+  it('preserves inherited-directory creation and other Orca operations', () => {
+    expect(policy('create_worker', { label: 'inherits' })).toBe('auto-approve');
+    expect(policy('create_workers', { workers: [{ label: 'a' }, { label: 'b' }] })).toBe('auto-approve');
+    expect(policy('send_to_worker', { worker_id: 'a', message: 'continue' })).toBe('auto-approve');
+    expect(policy('list_workers')).toBe('auto-approve');
+  });
+
+  it('does not infer directory inheritance from missing approval evidence', () => {
+    expect(policy(undefined)).toBe('prompt-each-time');
+    expect(policy(undefined, { working_dir: '/other' })).toBe('prompt-each-time');
+    for (const name of ['create_worker', 'create_workers']) {
+      for (const params of [undefined, 'invalid JSON', [], null]) {
+        expect(policy(name, params)).toBe('prompt-each-time');
+      }
+    }
+    expect(policy('create_workers', {})).toBe('prompt-each-time');
+    expect(policy('create_workers', { workers: [null] })).toBe('prompt-each-time');
   });
 });

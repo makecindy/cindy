@@ -19,6 +19,9 @@ export type DbTxName =
   | 'orca.reconcileInactiveTeamWorkersForLead'
   | 'sessions.renameTitles'
   | 'sessions.setStatus'
+  | 'recentWorkdirs.mergeWindowsIdentity'
+  | 'recentWorkdirs.removeWindowsIdentity'
+  | 'projectAliases.replaceIdentity'
   | 'toolResults.compactSession'
   | 'session.agentSwitchFallback'
   | 'context.rebuild'
@@ -437,7 +440,26 @@ export interface SessionsSetStatusResultItem {
   title: string | null;
   workingDir: string | null;
   workspaceKind: string | null;
+  remoteHostId: string | null;
+  source: string | null;
   status: 'active' | 'archived';
+}
+
+export interface RecentWorkdirsMergeWindowsIdentityArgs {
+  path: string;
+  lastUsedAt: number;
+}
+
+export interface RecentWorkdirsRemoveWindowsIdentityArgs {
+  path: string;
+}
+
+export interface ProjectAliasesReplaceIdentityArgs {
+  projectKey: string;
+  comparisonKey: string;
+  foldCase: boolean;
+  alias: string | null;
+  updatedAt: number;
 }
 
 export interface CompactSessionToolResultsArgs {
@@ -643,7 +665,13 @@ export interface BotsReconcileCanonicalLinkArgs {
 }
 
 export interface BotsReconcileCanonicalLinkResult {
-  status: 'unchanged' | 'repaired-mirror' | 'migrated' | 'missing-pointer' | 'missing-session' | 'conflict';
+  status:
+    | 'unchanged'
+    | 'repaired-mirror'
+    | 'migrated'
+    | 'missing-pointer'
+    | 'missing-session'
+    | 'conflict';
   canonicalSessionId: string | null;
 }
 
@@ -655,8 +683,15 @@ export interface BotsReplaceCanonicalSessionResult {
 
 export interface BotsPrepareRuntimeArgs {
   snapshot: {
-    id: string; botId: string; sessionId: string; profileVersion: number; agentKind: string;
-    workingDir: string; memoryScopeKey: string | null; configuredJson: string; resolvedJson: string;
+    id: string;
+    botId: string;
+    sessionId: string;
+    profileVersion: number;
+    agentKind: string;
+    workingDir: string;
+    memoryScopeKey: string | null;
+    configuredJson: string;
+    resolvedJson: string;
     preparedAt: number;
   };
   eventId: string;
@@ -705,10 +740,18 @@ export interface BotsReparentDelegationsResult {
 export interface BotsCreateDelegationArgs {
   maxActiveChildren: number;
   delegation: {
-    id: string; requestingBotId: string; targetBotId: string | null; parentSessionId: string;
-    childSessionId: string; objective: string; contextRefsJson: string;
-    permissionSnapshotJson: string; lineageJson: string; targetProfileVersion: number | null;
-    depth: number; createdAt: number;
+    id: string;
+    requestingBotId: string;
+    targetBotId: string | null;
+    parentSessionId: string;
+    childSessionId: string;
+    objective: string;
+    contextRefsJson: string;
+    permissionSnapshotJson: string;
+    lineageJson: string;
+    targetProfileVersion: number | null;
+    depth: number;
+    createdAt: number;
   };
   session: BotsReplaceCanonicalSessionArgs['session'];
 }
@@ -735,11 +778,15 @@ export interface BotsReopenDelegationResult {
 }
 
 export interface BotsLifecycleTransitionArgs {
-  botId: string; canonicalSessionId: string | null; expectedProfileStatus: string;
-  at: number; eventId: string;
+  botId: string;
+  canonicalSessionId: string | null;
+  expectedProfileStatus: string;
+  at: number;
+  eventId: string;
 }
 export interface BotsArchiveLifecycleArgs extends BotsLifecycleTransitionArgs {
-  expectedProfileStatus: string; worktreeDisposition: string;
+  expectedProfileStatus: string;
+  worktreeDisposition: string;
 }
 export interface BotsDeleteProfileArgs {
   botId: string;
@@ -1116,6 +1163,9 @@ export type DbTxArgsByName = {
   'orca.reconcileInactiveTeamWorkersForLead': OrcaReconcileInactiveTeamWorkersForLeadArgs;
   'sessions.renameTitles': SessionsRenameTitlesArgs;
   'sessions.setStatus': SessionsSetStatusArgs;
+  'recentWorkdirs.mergeWindowsIdentity': RecentWorkdirsMergeWindowsIdentityArgs;
+  'recentWorkdirs.removeWindowsIdentity': RecentWorkdirsRemoveWindowsIdentityArgs;
+  'projectAliases.replaceIdentity': ProjectAliasesReplaceIdentityArgs;
   'toolResults.compactSession': CompactSessionToolResultsArgs;
   'session.agentSwitchFallback': SessionAgentSwitchFallbackArgs;
   'context.rebuild': ContextRebuildArgs;
@@ -1185,6 +1235,13 @@ export type DbTxResultByName = {
   'orca.reconcileInactiveTeamWorkersForLead': string[];
   'sessions.renameTitles': SessionsRenameTitleResult[];
   'sessions.setStatus': SessionsSetStatusResultItem[];
+  'recentWorkdirs.mergeWindowsIdentity': undefined;
+  'recentWorkdirs.removeWindowsIdentity': { changes: number };
+  'projectAliases.replaceIdentity': {
+    projectKey: string;
+    alias: string;
+    updatedAt: number;
+  } | null;
   'toolResults.compactSession': CompactSessionToolResultsResult;
   'session.agentSwitchFallback': undefined;
   'context.rebuild': undefined;

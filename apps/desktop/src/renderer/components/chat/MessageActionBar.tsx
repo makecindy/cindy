@@ -43,8 +43,9 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
+import { CHAT_COLOR_TRANSITION_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { Spinner } from '@/components/ui/spinner';
-import { Tooltip } from '@/components/ui/tooltip';
+import { Tip, Tooltip } from '@/components/ui/tooltip';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -119,6 +120,16 @@ interface MessageActionBarProps {
 // Acts as a debounce — quick re-enters within this window cancel the fade
 // without resetting opacity, so the bar stays steady at full visibility.
 const LEAVE_DEBOUNCE_MS = 250;
+
+const actionButtonClass = cn(
+  CHAT_ICON_BUTTON_CLASS,
+  'group h-6 w-6 border-none bg-transparent',
+  'enabled:hover:bg-[var(--cmd-palette-item-hover)]',
+);
+const actionIconClass = cn(
+  CHAT_COLOR_TRANSITION_CLASS,
+  'text-[var(--cmd-palette-item-meta)] group-hover:text-[var(--msg-assistant-text)]',
+);
 
 export function MessageActionBar({
   createdAt,
@@ -263,27 +274,28 @@ export function MessageActionBar({
   const Icon = copied ? Check : Copy;
 
   const copyBtn = (
-    <button
-      key="copy"
-      type="button"
-      onClick={handleCopy}
-      className={cn(
-        'group flex h-[24px] w-[24px] items-center justify-center',
-        'rounded-[4px] border-none bg-transparent outline-none cursor-pointer',
-        'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
-      )}
-      aria-label={t('chat.messageActionBar.copy')}
-    >
-      <Icon
-        size={14}
-        strokeWidth={2}
-        className={cn(
-          'text-[var(--cmd-palette-item-meta)]',
-          !copied && 'group-hover:text-[var(--msg-assistant-text)]',
-          'transition-colors duration-150',
-        )}
-      />
-    </button>
+    <Tooltip.Root key="copy">
+      <Tooltip.Trigger asChild>
+        <button
+          type="button"
+          onClick={handleCopy}
+          disabled={moreInFlight}
+          className={actionButtonClass}
+          aria-label={t('chat.messageActionBar.copy')}
+        >
+          <Icon
+            size={14}
+            strokeWidth={2}
+            className={cn(
+              'text-[var(--cmd-palette-item-meta)]',
+              !copied && 'group-hover:text-[var(--msg-assistant-text)]',
+              CHAT_COLOR_TRANSITION_CLASS,
+            )}
+          />
+        </button>
+      </Tooltip.Trigger>
+      <Tooltip.Content>{t('chat.messageActionBar.copy')}</Tooltip.Content>
+    </Tooltip.Root>
   );
 
   // 分享为图片 — 紧贴复制右侧。点击进入选择模式并预选本条,后续勾选与出口都在
@@ -298,11 +310,7 @@ export function MessageActionBar({
             onShareAsImage();
           }}
           disabled={inFlight}
-          className={cn(
-            'group flex h-[24px] w-[24px] items-center justify-center',
-            'rounded-full border-none bg-transparent outline-none cursor-pointer',
-            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
-          )}
+          className={actionButtonClass}
           aria-label={t('chat.shareImage.entry')}
         >
           {/* iOS 同款分享形状(托盘 + 上箭头,对应 SF Symbols 的
@@ -310,11 +318,7 @@ export function MessageActionBar({
           <Share
             size={14}
             strokeWidth={2}
-            className={cn(
-              'text-[var(--cmd-palette-item-meta)]',
-              'group-hover:text-[var(--msg-assistant-text)]',
-              'transition-colors duration-150',
-            )}
+            className={actionIconClass}
           />
         </button>
       </Tooltip.Trigger>
@@ -332,12 +336,7 @@ export function MessageActionBar({
             void handleFork();
           }}
           disabled={inFlight}
-          className={cn(
-            'group flex h-[24px] w-[24px] items-center justify-center',
-            'rounded-lg border-none bg-transparent outline-none cursor-pointer',
-            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
-            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] disabled:cursor-default',
-          )}
+          className={actionButtonClass}
           aria-label={t('chat.messageActionBar.fork')}
         >
           {forking ? (
@@ -346,11 +345,7 @@ export function MessageActionBar({
             <Split
               size={14}
               strokeWidth={2}
-              className={cn(
-                'text-[var(--cmd-palette-item-meta)]',
-                'group-hover:text-[var(--msg-assistant-text)]',
-                'transition-colors duration-150',
-              )}
+              className={actionIconClass}
             />
           )}
         </button>
@@ -369,22 +364,13 @@ export function MessageActionBar({
             onAddToChat();
           }}
           disabled={inFlight}
-          className={cn(
-            'group flex h-[24px] w-[24px] items-center justify-center',
-            'rounded-full border-none bg-transparent outline-none cursor-pointer',
-            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
-            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          )}
+          className={actionButtonClass}
           aria-label={t('chat.messageActionBar.reply')}
         >
           <MessageSquareReply
             size={14}
             strokeWidth={2}
-            className={cn(
-              'text-[var(--cmd-palette-item-meta)]',
-              'group-hover:text-[var(--msg-assistant-text)]',
-              'transition-colors duration-150',
-            )}
+            className={actionIconClass}
           />
         </button>
       </Tooltip.Trigger>
@@ -398,7 +384,7 @@ export function MessageActionBar({
         <time
           dateTime={createdAt}
           className={cn(
-            'inline-flex h-[24px] items-center text-12 font-normal whitespace-nowrap',
+            'inline-flex h-6 items-center text-12 font-normal whitespace-nowrap',
             // Optical adjustment: nudge time text down 0.5px so its visual
             // mid-line aligns with the lucide Copy icon glyph center.
             'relative top-[0.5px]',
@@ -463,7 +449,7 @@ export function MessageActionBar({
   // bar 的 gap-0.5(2px)对两段相邻文本太挤,额外 6px 左距(共 8px)让「时间 | 用量」
   // 读成两个独立信息组。金额与 token 回退共用同一套 —— 换的是内容,不是位置。
   const metaTextClassName = cn(
-    'inline-flex h-[24px] items-center text-12 font-normal whitespace-nowrap',
+    'inline-flex h-6 items-center text-12 font-normal whitespace-nowrap',
     'relative top-[0.5px]',
     'ml-1.5',
     'text-[var(--settings-section-desc)] cursor-default',
@@ -521,21 +507,13 @@ export function MessageActionBar({
             onEdit();
           }}
           disabled={inFlight}
-          className={cn(
-            'group flex h-[24px] w-[24px] items-center justify-center',
-            'rounded-[4px] border-none bg-transparent outline-none cursor-pointer',
-            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors disabled:cursor-default',
-          )}
+          className={actionButtonClass}
           aria-label={t('chat.messageActionBar.edit')}
         >
           <Pencil
             size={14}
             strokeWidth={2}
-            className={cn(
-              'text-[var(--cmd-palette-item-meta)]',
-              'group-hover:text-[var(--msg-assistant-text)]',
-              'transition-colors duration-150',
-            )}
+            className={actionIconClass}
           />
         </button>
       </Tooltip.Trigger>
@@ -551,39 +529,31 @@ export function MessageActionBar({
   const moreMenu = (addToChatInMenu || copyLinkText || canRewind || onDelete) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
       <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          onClick={(e) => e.stopPropagation()}
-          onPointerDown={() => {
-            menuInteractionFromPointerRef.current = true;
-          }}
-          onKeyDown={() => {
-            menuInteractionFromPointerRef.current = false;
-          }}
-          disabled={moreInFlight}
-          className={cn(
-            'group flex h-[24px] w-[24px] items-center justify-center',
-            'rounded-full border-none bg-transparent outline-none cursor-pointer',
-            'hover:bg-[var(--cmd-palette-item-hover)] transition-colors',
-            'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-            'data-[state=open]:bg-[var(--cmd-palette-item-hover)] disabled:cursor-default',
-          )}
-          aria-label={t('chat.messageActionBar.moreActions')}
-        >
-          {moreInFlight ? (
-            <Spinner size={14} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
-          ) : (
-            <Ellipsis
-              size={14}
-              strokeWidth={2}
-              className={cn(
-                'text-[var(--cmd-palette-item-meta)]',
-                'group-hover:text-[var(--msg-assistant-text)]',
-                'transition-colors duration-150',
-              )}
-            />
-          )}
-        </button>
+        <Tip text={t('chat.messageActionBar.moreActions')}>
+          <button
+            type="button"
+            onClick={(e) => e.stopPropagation()}
+            onPointerDown={() => {
+              menuInteractionFromPointerRef.current = true;
+            }}
+            onKeyDown={() => {
+              menuInteractionFromPointerRef.current = false;
+            }}
+            disabled={moreInFlight}
+            className={cn(actionButtonClass, 'data-[state=open]:bg-[var(--cmd-palette-item-hover)]')}
+            aria-label={t('chat.messageActionBar.moreActions')}
+          >
+            {moreInFlight ? (
+              <Spinner size={14} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
+            ) : (
+              <Ellipsis
+                size={14}
+                strokeWidth={2}
+                className={actionIconClass}
+              />
+            )}
+          </button>
+        </Tip>
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align={align === 'left' ? 'start' : 'end'}
@@ -689,15 +659,15 @@ export function MessageActionBar({
       // 操作栏是纯交互件:分享图片的光栅化会按这个标记整条剔除,不进产物。
       {...{ [SHARE_EXCLUDE_ATTR]: '' }}
       className={cn(
-        'flex items-center gap-0.5',
+        'flex flex-wrap items-center gap-0.5',
         align === 'right' ? 'justify-end' : 'justify-start',
         // 250ms is long enough to perceive the fade without dragging.
         // Hover re-enters mid-fade interpolate from the current opacity
         // (browser CSS transition behavior — no replay from 0).
-        'transition-opacity duration-[250ms] ease-out',
+        'transition-opacity duration-[var(--motion-enter)] ease-[var(--motion-ease-out)] motion-reduce:transition-none',
         simplifiedBotConversation || visible || menuOpen
           ? 'opacity-100'
-          : 'opacity-0 pointer-events-none',
+          : 'opacity-0 pointer-events-none focus-within:opacity-100 focus-within:pointer-events-auto',
         // Menu-owned actions dim the entire bar and block clicks. Fork only
         // disables its own button so More remains available.
         moreInFlight && 'opacity-60 pointer-events-none',

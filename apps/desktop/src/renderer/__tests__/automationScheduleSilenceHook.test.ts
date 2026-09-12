@@ -304,7 +304,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     expect(window.electronAPI.maker.schedule.listSidebarIndexRuns).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps read failure history without a red dot after a newer success and reopening', async () => {
+  it('keeps a recovered warning cleared after reopening the task', async () => {
     stubApiWithRuns([
       indexRun({ runId: 'read-failure', status: 'failed', readAt: 30, firedAt: 10 }),
       indexRun({ runId: 'latest-success', status: 'success', readAt: 30, firedAt: 20 }),
@@ -312,8 +312,8 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     const view = renderHook(() => useAutomationScheduleSessionIndex());
     await waitFor(() => {
       expect(view.result.current.get('session-1')).toMatchObject({
-        hasFailedRun: true,
-        latestFailedRun: { runId: 'read-failure', firedAt: 10 },
+        hasFailedRun: false,
+        latestFailedRun: undefined,
         hasUnreadFailedRun: false,
         hasUnreadRun: false,
         unreadRunIds: [],
@@ -324,7 +324,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
     const reopened = renderHook(() => useAutomationScheduleSessionIndex());
     await waitFor(() => {
       expect(reopened.result.current.get('session-1')).toMatchObject({
-        hasFailedRun: true,
+        hasFailedRun: false,
         hasUnreadFailedRun: false,
       });
     });
@@ -335,7 +335,7 @@ describe('useAutomationScheduleSessionIndex marker reconciliation', () => {
       indexRun({ runId: 'read-z', status: 'interrupted', readAt: 30, firedAt: 20 }),
       indexRun({ runId: 'read-a', status: 'failed', readAt: 30, firedAt: 20 }),
       indexRun({ runId: 'older-unread', status: 'failed', readAt: undefined, firedAt: 10 }),
-      indexRun({ runId: 'success', status: 'success', readAt: 30, firedAt: 25 }),
+      indexRun({ runId: 'success', scheduleId: 'other-schedule', status: 'success', readAt: 30, firedAt: 25 }),
     ]);
     const { result } = renderHook(() => useAutomationScheduleSessionIndex());
     await waitFor(() =>

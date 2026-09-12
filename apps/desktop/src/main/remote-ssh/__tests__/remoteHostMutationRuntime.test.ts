@@ -1,4 +1,8 @@
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import { execSync } from 'node:child_process';
+import { mkdtempSync, mkdirSync, symlinkSync, rmSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import type {
   HostConfig,
@@ -130,6 +134,7 @@ vi.mock('../../maker-host/index.js', () => ({
 
 import {
   getRemoteSshPool,
+  probeRemoteWorkingDirectory,
   registerRemoteSshIpc,
   REMOTE_SSH_INVOKE,
 } from '../index.js';
@@ -206,6 +211,103 @@ beforeEach(async () => {
 });
 
 describe('remote SSH mutation runtime semantics', () => {
+  it.each(['\n', '\r', '\r\n'])('rejects injected protocol lines before remote execution (%j)', async (separator) => {
+    await getRemoteSshPool().hydrate([host('worker-dir')]);
+    const remote = getRemoteSshPool().get('worker-dir')!;
+    const status = vi.spyOn(remote, 'getStatus').mockReturnValue('ready');
+    const exec = vi.spyOn(remote, 'exec');
+    try {
+      await expect(probeRemoteWorkingDirectory('worker-dir', `/missing${separator}dir /other`))
+        .rejects.toThrow('unsupported control characters');
+      expect(exec).not.toHaveBeenCalled();
+    } finally {
+      exec.mockRestore();
+      status.mockRestore();
+    }
+  });
+
+  // symlink-platform-skip: Windows cannot represent CR/LF in directory names used as link targets.
+  it.skipIf(process.platform === 'win32')('validates physical paths before emitting the line protocol', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cindy-stat-framing-'));
+    await getRemoteSshPool().hydrate([host('worker-dir')]);
+    const remote = getRemoteSshPool().get('worker-dir')!;
+    const status = vi.spyOn(remote, 'getStatus').mockReturnValue('ready');
+    const exec = vi.spyOn(remote, 'exec').mockImplementation(async (command) => {
+      try {
+        return { exitCode: 0, signal: null, stdout: `banner\n${execSync(command, { encoding: 'utf8' })}`, stderr: '' };
+      } catch {
+        return { exitCode: 64, signal: null, stdout: '', stderr: 'unsupported physical path' };
+      }
+    });
+    try {
+      const normal = join(root, 'project ');
+      mkdirSync(normal);
+      await expect(probeRemoteWorkingDirectory('worker-dir', normal)).resolves.toBe(realpathSync(normal));
+      for (const [i, suffix] of ['\n', '\r', '\ndir other'].entries()) {
+        const target = join(root, `target${suffix}`);
+        const alias = join(root, `alias-${i}`);
+        mkdirSync(target);
+        symlinkSync(target, alias);
+        await expect(probeRemoteWorkingDirectory('worker-dir', alias)).rejects.toThrow('bash exit=64');
+        await expect(probeRemoteWorkingDirectory('worker-dir', join(alias, 'missing'))).rejects.toThrow('bash exit=64');
+      }
+    } finally {
+      exec.mockRestore();
+      status.mockRestore();
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it.each(['dir /remote/project \n', 'Welcome\nnotice\ndir /remote/project \n', 'Welcome\r\ndir /remote/project \r\n'])('preserves trailing whitespace after shell startup output: %j', async (stdout) => {
+    await getRemoteSshPool().hydrate([host('worker-dir')]);
+    const remote = getRemoteSshPool().get('worker-dir')!;
+    const status = vi.spyOn(remote, 'getStatus').mockReturnValue('ready');
+    const exec = vi.spyOn(remote, 'exec').mockResolvedValue({
+      exitCode: 0, signal: null, stdout, stderr: '',
+    });
+    try {
+      await expect(probeRemoteWorkingDirectory('worker-dir', '/remote/project '))
+        .resolves.toBe('/remote/project ');
+      await expect(handler(REMOTE_SSH_INVOKE.STAT_REMOTE_PATH)({}, { id: 'worker-dir', path: '/remote/project ' }))
+        .resolves.toEqual({ kind: 'dir', resolvedPath: '/remote/project ' });
+      expect(exec).toHaveBeenCalledWith(expect.stringContaining("'/remote/project '"),
+        expect.objectContaining({ timeoutMs: 10_000 }));
+    } finally {
+      exec.mockRestore();
+      status.mockRestore();
+    }
+  });
+
+  it.each([true, false])('reconnects only the selected Worker host before probing (success=%s)', async (succeeds) => {
+    const pool = getRemoteSshPool();
+    await pool.hydrate([host('worker-dir'), host('unrelated')]);
+    const remote = pool.get('worker-dir')!;
+    let ready = false;
+    const status = vi.spyOn(remote, 'getStatus').mockImplementation(() => ready ? 'ready' : 'disconnected');
+    const connect = vi.spyOn(pool, 'connect').mockImplementation(async () => {
+      if (!succeeds) throw new Error('fixture connection failed');
+      ready = true;
+    });
+    const exec = vi.spyOn(remote, 'exec').mockResolvedValue({
+      exitCode: 0, signal: null, stdout: 'banner\ndir /remote/project \n', stderr: '',
+    });
+    try {
+      const result = probeRemoteWorkingDirectory('worker-dir', '/remote/project ');
+      if (succeeds) {
+        await expect(result).resolves.toBe('/remote/project ');
+        expect(connect.mock.invocationCallOrder[0]).toBeLessThan(exec.mock.invocationCallOrder[0]!);
+      } else {
+        await expect(result).rejects.toThrow('fixture connection failed');
+        expect(exec).not.toHaveBeenCalled();
+      }
+      expect(connect).toHaveBeenCalledExactlyOnceWith('worker-dir');
+    } finally {
+      exec.mockRestore();
+      connect.mockRestore();
+      status.mockRestore();
+    }
+  });
+
   it('returns a cold-start diagnostic instead of making the host list look valid and empty', () => {
     expect(initialListResult).toMatchObject({
       hosts: [],

@@ -11,7 +11,6 @@ import {
   type SidebarPinnedOrderMutation,
   type SidebarSettingsSnapshot,
 } from '../../../../../shared/sidebarSettings';
-import { reconcileManualProjectOrder } from '@cindy/maker-shared/project-order-sync';
 import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
 
 const log = createLogger('SidebarFilterCore');
@@ -52,8 +51,8 @@ export type FilterStatus = 'active' | 'archived' | 'all';
 export const DIALOGUE_FILTER_KEY = 'dialogue';
 /** 'all' 字符串字面量 = 选中"全部"；string[] = 勾选的 projectKey 和/或 DIALOGUE_FILTER_KEY。 */
 export type FilterProjects = 'all' | string[];
-/** M41: vendor filter — 'all' = 全部；'cc' = 仅 Claude；'codex' = 仅 Codex。 */
-export type FilterVendor = 'all' | 'cc' | 'codex';
+/** Harness filter；沿用 vendor 存储键，兼容已有筛选偏好。 */
+export type FilterVendor = 'all' | 'cc' | 'codex' | 'pi';
 /**
  * Sidebar 主列表分组方式(侧边栏重设计 D 期)。
  *   - project: 「按项目分组」开——有项目的任务收进项目行(默认)。
@@ -268,7 +267,7 @@ export function removeProjectsFromFilter(
 
 /* ============================== vendor load/persist ============================== */
 
-const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex']);
+const VENDOR_VALUES: ReadonlySet<string> = new Set<FilterVendor>(['all', 'cc', 'codex', 'pi']);
 
 export function loadVendor(): FilterVendor {
   const storage = safeStorage();
@@ -457,7 +456,11 @@ export function persistLastActivity(lastActivity: FilterLastActivity): void {
 
 /* ============================== sortBy load/persist ============================== */
 
-const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>(['recency', 'created', 'priority']);
+const SORT_BY_VALUES: ReadonlySet<string> = new Set<FilterSortBy>([
+  'recency',
+  'created',
+  'priority',
+]);
 const PROJECT_ORDER_VALUES: ReadonlySet<string> = new Set<FilterProjectOrder>([
   'activity',
   'custom',
@@ -643,13 +646,29 @@ export function persistManualProjectOrder(order: readonly string[], ownerId: str
 export function normalizeManualProjectOrder(
   prev: readonly string[],
   activeWorkingDirs: readonly string[],
+  localPlatform: string = '',
 ): string[] {
+  const activeKeys = normalizeProjectKeyList(activeWorkingDirs, localPlatform);
+  const activeIdentities = new Set(
+    activeKeys.map((key) => projectKeyComparisonKey(key, localPlatform) ?? key),
+  );
   const prevKeys: string[] = [];
+  const seen = new Set<string>();
   for (const wd of prev) {
     const key = normalizeProjectKey(wd);
-    if (key) prevKeys.push(key);
+    if (!key) continue;
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (!activeIdentities.has(identity) || seen.has(identity)) continue;
+    seen.add(identity);
+    prevKeys.push(key);
   }
-  return reconcileManualProjectOrder(prevKeys, normalizeProjectKeyList(activeWorkingDirs));
+  for (const key of activeKeys) {
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    prevKeys.push(key);
+  }
+  return prevKeys;
 }
 
 export function moveManualProjectOrder(
@@ -658,21 +677,32 @@ export function moveManualProjectOrder(
   sourceWorkingDir: string,
   targetWorkingDir: string,
   position: ManualProjectDropPosition,
+  localPlatform: string = '',
 ): string[] {
-  const normalized = normalizeManualProjectOrder(prev, activeWorkingDirs);
+  const normalized = normalizeManualProjectOrder(prev, activeWorkingDirs, localPlatform);
   const sourceKey = normalizeProjectKey(sourceWorkingDir);
   const targetKey = normalizeProjectKey(targetWorkingDir);
-  if (!sourceKey || !targetKey || sourceKey === targetKey) return normalized;
-  const sourceIndex = normalized.indexOf(sourceKey);
-  const targetIndex = normalized.indexOf(targetKey);
+  if (!sourceKey || !targetKey) return normalized;
+  const sourceIdentity = projectKeyComparisonKey(sourceKey, localPlatform) ?? sourceKey;
+  const targetIdentity = projectKeyComparisonKey(targetKey, localPlatform) ?? targetKey;
+  if (sourceIdentity === targetIdentity) return normalized;
+  const sourceIndex = normalized.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === sourceIdentity,
+  );
+  const targetIndex = normalized.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === targetIdentity,
+  );
   if (sourceIndex < 0 || targetIndex < 0) return normalized;
 
+  const sourceRepresentative = normalized[sourceIndex] as string;
   const withoutSource = normalized.slice();
   withoutSource.splice(sourceIndex, 1);
-  const targetIndexAfterRemoval = withoutSource.indexOf(targetKey);
+  const targetIndexAfterRemoval = withoutSource.findIndex(
+    (key) => (projectKeyComparisonKey(key, localPlatform) ?? key) === targetIdentity,
+  );
   if (targetIndexAfterRemoval < 0) return normalized;
   const insertIndex = position === 'after' ? targetIndexAfterRemoval + 1 : targetIndexAfterRemoval;
-  withoutSource.splice(insertIndex, 0, sourceKey);
+  withoutSource.splice(insertIndex, 0, sourceRepresentative);
   return withoutSource;
 }
 
@@ -754,20 +784,23 @@ export function finishManualPinnedOrderLegacyMigration(ownerId: string | null): 
 export function normalizeManualPinnedOrder(
   prev: readonly string[],
   activeEntryIds: readonly string[],
+  comparisonKey: (entryId: string) => string = (entryId) => entryId,
 ): string[] {
-  const activeSet = new Set(activeEntryIds);
+  const activeSet = new Set(activeEntryIds.map(comparisonKey));
   const seen = new Set<string>();
   const next: string[] = [];
 
   for (const id of prev) {
-    if (!activeSet.has(id) || seen.has(id)) continue;
-    seen.add(id);
+    const identity = comparisonKey(id);
+    if (!activeSet.has(identity) || seen.has(identity)) continue;
+    seen.add(identity);
     next.push(id);
   }
 
   for (const id of activeEntryIds) {
-    if (seen.has(id)) continue;
-    seen.add(id);
+    const identity = comparisonKey(id);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     next.push(id);
   }
 
@@ -790,12 +823,18 @@ export function normalizeManualPinnedOrder(
 export function mergeVisibleReorder(
   currentFullOrder: readonly string[],
   visibleNewOrder: readonly string[],
+  comparisonKey: (id: string) => string = (id) => id,
 ): string[] {
-  const visibleSet = new Set(visibleNewOrder);
-  const queue = [...visibleNewOrder];
+  const storedRepresentatives = new Map<string, string>();
+  for (const id of currentFullOrder) {
+    const identity = comparisonKey(id);
+    if (!storedRepresentatives.has(identity)) storedRepresentatives.set(identity, id);
+  }
+  const visibleSet = new Set(visibleNewOrder.map(comparisonKey));
+  const queue = visibleNewOrder.map((id) => storedRepresentatives.get(comparisonKey(id)) ?? id);
   const result: string[] = [];
   for (const id of currentFullOrder) {
-    if (visibleSet.has(id)) {
+    if (visibleSet.has(comparisonKey(id))) {
       // 可见项槽位:按新顺序依次填;queue 异常耗尽时保留原 id 不丢。
       result.push(queue.length > 0 ? (queue.shift() as string) : id);
     } else {
@@ -814,9 +853,14 @@ export function mergeVisibleReorder(
 export function snapshotManualProjectOrder(
   visualVisibleKeys: readonly string[],
   baselineKeys: readonly string[],
+  localPlatform: string = '',
 ): string[] {
-  const fullOrder = normalizeManualProjectOrder([], baselineKeys);
-  return mergeVisibleReorder(fullOrder, visualVisibleKeys);
+  const fullOrder = normalizeManualProjectOrder([], baselineKeys, localPlatform);
+  return mergeVisibleReorder(
+    fullOrder,
+    visualVisibleKeys,
+    (projectKey) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+  );
 }
 
 /**
@@ -854,18 +898,14 @@ function normalizeFilterEntry(raw: unknown): string | null {
   return normalizeProjectKey(raw);
 }
 
-function normalizeFilterProjectList(
-  values: readonly unknown[],
-  localPlatform?: string,
-): string[] {
+function normalizeFilterProjectList(values: readonly unknown[], localPlatform?: string): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = normalizeFilterEntry(value);
     if (!key) continue;
-    const identity = localPlatform == null
-      ? key
-      : (projectFilterEntryIdentity(key, localPlatform) ?? key);
+    const identity =
+      localPlatform == null ? key : (projectFilterEntryIdentity(key, localPlatform) ?? key);
     if (seen.has(identity)) continue;
     seen.add(identity);
     out.push(key);
@@ -873,13 +913,15 @@ function normalizeFilterProjectList(
   return out;
 }
 
-function normalizeProjectKeyList(values: readonly unknown[]): string[] {
+function normalizeProjectKeyList(values: readonly unknown[], localPlatform: string = ''): string[] {
   const seen = new Set<string>();
   const out: string[] = [];
   for (const value of values) {
     const key = typeof value === 'string' ? normalizeProjectKey(value) : null;
-    if (!key || seen.has(key)) continue;
-    seen.add(key);
+    if (!key) continue;
+    const identity = projectKeyComparisonKey(key, localPlatform) ?? key;
+    if (seen.has(identity)) continue;
+    seen.add(identity);
     out.push(key);
   }
   return out;

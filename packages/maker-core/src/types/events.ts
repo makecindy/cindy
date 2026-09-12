@@ -188,6 +188,11 @@ export interface AgentEvent {
   /** Session.instanceId of the incarnation that dequeued this event. Host-only. */
   sessionInstanceId?: string;
   /**
+   * Host-only recovery notice, independent of the already completed product turn.
+   * Session delivers it on `onRuntimeRecovery`, never on product `onEvent`.
+   */
+  runtimeRecovery?: true;
+  /**
    * Provider-owned claim attached synchronously to a `done` boundary when that
    * boundary has an automatic continuation. Consumers pass it back to the
    * session lifecycle API; unlike a live task-map sample it cannot race later
@@ -222,6 +227,41 @@ export function isTerminalTurnEvent(event: AgentEvent): boolean {
     return data?.isRunning === false;
   }
   return isTerminalAgentErrorEvent(event);
+}
+
+/**
+ * 会刷新 Session 零事件看门狗 / Codex upstream-idle 计时的事件。
+ *
+ * **白名单**，不是「排除心跳」的黑名单。`status` / `account_usage` 是传输层或用量
+ * 心跳；`turn_diff` / `compact_boundary` / `session_id` / `plan_mode_changed` /
+ * `interaction_dismissed` 是系统或诊断帧；`done` / `error`（含 `willRetry: true`
+ * 的非终态 error）由终态路径自己清 watchdog，不能再当存活证据。把这些算进存活，
+ * 会让卡死的 turn 永远像在跑（典型：自动续跑被 vendor accept 之后只剩 usage-refresh
+ * status，banner 被吞、Continue 进不去）。后台事件同样不是当前 turn 的存活证据。
+ *
+ * 超时后的终态 error 交给 interrupted-turn 自动续跑（与 reconnect-stalled
+ * 同类）；额度耗尽才把 Continue 交还用户。
+ */
+const TURN_WATCHDOG_LIVENESS_TYPES = new Set<AgentEventType>([
+  'text',
+  'thinking',
+  'tool_use',
+  'tool_result',
+  'tool_result_full',
+  'agent_task_update',
+  'image',
+  'interaction_request',
+]);
+
+export function isTurnWatchdogLivenessEvent(event: AgentEvent): boolean {
+  if (event.turnScope === 'background') return false;
+  if (event.type === 'text' || event.type === 'thinking') {
+    const text = isRecord(event.data) ? event.data.text : undefined;
+    // Match Desktop's visible-text semantics: whitespace, format and control
+    // characters alone are not progress. Keep the original event untouched.
+    return typeof text === 'string' && /[^\s\p{Cf}\p{Cc}]/u.test(text);
+  }
+  return TURN_WATCHDOG_LIVENESS_TYPES.has(event.type);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

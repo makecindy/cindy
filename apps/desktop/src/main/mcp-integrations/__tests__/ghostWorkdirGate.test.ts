@@ -302,7 +302,7 @@ function makeDeps(
 
 function clearAllPrefs(): void {
   // 把测试涉及的目录 × id 全部清一遍(幂等;清空后 store 自动删文件)。
-  for (const dir of [WORKDIR, '/proj/beta', 'E:/Repo']) {
+  for (const dir of [WORKDIR, `${WORKDIR} `, '/proj/beta', 'E:/Repo']) {
     for (const id of ['art', 'other', 'missing', 'sleeping', 'account']) {
       setGhostDisabledForWorkdir(dir, id, false);
     }
@@ -732,6 +732,13 @@ afterAll(() => {
 });
 
 describe('写路径 roundtrip(真实存储,tmp userData)', () => {
+  it('keeps adjacent whitespace-distinct project overrides independent', () => {
+    setGhostDisabledForWorkdir(WORKDIR, 'art', true);
+    expect(isGhostDisabledForWorkdir('art', `${WORKDIR} `)).toBe(false);
+    setGhostDisabledForWorkdir(`${WORKDIR} `, 'other', true);
+    expect(listDisabledGhostIdsForWorkdir(`${WORKDIR} `)).toEqual(['other']);
+    expect(listDisabledGhostIdsForWorkdir(WORKDIR)).toEqual(['art']);
+  });
   it('set → 生效;清最后一条 → 键与文件一并删除(reset 语义)', () => {
     expect(setGhostDisabledForWorkdir(WORKDIR, 'art', true)).toEqual(['art']);
     expect(fs.existsSync(prefsFile())).toBe(true);

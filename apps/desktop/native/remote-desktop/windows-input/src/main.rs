@@ -5,6 +5,7 @@ use std::{
     sync::mpsc,
     time::Duration,
 };
+use windows_sys::Win32::Foundation::GetLastError;
 use windows_sys::Win32::UI::{HiDpi::*, Input::KeyboardAndMouse::*, WindowsAndMessaging::*};
 mod desktop;
 mod selection;
@@ -12,9 +13,15 @@ mod selection;
 static FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 fn send(input: INPUT) -> bool {
     let ok = unsafe { SendInput(1, &input, std::mem::size_of::<INPUT>() as i32) == 1 };
-    if !ok && !FAILED.swap(true, std::sync::atomic::Ordering::SeqCst) {
-        println!("error");
-        io::stdout().flush().ok();
+    if !ok {
+        let status = unsafe { GetLastError() };
+        if !FAILED.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            // The parent treats any output line as "input failed" and stops
+            // reading, so the reason rides on the one line it already prints:
+            // which call failed and the Win32 status. No coordinates, no text.
+            println!("error send_input {status}");
+            io::stdout().flush().ok();
+        }
     }
     ok
 }
@@ -187,8 +194,8 @@ fn main() {
     let mut keys = HashSet::new();
     let mut buttons = HashSet::new();
     let mut desktop = desktop::InputDesktop::new();
-    if desktop.bind().is_err() {
-        println!("error");
+    if let Err(status) = desktop.bind() {
+        println!("error input_desktop {status}");
         return;
     }
     println!("ready");
@@ -205,8 +212,8 @@ fn main() {
                 break;
             }
             Ok(false) => (),
-            Err(_) => {
-                println!("error");
+            Err(status) => {
+                println!("error input_desktop {status}");
                 io::stdout().flush().ok();
                 break;
             }

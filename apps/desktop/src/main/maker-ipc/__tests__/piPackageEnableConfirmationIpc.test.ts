@@ -59,7 +59,7 @@ describe('Pi package Settings authorization IPC contract', () => {
     const handler = mutationHandlerSource();
     expect(handler).toContain('await invalidateRuntimes();');
     expect(handler).toContain('piPackageMutationMayHaveChangedState(error)');
-    expect(handler).not.toContain("request.action === 'remove'");
+    // Positive versus revoking mutations run through real Session behavior tests.
   });
 
   it('returns partial convergence without rewriting native mutation success', () => {

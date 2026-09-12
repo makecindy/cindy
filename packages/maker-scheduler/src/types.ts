@@ -166,6 +166,8 @@ export type PreRunHookDecision = 'run' | 'skip' | 'block';
  * 之前就失败，也可能通过后继续得到正常的 agent 结果。
  */
 export interface PreRunHookRunResult {
+  /** Explicit successful check, including a healthy no-work skip. Optional for old hooks. */
+  checkSucceeded?: true;
   status: PreRunHookRunStatus;
   decision: PreRunHookDecision;
   exitCode: number | null;

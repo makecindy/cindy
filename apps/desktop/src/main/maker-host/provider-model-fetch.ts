@@ -48,6 +48,9 @@ export interface ProviderModelsFetchSpec {
    * isRendererAccessibleSafeStorageKey）。仅用于“刷新模型”复用已存请求头鉴权的端点。
    */
   savedProviderId?: string;
+  /** Main-only import constraints; ordinary settings discovery keeps its existing policy. */
+  redirect?: 'error';
+  responseByteLimit?: number;
 }
 
 /** 结构化结果（查询型返回：renderer 需要 code 渲染分类文案，不走 throwIpcError）。 */
@@ -130,7 +133,7 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
       explicit && modelsUrl?.origin === baseUrl.origin
         ? explicit
         : deriveModelsDiscoveryUrl(spec.baseUrl),
-    init: { method: 'GET', headers },
+    init: { method: 'GET', headers, ...(spec.redirect ? { redirect: spec.redirect } : {}) },
   };
 }
 
@@ -143,6 +146,31 @@ function networkErrorCode(err: unknown): string {
     return err.name || 'UNKNOWN_NETWORK_ERROR';
   }
   return 'UNKNOWN_NETWORK_ERROR';
+}
+
+/** Count decoded stream bytes before buffering/parsing, including missing or false length headers. */
+async function readLimitedBody(res: Response, limit: number): Promise<string> {
+  if (Number(res.headers.get('content-length')) > limit) {
+    await res.body?.cancel().catch(() => undefined);
+    throw new Error('models response exceeds byte limit');
+  }
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > limit) throw new Error('models response exceeds byte limit');
+      chunks.push(value);
+    }
+    return Buffer.concat(chunks, total).toString('utf8');
+  } finally {
+    await reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 /** 拉一次模型列表并分类结果。fetch 可注入（单测）。 */
@@ -178,7 +206,9 @@ export async function fetchProviderModels(
   if (!res.ok) {
     let bodyText = '';
     try {
-      bodyText = (await res.text()).slice(0, MAX_ERROR_BODY_BYTES);
+      bodyText = spec.responseByteLimit === undefined
+        ? (await res.text()).slice(0, MAX_ERROR_BODY_BYTES)
+        : await readLimitedBody(res, Math.min(spec.responseByteLimit, MAX_ERROR_BODY_BYTES));
     } catch {
       /* 读体失败按空体分类 */
     }
@@ -187,13 +217,15 @@ export async function fetchProviderModels(
   }
   let json: unknown;
   try {
-    json = await res.json();
+    json = spec.responseByteLimit === undefined
+      ? await res.json()
+      : JSON.parse(await readLimitedBody(res, spec.responseByteLimit));
   } catch {
     return {
       ok: false,
       code: 'UNKNOWN',
       status: res.status,
-      detail: 'models response is not JSON',
+      detail: 'models response is not JSON or exceeds the response limit',
     };
   }
   const models = parseModelsListResponse(json);

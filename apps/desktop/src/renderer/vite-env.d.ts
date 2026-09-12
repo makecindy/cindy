@@ -2890,14 +2890,15 @@ interface ElectronAPI {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
+        | { type: 'provider-import'; importId: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => void,
   ) => () => void;
 
   /**
    * 冷启动期间 (mainWindow 未 ready / renderer 未挂 listener) 缓存的 deep link /
-   * --open-folder payload。MainLayout mount 后调一次,take 一次清空——已运行
-   * 场景始终返回 null。未登录用户冷启动 + deep link 时,此机制保证用户完成
+   * --open-folder payload。MainLayout mount 与供应商导入唤醒共用此入口，take 一次清空。
+   * 未登录用户冷启动 + deep link 时,此机制保证用户完成
    * Feishu OAuth 后能继续消费当时的"点击意图"。
    */
   takePendingDeepLink: () => Promise<
@@ -2905,6 +2906,7 @@ interface ElectronAPI {
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
+    | { type: 'provider-import'; importId: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
     | null
   >;
@@ -4644,7 +4646,14 @@ interface ElectronAPI {
     };
     recentWorkdirs: {
       /** 列出"最近工作目录"按 lastUsedAt desc;归档/删除 session 都不影响本列表。 */
-      list: () => Promise<Array<{ path: string; lastUsedAt: string; exists: boolean }>>;
+      list: () => Promise<
+        Array<{
+          path: string;
+          lastUsedAt: string;
+          exists: boolean;
+          knownAgentKinds: string[];
+        }>
+      >;
       /** 从最近列表移除一条(列表卫生,不动 sessions / 磁盘;再次使用会重新入列)。 */
       remove: (input: { path: string }) => Promise<{ deleted: boolean }>;
       /** Broadcast: 任一窗口/远程调用删除条目后通知;返回退订函数。 */
@@ -5262,6 +5271,16 @@ interface ElectronAPI {
       providerId: string,
       options?: { releaseOwner?: boolean; ownerId?: string },
     ) => Promise<{ ok: true }>;
+    previewProviderImport: (
+      importId: string,
+      targetProviderId?: string,
+    ) => Promise<import('../shared/providerImport').ProviderImportPreview>;
+    confirmProviderImport: (
+      importId: string,
+      targetProviderId?: string,
+      interrupt?: true,
+    ) => Promise<import('../shared/providerImport').ProviderImportConfirmResult>;
+    cancelProviderImport: (importId: string) => Promise<{ ok: true }>;
     onProviderOAuthProgress: (
       cb: (progress: {
         providerId: string;
@@ -5269,6 +5288,11 @@ interface ElectronAPI {
         verificationUrl: string;
         userCode: string;
         expiresAt: number;
+      } | {
+        providerId: string;
+        ownerId: string;
+        phase: 'browser-url';
+        url: string | null;
       }) => void,
     ) => () => void;
     /** 自定义供应商上游错误订阅（返回 off）；code 走 providerError.* i18n。 */

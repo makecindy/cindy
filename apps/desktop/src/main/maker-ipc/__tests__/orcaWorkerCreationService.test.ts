@@ -1,3 +1,4 @@
+import path from 'node:path';
 import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -97,6 +98,7 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     })),
     getWorkerDefaults: vi.fn(() => ({})),
     getWorkerPermissionMode: vi.fn(() => 'auto' as const),
+    resolveWorkerWorkingDir: vi.fn(async (dir) => dir),
     getAvailableModels: vi.fn((agent: AgentKind) => (
       agent === 'codex'
         ? [
@@ -187,6 +189,74 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     service: createOrcaWorkerCreationService(deps),
   };
 }
+
+describe('Orca worker working directory', () => {
+  const params: OrcaWorkerCreateParams = {
+    leadSessionId: 'lead-1', role: 'developer', agent: 'codex', label: 'worker',
+    initialTask: 'Run in the assigned project',
+  };
+
+  it('binds the resolved directory before bootstrap (dispatch belongs to lifecycle)', async () => {
+    const requested = path.resolve('candidate link ');
+    const resolved = path.resolve('candidate real ');
+    const { deps, service } = createDeps({
+      resolveWorkerWorkingDir: vi.fn(async () => resolved),
+    });
+    const result = await service.createWorker({ ...params, workingDir: requested });
+    expect(result.ok).toBe(true);
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith(requested, expect.objectContaining({ id: 'lead-1' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: resolved, workspaceKind: 'project',
+    }));
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    expect(vi.mocked(deps.resolveWorkerWorkingDir).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deps.bootstrapSession).mock.invocationCallOrder[0]!);
+  });
+
+  it('preserves Lead directory inheritance when the override is omitted', async () => {
+    const { deps, service } = createDeps();
+    await service.createWorker(params);
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: 'C:\\repo' }));
+  });
+
+  it.each(['', ' ', 'relative/project', './project', 'a\0b'])('rejects invalid directory %j before creating anything', async (workingDir) => {
+    const { deps, service } = createDeps();
+    expect(await service.createWorker({ ...params, workingDir })).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing directory', 'not a directory', 'collaboration disabled'])('does not fall back when resolution fails: %s', async (reason) => {
+    const { deps, service } = createDeps({ resolveWorkerWorkingDir: vi.fn(async () => { throw new Error(reason); }) });
+    expect(await service.createWorker({ ...params, workingDir: path.resolve('candidate') }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
+  it('uses project context when a dialogue Lead explicitly selects a directory', async () => {
+    const { deps, service } = createDeps();
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...lead!, workspaceKind: 'dialogue' });
+    const workingDir = path.resolve('explicit project');
+    expect(await service.createWorker({ ...params, workingDir })).toMatchObject({ ok: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir, workspaceKind: 'project' }));
+  });
+
+  it('resolves SSH paths on the inherited host and binds the result', async () => {
+    const { deps, service } = createDeps();
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...lead!, remoteHostId: 'host-1' });
+    vi.mocked(deps.resolveWorkerWorkingDir).mockResolvedValue('/remote/real');
+    expect(await service.createWorker({ ...params, workingDir: '/remote/project' })).toMatchObject({ ok: true });
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith('/remote/project', expect.objectContaining({ remoteHostId: 'host-1' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/real', remoteHostId: 'host-1' }));
+  });
+});
 
 describe('OrcaWorkerCreationService', () => {
   const workerStatus = (status: OrcaWorkerStatus): OrcaWorkerStatus => status;

@@ -57,6 +57,7 @@
     "collapsedHint": "タップして回答",
     "selectAnswer": "回答 {{label}} を選択",
     "submittingHint": "決定をパソコンに送信中です。重複して送信しないでください。",
+    "decisionNotAccepted": "回答を送信できませんでした。もう一度お試しください。",
     "customAnswerInputAccessibility": "カスタム回答を入力",
     "customAnswerPlaceholder": "その他の回答を入力",
     "customAnswerButtonText": "その他の回答を入力…",

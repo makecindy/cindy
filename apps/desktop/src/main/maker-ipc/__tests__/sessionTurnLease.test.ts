@@ -3,7 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 
 import type { DbClient } from '../../localDb/client/DbClient.js';
 import { tx as runDbTx } from '../../localDb/worker/opHandlers/tx.js';
@@ -294,6 +295,72 @@ describe('shared-process session turn lease', () => {
       tracker.markTurnEndedAndCheckIdle('source-1', 'generation-2'),
     ).resolves.toBe(true);
     await expect(readPersistedSessionTurnLeases(first, 'source-1')).resolves.toEqual([]);
+  });
+
+  it.each([
+    { stage: 'read', successor: false },
+    { stage: 'write', successor: false },
+    { stage: 'read', successor: true },
+  ] as const)('settles retirement after lease $stage failure, preserving successor=$successor', async ({ stage, successor }) => {
+    const { first } = setup();
+    let fail = false;
+    const client = {
+      ...first,
+      query: async <T>(sql: string, params?: unknown[]) => {
+        if (fail && stage === 'read') throw new Error('injected lease read failure');
+        return first.query<T>(sql, params);
+      },
+      tx: async (name: string, args: unknown) => {
+        if (fail && stage === 'write') throw new Error('injected lease write failure');
+        return first.tx(name, args);
+      },
+    } as typeof first;
+    const tracker = new SessionTurnLeaseTracker({
+      getDbClient: () => client, owner: { instanceId: 'first', processId: 101 },
+      createTurnId: () => 'turn', now: () => 1, ownerProcessEnded: () => false,
+    });
+    await tracker.markTurnStarted('source-1', 'turn');
+    let finish!: () => void;
+    let exit!: () => void;
+    const terminal = new Promise<void>(resolve => { finish = resolve; });
+    const closed = new Promise<void>(resolve => { exit = resolve; });
+    const handle = {
+      id: 'runtime', agentKind: 'pi', model: 'm', send: vi.fn(async () => {}),
+      isTurnRunning: () => false, setInteractionResolver() {},
+      close: vi.fn(async () => { exit(); }),
+      async *events() {
+        await terminal;
+        yield { type: 'done', source: 'pi', data: { status: 'completed', silentStop: true } } as AgentEvent;
+        await closed;
+      },
+    } as unknown as AgentSessionHandle;
+    const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const runtime = new Session({ id: 'source-1', agentKind: 'pi', workDir: '/repo', handle,
+      capabilities: {} as never, logger, turnStallMs: 0 });
+    const seen: AgentEvent[] = [];
+    runtime.setTurnLifecycleObserver({
+      beforeProviderStart() {}, onUndispatched() {},
+      onTerminal({ turnGeneration }) { runtime.claimHostTurnContinuation(turnGeneration); },
+    });
+    runtime.onEvent(event => seen.push(event));
+    await runtime.send('work');
+    const generation = runtime.getTurnGeneration();
+    await runtime.closeAfterCurrentTurn();
+    finish();
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+    expect(handle.close).not.toHaveBeenCalled();
+    if (successor) await runtime.sendHostTurnContinuation('already authorized continuation');
+    fail = true;
+    await expect(tracker.markTurnEndedAndCheckIdle('source-1', 'turn',
+      () => runtime.settleHostTurnContinuation(generation))).rejects.toThrow(`injected lease ${stage} failure`);
+    if (successor) {
+      expect(handle.close).not.toHaveBeenCalled();
+      expect(handle.send).toHaveBeenCalledTimes(2);
+      await runtime.close();
+    } else {
+      await vi.waitFor(() => expect(runtime.getStatus()).toBe('closed'));
+      expect(handle.send).toHaveBeenCalledOnce();
+    }
   });
 
   it('refreshes active PID-only leases with exact liveness without overwriting a successor', async () => {

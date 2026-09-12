@@ -88,7 +88,8 @@ import {
   MANAGED_LMSTUDIO_PROVIDER_ID,
   MANAGED_OLLAMA_PROVIDER_ID,
 } from '../../../shared/localModelRuntime';
-import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { ProviderImportDialog } from './ProviderImportDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
@@ -1000,8 +1001,8 @@ function GenericOAuthHeader({
     [],
   );
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
-    useProviderOAuthDeviceCode(provider.id, { observeProgress: deviceFlow });
+  const { deviceCode, browserUrl, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
+    useProviderOAuthDeviceCode(provider.id, { observeProgress: deviceFlow || provider.auth.native === 'codex' });
 
   const handleLogin = useCallback(async () => {
     const attempt = ++loginAttempt.current;
@@ -1094,7 +1095,8 @@ function GenericOAuthHeader({
           disabled: busy,
         };
   const detail =
-    loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined;
+    loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} />
+      : loggingIn && browserUrl ? <OAuthBrowserLink url={browserUrl} /> : undefined;
 
   return (
     <DetailHeader
@@ -2021,6 +2023,16 @@ export function ProvidersSection() {
     modelId: string;
     agent?: AgentKind;
   } | null>(null);
+  const [providerImportId, setProviderImportId] = useState<string | null>(null);
+  const closeProviderImport = useCallback(() => setProviderImportId(null), []);
+  const finishProviderImport = useCallback(
+    (providerId: string) => {
+      setProviderImportId(null);
+      setSelectedId(providerId);
+      refetch();
+    },
+    [refetch],
+  );
   const addProviderButtonRef = useRef<HTMLButtonElement>(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
@@ -2253,7 +2265,7 @@ export function ProvidersSection() {
   }, [detections, byId, listProviders]);
 
   /**
-   * 深链定位(?connect=<id> / ?wizard=1,来自「连接供应商」引导卡等):providers
+   * 深链定位(?connect=<id> / ?wizard=1 / ?import=<opaque-id>):providers
    * 就绪后一次性消费,消费即从 URL 摘除(replace,防返回/刷新重复触发)。
    *   - connect 命中左栏占行的供应商(如 xd)→ 直接选中;
    *   - connect 命中目录内置渠道 → 向导直达该渠道授权步;
@@ -2271,10 +2283,13 @@ export function ProvidersSection() {
       agentParam === 'claude-code' || agentParam === 'codex' || agentParam === 'pi'
         ? agentParam
         : undefined;
-    if (!connect && !wizardFlag) return;
+    const importId = searchParams.get('import');
+    if (!connect && !wizardFlag && !importId) return;
     // 不用一次性 ref:消费后立即删参(下方 replace)即防重放;组件常驻期间
     // 再次带参导航(如二次深链)仍应生效(review 反馈)。
-    if (connect) {
+    if (importId) {
+      setProviderImportId(importId);
+    } else if (connect) {
       const target = byId.get(connect);
       if (target?.source === 'user' && model) {
         setSelectedId(connect);
@@ -2308,6 +2323,7 @@ export function ProvidersSection() {
     next.delete('wizard');
     next.delete('model');
     next.delete('agent');
+    next.delete('import');
     setSearchParams(next, { replace: true });
   }, [loading, searchParams, setSearchParams, byId, listProviders]);
 
@@ -2875,6 +2891,15 @@ export function ProvidersSection() {
             setDialog(null);
             refetch();
           }}
+        />
+      )}
+
+      {providerImportId && (
+        <ProviderImportDialog
+          key={`${dataOwnerId}:${ownerGeneration}:${providerImportId}`}
+          importId={providerImportId}
+          onClose={closeProviderImport}
+          onDone={finishProviderImport}
         />
       )}
     </div>

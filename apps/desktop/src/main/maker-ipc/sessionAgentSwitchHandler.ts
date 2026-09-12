@@ -110,6 +110,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
     sessionId: string,
     intent: PendingAgentSwitchIntent,
     applyNow: boolean,
+    assertSelectionCurrent?: () => void,
   ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
@@ -237,6 +238,8 @@ export interface SessionAgentSwitchResult {
 
 /** 登记的切换意图(下一条消息发送时刻执行;effort/fastMode 由 renderer 按目标引擎解析好带入)。 */
 export interface PendingAgentSwitchIntent {
+  /** Agent-requested complete selection, exposed by the runtime control query. */
+  runtimeSource?: 'agent';
   /** SET_MODEL intent: apply the route without a cross-engine handoff. */
   sameAgentSelection?: boolean;
   targetAgentKind: AgentKind;
@@ -362,6 +365,9 @@ export async function performSessionAgentSwitch(
     applyNow?: boolean;
     /** Abort signal for direct scheduler/IM sends; checked at side-effect boundaries. */
     signal?: AbortSignal;
+    runtimeSource?: 'agent';
+    /** Recheck caller CAS after asynchronous validation, before staging any intent. */
+    assertSelectionCurrent?: () => void;
   },
 ): Promise<SessionAgentSwitchResult> {
   const { sessionId, targetAgentKind, model, providerId, signal } = params;
@@ -402,6 +408,9 @@ export async function performSessionAgentSwitch(
   if (!row || row.status === 'deleted') {
     throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
   }
+  if (params.runtimeSource === 'agent' && row.status === 'archived') {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'archived task cannot change harness');
+  }
   if (row.source === 'review') {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
   }
@@ -413,6 +422,8 @@ export async function performSessionAgentSwitch(
     // Orca lead/worker:协同运行时对 agent 形态有独立契约(docs/dev-rules/orca-team-architecture.md),不掺和。
     throwIpcError('UNSUPPORTED_CAPABILITY', 'agent switch is not supported for Orca sessions');
   }
+
+  params.assertSelectionCurrent?.();
 
   const fromDbKind: DbAgentKind = normalizeDbAgentKind(row.agentKind);
   const toDbKind: DbAgentKind = makerToDbAgentKind(targetAgentKind);
@@ -427,7 +438,8 @@ export async function performSessionAgentSwitch(
         ...(typeof params.effort === 'string' ? { effort: params.effort } : {}),
         ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
         sameAgentSelection: true,
-      }, false);
+        ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
+      }, false, params.assertSelectionCurrent);
       return {
         switched: false,
         agentKind: targetAgentKind,
@@ -478,6 +490,7 @@ export async function performSessionAgentSwitch(
   // 重复登记 = 覆盖(同一意图的最新表达)。
   if (!params.applyNow && deps.pendingSwitches) {
     const intent: PendingAgentSwitchIntent = {
+      ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       targetAgentKind,
       model,
       providerId: normalizedProviderId,
@@ -631,6 +644,7 @@ export async function performSessionAgentSwitch(
               // 清 id 与改边界必须同成同败。失败后重新登记完整意图与恢复载荷,
               // 下一条消息先重试原子恢复尾段,而不是带半状态继续 lazy-create。
               deps.pendingSwitches?.set(sessionId, {
+                ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
                 targetAgentKind,
                 model,
                 providerId: normalizedProviderId,
@@ -654,6 +668,7 @@ export async function performSessionAgentSwitch(
             // 边界插入失败时无法原子保证“清 id + 改边界”。保留意图自愈,
             // 避免只清 sdk id 后 DB pending 与实际注入内容分叉。
             deps.pendingSwitches?.set(sessionId, {
+              ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
               targetAgentKind,
               model,
               providerId: normalizedProviderId,
@@ -727,7 +742,8 @@ export async function performSessionAgentSwitch(
  *    send 事务既有的 SESSION_RUNNING guard / coordinator 重试;
  *  - 空闲 → 执行完整切换事务(skipBootstrap:随后的 lazy-create 会按 DB 新值
  *    spawn),成功后才以 CAS 清 pending;
- *  - 执行失败不阻塞发送,但保留原意图,下一条消息自动重试。resume 回落事务
+ *  - 完整 Agent 选择或同引擎模型选择失败时阻止发送并保留意图；旧跨引擎选择器
+ *    保留原有失败后继续发送的行为。resume 回落事务
  *    已进入 commit point 后若失败,则只重试其原子恢复尾段。
  */
 const pendingAgentSwitchApplyInFlight = new Map<string, Promise<void>>();
@@ -792,6 +808,7 @@ export function applyPendingAgentSwitchIfIdle(
       const result = await performSessionAgentSwitch(deps, {
         sessionId,
         targetAgentKind: intent.targetAgentKind,
+        runtimeSource: intent.runtimeSource,
         model: intent.model,
         providerId: intent.providerId,
         effort: intent.effort,
@@ -803,6 +820,9 @@ export function applyPendingAgentSwitchIfIdle(
         applyNow: true,
         signal: opts?.signal,
       });
+      if (result.retryPending && intent.runtimeSource === 'agent') {
+        throw new Error('Harness switch recovery is pending; retry the send after recovery');
+      }
       // CAS 语义:执行期间用户可能又选了另一个目标,不能把新意图一起清掉。
       if (!result.retryPending && deps.pendingSwitches?.get(sessionId) === intent) {
         deps.pendingSwitches.clear(sessionId);
@@ -820,7 +840,7 @@ export function applyPendingAgentSwitchIfIdle(
         err: err instanceof Error ? err.message : String(err),
       });
       // Never send on the old model after the user's selected route failed preparation.
-      if (intent.sameAgentSelection) throw err;
+      if (intent.sameAgentSelection || intent.runtimeSource === 'agent') throw err;
     }
   })().finally(() => {
     if (pendingAgentSwitchApplyInFlight.get(sessionId) === run) {

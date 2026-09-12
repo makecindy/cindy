@@ -67,7 +67,10 @@ import { removeSessionRefsIfDeleted as removeDeletedSessionMediaRefs } from '../
 import { removeWechatSessionAttachmentDir } from '../../im/wechat/mediaStaging';
 import { upsertRecentWorkdir } from './recentWorkdirs';
 import { createLogger } from '../../logger';
-import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../../shared/sessionSource.js';
+import {
+  DESKTOP_VISIBLE_SESSION_SOURCES,
+  isRetainableProjectSessionSource,
+} from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
@@ -166,9 +169,7 @@ export function setSessionRemovalCleanup(
 }
 
 /** Composition-root injection keeps the localDb IPC layer independent of worktree implementation modules. */
-export function setSessionWorktreeRecycle(
-  recycle: SessionWorktreeRecycle | null,
-): void {
+export function setSessionWorktreeRecycle(recycle: SessionWorktreeRecycle | null): void {
   sessionWorktreeRecycle = recycle;
 }
 
@@ -203,7 +204,8 @@ async function withStatusWriteLock<T>(
     const resources = status === undefined ? [] : await readSessionWorktreeResources(db, sessionId);
     const physicalResources = await Promise.all(resources.map(physicalWorktreeKey));
     const mutate = async () => {
-      if (status === 'archived' || status === 'deleted') await requestWorktreeRecycle(sessionId, resources);
+      if (status === 'archived' || status === 'deleted')
+        await requestWorktreeRecycle(sessionId, resources);
       const result = await task();
       for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
       return result;
@@ -214,7 +216,10 @@ async function withStatusWriteLock<T>(
   return withSessionRouteLock(sessionId, write);
 }
 
-async function requestWorktreeRecycle(sessionId: string, resources: readonly string[] = []): Promise<void> {
+async function requestWorktreeRecycle(
+  sessionId: string,
+  resources: readonly string[] = [],
+): Promise<void> {
   const recycle = sessionWorktreeRecycle;
   if (!recycle) throw new Error('worktree recycle implementation is not wired');
   await recycle(sessionId, resources);
@@ -229,11 +234,20 @@ export async function requestSessionWorktreeRecycle(
 }
 
 /** Read from the same captured database that will receive the status/path update. */
-async function readSessionWorktreeResources(db: DbClient['drizzle'], sessionId: string): Promise<string[]> {
+async function readSessionWorktreeResources(
+  db: DbClient['drizzle'],
+  sessionId: string,
+): Promise<string[]> {
   try {
-    const [row] = await db.select({
-      workingDir: sessions.workingDir, worktreePath: sessions.worktreePath, remoteHostId: sessions.remoteHostId,
-    }).from(sessions).where(eq(sessions.id, sessionId)).limit(1);
+    const [row] = await db
+      .select({
+        workingDir: sessions.workingDir,
+        worktreePath: sessions.worktreePath,
+        remoteHostId: sessions.remoteHostId,
+      })
+      .from(sessions)
+      .where(eq(sessions.id, sessionId))
+      .limit(1);
     if (!row || row.remoteHostId) return [];
     return [row.workingDir, row.worktreePath].flatMap((value) => {
       const root = value ? managedWorktreeRoot(value) : null;
@@ -251,7 +265,10 @@ async function withWorktreeMutation<T>(resources: string[], task: () => Promise<
     const code = (error as { code?: string })?.code;
     if (code && error instanceof Error && error.message.startsWith(`[${code}]`)) throw error;
     log.warn('worktree mutation postponed', { code: code ?? 'unavailable' });
-    throwIpcError('PRECONDITION_FAILED', 'Worktree is busy or its recovery record could not be saved');
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Worktree is busy or its recovery record could not be saved',
+    );
   }
 }
 
@@ -313,11 +330,19 @@ export function broadcastSessionPatched(
   const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
   try {
     if (hasCapturedScope) {
-      broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+      broadcastTap.tapWindowBroadcast(
+        'local-db:sessions:patched',
+        { sessionId, patch },
+        ownerStamp,
+      );
     } else if (ownerStamp === undefined) {
       broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch });
     } else {
-      broadcastTap.tapWindowBroadcast('local-db:sessions:patched', { sessionId, patch }, ownerStamp);
+      broadcastTap.tapWindowBroadcast(
+        'local-db:sessions:patched',
+        { sessionId, patch },
+        ownerStamp,
+      );
     }
   } catch (error) {
     log.warn('session patch device-link broadcast failed', {
@@ -349,6 +374,20 @@ export function broadcastSessionPatched(
         sessionId,
         error: error instanceof Error ? error.message : String(error),
       });
+    }
+  }
+}
+
+function broadcastRecentWorkdirsChanged(path: string, ownerScope: OwnerScope): void {
+  if (!isOwnerScopeCurrent(ownerScope)) return;
+  const hasCapturedScope = ownerScope !== null;
+  const ownerStamp = hasCapturedScope ? ownerScope.ownerStamp : getSafeOwnerPushStamp();
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    if (hasCapturedScope || ownerStamp !== undefined) {
+      window.webContents.send('local-db:recent-workdirs:changed', { path }, ownerStamp);
+    } else {
+      window.webContents.send('local-db:recent-workdirs:changed', { path });
     }
   }
 }
@@ -397,7 +436,8 @@ export async function recycleSessionWorktreeForStatusChange(
     await queueSessionWorktreeRecycle(() => recycleSessionWorktreeInQueue(sessionId, scope));
   } catch (error) {
     log.warn('worktree recycle scheduling postponed', {
-      sessionId, code: (error as NodeJS.ErrnoException).code ?? 'unavailable',
+      sessionId,
+      code: (error as NodeJS.ErrnoException).code ?? 'unavailable',
     });
   }
 }
@@ -409,7 +449,8 @@ async function recycleSessionWorktreeInQueue(
   const affectedWorktreeSessionIds = new Set<string>();
   try {
     const { ownerScope, mediaDb } = capturedScope;
-    const ownerIsCurrent = (): boolean => isOwnerScopeCurrent(ownerScope) && getDbClient().drizzle === mediaDb;
+    const ownerIsCurrent = (): boolean =>
+      isOwnerScopeCurrent(ownerScope) && getDbClient().drizzle === mediaDb;
     if (!ownerIsCurrent()) return;
     const cancelOperations = sessionRemovalCancelOperations;
     const cleanupRemovedSession = sessionRemovalCleanup;
@@ -1210,12 +1251,15 @@ export function registerSessionIpc(
         scheduleSessionListProjectionBackfill(mergedRows);
         return mergedRows.map((r) =>
           sessionToCamel(
-            projectSessionContextWindow({
-              ...r.session,
-              messageCount: r.messageCount,
-              latestMessageExtract: r.latestMessageExtract,
-              latestMessageRole: r.latestMessageRole,
-            }, opts.resolveContextWindow),
+            projectSessionContextWindow(
+              {
+                ...r.session,
+                messageCount: r.messageCount,
+                latestMessageExtract: r.latestMessageExtract,
+                latestMessageRole: r.latestMessageRole,
+              },
+              opts.resolveContextWindow,
+            ),
           ),
         );
       };
@@ -1320,8 +1364,10 @@ export function registerSessionIpc(
       log.info('[localDb] allocated dialogue workspace', { sessionId: id, workingDir });
     }
     const requestedWritableDirs = createBody?.writableDirs ?? [];
-    if (!Array.isArray(requestedWritableDirs)
-      || !requestedWritableDirs.every((dir) => typeof dir === 'string')) {
+    if (
+      !Array.isArray(requestedWritableDirs) ||
+      !requestedWritableDirs.every((dir) => typeof dir === 'string')
+    ) {
       throwIpcError('INVALID_PARAMS', 'writableDirs must be string[]');
     }
     const requestedRemoteHostId = normalizeRemoteHostId(createBody?.remoteHostId);
@@ -1356,9 +1402,13 @@ export function registerSessionIpc(
       autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
       source: 'local-db:sessions:create',
     });
-    const resource = !insertRow.remoteHostId && insertRow.workingDir
-      ? managedWorktreeRoot(insertRow.workingDir) : null;
-    const insert = async () => { await db.insert(sessions).values(insertRow); };
+    const resource =
+      !insertRow.remoteHostId && insertRow.workingDir
+        ? managedWorktreeRoot(insertRow.workingDir)
+        : null;
+    const insert = async () => {
+      await db.insert(sessions).values(insertRow);
+    };
     if (resource) await withWorktreeMutation([resource], insert);
     else await insert();
     const [row] = await db.select().from(sessions).where(eq(sessions.id, id));
@@ -1804,12 +1854,19 @@ export function registerSessionIpc(
       // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
       const statusChanged = p.status !== undefined;
       if (
-        projectTargetChanged &&
+        (projectTargetChanged || p.status === 'deleted' || p.status === 'archived') &&
         row.workspaceKind === 'project' &&
         row.workingDir &&
-        !row.remoteHostId
+        !row.remoteHostId &&
+        isRetainableProjectSessionSource(row.source)
       ) {
-        await upsertRecentWorkdir(row.workingDir, Date.now());
+        const touched = await upsertRecentWorkdir(
+          row.workingDir,
+          Date.now(),
+          process.platform,
+          dbClient,
+        );
+        if (touched) broadcastRecentWorkdirsChanged(row.workingDir, ownerScope);
       }
       // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
       // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
@@ -1875,9 +1932,15 @@ export function registerSessionIpc(
     };
     if (p.workingDir === undefined) return update();
     return withSessionRouteLock(sid, async () => {
-      const [binding] = await db.select({ remoteHostId: sessions.remoteHostId }).from(sessions).where(eq(sessions.id, sid)).limit(1);
-      const resource = !binding?.remoteHostId && typeof p.workingDir === 'string'
-        ? managedWorktreeRoot(p.workingDir) : null;
+      const [binding] = await db
+        .select({ remoteHostId: sessions.remoteHostId })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      const resource =
+        !binding?.remoteHostId && typeof p.workingDir === 'string'
+          ? managedWorktreeRoot(p.workingDir)
+          : null;
       const resources = await readSessionWorktreeResources(db, sid);
       if (resource) resources.push(resource);
       return withWorktreeMutation(resources, update);
@@ -1961,7 +2024,7 @@ export async function patchSessionMetaInDb(
   const setObj = sessionPatchToRow(patch, { bumpUpdatedAt: false });
   // 控制端远程改名走这条,与本机改名同口径(同样先记号后写库)。
   if (patch.title !== undefined) noteUserTitleWritten(sessionId);
-  const updated = await withStatusWriteLock(db, sessionId, patch.status, async () => {
+  const { updated, source } = await withStatusWriteLock(db, sessionId, patch.status, async () => {
     if (patch.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sessionId);
     await writeSessionPatch(db, sessionId, setObj, patch.status);
     const row = await selectSessionWithCount(db, sessionId);
@@ -1971,8 +2034,23 @@ export async function patchSessionMetaInDb(
       row.summary = null;
     }
     cleanupSessionRuntimeForTerminalStatus(sessionId, patch.status);
-    return sessionToCamel(row);
+    return { updated: sessionToCamel(row), source: row.source };
   });
+  if (
+    (patch.status === 'deleted' || patch.status === 'archived') &&
+    updated.workspaceKind === 'project' &&
+    updated.workingDir &&
+    !updated.remoteHostId &&
+    isRetainableProjectSessionSource(source)
+  ) {
+    const touched = await upsertRecentWorkdir(
+      updated.workingDir,
+      Date.now(),
+      process.platform,
+      dbClient,
+    );
+    if (touched) broadcastRecentWorkdirsChanged(updated.workingDir, ownerScope);
+  }
   notifyAgentIslandSessionPatch(updated.id, {
     status: updated.status,
     title: updated.title,
@@ -2166,16 +2244,33 @@ export async function setSessionsStatusInDb(
           throwIpcError(code, message);
         }
         throw err;
-    });
-    for (const item of rows) {
-      cleanupSessionRuntimeForTerminalStatus(item.sessionId, item.status);
-    }
-    for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
-    return rows;
+      });
+      for (const item of rows) {
+        cleanupSessionRuntimeForTerminalStatus(item.sessionId, item.status);
+      }
+      for (const resource of physicalResources) notifyWorktreeRecycleOpportunity(resource);
+      return rows;
     });
   });
   for (const item of applied) {
     compactTerminalSessionToolResults(dbClient, item.sessionId, item.status);
+  }
+  if (status === 'archived') {
+    const touchedAt = Date.now();
+    const localProjectDirs = new Set(
+      applied.flatMap((item) =>
+        item.workspaceKind === 'project' &&
+        item.workingDir &&
+        !item.remoteHostId &&
+        isRetainableProjectSessionSource(item.source)
+          ? [item.workingDir]
+          : [],
+      ),
+    );
+    for (const workingDir of localProjectDirs) {
+      const touched = await upsertRecentWorkdir(workingDir, touchedAt, process.platform, dbClient);
+      if (touched) broadcastRecentWorkdirsChanged(workingDir, ownerScope);
+    }
   }
   if (!isOwnerScopeCurrent(ownerScope))
     return applied.map((item) => ({
@@ -2240,14 +2335,14 @@ export async function deleteBotProfileAndDetachSessionsInDb(
   const ids = [...new Set(sessionIds)];
   const ownerScope = captureOwnerScope();
   const db = getDbClient().drizzle;
-  const commitDeletion = () => commitBotProfileDeletion({
-    botId,
-    sessionIds: ids,
-    keepTaskHistory,
-  });
-  const committed = ids.length > 0
-    ? await withSessionRouteLocks(ids, commitDeletion)
-    : await commitDeletion();
+  const commitDeletion = () =>
+    commitBotProfileDeletion({
+      botId,
+      sessionIds: ids,
+      keepTaskHistory,
+    });
+  const committed =
+    ids.length > 0 ? await withSessionRouteLocks(ids, commitDeletion) : await commitDeletion();
   const status = committed.status;
   const committedSessionIds = [...new Set(committed.sessionIds)];
 
@@ -2361,7 +2456,9 @@ async function piSubagentLauncherProvenStopped(sessionId: string): Promise<boole
       deadline = setTimeout(() => resolve(false), PI_SUBAGENT_CLEANUP_CLOSE_TIMEOUT_MS);
       deadline.unref?.();
     }),
-  ]).finally(() => { if (deadline) clearTimeout(deadline); });
+  ]).finally(() => {
+    if (deadline) clearTimeout(deadline);
+  });
   if (!closed) {
     log.warn('PI Subagent cleanup timed out closing the deleted parent task', { sessionId });
     return false;
@@ -2426,7 +2523,7 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
       });
     }
     if (superseded()) return;
-    const delayMs = Math.min(60_000, 1_000 * (2 ** Math.min(attempt, 6)));
+    const delayMs = Math.min(60_000, 1_000 * 2 ** Math.min(attempt, 6));
     const timer = setTimeout(() => {
       piSubagentCleanupTimers.delete(sessionId);
       scheduleDeletedPiSubagentCleanup(sessionId, attempt + 1);
@@ -2437,7 +2534,12 @@ function scheduleDeletedPiSubagentCleanup(sessionId: string, attempt = 0): void 
 }
 
 export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
-  const parentRoot = path.join(app.getPath('userData'), 'pi-agent-home', 'runtime', 'pi-subagent-runs');
+  const parentRoot = path.join(
+    app.getPath('userData'),
+    'pi-agent-home',
+    'runtime',
+    'pi-subagent-runs',
+  );
   let idsFromDisk: string[] = [];
   try {
     const entries = await fs.readdir(parentRoot, { withFileTypes: true });
@@ -2457,7 +2559,8 @@ export async function resumeDeletedPiSubagentCleanup(): Promise<void> {
     .from(sessions)
     .where(and(eq(sessions.status, 'deleted'), eq(sessions.agentKind, 'pi')));
 
-  const diskDeleted = idsFromDisk.length === 0
+  const diskDeleted =
+    idsFromDisk.length === 0
       ? []
       : await db
           .select({ id: sessions.id })

@@ -830,6 +830,33 @@ describe('Phase 2:切回停泊引擎(resume + 增量交接)', () => {
     });
   }
 
+  it.each([false, true])('Agent recovery retains its source and blocks sending (missing boundary=%s)', async (missingBoundary) => {
+    const pending = createPendingAgentSwitchRegistry();
+    const { deps } = makeResumeDeps({
+      pendingSwitches: pending,
+      bootstrapSwitchedSession: vi.fn(async () => { throw new Error('resume unavailable'); }),
+      applyResumeFallbackAtomically: vi.fn(async () => { throw new Error('transaction unavailable'); }),
+      ...(missingBoundary ? { insertBoundaryMessage: vi.fn(async () => { throw new Error('boundary unavailable'); }) } : {}),
+    });
+    await performSessionAgentSwitch(deps, { ...validParams, runtimeSource: 'agent' });
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toThrow('recovery is pending');
+    expect(pending.get('s1')).toMatchObject({ runtimeSource: 'agent', resumeFallbackRecovery: { boundaryClientId: missingBoundary ? null : 'boundary-client-1' } });
+    await expect(applyPendingAgentSwitchIfIdle(deps, 's1')).rejects.toThrow(missingBoundary ? 'boundary unavailable' : 'transaction unavailable');
+    expect(pending.get('s1')?.runtimeSource).toBe('agent');
+  });
+
+  it('consumes an Agent harness selection through the existing history handoff transaction', async () => {
+    const pending = createPendingAgentSwitchRegistry();
+    const { deps, calls } = makeResumeDeps({ pendingSwitches: pending });
+    await performSessionAgentSwitch(deps, { ...validParams, runtimeSource: 'agent' });
+    expect(calls).toEqual([]);
+    await applyPendingAgentSwitchIfIdle(deps, 's1');
+    expect(calls).toContain('db');
+    expect(calls).toContain('boundary');
+    expect(calls).toContain('bootstrap');
+    expect(pending.get('s1')).toBeUndefined();
+  });
+
   it('有停泊绑定:DB 落停泊 id、交接为增量模式、边界行标 resumed', async () => {
     const { deps } = makeResumeDeps();
     const result = await performSessionAgentSwitch(deps, validParams);

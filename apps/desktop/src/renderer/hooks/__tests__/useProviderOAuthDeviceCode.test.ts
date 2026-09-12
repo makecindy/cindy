@@ -14,6 +14,11 @@ describe('useProviderOAuthDeviceCode', () => {
     verificationUrl: string;
     userCode: string;
     expiresAt?: number;
+  } | {
+    providerId: string;
+    ownerId: string;
+    phase: 'browser-url';
+    url: string | null;
   }) => void) | null = null;
 
   beforeEach(() => {
@@ -58,6 +63,32 @@ describe('useProviderOAuthDeviceCode', () => {
       userCode: 'AAAA',
       expiresAt: 123,
     });
+  });
+  it('keeps browser links only for the active owner and clears on cancel, finish and provider switch', () => {
+    const { result, rerender } = renderHook(({ id }) => useProviderOAuthDeviceCode(id), {
+      initialProps: { id: 'provider-a' },
+    });
+    let first!: ReturnType<typeof result.current.beginOwnedLogin>;
+    act(() => { first = result.current.beginOwnedLogin(); });
+    const progress = (ownerId = first.ownerId!, url: string | null = 'https://auth.openai.com/authorize?fake=1') =>
+      listener?.({ providerId: 'provider-a', ownerId, phase: 'browser-url', url });
+    act(() => progress('unrelated'));
+    expect(result.current.browserUrl).toBeNull();
+    act(() => progress());
+    expect(result.current.browserUrl).toContain('fake=1');
+    act(() => result.current.cancelOwnedLogin());
+    expect(result.current.browserUrl).toBeNull();
+    let next!: typeof first;
+    act(() => { next = result.current.beginOwnedLogin(); progress(next.ownerId); });
+    act(() => { progress(); first.finish(); });
+    expect(result.current.browserUrl).toContain('fake=1');
+    act(() => next.finish());
+    expect(result.current.browserUrl).toBeNull();
+    act(() => progress(next.ownerId));
+    expect(result.current.browserUrl).toBeNull();
+    act(() => { next = result.current.beginOwnedLogin(); progress(next.ownerId); });
+    rerender({ id: 'provider-b' });
+    expect(result.current.browserUrl).toBeNull();
   });
 
   it('unsubscribes without cancelling a login observed from another view', () => {

@@ -133,6 +133,22 @@ export class RemoteDesktopController {
     this.deps.stopVideo();
     this.deps.changed();
   }
+  /**
+   * Input injection failed while the lease is still valid. Input belongs to the
+   * control bit, so release control and keep everything else: ending the lease
+   * here would tear down capture and media, and every phone tap would surface as
+   * a reconnect even though the desktop session itself is healthy. The viewer
+   * observes the new state on its next heartbeat or input attempt.
+   */
+  releaseControl(): void {
+    const active = this.active;
+    if (!active?.controlling) return;
+    active.controlling = false;
+    this.controlGeneration++;
+    this.clipboardTransfer.reset();
+    this.deps.stopInput();
+    this.deps.changed();
+  }
   /** Explicit local disconnect must not be undone by the phone's recovery. */
   stopByUser(): void {
     const target = this.active ?? this.lastEnded;

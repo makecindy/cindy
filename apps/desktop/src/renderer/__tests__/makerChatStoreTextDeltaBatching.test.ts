@@ -298,7 +298,7 @@ function installElectronBridge(): void {
           return vi.fn();
         },
         send: vi.fn(async () => ({ accepted: true })),
-        resolveInteraction: vi.fn(async () => {}),
+        resolveInteraction: vi.fn(async () => ({ accepted: true })),
         submitPluginSetupInline: vi.fn(async () => {}),
         getPendingInteractions,
         steer: vi.fn(async () => true),
@@ -6635,7 +6635,7 @@ describe('makerChatStore text delta batching', () => {
     );
   });
 
-  it('preserves terminal interaction state on late initial DB-created echoes', () => {
+  it('preserves terminal interaction state on late initial DB-created echoes', async () => {
     emitInteractionRequest(
       {
         kind: 'ask_user_question',
@@ -6656,6 +6656,7 @@ describe('makerChatStore text delta batching', () => {
 
     makerChatStore.answerUserQuestion(SESSION_ID, 'ask-terminal', { 'Continue?': 'Yes' });
     makerChatStore.respondToPlanReview(SESSION_ID, 'plan-terminal', false, 'Needs more detail');
+    await flushPromises();
 
     expect(makerChatStore.getSnapshot(SESSION_ID).messages).toEqual(
       expect.arrayContaining([
