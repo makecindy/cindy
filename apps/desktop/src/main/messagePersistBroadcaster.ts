@@ -253,6 +253,21 @@ interface SealedAssistantLateFinalCandidate {
  */
 const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFinalCandidate>();
 
+/**
+ * 最近一次边界(tool_use / interaction / done)flush 掉的 assistant block 身份。
+ *
+ * 交互边界会先 flushAssistantBlock 再落 ask_user / plan_review 行,而交互行会把
+ * lastPersistedMsgBySession 刷成非 assistant —— 紧随其后的 message_end 全文快照
+ * (isFinal + isFullText)看到的上一条已是交互行,相邻 DUP-SKIP 失效,于是同一段
+ * 正文落第二行(现象:回复 → 提问卡 → 同一条回复)。这里单独记住这块已落库的身份,
+ * 让同源快照复用它;新 assistant 行落库 / turn reset / clear 时作废,避免吞掉
+ * 新消息。
+ */
+const lastBoundaryFlushedAssistantBySession = new Map<
+  string,
+  { persistId: string; text: string; agentMessageId?: string }
+>();
+
 function matchesSealedAssistantIdentity(
   candidate: SealedAssistantLateFinalCandidate,
   agentMeta: AgentMeta | null,
@@ -290,6 +305,7 @@ export function noteSessionClearBoundary(sessionId: string, clearedAt: string | 
     clearSessionThinkingSnapshots(sessionId);
     clearBoundaryBySession.set(sessionId, parsed);
     sealedAssistantLateFinalBySession.delete(sessionId);
+    lastBoundaryFlushedAssistantBySession.delete(sessionId);
     // A cleared transcript must not be revived by a late terminal update from an
     // older background task. New tool calls repopulate this linkage after the boundary.
     clearAgentTaskPersistState(sessionId);
@@ -742,6 +758,9 @@ function enqueuePersistAssistant(
   createdAt: number,
   agentMessageId?: string,
 ): void {
+  // 有新的 assistant 行要落库:上一条边界 flush 身份作废,防止迟到的全文快照
+  // 误复用到更早的消息上。flushAssistantBlockInternal 在本函数返回后重新登记。
+  lastBoundaryFlushedAssistantBySession.delete(sessionId);
   noteAssistantTranscriptUuid(sessionId, agentMeta);
   enqueueVisibleDbMessage(`assistant:${sessionId}:${clientId}`, sessionId, {
     clientId,
@@ -1987,6 +2006,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // 不经 notePersistedMessage),若跨 turn 保留,turn1 burst "X" → 用户发消息(不更新 main
   // tracker)→ turn2 又 burst "X" 会被误判重复、跳 create → turn2 回复丢失。清在这里堵死。
   lastPersistedMsgBySession.delete(sessionId);
+  lastBoundaryFlushedAssistantBySession.delete(sessionId);
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
 }
 
@@ -2076,6 +2096,19 @@ export function onAssistantTextEvent(
       if (agentMeta) block.agentMeta = agentMeta;
       return block.persistId;
     }
+    // 边界 flush 后同源的全文快照:交互边界(ask_user / plan_review)会先落
+    // assistant 行、再落交互行,交互行把 lastPersistedMsgBySession 刷成非
+    // assistant,相邻 DUP-SKIP 看不到刚落库的行 —— 这里按身份复用,不落第二行。
+    const boundaryFlushed = lastBoundaryFlushedAssistantBySession.get(sessionId);
+    if (
+      boundaryFlushed &&
+      visible &&
+      boundaryFlushed.text === visible &&
+      (!agentMessageId || boundaryFlushed.agentMessageId === agentMessageId)
+    ) {
+      lastBoundaryFlushedAssistantBySession.delete(sessionId);
+      return boundaryFlushed.persistId;
+    }
     // 非流式 isFinal burst(result 兜底补推也走这):无在飞 block,立即落库。
     if (visible) {
       // DUP-SKIP(对齐 renderer 老 757-762):若紧邻的上一条已落库消息正是内容完全
@@ -2163,6 +2196,13 @@ function flushAssistantBlockInternal(
     block.createdAt,
     block.agentMessageId,
   );
+  // 登记这次边界 flush 的身份,供随后到达的同源 isFinal 全文快照复用(见
+  // onAssistantTextEvent 的 burst 分支)。
+  lastBoundaryFlushedAssistantBySession.set(sessionId, {
+    persistId: block.persistId,
+    text: visible,
+    ...(block.agentMessageId ? { agentMessageId: block.agentMessageId } : {}),
+  });
   return {
     persistId: block.persistId,
     text: visible,
@@ -2589,6 +2629,7 @@ export function clearSessionPersistState(sessionId: string): void {
   pendingFullTextByToolUseId.delete(sessionId);
   toolResultContentByClientId.delete(sessionId);
   lastPersistedMsgBySession.delete(sessionId);
+  lastBoundaryFlushedAssistantBySession.delete(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
   lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   lastAssistantTranscriptUuidBySession.delete(sessionId);

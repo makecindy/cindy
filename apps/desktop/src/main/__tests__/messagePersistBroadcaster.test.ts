@@ -2382,6 +2382,52 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     expect(assistantCreates).toHaveLength(2);
   });
 
+  it('交互边界 flush 后,同源 isFinal 全文快照复用已落库行(ask_user 行打断相邻守卫)', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: false }, null);
+    // 交互边界:先 flush 在飞 assistant,再落 ask_user 行(会把 lastPersistedMsgBySession
+    // 刷成非 assistant,使相邻 DUP-SKIP 失效)。
+    flushAssistantBlock(SESSION, null);
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-dup-after-flush',
+      questions: [{ question: '选哪个?' }],
+    });
+    // 随后 message_end 的权威全文快照(带 usage meta)到达 —— 必须复用同一行。
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: '选哪个?', isFinal: true, isFullText: true },
+      { model: 'pi-test', stopReason: 'toolUse', usage: {} },
+    );
+    expect(lateFinalId).toBe(persistId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+    expect(assistantCreates[0]?.[1]).toEqual(
+      expect.objectContaining({ clientId: persistId, content: '选哪个?' }),
+    );
+  });
+
+  it('交互边界 flush 后,不同 SDK 消息的同文本快照仍单独落行(身份不同不吞)', async () => {
+    const firstId = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-dup-distinct',
+      questions: [{ question: '选哪个?' }],
+    });
+    const secondId = onAssistantTextEvent(
+      SESSION,
+      { text: '选哪个?', isFinal: true, isFullText: true, agentMessageId: 'msg-second' },
+      null,
+    );
+    expect(secondId).not.toBe(firstId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+
   it('P1b:跨 turn(reset 之后)同内容 burst 不去重 → 两次 create、不丢消息', async () => {
     // turn1 非流式 burst "X";turn 结束 reset(用户消息走 renderer、不更新 main tracker,
     // 故必须靠 reset 清 tracker,否则 turn2 同内容 burst 会被误判重复跳 create → 丢回复)。
