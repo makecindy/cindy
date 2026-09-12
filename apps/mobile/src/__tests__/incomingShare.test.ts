@@ -168,7 +168,9 @@ describe('incoming Share Extension payloads', () => {
   it('retains successive shares during login and does not clear the newer native slot', () => {
     setMobileAuthOwner(null);
     let raw = [{ value: 'file:///group/cindy-share-a/report.pdf', shareType: 'file' as const }];
-    const native = { getSharedPayloads: () => raw, clearSharedPayloads: vi.fn(() => { raw = []; }) };
+    const native = { getSharedPayloads: () => raw, clearSharedPayloads: vi.fn((expected) => {
+      if (expected === raw) raw = [];
+    }) };
     receiveIncomingShare(native);
     const first = stageIncomingShareBatch([payload({
       value: raw[0]!.value, contentUri: raw[0]!.value, mimeType: undefined,
@@ -180,14 +182,14 @@ describe('incoming Share Extension payloads', () => {
     expect(consumeIncomingShareBatch(first.id)).toBe(false);
     setMobileAuthOwner('account-a');
     expect(consumeIncomingShareBatch(first.id)).toBe(true);
-    expect(native.clearSharedPayloads).not.toHaveBeenCalled();
+    expect(native.clearSharedPayloads).toHaveBeenCalledTimes(1);
     expect(consumeIncomingShareBatch(first.id)).toBe(false);
     const secondId = incomingShareBatchId([payload({
       value: raw[0]!.value, contentUri: raw[0]!.value, mimeType: undefined,
       contentMimeType: null, contentSize: null,
     })]);
     expect(consumeIncomingShareBatch(secondId)).toBe(true);
-    expect(native.clearSharedPayloads).toHaveBeenCalledTimes(1);
+    expect(native.clearSharedPayloads).toHaveBeenCalledTimes(2);
   });
 
   it('never treats remote URLs as local upload/cleanup targets', () => {

@@ -20,7 +20,17 @@ function patchShareExtension(source) {
     '      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)', 1);
   replace('      try data.write(to: destinationURL)',
     '      try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)\n      try data.write(to: destinationURL)', 1);
-  return source;
+  replace('      userDefaults.set(encoded, forKey: SHARE_INTO_DEFAULTS_KEY)\n      userDefaults.synchronize()',
+    '      do {\n        try IncomingShareSlot.write(encoded, group: appGroupId)\n        return true\n      } catch {\n        print("Error: incoming share could not be saved")\n        return false\n      }', 1);
+  replace('        saveToUserDefaults(payload)',
+    '        guard saveToUserDefaults(payload) else {\n          self.close()\n          return\n        }', 1);
+  replace('  private func saveToUserDefaults(_ payload: [SharePayload]) {',
+    '  private func saveToUserDefaults(_ payload: [SharePayload]) -> Bool {', 1);
+  replace('    guard let userDefaults = UserDefaults(suiteName: appGroupId) else {\n      print("Error: Expo-sharing could not initialize UserDefaults with group: \\(appGroupId)")\n      return\n    }', '', 1);
+  replace('      print("Error: Expo-sharing has failed to serialize shared data to JSON")',
+    '      print("Error: Expo-sharing has failed to serialize shared data to JSON")\n      return false', 1);
+  return source + '\n' + fs.readFileSync(path.join(__dirname,
+    '../modules/cindy-incoming-share/ios/IncomingShareSlot.swift'), 'utf8');
 }
 
 module.exports = config => withXcodeProject(config, mod => {

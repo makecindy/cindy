@@ -25,7 +25,7 @@ export function IncomingShareBridge() {
     const initialOwner = getMobileAuthOwner();
     let stopWatchingAccount: (() => void) | undefined;
     let subscriptions: Array<{ remove(): void }> = [];
-    void import('expo-sharing').then((sharing) => {
+    void import('@/session/incomingShareNative').then((sharing) => {
       if (!active) return;
       stopWatchingAccount = watchIncomingShareAccount(sharing, initialOwner);
       const refresh = () => {

@@ -16,6 +16,10 @@ describe('incoming share native file ownership', () => {
     expect(patched.match(/directory.appendingPathComponent\(fileName\)/g)).toHaveLength(2);
     expect(patched).not.toContain('removeItem(at: destinationURL)');
     expect(patched).toContain('guard !shareStarted else { return }');
+    expect(patched).toContain('try IncomingShareSlot.write(encoded, group: appGroupId)');
+    expect(patched).toContain('guard saveToUserDefaults(payload) else');
+    expect(patched).toContain('enum IncomingShareSlot');
+    expect(patched).not.toContain('userDefaults.set(encoded');
   });
 
   it('fails prebuild when upstream changes the copy contract', () => {

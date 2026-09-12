@@ -18,7 +18,7 @@ vi.mock('@/session/incomingShare', () => ({
   receiveIncomingShare: mock.receive, useIncomingShareBatch: () => null,
   watchIncomingShareAccount: () => mock.stop,
 }));
-vi.mock('expo-sharing', () => ({}));
+vi.mock('@/session/incomingShareNative', () => ({}));
 vi.mock('@/session/incomingShareCleanup', () => ({ cleanupExpiredIncomingShares: mock.cleanup }));
 
 beforeEach(() => { mock.effects.length = 0; vi.clearAllMocks(); });

@@ -85,7 +85,7 @@ function updateIncomingShareOwner(): void {
 
 type IncomingShareNative = {
   getSharedPayloads(): SharePayload[];
-  clearSharedPayloads(): void;
+  clearSharedPayloads(expected: SharePayload[]): void;
 };
 
 /** Also clear a native payload not yet observed by the JS mailbox on logout/switch. */
@@ -98,7 +98,7 @@ export function watchIncomingShareAccount(
     if (!isMobileAuthOwnerCurrent(previous) && !isFirstShareLogin(previous)) {
       try {
         const raw = native.getSharedPayloads();
-        native.clearSharedPayloads();
+        native.clearSharedPayloads(raw);
         void deleteIncomingSharedFiles(raw.map((payload) => payload.value)).catch(() => undefined);
       } catch { /* Sharing is unavailable in older native binaries. */ }
     }
@@ -169,7 +169,6 @@ export function consumeIncomingShareBatch(id: string): boolean {
 export function receiveIncomingShare(native: IncomingShareNative): void {
   const raw = native.getSharedPayloads();
   if (raw.length === 0) return;
-  const key = JSON.stringify(raw);
   const payloads = raw.map((payload): ResolvedSharePayload => ({
     ...payload,
     contentUri: payload.value,
@@ -179,8 +178,8 @@ export function receiveIncomingShare(native: IncomingShareNative): void {
     contentSize: null,
   }));
   stageIncomingShareBatch(payloads, () => {
-    // A second share may replace the native slot while login is pending.
-    if (JSON.stringify(native.getSharedPayloads()) === key) native.clearSharedPayloads();
+    // Native compares the captured bytes and clears under the writer's lock.
+    native.clearSharedPayloads(raw);
   });
 }
 
