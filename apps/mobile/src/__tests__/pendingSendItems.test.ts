@@ -14,8 +14,6 @@ import {
   buildPendingSendItems,
   isPendingSendItemSelected,
   mergePendingSendItems,
-  reconcilePendingSendOrder,
-  type PendingSendOrder,
   pendingSendItemKey,
   pendingSendSpins,
   type MobilePendingSendActions,
@@ -24,6 +22,8 @@ import type { MobileOutboxDisplayItem } from '@/session/sessionOutbox';
 import type { QueuedRemoteMessage, RemoteMessage } from '@/session/types';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
+import { buildMobileStreamingRenderWindow } from '@/session/messageRenderStreamingCache';
+import { appendOptimisticUserMessage, projectOptimisticUserMessages, reconcileOptimisticUserMessages, type OptimisticUserMessage } from '@/session/optimisticUserMessages';
 
 const NO_IDS: ReadonlySet<string> = new Set();
 const NO_PRESENTATION: ReadonlyMap<string, { actions: MobilePendingSendActions; hint: string | null }> = new Map();
@@ -102,179 +102,147 @@ describe('appendPendingSendItems', () => {
 
 describe('reply before user echo', () => {
   const sessionId = 'reply-order';
-  const userSendAt = '2026-07-30T00:00:02.000Z';
-  function row(clientId: string, role: RemoteMessage['role'], createdAt: string): RemoteMessage {
-    return { id: clientId, clientId, sessionId, role, createdAt,
+  function row(clientId: string, role: RemoteMessage['role'], seconds: number): RemoteMessage {
+    return { id: clientId, clientId, sessionId, role,
+      createdAt: new Date(Date.UTC(2026, 6, 30, 0, 0, seconds)).toISOString(),
       content: role === 'user' ? { text: 'Continue' } : 'Reply', toolUseId: null, agentMeta: null };
   }
   function push(message: RemoteMessage) {
     remoteSessionStore.applyRemotePush('dev', 'local-db:messages:created', { sessionId, message });
   }
-  function render(
-    pending: ReturnType<typeof build>,
-    boundary: string | null = userSendAt,
-    baselines: ReadonlyMap<string, string | null> = new Map([['sent', '2026-07-30T00:00:00.000Z']]),
-  ) {
+  function reserve(current: readonly OptimisticUserMessage[] = [], clientId = 'sent') {
+    return appendOptimisticUserMessage(current, remoteSessionStore.getMessages(sessionId), queued(clientId), sessionId);
+  }
+  function render(pending: ReturnType<typeof build>, slots: readonly OptimisticUserMessage[]) {
+    const messages = remoteSessionStore.getMessages(sessionId);
+    const echoed = new Set(messages.map((message) => message.clientId));
     return mergePendingSendItems(buildMobileMessageRenderItems(
-      remoteSessionStore.getMessages(sessionId), { isSessionStreaming: true },
-    ), pending, boundary, new Map([...baselines].map(([id, baseline]) => [id, { baseline }])));
+      projectOptimisticUserMessages(messages, slots), { isSessionStreaming: true, preserveSourceOrder: true },
+    ), pending, new Set(slots.map((entry) => entry.message.clientId).filter((id) => !echoed.has(id))));
   }
   afterEach(() => { remoteSessionStore.clear(); vi.useRealTimers(); });
 
+  it('invalidates the streaming prefix when a local user introduces a new turn boundary', () => {
+    const old = [row('old-user', 'user', 0), { ...row('old-thinking', 'thinking', 1), content: { text: 'Old thought' } }];
+    const previous = buildMobileStreamingRenderWindow({
+      cacheKey: 'en', messages: old, messageStructureToken: {},
+      options: { isSessionStreaming: true, sessionId },
+    });
+    const slots = appendOptimisticUserMessage([], old, queued('sent'), sessionId);
+    const current = [...old, { ...row('new-thinking', 'thinking', 3), content: { text: 'New thought' } }];
+    const next = buildMobileStreamingRenderWindow({
+      cacheKey: 'en', messages: projectOptimisticUserMessages(current, slots),
+      messageStructureToken: {}, previousPrefix: previous.prefix,
+      options: { isSessionStreaming: true, preserveSourceOrder: true, sessionId },
+    });
+    expect(next.items.map((item) => item.key)).toEqual([
+      'message-old-user', 'work-old-thinking', 'message-sent', 'work-new-thinking',
+    ]);
+  });
+
   it.each(['settling', 'sending'])('keeps the %s bubble before an early reply and replaces it in place', (phase) => {
-    push(row('old-user', 'user', '2026-07-30T00:00:00.000Z'));
-    push(row('old-reply', 'assistant', '2026-07-30T00:00:01.000Z'));
+    push(row('old-user', 'user', 0));
+    push(row('old-reply', 'assistant', 1));
+    const slots = reserve(); // The production send path reserves BEFORE enqueue.
     const pending = build({
       settling: phase === 'settling' ? [queued('sent')] : [],
       queue: phase === 'sending' ? [queued('sent'), queued('next')] : [queued('next')],
       sendingClientIds: new Set(phase === 'sending' ? ['sent'] : []),
       outbox: [outboxItem('upload', { attachmentCount: 1, uploadedCount: 0 })],
     });
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    const before = render(pending);
+    push(row('reply', 'assistant', 3));
+    const before = render(pending, slots);
     expect(before.map((item) => item.key)).toEqual([
       'message-old-user', 'message-old-reply', 'message-sent', 'message-reply', 'message-next', 'message-upload',
     ]);
     expect(before[2]).toBe(pending[0]);
-    push(row('sent', 'user', userSendAt));
-    // Deliberately keep the stale pending snapshot: no duplicate or position change.
-    expect(render(pending).map((item) => item.key)).toEqual(before.map((item) => item.key));
-    expect(render(pending)[2].type).toBe('message');
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    expect(render(pending).map((item) => item.key)).toEqual(before.map((item) => item.key));
+    push(row('sent', 'user', 2));
+    expect(render(pending, slots).map((item) => item.key)).toEqual(before.map((item) => item.key));
+    expect(render(pending, slots)[2].type).toBe('message');
   });
 
-  it('keeps streaming deltas behind the pending user without consulting the phone clock', () => {
+  it.each(['2020-01-01', '2030-01-01'])('ignores a phone clock set to %s', (clock) => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date('2030-01-01'));
-    const pending = build({ settling: [queued('sent')] });
+    vi.setSystemTime(new Date(clock));
+    const source = queued('sent');
+    source.chatMessage.createdAt = new Date().toISOString();
+    const slots = appendOptimisticUserMessage([], [], source, sessionId);
+    const pending = build({ settling: [source] });
     remoteSessionStore.applyRemotePush('dev', 'maker:event', {
       sessionId, persistId: 'reply', event: { type: 'text', data: { text: 'Reply', isFinal: false } },
     });
     vi.advanceTimersByTime(100);
-    expect(render(pending).map((item) => item.key)).toEqual(['message-sent', 'message-reply']);
-    push(row('sent', 'user', userSendAt));
-    expect(render(pending).map((item) => item.key)).toEqual(['message-sent', 'message-reply']);
+    expect(render(pending, slots).map((item) => item.key)).toEqual(['message-sent', 'message-reply']);
+    push(row('sent', 'user', 2));
+    expect(render(pending, slots).map((item) => item.key)).toEqual(['message-sent', 'message-reply']);
   });
 
-  it('places the boundary before folded work, not just before reply text', () => {
-    push(row('old-user', 'user', '2026-07-30T00:00:00.000Z'));
-    push(row('old-reply', 'assistant', '2026-07-30T00:00:01.000Z'));
-    push({ ...row('thinking', 'thinking', userSendAt), content: { text: 'Thinking' } });
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    const items = render(build({ settling: [queued('sent')] }));
-    const work = items.find((item) => item.type === 'work_group');
-    expect(work?.startedAtMs).toBeLessThan(Date.parse(userSendAt));
-    expect(items[2].key).toBe('message-sent');
-    expect(items[3]).toBe(work);
-    expect(items.at(-1)?.key).toBe('message-reply');
+  it('separates new folded work from the previous turn before grouping', () => {
+    push(row('old-user', 'user', 0));
+    push({ ...row('old-thinking', 'thinking', 1), content: { text: 'Old thought' } });
+    const slots = reserve();
+    push({ ...row('thinking', 'thinking', 3), content: { text: 'New thought' } });
+    const items = render(build({ settling: [queued('sent')] }), slots);
+    expect(items.map((item) => item.key)).toEqual([
+      'message-old-user', 'work-old-thinking', 'message-sent', 'work-thinking',
+    ]);
   });
 
-  it('skips a foreign settling item without blocking the matching local send', () => {
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    const pending = build({ settling: [queued('foreign'), queued('sent')] });
-    expect(render(pending).map((item) => item.key))
-      .toEqual(['message-sent', 'message-reply', 'message-foreign']);
+  it.each(['image', 'synthetic'])('retains the reserved %s bubble before reply grouping', (kind) => {
+    const source = queued('sent', kind === 'synthetic' ? '[UI_ACTION_TRIGGER] hidden action' : '');
+    if (kind === 'image') source.chatMessage.images = [{ url: 'https://example.com/image.png', name: 'image.png' }];
+    const slots = appendOptimisticUserMessage([], [], source, sessionId);
+    push(row('reply', 'assistant', 3));
+    const pending = build({ settling: [source] });
+    const items = render(pending, slots);
+    expect(items.map((item) => item.key)).toEqual(['message-sent', 'message-reply']);
+    expect(items[0]).toBe(pending[0]);
+    expect(JSON.stringify(items[0])).not.toContain('hidden action');
   });
 
-  it.each(['first', 'second'])('keeps both turn positions when the %s echo arrives first', (firstEcho) => {
-    const secondBoundary = '2026-07-30T00:00:04.000Z';
+  it.each(['sent', 'second'])('keeps two reserved positions when %s echoes first', (firstEcho) => {
+    let slots = reserve();
+    push(row('reply', 'assistant', 3));
+    slots = reserve(slots, 'second');
+    push(row('second-reply', 'assistant', 5));
     let pending = build({ settling: [queued('sent'), queued('second')] });
-    let order: ReadonlyMap<string, PendingSendOrder> = new Map([
-      ['sent', { baseline: '2026-07-30T00:00:00.000Z' }],
-      ['second', { baseline: userSendAt }],
-    ]);
-    const draw = (boundary = secondBoundary) => {
-      order = reconcilePendingSendOrder(order, pending, boundary);
-      return mergePendingSendItems(buildMobileMessageRenderItems(
-        remoteSessionStore.getMessages(sessionId), { isSessionStreaming: true },
-      ), pending, boundary, order).map((item) => item.key);
-    };
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    push(row('second-reply', 'assistant', '2026-07-30T00:00:05.000Z'));
     const expected = ['message-sent', 'message-reply', 'message-second', 'message-second-reply'];
-    expect(draw()).toEqual(expected);
-    const echoedId = firstEcho === 'first' ? 'sent' : 'second';
-    push(row(echoedId, 'user', echoedId === 'sent' ? userSendAt : secondBoundary));
-    expect(draw()).toEqual(expected); // stale pending snapshot still deduplicates
-    pending = pending.filter((item) => item.clientId !== echoedId);
-    expect(draw()).toEqual(expected); // pruning the later baseline must not move the older bubble
-    expect(order.has(echoedId)).toBe(false);
-    expect(draw('2026-07-30T00:00:06.000Z')).toEqual(expected);
-    const remaining = echoedId === 'sent' ? 'second' : 'sent';
-    push(row(remaining, 'user', remaining === 'sent' ? userSendAt : secondBoundary));
-    expect(draw()).toEqual(expected);
-    expect(reconcilePendingSendOrder(order, [], secondBoundary).size).toBe(0);
+    expect(render(pending, slots).map((item) => item.key)).toEqual(expected);
+    push(row(firstEcho, 'user', firstEcho === 'sent' ? 2 : 4));
+    expect(render(pending, slots).map((item) => item.key)).toEqual(expected);
+    pending = pending.filter((item) => item.clientId !== firstEcho);
+    slots = reconcileOptimisticUserMessages(slots, remoteSessionStore.getMessages(sessionId),
+      new Set(pending.map((item) => item.clientId)), new Set([firstEcho]));
+    expect(render(pending, slots).map((item) => item.key)).toEqual(expected);
   });
 
-  it('pins an observed turn before a later send starts and never assigns queued work early', () => {
-    let order: ReadonlyMap<string, PendingSendOrder> = new Map([['sent', { baseline: null }]]);
-    let pending = build({ settling: [queued('sent')] });
-    order = reconcilePendingSendOrder(order, pending, userSendAt);
-    expect(order.get('sent')?.boundary).toBe(Date.parse(userSendAt));
-    order = new Map([...order, ['next', { baseline: userSendAt }]]);
-    pending = build({ settling: [queued('sent')], queue: [queued('next')] });
-    const nextBoundary = '2026-07-30T00:00:04.000Z';
-    order = reconcilePendingSendOrder(order, pending, nextBoundary);
-    expect(order.get('sent')?.boundary).toBe(Date.parse(userSendAt));
-    expect(order.get('next')?.boundary).toBeUndefined();
-    pending = build({ settling: [queued('sent'), queued('next')] });
-    order = reconcilePendingSendOrder(order, pending, nextBoundary);
-    expect(order.get('next')?.boundary).toBe(Date.parse(nextBoundary));
-    expect(reconcilePendingSendOrder(order, pending, nextBoundary)).toBe(order);
+  it('keeps a busy follow-up and unsent outbox at the tail until dispatch', () => {
+    push(row('current', 'user', 0));
+    const pending = build({ queue: [queued('next')], sendingClientIds: new Set(['next']), outbox: [outboxItem('upload')] });
+    push(row('reply', 'assistant', 3));
+    expect(render(pending, []).map((item) => item.key))
+      .toEqual(['message-current', 'message-reply', 'message-next', 'message-upload']);
+    const slots = reserve([], 'next');
+    push(row('next-reply', 'assistant', 5));
+    expect(render(build({ settling: [queued('next')] }), slots).map((item) => item.key))
+      .toEqual(['message-current', 'message-reply', 'message-next', 'message-next-reply']);
   });
 
-  it('leaves a follow-up behind the current response when the current user is already visible', () => {
-    push(row('current', 'user', userSendAt));
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    const pending = build({ queue: [queued('next')], sendingClientIds: new Set(['next']) });
-    expect(render(pending).map((item) => item.key)).toEqual(['message-current', 'message-reply', 'message-next']);
+  it('drops failed, cancelled, and rolled-back queue reservations', () => {
+    const slots = reserve();
+    expect(reconcileOptimisticUserMessages(slots, [], NO_IDS, NO_IDS)).toEqual([]);
+    expect(reconcileOptimisticUserMessages(slots, [], new Set(['sent']), NO_IDS)).toBe(slots);
+    expect(reconcileOptimisticUserMessages(slots, [row('sent', 'user', 2)], NO_IDS, NO_IDS)).toBe(slots);
+    expect(reconcileOptimisticUserMessages(slots, [row('sent', 'user', 2)], NO_IDS, new Set(['sent']))).toEqual([]);
   });
 
-  it('does not assign the same observed turn to two sends with the same baseline', () => {
-    let order: ReadonlyMap<string, PendingSendOrder> = new Map([
-      ['sent', { baseline: null }], ['next', { baseline: null }],
-    ]);
-    let pending = build({ settling: [queued('sent'), queued('next')] });
-    order = reconcilePendingSendOrder(order, pending, userSendAt);
-    expect(order.get('sent')?.boundary).toBe(Date.parse(userSendAt));
-    expect(order.get('next')?.boundary).toBeUndefined();
-    push(row('sent', 'user', userSendAt));
-    pending = pending.filter((item) => item.clientId !== 'sent');
-    order = reconcilePendingSendOrder(order, pending, userSendAt);
-    order = reconcilePendingSendOrder(order, pending, userSendAt);
-    expect(order.get('next')?.boundary).toBeUndefined();
-    const secondBoundary = '2026-07-30T00:00:04.000Z';
-    order = reconcilePendingSendOrder(order, pending, secondBoundary);
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    push(row('next-reply', 'assistant', '2026-07-30T00:00:05.000Z'));
-    expect(mergePendingSendItems(buildMobileMessageRenderItems(
-      remoteSessionStore.getMessages(sessionId), { isSessionStreaming: true },
-    ), pending, secondBoundary, order).map((item) => item.key))
-      .toEqual(['message-sent', 'message-reply', 'message-next', 'message-next-reply']);
-  });
-
-  it('does not promote a queued follow-up or an unsent outbox entry into the current turn', () => {
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    const pending = build({ queue: [queued('next')], outbox: [outboxItem('local')] });
-    expect(render(pending).map((item) => item.key)).toEqual(['message-reply', 'message-next', 'message-local']);
-  });
-
-  it('does not invent a boundary from missing or invalid host metadata', () => {
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    const pending = build({ settling: [queued('sent')] });
-    for (const boundary of [null, 'invalid']) {
-      expect(render(pending, boundary).map((item) => item.key)).toEqual(['message-reply', 'message-sent']);
-    }
-  });
-
-  it('does not mistake an unloaded old user row for the message just sent', () => {
-    push(row('reply', 'assistant', '2026-07-30T00:00:03.000Z'));
-    const pending = build({ queue: [queued('sent')], sendingClientIds: new Set(['sent']) });
-    for (const baselines of [new Map<string, string | null>(), new Map([['sent', userSendAt]])]) {
-      expect(render(pending, userSendAt, baselines).map((item) => item.key))
-        .toEqual(['message-reply', 'message-sent']);
-    }
+  it('preserves prepended history and does not use timestamps to reanchor the send', () => {
+    push(row('old-reply', 'assistant', 1));
+    const slots = reserve();
+    push(row('older-user', 'user', 0));
+    push(row('reply', 'assistant', 3));
+    expect(render(build({ settling: [queued('sent')] }), slots).map((item) => item.key))
+      .toEqual(['message-older-user', 'message-old-reply', 'message-sent', 'message-reply']);
   });
 });
 

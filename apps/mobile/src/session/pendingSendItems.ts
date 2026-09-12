@@ -12,8 +12,8 @@
  * 进了 data 之后:与正式消息同容器、同 key(`message-${clientId}`)、同一处位置,回流就是
  * 同一个列表位置上的内容替换 —— 原地变实,零跳动;listData 也不再为空,居中占位自然不出现。
  *
- * 未派发条目保持队列 / outbox 顺序。已派发但缺少正式回流的气泡，按主机本轮
- * userSendAt 放在回复之前，不能简单追加到回复后面。
+ * 未派发条目保持队列 / outbox 顺序。已派发气泡在分组前占据本地用户消息的位置，
+ * 正式回流以同一个 clientId 原位替换，不比较控制端与主机的时钟。
  */
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
 import {
@@ -28,7 +28,7 @@ import {
 } from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
 import type { GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
-import type { MobileMessageRenderItem, MobileWorkChildItem } from '@/session/messageRenderModel';
+import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
 
 export type MobilePendingSendPhase =
   /** 已确认入队,等被控端派发。 */
@@ -120,91 +120,17 @@ export function appendPendingSendItems<T extends { key: string }>(
   return remaining.length === 0 ? rendered : [...rendered, ...remaining];
 }
 
-/**
- * The host's current user boundary can arrive before its persisted user row. Keep
- * that row's settling bubble before the reply, including folded work, until the
- * echo replaces it. Queued follow-ups and local uploads still belong at the tail.
- * Compare only host timestamps: a phone's enqueue time is not a host ordering fact.
- */
-export interface PendingSendOrder {
-  baseline: string | null;
-  /** Once observed, this send's host boundary must not follow later turns. */
-  boundary?: number;
-}
-
-/** Resolve all sends before pruning: a later send's baseline identifies the
- * preceding turn even when both user echoes are still missing. */
-export function reconcilePendingSendOrder(
-  order: ReadonlyMap<string, PendingSendOrder>,
-  pending: readonly MobilePendingSendItem[],
-  userSendAt: string | null | undefined,
-): ReadonlyMap<string, PendingSendOrder> {
-  const boundaries = [...new Set([
-    Date.parse(userSendAt ?? ''),
-    ...[...order.values()].flatMap((entry) => [Date.parse(entry.baseline ?? ''), entry.boundary ?? NaN]),
-  ].filter(Number.isFinite))].sort((a, b) => a - b);
-  const assigned = new Set([...order.values()].map((entry) => entry.boundary));
-  const next = new Map<string, PendingSendOrder>();
-  for (const item of pending) {
-    const entry = order.get(item.clientId);
-    if (!entry) continue;
-    const baseline = entry.baseline === null ? -Infinity : Date.parse(entry.baseline);
-    const boundary = entry.boundary ?? (isDispatchedPending(item)
-      ? boundaries.find((value) => value > baseline && !assigned.has(value)) : undefined);
-    if (boundary !== undefined) assigned.add(boundary);
-    // Preserve the lower bound when an earlier echo is pruned. Otherwise a
-    // waiting send could claim that same turn on the next render.
-    const claimed = boundary === undefined ? boundaries.filter((value) => assigned.has(value) && value > baseline).at(-1) : undefined;
-    const nextBaseline = claimed === undefined ? entry.baseline : new Date(claimed).toISOString();
-    next.set(item.clientId, boundary === entry.boundary && nextBaseline === entry.baseline
-      ? entry : { baseline: nextBaseline, boundary });
-  }
-  return next.size === order.size && [...next].every(([id, entry]) => order.get(id) === entry)
-    ? order : next;
-}
-
-function isDispatchedPending(item: MobilePendingSendItem): boolean {
-  return item.phase === 'settling' || (item.phase === 'sending' && item.queueIndex === 1);
-}
-
+/** Replace only local placeholders; durable echoes win even with stale queue state. */
 export function mergePendingSendItems(
   rendered: readonly MobileMessageRenderItem[],
   pending: readonly MobilePendingSendItem[],
-  userSendAt: string | null | undefined,
-  sendOrder: ReadonlyMap<string, PendingSendOrder>,
+  optimisticClientIds: ReadonlySet<string>,
 ): readonly MobileMessageRenderItem[] {
-  const appended = appendPendingSendItems(rendered, pending);
-  if (appended === rendered) return appended;
-  const order = reconcilePendingSendOrder(sendOrder, pending, userSendAt);
-  const waiting = appended.slice(rendered.length) as MobilePendingSendItem[];
-  const insertions = new Map<number, MobilePendingSendItem[]>();
-  const tail: MobilePendingSendItem[] = [];
-  for (const item of waiting) {
-    const boundary = order.get(item.clientId)?.boundary;
-    const replyIndex = boundary !== undefined && isDispatchedPending(item)
-      ? rendered.findIndex((row) => renderItemStartsAt(row) >= boundary) : -1;
-    const firstRow = rendered[replyIndex];
-    // An existing user boundary needs no placeholder. A later user must not
-    // suppress an earlier bubble when its own response is already visible.
-    if (replyIndex < 0 || (firstRow.type === 'message' && firstRow.message.source.role === 'user')) tail.push(item);
-    else insertions.set(replyIndex, [...(insertions.get(replyIndex) ?? []), item]);
-  }
-  return insertions.size === 0 ? appended
-    : [...rendered.flatMap((item, index) => [...(insertions.get(index) ?? []), item]), ...tail];
-}
-
-function renderItemStartsAt(item: MobileMessageRenderItem | MobileWorkChildItem): number {
-  switch (item.type) {
-    case 'message':
-    case 'thinking': return Date.parse(item.message.source.createdAt);
-    case 'tool_group':
-    case 'tool_media': return Date.parse(item.tools[0]?.source.createdAt ?? '');
-    case 'todo':
-    case 'agent_task': return Date.parse(item.createdAt);
-    case 'work_group': return item.children.length > 0 ? renderItemStartsAt(item.children[0]) : NaN;
-    case 'subagent_group': return item.childItems.length > 0 ? renderItemStartsAt(item.childItems[0]) : NaN;
-    default: return NaN;
-  }
+  const byId = new Map(pending.map((item) => [item.clientId, item]));
+  const replaced = optimisticClientIds.size === 0 ? rendered : rendered.map((item) =>
+    item.type === 'message' && optimisticClientIds.has(item.message.source.clientId)
+      ? byId.get(item.message.source.clientId) ?? item : item);
+  return appendPendingSendItems(replaced, pending);
 }
 
 /**
