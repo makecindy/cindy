@@ -300,6 +300,39 @@ describe('WorkdirWatchManager 过滤开关', () => {
   });
 
   /**
+   * 评审 P2：watcher 报错后紧接着的 reconcile 又失败时不能只记日志 —— 消费者
+   * 意图还在 desired，但没有 watcher、也没有定时器再收敛，SSH 连接没断的情况下
+   * 事件会永久停止。要有带退避与上限的重试（退避避免持续失败时紧密重建循环）。
+   */
+  it('watcher 出错后收敛失败:退避重试直到恢复', async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new WorkdirWatchManager(() => {});
+      await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+      expect(h.created).toHaveLength(1);
+
+      // 触发 error（拆掉 entry → 立即 reconcile），并让这次 reconcile 失败。
+      let failWith = (_err: Error): void => {};
+      h.gate = new Promise<void>((_resolve, reject) => {
+        failWith = reject;
+      });
+      const onSpy = h.created[0].watcher.on as unknown as ReturnType<typeof vi.fn>;
+      const handler = onSpy.mock.calls.find(([evt]) => evt === 'error')?.[1] as (err: Error) => void;
+      handler(new Error('boom'));
+      failWith(new Error('reconcile failed'));
+      await vi.advanceTimersByTimeAsync(0);
+
+      // 退避（500ms）后重试成功：重新建出活着的 watcher。
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.created.length).toBeGreaterThanOrEqual(2);
+      expect(h.created.at(-1)?.closed).toBe(false);
+      manager.stopAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
    * 评审 P1：启动失败时若把消费者的意图留在 desired 里，控制端只会清本地注册、
    * 不会再发 watchStop → daemon 里多出一个幽灵消费者：它抬高别的消费者的可见性
    * 并集，最后一人 stop 时还会把它当孤儿 watcher 留下。

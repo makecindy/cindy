@@ -419,6 +419,11 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
     refCount: 0,
     listeners: new Set(),
   };
+  // 继承来的展开集合要按**（可能已过滤的）**树剪一次：剪枝那条路径挂在 fetch
+  // 成功分支上，根请求失败时根本不会执行 —— 而 reveal-only 路径一旦被写进本
+  // scope 的 localStorage（用户在错误恢复前操作目录、或 expandToPath 等路径），
+  // 下次挂载就会变成最多 200 次无用 listDir（评审 P2）。剪完顺带回写本 scope。
+  pruneExpandedForCurrentTree(store);
   stores.set(key, store);
   return store;
 }

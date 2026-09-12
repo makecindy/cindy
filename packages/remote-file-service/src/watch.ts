@@ -126,6 +126,11 @@ function sameWatchOptions(a: WatchFilterOptions, b: WatchFilterOptions): boolean
 
 const COALESCE_MS = 50;
 
+/** watcher 报错后重建的退避参数：起点 / 上限 / 次数上限。 */
+const RECONCILE_RETRY_BASE_MS = 500;
+const RECONCILE_RETRY_MAX_MS = 8_000;
+const RECONCILE_RETRY_LIMIT = 5;
+
 export class WorkdirWatchManager {
   private readonly entries = new Map<string, WatchEntry>();
   /** 启动中的 workdir:has 判定与 entries.set 之间隔着 loadIgnoreMatcher 的
@@ -140,6 +145,10 @@ export class WorkdirWatchManager {
    *  一份,选项取全部消费者的可见性并集(见 effectiveOptions);start() / stop()
    *  每轮重读它收敛。 */
   private readonly desired = new Map<string, Map<string, ConsumerIntent>>();
+
+  /** watcher 报错后的重建重试定时器与次数（退避 + 上限，见 scheduleReconcileRetry）。 */
+  private readonly retryTimers = new Map<string, NodeJS.Timeout>();
+  private readonly retryAttempts = new Map<string, number>();
 
   /** 没带 consumerId 的调用方(旧控制端 / 内部调用)归到这个默认消费者。 */
   private static readonly DEFAULT_CONSUMER = 'default';
@@ -166,6 +175,7 @@ export class WorkdirWatchManager {
     this.desired.set(workdir, consumers);
     try {
       await this.reconcile(workdir);
+      this.clearReconcileRetry(workdir); // 新意图已生效:旧的重试状态作废
       // 成功才记 committed:失败回滚只恢复到「真的生效过」的值。
       const settled = this.desired.get(workdir)?.get(consumerId);
       if (settled && settled.options === attempted) settled.committed = attempted;
@@ -258,6 +268,52 @@ export class WorkdirWatchManager {
     return { showIgnoredDirs, hideMetaFiles: !showMetaFiles };
   }
 
+  /**
+   * watcher 报错后的收敛重试(退避 + 上限)。
+   *
+   * 为什么不能只 catch 一下:错误把 entry 拆掉后,如果紧接着的 reconcile 又失败
+   * (远程挂载短暂不可用 / 目录正在被替换),消费者意图仍留在 desired、但已经
+   * 没有 watcher,也没有任何定时器会再来收敛 —— SSH 连接没断的情况下,后续文件
+   * 事件会永久停止,直到用户改开关或重挂载面板(评审 P2)。退避避免持续失败时
+   * 形成紧密重建循环。
+   */
+  private scheduleReconcileRetry(workdir: string): void {
+    if (this.retryTimers.has(workdir)) return;
+    if (!this.desired.has(workdir)) return; // 期间消费者全撤了:不再重试
+    const attempt = (this.retryAttempts.get(workdir) ?? 0) + 1;
+    if (attempt > RECONCILE_RETRY_LIMIT) {
+      this.retryAttempts.delete(workdir);
+      log.warn('watch reconcile retries exhausted', workdir);
+      return;
+    }
+    this.retryAttempts.set(workdir, attempt);
+    const delay = Math.min(
+      RECONCILE_RETRY_BASE_MS * 2 ** (attempt - 1),
+      RECONCILE_RETRY_MAX_MS,
+    );
+    const timer = setTimeout(() => {
+      this.retryTimers.delete(workdir);
+      void this.reconcile(workdir)
+        .then(() => this.retryAttempts.delete(workdir))
+        .catch((err) => {
+          log.warn('watch reconcile retry failed', workdir, String(err));
+          this.scheduleReconcileRetry(workdir);
+        });
+    }, delay);
+    timer.unref?.();
+    this.retryTimers.set(workdir, timer);
+  }
+
+  /** 清掉某个 workdir 的重试状态(stop / 新 start 成功时调用)。 */
+  private clearReconcileRetry(workdir: string): void {
+    const timer = this.retryTimers.get(workdir);
+    if (timer) {
+      clearTimeout(timer);
+      this.retryTimers.delete(workdir);
+    }
+    this.retryAttempts.delete(workdir);
+  }
+
   private async startInner(workdir: string, opts: WatchFilterOptions): Promise<void> {
     const matcher = await loadIgnoreMatcher(workdir, {
       hideMetaFiles: opts.hideMetaFiles,
@@ -286,9 +342,14 @@ export class WorkdirWatchManager {
       log.warn('fs.watch error, dropping watcher', workdir, String(err));
       if (this.entries.get(workdir) !== entry) return; // 已被替换 / 停止:不碰新 entry
       this.closeEntry(workdir);
-      void this.reconcile(workdir).catch((rerr) =>
-        log.warn('watch reconcile after error failed', workdir, String(rerr)),
-      );
+      // 就地收敛;失败(挂载短暂不可用 / 目录正在被替换)则带退避重试,直到成功
+      // 或耗尽 —— 只记日志会让这个入口静默失效到用户改开关(评审 P2)。
+      void this.reconcile(workdir)
+        .then(() => this.retryAttempts.delete(workdir))
+        .catch((rerr) => {
+          log.warn('watch reconcile after error failed', workdir, String(rerr));
+          this.scheduleReconcileRetry(workdir);
+        });
     });
     entry.watcher = watcher;
     if (this.stopDuringStart.delete(workdir)) {
@@ -322,6 +383,7 @@ export class WorkdirWatchManager {
       }
       this.desired.delete(workdir);
     }
+    this.clearReconcileRetry(workdir);
     // 撤销意图:收敛循环读到 desired 缺失即结束(piggyback 的新 start 会写回)。
     // 还在启动窗口:打标记让 startInner 完成时自拆(entries 里此刻还没有它)。
     if (this.starting.has(workdir)) this.stopDuringStart.add(workdir);
@@ -345,6 +407,9 @@ export class WorkdirWatchManager {
   stopAll(): void {
     // 全部意图撤销:启动中的 workdir 也要让收敛循环看到「没有 desired」而结束。
     this.desired.clear();
+    for (const timer of this.retryTimers.values()) clearTimeout(timer);
+    this.retryTimers.clear();
+    this.retryAttempts.clear();
     for (const workdir of [...this.starting.keys()]) this.stopDuringStart.add(workdir);
     for (const workdir of [...this.entries.keys()]) this.closeEntry(workdir);
   }
