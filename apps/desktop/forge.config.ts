@@ -1807,6 +1807,7 @@ const config: ForgeConfig = {
           config: 'vite.preload.config.ts',
           target: 'preload',
         },
+        { entry: 'src/preload/remoteDesktopViewerPreload.ts', config: 'vite.preload.config.ts', target: 'preload' },
         {
           // 右侧栏独立子窗口专用 preload:最小权限 bridge,不加载主 preload 完整桥。
           entry: 'src/preload/sidebarWindowPreload.ts',

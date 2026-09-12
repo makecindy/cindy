@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DesktopLocalState } from '../../../shared/remoteDesktop';
 import { ConfirmDialog } from '@/components/ui/confirm-dialog';
+import { Button } from '@/components/ui/button';
 import { RemoteDesktopPermissions } from '@/components/settings/RemoteDesktopPermissions';
 
 /** Main-window status and permission UI; it has no capture or media bridge. */
@@ -73,12 +74,9 @@ export function RemoteDesktopHost() {
                 : 'remoteDesktop.beingViewed',
             )}
           </span>
-          <button
-            className="min-h-11 rounded-full px-3 font-medium hover:bg-sidebar-item-hover"
-            onClick={() => void window.electronAPI.remoteDesktop.stop()}
-          >
+          <Button variant="secondary" onClick={() => void window.electronAPI.remoteDesktop.stop()}>
             {t('remoteDesktop.disconnect')}
-          </button>
+          </Button>
         </div>
       )}
     </>

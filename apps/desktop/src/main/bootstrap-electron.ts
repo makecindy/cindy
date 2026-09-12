@@ -635,6 +635,7 @@ import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
+import { RemoteDesktopViewerWindows } from './remote-desktop-viewer/windows.js';
 import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
 import { createResourceUsageWindow } from './resource-usage-window/window.js';
 import { registerResourceUsageWindowIpc } from './resource-usage-window/ipc.js';
@@ -1580,6 +1581,7 @@ function clearAccountBoundaryAbortMark(): void {
 }
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
+  remoteDesktopViewerWindows.reset();
   const blockingFailures: unknown[] = [];
   // Goal timers can dispatch through the outgoing Maker while launch-fence
   // acquisition waits behind queued filesystem work. Invalidate them before
@@ -2349,6 +2351,10 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(sender =>
+  isResourceUsageOpenSender({ sender, mainWindow: mainWindowRef, senderWindow: BrowserWindow.fromWebContents(sender), isSecondaryAppWindow }),
+);
+remoteDesktopViewerWindows.register();
 
 setGhostsChangedObserver((ghosts) => {
   ghostPanelWindowsController.reconcile(ghosts);
@@ -2442,6 +2448,7 @@ registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
 setAppSessionCommitBoundaryHook(() => {
+  remoteDesktopViewerWindows.reset();
   ghostPanelWindowsController.closeForOwnerChange();
   clearAllSessionProviders();
   clearAllSessionRuntimeAxes();
@@ -2969,6 +2976,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
   resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
+  remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
   ghostPanelWindowsController.setLocale(currentApplicationMenuLocale);
   refreshGhostLocalization();
@@ -3777,6 +3785,7 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
     }
     resourceUsageWindowController.destroyWindow();
+    remoteDesktopViewerWindows.reset();
     rsbWindowController.destroyWindow();
     ghostPanelWindowsController.destroyAllWindows();
     if (mainWindowRef === mainWindow) mainWindowRef = null;
@@ -3895,6 +3904,8 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
+      remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale ?? getPreferredApplicationLocale());
+      remoteDesktopViewerWindows.prewarm();
       // 右侧栏子窗口预热:复刻资源用量窗口模式,主窗口可见后后台创建
       // 隐藏 BrowserWindow 并加载轻量 renderer,后续 detach 点击仅 show+focus。
       rsbWindowController.prewarm();
@@ -9831,3 +9842,5 @@ function startReadyWorktreeMaintenance(): void {
     void WorktreePool.recoverPool().catch((error) => dbClientLog.warn('worktree pool recovery postponed', error));
   }
 }
+
+onQuit('remote-desktop-viewer', () => remoteDesktopViewerWindows.reset(), 'sync');

@@ -15,7 +15,8 @@
 
 import { useState, useSyncExternalStore, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { RefreshCw, Pencil, Trash2, Check, X } from 'lucide-react';
+import { RefreshCw, Pencil, Trash2, Check, X, Monitor } from 'lucide-react';
+import { toast } from '@/lib/toast';
 
 import { Spinner } from '@/components/ui/spinner';
 import { Switch } from '@/components/ui/switch';
@@ -385,6 +386,14 @@ export function MyDevicesPanel({
                   </div>
                   {editingId !== d.deviceId && (
                     <div className="flex shrink-0 items-center gap-1">
+                      {canBeControlledPlatform(d.platform) && !peerRevoked && (
+                        <button type="button" className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-full text-[var(--text-primary)] hover:bg-[var(--surface-chip)] disabled:opacity-40"
+                          disabled={!d.online || !d.remoteControlEnabled || !d.controlEnabled}
+                          title={t('remoteDesktop.title')} aria-label={t('remoteDesktop.title')}
+                          onClick={() => void window.electronAPI.openRemoteDesktop({deviceId:d.deviceId,name:d.name}).catch(() => toast.error(t('remoteDesktop.connectionError')))}>
+                          <Monitor size={16}/>
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {

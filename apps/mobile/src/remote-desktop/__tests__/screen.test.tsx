@@ -338,6 +338,7 @@ beforeEach(() => {
           lockOnExit: fixture.lockSupported,
           trickleIce: fixture.trickleIce,
           automaticReconnect: true,
+          connectionTakeover: true,
           backgroundViewing: true,
           enabled: true,
           canControl: fixture.canControl,
@@ -381,6 +382,66 @@ const connect = async () => {
 };
 
 describe("remote desktop controls", () => {
+  it("retries an initial capabilities timeout normally on a legacy host", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    let attempts = 0;
+    fixture.invoke.mockImplementation(async (...args) => {
+      if (args[2][0].op === "capabilities") {
+        attempts++;
+        if (attempts === 1)
+          throw Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" });
+        return { ...(await original(...args)), automaticReconnect: undefined };
+      }
+      return original(...args);
+    });
+    await connect();
+    await act(async () => vi.advanceTimersByTimeAsync(6000));
+    expect(host.textContent).not.toContain("remoteDesktop.upgrade");
+    expect(requests().filter((request) => request.op === "start")).toEqual([
+      { op: "start", displayId: "display" },
+    ]);
+  });
+  it("keeps the video when a fallback input is rejected because control was released", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "input"
+        ? Promise.reject(new Error("DESKTOP_VIEW_ONLY"))
+        : original(...args),
+    );
+    await act(async () => {
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "input",
+            epoch: "lease",
+            sequence: 1,
+            events: [{ kind: "move", x: 0.5, y: 0.5 }],
+          }),
+        },
+      });
+    });
+    expect(sent()).toContainEqual({ type: "control", enabled: false });
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+  });
+  it("reflects a host-side input failure as view-only without replacing the video lease", async () => {
+    await connect();
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation((...args) =>
+      args[2][0].op === "heartbeat"
+        ? Promise.resolve({ controlling: false })
+        : original(...args),
+    );
+    await act(async () => vi.advanceTimersByTimeAsync(3100));
+    expect(
+      fixture.post.mock.calls.map(([json]) => JSON.parse(json)),
+    ).toContainEqual({ type: "control", enabled: false });
+    expect(requests().filter((r) => r.op === "start")).toHaveLength(1);
+    expect(requests().filter((r) => r.op === "stop")).toHaveLength(0);
+    act(() => button("operations").click());
+    expect(visibleInputHint()).toBe("remoteDesktop.viewOnlyHint");
+  });
   it("keeps iOS data detection disabled without passing its prop to Android", async () => {
     await act(async () => {});
     expect(fixture.webViewProps).toMatchObject({ dataDetectorTypes: "none" });
@@ -1932,6 +1993,37 @@ describe("remote desktop controls", () => {
     expect(button("keyboard").disabled).toBe(true);
     await act(async () => button("viewOnly").click());
     expect(button("keyboard").disabled).toBe(false);
+  });
+  it("asks before taking over an existing remote desktop viewer", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    let firstStart = true;
+    fixture.invoke.mockImplementation((...args) => {
+      const request = args[2][0];
+      if (request.op === "start" && firstStart) {
+        firstStart = false;
+        return Promise.reject(new Error("DESKTOP_BUSY"));
+      }
+      return original(...args);
+    });
+
+    await connect();
+
+    expect(fixture.alert).toHaveBeenCalledWith(
+      "remoteDesktop.connectionBusy",
+      "remoteDesktop.connectionBusyTakeover",
+      expect.any(Array),
+    );
+    const buttons = fixture.alert.mock.calls.at(-1)![2] as Array<{
+      onPress?: () => void;
+    }>;
+    await act(async () => {
+      buttons[1].onPress?.();
+    });
+    expect(requests()).toContainEqual({
+      op: "start",
+      displayId: "display",
+      takeover: true,
+    });
   });
   it("rotation preserves the viewer and control lease", async () => {
     await connect();

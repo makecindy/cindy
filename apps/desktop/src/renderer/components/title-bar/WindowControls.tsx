@@ -58,6 +58,7 @@ export function WindowControls({
 
   useEffect(() => {
     if (
+      onClose ||
       (window.electronAPI.platform !== 'win32' && window.electronAPI.platform !== 'linux') ||
       isSecondaryWindow() ||
       isSidebarWindow() ||
@@ -79,7 +80,7 @@ export function WindowControls({
     return window.electronAPI.platform === 'win32'
       ? window.electronAPI.windowBehavior.onWindowsCloseBehaviorRequested(onCloseBehaviorRequested)
       : window.electronAPI.windowBehavior.onLinuxCloseBehaviorRequested(onCloseBehaviorRequested);
-  }, []);
+  }, [onClose]);
 
   useEffect(() => {
     closeBehaviorDialogVisibleRef.current = showCloseBehaviorDialog;

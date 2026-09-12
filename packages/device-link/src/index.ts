@@ -16,6 +16,8 @@ export * from "./attachmentOssRef.js";
 export * from "./contactsSyncProtocol.js";
 export * from "./remoteResources.js";
 export * from "./remoteDesktop.js";
+export * from "./remoteDesktopViewerSession.js";
+export * from "./remoteDesktopViewerMedia.js";
 export * from "./deviceIdentity.js";
 export * from "./remoteCredentials.js";
 export * from "./remoteDesktopIce.js";

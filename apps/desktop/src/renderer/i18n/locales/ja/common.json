@@ -60,7 +60,50 @@
     "sendText": "文字を送信",
     "keys": "キー",
     "showDesktop": "デスクトップ",
-    "allWindows": "すべてのウィンドウ"
+    "allWindows": "すべてのウィンドウ",
+    "reconnecting": "再接続中…",
+    "connectionBusy": "別のデバイスがこのリモートデスクトップに接続しています。そのデバイスでリモートデスクトップを終了してから、もう一度接続してください。",
+    "takeoverConnection": "接続を引き継ぐ",
+    "connectionBusyTakeover": "別のデバイスが接続中です。接続を引き継ぐと、そのデバイスは切断されます。",
+    "remoteDisabled": "コンピュータのリモート操作が無効になっています。",
+    "accessRevoked": "このコンピュータへのアクセスが取り消されました。",
+    "directConnection": "パソコンに直接接続",
+    "videoRelay": "サーバー経由の映像",
+    "screenshotRelay": "サーバー経由のスクリーンショット",
+    "shortcut": {
+      "open": "リモートデスクトップを開く",
+      "checking": "リモートデスクトップを確認中…",
+      "opening": "リモートデスクトップを開いています…",
+      "unavailable": "リモートデスクトップに接続できません：{{reason}}",
+      "offline": "このコンピュータはオフラインです。",
+      "controlDisabled": "リモートコントロール設定で、このコンピュータの操作を許可してください。",
+      "unsupported": "このデバイスはリモートデスクトップに対応していません。",
+      "checkFailed": "コンピュータの状態を確認できません。もう一度カーソルを合わせて再試行してください。",
+      "noDisplay": "このコンピュータに利用可能なディスプレイがありません。"
+    },
+    "viewer": {
+      "settings": "操作",
+      "sound": "音声",
+      "fullscreen": "全画面表示",
+      "exitFullscreen": "全画面表示を終了",
+      "fps": "フレームレート",
+      "quality": "画質",
+      "automatic": "自動",
+      "smooth": "スムーズ",
+      "balanced": "バランス",
+      "clear": "高画質",
+      "resolution": "コンピュータの解像度",
+      "clipboardFailed": "テキストを転送できません。操作権限を確認し、16,384 文字以内にしてください。",
+      "settingsFailed": "表示設定を変更できませんでした。",
+      "inputHint": "画面をクリックして入力します。Ctrl+Alt+Esc でキーボードのフォーカスを解除し、Cmd/Ctrl+W でこのウィンドウを閉じます。",
+      "controlPending": "操作権限を取得中…",
+      "controlRequired": "表示のみです。クリップボードとデスクトップ操作を使うには操作権限を取得してください。",
+      "confirmDisconnect": "このコンピュータとの接続を切断しますか？",
+      "confirmDisconnectHint": "リモートデスクトップ接続を終了します。コンピュータ上のアプリは動作を続けます。",
+      "disconnectFailed": "切断できませんでした。もう一度お試しください。",
+      "clipboardShortcutHint": "画面内で {{modifier}}+C / {{modifier}}+V を使うと、コンピュータ間でテキストをコピーして貼り付けられます。画像とファイルにはまだ対応していません。",
+      "resolutionHint": "解像度の変更はリモートの実際のモニターに反映されます。"
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "パラメータが無効です。確認して再試行してください。",
@@ -3595,7 +3638,7 @@
         "allowInboundAria": "{{name}} に本機の操作を許可するか切り替え",
         "peerControlOff": "相手側が操作を許可していません",
         "masterOffHint": "先に上のメインスイッチをオンにしてください",
-        "controllingThisMac": "本機を操作中"
+        "controllingThisMac": "Cindy に接続中"
       },
       "toast": {
         "revoked": "このデバイスのアクセス権を撤回しました",
@@ -5663,9 +5706,9 @@
       "requestChanges": "修正を依頼",
       "planFeedbackPlaceholder": "フィードバック(任意)"
     },
-    "controlledBy": "{{name}} が操作中",
-    "controlledByMultiple": "{{count}} 台のデバイスが操作中",
-    "controlledTooltip": "同じアカウントでログイン中の別のデバイスがこの端末をリモート操作しています。アクセス権限を撤回できます。",
+    "controlledBy": "{{name}} が Cindy に接続中",
+    "controlledByMultiple": "{{count}} 台のデバイスが Cindy に接続中",
+    "controlledTooltip": "Cindy のセッションに接続しているデバイスです。この数はデスクトップのマウスやキーボードを操作している台数ではありません。アクセス権限を撤回できます。",
     "revokeAccess": "権限を撤回",
     "viewControllers": "表示",
     "collapseControlledNotice": "リモート操作の通知を折りたたむ",

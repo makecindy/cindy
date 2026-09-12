@@ -89,6 +89,7 @@ import {
 import { absorbSessionStarting } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
+import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
@@ -1055,42 +1056,44 @@ export function ProjectsSection({
               return (
                 <div key={key} className="flex flex-col gap-1">
                   {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
-                  <button
-                    type="button"
-                    onClick={() => toggleDeviceSection(key)}
-                    aria-expanded={!sectionCollapsed}
-                    aria-label={
-                      sectionCollapsed
-                        ? t('ccAgent.sidebar.deviceGroup.expand')
-                        : t('ccAgent.sidebar.deviceGroup.collapse')
-                    }
-                    className={cn(
-                      'flex h-6 w-full items-center gap-1.5 rounded-md px-1.5',
-                      'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
-                    )}
-                  >
-                    {sectionCollapsed ? (
-                      <ChevronRight size={12} strokeWidth={2} className="shrink-0" />
-                    ) : (
-                      <ChevronDown size={12} strokeWidth={2} className="shrink-0" />
-                    )}
-                    <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
-                    <span className="min-w-0 truncate text-xs font-medium">{name}</span>
-                    {!online && (
-                      <span
-                        aria-hidden
-                        className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
-                      />
-                    )}
-                    {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
-                          (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
-                          段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}
-                    {!online && (
-                      <span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-                        {t('ccAgent.sidebar.deviceGroup.offline')}
-                      </span>
-                    )}
-                  </button>
+                  <DeviceSectionHeader deviceId={section.deviceId} name={name}>
+                    <button
+                      type="button"
+                      onClick={() => toggleDeviceSection(key)}
+                      aria-expanded={!sectionCollapsed}
+                      aria-label={
+                        sectionCollapsed
+                          ? t('ccAgent.sidebar.deviceGroup.expand')
+                          : t('ccAgent.sidebar.deviceGroup.collapse')
+                      }
+                      className={cn(
+                        'flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full px-1.5',
+                        'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
+                      )}
+                    >
+                      {sectionCollapsed ? (
+                        <ChevronRight size={12} strokeWidth={2} className="shrink-0" />
+                      ) : (
+                        <ChevronDown size={12} strokeWidth={2} className="shrink-0" />
+                      )}
+                      <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
+                      <span className="min-w-0 truncate text-xs font-medium">{name}</span>
+                      {!online && (
+                        <span
+                          aria-hidden
+                          className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                        />
+                      )}
+                      {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
+                            (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
+                            段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}
+                      {!online && (
+                        <span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+                          {t('ccAgent.sidebar.deviceGroup.offline')}
+                        </span>
+                      )}
+                    </button>
+                  </DeviceSectionHeader>
                   <SectionCollapse collapsed={sectionCollapsed}>
                     <div className="flex flex-col gap-1 pl-2">
                       {/* 折叠上限每段独立应用(切段在前,见 deviceSections 注释);
