@@ -5774,6 +5774,9 @@ export default function SessionScreen() {
       return;
     }
     const useDurableOutbox = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand && !legacyPlanRequiresLiveDispatch;
+    const planModeAtSend = runtimeOptions?.planModeSupported === true
+      ? (readSessionRowNow() ?? currentSession).planModeEnabled === true
+      : undefined;
     pendingSkillSelectionRef.current = null;
     // 乐观第一拍:点发送立刻清空输入框并跟到底部,不等任何网络往返(enqueue 是
     // device-link 远程调用,弱网下数秒;文字已捕获进 text)。失败时若输入框仍为空
@@ -5897,7 +5900,7 @@ export default function SessionScreen() {
             clientId: createOutboxClientId(), sessionId, text, quotesEncoded: quotesEncodedAtSend,
             sessionRefs: sessionRefsAtSend, agentReferences: agentReferencesAtSend,
             pastedTextRanges: pastedTextRangesAtSend, slashCommandRanges: slashCommandRangesAtSend ?? [],
-            permissionModeAtSend, readyAttachments, readyPreviews,
+            permissionModeAtSend, planModeAtSend, readyAttachments, readyPreviews,
             claimedUploads: pendingSources.map(({ localId, source }) => ({ localId, failed: false, kind: source.kind, previewUri: source.uri })),
           });
           const clearedAt = currentSession.clearedAt ? Date.parse(currentSession.clearedAt) : null;

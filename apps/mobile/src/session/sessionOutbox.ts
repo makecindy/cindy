@@ -106,6 +106,8 @@ export interface MobileOutboxItem {
    * store 拿到的已是恢复后的值,消息本身必须仍按发送时刻的档位派发。
    */
   permissionModeAtSend: string;
+  /** 新协议的单条 Plan 快照；旧记录缺失时保留原协议语义。 */
+  planModeAtSend?: boolean;
   /** 附件槽位(按用户可见顺序);null = 对应上传任务尚未落定。 */
   attachmentSlots: ReadonlyArray<RemoteSerializedAttachment | null>;
   /**
@@ -186,6 +188,7 @@ export function buildOutboxItem(input: {
   pastedTextRanges?: Array<{ start: number; end: number; display: string }>;
   slashCommandRanges?: Array<{ start: number; end: number }>;
   permissionModeAtSend: string;
+  planModeAtSend?: boolean;
   /** 发送时刻已就绪的附件(占前段槽位)。 */
   readyAttachments: readonly RemoteSerializedAttachment[];
   /** 就绪附件的本地预览 uri(与 readyAttachments 对齐;缺失传 null)。 */
@@ -228,6 +231,7 @@ export function buildOutboxItem(input: {
     pastedTextRanges: input.pastedTextRanges ?? [],
     slashCommandRanges: input.slashCommandRanges ?? [],
     permissionModeAtSend: input.permissionModeAtSend,
+    ...(input.planModeAtSend !== undefined ? { planModeAtSend: input.planModeAtSend } : {}),
     attachmentSlots: slots,
     slotMeta,
     slotByLocalId,

@@ -198,6 +198,7 @@ export function MobileOutboxBridge() {
           item.clientId,
           {
             attachments: outboxItemAttachments(item),
+            planMode: item.planModeAtSend,
             quotesEncoded: item.quotesEncoded,
             agentReferences: item.agentReferences,
             pastedTextRanges: item.pastedTextRanges,

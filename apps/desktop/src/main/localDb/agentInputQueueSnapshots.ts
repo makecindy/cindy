@@ -31,7 +31,7 @@ const SNAPSHOT_COUNT_QUERY_BATCH_SIZE = 200;
 
 /** per-session 写链:只做覆盖写/删除排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
-/** 当前 session 最近一次写操作的真实结果(保留 reject 供 durable boundary 等待者观察)。 */
+/** 最近一次真实队列快照写入的结果；取消墓碑不能替代队列落盘证明。 */
 const _latestWriteResults = new Map<string, Promise<void>>();
 
 /**
@@ -87,7 +87,7 @@ async function flushCancellations(owner: CurrentDbClientSnapshot, sessionId: str
 export function hasInputDeliveryCancellation(sessionId: string, clientId: string): boolean {
   return cancelledDeliveryIds.get(queueKey(queueOwner(), sessionId))?.has(clientId) === true;
 }
-async function chainWrite(sessionId: string, op: (owner: CurrentDbClientSnapshot) => Promise<void>): Promise<void> {
+async function chainWrite(sessionId: string, kind: 'snapshot' | 'cancellation', op: (owner: CurrentDbClientSnapshot) => Promise<void>): Promise<void> {
   const owner = queueOwner();
   const sid = sessionId;
   sessionId = queueKey(owner, sid);
@@ -110,7 +110,7 @@ async function chainWrite(sessionId: string, op: (owner: CurrentDbClientSnapshot
   // a later successful write replaces it.  Treating a rejected write as
   // "nothing pending" would let attachment ownership advance past a snapshot
   // that never became crash-recoverable.
-  void opResult.then(
+  if (kind === 'snapshot') void opResult.then(
     () => {
       if (_latestWriteResults.get(sessionId) === opResult) {
         _latestWriteResults.delete(sessionId);
@@ -119,7 +119,7 @@ async function chainWrite(sessionId: string, op: (owner: CurrentDbClientSnapshot
     () => undefined,
   );
   _writeChains.set(sessionId, chainNext);
-  _latestWriteResults.set(sessionId, opResult);
+  if (kind === 'snapshot') _latestWriteResults.set(sessionId, opResult);
   return opResult;
 }
 
@@ -147,7 +147,7 @@ export async function saveCancelledInputDelivery(sessionId: string, clientId: st
   const cancelled = cancelledDeliveryIds.get(key) ?? new Set<string>();
   cancelled.add(clientId);
   cancelledDeliveryIds.set(key, cancelled);
-  await chainWrite(sessionId, async () => undefined);
+  await chainWrite(sessionId, 'cancellation', async () => undefined);
   // After restart this namespace may already belong to executed history. INSERT
   // ... ON CONFLICT DO NOTHING succeeding does not prove cancellation won.
   const rows = await owner.client.drizzle.select({ role: messages.role }).from(messages)
@@ -164,7 +164,7 @@ export async function readInputDeliveryReceipts(
   const owner = queueOwner();
   // Retrying a failed cancellation must precede observing absence or advancing a snapshot.
   if (pendingCancellations.has(queueKey(owner, sessionId))) {
-    await chainWrite(sessionId, async () => undefined);
+    await chainWrite(sessionId, 'cancellation', async () => undefined);
   }
   await awaitAgentInputQueueSnapshotPersistence(sessionId);
   assertQueueOwner(owner);
@@ -221,7 +221,7 @@ export function saveAgentInputQueueSnapshot(
   sessionId: string,
   items: AgentInputQueuedMessage[],
 ): Promise<void> {
-  return chainWrite(sessionId, async (owner) => {
+  return chainWrite(sessionId, 'snapshot', async (owner) => {
     try {
       const db = owner.client.drizzle;
       if (items.length === 0) {

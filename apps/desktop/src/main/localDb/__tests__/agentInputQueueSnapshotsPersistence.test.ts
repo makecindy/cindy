@@ -68,6 +68,34 @@ function installDb(
 }
 
 describe('agent input queue snapshot durability boundary', () => {
+  it.each(['settled', 'pending', 'receipt-retry'] as const)('does not let %s cancellation replace a failed snapshot boundary', async (timing) => {
+    const sid = `snapshot-cancel-${timing}`;
+    const failure = new Error('snapshot failed');
+    const gate = deferred<void>();
+    const snapshotWrite = vi.fn().mockImplementationOnce(() => gate.promise).mockResolvedValue(undefined);
+    const cancelWrite = vi.fn().mockResolvedValue(undefined);
+    if (timing === 'receipt-retry') cancelWrite.mockRejectedValueOnce(new Error('cancel failed'));
+    const select = vi.fn(() => ({ from: () => ({ where: async () => [{ role: 'message_tombstone' }] }) }));
+    mocks.getDbClient.mockReturnValue({ drizzle: {
+      insert: () => ({ values: () => ({ onConflictDoUpdate: snapshotWrite, onConflictDoNothing: cancelWrite }) }),
+      select,
+    } });
+    const snapshot = saveAgentInputQueueSnapshot(sid, [queued()]);
+    const rejectedSnapshot = expect(snapshot).rejects.toBe(failure);
+    if (timing !== 'pending') { gate.reject(failure); await rejectedSnapshot; }
+    const cancel = saveCancelledInputDelivery(sid, 'cancelled-other');
+    if (timing === 'pending') { gate.reject(failure); await rejectedSnapshot; }
+    if (timing === 'receipt-retry') await expect(cancel).rejects.toThrow('cancel failed');
+    else await expect(cancel).resolves.toBe(true);
+    await expect(awaitAgentInputQueueSnapshotPersistence(sid)).rejects.toBe(failure);
+    const priorReads = select.mock.calls.length;
+    await expect(readInputDeliveryReceipts(sid, ['client-queued'])).rejects.toBe(failure);
+    expect(select.mock.calls.length).toBe(priorReads);
+    expect(cancelWrite).toHaveBeenCalledTimes(timing === 'receipt-retry' ? 2 : 1);
+    await saveAgentInputQueueSnapshot(sid, [queued()]);
+    await expect(awaitAgentInputQueueSnapshotPersistence(sid)).resolves.toBeUndefined();
+  });
+
   it('rejects through Promise handlers when the database owner is unavailable', async () => {
     mocks.getDbClient.mockImplementation(() => { throw new Error('DbClient not ready'); });
     try {
