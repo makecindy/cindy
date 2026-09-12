@@ -40,7 +40,35 @@ describe('desktop input permission detection', () => {
     mocks.access.mockResolvedValue(undefined);
     mocks.exec.mockResolvedValue({ stdout: 'ready\n' });
   });
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('bounds a slow cold build and lets later polls reuse it without prompting', async () => {
+    vi.useFakeTimers();
+    mocks.access.mockRejectedValue(new Error('ENOENT'));
+    let finishBuild!: () => void;
+    mocks.exec.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishBuild = resolve;
+        }),
+    );
+    const first = readDesktopInputPermission();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(await first).toBe('unknown');
+    expect(mocks.exec).toHaveBeenCalledTimes(1);
+
+    const retry = readDesktopInputPermission();
+    finishBuild();
+    expect(await retry).toBe('granted');
+    expect(mocks.exec.mock.calls.map(([binary, args]) => [binary === 'swiftc', args[0]])).toEqual([
+      [true, '-D'],
+      [false, '--check'],
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 
   it('detects an existing grant on a cold dev build without requesting authorization', async () => {
     mocks.access.mockRejectedValue(new Error('ENOENT'));

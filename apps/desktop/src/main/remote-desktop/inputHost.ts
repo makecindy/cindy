@@ -125,10 +125,19 @@ export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'u
 
 export async function readDesktopInputPermission(): Promise<DesktopPermissionStatus> {
   if (process.platform !== 'darwin') return 'notRequired';
+  let timer: ReturnType<typeof setTimeout> | undefined;
   try {
     // A cold dev build must prepare the helper too; preparation does not prompt.
+    // Bound this caller's wait below the remote channel budget. A slow build
+    // stays shared in resolveBinary so later polls reuse it instead of restarting.
+    const binary = await Promise.race([
+      resolveBinary(),
+      new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error('DESKTOP_INPUT_PREPARING')), 5000);
+      }),
+    ]);
     // Only --request-permission may open the macOS authorization UI.
-    const { stdout } = await exec(await resolveBinary(), ['--check'], {
+    const { stdout } = await exec(binary, ['--check'], {
       timeout: 5000,
       maxBuffer: 1024,
     });
@@ -139,6 +148,8 @@ export async function readDesktopInputPermission(): Promise<DesktopPermissionSta
         : 'unknown';
   } catch {
     return 'unknown';
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 }
 
