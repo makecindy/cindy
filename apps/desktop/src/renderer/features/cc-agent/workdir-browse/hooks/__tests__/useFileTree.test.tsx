@@ -318,11 +318,12 @@ describe('useFileTree showIgnoredDirs option', () => {
       view.rerender({ reveal: false });
     });
 
-    // 数据还没回来：被忽略行已由首帧过滤拿掉，子树缓存与展开态保持不动
-    // （树其余部分不重新挂载，不是逐级折叠）。
+    // 数据还没回来：被忽略行已由首帧过滤拿掉，它的**整棵缓存**也一起丢了
+    // （否则 refresh() 会按 entries key 重扫它）；展开态保持不动 —— 树其余部分
+    // 不重新挂载，不是逐级折叠。
     expect(view.result.current.initialLoading).toBe(false);
     expect(view.result.current.entries.get('')?.map((e) => e.name)).toEqual(['src']);
-    expect(view.result.current.entries.get('node_modules')).toEqual(revealedChild);
+    expect(view.result.current.entries.has('node_modules')).toBe(false);
     expect(view.result.current.expanded.has('node_modules')).toBe(true);
     // 过渡期不 warm 借来的子树 —— 不给被忽略路径白发 listDir。
     const hiddenCalls = mocks.listDir.mock.calls.filter((c) => c[0].showIgnoredDirs === false);
@@ -448,6 +449,68 @@ describe('useFileTree showIgnoredDirs option', () => {
     expect(mocks.listDir).toHaveBeenCalledWith(
       expect.objectContaining({ relPath: 'packages', showIgnoredDirs: true }),
     );
+
+    view.unmount();
+  });
+
+  /**
+   * 评审 P1：只过滤行、不丢缓存会让隐藏态的下一次 refresh() 重扫它们 —— refresh
+   * 按 entries 的 key 逐个 listDir，node_modules 子树可能有数百个 key（SSH /
+   * device-link 上就是数百条 RPC）。
+   */
+  it('关开关丢弃被移除目录的缓存子树,refresh 不再重扫它们', async () => {
+    const dir = (name: string, relPath: string): DirEntry => ({
+      name,
+      relPath,
+      type: 'directory',
+      size: 0,
+      mtimeMs: 1,
+    });
+    const revealedRoot = [dir('src', 'src'), dir('node_modules', 'node_modules')];
+    const revealedNodeModules = [dir('pkg', 'node_modules/pkg')];
+    const revealedPkg = [dir('deep', 'node_modules/pkg/deep')];
+
+    const hiddenRoot = [dir('src', 'src')];
+    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) => {
+      if (!args.showIgnoredDirs) return Promise.resolve(hiddenRoot);
+      if (args.relPath === 'node_modules') return Promise.resolve(revealedNodeModules);
+      if (args.relPath === 'node_modules/pkg') return Promise.resolve(revealedPkg);
+      return Promise.resolve(revealedRoot);
+    });
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-drop-cache', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: true } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    await act(async () => {
+      view.result.current.toggleFolder('node_modules');
+    });
+    await waitFor(() => expect(view.result.current.entries.has('node_modules')).toBe(true));
+    await act(async () => {
+      view.result.current.toggleFolder('node_modules/pkg');
+    });
+    await waitFor(() => expect(view.result.current.entries.has('node_modules/pkg')).toBe(true));
+
+    await act(async () => {
+      view.rerender({ reveal: false });
+    });
+
+    // 整棵缓存都丢，不只是父列表里那一行。
+    expect(view.result.current.entries.has('node_modules')).toBe(false);
+    expect(view.result.current.entries.has('node_modules/pkg')).toBe(false);
+
+    // 刷新只会扫仍然可达的 key。
+    mocks.listDir.mockClear();
+    await act(async () => {
+      await view.result.current.refresh();
+    });
+    const rescanned = mocks.listDir.mock.calls
+      .map((c) => c[0].relPath as string)
+      .filter((p) => p === 'node_modules' || p.startsWith('node_modules/'));
+    expect(rescanned).toEqual([]);
+    expect(mocks.listDir).toHaveBeenCalledWith(expect.objectContaining({ relPath: '' }));
 
     view.unmount();
   });

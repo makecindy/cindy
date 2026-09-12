@@ -96,4 +96,36 @@ describe('RemoteWatchRegistry 失败清理', () => {
     await registry.stop(win.id, 'host-1', '/repo');
     expect(request).not.toHaveBeenCalled();
   });
+
+  /**
+   * 评审 P1：同 (host, workdir) 的多个窗口共用一个 consumerId，而 stop 侧有引用
+   * 计数（还有别窗在 watch 就不发 watchStop）。两个替换 start 同时失败时，本地
+   * 条目全被删、daemon 侧却会留着注册与重建出来的 watcher（没有客户端再 stop
+   * 它）。必须由**最后一个**失败者撤回。
+   */
+  it('同 workdir 两个窗口的 start 都失败:最后一个失败者撤回 daemon 注册', async () => {
+    const { registry, request } = setup();
+    const w1 = makeWindow(1);
+    const w2 = makeWindow(2);
+    const first = deferred();
+    const second = deferred();
+    request.mockImplementationOnce(() => first.promise);
+    request.mockImplementationOnce(() => second.promise);
+
+    const start1 = registry.start(w1, 'host-1', '/repo', { showIgnoredDirs: true }, vi.fn());
+    const start2 = registry.start(w2, 'host-1', '/repo', { showIgnoredDirs: true }, vi.fn());
+
+    // 先失败的窗口还看到另一个本地条目 → 不能撤（对方可能站起来）。
+    first.reject(new Error('boom-1'));
+    await expect(start1).rejects.toThrow('boom-1');
+    expect(request).not.toHaveBeenCalledWith('host-1', 'watchStop', expect.anything());
+
+    // 最后一个失败者：本地再无同 (host, workdir) 条目 → 撤注册。
+    second.reject(new Error('boom-2'));
+    await expect(start2).rejects.toThrow('boom-2');
+    expect(request).toHaveBeenCalledWith('host-1', 'watchStop', {
+      workdir: '/repo',
+      consumerId: 'desktop-tree',
+    });
+  });
 });

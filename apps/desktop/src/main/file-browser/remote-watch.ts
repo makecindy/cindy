@@ -99,6 +99,23 @@ export class RemoteWatchRegistry {
       if (this.entries.get(k) === entry) this.entries.delete(k);
       offEvent();
       offReconnect();
+      // 本地最后一个订阅者也没能站起来:撤回 daemon 侧的 consumer 注册。
+      //
+      // 为什么必须补这一发:同 (host, workdir) 的多个窗口共用一个 consumerId,
+      // 而 stop 侧有引用计数(还有别窗在 watch 就不发 watchStop)。两个替换 start
+      // 同时失败时,本地条目全被删、daemon 侧却留着注册与重建出来的 watcher ——
+      // 没有任何客户端再去 stop 它(评审 P1),它还会抬高 device-link 的可见性
+      // 并集。只在确认本地再无同 (host, workdir) 条目时才发:还有别的窗口在
+      // watch(或它的 start 正在飞,条目已先入表)时不能撤。
+      const stillLocal = [...this.entries.keys()].some((key) => {
+        const [, h, w] = key.split('::');
+        return h === hostId && w === workdir;
+      });
+      if (!stillLocal) {
+        void this.mgr
+          .request(hostId, 'watchStop', { workdir, consumerId: WATCH_CONSUMER_ID })
+          .catch(() => undefined);
+      }
       throw err;
     }
   }
