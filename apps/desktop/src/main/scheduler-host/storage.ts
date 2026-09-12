@@ -49,6 +49,25 @@ import { normalizeTurnUsageDetails } from '../../shared/turnUsageDetails.js';
 
 export type SchedulerDrizzleDb = BetterSQLite3Database<typeof schema>;
 
+/** A success only recovers failures belonging to the same automation. */
+function failureRecoveredSql(alias: 'failed' | 'schedule_runs') {
+  const row = sql.raw(alias);
+  return sql<boolean>`CASE WHEN ${row}.status IN ('failed', 'interrupted') THEN EXISTS (
+    SELECT 1 FROM schedule_runs AS recovered
+    WHERE recovered.schedule_id = ${row}.schedule_id
+      AND recovered.fired_at >= ${row}.fired_at
+      AND (recovered.status = 'success' OR (
+        CASE WHEN json_valid(${row}.pre_run_hook_result)
+          THEN json_extract(${row}.pre_run_hook_result, '$.decision') = 'block' ELSE 0 END
+        AND recovered.status IN ('skipped', 'success', 'failed')
+        AND CASE WHEN json_valid(recovered.pre_run_hook_result)
+          THEN json_extract(recovered.pre_run_hook_result, '$.checkSucceeded') = 1 ELSE 0 END
+      ))
+      AND (recovered.fired_at > ${row}.fired_at
+        OR (recovered.fired_at = ${row}.fired_at AND recovered.id > ${row}.id))
+  ) ELSE 0 END`;
+}
+
 export interface ScheduleSidebarIndexRun {
   runId: string;
   scheduleId: string;
@@ -62,6 +81,8 @@ export interface ScheduleSidebarIndexRun {
   status: ScheduleRun['status'];
   readAt?: number;
   firedAt?: number;
+  failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  failureRecovered?: boolean;
 }
 
 export interface ScheduleCostSummary {
@@ -599,7 +620,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * Sidebar 聚合索引用的轻量 run 列表：
    * - 每个 session 只返回最新的 run 映射，读取量不随同一任务的运行次数增长。
    * - 额外包含全部 running 与未读终态 run，供运行标记对账和未读计数。
-   * - 每个 session 保留最近一次失败/中断，即使已读也能查看历史失败提示。
+   * - 每个 session 保留最近一次尚未恢复的失败/中断；已读不等于恢复。
    * - 未读旧 run 先返回以累计 session 红点，最新映射最后返回以裁决 Automation 归属。
    * - 非最新 running 不携带 sessionId，只参与运行标记对账。
    * - 内部例行任务在 SQL 内排除，避免未读历史随运行次数累积到公共侧栏内存中。
@@ -619,6 +640,14 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: scheduleRuns.status,
       readAt: scheduleRuns.readAt,
       firedAt: scheduleRuns.firedAt,
+      failureRecovered: failureRecoveredSql('schedule_runs'),
+      failureKind: sql<'precheck' | 'rate-limit' | 'execution'>`CASE
+        WHEN json_valid(${scheduleRuns.preRunHookResult}) THEN CASE
+          WHEN json_extract(${scheduleRuns.preRunHookResult}, '$.decision') = 'block' THEN CASE
+            WHEN lower(json_extract(${scheduleRuns.preRunHookResult}, '$.stderr')) LIKE '%rate limit%'
+              THEN 'rate-limit' ELSE 'precheck' END
+          ELSE 'execution' END
+        ELSE 'execution' END`,
     };
     const [latestSessionRows, unreadRows, runningRows, latestFailedRows] = await Promise.all([
       db
@@ -648,6 +677,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
             SELECT failed.id FROM schedule_runs AS failed
             WHERE failed.session_id = ${scheduleSessionLatestRuns.sessionId}
               AND failed.status IN ('failed', 'interrupted')
+              AND NOT ${failureRecoveredSql('failed')}
             ORDER BY failed.fired_at DESC, failed.id DESC LIMIT 1
           )`,
           ),
@@ -681,6 +711,10 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       status: row.status,
       readAt: row.readAt ?? undefined,
       firedAt: row.firedAt ?? undefined,
+      ...(row.status === 'failed' || row.status === 'interrupted' ? {
+        failureRecovered: Boolean(row.failureRecovered),
+        failureKind: row.failureKind,
+      } : {}),
     }));
 
     const linkedSessionIds = new Set(

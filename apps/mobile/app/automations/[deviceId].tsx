@@ -134,7 +134,7 @@ export default function AutomationsScreen() {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const params = useLocalSearchParams<{ deviceId: string; name?: string }>();
+  const params = useLocalSearchParams<{ deviceId: string; name?: string; focus?: string }>();
   const deviceId = String(params.deviceId ?? '');
   const deviceName = String(params.name ?? deviceId);
   const router = useRouter();
@@ -147,12 +147,15 @@ export default function AutomationsScreen() {
   const scheduleEventSnapshot = useRemoteScheduleEventSnapshot(deviceId);
   const remoteSessions = useRemoteSessions();
   const [schedules, setSchedules] = useState<RemoteSchedule[]>([]);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(params.focus ?? null);
+  useEffect(() => { if (params.focus) setSelectedId(params.focus); }, [params.focus]);
   const [runsBySchedule, setRunsBySchedule] = useState<Map<string, RemoteScheduleRun[]>>(
     () => new Map(),
   );
   const [loading, setLoading] = useState(false);
   const [runsLoading, setRunsLoading] = useState(false);
+  const scrollRef = useRef<ScrollView>(null);
+  const historyLayout = useRef<{ detail?: number; header?: number; focused?: string }>({});
   const [busyAction, setBusyAction] = useState<string | null>(null);
   const [openingRunId, setOpeningRunId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -178,6 +181,16 @@ export default function AutomationsScreen() {
     [schedules, selectedId],
   );
   const selectedScheduleId = selectedSchedule?.id ?? null;
+  const revealFocusedHistory = useCallback(() => {
+    const layout = historyLayout.current;
+    const focusKey = JSON.stringify([deviceId, params.focus]);
+    if (!params.focus || selectedScheduleId !== params.focus || loading || runsLoading
+      || !runsBySchedule.has(params.focus)
+      || layout.focused === focusKey || layout.detail === undefined || layout.header === undefined) return;
+    layout.focused = focusKey;
+    scrollRef.current?.scrollTo({ y: layout.detail + layout.header, animated: false });
+  }, [deviceId, params.focus, selectedScheduleId, loading, runsLoading, runsBySchedule]);
+  useEffect(revealFocusedHistory, [revealFocusedHistory]);
   const selectedRuns = selectedSchedule ? (runsBySchedule.get(selectedSchedule.id) ?? []) : [];
   const displayedRuns = useMemo(() => displayRunsForMobile(selectedRuns), [selectedRuns]);
   const overview = useMemo(
@@ -868,6 +881,8 @@ export default function AutomationsScreen() {
       </SummaryStrip>
 
       <ScrollView
+        ref={scrollRef}
+        onContentSizeChange={revealFocusedHistory}
         refreshControl={<RefreshControl refreshing={loading || runsLoading} onRefresh={refreshAll} />}
         contentContainerStyle={[
           styles.content,
@@ -983,7 +998,10 @@ export default function AutomationsScreen() {
             </View>
 
             {selectedSchedule && (
-              <View style={styles.detail} testID="automations.detail">
+              <View style={styles.detail} testID="automations.detail" onLayout={(event) => {
+                historyLayout.current.detail = event.nativeEvent.layout.y;
+                revealFocusedHistory();
+              }}>
                 <ScheduleDetail
                   busyAction={busyAction}
                   onPause={() => requestPauseSchedule(selectedSchedule)}
@@ -1004,7 +1022,10 @@ export default function AutomationsScreen() {
                   schedule={selectedSchedule}
                 />
 
-                <View style={styles.runsHeader}>
+                <View style={styles.runsHeader} onLayout={(event) => {
+                  historyLayout.current.header = event.nativeEvent.layout.y;
+                  revealFocusedHistory();
+                }}>
                   <Text style={styles.sectionTitle}>{t('devices.automations.recentRuns')}</Text>
                   {runsLoading ? <ActivityIndicator color={colors.textSecondary} /> : null}
                 </View>

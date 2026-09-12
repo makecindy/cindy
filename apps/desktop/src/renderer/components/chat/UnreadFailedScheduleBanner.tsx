@@ -3,6 +3,7 @@ import { AlertCircle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
+import { scheduleFailureMessageKey } from '@cindy/maker-shared/schedule-model';
 import {
   compareFailedScheduleRuns,
   dismissScheduleFailure,
@@ -17,6 +18,7 @@ interface BannerProps {
   latestFailedRun: FailedScheduleRunSnapshot;
   className?: string;
   style?: CSSProperties;
+  onViewHistory?: () => void;
 }
 
 /** 历史定时失败看过即已读；需要重试或继续的错误仍由各自的操作横幅负责。 */
@@ -35,6 +37,7 @@ function FailedScheduleNotice({
   latestFailedRun,
   className,
   style,
+  onViewHistory,
 }: BannerProps) {
   const { t } = useTranslation();
   // 关闭是本机 UI 偏好，不修改运行记录或已读回执。
@@ -89,7 +92,13 @@ function FailedScheduleNotice({
     >
       <AlertCircle size={14} className="shrink-0 mt-[2px] text-[var(--error-fg)]" />
       <span className="flex-1 min-w-0 text-xs break-all text-[var(--error-fg)]">
-        {t('chat.unreadFailedScheduleBanner.text')}
+        {t(`chat.unreadFailedScheduleBanner.${scheduleFailureMessageKey(latestFailedRun)}`)}
+        {onViewHistory && (
+          <button type="button" onClick={onViewHistory} data-split-pane-route-action=""
+            className="ml-2 rounded-full px-2 py-1 underline hover:bg-[var(--button-primary-hover)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]">
+            {t('chat.unreadFailedScheduleBanner.viewHistory')}
+          </button>
+        )}
       </span>
       <Tip text={t('chat.unreadFailedScheduleBanner.dismissTitle')}>
         <button

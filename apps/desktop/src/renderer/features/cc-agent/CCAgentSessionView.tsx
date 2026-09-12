@@ -4899,6 +4899,9 @@ export function CCAgentSessionView({
                   dataOwnerId={dataOwnerId}
                   sessionId={sessionId}
                   latestFailedRun={scheduleSessionInfo.latestFailedRun}
+                  onViewHistory={canNavigateSession && !remoteDeviceId && scheduleSessionInfo.latestFailedRun.scheduleId
+                    ? () => navigate(`/cc-agent/scheduled?focus=${encodeURIComponent(scheduleSessionInfo.latestFailedRun!.scheduleId!)}`)
+                    : undefined}
                   style={{ width: inputWidth }}
                   className="py-1"
                 />

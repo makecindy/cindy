@@ -1,6 +1,9 @@
 {
   "failedScheduleNotice": {
-    "text": "완료되지 않은 예약 실행이 있습니다. 실행 기록을 확인하세요.",
+    "text": "실패한 자동 실행이 있습니다.",
+    "precheck": "자동 확인이 일시적으로 차단되었습니다.",
+    "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
+    "viewHistory": "실행 기록 보기",
     "dismissTitle": "이전 실패 알림 닫기"
   },
   "common": {

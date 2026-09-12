@@ -419,7 +419,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(h.send).not.toHaveBeenCalled();
   });
 
-  it('releases the heartbeat route lock before reporting an archived target', async () => {
+  it.each([false, true])('retires an archived target and releases an acquired lock (racing=%s)', async (racing) => {
     const order: string[] = [];
     const h = createSessionHarness(async () => ({ accepted: true }));
     const releaseAgentSwitchLock = vi.fn(() => {
@@ -435,16 +435,21 @@ describe('MakerScheduleRunner send outcome policy', () => {
       userSendAt: null,
       providerId: null,
     });
+    if (racing) mocks.getSessionRowSnapshot.mockResolvedValueOnce({ status: 'active', userSendAt: null, providerId: null });
+    const pause = vi.fn(async () => { order.push('pause'); });
+    runner.attachScheduler({ pause } as never);
 
     await expect(
       runner.fire(
         baseSchedule({ targetSessionId: 'scheduler-session' }),
         createFireContext(),
       ),
-    ).rejects.toThrow(/target session not available/);
+    ).resolves.toMatchObject({ skipped: true });
 
-    expect(order).toEqual(['release', 'notify']);
-    expect(releaseAgentSwitchLock).toHaveBeenCalledTimes(1);
+    expect(order).toEqual(racing ? ['release', 'pause'] : ['pause']);
+    expect(acquirePendingAgentSwitch).toHaveBeenCalledTimes(racing ? 1 : 0);
+    expect(pause).toHaveBeenCalledWith('schedule-1', { exemptRunId: 'run-1' });
+    expect(notifier.notify).not.toHaveBeenCalled();
     expect(h.send).not.toHaveBeenCalled();
   });
 

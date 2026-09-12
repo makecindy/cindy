@@ -25,6 +25,13 @@ const payload: PreRunHookStdinPayload = {
 };
 
 describe('executePreRunHook', () => {
+  it.each([0, 1, 2])('only successful exits can attest healthy checks (exit %s)', async (exitCode) => {
+    const result = await executePreRunHook({
+      command: `node -e "console.log('CINDY_PRECHECK_OK'); process.exit(${exitCode})"`,
+      stdinPayload: payload,
+    });
+    expect(result.checkSucceeded).toBe(exitCode === 1 ? undefined : true);
+  });
   it('exit 0 → decision run', async () => {
     const result = await executePreRunHook({
       command: 'node -e "process.exit(0)"',
@@ -44,6 +51,7 @@ describe('executePreRunHook', () => {
     });
     expect(result.decision).toBe('skip');
     expect(result.status).toBe('skipped');
+    expect(result.checkSucceeded).toBeUndefined();
     expect(result.exitCode).toBe(2);
   });
 

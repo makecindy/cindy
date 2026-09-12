@@ -118,7 +118,7 @@ describe('scheduleIndex', () => {
       expect(listRuns).toHaveBeenCalledTimes(visible ? 1 : 0);
       expect(markRunRead).toHaveBeenCalledTimes(visible ? 1 : 0);
       expect(onIndex).toHaveBeenCalledTimes(visible ? 1 : 0);
-      if (visible) expect(onIndex.mock.calls[0][0].get('task').latestFailedRun).toEqual({ runId: 'run', firedAt: 1 });
+      if (visible) expect(onIndex.mock.calls[0][0].get('task').latestFailedRun).toMatchObject({ runId: 'run', firedAt: 1, scheduleId: 'sched-1', failureKind: 'execution' });
     } finally {
       resetScheduleIndexThrottleForTesting();
       vi.useRealTimers();
@@ -145,7 +145,7 @@ describe('scheduleIndex', () => {
       loadSharedSessionScheduleIndex('shared-lightweight', maker),
     ]);
     expect(home).toBe(task);
-    expect(home.get('current')?.latestFailedRun).toEqual({ runId: 'old-failure', firedAt: 1 });
+    expect(home.get('current')?.latestFailedRun).toMatchObject({ runId: 'old-failure', firedAt: 1, scheduleId: 'sched-1', failureKind: 'execution' });
     expect(home.has('previous')).toBe(false);
     expect(home.get('zero-task')?.allSchedulesStopped).toBe(true);
     expect(list).toHaveBeenCalledTimes(1);

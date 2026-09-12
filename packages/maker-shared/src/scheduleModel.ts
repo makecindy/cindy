@@ -598,7 +598,51 @@ function readString(value: Record<string, unknown>, key: string): string | null 
 }
 
 /** Historical failure notices are independent of read receipts. */
-export interface FailedScheduleRunSnapshot { runId: string; firedAt: number }
+export type ScheduleFailureKind = 'precheck' | 'rate-limit' | 'execution';
+export interface FailedScheduleRunSnapshot {
+  runId: string;
+  firedAt: number;
+  scheduleId?: string;
+  failureKind?: ScheduleFailureKind;
+}
+
+/** Old hosts can omit the classification; keep their warning generic. */
+export function scheduleFailureMessageKey(run: FailedScheduleRunSnapshot): string {
+  return run.failureKind === 'rate-limit' ? 'rateLimited'
+    : run.failureKind === 'precheck' ? 'precheck' : 'text';
+}
+
+export function classifyScheduleFailure(run: RemoteScheduleRun): ScheduleFailureKind {
+  if (run.failureKind) return run.failureKind;
+  if (run.preRunHookResult?.decision === 'block') {
+    return /rate limit/i.test(run.preRunHookResult.stderr ?? '') ? 'rate-limit' : 'precheck';
+  }
+  return run.errorMsg?.startsWith('pre-run hook') ? 'precheck' : 'execution';
+}
+
+/** Full-history callers and lightweight host projections use the same recovery rule. */
+export function activeScheduleFailures(runs: readonly RemoteScheduleRun[]): Set<string> {
+  const successes = new Map<string, FailedScheduleRunSnapshot>();
+  const checks = new Map<string, FailedScheduleRunSnapshot>();
+  for (const run of runs) {
+    const candidate = { runId: run.id, firedAt: toMillis(run.firedAt) };
+    const targets = [
+      ...(run.status === 'success' ? [successes] : []),
+      ...(['success', 'failed', 'skipped'].includes(run.status) && run.preRunHookResult?.checkSucceeded === true ? [checks] : []),
+    ];
+    for (const target of targets) {
+      const previous = target.get(run.scheduleId);
+      if (!previous || compareFailedScheduleRuns(candidate, previous) > 0) target.set(run.scheduleId, candidate);
+    }
+  }
+  return new Set(runs.filter((run) => {
+    if (!isFailedScheduleRun(run) || run.failureRecovered === true) return false;
+    const success = successes.get(run.scheduleId);
+    const check = run.preRunHookResult?.decision === 'block' ? checks.get(run.scheduleId) : undefined;
+    return ![success, check].some((recovered) => recovered
+      && compareFailedScheduleRuns(recovered, { runId: run.id, firedAt: toMillis(run.firedAt) }) > 0);
+  }).map((run) => run.id));
+}
 export function compareFailedScheduleRuns(a: FailedScheduleRunSnapshot, b: FailedScheduleRunSnapshot): number {
   return a.firedAt - b.firedAt || (a.runId > b.runId ? 1 : a.runId < b.runId ? -1 : 0);
 }

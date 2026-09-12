@@ -8570,7 +8570,10 @@
       "dismissTitle": "Dismiss this interruption notice"
     },
     "unreadFailedScheduleBanner": {
-      "text": "Some scheduled runs did not finish. Check the run history.",
+      "text": "An automatic run failed.",
+      "precheck": "Automatic checks are temporarily blocked.",
+      "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
+      "viewHistory": "View run history",
       "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {

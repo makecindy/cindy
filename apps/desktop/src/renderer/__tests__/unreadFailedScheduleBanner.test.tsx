@@ -71,6 +71,16 @@ afterEach(() => {
 });
 
 describe('historical failed schedule notice', () => {
+  it('distinguishes precheck failures and opens history without dismissing the warning', () => {
+    const onViewHistory = vi.fn();
+    render(<UnreadFailedScheduleBanner dataOwnerId="owner" sessionId="session"
+      latestFailedRun={{ runId: 'failed', firedAt: 1, failureKind: 'rate-limit', scheduleId: 'schedule' }}
+      onViewHistory={onViewHistory} />);
+    expect(screen.getByText('chat.unreadFailedScheduleBanner.rateLimited')).toBeTruthy();
+    fireEvent.click(screen.getByText('chat.unreadFailedScheduleBanner.viewHistory'));
+    expect(onViewHistory).toHaveBeenCalledOnce();
+    expect(screen.queryByTestId('unread-failed-schedule-banner')).not.toBeNull();
+  });
   it('reads on opening even when running or specific errors replace the generic banner', async () => {
     render(<View runIds={['old']} showBanner={false} />);
     await waitFor(() => expect(readIds.has('old')).toBe(true));
