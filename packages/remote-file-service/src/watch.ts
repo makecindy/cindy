@@ -103,6 +103,16 @@ interface WatchFilterOptions {
   showIgnoredDirs: boolean;
 }
 
+/** 一个消费者在某个 workdir 上的意图。 */
+interface ConsumerIntent {
+  /** 当前尝试的过滤需求(reconcile 与并集用这个)。 */
+  options: WatchFilterOptions;
+  /** 最近一次 reconcile **成功后**生效过的值;从没成功过是 null。
+   *  失败回滚恢复到它 —— 不能快照「进入 start 时的前值」:同一 consumerId 的
+   *  重叠 start 里,那个前值可能是另一个尚未提交、同样失败的尝试(评审 P1)。 */
+  committed: WatchFilterOptions | null;
+}
+
 function normalizeWatchOptions(opts: {
   hideMetaFiles?: boolean;
   showIgnoredDirs?: boolean;
@@ -126,9 +136,10 @@ export class WorkdirWatchManager {
   /** 启动窗口内收到 stop 的 workdir:startInner 完成时不装 watcher(装完即拆),
    *  否则快速开关文件浏览会留下无人再来 stop 的孤儿原生 watcher。 */
   private readonly stopDuringStart = new Set<string>();
-  /** 每个 workdir 的消费者 → 该消费者的过滤需求。watcher 只此一份,选项取全部
-   *  消费者的可见性并集(见 effectiveOptions);start() / stop() 每轮重读它收敛。 */
-  private readonly desired = new Map<string, Map<string, WatchFilterOptions>>();
+  /** 每个 workdir 的消费者 → 它的意图(当前尝试 + 最近一次生效值)。watcher 只此
+   *  一份,选项取全部消费者的可见性并集(见 effectiveOptions);start() / stop()
+   *  每轮重读它收敛。 */
+  private readonly desired = new Map<string, Map<string, ConsumerIntent>>();
 
   /** 没带 consumerId 的调用方(旧控制端 / 内部调用)归到这个默认消费者。 */
   private static readonly DEFAULT_CONSUMER = 'default';
@@ -146,28 +157,41 @@ export class WorkdirWatchManager {
     opts: { hideMetaFiles?: boolean; showIgnoredDirs?: boolean } = {},
     consumerId: string = WorkdirWatchManager.DEFAULT_CONSUMER,
   ): Promise<void> {
-    const consumers = this.desired.get(workdir) ?? new Map<string, WatchFilterOptions>();
-    const previous = consumers.get(consumerId);
+    const consumers = this.desired.get(workdir) ?? new Map<string, ConsumerIntent>();
     const attempted = normalizeWatchOptions(opts);
-    consumers.set(consumerId, attempted);
+    consumers.set(consumerId, {
+      options: attempted,
+      committed: consumers.get(consumerId)?.committed ?? null,
+    });
     this.desired.set(workdir, consumers);
     try {
       await this.reconcile(workdir);
+      // 成功才记 committed:失败回滚只恢复到「真的生效过」的值。
+      const settled = this.desired.get(workdir)?.get(consumerId);
+      if (settled && settled.options === attempted) settled.committed = attempted;
     } catch (err) {
       // 启动失败:回滚**本次**写入的意图,否则 daemon 会留下一个「幽灵消费者」——
       // 控制端的失败处理只清本地注册、不会再发 watchStop(见 remote-watch.ts),
       // 之后别的消费者的可见性并集会被它抬高,最后一人 stop 时还会因它留下
-      // 孤儿 watcher(评审 P1)。只回滚仍然是自己这次写的那个值:并发的
-      // stop + start 会把同一 consumerId 覆盖成新选项,那属于它的意图。
-      const current = this.desired.get(workdir);
-      if (current && current.get(consumerId) === attempted) {
-        if (previous) current.set(consumerId, previous);
-        else current.delete(consumerId);
-        if (current.size === 0) this.desired.delete(workdir);
+      // 孤儿 watcher(评审 P1)。
+      //
+      // 恢复到 **committed** 而不是进入时快照:同一 consumerId 的重叠 start(双
+      // 窗口启同一 workdir)里,快照可能是另一个尚未提交、同样失败的尝试 ——
+      // 恢复它等于让失败注册复活,而下面 fire-and-forget 的 reconcile 会真给
+      // 它建一个没人再 stop 的 watcher。没有 committed = 该 consumer 从未成功
+      // 注册过,直接删。
+      const current = this.desired.get(workdir)?.get(consumerId);
+      if (current && current.options === attempted) {
+        if (current.committed) {
+          current.options = current.committed;
+        } else {
+          this.desired.get(workdir)?.delete(consumerId);
+          if (this.desired.get(workdir)?.size === 0) this.desired.delete(workdir);
+        }
       }
-      // 回滚改变了并集。而且失败可能就发生在「选项变化 → closeEntry 拆掉旧
-      // watcher → startInner 失败」之后:原有消费者此刻**没有 watcher**。按恢复
-      // 后的意图再收敛一次,否则它会静默失去直播,只能等自己重连或用户手动刷新。
+      // 回滚改变了并集,而且失败可能就在「选项变化 → closeEntry 拆掉旧 watcher →
+      // startInner 失败」之后:原有消费者此刻没有 watcher。按恢复后的意图再收敛
+      // 一次,否则它会静默失去直播,只能等自己重连或用户手动刷新。
       void this.reconcile(workdir).catch((rerr) =>
         log.warn('watch reconcile after rollback failed', workdir, String(rerr)),
       );
@@ -195,7 +219,13 @@ export class WorkdirWatchManager {
         continue;
       }
       const want = this.effectiveOptions(workdir);
-      if (!want) return; // 期间所有消费者都 stop:意图已撤
+      if (!want) {
+        // 没有消费者了:watcher 不该活着。所有进入这里的路径(stop、回滚删掉
+        // 最后一个消费者)都要维护这个不变量 —— 否则会留下没人再 stop 的孤儿
+        // watcher(评审 P1 同类:回滚删注册后 fire-and-forget 的收敛不会再拆)。
+        this.closeEntry(workdir);
+        return;
+      }
       const existing = this.entries.get(workdir);
       if (existing) {
         if (sameWatchOptions(existing, want)) return;
@@ -221,9 +251,9 @@ export class WorkdirWatchManager {
     if (!consumers || consumers.size === 0) return null;
     let showIgnoredDirs = false;
     let showMetaFiles = false;
-    for (const opts of consumers.values()) {
-      if (opts.showIgnoredDirs) showIgnoredDirs = true;
-      if (!opts.hideMetaFiles) showMetaFiles = true;
+    for (const intent of consumers.values()) {
+      if (intent.options.showIgnoredDirs) showIgnoredDirs = true;
+      if (!intent.options.hideMetaFiles) showMetaFiles = true;
     }
     return { showIgnoredDirs, hideMetaFiles: !showMetaFiles };
   }

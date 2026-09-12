@@ -354,4 +354,57 @@ describe('WorkdirWatchManager 过滤开关', () => {
     expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(false);
     manager.stopAll();
   });
+
+  /**
+   * 评审 P1：同一 consumerId 的重叠 start（双窗口启同一 workdir）共享同一次启动、
+   * 一起失败时，后到的那个不能把前一个**同样失败的**尝试当「前值」恢复 —— 否则
+   * 失败注册复活，回滚后的 fire-and-forget 收敛会真给它建一个没人再 stop 的
+   * 孤儿 watcher。
+   */
+  it('同一 consumerId 的重叠 start 都失败:不复活失败注册,不留活着的孤儿 watcher', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    let failWith = (_err: Error): void => {};
+    h.gate = new Promise<void>((_resolve, reject) => {
+      failWith = reject;
+    });
+
+    const first = manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    const second = manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    failWith(new Error('matcher load failed'));
+    await expect(first).rejects.toThrow('matcher load failed');
+    await expect(second).rejects.toThrow('matcher load failed');
+    await new Promise((resolve) => setTimeout(resolve, 0)); // 等 fire-and-forget 收敛
+
+    // 两个 caller 都失败 → 不能留下活着的 watcher（旧实现会复活失败注册并建出它）。
+    expect(h.created.every((c) => c.closed)).toBe(true);
+
+    // 下一次同选项 start 要真能建出活 watcher（注册表里没有幽灵）。
+    await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    expect(h.created.at(-1)?.closed).toBe(false);
+    manager.stopAll();
+  });
+
+  /**
+   * 正向锁定：同一消费者已有生效注册、改选项重建失败时，回滚要恢复到**已生效**
+   * 的值（committed），而不是把注册从表里删掉 —— 否则那个消费者静默失去直播。
+   */
+  it('已有生效注册的消费者改选项失败:回滚到已生效值', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    await manager.start('/repo', {}, 'desktop-tree');
+    expect(h.created).toHaveLength(1);
+
+    let failWith = (_err: Error): void => {};
+    h.gate = new Promise<void>((_resolve, reject) => {
+      failWith = reject;
+    });
+    const failing = manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    failWith(new Error('matcher load failed'));
+    await expect(failing).rejects.toThrow('matcher load failed');
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    // 回滚到已生效的隐藏态：watcher 活着且 matcher 用隐藏选项。
+    expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(false);
+    expect(h.created.at(-1)?.closed).toBe(false);
+    manager.stopAll();
+  });
 });
