@@ -277,6 +277,11 @@ export function PeerFileTransport() {
       view.current?.injectJavaScript("if (typeof runtime !== 'undefined') runtime.dispose();true;");
     };
   }, [foreground, ready, auth.isAuthenticated, viewKey]);
+  const handleProcessTerminated = () => {
+    if (liveView.current !== viewKey) return;
+    setReady(null);
+    setCrashes((n) => Math.min(2, n + 1));
+  };
   if (!foreground || !auth.isAuthenticated) return null;
   return (
     <View
@@ -300,10 +305,8 @@ export function PeerFileTransport() {
         mixedContentMode="never"
         mediaCapturePermissionGrantType="deny"
         incognito
-        onContentProcessDidTerminate={() => {
-          setReady(null);
-          setCrashes((n) => Math.min(2, n + 1));
-        }}
+        onContentProcessDidTerminate={handleProcessTerminated}
+        onRenderProcessGone={handleProcessTerminated}
         onMessage={(event) => {
           try {
             if (liveView.current !== viewKey) return;

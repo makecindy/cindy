@@ -54,6 +54,8 @@ export function HtmlSnapshotReader({ preview, onError }: { preview: MobileHtmlPr
     allowFileAccess={false}
     mediaCapturePermissionGrantType="deny"
     onError={onError}
+    onContentProcessDidTerminate={onError}
+    onRenderProcessGone={onError}
     onHttpError={(event) => {
       if (interceptSnapshotNavigation(event.nativeEvent.url, preview.url, preview.documents)) onError();
     }}
