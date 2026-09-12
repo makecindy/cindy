@@ -80,7 +80,7 @@ export async function openHtmlFileByPreference(
 ): Promise<void> {
   let loading: string | null = null;
   const delayed = setTimeout(() => {
-    loading = toast.warning(t('chat.remoteFile.previewFetching'), { duration: 120_000 });
+    loading = toast.loading(t('chat.remoteFile.previewFetching'));
   }, 600);
   try {
     const result = await window.electronAPI.fileBrowser.previewHtml({

@@ -2,12 +2,12 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import type { TFunction } from 'i18next';
 const mocks = vi.hoisted(() => ({
-  sidebar: vi.fn(), preference: vi.fn(() => 'sidebar'), preview: vi.fn(), external: vi.fn(), error: vi.fn(),
+  sidebar: vi.fn(), preference: vi.fn(() => 'sidebar'), preview: vi.fn(), external: vi.fn(), error: vi.fn(), loading: vi.fn(() => 'loading'), dismiss: vi.fn(),
 }));
 vi.mock('@/features/right-sidebar/lib/openInSidebarBrowser', () => ({ openUrlInSidebarBrowser: mocks.sidebar }));
 vi.mock('@/hooks/useLinkOpenPreference', () => ({ getLinkOpenPreference: mocks.preference, getLinkOpenPreferenceForUrl: mocks.preference }));
 vi.mock('@/features/cc-agent/embeddedSessionNavigation', () => ({ useSidebarTargetSessionId: (id: string) => id }));
-vi.mock('@/lib/toast', () => ({ toast: { error: mocks.error, warning: vi.fn(), dismiss: vi.fn() } }));
+vi.mock('@/lib/toast', () => ({ toast: { error: mocks.error, loading: mocks.loading, dismiss: mocks.dismiss } }));
 import { openHtmlFileByPreference } from '../components/chat/useOpenWithMenu';
 const t = ((key: string) => key) as TFunction;
 const context = { origin: { kind: 'device' as const, deviceId: 'remote-device' }, workingDir: '/remote' };
@@ -37,4 +37,22 @@ it('shows an actionable old-device error and does not open partial content', asy
   expect(mocks.error).toHaveBeenCalledWith('chat.remoteFile.previewUnsupported');
   expect(mocks.sidebar).not.toHaveBeenCalled();
   expect(mocks.external).not.toHaveBeenCalled();
+});
+
+it.each([false, true])('dismisses neutral loading when preview settles (failure=%s)', async (fails) => {
+  vi.useFakeTimers();
+  try {
+    let settle!: () => void;
+    mocks.preview.mockImplementationOnce(() => new Promise((resolve, reject) => {
+      settle = () => fails ? reject(new Error('failed')) : resolve({ url: 'http://127.0.0.1/preview/' });
+    }));
+    const opening = openHtmlFileByPreference('session', '/remote/index.html', t, context);
+    await vi.advanceTimersByTimeAsync(600);
+    expect(mocks.loading).toHaveBeenCalledWith('chat.remoteFile.previewFetching');
+    expect(mocks.error).not.toHaveBeenCalled();
+    settle();
+    await opening;
+    expect(mocks.dismiss).toHaveBeenCalledWith('loading');
+    expect(mocks.error).toHaveBeenCalledTimes(fails ? 1 : 0);
+  } finally { vi.useRealTimers(); }
 });
