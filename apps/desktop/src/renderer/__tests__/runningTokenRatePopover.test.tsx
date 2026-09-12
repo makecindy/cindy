@@ -20,6 +20,7 @@ it('pins the card on click and dismisses with Escape, returning focus to the spe
       history={{
         startedAt: 1,
         baseline: { durationMs: 10000, outputTokens: 1000 },
+        lastReport: { durationMs: 10000, outputTokens: 1000 },
         peak: 120,
         samples: [
           { durationMs: 1000, outputTokens: 120, rate: 120 },
@@ -46,7 +47,7 @@ it.each(['Escape', 'outside', 'trigger'] as const)(
         rateText="100 tok/s"
         averageRate="110"
         outputTokens={1000}
-        history={{ startedAt: 1, baseline: null, peak: 100, samples: [] }}
+        history={{ startedAt: 1, baseline: null, lastReport: null, peak: 100, samples: [] }}
       />,
     );
     const trigger = screen.getByRole('button');
