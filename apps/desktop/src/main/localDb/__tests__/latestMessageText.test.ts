@@ -4,7 +4,7 @@ import { drizzle } from 'drizzle-orm/better-sqlite3';
 
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
-import { regenerateTitleMaterial } from '../latestMessageText.js';
+import { latestMessage, regenerateTitleMaterial } from '../latestMessageText.js';
 import * as schema from '../schema.js';
 
 interface Harness {
@@ -254,5 +254,26 @@ describe('regenerateTitleMaterial hook user text', () => {
     const material = await regenerateTitleMaterial('s1', 8, false, { preferHookUserText: true });
     expect(material.opening.text).toBe('原始用户正文');
     expect(material.recent.map((m) => m.text)).toEqual(['原始用户正文']);
+  });
+});
+
+describe('latestMessage visibility', () => {
+  it('reads the clear boundary and latest non-rewound message in one statement', async () => {
+    const { sqlite, statements } = createHarness();
+    sqlite.exec("INSERT INTO sessions (id, cleared_at) VALUES ('s1', NULL)");
+    const insert = sqlite.prepare(`INSERT INTO messages
+      (id, client_id, session_id, role, content, created_at, rewind_at)
+      VALUES (?, ?, 's1', 'assistant', ?, ?, ?)`);
+    insert.run('a', 'a', JSON.stringify('old'), 100, null);
+    insert.run('b', 'b', JSON.stringify('visible'), 200, null);
+    insert.run('c', 'c', JSON.stringify('rewound'), 300, 400);
+    statements.length = 0;
+    expect(await latestMessage('s1', 'assistant')).toEqual({ text: 'visible', createdAt: 200 });
+    const reads = statements.filter((s) => /^select/i.test(s));
+    expect(reads).toHaveLength(1);
+    expect(reads[0]).toMatch(/inner join "sessions"/i);
+    expect(reads[0]).toContain('"sessions"."cleared_at"');
+    sqlite.exec("UPDATE sessions SET cleared_at = 200 WHERE id = 's1'");
+    expect(await latestMessage('s1', 'assistant')).toEqual({ text: '', createdAt: null });
   });
 });

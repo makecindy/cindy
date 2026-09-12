@@ -379,9 +379,9 @@ export function registerPassportInputDevice(): void {
       next.stdout.on('data', (data: string) => {
         if (child !== next) return;
         buffer += data;
-        if (buffer.length > 8192) { failChild('output exceeded limit'); return; }
         let index: number;
         while ((index = buffer.indexOf('\n')) >= 0) {
+          if (index > 8192) { failChild('output exceeded limit'); return; }
           const line = buffer.slice(0, index); buffer = buffer.slice(index + 1);
           let helperKind: unknown;
           try {
@@ -405,6 +405,7 @@ export function registerPassportInputDevice(): void {
           }
           handleVoice(line);
         }
+        if (buffer.length > 8192) failChild('output exceeded limit');
       });
       next.stderr.resume();
       next.stdin.on('error', () => failChild('stdin failed'));

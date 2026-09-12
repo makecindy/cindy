@@ -239,6 +239,18 @@ describe('Passport host transcription boundary', () => {
     expect(mocks.asr).toHaveBeenCalledTimes(2);
     expect(mocks.ipc.get('passport:state')!({}).voice).toBe('draft');
   });
+  it('accepts a batch of complete helper lines larger than the line limit', async () => {
+    const child = mocks.spawn.mock.results[0].value;
+    stdout.emit('data', '{"kind":"idle"}\n'.repeat(1000));
+    record(); await flush();
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(mocks.ipc.get('passport:state')!({}).voice).toBe('draft');
+  });
+  it.each(['', '\n'])('rejects an oversized individual helper line ending with %j', (ending) => {
+    const child = mocks.spawn.mock.results[0].value;
+    stdout.emit('data', 'x'.repeat(8193) + ending);
+    expect(child.kill).toHaveBeenCalledOnce();
+  });
   it('restarts an unexpectedly exited helper with bounded backoff', async () => {
     const firstChild = mocks.spawn.mock.results[0].value;
     firstChild.emit('exit', 1, null);

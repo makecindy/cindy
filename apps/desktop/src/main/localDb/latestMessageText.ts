@@ -204,18 +204,17 @@ export async function latestMessage(
   role: 'user' | 'assistant',
 ): Promise<LatestMessage> {
   const db = getDbClient().drizzle;
-  const clearedAt = await sessionClearedAt(sessionId);
-  const conds = [
-    eq(messages.sessionId, sessionId),
-    eq(messages.role, role),
-    isNull(messages.rewindAt),
-  ];
-  if (clearedAt != null) conds.push(gt(messages.createdAt, clearedAt));
   const [row] = await db
     .select({ content: messages.content, createdAt: messages.createdAt })
     .from(messages)
-    .where(and(...conds))
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(and(
+      eq(messages.sessionId, sessionId),
+      eq(messages.role, role),
+      isNull(messages.rewindAt),
+      or(isNull(sessions.clearedAt), gt(messages.createdAt, sessions.clearedAt)),
+    ))
+    .orderBy(desc(messages.createdAt), desc(joinedMessageRowid))
     .limit(1);
   return { text: extractText(row?.content, role), createdAt: row?.createdAt ?? null };
 }
