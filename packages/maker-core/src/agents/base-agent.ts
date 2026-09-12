@@ -987,6 +987,8 @@ export interface AgentDeps {
     ctx: {
       providerId?: string;
       codexHome?: string;
+      /** Actual native config/history root; credential/catalog preparation keeps codexHome above. */
+      runtimeCodexHome?: string;
       accountHostKey?: string;
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
@@ -1279,7 +1281,9 @@ export interface AgentDeps {
    */
   prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
   recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
-  resolveCodexThreadStorageHome?: (threadId: string) => Promise<string | undefined>;
+  resolveCodexThreadStorage?: (threadId: string) => Promise<{ historyHome: string; sqliteHome: string } | undefined>;
+  /** Freeze the owner/account scope before async host startup; never expose tokens to the renderer. */
+  createCodexAuthTokenReader?: (providerId?: string) => () => Promise<import('./codex/app-server/external-auth.js').CodexChatgptTokens>;
 
   /**
    * Codex 专用:把已拼好的产品级 system prompt 同步登记到 host 的 codex proxy registry。

@@ -153,6 +153,41 @@ class NotificationTransport implements Transport {
   }
 }
 
+describe('AppServerHost isolated account lifecycle', () => {
+  it.each([false, true])('rejects persistent native policy before task dispatch (OAuth: %s)', async oauth => {
+    const transport = new NotificationTransport(() => ({ config: { cli_auth_credentials_store: 'file' } }));
+    const readTokens = vi.fn(async () => ({ accessToken: 'fixture-token', chatgptAccountId: 'account-b' }));
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, requireEphemeralAuth: true,
+      ...(oauth ? { externalAuth: { readTokens } } : {}),
+    });
+    try {
+      await expect(host.request('thread/resume', { threadId: 'fixture' })).rejects.toThrow('isolated account authentication');
+      const methods = transport.lines.map(line => JSON.parse(line).method);
+      expect(methods).not.toContain('account/login/start');
+      expect(methods).not.toContain('thread/resume');
+      expect(readTokens).not.toHaveBeenCalled();
+    } finally { await host.retire(); }
+  });
+
+  it('never installs a credential read that finishes after retirement', async () => {
+    const transport = new NotificationTransport(() => ({ config: { cli_auth_credentials_store: 'ephemeral' } }));
+    let resolve!: (value: { accessToken: string; chatgptAccountId: string }) => void;
+    const readTokens = vi.fn(() => new Promise<{ accessToken: string; chatgptAccountId: string }>(done => { resolve = done; }));
+    const host = new AppServerHost({ createTransport: () => transport, logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' }, externalAuth: { readTokens },
+    });
+    const pending = host.ensureStarted();
+    const rejected = expect(pending).rejects.toThrow();
+    await vi.waitFor(() => expect(readTokens).toHaveBeenCalledOnce());
+    const retiring = host.retire();
+    resolve({ accessToken: 'late-fixture-secret', chatgptAccountId: 'account-b' });
+    await retiring;
+    await rejected;
+    expect(transport.lines.join('\n')).not.toContain('late-fixture-secret');
+  });
+});
+
 describe('AppServerHost assistant text delta routing', () => {
   it('subscribes to dedicated agentMessage deltas and routes them to the owning thread', async () => {
     const transport = new NotificationTransport();

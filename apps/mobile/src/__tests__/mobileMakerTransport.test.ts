@@ -11,6 +11,11 @@ import {
 } from "@/device-link/mobileMakerTransport";
 import type { RemoteInvoke } from "@/device-link/mobileMakerTransport";
 import { installPeerFileDownload } from "@/device-link/peerFileRegistry";
+import { resolveMobileRemoteMedia } from "@/session/remoteMedia";
+import {
+  setMobileAuthOwner,
+  __testing as authOwnerTesting,
+} from "@/auth/authOwnerGeneration";
 
 function harness() {
   const calls: Array<{ deviceId: string; channel: string; args?: unknown[] }> =
@@ -31,6 +36,82 @@ function harness() {
 }
 
 describe("mobile maker transport", () => {
+  it("does not return old-account OSS keys to a cleanup callback after account change", async () => {
+    setMobileAuthOwner("first");
+    const onDiscardOssKey = vi.fn();
+    const maker = createMobileMakerTransport({
+      deviceId: "d",
+      invoke: async <T,>() => {
+        setMobileAuthOwner("second");
+        return { ossKey: "first/key", size: 1, mimeType: "text/html" } as T;
+      },
+    });
+    try {
+      await expect(
+        maker.fetchRemoteMedia("xdt-file://open?path=/a", { onDiscardOssKey }),
+      ).rejects.toThrow("FILE_PEER_CANCELLED");
+      expect(onDiscardOssKey).not.toHaveBeenCalled();
+    } finally {
+      authOwnerTesting.reset();
+    }
+  });
+  it.each([
+    ["prepare", "abort"],
+    ["prepare", "stale"],
+    ["fallback", "abort"],
+    ["fallback", "stale"],
+  ])(
+    "returns late %s OSS ownership before %s cancellation",
+    async (phase, reason) => {
+      const abort = new AbortController();
+      let current = true;
+      const uploaded = new Set<string>();
+      const remove = vi.fn();
+      const presignGet = vi.fn();
+      const invoke = vi.fn(async (_device, _channel, args) => {
+        expect(args[0]).not.toHaveProperty("onDiscardOssKey");
+        if (phase === "fallback" && args[0].prepareOnly)
+          return {
+            ossKey: "",
+            size: 70_000,
+            mimeType: "text/html",
+            transferRequired: true,
+          };
+        if (reason === "abort") abort.abort();
+        else current = false;
+        return {
+          ossKey: "owned/late.html",
+          size: 70_000,
+          mimeType: "text/html",
+        };
+      });
+      const uninstall = installPeerFileDownload(async () => null);
+      const maker = createMobileMakerTransport({
+        deviceId: "d",
+        invoke: (device, channel, args) => invoke(device, channel, args) as Promise<never>,
+        isCurrent: () => current,
+      });
+      const read = async () => {
+        try {
+          return await resolveMobileRemoteMedia(
+            { kind: "image", url: "xdt-file://open?path=/late.html" },
+            { fetchRemoteMedia: maker.fetchRemoteMedia, presignGet },
+            { signal: abort.signal, onOssKey: (key) => uploaded.add(key) },
+          );
+        } finally {
+          for (const key of uploaded) remove(key);
+        }
+      };
+      try {
+        await expect(read()).rejects.toThrow("FILE_PEER_CANCELLED");
+        expect(remove).toHaveBeenCalledExactlyOnceWith("owned/late.html");
+        expect(presignGet).not.toHaveBeenCalled();
+        expect(invoke).toHaveBeenCalledTimes(phase === "prepare" ? 1 : 2);
+      } finally {
+        uninstall();
+      }
+    },
+  );
   it("uses the shared inline/peer/OSS policy for media files", async () => {
     const direct = { ossKey: "", size: 70_000, mimeType: "text/plain" };
     const peer = vi.fn(async () => direct);

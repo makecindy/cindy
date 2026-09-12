@@ -45,6 +45,18 @@ const useOrcaWorkerSelectionSourcePath = resolve(__dirname, '..', '..', 'rendere
 const useOrcaWorkerSelectionSource = readFileSync(useOrcaWorkerSelectionSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('sendToSession ordering', () => {
+  it('routes pending harness selections through the canonical queued send before using a live handle', () => {
+    const block = extractSendToSessionSource();
+    const routing = block.indexOf('|| agentSwitchPending.get(targetSessionId)');
+    expect(routing).toBeGreaterThan(0);
+    const enqueue = block.indexOf('await enqueueSendToSessionMessage({', routing);
+    const queuedReply = block.indexOf("wakeKind: 'queued'", enqueue);
+    const liveRead = block.indexOf('let live = maker.getSession(targetSessionId)');
+    expect(enqueue).toBeGreaterThan(routing);
+    expect(queuedReply).toBeGreaterThan(enqueue);
+    expect(queuedReply).toBeLessThan(liveRead);
+  });
+
   it('routes even idle private Bot deliveries through the durable input coordinator', () => {
     const block = extractSendToSessionSource();
     const routing = block.indexOf("explicitClientId?.startsWith('bot-dm:') || explicitClientId?.startsWith('bot-authorization-resume:') || inputCoordinator.shouldQueueNewTurn(targetSessionId)");

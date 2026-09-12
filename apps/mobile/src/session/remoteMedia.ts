@@ -34,10 +34,18 @@ export interface MobileResolvedRemoteMedia {
   inlineBase64?: string;
 }
 
+export interface MobileRemoteMediaFetchOptions {
+  skipCache?: boolean;
+  thumbnail?: boolean;
+  signal?: AbortSignal;
+  /** Return an undelivered OSS result to its existing cleanup owner before cancellation rejects. */
+  onDiscardOssKey?: (ossKey: string) => void;
+}
+
 export interface MobileRemoteMediaResolverDeps {
   fetchRemoteMedia(
     url: string,
-    opts?: { skipCache?: boolean; thumbnail?: boolean; signal?: AbortSignal },
+    opts?: MobileRemoteMediaFetchOptions,
   ): Promise<MobileRemoteMediaFetchResult>;
   presignGet(ossKey: string): Promise<MobileRemoteMediaPresignResult>;
 }
@@ -152,6 +160,7 @@ export async function resolveMobileRemoteMedia(
     throw new Error(i18n.t("composer.attachments.notFetchableMedia"));
   }
   const fetchOpts = {
+    ...(opts?.onOssKey ? { onDiscardOssKey: opts.onOssKey } : {}),
     ...(opts?.signal ? { signal: opts.signal } : {}),
     ...(opts?.skipCache ? { skipCache: true } : {}),
     ...(opts?.thumbnail ? { thumbnail: true } : {}),

@@ -56,7 +56,10 @@ import type {
 } from "@cindy/maker-shared/device-link-contract";
 import type { ProviderView } from "@cindy/model-providers/registry";
 import type { RewindPreviewPayload } from "@/session/rewindPreview";
-import type { MobileRemoteMediaFetchResult } from "@/session/remoteMedia";
+import type {
+  MobileRemoteMediaFetchOptions,
+  MobileRemoteMediaFetchResult,
+} from "@/session/remoteMedia";
 import type {
   RemoteSchedule,
   RemoteScheduleCreateFromTemplateInput,
@@ -627,7 +630,7 @@ export interface MobileMakerTransport {
   ): Promise<MobileAtResourceScanResult>;
   fetchRemoteMedia(
     url: string,
-    opts?: { skipCache?: boolean; thumbnail?: boolean; signal?: AbortSignal },
+    opts?: MobileRemoteMediaFetchOptions,
   ): Promise<MobileRemoteMediaFetchResult>;
   transcribeVoice(
     input: MobileVoiceTranscribeRequest,
@@ -859,7 +862,7 @@ export function createMobileMakerTransport({
   const files = createDeviceFileOperations(fileOp);
   const fetchMedia = (
     url: string,
-    opts?: { signal?: AbortSignal; skipCache?: boolean; thumbnail?: boolean },
+    opts?: MobileRemoteMediaFetchOptions,
     fallback?: () => Promise<MobileRemoteMediaFetchResult>,
   ) => {
     const fetch = (prepareOnly: boolean) =>
@@ -876,6 +879,12 @@ export function createMobileMakerTransport({
       discard: (result) => {
         const uri = peerMediaUri(result);
         if (uri) releasePeerMedia(uri);
+        else if (
+          isMobileAuthOwnerCurrent(fileOwner) &&
+          typeof result.ossKey === "string" &&
+          result.ossKey.length > 0
+        )
+          opts?.onDiscardOssKey?.(result.ossKey);
       },
       signal: opts?.signal,
       prepare: () => fetch(!opts?.thumbnail),
