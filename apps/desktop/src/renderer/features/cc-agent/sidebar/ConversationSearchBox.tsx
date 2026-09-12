@@ -434,9 +434,9 @@ export function useConversationSearch({
         SEARCH_LIMIT,
         sortBy,
       );
-      // A local empty page is not a definitive empty result while remote
-      // keyword requests are still outstanding.
-      if (next.results.length === 0 && !keywordSettled) return;
+      // Empty results are definitive only after every applicable stage settles.
+      // Either keyword or semantic search may still contribute a late hit.
+      if (next.results.length === 0 && (!keywordSettled || !semanticSettled)) return;
       setResponse(next);
       setStatus('done');
     };

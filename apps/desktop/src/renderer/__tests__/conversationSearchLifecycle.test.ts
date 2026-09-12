@@ -138,6 +138,41 @@ describe('conversation search request lifecycle', () => {
     await act(async () => keyword.resolve(page('remote-hit', true)));
     expect(view.result.current.status).toBe('done');
   });
+  it.each(['hit', 'empty', 'failure'])(
+    'waits for the semantic %s after an early empty keyword page',
+    async (outcome) => {
+      const hybrid = deferred();
+      vi.mocked(searchConversations).mockImplementation((request) =>
+        request.semanticMode === 'keyword' ? Promise.resolve(page()) : hybrid.promise,
+      );
+      const view = mount();
+      act(() => view.result.current.setQuery('needle'));
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(250);
+      });
+      expect(view.result.current.status).toBe('searching');
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(650);
+      });
+      expect(view.result.current.status).toBe('searching');
+      await act(async () => {
+        if (outcome === 'failure') hybrid.reject(new Error('offline'));
+        else hybrid.resolve(page(outcome === 'hit' ? 'semantic' : undefined));
+      });
+      expect(view.result.current.status).toBe('done');
+      expect(view.result.current.results.map((item) => item.session.id)).toEqual(
+        outcome === 'hit' ? ['semantic'] : [],
+      );
+    },
+  );
+  it('publishes a remote-only empty page without waiting for an inapplicable semantic stage', async () => {
+    vi.mocked(searchConversations).mockResolvedValue(page());
+    const view = mount(['remote']);
+    await start(view);
+    expect(view.result.current.status).toBe('done');
+    expect(view.result.current.results).toEqual([]);
+    expect(searchConversations).toHaveBeenCalledTimes(1);
+  });
   it.each(['keyword', 'hybrid'])('retains the successful page when %s fails', async (failed) => {
     vi.mocked(searchConversations).mockImplementation((request) =>
       request.semanticMode === failed
