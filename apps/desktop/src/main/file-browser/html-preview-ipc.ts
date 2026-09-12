@@ -38,7 +38,7 @@ export async function disposeHtmlPreviews(): Promise<void> {
 export function registerHtmlPreviewIpc(remote: RemoteSource): void {
   ipcMain.handle(HTML_PREVIEW_CHANNEL, async (event, args: HtmlPreviewArgs) => {
     assertTrustedAppRendererEvent(event);
-    if (shuttingDown || active.size + preparing >= 8)
+    if (shuttingDown || preparing >= 8)
       throwIpcError('HTML_PREVIEW_TOO_LARGE', 'Preview capacity exceeded');
     preparing++;
     try {
@@ -46,6 +46,15 @@ export function registerHtmlPreviewIpc(remote: RemoteSource): void {
       const scope = captureDataOwnerBroadcastScope();
       const isCurrent = () => !shuttingDown && isDataOwnerBroadcastScopeCurrent(scope);
       const db = getDbClient().drizzle;
+      // Finished snapshots are a bounded cache, not concurrent preparation slots.
+      // External browsers cannot report tab closure; evict the oldest snapshot so
+      // sequential opens (or failed browser launches) never block new previews for hours.
+      while (active.size + preparing > 8) {
+        const oldest = active.values().next().value;
+        if (!oldest) break;
+        await oldest();
+      }
+      if (!isCurrent()) throw new Error('PREVIEW_CANCELLED');
       const preview = await createHtmlPreview(args, {
         isCurrent,
         list: async (root, rel) => {

@@ -350,6 +350,12 @@ Reference implementation: `apps/desktop/src/renderer/components/ui/confirm-dialo
 
 The usage heatmap, daily-token bars and their separate interaction indicators follow [the Usage History component specification](./usage-history-charts.md). Their 2px data-mark geometry is set by the §5 registered data-mark members (`usage-heatmap-day` / `usage-token-bar`); the bounded hover/focus/selection emphasis is registered with those members in §5 (interaction constraints), and the extensible model palette, fixed Agent/harness colors and heatmap blue are the §2 Usage History color registration. Date filtering enters through the charts themselves (cell / bar hit targets) plus the range selector on the page — the formerly drafted single-day date form is not part of this entry, and the component spec records the unresolved target-size ruling separately.
 
+### Desktop chat and operation authorization (DS-9, 2026-09-11)
+
+Chat prose and compact code use the existing `chatChrome.ts` presentation entry; activity rows reuse `activityRowChrome.ts`. Keep user/assistant, tool, code, thinking and media theme aliases local. Icon actions use the ordinary pill frame with their contextual targets, visible keyboard focus and a Tip; a hidden message action bar becomes visible when keyboard focus enters it. Media previews and content-clipping cards retain their content geometry under §5. Do not change message identity, streaming, history, Diff Worker/virtualization or media/file lifecycles to share presentation.
+
+**Desktop Permission decisions, user-approved 2026-09-11 after actual-component comparison:** Allow once remains the visual main action using `perm-allow-*`; deny and session-scoped allow remain secondary. Retain neutral operation information: Desktop has no trusted risk-level field, and `autoReviewUnavailable` is not a risk conclusion. No invented danger variant or command-based risk inference. Keep the request in the composer area with title → description → scrollable operation → right-aligned wrapping actions, at the existing density. Use Button with a narrow local-alias adaptation; apply §5's existing pill-button and keycap treatments. Keep long scoped rules bounded by the column and available in the Tip. Labels, order, shortcuts, IME/editable-focus guards, submitting and failure recovery remain owned by the existing permission flow. This decision does not cover permission mode selectors, account/plugin authorization lifecycles or Mobile layout; Mobile is deferred to its own phase.
+
 ## 5. Layout Principles
 
 ### Spacing System

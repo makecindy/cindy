@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +8,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('@/components/ui/tooltip', () => ({
+vi.mock('@/components/ui/tooltip', async (importOriginal) => ({
+  // Keep Tip's real ref/event forwarding for the composed menu trigger.
+  ...(await importOriginal<typeof import('@/components/ui/tooltip')>()),
   Tooltip: {
     Root: ({ children }: { children: ReactNode }) => <>{children}</>,
     Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -260,7 +262,7 @@ describe('MessageActionBar', () => {
     const trigger = screen.getByRole('button', {
       name: 'chat.messageActionBar.moreActions',
     });
-    trigger.focus();
+    act(() => trigger.focus());
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     const item = await screen.findByRole('menuitem', {
       name: 'chat.quote.addToChat',

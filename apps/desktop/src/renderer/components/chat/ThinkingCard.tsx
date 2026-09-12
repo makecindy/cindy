@@ -27,6 +27,12 @@
  *     the persistent hook is the single source of truth.
  */
 
+import { CHAT_CHEVRON_TRANSITION_CLASS, CHAT_FOCUS_CLASS } from './chatChrome';
+import {
+  ACTIVITY_ROW_RADIUS_CLASS,
+  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+} from './activityRowChrome';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Sparkles, ChevronRight, Lock } from 'lucide-react';
 
@@ -74,10 +80,9 @@ function BodyRail({ children }: { children: React.ReactNode }) {
   return (
     <div
       className={cn(
-        'select-text mt-1 pl-3',
+        'select-text mt-1 pl-3 py-1.5',
         'border-l-2 border-[var(--agent-actions-rail)]',
       )}
-      style={{ paddingTop: 6, paddingBottom: 6 }}
     >
       {children}
     </div>
@@ -126,7 +131,7 @@ export function ThinkingCard({
         <div className="w-full">
           {/* select-none:另两个变体的 header 是 <button> 天然禁选,redacted 分支
               是纯 div,需显式对齐,避免状态短语可被划选 */}
-          <div className="flex select-none items-center gap-[6px] py-[2px]">
+          <div className="flex select-none items-center gap-1.5 px-2 py-0.5">
             <span className="inline-flex h-[1lh] items-center shrink-0">
               <Sparkles
                 size={14}
@@ -158,9 +163,12 @@ export function ThinkingCard({
             type="button"
             onClick={onToggle}
             className={cn(
-              'flex w-full items-center gap-[6px] py-[2px]',
+              'flex w-full items-center gap-1.5 px-2 py-0.5',
               'select-none cursor-pointer',
-              'hover:opacity-80 transition-opacity',
+              ACTIVITY_ROW_RADIUS_CLASS,
+              ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+              ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+              CHAT_FOCUS_CLASS,
               'text-left',
             )}
             aria-expanded={expanded}
@@ -187,7 +195,7 @@ export function ThinkingCard({
               size={14}
               className={cn(
                 'shrink-0 text-[var(--msg-tool-card-chevron)]',
-                'transition-transform duration-[var(--motion-fast,150ms)]',
+                CHAT_CHEVRON_TRANSITION_CLASS,
                 expanded && 'rotate-90',
               )}
             />
@@ -223,9 +231,12 @@ export function ThinkingCard({
           type="button"
           onClick={onToggle}
           className={cn(
-            'flex w-full items-center gap-[6px] py-[2px]',
+            'flex w-full items-center gap-1.5 px-2 py-0.5',
             'select-none cursor-pointer',
-            'hover:opacity-80 transition-opacity',
+            ACTIVITY_ROW_RADIUS_CLASS,
+            ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+            ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+            CHAT_FOCUS_CLASS,
             'text-left',
           )}
           aria-expanded={expanded}
@@ -244,7 +255,7 @@ export function ThinkingCard({
             size={14}
             className={cn(
               'shrink-0 text-[var(--msg-tool-card-chevron)]',
-              'transition-transform duration-[var(--motion-fast,150ms)]',
+              CHAT_CHEVRON_TRANSITION_CLASS,
               expanded && 'rotate-90',
             )}
           />

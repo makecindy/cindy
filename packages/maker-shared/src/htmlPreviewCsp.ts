@@ -52,6 +52,8 @@ export const HTML_PREVIEW_CSP = [
   "font-src data:",
   "style-src 'unsafe-inline' data:",
   "script-src 'unsafe-inline' data:",
+  // Never let a temporary snapshot install a worker on a reusable loopback origin.
+  "worker-src 'none'",
   "connect-src 'none'",
   "form-action 'none'",
   "base-uri 'none'",

@@ -11,6 +11,8 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
+import { Tip } from '@/components/ui/tooltip';
+import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -508,11 +510,9 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       <pre
         ref={preRef}
         className={cn(
-          'rounded-[12px]',
-          'border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)]',
-          'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
-          'select-text',
+          CHAT_CODE_SURFACE_CLASS,
+          CHAT_CODE_CLASS,
+          'p-4',
           // 取消横向滚动:长行/长 token 自动折行,避免出现横滚条
           'whitespace-pre-wrap break-all',
         )}
@@ -520,22 +520,23 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       >
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
-        title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
-        className={cn(
-          'absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center',
-          'rounded-md border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-          'opacity-0 transition-opacity duration-150',
-          'group-hover:opacity-100 focus-visible:opacity-100',
-          'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
-        )}
-      >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
+      <Tip text={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
+          className={cn(
+            CHAT_ICON_BUTTON_CLASS,
+            'absolute right-2 top-2 h-7 w-7 border border-[var(--msg-code-block-border)]',
+            'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+            'opacity-0 transition-[color,background-color,opacity] duration-[var(--motion-fast)]',
+            'group-hover:opacity-100 focus-visible:opacity-100',
+            'enabled:hover:bg-[var(--cmd-palette-item-hover)] enabled:hover:text-[var(--msg-assistant-text)]',
+          )}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </Tip>
     </div>
   );
 }

@@ -35,6 +35,24 @@ beforeEach(() => {
   mocks.current = true;
 });
 afterAll(disposeHtmlPreviews);
+it('bounds concurrent preparations before allocating more snapshots', async () => {
+  let release!: () => void;
+  const paused = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  registerHtmlPreviewIpc({
+    list: async () => {
+      await paused;
+      return [];
+    },
+    read: vi.fn(),
+  });
+  const open = mocks.handle.mock.calls[0][1];
+  const settled = Promise.allSettled(Array.from({ length: 8 }, () => open({}, args)));
+  await expect(open({}, args)).rejects.toMatchObject({ code: 'HTML_PREVIEW_TOO_LARGE' });
+  release();
+  expect((await settled).every((result) => result.status === 'rejected')).toBe(true);
+});
 it('rejects an untrusted guest before any filesystem or remote operation', async () => {
   mocks.trusted.mockImplementationOnce(() => {
     throw new Error('PERMISSION_DENIED');
@@ -102,6 +120,30 @@ it('passes the captured owner guard and compensation scope through media ingesti
       code: 'BROWSER_FILE_OPEN_FAILED',
     });
     expect(mocks.ingest).toHaveBeenCalledTimes(1);
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+});
+it('opens beyond eight sequential snapshots by reclaiming the oldest completed one', async () => {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-preview-capacity-test-'));
+  try {
+    const source = path.join(dir, 'index.html');
+    await fs.writeFile(source, '');
+    registerHtmlPreviewIpc({
+      list: async () => [
+        { name: 'index.html', relPath: 'index.html', type: 'file', size: 0, mtimeMs: 0 },
+      ],
+      read: async () => source,
+    });
+    const open = mocks.handle.mock.calls[0][1];
+    const urls: string[] = [];
+    for (let i = 0; i < 12; i++) urls.push((await open({}, args)).url);
+    await expect(fetch(urls[0])).rejects.toThrow();
+    for (const url of urls.slice(-8)) {
+      const response = await fetch(url, { redirect: 'manual' });
+      expect(response.status).toBe(302);
+      await response.body?.cancel();
+    }
   } finally {
     await fs.rm(dir, { recursive: true, force: true });
   }

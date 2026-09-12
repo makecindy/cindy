@@ -7,9 +7,14 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { HTML_PREVIEW_CSP, withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
+import { HTML_PREVIEW_CSP, HTML_SNAPSHOT_CSP, withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
 
 describe('HTML_PREVIEW_CSP(策略内容)', () => {
+  it('blocks workers explicitly even when snapshot scripts permit self', () => {
+    expect(HTML_PREVIEW_CSP).toContain("worker-src 'none'");
+    expect(HTML_SNAPSHOT_CSP).toContain("worker-src 'none'");
+    expect(HTML_SNAPSHOT_CSP).toContain("script-src 'self' 'unsafe-inline' data:");
+  });
   it('默认全拒,网络出口关闭', () => {
     expect(HTML_PREVIEW_CSP).toContain("default-src 'none'");
     expect(HTML_PREVIEW_CSP).toContain("connect-src 'none'");
