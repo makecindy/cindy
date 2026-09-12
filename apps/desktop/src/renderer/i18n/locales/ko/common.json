@@ -8548,8 +8548,14 @@
       }
     },
     "runningStatus": {
+      "currentRate": "최근 속도",
+      "waitingSample": "측정 중",
+      "averageRate": "이번 턴 평균",
+      "rateHistory": "생성 속도 추이",
+      "outputTotal": "누적 출력",
+      "observedPeak": "최고",
       "tokenRate": "{{rate}} tok/s",
-      "tokenRateDescription": "이번 턴에서 메인 Agent의 평균 생성 속도입니다. 사고 과정을 포함하며 도구 실행과 승인 대기 시간은 제외합니다. 사용량 보고에 따라 갱신되며, 옆에는 턴의 전체 경과 시간이 표시됩니다.",
+      "tokenRateDescription": "최근 생성 구간의 속도. 도구 실행과 대기는 제외합니다.",
       "tokenCount": "{{tokens}} tok"
     },
     "shareImage": {
