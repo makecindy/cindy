@@ -93,6 +93,7 @@ import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttach
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
 import {
   consumeIncomingShareBatch,
+  deleteIncomingSharedFiles,
   selectIncomingShareUploadCandidates,
   useIncomingShareBatch,
 } from '@/session/incomingShare';
@@ -178,6 +179,7 @@ import { i18n } from '@/i18n';
 import {
   getMobileAuthOwner,
   isMobileAuthOwnerCurrent,
+  subscribeMobileAuthOwner,
 } from '@/auth/authOwnerGeneration';
 import { useTranslation } from 'react-i18next';
 import {
@@ -334,18 +336,6 @@ import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftMod
 import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
-
-async function deleteIncomingSharedFiles(uris: readonly string[]): Promise<void> {
-  const FileSystem = await import('expo-file-system/legacy');
-  await Promise.all([...new Set(uris)].map((uri) => (
-    FileSystem.deleteAsync(
-      // The extension owns one file per UUID directory. Other pipeline outputs
-      // (JPEG conversion/preprocessing) are individual files, never directories.
-      uri.match(/^(file:\/\/.*\/cindy-share-[\da-f-]{36})\/[^/]+$/i)?.[1] ?? uri,
-      { idempotent: true },
-    ).catch(() => undefined)
-  )));
-}
 
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
 // composer 除输入区外的 chrome 高度估算（输入行上下 padding + 边框），
@@ -689,10 +679,21 @@ export default function NewRemoteSessionScreen() {
     onError: setAttachmentError,
     onPicked: () => setContextSheetOpen(false),
   });
+  useEffect(() => subscribeMobileAuthOwner(() => {
+    // Switching accounts invalidates both queued uploads and already received
+    // attachments, synchronously, before a new account can send this draft.
+    discardAllPendingUploads();
+    attachmentsRef.current = [];
+    setAttachments([]);
+    setAttachmentPreviews({});
+    setMediaAssetAttachments({});
+    setAttachmentError(null);
+  }), [discardAllPendingUploads]);
   const incomingShareBatch = useIncomingShareBatch();
   const isShareTargetFocused = useIsFocused();
   useEffect(() => {
     if (!isShareTargetFocused || !auth.isAuthenticated || !incomingShareBatch
+      || getMobileAuthOwner().accountId !== auth.user?.id
       || !consumeIncomingShareBatch(incomingShareBatch.id)) return;
     const selection = selectIncomingShareUploadCandidates(incomingShareBatch.payloads);
     const remainingSlots = Math.max(

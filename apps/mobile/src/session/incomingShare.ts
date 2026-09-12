@@ -8,6 +8,12 @@
  */
 import { useSyncExternalStore } from 'react';
 import type { ResolvedSharePayload, SharePayload } from 'expo-sharing';
+import {
+  getMobileAuthOwner,
+  isMobileAuthOwnerCurrent,
+  subscribeMobileAuthOwner,
+  type MobileAuthOwnerGeneration,
+} from '@/auth/authOwnerGeneration';
 
 import {
   categorizeMobileAttachment,
@@ -21,6 +27,7 @@ export interface IncomingShareBatch {
   id: string;
   payloads: readonly ResolvedSharePayload[];
   acknowledge: () => void;
+  owner: MobileAuthOwnerGeneration;
 }
 
 export interface IncomingShareUploadSelection {
@@ -31,6 +38,75 @@ export interface IncomingShareUploadSelection {
 let currentBatch: IncomingShareBatch | null = null;
 const pendingBatches: IncomingShareBatch[] = [];
 const listeners = new Set<() => void>();
+let unsubscribeOwner: (() => void) | undefined;
+
+export async function deleteIncomingSharedFiles(uris: readonly string[]): Promise<void> {
+  const FileSystem = await import('expo-file-system/legacy');
+  await Promise.all([...new Set(uris)].filter((uri) => uri.startsWith('file://')).map((uri) => (
+    FileSystem.deleteAsync(
+      // Each native input owns one UUID directory; converted images are files.
+      uri.match(/^(file:\/\/.*\/cindy-share-[\da-f-]{36})\/[^/]+$/i)?.[1] ?? uri,
+      { idempotent: true },
+    ).catch(() => undefined)
+  )));
+}
+
+function acknowledgeBatch(batch: IncomingShareBatch): void {
+  try { batch.acknowledge(); } catch {
+    // Older native binaries may not expose the App Group.
+  }
+}
+
+function isFirstShareLogin(owner: MobileAuthOwnerGeneration): boolean {
+  const current = getMobileAuthOwner();
+  return !owner.accountKey && !!current.accountKey
+    && current.generation === owner.generation + 1;
+}
+
+function updateIncomingShareOwner(): void {
+  const owner = getMobileAuthOwner();
+  const discarded = pendingBatches.filter((batch) => {
+    // A share received while logged out may follow the first login only.
+    if (isFirstShareLogin(batch.owner)) {
+      batch.owner = owner;
+    }
+    return !isMobileAuthOwnerCurrent(batch.owner);
+  });
+  if (!discarded.length) return;
+  for (const batch of discarded) {
+    pendingBatches.splice(pendingBatches.indexOf(batch), 1);
+    acknowledgeBatch(batch);
+    void deleteIncomingSharedFiles(batch.payloads.map((payload) => payload.contentUri ?? payload.value))
+      .catch(() => undefined);
+  }
+  currentBatch = pendingBatches[0] ?? null;
+  emit();
+}
+
+type IncomingShareNative = {
+  getSharedPayloads(): SharePayload[];
+  clearSharedPayloads(): void;
+};
+
+/** Also clear a native payload not yet observed by the JS mailbox on logout/switch. */
+export function watchIncomingShareAccount(
+  native: IncomingShareNative,
+  previous = getMobileAuthOwner(),
+): () => void {
+  const changed = () => {
+    const current = getMobileAuthOwner();
+    if (!isMobileAuthOwnerCurrent(previous) && !isFirstShareLogin(previous)) {
+      try {
+        const raw = native.getSharedPayloads();
+        native.clearSharedPayloads();
+        void deleteIncomingSharedFiles(raw.map((payload) => payload.value)).catch(() => undefined);
+      } catch { /* Sharing is unavailable in older native binaries. */ }
+    }
+    previous = current;
+  };
+  changed();
+  return subscribeMobileAuthOwner(changed);
+}
 
 function emit(): void {
   for (const listener of listeners) listener();
@@ -70,7 +146,8 @@ export function stageIncomingShareBatch(
   const id = incomingShareBatchId(payloads);
   const existing = pendingBatches.find((batch) => batch.id === id);
   if (existing) return existing;
-  const batch = { id, payloads: [...payloads], acknowledge };
+  unsubscribeOwner ??= subscribeMobileAuthOwner(updateIncomingShareOwner);
+  const batch = { id, payloads: [...payloads], acknowledge, owner: getMobileAuthOwner() };
   pendingBatches.push(batch);
   currentBatch = pendingBatches[0]!;
   emit();
@@ -78,24 +155,18 @@ export function stageIncomingShareBatch(
 }
 
 export function consumeIncomingShareBatch(id: string): boolean {
-  if (!currentBatch || currentBatch.id !== id) return false;
+  if (!currentBatch || currentBatch.id !== id
+    || !currentBatch.owner.accountKey || !isMobileAuthOwnerCurrent(currentBatch.owner)) return false;
   const consumed = currentBatch;
   pendingBatches.shift();
   currentBatch = pendingBatches[0] ?? null;
   emit();
-  try {
-    consumed.acknowledge();
-  } catch {
-    // A native clear failure must not lose files already claimed by the composer.
-  }
+  acknowledgeBatch(consumed);
   return true;
 }
 
 /** Raw local files need no asynchronous resolver; the uploader stats their size. */
-export function receiveIncomingShare(native: {
-  getSharedPayloads(): SharePayload[];
-  clearSharedPayloads(): void;
-}): void {
+export function receiveIncomingShare(native: IncomingShareNative): void {
   const raw = native.getSharedPayloads();
   if (raw.length === 0) return;
   const key = JSON.stringify(raw);
@@ -198,6 +269,8 @@ export function selectIncomingShareUploadCandidates(
 }
 
 export function __resetIncomingShareForTest(): void {
+  unsubscribeOwner?.();
+  unsubscribeOwner = undefined;
   currentBatch = null;
   pendingBatches.length = 0;
   listeners.clear();

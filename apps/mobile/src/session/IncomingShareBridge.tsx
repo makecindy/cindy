@@ -3,9 +3,11 @@ import { AppState, Linking, Platform } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
 
 import { useAuth } from '@/auth/AuthContext';
+import { getMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import {
   receiveIncomingShare,
   useIncomingShareBatch,
+  watchIncomingShareAccount,
 } from '@/session/incomingShare';
 
 /**
@@ -20,9 +22,12 @@ export function IncomingShareBridge() {
   useEffect(() => {
     if (Platform.OS !== 'ios') return;
     let active = true;
+    const initialOwner = getMobileAuthOwner();
+    let stopWatchingAccount: (() => void) | undefined;
     let subscriptions: Array<{ remove(): void }> = [];
     void import('expo-sharing').then((sharing) => {
       if (!active) return;
+      stopWatchingAccount = watchIncomingShareAccount(sharing, initialOwner);
       const refresh = () => {
         // Older development clients lack the native App Group. Inbound sharing
         // must not prevent startup. Local files need no async/network resolver.
@@ -40,6 +45,7 @@ export function IncomingShareBridge() {
     }).catch(() => undefined);
     return () => {
       active = false;
+      stopWatchingAccount?.();
       subscriptions.forEach((subscription) => subscription.remove());
     };
   }, []);
