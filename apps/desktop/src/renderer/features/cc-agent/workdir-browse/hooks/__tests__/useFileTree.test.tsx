@@ -414,7 +414,7 @@ describe('useFileTree showIgnoredDirs option', () => {
       size: 0,
       mtimeMs: 1,
     });
-    const hiddenRoot = [dir('packages', 'packages')];
+    const hiddenRoot: readonly DirEntry[] = [dir('packages', 'packages')];
     const hiddenChild = [dir('foo', 'packages/foo')];
     const revealedChild = [
       dir('foo', 'packages/foo'),
@@ -470,7 +470,7 @@ describe('useFileTree showIgnoredDirs option', () => {
     const revealedNodeModules = [dir('pkg', 'node_modules/pkg')];
     const revealedPkg = [dir('deep', 'node_modules/pkg/deep')];
 
-    const hiddenRoot = [dir('src', 'src')];
+    const hiddenRoot: readonly DirEntry[] = [dir('src', 'src')];
     mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) => {
       if (!args.showIgnoredDirs) return Promise.resolve(hiddenRoot);
       if (args.relPath === 'node_modules') return Promise.resolve(revealedNodeModules);
@@ -511,6 +511,75 @@ describe('useFileTree showIgnoredDirs option', () => {
       .filter((p) => p === 'node_modules' || p.startsWith('node_modules/'));
     expect(rescanned).toEqual([]);
     expect(mocks.listDir).toHaveBeenCalledWith(expect.objectContaining({ relPath: '' }));
+
+    view.unmount();
+  });
+
+  /**
+   * 评审 P2：切到隐藏态后、root 数据回来前操作目录，会把继承来的 reveal-only
+   * 展开位写进隐藏 scope（那次 saveExpandedSet 早于剪枝）；剪枝发生在 root 回来时，
+   * 必须**同步回写**清理后的集合，否则脏路径固化进 localStorage，下次挂载按它们
+   * 逐个 listDir。
+   */
+  it('剪枝时回写持久化,隐藏 scope 不残留 reveal-only 展开位', async () => {
+    const revealedRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+      { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    const revealedChild: readonly DirEntry[] = [
+      { name: 'pkg', relPath: 'node_modules/pkg', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    const hiddenRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+
+    const pendingRoot = deferred<readonly DirEntry[]>();
+    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) => {
+      if (!args.showIgnoredDirs) {
+        // 隐藏态的 root 故意挂起（慢通道），src 立刻返回避免测试悬空。
+        return args.relPath === 'src' ? Promise.resolve([]) : pendingRoot.promise;
+      }
+      if (args.relPath === 'node_modules') return Promise.resolve(revealedChild);
+      return Promise.resolve(revealedRoot);
+    });
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-persist-prune', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: true } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    await act(async () => {
+      view.result.current.toggleFolder('node_modules');
+    });
+    await waitFor(() => expect(view.result.current.expanded.has('node_modules')).toBe(true));
+
+    // 切到隐藏态：root 挂起，处于过渡窗口；继承的展开位仍在内存里。
+    await act(async () => {
+      view.rerender({ reveal: false });
+    });
+    expect(view.result.current.expanded.has('node_modules')).toBe(true);
+
+    // 过渡窗口里操作普通目录 —— 这一发 saveExpandedSet 会带上继承来的
+    // node_modules（旧实现如此）。
+    mocks.saveExpandedSet.mockClear();
+    await act(async () => {
+      view.result.current.toggleFolder('src');
+    });
+
+    // root 数据回来 → 剪枝 → 必须回写清理后的集合。
+    await act(async () => {
+      pendingRoot.resolve(hiddenRoot);
+      await Promise.resolve();
+    });
+    expect(view.result.current.expanded.has('node_modules')).toBe(false);
+
+    const persistedHidden = mocks.saveExpandedSet.mock.calls
+      .filter((c) => c[2]?.showIgnoredDirs === false)
+      .map((c) => c[1] as Set<string>)
+      .at(-1);
+    expect(persistedHidden?.has('node_modules')).toBe(false);
+    expect(persistedHidden?.has('src')).toBe(true);
 
     view.unmount();
   });

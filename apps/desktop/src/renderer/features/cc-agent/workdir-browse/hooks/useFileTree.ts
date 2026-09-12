@@ -338,6 +338,11 @@ function findRevealSiblingSnapshot(
  *
  * 查不到祖先列表(缓存被清 / 还没拉过)时保守保留 —— 宁可留一个 stale 展开位,
  * 也不能把用户真实的展开态删掉。
+ *
+ * 剪枝后**同步回写持久化**(评审 P2):过渡窗口里 root 数据还没到时,用户若做过
+ * 一次 toggleFolder,那次 saveExpandedSet 会把继承来的 reveal-only 路径一并
+ * 写进本 scope —— 不回写就会把它们固化进 localStorage,下次挂载按这些路径逐个
+ * listDir(上限 200 个,SSH / device-link 上代价明显)。
  */
 function pruneExpandedForCurrentTree(store: FileTreeStore): void {
   if (!store.snapshot.entries.has(ROOT_KEY)) return;
@@ -362,6 +367,7 @@ function pruneExpandedForCurrentTree(store: FileTreeStore): void {
   if (!changed) return;
   store.snapshot = { ...store.snapshot, expanded: next };
   emit(store);
+  saveExpandedSet(store.workdir, next, { showIgnoredDirs: store.showIgnoredDirs });
 }
 
 function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
