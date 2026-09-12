@@ -146,7 +146,7 @@ final class HtmlSnapshotServer {
   }
 
   private func responseHead(_ status: Int, length: Int = 0, extra: String = "") -> String {
-    "HTTP/1.1 \(status) \(status == 200 ? "OK" : status == 302 ? "Found" : "Error")\r\nConnection: close\r\nContent-Length: \(length)\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: \(csp)\r\nReferrer-Policy: no-referrer\r\n\(extra)\r\n"
+    "HTTP/1.1 \(status) \(status == 200 ? "OK" : status == 302 ? "Found" : "Error")\r\nConnection: close\r\nContent-Length: \(length)\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nContent-Security-Policy: \(csp)\r\nPermissions-Policy: camera=(), microphone=(), geolocation=()\r\nReferrer-Policy: no-referrer\r\n\(extra)\r\n"
   }
 
   private func send(_ id: UUID, status: Int, extra: String = "") {

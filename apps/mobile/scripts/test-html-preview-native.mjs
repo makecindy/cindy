@@ -40,13 +40,19 @@ dispatchMain()
   });
   const initial = new URL(url);
   const origin = initial.origin;
+  const assertPermissions = (response) => assert.equal(
+    response.headers.get('permissions-policy'),
+    'camera=(), microphone=(), geolocation=()',
+  );
   const bootstrap = await fetch(url, { redirect: 'manual' });
+  assertPermissions(bootstrap);
   assert.equal(bootstrap.status, 302);
   assert.equal(bootstrap.headers.get('location'), '/index.html');
   const cookie = bootstrap.headers.get('set-cookie').split(';')[0];
   assert.match(bootstrap.headers.get('set-cookie'), /HttpOnly; SameSite=Strict/);
   assert.equal((await fetch(origin + '/index.html')).status, 403);
   const page = await fetch(origin + '/index.html', { headers: { cookie } });
+  assertPermissions(page);
   assert.match(await page.text(), /中文/);
   assert.match(page.headers.get('content-type'), /charset=utf-8/);
   assert.equal(page.headers.get('cache-control'), 'no-store');
@@ -56,6 +62,9 @@ dispatchMain()
   assert.equal((await fetch(origin + '/second.html', { headers: { cookie } })).status, 200);
   assert.equal((await fetch(origin + '/', { headers: { cookie } })).status, 200);
   const head = await fetch(origin + '/index.html', { method: 'HEAD', headers: { cookie } });
+  assertPermissions(head);
+  assertPermissions(await fetch(origin + '/index.html'));
+  assertPermissions(await fetch(origin + '/missing.html', { headers: { cookie } }));
   assert.equal(head.status, 200);
   assert.equal(await head.text(), '');
   assert.ok(Number(head.headers.get('content-length')) > 0);

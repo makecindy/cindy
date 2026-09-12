@@ -121,7 +121,7 @@ internal class HtmlSnapshotServer(root: String, private val entry: String, priva
   private fun head(status: Int, length: Long = 0, extra: String = ""): String =
     "HTTP/1.1 $status ${if (status == 200) "OK" else if (status == 302) "Found" else "Error"}\r\n" +
       "Connection: close\r\nContent-Length: $length\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\n" +
-      "Content-Security-Policy: $csp\r\nReferrer-Policy: no-referrer\r\n$extra\r\n"
+      "Content-Security-Policy: $csp\r\nPermissions-Policy: camera=(), microphone=(), geolocation=()\r\nReferrer-Policy: no-referrer\r\n$extra\r\n"
 
   private fun send(socket: Socket, status: Int, extra: String = "") {
     socket.getOutputStream().write(head(status, extra = extra).toByteArray(Charsets.UTF_8))
