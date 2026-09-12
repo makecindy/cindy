@@ -8566,7 +8566,6 @@
       "text": "先前有自動執行失敗。",
       "precheck": "自動檢查暫時受阻。",
       "rateLimited": "自動檢查暫時受阻：請求限流。",
-      "viewHistory": "查看執行記錄",
       "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {

@@ -8567,7 +8567,6 @@
       "text": "此前有自动运行失败。",
       "precheck": "自动检查暂时受阻。",
       "rateLimited": "自动检查暂时受阻：请求限流。",
-      "viewHistory": "查看运行记录",
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {

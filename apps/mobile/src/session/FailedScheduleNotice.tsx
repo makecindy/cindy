@@ -9,7 +9,7 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 /** Only a local display preference: never writes a run or a read receipt. */
-export function FailedScheduleNotice({ source, run, onViewHistory }: { source: string; run: FailedScheduleRunSnapshot; onViewHistory?: () => void }) {
+export function FailedScheduleNotice({ source, run }: { source: string; run: FailedScheduleRunSnapshot }) {
   const key = `scheduleFailureDismissal:${source}`;
   const [loaded, setLoaded] = useState(false);
   const [dismissed, setDismissed] = useState<FailedScheduleRunSnapshot | null>(null);
@@ -37,13 +37,7 @@ export function FailedScheduleNotice({ source, run, onViewHistory }: { source: s
   return (
     <View style={styles.box} testID="session.failedScheduleNotice">
       <CircleAlert color={colors.errorText} size={iconSize.md} strokeWidth={iconStroke.regular} />
-      <View style={styles.content}>
-        <Text style={styles.text}>{t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`)}</Text>
-        {onViewHistory && <Pressable accessibilityRole="button" onPress={onViewHistory}
-          style={({ pressed }) => [styles.history, pressed && styles.pressed]}>
-          <Text style={styles.historyText}>{t('session.failedScheduleNotice.viewHistory')}</Text>
-        </Pressable>}
-      </View>
+      <Text style={styles.text}>{t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`)}</Text>
       <Pressable accessibilityRole="button" accessibilityLabel={t('session.failedScheduleNotice.dismissTitle')}
         onPress={dismiss} style={({ pressed }) => [styles.close, pressed && styles.pressed]}>
         <X color={colors.errorText} size={iconSize.md} strokeWidth={iconStroke.regular} />
@@ -55,10 +49,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   box: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, marginTop: spacing.sm,
     paddingLeft: spacing.md, backgroundColor: colors.surfaceElevated, borderColor: colors.errorBorder,
     borderWidth: StyleSheet.hairlineWidth, borderRadius: radius.container },
-  content: { flex: 1 },
-  text: { color: colors.errorText, fontSize: typeScale.caption, lineHeight: lineHeight.caption, paddingVertical: spacing.sm },
-  history: { minHeight: 44, justifyContent: 'center', alignSelf: 'flex-start', paddingHorizontal: spacing.sm, borderRadius: radius.pill },
-  historyText: { color: colors.errorText, fontSize: typeScale.caption, textDecorationLine: 'underline' },
+  text: { flex: 1, color: colors.errorText, fontSize: typeScale.caption, lineHeight: lineHeight.caption, paddingVertical: spacing.sm },
   close: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', borderRadius: radius.pill },
   pressed: { opacity: 0.7 },
 });

@@ -3,7 +3,6 @@
     "text": "An automatic run failed.",
     "precheck": "Automatic checks are temporarily blocked.",
     "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
-    "viewHistory": "View run history",
     "dismissTitle": "Dismiss past failure notice"
   },
   "common": {

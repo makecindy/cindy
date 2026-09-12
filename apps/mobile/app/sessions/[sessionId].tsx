@@ -9374,11 +9374,7 @@ export default function SessionScreen() {
                           streaming: isSessionStreaming, running: remoteSessionRunning,
                         }) && scheduleFailure?.run ? (
                           <FailedScheduleNotice key={scheduleNoticeSource}
-                            source={scheduleNoticeSource} run={scheduleFailure.run}
-                            onViewHistory={scheduleFailure.run.scheduleId ? () => router.push({
-                              pathname: '/automations/[deviceId]',
-                              params: { deviceId, name: deviceName, focus: scheduleFailure.run!.scheduleId! },
-                            }) : undefined} />
+                            source={scheduleNoticeSource} run={scheduleFailure.run} />
                         ) : null}
                         {/* 队列状态横幅(错误 / 凭证等待 / 停止确认 / 暂停)。待发送气泡
                             不在这里,它们是消息流里的 pending_send 项。 */}

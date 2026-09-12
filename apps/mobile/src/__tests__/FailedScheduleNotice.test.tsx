@@ -32,13 +32,9 @@ afterEach(() => act(() => root.unmount()));
 async function show(source = 'owner/host/task', value = run) {
   await act(async () => root.render(<FailedScheduleNotice key={source} source={source} run={value} />));
 }
-it('shows a rate-limit explanation and a working history action', async () => {
-  const onViewHistory = vi.fn();
+it('shows a rate-limit explanation', async () => {
   await act(async () => root.render(<FailedScheduleNotice source="owner/device/task"
-    run={{ ...run, failureKind: 'rate-limit', scheduleId: 'schedule' }} onViewHistory={onViewHistory} />));
-  expect(host.textContent).toContain('session.failedScheduleNotice.rateLimited');
-  await act(async () => host.querySelector('button')!.click());
-  expect(onViewHistory).toHaveBeenCalledOnce();
+    run={{ ...run, failureKind: 'rate-limit', scheduleId: 'schedule' }} />));
   expect(host.textContent).toContain('session.failedScheduleNotice.rateLimited');
 });
 it('keeps dismissal local and shows a newer failed run', async () => {
