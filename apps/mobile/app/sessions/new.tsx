@@ -1,4 +1,4 @@
-import { mobileDurableOutbox, holdDurableOutboxCreation } from '@/session/mobileDurableOutbox';
+import { mobileDurableOutbox, holdDurableOutboxCreation, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeRetainedOutboxFiles } from '@/session/durableOutboxFiles';
 import { buildOutboxItem, createOutboxClientId } from '@/session/sessionOutbox';
 import type { DurableOutboxRecord } from '@/session/durableOutbox';
@@ -15,6 +15,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
   type SetStateAction,
 } from 'react';
@@ -176,6 +177,7 @@ import { newSessionText } from '@/session/newSessionMessages';
 import { i18n } from '@/i18n';
 import {
   getMobileAuthOwner,
+  subscribeMobileAuthOwner,
   isMobileAuthOwnerCurrent,
 } from '@/auth/authOwnerGeneration';
 import { useTranslation } from 'react-i18next';
@@ -429,6 +431,7 @@ export default function NewRemoteSessionScreen() {
   const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;
   const router = useRouter();
   const auth = useAuth();
+  const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
   const {
     getPresenceAvailability,
     invoke,
@@ -615,14 +618,24 @@ export default function NewRemoteSessionScreen() {
   // (创建期间发出的消息可能超出单条上限,装不下的只能丢,但不能静默丢,review P1)。
   // 声明在 attachmentError 之后:notice 就落在附件错误行上。
   const outboxRecoveryRef = useRef<DurableOutboxRecord | null>(null);
+  const leaveForeignOutboxRecovery = useCallback(() => {
+    const record = outboxRecoveryRef.current;
+    if (!record || record.accountId === getMobileAuthOwner().accountKey) return false;
+    router.replace('/devices');
+    return true;
+  }, [router]);
   useEffect(() => {
+    const owner = outboxOwner;
+    if (leaveForeignOutboxRecovery()) return;
     const sid = String(params.recoverySessionId ?? '');
     if (!sid) return;
     let active = true;
-    void mobileDurableOutbox.ready().then(() => {
-      if (!active) return;
-      const record = mobileDurableOutbox.getSnapshot().find((r) => r.item.sessionId === sid && r.creation);
+    let restored = false;
+    const restore = () => {
+      if (!active || restored || !isMobileAuthOwnerCurrent(owner)) return;
+      const record = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sid && r.creation);
       if (!record?.creation || record.prepared) return;
+      restored = true;
       outboxRecoveryRef.current = record;
       userTouchedWorkspaceRef.current = true;
       userTouchedDeviceRef.current = true;
@@ -630,9 +643,11 @@ export default function NewRemoteSessionScreen() {
       setAttachments(record.item.attachmentSlots.filter((a): a is RemoteSerializedAttachment => a !== null));
       setSelectedDeviceId(record.deviceId);
       setSelectedDeviceName(record.creation.deviceName);
-    });
-    return () => { active = false; };
-  }, [params.recoverySessionId]);
+    };
+    const unsubscribe = mobileDurableOutbox.subscribe(restore);
+    void mobileDurableOutbox.ready().then(restore);
+    return () => { active = false; unsubscribe(); };
+  }, [params.recoverySessionId, outboxOwner, leaveForeignOutboxRecovery]);
   useEffect(() => {
     const stashed = drainStashedNewSessionDraft();
     if (!stashed) return;
@@ -4041,6 +4056,7 @@ export default function NewRemoteSessionScreen() {
   }, [draft.permissionMode, patchDraft, planModeCapability, runtimeOptions.permissionOptions]);
 
   const create = useCallback(async () => {
+    if (leaveForeignOutboxRecovery()) return;
     if (
       creatingRef.current
       || voicePermissionRequestInFlightRef.current
@@ -4203,7 +4219,7 @@ export default function NewRemoteSessionScreen() {
         }
         if (!isCurrentOwner()) return;
         if (found) {
-          const latest = mobileDurableOutbox.getSnapshot().find((r) => r.item.clientId === recovering.item.clientId && r.item.sessionId === sessionId);
+          const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === recovering.item.clientId && r.item.sessionId === sessionId);
           if (latest && !latest.prepared) await mobileDurableOutbox.update(latest, { suspended: false, state: 'queued' });
           throw new Error(t('session.outbox.taskAlreadyCreated'));
         }
@@ -4385,7 +4401,7 @@ export default function NewRemoteSessionScreen() {
       if (recovering && !useDurableCreation) throw new Error(t('session.outbox.legacyPlanRecovery'));
       if (useDurableCreation) {
         const firstRecord: DurableOutboxRecord = {
-          version: 1, accountId: accountIdAtCreate, deviceId: deviceIdSnapshot,
+          version: 1, accountId: authOwnerAtCreate.accountKey, deviceId: deviceIdSnapshot,
           createdAt: recovering?.createdAt ?? Date.now(), state: 'queued', suspended: false, uploads: [], clearBoundaryMs: null,
           creation: { draft: effectiveDraft, deviceName: selectedDeviceName,
             planModeArm: planModeCapability && planModeDraftOn, restorePermissionMode: legacyPlanRestore },
@@ -4411,7 +4427,7 @@ export default function NewRemoteSessionScreen() {
           }
           if (!isCurrentOwner() || !ensureDeviceAlive()) return;
           if (recovering) {
-            const latest = mobileDurableOutbox.getSnapshot().find((r) => r.item.clientId === firstMessageClientId && r.item.sessionId === sessionId);
+            const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === firstMessageClientId && r.item.sessionId === sessionId);
             if (!latest || latest.prepared) throw new Error('OUTBOX_STALE_WRITE');
             await mobileDurableOutbox.update(latest, firstRecord);
           } else await mobileDurableOutbox.add(firstRecord);
@@ -4575,7 +4591,7 @@ export default function NewRemoteSessionScreen() {
           maker,
           handoffFirstMessage: useDurableCreation ? async (item) => {
             if (!isCurrentOwner()) throw new Error('OUTBOX_OWNER_CHANGED');
-            const record = mobileDurableOutbox.getSnapshot().find((r) => r.item.sessionId === sessionId && r.item.clientId === firstMessageClientId);
+            const record = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sessionId && r.item.clientId === firstMessageClientId);
             if (!record) throw new Error('OUTBOX_STALE_WRITE');
             await mobileDurableOutbox.update(record, { template: item, state: 'queued', suspended: false, error: undefined });
           } : undefined,
@@ -4628,6 +4644,7 @@ export default function NewRemoteSessionScreen() {
     selectedDeviceName,
     draft,
     finishVoiceRecording,
+    leaveForeignOutboxRecovery,
     getPresenceAvailability,
     maker,
     openLink,
@@ -4657,6 +4674,7 @@ export default function NewRemoteSessionScreen() {
   // composer 附件不随目标带入(与桌面一致)。goal.set 失败时报错留在面板,会话已创建,
   // 用户可进会话重设目标,重试本表单会新建会话。
   const createGoalSession = useCallback(async (input: { objective: string; limits?: MobileGoalLimitsInput }) => {
+    if (leaveForeignOutboxRecovery()) return;
     if (creatingRef.current || goalBusy) return;
     if (!selectedDeviceId) {
       setGoalError(t('session.new.selectDeviceError'));
@@ -5372,6 +5390,7 @@ export default function NewRemoteSessionScreen() {
     confirmAgentUnauthenticated,
     draft,
     goalBusy,
+    leaveForeignOutboxRecovery,
     maker,
     openLink,
     patchDraft,

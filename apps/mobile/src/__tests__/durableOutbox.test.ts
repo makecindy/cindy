@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { accountVaultKey } from '@cindy/auth-client';
 import {
   createDurableOutbox,
   observeDurableOutboxSending,
@@ -124,6 +125,56 @@ async function setup(storage = disk()) {
 }
 
 describe("durable mobile outbox ownership", () => {
+  it('isolates identical membership IDs across realms without claiming unqualified draft data', async () => {
+    const storage = disk();
+    const store = createDurableOutbox(storage);
+    await store.activate('alice');
+    await store.add(message());
+    const oldData = [...storage.data.entries()][0]!;
+    const globalKey = accountVaultKey('global', 'alice');
+    const cnKey = accountVaultKey('cn', 'alice');
+    await store.activate(globalKey);
+    expect(store.getSnapshot()).toEqual([]);
+    await store.add({ ...message(), accountId: globalKey });
+    const oldRecord = store.getSnapshot()[0]!;
+    const sending = vi.fn();
+    const unsubscribe = observeDurableOutboxSending(store, 'mac-a', 'session-a', sending, vi.fn(), cnKey);
+    await store.activate(cnKey);
+    expect(store.getSnapshot()).toEqual([]);
+    await expect(store.update(oldRecord, { state: 'sending' })).rejects.toThrow('OUTBOX_OWNER_CHANGED');
+    await store.add({ ...message(), accountId: cnKey });
+    await store.update(store.getSnapshot()[0]!, { state: 'sending', prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    expect(sending).toHaveBeenCalledOnce();
+    expect(sending.mock.calls[0]?.[0].accountId).toBe(cnKey);
+    await store.activate(globalKey);
+    expect(store.getSnapshot()[0]?.accountId).toBe(globalKey);
+    expect(store.getSnapshot()[0]?.state).toBe('queued');
+    expect(storage.data.get(oldData[0])).toBe(oldData[1]);
+    unsubscribe();
+  });
+  it.each(['unknown', 'pending'] as const)('settles legacy %s cancellation as confirmation required without deleting or resending', async (state) => {
+    const { store, runner, deps } = await setup();
+    await store.add({ ...message(), state: 'confirming', cancelRequested: true,
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    deps.projection.mockResolvedValue({ ...projection('id-1', state), inputDeliveryVersion: undefined });
+    await runner.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'failed', cancelRequested: true, error: 'check receipt' });
+    expect(deps.cancel).not.toHaveBeenCalled();
+    expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cleanup).not.toHaveBeenCalled();
+  });
+  it.each(['removed', 'history'] as const)('does not authorize remote attachment deletion from %s evidence', async (evidence) => {
+    const { store, runner, deps } = await setup();
+    await store.add({ ...message(), state: 'confirming', cancelRequested: true,
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    const record = store.getSnapshot()[0]!;
+    deps.projection.mockResolvedValue({ ...projection('id-1', evidence === 'removed' ? 'removed' : 'unknown'), inputDeliveryVersion: undefined });
+    deps.history.mockResolvedValue(true);
+    await runner.run();
+    expect(store.getSnapshot()).toEqual([]);
+    expect(deps.cleanup).toHaveBeenCalledWith(record, false);
+    expect(deps.cancel).not.toHaveBeenCalled();
+  });
   it('reserves a visible user slot synchronously before an immediate assistant reply', async () => {
     const { store, deps, runner } = await setup();
     let source: RemoteMessage[] = [];
@@ -343,10 +394,13 @@ describe("app-owned delivery and reconciliation", () => {
     const running = runner.run();
     await vi.waitFor(() => expect(deps.cancel).toHaveBeenCalledOnce());
     expect(store.getSnapshot()).toHaveLength(1);
+    expect(deps.cleanup).not.toHaveBeenCalled();
+    const cancelledRecord = store.getSnapshot()[0]!;
     gate.resolve();
     await running;
     expect(store.getSnapshot()).toHaveLength(0);
     expect(deps.enqueue).not.toHaveBeenCalled();
+    expect(deps.cleanup).toHaveBeenCalledWith(cancelledRecord, true);
   });
   it("keeps FIFO within a task while other computers can continue", async () => {
     const { store, runner, deps } = await setup();
@@ -403,6 +457,7 @@ describe("app-owned delivery and reconciliation", () => {
     await runner.run();
     expect(store.getSnapshot()[0]?.state).toBe("host-owned");
     expect(store.getSnapshot()[0]?.cancelRequested).toBe(false);
+    expect(deps.cleanup).not.toHaveBeenCalled();
   });
   it("reuploads expired attachment references from the durable file without changing clientId", async () => {
     const { store, deps } = await setup();

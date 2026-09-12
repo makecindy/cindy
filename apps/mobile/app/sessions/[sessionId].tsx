@@ -3,8 +3,8 @@ import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
-import { getMobileAuthOwner, isMobileAuthOwnerCurrent } from '@/auth/authOwnerGeneration';
-import { mobileDurableOutbox, durableOutboxDisplayItem } from '@/session/mobileDurableOutbox';
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
+import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, discardCancelledOutboxUploads } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles } from '@/session/durableOutboxFiles';
 import { observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
@@ -993,6 +993,7 @@ export default function SessionScreen() {
     return () => subscription.remove();
   }, [deviceId, sessionId]);
   const auth = useAuth();
+  const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
   const windowDimensions = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const keyboardState = useMobileKeyboardState();
@@ -1541,9 +1542,10 @@ export default function SessionScreen() {
   // ref 在 send() 同步段立即置位,后续点击当场拦下(同 new.tsx creatingRef /
   // voiceStopInFlightRef 的既有模式)。
   const sendInFlightRef = useRef(false);
-  const durableOutboxRecords = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
+  const rawOutboxRecords = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
+  const durableOutboxRecords = useMemo(() => rawOutboxRecords.filter((record) => record.accountId === outboxOwner.accountKey), [rawOutboxRecords, outboxOwner]);
   const outboxItems = useMemo(() => durableOutboxRecords
-    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountId)
+    .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey)
     .map(durableOutboxDisplayItem), [durableOutboxRecords, deviceId, sessionId]);
   const outboxRef = useRef<readonly MobileOutboxItem[]>(outboxItems);
   outboxRef.current = outboxItems;
@@ -1554,7 +1556,7 @@ export default function SessionScreen() {
       const upload = record.uploads.find((item) => item.slot === slot);
       return upload ? durableOutboxUploadUri(record, upload) : record.item.slotMeta[slot]?.previewUri;
     });
-  }, clearQueueItemSending), [deviceId, sessionId, markQueueItemSending, clearQueueItemSending, rememberSentAttachmentPreviews]);
+  }, clearQueueItemSending, outboxOwner.accountKey), [outboxOwner, deviceId, sessionId, markQueueItemSending, clearQueueItemSending, rememberSentAttachmentPreviews]);
   const pageMessageWorkLeaseRef = useRef<ReturnType<
     typeof remoteSessionStore.acquireSessionMessageWork
   > | null>(null);
@@ -3589,7 +3591,7 @@ export default function SessionScreen() {
             void prepareNewSessionCreationForEdit(sessionId)
               .then(async (prepared) => {
                 if (!prepared || !isMobileAuthOwnerCurrent(ownerAtEdit) || outboxSessionAliveRef.current !== sessionId) return;
-                const durableFirst = mobileDurableOutbox.getSnapshot().find((r) => r.item.sessionId === sessionId && r.deviceId === deviceId && r.creation);
+                const durableFirst = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sessionId && r.deviceId === deviceId && r.creation);
                 if (durableFirst) {
                   const owner = getMobileAuthOwner();
                   await mobileDurableOutbox.update(durableFirst, { suspended: true, state: 'failed', error: t('session.screen.firstMessageNotSent') });
@@ -3664,7 +3666,7 @@ export default function SessionScreen() {
       return;
     }
     if (status === 'enqueue-failed') {
-      const durableFirst = mobileDurableOutbox.getSnapshot().find((r) => r.item.sessionId === sessionId && r.deviceId === deviceId && r.creation);
+      const durableFirst = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sessionId && r.deviceId === deviceId && r.creation);
       if (durableFirst) {
         const owner = getMobileAuthOwner();
         void mobileDurableOutbox.update(durableFirst, { state: 'queued', suspended: false, error: undefined }).then(() => {
@@ -5394,7 +5396,7 @@ export default function SessionScreen() {
     return outboxConnectionBlockedNow() || isRemoteSessionMissing(row) || row?.cacheSeeded === true
       || getNewSessionCreationTask(sessionId) !== null;
   };
-  const findDurableOutboxRecord = (clientId: string) => mobileDurableOutbox.getSnapshot().find((r) =>
+  const findDurableOutboxRecord = (clientId: string) => getCurrentMobileOutboxRecords().find((r) =>
     r.deviceId === deviceId && r.item.sessionId === sessionId && r.item.clientId === clientId);
   const retryOutboxItem = (clientId: string) => {
     const record = findDurableOutboxRecord(clientId);
@@ -5427,13 +5429,7 @@ export default function SessionScreen() {
       if (!record.prepared) {
         await mobileDurableOutbox.remove(record);
         await removeOutboxFiles(record);
-        for (const attachment of outboxItemAttachments(record.item)) {
-          discardMobileUploadedAttachment(attachment, { getToken: async () => {
-            if (!isMobileAuthOwnerCurrent(owner)) return null;
-            const token = await auth.getAccessToken();
-            return isMobileAuthOwnerCurrent(owner) ? token : null;
-          } });
-        }
+        discardCancelledOutboxUploads(record, owner, () => auth.getAccessToken());
       } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
     };
     void remove().catch((err) => {
@@ -5447,7 +5443,7 @@ export default function SessionScreen() {
   const takeOutboxForSession = (
     targetSessionId: string, _uploads: 'release-to-tray' | 'cancel',
   ): { items: MobileOutboxItem[]; cancelledUploadCount: number } => {
-    if (mobileDurableOutbox.getSnapshot().some((r) => r.item.sessionId === targetSessionId && r.deviceId === deviceId)) {
+    if (getCurrentMobileOutboxRecords().some((r) => r.item.sessionId === targetSessionId && r.deviceId === deviceId)) {
       throw new Error(t('session.outbox.restoreFailed'));
     }
     return { items: [], cancelledUploadCount: 0 };
@@ -5906,7 +5902,7 @@ export default function SessionScreen() {
           });
           const clearedAt = currentSession.clearedAt ? Date.parse(currentSession.clearedAt) : null;
           record = {
-            version: 1, accountId: ownerAtSend.accountId, deviceId, item, createdAt: Date.now(),
+            version: 1, accountId: ownerAtSend.accountKey, deviceId, item, createdAt: Date.now(),
             state: 'queued', uploads: [], clearBoundaryMs: clearedAt !== null && Number.isFinite(clearedAt) ? clearedAt : null,
           };
           for (let slot = 0; slot < readyAttachments.length; slot++) {

@@ -1,9 +1,31 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { getMobileAuthOwner, isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
 import { createDurableOutbox, type DurableOutboxRecord } from "./durableOutbox";
 import { durableOutboxUploadUri } from "./durableOutboxFiles";
-import type { MobileOutboxItem } from "./sessionOutbox";
+import { outboxItemAttachments, type MobileOutboxItem } from "./sessionOutbox";
+import { discardMobileUploadedAttachment } from "./mobileAttachmentUpload";
 
 export const mobileDurableOutbox = createDurableOutbox(AsyncStorage);
+/** Hide old-owner rows even before the bridge's React effect activates the next ledger. */
+export function getCurrentMobileOutboxRecords(): readonly DurableOutboxRecord[] {
+  const key = getMobileAuthOwner().accountKey;
+  return mobileDurableOutbox.getSnapshot().filter((record) => record.accountId === key);
+}
+/** Only call after local cancellation or an explicit durable cancellation acknowledgement. */
+export function discardCancelledOutboxUploads(
+  record: DurableOutboxRecord,
+  owner: MobileAuthOwnerGeneration,
+  getToken: () => Promise<string | null>,
+): void {
+  if (record.accountId !== owner.accountKey) return;
+  for (const attachment of outboxItemAttachments(record.item)) {
+    discardMobileUploadedAttachment(attachment, { getToken: async () => {
+      if (!isMobileAuthOwnerCurrent(owner)) return null;
+      const token = await getToken();
+      return isMobileAuthOwnerCurrent(owner) ? token : null;
+    } });
+  }
+}
 export function durableOutboxDisplayItem(
   record: DurableOutboxRecord,
 ): MobileOutboxItem {

@@ -14,6 +14,7 @@ export interface DurableUpload {
 
 export interface DurableOutboxRecord {
   version: 1;
+  /** Canonical realm-qualified auth accountKey; unqualified pre-release rows are never claimed. */
   accountId: string;
   deviceId: string;
   item: MobileOutboxItem;
@@ -186,8 +187,8 @@ export function observeDurableOutboxSending(
   sessionId: string,
   onSending: (record: DurableOutboxRecord) => void,
   onSettled: (clientId: string) => void,
+  accountId = store.getAccountId(),
 ): () => void {
-  const accountId = store.getAccountId();
   const scoped = () => store.getSnapshot().filter((r) => r.accountId === accountId
     && r.deviceId === deviceId && r.item.sessionId === sessionId);
   let previous = new Map(scoped().map((r) => [r.item.clientId, r]));

@@ -1,9 +1,10 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useSyncExternalStore } from "react";
 import { Alert, AppState } from "react-native";
 import { useAuth } from "@/auth/AuthContext";
 import {
   getMobileAuthOwner,
   isMobileAuthOwnerCurrent,
+  subscribeMobileAuthOwner,
 } from "@/auth/authOwnerGeneration";
 import { useDeviceLink } from "@/device-link/DeviceLinkContext";
 import {
@@ -22,6 +23,7 @@ import {
 import {
   mobileDurableOutbox,
   isDurableOutboxCreationHeld,
+  discardCancelledOutboxUploads,
 } from "./mobileDurableOutbox";
 import {
   durableOutboxUploadUri,
@@ -49,17 +51,17 @@ export function MobileOutboxBridge() {
   const link = useDeviceLink();
   const latest = useRef({ auth, link });
   latest.current = { auth, link };
-  const accountId = auth.isAuthenticated ? (auth.user?.id?.trim() ?? "") : "";
+  const owner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
+  const accountId = auth.isAuthenticated && auth.user?.id?.trim() === owner.accountId ? owner.accountKey : "";
   const runnerRef = useRef<ReturnType<
     typeof createDurableOutboxDelivery
   > | null>(null);
   useEffect(() => {
-    const owner = getMobileAuthOwner();
     let active = true;
     const isCurrent = () =>
       active &&
       !!accountId &&
-      owner.accountId === accountId &&
+      owner.accountKey === accountId &&
       isMobileAuthOwnerCurrent(owner);
     const guard = () => {
       if (!isCurrent()) throw new Error("OUTBOX_OWNER_CHANGED");
@@ -283,7 +285,10 @@ export function MobileOutboxBridge() {
           });
         return found;
       },
-      cleanup: removeOutboxFiles,
+      cleanup: async (record, cancelled) => {
+        await removeOutboxFiles(record);
+        if (cancelled) discardCancelledOutboxUploads(record, owner, () => latest.current.auth.getAccessToken());
+      },
       mediaFailed: (error) =>
         formatRemoteError(error).includes("DEVICE_LINK_MEDIA_TRANSFER_FAILED"),
       retryable: (error) =>
@@ -322,7 +327,7 @@ export function MobileOutboxBridge() {
       appState.remove();
       for (const lease of leases.values()) lease.release();
     };
-  }, [accountId]);
+  }, [accountId, owner]);
   useEffect(() => {
     runnerRef.current?.wake();
     void runnerRef.current?.run().catch(() => undefined);

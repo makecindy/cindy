@@ -29,7 +29,7 @@ export interface DurableOutboxDeliveryDeps {
     record: DurableOutboxRecord,
     projection: InputProjection,
   ): void;
-  cleanup(record: DurableOutboxRecord): Promise<void>;
+  cleanup(record: DurableOutboxRecord, cancelled: boolean): Promise<void>;
   accepted?(record: DurableOutboxRecord): Promise<void>;
   mediaFailed?(error: unknown): boolean;
   retryable(error: unknown): boolean;
@@ -49,11 +49,11 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
     JSON.stringify([r.deviceId, r.item.sessionId, r.item.clientId]);
   const current = (r: DurableOutboxRecord) =>
     !stopped && deps.isCurrent() && deps.store.getSnapshot().includes(r);
-  async function finish(record: DurableOutboxRecord) {
+  async function finish(record: DurableOutboxRecord, cancelled = false) {
     if (!current(record)) return;
     await deps.store.remove(record);
     // Removing the ledger first leaves at worst an orphan file, never an accepted row with missing bytes.
-    await deps.cleanup(record);
+    await deps.cleanup(record, cancelled);
     due.delete(id(record));
     attempts.delete(id(record));
   }
@@ -81,11 +81,11 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (state === "removed") return await finish(record);
       if (record.cancelRequested) {
         if (!record.prepared && state === "unknown")
-          return await finish(record);
+          return await finish(record, true);
         if (projection.inputDeliveryVersion === 1) {
           const cancelled = await deps.cancel(record);
           if (!current(record)) return;
-          if (cancelled) await finish(record);
+          if (cancelled) await finish(record, true);
           else {
             await deps.accepted?.(record);
             await update({
@@ -99,6 +99,8 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           await update({ state: "failed", error: deps.confirmationMessage });
         } else if (await deps.history(record)) {
           if (current(record)) await finish(record);
+        } else if (current(record)) {
+          await update({ state: "failed", error: deps.confirmationMessage });
         }
         return;
       }
