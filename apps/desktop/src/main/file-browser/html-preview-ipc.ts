@@ -2,10 +2,16 @@ import { ipcMain } from 'electron';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { listDir, type DirEntry } from '@cindy/file-browser-core';
-import { createHtmlPreview, copyPreviewFile, previewLocation, type HtmlPreviewArgs } from './html-preview.js';
+import {
+  createHtmlPreview,
+  copyPreviewFile,
+  previewLocation,
+  type HtmlPreviewArgs,
+} from './html-preview.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getSensitiveMediaBlocklist, isPathAllowedAgainst } from '../filePathPolicy.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
+import { captureMediaRefCompensationScope } from '../cindy-media/refCompensationJournal.js';
 import { sniffMediaMime } from '../cindy-media/sniffMediaMime.js';
 import { createLogger } from '../logger.js';
 import {
@@ -74,11 +80,18 @@ export function registerHtmlPreviewIpc(remote: RemoteSource): void {
           }
           if (!isCurrent()) throw new Error('PREVIEW_CANCELLED');
           if (mime) {
+            const refCompensationScope = captureMediaRefCompensationScope(scope.ownerScopeKey);
+            const assertStillValid = () => {
+              if (!isCurrent()) throw new Error('PREVIEW_CANCELLED');
+              refCompensationScope.assertStillValid();
+            };
             await ingestMedia(
               {
                 filePath: dest,
                 mimeType: mime,
                 isCache: true,
+                assertStillValid,
+                refCompensationScope,
                 refs: [
                   {
                     refKind: 'integration-cache',
@@ -113,7 +126,9 @@ export function registerHtmlPreviewIpc(remote: RemoteSource): void {
       const message = error instanceof Error ? error.message : '';
       const code = /PREVIEW_TOO_LARGE|DIRECTORY_TOO_LARGE/.test(message)
         ? 'HTML_PREVIEW_TOO_LARGE'
-        : /COMPLETE_DIRECTORY_LISTING_UNSUPPORTED|unknown.*(op|method)|METHOD_NOT_FOUND|CHANNEL_NOT_ALLOWED/i.test(message)
+        : /COMPLETE_DIRECTORY_LISTING_UNSUPPORTED|unknown.*(op|method)|METHOD_NOT_FOUND|CHANNEL_NOT_ALLOWED/i.test(
+              message,
+            )
           ? 'HTML_PREVIEW_UNSUPPORTED'
           : /NOT_FOUND|ENOENT/.test(message)
             ? 'NOT_FOUND'
