@@ -2419,6 +2419,29 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     );
   });
 
+  it('边界 flush 只攒到部分文本时,终态全文更新既有行而不是另起一行', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: '选哪个', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-partial-flush',
+      questions: [{ question: '选哪个?' }],
+    });
+    // message_end 是权威全文,与已 flush 的部分文本不完全相等。
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: '选哪个?', isFinal: true, isFullText: true },
+      { model: 'pi-test', stopReason: 'toolUse', usage: {} },
+    );
+    expect(lateFinalId).toBe(persistId);
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, '选哪个?');
+    expect(broadcastMessageRow).toHaveBeenCalled();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+  });
+
   it('边界后落过别的消息(tool_use)时同文本快照不复用,仍单独落行', async () => {
     const persistId = onAssistantTextEvent(SESSION, { text: 'Done.', isFinal: false }, null);
     flushAssistantBlock(SESSION, null);

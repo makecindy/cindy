@@ -2118,10 +2118,26 @@ export function onAssistantTextEvent(
       boundaryFlushed &&
       visible &&
       atInteractionBoundary &&
-      boundaryFlushed.text === visible &&
-      (!agentMessageId || boundaryFlushed.agentMessageId === agentMessageId)
+      (!agentMessageId || boundaryFlushed.agentMessageId === agentMessageId) &&
+      (boundaryFlushed.text === visible || isFullText)
     ) {
       lastBoundaryFlushedAssistantBySession.delete(sessionId);
+      // message_end 的 isFullText 是权威全文:边界 flush 可能只攒到部分文本(尾部
+      // delta 未消费 / 流式纠错),此时用全文更新既有行,而不是要求逐字相等后另起
+      // 一行(否则仍是"部分文本 + 提问卡 + 完整文本"两行)。
+      if (isFullText && boundaryFlushed.text !== visible) {
+        enqueueWrite(
+          `boundary_flushed_content:${sessionId}:${boundaryFlushed.persistId}`,
+          async (ownerScope) => {
+            const updated = await updateDbMessageContent(
+              sessionId,
+              boundaryFlushed.persistId,
+              visible,
+            );
+            if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+          },
+        );
+      }
       // 交互边界 flush 时 delta 往往还没带 model / usage / stopReason,message_end 的
       // 全文快照才是权威终态 meta;复用旧行时必须把这些字段合并回去,否则 reload 与
       // 费用统计会读到不完整记录。
