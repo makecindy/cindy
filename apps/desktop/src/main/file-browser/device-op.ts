@@ -198,7 +198,10 @@ async function resolveWorkdirExecution(
     sshHosts = rows.map((r) => r.remoteHostId).filter((h): h is string => !!h);
   } catch (err) {
     log.warn('workdir execution lookup failed', { error: String(err) });
-    if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
+    if (
+      !localProbe.allowed &&
+      (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')
+    ) {
       return { kind: 'unavailable', reason: localProbe.reason };
     }
     // 查询失败:退回本地语义(与旧行为一致);明确不存在时由底层返回可读错误。
@@ -218,7 +221,10 @@ async function resolveWorkdirExecution(
   }
   if (isLocalDir) return { kind: 'local' };
   if (sshHosts.length === 1) return { kind: 'ssh', hostId: sshHosts[0] };
-  if (!localProbe.allowed && (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')) {
+  if (
+    !localProbe.allowed &&
+    (localProbe.reason === 'timeout' || localProbe.reason === 'unavailable')
+  ) {
     return { kind: 'unavailable', reason: localProbe.reason };
   }
   return { kind: 'local' };
@@ -263,7 +269,12 @@ function setExportJobTerminal(transferId: string, job: ExportJob): void {
 async function sshSearchCollect(
   hostId: string,
   q: { workdir: string; query: string; caseSensitive: boolean; maxMatches: number },
-): Promise<{ matches: SearchMatch[]; truncated: boolean; totalMatches: number; totalFiles: number }> {
+): Promise<{
+  matches: SearchMatch[];
+  truncated: boolean;
+  totalMatches: number;
+  totalFiles: number;
+}> {
   const mgr = getRemoteFileBrowser();
   const matches: SearchMatch[] = [];
   return await new Promise((resolve, reject) => {
@@ -273,7 +284,11 @@ async function sshSearchCollect(
     // 拿到 id 后过滤回放(与 search/index.ts 远程通路同一教训)——否则秒回/
     // 空结果的嵌套搜索会丢 end,干等 20s 超时。
     const buffered: SearchEvent[] = [];
-    const finish = (payload: { truncated: boolean; totalMatches: number; totalFiles: number }): void => {
+    const finish = (payload: {
+      truncated: boolean;
+      totalMatches: number;
+      totalFiles: number;
+    }): void => {
       if (settled) return;
       settled = true;
       off();
@@ -285,7 +300,11 @@ async function sshSearchCollect(
       if (data.type === 'match') {
         matches.push(data);
       } else if (data.type === 'end') {
-        finish({ truncated: data.truncated, totalMatches: data.totalMatches, totalFiles: data.totalFiles });
+        finish({
+          truncated: data.truncated,
+          totalMatches: data.totalMatches,
+          totalFiles: data.totalFiles,
+        });
       } else {
         settled = true;
         off();
@@ -338,7 +357,12 @@ function localSearchCollect(q: {
   query: string;
   caseSensitive: boolean;
   maxMatches: number;
-}): Promise<{ matches: SearchMatch[]; truncated: boolean; totalMatches: number; totalFiles: number }> {
+}): Promise<{
+  matches: SearchMatch[];
+  truncated: boolean;
+  totalMatches: number;
+  totalFiles: number;
+}> {
   const searcher = new RipgrepSearcher({ rgPath: getRipgrepBinaryPath(), logger: log });
   const matches: SearchMatch[] = [];
   return new Promise((resolve, reject) => {
@@ -346,7 +370,12 @@ function localSearchCollect(q: {
       if (evt.type === 'match') {
         matches.push(evt);
       } else if (evt.type === 'end') {
-        resolve({ matches, truncated: evt.truncated, totalMatches: evt.totalMatches, totalFiles: evt.totalFiles });
+        resolve({
+          matches,
+          truncated: evt.truncated,
+          totalMatches: evt.totalMatches,
+          totalFiles: evt.totalFiles,
+        });
       } else {
         reject(new Error(evt.message));
       }
@@ -367,7 +396,12 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   // 这个分支,会走到 default 返回 `unknown op: caps`——控制端把它当确定性
   // 的"不支持压缩"信号(见 fileBrowserTransport 的 caps 缓存)。
   if (args.op === 'caps') {
-    return { ok: true as const, gzip: true as const, completeDirectoryListing: true as const };
+    return {
+      ok: true as const,
+      gzip: true as const,
+      completeDirectoryListing: true as const,
+      fileRead: true as const,
+    };
   }
   const guardResult = await checkRemoteWorkingDir(args.workdir);
   if (!guardResult.allowed && guardResult.reason === 'invalid') {
@@ -436,7 +470,10 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       }
       case 'readFile': {
         try {
-          const data = await mgr.request(hostId, 'readFile', { workdir, relPath: args.relPath ?? '' });
+          const data = await mgr.request(hostId, 'readFile', {
+            workdir,
+            relPath: args.relPath ?? '',
+          });
           return await encodeReadFileResult(data, args.acceptGzip);
         } catch (err) {
           const code = (err as Error & { code?: string }).code;
@@ -455,9 +492,15 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         return { ok: true as const, ...r };
       }
       case 'createFile':
-        return { ok: true as const, stat: await mgr.request(hostId, 'createFile', { workdir, relPath: args.relPath ?? '' }) };
+        return {
+          ok: true as const,
+          stat: await mgr.request(hostId, 'createFile', { workdir, relPath: args.relPath ?? '' }),
+        };
       case 'createFolder':
-        return { ok: true as const, stat: await mgr.request(hostId, 'createFolder', { workdir, relPath: args.relPath ?? '' }) };
+        return {
+          ok: true as const,
+          stat: await mgr.request(hostId, 'createFolder', { workdir, relPath: args.relPath ?? '' }),
+        };
       case 'renameEntry':
         return {
           ok: true as const,
@@ -474,19 +517,27 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         return mgr.request(hostId, 'listAllFiles', { workdir, cap: args.cap });
       case 'exportFileStart':
       case 'exportFileStatus':
+      case 'fileUrl':
         // 嵌套(device-link 套 SSH)的大文件导出要先经 daemon 分片拉回被控端再
         // 上传 OSS,本期不做——控制端对嵌套会话维持 OVERSIZE 占位。
         return bad('exportFile is not supported for nested SSH workdirs yet');
       case 'thumbnail':
         // 嵌套 SSH 的缩略图要先分片拉回原图再缩放,成本与收益不成比例,本期
         // 不做——控制端(手机网格)对嵌套会话回退类型占位图。
-        return { ok: false as const, code: 'THUMB_UNSUPPORTED' as const, message: 'nested SSH workdir' };
+        return {
+          ok: false as const,
+          code: 'THUMB_UNSUPPORTED' as const,
+          message: 'nested SSH workdir',
+        };
       case 'searchCollect':
         return sshSearchCollect(hostId, {
           workdir,
           query: args.query ?? '',
           caseSensitive: args.caseSensitive === true,
-          maxMatches: Math.min(args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES, SEARCH_COLLECT_MAX_MATCHES),
+          maxMatches: Math.min(
+            args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES,
+            SEARCH_COLLECT_MAX_MATCHES,
+          ),
         });
       default:
         return bad(`unknown op: ${args.op}`);
@@ -495,11 +546,24 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
 
   // —— 本地执行(被控端自身 fs)——
   switch (args.op) {
+    case 'fileUrl': {
+      const relPath = args.relPath ?? '';
+      const st = await statEntry(workdir, relPath);
+      if (st.type !== 'file') return bad('not a file');
+      const url = new URL('xdt-file://open');
+      url.searchParams.set('path', path.resolve(workdir, relPath));
+      url.searchParams.set('baseDir', workdir);
+      url.searchParams.set('maxBytes', String(Math.max(1, st.size)));
+      return { ok: true, url: url.toString(), size: st.size, mtimeMs: st.mtimeMs };
+    }
     case 'listDir': {
-      const matcher = args.includeIgnored === true ? null : await loadIgnoreMatcher(workdir, {
-        hideMetaFiles: args.hideMetaFiles ?? true,
-        honorVcsIgnore: false,
-      });
+      const matcher =
+        args.includeIgnored === true
+          ? null
+          : await loadIgnoreMatcher(workdir, {
+              hideMetaFiles: args.hideMetaFiles ?? true,
+              honorVcsIgnore: false,
+            });
       return listDir(workdir, args.relPath ?? '', matcher, {
         docMode: args.includeIgnored === true ? false : args.docMode,
         maxEntries: args.maxEntries,
@@ -541,7 +605,10 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
     }
     case 'renameEntry': {
       try {
-        return { ok: true as const, stat: await renameEntry(workdir, args.fromRel ?? '', args.toRel ?? '') };
+        return {
+          ok: true as const,
+          stat: await renameEntry(workdir, args.fromRel ?? '', args.toRel ?? ''),
+        };
       } catch (err) {
         return bad(String(err));
       }
@@ -582,7 +649,12 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
           },
         })
           .then((up) => {
-            setExportJobTerminal(transferId, { state: 'done', key: up.key, size: up.size, uploaded: up.size });
+            setExportJobTerminal(transferId, {
+              state: 'done',
+              key: up.key,
+              size: up.size,
+              uploaded: up.size,
+            });
           })
           .catch((err) => {
             // 回包用 message 而非 String(err):这条会原样显示在控制端(手机预览页)
@@ -591,7 +663,12 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
             const message = err instanceof Error ? err.message || err.name : String(err);
             // 日志单独带原始 error(stack 与 cause 链都要留着排障),不跟着回包降级成字符串。
             log.warn('exportFile upload failed', { transferId }, err);
-            setExportJobTerminal(transferId, { state: 'error', message, size: st.size, uploaded: 0 });
+            setExportJobTerminal(transferId, {
+              state: 'error',
+              message,
+              size: st.size,
+              uploaded: 0,
+            });
           });
         return { ok: true as const, transferId, size: st.size, mtimeMs: st.mtimeMs };
       } catch (err) {
@@ -616,7 +693,10 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
         workdir,
         query: args.query ?? '',
         caseSensitive: args.caseSensitive === true,
-        maxMatches: Math.min(args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES, SEARCH_COLLECT_MAX_MATCHES),
+        maxMatches: Math.min(
+          args.maxMatches ?? SEARCH_COLLECT_MAX_MATCHES,
+          SEARCH_COLLECT_MAX_MATCHES,
+        ),
       });
     case 'thumbnail': {
       // 图片缩略图(手机网格视图):路径安全与 exportFileStart 同源
@@ -625,7 +705,8 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       try {
         const relPath = args.relPath ?? '';
         const st = await statEntry(workdir, relPath);
-        if (st.type !== 'file') return { ok: false as const, code: 'THUMB_FAILED' as const, message: 'not a file' };
+        if (st.type !== 'file')
+          return { ok: false as const, code: 'THUMB_FAILED' as const, message: 'not a file' };
         const abs = path.resolve(workdir, relPath);
         const realAbs = await fsp.realpath(abs);
         const realRoot = await fsp.realpath(workdir);
@@ -678,8 +759,7 @@ function isSameOwnerStamp(
   right: PushOwnerStamp | undefined,
 ): boolean {
   return (
-    left?.dataOwnerId === right?.dataOwnerId &&
-    left?.ownerGeneration === right?.ownerGeneration
+    left?.dataOwnerId === right?.dataOwnerId && left?.ownerGeneration === right?.ownerGeneration
   );
 }
 
@@ -699,7 +779,11 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
   // 双双通过 has 检查——SSH 嵌套分支就会重复注册 onHostEvent/onHostConnected,
   // 第二次 sshWatchOffs.set 覆盖第一对 off,泄漏的监听让 fileTree 事件双份转发、
   // released 后仍随重连反复 watchStart。同步占位挡掉并发进入。
-  if (localWatchWorkdirs.has(workdir) || sshWatchOffs.has(workdir) || fsWatchStarting.has(workdir)) {
+  if (
+    localWatchWorkdirs.has(workdir) ||
+    sshWatchOffs.has(workdir) ||
+    fsWatchStarting.has(workdir)
+  ) {
     return;
   }
   const token = Symbol(workdir);
@@ -738,7 +822,10 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
     return;
   }
   if (exec.kind === 'ambiguous') {
-    log.warn('device fs-watch skipped: workdir endpoint ambiguous', { workdir, reason: exec.reason });
+    log.warn('device fs-watch skipped: workdir endpoint ambiguous', {
+      workdir,
+      reason: exec.reason,
+    });
     return;
   }
   if (exec.kind === 'local' && !guardResult.allowed) {

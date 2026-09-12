@@ -24,7 +24,9 @@
  * 其对象被查看器关闭即删,而播放器侧没有自动 skipCache 重试路径,悬空 key 会卡住播放。
  */
 import path from 'node:path';
-import { realpath, stat } from 'node:fs/promises';
+import { open, realpath, stat } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { FILE_INLINE_MAX_BYTES } from '@cindy/device-link';
 
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as videoCacheStore from '../videoCacheStore.js';
@@ -32,7 +34,7 @@ import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
 import { getSensitiveMediaBlocklist, isPathAllowedAgainst } from '../filePathPolicy.js';
 import { materializeSshRemoteMedia } from '../file-browser/ssh-media.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
-import { uploadLocalFile } from './mediaTransfer.js';
+import { mimeOf, uploadLocalFile } from './mediaTransfer.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('device-link:mediaFetch');
@@ -67,6 +69,7 @@ export interface MediaFetchResult {
    * presign + 控制端下载」整往返(与 file-browser thumbnail op 同取舍)。
    */
   inlineBase64?: string;
+  transferRequired?: boolean;
 }
 
 /** 缩略图最长边:手机聊天气泡最宽 ~360pt@3x≈1080px,1024 足够清晰;点开查看器仍取原图。 */
@@ -406,11 +409,41 @@ export async function resolveAuthorizedMedia(arg: unknown, maximumBytes?: number
 export async function fetchLocalMediaToOss(arg: unknown): Promise<MediaFetchResult> {
   const record =
     arg && typeof arg === 'object'
-      ? (arg as { url?: unknown; skipCache?: unknown; thumbnail?: unknown })
+      ? (arg as { url?: unknown; skipCache?: unknown; thumbnail?: unknown; prepareOnly?: unknown })
       : {};
-  const { absPath, mimeType, uploadExtHint } = await resolveAuthorizedMedia(arg);
+  const { absPath, mimeType, uploadExtHint, maxBytes } = await resolveAuthorizedMedia(arg);
   const url = record.url as string;
   const skipCache = record.skipCache === true;
+  if (record.prepareOnly === true && record.thumbnail !== true) {
+    const file = await open(absPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+    try {
+      const before = await file.stat();
+      if (!before.isFile()) throw new Error('REMOTE_FILE_NOT_REGULAR');
+      if (maxBytes !== null && before.size > maxBytes) throw new Error('REMOTE_FILE_TOO_LARGE');
+      const result = {
+        ossKey: '',
+        size: before.size,
+        mimeType:
+          mimeType ??
+          mimeOf((uploadExtHint ?? path.extname(absPath)).replace(/^\./, '').toLowerCase()),
+      };
+      if (before.size > FILE_INLINE_MAX_BYTES) return { ...result, transferRequired: true };
+      // Bounded read: a growing file cannot allocate an unbounded relay response.
+      const bytes = Buffer.alloc(before.size);
+      let offset = 0;
+      while (offset < bytes.length) {
+        const read = await file.read(bytes, offset, bytes.length - offset, offset);
+        if (!read.bytesRead) throw new Error('REMOTE_FILE_CHANGED');
+        offset += read.bytesRead;
+      }
+      const after = await file.stat();
+      if (after.size !== before.size || after.mtimeMs !== before.mtimeMs)
+        throw new Error('REMOTE_FILE_CHANGED');
+      return { ...result, inlineBase64: bytes.toString('base64') };
+    } finally {
+      await file.close();
+    }
+  }
   if (record.thumbnail === true && canThumbnail(absPath, mimeType)) {
     try {
       // 输入体量护栏:病态大图(> 48MB)解码成本失控,直接放弃缩图走原图路径;

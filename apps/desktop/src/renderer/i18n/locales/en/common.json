@@ -1978,6 +1978,7 @@
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
+        "reopenLoginPage": "Reopen sign-in page",
         "toast": {
           "loggedIn": "Signed in to {{name}}",
           "loginFailed": "Could not sign in to {{name}}. Try again.",

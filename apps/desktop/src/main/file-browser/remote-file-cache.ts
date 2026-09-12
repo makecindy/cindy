@@ -21,7 +21,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 
-import { dataOwnerStorageKey } from '../appSessionState.js';
+import { activeOwnerScopeKey, dataOwnerStorageKey } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('file-browser/remote-cache');
@@ -32,6 +32,8 @@ const CHAT_ATTACHMENT_CACHE_DIR_NAME = 'chat-attachment-cache';
 const MAX_CACHE_BYTES = 4 * 1024 * 1024 * 1024;
 
 export interface RemoteFileIdentity {
+  /** Capture before any await so a switched account cannot share an in-flight read. */
+  scope?: string;
   transport: 'ssh' | 'device';
   /** SSH hostId 或 device-link deviceId。 */
   endpointId: string;
@@ -41,7 +43,11 @@ export interface RemoteFileIdentity {
   mtimeMs: number;
 }
 
-export type FetchProgressFn = (received: number, total: number, phase?: 'upload' | 'download') => void;
+export type FetchProgressFn = (
+  received: number,
+  total: number,
+  phase?: 'upload' | 'download',
+) => void;
 
 /** 取回执行体:把远端文件完整写到 destPath(临时路径),完成返回。 */
 export type FetchExecutor = (destPath: string, onProgress: FetchProgressFn) => Promise<void>;
@@ -121,9 +127,15 @@ export async function cleanupOwnedUnpersistedStagedChatAttachments(params: {
 }
 
 /** 路径身份前缀(不含 size/mtime):断线兜底按它捞最近副本。 */
-function prefixHashFor(id: Pick<RemoteFileIdentity, 'transport' | 'endpointId' | 'workdir' | 'relPath'>): string {
+function prefixHashFor(
+  id: Pick<RemoteFileIdentity, 'transport' | 'endpointId' | 'workdir' | 'relPath' | 'scope'>,
+): string {
   return createHash('sha1')
-    .update([id.transport, id.endpointId, id.workdir, id.relPath].join('\n'))
+    .update(
+      [id.scope ?? activeOwnerScopeKey(), id.transport, id.endpointId, id.workdir, id.relPath].join(
+        '\n',
+      ),
+    )
     .digest('hex')
     .slice(0, 20);
 }
@@ -175,7 +187,8 @@ export async function findStaleCached(
     try {
       const full = path.join(cacheDir(), n);
       const st = await fs.stat(full);
-      if (st.isFile() && (!best || st.mtimeMs > best.mtimeMs)) best = { p: full, mtimeMs: st.mtimeMs };
+      if (st.isFile() && (!best || st.mtimeMs > best.mtimeMs))
+        best = { p: full, mtimeMs: st.mtimeMs };
     } catch {
       // 竞态删除,忽略
     }
@@ -222,6 +235,7 @@ export async function fetchRemoteFileToCache(
   executor: FetchExecutor,
   onProgress: FetchProgressFn,
 ): Promise<string> {
+  id = { ...id, scope: id.scope ?? activeOwnerScopeKey() };
   const dest = cachePathFor(id);
   const existing = inflight.get(dest);
   if (existing) return existing;

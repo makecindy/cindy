@@ -191,6 +191,7 @@ beforeEach(() => {
       listProviders: vi.fn(async () => ({ providers: providersState.providers, dataOwnerId: 'owner', ownerGeneration: 1 })),
       setProviderPresentation: vi.fn(async () => ({ ok: true })),
       providerOAuthLogout: vi.fn(async () => ({ ok: true })),
+      onProviderOAuthProgress: vi.fn(() => () => undefined),
       auth: { logout: codexAuthActions.logout },
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       localModelStatus: vi.fn(async () => ({ kind: 'ready' })),
@@ -391,10 +392,14 @@ describe('ProvidersSection — 深链定位', () => {
 
   it('a cancelled login cannot clear a newer login on the same account', async () => {
     const completions: ((result: { ok: boolean }) => void)[] = [];
-    const login = vi.fn(() => new Promise<{ ok: boolean }>((resolve) => completions.push(resolve)));
+    const login = vi.fn((_id: string, _options?: { ownerId?: string }) => new Promise<{ ok: boolean }>((resolve) => completions.push(resolve)));
+    let progress!: Parameters<typeof window.electronAPI.maker.onProviderOAuthProgress>[0];
+    const openExternal = vi.fn(async () => ({ success: true }));
+    window.electronAPI.openExternal = openExternal;
     Object.assign(window.electronAPI.maker, {
       providerOAuthLogin: login,
       providerOAuthCancel: vi.fn(async () => ({ ok: true })),
+      onProviderOAuthProgress: vi.fn((callback) => { progress = callback; return () => undefined; }),
     });
     providersState.providers = [
       makeProvider('openai-work', {
@@ -411,7 +416,12 @@ describe('ProvidersSection — 深链定位', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.cancel' }));
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.button.authorize' }));
+    const url = 'https://auth.openai.com/authorize?fake=1';
+    act(() => progress({ providerId: 'openai-work', ownerId: login.mock.calls[1][1]!.ownerId!, phase: 'browser-url', url }));
     await act(async () => completions[0]({ ok: false }));
+    expect(openExternal).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.genericOAuth.reopenLoginPage' }));
+    expect(openExternal).toHaveBeenCalledExactlyOnceWith(url);
     expect(screen.getByRole('button', { name: 'settings.providers.button.cancel' })).toBeTruthy();
     expect(toastError).not.toHaveBeenCalled();
     expect(login).toHaveBeenCalledTimes(2);
@@ -420,6 +430,7 @@ describe('ProvidersSection — 深链定位', () => {
       expect.objectContaining({ ownerId: expect.any(String) }),
     ]);
     await act(async () => completions[1]({ ok: false }));
+    expect(screen.queryByRole('button', { name: 'settings.providers.genericOAuth.reopenLoginPage' })).toBeNull();
     expect(
       screen.getByRole('button', { name: 'settings.providers.button.authorize' }),
     ).toBeTruthy();

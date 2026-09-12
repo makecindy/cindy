@@ -1977,6 +1977,7 @@
       },
       "genericOAuth": {
         "subtitle": "구독 계정",
+        "reopenLoginPage": "로그인 페이지 다시 열기",
         "toast": {
           "loggedIn": "{{name}}에 로그인했습니다",
           "loginFailed": "{{name}}에 로그인하지 못했습니다. 다시 시도하세요.",

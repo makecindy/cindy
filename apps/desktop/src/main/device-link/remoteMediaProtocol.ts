@@ -1,4 +1,4 @@
-import { tryPeerFile } from './filePeer';
+import { readRemoteDeviceFile } from './fileAccess';
 /**
  * remoteMediaProtocol.ts — 控制端 `cindy-remote-media://` 自定义 scheme(入方向媒体)。
  * ---------------------------------------------------------------------------
@@ -41,6 +41,7 @@ interface MediaFetchResult {
   ossKey: string;
   mimeType: string;
   size: number;
+  inlineBase64?: string;
 }
 
 /** 视频/音频走 OSS 流式(不整下);其它整下进内存缓存。 */
@@ -141,6 +142,16 @@ function toEntry(
   origUrl: string,
   fetched: MediaFetchResult,
 ): Promise<RemoteMediaEntry> {
+  if (fetched.inlineBase64 !== undefined) {
+    return Promise.resolve(
+      cache.recordLocal(
+        deviceId,
+        origUrl,
+        Buffer.from(fetched.inlineBase64, 'base64'),
+        fetched.mimeType,
+      ),
+    );
+  }
   if (isStreamable(fetched.mimeType) || fetched.size > LOCAL_BUFFER_MAX) {
     // 视频/音频,或任意大文件(> 64MiB):OSS 保活,按 range 流式取,不整下进内存。
     return Promise.resolve(
@@ -151,20 +162,22 @@ function toEntry(
 }
 
 async function fetchAndCache(deviceId: string, origUrl: string): Promise<RemoteMediaEntry> {
-  if (!origUrl.startsWith('xdt-video:') && !origUrl.startsWith('xdt-audio:')) {
-    const direct = await tryPeerFile(deviceId, origUrl, remoteInvoke);
-    if (direct) {
-      try {
-        if (direct.size <= LOCAL_BUFFER_MAX && !isStreamable(direct.mimeType)) {
-          const bytes = await fs.readFile(direct.path);
-          return cache.recordLocal(deviceId, origUrl, bytes, direct.mimeType);
-        }
-      } finally {
-        await direct.dispose();
-      }
+  const fetched = await readRemoteDeviceFile(deviceId, origUrl, remoteInvoke, {
+    maxPeerBytes: LOCAL_BUFFER_MAX,
+    stream: true,
+  });
+  if ('path' in fetched) {
+    try {
+      return cache.recordLocal(
+        deviceId,
+        origUrl,
+        await fs.readFile(fetched.path),
+        fetched.mimeType,
+      );
+    } finally {
+      await fetched.dispose();
     }
   }
-  const fetched = await invokeMediaFetch(deviceId, origUrl, false);
   try {
     return await toEntry(deviceId, origUrl, fetched);
   } catch (err) {

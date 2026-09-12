@@ -94,7 +94,11 @@ export async function prepareMobileHtmlPreview(absPath: string, deps: RemoteAbsF
           (key) => uploaded.add(key), { baseDir: root, maxBytes: Math.max(1, file.size) }, signal);
         assertHtmlSnapshotActive(signal);
         if (media.size !== file.size) throw new Error('PREVIEW_CHANGED');
-        if (media.url.startsWith('file://')) {
+        if (media.inlineBase64 !== undefined) {
+          destination.create();
+          destination.write(Uint8Array.from(atob(media.inlineBase64), (char) => char.charCodeAt(0)));
+          if (destination.size !== file.size) throw new Error('PREVIEW_CHANGED');
+        } else if (media.url.startsWith('file://')) {
           try { new File(media.url).copy(destination); } finally { releasePeerMedia(media.url); }
           if (destination.size !== file.size) throw new Error('PREVIEW_CHANGED');
         } else {

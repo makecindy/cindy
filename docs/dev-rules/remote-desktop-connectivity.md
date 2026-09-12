@@ -109,13 +109,38 @@ relay envelope kind or server file API. Both peers use the existing ICE endpoint
 ICE chooses a direct or TURN path. The file channel does not share desktop video,
 input handling, capture permissions or capture-process lifetime.
 
-Desktop images, file-browser reads and HTML snapshot downloads attempt this path
-before the existing OSS transfer. Mobile uses a separate trusted WebView with a
+File access has two layers. `packages/device-link/src/fileAccess.ts` owns the
+shared directory/text operation facade and whole-file transfer selection; Desktop
+and Mobile adapters provide platform I/O. Sidebar downloads, message files/media,
+Mobile export/share and HTML snapshot files use this policy. Directory listing
+keeps the existing `remote-op` and separates complete enumeration from display
+filtering. Bounded text previews retain binary detection, truncation and gzip;
+they are preview projections rather than whole-file downloads.
+
+Whole-file reads request `prepareOnly` after host authorization. Up to 64 KiB,
+including empty files, returns inline bytes; larger files attempt the reusable
+file WebRTC connection, then OSS. The 100 MiB peer limit remains; range-streaming
+media intentionally use OSS, selected before downloading any peer bytes. Workdir
+downloads probe `caps.fileRead` first: old hosts retain two-phase export jobs, so
+large uploads do not regress to a single relay invocation. `fileUrl` resolves a
+workdir-relative reference on the host, never guesses nested SSH as local storage.
+Nested SSH whole-file export remains unsupported as before; media URLs with an
+explicit verified SSH session retain their existing SSH materialization path.
+
+Mobile uses a separate trusted WebView with a
 build-time-generated script (`node scripts/file-peer-runtime.mjs`), never native
 `Function.toString()`. User HTML receives no native file or transport bridge.
 Missing peer capability, connection or transfer failure falls back to OSS; explicit
 cancellation/account change cancels the operation instead. Old hosts remain usable
 through OSS, but the direct file path requires an updated host.
+
+Transport errors do not bypass host authorization. Cancelled/obsolete reads do
+not start fallback or deliver completed results; disposable peer files are released.
+Legacy OSS export jobs and shared cache fills may finish in the background after
+a consumer leaves. They do not tear down another consumer's transfer or the relay.
+Directory/text/index caches and file-download identities include account/device
+scope; unscoped Mobile v1 directory/snippet caches are not read. Preview snapshots
+still own their copied files independently from the short-lived transfer staging.
 
 An `open` request resolves the same authorized media URL as OSS. Only Main resolves
 paths, checks the effective size limit and opens the descriptor. The renderer sees

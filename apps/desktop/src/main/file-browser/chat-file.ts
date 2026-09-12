@@ -1,4 +1,4 @@
-import { copyFile } from 'node:fs/promises';
+import { copyFile, writeFile } from 'node:fs/promises';
 /**
  * chat-file.ts — 聊天流文件类交互的远程取回编排(`maker:chat-file:fetch` 的业务体)。
  * ---------------------------------------------------------------------------
@@ -32,8 +32,7 @@ export { toWorkdirRel } from '../../shared/workdirPath.js';
 
 /** 聊天文件取回的远程来源(local 不进本模块——renderer 侧直接走本机路径)。 */
 export type ChatFileOrigin =
-  | { kind: 'device'; deviceId: string }
-  | { kind: 'ssh'; remoteHostId: string };
+  { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
 
 export interface ChatFileFetchArgs {
   origin: ChatFileOrigin;
@@ -49,7 +48,11 @@ export interface ChatFileFetchArgs {
  */
 export type ChatFileFetchResult =
   | { ok: true; cachePath: string; stale: boolean; size: number }
-  | { ok: false; code: 'BAD_ARGS' | 'OUTSIDE_WORKDIR' | 'NOT_FOUND' | 'FETCH_FAILED'; message?: string };
+  | {
+      ok: false;
+      code: 'BAD_ARGS' | 'OUTSIDE_WORKDIR' | 'NOT_FOUND' | 'FETCH_FAILED';
+      message?: string;
+    };
 
 /** 远端 stat 结果(file-service 与 device-op statEntry 同形投影)。 */
 export interface ChatFileStat {
@@ -60,7 +63,6 @@ export interface ChatFileStat {
 
 /** 可注入依赖(单测替换;生产默认值见 index.ts 注册处)。 */
 export interface ChatFileDeps {
-  peerFile?(device: string, url: string): Promise<{ path: string; size: number; dispose(): Promise<void> } | null>;
   /** SSH:file-service stat(workdir 相对路径)。 */
   sshStat(hostId: string, workdir: string, relPath: string): Promise<ChatFileStat>;
   /** device:被控端 stat(FILE_BROWSER_REMOTE_OP_CHANNEL op:'stat')。 */
@@ -78,7 +80,13 @@ export interface ChatFileDeps {
     onProgress: FetchProgressFn,
   ): Promise<string>;
   /** device workdir 外:被控端 media:fetch(任意绝对路径上 OSS)。 */
-  deviceMediaFetch(deviceId: string, url: string): Promise<{ ossKey: string; size: number }>;
+  deviceMediaFetch(
+    deviceId: string,
+    url: string,
+  ): Promise<
+    | { ossKey: string; size: number; inlineBase64?: string }
+    | { ossKey: string; size: number; path: string; dispose(): Promise<void> }
+  >;
   /** OSS 对象流式直下到本地文件。 */
   downloadToFile(
     key: string,
@@ -155,6 +163,8 @@ async function staleFallback(
   id: Pick<RemoteFileIdentity, 'transport' | 'endpointId' | 'workdir' | 'relPath'>,
   err: unknown,
 ): Promise<ChatFileFetchResult> {
+  if (String(err).includes('FILE_PEER_CANCELLED'))
+    return { ok: false, code: 'FETCH_FAILED', message: String(err) };
   const stalePath = await deps.findStale(id).catch(() => null);
   if (stalePath) return { ok: true, cachePath: stalePath, stale: true, size: -1 };
   return { ok: false, code: 'FETCH_FAILED', message: String(err) };
@@ -203,12 +213,22 @@ export async function fetchChatFile(
     if (stat.type !== 'file') return { ok: false, code: 'NOT_FOUND' };
     try {
       const cachePath = await deps.fetchBigFile(
-        { workdir, relPath, size: stat.size, mtimeMs: stat.mtimeMs, remoteHostId: origin.remoteHostId },
+        {
+          workdir,
+          relPath,
+          size: stat.size,
+          mtimeMs: stat.mtimeMs,
+          remoteHostId: origin.remoteHostId,
+        },
         onProgress,
       );
       return { ok: true, cachePath, stale: false, size: stat.size };
     } catch (err) {
-      return staleFallback(deps, { transport: 'ssh', endpointId: origin.remoteHostId, workdir, relPath }, err);
+      return staleFallback(
+        deps,
+        { transport: 'ssh', endpointId: origin.remoteHostId, workdir, relPath },
+        err,
+      );
     }
   }
 
@@ -236,7 +256,11 @@ export async function fetchChatFile(
       );
       return { ok: true, cachePath, stale: false, size: stat.size };
     } catch (err) {
-      return staleFallback(deps, { transport: 'device', endpointId: origin.deviceId, workdir, relPath }, err);
+      return staleFallback(
+        deps,
+        { transport: 'device', endpointId: origin.deviceId, workdir, relPath },
+        err,
+      );
     }
   }
 
@@ -260,16 +284,23 @@ export async function fetchChatFile(
   let uploadedKey: string | null = null;
   let consumed = false;
   try {
-    const direct = await deps.peerFile?.(origin.deviceId, buildDevicePathUrl(absPath));
-    if (direct) {
-      try {
-        const cachePath = await deps.fetchToCache({ ...identity, size: direct.size }, async (dest, progress) => {
-          await copyFile(direct.path, dest); progress(direct.size, direct.size);
-        }, onProgress);
-        return { ok: true, cachePath, stale: false, size: direct.size };
-      } finally { await direct.dispose(); }
-    }
     const fetched = await deps.deviceMediaFetch(origin.deviceId, buildDevicePathUrl(absPath));
+    if ('path' in fetched || fetched.inlineBase64 !== undefined) {
+      try {
+        const cachePath = await deps.fetchToCache(
+          { ...identity, size: fetched.size },
+          async (dest, progress) => {
+            if ('path' in fetched) await copyFile(fetched.path, dest);
+            else await writeFile(dest, Buffer.from(fetched.inlineBase64!, 'base64'));
+            progress(fetched.size, fetched.size);
+          },
+          onProgress,
+        );
+        return { ok: true, cachePath, stale: false, size: fetched.size };
+      } finally {
+        if ('path' in fetched) await fetched.dispose();
+      }
+    }
     uploadedKey = fetched.ossKey;
     const cachePath = await deps.fetchToCache(
       { ...identity, size: fetched.size },

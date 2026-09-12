@@ -20,7 +20,7 @@ import {
   type UnrecoverableProviderCredential,
 } from '../../secrets/providerSecretStore.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
-import { MAKER_INVOKE } from '../channels.js';
+import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
@@ -3570,6 +3570,36 @@ describe('provider:oauth mutation ordering', () => {
     finishLogin({ ok: false });
     await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
   });
+  it('sends browser recovery only to the owning renderer and rejects stale progress', async () => {
+    const harness = new IpcHarness();
+    const send = vi.fn();
+    let progress!: (url: string | null) => void;
+    let finish!: (result: { ok: boolean }) => void;
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ ...owner }),
+      assertTrustedSender: (event: any) => { event.sender.send = send; },
+      oauthLogin: async (_id, _current, onBrowserUrl) => {
+        progress = onBrowserUrl!;
+        return new Promise(resolve => { finish = resolve; });
+      },
+    }));
+    const login = harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'account-a', { ownerId: 'attempt-a' });
+    await vi.waitFor(() => expect(progress).toBeDefined());
+    progress('https://auth.openai.com/authorize?fake=1');
+    expect(send).toHaveBeenCalledExactlyOnceWith(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+      providerId: 'account-a', ownerId: 'attempt-a', phase: 'browser-url', url: 'https://auth.openai.com/authorize?fake=1',
+    });
+    owner.generation++;
+    progress('https://auth.openai.com/authorize?wrong-owner=1');
+    expect(send).toHaveBeenCalledTimes(1);
+    owner.generation--;
+    await harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, 'account-a', { releaseOwner: true, ownerId: 'attempt-a' });
+    progress('https://auth.openai.com/authorize?late=1');
+    expect(send).toHaveBeenCalledTimes(1);
+    finish({ ok: false });
+    await login;
+  });
 
   it('invalidates post-login work when the provider is edited before discovery finishes', async () => {
     mountDb();
@@ -3624,6 +3654,45 @@ describe('provider:oauth mutation ordering', () => {
     finishLogin({ ok: true, rollbackCredentials });
     await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
     expect(rollbackCredentials).toHaveBeenCalledOnce();
+  });
+
+  it.each([false, true])('publishes login identity only after acceptance (cancelled=%s)', async (cancelled) => {
+    const harness = new IpcHarness();
+    type LoginResult = Awaited<ReturnType<ProviderHandlerDeps['oauthLogin']>>;
+    let finishLogin!: (result: LoginResult) => void;
+    const oauthLogin = vi.fn(() => new Promise<LoginResult>((resolve) => { finishLogin = resolve; }));
+    const afterCommit = vi.fn(async () => {});
+    const rollbackCredentials = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({ oauthLogin }));
+    const login = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter');
+    await vi.waitFor(() => expect(oauthLogin).toHaveBeenCalledOnce());
+    if (cancelled) await harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, 'openrouter');
+    finishLogin({ ok: true, afterCommit, rollbackCredentials });
+    await expect(login).resolves.toEqual(cancelled ? { ok: false, reason: 'login_cancelled' } : { ok: true });
+    expect(afterCommit).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+    expect(rollbackCredentials).toHaveBeenCalledTimes(cancelled ? 1 : 0);
+  });
+
+  it('keeps accepted credentials when cancelled during presentation refresh', async () => {
+    const harness = new IpcHarness();
+    let finishRefresh!: () => void;
+    const afterCommit = vi.fn(() => new Promise<void>((resolve) => { finishRefresh = resolve; }));
+    const rollbackCredentials = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({ oauthLogin: vi.fn(async () => ({ ok: true, afterCommit, rollbackCredentials })) }));
+    const login = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter');
+    await vi.waitFor(() => expect(afterCommit).toHaveBeenCalledOnce());
+    await harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, 'openrouter');
+    finishRefresh();
+    await expect(login).resolves.toEqual({ ok: true });
+    expect(rollbackCredentials).not.toHaveBeenCalled();
+  });
+
+  it('does not turn an accepted login into failure when presentation refresh fails', async () => {
+    const harness = new IpcHarness();
+    const afterCommit = vi.fn(async () => { throw new Error('refresh unavailable'); });
+    registerProviderHandlers(harness, makeDeps({ oauthLogin: vi.fn(async () => ({ ok: true, afterCommit })) }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter')).resolves.toEqual({ ok: true });
+    expect(afterCommit).toHaveBeenCalledOnce();
   });
 
   it('encodes failed stale-login credential rollback as an IPC INTERNAL error', async () => {

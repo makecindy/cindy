@@ -6,14 +6,34 @@
  * expo-file-system 的原生模块随 expo 核心包已链接进现有原生构建,本文件只是
  * JS 层引用,不影响 fingerprint(以 mobile:release:check 实测为准)。
  */
-import { Directory, File, Paths } from 'expo-file-system';
+import { Directory, File, Paths } from "expo-file-system";
 
-import { extOfMime, type RemoteMediaDiskCacheIO } from '@/session/remoteMediaDiskCache';
+import {
+  extOfMime,
+  type RemoteMediaDiskCacheIO,
+} from "@/session/remoteMediaDiskCache";
 
-const CACHE_DIR_NAME = 'remote-media';
-const INDEX_FILE_NAME = 'index.json';
-const INDEX_TMP_NAME = 'index.json.tmp';
-const SHARE_TMP_DIR_NAME = 'remote-media-share';
+const CACHE_DIR_NAME = "remote-media";
+const INDEX_FILE_NAME = "index.json";
+const INDEX_TMP_NAME = "index.json.tmp";
+const SHARE_TMP_DIR_NAME = "remote-media-share";
+
+async function copyRemoteFile(url: string, target: File): Promise<File> {
+  if (url.startsWith("file://")) {
+    new File(url).copy(target);
+    return target;
+  }
+  if (url.startsWith("data:")) {
+    const match = /^data:[\w.+-]+\/[\w.+-]+;base64,([A-Za-z0-9+/=]*)$/.exec(
+      url,
+    );
+    if (!match || match[1].length > 1024 * 1024)
+      throw new Error("INVALID_INLINE_FILE");
+    target.write(Uint8Array.from(atob(match[1]), (char) => char.charCodeAt(0)));
+    return target;
+  }
+  return File.downloadFileAsync(url, target, { idempotent: true });
+}
 
 /**
  * 一次性分享临时文件:超出磁盘缓存预算的对象走 store 会被 LRU 立即逐出,
@@ -32,7 +52,7 @@ export async function downloadRemoteMediaShareTemp(
     // 带原始文件名时落进一次性唯一子目录:分享单里显示真实文件名与扩展名
     // (PDF/视频/压缩包等非图片类型靠扩展名保住类型识别,extOfMime 只认图片
     // mime,兜底 .img 会让接收方无法正确预览);子目录唯一化避免同名冲突。
-    const safeName = fileName?.replace(/[\\/:*?"<>|]/g, '_').trim();
+    const safeName = fileName?.replace(/[\\/:*?"<>|]/g, "_").trim();
     let target: File;
     if (safeName) {
       const sub = new Directory(dir, unique);
@@ -41,8 +61,8 @@ export async function downloadRemoteMediaShareTemp(
     } else {
       target = new File(dir, `share-${unique}.${extOfMime(mimeType)}`);
     }
-    const file = url.startsWith('file://') ? (new File(url).copy(target), target) : await File.downloadFileAsync(url, target, { idempotent: true });
-    return (file.size ?? 0) > 0 ? file.uri : null;
+    const file = await copyRemoteFile(url, target);
+    return file.exists ? file.uri : null;
   } catch {
     return null; // 分享失败由调用方兜底提示
   }
@@ -63,10 +83,15 @@ export async function downloadRemoteMediaAsDataUri(
   mimeType: string,
   maxBytes: number,
 ): Promise<string | null> {
-  return withDownloadedRemoteMediaFile(url, mimeType, maxBytes, async (file) => {
-    const base64 = await file.base64();
-    return base64 ? `data:${mimeType};base64,${base64}` : null;
-  });
+  return withDownloadedRemoteMediaFile(
+    url,
+    mimeType,
+    maxBytes,
+    async (file) => {
+      const base64 = await file.base64();
+      return base64 ? `data:${mimeType};base64,${base64}` : null;
+    },
+  );
 }
 
 /** Consume a size-bounded download before deleting its private temporary file. */
@@ -82,7 +107,7 @@ export async function withDownloadedRemoteMediaFile<T>(
     dir.create({ intermediates: true, idempotent: true });
     const unique = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
     target = new File(dir, `res-${unique}.${extOfMime(mimeType)}`);
-    const file = url.startsWith('file://') ? (new File(url).copy(target), target) : await File.downloadFileAsync(url, target, { idempotent: true });
+    const file = await copyRemoteFile(url, target);
     const size = file.size ?? 0;
     if (size <= 0 || size > maxBytes) return null;
     return await read(file);
@@ -133,8 +158,10 @@ export function createExpoRemoteMediaDiskCacheIO(): RemoteMediaDiskCacheIO {
       // init 对账当孤儿清掉。
       const tmp = new File(dir, `${name}.wb.tmp`);
       try {
-        const FileSystem = await import('expo-file-system/legacy');
-        await FileSystem.writeAsStringAsync(tmp.uri, base64, { encoding: FileSystem.EncodingType.Base64 });
+        const FileSystem = await import("expo-file-system/legacy");
+        await FileSystem.writeAsStringAsync(tmp.uri, base64, {
+          encoding: FileSystem.EncodingType.Base64,
+        });
         const size = tmp.size ?? 0;
         if (size <= 0) {
           if (tmp.exists) tmp.delete();
@@ -158,7 +185,7 @@ export function createExpoRemoteMediaDiskCacheIO(): RemoteMediaDiskCacheIO {
       // 保留旧条目继续离线可看)。残留的 .dl.tmp 由 init 对账当孤儿清掉。
       const tmp = new File(dir, `${name}.dl.tmp`);
       try {
-        const downloaded = url.startsWith('file://') ? (new File(url).copy(tmp), tmp) : await File.downloadFileAsync(url, tmp, { idempotent: true });
+        const downloaded = await copyRemoteFile(url, tmp);
         const size = downloaded.size ?? 0;
         if (size <= 0) {
           if (tmp.exists) tmp.delete();
@@ -178,7 +205,8 @@ export function createExpoRemoteMediaDiskCacheIO(): RemoteMediaDiskCacheIO {
     listFiles() {
       // 数据文件名列表(契约:不含 index 自身与临时文件),供 init 对账删孤儿。
       // .dl.tmp 残留刻意**不**过滤——它们不在 index 里,正该被对账清掉。
-      return dir.list()
+      return dir
+        .list()
         .filter((item): item is File => item instanceof File)
         .map((file) => file.name)
         .filter((name) => name !== INDEX_FILE_NAME && name !== INDEX_TMP_NAME);

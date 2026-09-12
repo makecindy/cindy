@@ -705,6 +705,8 @@ function FilePreviewPage({
   if (item.thumb === 'doc') {
     return (
       <TextPreviewPage
+        key={maker.fileBrowser.cacheScope}
+        cacheScope={maker.fileBrowser.cacheScope}
         absolutePathOf={absolutePathOf}
         active={active}
         prepareHtmlPreview={prepareHtmlPreview}
@@ -867,6 +869,7 @@ function PdfPreviewPage({
  * markdown / HTML(richTextKindOf)多一层「渲染 / 源码」切换,渲染态复用同一份已读文本。
  */
 function TextPreviewPage({
+  cacheScope,
   absolutePathOf,
   active,
   prepareHtmlPreview,
@@ -879,6 +882,7 @@ function TextPreviewPage({
   visible,
   workdir,
 }: {
+  cacheScope: string;
   /** item.relPath → 被控端绝对路径(HTML 资源透传要据此定位同目录)。 */
   absolutePathOf(relPath: string): string;
   active: boolean;
@@ -906,7 +910,7 @@ function TextPreviewPage({
   const cacheable = !!workdir && !isAbsolutePathShape(item.relPath);
   const [state, setState] = useState<TextPreviewState>(() => {
     // 内存缓存命中(mtime keyed)直接就绪:翻页/重进零等待、零重复拉取。
-    const cached = cacheable ? getCachedPreviewText(workdir, item.relPath, item.mtimeMs) : null;
+    const cached = cacheable ? getCachedPreviewText(cacheScope, workdir, item.relPath, item.mtimeMs) : null;
     return cached
       ? {
           status: 'ready',
@@ -959,7 +963,7 @@ function TextPreviewPage({
           // 原文只为渲染态(markdown / HTML)保留,普通代码文件不留大字符串。
           content: richKind ? content : undefined,
         };
-        if (cacheable) storeCachedPreviewText(workdir, item.relPath, res.data.mtimeMs, ready);
+        if (cacheable) storeCachedPreviewText(cacheScope, workdir, item.relPath, res.data.mtimeMs, ready);
         setState({ status: 'ready', ...ready });
       })
       .catch((err) => {
@@ -970,7 +974,7 @@ function TextPreviewPage({
     return () => {
       cancelled = true;
     };
-  }, [active, cacheable, item.relPath, richKind, readTextFile, t, workdir]);
+  }, [active, cacheable, cacheScope, item.relPath, richKind, readTextFile, t, workdir]);
 
   const htmlSnapshot = useHtmlSnapshot(
     absolutePathOf(item.relPath),

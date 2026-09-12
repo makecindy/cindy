@@ -130,7 +130,7 @@ describe('RipgrepSearcher fatal exit handling', () => {
   }
 
   function waitForSearch(
-    searcher: InstanceType<ReturnType<typeof importSearcher>> extends Promise<infer P> ? P : never,
+    searcher: InstanceType<Awaited<ReturnType<typeof importSearcher>>>,
     searchId: string,
   ): Promise<void> {
     return new Promise<void>((resolve) => {
@@ -154,7 +154,7 @@ describe('RipgrepSearcher fatal exit handling', () => {
     const events: unknown[] = [];
     searcher.on('event', (ev) => events.push(ev));
 
-    const searchId = searcher.start({ query: 'needle', workdir: '/tmp/work' });
+    const searchId = searcher.start({ query: 'needle', workdir: '/tmp/work', caseSensitive: false, maxMatches: 100 });
     await waitForSearch(searcher, searchId);
 
     const errorEvents = events.filter(
@@ -179,7 +179,7 @@ describe('RipgrepSearcher fatal exit handling', () => {
     const events: unknown[] = [];
     searcher.on('event', (ev) => events.push(ev));
 
-    const searchId = searcher.start({ query: 'needle', workdir: '/tmp/work' });
+    const searchId = searcher.start({ query: 'needle', workdir: '/tmp/work', caseSensitive: false, maxMatches: 100 });
     await waitForSearch(searcher, searchId);
 
     const errorEvents = events.filter(
@@ -208,7 +208,7 @@ describe('RipgrepSearcher fatal exit handling', () => {
     const events: unknown[] = [];
     searcher.on('event', (ev) => events.push(ev));
 
-    const searchId = searcher.start({ query: 'needle', workdir: '/tmp/work' });
+    const searchId = searcher.start({ query: 'needle', workdir: '/tmp/work', caseSensitive: false, maxMatches: 100 });
     await waitForSearch(searcher, searchId);
 
     const errorEvents = events.filter(
