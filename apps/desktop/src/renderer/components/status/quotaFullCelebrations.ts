@@ -47,7 +47,9 @@ export class QuotaFullCelebrations {
       const previous = history.windows.get(window.key);
       // Snapshot timestamps only reject stale task data; reset deadlines play no role.
       if (previous?.updatedAt != null) {
-        if (updatedAt === null || updatedAt <= previous.updatedAt) return;
+        // Equal timestamps are valid for live notifications that retain the
+        // snapshot's timestamp; only strictly older task snapshots are stale.
+        if (updatedAt === null || updatedAt < previous.updatedAt) return;
       }
       const full = window.remainingPercent === 100;
       const recovered = full && (previous ? !previous.full : !history.celebrated);

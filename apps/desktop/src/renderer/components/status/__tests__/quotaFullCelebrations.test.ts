@@ -77,12 +77,12 @@ describe('QuotaFullCelebrations', () => {
     },
   );
 
-  it('does not rearm from unversioned or equal-timestamp data after a versioned full snapshot', () => {
+  it('accepts equal-timestamp live updates after a versioned full snapshot', () => {
     const history = new QuotaFullCelebrations();
     expect(history.observe('openai', [slot(100)], 1000)).toBe('primary');
     expect(history.observe('openai', [slot(20)], 1000)).toBeNull();
     expect(history.observe('openai', [slot(20)])).toBeNull();
-    expect(history.observe('openai', [slot(100)], 2000)).toBeNull();
+    expect(history.observe('openai', [slot(100)], 2000)).toBe('primary');
   });
 
   it('consumes simultaneous windows together and keeps independent windows armed', () => {
