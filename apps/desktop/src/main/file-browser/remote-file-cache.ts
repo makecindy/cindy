@@ -7,7 +7,7 @@
  *  - device:被控端 exportFile 上传 OSS → 本端 presign-get 流式直下(bytes
  *    不经 relay),下载完 best-effort 删中转对象。
  *
- * 缓存:userData/remote-file-cache/<sha1(identity)>-<basename>,identity =
+ * 缓存:userData/remote-file-cache/<sha256(identity) 前缀>-<basename>,identity =
  * transport+端点+workdir+relPath+size+mtimeMs——远端文件变了 identity 即变,
  * 天然失效;命中直接复用(2GB 不用重拉)。LRU 按字节上限逐出(atime 用
  * 文件 mtime 近似:命中时 touch)。
@@ -130,7 +130,8 @@ export async function cleanupOwnedUnpersistedStagedChatAttachments(params: {
 function prefixHashFor(
   id: Pick<RemoteFileIdentity, 'transport' | 'endpointId' | 'workdir' | 'relPath' | 'scope'>,
 ): string {
-  return createHash('sha1')
+  // Deterministic cache identity only; scope is mode/owner ID/generation, never credentials.
+  return createHash('sha256')
     .update(
       [id.scope ?? activeOwnerScopeKey(), id.transport, id.endpointId, id.workdir, id.relPath].join(
         '\n',
