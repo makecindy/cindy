@@ -16,6 +16,22 @@ const mainWebContents = {};
 const assertTrustedAppRendererEvent = vi.fn();
 const overlayIcon = {};
 const createWindowsBadgeIcon = vi.fn((count: number) => (count > 0 ? overlayIcon : null));
+let owner = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
+vi.mock('../appSessionState', () => ({ getActiveAppSession: () => owner }));
+
+function publish(
+  event: unknown,
+  count: unknown,
+  sessionIds = ['late-notification'],
+  stamp = owner,
+) {
+  return registeredHandlers.get('notification:set-app-attention-count')!(event, {
+    count,
+    sessionIds,
+    dataOwnerId: stamp.dataOwnerId,
+    ownerGeneration: stamp.generation,
+  });
+}
 
 vi.mock('../windowsBadgeIcon', () => ({ createWindowsBadgeIcon }));
 vi.mock('../i18n', () => ({ t: () => 'Tasks needing attention: {{count}}' }));
@@ -76,6 +92,7 @@ async function freshService(platform: NodeJS.Platform = 'darwin') {
 }
 
 beforeEach(() => {
+  owner = { dataOwnerId: 'owner-a', generation: 1 };
   createWindowsBadgeIcon.mockClear();
   assertTrustedAppRendererEvent.mockReset();
   setBadgeCount.mockClear();
@@ -95,7 +112,6 @@ afterEach(() => {
 describe('appBadgeService', () => {
   it('uses the current total without treating a snapshot as an acknowledgement', async () => {
     const service = await freshService();
-    const publish = registeredHandlers.get('notification:set-app-attention-count')!;
     const event = { sender: mainWebContents };
     await publish(event, 3);
     expect(service.getAttentionCount()).toBe(3);
@@ -114,12 +130,43 @@ describe('appBadgeService', () => {
     expect(dockSetBadge).toHaveBeenLastCalledWith('');
   });
 
+  it('preserves Bot attention outside the catalog and deduplicates IDs entering it', async () => {
+    const service = await freshService();
+    const event = { sender: mainWebContents };
+    await publish(event, 3, ['a', 'b', 'c']);
+    service.markSessionNeedsAttention('bot-task');
+    service.markSessionNeedsAttention('bot-task');
+    expect(service.getAttentionCount()).toBe(4);
+    await publish(event, 2, ['a', 'b', 'c']);
+    expect(service.getAttentionCount()).toBe(3);
+    service.clearSessionAttention('bot-task');
+    expect(service.getAttentionCount()).toBe(2);
+    service.markSessionNeedsAttention('bot-task');
+    await publish(event, 3, ['a', 'b', 'c', 'bot-task']);
+    expect(service.getAttentionCount()).toBe(3);
+    await publish(event, 0, []);
+    expect(service.getAttentionCount()).toBe(0);
+    service.clearAllSessionAttention();
+    expect(service.getAttentionCount()).toBe(0);
+  });
+
   it('rejects secondary windows, untrusted frames and invalid totals', async () => {
     await freshService();
-    const publish = registeredHandlers.get('notification:set-app-attention-count')!;
-    await expect(publish({ sender: {} }, 4)).rejects.toThrow('main window');
+    await expect(publish({ sender: {} }, 4)).rejects.toMatchObject({ code: 'PERMISSION_DENIED' });
     for (const count of [-1, 1.5, NaN, Infinity, '3', Number.MAX_SAFE_INTEGER + 1]) {
-      await expect(publish({ sender: mainWebContents }, count)).rejects.toThrow('safe integer');
+      await expect(publish({ sender: mainWebContents }, count)).rejects.toMatchObject({
+        code: 'INVALID_PARAMS',
+      });
+    }
+    const handler = registeredHandlers.get('notification:set-app-attention-count')!;
+    for (const snapshot of [
+      3,
+      { count: 3 },
+      { count: 3, sessionIds: [null], dataOwnerId: 'owner-a', ownerGeneration: 1 },
+    ]) {
+      await expect(handler({ sender: mainWebContents }, snapshot)).rejects.toMatchObject({
+        code: 'INVALID_PARAMS',
+      });
     }
     assertTrustedAppRendererEvent.mockImplementationOnce(() => {
       throw new Error('untrusted frame');
@@ -128,16 +175,23 @@ describe('appBadgeService', () => {
     expect(setBadgeCount).not.toHaveBeenCalled();
   });
 
-  it('clears a projected total on shutdown even without event-based attention', async () => {
+  it('clears the previous owner total until the new owner publishes its inventory', async () => {
     const service = await freshService();
-    await registeredHandlers.get('notification:set-app-attention-count')!(
-      { sender: mainWebContents },
-      3,
-    );
+    await publish({ sender: mainWebContents }, 3);
     service.clearAllSessionAttention();
     expect(service.getAttentionCount()).toBe(0);
     expect(dockSetBadge).toHaveBeenLastCalledWith('');
     expect(onSessionAttentionCleared).not.toHaveBeenCalled();
+    const previousOwner = owner;
+    owner = { dataOwnerId: null, generation: 2 };
+    service.markSessionNeedsAttention('late-signed-out-event');
+    await publish({ sender: mainWebContents }, 3, [], previousOwner);
+    expect(service.getAttentionCount()).toBe(0);
+    owner = { dataOwnerId: 'owner-b', generation: 3 };
+    await publish({ sender: mainWebContents }, 3, [], previousOwner);
+    expect(service.getAttentionCount()).toBe(0);
+    await publish({ sender: mainWebContents }, 1);
+    expect(service.getAttentionCount()).toBe(1);
   });
 
   it('macOS uses numeric Dock badge count and deduplicates sessions', async () => {
@@ -209,7 +263,6 @@ describe('appBadgeService', () => {
 
   it('Windows uses the projected total and keeps exact counts in the description', async () => {
     await freshService('win32');
-    const publish = registeredHandlers.get('notification:set-app-attention-count')!;
     await publish({ sender: mainWebContents }, 123);
     expect(createWindowsBadgeIcon).toHaveBeenLastCalledWith(123);
     expect(setOverlayIcon).toHaveBeenLastCalledWith(overlayIcon, 'Tasks needing attention: 123');

@@ -2805,7 +2805,7 @@ interface ElectronAPI {
     clear: () => Promise<{ configured: boolean; enabled: boolean }>;
   };
   /** 主窗口投影全部任务的关注总数；独立于通知事件及逐任务已读回执。 */
-  notificationSetAppAttentionCount: (count: number) => Promise<void>;
+  notificationSetAppAttentionCount: (snapshot: import('../shared/sessionAttention').AppAttentionSnapshot) => Promise<void>;
   /** 将对应 session 标记为需要关注，同步灵动岛状态。 */
   notificationMarkSessionAttention: (sessionId: string) => Promise<void>;
   /** 用户查看或处置对应 session 后，同步逐任务已读回执。 */

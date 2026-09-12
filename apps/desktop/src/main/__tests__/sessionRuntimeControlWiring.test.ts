@@ -171,6 +171,10 @@ describe('session runtime control wiring', () => {
       '// ── Custom protocol registration',
     );
     expect(body).toContain('ghostPanelWindowsController.closeForOwnerChange();');
+    expect(body.indexOf('clearAllSessionAttention();')).toBeGreaterThan(-1);
+    expect(body.indexOf('clearAllSessionAttention();')).toBeLessThan(
+      body.indexOf('authManager.setStableOwnerPostCommitTask('),
+    );
     expect(body).toContain('clearAllSessionProviders();');
     expect(body).toContain('clearAllSessionRuntimeAxes();');
     expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(

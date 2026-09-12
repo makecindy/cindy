@@ -15,11 +15,15 @@ import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { createLogger } from '@/lib/logger';
 import { countAppAttention } from '@/features/cc-agent/lib/appAttentionCount';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
+import { useAuth } from '@/contexts/AuthContext';
 
 const log = createLogger('AppBadgeAttentionSync');
 
 /** 主窗口常驻：设置/伙伴页也持续更新，独立订阅避免带动布局重渲染。 */
 export function AppBadgeAttentionSync() {
+  useAuth();
+  const owner = getDataOwnerGeneration();
   const { sessions, isLoading, error } = useCCSessions({ includeArchived: 'all' });
   const remoteSessions = useRemoteProjectSessions();
   const localSchedules = usePublishedAutomationScheduleSessionIndex();
@@ -43,10 +47,17 @@ export function AppBadgeAttentionSync() {
   });
   useEffect(() => {
     if (isLoading || error) return;
-    void window.electronAPI.notificationSetAppAttentionCount(count).catch((err: unknown) => {
-      log.warn('failed to update app attention count', err);
-    });
+    void window.electronAPI
+      .notificationSetAppAttentionCount({
+        count,
+        sessionIds: [...sessions, ...remoteSessions].map((session) => session.id),
+        dataOwnerId: owner.dataOwnerId,
+        ownerGeneration: owner.generation,
+      })
+      .catch((err: unknown) => {
+        log.warn('failed to update app attention count', err);
+      });
     // 卸载/切路由不是已读，不清图标；下次挂载会重新提交完整投影。
-  }, [count, isLoading, error]);
+  }, [count, isLoading, error, sessions, remoteSessions, owner]);
   return null;
 }

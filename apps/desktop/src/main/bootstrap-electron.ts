@@ -2438,6 +2438,7 @@ registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
 setAppSessionCommitBoundaryHook(() => {
+  clearAllSessionAttention();
   ghostPanelWindowsController.closeForOwnerChange();
   clearAllSessionProviders();
   clearAllSessionRuntimeAxes();

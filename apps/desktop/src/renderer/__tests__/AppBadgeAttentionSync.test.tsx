@@ -10,9 +10,12 @@ const state = vi.hoisted(() => ({
     ['c', 'done'],
   ]),
   empty: new Map(),
+  owner: { dataOwnerId: 'owner-a', generation: 1 },
   isLoading: false,
   publish: vi.fn().mockResolvedValue(undefined),
 }));
+vi.mock('@/contexts/AuthContext', () => ({ useAuth: () => ({}) }));
+vi.mock('@/contexts/dataOwnerGeneration', () => ({ getDataOwnerGeneration: () => state.owner }));
 
 vi.mock('@/hooks/useCCSessions', () => ({
   useCCSessions: () => ({ sessions: state.sessions, isLoading: state.isLoading, error: null }),
@@ -53,7 +56,12 @@ describe('app badge projection lifecycle', () => {
   it('publishes current totals, retains them on focus and unmount, and resyncs on mount', () => {
     vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
     const view = render(<AppBadgeAttentionSync />);
-    expect(state.publish).toHaveBeenLastCalledWith(3);
+    expect(state.publish).toHaveBeenLastCalledWith({
+      count: 3,
+      sessionIds: ['a', 'b', 'c'],
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 1,
+    });
     window.dispatchEvent(new Event('focus'));
     expect(state.publish).toHaveBeenCalledTimes(1);
     state.attention = new Map([
@@ -61,11 +69,11 @@ describe('app badge projection lifecycle', () => {
       ['c', 'done'],
     ]);
     view.rerender(<AppBadgeAttentionSync />);
-    expect(state.publish).toHaveBeenLastCalledWith(2);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 2 }));
     view.unmount();
     expect(state.publish).toHaveBeenCalledTimes(2);
     render(<AppBadgeAttentionSync />);
-    expect(state.publish).toHaveBeenLastCalledWith(2);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 2 }));
     expect(state.publish).toHaveBeenCalledTimes(3);
   });
 
@@ -76,6 +84,6 @@ describe('app badge projection lifecycle', () => {
     expect(state.publish).not.toHaveBeenCalled();
     state.isLoading = false;
     view.rerender(<AppBadgeAttentionSync />);
-    expect(state.publish).toHaveBeenLastCalledWith(3);
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
   });
 });

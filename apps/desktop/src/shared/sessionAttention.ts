@@ -14,6 +14,13 @@ export const SESSION_ATTENTION_CLEARED_CHANNEL = 'notification:session-attention
 /** 主窗口把当前任务关注总数投影到本机图标；不是已读回执，不经 device-link 转发。 */
 export const APP_ATTENTION_COUNT_CHANNEL = 'notification:set-app-attention-count';
 
+export interface AppAttentionSnapshot {
+  count: number;
+  sessionIds: string[];
+  dataOwnerId: string | null;
+  ownerGeneration: number;
+}
+
 /**
  * 清除会话 attention 的意图,随 IPC / 广播全链路透传:
  * 'explicit' = 用户真实看到了内容(可清未读 error);
