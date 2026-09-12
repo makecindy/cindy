@@ -781,12 +781,7 @@ export function ProjectsSection({
     return [...projects.flatMap((project) => project.sessions), ...dialogues];
   }, [filter.groupBy, projects, dialogues]);
   const dialogueSourceLabelMap = useMemo(
-    () =>
-      buildSessionSourceLabelMap(
-        flattenedSessionsForSourceLabels,
-        allKnownProjects,
-        t('ccAgent.sidebar.dialogues'),
-      ),
+    () => buildSessionSourceLabelMap(flattenedSessionsForSourceLabels, allKnownProjects),
     [flattenedSessionsForSourceLabels, allKnownProjects, t],
   );
 
