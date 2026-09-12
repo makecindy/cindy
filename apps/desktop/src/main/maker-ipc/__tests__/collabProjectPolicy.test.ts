@@ -54,6 +54,24 @@ describe('assertCollabProjectEnabled', () => {
     ).not.toThrow();
   });
 
+  it.each(['.cindy-worktrees', '.xdt-worktrees'])('enforces the base policy for %s without changing runtime cwd', (folder) => {
+    const context = { ...project, workingDir: `/projects/repo /${folder}/worker/src` };
+    const calls: Array<string | undefined> = [];
+    expect(() => assertCollabProjectEnabled(context, (_plugin, path) => {
+      calls.push(path);
+      return path !== '/projects/repo ';
+    }, neverManagedDialogue)).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
+    expect(calls).toEqual(['/projects/repo ']);
+    expect(context.workingDir).toBe(`/projects/repo /${folder}/worker/src`);
+    expect(resolveLocalCollabPolicyWorkingDir(context.workingDir, 'project', neverManagedDialogue))
+      .toBe('/projects/repo ');
+  });
+
+  it('keeps imported worktree project overrides independent', () => {
+    const path = '/projects/repo/.worktrees/imported';
+    expect(resolveLocalCollabPolicyWorkingDir(path, 'project', neverManagedDialogue)).toBe(path);
+  });
+
   it('rejects a project with collab disabled', () => {
     expect(() =>
       assertCollabProjectEnabled(project, () => false, neverManagedDialogue),

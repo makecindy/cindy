@@ -1,4 +1,5 @@
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { normalizeWorkingDirForProjectSettings } from '../../shared/workingDir.js';
 
 export interface CollabProjectPolicyContext {
   workingDir?: string | null;
@@ -27,7 +28,7 @@ export function resolveLocalCollabPolicyWorkingDir(
   ) {
     return undefined;
   }
-  return workingDir;
+  return normalizeWorkingDirForProjectSettings(workingDir) ?? workingDir;
 }
 
 /**
