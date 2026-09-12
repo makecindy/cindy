@@ -45,7 +45,7 @@ import type {
   RewindFilesResult,
   SendOrigin,
 } from './types/events.js';
-import { isTerminalAgentErrorEvent, parseToolLoopErrorDetails } from './types/events.js';
+import { isTerminalAgentErrorEvent, parseToolLoopErrorDetails, isTurnWatchdogLivenessEvent } from './types/events.js';
 import type { ContextUsageData } from './types/context-usage.js';
 import type { PiRuntimeCapabilityManifest } from './types/pi-runtime-capabilities.js';
 import type {
@@ -76,13 +76,14 @@ export type SessionStatusListener = (status: SessionStatus) => void;
 export type InteractionRequestListener = (req: InteractionRequest) => Promise<InteractionDecision>;
 
 /**
- * turn 零事件看门狗阈值(ms)。turn 在跑、却连续这么久**一个事件都没有**,视为整条
+ * turn 零事件看门狗阈值(ms)。turn 在跑、却连续这么久**没有产品进展**,视为整条
  * 链路已死,中断本轮而不是永远转圈。env `XDT_SESSION_TURN_STALL_MS` 覆盖,0 关闭。
  *
  * 与 agent 层 watchdog 的分工:各 agent 内部的 upstream-idle watchdog 只盯"球在上游
  * 却不回话"(claude-code 30min / codex 30min),它们在**工具执行期间刻意不计时** ——
  * 因此工具自己 hang(MCP 卡住、SDK↔子进程 stdio 通道 wedge)时没有任何机制兜底,
- * turn 可以永久挂着。这一层就是兜那个洞:不区分球在谁手里,只看"还有没有动静"。
+ * turn 可以永久挂着。这一层就是兜那个洞:不区分球在谁手里,只看有没有产品进展。
+ * `status` / `account_usage` 是传输层或用量心跳,不算进展(见 isTurnWatchdogLivenessEvent)。
  *
  * 45min 刻意大于 agent 层的 30min,保证正常情况下 agent 自己先自愈、不被抢跑;
  * 只有 agent 层也失灵才轮到这里。
@@ -938,8 +939,8 @@ export class Session {
       turnDispatched = true;
       reservation.accepted = true;
       this.unacceptedSendGeneration = null;
-      // turn 真正开始跑 → 起 stall 看门狗。后续每个事件都会重置它，done / 终态
-      // error 会清掉它（见 armTurnStallWatchdog）。
+      // turn 真正开始跑 → 起 stall 看门狗。后续产品进展事件会重置它；status /
+      // account_usage 心跳不算。done / 终态 error 会清掉它（见 armTurnStallWatchdog）。
       this.armTurnStallWatchdog();
       return { accepted: true };
     } catch (e) {
@@ -2495,7 +2496,6 @@ export class Session {
       return;
     }
     const isBackgroundEvent = event.turnScope === 'background';
-    if (!isBackgroundEvent) this.lastEventAt = Date.now();
     this.lastEventType = event.type;
     if (event.sessionInstanceId === undefined) {
       event.sessionInstanceId = this.instanceId;
@@ -2516,6 +2516,11 @@ export class Session {
     const isCurrentGeneration =
       resolvedGeneration === this.turnGeneration &&
       observedGeneration === this.turnGeneration;
+    // leftover / 旧 generation 的产品事件不能把当前 turn 的 stall 日志时钟往前拨。
+    // 心跳与非产品事件同样不算（见 isTurnWatchdogLivenessEvent）。
+    if (!isBackgroundEvent && isCurrentGeneration && isTurnWatchdogLivenessEvent(event)) {
+      this.lastEventAt = Date.now();
+    }
     // In-flight start-failure is stamped N+1 from an older wait. Snapshot and
     // probe must still settle the current send even when observed stays on N.
     const settleAsCurrentGeneration =
@@ -2711,7 +2716,7 @@ export class Session {
       // Only an actual Host claim keeps the executor available for bounded
       // silent-stop continuation; an unowned terminal can retire normally.
       this.finishRetirementIfSettled();
-    } else if (isCurrentGeneration) {
+    } else if (isCurrentGeneration && isTurnWatchdogLivenessEvent(event)) {
       this.armTurnStallWatchdog();
     }
   }
@@ -2841,7 +2846,7 @@ export class Session {
     if (this.hasRunningBackgroundTasks()) return;
     const now = Date.now();
     const msSinceLastEvent = this.lastEventAt > 0 ? now - this.lastEventAt : null;
-    this.logger.warn('turn stall watchdog tripped — no events at all, interrupting turn', {
+    this.logger.warn('turn stall watchdog tripped — no product activity, interrupting turn', {
       turnStallMs: this.turnStallMs,
       lastEventType: this.lastEventType,
       msSinceLastEvent,

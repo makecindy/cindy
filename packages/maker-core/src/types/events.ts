@@ -229,6 +229,35 @@ export function isTerminalTurnEvent(event: AgentEvent): boolean {
   return isTerminalAgentErrorEvent(event);
 }
 
+/**
+ * 会刷新 Session 零事件看门狗 / Codex upstream-idle 计时的事件。
+ *
+ * **白名单**，不是「排除心跳」的黑名单。`status` / `account_usage` 是传输层或用量
+ * 心跳；`turn_diff` / `compact_boundary` / `session_id` / `plan_mode_changed` /
+ * `interaction_dismissed` 是系统或诊断帧；`done` / `error`（含 `willRetry: true`
+ * 的非终态 error）由终态路径自己清 watchdog，不能再当存活证据。把这些算进存活，
+ * 会让卡死的 turn 永远像在跑（典型：自动续跑被 vendor accept 之后只剩 usage-refresh
+ * status，banner 被吞、Continue 进不去）。后台事件同样不是当前 turn 的存活证据。
+ *
+ * 超时后的终态 error 交给 interrupted-turn 自动续跑（与 reconnect-stalled
+ * 同类）；额度耗尽才把 Continue 交还用户。
+ */
+const TURN_WATCHDOG_LIVENESS_TYPES = new Set<AgentEventType>([
+  'text',
+  'thinking',
+  'tool_use',
+  'tool_result',
+  'tool_result_full',
+  'agent_task_update',
+  'image',
+  'interaction_request',
+]);
+
+export function isTurnWatchdogLivenessEvent(event: AgentEvent): boolean {
+  if (event.turnScope === 'background') return false;
+  return TURN_WATCHDOG_LIVENESS_TYPES.has(event.type);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }

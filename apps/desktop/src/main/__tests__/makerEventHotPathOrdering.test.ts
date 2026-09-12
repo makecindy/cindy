@@ -445,30 +445,37 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('preserves only a waiting Codex reconnect-stall retry across its exact provider rebuild', () => {
+  it('preserves continuation-only retry across its exact unexpected provider rebuild', () => {
     const closedBlock = extractSessionCloseAdaptersSource();
 
     expect(source).toContain(
-      'const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();',
+      'const pendingContinuationOnlyAutoResumeRebuilds = new WeakMap<Session, number>();',
     );
-    expect(source).toContain("if (signals.reason === 'codex_reconnect_stalled') {");
+    expect(source).toContain('if (isAcceptedTurnContinuationOnlyReason(signals.reason)) {');
     expect(source).toContain(
-      'pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);',
+      'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
     );
-    expect(source).toContain("if (closeReason !== 'unexpected') return false;");
+    expect(source).toContain('shouldPreserveWaitingContinuationOnlyAutoResume({');
+    expect(source).toContain('leasedAttemptToken,');
     expect(source).toContain(
       'interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)',
     );
-    expect(source).toContain('coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken');
-    expect(source).toContain('autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken)');
+    expect(source).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
+    expect(source).toContain('coordinator?.hasQueuedAutoResume(session.id)');
+    expect(source).toContain('isContinuationOnly:');
+    expect(source).toContain('coordinator?.isContinuationOnlyAutoResume(session.id) === true');
+    expect(source).toContain('coordinator?.isContinuationOnlyAutoResume(session.id) !== true');
     expect(closedBlock).toContain(
-      'shouldPreserveCodexReconnectStalledAutoResume(session, closeReason)',
+      'shouldPreserveContinuationOnlyAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain('runSessionCloseCleanup(context.preserveAutoResumeIntent, {');
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
+    expect(source).toMatch(/onBind: \(session: WiredSession\) => \{\s*advanceSessionTurnBoundaryGeneration\(session.id\);\s*bindContinuationOnlyAutoResumeLease\(session\);/);
+    expect(source).toContain('onUnconfirmedAutoResumeTurn:');
+    expect(source).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {

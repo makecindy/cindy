@@ -5,9 +5,11 @@ import {
   INTERRUPTED_TURN_MAX_EPISODE_ATTEMPTS,
   InterruptedTurnAutoResumeGuard,
   interruptedTurnResumeDelayMs,
+  isAcceptedTurnContinuationOnlyReason,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
   isSubstantiveProgressEvent,
+  shouldPreserveWaitingContinuationOnlyAutoResume,
 } from '../interruptedTurnAutoResume.js';
 
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
@@ -64,6 +66,108 @@ describe('isInterruptedTurnError', () => {
         message: 'Codex app-server stopped making progress while reconnecting.',
       }),
     ).toBe(true);
+  });
+
+  it('accepts stall / idle timeouts so heartbeat-only zombie running can auto-retry', () => {
+    // 用量心跳不再刷新看门狗之后，这两类 reason 就是「以为还在跑、其实没进展」。
+    // 必须走自动续跑，不能直接把 Continue 交还用户；额度耗尽才停。
+    expect(
+      isInterruptedTurnError({
+        reason: 'turn_no_event_timeout',
+        message: 'This turn produced no activity at all for 45 minutes.',
+      }),
+    ).toBe(true);
+    expect(
+      isInterruptedTurnError({
+        reason: 'upstream_response_idle_timeout',
+        message: 'The model stopped responding for a long time.',
+      }),
+    ).toBe(true);
+    expect(isInterruptedTurnError({ reason: 'turn_no_event_timeout' })).toBe(true);
+    expect(isInterruptedTurnError({ reason: 'upstream_response_idle_timeout' })).toBe(true);
+  });
+
+  it('marks accepted-turn timeouts as continuation-only', () => {
+    expect(isAcceptedTurnContinuationOnlyReason('turn_no_event_timeout')).toBe(true);
+    expect(isAcceptedTurnContinuationOnlyReason('upstream_response_idle_timeout')).toBe(true);
+    expect(isAcceptedTurnContinuationOnlyReason('codex_reconnect_stalled')).toBe(true);
+    expect(isAcceptedTurnContinuationOnlyReason('empty-response')).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason('upstream-overload')).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason('turn-failed')).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason(undefined)).toBe(false);
+  });
+
+  it('preserves waiting continuation-only auto-resume only across unexpected close', () => {
+    const waiting = {
+      closeReason: 'unexpected' as const,
+      leasedAttemptToken: 7,
+      guardIsCurrentAttempt: true,
+      bookIsCurrentAttempt: true,
+      coordinatorAttemptToken: 7,
+      hasLiveSchedule: true,
+      hasQueuedAutoResume: false,
+      isContinuationOnly: true,
+    };
+    // Session stall drain / Codex idle ACK-fail close / Claude interrupt-reject drain
+    // 都是 vendor 自己 close，Maker 没有显式 reason → unexpected。
+    expect(shouldPreserveWaitingContinuationOnlyAutoResume(waiting)).toBe(true);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({ ...waiting, closeReason: 'requested' }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({ ...waiting, closeReason: 'agent-switch' }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        leasedAttemptToken: undefined,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        leasedAttemptToken: undefined,
+        coordinatorAttemptToken: null,
+        hasLiveSchedule: false,
+        hasQueuedAutoResume: true,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({ ...waiting, hasLiveSchedule: false }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        hasLiveSchedule: false,
+        hasQueuedAutoResume: true,
+      }),
+    ).toBe(true);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        hasLiveSchedule: false,
+        hasQueuedAutoResume: true,
+        closeReason: 'requested',
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        coordinatorAttemptToken: 8,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        guardIsCurrentAttempt: false,
+      }),
+    ).toBe(false);
+    expect(
+      shouldPreserveWaitingContinuationOnlyAutoResume({
+        ...waiting,
+        isContinuationOnly: false,
+      }),
+    ).toBe(false);
   });
 
   it('rejects oversized-history classification so auto-resume cannot loop', () => {
