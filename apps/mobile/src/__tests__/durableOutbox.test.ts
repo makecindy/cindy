@@ -126,6 +126,82 @@ async function setup(storage = disk()) {
 }
 
 describe("durable mobile outbox ownership", () => {
+  it('reconfirms a cancellation tombstone after its first response is lost', async () => {
+    const { store, runner, deps } = await setup();
+    await store.add({ ...message(), state: 'confirming', cancelRequested: true,
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    deps.cancel.mockRejectedValueOnce(new Error('response lost'));
+    await runner.run();
+    expect(store.getSnapshot()[0]?.cancelRequested).toBe(true);
+    expect(deps.cleanup).not.toHaveBeenCalled();
+    deps.projection.mockResolvedValue(projection('id-1', 'removed'));
+    runner.wake();
+    await runner.run();
+    expect(deps.cancel).toHaveBeenCalledTimes(2);
+    expect(deps.cleanup).toHaveBeenCalledWith(expect.objectContaining({ cleanupOutcome: 'cancelled' }), true);
+    expect(store.getSnapshot()).toEqual([]);
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+  it('does not claim cancelled uploads when a removed receipt is followed by cancel=false', async () => {
+    const { store, runner, deps } = await setup();
+    await store.add({ ...message(), state: 'confirming', cancelRequested: true,
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    deps.projection.mockResolvedValue(projection('id-1', 'removed'));
+    deps.cancel.mockResolvedValue(false);
+    await runner.run();
+    runner.wake();
+    await runner.run();
+    expect(deps.cleanup).toHaveBeenCalledWith(expect.objectContaining({ cleanupOutcome: 'accepted' }), false);
+    expect(deps.enqueue).not.toHaveBeenCalled();
+  });
+  it.each([
+    ['accepted', 'files'], ['accepted', 'ledger'],
+    ['cancelled', 'files'], ['cancelled', 'ledger'],
+  ] as const)('recovers %s cleanup after %s deletion fails without consulting the host or resending', async (outcome, failure) => {
+    const { store, runner, deps, storage } = await setup();
+    await store.add({ ...message(), state: 'confirming', cancelRequested: outcome === 'cancelled',
+      prepared: { clientId: 'id-1' } as QueuedRemoteMessage });
+    deps.projection.mockResolvedValue(projection('id-1', 'removed'));
+    if (failure === 'files') deps.cleanup.mockRejectedValueOnce(new Error('filesystem busy'));
+    else vi.spyOn(storage, 'removeItem').mockRejectedValueOnce(new Error('storage busy'));
+    await runner.run();
+    expect(store.getSnapshot()[0]).toMatchObject({ state: 'host-owned', cleanupOutcome: outcome });
+    runner.stop();
+    const recovered = await setup(storage);
+    expect(recovered.store.getSnapshot()[0]?.cleanupOutcome).toBe(outcome);
+    recovered.deps.projection.mockRejectedValue(new Error('host offline'));
+    await recovered.runner.run();
+    expect(recovered.deps.cleanup).toHaveBeenCalledWith(expect.objectContaining({ cleanupOutcome: outcome }), outcome === 'cancelled');
+    expect(recovered.store.getSnapshot()).toEqual([]);
+    expect(recovered.deps.projection).not.toHaveBeenCalled();
+    expect(recovered.deps.upload).not.toHaveBeenCalled();
+    expect(recovered.deps.enqueue).not.toHaveBeenCalled();
+    expect(recovered.deps.cancel).not.toHaveBeenCalled();
+  });
+  it('does not delete bytes when persisting completion fails', async () => {
+    const { store, runner, deps, storage } = await setup();
+    await store.add(message());
+    deps.projection.mockResolvedValue(projection('id-1', 'removed'));
+    vi.spyOn(storage, 'setItem').mockRejectedValueOnce(new Error('disk full'));
+    await runner.run();
+    expect(deps.cleanup).not.toHaveBeenCalled();
+    expect(store.getSnapshot()[0]?.cleanupOutcome).toBeUndefined();
+    expect(storage.data.size).toBe(1);
+  });
+  it('keeps completion after an account switch during cleanup and never blocks the next message', async () => {
+    const { store, runner, deps, storage, deactivate } = await setup();
+    await store.add({ ...message(), state: 'host-owned', cleanupOutcome: 'cancelled' });
+    await store.add({ ...message('id-2'), createdAt: 2 });
+    deps.cleanup.mockImplementationOnce(async () => { deactivate(); });
+    await runner.run();
+    expect(storage.data.size).toBe(2);
+    runner.stop();
+    const recovered = await setup(storage);
+    recovered.deps.cleanup.mockRejectedValue(new Error('still busy'));
+    await recovered.runner.run();
+    expect(recovered.deps.enqueue).toHaveBeenCalledWith(expect.objectContaining({ item: expect.objectContaining({ clientId: 'id-2' }) }));
+    expect(recovered.store.getSnapshot().find((r) => r.item.clientId === 'id-1')?.cleanupOutcome).toBe('cancelled');
+  });
   it('isolates identical membership IDs across realms without claiming unqualified draft data', async () => {
     const storage = disk();
     const store = createDurableOutbox(storage);
@@ -173,7 +249,7 @@ describe("durable mobile outbox ownership", () => {
     deps.history.mockResolvedValue(true);
     await runner.run();
     expect(store.getSnapshot()).toEqual([]);
-    expect(deps.cleanup).toHaveBeenCalledWith(record, false);
+    expect(deps.cleanup).toHaveBeenCalledWith(expect.objectContaining({ ...record, state: 'host-owned', cleanupOutcome: 'accepted' }), false);
     expect(deps.cancel).not.toHaveBeenCalled();
   });
   it('reserves a visible user slot synchronously before an immediate assistant reply', async () => {
@@ -401,7 +477,7 @@ describe("app-owned delivery and reconciliation", () => {
     await running;
     expect(store.getSnapshot()).toHaveLength(0);
     expect(deps.enqueue).not.toHaveBeenCalled();
-    expect(deps.cleanup).toHaveBeenCalledWith(cancelledRecord, true);
+    expect(deps.cleanup).toHaveBeenCalledWith(expect.objectContaining({ ...cancelledRecord, state: 'host-owned', cleanupOutcome: 'cancelled' }), true);
   });
   it("keeps FIFO within a task while other computers can continue", async () => {
     const { store, runner, deps } = await setup();

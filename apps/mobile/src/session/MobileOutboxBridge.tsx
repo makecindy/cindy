@@ -43,7 +43,7 @@ import {
   prepareMobileQueuedSessionReferences,
 } from "./sessionReferences";
 import { remoteSessionStore } from "./remoteSessionStore";
-import type { DurableOutboxRecord } from "./durableOutbox";
+import { isDurableOutboxSettled, type DurableOutboxRecord } from "./durableOutbox";
 import type { InputProjection } from "./types";
 
 /** Runs only while the OS gives the app execution time; foreground/reconnect resume the same ledger. */
@@ -114,6 +114,7 @@ export function MobileOutboxBridge() {
       if (!isCurrent()) return;
       const keys = new Set<string>();
       for (const record of mobileDurableOutbox.getSnapshot()) {
+        if (isDurableOutboxSettled(record)) continue;
         if (
           record.creation &&
           !remoteSessionStore
@@ -153,13 +154,14 @@ export function MobileOutboxBridge() {
       store: mobileDurableOutbox,
       isCurrent,
       canRun: (r) =>
-        !r.suspended &&
-        !isDurableOutboxCreationHeld(r.item.sessionId) &&
-        latest.current.link.status === "online" &&
         AppState.currentState !== "background" &&
         AppState.currentState !== "inactive" &&
-        latest.current.link.getPresenceAvailability(r.deviceId) !== false &&
-        getNewSessionCreationTask(r.item.sessionId) === null,
+        (isDurableOutboxSettled(r) ||
+          (!r.suspended &&
+            !isDurableOutboxCreationHeld(r.item.sessionId) &&
+            latest.current.link.status === "online" &&
+            latest.current.link.getPresenceAvailability(r.deviceId) !== false &&
+            getNewSessionCreationTask(r.item.sessionId) === null)),
       projection: async (r) => {
         epochs.set(leaseKey(r), {
           authority: remoteSessionStore.captureInputProjectionAuthorityEpoch(

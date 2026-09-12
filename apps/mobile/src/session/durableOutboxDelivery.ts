@@ -1,6 +1,7 @@
 import type { InputDeliveryProjection } from "@cindy/device-link";
 import {
   createDurableOutbox,
+  isDurableOutboxSettled,
   type DurableOutboxRecord,
   type DurableUpload,
 } from "./durableOutbox";
@@ -50,14 +51,6 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
     JSON.stringify([r.deviceId, r.item.sessionId, r.item.clientId]);
   const current = (r: DurableOutboxRecord) =>
     !stopped && deps.isCurrent() && deps.store.getSnapshot().includes(r);
-  async function finish(record: DurableOutboxRecord, cancelled = false) {
-    if (!current(record)) return;
-    await deps.store.remove(record);
-    // Removing the ledger first leaves at worst an orphan file, never an accepted row with missing bytes.
-    await deps.cleanup(record, cancelled);
-    due.delete(id(record));
-    attempts.delete(id(record));
-  }
   async function deliver(initial: DurableOutboxRecord) {
     let record = initial;
     due.set(id(record), Date.now() + 5_000);
@@ -65,7 +58,21 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       if (!current(record)) throw new Error("OUTBOX_STALE_WRITE");
       record = await deps.store.update(record, patch);
     };
+    const finish = async (cancelled = false) => {
+      if (!current(record)) return;
+      if (!isDurableOutboxSettled(record)) {
+        await update({ state: 'host-owned', cleanupOutcome: cancelled ? 'cancelled' : 'accepted', error: undefined });
+      }
+      if (!current(record)) return;
+      await deps.cleanup(record, record.cleanupOutcome === 'cancelled');
+      if (!current(record)) return;
+      await deps.store.remove(record);
+      due.delete(id(record));
+      attempts.delete(id(record));
+    };
     try {
+      // Persisted completion never re-enters delivery, even after missing files or lost host history.
+      if (isDurableOutboxSettled(record)) return await finish();
       const projection = await deps.projection(record);
       if (!current(record)) return;
       deps.applyProjection(record, projection);
@@ -79,14 +86,13 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         )
           ? "pending"
           : "unknown");
-      if (state === "removed") return await finish(record);
       if (record.cancelRequested) {
         if (!record.prepared && state === "unknown")
-          return await finish(record, true);
+          return await finish(true);
         if (projection.inputDeliveryVersion === 1) {
           const cancelled = await deps.cancel(record);
           if (!current(record)) return;
-          if (cancelled) await finish(record, true);
+          if (cancelled) await finish(true);
           else {
             await deps.accepted?.(record);
             await update({
@@ -95,16 +101,19 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
               error: undefined,
             });
           }
+        } else if (state === 'removed') {
+          await finish();
         } else if (state === "pending") {
           // Legacy hosts cannot seal a not-yet-arrived enqueue. Keep uncertain cancellation visible.
           await update({ state: "failed", error: deps.confirmationMessage });
         } else if (await deps.history(record)) {
-          if (current(record)) await finish(record);
+          if (current(record)) await finish();
         } else if (current(record)) {
           await update({ state: "failed", error: deps.confirmationMessage });
         }
         return;
       }
+      if (state === "removed") return await finish();
       if (
         record.clearBoundaryMs !== undefined &&
         projection.clearBoundaryMs !== undefined &&
@@ -115,7 +124,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
           state === "accepted" ||
           state === "pending"
         )
-          return await finish(record);
+          return await finish();
         await update({ state: "failed", error: deps.clearedMessage });
         return;
       }
@@ -127,7 +136,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
         if (record.state !== "host-owned") await deps.accepted?.(record);
         if (!current(record)) return;
         if (await deps.history(record)) {
-          if (current(record)) await finish(record);
+          if (current(record)) await finish();
           return;
         }
         if (!current(record)) return;
@@ -138,7 +147,7 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       }
       // Even old hosts may already have persisted a user row after the enqueue receipt was lost.
       if (record.prepared && (await deps.history(record))) {
-        if (current(record)) await finish(record);
+        if (current(record)) await finish();
         return;
       }
       if (!current(record) || record.state === "failed") return;
@@ -234,13 +243,15 @@ export function createDurableOutboxDelivery(deps: DurableOutboxDeliveryDeps) {
       // Never turn an uncertain write into a fresh message or discard its ID.
       await update({
         state:
-          record.state === "sending"
-            ? "confirming"
-            : deps.retryable(error)
-              ? record.state
-              : "failed",
+          isDurableOutboxSettled(record)
+            ? record.state
+            : record.state === "sending"
+              ? "confirming"
+              : deps.retryable(error)
+                ? record.state
+                : "failed",
         error: deps.describe(error),
-        ...(deps.mediaFailed?.(error) && record.uploads.length
+        ...(!isDurableOutboxSettled(record) && deps.mediaFailed?.(error) && record.uploads.length
           ? { refreshUploads: true }
           : {}),
       }).catch(() => undefined);

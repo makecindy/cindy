@@ -4,9 +4,9 @@ import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '
 import { useRemoteResourceSession } from '@/session/useRemoteResourceSession';
 import { mobileDebugLog } from '@/debug/mobileDebugLog';
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, subscribeMobileAuthOwner } from '@/auth/authOwnerGeneration';
-import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords, cleanupOutboxResources } from '@/session/mobileDurableOutbox';
+import { mobileDurableOutbox, durableOutboxDisplayItem, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
 import { retainOutboxFile, durableOutboxUploadUri, removeOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
-import { observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
+import { isDurableOutboxSettled, observeDurableOutboxSending, type DurableOutboxRecord } from '@/session/durableOutbox';
 import { isInFlightDeviceLinkError } from '@cindy/device-link';
 import { takeRefinementContextTail, truncateRefinementReply } from '@cindy/voice-input-core';
 import {
@@ -1544,7 +1544,7 @@ export default function SessionScreen() {
   // voiceStopInFlightRef 的既有模式)。
   const sendInFlightRef = useRef(false);
   const rawOutboxRecords = useSyncExternalStore(mobileDurableOutbox.subscribe, mobileDurableOutbox.getSnapshot);
-  const durableOutboxRecords = useMemo(() => rawOutboxRecords.filter((record) => record.accountId === outboxOwner.accountKey), [rawOutboxRecords, outboxOwner]);
+  const durableOutboxRecords = useMemo(() => rawOutboxRecords.filter((record) => record.accountId === outboxOwner.accountKey && !isDurableOutboxSettled(record)), [rawOutboxRecords, outboxOwner]);
   const outboxItems = useMemo(() => durableOutboxRecords
     .filter((r) => r.deviceId === deviceId && r.item.sessionId === sessionId && r.accountId === getMobileAuthOwner().accountKey)
     .map(durableOutboxDisplayItem), [durableOutboxRecords, deviceId, sessionId]);
@@ -5428,8 +5428,7 @@ export default function SessionScreen() {
     const owner = getMobileAuthOwner();
     const remove = async () => {
       if (!record.prepared) {
-        await mobileDurableOutbox.remove(record);
-        await cleanupOutboxResources(record, owner, () => auth.getAccessToken(), true);
+        await mobileDurableOutbox.update(record, { state: 'host-owned', cleanupOutcome: 'cancelled', cancelRequested: true, error: undefined });
       } else await mobileDurableOutbox.update(record, { cancelRequested: true, state: 'confirming' });
     };
     void remove().catch((err) => {

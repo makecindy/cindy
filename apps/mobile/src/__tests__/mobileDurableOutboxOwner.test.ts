@@ -25,6 +25,7 @@ function record(): DurableOutboxRecord {
 }
 beforeEach(async () => {
   setMobileAuthOwner(null);
+  await mobileDurableOutbox.activate('');
   mocks.data.clear();
   mocks.discard.mockReset();
   mocks.removeFiles.mockReset();
@@ -49,6 +50,13 @@ it('hides the old realm ledger synchronously before the bridge activates the new
   await mobileDurableOutbox.add(record());
   expect(getCurrentMobileOutboxRecords()).toHaveLength(1);
   setMobileAuthOwner('alice', 'cn');
+  expect(mobileDurableOutbox.getSnapshot()).toHaveLength(1);
+  expect(getCurrentMobileOutboxRecords()).toEqual([]);
+});
+
+it('keeps cleanup-only rows durable but hides them from sending and creation recovery views', async () => {
+  await mobileDurableOutbox.add(record());
+  await mobileDurableOutbox.update(mobileDurableOutbox.getSnapshot()[0]!, { state: 'host-owned', cleanupOutcome: 'cancelled' });
   expect(mobileDurableOutbox.getSnapshot()).toHaveLength(1);
   expect(getCurrentMobileOutboxRecords()).toEqual([]);
 });

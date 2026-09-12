@@ -1,6 +1,6 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { getMobileAuthOwner, isMobileAuthOwnerCurrent, type MobileAuthOwnerGeneration } from '@/auth/authOwnerGeneration';
-import { createDurableOutbox, type DurableOutboxRecord } from "./durableOutbox";
+import { createDurableOutbox, isDurableOutboxSettled, type DurableOutboxRecord } from "./durableOutbox";
 import { durableOutboxUploadUri, removeOutboxFiles } from "./durableOutboxFiles";
 import { outboxItemAttachments, type MobileOutboxItem } from "./sessionOutbox";
 import { discardMobileUploadedAttachment } from "./mobileAttachmentUpload";
@@ -23,7 +23,7 @@ export async function cleanupOutboxResources(
 /** Hide old-owner rows even before the bridge's React effect activates the next ledger. */
 export function getCurrentMobileOutboxRecords(): readonly DurableOutboxRecord[] {
   const key = getMobileAuthOwner().accountKey;
-  return mobileDurableOutbox.getSnapshot().filter((record) => record.accountId === key);
+  return mobileDurableOutbox.getSnapshot().filter((record) => record.accountId === key && !isDurableOutboxSettled(record));
 }
 /** Call only for confirmed cancellation, superseded references, or an upload never handed to the ledger. */
 export function discardOutboxUploads(

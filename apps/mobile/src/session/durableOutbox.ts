@@ -27,6 +27,8 @@ export interface DurableOutboxRecord {
   retrySafe?: boolean;
   error?: string;
   cancelRequested?: boolean;
+  /** Delivery is settled; retain the ledger solely until local cleanup succeeds. */
+  cleanupOutcome?: "accepted" | "cancelled";
   sendAtMs?: number;
   suspended?: boolean;
   template?: QueuedRemoteMessage;
@@ -44,6 +46,10 @@ export interface OutboxStorage {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
   removeItem(key: string): Promise<void>;
+}
+
+export function isDurableOutboxSettled(record: DurableOutboxRecord): boolean {
+  return record.cleanupOutcome !== undefined;
 }
 
 const PREFIX = "cindy.mobile.outbox.v1.";
@@ -136,6 +142,8 @@ export function createDurableOutbox(storage: OutboxStorage) {
             !record.item.clientId ||
             keyFor(record) !== key ||
             !Array.isArray(record.uploads) ||
+            (record.cleanupOutcome !== undefined &&
+              record.cleanupOutcome !== 'accepted' && record.cleanupOutcome !== 'cancelled') ||
             ![
               "queued",
               "sending",
@@ -189,7 +197,7 @@ export function observeDurableOutboxSending(
   onSettled: (clientId: string) => void,
   accountId = store.getAccountId(),
 ): () => void {
-  const scoped = () => store.getSnapshot().filter((r) => r.accountId === accountId
+  const scoped = () => store.getSnapshot().filter((r) => !isDurableOutboxSettled(r) && r.accountId === accountId
     && r.deviceId === deviceId && r.item.sessionId === sessionId);
   let previous = new Map(scoped().map((r) => [r.item.clientId, r]));
   const seen = new Set([...previous.values()].filter((r) => r.sendAtMs !== undefined
