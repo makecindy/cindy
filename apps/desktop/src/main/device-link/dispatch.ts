@@ -2442,28 +2442,13 @@ async function handleInvoke(
     return;
   }
 
-  if (payload && COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)) {
-    const listingKey = remoteListingFlightKey(src, payload);
-    const existing = remoteListingFlights.get(listingKey);
-    if (existing && existing.linkEpoch === invokeLinkEpoch) {
-      const result = await existing.promise;
-      if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
-      if (!await sendAuthorizedInvokeResultSafe(
-        client,
-        src,
-        requestId,
-        result,
-        payload.channel,
-        payload.args,
-        fingerprint,
-      )) {
-        throw new DeviceLinkError('BACKPRESSURE', 'coalesced invoke-result could not be queued');
-      }
-      return;
-    }
-  }
-
   const invokeBytes = encodedByteLength(fingerprint);
+  const listingKey = canCoalesceRemoteListing(payload)
+    ? remoteListingFlightKey(src, payload)
+    : null;
+  const existingListing = listingKey ? remoteListingFlights.get(listingKey) : undefined;
+  const joiningExisting = !!(existingListing && existingListing.linkEpoch === invokeLinkEpoch);
+
   const controllerAdmission = remoteInvokeAdmissionState(src);
   const controllerAtLimit = (
     controllerAdmission.messages >= REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT
@@ -2492,6 +2477,39 @@ async function handleInvoke(
       fingerprint,
     )) {
       throw new DeviceLinkError('BACKPRESSURE', 'overload invoke-result could not be queued');
+    }
+    return;
+  }
+
+  if (joiningExisting && existingListing) {
+    const waiterEntry = {
+      promise: existingListing.promise,
+      bytes: invokeBytes,
+      fingerprint,
+      linkEpoch: invokeLinkEpoch,
+    };
+    inFlightRemoteInvokeResults.set(cacheKey, waiterEntry);
+    inFlightRemoteInvokeBytes += invokeBytes;
+    let joined: InvokeResultPayload;
+    try {
+      joined = normalizeInvokeResultForWire(await existingListing.promise);
+      if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    } finally {
+      if (inFlightRemoteInvokeResults.get(cacheKey) === waiterEntry) {
+        inFlightRemoteInvokeResults.delete(cacheKey);
+        inFlightRemoteInvokeBytes -= invokeBytes;
+      }
+    }
+    if (!await sendAuthorizedInvokeResultSafe(
+      client,
+      src,
+      requestId,
+      joined,
+      payload?.channel,
+      payload?.args,
+      fingerprint,
+    )) {
+      throw new DeviceLinkError('BACKPRESSURE', 'coalesced invoke-result could not be queued');
     }
     return;
   }
@@ -2529,9 +2547,6 @@ async function handleInvoke(
   };
   inFlightRemoteInvokeResults.set(cacheKey, inFlightEntry);
   inFlightRemoteInvokeBytes += invokeBytes;
-  const listingKey = payload && COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
-    ? remoteListingFlightKey(src, payload)
-    : null;
   if (listingKey) remoteListingFlights.set(listingKey, inFlightEntry);
   let result: InvokeResultPayload;
   try {
@@ -2613,6 +2628,19 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
   return null;
+}
+
+function isFreshSessionListInvoke(payload: InvokePayload): boolean {
+  if (payload.channel !== 'local-db:sessions:list') return false;
+  const options = payload.args?.[2];
+  return !!(options && typeof options === 'object' && !Array.isArray(options)
+    && (options as { fresh?: unknown }).fresh === true);
+}
+
+function canCoalesceRemoteListing(payload: InvokePayload | undefined): payload is InvokePayload {
+  return !!payload
+    && COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
+    && !isFreshSessionListInvoke(payload);
 }
 
 function remoteListingFlightKey(src: string, payload: InvokePayload): string {

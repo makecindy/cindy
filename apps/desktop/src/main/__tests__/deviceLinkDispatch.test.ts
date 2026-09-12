@@ -1171,6 +1171,75 @@ describe('被控端控制链路生命周期', () => {
     ]));
   });
 
+  it('listing 合并 waiter 仍计入 per-controller 准入上限', async () => {
+    remoteControlEnabled = true;
+    let resolveList: ((value: unknown[]) => void) | undefined;
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolveList = resolve;
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = { channel: 'local-db:sessions:list', args: [20, 'all'] };
+    const limit = dispatchTesting.remoteInvokeInFlightPerControllerLimit;
+    for (let index = 0; index < limit + 1; index += 1) {
+      feed({
+        v: 1,
+        kind: 'invoke',
+        id: `list-admit-${index}`,
+        src: 'ctrl-a',
+        payload,
+      });
+    }
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: `list-admit-${limit}`,
+      payload: {
+        ok: false,
+        error: {
+          code: 'BACKPRESSURE',
+          message: 'remote invoke execution queue is full',
+        },
+      },
+    }));
+    resolveList?.([{ id: 's1' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter((call) => call.payload && (call.payload as { ok?: boolean }).ok === true))
+        .toHaveLength(limit);
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {
+    remoteControlEnabled = true;
+    let resolvers: Array<(value: unknown[]) => void> = [];
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = {
+      channel: 'local-db:sessions:list',
+      args: [20, 'all', { includePinned: true, fresh: true }],
+    };
+    feed({ v: 1, kind: 'invoke', id: 'fresh-1', src: 'ctrl-a', payload });
+    feed({ v: 1, kind: 'invoke', id: 'fresh-2', src: 'ctrl-a', payload });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    resolvers[0]?.([{ id: 'old' }]);
+    resolvers[1]?.([{ id: 'new' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'fresh-1' || call.requestId === 'fresh-2',
+      )).toHaveLength(2);
+    });
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: 'fresh-1', payload: { ok: true, result: [{ id: 'old' }] } }),
+      expect.objectContaining({ requestId: 'fresh-2', payload: { ok: true, result: [{ id: 'new' }] } }),
+    ]));
+  });
+
   it('显式 link-close 后丢弃旧世代晚到 IPC 结果，快速重开也不串进新链路', async () => {
     remoteControlEnabled = true;
     let resolveInvoke: ((value: string[]) => void) | undefined;
