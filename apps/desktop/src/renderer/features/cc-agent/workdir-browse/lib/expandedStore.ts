@@ -14,7 +14,7 @@
  * Storage shape:
  *   {
  *     "<workdir absolute path>": ["Assets", "Assets/Scripts", "Design"],
- *     "<workdir absolute path>::reveal": ["node_modules"],
+ *     "<workdir absolute path>\u0000reveal": ["node_modules"],
  *     ...
  *   }
  *
@@ -79,6 +79,12 @@ export interface ExpandedScopeOptions {
  * 旧实现用 `::reveal` 裸后缀：workdir 以 `::reveal` 结尾时（如
  * `/srv/project::reveal`），它的隐藏键恰好等于 `/srv/project` 的 reveal 键，两个
  * 项目的展开态互相覆盖、各自恢复无关路径（评审 P1）。
+ *
+ * **不回退旧版 `::reveal` 键**：这个字符串同时可能就是**某个 workdir 的隐藏键**，
+ * 回退只是把同一个碰撞换个方向 —— `/srv/project` 的 reveal 态会读到
+ * `/srv/project::reveal` 的隐藏态数据，又对无关路径发 listDir（评审 P1）。旧键无法
+ * 区分「旧版 reveal 写入的数据」与「另一个 workdir 的隐藏数据」，所以一律不读；
+ * 代价是升级后「放行态展开记录」一次性丢失（重新展开即可），隐藏态不受影响。
  */
 const REVEAL_SCOPE_SUFFIX = '\u0000reveal';
 
@@ -86,19 +92,12 @@ function expandedScopeKey(workdir: string, opts: ExpandedScopeOptions): string {
   return opts.showIgnoredDirs ? `${workdir}${REVEAL_SCOPE_SUFFIX}` : workdir;
 }
 
-/** 旧版 reveal 键（`::reveal`）：只用于**读取回退**，避免升级后丢展开态。 */
-function legacyRevealScopeKey(workdir: string, opts: ExpandedScopeOptions): string | null {
-  return opts.showIgnoredDirs ? `${workdir}::reveal` : null;
-}
-
 export function loadExpandedSet(
   workdir: string,
   opts: ExpandedScopeOptions = {},
 ): Set<string> {
   const bag = loadBag();
-  // 新键优先；没有则回退到旧版 `::reveal` 键（迁移前写入的数据）。
-  const legacy = legacyRevealScopeKey(workdir, opts);
-  const list = bag[expandedScopeKey(workdir, opts)] ?? (legacy ? bag[legacy] : undefined);
+  const list = bag[expandedScopeKey(workdir, opts)];
   if (!Array.isArray(list)) return new Set();
   return new Set(list.filter((s): s is string => typeof s === 'string'));
 }
@@ -121,6 +120,6 @@ export function saveExpandedSet(
   }
   // 不清旧版 `::reveal` 键：它和隐藏键共用同一个字符串空间（`/srv/project::reveal`
   // 既是 /srv/project 的旧 reveal 键、又是它自己的隐藏键），删它就会误删另一个
-  // workdir 的数据。旧键只是残留、不再被写入，读取已回退到新键。
+  // workdir 的数据。旧键只是残留、不再被读也不再被写。
   saveBag(bag);
 }

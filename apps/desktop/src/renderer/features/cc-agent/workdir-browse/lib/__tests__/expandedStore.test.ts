@@ -39,12 +39,19 @@ describe('expandedStore 按 showIgnoredDirs 分片', () => {
     expect([...loadExpandedSet('/srv/project', { showIgnoredDirs: true })]).toEqual(['b']);
   });
 
-  it('读取回退旧版 ::reveal 键,升级不丢展开态', () => {
-    localStorage.setItem(
-      'cc-agent.workdirBrowse.expandedFolders.v1',
-      JSON.stringify({ '/repo::reveal': ['node_modules'] }),
-    );
-    expect([...loadExpandedSet('/repo', { showIgnoredDirs: true })]).toEqual(['node_modules']);
+  /**
+   * 评审 P1：**不**回退旧版 `::reveal` 键 —— 它同时可能就是**另一个 workdir 的
+   * 隐藏键**，回退只是把撞键换了个方向（`/srv/project` 的 reveal 态读到
+   * `/srv/project::reveal` 的隐藏态），又会对无关路径发 listDir。旧键无法区分两种
+   * 语义，所以一律不读。
+   */
+  it('不读旧版 ::reveal 键:不把别的 workdir 的隐藏态误当自己的 reveal 态', () => {
+    // `/srv/project::reveal` 以自己的**隐藏态**存了展开数据（合法写入）。
+    saveExpandedSet('/srv/project::reveal', new Set(['node_modules']));
+    // `/srv/project` 的 reveal 态没有自己的数据 → 必须是空的，不能借到上面那份。
+    expect([...loadExpandedSet('/srv/project', { showIgnoredDirs: true })]).toEqual([]);
+    // 而它自己的隐藏态照旧读到自己的数据。
+    expect([...loadExpandedSet('/srv/project::reveal')]).toEqual(['node_modules']);
   });
 
   it('隐藏态沿用历史键:升级后原有展开态不丢', () => {
