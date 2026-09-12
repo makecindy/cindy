@@ -4057,6 +4057,10 @@ export class DeviceLinkClient {
     // 同 stream 重复 open：发送方向已经 ready 时绝不能再打回 awaiting-confirm，
     // 否则 ACK/重试被暂停，pending 只涨不消，对端超时后再 open，形成死循环。
     if (resume.duplicateOpen && this.isPeerSendReady(peer)) {
+      // sendLinkAccept 已把这次 accept 记进 active 路由账本；确认分支才会
+      // discard。这里保持 ready、不进 awaiting-confirm，但仍要结算该记录，
+      // 否则每次重复 open 泄漏一条，满 1024 后后续 accept 全 BACKPRESSURE。
+      this.settleOutboundRouteAttemptsForId(dst, requestId);
       if (peer.pending.size > 0) this.ensureRetryTimer(dst);
       this.logRecoverySend(dst, peer, 'link-replay', true);
       return;
