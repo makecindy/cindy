@@ -4,6 +4,19 @@ import { CodexExternalAuthSession, assertCodexEphemeralAuth, useCodexHistoryHome
 const initial = { accessToken: 'test-token-old', chatgptAccountId: 'account-b' };
 
 describe('external account authentication', () => {
+  it.each(['win32', 'darwin', 'linux'] as const)('honors %s environment casing without leaking Windows identity aliases', (platform) => {
+    const aliases = { Codex_Home: '/old-home', Codex_Access_Token: 'old-token',
+      codex_api_key: 'old-key', OpenAI_API_Key: 'old-key', OpenAI_Federation_Rule_Id: 'old-rule',
+      OpenAI_Identity_Token_File: '/old-file', OpenAI_Workload_Identity_Context: 'old-context' };
+    const env = { ...aliases, CODEX_HOME: '/account-b', OPENAI_API_KEY: 'old-uppercase',
+      XDT_CODEX_API_KEY: 'selected-gateway', Path: '/bin' };
+    expect(useCodexHistoryHome(env, '/history-a', platform)).toEqual({
+      ...(platform === 'win32' ? {} : aliases),
+      CODEX_HOME: '/history-a', XDT_CODEX_API_KEY: 'selected-gateway', Path: '/bin',
+    });
+    expect(env).toMatchObject({ ...aliases, CODEX_HOME: '/account-b', OPENAI_API_KEY: 'old-uppercase' });
+  });
+
   it('removes inherited native identities while preserving the selected gateway credentials', () => {
     const env = { CODEX_HOME: '/account-b', CODEX_ACCESS_TOKEN: 'old', CODEX_API_KEY: 'old',
       OPENAI_API_KEY: 'old', OPENAI_FEDERATION_RULE_ID: '', OPENAI_IDENTITY_TOKEN_FILE: '/old',

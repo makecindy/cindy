@@ -33,12 +33,16 @@ export async function assertCodexEphemeralAuth(
 export function useCodexHistoryHome(
   env: Record<string, string>,
   historyHome: string,
+  platform: NodeJS.Platform = process.platform,
 ): Record<string, string> {
-  const result: Record<string, string> = { ...env, CODEX_HOME: historyHome };
-  for (const key of ['CODEX_ACCESS_TOKEN', 'CODEX_API_KEY', 'OPENAI_API_KEY',
-    'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']) {
-    delete result[key];
+  const replacedKeys = new Set(['CODEX_HOME', 'CODEX_ACCESS_TOKEN', 'CODEX_API_KEY', 'OPENAI_API_KEY',
+    'OPENAI_FEDERATION_RULE_ID', 'OPENAI_IDENTITY_TOKEN_FILE', 'OPENAI_WORKLOAD_IDENTITY_CONTEXT']);
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env)) {
+    // Windows child environments are case-insensitive, including CODEX_HOME aliases.
+    if (!replacedKeys.has(platform === 'win32' ? key.toUpperCase() : key)) result[key] = value;
   }
+  result.CODEX_HOME = historyHome;
   return result;
 }
 

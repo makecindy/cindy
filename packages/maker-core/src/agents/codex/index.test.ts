@@ -414,7 +414,8 @@ describe('CodexAgent spawn configuration', () => {
       resolveCodexThreadStorage: async () => ({ historyHome, sqliteHome: historyHome }),
     });
     deps.auth.getState = async () => ({ authenticated: true, authSource: 'oauth' });
-    deps.auth.getAuthEnv = async () => ({ CODEX_HOME: credentialHome });
+    deps.auth.getAuthEnv = async () => ({ CODEX_HOME: credentialHome, CODEX_ACCESS_TOKEN: 'inherited-token',
+      OPENAI_IDENTITY_TOKEN_FILE: '/inherited-identity' });
     MockCodexTransport.onCreate = transport => {
       transport.setMockResponse('config/read', { result: { config: { cli_auth_credentials_store: 'ephemeral' } } });
       transport.setMockResponse('account/login/start', { result: { type: 'chatgptAuthTokens' } });
@@ -430,6 +431,10 @@ describe('CodexAgent spawn configuration', () => {
       await vi.waitFor(() => expect(taskTransport.lines.map(line => JSON.parse(line)))
         .toContainEqual({ id: 'refresh-account', result: updated }));
       expect(createdStdioOptions[1].env?.CODEX_HOME).toBe(credentialHome);
+      for (const options of createdStdioOptions) {
+        expect(options.env).not.toHaveProperty('CODEX_ACCESS_TOKEN');
+        expect(options.env).not.toHaveProperty('OPENAI_IDENTITY_TOKEN_FILE');
+      }
       expect(createdStdioOptions[1].extraArgs).not.toContain('cli_auth_credentials_store="ephemeral"');
       expect(createdTransports[1].lines.some(line => JSON.parse(line).method === 'account/login/start')).toBe(false);
       expect(createdTransports[1].lines.map(line => JSON.parse(line))).toContainEqual(expect.objectContaining({

@@ -2901,6 +2901,10 @@ export class CodexAgent extends BaseAgent {
     if (!remoteHostId && sqliteHome) extraArgs.push('-c', `sqlite_home=${JSON.stringify(sqliteHome)}`);
     let externalAuth: CodexExternalAuth | undefined;
     const requireEphemeralAuth = !remoteHostId && !!historyHome && path.resolve(historyHome) !== path.resolve(env.CODEX_HOME ?? '');
+    if (!remoteHostId && hostPurpose === 'control-plane' && effectiveMode === 'oauth-bearer' && env.CODEX_HOME) {
+      // Managed refresh must read the selected account's file, not an inherited identity.
+      env = useCodexHistoryHome(env, env.CODEX_HOME);
+    }
     if (requireEphemeralAuth) {
       // Extra spawn configuration above intentionally uses the TARGET credential
       // home (proxy auth, model catalogs and account controls). Only the native
