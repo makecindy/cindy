@@ -28,7 +28,15 @@
  * singleton 拿当前 dirty 状态,跟 doc 模式行为一致。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type DragEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronsDownUp, FolderX, RefreshCw, Search, X as XIcon } from 'lucide-react';
 
@@ -48,10 +56,7 @@ import {
   type FileTreeViewHandle,
 } from '@/features/cc-agent/workdir-browse/FileTreeView';
 import { FileBodyView } from '@/features/cc-agent/workdir-browse/FileBodyView';
-import {
-  useFileTree,
-  type DirEntry,
-} from '@/features/cc-agent/workdir-browse/hooks/useFileTree';
+import { useFileTree, type DirEntry } from '@/features/cc-agent/workdir-browse/hooks/useFileTree';
 import { useFileContent } from '@/features/cc-agent/workdir-browse/hooks/useFileContent';
 import { useConfirmSwitchAwayIfDirty } from '@/features/cc-agent/workdir-browse/hooks/useConfirmSwitchAwayIfDirty';
 import { useProjectFileList } from '@/features/cc-agent/workdir-browse/hooks/useProjectFileList';
@@ -60,10 +65,7 @@ import { SearchPanel } from '@/features/cc-agent/workdir-browse/search/SearchPan
 import { useProjectSearch } from '@/features/cc-agent/workdir-browse/search/hooks/useProjectSearch';
 import { FileFilterInput } from '@/features/cc-agent/workdir-browse/FileFilterInput';
 import { FilterResultList } from '@/features/cc-agent/workdir-browse/FilterResultList';
-import {
-  FILTER_RESULT_LIMIT,
-  filterFiles,
-} from '@/features/cc-agent/workdir-browse/lib/filterFiles';
+import { filterFilesWithMeta } from '@/features/cc-agent/workdir-browse/lib/filterFiles';
 import { toOsAbsolutePath } from '@/features/cc-agent/workdir-browse/lib/fileMeta';
 import {
   openUrlInSidebarBrowser,
@@ -133,7 +135,7 @@ function FileBrowserBodyWithWorkdir({
   // remoteHostId)时 deviceId 优先——SSH 二跳由被控端 device-op 处理,控制端
   // 不能把被控端的 hostId 发给自己的 main。
   const deviceId = useSyncExternalStore(remoteProjectsStore.subscribe, () =>
-    ctx.sessionId ? getSessionDeviceId(ctx.sessionId) ?? null : null,
+    ctx.sessionId ? (getSessionDeviceId(ctx.sessionId) ?? null) : null,
   );
   const remoteHostId = deviceId ? null : ctx.remoteHostId;
   const isRemote = Boolean(remoteHostId) || Boolean(deviceId);
@@ -141,7 +143,10 @@ function FileBrowserBodyWithWorkdir({
   const fileContent = useFileContent(workdir, state.selectedFilePath, remoteHostId, deviceId);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
   const [imageLightboxSrc, setImageLightboxSrc] = useState<string | null>(null);
-  const externalFileContent = useFileContent(externalFile?.workdir ?? workdir, externalFile?.relPath ?? null);
+  const externalFileContent = useFileContent(
+    externalFile?.workdir ?? workdir,
+    externalFile?.relPath ?? null,
+  );
   const fileDragDepthRef = useRef(0);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
   const confirmSwitchAway = useConfirmSwitchAwayIfDirty();
@@ -163,8 +168,8 @@ function FileBrowserBodyWithWorkdir({
   const projectFiles = useProjectFileList(workdir, remoteHostId, deviceId, {
     enabled: filterQuery.trim() !== '',
   });
-  const filteredFiles = useMemo(
-    () => filterFiles(filterQuery, projectFiles.files),
+  const filteredFileResults = useMemo(
+    () => filterFilesWithMeta(filterQuery, projectFiles.files),
     [filterQuery, projectFiles.files],
   );
   const search = useProjectSearch({
@@ -356,7 +361,11 @@ function FileBrowserBodyWithWorkdir({
       const abs = toOsAbsolutePath(workdir, entry.relPath);
       const res = await window.electronAPI.showItemInFolder({ filePath: abs });
       if (!res.success) {
-        toast.error(t('ccAgent.workdirBrowse.revealFailed', { error: res.error ?? t('ccAgent.common.unknownError') }));
+        toast.error(
+          t('ccAgent.workdirBrowse.revealFailed', {
+            error: res.error ?? t('ccAgent.common.unknownError'),
+          }),
+        );
       }
     },
     [workdir, t],
@@ -654,11 +663,8 @@ function FileBrowserBodyWithWorkdir({
           <FileFilterInput value={filterQuery} onChange={setFilterQuery} />
           {filterQuery ? (
             <FilterResultList
-              files={filteredFiles}
-              truncated={
-                // ripgrep cap 截断,或者前端展示上限截断(命中超过 FILTER_RESULT_LIMIT)
-                projectFiles.truncated || filteredFiles.length >= FILTER_RESULT_LIMIT
-              }
+              files={filteredFileResults.files}
+              truncated={filteredFileResults.truncated}
               isLoading={projectFiles.isLoading}
               indexError={projectFiles.error}
               selectedPath={state.selectedFilePath}
@@ -677,7 +683,9 @@ function FileBrowserBodyWithWorkdir({
                 onCopyFilePath={!isRemote ? handleCopyFilePath : undefined}
                 onRevealInFolder={!isRemote ? handleRevealInFolder : undefined}
                 onOpenInFileBrowser={ctx.sessionId ? handleOpenInFileBrowser : undefined}
-                onOpenInSidebarBrowser={!isRemote && ctx.sessionId ? handleOpenInSidebarBrowser : undefined}
+                onOpenInSidebarBrowser={
+                  !isRemote && ctx.sessionId ? handleOpenInSidebarBrowser : undefined
+                }
                 onOpenInBrowser={!isRemote ? handleOpenInBrowser : undefined}
               />
             </div>

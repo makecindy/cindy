@@ -7,7 +7,8 @@
  * 抽到 workdir-browse/ 下,RSB plugin 和 doc 模式 sidebar 共用。
  */
 
-import { ChevronDown, File as FileIcon, Folder } from 'lucide-react';
+import { ChevronDown, ChevronRight, File as FileIcon, Folder } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -15,7 +16,7 @@ import { buildFilterTreeRows, FILTER_RESULT_LIMIT } from './lib/filterFiles';
 
 export interface FilterResultListProps {
   files: readonly string[];
-  /** ripgrep cap 截断或前端展示上限截断 —— 显示"结果过多"提示行。 */
+  /** 当前关键词命中超过展示上限 —— 显示"结果过多"提示行。 */
   truncated: boolean;
   /** 首次索引加载中(no cached files yet)。 */
   isLoading: boolean;
@@ -39,6 +40,30 @@ export function FilterResultList({
 }: FilterResultListProps) {
   const { t } = useTranslation();
   const rows = buildFilterTreeRows(files);
+  const [directoryExpansionOverrides, setDirectoryExpansionOverrides] = useState<
+    ReadonlyMap<string, boolean>
+  >(new Map());
+
+  const toggleDirectory = (relPath: string) => {
+    setDirectoryExpansionOverrides((current) => {
+      const next = new Map(current);
+      const expanded = current.get(relPath) ?? true;
+      next.set(relPath, !expanded);
+      return next;
+    });
+  };
+
+  const isDirectoryExpanded = (relPath: string) => directoryExpansionOverrides.get(relPath) ?? true;
+
+  const isHiddenByCollapsedDirectory = (relPath: string) => {
+    return rows.some(
+      (row) =>
+        row.kind === 'directory' &&
+        row.relPath !== relPath &&
+        relPath.startsWith(`${row.relPath}/`) &&
+        !isDirectoryExpanded(row.relPath),
+    );
+  };
 
   if (isLoading && files.length === 0) {
     return (
@@ -67,19 +92,36 @@ export function FilterResultList({
     <div className="rsb-fbody-tree-scroll min-h-0 flex-1">
       <div className="flex h-full w-full flex-col gap-px overflow-y-auto py-2">
         {rows.map((row) => {
+          if (isHiddenByCollapsedDirectory(row.relPath)) return null;
           const paddingLeft = row.depth * 16 + 8;
           if (row.kind === 'directory') {
+            const expanded = isDirectoryExpanded(row.relPath);
             return (
-              <div
+              <button
+                type="button"
                 key={`directory:${row.relPath}`}
+                onClick={() => toggleDirectory(row.relPath)}
+                aria-expanded={expanded}
                 title={row.relPath}
-                className="flex min-w-0 items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm text-foreground"
+                className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm text-foreground hover:bg-sidebar-item-hover"
                 style={{ paddingLeft }}
               >
-                <ChevronDown size={14} strokeWidth={1.8} className="shrink-0 text-sidebar-muted" />
+                {expanded ? (
+                  <ChevronDown
+                    size={14}
+                    strokeWidth={1.8}
+                    className="shrink-0 text-sidebar-muted"
+                  />
+                ) : (
+                  <ChevronRight
+                    size={14}
+                    strokeWidth={1.8}
+                    className="shrink-0 text-sidebar-muted"
+                  />
+                )}
                 <Folder size={14} strokeWidth={1.5} className="shrink-0 text-sidebar-muted" />
                 <span className="truncate">{row.label}</span>
-              </div>
+              </button>
             );
           }
 
@@ -98,6 +140,7 @@ export function FilterResultList({
               )}
               style={{ paddingLeft }}
             >
+              <span aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
               <FileIcon size={14} strokeWidth={1.5} className="shrink-0 text-sidebar-muted" />
               <span className="truncate">{row.label}</span>
             </button>

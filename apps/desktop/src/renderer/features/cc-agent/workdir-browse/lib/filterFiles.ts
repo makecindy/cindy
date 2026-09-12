@@ -16,6 +16,11 @@
 /** 文件名筛选结果展示上限。匹配再多也只渲染前 N 条,避免列表爆 + 用户分不清重点。 */
 export const FILTER_RESULT_LIMIT = 200;
 
+export interface FilterFileResults {
+  files: string[];
+  truncated: boolean;
+}
+
 export interface FilterTreeRow {
   kind: 'directory' | 'file';
   /** The complete workdir-relative POSIX path represented by this row. */
@@ -30,20 +35,33 @@ export function filterFiles(
   files: readonly string[],
   limit = FILTER_RESULT_LIMIT,
 ): string[] {
+  return filterFilesWithMeta(query, files, limit).files;
+}
+
+export function filterFilesWithMeta(
+  query: string,
+  files: readonly string[],
+  limit = FILTER_RESULT_LIMIT,
+): FilterFileResults {
   const q = query.trim().toLowerCase();
-  if (!q) return [];
+  if (!q) return { files: [], truncated: false };
   const basenameMatches: string[] = [];
   const pathMatches: string[] = [];
+  let matchCount = 0;
   for (const f of files) {
     const lower = f.toLowerCase();
     if (!lower.includes(q)) continue;
+    matchCount += 1;
+    if (matchCount > limit) break;
     const slash = lower.lastIndexOf('/');
     const basename = slash < 0 ? lower : lower.slice(slash + 1);
     if (basename.includes(q)) basenameMatches.push(f);
     else pathMatches.push(f);
-    if (basenameMatches.length + pathMatches.length >= limit) break;
   }
-  return [...basenameMatches, ...pathMatches];
+  return {
+    files: [...basenameMatches, ...pathMatches],
+    truncated: matchCount > limit,
+  };
 }
 
 interface FilterTreeNode {
@@ -88,7 +106,12 @@ export function buildFilterTreeRows(files: readonly string[]): FilterTreeRow[] {
         compacted = onlyChild;
         labels.push(compacted.name);
       }
-      rows.push({ kind: 'directory', relPath: compacted.relPath, label: labels.join(' / '), depth });
+      rows.push({
+        kind: 'directory',
+        relPath: compacted.relPath,
+        label: labels.join(' / '),
+        depth,
+      });
       visit(compacted, depth + 1);
     }
     for (const file of node.files) {
