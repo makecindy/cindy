@@ -35,6 +35,7 @@ import {
   createEventIgnoreMatcher,
   loadIgnoreMatcher,
   scopedLogger,
+  WATCH_ALWAYS_IGNORE,
   XDT_TMP_SUFFIX,
   type Matcher,
 } from '@cindy/file-browser-core';
@@ -49,6 +50,34 @@ const log = scopedLogger('file-service/watch');
  * SSH + IPC 上打出一串与路径数同阶的 fileTree 帧。容器依赖 workdir,常量即可。
  */
 const eventAlwaysIgnore = createEventIgnoreMatcher();
+
+/**
+ * 路径是否落在「开关打开也永远不推事件」目录的**内部**(不含目录自身)。
+ *
+ * 为什么不直接问 eventAlwaysIgnore:`ignore` 的目录模式(`node_modules/`)同时
+ * 匹配该目录自身与它全部后代,而这里要的只是后代 —— 开关打开时 node_modules /
+ * Library 这一行就在树里,它自己被创建 / 删除 / 改名必须让父目录 refetch
+ * (评审 P1:整条 rename 被吞掉的话,树会陈旧到手动刷新)。所以按路径段判断:
+ * 除最后一段外任一段命中名单即为「内部」。
+ */
+function isInsideAlwaysIgnoredDir(relPath: string): boolean {
+  const segments = relPath.split('/');
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    if ((WATCH_ALWAYS_IGNORE as readonly string[]).includes(segments[i])) return true;
+  }
+  return false;
+}
+
+/**
+ * 路径是否是「开关打开也永远不推事件」目录的**自身**(node_modules / Library)。
+ * 这些行在开关打开时就在树里(见 isInsideAlwaysIgnoredDir),而恒真层的`ignore`
+ * 模式对自身也命中 —— 兜底那一行必须先把它排除掉,否则目录自身的 rename 又会被
+ * 吞回去。
+ */
+function isAlwaysIgnoredDirItself(relPath: string): boolean {
+  const last = relPath.slice(relPath.lastIndexOf('/') + 1);
+  return (WATCH_ALWAYS_IGNORE as readonly string[]).includes(last);
+}
 
 export interface RemoteFileTreeEvent {
   workdir: string;
@@ -118,9 +147,26 @@ export class WorkdirWatchManager {
     consumerId: string = WorkdirWatchManager.DEFAULT_CONSUMER,
   ): Promise<void> {
     const consumers = this.desired.get(workdir) ?? new Map<string, WatchFilterOptions>();
-    consumers.set(consumerId, normalizeWatchOptions(opts));
+    const previous = consumers.get(consumerId);
+    const attempted = normalizeWatchOptions(opts);
+    consumers.set(consumerId, attempted);
     this.desired.set(workdir, consumers);
-    await this.reconcile(workdir);
+    try {
+      await this.reconcile(workdir);
+    } catch (err) {
+      // 启动失败:回滚**本次**写入的意图,否则 daemon 会留下一个「幽灵消费者」——
+      // 控制端的失败处理只清本地注册、不会再发 watchStop(见 remote-watch.ts),
+      // 之后别的消费者的可见性并集会被它抬高,最后一人 stop 时还会因它留下
+      // 孤儿 watcher(评审 P1)。只回滚仍然是自己这次写的那个值:并发的
+      // stop + start 会把同一 consumerId 覆盖成新选项,那属于它的意图。
+      const current = this.desired.get(workdir);
+      if (current && current.get(consumerId) === attempted) {
+        if (previous) current.set(consumerId, previous);
+        else current.delete(consumerId);
+        if (current.size === 0) this.desired.delete(workdir);
+      }
+      throw err;
+    }
   }
 
   /**
@@ -197,9 +243,16 @@ export class WorkdirWatchManager {
       void this.handleRaw(workdir, entry, eventType, filename.toString());
     });
     watcher.on('error', (err) => {
-      // watcher 挂了(权限 / 目录被删):log 后移除,消费端靠手动刷新。
+      // watcher 挂了(权限 / 目录被删):拆掉**这个** entry,保留消费者意图并按
+      // 剩余并集重建。不能走 stop(workdir) —— 那要挑一个 consumerId,而错误不是
+      // 任何消费者的意图变化:拿默认 id 会删错人,reconcile 又看到同一个坏
+      // entry 选项没变而原地返回,直播就静默冻结到手动改开关或 daemon 重启。
       log.warn('fs.watch error, dropping watcher', workdir, String(err));
-      this.stop(workdir);
+      if (this.entries.get(workdir) !== entry) return; // 已被替换 / 停止:不碰新 entry
+      this.closeEntry(workdir);
+      void this.reconcile(workdir).catch((rerr) =>
+        log.warn('watch reconcile after error failed', workdir, String(rerr)),
+      );
     });
     entry.watcher = watcher;
     if (this.stopDuringStart.delete(workdir)) {
@@ -268,11 +321,14 @@ export class WorkdirWatchManager {
     const relPath = rawFilename.split(path.sep).join('/');
     if (relPath === '' || relPath.startsWith('..')) return;
     if (relPath.endsWith(XDT_TMP_SUFFIX)) return;
-  /** matcher 不知道路径是 file 还是 dir,双查任一命中即丢(同 desktop watcher)。 */
-  if (entry.matcher.ignores(relPath, false) && entry.matcher.ignores(relPath, true)) return;
-  // 开关打开也永远不推的目录(node_modules / Library):按目录语义查一次就够,
-  // 目录模式命中即包含其后代,不用再试 file 解释。
-  if (eventAlwaysIgnore.ignores(relPath, true)) return;
+    /** matcher 不知道路径是 file 还是 dir,双查任一命中即丢(同 desktop watcher)。 */
+    if (entry.matcher.ignores(relPath, false) && entry.matcher.ignores(relPath, true)) return;
+    // 开关打开也永远不推的目录(node_modules / Library):只丢**内部**事件,
+    // 目录自身的生命周期事件要留(见 isInsideAlwaysIgnoredDir)。
+    if (isInsideAlwaysIgnoredDir(relPath)) return;
+    // 兜底:BUILTIN_IGNORE_ALWAYS(.git / .DS_Store 之类,自身与后代都不显示)。
+    // 但恒真忽略目录自身已在上一行放行,不能再被这里拦下。
+    if (!isAlwaysIgnoredDirItself(relPath) && eventAlwaysIgnore.ignores(relPath, true)) return;
 
     let type: RemoteFileTreeEvent['type'];
     if (eventType === 'change') {

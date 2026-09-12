@@ -254,4 +254,75 @@ describe('WorkdirWatchManager 过滤开关', () => {
     expect(h.created.every((c) => c.closed)).toBe(true);
     manager.stopAll();
   });
+
+  /**
+   * 评审 P1：`ignore` 的目录模式（`node_modules/`）同时匹配目录自身与全部后代，
+   * 而事件过滤要的只是后代 —— 开关打开时 node_modules / Library 这一行就在树里，
+   * 它自己被建 / 删 / 改名必须推给父目录 refetch，否则树陈旧到手动刷新。
+   */
+  it('开关打开时恒真忽略目录自身的事件仍推,只丢其后代', async () => {
+    const manager = new WorkdirWatchManager((event) => emitted.push(event));
+    await manager.start('/repo', { showIgnoredDirs: true });
+    const record = h.created[0];
+
+    // 目录自身的生命周期事件：推（类型由 lstat 映射出 add/unlink，这里只看 relPath）。
+    await fireEvent(record, 'rename', 'node_modules');
+    expect(emitted.map((e) => e.relPath)).toEqual(['node_modules']);
+
+    // 后代仍然静默：npm install / Unity 导入不会打爆通道。
+    const before = emitted.length;
+    for (const rel of ['node_modules/react/index.js', 'foo/node_modules/a.js', 'foo/Library/x.dll']) {
+      await fireEvent(record, 'change', rel);
+    }
+    expect(emitted.length).toBe(before);
+    manager.stopAll();
+  });
+
+  /**
+   * 评审 P1：错误处理曾调 `stop(workdir)`（默认 consumerId）—— 删错人，且
+   * reconcile 看到同一个坏 entry 选项没变而原地返回，直播静默冻结到手动改开关
+   * 或 daemon 重启。现在按剩余消费者并集拆掉重建成新的活 watcher。
+   */
+  it('watcher 出错时保留消费者意图并重建,不静默冻结', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    expect(h.created).toHaveLength(1);
+
+    const onSpy = h.created[0].watcher.on as unknown as ReturnType<typeof vi.fn>;
+    const handler = onSpy.mock.calls.find(([evt]) => evt === 'error')?.[1] as (err: Error) => void;
+    handler(new Error('boom'));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(h.created).toHaveLength(2);
+    expect(h.created[0].closed).toBe(true);
+    expect(h.created[1].closed).toBe(false);
+    manager.stopAll();
+  });
+
+  /**
+   * 评审 P1：启动失败时若把消费者的意图留在 desired 里，控制端只会清本地注册、
+   * 不会再发 watchStop → daemon 里多出一个幽灵消费者：它抬高别的消费者的可见性
+   * 并集，最后一人 stop 时还会把它当孤儿 watcher 留下。
+   */
+  it('启动失败回滚本次消费者意图:不抬高别的消费者并集,也不留孤儿 watcher', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    let failWith = (_err: Error): void => {};
+    h.gate = new Promise<void>((_resolve, reject) => {
+      failWith = reject;
+    });
+
+    const failing = manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    failWith(new Error('matcher load failed'));
+    await expect(failing).rejects.toThrow('matcher load failed');
+    expect(h.created).toHaveLength(0);
+
+    // device-link（隐藏）看到的并集不应被那个失败的 reveal 需求抬高。
+    await manager.start('/repo', {}, 'device-link');
+    expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(false);
+
+    // 最后一个真实消费者 stop：watcher 被拆（没有幽灵撑着）。
+    manager.stop('/repo', 'device-link');
+    expect(h.created.every((c) => c.closed)).toBe(true);
+    manager.stopAll();
+  });
 });
