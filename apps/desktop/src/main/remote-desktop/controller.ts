@@ -90,6 +90,16 @@ export class RemoteDesktopController {
   private clipboardPending = false;
   private syncGeneration = 0;
   private privacyGeneration = 0;
+  private privacyOperation: { enabled: boolean; promise: Promise<{ enabled: boolean }> } | null =
+    null;
+  private clearSafety(): void {
+    this.privacyGeneration++;
+    this.privacyOperation = null;
+    this.syncGeneration++;
+    if (this.active) this.active.clipboardSync = false;
+    this.deps.stopPrivacyScreen?.();
+    this.deps.stopHostMute?.();
+  }
   private clipboardTransfer = new ClipboardTransfer();
   private lastFrame = -Infinity;
   private controlGeneration = 0;
@@ -148,9 +158,8 @@ export class RemoteDesktopController {
     if (this.active) this.lastEnded = { peer: this.active.peer, lease: this.active.lease };
     this.clipboardTransfer.reset();
     this.controlGeneration++;
+    this.clearSafety();
     this.active = null;
-    this.deps.stopPrivacyScreen?.();
-    this.deps.stopHostMute?.();
     this.deps.stopInput();
     this.deps.stopVideo();
     this.deps.changed();
@@ -167,6 +176,7 @@ export class RemoteDesktopController {
     const active = this.active;
     if (!active || (!active.controlling && !this.inputStarting)) return;
     active.controlling = false;
+    this.clearSafety();
     this.controlGeneration++;
     this.clipboardTransfer.reset();
     this.deps.stopInput();
@@ -298,26 +308,44 @@ export class RemoteDesktopController {
     const active = this.require(peer, request.lease);
     switch (request.op) {
       case 'privacyScreen': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
         if (!this.deps.privacyScreen) throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
         active.privacyLockOnExit = request.lockOnExit === true;
+        // Lock preference changes join the same mask/capture initialization.
+        if (this.privacyOperation?.enabled === request.enabled)
+          return this.privacyOperation.promise;
         const generation = ++this.privacyGeneration;
-        await this.deps.privacyScreen(request.enabled, () => {
+        const current = () => {
           this.tick();
-          return this.active === active && generation === this.privacyGeneration;
-        });
-        this.require(peer, request.lease);
-        if (generation !== this.privacyGeneration) throw new Error('DESKTOP_LEASE_EXPIRED');
-        return { enabled: request.enabled };
+          return (
+            this.active === active && active.controlling && generation === this.privacyGeneration
+          );
+        };
+        const promise = this.deps
+          .privacyScreen(request.enabled, current)
+          .then(() => {
+            if (!current()) throw new Error('DESKTOP_LEASE_EXPIRED');
+            return { enabled: request.enabled };
+          })
+          .catch((error) => {
+            if (generation === this.privacyGeneration) this.privacyOperation = null;
+            throw error;
+          });
+        this.privacyOperation = { enabled: request.enabled, promise };
+        return promise;
       }
       case 'clipboardSync': {
         if (request.enabled && (!active.controlling || !this.deps.clipboardVersion))
           throw new Error('DESKTOP_CLIPBOARD_UNAVAILABLE');
-        this.syncGeneration++;
+        if (active.clipboardSync !== request.enabled) {
+          this.syncGeneration++;
+          this.clipboardTransfer.resetSync();
+        }
         active.clipboardSync = request.enabled;
-        this.clipboardTransfer.reset();
         return { enabled: request.enabled };
       }
       case 'hostMute': {
+        if (!active.controlling) throw new Error('DESKTOP_VIEW_ONLY');
         if (!this.deps.hostMute) throw new Error('DESKTOP_HOST_MUTE_UNAVAILABLE');
         active.hostMute = request.enabled;
         await this.deps.hostMute(request.enabled);
@@ -364,6 +392,7 @@ export class RemoteDesktopController {
         active.backgroundViewing = request.enabled;
         if (request.enabled) {
           active.controlling = false;
+          this.clearSafety();
           this.clipboardTransfer.reset();
           this.controlGeneration++;
           this.deps.stopInput();
@@ -379,6 +408,7 @@ export class RemoteDesktopController {
         const generation = ++this.controlGeneration;
         if (!request.enabled) {
           active.controlling = false;
+          this.clearSafety();
           this.deps.stopInput();
         } else if (!active.controlling) {
           this.inputStarting = true;

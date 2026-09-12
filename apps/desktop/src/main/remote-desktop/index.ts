@@ -430,11 +430,10 @@ export const remoteDesktop = new RemoteDesktopController({
       try {
         await nativeCapture.preparePrivacy(nativeDisplay, nativeSettings);
       } catch (error) {
-        privacyScreen.stop();
+        if (current()) privacyScreen.stop();
         throw error;
       }
       if (!current()) {
-        privacyScreen.stop();
         throw new Error('DESKTOP_LEASE_EXPIRED');
       }
       return;

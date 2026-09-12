@@ -107,6 +107,7 @@ describe('remote desktop authority and lifecycle', () => {
       expect(current()).toBe(true);
     });
     const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
     await h.controller.request('phone', {
       op: 'privacyScreen',
       lease,
@@ -133,6 +134,7 @@ describe('remote desktop authority and lifecycle', () => {
       throw new Error('LOCK_FAILED');
     });
     const { lease } = await h.start();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
     await h.controller.request('phone', {
       op: 'privacyScreen',
       lease,
@@ -178,6 +180,7 @@ describe('remote desktop authority and lifecycle', () => {
         });
       }
     };
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
     const enable = h.controller.request('phone', { op: 'privacyScreen', lease, enabled: true });
     await h.controller.request('phone', { op: 'privacyScreen', lease, enabled: false });
     expect(oldCurrent()).toBe(false);
@@ -895,4 +898,66 @@ describe('human / Agent input ownership', () => {
     ).rejects.toThrow('action');
     acquireHumanDesktopInput()();
   });
+});
+
+it.each(['control', 'presentation', 'failure'] as const)(
+  'revokes safety effects on %s control loss',
+  async (kind) => {
+    const h = harness(),
+      { lease } = await h.start();
+    h.deps.privacyScreen = vi.fn(async () => {});
+    h.deps.hostMute = vi.fn(async () => {});
+    h.deps.stopPrivacyScreen = vi.fn();
+    h.deps.stopHostMute = vi.fn();
+    for (const op of ['privacyScreen', 'hostMute'] as const)
+      await expect(h.controller.request('phone', { op, lease, enabled: true })).rejects.toThrow(
+        'DESKTOP_VIEW_ONLY',
+      );
+    expect(h.deps.privacyScreen).not.toHaveBeenCalled();
+    expect(h.deps.hostMute).not.toHaveBeenCalled();
+    await h.controller.request('phone', { op: 'control', lease, enabled: true });
+    await h.controller.request('phone', { op: 'privacyScreen', lease, enabled: true });
+    await h.controller.request('phone', { op: 'hostMute', lease, enabled: true });
+    if (kind === 'failure') h.controller.releaseControl();
+    else await h.controller.request('phone', { op: kind, lease, enabled: kind === 'presentation' });
+    expect(h.deps.stopPrivacyScreen).toHaveBeenCalledOnce();
+    expect(h.deps.stopHostMute).toHaveBeenCalledOnce();
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+  },
+);
+it('joins duplicate privacy initialization and invalidates it on control loss', async () => {
+  const h = harness(),
+    { lease } = await h.start();
+  await h.controller.request('phone', { op: 'control', lease, enabled: true });
+  let ready!: () => void;
+  h.deps.privacyScreen = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+  );
+  const first = h.controller.request('phone', { op: 'privacyScreen', lease, enabled: true });
+  const second = h.controller.request('phone', {
+    op: 'privacyScreen',
+    lease,
+    enabled: true,
+    lockOnExit: true,
+  });
+  let settled = false;
+  void second.then(
+    () => {
+      settled = true;
+    },
+    () => {},
+  );
+  await Promise.resolve();
+  expect(settled).toBe(false);
+  expect(h.deps.privacyScreen).toHaveBeenCalledOnce();
+  h.controller.releaseControl();
+  const errors = Promise.all([
+    expect(first).rejects.toThrow('DESKTOP_LEASE_EXPIRED'),
+    expect(second).rejects.toThrow('DESKTOP_LEASE_EXPIRED'),
+  ]);
+  ready();
+  await errors;
 });

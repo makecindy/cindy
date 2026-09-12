@@ -48,12 +48,12 @@ const caps = {
   displays: [],
   clipboardSync: true,
 };
-function Probe() {
+function Probe({ focused = true }: { focused?: boolean }) {
   latest = useRemoteDesktopSafety(
     "computer",
     lease,
     true,
-    true,
+    focused,
     caps,
     h.request,
   );
@@ -102,4 +102,30 @@ it("does not repeatedly request denied permission and supports retry without tog
   expect(latest.clipboardSync).toBe(true);
   expect(latest.safetyNotice).toBeNull();
   expect(h.update).not.toHaveBeenCalled();
+});
+
+it("foreground replacement never sends a stale cleanup disable", async () => {
+  await act(async () => root.render(createElement(Probe)));
+  await act(async () => root.render(createElement(Probe, { focused: false })));
+  await act(async () => root.render(createElement(Probe)));
+  expect(
+    h.request.mock.calls.filter(
+      ([message]) => message.op === "clipboardSync" && !message.enabled,
+    ),
+  ).toHaveLength(0);
+  expect(h.tick).toHaveBeenCalledTimes(2);
+  expect(h.update).not.toHaveBeenCalled();
+});
+it("renews host opt-in after a delayed disable from an earlier client state", async () => {
+  h.tick.mockRejectedValueOnce(new Error("DESKTOP_CLIPBOARD_UNAVAILABLE"));
+  await act(async () => root.render(createElement(Probe)));
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(1500);
+  });
+  expect(
+    h.request.mock.calls.filter(
+      ([message]) => message.op === "clipboardSync" && message.enabled,
+    ),
+  ).toHaveLength(2);
+  expect(latest.safetyNotice).toBeNull();
 });

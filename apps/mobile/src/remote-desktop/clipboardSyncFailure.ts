@@ -6,9 +6,11 @@ export function clipboardSyncErrorCode(error: unknown): string {
       ? String(error.code)
       : "";
   return (
+    (value + " " + code).match(/\b(?:CLIPBOARD|PASTE)_[A-Z_]+\b/)?.[0] ??
     (code + " " + value).match(
       /\b(?:CLIPBOARD|DESKTOP|INVOKE|PASTE|ERR|E)_[A-Z_]+\b/,
-    )?.[0] ?? "UNKNOWN"
+    )?.[0] ??
+    "UNKNOWN"
   );
 }
 export function clipboardSyncFailure(error: unknown, failures: number) {

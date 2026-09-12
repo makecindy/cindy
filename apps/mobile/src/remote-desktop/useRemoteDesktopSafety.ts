@@ -99,7 +99,13 @@ export function useRemoteDesktopSafety(
   ]);
   useEffect(() => {
     setPrivacyActive(false);
-    if (!lease || !connected || !privacyLoaded || !caps?.privacyScreen) return;
+    if (
+      !lease?.controlling ||
+      !connected ||
+      !privacyLoaded ||
+      !caps?.privacyScreen
+    )
+      return;
     let current = true;
     setNotice(null);
     const check = () => {
@@ -120,6 +126,7 @@ export function useRemoteDesktopSafety(
     };
   }, [
     lease?.lease,
+    lease?.controlling,
     connected,
     privacy,
     privacyLoaded,
@@ -128,7 +135,12 @@ export function useRemoteDesktopSafety(
     request,
   ]);
   useEffect(() => {
-    if (!lease || !connected || !hostMuteLoaded || caps?.hostMute !== true)
+    if (
+      !lease?.controlling ||
+      !connected ||
+      !hostMuteLoaded ||
+      caps?.hostMute !== true
+    )
       return;
     let current = true;
     void request({
@@ -143,12 +155,31 @@ export function useRemoteDesktopSafety(
     };
   }, [
     lease?.lease,
+    lease?.controlling,
     connected,
     hostMute,
     hostMuteLoaded,
     caps?.hostMute,
     request,
   ]);
+  useEffect(() => {
+    if (!lease || !connected || !syncLoaded || sync || !syncSupported) return;
+    let current = true;
+    void request(
+      { op: "clipboardSync", lease: lease.lease, enabled: false },
+      () => {
+        if (
+          !current ||
+          latest.current.sync ||
+          latest.current.lease?.lease !== lease.lease
+        )
+          throw new Error("DESKTOP_LEASE_EXPIRED");
+      },
+    ).catch(() => {});
+    return () => {
+      current = false;
+    };
+  }, [lease?.lease, connected, syncLoaded, sync, syncSupported, request]);
   useEffect(() => {
     if (
       !lease ||
@@ -228,6 +259,8 @@ export function useRemoteDesktopSafety(
       } catch (error) {
         if (!valid()) return;
         const failure = clipboardSyncFailure(error, failures++);
+        if (failure.code === "DESKTOP_CLIPBOARD_UNAVAILABLE")
+          enabledOnHost = false;
         console.debug("[clipboard-sync] failed", {
           stage: enabledOnHost ? "transfer" : "enable",
           code: failure.code,
@@ -244,11 +277,9 @@ export function useRemoteDesktopSafety(
       console.debug("[clipboard-sync] paused");
       current = false;
       clearTimeout(timer);
-      void request({
-        op: "clipboardSync",
-        lease: lease.lease,
-        enabled: false,
-      }).catch(() => {});
+      // Pausing stops the caller-owned polling only. The host never initiates
+      // reads; its lease-scoped opt-in ends on control loss or disconnect.
+      // No late cleanup RPC can disable a replacement foreground loop.
     };
   }, [
     deviceId,
@@ -280,16 +311,7 @@ export function useRemoteDesktopSafety(
     },
     hostMute,
     hostMuteAvailable: hostMuteLoaded && caps?.hostMute === true,
-    onHostMute: async (enabled: boolean) => {
-      setHostMute(enabled);
-      if (!lease || !connected || caps?.hostMute !== true) return;
-      try {
-        await request({ op: "hostMute", lease: lease.lease, enabled });
-      } catch {
-        setHostMute(!enabled);
-        setNotice("hostMuteFailed");
-      }
-    },
+    onHostMute: setHostMute,
     safetyNotice: clipboardNotice ?? notice,
   };
 }

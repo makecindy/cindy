@@ -150,3 +150,29 @@ describe('clipboard transfer idle expiry', () => {
     },
   );
 });
+
+it.each([true, false])('does not replace an active transfer with sync=%s', async (sync) => {
+  const buffer = new ClipboardTransfer();
+  const common = { op: 'clipboardContent' as const, lease: 'lease' };
+  const transfer = vi.fn(async () => ({ text: 'hello' }));
+  const first = (await buffer.handle(
+    { ...common, action: 'copy', sync: !sync },
+    () => true,
+    transfer,
+  )) as { id: string };
+  await expect(
+    buffer.handle({ ...common, action: 'copy', sync }, () => true, transfer),
+  ).rejects.toThrow('DESKTOP_CLIPBOARD_BUSY');
+  if (!sync) buffer.resetSync();
+  else {
+    buffer.resetSync();
+    expect(
+      await buffer.handle(
+        { ...common, action: 'read', id: first.id, offset: 0 },
+        () => true,
+        transfer,
+      ),
+    ).toEqual({ data: '{"text":"hello"}' });
+  }
+  buffer.reset();
+});

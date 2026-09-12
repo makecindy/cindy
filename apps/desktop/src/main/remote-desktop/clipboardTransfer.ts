@@ -24,6 +24,9 @@ export class ClipboardTransfer {
     this.timer = undefined;
     this.value = null;
   }
+  resetSync(): void {
+    if (this.value?.sync) this.reset();
+  }
   async handle(
     request: ClipboardContentRequest,
     isCurrent: () => boolean,
@@ -35,6 +38,8 @@ export class ClipboardTransfer {
     ) => Promise<RemoteClipboardContent | { version: string } | void>,
   ): Promise<unknown> {
     if (!isCurrent()) throw new Error('DESKTOP_LEASE_EXPIRED');
+    if (this.value && ['copy', 'begin', 'paste'].includes(request.action))
+      throw new Error('DESKTOP_CLIPBOARD_BUSY');
     if (request.action === 'paste') {
       if (!request.sync || !request.version || request.data.length > CLIPBOARD_CHUNK_CHARS)
         throw new Error('INVALID_REQUEST');
