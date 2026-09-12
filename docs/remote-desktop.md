@@ -1,4 +1,94 @@
-# Mobile remote desktop
+# Remote desktop
+
+## Desktop viewer
+
+Desktop can open a same-account computer's remote desktop from its device card
+in Remote control settings, or the task-list machine menu's Remote desktop submenu.
+When the sidebar is grouped by machine, hovering or keyboard-focusing a remote
+machine reveals a desktop shortcut. A debounced, read-only capability check
+distinguishes available desktops from offline, disabled, revoked or unsupported
+targets; unavailable shortcuts show a crossed-out monitor with an explanation.
+Hovering never starts desktop capture or takes over another viewer, and clicking
+the shortcut does not expand or collapse the machine group.
+It opens a clean, independent window with native mouse/keyboard input and a small
+toolbar. Reopening the same target focuses its existing window. Full screen,
+view-only/control, display selection, sound, video settings and text
+clipboard shortcuts are available. Resolution changes appear only for a capable
+host and affect its actual monitor. Ctrl+Alt+Esc releases keyboard focus;
+Cmd/Ctrl+W requests closing this viewer, including while it owns keyboard focus.
+The toolbar exit, native window close and close shortcut share a confirmation
+dialog; cancelling keeps the connection and control lease. Confirmation belongs
+to the current window generation and cannot close a later connection.
+
+While controlling, the local cursor is hidden inside the remote picture even
+when Windows embeds its cursor in the video rather than sending cursor metadata.
+Cursor hiding is scoped to the remote picture, not the system or window focus:
+moving outside it immediately restores the local cursor even if the viewer keeps
+focus. Local toolbar controls and dialogs retain their cursor. View-only mode
+also restores the local cursor inside the picture.
+With the picture focused, Cmd+C/V on macOS or Ctrl+C/V on Windows copies selected
+remote text to the local clipboard or pastes local text remotely. Transfers use
+the existing authorized Main bridge, are ordered and user-triggered, and report
+failure without reconnecting. There is no background clipboard monitoring or
+automatic context-menu synchronization; images, files and cut are not bridged.
+
+The shared viewer session marks recovery only when a start is attempted, so an
+initial capability-query timeout does not turn a retry against a legacy host into
+an unsupported resume. Start and stop operations are serialized per viewer,
+including cleanup of a late lease; superseded display choices are discarded before
+they reach the host. An idle stop still dispatches immediately for Mobile exit
+locking. This recovery stays within one viewer's lease and never closes a peer
+link or the shared relay; regression tests cover another peer remaining responsive
+and preserve explicit confirmation before taking over someone else's desktop.
+Main retains the same owner/target cleanup barrier across Renderer replacement;
+rebinding to a different owner or target does not wait on that old barrier.
+
+The window reuses the existing resource-usage auxiliary-window controller and
+factory for hidden prewarming, two-phase readiness, hide/reuse and bounded crash
+recovery. Prewarming loads only the shell and never connects to or captures a
+computer. Closing/minimizing retires its lease, clears pixels and stops polling;
+ordinary focus loss releases held input while retaining viewing. A crashed or
+automatically restored viewer uses `resume`, preserving a host's explicit stop.
+An account boundary destroys the viewer windows. The host's single-viewer lease
+and explicit takeover rules apply equally to phone and Desktop viewers.
+
+No new server, media protocol or native input helper is introduced. `device-link`
+owns the shared viewer lease/signaling adapters; `maker-shared/remote-desktop-viewer`
+owns the browser media, input queue and geometry used by both clients. Desktop
+imports it as a static module without inline scripts or eval. The Mobile HTML
+embeds a generated source literal because Hermes does not preserve function
+source. After editing the common browser module, run:
+
+```sh
+node scripts/sync-remote-desktop-viewer.mjs
+```
+
+The source parity test prevents Mobile from shipping a stale copy. Mobile retains
+its touch UI, native keyboard, PiP and optional unlock integration. Desktop does
+not add password storage, virtual controls, screen rotation or PiP. Its dedicated
+preload exposes only fixed viewer/window operations; Main binds requests to the
+actual window, account generation, target and returned lease. Text clipboard
+contents stay in Main. `stop` never calls `closeLink` or resets the shared relay,
+so other tasks, file views and peers keep their existing connections.
+
+The local real-Chromium harness uses the production Desktop viewer with a
+synthetic canvas host, validates video, keyboard and same-lease media recovery,
+and saves Light/Dark screenshots in a unique system temporary directory:
+
+Only the disposable test browser disables mDNS host-address masking. The fixture
+records both data-channel input and the preload-bridge fallback. Recovery uses an
+explicit closed-peer event and checks decoded frames on the replacement peer;
+it does not measure how quickly a real network outage is detected.
+
+```sh
+node apps/desktop/scripts/remote-desktop-viewer-smoke.mjs http://localhost:<vite-port> /path/to/chrome
+```
+
+This harness does not establish physical Desktop-to-Desktop, cross-NAT, macOS
+keyboard/permission or packaged-build support. Those retain the platform and
+network verification requirements below.
+
+## Mobile viewer
 
 The device detail page opens the real desktop of the selected computer. On the
 computer, enable **Settings → Remote control → Allow remote desktop**, as well
@@ -8,6 +98,14 @@ when the host supports input, using the existing permission and ownership checks
 **Controls → View only** releases control and preserves that choice when reconnecting
 within this page. The computer always has a **Disconnect**
 button while being viewed or controlled.
+
+The host allows one active remote-desktop viewer at a time. Starting a new
+viewer checks and reserves that lease atomically; if another viewer is still
+connected, the controller shows a takeover confirmation. Confirming takeover
+ends the previous viewer's lease before creating the new one. The host status
+banner also expires abandoned viewers after the lease heartbeat timeout, so a
+phone that has already gone away does not keep the computer marked as viewed
+indefinitely.
 
 ## Interaction
 

@@ -58,7 +58,7 @@ test('DS-8: every desktop globals.css surface includes its generated token style
   const { surfaces } = buildGeneratedSurfaces(ROOT);
   const consumers = surfaces.filter(surface => surface.platform === 'desktop'
     && surface.styleSources.includes('apps/desktop/src/renderer/styles/globals.css'));
-  assert.equal(consumers.length, 5);
+  assert.equal(consumers.length, 6);
   for (const surface of consumers) {
     assert.ok(surface.styleSources.includes('apps/desktop/src/renderer/styles/generated/tokens.css'), surface.id);
   }
@@ -1016,6 +1016,7 @@ test('renderer 模块图入口双向核对: index.tsx 的参数→入口模块�
   const actualEntries = extractRendererEntries(fs.readFileSync(RENDERER_INDEX_PATH, 'utf8'));
   // 与源码实况钉死:当前 3 个参数各自加载的入口模块。
   assert.deepEqual(Object.fromEntries(actualEntries), {
+    remoteDesktopViewer: './remote-desktop-viewer-entry',
     resourceUsageWindow: './resource-usage-entry',
     sidebarWindow: './sidebar-window-entry',
     ghostPanelWindow: './ghost-panel-window-entry',
