@@ -7,6 +7,7 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { isLoopbackProviderUrl } from '@cindy/model-providers';
 
 import type {
   AgentKind,
@@ -506,6 +507,15 @@ function parsePayload(value: unknown): ProviderImportDraft {
     fail('data.endpoints must be a bounded non-empty array');
   }
   const endpoints = input.endpoints.map(parseEndpoint);
+  if (
+    auth?.method === 'none' &&
+    endpoints.some((endpoint) =>
+      !isLoopbackProviderUrl(endpoint.baseUrl) ||
+      (endpoint.modelsUrl !== undefined && !isLoopbackProviderUrl(endpoint.modelsUrl)),
+    )
+  ) {
+    fail('no-auth endpoints and model discovery must use loopback URLs');
+  }
   if (
     auth?.method !== 'apiKey' &&
     endpoints.some((endpoint) => endpoint.apiKey || endpoint.headers)

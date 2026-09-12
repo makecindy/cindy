@@ -75,6 +75,26 @@ afterEach(() => {
 });
 
 describe('provider import URL parsing', () => {
+  it.each(['http://localhost:4000/v1', 'http://127.0.0.1:4000/v1', 'http://[::1]:4000/v1'])(
+    'accepts no-auth loopback endpoints: %s', (baseUrl) => {
+      const id = createDraft(customPayload({
+        auth: { method: 'none' },
+        endpoints: [{ protocol: 'openai-chat', baseUrl }],
+      }));
+      expect(previewProviderImport(id, SCOPE, []).authMethod).toBe('none');
+    },
+  );
+
+  it.each([
+    { baseUrl: 'https://remote.test/v1' },
+    { baseUrl: 'http://127.0.0.1:4000/v1', modelsUrl: 'https://remote.test/models' },
+  ])('rejects remote no-auth URLs before creating a reviewable draft: %j', (endpoint) => {
+    expect(createProviderImportDraftFromRest(importRest(customPayload({
+      auth: { method: 'none' },
+      endpoints: [{ protocol: 'openai-chat', ...endpoint }],
+    })))).toBeNull();
+  });
+
   it('materializes catalog presets using the wizard runtime mapping without freezing model defaults', () => {
     const preset: ProviderPreset = {
       id: 'catalog-demo',

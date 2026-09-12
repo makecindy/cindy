@@ -26,14 +26,23 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
   const [authorizing, setAuthorizing] = useState(false);
   const authorizingRef = useRef(false);
   const alive = useRef(true);
+  const activeImportId = useRef(importId);
   const oauth = useProviderOAuthDeviceCode(
     preview?.authMethod === 'oauth' ? preview.providerId : null,
   );
 
   useEffect(() => {
     alive.current = true;
+    activeImportId.current = importId;
     return () => {
       alive.current = false;
+      // StrictMode immediately reattaches the same effect; only a real departure
+      // or a different import releases the secret-bearing draft.
+      queueMicrotask(() => {
+        if (!alive.current || activeImportId.current !== importId) {
+          void window.electronAPI.maker.cancelProviderImport(importId).catch(() => undefined);
+        }
+      });
     };
   }, [importId]);
 
@@ -141,6 +150,11 @@ export function ProviderImportDialog({ importId, onClose, onDone }: ProviderImpo
     } finally {
       savingRef.current = false;
       if (alive.current) setSaving(false);
+      else {
+        // Main does not interrupt a confirmed write. If it failed after unmount,
+        // release the now-retryable draft as well as the earlier cleanup attempt.
+        void window.electronAPI.maker.cancelProviderImport(importId).catch(() => undefined);
+      }
     }
   }
 

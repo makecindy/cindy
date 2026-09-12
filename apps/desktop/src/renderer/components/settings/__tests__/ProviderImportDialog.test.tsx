@@ -67,6 +67,33 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('ProviderImportDialog', () => {
+  it('releases drafts when the review is replaced or unmounted without cancelling the new review', async () => {
+    const view = render(
+      <StrictMode><ProviderImportDialog key="one" importId="draft-one" onClose={vi.fn()} onDone={vi.fn()} /></StrictMode>,
+    );
+    await screen.findByText('Vendor Demo');
+    expect(maker.cancelProviderImport).not.toHaveBeenCalled();
+    view.rerender(
+      <StrictMode><ProviderImportDialog key="two" importId="draft-two" onClose={vi.fn()} onDone={vi.fn()} /></StrictMode>,
+    );
+    await waitFor(() => expect(maker.cancelProviderImport).toHaveBeenCalledWith('draft-one'));
+    expect(maker.cancelProviderImport).not.toHaveBeenCalledWith('draft-two');
+    view.unmount();
+    await waitFor(() => expect(maker.cancelProviderImport).toHaveBeenCalledWith('draft-two'));
+  });
+
+  it('releases a failed confirmed draft after its review unmounts', async () => {
+    let reject!: (error: Error) => void;
+    maker.confirmProviderImport.mockImplementationOnce(() => new Promise((_resolve, fail) => { reject = fail; }));
+    const view = render(<ProviderImportDialog importId="draft-one" onClose={vi.fn()} onDone={vi.fn()} />);
+    await screen.findByText('Vendor Demo');
+    fireEvent.click(screen.getByText('settings.providers.import.create'));
+    view.unmount();
+    await waitFor(() => expect(maker.cancelProviderImport).toHaveBeenCalledTimes(1));
+    await act(async () => reject(new Error('save failed')));
+    expect(maker.cancelProviderImport).toHaveBeenCalledTimes(2);
+  });
+
   it('survives StrictMode and saves only on explicit confirmation, not the automatic Radix close event', async () => {
     const onClose = vi.fn();
     const onDone = vi.fn();

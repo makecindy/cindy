@@ -49,7 +49,7 @@ import {
   isDeepLinkProviderConnectId,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
-import { createProviderImportDraftFromRest } from './provider-import/providerImport';
+import { cancelProviderImport, createProviderImportDraftFromRest } from './provider-import/providerImport';
 
 const log = createLogger('deepLink');
 
@@ -420,6 +420,9 @@ function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
     // 会触发),后到的覆盖前者。但 warn log 留下排查线索,事后能从日志识别这种
     // 情况;若未来收到反馈再改为"先到先得"或"显式拒绝后者"。
     if (pendingDeepLink) {
+      if (pendingDeepLink.type === 'provider-import') {
+        cancelProviderImport(pendingDeepLink.importId);
+      }
       log.warn('overwriting buffered pending payload', {
         previous: pendingDeepLink,
         next: payload,
@@ -470,15 +473,16 @@ export function findDeepLinkInArgv(argv: readonly string[]): string | null {
 }
 
 /**
- * Replace a consumed protocol URL in a mutable argv array before the process can
- * expose it to diagnostics or child processes. The caller retains the URL locally
- * long enough to parse it; only a non-sensitive marker remains in argv afterwards.
+ * Remove all provider-import arguments (even invalid/unselected ones), plus every
+ * copy of the consumed URL. The caller retains the selected URL for delivery.
+ * This sanitizes JS argv and future copies, not the OS's original command line.
  */
-export function redactConsumedDeepLinkInArgv(argv: string[], deepLink: string): void {
+export function redactConsumedDeepLinkInArgv(argv: string[], deepLink?: string): void {
   for (let i = argv.length - 1; i >= 0; i -= 1) {
-    if (argv[i] !== deepLink) continue;
+    const arg = argv[i];
+    const prefix = typeof arg === 'string' ? matchDeepLinkPrefix(arg) : null;
+    if (arg !== deepLink && !(prefix && arg.slice(prefix.length).startsWith('provider/'))) continue;
     argv[i] = `${DEEP_LINK_PRIMARY_SCHEME}://consumed`;
-    return;
   }
 }
 

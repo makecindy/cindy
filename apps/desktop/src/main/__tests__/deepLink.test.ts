@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { app, type BrowserWindow } from 'electron';
+import { previewProviderImport } from '../provider-import/providerImport';
 
 // vitest 跑测试时不会真的初始化 Electron app, 单 import 需要 mock electron。
 // deepLink.ts 只在 registerDeepLinkProtocol / dispatchDeepLink 用到 app /
@@ -360,6 +361,33 @@ describe('findDeepLinkInArgv', () => {
 });
 
 describe('redactConsumedDeepLinkInArgv', () => {
+  it('drops both schemes before restart without selecting or retaining an import', () => {
+    const argv = ['electron', '--flag', 'cindy://session/keep', providerImportUrl('cindy'), providerImportUrl('xdt-maker')];
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['electron', '--flag', 'cindy://session/keep', 'cindy://consumed', 'cindy://consumed']);
+  });
+  it('removes every import, including invalid and duplicate arguments, while retaining the selected URL for parsing', () => {
+    const selected = providerImportUrl('xdt-maker');
+    const argv = ['electron.exe', '--flag', 'cindy://session/keep', 'cindy://provider/import?invalid=FAKE', selected, selected];
+    const url = findDeepLinkInArgv(argv)!;
+    redactConsumedDeepLinkInArgv(argv, url);
+    expect(argv).toEqual(['electron.exe', '--flag', 'cindy://session/keep', 'cindy://consumed', 'cindy://consumed', 'cindy://consumed']);
+    expect(parseDeepLink(url)?.type).toBe('provider-import');
+  });
+
+  it('releases an overwritten cold-start draft before a renderer ever mounts', () => {
+    setDeepLinkMainWindow(null);
+    for (let i = 0; i < 130; i++) {
+      const data = Buffer.from(JSON.stringify({
+        kind: 'custom', name: `Draft ${i}`, auth: { method: 'apiKey', apiKey: 'FAKE-KEY' },
+        endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://example.invalid/v1' }],
+      })).toString('base64url');
+      handleIncomingDeepLink(`cindy://provider/import?v=1&data=${data}`, 'cold-start-argv');
+    }
+    const draft = takePendingDeepLink();
+    if (draft?.type !== 'provider-import') throw new Error('missing draft');
+    expect(previewProviderImport(draft.importId, { dataOwnerId: null, generation: 0 }, []).name).toBe('Draft 129');
+  });
   it('replaces a consumed URL without changing unrelated argv entries', () => {
     const argv = ['electron.exe', '--flag', 'cindy://provider/import?v=1&data=secret'];
     redactConsumedDeepLinkInArgv(argv, argv[2]!);

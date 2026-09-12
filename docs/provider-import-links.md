@@ -103,13 +103,14 @@ $url = 'cindy://provider/import?v=1&data=' . $data;
 }
 ```
 
-省略 `targets` 时，Messages 可供三个引擎选择，Chat/Responses 可供 Codex 和 Pi 选择；Codex 优先 Responses，Pi 优先 Chat，Claude Code 只选 Messages。同一引擎出现同等优先级的多个入口时整条拒绝，供应商应显式指定 `targets`。无需鉴权使用 `auth: { "method": "none" }`，不要携带 Key。
+省略 `targets` 时，Messages 可供三个引擎选择，Chat/Responses 可供 Codex 和 Pi 选择；Codex 优先 Responses，Pi 优先 Chat，Claude Code 只选 Messages。同一引擎出现同等优先级的多个入口时整条拒绝，供应商应显式指定 `targets`。无需鉴权使用 `auth: { "method": "none" }`，不要携带 Key；该模式仅支持本机回环服务（如 `http://127.0.0.1:4000/v1`），所有端点及可选 `modelsUrl` 都必须是回环地址，远程免鉴权链接在解析阶段即被拒绝。
 
 通用 OAuth 也可预填公开描述：`auth.method: "oauth"`，共用 `tokenUrl`、`clientId`、`scopes`，授权码流带 `authorizeUrl`，设备码流带 `flow: "device-code"` 和 `deviceAuthorizationUrl`。确认后先保存连接，再运行 Cindy 现有授权流程；失败或取消授权不删除连接，可重试。OAuth 不支持 Pi 导入；不接受 access/refresh token 或 client secret。可选 OAuth 模型发现地址必须与所有运行入口同源。
 
 ## 用户确认与更新语义
 
 - 所有写入都需要在 Cindy 点击确认。点击链接只创建短期草稿，不写凭证、不请求供应商。
+- 导入不跨应用重启保留。若点击链接恰逢更新重启，请在重启完成后重新点击原链接；不会将含凭证的导入参数复制给更新后的进程。
 - 自定义/预设导入默认新建唯一连接。相同站点的不同账号不会互相覆盖。
 - 若存在相同 Key 目的地（引擎、协议、base URL、request path）的用户添加 API Key 连接，用户可在确认窗主动选择它；原生 OAuth 和托管本地连接不在候选中。此时**只更新携带的 API Key**，保留原名称、模型、路由、Header 和其他引擎配置。URL 无权指定覆盖目标；可选 `id` 只是新连接 ID 的前缀提示。
 - 内置 Key 槽位固定，确认窗明确提示替换该 Key。

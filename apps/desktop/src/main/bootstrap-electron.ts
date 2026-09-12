@@ -2629,6 +2629,9 @@ if (started) {
   if (process.platform === 'linux' && waitedForUpdateLock && lockCleared) {
     try {
       const exe = process.execPath;
+      // Imports are deliberately not carried across an update restart. The user
+      // can click the original link again; never copy its credentials to a child.
+      redactConsumedDeepLinkInArgv(process.argv);
       const args = process.argv.slice(1);
       spawn(exe, args, { stdio: 'inherit', detached: true }).unref();
     } catch {
@@ -3575,6 +3578,7 @@ if (
       // 的中间态。
       const url = findDeepLinkInArgv(argv);
       if (url) {
+        redactConsumedDeepLinkInArgv(argv, url);
         handleIncomingDeepLink(url, 'second-instance');
       } else {
         const openFolder = findOpenFolderInArgv(argv);
@@ -5927,6 +5931,7 @@ const registerIpcHandlers = () => {
         return getMakerCore();
       });
       registerMakerCoreIpc(ipcMaker, {
+        builtinApiKeyDeps,
         onAnySessionTurnKeepaliveChange: (isRunning) => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();
@@ -8013,7 +8018,8 @@ const registerIpcHandlers = () => {
       relaunch: (requestId) => {
         dbClientLog.info('database slimming relaunch requested');
         if (app.isPackaged) {
-          app.relaunch();
+          // Do not replay the native startup argv, which may contain an import Key.
+          app.relaunch({ args: process.argv.slice(1) });
         } else {
           // Forge owns the Vite server. A bare app.relaunch() outlives Forge,
           // then opens a white window against a dead localhost renderer. The
