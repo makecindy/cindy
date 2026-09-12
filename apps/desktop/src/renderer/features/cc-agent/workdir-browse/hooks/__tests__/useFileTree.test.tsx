@@ -635,6 +635,39 @@ describe('useFileTree showIgnoredDirs option', () => {
   });
 
   /**
+   * 评审 P2：切开关后新 matcher 的根请求失败时，seed 借来的树**不代表当前视图**
+   * —— 留着它会让「开关已按下 + 树还是隐藏态旧数据」在 UI 上看起来像加载成功
+   * （错误占位只在 entries 为空时显示）。失败要可见、可重试。
+   */
+  it('切开关后根请求失败:清掉借来的旧树让错误可见', async () => {
+    const hiddenRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) => {
+      if (args.showIgnoredDirs) return Promise.reject(new Error('boom')); // reveal 侧全失败
+      if (args.relPath) return Promise.resolve([]);
+      return Promise.resolve(hiddenRoot);
+    });
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-seed-fail', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: false } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+
+    // 切到 reveal：先借隐藏态的树（首帧仍有旧数据），随后根请求失败。
+    await act(async () => {
+      view.rerender({ reveal: true });
+    });
+    await waitFor(() => expect(view.result.current.loadError).toBe('load-failed'));
+    // 借来的旧树被清掉 → 走错误占位，而不是把旧数据当新视图。
+    expect(view.result.current.entries.size).toBe(0);
+    expect(view.result.current.initialLoading).toBe(false);
+    view.unmount();
+  });
+
+  /**
    * 兄弟 store 还在首次 listDir 上（慢通道）时不能冒充「已加载」：没有可显示内容
    * 就保持 initialLoading，否则 FileTreeView 会把空 rows 渲染成「此文件夹为空」
    * 而不是延迟 loading 态。

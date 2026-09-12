@@ -369,6 +369,34 @@ describe('WorkdirWatchManager 过滤开关', () => {
   });
 
   /**
+   * 评审 P2：**部分停止**按剩余消费者收窄 matcher 时重建失败，也要退避重试 ——
+   * 旧 watcher 这时已经拆了，只记日志会让剩下的消费者永久失去实时事件。
+   */
+  it('部分停止后的重建失败:退避重试直到恢复', async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new WorkdirWatchManager(() => {});
+      await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+      await manager.start('/repo', {}, 'device-link');
+      expect(h.created).toHaveLength(1); // 并集 watcher 只建一个
+
+      // 部分停止 → 收窄重建，但这次 loadIgnoreMatcher 失败。
+      h.failNext = 1;
+      manager.stop('/repo', 'desktop-tree');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(h.created.at(-1)?.closed).toBe(true); // 旧 watcher 已关
+
+      // 退避重试后按剩余消费者（隐藏）建回 watcher。
+      await vi.advanceTimersByTimeAsync(600);
+      expect(h.created.at(-1)?.closed).toBe(false);
+      expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(false);
+      manager.stopAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
    * 评审 P1：启动失败时若把消费者的意图留在 desired 里，控制端只会清本地注册、
    * 不会再发 watchStop → daemon 里多出一个幽灵消费者：它抬高别的消费者的可见性
    * 并集，最后一人 stop 时还会把它当孤儿 watcher 留下。

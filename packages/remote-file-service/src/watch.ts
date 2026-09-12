@@ -378,11 +378,16 @@ export class WorkdirWatchManager {
       if (consumers.size > 0) {
         // 还有别的消费者:按剩余并集收敛(可能收窄,需要重建 matcher)。这里是
         // sync 的 RPC handler,重建异步进行 —— RPC 语义是「撤销本消费者的
-        // 需求」,不承诺 watcher 在返回前已重建完。失败只记日志:订阅端各自有
-        // 重连 replay / 聚焦刷新兜底。
-        void this.reconcile(workdir).catch((err) =>
-          log.warn('watch reconcile after partial stop failed', workdir, String(err)),
-        );
+        // 需求」,不承诺 watcher 在返回前已重建完。失败要走带退避的**重试**:
+        // 旧 watcher 此刻已经被拆了,只记日志会让剩下的消费者在挂载短暂不可用
+        // 时永久失去实时事件,直到下一次显式 start / stop 或 daemon 重连
+        // (评审 P2)。
+        void this.reconcile(workdir)
+          .then(() => this.retryAttempts.delete(workdir))
+          .catch((err) => {
+            log.warn('watch reconcile after partial stop failed', workdir, String(err));
+            this.scheduleReconcileRetry(workdir);
+          });
         return;
       }
       this.desired.delete(workdir);

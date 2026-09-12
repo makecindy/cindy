@@ -200,6 +200,10 @@ interface FileTreeStore {
      */
     loadError: 'device-too-old' | 'load-failed' | null;
   };
+  /** 本 store 的 entries 是否还是从兄弟 scope **借来**的 seed 数据（切换开关的
+   *  过渡窗口）。借来的树一旦根请求失败就不代表当前视图，留着会让失败看起来像
+   *  加载成功（评审 P2）。 */
+  seeded: boolean;
   /** 同一 relPath 的并发 listDir,latest 赢:每次开 listDir 前 bump,resolve
    *  时比对 —— 不一致就丢结果。 */
   tokens: Map<string, number>;
@@ -411,6 +415,7 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
             initialLoading: true,
             loadError: null,
           },
+    seeded: seedDisplayable && !!seed,
     tokens: new Map(),
     inFlight: new Map(),
     pendingEventParents: new Set(),
@@ -466,10 +471,19 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
     // root 失败要可见:空树 + 无提示会被读成"项目是空的"。device-link 的
     // 版本偏差(老被控端无 remote-op channel)单独标记,渲染升级提示。
     if (relPath === ROOT_KEY) {
+      const seededEntries = store.seeded;
+      store.seeded = false;
       store.snapshot = {
         ...store.snapshot,
+        // seed 过渡：借来的树一旦根请求失败就不代表当前视图，留着会让「开关已按下
+        // + 树还是隐藏态旧数据」看起来像加载成功（错误占位只在 entries 为空时显示，
+        // 见 FileBrowserBody）。清掉它让失败可见且可重试；只清一次，之后恢复既有
+        // 「保留旧树」语义（那时 entries 确实属于当前视图）（评审 P2）。
+        entries: seededEntries ? new Map() : store.snapshot.entries,
         loadError: isDeviceTooOldError(err) ? 'device-too-old' : 'load-failed',
       };
+      // 借来的展开态在空树下不可达，一并剪掉（顺带回写本 scope）。
+      if (seededEntries) pruneExpandedForCurrentTree(store);
       emit(store);
     }
     // Keep prior state; user can refresh manually.
