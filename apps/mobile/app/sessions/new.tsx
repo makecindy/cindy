@@ -1,6 +1,6 @@
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import Constants from 'expo-constants';
 import { MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { formatMobileBuildLabel, normalizeBuildInfo } from '@/config/buildInfo';
@@ -91,6 +91,11 @@ import { discardMobileUploadedAttachment } from '@/session/mobileAttachmentUploa
 import { goBackGuarded } from '@/utils/backGuard';
 import { buildMobileImageAttachmentCandidate } from '@/session/mobileImageAttachment';
 import { useMobileLocalAttachments } from '@/session/useMobileLocalAttachments';
+import {
+  consumeIncomingShareBatch,
+  selectIncomingShareUploadCandidates,
+  useIncomingShareBatch,
+} from '@/session/incomingShare';
 import {
   AT_RESOURCE_QUERY_DEBOUNCE_MS,
   buildComposerPaletteCacheKey,
@@ -329,6 +334,18 @@ import { draftModelMemoryFor, hydrateDraftModelMemory } from '@/session/draftMod
 import { effortLabelFromRuntime, rowFastEditable } from '@/session/modelPickerRows';
 import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
+
+async function deleteIncomingSharedFiles(uris: readonly string[]): Promise<void> {
+  const FileSystem = await import('expo-file-system/legacy');
+  await Promise.all([...new Set(uris)].map((uri) => (
+    FileSystem.deleteAsync(
+      // The extension owns one file per UUID directory. Other pipeline outputs
+      // (JPEG conversion/preprocessing) are individual files, never directories.
+      uri.match(/^(file:\/\/.*\/cindy-share-[\da-f-]{36})\/[^/]+$/i)?.[1] ?? uri,
+      { idempotent: true },
+    ).catch(() => undefined)
+  )));
+}
 
 const COMPOSER_INPUT_MULTILINE_CONTENT_THRESHOLD = 34;
 // composer 除输入区外的 chrome 高度估算（输入行上下 padding + 边框），
@@ -672,6 +689,49 @@ export default function NewRemoteSessionScreen() {
     onError: setAttachmentError,
     onPicked: () => setContextSheetOpen(false),
   });
+  const incomingShareBatch = useIncomingShareBatch();
+  const isShareTargetFocused = useIsFocused();
+  useEffect(() => {
+    if (!isShareTargetFocused || !auth.isAuthenticated || !incomingShareBatch
+      || !consumeIncomingShareBatch(incomingShareBatch.id)) return;
+    const selection = selectIncomingShareUploadCandidates(incomingShareBatch.payloads);
+    const remainingSlots = Math.max(
+      0,
+      MOBILE_MAX_ATTACHMENTS
+        - attachmentsRef.current.length
+        - getPendingUploadCount(),
+    );
+    const accepted = selection.candidates.slice(0, remainingSlots);
+    const dropped = selection.candidates.slice(remainingSlots);
+    const cleanupUris = [
+      ...selection.rejectedUris,
+      ...dropped.map((candidate) => candidate.uri),
+    ];
+    if (cleanupUris.length > 0) {
+      void deleteIncomingSharedFiles(cleanupUris).catch(() => undefined);
+    }
+    if (accepted.length > 0) {
+      enqueueUploads(accepted.map((candidate) => ({
+        ...candidate,
+        cleanupLocalUris: deleteIncomingSharedFiles,
+      })), { token: auth.getAccessToken() });
+    }
+    if (dropped.length > 0) {
+      setAttachmentError(i18n.t('composer.upload.maxAttachments', {
+        count: MOBILE_MAX_ATTACHMENTS,
+      }));
+    } else if (selection.rejectedUris.length > 0) {
+      setAttachmentError(i18n.t('composer.upload.fileTypeUnsupported'));
+    } else {
+      setAttachmentError(null);
+    }
+  }, [
+    auth,
+    enqueueUploads,
+    getPendingUploadCount,
+    incomingShareBatch,
+    isShareTargetFocused,
+  ]);
   const [slashCommands, setSlashCommands] = useState<MobileSlashCommand[]>([]);
   const [slashPaletteLoading, setSlashPaletteLoading] = useState(false);
   const [slashPaletteError, setSlashPaletteError] = useState<string | null>(null);

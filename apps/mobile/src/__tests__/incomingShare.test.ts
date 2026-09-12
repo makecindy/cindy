@@ -1,0 +1,187 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ResolvedSharePayload } from 'expo-sharing';
+
+import {
+  __resetIncomingShareForTest,
+  consumeIncomingShareBatch,
+  incomingShareBatchId,
+  selectIncomingShareUploadCandidates,
+  stageIncomingShareBatch,
+  receiveIncomingShare,
+} from '@/session/incomingShare';
+
+const convertToJpeg = vi.fn(async (uri: string) => `${uri}.jpg`);
+
+vi.mock('@/session/pastedImageAttachment', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@/session/pastedImageAttachment')>();
+  return {
+    ...original,
+    resolvePastedImageAsset: async (uri: string, index: number) => {
+      const classified = original.classifyPastedImageUri(uri);
+      if (classified.needsJpegConversion) {
+        return {
+          uri: await convertToJpeg(uri),
+          fileName: `pasted-image-${index + 1}.jpg`,
+          mimeType: 'image/jpeg',
+        };
+      }
+      return original.resolvePastedImageAsset(uri, index);
+    },
+  };
+});
+
+function payload(
+  patch: Partial<ResolvedSharePayload>,
+): ResolvedSharePayload {
+  return {
+    value: 'file:///shared/report.pdf',
+    shareType: 'file',
+    mimeType: 'application/pdf',
+    contentUri: 'file:///shared/report.pdf',
+    contentType: 'file',
+    contentMimeType: 'application/pdf',
+    originalName: 'report.pdf',
+    contentSize: 1024,
+    ...patch,
+  } as ResolvedSharePayload;
+}
+
+describe('incoming Share Extension payloads', () => {
+  beforeEach(() => {
+    __resetIncomingShareForTest();
+    convertToJpeg.mockClear();
+  });
+
+  it('converts non-sendable iOS image formats before entering the attachment uploader', async () => {
+    const result = selectIncomingShareUploadCandidates([
+      payload({
+        value: 'file:///shared/IMG_0001.HEIC',
+        shareType: 'image',
+        mimeType: 'image/heic',
+        contentUri: 'file:///shared/IMG_0001.HEIC',
+        contentType: 'image',
+        contentMimeType: 'image/heic',
+        originalName: 'IMG_0001.HEIC',
+      }),
+    ]);
+
+    expect(result.candidates).toHaveLength(1);
+    expect(result.candidates[0]).toMatchObject({
+      kind: 'image',
+      name: 'IMG_0001.HEIC',
+      mimeType: 'image/heic',
+    });
+    await expect(result.candidates[0]!.resolve!()).resolves.toEqual({
+      uri: 'file:///shared/IMG_0001.HEIC.jpg',
+      name: 'IMG_0001.jpg',
+      mimeType: 'image/jpeg',
+      size: 0,
+      skipPreprocess: true,
+    });
+    expect(convertToJpeg).toHaveBeenCalledWith('file:///shared/IMG_0001.HEIC');
+  });
+
+  it('converts supported files and images into the existing attachment upload candidates', () => {
+    const result = selectIncomingShareUploadCandidates([
+      payload({}),
+      payload({
+        value: 'file:///shared/screenshot.png',
+        shareType: 'image',
+        mimeType: 'image/png',
+        contentUri: 'file:///shared/screenshot.png',
+        contentType: 'image',
+        contentMimeType: 'image/png',
+        originalName: 'screenshot.png',
+        contentSize: 2048,
+      }),
+    ]);
+
+    expect(result).toEqual({
+      candidates: [
+        {
+          kind: 'file',
+          uri: 'file:///shared/report.pdf',
+          name: 'report.pdf',
+          size: 1024,
+          mimeType: 'application/pdf',
+        },
+        {
+          kind: 'image',
+          uri: 'file:///shared/screenshot.png',
+          name: 'screenshot.png',
+          size: 2048,
+          mimeType: 'image/png',
+        },
+      ],
+      rejectedUris: [],
+    });
+  });
+
+  it('falls back to a decoded URI basename and rejects unsupported attachment types', () => {
+    const result = selectIncomingShareUploadCandidates([
+      payload({
+        contentUri: 'file:///shared/My%20Notes.md',
+        originalName: null,
+        contentSize: null,
+        contentMimeType: null,
+        mimeType: 'text/markdown',
+      }),
+      payload({
+        value: 'file:///shared/archive.zip',
+        contentUri: 'file:///shared/archive.zip',
+        originalName: 'archive.zip',
+      }),
+    ]);
+
+    expect(result.candidates).toEqual([{
+      kind: 'file',
+      uri: 'file:///shared/My%20Notes.md',
+      name: 'My Notes.md',
+      size: 0,
+      mimeType: 'text/markdown',
+    }]);
+    expect(result.rejectedUris).toEqual(['file:///shared/archive.zip']);
+  });
+
+  it('keeps a batch until the matching consumer acknowledges it exactly once', () => {
+    const acknowledge = vi.fn();
+    const shared = [payload({})];
+    const first = stageIncomingShareBatch(shared, acknowledge);
+    const duplicate = stageIncomingShareBatch(shared, vi.fn());
+
+    expect(first?.id).toBe(incomingShareBatchId(shared));
+    expect(duplicate).toBe(first);
+    expect(consumeIncomingShareBatch('wrong-id')).toBe(false);
+    expect(acknowledge).not.toHaveBeenCalled();
+    expect(consumeIncomingShareBatch(first!.id)).toBe(true);
+    expect(acknowledge).toHaveBeenCalledTimes(1);
+    expect(consumeIncomingShareBatch(first!.id)).toBe(false);
+  });
+
+  it('retains successive shares during login and does not clear the newer native slot', () => {
+    let raw = [{ value: 'file:///group/cindy-share-a/report.pdf', shareType: 'file' as const }];
+    const native = { getSharedPayloads: () => raw, clearSharedPayloads: vi.fn(() => { raw = []; }) };
+    receiveIncomingShare(native);
+    const first = stageIncomingShareBatch([payload({
+      value: raw[0]!.value, contentUri: raw[0]!.value, mimeType: undefined,
+      contentMimeType: null, contentSize: null,
+    })], vi.fn())!;
+    raw = [{ value: 'file:///group/cindy-share-b/report.pdf', shareType: 'file' }];
+    receiveIncomingShare(native);
+    receiveIncomingShare(native);
+    expect(consumeIncomingShareBatch(first.id)).toBe(true);
+    expect(native.clearSharedPayloads).not.toHaveBeenCalled();
+    expect(consumeIncomingShareBatch(first.id)).toBe(false);
+    const secondId = incomingShareBatchId([payload({
+      value: raw[0]!.value, contentUri: raw[0]!.value, mimeType: undefined,
+      contentMimeType: null, contentSize: null,
+    })]);
+    expect(consumeIncomingShareBatch(secondId)).toBe(true);
+    expect(native.clearSharedPayloads).toHaveBeenCalledTimes(1);
+  });
+
+  it('never treats remote URLs as local upload/cleanup targets', () => {
+    expect(selectIncomingShareUploadCandidates([payload({ contentUri: 'https://example.com/report.pdf' })]))
+      .toEqual({ candidates: [], rejectedUris: [] });
+  });
+});
