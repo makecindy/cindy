@@ -1,0 +1,1565 @@
+[
+  {
+    "id": "openai",
+    "adapter": "openai-responses",
+    "baseUrl": "https://chatgpt.com/backend-api/codex",
+    "authKind": "forward"
+  },
+  {
+    "id": "cursor",
+    "adapter": "cursor",
+    "baseUrl": "https://api2.cursor.sh",
+    "authKind": "oauth"
+  },
+  {
+    "id": "xai",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.x.ai/v1",
+    "authKind": "oauth",
+    "supportsOpenAiWebSearchToolFields": false,
+    "supportsResponsesCustomTools": false,
+    "parallelToolCalls": true,
+    "modelSupportsVerbosity": {
+      "grok-4.6": false,
+      "grok-4.5": false,
+      "grok-4.3": false,
+      "grok-4.20-multi-agent-0309": false,
+      "grok-4.20-0309-reasoning": false,
+      "grok-4.20-0309-non-reasoning": false,
+      "grok-build-0.1": false,
+      "grok-composer-2.5-fast": false
+    },
+    "supportsVerbosity": false,
+    "modelWireDefaults": {
+      "grok-4.6": {
+        "wire": "openai-responses",
+        "inbound": [
+          "responses"
+        ],
+        "authModes": [
+          "oauth"
+        ],
+        "forwardCallerServiceTier": false
+      },
+      "grok-4.5": {
+        "wire": "openai-responses",
+        "inbound": [
+          "responses"
+        ],
+        "authModes": [
+          "oauth"
+        ],
+        "forwardCallerServiceTier": false
+      },
+      "grok-4.20-multi-agent-0309": {
+        "wire": "openai-responses",
+        "inbound": [
+          "responses",
+          "chat",
+          "anthropic"
+        ],
+        "forwardCallerServiceTier": false
+      }
+    },
+    "noReasoningModels": [
+      "grok-4.20-0309-non-reasoning",
+      "grok-build-0.1",
+      "grok-composer-2.5-fast"
+    ],
+    "preserveReasoningContentModels": [
+      "grok-4.6",
+      "grok-4.5",
+      "grok-4.3",
+      "grok-4.20-0309-reasoning"
+    ]
+  },
+  {
+    "id": "command-code",
+    "adapter": "command-code",
+    "baseUrl": "https://api.commandcode.ai",
+    "authKind": "oauth",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "orcarouter-oauth",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.orcarouter.ai/v1",
+    "authKind": "oauth",
+    "modelReasoningEffortMap": {
+      "deepseek/deepseek-v4-pro": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "preserveReasoningContentModels": [
+      "deepseek/deepseek-v4-pro"
+    ]
+  },
+  {
+    "id": "anthropic",
+    "adapter": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "authKind": "oauth"
+  },
+  {
+    "id": "anthropic-apikey",
+    "adapter": "anthropic",
+    "baseUrl": "https://api.anthropic.com",
+    "authKind": "key"
+  },
+  {
+    "id": "kimi",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.kimi.com/coding/v1",
+    "authKind": "oauth",
+    "modelSuffixBracketStrip": true,
+    "promptCacheKey": true,
+    "noReasoningModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ],
+    "modelReasoningEffortMap": {
+      "k3": {
+        "none": "none",
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max"
+      },
+      "k3[1m]": {
+        "none": "none",
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max"
+      }
+    },
+    "noTemperatureModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ],
+    "noTopPModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ],
+    "noPenaltyModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ],
+    "autoToolChoiceOnlyModels": [
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-for-coding"
+    ],
+    "preserveReasoningContentModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ]
+  },
+  {
+    "id": "kiro",
+    "adapter": "kiro",
+    "baseUrl": "https://runtime.us-east-1.kiro.dev",
+    "authKind": "oauth",
+    "modelSupportsVerbosity": {
+      "kiro-auto": false,
+      "gpt-5.6-sol": false,
+      "gpt-5.6-terra": false,
+      "gpt-5.6-luna": false,
+      "claude-sonnet-5": false,
+      "claude-opus-5": false,
+      "claude-opus-4.8": false,
+      "claude-opus-4.7": false,
+      "claude-opus-4.6": false,
+      "claude-opus-4.5": false,
+      "claude-sonnet-4.6": false,
+      "claude-sonnet-4.5": false,
+      "claude-sonnet-4.0": false,
+      "claude-haiku-4.5": false,
+      "deepseek-3.2": false,
+      "minimax-m2.5": false,
+      "minimax-m2.1": false,
+      "glm-5": false,
+      "qwen3-coder-next": false
+    }
+  },
+  {
+    "id": "nous",
+    "adapter": "openai-chat",
+    "baseUrl": "https://inference-api.nousresearch.com/v1",
+    "authKind": "oauth"
+  },
+  {
+    "id": "openai-apikey",
+    "adapter": "openai-responses",
+    "baseUrl": "https://api.openai.com/v1",
+    "authKind": "key"
+  },
+  {
+    "id": "meta-model",
+    "adapter": "openai-responses",
+    "baseUrl": "https://api.meta.ai/v1",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "muse-spark-1.3": {
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh"
+      },
+      "muse-spark-1.3-contributor": {
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh"
+      }
+    }
+  },
+  {
+    "id": "meta-muse",
+    "adapter": "openai-responses",
+    "baseUrl": "https://api.meta.ai/v1",
+    "authKind": "oauth",
+    "modelReasoningEffortMap": {
+      "muse-spark-1.3": {
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh"
+      },
+      "muse-spark-1.3-contributor": {
+        "minimal": "minimal",
+        "low": "low",
+        "medium": "medium",
+        "high": "high",
+        "xhigh": "xhigh"
+      }
+    }
+  },
+  {
+    "id": "umans",
+    "adapter": "anthropic",
+    "baseUrl": "https://api.code.umans.ai",
+    "authKind": "key",
+    "escapeBuiltinToolNames": true
+  },
+  {
+    "id": "opencode-go",
+    "adapter": "openai-chat",
+    "baseUrl": "https://opencode.ai/zen/go/v1",
+    "authKind": "key",
+    "openaiChatEofTolerance": true,
+    "statelessResponses": true,
+    "modelWireDefaults": {
+      "gpt-5.6-luna": "openai-responses",
+      "grok-4.6": "openai-responses",
+      "muse-spark-1.3-contributor": "openai-responses",
+      "muse-spark-1.2-contributor": "openai-responses"
+    },
+    "modelReasoningEffortMap": {
+      "kimi-k3": {
+        "none": "none",
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max"
+      },
+      "mimo-v2.5": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "mimo-v2.5-pro": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "glm-5": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "glm-5.1": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "deepseek-v4-pro": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      },
+      "deepseek-v4-flash": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "modelSupportsReasoningSummaries": {
+      "glm-5.3": true,
+      "glm-5.3-flash": true,
+      "glm-5.2": true,
+      "glm-5.1": true,
+      "glm-5": true,
+      "deepseek-v4-pro": true,
+      "deepseek-v4-flash": true
+    },
+    "thinkingToggleModels": [
+      "mimo-v2.5",
+      "mimo-v2.5-pro",
+      "glm-5",
+      "glm-5.1"
+    ],
+    "thinkingBudgetModels": [
+      "qwen3.5-397b",
+      "qwen3.6-35b",
+      "qwen3.5-plus",
+      "qwen3.6-plus",
+      "qwen3.7-max",
+      "qwen3.7-plus"
+    ],
+    "noReasoningModels": [
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed"
+    ],
+    "noTemperatureModels": [
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed"
+    ],
+    "noTopPModels": [
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed"
+    ],
+    "noPenaltyModels": [
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed"
+    ],
+    "autoToolChoiceOnlyModels": [
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed"
+    ],
+    "preserveReasoningContentModels": [
+      "glm-5.3",
+      "glm-5.3-flash",
+      "glm-5.2",
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash"
+    ]
+  },
+  {
+    "id": "neuralwatt",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.neuralwatt.com/v1",
+    "authKind": "key",
+    "thinkingBudgetModels": [
+      "qwen3.5-397b",
+      "qwen3.6-35b",
+      "qwen3.5-plus",
+      "qwen3.6-plus",
+      "qwen3.7-max",
+      "qwen3.7-plus"
+    ],
+    "noReasoningModels": [
+      "glm-5.3-fast",
+      "glm-5.3-short-fast",
+      "glm-5.2-fast",
+      "glm-5.2-short-fast",
+      "kimi-k2.6-fast",
+      "qwen3.5-397b-fast",
+      "qwen3.6-35b-fast"
+    ],
+    "noTemperatureModels": [
+      "kimi-k2.7-code"
+    ],
+    "noTopPModels": [
+      "kimi-k2.7-code"
+    ],
+    "noPenaltyModels": [
+      "kimi-k2.7-code"
+    ],
+    "autoToolChoiceOnlyModels": [
+      "kimi-k2.7-code"
+    ],
+    "preserveReasoningContentModels": [
+      "glm-5.3",
+      "glm-5.3-short",
+      "glm-5.3-flash",
+      "glm-5.2",
+      "glm-5.2-short",
+      "kimi-k2.6",
+      "kimi-k2.7-code",
+      "qwen3.5-397b",
+      "qwen3.6-35b"
+    ]
+  },
+  {
+    "id": "openrouter",
+    "adapter": "openai-chat",
+    "baseUrl": "https://openrouter.ai/api/v1",
+    "authKind": "key"
+  },
+  {
+    "id": "cline-pass",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.cline.bot/api/v1",
+    "authKind": "key",
+    "reasoningWireFormat": "gateway-object"
+  },
+  {
+    "id": "cline",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.cline.bot/api/v1",
+    "authKind": "key"
+  },
+  {
+    "id": "orcarouter",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.orcarouter.ai/v1",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "deepseek/deepseek-v4-pro": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "preserveReasoningContentModels": [
+      "deepseek/deepseek-v4-pro"
+    ]
+  },
+  {
+    "id": "packycode",
+    "adapter": "openai-chat",
+    "baseUrl": "https://cf.api.fan/v1",
+    "authKind": "key"
+  },
+  {
+    "id": "bizrouter",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.bizrouter.ai/v1",
+    "authKind": "key"
+  },
+  {
+    "id": "groq",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.groq.com/openai/v1",
+    "authKind": "key"
+  },
+  {
+    "id": "google",
+    "adapter": "google",
+    "baseUrl": "https://generativelanguage.googleapis.com",
+    "authKind": "key"
+  },
+  {
+    "id": "google-vertex",
+    "adapter": "google",
+    "baseUrl": "https://aiplatform.googleapis.com",
+    "authKind": "key",
+    "googleMode": "vertex"
+  },
+  {
+    "id": "google-antigravity",
+    "adapter": "google",
+    "baseUrl": "https://daily-cloudcode-pa.googleapis.com",
+    "authKind": "oauth",
+    "googleMode": "cloud-code-assist"
+  },
+  {
+    "id": "azure-openai",
+    "adapter": "azure-openai",
+    "baseUrl": "https://{resource}.openai.azure.com/openai",
+    "authKind": "key"
+  },
+  {
+    "id": "ollama",
+    "adapter": "openai-chat",
+    "baseUrl": "http://localhost:11434/v1",
+    "authKind": "local"
+  },
+  {
+    "id": "vllm",
+    "adapter": "openai-chat",
+    "baseUrl": "http://localhost:8000/v1",
+    "authKind": "local"
+  },
+  {
+    "id": "lm-studio",
+    "adapter": "openai-chat",
+    "baseUrl": "http://localhost:1234/v1",
+    "authKind": "local"
+  },
+  {
+    "id": "deepseek",
+    "baseUrl": "https://api.deepseek.com",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelWireDefaults": {
+      "deepseek-v4-flash": {
+        "wire": "openai-responses",
+        "inbound": [
+          "responses"
+        ]
+      },
+      "deepseek-v4-pro": {
+        "wire": "openai-responses",
+        "inbound": [
+          "responses"
+        ]
+      }
+    },
+    "modelResponsesTerminalRepair": {
+      "deepseek-v4-flash": {
+        "graceMs": 5000
+      },
+      "deepseek-v4-pro": {
+        "graceMs": 5000
+      }
+    },
+    "responsesItemIdRepair": {
+      "repairInvalidIds": true,
+      "repairMissingTerminalIds": true
+    },
+    "responsesPath": "/responses",
+    "preserveResponsesReasoningContent": true,
+    "statelessResponses": true,
+    "requiresAdjacentResponsesToolResults": true,
+    "annotateEmptyToolOutputs": true,
+    "modelReasoningEffortMap": {
+      "deepseek-v4-pro": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      },
+      "deepseek-v4-flash": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "modelSupportsReasoningSummaries": {
+      "deepseek-v4-pro": true,
+      "deepseek-v4-flash": true
+    },
+    "preserveReasoningContentModels": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash"
+    ]
+  },
+  {
+    "id": "cerebras",
+    "baseUrl": "https://api.cerebras.ai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "chutes",
+    "baseUrl": "https://llm.chutes.ai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "deepinfra",
+    "baseUrl": "https://api.deepinfra.com/v1/openai",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "hyperbolic",
+    "baseUrl": "https://api.hyperbolic.xyz/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "nscale",
+    "baseUrl": "https://inference.api.nscale.com/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "vultr",
+    "baseUrl": "https://api.vultrinference.com/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "baseten",
+    "baseUrl": "https://inference.baseten.co/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": true,
+    "modelReasoningEffortMap": {
+      "deepseek-ai/DeepSeek-V4-Pro": {
+        "none": "none",
+        "minimal": "minimal"
+      },
+      "thinkingmachines/inkling": {
+        "none": "none",
+        "minimal": "minimal"
+      },
+      "openai/gpt-oss-120b": {
+        "none": "none",
+        "minimal": "minimal"
+      },
+      "moonshotai/Kimi-K3": {
+        "none": "none"
+      },
+      "zai-org/GLM-5.3": {
+        "none": "none"
+      },
+      "zai-org/GLM-5.3-Fast": {
+        "none": "none"
+      },
+      "zai-org/GLM-5.2": {
+        "none": "none"
+      },
+      "zai-org/GLM-5.2-Fast": {
+        "none": "none"
+      }
+    }
+  },
+  {
+    "id": "commandcode",
+    "adapter": "openai-chat",
+    "baseUrl": "https://api.commandcode.ai/provider/v1",
+    "authKind": "key",
+    "promptCacheKey": true
+  },
+  {
+    "id": "sambanova",
+    "baseUrl": "https://api.sambanova.ai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "nebius",
+    "baseUrl": "https://api.tokenfactory.nebius.com/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "digitalocean",
+    "baseUrl": "https://inference.do-ai.run/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "scaleway",
+    "baseUrl": "https://api.scaleway.ai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "featherless",
+    "baseUrl": "https://api.featherless.ai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "novita",
+    "baseUrl": "https://api.novita.ai/openai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false
+  },
+  {
+    "id": "together",
+    "baseUrl": "https://api.together.xyz/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "fireworks",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "firepass",
+    "baseUrl": "https://api.fireworks.ai/inference/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "moonshot",
+    "baseUrl": "https://api.moonshot.ai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "noReasoningModels": [
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5"
+    ],
+    "noTemperatureModels": [
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5"
+    ],
+    "noTopPModels": [
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5"
+    ],
+    "noPenaltyModels": [
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5"
+    ],
+    "autoToolChoiceOnlyModels": [
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed"
+    ],
+    "preserveReasoningContentModels": [
+      "kimi-k3",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5"
+    ]
+  },
+  {
+    "id": "huggingface",
+    "baseUrl": "https://router.huggingface.co/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "nvidia",
+    "baseUrl": "https://integrate.api.nvidia.com/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "parallelToolCalls": false,
+    "noReasoningModels": [
+      "moonshotai/kimi-k2.6",
+      "moonshotai/kimi-k2.5",
+      "moonshotai/kimi-k2-thinking",
+      "moonshotai/kimi-k2-instruct",
+      "moonshotai/kimi-k2-instruct-0905"
+    ],
+    "preserveReasoningContentModels": [
+      "moonshotai/kimi-k2.6",
+      "moonshotai/kimi-k2.5",
+      "moonshotai/kimi-k2-thinking"
+    ]
+  },
+  {
+    "id": "venice",
+    "baseUrl": "https://api.venice.ai/api/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "zai",
+    "baseUrl": "https://api.z.ai/api/coding/paas/v4",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelSuffixBracketStrip": true,
+    "modelSupportsReasoningSummaries": {
+      "glm-5.3": true,
+      "glm-5.3[1m]": true,
+      "glm-5.3-flash": true,
+      "glm-5.2": true,
+      "glm-5.2[1m]": true
+    },
+    "preserveReasoningContentModels": [
+      "glm-5.3",
+      "glm-5.3[1m]",
+      "glm-5.3-flash",
+      "glm-5.2",
+      "glm-5.2[1m]"
+    ]
+  },
+  {
+    "id": "zhipu-bigmodel",
+    "baseUrl": "https://open.bigmodel.cn/api/paas/v4",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "thinkingToggleModels": [
+      "glm-4.6",
+      "glm-4.7",
+      "glm-5",
+      "glm-5.1",
+      "glm-5.2",
+      "glm-5.3",
+      "glm-5.3-flash"
+    ],
+    "modelReasoningEffortMap": {
+      "glm-4.6": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "glm-4.7": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "glm-5": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "glm-5.1": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "glm-5.2": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "glm-5.3": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "glm-5.3-flash": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      }
+    },
+    "modelSupportsReasoningSummaries": {
+      "glm-4.6": true,
+      "glm-4.7": true,
+      "glm-5": true,
+      "glm-5.1": true,
+      "glm-5.2": true,
+      "glm-5.3": true,
+      "glm-5.3-flash": true
+    },
+    "preserveReasoningContentModels": [
+      "glm-4.6",
+      "glm-4.7",
+      "glm-5",
+      "glm-5.1",
+      "glm-5.2",
+      "glm-5.3",
+      "glm-5.3-flash"
+    ],
+    "requiresReasoningPlaceholderModels": []
+  },
+  {
+    "id": "zhipu-bigmodel-coding",
+    "baseUrl": "https://open.bigmodel.cn/api/coding/paas/v4",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelSuffixBracketStrip": true,
+    "modelSupportsReasoningSummaries": {
+      "glm-5.3": true,
+      "glm-5.3[1m]": true,
+      "glm-5.3-flash": true,
+      "glm-5.2": true,
+      "glm-5.2[1m]": true
+    },
+    "preserveReasoningContentModels": [
+      "glm-5.3",
+      "glm-5.3[1m]",
+      "glm-5.3-flash",
+      "glm-5.2",
+      "glm-5.2[1m]"
+    ]
+  },
+  {
+    "id": "zhipu-bigmodel-responses",
+    "baseUrl": "https://open.bigmodel.cn/api/v1",
+    "adapter": "openai-responses",
+    "authKind": "key",
+    "modelSupportsReasoningSummaries": {
+      "glm-5.3": true,
+      "glm-5.3-flash": true,
+      "glm-5-turbo": true
+    },
+    "preserveResponsesReasoningContent": true
+  },
+  {
+    "id": "nanogpt",
+    "baseUrl": "https://nano-gpt.com/api/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "synthetic",
+    "baseUrl": "https://api.synthetic.new/openai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "siliconflow",
+    "baseUrl": "https://api.siliconflow.cn/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "qwen-cloud",
+    "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "tencent-coding-plan",
+    "baseUrl": "https://api.lkeap.cloud.tencent.com/coding/v3",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "volcengine",
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/v3",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "doubao-seed-2-1-pro-260628": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "doubao-seed-2-1-turbo-260628": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      },
+      "doubao-seed-evolving": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "enabled",
+        "high": "enabled",
+        "xhigh": "enabled",
+        "max": "enabled"
+      }
+    },
+    "thinkingToggleModels": [
+      "doubao-seed-2-1-pro-260628",
+      "doubao-seed-2-1-turbo-260628",
+      "doubao-seed-evolving"
+    ],
+    "preserveReasoningContentModels": [
+      "deepseek-v4-pro-260425",
+      "deepseek-v4-flash-260425",
+      "glm-5-2-260617",
+      "glm-4-7-251222"
+    ]
+  },
+  {
+    "id": "volcengine-coding-plan",
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/coding/v3",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "deepseek-v4-pro": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      },
+      "deepseek-v4-flash": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "preserveReasoningContentModels": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash"
+    ]
+  },
+  {
+    "id": "volcengine-agent-plan",
+    "baseUrl": "https://ark.cn-beijing.volces.com/api/plan/v3",
+    "responsesPath": "/responses",
+    "adapter": "openai-responses",
+    "authKind": "key"
+  },
+  {
+    "id": "qianfan",
+    "baseUrl": "https://qianfan.baidubce.com/v2",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "alibaba",
+    "baseUrl": "https://coding-intl.dashscope.aliyuncs.com/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "alibaba-token-plan",
+    "baseUrl": "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "deepseek-v4-pro": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "directReasoningEffortModels": [
+      "qwen3.8-max"
+    ],
+    "thinkingBudgetModels": [
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen3.6-flash"
+    ],
+    "preserveReasoningContentModels": [
+      "glm-5.3",
+      "glm-5.3-flash",
+      "glm-5.2",
+      "deepseek-v4-pro",
+      "qwen3.8-max",
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen3.6-flash"
+    ]
+  },
+  {
+    "id": "alibaba-token-plan-intl",
+    "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "deepseek-v4-pro": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      },
+      "deepseek-v4-flash": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "directReasoningEffortModels": [
+      "qwen3.8-max"
+    ],
+    "thinkingBudgetModels": [
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen3.6-plus",
+      "qwen3.6-flash"
+    ],
+    "preserveReasoningContentModels": [
+      "glm-5.3",
+      "glm-5.3-flash",
+      "glm-5.2",
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "qwen3.8-max",
+      "qwen3.7-max",
+      "qwen3.7-plus",
+      "qwen3.6-plus",
+      "qwen3.6-flash"
+    ],
+    "noReasoningModels": [
+      "kimi-k2.7-code",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "deepseek-v3.2",
+      "glm-5.1",
+      "glm-5",
+      "MiniMax-M2.5"
+    ]
+  },
+  {
+    "id": "parallel",
+    "baseUrl": "https://platform.parallel.ai",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "zenmux",
+    "baseUrl": "https://zenmux.ai/api/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "litellm",
+    "baseUrl": "http://localhost:4000/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "ollama-cloud",
+    "baseUrl": "https://ollama.com/v1",
+    "adapter": "ollama-native",
+    "authKind": "key",
+    "supportsVerbosity": false
+  },
+  {
+    "id": "mistral",
+    "baseUrl": "https://api.mistral.ai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "minimax",
+    "baseUrl": "https://api.minimax.io/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "MiniMax-M3": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "adaptive",
+        "high": "adaptive",
+        "xhigh": "adaptive",
+        "max": "adaptive"
+      }
+    },
+    "preserveReasoningContentModels": [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.5",
+      "MiniMax-M2.5-highspeed",
+      "MiniMax-M2.1",
+      "MiniMax-M2.1-highspeed",
+      "MiniMax-M2"
+    ],
+    "requiresReasoningPlaceholderModels": [],
+    "reasoningSplitModels": [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.5",
+      "MiniMax-M2.5-highspeed",
+      "MiniMax-M2.1",
+      "MiniMax-M2.1-highspeed",
+      "MiniMax-M2"
+    ],
+    "reasoningDetailsModels": [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.5",
+      "MiniMax-M2.5-highspeed",
+      "MiniMax-M2.1",
+      "MiniMax-M2.1-highspeed",
+      "MiniMax-M2"
+    ],
+    "thinkingToggleModels": [
+      "MiniMax-M3"
+    ]
+  },
+  {
+    "id": "minimax-cn",
+    "baseUrl": "https://api.minimaxi.com/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "MiniMax-M3": {
+        "none": "disabled",
+        "minimal": "disabled",
+        "low": "disabled",
+        "medium": "adaptive",
+        "high": "adaptive",
+        "xhigh": "adaptive",
+        "max": "adaptive"
+      }
+    },
+    "preserveReasoningContentModels": [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.5",
+      "MiniMax-M2.5-highspeed",
+      "MiniMax-M2.1",
+      "MiniMax-M2.1-highspeed",
+      "MiniMax-M2"
+    ],
+    "requiresReasoningPlaceholderModels": [],
+    "reasoningSplitModels": [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.5",
+      "MiniMax-M2.5-highspeed",
+      "MiniMax-M2.1",
+      "MiniMax-M2.1-highspeed",
+      "MiniMax-M2"
+    ],
+    "reasoningDetailsModels": [
+      "MiniMax-M3",
+      "MiniMax-M2.7",
+      "MiniMax-M2.7-highspeed",
+      "MiniMax-M2.5",
+      "MiniMax-M2.5-highspeed",
+      "MiniMax-M2.1",
+      "MiniMax-M2.1-highspeed",
+      "MiniMax-M2"
+    ],
+    "thinkingToggleModels": [
+      "MiniMax-M3"
+    ]
+  },
+  {
+    "id": "kimi-code",
+    "baseUrl": "https://api.kimi.com/coding/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelSuffixBracketStrip": true,
+    "promptCacheKey": true,
+    "noReasoningModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ],
+    "modelReasoningEffortMap": {
+      "k3": {
+        "none": "none",
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max"
+      },
+      "k3[1m]": {
+        "none": "none",
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "max",
+        "max": "max"
+      }
+    },
+    "noTemperatureModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ],
+    "noTopPModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ],
+    "noPenaltyModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ],
+    "autoToolChoiceOnlyModels": [
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-for-coding"
+    ],
+    "preserveReasoningContentModels": [
+      "k3",
+      "k3[1m]",
+      "kimi-k2.7-code",
+      "kimi-k2.7-code-highspeed",
+      "kimi-k2.6",
+      "kimi-k2.5",
+      "kimi-for-coding"
+    ]
+  },
+  {
+    "id": "opencode-zen",
+    "baseUrl": "https://opencode.ai/zen/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "deepseek-v4-pro": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      },
+      "deepseek-v4-flash": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      },
+      "deepseek-v4-flash-free": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "preserveReasoningContentModels": [
+      "deepseek-v4-pro",
+      "deepseek-v4-flash",
+      "deepseek-v4-flash-free"
+    ]
+  },
+  {
+    "id": "vercel-ai-gateway",
+    "baseUrl": "https://ai-gateway.vercel.sh/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "opencode-free",
+    "adapter": "openai-chat",
+    "baseUrl": "https://opencode.ai/zen/v1",
+    "authKind": "key",
+    "modelReasoningEffortMap": {
+      "deepseek-v4-flash-free": {
+        "low": "low",
+        "medium": "high",
+        "high": "high",
+        "xhigh": "high",
+        "max": "max"
+      }
+    },
+    "preserveReasoningContentModels": [
+      "deepseek-v4-flash-free"
+    ]
+  },
+  {
+    "id": "xiaomi",
+    "baseUrl": "https://api.xiaomimimo.com/anthropic",
+    "adapter": "anthropic",
+    "authKind": "key"
+  },
+  {
+    "id": "xiaomi-mimo",
+    "baseUrl": "https://api.xiaomimimo.com/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "reasoningEffortMap": {
+      "xhigh": "high",
+      "max": "high",
+      "ultra": "high"
+    }
+  },
+  {
+    "id": "kilo",
+    "baseUrl": "https://api.kilo.ai/api/gateway",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "mimo-free",
+    "adapter": "mimo-free",
+    "baseUrl": "https://api.xiaomimimo.com/api/free-ai/openai/chat",
+    "authKind": "key",
+    "reasoningEffortMap": {
+      "xhigh": "high",
+      "max": "high",
+      "ultra": "high"
+    }
+  },
+  {
+    "id": "mimo",
+    "baseUrl": "https://token-plan-cn.xiaomimimo.com/v1",
+    "adapter": "openai-chat",
+    "authKind": "key",
+    "reasoningEffortMap": {
+      "xhigh": "high",
+      "max": "high",
+      "ultra": "high"
+    }
+  },
+  {
+    "id": "cloudflare-ai-gateway",
+    "baseUrl": "https://gateway.ai.cloudflare.com/v1/{account-id}/{gateway}/anthropic",
+    "adapter": "anthropic",
+    "authKind": "key"
+  },
+  {
+    "id": "cloudflare-workers-ai",
+    "baseUrl": "https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "github-copilot",
+    "baseUrl": "https://api.githubcopilot.com",
+    "adapter": "openai-chat",
+    "authKind": "oauth",
+    "modelWireDefaults": {
+      "gpt-5.3-codex": "openai-responses",
+      "gpt-5.4": "openai-responses",
+      "gpt-5.4-mini": "openai-responses",
+      "gpt-5.5": "openai-responses",
+      "gpt-5.6-luna": "openai-responses",
+      "gpt-5.6-sol": "openai-responses",
+      "gpt-5.6-terra": "openai-responses",
+      "gpt-6-astra": "openai-responses",
+      "grok-4.5": "openai-responses",
+      "grok-4.6": "openai-responses",
+      "mai-code-1.1-flash": "openai-responses",
+      "mai-code-1-flash-picker": "openai-responses"
+    }
+  },
+  {
+    "id": "gitlab-duo",
+    "baseUrl": "https://cloud.gitlab.com/ai/v1/proxy/openai/v1",
+    "adapter": "openai-chat",
+    "authKind": "key"
+  },
+  {
+    "id": "qoder",
+    "adapter": "qoder",
+    "baseUrl": "https://qoder.com",
+    "authKind": "key"
+  },
+  {
+    "id": "qoder-cn",
+    "adapter": "qoder",
+    "baseUrl": "https://qoder.cn",
+    "authKind": "key"
+  },
+  {
+    "id": "codebuddy",
+    "adapter": "codebuddy",
+    "baseUrl": "https://www.codebuddy.ai",
+    "authKind": "key"
+  },
+  {
+    "id": "codebuddy-cn",
+    "adapter": "codebuddy",
+    "baseUrl": "https://www.codebuddy.cn",
+    "authKind": "key"
+  }
+]

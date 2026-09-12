@@ -16,10 +16,11 @@
 // change are sub-100ms (just stat + copy if dest also needs refresh).
 
 import { spawnSync } from 'node:child_process';
-import { copyFileSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import process from 'node:process';
+import { newestBundleInputMtime } from './remote-bundle-inputs.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const DESKTOP_ROOT = resolve(here, '..');
@@ -37,6 +38,7 @@ const TARGETS = [
   },
   {
     pkgName: '@cindy/anthropic-compat-proxy',
+    dependencyDirs: [resolve(MONOREPO_ROOT, 'packages', 'model-compat')],
     pkgDir: resolve(MONOREPO_ROOT, 'packages', 'anthropic-compat-proxy'),
     bundleFile: 'dist/proxy.mjs',
     destDir: resolve(DESKTOP_ROOT, 'resources', 'anthropic-compat-proxy'),
@@ -58,27 +60,6 @@ const TARGETS = [
   },
 ];
 
-function newestMtime(rootDir, relPaths) {
-  let newest = 0;
-  for (const rel of relPaths) {
-    const abs = join(rootDir, rel);
-    if (!existsSync(abs)) continue;
-    const st = statSync(abs);
-    if (st.isDirectory()) {
-      // Recursive walk; readdirSync({recursive:true}) is Node 20+ stable.
-      const entries = readdirSync(abs, { recursive: true, withFileTypes: true });
-      for (const e of entries) {
-        if (!e.isFile()) continue;
-        const child = statSync(join(e.parentPath ?? abs, e.name));
-        if (child.mtimeMs > newest) newest = child.mtimeMs;
-      }
-    } else {
-      if (st.mtimeMs > newest) newest = st.mtimeMs;
-    }
-  }
-  return newest;
-}
-
 function bundleIfStale(target) {
   const bundleAbs = join(target.pkgDir, target.bundleFile);
   const bundleMtime = existsSync(bundleAbs) ? statSync(bundleAbs).mtimeMs : 0;
@@ -86,7 +67,7 @@ function bundleIfStale(target) {
   // package.json (deps could change). pnpm-lock.yaml is at monorepo root —
   // skipping it intentionally; an esbuild bump would touch package.json
   // either way via devDependencies.
-  const srcMtime = newestMtime(target.pkgDir, ['src', 'build.mjs', 'package.json']);
+  const srcMtime = newestBundleInputMtime(target.pkgDir, target.dependencyDirs);
   if (bundleMtime >= srcMtime && bundleMtime > 0) {
     return false; // up-to-date
   }

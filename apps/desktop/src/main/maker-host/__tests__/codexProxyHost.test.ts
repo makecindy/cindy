@@ -2708,13 +2708,13 @@ describe('codex proxy host', () => {
         // upstream 是函数形态(每请求现取,model-access 下发可运行期换 endpoint);
         // 断言其当前求值 = 网关 base + /v1
         upstream: expect.any(Function),
-        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
+        // [encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, 视觉桥(controller 未注入 → 短路透传), 工具 ID 校正, stripNonAnthropicFields]
         transformRequest: [
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
           expect.any(Function), expect.any(Function), expect.any(Function), expect.any(Function),
-          expect.any(Function), expect.any(Function),
+          expect.any(Function), expect.any(Function), expect.any(Function),
         ],
         transformResponse: expect.any(Function),
         routingTransform: expect.any(Function),
@@ -4181,7 +4181,9 @@ describe('codex proxy host', () => {
       reasoning: { effort: 'high', summary: 'auto' },
       tools: [
         { type: 'function', name: 'read_file' },
-        { type: 'web_search', filters: { allowed_domains: ['docs.x.ai'] }, enable_image_search: true },
+        // Namespace tools now survive through OpenCodex's reversible flattening.
+        { type: 'function', name: 'multi_agent_v1__close_agent' },
+        { type: 'web_search', filters: { allowed_domains: ['docs.x.ai'] }, enable_image_search: true, user_location: { type: 'approximate', country: 'US' } },
         // Codex 不知道 xAI 还有 x_search;由 host 恒定补在末尾,Grok 才有 X 的实时视野。
         { type: 'x_search' },
       ],
@@ -5632,6 +5634,7 @@ describe('codex proxy host', () => {
       tools: [
         { type: 'function', name: 'exec_command' },
         { type: 'function', name: 'write_stdin' },
+        { type: 'function', name: 'multi_agent_v1__close_agent' },
         { type: 'web_search' },
       ],
       tool_choice: 'auto',
@@ -5720,6 +5723,7 @@ describe('codex proxy host', () => {
       reasoning: { effort: 'high' },
       tools: [
         { type: 'function', name: 'exec_command' },
+        { type: 'function', name: 'mcp__example__read' },
         { type: 'web_search' },
       ],
       input: [
@@ -5816,7 +5820,7 @@ describe('codex proxy host', () => {
 
     expect(current).toEqual({
       model: 'doubao-seed-2-1-pro-260628',
-      tools: [{ type: 'function', name: 'exec_command' }],
+      tools: [{ type: 'function', name: 'exec_command' }, { type: 'function', name: 'mcp__example__read' }],
       input: 'hello',
     });
   });
@@ -6351,7 +6355,7 @@ describe('codex proxy host', () => {
     await host.ensureCodexProxyReady();
 
     const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
-    expect(transforms).toHaveLength(22); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, 视觉桥(短路), 工具 ID 校正, stripNonAnthropicFields, dump
+    expect(transforms).toHaveLength(23); // encrypted activeStrip, image generation activeStrip, provider-aware Guardian reviewer, locked Subagent route, instructions 注入, locked Subagent exec guard, Gateway 原生 web_search, 跨来源压缩块兼容, xAI ModelInput activeStrip, exec function adapter, strict gateway history 兼容, xAI ModelInput sanitize, DeepSeek V4 custom tool 兼容, xAI Responses 兼容, XD Gateway Grok 兼容, ByteDance Seed tool 兼容, MiniMax effort 兼容, provider model rewrite, provider 参数归一, 视觉桥(短路), 工具 ID 校正, stripNonAnthropicFields, dump
     const ctx = {
       method: 'POST',
       url: '/v1/responses',
