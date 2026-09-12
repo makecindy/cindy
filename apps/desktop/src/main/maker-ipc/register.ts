@@ -10,7 +10,7 @@ import { refreshSubscriptionAccountModels } from '../maker-host/subscription-acc
 import { syncSubscriptionAccountUsage } from '../usage/subscriptionAccountUsage.js';
 import { clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
 import { subscriptionAccountKind, subscriptionAccountState, loginSubscriptionAccount, logoutSubscriptionAccount, cancelSubscriptionAccountLogin, removeSubscriptionAccountCredentialsReversibly } from '../maker-host/subscription-account-auth.js';
-import { isCodexAccountProvider, codexAccountState, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
+import { isCodexAccountProvider, codexAccountState, codexAccountLoginName, loginCodexAccount, logoutCodexAccount, cancelCodexAccountLogin, removeCodexAccountCredentialsReversibly, retireCodexAccount } from '../maker-host/codex-account-auth.js';
 import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 /**
  * registerMakerIpc — 把 Maker Core 的能力暴露为 maker:* IPC channel。
@@ -5550,26 +5550,27 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const owner = getActiveAppSession();
         const current = () => isCurrent() && getActiveAppSession().generation === owner.generation;
         const result = await loginCodexAccount(providerId, isCurrent);
-        if (result.ok && current()) {
+        if (!result.ok) return result;
+        return { ...result, afterCommit: async () => {
+          if (!current()) return;
           const previous = await getCustomProvider(providerId);
-          if (!current()) return result;
+          if (!current()) return;
           const identity = codexAccountState(providerId).identity;
-          if (previous && identity && result.firstLogin && previous.name === 'OpenAI') {
-            const baseName = `OpenAI · ${identity}`.slice(0, 50);
+          if (previous && identity) {
             const names = new Set(getActiveCatalog().providers.filter((provider) => provider.id !== providerId).map((provider) => provider.name));
-            let name = baseName;
-            for (let suffix = 2; names.has(name); suffix++) name = `${baseName} (${suffix})`;
-            await updateCustomProviderIfUnchanged(providerId, previous, { ...previous, name });
-            if (!current()) return result;
-            await refreshCustomProvidersIntoCatalog();
+            const name = codexAccountLoginName(previous.name, result.previousIdentity, identity, names);
+            if (name !== undefined) {
+              await updateCustomProviderIfUnchanged(providerId, previous, { ...previous, name });
+              if (!current()) return;
+              await refreshCustomProvidersIntoCatalog();
+            }
           }
-          if (!current()) return result;
+          if (!current()) return;
           try { await maker.refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer', providerId }); }
           catch { /* Login remains valid; model refresh can be retried without changing credentials. */ }
-          if (!current()) return result;
+          if (!current()) return;
           broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {});
-        }
-        return result;
+        } };
       }
       const provider = getActiveCatalog().providers.find((p) => p.id === providerId);
       const oauth = provider?.auth.oauth;

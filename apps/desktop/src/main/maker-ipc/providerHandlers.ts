@@ -310,6 +310,8 @@ export interface ProviderHandlerDeps {
     ok: boolean;
     reason?: string;
     rollbackCredentials?: () => boolean;
+    /** Publish identity/model changes only after the login is accepted, outside rollback. */
+    afterCommit?: () => Promise<void>;
   }>;
   oauthLogout(providerId: string): Promise<void>;
   oauthCancel(providerId: string): void;
@@ -2132,6 +2134,11 @@ export function registerProviderHandlers(
         if (isOAuthMutationCurrent(id, generation)) {
           if (result.ok) {
             finishRouteMutation.commit?.();
+            try {
+              await result.afterCommit?.();
+            } catch {
+              log.warn('provider presentation refresh failed after committed OAuth login');
+            }
             if (codexHostPrepared) {
               if (!deps.finalizeCodexCustomProviderHostChange) {
                 throwIpcError('INTERNAL', 'local Codex Host reload is unavailable');

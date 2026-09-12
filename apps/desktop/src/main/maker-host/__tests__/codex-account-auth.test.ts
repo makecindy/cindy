@@ -2,6 +2,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
+import { shell } from 'electron';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
@@ -40,12 +42,14 @@ vi.mock('../codex-auth-state.js', () => ({
 vi.mock('node:child_process', () => ({
   spawn: (_binary: string, _args: string[], options: any) => {
     const child = Object.assign(new EventEmitter(), {
-      stdout: new EventEmitter(),
-      stderr: new EventEmitter(),
+      stdout: new PassThrough(),
+      stderr: new PassThrough(),
     });
     state.child = child;
     setImmediate(() => {
       if (state.hold) return;
+      child.stderr.write('Open https://auth.openai.com/authorize?test=1\n');
+      child.stdout.write('https://auth.openai.com/authorize?test=1\n');
       fs.writeFileSync(path.join(options.env.CODEX_HOME, 'auth.json'), state.raw);
       child.emit('exit', 0);
     });
@@ -56,6 +60,7 @@ vi.mock('node:child_process', () => ({
 import {
   cancelCodexAccountLogin,
   codexAccountHome,
+  codexAccountLoginName,
   codexAccountState,
   invalidateCodexAccount,
   loginCodexAccount,
@@ -77,6 +82,7 @@ function credential(subject: string, account = 'workspace') {
   });
 }
 beforeEach(() => {
+  vi.clearAllMocks();
   state.root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-codex-account-auth-'));
   state.owner = { dataOwnerId: 'owner-a', generation: 1 };
   state.raw = credential('person-a');
@@ -89,6 +95,23 @@ afterEach(() => {
 });
 
 describe('native Codex account credentials', () => {
+  it('leaves opening the authorization page to Codex even when both streams print its URL', async () => {
+    expect((await loginCodexAccount('account-a', () => true)).ok).toBe(true);
+    expect(shell.openExternal).not.toHaveBeenCalled();
+    expect(codexAccountState('account-a').authenticated).toBe(true);
+  });
+  it('updates generated names after login while preserving custom names and avoiding duplicates', () => {
+    const oldIdentity = 'person-a@example.test';
+    const newIdentity = 'person-b@example.test';
+    const next = `OpenAI · ${newIdentity}`;
+    for (const name of ['OpenAI', `OpenAI · ${oldIdentity}`, `OpenAI · ${oldIdentity} (2)`, `OpenAI · ${oldIdentity} (10)`]) {
+      expect(codexAccountLoginName(name, oldIdentity, newIdentity, new Set([next]))).toBe(`${next} (2)`);
+    }
+    expect(codexAccountLoginName('My work account', oldIdentity, newIdentity, new Set())).toBeUndefined();
+    expect(codexAccountLoginName(`OpenAI · ${oldIdentity} custom`, oldIdentity, newIdentity, new Set())).toBeUndefined();
+    expect(codexAccountLoginName('OpenAI', undefined, newIdentity, new Set())).toBe(next);
+    expect(codexAccountLoginName(`OpenAI · ${oldIdentity}`, oldIdentity, oldIdentity, new Set())).toBeUndefined();
+  });
   it('ignores an old failed token after reconnect and invalidates only its own account', async () => {
     await loginCodexAccount('account-a', () => true);
     const oldToken = JSON.parse(state.raw).tokens.access_token;
@@ -123,14 +146,61 @@ describe('native Codex account credentials', () => {
     expect(codexAccountHome('account-b')).not.toBe(oldHome);
     expect(codexAccountState('account-b').authenticated).toBe(false);
   });
-  it('rejects replacing a provider with a different account', async () => {
+  it.each([
+    ['person-b', 'workspace'],
+    ['person-a', 'other-workspace'],
+    ['person-a', 'workspace'],
+  ])('reconnects as %s in %s without changing another connection', async (subject, workspace) => {
     await loginCodexAccount('account-a', () => true);
-    state.raw = credential('person-b');
-    expect(await loginCodexAccount('account-a', () => true)).toMatchObject({
-      ok: false,
-      reason: 'account_mismatch',
+    await loginCodexAccount('account-b', () => true);
+    await logoutCodexAccount('account-a');
+    const retire = vi.fn(async () => {
+      expect(codexAccountState('account-a').authenticated).toBe(false);
     });
-    expect(codexAccountState('account-a').identity).toBe('person-a@example.test');
+    setCodexAccountRetirement(retire);
+    state.raw = credential(subject, workspace);
+    expect(await loginCodexAccount('account-a', () => true)).toMatchObject({
+      ok: true,
+      firstLogin: false,
+      previousIdentity: 'person-a@example.test',
+    });
+    expect(retire).toHaveBeenCalledExactlyOnceWith('account-a');
+    expect(codexAccountState('account-a').identity).toBe(`${subject}@example.test`);
+    expect(codexAccountState('account-b').identity).toBe('person-a@example.test');
+  });
+  it('keeps rejecting credentials replaced outside an explicit login', async () => {
+    await loginCodexAccount('account-a', () => true);
+    fs.writeFileSync(path.join(codexAccountHome('account-a'), 'auth.json'), credential('person-b'));
+    expect(codexAccountState('account-a')).toMatchObject({
+      authenticated: false,
+      errorReason: 'account_mismatch',
+    });
+  });
+  it('restores the disconnected identity when a replacement login is rolled back', async () => {
+    await loginCodexAccount('account-a', () => true);
+    await logoutCodexAccount('account-a');
+    const home = codexAccountHome('account-a');
+    const identity = fs.readFileSync(path.join(home, 'account.json'), 'utf8');
+    state.raw = credential('person-b');
+    const result = await loginCodexAccount('account-a', () => true);
+    expect(result.ok).toBe(true);
+    expect(result.rollbackCredentials?.()).toBe(true);
+    expect(codexAccountState('account-a').authenticated).toBe(false);
+    expect(fs.readFileSync(path.join(home, 'account.json'), 'utf8')).toBe(identity);
+    expect(fs.existsSync(path.join(home, 'auth.json'))).toBe(false);
+  });
+  it('does not commit a replacement cancelled while retiring the old runtime', async () => {
+    await loginCodexAccount('account-a', () => true);
+    await logoutCodexAccount('account-a');
+    let current = true;
+    setCodexAccountRetirement(async () => { current = false; });
+    state.raw = credential('person-b');
+    expect(await loginCodexAccount('account-a', () => current)).toMatchObject({
+      ok: false,
+      reason: 'login_cancelled',
+    });
+    expect(codexAccountState('account-a').authenticated).toBe(false);
+    expect(fs.existsSync(path.join(codexAccountHome('account-a'), 'auth.json'))).toBe(false);
   });
   it('rolls back a committed login when its IPC owner cancels', async () => {
     const result = await loginCodexAccount('account-a', () => true);

@@ -3626,6 +3626,45 @@ describe('provider:oauth mutation ordering', () => {
     expect(rollbackCredentials).toHaveBeenCalledOnce();
   });
 
+  it.each([false, true])('publishes login identity only after acceptance (cancelled=%s)', async (cancelled) => {
+    const harness = new IpcHarness();
+    type LoginResult = Awaited<ReturnType<ProviderHandlerDeps['oauthLogin']>>;
+    let finishLogin!: (result: LoginResult) => void;
+    const oauthLogin = vi.fn(() => new Promise<LoginResult>((resolve) => { finishLogin = resolve; }));
+    const afterCommit = vi.fn(async () => {});
+    const rollbackCredentials = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({ oauthLogin }));
+    const login = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter');
+    await vi.waitFor(() => expect(oauthLogin).toHaveBeenCalledOnce());
+    if (cancelled) await harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, 'openrouter');
+    finishLogin({ ok: true, afterCommit, rollbackCredentials });
+    await expect(login).resolves.toEqual(cancelled ? { ok: false, reason: 'login_cancelled' } : { ok: true });
+    expect(afterCommit).toHaveBeenCalledTimes(cancelled ? 0 : 1);
+    expect(rollbackCredentials).toHaveBeenCalledTimes(cancelled ? 1 : 0);
+  });
+
+  it('keeps accepted credentials when cancelled during presentation refresh', async () => {
+    const harness = new IpcHarness();
+    let finishRefresh!: () => void;
+    const afterCommit = vi.fn(() => new Promise<void>((resolve) => { finishRefresh = resolve; }));
+    const rollbackCredentials = vi.fn(() => true);
+    registerProviderHandlers(harness, makeDeps({ oauthLogin: vi.fn(async () => ({ ok: true, afterCommit, rollbackCredentials })) }));
+    const login = harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter');
+    await vi.waitFor(() => expect(afterCommit).toHaveBeenCalledOnce());
+    await harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, 'openrouter');
+    finishRefresh();
+    await expect(login).resolves.toEqual({ ok: true });
+    expect(rollbackCredentials).not.toHaveBeenCalled();
+  });
+
+  it('does not turn an accepted login into failure when presentation refresh fails', async () => {
+    const harness = new IpcHarness();
+    const afterCommit = vi.fn(async () => { throw new Error('refresh unavailable'); });
+    registerProviderHandlers(harness, makeDeps({ oauthLogin: vi.fn(async () => ({ ok: true, afterCommit })) }));
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'openrouter')).resolves.toEqual({ ok: true });
+    expect(afterCommit).toHaveBeenCalledOnce();
+  });
+
   it('encodes failed stale-login credential rollback as an IPC INTERNAL error', async () => {
     const harness = new IpcHarness();
     let finishLogin!: (result: { ok: boolean; rollbackCredentials?: () => boolean }) => void;

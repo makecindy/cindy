@@ -1,4 +1,4 @@
-import { app, shell } from 'electron';
+import { app } from 'electron';
 import { createHash, randomUUID } from 'node:crypto';
 import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
@@ -52,6 +52,26 @@ export function codexAccountHome(providerId: string): string {
 interface AccountIdentity {
   principal: string;
   label: string;
+}
+
+/** Legacy names have no customization flag; recognize only the generated shape. */
+export function codexAccountLoginName(
+  name: string,
+  previousIdentity: string | undefined,
+  identity: string,
+  occupiedNames: ReadonlySet<string>,
+): string | undefined {
+  if (previousIdentity === identity) return undefined;
+  const oldBase = previousIdentity ? `OpenAI · ${previousIdentity}`.slice(0, 50) : undefined;
+  const generated = oldBase && (
+    name === oldBase ||
+    (name.startsWith(oldBase) && /^ \((?:[2-9]|[1-9]\d+)\)$/.test(name.slice(oldBase.length)))
+  );
+  if (name !== 'OpenAI' && !generated) return undefined;
+  const base = `OpenAI · ${identity}`.slice(0, 50);
+  let next = base;
+  for (let suffix = 2; occupiedNames.has(next); suffix++) next = `${base} (${suffix})`;
+  return next;
 }
 
 /** Pure parser: never return tokens through account status or IPC. */
@@ -128,6 +148,7 @@ export async function loginCodexAccount(
   ok: boolean;
   reason?: string;
   firstLogin?: boolean;
+  previousIdentity?: string;
   rollbackCredentials?: () => boolean;
 }> {
   if (!isCodexAccountProvider(providerId)) throw new Error('Unknown Codex account provider');
@@ -171,18 +192,10 @@ export async function loginCodexAccount(
         detached: process.platform !== 'win32',
         windowsHide: true,
       });
-      let output = '';
-      let opened = false;
-      const progress = (chunk: Buffer) => {
-        output = (output + chunk.toString()).slice(-32_768);
-        const url = output.match(/(https:\/\/auth\.openai\.com\/[^\s<>"'\x1b]+)\s/)?.[1];
-        if (!opened && url && current()) {
-          opened = true;
-          void shell.openExternal(url).catch(() => operation.cancel());
-        }
-      };
-      proc.stdout?.on('data', progress);
-      proc.stderr?.on('data', progress);
+      // `codex login` opens the browser itself. Drain its output without opening
+      // the printed authorization URL a second time.
+      proc.stdout?.resume();
+      proc.stderr?.resume();
       const timeout = setTimeout(operation.cancel, 5 * 60_000);
       proc.once('error', (error) => {
         clearTimeout(timeout);
@@ -204,8 +217,8 @@ export async function loginCodexAccount(
     } catch {
       /* first login */
     }
-    if (previous && previous.principal !== identity.principal)
-      return { ok: false, reason: 'account_mismatch' };
+    // An explicit login may replace this connection's account or workspace.
+    // Retire its old runtime before committing the newly authorized identity.
     await retireAccount(providerId);
     if (!current()) return { ok: false, reason: 'login_cancelled' };
     const files = ['auth.json', 'account.json', 'config.toml', 'disconnected', 'invalidated'];
@@ -238,7 +251,7 @@ export async function loginCodexAccount(
     fs.renameSync(path.join(staging, 'auth.json'), path.join(home, 'auth.json'));
     fs.rmSync(path.join(home, 'disconnected'), { force: true });
     fs.rmSync(path.join(home, 'invalidated'), { force: true });
-    return { ok: true, firstLogin: previous === null, rollbackCredentials };
+    return { ok: true, firstLogin: previous === null, previousIdentity: previous?.label, rollbackCredentials };
   } finally {
     if (logins.get(home) === operation) logins.delete(home);
     try {
