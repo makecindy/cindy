@@ -44,7 +44,7 @@ export function PermissionGuideView(props: PermissionGuideViewProps) {
       <Host
         matchContents={{ vertical: true }}
         colorScheme={mode}
-        seedColor={colors.textPrimary}
+        seedColor={colors.cta}
         ignoreSafeArea="all"
       >
         <VStack

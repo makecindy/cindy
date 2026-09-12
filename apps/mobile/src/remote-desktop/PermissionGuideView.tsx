@@ -116,10 +116,10 @@ const makeStyles = (colors: ThemeColors) =>
       justifyContent: "center",
       borderRadius: radius.pill,
     },
-    primary: { backgroundColor: colors.textPrimary },
+    primary: { backgroundColor: colors.cta },
     primaryText: {
       ...textStyles.body,
-      color: colors.surface,
+      color: colors.ctaText,
       textAlign: "center",
     },
     pending: { opacity: 0.5 },
