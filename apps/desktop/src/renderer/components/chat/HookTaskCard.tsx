@@ -11,6 +11,7 @@
 import { useId, useState } from 'react';
 import { ChevronRight, MessageSquare, Send } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import SlackIcon from './SlackIcon';
@@ -52,18 +53,30 @@ function ImIcon({ im }: { im: string }) {
   }
 }
 
-function imLabel(im: string): string {
+// Component-specific bare-text treatment registered in DESIGN.md §4.
+const disclosureClassName =
+  'inline-flex min-h-6 min-w-6 items-center py-1 w-fit cursor-pointer text-12 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] focus-visible:outline-offset-2';
+
+function imLabel(im: string, t: TFunction): string {
   switch (im) {
     case 'slack':
-      return 'Slack';
+      return t('settings.tina.prefs.providerSlack');
     case 'telegram':
-      return 'Telegram';
+      return t('settings.tina.prefs.providerTelegram');
     case 'x':
-      return 'X';
+      return t('settings.tina.prefs.providerX');
     case 'feishu':
-      return 'Feishu';
+      return t('settings.feishuBot.services.feishu');
     case 'lark':
-      return 'Lark';
+      return t('settings.feishuBot.services.lark');
+    case 'discord':
+      return t('settings.about.social.discordLabel');
+    case 'wechat':
+      return t('login.social.wechat');
+    case 'wecom':
+      return t('settings.wecomBot.serviceName');
+    case 'dingtalk':
+      return t('settings.dingtalkBot.serviceName');
     default:
       return im;
   }
@@ -113,7 +126,7 @@ export default function HookTaskCard({
       <div className="flex items-center gap-2 px-[14px] pt-[10px] pb-[6px]">
         <ImIcon im={im} />
         <span className="text-13 font-semibold text-[var(--text-primary)]">
-          {t('chat.threadContext.cindyFrom', { platform: imLabel(im) })}
+          {t('chat.threadContext.cindyFrom', { platform: imLabel(im, t) })}
         </span>
       </div>
 
@@ -135,7 +148,7 @@ export default function HookTaskCard({
               type="button"
               aria-expanded={bodyExpanded}
               onClick={() => setBodyExpanded((value) => !value)}
-              className="mt-2 text-12 text-[var(--text-tertiary)] hover:text-[var(--text-secondary)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)]"
+              className={cn(disclosureClassName, 'mt-2')}
             >
               {t(
                 bodyExpanded
@@ -154,11 +167,7 @@ export default function HookTaskCard({
               aria-expanded={expanded}
               aria-controls={expanded ? contextId : undefined}
               onClick={() => setExpanded((v) => !v)}
-              className={cn(
-                'flex items-center gap-1.5 w-fit cursor-pointer',
-                'text-12 font-medium text-[var(--text-tertiary)]',
-                'hover:text-[var(--text-secondary)] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-[var(--focus-ring)] focus-visible:outline-offset-2',
-              )}
+              className={cn(disclosureClassName, 'gap-1.5 font-medium text-left')}
             >
               <ChevronRight
                 size={12}

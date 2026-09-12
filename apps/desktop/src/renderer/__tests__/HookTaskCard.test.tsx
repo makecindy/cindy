@@ -36,6 +36,9 @@ describe('HookTaskCard attached context', () => {
         />,
       );
       const toggle = screen.getByRole('button', { name: '本条附带的上下文（12）' });
+      expect(toggle.className).toContain('min-h-6');
+      expect(toggle.className).toContain('py-1');
+      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       fireEvent.click(toggle);
       expect(screen.getByRole('region', { name: '引用消息（2）' })).toBeTruthy();
@@ -86,6 +89,9 @@ describe('HookTaskCard attached context', () => {
       const text = Array.from({ length: 30 }, (_, i) => `line ${i}`).join('\n');
       const { container } = render(<HookTaskCard im="feishu" userText={text} collapseUserText />);
       const toggle = screen.getByRole('button');
+      expect(toggle.className).toContain('min-h-6');
+      expect(toggle.className).toContain('py-1');
+      expect(toggle.className).toContain('focus-visible:outline');
       expect(toggle.getAttribute('aria-expanded')).toBe('false');
       expect(container.querySelector('.line-clamp-10')).toBeTruthy();
       fireEvent.click(toggle);
@@ -187,6 +193,37 @@ describe('HookTaskCard attached context', () => {
     expect(container.textContent).toContain('Lark');
     expect(container.textContent).not.toContain('Feishu');
   });
+
+  it.each([
+    ['en', 'Feishu', 'WeChat', 'WeCom', 'DingTalk'],
+    ['zh-CN', '飞书', '微信', '企业微信', '钉钉'],
+    ['zh-TW', '飛書', '微信', '企業微信', '釘釘'],
+    ['ja', 'Feishu', 'WeChat', 'WeCom', 'DingTalk'],
+    ['ko', 'Feishu', 'WeChat', 'WeCom', 'DingTalk'],
+  ])(
+    'uses the localized service names for every channel in %s',
+    async (locale, feishu, wechat, wecom, dingtalk) => {
+      await i18n.changeLanguage(locale);
+      for (const [im, label] of [
+        ['telegram', 'Telegram'],
+        ['slack', 'Slack'],
+        ['x', 'X'],
+        ['discord', 'Discord'],
+        ['lark', 'Lark'],
+        ['feishu', feishu],
+        ['wechat', wechat],
+        ['wecom', wecom],
+        ['dingtalk', dingtalk],
+        ['future-channel', 'future-channel'],
+      ]) {
+        const { unmount } = render(<HookTaskCard im={im} userText="Question" />);
+        expect(
+          screen.getByText(i18n.t('chat.threadContext.cindyFrom', { platform: label })),
+        ).toBeTruthy();
+        unmount();
+      }
+    },
+  );
 
   it.each([
     'telegram',

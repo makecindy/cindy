@@ -2553,6 +2553,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "WeCom",
       "title": "WeCom Intelligent Bot",
       "description": "Connect a WeCom intelligent bot and use {{appName}} from direct and group chats.",
       "status": {
@@ -2776,6 +2777,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "DingTalk",
       "title": "DingTalk Bot",
       "description": "Connect your own DingTalk bot and use {{appName}} in DMs and group chats through Stream mode.",
       "status": {

@@ -2552,6 +2552,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "WeCom",
       "title": "WeCom インテリジェントボット",
       "description": "WeCom インテリジェントボットを接続し、DM とグループチャットから {{appName}} を利用します。",
       "status": {
@@ -2775,6 +2776,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "DingTalk",
       "title": "DingTalk ボット",
       "description": "自作の DingTalk ボットを接続し、Stream モードで DM やグループから {{appName}} を利用します。",
       "status": {
