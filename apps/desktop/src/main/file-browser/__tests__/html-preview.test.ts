@@ -4,7 +4,13 @@ import path from 'node:path';
 import os from 'node:os';
 import { get } from 'node:http';
 import { listDir } from '@cindy/file-browser-core';
-import { createHtmlPreview, copyPreviewFile, previewLocation, type PreviewSource } from '../html-preview';
+import { HTML_SNAPSHOT_CSP, withSnapshotHtmlCsp } from '@cindy/maker-shared/file-preview';
+import {
+  createHtmlPreview,
+  copyPreviewFile,
+  previewLocation,
+  type PreviewSource,
+} from '../html-preview';
 
 const cleanups: Array<() => Promise<void>> = [];
 afterEach(async () => {
@@ -45,13 +51,24 @@ describe('directory HTML preview', () => {
     const dest = path.join(dir, 'copy.html');
     await copyPreviewFile(source, dest, size);
     expect(await fs.readFile(dest, 'utf8')).toBe(await fs.readFile(source, 'utf8'));
-    await expect(copyPreviewFile(source, path.join(dir, 'short.html'), size - 1)).rejects.toThrow('PREVIEW_CHANGED');
+    await expect(copyPreviewFile(source, path.join(dir, 'short.html'), size - 1)).rejects.toThrow(
+      'PREVIEW_CHANGED',
+    );
     await fs.symlink(source, path.join(dir, 'link.html'));
-    await expect(copyPreviewFile(path.join(dir, 'link.html'), path.join(dir, 'linked.html'), size)).rejects.toThrow();
+    await expect(
+      copyPreviewFile(path.join(dir, 'link.html'), path.join(dir, 'linked.html'), size),
+    ).rejects.toThrow();
   });
   it('serves a complete immutable tree and root-relative module assets through authenticated HTTP', async () => {
     const { dir, source, args } = await fixture();
     await fs.writeFile(path.join(dir, '.env'), 'fixture');
+    const secondPage = '<script>window.authorScript = true;</script><a href="index.html">Back</a>';
+    await fs.writeFile(path.join(dir, 'second.html'), secondPage);
+    const xml =
+      '<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><p>XML</p></body></html>';
+    await fs.writeFile(path.join(dir, 'xml.xhtml'), xml);
+    const legacy = Buffer.from('<meta charset="windows-1252"><p>caf\xe9</p>', 'latin1');
+    await fs.writeFile(path.join(dir, 'legacy.html'), legacy);
     const preview = await createHtmlPreview(args, source);
     cleanups.push(preview.close);
     const entry = await fetch(preview.url, { redirect: 'manual' });
@@ -61,6 +78,19 @@ describe('directory HTML preview', () => {
     expect((await fetch(origin + '/.env', { headers: { Cookie: cookie } })).status).toBe(404);
     const html = await fetch(origin + '/index.html', { headers: { Cookie: cookie } });
     expect(await html.text()).toContain('/dist/app.js');
+    expect(html.headers.get('content-security-policy')).toBe(HTML_SNAPSHOT_CSP);
+    expect(html.headers.get('permissions-policy')).toBe('camera=(), microphone=(), geolocation=()');
+    const second = await fetch(origin + '/second.html', { headers: { Cookie: cookie } });
+    const secondBody = await second.text();
+    expect(secondBody).toBe(withSnapshotHtmlCsp(secondPage));
+    expect(Number(second.headers.get('content-length'))).toBe(Buffer.byteLength(secondBody));
+    const xhtml = await fetch(origin + '/xml.xhtml', { headers: { Cookie: cookie } });
+    expect(xhtml.headers.get('content-type')).toBe('application/xhtml+xml');
+    expect(xhtml.headers.get('content-security-policy')).toBe(HTML_SNAPSHOT_CSP);
+    expect(await xhtml.text()).toBe(xml);
+    const encoded = await fetch(origin + '/legacy.html', { headers: { Cookie: cookie } });
+    expect(encoded.headers.get('content-security-policy')).toBe(HTML_SNAPSHOT_CSP);
+    expect(Buffer.from(await encoded.arrayBuffer())).toEqual(legacy);
     await fs.writeFile(path.join(dir, 'dist/app.js'), 'changed');
     const js = await fetch(origin + '/dist/app.js', { headers: { Cookie: cookie } });
     expect(js.headers.get('content-type')).toBe('text/javascript');
@@ -86,6 +116,22 @@ describe('directory HTML preview', () => {
     expect(
       (await fetch(origin + '/index.html', { method: 'POST', headers: { Cookie: cookie } })).status,
     ).toBe(405);
+  });
+  it('guards cached HTML without rewriting the shared source cache', async () => {
+    const { source, args } = await fixture();
+    const original = await fs.readFile(args.absPath, 'utf8');
+    const preview = await createHtmlPreview(args, {
+      ...source,
+      materialize: async (from) => from,
+    });
+    cleanups.push(preview.close);
+    const entry = await fetch(preview.url, { redirect: 'manual' });
+    const cookie = entry.headers.get('set-cookie')!.split(';')[0];
+    const response = await fetch(new URL('/index.html', preview.url), {
+      headers: { Cookie: cookie },
+    });
+    expect(await response.text()).toBe(withSnapshotHtmlCsp(original));
+    expect(await fs.readFile(args.absPath, 'utf8')).toBe(original);
   });
   it('does not open a partial snapshot on transfer failure or excessive size', async () => {
     const { args, source } = await fixture();

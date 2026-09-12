@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import { randomBytes } from 'node:crypto';
+import { HTML_SNAPSHOT_CSP, withSnapshotHtmlCsp } from '@cindy/maker-shared/file-preview';
 import type { DirEntry } from '@cindy/file-browser-core';
 import { toWorkdirRel } from '../../shared/workdirPath.js';
 
@@ -26,25 +27,47 @@ const MAX_BYTES = 100 * 1024 * 1024;
 const MAX_ENTRIES = 2000;
 
 /** Copy a fixed-size ordinary file, refusing growth and symlink substitution. */
-export async function copyPreviewFile(source: string, destination: string, expectedSize: number): Promise<void> {
+export async function copyPreviewFile(
+  source: string,
+  destination: string,
+  expectedSize: number,
+): Promise<void> {
+  const before = await fs.lstat(source);
+  if (!before.isFile()) throw new Error('PREVIEW_CHANGED');
   const input = await fs.open(source, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
   try {
     const stat = await input.stat();
-    if (!stat.isFile() || stat.size !== expectedSize) throw new Error('PREVIEW_CHANGED');
+    if (
+      !stat.isFile() ||
+      stat.size !== expectedSize ||
+      stat.dev !== before.dev ||
+      stat.ino !== before.ino
+    )
+      throw new Error('PREVIEW_CHANGED');
     const output = await fs.open(destination, 'wx', 0o600);
     try {
       const buffer = Buffer.alloc(64 * 1024);
       let offset = 0;
       while (offset < expectedSize) {
-        const { bytesRead } = await input.read(buffer, 0, Math.min(buffer.length, expectedSize - offset), offset);
+        const { bytesRead } = await input.read(
+          buffer,
+          0,
+          Math.min(buffer.length, expectedSize - offset),
+          offset,
+        );
         if (!bytesRead) throw new Error('PREVIEW_CHANGED');
         await output.writeFile(buffer.subarray(0, bytesRead));
         offset += bytesRead;
       }
       const after = await input.stat();
-      if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) throw new Error('PREVIEW_CHANGED');
-    } finally { await output.close(); }
-  } finally { await input.close(); }
+      if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs)
+        throw new Error('PREVIEW_CHANGED');
+    } finally {
+      await output.close();
+    }
+  } finally {
+    await input.close();
+  }
 }
 const MIME: Record<string, string> = {
   '.html': 'text/html',
@@ -156,12 +179,40 @@ export async function createHtmlPreview(args: HtmlPreviewArgs, source: PreviewSo
       await fs.mkdir(path.dirname(dest), { recursive: true });
       const materialized = await source.materialize(sourcePath, dest, file.size);
       if ((await fs.stat(materialized)).size !== file.size) throw new Error('PREVIEW_CHANGED');
-      assets.set('/' + file.relPath, { path: materialized, size: stat.size });
+      // Guard HTML documents, including secondary pages, before publishing the snapshot.
+      // Copy guarded HTML into this snapshot even if materialize returned a shared cache path.
+      // XML documents retain their parser/MIME and use the response CSP, not an HTML prolog.
+      let assetPath = materialized;
+      let assetSize = stat.size;
+      if (/\.html?$/i.test(file.relPath)) {
+        const original = await fs.readFile(materialized);
+        let html: string | undefined;
+        try {
+          html = new TextDecoder('utf-8', { fatal: true }).decode(original);
+        } catch {
+          // Preserve legacy encodings; the response CSP still applies to these documents.
+        }
+        // Do not reinterpret UTF-16 or a document declaring a different encoding as UTF-8.
+        const charsets = html?.matchAll(/charset\s*=\s*["']?\s*([^\s"'/>;]+)/gi);
+        if (
+          html !== undefined &&
+          !html.includes('\0') &&
+          [...(charsets ?? [])].every((match) => /^utf-?8$/i.test(match[1]))
+        ) {
+          const guarded = withSnapshotHtmlCsp(html);
+          await fs.writeFile(dest, guarded, { encoding: 'utf8', mode: 0o600 });
+          assetPath = dest;
+          assetSize = Buffer.byteLength(guarded);
+        }
+      }
+      assets.set('/' + file.relPath, { path: assetPath, size: assetSize });
     }
     const token = randomBytes(24).toString('hex');
     const cookieName = `cindy_preview_${token}`;
     let origin = '';
     server = createServer((req, res) => {
+      res.setHeader('Content-Security-Policy', HTML_SNAPSHOT_CSP);
+      res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
       res.setHeader('Cache-Control', 'no-store');
       res.setHeader('Referrer-Policy', 'same-origin');
       res.setHeader('X-Content-Type-Options', 'nosniff');

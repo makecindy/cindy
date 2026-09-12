@@ -157,6 +157,14 @@ work, but completed files retain their normal lifetime. Account changes remove t
 The HTML strategy remains a directory snapshot served by a viewer-local loopback
 HTTP server. Direct/TURN changes how the bytes arrive, not how relative navigation,
 CSS, JavaScript or images resolve. It does not execute a remote site's backend.
+Desktop and Mobile share the snapshot CSP and parser-first device API guard in
+`maker-shared/file-preview`. UTF-8 `.html`/`.htm` pages receive the guard; Desktop also
+serves the CSP as a response header. Other encodings and XML documents (XHTML/SVG) preserve their MIME
+and bytes, receive the response policy, and do not receive an HTML script prolog.
+Same-origin assets and requests remain usable,
+while external subresources, fetch and forms are blocked. This is not a zero-egress
+sandbox: documents without the prolog and the shared guard's residual child realms can access WebRTC, and an
+external browser's top-level navigation is outside the loopback server's control.
 The Mobile loopback server is a native-module change and requires a compatible
 native build; the WebRTC transport itself reuses the existing WebView dependency.
 

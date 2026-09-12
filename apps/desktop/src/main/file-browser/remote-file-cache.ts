@@ -171,15 +171,21 @@ function cachePathFor(id: RemoteFileIdentity): string {
   return path.join(cacheDir(), `${prefixHashFor(id)}-${id.size}-${Math.round(id.mtimeMs)}-${base}`);
 }
 
+function assertCacheOwner(scope: string): void {
+  if (scope !== activeOwnerScopeKey()) throw new Error('FILE_PEER_CANCELLED');
+}
+
 /** 断线兜底:按路径身份前缀找最近的已缓存副本(可能不是最新版本)。 */
 export async function findStaleCached(
   id: Pick<RemoteFileIdentity, 'transport' | 'endpointId' | 'workdir' | 'relPath'>,
 ): Promise<string | null> {
-  const prefix = `${prefixHashFor(id)}-`;
+  const scope = activeOwnerScopeKey();
+  const prefix = `${prefixHashFor({ ...id, scope })}-`;
   let names: string[];
   try {
     names = await fs.readdir(cacheDir());
   } catch {
+    assertCacheOwner(scope);
     return null;
   }
   let best: { p: string; mtimeMs: number } | null = null;
@@ -194,6 +200,7 @@ export async function findStaleCached(
       // 竞态删除,忽略
     }
   }
+  assertCacheOwner(scope);
   return best?.p ?? null;
 }
 
@@ -208,20 +215,28 @@ export function isInsideCacheDir(p: string): boolean {
  * (.part → rename),失败静默——写穿是增益路径,不许影响主流程。
  */
 export async function putCachedContent(id: RemoteFileIdentity, content: string): Promise<void> {
+  const scope = id.scope ?? activeOwnerScopeKey();
+  const dest = cachePathFor({ ...id, scope });
+  const tmp = `${dest}.${randomUUID()}.part`;
   try {
-    const dest = cachePathFor(id);
+    assertCacheOwner(scope);
     try {
       const st = await fs.stat(dest);
       if (st.size > 0) return; // 已有同版本副本
     } catch {
       // miss → 写入
     }
+    assertCacheOwner(scope);
     await fs.mkdir(cacheDir(), { recursive: true });
-    const tmp = `${dest}.part`;
+    assertCacheOwner(scope);
     await fs.writeFile(tmp, content, 'utf8');
+    assertCacheOwner(scope);
     await fs.rename(tmp, dest);
+    if (scope !== activeOwnerScopeKey()) await fs.rm(dest, { force: true });
   } catch (err) {
     log.debug('cache write-through failed', { relPath: id.relPath, error: String(err) });
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
   }
 }
 
@@ -236,10 +251,25 @@ export async function fetchRemoteFileToCache(
   executor: FetchExecutor,
   onProgress: FetchProgressFn,
 ): Promise<string> {
-  id = { ...id, scope: id.scope ?? activeOwnerScopeKey() };
+  const scope = id.scope ?? activeOwnerScopeKey();
+  assertCacheOwner(scope);
+  id = { ...id, scope };
+  const report: FetchProgressFn = (...args) => {
+    assertCacheOwner(scope);
+    onProgress(...args);
+  };
   const dest = cachePathFor(id);
   const existing = inflight.get(dest);
-  if (existing) return existing;
+  if (existing) {
+    try {
+      const result = await existing;
+      assertCacheOwner(scope);
+      return result;
+    } catch (error) {
+      assertCacheOwner(scope);
+      throw error;
+    }
+  }
 
   const run = (async () => {
     try {
@@ -248,26 +278,35 @@ export async function fetchRemoteFileToCache(
         // 命中:touch 更新 LRU 位次,秒回。
         const now = new Date();
         await fs.utimes(dest, now, now).catch(() => undefined);
-        onProgress(id.size, id.size);
+        report(id.size, id.size);
+        assertCacheOwner(scope);
         return dest;
       }
+      assertCacheOwner(scope);
       await fs.rm(dest, { force: true });
     } catch {
       // miss
     }
+    assertCacheOwner(scope);
     await fs.mkdir(cacheDir(), { recursive: true });
     const tmp = `${dest}.part`;
     try {
-      await executor(tmp, onProgress);
+      assertCacheOwner(scope);
+      await executor(tmp, report);
+      assertCacheOwner(scope);
       const got = await fs.stat(tmp);
+      assertCacheOwner(scope);
       if (got.size !== id.size) {
         // 远端文件在取回途中变化(size 对不上)——废弃,让 caller 报错重试。
         throw new Error(`fetched size mismatch: got ${got.size}, expect ${id.size}`);
       }
       await fs.rename(tmp, dest);
+      if (scope !== activeOwnerScopeKey()) await fs.rm(dest, { force: true });
+      assertCacheOwner(scope);
     } finally {
       await fs.rm(tmp, { force: true }).catch(() => undefined);
     }
+    assertCacheOwner(scope);
     // 新版本落地即清同路径旧版本(前缀同、文件名不同):被更新文件的历史
     // 副本不再占位等 LRU,断线兜底也只会捞到最新成功副本。
     void (async () => {
@@ -288,7 +327,12 @@ export async function fetchRemoteFileToCache(
 
   inflight.set(dest, run);
   try {
-    return await run;
+    const result = await run;
+    assertCacheOwner(scope);
+    return result;
+  } catch (error) {
+    assertCacheOwner(scope);
+    throw error;
   } finally {
     inflight.delete(dest);
   }

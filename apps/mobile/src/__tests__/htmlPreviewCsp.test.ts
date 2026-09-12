@@ -90,7 +90,7 @@ describe('withHtmlPreviewCsp(自带前导段,不定位作者 doctype)', () => {
 describe('前导段剥离设备与 WebRTC 能力(review P0)', () => {
   const prolog = withHtmlPreviewCsp('<html><body>x</body></html>');
   const cspSource = readFileSync(
-    resolve(process.cwd(), 'src/session/htmlPreviewCsp.ts'),
+    resolve(process.cwd(), '../../packages/maker-shared/src/htmlPreviewCsp.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
   const OPEN = '<script>';
@@ -210,7 +210,7 @@ describe('渲染载体的安全接线(源码级守卫)', () => {
     'utf8',
   ).replace(/\r\n/g, '\n');
   const cspSource = readFileSync(
-    resolve(process.cwd(), 'src/session/htmlPreviewCsp.ts'),
+    resolve(process.cwd(), '../../packages/maker-shared/src/htmlPreviewCsp.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
 
