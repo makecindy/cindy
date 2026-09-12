@@ -56,6 +56,10 @@ const PI_EFFORTS: readonly PiReasoningEffort[] = [
   'xhigh',
   'max',
 ];
+function normalizeOAuthParamKey(key: string): string {
+  return key.toLowerCase().replace(/[^a-z0-9]/g, '');
+}
+
 const FORBIDDEN_OAUTH_IMPORT_PARAM_KEYS = new Set([
   'access_token',
   'assertion',
@@ -67,7 +71,7 @@ const FORBIDDEN_OAUTH_IMPORT_PARAM_KEYS = new Set([
   'password',
   'refresh_token',
   'token',
-]);
+].map(normalizeOAuthParamKey));
 
 type ProviderImportScope = { dataOwnerId: string | null; generation: number };
 
@@ -182,7 +186,7 @@ function parsePublicOAuthParams(
 ): Record<string, string> {
   const params = parseStringRecord(value, label, 16)!;
   const sensitiveKey = Object.keys(params).find((key) =>
-    FORBIDDEN_OAUTH_IMPORT_PARAM_KEYS.has(key.trim().toLowerCase().replace(/-/g, '_')),
+    FORBIDDEN_OAUTH_IMPORT_PARAM_KEYS.has(normalizeOAuthParamKey(key)),
   );
   if (sensitiveKey) fail(`${label}.${sensitiveKey} cannot contain OAuth credentials`);
   return params;
@@ -297,14 +301,19 @@ function parseEndpoint(value: unknown, index: number): ParsedEndpoint {
   let apiKey: string | undefined;
   if (endpoint.apiKey !== undefined)
     apiKey = boundedString(endpoint.apiKey, `${label}.apiKey`, MAX_API_KEY_LENGTH);
+  const baseUrl = httpUrl(endpoint.baseUrl, `${label}.baseUrl`, false, true);
+  const modelsUrl = endpoint.modelsUrl !== undefined
+    ? httpUrl(endpoint.modelsUrl, `${label}.modelsUrl`, false, true)
+    : undefined;
+  if (modelsUrl && new URL(modelsUrl).origin !== new URL(baseUrl).origin) {
+    fail(`${label}.modelsUrl must share the endpoint origin`);
+  }
   return {
     protocol,
-    baseUrl: httpUrl(endpoint.baseUrl, `${label}.baseUrl`, false, true),
+    baseUrl,
     ...(targets ? { targets } : {}),
     models,
-    ...(endpoint.modelsUrl !== undefined
-      ? { modelsUrl: httpUrl(endpoint.modelsUrl, `${label}.modelsUrl`, false, true) }
-      : {}),
+    ...(modelsUrl ? { modelsUrl } : {}),
     ...(requestPath ? { requestPath } : {}),
     ...(endpoint.headers !== undefined
       ? {

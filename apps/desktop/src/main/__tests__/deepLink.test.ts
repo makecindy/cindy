@@ -324,6 +324,29 @@ describe('dual scheme (cindy primary + legacy xdt-maker)', () => {
     expect(takePendingDeepLink()).toBeNull();
   });
 
+  it('retains an import on a loaded login page until MainLayout takes it, only once', () => {
+    const send = vi.fn();
+    const win = {
+      isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
+      focus: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => false, send },
+    };
+    setDeepLinkMainWindow(win as unknown as BrowserWindow);
+    try {
+      handleIncomingDeepLink(providerImportUrl('cindy'), 'test');
+      const first = send.mock.calls[0]![1];
+      handleIncomingDeepLink(providerImportUrl('xdt-maker'), 'test');
+      const last = send.mock.calls[1]![1];
+      expect(() => previewProviderImport(first.importId, { dataOwnerId: null, generation: 0 }, [])).toThrow();
+      expect(takePendingDeepLink()).toEqual(last);
+      // Whichever wins (mount pull or push wake-up), the other sees no import.
+      expect(takePendingDeepLink()).toBeNull();
+      expect(JSON.stringify(send.mock.calls)).not.toContain('sk-must-stay-in-main');
+    } finally {
+      setDeepLinkMainWindow(null);
+    }
+  });
+
   it('rejects malformed provider import paths and repeated parameters', () => {
     const valid = providerImportUrl('cindy');
     expect(parseDeepLink(valid.replace('provider/import', 'providers/import'))).toBeNull();

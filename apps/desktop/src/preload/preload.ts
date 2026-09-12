@@ -3723,7 +3723,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }),
 
   // 冷启动时 (mainWindow 未 ready / renderer 未挂 listener) 缓存的 payload。
-  // MainLayout mount 后调一次,take 一次清空——已运行场景始终返回 null。
+  // MainLayout mount 和供应商导入唤醒事件共用此入口，take 一次清空。
   // 详见 main/deepLink.ts 的 pending buffer 段。
   takePendingDeepLink: (): Promise<
     | { type: 'session'; id: string; messageClientId?: string }

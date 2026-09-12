@@ -75,6 +75,31 @@ afterEach(() => {
 });
 
 describe('provider import URL parsing', () => {
+  it.each(['authorization-code', 'device-code'])('rejects OAuth credential spelling variants in %s extra params', (flow) => {
+    const keys = ['access_token', 'client_assertion', 'client_secret', 'device_code', 'id_token', 'refresh_token', 'password', 'assertion', 'code', 'token'];
+    for (const key of keys) {
+      for (const variant of [key, key.toUpperCase(), key.replaceAll('_', '-'), key.replaceAll('_', '.'), key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase())]) {
+        const auth = {
+          method: 'oauth', flow, tokenUrl: 'https://auth.acme.test/token', clientId: 'public-client', scopes: 'openid',
+          ...(flow === 'device-code'
+            ? { deviceAuthorizationUrl: 'https://auth.acme.test/device', extraDeviceParams: { [variant]: 'FAKE-CREDENTIAL' } }
+            : { authorizeUrl: 'https://auth.acme.test/authorize', extraAuthParams: { [variant]: 'FAKE-CREDENTIAL' } }),
+        };
+        expect(createProviderImportDraftFromRest(importRest(customPayload({ auth, endpoints: [{ protocol: 'openai-responses', baseUrl: 'https://api.acme.test/v1' }] }))), variant).toBeNull();
+      }
+    }
+  });
+
+  it.each(['https://other.test/models', 'http://api.acme.test/models', 'https://api.acme.test:8443/models'])(
+    'rejects unsupported cross-origin model discovery %s', (modelsUrl) => {
+      expect(createProviderImportDraftFromRest(importRest(customPayload({ endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl }] })))).toBeNull();
+    },
+  );
+
+  it('accepts a same-origin model endpoint with a different path and equivalent default port', () => {
+    createDraft(customPayload({ endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://api.acme.test:443/catalog/models' }] }));
+  });
+
   it.each(['http://localhost:4000/v1', 'http://127.0.0.1:4000/v1', 'http://[::1]:4000/v1'])(
     'accepts no-auth loopback endpoints: %s', (baseUrl) => {
       const id = createDraft(customPayload({

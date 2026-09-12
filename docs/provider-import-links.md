@@ -121,6 +121,6 @@ $url = 'cindy://provider/import?v=1&data=' . $data;
 
 只接受精确路径、v1、一个 `v` 和一个 `data` 参数；未知字段、重复参数、非法值整条拒绝。解析上限约 32 KiB URL / 24 KiB 解码数据、8 个端点、每端点 256 个模型 / 24 个 Header、自定义 Key 4 KiB、内置 Key 1 KiB。浏览器/操作系统可能有更低长度限制，供应商应优先生成短链接并省略模型清单。
 
-端点必须为 HTTP(S)，不得含用户名、密码、query 或 fragment；OAuth 端点必须 HTTPS。API Key 放在专用字段，不能放在端点 URL。`requestPath` 必须以单个 `/` 开头（如 `/responses`），不能带 query/fragment 或指定另一主机。自定义 Header 会进入凭证存储，不在预览显示值。
+端点必须为 HTTP(S)，不得含用户名、密码、query 或 fragment；OAuth 端点必须 HTTPS。可选 `modelsUrl` 必须与对应 `baseUrl` 同源（协议、主机及端口一致），否则整条拒绝，避免运行时忽略该地址。API Key 放在专用字段，不能放在端点 URL。`requestPath` 必须以单个 `/` 开头（如 `/responses`），不能带 query/fragment 或指定另一主机。自定义 Header 会进入凭证存储，不在预览显示值。
 
 用上面的假 Key 和 `example.invalid` 测试即可，不要使用真实用户 Key。开发版 UI/自动测试不能证明操作系统的安装协议注册；发布前还需 packaged macOS/Windows 的冷启动与运行中唤起冒烟。

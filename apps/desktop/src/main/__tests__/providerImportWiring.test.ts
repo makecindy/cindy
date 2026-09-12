@@ -6,8 +6,12 @@ import { describe, expect, it } from 'vitest';
 const bootstrap = readFileSync(new URL('../bootstrap-electron.ts', import.meta.url), 'utf8');
 const register = readFileSync(new URL('../maker-ipc/register.ts', import.meta.url), 'utf8');
 const updateService = readFileSync(new URL('../updateService.ts', import.meta.url), 'utf8');
+const mainLayout = readFileSync(new URL('../../renderer/components/layout/MainLayout.tsx', import.meta.url), 'utf8');
 
 describe('provider import wiring', () => {
+  it('consumes the main pending slot when an import wake-up reaches MainLayout', () => {
+    expect(mainLayout).toMatch(/onDeepLinkNavigate\(\(payload\) => \{\s*if \(payload.type !== 'provider-import'\) \{\s*handleDeepLinkPayload\(payload\);\s*return;\s*\}[\s\S]*?takePendingDeepLink\(\)\.then\(\(pending\) => \{\s*if \(pending\) handleDeepLinkPayload\(pending\);/);
+  });
   it('passes sanitized JS argv explicitly instead of replaying Electron native startup arguments', () => {
     for (const source of [bootstrap, updateService]) {
       expect(source).toContain('app.relaunch({ args: process.argv.slice(1) });');

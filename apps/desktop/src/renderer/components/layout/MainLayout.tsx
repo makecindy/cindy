@@ -652,13 +652,23 @@ export function MainLayout() {
     [navigate, navigateToSession, openShareImport],
   );
   useEffect(() => {
-    const unsubscribe = window.electronAPI.onDeepLinkNavigate(handleDeepLinkPayload);
+    const unsubscribe = window.electronAPI.onDeepLinkNavigate((payload) => {
+      if (payload.type !== 'provider-import') {
+        handleDeepLinkPayload(payload);
+        return;
+      }
+      // Main retains imports through login. Both this wake-up and the mount pull
+      // use the same atomic take, so either ordering navigates only once.
+      void window.electronAPI.takePendingDeepLink().then((pending) => {
+        if (pending) handleDeepLinkPayload(pending);
+      });
+    });
     return unsubscribe;
   }, [handleDeepLinkPayload]);
 
   // pull-on-mount:冷启动期间 (mainWindow 未 ready / renderer 未挂 listener)
   // 缓存在 main 端的 deep link / --open-folder payload, MainLayout 第一次 mount
-  // 时拉一次消费。已运行场景始终返回 null,no-op。
+  // 时拉一次消费。导入唤醒事件也会 take，两者只有先到者拿到 payload。
   //
   // 关键场景:未登录用户右键 "通过 Cindy 打开" → 冷启动 → LoginPage 接管 →
   // 用户走完 Feishu OAuth → MainLayout (在 ProtectedRoute 之内) 第一次 mount →
