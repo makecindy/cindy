@@ -260,7 +260,11 @@ const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFin
  * lastPersistedMsgBySession 刷成非 assistant —— 紧随其后的 message_end 全文快照
  * (isFinal + isFullText)看到的上一条已是交互行,相邻 DUP-SKIP 失效,于是同一段
  * 正文落第二行(现象:回复 → 提问卡 → 同一条回复)。这里单独记住这块已落库的身份,
- * 让同源快照复用它;新 assistant 行落库 / turn reset / clear 时作废,避免吞掉
+ * 让同源快照复用它。
+ *
+ * 复用只发生在"交互行仍是最后一条已落库消息"的窗口内(见 onAssistantTextEvent):
+ * 窗口内到达的全文快照按构造属于刚 flush 的同一块。新 assistant 行落库、开始新的
+ * delta block、交互被回答、turn reset / clear 时都作废记录,避免吞掉合法的同文本
  * 新消息。
  */
 const lastBoundaryFlushedAssistantBySession = new Map<
@@ -1870,6 +1874,9 @@ export function onInteractionResolved(
   const requestId = typeof request.requestId === 'string' ? request.requestId : '';
   if (!requestId) return;
   if (!claimInteractionPersistId(sessionId, persistId)) return;
+  // 交互已结束:边界 flush 的复用窗口到此为止。其后到达的全文快照即使文本相同,
+  // 也可能是新一轮 assistant 消息,不能再当作刚 flush 那块的快照。
+  lastBoundaryFlushedAssistantBySession.delete(sessionId);
   const acceptedAt = Date.now();
 
   if (kind === 'ask_user_question') {
@@ -2099,14 +2106,40 @@ export function onAssistantTextEvent(
     // 边界 flush 后同源的全文快照:交互边界(ask_user / plan_review)会先落
     // assistant 行、再落交互行,交互行把 lastPersistedMsgBySession 刷成非
     // assistant,相邻 DUP-SKIP 看不到刚落库的行 —— 这里按身份复用,不落第二行。
+    //
+    // 复用窗口严格限定在"交互行仍是最后一条已落库消息"期间:窗口内到达的全文快照
+    // 按构造属于刚 flush 的同一块;交互被回答(onInteractionResolved)/中间落过其它
+    // 消息/又开始新 delta block 后,记录已失效,合法的同文本新消息不会被吞。
     const boundaryFlushed = lastBoundaryFlushedAssistantBySession.get(sessionId);
+    const lastPersisted = lastPersistedMsgBySession.get(sessionId);
+    const atInteractionBoundary =
+      lastPersisted?.role === 'ask_user' || lastPersisted?.role === 'plan_review';
     if (
       boundaryFlushed &&
       visible &&
+      atInteractionBoundary &&
       boundaryFlushed.text === visible &&
       (!agentMessageId || boundaryFlushed.agentMessageId === agentMessageId)
     ) {
       lastBoundaryFlushedAssistantBySession.delete(sessionId);
+      // 交互边界 flush 时 delta 往往还没带 model / usage / stopReason,message_end 的
+      // 全文快照才是权威终态 meta;复用旧行时必须把这些字段合并回去,否则 reload 与
+      // 费用统计会读到不完整记录。
+      if (agentMeta) {
+        enqueueWrite(
+          `boundary_flushed_meta:${sessionId}:${boundaryFlushed.persistId}`,
+          async (ownerScope) => {
+            const patched = await patchMessageAgentMetaWithResult(
+              sessionId,
+              boundaryFlushed.persistId,
+              { ...agentMeta },
+            );
+            if (patched) {
+              broadcastMessageAgentMetaUpdate(sessionId, boundaryFlushed.persistId, ownerScope);
+            }
+          },
+        );
+      }
       return boundaryFlushed.persistId;
     }
     // 非流式 isFinal burst(result 兜底补推也走这):无在飞 block,立即落库。
@@ -2141,6 +2174,9 @@ export function onAssistantTextEvent(
   // delta: accumulate the raw snapshot; strip only the completed block.
   let block = assistantBlocks.get(sessionId);
   if (!block) {
+    // 新的 delta block 已开始:上一条边界 flush 的身份不再可复用(它的全文快照
+    // 已经过去,或会走 block 分支),避免吞掉这条新消息。
+    lastBoundaryFlushedAssistantBySession.delete(sessionId);
     block = {
       persistId: createId(),
       text: rawText,

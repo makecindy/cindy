@@ -2406,6 +2406,53 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     expect(assistantCreates[0]?.[1]).toEqual(
       expect.objectContaining({ clientId: persistId, content: '选哪个?' }),
     );
+    // message_end 才带来的终态 meta 必须合并回被复用的行,不能因复用而丢失。
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({ model: 'pi-test', stopReason: 'toolUse' }),
+    );
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.anything(),
+    );
+  });
+
+  it('边界后落过别的消息(tool_use)时同文本快照不复用,仍单独落行', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: 'Done.', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onToolUseEvent(SESSION, { toolUseId: 'tu_between', toolName: 'Edit', input: {} }, null);
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Done.', isFinal: true, isFullText: true },
+      null,
+    );
+    // 上一条已落库消息不是交互行 → 复用窗口已关闭,不能吞这条合法消息。
+    expect(lateFinalId).not.toBe(persistId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+
+  it('交互被回答后同文本快照不复用(复用窗口随交互结束关闭)', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: '同一句话', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    const request = { kind: 'ask_user_question' as const, requestId: 'req-reuse-window', questions: [{ question: '同一句话' }] };
+    const askId = onInteractionMessage(SESSION, request);
+    expect(askId).toBeTruthy();
+    onInteractionResolved(SESSION, askId, 'ask_user_question', request, { answers: { '同一句话': '答' } });
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: '同一句话', isFinal: true, isFullText: true },
+      null,
+    );
+    expect(lateFinalId).not.toBe(persistId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
   });
 
   it('交互边界 flush 后,不同 SDK 消息的同文本快照仍单独落行(身份不同不吞)', async () => {
