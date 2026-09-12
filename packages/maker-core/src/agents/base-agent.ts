@@ -1021,6 +1021,18 @@ export interface AgentDeps {
   disableCodexPluginRuntime?: boolean;
 
   /**
+   * Optional local exception to the host-wide Codex plugin disable policy.
+   * The callback must return a complete, fail-closed spawn policy: when it
+   * throws, maker-core keeps all local Codex plugins disabled.
+   */
+  prepareCodexPluginRuntimeConfig?: (ctx: {
+    codexHome?: string;
+  }) => Promise<{
+    extraArgs: string[];
+    enabledPluginIds: string[];
+  }>;
+
+  /**
    * Codex 专用：登记本机 stdio app-server 的 PID 与职责。
    * 返回 disposer 时会跟随 transport close 调用；远端 SSH transport 不触发。
    */

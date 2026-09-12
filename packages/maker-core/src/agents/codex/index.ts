@@ -2726,9 +2726,11 @@ export class CodexAgent extends BaseAgent {
 
     // 超集升格硬依赖 proxy。proxy 不可用时降级回原 gateway-key spawn 重来一轮;
     // 降级后 upgraded=false,循环至多跑两轮必收敛。
-    const baseExtraArgs = !remoteHostId && this.deps.disableCodexPluginRuntime
+    const disabledPluginRuntimeArgs = !remoteHostId && this.deps.disableCodexPluginRuntime
       ? ['--disable', 'plugins', '--disable', 'remote_plugin']
       : [];
+    let baseExtraArgs = [...disabledPluginRuntimeArgs];
+    let enabledPluginIds: string[] = [];
     let effectiveMode: AgentCredentialMode | undefined;
     let env: Record<string, string> = {};
     let extraArgs = [...baseExtraArgs];
@@ -2765,6 +2767,27 @@ export class CodexAgent extends BaseAgent {
       env = await buildCodexEnv(this.deps.auth, this.deps.runtimeConfig, authOptions);
       assertCurrentGeneration('env');
 
+      baseExtraArgs = [...disabledPluginRuntimeArgs];
+      enabledPluginIds = [];
+      if (
+        !remoteHostId
+        && this.deps.disableCodexPluginRuntime
+        && this.deps.prepareCodexPluginRuntimeConfig
+      ) {
+        try {
+          const pluginRuntime = await this.deps.prepareCodexPluginRuntimeConfig({
+            codexHome: env.CODEX_HOME,
+          });
+          assertCurrentGeneration('plugin runtime config');
+          baseExtraArgs = [...pluginRuntime.extraArgs];
+          enabledPluginIds = [...pluginRuntime.enabledPluginIds];
+        } catch (error) {
+          this.deps.logger.error(
+            'Codex allowlisted plugin runtime prep failed; keeping plugins disabled',
+            { message: error instanceof Error ? error.message : String(error) },
+          );
+        }
+      }
       extraArgs = [...baseExtraArgs];
       codexProxyActive = false;
       codexBrowserUseAvailable = false;
@@ -2888,7 +2911,12 @@ export class CodexAgent extends BaseAgent {
       break;
     }
     if (!remoteHostId && sqliteHome) extraArgs.push('-c', `sqlite_home=${JSON.stringify(sqliteHome)}`);
-    if (baseExtraArgs.length > 0) {
+    if (enabledPluginIds.length > 0) {
+      this.deps.logger.info('Codex allowlisted plugin runtime enabled for local app-server', {
+        pluginIds: enabledPluginIds,
+        remotePlugin: false,
+      });
+    } else if (disabledPluginRuntimeArgs.length > 0) {
       this.deps.logger.info('Codex plugin runtime disabled for local app-server', {
         plugins: false,
         remotePlugin: false,

@@ -77,6 +77,11 @@ interface PrepareOptions {
   capabilityRouting?: CapabilityRoutingPolicy;
 }
 
+export interface CodexAllowlistedPluginRuntimeConfig {
+  extraArgs: string[];
+  enabledPluginIds: string[];
+}
+
 type PluginEnablementSnapshot =
   | { status: 'known'; enabledPluginKeys: ReadonlySet<string> }
   | { status: 'unknown' };
@@ -976,6 +981,170 @@ async function readPluginsTable(file: string): Promise<{
       plugins && typeof plugins === 'object' && !Array.isArray(plugins)
         ? (plugins as Record<string, unknown>)
         : {},
+  };
+}
+
+async function isNonEmptyFile(file: string): Promise<boolean> {
+  try {
+    const stat = await fsp.stat(file);
+    return stat.isFile() && stat.size > 0;
+  } catch {
+    return false;
+  }
+}
+
+async function hasLoadableSkillContent(
+  pluginVersionDir: string,
+  declaration: unknown,
+): Promise<boolean> {
+  if (typeof declaration !== 'string') return false;
+  let skillsDir: string;
+  try {
+    skillsDir = resolvePluginOwnedPath(pluginVersionDir, declaration);
+  } catch {
+    return false;
+  }
+  for (const skillName of await listDirectoryNames(skillsDir)) {
+    if (await isNonEmptyFile(path.join(skillsDir, skillName, 'SKILL.md'))) return true;
+  }
+  return false;
+}
+
+async function hasLoadableJsonMap(
+  pluginVersionDir: string,
+  declaration: unknown,
+  mapKey: string,
+): Promise<boolean> {
+  let entries: Record<string, unknown>;
+  if (isRecord(declaration)) {
+    entries = declaration;
+  } else if (typeof declaration === 'string') {
+    let configFile: string;
+    try {
+      configFile = resolvePluginOwnedPath(pluginVersionDir, declaration);
+      const config = await readJsonObject(configFile);
+      entries = isRecord(config[mapKey]) ? config[mapKey] : config;
+    } catch {
+      return false;
+    }
+  } else {
+    return false;
+  }
+  return Object.keys(entries).length > 0;
+}
+
+async function isLoadableCachedPluginVersion(
+  pluginVersionDir: string,
+  pluginName: string,
+  version: string,
+): Promise<boolean> {
+  let manifest: Record<string, unknown> | null = null;
+  try {
+    for (const relativeManifest of DISCOVERABLE_PLUGIN_MANIFEST_PATHS) {
+      const candidate = path.join(pluginVersionDir, relativeManifest);
+      if (!(await isNonEmptyFile(candidate))) continue;
+      manifest = await readJsonObject(candidate);
+      break;
+    }
+  } catch {
+    return false;
+  }
+  if (
+    !manifest ||
+    manifest['name'] !== pluginName ||
+    manifest['version'] !== version
+  ) {
+    return false;
+  }
+
+  const contentChecks: Promise<boolean>[] = [];
+  if ('skills' in manifest) {
+    contentChecks.push(hasLoadableSkillContent(pluginVersionDir, manifest['skills']));
+  }
+  if ('mcpServers' in manifest) {
+    contentChecks.push(
+      hasLoadableJsonMap(pluginVersionDir, manifest['mcpServers'], 'mcpServers'),
+    );
+  }
+  if ('hooks' in manifest) {
+    contentChecks.push(hasLoadableJsonMap(pluginVersionDir, manifest['hooks'], 'hooks'));
+  }
+  return contentChecks.length > 0 && (await Promise.all(contentChecks)).every(Boolean);
+}
+
+async function hasLoadableCachedPlugin(
+  pluginDir: string,
+  pluginName: string,
+): Promise<boolean> {
+  for (const version of await listDirectoryNames(pluginDir)) {
+    if (
+      await isLoadableCachedPluginVersion(
+        path.join(pluginDir, version),
+        pluginName,
+        version,
+      )
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Build a complete local Codex plugin policy for one app-server spawn.
+ * Only explicitly enabled, loadable cached entries from the host allowlist survive;
+ * every other configured plugin is disabled and remote installation stays off.
+ */
+export async function prepareCodexAllowlistedPluginRuntimeConfig(
+  codexHome: string,
+  allowedPluginIds: readonly string[],
+): Promise<CodexAllowlistedPluginRuntimeConfig> {
+  const paths = codexGlobalPluginsPaths(codexHome);
+  const { plugins } = await readPluginsTable(paths.configFile);
+  const allowed = new Set(allowedPluginIds);
+  const enabledPluginIds: string[] = [];
+
+  for (const pluginId of [...allowed].sort()) {
+    const config = plugins[pluginId];
+    if (!isRecord(config) || config['enabled'] !== true) continue;
+    const marketplace = marketplaceOfPluginKey(pluginId);
+    if (!marketplace) continue;
+    const pluginName = pluginId.slice(0, -(marketplace.length + 1));
+    const pluginDir = path.join(paths.cacheDir, marketplace, pluginName);
+    if (!(await isDirectory(pluginDir))) {
+      throw new Error(`allowlisted Codex plugin cache is missing: ${pluginId}`);
+    }
+    if (!(await hasLoadableCachedPlugin(pluginDir, pluginName))) {
+      throw new Error(`allowlisted Codex plugin cache is incomplete: ${pluginId}`);
+    }
+    enabledPluginIds.push(pluginId);
+  }
+
+  if (enabledPluginIds.length === 0) {
+    return {
+      extraArgs: ['--disable', 'plugins', '--disable', 'remote_plugin'],
+      enabledPluginIds: [],
+    };
+  }
+
+  const enabled = new Set(enabledPluginIds);
+  const pluginOverrides = Object.keys(plugins)
+    .sort()
+    .flatMap((pluginId) => [
+      '-c',
+      `plugins.${JSON.stringify(pluginId)}.enabled=${enabled.has(pluginId)}`,
+    ]);
+  return {
+    extraArgs: [
+      '--enable',
+      'plugins',
+      '--enable',
+      'hooks',
+      '--disable',
+      'remote_plugin',
+      ...pluginOverrides,
+    ],
+    enabledPluginIds,
   };
 }
 
