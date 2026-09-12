@@ -207,20 +207,52 @@ beforeEach(async () => {
 });
 
 describe('remote SSH mutation runtime semantics', () => {
-  it('preserves trailing whitespace in a resolved Worker directory', async () => {
+  it.each(['dir /remote/project \n', 'Welcome\nnotice\ndir /remote/project \n', 'Welcome\r\ndir /remote/project \r\n'])('preserves trailing whitespace after shell startup output: %j', async (stdout) => {
     await getRemoteSshPool().hydrate([host('worker-dir')]);
     const remote = getRemoteSshPool().get('worker-dir')!;
     const status = vi.spyOn(remote, 'getStatus').mockReturnValue('ready');
     const exec = vi.spyOn(remote, 'exec').mockResolvedValue({
-      exitCode: 0, signal: null, stdout: 'dir /remote/project \n', stderr: '',
+      exitCode: 0, signal: null, stdout, stderr: '',
     });
     try {
       await expect(probeRemoteWorkingDirectory('worker-dir', '/remote/project '))
         .resolves.toBe('/remote/project ');
+      await expect(handler(REMOTE_SSH_INVOKE.STAT_REMOTE_PATH)({}, { id: 'worker-dir', path: '/remote/project ' }))
+        .resolves.toEqual({ kind: 'dir', resolvedPath: '/remote/project ' });
       expect(exec).toHaveBeenCalledWith(expect.stringContaining("'/remote/project '"),
         expect.objectContaining({ timeoutMs: 10_000 }));
     } finally {
       exec.mockRestore();
+      status.mockRestore();
+    }
+  });
+
+  it.each([true, false])('reconnects only the selected Worker host before probing (success=%s)', async (succeeds) => {
+    const pool = getRemoteSshPool();
+    await pool.hydrate([host('worker-dir'), host('unrelated')]);
+    const remote = pool.get('worker-dir')!;
+    let ready = false;
+    const status = vi.spyOn(remote, 'getStatus').mockImplementation(() => ready ? 'ready' : 'disconnected');
+    const connect = vi.spyOn(pool, 'connect').mockImplementation(async () => {
+      if (!succeeds) throw new Error('fixture connection failed');
+      ready = true;
+    });
+    const exec = vi.spyOn(remote, 'exec').mockResolvedValue({
+      exitCode: 0, signal: null, stdout: 'banner\ndir /remote/project \n', stderr: '',
+    });
+    try {
+      const result = probeRemoteWorkingDirectory('worker-dir', '/remote/project ');
+      if (succeeds) {
+        await expect(result).resolves.toBe('/remote/project ');
+        expect(connect.mock.invocationCallOrder[0]).toBeLessThan(exec.mock.invocationCallOrder[0]!);
+      } else {
+        await expect(result).rejects.toThrow('fixture connection failed');
+        expect(exec).not.toHaveBeenCalled();
+      }
+      expect(connect).toHaveBeenCalledExactlyOnceWith('worker-dir');
+    } finally {
+      exec.mockRestore();
+      connect.mockRestore();
       status.mockRestore();
     }
   });

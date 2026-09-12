@@ -2041,6 +2041,7 @@ export function registerRemoteSshIpc(): void {
 
 /** Validate an existing Worker directory using the host filesystem, not local fs. */
 export async function probeRemoteWorkingDirectory(hostId: string, inputPath: string): Promise<string> {
+  await ensureRemoteHostReady(hostId);
   const result = await statRemotePath(requireConnectedHost(hostId), inputPath);
   if (result.kind !== 'dir') throw new Error('Remote working directory is unavailable');
   return result.resolvedPath;
@@ -2108,9 +2109,9 @@ fi
   if (result.exitCode !== 0) {
     throw new Error(`bash exit=${result.exitCode}: ${result.stderr.trim().slice(0, 200) || '(no stderr)'}`);
   }
-  // Remove only the protocol terminator: trailing spaces belong to the path.
-  const line = result.stdout.replace(/\r?\n$/, '');
-  if (/[\r\n]/.test(line)) throw new Error('unexpected multiline stat output');
+  // Shell startup can print banners before the final protocol line. Remove
+  // only its terminator: trailing spaces belong to the path, not the framing.
+  const line = result.stdout.replace(/\r?\n$/, '').split(/\r?\n/).pop() ?? '';
   // Allow spaces in the resolved path — only split on the first space.
   const spaceIdx = line.indexOf(' ');
   if (spaceIdx < 0) {
