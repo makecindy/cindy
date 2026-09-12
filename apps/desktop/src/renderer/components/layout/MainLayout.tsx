@@ -34,6 +34,7 @@ import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginSc
 import { ScheduleSessionIndexOwner } from '@/features/scheduler/components/ScheduleSessionIndexOwner';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { QuickSwitcher } from '@/features/cc-agent/QuickSwitcher';
 import { isAppInteractionLocked } from '@/lib/appInteractionLock';
 import { useCloseShortcutShellOwner } from '@/hooks/useCloseWindowShortcut';
 import {
@@ -1354,6 +1355,7 @@ export function MainLayout() {
     <FeatureSidebarSlotProvider
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
+      <QuickSwitcher revealSidebar={() => { setIsSidebarCollapsed(false); setIsRailMode(false); }} />
       <ScheduleSessionIndexOwner />
       <div
         ref={rowRef}

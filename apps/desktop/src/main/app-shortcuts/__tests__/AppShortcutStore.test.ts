@@ -47,6 +47,21 @@ afterEach(() => {
 });
 
 describe('AppShortcutStore', () => {
+  it('yields defaults to external keys without persisting them or suppressing explicit overrides', () => {
+    const store = makeStore('win32');
+    const voiceCombo = combo('KeyK', { ctrl: true });
+    expect(store.getEffectiveMap([voiceCombo]).get('open-quick-switcher')).toEqual([]);
+    expect(store.getEffectiveMap().get('open-quick-switcher')).toEqual([voiceCombo]);
+    expect(fs.existsSync(filePath())).toBe(false);
+
+    expect(store.setOverride('open-quick-switcher', combo('KeyJ', { ctrl: true }))).toBeNull();
+    expect(store.getEffectiveMap([voiceCombo]).get('open-quick-switcher')).toEqual([
+      combo('KeyJ', { ctrl: true }),
+    ]);
+    store.setOverride('open-quick-switcher', null);
+    expect(store.getEffectiveMap([voiceCombo]).get('open-quick-switcher')).toEqual([]);
+  });
+
   it('returns registry defaults when no overrides exist', () => {
     const store = makeStore('darwin');
     expect(store.getEffectiveCombos('toggle-sidebar')).toEqual([

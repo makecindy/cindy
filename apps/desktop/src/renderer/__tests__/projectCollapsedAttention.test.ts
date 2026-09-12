@@ -282,11 +282,16 @@ describe('collapsed project attention wiring', () => {
   });
 
   it('feeds both regular and pinned project rows from their displayed children', () => {
+    // Quick-switch expansion must drive both row visibility and its collapsed-only alert.
+    expect(sidebarUpperSource).toContain('collapsed={projectReveal.collapsed}');
+    expect(sidebarUpperSource).toContain(
+      'isCollapsed={projectReveal.collapsed.has(project.projectKey)}',
+    );
     expect(projectsSectionSource).toContain(
       'collapsed.has(project.projectKey) ? collapsedAttentionToneFor(project.sessions) : null',
     );
     expect(sidebarUpperSource).toMatch(
-      /collapse\.collapsed\.has\(project\.projectKey\)[\s\S]*?collapsedAttentionToneFor\(displaySessions \?\? project\.sessions\)[\s\S]*?: null/,
+      /projectReveal\.collapsed\.has\(project\.projectKey\)[\s\S]*?collapsedAttentionToneFor\(displaySessions \?\? project\.sessions\)[\s\S]*?: null/,
     );
   });
 });

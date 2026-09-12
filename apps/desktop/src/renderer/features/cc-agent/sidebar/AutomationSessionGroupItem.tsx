@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useStat
 import { ChevronDown, ChevronRight, EllipsisVertical, Play } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
+import { clearQuickSwitcherFocus, useQuickSwitcherFocus } from '@/state/quickSwitcherFocus';
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
@@ -124,14 +125,16 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
     group.id,
     group.legacyId,
   );
-  const collapsed = controlledCollapsed ?? storedCollapsed;
+  const quickFocus = useQuickSwitcherFocus();
+  const collapsed = (controlledCollapsed ?? storedCollapsed) && !group.sessions.some((s) => s.id === quickFocus?.session?.id);
   const toggleCollapsed = useCallback(() => {
+    clearQuickSwitcherFocus();
     if (onCollapsedChange) {
       onCollapsedChange(!collapsed);
       return;
     }
-    toggleStoredCollapsed();
-  }, [collapsed, onCollapsedChange, toggleStoredCollapsed]);
+    if (collapsed === storedCollapsed) toggleStoredCollapsed();
+  }, [collapsed, storedCollapsed, onCollapsedChange, toggleStoredCollapsed]);
   // 轴 2:运行列表内部的「前 5 条 / 显示全部」临时态,离开自动收回。
   // 收起告警列表和展开历史列表共用这一份状态,所以切折叠必须复位 —— 否则
   // 收起态点过「显示全部」再展开会一次摊开整组历史(Codex #3184),对称地,

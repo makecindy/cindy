@@ -268,6 +268,8 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // channel and the controller falls back to the bounded legacy sessions:list
   // projection.
   'local-db:conversations:search',
+  // Read-only title directory; bounded pages, no local UI or shell effects.
+  'local-db:conversations:catalog',
   DL_HISTORY_MESSAGES_CHANNEL,
   'local-db:messages:list',
   // Read-only visible history and recoverable work ranges; same session authorization as list.
