@@ -128,4 +128,31 @@ describe('RemoteWatchRegistry 失败清理', () => {
       consumerId: 'desktop-tree',
     });
   });
+
+  /**
+   * 评审 P1：workdir 是合法 POSIX 路径，可以包含 `::`（如 `/srv/foo::bar`）。旧实现
+   * 把引用计数扫描建立在 `${windowId}::${hostId}::${workdir}` 的字符串拆分上 ——
+   * 拆分会把路径截断，于是认不出另一个窗口在看同一 workdir，停一个窗口会误发
+   * watchStop 把另一个也停掉。现在 hostId / workdir 结构化存在 entry 上。
+   */
+  it('workdir 含 :: 时引用计数仍准确:停一个窗口不误发 watchStop', async () => {
+    const { registry, request } = setup();
+    const w1 = makeWindow(1);
+    const w2 = makeWindow(2);
+    const workdir = '/srv/foo::bar';
+
+    await registry.start(w1, 'host-1', workdir, {}, vi.fn());
+    await registry.start(w2, 'host-1', workdir, {}, vi.fn());
+    request.mockClear();
+
+    await registry.stop(w1.id, 'host-1', workdir);
+    // 另一个窗口还在看 → 不能发 watchStop。
+    expect(request).not.toHaveBeenCalledWith('host-1', 'watchStop', expect.anything());
+
+    await registry.stop(w2.id, 'host-1', workdir);
+    expect(request).toHaveBeenCalledWith('host-1', 'watchStop', {
+      workdir,
+      consumerId: 'desktop-tree',
+    });
+  });
 });

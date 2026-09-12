@@ -32,6 +32,25 @@ describe('useFileBrowserPreference', () => {
     expect(result.current.isCustomized).toBe(false);
   });
 
+  /**
+   * 评审 P1：本窗口在没有任何消费者的窗口期里摘掉了 storage listener，期间另一个
+   * 窗口改了偏好就收不到事件；重挂载时 readPreference 又会走模块级缓存早退，会让
+   * 开关与文件树永久陈旧到下一次变更或刷新。所以首个监听者（重）挂载时要让缓存
+   * 失效、回落 localStorage。
+   */
+  it('无消费者窗口期后重挂载会重读 localStorage', () => {
+    const first = renderHook(() => useFileBrowserPreference());
+    expect(first.result.current.showIgnoredDirs).toBe(false);
+    first.unmount(); // → 本窗口没有监听者了
+
+    // 另一个窗口改了偏好：只落 localStorage，本窗口收不到 storage 事件。
+    localStorage.setItem(KEY, 'true');
+
+    const second = renderHook(() => useFileBrowserPreference());
+    expect(second.result.current.showIgnoredDirs).toBe(true);
+    expect(second.result.current.isCustomized).toBe(true);
+  });
+
   it('读取已存的开启 override', () => {
     localStorage.setItem(KEY, 'true');
     expect(getShowIgnoredDirs()).toBe(true);

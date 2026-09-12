@@ -29,6 +29,12 @@ const log = createLogger('file-browser/remote-watch');
 const WATCH_CONSUMER_ID = 'desktop-tree';
 
 interface RegistryEntry {
+  /** 结构化保存 host / workdir：引用计数扫描不再拆 `${windowId}::${host}::${workdir}`
+   *  —— workdir 里合法出现 `::` 时（如 `/srv/foo::bar`），拆分会截断路径，扫描就
+   *  认不出另一个窗口在看同一 workdir，停一个窗口会误发 watchStop 把另一个也停掉
+   *  （评审 P1）。 */
+  hostId: string;
+  workdir: string;
   offEvent: () => void;
   offReconnect: () => void;
 }
@@ -78,7 +84,7 @@ export class RemoteWatchRegistry {
         .request(hostId, 'watchStart', watchOpts)
         .catch((err) => log.warn('watch replay failed', { hostId, workdir, error: String(err) }));
     });
-    const entry: RegistryEntry = { offEvent, offReconnect };
+    const entry: RegistryEntry = { hostId, workdir, offEvent, offReconnect };
     this.entries.set(k, entry);
 
     window.once('closed', () => {
@@ -107,10 +113,9 @@ export class RemoteWatchRegistry {
       // 没有任何客户端再去 stop 它(评审 P1),它还会抬高 device-link 的可见性
       // 并集。只在确认本地再无同 (host, workdir) 条目时才发:还有别的窗口在
       // watch(或它的 start 正在飞,条目已先入表)时不能撤。
-      const stillLocal = [...this.entries.keys()].some((key) => {
-        const [, h, w] = key.split('::');
-        return h === hostId && w === workdir;
-      });
+      const stillLocal = [...this.entries.values()].some(
+        (e) => e.hostId === hostId && e.workdir === workdir,
+      );
       if (!stillLocal) {
         void this.mgr
           .request(hostId, 'watchStop', { workdir, consumerId: WATCH_CONSUMER_ID })
@@ -129,10 +134,9 @@ export class RemoteWatchRegistry {
     entry.offReconnect();
     // 同 host 其它 window/workdir 还在 watch 时不能全局 watchStop;仅当这是该
     // (host, workdir) 的最后一个订阅者才让 daemon 停 watch。
-    const stillWatching = [...this.entries.keys()].some((key) => {
-      const [, h, w] = key.split('::');
-      return h === hostId && w === workdir;
-    });
+    const stillWatching = [...this.entries.values()].some(
+      (e) => e.hostId === hostId && e.workdir === workdir,
+    );
     if (!stillWatching) {
       await this.mgr
         .request(hostId, 'watchStop', { workdir, consumerId: WATCH_CONSUMER_ID })

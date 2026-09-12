@@ -86,6 +86,14 @@ export function useFileBrowserPreference(): {
 
   useEffect(() => {
     const sync = () => setPreference(readPreference());
+    // 首个监听者（重）挂载时让模块级缓存失效、回落 localStorage：本窗口可能在
+    // 没有任何消费者的窗口期里错过另一个窗口的 storage 事件（那时 listener 不在
+    // 场），不重读就会让开关与文件树永久陈旧到下一次变更或刷新（评审 P1）。
+    if (listeners.size === 0) {
+      memoryValue = null;
+      memoryCustomized = null;
+      sync();
+    }
     listeners.add(sync);
     const onStorage = (e: StorageEvent) => {
       if (e.key !== STORAGE_KEY) return;
