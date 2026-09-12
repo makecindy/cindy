@@ -11665,7 +11665,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent.mock.calls[2]?.[3]?.persistUserMessage?.autoResume).toBe(true);
   });
 
-  it.each(['before-send', 'send-failed'] as const)(
+  it.each(['before-send', 'references', 'send-failed'] as const)(
     '连续 replacement 关闭共用三次派发预算：%s',
     async (phase) => {
       const h = createHarness();
@@ -11673,7 +11673,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       const takeover = { ...TAKEOVER_INFO, reason: 'upstream_response_idle_timeout' };
       h.setResumableTurnErrorTakeover(takeover);
       h.setHasAssistantProgressAfter(async () => false);
-      await failAfterDispatch(h, sid);
+      await failAfterDispatch(h, sid, makeItem('q-first', 'original long task', {
+        sessionRefs: [{ sessionId: 'referenced-session' }],
+      }));
       const attempts = Array.from({ length: 3 }, () => ({
         started: deferred<void>(),
         release: deferred<void>(),
@@ -11684,6 +11686,12 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
             attempt.started.resolve();
             await attempt.release.promise;
             return 'sdk-session';
+          });
+        } else if (phase === 'references') {
+          h.resolveSessionReferences.mockImplementationOnce(async () => {
+            attempt.started.resolve();
+            await attempt.release.promise;
+            return [];
           });
         } else {
           h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
@@ -11708,7 +11716,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect(h.coordinator.hasQueuedAutoResume(sid)).toBe(false);
       expect(latestProjection(h.projections).pendingQueue).toEqual([]);
       await flush();
-      expect(h.sendToAgent).toHaveBeenCalledTimes(phase === 'before-send' ? 1 : 4);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(phase === 'send-failed' ? 4 : 1);
     },
   );
 

@@ -126,7 +126,12 @@ Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断
 这两类超时与
 `codex_reconnect_stalled` 同类，进入 interrupted-turn 自动续跑；自动续跑对这三类
 **只发 CONTINUE 指令，绝不克隆原始用户 prompt**（turn 已被 accept，克隆会重放已执行的
-工具副作用）。退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
+工具副作用）。Claude rewind / cancellation bridge 的 `/compact` 位于真实用户输入之前，
+其超时使用 `bridge_upstream_response_idle_timeout`，不进入该自动续跑白名单；保持既有
+清队列、保留重建目标与人工重试行为，不能对尚未执行的用户输入发送 CONTINUE。
+引用内容解析等异步准备仍属于未派发态；完成后复核 active 身份，再在真正调用 send 前
+标记 sendStarted，迟到的准备结果不得发送或修改已经交给 replacement 的项。
+退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
 或 interrupt ACK 失败而 `unexpected` close 时，必须用实例 + attemptToken 精确保留交棒，
 不得 teardown 已批准的自动续跑——包括 timer 已 fire、CONTINUE 已因 SESSION_RUNNING
 回队、CONTINUE 已进入 drain 但尚未 vendor dispatch、以及 CONTINUE 已 sendStarted 但

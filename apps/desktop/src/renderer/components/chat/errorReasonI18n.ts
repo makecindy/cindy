@@ -26,6 +26,7 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   'codex-auto-review-unavailable': 'logic.errors.codexAutoReviewUnavailable',
   'host-shell-command-blocked': 'logic.errors.hostShellCommandBlocked',
   upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
+  bridge_upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
   codex_reconnect_stalled: 'logic.errors.upstreamResponseIdleTimeout',
   codex_history_oversized: 'logic.errors.codexHistoryOversized',
   // Persisted error rows and the live reason both lack a reliable retirement

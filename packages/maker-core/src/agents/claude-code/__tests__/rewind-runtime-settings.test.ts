@@ -1863,7 +1863,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
           events.some(
             (e) =>
               e.type === 'error' &&
-              (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout',
+              (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout',
           ),
           'watchdog terminal error must reach eventQueue (not swallowed by bridge filter)',
         ).toBe(true);
@@ -1872,7 +1872,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
     );
     await vi.waitFor(() => {
       expect(
-        events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout'),
+        events.some((e) => e.type === 'done' && (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout'),
       ).toBe(true);
     });
 
@@ -1947,7 +1947,7 @@ describe('ClaudeCodeAgent runtime settings during rewind window', () => {
           events.some(
             (e) =>
               e.type === 'error' &&
-              (e.data as { reason?: string }).reason === 'upstream_response_idle_timeout',
+              (e.data as { reason?: string }).reason === 'bridge_upstream_response_idle_timeout',
           ),
         ).toBe(true);
       },

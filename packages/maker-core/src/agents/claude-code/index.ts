@@ -2892,7 +2892,9 @@ export class ClaudeCodeAgent extends BaseAgent {
               `已自动中断当前 turn 防止卡死。可以直接发下一条消息继续 ` +
               `(已完成的 tool result 都保留)。`,
             isTerminal: true,
-            reason: 'upstream_response_idle_timeout',
+            // The bridge precedes the user's input, which is cleared below.
+            // It is not an accepted user turn that can receive CONTINUE.
+            reason: 'bridge_upstream_response_idle_timeout',
             idleMs,
             sdkSessionId,
             lastEventType: upstreamResponseLastEventType,
@@ -2916,7 +2918,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         turnState.interruptRequested = false;
         pendingToolIds.clear();
         preserveBridgeRetryTarget(timedOutBridgeKind, timedOutRewindResumeAt);
-        emitTurnBoundary('upstream_response_idle_timeout', suppressedDoneData);
+        emitTurnBoundary('bridge_upstream_response_idle_timeout', suppressedDoneData);
         return;
       }
       eventQueue.push({

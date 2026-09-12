@@ -15,6 +15,11 @@ import {
 // 判定单测的核心是**白名单收紧**:自动重试一个确定性失败(认证过期、协议错)会反复
 // 烧额度并反复报错,所以只有识别得了的"上游把 turn 打断了"才允许自愈。
 describe('isInterruptedTurnError', () => {
+  it('does not continue a bridge timeout before the user input has executed', () => {
+    const reason = 'bridge_upstream_response_idle_timeout';
+    expect(isInterruptedTurnError({ reason, message: 'request timed out' })).toBe(false);
+    expect(isAcceptedTurnContinuationOnlyReason(reason)).toBe(false);
+  });
   // 2026-07-30 实测的真实形态(Claude Code SDK 2.1.219 + Bedrock):SSE 流被中途切断,
   // terminal_reason='api_error'、sdkError='server_error'、无 HTTP 状态码。这条用例是
   // 回归锚 —— 上游改文案时它会先红。

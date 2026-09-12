@@ -4415,18 +4415,19 @@ export class AgentInputCoordinator {
       }
       const sdkSessionId = await this.deps.getSdkSessionId(sessionId).catch(() => undefined);
       if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      const referenceContexts = await this.resolveReferenceContexts(head);
+      if (!this.isActiveTurnCurrent(sessionId, active)) return;
+      head.persistedContent = attachSessionReferenceMetadata(
+        head.persistedContent,
+        referenceContexts,
+      );
+      const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
       active.sendStarted = true;
       active.dispatchLifecycle = 'sending';
       // Freeze side-effect timestamps before entering vendor code. A dispatch
       // may synchronously emit the new turn's started marker before it returns;
       // post-dispatch acknowledgements must remain older than that marker.
       const preVendorDispatchAt = Math.max(0, Date.now() - 1);
-      const referenceContexts = await this.resolveReferenceContexts(head);
-      head.persistedContent = attachSessionReferenceMetadata(
-        head.persistedContent,
-        referenceContexts,
-      );
-      const makerUserMessage = buildMakerUserMessage(head, referenceContexts);
       const result = await this.deps.sendToAgent(sessionId, makerUserMessage, head.createOpts, {
         [AUTO_REVIEW_SOURCE_CONTENT]: head.autoReviewUserText ?? '',
         messageUuid: active.messageUuid,
