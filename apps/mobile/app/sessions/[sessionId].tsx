@@ -4223,6 +4223,12 @@ export default function SessionScreen() {
     projectedMessageWindowRef.current = { projection, sessionId };
     return projection;
   }, [messageStructureChangedIndexes, messageStructureToken, messages, sessionId]);
+  const previousRenderItemsRef = useRef<{
+    sessionId: string;
+    messages: readonly RemoteMessage[];
+    items: readonly MobileMessageRenderItem[];
+    prefix: MobileStreamingRenderPrefixCache | null;
+  } | null>(null);
   const confirmedUserClientIds = useMemo(() => new Set(
     (historyView.snapshot.ready
       ? historyViewLeaves(historyView.snapshot.items).flatMap((item) => item.type === 'messages' ? item.messages : [])
@@ -4239,7 +4245,11 @@ export default function SessionScreen() {
     );
     for (const item of settlingItemsForRender) {
       if (!confirmedUserClientIds.has(item.clientId)) {
-        items = appendOptimisticUserMessage(items, messages, item, sessionId);
+        // On reconnect the first render can contain both the reply and the
+        // vanished queue. Anchor to the last committed frame, not that reply.
+        const beforeDispatch = previousRenderItemsRef.current?.sessionId === sessionId
+          ? previousRenderItemsRef.current.messages : [];
+        items = appendOptimisticUserMessage(items, beforeDispatch, item, sessionId);
       }
     }
     return items;
@@ -4261,11 +4271,6 @@ export default function SessionScreen() {
     () => historyView.snapshot.ready ? historyView.snapshot.nextCursor : oldestMessageCursor(latestMessagesRef.current),
     [messageStructureToken, historyView.snapshot],
   );
-  const previousRenderItemsRef = useRef<{
-    sessionId: string;
-    items: readonly MobileMessageRenderItem[];
-    prefix: MobileStreamingRenderPrefixCache | null;
-  } | null>(null);
   const streamingRenderPrefixRef = useRef<MobileStreamingRenderPrefixCache | null>(null);
   const renderWindow = useMemo(
     () => {
@@ -4352,10 +4357,11 @@ export default function SessionScreen() {
     }
     previousRenderItemsRef.current = {
       sessionId,
+      messages,
       items: renderWindow.items,
       prefix: renderWindow.prefix,
     };
-  }, [renderWindow.items, renderWindow.prefix, sessionId]);
+  }, [messages, renderWindow.items, renderWindow.prefix, sessionId]);
   // Known stale entry content bypasses the quiet delay; routine sync stays subtle.
   const showSyncingIndicator = !showConnectionBanner && !showCachedHistoryNotice
     && (loading || historyView.snapshot.loading || status === 'connecting' || contentRecoveryState === 'syncing');

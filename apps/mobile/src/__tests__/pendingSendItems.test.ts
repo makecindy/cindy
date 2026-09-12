@@ -23,6 +23,7 @@ import type { QueuedRemoteMessage, RemoteMessage } from '@/session/types';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
 import { buildMobileStreamingRenderWindow } from '@/session/messageRenderStreamingCache';
+import { computeVanishedQueueItems } from '@/session/queueSettling';
 import { appendOptimisticUserMessage, projectOptimisticUserMessages, reconcileOptimisticUserMessages, type OptimisticUserMessage } from '@/session/optimisticUserMessages';
 
 const NO_IDS: ReadonlySet<string> = new Set();
@@ -121,6 +122,26 @@ describe('reply before user echo', () => {
     ), pending, new Set(slots.map((entry) => entry.message.clientId).filter((id) => !echoed.has(id))));
   }
   afterEach(() => { remoteSessionStore.clear(); vi.useRealTimers(); });
+
+  it('promotes a busy send when reconnect delivers its reply and empty queue together', () => {
+    push(row('current', 'user', 0));
+    push(row('current-reply', 'assistant', 1));
+    const previousQueue = [queued('sent')];
+    const committedMessages = remoteSessionStore.getMessages(sessionId);
+    // No reservation while busy. Both events arrive before the next UI commit.
+    expect(render(build({ queue: previousQueue }), []).at(-1)?.key).toBe('message-sent');
+    push(row('next-reply', 'assistant', 3));
+    const settling = computeVanishedQueueItems({
+      previous: previousQueue, current: [], previousSteeringClientIds: NO_IDS,
+      currentSteeringClientIds: NO_IDS, hiddenClientIds: NO_IDS, locallyRemovedClientIds: NO_IDS,
+    });
+    const slots = settling.reduce<readonly OptimisticUserMessage[]>((items, item) =>
+      appendOptimisticUserMessage(items, committedMessages, item, sessionId), []);
+    const expected = ['message-current', 'message-current-reply', 'message-sent', 'message-next-reply'];
+    expect(render(build({ settling }), slots).map((item) => item.key)).toEqual(expected);
+    push(row('sent', 'user', 2));
+    expect(render(build({ settling }), slots).map((item) => item.key)).toEqual(expected);
+  });
 
   it('invalidates the streaming prefix when a local user introduces a new turn boundary', () => {
     const old = [row('old-user', 'user', 0), { ...row('old-thinking', 'thinking', 1), content: { text: 'Old thought' } }];
