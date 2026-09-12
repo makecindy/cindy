@@ -1,19 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
-import type {
-  AgentEvent,
-  Maker,
-  Session,
-  SessionSendResult,
-} from '@cindy/maker-core';
+import type { AgentEvent, Maker, Session, SessionSendResult } from '@cindy/maker-core';
 import type { Scheduler } from '@cindy/maker-scheduler';
 import { SCHEDULER_RUN_ID_VENDOR_OPTION } from '@cindy/maker-scheduler';
-import type {
-  FireContext,
-  Logger,
-  Notifier,
-  Schedule,
-} from '@cindy/maker-scheduler';
+import type { FireContext, Logger, Notifier, Schedule } from '@cindy/maker-scheduler';
 
 const mocks = vi.hoisted(() => ({
   createMessage: vi.fn(),
@@ -166,10 +156,7 @@ function acceptingSend(): SendImpl {
   };
 }
 
-async function fireToCompletion(
-  runner: MakerScheduleRunner,
-  h: FakeSessionHarness,
-): Promise<void> {
+async function fireToCompletion(runner: MakerScheduleRunner, h: FakeSessionHarness): Promise<void> {
   const firePromise = runner.fire(baseSchedule(), createFireContext());
   await vi.waitFor(() => {
     expect(mocks.createMessage).toHaveBeenCalled();
@@ -258,10 +245,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       notifyImpl: async (_schedule, run) => (run.id === 'run-a' ? notifyA : notifyB),
     });
 
-    const fireA = runner.fire(
-      baseSchedule({ id: 'schedule-a' }),
-      createFireContext('run-a'),
-    );
+    const fireA = runner.fire(baseSchedule({ id: 'schedule-a' }), createFireContext('run-a'));
     await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(1));
     h.emit({ type: 'done', data: {} });
     await vi.waitFor(() =>
@@ -273,10 +257,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
 
     // A's turn is done, but its fire is still finalizing notification work.
     // B is accepted on the same session before A's finally runs.
-    const fireB = runner.fire(
-      baseSchedule({ id: 'schedule-b' }),
-      createFireContext('run-b'),
-    );
+    const fireB = runner.fire(baseSchedule({ id: 'schedule-b' }), createFireContext('run-b'));
     await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
     h.emit({ type: 'done', data: {} });
     await vi.waitFor(() =>
@@ -316,10 +297,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       notifyImpl: async (_schedule, run) => (run.id === 'run-a' ? notifyA : undefined),
     });
 
-    const fireA = runner.fire(
-      baseSchedule({ id: 'schedule-a' }),
-      createFireContext('run-a'),
-    );
+    const fireA = runner.fire(baseSchedule({ id: 'schedule-a' }), createFireContext('run-a'));
     await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(1));
     h.emit({ type: 'done', data: {} });
     await vi.waitFor(() =>
@@ -329,10 +307,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       ),
     );
 
-    const fireB = runner.fire(
-      baseSchedule({ id: 'schedule-b' }),
-      createFireContext('run-b'),
-    );
+    const fireB = runner.fire(baseSchedule({ id: 'schedule-b' }), createFireContext('run-b'));
     await vi.waitFor(() =>
       expect(setVendorOptions).toHaveBeenCalledWith({
         [SCHEDULER_RUN_ID_VENDOR_OPTION]: 'run-b',
@@ -353,14 +328,11 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(h.vendorOptions[SCHEDULER_RUN_ID_VENDOR_OPTION]).toBeUndefined();
   });
 
-  it('silentWhenIdle=true → 发送隐藏主动上报协议,落库仍保留原始 prompt', async () => {
+  it('每轮发送权威 firedAt 上下文,静默任务再追加主动上报协议,落库仍保留原始 prompt', async () => {
     const h = createSessionHarness(acceptingSend());
     const { runner } = createRunnerHarness(h.session, { silenced: false });
 
-    const firePromise = runner.fire(
-      baseSchedule({ silentWhenIdle: true }),
-      createFireContext(),
-    );
+    const firePromise = runner.fire(baseSchedule({ silentWhenIdle: true }), createFireContext());
     await vi.waitFor(() => {
       expect(mocks.createMessage).toHaveBeenCalled();
     });
@@ -371,6 +343,14 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
       content: string;
     };
     expect(sent.content.startsWith('check the PR status')).toBe(true);
+    expect(sent.content).toContain('[Scheduled run context]');
+    expect(sent.content).toContain('firedAtEpochMs: 1700000000100');
+    expect(sent.content).toContain('firedAtUtc: 2023-11-14T22:13:20.100Z');
+    expect(sent.content).toContain('firedAtInScheduleTimezone: 2023-11-15T06:13:20[Asia/Shanghai]');
+    expect(sent.content).toContain(
+      'Use the task instructions to determine the requested time range.',
+    );
+    expect(sent.content).not.toContain('outside this run');
     expect(sent.content).toContain('schedule_notify_current_run');
     expect(sent.content).toContain('Successful runs do not notify by default');
     expect(sent.content).toContain('call_tool');
@@ -380,7 +360,7 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     expect(body.content).toBe('check the PR status');
   });
 
-  it('silentWhenIdle=false → prompt 原样,不注入协议', async () => {
+  it('silentWhenIdle=false → 仍注入 firedAt 上下文,但不注入静默协议', async () => {
     const h = createSessionHarness(acceptingSend());
     const { runner } = createRunnerHarness(h.session, { silenced: false });
 
@@ -389,7 +369,43 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     const sent = (h.session.send as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
       content: string;
     };
-    expect(sent.content).toBe('check the PR status');
+    expect(sent.content.startsWith('check the PR status')).toBe(true);
+    expect(sent.content).toContain('[Scheduled run context]');
+    expect(sent.content).toContain('firedAtEpochMs: 1700000000100');
+    expect(sent.content).not.toContain('[Silent scheduled run]');
+    const [, body] = mocks.createMessage.mock.calls[0];
+    expect(body.content).toBe('check the PR status');
+  });
+
+  it('successive runs retain their own trigger time across Auckland DST and a UTC date boundary', async () => {
+    const h = createSessionHarness(acceptingSend());
+    const { runner } = createRunnerHarness(h.session, { silenced: false });
+    const schedule = baseSchedule({
+      timezone: 'Pacific/Auckland',
+      prompt: 'Find appointments for the next seven days',
+    });
+    const cases = [
+      ['2026-09-26T13:59:59.123Z', '2026-09-27T01:59:59[Pacific/Auckland]'],
+      ['2026-09-26T14:00:00.456Z', '2026-09-27T03:00:00[Pacific/Auckland]'],
+    ];
+    for (const [index, [utc, local]] of cases.entries()) {
+      const fire = runner.fire(schedule, {
+        ...createFireContext(`run-${index}`),
+        firedAt: Date.parse(utc),
+      });
+      await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(index + 1));
+      h.emit({ type: 'done', data: {} });
+      await fire;
+      const sent = (h.session.send as ReturnType<typeof vi.fn>).mock.calls[index][0] as {
+        content: string;
+      };
+      expect(sent.content).toContain(`firedAtEpochMs: ${Date.parse(utc)}`);
+      expect(sent.content).toContain(`firedAtUtc: ${utc}`);
+      expect(sent.content).toContain(`firedAtInScheduleTimezone: ${local}`);
+      expect(sent.content.startsWith(schedule.prompt)).toBe(true);
+      expect(sent.content).not.toContain('authoritative endpoint');
+      expect(mocks.createMessage.mock.calls[index][1].content).toBe(schedule.prompt);
+    }
   });
 
   it('failed + silenced → 仍然通知(fail-safe,异常必须可见)', async () => {
@@ -450,7 +466,10 @@ describe('MakerScheduleRunner silent-run notification skip', () => {
     // 投递卡住:此刻若还没认领,就存在竞态窗口
     let releaseNotify!: () => void;
     notifier.notify.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseNotify = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          releaseNotify = resolve;
+        }),
     );
 
     const firePromise = runner.fire(baseSchedule(), ctx);
