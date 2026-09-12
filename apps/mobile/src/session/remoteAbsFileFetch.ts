@@ -150,7 +150,7 @@ export async function fetchRemoteAbsFileOnce(
     return resolveMobileRemoteMedia(
       { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh, constraints) },
       { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
-      onOssKey || signal ? { onOssKey, signal } : undefined,
+      { onOssKey, signal, stream: false },
     );
   });
 }

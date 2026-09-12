@@ -43,6 +43,7 @@ export function readRemoteDeviceFile(
     return response.result as DeviceFileResult;
   };
   return readDeviceFile<LocalFileResult>({
+    stream: options.stream,
     signal: options.signal,
     isCurrent: () => isDataOwnerBroadcastScopeCurrent(owner),
     discard: async (result) => {
@@ -79,8 +80,7 @@ export function readRemoteDeviceFile(
     peer: async (metadata) => {
       if (
         metadata.size >
-          Math.min(options.maxPeerBytes ?? FILE_PEER_MAX_BYTES, FILE_PEER_MAX_BYTES) ||
-        (options.stream && /^(audio|video)\//.test(metadata.mimeType))
+          Math.min(options.maxPeerBytes ?? FILE_PEER_MAX_BYTES, FILE_PEER_MAX_BYTES)
       )
         return null;
       const result = await tryPeerFile(device, url, invoke, options.signal);

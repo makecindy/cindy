@@ -35,6 +35,8 @@ export interface MobileResolvedRemoteMedia {
 }
 
 export interface MobileRemoteMediaFetchOptions {
+  /** Local read intent only; false for consumers that copy complete bytes. */
+  stream?: boolean;
   skipCache?: boolean;
   thumbnail?: boolean;
   signal?: AbortSignal;
@@ -51,6 +53,7 @@ export interface MobileRemoteMediaResolverDeps {
 }
 
 export interface MobileRemoteMediaResolveOptions {
+  stream?: boolean;
   signal?: AbortSignal;
   /** 强制被控端绕过上传去重缓存(上次的 ossKey 已悬空时的自愈路径)。 */
   skipCache?: boolean;
@@ -160,6 +163,7 @@ export async function resolveMobileRemoteMedia(
     throw new Error(i18n.t("composer.attachments.notFetchableMedia"));
   }
   const fetchOpts = {
+    ...(opts?.stream !== undefined ? { stream: opts.stream } : {}),
     ...(opts?.onOssKey ? { onDiscardOssKey: opts.onOssKey } : {}),
     ...(opts?.signal ? { signal: opts.signal } : {}),
     ...(opts?.skipCache ? { skipCache: true } : {}),

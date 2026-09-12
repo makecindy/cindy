@@ -36,6 +36,27 @@ function harness() {
 }
 
 describe("mobile maker transport", () => {
+  it.each(["audio/mpeg", "video/mp4"])("streams %s while preserving peer for complete byte consumers", async (mimeType) => {
+    const metadata = { ossKey: "", size: 70_000, mimeType, transferRequired: true };
+    const direct = { ...metadata, transferRequired: false };
+    const peer = vi.fn(async () => direct);
+    const uninstall = installPeerFileDownload(peer);
+    const invoke = vi.fn(async (_device, _channel, args) => {
+      expect(args[0]).not.toHaveProperty("stream");
+      if (args[0].op === "caps") return { fileRead: true };
+      if (args[0].op === "fileUrl") return { ok: true, url: "xdt-file://open?path=/media" };
+      return args[0].prepareOnly ? metadata : { ...metadata, ossKey: "stream/key", transferRequired: false };
+    });
+    try {
+      const maker = createMobileMakerTransport({ deviceId: "d", invoke: invoke as RemoteInvoke });
+      expect((await maker.fetchRemoteMedia("xdt-file://open?path=/media")).ossKey).toBe("stream/key");
+      expect(peer).not.toHaveBeenCalled();
+      expect(await maker.fileBrowser.readBytes("/p", "media")).toBe(direct);
+      expect(peer).toHaveBeenCalledOnce();
+      expect(await maker.fetchRemoteMedia("xdt-file://open?path=/media", { stream: false })).toBe(direct);
+      expect(peer).toHaveBeenCalledTimes(2);
+    } finally { uninstall(); }
+  });
   it("does not return old-account OSS keys to a cleanup callback after account change", async () => {
     setMobileAuthOwner("first");
     const onDiscardOssKey = vi.fn();

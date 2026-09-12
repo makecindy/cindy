@@ -8,6 +8,17 @@ const metadata = {
   transferRequired: true,
 };
 describe("shared file read policy", () => {
+  it.each(["audio/mpeg", "video/mp4", "Audio/MP4"])("keeps %s playback on OSS but full-file reads on peer", async (mimeType) => {
+    const prepared = { ...metadata, mimeType };
+    const peer = vi.fn(async () => ({ ...prepared, transferRequired: false }));
+    const fallback = vi.fn(async () => ({ ...prepared, ossKey: "stream/key", transferRequired: false }));
+    expect((await readDeviceFile({ prepare: async () => prepared, peer, fallback, stream: true })).ossKey).toBe("stream/key");
+    expect(peer).not.toHaveBeenCalled();
+    expect(fallback).toHaveBeenCalledOnce();
+    await readDeviceFile({ prepare: async () => prepared, peer, fallback, stream: false });
+    expect(peer).toHaveBeenCalledOnce();
+    expect(fallback).toHaveBeenCalledOnce();
+  });
   it("returns an empty inline file without peer negotiation or OSS", async () => {
     const result = {
       ossKey: "",

@@ -864,6 +864,7 @@ export function createMobileMakerTransport({
     url: string,
     opts?: MobileRemoteMediaFetchOptions,
     fallback?: () => Promise<MobileRemoteMediaFetchResult>,
+    stream = opts?.stream ?? true,
   ) => {
     const fetch = (prepareOnly: boolean) =>
       call<MobileRemoteMediaFetchResult>(DEVICE_LINK_MEDIA_FETCH_CHANNEL, [
@@ -875,6 +876,7 @@ export function createMobileMakerTransport({
         },
       ]);
     return readDeviceFile({
+      stream,
       isCurrent,
       discard: (result) => {
         const uri = peerMediaUri(result);
@@ -1204,7 +1206,7 @@ export function createMobileMakerTransport({
         assertFileReadActive(signal);
         if (!reference.ok)
           throw new Error(reference.message ?? "FILE_READ_FAILED");
-        return fetchMedia(reference.url, { signal }, fallback);
+        return fetchMedia(reference.url, { signal }, fallback, false);
       },
       caps: (workdir) =>
         call("file-browser:remote-op", [{ op: "caps", workdir }]),
