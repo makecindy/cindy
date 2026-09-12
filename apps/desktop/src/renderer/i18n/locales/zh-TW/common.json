@@ -1977,6 +1977,7 @@
       },
       "genericOAuth": {
         "subtitle": "訂閱帳號",
+        "reopenLoginPage": "重新開啟登入頁面",
         "toast": {
           "loggedIn": "已登入 {{name}}",
           "loginFailed": "{{name}} 登入失敗，請重試",

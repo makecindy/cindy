@@ -20,7 +20,7 @@ import {
   type UnrecoverableProviderCredential,
 } from '../../secrets/providerSecretStore.js';
 import { throwIpcError } from '../../utils/ipcValidate.js';
-import { MAKER_INVOKE } from '../channels.js';
+import { MAKER_INVOKE, MAKER_PUSH } from '../channels.js';
 import { registerProviderHandlers, type ProviderHandlerDeps } from '../providerHandlers.js';
 import { clearModelVisibilityMirror, waitForModelVisibilityMirror, getModelVisibilityMirrorSnapshot } from '../../maker-host/model-visibility-mirror.js';
 import { extractIpcError } from '../../../renderer/utils/ipcError';
@@ -3569,6 +3569,36 @@ describe('provider:oauth mutation ordering', () => {
 
     finishLogin({ ok: false });
     await expect(login).resolves.toEqual({ ok: false, reason: 'login_cancelled' });
+  });
+  it('sends browser recovery only to the owning renderer and rejects stale progress', async () => {
+    const harness = new IpcHarness();
+    const send = vi.fn();
+    let progress!: (url: string | null) => void;
+    let finish!: (result: { ok: boolean }) => void;
+    const owner = { dataOwnerId: 'owner-a', generation: 1 };
+    registerProviderHandlers(harness, makeDeps({
+      currentOwnerSession: () => ({ ...owner }),
+      assertTrustedSender: (event: any) => { event.sender.send = send; },
+      oauthLogin: async (_id, _current, onBrowserUrl) => {
+        progress = onBrowserUrl!;
+        return new Promise(resolve => { finish = resolve; });
+      },
+    }));
+    const login = harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_LOGIN, 'account-a', { ownerId: 'attempt-a' });
+    await vi.waitFor(() => expect(progress).toBeDefined());
+    progress('https://auth.openai.com/authorize?fake=1');
+    expect(send).toHaveBeenCalledExactlyOnceWith(MAKER_PUSH.PROVIDER_OAUTH_PROGRESS, {
+      providerId: 'account-a', ownerId: 'attempt-a', phase: 'browser-url', url: 'https://auth.openai.com/authorize?fake=1',
+    });
+    owner.generation++;
+    progress('https://auth.openai.com/authorize?wrong-owner=1');
+    expect(send).toHaveBeenCalledTimes(1);
+    owner.generation--;
+    await harness.invokeFrom(101, MAKER_INVOKE.PROVIDER_OAUTH_CANCEL, 'account-a', { releaseOwner: true, ownerId: 'attempt-a' });
+    progress('https://auth.openai.com/authorize?late=1');
+    expect(send).toHaveBeenCalledTimes(1);
+    finish({ ok: false });
+    await login;
   });
 
   it('invalidates post-login work when the provider is edited before discovery finishes', async () => {

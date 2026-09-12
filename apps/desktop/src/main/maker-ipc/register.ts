@@ -5529,7 +5529,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。
-    oauthLogin: async (providerId, isCurrent) => {
+    oauthLogin: async (providerId, isCurrent, onBrowserUrl) => {
       if (subscriptionAccountKind(providerId)) {
         const result = await loginSubscriptionAccount(providerId, isCurrent);
         if (result.ok && isCurrent()) {
@@ -5549,7 +5549,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (isCodexAccountProvider(providerId)) {
         const owner = getActiveAppSession();
         const current = () => isCurrent() && getActiveAppSession().generation === owner.generation;
-        const result = await loginCodexAccount(providerId, isCurrent);
+        const result = await loginCodexAccount(providerId, isCurrent, onBrowserUrl);
         if (!result.ok) return result;
         return { ...result, afterCommit: async () => {
           if (!current()) return;

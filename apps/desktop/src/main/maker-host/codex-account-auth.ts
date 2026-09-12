@@ -144,6 +144,7 @@ export function cancelCodexAccountLogin(providerId: string): void {
 export async function loginCodexAccount(
   providerId: string,
   isCurrent: () => boolean,
+  onBrowserUrl?: (url: string | null) => void,
 ): Promise<{
   ok: boolean;
   reason?: string;
@@ -192,16 +193,44 @@ export async function loginCodexAccount(
         detached: process.platform !== 'win32',
         windowsHide: true,
       });
-      // `codex login` opens the browser itself. Drain its output without opening
-      // the printed authorization URL a second time.
-      proc.stdout?.resume();
-      proc.stderr?.resume();
+      // The CLI opens the browser itself; its manual fallback message is unconditional.
+      // Keep one validated URL for an explicit user action, never a second auto-open.
+      let published = false;
+      let outputActive = true;
+      for (const stream of [proc.stdout, proc.stderr]) {
+        let pending = '';
+        let oversized = false;
+        stream?.setEncoding('utf8');
+        stream?.on('data', (chunk: string) => {
+          for (const part of chunk.split(/(?<=\n)/)) {
+            if (pending.length + part.length > 16_384) oversized = true;
+            if (!oversized) pending += part;
+            if (!part.endsWith('\n')) continue;
+            if (!oversized && !published && outputActive && current()) {
+              const candidate = pending.match(/https:\/\/auth\.openai\.com\/[^\s\x1b]+/)?.[0];
+              if (candidate) {
+                const url = new URL(candidate);
+                if (url.origin === 'https://auth.openai.com' &&
+                    ['/authorize', '/oauth/authorize'].includes(url.pathname) &&
+                    !url.username && !url.password && !url.hash) {
+                  published = true;
+                  onBrowserUrl?.(url.href);
+                }
+              }
+            }
+            pending = '';
+            oversized = false;
+          }
+        });
+      }
       const timeout = setTimeout(operation.cancel, 5 * 60_000);
       proc.once('error', (error) => {
+        outputActive = false;
         clearTimeout(timeout);
         reject(error);
       });
       proc.once('exit', (code) => {
+        outputActive = false;
         clearTimeout(timeout);
         resolve(code);
       });
@@ -253,6 +282,7 @@ export async function loginCodexAccount(
     fs.rmSync(path.join(home, 'invalidated'), { force: true });
     return { ok: true, firstLogin: previous === null, previousIdentity: previous?.label, rollbackCredentials };
   } finally {
+    onBrowserUrl?.(null);
     if (logins.get(home) === operation) logins.delete(home);
     try {
       await fsp.rm(staging, { recursive: true, force: true });

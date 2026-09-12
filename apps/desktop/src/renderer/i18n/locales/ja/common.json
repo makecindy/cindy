@@ -1977,6 +1977,7 @@
       },
       "genericOAuth": {
         "subtitle": "サブスクリプションアカウント",
+        "reopenLoginPage": "ログインページを再度開く",
         "toast": {
           "loggedIn": "{{name}} にログインしました",
           "loginFailed": "{{name}} にログインできませんでした。再試行してください。",

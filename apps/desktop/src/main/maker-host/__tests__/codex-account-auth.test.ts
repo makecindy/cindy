@@ -96,9 +96,30 @@ afterEach(() => {
 
 describe('native Codex account credentials', () => {
   it('leaves opening the authorization page to Codex even when both streams print its URL', async () => {
-    expect((await loginCodexAccount('account-a', () => true)).ok).toBe(true);
+    const progress = vi.fn();
+    expect((await loginCodexAccount('account-a', () => true, progress)).ok).toBe(true);
+    expect(progress.mock.calls).toEqual([['https://auth.openai.com/authorize?test=1'], [null]]);
     expect(shell.openExternal).not.toHaveBeenCalled();
     expect(codexAccountState('account-a').authenticated).toBe(true);
+  });
+  it('retains a chunked fallback URL while the CLI waits, rejects unrelated output and clears on cancel', async () => {
+    state.hold = true;
+    const progress = vi.fn();
+    const pending = loginCodexAccount('account-a', () => true, progress);
+    await vi.waitFor(() => expect(state.child).not.toBeNull());
+    state.child.stderr.write('https://auth.openai.com.evil.test/oauth/authorize?bad=1\n');
+    state.child.stderr.write('https://auth.openai.com/not-login?bad=1\n');
+    state.child.stderr.write('x'.repeat(17_000) + 'https://auth.openai.com/authorize?bad=1\n');
+    state.child.stderr.write('If your browser did not open, navigate to this URL to authenticate:\nhttps://auth.openai.com/oauth/author');
+    expect(progress).not.toHaveBeenCalled();
+    state.child.stderr.write('ize?state=fake&code_challenge=fake\n');
+    expect(progress).toHaveBeenCalledExactlyOnceWith('https://auth.openai.com/oauth/authorize?state=fake&code_challenge=fake');
+    expect(shell.openExternal).not.toHaveBeenCalled();
+    cancelCodexAccountLogin('account-a');
+    await expect(pending).resolves.toMatchObject({ ok: false, reason: 'login_cancelled' });
+    expect(progress).toHaveBeenLastCalledWith(null);
+    state.child.stderr.write('https://auth.openai.com/authorize?late=1\n');
+    expect(progress).toHaveBeenCalledTimes(2);
   });
   it('updates generated names after login while preserving custom names and avoiding duplicates', () => {
     const oldIdentity = 'person-a@example.test';
