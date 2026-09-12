@@ -12,8 +12,8 @@
  * 进了 data 之后:与正式消息同容器、同 key(`message-${clientId}`)、同一处位置,回流就是
  * 同一个列表位置上的内容替换 —— 原地变实,零跳动;listData 也不再为空,居中占位自然不出现。
  *
- * 顺序契约(与原 footer 一致):落定中(已出队、等回流)在前,排队中居中,本地 outbox 在后
- * —— outbox 是最晚发出的。
+ * 未派发条目保持队列 / outbox 顺序。已派发气泡在分组前占据本地用户消息的位置，
+ * 正式回流以同一个 clientId 原位替换，不比较控制端与主机的时钟。
  */
 import { syntheticTriggerKind } from '@cindy/maker-shared/synthetic-trigger';
 import {
@@ -28,6 +28,7 @@ import {
 } from '@/session/sentMessageAtoms';
 import type { QueuedRemoteMessage } from '@/session/types';
 import type { GetSentMessageImagePreview } from '@/session/sentMessageImagePreviews';
+import type { MobileMessageRenderItem } from '@/session/messageRenderModel';
 
 export type MobilePendingSendPhase =
   /** 已确认入队,等被控端派发。 */
@@ -117,6 +118,19 @@ export function appendPendingSendItems<T extends { key: string }>(
   const renderedKeys = new Set(rendered.map((item) => item.key));
   const remaining = pending.filter((item) => !renderedKeys.has(item.key));
   return remaining.length === 0 ? rendered : [...rendered, ...remaining];
+}
+
+/** Replace only local placeholders; durable echoes win even with stale queue state. */
+export function mergePendingSendItems(
+  rendered: readonly MobileMessageRenderItem[],
+  pending: readonly MobilePendingSendItem[],
+  optimisticClientIds: ReadonlySet<string>,
+): readonly MobileMessageRenderItem[] {
+  const byId = new Map(pending.map((item) => [item.clientId, item]));
+  const replaced = optimisticClientIds.size === 0 ? rendered : rendered.map((item) =>
+    item.type === 'message' && optimisticClientIds.has(item.message.source.clientId)
+      ? byId.get(item.message.source.clientId) ?? item : item);
+  return appendPendingSendItems(replaced, pending);
 }
 
 /**
