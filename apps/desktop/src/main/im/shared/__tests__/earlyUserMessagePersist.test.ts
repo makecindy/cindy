@@ -76,7 +76,10 @@ function wire(opts: { withPrepare: boolean } = { withPrepare: true }): Harness {
   const prepareAgentTurnText = opts.withPrepare
     ? vi.fn(async (event: IMMessageEvent) => {
         calls.push('prepare');
-        return { agentText: `<group_chat_context>…</group_chat_context>${event.text}` };
+        return {
+          agentText: `<group_chat_context>…</group_chat_context>${event.text}`,
+          contextSnapshot: { groupContext: 'filtered background' },
+        };
       })
     : undefined;
 
@@ -149,6 +152,9 @@ describe('messageHandler early user-message persist', () => {
     // 前缀只进模型消息。
     expect(turnArgs(h.runAgentTurn).agentText).toContain('group_chat_context');
     expect(turnArgs(h.runAgentTurn).text).toBe('总结上面');
+    expect(turnArgs(h.runAgentTurn).contextSnapshot).toEqual({
+      groupContext: 'filtered background',
+    });
   });
 
   it('会话忙 / 还没建行时 runner 返回 null ⇒ turn 不带该字段, 退回原行为', async () => {

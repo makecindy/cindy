@@ -2595,6 +2595,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "企业微信",
       "title": "企业微信智能机器人",
       "description": "连接企业微信智能机器人，在单聊和群聊中使用 {{appName}}。",
       "status": {
@@ -2818,6 +2819,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "钉钉",
       "title": "钉钉机器人",
       "description": "连接你自建的钉钉机器人，通过 Stream 模式在私聊和群聊中使用 {{appName}}。",
       "status": {
@@ -9117,6 +9119,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · 来自 {{platform}}",
+      "attachedContext": "本条附带的上下文",
+      "attachedContextCount": "本条附带的上下文（{{count}}）",
+      "groupBackgroundCount": "群聊背景（{{count}}）",
+      "referencedMessages": "引用消息（{{count}}）",
+      "referencedContext": "引用消息",
+      "groupBackground": "群聊背景",
       "viewThread": "查看 thread 上下文 ({{count}})"
     },
     "rewind": {

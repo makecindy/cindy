@@ -2595,6 +2595,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "WeCom",
       "title": "WeCom インテリジェントボット",
       "description": "WeCom インテリジェントボットを接続し、DM とグループチャットから {{appName}} を利用します。",
       "status": {
@@ -2818,6 +2819,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "DingTalk",
       "title": "DingTalk ボット",
       "description": "自作の DingTalk ボットを接続し、Stream モードで DM やグループから {{appName}} を利用します。",
       "status": {
@@ -9117,6 +9119,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}} から",
+      "attachedContext": "このメッセージに添付されたコンテキスト",
+      "attachedContextCount": "このメッセージに添付されたコンテキスト（{{count}}）",
+      "groupBackgroundCount": "グループチャットの背景（{{count}}）",
+      "referencedMessages": "参照メッセージ（{{count}}）",
+      "referencedContext": "参照メッセージ",
+      "groupBackground": "グループチャットの背景",
       "viewThread": "スレッドの文脈を見る ({{count}})"
     },
     "rewind": {

@@ -426,6 +426,7 @@ function setupSessionWithId(
 }
 
 interface TurnOverrides {
+  contextSnapshot?: { groupContext?: string; replyContext?: string };
   userMessageId?: string;
   text?: string;
   agentText?: string;
@@ -449,6 +450,7 @@ async function startDefaultTurn(onTurnComplete = vi.fn(), overrides: TurnOverrid
     userMessageId: overrides.userMessageId ?? 'msg-user',
     text: overrides.text ?? 'PROMPT_SECRET full user message TOKEN_VALUE file body',
     ...(overrides.agentText ? { agentText: overrides.agentText } : {}),
+    contextSnapshot: overrides.contextSnapshot,
     attachments: [],
     onTurnComplete,
     ...(overrides.onRouteResolved ? { onRouteResolved: overrides.onRouteResolved } : {}),
@@ -619,6 +621,71 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
     await runDefaultTurn();
 
     expect(mocks.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(h.session, 'im-anchor-client');
+    expect(mocks.persistUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: expect.objectContaining({ im: 'feishu', contextSnapshot: {} }),
+      }),
+    );
+  });
+
+  it('uses the adapter service identity for both early persistence and accepted enrichment', async () => {
+    fakeAdapter.messageSourceIm = () => 'lark';
+    try {
+      const h = setupSession(async () => ({ accepted: true }));
+      mocks.getMaker.mockReturnValue({
+        ...createMakerHarness(h.session),
+        getSession: () => h.session,
+      });
+      mocks.persistUserMessage.mockResolvedValue({ clientId: 'early-client' });
+      await getRunner().persistInboundUserMessageEarly!({
+        botContextId: 'cli_test_bot',
+        userId: 'ou_user',
+        text: 'question',
+      });
+      expect(mocks.persistUserMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          source: expect.objectContaining({ im: 'lark', contextSnapshot: {} }),
+        }),
+      );
+
+      await runDefaultTurn(vi.fn(), {
+        prePersistedUserMessage: { sessionId: 'feishu-session', clientId: 'early-client' },
+        contextSnapshot: { groupContext: 'saved background' },
+      });
+      expect(mocks.persistUserMessage).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          existingClientId: 'early-client',
+          source: expect.objectContaining({
+            im: 'lark',
+            contextSnapshot: { groupContext: 'saved background' },
+          }),
+        }),
+      );
+      expect(fakeAdapter.channel).toBe('feishu');
+    } finally {
+      delete fakeAdapter.messageSourceIm;
+    }
+  });
+
+  it('marks early IM rows with an empty snapshot rather than parsing the user body as context', async () => {
+    const h = setupSession(async () => ({ accepted: true }));
+    mocks.getMaker.mockReturnValue({
+      ...createMakerHarness(h.session),
+      getSession: () => h.session,
+    });
+    mocks.persistUserMessage.mockResolvedValue({ clientId: 'early-client' });
+    const text = '<group_chat_context>\n[群里最近的消息]\nuser pasted this\n</group_chat_context>';
+    await getRunner().persistInboundUserMessageEarly!({
+      botContextId: 'cli_test_bot',
+      userId: 'ou_user',
+      text,
+    });
+    expect(mocks.persistUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text,
+        source: { im: 'feishu', userText: text, contentFormat: 'user-text', contextSnapshot: {} },
+      }),
+    );
   });
 
   /**
@@ -627,12 +694,22 @@ describe('turnRunner send outcome policy (feishu adapter characterization)', () 
    */
   it('reuses a pre-persisted user message instead of writing a second row', async () => {
     const h = setupSession(async () => ({ accepted: true }));
+    mocks.persistUserMessage.mockResolvedValue({ clientId: 'early-client' });
 
     await runDefaultTurn(vi.fn(), {
       prePersistedUserMessage: { sessionId: 'feishu-session', clientId: 'early-client' },
+      contextSnapshot: { groupContext: '[Alice] saved background' },
     });
 
-    expect(mocks.persistUserMessage).not.toHaveBeenCalled();
+    expect(mocks.persistUserMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        existingClientId: 'early-client',
+        source: expect.objectContaining({
+          im: 'feishu',
+          contextSnapshot: { groupContext: '[Alice] saved background' },
+        }),
+      }),
+    );
     expect(mocks.beginTurnChangeSetAtDispatch).toHaveBeenCalledWith(h.session, 'early-client');
   });
 
