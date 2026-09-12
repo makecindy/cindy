@@ -1,6 +1,6 @@
 {
   "appBadge": {
-    "attentionCount": "확인이 필요한 작업: {{count}}"
+    "attentionCount": "확인이 필요한 세션: {{count}}"
   },
   "remoteDesktop": {
     "windowsTitle": "잠금 화면 제어",

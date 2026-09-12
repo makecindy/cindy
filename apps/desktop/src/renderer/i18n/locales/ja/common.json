@@ -1,6 +1,6 @@
 {
   "appBadge": {
-    "attentionCount": "対応が必要なタスク：{{count}}"
+    "attentionCount": "対応が必要なセッション：{{count}}"
   },
   "remoteDesktop": {
     "windowsTitle": "ロック画面の操作",

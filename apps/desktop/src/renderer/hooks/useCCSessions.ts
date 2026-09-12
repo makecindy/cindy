@@ -127,6 +127,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
       if (next !== null) {
         setSnapshotState({ data: next, filter });
         setIsLoading(false);
+        setError(null);
       }
     });
 
@@ -182,10 +183,7 @@ export function useCCSessions(options?: UseCCSessionsOptions): UseCCSessionsRetu
     [],
   );
 
-  const refreshSessions = useCallback(
-    () => sessionsStore.forceRefresh(filter),
-    [filter],
-  );
+  const refreshSessions = useCallback(() => sessionsStore.forceRefresh(filter), [filter]);
 
   /** Update a session's fields without re-fetching. Preserves list order — useful
    *  for renames that shouldn't re-sort. 实际转发给 store 让所有 subscriber 同步。 */
