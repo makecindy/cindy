@@ -2039,6 +2039,13 @@ export function registerRemoteSshIpc(): void {
   log.info('remote-ssh IPC registered', { home: os.homedir() });
 }
 
+/** Validate an existing Worker directory using the host filesystem, not local fs. */
+export async function probeRemoteWorkingDirectory(hostId: string, inputPath: string): Promise<string> {
+  const result = await statRemotePath(requireConnectedHost(hostId), inputPath);
+  if (result.kind !== 'dir') throw new Error('Remote working directory is unavailable');
+  return result.resolvedPath;
+}
+
 /**
  * stat-remote-path — POSIX-bash-driven stat that also expands a leading `~`
  * or `~/...` to `$HOME` safely (no `eval`, no command injection).

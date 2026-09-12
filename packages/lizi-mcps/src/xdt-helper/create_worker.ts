@@ -57,6 +57,7 @@ export interface CreateWorkerDeps {
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     fast?: boolean;
     label: string;
+    workingDir?: string;
     initialTask?: string;
   }) => Promise<CreateWorkerControlResult>;
 }
@@ -102,6 +103,8 @@ export const createWorkerSpecSchema = z.object({
     .min(1)
     .optional()
     .describe('可选, 创建后立即派给 worker 的第一条消息'),
+  working_dir: z.string().trim().min(1).max(4096).optional()
+    .describe('可选，Worker 所在主机上已存在的绝对工作目录；省略则继承 Lead。创建前校验并绑定，失败不回退；不创建目录或 Git worktree。'),
 }).strict();
 
 export type CreateWorkerSpec = z.infer<typeof createWorkerSpecSchema>;
@@ -130,6 +133,7 @@ const DESCRIPTION = [
   '- effort: 可选, reasoning/thinking 强度 (low / medium / high / xhigh / max / ultra)。Codex: 映射 OpenAI reasoning effort(max/ultra 仅部分模型如 GPT-5.6 Sol 支持); Claude Code: 映射 extended thinking token 预算(无 ultra,自动降级为 max)。显式传入时必须匹配所选 model 能力；当前 worker 模型都不把 minimal 作为可选思考档。',
   '- fast: 可选 boolean, 是否给 worker 开启 Fast 模式 (更快输出)。用户明确说「fast / 快速 / 开/关 fast」时显式传。对 codex 与 pi worker 生效 (且需所选模型声明 supportsFastMode; 否则自动降级为关); claude-code worker 忽略此参数 (其 fast mode 在 agent 层为 no-op)。不传则继承默认 (New Maker 面板默认或 lead session 的 fastMode)。',
   '- label: worker 短标识, 1-32 chars, 只能含字母、数字、-、_, 同 workflow 内唯一, 用于 switch_focus 定位',
+  '- working_dir: 可选，Worker 所在主机上已存在的绝对目录；创建前校验并绑定，省略继承 Lead，失败不回退。不创建目录或 Git worktree。',
   "- initial_task: 可选, 创建后立即派给 worker 的第一条消息；dispatch_outcome.wakeKind=queued 表示首条任务已成功入队(此时回传 queued_message_id, 被消费前可用 get_worker_queue_status / update_queued_message / cancel_queued_message / merge_queued_messages 管理)；dispatch_outcome.kind='session-dispatch' 且 dispatched=false，或 kind='host-send' 且 accepted=false，表示 worker 已创建但首条任务未送达 / 派发失败",
   '',
   '【硬边界】',
@@ -153,7 +157,7 @@ export function registerCreateWorkerTool(
     category: 'control',
     description: DESCRIPTION,
     inputShape: createWorkerSpecSchema.shape,
-    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task }) => {
+    handler: async ({ role, agent, model, provider_id, effort, fast, label, initial_task, working_dir }) => {
       const ctx = deps.getSessionContext?.() ?? deps;
       if (!ctx.sessionId) {
         return errorPayload('LEAD_NOT_SUPPORTED', '当前 session 类型不支持作为 Lead。');
@@ -173,6 +177,7 @@ export function registerCreateWorkerTool(
         effort,
         fast,
         label,
+        ...(working_dir !== undefined ? { workingDir: working_dir } : {}),
         initialTask: initial_task,
       });
       if (!result.ok) {

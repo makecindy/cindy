@@ -208,6 +208,13 @@ Worker 不出现在普通 sidebar。renderer 用 `isOrcaWorkerSession(session) =
 
 Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强制；toggle off 时 Lead/Worker 使用用户选的 workingDir，toggle on 时 Lead/Worker 共用同一个 worktree。
 
+`create_worker` / `create_workers` 的每个 Worker 可显式指定 `working_dir`（Worker
+所在主机上已存在的绝对目录）。省略时仍继承 Lead；显式指定时，在 reservation、session
+bootstrap 和首条任务派发之前校验并绑定，项目上下文与 agent 进程使用同一目录。
+本机目录解析真实路径并检查目录及协同开关；SSH 目录通过继承的 remoteHostId 在远端校验，
+不拿本机文件系统判断远端路径。无效目录或目标项目禁用协同时返回错误，不回退到 Lead
+目录，也不创建 Worker。该参数不创建目录或 Git worktree，不改变供应商、模型与权限继承。
+
 ### 协同运行时行为契约
 
 本节记录当前系统必须持续满足的运行时不变量。它们不是远期规划，而是 Lead / Worker 协同时已经依赖的行为契约。

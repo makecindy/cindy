@@ -55,6 +55,18 @@ function hardLimitFailure(hardLimit: number) {
 }
 
 describe('create_workers tool', () => {
+  it('preserves each worker directory independently in a batch', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+      .mockResolvedValueOnce(created(1, 5)).mockResolvedValueOnce(created(2, 5));
+    const registry = setup(createWorker);
+    await registry.call('create_workers', { workers: [
+      { ...worker(1), working_dir: '/tmp/first' },
+      { ...worker(2), working_dir: '/tmp/second with spaces' },
+    ] });
+    expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({ workingDir: '/tmp/first' }));
+    expect(createWorker).toHaveBeenNthCalledWith(2, expect.objectContaining({ workingDir: '/tmp/second with spaces' }));
+  });
+
   it('routes multi-worker requests to one deterministic batch tool', () => {
     const createWorker = vi.fn<CreateWorkerDeps['createWorker']>();
     const registry = setup(createWorker);

@@ -1,5 +1,6 @@
 import type { AgentKind } from '@cindy/maker-core';
 import type { AuthStrategy } from '@cindy/model-providers';
+import path from 'node:path';
 
 import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-switch.js';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
@@ -188,6 +189,8 @@ export interface OrcaWorkerCreateParams {
    */
   providerId?: string | null;
   initialTask?: string;
+  /** Existing absolute directory on the Worker's host; omission inherits Lead. */
+  workingDir?: string;
   /** 显式值用于本次创建；缺省读取全局 Worker 创建偏好。 */
   workerPermissionMode?: OrcaWorkerPermissionMode;
 }
@@ -207,6 +210,8 @@ export interface OrcaWorkerCreationDeps {
   getLeadSessionRow(leadSessionId: string): Promise<OrcaLeadSessionSnapshot | null>;
   getWorkerDefaults(agent: AgentKind): OrcaWorkerDefaultsSnapshot;
   getWorkerPermissionMode(): OrcaWorkerPermissionMode;
+  /** Validate existence and target project policy before reserving or bootstrapping. */
+  resolveWorkerWorkingDir(dir: string, lead: OrcaLeadSessionSnapshot): Promise<string>;
   getAvailableModels(agent: AgentKind): OrcaWorkerModelCapabilities[];
   /**
    * 从同一次 provider registry 读取构造 Worker 路由上下文。
@@ -680,6 +685,20 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       return { ok: false, errorCode: 'NOT_FOUND', message: `lead session ${params.leadSessionId} not found` };
     }
 
+    let workingDir = lead.workingDir ?? '';
+    if (params.workingDir !== undefined) {
+      const requested = typeof params.workingDir === 'string' ? params.workingDir.trim() : '';
+      const paths = lead.remoteHostId ? path.posix : path;
+      if (!requested || requested.length > 4096 || requested.includes('\0') || !paths.isAbsolute(requested)) {
+        return { ok: false, errorCode: 'INVALID_PARAMS', message: 'working_dir must be an existing absolute directory on the Worker host' };
+      }
+      try {
+        workingDir = await deps.resolveWorkerWorkingDir(requested, lead);
+      } catch {
+        return { ok: false, errorCode: 'INVALID_PARAMS', message: 'working_dir is unavailable or collaboration is disabled for that directory; no Worker was started' };
+      }
+    }
+
     // 轮 42:解除「SSH remote lead 禁 Pi worker」闸 —— 该闸写于 Pi SSH remote 能力
     // 落地之前(前提「PiAgent.startSession 对 remoteHostId 一律 NotSupportedError」
     // 已不成立, 现 remote pi 会话全链路可用)。worker 创建走通用 remote 路径:
@@ -1010,12 +1029,12 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       const workerOpts = deps.buildCreateOptsWithStderr({
         id: workerSessionId,
         agentKind: params.agent,
-        // Worker 与 Lead 共享同一种 workspace 语义。dialogue Lead 虽然已有 main 自动分配
-        // 的运行目录,也不能把 Worker 落成 project,否则侧栏分组和项目能力都会误判。
-        workspaceKind: lead.workspaceKind,
-        workingDir: lead.workingDir ?? '',
+        // 未指定目录时保留 Lead 的 workspace 语义（包括 dialogue 托管目录）。
+        // 显式选择目录才使用 project，并在 bootstrap 前完成校验。
+        workspaceKind: params.workingDir === undefined ? lead.workspaceKind : 'project',
+        workingDir,
         // remote lead 的 worker 继承 remoteHostId:在同一台远端主机上 spawn,
-        // 与 lead 共享远端 workingDir;本地 lead 不带此字段 (本地 worker)。
+        // workingDir 在该远端校验；本地 lead 不带此字段（本地 worker）。
         ...(lead.remoteHostId ? { remoteHostId: lead.remoteHostId } : {}),
         model: resolved.model,
         providerId: resolved.providerId,
