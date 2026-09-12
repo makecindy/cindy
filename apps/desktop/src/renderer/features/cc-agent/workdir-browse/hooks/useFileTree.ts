@@ -575,11 +575,20 @@ async function initStore(store: FileTreeStore): Promise<void> {
 
   // Initial root fetch + 已 restore expanded 目录的并行 lazy fetch。每个 listDir
   // <12ms,即使 50 个 restored 也能在 <1s 内 warm 完。
-  // 只 warm restored:seed 带来的子树缓存是过渡显示用的旧数据,不去重拉 ——
-  // 重拉等于给被忽略路径白发 listDir,而它们本来就只活到 root 数据回来。
+  //
+  // seed 带来的展开父目录(不在 restored 里的那些)按**方向**分别处理:
+  //  - 切到 reveal:hidden 态的数据缺了被忽略目录,不重拉就永远看不到
+  //    node_modules / build(评审 P2),所以按新 matcher 重拉一遍;
+  //  - 切到 hidden:reveal 态的数据多出被忽略项,首帧已由
+  //    filterSeedTreeForHiddenView 就地滤掉,不再白发一轮 listDir。
+  const inheritedExpanded = [...store.snapshot.expanded].filter(
+    (p) => p !== ROOT_KEY && !restored.has(p),
+  );
+  const refetchInherited = store.showIgnoredDirs ? inheritedExpanded : [];
   await Promise.all([
     fetchDir(store, ROOT_KEY),
     ...[...restored].map((p) => fetchDir(store, p)),
+    ...refetchInherited.map((p) => fetchDir(store, p)),
   ]);
   store.snapshot = { ...store.snapshot, initialLoading: false };
   emit(store);

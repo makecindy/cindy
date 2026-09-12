@@ -165,6 +165,12 @@ export class WorkdirWatchManager {
         else current.delete(consumerId);
         if (current.size === 0) this.desired.delete(workdir);
       }
+      // 回滚改变了并集。而且失败可能就发生在「选项变化 → closeEntry 拆掉旧
+      // watcher → startInner 失败」之后:原有消费者此刻**没有 watcher**。按恢复
+      // 后的意图再收敛一次,否则它会静默失去直播,只能等自己重连或用户手动刷新。
+      void this.reconcile(workdir).catch((rerr) =>
+        log.warn('watch reconcile after rollback failed', workdir, String(rerr)),
+      );
       throw err;
     }
   }
@@ -257,6 +263,7 @@ export class WorkdirWatchManager {
     entry.watcher = watcher;
     if (this.stopDuringStart.delete(workdir)) {
       // 启动期间来了 stop(调用方的登记已清,不会再发第二次 stop):当场拆掉。
+      // 标记的清理归 reconcile 的 finally(成功 / 失败两条路径都走那里)。
       try {
         watcher.close();
       } catch {

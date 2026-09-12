@@ -325,4 +325,33 @@ describe('WorkdirWatchManager 过滤开关', () => {
     expect(h.created.every((c) => c.closed)).toBe(true);
     manager.stopAll();
   });
+
+  /**
+   * 自查发现：回滚改变了并集，而且失败可能就发生在「选项变化 → closeEntry 拆掉旧
+   * watcher → startInner 失败」之后 —— 原有消费者此刻没有 watcher。回滚后必须按
+   * 恢复后的意图再收敛一次，否则它会静默失去直播。
+   */
+  it('启动失败回滚后按恢复的意图重建原有消费者的 watcher', async () => {
+    const manager = new WorkdirWatchManager(() => {});
+    // A（隐藏）先建好 watcher。
+    await manager.start('/repo', {}, 'desktop-tree');
+    expect(h.created).toHaveLength(1);
+
+    // B（reveal）到来：并集变化 → 拆旧重建；让这次 matcher 加载失败。
+    let failWith = (_err: Error): void => {};
+    h.gate = new Promise<void>((_resolve, reject) => {
+      failWith = reject;
+    });
+    const failing = manager.start('/repo', { showIgnoredDirs: true }, 'device-link');
+    failWith(new Error('matcher load failed'));
+    await expect(failing).rejects.toThrow('matcher load failed');
+    await new Promise((resolve) => setTimeout(resolve, 0)); // 等回滚后的 reconcile
+
+    // 回滚后只剩 A 的意图：必须有一个活着的 watcher 用隐藏 matcher。
+    expect(h.created).toHaveLength(2);
+    expect(h.created[0].closed).toBe(true);
+    expect(h.created[1].closed).toBe(false);
+    expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(false);
+    manager.stopAll();
+  });
 });

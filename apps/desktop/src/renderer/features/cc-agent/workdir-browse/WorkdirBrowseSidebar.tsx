@@ -619,8 +619,14 @@ export function WorkdirBrowseSidebar({
 
       // 文件夹 rename:把 expanded 持久化里所有 oldRel / oldRel/* 的条目改前缀。
       // 实时 expanded 集合不改 — 反正打开重命名后的新文件夹时会重新 fetch。
+      //
+      // scope 必须与 tree store **实际生效**的开关一致:device-link 被控端不支持
+      // 「显示被忽略的目录」时 useFileTree 会退回隐藏态 store;若这里仍按用户偏好
+      // 写 reveal scope,迁移就落在不生效的那一格 —— 当前隐藏 scope 仍存旧路径,
+      // 面板重挂载后会去请求已不存在的目录,新目录的展开态也丢了(评审 P2)。
       if (entry.type === 'directory') {
-        const persisted = loadExpandedSet(workdir, { showIgnoredDirs });
+        const scopedShowIgnoredDirs = showIgnoredDirs && tree.showIgnoredDirsSupported !== false;
+        const persisted = loadExpandedSet(workdir, { showIgnoredDirs: scopedShowIgnoredDirs });
         let dirty = false;
         const next = new Set<string>();
         for (const p of persisted) {
@@ -634,10 +640,19 @@ export function WorkdirBrowseSidebar({
             next.add(p);
           }
         }
-        if (dirty) saveExpandedSet(workdir, next, { showIgnoredDirs });
+        if (dirty) saveExpandedSet(workdir, next, { showIgnoredDirs: scopedShowIgnoredDirs });
       }
     },
-    [renamingPath, tree.entries, workdir, showIgnoredDirs, selectedPath, setSearchParams, t],
+    [
+      renamingPath,
+      tree.entries,
+      tree.showIgnoredDirsSupported,
+      workdir,
+      showIgnoredDirs,
+      selectedPath,
+      setSearchParams,
+      t,
+    ],
   );
 
   // 右键 文件 → Copy File Path。Electron renderer 启用了 clipboard write,

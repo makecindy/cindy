@@ -401,6 +401,58 @@ describe('useFileTree showIgnoredDirs option', () => {
   });
 
   /**
+   * 评审 P2：反方向（hidden → reveal）不能只靠过滤 —— hidden 态的数据**缺**了被
+   * 忽略目录，不重拉的话开了开关也看不到 node_modules / build，一直到手动刷新。
+   * 所以继承来的展开父目录要按新 matcher 重拉一遍。
+   */
+  it('开开关时重拉继承的展开父目录,让嵌套被忽略目录显示出来', async () => {
+    const dir = (name: string, relPath: string): DirEntry => ({
+      name,
+      relPath,
+      type: 'directory',
+      size: 0,
+      mtimeMs: 1,
+    });
+    const hiddenRoot = [dir('packages', 'packages')];
+    const hiddenChild = [dir('foo', 'packages/foo')];
+    const revealedChild = [
+      dir('foo', 'packages/foo'),
+      dir('node_modules', 'packages/node_modules'),
+    ];
+    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) => {
+      if (!args.showIgnoredDirs) {
+        return Promise.resolve(args.relPath === 'packages' ? hiddenChild : hiddenRoot);
+      }
+      return Promise.resolve(args.relPath === 'packages' ? revealedChild : hiddenRoot);
+    });
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-reveal-refetch', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: false } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    await act(async () => {
+      view.result.current.toggleFolder('packages');
+    });
+    await waitFor(() => expect(view.result.current.entries.get('packages')).toEqual(hiddenChild));
+
+    mocks.listDir.mockClear();
+    await act(async () => {
+      view.rerender({ reveal: true });
+    });
+    await waitFor(() =>
+      expect(view.result.current.entries.get('packages')).toEqual(revealedChild),
+    );
+    // 重拉的确实是那个继承来的展开父目录。
+    expect(mocks.listDir).toHaveBeenCalledWith(
+      expect.objectContaining({ relPath: 'packages', showIgnoredDirs: true }),
+    );
+
+    view.unmount();
+  });
+
+  /**
    * 兄弟 store 还在首次 listDir 上（慢通道）时不能冒充「已加载」：没有可显示内容
    * 就保持 initialLoading，否则 FileTreeView 会把空 rows 渲染成「此文件夹为空」
    * 而不是延迟 loading 态。
