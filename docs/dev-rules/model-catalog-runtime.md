@@ -76,9 +76,18 @@ Server 目录；不改 Gateway 的价格、成员、上下文与可用性。
 
 ### 模型简介本地化
 
-Desktop 模型选择器（含收藏）、旧入口的配置浮层及设置详情统一使用
+Desktop 模型选择器、旧入口的配置浮层及设置详情在展示简介时统一使用
 `renderer/lib/modelDescriptions.ts` 解析本地简介，文案放在五语 `common.json` 的
 `modelDescriptions`。只写简短用途，不从文案推导能力、协议、价格、窗口或默认档位。
+
+模型选择器的「全部」「收藏」分栏中，非 Cindy AI 模型的第二行优先展示供应商、
+已识别账号及可用的订阅套餐余量；账号已包含在供应商名称中时不重复追加。余量仅用
+重置倒计时和剩余百分比表示，不显示图表或周期标题。整行不换行，长来源名称省略，
+保留余量，悬停可查看全文。远程目录不读取本机账号余量；Cindy AI 及单供应商分栏
+继续展示本地简介。实现见 `renderer/components/new-chat/ModelSourceDetails.tsx` 和
+`UnifiedModelRow.tsx`，行为覆盖见 `renderer/__tests__/modelSourceDetails.test.tsx` 及
+`unifiedModelPanelRendering.test.tsx`。
+
 同系列不同接入路径复用用途说明；特殊长上下文版本保留单独的费用提醒。
 媒体用途优先尊重明确的类型字段，不能因厂商分组是 GPT 就介绍成编程模型。
 
@@ -137,7 +146,6 @@ Server 维护 Registry V4 的 `localModels`，本仓 `model-registry.json` 仅�
 不得重新增加独立的硬编码推荐名单。更新时协调完整 Registry revision 和服务端覆盖源，
 保持旧客户端的版本投影与显式空推荐语义。
 
-
 ### 原生缓存与简略列表的字段完整性（2026-09-07）
 
 Codex 的 `context_window` 是工作默认，`max_context_window` 是原生最大窗口，不能互相代替。
@@ -150,7 +158,6 @@ Codex 的 `context_window` 是工作默认，`max_context_window` 是原生最�
 下架型号不能因为补元数据而被重新加入。无原生数据时仍依赖 Registry，不能把读取失败推断成 872K 或 1M。
 
 2026-09-07 的全目录核对与源侧待办见 [2026-09-07 核对记录](../model-catalog-audit-2026-09-07.md)。
-
 
 ### 型号标准与 Gateway 控制（2026-09-07 用户裁决）
 
@@ -174,17 +181,17 @@ GPT `[1m]` 是旧窗口预设，退出 Desktop 管理和新选择清单；完整
 
 ## 从需求找到代码
 
-| 阶段 | 代码入口与函数 | 相关验证位置 |
-| --- | --- | --- |
-| 完整 Catalog / Registry 校验 | [catalog.ts](../../packages/model-providers/src/catalog.ts) `parseCatalog`；[modelAccessValidator.ts](../../packages/model-providers/src/modelAccessValidator.ts) `parseModelRegistry` | [catalog.test.ts](../../packages/model-providers/src/__tests__/catalog.test.ts)、[modelAccessValidator.test.ts](../../packages/model-providers/src/__tests__/modelAccessValidator.test.ts) |
-| 数据源、缓存、内置回退 | [source.ts](../../packages/model-providers/src/source.ts) `loadCatalogWithSource` / `selectNewerModelRegistry`；[modelRegistry.ts](../../packages/model-providers/src/modelRegistry.ts) `decideModelRegistrySnapshot` | [source-registry.test.ts](../../packages/model-providers/src/__tests__/source-registry.test.ts)、[modelRegistry.test.ts](../../packages/model-providers/src/__tests__/modelRegistry.test.ts) |
-| 资料继承与预设 | [modelMetadataLayers.ts](../../packages/model-providers/src/modelMetadataLayers.ts) `resolveModelMetadata`；[user-provider.ts](../../packages/model-providers/src/user-provider.ts) `buildUserProvider` | [modelMetadataLayers.test.ts](../../packages/model-providers/src/__tests__/modelMetadataLayers.test.ts)、[user-provider.test.ts](../../packages/model-providers/src/__tests__/user-provider.test.ts) |
-| Desktop 活动目录与刷新 | [createDesktopProviderService.ts](../../apps/desktop/src/main/maker-host/createDesktopProviderService.ts)；[active-catalog.ts](../../apps/desktop/src/main/maker-host/active-catalog.ts) | [host 测试](../../apps/desktop/src/main/maker-host/__tests__) |
-| 用户覆盖 | [localCatalogOverrides.ts](../../apps/desktop/src/main/maker-host/model-plane/localCatalogOverrides.ts)；[model-catalog-override-store.ts](../../apps/desktop/src/main/maker-host/model-catalog-override-store.ts) | host 的 modelPlane / override 测试 |
-| 多账号与公共目录身份 | [provider-identity.ts](../../packages/model-providers/src/provider-identity.ts) `providerCatalogId`；[subscription-account-models.ts](../../apps/desktop/src/main/maker-host/subscription-account-models.ts) `refreshSubscriptionAccountModels`；凭证适配见同目录 codex-account-auth / subscription-account-auth | [目录共用与账号隔离测试](../../apps/desktop/src/main/maker-host/__tests__/openAiAccountCatalogParity.test.ts)、[订阅凭证测试](../../apps/desktop/src/main/maker-host/__tests__/subscription-account-auth.test.ts) |
-| 媒体列表投影 | [providerMediaModels.ts](../../packages/model-providers/src/providerMediaModels.ts) `projectProviderMediaModels` | [providerMediaModels.test.ts](../../packages/model-providers/src/__tests__/providerMediaModels.test.ts) |
-| 本地候选与推荐 | [localModelCatalog.ts](../../packages/model-providers/src/localModelCatalog.ts)；[localModelRuntime.ts](../../apps/desktop/src/shared/localModelRuntime.ts) `recommendForHost` | [localModelRuntime.test.ts](../../apps/desktop/src/shared/__tests__/localModelRuntime.test.ts) |
-| 模型路由进入执行配置 | [runtime-configs.ts](../../apps/desktop/src/main/maker-host/runtime-configs.ts)、[model-plane](../../apps/desktop/src/main/maker-host/model-plane)、[pi-host.ts](../../apps/desktop/src/main/maker-host/pi-host.ts) | host 及 [maker-core 测试入口](../../packages/maker-core/src/agents) |
+| 阶段                         | 代码入口与函数                                                                                                                                                                                                                                                                                                   | 相关验证位置                                                                                                                                                                                                      |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| 完整 Catalog / Registry 校验 | [catalog.ts](../../packages/model-providers/src/catalog.ts) `parseCatalog`；[modelAccessValidator.ts](../../packages/model-providers/src/modelAccessValidator.ts) `parseModelRegistry`                                                                                                                           | [catalog.test.ts](../../packages/model-providers/src/__tests__/catalog.test.ts)、[modelAccessValidator.test.ts](../../packages/model-providers/src/__tests__/modelAccessValidator.test.ts)                        |
+| 数据源、缓存、内置回退       | [source.ts](../../packages/model-providers/src/source.ts) `loadCatalogWithSource` / `selectNewerModelRegistry`；[modelRegistry.ts](../../packages/model-providers/src/modelRegistry.ts) `decideModelRegistrySnapshot`                                                                                            | [source-registry.test.ts](../../packages/model-providers/src/__tests__/source-registry.test.ts)、[modelRegistry.test.ts](../../packages/model-providers/src/__tests__/modelRegistry.test.ts)                      |
+| 资料继承与预设               | [modelMetadataLayers.ts](../../packages/model-providers/src/modelMetadataLayers.ts) `resolveModelMetadata`；[user-provider.ts](../../packages/model-providers/src/user-provider.ts) `buildUserProvider`                                                                                                          | [modelMetadataLayers.test.ts](../../packages/model-providers/src/__tests__/modelMetadataLayers.test.ts)、[user-provider.test.ts](../../packages/model-providers/src/__tests__/user-provider.test.ts)              |
+| Desktop 活动目录与刷新       | [createDesktopProviderService.ts](../../apps/desktop/src/main/maker-host/createDesktopProviderService.ts)；[active-catalog.ts](../../apps/desktop/src/main/maker-host/active-catalog.ts)                                                                                                                         | [host 测试](../../apps/desktop/src/main/maker-host/__tests__)                                                                                                                                                     |
+| 用户覆盖                     | [localCatalogOverrides.ts](../../apps/desktop/src/main/maker-host/model-plane/localCatalogOverrides.ts)；[model-catalog-override-store.ts](../../apps/desktop/src/main/maker-host/model-catalog-override-store.ts)                                                                                               | host 的 modelPlane / override 测试                                                                                                                                                                                |
+| 多账号与公共目录身份         | [provider-identity.ts](../../packages/model-providers/src/provider-identity.ts) `providerCatalogId`；[subscription-account-models.ts](../../apps/desktop/src/main/maker-host/subscription-account-models.ts) `refreshSubscriptionAccountModels`；凭证适配见同目录 codex-account-auth / subscription-account-auth | [目录共用与账号隔离测试](../../apps/desktop/src/main/maker-host/__tests__/openAiAccountCatalogParity.test.ts)、[订阅凭证测试](../../apps/desktop/src/main/maker-host/__tests__/subscription-account-auth.test.ts) |
+| 媒体列表投影                 | [providerMediaModels.ts](../../packages/model-providers/src/providerMediaModels.ts) `projectProviderMediaModels`                                                                                                                                                                                                 | [providerMediaModels.test.ts](../../packages/model-providers/src/__tests__/providerMediaModels.test.ts)                                                                                                           |
+| 本地候选与推荐               | [localModelCatalog.ts](../../packages/model-providers/src/localModelCatalog.ts)；[localModelRuntime.ts](../../apps/desktop/src/shared/localModelRuntime.ts) `recommendForHost`                                                                                                                                   | [localModelRuntime.test.ts](../../apps/desktop/src/shared/__tests__/localModelRuntime.test.ts)                                                                                                                    |
+| 模型路由进入执行配置         | [runtime-configs.ts](../../apps/desktop/src/main/maker-host/runtime-configs.ts)、[model-plane](../../apps/desktop/src/main/maker-host/model-plane)、[pi-host.ts](../../apps/desktop/src/main/maker-host/pi-host.ts)                                                                                              | host 及 [maker-core 测试入口](../../packages/maker-core/src/agents)                                                                                                                                               |
 
 Server 对应入口为 `model-access-server/src/routes/modelCatalog.ts`、`services/catalogSource.ts` 与本仓独立维护的 contracts。
 先确认 Server 分支是否具备目标能力；不要把本仓解析器直接视为 Server 已部署的实现。

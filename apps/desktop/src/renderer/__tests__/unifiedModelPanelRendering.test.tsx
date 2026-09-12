@@ -3311,17 +3311,60 @@ describe('统一面板 · 合并行与 wire id', () => {
     expect(getEffort.mock.calls).not.toContainEqual(['claude-code', 'openai', 'gpt-5.6']);
   });
 
-  it('本地简介单行截断并挂 title，不透出上游英文描述，模型名同理', () => {
+  it('全部模型优先显示来源，Cindy AI 保留单行本地简介', () => {
     renderPanel();
     const row = rowFor('GPT-5.6');
     expect(row.textContent).not.toContain('A very long English');
-    const desc = within(row).getByText('用于编写代码、排查错误与改进程序。');
+    expect(row.querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
+    expect(within(row).queryByText('用于编写代码、排查错误与改进程序。')).toBeNull();
+    const desc = within(rowFor('GPT-5.5')).getByText('用于编写代码、排查错误与改进程序。');
     expect(desc.getAttribute('title')).toBe('用于编写代码、排查错误与改进程序。');
     expect(desc).toBeTruthy();
     expect(desc.className).toContain('truncate');
     const name = within(row).getByText('GPT-5.6');
     expect(name.getAttribute('title')).toBe('GPT-5.6');
     expect(name.className).toContain('truncate');
+  });
+
+  it.each([
+    { providerId: 'openai', modelName: 'GPT-5.6', accountField: 'openAiAccount', named: false },
+    { providerId: 'openai', modelName: 'GPT-5.6', accountField: 'openAiAccount', named: true },
+    { providerId: 'anthropic', modelName: 'Opus 5', accountField: 'subscriptionAccount', named: false },
+    { providerId: 'anthropic', modelName: 'Opus 5', accountField: 'subscriptionAccount', named: true },
+  ])('全部和收藏显示识别出的账号，不重复已有账号名：$providerId / $named', ({ providerId, modelName, accountField, named }) => {
+    const original = providersRef.providers;
+    const identity = 'recognized@example.test';
+    providersRef.providers = original.map((value) => {
+      const provider = value as Record<string, unknown>;
+      return provider.id === providerId ? {
+        ...provider,
+        name: named ? `工作账号 · ${identity}` : '工作账号',
+        [accountField]: { source: 'oauth', identity },
+      } : provider;
+    });
+    try {
+      renderPanel();
+      expect(rowFor(modelName).querySelector('[data-model-source-details]')?.textContent).toBe(`工作账号 · ${identity}`);
+      fireEvent.click(within(rowFor(modelName)).getByRole('button', { name: '存为收藏' }));
+      fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
+      expect(rowFor(modelName).querySelector('[data-model-source-details]')?.textContent).toBe(`工作账号 · ${identity}`);
+    } finally {
+      providersRef.providers = original;
+    }
+  });
+
+  it('收藏保持来源第二行，切到单供应商分栏恢复简介', () => {
+    renderPanel();
+    fireEvent.click(within(rowFor('GPT-5.6')).getByRole('button', { name: '存为收藏' }));
+    fireEvent.click(document.querySelector('[data-rail-item="favorites"]')!);
+    expect(rowFor('GPT-5.6').querySelector('[data-model-source-details]')?.textContent).toBe('OpenAI');
+    fireEvent.click(document.querySelector('[data-rail-item="provider:openai"]')!);
+    const providerRows = within(screen.getByRole('listbox')).getAllByText('GPT-5.6');
+    for (const name of providerRows) {
+      const row = name.closest('[data-unified-anchor]') as HTMLElement;
+      expect(row.querySelector('[data-model-source-details]')).toBeNull();
+      expect(within(row).getByText('用于编写代码、排查错误与改进程序。')).toBeTruthy();
+    }
   });
 
   it('没有折扣的行不渲染折扣徽标', () => {

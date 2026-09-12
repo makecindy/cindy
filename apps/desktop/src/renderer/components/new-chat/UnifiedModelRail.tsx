@@ -5,6 +5,7 @@ import { useTranslation } from 'react-i18next';
 import type { ProviderView } from '@cindy/model-providers';
 
 import { cn } from '@/lib/utils';
+import { providerAccountLabel } from '@/lib/providerDisplayName';
 import { Tip } from '@/components/ui/tooltip';
 
 import { useProviderWeeklyQuota } from './useProviderWeeklyQuota';
@@ -137,22 +138,6 @@ function ProviderQuotaButton(props: RailButtonProps & { provider: ProviderView }
   return <RailButtonView {...props} quota={quota} />;
 }
 
-function accountLabel(label: string, identity?: string): string {
-  if (!identity || label === identity) return label;
-  // Independent logins already name the connection "Provider · identity".
-  // OpenAI also truncates that generated name to 50 characters and may add (2).
-  const baseLabel = label.replace(/ \(\d+\)$/, '');
-  if (baseLabel.endsWith(` · ${identity}`)) return label;
-  const separator = baseLabel.indexOf(' · ');
-  if (
-    separator >= 0 &&
-    baseLabel.length === 50 &&
-    `${baseLabel.slice(0, separator)} · ${identity}`.slice(0, 50) === baseLabel
-  )
-    return label;
-  return `${label} · ${identity}`;
-}
-
 function RailButtonView({
   label,
   accountIdentity,
@@ -172,7 +157,7 @@ function RailButtonView({
       ? null
       : `${t('quotaCard.weeklyLabel')} · ${t('quotaCard.remainingPercent', { percent: remaining })}`;
   const reset = formatQuotaResetCountdown(quota?.resetsAt, Date.now(), t);
-  const displayLabel = accountLabel(label, accountIdentity);
+  const displayLabel = providerAccountLabel(label, accountIdentity);
   const tooltip = quotaLabel ? (
     <>
       <div>{displayLabel}</div>

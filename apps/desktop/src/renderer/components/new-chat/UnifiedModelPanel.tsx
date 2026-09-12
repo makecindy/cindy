@@ -29,6 +29,7 @@ import { UnifiedFlyoutHost } from './UnifiedFlyoutHost';
 import { UnifiedModelRail } from './UnifiedModelRail';
 import { useUnifiedRowActions } from './useUnifiedRowActions';
 import { UnifiedModelRow } from './UnifiedModelRow';
+import { ModelSourceUsageProvider } from './ModelSourceDetails';
 import {
   anchorKey,
   favoriteMatchesSelection,
@@ -950,7 +951,7 @@ export function UnifiedModelPanel({
     [widthSizerActive, entries, favorites, effectiveEngineOf, providerOrder],
   );
 
-  return (
+  const panelContent = (
     <div
       className="flex min-h-0 min-w-0 shrink"
       style={{ height: `${listMaxHeight ?? 428}px` }}
@@ -1075,6 +1076,9 @@ export function UnifiedModelPanel({
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
+                      {...(effectiveRail.kind === 'all' || effectiveRail.kind === 'favorites'
+                        ? { sourceLabel: providerLabel(row.entry.providerId) }
+                        : {})}
                       selected={isSelectedRow(row.anchor, row.entry)}
                       active={sameAnchor(flyAnchor, row.anchor)}
                       isFavoriteRow={!!row.favorite}
@@ -1145,6 +1149,7 @@ export function UnifiedModelPanel({
                       entry={row.entry}
                       anchor={row.anchor}
                       config={config}
+                      sourceLabel={providerLabel(row.entry.providerId)}
                       selected={false}
                       active={false}
                       isFavoriteRow={!!row.favorite}
@@ -1230,5 +1235,10 @@ export function UnifiedModelPanel({
         </UnifiedFlyoutHost>
       )}
     </div>
+  );
+  return (
+    <ModelSourceUsageProvider providers={providers} enabled={localProviderUsage}>
+      {panelContent}
+    </ModelSourceUsageProvider>
   );
 }
