@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "확인이 필요한 세션: {{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "잠금 화면 제어",
     "windowsready": "현재 Cindy 실행에 허용되었습니다. Cindy를 다시 시작하면 관리자 승인이 다시 필요합니다.",

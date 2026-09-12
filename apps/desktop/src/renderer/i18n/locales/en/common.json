@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "Tasks needing attention: {{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "Lock screen control",
     "windowsready": "Enabled for this Cindy process. Restarting Cindy requires administrator authorization again.",

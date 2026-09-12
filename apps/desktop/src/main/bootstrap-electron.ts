@@ -467,7 +467,11 @@ import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
-import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
+import {
+  initAppBadgeService,
+  clearAllSessionAttention,
+  refreshWindowsAppBadge,
+} from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -2446,6 +2450,7 @@ registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
 setAppSessionCommitBoundaryHook(() => {
+  clearAllSessionAttention();
   remoteDesktopViewerWindows.reset();
   ghostPanelWindowsController.closeForOwnerChange();
   clearAllSessionProviders();
@@ -2973,6 +2978,7 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  refreshWindowsAppBadge();
   resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
   remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
@@ -3373,10 +3379,9 @@ function hasFocusedAppWindow(): boolean {
   return BrowserWindow.getAllWindows().some((win) => isFocusedAppContentWindow(win));
 }
 
-function syncAppFocusState(clearAttentionWhenFocused = false): void {
+function syncAppFocusState(): void {
   const appFocused = hasFocusedAppWindow();
   providerModelFocusRefreshTracker.sync(appFocused);
-  if (appFocused && clearAttentionWhenFocused) clearAllSessionAttention();
   getAgentIslandService()?.setAppFocused(appFocused);
 }
 
@@ -3396,7 +3401,7 @@ app.on('browser-window-focus', (_event, win) => {
     appFocusSyncTimer = null;
   }
   const focusedAppContent = isAppContentWindow(win);
-  syncAppFocusState(focusedAppContent);
+  syncAppFocusState();
   if (focusedAppContent) {
     syncPluginMarketForActiveOwner(30_000);
     // OAuth and system settings may complete outside Cindy. Focus is a
@@ -3891,6 +3896,7 @@ const createWindow = () => {
     showMainWindowAndRestoreFullscreen(mainWindow, {
       restoreFullscreen: shouldRestoreMacFullscreen,
     });
+    refreshWindowsAppBadge();
     if (!app.isPackaged) markDesktopDevWindowReady();
     void runComputerUseSmokeIfRequested();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
@@ -3955,12 +3961,7 @@ const createWindow = () => {
   // Keyboard hello when the window comes back from hide / minimize / Dock.
   attachWorkLouderCodexWindowReveal(mainWindow);
 
-  // App badge: 用户把任意 Cindy 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
-  // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个
-  // 路由 / 开没开会话 —— 之前清除逻辑寄生在 cc-agent sidebar 且只清 activeSessionId,
-  // 离开会话页(设置 / skillhub)或红点属于后台会话时就清不掉。clearAllSessionAttention
-  // 只清 app 级 badge,不向 Agent Island 转发逐 session 已读;in-app 的会话小圆点仍由
-  // renderer 自行管理(点进会话才消),随后通过 clearSessionAttention 显式同步。
+  // App badge 投影当前任务关注总数；窗口聚焦不等于读完所有任务，不清总数。
   // Agent Island smart suppression 同样按 app 级焦点判断:主窗 blur 到「在新窗口打开」
   // 的会话副窗时,用户仍在 Cindy 内,不能把 appFocused 置 false。
 

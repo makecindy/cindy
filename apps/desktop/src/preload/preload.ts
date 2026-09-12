@@ -114,7 +114,7 @@ import {
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
 import { RESOURCE_USAGE_WINDOW_OPEN_CHANNEL } from '../shared/resourceUsageWindow';
-import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
+import { APP_ATTENTION_COUNT_CHANNEL, SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
 import {
   VOICE_INPUT_TEST_CONNECTION_CHANNEL,
@@ -3568,6 +3568,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clear: (): Promise<{ configured: boolean; enabled: boolean }> =>
       ipcRenderer.invoke('wecomGroupNotification:clear'),
   },
+  notificationSetAppAttentionCount: (snapshot: import('../shared/sessionAttention').AppAttentionSnapshot): Promise<void> =>
+    ipcRenderer.invoke(APP_ATTENTION_COUNT_CHANNEL, snapshot),
   notificationMarkSessionAttention: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke('notification:mark-session-attention', sessionId),
   // intent:'explicit' = 用户真实看到了内容(报错 banner 聚焦驻留 / 全部标为已读等);
