@@ -376,6 +376,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const presenceAvailableByDeviceRef = useRef(new Map<string, boolean>());
   const rosterConsumerRef = useRef<(() => (devices: DeviceView[]) => void) | null>(null);
   const rosterRequestRef = useRef<{ client: DeviceLinkClient | null; epoch: number; promise: Promise<{ devices: DeviceView[] }> } | null>(null);
+  const rosterRequestGenerationRef = useRef(0);
   const presenceAvailabilityEpochsRef = useRef(createPresenceAvailabilityEpochs());
   const presencePendingRecoveryDeviceIdsRef = useRef(new Set<string>());
   const presenceUnavailableVerdictsRef = useRef(
@@ -404,10 +405,16 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const epoch = connectionEpochRef.current;
     const pending = rosterRequestRef.current;
     if (!options.fresh && pending?.client === client && pending.epoch === epoch) return pending.promise;
+    const generation = ++rosterRequestGenerationRef.current;
     const apply = rosterConsumerRef.current?.();
     const promise = auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
       baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 12_000,
-    }).then((result) => { apply?.(result.devices); return result; });
+    }).then((result) => {
+      // A fresh read supersedes every older roster consumer, even when the older
+      // response arrives first and would otherwise outrank the new snapshot.
+      if (rosterRequestGenerationRef.current === generation) apply?.(result.devices);
+      return result;
+    });
     rosterRequestRef.current = { client, epoch, promise };
     void promise.finally(() => {
       if (rosterRequestRef.current?.promise === promise) rosterRequestRef.current = null;

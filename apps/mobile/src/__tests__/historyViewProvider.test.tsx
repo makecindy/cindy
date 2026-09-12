@@ -154,6 +154,38 @@ describe('Provider device roster reads', () => {
     expect(await joined).toEqual({ devices: [] });
     expect(await fresh).toEqual({ devices: [desktop] });
   });
+
+  it('prevents an older roster response from superseding a newer fresh read', async () => {
+    const stale = deferredRoster();
+    const current = deferredRoster();
+    auth.apiFetch.mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
+    const client = transport.clients[0];
+
+    await act(async () => {
+      client.status = 'online';
+      client.statusChanged('online');
+    });
+    const joined = context.readDeviceList();
+    const fresh = context.readDeviceList({ fresh: true });
+
+    const offlineDesktop: DeviceView = {
+      deviceId: 'desktop', name: 'Desktop', platform: 'darwin', appVersion: 'test',
+      online: false, remoteControlEnabled: true, busy: false, lastSeenAt: new Date(1).toISOString(),
+      isSelf: false,
+    };
+    const onlineDesktop: DeviceView = { ...offlineDesktop, online: true };
+    await act(async () => {
+      stale.resolve({ devices: [offlineDesktop] });
+    });
+    expect(context.getPresenceAvailability('desktop')).toBeNull();
+    await act(async () => {
+      current.resolve({ devices: [onlineDesktop] });
+    });
+
+    expect(await joined).toEqual({ devices: [offlineDesktop] });
+    expect(await fresh).toEqual({ devices: [onlineDesktop] });
+    expect(context.getPresenceAvailability('desktop')).toBe(true);
+  });
 });
 
 describe('Provider network recovery priority', () => {
