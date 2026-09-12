@@ -8,16 +8,24 @@ const metadata = {
   transferRequired: true,
 };
 describe("shared file read policy", () => {
-  it.each(["audio/mpeg", "video/mp4", "Audio/MP4"])("keeps %s playback on OSS but full-file reads on peer", async (mimeType) => {
+  it.each(["audio/mpeg", "video/mp4", "image/png", "application/pdf", "application/octet-stream"])("keeps retained %s previews on OSS but full-file reads on peer", async (mimeType) => {
     const prepared = { ...metadata, mimeType };
     const peer = vi.fn(async () => ({ ...prepared, transferRequired: false }));
     const fallback = vi.fn(async () => ({ ...prepared, ossKey: "stream/key", transferRequired: false }));
-    expect((await readDeviceFile({ prepare: async () => prepared, peer, fallback, stream: true })).ossKey).toBe("stream/key");
+    expect((await readDeviceFile({ prepare: async () => prepared, peer, fallback, stream: true, peerResultIsTransient: true })).ossKey).toBe("stream/key");
     expect(peer).not.toHaveBeenCalled();
     expect(fallback).toHaveBeenCalledOnce();
-    await readDeviceFile({ prepare: async () => prepared, peer, fallback, stream: false });
+    await readDeviceFile({ prepare: async () => prepared, peer, fallback, stream: false, peerResultIsTransient: true });
     expect(peer).toHaveBeenCalledOnce();
     expect(fallback).toHaveBeenCalledOnce();
+  });
+  it.each([["image/png", 1], ["application/pdf", 1], ["audio/mpeg", 0], ["video/mp4", 0], ["Audio/MP4", 0]] as const)("preserves copied-peer adapter policy for %s", async (mimeType, peerCalls) => {
+    const prepared = { ...metadata, mimeType };
+    const peer = vi.fn(async () => ({ ...prepared, transferRequired: false }));
+    const fallback = vi.fn(async () => ({ ...prepared, ossKey: "stream/key" }));
+    await readDeviceFile({ prepare: async () => prepared, peer, fallback, stream: true });
+    expect(peer).toHaveBeenCalledTimes(peerCalls);
+    expect(fallback).toHaveBeenCalledTimes(1 - peerCalls);
   });
   it("returns an empty inline file without peer negotiation or OSS", async () => {
     const result = {

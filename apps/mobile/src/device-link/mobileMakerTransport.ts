@@ -878,6 +878,7 @@ export function createMobileMakerTransport({
       ]);
     return readDeviceFile({
       stream,
+      peerResultIsTransient: true,
       isCurrent,
       discard: (result) => {
         const uri = peerMediaUri(result);

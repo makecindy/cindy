@@ -12,7 +12,7 @@ import type { MobileRemoteMediaPresignResult } from "@/session/remoteMedia";
 import { peerMediaUri, peerMediaExpiry } from "@/device-link/peerFileRegistry";
 
 export interface ExportRemoteFileDeps {
-  /** Playback URLs must not reuse short-lived full-file peer results. */
+  /** Retained preview URLs must not reuse short-lived full-file peer results. */
   stream?: boolean;
   maker: Pick<MobileMakerTransport, "fileBrowser">;
   deviceId: string;

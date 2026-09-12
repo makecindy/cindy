@@ -19,8 +19,10 @@ export async function readDeviceFile<T extends DeviceFileResult>(options: {
   prepare(): Promise<DeviceFileResult>;
   peer(metadata: DeviceFileResult): Promise<T | null>;
   fallback(): Promise<DeviceFileResult>;
-  /** Playback keeps audio/video on the streaming fallback; exports read complete files. */
+  /** Retained preview/playback URL, rather than an immediate complete-file copy. */
   stream?: boolean;
+  /** Adapter returns expiring staging URLs without copying them into consumer-owned storage. */
+  peerResultIsTransient?: boolean;
   signal?: AbortSignal;
   isCurrent?(): boolean;
   discard?(result: DeviceFileResult | T): Promise<void> | void;
@@ -41,9 +43,9 @@ export async function readDeviceFile<T extends DeviceFileResult>(options: {
   const prepared = await options.prepare();
   if (!active()) return discardCancelled(prepared);
   if (prepared.transferRequired !== true) return prepared;
-  const direct = options.stream && /^(audio|video)\//i.test(prepared.mimeType)
-    ? null
-    : await options.peer(prepared);
+  const needsFallback = options.stream &&
+    (options.peerResultIsTransient || /^(audio|video)\//i.test(prepared.mimeType));
+  const direct = needsFallback ? null : await options.peer(prepared);
   if (direct && !active()) return discardCancelled(direct);
   else assertActive();
   if (direct) return direct;

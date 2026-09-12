@@ -36,7 +36,7 @@ function harness() {
 }
 
 describe("mobile maker transport", () => {
-  it.each(["audio/mpeg", "video/mp4"])("streams %s while preserving peer for complete byte consumers", async (mimeType) => {
+  it.each(["audio/mpeg", "video/mp4", "image/png", "application/pdf", "application/octet-stream"])("retains %s previews while preserving peer for complete byte consumers", async (mimeType) => {
     const metadata = { ossKey: "", size: 70_000, mimeType, transferRequired: true };
     const direct = { ...metadata, transferRequired: false };
     const peer = vi.fn(async () => direct);
@@ -152,7 +152,7 @@ describe("mobile maker transport", () => {
         (await maker.fetchRemoteMedia("xdt-file://open?path=/a")).inlineBase64,
       ).toBe("");
       expect(peer).not.toHaveBeenCalled();
-      expect(await maker.fetchRemoteMedia("xdt-file://open?path=/b")).toBe(
+      expect(await maker.fetchRemoteMedia("xdt-file://open?path=/b", { stream: false })).toBe(
         direct,
       );
       expect(peer).toHaveBeenCalledOnce();

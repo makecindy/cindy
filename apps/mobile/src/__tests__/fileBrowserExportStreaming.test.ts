@@ -6,7 +6,7 @@ import { clearPeerMedia, installPeerFileDownload, recordPeerMedia } from '@/devi
 vi.mock('@react-native-async-storage/async-storage', () => ({ default: {} }));
 
 describe('file browser playback and download', () => {
-  it.each(['audio/mpeg', 'video/mp4'])('keeps %s playback off cached peer downloads in either order', async (mimeType) => {
+  it.each(['audio/mpeg', 'video/mp4', 'image/png', 'application/pdf', 'application/octet-stream'])('keeps %s previews off cached peer downloads in either order', async (mimeType) => {
     for (const first of [false, true]) {
       const direct = { ossKey: '', size: 70_000, mimeType };
       const local = 'file:///preview-staging';
