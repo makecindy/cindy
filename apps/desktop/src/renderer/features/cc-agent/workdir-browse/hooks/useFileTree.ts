@@ -353,12 +353,19 @@ function findRevealSiblingSnapshot(
  * 查不到祖先列表(缓存被清 / 还没拉过)时保守保留 —— 宁可留一个 stale 展开位,
  * 也不能把用户真实的展开态删掉。
  *
- * 剪枝后**同步回写持久化**(评审 P2):过渡窗口里 root 数据还没到时,用户若做过
- * 一次 toggleFolder,那次 saveExpandedSet 会把继承来的 reveal-only 路径一并
- * 写进本 scope —— 不回写就会把它们固化进 localStorage,下次挂载按这些路径逐个
- * listDir(上限 200 个,SSH / device-link 上代价明显)。
+ * 剪枝后**同步回写持久化**（评审 P2）：过渡窗口里 root 数据还没到时，用户若做过
+ * 一次 toggleFolder，那次 saveExpandedSet 会把继承来的 reveal-only 路径一并
+ * 写进本 scope —— 不回写就会把它们固化进 localStorage，下次挂载按这些路径逐个
+ * listDir（上限 200 个，SSH / device-link 上代价明显）。
+ *
+ * `keep`：目标 scope **自己持久化过**的展开位，豁免剪枝。回写是整份覆盖，调用方
+ * 必须先把这些路径并进 `snapshot.expanded` 再调本函数，否则它们会被这次回写抹掉
+ * （评审 P1：借来的树只能当过渡内容，不能拿它否定本 scope 自己的记录）。
  */
-function pruneExpandedForCurrentTree(store: FileTreeStore): void {
+function pruneExpandedForCurrentTree(
+  store: FileTreeStore,
+  opts?: { keep?: ReadonlySet<string> },
+): void {
   if (!store.snapshot.entries.has(ROOT_KEY)) return;
   const reachable = (relPath: string): boolean => {
     const parts = relPath.split('/');
@@ -375,7 +382,7 @@ function pruneExpandedForCurrentTree(store: FileTreeStore): void {
   const next = new Set<string>();
   let changed = false;
   for (const relPath of store.snapshot.expanded) {
-    if (relPath === ROOT_KEY || reachable(relPath)) next.add(relPath);
+    if (relPath === ROOT_KEY || opts?.keep?.has(relPath) || reachable(relPath)) next.add(relPath);
     else changed = true;
   }
   if (!changed) return;
@@ -391,6 +398,12 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
   // 切开关路径:借另一半 reveal scope 的整棵树当首帧内容,不经过 initialLoading
   // 空白;首次挂载(无兄弟 store)仍走原来的 loading 路径。
   const seed = findRevealSiblingSnapshot(opts);
+  // 本 scope 自己持久化过的展开位:seed 是**过渡内容**,而下面的剪枝会同步回写
+  // 本 scope 的 localStorage —— 不先读出来并进快照,「借来的树里不可达」就会
+  // 连带抹掉本 scope 原有记录(评审 P1:切回隐藏态后目录无故全部折叠)。
+  const persistedExpanded = loadExpandedSet(opts.workdir, {
+    showIgnoredDirs: opts.showIgnoredDirs,
+  });
   // 兄弟 store 可能还卡在首次 listDir 上(慢通道):没有可显示内容时不得冒充
   // 「已加载」—— 否则 FileTreeView 会把 initialLoading:false + 空 rows 渲染成
   // 「此文件夹为空」,而不是延迟 loading 态。终态错误可显示(渲染错误占位)。
@@ -411,7 +424,8 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
             entries: opts.showIgnoredDirs
               ? seed.entries
               : filterSeedTreeForHiddenView(seed.entries),
-            expanded: seed.expanded,
+            // 借来的过渡展开态 + 本 scope 已有的持久记录(见上方 persistedExpanded)。
+            expanded: new Set([...seed.expanded, ...persistedExpanded]),
             // 新 store 自己还没有 in-flight 请求,seed 的 loadingPaths 不继承。
             loadingPaths: new Set(),
             initialLoading: false,
@@ -438,7 +452,9 @@ function getOrCreateStore(opts: Required<UseFileTreeOptions>): FileTreeStore {
   // 成功分支上，根请求失败时根本不会执行 —— 而 reveal-only 路径一旦被写进本
   // scope 的 localStorage（用户在错误恢复前操作目录、或 expandToPath 等路径），
   // 下次挂载就会变成最多 200 次无用 listDir（评审 P2）。剪完顺带回写本 scope。
-  pruneExpandedForCurrentTree(store);
+  // `keep` = 本 scope 自己的持久记录：借来的树只能判「借来的路径」，不能否定本
+  // scope 的展开位（评审 P1）。
+  pruneExpandedForCurrentTree(store, { keep: persistedExpanded });
   stores.set(key, store);
   return store;
 }

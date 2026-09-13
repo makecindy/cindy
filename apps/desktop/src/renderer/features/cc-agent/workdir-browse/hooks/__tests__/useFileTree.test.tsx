@@ -16,7 +16,9 @@ const mocks = vi.hoisted(() => {
     fileBrowserApiFor: vi.fn(),
     isDeviceTooOldError: vi.fn(() => false),
     listDir: vi.fn(),
-    loadExpandedSet: vi.fn(() => new Set<string>()),
+    loadExpandedSet: vi.fn(
+      (_workdir: string, _opts?: { showIgnoredDirs?: boolean }) => new Set<string>(),
+    ),
     deviceSupportsRevealIgnoredDirs: vi.fn(
       async (): Promise<boolean | null> => true,
     ),
@@ -75,6 +77,8 @@ describe('useFileTree refresh scheduling', () => {
     vi.clearAllMocks();
     mocks.eventCallbacks.length = 0;
     mocks.fileBrowserApiFor.mockReturnValue({ listDir: mocks.listDir });
+    // clearAllMocks 不重置实现：用例自设的 loadExpandedSet 行为要在每个用例前复位。
+    mocks.loadExpandedSet.mockImplementation(() => new Set<string>());
   });
 
   it('limits a directory refresh to one trailing scan during a watcher storm', async () => {
@@ -137,6 +141,8 @@ describe('useFileTree showIgnoredDirs option', () => {
     mocks.eventCallbacks.length = 0;
     mocks.listDir.mockResolvedValue([]);
     mocks.fileBrowserApiFor.mockReturnValue({ listDir: mocks.listDir });
+    // clearAllMocks 不重置实现：用例自设的 loadExpandedSet 行为要在每个用例前复位。
+    mocks.loadExpandedSet.mockImplementation(() => new Set<string>());
   });
 
   it('listDir / startWatch 带上开关值', async () => {
@@ -339,6 +345,103 @@ describe('useFileTree showIgnoredDirs option', () => {
     await waitFor(() => expect(view.result.current.entries.get('')).toEqual(hiddenRoot));
     // 整体替换完成：借来的 reveal-only 展开位被剪掉。
     expect(view.result.current.expanded.has('node_modules')).toBe(false);
+
+    view.unmount();
+  });
+
+  /**
+   * 评审 P1（PR #4398 轮七）：创建 store 时借的是另一半 scope 的过渡快照，而剪枝
+   * 会**同步回写本 scope 的 localStorage** —— 剪之前必须先读本 scope 自己的持久
+   * 记录并豁免它，否则切回隐藏态时用户原有（本 scope）的展开位会被一起抹掉。
+   */
+  it('切回隐藏态时保留本 scope 已持久化的展开位', async () => {
+    const revealedRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+      { name: 'docs', relPath: 'docs', type: 'directory', size: 0, mtimeMs: 1 },
+      { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    const hiddenRoot = revealedRoot.filter((entry) => entry.name !== 'node_modules');
+    mocks.listDir.mockImplementation((args: { showIgnoredDirs?: boolean }) =>
+      Promise.resolve(args.showIgnoredDirs ? revealedRoot : hiddenRoot),
+    );
+    // 上一次会话里 hidden scope 自己存过展开位：docs。
+    mocks.loadExpandedSet.mockImplementation(
+      (_workdir: string, opts?: { showIgnoredDirs?: boolean }) =>
+        opts?.showIgnoredDirs ? new Set<string>() : new Set(['docs']),
+    );
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-scope-keep', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: true } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+    await act(async () => {
+      view.result.current.toggleFolder('node_modules');
+    });
+    expect(view.result.current.expanded.has('node_modules')).toBe(true);
+
+    await act(async () => {
+      view.rerender({ reveal: false });
+    });
+
+    // 剪枝回写必须保留本 scope 既有的 'docs'，同时仍然剪掉借来的 node_modules。
+    const hiddenWrites = mocks.saveExpandedSet.mock.calls
+      .filter((call) => (call[2] as { showIgnoredDirs?: boolean } | undefined)?.showIgnoredDirs === false)
+      .map((call) => call[1] as Set<string>);
+    expect(hiddenWrites.length).toBeGreaterThan(0);
+    const lastWrite = hiddenWrites.at(-1)!;
+    expect(lastWrite.has('docs')).toBe(true);
+    expect(lastWrite.has('node_modules')).toBe(false);
+
+    // 内存里也保留：切回后 docs 仍是展开态。
+    expect(view.result.current.expanded.has('docs')).toBe(true);
+    expect(view.result.current.expanded.has('node_modules')).toBe(false);
+
+    view.unmount();
+  });
+
+  /**
+   * 评审 P1（PR #4398 轮七）的另一半：反向切到放行态时，seed 是**隐藏态**的树
+   * （本来就看不到被忽略目录），不能拿它判断放行态自己的展开位不可达 —— `keep`
+   * 必须豁免本 scope 的持久记录，否则用户在放行态展开的 node_modules 会在切回时
+   * 被剪掉。
+   */
+  it('切到放行态时保留本 scope 已持久化的展开位（借来的隐藏树判不了它）', async () => {
+    const hiddenRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    const revealedRoot: readonly DirEntry[] = [
+      ...hiddenRoot,
+      { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 2 },
+    ];
+    mocks.listDir.mockImplementation((args: { showIgnoredDirs?: boolean }) =>
+      Promise.resolve(args.showIgnoredDirs ? revealedRoot : hiddenRoot),
+    );
+    // 放行态 scope 上次会话存过 node_modules 展开位。
+    mocks.loadExpandedSet.mockImplementation(
+      (_workdir: string, opts?: { showIgnoredDirs?: boolean }) =>
+        opts?.showIgnoredDirs ? new Set(['node_modules']) : new Set<string>(),
+    );
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-scope-keep-reveal', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: false } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+
+    await act(async () => {
+      view.rerender({ reveal: true });
+    });
+
+    // 借来的隐藏树里没有 node_modules，不能因此把放行态自己的展开位剪掉：
+    // 要么没回写，要么回写里必须带着它。
+    const revealWrites = mocks.saveExpandedSet.mock.calls
+      .filter((call) => (call[2] as { showIgnoredDirs?: boolean } | undefined)?.showIgnoredDirs === true)
+      .map((call) => call[1] as Set<string>);
+    expect(revealWrites.every((set) => set.has('node_modules'))).toBe(true);
+    expect(view.result.current.expanded.has('node_modules')).toBe(true);
 
     view.unmount();
   });
@@ -802,6 +905,7 @@ describe('useFileTree device 的 showIgnoredDirs 能力探测', () => {
     mocks.eventCallbacks.length = 0;
     mocks.listDir.mockResolvedValue([]);
     mocks.fileBrowserApiFor.mockReturnValue({ listDir: mocks.listDir });
+    mocks.loadExpandedSet.mockImplementation(() => new Set<string>());
     mocks.deviceSupportsRevealIgnoredDirs.mockImplementation(async () => true);
     mocks.reconnectEpoch.current = 0;
   });
