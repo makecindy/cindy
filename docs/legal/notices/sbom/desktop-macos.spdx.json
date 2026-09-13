@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/cbf89f59ca0e1e2f8f57023a2e4d9827379aa5fe5cb5571be35979a076753ea4",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/2b748e6f6c5d64f3e0a5fe582372e5abff539cda6ba4e64d7530d41016996b4a",
   "creationInfo": {
-    "created": "2026-09-13T09:07:00Z",
+    "created": "2026-09-13T10:55:59Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -116,6 +116,16 @@
       "SPDXID": "SPDXRef-Package-4e840ef8561a058f",
       "versionInfo": "vendored",
       "downloadLocation": "https://github.com/openclaw/openclaw",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
+      "name": "OpenCodex compatibility sources (vendored)",
+      "SPDXID": "SPDXRef-Package-fa0d2644b7f5bf42",
+      "versionInfo": "c155cc7923dbc0102e27d79185505a85d4357b2c",
+      "downloadLocation": "https://github.com/lidge-jun/opencodex/tree/c155cc7923dbc0102e27d79185505a85d4357b2c",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
       "licenseDeclared": "MIT",
@@ -15061,6 +15071,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-4e840ef8561a058f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-fa0d2644b7f5bf42"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
