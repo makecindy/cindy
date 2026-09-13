@@ -723,7 +723,12 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
  *  只判**祖先段**：忽略名单是**目录**规则，同名普通文件（`dist` / `build` /
  *  `.cache` 这种没有扩展名的构建脚本、配置文件）在 listDir 里是照常显示的 ——
  *  把叶子段也判进去会让这些文件的 add/change/unlink 事件被丢掉，行陈旧到手动
- *  刷新（评审 P1）。 */
+ *  刷新（评审 P1）。
+ *
+ *  代价：被忽略目录**自身**的事件（`relPath='node_modules'`）也会转发给隐藏态
+ *  客户端。事件流不携带类型、同名普通文件必须放行，两者无法从路径区分；转发后
+ *  在隐藏态树里是 no-op（该目录不在 entries），只是每次目录级变更多一条无效 IPC。
+ *  这层本来就是粗粒度预过滤，精确判据在 renderer（queueEventRefresh）。 */
 function isInsideRevealableIgnoreDir(relPath: string): boolean {
   const segments = relPath.split('/');
   return segments.slice(0, -1).some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment));

@@ -10,7 +10,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import type { DirEntry } from '../../hooks/useFileTree';
-import { flattenTree } from '../treeRows';
+import { flattenTree, TREE_ROW_PITCH } from '../treeRows';
 import {
   _resetTreeScrollAnchorsForTests,
   computeTreeRestoreScrollTop,
@@ -109,8 +109,12 @@ describe('computeTreeScrollAnchor / computeTreeRestoreScrollTop', () => {
     });
   });
 
-  it('滚动超出末尾时钳到最后一行，不返回 null', () => {
-    expect(computeTreeScrollAnchor(rows, 100_000)?.rowKey).toBe('z.ts');
+  it('滚动超出末尾时钳到最后一行，且 offset 不越界', () => {
+    const anchor = computeTreeScrollAnchor(rows, 100_000);
+    expect(anchor?.rowKey).toBe('z.ts');
+    // 不变量：0 ≤ offset < pitch（scrollTop 越界时也不能让锚点记录失真）。
+    expect(anchor!.offset).toBeGreaterThanOrEqual(0);
+    expect(anchor!.offset).toBeLessThan(TREE_ROW_PITCH);
   });
 
   it('空树返回 null', () => {

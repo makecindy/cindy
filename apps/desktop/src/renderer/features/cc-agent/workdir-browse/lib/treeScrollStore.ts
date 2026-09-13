@@ -77,7 +77,9 @@ export function computeTreeScrollAnchor(
   if (!row) return null;
   return {
     rowKey: treeRowKey(row),
-    offset: offsetInList - index * TREE_ROW_PITCH,
+    // scrollTop 理论上不会超真实 maxScroll（浏览器会鉗），但 jsdom / 程序性赋值
+    // 下可能越界；这里守住「0 ≤ offset < pitch」的不变量，避免锚点记录失真。
+    offset: Math.min(offsetInList - index * TREE_ROW_PITCH, TREE_ROW_PITCH - 1),
   };
 }
 
