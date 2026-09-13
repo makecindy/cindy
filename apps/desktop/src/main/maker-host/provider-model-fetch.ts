@@ -127,7 +127,7 @@ function withoutCredentialHeaders(
   const normalized: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers ?? {})) {
     const lower = name.toLowerCase();
-    if (lower !== 'authorization' && lower !== 'x-api-key') normalized[lower] = value;
+    if (lower !== 'authorization' && lower !== 'x-api-key' && lower !== 'x-goog-api-key') normalized[lower] = value;
   }
   return normalized;
 }
@@ -149,7 +149,8 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const explicit = spec.modelsUrl?.trim();
   const modelsUrl = explicit ? parseModelsFetchUrl(explicit) : null;
   const discoveryUrl = explicit && modelsUrl?.origin === baseUrl.origin
-    ? explicit : deriveModelsDiscoveryUrl(spec.baseUrl);
+    ? explicit : spec.wireProtocol === 'google-generative-ai'
+      ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
   const mustStripCredentialHeaders =
     !!spec.apiKey || spec.authMethod === 'none' || spec.authMethod === 'oauth';
   const headers: Record<string, string> = mustStripCredentialHeaders
@@ -165,6 +166,8 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
     delete headers['anthropic-beta'];
     delete headers['x-api-key'];
     if (spec.apiKey) headers['authorization'] = `Bearer ${spec.apiKey}`;
+  } else if (spec.wireProtocol === 'google-generative-ai') {
+    if (spec.apiKey) headers['x-goog-api-key'] = spec.apiKey;
   } else if (anthropicMessages) {
     // Anthropic wire 的所有端点（含 GET /v1/models）都要求 anthropic-version，缺失直接 400。
     headers['anthropic-version'] = headers['anthropic-version'] ?? '2023-06-01';

@@ -1071,12 +1071,15 @@ it('imports an OpenCode Go Responses model into all three engines', async () => 
   await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
   const saved = vi.mocked(createCustomProvider).mock.calls[0][0];
   expect(saved.runtimes.pi?.models.filter(m => m.defaultEnabled !== false).map(m => m.id)).toEqual(['gpt-5.6-luna']);
-  expect(saved.runtimes['claude-code']?.models.find(m => m.id === 'gpt-5.6-luna')).toMatchObject({ id: 'gpt-5.6-luna', api: 'openai-responses' });
-  expect(saved.runtimes.codex?.models.find(m => m.id === 'gpt-5.6-luna')).toMatchObject({ id: 'gpt-5.6-luna', api: 'openai-responses' });
+  expect(saved.runtimes['claude-code']?.models.find(m => m.id === 'gpt-5.6-luna')).not.toHaveProperty('api');
+  expect(saved.runtimes.codex?.models.find(m => m.id === 'gpt-5.6-luna')).not.toHaveProperty('api');
   const model = buildUserProvider(saved, { presets: [preset] }).models.pi?.find(m => m.id === 'gpt-5.6-luna');
   expect(model).toMatchObject({ piApi: 'openai-responses', supportsImageInput: true });
   const projected = buildUserProvider(saved, { presets: [preset] });
-  for (const agent of projected.agents) expect(projected.models[agent]?.find(m => m.id === 'gpt-5.6-luna')?.defaultEnabled).toBe(agent !== 'claude-code');
+  for (const agent of projected.agents) {
+    expect(projected.models[agent]?.find(m => m.id === 'gpt-5.6-luna')).toMatchObject({ api: 'openai-responses', defaultEnabled: agent !== 'claude-code' });
+    expect(saved.runtimes[agent]?.models.find(m => m.id === 'gpt-5.6-luna')).not.toHaveProperty('route');
+  }
 });
 
 
@@ -1175,4 +1178,28 @@ it('imports the full Hermes inventory immediately, enables selected Pi models an
     expect(provider.models[agent]?.find(m => m.id === 'google/gemini-test')?.defaultEnabled).toBe(agent === 'pi');
     expect(provider.models[agent]?.find(m => m.id === 'other')?.defaultEnabled).toBe(false);
   }
+});
+
+
+it('keeps legacy curated recommendations selected and newly discovered models unchecked', async () => {
+  const preset = { id: 'selection-fixture', name: 'Selection Fixture', runtimes: {
+    pi: { baseUrl: 'https://selection.example/v1', wireProtocol: 'openai-chat' as const, models: [
+      { id: 'recommended', name: 'Recommended' },
+      { id: 'disabled', name: 'Disabled', defaultEnabled: false },
+    ] },
+  } };
+  window.electronAPI.maker.listProviderPresets = vi.fn(async () => ({ presets: [preset] }));
+  window.electronAPI.maker.fetchProviderModels = vi.fn(async () => ({ ok: true, models: [
+    { id: 'recommended', name: 'Recommended' }, { id: 'unspecified', name: 'Unspecified' },
+  ] }));
+  renderWizard(preset.id);
+  await screen.findByDisplayValue('Selection Fixture');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'fixture-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  await screen.findByText('Unspecified');
+  expect(screen.getAllByText('settings.providers.wizard.recommended')).toHaveLength(1);
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
+  const models = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models;
+  expect(models.filter(model => model.defaultEnabled !== false).map(model => model.id)).toEqual(['recommended']);
 });

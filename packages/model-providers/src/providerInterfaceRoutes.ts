@@ -1,6 +1,7 @@
 import interfaceModels from '../catalog/provider-interface-models.json';
 import raw from '../catalog/providers.json';
-import type { AgentKind, ProviderPreset, ProviderRuntimeModelConfig } from './types.js';
+import { compatibilityProtocol } from '@cindy/model-compat/protocol';
+import type { AgentKind, ProviderPreset, ProviderRuntimeModelConfig, ProviderWireProtocol } from './types.js';
 
 // These contracts describe supplier front doors, not a model manufacturer's API.
 // Sources and limits: docs/dev-rules/provider-interface-audit.md. Never infer an
@@ -28,15 +29,45 @@ const overrides: Record<string, Partial<Record<AgentKind, Route>>> = {
 };
 const clean = (value: string) => value.replace(/\/+$/, '');
 
+/** SDK adapter names and public wire languages share one projection. */
+export function providerWireProtocolForApi(api: string | null | undefined): ProviderWireProtocol | undefined {
+  const protocol = compatibilityProtocol(api);
+  return protocol === 'anthropic' ? 'anthropic-messages'
+    : protocol === 'google' ? 'google-generative-ai' : protocol ?? undefined;
+}
+
+/** Only Google's documented public endpoints have this path relationship.
+ * Custom proxies, account hosts and custom request paths are never rewritten. */
+export function providerBaseUrlForApi(baseUrl: string, api: string): string {
+  try {
+    const url = new URL(baseUrl);
+    if (url.origin !== 'https://generativelanguage.googleapis.com') return baseUrl;
+    const path = url.pathname.replace(/\/+$/, '');
+    if (!/^\/v1(?:beta)?(?:\/openai)?$/.test(path)) return baseUrl;
+    if (api === 'google-generative-ai') url.pathname = path.replace(/\/openai$/, '');
+    else if (api === 'openai-completions') url.pathname = `${path.replace(/\/openai$/, '')}/openai`;
+    else return baseUrl;
+    return url.toString().replace(/\/$/, '');
+  } catch { return baseUrl; }
+}
+
 /** The selected HTTP API and its route must agree. In particular, a model's
  * explicit Responses API cannot inherit a connection's Chat default. SDK-only
  * adapters retain their own transport, and custom request paths stay explicit. */
 export function alignModelApiRoute<T extends ProviderRuntimeModelConfig>(model: T, baseUrl: string, runtimeWire?: string): T {
   const api = model.api ?? model.piApi;
-  const wireProtocol = api === 'openai-completions' ? 'openai-chat'
-    : api === 'anthropic-messages' || api === 'openai-responses' ? api : undefined;
-  if (!wireProtocol || model.route?.requestPath || (model.route?.wireProtocol ?? runtimeWire) === wireProtocol) return model;
-  return { ...model, route: { ...model.route, baseUrl: model.route?.baseUrl ?? baseUrl, wireProtocol } };
+  const wireProtocol = providerWireProtocolForApi(api);
+  if (!api || !wireProtocol || model.route?.requestPath) return model;
+  const upstream = model.route?.baseUrl ?? baseUrl;
+  const target = providerBaseUrlForApi(upstream, api);
+  if (target === upstream && (model.route?.wireProtocol ?? runtimeWire) === wireProtocol) return model;
+  return { ...model, route: { ...model.route, baseUrl: target, wireProtocol } };
+}
+
+export function providerInterfaceDefaultRoute(presetId: string, agent: AgentKind, baseUrl: string) {
+  const route = contract(presetId, agent);
+  return route && [...route.inputs, route.baseUrl].some(input => clean(input) === clean(baseUrl))
+    ? { baseUrl: route.baseUrl, wireProtocol: providerWireProtocolForApi(route.api)! } : undefined;
 }
 function contract(presetId: string, agent: AgentKind): Route | undefined {
   const override = overrides[presetId]?.[agent];
@@ -69,7 +100,7 @@ export function providerInterfaceModelRoute<T extends ProviderRuntimeModelConfig
     if (!allowed.includes(clean(baseUrl)) || (model.route && !allowed.includes(clean(model.route.baseUrl)))) return model;
     if (!managed && ((model.api && model.api !== 'openai-completions') || (model.piApi && model.piApi !== 'openai-completions') || (model.route && model.route.wireProtocol !== 'openai-chat'))) return model;
     return { ...model, api: specific.api, ...(agent === 'pi' ? { piApi: specific.api } : {}), route: {
-      baseUrl: specific.baseUrl, wireProtocol: specific.api === 'anthropic-messages' || specific.api === 'openai-responses' ? specific.api : 'openai-chat',
+      baseUrl: specific.baseUrl, wireProtocol: providerWireProtocolForApi(specific.api) ?? 'openai-chat',
     } };
   }
   if (agent === 'pi') return model;

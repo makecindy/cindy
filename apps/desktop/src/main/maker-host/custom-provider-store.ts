@@ -189,7 +189,7 @@ function validateNoAuthLoopbackBoundary(
 }
 
 function allowedWireProtocols(_agent: string): readonly ProviderWireProtocol[] {
-  return ['openai-responses', 'openai-chat', 'anthropic-messages'];
+  return ['openai-responses', 'openai-chat', 'anthropic-messages', 'google-generative-ai'];
 }
 
 function isAllowedWireProtocol(agent: string, value: unknown): value is ProviderWireProtocol {
@@ -843,7 +843,8 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
       typeof r.wireProtocol === 'string' &&
       (r.wireProtocol === 'anthropic-messages' ||
         r.wireProtocol === 'openai-responses' ||
-        r.wireProtocol === 'openai-chat')
+        r.wireProtocol === 'openai-chat' ||
+        r.wireProtocol === 'google-generative-ai')
     ) {
       entry.wireProtocol = r.wireProtocol;
     } else if (agent === 'pi' && r.wireProtocol === undefined) {

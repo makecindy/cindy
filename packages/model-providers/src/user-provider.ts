@@ -1,4 +1,4 @@
-import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface } from './providerInterfaceRoutes.js';
+import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface, providerWireProtocolForApi, providerBaseUrlForApi } from './providerInterfaceRoutes.js';
 import { nativeModelAgents } from './modelProtocol.js';
 import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
 import { providerEndpointBindings, bindProviderPresetRuntime } from './providerEndpointTemplate.js';
@@ -389,7 +389,7 @@ function toRouting(
   headersState: "configured" | "unknown" | undefined,
   strategy: "api-key-header" | "oauth-token" | "oauth-passthrough" | "provider-oauth-header" | "none",
   modelsUrl?: string,
-  wireProtocol?: "anthropic-messages" | "openai-responses" | "openai-chat",
+  wireProtocol?: ProviderWireProtocol,
   piCatalogProviderId?: string,
   supportsImageGeneration?: boolean,
 ): RoutingDescriptor {
@@ -494,7 +494,7 @@ export function buildUserProvider(
         ...(agent === 'pi' && interfaceDefault.piApi ? { piApi: interfaceDefault.piApi } : {}),
         ...(interfaceDefault.route ? { route: { ...interfaceDefault.route } } : {}),
       } : storedModel;
-      const m = rt.requestPath ? storedModel : alignModelApiRoute(
+      const m = rt.requestPath ? configuredModel : alignModelApiRoute(
         providerInterfaceModelRoute(configuredModel, agent, rt.catalogPresetId, rt.baseUrl),
         rt.baseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
       );
@@ -536,13 +536,14 @@ export function buildUserProvider(
             !m.api && !m.piApi && !m.route)
           ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, rt.baseUrl)
             ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
-          ?? (followsPreset && sameRoute && presetModel?.api === m.api
+          ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
             ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
         : undefined;
       const importedApi = imported &&
         PI_MODEL_APIS.some(api => api === imported.execution.pi.api)
           ? imported.execution.pi.api as NonNullable<ProviderRuntimeModelConfig['piApi']>
-          : !m.route && presetApi ? presetApi : undefined;
+          : !m.route && presetApi ? presetApi
+          : wire === 'google-generative-ai' ? 'google-generative-ai' : undefined;
       const defaults = imported || catalogDefaults || presetDefaults
         ? mergeModelMetadata(imported ? providerModelMetadata(imported) : undefined, catalogDefaults, presetDefaults)
         : undefined;
@@ -576,11 +577,15 @@ export function buildUserProvider(
           defaults,
           nativeCodex ? 'openai' : undefined,
         ),
+        // Projection is not a user edit. Save only the original configuration.
+        userModelConfig: structuredClone(storedModel),
         ...(m.api ? { api: m.api, ...(agent === 'pi' ? { piApi: m.api } : {}) } : {}),
         ...(importedApi && !m.piApi && !m.api ? {
           api: importedApi, ...(agent === 'pi' ? { piApi: importedApi } : {}),
-          ...(!m.route && importedApi !== wire ? { route: { baseUrl: rt.baseUrl,
-            wireProtocol: importedApi === 'anthropic-messages' || importedApi === 'openai-responses' ? importedApi : 'openai-chat' } } : {}),
+          ...(!m.route && providerWireProtocolForApi(importedApi) && providerWireProtocolForApi(importedApi) !== wire ? { route: {
+            baseUrl: providerBaseUrlForApi(rt.baseUrl, importedApi),
+            wireProtocol: providerWireProtocolForApi(importedApi)!,
+          } } : {}),
         } : {}),
         ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
       };

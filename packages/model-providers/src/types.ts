@@ -57,7 +57,7 @@ export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
 /** Provider runtime 上游实际接受的推理 wire protocol。 */
 export type ProviderWireProtocol =
-  "anthropic-messages" | "openai-responses" | "openai-chat";
+  "anthropic-messages" | "openai-responses" | "openai-chat" | "google-generative-ai";
 
 /** Codex 通过本地 bridge 兼容的两种非原生 Responses wire protocol。 */
 export type CodexCompatibilityWireProtocol = Extract<

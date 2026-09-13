@@ -53,6 +53,8 @@ import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
 
 import {
   classifyVisionCapability,
+  providerWireProtocolForApi,
+  providerBaseUrlForApi,
   clampEffortToSupported,
   EFFORT_VALUES,
   isAgentSelectableModel,
@@ -64,7 +66,6 @@ import type {
   CatalogModel,
   Effort,
   PiModelApi,
-  ProviderWireProtocol,
   ProviderView,
 } from '@cindy/model-providers';
 
@@ -261,16 +262,16 @@ export function ModelAdvancedDrawer({
     const runtime = config.runtimes[agent];
     const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
     if (!runtime || !model) return;
-    const wire: ProviderWireProtocol | undefined = api === 'openai-completions' ? 'openai-chat'
-      : api === 'anthropic-messages' || api === 'openai-responses' ? api : undefined;
     model.api = api;
     if (agent === 'pi') model.piApi = api;
-    if (wire) model.route = {
-      baseUrl: model.route?.baseUrl ?? runtime.baseUrl, wireProtocol: wire,
-      ...(runtime.requestPath ? { requestPath: wire === 'anthropic-messages' ? '/v1/messages'
-        : wire === 'openai-responses' ? '/responses' : '/chat/completions' } : {}),
+    const wire = providerWireProtocolForApi(api);
+    if (!wire) return;
+    model.route = {
+      ...model.route,
+      baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
+      wireProtocol: wire,
+      ...(runtime.requestPath && !model.route?.requestPath ? { requestPath: runtime.requestPath } : {}),
     };
-    if (!wire) model.route = { baseUrl: model.route?.baseUrl ?? runtime.baseUrl, wireProtocol: 'openai-chat' };
     setProtocolSaving(true);
     try {
       const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });

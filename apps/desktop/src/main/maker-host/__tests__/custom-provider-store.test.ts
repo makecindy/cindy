@@ -1631,3 +1631,16 @@ describe('supplier metadata persistence', () => {
 
   });
 });
+
+
+it('persists and reloads Google runtime/model routes without converting them to Chat', async () => {
+  mountDb();
+  const config: CustomProviderConfig = { id: 'google-roundtrip', name: 'Google', runtimes: {
+    pi: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireProtocol: 'google-generative-ai', models: [{
+      id: 'new-gemini', name: 'Gemini', api: 'google-generative-ai',
+      route: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireProtocol: 'google-generative-ai' },
+    }] },
+  } };
+  await createCustomProvider(config);
+  expect((await getCustomProvider(config.id))?.runtimes).toEqual(config.runtimes);
+});

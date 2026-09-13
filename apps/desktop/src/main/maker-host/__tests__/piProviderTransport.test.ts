@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { PROVIDER_MODEL_CATALOG } from '@cindy/model-providers';
-import { createPiProviderFetch } from '../pi-provider-transport.js';
+import { describe, expect, it, vi } from 'vitest';
+import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { createPiProviderFetch, invocationModelRecord } from '../pi-provider-transport.js';
 
 const reply = [
   { id: 'fixture-reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: 'Hello' } }] },
@@ -100,4 +100,30 @@ it('honors newly discovered max thinking instead of clamping it to an older tabl
   } });
   await (await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: 'hello', stream: true, reasoning: { effort: 'max' } }) })).text();
   expect(sent).toMatchObject({ model: row.id, reasoning_effort: 'max' });
+});
+
+
+it.each(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'])('sends imported %s through the real Google SDK to the native endpoint', async id => {
+  const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!;
+  const provider = buildUserProvider({ id: 'google-import', name: 'Google', runtimes: {
+    pi: { ...preset.runtimes.pi!, catalogPresetId: 'google-gemini-api', models: [{ id, name: id }] },
+  } }, { presets: [preset] });
+  const model = provider.models.pi![0];
+  const row = invocationModelRecord(model, model.route?.baseUrl ?? provider.routing.pi!.upstream!)!;
+  const requests: Request[] = [];
+  vi.stubGlobal('fetch', async (input: RequestInfo | URL, init?: RequestInit) => {
+    const request = new Request(input, init); requests.push(request);
+    expect(new URL(request.url).pathname).toBe(`/v1beta/models/${id}:streamGenerateContent`);
+    expect(request.headers.get('x-goog-api-key')).toBe('fixture-key');
+    expect(await request.json()).toMatchObject({ contents: [{ role: 'user', parts: [{ text: 'hello' }] }], generationConfig: { maxOutputTokens: 128 } });
+    return new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'OK' }] }, finishReason: 'STOP' }] })}\n\n`, { headers: { 'content-type': 'text/event-stream' } });
+  });
+  try {
+    const send = createPiProviderFetch({ row, providerId: provider.id, apiKey: 'fixture-key', fetchImpl: globalThis.fetch });
+    const response = await send('https://unused.invalid', { body: JSON.stringify({ model: id, input: 'hello', max_output_tokens: 128, stream: true }) });
+    const output = await response.text();
+    expect(output).toContain('response.completed');
+    expect(output).toContain('OK');
+    expect(requests).toHaveLength(1);
+  } finally { vi.unstubAllGlobals(); }
 });

@@ -37,6 +37,12 @@ export function parseModelsListResponse(
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
+    const google = item && typeof item === 'object'
+      && typeof (item as { name?: unknown }).name === 'string'
+      && (item as { name: string }).name.startsWith('models/')
+      && Array.isArray((item as { supportedGenerationMethods?: unknown }).supportedGenerationMethods)
+      ? item as { name: string; displayName?: string; inputTokenLimit?: number; outputTokenLimit?: number }
+      : undefined;
     const id =
       typeof item === "string"
         ? item
@@ -49,7 +55,7 @@ export function parseModelsListResponse(
                 ? (item as { key: string }).key
                 : typeof (item as { model_name?: unknown }).model_name === 'string'
                   ? (item as { model_name: string }).model_name
-                  : null
+                  : google ? google.name.slice('models/'.length) : null
           : null;
     if (!id || seen.has(id)) continue;
     seen.add(id);
@@ -64,7 +70,7 @@ export function parseModelsListResponse(
             max_input_tokens?: unknown;
           })
         : null;
-    const name =
+    const name = google && typeof google.displayName === 'string' ? google.displayName :
       rec && typeof rec.display_name === "string" && rec.display_name.length > 0
         ? rec.display_name
         : rec && typeof rec.name === "string" && rec.name.length > 0
@@ -76,6 +82,7 @@ export function parseModelsListResponse(
           rec.context_window,
           rec.max_context_length,
           rec.max_input_tokens,
+          google?.inputTokenLimit,
         ].find(
           // Math.floor(v) > 0 而非 v > 0:0 < v < 1(如 context_length: 0.5)会通过
           // v > 0 但取整成 contextWindow: 0——按取整后的值校验才不会漏这个区间
@@ -123,7 +130,7 @@ export function parseModelsListResponse(
         && url.pathname.replace(/\/+$/, '') === '/v1/models'; } catch { return false; }
     })();
     const discoveredMetadata = pickModelMetadata({
-      ...([rec?.display_name, rec?.name].some(
+      ...([rec?.display_name, rec?.name, google?.displayName].some(
         (value) => typeof value === "string" && value.trim().length > 0,
       )
         ? { name }
@@ -136,7 +143,7 @@ export function parseModelsListResponse(
       contextWindow:
         typeof rawWindow === "number" ? Math.floor(rawWindow) : info.max_input_tokens,
       maxOutputTokens:
-        record.max_output_tokens ?? info.max_output_tokens ??
+        record.max_output_tokens ?? info.max_output_tokens ?? google?.outputTokenLimit ??
         record.maxOutputTokens ??
         (isVercel ? record.max_tokens : undefined) ??
         (record.top_provider as Record<string, unknown> | undefined)

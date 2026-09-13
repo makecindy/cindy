@@ -1,3 +1,4 @@
+import { buildUserProvider, BUNDLED_CATALOG } from '@cindy/model-providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
@@ -850,4 +851,27 @@ describe('custom provider credential lifecycle', () => {
       ),
     ).rejects.toThrow('credential rollback failed');
   });
+});
+
+
+it('roundtrips raw model choices without freezing projected protocols or limits', () => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!);
+  const modelId = 'gemini-3.6-flash';
+  const raw = { id: 'google-test', name: 'Google', runtimes: {
+    pi: { ...preset.runtimes.pi!, catalogPresetId: 'google-gemini-api', models: [
+      { id: modelId, name: 'Gemini' },
+      { id: 'manual', name: 'Manual', api: 'openai-completions' as const, contextWindow: 32000,
+        route: { baseUrl: 'https://custom.example/v1', wireProtocol: 'openai-chat' as const } },
+    ] },
+  } };
+  const view = { ...buildUserProvider(raw, { presets: [preset] }), connected: true } as ProviderView;
+  const saved = providerViewToCustomProviderConfig(view);
+  saved.name = 'Renamed';
+  expect(saved.runtimes.pi!.models).toEqual(raw.runtimes.pi.models);
+  const nextModel = preset.runtimes.pi!.models.find(m => m.id === modelId)!;
+  nextModel.api = 'openai-completions'; nextModel.piApi = 'openai-completions';
+  nextModel.route = { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' };
+  const next = buildUserProvider(saved, { presets: [preset] });
+  expect(next.models.pi![0]).toMatchObject({ api: 'openai-completions', route: nextModel.route });
+  expect(next.models.pi![1].userModelConfig).toEqual(raw.runtimes.pi.models[1]);
 });

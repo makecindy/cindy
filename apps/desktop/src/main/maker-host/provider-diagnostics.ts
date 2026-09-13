@@ -86,7 +86,7 @@ function withoutCredentialHeaders(
   const normalized: Record<string, string> = {};
   for (const [name, value] of Object.entries(headers ?? {})) {
     const lower = name.toLowerCase();
-    if (lower !== 'authorization' && lower !== 'x-api-key') normalized[lower] = value;
+    if (lower !== 'authorization' && lower !== 'x-api-key' && lower !== 'x-goog-api-key') normalized[lower] = value;
   }
   return normalized;
 }
@@ -107,6 +107,16 @@ export function buildProbeRequest(spec: ProviderProbeSpec): { url: string; init:
     ? withoutCredentialHeaders(spec.headers)
     : normalizedHeaders(spec.headers);
   headers['content-type'] = 'application/json';
+  if (spec.wireProtocol === 'google-generative-ai') {
+    if (spec.apiKey) headers['x-goog-api-key'] = spec.apiKey;
+    return {
+      url: appendProviderRequestPath(spec.baseUrl, spec.requestPath ?? `/models/${encodeURIComponent(spec.modelId.replace(/^models\//, ''))}:generateContent`),
+      init: { method: 'POST', headers, body: JSON.stringify({
+        contents: [{ role: 'user', parts: [{ text: 'ping' }] }],
+        generationConfig: { maxOutputTokens: 16 },
+      }) },
+    };
+  }
   const anthropicMessages =
     spec.wireProtocol === 'anthropic-messages' ||
     (spec.wireProtocol === undefined && spec.agent === 'claude-code');

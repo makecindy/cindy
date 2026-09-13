@@ -4402,3 +4402,14 @@ describe('provider connection management', () => {
     expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
   });
 });
+
+
+it.each(['anthropic-messages', 'openai-responses', 'openai-chat', 'google-generative-ai'])('preserves %s discovery through the Claude IPC entry', async wireProtocol => {
+  const harness = new IpcHarness();
+  const fetchModels = vi.fn(async () => ({ ok: true as const, models: [] }));
+  registerProviderHandlers(harness, makeDeps({ fetchModels }));
+  await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+    agent: 'claude-code', wireProtocol, baseUrl: 'https://supplier.example/v1', authMethod: 'apiKey', apiKey: 'fixture-key',
+  });
+  expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({ wireProtocol, agent: 'claude-code' }));
+});

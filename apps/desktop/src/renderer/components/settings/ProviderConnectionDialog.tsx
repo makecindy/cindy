@@ -2282,7 +2282,7 @@ export function ProviderConnectionDialog({
                       }
                     >
                       {t(
-                        activeTab === 'pi'
+                        activeTab === 'pi' && option.value !== 'google-generative-ai'
                           ? `settings.providers.custom.wireProtocol.pi${
                               option.value === 'anthropic-messages'
                                 ? 'Anthropic'
@@ -2297,7 +2297,7 @@ export function ProviderConnectionDialog({
                 </div>
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
                   {t(
-                    activeTab === 'pi'
+                    activeTab === 'pi' && f.wireProtocol !== 'google-generative-ai'
                       ? `settings.providers.custom.wireProtocol.pi${
                           f.wireProtocol === 'anthropic-messages'
                             ? 'AnthropicHelp'

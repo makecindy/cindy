@@ -62,7 +62,7 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 | aliyun-bailian-coding | Chat / Messages | Coding Plan 专用 key 和地址；不可与按量 key 混用 | [官方资料](https://help.aliyun.com/zh/model-studio/coding-plan) |
 | aliyun-bailian-token-plan-cn | 现有 Chat / Messages | 保留产品独立入口；官方概览未完整说明协议矩阵，待专项核实 | [官方资料](https://help.aliyun.com/zh/model-studio/token-plan-personal-overview) |
 | aliyun-bailian-token-plan-team-cn | 现有 Chat / Messages | 保留产品独立入口；官方概览未完整说明协议矩阵，待专项核实 | [官方资料](https://help.aliyun.com/zh/model-studio/token-plan-personal-overview) |
-| google-gemini-api | Gemini / Chat | 官方提供 Gemini 及 OpenAI 兼容接口；现有预设用 Chat；本轮未切换 Pi 到 Gemini | [官方资料](https://ai.google.dev/gemini-api/docs/openai) |
+| google-gemini-api | Gemini / Chat | 官方提供 Gemini 及 OpenAI 兼容接口；标准表的 Gemini adapter 与 /v1beta 成对导入，不能继承 /v1beta/openai | [官方资料](https://ai.google.dev/gemini-api/docs/openai) |
 | litellm | Chat / Responses / Messages | 修复默认地址的 Claude Messages；实际路由仍取决于用户部署 | [官方资料](https://docs.litellm.ai/docs/anthropic_unified) |
 | lmstudio | Chat / Responses / Messages | 修复默认地址的 Codex Responses；自定义地址及旧版本不可推断 | [官方资料](https://lmstudio.ai/docs/developer/openai-compat) |
 | llamacpp | Chat / Responses / Messages | 最新源码支持；存量本地服务版本未知，保留原配置，不批量改成新协议 | [官方资料](https://raw.githubusercontent.com/ggml-org/llama.cpp/master/tools/server/README.md) |
@@ -143,3 +143,22 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 - 已重启同一 `dev2-provider-four-api` 隔离 DEV，启动器确认 ready、来源 worktree 匹配。
   从运行中的客户端只读取得三家供应商的实际目录，Gemini 原生声明/接口/上下文均与回放一致。
   OpenRouter Gemini 默认开关为 Claude Code 关、Codex 关、Pi 开；另两家原有未选中状态保留。
+
+
+### 草稿统一修复复核（2026-09-13）
+
+- Google 官方三个预勾型号与后来补入的目录型号现在使用同一规则：API、wire 与 base URL
+  成对读取。真实 Pi Google SDK 的请求被本地测试截获，确认请求
+  `/v1beta/models/{id}:streamGenerateContent`，没有 `/openai/models/`。
+- 四种公开 wire 包括 Google；Azure Responses、Vertex 的 SDK 身份仍保留在 API 字段，
+  不把内部 adapter 名列为新增的用户协议。配置校验、落库、远程展示、Pi 运行时和探测同步识别。
+  HTTP-only 视觉/辅助请求路径不能把 Google 当作 Chat 发出；原生 Pi 图片能力不受影响。
+- LiteLLM 新 Claude runtime 在选择模型之前就使用 Messages 与代理根地址。存量模型的
+  逐模型修正仍通过共同投影处理，不改用户自定义主机或请求路径。
+- 保存配置时保留原始用户模型字段，导入预设只保存模型引用；派生 API/route 不写进
+  `userModelConfig`。回归覆盖名称修改后的保存、再次投影、目录协议变更和手动覆盖保留。
+- 向导勾选与推荐标记一致：保留维护表中缺省开启的旧推荐，标准表补入和接口新发现的
+  模型默认未勾。官方 API 的少量离线推荐显式标记推荐，避免发现失败时失去可选默认。
+- Copilot 身份/账号主机、OAuth 报价已在上一批修复，本批整仓测试继续覆盖。
+  Fireworks 的 Messages 支持不只限 Claude；不能按厂商名删除其已声明接口。
+- 本批没有重启 DEV、没有请求收费生成。模拟请求和表结构检查不等于所有渠道的真实账号验收。

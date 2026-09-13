@@ -1,9 +1,9 @@
-import { alignModelApiRoute, providerInterfaceModelRoute } from './providerInterfaceRoutes.js';
+import { alignModelApiRoute, providerInterfaceModelRoute, providerInterfaceDefaultRoute, providerWireProtocolForApi } from './providerInterfaceRoutes.js';
 import { compatibilityProtocol, selectCompatibilityRoute } from '@cindy/model-compat/protocol';
 import { PI_PROVIDER_PRESET_IDS as existingConnections, sourceProviderForPreset } from './providerPresetIdentity.js';
 import { PROVIDER_MODEL_CATALOG } from './providerModelCatalog.js';
 import { PI_MODEL_APIS } from './types.js';
-import type { ProviderPreset, ProviderWireProtocol, PiModelApi } from './types.js';
+import type { ProviderPreset, PiModelApi } from './types.js';
 
 /** Connection labels only; model IDs, APIs and endpoints remain in the standard catalog. */
 const labels: Record<string, string> = {
@@ -20,9 +20,7 @@ const labels: Record<string, string> = {
   'xiaomi-token-plan-sgp': 'MiMo Token Plan (Singapore)',
 };
 
-const wire = (api: string): ProviderWireProtocol | undefined =>
-  api === 'openai-completions' ? 'openai-chat' :
-  api === 'openai-responses' || api === 'anthropic-messages' ? api : undefined;
+const wire = providerWireProtocolForApi;
 
 /** New client bridge capability; existing endpoints and model membership stay authoritative. */
 export function withClaudeProviderRuntime(preset: ProviderPreset): ProviderPreset {
@@ -31,6 +29,7 @@ export function withClaudeProviderRuntime(preset: ProviderPreset): ProviderPrese
   if (!portable) return preset;
   return { ...preset, runtimes: { ...preset.runtimes, 'claude-code': {
     ...portable, wireProtocol: portable.wireProtocol ?? 'openai-responses',
+    ...providerInterfaceDefaultRoute(preset.id, 'claude-code', portable.baseUrl),
     models: portable.models.map(({ piApi, ...model }) => ({ ...model, ...(model.api ?? piApi ? { api: model.api ?? piApi } : {}) })),
   } } };
 }
@@ -54,7 +53,7 @@ export function appendPiProviderPresets(presets: readonly ProviderPreset[]): Pro
       return [agent, { ...runtime, models: [...runtime.models.map(model => {
         // Maintained upstream API wins over old harness-specific preset transports.
         // Match exact IDs at this official origin; never borrow from a custom host.
-        if (sourceId !== 'opencode' && sourceId !== 'opencode-go') return model;
+        if (sourceId !== 'opencode' && sourceId !== 'opencode-go' && sourceId !== 'google') return model;
         const candidates = rows.filter(row => row.id === model.id && (() => {
           try { return new URL(row.upstream).origin === new URL(runtime.baseUrl).origin; } catch { return false; }
         })());

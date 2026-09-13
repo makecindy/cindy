@@ -801,3 +801,13 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     expect(fetchCalled).toBe(false);
   });
 });
+
+
+it('probes Google using generateContent instead of falling through to Responses', () => {
+  const request = buildProbeRequest({ agent: 'codex', wireProtocol: 'google-generative-ai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelId: 'new-gemini', apiKey: 'fixture-key' });
+  expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/new-gemini:generateContent');
+  expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'fixture-key' });
+  expect(request.init.headers).not.toHaveProperty('authorization');
+  expect(JSON.parse(String(request.init.body))).toMatchObject({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }], generationConfig: { maxOutputTokens: 16 } });
+});

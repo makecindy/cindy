@@ -105,6 +105,8 @@ export function piNativeCatalogModels(
 
 function wireProtocolToPiCatalogApi(protocol: ProviderWireProtocol): string {
   switch (protocol) {
+    case 'google-generative-ai':
+      return 'google-generative-ai';
     case "anthropic-messages":
       return "anthropic-messages";
     case "openai-responses":

@@ -469,9 +469,7 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     }
     if (spec.wireProtocol !== undefined) {
       const allowed =
-        spec.agent === 'claude-code'
-          ? ['anthropic-messages']
-          : ['openai-responses', 'openai-chat', 'anthropic-messages'];
+        ['openai-responses', 'openai-chat', 'anthropic-messages', 'google-generative-ai'];
       if (typeof spec.wireProtocol !== 'string' || !allowed.includes(spec.wireProtocol))
         return null;
     }
@@ -525,9 +523,7 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     return null;
   if (spec.wireProtocol !== undefined) {
     const allowed =
-      spec.agent === 'claude-code'
-        ? ['anthropic-messages']
-        : ['openai-responses', 'openai-chat', 'anthropic-messages'];
+      ['openai-responses', 'openai-chat', 'anthropic-messages', 'google-generative-ai'];
     if (typeof spec.wireProtocol !== 'string' || !allowed.includes(spec.wireProtocol)) return null;
   }
   if (spec.headers !== undefined) {

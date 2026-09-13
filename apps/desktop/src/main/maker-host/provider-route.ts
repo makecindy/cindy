@@ -930,7 +930,7 @@ function implicitBridgeWire(
 function hasImplicitLocalBridgeCandidate(modelId: string, agent: AgentKind): boolean {
   return providersForModel(modelId, agent).some((provider) => {
     const wire = implicitBridgeWire(providerRoutingForModel(provider, agent, modelId), agent);
-    return wire === 'openai-chat' || wire === 'anthropic-messages' || (agent === 'claude-code' && wire === 'openai-responses');
+    return wire === 'openai-chat' || wire === 'anthropic-messages' || wire === 'google-generative-ai' || (agent === 'claude-code' && wire === 'openai-responses');
   });
 }
 
@@ -969,7 +969,7 @@ export async function resolveImplicitLocalBridgeRouteResolution(
   if (source.kind !== 'provider') return source;
   const routing = providerRoutingForModel(source.provider, agent, modelId);
   const wire = implicitBridgeWire(routing, agent);
-  if (wire !== 'openai-chat' && wire !== 'anthropic-messages' && !(agent === 'claude-code' && wire === 'openai-responses')) {
+  if (wire !== 'openai-chat' && wire !== 'anthropic-messages' && wire !== 'google-generative-ai' && !(agent === 'claude-code' && wire === 'openai-responses')) {
     return { kind: 'none' };
   }
   const route = await resolveProviderRouteById(source.provider.id, agent, modelId);
@@ -1215,6 +1215,8 @@ export function resolveVisionBackendRoute(
   // Claude/Codex 保留各自原生前门的历史缺省；Pi 是后来加入的自适应 runtime，
   // 缺声明不能猜成 Chat，否则视觉工具会把图片与凭证发往错误协议端点。
   if (agent === 'pi' && routing.wireProtocol === undefined) return null;
+  // This HTTP-only helper has no Google serializer; native Pi handles images itself.
+  if (routing.wireProtocol === 'google-generative-ai') return null;
   const wireProtocol: 'anthropic-messages' | 'openai-responses' | 'openai-chat' =
     routing.wireProtocol ??
     (agent === 'claude-code'

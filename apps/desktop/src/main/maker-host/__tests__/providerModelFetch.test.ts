@@ -376,3 +376,18 @@ describe('fetchProviderModels', () => {
     expect(seenHeaders['anthropic-version']).toBe('2023-06-01');
   });
 });
+
+
+it('discovers native Google models with Google auth and exact declared limits', async () => {
+  const result = await fetchProviderModels(spec({ agent: 'pi', wireProtocol: 'google-generative-ai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    headers: { authorization: 'Bearer stale', 'x-goog-api-key': 'stale' },
+  }), async (url, init) => {
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(init?.headers).toEqual({ 'x-goog-api-key': 'sk-test' });
+    return fakeResponse(200, JSON.stringify({ models: [{ name: 'models/new-gemini', displayName: 'New Gemini',
+      supportedGenerationMethods: ['generateContent'], inputTokenLimit: 1048576, outputTokenLimit: 65536 }] }));
+  });
+  expect(result).toMatchObject({ ok: true, models: [{ id: 'new-gemini', name: 'New Gemini', contextWindow: 1048576,
+    discoveredMetadata: { contextWindow: 1048576, maxOutputTokens: 65536 } }] });
+});

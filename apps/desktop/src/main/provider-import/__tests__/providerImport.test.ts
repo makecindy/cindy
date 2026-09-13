@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderPreset, ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
 
 import {
   beginProviderImportConfirm,
@@ -201,13 +201,16 @@ describe('provider import URL parsing', () => {
           pi: {
             catalogPresetId: preset.id,
             piCatalogProviderId: 'acme',
-            models: [{ piApi: 'openai-completions' }],
+            models: [{ id: 'm1', name: 'M1', discoveredMetadata: {} }],
           },
         },
       },
     });
-    if (draft.kind === 'custom')
+    if (draft.kind === 'custom') {
       expect(draft.config.runtimes.codex!.models[0]).not.toHaveProperty('contextWindow');
+      expect(draft.config.runtimes.pi!.models[0]).not.toHaveProperty('piApi');
+      expect(buildUserProvider(draft.config, { presets: [preset] }).models.pi![0].piApi).toBe('openai-completions');
+    }
   });
 
   it('rejects missing and no-auth presets instead of silently importing a key into another connection', () => {

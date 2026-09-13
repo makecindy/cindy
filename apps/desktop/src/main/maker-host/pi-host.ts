@@ -939,6 +939,8 @@ export interface BuildPiAgentOpts {
 /** Cindy wire protocol → pi models.json api 形态。 */
 function wireProtocolToPiApi(wp: ProviderWireProtocol): PiNativeApi {
   switch (wp) {
+    case 'google-generative-ai':
+      return 'google-generative-ai';
     case 'anthropic-messages':
       return 'anthropic-messages';
     case 'openai-responses':

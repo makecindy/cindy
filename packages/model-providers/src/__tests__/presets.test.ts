@@ -886,7 +886,7 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
       expect(
         preset.runtimes.pi?.wireProtocol,
         `${preset.id} is missing the Pi default protocol`,
-      ).toMatch(/^(anthropic-messages|openai-chat|openai-responses)$/);
+      ).toMatch(/^(anthropic-messages|openai-chat|openai-responses|google-generative-ai)$/);
     }
   });
 });

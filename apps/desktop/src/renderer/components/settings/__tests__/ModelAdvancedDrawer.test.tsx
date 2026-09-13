@@ -132,6 +132,28 @@ describe('model advanced editor', () => {
     } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
   });
 
+  it('saves Google selection with its matching wire and official endpoint', async () => {
+    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
+      codex: { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat',
+        models: [{ id: 'new-gemini', name: 'New Gemini' }, { id: 'other', name: 'Other' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Google Gemini' }));
+      await waitFor(() => expect(update).toHaveBeenCalledOnce());
+      const config = update.mock.calls[0]![0] as { runtimes: { codex: { models: unknown[] } } };
+      expect(config.runtimes.codex.models).toEqual([
+        { id: 'new-gemini', name: 'New Gemini', api: 'google-generative-ai', route: {
+          baseUrl: 'https://generativelanguage.googleapis.com/v1beta', wireProtocol: 'google-generative-ai',
+        } }, { id: 'other', name: 'Other' },
+      ]);
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
   it('rejects new small settings but accepts 100K without rewriting existing small overrides', () => {
     mocks.limit = 1_000;
     draw();

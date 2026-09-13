@@ -136,7 +136,7 @@ function isAllowedDiscoveryWireProtocol(
   value: unknown,
 ): value is ProviderModelRouteConfig['wireProtocol'] {
   const supported =
-    value === 'anthropic-messages' || value === 'openai-responses' || value === 'openai-chat';
+    value === 'anthropic-messages' || value === 'openai-responses' || value === 'openai-chat' || value === 'google-generative-ai';
   return supported;
 }
 
@@ -175,18 +175,18 @@ function isDiscoverySourceValidForRuntime(
  * runtime(两家无 Anthropic 兼容端点),表单会自动展示实际支持的 runtime。
  */
 const ANTHROPIC_API_MODELS = [
-  { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
-  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
-  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
+  { id: 'claude-opus-5', defaultEnabled: true, name: 'Claude Opus 5', contextWindow: 1_000_000 },
+  { id: 'claude-sonnet-5', defaultEnabled: true, name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
+  { id: 'claude-haiku-4-5', defaultEnabled: true, name: 'Claude Haiku 4.5', contextWindow: 200_000 },
 ];
 const OPENAI_API_MODELS = [
-  { id: 'gpt-5.5', name: 'GPT-5.5' },
-  { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini' },
+  { id: 'gpt-5.5', defaultEnabled: true, name: 'GPT-5.5' },
+  { id: 'gpt-5.4-mini', defaultEnabled: true, name: 'GPT-5.4 mini' },
 ];
 const XAI_API_MODELS = [
-  { id: 'grok-4.6', name: 'Grok 4.6', contextWindow: 500_000 },
-  { id: 'grok-4.5', name: 'Grok 4.5', contextWindow: 500_000 },
-  { id: 'grok-4.3', name: 'Grok 4.3', contextWindow: 1_000_000 },
+  { id: 'grok-4.6', defaultEnabled: true, name: 'Grok 4.6', contextWindow: 500_000 },
+  { id: 'grok-4.5', defaultEnabled: true, name: 'Grok 4.5', contextWindow: 500_000 },
+  { id: 'grok-4.3', defaultEnabled: true, name: 'Grok 4.3', contextWindow: 1_000_000 },
 ];
 
 export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
@@ -932,7 +932,8 @@ export function AddProviderWizard({
       );
     });
     if (!editableBaseUrlsValid) return;
-    // Membership alone is not a recommendation. Preserve the catalog's visibility defaults.
+    // Curated presets use omission as their legacy default-on; generated catalog additions
+    // explicitly default off. Keep the checkbox and recommendation badge consistent.
     const initial = new Map<
       string,
       {
@@ -953,7 +954,7 @@ export function AddProviderWizard({
         const existing = initial.get(m.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
-          if (m.defaultEnabled === true) {
+          if (m.defaultEnabled !== false) {
             existing.checked = true;
             existing.recommended = true;
           }
@@ -964,7 +965,7 @@ export function AddProviderWizard({
           initial.set(m.id, {
             name: m.name,
             checked: m.defaultEnabled !== false,
-            recommended: m.defaultEnabled === true,
+            recommended: m.defaultEnabled !== false,
             agents: [agent],
             ...(m.route ? { routes: { [agent]: m.route } } : {}),
           });
@@ -1312,10 +1313,10 @@ export function AddProviderWizard({
               ...(presetModel?.mode ? { mode: presetModel.mode } : {}),
               ...(presetModel?.modalities ? { modalities: { input: [...presetModel.modalities.input], output: [...presetModel.modalities.output] } } : {}),
               ...(presetModel?.officialDocs ? { officialDocs: presetModel.officialDocs } : {}),
-              ...(presetModel?.api ? { api: presetModel.api } : {}),
-              ...(agent === 'pi' && presetModel?.piApi ? { piApi: presetModel.piApi } : {}),
-              ...((presetModel?.route ?? m.routes?.[agent])
-                ? { route: presetModel?.route ?? m.routes?.[agent] }
+              // Known models follow the maintained preset after refresh. Only
+              // independently discovered routes need a saved routing snapshot.
+              ...(!presetModel && m.routes?.[agent]
+                ? { route: m.routes[agent] }
                 : {}),
             };
           });

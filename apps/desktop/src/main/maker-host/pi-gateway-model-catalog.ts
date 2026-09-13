@@ -30,6 +30,8 @@ function normalizeModelId(modelId: string): string {
 
 function piApiFromWireProtocol(protocol: ProviderWireProtocol | undefined): PiModelApi | undefined {
   switch (protocol) {
+    case 'google-generative-ai':
+      return 'google-generative-ai';
     case 'anthropic-messages':
       return 'anthropic-messages';
     case 'openai-responses':

@@ -305,3 +305,5 @@ export { providerEndpointBindings, bindProviderEndpoint, bindProviderPresetRunti
 
 export { providerSetupLink } from './providerSetupLinks.js';
 export { providerPresetOAuth, providerPresetOAuthRuntimes, providerOAuthContract } from './providerPresetOAuth.js';
+
+export { alignModelApiRoute, providerWireProtocolForApi, providerBaseUrlForApi } from "./providerInterfaceRoutes.js";
