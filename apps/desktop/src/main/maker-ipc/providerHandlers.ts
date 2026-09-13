@@ -227,6 +227,14 @@ function oauthDescriptorSignature(config: CustomProviderConfig | null): string |
       });
 }
 
+function oauthRuntimeEndpointSignature(config: CustomProviderConfig | null): string | null {
+  if (config?.auth?.method !== 'oauth') return null;
+  return JSON.stringify((['claude-code', 'codex', 'pi'] as const).map((agent) => {
+    const runtime = config.runtimes?.[agent];
+    return { agent, baseUrl: runtime?.baseUrl ?? null, modelsUrl: runtime?.modelsUrl ?? null };
+  }));
+}
+
 /** Never expose runtime header credentials to WebViews or synthetic remote events. */
 function withoutProviderHeaderCredentials(provider: ProviderView): ProviderView {
   if (!provider.routing) return provider;
@@ -1967,7 +1975,10 @@ export function registerProviderHandlers(
           (previous.auth?.method ?? 'apiKey') !== (config.auth?.method ?? 'apiKey');
         const oauthDescriptorChanged =
           oauthDescriptorSignature(previous) !== oauthDescriptorSignature(config);
-        const shouldResetOAuth = authMethodChanged || oauthDescriptorChanged;
+        const oauthBindingChanged =
+          oauthDescriptorChanged
+          || oauthRuntimeEndpointSignature(previous) !== oauthRuntimeEndpointSignature(config);
+        const shouldResetOAuth = authMethodChanged || oauthBindingChanged;
         // API key 的写 / 删与配置更新处于同一 main 队列；若后续 OAuth 清理或 DB 写失败，
         // 用原值回滚，确保并发窗口不能把另一份配置和密钥拼在一起。
         // key/header 的 storage key 按当前 owner 动态解析，写入前必须仍是发起方。
@@ -1984,7 +1995,7 @@ export function registerProviderHandlers(
           keyMutations.some((mutation) => mutation.agent === 'codex') ||
           headerMutations.some((mutation) => mutation.agent === 'codex') ||
           authMethodChanged ||
-          (config.auth?.method === 'oauth' && oauthDescriptorChanged);
+          (config.auth?.method === 'oauth' && oauthBindingChanged);
         const previousCodexConfigSignature =
           deps.codexCustomProviderConfigSignature?.(previous) ?? '';
         const targetCodexConfigSignature =

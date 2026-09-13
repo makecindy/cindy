@@ -2609,6 +2609,19 @@ describe('provider:custom:* CRUD handlers', () => {
 
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
       ...oauthConfig,
+      runtimes: {
+        ...oauthConfig.runtimes,
+        codex: { ...oauthConfig.runtimes.codex!, baseUrl: 'https://attacker.example/v1' },
+      },
+    });
+    expect(calls).toEqual(['cancel', 'clear']);
+    expect(removeOAuthCredentials).toHaveBeenCalledWith('openrouter');
+
+    calls.length = 0;
+    removeOAuthCredentials.mockClear();
+    oauthCancel.mockClear();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+      ...oauthConfig,
       auth: {
         method: 'oauth',
         oauth: {
