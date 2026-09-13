@@ -1177,10 +1177,17 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
   }
 }
 
+/**
+ * registerSessionIpc 收到的运行时依赖(closeIdleSessionForMove 等)。MCP 会话操作工具
+ * 不经 IPC 直接调 updateSessionInDb 时沿用同一份,保证与 renderer 路径行为一致。
+ */
+let registeredSessionIpcOpts: RegisterSessionIpcOpts = {};
+
 export function registerSessionIpc(
   readSessionListLogScope: () => string | null = () => null,
   opts: RegisterSessionIpcOpts = {},
 ): void {
+  registeredSessionIpcOpts = opts;
   // interrupted-turn-resume 假阳性修复:每次 last_turn_ended_at 真正落库(正常收尾 /
   // barrier 版收尾 / ack)都广播 lastTurnEndedAt patch —— renderer 的 session 快照可能
   // 是在 turn 飞行中或「done → ended 落库」空窗里取的(startedAt > endedAt),此前
@@ -1660,285 +1667,8 @@ export function registerSessionIpc(
 
   ipcMain.handle('local-db:sessions:update', async (_e, id: unknown, patch: unknown) => {
     const sid = requireString(id, 'id');
-    const ownerScope = captureOwnerScope();
     const p = requireObject(patch, 'patch');
-    if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
-      throwIpcError(
-        'UNSUPPORTED_CAPABILITY',
-        'directory grants must be changed through maker:set-*-dirs',
-      );
-    }
-    const dbClient = getDbClient();
-    const db = dbClient.drizzle;
-    // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
-    // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
-    const update = async () => {
-      if (p.workspaceKind !== undefined) {
-        const value = p.workspaceKind;
-        if (value !== 'project' && value !== 'dialogue') {
-          throwIpcError('INVALID_PARAMS', `invalid workspaceKind: ${String(value)}`);
-        }
-      }
-      const ALLOWED_UPDATE_ORCA_ROLES = new Set<string>(['lead', 'worker']);
-      if (
-        p.orcaRole !== undefined &&
-        p.orcaRole !== null &&
-        !ALLOWED_UPDATE_ORCA_ROLES.has(p.orcaRole as string)
-      ) {
-        throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(p.orcaRole)}`);
-      }
-      if (typeof p.workingDir === 'string') {
-        p.workingDir = normalizeWorkingDirForStorage(p.workingDir) ?? null;
-      }
-      const REVIEW_IMMUTABLE_FIELDS = new Set([
-        'workingDir',
-        'workspaceKind',
-        'model',
-        'providerId',
-        'effort',
-        'permissionMode',
-        'fastMode',
-        'planModeEnabled',
-        'orcaRole',
-        'extraDirs',
-        'writableDirs',
-      ]);
-      if (Object.keys(p).some((key) => REVIEW_IMMUTABLE_FIELDS.has(key))) {
-        const [target] = await db
-          .select({ source: sessions.source })
-          .from(sessions)
-          .where(eq(sessions.id, sid))
-          .limit(1);
-        if (target?.source === 'review') {
-          throwIpcError(
-            'UNSUPPORTED_CAPABILITY',
-            'Review task settings are fixed to the source task',
-          );
-        }
-      }
-      // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,update 后对比实际变化。
-      // CLI 转录按 cwd 转码目录存放,workingDir 变了必须跟着搬,否则 resume 报
-      // "No conversation found with session ID"(见 claude-transcript-relocation.ts)。
-      const beforeMove =
-        p.workingDir !== undefined
-          ? (
-              await db
-                .select({
-                  workingDir: sessions.workingDir,
-                  agentKind: sessions.agentKind,
-                  remoteHostId: sessions.remoteHostId,
-                })
-                .from(sessions)
-                .where(eq(sessions.id, sid))
-            )[0]
-          : undefined;
-      const movingLocalNonClaudeSession =
-        beforeMove &&
-        beforeMove.agentKind !== 'cc' &&
-        !beforeMove.remoteHostId &&
-        beforeMove.workingDir &&
-        typeof p.workingDir === 'string' &&
-        p.workingDir &&
-        normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir;
-      // Pi/Codex keep a live Maker handle whose cwd is fixed at bootstrap. Close it
-      // before persisting the new directory so the next send lazily recreates the
-      // runtime with the moved session's cwd instead of continuing in the old one.
-      if (movingLocalNonClaudeSession) {
-        if (!opts.closeIdleSessionForMove) {
-          throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
-        }
-        const idle = await opts.closeIdleSessionForMove(sid);
-        if (idle === false) {
-          throwIpcError('PRECONDITION_FAILED', '运行中的任务不能移动');
-        }
-      }
-      // 只有纯设置字段(model/effort 等)才跳过 bump；凡带 activity 字段
-      // (clearedAt / sdkSessionId / status / token 用量等)仍需更新 updatedAt，
-      // 否则本地 /clear 后重启侧栏时间回退旧值。
-      const SETTINGS_ONLY_FIELDS = new Set([
-        'model',
-        'effort',
-        'permissionMode',
-        'fastMode',
-        'planModeEnabled',
-        'providerId',
-        'orcaRole',
-        'extraDirs',
-        'writableDirs',
-        'pinnedAt',
-        'workingDir',
-        'workspaceKind',
-        'title',
-      ]);
-      const isSettingsOnly = Object.keys(p).every((k) => SETTINGS_ONLY_FIELDS.has(k));
-      const setObj = sessionPatchToRow(p as Parameters<typeof sessionPatchToRow>[0], {
-        bumpUpdatedAt: !isSettingsOnly,
-      });
-      if (p.clearedAt !== undefined) {
-        setObj.summary = null;
-        setObj.listPreview = null;
-        setObj.listPreviewRole = null;
-      }
-      // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
-      // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
-      // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
-      // 有真实时间差,在那期间智能标题仍能满足 `WHERE title = 期望值` 把名字盖掉。
-      // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
-      // 按下过保存,这个方向的偏差是安全的。
-      if (typeof p.title === 'string') noteUserTitleWritten(sid);
-      await withStatusWriteLock(
-        db,
-        sid,
-        p.status,
-        async () => {
-          if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
-          await writeSessionPatch(db, sid, setObj, p.status);
-          cleanupSessionRuntimeForTerminalStatus(sid, p.status);
-        },
-        p.workingDir !== undefined,
-      );
-      // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
-      // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
-      if (p.clearedAt !== undefined) {
-        noteSessionClearBoundary(sid, p.clearedAt as string | null);
-        // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
-        // 已过时;置顶卡片优先用 summary 而非 preview,不清就会继续显示旧任务摘要。
-        // 与 clearedAt 同一句 UPDATE 置空，避免崩溃后非 NULL 缓存绕过 clear 边界。
-        if (isOwnerScopeCurrent(ownerScope)) {
-          broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
-        }
-        void recomputePrRefsForSession(sid).catch(() => undefined);
-      }
-      // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
-      // renderer 拿到更新结果时转录已就位(用户可立即续聊),且迁移中持久化的最新
-      // sdkSessionId 能进返回行与广播 patch——否则 renderer 留着旧 resume id,下一次
-      // lazy-create 仍会 resume 到 pre-fork 会话。内部 best-effort 不抛错。
-      // 动态 import 避免 localDb → maker-host 的静态模块环(同下方 sessionTaskSummary)。
-      if (
-        beforeMove &&
-        beforeMove.agentKind === 'cc' &&
-        !beforeMove.remoteHostId &&
-        beforeMove.workingDir &&
-        typeof p.workingDir === 'string' &&
-        p.workingDir &&
-        normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
-      ) {
-        const m = await import('../../maker-host/claude-transcript-relocation.js');
-        const reloc = await m.relocateClaudeTranscriptsForSessionMove(
-          sid,
-          beforeMove.workingDir,
-          p.workingDir,
-        );
-        if (reloc.persistedSdkSessionId) {
-          (p as Record<string, unknown>).sdkSessionId = reloc.persistedSdkSessionId;
-        }
-      }
-      const row = await selectSessionWithCount(db, sid);
-      if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
-      // 取消置顶后摘要不再有展示面,立刻清掉,避免列表/再次置顶前继续吃旧句。
-      if (p.pinnedAt !== undefined && row.pinnedAt == null) {
-        await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sid));
-        row.summary = null;
-      }
-      const updated = sessionToCamel(row);
-      const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
-      const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
-      const titleChanged = p.title !== undefined;
-      // 归档/删除这类纯 status 变化也要广播:本机多窗口收敛靠 sessions:patched,
-      // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
-      const statusChanged = p.status !== undefined;
-      if (
-        (projectTargetChanged || p.status === 'deleted' || p.status === 'archived') &&
-        row.workspaceKind === 'project' &&
-        row.workingDir &&
-        !row.remoteHostId &&
-        isRetainableProjectSessionSource(row.source)
-      ) {
-        const touched = await upsertRecentWorkdir(
-          row.workingDir,
-          Date.now(),
-          process.platform,
-          dbClient,
-        );
-        if (touched) broadcastRecentWorkdirsChanged(row.workingDir, ownerScope);
-      }
-      // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
-      // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
-      // 之后、广播之前还有 await(摘要清理 / recent-workdir / 转录迁移),两个窗口
-      // 对同一任务并发操作时,本请求可能在此期间被另一窗口推进到更晚的终态(如
-      // 归档写入后被删除)。用过期值广播会把镜像回滚成旧 UI 状态(已删除任务在
-      // 副窗/控制端复活),且若本广播是最后一条,镜像不会自愈。
-      //
-      // 因此含 status 的 patch 在广播前(所有 await 之后)**重读一次**:重读与广播
-      // 之间无 await,同进程单事件循环下不可能再插入并发写;即便并发删除的广播
-      // 晚于本广播到达,镜像最终也收敛到 deleted。
-      let broadcastStatus = updated.status;
-      if (p.status !== undefined) {
-        const [currentRow] = await db
-          .select({ status: sessions.status })
-          .from(sessions)
-          .where(eq(sessions.id, sid))
-          .limit(1);
-        if (currentRow) broadcastStatus = currentRow.status;
-      }
-      const broadcastPatch =
-        p.pinnedAt === undefined && p.status === undefined
-          ? p
-          : {
-              ...p,
-              ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
-              ...(p.status !== undefined ? { status: broadcastStatus } : {}),
-              ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
-              ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
-                ? { status: broadcastStatus }
-                : {}),
-            };
-      if (
-        projectTargetChanged ||
-        settingsChanged ||
-        titleChanged ||
-        statusChanged ||
-        p.pinnedAt !== undefined
-      ) {
-        if (isOwnerScopeCurrent(ownerScope)) {
-          broadcastSessionPatched(sid, broadcastPatch, ownerScope);
-        }
-      }
-      // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
-      // "置顶后又跑过 turn"的会话)。动态 import 避免 localDb → maker-host 的静态
-      // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
-      if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
-        void import('../../sessionTaskSummary.js').then((m) =>
-          m.maybeGenerateSessionTaskSummary(sid, { force: true }),
-        );
-      }
-      notifyAgentIslandSessionPatch(updated.id, {
-        status: updated.status,
-        title: updated.title,
-        workingDir: updated.workingDir,
-        workspaceKind: updated.workspaceKind,
-      });
-      scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
-      notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
-      cleanupSessionTerminalArtifacts(sid, p.status);
-      compactTerminalSessionToolResults(dbClient, sid, p.status);
-      return updated;
-    };
-    if (p.workingDir === undefined) return update();
-    return withSessionRouteLock(sid, async () => {
-      const [binding] = await db
-        .select({ remoteHostId: sessions.remoteHostId })
-        .from(sessions)
-        .where(eq(sessions.id, sid))
-        .limit(1);
-      const resource =
-        !binding?.remoteHostId && typeof p.workingDir === 'string'
-          ? managedWorktreeRoot(p.workingDir)
-          : null;
-      const resources = await readSessionWorktreeResources(db, sid);
-      if (resource) resources.push(resource);
-      return withWorktreeMutation(resources, update);
-    });
+    return updateSessionInDb(sid, p, opts);
   });
 
   // 窄口径会话元数据编辑(status / title / pinnedAt)。专为 device-link 控制端**远程**
@@ -1985,6 +1715,297 @@ export function registerSessionIpc(
       m.setPinnedSectionCardMode(enabled);
     },
   );
+}
+
+/**
+ * `local-db:sessions:update` 的业务体。renderer 的 sessionService.update 与 MCP
+ * 会话操作工具(move / pin / delete 等)共用这一条路径:路由锁 + worktree 锁、
+ * review 会话拒改、Pi/Codex 空闲 runtime 关闭、cc 转录目录搬迁、recent-workdir
+ * 维护、sessions:patched 广播与 agent-island 通知都在这里,不得另起平行写入链路。
+ */
+export async function updateSessionInDb(
+  sid: string,
+  p: Record<string, unknown>,
+  opts: RegisterSessionIpcOpts = registeredSessionIpcOpts,
+): Promise<ReturnType<typeof sessionToCamel>> {
+  const ownerScope = captureOwnerScope();
+  if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
+    throwIpcError(
+      'UNSUPPORTED_CAPABILITY',
+      'directory grants must be changed through maker:set-*-dirs',
+    );
+  }
+  const dbClient = getDbClient();
+  const db = dbClient.drizzle;
+  // 工作目录切换必须和发送/懒启动共用同一把路由锁。否则发送可能在
+  // 读取旧目录后、写入新目录前重建 runtime，随后仍在旧目录执行。
+  const update = async () => {
+    if (p.workspaceKind !== undefined) {
+      const value = p.workspaceKind;
+      if (value !== 'project' && value !== 'dialogue') {
+        throwIpcError('INVALID_PARAMS', `invalid workspaceKind: ${String(value)}`);
+      }
+    }
+    const ALLOWED_UPDATE_ORCA_ROLES = new Set<string>(['lead', 'worker']);
+    if (
+      p.orcaRole !== undefined &&
+      p.orcaRole !== null &&
+      !ALLOWED_UPDATE_ORCA_ROLES.has(p.orcaRole as string)
+    ) {
+      throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(p.orcaRole)}`);
+    }
+    if (typeof p.workingDir === 'string') {
+      p.workingDir = normalizeWorkingDirForStorage(p.workingDir) ?? null;
+    }
+    const REVIEW_IMMUTABLE_FIELDS = new Set([
+      'workingDir',
+      'workspaceKind',
+      'model',
+      'providerId',
+      'effort',
+      'permissionMode',
+      'fastMode',
+      'planModeEnabled',
+      'orcaRole',
+      'extraDirs',
+      'writableDirs',
+    ]);
+    if (Object.keys(p).some((key) => REVIEW_IMMUTABLE_FIELDS.has(key))) {
+      const [target] = await db
+        .select({ source: sessions.source })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      if (target?.source === 'review') {
+        throwIpcError(
+          'UNSUPPORTED_CAPABILITY',
+          'Review task settings are fixed to the source task',
+        );
+      }
+    }
+    // 会话移动转录迁移:patch 带 workingDir 时先留存旧值,update 后对比实际变化。
+    // CLI 转录按 cwd 转码目录存放,workingDir 变了必须跟着搬,否则 resume 报
+    // "No conversation found with session ID"(见 claude-transcript-relocation.ts)。
+    const beforeMove =
+      p.workingDir !== undefined
+        ? (
+            await db
+              .select({
+                workingDir: sessions.workingDir,
+                agentKind: sessions.agentKind,
+                remoteHostId: sessions.remoteHostId,
+              })
+              .from(sessions)
+              .where(eq(sessions.id, sid))
+          )[0]
+        : undefined;
+    const movingLocalNonClaudeSession =
+      beforeMove &&
+      beforeMove.agentKind !== 'cc' &&
+      !beforeMove.remoteHostId &&
+      beforeMove.workingDir &&
+      typeof p.workingDir === 'string' &&
+      p.workingDir &&
+      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir;
+    // Pi/Codex keep a live Maker handle whose cwd is fixed at bootstrap. Close it
+    // before persisting the new directory so the next send lazily recreates the
+    // runtime with the moved session's cwd instead of continuing in the old one.
+    if (movingLocalNonClaudeSession) {
+      if (!opts.closeIdleSessionForMove) {
+        throwIpcError('INTERNAL', '会话移动 runtime 操作未配置');
+      }
+      const idle = await opts.closeIdleSessionForMove(sid);
+      if (idle === false) {
+        throwIpcError('PRECONDITION_FAILED', '运行中的任务不能移动');
+      }
+    }
+    // 只有纯设置字段(model/effort 等)才跳过 bump；凡带 activity 字段
+    // (clearedAt / sdkSessionId / status / token 用量等)仍需更新 updatedAt，
+    // 否则本地 /clear 后重启侧栏时间回退旧值。
+    const SETTINGS_ONLY_FIELDS = new Set([
+      'model',
+      'effort',
+      'permissionMode',
+      'fastMode',
+      'planModeEnabled',
+      'providerId',
+      'orcaRole',
+      'extraDirs',
+      'writableDirs',
+      'pinnedAt',
+      'workingDir',
+      'workspaceKind',
+      'title',
+    ]);
+    const isSettingsOnly = Object.keys(p).every((k) => SETTINGS_ONLY_FIELDS.has(k));
+    const setObj = sessionPatchToRow(p as Parameters<typeof sessionPatchToRow>[0], {
+      bumpUpdatedAt: !isSettingsOnly,
+    });
+    if (p.clearedAt !== undefined) {
+      setObj.summary = null;
+      setObj.listPreview = null;
+      setObj.listPreviewRole = null;
+    }
+    // 用户手动改名(重命名框 / 侧边栏)走这条:告诉自动起名收手。同值改名不会让
+    // 条件写落空,不显式说一声的话智能标题会把他刚保存的名字盖掉(review P1)。
+    // **必须先于 UPDATE**:写库是一次 worker RPC 往返,改名提交与这里拿到回执之间
+    // 有真实时间差,在那期间智能标题仍能满足 `WHERE title = 期望值` 把名字盖掉。
+    // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
+    // 按下过保存,这个方向的偏差是安全的。
+    if (typeof p.title === 'string') noteUserTitleWritten(sid);
+    await withStatusWriteLock(
+      db,
+      sid,
+      p.status,
+      async () => {
+        if (p.status !== undefined) await assertGenericSessionLifecycleAllowed(db, sid);
+        await writeSessionPatch(db, sid, setObj, p.status);
+        cleanupSessionRuntimeForTerminalStatus(sid, p.status);
+      },
+      p.workingDir !== undefined,
+    );
+    // session-git-pr-context:/clear 经此处写 clearedAt——边界之前的消息对用户
+    // 不可见,PR 引用同步重算(fire-and-forget,内部按 clearedAt/rewindAt 过滤)。
+    if (p.clearedAt !== undefined) {
+      noteSessionClearBoundary(sid, p.clearedAt as string | null);
+      // sidebar-card-mode(codex review):summary 是基于 clear 前内容生成的,clear 后
+      // 已过时;置顶卡片优先用 summary 而非 preview,不清就会继续显示旧任务摘要。
+      // 与 clearedAt 同一句 UPDATE 置空，避免崩溃后非 NULL 缓存绕过 clear 边界。
+      if (isOwnerScopeCurrent(ownerScope)) {
+        broadcastSessionPatched(sid, { summary: null, preview: null }, ownerScope);
+      }
+      void recomputePrRefsForSession(sid).catch(() => undefined);
+    }
+    // workingDir 实际变化的本机 cc 会话:迁移 CLI 转录后再查询返回行/广播,保证
+    // renderer 拿到更新结果时转录已就位(用户可立即续聊),且迁移中持久化的最新
+    // sdkSessionId 能进返回行与广播 patch——否则 renderer 留着旧 resume id,下一次
+    // lazy-create 仍会 resume 到 pre-fork 会话。内部 best-effort 不抛错。
+    // 动态 import 避免 localDb → maker-host 的静态模块环(同下方 sessionTaskSummary)。
+    if (
+      beforeMove &&
+      beforeMove.agentKind === 'cc' &&
+      !beforeMove.remoteHostId &&
+      beforeMove.workingDir &&
+      typeof p.workingDir === 'string' &&
+      p.workingDir &&
+      normalizeWorkingDirForStorage(beforeMove.workingDir) !== p.workingDir
+    ) {
+      const m = await import('../../maker-host/claude-transcript-relocation.js');
+      const reloc = await m.relocateClaudeTranscriptsForSessionMove(
+        sid,
+        beforeMove.workingDir,
+        p.workingDir,
+      );
+      if (reloc.persistedSdkSessionId) {
+        (p as Record<string, unknown>).sdkSessionId = reloc.persistedSdkSessionId;
+      }
+    }
+    const row = await selectSessionWithCount(db, sid);
+    if (!row) throwIpcError('NOT_FOUND', 'Session 不存在');
+    // 取消置顶后摘要不再有展示面,立刻清掉,避免列表/再次置顶前继续吃旧句。
+    if (p.pinnedAt !== undefined && row.pinnedAt == null) {
+      await db.update(sessions).set({ summary: null }).where(eq(sessions.id, sid));
+      row.summary = null;
+    }
+    const updated = sessionToCamel(row);
+    const projectTargetChanged = p.workspaceKind !== undefined || p.workingDir !== undefined;
+    const settingsChanged = Object.keys(p).some((key) => REMOTE_PERSIST_FIELDS.has(key));
+    const titleChanged = p.title !== undefined;
+    // 归档/删除这类纯 status 变化也要广播:本机多窗口收敛靠 sessions:patched,
+    // 否则「在新窗口打开」的副窗口无从得知会话已被移除,仍停留在旧视图(#3175)。
+    const statusChanged = p.status !== undefined;
+    if (
+      (projectTargetChanged || p.status === 'deleted' || p.status === 'archived') &&
+      row.workspaceKind === 'project' &&
+      row.workingDir &&
+      !row.remoteHostId &&
+      isRetainableProjectSessionSource(row.source)
+    ) {
+      const touched = await upsertRecentWorkdir(
+        row.workingDir,
+        Date.now(),
+        process.platform,
+        dbClient,
+      );
+      if (touched) broadcastRecentWorkdirsChanged(row.workingDir, ownerScope);
+    }
+    // status 广播必须用**广播时刻的持久化真值**,不能带请求值 p.status,也不能用
+    // 上方读行的快照:写入(withStatusWriteLock)与广播不在同一串行区间,且读行
+    // 之后、广播之前还有 await(摘要清理 / recent-workdir / 转录迁移),两个窗口
+    // 对同一任务并发操作时,本请求可能在此期间被另一窗口推进到更晚的终态(如
+    // 归档写入后被删除)。用过期值广播会把镜像回滚成旧 UI 状态(已删除任务在
+    // 副窗/控制端复活),且若本广播是最后一条,镜像不会自愈。
+    //
+    // 因此含 status 的 patch 在广播前(所有 await 之后)**重读一次**:重读与广播
+    // 之间无 await,同进程单事件循环下不可能再插入并发写;即便并发删除的广播
+    // 晚于本广播到达,镜像最终也收敛到 deleted。
+    let broadcastStatus = updated.status;
+    if (p.status !== undefined) {
+      const [currentRow] = await db
+        .select({ status: sessions.status })
+        .from(sessions)
+        .where(eq(sessions.id, sid))
+        .limit(1);
+      if (currentRow) broadcastStatus = currentRow.status;
+    }
+    const broadcastPatch =
+      p.pinnedAt === undefined && p.status === undefined
+        ? p
+        : {
+            ...p,
+            ...(p.pinnedAt !== undefined ? { pinnedAt: updated.pinnedAt } : {}),
+            ...(p.status !== undefined ? { status: broadcastStatus } : {}),
+            ...(p.pinnedAt !== undefined && updated.pinnedAt === null ? { summary: null } : {}),
+            ...(p.pinnedAt !== undefined && updated.pinnedAt !== null
+              ? { status: broadcastStatus }
+              : {}),
+          };
+    if (
+      projectTargetChanged ||
+      settingsChanged ||
+      titleChanged ||
+      statusChanged ||
+      p.pinnedAt !== undefined
+    ) {
+      if (isOwnerScopeCurrent(ownerScope)) {
+        broadcastSessionPatched(sid, broadcastPatch, ownerScope);
+      }
+    }
+    // sidebar-card-mode: 会话被置顶那一刻补生成任务摘要(turn-done 路径只覆盖
+    // "置顶后又跑过 turn"的会话)。动态 import 避免 localDb → maker-host 的静态
+    // 模块环;fire-and-forget,模块内部自带置顶/节流守卫。
+    if (p.pinnedAt !== undefined && updated.pinnedAt !== null) {
+      void import('../../sessionTaskSummary.js').then((m) =>
+        m.maybeGenerateSessionTaskSummary(sid, { force: true }),
+      );
+    }
+    notifyAgentIslandSessionPatch(updated.id, {
+      status: updated.status,
+      title: updated.title,
+      workingDir: updated.workingDir,
+      workspaceKind: updated.workspaceKind,
+    });
+    scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
+    notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
+    cleanupSessionTerminalArtifacts(sid, p.status);
+    compactTerminalSessionToolResults(dbClient, sid, p.status);
+    return updated;
+  };
+  if (p.workingDir === undefined) return update();
+  return withSessionRouteLock(sid, async () => {
+    const [binding] = await db
+      .select({ remoteHostId: sessions.remoteHostId })
+      .from(sessions)
+      .where(eq(sessions.id, sid))
+      .limit(1);
+    const resource =
+      !binding?.remoteHostId && typeof p.workingDir === 'string'
+        ? managedWorktreeRoot(p.workingDir)
+        : null;
+    const resources = await readSessionWorktreeResources(db, sid);
+    if (resource) resources.push(resource);
+    return withWorktreeMutation(resources, update);
+  });
 }
 
 export async function patchSessionMetaInDb(
