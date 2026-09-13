@@ -2234,7 +2234,7 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     const { providers, env } = buildPiNativeProvidersFromConfigs([{ id: 'copilot-oauth', name: 'Copilot',
       auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
       runtimes: { pi: { baseUrl: row.upstream, catalogPresetId: 'github-copilot', wireProtocol: 'openai-responses',
-        models: [{ id: row.id, name: row.name, api: row.execution.pi.api }] } } }],
+        models: [{ id: row.id, name: row.name, api: 'openai-responses' }] } } }],
       () => { throw new Error('OAuth must not read API keys'); }, undefined, undefined, undefined, 'http://127.0.0.1:9999');
     expect(providers[0]).toMatchObject({ adapterProvider: 'github-copilot', baseUrl: 'http://127.0.0.1:9999' });
     expect(providers[0]?.apiKeyEnvVar).toBeUndefined();
