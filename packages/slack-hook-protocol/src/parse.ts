@@ -231,6 +231,14 @@ function validateSource(v: unknown): string | null {
   if (v === undefined) return null;
   if (!isPlainObject(v)) return 'task.dispatch.source must be an object when present';
   if (!isNonEmptyString(v.im)) return 'task.dispatch.source.im must be a non-empty string';
+  if (v.xContext !== undefined) {
+    const x = v.xContext;
+    if (!isPlainObject(x) || !isNonEmptyString(x.requesterId) ||
+        typeof x.truncated !== 'boolean' ||
+        (x.requesterName !== undefined && typeof x.requesterName !== 'string')) {
+      return 'task.dispatch.source.xContext must contain requesterId, truncated and optional requesterName';
+    }
+  }
   if (v.channelName !== undefined && !isNullableString(v.channelName)) {
     return 'task.dispatch.source.channelName must be a string or null';
   }
@@ -259,6 +267,11 @@ function validateSource(v: unknown): string | null {
       }
       if (typeof entry.text !== 'string') {
         return `task.dispatch.source.threadContext[${i}].text must be a string`;
+      }
+      if ((entry.messageId !== undefined && !isNonEmptyString(entry.messageId)) ||
+          (entry.authorId !== undefined && !isNonEmptyString(entry.authorId)) ||
+          (entry.replyToMessageId !== undefined && !isNullableNonEmptyString(entry.replyToMessageId))) {
+        return `task.dispatch.source.threadContext[${i}] has invalid message identity`;
       }
     }
   }

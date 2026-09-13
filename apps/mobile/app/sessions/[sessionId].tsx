@@ -1991,7 +1991,7 @@ export default function SessionScreen() {
     [sessionId, sessions],
   );
   const sessionManagedByHost = isHostManagedSession(currentSession);
-  const composerDeviceProviders = useDeviceProviders(deviceId || undefined);
+  const composerDeviceProviders = useDeviceProviders(deviceId || undefined, modelSheetOpen);
   const accountProvider = composerDeviceProviders.ready
     ? composerDeviceProviders.providers.find((provider) => provider.id === currentSession?.providerId)
     : undefined;

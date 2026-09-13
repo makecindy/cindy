@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * Plugin detail presentation for configuration, Tools, permissions, and factual metadata.
  *
@@ -944,7 +945,7 @@ export function DetailsSection({
                     if (!installDir) return;
                     void window.electronAPI.openPath(installDir).then(
                       (result) => {
-                        if (!result.success) toast.error(t('settings.ghosts.errors.generic'));
+                        if (shouldShowOpenPathError(result)) toast.error(t('settings.ghosts.errors.generic'));
                       },
                       () => toast.error(t('settings.ghosts.errors.generic')),
                     );

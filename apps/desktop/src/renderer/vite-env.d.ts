@@ -2934,7 +2934,7 @@ interface ElectronAPI {
    * Open a local file path with the OS default application. Used by the
    * TextLightbox toolbar Open-in-System button and the Oversize main button.
    */
-  openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  openPath: (filePath: string) => Promise<import('../shared/openPathResult').OpenPathResult>;
 
   /**
    * 文件 chip 右键「打开方式」:枚举可打开该文件的应用(Windows 注册表;

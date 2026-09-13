@@ -27,6 +27,11 @@ function providerErrorCode(error: unknown): string | undefined {
   return /^(?:Error invoking remote method '[^']+': Error: )?\[([A-Z0-9_]+)\]/.exec(message)?.[1];
 }
 
+/** Short retries and mounted-picker recovery must recognize the same IPC forms. */
+export function isDeviceProvidersVisibilityNotReadyError(error: unknown): boolean {
+  return providerErrorCode(error) === 'MODEL_VISIBILITY_NOT_READY';
+}
+
 /** Only an explicitly unsupported channel permits the legacy capabilities fallback. */
 export function isDeviceProvidersUnsupportedError(error: unknown): boolean {
   const code = providerErrorCode(error);
@@ -41,7 +46,7 @@ async function requestDeviceProviders(
     try {
       return await fetcher();
     } catch (error) {
-      if (providerErrorCode(error) !== 'MODEL_VISIBILITY_NOT_READY' || attempt >= 2 || !isCurrent()) throw error;
+      if (!isDeviceProvidersVisibilityNotReadyError(error) || attempt >= 2 || !isCurrent()) throw error;
       await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
       if (!isCurrent()) throw error;
     }
