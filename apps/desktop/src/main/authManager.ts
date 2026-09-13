@@ -151,6 +151,10 @@ import {
 } from './localProfileDataMigration.js';
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
+import {
+  runGuardedRuntimeAuthExpiry,
+  type RuntimeCredentialRemovalResult,
+} from './authRuntimeExpiryGuard';
 import { withCrossProcessLock } from './device-link/crossProcessLock';
 import {
   StableOwnerPostCommitCoordinator,
@@ -1663,6 +1667,44 @@ async function removeVaultAccount(accountKey: string): Promise<void> {
     delete vault.resources[accountKey];
     if (vault.activeAccountKey === accountKey) vault.activeAccountKey = null;
   });
+}
+
+/**
+ * Remove only the active Resource generation rejected by this runtime refresh.
+ * The vault mutation is the authoritative CAS; compatibility records are then
+ * deleted with their existing compare-and-delete guard so a concurrent login
+ * can replace either representation without being erased by stale cleanup.
+ */
+async function removeRejectedRuntimeCredentials(input: {
+  realm: AuthRegion;
+  rejectedRefreshTokens: readonly string[];
+  validateBeforeWrite: () => void;
+}): Promise<RuntimeCredentialRemovalResult> {
+  const rejectedRefreshTokens = new Set(input.rejectedRefreshTokens);
+  const removal = await mutateAuthAccountVault((vault) => {
+    input.validateBeforeWrite();
+    const activeKey = vault.activeAccountKey;
+    const activeResource = activeKey ? vault.resources[activeKey] : undefined;
+    if (!activeKey || !activeResource) return 'missing';
+    if (
+      activeResource.realm !== input.realm ||
+      !rejectedRefreshTokens.has(activeResource.refreshToken)
+    ) {
+      return 'stale';
+    }
+    delete vault.resources[activeKey];
+    vault.activeAccountKey = null;
+    return 'removed';
+  });
+  if (removal === 'stale') return removal;
+
+  for (const token of input.rejectedRefreshTokens) {
+    removeSafeIfUnchanged(AUTH_SESSION_KEY, serializeAuthSessionRecord(input.realm, token));
+    if (input.realm === AUTH_REGION) {
+      removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, token);
+    }
+  }
+  return removal;
 }
 
 function bindResourcePairToSavedAccount(
@@ -3636,52 +3678,107 @@ function clearAuth(
 async function expireRuntimeAuth(
   previousUserId: string,
   reason: SessionExpiredReason = 'unknown',
-  opts: { preservePersistedRefreshToken?: boolean } = {},
+  opts:
+    | { preservePersistedRefreshToken: true }
+    | {
+        preservePersistedRefreshToken?: false;
+        rejectedRealm: AuthRegion;
+        rejectedRefreshTokens: readonly string[];
+      },
 ): Promise<void> {
-  const expiredAccountKey = currentUser ? accountVaultKey(activeAuthRealm, currentUser.id) : null;
-  if (
-    expiredAccountKey &&
-    !opts.preservePersistedRefreshToken &&
-    !isPassiveSharedUserDataInstance()
-  ) {
-    try {
-      await removeVaultAccount(expiredAccountKey);
-    } catch (error) {
-      log.warn('failed to remove expired account from saved-account vault', error);
-    }
-  }
-  // Raise the owner boundary before clearing auth so queued owner-scoped
-  // continuations see the pending boundary and fail closed, rather than
-  // executing between token clearance and the async teardown (P1,
+  const expiryEpoch = authStateEpoch;
+  const expiryRealm = activeAuthRealm;
+  const expiryUserId = currentUser?.id ?? getActiveAppSession().dataOwnerId ?? previousUserId;
+  const isExpiryStillCurrent = (): boolean =>
+    authStateEpoch === expiryEpoch &&
+    activeAuthRealm === expiryRealm &&
+    (currentUser?.id ?? getActiveAppSession().dataOwnerId ?? previousUserId) === expiryUserId;
+  const assertExpiryStillCurrent = (): void => {
+    if (isExpiryStillCurrent()) return;
+    throw new AuthApiError(
+      'AUTH_FLOW_SUPERSEDED',
+      409,
+      'Runtime auth expiry was superseded by a newer auth action',
+    );
+  };
+
+  // Raise the owner boundary before awaiting credential cleanup or teardown
+  // so queued owner-scoped continuations fail closed throughout the stale-
+  // expiry race window (P1,
   // PRRT_kwDOTgdRUs6YaakC).  beginAppSessionBoundary is ref-counted;
   // withAccountFreeOwnerCommit will extend it, and the finally block
   // releases the outer reference after teardown completes.
   const releaseBoundary = beginAppSessionBoundary();
-  clearAuth({
-    notify: false,
-    nextMode: 'signed-out',
-    preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
-    deferSessionCommit: true,
-  });
+  let expiryCommitted = false;
+  let expiryClearedOnFailure = false;
   try {
-    await withAccountFreeOwnerCommit({
-      reason,
-      nextMode: 'signed-out',
-      preservePersistedRefreshToken: opts.preservePersistedRefreshToken,
-      notify: false,
-      clearOnFailure: true,
-      authAlreadyCleared: true,
+    const outcome = await runGuardedRuntimeAuthExpiry({
+      isCurrent: isExpiryStillCurrent,
+      ...(!opts.preservePersistedRefreshToken && !isPassiveSharedUserDataInstance()
+        ? {
+            removeRejectedCredentials: async () => {
+              try {
+                return await removeRejectedRuntimeCredentials({
+                  realm: opts.rejectedRealm,
+                  rejectedRefreshTokens: opts.rejectedRefreshTokens,
+                  validateBeforeWrite: assertExpiryStillCurrent,
+                });
+              } catch (error) {
+                if (error instanceof AuthApiError && error.code === 'AUTH_FLOW_SUPERSEDED') {
+                  throw error;
+                }
+                // A definitive rejection still has to end the in-memory
+                // session when storage is unavailable. Preserve every disk
+                // representation rather than falling back to key deletion.
+                log.warn('failed to compare-and-delete rejected runtime credentials', error);
+                return 'missing';
+              }
+            },
+          }
+        : {}),
+      commit: ({ validateBeforeCommit, shouldClearOnFailure }) =>
+        withAccountFreeOwnerCommit({
+          reason,
+          nextMode: 'signed-out',
+          // Runtime expiry has already compare-and-deleted only the rejected
+          // generation above. Never let clearAuth key-delete a replacement that
+          // arrived while the vault lock or teardown was pending.
+          preservePersistedRefreshToken: true,
+          notify: false,
+          clearOnFailure: true,
+          validateBeforeCommit,
+          shouldClearOnFailure: () => {
+            const shouldClear = shouldClearOnFailure();
+            if (shouldClear) expiryClearedOnFailure = true;
+            return shouldClear;
+          },
+        }),
     });
+    if (outcome === 'superseded') return;
+    if (outcome === 'stale-credential') {
+      log.warn(
+        'runtime auth expiry found a newer active credential generation; keeping the replacement and retrying later',
+      );
+      scheduleRefreshRetryAfterTransientFailure();
+      return;
+    }
+    expiryCommitted = true;
   } catch (err) {
+    if (err instanceof AuthApiError && err.code === 'AUTH_FLOW_SUPERSEDED') {
+      log.info('runtime auth expiry was superseded; preserving the newer auth owner');
+      return;
+    }
     // A teardown or durable-state failure must not restore an expired
     // credential. The helper has already cleared the in-memory owner; leave
     // the durable boundary non-stable for the next recovery attempt.
     log.error('runtime auth expiry owner transition failed', err);
   } finally {
     releaseBoundary();
-    notifyRenderer();
-    notifyAuthListeners();
-    notifySessionExpired(reason);
+    if (expiryCommitted || expiryClearedOnFailure) {
+      notifyRenderer();
+      notifyAuthListeners();
+      notifySessionExpired(reason);
+    }
   }
 }
 
@@ -5564,7 +5661,7 @@ export async function refresh(): Promise<boolean> {
     }
 
     try {
-      const { result, failureAction, replacementRetries, requestedToken } =
+      const { result, failureAction, replacementRetries, requestedToken, rejectedTokens } =
         await runAuthRefreshWithReplacementRetry(storedToken, {
           phase: 'runtime',
           realm: refreshRealm,
@@ -5591,7 +5688,10 @@ export async function refresh(): Promise<boolean> {
           );
           const previousUserId =
             currentUser?.id ?? getActiveAppSession().dataOwnerId ?? 'signed-out';
-          await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));
+          await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code), {
+            rejectedRealm: refreshRealm,
+            rejectedRefreshTokens: rejectedTokens,
+          });
         } else if (action.kind === 'foreign-device') {
           log.warn(
             'runtime refresh: DEVICE_MISMATCH — expiring this process and keeping the persisted refresh token',

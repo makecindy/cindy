@@ -933,7 +933,9 @@ describe('auth login-flow reset', () => {
     expect(refreshBody).toContain('const authRealmChanged = refreshRealm !== activeAuthRealm;');
     expect(refreshBody).toContain('await commitDesktopRefreshCredentials(');
     expect(refreshBody).toContain('activeAuthRealm = refreshRealm;');
-    expect(refreshBody.match(/commitCloudAppSession\(currentUser.id, authRealmChanged\);/g)).toHaveLength(2);
+    expect(
+      refreshBody.match(/commitCloudAppSession\(currentUser.id, authRealmChanged\);/g),
+    ).toHaveLength(2);
     expect(refreshBody).toContain(
       'const membershipKindChanged = previousMembershipKind !== nextUser.membershipKind;',
     );
@@ -955,9 +957,15 @@ describe('auth login-flow reset', () => {
     const helperStart = source.indexOf('async function expireRuntimeAuth(');
     const helperEnd = source.indexOf('\n}\n\n// ── Public API', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
-    expect(helperBody).toContain('clearAuth({ notify: false,');
-    expect(helperBody).toContain('await withAccountFreeOwnerCommit({');
-    expect(helperBody).toContain('authAlreadyCleared: true');
+    expect(helperBody).toContain('await runGuardedRuntimeAuthExpiry({');
+    expect(helperBody).toContain('const expiryEpoch = authStateEpoch;');
+    expect(helperBody).toContain('validateBeforeWrite: assertExpiryStillCurrent');
+    expect(helperBody).toContain("if (outcome === 'superseded') return;");
+    expect(helperBody).toContain('preservePersistedRefreshToken: true');
+    expect(helperBody).toContain('withAccountFreeOwnerCommit({');
+    expect(helperBody).toContain('validateBeforeCommit,');
+    expect(helperBody).toContain('if (shouldClear) expiryClearedOnFailure = true;');
+    expect(helperBody).toContain('if (expiryCommitted || expiryClearedOnFailure) {');
     expect(helperBody).toContain('notifySessionExpired(reason);');
 
     const ownerCommitStart = source.indexOf('async function withAccountFreeOwnerCommit(');
@@ -976,9 +984,26 @@ describe('auth login-flow reset', () => {
     const refreshEnd = source.indexOf('\n}\n\nexport async function logout()', refreshStart);
     const refreshBody = source.slice(refreshStart, refreshEnd);
     expect(refreshBody).toContain(
-      'await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code));',
+      'await expireRuntimeAuth(previousUserId, resolveSessionExpiredReason(code), {',
     );
+    expect(refreshBody).toContain('rejectedRealm: refreshRealm');
+    expect(refreshBody).toContain('rejectedRefreshTokens: rejectedTokens');
     expect(refreshBody).not.toContain('clearAuth({ notify: false });');
+  });
+
+  it('compare-and-deletes only the rejected runtime credential generation', () => {
+    const helperStart = source.indexOf('async function removeRejectedRuntimeCredentials(');
+    const helperEnd = source.indexOf('\n}\n\nfunction bindResourcePairToSavedAccount', helperStart);
+    const helperBody = source.slice(helperStart, helperEnd);
+
+    expect(helperBody).toContain('input.validateBeforeWrite();');
+    expect(helperBody).toContain('vault.activeAccountKey');
+    expect(helperBody).toContain('rejectedRefreshTokens.has(activeResource.refreshToken)');
+    expect(helperBody).toContain("return 'stale';");
+    expect(helperBody).toContain('delete vault.resources[activeKey];');
+    expect(helperBody).toContain('removeSafeIfUnchanged(AUTH_SESSION_KEY');
+    expect(helperBody).toContain('removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY');
+    expect(helperBody).not.toContain('removeSafe(AUTH_SESSION_KEY)');
   });
 
   it('reserves local namespaces before publishing a cloud owner', () => {
@@ -1117,7 +1142,9 @@ describe('auth login-flow reset', () => {
     const completeEnd = source.indexOf('\n}\n\nasync function acceptLoginOutcome', completeStart);
     const completeBody = source.slice(completeStart, completeEnd);
     const acceptedUser = completeBody.indexOf('currentUser = nextUser;');
-    const ownerCommit = completeBody.indexOf('commitCloudAppSession(currentUser.id, authRealmChanged);');
+    const ownerCommit = completeBody.indexOf(
+      'commitCloudAppSession(currentUser.id, authRealmChanged);',
+    );
     const clearPreviousFlag = completeBody.indexOf('canaryFlagStore.clear();', acceptedUser);
     expect(acceptedUser).toBeGreaterThan(-1);
     expect(clearPreviousFlag).toBeGreaterThan(acceptedUser);
