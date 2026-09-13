@@ -165,9 +165,23 @@ const PREFILTER_REVEALABLE = [
  *
  * 将来名单里若出现**文件**项(如 .DS_Store),要另发不带后缀的 `**\/<name>`
  * —— 文件没有“内部”,套用同一对形态会让它自己漏出去。
+ *
+ * 名字段展开为**大小写不敏感**的字符类(`[nN][oO]...`):parcel 内部走
+ * `picomatch.makeRe(value, { dot, windows })`,**没有 nocase** —— glob 区分大小写;
+ * 而 matcher 用的 `ignore` 包默认 ignorecase=true。大小写不敏感卷上 `NODE_MODULES` /
+ * `Library` 与名单同名、matcher 判定为忽略,预过滤却匹配不到:开关打开时这些目录被
+ * matcher 放行,整棵依赖树的每个事件都会一路推过 watcher-host + IPC(评审 P1)。
  */
+const caseInsensitiveName = (name: string): string =>
+  [...name]
+    .map((ch) => (/[A-Za-z]/.test(ch) ? `[${ch.toLowerCase()}${ch.toUpperCase()}]` : ch))
+    .join('');
+
 const ignoreGlobsForDirs = (names: readonly string[]): string[] =>
-  names.flatMap((name) => [`**/${name}/*`, `**/${name}/**/*`]);
+  names.flatMap((name) => {
+    const dir = caseInsensitiveName(name);
+    return [`**/${dir}/*`, `**/${dir}/**/*`];
+  });
 
 function buildIgnoreList(opts: { showIgnoredDirs: boolean }): string[] {
   // ALWAYS 名单**无条件注册**,不做存在性探测:parcel 的 ignore 只在

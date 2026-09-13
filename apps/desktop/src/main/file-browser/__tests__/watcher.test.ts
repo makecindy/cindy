@@ -185,16 +185,16 @@ describe('WatcherManager stop 宽限期', () => {
     await manager.start(makeWindow(), workdir, { showIgnoredDirs: true }, vi.fn());
     expect(calls[0].ignore).toEqual(
       expect.arrayContaining([
-        '**/node_modules/*',
-        '**/node_modules/**/*',
-        '**/Library/*',
-        '**/Library/**/*',
-        '**/.git/*',
-        '**/.git/**/*',
+        '**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/*',
+        '**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/**/*',
+        '**/[lL][iI][bB][rR][aA][rR][yY]/*',
+        '**/[lL][iI][bB][rR][aA][rR][yY]/**/*',
+        '**/.[gG][iI][tT]/*',
+        '**/.[gG][iI][tT]/**/*',
       ]),
     );
     // 开关打开时 REVEALABLE 不预过滤 —— 它们本来就该推事件。
-    expect(calls[0].ignore).not.toContain('**/dist/*');
+    expect(calls[0].ignore).not.toContain('**/[dD][iI][sS][tT]/*');
   });
 
   it('开关关闭时同样无条件带上 ALWAYS(目录稍后才出现也不漏)', async () => {
@@ -203,12 +203,12 @@ describe('WatcherManager stop 宽限期', () => {
     await manager.start(makeWindow(), workdir, { showIgnoredDirs: false }, vi.fn());
     expect(calls[0].ignore).toEqual(
       expect.arrayContaining([
-        '**/node_modules/*',
-        '**/node_modules/**/*',
-        '**/Library/*',
-        '**/Library/**/*',
-        '**/dist/*',
-        '**/dist/**/*',
+        '**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/*',
+        '**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/**/*',
+        '**/[lL][iI][bB][rR][aA][rR][yY]/*',
+        '**/[lL][iI][bB][rR][aA][rR][yY]/**/*',
+        '**/[dD][iI][sS][tT]/*',
+        '**/[dD][iI][sS][tT]/**/*',
       ]),
     );
   });
@@ -226,13 +226,37 @@ describe('WatcherManager stop 宽限期', () => {
   it('预过滤用 glob 覆盖任意层级,且不吞目录自身事件', async () => {
     const { manager, calls } = setup();
     await manager.start(makeWindow(), 'D:/repo', { showIgnoredDirs: false }, vi.fn());
-    expect(calls[0].ignore).toContain('**/node_modules/*');
-    expect(calls[0].ignore).toContain('**/node_modules/**/*');
-    expect(calls[0].ignore).toContain('**/Library/*');
-    expect(calls[0].ignore).toContain('**/Library/**/*');
+    expect(calls[0].ignore).toContain('**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/*');
+    expect(calls[0].ignore).toContain('**/[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]/**/*');
+    expect(calls[0].ignore).toContain('**/[lL][iI][bB][rR][aA][rR][yY]/*');
+    expect(calls[0].ignore).toContain('**/[lL][iI][bB][rR][aA][rR][yY]/**/*');
     // 旧形态（吞目录自身事件）不得回潮。
     expect(calls[0].ignore).not.toContain('**/node_modules/**');
     expect(calls[0].ignore).not.toContain(path.join('D:/repo', 'node_modules'));
+  });
+
+  /**
+   * 评审 P1（PR #4398 轮八）：parcel 的 ignore glob 走 picomatch 默认选项
+   * （`@parcel/watcher/wrapper.js` 只传 `dot` / `windows`，**无 nocase**），而
+   * matcher 用的 `ignore` 包默认 `ignorecase=true` —— 大小写不敏感卷上
+   * `NODE_MODULES` / `Library` 与名单同名，matcher 判忽略、预过滤却匹配不到：
+   * 开关打开时这些目录被 matcher 放行，整棵依赖树的事件都会推过 watcher-host + IPC。
+   * 名字段必须折叠大小写（字符类），区分大小写的原名形态不得回潮。
+   */
+  it('预过滤 glob 折叠大小写:变体目录名同样命中', async () => {
+    const { manager, calls } = setup();
+    await manager.start(makeWindow(), 'D:/repo', { showIgnoredDirs: true }, vi.fn());
+    const ignore = calls[0].ignore;
+    for (const name of [
+      '[nN][oO][dD][eE]_[mM][oO][dD][uU][lL][eE][sS]',
+      '[lL][iI][bB][rR][aA][rR][yY]',
+    ]) {
+      expect(ignore).toContain(`**/${name}/*`);
+      expect(ignore).toContain(`**/${name}/**/*`);
+    }
+    // 区分大小写的原名形态不得回潮（大小写不敏感卷上会漏掉变体目录）。
+    expect(ignore).not.toContain('**/node_modules/*');
+    expect(ignore).not.toContain('**/Library/*');
   });
 
   it('不同 window 同 workdir 互不干扰(key 维度 window×workdir)', async () => {
