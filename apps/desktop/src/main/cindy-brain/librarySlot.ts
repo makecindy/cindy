@@ -17,7 +17,7 @@
  * 全部经 deps,单测拿 tmpdir + 进程内 core 直测,零 Electron。
  */
 
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { crc32 } from 'node:zlib';
@@ -133,6 +133,27 @@ export function libraryAvailableRef(input: {
   return `cindy-media://blobs/${input.hash}.${ext}`;
 }
 
+export { parseLibraryAssetRef, resolveLibraryAssetPath } from '@cindy/maker-core';
+const LIBRARY_EPOCH_IDENTITY_NS = 'cindy-library-epoch-v1';
+
+/** opaque 库身份:区分 owner / 迁根 / A→B→A,回执不出现 owner 原值或绝对根。 */
+export function mintLibraryEpochIdentity(input: {
+  ghostId: string;
+  ownerScopeKey: string | null;
+  generation: number;
+  rootDir: string;
+  grantedAt: number;
+}): string {
+  return createHash('sha256').update([
+    LIBRARY_EPOCH_IDENTITY_NS,
+    input.ghostId,
+    input.ownerScopeKey ?? '',
+    String(input.generation),
+    input.rootDir,
+    String(input.grantedAt),
+  ].join('\0')).digest('hex');
+}
+
 /** 单插件的库会话(vault + sql 绑定到同一根与 owner scope)。 */
 interface GhostLibrarySession {
   ghostId: string;
@@ -145,7 +166,7 @@ interface GhostLibrarySession {
   drift: 'binding-moved' | 'disk-missing' | null;
   /** bind/unbind 代次;默认根为 0。不含绝对路径。 */
   generation: number;
-  /** 库身份短码(default / g<generation>),不含绝对路径。 */
+  /** opaque 库身份(64-hex),区分 owner/迁根/A→B→A,不暴露 owner 原值或绝对根。 */
   identity: string;
 }
 
@@ -219,6 +240,12 @@ export class GhostLibrarySlot {
   private extraDirGrant: { ghostId: string; root: string } | null = null;
   /** 最近一次显式 open 的插件;status 只给它复挂,别人 status 不得抢槽。 */
   private extraDirOpenerGhostId: string | null = null;
+  /** writeBegin 时按 streamId 捕获的写入 epoch,commit 不得事后拼当前全局身份。 */
+  private readonly writeEpochByStream = new Map<string, {
+    ghostId: string;
+    libraryGeneration: number;
+    libraryIdentity: string;
+  }>();
 
   constructor(private readonly deps: GhostLibrarySlotDeps) {}
 
@@ -359,7 +386,13 @@ export class GhostLibrarySlot {
     });
     const record = 'record' in resolution ? resolution.record : undefined;
     const generation = record?.generation ?? 0;
-    const identity = record ? `g${generation}` : 'default';
+    const identity = mintLibraryEpochIdentity({
+      ghostId,
+      ownerScopeKey: scopeKey,
+      generation,
+      rootDir: root,
+      grantedAt: record?.grantedAt ?? 0,
+    });
     return {
       ghostId,
       vault,
@@ -387,6 +420,15 @@ export class GhostLibrarySlot {
         this.isExtraDirGrantedFor(session.ghostId, session.vault.getRootDir())
         && session.drift === null
         && (state === 'ready' || state === 'readonly'),
+      ...this.epochFields(session),
+    };
+  }
+
+  /** 实际写入 session 的 epoch;必须在 await vault 之前捕获。 */
+  private epochFields(
+    session: GhostLibrarySession,
+  ): { libraryGeneration: number; libraryIdentity: string } {
+    return {
       libraryGeneration: session.generation,
       libraryIdentity: session.identity,
     };
@@ -442,6 +484,9 @@ export class GhostLibrarySlot {
     const session = this.sessions.get(ghostId);
     if (!session) return;
     this.sessions.delete(ghostId);
+    for (const [streamId, epoch] of this.writeEpochByStream) {
+      if (epoch.ghostId === ghostId) this.writeEpochByStream.delete(streamId);
+    }
     await session.sql.dispose().catch(() => {});
     await session.vault.invalidate().catch(() => {});
     if (this.extraDirGrant?.ghostId === ghostId) {
@@ -574,13 +619,16 @@ export class GhostLibrarySlot {
         return { ok: true, op: 'read', path: r.path, content: r.content, encoding: r.encoding, bytes: r.bytes, sha256: r.sha256 };
       }
       case 'write': {
+        const epoch = this.epochFields(session);
         const r = await vault.write({ path: req.path, content: req.content, encoding: req.encoding, ifNotExists: req.ifNotExists });
         if (!r.ok) return vaultFail(r);
-        return { ok: true, op: 'write', path: r.path, bytes: r.bytes, sha256: r.sha256 };
+        return { ok: true, op: 'write', path: r.path, bytes: r.bytes, sha256: r.sha256, ...epoch };
       }
       case 'writeBegin': {
+        const epoch = this.epochFields(session);
         const r = await vault.writeBegin({ path: req.path, totalBytes: req.totalBytes, sha256: req.sha256 });
         if (!r.ok) return vaultFail(r);
+        this.writeEpochByStream.set(r.streamId, { ghostId, ...epoch });
         return { ok: true, op: 'writeBegin', streamId: r.streamId };
       }
       case 'writeChunk': {
@@ -589,11 +637,22 @@ export class GhostLibrarySlot {
         return { ok: true, op: 'writeChunk', accepted: r.accepted };
       }
       case 'writeCommit': {
+        const streamId = typeof req.streamId === 'string' ? req.streamId : '';
+        const captured = this.writeEpochByStream.get(streamId);
+        if (!captured || captured.ghostId !== ghostId) {
+          return fail('STREAM_INVALID', 'streamId 无效或已结束');
+        }
+        const epoch = {
+          libraryGeneration: captured.libraryGeneration,
+          libraryIdentity: captured.libraryIdentity,
+        };
         const r = await vault.writeCommit({ streamId: req.streamId });
+        this.writeEpochByStream.delete(streamId);
         if (!r.ok) return vaultFail(r);
-        return { ok: true, op: 'writeCommit', path: r.path, bytes: r.bytes, sha256: r.sha256 };
+        return { ok: true, op: 'writeCommit', path: r.path, bytes: r.bytes, sha256: r.sha256, ...epoch };
       }
       case 'writeAbort': {
+        if (typeof req.streamId === 'string') this.writeEpochByStream.delete(req.streamId);
         const r = await vault.writeAbort({ streamId: req.streamId });
         if (!r.ok) return vaultFail(r);
         return { ok: true, op: 'writeAbort', aborted: r.aborted };

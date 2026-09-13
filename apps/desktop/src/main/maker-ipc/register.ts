@@ -615,6 +615,8 @@ import { refreshCodexMcpEnvironment } from './codexMcpRefresh.js';
 import {
   excludeDirectoryGrantConflictsWithSlots,
   extraDirsForRuntime,
+  directoryGrantsForRuntime,
+  libraryRootForRuntime,
   isLibraryExtraDirSlot,
   libraryExtraDirSlot,
   libraryRootFromSlot,
@@ -3012,7 +3014,7 @@ export function applyDirectoryGrants(
     const result = await applyRemoteDirectoryGrantUpdate(axis, dirsToApply, {
       setExtraDirs: persistOnly
         ? async () => {}
-        : (dirs) => sess.setExtraDirs(extraDirsForRuntime(dirs)),
+        : (dirs) => sess.setExtraDirs(extraDirsForRuntime(dirs), libraryRootForRuntime(dirs)),
       setWritableDirs: persistOnly
         ? async () => {}
         : (dirs) => sess.setWritableDirs(dirs),
@@ -7019,7 +7021,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       orcaWorkerId: target.id,
       orcaWorkerSessionId: target.sessionId,
     };
-    const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId));
+    const storedExtraDirs = await readSessionExtraDirsFromDb(target.sessionId);
     const writableDirs = await readSessionWritableDirsFromDb(target.sessionId);
     const opts = buildCreateOptsWithStderr({
       id: row.id,
@@ -7037,7 +7039,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 安装 / codex daemon MCP 注入), 否则会以远端 workingDir 在本机 spawn,
       // 且远端 daemon 的协同 MCP 通道不就绪。
       remoteHostId: row.remoteHostId ?? undefined,
-      ...(extraDirs.length > 0 ? { extraDirs } : {}),
+      ...directoryGrantsForRuntime(storedExtraDirs),
       ...(writableDirs.length > 0 ? { writableDirs } : {}),
     });
     await ensureRemoteReadyForSessionStart({ createOpts: opts });
@@ -8220,7 +8222,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (co.extraDirs === undefined) {
         try {
           const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-          if (extraDirs.length > 0) co.extraDirs = extraDirsForRuntime(extraDirs);
+          if (extraDirs.length > 0) Object.assign(co, directoryGrantsForRuntime(extraDirs));
         } catch (err) {
           log.warn('agent-switch bootstrap: read extra_dirs from DB failed (non-fatal)', {
             sessionId,
@@ -9109,7 +9111,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (createOpts.extraDirs === undefined) {
           try {
             const row = await readSessionExtraDirsFromDb(targetSessionId);
-            if (row.length > 0) createOpts.extraDirs = extraDirsForRuntime(row);
+            if (row.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(row));
           } catch (err) {
             log.warn('sendToSession: read extra_dirs from DB failed (non-fatal)', {
               targetSessionId,
@@ -9849,7 +9851,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (createOpts.extraDirs === undefined) {
       try {
         const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-        if (extraDirs.length > 0) createOpts.extraDirs = extraDirsForRuntime(extraDirs);
+        if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
       } catch (err) {
         log.warn('inter-agent queue: read extra_dirs from DB failed (non-fatal)', {
           sessionId,
@@ -12544,7 +12546,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (createOpts.extraDirs === undefined) {
         try {
           const extraDirs = await readSessionExtraDirsFromDb(sessionId);
-          if (extraDirs.length > 0) createOpts.extraDirs = extraDirsForRuntime(extraDirs);
+          if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
         } catch (err) {
           log.warn('overflow replay: read extra_dirs from DB failed (non-fatal)', {
             sessionId,
@@ -12870,7 +12872,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         if (co.extraDirs === undefined) {
           try {
             const row = await readSessionExtraDirsFromDb(sessionId);
-            if (row.length > 0) co.extraDirs = extraDirsForRuntime(row);
+            if (row.length > 0) Object.assign(co, directoryGrantsForRuntime(row));
           } catch (err) {
             log.warn('context-usage lazy-create: read extra_dirs from DB failed (non-fatal)', {
               sessionId,
@@ -17074,7 +17076,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!workDirReady) return null;
     await synthesizeOrcaVendorOptionsFromDb(sessionId, createOpts);
     const extraDirs = await readSessionExtraDirsFromDb(sessionId).catch(() => []);
-    if (extraDirs.length > 0) createOpts.extraDirs = extraDirsForRuntime(extraDirs);
+    if (extraDirs.length > 0) Object.assign(createOpts, directoryGrantsForRuntime(extraDirs));
     const writableDirs = await readSessionWritableDirsFromDb(sessionId).catch(() => []);
     if (writableDirs.length > 0) createOpts.writableDirs = writableDirs;
     await ensureRemoteReadyForSessionStart({ createOpts });

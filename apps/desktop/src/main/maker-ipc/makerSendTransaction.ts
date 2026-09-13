@@ -4,6 +4,7 @@ import {
   AUTO_REVIEW_USER_INTENT,
   INHERITED_CAPABILITY_SELECTION,
   MAIN_OWNED_SEND_CONTEXT,
+  LIBRARY_READ_ROOT,
   type AgentKind,
   type MainOwnedSendContext,
   type SessionSendOptions,
@@ -34,7 +35,9 @@ import {
 import { buildCindyMakeTaskNote } from '../cindy-make/taskNote.js';
 import {
   excludeDirectoryGrantConflicts,
+  directoryGrantsForRuntime,
   extraDirsForRuntime,
+  libraryExtraDirSlot,
   validateExtraDirs,
 } from './extraDirsValidator.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
@@ -67,7 +70,9 @@ export async function prepareDirectoryGrantsForBootstrap(
   opts: CreateOpts,
   deps: BootstrapDirectoryGrantDeps,
 ): Promise<void> {
-  const requestedExtraDirs = opts.extraDirs ?? [];
+  const libraryRoot = opts.remoteHostId ? undefined : opts[LIBRARY_READ_ROOT];
+  const requestedExtraDirs = (opts.extraDirs ?? []).map((dir) =>
+    dir === libraryRoot ? libraryExtraDirSlot(dir) : dir);
   // Writable roots are a Main-owned persisted grant. CREATE_SESSION and lazy SEND payloads are
   // renderer/device-link controlled, so bootstrap must replace them with SQLite truth.
   const requestedWritableDirs =
@@ -77,9 +82,9 @@ export async function prepareDirectoryGrantsForBootstrap(
   const extraValidation = await validateExtraDirs(requestedExtraDirs, opts.workingDir, deps.statDirectory);
   const writableValidation = await validateExtraDirs(requestedWritableDirs, opts.workingDir, deps.statDirectory);
   const extraDirs = extraValidation.valid;
-  const writableDirs = await excludeDirectoryGrantConflicts(writableValidation.valid, extraDirs, deps.realpathDirectory);
+  const writableDirs = await excludeDirectoryGrantConflicts(writableValidation.valid, extraDirsForRuntime(extraDirs), deps.realpathDirectory);
 
-  if (opts.extraDirs !== undefined || extraDirs.length > 0) opts.extraDirs = extraDirs;
+  if (opts.extraDirs !== undefined || extraDirs.length > 0) Object.assign(opts, directoryGrantsForRuntime(extraDirs));
   if (opts.writableDirs !== undefined || writableDirs.length > 0) opts.writableDirs = writableDirs;
 
   const changed =
@@ -611,7 +616,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       try {
         const row = await deps.readSessionExtraDirsFromDb(sessionId);
         if (row.length > 0) {
-          opts.extraDirs = extraDirsForRuntime(row);
+          Object.assign(opts, directoryGrantsForRuntime(row));
         }
       } catch (err) {
         deps.log.warn(`${source}: read extra_dirs from DB failed (non-fatal)`, {

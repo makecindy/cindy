@@ -80,8 +80,24 @@ backups）对插件不可达——路径语法段首不许点，协议层天然�
     library 根 realpath 静默写入该会话只读 extraDirs。只读、不弹 picker / 确认卡、
     不改权限档。library 专用槽不占用户 EXTRA_DIRS_MAX=10。回执 / 握手 / probe 禁绝对
     路径，相对键 `library:assets/<2>/<hash>/blob.<ext>`。路径不跨 turn 缓存。
-    confirmed 只认宿主 `librarySlot.writeCommit` ACK 的 64-hex sha256。仓内无
-    `libraryConfirmed.ts`（不存在），不得发明该文件。
+    confirmed 只认宿主 `librarySlot.write` / `writeCommit` ACK 的 64-hex sha256。
+    成功写入回执兼容可选 `libraryGeneration` / `libraryIdentity`：必须在 await 之前从
+    真正执行写入的 session 或 `writeBegin` 按 streamId 捕获的 epoch 带出，禁止事后拼当前
+    全局身份。`libraryIdentity` 是 64-hex opaque 值，须区分 owner / 迁根 / 自定义 A→B→A，且不得
+    出现 owner 原值或绝对根。二元组只表示绑定身份：默认 D→自定义 C→默认 D、owner X→Y→X
+    回到同一默认 binding 时两端可以复用同一对字段，这不证明当前激活有效。激活有效期由插件
+    用握手切换窗口判定（见到不同二元组或 unavailable 后，旧回执即使稍后与当前握手再次相等
+    也不得 confirmed）。宿主不为此新增字段或持久单调计数。旧插件忽略新可选字段仍可用；缺
+    字段旧回执由 PR4 安全恢复，禁止因此要求重装或重授权。仓内无 `libraryConfirmed.ts`（不
+    存在），不得发明该文件。
+    宿主用当前已授权 extraDir 绝对根解析 `library:assets/<2>/<hash>/blob.<ext>`；插件
+    open/status/MCP 回执不得带绝对根。Host-only `LIBRARY_READ_ROOT` 元数据随任务 extraDirs
+    保留专用槽身份，不能从普通用户目录猜根或由 Renderer JSON 提供。三 harness 只向当前
+    任务投影实际授权根；Pi 当轮在工具结果后从权限快照补映射。解析实现位于 maker-core 的
+    `agents/shared/library-native-read.ts`，由生产发送上下文消费；native 工具仍负责实际读取
+    与权限执行，映射本身不授予权限。bootstrap 校验及收窄持久记录仍保留专用槽和 10 个用户目录。
+    Claude 中途授权下一 turn resume+fork 生效；Codex
+    低于 0.144.6 不得假授权；Pi 当轮热更新权限文件。
 12. **切根像素与限额**：正本文件名是 `blob`（路径 `assets/<2>/<hash>/blob.<ext>`），
     不是 `<hash>.<ext>`。同目录 sidecar `meta.json` / `preview.webp` 禁止当像素。
     16MiB 是 library 分块阈值（更大走 writeBegin），cindy-media 单件 50MiB、配额

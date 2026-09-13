@@ -8408,7 +8408,15 @@ export type GhostPipeLibraryResult =
       bytes: number;
       sha256: string;
     }
-  | { ok: true; op: 'write' | 'writeCommit'; path: string; bytes: number; sha256: string }
+  | {
+      ok: true;
+      op: 'write' | 'writeCommit';
+      path: string;
+      bytes: number;
+      sha256: string;
+      libraryGeneration?: number;
+      libraryIdentity?: string;
+    }
   | { ok: true; op: 'writeBegin'; streamId: string }
   | { ok: true; op: 'writeChunk'; accepted: number }
   | { ok: true; op: 'writeAbort'; aborted: boolean }

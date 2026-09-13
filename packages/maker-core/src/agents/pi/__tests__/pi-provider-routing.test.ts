@@ -4478,6 +4478,32 @@ describe("Pi provider-aware model routing", () => {
     },
   );
 
+  it("projects only the persisted task library grant into native read context", async () => {
+    const handle = await new PiAgent(byomDeps(async () => ({ providers: [], env: {} }))).startSession({
+      sessionId: "library-native-context", workingDir: cwd, model: "local-model", permissionMode: "ask",
+    });
+    const ref = `library:assets/aa/${"a".repeat(64)}/blob.png`;
+    await handle.setExtraDirs!(["/refs/user", "/refs/library-a"], "/refs/library-a");
+    captured.requests.length = 0;
+    await handle.send({ type: "user", content: ref });
+    const first = String(captured.requests.find((r) => r.type === "prompt")?.message);
+    expect(first).toContain('"libraryRoot":"/refs/library-a"');
+    expect(first).toContain(JSON.stringify({ ref, path: path.join("/refs/library-a", "assets", "aa", "a".repeat(64), "blob.png") }));
+    await handle.setExtraDirs!(["/refs/user", "/refs/library-b"], "/refs/library-b");
+    captured.requests.length = 0;
+    await handle.send({ type: "user", content: ref });
+    const second = String(captured.requests.find((r) => r.type === "prompt")?.message);
+    expect(second).toContain('"libraryRoot":"/refs/library-b"');
+    expect(second).not.toContain("/refs/library-a");
+    await handle.setExtraDirs!(["/refs/user"], null);
+    captured.requests.length = 0;
+    await handle.send({ type: "user", content: ref });
+    const revoked = String(captured.requests.find((r) => r.type === "prompt")?.message);
+    expect(revoked).toContain('"libraryRoot":null');
+    expect(revoked).not.toContain("/refs/library-b");
+    await handle.close();
+  });
+
   it("keeps a leading /skill: command at the prompt start even when Extra Dirs are configured", async () => {
     const agent = new PiAgent(
       byomDeps(async () => ({ providers: [], env: {} })),

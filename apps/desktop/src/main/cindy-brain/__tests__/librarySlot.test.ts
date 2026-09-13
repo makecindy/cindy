@@ -13,6 +13,9 @@ import {
   GhostLibrarySlot,
   LIBRARY_CLIPBOARD_WRITE_MAX_BYTES,
   libraryAvailableRef,
+  mintLibraryEpochIdentity,
+  parseLibraryAssetRef,
+  resolveLibraryAssetPath,
   type GhostLibrarySlotDeps,
 } from '../librarySlot.js';
 import { createHash } from 'node:crypto';
@@ -71,6 +74,7 @@ describe('GhostLibrarySlot', () => {
     defaultRootBase = path.join(tmp, 'owners', 'a', 'libraries');
     bindingFile = path.join(tmp, 'owners', 'a', 'libraries-binding.json');
     candidate = path.join(tmp, 'picked');
+    scopeKey = 'local:owner-a:1';
     clock = 0;
     await fs.promises.mkdir(candidate, { recursive: true });
     ghost = makeGhost(true);
@@ -813,7 +817,14 @@ describe('GhostLibrarySlot', () => {
     };
     expect(openHs.authorizedReadonly).toBe(true);
     expect(openHs.libraryGeneration).toBe(0);
-    expect(openHs.libraryIdentity).toBe('default');
+    expect(openHs.libraryIdentity).toMatch(/^[0-9a-f]{64}$/);
+    expect(openHs.libraryIdentity).toBe(mintLibraryEpochIdentity({
+      ghostId: GHOST_ID,
+      ownerScopeKey: 'local:owner-a:1',
+      generation: 0,
+      rootDir: path.join(defaultRootBase, GHOST_ID),
+      grantedAt: 0,
+    }));
     const dumped = JSON.stringify(open);
     expect(dumped).not.toContain(defaultRootBase);
     expect(dumped).not.toMatch(/\/Users\//);
@@ -856,7 +867,16 @@ describe('GhostLibrarySlot', () => {
     };
     expect(hs.authorizedReadonly).toBe(true);
     expect(hs.libraryGeneration).toBe(1);
-    expect(hs.libraryIdentity).toBe('g1');
+    expect(hs.libraryIdentity).toMatch(/^[0-9a-f]{64}$/);
+    const boundRecord = await bindingStore.getBinding(GHOST_ID);
+    expect(boundRecord).not.toBeNull();
+    expect(hs.libraryIdentity).toBe(mintLibraryEpochIdentity({
+      ghostId: GHOST_ID,
+      ownerScopeKey: 'local:owner-a:1',
+      generation: 1,
+      rootDir: path.join(await fs.promises.realpath(candidate), GHOST_ID),
+      grantedAt: boundRecord!.grantedAt,
+    }));
     const dumped = JSON.stringify(open);
     expect(dumped).not.toContain(candidate);
     expect(dumped).not.toContain(defaultRoot);
@@ -982,11 +1002,12 @@ describe('GhostLibrarySlot', () => {
     expect((stB as unknown as { authorizedReadonly: boolean }).authorizedReadonly).toBe(true);
   });
 
-  it('writeCommit ACK 含 64-hex sha256,形状 {ok,op,path,bytes,sha256}', async () => {
+  it('writeCommit ACK 含 64-hex sha256 与捕获的 epoch,旧插件可忽略新字段', async () => {
     const body = 'pixel-bytes';
     const sha = createHash('sha256').update(body).digest('hex');
     const rel = 'assets/ab/abc123def456abc123def456abc123de/blob.png';
-    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    const open = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!open.ok || open.op !== 'open') throw new Error(JSON.stringify(open));
     const begin = await slot.handleLibraryRequest(GHOST_ID, {
       op: 'writeBegin', path: rel, totalBytes: Buffer.byteLength(body), sha256: sha,
     });
@@ -996,14 +1017,34 @@ describe('GhostLibrarySlot', () => {
     });
     expect(chunk.ok).toBe(true);
     const commit = await slot.handleLibraryRequest(GHOST_ID, { op: 'writeCommit', streamId: begin.streamId });
+    const expectedIdentity = mintLibraryEpochIdentity({
+      ghostId: GHOST_ID,
+      ownerScopeKey: 'local:owner-a:1',
+      generation: 0,
+      rootDir: path.join(defaultRootBase, GHOST_ID),
+      grantedAt: 0,
+    });
     expect(commit).toEqual({
       ok: true,
       op: 'writeCommit',
       path: rel,
       bytes: Buffer.byteLength(body),
       sha256: sha,
+      libraryGeneration: 0,
+      libraryIdentity: expectedIdentity,
     });
     expect(commit.ok && 'sha256' in commit && /^[0-9a-f]{64}$/.test(commit.sha256)).toBe(true);
+    const { libraryGeneration, libraryIdentity, ...legacy } = commit as {
+      ok: true; op: 'writeCommit'; path: string; bytes: number; sha256: string;
+      libraryGeneration?: number; libraryIdentity?: string;
+    };
+    expect(legacy).toEqual({
+      ok: true, op: 'writeCommit', path: rel, bytes: Buffer.byteLength(body), sha256: sha,
+    });
+    expect(libraryGeneration).toBe(0);
+    expect(libraryIdentity).toBe(expectedIdentity);
+    expect(JSON.stringify(commit)).not.toContain('local:owner');
+    expect(JSON.stringify(commit)).not.toContain(defaultRootBase);
     expect(fs.existsSync(path.join(tmp, 'libraryConfirmed.ts'))).toBe(false);
     expect(fs.existsSync(path.join(process.cwd(), 'apps/desktop/src/main/cindy-brain/libraryConfirmed.ts'))).toBe(false);
   });
@@ -1016,5 +1057,165 @@ describe('GhostLibrarySlot', () => {
       .toBe(`cindy-media://blobs/${hash}.png`);
     expect(libraryAvailableRef({ authorized: false, hash, ext: 'svg', confirmed: true })).toBeNull();
     expect(libraryAvailableRef({ authorized: true, hash, ext: 'png', confirmed: false })).toBeNull();
+  });
+
+  it('write 回执 epoch 来自写入 session,owner 切换后新写入不换绑旧回执', async () => {
+    const first = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'write', path: 'assets/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/blob.png', content: 'a',
+    });
+    if (!first.ok || first.op !== 'write') throw new Error(JSON.stringify(first));
+    const firstIdentity = first.libraryIdentity;
+    expect(first.libraryGeneration).toBe(0);
+    expect(firstIdentity).toMatch(/^[0-9a-f]{64}$/);
+    expect(JSON.stringify(first)).not.toContain('local:owner');
+
+    scopeKey = 'local:owner-b:1';
+    defaultRootBase = path.join(tmp, 'owners', 'b', 'libraries');
+    const second = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'write', path: 'assets/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/blob.png', content: 'b',
+    });
+    if (!second.ok || second.op !== 'write') throw new Error(JSON.stringify(second));
+    const ownerBRoot = path.join(tmp, 'owners', 'b', 'libraries', GHOST_ID);
+    expect(second.libraryIdentity).not.toBe(firstIdentity);
+    expect(second.libraryIdentity).toBe(mintLibraryEpochIdentity({
+      ghostId: GHOST_ID,
+      ownerScopeKey: 'local:owner-b:1',
+      generation: 0,
+      rootDir: ownerBRoot,
+      grantedAt: 0,
+    }));
+    expect(first.libraryIdentity).toBe(firstIdentity);
+    expect(JSON.stringify(second)).not.toContain('local:owner');
+  });
+
+  it('writeCommit epoch 在 writeBegin 捕获,切根后不得拼当前身份', async () => {
+    const body = 'stream-pixel';
+    const sha = createHash('sha256').update(body).digest('hex');
+    const rel = `assets/${sha.slice(0, 2)}/${sha}/blob.png`;
+    await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    const begin = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'writeBegin', path: rel, totalBytes: Buffer.byteLength(body), sha256: sha,
+    });
+    if (!begin.ok || begin.op !== 'writeBegin') throw new Error(JSON.stringify(begin));
+    const beginIdentity = mintLibraryEpochIdentity({
+      ghostId: GHOST_ID,
+      ownerScopeKey: 'local:owner-a:1',
+      generation: 0,
+      rootDir: path.join(defaultRootBase, GHOST_ID),
+      grantedAt: 0,
+    });
+    await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'writeChunk', streamId: begin.streamId, seq: 1, content: body,
+    });
+    const bound = await bindingStore.setBinding(GHOST_ID, candidate);
+    expect(bound.ok).toBe(true);
+    await slot.disposeGhost(GHOST_ID);
+    const openB = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!openB.ok || openB.op !== 'open') throw new Error(JSON.stringify(openB));
+    expect(openB.libraryIdentity).not.toBe(beginIdentity);
+    const stale = await slot.handleLibraryRequest(GHOST_ID, { op: 'writeCommit', streamId: begin.streamId });
+    expect(stale).toMatchObject({ ok: false, errorCode: 'STREAM_INVALID' });
+    expect(JSON.stringify(stale)).not.toContain(openB.libraryIdentity);
+  });
+
+  it('默认 D→自定义 C→默认 D:两端绑定身份可复用,中间握手不同,旧回执不得当当前激活', async () => {
+    const first = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'write', path: 'assets/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/blob.png', content: 'd1',
+    });
+    if (!first.ok || first.op !== 'write') throw new Error(JSON.stringify(first));
+    const defaultEpoch = {
+      libraryGeneration: first.libraryGeneration,
+      libraryIdentity: first.libraryIdentity,
+    };
+    expect(defaultEpoch.libraryGeneration).toBe(0);
+    expect(defaultEpoch.libraryIdentity).toMatch(/^[0-9a-f]{64}$/);
+
+    const bound = await bindingStore.setBinding(GHOST_ID, candidate);
+    expect(bound.ok).toBe(true);
+    await slot.disposeGhost(GHOST_ID);
+    const customOpen = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!customOpen.ok || customOpen.op !== 'open') throw new Error(JSON.stringify(customOpen));
+    expect(customOpen.libraryIdentity).not.toBe(defaultEpoch.libraryIdentity);
+    expect(customOpen.libraryGeneration).toBe(1);
+
+    await bindingStore.removeBinding(GHOST_ID);
+    await slot.disposeGhost(GHOST_ID);
+    const defaultAgain = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!defaultAgain.ok || defaultAgain.op !== 'open') throw new Error(JSON.stringify(defaultAgain));
+    expect(defaultAgain.libraryIdentity).toBe(defaultEpoch.libraryIdentity);
+    expect(defaultAgain.libraryGeneration).toBe(0);
+    expect(JSON.stringify({ first, customOpen, defaultAgain })).not.toContain('local:owner');
+    expect(JSON.stringify({ first, customOpen, defaultAgain })).not.toContain(defaultRootBase);
+    expect(JSON.stringify({ first, customOpen, defaultAgain })).not.toContain(candidate);
+  });
+
+  it('owner X→Y→X 回到同一默认 binding:X 两端身份相同,Y 介入后旧 X 回执不再是当前激活', async () => {
+    const writeX1 = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'write', path: 'assets/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa/blob.png', content: 'x1',
+    });
+    if (!writeX1.ok || writeX1.op !== 'write') throw new Error(JSON.stringify(writeX1));
+    const xEpoch = writeX1.libraryIdentity;
+    const xRoot = path.join(tmp, 'owners', 'a', 'libraries', GHOST_ID);
+
+    scopeKey = 'local:owner-b:1';
+    defaultRootBase = path.join(tmp, 'owners', 'b', 'libraries');
+    const writeY = await slot.handleLibraryRequest(GHOST_ID, {
+      op: 'write', path: 'assets/bb/bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb/blob.png', content: 'y',
+    });
+    if (!writeY.ok || writeY.op !== 'write') throw new Error(JSON.stringify(writeY));
+    expect(writeY.libraryIdentity).not.toBe(xEpoch);
+
+    scopeKey = 'local:owner-a:1';
+    defaultRootBase = path.join(tmp, 'owners', 'a', 'libraries');
+    const openX2 = await slot.handleLibraryRequest(GHOST_ID, { op: 'open' });
+    if (!openX2.ok || openX2.op !== 'open') throw new Error(JSON.stringify(openX2));
+    expect(openX2.libraryIdentity).toBe(xEpoch);
+    expect(openX2.libraryIdentity).toBe(mintLibraryEpochIdentity({
+      ghostId: GHOST_ID,
+      ownerScopeKey: 'local:owner-a:1',
+      generation: 0,
+      rootDir: xRoot,
+      grantedAt: 0,
+    }));
+    expect(JSON.stringify({ writeX1, writeY, openX2 })).not.toContain('local:owner');
+  });
+
+  it('opaque identity 区分 owner / 迁根 / A→B→A,不暴露 owner 原值', () => {
+    const rootA = '/tmp/lib-a/mivo-canvas';
+    const rootB = '/tmp/lib-b/mivo-canvas';
+    const ownerA = mintLibraryEpochIdentity({
+      ghostId: GHOST_ID, ownerScopeKey: 'local:owner-a:1', generation: 0, rootDir: rootA, grantedAt: 0,
+    });
+    const ownerB = mintLibraryEpochIdentity({
+      ghostId: GHOST_ID, ownerScopeKey: 'local:owner-b:1', generation: 0, rootDir: rootA, grantedAt: 0,
+    });
+    const moved = mintLibraryEpochIdentity({
+      ghostId: GHOST_ID, ownerScopeKey: 'local:owner-a:1', generation: 1, rootDir: rootB, grantedAt: 11,
+    });
+    const aba = mintLibraryEpochIdentity({
+      ghostId: GHOST_ID, ownerScopeKey: 'local:owner-a:1', generation: 3, rootDir: rootA, grantedAt: 33,
+    });
+    expect(new Set([ownerA, ownerB, moved, aba]).size).toBe(4);
+    for (const id of [ownerA, ownerB, moved, aba]) {
+      expect(id).toMatch(/^[0-9a-f]{64}$/);
+      expect(id).not.toContain('local:owner');
+      expect(id).not.toContain(rootA);
+      expect(id).not.toContain(rootB);
+    }
+  });
+
+  it('host-owned 相对键解析用最新根,拒绝 sidecar / cindy-media / 绝对路径', () => {
+    const hash = 'd'.repeat(64);
+    const rel = `assets/${hash.slice(0, 2)}/${hash}/blob.png`;
+    const ref = `library:${rel}`;
+    const rootA = path.join(tmp, 'root-a');
+    const rootB = path.join(tmp, 'root-b');
+    expect(parseLibraryAssetRef(ref)).toBe(rel);
+    expect(resolveLibraryAssetPath(rootA, ref)).toBe(path.join(rootA, ...rel.split('/')));
+    expect(resolveLibraryAssetPath(rootB, ref)).toBe(path.join(rootB, ...rel.split('/')));
+    expect(resolveLibraryAssetPath(rootA, `library:assets/${hash.slice(0, 2)}/${hash}/preview.webp`)).toBeNull();
+    expect(resolveLibraryAssetPath(rootA, `cindy-media://blobs/${hash}.png`)).toBeNull();
+    expect(resolveLibraryAssetPath(rootA, path.join(rootA, rel))).toBeNull();
+    expect(resolveLibraryAssetPath('relative-root', ref)).toBeNull();
   });
 });

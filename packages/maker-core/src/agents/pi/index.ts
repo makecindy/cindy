@@ -24,6 +24,7 @@ import { snapshotDisabledSkillLaunch, currentDisabledSkillLaunchPaths, extendDis
  * 写「尚未支持」。跨设备控制仍走 device-link, 在目标设备本地启动 Pi。
  */
 
+import { LIBRARY_READ_ROOT, libraryNativeReadContext } from '../shared/library-native-read.js';
 import os from 'node:os';
 import path from 'node:path';
 import { constants as fsConstants, promises as fs } from 'node:fs';
@@ -1579,7 +1580,7 @@ function piExtraDirsPrompt(readOnlyDirs: readonly string[], writableDirs: readon
     const labels = [...new Set(readOnlyDirs.map(extraDirBasename))];
     sections.push(
       '<cindy-extra-reference-directories>',
-      'This task can read the plugin library and extra references as read-only. Do not modify them:',
+      'This task can read extra references as read-only. If a plugin library root is authorized as a host-owned extraDir, resolve the latest library:assets/<2>/<hash>/blob.<ext> relative key against that root; do not cache roots across directory changes. Do not modify them.',
       ...labels.map((label) => `- ${label}`),
       '</cindy-extra-reference-directories>',
     );
@@ -3150,6 +3151,7 @@ export class PiAgent extends BaseAgent {
       mode === 'bypassPermissions' ? 'bypassPermissions' : mode === 'auto' ? 'auto' : 'ask';
     let permissionMode =
       reviewMode ? 'ask' : normalizePermissionMode(opts.permissionMode);
+    let mutableLibraryRoot: string | null | undefined = opts.remoteHostId || reviewMode ? undefined : (opts[LIBRARY_READ_ROOT] ?? undefined);
     let mutableExtraDirs = [...(opts.extraDirs ?? [])];
     let mutableWritableDirs = [...(opts.writableDirs ?? [])];
     let reviewReadGrants: Awaited<ReturnType<typeof buildReviewReadGrants>> = [];
@@ -3175,6 +3177,7 @@ export class PiAgent extends BaseAgent {
     type PermissionSnapshot = {
       mode: 'ask' | 'auto' | 'bypassPermissions';
       readOnlyRoots: string[];
+      libraryRoot?: string | null;
       writableRoots: string[];
       reviewReadPaths?: string[];
       reviewOnly?: true;
@@ -3183,12 +3186,14 @@ export class PiAgent extends BaseAgent {
     let requestedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
+      ...(mutableLibraryRoot !== undefined ? { libraryRoot: mutableLibraryRoot } : {}),
       writableRoots: [...mutableWritableDirs],
       ...reviewPathSnapshot,
     };
     let persistedPermissionSnapshot: PermissionSnapshot = {
       mode: permissionMode,
       readOnlyRoots: [...mutableExtraDirs],
+      ...(mutableLibraryRoot !== undefined ? { libraryRoot: mutableLibraryRoot } : {}),
       writableRoots: [...mutableWritableDirs],
       ...reviewPathSnapshot,
     };
@@ -3240,6 +3245,7 @@ export class PiAgent extends BaseAgent {
       requestedPermissionSnapshot = {
         mode: next.mode,
         readOnlyRoots: [...next.readOnlyRoots],
+        ...(next.libraryRoot !== undefined ? { libraryRoot: next.libraryRoot } : {}),
         writableRoots: [...next.writableRoots],
         ...reviewPathSnapshot,
       };
@@ -3289,6 +3295,7 @@ export class PiAgent extends BaseAgent {
               // 放宽失败时 permissionMode 仍是旧的已提交 mode，同样达到回滚效果。
               mode: permissionMode,
               readOnlyRoots: [...persistedPermissionSnapshot.readOnlyRoots],
+              libraryRoot: persistedPermissionSnapshot.libraryRoot,
               writableRoots: [...persistedPermissionSnapshot.writableRoots],
               ...reviewPathSnapshot,
             };
@@ -3300,10 +3307,12 @@ export class PiAgent extends BaseAgent {
         if (gen === permissionWriteGen) {
           permissionMode = snapshot.mode;
           mutableExtraDirs = [...snapshot.readOnlyRoots];
+          mutableLibraryRoot = snapshot.libraryRoot;
           mutableWritableDirs = [...snapshot.writableRoots];
           persistedPermissionSnapshot = {
             mode: snapshot.mode,
             readOnlyRoots: [...snapshot.readOnlyRoots],
+            libraryRoot: snapshot.libraryRoot,
             writableRoots: [...snapshot.writableRoots],
             ...reviewPathSnapshot,
           };
@@ -6459,7 +6468,7 @@ export class PiAgent extends BaseAgent {
           // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
           const promptText = composePiPromptText(
             text,
-            piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
+            [piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs), libraryNativeReadContext(mutableLibraryRoot, mutableExtraDirs, text)].filter(Boolean).join("\n\n"),
             runtimeCapabilityManifest,
           );
           const managedExtensionCommandName = managedExtensionSlashCommandName(
@@ -6702,7 +6711,7 @@ export class PiAgent extends BaseAgent {
         // /skill: 起始时不前置 Extra Dir 引用段(否则命令退化成文本),与 send 同口径。
         const promptText = composePiPromptText(
           text,
-          piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs),
+          [piExtraDirsPrompt(mutableExtraDirs, mutableWritableDirs), libraryNativeReadContext(mutableLibraryRoot, mutableExtraDirs, text)].filter(Boolean).join("\n\n"),
           runtimeCapabilityManifest,
         );
         const managedExtensionCommandName = managedExtensionSlashCommandName(
@@ -7024,11 +7033,12 @@ export class PiAgent extends BaseAgent {
         }
       },
 
-      async setExtraDirs(dirs: string[]): Promise<void> {
+      async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
         if (reviewMode) return;
         await writePermissionSnapshotOrFailClosed({
           ...requestedPermissionSnapshot,
           readOnlyRoots: [...dirs],
+          libraryRoot: remote ? undefined : (libraryRoot ?? (requestedPermissionSnapshot.libraryRoot === undefined ? undefined : null)),
         });
       },
 

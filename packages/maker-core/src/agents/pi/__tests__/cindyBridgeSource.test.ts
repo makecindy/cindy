@@ -2213,3 +2213,39 @@ it('routes Bot shortcuts through the scoped helper entry without exposing them t
     expect(calls.at(-1)).toEqual({ method: 'tools/call', params: { name: 'call_tool', arguments: { name, args } }, signal: controller.signal });
   }
 });
+
+
+describe('Pi same-turn library native mapping', () => {
+  it('reads the current permission snapshot after a tool result and removes revoked roots', async () => {
+    let permission: Record<string, unknown> = { mode: 'ask', readOnlyRoots: ['/library-a'], libraryRoot: '/library-a' };
+    let callback: (event: unknown) => Promise<any>;
+    const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+    const permissionStart = source.indexOf('function currentPermissionState()');
+    const permissionEnd = source.indexOf('\n}\n', permissionStart) + 3;
+    const hookStart = source.indexOf("  pi.on('tool_result', async (event: any) => {");
+    const hookEnd = source.indexOf("\n  pi.on('tool_result', async (event: any, ctx: any)", hookStart);
+    expect(permissionStart).toBeGreaterThan(-1);
+    expect(hookStart).toBeGreaterThan(-1);
+    const js = ts.transpileModule(source.slice(permissionStart, permissionEnd) + source.slice(hookStart, hookEnd), {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS },
+    }).outputText;
+    runInNewContext(js, {
+      process: { env: { CINDY_PI_PERMISSION_FILE: '/synthetic/permission.json' } }, path,
+      readFileSync: () => JSON.stringify(permission),
+      pi: { on: (_event: string, cb: typeof callback) => { callback = cb; } },
+    });
+    const event = { content: [{ type: 'text', text: `library:assets/aa/${'a'.repeat(64)}/blob.png` }] };
+    expect(JSON.stringify(await callback!(event))).toContain('/library-a');
+    permission = { mode: 'ask', readOnlyRoots: ['/library-b'], libraryRoot: '/library-b' };
+    const moved = JSON.stringify(await callback!(event));
+    expect(moved).toContain('/library-b');
+    expect(moved).not.toContain('/library-a');
+    permission = { mode: 'ask', readOnlyRoots: ['/user'], libraryRoot: '/library-b' };
+    const revoked = JSON.stringify(await callback!(event));
+    expect(revoked).not.toContain('/library-b');
+    expect(revoked).toContain('libraryRoot');
+    expect(event.content).toHaveLength(1);
+    permission = { ...permission, reviewOnly: true };
+    expect(await callback!(event)).toBeUndefined();
+  });
+});

@@ -1965,7 +1965,7 @@ export class Session {
    * 不写 DB —— 持久化由调用方 (main IPC 协调 local-db:sessions:update) 负责,
    * 跟 setModel/setEffort 双 IPC 协调先例一致。
    */
-  async setExtraDirs(dirs: string[]): Promise<void> {
+  async setExtraDirs(dirs: string[], libraryRoot?: string | null): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.extraDirs.supported) {
       throw new NotSupportedError('extraDirs', this.capabilities.extraDirs);
@@ -1973,7 +1973,7 @@ export class Session {
     if (!this.handle.setExtraDirs) {
       throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setExtraDirs(dirs);
+    await this.handle.setExtraDirs(dirs, libraryRoot);
   }
 
   /**
