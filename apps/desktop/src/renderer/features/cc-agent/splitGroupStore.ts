@@ -112,6 +112,108 @@ function removePane(root: SplitNode, sessionId: string): SplitNode | null {
   return first === root.first && second === root.second ? root : { ...root, first, second };
 }
 
+interface DetachedPane {
+  root: SplitNode | null;
+  pane: SplitPaneNode | null;
+}
+
+function detachPane(root: SplitNode, sessionId: string): DetachedPane {
+  if (root.type === 'pane') {
+    return root.sessionId === sessionId ? { root: null, pane: root } : { root, pane: null };
+  }
+
+  const first = detachPane(root.first, sessionId);
+  if (first.pane) {
+    return { root: first.root ? { ...root, first: first.root } : root.second, pane: first.pane };
+  }
+
+  const second = detachPane(root.second, sessionId);
+  if (second.pane) {
+    return { root: second.root ? { ...root, second: second.root } : root.first, pane: second.pane };
+  }
+
+  return { root, pane: null };
+}
+
+export interface SplitPaneRect {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+}
+
+export interface SplitPaneDropGeometry {
+  source: SplitPaneRect;
+  anchor: SplitPaneRect;
+  gutterPx: number;
+}
+
+const PANE_GEOMETRY_EPSILON_PX = 1;
+
+function isValidPaneRect(rect: SplitPaneRect): boolean {
+  return (
+    Number.isFinite(rect.left) &&
+    Number.isFinite(rect.top) &&
+    Number.isFinite(rect.width) &&
+    Number.isFinite(rect.height) &&
+    rect.width > 0 &&
+    rect.height > 0
+  );
+}
+
+function rangesMatch(startA: number, sizeA: number, startB: number, sizeB: number): boolean {
+  return (
+    Math.abs(startA - startB) <= PANE_GEOMETRY_EPSILON_PX &&
+    Math.abs(startA + sizeA - (startB + sizeB)) <= PANE_GEOMETRY_EPSILON_PX
+  );
+}
+
+function edgesAreAdjacent(firstEnd: number, secondStart: number, gutterPx: number): boolean {
+  const gap = secondStart - firstEnd;
+  return gap >= -PANE_GEOMETRY_EPSILON_PX && gap <= gutterPx + PANE_GEOMETRY_EPSILON_PX;
+}
+
+function isPaneAlreadyAtSide(
+  geometry: SplitPaneDropGeometry | null | undefined,
+  side: DropSide,
+): boolean {
+  if (
+    !geometry ||
+    !Number.isFinite(geometry.gutterPx) ||
+    geometry.gutterPx < 0 ||
+    !isValidPaneRect(geometry.source) ||
+    !isValidPaneRect(geometry.anchor)
+  ) {
+    return false;
+  }
+  const { source, anchor } = geometry;
+
+  switch (side) {
+    case 'left':
+      return (
+        edgesAreAdjacent(source.left + source.width, anchor.left, geometry.gutterPx) &&
+        rangesMatch(source.top, source.height, anchor.top, anchor.height)
+      );
+    case 'right':
+      return (
+        edgesAreAdjacent(anchor.left + anchor.width, source.left, geometry.gutterPx) &&
+        rangesMatch(source.top, source.height, anchor.top, anchor.height)
+      );
+    case 'top':
+      return (
+        edgesAreAdjacent(source.top + source.height, anchor.top, geometry.gutterPx) &&
+        rangesMatch(source.left, source.width, anchor.left, anchor.width)
+      );
+    case 'bottom':
+      return (
+        edgesAreAdjacent(anchor.top + anchor.height, source.top, geometry.gutterPx) &&
+        rangesMatch(source.left, source.width, anchor.left, anchor.width)
+      );
+  }
+
+  return false;
+}
+
 interface CoerceContext {
   seenKeys: Set<string>;
   seenSessionIds: Set<string>;
@@ -366,6 +468,50 @@ export const splitGroupStore = {
         (node) => makeSplit(node as SplitPaneNode),
       ),
     });
+    return true;
+  },
+
+  moveSession(
+    sessionIdInput: string,
+    anchorSessionIdInput: string,
+    side: DropSide,
+    geometry?: SplitPaneDropGeometry | null,
+  ): boolean {
+    ensureHydrated();
+    const sessionId = normalizeSessionId(sessionIdInput);
+    const anchorSessionId = normalizeSessionId(anchorSessionIdInput);
+    if (!sessionId || !anchorSessionId || sessionId === anchorSessionId || !state.root)
+      return false;
+
+    const panes = getSplitPanes(state.root);
+    if (!panes.some((pane) => pane.sessionId === sessionId)) return false;
+    if (!panes.some((pane) => pane.sessionId === anchorSessionId)) return false;
+    // Geometry comes from the rendered panes because split fractions can be clamped by their
+    // minimum sizes. If it is unavailable, allow the move instead of making a structural guess.
+    if (isPaneAlreadyAtSide(geometry, side)) return false;
+
+    const detached = detachPane(state.root, sessionId);
+    if (!detached.pane || !detached.root) return false;
+
+    const existingKeys = new Set<string>();
+    collectNodeKeys(detached.root, existingKeys);
+    existingKeys.add(detached.pane.key);
+    const makeSplit = (anchorPane: SplitPaneNode): SplitBranchNode => ({
+      type: 'split',
+      key: nextUniqueKey('split', existingKeys),
+      direction: directionForSide(side),
+      fraction: 0.5,
+      first: isBeforeSide(side) ? detached.pane! : anchorPane,
+      second: isBeforeSide(side) ? anchorPane : detached.pane!,
+    });
+
+    const nextRoot = replaceNode(
+      detached.root,
+      (node) => node.type === 'pane' && node.sessionId === anchorSessionId,
+      (node) => makeSplit(node as SplitPaneNode),
+    );
+    if (nextRoot === detached.root) return false;
+    emit({ root: nextRoot });
     return true;
   },
 

@@ -8,6 +8,7 @@ import {
 } from '@/lib/sessionLinkDrop';
 
 export const SPLIT_GROUP_SESSION_MIME = 'application/x-cindy-session-id';
+export const SPLIT_GROUP_PANE_MIME = 'application/x-cindy-split-pane';
 /** Backward-compatible feature-local name for the shared composer payload. */
 export { SESSION_LINK_DROP_MIME as SPLIT_GROUP_SESSION_LINK_MIME };
 /** 输入框优先消费任务拖放，分屏 pane 不应在 capture 阶段抢走。 */
@@ -275,6 +276,29 @@ export function hasSplitGroupSessionType(types: ArrayLike<string>): boolean {
 
 export function isSplitGroupComposerDropTarget(target: EventTarget | null): boolean {
   return isSessionLinkDropTarget(target);
+}
+
+export function writeSplitGroupPaneDragData(
+  dataTransfer: SplitGroupDragDataTransfer,
+  sessionIdInput: string,
+): boolean {
+  const sessionId = sessionIdInput.trim();
+  if (!sessionId) return false;
+  dataTransfer.effectAllowed = 'move';
+  // A pane drag is only meaningful to Cindy's split-group targets. Clear any
+  // generic browser flavor so the composer/editor cannot parse the session id
+  // as plain text before the outer drop cleanup runs.
+  dataTransfer.clearData?.();
+  dataTransfer.setData(SPLIT_GROUP_PANE_MIME, sessionId);
+  return true;
+}
+
+export function hasSplitGroupPaneType(types: ArrayLike<string>): boolean {
+  return Array.from(types).includes(SPLIT_GROUP_PANE_MIME);
+}
+
+export function hasSplitGroupDragType(types: ArrayLike<string>): boolean {
+  return hasSplitGroupSessionType(types) || hasSplitGroupPaneType(types);
 }
 
 export interface SplitDragSourceContext {
