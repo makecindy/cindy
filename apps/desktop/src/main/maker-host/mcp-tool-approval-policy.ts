@@ -196,12 +196,14 @@ const SESSION_OPS_REQUIRING_APPROVAL: ReadonlySet<string> = new Set([
   'move_sessions',
   'delete_sessions',
   'export_session',
+  // fork 会复制源会话的 workingDir 与权限档:在另一个项目根下派生新会话同样是委派访问。
+  'fork_session',
 ]);
 
 /**
  * 取 cindy_helper progressive 调用的内层动作,并判断这次调用是否真的触发受管副作用:
  * move_sessions 只有 target_kind=project(改写目录)才需要;delete_sessions 只有
- * dry_run=false(真删)才需要;export_session 一律需要。args 读不出形状时按需要审批处理。
+ * dry_run=false(真删)才需要;export_session / fork_session 一律需要。args 读不出形状时按需要审批处理。
  */
 function readCindyHelperInnerCall(
   toolParams: unknown,

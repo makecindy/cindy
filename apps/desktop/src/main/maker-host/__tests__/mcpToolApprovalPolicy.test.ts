@@ -191,6 +191,7 @@ describe('desktop MCP approval policy', () => {
       'prompt-each-time',
     );
     expect(call('export_session', { session_id: 'a', target_path: '/tmp/x' })).toBe('prompt-each-time');
+    expect(call('fork_session', { session_id: 'a', message_id: 'm' })).toBe('prompt-each-time');
     expect(call('list_sessions', {})).toBe('auto-approve');
     // Claude in-process bridge 会把嵌套 payload 字符串化:按 Host 实际拿到的值判定。
     expect(
