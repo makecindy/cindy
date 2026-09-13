@@ -152,6 +152,7 @@ import {
 import { buildSafeStorageIssueMeta } from './safeStorageIssueLog.js';
 import { createCredentialStoreHealth } from './authCredentialStoreHealth';
 import {
+  removeRejectedRuntimeCredentialCopies,
   runGuardedRuntimeAuthExpiry,
   type RuntimeCredentialRemovalResult,
 } from './authRuntimeExpiryGuard';
@@ -1680,31 +1681,18 @@ async function removeRejectedRuntimeCredentials(input: {
   rejectedRefreshTokens: readonly string[];
   validateBeforeWrite: () => void;
 }): Promise<RuntimeCredentialRemovalResult> {
-  const rejectedRefreshTokens = new Set(input.rejectedRefreshTokens);
-  const removal = await mutateAuthAccountVault((vault) => {
-    input.validateBeforeWrite();
-    const activeKey = vault.activeAccountKey;
-    const activeResource = activeKey ? vault.resources[activeKey] : undefined;
-    if (!activeKey || !activeResource) return 'missing';
-    if (
-      activeResource.realm !== input.realm ||
-      !rejectedRefreshTokens.has(activeResource.refreshToken)
-    ) {
-      return 'stale';
-    }
-    delete vault.resources[activeKey];
-    vault.activeAccountKey = null;
-    return 'removed';
+  return removeRejectedRuntimeCredentialCopies({
+    ...input,
+    mutateVault: (operation) => mutateAuthAccountVault(operation),
+    serializeSession: serializeAuthSessionRecord,
+    removeSessionIfUnchanged: (expected) => removeSafeIfUnchanged(AUTH_SESSION_KEY, expected),
+    ...(input.realm === AUTH_REGION
+      ? {
+          removeLegacyIfUnchanged: (expected: string) =>
+            removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, expected),
+        }
+      : {}),
   });
-  if (removal === 'stale') return removal;
-
-  for (const token of input.rejectedRefreshTokens) {
-    removeSafeIfUnchanged(AUTH_SESSION_KEY, serializeAuthSessionRecord(input.realm, token));
-    if (input.realm === AUTH_REGION) {
-      removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY, token);
-    }
-  }
-  return removal;
 }
 
 function bindResourcePairToSavedAccount(
@@ -2440,6 +2428,8 @@ async function withAccountFreeOwnerCommit(opts: {
   authAlreadyCleared?: boolean;
   validateBeforeCommit?: () => boolean;
   shouldClearOnFailure?: () => boolean;
+  markPassiveLocalSignOut?: boolean;
+  onAuthCleared?: () => void;
 }): Promise<void> {
   let authCleared = opts.authAlreadyCleared ?? false;
   let releaseBoundary: (() => void) | null = null;
@@ -2459,6 +2449,7 @@ async function withAccountFreeOwnerCommit(opts: {
         'Account-free owner transition was superseded before commit',
       );
     }
+    if (opts.markPassiveLocalSignOut) passiveLocalSignOut = true;
     if (!authCleared) {
       clearAuth({
         notify: false,
@@ -2467,6 +2458,7 @@ async function withAccountFreeOwnerCommit(opts: {
         deferSessionCommit: true,
       });
       authCleared = true;
+      opts.onAuthCleared?.();
     }
     commitVolatileAppSession(opts.nextMode);
     if (notify) {
@@ -2515,6 +2507,7 @@ async function withAccountFreeOwnerCommit(opts: {
             deferSessionCommit: true,
           });
           authCleared = true;
+          opts.onAuthCleared?.();
         }
         commitActiveAppSession(opts.nextMode);
         // Same-owner account-free repair: advance the owner generation after the
@@ -2538,6 +2531,7 @@ async function withAccountFreeOwnerCommit(opts: {
           deferSessionCommit: true,
         });
         authCleared = true;
+        opts.onAuthCleared?.();
       }
       // The durable app-session write may be the operation that failed. Keep
       // the process account-free without retrying that write on this path.
@@ -3594,10 +3588,9 @@ function clearAuth(
     notify?: boolean;
     nextMode?: Extract<AppSessionMode, 'signed-out' | 'local'>;
     /**
-     * 为 true 时不删除磁盘上的 refresh token 文件。仅用于「凭证已确认缺席」的
-     * 过期路径(credential-lost):此刻磁盘上没有属于本进程的 token 可清,而共享
-     * userData 的另一个实例可能刚好在登出→重登间隙写入了新 token——无条件
-     * removeSafe 会把别人的新 token 删掉,把对方也踢成半死。
+     * 为 true 时不删除磁盘上的 refresh token 文件。用于「凭证已确认缺席」或调用方已
+     * compare-and-delete 本轮被拒 generation 的过期路径：共享 userData 的另一个实例
+     * 可能刚好写入了新 token，无条件 removeSafe 会把别人的新 token 删掉。
      */
     preservePersistedRefreshToken?: boolean;
     /**
@@ -3736,7 +3729,7 @@ async function expireRuntimeAuth(
             },
           }
         : {}),
-      commit: ({ validateBeforeCommit, shouldClearOnFailure }) =>
+      commit: ({ validateBeforeCommit, shouldClearOnFailure, markSelfCleared }) =>
         withAccountFreeOwnerCommit({
           reason,
           nextMode: 'signed-out',
@@ -3746,6 +3739,8 @@ async function expireRuntimeAuth(
           preservePersistedRefreshToken: true,
           notify: false,
           clearOnFailure: true,
+          markPassiveLocalSignOut: true,
+          onAuthCleared: markSelfCleared,
           validateBeforeCommit,
           shouldClearOnFailure: () => {
             const shouldClear = shouldClearOnFailure();

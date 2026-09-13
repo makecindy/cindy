@@ -964,6 +964,8 @@ describe('auth login-flow reset', () => {
     expect(helperBody).toContain('preservePersistedRefreshToken: true');
     expect(helperBody).toContain('withAccountFreeOwnerCommit({');
     expect(helperBody).toContain('validateBeforeCommit,');
+    expect(helperBody).toContain('markPassiveLocalSignOut: true');
+    expect(helperBody).toContain('onAuthCleared: markSelfCleared');
     expect(helperBody).toContain('if (shouldClear) expiryClearedOnFailure = true;');
     expect(helperBody).toContain('if (expiryCommitted || expiryClearedOnFailure) {');
     expect(helperBody).toContain('notifySessionExpired(reason);');
@@ -996,11 +998,9 @@ describe('auth login-flow reset', () => {
     const helperEnd = source.indexOf('\n}\n\nfunction bindResourcePairToSavedAccount', helperStart);
     const helperBody = source.slice(helperStart, helperEnd);
 
-    expect(helperBody).toContain('input.validateBeforeWrite();');
-    expect(helperBody).toContain('vault.activeAccountKey');
-    expect(helperBody).toContain('rejectedRefreshTokens.has(activeResource.refreshToken)');
-    expect(helperBody).toContain("return 'stale';");
-    expect(helperBody).toContain('delete vault.resources[activeKey];');
+    expect(helperBody).toContain('removeRejectedRuntimeCredentialCopies({');
+    expect(helperBody).toContain('mutateVault: (operation) => mutateAuthAccountVault(operation)');
+    expect(helperBody).toContain('serializeSession: serializeAuthSessionRecord');
     expect(helperBody).toContain('removeSafeIfUnchanged(AUTH_SESSION_KEY');
     expect(helperBody).toContain('removeSafeIfUnchanged(LEGACY_RESOURCE_REFRESH_TOKEN_KEY');
     expect(helperBody).not.toContain('removeSafe(AUTH_SESSION_KEY)');
