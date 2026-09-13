@@ -52,7 +52,7 @@ import {
   type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useVirtualizer } from '@tanstack/react-virtual';
+import { defaultRangeExtractor, useVirtualizer, type Range } from '@tanstack/react-virtual';
 import {
   ChevronDown,
   ChevronRight,
@@ -262,6 +262,42 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
   // scroll 容器 ref —— 虚拟器与滚动锚点都以它为坐标原点。
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // 行内编辑行（新建 / 重命名）必须始终留在虚拟窗口里：输入值存在 InlineTreeRow
+  // 自己的 state 里、提交靠 blur —— 行被虚拟化回收时元素从 DOM 移除，浏览器不会
+  // 给被移除的元素派发 blur，草稿静默丢失；滚回来时又会以空值重新挂载并抢焦点。
+  // rangeExtractor 把这一行额外钉进渲染集合（其余行照旧按视口回收），滚动不再
+  // 打断编辑。
+  const pinnedEditRowIndex = useMemo(() => {
+    if (renamingPath) {
+      const index = rows.findIndex(
+        (row) => row.kind === 'entry' && row.entry.relPath === renamingPath,
+      );
+      if (index >= 0) return index;
+    }
+    if (pendingCreate) {
+      const index = rows.findIndex(
+        (row) =>
+          row.kind === 'pending' &&
+          row.pending.parentRel === pendingCreate.parentRel &&
+          row.pending.kind === pendingCreate.kind,
+      );
+      if (index >= 0) return index;
+    }
+    return -1;
+  }, [pendingCreate, renamingPath, rows]);
+
+  const rangeExtractor = useCallback(
+    (range: Range) => {
+      const indexes = defaultRangeExtractor(range);
+      if (pinnedEditRowIndex >= 0 && !indexes.includes(pinnedEditRowIndex)) {
+        indexes.push(pinnedEditRowIndex);
+        indexes.sort((a, b) => a - b);
+      }
+      return indexes;
+    },
+    [pinnedEditRowIndex],
+  );
+
   const virtualizer = useVirtualizer({
     count: rows.length,
     // 非激活 tab 不发滚动元素：虚拟器会断开观察，激活时重新订阅并**同步**读一次
@@ -274,6 +310,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     overscan: OVERSCAN,
     paddingStart: TREE_LIST_PADDING,
     paddingEnd: TREE_LIST_PADDING,
+    rangeExtractor,
     // 行内容的稳定 key：展开/折叠后行的 index 会位移，靠 key 复用 measure 缓存。
     getItemKey: (index) => {
       const row = rows[index];

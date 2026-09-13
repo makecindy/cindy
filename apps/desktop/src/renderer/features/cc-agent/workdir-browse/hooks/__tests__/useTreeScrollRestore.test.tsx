@@ -197,6 +197,58 @@ describe('useTreeScrollRestore', () => {
     expect(el.scrollTop).toBe(8 + 4 * 29);
   });
 
+  it('程序性恢复写入被钳位后触发的 scroll 事件不结束 pending', () => {
+    const scope = makeTreeScrollScope('tab-1', '/repo');
+    // 锚点在最后一行，视口比内容还高：首次恢复会被钳到 maxScroll，
+    // 此时顶部并不是锚点行 —— 浏览器随之派发的 scroll 事件必须靠
+    // programmaticScrollRef 识别，否则会被误当成用户接管。
+    saveTreeScrollAnchor(scope, { rowKey: 'f.ts', offset: 0 });
+    setTestViewportSize(100);
+
+    const { container, rerender } = render(
+      <Harness scope={scope} rows={makeRows(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts'])} />,
+    );
+    const el = viewportOf(container);
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 190 });
+    // 重新触发一次恢复：目标 8+5*29=153 > maxScroll(90) → 写入 90。
+    rerender(
+      <Harness scope={scope} rows={makeRows(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts'])} />,
+    );
+    expect(el.scrollTop).toBe(90);
+
+    // 浏览器会为这次程序性写入派发 scroll（jsdom 不自动派发，手动模拟）。
+    fireEvent.scroll(el);
+
+    // 树变高后目标重新可达：pending 若被误清，视图不会回到锚点行。
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, value: 300 });
+    rerender(
+      <Harness
+        scope={scope}
+        rows={makeRows(['a.ts', 'b.ts', 'c.ts', 'd.ts', 'e.ts', 'f.ts', 'g.ts', 'h.ts', 'i.ts', 'j.ts'])}
+      />,
+    );
+    expect(el.scrollTop).toBe(8 + 5 * 29);
+  });
+
+  it('浏览器 scroll anchoring 微调（顶部仍是锚点行）不结束 pending', () => {
+    const scope = makeTreeScrollScope('tab-1', '/repo');
+    saveTreeScrollAnchor(scope, { rowKey: 'c.ts', offset: 10 });
+
+    const { container, rerender } = render(
+      <Harness scope={scope} rows={makeRows(['a.ts', 'b.ts', 'c.ts', 'd.ts'])} />,
+    );
+    const el = viewportOf(container);
+    expect(el.scrollTop).toBe(8 + 2 * 29 + 10);
+
+    // Chrome 在行插入/删除时会自行调 scrollTop，但顶部仍是 c.ts（锚点行）——
+    // 这不是用户接管。
+    el.scrollTop = 8 + 2 * 29 + 2;
+    fireEvent.scroll(el);
+
+    rerender(<Harness scope={scope} rows={makeRows(['x.ts', 'y.ts', 'a.ts', 'b.ts', 'c.ts', 'd.ts'])} />);
+    expect(el.scrollTop).toBe(8 + 4 * 29 + 10);
+  });
+
   it('用户滚动后，后续 rows 变化不再把视图拉回旧锚点', () => {
     const scope = makeTreeScrollScope('tab-1', '/repo');
     saveTreeScrollAnchor(scope, { rowKey: 'e.ts', offset: 0 });

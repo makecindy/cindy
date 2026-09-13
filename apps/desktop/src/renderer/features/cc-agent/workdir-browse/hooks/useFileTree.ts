@@ -493,8 +493,9 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
         entries: seededEntries ? new Map() : store.snapshot.entries,
         loadError: isDeviceTooOldError(err) ? 'device-too-old' : 'load-failed',
       };
-      // 借来的展开态在空树下不可达，一并剪掉（顺带回写本 scope）。
-      if (seededEntries) pruneExpandedForCurrentTree(store);
+      // 借来的展开态在空树下不可达，剪枝与回写由**创建时**那次
+      // pruneExpandedForCurrentTree（getOrCreateStore）完成；root 首次失败时
+      // snapshot.entries 已被清空，再调 prune 会因缺 ROOT_KEY 直接早退，不重复。
       emit(store);
     }
     // Keep prior state; user can refresh manually.
