@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  deleteSessions,
   moveSessions,
   type SessionOperationsDeps,
   type SessionOpsRow,
@@ -51,6 +52,7 @@ function makeDeps(rows: SessionOpsRow[], overrides: Partial<SessionOperationsDep
     isImAttached: () => false,
     isDirectory: async () => true,
     updateSession,
+    worktreeRemovalPreview: async () => ({ hasWorktree: false, dirty: false }),
     ...overrides,
   };
   return { deps, updateSession };
@@ -188,5 +190,93 @@ describe('moveSessions', () => {
     });
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND', moved: [{ sessionId: 'a' }] });
+  });
+});
+
+describe('deleteSessions', () => {
+  it('dry run previews dirty worktrees without writing', async () => {
+    const { deps, updateSession } = makeDeps([row('a'), row('b')], {
+      worktreeRemovalPreview: async (id) => ({ hasWorktree: id === 'b', dirty: true }),
+    });
+    const res = await deleteSessions(deps, { sessionIds: ['a', 'b'], dryRun: true });
+    expect(res).toMatchObject({
+      ok: true,
+      items: [
+        { sessionId: 'a', dirtyWorktree: false, dirtyWorktreeUnknown: false },
+        { sessionId: 'b', dirtyWorktree: true, dirtyWorktreeUnknown: false },
+      ],
+    });
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it('treats a failed worktree preview as dirty and flags it unknown', async () => {
+    const { deps } = makeDeps([row('a')], {
+      worktreeRemovalPreview: async () => {
+        throw new Error('git status failed');
+      },
+    });
+    const res = await deleteSessions(deps, { sessionIds: ['a'], dryRun: true });
+    expect(res).toMatchObject({ ok: true, items: [{ dirtyWorktree: true, dirtyWorktreeUnknown: true }] });
+  });
+
+  it('soft-deletes via status=deleted with an in-lock recheck and allows archived sessions', async () => {
+    const { deps, updateSession } = makeDeps([row('a', { status: 'archived' })]);
+    const res = await deleteSessions(deps, { sessionIds: ['a'], dryRun: false });
+    expect(updateSession.mock.calls[0].slice(0, 2)).toEqual(['a', { status: 'deleted' }]);
+    expect(updateSession.mock.calls[0][2]?.beforeWrite).toBeTypeOf('function');
+    expect(res).toMatchObject({ ok: true, items: [{ sessionId: 'a', status: 'deleted' }] });
+  });
+
+  it('refuses when the previewed dirty state changed before the real delete', async () => {
+    const { deps, updateSession } = makeDeps([row('a')], {
+      worktreeRemovalPreview: async () => ({ hasWorktree: true, dirty: true }),
+    });
+    const res = await deleteSessions(deps, { sessionIds: ['a'], dryRun: false, expectedDirty: { a: false } });
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it('rechecks running state inside the write lock and preserves deleted items', async () => {
+    let checks = 0;
+    const { deps, updateSession } = makeDeps([row('a'), row('b')], {
+      isTurnRunning: (id) => id === 'b' && ++checks > 1,
+    });
+    const res = await deleteSessions(deps, { sessionIds: ['a', 'b'], dryRun: false });
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', items: [{ sessionId: 'a' }] });
+    expect(updateSession).toHaveBeenCalledTimes(2);
+  });
+
+  it.each<[string, Partial<SessionOpsRow>, Partial<SessionOperationsDeps>]>([
+    ['remote', { remoteHostId: 'host' }, {}],
+    ['deleted', { status: 'deleted' }, {}],
+    ['bot', { source: 'bot' }, {}],
+    ['worker', { orcaRole: 'worker' }, {}],
+    ['running', {}, { isTurnRunning: (id) => id === 'b' }],
+    ['IM attached', {}, { isImAttached: (id) => id === 'b' }],
+  ])('PRECONDITION_FAILED (%s) blocks the whole batch', async (_name, patch, overrides) => {
+    const { deps, updateSession } = makeDeps([row('a'), row('b', patch)], overrides);
+    const res = await deleteSessions(deps, { sessionIds: ['a', 'b'], dryRun: false });
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it('NOT_FOUND for any missing id writes nothing and mapped codes survive update failures', async () => {
+    const { deps, updateSession } = makeDeps([row('a')]);
+    expect(await deleteSessions(deps, { sessionIds: ['a', 'ghost'], dryRun: false })).toMatchObject({
+      ok: false,
+      errorCode: 'NOT_FOUND',
+    });
+    expect(updateSession).not.toHaveBeenCalled();
+    const { deps: failing } = makeDeps([row('a'), row('b')], {
+      updateSession: vi.fn(async (id: string) => {
+        if (id === 'b') throw Object.assign(new Error('[NOT_FOUND] gone'), { code: 'NOT_FOUND' });
+        return {};
+      }),
+    });
+    expect(await deleteSessions(failing, { sessionIds: ['a', 'b'], dryRun: false })).toMatchObject({
+      ok: false,
+      errorCode: 'NOT_FOUND',
+      items: [{ sessionId: 'a' }],
+    });
   });
 });
