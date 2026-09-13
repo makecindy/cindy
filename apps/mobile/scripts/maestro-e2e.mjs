@@ -6,12 +6,14 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import { resolveMobileE2eProfile } from './mobile-e2e-profile.mjs';
+import { probeMetroOwnership } from './sim-metro.mjs';
 
 const scriptDir = resolve(fileURLToPath(import.meta.url), '..');
 const mobileRoot = resolve(scriptDir, '..');
 const flowRoot = resolve(mobileRoot, 'e2e', 'maestro');
 const doctorScript = resolve(scriptDir, 'native-e2e-doctor.mjs');
 const defaultAppId = 'com.xd.cindy';
+const loginScenario = 'providers:email-only';
 
 const options = parseArgs(process.argv.slice(2));
 const profile = resolveMobileE2eProfile(options.profile ?? process.env.XDT_MOBILE_E2E_PROFILE);
@@ -59,13 +61,16 @@ for (const flow of resolvedFlows) {
   }
 }
 
-if (resolvedFlows.some((flow) => flowIncludesLogin(flow)) && !process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim()) {
-  throw new Error([
-    'Maestro flows include the login scenario, but EXPO_PUBLIC_LOGIN_SCENARIO is unset.',
-    'Start Metro with the deterministic login fixture before running Maestro, for example:',
-    '  EXPO_PUBLIC_LOGIN_SCENARIO=providers:email-only pnpm --filter mobile start -- --port 8081',
-    'Or use the local runner with --start-expo, which injects the scenario before bundling.',
-  ].join('\n'));
+const includesLogin = resolvedFlows.some((flow) => flowIncludesLogin(flow));
+if (includesLogin) {
+  const metroPort = expoUrl ? new URL(expoUrl).port || '8081' : '8081';
+  const ownership = probeMetroOwnership(Number(metroPort));
+  if (ownership?.loginScenario !== loginScenario) {
+    throw new Error([
+      `Active Metro on port ${metroPort} is not verified with EXPO_PUBLIC_LOGIN_SCENARIO=${loginScenario}.`,
+      'Start Metro through pnpm mobile:sim:start with that variable, or use local-device-link-smoke --start-expo.',
+    ].join('\n'));
+  }
 }
 
 if (options.dryRun) {

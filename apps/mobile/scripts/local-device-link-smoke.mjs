@@ -5,7 +5,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { resolveMobileE2eProfile } from './mobile-e2e-profile.mjs';
-import { probeMetroOwnership, terminateMetro } from './sim-metro.mjs';
+import {
+  clearMetroOwner,
+  gitSourceIdentity,
+  metroEnvironmentFingerprint,
+  probeMetroOwnership,
+  terminateMetro,
+  writeMetroOwner,
+} from './sim-metro.mjs';
 
 const scriptDir = resolve(fileURLToPath(import.meta.url), '..');
 const mobileRoot = resolve(scriptDir, '..');
@@ -42,8 +49,14 @@ const deviceLinkApiBase = normalizeBaseUrl(
     ?? process.env.EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL
     ?? deriveDeviceLinkApiBase(apiBase),
 );
-const loginScenario =
-  process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim() || defaultLoginScenario;
+const requestedLoginScenario = process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim();
+if (requestedLoginScenario && requestedLoginScenario !== defaultLoginScenario) {
+  throw new Error([
+    `local-device-link-smoke login flow requires ${defaultLoginScenario}, but EXPO_PUBLIC_LOGIN_SCENARIO=${requestedLoginScenario}.`,
+    'Use a flow-specific runner for other login scenarios instead of the fixed email-code precondition.',
+  ].join('\n'));
+}
+const loginScenario = defaultLoginScenario;
 if (options.startExpo) {
   process.env.EXPO_PUBLIC_XDT_API_BASE_URL = apiBase;
   process.env.XDT_MOBILE_E2E_API_BASE_URL = apiBase;
@@ -575,6 +588,7 @@ async function startExpoProcess(url) {
     console.log(`local-device-link-smoke restarted the existing Metro at ${expoServer.statusUrl} to inject the login scenario`);
   }
 
+  const sourceIdentity = gitSourceIdentity(repoRoot);
   const child = spawn(pnpmBin(), ['start', '--', '--host', expoServer.startHost, '--port', expoServer.port], {
     cwd: mobileRoot,
     env: {
@@ -584,6 +598,7 @@ async function startExpoProcess(url) {
       EXPO_PUBLIC_XDT_API_BASE_URL: apiBase,
       EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL: deviceLinkApiBase,
       EXPO_PUBLIC_LOGIN_SCENARIO: loginScenario,
+      EXPO_PUBLIC_XDT_GIT_SOURCE: sourceIdentity,
       ...(voiceProxyBaseUrl ? {
         EXPO_PUBLIC_XDT_MOBILE_VOICE_LITELLM_BASE_URL: voiceProxyBaseUrl,
         EXPO_PUBLIC_CINDY_VOICE_API_BASE_URL: voiceProxyBaseUrl,
@@ -594,8 +609,21 @@ async function startExpoProcess(url) {
     detached: process.platform !== 'win32',
     stdio: ['ignore', 'pipe', 'pipe'],
   });
+  writeMetroOwner(expoServer.port, {
+    pid: child.pid,
+    launcherPid: child.pid,
+    source: sourceIdentity,
+    loginScenario,
+    envFingerprint: metroEnvironmentFingerprint({
+      env: { EXPO_PUBLIC_LOGIN_SCENARIO: loginScenario },
+    }),
+    worktreeRoot: repoRoot,
+  });
   pipeChildOutput(child, 'expo');
-  const cleanupTask = () => stopChild(child);
+  const cleanupTask = () => {
+    clearMetroOwner(expoServer.port, child.pid);
+    stopChild(child);
+  };
   cleanupTasks.push(cleanupTask);
   console.log(`local-device-link-smoke started Expo fixture on ${expoServer.statusUrl}`);
   return cleanupTask;
