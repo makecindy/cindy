@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  exportSession,
   moveSessions,
   type SessionOperationsDeps,
   type SessionOpsRow,
@@ -51,6 +52,15 @@ function makeDeps(rows: SessionOpsRow[], overrides: Partial<SessionOperationsDep
     isImAttached: () => false,
     isDirectory: async () => true,
     updateSession,
+    fileExists: async () => false,
+    exportShare: async ({ targetPath }) => ({
+      status: 'ok',
+      filePath: targetPath,
+      fidelity: 'full',
+      missingTranscripts: [],
+      mediaMissing: 0,
+      orcaWorkers: 0,
+    }),
     ...overrides,
   };
   return { deps, updateSession };
@@ -188,5 +198,66 @@ describe('moveSessions', () => {
     });
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND', moved: [{ sessionId: 'a' }] });
+  });
+});
+
+describe('exportSession', () => {
+  const params = { sessionId: 'a', excludeMedia: false };
+
+  it('appends the share extension, derives the parent with path.dirname and validates it', async () => {
+    const exportShare = vi.fn(async ({ targetPath }: { targetPath: string }) => ({
+      status: 'ok' as const,
+      filePath: targetPath,
+      fidelity: 'full',
+      missingTranscripts: [],
+      mediaMissing: 0,
+      orcaWorkers: 0,
+    }));
+    const isDirectory = vi.fn(async () => true);
+    const { deps } = makeDeps([row('a')], { exportShare, isDirectory });
+    const res = await exportSession(deps, { ...params, targetPath: '/tmp/out/x' }, '.cshare');
+    expect(isDirectory).toHaveBeenCalledWith('/tmp/out');
+    expect(exportShare).toHaveBeenCalledWith({ sessionId: 'a', targetPath: '/tmp/out/x.cshare', excludeMedia: false });
+    expect(res).toMatchObject({ ok: true, filePath: '/tmp/out/x.cshare', fidelity: 'full' });
+
+    const { deps: bad } = makeDeps([row('a')], { isDirectory: async () => false });
+    expect(await exportSession(bad, { ...params, targetPath: '/nope/x' }, '.cshare')).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+    });
+  });
+
+  it('rejects relative targets and refuses to overwrite an existing file', async () => {
+    const { deps, exportShare } = { ...makeDeps([row('a')]), exportShare: vi.fn() };
+    expect(await exportSession(deps, { ...params, targetPath: 'relative/x' }, '.cshare')).toMatchObject({
+      ok: false,
+      errorCode: 'INVALID_ARGS',
+    });
+    const { deps: existing } = makeDeps([row('a')], { fileExists: async () => true, exportShare });
+    expect(await exportSession(existing, { ...params, targetPath: '/tmp/x.cshare' }, '.cshare')).toMatchObject({
+      ok: false,
+      errorCode: 'PRECONDITION_FAILED',
+    });
+    expect(exportShare).not.toHaveBeenCalled();
+  });
+
+  it('maps oversize outcomes and coded errors', async () => {
+    const { deps } = makeDeps([row('a')], {
+      exportShare: async () => ({ status: 'oversize', totalBytes: 10, mediaBytes: 8, limitBytes: 5 }),
+    });
+    expect(await exportSession(deps, { ...params, targetPath: '/tmp/x.cshare' }, '.cshare')).toMatchObject({
+      ok: false,
+      errorCode: 'OVERSIZE',
+      data: { total_bytes: 10, limit_bytes: 5 },
+    });
+    const { deps: remote } = makeDeps([row('a')], {
+      exportShare: async () => {
+        throw Object.assign(new Error('remote'), { code: 'PRECONDITION_FAILED' });
+      },
+    });
+    expect(await exportSession(remote, { ...params, targetPath: '/tmp/x.cshare' }, '.cshare')).toMatchObject({
+      ok: false,
+      errorCode: 'PRECONDITION_FAILED',
+    });
   });
 });
