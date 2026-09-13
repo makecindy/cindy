@@ -31,6 +31,15 @@ export type { UnifiedCommand } from '@cindy/maker-core';
 
 export const PI_RUNTIME_SKILL_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000, 4_000] as const;
 
+/**
+ * Manual compact is a host-owned control command, not a prompt. Accept the exact
+ * command only; qualified text such as `/compact focus on APIs` keeps the
+ * agent-specific SDK/skill path.
+ */
+export function isExactManualCompactCommand(message: string): boolean {
+  return /^\/compact\s*$/i.test(message.trim());
+}
+
 export function isSlashCommandUnavailable(command: UnifiedCommand): boolean {
   return command.kind === 'agent-skill'
     && (
