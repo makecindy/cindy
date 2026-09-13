@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * SchedulerPage — /schedules 主路由（master-detail 改版）
  * ---------------------------------------------------------------------------
@@ -456,7 +457,7 @@ export function SchedulerPage() {
       const filePath = projectAutomationConfigPath(workingDir);
       try {
         const result = await window.electronAPI.openPath(filePath);
-        if (!result.success)
+        if (shouldShowOpenPathError(result))
           toast.error(result.error || t('scheduler.list.section.openConfigFailed'));
       } catch (e) {
         toast.error(e instanceof Error ? e.message : String(e));

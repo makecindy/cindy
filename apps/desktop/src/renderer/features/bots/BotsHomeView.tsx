@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard';
 import { useProviderOnboarding } from '@/hooks/useProviderOnboarding';
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -579,7 +580,7 @@ export function BotSettings({
                     if (!bot.homeDir) return;
                     setFolderError(null);
                     void window.electronAPI.openPath(bot.homeDir).then((result) => {
-                      if (!result.success)
+                      if (shouldShowOpenPathError(result))
                         setFolderError(result.error ?? t('bots.homeFolder.openFailed'));
                     });
                   }}
