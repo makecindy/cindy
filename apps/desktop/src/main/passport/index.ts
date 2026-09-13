@@ -53,7 +53,7 @@ export function registerPassportInputDevice(): void {
   let devices: string[] = [], bluetooth = 0;
   let voiceState: PassportState['voice'] = 'idle';
   let pending: (PassportDictation & { owner: string; recordingToken: number; page: number; confirmed: boolean; confirmedAt: number; claimed: boolean; sendFailed: boolean }) | null = null;
-  let reading: { id: string; owner: string; page: number; text: string; createdAt: number | null } | null = null;
+  let reading: { id: string; owner: string; page: number; text: string; createdAt: number | null; rowid: number | null } | null = null;
   let voiceOwner = '';
   let voiceTaskId = '';
   let voiceToken = 0, voiceRevision = 0;
@@ -147,7 +147,7 @@ export function registerPassportInputDevice(): void {
       catch { draft.confirmed = false; draft.sendFailed = true; voiceState = 'draft'; }
     } else if (action.token === 0 && action.action <= 3) {
       if (!reading || reading.id !== action.id || action.action === 1) {
-        reading = { id: action.id, owner, page: 0, text: '', createdAt: null };
+        reading = { id: action.id, owner, page: 0, text: '', createdAt: null, rowid: null };
       } else reading.page += action.action === 2 ? -1 : 1;
     }
     void refresh();
@@ -235,8 +235,8 @@ export function registerPassportInputDevice(): void {
       if (view && !pending && voiceState === 'idle' && catalog.options.some((task) => task.id === view.id)) {
         const reply = await latestMessage(view.id, 'assistant');
         if (reading === view && owner === activeOwnerScopeKey()) {
-          if (view.createdAt !== reply.createdAt) view.page = 0;
-          view.text = reply.text; view.createdAt = reply.createdAt;
+          if (view.createdAt !== reply.createdAt || view.rowid !== reply.rowid) view.page = 0;
+          view.text = reply.text; view.createdAt = reply.createdAt; view.rowid = reply.rowid;
         }
       }
       if (wanted && epoch === generation && owner === activeOwnerScopeKey()) {

@@ -268,12 +268,12 @@ describe('latestMessage visibility', () => {
     insert.run('b', 'b', JSON.stringify('visible'), 200, null);
     insert.run('c', 'c', JSON.stringify('rewound'), 300, 400);
     statements.length = 0;
-    expect(await latestMessage('s1', 'assistant')).toEqual({ text: 'visible', createdAt: 200 });
+    expect(await latestMessage('s1', 'assistant')).toEqual({ text: 'visible', createdAt: 200, rowid: 2 });
     const reads = statements.filter((s) => /^select/i.test(s));
     expect(reads).toHaveLength(1);
     expect(reads[0]).toMatch(/inner join "sessions"/i);
     expect(reads[0]).toContain('"sessions"."cleared_at"');
     sqlite.exec("UPDATE sessions SET cleared_at = 200 WHERE id = 's1'");
-    expect(await latestMessage('s1', 'assistant')).toEqual({ text: '', createdAt: null });
+    expect(await latestMessage('s1', 'assistant')).toEqual({ text: '', createdAt: null, rowid: null });
   });
 });

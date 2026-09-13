@@ -29,6 +29,8 @@ export interface LatestMessage {
   text: string;
   /** unix ms;无该角色可见消息时为 null。调用方可据此判断 user/assistant 是否同轮。 */
   createdAt: number | null;
+  /** SQLite row id;用于区分同一毫秒写入的消息。 */
+  rowid: number | null;
 }
 
 /** regenerateTitleMaterial 的单条素材:带角色的纯文本消息。
@@ -205,7 +207,7 @@ export async function latestMessage(
 ): Promise<LatestMessage> {
   const db = getDbClient().drizzle;
   const [row] = await db
-    .select({ content: messages.content, createdAt: messages.createdAt })
+    .select({ content: messages.content, createdAt: messages.createdAt, rowid: joinedMessageRowid })
     .from(messages)
     .innerJoin(sessions, eq(messages.sessionId, sessions.id))
     .where(and(
@@ -216,7 +218,7 @@ export async function latestMessage(
     ))
     .orderBy(desc(messages.createdAt), desc(joinedMessageRowid))
     .limit(1);
-  return { text: extractText(row?.content, role), createdAt: row?.createdAt ?? null };
+  return { text: extractText(row?.content, role), createdAt: row?.createdAt ?? null, rowid: row?.rowid ?? null };
 }
 
 export async function latestMessageText(
