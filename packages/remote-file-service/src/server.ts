@@ -31,6 +31,11 @@ import {
   setFileBrowserCoreLoggerFactory,
   statEntry,
   writeFile,
+  writeNewFile,
+  verifyNewFile,
+  eraseIfSame,
+  releaseNewFile,
+  NewFileHoldRegistry,
   type CoreLogger,
   type SearchEvent,
 } from '@cindy/file-browser-core';
@@ -122,6 +127,9 @@ export function runFileService(
     return searcher;
   };
 
+  /** writeNewFile / verifyNewFile 保留的描述符(调用方登记窗口内的 inode 级撤回能力)。 */
+  const holds = new NewFileHoldRegistry();
+
   const handlers: {
     [M in keyof FsRpcMethods]: (params: Params<M>) => Promise<Result<M>> | Result<M>;
   } = {
@@ -170,6 +178,35 @@ export function runFileService(
       ),
     createFile: (p) =>
       createFile(requireString(p?.workdir, 'workdir'), requireString(p?.relPath, 'relPath')),
+    writeNewFile: async (p) => {
+      const r = await writeNewFile(
+        requireString(p?.workdir, 'workdir'),
+        requireString(p?.relPath, 'relPath'),
+        typeof p?.content === 'string' ? p.content : bad('content must be a string'),
+        holds,
+      );
+      return { size: r.size, mtimeMs: r.mtimeMs, dev: r.dev, ino: r.ino, holdId: r.holdId as string, durable: r.durable };
+    },
+    verifyNewFile: async (p) => {
+      const r = await verifyNewFile(
+        requireString(p?.workdir, 'workdir'),
+        requireString(p?.relPath, 'relPath'),
+        requireString(p?.sha256, 'sha256'),
+        typeof p?.size === 'number' && Number.isInteger(p.size) && p.size >= 0 ? p.size : bad('size must be a non-negative integer'),
+        holds,
+      );
+      return { size: r.size, mtimeMs: r.mtimeMs, dev: r.dev, ino: r.ino, holdId: r.holdId as string };
+    },
+    releaseNewFile: (p) => releaseNewFile(holds, requireString(p?.holdId, 'holdId')),
+    eraseIfSame: (p) =>
+      eraseIfSame(
+        requireString(p?.workdir, 'workdir'),
+        requireString(p?.relPath, 'relPath'),
+        requireString(p?.dev, 'dev'),
+        requireString(p?.ino, 'ino'),
+        holds,
+        p?.holdId === undefined ? undefined : requireString(p.holdId, 'holdId'),
+      ),
     createFolder: (p) =>
       createFolder(requireString(p?.workdir, 'workdir'), requireString(p?.relPath, 'relPath')),
     renameEntry: (p) =>
@@ -265,9 +302,10 @@ export function runFileService(
     });
     input.on('end', () => {
       // stdin EOF = client 走了。等在飞请求写完再退,别截断响应流。
-      void Promise.allSettled([...inflight]).then(() => {
+      void Promise.allSettled([...inflight]).then(async () => {
         searcher?.cancelAll();
         watchManager.stopAll();
+        await holds.closeAll();
         resolve();
       });
     });
@@ -275,7 +313,7 @@ export function runFileService(
       logger.error('input stream error', String(err));
       searcher?.cancelAll();
       watchManager.stopAll();
-      resolve();
+      void holds.closeAll().then(resolve);
     });
   });
 }

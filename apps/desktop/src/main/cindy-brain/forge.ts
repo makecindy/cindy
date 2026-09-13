@@ -3458,6 +3458,19 @@ await cindy.send({ type: 'fs-request', op: 'write', root: 'save',
 await cindy.fs({ op: 'write', root: 'data', path: 'a.txt', content: 'hi' });
 \`\`\`
 
+Host 对 \`ghost_call\` 的最终 MCP 文本返回包另有 64 KiB UTF-8 上限(包含 JSON 转义)。
+小结果原样返回；超大结果在当前活跃任务实例已确认可自动写入的任务工作目录中保存为
+\`tool-results/ghost-<唯一ID>.json\`（SSH 远程任务经 remote-file-service 写到远端工作目录，
+单文件上限 2 MiB，路径同样相对远端工作目录），模型收到 \`saved_to\`、\`bytes\`、
+\`complete_result_saved\`、有界预览和按需读取指引。文件保存完整返回 JSON，
+由任务工作目录保留，归档任务不自动删它；不要将包含私密数据的结果文件提交到代码仓库。
+Host 在外置前保留媒体引用账本，普通媒体/卡片路由字段继续内联。
+若路由元数据本身也超限，\`metadata_externalized:true\` 表示完整元数据只在文件中，
+需要按需读取后展示。存储失败、任务实例已切换或没有自动写权限时，
+\`complete_result_saved:false\` 明确表示只保留预览，不伪造文件路径，
+也不自动重做已经执行的工具动作。插件仍宜自行分页或返回小的结果指针，
+多个中等结果累加和非 ghost MCP 入口不属于这条单结果护栏的保证范围。
+
 三档目的地(都由主机强制,写错拿到的是结构化拒绝):
 
 - \`root:'data'\` **私有数据目录**:你的专属储物柜(卸载时整体回收,沉睡保留)。

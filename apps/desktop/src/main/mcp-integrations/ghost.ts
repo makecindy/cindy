@@ -28,6 +28,7 @@ import path from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 
 import { buildGhostRosterPrompt } from 'cindy-tools';
+import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
 import type {
   CindyForgeInstallResult,
   CindyForgePackResult,
@@ -62,6 +63,7 @@ import {
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
 import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
+import { getRemoteFileBrowser } from '../file-browser/remote-deps.js';
 import { getActiveAppSession, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   deriveGhostSessionContext,
@@ -101,7 +103,7 @@ import {
 } from '../plugin-publisher/host.js';
 import { workdirWriteVerdict } from '../cindy-brain/fsSlot.js';
 import * as blobStore from '../cindy-media/blobStore.js';
-import { commitMessageMediaRefs } from '../cindy-media/chatAttachments.js';
+import { collectCindyMediaUrls as collectChatMediaUrls, commitMessageMediaRefs } from '../cindy-media/chatAttachments.js';
 import { callCindyMedia } from '../cindy-media/invocationService.js';
 import type { MediaDownloadContext } from '../cindy-media/mediaDownload.js';
 import * as ledger from '../cindy-media/ledger.js';
@@ -336,6 +338,7 @@ async function withForgeOwnerLease<T>(operation: () => Promise<T>): Promise<T> {
 
 async function getForgeSessionFsGate(
   sessionContext: LiziMcpSessionContext | undefined,
+  requireAutomaticWrite = false,
 ): Promise<ForgeSessionFsGate> {
   const sessionId = sessionContext?.sessionId ?? null;
   if (!sessionId) {
@@ -353,7 +356,8 @@ async function getForgeSessionFsGate(
       message: 'Forge cannot use a remote or unverified session workdir on the local host',
     };
   }
-  if (workdirWriteVerdict(snapshot.permissionMode, snapshot.planModeEnabled) === 'deny') {
+  const verdict = workdirWriteVerdict(snapshot.permissionMode, snapshot.planModeEnabled);
+  if (verdict === 'deny' || (requireAutomaticWrite && verdict !== 'allow')) {
     return {
       ok: false,
       errorCode: 'WORKDIR_READ_ONLY',
@@ -361,6 +365,430 @@ async function getForgeSessionFsGate(
     };
   }
   return { ok: true, workingDir: snapshot.workingDir };
+}
+
+/* ────────────────────────────────────────────────────────────────────────
+ * 超大工具结果外置(#4245):写入前只认当前活跃实例的运行时真相。权限热切换
+ * runtime-first、DB-second,持久化行在合法窗口内会滞后;实例重建后 business
+ * sessionId 复用,旧 MCP 请求不得借新实例的目录与权限。任何缺失/不一致 fail
+ * closed。远程会话的 workingDir 在被控端:经 remote-file-service 写到远端任务
+ * 目录并返回远端可读的相对路径,不落本机。
+ * ──────────────────────────────────────────────────────────────────────── */
+
+interface LargeResultSpillTarget {
+  sessionId: string;
+  workingDir: string;
+  remoteHostId: string | null;
+  /**
+   * 再次现读活跃实例:每个 await 之后(写文件前、挂媒体引用前)都要重验,实例
+   * 已换 / 会话已结束 / 权限已收紧 / 远端归属变化时抛错。传入 reviewTarget
+   * (写入前)时,Auto 会话把该目标交给会话统一审阅器,只有 allow 才继续。
+   */
+  revalidate(reviewTarget?: string): Promise<void>;
+}
+
+const LARGE_RESULT_DIR = 'tool-results';
+
+async function resolveLargeResultSpillTarget(
+  sessionContext: LiziMcpSessionContext | undefined,
+  getLiveSessionGrantState: CindyGhostsHostDeps['getLiveSessionGrantState'],
+): Promise<LargeResultSpillTarget> {
+  const sessionId = sessionContext?.sessionId ?? null;
+  const sessionInstanceId = sessionContext?.sessionInstanceId ?? null;
+  if (!sessionId || !sessionInstanceId || !getLiveSessionGrantState) {
+    throw new Error('Tool result storage requires the live session');
+  }
+  // 实例不匹配 / 会话不再 active / 运行时异常 → null,一律 fail closed。
+  const first = getLiveSessionGrantState(sessionId, sessionInstanceId);
+  if (!first) throw new Error('Tool result storage requires the live session');
+  const snapshot = await getSessionFsSnapshot(sessionId);
+  if (!snapshot?.workingDir) throw new Error('Tool result storage requires an authoritative session workdir');
+  const workingDir = snapshot.workingDir;
+  const remoteHostId = first.remoteHostId;
+  const readOnlyError = () =>
+    new Error('Tool result storage is disabled while the session is read-only or in plan mode');
+  // Auto: the reviewer's allow is bound to the permission/Plan generation of the snapshot
+  // that produced it. A later revalidate() gets a fresh snapshot whose own isCurrent() only
+  // proves the *new* generation is Auto — it must also prove the approving one is still it.
+  let approvedIsCurrent: (() => boolean) | null | undefined;
+  // The exact target this write was cleared for. Remembered so that a later boundary
+  // (beforeCommit / beforeSend) can obtain a *fresh* Auto review if the session was
+  // downgraded from Full Access to Auto meanwhile — a Full Access allow never carries
+  // over into Auto, and Auto has to see the target itself.
+  let clearedTarget: string | undefined;
+  const reviewNow = async (live: NonNullable<ReturnType<NonNullable<typeof getLiveSessionGrantState>>>, target: string): Promise<void> => {
+    let decision: AutoReviewDecision;
+    try {
+      decision = await live.reviewAction!({
+        kind: 'file-write',
+        path: target,
+        resolvedPath: target,
+        resolvedWritableRoots: [workingDir],
+      });
+    } catch {
+      throw readOnlyError();
+    }
+    if (live.isCurrent?.() === false) throw readOnlyError();
+    if (decision.verdict !== 'allow') {
+      throw new Error(
+        decision.verdict === 'block'
+          ? (decision.reason ?? 'Automatic review denied the tool result storage write.')
+          : 'Tool result storage requires a write the session reviewer did not approve automatically',
+      );
+    }
+    // Bind the allow to the snapshot that produced it; a legacy provider without
+    // isCurrent has no generation to bind (null keeps later checks fail-closed-neutral).
+    approvedIsCurrent = live.isCurrent ?? null;
+  };
+  const revalidate = async (reviewTarget?: string): Promise<void> => {
+    const live = getLiveSessionGrantState(sessionId, sessionInstanceId);
+    if (!live) throw new Error('Tool result storage requires the live session');
+    if ((snapshot.remoteHostId ?? null) !== live.remoteHostId || live.remoteHostId !== remoteHostId) {
+      throw new Error('Tool result storage requires an authoritative session workdir');
+    }
+    // 计划模式同样 runtime-first:isCurrent 已含运行时 Plan 状态与权限/Plan 代次校验,
+    // 有它就必须为 true;旧装配方没有 isCurrent 时回退持久化行的 planModeEnabled。
+    if (live.isCurrent && live.isCurrent() !== true) throw readOnlyError();
+    const planModeEnabled = live.isCurrent ? false : snapshot.planModeEnabled;
+    const verdict = workdirWriteVerdict(live.permissionMode ?? '', planModeEnabled);
+    if (reviewTarget !== undefined) clearedTarget = reviewTarget;
+    if (verdict === 'allow') {
+      // Full Access: no reviewer involved. Any earlier Auto approval is irrelevant here,
+      // and (see below) a Full Access clearance never stands in for an Auto review later.
+      approvedIsCurrent = undefined;
+      return;
+    }
+    // Auto:workdir 写入交给当前会话的统一审阅器(与 fsSlot 的 workdir 写同口径),
+    // 没有审阅器、审阅异常、要求确认或拒绝都 fail closed —— 工具结果外置是宿主
+    // 内部动作,不弹确认卡。写入前审阅一次(reviewTarget),写后复验只查活性/归属。
+    if (verdict !== 'review' || !live.reviewAction) throw readOnlyError();
+    if (reviewTarget === undefined) {
+      // Post-clearance boundaries under Auto. The write may proceed only on an Auto
+      // approval whose generation is still live. No such approval (never reviewed under
+      // Auto — e.g. cleared under Full Access and downgraded meanwhile — or the approving
+      // generation is gone) means the *current* Auto generation must review the target
+      // now; before any target is known there is nothing to clear and nothing to review.
+      if (approvedIsCurrent === null || (approvedIsCurrent && approvedIsCurrent() === true)) return;
+      if (clearedTarget === undefined) return;
+      await reviewNow(live, clearedTarget);
+      return;
+    }
+    await reviewNow(live, reviewTarget);
+  };
+  // The snapshot read above is an async boundary; check the live state once more before returning.
+  await revalidate();
+  return { sessionId, workingDir, remoteHostId, revalidate };
+}
+
+/**
+ * 远端写:createFolder(已存在则复用)后用 daemon 的 writeNewFile 一步排他新建并
+ * 写入(O_EXCL,目标已存在 / 为 symlink 即失败、不跟随最终链接),不留 createFile →
+ * writeFile 之间可被换成 symlink 的窗口。路径一律 POSIX(远端 daemon 只支持 POSIX)。
+ * 变更类 RPC 断链时结果未知:daemon 可能已写完、只是响应没回来,不能盲删唯一副本,
+ * 用幂等 stat 核验字节数:一致 = 成功;缺失 = 失败不删;不一致才删。
+ */
+async function writeLargeResultToRemote(
+  remoteHostId: string,
+  workdir: string,
+  relPath: string,
+  text: string,
+  revalidate: () => Promise<void>,
+): Promise<SpillAnchor | null> {
+  const remote = getRemoteFileBrowser();
+  const dir = path.posix.dirname(relPath);
+  // Same frame-boundary revalidation as the write below: connecting / installing /
+  // handshaking the host can take long, and a stale approval must not execute even this
+  // directory mutation in the workdir. An authorization failure here is final — it is not
+  // an ambiguous filesystem outcome and must not enter the "did the mkdir land?" poll.
+  let authorizationRevoked = false;
+  const beforeSend = async (): Promise<void> => {
+    try {
+      await revalidate();
+    } catch (err) {
+      authorizationRevoked = true;
+      throw err;
+    }
+  };
+  try {
+    await remote.request(remoteHostId, 'createFolder', { workdir, relPath: dir }, { beforeSend });
+  } catch (err) {
+    if (authorizationRevoked) throw err;
+    // 超时/断链时 daemon 可能仍在 mkdir:按结果未知轮询等目录出现;明确失败(EEXIST 等)
+    // 只 stat 一次确认目录已在。目录仍不可见就放弃,不能把唯一文件写进不存在的目录。
+    const ready = await pollRemoteStat(remote, remoteHostId, workdir, dir, {
+      attempts: isRemoteResultUnknown(err) ? REMOTE_WRITE_RECONCILE.maxAttempts : 1,
+      done: (stat) => stat?.type === 'directory',
+    });
+    if (!ready) throw err;
+  }
+  // The directory RPC (and its reconcile window) is an async boundary: the exact
+  // instance and its write grant must still hold right before the private bytes go out.
+  await revalidate();
+  const bytes = Buffer.from(text, 'utf8');
+  try {
+    // `beforeSend` runs after the manager has connected / probed / installed / handshaken
+    // the host — i.e. at the real frame boundary — so an instance that ended or lost its
+    // grant while the client was being built never has its private bytes sent.
+    const written = await remote.request(
+      remoteHostId,
+      'writeNewFile',
+      { workdir, relPath, content: text },
+      { beforeSend: revalidate },
+    );
+    const anchor: SpillAnchor = { dev: written.dev, ino: written.ino, ...(typeof written.holdId === 'string' ? { holdId: written.holdId } : {}) };
+    if (written.durable === false) {
+      // The staging removal did not reach disk (round 30): a crash could bring the hidden
+      // hard link back with the full private content outside the ledger lifecycle. This
+      // client is the only party that accepted the publish and still holds the descriptor:
+      // withdraw through it and report the write as failed.
+      await remote.request(remoteHostId, 'eraseIfSame', { workdir, relPath, dev: anchor.dev, ino: anchor.ino, ...(anchor.holdId !== undefined ? { holdId: anchor.holdId } : {}) }).catch(() => undefined);
+      throw new Error('remote spill not durable: staging removal did not reach disk');
+    }
+    return anchor;
+  } catch (err) {
+    if (isRemoteResultUnknown(err)) {
+      return reconcileUnknownRemoteWrite(remote, remoteHostId, workdir, relPath, bytes, err);
+    }
+    // A definite failure (EEXIST, size limit, path rejection) wrote nothing.
+    throw err;
+  }
+}
+
+/** Race a probe against the remaining reconcile budget; the loser's outcome is ignored. */
+function withinBudget<T>(probe: Promise<T>, budgetMs: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const bound = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(Object.assign(new Error('verifyNewFile exceeded the reconcile budget'), { code: 'RECONCILE_BUDGET' })), budgetMs);
+  });
+  probe.catch(() => undefined); // a late rejection after the race must not be unhandled
+  return Promise.race([probe, bound]).finally(() => clearTimeout(timer));
+}
+
+/** 结果未知时的 stat 轮询节奏:总时长约 10s,覆盖慢文件系统上 2 MiB 上限的写入;测试可缩短。 */
+export const REMOTE_WRITE_RECONCILE = { intervalMs: 250, maxAttempts: 40, windowMs: 10_000 };
+
+type RemoteStatResult = { type: string; size?: number | null; mtimeMs?: number | null } | null;
+
+/**
+ * 轮询 stat 直到 done 为真(返回 true),或次数/总时长耗尽(false);stat 失败按 null 交给 done。
+ * 总时长按墙钟计:每次 stat 本身可能等到客户端 15s 超时,不能让 40 次探测把 ghost_call 与
+ * owner lease 拖到十分钟;窗口一到就停,不再发下一次探测。
+ */
+async function pollRemoteStat(
+  remote: ReturnType<typeof getRemoteFileBrowser>,
+  remoteHostId: string,
+  workdir: string,
+  relPath: string,
+  options: { attempts: number; done: (stat: RemoteStatResult) => boolean; giveUp?: (stat: RemoteStatResult) => boolean },
+): Promise<boolean> {
+  const deadline = Date.now() + REMOTE_WRITE_RECONCILE.windowMs;
+  for (let attempt = 0; attempt < options.attempts; attempt += 1) {
+    const stat = (await remote.request(remoteHostId, 'stat', { workdir, relPath }).catch(() => null)) as RemoteStatResult;
+    if (options.done(stat)) return true;
+    if (options.giveUp?.(stat)) return false;
+    if (attempt + 1 >= options.attempts) break;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(REMOTE_WRITE_RECONCILE.intervalMs, remaining)));
+    if (Date.now() >= deadline) break;
+  }
+  return false;
+}
+
+/**
+ * 断链/超时后 daemon 可能仍在写:客户端超时只是把请求移出 pending 表,服务端写入继续,
+ * 而协议没有完成令牌,长度/mtime 也证明不了「是本机写的」——workdir 内的进程可以放一个
+ * 同长度文件或 symlink 冒充。因此按**内容身份**消歧:轮询 daemon 的 verifyNewFile
+ * (非 symlink、父目录仍在 workdir 内、大小与 SHA-256 与本次内容完全一致),通过即拿到
+ * inode 身份视为本次写入已发布;文件暂时缺失/未写完都继续等(远端 open 本身可能阻塞过
+ * 客户端超时);窗口耗尽仍未核实则保留现场、按失败上报,不做任何删除。
+ */
+async function reconcileUnknownRemoteWrite(
+  remote: ReturnType<typeof getRemoteFileBrowser>,
+  remoteHostId: string,
+  workdir: string,
+  relPath: string,
+  bytes: Buffer,
+  cause: unknown,
+): Promise<SpillAnchor> {
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const size = bytes.length;
+  const deadline = Date.now() + REMOTE_WRITE_RECONCILE.windowMs;
+  let lastError: string | null = null;
+  for (let attempt = 0; attempt < REMOTE_WRITE_RECONCILE.maxAttempts; attempt += 1) {
+    // Each probe is bounded by the time left in the window: the client's default 15s
+    // request timeout (and any endpoint rebuild) must not push ghost_call and the owner
+    // lease past the configured 10s. A probe that outlives its bound is abandoned; its
+    // late outcome is ignored and the write stays "unverified".
+    const budget = deadline - Date.now();
+    if (budget <= 0) break;
+    try {
+      const verified = await withinBudget(
+        remote.request(remoteHostId, 'verifyNewFile', { workdir, relPath, sha256, size }),
+        budget,
+      );
+      return { dev: verified.dev, ino: verified.ino, ...(typeof verified.holdId === 'string' ? { holdId: verified.holdId } : {}) };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+    }
+    if (attempt + 1 >= REMOTE_WRITE_RECONCILE.maxAttempts) break;
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+    await new Promise<void>((resolve) => setTimeout(resolve, Math.min(REMOTE_WRITE_RECONCILE.intervalMs, remaining)));
+    if (Date.now() >= deadline) break;
+  }
+  log.warn('ghost large result: remote write unverified after reconcile window; leaving the path untouched', {
+    remoteHostId, relPath, size, lastError,
+  });
+  throw cause;
+}
+
+/**
+ * 变更类 RPC 的结果未知:断链(CHANNEL_CLOSED / CHANNEL_ERROR)与客户端超时(TIMEOUT,
+ * daemon 可能已写完只是响应晚到)都不能当作「没写」,必须回读核对。
+ * ENDPOINT_STALE 是 RemoteFileBrowserManager 在端点代次变化时于 catch/成功后生成的包装错误,
+ * 会盖掉底层结果:请求可能已发出甚至已成功发布,同样只能按未知处理、经当前端点 verifyNewFile
+ * 消歧(不是同一台机器时核验自然失败,保持"失败但不删"的现场)。
+ */
+function isRemoteResultUnknown(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  return code === 'CHANNEL_CLOSED' || code === 'CHANNEL_ERROR' || code === 'TIMEOUT' || code === 'ENDPOINT_STALE';
+}
+
+/** 外置文件写入后记录的 inode 身份(本地 lstat / 远端 writeNewFile 或 verifyNewFile 返回),供清理时锚定。 */
+/** dev/ino 以十进制字符串承载:Windows 文件 ID 为 64 位,JS number 会丢低位。 */
+interface SpillIdentity { dev: string; ino: string }
+/**
+ * 清理锚:inode 身份,远端还带 daemon 保留的描述符 hold(holdId):目录被移出 workdir 后
+ * 仍可经该描述符清零同一 inode,登记完成后 releaseNewFile 关闭。
+ */
+interface SpillAnchor extends SpillIdentity { holdId?: string }
+type LocalSpillAnchor = SpillAnchor;
+
+/**
+ * 本地外置文件写成后立刻按 inode 身份把它打开并**持有**(O_NOFOLLOW,fstat 必须等于写入器经
+ * 自己句柄读到的身份):随后的权限复验与媒体账本登记都是异步边界,期间 workdir 进程可能把
+ * 输出目录整个移出 workdir,按路径的清理就再也找不到那份内容;经这个句柄清零与路径无关。
+ * 打开失败或身份不符(写入器关句柄到这里之间已被移走)时不持有,退回按身份的路径清理。
+ */
+async function bindLocalSpill(abs: string, identity: SpillIdentity): Promise<fs.promises.FileHandle | null> {
+  let handle: fs.promises.FileHandle;
+  try {
+    handle = await fs.promises.open(abs, fs.constants.O_RDWR | ((fs.constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0));
+  } catch {
+    return null;
+  }
+  try {
+    const st = await handle.stat({ bigint: true });
+    if (st.isFile() && st.dev.toString() === identity.dev && st.ino.toString() === identity.ino) return handle;
+  } catch {
+    /* fall through: not bindable */
+  }
+  await handle.close().catch(() => undefined);
+  return null;
+}
+
+/**
+ * 本地按 inode 身份擦除:以 O_NOFOLLOW 打开并 fstat 核对,通过后经该 fd 把私密内容清零
+ * (擦除与 inode 绑定,与路径无关)。不再 unlink 路径名:POSIX 没有"按 inode 删除路径名"
+ * 的原语,检查后删除总有可能删掉期间被放到同名处的无关文件;敏感内容既已经 fd 清零,
+ * 保守地留下一个空文件名是可接受的结果。
+ */
+async function truncateIfSame(candidate: string, anchor: SpillIdentity): Promise<void> {
+  const handle = await fs.promises.open(candidate, fs.constants.O_RDWR | ((fs.constants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0));
+  try {
+    const st = await handle.stat({ bigint: true });
+    if (!st.isFile() || st.dev.toString() !== anchor.dev || st.ino.toString() !== anchor.ino) return;
+    await handle.truncate(0);
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * 清理刚写的外置文件。本地与远端都只按 inode 身份擦除内容、不删路径名:父目录可能已被换成指向别处的 symlink,并在
+ * 那里放一个同名文件诱导删除。只有父目录 realpath 仍在 workdir 内、且同名条目的 dev/ino
+ * 与写入时记录的一致,才删那一个条目;否则放弃(宁可留下自己的文件,不删别人的)。
+ */
+async function discardLargeResultFile(
+  target: LargeResultSpillTarget,
+  relPath: string,
+  anchor: LocalSpillAnchor | null,
+  hold: fs.promises.FileHandle | null = null,
+): Promise<void> {
+  try {
+    if (!anchor) return;
+    if (target.remoteHostId) {
+      // Identity-checked deletion on the daemon: never follows a swapped symlink, never
+      // removes anything but the inode this call created/verified. With the daemon-held
+      // descriptor (hold) no pathname is needed at all: the directory may have been moved.
+      await getRemoteFileBrowser().request(target.remoteHostId, 'eraseIfSame', {
+        workdir: target.workingDir, relPath, dev: anchor.dev, ino: anchor.ino,
+        ...(anchor.holdId !== undefined ? { holdId: anchor.holdId } : {}),
+      });
+      return;
+    }
+    if (hold) {
+      // Inode-bound: the retained handle follows the file wherever its directory went.
+      const st = await hold.stat({ bigint: true });
+      if (st.isFile() && st.dev.toString() === anchor.dev && st.ino.toString() === anchor.ino) {
+        await hold.truncate(0);
+        return;
+      }
+    }
+    const abs = path.join(target.workingDir, relPath);
+    const [wdReal, parentReal] = await Promise.all([fs.promises.realpath(target.workingDir), fs.promises.realpath(path.dirname(abs))]);
+    if (parentReal !== wdReal && !parentReal.startsWith(wdReal + path.sep)) return;
+    await truncateIfSame(path.join(parentReal, path.basename(abs)), anchor);
+  } catch {
+    /* best-effort: the write already failed to be accounted for; keep the original error */
+  }
+}
+
+/**
+ * 只在字节落盘成功后才给完整结果里的媒体挂引用。引用身份是**外置结果文件本身**
+ * (refKind ghost-tool-result / refId = 文件相对路径 / originSessionId = 会话),不与消息
+ * 生命周期的 session-attachment 行共用:消息回退清理只看 live messages,共享行会被删掉
+ * 而回收器随即回收 saved_to 仍引用的字节。会话删除时按 originSessionId 连坐清理。
+ * 逐 URL 隔离(pin → 本文件已有引用则跳过 → addRef),并记住**本次调用实际插入的引用
+ * id**;任一 URL 挂账失败时只按这些 id 回滚(并发的另一次外置不受影响),再删掉刚写的
+ * 文件,不留没有结果文件的孤立引用。成功时把插入的 id 交给调用方,供后续复验失败回滚。
+ */
+async function commitLargeResultMediaRefs(target: LargeResultSpillTarget, relPath: string, text: string, anchor: LocalSpillAnchor | null, hold: fs.promises.FileHandle | null): Promise<string[]> {
+  // Reserve every ref id *before* the insert RPC: a DB worker that commits the row but
+  // loses its response would otherwise leave an id we never learned and cannot roll back.
+  // Rollback removes all attempted ids (removeRefById is idempotent for rows never written).
+  const inserted: string[] = [];
+  let failed = 0;
+  for (const url of collectChatMediaUrls(text)) {
+    const parsed = blobStore.parseBlobUrl(url);
+    if (!parsed) continue;
+    try {
+      await ledger.pinBlob(parsed.hash);
+      if (await ledger.hasRef({ hash: parsed.hash, refKind: 'ghost-tool-result', refId: relPath })) continue;
+      const id = randomUUID();
+      inserted.push(id);
+      await ledger.addRef({
+        id,
+        hash: parsed.hash,
+        refKind: 'ghost-tool-result',
+        refId: relPath,
+        originSessionId: target.sessionId,
+        originKind: 'tool',
+      });
+    } catch (err) {
+      failed += 1;
+      log.warn('ghost large result: media ref commit failed for url', {
+        sessionId: target.sessionId,
+        hash: parsed.hash,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  if (failed === 0) return inserted;
+  for (const id of inserted) await ledger.removeRefById(id).catch(() => 0);
+  await discardLargeResultFile(target, relPath, anchor, hold);
+  throw new Error('Tool result media references unavailable');
 }
 
 /** 意识显示名(确认卡标题用;查不到回落 id)。 */
@@ -1432,6 +1860,106 @@ export function getCindyGhostsMcpDeps(
     },
   });
   return {
+    saveLargeGhostResult: async (text) => withForgeOwnerLease(async () => {
+      // Live instance + runtime permission are re-read immediately before any
+      // side effect; the persisted row only supplies the workdir path.
+      const target = await resolveLargeResultSpillTarget(resolveSessionContext(), hostDeps.getLiveSessionGrantState);
+      const fileName = `ghost-${randomUUID()}.json`;
+      const relativePath = target.remoteHostId
+        ? path.posix.join(LARGE_RESULT_DIR, fileName)
+        : path.join(LARGE_RESULT_DIR, fileName);
+      await target.revalidate(
+        target.remoteHostId
+          ? path.posix.join(target.workingDir, relativePath)
+          : path.join(target.workingDir, relativePath),
+      );
+      let anchor: LocalSpillAnchor | null = null;
+      let hold: fs.promises.FileHandle | null = null;
+      if (target.remoteHostId) {
+        anchor = await writeLargeResultToRemote(target.remoteHostId, target.workingDir, relativePath, text, () => target.revalidate());
+      } else {
+        // Reuse the root-anchored, no-overwrite writer, including its symlink/race
+        // checks. No plugin-controlled filename or raw fs write enters this path.
+        // `beforeCommit` runs right before the isolated writer receives the bytes: the
+        // realpath/lstat checks and utility-process start-up are async, and an instance that
+        // ended, switched, entered Plan or lost its grant meanwhile must not get a file written.
+        const outcome = await writeDocsOutput({
+          root: target.workingDir,
+          path: path.join(target.workingDir, relativePath),
+          data: Buffer.from(text, 'utf8'),
+          overwrite: false,
+          beforeCommit: () => target.revalidate(),
+        });
+        // The cleanup anchor is the identity the writer read through its own handle —
+        // never a separate path query, which a workdir process could have re-pointed at an
+        // unrelated file. Without an attested identity, cleanup is skipped.
+        anchor = outcome?.identity ?? null;
+        // Retain an inode-bound capability across the bookkeeping below (round 29): a
+        // path-only cleanup cannot follow the output directory once a workdir process moves
+        // it out of the workdir between the writer's success and the ledger commit. A
+        // write whose attested inode can no longer be bound (moved or replaced in that gap)
+        // is an unsettled write (round 30): nothing is booked in its name, the path is
+        // cleaned by identity where still reachable, and the call fails.
+        if (anchor) {
+          hold = await bindLocalSpill(path.join(target.workingDir, relativePath), anchor);
+          if (!hold) {
+            await discardLargeResultFile(target, relativePath, anchor);
+            throw new Error('Tool result file lost its anchor before registration');
+          }
+        }
+      }
+      try {
+        // The write is another async boundary: an instance that ended or lost its
+        // automatic-write grant meanwhile must not have refs booked in its name.
+        try {
+          await target.revalidate();
+        } catch (err) {
+          await discardLargeResultFile(target, relativePath, anchor, hold);
+          throw err;
+        }
+        // Keep media referenced by the full response alive even when the SDK only
+        // receives its bounded projection; refs are committed after the bytes are durable.
+        const insertedRefs = await commitLargeResultMediaRefs(target, relativePath, text, anchor, hold);
+        // The ledger mutations above are further async boundaries: an instance that
+        // ended or lost its grant meanwhile must not keep refs or a private file in its name.
+        try {
+          await target.revalidate();
+        } catch (err) {
+          for (const id of insertedRefs) await ledger.removeRefById(id).catch(() => 0);
+          await discardLargeResultFile(target, relativePath, anchor, hold);
+          throw err;
+        }
+        // Remote: drop the daemon-held descriptor only now. The authorization is re-checked
+        // at the real frame boundary (round 30): reconnecting / handshaking the host may take
+        // long, and an instance that ended or lost its grant meanwhile withdraws the whole
+        // spill through the still-held descriptor instead of keeping the file in its name.
+        if (target.remoteHostId && anchor?.holdId !== undefined) {
+          let authorizationRevoked = false;
+          try {
+            await getRemoteFileBrowser().request(
+              target.remoteHostId,
+              'releaseNewFile',
+              { holdId: anchor.holdId },
+              { beforeSend: async () => { try { await target.revalidate(); } catch (err) { authorizationRevoked = true; throw err; } } },
+            );
+          } catch (err) {
+            if (authorizationRevoked) {
+              for (const id of insertedRefs) await ledger.removeRefById(id).catch(() => 0);
+              await discardLargeResultFile(target, relativePath, anchor, hold);
+              throw err;
+            }
+            // The bytes are durable, referenced and re-validated; a lost release response only
+            // leaves a daemon-side descriptor that its TTL closes.
+            log.warn('ghost large result: remote hold release failed; the daemon closes it after its TTL', {
+              remoteHostId: target.remoteHostId, relPath: relativePath, error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        return relativePath;
+      } finally {
+        await hold?.close().catch(() => undefined);
+      }
+    }),
     ...(marketTools ? {
       searchMarket: (query: string) => marketTools.search(query),
       installMarket: (request: { pluginId: string; releaseId: string }, signal?: AbortSignal) => marketTools.install(request, signal),

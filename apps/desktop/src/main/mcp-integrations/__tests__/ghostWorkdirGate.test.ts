@@ -23,6 +23,12 @@ import type {
   GhostSetupEnsureResult,
 } from '../../cindy-brain/ghostSetupCoordinator';
 import { t } from '../../i18n';
+import type { WriteDocsOutputFn } from '@cindy/mcps';
+import { runDocsOutputWriteForTest } from '../../doc-tools/docsOutputWriterUtilityProcess.js';
+import { handleGhostCall } from 'cindy-tools';
+
+const { writeDocsOutputMock } = vi.hoisted(() => ({ writeDocsOutputMock: vi.fn<WriteDocsOutputFn>(async () => {}) }));
+vi.mock('../../doc-tools/docsOutputWriter.js', () => ({ writeDocsOutput: writeDocsOutputMock }));
 import type { CindyGhostsHostDeps } from '../ghost';
 
 const tmpUserData = fs.mkdtempSync(path.join(os.tmpdir(), 'ghost-workdir-gate-'));
@@ -78,6 +84,7 @@ type TestLedgerRef = {
   refKind: string;
   refId: string;
   originKind?: 'user' | 'tool';
+  id?: string;
 };
 const ledgerRefs: TestLedgerRef[] = [];
 const ledgerHasRefMock = vi.fn(async (params: TestLedgerRef) =>
@@ -99,10 +106,27 @@ const ledgerHasGhostToolGrantMock = vi.fn(
         (ref.refKind === 'ghost-tool-grant' || ref.refKind === 'ghost-grant'),
     ),
 );
+let ledgerRefSeq = 0;
 const ledgerAddRefMock = vi.fn(async (params: TestLedgerRef) => {
-  ledgerRefs.push({ ...params });
-  return `ref-${ledgerRefs.length}`;
+  const id = params.id ?? `ref-${++ledgerRefSeq}`;
+  ledgerRefs.push({ ...params, id });
+  return id;
 });
+const ledgerRemoveSessionAttachmentRefMock = vi.fn(async (params: { sessionId: string; hash: string }) => {
+  const before = ledgerRefs.length;
+  for (let i = ledgerRefs.length - 1; i >= 0; i -= 1) {
+    const ref = ledgerRefs[i]!;
+    if (ref.refKind === 'session-attachment' && ref.refId === params.sessionId && ref.hash === params.hash) ledgerRefs.splice(i, 1);
+  }
+  return before - ledgerRefs.length;
+});
+const ledgerRemoveRefByIdMock = vi.fn(async (id: string) => {
+  const index = ledgerRefs.findIndex(ref => ref.id === id);
+  if (index < 0) return 0;
+  ledgerRefs.splice(index, 1);
+  return 1;
+});
+const remoteFsRequestMock = vi.fn<(hostId: string, method: string, params: Record<string, unknown>, options?: { beforeSend?: () => Promise<void> }) => Promise<unknown>>(async () => ({}));
 const callCindyMediaMock = vi.fn();
 const dirDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'dir-ticket' } }));
 const saveDepositMock = vi.fn(() => ({ ok: true, receipt: { token: 'save-ticket' } }));
@@ -235,11 +259,23 @@ vi.mock('../../plugin-publisher/host.js', () => ({
   getPluginPublisherOrchestrator: vi.fn(),
   startPluginPublish: startPluginPublishMock,
 }));
-vi.mock('../../cindy-media/blobStore.js', () => ({ mimeForExt: () => 'image/png' }));
+vi.mock('../../cindy-media/blobStore.js', () => ({
+  mimeForExt: () => 'image/png',
+  parseBlobUrl: (url: string) => {
+    const match = /^cindy-media:\/\/blobs\/([a-f0-9]{64})\.png$/.exec(url);
+    return match ? { hash: match[1], ext: '.png' } : null;
+  },
+}));
 vi.mock('../../cindy-media/ledger.js', () => ({
+  pinBlob: vi.fn(async () => {}),
   hasRef: ledgerHasRefMock,
   hasGhostToolGrant: ledgerHasGhostToolGrantMock,
   addRef: ledgerAddRefMock,
+  removeRefById: ledgerRemoveRefByIdMock,
+  removeSessionAttachmentRefIfUnreferencedByLiveMessage: ledgerRemoveSessionAttachmentRefMock,
+}));
+vi.mock('../../file-browser/remote-deps.js', () => ({
+  getRemoteFileBrowser: () => ({ request: remoteFsRequestMock }),
 }));
 vi.mock('../../cindy-media/invocationService.js', () => ({
   callCindyMedia: callCindyMediaMock,
@@ -249,7 +285,7 @@ vi.mock('../ghostAttachmentResolve.js', () => ({
   resolveGhostAttachmentUrl: resolveGhostAttachmentUrlMock,
 }));
 
-const { getCindyGhostsMcpDeps, getGhostRosterPrompt } = await import('../ghost');
+const { getCindyGhostsMcpDeps, getGhostRosterPrompt, REMOTE_WRITE_RECONCILE } = await import('../ghost');
 const { createCindyGhostsMcpServer } = await import('cindy-tools');
 const { setGhostDisabledForWorkdir, listDisabledGhostIdsForWorkdir, isGhostDisabledForWorkdir } =
   await import('../../cindy-brain/ghostWorkdirPrefs');
@@ -310,6 +346,8 @@ function clearAllPrefs(): void {
 }
 
 beforeEach(() => {
+  writeDocsOutputMock.mockReset();
+  writeDocsOutputMock.mockResolvedValue(undefined);
   authorizationRequestMock.mockClear();
   isAuthorizationSessionMock.mockResolvedValue(false);
   fs.mkdirSync(outsideDir, { recursive: true });
@@ -401,13 +439,17 @@ beforeEach(() => {
   ledgerAddRefMock.mockReset();
   ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
     ledgerRefs.push({ ...params });
-    return `ref-${ledgerRefs.length}`;
+    return params.id ?? `ref-${ledgerRefs.length}`;
   });
   ledgerRefs.length = 0;
   dirDepositMock.mockClear();
   saveDepositMock.mockClear();
   liveGrantStateMock.mockReset();
   liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null });
+  remoteFsRequestMock.mockReset();
+  remoteFsRequestMock.mockResolvedValue({});
+  ledgerRemoveSessionAttachmentRefMock.mockClear();
+  ledgerRemoveRefByIdMock.mockClear();
   callCindyMediaMock.mockReset();
   alsSessionContextMock.mockReset();
   logWarnMock.mockClear();
@@ -2331,6 +2373,890 @@ it.each([false, true])('only marks a teammate setup plan as reauthorization with
   expect(authorizationRequestMock).toHaveBeenCalledWith('s1', {
     kind: 'plugin', id: 'art', ...(reauth ? { reauthorize: true } : {}),
   }, setupPlan);
+});
+
+describe('oversized ghost result Host storage', () => {
+  // main 起 Auto 会话的 workdir 写入走会话统一审阅器:默认桩给一个放行的 reviewAction。
+  const reviewAllow = vi.fn(async () => ({ verdict: 'allow' as const }));
+  beforeEach(() => {
+    reviewAllow.mockClear();
+    // Shorten the remote reconcile window so ambiguity paths stay fast in tests.
+    REMOTE_WRITE_RECONCILE.intervalMs = 1;
+    REMOTE_WRITE_RECONCILE.maxAttempts = 5;
+    REMOTE_WRITE_RECONCILE.windowMs = 2_000;
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true, reviewAction: reviewAllow });
+  });
+
+  // Codex P1 (round 10): the local writer's own realpath/lstat checks and utility-process
+  // start-up are async. Live instance/permission is re-checked at the writer's final
+  // `beforeCommit` boundary, so an instance that ended meanwhile never gets bytes written.
+  it('revalidates at the local writer boundary and withholds the bytes when the instance ended', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+    let current = true;
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => current, reviewAction: reviewAllow });
+    let bytesHandedOver = false;
+    writeDocsOutputMock.mockImplementation(async input => {
+      // Simulate the instance ending while the writer was starting up, then reach the boundary.
+      current = false;
+      await input.beforeCommit?.();
+      bytesHandedOver = true;
+    });
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(writeDocsOutputMock).toHaveBeenCalledOnce();
+    expect(bytesHandedOver).toBe(false);
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+  });
+
+  // Codex P1 (round 15): the reviewer's allow belongs to the generation that produced it.
+  // Switching permission/Plan away and back mints a new generation whose own isCurrent()
+  // is true, but the approval must not carry over to it.
+  it('does not carry an Auto allow across a permission generation switch-away-and-back', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+    let generation = 0;
+    liveGrantStateMock.mockImplementation(() => {
+      const captured = generation;
+      return { permissionMode: 'auto', remoteHostId: null, isCurrent: () => generation === captured, reviewAction: reviewAllow };
+    });
+    let bytesHandedOver = false;
+    writeDocsOutputMock.mockImplementation(async input => {
+      // Away (e.g. to Ask / Plan) and back to Auto while the writer was starting up.
+      generation += 2;
+      await input.beforeCommit?.();
+      bytesHandedOver = true;
+    });
+    // The old allow does not carry over; the new Auto generation reviews the target itself
+    // at the boundary (round 28) and, allowing it, the write proceeds on that fresh review.
+    await expect(deps.saveLargeGhostResult!('result')).resolves.toMatch(/^tool-results/);
+    expect(reviewAllow).toHaveBeenCalledTimes(2);
+    expect(bytesHandedOver).toBe(true);
+  });
+
+  // Codex P1 (round 28): a Full Access clearance never stands in for an Auto review. When
+  // the session is downgraded to Auto while the writer starts, the current Auto generation
+  // must review the target itself at the final boundary.
+  it('requires a fresh Auto review at the boundary when Full Access was downgraded to Auto meanwhile', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'bypassPermissions', planModeEnabled: false });
+    let mode: 'bypassPermissions' | 'auto' = 'bypassPermissions';
+    liveGrantStateMock.mockImplementation(() => ({ permissionMode: mode, remoteHostId: null, isCurrent: () => true, reviewAction: reviewAllow }));
+    const seen: string[] = [];
+    writeDocsOutputMock.mockImplementation(async input => {
+      mode = 'auto'; // downgraded while the utility process was starting
+      await input.beforeCommit?.();
+      seen.push('write');
+    });
+    const saved = await deps.saveLargeGhostResult!('result');
+    expect(reviewAllow).toHaveBeenCalledOnce();
+    expect(reviewAllow).toHaveBeenCalledWith(expect.objectContaining({ kind: 'file-write', path: path.join(WORKDIR, saved) }));
+    expect(seen).toEqual(['write']);
+  });
+
+  it('withholds the write when the fresh Auto review after a downgrade blocks it', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'bypassPermissions', planModeEnabled: false });
+    let mode: 'bypassPermissions' | 'auto' = 'bypassPermissions';
+    const reviewBlock = vi.fn(async () => ({ verdict: 'block' as const, reason: 'no spills' }));
+    liveGrantStateMock.mockImplementation(() => ({ permissionMode: mode, remoteHostId: null, isCurrent: () => true, reviewAction: reviewBlock }));
+    let bytesHandedOver = false;
+    writeDocsOutputMock.mockImplementation(async input => {
+      mode = 'auto';
+      await input.beforeCommit?.();
+      bytesHandedOver = true;
+    });
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow('no spills');
+    expect(reviewBlock).toHaveBeenCalledOnce();
+    expect(bytesHandedOver).toBe(false);
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+  });
+
+  it('keeps an Auto allow while the approving generation stays live', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+    const generation = 0;
+    liveGrantStateMock.mockImplementation(() => {
+      const captured = generation;
+      return { permissionMode: 'auto', remoteHostId: null, isCurrent: () => generation === captured, reviewAction: reviewAllow };
+    });
+    writeDocsOutputMock.mockImplementation(async input => { await input.beforeCommit?.(); });
+    const saved = await deps.saveLargeGhostResult!('result');
+    expect(path.dirname(saved)).toBe('tool-results'); // platform separator (Windows CI uses '\\')
+    expect(reviewAllow).toHaveBeenCalledOnce();
+  });
+
+  // Codex P1 (round 15 / round 30): the cleanup anchor comes from the writer's own handle,
+  // never from a later path query; a path re-pointed at an unrelated file must not be
+  // destroyed — and a write whose inode can no longer be bound is an unsettled write: the
+  // call fails before anything is booked in its name.
+  it('never destroys a file that replaced the spill path and fails closed when the inode cannot be bound', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ghost-spill-replaced-'));
+    try {
+      const deps = makeDeps();
+      sessionSnapshotMock.mockResolvedValue({ workingDir: root, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+      writeDocsOutputMock.mockImplementation(async input => {
+        await fs.promises.mkdir(path.dirname(input.path), { recursive: true });
+        await fs.promises.writeFile(input.path, input.data);
+        const st = await fs.promises.lstat(input.path, { bigint: true });
+        // A workdir process swaps the UUID path for an unrelated file right after the write.
+        await fs.promises.rename(input.path, `${input.path}.moved`);
+        await fs.promises.writeFile(input.path, 'someone else');
+        return { identity: { dev: st.dev.toString(), ino: st.ino.toString() } };
+      });
+      const broken = 'f'.repeat(64);
+      await expect(deps.saveLargeGhostResult!(JSON.stringify({ c: `cindy-media://blobs/${broken}.png` }))).rejects.toThrow('lost its anchor');
+      expect(ledgerAddRefMock).not.toHaveBeenCalled();
+      const written = writeDocsOutputMock.mock.calls[0]![0].path;
+      expect(await fs.promises.readFile(written, 'utf8')).toBe('someone else');
+      // Our own inode (now under the moved name) was the only thing eligible for cleanup;
+      // it is left untouched because it no longer sits at the spill path.
+      expect(await fs.promises.readFile(`${written}.moved`, 'utf8')).toContain(broken);
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('skips cleanup entirely when the writer attested no identity', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ghost-spill-noid-'));
+    try {
+      const deps = makeDeps();
+      sessionSnapshotMock.mockResolvedValue({ workingDir: root, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+      writeDocsOutputMock.mockImplementation(async input => {
+        await fs.promises.mkdir(path.dirname(input.path), { recursive: true });
+        await fs.promises.writeFile(input.path, input.data);
+      });
+      const broken = 'f'.repeat(64);
+      ledgerAddRefMock.mockImplementation(async () => { throw new Error('FOREIGN KEY constraint failed'); });
+      await expect(deps.saveLargeGhostResult!(JSON.stringify({ c: `cindy-media://blobs/${broken}.png` }))).rejects.toThrow('media references unavailable');
+      const written = writeDocsOutputMock.mock.calls[0]![0].path;
+      await expect(fs.promises.access(written)).resolves.toBeUndefined();
+    } finally {
+      ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
+        const id = params.id ?? `ref-${++ledgerRefSeq}`;
+        ledgerRefs.push({ ...params, id });
+        return id;
+      });
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('passes a beforeCommit revalidation to the local writer on the happy path', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+    const seen: string[] = [];
+    writeDocsOutputMock.mockImplementation(async input => {
+      seen.push('before');
+      await input.beforeCommit?.();
+      seen.push('write');
+    });
+    await deps.saveLargeGhostResult!('result');
+    expect(seen).toEqual(['before', 'write']);
+    expect(writeDocsOutputMock.mock.calls[0]![0].beforeCommit).toBeTypeOf('function');
+  });
+
+  it('asks the session reviewer for the exact workdir target before writing in Auto', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+    const rel = await deps.saveLargeGhostResult!('result');
+    expect(reviewAllow).toHaveBeenCalledOnce();
+    expect(reviewAllow).toHaveBeenCalledWith({
+      kind: 'file-write',
+      path: path.join(WORKDIR, rel),
+      resolvedPath: path.join(WORKDIR, rel),
+      resolvedWritableRoots: [WORKDIR],
+    });
+    expect(writeDocsOutputMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: 'reviewer blocks', reviewAction: async () => ({ verdict: 'block' as const, reason: 'nope' }) },
+    { name: 'reviewer asks', reviewAction: async () => ({ verdict: 'ask' as const }) },
+    { name: 'reviewer throws', reviewAction: async () => { throw new Error('boom'); } },
+    { name: 'reviewer missing', reviewAction: undefined },
+  ])('fails closed in Auto when the session reviewer does not allow the write (%s)', async ({ reviewAction }) => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true, ...(reviewAction ? { reviewAction } : {}) });
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(writeDocsOutputMock).not.toHaveBeenCalled();
+    expect(remoteFsRequestMock).not.toHaveBeenCalled();
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
+  it('does not consult the reviewer for Full Access sessions', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'bypassPermissions', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'bypassPermissions', remoteHostId: null, isCurrent: () => true, reviewAction: reviewAllow });
+    await expect(deps.saveLargeGhostResult!('result')).resolves.toMatch(/^tool-results/);
+    expect(reviewAllow).not.toHaveBeenCalled();
+  });
+  it('roundtrips a production handler result through the safe filesystem writer', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ghost-safe-spill-'));
+    try {
+      const deps = makeDeps();
+      sessionSnapshotMock.mockResolvedValue({ workingDir: root, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+      writeDocsOutputMock.mockImplementation(async input => {
+        const realRoot = await fs.promises.realpath(root);
+        const stat = await fs.promises.lstat(realRoot, { bigint: true });
+        await runDocsOutputWriteForTest({
+          expectedRoot: { realPath: realRoot, dev: stat.dev, ino: stat.ino },
+          expectedParent: null,
+          parentRelativePath: path.relative(input.root, path.dirname(input.path)),
+          targetName: path.basename(input.path), data: input.data, overwrite: input.overwrite,
+        }, realRoot);
+      });
+      const data = '\\'.repeat(641694);
+      const response = await handleGhostCall({ ...deps, callGhostTool: async () => ({ ok: true, result: { data } }) }, { ghost_id: 'synthetic', tool: 'read' });
+      const projection = JSON.parse(response.content[0].text);
+      expect(projection.complete_result_saved).toBe(true);
+      const stored = JSON.parse(await fs.promises.readFile(path.join(root, projection.saved_to), 'utf8'));
+      expect(stored.result.data).toBe(data);
+      expect(Buffer.byteLength(JSON.stringify(response))).toBeLessThanOrEqual(64 * 1024);
+    } finally { await fs.promises.rm(root, { recursive: true, force: true }); }
+  });
+
+  it('pins media that only occurs beyond the inline preview once the bytes are durable', async () => {
+    const deps = makeDeps();
+    const hash = 'b'.repeat(64);
+    await deps.saveLargeGhostResult!(JSON.stringify({ result: { text: 'x'.repeat(70000), image: `cindy-media://blobs/${hash}.png` } }));
+    // Codex P1: the spilled file owns its media refs (not the message-lifecycle session-attachment row).
+    expect(ledgerRefs).toContainEqual(expect.objectContaining({ hash, refKind: 'ghost-tool-result', refId: expect.stringMatching(/^tool-results[\\/]/), originKind: 'tool' }));
+    expect(ledgerRefs).not.toContainEqual(expect.objectContaining({ hash, refKind: 'session-attachment' }));
+    // Greptile P2: refs are committed after the safe write so a failed write never leaves an orphan ref.
+    expect(writeDocsOutputMock.mock.invocationCallOrder[0]).toBeLessThan(ledgerAddRefMock.mock.invocationCallOrder[0]!);
+  });
+
+  it.each<TestAgentKind>(['claude-code', 'codex', 'pi'])('uses the authoritative local root and safe writer for %s', async agentKind => {
+    const deps = makeDeps(agentKind);
+    const text = JSON.stringify({ ok: true, result: { data: 'x'.repeat(70000) } });
+    const saved = await deps.saveLargeGhostResult!(text);
+    expect(liveGrantStateMock).toHaveBeenCalledWith('s1', 's1-instance');
+    expect(sessionSnapshotMock).toHaveBeenCalledWith('s1');
+    expect(path.dirname(saved)).toBe('tool-results');
+    expect(path.basename(saved)).toMatch(/^ghost-[0-9a-f-]+\.json$/);
+    expect(writeDocsOutputMock).toHaveBeenCalledWith({
+      root: WORKDIR, path: path.join(WORKDIR, saved), data: Buffer.from(text), overwrite: false,
+      beforeCommit: expect.any(Function),
+    });
+    expect(remoteFsRequestMock).not.toHaveBeenCalled();
+    expect(captureMutationOwnerMock).toHaveBeenCalledOnce();
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
+  // Codex P1: the persisted row lags runtime permission changes and a rebuilt
+  // instance reuses the business id; only the exact live instance may authorize.
+  it.each([
+    { name: 'stale instance', live: null },
+    { name: 'runtime switched to ask', live: { permissionMode: 'ask', remoteHostId: null } },
+    { name: 'runtime switched to plan', live: { permissionMode: 'plan', remoteHostId: null } },
+    { name: 'runtime permission unknown', live: { permissionMode: null, remoteHostId: null } },
+    { name: 'runtime plan mode on (isCurrent false)', live: { permissionMode: 'auto', remoteHostId: null, isCurrent: () => false } },
+    { name: 'runtime remote but row local', live: { permissionMode: 'auto', remoteHostId: 'remote' } },
+  ])('does not spill on a persisted auto row when the live session says otherwise (%s)', async ({ live }) => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue(live);
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(liveGrantStateMock).toHaveBeenCalledWith('s1', 's1-instance');
+    expect(writeDocsOutputMock).not.toHaveBeenCalled();
+    expect(remoteFsRequestMock).not.toHaveBeenCalled();
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
+  it('prefers the live plan-mode reading over a stale persisted row', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, remoteHostId: null, permissionMode: 'ask', planModeEnabled: true });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, isCurrent: () => true, reviewAction: reviewAllow });
+    await expect(deps.saveLargeGhostResult!('result')).resolves.toMatch(/^tool-results/);
+    expect(writeDocsOutputMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { remoteHostId: 'remote', permissionMode: 'auto', planModeEnabled: false },
+    { remoteHostId: null, permissionMode: 'auto', planModeEnabled: true },
+  ])('does not spill when the persisted row disagrees with the live session (%j)', async state => {
+    const deps = makeDeps('codex');
+    // 旧装配方没有 isCurrent:计划模式回退持久化行;远端归属不一致同样拒绝。
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: null, reviewAction: reviewAllow });
+    sessionSnapshotMock.mockResolvedValue({ workingDir: WORKDIR, ...state });
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(writeDocsOutputMock).not.toHaveBeenCalled();
+    expect(remoteFsRequestMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { name: 'unknown session', sessionId: null, sessionInstanceId: null },
+    { name: 'missing instance id', sessionId: 's1', sessionInstanceId: null },
+  ])('does not fall back to the cwd or the persisted row (%s)', async ({ sessionId, sessionInstanceId }) => {
+    const deps = makeDeps('codex', sessionId, sessionInstanceId);
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(liveGrantStateMock).not.toHaveBeenCalled();
+    expect(writeDocsOutputMock).not.toHaveBeenCalled();
+  });
+
+  it('does not spill when the host cannot read the live session', async () => {
+    alsSessionContextMock.mockReturnValue({ agentKind: 'codex', workingDir: WORKDIR, sessionId: 's1', sessionInstanceId: 's1-instance' });
+    const deps = getCindyGhostsMcpDeps(undefined, { getAppVersion: appVersionMock });
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(writeDocsOutputMock).not.toHaveBeenCalled();
+  });
+
+  it('propagates a failed safe write, commits no media refs and releases the owner lease', async () => {
+    const deps = makeDeps();
+    const hash = 'c'.repeat(64);
+    writeDocsOutputMock.mockRejectedValueOnce(new Error('disk full'));
+    await expect(deps.saveLargeGhostResult!(JSON.stringify({ image: `cindy-media://blobs/${hash}.png` }))).rejects.toThrow('disk full');
+    expect(writeDocsOutputMock).toHaveBeenCalledOnce();
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
+  it('rolls back only the refs it added and removes the file when media accounting fails', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ghost-spill-rollback-'));
+    try {
+      const deps = makeDeps();
+      sessionSnapshotMock.mockResolvedValue({ workingDir: root, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+      writeDocsOutputMock.mockImplementation(async input => {
+        await fs.promises.mkdir(path.dirname(input.path), { recursive: true });
+        await fs.promises.writeFile(input.path, input.data);
+        const st = await fs.promises.lstat(input.path, { bigint: true });
+        return { identity: { dev: st.dev.toString(), ino: st.ino.toString() } };
+      });
+      const existing = 'd'.repeat(64);
+      const fresh = 'e'.repeat(64);
+      const broken = 'f'.repeat(64);
+      ledgerRefs.push({ hash: existing, refKind: 'session-attachment', refId: 's1', originKind: 'tool' });
+      ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
+        if (params.hash === broken) throw new Error('FOREIGN KEY constraint failed');
+        const id = params.id ?? `ref-${++ledgerRefSeq}`;
+        ledgerRefs.push({ ...params, id });
+        return id;
+      });
+      const text = JSON.stringify({ a: `cindy-media://blobs/${existing}.png`, b: `cindy-media://blobs/${fresh}.png`, c: `cindy-media://blobs/${broken}.png` });
+      await expect(deps.saveLargeGhostResult!(text)).rejects.toThrow('media references unavailable');
+      // The file identity is independent of the pre-existing session-attachment row: both
+      // `existing` and `fresh` got their own ghost-tool-result refs; rollback covers those two
+      // plus the id reserved for `broken` (its insert may have landed before rejecting).
+      expect(ledgerRemoveRefByIdMock).toHaveBeenCalledTimes(3);
+      expect(ledgerRemoveSessionAttachmentRefMock).not.toHaveBeenCalled();
+      expect(ledgerRefs).toContainEqual(expect.objectContaining({ hash: existing, refKind: 'session-attachment', refId: 's1' }));
+      expect(ledgerRefs).not.toContainEqual(expect.objectContaining({ refKind: 'ghost-tool-result' }));
+      expect(ledgerRefs).not.toContainEqual(expect.objectContaining({ hash: fresh }));
+      const written = writeDocsOutputMock.mock.calls[0]![0].path;
+      expect((await fs.promises.stat(written)).size).toBe(0); // erased through the fd; pathname kept
+      expect(releaseMutationMock).toHaveBeenCalledOnce();
+    } finally {
+      ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
+        const id = params.id ?? `ref-${++ledgerRefSeq}`;
+        ledgerRefs.push({ ...params, id });
+        return id;
+      });
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  // Codex P1 (round 4): rollback is keyed by the refs this call inserted, so a
+  // concurrent spill that booked the same blob keeps its reference.
+  it('keeps a concurrent spill\'s reference to the same blob when this call rolls back', async () => {
+    const deps = makeDeps();
+    const shared = 'a'.repeat(64);
+    const broken = 'f'.repeat(64);
+    // Both calls observe "no ref yet" for the shared blob (the race window).
+    ledgerHasRefMock.mockImplementation(async () => false);
+    ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
+      if (params.hash === broken) throw new Error('FOREIGN KEY constraint failed');
+      const id = params.id ?? `ref-${++ledgerRefSeq}`;
+      ledgerRefs.push({ ...params, id });
+      return id;
+    });
+    try {
+      const okText = JSON.stringify({ image: `cindy-media://blobs/${shared}.png` });
+      const badText = JSON.stringify({ image: `cindy-media://blobs/${shared}.png`, other: `cindy-media://blobs/${broken}.png` });
+      const [ok, bad] = await Promise.allSettled([deps.saveLargeGhostResult!(okText), deps.saveLargeGhostResult!(badText)]);
+      expect(ok.status).toBe('fulfilled');
+      expect(bad.status).toBe('rejected');
+      const remaining = ledgerRefs.filter(ref => ref.hash === shared && ref.refKind === 'ghost-tool-result');
+      expect(remaining).toHaveLength(1); // the successful call's row survives
+      // Rollback touches only this call's reserved ids (shared + broken), never the other call's row.
+      expect(ledgerRemoveRefByIdMock).toHaveBeenCalledTimes(2);
+      expect(ledgerRemoveRefByIdMock).not.toHaveBeenCalledWith(remaining[0]!.id);
+    } finally {
+      ledgerHasRefMock.mockImplementation(async (params: TestLedgerRef) =>
+        ledgerRefs.some(ref => ref.hash === params.hash && ref.refKind === params.refKind && ref.refId === params.refId
+          && (params.originKind === undefined || ref.originKind === params.originKind)));
+      ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
+        const id = params.id ?? `ref-${++ledgerRefSeq}`;
+        ledgerRefs.push({ ...params, id });
+        return id;
+      });
+    }
+  });
+
+  // Codex P1: an SSH remote session's workdir lives on the remote host. Route
+  // the spill through remote-file-service instead of failing closed.
+  it.each<TestAgentKind>(['codex', 'pi'])('spills a remote session result through remote-file-service for %s', async agentKind => {
+    const deps = makeDeps(agentKind);
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    const hash = 'a'.repeat(64);
+    const text = JSON.stringify({ ok: true, result: { data: 'x'.repeat(70000), image: `cindy-media://blobs/${hash}.png` } });
+    const saved = await deps.saveLargeGhostResult!(text);
+    expect(saved).toMatch(/^tool-results\/ghost-[0-9a-f-]+\.json$/);
+    expect(writeDocsOutputMock).not.toHaveBeenCalled();
+    expect(remoteFsRequestMock.mock.calls.map(call => call.slice(0, 2))).toEqual([
+      ['host-1', 'createFolder'], ['host-1', 'writeNewFile'],
+    ]);
+    expect(remoteFsRequestMock).toHaveBeenCalledWith('host-1', 'createFolder', { workdir: '/srv/work', relPath: 'tool-results' }, { beforeSend: expect.any(Function) });
+    // Exclusive create+write in one RPC: no createFile → writeFile window for a symlink swap.
+    expect(remoteFsRequestMock).toHaveBeenCalledWith('host-1', 'writeNewFile', { workdir: '/srv/work', relPath: saved, content: text }, { beforeSend: expect.any(Function) });
+    expect(remoteFsRequestMock.mock.calls.map(call => call[1])).not.toContain('writeFile');
+    expect(remoteFsRequestMock.mock.invocationCallOrder.at(-1)).toBeLessThan(ledgerAddRefMock.mock.invocationCallOrder[0]!);
+    expect(ledgerRefs).toContainEqual(expect.objectContaining({ hash, refKind: 'ghost-tool-result', refId: saved, originKind: 'tool' }));
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
+  it('reuses an existing remote tool-results folder', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    remoteFsRequestMock.mockImplementation(async (_host, method) => {
+      if (method === 'createFolder') throw new Error('EEXIST: file already exists');
+      if (method === 'stat') return { relPath: 'tool-results', type: 'directory', size: 0, mtimeMs: 0 };
+      return {};
+    });
+    await expect(deps.saveLargeGhostResult!('result')).resolves.toMatch(/^tool-results\//);
+    expect(remoteFsRequestMock.mock.calls.map(call => call[1])).toEqual(['createFolder', 'stat', 'writeNewFile']);
+  });
+
+  it('commits no refs and issues no delete when the remote exclusive write fails outright', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    remoteFsRequestMock.mockImplementation(async (_host, method) => {
+      if (method === 'writeNewFile') throw new Error('content too large (>2097152 bytes)');
+      return {};
+    });
+    const hash = 'a'.repeat(64);
+    await expect(deps.saveLargeGhostResult!(JSON.stringify({ image: `cindy-media://blobs/${hash}.png` }))).rejects.toThrow('content too large');
+    expect(remoteFsRequestMock.mock.calls.map(call => call[1])).toEqual(['createFolder', 'writeNewFile']); // definite failure wrote nothing: no delete
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+    expect(releaseMutationMock).toHaveBeenCalledOnce();
+  });
+
+  // Codex P1 (round 3): the live gate is re-read after every await, not cached once.
+  it.each([
+    { name: 'before the write', sequence: ['auto', 'auto', 'ask'] },
+    { name: 'during the snapshot read', sequence: ['auto', 'ask'] },
+  ])('does not write when the runtime grant changes %s', async ({ sequence }) => {
+    const deps = makeDeps('codex');
+    const modes = [...sequence];
+    liveGrantStateMock.mockImplementation(() => ({ permissionMode: modes.length > 1 ? modes.shift()! : modes[0]!, remoteHostId: null }));
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(writeDocsOutputMock).not.toHaveBeenCalled();
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+  });
+
+  it('discards the written file and books no refs when the instance ends during the write', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ghost-spill-revalidate-'));
+    try {
+      const deps = makeDeps('codex');
+      sessionSnapshotMock.mockResolvedValue({ workingDir: root, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+      let calls = 0;
+      liveGrantStateMock.mockImplementation(() => (++calls <= 3 ? { permissionMode: 'auto', remoteHostId: null, isCurrent: () => true, reviewAction: reviewAllow } : null));
+      writeDocsOutputMock.mockImplementation(async input => {
+        await fs.promises.mkdir(path.dirname(input.path), { recursive: true });
+        await fs.promises.writeFile(input.path, input.data);
+        const st = await fs.promises.lstat(input.path, { bigint: true });
+        return { identity: { dev: st.dev.toString(), ino: st.ino.toString() } };
+      });
+      const hash = 'a'.repeat(64);
+      await expect(deps.saveLargeGhostResult!(JSON.stringify({ image: `cindy-media://blobs/${hash}.png` }))).rejects.toThrow('live session');
+      expect(writeDocsOutputMock).toHaveBeenCalledOnce();
+      expect((await fs.promises.stat(writeDocsOutputMock.mock.calls[0]![0].path)).size).toBe(0);
+      expect(ledgerAddRefMock).not.toHaveBeenCalled();
+      expect(liveGrantStateMock).toHaveBeenCalledTimes(4);
+    } finally { await fs.promises.rm(root, { recursive: true, force: true }); }
+  });
+
+  // Codex P1 (round 29): between the writer's success and the ledger commit a workdir process
+  // can move the whole output directory out of the workdir; a path-based cleanup would then
+  // find nothing. The retained inode-bound handle still zeroes the content wherever it went.
+  it('zeroes the spill through the retained handle when its directory was moved out during bookkeeping', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ghost-spill-hold-'));
+    const outside = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ghost-spill-hold-outside-'));
+    try {
+      const deps = makeDeps('codex');
+      sessionSnapshotMock.mockResolvedValue({ workingDir: root, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+      writeDocsOutputMock.mockImplementation(async input => {
+        await fs.promises.mkdir(path.dirname(input.path), { recursive: true });
+        await fs.promises.writeFile(input.path, input.data);
+        const st = await fs.promises.lstat(input.path, { bigint: true });
+        return { identity: { dev: st.dev.toString(), ino: st.ino.toString() } };
+      });
+      let moved = false;
+      ledgerAddRefMock.mockImplementation(async () => {
+        // The output directory leaves the workdir while the ledger call is in flight.
+        // Windows refuses to move a directory holding an open handle (the retained hold):
+        // then no race exists and the file stays put; the erase must still go through.
+        moved = await fs.promises.rename(path.join(root, 'tool-results'), path.join(outside, 'tool-results')).then(() => true, () => false);
+        throw new Error('FOREIGN KEY constraint failed');
+      });
+      await expect(deps.saveLargeGhostResult!(JSON.stringify({ image: `cindy-media://blobs/${'f'.repeat(64)}.png` }))).rejects.toThrow('media references unavailable');
+      const written = writeDocsOutputMock.mock.calls[0]![0].path;
+      if (moved) {
+        expect((await fs.promises.stat(path.join(outside, 'tool-results', path.basename(written)))).size).toBe(0);
+        await expect(fs.promises.access(written)).rejects.toThrow();
+      } else {
+        expect(process.platform).toBe('win32');
+        expect((await fs.promises.stat(written)).size).toBe(0);
+      }
+    } finally {
+      ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
+        const id = params.id ?? `ref-${++ledgerRefSeq}`;
+        ledgerRefs.push({ ...params, id });
+        return id;
+      });
+      await fs.promises.rm(root, { recursive: true, force: true });
+      await fs.promises.rm(outside, { recursive: true, force: true });
+    }
+  });
+
+  // Codex P1 (round 4): the ledger mutations are async boundaries too — an instance that ends
+  // while refs are being committed must not keep refs or the private file in its name.
+  it('rolls back refs and the file when the instance ends while media refs are committed', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ghost-spill-post-commit-'));
+    try {
+      const deps = makeDeps('codex');
+      sessionSnapshotMock.mockResolvedValue({ workingDir: root, remoteHostId: null, permissionMode: 'auto', planModeEnabled: false });
+      let calls = 0;
+      liveGrantStateMock.mockImplementation(() => (++calls <= 4 ? { permissionMode: 'auto', remoteHostId: null, isCurrent: () => true, reviewAction: reviewAllow } : null));
+      writeDocsOutputMock.mockImplementation(async input => {
+        await fs.promises.mkdir(path.dirname(input.path), { recursive: true });
+        await fs.promises.writeFile(input.path, input.data);
+        const st = await fs.promises.lstat(input.path, { bigint: true });
+        return { identity: { dev: st.dev.toString(), ino: st.ino.toString() } };
+      });
+      ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
+        const id = params.id ?? `ref-${++ledgerRefSeq}`;
+        ledgerRefs.push({ ...params, id });
+        return id;
+      });
+      const hash = 'c'.repeat(64);
+      await expect(deps.saveLargeGhostResult!(JSON.stringify({ image: `cindy-media://blobs/${hash}.png` }))).rejects.toThrow('live session');
+      expect(ledgerAddRefMock).toHaveBeenCalledOnce();
+      expect(ledgerRemoveRefByIdMock).toHaveBeenCalledOnce();
+      expect(ledgerRemoveRefByIdMock).toHaveBeenCalledWith(await ledgerAddRefMock.mock.results[0]!.value);
+      expect(ledgerRefs).not.toContainEqual(expect.objectContaining({ hash }));
+      expect((await fs.promises.stat(writeDocsOutputMock.mock.calls[0]![0].path)).size).toBe(0);
+      expect(liveGrantStateMock).toHaveBeenCalledTimes(5);
+    } finally { await fs.promises.rm(root, { recursive: true, force: true }); }
+  });
+
+  // Codex P1 (rounds 5–9): after a client TIMEOUT the daemon may still be writing; the only
+  // acceptable proof of *this* write is the daemon's content-identity check (verifyNewFile).
+  const remoteIdentity = { size: 0, mtimeMs: 0, dev: '7', ino: '9' };
+  const timeoutThenVerify = (verify: (call: number) => unknown) => {
+    let verifyCalls = 0;
+    remoteFsRequestMock.mockImplementation(async (_host, method) => {
+      if (method === 'writeNewFile') throw Object.assign(new Error('writeNewFile TIMEOUT'), { code: 'TIMEOUT' });
+      if (method === 'verifyNewFile') return verify(++verifyCalls);
+      return {};
+    });
+    return () => verifyCalls;
+  };
+  const remoteSession = () => {
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+  };
+
+  // Codex P1 (round 25): the directory mutation before the write is inside the same
+  // frame boundary — a stale approval must not create tool-results either.
+  it('withholds the remote createFolder when the instance ended while the host was connecting', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    let current = true;
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => current, reviewAction: reviewAllow });
+    const sent: string[] = [];
+    remoteFsRequestMock.mockImplementation(async (_host, method, _params, options) => {
+      if (method === 'createFolder') { current = false; await options?.beforeSend?.(); }
+      sent.push(method);
+      return {};
+    });
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(sent).toEqual([]);
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+  });
+
+  // Codex P1 (round 24): the remote write re-checks the live grant at the manager's send
+  // boundary (after connect/probe/install/handshake), not only before calling the manager.
+  it('passes revalidation as beforeSend and withholds the remote write when the instance ended while connecting', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    let current = true;
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => current, reviewAction: reviewAllow });
+    let bytesSent = false;
+    remoteFsRequestMock.mockImplementation(async (_host, method, _params, options) => {
+      if (method === 'writeNewFile') {
+        current = false; // instance ended while the client was being built
+        await options?.beforeSend?.();
+        bytesSent = true;
+        return remoteIdentity;
+      }
+      return {};
+    });
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(bytesSent).toBe(false);
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+  });
+
+  it('waits for an in-progress remote write after a timeout and accepts it once the daemon verifies the content', async () => {
+    const deps = makeDeps('codex'); remoteSession();
+    const text = JSON.stringify({ ok: true, result: 'x'.repeat(100) });
+    const calls = timeoutThenVerify(call => { if (call < 4) throw new Error('OPERATION_FAILED: size mismatch'); return remoteIdentity; });
+    await expect(deps.saveLargeGhostResult!(text)).resolves.toMatch(/^tool-results\//);
+    expect(calls()).toBe(4);
+    const methods = remoteFsRequestMock.mock.calls.map(call => call[1]);
+    expect(methods).not.toContain('deleteEntry');
+    expect(methods).not.toContain('eraseIfSame');
+    expect(methods).not.toContain('stat');
+    // The verification carries this write's exact content identity, not just a length.
+    const verifyParams = remoteFsRequestMock.mock.calls.find(call => call[1] === 'verifyNewFile')![2] as { sha256: string; size: number };
+    expect(verifyParams.size).toBe(Buffer.byteLength(text, 'utf8'));
+    expect(verifyParams.sha256).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('keeps an unverifiable remote path untouched and reports the timeout instead of deleting anything', async () => {
+    const deps = makeDeps('codex'); remoteSession();
+    const text = JSON.stringify({ ok: true, result: 'x'.repeat(100) });
+    const calls = timeoutThenVerify(() => { throw new Error('OPERATION_FAILED: content mismatch'); });
+    await expect(deps.saveLargeGhostResult!(text)).rejects.toThrow('writeNewFile TIMEOUT');
+    expect(calls()).toBe(REMOTE_WRITE_RECONCILE.maxAttempts);
+    const methods = remoteFsRequestMock.mock.calls.map(call => call[1]);
+    expect(methods).not.toContain('deleteEntry');
+    expect(methods).not.toContain('eraseIfSame');
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+  });
+
+  it('waits through a temporarily missing file after the timeout (remote open may have blocked past the deadline)', async () => {
+    const deps = makeDeps('codex'); remoteSession();
+    const text = JSON.stringify({ ok: true, result: 'x'.repeat(100) });
+    const calls = timeoutThenVerify(call => { if (call < 3) throw new Error('OPERATION_FAILED: ENOENT'); return remoteIdentity; });
+    await expect(deps.saveLargeGhostResult!(text)).resolves.toMatch(/^tool-results\//);
+    expect(calls()).toBe(3);
+  });
+
+  // Codex P1 (round 8): each probe may itself wait on the client deadline; the whole
+  // reconciliation is bounded by wall-clock, not by probe count.
+  it('stops reconciling once the wall-clock window is spent even if probes are slow', async () => {
+    const deps = makeDeps('codex'); remoteSession();
+    REMOTE_WRITE_RECONCILE.maxAttempts = 40;
+    REMOTE_WRITE_RECONCILE.windowMs = 60;
+    const text = JSON.stringify({ ok: true, result: 'x'.repeat(100) });
+    const calls = timeoutThenVerify(async () => { await new Promise(resolve => setTimeout(resolve, 40)); throw Object.assign(new Error('verify TIMEOUT'), { code: 'TIMEOUT' }); });
+    const started = Date.now();
+    await expect(deps.saveLargeGhostResult!(text)).rejects.toThrow('writeNewFile TIMEOUT');
+    expect(calls()).toBeLessThanOrEqual(3);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  // Codex P2 (round 18): a probe that never returns (daemon silent on a live channel) must
+  // not outlive the reconcile window; each probe is bounded by the remaining budget.
+  it('bounds a hanging verifyNewFile probe by the remaining reconcile window', async () => {
+    const deps = makeDeps('codex'); remoteSession();
+    REMOTE_WRITE_RECONCILE.maxAttempts = 40;
+    REMOTE_WRITE_RECONCILE.windowMs = 80;
+    const text = JSON.stringify({ ok: true, result: 'x'.repeat(100) });
+    const calls = timeoutThenVerify(() => new Promise(() => {})); // never settles
+    const started = Date.now();
+    await expect(deps.saveLargeGhostResult!(text)).rejects.toThrow('writeNewFile TIMEOUT');
+    expect(calls()).toBe(1);
+    expect(Date.now() - started).toBeLessThan(1_000);
+  });
+
+  // Codex P1 (round 9): remote cleanup is identity-checked on the daemon and never path-based.
+  it('cleans up a remote spill only through eraseIfSame with the identity returned by writeNewFile', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    let calls = 0;
+    // resolve(2) → pre-write(3) → after directory step(4) → post-write(5): the 5th read ends the instance.
+    liveGrantStateMock.mockImplementation(() => (++calls <= 4 ? { permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow } : null));
+    remoteFsRequestMock.mockImplementation(async (_host, method) => (method === 'writeNewFile' ? { size: 5, mtimeMs: 1, dev: '7', ino: '9' } : {}));
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow('live session');
+    const methods = remoteFsRequestMock.mock.calls.map(call => call[1]);
+    expect(methods).not.toContain('deleteEntry');
+    expect(remoteFsRequestMock).toHaveBeenCalledWith('host-1', 'eraseIfSame', { workdir: '/srv/work', relPath: expect.stringMatching(/^tool-results\//), dev: '7', ino: '9' });
+  });
+
+  // Codex P1 (round 29/30): the daemon keeps the writer's descriptor (hold) as the client's
+  // inode capability across its own bookkeeping; it is released only after the last
+  // revalidation — re-checked again at the release frame boundary (`beforeSend`) — and any
+  // earlier failure withdraws through eraseIfSame *with* the hold. No pathname is deleted.
+  it('releases the remote hold only after refs are committed and re-validates at the send boundary', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    remoteFsRequestMock.mockImplementation(async (_host, method, _params, options) => {
+      if (method === 'writeNewFile') return { size: 5, mtimeMs: 1, dev: '7', ino: '9', holdId: 'hold-1', durable: true };
+      if (method === 'releaseNewFile') { await options?.beforeSend?.(); return { released: true }; }
+      return {};
+    });
+    const hash = 'a'.repeat(64);
+    await deps.saveLargeGhostResult!(JSON.stringify({ image: `cindy-media://blobs/${hash}.png` }));
+    const methods = remoteFsRequestMock.mock.calls.map(call => call[1]);
+    expect(methods).toEqual(['createFolder', 'writeNewFile', 'releaseNewFile']);
+    expect(remoteFsRequestMock).toHaveBeenCalledWith('host-1', 'releaseNewFile', { holdId: 'hold-1' }, { beforeSend: expect.any(Function) });
+    // Ledger first, release last: the hold outlives every async boundary of the bookkeeping.
+    expect(ledgerAddRefMock.mock.invocationCallOrder[0]!).toBeLessThan(remoteFsRequestMock.mock.invocationCallOrder.at(-1)!);
+  });
+
+  it('withdraws through the hold when the instance ended at the release frame boundary', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    let live = true;
+    liveGrantStateMock.mockImplementation(() => (live ? { permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow } : null));
+    remoteFsRequestMock.mockImplementation(async (_host, method, _params, options) => {
+      if (method === 'writeNewFile') return { size: 5, mtimeMs: 1, dev: '7', ino: '9', holdId: 'hold-1', durable: true };
+      if (method === 'releaseNewFile') { live = false; await options?.beforeSend?.(); return { released: true }; }
+      return {};
+    });
+    const hash = 'a'.repeat(64);
+    await expect(deps.saveLargeGhostResult!(JSON.stringify({ image: `cindy-media://blobs/${hash}.png` }))).rejects.toThrow('live session');
+    expect(remoteFsRequestMock.mock.calls.map(call => call[1])).toEqual(['createFolder', 'writeNewFile', 'releaseNewFile', 'eraseIfSame']);
+    expect(remoteFsRequestMock).toHaveBeenCalledWith('host-1', 'eraseIfSame', { workdir: '/srv/work', relPath: expect.stringMatching(/^tool-results\//), dev: '7', ino: '9', holdId: 'hold-1' });
+    expect(ledgerRemoveRefByIdMock).toHaveBeenCalledOnce();
+    expect(ledgerRefs).not.toContainEqual(expect.objectContaining({ hash }));
+  });
+
+  it('keeps a completed remote spill when only the release response is lost', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    remoteFsRequestMock.mockImplementation(async (_host, method) => {
+      if (method === 'writeNewFile') return { size: 5, mtimeMs: 1, dev: '7', ino: '9', holdId: 'hold-1', durable: true };
+      if (method === 'releaseNewFile') throw Object.assign(new Error('releaseNewFile TIMEOUT'), { code: 'TIMEOUT' });
+      return {};
+    });
+    await expect(deps.saveLargeGhostResult!('result')).resolves.toMatch(/^tool-results\//);
+    expect(remoteFsRequestMock.mock.calls.map(call => call[1])).toEqual(['createFolder', 'writeNewFile', 'releaseNewFile']);
+  });
+
+  it('passes the hold to eraseIfSame when the ledger fails after a remote write', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    remoteFsRequestMock.mockImplementation(async (_host, method) => (method === 'writeNewFile' ? { size: 5, mtimeMs: 1, dev: '7', ino: '9', holdId: 'hold-1', durable: true } : {}));
+    ledgerAddRefMock.mockImplementation(async () => { throw new Error('FOREIGN KEY constraint failed'); });
+    try {
+      await expect(deps.saveLargeGhostResult!(JSON.stringify({ image: `cindy-media://blobs/${'f'.repeat(64)}.png` }))).rejects.toThrow('media references unavailable');
+      expect(remoteFsRequestMock.mock.calls.map(call => call[1])).toEqual(['createFolder', 'writeNewFile', 'eraseIfSame']);
+      expect(remoteFsRequestMock).toHaveBeenCalledWith('host-1', 'eraseIfSame', expect.objectContaining({ dev: '7', ino: '9', holdId: 'hold-1' }));
+    } finally {
+      ledgerAddRefMock.mockImplementation(async (params: TestLedgerRef) => {
+        const id = params.id ?? `ref-${++ledgerRefSeq}`;
+        ledgerRefs.push({ ...params, id });
+        return id;
+      });
+    }
+  });
+
+  // Codex P1 (round 30): a staging removal that did not reach disk is reported, not swallowed;
+  // this client is the only party that accepted the publish and withdraws through the hold.
+  it('withdraws a remote write whose staging removal was not durable', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    remoteFsRequestMock.mockImplementation(async (_host, method) => (method === 'writeNewFile' ? { size: 5, mtimeMs: 1, dev: '7', ino: '9', holdId: 'hold-1', durable: false } : {}));
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow('not durable');
+    expect(remoteFsRequestMock.mock.calls.map(call => call[1])).toEqual(['createFolder', 'writeNewFile', 'eraseIfSame']);
+    expect(remoteFsRequestMock).toHaveBeenCalledWith('host-1', 'eraseIfSame', expect.objectContaining({ dev: '7', ino: '9', holdId: 'hold-1' }));
+    expect(ledgerAddRefMock).not.toHaveBeenCalled();
+  });
+
+  it('carries the hold learned from verifyNewFile into the release after a lost write response', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    remoteFsRequestMock.mockImplementation(async (_host, method) => {
+      if (method === 'writeNewFile') throw Object.assign(new Error('writeNewFile TIMEOUT'), { code: 'TIMEOUT' });
+      if (method === 'verifyNewFile') return { size: 5, mtimeMs: 1, dev: '7', ino: '9', holdId: 'hold-v' };
+      if (method === 'releaseNewFile') return { released: true };
+      return {};
+    });
+    await deps.saveLargeGhostResult!('result');
+    expect(remoteFsRequestMock.mock.calls.map(call => call[1])).toEqual(['createFolder', 'writeNewFile', 'verifyNewFile', 'releaseNewFile']);
+    expect(remoteFsRequestMock).toHaveBeenCalledWith('host-1', 'releaseNewFile', { holdId: 'hold-v' }, { beforeSend: expect.any(Function) });
+  });
+
+  // Codex P1 (round 6): createFolder can time out while the daemon is still running mkdir.
+  it.each([
+    { name: 'waits for the folder to appear after a createFolder timeout, then writes', appears: true },
+    { name: 'gives up without writing when the folder never appears after a createFolder timeout', appears: false },
+  ])('$name', async ({ appears }) => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-1', isCurrent: () => true, reviewAction: reviewAllow });
+    const text = JSON.stringify({ ok: true, result: 'x'.repeat(100) });
+    let dirStats = 0;
+    remoteFsRequestMock.mockImplementation(async (_host, method, params) => {
+      if (method === 'createFolder') throw Object.assign(new Error('createFolder TIMEOUT'), { code: 'TIMEOUT' });
+      if (method === 'stat' && (params as { relPath: string }).relPath === 'tool-results') {
+        dirStats += 1;
+        if (appears && dirStats >= 3) return { relPath: 'tool-results', mtimeMs: 0, type: 'directory', size: 0 };
+        throw new Error('OPERATION_FAILED: ENOENT');
+      }
+      return {};
+    });
+    const outcome = deps.saveLargeGhostResult!(text);
+    const methods = () => remoteFsRequestMock.mock.calls.map(call => call[1]);
+    if (appears) {
+      await expect(outcome).resolves.toMatch(/^tool-results\//);
+      expect(dirStats).toBe(3);
+      expect(methods()).toContain('writeNewFile');
+    } else {
+      await expect(outcome).rejects.toThrow('createFolder TIMEOUT');
+      expect(dirStats).toBe(REMOTE_WRITE_RECONCILE.maxAttempts);
+      expect(methods()).not.toContain('writeNewFile');
+    }
+  });
+
+  // Codex P1 (round 3, refined in round 9): a lost RPC response is not a failed write. The
+  // daemon's verifyNewFile decides; nothing is ever deleted on ambiguity.
+  it.each([
+    { name: 'accepts a verified complete file after a lost response', code: 'CHANNEL_CLOSED', verified: true },
+    { name: 'keeps an unverified path untouched after a lost response and reports failure', code: 'CHANNEL_CLOSED', verified: false },
+    { name: 'accepts a verified complete file after a client timeout', code: 'TIMEOUT', verified: true },
+    { name: 'keeps an unverified path untouched after a client timeout and reports failure', code: 'TIMEOUT', verified: false },
+    // Codex P1 (round 15b): the endpoint-generation wrapper error hides the real outcome.
+    { name: 'accepts a verified complete file after an endpoint-stale wrapper error', code: 'ENDPOINT_STALE', verified: true },
+    { name: 'keeps an unverified path untouched after an endpoint-stale wrapper error', code: 'ENDPOINT_STALE', verified: false },
+  ])('$name', async ({ code, verified }) => {
+    const deps = makeDeps('codex'); remoteSession();
+    const text = JSON.stringify({ ok: true, result: 'x'.repeat(100) });
+    remoteFsRequestMock.mockImplementation(async (_host, method) => {
+      if (method === 'writeNewFile') throw Object.assign(new Error(`writeNewFile ${code}`), { code });
+      if (method === 'verifyNewFile') { if (verified) return remoteIdentity; throw new Error('OPERATION_FAILED: not a regular file'); }
+      return {};
+    });
+    const outcome = deps.saveLargeGhostResult!(text);
+    if (verified) await expect(outcome).resolves.toMatch(/^tool-results\//);
+    else await expect(outcome).rejects.toThrow(`writeNewFile ${code}`);
+    const methods = remoteFsRequestMock.mock.calls.map(call => call[1]);
+    expect(methods).not.toContain('deleteEntry');
+    expect(methods).not.toContain('eraseIfSame');
+    expect(methods.slice(0, 3)).toEqual(['createFolder', 'writeNewFile', 'verifyNewFile']);
+    if (!verified) expect(methods.filter(m => m === 'verifyNewFile')).toHaveLength(REMOTE_WRITE_RECONCILE.maxAttempts);
+  });
+
+  it('does not spill a remote session result when the live instance disagrees about the host', async () => {
+    const deps = makeDeps('codex');
+    sessionSnapshotMock.mockResolvedValue({ workingDir: '/srv/work', remoteHostId: 'host-1', permissionMode: 'auto', planModeEnabled: false });
+    liveGrantStateMock.mockReturnValue({ permissionMode: 'auto', remoteHostId: 'host-2' });
+    await expect(deps.saveLargeGhostResult!('result')).rejects.toThrow();
+    expect(remoteFsRequestMock).not.toHaveBeenCalled();
+  });
 });
 
 describe('market install live authority', () => {
