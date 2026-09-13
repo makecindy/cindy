@@ -243,7 +243,8 @@ describe('Work Louder Codex settings IPC business body', () => {
   it('drops a published catalog that belongs to another account generation', () => {
     const source = readFileSync(resolve(__dirname, '../index.ts'), 'utf8');
     expect(source).toContain('if (isAppSessionBoundaryPending()) return null;');
-    expect(source).toContain('if (rendererTaskCatalogScope !== currentTaskCatalogScope())');
+    expect(source).toContain('return readRendererTaskCatalog(currentTaskCatalogScope());');
+    expect(source).toContain('publishRendererTaskCatalog(tasks, scope);');
     expect(source).toContain('if (!scope) return;');
     expect(source).toContain('workLouderAccessories.applySettings(model, persisted[model]);');
     expect(source).toContain('workLouderCodexLightingController.start();');

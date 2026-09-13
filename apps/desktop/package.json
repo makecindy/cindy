@@ -159,6 +159,7 @@
     "mermaid": "^11.14.0",
     "node-machine-id": "^1.1.12",
     "node-pty": "^1.0.0",
+    "ogg-opus-decoder": "1.7.5",
     "pdfjs-dist": "^5.7.284",
     "picomatch": "^4.0.5",
     "pptxgenjs": "^4.0.1",

@@ -78,6 +78,11 @@ import {
   listWorkLouderCodexTaskCatalog,
   type WorkLouderCodexTaskCatalogInput,
 } from './taskSlots.js';
+import {
+  clearRendererTaskCatalog,
+  publishRendererTaskCatalog,
+  readRendererTaskCatalog,
+} from './taskCatalogPublication.js';
 
 const log = createLogger('worklouder-codex');
 const requireFromMain = createRequire(__filename);
@@ -141,31 +146,13 @@ const hostClient = new WorkLouderCodexHostClient({
 });
 const codexMicroGuardService = new CodexMicroGuardService();
 
-/**
- * Tasks as the sidebar currently shows them, published by the renderer.
- *
- * The local table is not the whole picture: sessions on a linked machine live
- * only in the renderer's remote store, so a machine driving someone else's
- * sessions would show six empty agent keys. The renderer is also the only side
- * that knows which machine filter is applied, so what it sends is what the user
- * sees. Null until it reports — until then the local table is the best guess.
- */
-let rendererTaskCatalog: WorkLouderCodexTaskCatalogInput[] | null = null;
-let rendererTaskCatalogScope: string | null = null;
-
 function currentTaskCatalogScope(): string | null {
   if (isAppSessionBoundaryPending()) return null;
   return activeOwnerScopeKey();
 }
 
-function currentRendererTaskCatalog(): WorkLouderCodexTaskCatalogInput[] | null {
-  if (!rendererTaskCatalog) return null;
-  if (rendererTaskCatalogScope !== currentTaskCatalogScope()) {
-    rendererTaskCatalog = null;
-    rendererTaskCatalogScope = null;
-    return null;
-  }
-  return rendererTaskCatalog;
+function currentRendererTaskCatalog(): readonly WorkLouderCodexTaskCatalogInput[] | null {
+  return readRendererTaskCatalog(currentTaskCatalogScope());
 }
 
 export const workLouderCodexLightingController = new WorkLouderCodexLightingController(
@@ -258,8 +245,7 @@ export function registerWorkLouderCodexInputDevice(): void {
       suspendTaskSlots:
         model === 'codex-micro'
           ? () => {
-              rendererTaskCatalog = null;
-              rendererTaskCatalogScope = null;
+              clearRendererTaskCatalog();
               workLouderCodexLightingController.suspendTaskSlots();
             }
           : () => undefined,
@@ -323,8 +309,7 @@ export function registerWorkLouderCodexSettingsIpc(): void {
     publishTasks: (tasks) => {
       const scope = currentTaskCatalogScope();
       if (!scope) return;
-      rendererTaskCatalog = tasks.map((task) => ({ ...task }));
-      rendererTaskCatalogScope = scope;
+      publishRendererTaskCatalog(tasks, scope);
       void workLouderCodexLightingController.refreshTaskSlots().catch(() => undefined);
     },
     setLayoutPreviewActive: (active, model, event) => {

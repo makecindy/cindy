@@ -215,6 +215,34 @@
     }
   },
   "settings": {
+    "passport": {
+      "back": "Back",
+      "title": "Cindy Passport",
+      "loading": "Loading",
+      "entryDescription": "View task status, read replies, and continue tasks by voice.",
+      "description": "Read task status and replies on the device, then review and confirm voice replies. Speech recognition follows your Cindy voice-input settings.",
+      "disconnected": "Not connected",
+      "devices": "Bluetooth devices",
+      "voiceTitle": "Voice replies",
+      "enabled": "Enable Passport",
+      "unsupported": "Requires macOS",
+      "disabled": "Disabled",
+      "connected": "Connected",
+      "scanning": "Choose a nearby Passport and enter the code shown on its screen",
+      "bluetooth": "Allow Cindy Bluetooth access and turn on Bluetooth",
+      "connect": "Connect",
+      "disconnect": "Disconnect and stop reconnecting",
+      "reset": "Reset to default",
+      "error": "Could not update Passport. Try again.",
+      "voice": {
+        "idle": "Choose a task on Passport to record",
+        "recording": "Receiving recording",
+        "transcribing": "Transcribing with Cindy",
+        "draft": "Review the text on Passport and press OK to send",
+        "sending": "Sending to the selected task",
+        "error": "Recording or transcription failed. Record again."
+      }
+    },
     "title": "Settings",
     "back": "Back",
     "defaults": {

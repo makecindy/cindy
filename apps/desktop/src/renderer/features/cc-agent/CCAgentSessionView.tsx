@@ -219,6 +219,7 @@ import {
   resolveSessionRoute,
 } from '@/lib/orcaSessionIdentity';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
+import { deliverPassportDictation } from '@/lib/passportDictationDelivery';
 import type { AttachedFile, ComposerBotMention, MentionedResource } from '@/lib/fileTypes';
 import { serializeAttachedFiles } from '@/lib/messageAttachmentPayload';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
@@ -3996,6 +3997,30 @@ export function CCAgentSessionView({
   // 只回填、不自动补发(理由见 pendingFirstMessage 的「可恢复副本」注释)。
   // 内存里还有 pending 时不该走这里 —— 那是正常交接,由下面的消费逻辑负责。
   const handoffRestoredRef = useRef<string | null>(null);
+  // Main claims each hardware-confirmed dictation once. Use the normal send
+  // queue, preserving any unrelated composer draft the user is editing.
+  useEffect(() => {
+    if (!sessionId || isRemoteSession || readOnly || !session?.workingDir) return;
+    let disposed = false, polling = false;
+    const poll = async (): Promise<void> => {
+      if (polling) return;
+      polling = true;
+      const owner = getDataOwnerGeneration();
+      try {
+        const draft = await window.electronAPI.passport.getDictation(sessionId);
+        if (!draft) return;
+        await deliverPassportDictation(draft,
+          () => !disposed && isDataOwnerGenerationCurrent(owner) && isDataOwnerPushCurrent(draft.ownerStamp),
+          (text) => sendMessage(text, session.model, session.effort as Effort,
+            session.permissionMode as PermissionMode, session.workingDir!),
+          (token, sent) => window.electronAPI.passport.acknowledgeDictation(token, sent));
+      } catch { log.warn('Passport dictation could not be loaded'); }
+      finally { polling = false; }
+    };
+    void poll();
+    const timer = setInterval(() => { void poll(); }, 1000);
+    return () => { disposed = true; clearInterval(timer); };
+  }, [sessionId, isRemoteSession, readOnly, session?.workingDir, session?.model, session?.effort, session?.permissionMode, sendMessage]);
   const restoreRecoverableHandoff = useCallback(
     (kind: RecoverableHandoffKind) => {
       if (!sessionId) return;

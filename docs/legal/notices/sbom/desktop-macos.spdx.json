@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-macos",
-  "documentNamespace": "https://cindy.app/spdx/desktop-macos/f9d1b71d3f3af4644b3f44e9db58602b3c23dad7f2ee02a00658954a5aae73d2",
+  "documentNamespace": "https://cindy.app/spdx/desktop-macos/2b748e6f6c5d64f3e0a5fe582372e5abff539cda6ba4e64d7530d41016996b4a",
   "creationInfo": {
-    "created": "2026-09-13T03:14:43Z",
+    "created": "2026-09-13T10:55:59Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -851,6 +851,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40discordjs/ws@1.2.3"
+        }
+      ]
+    },
+    {
+      "name": "@eshaz/web-worker",
+      "SPDXID": "SPDXRef-Package-8509af8b831a9bd3",
+      "versionInfo": "1.2.2",
+      "downloadLocation": "https://github.com/eshaz/web-worker",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40eshaz/web-worker@1.2.2"
         }
       ]
     },
@@ -3830,6 +3847,40 @@
       ]
     },
     {
+      "name": "@wasm-audio-decoders/common",
+      "SPDXID": "SPDXRef-Package-f258edfa90e6db09",
+      "versionInfo": "9.0.7",
+      "downloadLocation": "https://github.com/eshaz/wasm-audio-decoders",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40wasm-audio-decoders/common@9.0.7"
+        }
+      ]
+    },
+    {
+      "name": "@wasm-audio-decoders/opus-ml",
+      "SPDXID": "SPDXRef-Package-4124bf58c2571471",
+      "versionInfo": "0.0.3",
+      "downloadLocation": "https://github.com/eshaz/wasm-audio-decoders",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40wasm-audio-decoders/opus-ml@0.0.3"
+        }
+      ]
+    },
+    {
       "name": "@wecom/aibot-node-sdk",
       "SPDXID": "SPDXRef-Package-52dee735109446cd",
       "versionInfo": "1.0.7",
@@ -4914,6 +4965,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/cn-font-split@6.0.3"
+        }
+      ]
+    },
+    {
+      "name": "codec-parser",
+      "SPDXID": "SPDXRef-Package-23878422df7b883c",
+      "versionInfo": "2.5.0",
+      "downloadLocation": "https://github.com/eshaz/codec-parser",
+      "filesAnalyzed": false,
+      "licenseConcluded": "LGPL-3.0-or-later",
+      "licenseDeclared": "LGPL-3.0-or-later",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/codec-parser@2.5.0"
         }
       ]
     },
@@ -11327,6 +11395,23 @@
       ]
     },
     {
+      "name": "ogg-opus-decoder",
+      "SPDXID": "SPDXRef-Package-fab84af0da344195",
+      "versionInfo": "1.7.5",
+      "downloadLocation": "https://github.com/eshaz/wasm-audio-decoders",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/ogg-opus-decoder@1.7.5"
+        }
+      ]
+    },
+    {
       "name": "on-finished",
       "SPDXID": "SPDXRef-Package-d73f1008f55d76f0",
       "versionInfo": "2.4.1",
@@ -11374,6 +11459,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/onetime@5.1.2"
+        }
+      ]
+    },
+    {
+      "name": "opus-decoder",
+      "SPDXID": "SPDXRef-Package-d52d487a1eac854a",
+      "versionInfo": "0.7.12",
+      "downloadLocation": "https://github.com/eshaz/wasm-audio-decoders",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/opus-decoder@0.7.12"
         }
       ]
     },
@@ -13350,6 +13452,23 @@
       ]
     },
     {
+      "name": "simple-yenc",
+      "SPDXID": "SPDXRef-Package-adaaabc4ab5f283c",
+      "versionInfo": "1.0.4",
+      "downloadLocation": "https://github.com/eshaz/simple-yenc",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/simple-yenc@1.0.4"
+        }
+      ]
+    },
+    {
       "name": "smol-toml",
       "SPDXID": "SPDXRef-Package-e29500775b243435",
       "versionInfo": "1.7.0",
@@ -15186,6 +15305,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-8509af8b831a9bd3"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-ef09030156acbe49"
     },
     {
@@ -16061,6 +16185,16 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-f258edfa90e6db09"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4124bf58c2571471"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-52dee735109446cd"
     },
     {
@@ -16377,6 +16511,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-e4a5a8118922d90b"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-23878422df7b883c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -18266,6 +18405,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-fab84af0da344195"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-d73f1008f55d76f0"
     },
     {
@@ -18277,6 +18421,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-59fea5aa8cadd5e9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-d52d487a1eac854a"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -18857,6 +19006,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-d3a6df68f74cfcd1"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-adaaabc4ab5f283c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
