@@ -1,22 +1,22 @@
 /**
- * FilterResultList —— 文件名筛选结果列表。
+ * FilterResultList —— 文件名筛选结果树。
  *
- * 每行 basename(主) + dirname(副,小一号),点击选中文件触发 onSelectFile。
- * 跟 FileTreeView 同视觉风格(h-28px / rounded-md / hover bg-sidebar-item-hover /
- * selected bg-sidebar-item-active)。
+ * 从扁平索引结果重建最小树，只显示命中文件所需的目录；没有分叉的目录链
+ * 合并为一行路径。这样搜索不会把工作区压成失去层级的文件列表。
  *
  * 抽到 workdir-browse/ 下,RSB plugin 和 doc 模式 sidebar 共用。
  */
 
-import { File as FileIcon } from 'lucide-react';
+import { ChevronDown, ChevronRight, File as FileIcon, Folder } from 'lucide-react';
+import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { FILTER_RESULT_LIMIT } from './lib/filterFiles';
+import { buildFilterTreeRows, FILTER_RESULT_LIMIT } from './lib/filterFiles';
 
 export interface FilterResultListProps {
   files: readonly string[];
-  /** ripgrep cap 截断或前端展示上限截断 —— 显示"结果过多"提示行。 */
+  /** 当前关键词命中超过展示上限 —— 显示"结果过多"提示行。 */
   truncated: boolean;
   /** 首次索引加载中(no cached files yet)。 */
   isLoading: boolean;
@@ -39,6 +39,31 @@ export function FilterResultList({
   onSelectFile,
 }: FilterResultListProps) {
   const { t } = useTranslation();
+  const rows = buildFilterTreeRows(files);
+  const [directoryExpansionOverrides, setDirectoryExpansionOverrides] = useState<
+    ReadonlyMap<string, boolean>
+  >(new Map());
+
+  const toggleDirectory = (relPath: string) => {
+    setDirectoryExpansionOverrides((current) => {
+      const next = new Map(current);
+      const expanded = current.get(relPath) ?? true;
+      next.set(relPath, !expanded);
+      return next;
+    });
+  };
+
+  const isDirectoryExpanded = (relPath: string) => directoryExpansionOverrides.get(relPath) ?? true;
+
+  const isHiddenByCollapsedDirectory = (relPath: string) => {
+    return rows.some(
+      (row) =>
+        row.kind === 'directory' &&
+        row.relPath !== relPath &&
+        relPath.startsWith(`${row.relPath}/`) &&
+        !isDirectoryExpanded(row.relPath),
+    );
+  };
 
   if (isLoading && files.length === 0) {
     return (
@@ -66,31 +91,58 @@ export function FilterResultList({
   return (
     <div className="rsb-fbody-tree-scroll min-h-0 flex-1">
       <div className="flex h-full w-full flex-col gap-px overflow-y-auto py-2">
-        {files.map((relPath) => {
-          const slash = relPath.lastIndexOf('/');
-          const basename = slash < 0 ? relPath : relPath.slice(slash + 1);
-          const dirname = slash < 0 ? '' : relPath.slice(0, slash);
-          const selected = relPath === selectedPath;
+        {rows.map((row) => {
+          if (isHiddenByCollapsedDirectory(row.relPath)) return null;
+          const paddingLeft = row.depth * 16 + 8;
+          if (row.kind === 'directory') {
+            const expanded = isDirectoryExpanded(row.relPath);
+            return (
+              <button
+                type="button"
+                key={`directory:${row.relPath}`}
+                onClick={() => toggleDirectory(row.relPath)}
+                aria-expanded={expanded}
+                title={row.relPath}
+                className="flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm text-foreground hover:bg-sidebar-item-hover"
+                style={{ paddingLeft }}
+              >
+                {expanded ? (
+                  <ChevronDown
+                    size={14}
+                    strokeWidth={1.8}
+                    className="shrink-0 text-sidebar-muted"
+                  />
+                ) : (
+                  <ChevronRight
+                    size={14}
+                    strokeWidth={1.8}
+                    className="shrink-0 text-sidebar-muted"
+                  />
+                )}
+                <Folder size={14} strokeWidth={1.5} className="shrink-0 text-sidebar-muted" />
+                <span className="truncate">{row.label}</span>
+              </button>
+            );
+          }
+
+          const selected = row.relPath === selectedPath;
           return (
             <button
               type="button"
-              key={relPath}
-              onClick={() => onSelectFile(relPath)}
-              title={relPath}
+              key={`file:${row.relPath}`}
+              onClick={() => onSelectFile(row.relPath)}
+              title={row.relPath}
               className={cn(
-                'flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-left text-sm',
+                'flex w-full min-w-0 items-center gap-1.5 rounded-md py-1 pr-2 text-left text-sm',
                 selected
                   ? 'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground'
                   : 'text-foreground hover:bg-sidebar-item-hover',
               )}
+              style={{ paddingLeft }}
             >
+              <span aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
               <FileIcon size={14} strokeWidth={1.5} className="shrink-0 text-sidebar-muted" />
-              <span className="flex min-w-0 flex-1 flex-col leading-tight">
-                <span className="truncate">{basename}</span>
-                {dirname && (
-                  <span className="truncate text-10 text-sidebar-muted">{dirname}</span>
-                )}
-              </span>
+              <span className="truncate">{row.label}</span>
             </button>
           );
         })}
