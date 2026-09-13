@@ -1,16 +1,14 @@
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
-import { createHmac, randomBytes } from 'node:crypto';
-
 import { z } from 'zod';
 
 import type { XdtHelperToolRegistry } from '../lizi_xdtHelperToolRegistry.js';
 import type { ControlResult } from '../lizi_xdtHelperMcpServer.js';
 import type { LiziMcpSessionContext } from '../types.js';
+import { decodeConfirmationToken, encodeConfirmationToken } from './_confirmation_token.js';
 import { errorPayload, okPayload } from './_payload.js';
 
 const MAX_RENAME_BATCH_SIZE = 20;
 const TITLE_MAX_LENGTH = 120;
-const CONFIRMATION_TOKEN_SECRET = randomBytes(32);
 
 export interface RenameSessionChange {
   sessionId: string;
@@ -108,44 +106,23 @@ function createConfirmationPayload(
   };
 }
 
-function encodeConfirmationToken(payload: RenameSessionsConfirmationPayload): string {
-  const encoded = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url');
-  const digest = createHmac('sha256', CONFIRMATION_TOKEN_SECRET)
-    .update(encoded)
-    .digest('hex')
-    .slice(0, 24);
-  return `v1.${encoded}.${digest}`;
-}
-
-function decodeConfirmationToken(token: string): RenameSessionsConfirmationPayload | null {
-  const [version, encoded, digest] = token.split('.');
-  if (version !== 'v1' || !encoded || !digest) return null;
-  const expectedDigest = createHmac('sha256', CONFIRMATION_TOKEN_SECRET)
-    .update(encoded)
-    .digest('hex')
-    .slice(0, 24);
-  if (digest !== expectedDigest) return null;
-
-  try {
-    const payload = JSON.parse(
-      Buffer.from(encoded, 'base64url').toString('utf8'),
-    ) as RenameSessionsConfirmationPayload;
-    if (payload.v !== 1 || !Array.isArray(payload.changes)) return null;
-    for (const change of payload.changes) {
-      if (
-        typeof change?.sessionId !== 'string' ||
-        typeof change.title !== 'string' ||
-        (change.expectedCurrentTitle !== null && typeof change.expectedCurrentTitle !== 'string') ||
-        (change.expectedUpdatedAt !== null && typeof change.expectedUpdatedAt !== 'string') ||
-        (change.approvedCurrentTitle !== null && typeof change.approvedCurrentTitle !== 'string')
-      ) {
-        return null;
-      }
+function isRenameConfirmationPayload(
+  payload: unknown,
+): payload is RenameSessionsConfirmationPayload {
+  const p = payload as Partial<RenameSessionsConfirmationPayload> | null;
+  if (!p || p.v !== 1 || !Array.isArray(p.changes)) return false;
+  for (const change of p.changes) {
+    if (
+      typeof change?.sessionId !== 'string' ||
+      typeof change.title !== 'string' ||
+      (change.expectedCurrentTitle !== null && typeof change.expectedCurrentTitle !== 'string') ||
+      (change.expectedUpdatedAt !== null && typeof change.expectedUpdatedAt !== 'string') ||
+      (change.approvedCurrentTitle !== null && typeof change.approvedCurrentTitle !== 'string')
+    ) {
+      return false;
     }
-    return payload;
-  } catch {
-    return null;
   }
+  return true;
 }
 
 function matchesConfirmationPayload(
@@ -213,7 +190,9 @@ export function registerRenameSessionsTool(
       }
 
       const confirmationPayload =
-        !dry_run && confirmation_token ? decodeConfirmationToken(confirmation_token) : null;
+        !dry_run && confirmation_token
+          ? decodeConfirmationToken(confirmation_token, isRenameConfirmationPayload)
+          : null;
       if (
         !dry_run &&
         (!confirmationPayload || !matchesConfirmationPayload(normalized, confirmationPayload))

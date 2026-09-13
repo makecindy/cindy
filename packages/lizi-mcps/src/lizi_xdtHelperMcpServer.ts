@@ -40,6 +40,14 @@ import {
   registerRenameSessionsTool,
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerMoveSessionsTool,
+  registerPinSessionsTool,
+  registerUnpinSessionsTool,
+  registerDeleteSessionsTool,
+  registerExportSessionTool,
+  registerOpenSessionInNewWindowTool,
+  registerForkSessionTool,
+  registerGetSessionBranchesTool,
   registerSendToSessionTool,
   registerListWorkdirsTool,
   registerListSessionsTool,
@@ -58,6 +66,13 @@ import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js'
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
+import type { MoveSessionsDeps } from './xdt-helper/move_sessions.js';
+import type { PinSessionsDeps } from './xdt-helper/pin_sessions.js';
+import type { DeleteSessionsDeps } from './xdt-helper/delete_sessions.js';
+import type { ExportSessionDeps } from './xdt-helper/export_session.js';
+import type { OpenSessionInNewWindowDeps } from './xdt-helper/open_session_in_new_window.js';
+import type { ForkSessionDeps } from './xdt-helper/fork_session.js';
+import type { GetSessionBranchesDeps } from './xdt-helper/get_session_branches.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import {
   registerBotSkillTools,
@@ -625,6 +640,21 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  /**
+   * GUI 会话菜单对应的其余会话操作回调(移动到项目/对话、置顶、删除、导出分享包、
+   * 在新窗口打开、分叉、分支家族)。host 注入后对应 control 类工具才会注册;host 侧
+   * 一律复用主进程既有业务路径(sessions:update / session-share / fork),并负责与 GUI
+   * 同口径的守卫(远程 / 运行中 / IM 接管中 / 空草稿等)。
+   */
+  sessionOps?: {
+    moveSessions: MoveSessionsDeps['moveSessions'];
+    setSessionsPinned: PinSessionsDeps['setSessionsPinned'];
+    deleteSessions: DeleteSessionsDeps['deleteSessions'];
+    exportSession: ExportSessionDeps['exportSession'];
+    openSessionInNewWindow: OpenSessionInNewWindowDeps['openSessionInNewWindow'];
+    forkSession: ForkSessionDeps['forkSession'];
+    getSessionBranches: GetSessionBranchesDeps['getSessionBranches'];
+  };
 }
 
 /**
@@ -689,6 +719,25 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.sessionOps) {
+    const ops = deps.sessionOps;
+    const getSessionContext = () => resolveLiziMcpSessionContext(sessionCtx);
+    registerMoveSessionsTool(registry, { getSessionContext, moveSessions: ops.moveSessions });
+    const pinDeps = { getSessionContext, setSessionsPinned: ops.setSessionsPinned };
+    registerPinSessionsTool(registry, pinDeps);
+    registerUnpinSessionsTool(registry, pinDeps);
+    registerDeleteSessionsTool(registry, { getSessionContext, deleteSessions: ops.deleteSessions });
+    registerExportSessionTool(registry, { getSessionContext, exportSession: ops.exportSession });
+    registerOpenSessionInNewWindowTool(registry, {
+      getSessionContext,
+      openSessionInNewWindow: ops.openSessionInNewWindow,
+    });
+    registerForkSessionTool(registry, { getSessionContext, forkSession: ops.forkSession });
+    registerGetSessionBranchesTool(registry, {
+      getSessionContext,
+      getSessionBranches: ops.getSessionBranches,
+    });
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。

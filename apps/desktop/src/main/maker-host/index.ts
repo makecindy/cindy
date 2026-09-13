@@ -927,6 +927,8 @@ export function getMaker(): Maker {
       pluginRegistry,
       resolveIOSSimulatorAccess,
       invokeRemote: remoteInvoke,
+      isSessionTurnRunning: (sessionId: string) =>
+        _maker?.getSession(sessionId)?.isTurnRunning() === true,
       // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
       // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
       // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。
