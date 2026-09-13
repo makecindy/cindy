@@ -607,6 +607,33 @@ describe('AddProviderWizard — preset 直达', () => {
     });
   });
 
+  it('copies a filled account slot across editable engines', async () => {
+    const preset = {
+      id: 'azure-slots',
+      name: 'Azure Slots',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://{resource}.openai.azure.com/openai/v1',
+          baseUrlEditable: true,
+          wireProtocol: 'openai-chat' as const,
+          models: [{ id: 'm', name: 'M' }],
+        },
+        codex: {
+          baseUrl: 'https://{resource}.openai.azure.com/openai/v1',
+          baseUrlEditable: true,
+          wireProtocol: 'openai-responses' as const,
+          models: [{ id: 'm', name: 'M' }],
+        },
+      },
+    };
+    vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValueOnce({ presets: [preset] });
+    renderWizard('azure-slots');
+    const inputs = await screen.findAllByDisplayValue('https://{resource}.openai.azure.com/openai/v1');
+    expect(inputs).toHaveLength(2);
+    fireEvent.change(inputs[0], { target: { value: 'https://myres.openai.azure.com/openai/v1' } });
+    expect(screen.getAllByDisplayValue('https://myres.openai.azure.com/openai/v1')).toHaveLength(2);
+  });
+
   it('LiteLLM:模型发现失败时可手填模型 ID，并以 none 鉴权保存', async () => {
     renderWizard('litellm');
 
@@ -1086,7 +1113,7 @@ it('imports an OpenCode Go Responses model into all three engines', async () => 
 it.each(['finish', 'back', 'close'] as const)('logs in without a key and handles %s with the owned account', async action => {
   const preset = { id: 'openrouter', name: 'OpenRouter', runtimes: {
     pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat' as const,
-      models: [{ id: 'test/model', name: 'Test model', defaultEnabled: true, api: 'openai-completions' as const }] },
+      models: [{ id: 'test/model', name: 'Test model', api: 'openai-completions' as const }] },
   } };
   const maker = window.electronAPI.maker;
   vi.mocked(maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
@@ -1101,6 +1128,7 @@ it.each(['finish', 'back', 'close'] as const)('logs in without a key and handles
   const view = renderWizard('openrouter');
   fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
   await screen.findByText('Test model');
+  expect(screen.getByText('settings.providers.wizard.recommended')).toBeTruthy();
   expect(created.auth).toMatchObject({ method: 'oauth', oauth: { tokenUrl: 'https://openrouter.ai/api/v1/auth/keys' } });
   if (action !== 'finish') {
     if (action === 'back') fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.back' }));

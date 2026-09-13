@@ -661,14 +661,7 @@ export function AddProviderWizard({
       setSel({ kind: 'preset', preset });
       setName(presetDisplayName(preset, i18n.language));
       setApiKey('');
-      setPresetBaseUrls(
-        Object.fromEntries(
-          configuredPresetAgents(preset).map((agent) => [
-            agent,
-            preset.runtimes[agent]?.baseUrl ?? '',
-          ]),
-        ) as PresetBaseUrls,
-      );
+      setPresetBaseUrls({});
       setStep(2);
     },
     [i18n.language, onDone, providers, pickOauth],
@@ -839,7 +832,7 @@ export function AddProviderWizard({
           oauthDraftRef.current = config;
           const choices: typeof picks = new Map();
           const recommendedIds = new Set(Object.values(preset.runtimes).flatMap(rt =>
-            rt?.models.filter(m => m.defaultEnabled === true).map(m => m.id) ?? []));
+            rt?.models.filter(m => m.defaultEnabled !== false).map(m => m.id) ?? []));
           for (const agent of connected.agents) for (const model of connected.models[agent] ?? []) {
             const recommended = recommendedIds.has(model.id);
             const existing = choices.get(model.id);
