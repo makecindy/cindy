@@ -40,6 +40,9 @@ import {
   registerRenameSessionsTool,
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerMoveSessionsTool,
+  registerOpenSessionInNewWindowTool,
+  registerGetSessionBranchesTool,
   registerSendToSessionTool,
   registerListWorkdirsTool,
   registerListSessionsTool,
@@ -58,6 +61,9 @@ import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js'
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
+import type { MoveSessionsDeps } from './xdt-helper/move_sessions.js';
+import type { OpenSessionInNewWindowDeps } from './xdt-helper/open_session_in_new_window.js';
+import type { GetSessionBranchesDeps } from './xdt-helper/get_session_branches.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import {
   registerBotSkillTools,
@@ -625,6 +631,11 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  sessionOps?: {
+    moveSessions: MoveSessionsDeps['moveSessions'];
+    openSessionInNewWindow: OpenSessionInNewWindowDeps['openSessionInNewWindow'];
+    getSessionBranches: GetSessionBranchesDeps['getSessionBranches'];
+  };
 }
 
 /**
@@ -689,6 +700,20 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.sessionOps) {
+    registerMoveSessionsTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      moveSessions: deps.sessionOps.moveSessions,
+    });
+    registerOpenSessionInNewWindowTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      openSessionInNewWindow: deps.sessionOps.openSessionInNewWindow,
+    });
+    registerGetSessionBranchesTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      getSessionBranches: deps.sessionOps.getSessionBranches,
+    });
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
