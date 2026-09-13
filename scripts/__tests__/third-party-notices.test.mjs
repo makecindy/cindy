@@ -24,6 +24,12 @@ function read(relativePath) {
   return fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
 }
 
+test("Windows input helper dependencies participate in Cargo license collection", () => {
+  const source = read("scripts/generate-third-party-notices.mjs");
+  assert.ok(source.includes('"windows-gamepad-helper"'));
+  assert.ok(source.includes('"windows-micro-helper"'));
+});
+
 test("generated artifact notices are platform-scoped and disclose restricted components separately", () => {
   const windows = read("docs/legal/notices/desktop-win.txt");
   const macos = read("docs/legal/notices/desktop-macos.txt");

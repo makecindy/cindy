@@ -33,6 +33,8 @@ const MOBILE_DIR = path.join(REPO_ROOT, "apps", "mobile");
 const NOTICES_DIR = path.join(REPO_ROOT, "docs", "legal", "notices");
 const SBOM_DIR = path.join(NOTICES_DIR, "sbom");
 const CARGO_MANIFESTS = [
+  path.join(DESKTOP_DIR, "native", "xbox-gamepad", "windows-gamepad-helper", "Cargo.toml"),
+  path.join(DESKTOP_DIR, "native", "worklouder", "windows-micro-helper", "Cargo.toml"),
   path.join(DESKTOP_DIR, "native", "remote-desktop", "windows-input", "Cargo.toml"),
   path.join(DESKTOP_DIR, "native", "remote-desktop", "windows-host", "Cargo.toml"),
   path.join(DESKTOP_DIR, "cindy-updater", "src-tauri", "Cargo.toml"),

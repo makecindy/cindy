@@ -9,6 +9,38 @@ function enabledSettings() {
 }
 
 describe('XboxGamepadController', () => {
+  it.each(['lt', 'rt'] as const)(
+    'keeps Windows %s voice held across pressure dips until release',
+    (trigger) => {
+      const dispatch = vi.fn();
+      const controller = new XboxGamepadController({ isCindyFrontmost: () => true, dispatch });
+      controller.applySettings('xbox', enabledSettings());
+      controller.handleHostMessage({ kind: 'presence', family: 'xbox', present: true });
+      // Matches native TriggerState's sequence, including main's second parsing pass.
+      for (const [pressure, pressed] of [
+        [0, false],
+        [0.6, true],
+        [0.5, true],
+        [0.6, true],
+        [0.41, true],
+        [0.4, false],
+      ] as const) {
+        controller.handleHostMessage({
+          kind: 'frame',
+          family: 'xbox',
+          buttons: { ...XBOX_GAMEPAD_EMPTY_FRAME.buttons, [trigger]: pressed },
+          axes: { ...XBOX_GAMEPAD_EMPTY_FRAME.axes },
+          triggers: { ...XBOX_GAMEPAD_EMPTY_FRAME.triggers, [trigger]: pressure },
+        });
+      }
+      expect(
+        dispatch.mock.calls.map(([action]) => action).filter((action) => action.type === 'voice'),
+      ).toEqual([
+        { type: 'voice', phase: 'press' },
+        { type: 'voice', phase: 'release' },
+      ]);
+    },
+  );
   it('ignores input until the adapter is enabled and Cindy is frontmost', () => {
     const dispatch = vi.fn();
     const preview = vi.fn();

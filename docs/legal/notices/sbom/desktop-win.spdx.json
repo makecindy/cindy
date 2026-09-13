@@ -3,10 +3,12 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-win",
-  "documentNamespace": "https://cindy.app/spdx/desktop-win/68ba748a0dbf03435636111e284ced5231d7391f7af08ddea098ffcbd1fd7f3a",
+  "documentNamespace": "https://cindy.app/spdx/desktop-win/17e15ee84cc0c4eb46e6e8106d56c5a5f8a21a71d157a7bae3c177dd49278610",
   "creationInfo": {
-    "created": "2026-09-08T11:11:04Z",
-    "creators": ["Tool: scripts/generate-third-party-notices.mjs"]
+    "created": "2026-09-10T10:12:32Z",
+    "creators": [
+      "Tool: scripts/generate-third-party-notices.mjs"
+    ]
   },
   "packages": [
     {
@@ -1622,6 +1624,23 @@
       ]
     },
     {
+      "name": "hidapi",
+      "SPDXID": "SPDXRef-Package-91bc23af2f89b87d",
+      "versionInfo": "2.6.7",
+      "downloadLocation": "https://github.com/ruabmbua/hidapi-rs",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/hidapi@2.6.7"
+        }
+      ]
+    },
+    {
       "name": "html5ever",
       "SPDXID": "SPDXRef-Package-e1e93f831860d1fe",
       "versionInfo": "0.38.0",
@@ -2026,6 +2045,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:cargo/libc@0.2.186"
+        }
+      ]
+    },
+    {
+      "name": "libc",
+      "SPDXID": "SPDXRef-Package-34a71dbb96a0de0c",
+      "versionInfo": "0.2.189",
+      "downloadLocation": "https://github.com/rust-lang/libc",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT OR Apache-2.0",
+      "licenseDeclared": "MIT OR Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:cargo/libc@0.2.189"
         }
       ]
     },
@@ -20151,6 +20187,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-91bc23af2f89b87d"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-e1e93f831860d1fe"
     },
     {
@@ -20267,6 +20308,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-2a9843e9e27b33b0"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-34a71dbb96a0de0c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

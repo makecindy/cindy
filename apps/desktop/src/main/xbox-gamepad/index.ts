@@ -161,7 +161,7 @@ export function registerXboxGamepadSettingsIpc(): void {
   for (const family of GAMEPAD_FAMILIES) {
     controller.applySettings(family, readXboxGamepadSettings(family));
   }
-  if (process.platform === 'darwin') {
+  if (process.platform === 'darwin' || process.platform === 'win32') {
     host.start();
     syncSwitch2Usb();
   } else {

@@ -5,6 +5,7 @@ import { promisify } from 'node:util';
 import { app } from 'electron';
 
 import { createLogger } from '../logger.js';
+import { resolveWindowsInputHelper } from '../input-devices/windowsHelperBinary.js';
 import { isXboxGamepadHostMessage, type XboxGamepadHostMessage } from './protocol.js';
 
 const execFilePromise = promisify(execFile);
@@ -210,12 +211,13 @@ export function createXboxGamepadHost(
 }
 
 function defaultSpawnHelper(command: string): ChildProcessWithoutNullStreams {
-  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'] });
+  return spawn(command, [], { stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 }
 
-async function resolveXboxGamepadHelperPath(): Promise<string> {
-  if (process.platform === 'darwin') return resolveMacHelperPath();
-  throw new Error(`Xbox gamepad helper is not available on ${process.platform}`);
+export async function resolveXboxGamepadHelperPath(platform = process.platform): Promise<string> {
+  if (platform === 'darwin') return resolveMacHelperPath();
+  if (platform === 'win32') return resolveWindowsInputHelper('gamepad');
+  throw new Error(`Xbox gamepad helper is not available on ${platform}`);
 }
 
 async function resolveMacHelperPath(): Promise<string> {
