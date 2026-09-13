@@ -2459,23 +2459,30 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     expect(assistantCreates).toHaveLength(2);
   });
 
-  it('交互被回答后同文本快照不复用(复用窗口随交互结束关闭)', async () => {
+  it('交互被回答后迟到的同源终态全文仍复用该行(resolution 不作废复用窗口)', async () => {
     const persistId = onAssistantTextEvent(SESSION, { text: '同一句话', isFinal: false }, null);
     flushAssistantBlock(SESSION, null);
     const request = { kind: 'ask_user_question' as const, requestId: 'req-reuse-window', questions: [{ question: '同一句话' }] };
     const askId = onInteractionMessage(SESSION, request);
     expect(askId).toBeTruthy();
+    // 用户可能在 message_end 的全文快照被消费前就答完(两条路径竞速):回答本身
+    // 不作废复用窗口,否则这块正文会在提问卡之后再落一行。
     onInteractionResolved(SESSION, askId, 'ask_user_question', request, { answers: { '同一句话': '答' } });
     const lateFinalId = onAssistantTextEvent(
       SESSION,
       { text: '同一句话', isFinal: true, isFullText: true },
-      null,
+      { model: 'pi-test', stopReason: 'toolUse', usage: {} },
     );
-    expect(lateFinalId).not.toBe(persistId);
+    expect(lateFinalId).toBe(persistId);
     await flushWrites();
     const assistantCreates = vi.mocked(createMessage).mock.calls
       .filter(([, message]) => message.role === 'assistant');
-    expect(assistantCreates).toHaveLength(2);
+    expect(assistantCreates).toHaveLength(1);
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({ model: 'pi-test', stopReason: 'toolUse' }),
+    );
   });
 
   it('交互边界 flush 后,不同 SDK 消息的同文本快照仍单独落行(身份不同不吞)', async () => {

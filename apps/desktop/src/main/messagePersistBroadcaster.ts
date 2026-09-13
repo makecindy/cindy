@@ -264,8 +264,11 @@ const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFin
  *
  * 复用只发生在"交互行仍是最后一条已落库消息"的窗口内(见 onAssistantTextEvent):
  * 窗口内到达的全文快照按构造属于刚 flush 的同一块。新 assistant 行落库、开始新的
- * delta block、交互被回答、turn reset / clear 时都作废记录,避免吞掉合法的同文本
- * 新消息。
+ * delta block、turn reset / clear 时都作废记录,避免吞掉合法的同文本新消息。
+ * 交互被回答(onInteractionResolved)**不**作废记录:message_end 的全文快照与交互
+ * 回答是两条竞速路径,用户可能在快照被消费前就答完,此时记录必须还活着,否则同一块
+ * 正文会再落一行;窗口改由紧随其后的 tool_result 行(ask_user 工具结果)自然关闭 ——
+ * 下一条 assistant 消息只可能在 tool_result 之后产生。
  */
 const lastBoundaryFlushedAssistantBySession = new Map<
   string,
@@ -1874,9 +1877,9 @@ export function onInteractionResolved(
   const requestId = typeof request.requestId === 'string' ? request.requestId : '';
   if (!requestId) return;
   if (!claimInteractionPersistId(sessionId, persistId)) return;
-  // 交互已结束:边界 flush 的复用窗口到此为止。其后到达的全文快照即使文本相同,
-  // 也可能是新一轮 assistant 消息,不能再当作刚 flush 那块的快照。
-  lastBoundaryFlushedAssistantBySession.delete(sessionId);
+  // 刻意不动 lastBoundaryFlushedAssistantBySession:回答完成不等于 message_end 的
+  // 全文快照已被消费(见该 map 的注释)。交互行本身不刷新 lastPersistedMsgBySession,
+  // 复用窗口仍然成立;等 ask_user 的 tool_result 行落库后窗口自然关闭。
   const acceptedAt = Date.now();
 
   if (kind === 'ask_user_question') {
@@ -2108,8 +2111,9 @@ export function onAssistantTextEvent(
     // assistant,相邻 DUP-SKIP 看不到刚落库的行 —— 这里按身份复用,不落第二行。
     //
     // 复用窗口严格限定在"交互行仍是最后一条已落库消息"期间:窗口内到达的全文快照
-    // 按构造属于刚 flush 的同一块;交互被回答(onInteractionResolved)/中间落过其它
-    // 消息/又开始新 delta block 后,记录已失效,合法的同文本新消息不会被吞。
+    // 按构造属于刚 flush 的同一块;中间落过其它消息(如 ask_user 的 tool_result)/
+    // 又开始新 delta block 后,记录已失效,合法的同文本新消息不会被吞。交互被回答
+    // 本身不作废窗口:终态全文可能与回答竞速,迟到的那条仍要更新这一行。
     const boundaryFlushed = lastBoundaryFlushedAssistantBySession.get(sessionId);
     const lastPersisted = lastPersistedMsgBySession.get(sessionId);
     const atInteractionBoundary =
