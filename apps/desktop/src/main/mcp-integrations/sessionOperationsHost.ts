@@ -7,17 +7,26 @@
  */
 
 import { stat } from 'node:fs/promises';
+import { BrowserWindow } from 'electron';
 import { isAbsolute } from 'node:path';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
-import type { MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
+import type {
+  GetSessionBranchesResult,
+  MoveSessionsResult,
+  OpenSessionInNewWindowResult,
+  SessionMoveTarget,
+} from '@cindy/mcps';
 
 import { bindingStore } from '../im/binding.js';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import { openSessionInNewWindow as openSecondaryWindow } from '../secondary-windows.js';
 import {
+  getSessionBranches,
   moveSessions,
+  openSessionInNewWindow,
   type SessionOperationsDeps,
   type SessionOpsRow,
 } from './sessionOperations.js';
@@ -108,6 +117,10 @@ export function createSessionOperationsDeps(
       hooks?.beforeWrite
         ? bindingStore.runExclusive(() => updateSessionInDb(sessionId, patch, undefined, hooks))
         : updateSessionInDb(sessionId, patch, undefined, hooks),
+    openInNewWindow: (sessionId) => {
+      const anchor = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0] ?? null;
+      openSecondaryWindow(sessionId, anchor);
+    },
   };
 }
 
@@ -120,6 +133,9 @@ export function createSessionOpsCallbacks(isTurnRunning: (sessionId: string) => 
   return {
     moveSessions: (params: { sessionIds: string[]; target: SessionMoveTarget }): Promise<MoveSessionsResult> =>
       guarded(() => moveSessions(deps, params)),
-
+    openSessionInNewWindow: (params: { sessionId: string }): Promise<OpenSessionInNewWindowResult> =>
+      guarded(() => openSessionInNewWindow(deps, params)),
+    getSessionBranches: (params: { sessionId: string }): Promise<GetSessionBranchesResult> =>
+      guarded(() => getSessionBranches(deps, params)),
   };
 }

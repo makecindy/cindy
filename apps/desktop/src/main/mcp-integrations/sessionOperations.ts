@@ -12,7 +12,15 @@
 
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { isAbsolute } from 'node:path';
-import type { MoveSessionsResult, SessionMoveTarget, SessionOpErrorCode, SessionOpItem } from '@cindy/mcps';
+import type {
+  GetSessionBranchesResult,
+  MoveSessionsResult,
+  OpenSessionInNewWindowResult,
+  SessionBranchItem,
+  SessionMoveTarget,
+  SessionOpErrorCode,
+  SessionOpItem,
+} from '@cindy/mcps';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 
@@ -50,7 +58,8 @@ export interface SessionOperationsDeps {
     patch: Record<string, unknown>,
     hooks?: { beforeWrite?: () => Promise<string | null> },
   ): Promise<unknown>;
-
+  /** secondary-windows.openSessionInNewWindow(本机桌面端窗口)。 */
+  openInNewWindow(sessionId: string): void;
 }
 
 type Err<E extends string> = { ok: false; errorCode: E; message: string };
@@ -192,4 +201,60 @@ export async function moveSessions(
     }
   }
   return { ok: true, moved };
+}
+
+/** 在新的应用窗口里打开会话(GUI「在新窗口打开」同款);已删除拒绝。 */
+export async function openSessionInNewWindow(
+  deps: SessionOperationsDeps,
+  params: { sessionId: string },
+): Promise<OpenSessionInNewWindowResult> {
+  const loaded = await loadAll(deps, [params.sessionId]);
+  if (!Array.isArray(loaded)) return loaded;
+  const [row] = loaded;
+  if (row.status === 'deleted') return err('PRECONDITION_FAILED', `${row.id}: 会话已删除`);
+  try {
+    deps.openInNewWindow(row.id);
+  } catch (e) {
+    return err('INTERNAL', e instanceof Error ? e.message : String(e));
+  }
+  return { ok: true, sessionId: row.id, title: row.title };
+}
+
+/** 会话分叉家族:沿 parentSessionId 向上找根(链断即根),再 BFS 收集全部未删除的派生会话。 */
+export async function getSessionBranches(
+  deps: SessionOperationsDeps,
+  params: { sessionId: string },
+): Promise<GetSessionBranchesResult> {
+  const loaded = await loadAll(deps, [params.sessionId]);
+  if (!Array.isArray(loaded)) return loaded;
+  // 向上找根(源被删时 parentSessionId 已 SET NULL,链在此断开即视为根)。
+  let root = loaded[0];
+  const seen = new Set<string>([root.id]);
+  while (root.parentSessionId && !seen.has(root.parentSessionId)) {
+    const [parent] = await deps.loadSessions([root.parentSessionId]);
+    // 源会话已软删除时链在此断开:GUI 分支树同样不展示 deleted 墓碑。
+    if (!parent || parent.status === 'deleted') break;
+    seen.add(parent.id);
+    root = parent;
+  }
+  // 向下 BFS 收集全部派生会话。
+  const family: SessionOpsRow[] = [root];
+  let frontier = [root.id];
+  const visited = new Set<string>([root.id]);
+  while (frontier.length > 0) {
+    // 软删除的子会话及其后代整体不进家族(与 GUI includeArchived:'all' 列表排除 deleted 一致)。
+    const children = (await deps.loadChildren(frontier)).filter(
+      (row) => !visited.has(row.id) && row.status !== 'deleted',
+    );
+    for (const child of children) visited.add(child.id);
+    family.push(...children);
+    frontier = children.map((row) => row.id);
+  }
+  const items: SessionBranchItem[] = family.map((row) => ({
+    ...toItem(row),
+    parentSessionId: row.parentSessionId,
+    forkedAtMessageId: row.forkedAtMessageId,
+    createdAt: row.createdAt,
+  }));
+  return { ok: true, rootSessionId: root.id, family: items };
 }
