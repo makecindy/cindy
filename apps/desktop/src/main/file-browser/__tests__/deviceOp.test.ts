@@ -829,6 +829,17 @@ describe('file-browser device-op', () => {
       event: 'fileTree',
       data: { workdir: sshWorkdir, type: 'add', relPath: 'packages/foo/build/out.map' },
     });
+    // 大小写变体同样按不可见处理：matcher 的 ignorecase 默认让 DIST 与 dist 同义，
+    // 事件不该继续推过 relay（评审 P2）。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'DIST/bundle.js' },
+    });
+    // 名单本身是混合大小写（Library / Temp / Logs），段比较折叠后仍要命中。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'remote/Library/x.dat' },
+    });
     expect(pushSpy).not.toHaveBeenCalled();
 
     // 普通路径照常转发。

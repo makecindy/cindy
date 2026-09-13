@@ -728,10 +728,14 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
  *  代价：被忽略目录**自身**的事件（`relPath='node_modules'`）也会转发给隐藏态
  *  客户端。事件流不携带类型、同名普通文件必须放行，两者无法从路径区分；转发后
  *  在隐藏态树里是 no-op（该目录不在 entries），只是每次目录级变更多一条无效 IPC。
- *  这层本来就是粗粒度预过滤，精确判据在 renderer（queueEventRefresh）。 */
+ *  这层本来就是粗粒度预过滤，精确判据在 renderer（queueEventRefresh）。
+ *
+ *  段比较折叠大小写：matcher 用的 `ignore` 包默认 `ignorecase=true`（大小写不敏感
+ *  卷上 `DIST` 与 `dist` 是同一个目录），不折叠会把变体目录内部的事件继续推过
+ *  relay（评审 P2）。 */
 function isInsideRevealableIgnoreDir(relPath: string): boolean {
   const segments = relPath.split('/');
-  return segments.slice(0, -1).some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment));
+  return segments.slice(0, -1).some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment.toLowerCase()));
 }
 
 function scheduleFsWatchReconcile(workdir: string): void {

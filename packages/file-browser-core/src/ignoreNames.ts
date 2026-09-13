@@ -95,7 +95,10 @@ export const WATCH_ALWAYS_IGNORE = ['node_modules', 'Library'] as const;
  * 与 `WATCH_ALWAYS_IGNORE` 的分工：后者是「永远不 watch 内部」的一层（daemon 不会
  * 发它们的事件）；本集合是「隐藏态不可见、reveal 态可见」的一层 —— daemon 在并集
  * matcher 下会发它们的事件，订阅方要自己按自己的可见性滤。
+ *
+ * 成员统一小写：`ignore` 包默认 `ignorecase=true`（大小写不敏感卷上 `DIST` 与
+ * `dist` 是同一个目录），消费方比较路径段前必须折叠大小写。
  */
 export const REVEALABLE_IGNORE_DIR_NAMES: ReadonlySet<string> = new Set(
-  BUILTIN_IGNORE_REVEALABLE.map((name) => name.replace(/\/$/, '')),
+  BUILTIN_IGNORE_REVEALABLE.map((name) => name.replace(/\/$/, '').toLowerCase()),
 );

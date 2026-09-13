@@ -245,6 +245,8 @@ describe('useFileTree showIgnoredDirs option', () => {
     const revealedRoot: readonly DirEntry[] = [
       { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
       { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 1 },
+      // 大小写变体：matcher 的 ignorecase 默认让 BUILD 与 build 同义，首帧也该滤掉。
+      { name: 'BUILD', relPath: 'BUILD', type: 'directory', size: 0, mtimeMs: 1 },
       { name: 'README.md', relPath: 'README.md', type: 'file', size: 10, mtimeMs: 1 },
     ];
     const pendingRoot = deferred<readonly DirEntry[]>();

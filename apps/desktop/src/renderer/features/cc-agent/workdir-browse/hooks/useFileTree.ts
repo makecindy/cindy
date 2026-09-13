@@ -251,11 +251,14 @@ function emit(store: FileTreeStore): void {
  * 隐藏态会忽略的一级目录名。名单从 @cindy/file-browser-core/ignoreNames 单源
  * 导入(经 shared 转发),只覆盖内置项 —— `.gitignore` / `.p4ignore` 里的自定义
  * 条目 renderer 拿不到,要等新 matcher 的数据回来才消失。
+ *
+ * 名单与比较都折叠大小写:matcher 的 `ignore` 包默认 `ignorecase=true`,大小写
+ * 变体(`DIST` / `BUILD`)在隐藏态同样不可见,不折叠会让它们在首帧多留一拍。
  */
 const HIDDEN_VIEW_DIR_NAMES = new Set(
   [...BUILTIN_IGNORE_ALWAYS, ...BUILTIN_IGNORE_REVEALABLE]
     .filter((name) => name.endsWith('/'))
-    .map((name) => name.slice(0, -1)),
+    .map((name) => name.slice(0, -1).toLowerCase()),
 );
 
 /**
@@ -283,7 +286,7 @@ function filterSeedTreeForHiddenView(
   const next = new Map<string, readonly DirEntry[]>();
   for (const [dir, list] of entries) {
     const kept = list.filter((entry) => {
-      if (entry.type === 'directory' && HIDDEN_VIEW_DIR_NAMES.has(entry.name)) {
+      if (entry.type === 'directory' && HIDDEN_VIEW_DIR_NAMES.has(entry.name.toLowerCase())) {
         droppedRoots.add(entry.relPath);
         return false;
       }
