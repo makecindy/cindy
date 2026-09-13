@@ -206,6 +206,15 @@ describe('excludeOrcaWorkerSessions', () => {
     ]);
     expect(kept.map((item) => item.id)).toEqual(['lead', 'normal']);
   });
+
+  it('hides workers on home, the session drawer, and the full device/project list', () => {
+    const home = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
+    const detail = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
+    const drawer = readFileSync(resolve(process.cwd(), 'src/session/SessionListDrawer.tsx'), 'utf8');
+    expect(home).toContain('excludeOrcaWorkerSessions(sessions)');
+    expect(detail).toContain('excludeOrcaWorkerSessions(allSessions)');
+    expect(drawer).toContain('excludeOrcaWorkerSessions(sessions)');
+  });
 });
 
 describe('MessageRenderer wires the orca card', () => {
