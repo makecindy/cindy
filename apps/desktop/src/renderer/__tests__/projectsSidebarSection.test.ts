@@ -119,9 +119,17 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).toContain('advanceViewedPriorityHold(');
     expect(projectsSectionSource).toContain('holdViewedPriorityRank(');
     expect(projectsSectionSource).toContain('viewedSessionId ?? activeSessionId');
-    // 折叠豁免与排序同一口径(含远程),不再用只有本地的 notifications。
+    // 折叠豁免与排序、聚合灯同一口径(含远程):attention ∪ running
+    // (Greptile P1:running-only 会话不能被折进「显示全部」,否则上层
+    // 呼吸灯指向不可见条目),不再用只有本地的 notifications。
     expect(projectsSectionSource).toContain(
-      'entrySessions(entry).some((s) => priorityContext.attentionSessionIds.has(s.id))',
+      'const next = new Set(priorityContext.attentionSessionIds)',
+    );
+    expect(projectsSectionSource).toContain(
+      'for (const id of priorityContext.runningSessionIds) next.add(id)',
+    );
+    expect(projectsSectionSource).toContain(
+      'entrySessions(entry).some((s) => lampFoldExemptIds.has(s.id))',
     );
   });
 
