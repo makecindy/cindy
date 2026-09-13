@@ -266,11 +266,12 @@ export function ModelAdvancedDrawer({
     if (agent === 'pi') model.piApi = api;
     const wire = providerWireProtocolForApi(api);
     if (!wire) return;
+    const existingRoute = { ...(model.route ?? {}) };
+    delete existingRoute.requestPath;
     model.route = {
-      ...model.route,
+      ...existingRoute,
       baseUrl: providerBaseUrlForApi(model.route?.baseUrl ?? runtime.baseUrl, api),
       wireProtocol: wire,
-      ...(runtime.requestPath && !model.route?.requestPath ? { requestPath: runtime.requestPath } : {}),
     };
     setProtocolSaving(true);
     try {

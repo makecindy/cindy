@@ -11,7 +11,13 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
       { id: 'aion-labs/aion-3.0-mini', name: 'Aion' },
       { id: 'new/model', name: 'New', discoveredCost: { input: 0, output: 0.5 } },
     ] },
-  } }), ...(['claude', 'xai'] as const).map(native => {
+  } }), buildUserProvider({
+    id: 'openrouter-oauth', name: 'OpenRouter',
+    auth: { method: 'oauth', oauth: { authorizeUrl: 'https://openrouter.ai/auth', tokenUrl: 'https://openrouter.ai/api/v1/auth/keys', clientId: 'cindy', scopes: '' } },
+    runtimes: { pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat', models: [
+      { id: 'oauth/new', name: 'OAuth New', discoveredCost: { input: 0.1, output: 0.2 } },
+    ] } },
+  }), ...(['claude', 'xai'] as const).map(native => {
     const provider = buildUserProvider({
       id: `${native}-account`, name: 'Account', auth: { method: 'oauth', native }, runtimes: {},
     });
@@ -38,6 +44,8 @@ describe('independent subscription account reference prices', () => {
       .toMatchObject({ inputPerMtok: 0, outputPerMtok: 0.5 });
     expect(getModelPriceQuote(pricing, 'another-account', 'new/model', 'pi')).toBeUndefined();
     expect(getModelPriceQuote(pricing, 'router-account', 'new/model', 'codex')).toBeUndefined();
+    expect(getModelPriceQuote(pricing, 'openrouter-oauth', 'oauth/new', 'pi'))
+      .toMatchObject({ inputPerMtok: 0.1, outputPerMtok: 0.2, source: 'provider-reference' });
   });
   it.each([
     ['claude', 'anthropic', 'claude-sonnet-4-6'],

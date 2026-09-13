@@ -115,8 +115,8 @@ describe('model advanced editor', () => {
     const previous = window.electronAPI;
     Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
     const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
-      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses',
-        models: [{ id: 'gpt-6', name: 'GPT-6' }, { id: 'other', name: 'Other' }] },
+      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat',
+        models: [{ id: 'gpt-6', name: 'GPT-6', route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses', requestPath: '/custom/chat' } }, { id: 'other', name: 'Other' }] },
     } }), connected: true } as ProviderView;
     try {
       render(drawer(source.models.codex![0], 'high', ['high'], source));

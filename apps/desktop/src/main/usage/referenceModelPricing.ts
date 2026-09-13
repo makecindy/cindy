@@ -34,9 +34,9 @@ export function getReferenceModelPricing(): ModelPricingCatalog {
   const registry = catalog.modelRegistry;
   const pricing = registryPricingCatalog(registry);
   for (const provider of catalog.providers) {
-    // Imported BYOK prices belong to this connection and engine, just like its
-    // discovered capabilities. Publishing only Registry routes dropped them all.
-    if (provider.source === 'user' && provider.auth.method !== 'oauth' && provider.id !== 'xd') {
+    // Connection-local prices belong to this account and engine, including OAuth
+    // discovery quotes. Publishing only Registry routes dropped them all.
+    if (provider.source === 'user' && provider.id !== 'xd') {
       for (const [agent, models] of Object.entries(provider.models)) {
         for (const model of models ?? []) {
           const cost = model.cost;
