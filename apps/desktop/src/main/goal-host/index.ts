@@ -21,6 +21,7 @@ import { readGoalSettings, writeGoalSettings } from '../maker-host/goal-settings
 import { readClaudeAccountUsageSnapshot } from '../usage/claudeAccountUsage.js';
 import { readCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 import { GoalController } from './controller';
+import { createRunEventRecorder, type GoalRunEvent } from './runEvents';
 import { restoreSessionForGoal } from './sessionRestore.js';
 import { GoalStorage, type GoalDrizzleDb } from './storage';
 import type { GoalStatusUpdate, SessionLike } from './types';
@@ -35,6 +36,22 @@ export interface StartGoalControllerDeps {
 }
 
 let _controller: GoalController | null = null;
+
+/**
+ * Goal run 结构化观测记录器(#2105 P0):内存环,最近 N 条。生产/测试均可经
+ * getGoalRunEvents 查询审计;持久化(push renderer / SQLite)留后续阶段。
+ */
+const goalRunRecorder = createRunEventRecorder();
+
+/** 读最近 Goal run 观测事件(审计 / 排障用;controller 重置后为空)。 */
+export function getGoalRunEvents(): readonly GoalRunEvent[] {
+  return goalRunRecorder.snapshot();
+}
+
+/** 显式清空观测环(切账号 / 登出等 reset 场景,防止旧账号事件泄漏给新查看方)。 */
+export function clearGoalRunEvents(): void {
+  goalRunRecorder.clear();
+}
 
 /** Incremented on every resetGoalController call. attemptStartScheduler uses
  * this to bail out if a teardown raced its await. */
@@ -129,6 +146,10 @@ export function startGoalController(deps: StartGoalControllerDeps): GoalControll
         agentMeta: { goalNotice: kind },
       });
     },
+    // #2105 P0:Goal run 结构化观测事件 → 内存环。
+    recordRunEvent: (evt) => {
+      goalRunRecorder.record(evt);
+    },
   });
   _controller = controller;
   logger.info('[goal-host] started');
@@ -150,6 +171,9 @@ export async function resetGoalController(): Promise<void> {
   _controller = null;
   _teardownGeneration++;
   if (controller) await controller.dispose();
+  // 清空观测环:recorder 是模块级单例,不清空会让旧账号的 sessionId/reason 泄漏给
+  // 重置后的新查看方,造成排障误判与隐私暴露。
+  goalRunRecorder.clear();
 }
 
 /** Return current teardown generation. Callers that await across a teardown
