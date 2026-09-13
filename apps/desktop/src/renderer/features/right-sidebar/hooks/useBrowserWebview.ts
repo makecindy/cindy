@@ -30,6 +30,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import type { WebviewTag } from 'electron';
 
 import { selectPersistableFavicon } from '../../../../shared/faviconPersistence';
+import { browserPageZoomScript } from '../../../../shared/rsbNativePopup';
 import { browserWebviewPool } from '../lib/browserWebviewPool';
 import {
   consumePendingKillCause,
@@ -100,6 +101,7 @@ export interface UseBrowserWebviewResult {
   goForward: () => void;
   /** 停止当前加载(loading 时给 abort 按钮用)。 */
   stop: () => void;
+  setZoomFactor: (zoomFactor: number) => void;
   /** 关闭资源提示条(用户点「忽略」)。 */
   dismissResourceAlert: () => void;
 }
@@ -115,6 +117,7 @@ export function useBrowserWebview(
   sessionId?: string,
   visible?: boolean,
   enabled = true,
+  zoomFactor = 1,
 ): UseBrowserWebviewResult {
   // pool entry 引用 + 反应式 state。entry 本身在 pool 模块管;hook 只观察。
   const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null);
@@ -131,6 +134,7 @@ export function useBrowserWebview(
   const [resourceAlert, setResourceAlert] = useState<{ cpuPercent: number } | null>(null);
   // webview ref —— actions 用,避免 stale closure。
   const webviewRef = useRef<WebviewTag | null>(null);
+  const zoomFactorRef = useRef(zoomFactor);
   const urlRef = useRef('');
   const suppressStaleUrlRef = useRef<{ targetUrl: string; staleUrl: string } | null>(null);
   const navigationAttemptsRef = useRef<number[]>([]);
@@ -144,6 +148,19 @@ export function useBrowserWebview(
   const [entryEpoch, setEntryEpoch] = useState(0);
   const visibleRef = useRef(visible === true);
   visibleRef.current = visible === true;
+  zoomFactorRef.current = zoomFactor;
+
+  const applyZoomFactor = useCallback(() => {
+    const webview = webviewRef.current;
+    if (!visibleRef.current || !webview) return;
+    try {
+      void webview
+        .executeJavaScript(browserPageZoomScript(zoomFactorRef.current))
+        .catch(() => undefined);
+    } catch {
+      // dom-ready will retry after attachment.
+    }
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -285,6 +302,7 @@ export function useBrowserWebview(
     //   对齐 Codex `main-cC-d0ezP.js:48842` 监听点(他们也用 dom-ready 做 attach 后初始化)。
     const onDomReady = () => {
       refreshNav();
+      applyZoomFactor();
       if (!sessionId) return;
       try {
         const webContentsId = entry.webview.getWebContentsId();
@@ -432,7 +450,7 @@ export function useBrowserWebview(
       // **不**释放 pool entry —— webview DOM 节点继续保活,切回该 tab 时可直接
       // 复用。释放是 plugin 在用户主动关闭 tab 时显式调 pool.release(tabId)。
     };
-  }, [enabled, tabId, sessionId, setObservedUrl, entryEpoch, visible]);
+  }, [applyZoomFactor, enabled, tabId, sessionId, setObservedUrl, entryEpoch, visible]);
 
   const navigate = useCallback((nextUrl: string) => {
     const wv = webviewRef.current;
@@ -510,9 +528,20 @@ export function useBrowserWebview(
       setIsLoading(false);
     }
   }, []);
+  const setZoomFactor = useCallback(
+    (zoomFactor: number) => {
+      zoomFactorRef.current = zoomFactor;
+      applyZoomFactor();
+    },
+    [applyZoomFactor],
+  );
   const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
   const currentEntry = enabled ? browserWebviewPool.peek(tabId) : undefined;
   const currentWebview = currentEntry?.wrapper === wrapper ? currentEntry.webview : null;
+
+  useEffect(() => {
+    if (visible === true) applyZoomFactor();
+  }, [applyZoomFactor, currentWebview, visible, zoomFactor]);
 
   return {
     // 隐藏 tab 不首次 acquire（见上方 existing/visible 守门），也不会触发首次导航；
@@ -536,6 +565,7 @@ export function useBrowserWebview(
     goBack,
     goForward,
     stop,
+    setZoomFactor,
     dismissResourceAlert,
   };
 }

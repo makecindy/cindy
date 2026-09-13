@@ -145,6 +145,10 @@ export function useNativePopupSurface(
     setSnapshot((current) => ({ ...current, isLoading: false }));
     command({ command: 'stop' });
   }, [command]);
+  const setZoomFactor = useCallback(
+    (zoomFactor: number) => command({ command: 'set-zoom-factor', zoomFactor }),
+    [command],
+  );
 
   return {
     wrapper: null,
@@ -156,6 +160,7 @@ export function useNativePopupSurface(
     goBack,
     goForward,
     stop,
+    setZoomFactor,
     dismissResourceAlert: () => undefined,
     closed,
   };

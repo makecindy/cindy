@@ -2,7 +2,7 @@
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { createElement, createRef } from 'react';
+import { createElement, createRef, type ButtonHTMLAttributes, type ReactNode } from 'react';
 
 import tailwindConfig from '../../../../../../../tailwind.config';
 import { BrowserChrome, type BrowserChromeHandle } from '../BrowserChrome';
@@ -17,27 +17,38 @@ vi.mock('react-i18next', () => ({
 // 沿用仓库既定测试模式:mock 成始终展开的直通组件,Item 渲染成普通 <button>,
 // 把 Radix 的 onSelect 映射到 onClick、透传 disabled —— 这样能直接断言菜单项的
 // 可用性与回调,不依赖真实菜单开合。
-vi.mock('@/components/ui/dropdown-menu', () => {
-  const react = require('react') as typeof import('react');
+vi.mock('@/components/ui/dropdown-menu', async () => {
+  const react = await vi.importActual<typeof import('react')>('react');
   return {
-    DropdownMenu: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenu: ({ children }: { children: ReactNode }) =>
       react.createElement(react.Fragment, null, children),
-    DropdownMenuTrigger: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuTrigger: ({ children }: { children: ReactNode }) =>
       react.createElement(react.Fragment, null, children),
-    DropdownMenuContent: ({ children }: { children: React.ReactNode }) =>
+    DropdownMenuContent: ({ children }: { children: ReactNode }) =>
       react.createElement('div', null, children),
+    DropdownMenuGroup: ({ children }: { children: ReactNode }) =>
+      react.createElement('div', null, children),
+    DropdownMenuLabel: ({ children }: { children: ReactNode }) =>
+      react.createElement('div', null, children),
+    DropdownMenuSeparator: () => react.createElement('hr'),
     DropdownMenuItem: ({
       children,
       onSelect,
       disabled,
-    }: {
-      children: React.ReactNode;
-      onSelect?: () => void;
+      ...props
+    }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, 'onSelect'> & {
+      children: ReactNode;
+      onSelect?: (event: { preventDefault: () => void }) => void;
       disabled?: boolean;
     }) =>
       react.createElement(
         'button',
-        { type: 'button', disabled, onClick: () => onSelect?.() },
+        {
+          ...props,
+          type: 'button',
+          disabled,
+          onClick: () => onSelect?.({ preventDefault: vi.fn() }),
+        },
         children,
       ),
   };
@@ -54,11 +65,13 @@ function renderChrome(
     commentActive?: boolean;
     onReload?: () => void;
     onStop?: () => void;
+    zoomFactor?: number;
   } = {},
 ) {
   const onNavigate = vi.fn();
   const onOpenInSystemBrowser = vi.fn();
   const onCopyLink = vi.fn();
+  const onZoomChange = vi.fn();
   const ref = createRef<BrowserChromeHandle>();
   render(
     createElement(BrowserChrome, {
@@ -77,11 +90,13 @@ function renderChrome(
       onToggleComment: vi.fn(),
       onOpenInSystemBrowser,
       onCopyLink,
+      zoomFactor: extra.zoomFactor ?? 1,
+      onZoomChange,
       commentSupported: extra.commentSupported,
       canOpenInSystemBrowser: extra.canOpenInSystemBrowser ?? true,
     }),
   );
-  return { onNavigate, onOpenInSystemBrowser, onCopyLink, ref };
+  return { onNavigate, onOpenInSystemBrowser, onCopyLink, onZoomChange, ref };
 }
 
 describe('BrowserChrome', () => {
@@ -207,6 +222,35 @@ describe('BrowserChrome', () => {
     expect(onCopyLink).toHaveBeenCalledTimes(1);
   });
 
+  it('shows the current page zoom and applies standard zoom actions', () => {
+    const { onZoomChange } = renderChrome('https://www.taptap.cn/', { zoomFactor: 1.25 });
+
+    expect(screen.getByRole('button', { name: 'rightSidebar.browser.resetZoom' }).textContent).toBe(
+      '125%',
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.zoomOut' }));
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.resetZoom' }));
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.zoomIn' }));
+
+    expect(onZoomChange.mock.calls).toEqual([[1.1], [1], [1.5]]);
+  });
+
+  it('disables zoom controls at their bounds', () => {
+    const low = renderChrome('https://www.taptap.cn/', { zoomFactor: 0.25 });
+    expect(
+      (screen.getByRole('button', { name: 'rightSidebar.browser.zoomOut' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    cleanup();
+
+    renderChrome('https://www.taptap.cn/', { zoomFactor: 5 });
+    expect(
+      (screen.getByRole('button', { name: 'rightSidebar.browser.zoomIn' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+    expect(low.onZoomChange).not.toHaveBeenCalled();
+  });
+
   it('disables both more-menu items when there is no valid link (about:blank new tab)', () => {
     const { onOpenInSystemBrowser, onCopyLink } = renderChrome('about:blank');
 
@@ -228,7 +272,7 @@ describe('BrowserChrome', () => {
   });
 
   it('disables system-browser opening when the host has no safe opener for the URL', () => {
-    const { onOpenInSystemBrowser, onCopyLink } = renderChrome('file:///tmp/notes.md', {
+    renderChrome('file:///tmp/notes.md', {
       canOpenInSystemBrowser: false,
     });
 
