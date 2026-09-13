@@ -1,4 +1,4 @@
-import { BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
+import { providerEndpointBindings, BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
  * shared catalog and edited through standard model settings. Stored per-runtime credentials,
@@ -1188,6 +1188,12 @@ export function ProviderConnectionDialog({
   const f = rt[activeTab];
   const boundPreset = presets.find(preset => preset.id === f.catalogPresetId);
   const templateBound = Boolean(f.catalogPresetId);
+  const endpointTemplate = boundPreset?.runtimes[activeTab]?.baseUrl;
+  const fixedTemplateEndpoint = templateBound && !endpointTemplate?.includes('{');
+  // Google inference and discovery already resolve to this native endpoint. The old
+  // compatibility base remains stored as a template reference, never an editable choice.
+  const displayedBaseUrl = fixedTemplateEndpoint && f.catalogPresetId === 'google-gemini-api'
+    ? resolveProviderConnectionProbeRoute(activeTab, f, presets)?.baseUrl ?? f.baseUrl : f.baseUrl;
   const canShowImageGenerationAdvanced =
     activeTab === 'codex' && canRuntimeUseNativeImageGeneration(f);
   useEffect(() => {
@@ -1195,7 +1201,12 @@ export function ProviderConnectionDialog({
     resetImageGenerationHelp();
   }, [canShowImageGenerationAdvanced, resetImageGenerationHelp, showImageGenerationAdvanced]);
 
-  /** 测试当前 Tab 的表单值（未保存也能测；key 仅内存透传给 main，不落盘）。 */
+  // Account/location edits must stay within the declared endpoint template.
+  const matchesEndpointTemplate = useCallback((agent: DialogAgentKind, fields: RuntimeFields) => {
+    const template = presets.find(preset => preset.id === fields.catalogPresetId)?.runtimes[agent]?.baseUrl;
+    return !template?.includes('{') || providerEndpointBindings(template, fields.baseUrl.trim()) !== null;
+  }, [presets]);
+
   const handleTest = useCallback(async () => {
     const agent = activeTab;
     const rf = rt[agent];
@@ -1203,6 +1214,10 @@ export function ProviderConnectionDialog({
     const defaultBaseUrl = rf.baseUrl.trim();
     const firstModelConfig = firstProviderChatModel(rf.models);
     const firstModel = firstModelConfig?.id.trim();
+    if (!matchesEndpointTemplate(agent, rf)) {
+      toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
+      return;
+    }
     if (!defaultBaseUrl || !firstModel) {
       toast.error(t('settings.providers.custom.test.needFields'));
       return;
@@ -1288,7 +1303,7 @@ export function ProviderConnectionDialog({
       setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
       if (ipc?.message) toast.error(ipc.message);
     }
-  }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets]);
+  }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets, matchesEndpointTemplate]);
 
   // 拉取单飞：任一 runtime（含 Pi）在途时所有 Tab 的拉取按钮都禁用——两个并发请求会竞争
   // 同一个勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
@@ -1312,7 +1327,7 @@ export function ProviderConnectionDialog({
       toast.error(t('settings.providers.custom.fetch.needBaseUrl'));
       return;
     }
-    if (!areProviderRequestUrlsAllowed(authMode, baseUrl, rf.modelsUrl)) {
+    if (!matchesEndpointTemplate(agent, rf) || !areProviderRequestUrlsAllowed(authMode, baseUrl, rf.modelsUrl)) {
       toast.error(t('settings.providers.custom.errors.baseUrlInvalid'));
       return;
     }
@@ -1450,7 +1465,7 @@ export function ProviderConnectionDialog({
       modelFetchInFlightRef.current = false;
       setFetchingModels((prev) => ({ ...prev, [agent]: false }));
     }
-  }, [activeTab, authMode, rt, fetchingModels, initial, picker, runtimeFill, savedBaselineFor, t]);
+  }, [activeTab, authMode, rt, fetchingModels, initial, picker, runtimeFill, savedBaselineFor, t, matchesEndpointTemplate]);
 
   /**
    * 勾选弹层确认：勾选集写回该 runtime 的模型行。基于**确认时的最新表单行**合并，
@@ -1607,6 +1622,11 @@ export function ProviderConnectionDialog({
         return;
       }
       if (!areProviderRequestUrlsAllowed(authMode, rf.baseUrl, rf.modelsUrl)) {
+        setActiveTab(a);
+        reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlInvalid'));
+        return;
+      }
+      if (!matchesEndpointTemplate(a, rf)) {
         setActiveTab(a);
         reportFieldError(`${a}:baseUrl`, t('settings.providers.custom.errors.baseUrlInvalid'));
         return;
@@ -1848,6 +1868,7 @@ export function ProviderConnectionDialog({
     editing,
     initial,
     existingIds,
+    matchesEndpointTemplate,
     onSaved,
     keyHydrationFailed,
     showAdvanced,
@@ -2341,8 +2362,11 @@ export function ProviderConnectionDialog({
                   <SettingsTextInput
                     {...control}
                     surface="ivory"
-                    value={f.baseUrl}
-                    onChange={(v) => patch(activeTab, (x) => ({ ...x, baseUrl: v }))}
+                    value={displayedBaseUrl}
+                    readOnly={fixedTemplateEndpoint}
+                    onChange={(v) => {
+                      if (!fixedTemplateEndpoint) patch(activeTab, (x) => ({ ...x, baseUrl: v }));
+                    }}
                     placeholder={t('settings.providers.custom.fields.baseUrlPlaceholder')}
                   />
                 )}

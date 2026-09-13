@@ -1528,5 +1528,39 @@ it('keeps a template connection editable without offering protocol or path switc
   await waitFor(() => expect(window.electronAPI.maker.listProviderPresets).toHaveBeenCalled());
   expect(screen.queryByText('settings.providers.custom.fields.wireProtocol')).toBeNull();
   expect(screen.queryByRole('button', { name: 'settings.providers.custom.runtimeFill.action' })).toBeNull();
-  expect(screen.getByDisplayValue(preset.runtimes.codex!.baseUrl)).toBeTruthy();
+  const endpoint = screen.getByDisplayValue('https://generativelanguage.googleapis.com/v1beta') as HTMLInputElement;
+  expect(endpoint.readOnly).toBe(true);
+  fireEvent.change(endpoint, { target: { value: 'https://other.example/v1' } });
+  expect(endpoint.value).toBe('https://generativelanguage.googleapis.com/v1beta');
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  expect(JSON.stringify(customProviderMocks.updateCustomProvider.mock.calls[0])).toContain(preset.runtimes.codex!.baseUrl);
+  expect(JSON.stringify(customProviderMocks.updateCustomProvider.mock.calls[0])).not.toContain('other.example');
+});
+
+ it('allows a cloud account endpoint but rejects changing its fixed host pattern', async () => {
+  const preset = { id: 'cloud-account', name: 'Cloud account', authMethod: 'apiKey' as const,
+    runtimes: { codex: { baseUrl: 'https://{account}.example.test/v1', wireProtocol: 'openai-responses' as const,
+      models: [{ id: 'deployment', name: 'Deployment' }] } } };
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+  render(<ProviderConnectionDialog initial={{ id: 'account', name: 'Account', runtimes: {
+    codex: { ...preset.runtimes.codex, catalogPresetId: preset.id, baseUrl: 'https://first.example.test/v1' },
+  } }} onSaved={vi.fn()} onClose={vi.fn()} />);
+  const endpoint = screen.getByDisplayValue('https://first.example.test/v1') as HTMLInputElement;
+  await waitFor(() => expect(endpoint.readOnly).toBe(false));
+  fireEvent.change(endpoint, { target: { value: 'https://wrong.test/v1' } });
+  const fetchModels = vi.fn();
+  window.electronAPI.maker.fetchProviderModels = fetchModels;
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+  expect(window.electronAPI.maker.testProviderConnection).not.toHaveBeenCalled();
+  expect(fetchModels).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await screen.findByText('settings.providers.custom.errors.baseUrlInvalid');
+  expect(customProviderMocks.updateCustomProvider).not.toHaveBeenCalled();
+  fireEvent.change(endpoint, { target: { value: 'https://second.example.test/v1' } });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  expect(JSON.stringify(customProviderMocks.updateCustomProvider.mock.calls[0])).toContain('https://second.example.test/v1');
 });
