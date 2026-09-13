@@ -6,6 +6,7 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  forkSession,
   moveSessions,
   type SessionOperationsDeps,
   type SessionOpsRow,
@@ -51,6 +52,8 @@ function makeDeps(rows: SessionOpsRow[], overrides: Partial<SessionOperationsDep
     isImAttached: () => false,
     isDirectory: async () => true,
     updateSession,
+    resolveMessageClientId: async () => ({ clientId: 'client-1', role: 'assistant', text: '' }),
+    forkAtMessage: async () => ({ id: 'forked' }),
     ...overrides,
   };
   return { deps, updateSession };
@@ -188,5 +191,49 @@ describe('moveSessions', () => {
     });
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND', moved: [{ sessionId: 'a' }] });
+  });
+});
+
+describe('forkSession', () => {
+  it('resolves the message client id and returns the forked session', async () => {
+    const forkAtMessage = vi.fn(async () => ({ id: 'forked' }));
+    const { deps } = makeDeps([row('a'), row('forked', { parentSessionId: 'a' })], { forkAtMessage });
+    const res = await forkSession(deps, { sessionId: 'a', messageId: 'm1' });
+    expect(forkAtMessage).toHaveBeenCalledWith('a', 'client-1');
+    expect(res).toMatchObject({ ok: true, session: { sessionId: 'forked' } });
+  });
+
+  it('refuses deleted, remote and unknown sessions', async () => {
+    const { deps } = makeDeps([row('d', { status: 'deleted' }), row('r', { remoteHostId: 'host' })]);
+    expect(await forkSession(deps, { sessionId: 'd', messageId: 'm' })).toMatchObject({ errorCode: 'PRECONDITION_FAILED' });
+    expect(await forkSession(deps, { sessionId: 'r', messageId: 'm' })).toMatchObject({ errorCode: 'PRECONDITION_FAILED' });
+    expect(await forkSession(deps, { sessionId: 'x', messageId: 'm' })).toMatchObject({ errorCode: 'NOT_FOUND' });
+  });
+
+  it('maps fork error codes', async () => {
+    const withCode = (code: string) =>
+      makeDeps([row('a')], {
+        forkAtMessage: async () => {
+          throw Object.assign(new Error(code), { code });
+        },
+      }).deps;
+    expect(await forkSession(withCode('NOT_USER_MESSAGE'), { sessionId: 'a', messageId: 'm' })).toMatchObject({ errorCode: 'INVALID_ARGS' });
+    expect(await forkSession(withCode('NO_PRIOR_ASSISTANT'), { sessionId: 'a', messageId: 'm' })).toMatchObject({ errorCode: 'PRECONDITION_FAILED' });
+    expect(await forkSession(withCode('UNSUPPORTED_HISTORY'), { sessionId: 'a', messageId: 'm' })).toMatchObject({ errorCode: 'UNSUPPORTED_CAPABILITY' });
+    expect(await forkSession(withCode('SOMETHING_ELSE'), { sessionId: 'a', messageId: 'm' })).toMatchObject({ errorCode: 'INTERNAL' });
+    const { deps: noMsg } = makeDeps([row('a')], { resolveMessageClientId: async () => null });
+    expect(await forkSession(noMsg, { sessionId: 'a', messageId: 'm' })).toMatchObject({ errorCode: 'NOT_FOUND' });
+  });
+
+  it('returns the selected user message as draftText so the caller can seed the new session', async () => {
+    const { deps } = makeDeps([row('a')], {
+      resolveMessageClientId: async () => ({ clientId: 'c', role: 'user', text: '继续做第二步' }),
+    });
+    expect(await forkSession(deps, { sessionId: 'a', messageId: 'm' })).toMatchObject({ ok: true, draftText: '继续做第二步' });
+    const { deps: assistant } = makeDeps([row('a')], {
+      resolveMessageClientId: async () => ({ clientId: 'c', role: 'assistant', text: 'reply' }),
+    });
+    const res = await forkSession(assistant, { sessionId: 'a', messageId: 'm' });
+    expect(res.ok && 'draftText' in res).toBe(false);
   });
 });
