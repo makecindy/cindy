@@ -11,7 +11,7 @@ import * as googleVertex from '@earendil-works/pi-ai/api/google-vertex';
 import * as azureOpenaiResponses from '@earendil-works/pi-ai/api/azure-openai-responses';
 import * as bedrockConverseStream from '@earendil-works/pi-ai/api/bedrock-converse-stream';
 import * as mistralConversations from '@earendil-works/pi-ai/api/mistral-conversations';
-import { PI_REASONING_EFFORTS, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
+import { PI_REASONING_EFFORTS, PROVIDER_MODEL_CATALOG, providerEndpointBindings, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
 
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
   const selected = model.api ?? api;
@@ -116,6 +116,22 @@ export function requiresNativeProviderAuth(row: ProviderModelRecord | undefined)
   return identity === 'github-copilot' || identity === 'cloudflare-ai-gateway';
 }
 
+const HOST_CREDENTIAL_APIS = new Set<string>(['google-vertex', 'bedrock-converse-stream']);
+
+/** Vertex ADC / Bedrock IAM may only target Main-approved cloud endpoints. */
+export function hostCredentialEndpointAllowed(api: string, destination: string): boolean {
+  if (!HOST_CREDENTIAL_APIS.has(api)) return true;
+  return Object.values(PROVIDER_MODEL_CATALOG.providers).some((rows) =>
+    rows.some((row) => row.execution.pi.api === api && providerEndpointBindings(row.upstream, destination) !== null));
+}
+
+function assertHostCredentialEndpoint(api: string, destination: string, apiKey?: string): void {
+  if (!HOST_CREDENTIAL_APIS.has(api)) return;
+  if (api === 'google-vertex' && apiKey?.trim()) return;
+  if (hostCredentialEndpointAllowed(api, destination)) return;
+  throw new Error('Native provider request requires an approved cloud endpoint');
+}
+
 function cloudflareGatewayHeaders(
   apiKey: string | undefined,
   headers: Record<string, string> | undefined,
@@ -131,8 +147,10 @@ function cloudflareGatewayHeaders(
 
 function nativeInvocationModel(options: PiProviderTransportOptions, modelId: string): Model<Api> {
   const row = options.row;
+  const destination = options.upstream ?? row.upstream;
+  assertHostCredentialEndpoint(row.execution.pi.api, destination, options.apiKey);
   const model: Model<Api> = { id: modelId, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
-    api: row.execution.pi.api, baseUrl: options.upstream ?? row.upstream, contextWindow: row.contextWindow,
+    api: row.execution.pi.api, baseUrl: destination, contextWindow: row.contextWindow,
     maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow), reasoning: row.reasoning,
     input: row.supportsImageInput ? ['text', 'image'] : ['text'],
     cost: { input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,

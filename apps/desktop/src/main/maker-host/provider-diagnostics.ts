@@ -16,7 +16,6 @@
 
 import {
   appendProviderRequestPath,
-  providerEndpointBindings,
   providerModelRecord,
   providerPresetModelRecord,
   providerWireProtocolForApi,
@@ -36,7 +35,7 @@ import {
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { outboundFetch } from './outbound-fetch.js';
-import { invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
+import { hostCredentialEndpointAllowed, invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { buildRouteDecision, providerRoutingForModel } from './provider-route.js';
 
 /** 探测请求超时。 */
@@ -116,10 +115,7 @@ function hostEnvironmentApiAllowed(spec: ProviderProbeSpec, api: string): boolea
   if (!HOST_ENVIRONMENT_APIS.has(api as PiModelApi)) return true;
   // Bedrock signs with Desktop IAM even when a dummy apiKey is present.
   if (api !== 'bedrock-converse-stream' && probeHasUserSecret(spec)) return true;
-  if (!spec.catalogPresetId) return false;
-  const row = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, api as PiModelApi)
-    ?? providerPresetModelRecord(spec.catalogPresetId, spec.modelId);
-  return Boolean(row && row.execution.pi.api === api && providerEndpointBindings(row.upstream, spec.baseUrl) !== null);
+  return hostCredentialEndpointAllowed(api, spec.baseUrl);
 }
 
 function normalizedHeaders(headers: Record<string, string> | undefined): Record<string, string> {

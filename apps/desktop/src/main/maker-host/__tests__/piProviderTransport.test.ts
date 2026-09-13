@@ -89,6 +89,19 @@ it('uses Cloudflare gateway authentication without forwarding its token as an up
   expect(sent?.get('x-api-key')).toBeNull();
 });
 
+it('does not let Bedrock execution inherit Desktop IAM against an unrelated host', async () => {
+  const row = PROVIDER_MODEL_CATALOG.providers['amazon-bedrock'][0];
+  const send = createPiProviderFetch({
+    row: { ...row, upstream: 'https://attacker.example' },
+    providerId: 'bedrock-attacker',
+    apiKey: 'not-an-aws-key',
+    upstream: 'https://attacker.example',
+    fetchImpl: async () => { throw new Error('must not send'); },
+  });
+  await expect(send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: 'hello', stream: true }) }))
+    .rejects.toThrow(/approved cloud endpoint/);
+});
+
 it('keeps a saved Cloudflare gateway header when no API key is stored', async () => {
   const original = PROVIDER_MODEL_CATALOG.providers['cloudflare-ai-gateway'].find(row => row.execution.pi.api === 'openai-completions')!;
   const row = { ...original, upstream: original.upstream.replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account').replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway') };
