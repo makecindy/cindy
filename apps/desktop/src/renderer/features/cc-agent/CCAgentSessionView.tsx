@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 import { shouldShowFailedScheduleNotice } from '@cindy/maker-shared/schedule-model';
 /**
  * CCAgentSessionView
@@ -1503,7 +1504,7 @@ export function CCAgentSessionView({
     if (isRemoteWorktreeSession) return;
     try {
       const result = await window.electronAPI.openPath(wd);
-      if (!result.success) toast.error(result.error || t('ccAgent.common.openFolderFailed'));
+      if (shouldShowOpenPathError(result)) toast.error(result.error || t('ccAgent.common.openFolderFailed'));
     } catch (err) {
       log.error('[open workingDir]', err);
       toast.error(t('ccAgent.common.openFolderFailed'));

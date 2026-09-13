@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../shared/openPathResult';
 /**
  * remoteFileOpen — 聊天流文件类交互的远程分流入口(renderer 侧)。
  * ---------------------------------------------------------------------------
@@ -88,7 +89,7 @@ export async function openRemoteChatFile(
   const cachePath = await fetchChatFileWithToasts(origin, workdir, absPath);
   if (!cachePath) return;
   const res = await window.electronAPI.openPath(cachePath);
-  if (!res.success) toast.error(res.error || i18n.t('logic.errors.openFileFailed'));
+  if (shouldShowOpenPathError(res)) toast.error(res.error || i18n.t('logic.errors.openFileFailed'));
 }
 
 /** 远程会话「定位文件」:取回缓存副本后在文件管理器中定位本地副本。 */

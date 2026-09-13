@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * CCAgentFeature 的 Sidebar 上半内容。
  * ---------------------------------------------------------------------------
@@ -2495,7 +2496,7 @@ function ExpandedView({
     async (workingDir: string) => {
       try {
         const result = await window.electronAPI.openPath(workingDir);
-        if (!result.success) {
+        if (shouldShowOpenPathError(result)) {
           toast.error(result.error || t('ccAgent.common.openFolderFailed'));
         }
       } catch (err) {

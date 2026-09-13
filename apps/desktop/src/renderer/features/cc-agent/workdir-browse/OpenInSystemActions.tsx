@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../../shared/openPathResult';
 import { ExternalLink, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -23,7 +24,7 @@ export function OpenInSystemActions({
   const onOpenFile = async () => {
     try {
       const r = await window.electronAPI.openPath(absPath);
-      if (!r.success) toast.error(r.error || t('ccAgent.common.openFailed'));
+      if (shouldShowOpenPathError(r)) toast.error(r.error || t('ccAgent.common.openFailed'));
     } catch (err) {
       toast.error(
         t('ccAgent.common.openFailedWith', {
@@ -36,7 +37,7 @@ export function OpenInSystemActions({
   const onOpenFolder = async () => {
     try {
       const r = await window.electronAPI.openPath(folderPath);
-      if (!r.success) toast.error(r.error || t('ccAgent.common.openFolderFailed'));
+      if (shouldShowOpenPathError(r)) toast.error(r.error || t('ccAgent.common.openFolderFailed'));
     } catch (err) {
       toast.error(
         t('ccAgent.common.openFolderFailedWith', {
