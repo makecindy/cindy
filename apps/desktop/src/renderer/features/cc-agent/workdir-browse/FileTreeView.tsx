@@ -264,7 +264,12 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
 
   const virtualizer = useVirtualizer({
     count: rows.length,
-    getScrollElement: () => containerRef.current,
+    // 非激活 tab 不发滚动元素：虚拟器会断开观察，激活时重新订阅并**同步**读一次
+    // 真实视口尺寸（observeElementRect 订阅时立即 read offsetWidth/Height）。
+    // 不能只靠 ResizeObserver 把「视口从 0 变回来」告诉虚拟器：display:none 子树
+    // 上的 RO 回调时机不可靠（窗口不可见时 Chrome 干脆不派发），懒挂载的隐藏 tab
+    // 切回后就会永远 scrollRect=0、一行不渲染（实测）。
+    getScrollElement: () => (active ? containerRef.current : null),
     estimateSize: () => TREE_ROW_PITCH,
     overscan: OVERSCAN,
     paddingStart: TREE_LIST_PADDING,

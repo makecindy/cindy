@@ -182,7 +182,22 @@ describe('useTreeScrollRestore', () => {
     expect(viewportOf(container).scrollTop).toBe(8 + 3 * 29 + 1);
   });
 
-  it('可见态下用户滚动后，同一 scope 内不再被锚点拉回', () => {
+  it('锚点行因上方插入而位移时，视图继续跟随锚点行（直到用户滚动）', () => {
+    const scope = makeTreeScrollScope('tab-1', '/repo');
+    saveTreeScrollAnchor(scope, { rowKey: 'c.ts', offset: 0 });
+
+    const { container, rerender } = render(
+      <Harness scope={scope} rows={makeRows(['a.ts', 'b.ts', 'c.ts'])} />,
+    );
+    const el = viewportOf(container);
+    expect(el.scrollTop).toBe(8 + 2 * 29);
+
+    // 上方插入两行：锚点行仍在顶部（换 store 后数据分批到达的缩影）。
+    rerender(<Harness scope={scope} rows={makeRows(['x.ts', 'y.ts', 'a.ts', 'b.ts', 'c.ts'])} />);
+    expect(el.scrollTop).toBe(8 + 4 * 29);
+  });
+
+  it('用户滚动后，后续 rows 变化不再把视图拉回旧锚点', () => {
     const scope = makeTreeScrollScope('tab-1', '/repo');
     saveTreeScrollAnchor(scope, { rowKey: 'e.ts', offset: 0 });
 

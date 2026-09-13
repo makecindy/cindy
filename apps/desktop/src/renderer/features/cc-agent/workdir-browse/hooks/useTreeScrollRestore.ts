@@ -41,8 +41,14 @@ export function useTreeScrollRestore(
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const scopeRef = useRef(scope);
-  /** 还有一次「待完成」的恢复：scope 变化 / 重新激活时置位，恢复成功或用户滚动后清除。 */
+  /** 还有一次「待完成」的恢复：scope 变化 / 重新激活时置位。
+   *  注意：找到锚点行后**不**立即清除 —— 换 store 时新树是分批长出来的，锚点行
+   *  的 index 会随后续数据到达而位移，要跟到树稳定为止。清除只发生在用户自己
+   *  滚动时（用户接管）。 */
   const pendingRestoreRef = useRef(true);
+  /** 我们自己写进的 scrollTop；用来识别并忽略由它触发的那次 scroll 事件，
+   *  否则会把程序性滚动误判成用户滚动、提前交还控制权。 */
+  const programmaticScrollRef = useRef<number | null>(null);
   if (scopeRef.current !== scope) {
     scopeRef.current = scope;
     pendingRestoreRef.current = true;
@@ -67,10 +73,17 @@ export function useTreeScrollRestore(
     }
     const target = computeTreeRestoreScrollTop(rowsRef.current, anchor);
     if (target === null) return false; // 锚点行还没进树：继续等 rows 变化
-    pendingRestoreRef.current = false;
-    if (Math.abs(el.scrollTop - target) >= RESTORE_EPSILON_PX) {
-      el.scrollTop = target;
+    // 目标可能超出当前可滚范围（树还在长），先按容器现状钳一次 —— 这样
+    // programmaticScrollRef 与浏览器实际落点一致，不会把钳位误判成用户滚动。
+    // jsdom 无布局（scrollHeight 恒 0）时跳过钳位，否则会把所有恢复都钳成 0。
+    const maxScroll =
+      el.scrollHeight > 0 ? Math.max(0, el.scrollHeight - el.clientHeight) : target;
+    const clamped = Math.min(target, maxScroll);
+    if (Math.abs(el.scrollTop - clamped) >= RESTORE_EPSILON_PX) {
+      programmaticScrollRef.current = clamped;
+      el.scrollTop = clamped;
     }
+    // 保持 pending：后续 rows 变化（数据分批到达 / 树稳定过程）继续对齐锚点行。
     return true;
   }, [containerRef]);
 
@@ -100,6 +113,17 @@ export function useTreeScrollRestore(
     const el = containerRef.current;
     // 隐藏态 scrollTop 会复位成 0，那不是用户位置，不能覆盖已有锚点。
     if (!el || el.clientHeight === 0) return;
+    if (pendingRestoreRef.current) {
+      const anchor = loadTreeScrollAnchor(scopeRef.current);
+      const expected = programmaticScrollRef.current;
+      programmaticScrollRef.current = null;
+      // 我们自己的恢复写入：忽略。
+      if (expected !== null && Math.abs(el.scrollTop - expected) < RESTORE_EPSILON_PX) return;
+      // 浏览器 scroll anchoring：行插入/删除时 Chrome 会自行调 scrollTop，但顶部仍是
+      // 锚点行 —— 这不代表用户接管，保持 pending，继续跟随树的变化。
+      const currentTop = computeTreeScrollAnchor(rowsRef.current, el.scrollTop);
+      if (anchor && currentTop && currentTop.rowKey === anchor.rowKey) return;
+    }
     const anchor = computeTreeScrollAnchor(rowsRef.current, el.scrollTop);
     if (!anchor) return;
     pendingRestoreRef.current = false; // 用户自己滚了 = 放弃本次恢复
