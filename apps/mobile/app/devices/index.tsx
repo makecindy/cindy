@@ -945,7 +945,10 @@ function HomeScreenContent() {
           if (homeAccountGenerationRef.current !== accountGenerationAtStart) {
             throw new Error('Home account generation superseded');
           }
-          return readDeviceList();
+          // Provider connection recovery may already own an older roster request. Home's
+          // presence fence is captured above, so joining that earlier request could let its
+          // stale empty snapshot erase a desktop presence delta that will not be replayed.
+          return readDeviceList({ fresh: true });
         },
         { maxAttempts: 3 },
       );

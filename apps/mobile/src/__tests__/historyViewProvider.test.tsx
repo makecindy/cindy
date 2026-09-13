@@ -6,6 +6,7 @@ import {
   DEVICE_LINK_CAPABILITY_HISTORY_VIEW_V1,
   type DeviceLinkClient,
   type DeviceLinkStatus,
+  type DeviceView,
   type LinkAcceptPayload,
   type PresenceSnapshot,
 } from '@cindy/device-link';
@@ -17,7 +18,7 @@ const auth = vi.hoisted(() => ({
   accountGeneration: 1,
   user: { id: 'test-account' },
   getAccessToken: vi.fn(async () => 'test-token'),
-  apiFetch: vi.fn(async () => ({ devices: [] })),
+  apiFetch: vi.fn(async (..._args: unknown[]): Promise<{ devices: DeviceView[] }> => ({ devices: [] })),
 }));
 vi.mock('@/auth/AuthContext', () => ({ useAuth: () => auth }));
 const networkEvents = vi.hoisted(() => ({
@@ -95,6 +96,11 @@ function deferredAccept() {
   const promise = new Promise<LinkAcceptPayload>(done => { resolve = done; });
   return { promise, resolve };
 }
+function deferredRoster() {
+  let resolve!: (value: { devices: DeviceView[] }) => void;
+  const promise = new Promise<{ devices: DeviceView[] }>(done => { resolve = done; });
+  return { promise, resolve };
+}
 async function readHistory() {
   // Attach rejection handling immediately: lifecycle tests intentionally reject.
   let result!: Promise<unknown>;
@@ -105,11 +111,82 @@ async function readHistory() {
 beforeEach(async () => {
   networkEvents.state = 'active';
   auth.accountGeneration = 1;
+  auth.apiFetch.mockReset();
+  auth.apiFetch.mockResolvedValue({ devices: [] });
   transport.clients.length = 0;
   root = createRoot(document.createElement('div'));
   await act(async () => render());
 });
 afterEach(async () => { await act(async () => root.unmount()); });
+
+describe('Provider device roster reads', () => {
+  it('starts a fresh snapshot when Home joins a recovery read that predates its presence fence', async () => {
+    const stale = deferredRoster();
+    const current = deferredRoster();
+    auth.apiFetch.mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
+    const client = transport.clients[0];
+
+    await act(async () => {
+      client.status = 'online';
+      client.statusChanged('online');
+    });
+    expect(auth.apiFetch).toHaveBeenCalledTimes(1);
+
+    await act(async () => client.presenceChanged({
+      deviceId: 'desktop', deviceName: 'Desktop', platform: 'darwin', appVersion: 'test',
+      online: true, remoteControlEnabled: true, busy: false, lastSeenAt: 1,
+    }));
+    const joined = context.readDeviceList();
+    expect(auth.apiFetch).toHaveBeenCalledTimes(1);
+    const fresh = context.readDeviceList({ fresh: true });
+    expect(auth.apiFetch).toHaveBeenCalledTimes(2);
+
+    const desktop: DeviceView = {
+      deviceId: 'desktop', name: 'Desktop', platform: 'darwin', appVersion: 'test',
+      online: true, remoteControlEnabled: true, busy: false, lastSeenAt: new Date(1).toISOString(),
+      isSelf: false,
+    };
+    await act(async () => {
+      stale.resolve({ devices: [] });
+      current.resolve({ devices: [desktop] });
+    });
+
+    expect(await joined).toEqual({ devices: [] });
+    expect(await fresh).toEqual({ devices: [desktop] });
+  });
+
+  it('prevents an older roster response from superseding a newer fresh read', async () => {
+    const stale = deferredRoster();
+    const current = deferredRoster();
+    auth.apiFetch.mockReturnValueOnce(stale.promise).mockReturnValueOnce(current.promise);
+    const client = transport.clients[0];
+
+    await act(async () => {
+      client.status = 'online';
+      client.statusChanged('online');
+    });
+    const joined = context.readDeviceList();
+    const fresh = context.readDeviceList({ fresh: true });
+
+    const offlineDesktop: DeviceView = {
+      deviceId: 'desktop', name: 'Desktop', platform: 'darwin', appVersion: 'test',
+      online: false, remoteControlEnabled: true, busy: false, lastSeenAt: new Date(1).toISOString(),
+      isSelf: false,
+    };
+    const onlineDesktop: DeviceView = { ...offlineDesktop, online: true };
+    await act(async () => {
+      stale.resolve({ devices: [offlineDesktop] });
+    });
+    expect(context.getPresenceAvailability('desktop')).toBeNull();
+    await act(async () => {
+      current.resolve({ devices: [onlineDesktop] });
+    });
+
+    expect(await joined).toEqual({ devices: [offlineDesktop] });
+    expect(await fresh).toEqual({ devices: [onlineDesktop] });
+    expect(context.getPresenceAvailability('desktop')).toBe(true);
+  });
+});
 
 describe('Provider network recovery priority', () => {
   const wifi = { type: 'WIFI', isConnected: true, isInternetReachable: true };

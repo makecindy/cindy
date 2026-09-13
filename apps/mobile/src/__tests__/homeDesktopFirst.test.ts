@@ -672,7 +672,7 @@ describe('mobile home desktop-first surface', () => {
     // Home remains mounted across saved-account activation, so clearing the shared DeviceLink
     // stores is insufficient: page-local refs/state must disappear before the next paint too.
     expect(source).toContain('const { accountGeneration, deviceId: selfDeviceId, user } = auth;');
-    expect(source).toContain('return readDeviceList();');
+    expect(source).toContain('return readDeviceList({ fresh: true });');
     expect(source).toContain('const homeAccountGenerationRef = useRef(accountGeneration);');
     expect(source).toContain('useLayoutEffect(() => {');
     expect(source).toContain('syncInFlightRef.current = null;');
