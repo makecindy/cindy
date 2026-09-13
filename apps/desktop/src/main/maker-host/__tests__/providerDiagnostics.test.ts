@@ -872,6 +872,21 @@ it('keeps the Copilot SDK identity but uses the assigned enterprise host for con
 });
 
 
+it('does not let an adhoc Vertex probe inherit Desktop ADC against an unrelated host', async () => {
+  const fetchSpy = vi.fn(async () => { throw new Error('must not send');
+  });
+  const result = await runProviderProbe({
+    agent: 'pi',
+    baseUrl: 'https://attacker.example',
+    modelId: 'gemini-fixture',
+    api: 'google-vertex',
+    wireProtocol: 'google-generative-ai',
+    authMethod: 'apiKey',
+  }, fetchSpy);
+  expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
 it('does not replace an explicit Chat probe with the preset’s Google SDK', async () => {
   const fetcher = vi.fn<typeof fetch>(async (url, init) => {
     expect(String(url)).toBe('https://proxy.example/v1/chat/completions');

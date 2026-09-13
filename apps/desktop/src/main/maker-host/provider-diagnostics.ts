@@ -16,6 +16,7 @@
 
 import {
   appendProviderRequestPath,
+  providerEndpointBindings,
   providerModelRecord,
   providerPresetModelRecord,
   providerWireProtocolForApi,
@@ -100,6 +101,25 @@ function withoutCredentialHeaders(
     if (lower !== 'authorization' && lower !== 'x-api-key' && lower !== 'x-goog-api-key') normalized[lower] = value;
   }
   return normalized;
+}
+
+const HOST_ENVIRONMENT_APIS = new Set<PiModelApi>(['google-vertex', 'bedrock-converse-stream']);
+
+function probeHasUserSecret(spec: ProviderProbeSpec): boolean {
+  if (spec.apiKey?.trim()) return true;
+  const headers = new Headers(spec.headers);
+  return Boolean(headers.get('authorization') || headers.get('x-api-key') || headers.get('x-goog-api-key'));
+}
+
+/** Vertex/Bedrock can use Desktop ADC/IAM. Renderer-chosen URLs must not inherit those credentials. */
+function hostEnvironmentApiAllowed(spec: ProviderProbeSpec, api: string): boolean {
+  if (!HOST_ENVIRONMENT_APIS.has(api as PiModelApi)) return true;
+  if (spec.nativeModel) return true;
+  if (probeHasUserSecret(spec)) return true;
+  if (!spec.catalogPresetId) return false;
+  const row = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, api as PiModelApi)
+    ?? providerPresetModelRecord(spec.catalogPresetId, spec.modelId);
+  return Boolean(row && row.execution.pi.api === api && providerEndpointBindings(row.upstream, spec.baseUrl) !== null);
 }
 
 function normalizedHeaders(headers: Record<string, string> | undefined): Record<string, string> {
@@ -271,7 +291,12 @@ export async function runProviderProbe(
     ?? providerModelRecord(spec.modelId, spec.baseUrl, spec.api ?? spec.wireProtocol)
     ?? (presetRow && (spec.api || !spec.wireProtocol || providerWireProtocolForApi(presetRow.execution.pi.api) === spec.wireProtocol)
       ? presetRow : undefined);
-  const api = spec.api ?? row?.execution.pi.api;
+  const requestedApi = spec.api ?? row?.execution.pi.api;
+  if (requestedApi && !hostEnvironmentApiAllowed(spec, requestedApi)) {
+    return { ok: false, code: 'AUTH_INVALID', latencyMs: Date.now() - start,
+      detail: 'native SDK probe requires a user credential or a matching saved preset endpoint' };
+  }
+  const api = requestedApi;
   if (api && (['google-generative-ai', 'google-vertex', 'azure-openai-responses',
     'bedrock-converse-stream', 'mistral-conversations'].includes(api) || requiresNativeProviderAuth(row))) {
     const model = row ?? invocationModelRecord({ id: spec.modelId, name: spec.modelId,
