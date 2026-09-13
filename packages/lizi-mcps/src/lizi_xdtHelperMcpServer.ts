@@ -40,6 +40,10 @@ import {
   registerRenameSessionsTool,
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
+  registerMoveSessionsTool,
+  registerPinSessionsTool,
+  registerUnpinSessionsTool,
+  type PinSessionsDeps,
   registerSendToSessionTool,
   registerListWorkdirsTool,
   registerListSessionsTool,
@@ -58,6 +62,7 @@ import type { SubmitGithubIssueDeps } from './xdt-helper/submit_github_issue.js'
 import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_session_title.js';
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
+import type { MoveSessionsDeps } from './xdt-helper/move_sessions.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import {
   registerBotSkillTools,
@@ -625,6 +630,10 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
+  sessionOps?: {
+    moveSessions: MoveSessionsDeps['moveSessions'];
+    setSessionsPinned: PinSessionsDeps['setSessionsPinned'];
+  };
 }
 
 /**
@@ -689,6 +698,18 @@ export function createXdtHelperMcpServer(
     };
     registerArchiveSessionsTool(registry, archiveDeps);
     registerUnarchiveSessionsTool(registry, archiveDeps);
+  }
+  if (deps.sessionOps) {
+    registerMoveSessionsTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      moveSessions: deps.sessionOps.moveSessions,
+    });
+    const pinDeps = {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setSessionsPinned: deps.sessionOps.setSessionsPinned,
+    };
+    registerPinSessionsTool(registry, pinDeps);
+    registerUnpinSessionsTool(registry, pinDeps);
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。
