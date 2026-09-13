@@ -1,6 +1,6 @@
 import { resolveConversationSessionHeaders, withChatBridgeUserAgent, overrideHeadersCaseInsensitive } from '@cindy/responses-chat-bridge';
 import { providerModelRecord } from '@cindy/model-providers';
-import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
+import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { peekGrokAccessToken } from './grok-oauth-login.js';
@@ -1132,7 +1132,7 @@ function createChatBridgeDecision(
         const nativeFetch = createPiProviderFetch({ row: standard, providerId,
           // Keep the catalog adapter while honoring the host assigned to this account.
           upstream: buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream,
-          apiKey: Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1].replace(/^Bearer\s+/i, '') ?? Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-api-key')?.[1] ?? 'cindy-local-provider',
+          apiKey: nativeBridgeApiKey(headers),
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {
             const response = await outboundFetch(url, init);

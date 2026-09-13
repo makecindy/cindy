@@ -1770,7 +1770,7 @@ export async function resolvePiNativeProviders(ctx: {
     (id, reason) => log.warn('resolvePiNativeProviders: skipped custom provider', { id, reason }),
     bundledModels ?? undefined,
     getActiveCatalog(),
-    compatProxyReady ? getClaudeEndpoint() : undefined,
+    !isRemote && compatProxyReady ? getClaudeEndpoint() : undefined,
   );
   // Remote PI cannot use the local native overlay. Preserve upstream's exact
   // SuperGrok provenance/forwarding path there; locally the version-matched PI

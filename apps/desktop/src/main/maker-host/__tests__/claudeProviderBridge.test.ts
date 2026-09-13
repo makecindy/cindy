@@ -2,9 +2,16 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
+import { PROVIDER_MODEL_CATALOG } from '@cindy/model-providers';
 import { claudeProviderReasoningNamespace, createClaudeProviderBridge } from '../claude-provider-bridge.js';
 
-async function runBridge(protocol: 'openai-chat' | 'openai-responses', stream: boolean, upstream: string, onRequest: (url: string, init?: RequestInit) => void) {
+async function runBridge(
+  protocol: 'openai-chat' | 'openai-responses',
+  stream: boolean,
+  upstream: string,
+  onRequest: (url: string, init?: RequestInit) => void,
+  extras: Partial<Parameters<typeof createClaudeProviderBridge>[0]> = {},
+) {
   const handler = createClaudeProviderBridge({
     url: `https://supplier.example/v1/${protocol === 'openai-chat' ? 'chat/completions' : 'responses'}`,
     protocol, headers: { authorization: 'Bearer fixture-supplier-key', 'x-api-key': 'fixture-supplier-key' },
@@ -13,6 +20,7 @@ async function runBridge(protocol: 'openai-chat' | 'openai-responses', stream: b
       onRequest(String(url), init);
       return new Response(upstream, { headers: { 'content-type': 'text/event-stream' } });
     },
+    ...extras,
   });
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
@@ -55,6 +63,21 @@ describe('Claude Code custom provider translation', () => {
     expect(result.status).toBe(200);
     if (stream) { expect(result.body).toContain('message_stop'); expect(result.body).toContain('Hello'); }
     else expect(JSON.parse(result.body)).toMatchObject({ type: 'message', content: [{ type: 'text', text: 'Hello' }] });
+  });
+
+  it('keeps Cloudflare header-only credentials on the native Claude bridge', async () => {
+    const original = PROVIDER_MODEL_CATALOG.providers['cloudflare-ai-gateway'].find(row => row.execution.pi.api === 'openai-completions')!;
+    const row = { ...original, upstream: original.upstream.replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account').replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway') };
+    let sent: Headers | undefined;
+    const result = await runBridge('openai-chat', true, chatStream, (url, init) => {
+      sent = new Headers(init?.headers as HeadersInit);
+    }, {
+      headers: { 'cf-aig-authorization': 'Bearer header-only-key' },
+      model: row,
+    });
+    expect(result.status).toBe(200);
+    expect(sent?.get('cf-aig-authorization')).toBe('Bearer header-only-key');
+    expect(sent?.get('authorization')).toBeNull();
   });
 
   it('keeps encrypted reasoning state private to a connection, not a shared URL', () => {

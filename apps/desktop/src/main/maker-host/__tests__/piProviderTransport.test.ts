@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
-import { createPiProviderFetch, invocationModelRecord, NATIVE_ADAPTER_ERROR_BODY_LIMIT, readBoundedResponseText } from '../pi-provider-transport.js';
+import { createPiProviderFetch, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, readBoundedResponseText } from '../pi-provider-transport.js';
 
 const reply = [
   { id: 'fixture-reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: 'Hello' } }] },
@@ -87,6 +87,11 @@ it('uses Cloudflare gateway authentication without forwarding its token as an up
   expect(sent?.get('cf-aig-authorization')).toBe('Bearer fixture-gateway-key');
   expect(sent?.get('authorization')).toBeNull();
   expect(sent?.get('x-api-key')).toBeNull();
+});
+
+it('does not invent a fake API key for header-only native bridges', () => {
+  expect(nativeBridgeApiKey({ 'cf-aig-authorization': 'Bearer header-only-key' })).toBe('');
+  expect(nativeBridgeApiKey({ authorization: 'Bearer real-key' })).toBe('real-key');
 });
 
 it('does not let Bedrock execution inherit Desktop IAM against an unrelated host', async () => {

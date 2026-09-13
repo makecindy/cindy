@@ -1,7 +1,7 @@
 import { normalizeProviderRequest } from '@cindy/model-compat';
 import { createHash } from 'node:crypto';
 import type { ProviderModelRecord } from '@cindy/model-providers';
-import { createPiProviderFetch } from './pi-provider-transport.js';
+import { createPiProviderFetch, nativeBridgeApiKey } from './pi-provider-transport.js';
 import { createResponsesHandler, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 import { ChatSseTranslator, translateResponsesRequestWithContext, type ChatBridgeCapabilities, type ResponsesRequest } from '@cindy/responses-chat-bridge';
 
@@ -26,7 +26,7 @@ export function createClaudeProviderBridge(options: {
   const nativeFetch = options.model ? createPiProviderFetch({ row: options.model,
     providerId: options.providerId ?? 'custom',
     upstream: options.nativeUpstream,
-    apiKey: Object.entries(options.headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1].replace(/^Bearer\s+/i, '') ?? Object.entries(options.headers).find(([name]) => name.toLowerCase() === 'x-api-key')?.[1] ?? 'cindy-local-provider',
+    apiKey: nativeBridgeApiKey(options.headers),
     headers: Object.fromEntries(Object.entries(options.headers).filter(([name]) =>
       !['authorization', 'x-api-key', 'anthropic-version', 'anthropic-beta'].includes(name.toLowerCase()))),
     fetchImpl: options.fetchImpl,

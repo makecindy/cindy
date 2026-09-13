@@ -132,6 +132,12 @@ function assertHostCredentialEndpoint(api: string, destination: string, apiKey?:
   throw new Error('Native provider request requires an approved cloud endpoint');
 }
 
+export function nativeBridgeApiKey(headers: Readonly<Record<string, string>>): string {
+  const authorization = Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1];
+  if (authorization) return authorization.replace(/^Bearer\s+/i, '');
+  return Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-api-key')?.[1] ?? '';
+}
+
 function cloudflareGatewayHeaders(
   apiKey: string | undefined,
   headers: Record<string, string> | undefined,
