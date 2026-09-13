@@ -1116,6 +1116,49 @@ it.each(['finish', 'back', 'close'] as const)('logs in without a key and handles
   expect(vi.mocked(deleteCustomProvider).mock.calls.length).toBe(deletedBefore);
 });
 
+it('does not discard the OAuth connection if the wizard closes while finish is saving', async () => {
+  const preset = { id: 'openrouter', name: 'OpenRouter', runtimes: {
+    pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat' as const,
+      models: [{ id: 'test/model', name: 'Test model', defaultEnabled: true, api: 'openai-completions' as const }] },
+  } };
+  const maker = window.electronAPI.maker;
+  vi.mocked(maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+  let created!: Parameters<typeof createCustomProvider>[0];
+  vi.mocked(createCustomProvider).mockImplementation(async config => { created = config; return { ok: true }; });
+  let finishSaving!: (value: { ok: true }) => void;
+  vi.mocked(updateCustomProvider).mockImplementation(() => new Promise(resolve => { finishSaving = resolve; }));
+  Object.assign(maker, {
+    providerOAuthLogin: vi.fn(async () => ({ ok: true })),
+    providerOAuthCancel: vi.fn(async () => ({ ok: true })),
+    onProviderOAuthProgress: vi.fn(() => () => undefined),
+    listProviders: vi.fn(async () => ({ providers: [{ ...buildUserProvider(created), connected: true }] })),
+  });
+  const onClose = vi.fn();
+  const onDone = vi.fn();
+  const view = render(
+    React.createElement(AddProviderWizard, {
+      providers: [anthropicProvider],
+      entry: { kind: 'preset' as const, presetId: 'openrouter' },
+      onOpenCustomForm: vi.fn(),
+      onClose,
+      onDone,
+    }),
+  );
+  fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
+  await screen.findByText('Test model');
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
+  await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
+  fireEvent.keyDown(window, { key: 'Escape' });
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.cancel' }));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(deleteCustomProvider).not.toHaveBeenCalled();
+  view.unmount();
+  expect(deleteCustomProvider).not.toHaveBeenCalled();
+  finishSaving({ ok: true });
+  await waitFor(() => expect(onDone).toHaveBeenCalledWith(created.id));
+  expect(deleteCustomProvider).not.toHaveBeenCalled();
+});
+
 it('preserves OAuth-discovered prices for every engine when finishing model selection', async () => {
   const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!);
   const id = 'new-vendor/oauth-discovered-model';

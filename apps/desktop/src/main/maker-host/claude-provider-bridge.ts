@@ -5,6 +5,12 @@ import { createPiProviderFetch } from './pi-provider-transport.js';
 import { createResponsesHandler, type ResponsesBridgeHandler } from '@cindy/anthropic-responses-bridge';
 import { ChatSseTranslator, translateResponsesRequestWithContext, type ChatBridgeCapabilities, type ResponsesRequest } from '@cindy/responses-chat-bridge';
 
+/** Reasoning blobs are private to a connection, not to a shared upstream URL. */
+export function claudeProviderReasoningNamespace(url: string, providerId?: string): string {
+  const material = providerId ? `${providerId}\0${url}` : url;
+  return `cindy-provider-${createHash('sha256').update(material).digest('hex')}/`;
+}
+
 /** Reuse the two existing translators without opening another server or forwarding client credentials. */
 export function createClaudeProviderBridge(options: {
   url: string;
@@ -87,7 +93,7 @@ export function createClaudeProviderBridge(options: {
   };
   return createResponsesHandler({
     providers: [{
-      prefix: '', reasoningNamespace: `cindy-provider-${createHash('sha256').update(options.url).digest('hex')}/`, upstreamBase: options.url, wireProtocol: 'openai-responses',
+      prefix: '', reasoningNamespace: claudeProviderReasoningNamespace(options.url, options.providerId), upstreamBase: options.url, wireProtocol: 'openai-responses',
       buildHeaders: async () => Object.fromEntries(Object.entries(options.headers).filter(([name]) =>
         !['x-api-key', 'anthropic-version', 'anthropic-beta'].includes(name.toLowerCase()))),
       preserveReasoningState: !!options.model,

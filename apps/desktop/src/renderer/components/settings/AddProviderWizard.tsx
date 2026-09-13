@@ -372,6 +372,7 @@ export function AddProviderWizard({
   const [apiKey, setApiKey] = useState('');
   const [presetBaseUrls, setPresetBaseUrls] = useState<PresetBaseUrls>({});
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
   const oauthDraftRef = useRef<CustomProviderConfig | null>(null);
   const oauthAttemptRef = useRef(0);
   const [ollamaCanInstall, setOllamaCanInstall] = useState(() =>
@@ -608,6 +609,7 @@ export function AddProviderWizard({
 
   useEffect(() => () => {
     oauthAttemptRef.current += 1;
+    if (savingRef.current) return;
     const draft = oauthDraftRef.current;
     oauthDraftRef.current = null;
     if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
@@ -895,8 +897,9 @@ export function AddProviderWizard({
     setLoggingIn(false);
   }, [sel, clearGenericDeviceCode, cancelGenericOwnedLogin]);
 
-  /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。 */
+  /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。保存中不能关，避免删掉正在落盘的 OAuth 连接。 */
   const handleClose = useCallback(() => {
+    if (savingRef.current) return;
     if (loggingIn) cancelAuthorize();
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
@@ -1276,10 +1279,13 @@ export function AddProviderWizard({
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
     }
+    const oauthDraft = oauthDraftRef.current;
+    oauthDraftRef.current = null;
+    savingRef.current = true;
     setSaving(true);
     try {
       const existing = new Set(providers.map((p) => p.id));
-      const id = oauthDraftRef.current?.id ?? (
+      const id = oauthDraft?.id ?? (
         preset.id === 'lmstudio'
           ? MANAGED_LMSTUDIO_PROVIDER_ID
           : uniqueCustomProviderId(
@@ -1334,11 +1340,12 @@ export function AddProviderWizard({
       }
       if (Object.keys(runtimes).length === 0) {
         toast.error(t('settings.providers.wizard.noModelSelected'));
+        if (oauthDraft) oauthDraftRef.current = oauthDraft;
         return;
       }
-      await (oauthDraftRef.current ? updateCustomProvider : createCustomProvider)(
+      await (oauthDraft ? updateCustomProvider : createCustomProvider)(
         {
-          ...(oauthDraftRef.current ?? {}),
+          ...(oauthDraft ?? {}),
           id,
           name: name.trim() || presetDisplayName(preset, i18n.language),
           ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
@@ -1346,7 +1353,6 @@ export function AddProviderWizard({
         },
         keys,
       );
-      oauthDraftRef.current = null;
       toast.success(
         t('settings.providers.wizard.createdToast', {
           name: name.trim() || presetDisplayName(preset, i18n.language),
@@ -1354,8 +1360,10 @@ export function AddProviderWizard({
       );
       onDone(id);
     } catch {
+      if (oauthDraft) oauthDraftRef.current = oauthDraft;
       toast.error(t('settings.providers.wizard.createFailed'));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language]);
@@ -2133,6 +2141,7 @@ export function AddProviderWizard({
           <button
             type="button"
             onClick={() => {
+              if (savingRef.current) return;
               if (step === 3) {
                 if (oauthDraftRef.current && sel?.kind === 'preset') {
                   pickPreset(presets.find(p => p.id === sel.preset.id) ?? sel.preset);
@@ -2162,7 +2171,8 @@ export function AddProviderWizard({
             <button
               type="button"
               onClick={handleClose}
-              className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+              disabled={saving}
+              className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               style={{
                 borderColor: 'var(--settings-btn-secondary-border)',
                 color: 'var(--text-primary)',

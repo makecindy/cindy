@@ -2,7 +2,7 @@ import { createServer } from 'node:http';
 import { once } from 'node:events';
 import type { AddressInfo } from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { createClaudeProviderBridge } from '../claude-provider-bridge.js';
+import { claudeProviderReasoningNamespace, createClaudeProviderBridge } from '../claude-provider-bridge.js';
 
 async function runBridge(protocol: 'openai-chat' | 'openai-responses', stream: boolean, upstream: string, onRequest: (url: string, init?: RequestInit) => void) {
   const handler = createClaudeProviderBridge({
@@ -55,5 +55,13 @@ describe('Claude Code custom provider translation', () => {
     expect(result.status).toBe(200);
     if (stream) { expect(result.body).toContain('message_stop'); expect(result.body).toContain('Hello'); }
     else expect(JSON.parse(result.body)).toMatchObject({ type: 'message', content: [{ type: 'text', text: 'Hello' }] });
+  });
+
+  it('keeps encrypted reasoning state private to a connection, not a shared URL', () => {
+    const url = 'https://openrouter.ai/api/v1/chat/completions';
+    expect(claudeProviderReasoningNamespace(url, 'custom:openrouter-a'))
+      .not.toBe(claudeProviderReasoningNamespace(url, 'custom:openrouter-b'));
+    expect(claudeProviderReasoningNamespace(url, 'custom:openrouter-a'))
+      .not.toBe(claudeProviderReasoningNamespace(url));
   });
 });
