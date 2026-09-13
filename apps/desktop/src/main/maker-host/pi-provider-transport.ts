@@ -3,6 +3,14 @@ import { once } from 'node:events';
 import type { ServerResponse } from 'node:http';
 import { ChatSseTranslator, translateResponsesRequestWithContext, type ResponsesRequest } from '@cindy/responses-chat-bridge';
 import type { Api, Model, Context, AssistantMessage, TextContent, ImageContent, ThinkingLevel, ProviderStreams } from '@earendil-works/pi-ai';
+import * as openaiCompletions from '@earendil-works/pi-ai/api/openai-completions';
+import * as openaiResponses from '@earendil-works/pi-ai/api/openai-responses';
+import * as anthropicMessages from '@earendil-works/pi-ai/api/anthropic-messages';
+import * as googleGenerativeAi from '@earendil-works/pi-ai/api/google-generative-ai';
+import * as googleVertex from '@earendil-works/pi-ai/api/google-vertex';
+import * as azureOpenaiResponses from '@earendil-works/pi-ai/api/azure-openai-responses';
+import * as bedrockConverseStream from '@earendil-works/pi-ai/api/bedrock-converse-stream';
+import * as mistralConversations from '@earendil-works/pi-ai/api/mistral-conversations';
 import { PI_REASONING_EFFORTS, providerModelRecord, providerModelAdapterId, providerPresetModelRecord, type CatalogModel, type ProviderModelRecord, type PiModelApi } from '@cindy/model-providers';
 
 export function invocationModelRecord(model: CatalogModel, upstream: string, api?: PiModelApi): ProviderModelRecord | undefined {
@@ -23,15 +31,15 @@ export function invocationModelRecord(model: CatalogModel, upstream: string, api
   };
 }
 
-const adapters: Record<string, () => Promise<ProviderStreams>> = {
-  'openai-completions': () => import('@earendil-works/pi-ai/api/openai-completions'),
-  'openai-responses': () => import('@earendil-works/pi-ai/api/openai-responses'),
-  'anthropic-messages': () => import('@earendil-works/pi-ai/api/anthropic-messages'),
-  'google-generative-ai': () => import('@earendil-works/pi-ai/api/google-generative-ai'),
-  'google-vertex': () => import('@earendil-works/pi-ai/api/google-vertex'),
-  'azure-openai-responses': () => import('@earendil-works/pi-ai/api/azure-openai-responses'),
-  'bedrock-converse-stream': () => import('@earendil-works/pi-ai/api/bedrock-converse-stream'),
-  'mistral-conversations': () => import('@earendil-works/pi-ai/api/mistral-conversations'),
+const adapters: Record<string, ProviderStreams> = {
+  'openai-completions': openaiCompletions,
+  'openai-responses': openaiResponses,
+  'anthropic-messages': anthropicMessages,
+  'google-generative-ai': googleGenerativeAi,
+  'google-vertex': googleVertex,
+  'azure-openai-responses': azureOpenaiResponses,
+  'bedrock-converse-stream': bedrockConverseStream,
+  'mistral-conversations': mistralConversations,
 };
 const zeroUsage = () => ({ input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } });
@@ -101,7 +109,8 @@ function nativeInvocationModel(options: PiProviderTransportOptions, modelId: str
 /** Use the same SDK, model identity and destination as chat, with a bounded probe. */
 export async function probePiProvider(options: PiProviderTransportOptions, signal: AbortSignal): Promise<AssistantMessage> {
   const model = nativeInvocationModel(options, options.row.id);
-  const adapter = await adapters[model.api]();
+  const adapter = adapters[model.api];
+  if (!adapter) throw new Error('Native API is not supported by the bundled Pi adapter');
   const cloudflare = model.provider === 'cloudflare-ai-gateway';
   return adapter.streamSimple(model, { messages: [{ role: 'user', content: 'ping', timestamp: 0 }] }, {
     apiKey: cloudflare ? undefined : options.apiKey,
@@ -156,9 +165,8 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
     }
     context.tools = converted.request.tools?.map(tool => ({ name: tool.function.name,
       description: tool.function.description ?? '', parameters: tool.function.parameters as never }));
-    const load = adapters[model.api];
-    if (!load) throw new Error('Native API is not supported by the bundled Pi adapter');
-    const adapter = await load();
+    const adapter = adapters[model.api];
+    if (!adapter) throw new Error('Native API is not supported by the bundled Pi adapter');
     const abort = new AbortController();
     const signal = init?.signal ? AbortSignal.any([init.signal, abort.signal]) : abort.signal;
     const cloudflareGateway = model.provider === 'cloudflare-ai-gateway';

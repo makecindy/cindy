@@ -1755,7 +1755,6 @@ export function ProviderConnectionDialog({
         !flowUrl ||
         !tokenUrl ||
         !clientId ||
-        !scopes ||
         !httpsOk(flowUrl) ||
         !httpsOk(tokenUrl)
       ) {
@@ -1766,9 +1765,7 @@ export function ProviderConnectionDialog({
               : 'authorizeUrl'
             : !tokenUrl || !httpsOk(tokenUrl)
               ? 'tokenUrl'
-              : !clientId
-                ? 'clientId'
-                : 'scopes';
+              : 'clientId';
         reportFieldError(`oauth:${invalid}`, t('settings.providers.custom.errors.oauthInvalid'));
         return;
       }

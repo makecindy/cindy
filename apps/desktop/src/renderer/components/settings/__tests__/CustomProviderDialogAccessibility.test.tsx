@@ -1564,3 +1564,21 @@ it('keeps a template connection editable without offering protocol or path switc
   await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
   expect(JSON.stringify(customProviderMocks.updateCustomProvider.mock.calls[0])).toContain('https://second.example.test/v1');
 });
+
+it('saves OpenRouter OAuth connections that leave scopes empty for provider defaults', async () => {
+  const { providerPresetOAuth } = await import('@cindy/model-providers');
+  const oauth = providerPresetOAuth('openrouter')!;
+  expect(oauth.scopes).toBe('');
+  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+  render(<ProviderConnectionDialog initial={{
+    id: 'openrouter-account', name: 'OpenRouter',
+    auth: { method: 'oauth', oauth },
+    runtimes: { pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat',
+      models: [{ id: 'vendor/model', name: 'Model' }] } },
+  }} onSaved={vi.fn()} onClose={vi.fn()} />);
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
+  expect(customProviderMocks.updateCustomProvider.mock.calls[0][0].auth).toMatchObject({
+    method: 'oauth', oauth: { scopes: '' },
+  });
+});
