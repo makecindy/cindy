@@ -72,7 +72,7 @@ import {
   shouldReplaceListWithSearchResults,
 } from '@/session/conversationSearch';
 import { useConversationSearch } from '@/session/useConversationSearch';
-import { excludeOrcaWorkerSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
+import { selectVisibleDeviceSessions, sessionMatchesProjectDir } from '@/session/mobileHome';
 import { HomeSessionRow } from './index';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
 import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
@@ -178,12 +178,11 @@ function DeviceDetailScreenContent() {
   // 重渲染风暴)。store 层已保证 allSessions 引用在内容未变时稳定,这里不能亲手打破。
   // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
   // 与首页卡片口径对齐:首页已 exclude worker,「查看全部 N 条」不能再把它们露出来。
-  const sessions = useMemo(() => excludeOrcaWorkerSessions(allSessions).filter((s) =>
-    // 用展示用 canonicalDeviceId(设备归并结果)匹配,与首页项目卡一致 —— 被认领的 stale 会话也能显示,
-    // 数量与卡片相符。deviceLinkDeviceId 仍是物理路由 key(openSession / patch 用它),不参与此处判断。
-    (s.canonicalDeviceId ?? s.deviceLinkDeviceId) === deviceId
-    && (!projectWorkingDir || sessionMatchesProjectDir(s.workingDir, projectWorkingDir))),
-  [allSessions, deviceId, projectWorkingDir]);
+  // 用展示用 canonicalDeviceId(设备归并结果)匹配 —— 被认领的 stale 会话也能显示,数量与卡片相符。
+  const sessions = useMemo(
+    () => selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir),
+    [allSessions, deviceId, projectWorkingDir],
+  );
   const messageVersion = useRemoteMessageVersion();
   const storeVersion = useRemoteSessionStoreVersion();
   const [statusFilter, setStatusFilter] = useState<RemoteSessionStatusFilter>(

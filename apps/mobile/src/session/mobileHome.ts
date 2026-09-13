@@ -4,6 +4,7 @@ import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 import { localizeRemoteSessionListItem } from '@/session/sessionList';
 import {
   buildMobileHomePresentation as buildMobileHomePresentationShared,
+  sessionMatchesProjectDir,
   type MobileHomeSessionLike,
   type MobileHomeNoDeviceContext,
   type MobileHomeOptions,
@@ -98,4 +99,20 @@ export function excludeOrcaWorkerSessions<T extends Pick<RemoteSession, 'orcaRol
   sessions: readonly T[],
 ): T[] {
   return sessions.filter((session) => session.orcaRole !== 'worker');
+}
+
+/**
+ * 设备/项目「查看全部」列表的会话派生:先丢掉 Orca worker,再按规范设备 id 与项目目录收口。
+ * 结果必须直接喂给该页的 sections / 计数,不能只在别处调用 helper。
+ */
+export function selectVisibleDeviceSessions<
+  T extends Pick<RemoteSession, 'orcaRole' | 'canonicalDeviceId' | 'deviceLinkDeviceId' | 'workingDir'>,
+>(
+  sessions: readonly T[],
+  deviceId: string,
+  projectWorkingDir?: string | null,
+): T[] {
+  return excludeOrcaWorkerSessions(sessions).filter((session) =>
+    (session.canonicalDeviceId ?? session.deviceLinkDeviceId) === deviceId
+    && (!projectWorkingDir || sessionMatchesProjectDir(session.workingDir, projectWorkingDir)));
 }

@@ -7,7 +7,7 @@ import {
   classifyOrcaDispatchTool,
   parseOrcaWorkerReport,
 } from '@/session/orcaCollab';
-import { excludeOrcaWorkerSessions } from '@/session/mobileHome';
+import { excludeOrcaWorkerSessions, selectVisibleDeviceSessions } from '@/session/mobileHome';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
 import type { RemoteMessage, RemoteSession } from '@/session/types';
 
@@ -212,8 +212,57 @@ describe('excludeOrcaWorkerSessions', () => {
     const detail = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
     const drawer = readFileSync(resolve(process.cwd(), 'src/session/SessionListDrawer.tsx'), 'utf8');
     expect(home).toContain('excludeOrcaWorkerSessions(sessions)');
-    expect(detail).toContain('excludeOrcaWorkerSessions(allSessions)');
     expect(drawer).toContain('excludeOrcaWorkerSessions(sessions)');
+    expect(detail).toContain('selectVisibleDeviceSessions(allSessions, deviceId, projectWorkingDir)');
+    expect(detail).toContain('buildRemoteSessionSections(sessions,');
+  });
+});
+
+describe('selectVisibleDeviceSessions', () => {
+  it('drops workers and keeps lead/normal rows in the same device and project', () => {
+    const rows = selectVisibleDeviceSessions([
+      session({
+        id: 'lead',
+        orcaRole: 'lead',
+        deviceLinkDeviceId: 'dev-a',
+        workingDir: '/repo/cindy',
+      }),
+      session({
+        id: 'worker',
+        orcaRole: 'worker',
+        deviceLinkDeviceId: 'dev-a',
+        workingDir: '/repo/cindy',
+      }),
+      session({
+        id: 'other-device',
+        orcaRole: null,
+        deviceLinkDeviceId: 'dev-b',
+        workingDir: '/repo/cindy',
+      }),
+      session({
+        id: 'other-project',
+        orcaRole: null,
+        deviceLinkDeviceId: 'dev-a',
+        workingDir: '/repo/infra',
+      }),
+      session({
+        id: 'canonical-match',
+        orcaRole: null,
+        canonicalDeviceId: 'dev-a',
+        deviceLinkDeviceId: 'stale-id',
+        workingDir: '/repo/cindy',
+      }),
+    ], 'dev-a', '/repo/cindy');
+    expect(rows.map((item) => item.id)).toEqual(['lead', 'canonical-match']);
+  });
+
+  it('keeps all non-worker rows for a device when no project dir is set', () => {
+    const rows = selectVisibleDeviceSessions([
+      session({ id: 'keep', orcaRole: null, deviceLinkDeviceId: 'dev-a', workingDir: '/repo/one' }),
+      session({ id: 'worker', orcaRole: 'worker', deviceLinkDeviceId: 'dev-a', workingDir: '/repo/one' }),
+      session({ id: 'other', orcaRole: 'lead', deviceLinkDeviceId: 'dev-b', workingDir: '/repo/one' }),
+    ], 'dev-a');
+    expect(rows.map((item) => item.id)).toEqual(['keep']);
   });
 });
 
