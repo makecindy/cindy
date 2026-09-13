@@ -60,6 +60,7 @@ export interface ContextSheetGoalViewProps {
   onSetGoal: (input: { objective: string; limits?: MobileGoalLimitsInput }) => void;
   onPauseGoal: () => void;
   onResumeGoal: () => void;
+  resumeDisabled?: boolean;
   onClearGoal: () => void;
   /** 打开表单时的默认目标内容(对齐桌面 NewGoalDialog:composer 里已有的文字带入)。 */
   initialObjective?: string;
@@ -79,6 +80,7 @@ export function ContextSheetGoalView({
   onSetGoal,
   onPauseGoal,
   onResumeGoal,
+  resumeDisabled = false,
   onClearGoal,
   initialObjective,
   initial,
@@ -92,6 +94,7 @@ export function ContextSheetGoalView({
       onClearGoal={onClearGoal}
       onPauseGoal={onPauseGoal}
       onResumeGoal={onResumeGoal}
+      resumeDisabled={resumeDisabled}
       testID={testID}
     />
   ) : (
@@ -238,6 +241,7 @@ function GoalStatusView({
   onClearGoal,
   onPauseGoal,
   onResumeGoal,
+  resumeDisabled = false,
   testID,
 }: {
   busy: boolean;
@@ -246,6 +250,7 @@ function GoalStatusView({
   onClearGoal: () => void;
   onPauseGoal: () => void;
   onResumeGoal: () => void;
+  resumeDisabled?: boolean;
   testID?: string;
 }) {
   const styles = useThemedStyles(makeGoalStyles);
@@ -278,7 +283,7 @@ function GoalStatusView({
           <GoalActionButton busy={busy} label={t('interaction.contextSheet.pause')} onPress={onPauseGoal} testID="contextSheet.goalPauseButton" />
         ) : null}
         {canResume ? (
-          <GoalActionButton busy={busy} label={t('interaction.contextSheet.resume')} onPress={onResumeGoal} testID="contextSheet.goalResumeButton" />
+          <GoalActionButton busy={busy} disabled={resumeDisabled} label={t('interaction.contextSheet.resume')} onPress={onResumeGoal} testID="contextSheet.goalResumeButton" />
         ) : null}
         <GoalActionButton
           busy={busy}
@@ -294,12 +299,14 @@ function GoalStatusView({
 
 function GoalActionButton({
   busy,
+  disabled = false,
   label,
   onPress,
   testID,
   textColor,
 }: {
   busy: boolean;
+  disabled?: boolean;
   label: string;
   onPress: () => void;
   testID?: string;
@@ -310,10 +317,10 @@ function GoalActionButton({
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
-      accessibilityState={{ disabled: busy }}
-      disabled={busy}
+      accessibilityState={{ disabled: busy || disabled }}
+      disabled={busy || disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.actionButton, pressed && styles.pressed, busy && styles.ctaButtonDisabled]}
+      style={({ pressed }) => [styles.actionButton, pressed && styles.pressed, (busy || disabled) && styles.ctaButtonDisabled]}
       testID={testID}
     >
       <Text style={[styles.actionButtonText, textColor ? { color: textColor } : null]}>{label}</Text>
