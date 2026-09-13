@@ -13,7 +13,6 @@ import type { DirEntry } from '../../hooks/useFileTree';
 import { flattenTree } from '../treeRows';
 import {
   _resetTreeScrollAnchorsForTests,
-  clearTreeScrollAnchor,
   computeTreeRestoreScrollTop,
   computeTreeScrollAnchor,
   loadTreeScrollAnchor,
@@ -53,13 +52,11 @@ describe('treeScrollStore', () => {
     _resetTreeScrollAnchorsForTests();
   });
 
-  it('save / load / clear 在同一 scope 内往返', () => {
+  it('save / load 在同一 scope 内往返', () => {
     const scope = makeTreeScrollScope('tab-1', '/repo::reveal');
     saveTreeScrollAnchor(scope, { rowKey: 'src/x.ts', offset: 7 });
 
     expect(loadTreeScrollAnchor(scope)).toEqual({ rowKey: 'src/x.ts', offset: 7 });
-    clearTreeScrollAnchor(scope);
-    expect(loadTreeScrollAnchor(scope)).toBeNull();
   });
 
   it('不同视口 / 不同 store 互不污染', () => {

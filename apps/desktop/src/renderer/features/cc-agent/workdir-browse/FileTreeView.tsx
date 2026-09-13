@@ -13,9 +13,14 @@
  * 虚拟滚动：树是「扁平行数组 + 固定行高」，node_modules 展开后单棵树上千行。
  * 全量渲染时每行（图标 + i18n wrapper + DOM 创建）实测约 0.25ms，展开一次阻塞
  * 主线程 ~350ms；@tanstack/react-virtual 只渲染视口内的行（+ overscan），行数
- * 不再与渲染成本挂钩。隐藏数组（RSB 非激活 tab 是 display:none）的视口高度为 0，
- * 虚拟器自然产出 0 行 —— 不需要额外的 active prop 做渲染门控（active 仍用于
- * 滚动位置的恢复时机，见下）。
+ * 不再与渲染成本挂钩。
+ *
+ * 非激活 tab（RSB keep-alive 的 display:none 子树）的实际行为分两种，行数都有界：
+ *   - 首挂载即隐藏（视口从未测量）：虚拟器拿到 initialRect {0,0} → 产出 0 行；
+ *   - 可见过再隐藏：virtual-core 的 cleanup() 只断开 observer，不清 scrollRect，
+ *     会保留最后一个视口的行（约 视口高/29 + overscan ≈ 25–50 行），不会回退到全量渲染。
+ * 所以被删掉的旧 active prop 门控（隐藏 tab 不产出任何行 DOM）已不再保证；active
+ * 现在只用于滚动位置的恢复时机（见下）。边界测试见 __tests__/FileTreeView.scroll.test.tsx。
  *
  * 滚动位置：顶部行 + 行内偏移作为锚点存在 treeScrollStore，绑定关系是
  * 「视口身份（scrollScope）+ store key（隐藏态 / 放行态）」。切 tab、切
@@ -127,8 +132,9 @@ export interface FileTreeViewProps {
   scrollScope: string;
   /**
    * 宿主是否处于激活状态（RSB 多标签 keep-alive）。仅影响**滚动位置的恢复时机**：
-   * 非激活 → 激活时重新对齐到锚点。不影响渲染 —— 隐藏视口高度为 0，虚拟器本来
-   * 就不渲染行（见 useTreeScrollRestore）。默认真（doc 侧栏等单宿主场景）。
+   * 非激活 → 激活时重新对齐到锚点。不承担行渲染门控：首挂载即隐藏的 tab 产 0 行，
+   * 可见过再隐藏的 tab 保留最后一个视口的行（≤ 视口高/29 + overscan，见文件头注释）。
+   * 默认真（doc 侧栏等单宿主场景）。
    */
   active?: boolean;
   /** Currently selected file relPath (from URL). Used to draw highlight. */

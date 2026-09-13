@@ -93,7 +93,7 @@ export function useTreeScrollRestore(
     if (pendingRestoreRef.current && active) tryRestore();
   }, [active, rows, scope, tryRestore]);
 
-  // 容器尺寸恢复：隐藏 tab / 隐藏视图切回时恢复视口位置。
+  // 容器尺寸恢复（补充路径）：隐藏 tab / 隐藏视图切回时恢复视口位置。
   //
   // 不跟踪 0 → 非 0 的跳变：浏览器对 display:none 是否派发 RO 回调并不一致，
   // 漏一次 0 就会丢掉后续的恢复机会。每次回调（可见时）都调 tryRestore —— 用户
@@ -108,6 +108,19 @@ export function useTreeScrollRestore(
     observer.observe(el);
     return () => observer.disconnect();
   }, [containerRef, tryRestore]);
+
+  // 用户对行的操作（点击展开 / 选中、拖滚动条）也算接管：sticky 锚点只在数据
+  // 分批到达期间需要；一旦交互就交还控制权 —— 否则首次滚动前点击展开锚点行上方
+  // 的目录会被立刻回拉，刚展开的内容被推出视口（reviewer P3）。
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const takeover = () => {
+      pendingRestoreRef.current = false;
+    };
+    el.addEventListener('pointerdown', takeover, { passive: true });
+    return () => el.removeEventListener('pointerdown', takeover);
+  }, [containerRef]);
 
   const onScroll = useCallback(() => {
     const el = containerRef.current;

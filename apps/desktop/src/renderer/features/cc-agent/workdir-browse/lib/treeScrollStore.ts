@@ -57,10 +57,6 @@ export function loadTreeScrollAnchor(scope: string): TreeScrollAnchor | null {
   return anchors.get(scope) ?? null;
 }
 
-export function clearTreeScrollAnchor(scope: string): void {
-  anchors.delete(scope);
-}
-
 /** 测试专用：清空模块级状态。 */
 export function _resetTreeScrollAnchorsForTests(): void {
   anchors.clear();

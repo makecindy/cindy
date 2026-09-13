@@ -249,6 +249,24 @@ describe('useTreeScrollRestore', () => {
     expect(el.scrollTop).toBe(8 + 4 * 29 + 10);
   });
 
+  it('用户点击行（pointerdown）后，后续 rows 变化不再回拉锚点', () => {
+    const scope = makeTreeScrollScope('tab-1', '/repo');
+    saveTreeScrollAnchor(scope, { rowKey: 'c.ts', offset: 0 });
+
+    const { container, rerender } = render(
+      <Harness scope={scope} rows={makeRows(['a.ts', 'b.ts', 'c.ts'])} />,
+    );
+    const el = viewportOf(container);
+    expect(el.scrollTop).toBe(8 + 2 * 29);
+
+    // 用户点了一下行（展开 / 选中都是 pointerdown）：即使还没滚动，也交还控制权。
+    fireEvent.pointerDown(el);
+
+    rerender(<Harness scope={scope} rows={makeRows(['x.ts', 'y.ts', 'a.ts', 'b.ts', 'c.ts'])} />);
+    // 保持用户当前的像素位置，不被拉回锚点行（c.ts 已位移到 index 4）。
+    expect(el.scrollTop).toBe(8 + 2 * 29);
+  });
+
   it('用户滚动后，后续 rows 变化不再把视图拉回旧锚点', () => {
     const scope = makeTreeScrollScope('tab-1', '/repo');
     saveTreeScrollAnchor(scope, { rowKey: 'e.ts', offset: 0 });

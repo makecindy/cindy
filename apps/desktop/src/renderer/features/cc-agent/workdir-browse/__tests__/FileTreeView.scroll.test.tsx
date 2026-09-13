@@ -112,7 +112,7 @@ describe('FileTreeView 虚拟滚动', () => {
     ).toBe(false);
   });
 
-  it('隐藏视口（高度 0）不渲染任何行 —— 原 active prop 的性能目的由虚拟化承担', () => {
+  it('首挂载即隐藏（视口从未测量）不渲染任何行', () => {
     setTestViewportSize(0);
     const entries: DirEntry[] = Array.from({ length: 300 }, (_, i) => file(`f${i}.ts`));
     const { container } = render(
@@ -125,6 +125,36 @@ describe('FileTreeView 虚拟滚动', () => {
     );
 
     expect(viewportOf(container).querySelectorAll('[data-relpath]')).toHaveLength(0);
+  });
+
+  /**
+   * keep-alive 的另一半：可见过再隐藏的 tab，virtual-core 的 cleanup() 不清
+   * scrollRect，会保留最后一个视口的行。这是**当前实际行为**（成本有界，且顺带
+   * 让编辑行切 tab 不卸载），不是「隐藏即 0 行」——用测试锁住，避免以后有人按
+   * 错误理解改动 getScrollElement / range 逻辑。
+   */
+  it('可见过再隐藏（active 翻转）保留最后一个视口的行，且行数有界', () => {
+    setTestViewportSize(300);
+    const entries: DirEntry[] = Array.from({ length: 300 }, (_, i) => file(`f${i}.ts`));
+    const tree = makeTree({ entries: [['', entries]] });
+    const { container, rerender } = render(
+      <FileTreeView tree={tree} scrollScope="tab-a" active selectedPath={null} onSelectFile={vi.fn()} />,
+    );
+    const el = viewportOf(container);
+    expect(el.querySelectorAll('[data-relpath]').length).toBeGreaterThan(0);
+
+    rerender(
+      <FileTreeView
+        tree={tree}
+        scrollScope="tab-a"
+        active={false}
+        selectedPath={null}
+        onSelectFile={vi.fn()}
+      />,
+    );
+    const hiddenRows = el.querySelectorAll('[data-relpath]').length;
+    expect(hiddenRows).toBeGreaterThan(0); // 保留陈旧视口，不是 0
+    expect(hiddenRows).toBeLessThan(60); // 有界，不回退全量渲染
   });
 });
 
