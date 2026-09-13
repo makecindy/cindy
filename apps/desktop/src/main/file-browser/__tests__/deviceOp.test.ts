@@ -841,6 +841,18 @@ describe('file-browser device-op', () => {
       dataOwnerId: 'owner-a',
       ownerGeneration: 7,
     });
+
+    // 与忽略目录同名的**普通文件**（叶子段）不算内部：listDir 会列出它，事件也必须转发
+    // （否则它的行陈旧到手动刷新）—— 忽略名单是目录规则，只判祖先段。
+    const sameNameFile = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'dist' },
+    };
+    handler?.(sameNameFile);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, sameNameFile.data, {
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 7,
+    });
     onFsWatchReleased(sshWorkdir);
   });
 

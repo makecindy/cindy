@@ -718,9 +718,15 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
 }
 
 /** relPath 是否落在「隐藏态不可见、只有开着『显示被忽略的目录』才看得见」的
- *  目录内部。用于 device-link 转发前按自己的可见性过滤 daemon 的并集事件流。 */
+ *  目录**内部**。用于 device-link 转发前按自己的可见性过滤 daemon 的并集事件流。
+ *
+ *  只判**祖先段**：忽略名单是**目录**规则，同名普通文件（`dist` / `build` /
+ *  `.cache` 这种没有扩展名的构建脚本、配置文件）在 listDir 里是照常显示的 ——
+ *  把叶子段也判进去会让这些文件的 add/change/unlink 事件被丢掉，行陈旧到手动
+ *  刷新（评审 P1）。 */
 function isInsideRevealableIgnoreDir(relPath: string): boolean {
-  return relPath.split('/').some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment));
+  const segments = relPath.split('/');
+  return segments.slice(0, -1).some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment));
 }
 
 function scheduleFsWatchReconcile(workdir: string): void {
