@@ -39,7 +39,15 @@
       "noticeWorker": "This is an Orca Worker session from your computer. The first mobile version is read-only and does not support sending messages, changing worker focus, archiving a worker, or stopping collaboration.",
       "noticeOther": "This is a collaboration session from your computer. The first mobile version is read-only; manage collaboration on your computer.",
       "readOnlyReason": "Collaboration is read-only on the first mobile version. Handle confirmations, queue edits, and session changes on your computer.",
-      "composerReadOnlyReason": "This collaboration subtask is read-only on mobile. Send messages from your computer."
+      "composerReadOnlyReason": "This collaboration subtask is read-only on mobile. Send messages from your computer.",
+      "workerStatus": {
+        "unknown": "Unknown",
+        "running": "Running",
+        "idle": "Idle",
+        "done": "Done",
+        "error": "Error",
+        "archived": "Archived"
+      }
     },
     "composer": {
       "voice": {
