@@ -113,6 +113,8 @@ export async function moveSessions(
   deps: SessionOperationsDeps,
   params: { sessionIds: string[]; target: SessionMoveTarget },
 ): Promise<MoveSessionsResult> {
+  // 写入前复核将窗口缩到单次 updateSession 调用内；CC 转录搬迁仍在
+  // updateSessionInDb 路由锁内，Pi/Codex 则由 closeIdleSessionForMove 在锁内二次拦截。
   if (params.target.kind === 'project') {
     if (!isAbsolute(params.target.workingDir)) {
       return err('INVALID_ARGS', `working_dir 必须是绝对路径: ${params.target.workingDir}`);

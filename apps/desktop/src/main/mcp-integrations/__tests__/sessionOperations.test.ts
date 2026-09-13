@@ -84,9 +84,11 @@ describe('moveSessions', () => {
 
   it('rejects a relative working_dir before directory lookup', async () => {
     const { deps, updateSession } = makeDeps([row('a')]);
+    const isDirectory = vi.spyOn(deps, 'isDirectory');
     const res = await moveSessions(deps, { sessionIds: ['a'], target: { kind: 'project', workingDir: 'relative' } });
     expect(res).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
     expect(updateSession).not.toHaveBeenCalled();
+    expect(isDirectory).not.toHaveBeenCalled();
   });
 
   it.each<[string, Partial<SessionOpsRow>, Partial<SessionOperationsDeps>]>([
@@ -121,6 +123,16 @@ describe('moveSessions', () => {
     let checks = 0;
     const { deps, updateSession } = makeDeps([row('a'), row('b')], {
       isTurnRunning: (id) => id === 'b' && ++checks > 1,
+    });
+    const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', moved: [{ sessionId: 'a' }] });
+    expect(updateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('rechecks IM attachment before each update and preserves moved items', async () => {
+    let checks = 0;
+    const { deps, updateSession } = makeDeps([row('a'), row('b')], {
+      isImAttached: (id) => id === 'b' && ++checks > 1,
     });
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', moved: [{ sessionId: 'a' }] });
