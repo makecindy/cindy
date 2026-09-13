@@ -140,10 +140,6 @@ export function resolveEnvFlag(value: string | undefined): boolean {
   return normalized === '1' || normalized === 'true' || normalized === 'yes';
 }
 
-export const DEV_LOGIN_ENABLED = resolveEnvFlag(
-  process.env.EXPO_PUBLIC_XDT_DEV_LOGIN_ENABLED,
-);
-
 export const MOBILE_VISUAL_MOCK_ENABLED =
   __DEV__ && resolveEnvFlag(process.env.EXPO_PUBLIC_CINDY_MOBILE_VISUAL_MOCK);
 

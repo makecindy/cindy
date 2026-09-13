@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import { resolveMobileE2eProfile } from './mobile-e2e-profile.mjs';
+import { probeMetroOwnership } from './sim-metro.mjs';
 
 const scriptDir = resolve(fileURLToPath(import.meta.url), '..');
 const mobileRoot = resolve(scriptDir, '..');
 const flowRoot = resolve(mobileRoot, 'e2e', 'maestro');
 const doctorScript = resolve(scriptDir, 'native-e2e-doctor.mjs');
 const defaultAppId = 'com.xd.cindy';
+const loginScenario = 'providers:email-only';
 
 const options = parseArgs(process.argv.slice(2));
 const profile = resolveMobileE2eProfile(options.profile ?? process.env.XDT_MOBILE_E2E_PROFILE);
@@ -56,6 +58,18 @@ const resolvedFlows = flows.map((flow) =>
 for (const flow of resolvedFlows) {
   if (!existsSync(flow)) {
     throw new Error(`Maestro flow does not exist: ${flow}`);
+  }
+}
+
+const includesLogin = resolvedFlows.some((flow) => flowIncludesLogin(flow));
+if (includesLogin) {
+  const metroPort = expoUrl ? new URL(expoUrl).port || '8081' : '8081';
+  const ownership = probeMetroOwnership(Number(metroPort));
+  if (ownership?.loginScenario !== loginScenario) {
+    throw new Error([
+      `Active Metro on port ${metroPort} is not verified with EXPO_PUBLIC_LOGIN_SCENARIO=${loginScenario}.`,
+      'Start Metro through pnpm mobile:sim:start with that variable, or use local-device-link-smoke --start-expo.',
+    ].join('\n'));
   }
 }
 
@@ -209,6 +223,17 @@ function parseArgs(args) {
 
 function sanitizeTestIdSegment(value) {
   return String(value).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+function flowIncludesLogin(flow, seen = new Set()) {
+  if (seen.has(flow)) return false;
+  seen.add(flow);
+  const source = readFileSync(flow, 'utf8');
+  if (/runFlow:\s*login_mock(?:_no_clear)?\.yaml/.test(source)) return true;
+  return [...source.matchAll(/runFlow:\s*([^\s#]+\.yaml)/g)].some(([, child]) => {
+    const childPath = resolve(flowRoot, child);
+    return existsSync(childPath) && flowIncludesLogin(childPath, seen);
+  });
 }
 
 function expoUrlWithRoute(url, route) {

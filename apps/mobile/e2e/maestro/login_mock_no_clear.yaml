@@ -1,5 +1,10 @@
 appId: ${APP_ID}
 ---
+# 登录前置:驱动真实登录 UI(identifier → 验证码),不依赖任何 dev-only 入口。
+# 离线确定性来自仓内既有的登录 scenario harness:Metro 以
+# EXPO_PUBLIC_LOGIN_SCENARIO=providers:email-only 启动后,__DEV__ 下真实
+# CindyAuthClient 被注入 scenario fetch(packages/auth-client/fixtures/loginScenarios.ts),
+# providers/discovery/request-code/verify-code 全部本地应答,验证码任意 6 位即通过。
 - waitForAnimationToEnd:
     timeout: 30000
 - tapOn:
@@ -36,23 +41,41 @@ appId: ${APP_ID}
           visible:
             id: "login.screen"
           timeout: 30000
-      - tapOn:
-          id: "login.debugButton"
-          retryTapIfNoChange: true
-      - runFlow:
-          when:
-            notVisible:
-              id: "login.devLoginButton"
-          commands:
-            - tapOn:
-                text: "打开开发调试"
-                retryTapIfNoChange: true
       - extendedWaitUntil:
           visible:
-            id: "login.devLoginButton"
-          timeout: 5000
+            id: "login.identifierInput"
+          timeout: 15000
       - tapOn:
-          id: "login.devLoginButton"
+          id: "login.identifierInput"
+      - inputText: "e2e@example.com"
+      - tapOn:
+          id: "login.continueButton"
+          retryTapIfNoChange: true
+      # Email discovery is gated by the consent dialog and completes asynchronously.
+      - extendedWaitUntil:
+          visible:
+            id: "login.consentDialog"
+          timeout: 15000
+      - tapOn:
+          id: "login.consentAgree"
+          retryTapIfNoChange: true
+      - extendedWaitUntil:
+          visible:
+            id: "login.emailCodeButton"
+          timeout: 15000
+      - tapOn:
+          id: "login.emailCodeButton"
+          retryTapIfNoChange: true
+      - extendedWaitUntil:
+          visible:
+            id: "login.codeInput"
+          timeout: 15000
+      - tapOn:
+          id: "login.codeInput"
+      - inputText: "123456"
+      - tapOn:
+          id: "login.verifyButton"
+          retryTapIfNoChange: true
 - extendedWaitUntil:
     visible:
       id: "devices.screen"

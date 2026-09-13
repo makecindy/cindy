@@ -86,7 +86,10 @@ const envResult = ensureMobileEnv({ mobileDir, authRegion: region, endpointEnv: 
 console.log(formatMobileEnvStatus(envResult, worktreeRoot));
 const envChanged = envResult.created || envResult.addedKeys.length > 0;
 const envFingerprint = metroEnvironmentFingerprint({
-  env: buildEnv,
+  env: {
+    ...buildEnv,
+    EXPO_PUBLIC_LOGIN_SCENARIO: process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim() ?? '',
+  },
   files: {
     '.env': readFileSync(envResult.envPath, 'utf8'),
     'scripts/self-host-regions.json': readFileSync(localConfigResult.configPath, 'utf8'),
@@ -205,6 +208,7 @@ if (portArgs.port === DEFAULT_PORT && Number.isInteger(child.pid)) {
     launcherPid: child.pid,
     source: sourceIdentity,
     region,
+    loginScenario: process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim() ?? '',
     envFingerprint,
     worktreeRoot,
   });
