@@ -2647,6 +2647,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // incremental tree updates while user is in the browse view.
   fileBrowser: {
     listDir: (params: {
+      /** Return all ordinary entries without presentation filtering. */
+      includeIgnored?: boolean;
       /** 非空 = SSH remote 会话,操作经远端 file-service 执行(main 侧路由)。 */
       remoteHostId?: string | null;
       workdir: string;
@@ -2813,6 +2815,15 @@ contextBridge.exposeInMainWorld('electronAPI', {
      * 进度沿用 onTransferProgress,relPath 键 = 原始 absPath。失败按 code 分流:
      * OUTSIDE_WORKDIR(SSH workdir 外,明确占位)/ NOT_FOUND / FETCH_FAILED。
      */
+    previewHtml: (params: {
+      origin:
+        | { kind: 'local' }
+        | { kind: 'device'; deviceId: string }
+        | { kind: 'ssh'; remoteHostId: string };
+      workdir: string;
+      absPath: string;
+    }): Promise<{ ok: true; url: string }> =>
+      ipcRenderer.invoke('maker:html-preview:open', params),
     chatFetch: (params: {
       origin: { kind: 'device'; deviceId: string } | { kind: 'ssh'; remoteHostId: string };
       workdir: string;

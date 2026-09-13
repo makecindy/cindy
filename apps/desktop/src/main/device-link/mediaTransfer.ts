@@ -87,7 +87,7 @@ function extOf(localPath: string): string {
 }
 
 /** ext → mime,未知回落 application/octet-stream。 */
-function mimeOf(ext: string): string {
+export function mimeOf(ext: string): string {
   return MIME_BY_EXT[ext] ?? 'application/octet-stream';
 }
 
@@ -335,7 +335,9 @@ async function putBytesToOss(
         // 态,把它的 HTTP 码混进用户可见串会把人往权限方向带,而真正卡住的是后面
         // 那跳。默认栈自己被拒时是 non-retriable,状态码照样会原样抛出。
         failures.push(`${transport.name}:HTTP ${err.httpStatus}`);
-        log.warn(`OSS PUT cached fallback rejected host=${host} status=${err.httpStatus}; retrying via undici`);
+        log.warn(
+          `OSS PUT cached fallback rejected host=${host} status=${err.httpStatus}; retrying via undici`,
+        );
         continue;
       }
       // 源文件读盘失败在 fetch 消费 body 时才浮出来,形态与网络失败一样;
@@ -354,7 +356,9 @@ async function putBytesToOss(
       // 否则只要每 30 分钟内传一次文件,TTL 就永远到不了期,undici 再也不被探测。
       if (failures.length > 0) {
         rememberElectronNetPreference(host, Date.now());
-        log.info(`OSS PUT recovered via Electron net host=${host} (undici unusable: ${failures.join('; ')})`);
+        log.info(
+          `OSS PUT recovered via Electron net host=${host} (undici unusable: ${failures.join('; ')})`,
+        );
       }
     } else {
       // undici 又通了:清掉记忆,回到默认顺序。

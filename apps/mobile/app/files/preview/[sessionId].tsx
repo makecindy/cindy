@@ -9,10 +9,8 @@
  * 切换文件通过 Done 返回列表完成。
  * 文本 = readFile(acceptGzip,pako 解码)+ 行号列表;图片 = 缩略图立即显示,
  * OSS 导出原图就绪后无缝换源(不出 loading 态,规则 7);其它 = 占位 + 下载。
- * markdown 与 HTML 额外有「渲染 / 源码」双态,默认渲染:两者都只用已读到的那份文本
- * (不为渲染多走一遍 OSS 导出),载体分别是 MarkdownFileReader 与 HtmlFileReader。
- * HTML 再多一步同目录资源透传:页面引用的相对资源经 media:fetch 逐个取回后回填
- * (htmlLocalResources + useHtmlLocalResources),自包含页面零请求直接过。
+ * markdown 与 HTML 额外有「渲染 / 源码」双态,默认渲染。markdown 复用已读文本;
+ * HTML 渲染完整目录快照,源码仍走文本通道与原有大小限制。
  *
  * absPath 单文件模式(route 参 absPath,与 relPath 互斥):聊天 chip 指向
  * workdir 外文件时进入。file-browser 的 relPath 通道(listDir / readFile /
@@ -47,7 +45,7 @@ import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import type { FileBrowserReadFileResult, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { isAbsolutePathShape, pathDisplayName } from '@/session/chatPathCandidate';
-import { adaptTextFilePreviewResult, fetchRemoteAbsFileOnce, fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
+import { adaptTextFilePreviewResult, fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
 import { formatByteSize, isHtmlFilePreviewCandidate } from '@/session/filePreview';
 import { joinRemotePath } from '@/session/htmlLocalResources';
 import { decodeGzipBase64Text, mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
@@ -55,14 +53,10 @@ import { appendQuote, truncateQuoteText } from '@/session/chatQuoteStore';
 import { getCachedPreviewText, storeCachedPreviewText } from '@/session/fileBrowserCache';
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
 import type { RemoteMediaSshContext } from '@/session/fileBrowserGallery';
-import { HtmlFileReader } from '@/session/HtmlFileReader';
-import {
-  HTML_RESOURCE_LIMIT,
-  HTML_RESOURCE_MAX_BYTES,
-  htmlBaseDirOf,
-  type HtmlResourceFetchTarget,
-} from '@/session/htmlLocalResources';
-import { useHtmlLocalResources } from '@/session/useHtmlLocalResources';
+import { HtmlSnapshotReader } from '@/session/HtmlFileReader';
+import { prepareMobileHtmlPreview, type PrepareMobileHtmlPreview } from '@/session/mobileHtmlPreview';
+import { useHtmlSnapshot } from '@/session/useHtmlSnapshot';
+import { MainWindowActionButton } from '@/components/MobilePrimitives';
 import { MarkdownFileReader } from '@/session/MarkdownFileReader';
 import { RemoteMediaPlayerWebView } from '@/session/mediaPlayerWebView';
 import {
@@ -78,7 +72,7 @@ import { ImageLightbox } from '@/session/ImageLightbox';
 import { buildMediaPayload } from '@/session/messagePayload';
 import type { MobileMessageGalleryImage } from '@/session/messageGallery';
 import type { MobileRemoteMediaPresignResult } from '@/session/remoteMedia';
-import { downloadRemoteMediaAsDataUri, downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo';
+import { downloadRemoteMediaShareTemp } from '@/session/remoteMediaDiskCacheExpo';
 import { remoteSessionStore, useRemoteSessions } from '@/session/remoteSessionStore';
 import type { RemoteSession } from '@/session/types';
 import { fontWeight, lineHeight, monoFont, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
@@ -375,12 +369,12 @@ export default function RemoteFilePreviewScreen() {
    * 外路径一律拒绝),relPath/mtime 参数此时被忽略。
    */
   const exportToUrl = useCallback(
-    (relPath: string, mtimeMs: number): Promise<string> => {
+    (relPath: string, mtimeMs: number, stream = true): Promise<string> => {
       if (singleAbsPath) {
-        return fetchRemoteAbsFileToUrl({ maker, deviceId, openLink, presignGet }, singleAbsPath);
+        return fetchRemoteAbsFileToUrl({ maker, deviceId, openLink, presignGet, stream }, singleAbsPath);
       }
       return exportRemoteFileToUrl(
-        { maker, deviceId, openLink, presignGet, isCancelled: () => unmountedRef.current },
+        { maker, deviceId, openLink, presignGet, stream, isCancelled: () => unmountedRef.current },
         workdir,
         relPath,
         mtimeMs,
@@ -410,73 +404,11 @@ export default function RemoteFilePreviewScreen() {
     return { sessionId, remoteHostId, workdir };
   }, [session?.remoteHostId, sessionId, workdir]);
 
-  /**
-   * 任意被控端绝对路径 → **`data:` URI**(HTML 渲染态取同目录资源用)。
-   *
-   * 与 exportToUrl 的区别:后者只服务「当前这个文件」(workdir 内走两段式导出、
-   * absPath 模式走单一路径取件);资源透传要取的是**页面引用的其它路径**,所以
-   * 统一走 media:fetch 的绝对路径通道 —— 它对 workdir 内外一视同仁,一条路径一条码。
-   *
-   * **两道边界都必须由被控端强制**(review P1/P2),手机侧的判断只能当第二道:
-   *  - `limits.baseDir` → 被控端对资源与 baseDir 各自 realpath 后判包含关系。
-   *    htmlLocalResources 的 `..` 拒绝只保证**词法**子树,产物目录里的软链绕得过去;
-   *  - `limits.maxBytes` → 被控端在 stat 之后、上传 OSS(SSH 还要先拉进 Desktop 缓存)
-   *    之前拒绝。手机拿到 `media.size` 时流量已经花完了。
-   *    该上限由整页剩余预算收窄而来,不是固定的 HTML_RESOURCE_MAX_BYTES。
-   *
-   * SSH 会话必须带上 sshMediaContext,否则被控端会把 absPath 当本机路径解析
-   * (review P2:取件必失败,同名路径还会读到错误来源)。
-   */
-  const fetchResourceDataUri = useCallback(
-    async (
-      target: HtmlResourceFetchTarget,
-      limits: { baseDir: string; maxBytes: number },
-    ): Promise<string> => {
-      // 本次允许的字节上限:取「整页剩余预算收窄出来的值」与单资源硬上限的较小者。
-      // 调度层已经收窄过,这里再夹一次是防调用方传入超大值(fail-closed 不吃亏)。
-      const maxBytes = Math.max(
-        1,
-        Math.min(limits.maxBytes || HTML_RESOURCE_MAX_BYTES, HTML_RESOURCE_MAX_BYTES),
-      );
-      // 每个资源都会在 OSS 上新建一个对象;字节一旦进了 data: URI,对象立即无用。
-      // 不回收的话一页最多遗留 32 个,反复进出预览还会累积(review P1)。
-      //
-      // **按 key 累加收集,而不是只回收 media.ossKey**(review P1 第二轮):
-      //  - presign 失败(弱网 / 回包非法)时 resolveMobileRemoteMedia 在**返回之前**抛错,
-      //    对象已经上传但 media 拿不到 —— 只围绕 media 写 finally 的话那个对象永久遗留;
-      //  - 瞬断重试的每一次都可能再上传一份,产出不同的 key,只记最后一个同样会漏。
-      // 所以在 onOssKey 里收全,统一在 finally 里逐个删。
-      const uploadedKeys = new Set<string>();
-      try {
-        // 一次性取件(带 ossKey、不进 60s 共享缓存):对象用完即删,缓存命中会回死 URL。
-        const media = await fetchRemoteAbsFileOnce(
-          { maker, deviceId, openLink, presignGet },
-          target.absPath,
-          sshMediaContext,
-          (ossKey) => uploadedKeys.add(ossKey),
-          // 服务端强制约束:新被控端在上传前就会按这两项拒绝,超限文件不产生任何流量。
-          { ...(limits.baseDir ? { baseDir: limits.baseDir } : {}), maxBytes },
-        );
-        // **下载之前先按 media.size 拒掉超限资源**(review P1):取件回包已经带了大小,
-        // 而 downloadRemoteMediaAsDataUri 是先把整个对象拉到手机缓存、再看 file.size ——
-        // media:fetch 上限有 2 GB、批量取件又有 4 路并发,不前置判断的话一份不可信产物
-        // 能凭「白名单扩展名的超大文件」打出数 GB 流量与临时磁盘占用,最后才返回空地址。
-        // **这道判断不能因为被控端也判了就删**:老被控端不认 maxBytes(版本歪斜是 fail-open),
-        // 而 size 缺失 / 谎报同样要兜住 —— 它是 fail-closed 的第二道。
-        if (media.size > maxBytes) return '';
-        // 预签名地址只在这里用一次:下载完即转成 data: URI,**绝不回填进页面**
-        // (页面里的脚本能读 DOM,凭证进 DOM 等于交给不可信文档,review P1)。
-        const dataUri = await downloadRemoteMediaAsDataUri(
-          media.url,
-          target.mimeType,
-          maxBytes,
-        );
-        return dataUri ?? '';
-      } finally {
-        // 放 finally:取件抛错 / 下载失败 / 超限同样要删,失败路径才是最容易漏掉的那条。
-        for (const ossKey of uploadedKeys) deleteResourceOssObject(ossKey);
-      }
-    },
+  const prepareHtmlPreview = useCallback<PrepareMobileHtmlPreview>(
+    (absPath, signal) => prepareMobileHtmlPreview(absPath, {
+      maker, deviceId, openLink, presignGet, ssh: sshMediaContext,
+      deleteOssObject: deleteResourceOssObject,
+    }, signal),
     [deleteResourceOssObject, deviceId, maker, openLink, presignGet, sshMediaContext],
   );
 
@@ -501,7 +433,7 @@ export default function RemoteFilePreviewScreen() {
     if (busyLabel) return;
     setBusyLabel(t('files.preview.exporting'));
     try {
-      const url = await exportToUrl(item.relPath, item.mtimeMs);
+      const url = await exportToUrl(item.relPath, item.mtimeMs, false);
       // 传原始文件名:分享单按真实扩展名识别类型(PDF/视频等非图片 mime 不在
       // extOfMime 映射里,不带名字会落成 .img 让接收方无法预览)。
       const mime = shareMimeForFileName(item.name);
@@ -606,7 +538,7 @@ export default function RemoteFilePreviewScreen() {
               visible={screenFocused && index === pageIndex}
               onHtmlPanChange={reportHtmlPan}
               exportToUrl={exportToUrl}
-              fetchResourceDataUri={fetchResourceDataUri}
+              prepareHtmlPreview={prepareHtmlPreview}
               item={item}
               maker={maker}
               onDownload={() => void downloadAndShare(item)}
@@ -718,7 +650,7 @@ function FilePreviewPage({
   absolutePathOf,
   active,
   exportToUrl,
-  fetchResourceDataUri,
+  prepareHtmlPreview,
   item,
   maker,
   onDownload,
@@ -734,10 +666,7 @@ function FilePreviewPage({
   absolutePathOf(relPath: string): string;
   active: boolean;
   exportToUrl(relPath: string, mtimeMs: number): Promise<string>;
-  fetchResourceDataUri(
-    target: HtmlResourceFetchTarget,
-    limits: { baseDir: string; maxBytes: number },
-  ): Promise<string>;
+  prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
   maker: Pick<MobileMakerTransport, 'fileBrowser'>;
   onDownload(): void;
@@ -776,9 +705,11 @@ function FilePreviewPage({
   if (item.thumb === 'doc') {
     return (
       <TextPreviewPage
+        key={maker.fileBrowser.cacheScope}
+        cacheScope={maker.fileBrowser.cacheScope}
         absolutePathOf={absolutePathOf}
         active={active}
-        fetchResourceDataUri={fetchResourceDataUri}
+        prepareHtmlPreview={prepareHtmlPreview}
         item={item}
         onDownload={onDownload}
         onHtmlPanChange={onHtmlPanChange}
@@ -938,9 +869,10 @@ function PdfPreviewPage({
  * markdown / HTML(richTextKindOf)多一层「渲染 / 源码」切换,渲染态复用同一份已读文本。
  */
 function TextPreviewPage({
+  cacheScope,
   absolutePathOf,
   active,
-  fetchResourceDataUri,
+  prepareHtmlPreview,
   item,
   onDownload,
   onHtmlPanChange,
@@ -950,14 +882,12 @@ function TextPreviewPage({
   visible,
   workdir,
 }: {
+  cacheScope: string;
   /** item.relPath → 被控端绝对路径(HTML 资源透传要据此定位同目录)。 */
   absolutePathOf(relPath: string): string;
   active: boolean;
-  /** 页面引用的资源 → `data:` URI(签名地址不进页面,见屏级 fetchResourceDataUri)。 */
-  fetchResourceDataUri(
-    target: HtmlResourceFetchTarget,
-    limits: { baseDir: string; maxBytes: number },
-  ): Promise<string>;
+  /** 下载完整目录并返回受控网页预览,签名地址不进入页面。 */
+  prepareHtmlPreview: PrepareMobileHtmlPreview;
   item: FileBrowserGridItem;
   onDownload(): void;
   /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */
@@ -980,7 +910,7 @@ function TextPreviewPage({
   const cacheable = !!workdir && !isAbsolutePathShape(item.relPath);
   const [state, setState] = useState<TextPreviewState>(() => {
     // 内存缓存命中(mtime keyed)直接就绪:翻页/重进零等待、零重复拉取。
-    const cached = cacheable ? getCachedPreviewText(workdir, item.relPath, item.mtimeMs) : null;
+    const cached = cacheable ? getCachedPreviewText(cacheScope, workdir, item.relPath, item.mtimeMs) : null;
     return cached
       ? {
           status: 'ready',
@@ -1033,7 +963,7 @@ function TextPreviewPage({
           // 原文只为渲染态(markdown / HTML)保留,普通代码文件不留大字符串。
           content: richKind ? content : undefined,
         };
-        if (cacheable) storeCachedPreviewText(workdir, item.relPath, res.data.mtimeMs, ready);
+        if (cacheable) storeCachedPreviewText(cacheScope, workdir, item.relPath, res.data.mtimeMs, ready);
         setState({ status: 'ready', ...ready });
       })
       .catch((err) => {
@@ -1044,55 +974,47 @@ function TextPreviewPage({
     return () => {
       cancelled = true;
     };
-  }, [active, cacheable, item.relPath, richKind, readTextFile, t, workdir]);
+  }, [active, cacheable, cacheScope, item.relPath, richKind, readTextFile, t, workdir]);
 
-  // HTML 资源透传:页面引用的同目录资源取回后回填,自包含页面零请求直接过。
-  // hook 必须在下面的早返回之前无条件调用 —— 未就绪时传空串,内部即刻短路。
-  const htmlSource = richKind === 'html' && state.status === 'ready' ? (state.content ?? '') : '';
-  const htmlBaseDir = useMemo(
-    () => (htmlSource ? htmlBaseDirOf(absolutePathOf(item.relPath)) : ''),
-    [absolutePathOf, htmlSource, item.relPath],
+  const htmlSnapshot = useHtmlSnapshot(
+    absolutePathOf(item.relPath),
+    visible && richKind === 'html' && richView === 'rendered',
+    prepareHtmlPreview,
   );
-  const htmlResources = useHtmlLocalResources(htmlSource, htmlBaseDir, fetchResourceDataUri);
-  const resourceNotices = [
-    htmlResources.failed > 0
-      ? t('files.preview.htmlResourcesMissing', { count: htmlResources.failed })
-      : null,
-    // 条数上限与总量预算**分开提示**(review P2):只有前者才等于「前 32 项已取回」,
-    // 总量预算可能在第 3 项就用尽,合并成一条会谎报取回数量。
-    htmlResources.overLimit > 0
-      ? t('files.preview.htmlResourcesTruncated', { limit: HTML_RESOURCE_LIMIT })
-      : null,
-    htmlResources.overBudget > 0
-      ? t('files.preview.htmlResourcesOverBudget', { count: htmlResources.overBudget })
-      : null,
-  ].filter((line): line is string => line !== null);
-
-  // 只有「可见 + HTML + 渲染态 + 正文就绪 + 资源取件已结束」这一种组合真的挂着 WebView,
-  // 需要外层让出横滑。资源还在取时页面上是 spinner —— 那时禁滑只会让用户滑不走。
-  // cleanup 无条件报 false:卸载(翻页 / 失焦 / 换文件)后不能把 pager 留在禁滑状态。
+  const [htmlLoadError, setHtmlLoadError] = useState(false);
+  useEffect(() => { setHtmlLoadError(false); }, [htmlSnapshot.preview]);
+  const htmlError = htmlSnapshot.error || (htmlLoadError ? new Error('HTML_PREVIEW_LOAD_FAILED') : null);
+  const htmlErrorCode = htmlError instanceof Error ? htmlError.message : '';
+  const htmlErrorMessage = htmlErrorCode === 'HTML_PREVIEW_NATIVE_UNAVAILABLE'
+    ? t('files.preview.htmlUpdateMobile')
+    : htmlErrorCode === 'COMPLETE_DIRECTORY_LISTING_UNSUPPORTED'
+      ? t('files.preview.htmlUpdateDesktop')
+      : htmlErrorCode === 'PREVIEW_TOO_LARGE'
+        ? t('files.preview.htmlSnapshotTooLarge')
+        : t('files.preview.htmlSnapshotFailed');
   const htmlPanWanted = visible && richKind === 'html' && richView === 'rendered'
-    && state.status === 'ready' && !htmlResources.loading;
+    && htmlSnapshot.foreground && !!htmlSnapshot.preview && !htmlError;
   useEffect(() => {
     onHtmlPanChange?.(item.key, htmlPanWanted);
     return () => onHtmlPanChange?.(item.key, false);
   }, [htmlPanWanted, item.key, onHtmlPanChange]);
 
-  if (state.status === 'loading') {
+  if (state.status === 'loading' && richKind !== 'html') {
     return (
       <View style={styles.centerFill}>
         <ActivityIndicator color={colors.textTertiary} />
       </View>
     );
   }
-  if (state.status === 'unavailable') {
+  if (state.status === 'unavailable' && richKind !== 'html') {
     return <UnsupportedPage item={item} onDownload={onDownload} reason={state.reason} />;
   }
 
-  const targetIndex = targetLine !== null && targetLine <= state.lines.length ? targetLine - 1 : null;
-  const lineNumWidth = String(state.lines.length).length;
-  const clipped = state.truncated || state.totalLines > state.lines.length;
-  const canRenderRich = richKind !== null && typeof state.content === 'string';
+  const ready = state.status === 'ready' ? state : null;
+  const targetIndex = targetLine !== null && targetLine <= (ready?.lines.length ?? 0) ? targetLine - 1 : null;
+  const lineNumWidth = String(ready?.lines.length ?? 0).length;
+  const clipped = ready && (ready.truncated || ready.totalLines > ready.lines.length) && !(richKind === 'html' && richView === 'rendered');
+  const canRenderRich = richKind === 'html' || (richKind !== null && typeof ready?.content === 'string');
   const showRendered = canRenderRich && richView === 'rendered';
   return (
     <View style={styles.textPage}>
@@ -1100,7 +1022,7 @@ function TextPreviewPage({
         <View style={styles.truncBar} testID="filePreview.truncBanner">
           <Info color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           <Text style={styles.truncText}>
-            {state.truncated ? t('files.preview.truncated2mb') : t('files.preview.truncatedLines', { lines: MAX_RENDERED_LINES })}
+            {ready?.truncated ? t('files.preview.truncated2mb') : t('files.preview.truncatedLines', { lines: MAX_RENDERED_LINES })}
           </Text>
         </View>
       ) : null}
@@ -1123,34 +1045,36 @@ function TextPreviewPage({
           ))}
         </View>
       ) : null}
-      {showRendered && richKind === 'html' && resourceNotices.length > 0 ? (
-        <View style={styles.truncBar} testID="filePreview.htmlResourceNotice">
-          <Info color={colors.textSecondary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
-          <Text style={styles.truncText}>{resourceNotices.join(' · ')}</Text>
-        </View>
-      ) : null}
       {showRendered ? (
         richKind === 'html' ? (
           // **只在真正可见的当前页挂载**(review P1):HTML 里的脚本是可执行的不可信
           // 内容,相邻预取页提前挂 WebView 会让用户还没打开的文件里的脚本 / 计时器 /
           // 网络请求先跑起来。离开当前页即卸载 —— 卸载 WebView 是停掉这些东西最彻底
-          // 的方式(比 injectJavaScript 去逐个 clearInterval 可靠)。文本预取与资源
-          // 取件都不受影响,所以滑回来时无需重新取。
+          // 的方式(比 injectJavaScript 去逐个 clearInterval 可靠)。离开后释放快照。
           !visible ? (
             <View style={styles.centerFill} testID="filePreview.htmlOffscreen" />
-          ) : htmlResources.loading ? (
+          ) : htmlError ? (
+            <View style={styles.centerFill} testID="filePreview.htmlError">
+              <Text style={styles.hintText}>{htmlErrorMessage}</Text>
+              <MainWindowActionButton action={{ label: t('files.preview.htmlReload'), onPress: htmlSnapshot.retry }} />
+            </View>
+          ) : !htmlSnapshot.preview || !htmlSnapshot.foreground ? (
             // 取件期间不先渲染破图再热替换 —— 那会让 WebView 重载、页面闪一下。
             <View style={styles.centerFill} testID="filePreview.htmlResourceLoading">
               <ActivityIndicator color={colors.textTertiary} />
               <Text style={styles.hintText}>{t('files.preview.fetchingHtmlResources')}</Text>
             </View>
           ) : (
-            // HTML 生成物:已读到的文本 + 内联好的同目录资源进 WebView。
-            <HtmlFileReader html={htmlResources.html} testID="filePreview.htmlRendered" />
+            // 只有完整下载并加固过的目录快照才能进入 WebView。
+            <HtmlSnapshotReader preview={htmlSnapshot.preview} onError={() => setHtmlLoadError(true)} />
           )
         ) : (
-          <MarkdownFileReader markdown={state.content ?? ''} onQuoteSelection={onQuoteSelection} targetLine={targetLine} testID="filePreview.markdownRendered" />
+          <MarkdownFileReader markdown={ready?.content ?? ''} onQuoteSelection={onQuoteSelection} targetLine={targetLine} testID="filePreview.markdownRendered" />
         )
+      ) : state.status === 'loading' ? (
+        <View style={styles.centerFill}><ActivityIndicator color={colors.textTertiary} /></View>
+      ) : state.status === 'unavailable' ? (
+        <UnsupportedPage item={item} onDownload={onDownload} reason={state.reason} />
       ) : (
       <FlatList
         contentContainerStyle={styles.codeContent}

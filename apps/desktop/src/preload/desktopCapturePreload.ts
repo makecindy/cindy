@@ -1,3 +1,4 @@
+import { FILE_PEER_LOCAL, type FilePeerHostApi, type FilePeerCommand } from '../shared/filePeer';
 import { contextBridge, ipcRenderer } from 'electron';
 import {
   DESKTOP_LOCAL,
@@ -23,4 +24,22 @@ const api: DesktopCaptureApi = {
   viewHeartbeat: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.VIEW_HEARTBEAT, lease),
   nativeFrame: (lease) => ipcRenderer.invoke(DESKTOP_LOCAL.NATIVE_FRAME, lease),
 };
-contextBridge.exposeInMainWorld('desktopCapture', api);
+if (location.search === '?mode=files') {
+  const files: FilePeerHostApi = {
+    register: () => ipcRenderer.invoke(FILE_PEER_LOCAL.REGISTER),
+    onCommand: (listener) => {
+      const wrapped = (_e: Electron.IpcRendererEvent, id: string, command: FilePeerCommand) =>
+        listener(id, command);
+      ipcRenderer.on(FILE_PEER_LOCAL.COMMAND, wrapped);
+      return () => {
+        ipcRenderer.removeListener(FILE_PEER_LOCAL.COMMAND, wrapped);
+      };
+    },
+    reply: (id, ok, value) => ipcRenderer.invoke(FILE_PEER_LOCAL.REPLY, id, ok, value),
+    read: (connection, ticket, offset) =>
+      ipcRenderer.invoke(FILE_PEER_LOCAL.READ, connection, ticket, offset),
+    write: (sink, offset, base64) =>
+      ipcRenderer.invoke(FILE_PEER_LOCAL.WRITE, sink, offset, base64),
+  };
+  contextBridge.exposeInMainWorld('filePeerHost', files);
+} else contextBridge.exposeInMainWorld('desktopCapture', api);

@@ -58,10 +58,6 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
-  openUrlInSidebarBrowser,
-  pathToFileUrl,
-} from '@/features/right-sidebar/lib/openInSidebarBrowser';
-import {
   openDirInSidebarFileBrowser,
   openExternalFileInSidebarFileBrowser,
   openFileInSidebarFileBrowser,
@@ -70,6 +66,7 @@ import { isRemoteFileOrigin } from '@/lib/sessionFileOrigin';
 import { copyRemoteChatFile, revealRemoteChatFile } from '@/lib/remoteFileOpen';
 import { toWorkdirRel } from '../../../shared/workdirPath';
 import { useSidebarTargetSessionId } from '@/features/cc-agent/embeddedSessionNavigation';
+import { openHtmlFileByPreference } from './useOpenWithMenu';
 import { useChatSessionFile } from './ChatSessionFileContext';
 
 export interface UseFileChipContextMenu {
@@ -180,30 +177,26 @@ export function useFileChipContextMenu({
   async function handleOpenInBrowser(): Promise<void> {
     setMenuPos(null);
     const abs = await getAbsPath();
-    try {
-      await window.electronAPI.openFileInBrowser(abs);
-    } catch (error) {
-      toast.error(
-        t(
-          mapIpcErrorToI18nKey(error, {
-            namespace: 'chat.markdownRenderer',
-            fallback: 'chat.markdownRenderer.openInBrowserFailed',
-          }),
-        ),
-      );
-    }
+    await openHtmlFileByPreference(
+      sidebarBrowserTargetSessionId ?? sidebarFileTargetSessionId ?? '',
+      abs,
+      t,
+      sessionFileCtx,
+      'external',
+    );
   }
 
   async function handleOpenInSidebar(): Promise<void> {
     setMenuPos(null);
     if (!sidebarBrowserTargetSessionId) return;
     const abs = await getAbsPath();
-    try {
-      await openUrlInSidebarBrowser(sidebarBrowserTargetSessionId, pathToFileUrl(abs));
-    } catch {
-      // store 层已 log(addTab 上限 / IPC 异常),这里只给用户反馈。
-      toast.error(t('chat.markdownRenderer.openInSidebarFailed'));
-    }
+    await openHtmlFileByPreference(
+      sidebarBrowserTargetSessionId,
+      abs,
+      t,
+      sessionFileCtx,
+      'sidebar',
+    );
   }
 
   async function handleOpenInSidebarFileBrowser(): Promise<void> {
@@ -333,7 +326,7 @@ export function useFileChipContextMenu({
             {t('chat.markdownRenderer.openInSidebarFileBrowser')}
           </DropdownMenuItem>
         ) : null}
-        {sidebarBrowserTargetSessionId && !remoteOrigin ? (
+        {sidebarBrowserTargetSessionId ? (
           <DropdownMenuItem onClick={handleOpenInSidebar}>
             <PanelRight className="mr-2 h-4 w-4" />
             {t('chat.markdownRenderer.openInSidebarBrowser')}
@@ -402,7 +395,7 @@ export function useFileChipContextMenu({
             ? t('chat.remoteFile.revealLocalCopy')
             : t('chat.markdownRenderer.revealFile')}
         </DropdownMenuItem>
-        {canOpenInBrowser && !remoteOrigin ? (
+        {canOpenInBrowser ? (
           <DropdownMenuItem onClick={handleOpenInBrowser}>
             <Globe className="mr-2 h-4 w-4" />
             {t('chat.markdownRenderer.openInBrowser')}

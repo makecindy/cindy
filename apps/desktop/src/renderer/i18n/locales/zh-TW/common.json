@@ -8772,6 +8772,11 @@
       "closeHint": "或點選背景關閉"
     },
     "remoteFile": {
+      "previewFailed": "無法準備網頁預覽，請檢查目錄和連線後重試",
+      "previewNotFound": "找不到 HTML 檔案，請確認檔案仍然存在",
+      "previewFetching": "正在準備網頁預覽…",
+      "previewTooLarge": "預覽超出限制（2000 個項目、100 MB 或 8 個已開啟預覽），請使用較小的目錄或重新啟動 Cindy 後重試",
+      "previewUnsupported": "遠端裝置暫不支援目錄預覽，請更新該裝置上的 Cindy 後重試",
       "fetching": "正在從遠端獲取檔案…",
       "fetchFailed": "從遠端獲取檔案失敗",
       "notFound": "遠端檔案不存在",

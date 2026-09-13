@@ -1,9 +1,10 @@
-import type { NormalizedToolMedia } from '@/session/messageNormalize';
+import { peerMediaUri, peerMediaExpiry } from "@/device-link/peerFileRegistry";
+import type { NormalizedToolMedia } from "@/session/messageNormalize";
 import {
   isPayloadDesktopLocalMediaUrl,
   isPayloadDirectPreviewableUrl,
-} from '@cindy/maker-shared/payload-summary';
-import { i18n } from '@/i18n';
+} from "@cindy/maker-shared/payload-summary";
+import { i18n } from "@/i18n";
 
 const EXPIRY_SAFETY_WINDOW_MS = 60 * 1000;
 
@@ -33,12 +34,27 @@ export interface MobileResolvedRemoteMedia {
   inlineBase64?: string;
 }
 
+export interface MobileRemoteMediaFetchOptions {
+  /** Local read intent only; false for consumers that copy complete bytes. */
+  stream?: boolean;
+  skipCache?: boolean;
+  thumbnail?: boolean;
+  signal?: AbortSignal;
+  /** Return an undelivered OSS result to its existing cleanup owner before cancellation rejects. */
+  onDiscardOssKey?: (ossKey: string) => void;
+}
+
 export interface MobileRemoteMediaResolverDeps {
-  fetchRemoteMedia(url: string, opts?: { skipCache?: boolean; thumbnail?: boolean }): Promise<MobileRemoteMediaFetchResult>;
+  fetchRemoteMedia(
+    url: string,
+    opts?: MobileRemoteMediaFetchOptions,
+  ): Promise<MobileRemoteMediaFetchResult>;
   presignGet(ossKey: string): Promise<MobileRemoteMediaPresignResult>;
 }
 
 export interface MobileRemoteMediaResolveOptions {
+  stream?: boolean;
+  signal?: AbortSignal;
   /** 强制被控端绕过上传去重缓存(上次的 ossKey 已悬空时的自愈路径)。 */
   skipCache?: boolean;
   /** 只要聊天列表缩略图:被控端缩 1024px webp inline 回包;老被控端回落原图。 */
@@ -58,7 +74,7 @@ export interface MobileRemoteMediaResolveOptions {
 }
 
 /** inline 缩略图没有 presign 过期语义,给个远未来的过期时间(本地字节不过期)。 */
-export const REMOTE_MEDIA_NEVER_EXPIRES = '9999-12-31T00:00:00.000Z';
+export const REMOTE_MEDIA_NEVER_EXPIRES = "9999-12-31T00:00:00.000Z";
 
 /**
  * UI 层远程媒体取件回调:缩略图懒取件传 signal(滚出队列可取消)+ thumbnail
@@ -67,8 +83,15 @@ export const REMOTE_MEDIA_NEVER_EXPIRES = '9999-12-31T00:00:00.000Z';
  * 按不同键隔离,查看器取原图不会命中缩略图缓存。
  */
 export type ResolveRemoteMediaFn = (
-  media: Pick<NormalizedToolMedia, 'kind' | 'url' | 'previewable'> & { thumbnail?: boolean },
-  opts?: { front?: boolean; signal?: AbortSignal; forceRefresh?: boolean; cachedOnly?: boolean },
+  media: Pick<NormalizedToolMedia, "kind" | "url" | "previewable"> & {
+    thumbnail?: boolean;
+  },
+  opts?: {
+    front?: boolean;
+    signal?: AbortSignal;
+    forceRefresh?: boolean;
+    cachedOnly?: boolean;
+  },
 ) => Promise<MobileResolvedRemoteMedia>;
 
 export function isDesktopLocalMediaUrl(url: unknown): url is string {
@@ -80,12 +103,12 @@ export function isDirectPreviewableMediaUrl(url: unknown): url is string {
 }
 
 export function canPreviewResolvedRemoteMedia(
-  kind: NormalizedToolMedia['kind'],
+  kind: NormalizedToolMedia["kind"],
   mimeType: string,
 ): boolean {
-  if (kind === 'image') return mimeType.startsWith('image/');
-  if (kind === 'video') return mimeType.startsWith('video/');
-  if (kind === 'audio') return mimeType.startsWith('audio/');
+  if (kind === "image") return mimeType.startsWith("image/");
+  if (kind === "video") return mimeType.startsWith("video/");
+  if (kind === "audio") return mimeType.startsWith("audio/");
   return false;
 }
 
@@ -109,7 +132,7 @@ export function localCopyResolvedMedia(
   resolved: MobileResolvedRemoteMedia,
   hit: { uri: string; mimeType: string; size: number } | null | undefined,
 ): MobileResolvedRemoteMedia | null {
-  if (!hit || !hit.uri || !hit.mimeType.startsWith('image/')) return null;
+  if (!hit || !hit.uri || !hit.mimeType.startsWith("image/")) return null;
   return {
     url: hit.uri,
     ossKey: resolved.ossKey,
@@ -122,22 +145,27 @@ export function localCopyResolvedMedia(
 }
 
 export function isResolvedRemoteMediaFresh(
-  media: Pick<MobileResolvedRemoteMedia, 'expiresAt'>,
+  media: Pick<MobileResolvedRemoteMedia, "expiresAt">,
   now = Date.now(),
 ): boolean {
   const expiresAt = Date.parse(media.expiresAt);
-  return Number.isFinite(expiresAt) && expiresAt - now > EXPIRY_SAFETY_WINDOW_MS;
+  return (
+    Number.isFinite(expiresAt) && expiresAt - now > EXPIRY_SAFETY_WINDOW_MS
+  );
 }
 
 export async function resolveMobileRemoteMedia(
-  media: Pick<NormalizedToolMedia, 'kind' | 'url'>,
+  media: Pick<NormalizedToolMedia, "kind" | "url">,
   deps: MobileRemoteMediaResolverDeps,
   opts?: MobileRemoteMediaResolveOptions,
 ): Promise<MobileResolvedRemoteMedia> {
   if (!isDesktopLocalMediaUrl(media.url)) {
-    throw new Error(i18n.t('composer.attachments.notFetchableMedia'));
+    throw new Error(i18n.t("composer.attachments.notFetchableMedia"));
   }
   const fetchOpts = {
+    ...(opts?.stream !== undefined ? { stream: opts.stream } : {}),
+    ...(opts?.onOssKey ? { onDiscardOssKey: opts.onOssKey } : {}),
+    ...(opts?.signal ? { signal: opts.signal } : {}),
     ...(opts?.skipCache ? { skipCache: true } : {}),
     ...(opts?.thumbnail ? { thumbnail: true } : {}),
   };
@@ -145,12 +173,22 @@ export async function resolveMobileRemoteMedia(
     media.url,
     Object.keys(fetchOpts).length > 0 ? fetchOpts : undefined,
   );
+  const local = peerMediaUri(fetched);
+  if (local)
+    return {
+      url: local,
+      ossKey: "",
+      size: fetched.size,
+      mimeType: fetched.mimeType,
+      expiresAt: peerMediaExpiry(fetched)!,
+      previewable: canPreviewResolvedRemoteMedia(media.kind, fetched.mimeType),
+    };
   // inline 缩略图回包:字节已随 invoke 帧到手,无 OSS 对象,跳过 presign。
   // url 先给 data URI 保证任何情况下可渲染;宿主(会话屏)会把字节落盘并换成 file://。
   if (isValidInlineResult(fetched)) {
     return {
       url: `data:${fetched.mimeType};base64,${fetched.inlineBase64}`,
-      ossKey: '',
+      ossKey: "",
       mimeType: fetched.mimeType,
       size: fetched.size,
       expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
@@ -162,15 +200,15 @@ export async function resolveMobileRemoteMedia(
   // 不是「回包合不合法」—— 只要 ossKey 非空,被控端的 PUT 就已经完成了。放在 isValidFetchResult
   // 之后会漏掉一整类:合法的**零字节**文件(空的 .css / .js 完全正常)会因为 `size > 0` 这条
   // 校验先抛错,而对象已经上传 —— 调用方拿不到 key,那个对象永久遗留。
-  if (typeof fetched?.ossKey === 'string' && fetched.ossKey.length > 0) {
+  if (typeof fetched?.ossKey === "string" && fetched.ossKey.length > 0) {
     opts?.onOssKey?.(fetched.ossKey);
   }
   if (!isValidFetchResult(fetched)) {
-    throw new Error(i18n.t('composer.attachments.mediaResultInvalid'));
+    throw new Error(i18n.t("composer.attachments.mediaResultInvalid"));
   }
   const signed = await deps.presignGet(fetched.ossKey);
   if (!isValidPresignResult(signed)) {
-    throw new Error(i18n.t('composer.attachments.mediaUrlInvalid'));
+    throw new Error(i18n.t("composer.attachments.mediaUrlInvalid"));
   }
   return {
     url: signed.getUrl,
@@ -183,46 +221,60 @@ export async function resolveMobileRemoteMedia(
 }
 
 export function formatRemoteMediaSize(bytes: number): string {
-  if (!Number.isFinite(bytes) || bytes <= 0) return '';
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  if (bytes < 1024 * 1024 * 1024)
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
   return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 /** inline 缩略图回包有效性:字节 + 图片 mime + 正数 size 齐备才算。 */
-function isValidInlineResult(value: MobileRemoteMediaFetchResult): value is MobileRemoteMediaFetchResult & { inlineBase64: string } {
+function isValidInlineResult(
+  value: MobileRemoteMediaFetchResult,
+): value is MobileRemoteMediaFetchResult & { inlineBase64: string } {
   return (
-    !!value
-    && typeof value.inlineBase64 === 'string'
-    && value.inlineBase64.length > 0
-    && typeof value.mimeType === 'string'
-    && value.mimeType.startsWith('image/')
-    && typeof value.size === 'number'
-    && Number.isFinite(value.size)
-    && value.size > 0
+    !!value &&
+    typeof value.inlineBase64 === "string" &&
+    typeof value.mimeType === "string" &&
+    /^[\w.+-]+\/[\w.+-]+$/.test(value.mimeType) &&
+    typeof value.size === "number" &&
+    Number.isFinite(value.size) &&
+    Number.isSafeInteger(value.size) &&
+    value.size >= 0 &&
+    value.inlineBase64.length <= 1024 * 1024 &&
+    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(
+      value.inlineBase64,
+    ) &&
+    (value.inlineBase64.length / 4) * 3 -
+      (value.inlineBase64.endsWith("==")
+        ? 2
+        : value.inlineBase64.endsWith("=")
+          ? 1
+          : 0) ===
+      value.size
   );
 }
 
 function isValidFetchResult(value: MobileRemoteMediaFetchResult): boolean {
   return (
-    !!value
-    && typeof value.ossKey === 'string'
-    && value.ossKey.length > 0
-    && typeof value.mimeType === 'string'
-    && value.mimeType.length > 0
-    && typeof value.size === 'number'
-    && Number.isFinite(value.size)
-    && value.size > 0
+    !!value &&
+    typeof value.ossKey === "string" &&
+    value.ossKey.length > 0 &&
+    typeof value.mimeType === "string" &&
+    value.mimeType.length > 0 &&
+    typeof value.size === "number" &&
+    Number.isFinite(value.size) &&
+    value.size >= 0
   );
 }
 
 function isValidPresignResult(value: MobileRemoteMediaPresignResult): boolean {
   return (
-    !!value
-    && typeof value.getUrl === 'string'
-    && value.getUrl.startsWith('http')
-    && typeof value.expiresAt === 'string'
-    && Number.isFinite(Date.parse(value.expiresAt))
+    !!value &&
+    typeof value.getUrl === "string" &&
+    value.getUrl.startsWith("http") &&
+    typeof value.expiresAt === "string" &&
+    Number.isFinite(Date.parse(value.expiresAt))
   );
 }

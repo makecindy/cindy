@@ -7,20 +7,25 @@
  *  - allowlist: 远程 IPC 隧道的 channel 白名单(默认拒绝制)
  *  - client: DeviceLinkClient(重连 / 心跳 / 请求配对状态机)
  */
-export * from './protocol.js';
-export * from './allowlist.js';
-export * from './client.js';
-export * from './transport.js';
-export * from './topics.js';
-export * from './attachmentOssRef.js';
-export * from './contactsSyncProtocol.js';
-export * from './remoteResources.js';
-export * from './remoteDesktop.js';
-export * from './remoteDesktopViewerSession.js';
-export * from './remoteDesktopViewerMedia.js';
-export * from './deviceIdentity.js';
-export * from './remoteCredentials.js';
-export * from './remoteDesktopIce.js';
-export * from './remoteDesktopIceConfig.js';
-export * from './remoteClipboard.js';
-export * from './remoteCursor.js';
+export * from "./protocol.js";
+export * from "./allowlist.js";
+export * from "./client.js";
+export * from "./transport.js";
+export * from "./topics.js";
+export * from "./attachmentOssRef.js";
+export * from "./contactsSyncProtocol.js";
+export * from "./remoteResources.js";
+export * from "./remoteDesktop.js";
+export * from "./remoteDesktopViewerSession.js";
+export * from "./remoteDesktopViewerMedia.js";
+export * from "./deviceIdentity.js";
+export * from "./remoteCredentials.js";
+export * from "./remoteDesktopIce.js";
+export * from "./remoteDesktopIceConfig.js";
+export * from "./remoteClipboard.js";
+export * from "./remoteCursor.js";
+export * from "./filePeer.js";
+export * from "./fileAccess.js";
+export * from "./filePeerRuntime.js";
+
+export { FILE_PEER_RUNTIME_SOURCE } from "./filePeerRuntimeSource.js";

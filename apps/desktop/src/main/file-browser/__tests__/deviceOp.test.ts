@@ -15,10 +15,7 @@ import path from 'node:path';
 import { gzipSync, gunzipSync } from 'node:zlib';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import {
-  WorkdirWatchManager,
-  type RemoteFileTreeEvent,
-} from '@cindy/remote-file-service';
+import { WorkdirWatchManager, type RemoteFileTreeEvent } from '@cindy/remote-file-service';
 import { FILE_BROWSER_EVENT_CHANNEL } from '@cindy/device-link';
 import type { RemoteWorkingDirCheckResult } from '../../device-link/remote-workdir-guard.js';
 
@@ -54,7 +51,11 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn() },
   utilityProcess: { fork: vi.fn() },
 }));
-const uploadMock = vi.fn(async (p: string) => ({ key: `oss/${p.split('/').pop()}`, size: 4, contentType: 'text/plain' }));
+const uploadMock = vi.fn(async (p: string) => ({
+  key: `oss/${p.split('/').pop()}`,
+  size: 4,
+  contentType: 'text/plain',
+}));
 vi.mock('../../device-link/mediaTransfer.js', () => ({
   uploadLocalFile: (p: string) => uploadMock(p),
 }));
@@ -171,6 +172,20 @@ describe('file-browser device-op', () => {
     ).rejects.toThrow(/REMOTE_WORKDIR_NOT_FOUND/);
   });
 
+  it('uses the same listDir for complete listings without changing legacy filtering', async () => {
+    await mkdir(path.join(workdir, 'dist'));
+    await fsWriteFile(path.join(workdir, '.env'), 'fixture');
+    const filtered = (await handleRemoteOp({ op: 'listDir', workdir })) as Array<{ name: string }>;
+    const all = (await handleRemoteOp({
+      op: 'listDir',
+      workdir,
+      includeIgnored: true,
+      docMode: true,
+    })) as Array<{ name: string }>;
+    expect(filtered.map((e) => e.name)).not.toContain('dist');
+    expect(all.map((e) => e.name)).toEqual(expect.arrayContaining(['dist', '.env']));
+  });
+
   it('local listDir / readFile / stat match local handler shapes', async () => {
     const entries = (await handleRemoteOp({ op: 'listDir', workdir })) as Array<{ name: string }>;
     expect(entries.map((e) => e.name)).toContain('src');
@@ -198,13 +213,22 @@ describe('file-browser device-op', () => {
     expect(await handleRemoteOp({ op: 'createFolder', workdir, relPath: 'docs' })).toMatchObject({
       ok: true,
     });
-    expect(await handleRemoteOp({ op: 'createFile', workdir, relPath: 'docs/x.md' })).toMatchObject({
-      ok: true,
-    });
+    expect(await handleRemoteOp({ op: 'createFile', workdir, relPath: 'docs/x.md' })).toMatchObject(
+      {
+        ok: true,
+      },
+    );
     expect(
-      await handleRemoteOp({ op: 'renameEntry', workdir, fromRel: 'docs/x.md', toRel: 'docs/y.md' }),
+      await handleRemoteOp({
+        op: 'renameEntry',
+        workdir,
+        fromRel: 'docs/x.md',
+        toRel: 'docs/y.md',
+      }),
     ).toMatchObject({ ok: true });
-    expect(await handleRemoteOp({ op: 'deleteEntry', workdir, relPath: 'docs/y.md' })).toMatchObject({
+    expect(
+      await handleRemoteOp({ op: 'deleteEntry', workdir, relPath: 'docs/y.md' }),
+    ).toMatchObject({
       ok: true,
     });
   });
@@ -214,7 +238,11 @@ describe('file-browser device-op', () => {
       await mkdir(path.join(workdir, 'docs'), { recursive: true });
       await fsWriteFile(path.join(workdir, 'docs', 'x.md'), 'big\n', 'utf8');
     });
-    const start = (await handleRemoteOp({ op: 'exportFileStart', workdir, relPath: 'docs/x.md' })) as {
+    const start = (await handleRemoteOp({
+      op: 'exportFileStart',
+      workdir,
+      relPath: 'docs/x.md',
+    })) as {
       ok: boolean;
       transferId?: string;
     };
@@ -294,7 +322,12 @@ describe('file-browser device-op', () => {
     dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
     sshRequestMock.mockResolvedValue({ entries: [{ name: 'r.ts' }] });
 
-    const entries = (await handleRemoteOp({ op: 'listDir', workdir: sshWorkdir })) as Array<{
+    const entries = (await handleRemoteOp({
+      op: 'listDir',
+      workdir: sshWorkdir,
+      includeIgnored: true,
+      maxEntries: 2000,
+    })) as Array<{
       name: string;
     }>;
     expect(entries.map((e) => e.name)).toEqual(['r.ts']);
@@ -303,6 +336,8 @@ describe('file-browser device-op', () => {
       relPath: '',
       hideMetaFiles: true,
       docMode: undefined,
+      includeIgnored: true,
+      maxEntries: 2000,
     });
   });
 
@@ -534,12 +569,12 @@ describe('file-browser device-op', () => {
       resolveFirstStart = resolve;
     });
     const managers: WorkdirWatchManager[] = [];
-    const startSpy = vi
-      .spyOn(WorkdirWatchManager.prototype, 'start')
-      .mockImplementation(function (this: WorkdirWatchManager) {
-        managers.push(this);
-        return managers.length === 1 ? firstStart : Promise.resolve();
-      });
+    const startSpy = vi.spyOn(WorkdirWatchManager.prototype, 'start').mockImplementation(function (
+      this: WorkdirWatchManager,
+    ) {
+      managers.push(this);
+      return managers.length === 1 ? firstStart : Promise.resolve();
+    });
     const stopSpy = vi
       .spyOn(WorkdirWatchManager.prototype, 'stop')
       .mockImplementation(() => undefined);
@@ -566,11 +601,10 @@ describe('file-browser device-op', () => {
         relPath: 'src/owner-b.ts',
       };
       (managers[1] as unknown as { emit: (value: RemoteFileTreeEvent) => void }).emit(event);
-      expect(pushSpy).toHaveBeenCalledWith(
-        FILE_BROWSER_EVENT_CHANNEL,
-        event,
-        { dataOwnerId: 'owner-b', ownerGeneration: 8 },
-      );
+      expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, event, {
+        dataOwnerId: 'owner-b',
+        ownerGeneration: 8,
+      });
     } finally {
       onFsWatchReleased(workdir);
       startSpy.mockRestore();
@@ -829,7 +863,12 @@ describe('file-browser device-op', () => {
 
   it('caps op advertises gzip; unknown op stays a deterministic negative signal', async () => {
     // caps 与 workdir 无关,guard 之前处理——guard 拒绝也不影响探测。
-    expect(await handleRemoteOp({ op: 'caps', workdir })).toEqual({ ok: true, gzip: true });
+    expect(await handleRemoteOp({ op: 'caps', workdir })).toEqual({
+      ok: true,
+      gzip: true,
+      completeDirectoryListing: true,
+      fileRead: true,
+    });
     // 控制端把 unknown op 当"老端不支持压缩"的确定性负信号,形状不能漂。
     expect(await handleRemoteOp({ op: 'nope', workdir })).toEqual({
       ok: false,
@@ -840,7 +879,12 @@ describe('file-browser device-op', () => {
   it('writeFile accepts contentGz (gzip+base64) and lands the plaintext on disk', async () => {
     const original = '# 标题\n' + '正文内容 body text\n'.repeat(5000);
     const contentGz = gzipSync(Buffer.from(original, 'utf8')).toString('base64');
-    const res = (await handleRemoteOp({ op: 'writeFile', workdir, relPath: 'src/a.ts', contentGz })) as {
+    const res = (await handleRemoteOp({
+      op: 'writeFile',
+      workdir,
+      relPath: 'src/a.ts',
+      contentGz,
+    })) as {
       ok: boolean;
     };
     expect(res.ok).toBe(true);
@@ -986,7 +1030,11 @@ describe('file-browser device-op', () => {
     });
 
     it('local: 路径穿越被拒绝', async () => {
-      const res = (await handleRemoteOp({ op: 'thumbnail', workdir, relPath: '../outside.png' })) as {
+      const res = (await handleRemoteOp({
+        op: 'thumbnail',
+        workdir,
+        relPath: '../outside.png',
+      })) as {
         ok: boolean;
       };
       expect(res.ok).toBe(false);

@@ -88,6 +88,13 @@ describe('remote-file-service RPC end-to-end', () => {
     expect(entries[0]?.type).toBe('directory');
   });
 
+  it('listDir can return complete entries over the same RPC', async () => {
+    await client.connect();
+    const { entries } = await client.request('listDir', { workdir, includeIgnored: true, docMode: true });
+    expect(entries.map(e => e.name)).toEqual(expect.arrayContaining(['node_modules', '.gitignore', 'blob.bin']));
+    await expect(client.request('listDir', { workdir, includeIgnored: true, maxEntries: 1 })).rejects.toThrow('DIRECTORY_TOO_LARGE');
+  });
+
   it('readFile returns content and BINARY_FILE for binaries', async () => {
     await client.connect();
     const file = await client.request('readFile', { workdir, relPath: 'src/a.ts' });

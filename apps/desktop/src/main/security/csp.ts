@@ -223,7 +223,9 @@ export function installContentSecurityPolicy(session: Session, ctx: CspContext):
     // Exact-origin match (not startsWith) so e.g. http://localhost:51730
     // cannot piggyback on a http://localhost:5173 dev origin.
     const isAppDocument =
-      (ctx.desktopCapture === true && url === 'cindy-desktop-capture://capture/index.html') ||
+      (ctx.desktopCapture === true &&
+        (url === 'cindy-desktop-capture://capture/index.html' ||
+          url === 'cindy-desktop-capture://capture/index.html?mode=files')) ||
       url.startsWith('file://') ||
       (ctx.devServerOrigin !== null && parseOrigin(url) === ctx.devServerOrigin);
     if (!isAppDocument) {

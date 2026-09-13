@@ -38,6 +38,7 @@ import {
 } from '@/session/remoteMedia';
 
 export interface RemoteAbsFileFetchDeps {
+  stream?: boolean;
   maker: Pick<MobileMakerTransport, 'fetchRemoteMedia'>;
   deviceId: string;
   openLink: (deviceId: string) => Promise<unknown>;
@@ -97,7 +98,7 @@ export async function fetchRemoteAbsFileToUrl(
   const sshKey = eff
     ? `${eff.sessionId}\u0000${eff.remoteHostId}\u0000${eff.workdir}`
     : '';
-  const key = `${deps.deviceId}\u0000${absPath}\u0000${sshKey}`;
+  const key = `${deps.deviceId}\u0000${absPath}\u0000${sshKey}\u0000${deps.stream === false ? 'file' : 'stream'}`;
   const cached = lookupCache(key, Date.now());
   if (cached) return cached.url;
   const resolved = await withTransientRemoteRetry(async () => {
@@ -106,6 +107,7 @@ export async function fetchRemoteAbsFileToUrl(
     return resolveMobileRemoteMedia(
       { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh) },
       { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
+      deps.stream === false ? { stream: false } : undefined,
     );
   });
   rememberFetch(key, resolved, Date.now());
@@ -142,6 +144,7 @@ export async function fetchRemoteAbsFileOnce(
    * 流量与磁盘已经花掉了(review P2)。老被控端忽略这两个参数,故手机侧判断照旧保留。
    */
   constraints?: RemoteMediaFetchConstraints | null,
+  signal?: AbortSignal,
 ): Promise<MobileResolvedRemoteMedia> {
   return withTransientRemoteRetry(async () => {
     await deps.openLink(deps.deviceId);
@@ -149,7 +152,7 @@ export async function fetchRemoteAbsFileOnce(
     return resolveMobileRemoteMedia(
       { kind: 'image', url: remoteFileMediaUrl(absPath, undefined, ssh, constraints) },
       { fetchRemoteMedia: deps.maker.fetchRemoteMedia, presignGet: deps.presignGet },
-      onOssKey ? { onOssKey } : undefined,
+      { onOssKey, signal, stream: false },
     );
   });
 }

@@ -38,8 +38,31 @@ import { StyleSheet, View } from 'react-native';
 import { WebView } from 'react-native-webview';
 import type { ShouldStartLoadRequest } from 'react-native-webview/lib/WebViewTypes';
 
-import { interceptHtmlNavigation } from '@/session/htmlNavigationPolicy';
+import { interceptHtmlNavigation, interceptSnapshotNavigation } from '@/session/htmlNavigationPolicy';
 import { withHtmlPreviewCsp } from '@/session/htmlPreviewCsp';
+import type { MobileHtmlPreview } from '@/session/mobileHtmlPreview';
+
+/** The server serves only the downloaded manifest; every HTML has the same CSP and device guard. */
+export function HtmlSnapshotReader({ preview, onError }: { preview: MobileHtmlPreview; onError(): void }) {
+  const source = useMemo(() => ({ uri: preview.url }), [preview.url]);
+  return <WebView
+    testID="filePreview.htmlRendered"
+    source={source}
+    originWhitelist={['*']}
+    onShouldStartLoadWithRequest={(request) => interceptSnapshotNavigation(request.url, preview.url, preview.documents)}
+    setSupportMultipleWindows={false}
+    allowFileAccess={false}
+    mediaCapturePermissionGrantType="deny"
+    onError={onError}
+    onContentProcessDidTerminate={onError}
+    onRenderProcessGone={onError}
+    onHttpError={(event) => {
+      if (interceptSnapshotNavigation(event.nativeEvent.url, preview.url, preview.documents)) onError();
+    }}
+    incognito
+    style={styles.fill}
+  />;
+}
 
 export function HtmlFileReader({ html, testID }: { html: string; testID?: string }) {
   // CSP 注入放在**渲染载体这一层**,而不是取件那一层:任何进到这个 WebView 的

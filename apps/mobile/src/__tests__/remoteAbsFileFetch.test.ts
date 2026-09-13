@@ -38,6 +38,18 @@ function makeDeps(overrides: Partial<{
 }
 
 describe('fetchRemoteAbsFileToUrl', () => {
+  it('separates streaming and complete-file cache entries in either order', async () => {
+    for (const first of [true, false]) {
+      const { deps, fetchRemoteMedia } = makeDeps();
+      await fetchRemoteAbsFileToUrl({ ...deps, stream: first }, '/media.mp4');
+      await fetchRemoteAbsFileToUrl({ ...deps, stream: !first }, '/media.mp4');
+      await fetchRemoteAbsFileToUrl({ ...deps, stream: first }, '/media.mp4');
+      expect(fetchRemoteMedia).toHaveBeenCalledTimes(2);
+      expect(fetchRemoteMedia.mock.calls.map((call) => (call as unknown[])[1])).toEqual(
+        first ? [undefined, { stream: false }] : [{ stream: false }, undefined],
+      );
+    }
+  });
   it('走 media:fetch 绝对路径通道并 presign 出下载地址', async () => {
     const { deps, fetchRemoteMedia, presignGet } = makeDeps();
     const url = await fetchRemoteAbsFileToUrl(deps, '/tmp/shot.png');

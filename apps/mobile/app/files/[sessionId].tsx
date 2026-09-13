@@ -244,7 +244,7 @@ export default function RemoteFileBrowserScreen() {
       });
       if (seq !== loadSeqRef.current) return;
       rawEntriesRef.current = normalizeRemoteOpDirEntries(raw);
-      storeCachedListing(workdir, relPath, rawEntriesRef.current);
+      storeCachedListing(maker.fileBrowser.cacheScope, workdir, relPath, rawEntriesRef.current);
       setItems(buildFileBrowserGridItems(rawEntriesRef.current, sortModeRef.current, Date.now()));
       setLastSyncedAt(Date.now());
     } catch (err) {
@@ -280,12 +280,12 @@ export default function RemoteFileBrowserScreen() {
   useEffect(() => {
     if (!workdir) return undefined;
     let cancelled = false;
-    const memoryCached = getCachedListingSync(workdir, relPath);
+    const memoryCached = getCachedListingSync(maker.fileBrowser.cacheScope, workdir, relPath);
     if (memoryCached) {
       rawEntriesRef.current = memoryCached;
       setItems(buildFileBrowserGridItems(memoryCached, sortModeRef.current, Date.now()));
     } else {
-      void readCachedListing(workdir, relPath).then((persisted) => {
+      void readCachedListing(maker.fileBrowser.cacheScope, workdir, relPath).then((persisted) => {
         if (cancelled || !persisted || rawEntriesRef.current.length > 0) return;
         rawEntriesRef.current = persisted;
         setItems(buildFileBrowserGridItems(persisted, sortModeRef.current, Date.now()));

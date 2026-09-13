@@ -8773,6 +8773,11 @@
       "closeHint": "或点击背景关闭"
     },
     "remoteFile": {
+      "previewFailed": "无法准备网页预览，请检查目录和连接后重试",
+      "previewNotFound": "找不到 HTML 文件，请确认文件仍然存在",
+      "previewFetching": "正在准备网页预览…",
+      "previewTooLarge": "预览超出限制（2000 个条目、100 MB 或 8 个已打开预览），请使用更小的目录或重启 Cindy 后重试",
+      "previewUnsupported": "远程设备暂不支持目录预览，请更新该设备上的 Cindy 后重试",
       "fetching": "正在从远端获取文件…",
       "fetchFailed": "从远端获取文件失败",
       "notFound": "远端文件不存在",

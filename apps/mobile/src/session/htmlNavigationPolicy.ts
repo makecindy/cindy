@@ -61,3 +61,14 @@ export function interceptHtmlNavigation(
   if (!documentSettled && (url === '' || url === 'about:blank')) return true;
   return false;
 }
+
+/** A snapshot may navigate only to its guarded HTML documents on its exact origin. */
+export function interceptSnapshotNavigation(url: string, bootstrap: string, documents: readonly string[]): boolean {
+  try {
+    const target = new URL(url);
+    const initial = new URL(bootstrap);
+    if (target.origin !== initial.origin || target.username || target.password) return false;
+    return target.pathname === initial.pathname
+      || documents.some((path) => decodeURIComponent(path) === decodeURIComponent(target.pathname));
+  } catch { return false; }
+}
