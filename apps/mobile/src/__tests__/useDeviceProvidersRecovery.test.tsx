@@ -2,6 +2,9 @@
 import { act, createElement } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { DeviceLinkClient, PROTOCOL_VERSION, DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  type Envelope, type WsLike } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 import { useDeviceProviders, type UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
 import { clearAllDeviceProviders, fetchDeviceProvidersFresh } from '@/device-link/deviceProvidersCache';
@@ -66,6 +69,96 @@ afterEach(async () => {
 });
 
 describe('model catalog failure recovery', () => {
+  it('keeps a second controller link and pending request intact when the first controller goes silent', async () => {
+    // Three real clients behind an in-memory relay: A and B both control host.
+    const sockets = new Map<string, Socket>();
+    let silentA = false;
+    class Socket extends EventEmitter implements WsLike {
+      constructor(readonly id: string) { super(); }
+      close = vi.fn(() => { this.emit('close', 1000); });
+      deliver(frame: Envelope) { this.emit('message', { toString: () => JSON.stringify(frame) }); }
+      send(data: string) {
+        const frame = JSON.parse(data) as Envelope;
+        void Promise.resolve().then(() => {
+          if (frame.kind === 'hello') {
+            this.deliver({ v: PROTOCOL_VERSION, kind: 'hello-ack', payload: {
+              serverProtocolVersion: PROTOCOL_VERSION, deviceId: this.id, userId: 'test-user',
+            } });
+          } else if (frame.dst && !(silentA && (this.id === 'a' || frame.dst === 'a'))) {
+            sockets.get(frame.dst)?.deliver({ ...frame, src: this.id });
+          }
+        });
+      }
+    }
+    const client = (id: string) => new DeviceLinkClient({
+      getWsUrl: () => 'ws://test-relay', getToken: async () => 'fake-token',
+      getHello: () => ({ deviceName: id, platform: 'darwin', appVersion: 'test', remoteControlEnabled: true, busy: false }),
+      createWebSocket: () => {
+        const socket = new Socket(id); sockets.set(id, socket);
+        return socket;
+      },
+      timing: { pingIntervalMs: 1_000_000, requestTimeoutMs: 50 },
+    });
+    const host = client('host'), a = client('a'), b = client('b');
+    let heldRequest: Envelope | undefined;
+    host.onFrame((frame) => {
+      if (frame.kind === 'link-open') host.sendLinkAccept(frame.src!, frame.id!, {
+        appVersion: 'test', allowlistHash: 'test', capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+      });
+      if (frame.kind === 'invoke') {
+        if (frame.src === 'b') heldRequest = frame;
+        else {
+          // First request reaches host, but A then stops receiving/ACKing.
+          if (!values.host?.error) silentA = true;
+          host.sendInvokeResult('a', frame.id!, { ok: true, result: catalog('recovered') });
+        }
+      }
+    });
+    try {
+      host.start(); a.start(); b.start();
+      await advance(0);
+      for (const socket of sockets.values()) socket.emit('open');
+      await advance(0);
+      const opening = Promise.all([a, b].map((controller) => controller.openLink('host', {
+        controllerName: 'test-controller', protocolVersion: PROTOCOL_VERSION, appVersion: 'test',
+      })));
+      await advance(0); await opening;
+      const bGeneration = b.getPeerLinkGeneration('host');
+      const hostGeneration = host.getPeerLinkGeneration('b');
+      const pending = b.invoke('host', { channel: 'local-db:sessions:list', args: [] }, 10_000);
+      void pending.catch(() => undefined);
+      const settled = vi.fn(); void pending.then(settled, settled);
+      const read = vi.fn(async () => {
+        const result = await a.invoke('host', { channel: 'maker:provider:list', args: [] }, values.host?.error ? 5_000 : 50);
+        if (!result.ok) throw new Error(result.error?.message);
+        return result.result;
+      });
+      state.makers.set('host', { listProviders: read });
+      await render('host');
+      await advance(50);
+      expect(values.host.ready).toBe(false);
+      expect(values.host.error).toContain('TIMEOUT');
+      silentA = false;
+      await advance(900);
+      // Allow the reliable stream to replay the lost earlier response first.
+      await advance(3_000);
+      expect(values.host.ready).toBe(true);
+      expect(read).toHaveBeenCalledTimes(2);
+      expect(settled).not.toHaveBeenCalled();
+      expect(b.isLinkReady('host')).toBe(true);
+      expect(host.isLinkReady('b')).toBe(true);
+      expect(b.getPeerLinkGeneration('host')).toBe(bGeneration);
+      expect(host.getPeerLinkGeneration('b')).toBe(hostGeneration);
+      for (const socket of sockets.values()) expect(socket.close).not.toHaveBeenCalled();
+      host.sendInvokeResult('b', heldRequest!.id!, { ok: true, result: ['uninterrupted'] });
+      await advance(0);
+      expect(await pending).toEqual({ ok: true, result: ['uninterrupted'] });
+    } finally {
+      await act(async () => root.render(null));
+      a.stop(); b.stop(); host.stop();
+    }
+  });
+
   it('recovers without a new relay epoch and leaves another device untouched', async () => {
     const read = state.makers.get('a')!.listProviders;
     await render('a', false, true);
@@ -138,9 +231,12 @@ describe('model catalog failure recovery', () => {
     expect(values.a.ready).toBe(false);
   });
 
-  it('continues recovery after model preference readiness exhausts its short retries', async () => {
+  it.each([
+    '[MODEL_VISIBILITY_NOT_READY] pending',
+    "Error invoking remote method 'maker:provider:list': Error: [MODEL_VISIBILITY_NOT_READY] pending",
+  ])('continues recovery after preference readiness exhausts short retries: %s', async (message) => {
     const read = state.makers.get('a')!.listProviders;
-    read.mockRejectedValue(new Error('[MODEL_VISIBILITY_NOT_READY] pending'));
+    read.mockRejectedValue(new Error(message));
     await render();
     await advance(750);
     expect(values.a.error).toContain('MODEL_VISIBILITY_NOT_READY');

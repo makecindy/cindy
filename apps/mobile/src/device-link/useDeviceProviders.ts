@@ -23,6 +23,7 @@ import {
   getDeviceProvidersGen,
   markDeviceFetchEpoch,
   isDeviceProvidersUnsupportedError,
+  isDeviceProvidersVisibilityNotReadyError,
   subscribeDeviceProviders,
   subscribeDeviceProvidersGen,
   subscribeDeviceProvidersError,
@@ -54,7 +55,7 @@ const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
 
 function canRecoverProviderRead(error: unknown): boolean {
   return isAutoRecoveringRemoteError(error)
-    || formatRemoteError(error).startsWith('[MODEL_VISIBILITY_NOT_READY]');
+    || isDeviceProvidersVisibilityNotReadyError(error);
 }
 
 /** 取被控设备的供应商目录;deviceId 省略 = 不拉取(返回空,调用方回退扁平列表)。 */
