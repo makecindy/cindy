@@ -481,6 +481,13 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message: err instanceof Error ? err.message : String(err) };
         }
       },
+      botSessionDelivery: {
+        send: async input => {
+          const svc = tryGetOrcaCollabService();
+          if (!svc) return { ok: false, errorCode: 'HOST_NOT_READY', message: 'Existing Session delivery service is not initialized.' };
+          return svc.sendToExistingSession(input);
+        },
+      },
       sessionTasks: {
         startSessionTask: async (params) => {
           const svc = tryGetBotDelegationService();

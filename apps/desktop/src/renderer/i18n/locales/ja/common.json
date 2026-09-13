@@ -1,4 +1,10 @@
 {
+  "botExistingSessionDelivery": {
+    "title": "既存のセッションにメッセージを送信",
+    "description": "以下のメッセージを指定したセッションに送信します。送信前に実行場所、モデル、権限を確認してください。",
+    "localTarget": "このコンピューター",
+    "remoteTarget": "リモートホスト：{{hostId}}"
+  },
   "appBadge": {
     "attentionCount": "対応が必要なセッション：{{count}}"
   },

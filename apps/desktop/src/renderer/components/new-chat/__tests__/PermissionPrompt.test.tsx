@@ -194,3 +194,18 @@ describe('PermissionPrompt 的会话级授权按钮', () => {
     );
   });
 });
+
+
+describe('existing task delivery confirmation', () => {
+  it('renders the entire authorization input including a 4000-character body suffix', () => {
+    const input = {
+      session_id: 'original-task', title: 'Target'.repeat(100),
+      message: 'x'.repeat(3980) + 'PRIVATE-SUFFIX-END',
+      model: 'fable', permission_mode: 'ask', plan_mode_enabled: true,
+    };
+    const { container } = render(<PermissionPrompt permission={{
+      requestId: 'delivery', toolName: 'cindy.send_to_existing_session', input,
+    }} onRespond={vi.fn()} />);
+    expect(container.querySelector('pre')?.textContent).toBe(JSON.stringify(input, null, 2));
+  });
+});

@@ -1,4 +1,10 @@
 {
+  "botExistingSessionDelivery": {
+    "title": "向現有任務傳送訊息",
+    "description": "將下方訊息傳送到指定任務。傳送前請確認其執行位置、模型和權限。",
+    "localTarget": "目前電腦",
+    "remoteTarget": "遠端主機：{{hostId}}"
+  },
   "appBadge": {
     "attentionCount": "需要關注的任務：{{count}}"
   },
