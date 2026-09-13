@@ -154,6 +154,59 @@ describe('listSessionTasks 配对', () => {
     ]));
   });
 
+  it('无 update 的历史回放读取持久化终态(与聊天卡同源,避免重载后终态漂移)', () => {
+    // tool_use 行的 agentMeta.agentTaskStatus 是 messagePersistBroadcaster 落库的
+    // 权威终态:重载(update 清空)后列表必须读它,而不是只看 isSubagentResultError。
+    const persisted = (status: 'completed' | 'failed' | 'stopped', clientId: string, toolUseId: string) =>
+      baseMessage({
+        clientId,
+        role: 'tool_use',
+        toolUseId,
+        content: { toolName: 'Task', input: {} },
+        agentMeta: { agentTaskStatus: status } as Message['agentMeta'],
+      });
+    const { completed } = listSessionTasks({
+      messages: [
+        persisted('stopped', 'c-stopped', 'toolu-stopped'),
+        toolResult('r-stopped', 'toolu-stopped', '<tool_use_error>Interrupted</tool_use_error>'),
+        persisted('completed', 'c-completed', 'toolu-completed'),
+        toolResult('r-completed', 'toolu-completed', '<tool_use_error>transient</tool_use_error>'),
+      ],
+      taskUpdates: undefined,
+      isSessionStreaming: false,
+    });
+
+    // 持久化 stopped 优先于错误回执(与 deriveAgentTaskStatus 的 persistedStatus 语义一致)。
+    expect(completed.find((it) => it.toolUseId === 'toolu-stopped')?.status).toBe('stopped');
+    // 持久化 completed 也优先于错误回执 —— 与聊天卡同源,不会重载后一边失败一边完成。
+    expect(completed.find((it) => it.toolUseId === 'toolu-completed')?.status).toBe('completed');
+  });
+
+  it('无 update 且未 settled 时,持久化终态(仅写 agentTaskStatus、无 tool result)优先', () => {
+    // 启动失败只写回 tool-use 的 agentTaskStatus、未产生 tool result:settled 与 update
+    // 都为 false。此时必须无条件采用持久化终态,而不是空闲显示 stopped / 流式显示
+    // running —— 与聊天卡(MessageStream 传终态)同口径。
+    const persistedOnly = (status: 'completed' | 'failed' | 'stopped', clientId: string, toolUseId: string) =>
+      baseMessage({
+        clientId,
+        role: 'tool_use',
+        toolUseId,
+        content: { toolName: 'Task', input: {} },
+        agentMeta: { agentTaskStatus: status } as Message['agentMeta'],
+      });
+    const { completed } = listSessionTasks({
+      messages: [
+        persistedOnly('failed', 'c-fail', 'toolu-fail'),
+        persistedOnly('stopped', 'c-stop', 'toolu-stop'),
+      ],
+      taskUpdates: undefined,
+      isSessionStreaming: true, // 即便流式,持久化 failed/stopped 也不得退化成 running
+    });
+
+    expect(completed.find((it) => it.toolUseId === 'toolu-fail')?.status).toBe('failed');
+    expect(completed.find((it) => it.toolUseId === 'toolu-stop')?.status).toBe('stopped');
+  });
+
   it('历史 workflow(无 update):从结果文本「Task ID: xxx」提取 taskId(详情读 wf 文件用)', () => {
     const { completed } = listSessionTasks({
       messages: [
