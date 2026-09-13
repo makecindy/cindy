@@ -10,13 +10,16 @@ import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
-import type { MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
+import type { ExportSessionResult, MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
 
 import { bindingStore } from '../im/binding.js';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import { exportSessionShare } from '../session-share/sessionShareExport.js';
+import { SHARE_FILE_EXT } from '../session-share/xdtshareFormat.pure.js';
 import {
+  exportSession,
   moveSessions,
   type SessionOperationsDeps,
   type SessionOpsRow,
@@ -108,6 +111,15 @@ export function createSessionOperationsDeps(
       hooks?.beforeWrite
         ? bindingStore.runExclusive(() => updateSessionInDb(sessionId, patch, undefined, hooks))
         : updateSessionInDb(sessionId, patch, undefined, hooks),
+    fileExists: async (path) => {
+      try {
+        await stat(path);
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    exportShare: (opts) => exportSessionShare({ ...opts, password: null }),
   };
 }
 
@@ -120,6 +132,7 @@ export function createSessionOpsCallbacks(isTurnRunning: (sessionId: string) => 
   return {
     moveSessions: (params: { sessionIds: string[]; target: SessionMoveTarget }): Promise<MoveSessionsResult> =>
       guarded(() => moveSessions(deps, params)),
-
+    exportSession: (params: { sessionId: string; targetPath: string; excludeMedia: boolean }): Promise<ExportSessionResult> =>
+      guarded(() => exportSession(deps, params, SHARE_FILE_EXT)),
   };
 }
