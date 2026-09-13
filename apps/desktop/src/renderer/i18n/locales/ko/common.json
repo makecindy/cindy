@@ -9748,6 +9748,7 @@
         "moveToProjectRunningBlocked": "이 세션은 실행 중입니다. 완료된 후 이동하세요.",
         "moveToProjectAttachedBlocked": "이 세션은 원격 연결 중입니다. 제어가 끝난 후 이동하세요.",
         "moveToProjectRemoteUnsupported": "원격 세션 이동은 아직 지원하지 않습니다",
+        "moveToProjectWorktreeBlocked": "이 작업의 작업 디렉터리는 worktree이므로 다른 프로젝트로 이동할 수 없습니다",
         "openInNewWindow": "새 창에서 열기",
         "exportShare": "세션 내보내기…",
         "exportHtml": "HTML로 내보내기…",

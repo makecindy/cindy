@@ -76,6 +76,7 @@ import {
   MENU_SUB_CONTENT_CLASS,
 } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
+import { isManagedWorktreeWorkingDir } from './lib/sessionMoveGuard';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
@@ -310,6 +311,12 @@ export function SessionContentHeader({
     async (target: SessionMoveTarget) => {
       if (session.remoteHostId || session.deviceLinkDeviceId) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
+        return;
+      }
+      // 与 CCAgentSidebarUpper 同款:worktree 会话不能改 workingDir(半移动),
+      // 移到对话不改目录、仍允许。
+      if (target.kind !== 'dialogue' && isManagedWorktreeWorkingDir(session.workingDir)) {
+        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
         return;
       }
       if (runningSessionIds.has(session.id)) {

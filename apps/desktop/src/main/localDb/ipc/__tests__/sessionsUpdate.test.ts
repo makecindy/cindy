@@ -1050,6 +1050,53 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
   });
+
+  it('refuses to move a task whose working directory is a managed worktree', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
+
+    await expect(invokeUpdate('cc-local', { workingDir: '/new/dir' }))
+      .rejects.toThrow(/cannot be moved outside its worktree/i);
+
+    // 拒绝发生在任何写库/关 runtime 之前:归属分裂的“半移动”不会落盘。
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir });
+    expect(h.closeSession).not.toHaveBeenCalled();
+    expect(h.relocate).not.toHaveBeenCalled();
+  });
+
+  it('refuses the same move through the shared entry point used by the MCP tools', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'codex-local');
+
+    // MCP 的 move_sessions 等非 IPC 调用方直接走 updateSessionInDb:守卫必须同样生效,
+    // 且让调用方看到「需要 handoff」而不是笼统的移动失败。
+    await expect(updateSessionInDb('codex-local', { workingDir: '/new/dir' }))
+      .rejects.toThrow(/worktree handoff is required/i);
+
+    expect(h.closeIdleSessionForMove).not.toHaveBeenCalled();
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ working_dir: worktreeDir });
+  });
+
+  it('allows binding a task to the worktree created for it', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+
+    await invokeUpdate('cc-local', { workingDir: worktreeDir });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir.replace(/\\/g, '/') });
+  });
+
+  it('allows a no-op move that stays inside the same worktree root', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
+
+    await invokeUpdate('cc-local', { workingDir: worktreeDir.replace(/\\/g, '/') });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir.replace(/\\/g, '/') });
+  });
 });
 
 async function invokeSetPinnedCardSummaries(event: unknown, enabled: unknown): Promise<unknown> {

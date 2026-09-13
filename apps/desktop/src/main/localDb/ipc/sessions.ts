@@ -1722,6 +1722,10 @@ export function registerSessionIpc(
  * 会话操作工具(move / pin / delete 等)共用这一条路径:路由锁 + worktree 锁、
  * review 会话拒改、Pi/Codex 空闲 runtime 关闭、cc 转录目录搬迁、recent-workdir
  * 维护、sessions:patched 广播与 agent-island 通知都在这里,不得另起平行写入链路。
+ *
+ * 「绑定托管 worktree 的会话不得改到该 worktree 之外」是这里的不变量,所有入口
+ * (GUI 侧栏、MCP 工具、device-link)一并生效;GUI 侧的预检只为及时反馈,规则
+ * 以本函数为准,不得在入口层另立一份。
  */
 export async function updateSessionInDb(
   sid: string,
@@ -1799,6 +1803,26 @@ export async function updateSessionInDb(
               .where(eq(sessions.id, sid))
           )[0]
         : undefined;
+    // worktree-handoff:worktree 会话的工作区边界就是它绑定的 worktree。只改 workingDir
+    // 会留下「半移动」—— 侧栏按新项目归组,而聊天框底部路径、Git 上下文、worktree
+    // store 归属与回收义务仍留在旧 worktree。完整的 worktree → Local Handoff 是独立
+    // 特性(#2190/#2585,需显式处置未提交改动与 worktree 归属),落地前这里拒绝把会话
+    // 移出 worktree;worktree 创建流程(基线目录 → 自己的 worktree)与同 worktree 内的
+    // no-op 不受影响。拦截发生在关 runtime / 写库 / 转录迁移之前,拒绝不留部分写入。
+    const currentWorktreeRoot =
+      beforeMove && !beforeMove.remoteHostId && beforeMove.workingDir
+        ? managedWorktreeRoot(beforeMove.workingDir)
+        : null;
+    const targetWorktreeRoot =
+      typeof p.workingDir === 'string' && p.workingDir
+        ? managedWorktreeRoot(p.workingDir)
+        : null;
+    if (currentWorktreeRoot && currentWorktreeRoot !== targetWorktreeRoot) {
+      throwIpcError(
+        'PRECONDITION_FAILED',
+        'A worktree session cannot be moved outside its worktree; worktree handoff is required',
+      );
+    }
     const movingLocalNonClaudeSession =
       beforeMove &&
       beforeMove.agentKind !== 'cc' &&

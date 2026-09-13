@@ -222,6 +222,7 @@ import {
 } from './lib/sidebarCollapseConfig';
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
 import { hasSessionSelectionModifier, type SessionClickModifiers } from './sidebar/SessionItem';
+import { isManagedWorktreeWorkingDir } from './lib/sessionMoveGuard';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
   DIALOGUE_FILTER_KEY,
@@ -2684,6 +2685,13 @@ function ExpandedView({
       if (!session) return;
       if (session.remoteHostId || session.deviceLinkDeviceId) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
+        return;
+      }
+      // worktree 会话的工作区就是它自己的 worktree：只改 workingDir 会造成半移动
+      // （侧栏按新项目归组，聊天框底部路径仍指旧 worktree）。handoff 是独立特性，
+      // 先按 MoveWorktreeBlocked 拒绝；移到对话不改目录，不受影响。
+      if (target.kind !== 'dialogue' && isManagedWorktreeWorkingDir(session.workingDir)) {
+        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
         return;
       }
       if (effectiveRunningSessionIds.has(sessionId)) {
