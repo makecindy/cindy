@@ -149,7 +149,7 @@ export async function moveSessions(
         ? '会话在移动前被 IM 接管'
         : null;
     if (lateReason) {
-      return { ...err('PRECONDITION_FAILED', `${row.id}: ${lateReason}`), moved };
+      return { ...err('PRECONDITION_FAILED', `${row.id}: ${lateReason}`), moved } as MoveSessionsResult;
     }
     try {
       const updated = (await deps.updateSession(row.id, { ...patch })) as Partial<SessionOpsRow>;
