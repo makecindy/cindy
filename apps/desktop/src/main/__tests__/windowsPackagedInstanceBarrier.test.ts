@@ -108,5 +108,6 @@ describe('windowsPackagedInstanceBarrier', () => {
       expect(retry.isHeld()).toBe(true);
       await retry.release();
     },
+    30_000,
   );
 });

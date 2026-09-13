@@ -42,6 +42,26 @@ const INDEX_FILENAME = 'MEMORY.md';
 const META_FILENAME = 'meta.json';
 const SHARD_EXT = '.md';
 const SLUG_REGEX = /^[a-z0-9_-]+$/;
+/** apply 全程持有的排他锁目录 — 宿主 write/delete 必须让路。 */
+export const CLEANUP_EXCLUSIVE_LOCK_DIR = '.cleanup-exclusive.lock';
+
+/**
+ * 清理 CLI 持锁期间拒绝宿主写/删, 避免 detectHost 快照后启动的 Cindy
+ * 写到即将被 rename 的 inode (Codex P1 on #2561: hold exclusive lock
+ * after host check through apply/rebuild)。
+ */
+export async function assertNoCleanupExclusiveLock(dir: string): Promise<void> {
+  try {
+    await fs.lstat(path.join(dir, CLEANUP_EXCLUSIVE_LOCK_DIR));
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw e;
+  }
+  throw new MemoryError(
+    'io-error',
+    'cleanup exclusive lock is held; host write blocked until apply/rebuild finishes',
+  );
+}
 
 /**
  * 把 workdir 绝对路径转成 sanitize 后的目录名 (Claude Code 风格)。
@@ -246,7 +266,10 @@ export class MemoryStorage {
 
   /**
    * 列出所有 memory 分片 (含 frontmatter + body)。MEMORY.md / meta.json 自动跳过。
-   * 损坏文件 (frontmatter 缺失 / type 非法) 跳过 + 不抛错 — 不让单个坏文件拖垮全量列表。
+   * 损坏文件 (frontmatter 缺失 / type 非法 / YAML 解析失败) 跳过 + 不抛错 —
+   * 不让单个坏文件拖垮全量列表。分片 I/O 错误 (EACCES/EPERM/锁) 必须抛出:
+   * 若当损坏跳过, rebuildIndex 会据此重写 MEMORY.md, 把仍存在的有效分片从
+   * 索引抹掉且锁解除后不会自动回来 (Codex P1 on #2561)。
    */
   async list(): Promise<MemoryRecord[]> {
     let entries: string[];
@@ -265,8 +288,9 @@ export class MemoryStorage {
       try {
         const rec = await this.readRecord(entry);
         if (rec) records.push(rec);
-      } catch {
-        // 单个坏文件跳过, 由 review 工具后续清理
+      } catch (e) {
+        if (isCorruptShardError(e)) continue;
+        throw e;
       }
     }
     // 按 type 分组, 同 type 内按 slug 升序 → MEMORY.md 索引可读性
@@ -279,12 +303,85 @@ export class MemoryStorage {
     return records;
   }
 
+  /**
+   * 列出所有合法分片, 同时返回同一读的原始字节 (record 与 hash 绑定同一读)。
+   * 供清理工具校验「分类字节 = 归档字节」, 避免 list 后再读导致 hash 绑到
+   * 宿主刷新后的新内容而分类仍是旧记录 (Codex P1 on #2561)。
+   * 损坏文件跳过, 与 list() 同口径; 分片 I/O 错误抛出, 不静默从计划中移除。
+   */
+  async listWithRaw(): Promise<Array<{ rec: MemoryRecord; raw: string }>> {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(this.dir);
+    } catch (e) {
+      if (isENOENT(e)) return [];
+      throw new MemoryError('io-error', `readdir failed: ${(e as Error).message}`);
+    }
+    const out: Array<{ rec: MemoryRecord; raw: string }> = [];
+    for (const entry of entries) {
+      if (entry === INDEX_FILENAME || entry === META_FILENAME) continue;
+      if (!entry.endsWith(SHARD_EXT)) continue;
+      const parsed = parseFilename(entry);
+      if (!parsed) continue;
+      const fullPath = path.join(this.dir, entry);
+      try {
+        const raw = await this.tryReadRaw(fullPath);
+        if (!raw) continue;
+        const shard = parseRawShard(raw, entry);
+        out.push({
+          rec: {
+            filename: entry,
+            slug: parsed.slug,
+            frontmatter: shard.frontmatter,
+            body: shard.body,
+            sizeBytes: Buffer.byteLength(raw, 'utf8'),
+          },
+          raw,
+        });
+      } catch (e) {
+        if (isCorruptShardError(e)) continue;
+        throw e;
+      }
+    }
+    out.sort((a, b) => {
+      if (a.rec.frontmatter.type !== b.rec.frontmatter.type) {
+        return a.rec.frontmatter.type.localeCompare(b.rec.frontmatter.type);
+      }
+      return a.rec.slug.localeCompare(b.rec.slug);
+    });
+    return out;
+  }
+
   /** 读单条; 不存在抛 not-found; 损坏抛 invalid-frontmatter */
   async read(filename: string): Promise<MemoryRecord> {
     this.assertSafeFilename(filename);
     const rec = await this.readRecord(filename);
     if (!rec) throw new MemoryError('not-found', `memory not found: ${filename}`);
     return rec;
+  }
+
+  /**
+   * 读单条 + 返回同一读的原始字节 (record 与 hash 绑定同一读 — 供清理工具
+   * 在 apply 时校验重复组保留副本仍是审阅时点内容)。
+   */
+  async readWithRaw(filename: string): Promise<{ rec: MemoryRecord; raw: string } | null> {
+    const parsed = parseFilename(filename);
+    if (!parsed) return null;
+    const fullPath = path.join(this.dir, filename);
+    const raw = await this.tryReadRaw(fullPath);
+    if (!raw) return null;
+    const shard = parseRawShard(raw, filename);
+    if (!shard) return null;
+    return {
+      rec: {
+        filename,
+        slug: parsed.slug,
+        frontmatter: shard.frontmatter,
+        body: shard.body,
+        sizeBytes: Buffer.byteLength(raw, 'utf8'),
+      },
+      raw,
+    };
   }
 
   /**
@@ -301,6 +398,7 @@ export class MemoryStorage {
    */
   async write(opts: WriteOptions): Promise<WriteResult> {
     this.validateOpts(opts);
+    await assertNoCleanupExclusiveLock(this.dir);
     const filename = buildFilename(opts.type, opts.name);
     const fullPath = path.join(this.dir, filename);
 
@@ -350,6 +448,8 @@ export class MemoryStorage {
     // tryReadRaw 的 await 窗口后、真正写盘前复核 owner scope (review #2388
     // Codex 8th P1): 边界不得把 shard 写入旧 owner 根。
     this.beforeFileWrite?.();
+    // await 窗口后再次确认清理锁, 避免 detectHost 快照后启动的宿主写盘。
+    await assertNoCleanupExclusiveLock(this.dir);
     await fs.writeFile(fullPath, fileText, 'utf8');
     // shard write 后、索引重建前复核 (review #2388 Codex 12th P1): writeFile
     // await 期间边界可能发生, 不得继续在旧 owner 下 rebuildIndex / 返回成功。
@@ -370,10 +470,12 @@ export class MemoryStorage {
 
   async delete(filename: string): Promise<void> {
     this.assertSafeFilename(filename);
+    await assertNoCleanupExclusiveLock(this.dir);
     const fullPath = path.join(this.dir, filename);
     // 删除前复核 (review #2388 Codex 14th P1): 单次预检只保护 delete 开始瞬间,
     // 边界在 fs.unlink / rebuildIndex 之间发生仍会删旧 owner 文件并重建索引。
     this.beforeFileWrite?.();
+    await assertNoCleanupExclusiveLock(this.dir);
     try {
       await fs.unlink(fullPath);
     } catch (e) {
@@ -612,9 +714,39 @@ interface ParsedShard {
 }
 
 function parseRawShard(raw: string, filenameForErr: string): ParsedShard {
-  const parsed = matter(raw);
+  let parsed: ReturnType<typeof matter>;
+  try {
+    parsed = matter(raw);
+  } catch (e) {
+    throw new MemoryError(
+      'invalid-frontmatter',
+      `${filenameForErr} frontmatter 解析失败: ${(e as Error).message}`,
+    );
+  }
+  // gray-matter 对 YAML 文档 `null` / `~` 返回 parsed.data === null;
+  // 直接读 data.title 会 TypeError, isCorruptShardError 认不出, list/dry-run
+  // 整片中止 (Codex P1 on #2561: Classify null YAML roots as corrupt shards).
+  if (
+    parsed.data === null ||
+    typeof parsed.data !== 'object' ||
+    Array.isArray(parsed.data)
+  ) {
+    throw new MemoryError(
+      'invalid-frontmatter',
+      `${filenameForErr} frontmatter 根节点不是对象`,
+    );
+  }
   const data = parsed.data as Partial<MemoryFrontmatter>;
-  if (!data.title || !data.description || !isMemoryType(data.type)) {
+  // gray-matter 会把 YAML `title: 123` / `title: true` 解成 number/boolean;
+  // 只检 truthy 再强转后, 清理扫描对 title.trim() 会 TypeError 中止整个
+  // dry-run (与 Codex P2 on #2561: 非字符串 frontmatter 判为损坏一致).
+  if (
+    typeof data.title !== 'string' ||
+    typeof data.description !== 'string' ||
+    !data.title ||
+    !data.description ||
+    !isMemoryType(data.type)
+  ) {
     throw new MemoryError(
       'invalid-frontmatter',
       `${filenameForErr} frontmatter 缺字段或 type 非法`,
@@ -633,4 +765,9 @@ function parseRawShard(raw: string, filenameForErr: string): ParsedShard {
 
 function isENOENT(e: unknown): boolean {
   return typeof e === 'object' && e !== null && (e as { code?: string }).code === 'ENOENT';
+}
+
+/** 仅 frontmatter/YAML 损坏可跳过; I/O 必须冒泡 (Codex P1 on #2561)。 */
+function isCorruptShardError(e: unknown): boolean {
+  return e instanceof MemoryError && e.code === 'invalid-frontmatter';
 }

@@ -5,7 +5,7 @@ const DEFAULT_ACQUIRE_TIMEOUT_MS = 5_000;
 // CI workers two shards can start this helper together and exceed five seconds
 // before the script emits its first status line.
 const HELPER_START_TIMEOUT_MS = 15_000;
-const HELPER_PROBE_TIMEOUT_MS = 5_000;
+const HELPER_PROBE_TIMEOUT_MS = 15_000;
 const HELPER_EXIT_TIMEOUT_MS = 2_000;
 const MAX_HELPER_OUTPUT_BYTES = 16 * 1024;
 
