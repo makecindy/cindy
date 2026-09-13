@@ -41,6 +41,9 @@ import {
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
   registerMoveSessionsTool,
+  registerPinSessionsTool,
+  registerUnpinSessionsTool,
+  type PinSessionsDeps,
   registerSendToSessionTool,
   registerListWorkdirsTool,
   registerListSessionsTool,
@@ -627,7 +630,10 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
-  sessionOps?: { moveSessions: MoveSessionsDeps['moveSessions'] };
+  sessionOps?: {
+    moveSessions: MoveSessionsDeps['moveSessions'];
+    setSessionsPinned: PinSessionsDeps['setSessionsPinned'];
+  };
 }
 
 /**
@@ -698,6 +704,12 @@ export function createXdtHelperMcpServer(
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       moveSessions: deps.sessionOps.moveSessions,
     });
+    const pinDeps = {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      setSessionsPinned: deps.sessionOps.setSessionsPinned,
+    };
+    registerPinSessionsTool(registry, pinDeps);
+    registerUnpinSessionsTool(registry, pinDeps);
   }
 
   // History 类工具: 仅 host 注入了 history 回调时注册。

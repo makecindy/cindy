@@ -10,7 +10,7 @@ import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
-import type { MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
+import type { MoveSessionsResult, SessionMoveTarget, SetSessionsPinnedResult } from '@cindy/mcps';
 
 import { bindingStore } from '../im/binding.js';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
@@ -18,6 +18,7 @@ import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
 import {
   moveSessions,
+  setSessionsPinned,
   type SessionOperationsDeps,
   type SessionOpsRow,
 } from './sessionOperations.js';
@@ -120,6 +121,8 @@ export function createSessionOpsCallbacks(isTurnRunning: (sessionId: string) => 
   return {
     moveSessions: (params: { sessionIds: string[]; target: SessionMoveTarget }): Promise<MoveSessionsResult> =>
       guarded(() => moveSessions(deps, params)),
+    setSessionsPinned: (params: { sessionIds: string[]; pinned: boolean }): Promise<SetSessionsPinnedResult> =>
+      guarded(() => setSessionsPinned(deps, params)),
 
   };
 }

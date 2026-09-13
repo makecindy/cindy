@@ -12,7 +12,13 @@
 
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { isAbsolute } from 'node:path';
-import type { MoveSessionsResult, SessionMoveTarget, SessionOpErrorCode, SessionOpItem } from '@cindy/mcps';
+import type {
+  MoveSessionsResult,
+  SessionMoveTarget,
+  SessionOpErrorCode,
+  SessionOpItem,
+  SetSessionsPinnedResult,
+} from '@cindy/mcps';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 
@@ -192,4 +198,34 @@ export async function moveSessions(
     }
   }
   return { ok: true, moved };
+}
+export async function setSessionsPinned(
+  deps: SessionOperationsDeps,
+  params: { sessionIds: string[]; pinned: boolean },
+): Promise<SetSessionsPinnedResult> {
+  const loaded = await loadAll(deps, params.sessionIds);
+  if (!Array.isArray(loaded)) return loaded;
+  // 置顶只写本地 pinnedAt 元数据,SSH 远程会话在 GUI 同样可置顶(patchMeta),这里不拦。
+  // 伙伴(Bot)会话与 Orca worker 不在侧栏置顶区展示,拒绝以免写入无人可见的状态。
+  for (const row of loaded) {
+    if (row.status !== 'active') return err('PRECONDITION_FAILED', `${row.id}: 会话已归档或删除,不能置顶`);
+    if (row.source === 'bot') return err('PRECONDITION_FAILED', `${row.id}: 伙伴(Bot)会话不能置顶`);
+    if (row.orcaRole === 'worker') return err('PRECONDITION_FAILED', `${row.id}: 协同 worker 会话不能置顶`);
+  }
+  const changed: SessionOpItem[] = [];
+  for (const row of loaded) {
+    try {
+      // 终态 / 运行态 / IM 接管的复核放在 updateSessionInDb 写锁内(beforeWrite):预检后被并发
+      // 归档或删除的会话不会再被写入 pinnedAt 并报成功。
+      await deps.updateSession(row.id, { pinnedAt: params.pinned ? new Date().toISOString() : null }, {
+        beforeWrite: () => lateGuard(deps, row.id, { allowArchived: false }),
+      });
+      changed.push(toItem(row));
+    } catch (e) {
+      // 保留映射后的业务错误码,只有未知异常才是 INTERNAL;已完成的 changed 一并带回。
+      const mapped = mapIpcError(e);
+      return { ...mapped, message: `${row.id}: ${mapped.message}`, changed } as SetSessionsPinnedResult;
+    }
+  }
+  return { ok: true, changed };
 }

@@ -40,6 +40,7 @@ export {
 } from './archive_sessions.js';
 export { SESSION_OPS_MAX_BATCH, type SessionOpErrorCode, type SessionOpItem, type SessionOpResult } from './_session_ops.js';
 export { registerMoveSessionsTool, type MoveSessionsDeps, type MoveSessionsResult, type SessionMoveTarget } from './move_sessions.js';
+export { registerPinSessionsTool, registerUnpinSessionsTool, type PinSessionsDeps, type SetSessionsPinnedResult } from './pin_sessions.js';
 // multi-worker Phase 1 control tools
 export {
   registerStartTeamTool,
