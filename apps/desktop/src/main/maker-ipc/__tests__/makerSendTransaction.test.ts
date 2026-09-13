@@ -56,6 +56,8 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     getSessionMeta: vi.fn(async () => ({ title: '现有会话' })),
     ensureRemoteReadyForSessionStart: vi.fn(async () => {}),
     checkWorkDirExists: vi.fn(async () => true),
+    // 默认"DB 目录不可用":不命中移动漂移重建,既有用例保持原语义。
+    statDirectory: vi.fn(async () => ({ isDirectory: () => false })),
     isOrcaMcpHydrated: vi.fn(() => true),
     buildCreateOptsWithStderr: vi.fn((opts: MakerSessionCreateOpts) => opts),
     synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => false),
@@ -1163,6 +1165,79 @@ describe('maker SEND transaction', () => {
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
     expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds a live runtime in the persisted directory when the runtime cwd drifted', async () => {
+    // 会话移动后旧 runtime 可能仍活着(cc 转录迁移 close 是 best-effort),且旧目录
+    // 通常还在:DB 目录真实存在时必须关旧 runtime 并按 DB 目录重建,否则下一轮消息
+    // 仍在旧 cwd 执行(2026-09-13 实报)。
+    const movedSession = createSession({ workDir: '/data/old-project' });
+    const rebuiltSession = createSession({ workDir: '/data/new-project' });
+    const { deps } = createDeps({
+      getSession: () => movedSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => '/data/new-project'),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+      bootstrapSession: vi.fn(async () => ({
+        session: rebuiltSession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'claude-code', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.checkWorkDirExists).toHaveBeenNthCalledWith(
+      1, 'session-1', '/data/old-project', 'codex', null, { suppressMissingBroadcast: true },
+    );
+    expect(deps.statDirectory).toHaveBeenCalledWith('/data/new-project');
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: '/data/new-project' }),
+    );
+    expect(movedSession.send).not.toHaveBeenCalled();
+    expect(rebuiltSession.send).toHaveBeenCalled();
+  });
+
+  it('keeps the live runtime when the persisted directory is not actually on disk', async () => {
+    // 只有 DB 目录真实存在才迁移：不存在时不能走 recovery/mkdir 把不存在的项目
+    // "恢复"成空文件夹，也不能丢掉活 runtime 的上下文。
+    const movedSession = createSession({ workDir: '/data/old-project' });
+    const { deps } = createDeps({
+      getSession: () => movedSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => '/data/new-project'),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => false })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'claude-code', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(movedSession.send).toHaveBeenCalled();
+  });
+
+  it('keeps the recovery fallback instead of switching a live runtime to the raw persisted path', async () => {
+    // DB 目录已被 workingDirectoryRecovery 接管(resolve 返回 fallback)：文件在
+    // fallback 里，不能因为原路径"存在"就把 session 拉回去。
+    const movedSession = createSession({ workDir: '/data/old-project' });
+    const { deps } = createDeps({
+      getSession: () => movedSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => '/mnt/disk/project'),
+      resolveRecoveredWorkingDir: (_id, dir) =>
+        (dir === '/mnt/disk/project' ? '/userData/fallback' : dir),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(movedSession.send).toHaveBeenCalled();
   });
 
   it.each(['claude-code', 'pi'] as const)('refreshes a live %s process after same-path recovery and preserves its note', async (agentKind) => {

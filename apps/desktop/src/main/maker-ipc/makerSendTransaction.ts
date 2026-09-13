@@ -338,6 +338,12 @@ export interface MakerSendTransactionDeps {
   ): Promise<boolean>;
   resolveRecoveredWorkingDir?(sessionId: string, workingDir: string): string;
   /**
+   * 纯文件系统探测(不做 recovery / mkdir / 广播)。判断 DB 里的 working_dir 是否
+   * **真实存在** —— 会话移动后 runtime cwd 与 DB 漂移时,只有确认 DB 目录真实存在
+   * 才重建 runtime,不能把不存在的目录"恢复"成空文件夹。
+   */
+  statDirectory(dir: string): Promise<{ isDirectory(): boolean }>;
+  /**
    * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create 把它当唯一
    * 真源直接采纳；rehydrate 只在 caller 传入的 workingDir 校验失败时用它兜底——
    * 输入队列崩溃快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
@@ -705,6 +711,24 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     return true;
   }
 
+  /**
+   * 持久化 working_dir 是否真实可用:纯 stat,不做 recovery / mkdir / 广播。
+   * 已被 workingDirectoryRecovery 接管的目录(resolve 返回 fallback)不算 ——
+   * session 的文件在 fallback 里,继续留在那里才符合恢复语义。
+   */
+  async function isUsablePersistedWorkingDir(
+    sessionId: string,
+    workingDir: string,
+  ): Promise<boolean> {
+    const resolved = deps.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;
+    if (resolved !== workingDir) return false;
+    try {
+      return (await deps.statDirectory(workingDir)).isDirectory();
+    } catch {
+      return false;
+    }
+  }
+
   async function rehydrateActiveSession(
     sessionId: string,
     createOpts: CreateOpts,
@@ -924,9 +948,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       await deps.ensureRemoteReadyForSessionStart({ session: sess, createOpts });
 
       if (sess) {
-        // Startup migration or a directory relocation may repair SQLite while a
-        // live SDK still owns the old cwd. Only use that persisted replacement;
-        // recreating an arbitrary project as an empty folder would lose its context.
+        // SQLite 里的 working_dir 才是持久真源(启动迁移 / 目录重定位 / 用户移动
+        // 会话都会改写它),而活 SDK 可能仍占着旧 cwd。漂移时按下面的规则切到持久
+        // 目录:它必须**真实存在**(纯 stat,绝不为它 mkdir 空文件夹 —— 那会丢掉活
+        // runtime 的上下文),且不被 workingDirectoryRecovery 的 fallback 接管。
         const dbDir = !sess.remoteHostId
           ? await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null)
           : null;
@@ -938,15 +963,27 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           sess.remoteHostId,
           ...(fallbackDir ? [{ suppressMissingBroadcast: true }] : []),
         );
+        // 会话移动(移动到项目 / worktree 变更)后旧 runtime 可能仍然活着 —— cc 的
+        // 转录迁移 close 是 best-effort,close 失败时移动照常完成。此时 DB 的
+        // working_dir 才是任务现在的目录:它**真实存在**且与 runtime cwd 不一致时,
+        // 关闭旧 runtime 并按 DB 目录重建;不能等旧目录消失 —— 旧目录通常还在
+        // (2026-09-13 实报:移动后消息仍在旧目录执行)。
+        const persistedDirReady = ok && fallbackDir
+          ? await isUsablePersistedWorkingDir(sessionId, fallbackDir)
+          : false;
         // Claude/Pi keep a process whose cwd can still reference the deleted inode.
         // The pending note also covers recovery performed by an earlier preflight.
         const recoveredDir = !sess.remoteHostId
           ? deps.resolveRecoveredWorkingDir?.(sessionId, sess.workDir) ?? sess.workDir
           : sess.workDir;
-        const needsCwdRefresh = ok && !sess.remoteHostId && (
+        // recovery 语义优先:live 目录已被 fallback 接管(或带 note)时按 fallback
+        // 重建,不做 DB 迁移 —— 那批文件在 fallback 里,不能把 session 拉回 DB 路径。
+        const liveDirNeedsRecovery =
           recoveredDir !== sess.workDir ||
           ((sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
-          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir)));
+          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir));
+        const needsCwdRefresh = ok && !sess.remoteHostId &&
+          (liveDirNeedsRecovery || persistedDirReady);
         if ((!ok && fallbackDir) || needsCwdRefresh) {
           const supplied = (createOpts as CreateOpts | undefined) ??
             await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
@@ -957,7 +994,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             ...supplied,
             ...preferences,
             id: sessionId,
-            workingDir: needsCwdRefresh ? recoveredDir : fallbackDir!,
+            workingDir: needsCwdRefresh
+              ? (liveDirNeedsRecovery ? recoveredDir : fallbackDir!)
+              : fallbackDir!,
             agentKind: sess.agentKind,
             remoteHostId: sess.remoteHostId ?? undefined,
           });
