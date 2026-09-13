@@ -2176,7 +2176,10 @@ export function onAssistantTextEvent(
               { ...agentMeta },
             );
             if (patched) {
-              broadcastMessageAgentMetaUpdate(sessionId, boundaryFlushed.persistId, ownerScope);
+              // 与其它 agent-meta 落库路径一致 await:广播内部要回查行,DB worker 正在
+              // 关停/替换时它会 reject;不 await 的话这个 promise 会逃出 enqueueWrite
+              // 的错误处理,变成 main 进程的 unhandled rejection。
+              await broadcastMessageAgentMetaUpdate(sessionId, boundaryFlushed.persistId, ownerScope);
             }
           },
         );
