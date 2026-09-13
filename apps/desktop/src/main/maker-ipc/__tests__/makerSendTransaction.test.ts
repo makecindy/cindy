@@ -1344,13 +1344,81 @@ describe('maker SEND transaction', () => {
       }),
     ).resolves.toMatchObject({ accepted: true });
 
-    // 首检拿 caller 值且静默(有 DB 兜底候选);兜底检拿 DB 值正常广播语义。
-    expect(checkWorkDirExists).toHaveBeenNthCalledWith(1, 'lazy-1', staleDir, 'codex', undefined, {
-      suppressMissingBroadcast: true,
-    });
-    expect(checkWorkDirExists).toHaveBeenNthCalledWith(2, 'lazy-1', dbDir, 'codex', undefined);
+    // lazy-create 直接采纳 DB 值,不再先校验 caller 快照(旧目录也是 caller 值时
+    // 会误判为可用)。
+    expect(checkWorkDirExists).toHaveBeenCalledTimes(1);
+    expect(checkWorkDirExists).toHaveBeenNthCalledWith(1, 'lazy-1', dbDir, 'codex', undefined);
     // bootstrap 用采纳后的 DB 路径 spawn。
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: dbDir }));
+  });
+
+  it('lazy-create prefers the DB working_dir even when the stale caller directory still exists', async () => {
+    // 用户把任务移动到别的项目后,排队/重试项里内嵌的还是旧目录;旧目录通常还在,
+    // 必须仍然以 DB 为准,否则 runtime 会在旧 cwd 启动(与移动语义矛盾)。
+    const staleDir = '/data/old-project';
+    const dbDir = '/data/new-project';
+    const checkWorkDirExists = vi.fn(async () => true);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      checkWorkDirExists,
+      readSessionWorkingDirFromDb: vi.fn(async () => dbDir),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('lazy-moved', 'hello', {
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-7',
+        workingDir: staleDir,
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(checkWorkDirExists).toHaveBeenCalledTimes(1);
+    expect(checkWorkDirExists).toHaveBeenNthCalledWith(
+      1,
+      'lazy-moved',
+      dbDir,
+      'claude-code',
+      undefined,
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: dbDir }),
+    );
+  });
+
+  it('lazy-create resolves the DB working_dir through the recovery fallback', async () => {
+    // 数据库里还是原始挂载路径,workingDirectoryRecovery 已为它登记临时目录:
+    // 采用 DB 值时必须过 resolve(),不能把 runtime 拉回不可用的原路径。
+    const staleDir = '/data/stale-project';
+    const dbDir = '/mnt/disk/project';
+    const fallbackDir = '/userData/dialogues/fallback';
+    const checkWorkDirExists = vi.fn(async (_sid: string, dir: string | undefined | null) => dir === fallbackDir);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      checkWorkDirExists,
+      readSessionWorkingDirFromDb: vi.fn(async () => dbDir),
+      resolveRecoveredWorkingDir: (_sid, dir) => (dir === dbDir ? fallbackDir : dir),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('lazy-fallback', 'hello', {
+        agentKind: 'codex',
+        model: 'gpt-5.5',
+        workingDir: staleDir,
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(checkWorkDirExists).toHaveBeenCalledTimes(1);
+    expect(checkWorkDirExists).toHaveBeenNthCalledWith(
+      1,
+      'lazy-fallback',
+      fallbackDir,
+      'codex',
+      undefined,
+      { suppressMissingBroadcast: true },
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: fallbackDir }),
+    );
   });
 
   it('lazy-create still fails with WORKDIR_MISSING when caller and DB workdirs are both gone', async () => {

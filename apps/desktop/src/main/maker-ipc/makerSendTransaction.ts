@@ -338,9 +338,9 @@ export interface MakerSendTransactionDeps {
   ): Promise<boolean>;
   resolveRecoveredWorkingDir?(sessionId: string, workingDir: string): string;
   /**
-   * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create /
-   * rehydrate 在 caller 传入的 workingDir 校验失败时用它兜底——输入队列崩溃
-   * 快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
+   * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create 把它当唯一
+   * 真源直接采纳；rehydrate 只在 caller 传入的 workingDir 校验失败时用它兜底——
+   * 输入队列崩溃快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
    */
   readSessionWorkingDirFromDb(sessionId: string): Promise<string | null>;
   isOrcaMcpHydrated(sessionId: string): boolean;
@@ -634,17 +634,38 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   /**
-   * workDir 校验 + DB 权威值兜底。caller 传入的 createOpts.workingDir 可能是
-   * 缓存的陈旧值(典型:输入队列崩溃快照在启动 sweep 改写 DB 之前入的库,
-   * 回放时仍内嵌老路径,2026-07-20 实报)——校验失败时读 DB 行的 working_dir
-   * 重试,通过则就地采纳进 createOpts(后续 bootstrap 用新 cwd spawn)。
+   * workDir 校验 + DB 权威值兜底。caller 传入的 createOpts.workingDir 可能是缓存的
+   * 陈旧值(典型:输入队列崩溃快照在启动 sweep 改写 DB 之前入的库,回放时仍内嵌老
+   * 路径,2026-07-20 实报;用户把任务移动到别的项目后,排队/重试项里内嵌的还是旧
+   * 目录,2026-09-13 实报)。两条调用路径的权威不同:
+   *   - lazy-create(preferDbWorkingDir=true):没有活 runtime,DB 行是唯一真源 ——
+   *     快照与 DB 不一致时**无条件**采纳 DB 值再校验。只在旧目录缺失时才回退不够:
+   *     用户移动到别的项目后旧目录通常还在,校验会通过,新 runtime 就在旧 cwd 启动,
+   *     与「移动时关闭 runtime、下一次 send 以新目录 lazy resume」的契约矛盾。
+   *   - rehydrate(默认):调用方(recovery / orca)已显式决定目标目录(可能是
+   *     workingDirectoryRecovery 选定的 fallback),DB 只在 caller 目录不可用时兜底,
+   *     不能无条件改回 DB。
    * 存在兜底候选时首检静默,避免"先弹错误横幅再静默成功"的假错误。
    */
   async function ensureWorkDirWithDbFallback(
     sessionId: string,
     createOpts: CreateOpts,
+    opts?: { preferDbWorkingDir?: boolean },
   ): Promise<boolean> {
     const dbDir = await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null);
+    if (opts?.preferDbWorkingDir && dbDir && dbDir !== createOpts.workingDir) {
+      const adopted = createOpts.remoteHostId
+        ? dbDir
+        : deps.resolveRecoveredWorkingDir?.(sessionId, dbDir) ?? dbDir;
+      if (adopted !== createOpts.workingDir) {
+        deps.log.info('send: lazy-create adopted DB working_dir over stale caller snapshot', {
+          sessionId,
+          staleWorkingDir: createOpts.workingDir,
+          workingDir: adopted,
+        });
+        createOpts.workingDir = adopted;
+      }
+    }
     const fallbackDir = dbDir && dbDir !== createOpts.workingDir ? dbDir : null;
     const ok = fallbackDir
       ? await deps.checkWorkDirExists(
@@ -801,7 +822,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     sessionId: string,
     createOpts: CreateOpts,
   ): Promise<ResolveSessionResult> {
-    const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts);
+    const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts, {
+      preferDbWorkingDir: true,
+    });
     if (!okLazy) {
       return {
         kind: 'failure',
