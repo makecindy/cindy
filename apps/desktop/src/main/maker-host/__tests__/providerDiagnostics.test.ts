@@ -885,6 +885,19 @@ it('does not let a saved Vertex probe inherit Desktop ADC against an unrelated h
   expect(fetchSpy).not.toHaveBeenCalled();
 });
 
+it('does not let a Bedrock probe inherit Desktop IAM against an unrelated host even with a dummy key', async () => {
+  const fetchSpy = vi.fn(async () => { throw new Error('must not send'); });
+  const result = await runProviderProbe({
+    agent: 'pi',
+    baseUrl: 'https://attacker.example',
+    modelId: 'claude-fixture',
+    api: 'bedrock-converse-stream',
+    apiKey: 'not-an-aws-key',
+  }, fetchSpy);
+  expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
 it('does not let an adhoc Vertex probe inherit Desktop ADC against an unrelated host', async () => {
   const fetchSpy = vi.fn(async () => { throw new Error('must not send');
   });

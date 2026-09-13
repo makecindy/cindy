@@ -114,7 +114,8 @@ function probeHasUserSecret(spec: ProviderProbeSpec): boolean {
 /** Vertex/Bedrock can use Desktop ADC/IAM. Renderer-chosen URLs must not inherit those credentials. */
 function hostEnvironmentApiAllowed(spec: ProviderProbeSpec, api: string): boolean {
   if (!HOST_ENVIRONMENT_APIS.has(api as PiModelApi)) return true;
-  if (probeHasUserSecret(spec)) return true;
+  // Bedrock signs with Desktop IAM even when a dummy apiKey is present.
+  if (api !== 'bedrock-converse-stream' && probeHasUserSecret(spec)) return true;
   if (!spec.catalogPresetId) return false;
   const row = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, api as PiModelApi)
     ?? providerPresetModelRecord(spec.catalogPresetId, spec.modelId);
