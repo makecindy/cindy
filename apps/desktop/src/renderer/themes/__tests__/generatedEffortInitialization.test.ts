@@ -13,7 +13,7 @@ describe('generated effort inputs initialize without DOM or circular imports', (
       await import('../colors');
       await import('../effortTierColors');
       expect(colorRegistry.getColors()).toEqual(first);
-      expect(first.length).toBe(541);
+      expect(first.length).toBe(542);
       expect(first[0].id).toBe('surface');
       expect(effort.effortTierColor('high')).toBe('#3B82F6');
       expect(effort.effortTierColor('unknown')).toBe('#14B8A6');

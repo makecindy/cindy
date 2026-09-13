@@ -2473,6 +2473,16 @@
           "$value": "{reference.defaults.lightbox-toolbar-hover-bg.dark}"
         }
       },
+      "region-capture-selection-border": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.region-capture-selection-border.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.region-capture-selection-border.dark}"
+        }
+      },
       "error-bg": {
         "light": {
           "$type": "color",

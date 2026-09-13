@@ -8680,6 +8680,46 @@
           }
         }
       },
+      "region-capture-selection-border": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.9
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 1
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              1,
+              1,
+              1
+            ],
+            "alpha": 0.9
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "rgb",
+              "alpha": true,
+              "precision": 1
+            }
+          }
+        }
+      },
       "error-bg": {
         "light": {
           "$type": "color",

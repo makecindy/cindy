@@ -1860,6 +1860,10 @@
       "light": "semantic.defaults.lightbox-toolbar-hover-bg.light",
       "dark": "semantic.defaults.lightbox-toolbar-hover-bg.dark"
     },
+    "region-capture-selection-border": {
+      "light": "semantic.defaults.region-capture-selection-border.light",
+      "dark": "semantic.defaults.region-capture-selection-border.dark"
+    },
     "error-bg": {
       "light": "semantic.defaults.error-bg.light",
       "dark": "semantic.defaults.error-bg.dark"
