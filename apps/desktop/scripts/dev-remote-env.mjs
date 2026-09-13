@@ -16,6 +16,7 @@ import {
   applyDesktopDevStartupConfig,
   stripDesktopDevRegionArgs,
 } from '../../../scripts/shared/desktop-dev-region.mjs';
+import { withDesktopDevNodeOptions } from '../../../scripts/shared/desktop-dev-node-options.mjs';
 
 const [command, ...rawArgs] = process.argv.slice(2);
 if (!command) {
@@ -25,11 +26,11 @@ if (!command) {
 
 const startupConfig = applyDesktopDevStartupConfig({ argv: rawArgs, mode: 'remote' });
 const args = stripDesktopDevRegionArgs(rawArgs);
-const env = {
+const env = withDesktopDevNodeOptions({
   ...process.env,
   XDT_DESKTOP_DEV_MODE: 'remote',
   VITE_CINDY_AUTH_REGION: startupConfig.region,
-};
+});
 const isWindows = process.platform === 'win32';
 
 // Windows 下 electron-forge 等 .cmd shim 需要经 shell 解析;shell 模式下 Node 不转义

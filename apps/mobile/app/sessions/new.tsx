@@ -749,7 +749,7 @@ export default function NewRemoteSessionScreen() {
     [capabilities, draft.model],
   );
   // 被控端供应商目录 → provider-aware 模型分段(对齐桌面)。0 供应商 / 旧被控端 → 回退扁平列表。
-  const deviceProviders = useDeviceProviders(selectedDeviceId || undefined);
+  const deviceProviders = useDeviceProviders(selectedDeviceId || undefined, modelSheetOpen);
   // 模型列表元信息(单价 / 折扣版 key presence)+ 草稿 per-(agent,来源,模型) 记忆(对齐桌面)。
   const deviceModelPricing = useDeviceModelPricing(selectedDeviceId || undefined);
   const deviceApiKeyStatus = useDeviceApiKeyStatus(selectedDeviceId || undefined);
