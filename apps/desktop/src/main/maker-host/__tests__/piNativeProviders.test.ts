@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { BUNDLED_CATALOG, PROVIDER_MODEL_CATALOG, providerModelRecord, buildUserProvider, type Catalog } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, PROVIDER_MODEL_CATALOG, providerModelRecord, buildUserProvider, providerPresetOAuth, type Catalog } from '@cindy/model-providers';
 
 // Account discovery persistence is outside this runtime/route fixture.
 vi.mock('../model-discovery/xai.js', () => ({
@@ -2226,6 +2226,18 @@ describe('buildPiNativeProvidersFromConfigs', () => {
       headers: { 'x-cindy-pi-provider-id': 'openrouter-test', 'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN' },
       models: [{ id: 'google/gemini-test', baseUrl: 'http://127.0.0.1:9999' }],
     });
+    expect(env).toEqual({});
+  });
+
+  it('keeps Copilot OAuth connections as native adapters without an API key env', () => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(model => model.execution.pi.api === 'openai-responses')!;
+    const { providers, env } = buildPiNativeProvidersFromConfigs([{ id: 'copilot-oauth', name: 'Copilot',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { pi: { baseUrl: row.upstream, catalogPresetId: 'github-copilot', wireProtocol: 'openai-responses',
+        models: [{ id: row.id, name: row.name, api: row.execution.pi.api }] } } }],
+      () => { throw new Error('OAuth must not read API keys'); }, undefined, undefined, undefined, 'http://127.0.0.1:9999');
+    expect(providers[0]).toMatchObject({ adapterProvider: 'github-copilot', baseUrl: 'http://127.0.0.1:9999' });
+    expect(providers[0]?.apiKeyEnvVar).toBeUndefined();
     expect(env).toEqual({});
   });
 

@@ -1,4 +1,19 @@
 /** Preserve Pi's provider-specific serializers for independently named Cindy connections. */
+export function nativeProviderAdapterAliases(
+  nativeProviders: Array<{ id: string; name: string; adapterProvider?: string; apiKeyEnvVar?: string }>,
+): Array<{ id: string; name: string; provider: string; keyEnv?: string }> {
+  return nativeProviders.flatMap((provider) =>
+    provider.adapterProvider
+      ? [{
+          id: provider.id,
+          name: provider.name,
+          provider: provider.adapterProvider,
+          ...(provider.apiKeyEnvVar ? { keyEnv: provider.apiKeyEnvVar } : {}),
+        }]
+      : [],
+  );
+}
+
 export const PI_NATIVE_PROVIDER_ADAPTER_SOURCE = String.raw`
 async function registerCindyNativeProviderAdapters(pi: any) {
   const raw = process.env.CINDY_PI_NATIVE_PROVIDER_ADAPTERS;
@@ -9,7 +24,7 @@ async function registerCindyNativeProviderAdapters(pi: any) {
   const { getApiProvider } = await import('@earendil-works/pi-ai/compat');
   pi.on('session_start', (_event: any, ctx: any) => {
     for (const alias of aliases) {
-      if (typeof alias.id !== 'string' || typeof alias.provider !== 'string' || typeof alias.keyEnv !== 'string') continue;
+      if (typeof alias.id !== 'string' || typeof alias.provider !== 'string') continue;
       const models = ctx.modelRegistry.getAll().filter((model: any) => model.provider === alias.id);
       if (models.length === 0) continue;
       const stream = (model: any, context: any, options: any, simple: boolean) => lazyStream(model, async () => {
@@ -33,7 +48,7 @@ async function registerCindyNativeProviderAdapters(pi: any) {
         })();
       });
       pi.registerProvider({ id: alias.id, name: alias.name ?? alias.id,
-        auth: { apiKey: envApiKeyAuth('API key', [alias.keyEnv]) },
+        ...(typeof alias.keyEnv === 'string' ? { auth: { apiKey: envApiKeyAuth('API key', [alias.keyEnv]) } } : {}),
         getModels: () => models,
         stream: (model: any, context: any, options: any) => stream(model, context, options, false),
         streamSimple: (model: any, context: any, options: any) => stream(model, context, options, true),
