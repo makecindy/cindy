@@ -14,6 +14,10 @@ import {
   mobileClientBuildEnv,
 } from '../shared/client-endpoint-build-env.mjs';
 import { resolveReleaseCdnBaseUrl } from '../shared/release-env.mjs';
+import {
+  assertMobileManifestBuildEnv,
+  createMobileManifestBuildSnapshot,
+} from '../shared/mobile-manifest-build-guard.cjs';
 
 const tempDirs = [];
 const originalReleaseCdn = process.env.XDT_CDN_BASE_URL;
@@ -93,6 +97,105 @@ test('Mobile bundling 进程环境只在 CindyDev 保留 Release 清单基址', 
     dev.EXPO_PUBLIC_CINDY_DEV_RELEASE_ENDPOINT_MANIFEST_BASE_URL,
     'https://hotfix-cn.example.invalid/app',
   );
+});
+
+test('Mobile 生产清单校验接受两区正本及等价 URL，且不修改传入环境', () => {
+  const repoRoot = writeRepoFixtures();
+  for (const authRegion of ['cn', 'global']) {
+    const expected = mobileClientBundleEnv({ authRegion, repoRoot });
+    const env = Object.freeze({
+      ...expected,
+      EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL:
+        `  ${expected.EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL.replace('https://hotfix-', 'https://HOTFIX-')}///  `,
+    });
+    assert.doesNotThrow(() => assertMobileManifestBuildEnv(env, expected));
+  }
+});
+
+test('Mobile 生产清单校验拒绝缺失、重复、对调及不匹配的最终值', () => {
+  const repoRoot = writeRepoFixtures();
+  const baseKey = 'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL';
+  const peerKey = 'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL';
+  for (const authRegion of ['cn', 'global']) {
+    const expected = mobileClientBundleEnv({ authRegion, repoRoot });
+    for (const key of [baseKey, peerKey]) {
+      for (const value of [undefined, '', ' ', 'not-a-url', 'http://example.invalid/app',
+        'https://fake-user:fake-secret@example.invalid/app']) {
+        assert.throws(() => assertMobileManifestBuildEnv({ ...expected, [key]: value }, expected),
+          (error) => error.message.includes(key) && !error.message.includes('fake-secret'));
+      }
+      assert.throws(() => assertMobileManifestBuildEnv({
+        ...expected, [key]: 'https://wrong.example.invalid/app',
+      }, expected), /仓内清单不一致/);
+    }
+    assert.throws(() => assertMobileManifestBuildEnv({
+      ...expected,
+      [peerKey]: `${expected[baseKey].replace('/app', ':443/app')}/`,
+    }, expected), /规范化后不能相同/);
+    assert.throws(() => assertMobileManifestBuildEnv({
+      ...expected, [baseKey]: expected[peerKey], [peerKey]: expected[baseKey],
+    }, expected), /仓内清单不一致/);
+    assert.throws(() => assertMobileManifestBuildEnv({
+      ...expected, EXPO_PUBLIC_CINDY_AUTH_REGION: 'dev',
+    }, expected), /构建区域不一致/);
+  }
+});
+
+test('Mobile bundling 覆盖 runner 的两区残留值并拦截仓内重复 CDN', () => {
+  const repoRoot = writeRepoFixtures();
+  const baseEnv = Object.freeze({
+    EXPO_PUBLIC_CINDY_AUTH_REGION: 'cn',
+    EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: 'https://stale.example.invalid/app',
+    EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL: 'https://stale.example.invalid/app',
+  });
+  const expected = mobileClientBundleEnv({ authRegion: 'global', repoRoot });
+  assert.deepEqual(mobileClientBundleProcessEnv({ authRegion: 'global', repoRoot, baseEnv }), expected);
+
+  fs.writeFileSync(path.join(repoRoot, 'config', 'endpoint.global.json'), JSON.stringify({
+    schemaVersion: 1, cdnBaseUrl: 'https://HOTFIX-CN.example.invalid:443/app///',
+  }));
+  for (const authRegion of ['cn', 'global']) {
+    assert.throws(() => mobileClientBundleProcessEnv({ authRegion, repoRoot, baseEnv }), /不能相同/);
+  }
+  assert.doesNotThrow(() => assertMobileManifestBuildEnv({
+    EXPO_PUBLIC_CINDY_AUTH_REGION: 'dev',
+  }, { EXPO_PUBLIC_CINDY_AUTH_REGION: 'dev' }));
+});
+
+test('Mobile 转换缓存按三个原始构建值隔离，且不回显值或受无关 env 影响', () => {
+  const env = Object.freeze(mobileClientBundleEnv({ authRegion: 'global', repoRoot: writeRepoFixtures() }));
+  const snapshot = createMobileManifestBuildSnapshot(env);
+  assert.match(snapshot.cacheKey, /^cindy-mobile-manifest-v1:[a-f0-9]{64}$/);
+  assert.equal(createMobileManifestBuildSnapshot({ ...env }).cacheKey, snapshot.cacheKey);
+  assert.doesNotThrow(() => snapshot.assertUnchanged({ ...env, UNRELATED_ENV: '1' }));
+  assert.equal(createMobileManifestBuildSnapshot({ ...env, UNRELATED_ENV: '1' }).cacheKey, snapshot.cacheKey);
+  for (const key of Object.keys(env)) {
+    for (const value of [undefined, '', `${env[key]} `, 'fake-secret']) {
+      const changed = { ...env, [key]: value };
+      const next = createMobileManifestBuildSnapshot(changed);
+      assert.notEqual(next.cacheKey, snapshot.cacheKey);
+      assert.doesNotMatch(next.cacheKey, /fake-secret/);
+      assert.throws(() => snapshot.assertUnchanged(changed),
+        (error) => error.message.includes('重启 Metro') && !error.message.includes('fake-secret'));
+    }
+  }
+});
+
+test('Mobile 构建快照仅保留稳定 CindyDev 的开发覆盖，跨构建身份必须重启', () => {
+  const dev = {
+    EXPO_PUBLIC_CINDY_AUTH_REGION: 'dev',
+    EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: 'http://localhost:1234',
+    EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL: 'http://localhost:5678',
+  };
+  const snapshot = createMobileManifestBuildSnapshot(dev);
+  const changedDev = { ...dev, EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: 'http://localhost:9999' };
+  assert.doesNotThrow(() => snapshot.assertUnchanged(changedDev));
+  assert.doesNotThrow(() => assertMobileManifestBuildEnv(changedDev, dev));
+  for (const authRegion of ['cn', 'global']) {
+    const release = mobileClientBundleEnv({ authRegion, repoRoot: writeRepoFixtures() });
+    assert.throws(() => snapshot.assertUnchanged(release), /重启 Metro/);
+    assert.throws(() => createMobileManifestBuildSnapshot(release).assertUnchanged(dev), /重启 Metro/);
+  }
 });
 
 test('Mobile 构建入口不把动态异常或环境变量值写入失败日志', () => {

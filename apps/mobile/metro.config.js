@@ -1,5 +1,9 @@
 const path = require('path');
 const { getDefaultConfig } = require('expo/metro-config');
+const {
+  assertMobileManifestBuildEnv,
+  createMobileManifestBuildSnapshot,
+} = require('../../scripts/shared/mobile-manifest-build-guard.cjs');
 
 const config = getDefaultConfig(__dirname);
 const workspaceRoot = path.resolve(__dirname, '../..');
@@ -14,6 +18,30 @@ Object.assign(process.env, mobileLogUploadBuildEnv({
 const workspaceNodeModules = path.join(workspaceRoot, 'node_modules');
 const appNodeModules = path.join(__dirname, 'node_modules');
 const sharedArrayBufferPolyfill = path.join(__dirname, 'src/polyfills/sharedArrayBuffer.js');
+
+// 必须早于 Transformer 缓存键及 WorkerFarm 环境快照：仅在 transform 时校验 env
+// 不能阻止已缓存的 Babel 结果内联旧地址。保留 Expo 既有 cacheVersion 并追加区域身份。
+const manifestBuildSnapshot = createMobileManifestBuildSnapshot(process.env);
+config.cacheVersion = `${config.cacheVersion}:${manifestBuildSnapshot.cacheKey}`;
+
+const defaultGetTransformOptions = config.transformer.getTransformOptions;
+config.transformer.getTransformOptions = async (entryPoints, options, getDependencies) => {
+  // dev 来自实际 bundle 请求，不能用 runner 的 NODE_ENV 代替：export:embed
+  // 可能保留 NODE_ENV=development，仍在生成生产 bundle。开发 Metro / CindyDev
+  // 保留端点覆盖；正式 bundle 的最终 env 必须与仓内两区清单一致。
+  const authRegion = process.env.EXPO_PUBLIC_CINDY_AUTH_REGION?.trim();
+  if (options.dev === false && authRegion !== 'dev') {
+    if (authRegion !== 'cn' && authRegion !== 'global') {
+      throw new Error('Mobile 构建配置错误：EXPO_PUBLIC_CINDY_AUTH_REGION 必须指定为 cn 或 global');
+    }
+    const { mobileClientBundleEnv } = await import('../../scripts/shared/client-endpoint-build-env.mjs');
+    assertMobileManifestBuildEnv(process.env, mobileClientBundleEnv({
+      authRegion,
+    }));
+  }
+  if (options.dev === false) manifestBuildSnapshot.assertUnchanged(process.env);
+  return defaultGetTransformOptions(entryPoints, options, getDependencies);
+};
 
 // mobile 直接吃 TS 源码的 workspace 包(见下方 .js→.ts resolveRequest 分流)。
 const workspaceTsSourcePackages = [
