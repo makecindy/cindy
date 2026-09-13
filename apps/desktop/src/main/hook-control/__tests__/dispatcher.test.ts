@@ -688,6 +688,32 @@ describe('dispatcher 核心语义', () => {
     });
   });
 
+  it('X 新字段在展示截断前组装，runner 收到客户端 prompt 与原话元数据', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    const longText = 'a'.repeat(5000) + '末尾事实';
+    d.handleDispatch('conn-1', dispatch({
+      prompt: '旧服务端模板',
+      source: {
+        im: 'x', triggerMessageId: '2', userText: '查看 PR',
+        xContext: { requesterId: 'u', requesterName: 'User', truncated: false },
+        threadContext: [
+          { messageId: '1', replyToMessageId: null, authorId: 'other', author: '@other', text: longText },
+          { messageId: '2', replyToMessageId: '1', authorId: 'u', author: '@user', text: '@bot 查看 PR' },
+        ],
+      },
+    }), c.send);
+    await tick();
+    expect(fr.calls[0]?.prompt).toContain('当前请求者：User（@user）');
+    expect(fr.calls[0]?.prompt).toContain(longText);
+    expect(fr.calls[0]?.prompt).not.toContain('旧服务端模板');
+    expect(fr.calls[0]?.prompt.endsWith('[@user · 当前请求]\n查看 PR')).toBe(true);
+    expect(fr.calls[0]?.source).toMatchObject({
+      userText: '查看 PR', triggerMessageId: '2', xContext: { requesterId: 'u' },
+    });
+  });
+
   it('标题用 source.userText, 不吃 prompt 里 server 挂的 thread 上下文块', async () => {
     // server 会把 thread 上下文拼进 prompt(Slack 的 injectThreadContext 一直
     // 如此, X 也已接上)。按 prompt 前 24 字取标题的话, 整条 thread 派出来的

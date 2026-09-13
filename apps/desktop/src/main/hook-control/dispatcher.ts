@@ -73,6 +73,7 @@ import { createAckReactions, type AckReactionTask } from './ackReactions.js';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
 import { terminalDeliveryExpired } from './requestLedger.js';
+import { composeXPrompt } from './xPrompt.js';
 import type { HookRequestLedger, HookTerminalRecord } from './requestLedger.js';
 
 /** 会话执行器抽象 —— 生产实现 session-runner.ts(包 maker), 测试注入假的。 */
@@ -496,6 +497,9 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
   const teamId = boundedNullable(source.teamId, SOURCE_TEAM_ID_MAX);
   const teamName = boundedNullable(source.teamName, SOURCE_TEAM_NAME_MAX);
   const threadContext = source.threadContext?.slice(0, SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
+    ...(entry.messageId !== undefined ? { messageId: entry.messageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) } : {}),
+    ...(entry.authorId !== undefined ? { authorId: entry.authorId.slice(0, SOURCE_THREAD_AUTHOR_MAX) } : {}),
+    ...(entry.replyToMessageId !== undefined ? { replyToMessageId: entry.replyToMessageId?.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) ?? null } : {}),
     author: entry.author.slice(0, SOURCE_THREAD_AUTHOR_MAX),
     text: entry.text.slice(0, SOURCE_THREAD_TEXT_MAX),
     ...(entry.isBot === true ? { isBot: true } : {}),
@@ -503,6 +507,11 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
 
   return {
     im: source.im,
+    ...(source.xContext ? { xContext: {
+      requesterId: source.xContext.requesterId.slice(0, SOURCE_THREAD_AUTHOR_MAX),
+      ...(source.xContext.requesterName !== undefined ? { requesterName: source.xContext.requesterName.slice(0, SOURCE_THREAD_AUTHOR_MAX) } : {}),
+      truncated: source.xContext.truncated,
+    } } : {}),
     ...(channelName !== undefined ? { channelName } : {}),
     ...(teamId !== undefined ? { teamId } : {}),
     ...(teamName !== undefined ? { teamName } : {}),
@@ -2227,7 +2236,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (!accountActive) return;
     const admittedGeneration = accountGeneration;
     const source = payload.source === undefined ? undefined : normalizeTaskSource(payload.source);
-    const dispatchPayload = source === undefined ? payload : { ...payload, source };
+    const dispatchPayload = {
+      ...payload,
+      ...(source === undefined ? {} : { source }),
+      prompt: composeXPrompt(payload.source, payload.prompt),
+    };
     sendFns.set(connectionId, send);
 
     // Durable terminal replay comes first: an auto-update restarts the process
