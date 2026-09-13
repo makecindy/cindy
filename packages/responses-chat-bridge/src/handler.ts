@@ -1,3 +1,4 @@
+import { chatCompatibilityCapabilities, normalizeProviderRequest } from '@cindy/model-compat';
 import type { ServerResponse } from 'node:http';
 
 import { ChatSseTranslator } from './chat-sse-translator.js';
@@ -197,11 +198,12 @@ export function createResponsesChatHandler(
       }
       const request = parsedBody as ResponsesRequest;
       const realModel = provider.rewriteModel?.(request.model) ?? request.model;
+      const compatibilityRoute = { harness: 'codex' as const, protocol: 'openai-chat' as const, upstreamBase: provider.upstreamBase, model: realModel };
       let translated;
       try {
         translated = translateResponsesRequestWithContext(request, {
           model: realModel,
-          capabilities: provider.capabilities,
+          capabilities: chatCompatibilityCapabilities(compatibilityRoute, provider.capabilities),
           onDroppedTool: (type, index) => {
             if (type === 'web_search') {
               log.warn?.('responses-chat bridge dropped unsupported built-in tool', {
@@ -278,7 +280,7 @@ export function createResponsesChatHandler(
             'content-type': 'application/json',
             accept: 'text/event-stream',
           },
-          body: JSON.stringify(chatRequest),
+          body: JSON.stringify(normalizeProviderRequest(chatRequest, compatibilityRoute, { reasoningEffortAlreadyMapped: provider.capabilities?.reasoningEffortMap !== undefined })),
           signal: abort.signal,
         });
         upstream = await send();
