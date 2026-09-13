@@ -33,6 +33,7 @@ import {
   importExternalClaudeCodeMessagesForSession,
   parseClaudeCodeMessageLine,
   readClaudeCodeSessionScanSummary,
+  readClaudeCodeSessionScanSummaryResult,
   readClaudeCodeSessionSummary,
   scanExternalClaudeCodeSessions,
 } from '../maker-host/claude-local-sessions';
@@ -549,6 +550,78 @@ describe('parseClaudeCodeMessageLine', () => {
     try {
       expect(await readClaudeCodeSessionScanSummary(file)).toBeNull();
       expect(await readClaudeCodeSessionSummary(file)).toBeNull();
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects internal review sessions with the internal reason category', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-review-reason-'));
+    const file = path.join(dir, `${sdkSessionId}.jsonl`);
+    fs.writeFileSync(
+      file,
+      `${line({
+        type: 'user',
+        uuid: 'user-review-channel',
+        cwd: '/tmp/project',
+        message: {
+          role: 'user',
+          content:
+            '<channel source="review-session-channel" id="review-1">\nReview this change',
+        },
+      })}\n`,
+    );
+
+    try {
+      const result = await readClaudeCodeSessionScanSummaryResult(file);
+      expect(result).toEqual({ kind: 'rejected', reason: 'internal' });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies a first top-level event after the scan window as windowLimit, not noEvents', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-window-limit-'));
+    const file = path.join(dir, `${sdkSessionId}.jsonl`);
+    const noise = Array.from({ length: 400 }, (_, i) =>
+      line({ type: 'system', cwd: '/tmp/project', uuid: `noise-${i}` }),
+    );
+    const lateUser = line({
+      type: 'user',
+      uuid: 'late-user',
+      cwd: '/tmp/project',
+      message: { role: 'user', content: 'hello after the scan window' },
+    });
+    fs.writeFileSync(file, `${[...noise, lateUser].join('\n')}\n`);
+
+    try {
+      expect(await readClaudeCodeSessionScanSummaryResult(file)).toEqual({
+        kind: 'rejected',
+        reason: 'windowLimit',
+      });
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('classifies unreadable files and missing top-level events', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-reject-reasons-'));
+    const missing = path.join(dir, 'missing.jsonl');
+    const noEvents = path.join(dir, 'no-events.jsonl');
+    fs.writeFileSync(
+      noEvents,
+      `${line({ type: 'system', cwd: '/tmp/project' })}\n`,
+    );
+
+    try {
+      expect(await readClaudeCodeSessionScanSummaryResult(missing)).toEqual({
+        kind: 'rejected',
+        reason: 'unreadable',
+      });
+      expect(await readClaudeCodeSessionScanSummaryResult(noEvents)).toEqual({
+        kind: 'rejected',
+        reason: 'noEvents',
+      });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -1334,6 +1407,35 @@ describe('parseClaudeCodeMessageLine', () => {
       const reparsed = await readClaudeCodeSessionScanSummary(file);
       expect(reparsed?.title).toBe('BBBB');
       expect(reparsed?.updatedAt).toBe(6_000_000);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('keeps the rejection reason across cache hits for unchanged files (no drift to noEvents)', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'claude-cache-reason-'));
+    const file = path.join(dir, `${sdkSessionId}.jsonl`);
+    fs.writeFileSync(
+      file,
+      `${line({
+        type: 'user',
+        uuid: 'user-review-cached',
+        cwd: '/tmp/project',
+        message: {
+          role: 'user',
+          content:
+            '<channel source="review-session-channel" id="review-1">\nReview this change',
+        },
+      })}\n`,
+    );
+    const mtime = new Date(7_000_000);
+    fs.utimesSync(file, mtime, mtime);
+
+    try {
+      const first = await readClaudeCodeSessionScanSummaryResult(file);
+      expect(first).toEqual({ kind: 'rejected', reason: 'internal' });
+      const cached = await readClaudeCodeSessionScanSummaryResult(file);
+      expect(cached).toEqual({ kind: 'rejected', reason: 'internal' });
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

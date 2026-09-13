@@ -180,7 +180,8 @@ describe('session import IPC', () => {
         { key: 'codex:codex-real-project' },
       ],
       rejected: {
-        existing: 2,
+        existing: 0,
+        managedDialogue: 2,
       },
     });
   });
