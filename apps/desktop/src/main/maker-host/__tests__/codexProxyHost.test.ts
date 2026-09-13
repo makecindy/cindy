@@ -711,6 +711,7 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       'https://api.deepseek.com/v1',
       'deepseek-chat',
     );
+    expect(capabilities.reasoningField).toBeUndefined();
     expect(capabilities.passthroughFields).not.toContain('n');
     expect(capabilities.passthroughFields).not.toContain('logprobs');
     expect(capabilities.passthroughFields).not.toContain('top_logprobs');

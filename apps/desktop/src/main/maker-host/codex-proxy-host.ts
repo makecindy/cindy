@@ -854,7 +854,7 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
   developerRole: 'system',
   parallelToolCalls: true,
   maxTokensField: 'max_tokens',
-  reasoningField: 'none',
+  // Leave reasoning undeclared so provider policy can fill it; translator defaults to none.
   streamUsage: true,
   // Responses fields with direct Chat equivalents. Provider-specific unsupported fields can
   // be removed later when the model capability catalog becomes more granular.
