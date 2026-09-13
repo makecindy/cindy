@@ -12,6 +12,8 @@ import {
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
+import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 
 import {
   createHostSendFailure,
@@ -56,6 +58,21 @@ export interface BootstrapDirectoryGrantDeps {
 
 function sameDirectoryList(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
+}
+
+/**
+ * 同一物理目录的不同拼写(分隔符、尾斜杠、Windows 盘符/UNC 大小写)不算目录漂移。
+ * 会话移动的漂移判定必须用它 —— 纯字符串比较会在仅拼写不同时白白关掉并重建活
+ * runtime。POSIX 路径保持大小写敏感(与 `projectKeys` 的 local 比较口径一致)。
+ */
+function sameWorkingDir(left: string, right: string): boolean {
+  const a = normalizeWorkingDirForStorage(left) ?? left;
+  const b = normalizeWorkingDirForStorage(right) ?? right;
+  if (a === b) return true;
+  const caseFoldable = (value: string): boolean => /^[A-Za-z]:\//.test(value) || value.startsWith('//');
+  return process.platform === 'win32' && caseFoldable(a) && caseFoldable(b)
+    ? a.toLowerCase() === b.toLowerCase()
+    : false;
 }
 
 /**
@@ -651,6 +668,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
    *   - rehydrate(默认):调用方(recovery / orca)已显式决定目标目录(可能是
    *     workingDirectoryRecovery 选定的 fallback),DB 只在 caller 目录不可用时兜底,
    *     不能无条件改回 DB。
+   * 采纳是 fail-closed 的:lazy-create 采纳 DB 值后,caller 快照不再作为回退腿 ——
+   * DB 目录不可用时走 checkWorkDirExists 的恢复流程(worktree restore / recovery
+   * fallback / 必要时 mkdir 普通目录),都失败才报 WORKDIR_MISSING,不允许因为
+   * "caller 快照里那个目录还在"就把会话留在旧 cwd。
    * 存在兜底候选时首检静默,避免"先弹错误横幅再静默成功"的假错误。
    */
   async function ensureWorkDirWithDbFallback(
@@ -712,16 +733,28 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   /**
-   * 持久化 working_dir 是否真实可用:纯 stat,不做 recovery / mkdir / 广播。
-   * 已被 workingDirectoryRecovery 接管的目录(resolve 返回 fallback)不算 ——
+   * 持久化 working_dir 是否真实可用。普通目录用纯 stat(不做 recovery / mkdir / 广播);
+   * 托管 worktree 用 send 侧同一套就绪判定 —— "目录存在"不等于 ready(git worktree add
+   * 后快照 apply 未完成、上一轮 apply 冲突会故意留目录并阻塞),普通 stat 会把这种目录
+   * 当可用,先关掉旧 runtime 再在重建时报 WORKDIR_MISSING。就绪检查只做 worktree
+   * restore / liveness,不会为普通目录 mkdir。
+   * 已被 workingDirectoryRecovery 接管的目录(resolve 返回 fallback)一律不算 ——
    * session 的文件在 fallback 里,继续留在那里才符合恢复语义。
    */
   async function isUsablePersistedWorkingDir(
     sessionId: string,
     workingDir: string,
+    agentKind: AgentKind,
+    remoteHostId: string | null | undefined,
   ): Promise<boolean> {
     const resolved = deps.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;
     if (resolved !== workingDir) return false;
+    const normalized = normalizeWorkingDirForStorage(workingDir) ?? workingDir;
+    if (getManagedWorktreeBasePath(normalized) !== null) {
+      return deps.checkWorkDirExists(sessionId, workingDir, agentKind, remoteHostId, {
+        suppressMissingBroadcast: true,
+      });
+    }
     try {
       return (await deps.statDirectory(workingDir)).isDirectory();
     } catch {
@@ -965,12 +998,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         );
         // 会话移动(移动到项目 / worktree 变更)后旧 runtime 可能仍然活着 —— cc 的
         // 转录迁移 close 是 best-effort,close 失败时移动照常完成。此时 DB 的
-        // working_dir 才是任务现在的目录:它**真实存在**且与 runtime cwd 不一致时,
-        // 关闭旧 runtime 并按 DB 目录重建;不能等旧目录消失 —— 旧目录通常还在
-        // (2026-09-13 实报:移动后消息仍在旧目录执行)。
-        const persistedDirReady = ok && fallbackDir
-          ? await isUsablePersistedWorkingDir(sessionId, fallbackDir)
-          : false;
+        // working_dir 才是任务现在的目录:它**真实存在**(托管 worktree 则要求就绪)
+        // 且与 runtime cwd 不一致时,关闭旧 runtime 并按 DB 目录重建;不能等旧目录
+        // 消失 —— 旧目录通常还在(2026-09-13 实报:移动后消息仍在旧目录执行)。
+        // 仅拼写差异(分隔符 / 尾斜杠 / Windows 大小写)不算漂移,不重建。
+        const persistedDirReady =
+          ok && fallbackDir && !sameWorkingDir(fallbackDir, sess.workDir)
+            ? await isUsablePersistedWorkingDir(
+                sessionId,
+                fallbackDir,
+                sess.agentKind,
+                sess.remoteHostId,
+              )
+            : false;
         // Claude/Pi keep a process whose cwd can still reference the deleted inode.
         // The pending note also covers recovery performed by an earlier preflight.
         const recoveredDir = !sess.remoteHostId

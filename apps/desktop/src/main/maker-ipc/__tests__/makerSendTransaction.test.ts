@@ -1240,6 +1240,91 @@ describe('maker SEND transaction', () => {
     expect(movedSession.send).toHaveBeenCalled();
   });
 
+  it('keeps the live runtime while the persisted managed worktree is not ready yet', async () => {
+    // 托管 worktree 的"存在"不等于 ready(快照 apply 未完成 / 上一轮 apply 冲突会留
+    // 目录并阻塞):此时不能先关掉旧 runtime 再在重建时报 WORKDIR_MISSING。
+    const liveSession = createSession({ workDir: '/data/old-project' });
+    const worktreeDir = '/repo/.cindy-worktrees/steady-goodall';
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => worktreeDir),
+      // stat 说"存在",但就绪检查(同 send 侧口径)说不 ready。
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+      checkWorkDirExists: vi.fn(async (_sid, dir) => dir !== worktreeDir),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.statDirectory).not.toHaveBeenCalledWith(worktreeDir);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(liveSession.send).toHaveBeenCalled();
+  });
+
+  it('rebuilds into a ready persisted managed worktree after cwd drift', async () => {
+    // stat 说不存在、就绪检查说 ready —— 证明走的是 worktree 就绪口径而非纯 stat。
+    const liveSession = createSession({ workDir: '/data/old-project' });
+    const worktreeDir = '/repo/.cindy-worktrees/steady-goodall';
+    const rebuilt = createSession({ workDir: worktreeDir });
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => worktreeDir),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => false })),
+      checkWorkDirExists: vi.fn(async () => true),
+      bootstrapSession: vi.fn(async () => ({
+        session: rebuilt,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: worktreeDir }),
+    );
+    expect(liveSession.send).not.toHaveBeenCalled();
+    expect(rebuilt.send).toHaveBeenCalled();
+  });
+
+  it('does not rebuild a live runtime for a path that only differs in spelling', async () => {
+    // 仅分隔符 / 尾斜杠差异不是目录漂移:否则白白关掉并重建一次 runtime。
+    const liveSession = createSession({ workDir: 'C:\\repo\\PROJECT' });
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => 'C:/repo/PROJECT/'),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: 'C:\\repo\\PROJECT',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(liveSession.send).toHaveBeenCalled();
+  });
+
+  it.skipIf(process.platform !== 'win32')('does not rebuild for a case-only Windows path difference', async () => {
+    const liveSession = createSession({ workDir: 'C:\\repo\\PROJECT' });
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => 'C:/repo/project'),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: 'C:\\repo\\PROJECT',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(liveSession.send).toHaveBeenCalled();
+  });
+
   it.each(['claude-code', 'pi'] as const)('refreshes a live %s process after same-path recovery and preserves its note', async (agentKind) => {
     const oldSession = createSession({ agentKind, hostStartupPreferences: {
       userPrompt: 'Keep the caller preference', makerMemoryEnabled: true,
