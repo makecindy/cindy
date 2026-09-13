@@ -44,7 +44,6 @@ import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { useConfirmSwitchAwayIfDirty } from './hooks/useConfirmSwitchAwayIfDirty';
 import { useProjectFileList } from './hooks/useProjectFileList';
 import { FileTreeView, type FileTreeViewHandle, type PendingCreate } from './FileTreeView';
-import { useRevealFileInTree } from './hooks/useRevealFileInTree';
 import { FileFilterInput } from './FileFilterInput';
 import { FilterResultList } from './FilterResultList';
 import { FILTER_RESULT_LIMIT, filterFiles } from './lib/filterFiles';
@@ -348,13 +347,10 @@ export function WorkdirBrowseSidebar({
     projectFiles.refresh();
   }, [tree, projectFiles]);
 
-  // FileTreeView 的 imperative ref —— useRevealFileInTree 通过它调 scrollToPath。
   const fileTreeRef = useRef<FileTreeViewHandle>(null);
-  const revealFileInTree = useRevealFileInTree(tree, fileTreeRef);
 
-  // 筛选结果点击 → 走跟 handleSelectFile 同样的 URL + storeAddTab 流程,然后清掉
-  // filter query(用户找到目标文件 = 想看它,而不是接着筛选)。
-  // 选完再调 revealFileInTree:展开父目录链 + 滚动到该行,跟 RSB 版同一份逻辑。
+  // 筛选结果点击 → 走跟 handleSelectFile 同样的 URL + storeAddTab 流程,
+  // 但保留 filter query 和结果列表,支持连续打开多个命中项。
   const handleSelectFromFilter = useCallback(
     async (relPath: string) => {
       const ok = await confirmSwitchAway(currentSelectedFile, relPath);
@@ -366,10 +362,8 @@ export function WorkdirBrowseSidebar({
       saveSelectedFile(workdir, relPath);
       const openedNow = storeAddTab(workdir, relPath);
       if (openedNow) clearFileScroll(workdir, relPath);
-      setFilterQuery('');
-      void revealFileInTree(relPath);
     },
-    [confirmSwitchAway, currentSelectedFile, revealFileInTree, setSearchParams, workdir],
+    [confirmSwitchAway, currentSelectedFile, setSearchParams, workdir],
   );
 
   // 右键 文件夹 → New File / New Folder:开 VSCode 风格内联输入行。
