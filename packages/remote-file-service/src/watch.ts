@@ -256,7 +256,9 @@ export class WorkdirWatchManager {
       const existing = this.entries.get(workdir);
       if (existing) {
         if (sameWatchOptions(existing, want)) return;
-        this.closeEntry(workdir); // 选项变了:拆掉重建(不能走 stop(),它会撤销 desired)
+        // 选项变了:拆掉重建(不能走 stop(),它会撤销 desired)。重建前先转发
+        // 合并窗口里的事件 —— 否则还在线的消费者会漏掉这一批(评审 P2)。
+        this.closeEntry(workdir, { flushPending: true });
       }
       const run = this.startInner(workdir, want);
       this.starting.set(workdir, run);
@@ -364,7 +366,8 @@ export class WorkdirWatchManager {
       // entry 选项没变而原地返回,直播就静默冻结到手动改开关或 daemon 重启。
       log.warn('fs.watch error, dropping watcher', workdir, String(err));
       if (this.entries.get(workdir) !== entry) return; // 已被替换 / 停止:不碰新 entry
-      this.closeEntry(workdir);
+      // 报错前已入队的事件仍是真实事件:重建前先转发,不随旧 entry 丢弃(评审 P2)。
+      this.closeEntry(workdir, { flushPending: true });
       // 就地收敛;失败(挂载短暂不可用 / 目录正在被替换)则带退避重试,直到成功
       // 或耗尽 —— 只记日志会让这个入口静默失效到用户改开关(评审 P2)。
       void this.reconcile(workdir)
@@ -418,12 +421,32 @@ export class WorkdirWatchManager {
     this.closeEntry(workdir);
   }
 
-  /** 拆掉已就位的 watcher。不碰 desired —— 选项变化重建时由调用方决定意图。 */
-  private closeEntry(workdir: string): void {
+  /** 把合并窗口里已经入队的事件立刻发出去（重建前保序转发用）。 */
+  private flushPending(entry: WatchEntry): void {
+    if (entry.flushTimer) {
+      clearTimeout(entry.flushTimer);
+      entry.flushTimer = null;
+    }
+    if (entry.pending.size === 0) return;
+    const batch = [...entry.pending.values()];
+    entry.pending.clear();
+    for (const evt of batch) this.emit(evt);
+  }
+
+  /**
+   * 拆掉已就位的 watcher。不碰 desired —— 选项变化重建时由调用方决定意图。
+   *
+   * `flushPending`：**重建**路径（选项变化 / watcher 报错后重建）要先转发合并
+   * 窗口里的事件 —— 旧 entry 的 `pending` 随 entry 一起被丢的话，还活着的消费者
+   * 会漏掉这次事件，文件树陈旧到同目录下一次事件或手动刷新（评审 P2）。
+   * 最后一个消费者停止 / stopAll 不带这个旗标：那时事件已无人消费，直接丢。
+   */
+  private closeEntry(workdir: string, opts?: { flushPending?: boolean }): void {
     const entry = this.entries.get(workdir);
     if (!entry) return;
     this.entries.delete(workdir);
-    if (entry.flushTimer) clearTimeout(entry.flushTimer);
+    if (opts?.flushPending) this.flushPending(entry);
+    else if (entry.flushTimer) clearTimeout(entry.flushTimer);
     try {
       entry.watcher.close();
     } catch {
@@ -480,9 +503,7 @@ export class WorkdirWatchManager {
     if (entry.flushTimer) return;
     entry.flushTimer = setTimeout(() => {
       entry.flushTimer = null;
-      const batch = [...entry.pending.values()];
-      entry.pending.clear();
-      for (const evt of batch) this.emit(evt);
+      this.flushPending(entry);
     }, COALESCE_MS);
     entry.flushTimer.unref?.();
   }

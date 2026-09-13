@@ -270,6 +270,34 @@ describe('WorkdirWatchManager 过滤开关', () => {
     manager.stopAll();
   });
 
+  /**
+   * 评审 P2（PR #4398 轮六）：并集变化触发 watcher 重建时，旧 entry 的 `pending`
+   * 不能随 entry 一起丢 —— 已入队（尚未过 50ms 合并窗口）的事件仍要转发给还在线的
+   * 消费者，否则文件树陈旧到同目录下一次事件或手动刷新。
+   */
+  it('重建 watcher 前先转发 pending 事件：并集收窄不丢已入队事件', async () => {
+    const manager = new WorkdirWatchManager((event) => emitted.push(event));
+    await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+    await manager.start('/repo', { showIgnoredDirs: false }, 'device-link');
+    expect(h.created).toHaveLength(1);
+
+    // 可见文件的 change 事件进入 50ms 合并窗口（还没到 flush）。
+    h.created[0].cb?.('change', 'src/app.ts');
+    expect(emitted).toHaveLength(0);
+
+    // desktop 消费者在窗口内停止 → 并集收窄 → 重建 watcher。
+    manager.stop('/repo', 'desktop-tree');
+
+    // pending 必须先转发给仍在线的 device-link 客户端，而不是随旧 entry 丢弃。
+    expect(emitted.map((e) => e.relPath)).toEqual(['src/app.ts']);
+
+    await new Promise((resolve) => setTimeout(resolve, 0)); // 等异步 reconcile
+    expect(h.created).toHaveLength(2);
+    expect(h.created.at(-1)?.closed).toBe(false);
+    expect(h.matcherOpts.at(-1)?.showIgnoredDirs).toBe(false);
+    manager.stopAll();
+  });
+
   it('最后一个消费者 stop 才拆 watcher', async () => {
     const manager = new WorkdirWatchManager(() => {});
     await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
