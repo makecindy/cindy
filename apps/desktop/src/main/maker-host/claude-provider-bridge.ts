@@ -14,10 +14,12 @@ export function createClaudeProviderBridge(options: {
   capabilities?: ChatBridgeCapabilities;
   model?: ProviderModelRecord;
   providerId?: string;
+  nativeUpstream?: string;
   fetchImpl: typeof fetch;
 }): ResponsesBridgeHandler {
   const nativeFetch = options.model ? createPiProviderFetch({ row: options.model,
     providerId: options.providerId ?? 'custom',
+    upstream: options.nativeUpstream,
     apiKey: Object.entries(options.headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1].replace(/^Bearer\s+/i, '') ?? Object.entries(options.headers).find(([name]) => name.toLowerCase() === 'x-api-key')?.[1] ?? 'cindy-local-provider',
     headers: Object.fromEntries(Object.entries(options.headers).filter(([name]) =>
       !['authorization', 'x-api-key', 'anthropic-version', 'anthropic-beta'].includes(name.toLowerCase()))),

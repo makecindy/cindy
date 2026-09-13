@@ -19,6 +19,12 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+
+const outbound = vi.hoisted(() => vi.fn<typeof fetch>());
+vi.mock('../outbound-fetch.js', () => ({ outboundFetch: outbound }));
 
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: true }),
@@ -54,11 +60,12 @@ import {
   setCustomProviderKeyReader,
   setPendingCredentialSwitchReader,
   setProviderOAuthTokenReader,
+  setOAuthTokenReader,
   setProviderViewsReader,
 } from '../provider-route';
 import { getActiveCatalog, setCustomProviders } from '../active-catalog';
 import * as providerRoute from '../provider-route';
-import { buildRegistry, buildUserProvider, PROVIDER_MODEL_CATALOG } from '@cindy/model-providers';
+import { buildRegistry, buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG } from '@cindy/model-providers';
 import { clearSessionProvider, setSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
@@ -107,6 +114,8 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     vi.restoreAllMocks();
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);
+    setOAuthTokenReader(() => null);
+    outbound.mockReset();
     setProviderViewsReader(async () => []);
     clearSessionProvider('sess-race');
     resetClaudeSessionRouteRegistryForTest();
@@ -132,6 +141,55 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     setSessionProvider('sess-race', 'zhipu-plan');
     const route = await transform({ model: row.id }, ctxWith({ 'x-claude-code-session-id': 'sdk-race' }));
     expect(route?.localHandler).toBeTypeOf('function');
+  });
+
+  it.each(['individual', 'business', 'enterprise'])('sends Copilot %s requests with native headers to the assigned host', async account => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'anthropic-messages')!;
+    const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
+    setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { 'claude-code': { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
+        wireProtocol: 'anthropic-messages', models: [{ id: row.id, name: row.name, api: 'anthropic-messages' }] } },
+    })]);
+    setOAuthTokenReader(() => token);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'copilot-account');
+    const body = { model: row.id, stream: true, max_tokens: 2048,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }] }] };
+    const ctx = ctxWith({ 'x-claude-code-session-id': 'sdk-race' });
+    const route = await transform(body, ctx);
+    expect(route?.upstreamOverride).toBe(`https://api.${account}.githubcopilot.com`);
+    expect(route?.localHandler).toBeTypeOf('function');
+    let sent: Request | undefined;
+    outbound.mockImplementation(async (url, init) => {
+      sent = new Request(url, init);
+      const events = [
+        { type: 'message_start', message: { id: 'fixture-reply', type: 'message', role: 'assistant', model: row.id, content: [], usage: { input_tokens: 2, output_tokens: 0 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+        { type: 'message_stop' },
+      ];
+      return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+        { headers: { 'content-type': 'text/event-stream' } });
+    });
+    const server = createServer((_req, res) => {
+      void Promise.resolve(route!.localHandler!({ parsedBody: body, rawBody: Buffer.from(JSON.stringify(body)), ctx, res }))
+        .catch(() => { res.statusCode = 500; res.end(); });
+    });
+    server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    try {
+      const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/messages`);
+      expect(await response.text()).toContain('Hello');
+      const target = new URL(sent!.url);
+      expect(target.origin + target.pathname).toBe(`https://api.${account}.githubcopilot.com/v1/messages`);
+      expect(sent?.headers.get('authorization')).toBe(`Bearer ${token}`);
+      expect(sent?.headers.get('x-api-key')).toBeNull();
+      expect(sent?.headers.get('x-initiator')).toBe('user');
+      expect(sent?.headers.get('copilot-vision-request')).toBe('true');
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   });
 
   it('无会话头的裸 glm-5.3 → 路由到用户智谱上游并换用户 key,不再透传默认网关', async () => {

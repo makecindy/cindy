@@ -844,7 +844,8 @@ export function AddProviderWizard({
             choices.set(model.id, { name: model.name, checked: recommended, recommended,
               agents: [...(existing?.agents ?? []), agent],
               discoveredMetadata: { ...existing?.discoveredMetadata, [agent]: model.discoveredMetadata },
-              discoveredCosts: { ...existing?.discoveredCosts, [agent]: model.discoveredCost },
+              discoveredCosts: { ...existing?.discoveredCosts,
+                [agent]: model.userModelConfig?.discoveredCost ?? model.discoveredCost },
             });
           }
           setSel({ kind: 'preset', preset: { ...preset, runtimes: config.runtimes } });

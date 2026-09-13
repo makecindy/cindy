@@ -142,7 +142,9 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
   const provider = getActiveCatalog().providers.find(p => p.id === providerId);
   const model = provider?.models['claude-code']?.find(m => m.id === wireModel);
   const routing = provider ? providerRoutingForModel(provider, 'claude-code', wireModel) : null;
-  const nativeRow = model && routing && model.api ? invocationModelRecord(model, route.upstreamOverride ?? routing.upstream) : undefined;
+  // Adapter identity belongs to the declared route. An OAuth account can select
+  // another host without becoming a different provider (e.g. Copilot Business).
+  const nativeRow = model && routing && model.api ? invocationModelRecord(model, routing.upstream) : undefined;
   const nativeIdentity = nativeRow ? providerModelAdapterId(nativeRow) : undefined;
   const requiresNativeAuth = nativeIdentity === 'cloudflare-ai-gateway' || nativeIdentity === 'github-copilot';
   if (provider?.source === 'user' && model && routing &&
@@ -155,7 +157,7 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
     const handler = createClaudeProviderBridge({
       url: `${base.replace(/\/+$/, '')}/${requestPath.replace(/^\/+/, '')}`,
       protocol, headers: route.headerOverride ?? {}, efforts: model.efforts,
-      ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, providerId: provider.id } : {}),
+      ...(row && (protocol === 'openai-chat' || model.api) ? { model: row, providerId: provider.id, nativeUpstream: base } : {}),
       capabilities: {
         ...(model.supportsImageInput ? { imageInput: 'image_url' as const } : {}),
         reasoningField: thinkingFormat === 'qwen' ? 'enable_thinking'

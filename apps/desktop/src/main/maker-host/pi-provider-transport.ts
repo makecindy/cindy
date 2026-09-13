@@ -67,6 +67,8 @@ function nativeHistory(request: ResponsesRequest, identity: string): Map<string,
 export function createPiProviderFetch(options: {
   row: ProviderModelRecord;
   providerId: string;
+  /** Account-specific destination; the catalog row still identifies its adapter. */
+  upstream?: string;
   apiKey: string;
   headers?: Record<string, string>;
   env?: Record<string, string>;
@@ -79,7 +81,7 @@ export function createPiProviderFetch(options: {
     } });
     const row = options.row;
     const model: Model<Api> = { id: request.model, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
-      api: row.execution.pi.api, baseUrl: row.upstream, contextWindow: row.contextWindow,
+      api: row.execution.pi.api, baseUrl: options.upstream ?? row.upstream, contextWindow: row.contextWindow,
       maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow), reasoning: row.reasoning,
       input: row.supportsImageInput ? ['text', 'image'] : ['text'],
       cost: { input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,

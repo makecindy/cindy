@@ -1113,6 +1113,45 @@ it.each(['finish', 'back', 'close'] as const)('logs in without a key and handles
   expect(vi.mocked(deleteCustomProvider).mock.calls.length).toBe(deletedBefore);
 });
 
+it('preserves OAuth-discovered prices for every engine when finishing model selection', async () => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!);
+  const id = 'new-vendor/oauth-discovered-model';
+  const maker = window.electronAPI.maker;
+  vi.mocked(maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+  let created!: Parameters<typeof createCustomProvider>[0];
+  vi.mocked(createCustomProvider).mockImplementation(async config => { created = config; return { ok: true }; });
+  const prices = {
+    'claude-code': { input: 0.12, output: 0.34, cacheRead: 0 },
+    codex: { input: 0.23, output: 0.45, cacheWrite: 0.56 },
+    pi: { input: 0.34, output: 0.56 },
+  };
+  Object.assign(maker, {
+    providerOAuthLogin: vi.fn(async () => ({ ok: true })),
+    providerOAuthCancel: vi.fn(async () => ({ ok: true })),
+    onProviderOAuthProgress: vi.fn(() => () => undefined),
+    listProviders: vi.fn(async () => {
+      for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+        created.runtimes[agent]!.models = [{ id, name: 'OAuth discovered model',
+          discoveredMetadata: { contextWindow: 123456 }, discoveredCost: prices[agent] }];
+      }
+      const provider = buildUserProvider(created, { presets: [preset] });
+      for (const agent of provider.agents) expect(provider.models[agent]![0].discoveredCost).toBeUndefined();
+      return { providers: [{ ...provider, connected: true }] };
+    }),
+  });
+  renderWizard('openrouter');
+  fireEvent.click(await screen.findByRole('button', { name: 'settings.providers.button.authorize' }));
+  fireEvent.click(await screen.findByText('OAuth discovered model'));
+  fireEvent.click(screen.getByRole('button', { name: 'settings.providers.wizard.finish' }));
+  await waitFor(() => expect(updateCustomProvider).toHaveBeenCalledOnce());
+  const saved = vi.mocked(updateCustomProvider).mock.calls[0][0];
+  const projected = buildUserProvider(saved, { presets: [preset] });
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    expect(saved.runtimes[agent]!.models[0].discoveredCost).toEqual(prices[agent]);
+    expect(projected.models[agent]![0].cost).toEqual(prices[agent]);
+  }
+});
+
 
 it('imports the full Hermes inventory immediately, enables selected Pi models and retains both optional harnesses', async () => {
   const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'nous')!);

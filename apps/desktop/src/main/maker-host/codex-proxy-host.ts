@@ -81,6 +81,7 @@ import {
   resolveSessionRouteDecision,
   resolvePendingSessionRouteDecision,
   buildLocalHandlerHeaders,
+  buildRouteDecision,
   inferProviderIdForModel,
   isHostInjectedAuthSession,
   isUserProviderSession,
@@ -1129,6 +1130,8 @@ function createChatBridgeDecision(
           appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
         }
         const nativeFetch = createPiProviderFetch({ row: standard, providerId,
+          // Keep the catalog adapter while honoring the host assigned to this account.
+          upstream: buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream,
           apiKey: Object.entries(headers).find(([name]) => name.toLowerCase() === 'authorization')?.[1].replace(/^Bearer\s+/i, '') ?? Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-api-key')?.[1] ?? 'cindy-local-provider',
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {

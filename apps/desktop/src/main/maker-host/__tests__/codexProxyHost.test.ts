@@ -1127,6 +1127,46 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     setCustomProviders([]);
   });
 
+  it.each(['individual', 'business', 'enterprise'])('keeps the Copilot adapter and uses the %s account host for Codex', async account => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId } = await import('@cindy/model-providers');
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(model => model.execution.pi.api === 'anthropic-messages')!;
+    const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
+    setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { codex: { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
+        wireProtocol: 'anthropic-messages', models: [{ id: row.id, name: row.name, api: 'anthropic-messages' }] } },
+    })]);
+    setOAuthTokenReader(() => token);
+    host.registerComposed('session-copilot', 'thread-copilot', 'PRODUCT_PROMPT');
+    setSessionProvider('session-copilot', 'copilot-account');
+    host.setCodexProxyAuthInjection('env-key');
+    try {
+      const body = { model: row.id, input: [{ role: 'user', content: 'hello' }] };
+      const decision = await host.createModelRoutingTransform()(body, {
+        reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-copilot' },
+      });
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      await (decision as { localHandler: (input: unknown) => Promise<void> }).localHandler({
+        rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, res: {},
+      });
+      expect(mockState.createPiProviderFetch).toHaveBeenLastCalledWith(expect.objectContaining({
+        apiKey: token,
+        upstream: `https://api.${account}.githubcopilot.com`,
+        row: expect.objectContaining({ id: row.id, upstream: row.upstream }),
+      }));
+      const nativeOptions = (mockState.createPiProviderFetch.mock.calls as unknown as Array<[{ row: typeof row }]>).at(-1)![0];
+      expect(providerModelAdapterId(nativeOptions.row)).toBe('github-copilot');
+    } finally {
+      clearSessionProvider('session-copilot');
+      setOAuthTokenReader(() => null);
+      setCustomProviders([]);
+    }
+  });
+
   it('routes the built-in Anthropic subscription through the bridge with host-owned Claude.ai OAuth', async () => {
     const host = await freshCodexProxyHost();
     const { setAnthropicDiscoveredModels } = await import('../active-catalog.js');
