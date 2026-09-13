@@ -2,7 +2,7 @@ import { Stack } from 'expo-router';
 import { X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Animated, Easing, Keyboard, Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { Animated, Easing, Keyboard, Linking, Platform, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
@@ -42,6 +42,7 @@ import { computeLoginKeyboardShift } from '@/auth/loginKeyboardAvoidance';
 import { useLoginHandoffOptional } from '@/auth/MobileLoginHandoffContext';
 import {
   createResendDeadline,
+  LOGIN_ACCOUNT_LIST,
   LOGIN_CONSENT_ROW,
   LOGIN_CONTROL,
   LOGIN_DELETION_BUBBLE,
@@ -55,6 +56,7 @@ import {
   LOGIN_TITLE,
   resolveDeletionBubbleFrame,
   resolveDeletionBubbleLinkHitSlop,
+  resolveLoginAccountListLayout,
   type LoginDeletionBubbleFrame,
   type LoginSurfaceMode,
 } from '@/auth/loginSkinLayout';
@@ -278,9 +280,19 @@ export function LoginScreen({
   const [accountDeletionStatus, setAccountDeletionStatus] =
     useState<AccountDeletionStatus | null>(null);
   const [accountSwitcherVisible, setAccountSwitcherVisible] = useState(false);
+  const accountSelectionScrollRef = useRef<ScrollView>(null);
   const styles = useThemedStyles(makeStyles);
   const configIssues = getMobileConfigIssues();
   const disabled = auth.isBusy || !auth.initialized || configIssues.length > 0;
+  const accountSelectionCount =
+    auth.loginState?.step === 'account-selection'
+      ? auth.loginState.accounts.length
+      : 0;
+
+  useEffect(() => {
+    if (accountSelectionCount <= LOGIN_ACCOUNT_LIST.visibleRowCount) return;
+    accountSelectionScrollRef.current?.flashScrollIndicators();
+  }, [accountSelectionCount]);
 
   useEffect(() => {
     let cancelled = false;
@@ -918,6 +930,7 @@ export function LoginScreen({
   const renderAccountSelection = () => {
     const state = auth.loginState;
     if (state?.step !== 'account-selection') return null;
+    const listLayout = resolveLoginAccountListLayout(state.accounts.length);
     return (
       <LoginPanel testID="login.panel.accountSelection">
         {backNode}
@@ -925,29 +938,48 @@ export function LoginScreen({
           title={loginText('chooseAccount')}
           subtitle={loginText('chooseAccountSubtitle')}
         />
-        {state.accounts.map((account, index) => (
-          <LoginMethodRow
-            accessibilityLabel={account.displayName}
-            disabled={disabled}
-            icon={account.kind === 'org' ? 'enterprise' : 'person'}
-            key={account.id}
-            onPress={() =>
-              void auth.dispatchLoginAction({
-                type: 'select-account',
-                accountId: account.id,
-              })
-            }
-            subtitle={
-              account.orgName || account.email || loginText('personalAccount')
-            }
-            testID={`login.account.${account.id}`}
-            title={account.displayName}
-            top={
-              LOGIN_METHOD_ROW.firstRowTopSsoOrg +
-              index * LOGIN_METHOD_ROW.rowStep
-            }
-          />
-        ))}
+        <ScrollView
+          bounces={false}
+          contentContainerStyle={{ height: listLayout.contentHeight }}
+          contentInsetAdjustmentBehavior="never"
+          overScrollMode="never"
+          ref={accountSelectionScrollRef}
+          scrollEnabled={
+            state.accounts.length > LOGIN_ACCOUNT_LIST.visibleRowCount
+          }
+          showsVerticalScrollIndicator={
+            state.accounts.length > LOGIN_ACCOUNT_LIST.visibleRowCount
+          }
+          style={{
+            height: listLayout.viewportHeight,
+            left: 0,
+            position: 'absolute',
+            top: LOGIN_ACCOUNT_LIST.viewportTop,
+            width: loginSizes.panelWidth,
+          }}
+          testID="login.accountList"
+        >
+          {state.accounts.map((account, index) => (
+            <LoginMethodRow
+              accessibilityLabel={account.displayName}
+              disabled={disabled}
+              icon={account.kind === 'org' ? 'enterprise' : 'person'}
+              key={account.id}
+              onPress={() =>
+                void auth.dispatchLoginAction({
+                  type: 'select-account',
+                  accountId: account.id,
+                })
+              }
+              subtitle={
+                account.orgName || account.email || loginText('personalAccount')
+              }
+              testID={`login.account.${account.id}`}
+              title={account.displayName}
+              top={index * LOGIN_METHOD_ROW.rowStep}
+            />
+          ))}
+        </ScrollView>
         {errorNode}
       </LoginPanel>
     );

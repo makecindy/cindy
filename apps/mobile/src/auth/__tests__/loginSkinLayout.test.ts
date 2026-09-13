@@ -12,8 +12,11 @@ vi.mock("expo-localization", () => ({
 import {
   createResendDeadline,
   formatResendCountdown,
+  LOGIN_ACCOUNT_LIST,
   LOGIN_CONTROL,
   LOGIN_DELETION_BUBBLE,
+  LOGIN_ERROR_TEXT,
+  LOGIN_METHOD_ROW,
   LOGIN_PAD_LANDSCAPE_STAGE,
   LOGIN_PAD_PORTRAIT_STAGE,
   LOGIN_STAGE_LONG,
@@ -24,6 +27,7 @@ import {
   resendCountdownRemaining,
   resolveDeletionBubbleFrame,
   resolveDeletionBubbleLinkHitSlop,
+  resolveLoginAccountListLayout,
   resolveLoginStage,
   resolveLoginSurface,
   resolveLoginSurfaceMode,
@@ -40,6 +44,24 @@ function expectBox(actual: LoginStageBox, expected: LoginStageBox) {
 }
 
 describe("loginSkin 750 stage 布局引擎", () => {
+  it("五个身份使用独立滚动视口：前两项位置不变，末项可完整滚入", () => {
+    const layout = resolveLoginAccountListLayout(5);
+
+    expect(LOGIN_ACCOUNT_LIST.viewportTop).toBe(
+      LOGIN_METHOD_ROW.firstRowTopSsoOrg,
+    );
+    expect(layout.rowTops.slice(0, 2)).toEqual([0, LOGIN_METHOD_ROW.rowStep]);
+    expect(layout.viewportHeight).toBe(
+      LOGIN_ERROR_TEXT.y - LOGIN_METHOD_ROW.firstRowTopSsoOrg,
+    );
+    expect(layout.contentHeight).toBe(
+      LOGIN_METHOD_ROW.height + 4 * LOGIN_METHOD_ROW.rowStep,
+    );
+    expect(layout.lastRowTopAtMaxScroll + LOGIN_METHOD_ROW.height).toBe(
+      layout.viewportHeight,
+    );
+  });
+
   it("scale 与 designHeight clamp:vw/750 缩放,dh clamp [600,1800]", () => {
     const layout = resolveLoginStage(390, 844);
     expect(layout.scale).toBeCloseTo(390 / 750, 10);
