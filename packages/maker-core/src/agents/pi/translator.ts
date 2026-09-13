@@ -295,6 +295,27 @@ export function isCurrentTurnHostAbortRequested(ctx: PiTranslateContext): boolea
     && ctx.hostAbortRequestTokens.size > 0;
 }
 
+/**
+ * Host Stop that was accepted while a prompt RPC had been confirmed but its
+ * `agent_start` had not yet arrived: `markPiHostAbortRequested` books it on the
+ * *pending* generation (turnGeneration + 1). A process exit inside that window
+ * ends the turn the user just cancelled, so exit settlement must recognise it
+ * exactly like a Stop on the streaming turn (#4354). A rolled-back prompt clears
+ * the pending token (and the booked Stop) first, so a rejected prompt never
+ * turns a later unrelated exit into "cancelled".
+ */
+export function isPendingTurnHostAbortRequested(ctx: PiTranslateContext): boolean {
+  return !ctx.isStreaming
+    && ctx.pendingHostTurnStartToken !== null
+    && ctx.hostAbortRequestGeneration === ctx.turnGeneration + 1
+    && ctx.hostAbortRequestTokens.size > 0;
+}
+
+/** Exit-time classification: a Stop on the streaming turn or on the confirmed, not yet started one. */
+export function isHostAbortRequestedAtExit(ctx: PiTranslateContext): boolean {
+  return isCurrentTurnHostAbortRequested(ctx) || isPendingTurnHostAbortRequested(ctx);
+}
+
 function clearPiHostAbortRequests(ctx: PiTranslateContext): void {
   ctx.hostAbortRequestTokens.clear();
   ctx.hostAbortRequestGeneration = null;

@@ -775,6 +775,32 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     await handle.close();
   });
 
+  // #4354: Stop lands after the prompt RPC was confirmed but before `agent_start`; a
+  // process exit inside that window is the user's cancellation, not a failure. Without a
+  // Stop the same exit stays a terminal failure.
+  it.each([{ code: 0, stopped: true }, { code: 1, stopped: true }, { code: 1, stopped: false }])('settles Pi exit $code before agent_start after Stop=$stopped as the user outcome', async ({ code, stopped }) => {
+    const deps = buildDeps();
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'exit-before-start', workingDir: cwd, model: 'm' });
+    const session = new Session({ id: 'exit-before-start', agentKind: 'pi', workDir: cwd,
+      handle, capabilities: agent.capabilities, logger: deps.logger, turnStallMs: 0 });
+    const seen: import('../../../types/events.js').AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+    await session.send('perform work');
+    // prompt RPC confirmed, agent_start deliberately never emitted
+    if (stopped) await session.abort();
+    captured.onExit?.({ code, signal: null });
+    await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+    expect(seen.filter((event) => event.type === 'error')).toEqual(stopped ? [] : [
+      expect.objectContaining({ data: expect.objectContaining({ isTerminal: true }) }),
+    ]);
+    expect(seen.filter((event) => event.type === 'done')).toEqual(stopped ? [
+      expect.objectContaining({ data: { status: 'cancelled' } }),
+    ] : []);
+    expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
+    await handle.close();
+  });
+
   it.each([0, 1])('preserves a delivered successful reply when Pi subsequently exits with %s', async (code) => {
     const deps = buildDeps();
     const agent = new PiAgent(deps);
