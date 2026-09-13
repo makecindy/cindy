@@ -133,6 +133,23 @@ describe('provider import URL parsing', () => {
     createDraft(customPayload({ endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://api.acme.test:443/catalog/models' }] }));
   });
 
+  it('keeps an explicit defaultEnabled override on imported compatibility routes', () => {
+    const importId = createDraft(customPayload({
+      endpoints: [{
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.acme.test/v1',
+        targets: ['claude-code'],
+        models: [{ id: 'compat-model', name: 'Compat', defaultEnabled: true }],
+      }],
+    }));
+    previewProviderImport(importId, SCOPE, []);
+    const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+    expect(draft.kind === 'custom' && draft.config.runtimes['claude-code']?.models[0]).toMatchObject({
+      id: 'compat-model',
+      defaultEnabled: true,
+    });
+  });
+
   it('imports Google generateContent endpoints for all three engines', () => {
     const importId = createDraft(customPayload({
       endpoints: [{

@@ -255,7 +255,7 @@ function parseModel(value: unknown, label: string): ProviderRuntimeModelConfig {
       fail(`${label}.${field} must be a boolean`);
     }
   }
-  if (model.defaultEnabled === false) result.defaultEnabled = false;
+  if (typeof model.defaultEnabled === 'boolean') result.defaultEnabled = model.defaultEnabled;
   if (model.supportsImageInput === true) result.supportsImageInput = true;
   if (model.reasoning === true) {
     if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) {
