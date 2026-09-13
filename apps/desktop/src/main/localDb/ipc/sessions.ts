@@ -145,6 +145,15 @@ export interface RegisterSessionIpcOpts {
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
 }
 
+/**
+ * 非 IPC 调用方(MCP 会话操作工具)可注入的写入前复核:在会话路由锁内、写库前执行,
+ * 返回非空字符串即以 PRECONDITION_FAILED 拒绝本次更新。用于把"运行中 / IM 接管中 /
+ * 已归档"这类守卫与写入放进同一串行区间,避免预检到写入之间的竞态。
+ */
+export interface UpdateSessionHooks {
+  beforeWrite?: () => Promise<string | null>;
+}
+
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
 let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
 let sessionWorktreeRecycle: SessionWorktreeRecycle | null = null;
@@ -1727,6 +1736,7 @@ export async function updateSessionInDb(
   sid: string,
   p: Record<string, unknown>,
   opts: RegisterSessionIpcOpts = registeredSessionIpcOpts,
+  hooks: UpdateSessionHooks = {},
 ): Promise<ReturnType<typeof sessionToCamel>> {
   const ownerScope = captureOwnerScope();
   if (p.extraDirs !== undefined || p.writableDirs !== undefined) {
@@ -1991,7 +2001,17 @@ export async function updateSessionInDb(
     compactTerminalSessionToolResults(dbClient, sid, p.status);
     return updated;
   };
-  if (p.workingDir === undefined) return update();
+  const guardedUpdate = async () => {
+    if (hooks.beforeWrite) {
+      const reason = await hooks.beforeWrite();
+      if (reason) throwIpcError('PRECONDITION_FAILED', reason);
+    }
+    return update();
+  };
+  // 带写入前复核的调用即使不改 workingDir 也要进路由锁:复核与写入必须同一串行区间。
+  if (p.workingDir === undefined) {
+    return hooks.beforeWrite ? withSessionRouteLock(sid, guardedUpdate) : update();
+  }
   return withSessionRouteLock(sid, async () => {
     const [binding] = await db
       .select({ remoteHostId: sessions.remoteHostId })
@@ -2004,7 +2024,7 @@ export async function updateSessionInDb(
         : null;
     const resources = await readSessionWorktreeResources(db, sid);
     if (resource) resources.push(resource);
-    return withWorktreeMutation(resources, update);
+    return withWorktreeMutation(resources, guardedUpdate);
   });
 }
 

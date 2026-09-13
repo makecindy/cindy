@@ -31,10 +31,18 @@ function row(id: string, patch: Partial<SessionOpsRow> = {}): SessionOpsRow {
 
 function makeDeps(rows: SessionOpsRow[], overrides: Partial<SessionOperationsDeps> = {}) {
   const byId = new Map(rows.map((r) => [r.id, r]));
-  const updateSession = vi.fn(async (id: string, patch: Record<string, unknown>) => ({
-    ...byId.get(id),
-    ...patch,
-  }));
+  // 与 updateSessionInDb 同款:beforeWrite 在"锁内"执行,返回原因即以 PRECONDITION_FAILED 拒绝。
+  const updateSession = vi.fn(
+    async (
+      id: string,
+      patch: Record<string, unknown>,
+      hooks?: { beforeWrite?: () => Promise<string | null> },
+    ) => {
+      const reason = await hooks?.beforeWrite?.();
+      if (reason) throw Object.assign(new Error(`[PRECONDITION_FAILED] ${reason}`), { code: 'PRECONDITION_FAILED' });
+      return { ...byId.get(id), ...patch };
+    },
+  );
   const deps: SessionOperationsDeps = {
     loadSessions: async (ids) => ids.flatMap((id) => (byId.has(id) ? [byId.get(id) as SessionOpsRow] : [])),
     loadChildren: async (parentIds) => rows.filter((r) => r.parentSessionId && parentIds.includes(r.parentSessionId)),
@@ -65,7 +73,7 @@ describe('moveSessions', () => {
   it('moves to dialogue with workspaceKind only', async () => {
     const { deps, updateSession } = makeDeps([row('a')]);
     await moveSessions(deps, { sessionIds: ['a'], target: { kind: 'dialogue' } });
-    expect(updateSession).toHaveBeenCalledWith('a', { workspaceKind: 'dialogue' });
+    expect(updateSession.mock.calls[0].slice(0, 2)).toEqual(['a', { workspaceKind: 'dialogue' }]);
   });
 
   it('NOT_FOUND for any missing id writes nothing', async () => {
@@ -119,23 +127,66 @@ describe('moveSessions', () => {
     expect(res).toMatchObject({ ok: false, errorCode: 'INTERNAL', moved: [{ sessionId: 'a' }] });
   });
 
-  it('rechecks running state before each update and preserves moved items', async () => {
+  it('rechecks running state inside the write lock and preserves moved items', async () => {
     let checks = 0;
     const { deps, updateSession } = makeDeps([row('a'), row('b')], {
       isTurnRunning: (id) => id === 'b' && ++checks > 1,
     });
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', moved: [{ sessionId: 'a' }] });
-    expect(updateSession).toHaveBeenCalledTimes(1);
+    // 复核发生在 updateSession 的 beforeWrite 里:b 进入了 updateSession 但没有写入。
+    expect(updateSession).toHaveBeenCalledTimes(2);
+    expect(updateSession.mock.calls[1][2]?.beforeWrite).toBeTypeOf('function');
   });
 
-  it('rechecks IM attachment before each update and preserves moved items', async () => {
+  it('rechecks IM attachment inside the write lock and preserves moved items', async () => {
     let checks = 0;
     const { deps, updateSession } = makeDeps([row('a'), row('b')], {
       isImAttached: (id) => id === 'b' && ++checks > 1,
     });
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', moved: [{ sessionId: 'a' }] });
-    expect(updateSession).toHaveBeenCalledTimes(1);
+    expect(updateSession).toHaveBeenCalledTimes(2);
+  });
+
+  it('refuses a session archived or deleted between precheck and write', async () => {
+    for (const late of ['archived', 'deleted'] as const) {
+      const rows = [row('a'), row('b')];
+      let loads = 0;
+      const { deps, updateSession } = makeDeps(rows, {
+        // 第一次批量读取正常;之后对 b 的锁内重读返回终态。
+        loadSessions: async (ids) => {
+          loads += 1;
+          return ids.flatMap((id) => {
+            const r = rows.find((x) => x.id === id);
+            if (!r) return [];
+            return [loads > 1 && id === 'b' ? { ...r, status: late } : r];
+          });
+        },
+      });
+      const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
+      expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', moved: [{ sessionId: 'a' }] });
+      expect(updateSession.mock.calls.filter((c) => c[0] === 'b')).toHaveLength(1);
+    }
+  });
+
+  it('rejects Bot-managed and Orca worker sessions for the whole batch', async () => {
+    for (const patch of [{ source: 'bot' }, { orcaRole: 'worker' as const }]) {
+      const { deps, updateSession } = makeDeps([row('a'), row('b', patch)]);
+      const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
+      expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+      expect(updateSession).not.toHaveBeenCalled();
+    }
+  });
+
+  it('preserves the mapped IPC error code from a failed update', async () => {
+    const { deps } = makeDeps([row('a'), row('b')], {
+      updateSession: vi.fn(async (id: string) => {
+        if (id === 'b') throw Object.assign(new Error('[NOT_FOUND] gone'), { code: 'NOT_FOUND' });
+        return {};
+      }),
+    });
+    const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
+    expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND', moved: [{ sessionId: 'a' }] });
   });
 });

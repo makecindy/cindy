@@ -15,7 +15,7 @@ import type { MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
 import { bindingStore } from '../im/binding.js';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
-import { sessions } from '../localDb/schema.js';
+import { orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
 import {
   moveSessions,
   type SessionOperationsDeps,
@@ -80,11 +80,14 @@ export function createSessionOperationsDeps(
         .where(inArray(sessions.parentSessionId, parentIds));
       return rows.map(toRow);
     },
+    // Worker 归属记录在 orca_teams → orca_workers(sessions.parent_session_id 只表示
+    // fork 派生关系,创建 worker 时不会写它),与协同面板 / effectiveRunningSessionIds 同源。
     listWorkerSessionIds: async (leadSessionId) => {
       const rows = await getDbClient()
-        .drizzle.select({ id: sessions.id })
-        .from(sessions)
-        .where(and(eq(sessions.parentSessionId, leadSessionId), eq(sessions.orcaRole, 'worker')));
+        .drizzle.select({ id: orcaWorkers.sessionId })
+        .from(orcaWorkers)
+        .innerJoin(orcaTeams, eq(orcaWorkers.teamId, orcaTeams.id))
+        .where(and(eq(orcaTeams.leadSessionId, leadSessionId), eq(orcaTeams.status, 'active')));
       return rows.map((row) => row.id);
     },
     isTurnRunning,
@@ -97,7 +100,8 @@ export function createSessionOperationsDeps(
         return false;
       }
     },
-    updateSession: (sessionId, patch) => updateSessionInDb(sessionId, patch),
+    updateSession: (sessionId, patch, hooks) =>
+      updateSessionInDb(sessionId, patch, undefined, hooks),
 
   };
 }

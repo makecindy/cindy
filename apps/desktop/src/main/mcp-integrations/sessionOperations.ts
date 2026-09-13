@@ -41,8 +41,15 @@ export interface SessionOperationsDeps {
   isTurnRunning(sessionId: string): boolean;
   isImAttached(sessionId: string): boolean;
   isDirectory(path: string): Promise<boolean>;
-  /** sessions:update 业务体(updateSessionInDb)。 */
-  updateSession(sessionId: string, patch: Record<string, unknown>): Promise<unknown>;
+  /**
+   * sessions:update 业务体(updateSessionInDb)。`beforeWrite` 在会话路由锁内、写库前执行,
+   * 返回非空字符串即以 PRECONDITION_FAILED 拒绝本次写入。
+   */
+  updateSession(
+    sessionId: string,
+    patch: Record<string, unknown>,
+    hooks?: { beforeWrite?: () => Promise<string | null> },
+  ): Promise<unknown>;
 
 }
 
@@ -104,8 +111,30 @@ async function mutationGuard(
 ): Promise<string | null> {
   if (row.remoteHostId) return '远程(SSH)会话不支持此操作';
   if (row.status === 'deleted') return '会话已删除';
+  // 伙伴(Bot)会话的工作区固定为其 workspace,Orca worker 的工作区继承自 lead 且不在侧栏:
+  // 两者在 GUI 都没有此类入口,工具侧同样拒绝,避免改写受管会话。
+  if (row.source === 'bot') return '伙伴(Bot)会话由伙伴运行时管理,不能在此操作';
+  if (row.orcaRole === 'worker') return '协同 worker 会话由协同面板管理,不能在此操作';
   if (await isRunning(deps, row)) return '会话正在运行中(含协同 worker),请等它结束';
   if (deps.isImAttached(row.id)) return '会话正被 IM 接管中';
+  return null;
+}
+
+/**
+ * 写入前(路由锁内)复核:重读该行,任何一条 GUI 守卫不再成立即拒绝。与预检相比多了
+ * "已归档 / 已删除"的终态复核 —— 预检后另一窗口归档或删除该会话时,不能把它当作已移动。
+ */
+async function lateGuard(
+  deps: SessionOperationsDeps,
+  sessionId: string,
+  options: { allowArchived: boolean },
+): Promise<string | null> {
+  const [fresh] = await deps.loadSessions([sessionId]);
+  if (!fresh) return '会话已不存在';
+  if (fresh.status === 'deleted') return '会话已在此期间被删除';
+  if (!options.allowArchived && fresh.status === 'archived') return '会话已在此期间被归档';
+  if (await isRunning(deps, fresh)) return '会话在写入前重新进入运行中';
+  if (deps.isImAttached(fresh.id)) return '会话在写入前被 IM 接管';
   return null;
 }
 
@@ -113,8 +142,6 @@ export async function moveSessions(
   deps: SessionOperationsDeps,
   params: { sessionIds: string[]; target: SessionMoveTarget },
 ): Promise<MoveSessionsResult> {
-  // 写入前复核将窗口缩到单次 updateSession 调用内；CC 转录搬迁仍在
-  // updateSessionInDb 路由锁内，Pi/Codex 则由 closeIdleSessionForMove 在锁内二次拦截。
   if (params.target.kind === 'project') {
     if (!isAbsolute(params.target.workingDir)) {
       return err('INVALID_ARGS', `working_dir 必须是绝对路径: ${params.target.workingDir}`);
@@ -143,16 +170,12 @@ export async function moveSessions(
       : { workingDir: params.target.workingDir, workspaceKind: 'project' as const };
   const moved: SessionOpItem[] = [];
   for (const row of loaded) {
-    const lateReason = (await isRunning(deps, row))
-      ? '会话在移动前重新进入运行中'
-      : deps.isImAttached(row.id)
-        ? '会话在移动前被 IM 接管'
-        : null;
-    if (lateReason) {
-      return { ...err('PRECONDITION_FAILED', `${row.id}: ${lateReason}`), moved } as MoveSessionsResult;
-    }
     try {
-      const updated = (await deps.updateSession(row.id, { ...patch })) as Partial<SessionOpsRow>;
+      // 运行中 / IM 接管 / 终态的复核放在 updateSessionInDb 的路由锁内(beforeWrite),
+      // 与写入同一串行区间;Pi/Codex 另有 closeIdleSessionForMove 在锁内二次拦截。
+      const updated = (await deps.updateSession(row.id, { ...patch }, {
+        beforeWrite: () => lateGuard(deps, row.id, { allowArchived: false }),
+      })) as Partial<SessionOpsRow>;
       moved.push(
         toItem({
           ...row,
@@ -161,8 +184,10 @@ export async function moveSessions(
         }),
       );
     } catch (e) {
+      // 保留映射后的业务错误码(NOT_FOUND / PRECONDITION_FAILED / INVALID_ARGS),
+      // 只有未知异常才是 INTERNAL;已完成的 moved 一并带回。
       const mapped = mapIpcError(e);
-      return { ...err('INTERNAL', `${row.id}: ${mapped.message}`), moved } as MoveSessionsResult;
+      return { ...mapped, message: `${row.id}: ${mapped.message}`, moved } as MoveSessionsResult;
     }
   }
   return { ok: true, moved };
