@@ -7,6 +7,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   moveSessions,
+  setSessionsPinned,
   type SessionOperationsDeps,
   type SessionOpsRow,
 } from '../sessionOperations.js';
@@ -188,5 +189,84 @@ describe('moveSessions', () => {
     });
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND', moved: [{ sessionId: 'a' }] });
+  });
+});
+
+
+describe('setSessionsPinned', () => {
+  it('writes pinnedAt ISO / null through updateSession', async () => {
+    const { deps, updateSession } = makeDeps([row('a')]);
+    await setSessionsPinned(deps, { sessionIds: ['a'], pinned: true });
+    expect(typeof updateSession.mock.calls[0][1].pinnedAt).toBe('string');
+    await setSessionsPinned(deps, { sessionIds: ['a'], pinned: false });
+    expect(updateSession.mock.calls[1][1]).toEqual({ pinnedAt: null });
+  });
+
+  it('rechecks terminal state inside the write lock and preserves changed items', async () => {
+    const rows = [row('a'), row('b')];
+    let loads = 0;
+    const { deps, updateSession } = makeDeps(rows, {
+      loadSessions: async (ids) => {
+        loads += 1;
+        return ids.flatMap((id) => {
+          const r = rows.find((x) => x.id === id);
+          if (!r) return [];
+          return [loads > 1 && id === 'b' ? { ...r, status: 'archived' as const } : r];
+        });
+      },
+    });
+    const res = await setSessionsPinned(deps, { sessionIds: ['a', 'b'], pinned: true });
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', changed: [{ sessionId: 'a' }] });
+    expect(updateSession.mock.calls[1][2]?.beforeWrite).toBeTypeOf('function');
+  });
+
+  it('pins SSH remote sessions like the GUI patchMeta path does', async () => {
+    const { deps, updateSession } = makeDeps([row('a', { remoteHostId: 'host' })]);
+    const res = await setSessionsPinned(deps, { sessionIds: ['a'], pinned: true });
+    expect(res).toMatchObject({ ok: true, changed: [{ sessionId: 'a' }] });
+    expect(updateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the mapped IPC error code from a failed update', async () => {
+    const { deps } = makeDeps([row('a'), row('b')], {
+      updateSession: vi.fn(async (id: string) => {
+        if (id === 'b') throw Object.assign(new Error('[NOT_FOUND] gone'), { code: 'NOT_FOUND' });
+        return {};
+      }),
+    });
+    const res = await setSessionsPinned(deps, { sessionIds: ['a', 'b'], pinned: true });
+    expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND', changed: [{ sessionId: 'a' }] });
+  });
+
+  it('refuses archived, deleted, Bot and Orca worker sessions for the whole batch', async () => {
+    for (const patch of [
+      { status: 'archived' as const },
+      { status: 'deleted' as const },
+      { source: 'bot' },
+      { orcaRole: 'worker' as const },
+    ]) {
+      const { deps, updateSession } = makeDeps([row('a'), row('b', patch)]);
+      const res = await setSessionsPinned(deps, { sessionIds: ['a', 'b'], pinned: true });
+      expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+      expect(updateSession).not.toHaveBeenCalled();
+    }
+  });
+
+  it('NOT_FOUND for any missing id writes nothing', async () => {
+    const { deps, updateSession } = makeDeps([row('a')]);
+    const res = await setSessionsPinned(deps, { sessionIds: ['a', 'ghost'], pinned: true });
+    expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it('reports partial progress when a later update fails', async () => {
+    const { deps } = makeDeps([row('a'), row('b')], {
+      updateSession: vi.fn(async (id: string) => {
+        if (id === 'b') throw new Error('disk on fire');
+        return {};
+      }),
+    });
+    const res = await setSessionsPinned(deps, { sessionIds: ['a', 'b'], pinned: true });
+    expect(res).toMatchObject({ ok: false, errorCode: 'INTERNAL', changed: [{ sessionId: 'a' }] });
   });
 });
