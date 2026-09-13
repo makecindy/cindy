@@ -170,6 +170,23 @@ describe('manual model refresh for saved OAuth providers', () => {
     expect(fetchCalls[0]?.url).toBe(provider.auth.oauth!.tokenUrl);
   });
 
+  it('forwards saved non-credential headers on OAuth model refresh', async () => {
+    const provider = savedProvider();
+    seedBlob('scoped-account', { access_token: 'fake-oauth-access' });
+    const result = await fetchSavedOAuthProviderModels(
+      provider, 'pi', 'scoped-account', () => true,
+      async (_url, init) => {
+        expect(init?.headers).toEqual({
+          authorization: 'Bearer fake-oauth-access',
+          'x-tenant': 'acme',
+        });
+        return new Response('{"data":["new-model"]}');
+      },
+      { 'X-Tenant': 'acme', Authorization: 'should-not-win' },
+    );
+    expect(result).toMatchObject({ ok: true, models: [{ id: 'new-model' }] });
+  });
+
   it('does not issue a public unauthenticated request when the login is gone', async () => {
     let requests = 0;
     const result = await fetchSavedOAuthProviderModels(savedProvider(), 'pi', 'missing-account', () => true,

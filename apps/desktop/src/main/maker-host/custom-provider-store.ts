@@ -603,7 +603,7 @@ function normalizeRuntime(
           }
         : {}),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-      ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+      ...(typeof m.defaultEnabled === 'boolean' ? { defaultEnabled: m.defaultEnabled } : {}),
       ...(typeof m.supportsImageInput === 'boolean'
         ? { supportsImageInput: m.supportsImageInput }
         : {}),
@@ -825,7 +825,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               m.contextWindow > 0
                 ? { contextWindow: m.contextWindow }
                 : {}),
-              ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+              ...(typeof m.defaultEnabled === 'boolean' ? { defaultEnabled: m.defaultEnabled } : {}),
               ...(typeof m.supportsImageInput === 'boolean'
                 ? { supportsImageInput: m.supportsImageInput }
                 : {}),

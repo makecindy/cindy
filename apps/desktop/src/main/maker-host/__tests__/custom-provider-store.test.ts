@@ -702,6 +702,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
             { id: 'a', name: 'A', contextWindow: 1_000_000 },
             { id: 'a', name: 'A dup' },
             { id: 'hidden', name: 'Hidden', defaultEnabled: false },
+            { id: 'checked', name: 'Checked', defaultEnabled: true },
           ],
           headers: { 'X-Org': 'acme' },
         },
@@ -711,6 +712,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect(got?.runtimes.codex?.models).toEqual([
       { id: 'a', name: 'A', contextWindow: 1_000_000 },
       { id: 'hidden', name: 'Hidden', defaultEnabled: false },
+      { id: 'checked', name: 'Checked', defaultEnabled: true },
     ]);
     expect(got?.runtimes.codex?.headers).toBeUndefined();
   });

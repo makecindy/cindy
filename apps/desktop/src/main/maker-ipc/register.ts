@@ -5497,6 +5497,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           storedCustomProviderId(provider.id),
           () => getActiveAppSession().generation === owner.generation &&
             getActiveCatalog().providers.find((p) => p.id === provider.id) === provider,
+          undefined,
+          spec.headers,
         );
       }
       return fetchProviderModels(spec);

@@ -114,7 +114,6 @@ function probeHasUserSecret(spec: ProviderProbeSpec): boolean {
 /** Vertex/Bedrock can use Desktop ADC/IAM. Renderer-chosen URLs must not inherit those credentials. */
 function hostEnvironmentApiAllowed(spec: ProviderProbeSpec, api: string): boolean {
   if (!HOST_ENVIRONMENT_APIS.has(api as PiModelApi)) return true;
-  if (spec.nativeModel) return true;
   if (probeHasUserSecret(spec)) return true;
   if (!spec.catalogPresetId) return false;
   const row = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, api as PiModelApi)
@@ -432,6 +431,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   const baseUrl = modelRouting.upstream;
   const wireProtocol = modelRouting.wireProtocol;
   const native = modelApi ? { api: modelApi, nativeModel: invocationModelRecord(model, baseUrl, modelApi) } : {};
+  const catalogPresetId = model.catalogPresetId ?? routing.piCatalogProviderId;
   // Pi derives its inference path from wireProtocol and does not consume requestPath.
   const requestPath = agent === 'pi' ? undefined : modelRouting.requestPath;
   // OAuth 形态：探测凭证用 Runner 持有的 access_token（与 oauth-token 路由同源），未登录时
@@ -446,6 +446,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
       baseUrl: buildRouteDecision(modelRouting, null, agent, null, oauthToken)?.upstreamOverride ?? baseUrl,
       modelId: model.id,
       ...native,
+      ...(catalogPresetId ? { catalogPresetId } : {}),
       wireProtocol,
       requestPath,
       apiKey: null,
@@ -461,6 +462,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
       baseUrl,
       modelId: model.id,
       ...native,
+      ...(catalogPresetId ? { catalogPresetId } : {}),
       wireProtocol,
       requestPath,
       apiKey: null,
@@ -473,6 +475,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     baseUrl,
     modelId: model.id,
     ...native,
+    ...(catalogPresetId ? { catalogPresetId } : {}),
     // 与 oauth-token 分支对齐：Chat 桥接供应商（api-key-header + openai-chat）的 saved 探测
     // 必须带上 wireProtocol，否则 buildProbeRequest 回落到原生 /responses，对 Chat-only 上游
     // 误报连接失败（真实会话走 resolveSessionRoute 不受影响，探测结论会与真实会话相反）。

@@ -80,6 +80,7 @@ export async function fetchSavedOAuthProviderModels(
   storageProviderId: string,
   isCurrent: () => boolean,
   fetchImpl: typeof fetch = outboundFetch,
+  headers?: Record<string, string>,
 ): Promise<ProviderModelsFetchResult> {
   const oauth = provider?.auth.oauth;
   const route = provider?.routing[agent];
@@ -103,6 +104,7 @@ export async function fetchSavedOAuthProviderModels(
     wireProtocol: route.wireProtocol,
     authMethod: 'oauth',
     apiKey: token,
+    headers,
     redirect: 'error',
   }, fetchImpl);
   return isCurrent() ? result : { ok: false, code: 'AUTH_INVALID' };

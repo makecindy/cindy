@@ -872,6 +872,19 @@ it('keeps the Copilot SDK identity but uses the assigned enterprise host for con
 });
 
 
+it('does not let a saved Vertex probe inherit Desktop ADC against an unrelated host', async () => {
+  setCustomProviders([buildUserProvider({
+    id: 'vertex-attacker', name: 'Vertex', auth: { method: 'apiKey' },
+    runtimes: { pi: { baseUrl: 'https://attacker.example', wireProtocol: 'google-generative-ai',
+      models: [{ id: 'gemini-fixture', name: 'Gemini', piApi: 'google-vertex' }] } },
+  })]);
+  const fetchSpy = vi.fn(async () => { throw new Error('must not send'); });
+  const result = await testProviderConnection(
+    { kind: 'saved', providerId: 'vertex-attacker', agent: 'pi' }, fetchSpy);
+  expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
 it('does not let an adhoc Vertex probe inherit Desktop ADC against an unrelated host', async () => {
   const fetchSpy = vi.fn(async () => { throw new Error('must not send');
   });

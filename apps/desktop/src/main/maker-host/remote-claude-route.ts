@@ -130,6 +130,13 @@ function materializeRoutedProvider(routed: ResolvedProviderRouteDecision): Remot
   if (routing.disabled) {
     throw new Error(`[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" route is disabled`);
   }
+  // Remote Claude Code always posts /v1/messages. Local Chat/Responses/Google
+  // connections depend on the loopback translator, which this env path cannot host.
+  if (routing.wireProtocol && routing.wireProtocol !== 'anthropic-messages') {
+    throw new Error(
+      `[REMOTE_PROVIDER_UNSUPPORTED] provider "${providerId}" uses ${routing.wireProtocol}, which remote Claude Code sessions can't replicate`,
+    );
+  }
   // cc 恒打 baseURL 的标准 /v1/messages,没有 env 能改推理路径。
   if (routing.requestPath) {
     throw new Error(
