@@ -23775,6 +23775,119 @@ describe('CodexAgent rewind', () => {
     await handle.close();
   });
 
+  // #4421: 0.153+ 的分页线程拒绝 thread/rollback(-32600)。原地回退要改走与
+  // forkSdkSession 相同的原生边界 fork,并把活动线程切到 fork 结果。
+  it('falls back to a native turn fork when the paginated thread rejects thread/rollback', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) {
+        throw Object.assign(
+          new Error('codex app-server thread/rollback error -32600: paginated threads do not support thread/rollback'),
+          { code: -32600 },
+        );
+      }
+      if (method === Method.ThreadTurnsList) return {
+        data: [
+          { id: 'dropped-turn', status: 'completed', startedAt: 200 },
+          { id: 'boundary-turn', status: 'completed', startedAt: 100 },
+        ], nextCursor: null,
+      };
+    }, { userAgent: 'mock-codex/0.153.4' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-paginated',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const iterator = handle.events()[Symbol.asyncIterator]();
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    const commitResult = await commitRewindFiles('', '', { tailTurnsToDrop: 1, forkAtTimestampMs: 150_500 });
+
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadRollback, {
+      threadId: 'start-thread-id',
+      numTurns: 1,
+    });
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, {
+      threadId: 'start-thread-id',
+      lastTurnId: 'boundary-turn',
+      excludeTurns: true,
+      cwd: '/repo',
+    });
+    expect(commitResult).toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.subscribeThread).toHaveBeenCalledTimes(2);
+    expect(host.subscribeThread).toHaveBeenLastCalledWith('fork-thread-id', expect.any(Object));
+    expect(await nextEvent(iterator)).toMatchObject({
+      type: 'session_id',
+      data: 'fork-thread-id',
+      source: 'codex',
+    });
+    await handle.close();
+  });
+
+  it('uses the persisted native anchor for the paginated rewind fork without listing turns', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) throw new Error('paginated threads do not support thread/rollback');
+    }, { userAgent: 'mock-codex/0.153.4' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-paginated-anchor',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 2, lastTurnId: 'persisted-boundary' }))
+      .resolves.toEqual({ sdkSessionId: 'fork-thread-id' });
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadTurnsList, expect.anything());
+    expect(host.request).toHaveBeenCalledWith(Method.ThreadFork, expect.objectContaining({
+      threadId: 'start-thread-id', lastTurnId: 'persisted-boundary',
+    }));
+    await handle.close();
+  });
+
+  it('surfaces a clear error instead of forking when the paginated rewind has no native boundary', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) throw new Error('paginated threads do not support thread/rollback');
+    }, { userAgent: 'mock-codex/0.153.4' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-paginated-no-anchor',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1 }))
+      .rejects.toThrow(/unambiguous native anchor or event timestamp/);
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadFork, expect.anything());
+    // 活动线程未被替换,后续仍订阅原线程。
+    expect(host.subscribeThread).toHaveBeenCalledTimes(1);
+    await handle.close();
+  });
+
+  it('does not fork for non-paginated rollback failures', async () => {
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.ThreadRollback) throw new Error('codex app-server thread/rollback error -32000: thread not found');
+    }, { userAgent: 'mock-codex/0.153.4' });
+    const handle = await agent.startSession({
+      sessionId: 'session-rewind-other-failure',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const commitRewindFiles = handle.commitRewindFiles;
+    if (!commitRewindFiles) throw new Error('expected commitRewindFiles');
+
+    await expect(commitRewindFiles('', '', { tailTurnsToDrop: 1, forkAtTimestampMs: 150_500 }))
+      .rejects.toThrow(/thread not found/);
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadFork, expect.anything());
+    expect(host.request).not.toHaveBeenCalledWith(Method.ThreadTurnsList, expect.anything());
+    await handle.close();
+  });
+
   it('re-registers proxy developer instructions for the replacement rollback thread', async () => {
     const registerCodexSystemPromptForThread = vi.fn();
     const agent = new CodexAgent(createDeps(

@@ -533,8 +533,11 @@ function resolveClaudeAssistantAnchor(
   return undefined;
 }
 
-function resolveCodexTurnAnchor(
-  rows: ForkTimelineMessage[],
+/** resolveCodexTurnAnchor / resolveCodexForkEventTimestamp 只读这几列;rewind 复用同一套边界判定(#4421)。 */
+export type CodexNativeBoundaryRow = Pick<ForkTimelineMessage, 'role' | 'content' | 'agentMeta' | 'createdAt'>;
+
+export function resolveCodexTurnAnchor(
+  rows: CodexNativeBoundaryRow[],
   sourceSdkSessionId: string,
 ): string | undefined {
   let timelineSdkSessionId: string | null = sourceSdkSessionId;
@@ -561,7 +564,7 @@ function resolveCodexTurnAnchor(
   return undefined;
 }
 
-function resolveCodexForkEventTimestamp(rows: ForkTimelineMessage[]): number | undefined {
+export function resolveCodexForkEventTimestamp(rows: CodexNativeBoundaryRow[]): number | undefined {
   for (let i = rows.length - 1; i >= 0; i -= 1) {
     const row = rows[i]!;
     // A new native segment has no event to anchor yet. Never borrow time from

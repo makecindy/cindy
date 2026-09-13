@@ -1145,6 +1145,58 @@ describe('db worker tx handlers', () => {
     },
   );
 
+  it.each([false, true])(
+    'rewind.commit remaps surviving native fork anchors to the replacement thread (inline=%s)',
+    async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      const keptMeta = JSON.stringify({
+        turnCompleted: true,
+        nativeForkAnchor: { agentKind: 'codex', kind: 'turn', sdkSessionId: 'thread-old', id: 'turn-1' },
+      });
+      const foreignMeta = JSON.stringify({
+        turnCompleted: true,
+        nativeForkAnchor: { agentKind: 'codex', kind: 'turn', sdkSessionId: 'thread-other', id: 'turn-x' },
+      });
+      const droppedMeta = JSON.stringify({
+        turnCompleted: true,
+        nativeForkAnchor: { agentKind: 'codex', kind: 'turn', sdkSessionId: 'thread-old', id: 'turn-2' },
+      });
+      await client.exec(
+        'INSERT INTO messages (id, client_id, session_id, role, content, agent_meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?)',
+        [
+          'm1', 'c1', 's1', 'assistant', 'kept', keptMeta, 100,
+          'm2', 'c2', 's1', 'assistant', 'foreign', foreignMeta, 150,
+          'm3', 'c3', 's1', 'user', 'target', null, 200,
+          'm4', 'c4', 's1', 'assistant', 'dropped', droppedMeta, 300,
+        ],
+      );
+
+      await client.tx('rewind.commit', {
+        sessionId: 's1',
+        targetCreatedAt: 200,
+        sdkSessionId: 'thread-new',
+        nativeForkAnchorSessionMap: [['thread-old', 'thread-new']],
+        now: 999,
+      });
+
+      const rows = await client.query('SELECT id, rewind_at, agent_meta FROM messages ORDER BY id') as Array<{
+        id: string; rewind_at: number | null; agent_meta: string | null;
+      }>;
+      expect(rows.map((r) => [r.id, r.rewind_at])).toEqual([
+        ['m1', null], ['m2', null], ['m3', 999], ['m4', 999],
+      ]);
+      expect(JSON.parse(rows[0]!.agent_meta!)).toEqual({
+        turnCompleted: true,
+        nativeForkAnchor: { agentKind: 'codex', kind: 'turn', sdkSessionId: 'thread-new', id: 'turn-1' },
+      });
+      // 异线程锚点与被软删的行都不动。
+      expect(rows[1]!.agent_meta).toBe(foreignMeta);
+      expect(rows[3]!.agent_meta).toBe(droppedMeta);
+    }, { useInlineWorker });
+    },
+  );
+
   it('rewind.commit uses target message id to avoid same-timestamp over-delete', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1');

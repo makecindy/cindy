@@ -248,6 +248,8 @@ import {
   type ThreadForkResponse,
   type ThreadRollbackParams,
   type ThreadRollbackResponse,
+  type ThreadTurnsListParams,
+  type ThreadTurnsListResponse,
   type ThreadResumeParams,
   type ThreadResumeResponse,
   type ThreadSettingsUpdateParams,
@@ -379,6 +381,16 @@ function clampEffortForCodex(model: string, e: Effort): CodexEffort {
 function normalizeTailTurnsToDrop(value: number | undefined): number {
   if (value === undefined || !Number.isFinite(value)) return 0;
   return Math.max(0, Math.floor(value));
+}
+
+/**
+ * Codex app-server 对分页线程(0.153+ 的 SQLite 索引历史)拒绝 thread/rollback:
+ * JSON-RPC -32600 "paginated threads do not support thread/rollback"。原地回退
+ * 遇到它要改走 thread/fork(lastTurnId) 绕行(#4421),其它错误照常上抛。
+ */
+export function isCodexPaginatedRollbackUnsupportedError(error: unknown): boolean {
+  const message = error instanceof Error ? error.message : typeof error === 'string' ? error : '';
+  return /paginated threads? do(?:es)? not support thread\/rollback/i.test(message);
 }
 
 function normalizeNativeForkTurnId(value: string | undefined): string | undefined {
@@ -13819,13 +13831,56 @@ export class CodexAgent extends BaseAgent {
           tailTurnsToDrop,
         });
         assertCurrentHost('thread/rollback');
-        const rollbackResp = await host.request<ThreadRollbackResponse>(
-          Method.ThreadRollback,
-          { threadId, numTurns: tailTurnsToDrop } as ThreadRollbackParams,
-        );
         const previousThreadId = threadId;
-        const nextThreadId = rollbackResp.thread.id || previousThreadId;
-        await recordNativeThreadLocation(rollbackResp.thread);
+        let replacementThread: ThreadRollbackResponse['thread'];
+        try {
+          const rollbackResp = await host.request<ThreadRollbackResponse>(
+            Method.ThreadRollback,
+            { threadId, numTurns: tailTurnsToDrop } as ThreadRollbackParams,
+          );
+          replacementThread = rollbackResp.thread;
+        } catch (error) {
+          if (!isCodexPaginatedRollbackUnsupportedError(error)) throw error;
+          // 分页线程(#4421):app-server 不支持按 turn 数裁剪,改用与 forkSdkSession
+          // 相同的原生边界 fork —— 目标之前最后一个已完成 turn 作 lastTurnId,
+          // thread/fork 出一条截断后的新线程并把活动线程切过去。native turn 计数
+          // 含失败/重试轮次,与可见 user 消息数不一一对应,所以边界只认宿主传来的
+          // 持久化锚点或按事件时间戳经 thread/turns/list 解析,绝不按 numTurns 数。
+          if (!supportsCodexNativeTurnFork(initResp.userAgent)) {
+            throw new Error(
+              `Codex app-server ${initResp.userAgent ?? 'unknown'} rejects thread/rollback for paginated threads and predates native turn fork (0.145.0); rewind is unavailable for this thread`,
+            );
+          }
+          let lastTurnId = normalizeNativeForkTurnId(rewindOpts?.lastTurnId);
+          if (!lastTurnId) {
+            if (!codexUserAgentAtLeast(initResp.userAgent, [0, 153, 4])) {
+              throw new Error(
+                `Codex app-server ${initResp.userAgent ?? 'unknown'} rejects thread/rollback for paginated threads and cannot list native turns (0.153.4); rewind is unavailable for this thread`,
+              );
+            }
+            lastTurnId = await resolveForkTurnAnchor(
+              (method, params) => host.request<ThreadTurnsListResponse>(method, params as ThreadTurnsListParams),
+              threadId,
+              rewindOpts?.forkAtTimestampMs,
+            );
+          }
+          log.info('commitRewindFiles ▶ thread/rollback unsupported for paginated thread; forking at native turn boundary', {
+            threadId,
+            tailTurnsToDrop,
+            lastTurnId,
+          });
+          assertCurrentHost('thread/fork (paginated rewind)');
+          const forkParams: ThreadForkParams = {
+            threadId,
+            lastTurnId,
+            ...(supportsCodexForkExcludeTurns(initResp.userAgent) ? { excludeTurns: true } : {}),
+            ...(opts.workingDir ? { cwd: opts.workingDir } : {}),
+          };
+          const forkResp = await host.request<ThreadForkResponse>(Method.ThreadFork, forkParams);
+          replacementThread = forkResp.thread;
+        }
+        const nextThreadId = replacementThread.id || previousThreadId;
+        await recordNativeThreadLocation(replacementThread);
         if (nextThreadId !== previousThreadId) {
           const released = await releaseCurrentThreadSubscription('thread/rollback subscription release');
           if (!released) {
