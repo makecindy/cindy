@@ -391,3 +391,25 @@ it('discovers native Google models with Google auth and exact declared limits', 
   expect(result).toMatchObject({ ok: true, models: [{ id: 'new-gemini', name: 'New Gemini', contextWindow: 1048576,
     discoveredMetadata: { contextWindow: 1048576, maxOutputTokens: 65536 } }] });
 });
+
+
+it('uses Bearer discovery for LongCat Messages without moving its inference endpoint', () => {
+  const result = buildModelsFetchRequest(spec({ baseUrl: 'https://api.longcat.chat/anthropic',
+    modelsUrl: 'https://api.longcat.chat/openai/v1/models', wireProtocol: 'anthropic-messages',
+    headers: { 'anthropic-version': '2023-06-01', 'anthropic-beta': 'fixture-beta' } }));
+  expect(result.url).toBe('https://api.longcat.chat/openai/v1/models');
+  const headers = new Headers(result.init.headers);
+  expect(headers.get('authorization')).toBe('Bearer sk-test');
+  expect(headers.has('anthropic-version')).toBe(false);
+  expect(headers.has('x-api-key')).toBe(false);
+});
+
+
+it('retains LongCat legacy header-only credentials when selecting its Bearer catalog', () => {
+  const result = buildModelsFetchRequest(spec({ baseUrl: 'https://api.longcat.chat/anthropic',
+    modelsUrl: 'https://api.longcat.chat/openai/v1/models', wireProtocol: 'anthropic-messages',
+    apiKey: null, headers: { 'x-api-key': 'fixture-legacy-key' } }));
+  const headers = new Headers(result.init.headers);
+  expect(headers.get('authorization')).toBe('Bearer fixture-legacy-key');
+  expect(headers.has('x-api-key')).toBe(false);
+});

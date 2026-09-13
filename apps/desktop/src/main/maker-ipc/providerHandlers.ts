@@ -17,6 +17,7 @@ import { setProviderPresentation, retainProviderPresentationAfterAuthChange } fr
 
 import type { CodexContextWindowInfo } from '@cindy/maker-core';
 import {
+  PI_MODEL_APIS,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   runtimeCustomProviderId,
@@ -473,6 +474,8 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
       if (typeof spec.wireProtocol !== 'string' || !allowed.includes(spec.wireProtocol))
         return null;
     }
+    if (spec.api !== undefined && (typeof spec.api !== 'string' || !(PI_MODEL_APIS as readonly string[]).includes(spec.api))) return null;
+    if (spec.catalogPresetId !== undefined && typeof spec.catalogPresetId !== 'string') return null;
     if (spec.requestPath !== undefined && !isProviderRequestPath(spec.requestPath)) return null;
     return {
       kind: 'adhoc',
@@ -482,6 +485,8 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
         modelId: spec.modelId,
         authMethod: spec.authMethod as ProviderProbeSpec['authMethod'],
         wireProtocol: spec.wireProtocol as ProviderProbeSpec['wireProtocol'],
+        ...(spec.api ? { api: spec.api as ProviderProbeSpec['api'] } : {}),
+        ...(spec.catalogPresetId ? { catalogPresetId: spec.catalogPresetId as string } : {}),
         requestPath: spec.agent === 'pi' ? undefined : (spec.requestPath as string | undefined),
         apiKey: (spec.apiKey as string | null | undefined) ?? null,
         headers: spec.headers as Record<string, string> | undefined,

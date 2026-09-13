@@ -34,7 +34,7 @@ export const CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS = [
   {
     value: 'google-generative-ai',
     labelKey: 'settings.providers.custom.modelProtocol.google',
-    helpKey: 'settings.providers.custom.modelProtocol.help',
+    helpKey: 'settings.providers.custom.wireProtocol.googleHelp',
     defaultRequestPath: '',
   },
 ] as const satisfies readonly CustomProviderWireProtocolOption[];

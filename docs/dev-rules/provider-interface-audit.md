@@ -57,7 +57,7 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 | moonshot-kimi-cn | 现有 Chat / Messages | 中文正文仅抓到 Chat；不把 Global Responses 自动借给中国大陆版 | [官方资料](https://platform.moonshot.cn/docs/guide/agent-support) |
 | moonshot-kimi-global | Chat / Messages / Responses | 官方 Responses 已确认；现有 Codex 仍用 Chat，本轮未扩大到所有型号 | [官方资料](https://platform.moonshot.ai/docs/api/responses) |
 | moonshot-kimi-code | 现有 Messages / Chat | 订阅与普通 API 不能混用；完整多协议矩阵待核实 | [官方资料](https://www.kimi.com/zh-cn/help/kimi-code/third-party-agents) |
-| minimax-cn | 现有 Messages / Chat / Responses | Global Responses 官方已确认；中国大陆版保留现有声明，未由 Global 推断新接口 | [官方资料](https://platform.minimax.io/docs/api-reference/responses-create) |
+| minimax-cn | Messages / Chat / Responses | 中国大陆官方 Responses 文档已确认；当前文档主机为 api.minimax.cn，既有 api.minimaxi.com 主机未做带凭证验收，不借 Global 证据判定 | [中国大陆官方资料](https://platform.minimax.cn/docs/api-reference/responses-create) |
 | minimax-global | 现有 Messages / Chat / Responses | Global Responses 官方已确认；中国大陆版保留现有声明，未由 Global 推断新接口 | [官方资料](https://platform.minimax.io/docs/api-reference/responses-create) |
 | aliyun-bailian-coding | Chat / Messages | Coding Plan 专用 key 和地址；不可与按量 key 混用 | [官方资料](https://help.aliyun.com/zh/model-studio/coding-plan) |
 | aliyun-bailian-token-plan-cn | 现有 Chat / Messages | 保留产品独立入口；官方概览未完整说明协议矩阵，待专项核实 | [官方资料](https://help.aliyun.com/zh/model-studio/token-plan-personal-overview) |
@@ -67,7 +67,7 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 | lmstudio | Chat / Responses / Messages | 修复默认地址的 Codex Responses；自定义地址及旧版本不可推断 | [官方资料](https://lmstudio.ai/docs/developer/openai-compat) |
 | llamacpp | Chat / Responses / Messages | 最新源码支持；存量本地服务版本未知，保留原配置，不批量改成新协议 | [官方资料](https://raw.githubusercontent.com/ggml-org/llama.cpp/master/tools/server/README.md) |
 | vllm | Chat / Responses / Messages | 最新文档有相关路由；部署版本、模板与启动配置未知，保留原配置 | [官方资料](https://docs.vllm.ai/en/latest/serving/openai_compatible_server.html) |
-| longcat | Chat / Messages | Codex 原先隐含 Responses 错误，改为 Chat 兼容 | [官方资料](https://longcat.chat/platform/docs/zh/) |
+| longcat | Chat / Messages | 推理入口按协议分开；共享 OpenAI 模型发现入口使用 Bearer，不继承 Messages 请求头；未做带凭证目录验收 | [官方资料](https://longcat.chat/platform/docs/zh/) |
 | zhipu-coding-plan-cn | Chat / Messages | 保留普通与 Coding Plan 独立入口；不从 Pi Chat 覆盖 Messages | [官方资料](https://docs.bigmodel.cn/cn/guide/develop/claude) |
 | zai-coding-plan-global | Chat / Messages | 保留普通与 Coding Plan 独立入口 | [官方资料](https://docs.z.ai/devpack/tool/claude) |
 | xiaomi-mimo-api-cn | Chat / Messages | 官方按量和中国大陆 Token Plan 文档确认两种入口 | [官方资料](https://mimo.mi.com/docs/zh-CN/quick-start/summary/first-api-call) |
@@ -86,7 +86,7 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 | cerebras | Pi 表 Chat；官方完整矩阵待核实 | 本轮文档抓取失败；不能声称只有 Chat | [官方资料](https://docs.cerebras.ai) |
 | cloudflare-ai-gateway | 随所代理的供应商路由 | 官方有供应商透传路径；未证明每模型都提供全部语言 | [官方资料](https://developers.cloudflare.com/ai-gateway/usage/providers/) |
 | cloudflare-workers-ai | Chat / 部分 Responses | 官方 Responses 示例 gpt-oss；不据此替所有模型开启 | [官方资料](https://developers.cloudflare.com/workers-ai/configuration/open-ai-compatibility/) |
-| fireworks | Chat / Responses / Messages | 修复两种入口；仅官方 inference 地址，不套用独立部署地址 | [官方资料](https://docs.fireworks.ai/llms.txt) |
+| fireworks | Chat / Responses / Messages | 官方 Messages 示例使用 Kimi，不能限定为 Claude；仅官方 inference 地址，不套用独立部署地址 | [官方资料](https://docs.fireworks.ai/tools-sdks/anthropic-compatibility) |
 | github-copilot | 按模型、登录权限和专用 API | 官方模型页面不能证明接口矩阵；保留 Pi 专用登录/adapter，完整矩阵待核实 | [官方资料](https://docs.github.com/en/copilot/reference/ai-models/supported-models) |
 | google-vertex | Gemini / 部分模型 Chat | 保留 Pi Vertex SDK；Chat 仅适用于文档列明模型/部署，不扩大到所有模型 | [官方资料](https://docs.cloud.google.com/vertex-ai/generative-ai/docs/multimodal/call-gemini-using-openai-library) |
 | groq | Chat / Responses | Responses 为 beta；修复 Codex 被压成 Chat | [官方资料](https://console.groq.com/docs/responses-api) |
@@ -162,3 +162,21 @@ OpenCode 官方文档表本次取得 Zen 69 条、Go 28 条声明，与实时模
 - Copilot 身份/账号主机、OAuth 报价已在上一批修复，本批整仓测试继续覆盖。
   Fireworks 的 Messages 支持不只限 Claude；不能按厂商名删除其已声明接口。
 - 本批没有重启 DEV、没有请求收费生成。模拟请求和表结构检查不等于所有渠道的真实账号验收。
+
+
+### 第二轮报告复核（2026-09-13）
+
+- Copilot 的 Codex Responses 先前绕过了原生 adapter，确实会遗漏编辑器和集成身份头。
+  Claude / Codex 现在共用“需要供应商专用鉴权”的判定；个人、Business、Enterprise
+  均覆盖路由决策与实际 Pi Responses SDK 请求头。连接探测也按令牌中的账号主机请求。
+- Vertex 的连接测试不再按公开 Google wire 拼 URL。saved / adhoc 保留 SDK API，
+  由与聊天相同的 Pi adapter 构造请求；Pi 的 HTTP-only helper 不再阻断 SDK 探测。
+  回归拦截真实 Vertex SDK 的 API Key 模式，确认 publisher 路径、流式响应和错误分类；
+  未使用真实云账号，ADC / 项目授权仍未做云端验收。
+- 未知 Google 型号走 Claude 时仍进入原生 SDK adapter，本轮增加路由回归。
+  Google 连接选择器使用“Google Gemini”和连接级帮助，不复用模型“继承默认”说明。
+- LongCat 的 Messages 推理与共享 OpenAI 模型发现分开处理；发现只发 Bearer。
+  无凭证 GET 返回 401，仅说明需鉴权，不能作为模型全集或账号可用的证明。
+- Fireworks 不按模型品牌删 Messages。中国大陆 MiniMax Responses 改用中国大陆官方来源，
+  原有别名主机的真实可用性仍单独标注；不把 Global 文档当作中国大陆部署证据。
+- 本批仅使用虚拟凭证、本地模拟及公开文档读取，没有付费生成，也没有重启 DEV。

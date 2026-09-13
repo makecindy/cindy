@@ -121,7 +121,7 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     resetClaudeSessionRouteRegistryForTest();
   });
 
-  it.each(['openai-chat', 'openai-responses'] as const)('selects the Claude translation handler for a saved %s connection', wireProtocol => {
+  it.each(['openai-chat', 'openai-responses', 'google-generative-ai'] as const)('selects the Claude translation handler for a saved %s connection', wireProtocol => {
     setCustomProviders([buildUserProvider({ id: 'zhipu-plan', name: 'Fixture', runtimes: {
       'claude-code': { baseUrl: 'https://supplier.example/v1', wireProtocol, models: [{ id: 'model', name: 'Model' }] },
     } })]);

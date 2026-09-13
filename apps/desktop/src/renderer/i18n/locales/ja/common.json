@@ -1744,7 +1744,8 @@
           "piAnthropic": "Anthropic Messages",
           "piResponsesHelp": "Pi がプロバイダーの OpenAI Responses API に直接接続します。",
           "piChatHelp": "Pi がプロバイダーの OpenAI 互換 Chat Completions API に直接接続します。",
-          "piAnthropicHelp": "Pi がプロバイダーの Anthropic Messages API に直接接続します。"
+          "piAnthropicHelp": "Pi がプロバイダーの Anthropic Messages API に直接接続します。",
+          "googleHelp": "プロバイダーの Google Gemini API エンドポイントを使用します。"
         },
         "modelProtocol": {
           "label": "モデルプロトコル",
@@ -1752,7 +1753,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
-          "google": "Google Generative AI",
+          "google": "Google Gemini",
           "help": "継承すると上のプロバイダープロトコルを使用します。このモデルだけ別のプロトコルが必要な場合に上書きします。",
           "ariaLabel": "{{model}} のモデルプロトコル"
         },

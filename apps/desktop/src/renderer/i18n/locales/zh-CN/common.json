@@ -1744,7 +1744,8 @@
           "piAnthropic": "Anthropic Messages",
           "piResponsesHelp": "Pi 直接连接供应商的 OpenAI Responses API。",
           "piChatHelp": "Pi 直接连接供应商的 OpenAI 兼容 Chat Completions API。",
-          "piAnthropicHelp": "Pi 直接连接供应商的 Anthropic Messages API。"
+          "piAnthropicHelp": "Pi 直接连接供应商的 Anthropic Messages API。",
+          "googleHelp": "使用供应商提供的 Google Gemini API 地址。"
         },
         "modelProtocol": {
           "label": "模型协议",
@@ -1752,7 +1753,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
-          "google": "Google Generative AI",
+          "google": "Google Gemini",
           "help": "继承默认会使用上方供应商协议；仅在该模型需要不同协议时覆盖。",
           "ariaLabel": "{{model}} 的模型协议"
         },

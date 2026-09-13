@@ -127,3 +127,26 @@ it.each(['gemini-3.6-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'])('send
     expect(requests).toHaveLength(1);
   } finally { vi.unstubAllGlobals(); }
 });
+
+
+it.each(['individual', 'business', 'enterprise'])('sends Copilot Responses editor headers to the %s host', async account => {
+  const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
+  let captured = false;
+  const send = createPiProviderFetch({ row, providerId: 'renamed-copilot',
+    upstream: `https://api.${account}.githubcopilot.com`, apiKey: 'fixture-token',
+    fetchImpl: async (url, init) => {
+      captured = true;
+      expect(String(url)).toBe(`https://api.${account}.githubcopilot.com/responses`);
+      const headers = new Headers(init?.headers);
+      expect(headers.get('authorization')).toBe('Bearer fixture-token');
+      expect(headers.get('editor-version')).toBeTruthy();
+      expect(headers.get('editor-plugin-version')).toBeTruthy();
+      expect(headers.get('copilot-integration-id')).toBe('vscode-chat');
+      return new Response('data: {"type":"response.completed","response":{"id":"fixture","status":"completed","output":[],"usage":{"input_tokens":1,"output_tokens":0,"total_tokens":1}}}\n\n',
+        { headers: { 'content-type': 'text/event-stream' } });
+    },
+  });
+  const result = await (await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: 'ping', max_output_tokens: 16 }) })).text();
+  expect(result).toContain('response.completed');
+  expect(captured).toBe(true);
+});

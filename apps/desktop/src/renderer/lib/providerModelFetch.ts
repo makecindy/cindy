@@ -2,6 +2,7 @@ import {
   isAgentSelectableModel,
   isLoopbackProviderUrl,
   resolvePiModelRoute,
+  providerWireProtocolForApi,
   type AgentKind,
   type PiModelApi,
   type ProviderModelRouteConfig,
@@ -19,8 +20,9 @@ export interface ProviderModelFetchSignatureFields {
 }
 
 export interface ProviderConnectionTestSignatureFields extends ProviderModelFetchSignatureFields {
+  catalogPresetId?: string;
   wireProtocol: ProviderWireProtocol;
-  models: ReadonlyArray<{ id: string; mode?: string; discoveredMetadata?: { mode?: string }; piApi?: PiModelApi; route?: ProviderModelRouteConfig }>;
+  models: ReadonlyArray<{ id: string; mode?: string; discoveredMetadata?: { mode?: string }; api?: PiModelApi; piApi?: PiModelApi; route?: ProviderModelRouteConfig }>;
 }
 
 export function firstProviderChatModel<T extends { id: string; mode?: string; discoveredMetadata?: { mode?: string } }>(models: readonly T[]): T | undefined {
@@ -33,6 +35,7 @@ export function firstProviderChatModel<T extends { id: string; mode?: string; di
 type ProviderProbeAgent = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 
 export interface ProviderConnectionProbeRoute {
+  api?: PiModelApi;
   baseUrl: string;
   wireProtocol: ProviderWireProtocol;
   requestPath?: string;
@@ -47,6 +50,11 @@ export function resolveProviderConnectionProbeRoute(
   >,
 ): ProviderConnectionProbeRoute | null {
   const firstModel = firstProviderChatModel(fields.models);
+  const api = firstModel?.api ?? firstModel?.piApi;
+  if (api && ['google-generative-ai', 'google-vertex', 'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(api)) {
+    return { api, baseUrl: firstModel?.route?.baseUrl ?? fields.baseUrl,
+      wireProtocol: providerWireProtocolForApi(api) ?? fields.wireProtocol };
+  }
   if (agent === 'pi') {
     const route = resolvePiModelRoute(firstModel, {
       baseUrl: fields.baseUrl,
@@ -127,6 +135,8 @@ export interface SavedProviderProbeBaseline {
   apiKey: string;
   headers: ReadonlyArray<{ name: string; value: string }>;
   modelPiApi?: string;
+  modelApi?: string;
+  catalogPresetId?: string;
   modelRoute?: ProviderModelRouteConfig;
 }
 
@@ -243,8 +253,10 @@ export function connectionTestCanUseSaved(
   if (form.baseUrl.trim() !== baseline.baseUrl.trim()) return false;
   if (form.requestPath.trim() !== baseline.requestPath.trim()) return false;
   if (form.wireProtocol !== baseline.wireProtocol) return false;
+  if ((form.catalogPresetId ?? null) !== (baseline.catalogPresetId ?? null)) return false;
   const firstModel = firstProviderChatModel(form.models);
   if ((firstModel?.piApi ?? null) !== (baseline.modelPiApi ?? null)) return false;
+  if ((firstModel?.api ?? null) !== (baseline.modelApi ?? null)) return false;
   if (
     JSON.stringify(normalizedModelRoute(firstModel?.route)) !==
     JSON.stringify(normalizedModelRoute(baseline.modelRoute))
@@ -264,6 +276,8 @@ export function providerConnectionTestRequestSignature(
     wireProtocol: fields.wireProtocol,
     modelId: firstProviderChatModel(fields.models)?.id.trim() ?? null,
     modelPiApi: firstProviderChatModel(fields.models)?.piApi ?? null,
+    modelApi: firstProviderChatModel(fields.models)?.api ?? null,
+    catalogPresetId: fields.catalogPresetId ?? null,
     modelRoute: normalizedModelRoute(
       firstProviderChatModel(fields.models)?.route,
     ),

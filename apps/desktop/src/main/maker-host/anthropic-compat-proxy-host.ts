@@ -47,9 +47,9 @@ import { buildVisionBridgeProxyTransform } from '../vision-bridge/vision-bridge-
 
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
-import { providerModelRecord, providerModelAdapterId } from '@cindy/model-providers';
+import { providerModelRecord } from '@cindy/model-providers';
 import { outboundFetch } from './outbound-fetch.js';
-import { invocationModelRecord } from './pi-provider-transport.js';
+import { invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { createClaudeProviderBridge } from './claude-provider-bridge.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
 import { isXaiSubscriptionProviderId } from './subscription-account-auth.js';
@@ -145,8 +145,7 @@ function attachClaudeProviderBridge(route: RoutingDecision, providerId: string, 
   // Adapter identity belongs to the declared route. An OAuth account can select
   // another host without becoming a different provider (e.g. Copilot Business).
   const nativeRow = model && routing && model.api ? invocationModelRecord(model, routing.upstream) : undefined;
-  const nativeIdentity = nativeRow ? providerModelAdapterId(nativeRow) : undefined;
-  const requiresNativeAuth = nativeIdentity === 'cloudflare-ai-gateway' || nativeIdentity === 'github-copilot';
+  const requiresNativeAuth = requiresNativeProviderAuth(nativeRow);
   if (provider?.source === 'user' && model && routing &&
       (requiresNativeAuth || routing.wireProtocol === 'openai-chat' || routing.wireProtocol === 'openai-responses' || (model.api && model.api !== 'anthropic-messages'))) {
     const base = route.upstreamOverride ?? routing.upstream;

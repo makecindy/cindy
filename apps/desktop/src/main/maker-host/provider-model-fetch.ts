@@ -159,13 +159,18 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const anthropicMessages =
     spec.wireProtocol === 'anthropic-messages' ||
     (spec.wireProtocol === undefined && spec.agent === 'claude-code');
-  if (isOpenRouterModelsUrl(discoveryUrl)) {
+  const discoveryEndpoint = new URL(discoveryUrl);
+  const longcatOpenAiCatalog = discoveryEndpoint.origin === 'https://api.longcat.chat'
+    && discoveryEndpoint.pathname.replace(/\/+$/, '') === '/openai/v1/models';
+  if (isOpenRouterModelsUrl(discoveryUrl) || longcatOpenAiCatalog) {
     // Discovery is provider-specific, not the generation harness's wire format.
     // OpenRouter's Anthropic view rewrites IDs and defaults to only 20 results.
+    // LongCat explicitly shares its OpenAI catalog with the Messages runtime.
+    const discoveryKey = spec.apiKey ?? (longcatOpenAiCatalog && !headers.authorization ? headers['x-api-key'] : undefined);
     delete headers['anthropic-version'];
     delete headers['anthropic-beta'];
     delete headers['x-api-key'];
-    if (spec.apiKey) headers['authorization'] = `Bearer ${spec.apiKey}`;
+    if (discoveryKey) headers['authorization'] = `Bearer ${discoveryKey}`;
   } else if (spec.wireProtocol === 'google-generative-ai') {
     if (spec.apiKey) headers['x-goog-api-key'] = spec.apiKey;
   } else if (anthropicMessages) {

@@ -1,6 +1,6 @@
 import { resolveConversationSessionHeaders, withChatBridgeUserAgent, overrideHeadersCaseInsensitive } from '@cindy/responses-chat-bridge';
 import { providerModelRecord } from '@cindy/model-providers';
-import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord } from './pi-provider-transport.js';
+import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { peekGrokAccessToken } from './grok-oauth-login.js';
@@ -1503,7 +1503,7 @@ function createLocalBridgeDecision(
 ): RoutingDecision | null {
   if (!route) return null;
   const nativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
-  if (route.routing.wireProtocol === 'openai-chat' || (nativeModel?.api && nativeModel.api !== 'openai-responses')) {
+  if (route.routing.wireProtocol === 'openai-chat' || (nativeModel?.api && (nativeModel.api !== 'openai-responses' || requiresNativeProviderAuth(invocationModelRecord(nativeModel, route.routing.upstream))))) {
     const decision = createChatBridgeDecision(
       route,
       instructions,
@@ -2690,7 +2690,7 @@ export function createModelRoutingTransform(
       ctx.method === 'POST'
       && Boolean(model)
       && (
-        (selectedModel?.api && selectedModel.api !== 'openai-responses')
+        (selectedModel?.api && (selectedModel.api !== 'openai-responses' || (selectedRouting && requiresNativeProviderAuth(invocationModelRecord(selectedModel, selectedRouting.upstream)))))
         || selectedRouting?.wireProtocol === 'openai-chat'
         || selectedRouting?.wireProtocol === 'anthropic-messages'
       );

@@ -4413,3 +4413,18 @@ it.each(['anthropic-messages', 'openai-responses', 'openai-chat', 'google-genera
   });
   expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({ wireProtocol, agent: 'claude-code' }));
 });
+
+
+it('preserves the actual Vertex API through the probe IPC and rejects unknown SDK names', async () => {
+  const harness = new IpcHarness();
+  const deps = makeDeps();
+  registerProviderHandlers(harness, deps);
+  const spec = { agent: 'pi', baseUrl: 'https://us-central1-aiplatform.googleapis.com',
+    modelId: 'gemini-fixture', authMethod: 'apiKey', apiKey: 'fixture-key',
+    wireProtocol: 'google-generative-ai', api: 'google-vertex', catalogPresetId: 'google-vertex' };
+  await harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, { kind: 'adhoc', spec });
+  expect(deps.testConnection).toHaveBeenCalledWith({ kind: 'adhoc', spec: expect.objectContaining(spec) });
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION,
+    { kind: 'adhoc', spec: { ...spec, api: 'invented-sdk' } })).rejects.toThrow(/INVALID_PARAMS/);
+  expect(deps.testConnection).toHaveBeenCalledOnce();
+});

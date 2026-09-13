@@ -771,6 +771,8 @@ export function ProviderConnectionDialog({
           ? { modelPiApi: firstProviderChatModel(rc.models)?.piApi }
           : {}),
         modelRoute: firstProviderChatModel(rc.models)?.route,
+        modelApi: firstProviderChatModel(rc.models)?.api,
+        catalogPresetId: rc.catalogPresetId,
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
             ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
@@ -1251,6 +1253,8 @@ export function ProviderConnectionDialog({
                 modelId: firstModel,
                 authMethod: authMode,
                 wireProtocol: probeWireProtocol,
+                ...(probeRoute.api ? { api: probeRoute.api } : {}),
+                ...(rf.catalogPresetId ? { catalogPresetId: rf.catalogPresetId } : {}),
                 ...(probeRequestPath ? { requestPath: probeRequestPath } : {}),
                 apiKey: authMode === 'apiKey' && canSendApiKey ? rf.apiKey.trim() || null : null,
                 ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),

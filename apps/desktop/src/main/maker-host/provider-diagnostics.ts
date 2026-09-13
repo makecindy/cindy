@@ -16,6 +16,11 @@
 
 import {
   appendProviderRequestPath,
+  providerModelRecord,
+  providerPresetModelRecord,
+  providerWireProtocolForApi,
+  type PiModelApi,
+  type ProviderModelRecord,
   isAgentSelectableModel,
   isLoopbackProviderUrl,
   type AgentKind,
@@ -30,7 +35,8 @@ import {
 } from '../../shared/providerErrors.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { outboundFetch } from './outbound-fetch.js';
-import { providerRoutingForModel } from './provider-route.js';
+import { invocationModelRecord, probePiProvider, requiresNativeProviderAuth } from './pi-provider-transport.js';
+import { buildRouteDecision, providerRoutingForModel } from './provider-route.js';
 
 /** 探测请求超时。 */
 const PROBE_TIMEOUT_MS = 10_000;
@@ -46,6 +52,11 @@ export interface ProviderProbeSpec {
   authMethod?: 'apiKey' | 'oauth' | 'none';
   /** 缺省按 agent 保持历史行为。 */
   wireProtocol?: ProviderWireProtocol;
+  /** Actual SDK API; the four display protocols cannot identify Vertex/Azure transports. */
+  api?: PiModelApi;
+  catalogPresetId?: string;
+  /** Main-only resolved model; never accepted from IPC. */
+  nativeModel?: ProviderModelRecord;
   /** 非标准推理端点的精确相对路径。 */
   requestPath?: string;
   /** 用户 API key；缺省 = 不注入鉴权头（端点可能靠自定义 headers 鉴权）。 */
@@ -254,8 +265,38 @@ export async function runProviderProbe(
   if (spec.authMethod === 'none' && !isLoopbackProviderUrl(spec.baseUrl)) {
     throw new TypeError('no-auth provider probes require a loopback URL');
   }
-  const { url, init } = buildProbeRequest(spec);
   const start = Date.now();
+  const presetRow = providerPresetModelRecord(spec.catalogPresetId, spec.modelId, spec.api);
+  const row = spec.nativeModel
+    ?? providerModelRecord(spec.modelId, spec.baseUrl, spec.api ?? spec.wireProtocol)
+    ?? (presetRow && (spec.api || !spec.wireProtocol || providerWireProtocolForApi(presetRow.execution.pi.api) === spec.wireProtocol)
+      ? presetRow : undefined);
+  const api = spec.api ?? row?.execution.pi.api;
+  if (api && (['google-generative-ai', 'google-vertex', 'azure-openai-responses',
+    'bedrock-converse-stream', 'mistral-conversations'].includes(api) || requiresNativeProviderAuth(row))) {
+    const model = row ?? invocationModelRecord({ id: spec.modelId, name: spec.modelId,
+      group: 'custom', contextWindow: 4096, maxOutput: 16, efforts: [], defaultEffort: null, api: api as PiModelApi }, spec.baseUrl)!;
+    try {
+      const result = await probePiProvider({ row: model, providerId: spec.catalogPresetId ?? 'custom-probe',
+        upstream: spec.baseUrl, apiKey: spec.authMethod === 'none' ? '' : spec.apiKey
+          ?? new Headers(spec.headers).get('authorization')?.replace(/^Bearer /i, '')
+          ?? new Headers(spec.headers).get('x-goog-api-key')
+          ?? new Headers(spec.headers).get('x-api-key') ?? '',
+        headers: spec.apiKey || spec.authMethod === 'none' ? withoutCredentialHeaders(spec.headers) : spec.headers, fetchImpl,
+      }, AbortSignal.timeout(PROBE_TIMEOUT_MS));
+      if (result.stopReason !== 'error' && result.stopReason !== 'aborted') return { ok: true, latencyMs: Date.now() - start };
+      const detail = result.errorMessage ?? 'Native provider probe failed';
+      const statusMatch = detail.match(/(?:status|code)["\s:]+(4\d\d|5\d\d)\b|^(4\d\d|5\d\d)(?:\s|:)/);
+      const status = statusMatch ? Number(statusMatch[1] ?? statusMatch[2]) : undefined;
+      const cls = classifyProviderError({ status, bodyText: detail,
+        ...(result.stopReason === 'aborted' ? { networkErrorCode: 'AbortError' } : {}) });
+      return { ok: false, code: cls.code, status, latencyMs: Date.now() - start, detail: cls.detail };
+    } catch (err) {
+      const cls = classifyProviderError({ networkErrorCode: networkErrorCode(err) });
+      return { ok: false, code: cls.code, latencyMs: Date.now() - start, detail: cls.detail };
+    }
+  }
+  const { url, init } = buildProbeRequest(spec);
   let res: Response;
   try {
     res = await fetchImpl(url, { ...init, signal: AbortSignal.timeout(PROBE_TIMEOUT_MS) });
@@ -350,7 +391,14 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     isAgentSelectableModel(m, { userProvider: provider.source === 'user' }),
   );
   if (!model) throw new Error(`provider '${providerId}' has no chat models for '${agent}'`);
-  const modelRouting = providerRoutingForModel(provider, agent, model.id);
+  // Pi's HTTP-only route helper intentionally excludes SDK transports. A native
+  // probe must keep the SDK route instead of treating that exclusion as failure.
+  const modelApi = model.api ?? model.piApi;
+  const modelRouting = agent === 'pi' && modelApi && ['google-generative-ai', 'google-vertex',
+    'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(modelApi)
+    ? { ...routing, upstream: model.route?.baseUrl ?? routing.upstream,
+      wireProtocol: model.route?.wireProtocol ?? routing.wireProtocol }
+    : providerRoutingForModel(provider, agent, model.id);
   if (!modelRouting) {
     throw new Error(
       `provider '${providerId}' model '${model.id}' has no supported protocol for '${agent}'`,
@@ -358,6 +406,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
   }
   const baseUrl = modelRouting.upstream;
   const wireProtocol = modelRouting.wireProtocol;
+  const native = modelApi ? { api: modelApi, nativeModel: invocationModelRecord(model, baseUrl, modelApi) } : {};
   // Pi derives its inference path from wireProtocol and does not consume requestPath.
   const requestPath = agent === 'pi' ? undefined : modelRouting.requestPath;
   // OAuth 形态：探测凭证用 Runner 持有的 access_token（与 oauth-token 路由同源），未登录时
@@ -369,8 +418,9 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     const oauthToken = oauthProbeTokenReader(providerId);
     return {
       agent,
-      baseUrl,
+      baseUrl: buildRouteDecision(modelRouting, null, agent, null, oauthToken)?.upstreamOverride ?? baseUrl,
       modelId: model.id,
+      ...native,
       wireProtocol,
       requestPath,
       apiKey: null,
@@ -385,6 +435,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
       agent,
       baseUrl,
       modelId: model.id,
+      ...native,
       wireProtocol,
       requestPath,
       apiKey: null,
@@ -396,6 +447,7 @@ export function resolveSavedProbeSpec(providerId: string, agent: AgentKind): Pro
     agent,
     baseUrl,
     modelId: model.id,
+    ...native,
     // 与 oauth-token 分支对齐：Chat 桥接供应商（api-key-header + openai-chat）的 saved 探测
     // 必须带上 wireProtocol，否则 buildProbeRequest 回落到原生 /responses，对 Chat-only 上游
     // 误报连接失败（真实会话走 resolveSessionRoute 不受影响，探测结论会与真实会话相反）。

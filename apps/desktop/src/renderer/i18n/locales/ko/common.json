@@ -1744,7 +1744,8 @@
           "piAnthropic": "Anthropic Messages",
           "piResponsesHelp": "Pi가 제공자의 OpenAI Responses API에 직접 연결합니다.",
           "piChatHelp": "Pi가 제공자의 OpenAI 호환 Chat Completions API에 직접 연결합니다.",
-          "piAnthropicHelp": "Pi가 제공자의 Anthropic Messages API에 직접 연결합니다."
+          "piAnthropicHelp": "Pi가 제공자의 Anthropic Messages API에 직접 연결합니다.",
+          "googleHelp": "제공자의 Google Gemini API 주소를 사용합니다."
         },
         "modelProtocol": {
           "label": "모델 프로토콜",
@@ -1752,7 +1753,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
-          "google": "Google Generative AI",
+          "google": "Google Gemini",
           "help": "상속하면 위의 제공자 프로토콜을 사용합니다. 이 모델에 다른 프로토콜이 필요할 때만 재정의하세요.",
           "ariaLabel": "{{model}} 모델 프로토콜"
         },

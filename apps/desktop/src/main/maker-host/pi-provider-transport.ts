@@ -64,7 +64,7 @@ function nativeHistory(request: ResponsesRequest, identity: string): Map<string,
 }
 
 /** Pi owns native payloads, thinking dialects and response parsing. Cindy translates harness envelopes. */
-export function createPiProviderFetch(options: {
+export interface PiProviderTransportOptions {
   row: ProviderModelRecord;
   providerId: string;
   /** Account-specific destination; the catalog row still identifies its adapter. */
@@ -73,25 +73,54 @@ export function createPiProviderFetch(options: {
   headers?: Record<string, string>;
   env?: Record<string, string>;
   fetchImpl: typeof fetch;
-}): typeof fetch {
+}
+
+/** Provider-specific authentication must not be bypassed by a matching harness wire. */
+export function requiresNativeProviderAuth(row: ProviderModelRecord | undefined): boolean {
+  const identity = row && providerModelAdapterId(row);
+  return identity === 'github-copilot' || identity === 'cloudflare-ai-gateway';
+}
+
+function nativeInvocationModel(options: PiProviderTransportOptions, modelId: string): Model<Api> {
+  const row = options.row;
+  const model: Model<Api> = { id: modelId, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
+    api: row.execution.pi.api, baseUrl: options.upstream ?? row.upstream, contextWindow: row.contextWindow,
+    maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow), reasoning: row.reasoning,
+    input: row.supportsImageInput ? ['text', 'image'] : ['text'],
+    cost: { input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,
+      cacheRead: row.cost?.cacheRead ?? 0, cacheWrite: row.cost?.cacheWrite ?? 0 },
+    thinkingLevelMap: { ...row.execution.pi.thinkingLevelMap, ...Object.fromEntries(PI_REASONING_EFFORTS.map(level =>
+      [level, row.efforts.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
+    compat: row.execution.pi.compat,
+    samplingParams: row.execution.pi.samplingParams,
+    headers: row.execution.pi.headers,
+  };
+  return model;
+}
+
+/** Use the same SDK, model identity and destination as chat, with a bounded probe. */
+export async function probePiProvider(options: PiProviderTransportOptions, signal: AbortSignal): Promise<AssistantMessage> {
+  const model = nativeInvocationModel(options, options.row.id);
+  const adapter = await adapters[model.api]();
+  const cloudflare = model.provider === 'cloudflare-ai-gateway';
+  return adapter.streamSimple(model, { messages: [{ role: 'user', content: 'ping', timestamp: 0 }] }, {
+    apiKey: cloudflare ? undefined : options.apiKey,
+    env: options.env,
+    headers: cloudflare ? { ...options.headers, 'cf-aig-authorization': `Bearer ${options.apiKey}`,
+      Authorization: null, 'x-api-key': null } : options.headers,
+    ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
+      ? { fetch: options.fetchImpl } : {}),
+    signal, maxRetries: 0, maxTokens: Math.min(16, model.maxTokens),
+  }).result();
+}
+
+export function createPiProviderFetch(options: PiProviderTransportOptions): typeof fetch {
   return async (_url, init) => {
     const request = JSON.parse(String(init?.body)) as ResponsesRequest;
     const converted = translateResponsesRequestWithContext(request, { capabilities: {
       imageInput: 'image_url', reasoningHistoryField: 'reasoning_content',
     } });
-    const row = options.row;
-    const model: Model<Api> = { id: request.model, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
-      api: row.execution.pi.api, baseUrl: options.upstream ?? row.upstream, contextWindow: row.contextWindow,
-      maxTokens: row.maxOutput ?? Math.min(4096, row.contextWindow), reasoning: row.reasoning,
-      input: row.supportsImageInput ? ['text', 'image'] : ['text'],
-      cost: { input: row.cost?.input ?? 0, output: row.cost?.output ?? 0,
-        cacheRead: row.cost?.cacheRead ?? 0, cacheWrite: row.cost?.cacheWrite ?? 0 },
-      thinkingLevelMap: { ...row.execution.pi.thinkingLevelMap, ...Object.fromEntries(PI_REASONING_EFFORTS.map(level =>
-        [level, row.efforts.includes(level) ? row.execution.pi.thinkingLevelMap?.[level] ?? level : null])) },
-      compat: row.execution.pi.compat,
-      samplingParams: row.execution.pi.samplingParams,
-      headers: row.execution.pi.headers,
-    };
+    const model = nativeInvocationModel(options, request.model);
     const identity = createHash('sha256').update(JSON.stringify([options.providerId, model.api, model.baseUrl, model.id])).digest('hex');
     const savedHistory = nativeHistory(request, identity);
     const context: Context = { messages: [] };

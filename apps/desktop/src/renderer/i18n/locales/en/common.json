@@ -1744,7 +1744,8 @@
           "piAnthropic": "Anthropic Messages",
           "piResponsesHelp": "Pi connects directly to the provider's OpenAI Responses API.",
           "piChatHelp": "Pi connects directly to the provider's OpenAI-compatible Chat Completions API.",
-          "piAnthropicHelp": "Pi connects directly to the provider's Anthropic Messages API."
+          "piAnthropicHelp": "Pi connects directly to the provider's Anthropic Messages API.",
+          "googleHelp": "Use the provider’s Google Gemini API endpoint."
         },
         "modelProtocol": {
           "label": "Model protocol",
@@ -1752,7 +1753,7 @@
           "messages": "Messages",
           "chat": "Chat",
           "responses": "Responses",
-          "google": "Google Generative AI",
+          "google": "Google Gemini",
           "help": "Inherit uses the provider protocol above. Override only when this model needs a different protocol.",
           "ariaLabel": "Model protocol for {{model}}"
         },
