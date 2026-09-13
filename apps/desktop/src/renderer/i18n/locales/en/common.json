@@ -6581,6 +6581,7 @@
       "goBackUnavailable": "No previous page",
       "goForwardUnavailable": "No next page",
       "reload": "Reload",
+      "hardReload": "Reload Page Without Cache",
       "stop": "Stop loading",
       "screenshot": "Screenshot",
       "screenshotCopied": "Screenshot copied to clipboard",

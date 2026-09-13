@@ -6579,6 +6579,7 @@
       "goBackUnavailable": "沒有可後退的頁面",
       "goForwardUnavailable": "沒有可前進的頁面",
       "reload": "重新整理",
+      "hardReload": "強制重新整理頁面（忽略快取）",
       "stop": "停止載入",
       "screenshot": "截圖",
       "screenshotCopied": "已複製截圖到剪貼簿",

@@ -6579,6 +6579,7 @@
       "goBackUnavailable": "没有可后退的页面",
       "goForwardUnavailable": "没有可前进的页面",
       "reload": "刷新",
+      "hardReload": "强制刷新页面（忽略缓存）",
       "stop": "停止加载",
       "screenshot": "截图",
       "screenshotCopied": "已复制截图到剪贴板",

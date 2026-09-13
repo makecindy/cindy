@@ -93,7 +93,7 @@ export interface UseBrowserWebviewResult {
   /** 加载新 URL(URL bar 输入或外部跳转入口)。 */
   navigate: (url: string) => void;
   /** 重新加载当前页。 */
-  reload: () => void;
+  reload: (options?: { ignoreCache?: boolean }) => void;
   /** 上一页。 */
   goBack: () => void;
   /** 下一页。 */
@@ -482,7 +482,7 @@ export function useBrowserWebview(
       wv.setAttribute('src', nextUrl);
     }
   }, []);
-  const reload = useCallback(() => {
+  const reload = useCallback((options?: { ignoreCache?: boolean }) => {
     navigationAttemptsRef.current = [];
     navigationFuseTrippedRef.current = false;
     setCrash(null);
@@ -493,7 +493,8 @@ export function useBrowserWebview(
     // BrowserChrome 的 loading 动画。调用失败时回滚，避免 UI 永久卡住。
     setIsLoading(true);
     try {
-      wv.reload();
+      if (options?.ignoreCache) wv.reloadIgnoringCache();
+      else wv.reload();
     } catch {
       setIsLoading(false);
     }
