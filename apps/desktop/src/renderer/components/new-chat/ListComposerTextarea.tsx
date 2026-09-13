@@ -5,6 +5,7 @@ import {
   computeTextareaContinuation,
   type TextareaListEdit,
 } from '@/lib/composerListTextarea';
+import { computePairedSelectionEdit, type PairedSelectionEdit } from '@/lib/pairedSelection';
 
 /**
  * ListComposerTextarea —— 原生 `<textarea>` 的直替换包装,统一附带 composer
@@ -54,6 +55,18 @@ function applyEdit(el: HTMLTextAreaElement, edit: TextareaListEdit): void {
   el.setSelectionRange(edit.caret, edit.caret);
 }
 
+function applyPairedSelectionEdit(
+  el: HTMLTextAreaElement,
+  edit: PairedSelectionEdit,
+  direction: 'forward' | 'backward' | 'none',
+): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
+  if (setter) setter.call(el, edit.value);
+  else el.value = edit.value;
+  el.dispatchEvent(new Event('input', { bubbles: true }));
+  el.setSelectionRange(edit.selectionStart, edit.selectionEnd, direction);
+}
+
 export const ListComposerTextarea = forwardRef<HTMLTextAreaElement, ListComposerTextareaProps>(
   function ListComposerTextarea({ onKeyDown, className, ...rest }, ref) {
     const handleKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -64,6 +77,16 @@ export const ListComposerTextarea = forwardRef<HTMLTextAreaElement, ListComposer
       // 仍显式守卫(类型为 number | null)以满足 strictNullChecks 并让意图清晰。
       if (!event.nativeEvent.isComposing && selStart !== null && selEnd !== null) {
         const noHardMods = !event.metaKey && !event.ctrlKey;
+        const pairedEdit = noHardMods
+          ? computePairedSelectionEdit(el.value, selStart, selEnd, event.key)
+          : null;
+        if (pairedEdit) {
+          event.preventDefault();
+          if (withinMaxLength(el, pairedEdit.value)) {
+            applyPairedSelectionEdit(el, pairedEdit, el.selectionDirection);
+          }
+          return;
+        }
         // Shift/Alt+Enter — 列表接续 / 空项退出。
         if (event.key === 'Enter' && (event.shiftKey || event.altKey) && noHardMods) {
           const edit = computeTextareaContinuation(el.value, selStart, selEnd);

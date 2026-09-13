@@ -70,6 +70,7 @@ import {
   markdownDarkEditorTheme,
 } from './codemirrorGithubTheme';
 import { getCodeMirrorLanguage } from './codemirrorLanguages';
+import { codeMirrorSelectionPairing } from './CodeMirrorSelectionPairing';
 import {
   clamp,
   findMarkdownTableAtLine,
@@ -1192,6 +1193,7 @@ export const PlaintextEditor = forwardRef<PlaintextEditorHandle, PlaintextEditor
       //   - code chrome → 始终挂 lineNumbers gutter,即使 parser 缺失。
       const extensions = [
         history(),
+        codeMirrorSelectionPairing,
         keymap.of([indentWithTab, ...defaultKeymap, ...historyKeymap]),
         ...(initialConfig.skipWrap ? [] : [EditorView.lineWrapping]),
         ...(initialConfig.useCodeChrome ? [lineNumbers()] : []),

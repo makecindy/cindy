@@ -29,6 +29,40 @@ function setup(opts: { value: string; caret: number; maxLength?: number }) {
 }
 
 describe('ListComposerTextarea 键盘契约', () => {
+  it('输入左符号时包裹并保留非空选区', () => {
+    const { el, onKeyDown } = setup({ value: 'before abc after', caret: 0 });
+    el.setSelectionRange(7, 10);
+
+    fireEvent.keyDown(el, { key: '(' });
+
+    expect(el.value).toBe('before (abc) after');
+    expect(el.selectionStart).toBe(8);
+    expect(el.selectionEnd).toBe(11);
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
+  it('IME 组字时不介入成对符号输入', () => {
+    const { el, onKeyDown } = setup({ value: 'abc', caret: 0 });
+    el.setSelectionRange(0, 3);
+
+    fireEvent.keyDown(el, { key: '(', isComposing: true });
+
+    expect(el.value).toBe('abc');
+    expect(onKeyDown).toHaveBeenCalledOnce();
+  });
+
+  it('包裹会超过 maxLength 时消费输入且保留原选区', () => {
+    const { el, onKeyDown } = setup({ value: 'abc', caret: 0, maxLength: 4 });
+    el.setSelectionRange(0, 3);
+
+    fireEvent.keyDown(el, { key: '"' });
+
+    expect(el.value).toBe('abc');
+    expect(el.selectionStart).toBe(0);
+    expect(el.selectionEnd).toBe(3);
+    expect(onKeyDown).not.toHaveBeenCalled();
+  });
+
   it('Alt+Enter 在非列表行:插换行并消费,不下沉到消费方(不误发送)', () => {
     const { el, onKeyDown } = setup({ value: 'hello', caret: 5 });
     fireEvent.keyDown(el, { key: 'Enter', altKey: true });
