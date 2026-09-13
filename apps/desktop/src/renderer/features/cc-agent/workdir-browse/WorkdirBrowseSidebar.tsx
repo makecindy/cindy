@@ -44,7 +44,6 @@ import { fileBrowserApiFor } from '@/lib/fileBrowserTransport';
 import { useConfirmSwitchAwayIfDirty } from './hooks/useConfirmSwitchAwayIfDirty';
 import { useProjectFileList } from './hooks/useProjectFileList';
 import { FileTreeView, type FileTreeViewHandle, type PendingCreate } from './FileTreeView';
-import { useRevealFileInTree } from './hooks/useRevealFileInTree';
 import { FileFilterInput } from './FileFilterInput';
 import { FilterResultList } from './FilterResultList';
 import { FILTER_RESULT_LIMIT, filterFiles } from './lib/filterFiles';
@@ -348,9 +347,7 @@ export function WorkdirBrowseSidebar({
     projectFiles.refresh();
   }, [tree, projectFiles]);
 
-  // FileTreeView 的 imperative ref —— useRevealFileInTree 通过它调 scrollToPath。
   const fileTreeRef = useRef<FileTreeViewHandle>(null);
-  const revealFileInTree = useRevealFileInTree(tree, fileTreeRef);
 
   // 筛选结果点击 → 走跟 handleSelectFile 同样的 URL + storeAddTab 流程,
   // 但保留 filter query 和结果列表,支持连续打开多个命中项。
