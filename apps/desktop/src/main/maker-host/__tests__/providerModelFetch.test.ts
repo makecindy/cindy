@@ -58,6 +58,24 @@ describe('import discovery limits', () => {
 });
 
 describe('buildModelsFetchRequest', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('uses the complete OpenRouter catalog for %s without Anthropic ID rewriting', async (agent) => {
+    const request = buildModelsFetchRequest(spec({
+      agent,
+      baseUrl: agent === 'claude-code' ? 'https://openrouter.ai/api' : 'https://openrouter.ai/api/v1',
+      headers: { 'anthropic-version': '2023-06-01', 'x-api-key': 'old-test-key' },
+    }));
+    expect(request.url).toBe('https://openrouter.ai/api/v1/models');
+    expect(request.init.headers).toEqual({ authorization: 'Bearer sk-test' });
+    const result = await fetchProviderModels(spec({ agent, baseUrl: 'https://openrouter.ai/api' }),
+      async (_url, init) => {
+        const headers = init?.headers as Record<string, string>;
+        return fakeResponse(200, JSON.stringify({ data: headers['anthropic-version']
+          ? [{ id: 'anthropic/openai/model[1m]' }]
+          : [{ id: 'openai/model', architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, pricing: { prompt: '0.000001', completion: '0.000002' } }] }));
+      });
+    expect(result.models?.[0]).toMatchObject({ id: 'openai/model', discoveredCost: { input: 1, output: 2 },
+      discoveredMetadata: { supportsImageInput: true } });
+  });
   it.each(
     (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
       ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({

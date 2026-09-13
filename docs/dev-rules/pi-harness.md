@@ -369,7 +369,7 @@ Pi home 复用。settings/packages/extensions 仍属于后续独立安全评审�
   (MEMORY_TYPES / CURATED_MEMORY_TYPES)、`memory/storage.ts rebuildIndex`、`pi/index.ts`
   writeCompactionDigest。
 - ✅ **BYOM / 本地模型**(已交付):自定义/本地模型走 pi 原生 provider 块直连,不过 compat 代理。
-  链路:CustomProviderDialog pi tab(+ api 选择器)→ custom-provider-store(pi runtime)→
+  链路:ProviderConnectionDialog 连接设置(模型能力来自统一目录)→ custom-provider-store(pi runtime)→
   user-provider 派生 → pi-host `resolvePiNativeProviders` → PiAgent writeModelsJson 原生块 +
   provider 感知 setModel。真二进制测试证明直连原生端点、网关零请求。
 - ✅ **统一会话树**(已交付):Cindy session fork 与 Pi append-only entry tree 的后端/

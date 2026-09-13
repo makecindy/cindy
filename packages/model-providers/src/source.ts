@@ -1,3 +1,4 @@
+import { withClaudeProviderRuntime } from './piProviderPresets.js';
 /**
  * 目录源解析与加载（纯逻辑，IO 由 host 注入，零 Electron / node 依赖）。
  *
@@ -488,7 +489,7 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   const presets = bundledPresets.map((bundled) => {
     const remote = primaryPresetsById.get(bundled.id);
     return remote
-      ? backfillPresetMetadata(remote, bundled, allowLegacyPiBackfill)
+      ? withClaudeProviderRuntime(backfillPresetMetadata(remote, bundled, allowLegacyPiBackfill))
       : bundled;
   });
   for (const preset of primaryPresets) {

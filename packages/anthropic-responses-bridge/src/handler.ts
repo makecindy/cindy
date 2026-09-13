@@ -1,3 +1,4 @@
+import { normalizeProviderRequest } from '@cindy/model-compat';
 /**
  * Bridge handler ——
  *
@@ -367,20 +368,28 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       maxOutputTokensSupported: provider.maxOutputTokensSupported,
       reasoningEffort,
       serviceTier,
-      providerPrefix: provider.prefix,
+      providerPrefix: provider.reasoningNamespace ?? provider.prefix,
+      preserveReasoningState: provider.preserveReasoningState,
       serverSideTools,
       // 生产控制面 = provider 配置(按 model 恒定,前缀稳定);dev-only strict spike
       // 仅作诊断证据路径叠加,默认关闭,不得当生产开关用。
       strictFunctionTools: provider.strictFunctionTools?.(realModel) === true
         || (wireDiagnosticsEnabled && opts.wireDiagnosticsStrict === true),
     });
+    let finalRequest: unknown;
+    try {
+      finalRequest = normalizeProviderRequest(responsesReq, { harness: 'claude-code', protocol: 'openai-responses', upstreamBase: provider.upstreamBase, model: responsesReq.model });
+    } catch {
+      writeJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'request cannot be represented by the selected provider protocol' } });
+      return;
+    }
     const diagnostics = wireDiagnosticsEnabled
       ? new WireDiagnosticsSession(log, {
         requestId: ctx.reqId ?? reqId,
         bridgeReqId: reqId,
         wireModel,
         realModel,
-        providerPrefix: provider.prefix,
+        providerPrefix: provider.reasoningNamespace ?? provider.prefix,
         downstreamStreaming,
       })
       : null;
@@ -400,7 +409,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           // 由下游缓冲满足。
           accept: 'text/event-stream',
         },
-        body: JSON.stringify(responsesReq),
+        body: JSON.stringify(finalRequest),
         signal: abort.signal,
       });
     } catch (err) {
@@ -472,7 +481,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
     // 完整的 Anthropic Message JSON。上游恒回 SSE(只接受流式),所以这里缓冲整流后组装;
     // 同时兼容个别上游直接给 Responses JSON 的情况。
     if (!downstreamStreaming) {
-      const translator = new SseTranslator(wireModel, serviceTier ?? 'default');
+      const translator = new SseTranslator(wireModel, serviceTier ?? 'default', provider.reasoningNamespace);
       const collector = new AnthropicMessageCollector();
       const collect = (event: AnthropicSseEvent): void => {
         diagnostics?.recordDownstreamEvent(event);
@@ -538,7 +547,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
 
     // 用 wireModel(带前缀,如 chatgpt/gpt-5.5)而非 realModel 构造 —— message_start 回显带前缀 id,
     // CC 的 modelUsage 据此记账,下游 usage 可按前缀区分订阅轮,不与真网关同名裸模型混淆。
-    const translator = new SseTranslator(wireModel, serviceTier ?? 'default');
+    const translator = new SseTranslator(wireModel, serviceTier ?? 'default', provider.reasoningNamespace);
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
     let buf = '';

@@ -63,6 +63,45 @@ export function resolveModelNativeApi(
     ?.nativeApi;
 }
 
+/** Model identity only, for a model verified in an imported catalog or the Registry.
+ * Reuse the declarations already used by Gateway; do not turn an execution API
+ * into a manufacturer declaration or copy a Gateway endpoint/capability override.
+ * Callers must not pass arbitrary names from a hand-written connection here.
+ */
+export function resolveCatalogModelNativeApi(
+  registry: ModelRegistry | undefined,
+  modelId: string,
+): import("./modelAccessBean.js").ModelNativeApi | null | undefined {
+  if (!registry) return undefined;
+  const base = findBaseModel(registry, modelId);
+  const entries = registry.models.filter(entry =>
+    entry.id === modelId || (base && (entry.id === base.id || entry.modelRef === base.id)),
+  );
+  if (entries.some(entry => entry.status === 'retired')) return null;
+  if (registry.schemaVersion < 3) return undefined;
+  const declarations = new Set(entries.flatMap(entry =>
+    entry.nativeApi !== undefined ? [entry.nativeApi] : [],
+  ));
+  if (declarations.size) return declarations.size === 1 ? [...declarations][0] : null;
+  const canonicalId = base?.id ?? modelId;
+  const declared = resolveModelNativeApi(registry, 'xd', canonicalId);
+  if (declared !== undefined) return declared;
+  if (canonicalId.includes('/')) return undefined;
+  // Direct catalogs may omit the vendor namespace (gemini-*, claude-*, qwen*).
+  // Apply only existing declared family prefixes; never strip an unknown input namespace.
+  const rules = registry.nativeApiRules?.flatMap(rule => {
+    const slash = rule.modelIdPrefix.lastIndexOf('/');
+    const prefix = rule.modelIdPrefix.slice(slash + 1);
+    return rule.providerId === 'xd' && slash >= 0 && prefix && canonicalId.startsWith(prefix)
+      ? [{ prefix, nativeApi: resolveModelNativeApi(registry, 'xd', `${rule.modelIdPrefix.slice(0, slash + 1)}${canonicalId}`) }]
+      : [];
+  }) ?? [];
+  const longest = Math.max(0, ...rules.map(rule => rule.prefix.length));
+  const matches = new Set(rules.filter(rule => rule.prefix.length === longest)
+    .flatMap(rule => rule.nativeApi !== undefined ? [rule.nativeApi] : []));
+  return matches.size > 1 ? null : [...matches][0];
+}
+
 export type ModelRegistrySnapshotDecision =
   "accept-incoming" | "preserve-current" | "preserve-current-conflict";
 

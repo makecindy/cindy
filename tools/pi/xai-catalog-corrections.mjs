@@ -43,3 +43,35 @@ export function preferredDefaultEffort(modelId, efforts, fallbackDefaultEffort) 
   if (requested && efforts.includes(requested)) return requested;
   return fallbackDefaultEffort(efforts);
 }
+
+// Preserve Cindy's already shipped model addition when importing its older pinned binary.
+export function applyPinnedXaiAdditions(providers, version) {
+  if (version !== "0.85.1" || providers.xai?.some(row => row.id === "grok-build-0.1")) return;
+  providers.xai = [...(providers.xai ?? []), {
+  "id": "grok-build-0.1",
+  "name": "Grok Build 0.1",
+  "api": "openai-responses",
+  "provider": "xai",
+  "baseUrl": "https://api.x.ai/v1",
+  "compat": {
+    "supportsLongCacheRetention": false
+  },
+  "reasoning": true,
+  "input": [
+    "text",
+    "image"
+  ],
+  "cost": {
+    "input": 1,
+    "output": 2,
+    "cacheRead": 0.2,
+    "cacheWrite": 0
+  },
+  "contextWindow": 256000,
+  "maxTokens": 256000,
+  "thinkingLevelMap": {
+    "off": null,
+    "minimal": null
+  }
+} ];
+}

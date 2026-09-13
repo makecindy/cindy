@@ -2123,7 +2123,7 @@
           "machine-capable": "このパソコンでローカルモデルを動かせる",
           "subscription": "サブスクリプションアカウント"
         },
-        "groupApiKey": "API とセルフホスト型プロキシ · プリセットはカタログと同期",
+        "groupApiKey": "その他のプロバイダー",
         "groupCustom": "カスタム",
         "metaOAuth": "サブスクリプションアカウント",
         "metaApiKey": "API key",
@@ -2149,8 +2149,8 @@
         "onlyAgentNote": "このプロバイダーは {{agent}} のみ対応です",
         "endpointLabel": "{{agent}} ベース URL",
         "noAuthNote": "このプロキシにクライアントキーは不要です。Cindy は転送前に CLI のサブスクリプション認証情報を削除します。",
-        "bridgedNote": "Cindy ブリッジ（Chat Completions）",
-        "docsLink": "接続ドキュメントを見る",
+        "signIn": "ログイン",
+        "setupLink": {"apiKey": "API キーを取得", "account": "登録・ログイン", "setup": "設定ガイド"},
         "fetching": "接続を確認してモデル一覧を取得しています…",
         "fetchFailed": "モデル一覧を取得できませんでした。プリセットの推奨モデルで追加を完了し、あとで詳細から更新できます",
         "manualModelHint": "モデルを検出できませんでした。このプロキシが提供する正確なモデル ID を入力してください。",
@@ -2168,6 +2168,7 @@
         "cancel": "キャンセル",
         "useApiKey": "API キーで接続する",
         "metaOAuthOrApi": "サブスクリプションアカウント · API key",
+        "metaLoginOrApi": "アカウントログイン · API key",
         "builtinApiKey": {
           "subtitle": "自分の API key で接続",
           "note": "このソースは画像生成モデルを提供し、チャットには参加しません。API key はこの端末のみに保存され(システムキーチェーンで暗号化)、アップロードされません。"
@@ -2333,6 +2334,11 @@
       "localAccount": {
         "useClaude": "ローカルの Claude Code アカウントを使用",
         "unavailable": "利用できるローカルログインがありません。元のアプリにログインするか、別のアカウントを追加してください。"
+      },
+      "connection": {
+        "modelCount": "{{count}} 個のモデルを設定済み",
+        "modelsAutomatic": "モデル情報は自動取得されます。個別の設定はモデル一覧から変更できます。",
+        "manualModel": "モデル ID（自動取得できない場合）"
       }
     },
     "experimental": {

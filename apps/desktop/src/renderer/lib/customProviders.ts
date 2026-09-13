@@ -1,4 +1,4 @@
-import { mergeDiscoveredRuntimeModels, type DiscoveredModel } from '@cindy/model-providers';
+import { mergeDiscoveredRuntimeModels, isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
 /**
  * customProviders —— 自定义供应商「配置 + per-runtime 密钥」的 renderer 侧写入编排。
  *
@@ -27,7 +27,6 @@ import type {
   AgentKind,
   CatalogModel,
   CustomProviderConfig,
-  PiModelApi,
   PiReasoningEffort,
   ProviderView,
   ProviderRuntimeModelConfig,
@@ -57,57 +56,8 @@ export function piCatalogProviderIdAfterRouteEdit(
     : undefined;
 }
 
-/** 开启 Pi reasoning 时的保守常用档位；xhigh/max 仍需用户明确勾选。 */
-export const DEFAULT_PI_CUSTOM_REASONING_EFFORTS: readonly PiReasoningEffort[] = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-];
-
 /** per-runtime 密钥输入：键为 agent，值为该 runtime 的 API key（空串 = 不改 / 不存）。 */
 export type RuntimeKeys = Partial<Record<AgentKind, string>>;
-
-/**
- * 模型 id 代表模型身份；一旦改变，旧模型携带的 contextWindow 等隐藏元数据不再可信。
- * id 未变时保留原引用，避免无意义地丢掉仍有效的预设元数据。
- */
-export function replaceCustomProviderModelId(
-  model: ProviderRuntimeModelConfig,
-  nextId: string,
-): ProviderRuntimeModelConfig {
-  if (nextId === model.id) return model;
-  return { id: nextId, name: model.name };
-}
-
-/** 单模型 Pi 协议覆盖；undefined 表示继承供应商默认协议。 */
-export function setCustomProviderModelPiApi(
-  models: readonly ProviderRuntimeModelConfig[],
-  targetIndex: number,
-  piApi: PiModelApi | undefined,
-): ProviderRuntimeModelConfig[] {
-  return models.map((model, index) => {
-    if (index !== targetIndex) return model;
-    const next = { ...model };
-    if (piApi) next.piApi = piApi;
-    else delete next.piApi;
-    const selectedWireProtocol =
-      piApi === 'anthropic-messages'
-        ? 'anthropic-messages'
-        : piApi === 'openai-completions'
-          ? 'openai-chat'
-          : piApi === 'openai-responses'
-            ? 'openai-responses'
-            : undefined;
-    // "Inherit default" means inheriting both protocol and endpoint. For an explicit override,
-    // retain a model endpoint only when it already speaks that protocol; otherwise the provider
-    // endpoint is the only safe pair (also repairs legacy protocol/route mismatches on save).
-    if (!selectedWireProtocol || next.route?.wireProtocol !== selectedWireProtocol) {
-      delete next.route;
-    }
-    return next;
-  });
-}
 
 /** PI always persists the selected protocol, including its common Chat default. */
 export function customProviderWireProtocolForSave(
@@ -116,65 +66,6 @@ export function customProviderWireProtocolForSave(
   defaultWireProtocol: ProviderWireProtocol,
 ): ProviderWireProtocol | undefined {
   return agent === 'pi' || wireProtocol !== defaultWireProtocol ? wireProtocol : undefined;
-}
-
-export function setCustomProviderModelSupportsImageInput(
-  models: readonly ProviderRuntimeModelConfig[],
-  targetIndex: number,
-  supportsImageInput: boolean,
-): ProviderRuntimeModelConfig[] {
-  return models.map((model, index) => {
-    if (index !== targetIndex) return model;
-    return { ...model, supportsImageInput };
-  });
-}
-
-export function setCustomProviderModelReasoning(
-  models: readonly ProviderRuntimeModelConfig[],
-  targetIndex: number,
-  reasoning: boolean,
-): ProviderRuntimeModelConfig[] {
-  return models.map((model, index) => {
-    if (index !== targetIndex) return model;
-    if (!reasoning) {
-      const rest = { ...model };
-      rest.reasoning = false;
-      delete rest.reasoningEfforts;
-      delete rest.reasoningDefaultEffort;
-      return rest;
-    }
-    return {
-      ...model,
-      reasoning: true,
-      reasoningEfforts: model.reasoningEfforts?.length
-        ? [...model.reasoningEfforts]
-        : [...DEFAULT_PI_CUSTOM_REASONING_EFFORTS],
-    };
-  });
-}
-
-export function setCustomProviderModelReasoningEffort(
-  models: readonly ProviderRuntimeModelConfig[],
-  targetIndex: number,
-  effort: PiReasoningEffort,
-  enabled: boolean,
-): ProviderRuntimeModelConfig[] {
-  return models.map((model, index) => {
-    if (index !== targetIndex || model.reasoning !== true) return model;
-    const current = model.reasoningEfforts ?? [];
-    if (!enabled && current.length <= 1 && current.includes(effort)) return model;
-    const selected = new Set(current);
-    if (enabled) selected.add(effort);
-    else selected.delete(effort);
-    const next = {
-      ...model,
-      reasoningEfforts: PI_REASONING_EFFORTS.filter((candidate) => selected.has(candidate)),
-    };
-    if (!enabled && model.reasoningDefaultEffort === effort) {
-      delete next.reasoningDefaultEffort;
-    }
-    return next;
-  });
 }
 
 /**
@@ -192,6 +83,7 @@ export function customProviderModelConfigFromCatalogModel(
     | 'contextWindowExplicit'
     | 'userModelConfig'
     | 'discoveredMetadata'
+    | 'discoveredCost'
     | 'nameExplicit'
     | 'defaultEnabled'
     | 'supportsImageInput'
@@ -212,6 +104,7 @@ export function customProviderModelConfigFromCatalogModel(
     id: model.id,
     name: model.name,
     discoveredMetadata: model.discoveredMetadata,
+    discoveredCost: model.discoveredCost,
     nameExplicit: model.nameExplicit,
     ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
     ...(model.route ? { route: { ...model.route } } : {}),
@@ -280,8 +173,29 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
 export function appendDiscoveredCustomProviderModels(
   existing: readonly ProviderRuntimeModelConfig[],
   discovered: readonly DiscoveredModel[],
+  discoveryUrl?: string,
 ): { models: ProviderRuntimeModelConfig[]; addedIds: string[] } {
-  const models = mergeDiscoveredRuntimeModels(existing, discovered, true);
+  let prior = existing;
+  if (discoveryUrl && isOpenRouterModelsUrl(discoveryUrl)) {
+    const actual = new Map(discovered.map(model => [model.id, model]));
+    // Repair only discovery-created Anthropic wrappers confirmed by the complete
+    // canonical response. Keep manual IDs and never guess another supplier's aliases.
+    const canonicalId = (model: ProviderRuntimeModelConfig) => {
+      if (actual.has(model.id) || !model.discoveredMetadata || model.nameExplicit || model.route || model.piApi || !model.id.startsWith('anthropic/')) return model.id;
+      const candidate = model.id.slice('anthropic/'.length).replace(/\[1m\]$/, '');
+      return actual.has(candidate) ? candidate : model.id;
+    };
+    const normalized = new Map(existing.filter(model => canonicalId(model) === model.id).map(model => [model.id, model]));
+    for (const model of existing) {
+      const id = canonicalId(model);
+      if (id === model.id) continue;
+      const canonical = normalized.get(id);
+      normalized.set(id, { ...model, ...canonical, id,
+        name: canonical?.nameExplicit ? canonical.name : actual.get(id)?.name ?? model.name });
+    }
+    prior = [...normalized.values()];
+  }
+  const models = mergeDiscoveredRuntimeModels(prior, discovered, true);
   const known = new Set(existing.map((model) => model.id));
   return {
     models,

@@ -1,3 +1,5 @@
+import { buildUserProvider, providerPresetOAuth } from '@cindy/model-providers';
+import { setCustomProviders } from '../active-catalog';
 /**
  * claudeProxyScopeGate.test.ts
  * ---------------------------------------------------------------------------
@@ -58,7 +60,7 @@ import {
   readClaudeSessionRoute,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
-import { setPendingCredentialSwitchReader, setProviderOAuthTokenReader } from '../provider-route';
+import { setOAuthTokenReader, setPendingCredentialSwitchReader, setProviderOAuthTokenReader } from '../provider-route';
 import {
   authenticatePiProxySession,
   registerPiProxySession,
@@ -1021,4 +1023,57 @@ describe('pi routingTransform — xdt session header selects the Pi provider rou
     });
     expect(decision?.headerOverride).not.toHaveProperty('x-cindy-pi-session-token');
   });
+});
+
+
+it.each([
+  ['openai-chat', '/chat/completions', '/api/v1', { messages: [{ role: 'user', content: 'fixture' }] }],
+  ['openai-responses', '/responses', '/api/v1', { input: 'fixture', store: false }],
+  ['anthropic-messages', '/v1/messages', '/api', { messages: [{ role: 'user', content: 'fixture' }], max_tokens: 8 }],
+] as const)('forwards OAuth Pi %s with its real supplier prefix and refreshed credentials', async (wireProtocol, requestPath, upstreamPrefix, input) => {
+  const id = 'openrouter-oauth-test';
+  const body = { model: 'google/gemini-test', ...input, stream: false };
+  const received: Array<{ url: string; authorization: string | undefined; body: unknown }> = [];
+  const upstream = createServer(async (req, res) => {
+    let raw = '';
+    for await (const chunk of req) raw += chunk;
+    received.push({ url: req.url!, authorization: req.headers.authorization, body: JSON.parse(raw) });
+    res.writeHead(200, { 'content-type': 'application/json' }); res.end('{}');
+  });
+  let proxy: ProxyHandle | undefined;
+  try {
+    setCustomProviders([buildUserProvider({ id, name: 'OpenRouter', auth: { method: 'oauth', oauth: providerPresetOAuth('openrouter')! },
+      runtimes: { pi: { baseUrl: `https://openrouter.ai${upstreamPrefix}`, wireProtocol, models: [{ id: body.model, name: body.model }] } },
+    })]);
+    setSessionProvider('sess-pi', id);
+    registerPiProxySession('sess-pi', 'session-secret', () => id);
+    let token = 'fixture-token-one';
+    setOAuthTokenReader(provider => provider === id ? token : null);
+    await new Promise<void>(resolve => upstream.listen(0, '127.0.0.1', resolve));
+    const address = upstream.address();
+    if (!address || typeof address === 'string') throw new Error('missing fixture address');
+    const destination = `http://127.0.0.1:${address.port}`;
+    const route = createModelRoutingTransform();
+    proxy = await createAnthropicCompatProxy({ upstream: destination, routingTransform: async (payload, ctx) => {
+      const decision = await route(payload, ctx);
+      expect(decision?.upstreamOverride).toBe(`https://openrouter.ai${upstreamPrefix}`);
+      expect(decision?.localHandler).toBeUndefined();
+      return { ...decision, upstreamOverride: `${destination}${upstreamPrefix}` };
+    } });
+    for (const next of ['fixture-token-one', 'fixture-token-two']) {
+      token = next;
+      const response = await fetch(`${proxy.url}${requestPath}`, { method: 'POST', headers: {
+        'content-type': 'application/json', authorization: 'Bearer placeholder',
+        'x-cindy-pi-session-id': 'sess-pi', 'x-cindy-pi-session-token': 'session-secret', 'x-cindy-pi-provider-id': id,
+      }, body: JSON.stringify(body), signal: AbortSignal.timeout(5000) });
+      expect(response.status).toBe(200); await response.text();
+    }
+    expect(received).toEqual(['fixture-token-one', 'fixture-token-two'].map(token => ({
+      url: `${upstreamPrefix}${requestPath}`, authorization: `Bearer ${token}`, body,
+    })));
+  } finally {
+    await proxy?.dispose();
+    await new Promise<void>(resolve => upstream.close(() => resolve()));
+    setCustomProviders([]); clearSessionProvider('sess-pi'); resetPiProxySessionsForTest(); setOAuthTokenReader(() => null);
+  }
 });

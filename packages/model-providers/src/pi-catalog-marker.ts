@@ -8,6 +8,7 @@ export function effectivePiWireProtocol(
 }
 
 interface PiProtocolModelLike {
+  api?: PiModelApi;
   piApi?: PiModelApi;
   route?: { baseUrl?: string; wireProtocol: ProviderWireProtocol; requestPath?: string };
 }
@@ -27,7 +28,7 @@ export function resolvePiModelWireProtocol(
   model: PiProtocolModelLike | undefined,
   providerDefault: ProviderWireProtocol | undefined,
 ): ProviderWireProtocol | null {
-  switch (model?.piApi) {
+  switch (model?.api ?? model?.piApi) {
     case 'anthropic-messages':
       return 'anthropic-messages';
     case 'openai-responses':
@@ -35,6 +36,10 @@ export function resolvePiModelWireProtocol(
     case 'openai-completions':
       return 'openai-chat';
     case 'google-generative-ai':
+    case 'bedrock-converse-stream':
+    case 'azure-openai-responses':
+    case 'google-vertex':
+    case 'mistral-conversations':
       return null;
     default:
       return model?.route?.wireProtocol ?? providerDefault ?? null;

@@ -12,7 +12,8 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import piCatalog from "../../catalog/pi-model-catalog.json";
+import { providerCatalogForPi } from "../providerModelCatalog.js";
+const piCatalog = providerCatalogForPi();
 
 const root = fileURLToPath(new URL("../../../../", import.meta.url));
 
@@ -33,10 +34,12 @@ describe("Pi catalog sync upstream precedence", () => {
         mkdirSync(sharedDirectory, { recursive: true });
         cpSync(path.join(root, 'packages/model-providers/src/piThinkingLevels.mjs'),
           path.join(sharedDirectory, 'piThinkingLevels.mjs'));
+        cpSync(path.join(root, 'packages/model-providers/catalog/provider-models.json'), path.join(catalogDirectory, 'provider-models.json'));
         const scriptsDirectory = path.join(temporary, "tools/pi");
         mkdirSync(scriptsDirectory, { recursive: true });
         for (const script of [
           "sync-model-catalog.mjs",
+          "catalog-format.mjs",
           "openai-catalog-corrections.mjs",
           "xai-catalog-corrections.mjs",
         ]) {
@@ -50,13 +53,13 @@ describe("Pi catalog sync upstream precedence", () => {
           path.join(catalogDirectory, "providers.json"),
         );
         const native = {
-          ...piCatalog.providers.openai[0],
+          ...piCatalog.providers.openai.find(model => model.id === 'gpt-6-astra')!,
           name: "Native Astra",
           contextWindow: 1_060_000,
           compat: { supportsStore: false },
           upstreamField: "preserve-native-metadata",
         };
-        const input = { ...piCatalog.providers, openai: [native] };
+        const input: Record<string, unknown[]> = { ...piCatalog.providers, openai: [native] };
         const inputPath = path.join(temporary, "input.json");
         writeFileSync(inputPath, JSON.stringify(input));
         const args: string[] = [];
@@ -85,12 +88,12 @@ describe("Pi catalog sync upstream precedence", () => {
         });
         const result = JSON.parse(
           readFileSync(
-            path.join(catalogDirectory, "pi-model-catalog.json"),
+            path.join(catalogDirectory, "provider-models.json"),
             "utf8",
           ),
         );
-        expect(result.providers.openai).toEqual([native]);
-        expect(result.providers["openai-codex"]).toEqual(input["openai-codex"]);
+        expect(result.providers.openai).toMatchObject([{ id: native.id, name: "Native Astra", contextWindow: 1_060_000, execution: { pi: { compat: { supportsStore: false } } } }]);
+        expect(result.providers["openai-codex"].map((m: { id: string }) => m.id).sort()).toEqual(piCatalog.providers["openai-codex"]!.map(m => m.id).sort());
       } finally {
         rmSync(temporary, { recursive: true, force: true });
       }

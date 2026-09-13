@@ -19,13 +19,15 @@ import { localizedModelName, localizedBrandName } from '@/lib/modelDisplayNames'
 
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
-import { AlertTriangle, Check, CircleHelp, Minus, Trash2, X } from 'lucide-react';
+import { AlertTriangle, Check, ChevronDown, CircleHelp, Minus, Trash2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
+import { providerViewToCustomProviderConfig, updateCustomProvider } from '@/lib/customProviders';
+import { DropdownMenu, DropdownMenuTrigger, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenuRadioItem } from '@/components/ui/dropdown-menu';
 import { MODEL_HARNESS_COLOR } from '@/lib/modelHarnessPresentation';
 import { ModelCompatibilityNotice } from '@/components/new-chat/ModelCompatibilityNotice';
-import { MODEL_PROTOCOL_LABEL } from '@/lib/modelProtocolLabel';
+import { MODEL_PROTOCOL_LABEL, MODEL_PROTOCOL_OPTIONS } from '@/lib/modelProtocolLabel';
 import { toast } from '@/lib/toast';
 import { Tip } from '@/components/ui/tooltip';
 import { Switch } from '@/components/ui/switch';
@@ -62,6 +64,7 @@ import type {
   CatalogModel,
   Effort,
   PiModelApi,
+  ProviderWireProtocol,
   ProviderView,
 } from '@cindy/model-providers';
 
@@ -206,6 +209,7 @@ export function ModelAdvancedDrawer({
   const selectionAvailable = provider.connected && !provider.suspended;
   const locale = i18n.resolvedLanguage ?? i18n.language ?? 'en';
   const [priceDialogOpen, setPriceDialogOpen] = useState(false);
+  const [protocolSaving, setProtocolSaving] = useState(false);
   const titleRef = useRef<HTMLHeadingElement>(null);
   // 开关/档位写的是 renderer 本地存储，订阅 version 才能在写后重渲染。
   useModelVisibilityVersion();
@@ -251,6 +255,31 @@ export function ModelAdvancedDrawer({
     [contextAgent, contextModel, provider.id, row, chatAgents],
   );
   const ctx = useModelContextLimit(open ? contextTarget : null);
+  const setModelApi = async (agent: AgentKind, api: PiModelApi) => {
+    if (protocolSaving || provider.source !== 'user' || provider.auth?.native || !row?.byAgent[agent]) return;
+    const config = providerViewToCustomProviderConfig(provider);
+    const runtime = config.runtimes[agent];
+    const model = runtime?.models.find(m => m.id === row.byAgent[agent]!.id);
+    if (!runtime || !model) return;
+    const wire: ProviderWireProtocol | undefined = api === 'openai-completions' ? 'openai-chat'
+      : api === 'anthropic-messages' || api === 'openai-responses' ? api : undefined;
+    model.api = api;
+    if (agent === 'pi') model.piApi = api;
+    if (wire) model.route = {
+      baseUrl: model.route?.baseUrl ?? runtime.baseUrl, wireProtocol: wire,
+      ...(runtime.requestPath ? { requestPath: wire === 'anthropic-messages' ? '/v1/messages'
+        : wire === 'openai-responses' ? '/responses' : '/chat/completions' } : {}),
+    };
+    if (!wire) model.route = { baseUrl: model.route?.baseUrl ?? runtime.baseUrl, wireProtocol: 'openai-chat' };
+    setProtocolSaving(true);
+    try {
+      const result = await updateCustomProvider(config, {}, { source: 'manual-settings' });
+      if (!result.ok) toast.error(t('settings.providers.custom.toast.saveFailed'));
+    }
+    catch { toast.error(t('settings.providers.custom.toast.saveFailed')); }
+    finally { setProtocolSaving(false); }
+  };
+
 
   const [ctxDraft, setCtxDraft] = useState('');
   const ctxDirtyRef = useRef(false);
@@ -341,7 +370,7 @@ export function ModelAdvancedDrawer({
   const price = pricePresentationOf(primaryAgent, primaryModel);
   const protocols = modelProtocolComparison(provider, row.byAgent);
   const protocolLabel = (api: PiModelApi | null) =>
-    api ? MODEL_PROTOCOL_LABEL[api] : t('settings.providers.models.advanced.undeclared');
+    api ? MODEL_PROTOCOL_LABEL[api] ?? null : t('settings.providers.models.advanced.undeclared');
   const displayedLimit = ctxDirtyRef.current
     ? ctxDraft.trim() === ''
       ? defaultWindow
@@ -455,14 +484,14 @@ export function ModelAdvancedDrawer({
                           {t('settings.providers.models.manage.connectionRequired')}
                         </p>
                       )}
-                      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
+                      {protocols.reference && protocolLabel(protocols.reference) && <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-2 gap-y-1 text-11">
                         <span className="text-[var(--text-tertiary)]">
                           {t('settings.providers.models.advanced.protocol.reference')}
                         </span>
                         <span className="text-[var(--text-secondary)]">
                           {protocolLabel(protocols.reference)}
                         </span>
-                      </div>
+                      </div>}
                       {provider.agents.map((agent) => {
                         const model = row.byAgent[agent];
                         // Missing catalog membership proves no configured route, not upstream incompatibility.
@@ -515,15 +544,32 @@ export function ModelAdvancedDrawer({
                                   id={protocolId}
                                   className="mt-0.5 text-11 leading-4 text-[var(--text-tertiary)]"
                                 >
-                                  {protocolLabel(protocol.outbound)}
-                                  {' · '}
-                                  {compatibility ? (
-                                    <ModelCompatibilityNotice />
-                                  ) : (
-                                    t(
+                                  {provider.source === 'user' && !provider.auth?.native && !model?.catalogPresetId && supported ? (
+                                    <DropdownMenu>
+                                      <DropdownMenuTrigger asChild>
+                                        <button type="button" disabled={protocolSaving}
+                                          aria-label={`${AGENT_LABEL[agent]} · ${t('settings.providers.custom.fields.wireProtocol')}`}
+                                          className="rounded-full px-2 py-1 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)]">
+                                          {protocolLabel(protocol.outbound)} <ChevronDown size={12} className="inline" aria-hidden />
+                                        </button>
+                                      </DropdownMenuTrigger>
+                                      <DropdownMenuContent className="z-[10003]" align="start">
+                                        <DropdownMenuRadioGroup value={protocol.outbound ?? ''}
+                                          onValueChange={value => void setModelApi(agent, value as PiModelApi)}>
+                                          {MODEL_PROTOCOL_OPTIONS.map(([api, label]) => <DropdownMenuRadioItem key={api} value={api}>{label}</DropdownMenuRadioItem>)}
+                                        </DropdownMenuRadioGroup>
+                                      </DropdownMenuContent>
+                                    </DropdownMenu>
+                                  ) : protocolLabel(protocol.outbound)}
+                                  {/* Missing manufacturer metadata does not make a configured
+                                      outbound protocol unconfirmed. Keep that distinction in
+                                      the manufacturer reference when one is declared. */}
+                                  {(protocol.mode !== 'unknown' || !protocol.outbound) && <>
+                                    {protocolLabel(protocol.outbound) && ' · '}
+                                    {compatibility ? <ModelCompatibilityNotice /> : t(
                                       `settings.providers.models.advanced.protocol.${protocol.mode}`,
-                                    )
-                                  )}
+                                    )}
+                                  </>}
                                 </p>
                               )}
                             </div>

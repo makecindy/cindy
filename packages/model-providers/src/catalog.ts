@@ -40,10 +40,10 @@ function isWireProtocol(value: unknown): value is (typeof WIRE_PROTOCOLS)[number
 }
 
 function isWireProtocolAllowedForAgent(
-  agent: AgentKind,
+  _agent: AgentKind,
   value: unknown,
 ): value is (typeof WIRE_PROTOCOLS)[number] {
-  return isWireProtocol(value) && (agent !== 'claude-code' || value === 'anthropic-messages');
+  return isWireProtocol(value);
 }
 
 function isValidModelRoute(
@@ -152,6 +152,9 @@ function validateModel(
   if (m.nativeApi !== undefined && m.nativeApi !== null) {
     assert(isPiModelApi(m.nativeApi), `model.nativeApi invalid for '${m.id}'`);
   }
+  if (m.api !== undefined) {
+    assert(isPiModelApi(m.api), `model.api invalid for '${m.id}'`);
+  }
   if (m.piApi !== undefined) {
     assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
   }
@@ -187,7 +190,7 @@ function validateOAuthDescriptor(p: Provider): void {
     `provider '${p.id}' auth.oauth.flow invalid`,
   );
   for (const field of ['tokenUrl', 'clientId', 'scopes'] as const) {
-    assert(typeof raw[field] === 'string' && raw[field].length > 0, `provider '${p.id}' auth.oauth.${field} missing`);
+    assert(typeof raw[field] === 'string' && (field === 'scopes' || raw[field].length > 0), `provider '${p.id}' auth.oauth.${field} missing`);
   }
   const requireHttpsUrl = (field: string): void => {
     const value = raw[field];
@@ -549,6 +552,7 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       const mm = m as Record<string, unknown>;
       if (typeof mm.id !== 'string' || mm.id.length === 0) return false;
       if (typeof mm.name !== 'string' || mm.name.length === 0) return false;
+      if (mm.api !== undefined && !isPiModelApi(mm.api)) return false;
       if (mm.piApi !== undefined && !isPiModelApi(mm.piApi)) return false;
       if (
         mm.contextWindow !== undefined
@@ -560,7 +564,6 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (!hasValidPresetReasoningCapability(agent, mm)) return false;
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
-    if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
     if (
       r.supportsImageGeneration !== undefined &&
       typeof r.supportsImageGeneration !== 'boolean'
@@ -681,9 +684,6 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
             const sourceUrl = httpUrl(source.baseUrl);
             if (!runtimeUrl || !sourceUrl || sourceUrl.origin !== runtimeUrl.origin) return false;
             if (!isWireProtocol(source.wireProtocol)) return false;
-            if (agent === 'claude-code' && source.wireProtocol !== 'anthropic-messages') {
-              return false;
-            }
             if (
               source.modelsUrl !== undefined &&
               (!isHttpUrl(source.modelsUrl) ||

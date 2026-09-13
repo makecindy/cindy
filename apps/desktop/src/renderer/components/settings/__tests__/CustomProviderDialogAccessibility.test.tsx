@@ -5,7 +5,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CustomProviderConfig } from '@cindy/model-providers';
 
-import { CustomProviderDialog } from '../CustomProviderDialog';
+import { ProviderConnectionDialog } from '../ProviderConnectionDialog';
 
 const customProviderMocks = vi.hoisted(() => ({
   readCustomProviderKey: vi.fn(),
@@ -123,7 +123,7 @@ async function renderImageGenerationHelp() {
   };
   customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
   const user = userEvent.setup();
-  render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+  render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
   // Let the dialog's initial focus settle before testing the help popover's focus behavior.
   await waitForInitialDialogFocus();
@@ -156,7 +156,7 @@ async function renderImageGenerationReloadConfirmation(onSaved = vi.fn(), onClos
     busyCount: 3,
   });
   const user = userEvent.setup();
-  render(<CustomProviderDialog initial={initial} onSaved={onSaved} onClose={onClose} />);
+  render(<ProviderConnectionDialog initial={initial} onSaved={onSaved} onClose={onClose} />);
   await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
   await user.click(
     screen.getByRole('button', { name: 'settings.providers.custom.fields.runtimeAdvanced' }),
@@ -180,7 +180,7 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
     busyCount: 3,
   });
   const user = userEvent.setup();
-  render(<CustomProviderDialog onSaved={onSaved} onClose={onClose} />);
+  render(<ProviderConnectionDialog onSaved={onSaved} onClose={onClose} />);
   await user.type(
     screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'),
     'New image provider',
@@ -190,14 +190,8 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
     screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'),
     'https://images.example.test/v1',
   );
-  await user.type(
-    screen.getByPlaceholderText('settings.providers.custom.fields.modelIdPlaceholder'),
-    'responses-model',
-  );
-  await user.type(
-    screen.getByPlaceholderText('settings.providers.custom.fields.modelNamePlaceholder'),
-    'Responses model',
-  );
+  await user.type(screen.getByLabelText('settings.providers.connection.manualModel'), 'responses-model');
+  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.addModel' }));
   await user.click(
     screen.getByRole('button', { name: 'settings.providers.custom.fields.runtimeAdvanced' }),
   );
@@ -213,8 +207,8 @@ async function renderNewImageGenerationReloadConfirmation(onSaved = vi.fn(), onC
   return { confirmation, onClose, onSaved, user };
 }
 
-describe('CustomProviderDialog accessibility', () => {
-  it.each(['target-model', 'flux-image-x'])('opens and focuses the custom chat window field for %s', async (modelId) => {
+describe('ProviderConnectionDialog accessibility', () => {
+  it.each(['target-model', 'flux-image-x'])('keeps %s in standard model settings instead of a second editor', async (modelId) => {
     const initial: CustomProviderConfig = {
       id: 'deep-link-provider',
       name: 'Deep Link Provider',
@@ -233,10 +227,9 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
 
     render(
-      <CustomProviderDialog
+      <ProviderConnectionDialog
         initial={initial}
         focusAgent="codex"
-        focusModelId={modelId}
         onSaved={vi.fn()}
         onClose={vi.fn()}
       />,
@@ -248,13 +241,8 @@ describe('CustomProviderDialog accessibility', () => {
         .getByRole('tab', { name: 'settings.providers.custom.protocol.codex' })
         .getAttribute('aria-selected'),
     ).toBe('true');
-    const contextWindow = screen.getByRole('textbox', {
-      name: 'settings.providers.custom.fields.modelContextWindowTitle',
-    });
-    await waitFor(() => expect(document.activeElement).toBe(contextWindow));
-    expect(contextWindow).toBe(
-      screen.getByPlaceholderText('settings.providers.custom.fields.modelContextWindowPlaceholder'),
-    );
+    expect(screen.queryByRole('textbox', { name: 'settings.providers.custom.fields.modelContextWindowTitle' })).toBeNull();
+    expect(screen.getByText('settings.providers.connection.modelsAutomatic')).not.toBeNull();
   });
 
   it('cancels a pending manual create without discarding the Provider draft', async () => {
@@ -499,7 +487,7 @@ describe('CustomProviderDialog accessibility', () => {
             Add provider
           </button>
           {open && (
-            <CustomProviderDialog onSaved={() => setOpen(false)} onClose={() => setOpen(false)} />
+            <ProviderConnectionDialog onSaved={() => setOpen(false)} onClose={() => setOpen(false)} />
           )}
         </>
       );
@@ -547,7 +535,7 @@ describe('CustomProviderDialog accessibility', () => {
             </button>
           )}
           {stage === 'dialog' && (
-            <CustomProviderDialog
+            <ProviderConnectionDialog
               returnFocusRef={stableTriggerRef}
               onSaved={() => setStage('idle')}
               onClose={() => setStage('idle')}
@@ -582,7 +570,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue('old-secret');
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await screen.findByText('settings.providers.custom.fields.apiKeySaved');
     const apiKey = screen.getByPlaceholderText(
       'settings.providers.custom.fields.apiKeyEditPlaceholder',
@@ -611,7 +599,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
     await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
@@ -647,7 +635,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await screen.findByText('settings.providers.custom.fields.apiKeySaved');
     await user.click(screen.getByRole('button', { name: 'settings.providers.custom.test.button' }));
 
@@ -676,7 +664,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue('saved-key');
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await screen.findByText('settings.providers.custom.fields.apiKeySaved');
     await user.click(
       screen.getByRole('button', { name: 'settings.providers.custom.wireProtocol.responses' }),
@@ -713,7 +701,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue('old-secret');
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     const apiKey = await screen.findByPlaceholderText(
       'settings.providers.custom.fields.apiKeyEditPlaceholder',
     );
@@ -757,7 +745,7 @@ describe('CustomProviderDialog accessibility', () => {
     );
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
 
     const baseUrl = screen.getByPlaceholderText(
@@ -798,7 +786,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue('old-secret');
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await screen.findByText('settings.providers.custom.fields.apiKeySaved');
     const baseUrl = screen.getByPlaceholderText(
       'settings.providers.custom.fields.baseUrlPlaceholder',
@@ -834,7 +822,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
 
     expect(screen.queryByText('settings.providers.custom.fields.requestPath')).toBeNull();
@@ -861,7 +849,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue('old-secret');
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     const apiKey = await screen.findByPlaceholderText(
       'settings.providers.custom.fields.apiKeyEditPlaceholder',
     );
@@ -892,7 +880,7 @@ describe('CustomProviderDialog accessibility', () => {
     };
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
 
     const configuredBadge = () =>
@@ -946,7 +934,7 @@ describe('CustomProviderDialog accessibility', () => {
     const onClose = vi.fn();
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={onClose} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={onClose} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
 
     const headersLabel = screen.getByText('settings.providers.custom.fields.headers');
@@ -1236,7 +1224,7 @@ describe('CustomProviderDialog accessibility', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
 
     const user = userEvent.setup();
-    render(<CustomProviderDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog initial={initial} onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
     await user.click(
       screen.getByRole('button', { name: 'settings.providers.custom.fields.runtimeAdvanced' }),
@@ -1288,7 +1276,7 @@ describe('CustomProviderDialog accessibility', () => {
 
     const user = userEvent.setup();
     render(
-      <CustomProviderDialog
+      <ProviderConnectionDialog
         initial={imageGenerationFromModelRouteProvider()}
         onSaved={vi.fn()}
         onClose={vi.fn()}
@@ -1336,54 +1324,12 @@ describe('CustomProviderDialog accessibility', () => {
     expect(capability.checked).toBe(true);
   });
 
-  it('immediately clears image generation when deleting the last Responses override row', async () => {
-    customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
 
-    const user = userEvent.setup();
-    render(
-      <CustomProviderDialog
-        initial={imageGenerationFromModelRouteProvider()}
-        onSaved={vi.fn()}
-        onClose={vi.fn()}
-      />,
-    );
-    await waitFor(() => expect(customProviderMocks.readCustomProviderKey).toHaveBeenCalled());
-    await user.click(
-      screen.getByRole('button', { name: 'settings.providers.custom.fields.runtimeAdvanced' }),
-    );
-    expect(
-      (
-        screen.getByRole('checkbox', {
-          name: 'settings.providers.custom.fields.runtimeSupportsImageGeneration',
-        }) as HTMLInputElement
-      ).checked,
-    ).toBe(true);
-
-    const removeButtons = screen.getAllByRole('button', {
-      name: 'settings.providers.custom.fields.removeRow',
-    });
-    await user.click(removeButtons[0]!);
-    expect(
-      screen.queryByRole('button', {
-        name: 'settings.providers.custom.fields.runtimeAdvanced',
-      }),
-    ).toBeNull();
-
-    await user.click(
-      screen.getByRole('button', { name: 'settings.providers.custom.wireProtocol.responses' }),
-    );
-    const capability = screen.getByRole('checkbox', {
-      name: 'settings.providers.custom.fields.runtimeSupportsImageGeneration',
-    }) as HTMLInputElement;
-    expect(capability.checked).toBe(false);
-    await user.click(capability);
-    expect(capability.checked).toBe(true);
-  });
 });
 
 describe('DS-6 field errors and save ownership', () => {
   it('reports name validation on the field and focuses it', async () => {
-    render(<CustomProviderDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitForInitialDialogFocus();
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
     const name = screen.getByLabelText('settings.providers.custom.fields.name');
@@ -1406,7 +1352,7 @@ describe('DS-6 field errors and save ownership', () => {
     const onClose = vi.fn(),
       onSaved = vi.fn();
     render(
-      <CustomProviderDialog
+      <ProviderConnectionDialog
         initial={modelRoutedCodexProvider()}
         onSaved={onSaved}
         onClose={onClose}
@@ -1434,7 +1380,7 @@ describe('DS-6 field errors and save ownership', () => {
     customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
     const user = userEvent.setup();
     render(
-      <CustomProviderDialog
+      <ProviderConnectionDialog
         initial={modelRoutedCodexProvider()}
         onSaved={vi.fn()}
         onClose={vi.fn()}
@@ -1456,17 +1402,11 @@ describe('DS-6 field errors and save ownership', () => {
     fireEvent.pointerLeave(eye);
     await waitFor(() => expect(screen.queryByRole('tooltip')).toBeNull());
 
-    const remove = screen.getAllByRole('button', {
-      name: 'settings.providers.custom.fields.removeRow',
-    })[0]!;
-    await user.hover(remove);
-    const removeTip = await screen.findByRole('tooltip');
-    expect(removeTip.textContent).toBe('settings.providers.custom.fields.removeRow');
-    expect(removeTip.parentElement!.className).toContain('z-[10001]');
+
   });
 
   it('keeps the field error while other fields change and clears it when the errored field is edited', async () => {
-    render(<CustomProviderDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitForInitialDialogFocus();
     const name = screen.getByLabelText('settings.providers.custom.fields.name');
     const baseUrl = screen.getByLabelText('settings.providers.custom.fields.baseUrl');
@@ -1496,7 +1436,7 @@ describe('DS-6 field errors and save ownership', () => {
   });
 
   it('clears the list-level model error when the new model row is filled after adding it back', async () => {
-    render(<CustomProviderDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitForInitialDialogFocus();
     // 名称 / baseUrl 合法,删掉仅有的空模型行 → 保存报列表级错误(渲染在「添加模型」旁,
     // 不依赖任何行存在)。
@@ -1506,23 +1446,11 @@ describe('DS-6 field errors and save ownership', () => {
     fireEvent.change(screen.getByLabelText('settings.providers.custom.fields.baseUrl'), {
       target: { value: 'https://example.test/v1' },
     });
-    fireEvent.click(
-      screen.getAllByRole('button', {
-        name: 'settings.providers.custom.fields.removeRow',
-      })[0]!,
-    );
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
     expect(screen.getByText('settings.providers.custom.errors.modelRequired')).toBeTruthy();
 
-    // 重新添加模型并填写:新行输入的 change 就是对列表级错误的修正,提示须同步清除
-    // ——否则会滞留到再次保存(review P1)。
-    fireEvent.click(
-      screen.getByRole('button', { name: 'settings.providers.custom.fields.addModel' }),
-    );
-    fireEvent.change(
-      screen.getByPlaceholderText('settings.providers.custom.fields.modelIdPlaceholder'),
-      { target: { value: 'm1' } },
-    );
+    fireEvent.change(screen.getByLabelText('settings.providers.connection.manualModel'), { target: { value: 'm1' } });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.addModel' }));
     expect(screen.queryByText('settings.providers.custom.errors.modelRequired')).toBeNull();
     expect(customProviderMocks.createCustomProvider).not.toHaveBeenCalled();
   });
@@ -1542,7 +1470,7 @@ describe('DS-6 field errors and save ownership', () => {
         },
       ],
     }));
-    render(<CustomProviderDialog onSaved={vi.fn()} onClose={vi.fn()} />);
+    render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={vi.fn()} />);
     await waitForInitialDialogFocus();
     // 保存空表单 → 名称必填报错。
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
@@ -1565,24 +1493,6 @@ describe('DS-6 field errors and save ownership', () => {
   });
 });
 
-it.each(['1,', '-5'])('saves a media type while its hidden context draft is %s', async (draft) => {
-  const user = userEvent.setup();
-  const initial: CustomProviderConfig = {
-    id: 'media-draft', name: 'Media Draft', auth: { method: 'apiKey' },
-    runtimes: { codex: { baseUrl: 'https://example.test/v1', models: [{ id: 'model', name: 'Model' }] } },
-  };
-  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
-  render(<CustomProviderDialog initial={initial} focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
-  const context = await screen.findByRole('textbox', { name: 'settings.providers.custom.fields.modelContextWindowTitle' });
-  fireEvent.change(context, { target: { value: draft } });
-  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.fields.modelType' }));
-  await user.click(screen.getByRole('menuitemradio', { name: /image/i }));
-  expect(screen.queryByRole('textbox', { name: 'settings.providers.custom.fields.modelContextWindowTitle' })).toBeNull();
-  await user.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
-  await waitFor(() => expect(customProviderMocks.updateCustomProvider).toHaveBeenCalledOnce());
-  expect(customProviderMocks.updateCustomProvider.mock.calls[0]?.[0].runtimes.codex.models[0].mode).toBe('image_generation');
-});
-
 
 it('preserves preset media metadata through probing and saving', async () => {
   const media = { id: 'media-first', name: 'Media', mode: 'image_generation' as const,
@@ -1593,7 +1503,7 @@ it('preserves preset media metadata through probing and saving', async () => {
       models: [media, { id: 'chat-second', name: 'Chat', mode: 'chat' as const }],
     } },
   }] }));
-  render(<CustomProviderDialog focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
+  render(<ProviderConnectionDialog focusAgent="codex" onSaved={vi.fn()} onClose={vi.fn()} />);
   await waitForInitialDialogFocus();
   fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.presets.label' }));
   fireEvent.click(await screen.findByRole('option', { name: 'Media Preset' }));

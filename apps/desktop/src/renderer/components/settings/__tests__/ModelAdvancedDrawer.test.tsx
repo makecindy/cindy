@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 const mocks = vi.hoisted(() => ({
@@ -31,7 +32,7 @@ vi.mock('@/hooks/useModelContextLimit', () => ({
 }));
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
-  isModelEnabled: () => true,
+  isModelEnabled: (_agent: unknown, _provider: unknown, model: { defaultEnabled?: boolean }) => model.defaultEnabled !== false,
   isModelVisibilityCustomized: () => false,
   setModelVisibility: vi.fn(),
   resetModelVisibilities: vi.fn(),
@@ -99,6 +100,38 @@ beforeEach(() => {
 });
 
 describe('model advanced editor', () => {
+  it('shows the imported API as a label rather than offering unrelated supplier transports', () => {
+    const source = { ...buildUserProvider({ id: 'nous-test', name: 'Hermes', runtimes: {
+      pi: { catalogPresetId: 'nous', baseUrl: 'https://inference-api.nousresearch.com/v1', wireProtocol: 'openai-chat', models: [{ id: 'gpt-6', name: 'GPT-6' }] },
+    } }), connected: true } as ProviderView;
+    const primary = source.models.pi![0];
+    render(<ModelAdvancedDrawer provider={source} row={{ id: primary.id, name: primary.name, avail: ['pi'], byAgent: { pi: primary } }} open onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    expect(screen.queryByRole('button', { name: 'Pi · settings.providers.custom.fields.wireProtocol' })).toBeNull();
+    expect(screen.getByText(/Chat Completions/)).toBeTruthy();
+  });
+
+  it('saves protocol selection to the selected engine and model without writing derived model limits', async () => {
+    const update = vi.fn(async (..._args: unknown[]) => ({ ok: true }));
+    const previous = window.electronAPI;
+    Object.defineProperty(window, 'electronAPI', { configurable: true, value: { maker: { updateCustomProvider: update } } });
+    const source = { ...buildUserProvider({ id: 'fixture', name: 'Fixture', runtimes: {
+      codex: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-responses',
+        models: [{ id: 'gpt-6', name: 'GPT-6' }, { id: 'other', name: 'Other' }] },
+    } }), connected: true } as ProviderView;
+    try {
+      render(drawer(source.models.codex![0], 'high', ['high'], source));
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Codex · settings.providers.custom.fields.wireProtocol' }), { key: 'ArrowDown' });
+      await screen.findByRole('menuitemradio', { name: 'Chat Completions' });
+      expect(screen.getAllByRole('menuitemradio').map(item => item.textContent)).toEqual(['Messages', 'Responses', 'Chat Completions', 'Google Gemini']);
+      fireEvent.click(await screen.findByRole('menuitemradio', { name: 'Chat Completions' }));
+      await waitFor(() => expect(update).toHaveBeenCalledTimes(1));
+      const config = update.mock.calls[0]![0] as unknown as { runtimes: { codex: { models: Array<Record<string, unknown>> } } };
+      expect(config.runtimes.codex.models[0]).toEqual({ id: 'gpt-6', name: 'GPT-6', api: 'openai-completions',
+        route: { baseUrl: 'https://supplier.example/v1', wireProtocol: 'openai-chat' } });
+      expect(config.runtimes.codex.models[1]).toEqual({ id: 'other', name: 'Other' });
+    } finally { Object.defineProperty(window, 'electronAPI', { configurable: true, value: previous }); }
+  });
+
   it('rejects new small settings but accepts 100K without rewriting existing small overrides', () => {
     mocks.limit = 1_000;
     draw();
@@ -252,6 +285,32 @@ describe('model advanced editor', () => {
     expect(mocks.setLimit).toHaveBeenCalledWith(1_000_000);
     expect(screen.getAllByText('272K').length).toBeGreaterThan(0);
     expect(screen.queryByText('settings.providers.models.advanced.codexContextHint')).toBeNull();
+  });
+
+  it('omits an undeclared manufacturer reference instead of presenting it as broken setup', () => {
+    render(drawer({ ...model, nativeApi: undefined }, undefined, undefined, { ...provider, id: 'unknown-provider', source: 'user' }));
+    expect(screen.queryByText('settings.providers.models.advanced.protocol.reference')).toBeNull();
+  });
+
+  it('renders imported OpenRouter Gemini with only Pi enabled, preserving all three supplier interfaces', () => {
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!;
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const id = 'google/gemini-3.8-flash';
+    const source = { ...buildUserProvider({ id: 'openrouter-test', name: 'OpenRouter', runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { ...preset.runtimes[agent]!, catalogPresetId: preset.id, models: [{ id, name: 'Gemini' }] }]),
+    ) }, { presets: BUNDLED_CATALOG.presets, modelRegistry: BUNDLED_CATALOG.modelRegistry }), connected: true } as ProviderView;
+    const byAgent = Object.fromEntries(agents.map(agent => [agent, source.models[agent]![0]]));
+    render(<ModelAdvancedDrawer provider={source} row={{ id, name: 'Gemini', avail: [...agents], byAgent }} open
+      onOpenChange={vi.fn()} pricePresentationOf={() => null} onDisable={vi.fn()} disabled={false} paymentRequired={false} />);
+    for (const agent of ['Claude Code', 'Codex', 'Pi']) {
+      const toggle = screen.getByRole('switch', { name: `Gemini · ${agent}` });
+      expect(toggle.getAttribute('aria-checked')).toBe(agent === 'Pi' ? 'true' : 'false');
+      expect(toggle.hasAttribute('data-compatibility')).toBe(agent !== 'Pi');
+    }
+    expect(screen.getByText(/^Messages/)).toBeTruthy();
+    expect(screen.getByText(/^Responses/)).toBeTruthy();
+    expect(screen.getByText(/^Chat Completions/)).toBeTruthy();
+    expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('1048');
   });
 
   it('shows whole K without rewriting the exact catalog value on untouched blur', () => {

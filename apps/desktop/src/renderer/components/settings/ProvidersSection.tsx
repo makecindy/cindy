@@ -80,7 +80,7 @@ import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
 import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
 import { QuotaHoverCard } from '../status/QuotaHoverCard';
-import { CustomProviderDialog } from './CustomProviderDialog';
+import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OllamaProviderDetail } from './OllamaProviderDetail';
 import {
@@ -2014,7 +2014,6 @@ export function ProvidersSection() {
     | {
         mode: 'edit';
         config: CustomProviderConfig;
-        focusModelId?: string;
         focusAgent?: AgentKind;
       }
   >(null);
@@ -2291,16 +2290,7 @@ export function ProvidersSection() {
       setProviderImportId(importId);
     } else if (connect) {
       const target = byId.get(connect);
-      if (target?.source === 'user' && model) {
-        setSelectedId(connect);
-        setFocusedModel(null);
-        setDialog({
-          mode: 'edit',
-          config: providerViewToCustomProviderConfig(target),
-          focusModelId: model,
-          ...(agent ? { focusAgent: agent } : {}),
-        });
-      } else if (listProviders.some((p) => p.id === connect)) {
+      if (listProviders.some((p) => p.id === connect)) {
         setSelectedId(connect);
         setFocusedModel(
           model ? { providerId: connect, modelId: model, ...(agent ? { agent } : {}) } : null,
@@ -2420,7 +2410,9 @@ export function ProvidersSection() {
             return;
           }
           anyOk = true;
-          const merged = appendDiscoveredCustomProviderModels(rt.models, r.models);
+          const openRouterCatalog = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(rt.baseUrl)
+            ? rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models' : undefined;
+          const merged = appendDiscoveredCustomProviderModels(rt.models, r.models, openRouterCatalog);
           rt.models = merged.models;
           added += merged.addedIds.length;
         }
@@ -2758,6 +2750,7 @@ export function ProvidersSection() {
                     )}
                   {!effectiveSelected.suspended &&
                     (providerHasModels(effectiveSelected) ||
+                      effectiveSelected.source === 'user' ||
                       (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
                         !effectiveSelected.modelDiscoveryFailure) ||
                       effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID) && (
@@ -2782,7 +2775,9 @@ export function ProvidersSection() {
                               : undefined
                           }
                           emptyMessage={
-                            effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID
+                            effectiveSelected.source === 'user' && effectiveSelected.modelDiscoveryFailure
+                              ? t(`settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`)
+                              : effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID
                               ? t('settings.providers.local.emptyInstalled')
                               : t(
                                   effectiveSelected.connected
@@ -2799,8 +2794,7 @@ export function ProvidersSection() {
                                 refreshDisabled: refreshingProviderId !== null,
                                 refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
                               }
-                            : effectiveSelected.source === 'user' &&
-                                effectiveSelected.auth.method !== 'oauth'
+                            : effectiveSelected.source === 'user'
                               ? {
                                   onRefresh: () => void handleRefreshModels(effectiveSelected),
                                   refreshing: refreshingProviderId === effectiveSelected.id,
@@ -2812,6 +2806,7 @@ export function ProvidersSection() {
                     )}
                   {!effectiveSelected.suspended &&
                     !providerHasModels(effectiveSelected) &&
+                    effectiveSelected.source !== 'user' &&
                     effectiveSelected.id !== MANAGED_OLLAMA_PROVIDER_ID &&
                     (Boolean(effectiveSelected.modelDiscoveryFailure) ||
                       !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
@@ -2871,18 +2866,17 @@ export function ProvidersSection() {
             setDialog({ mode: 'create' });
           }}
           onClose={() => setWizard(null)}
-          onDone={(providerId) => {
+          onDone={async (providerId) => {
+            await refetch();
             setWizard(null);
             if (providerId) setSelectedId(providerId);
-            refetch();
           }}
         />
       )}
 
       {dialog && (
-        <CustomProviderDialog
+        <ProviderConnectionDialog
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
-          focusModelId={dialog.mode === 'edit' ? dialog.focusModelId : undefined}
           focusAgent={dialog.mode === 'edit' ? dialog.focusAgent : undefined}
           existingIds={providers.map((p) => p.id)}
           returnFocusRef={dialog.mode === 'create' ? addProviderButtonRef : undefined}

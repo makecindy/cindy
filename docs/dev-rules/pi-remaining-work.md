@@ -157,50 +157,11 @@ provider 感知路由 + 端到端真二进制测试(BYOM 模型直连原生端�
 `writeModelsJson` 写多 provider;`buildModelProviderMap` + provider 感知 `setModel`/`--provider`
 (pi/index.ts)。**host 侧只要实现 `resolvePiNativeProviders` 把 custom provider 喂进来即可。**
 
-**剩余 = host 接线 + UI(按依赖顺序,均在 desktop / model-providers 侧)**:
-
-1. **`packages/model-providers/src/custom-provider-store.ts:36`** `VALID_AGENTS` 加 `'pi'`;
-   `:113-119` wireProtocol 白名单加 pi 分支(pi 允许 anthropic-messages / openai-chat /
-   openai-responses)。加 pi 是**增量**——CC/Codex custom provider 只有 cc/codex runtime,
-   不受影响;但要加测试确认。
-2. **`packages/model-providers/src/user-provider.ts:44`** `AGENT_ORDER` 加 `'pi'`;`:36`
-   `CUSTOM_EFFORTS` 加 pi 档位;`:66` `defaultWireProtocol` 加 pi 默认。这样 custom provider
-   的 pi runtime 才进 `deriveAvailableModels('pi')`。
-3. **`apps/desktop/src/main/maker-host/pi-host.ts`** 实现 `resolvePiNativeProviders`:从
-   `getActiveCatalog()` 筛 `source==='user'` 且有 pi runtime 的 provider,映射
-   wireProtocol→PiNativeApi(`openai-chat`→`openai-completions`、`openai-responses`→同名、
-   `anthropic-messages`→同名),读 `readCustomProviderKey(id,'pi')` 填进 `env`(键名
-   `CINDY_PI_KEY_<ID>`,与 spec.apiKeyEnvVar 对应),models 带 baseUrl/models[]。接到
-   `buildPiAgent` 的 deps。**注意**:原生路径不经 provider-route / compat-proxy,loopback/剥
-   凭证那套对它不生效——安全边界(禁 none+远程等)由 store 的 validate 与本 resolver 把关。
-4. **UI(唯一剩余增量)**:`apps/desktop/src/renderer/components/settings/CustomProviderDialog.tsx`。
-   **✅ 后端全通(commit 见 pi BYOM host 接线):store 收 pi runtime、user-provider 派生 pi 模型、
-   pi-host resolvePiNativeProviders 产出原生块——只差这个对话框能让用户添加 pi runtime。**
-   做法(用 typecheck 当 34 处的穷举清单):`DialogAgentKind` 加 `'pi'` → tsc 会逐个报出所有
-   `Record<DialogAgentKind,...>` 缺 pi 的位置,逐个补齐:
-   - `AGENTS`/`VISIBLE_AGENTS`/`TAB_META`(加 PiMark + i18n label/desc);
-   - 每-runtime 表单 state(init/read/handlers 的 agent 字典);
-   - `wireProtocol` 默认(pi 建议 openai-chat)+ **pi 专属 api 选择器**(3 选:anthropic-messages/
-     openai-responses/openai-chat;cc 锁 anthropic、codex 锁 responses/chat,pi 三选);
-   - i18n 四语(`settings.providers.custom.protocol.pi*` + api 选择器文案),过 check:i18n/glossary。
-   验证:desktop typecheck + CustomProviderDialog.test.tsx。
-
-**原设计说明(缺口 = pi 特有)**:
-1. **`writeModelsJson`(`packages/maker-core/src/agents/pi/index.ts:203`)现在只写单一
-   `cindy` provider,baseUrl 全指向 compat 代理。** 要让它对「自定义/本地 provider」额外写出
-   **原生 pi provider 块**:`{ name, baseUrl:<用户端点>, api:'openai-completions'|'anthropic-messages'|'google-generative-ai', apiKey:<env 插值或占位>, models:[...] }`,
-   baseUrl 直连用户端点。需要 host 把自定义 provider 的元数据(端点/api 类型/key 来源)透传给
-   PiAgent(目前只透传 `availableModels: ModelDescriptor[]`,信息不够 —— 要扩 deps 或
-   capabilityAdditions 带 provider 维度)。
-2. **`setModel`(`pi/index.ts` handle.setModel)现在硬编码 `provider: PI_PROVIDER_ID`**。
-   BYOM 模型属于别的 provider,要改成 provider-aware(从 model → 其所属 provider 解析)。
-3. 模型选择器让自定义模型出现在 pi tab(custom provider 的 `agents` 字段需含 `pi`;确认
-   `buildUserProvider` / 目录 union 是否已给 pi tab)。
-4. keyless 本地服务器(Ollama)要留 dummy apiKey,否则 pi `/model` 不显示(见
-   `apps/pi-bin/darwin-arm64/docs/models.md`)。
-
-**验收**:配一个本地 Ollama,pi 会话能选到它、直连本机端点跑通(抓包确认没走 compat 代理),
-成本按目录/0 计,thinking/工具调用正常。
+**2026-09-13 工作区更新**：host、自定义供应商三 runtime、连接向导与标准模型详情已接通。
+旧逐模型编辑器已移除，入口改为 `ProviderConnectionDialog`；协议不再锁定为 CC Messages。
+Pi 的八种原生 API 保留，Codex / Claude Code 通过共享翻译与 Pi SDK 适配；账号、发现、
+模型 API、Thinking、工作上下文与上游上限的验收和实际边界见
+[通用供应商目录](provider-catalog-generation.md)。本段记录工作区实现，不代表已合并或发布。
 
 ---
 

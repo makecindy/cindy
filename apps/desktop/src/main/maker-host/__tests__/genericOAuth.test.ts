@@ -1,3 +1,4 @@
+import { providerPresetOAuth } from '@cindy/model-providers';
 /**
  * generic-oauth Runner + oauth-token 路由分支 + active-catalog 发现模型泛化 merge 单测。
  *
@@ -14,9 +15,11 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-import type { OAuthProviderDescriptor } from '@cindy/model-providers';
+import type { OAuthProviderDescriptor, ProviderView } from '@cindy/model-providers';
+import { fetchSavedOAuthProviderModels } from '../provider-model-fetch.js';
 
 import {
+  parseModelsListResponse,
   cancelGenericOAuthLogin,
   configureGenericOAuth,
   deriveModelsDiscoveryUrl,
@@ -118,6 +121,73 @@ function seedBlob(providerId: string, blob: Record<string, unknown>): void {
   storage.map.set(providerId, JSON.stringify(blob));
   resetGenericOAuthMemoryCache(); // 让下次读走注入 storage
 }
+
+describe('manual model refresh for saved OAuth providers', () => {
+  function savedProvider(presetId = 'openrouter'): ProviderView {
+    const baseUrl = presetId === 'nous'
+      ? 'https://inference-api.nousresearch.com/v1' : 'https://openrouter.ai/api/v1';
+    return {
+      id: `${presetId}-account`, name: presetId, source: 'user', connected: true,
+      auth: { method: 'oauth', oauth: providerPresetOAuth(presetId)! },
+      agents: ['claude-code', 'codex', 'pi'], models: {},
+      routing: Object.fromEntries(['claude-code', 'codex', 'pi'].map(agent => [agent, {
+        upstream: baseUrl, wireProtocol: 'openai-chat', authStrategy: 'oauth-token',
+      }])),
+    };
+  }
+
+  for (const presetId of ['openrouter', 'nous']) {
+    it.each(['claude-code', 'codex', 'pi'] as const)(`${presetId} refresh uses the saved login and upstream protocol for %s`, async agent => {
+      const provider = savedProvider(presetId);
+      // Display IDs and owner-scoped storage IDs deliberately differ.
+      seedBlob('scoped-account', { access_token: 'fake-oauth-access' });
+      let requests = 0;
+      const result = await fetchSavedOAuthProviderModels(provider, agent, 'scoped-account', () => true,
+        async (url, init) => {
+          requests++;
+          expect(url).toBe(provider.auth.oauth!.modelsDiscoveryUrl);
+          expect(init?.headers).toEqual({ authorization: 'Bearer fake-oauth-access' });
+          expect(init?.redirect).toBe('error');
+          return new Response(JSON.stringify({ data: [{ id: 'new-model', context_length: 123456 }] }));
+        });
+      expect(requests).toBe(1);
+      expect(result).toMatchObject({ ok: true, models: [{ id: 'new-model', contextWindow: 123456 }] });
+      expect(JSON.stringify(result)).not.toContain('fake-oauth-access');
+    });
+  }
+
+  it('renews an expiring login before fetching the model list', async () => {
+    const provider = savedProvider('nous');
+    seedBlob('scoped-account', { access_token: 'fake-expired', refresh_token: 'fake-refresh', expires_at: nowMs + 1000 });
+    fetchResponder = () => new Response(JSON.stringify({ access_token: 'fake-renewed', expires_in: 3600 }));
+    const result = await fetchSavedOAuthProviderModels(provider, 'pi', 'scoped-account', () => true,
+      async (_url, init) => {
+        expect(init?.headers).toEqual({ authorization: 'Bearer fake-renewed' });
+        return new Response('{"data":["new-model"]}');
+      });
+    expect(result.ok).toBe(true);
+    expect(fetchCalls).toHaveLength(1);
+    expect(fetchCalls[0]?.url).toBe(provider.auth.oauth!.tokenUrl);
+  });
+
+  it('does not issue a public unauthenticated request when the login is gone', async () => {
+    let requests = 0;
+    const result = await fetchSavedOAuthProviderModels(savedProvider(), 'pi', 'missing-account', () => true,
+      async () => { requests++; return new Response('{"data":["model"]}'); });
+    expect(result).toEqual({ ok: false, code: 'AUTH_INVALID' });
+    expect(requests).toBe(0);
+  });
+
+  it.each(['before-request', 'during-request'])('discards a refresh after account/config changes %s', async phase => {
+    seedBlob('scoped-account', { access_token: 'fake-access' });
+    let current = phase !== 'before-request';
+    let requests = 0;
+    const result = await fetchSavedOAuthProviderModels(savedProvider(), 'pi', 'scoped-account', () => current,
+      async () => { requests++; current = false; return new Response('{"data":["model"]}'); });
+    expect(result).toEqual({ ok: false, code: 'AUTH_INVALID' });
+    expect(requests).toBe(phase === 'before-request' ? 0 : 1);
+  });
+});
 
 describe('blob 读写 / has / logout', () => {
   it('无凭证 → has=false、token=null；写入后可读；logout 清空', () => {
@@ -597,6 +667,13 @@ describe('deriveModelsDiscoveryUrl', () => {
 });
 
 describe('oauth-token 路由分支', () => {
+  it('uses the Copilot account host without allowing arbitrary token destinations', () => {
+    const routing = { upstream: 'https://api.individual.githubcopilot.com', authStrategy: 'oauth-token' as const };
+    expect(buildRouteDecision(routing, null, 'pi', null, 'tid=fake;proxy-ep=proxy.business.githubcopilot.com;exp=123')?.upstreamOverride).toBe('https://api.business.githubcopilot.com');
+    expect(buildRouteDecision(routing, null, 'pi', null, 'proxy-ep=proxy.business.githubcopilot.com.evil.test;')?.upstreamOverride).toBe(routing.upstream);
+    expect(buildRouteDecision({ ...routing, upstream: 'https://custom.example' }, null, 'pi', null, 'proxy-ep=proxy.business.githubcopilot.com;')?.upstreamOverride).toBe('https://custom.example');
+  });
+
   const routing = {
     upstream: 'https://api.acme.example',
     authStrategy: 'oauth-token' as const,
@@ -839,4 +916,88 @@ describe('explicit provider metadata fields', () => {
       },
     ]);
   });
+});
+
+
+describe('OpenRouter discovery metadata', () => {
+  it('imports provider facts without requiring a known model name', () => {
+    expect(parseModelsListResponse({ data: [{ id: 'new-vendor/new-model', name: 'New model',
+      context_length: 131072, architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] },
+      top_provider: { max_completion_tokens: 32768 },
+      pricing: { prompt: '0.0000007', completion: '0.0000014', input_cache_read: '0' },
+      reasoning: { supported_efforts: ['none', 'low', 'high'], default_effort: 'high' },
+      supported_parameters: ['tools', 'reasoning'],
+    }] }, 'https://openrouter.ai/api/v1/models')).toMatchObject([{ id: 'new-vendor/new-model',
+      discoveredMetadata: { contextWindow: 131072, maxOutputTokens: 32768,
+        modalities: { input: ['text', 'image'], output: ['text'] }, supportsImageInput: true,
+        supportsToolCalls: true, efforts: ['low', 'high'], defaultEffort: 'high' },
+      discoveredCost: { input: 0.7, output: 1.4, cacheRead: 0 },
+    }]);
+  });
+
+  it('keeps missing fields unknown and does not fabricate free prices or effort levels', () => {
+    const [model] = parseModelsListResponse({ data: [{ id: 'unlisted', pricing: { prompt: '', completion: '-1' } }] })!;
+    expect(model.discoveredMetadata).toEqual({});
+    expect(model.discoveredCost).toBeUndefined();
+  });
+});
+
+
+describe('official preset OAuth contracts', () => {
+  it('OpenRouter uses PKCE JSON exchange and stores the permanent key', async () => {
+    let authorization!: URL;
+    configureGenericOAuth({ openExternal: async url => {
+      authorization = new URL(url);
+      const callback = new URL(authorization.searchParams.get('callback_url')!);
+      expect(callback.searchParams.get('state')).toBe(authorization.searchParams.get('state'));
+      callback.searchParams.set('code', 'test-authorization-code');
+      void fetch(callback).catch(() => {});
+    } });
+    fetchResponder = () => new Response(JSON.stringify({ key: 'test-openrouter-key' }));
+    const oauth = providerPresetOAuth('openrouter')!;
+    const result = await runGenericOAuthLogin({ id: 'or-test', name: 'OpenRouter' }, oauth);
+    expect(result.ok).toBe(true);
+    expect(authorization.searchParams.has('redirect_uri')).toBe(false);
+    expect(authorization.searchParams.get('code_challenge_method')).toBe('S256');
+    expect(fetchCalls[0]!.headers?.['content-type']).toBe('application/json');
+    expect(JSON.parse(fetchCalls[0]!.body!)).toMatchObject({ code: 'test-authorization-code', code_challenge_method: 'S256' });
+    const stored = JSON.parse(storage.map.get('or-test')!);
+    expect(stored.access_token).toBe('test-openrouter-key');
+    expect(stored.expires_at).toBe(Number.MAX_SAFE_INTEGER);
+    expect(stored.refresh_token).toBeUndefined();
+  });
+
+  it('Nous rotates its refresh credential via the required header', async () => {
+    seedBlob('nous-test', { access_token: 'test-old', refresh_token: 'test-refresh', expires_at: nowMs - 1 });
+    fetchResponder = () => new Response(JSON.stringify({ access_token: 'test-new', refresh_token: 'test-rotated', expires_in: 600 }));
+    await refreshGenericOAuthIfNeeded('nous-test', providerPresetOAuth('nous')!);
+    expect(fetchCalls[0]!.headers?.['x-nous-refresh-token']).toBe('test-refresh');
+    expect(new URLSearchParams(fetchCalls[0]!.body).has('refresh_token')).toBe(false);
+    expect(JSON.parse(storage.map.get('nous-test')!).refresh_token).toBe('test-rotated');
+  });
+
+  it('Copilot exchanges the GitHub credential for an inference token and refreshes it', async () => {
+    seedBlob('copilot-test', { access_token: 'test-old', refresh_token: 'test-github', expires_at: nowMs - 1 });
+    fetchResponder = () => new Response(JSON.stringify({ token: 'test-copilot-inference', expires_at: nowMs / 1000 + 3600 }));
+    await refreshGenericOAuthIfNeeded('copilot-test', providerPresetOAuth('github-copilot')!);
+    expect(fetchCalls[0]!.url).toBe('https://api.github.com/copilot_internal/v2/token');
+    expect(fetchCalls[0]!.headers?.authorization).toBe('Bearer test-github');
+    expect(readCachedGenericOAuthAccessToken('copilot-test', undefined)).toBe('test-copilot-inference');
+  });
+});
+
+
+it('MiniMax uses its PKCE user-code grant and millisecond polling interval', async () => {
+  const oauth = providerPresetOAuth('minimax-global')!;
+  let polls = 0;
+  fetchResponder = url => url.endsWith('/oauth/code')
+    ? new Response(JSON.stringify({ user_code: 'TEST-CODE', verification_uri: 'https://platform.minimax.io/oauth', expired_in: 300, interval: 2000 }))
+    : new Response(JSON.stringify(++polls === 1 ? { status: 'pending' } : { status: 'success', access_token: 'test-mini-access', refresh_token: 'test-mini-refresh', expired_in: 600 }));
+  const result = await runGenericOAuthLogin({ id: 'mini-test', name: 'MiniMax' }, oauth);
+  expect(result.ok).toBe(true);
+  expect(new URLSearchParams(fetchCalls[0]!.body).get('code_challenge_method')).toBe('S256');
+  expect(new URLSearchParams(fetchCalls[1]!.body).get('grant_type')).toBe('urn:ietf:params:oauth:grant-type:user_code');
+  expect(new URLSearchParams(fetchCalls[1]!.body).get('code_verifier')).toBeTruthy();
+  expect(nowMs).toBe(1_004_000);
+  expect(JSON.parse(storage.map.get('mini-test')!).expires_at).toBe(nowMs + 600_000);
 });

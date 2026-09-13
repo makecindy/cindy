@@ -58,7 +58,7 @@ import {
 } from '../provider-route';
 import { getActiveCatalog, setCustomProviders } from '../active-catalog';
 import * as providerRoute from '../provider-route';
-import { buildRegistry, buildUserProvider } from '@cindy/model-providers';
+import { buildRegistry, buildUserProvider, PROVIDER_MODEL_CATALOG } from '@cindy/model-providers';
 import { clearSessionProvider, setSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
@@ -110,6 +110,28 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     setProviderViewsReader(async () => []);
     clearSessionProvider('sess-race');
     resetClaudeSessionRouteRegistryForTest();
+  });
+
+  it.each(['openai-chat', 'openai-responses'] as const)('selects the Claude translation handler for a saved %s connection', wireProtocol => {
+    setCustomProviders([buildUserProvider({ id: 'zhipu-plan', name: 'Fixture', runtimes: {
+      'claude-code': { baseUrl: 'https://supplier.example/v1', wireProtocol, models: [{ id: 'model', name: 'Model' }] },
+    } })]);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'zhipu-plan');
+    const decision = transform({ model: 'model' }, ctxWith({ 'x-claude-code-session-id': 'sdk-race' }));
+    return Promise.resolve(decision).then(route => expect(route?.localHandler).toBeTypeOf('function'));
+  });
+
+  it.each(['github-copilot', 'cloudflare-ai-gateway'])('keeps %s native authentication for Claude Messages routes', async sourceId => {
+    const row = PROVIDER_MODEL_CATALOG.providers[sourceId].find(row => row.execution.pi.api === 'anthropic-messages')!;
+    const baseUrl = row.upstream.replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account').replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway');
+    setCustomProviders([buildUserProvider({ id: 'zhipu-plan', name: 'Fixture', runtimes: {
+      'claude-code': { baseUrl, catalogPresetId: sourceId, wireProtocol: 'anthropic-messages', models: [{ id: row.id, name: row.name, api: 'anthropic-messages' }] },
+    } })]);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'zhipu-plan');
+    const route = await transform({ model: row.id }, ctxWith({ 'x-claude-code-session-id': 'sdk-race' }));
+    expect(route?.localHandler).toBeTypeOf('function');
   });
 
   it('无会话头的裸 glm-5.3 → 路由到用户智谱上游并换用户 key,不再透传默认网关', async () => {

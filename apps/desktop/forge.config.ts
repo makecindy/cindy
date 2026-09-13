@@ -1676,6 +1676,10 @@ const config: ForgeConfig = {
     // 使其在 packaged 应用中可以被 require()——asar 会阻止原生模块的 dlopen 调用。
     new AutoUnpackNativesPlugin({}),
     new VitePlugin({
+      // Dev keeps all watcher targets in one process. Build them serially at
+      // startup so the initial graph does not multiply the same high baseline;
+      // packaged builds retain Forge's normal concurrency.
+      concurrent: isDev ? false : true,
       build: [
         {
           entry: 'src/main/index.ts',

@@ -2124,7 +2124,7 @@
           "machine-capable": "This computer can run a local model",
           "subscription": "Subscription account"
         },
-        "groupApiKey": "API and self-hosted proxies · presets update with the catalog",
+        "groupApiKey": "More providers",
         "groupCustom": "Custom",
         "metaOAuth": "Subscription account",
         "metaApiKey": "API key",
@@ -2150,8 +2150,8 @@
         "onlyAgentNote": "This provider only supports {{agent}}",
         "endpointLabel": "{{agent}} base URL",
         "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
-        "bridgedNote": "Cindy bridge (Chat Completions)",
-        "docsLink": "View setup docs",
+        "signIn": "Sign in",
+        "setupLink": {"apiKey": "Get an API key", "account": "Sign up or sign in", "setup": "Setup help"},
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",
         "manualModelHint": "No models were discovered. Enter the exact model ID exposed by this proxy.",
@@ -2169,6 +2169,7 @@
         "cancel": "Cancel",
         "useApiKey": "API key connection",
         "metaOAuthOrApi": "Subscription account · API key",
+        "metaLoginOrApi": "Account sign-in · API key",
         "builtinApiKey": {
           "subtitle": "Connect with your own API key",
           "note": "This source provides image generation models and does not join chats. The API key is stored only on this device (encrypted by the system keychain) and never uploaded."
@@ -2334,6 +2335,11 @@
       "localAccount": {
         "useClaude": "Use local Claude Code account",
         "unavailable": "No local sign-in is available. Sign in to the source app or add a separate account."
+      },
+      "connection": {
+        "modelCount": "{{count}} models configured",
+        "modelsAutomatic": "Model details are imported automatically. Adjust individual models in the model list.",
+        "manualModel": "Model IDs (if discovery is unavailable)"
       }
     },
     "experimental": {

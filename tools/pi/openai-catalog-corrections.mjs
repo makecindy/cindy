@@ -23,3 +23,14 @@ export function applyAstraCatalogAdditions(providers) {
   }
   return providers;
 }
+
+/** Corrections already shipped by Cindy for the pinned 0.85.1 bundle. Newer Pi wins. */
+export function applyPinnedAstraCorrections(providers, version) {
+  if (version !== '0.85.1') return;
+  for (const provider of ['openai', 'openai-codex']) {
+    const model = providers[provider]?.find(row => row.id === 'gpt-6-astra');
+    if (!model) continue;
+    if (provider === 'openai' && model.contextWindow === 272000) model.contextWindow = 1050000;
+    model.thinkingLevelMap = { ...model.thinkingLevelMap, off: 'low', minimal: null };
+  }
+}

@@ -1,7 +1,7 @@
 /**
  * McpServerDialog —— 自定义 MCP 服务器「新建 / 编辑」表单弹窗。
  *
- * 结构参照 CustomProviderDialog:显示名称 + transport(http/sse)分段 + 端点 URL +
+ * 结构参照 ProviderConnectionDialog:显示名称 + transport(http/sse)分段 + 端点 URL +
  * 可选 bearer token + 可选请求头(增删行)。
  *
  * 「MCP id」内部句柄由显示名 slug 派生 + 去重,对用户隐藏(= agent 侧 mcpServers[name],

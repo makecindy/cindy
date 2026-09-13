@@ -907,11 +907,11 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
     const preset = BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === id);
     expect(preset?.docsUrl).toBe(docsUrl);
     expect(preset?.runtimes['claude-code']?.baseUrl).toMatch(/\/anthropic$/);
-    expect(preset?.runtimes['claude-code']?.models).toEqual([
+    expect(preset?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false)).toEqual([
       { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
       { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
     ]);
-    expect(preset?.runtimes.codex).toEqual({
+    expect({ ...preset?.runtimes.codex, models: preset?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
       baseUrl: codexBaseUrl,
       models: [
         { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
@@ -958,13 +958,13 @@ describe('官方渠道预设契约', () => {
     });
   });
 
-  it('llama.cpp 与 vLLM 提供 Codex Chat 与 Pi，不含 Claude Code', () => {
+  it('llama.cpp 与 vLLM 的 Chat 端点供三个引擎使用', () => {
     for (const [id, baseUrl] of [
       ['llamacpp', 'http://127.0.0.1:8080/v1'],
       ['vllm', 'http://127.0.0.1:8000/v1'],
     ] as const) {
       const local = preset(id);
-      expect(local?.runtimes['claude-code']).toBeUndefined();
+      expect(local?.runtimes['claude-code']).toEqual(local?.runtimes.codex);
       expect(local?.runtimes.codex).toEqual({
         baseUrl,
         wireProtocol: 'openai-chat',
@@ -990,7 +990,7 @@ describe('官方渠道预设契约', () => {
       codex: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
-        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000 }],
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-completions', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-chat' } }],
       },
       pi: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
@@ -1146,12 +1146,12 @@ describe('官方渠道预设契约', () => {
       [personalTokenPlan, personalTokenPlanModels],
       [teamTokenPlan, teamTokenPlanModels],
     ] as const) {
-      expect(tokenPlan?.runtimes['claude-code']).toEqual({
+      expect({ ...tokenPlan?.runtimes['claude-code'], models: tokenPlan?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
         modelsUrl: tokenPlanModelsUrl,
         models,
       });
-      expect(tokenPlan?.runtimes.codex).toEqual({
+      expect({ ...tokenPlan?.runtimes.codex, models: tokenPlan?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
         wireProtocol: 'openai-chat',
         modelsUrl: tokenPlanModelsUrl,
@@ -1188,7 +1188,7 @@ describe('官方渠道预设契约', () => {
       ).toBe(1_000_000);
       // 只补独立 1M 条目:既有裸条目保持原样(留空仍按 200K 保守默认),不静默抬窗。
       expect(claudeModels.find((model) => model.id === 'glm-5.2')).toEqual({ id: 'glm-5.2', name: 'GLM-5.2' });
-      expect(claudeModels.find((model) => model.id === 'glm-5.3')).toBeUndefined();
+      expect(claudeModels.find((model) => model.id === 'glm-5.3')).toMatchObject({ api: 'anthropic-messages', defaultEnabled: false });
     },
   );
 
@@ -1212,9 +1212,7 @@ describe('官方渠道预设契约', () => {
       wireProtocol: 'openai-chat',
       modelsUrl: 'https://opencode.ai/zen/go/v1/models',
     });
-    expect(piModels.map((model) => model.id)).toEqual([
-      ...new Set([...claudeModels, ...codexModels].map((model) => model.id)),
-    ]);
+    expect(new Set(piModels.map((model) => model.id))).toEqual(new Set([...claudeModels, ...codexModels].map((model) => model.id)));
 
     const expectedOverrides = new Map([
       ['minimax-m3', 'anthropic-messages'],
@@ -1238,7 +1236,7 @@ describe('官方渠道预设契约', () => {
         },
       });
     }
-    for (const model of piModels.filter((candidate) => !expectedOverrides.has(candidate.id))) {
+    for (const model of piModels.filter((candidate) => !candidate.api && !expectedOverrides.has(candidate.id))) {
       expect(model.piApi, model.id).toBeUndefined();
     }
   });
@@ -1257,7 +1255,7 @@ describe('官方渠道预设契约', () => {
 
   it('Google Gemini API 走公开 OpenAI Chat 兼容端点，不依赖 Gemini CLI 私有接口', () => {
     const gemini = preset('google-gemini-api');
-    expect(gemini?.runtimes['claude-code']).toBeUndefined();
+    expect(gemini?.runtimes['claude-code']).toEqual(gemini?.runtimes.codex);
     expect(gemini?.runtimes.codex).toEqual(expect.objectContaining({
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       wireProtocol: 'openai-chat',

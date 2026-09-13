@@ -1,0 +1,402 @@
+{
+  "opencode": {
+    "source": "https://opencode.ai/docs/zen/",
+    "checked": "2026-09-13",
+    "models": {
+      "gpt-6-astra": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.6-sol": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.6-terra": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.6-luna": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.5": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.5-pro": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.4": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.4-pro": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.4-mini": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.4-nano": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.3-codex": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.3-codex-spark": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.2": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.2-codex": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.1": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.1-codex": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.1-codex-max": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5.1-codex-mini": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5-codex": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "gpt-5-nano": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "claude-fable-5-1": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-fable-5": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-opus-5": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-opus-4-8": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-opus-4-7": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-opus-4-6": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-opus-4-5": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-sonnet-5": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-sonnet-4-6": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-sonnet-4-5": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "claude-haiku-4-5": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "gemini-3.8-flash": {
+        "api": "google-generative-ai",
+        "endpoint": "https://opencode.ai/zen/v1/models/gemini-3.8-flash"
+      },
+      "gemini-3.7-flash": {
+        "api": "google-generative-ai",
+        "endpoint": "https://opencode.ai/zen/v1/models/gemini-3.7-flash"
+      },
+      "gemini-3.6-flash": {
+        "api": "google-generative-ai",
+        "endpoint": "https://opencode.ai/zen/v1/models/gemini-3.6-flash"
+      },
+      "gemini-3.5-flash": {
+        "api": "google-generative-ai",
+        "endpoint": "https://opencode.ai/zen/v1/models/gemini-3.5-flash"
+      },
+      "gemini-3.5-flash-lite": {
+        "api": "google-generative-ai",
+        "endpoint": "https://opencode.ai/zen/v1/models/gemini-3.5-flash-lite"
+      },
+      "gemini-3.1-pro": {
+        "api": "google-generative-ai",
+        "endpoint": "https://opencode.ai/zen/v1/models/gemini-3.1-pro"
+      },
+      "gemini-3-flash": {
+        "api": "google-generative-ai",
+        "endpoint": "https://opencode.ai/zen/v1/models/gemini-3-flash"
+      },
+      "grok-4.6": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "grok-4.5": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "grok-build-0.1": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "muse-spark-1.3": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "muse-spark-1.2": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      },
+      "qwen3.7-max": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "qwen3.7-plus": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "qwen3.6-plus": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "qwen3.5-plus": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/v1/messages"
+      },
+      "deepseek-v4-pro": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "deepseek-v4-flash": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "deepseek-v4-flash-vision-exp": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "minimax-m3": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "minimax-m2.7": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "minimax-m2.5": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "glm-5.3-flash": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "glm-5.3": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "glm-5.2": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "glm-5.1": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "glm-5": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "kimi-k2.5": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "kimi-k2.6": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "kimi-k2.7-code": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "kimi-k3": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "big-pickle": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "mimo-v2.5-free": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "ling-3.0-flash-fin-free": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "nemotron-3-ultra-free": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "nemotron-3.5-lightning-free": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/v1/chat/completions"
+      },
+      "muse-spark-1.3-contributor-free": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/v1/responses"
+      }
+    }
+  },
+  "opencode-go": {
+    "source": "https://opencode.ai/docs/go/",
+    "checked": "2026-09-13",
+    "models": {
+      "grok-4.6": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/go/v1/responses"
+      },
+      "gpt-5.6-luna": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/go/v1/responses"
+      },
+      "glm-5.3-flash": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "glm-5.3": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "glm-5.2": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "glm-5.1": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "kimi-k3": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "kimi-k2.7-code": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "kimi-k2.6": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "longcat-2.0": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "deepseek-v4-pro": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "deepseek-v4-flash": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "deepseek-v4-flash-vision-exp": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "mimo-v2.5": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "mimo-v2.5-pro": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "minimax-m3": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/go/v1/messages"
+      },
+      "minimax-m2.7": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/go/v1/messages"
+      },
+      "minimax-m2.5": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/go/v1/messages"
+      },
+      "muse-spark-1.3-contributor": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/go/v1/responses"
+      },
+      "muse-spark-1.2-contributor": {
+        "api": "openai-responses",
+        "endpoint": "https://opencode.ai/zen/go/v1/responses"
+      },
+      "qwen3.8-max": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/go/v1/messages"
+      },
+      "qwen3.8-flash": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/go/v1/messages"
+      },
+      "qwen3.7-max": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/go/v1/messages"
+      },
+      "qwen3.7-plus": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/go/v1/messages"
+      },
+      "qwen3.6-plus": {
+        "api": "anthropic-messages",
+        "endpoint": "https://opencode.ai/zen/go/v1/messages"
+      },
+      "hy4-preview": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "hy3": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      },
+      "omen-alpha": {
+        "api": "openai-completions",
+        "endpoint": "https://opencode.ai/zen/go/v1/chat/completions"
+      }
+    }
+  }
+}

@@ -1,3 +1,4 @@
+import { PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from './native-provider-adapter-source.js';
 /**
  * cindy-bridge —— 写进 pi agentHome/extensions/ 的扩展源码(字符串常量)。
  *
@@ -3562,7 +3563,10 @@ function astraResponsesPayload(payload, model) {
   return out;
 }
 
+${PI_NATIVE_PROVIDER_ADAPTER_SOURCE}
+
 export default async function cindyBridge(pi: any) {
+  await registerCindyNativeProviderAdapters(pi);
   if (!currentPermissionState().reviewOnly) registerCindyQuestionTool(pi);
   pi.on('before_provider_request', (event, ctx) => astraResponsesPayload(event.payload, ctx.model));
   const mcpGateway = new CindyMcpGateway();

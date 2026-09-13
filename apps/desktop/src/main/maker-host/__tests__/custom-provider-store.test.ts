@@ -1330,19 +1330,19 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     ).toBe(false);
   });
 
-  it('rejects unsupported protocol/runtime combinations', () => {
+  it.each(['openai-chat', 'openai-responses', 'anthropic-messages'] as const)('accepts Claude portable protocol %s through its native or bridge path', wireProtocol => {
     expect(
       validateCustomProviderConfig({
         ...valid,
         runtimes: {
           'claude-code': {
             baseUrl: 'https://v.ai/chat',
-            wireProtocol: 'openai-chat',
+            wireProtocol,
             models: [{ id: 'm', name: 'M' }],
           },
         },
       }).ok,
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('update returns null when row absent', async () => {
@@ -1585,6 +1585,7 @@ describe('supplier metadata persistence', () => {
               contextWindow: 2000,
               supportsImageInput: false,
               discoveredMetadata: metadata,
+              discoveredCost: { input: 0.7, output: 1.4, cacheRead: 0 },
             },
           ],
         },
@@ -1598,6 +1599,7 @@ describe('supplier metadata persistence', () => {
       contextWindow: 2000,
       supportsImageInput: false,
       discoveredMetadata: metadata,
+              discoveredCost: { input: 0.7, output: 1.4, cacheRead: 0 },
     });
     const next = {
       ...saved!,
@@ -1620,5 +1622,12 @@ describe('supplier metadata persistence', () => {
       supportsImageInput: false,
       discoveredMetadata: { contextWindow: 3000 },
     });
+    await updateCustomProvider(valid.id, {
+      ...next, runtimes: { codex: { ...next.runtimes.codex, baseUrl: 'https://different.example/v1' } },
+    });
+    const moved = (await getCustomProvider(valid.id))?.runtimes.codex?.models[0];
+    expect(moved?.discoveredCost).toBeUndefined();
+    expect(moved?.contextWindow).toBe(2000);
+
   });
 });

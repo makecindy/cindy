@@ -2123,7 +2123,7 @@
           "machine-capable": "这台电脑适合跑本机模型",
           "subscription": "订阅账号"
         },
-        "groupApiKey": "API 与自托管 Proxy · 预设随目录更新",
+        "groupApiKey": "更多供应商",
         "groupCustom": "自定义",
         "metaOAuth": "订阅账号",
         "metaApiKey": "API key",
@@ -2149,8 +2149,8 @@
         "onlyAgentNote": "此供应商仅支持 {{agent}}",
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
-        "bridgedNote": "Cindy 桥接（Chat Completions）",
-        "docsLink": "查看接入文档",
+        "signIn": "登录",
+        "setupLink": {"apiKey": "获取 API Key", "account": "注册或登录", "setup": "设置帮助"},
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加，稍后在详情里刷新",
         "manualModelHint": "未发现可用模型，请填写此 Proxy 实际提供的模型 ID。",
@@ -2168,6 +2168,7 @@
         "cancel": "取消",
         "useApiKey": "API key 接入",
         "metaOAuthOrApi": "订阅账号 · API key",
+        "metaLoginOrApi": "账号登录 · API key",
         "builtinApiKey": {
           "subtitle": "用你自己的 API key 连接",
           "note": "此来源提供图像生成模型，不参与对话。API key 仅保存在本机（系统钥匙串加密），不会上传。"
@@ -2333,6 +2334,11 @@
       "localAccount": {
         "useClaude": "使用本机 Claude Code 账号",
         "unavailable": "未找到可用的本机登录，请先在对应应用中登录，或添加独立账号。"
+      },
+      "connection": {
+        "modelCount": "已配置 {{count}} 个模型",
+        "modelsAutomatic": "模型资料自动获取。单个模型的设置在模型列表中调整。",
+        "manualModel": "模型 ID（无法自动获取时填写）"
       }
     },
     "experimental": {

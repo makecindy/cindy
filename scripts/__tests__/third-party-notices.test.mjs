@@ -263,3 +263,22 @@ test("desktop resources include both open-source and restricted disclosures", ()
     ),
   );
 });
+
+test("all shipped desktop notices contain the complete pinned OpenCodex license", () => {
+  const upstream = JSON.parse(read("packages/model-compat/UPSTREAM.json"));
+  const license = read("packages/model-compat/LICENSE.opencodex").replace(/\r\n/g, "\n").trim();
+  for (const artifact of ["desktop-win", "desktop-macos", "desktop-linux"]) {
+    const notice = read(`docs/legal/notices/${artifact}.txt`);
+    assert.ok(notice.includes(license), `${artifact} includes the full MIT text`);
+    const sbom = JSON.parse(read(`docs/legal/notices/sbom/${artifact}.spdx.json`));
+    const component = sbom.packages.find(pkg => pkg.name === "OpenCodex compatibility sources (vendored)");
+    assert.ok(component, `${artifact} inventories OpenCodex`);
+    assert.equal(component.versionInfo, upstream.commit);
+    assert.equal(component.licenseDeclared, "MIT");
+  }
+  for (const file of ["apps/desktop/resources/THIRD-PARTY-NOTICES.txt", "docs/legal/notices/THIRD-PARTY-NOTICES.txt"]) {
+    const notice = read(file);
+    assert.ok(notice.includes(license), `${file} includes the full MIT text`);
+    assert.ok(notice.includes(`${upstream.repository}/tree/${upstream.commit}`));
+  }
+});

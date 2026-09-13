@@ -56,7 +56,7 @@ import {
   type CatalogXdMediaKind,
   type CatalogModel,
   type CustomProviderConfig,
-  type PiModelApi,
+  type PiModelApi as NativePiModelApi,
   type Provider,
   type ProviderWireProtocol,
 } from '@cindy/model-providers';
@@ -159,6 +159,9 @@ const discoveredMediaByProvider = new Map<
     videoModels?: NonNullable<Provider['videoModels']>;
   }
 >();
+/** Gateway supports only its portable HTTP APIs, not native cloud credential APIs. */
+type PiModelApi = Extract<NativePiModelApi, 'anthropic-messages' | 'openai-responses' | 'openai-completions' | 'google-generative-ai'>;
+
 /** 单 tab 能力覆盖块(shared/modelAccess ModelAccessAgentOverride 同形)。 */
 export interface XdGatewayAgentOverride {
   contextWindow?: number;
@@ -394,7 +397,7 @@ function resolveXdPiGatewayServerModelApi(
   const declared = piGatewayAuthorityCatalog
     ? resolveCatalogPiGatewayModelApi(piGatewayAuthorityCatalog, model.id)
     : undefined;
-  if (declared !== undefined) return declared;
+  if (declared !== undefined) return declared === null || isPiModelApi(declared) ? declared : null;
   // Explicit unknowns can keep an independently declared execution route, but that route
   // must never be presented as canonical. Missing metadata was already filled locally above.
   if ((base?.modelRegistry?.schemaVersion ?? 0) >= 3 || nativeApi === null) {
@@ -437,7 +440,7 @@ function resolveXdPiGatewayModelApi(model: XdGatewayModelInfo): PiModelApi | nul
   const catalogApi = resolveXdPiGatewayServerModelApi(model);
   if (catalogApi !== undefined) return catalogApi;
   const localApi = resolveBundledPiGatewayModelProfile(model.id)?.api;
-  if (localApi !== undefined) return localApi;
+  if (localApi !== undefined) return isPiModelApi(localApi) ? localApi : null;
   return resolveXdPiGatewayHintModelApi(model);
 }
 

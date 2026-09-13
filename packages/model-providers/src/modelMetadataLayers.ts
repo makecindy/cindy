@@ -21,6 +21,8 @@ export interface ModelMetadata {
   defaultEffort?: ModelEffort | null;
   supportsFastMode?: boolean;
   supportsImageInput?: boolean;
+  supportsToolCalls?: boolean;
+  reasoningRequired?: boolean;
 }
 export interface BaseModel {
   id: string;
@@ -42,6 +44,8 @@ export const MODEL_METADATA_FIELDS = [
   "defaultEffort",
   "supportsFastMode",
   "supportsImageInput",
+  "supportsToolCalls",
+  "reasoningRequired",
 ] as const;
 const efforts = new Set([
   "minimal",
@@ -375,6 +379,7 @@ export interface DiscoveredModel {
   id: string;
   name: string;
   contextWindow?: number;
+  discoveredCost?: import("./types.js").ModelCost;
   discoveredMetadata?: ModelMetadata;
 }
 export function mergeDiscoveredRuntimeModels(
@@ -396,13 +401,15 @@ export function mergeDiscoveredRuntimeModels(
         id: model.id,
         name: model.name,
         discoveredMetadata,
+        ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
         ...(hideNew ? { defaultEnabled: false } : {}),
       });
     else
       models[index] = {
         ...models[index],
         ...(!models[index].discoveredMetadata ? { nameExplicit: true } : {}),
-        discoveredMetadata,
+        discoveredMetadata: mergeModelMetadata(models[index].discoveredMetadata, discoveredMetadata),
+        ...(model.discoveredCost ? { discoveredCost: model.discoveredCost } : {}),
       };
   }
   return models;

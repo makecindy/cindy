@@ -39,7 +39,7 @@ export const PI_REASONING_EFFORTS = [
 export type PiReasoningEffort = (typeof PI_REASONING_EFFORTS)[number];
 
 /**
- * PI models.json understands these four portable inference protocols. The
+ * PI models.json understands these native inference APIs. The
  * provider-level wireProtocol remains the default for an endpoint; piApi is a
  * sparse per-model override for newly released models or protocol corrections.
  */
@@ -48,6 +48,10 @@ export const PI_MODEL_APIS = [
   "openai-responses",
   "openai-completions",
   "google-generative-ai",
+  "bedrock-converse-stream",
+  "azure-openai-responses",
+  "google-vertex",
+  "mistral-conversations",
 ] as const;
 export type PiModelApi = (typeof PI_MODEL_APIS)[number];
 
@@ -273,9 +277,12 @@ export interface ModelCost {
  * 跨 provider(如 gpt-5.5 同时由 openai 与 xd 提供)则必须元数据一致(见 catalog.ts 校验)。
  */
 export interface CatalogModel {
+  supportsToolCalls?: boolean;
+  reasoningRequired?: boolean;
   userModelConfig?: ProviderRuntimeModelConfig;
   catalogPresetId?: string;
   discoveredMetadata?: ModelMetadata;
+  discoveredCost?: ModelCost;
   nameExplicit?: boolean;
   /** Canonical model API from the accepted Registry; null explicitly means unverified. */
   nativeApi?: PiModelApi | null;
@@ -284,6 +291,8 @@ export interface CatalogModel {
   /** Server entitlement state. Paid-locked models remain present for UI but are never routable. */
   availability?: "available" | "requires_payment";
   /** Explicit Pi serializer; missing fields may use the matching native transport fallback. */
+  /** Upstream execution API, shared by Claude Code, Codex and Pi. */
+  api?: PiModelApi;
   piApi?: PiModelApi;
   /** 同一 provider/runtime 内该模型的上游覆盖；缺省使用 provider 级路由。 */
   route?: ProviderModelRouteConfig;
@@ -572,10 +581,13 @@ export interface ProviderRuntimeModelConfig extends Pick<
   "mode" | "modalities" | "officialDocs"
 > {
   discoveredMetadata?: ModelMetadata;
+  discoveredCost?: ModelCost;
   nameExplicit?: boolean;
   id: string;
   name: string;
   /** Per-model PI protocol override; provider wireProtocol remains the fallback. */
+  /** Upstream execution API, shared by Claude Code, Codex and Pi. */
+  api?: PiModelApi;
   piApi?: PiModelApi;
   /** 同一 runtime 内该模型的上游覆盖；缺省使用 runtime 级路由。 */
   route?: ProviderModelRouteConfig;

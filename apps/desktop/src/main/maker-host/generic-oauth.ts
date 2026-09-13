@@ -1,4 +1,5 @@
-import { pickModelMetadata, type DiscoveredModel } from '@cindy/model-providers';
+import { providerOAuthContract } from '@cindy/model-providers';
+import { parseModelsListResponse, isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
 /**
  * generic-oauth —— 目录 `auth.oauth` 描述符驱动的通用 OAuth Runner。
  *
@@ -127,6 +128,7 @@ interface TokenResponse {
   refresh_token?: string;
   expires_in?: number;
   scope?: string;
+  expires_at?: number;
 }
 
 function blobFromTokenResponse(t: TokenResponse, prev?: OAuthTokenBlob | null): OAuthTokenBlob {
@@ -134,7 +136,7 @@ function blobFromTokenResponse(t: TokenResponse, prev?: OAuthTokenBlob | null): 
   return {
     access_token: t.access_token,
     refresh_token: t.refresh_token ?? prev?.refresh_token,
-    expires_at: now + (t.expires_in ? t.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS),
+    expires_at: t.expires_at ?? (now + (t.expires_in ? t.expires_in * 1000 : DEFAULT_TOKEN_TTL_MS)),
     obtained_at: now,
     scope: t.scope ?? prev?.scope,
   };
@@ -238,18 +240,49 @@ function isExpiringSoon(b: OAuthTokenBlob): boolean {
 // ── 刷新（per-provider 单飞链，同 grok 的 _refreshChain 语义）──────────────────────
 const refreshChains = new Map<string, Promise<void>>();
 
+function miniMaxExpiresAt(value: unknown): number {
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n) || n <= 0) throw new Error('minimax_invalid_expiry');
+  return n > 1e12 ? n : n > 1e9 ? n * 1000 : io.now() + n * 1000;
+}
+
+function normalizeProviderToken(tok: TokenResponse, oauth: OAuthProviderDescriptor): TokenResponse {
+  if (providerOAuthContract(oauth) !== 'minimax') return tok;
+  return { ...tok, expires_at: miniMaxExpiresAt((tok as TokenResponse & { expired_in?: unknown }).expired_in) };
+}
+
+async function copilotToken(githubToken: string, signal: AbortSignal): Promise<TokenResponse> {
+  const response = await io.fetchImpl('https://api.github.com/copilot_internal/v2/token', {
+    headers: { accept: 'application/json', authorization: `Bearer ${githubToken}`,
+      'User-Agent': 'GitHubCopilotChat/0.35.0', 'Editor-Version': 'vscode/1.107.0',
+      'Editor-Plugin-Version': 'copilot-chat/0.35.0', 'Copilot-Integration-Id': 'vscode-chat' }, signal,
+  });
+  const body = await readJsonObject(response);
+  if (!response.ok || typeof body?.token !== 'string' || !body.token
+    || typeof body.expires_at !== 'number' || !Number.isFinite(body.expires_at)) {
+    throw new Error('copilot_token_exchange_failed');
+  }
+  return { access_token: body.token, refresh_token: githubToken, expires_at: body.expires_at * 1000 - 300_000 };
+}
+
 async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Promise<void> {
   const fresh = readBlob(providerId);
   if (fresh === null || !isExpiringSoon(fresh) || !fresh.refresh_token) return;
   const refreshToken = fresh.refresh_token;
   let res: Response;
   try {
+    if (providerOAuthContract(oauth) === 'copilot') {
+      const tok = await copilotToken(refreshToken, AbortSignal.timeout(REFRESH_FETCH_TIMEOUT_MS));
+      if (readBlob(providerId)?.refresh_token === refreshToken) writeBlob(providerId, blobFromTokenResponse(tok));
+      return;
+    }
+    const nous = providerOAuthContract(oauth) === 'nous';
     res = await io.fetchImpl(oauth.tokenUrl, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json', ...(nous ? { 'x-nous-refresh-token': refreshToken } : {}) },
       body: new URLSearchParams({
         grant_type: 'refresh_token',
-        refresh_token: refreshToken,
+        ...(nous ? {} : { refresh_token: refreshToken }),
         client_id: oauth.clientId,
       }).toString(),
       signal: AbortSignal.timeout(REFRESH_FETCH_TIMEOUT_MS),
@@ -267,7 +300,7 @@ async function doRefresh(providerId: string, oauth: OAuthProviderDescriptor): Pr
   }
   let tok: TokenResponse;
   try {
-    tok = (await res.json()) as TokenResponse;
+    tok = normalizeProviderToken((await res.json()) as TokenResponse, oauth);
   } catch {
     return;
   }
@@ -553,13 +586,21 @@ async function runDeviceCodeGrant(
   abort: AbortController,
   options?: GenericOAuthLoginOptions,
 ): Promise<TokenResponse> {
+  const minimax = providerOAuthContract(oauth) === 'minimax';
+  const verifier = minimax ? genVerifier() : '';
   const requestBody = new URLSearchParams(oauth.extraDeviceParams ?? {});
+  if (minimax) {
+    requestBody.set('response_type', 'code');
+    requestBody.set('code_challenge', genChallenge(verifier));
+    requestBody.set('code_challenge_method', 'S256');
+    requestBody.set('state', genState());
+  }
   // 标准字段永远以描述符为准；即使未来有未经过目录校验的调用方也不能被 extras 覆盖。
   requestBody.set('client_id', oauth.clientId);
-  requestBody.set('scope', oauth.scopes);
+  if (oauth.scopes) requestBody.set('scope', oauth.scopes);
   const authorizationResponse = await io.fetchImpl(oauth.deviceAuthorizationUrl, {
     method: 'POST',
-    headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
     body: requestBody.toString(),
     signal: AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]),
   });
@@ -569,13 +610,13 @@ async function runDeviceCodeGrant(
   }
 
   const deviceCode =
-    typeof authorization?.device_code === 'string' ? authorization.device_code : '';
+    typeof authorization?.device_code === 'string' ? authorization.device_code : minimax && typeof authorization?.user_code === 'string' ? authorization.user_code : '';
   const userCode = typeof authorization?.user_code === 'string' ? authorization.user_code : '';
   const verificationUrl =
     safeVerificationUrl(authorization?.verification_uri_complete) ??
     safeVerificationUrl(authorization?.verification_uri) ??
     safeVerificationUrl(authorization?.verification_url);
-  const expiresInSeconds = positiveNumber(authorization?.expires_in);
+  const expiresInSeconds = minimax ? (miniMaxExpiresAt(authorization?.expired_in) - io.now()) / 1000 : positiveNumber(authorization?.expires_in);
   if (!deviceCode || !userCode || !verificationUrl || !expiresInSeconds) {
     throw new Error('invalid_device_authorization_response');
   }
@@ -602,7 +643,7 @@ async function runDeviceCodeGrant(
   }
 
   let intervalMs = Math.min(
-    Math.max((positiveNumber(authorization?.interval) ?? 5) * 1000, 1_000),
+    Math.max(minimax ? (positiveNumber(authorization?.interval) ?? 2_000) : (positiveNumber(authorization?.interval) ?? 5) * 1000, minimax ? 2_000 : 1_000),
     60_000,
   );
   while (io.now() < expiresAt) {
@@ -611,10 +652,10 @@ async function runDeviceCodeGrant(
 
     const response = await io.fetchImpl(oauth.tokenUrl, {
       method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      headers: { 'content-type': 'application/x-www-form-urlencoded', accept: 'application/json' },
       body: new URLSearchParams({
-        grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
-        device_code: deviceCode,
+        grant_type: minimax ? 'urn:ietf:params:oauth:grant-type:user_code' : 'urn:ietf:params:oauth:grant-type:device_code',
+        ...(minimax ? { user_code: deviceCode, code_verifier: verifier } : { device_code: deviceCode }),
         client_id: oauth.clientId,
       }).toString(),
       signal: AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]),
@@ -628,6 +669,7 @@ async function runDeviceCodeGrant(
       return payload as unknown as TokenResponse;
     }
 
+    if (minimax && response.ok && payload?.status === 'pending') continue;
     const error = typeof payload?.error === 'string' ? payload.error : '';
     if (error === 'authorization_pending') continue;
     if (error === 'slow_down') {
@@ -665,7 +707,8 @@ export async function runGenericOAuthLogin(
   try {
     let tok: TokenResponse;
     if (oauth.flow === 'device-code') {
-      tok = await runDeviceCodeGrant(provider.id, oauth, abort, options);
+      tok = normalizeProviderToken(await runDeviceCodeGrant(provider.id, oauth, abort, options), oauth);
+      if (providerOAuthContract(oauth) === 'copilot') tok = await copilotToken(tok.access_token, AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]));
     } else {
       const verifier = genVerifier();
       const challenge = genChallenge(verifier);
@@ -674,14 +717,21 @@ export async function runGenericOAuthLogin(
       if (abort.signal.aborted) throw new Error('login_cancelled');
       const redirectUri = `http://127.0.0.1:${listener!.port}/callback`;
 
+      const openrouter = providerOAuthContract(oauth) === 'openrouter';
       const authUrl = new URL(oauth.authorizeUrl);
       for (const [k, v] of Object.entries(oauth.extraAuthParams ?? {})) {
         authUrl.searchParams.append(k, v);
       }
+      if (openrouter) {
+        const callback = new URL(redirectUri);
+        callback.searchParams.set('state', state);
+        authUrl.searchParams.set('callback_url', callback.toString());
+      } else {
       authUrl.searchParams.set('response_type', 'code');
       authUrl.searchParams.set('client_id', oauth.clientId);
       authUrl.searchParams.set('redirect_uri', redirectUri);
-      authUrl.searchParams.set('scope', oauth.scopes);
+      if (oauth.scopes) authUrl.searchParams.set('scope', oauth.scopes);
+      }
       authUrl.searchParams.set('code_challenge', challenge);
       authUrl.searchParams.set('code_challenge_method', 'S256');
       authUrl.searchParams.set('state', state);
@@ -711,22 +761,20 @@ export async function runGenericOAuthLogin(
 
       const response = await io.fetchImpl(oauth.tokenUrl, {
         method: 'POST',
-        headers: { 'content-type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          grant_type: 'authorization_code',
-          client_id: oauth.clientId,
-          code,
-          redirect_uri: redirectUri,
-          code_verifier: verifier,
-        }).toString(),
+        headers: { 'content-type': openrouter ? 'application/json' : 'application/x-www-form-urlencoded', accept: 'application/json' },
+        body: openrouter
+          ? JSON.stringify({ code, code_verifier: verifier, code_challenge_method: 'S256' })
+          : new URLSearchParams({ grant_type: 'authorization_code', client_id: oauth.clientId,
+              code, redirect_uri: redirectUri, code_verifier: verifier }).toString(),
         signal: AbortSignal.any([abort.signal, AbortSignal.timeout(TOKEN_EXCHANGE_TIMEOUT_MS)]),
       });
       if (!response.ok) {
         const body = await response.text().catch(() => '');
         throw new Error(`Token exchange failed (${response.status}): ${body.slice(0, 200)}`);
       }
-      tok = (await response.json()) as TokenResponse;
-      if (!tok.access_token) throw new Error('token 响应缺 access_token');
+      const payload = await response.json();
+      tok = openrouter ? { access_token: payload.key, expires_at: Number.MAX_SAFE_INTEGER } : payload as TokenResponse;
+      if (typeof tok.access_token !== 'string' || !tok.access_token.trim()) throw new Error('token 响应缺 access_token');
     }
 
     // 落盘前最后检查：已取消的登录绝不写凭证（同 grok）。
@@ -804,7 +852,7 @@ export async function discoverGenericOAuthModels(
   const token = readCachedGenericOAuthAccessToken(providerId, oauth);
   if (!token) return null;
   const headers: Record<string, string> = { authorization: `Bearer ${token}` };
-  if (agent === 'claude-code') headers['anthropic-version'] = '2023-06-01';
+  if (agent === 'claude-code' && !isOpenRouterModelsUrl(url)) headers['anthropic-version'] = '2023-06-01';
   let res: Response;
   try {
     res = await io.fetchImpl(url, {
@@ -821,109 +869,8 @@ export async function discoverGenericOAuthModels(
   } catch {
     return null;
   }
-  return parseModelsListResponse(json);
+  return parseModelsListResponse(json, url);
 }
 
-/**
- * 解析 OpenAI / Anthropic「列模型」响应的三种形状（`{data:[{id}]}` / `{models:[{id|slug}]}` /
- * 字符串数组）为去重后的 `{id, name, contextWindow?}[]`；无法识别返回 null。显示名优先取
- * 条目的 `display_name`（Anthropic 形状）/ `name` 字段，缺省回退 id。
- * contextWindow 尽力从常见字段读取（OpenRouter `context_length` / 通用 `context_window` /
- * Moonshot 等 `max_context_length` / Anthropic 兼容端点 `max_input_tokens`,与
- * model-discovery/anthropic.ts 认的字段对齐），无或非法时缺省——缺省的模型仍会
- * 回落保守默认(#386)。
- * 纯函数——OAuth 自动发现（本模块）与 API key 表单「获取模型列表」（provider-model-fetch）共用。
- */
-export function parseModelsListResponse(json: unknown): DiscoveredModel[] | null {
-  const list = (() => {
-    if (!json || typeof json !== 'object') return null;
-    const o = json as { data?: unknown; models?: unknown };
-    if (Array.isArray(o.data)) return o.data;
-    if (Array.isArray(o.models)) return o.models;
-    return null;
-  })();
-  if (!list) return null;
-  const out: DiscoveredModel[] = [];
-  const seen = new Set<string>();
-  for (const item of list) {
-    const id =
-      typeof item === 'string'
-        ? item
-        : item && typeof item === 'object'
-          ? typeof (item as { id?: unknown }).id === 'string'
-            ? (item as { id: string }).id
-            : typeof (item as { slug?: unknown }).slug === 'string'
-              ? (item as { slug: string }).slug
-              : null
-          : null;
-    if (!id || seen.has(id)) continue;
-    seen.add(id);
-    const rec =
-      item && typeof item === 'object'
-        ? (item as {
-            display_name?: unknown;
-            name?: unknown;
-            context_length?: unknown;
-            context_window?: unknown;
-            max_context_length?: unknown;
-            max_input_tokens?: unknown;
-          })
-        : null;
-    const name =
-      rec && typeof rec.display_name === 'string' && rec.display_name.length > 0
-        ? rec.display_name
-        : rec && typeof rec.name === 'string' && rec.name.length > 0
-          ? rec.name
-          : id;
-    const rawWindow = rec
-      ? [rec.context_length, rec.context_window, rec.max_context_length, rec.max_input_tokens].find(
-          // Math.floor(v) > 0 而非 v > 0:0 < v < 1(如 context_length: 0.5)会通过
-          // v > 0 但取整成 contextWindow: 0——按取整后的值校验才不会漏这个区间
-          // (review P2)。Number.isSafeInteger(Math.floor(v)) 拒绝超出安全整数范围的
-          // 异常值(如 context_length: 1e20)——这类值会通过取整后为正的校验,但落盘后
-          // Main 的正数校验反而会因为超界而拒绝整份供应商配置,内置 OAuth 发现分支则会
-          // 把这个失真值当真实窗口注入目录(review P2)。
-          (v) =>
-            typeof v === 'number' &&
-            Number.isFinite(v) &&
-            Math.floor(v) > 0 &&
-            Number.isSafeInteger(Math.floor(v)),
-        )
-      : undefined;
-    const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {};
-    const architecture = record.architecture as { input_modalities?: unknown } | undefined;
-    const reasoning = record.reasoning as
-      { supportedEfforts?: unknown; defaultEffort?: unknown } | undefined;
-    const rawDefault =
-      reasoning?.defaultEffort !== undefined ? reasoning.defaultEffort : record.default_effort;
-    const discoveredMetadata = pickModelMetadata({
-      ...([rec?.display_name, rec?.name].some(
-        (value) => typeof value === 'string' && value.trim().length > 0,
-      )
-        ? { name }
-        : {}),
-      mode: record.mode,
-      modalities: record.modalities,
-      officialDocs: record.officialDocs,
-      description: record.description,
-      group: record.group,
-      contextWindow: typeof rawWindow === 'number' ? Math.floor(rawWindow) : undefined,
-      maxOutputTokens: record.max_output_tokens ?? record.maxOutputTokens,
-      efforts: reasoning?.supportedEfforts ?? record.supported_efforts,
-      defaultEffort: rawDefault === 'none' ? null : rawDefault,
-      supportsFastMode: record.supports_fast_mode ?? record.supportsServiceTier,
-      supportsImageInput:
-        record.supports_image_input ??
-        (Array.isArray(architecture?.input_modalities)
-          ? architecture.input_modalities.includes('image')
-          : undefined),
-    });
-    out.push({
-      id,
-      discoveredMetadata,
-      name,
-      ...(typeof rawWindow === 'number' ? { contextWindow: Math.floor(rawWindow) } : {}),
-    });
-  }
-  return out;
-}
+
+export { parseModelsListResponse } from "@cindy/model-providers";

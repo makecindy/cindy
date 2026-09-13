@@ -1,19 +1,8 @@
-import { classifyModel, isChatEligible, isAgentSelectableModel } from '@cindy/model-providers';
-import { CATEGORY_LABEL_KEY } from '@/components/new-chat/sourceSwitch';
+import { classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
 /**
- * CustomProviderDialog —— 自定义供应商「新建 / 编辑」表单弹窗（按 .pen pQrpu/Fxstc 还原）。
- *
- * 结构：顶部「显示名称」(供应商身份,跨 runtime 共享) + Runtime 分段 Tab(Claude Code / Codex)。
- * **每个 Tab 是独立配置**：基础 URL / API 密钥 / 模型 / 请求头 都属于当前 Tab 的那个 runtime。
- * 只配需要的那个,也可两个都配(该来源同时供两端)。至少配一个 Tab。
- *
- * 「提供商 ID」内部句柄由显示名自动 slug 派生 + 去重,对用户隐藏(密钥名/文件名不能含 . 或 /)。
- * 配置经 maker IPC 入 localDb；密钥按 runtime 经 safeStorage 存(见 lib/customProviders)。
- * 编辑态回填已存密钥(默认遮罩,eye 可显形核对)、留空 = 不改；id 不可改。颜色全走主题 token。
- *
- * 本弹窗的输入统一传 `surface="ivory"`：面板是白色(`--surface-elevated`),ivory 底给出 fill
- * 抬升,这是收敛进 SettingsTextInput 之前就有的底色,原样保留。共享组件的默认底色是
- * DESIGN.md §4 规定的 `--surface-elevated`(压在 ivory settings 卡上的输入必须用它)。
+ * Connection credentials and advanced routing only. Model capabilities are imported into the
+ * shared catalog and edited through standard model settings. Stored per-runtime credentials,
+ * OAuth definitions, explicit routes and user overrides remain unchanged when saving.
  */
 
 import * as Dialog from '@radix-ui/react-dialog';
@@ -46,13 +35,7 @@ import { Button } from '@/components/ui/button';
 import { FormField } from '@/components/ui/form-field';
 import { Tip } from '@/components/ui/tooltip';
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
+
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { PiMark } from '@/components/icons/PiMark';
@@ -66,11 +49,6 @@ import {
   customProviderWireProtocolForSave,
   piCatalogProviderIdAfterRouteEdit,
   readCustomProviderKey,
-  replaceCustomProviderModelId,
-  setCustomProviderModelReasoning,
-  setCustomProviderModelReasoningEffort,
-  setCustomProviderModelPiApi,
-  setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
@@ -110,16 +88,13 @@ import {
 } from '@/lib/customProviderRuntimeFill';
 
 import {
-  formatContextWindow,
   isProviderRequestPath,
-  PI_REASONING_EFFORTS,
   presetDisplayName,
   sortPresetsForRegion,
 } from '@cindy/model-providers';
 import type {
   AgentKind,
   CustomProviderConfig,
-  PiModelApi,
   ProviderPreset,
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
@@ -181,14 +156,12 @@ function defaultWireFor(agent: DialogAgentKind): ProviderWireProtocol {
   return 'openai-responses';
 }
 
-interface CustomProviderDialogProps {
+interface ProviderConnectionDialogProps {
   initial?: CustomProviderConfig;
   /** 已占用的全部 provider id（内置 anthropic/openai/xd + 全部自定义）；新建时自动生成 id 时避让，防撞内置保留 id。 */
   existingIds?: string[];
   /** Stable fallback for transitions whose immediate opener unmounts before this dialog mounts. */
   returnFocusRef?: RefObject<HTMLElement | null>;
-  /** Settings deep link target: open the matching runtime and focus its context-window field. */
-  focusModelId?: string;
   focusAgent?: AgentKind;
   onSaved: () => void;
   onClose: () => void;
@@ -210,7 +183,6 @@ interface ModelPickerState {
 type DialogChildLayer =
   | { kind: 'preset-menu' }
   | { kind: 'model-picker'; value: ModelPickerState }
-  | { kind: 'model-protocol' | 'model-type'; agent: DialogAgentKind; index: number }
   | null;
 interface HeaderRow {
   name: string;
@@ -315,30 +287,6 @@ function FieldLabel({ children }: { children: React.ReactNode }) {
   );
 }
 
-/** 上下文窗口文本是否可提交:空 = 清除窗口;非空须整体合法(分组分隔符 + BigInt 上界)。 */
-function isCommittableWindowText(text: string): boolean {
-  const trimmed = text.trim();
-  if (trimmed === '') return true;
-  if (!/^[0-9]+(?:[,_ ][0-9]+)*$/.test(trimmed)) return false;
-  const parsed = BigInt(trimmed.replace(/[,_ ]/g, ''));
-  return parsed > 0n && parsed <= BigInt(Number.MAX_SAFE_INTEGER);
-}
-
-/** Compact context-window label shown inside the existing token-count input. */
-function compactContextWindowLabel(
-  draft: string | undefined,
-  contextWindow?: number,
-): string | null {
-  if (draft !== undefined) {
-    if (!isCommittableWindowText(draft) || !draft.trim()) return null;
-    const value = Number(BigInt(draft.trim().replace(/[,_ ]/g, '')));
-    return Number.isSafeInteger(value) && value > 0 ? formatContextWindow(value) : null;
-  }
-  return contextWindow != null && Number.isSafeInteger(contextWindow) && contextWindow > 0
-    ? formatContextWindow(contextWindow)
-    : null;
-}
-
 /**
  * 预设模板下拉——统一的 Popover 菜单(与外观设置 FamilyDropdown 同款样式)。
  * 不用原生 <select>:其展开菜单由系统绘制,不吃主题 token,视觉与应用内其它下拉不一致。
@@ -441,130 +389,17 @@ function PresetDropdown({
   );
 }
 
-const PI_MODEL_PROTOCOL_INHERIT = 'inherit';
-
-const PI_MODEL_PROTOCOL_OPTIONS: readonly {
-  value: PiModelApi | typeof PI_MODEL_PROTOCOL_INHERIT;
-  labelKey: string;
-}[] = [
-  { value: PI_MODEL_PROTOCOL_INHERIT, labelKey: 'settings.providers.custom.modelProtocol.inherit' },
-  { value: 'anthropic-messages', labelKey: 'settings.providers.custom.modelProtocol.messages' },
-  { value: 'openai-completions', labelKey: 'settings.providers.custom.modelProtocol.chat' },
-  { value: 'openai-responses', labelKey: 'settings.providers.custom.modelProtocol.responses' },
-  { value: 'google-generative-ai', labelKey: 'settings.providers.custom.modelProtocol.google' },
-];
-
-export function PiModelProtocolDropdown({
-  modelName,
-  value,
-  open,
-  onOpenChange,
-  onChange,
-}: {
-  modelName: string;
-  value: PiModelApi | undefined;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onChange: (value: PiModelApi | undefined) => void;
-}) {
-  const { t } = useTranslation();
-  const selectedValue = value ?? PI_MODEL_PROTOCOL_INHERIT;
-  const selected =
-    PI_MODEL_PROTOCOL_OPTIONS.find((option) => option.value === selectedValue) ??
-    PI_MODEL_PROTOCOL_OPTIONS[0];
-  const label = t('settings.providers.custom.modelProtocol.ariaLabel', {
-    model: modelName || t('settings.providers.custom.fields.modelIdPlaceholder'),
-  });
-  return (
-    <DropdownMenu open={open} onOpenChange={onOpenChange}>
-      <DropdownMenuTrigger asChild>
-        <button
-          type="button"
-          aria-label={label}
-          className={cn(
-            'flex h-9 w-44 items-center justify-between rounded-full border px-3 text-12 outline-none transition-colors',
-            'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] text-[var(--settings-input-text)]',
-            'focus-visible:border-[var(--settings-input-border-focus)] focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-          )}
-        >
-          <span className="truncate">{t(selected.labelKey)}</span>
-          <ChevronDown size={14} className="shrink-0 text-[var(--settings-eye-icon)]" />
-        </button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent
-        side="bottom"
-        align="start"
-        sideOffset={6}
-        collisionPadding={8}
-        onEscapeKeyDown={(event) => {
-          if (event.isComposing || event.keyCode === 229) event.preventDefault();
-        }}
-        className={cn(
-          'z-[10001] w-max min-w-[var(--radix-dropdown-menu-trigger-width)] max-w-[calc(100vw-16px)] rounded-xl p-2',
-          'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)] shadow-[var(--shadow-menu)]',
-        )}
-      >
-        <DropdownMenuRadioGroup
-          className="flex flex-col gap-[2px]"
-          value={selectedValue}
-          onValueChange={(nextValue) =>
-            onChange(
-              nextValue === PI_MODEL_PROTOCOL_INHERIT ? undefined : (nextValue as PiModelApi),
-            )
-          }
-          aria-label={label}
-        >
-          {PI_MODEL_PROTOCOL_OPTIONS.map((option) => {
-            return (
-              <DropdownMenuRadioItem
-                key={option.value}
-                value={option.value}
-                className={cn(
-                  'rounded-[8px] py-2 pl-8 pr-3 text-left text-12 font-medium',
-                  'text-[var(--settings-input-text)] focus:bg-[var(--cmd-palette-item-hover)]',
-                )}
-              >
-                <span className="truncate">{t(option.labelKey)}</span>
-              </DropdownMenuRadioItem>
-            );
-          })}
-        </DropdownMenuRadioGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
-  );
-}
-
-// ── 主组件 ─────────────────────────────────────────────────────────────────
-
-export function CustomProviderDialog({
+export function ProviderConnectionDialog({
   initial,
   existingIds,
   returnFocusRef,
-  focusModelId,
   focusAgent,
   onSaved,
   onClose,
-}: CustomProviderDialogProps) {
+}: ProviderConnectionDialogProps) {
   const { t, i18n } = useTranslation();
   const editing = !!initial;
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
-  const focusedAgent = (() => {
-    if (!initial || !focusModelId) return null;
-    if (
-      focusAgent &&
-      VISIBLE_AGENTS.includes(focusAgent as DialogAgentKind) &&
-      initial.runtimes[focusAgent as DialogAgentKind]?.models.some(
-        (model) => model.id === focusModelId,
-      )
-    ) {
-      return focusAgent as DialogAgentKind;
-    }
-    return (
-      VISIBLE_AGENTS.find((agent) =>
-        initial.runtimes[agent]?.models.some((model) => model.id === focusModelId),
-      ) ?? null
-    );
-  })();
 
   const formId = useId();
   const fieldId = (key: string) => `${formId}-${key}`;
@@ -595,10 +430,11 @@ export function CustomProviderDialog({
     input?.scrollIntoView?.({ block: 'nearest' });
   }, [fieldError]);
   const [name, setName] = useState(initial?.name ?? '');
+  const [manualModel, setManualModel] = useState('');
   const [rt, setRt] = useState<Record<DialogAgentKind, RuntimeFields>>(() => initRuntimes(initial));
   const [activeTab, setActiveTab] = useState<DialogAgentKind>(
     () =>
-      focusedAgent ??
+      (focusAgent && VISIBLE_AGENTS.includes(focusAgent as DialogAgentKind) ? focusAgent as DialogAgentKind : null) ??
       ((initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || 'claude-code'),
   );
   const [hasKey, setHasKey] = useState<Record<DialogAgentKind, boolean>>({
@@ -635,16 +471,11 @@ export function CustomProviderDialog({
     scopes: initialOAuth?.scopes ?? '',
   });
   // OAuth 模式下模型 / 请求头收进默认折叠的「高级配置」——模型授权后自动发现,普通用户无需碰。
-  const [showAdvanced, setShowAdvanced] = useState(Boolean(focusModelId && initialOAuth));
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [showImageGenerationAdvanced, setShowImageGenerationAdvanced] = useState(false);
   const [imageGenerationHelpPinned, setImageGenerationHelpPinned] = useState(false);
   const [imageGenerationHelpHovered, setImageGenerationHelpHovered] = useState(false);
   const [imageGenerationHelpFocused, setImageGenerationHelpFocused] = useState(false);
-  // 上下文窗口输入的行级草稿:受控输入若只回显已提交值,逐字符键入 `1,` 这类
-  // 合法中间态会被整体校验拒绝后回滚,声明支持的分组格式只能粘贴、无法键入
-  // (review P1)。草稿承载显示文本;合法完整值仍即时提交,失焦只清可提交
-  // 草稿。key = `agent:行号`;删行时只重映射该 runtime 的行号,别行草稿保留。
-  const [windowDrafts, setWindowDrafts] = useState<Record<string, string>>({});
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
@@ -686,7 +517,6 @@ export function CustomProviderDialog({
   const scrimRef = useRef<HTMLDivElement>(null);
   const dialogPanelRef = useRef<HTMLDivElement>(null);
   const saveButtonRef = useRef<HTMLButtonElement>(null);
-  const focusedContextWindowRef = useRef<HTMLInputElement>(null);
   // 原生 window listener 的生命周期不跟着每次 render 重绑；layout effect 只把
   // 已提交的层状态写入 ref，既避开 passive effect 延迟，也不暴露被放弃的并发 render。
   const childLayerRef = useRef(childLayer);
@@ -696,16 +526,7 @@ export function CustomProviderDialog({
   const onCloseRef = useRef(onClose);
   const showImageGenerationHelp =
     imageGenerationHelpPinned || imageGenerationHelpHovered || imageGenerationHelpFocused;
-  useLayoutEffect(() => {
-    if (!focusModelId || !focusedAgent || activeTab !== focusedAgent) return;
-    if (authMode === 'oauth' && !showAdvanced) return;
-    const input = focusedContextWindowRef.current;
-    if (!input) return;
-    input.focus();
-    if (typeof input.scrollIntoView === 'function') {
-      input.scrollIntoView({ block: 'center' });
-    }
-  }, [activeTab, authMode, focusModelId, focusedAgent, showAdvanced]);
+
   const cancelImageGenerationHelpPointerLeave = useCallback(() => {
     if (imageGenerationHelpPointerLeaveTimerRef.current === null) return;
     window.clearTimeout(imageGenerationHelpPointerLeaveTimerRef.current);
@@ -825,9 +646,6 @@ export function CustomProviderDialog({
         dismissImageGenerationHelp(true);
         return;
       }
-      // 单选协议菜单由 Radix 自己完成键盘关闭和焦点归还；这里只保留表单层级
-      // 记录，避免 window capture 抢先吞掉它的 Escape。
-      if (childLayerRef.current?.kind === 'model-protocol' || childLayerRef.current?.kind === 'model-type') return;
       // 在 Radix 的 document capture 之前由唯一 owner 结算；否则菜单的 80ms
       // 退场层仍可能 preventDefault，吞掉刚打开的模型选择器的 Escape。
       event.preventDefault();
@@ -863,7 +681,6 @@ export function CustomProviderDialog({
         : null;
     const frame = requestAnimationFrame(() => {
       (
-        focusedContextWindowRef.current ??
         dialogPanelRef.current?.querySelector<HTMLInputElement>('input')
       )?.focus();
     });
@@ -1040,6 +857,7 @@ export function CustomProviderDialog({
                   ...(m.mode ? { mode: m.mode } : {}),
                   ...(m.modalities ? { modalities: { input: [...m.modalities.input], output: [...m.modalities.output] } } : {}),
                   ...(m.officialDocs ? { officialDocs: m.officialDocs } : {}),
+                  ...(m.api ? { api: m.api } : {}),
                   ...(m.piApi ? { piApi: m.piApi } : {}),
                   ...(m.route ? { route: m.route } : {}),
                 }))
@@ -1061,7 +879,6 @@ export function CustomProviderDialog({
       // 全部失效——不清空的话陈旧草稿(如 -5)会挂在无关的新行、或挂在被预设清空
       // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
       // 卡死报错却找不到对应输入框(review P1)。
-      setWindowDrafts({});
       const first = configuredPresetAgents(p)[0];
       if (first) setActiveTab(first);
       // 预设整体替换名称/鉴权/全部 runtime:任何既有字段错误的指向(字段值、
@@ -1307,19 +1124,6 @@ export function CustomProviderDialog({
       }
       return next;
     });
-    const modelFilledAgents = changedTargets
-      .filter((target) => runtimeFill.selected[target.agent]?.includes('models'))
-      .map((target) => target.agent);
-    if (modelFilledAgents.length > 0) {
-      const modelFilled = new Set(modelFilledAgents);
-      setWindowDrafts((drafts) =>
-        Object.fromEntries(
-          Object.entries(drafts).filter(
-            ([key]) => !modelFilled.has(key.split(':')[0] as DialogAgentKind),
-          ),
-        ),
-      );
-    }
     setTest((prev) => {
       const next = { ...prev };
       for (const target of changedTargets) next[target.agent] = IDLE_TEST;
@@ -1555,8 +1359,10 @@ export function CustomProviderDialog({
             modalities: m.modalities,
             officialDocs: m.officialDocs,
             discoveredMetadata: m.discoveredMetadata,
+          discoveredCost: m.discoveredCost,
             nameExplicit: m.nameExplicit,
-            ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+            ...(m.api ? { api: m.api } : {}),
+          ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
             ...(m.route ? { route: { ...m.route } } : {}),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
@@ -1590,11 +1396,14 @@ export function CustomProviderDialog({
             return {
               id: m.id,
               name: cur?.name || m.name,
-              discoveredMetadata: m.discoveredMetadata ?? { contextWindow: m.contextWindow },
+              discoveredMetadata: mergeModelMetadata(cur?.discoveredMetadata,
+                m.discoveredMetadata ?? { contextWindow: m.contextWindow }),
+              discoveredCost: m.discoveredCost,
               mode: cur?.mode,
               modalities: cur?.modalities,
               officialDocs: cur?.officialDocs,
               nameExplicit: cur ? (cur.nameExplicit ?? !cur.discoveredMetadata) : undefined,
+              ...(cur?.api ? { api: cur.api } : {}),
               ...(agent === 'pi' && cur?.piApi ? { piApi: cur.piApi } : {}),
               ...(cur?.route ? { route: { ...cur.route } } : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
@@ -1669,6 +1478,7 @@ export function CustomProviderDialog({
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
       const reasoning = latest ? latest.reasoning : m.reasoning;
       const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
+      const api = latest ? latest.api : m.api;
       const piApi = latest ? latest.piApi : m.piApi;
       const reasoningDefaultEffort = latest
         ? latest.reasoningDefaultEffort
@@ -1680,7 +1490,9 @@ export function CustomProviderDialog({
         modalities: latest?.modalities ?? m.modalities,
         officialDocs: latest?.officialDocs ?? m.officialDocs,
         discoveredMetadata: m.discoveredMetadata ?? latest?.discoveredMetadata,
+        discoveredCost: m.discoveredCost ?? latest?.discoveredCost,
         nameExplicit: latest?.nameExplicit ?? m.nameExplicit,
+        ...(api ? { api } : {}),
         ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
         ...((latest?.route ?? m.route) ? { route: { ...(latest?.route ?? m.route)! } } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
@@ -1705,7 +1517,9 @@ export function CustomProviderDialog({
           modalities: m.modalities,
           officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
+          discoveredCost: m.discoveredCost,
           nameExplicit: m.nameExplicit,
+          ...(m.api ? { api: m.api } : {}),
           ...(picker.agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.route ? { route: { ...m.route } } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
@@ -1726,43 +1540,6 @@ export function CustomProviderDialog({
       }
     }
     patch(picker.agent, (x) => ({ ...x, models: merged }));
-    const oldIndexToId = new Map(previousModels.map((m, i) => [i, m.id.trim()]));
-    const newIndexById = new Map<string, number>();
-    merged.forEach((m, i) => {
-      if (!newIndexById.has(m.id)) newIndexById.set(m.id, i);
-    });
-    // 合并逻辑(上面的 latestById / 第二个 for 循环)对重复 id 都是「先遇到的旧行
-    // 赢」——按 previousModels 的原始顺序扫到的第一条。存活进 merged 的就是那
-    // 一条,不是随便哪条同 id 旧行。草稿重映射必须认准同一条,否则会把已被丢弃的
-    // 重复行的草稿错配到存活行上(review P1 ×2)。
-    const survivingOldIndexById = new Map<string, number>();
-    previousModels.forEach((m, i) => {
-      const id = m.id.trim();
-      if (id && !survivingOldIndexById.has(id)) survivingOldIndexById.set(id, i);
-    });
-    setWindowDrafts((drafts) => {
-      const next: Record<string, string> = {};
-      for (const [key, text] of Object.entries(drafts)) {
-        const sep = key.lastIndexOf(':');
-        const agent = key.slice(0, sep);
-        if (agent !== picker.agent) {
-          next[key] = text;
-          continue;
-        }
-        // 仍保留的行(id 未变)把草稿迁到新行号;被 picker 移出的行(取消勾选)
-        // 丢弃草稿——不合法草稿只应因它对应的行真的消失才清除。
-        const oldIdx = Number(key.slice(sep + 1));
-        const id = oldIndexToId.get(oldIdx);
-        // 空 id(未填完的手填行)没有稳定身份可追踪,直接丢弃;非空 id 只有
-        // 「合并时实际存活的那条旧行」的草稿才允许迁移——同 id 的其它旧行本就
-        // 在合并时被丢弃,它们的草稿也该丢弃,不能顶替到存活行上。
-        if (!id || survivingOldIndexById.get(id) !== oldIdx) continue;
-        const newIdx = newIndexById.get(id);
-        if (newIdx === undefined) continue;
-        next[`${agent}:${newIdx}`] = text;
-      }
-      return next;
-    });
     setChildLayer((current) =>
       current?.kind === 'model-picker' && current.value === picker ? null : current,
     );
@@ -1806,35 +1583,6 @@ export function CustomProviderDialog({
         return;
       }
     }
-    // 上下文窗口草稿必须已可提交:输入框还挂着 `1,` / `-5` 这类未完成/非法文本时
-    // 点保存,已提交值(或隐式 200K 默认)与用户可见文本不一致——静默存旧值等于
-    // 改掉用户显式输入(review P1 ×2)。定位到首个问题 tab 并报错拦下。
-    for (const [draftKey, draftText] of Object.entries(windowDrafts)) {
-      if (isCommittableWindowText(draftText)) continue;
-      const sep = draftKey.lastIndexOf(':');
-      const draftAgent = draftKey.slice(0, sep) as AgentKind;
-      if (!VISIBLE_AGENTS.includes(draftAgent)) continue;
-      // 该 runtime 未配置 baseUrl、或该行 id/name 为空:两者都会在下面序列化时
-      // 被丢弃,不会写进最终配置,草稿再非法也不该挡住一个原本有效的保存
-      // (review P1)。
-      const rf = rt[draftAgent];
-      if (!rf.baseUrl.trim()) continue;
-      const row = rf.models[Number(draftKey.slice(sep + 1))];
-      if (!row || !row.id.trim() || !row.name.trim()) continue;
-      if (!isAgentSelectableModel(
-        { id: row.id, group: 'custom', mode: row.mode ?? row.discoveredMetadata?.mode },
-        { userProvider: true },
-      )) continue;
-      setActiveTab(draftAgent);
-      // OAuth 鉴权模式下模型列表(含窗口输入)折在「高级」里;不展开的话用户看不到
-      // 需要修的这个输入框,报错后无从下手,只能瞎猜着点开(review P1)。
-      if (authMode === 'oauth' && !showAdvanced) setShowAdvanced(true);
-      reportFieldError(
-        `${draftAgent}:model:${rowId(row)}:context`,
-        t('settings.providers.custom.errors.contextWindowInvalid'),
-      );
-      return;
-    }
     const runtimes: CustomProviderConfig['runtimes'] = {};
     const keys: RuntimeKeys = {};
     for (const a of VISIBLE_AGENTS) {
@@ -1865,7 +1613,9 @@ export function CustomProviderDialog({
           modalities: m.modalities,
           officialDocs: m.officialDocs,
           discoveredMetadata: m.discoveredMetadata,
+          discoveredCost: m.discoveredCost,
           nameExplicit: m.nameExplicit,
+          ...(m.api ? { api: m.api } : {}),
           ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.route ? { route: { ...m.route } } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
@@ -1897,9 +1647,7 @@ export function CustomProviderDialog({
       if (models.length === 0 && authMode !== 'oauth') {
         setActiveTab(a);
         reportFieldError(
-          rf.models.length
-            ? `${a}:model:${rowId(rf.models[0])}:${rf.models[0].id.trim() ? 'name' : 'id'}`
-            : `${a}:add-model`,
+          `${a}:manualModel`,
           t('settings.providers.custom.errors.modelRequired'),
         );
         return;
@@ -2095,7 +1843,6 @@ export function CustomProviderDialog({
     initial,
     existingIds,
     onSaved,
-    windowDrafts,
     keyHydrationFailed,
     showAdvanced,
     savedBaselineFor,
@@ -2512,7 +2259,7 @@ export function CustomProviderDialog({
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
-            {(activeTab === 'codex' || activeTab === 'pi') && (
+            {(activeTab === 'claude-code' || activeTab === 'codex' || activeTab === 'pi') && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
                 <div className="flex flex-wrap gap-1.5">
@@ -2611,7 +2358,7 @@ export function CustomProviderDialog({
                       value={f.requestPath}
                       onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
                       placeholder={
-                        activeTab === 'claude-code' || f.wireProtocol === 'anthropic-messages'
+                        f.wireProtocol === 'anthropic-messages'
                           ? '/v1/messages'
                           : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
                       }
@@ -2688,436 +2435,22 @@ export function CustomProviderDialog({
 
             {(authMode !== 'oauth' || showAdvanced) && (
               <>
-                {/* 模型 */}
-                <div className="flex flex-col gap-2">
-                  <FieldLabel>{t('settings.providers.custom.fields.models')}</FieldLabel>
-                  {f.models.map((m, i) => (
-                    <div
-                      key={`${activeTab}:${rowId(m)}`}
-                      className="flex flex-wrap items-start gap-2"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <FormField
-                          id={fieldId(`${activeTab}:model:${rowId(m)}:id`)}
-                          label={`${t('settings.providers.custom.fields.modelIdPlaceholder')} ${i + 1}`}
-                          error={errorFor(`${activeTab}:model:${rowId(m)}:id`)}
-                          hideLabel
-                          reserveFeedback
-                        >
-                          {(control) => (
-                            <SettingsTextInput
-                              {...control}
-                              surface="ivory"
-                              value={m.id}
-                              onChange={(v) =>
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: x.models.map((y, j) =>
-                                    j === i ? replaceCustomProviderModelId(y, v) : y,
-                                  ),
-                                }))
-                              }
-                              placeholder={t('settings.providers.custom.fields.modelIdPlaceholder')}
-                            />
-                          )}
-                        </FormField>
-                      </div>
-                      <div className="min-w-0 flex-1">
-                        <FormField
-                          id={fieldId(`${activeTab}:model:${rowId(m)}:name`)}
-                          label={`${t('settings.providers.custom.fields.modelNamePlaceholder')} ${i + 1}`}
-                          error={errorFor(`${activeTab}:model:${rowId(m)}:name`)}
-                          reserveFeedback
-                          hideLabel
-                        >
-                          {(control) => (
-                            <SettingsTextInput
-                              {...control}
-                              surface="ivory"
-                              value={m.name}
-                              // nameExplicit: main #4108 的模型资料优先级语义——用户显式
-                              // 改名后不被动态发现覆盖;与 DS-6 的 FormField 结构合并保留。
-                              onChange={(v) =>
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: x.models.map((y, j) =>
-                                    j === i ? { ...y, name: v, nameExplicit: true } : y,
-                                  ),
-                                }))
-                              }
-                              placeholder={t(
-                                'settings.providers.custom.fields.modelNamePlaceholder',
-                              )}
-                            />
-                          )}
-                        </FormField>
-                      </div>
-                      <DropdownMenu
-                        open={childLayer?.kind === 'model-type' && childLayer.agent === activeTab && childLayer.index === i}
-                        onOpenChange={(open) => setChildLayer(open ? { kind: 'model-type', agent: activeTab, index: i } : null)}
-                      >
-                        <DropdownMenuTrigger asChild>
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="lg"
-                            aria-label={t('settings.providers.custom.fields.modelType')}
-                          >
-                            {m.mode === undefined
-                              ? t('settings.providers.custom.modelProtocol.inherit')
-                              : isChatEligible({ id: m.id, mode: m.mode })
-                                ? t('settings.providers.models.kindFilter.chat')
-                                : t(CATEGORY_LABEL_KEY[classifyModel({ id: m.id, mode: m.mode })])}
-                            <ChevronDown className="size-3.5" />
-                          </Button>
-                        </DropdownMenuTrigger>
-                        <DropdownMenuContent className="z-[10001]">
-                          <DropdownMenuRadioGroup
-                            value={m.mode ?? 'inherit'}
-                            onValueChange={(value) =>
-                              patch(activeTab, (x) => ({
-                                ...x,
-                                models: x.models.map((y, j) =>
-                                  j === i
-                                    ? { ...y, mode: value === 'inherit' ? undefined : value }
-                                    : y,
-                                ),
-                              }))
-                            }
-                          >
-                            <DropdownMenuRadioItem value="inherit">
-                              {t('settings.providers.custom.modelProtocol.inherit')}
-                            </DropdownMenuRadioItem>
-                            <DropdownMenuRadioItem value="chat">
-                              {t('settings.providers.models.kindFilter.chat')}
-                            </DropdownMenuRadioItem>
-                            {(
-                              [
-                                ['image_generation', 'image'],
-                                ['video_generation', 'video'],
-                                ['audio_generation', 'audio'],
-                                ['audio_speech', 'tts'],
-                                ['audio_transcription', 'stt'],
-                                ['realtime', 'realtime'],
-                                ['embedding', 'embedding'],
-                              ] as const
-                            ).map(([mode, category]) => (
-                              <DropdownMenuRadioItem key={mode} value={mode}>
-                                {t(CATEGORY_LABEL_KEY[category])}
-                              </DropdownMenuRadioItem>
-                            ))}
-                          </DropdownMenuRadioGroup>
-                        </DropdownMenuContent>
-                      </DropdownMenu>
-                      <div
-                        className="w-28 shrink-0"
-                        hidden={
-                          !isAgentSelectableModel(
-                            { id: m.id, group: 'custom', mode: m.mode ?? m.discoveredMetadata?.mode },
-                            { userProvider: true },
-                          )
-                        }
-                        title={t('settings.providers.custom.fields.modelContextWindowTitle')}
-                      >
-                        {/* 上下文窗口(tokens):留空 = 保守默认 200K(#386)。整体校验:
-                            只接受正整数(允许逗号/下划线/空格做分隔),其它字符直接
-                            拒绝本次变更(保持原值)——绝不剥字符再拼数字,-5 / 1e6 /
-                            262144.9 这类输入不得被静默纠正成另一个合法值(review P1)。 */}
-                        <FormField
-                          id={fieldId(`${activeTab}:model:${rowId(m)}:context`)}
-                          label={t('settings.providers.custom.fields.modelContextWindowTitle')}
-                          error={errorFor(`${activeTab}:model:${rowId(m)}:context`)}
-                          hideLabel
-                          reserveFeedback
-                        >
-                          {(control) => (
-                            <SettingsTextInput
-                              {...control}
-                              inputRef={
-                                focusedAgent === activeTab && focusModelId === m.id
-                                  ? focusedContextWindowRef
-                                  : undefined
-                              }
-                              surface="ivory"
-                              value={
-                                windowDrafts[`${activeTab}:${i}`] ??
-                                (m.contextWindow != null ? String(m.contextWindow) : '')
-                              }
-                              onBlur={() =>
-                                setWindowDrafts((drafts) => {
-                                  const draftText = drafts[`${activeTab}:${i}`];
-                                  // 只清可提交草稿(显示回落到已提交规范值);不可提交
-                                  // 草稿必须保留——输入框失焦先于保存按钮 click,清掉
-                                  // 会让保存守卫看不到非法文本、静默存旧值(review P1)。
-                                  if (
-                                    draftText === undefined ||
-                                    !isCommittableWindowText(draftText)
-                                  ) {
-                                    return drafts;
-                                  }
-                                  const rest = { ...drafts };
-                                  delete rest[`${activeTab}:${i}`];
-                                  return rest;
-                                })
-                              }
-                              onChange={(v) => {
-                                setWindowDrafts((drafts) => ({
-                                  ...drafts,
-                                  [`${activeTab}:${i}`]: v,
-                                }));
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: x.models.map((y, j) => {
-                                    if (j !== i) return y;
-                                    const trimmed = v.trim();
-                                    if (trimmed === '') {
-                                      const next = { ...y };
-                                      delete next.contextWindow;
-                                      return next;
-                                    }
-                                    // 整体校验(分隔符只允许单个、夹在数字组之间;BigInt 精确
-                                    // 校验上界防 parseInt 先舍入):不合法的中间态/非法值只
-                                    // 留在草稿,不提交、不剥字符拼数字(review P1 ×2)。
-                                    if (!isCommittableWindowText(trimmed)) return y;
-                                    return {
-                                      ...y,
-                                      contextWindow: Number(BigInt(trimmed.replace(/[,_ ]/g, ''))),
-                                    };
-                                  }),
-                                }));
-                              }}
-                              placeholder={t(
-                                'settings.providers.custom.fields.modelContextWindowPlaceholder',
-                              )}
-                              trailing={(() => {
-                                const label = compactContextWindowLabel(
-                                  windowDrafts[`${activeTab}:${i}`],
-                                  m.contextWindow,
-                                );
-                                return label ? (
-                                  <span
-                                    aria-hidden="true"
-                                    className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-11 font-medium tabular-nums text-[var(--text-tertiary)]"
-                                  >
-                                    {label}
-                                  </span>
-                                ) : null;
-                              })()}
-                            />
-                          )}
-                        </FormField>
-                      </div>
-                      <Tip
-                        text={t('settings.providers.custom.fields.removeRow')}
-                        contentClassName="z-[10001]"
-                      >
-                        <Button
-                          variant="secondary"
-                          size="lg"
-                          type="button"
-                          onClick={() => {
-                            setChildLayer((layer) => {
-                              if ((layer?.kind !== 'model-protocol' && layer?.kind !== 'model-type') || layer.agent !== activeTab) {
-                                return layer;
-                              }
-                              if (layer.index === i) return null;
-                              return layer.index > i ? { ...layer, index: layer.index - 1 } : layer;
-                            });
-                            // 只重映射受影响 runtime 的草稿键(删行后同 tab 后续行号
-                            // 前移),其它行/另一 runtime 的未提交草稿必须原样保留——
-                            // 全量清空会让保存守卫看不到别行的非法文本而静默存旧值
-                            // (review P1)。
-                            setWindowDrafts((drafts) => {
-                              const next: Record<string, string> = {};
-                              for (const [key, text] of Object.entries(drafts)) {
-                                const sep = key.lastIndexOf(':');
-                                const agent = key.slice(0, sep);
-                                const idx = Number(key.slice(sep + 1));
-                                if (agent !== activeTab) {
-                                  next[key] = text;
-                                } else if (idx < i) {
-                                  next[key] = text;
-                                } else if (idx > i) {
-                                  next[`${agent}:${idx - 1}`] = text;
-                                }
-                              }
-                              return next;
-                            });
-                            const next = f.models[i + 1] ?? f.models[i - 1];
-                            const nextId = fieldId(
-                              next
-                                ? `${activeTab}:model:${rowId(next)}:id`
-                                : `${activeTab}:add-model`,
-                            );
-                            patch(activeTab, (x) => ({
-                              ...x,
-                              models: x.models.filter((_, j) => j !== i),
-                            }));
-                            requestAnimationFrame(() => document.getElementById(nextId)?.focus());
-                          }}
-                          className="w-9 px-0"
-                          aria-label={t('settings.providers.custom.fields.removeRow')}
-                        >
-                          <Trash2 size={16} />
-                        </Button>
-                      </Tip>
-                      {activeTab === 'pi' && (
-                        <div className="flex basis-full flex-col gap-2 pr-12 text-[var(--settings-section-desc)]">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <span className="flex min-w-0 flex-col gap-0.5 leading-snug">
-                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-                                {t('settings.providers.custom.modelProtocol.label')}
-                              </span>
-                              <span className="text-11">
-                                {t('settings.providers.custom.modelProtocol.help')}
-                              </span>
-                            </span>
-                            <PiModelProtocolDropdown
-                              modelName={m.name || m.id}
-                              value={m.piApi}
-                              open={
-                                childLayer?.kind === 'model-protocol' &&
-                                childLayer.agent === activeTab &&
-                                childLayer.index === i
-                              }
-                              onOpenChange={(open) =>
-                                setChildLayer(
-                                  open
-                                    ? { kind: 'model-protocol', agent: activeTab, index: i }
-                                    : null,
-                                )
-                              }
-                              onChange={(piApi) =>
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: setCustomProviderModelPiApi(x.models, i, piApi),
-                                }))
-                              }
-                            />
-                          </div>
-                          <label className="flex cursor-pointer items-start gap-2">
-                            <input
-                              type="checkbox"
-                              checked={m.supportsImageInput === true}
-                              onChange={(event) => {
-                                const supportsImageInput = event.currentTarget.checked;
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: setCustomProviderModelSupportsImageInput(
-                                    x.models,
-                                    i,
-                                    supportsImageInput,
-                                  ),
-                                }));
-                              }}
-                              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
-                            />
-                            <span className="flex flex-col gap-0.5 leading-snug">
-                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-                                {t('settings.providers.custom.fields.modelSupportsImageInput')}
-                              </span>
-                              <span className="text-11">
-                                {t('settings.providers.custom.fields.modelSupportsImageInputHelp')}
-                              </span>
-                            </span>
-                          </label>
-                          <label className="flex cursor-pointer items-start gap-2">
-                            <input
-                              type="checkbox"
-                              checked={m.reasoning === true}
-                              onChange={(event) => {
-                                const reasoning = event.currentTarget.checked;
-                                patch(activeTab, (x) => ({
-                                  ...x,
-                                  models: setCustomProviderModelReasoning(x.models, i, reasoning),
-                                }));
-                              }}
-                              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
-                            />
-                            <span className="flex flex-col gap-0.5 leading-snug">
-                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-                                {t('settings.providers.custom.fields.modelSupportsReasoning')}
-                              </span>
-                              <span className="text-11">
-                                {t('settings.providers.custom.fields.modelSupportsReasoningHelp')}
-                              </span>
-                            </span>
-                          </label>
-                          {m.reasoning === true && (
-                            <div className="ml-6 flex flex-col gap-1.5">
-                              <span className="text-11 font-medium text-[var(--settings-section-sublabel)]">
-                                {t('settings.providers.custom.fields.modelReasoningEfforts')}
-                              </span>
-                              <div className="flex flex-wrap gap-x-3 gap-y-1.5">
-                                {PI_REASONING_EFFORTS.map((effort) => {
-                                  const selected = m.reasoningEfforts?.includes(effort) === true;
-                                  const lastSelected = selected && m.reasoningEfforts?.length === 1;
-                                  return (
-                                    <label
-                                      key={effort}
-                                      className={cn(
-                                        'flex items-center gap-1.5 text-11',
-                                        lastSelected
-                                          ? 'cursor-not-allowed opacity-50'
-                                          : 'cursor-pointer',
-                                      )}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={selected}
-                                        disabled={lastSelected}
-                                        onChange={(event) => {
-                                          const enabled = event.currentTarget.checked;
-                                          patch(activeTab, (x) => ({
-                                            ...x,
-                                            models: setCustomProviderModelReasoningEffort(
-                                              x.models,
-                                              i,
-                                              effort,
-                                              enabled,
-                                            ),
-                                          }));
-                                        }}
-                                        className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)] disabled:cursor-not-allowed"
-                                      />
-                                      {t(`effortLevels.${effort}`)}
-                                    </label>
-                                  );
-                                })}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  <button
-                    id={fieldId(`${activeTab}:add-model`)}
-                    aria-describedby={
-                      errorFor(`${activeTab}:add-model`)
-                        ? fieldId(`${activeTab}:add-model-error`)
-                        : undefined
-                    }
-                    type="button"
-                    onClick={() => {
-                      // Appending preserves all existing business draft indices.
-                      const row = { id: '', name: '' };
-                      const nextId = fieldId(`${activeTab}:model:${rowId(row)}:id`);
-                      patch(activeTab, (x) => ({ ...x, models: [...x.models, row] }));
-                      requestAnimationFrame(() => document.getElementById(nextId)?.focus());
-                    }}
-                    className="flex items-center gap-1.5 self-start py-0.5 text-13 font-medium text-[var(--settings-section-title)]"
-                  >
-                    <Plus size={14} className="text-[var(--settings-section-desc)]" />
-                    {t('settings.providers.custom.fields.addModel')}
-                  </button>
-                  <p
-                    id={fieldId(`${activeTab}:add-model-error`)}
-                    aria-live="polite"
-                    className="text-12 text-[var(--error-fg)]"
-                  >
-                    {errorFor(`${activeTab}:add-model`)}
-                  </p>
+                <div className="flex flex-col gap-2 text-13 text-[var(--text-secondary)]">
+                  <span>{t('settings.providers.connection.modelCount', { count: f.models.filter((model) => model.id.trim()).length })}</span>
+                  <span className="text-12">{t('settings.providers.connection.modelsAutomatic')}</span>
+                  <FormField id={fieldId(`${activeTab}:manualModel`)} label={t('settings.providers.connection.manualModel')} error={errorFor(`${activeTab}:manualModel`)}>
+                    {(control) => <SettingsTextInput {...control} surface="ivory" value={manualModel}
+                      onChange={setManualModel} />}
+                  </FormField>
+                  <Button variant="secondary" disabled={!manualModel.trim()} onClick={() => {
+                    const ids = [...new Set(manualModel.split(/[,\n]/).map((id) => id.trim()).filter(Boolean))];
+                    patch(activeTab, (runtime) => ({ ...runtime, models: [
+                      ...runtime.models.filter((model) => model.id.trim()),
+                      ...ids.filter((id) => !runtime.models.some((model) => model.id === id)).map((id) => ({ id, name: id })),
+                    ] }));
+                    setManualModel('');
+                    setFieldError(null);
+                  }}>{t('settings.providers.custom.fields.addModel')}</Button>
                 </div>
 
                 {/* 请求头（可选） */}

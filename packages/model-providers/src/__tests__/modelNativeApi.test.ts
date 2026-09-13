@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { BUNDLED_CATALOG, type ModelRegistry } from "../index.js";
 import { parseModelRegistry } from "../modelAccessValidator.js";
-import { resolveModelNativeApi } from "../modelRegistry.js";
+import { resolveCatalogModelNativeApi, resolveModelNativeApi } from "../modelRegistry.js";
 
 const registry = (): ModelRegistry => ({
   schemaVersion: 3,
@@ -14,6 +14,42 @@ const registry = (): ModelRegistry => ({
       nativeApi: "google-generative-ai",
     },
   ],
+});
+
+describe('native declarations for verified catalog identities', () => {
+  it.each([
+    ['google/gemini-3.8-flash', 'google-generative-ai'],
+    ['gemini-3.8-flash', 'google-generative-ai'],
+    ['anthropic/claude-fable-5', 'anthropic-messages'],
+    ['claude-fable-5', 'anthropic-messages'],
+    ['openai/gpt-6-astra', 'openai-responses'],
+    ['gpt-6-astra', 'openai-responses'],
+    ['qwen3.7-plus', 'openai-completions'],
+    ['deepseek-v4.1-flash', 'openai-completions'],
+  ])('reuses maintained model declarations for %s', (id, api) => {
+    expect(resolveCatalogModelNativeApi(BUNDLED_CATALOG.modelRegistry, id)).toBe(api);
+  });
+  it.each(['unknown/gemini-99', 'google/gemini-99/other', 'aion-labs/aion-3.0-mini'])('does not guess undeclared names or namespaces: %s', id => {
+    expect(resolveCatalogModelNativeApi(registry(), id)).toBeUndefined();
+  });
+  it('keeps explicit unknown, retirement and conflicting declarations ahead of family defaults', () => {
+    const r = registry();
+    r.models = [{ id: 'google/gemini-99', name: 'Gemini', nativeApi: null, routes: [] }];
+    expect(resolveCatalogModelNativeApi(r, 'google/gemini-99')).toBeNull();
+    r.models[0].nativeApi = 'google-generative-ai';
+    r.models[0].status = 'retired';
+    expect(resolveCatalogModelNativeApi(r, 'google/gemini-99')).toBeNull();
+    delete r.models[0].status;
+    r.models.push({ ...r.models[0], nativeApi: 'openai-responses' });
+    expect(resolveCatalogModelNativeApi(r, 'google/gemini-99')).toBeNull();
+  });
+  it('does not let a native declaration manufacture endpoint or capability data', () => {
+    const r = registry();
+    expect(resolveCatalogModelNativeApi(r, 'gemini-99')).toBe('google-generative-ai');
+    expect(r.models).toEqual([]);
+    expect(resolveModelNativeApi(r, 'custom-account', 'gemini-99')).toBeUndefined();
+    expect(resolveCatalogModelNativeApi({ ...r, schemaVersion: 2 }, 'gemini-99')).toBeUndefined();
+  });
 });
 
 describe("canonical model APIs in registry v3", () => {

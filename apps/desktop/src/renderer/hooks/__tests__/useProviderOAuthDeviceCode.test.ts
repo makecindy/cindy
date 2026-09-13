@@ -39,6 +39,15 @@ describe('useProviderOAuthDeviceCode', () => {
     });
   });
 
+  it('shows the new account device code rather than the preset identity', () => {
+    const browserLoginRef = { current: { providerId: 'nous-new-account', ownerId: 'owner' } };
+    const { result } = renderHook(() => useProviderOAuthDeviceCode('nous', { browserLoginRef }));
+    act(() => listener?.({ providerId: 'nous-new-account', phase: 'device-code', verificationUrl: 'https://portal.nousresearch.com', userCode: 'ABCD' }));
+    expect(result.current.deviceCode?.userCode).toBe('ABCD');
+    act(() => listener?.({ providerId: 'nous', phase: 'device-code', verificationUrl: 'https://portal.nousresearch.com', userCode: 'WRONG' }));
+    expect(result.current.deviceCode?.userCode).toBe('ABCD');
+  });
+
   it('keeps only matching progress in memory', () => {
     const { result } = renderHook(() => useProviderOAuthDeviceCode('provider-a'));
 

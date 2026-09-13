@@ -27,7 +27,7 @@ export interface UseProvidersReturn {
   providerOrder: string[];
   ownerGeneration: number | null;
   loading: boolean;
-  refetch: () => void;
+  refetch: () => Promise<boolean>;
 }
 
 /**
@@ -56,7 +56,7 @@ export function useProviders(): UseProvidersReturn {
       : getCachedProvidersSnapshot();
 
   const refetch = useCallback(() => {
-    void refreshLocalCatalogSnapshot();
+    return refreshLocalCatalogSnapshot();
   }, []);
 
   useEffect(() => {

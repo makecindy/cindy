@@ -188,10 +188,8 @@ function validateNoAuthLoopbackBoundary(
   return { ok: true };
 }
 
-function allowedWireProtocols(agent: string): readonly ProviderWireProtocol[] {
-  return agent === 'claude-code'
-    ? ['anthropic-messages']
-    : ['openai-responses', 'openai-chat', 'anthropic-messages'];
+function allowedWireProtocols(_agent: string): readonly ProviderWireProtocol[] {
+  return ['openai-responses', 'openai-chat', 'anthropic-messages'];
 }
 
 function isAllowedWireProtocol(agent: string, value: unknown): value is ProviderWireProtocol {
@@ -213,6 +211,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
   }
   let runtimeUrl: URL;
   try {
+    if (/[{}]/.test(r.baseUrl)) return invalid(`runtime '${agent}' baseUrl has unfilled account fields`);
     runtimeUrl = new URL(r.baseUrl);
     if (runtimeUrl.protocol !== 'http:' && runtimeUrl.protocol !== 'https:') {
       return invalid(`runtime '${agent}' baseUrl must be http(s)`);
@@ -245,6 +244,11 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     for (const field of ['mode', 'modalities', 'officialDocs'] as const) {
       if (mm[field] !== undefined && !validModelMetadata({ [field]: mm[field] })) return invalid(`runtime '${agent}' model.${field} invalid`);
     }
+    if (mm.discoveredCost !== undefined && (
+      !mm.discoveredCost || typeof mm.discoveredCost !== 'object' || Array.isArray(mm.discoveredCost) ||
+      Object.entries(mm.discoveredCost).some(([key, value]) =>
+        !['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) || typeof value !== 'number' || !Number.isFinite(value) || value < 0)
+    )) return invalid(`runtime '${agent}' discoveredCost invalid`);
     if (mm.discoveredMetadata !== undefined && !validModelMetadata(mm.discoveredMetadata))
       return invalid(`runtime '${agent}' discoveredMetadata invalid`);
     if (
@@ -261,6 +265,7 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
     }
+    if (mm.api !== undefined && !isPiModelApi(mm.api)) return invalid(`runtime '${agent}' model.api invalid`);
     if (mm.piApi !== undefined && (agent !== 'pi' || !isPiModelApi(mm.piApi))) {
       return invalid(`runtime '${agent}' model.piApi invalid`);
     }
@@ -445,7 +450,7 @@ function validateAuthSection(auth: unknown): ValidationResult {
     return invalid('auth.oauth authorization-code fields not allowed for device-code');
   }
   for (const field of ['tokenUrl', 'clientId', 'scopes'] as const) {
-    if (typeof o[field] !== 'string' || (o[field] as string).trim().length === 0) {
+    if (typeof o[field] !== 'string' || (field !== 'scopes' && (o[field] as string).trim().length === 0)) {
       return invalid(`auth.oauth.${field} required`);
     }
   }
@@ -584,7 +589,9 @@ function normalizeRuntime(
       name: m.name.trim(),
       ...pickModelMetadata({ mode: m.mode, modalities: m.modalities, officialDocs: m.officialDocs }),
       ...(m.discoveredMetadata ? { discoveredMetadata: m.discoveredMetadata } : {}),
+      ...(m.discoveredCost ? { discoveredCost: m.discoveredCost } : {}),
       ...(m.nameExplicit === true ? { nameExplicit: true } : {}),
+      ...(m.api ? { api: m.api } : {}),
       ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
       ...(m.route
         ? {
@@ -686,10 +693,30 @@ function normalizeConfig(config: CustomProviderConfig): CustomProviderConfig {
  * 避免非当前设置页（移动端、旧 renderer、异步发现）改了路由或模型后仍保留 marker，
  * 继而在 Pi 启动时用官方模型整条覆盖用户显式配置。
  */
-function invalidateEditedPiCatalogMarker(
+function invalidateEditedProviderMetadata(
   previous: CustomProviderConfig,
   next: CustomProviderConfig,
 ): CustomProviderConfig {
+  // Discovery quotes belong to a route. Editing an endpoint must not relabel its old price.
+  // Fresh discoveries with changed values are preserved; explicit user prices live elsewhere.
+  const routeKey = (runtime: CustomProviderRuntimeConfig, model: ProviderRuntimeModelConfig) => JSON.stringify([
+    (model.route?.baseUrl ?? runtime.baseUrl).replace(/\/+$/, ''),
+    model.route?.wireProtocol ?? runtime.wireProtocol,
+    model.route?.requestPath ?? runtime.requestPath ?? '',
+  ]);
+  for (const agent of VALID_AGENTS) {
+    const before = previous.runtimes[agent];
+    const after = next.runtimes[agent];
+    if (!before || !after) continue;
+    after.models = after.models.map(model => {
+      const old = before.models.find(row => row.id === model.id);
+      if (!old?.discoveredCost || routeKey(before, old) === routeKey(after, model) ||
+          JSON.stringify(old.discoveredCost) !== JSON.stringify(model.discoveredCost)) return model;
+      const copy = { ...model };
+      delete copy.discoveredCost;
+      return copy;
+    });
+  }
   const previousPi = previous.runtimes.pi;
   const nextPi = next.runtimes.pi;
   if (
@@ -782,8 +809,13 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               id: String(m.id),
               name: String(m.name ?? ''),
               ...pickModelMetadata({ mode: m.mode, modalities: m.modalities, officialDocs: m.officialDocs }),
+              ...(isPiModelApi(m.api) ? { api: m.api } : {}),
               ...(agent === 'pi' && isPiModelApi(m.piApi) ? { piApi: m.piApi } : {}),
               ...(route ? { route } : {}),
+              ...(m.discoveredCost && typeof m.discoveredCost === 'object' && !Array.isArray(m.discoveredCost)
+                ? { discoveredCost: Object.fromEntries(Object.entries(m.discoveredCost).filter(([key, value]) =>
+                  ['input', 'output', 'cacheRead', 'cacheWrite'].includes(key) && typeof value === 'number' && Number.isFinite(value) && value >= 0)) }
+                : {}),
               ...(validModelMetadata(m.discoveredMetadata)
                 ? { discoveredMetadata: m.discoveredMetadata }
                 : {}),
@@ -913,7 +945,7 @@ export async function updateCustomProvider(
   const db = getDbClient().drizzle;
   const existing = await db.select().from(customProviders).where(eq(customProviders.id, id)).get();
   if (!existing) return null;
-  const c = invalidateEditedPiCatalogMarker(
+  const c = invalidateEditedProviderMetadata(
     rowToConfig(existing),
     normalizeConfig({ ...config, id }),
   );
@@ -940,7 +972,7 @@ export async function updateCustomProviderIfUnchanged(
   now: number = Date.now(),
 ): Promise<boolean> {
   const expectedConfig = normalizeConfig({ ...expected, id });
-  const nextConfig = invalidateEditedPiCatalogMarker(
+  const nextConfig = invalidateEditedProviderMetadata(
     expectedConfig,
     normalizeConfig({ ...config, id }),
   );

@@ -5,7 +5,7 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
-import piModelCatalogJson from '@cindy/model-providers/pi-model-catalog' with { type: 'json' };
+import { providerCatalogForPi } from '@cindy/model-providers';
 
 export interface BundledPiGatewayModelProfile {
   api: PiModelApi;
@@ -19,7 +19,7 @@ interface PiCatalogRow extends BundledPiGatewayModelProfile {
   provider: string;
 }
 
-const catalog = piModelCatalogJson as unknown as {
+const catalog = providerCatalogForPi() as unknown as {
   providers: Record<string, PiCatalogRow[]>;
 };
 const rows = Object.values(catalog.providers).flat();

@@ -5,7 +5,8 @@ import {
   preferredDefaultEffort,
 } from '../../../../tools/pi/xai-catalog-corrections.mjs';
 import { applyAstraCatalogAdditions } from '../../../../tools/pi/openai-catalog-corrections.mjs';
-import piCatalog from '../../catalog/pi-model-catalog.json';
+import { providerCatalogForPi } from '../providerModelCatalog.js';
+const piCatalog = providerCatalogForPi();
 import { BUNDLED_CATALOG } from '../catalog.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
 
@@ -96,7 +97,7 @@ describe('Pi Astra catalog additions', () => {
     const native = { id: 'gpt-6-astra', contextWindow: 872_000, upstreamField: true };
     expect(applyAstraCatalogAdditions({ openai: [native] }).openai).toEqual([native]);
     expect(applyAstraCatalogAdditions(providers)).toEqual(providers);
-    expect(piCatalog.providers.openai).toEqual(providers.openai);
-    expect(piCatalog.providers['openai-codex'].find((model) => model.id === 'gpt-6-astra')).toEqual(providers['openai-codex'][0]);
+    expect(piCatalog.providers.openai.find(model => model.id === 'gpt-6-astra')).toMatchObject(providers.openai[0]);
+    expect(piCatalog.providers['openai-codex'].find((model) => model.id === 'gpt-6-astra')).toMatchObject(providers['openai-codex'][0]);
   });
 });

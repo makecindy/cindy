@@ -148,8 +148,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: () => null,
+vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
+  ProviderConnectionDialog: () => null,
 }));
 
 vi.mock('@/components/settings/AddProviderWizard', () => ({

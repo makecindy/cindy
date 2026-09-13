@@ -367,7 +367,7 @@ function parseOAuth(auth: Record<string, unknown>): OAuthProviderDescriptor {
   const common = {
     tokenUrl: httpUrl(auth.tokenUrl, 'auth.tokenUrl', true, true),
     clientId: boundedString(auth.clientId, 'auth.clientId', 512),
-    scopes: boundedString(auth.scopes, 'auth.scopes', 2_048),
+    scopes: auth.scopes === '' ? '' : boundedString(auth.scopes, 'auth.scopes', 2_048),
     ...(auth.modelsDiscoveryUrl !== undefined
       ? {
           modelsDiscoveryUrl: httpUrl(

@@ -212,7 +212,7 @@
 
 `packages/model-providers/catalog/model-registry.json` 的 `nativeApi` 与 `nativeApiRules`
 也是客户端执行策略的本地基线，不依赖 Gateway 提供原生协议。Pi 的
-`catalog/pi-model-catalog.json` 和官方运行时内置模型表用于核对协议及 serializer 参数；
+`catalog/provider-models.json` 和官方运行时内置模型表用于核对协议及 serializer 参数；
 核实后写入 Registry，不在 UI 中反推 Pi 配置。Gateway 的 `perAgent.pi.wireProtocol`
 仅是末级执行提示，不能覆盖本地已声明的原生协议，也不能填充 UI 的原生协议字段。
 

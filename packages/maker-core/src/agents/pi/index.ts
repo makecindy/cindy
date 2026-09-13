@@ -5007,6 +5007,7 @@ export class PiAgent extends BaseAgent {
         ...(proxyEnv ?? {}),
         // BYOM 原生 provider 的 api keys(键名对应 spec.apiKeyEnvVar,models.json 用 $ENV 引用)。
         ...nativeEnv,
+        CINDY_PI_NATIVE_PROVIDER_ADAPTERS: JSON.stringify(nativeProviders.filter(provider => provider.adapterProvider && provider.apiKeyEnvVar).map(provider => ({ id: provider.id, name: provider.name, provider: provider.adapterProvider, keyEnv: provider.apiKeyEnvVar }))),
         // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
         // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
         ...mcpEnv,

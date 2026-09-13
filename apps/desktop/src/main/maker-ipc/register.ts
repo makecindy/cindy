@@ -827,7 +827,7 @@ import {
 import { refreshOpenAiMediaModels } from '../maker-host/model-discovery/openai-media.js';
 import { refreshXaiMediaModels } from '../maker-host/model-discovery/xai-media.js';
 import { testProviderConnection } from '../maker-host/provider-diagnostics.js';
-import { fetchProviderModels } from '../maker-host/provider-model-fetch.js';
+import { fetchProviderModels, fetchSavedOAuthProviderModels } from '../maker-host/provider-model-fetch.js';
 import {
   beginProviderRouteMutation,
   setPendingCredentialSwitchReader,
@@ -5486,6 +5486,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         const applied = await maker.refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer', providerId: spec.savedProviderId! });
         if (getActiveAppSession().generation !== owner.generation) throw new Error('Account changed during model discovery');
         return { ok: applied, models: [] };
+      }
+      if (spec.authMethod === 'oauth') {
+        const owner = getActiveAppSession();
+        const provider = getActiveCatalog().providers.find((p) => p.id === spec.savedProviderId);
+        if (!provider) return { ok: false, code: 'AUTH_INVALID' };
+        return fetchSavedOAuthProviderModels(
+          provider,
+          spec.agent,
+          storedCustomProviderId(provider.id),
+          () => getActiveAppSession().generation === owner.generation &&
+            getActiveCatalog().providers.find((p) => p.id === provider.id) === provider,
+        );
       }
       return fetchProviderModels(spec);
     },

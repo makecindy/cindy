@@ -102,12 +102,12 @@ export class SseTranslator {
    */
   private readonly signaturePrefix: string;
 
-  constructor(model: string, serviceTier?: string) {
+  constructor(model: string, serviceTier?: string, reasoningNamespace?: string) {
     this.model = model;
     this.serviceTier = serviceTier;
     this.modelPinned = model.length > 0;
     const slash = model.indexOf('/');
-    this.signaturePrefix = slash > 0 ? model.slice(0, slash + 1) : '';
+    this.signaturePrefix = reasoningNamespace ?? (slash > 0 ? model.slice(0, slash + 1) : '');
   }
 
   /**

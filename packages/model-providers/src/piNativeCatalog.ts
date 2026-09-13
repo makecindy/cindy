@@ -1,4 +1,4 @@
-import piModelCatalogJson from "../catalog/pi-model-catalog.json" with { type: "json" };
+import { providerCatalogForPi } from "./providerModelCatalog.js";
 
 import { defaultEffortForCapabilities } from "./effortResolution.js";
 import { piSupportedEfforts } from "./piThinkingLevels.mjs";
@@ -24,7 +24,7 @@ interface PiCatalogRow {
   cost?: ModelCost;
 }
 
-const PI_CATALOG = piModelCatalogJson as unknown as {
+const PI_CATALOG = providerCatalogForPi() as unknown as {
   generatedAt: string;
   providers: Record<string, PiCatalogRow[]>;
 };

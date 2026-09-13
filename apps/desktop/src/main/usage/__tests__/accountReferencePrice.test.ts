@@ -6,7 +6,12 @@ vi.mock('../../maker-host/active-catalog.js', () => ({
   getActiveCatalog: () => ({ ...BUNDLED_CATALOG, providers: [buildUserProvider({
     id: 'openai-account', name: 'Account', auth: { method: 'oauth', native: 'codex' },
     runtimes: { codex: { baseUrl: 'https://chatgpt.com/backend-api/codex', models: [{ id: 'gpt-5.6-luna', name: 'Luna' }] } },
-  }), ...(['claude', 'xai'] as const).map(native => {
+  }), buildUserProvider({ id: 'router-account', name: 'Router', runtimes: {
+    pi: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol: 'openai-chat', models: [
+      { id: 'aion-labs/aion-3.0-mini', name: 'Aion' },
+      { id: 'new/model', name: 'New', discoveredCost: { input: 0, output: 0.5 } },
+    ] },
+  } }), ...(['claude', 'xai'] as const).map(native => {
     const provider = buildUserProvider({
       id: `${native}-account`, name: 'Account', auth: { method: 'oauth', native }, runtimes: {},
     });
@@ -25,6 +30,15 @@ import { accountReferencePriceQuote } from '../accountReferencePrice.js';
 import { getReferenceModelPricing, getCodexProviderSubscriptionValuePrice } from '../referenceModelPricing.js';
 
 describe('independent subscription account reference prices', () => {
+  it('publishes imported and discovered BYOK prices under the actual connection and engine', () => {
+    const pricing = getReferenceModelPricing();
+    expect(getModelPriceQuote(pricing, 'router-account', 'aion-labs/aion-3.0-mini', 'pi'))
+      .toMatchObject({ currency: 'USD', source: 'provider-reference', inputPerMtok: 0.7, outputPerMtok: 1.4 });
+    expect(getModelPriceQuote(pricing, 'router-account', 'new/model', 'pi'))
+      .toMatchObject({ inputPerMtok: 0, outputPerMtok: 0.5 });
+    expect(getModelPriceQuote(pricing, 'another-account', 'new/model', 'pi')).toBeUndefined();
+    expect(getModelPriceQuote(pricing, 'router-account', 'new/model', 'codex')).toBeUndefined();
+  });
   it.each([
     ['claude', 'anthropic', 'claude-sonnet-4-6'],
     ['xai', 'xai', 'xai/grok-4.6'],

@@ -122,6 +122,31 @@ describe('active catalog revision', () => {
     expect(read().routing.codex?.upstream).toBe('https://private.example/v1');
   });
 
+  it.each([1, 2, 3, 5] as const)('publishes Gemini defaults before notifying and retains native declarations across sparse V%s refresh', schemaVersion => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = { schemaVersion, updatedAt: '2099-09-13T00:00:00Z', models: [] };
+    setActiveCatalog(catalog);
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!;
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const id = 'google/gemini-3.8-flash';
+    const read = () => getActiveCatalog().providers.find(p => p.id === 'openrouter-test')!;
+    const listener = vi.fn(() => read());
+    setActiveCatalogChangedListener(listener);
+    setCustomProviderConfigs([{ id: 'openrouter-test', name: 'OpenRouter', runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { ...preset.runtimes[agent]!, catalogPresetId: preset.id, models: [{ id, name: 'Gemini' }] }]),
+    ) }]);
+    const check = (provider: ReturnType<typeof read>) => {
+      for (const agent of agents) expect(provider.models[agent]![0]).toMatchObject({
+        id, nativeApi: 'google-generative-ai', defaultEnabled: agent === 'pi',
+        contextWindow: 1_048_576, maxOutput: 65_536, supportsImageInput: true,
+      });
+    };
+    expect(listener).toHaveBeenCalledOnce();
+    check(listener.mock.results[0].value);
+    setActiveCatalog(structuredClone(catalog));
+    check(read());
+  });
+
   it.each([
     ['chat', 'image_generation'],
     ['image_generation', 'chat'],

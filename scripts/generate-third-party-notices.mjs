@@ -869,6 +869,19 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
     }),
   );
 
+  // Workspace packages are skipped by npm closure discovery. The vendored
+  // OpenCodex helpers are also bundled into Desktop main, not only the SSH proxy.
+  const opencodex = readJson(path.join(REPO_ROOT, "packages/model-compat/UPSTREAM.json"));
+  entries.push(
+    bundledComponent({
+      name: "OpenCodex compatibility sources (vendored)",
+      version: opencodex.commit,
+      license: "MIT",
+      url: `${opencodex.repository}/tree/${opencodex.commit}`,
+      licenseText: readBundledLicense("packages/model-compat/LICENSE.opencodex"),
+    }),
+  );
+
   // Tencent's public iLink client is the pinned protocol reference for the
   // Cindy-owned, host-agnostic implementation under packages/wechat-ilink.
   entries.push(

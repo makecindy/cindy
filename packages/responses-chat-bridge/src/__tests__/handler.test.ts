@@ -93,6 +93,44 @@ describe('createResponsesChatHandler', () => {
     },
   );
 
+  it.each([
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', effort: 'high', expected: { thinking: { type: 'adaptive' } } },
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', effort: 'none', expected: { thinking: { type: 'disabled' } } },
+    { upstreamBase: 'https://ark.cn-beijing.volces.com/api/v3', model: 'doubao-seed-2-1-pro-260628', effort: 'high', expected: { thinking: { type: 'enabled' } } },
+    { upstreamBase: 'https://api.neuralwatt.com/v1', model: 'qwen3.5-397b', effort: 'high', expected: { thinking_budget: 24576 } },
+  ])('retains $model reasoning until final provider normalization ($effort)', async ({ upstreamBase, model, effort, expected }) => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).toMatchObject(expected);
+      expect(body).not.toHaveProperty('reasoning_effort');
+      return streamResponse([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({ upstreamBase, buildHeaders: async () => ({}), capabilities: { developerRole: 'system' } }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model, input: 'hello', reasoning: { effort } }, res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+  });
+
+  it.each([
+    { upstreamBase: 'https://api.minimax.io/v1', model: 'MiniMax-M3', capabilities: { reasoningField: 'none' } as ChatBridgeCapabilities },
+    { upstreamBase: 'https://unrelated.example/v1', model: 'MiniMax-M3', capabilities: {} },
+    { upstreamBase: 'https://api.kimi.com/coding/v1', model: 'k3', capabilities: {} },
+  ])('respects explicit disable, unknown endpoints and declared noReasoning: $upstreamBase', async ({ upstreamBase, model, capabilities }) => {
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      expect(body).not.toHaveProperty('reasoning_effort');
+      expect(body).not.toHaveProperty('thinking');
+      expect(body).not.toHaveProperty('thinking_budget');
+      return streamResponse([{ choices: [{ delta: {}, finish_reason: 'stop' }] }]);
+    });
+    const handler = createResponsesChatHandler({ upstreamBase, buildHeaders: async () => ({}), capabilities }, { fetchImpl });
+    const res = new FakeResponse();
+    await handler.handle({ parsedBody: { model, input: 'hello', reasoning: { effort: 'high' } }, res: res as never });
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(res.status).toBe(200);
+  });
+
   it('leaves a consecutive system prefix intact when the upstream accepts it', async () => {
     const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
       expect(JSON.parse(String(init?.body)).messages).toEqual([

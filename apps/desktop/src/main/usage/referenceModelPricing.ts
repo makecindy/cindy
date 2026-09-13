@@ -34,6 +34,24 @@ export function getReferenceModelPricing(): ModelPricingCatalog {
   const registry = catalog.modelRegistry;
   const pricing = registryPricingCatalog(registry);
   for (const provider of catalog.providers) {
+    // Imported BYOK prices belong to this connection and engine, just like its
+    // discovered capabilities. Publishing only Registry routes dropped them all.
+    if (provider.source === 'user' && provider.auth.method !== 'oauth' && provider.id !== 'xd') {
+      for (const [agent, models] of Object.entries(provider.models)) {
+        for (const model of models ?? []) {
+          const cost = model.cost;
+          if (cost?.input === undefined || cost.output === undefined) continue;
+          if (![cost.input, cost.output].every(value => Number.isFinite(value) && value >= 0)) continue;
+          (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = {
+            providerId: provider.id, modelId: model.id, currency: 'USD',
+            source: 'provider-reference', approximate: true,
+            inputPerMtok: cost.input, outputPerMtok: cost.output,
+            ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
+            ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
+          };
+        }
+      }
+    }
     if (provider.auth?.method !== 'oauth' || !provider.auth.native) continue;
     for (const [agent, models] of Object.entries(provider.models)) {
       for (const model of models ?? []) {

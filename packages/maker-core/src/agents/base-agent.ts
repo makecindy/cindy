@@ -190,6 +190,10 @@ export type PiNativeApi =
   | 'openai-responses'
   | 'openai-completions'
   | 'google-generative-ai'
+  | 'bedrock-converse-stream'
+  | 'azure-openai-responses'
+  | 'google-vertex'
+  | 'mistral-conversations'
   /** PI's native ChatGPT subscription adapter; not a portable BYOM protocol. */
   | 'openai-codex-responses';
 
@@ -277,6 +281,8 @@ export type PiGatewayModelSpec = Pick<
  * 解析产出;PiAgent 写进 models.json 的独立 provider 块,并按 model→provider 路由 set_model。
  */
 export interface PiNativeProviderSpec {
+  /** Pi adapter identity; the user connection retains its independent ID and credential. */
+  adapterProvider?: string;
   /** PI runtime provider id(slug,禁与网关 provider `cindy` 撞名)。 */
   id: string;
   /** Cindy catalog / persisted provider id; defaults to the runtime id. */

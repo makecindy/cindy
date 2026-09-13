@@ -7,7 +7,7 @@ import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, PROVIDER_MODEL_CATALOG, providerModelRecord, buildUserProvider, type Catalog } from '@cindy/model-providers';
 
 // Account discovery persistence is outside this runtime/route fixture.
 vi.mock('../model-discovery/xai.js', () => ({
@@ -329,6 +329,33 @@ describe('resolvePiCindyGatewayModelApi', () => {
 });
 
 describe('buildPiNativeProvidersFromConfigs', () => {
+  it('carries catalog-generated suppliers through the real Pi launch mapping', () => {
+    const generatedIds = ['ant-ling', 'baseten', 'cerebras', 'fireworks', 'groq',
+      'huggingface', 'nvidia', 'together', 'mistral', 'opencode', 'qwen-token-plan',
+      'qwen-token-plan-individual', 'xiaomi-token-plan-ams', 'xiaomi-token-plan-sgp'];
+    for (const id of generatedIds) {
+      const preset = BUNDLED_CATALOG.presets!.find(p => p.id === id)!;
+      expect(preset, id).toBeDefined();
+      const runtime = preset.runtimes.pi!;
+      const skips: string[] = [];
+      const result = buildPiNativeProvidersFromConfigs([
+        { id, name: preset.name, runtimes: { pi: runtime } },
+      ], () => 'fixture-credential', (_id, reason) => skips.push(reason));
+      expect(skips, id).toEqual([]);
+      expect(result.providers, id).toHaveLength(1);
+      const provider = result.providers[0];
+      const rows = PROVIDER_MODEL_CATALOG.providers[id];
+      expect(provider.models, id).toHaveLength(rows.length);
+      rows.forEach((row, index) => {
+        const model = provider.models![index];
+        expect(model.api ?? provider.api, `${id}/${row.id}`).toBe(row.execution.pi.api);
+        expect(model.baseUrl ?? provider.baseUrl).toBe(row.upstream);
+        expect(model.contextWindow).toBe(row.contextWindow);
+        expect(model.input?.includes('image') ?? false).toBe(row.supportsImageInput);
+      });
+    }
+  });
+
   it.each([
     { baseUrl: 'https://api.openai.com/v1', wireProtocol: 'openai-responses' as const, expected: true },
     { baseUrl: 'https://private.example/v1', wireProtocol: 'openai-responses' as const, expected: false },
@@ -717,8 +744,14 @@ describe('buildPiNativeProvidersFromConfigs', () => {
         xhigh: null,
         max: null,
       },
-      // 目录标记清除后无同源元数据,Chat Completions 默认收敛 system role(#3832)。
-      compat: { supportsDeveloperRole: false },
+      // Exact route metadata remains available without a preset marker; explicit user fields win.
+      maxTokens: 384000,
+      cost: { input: 0.14, output: 0.28, cacheRead: 0.0028, cacheWrite: 0 },
+      compat: {
+        supportsDeveloperRole: false, supportsStore: false,
+        maxTokensField: 'max_tokens', thinkingFormat: 'deepseek',
+        requiresReasoningContentOnAssistantMessages: true,
+      },
     });
   });
 
@@ -2179,6 +2212,23 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(Object.values(env)).toContain('Bearer header-secret');
   });
 
+  it.each([['openai-completions', 'openai-chat'], ['openai-responses', 'openai-responses'], ['anthropic-messages', 'anthropic-messages']] as const)('keeps OAuth %s SDK base free of duplicated version prefixes', (api, wireProtocol) => {
+    const { providers, env } = buildPiNativeProvidersFromConfigs(
+      [{ id: 'openrouter-test', name: 'OpenRouter', auth: { method: 'oauth', oauth: { authorizeUrl: 'https://openrouter.ai/auth' } }, runtimes: { pi: piRuntime({
+        baseUrl: 'https://openrouter.ai/api/v1', wireProtocol,
+        models: [{ id: 'google/gemini-test', api,
+          route: { baseUrl: 'https://openrouter.ai/api/v1', wireProtocol } }],
+      }) } }],
+      () => { throw new Error('OAuth must not read API keys'); }, undefined, undefined, undefined, 'http://127.0.0.1:9999',
+    );
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({ api, baseUrl: 'http://127.0.0.1:9999',
+      headers: { 'x-cindy-pi-provider-id': 'openrouter-test', 'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN' },
+      models: [{ id: 'google/gemini-test', baseUrl: 'http://127.0.0.1:9999' }],
+    });
+    expect(env).toEqual({});
+  });
+
   it('oauth custom provider is skipped for pi native', () => {
     const skips: string[] = [];
     const { providers } = buildPiNativeProvidersFromConfigs(
@@ -2496,4 +2546,57 @@ it('uses the resolved BYOM catalog without borrowing its route or credentials', 
       reasoning: true, input: ['text', 'image'], cost: { input: 5, output: 6, cacheRead: 0, cacheWrite: 0 } })] });
   expect(result.providers[0]!.models[0]!.baseUrl).toBeUndefined();
   expect(result.env[result.providers[0]!.apiKeyEnvVar!]).toBe('fixture-key');
+});
+
+// Check the actual Pi launch descriptor, not just the settings/catalog projection.
+it('keeps mixed OpenCode protocols and image inputs in the native Pi launch', () => {
+  const { providers } = buildPiNativeProvidersFromConfigs([{
+    id: 'custom-opencode', name: 'OpenCode', runtimes: { pi: {
+      baseUrl: 'https://opencode.ai/zen/v1', wireProtocol: 'openai-chat',
+      models: ['gpt-6-astra', 'gemini-3.8-flash', 'deepseek-v4-flash', 'deepseek-v4-flash-vision-exp']
+        .map(id => ({ id, name: id })),
+    } },
+  }], () => 'test-key');
+  expect(providers).toHaveLength(1);
+  expect(providers[0]?.models[0]).toMatchObject({ api: 'openai-responses', input: ['text', 'image'] });
+  expect(providers[0]?.models[1]).toMatchObject({ api: 'google-generative-ai', input: ['text', 'image'] });
+  expect(providers[0]?.models[2]).toMatchObject({ input: ['text'] });
+  expect(providers[0]?.models[3]).toMatchObject({ input: ['text', 'image'] });
+});
+
+it('carries every unambiguous portable catalog model into the Pi descriptor', () => {
+  let checked = 0;
+  for (const rows of Object.values(PROVIDER_MODEL_CATALOG.providers)) {
+    for (const row of rows) {
+      const api = row.execution.pi.api;
+      if (api !== 'anthropic-messages' && api !== 'openai-responses' &&
+          api !== 'openai-completions' && api !== 'google-generative-ai') continue;
+      if (providerModelRecord(row.id, row.upstream, api) !== row) continue;
+      const { providers } = buildPiNativeProvidersFromConfigs([{
+        id: 'catalog-audit', name: 'Catalog audit', runtimes: { pi: {
+          baseUrl: row.upstream, wireProtocol: 'openai-chat',
+          models: [{ id: row.id, name: row.name, piApi: api }],
+        } },
+      }], () => 'test-key');
+      expect(providers[0]?.models[0], `${row.upstream} ${row.id}`).toMatchObject({
+        api, input: row.modalities.input.filter(value => value === 'text' || value === 'image'),
+        contextWindow: row.contextWindow, maxTokens: row.maxOutput,
+      });
+      checked++;
+    }
+  }
+  expect(checked).toBeGreaterThan(1000);
+});
+
+
+it('launches a new Azure deployment with the bound connection API and configured context', () => {
+  const preset = BUNDLED_CATALOG.presets!.find(preset => preset.id === 'azure-openai-responses')!;
+  const config = { id: 'azure-deployment-test', name: 'Azure', runtimes: { pi: {
+    ...preset.runtimes.pi!, baseUrl: 'https://my-resource.openai.azure.com/openai/v1', catalogPresetId: preset.id,
+    models: [{ id: 'deployment-new', name: 'Deployment', contextWindow: 64000 }],
+  } } };
+  const provider = buildUserProvider(config, { presets: BUNDLED_CATALOG.presets });
+  const result = buildPiNativeProvidersFromConfigs([config], () => 'fixture-key', undefined, undefined,
+    { ...BUNDLED_CATALOG, providers: [provider] });
+  expect(result.providers[0]?.models[0]).toMatchObject({ id: 'deployment-new', api: 'azure-openai-responses', contextWindow: 64000 });
 });
