@@ -133,6 +133,19 @@ describe('provider import URL parsing', () => {
     createDraft(customPayload({ endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://api.acme.test:443/catalog/models' }] }));
   });
 
+  it('imports Google generateContent endpoints for all three engines', () => {
+    const importId = createDraft(customPayload({
+      endpoints: [{
+        protocol: 'google-generative-ai',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        models: ['gemini-2.5-flash'],
+      }],
+    }));
+    const preview = previewProviderImport(importId, SCOPE, []);
+    expect(preview.runtimes.map((runtime) => runtime.agent)).toEqual(['claude-code', 'codex', 'pi']);
+    expect(preview.runtimes.every((runtime) => runtime.protocol === 'google-generative-ai')).toBe(true);
+  });
+
   it.each(['http://localhost:4000/v1', 'http://127.0.0.1:4000/v1', 'http://[::1]:4000/v1'])(
     'accepts no-auth loopback endpoints: %s', (baseUrl) => {
       const id = createDraft(customPayload({

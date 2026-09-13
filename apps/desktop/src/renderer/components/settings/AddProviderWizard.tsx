@@ -1306,7 +1306,7 @@ export function AddProviderWizard({
             return {
               id: m.id,
               name: m.name,
-              ...(!m.checked ? { defaultEnabled: false } : {}),
+              defaultEnabled: m.checked,
               discoveredMetadata,
               ...(m.discoveredCosts?.[agent] ? { discoveredCost: m.discoveredCosts[agent] } : {}),
               ...(presetModel?.mode ? { mode: presetModel.mode } : {}),

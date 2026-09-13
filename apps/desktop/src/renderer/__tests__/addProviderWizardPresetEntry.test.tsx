@@ -509,7 +509,7 @@ describe('AddProviderWizard — preset 直达', () => {
       catalogPresetId: 'explicit-pi',
       baseUrl: 'https://explicit.example/pi',
       wireProtocol: 'openai-chat',
-      models: [{ id: 'pi-model', name: 'Pi Model', discoveredMetadata: {} }],
+      models: [{ id: 'pi-model', name: 'Pi Model', discoveredMetadata: {}, defaultEnabled: true }],
     });
     expect(keys.pi).toBe('sk-test');
   });
@@ -529,7 +529,7 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(config.runtimes['claude-code']).toEqual({
       catalogPresetId: 'explicit-pi',
       baseUrl: 'https://explicit.example/anthropic',
-      models: [{ id: 'claude-model', name: 'Claude Model', discoveredMetadata: {} }],
+      models: [{ id: 'claude-model', name: 'Claude Model', discoveredMetadata: {}, defaultEnabled: true }],
     });
     expect(config.runtimes.pi?.models).toEqual([{ id: 'pi-model', name: 'Pi Model', discoveredMetadata: {}, defaultEnabled: false }]);
     expect(keys.pi).toBe('sk-test');
@@ -565,7 +565,7 @@ describe('AddProviderWizard — preset 直达', () => {
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
     const [config, keys] = vi.mocked(createCustomProvider).mock.calls[0];
     expect(config.runtimes['claude-code']?.models).toEqual([
-      { id: 'claude-only-model', name: 'Claude Only Model', discoveredMetadata: {} },
+      { id: 'claude-only-model', name: 'Claude Only Model', discoveredMetadata: {}, defaultEnabled: true },
     ]);
     expect(config.runtimes.pi).toBeUndefined();
     expect(keys.pi).toBeUndefined();
@@ -673,7 +673,7 @@ describe('AddProviderWizard — preset 直达', () => {
           codex: expect.objectContaining({
             baseUrl: 'http://localhost:4100/v1',
             requestPath: '/tenant/acme/infer',
-            models: [{ id: 'local-model', name: 'local-model', discoveredMetadata: {} }],
+            models: [{ id: 'local-model', name: 'local-model', discoveredMetadata: {}, defaultEnabled: true }],
           }),
         },
       }),
@@ -863,7 +863,7 @@ describe('AddProviderWizard — preset 直达', () => {
       baseUrl: 'https://open.bigmodel.cn/api/coding/paas/v4',
       wireProtocol: 'openai-chat',
     });
-    expect(runtime?.models.filter(m => m.defaultEnabled !== false)).toEqual([{ id: 'glm-5.2', name: 'GLM-5.2', discoveredMetadata: {} }]);
+    expect(runtime?.models.filter(m => m.defaultEnabled !== false)).toEqual([{ id: 'glm-5.2', name: 'GLM-5.2', discoveredMetadata: {}, defaultEnabled: true }]);
   });
 
   it('可编辑预设改为同源 endpoint 后继续合并 Responses 目录', async () => {
@@ -901,11 +901,12 @@ describe('AddProviderWizard — preset 直达', () => {
       }),
     );
     expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models).toEqual([
-      { id: 'chat-model', name: 'Chat Model', discoveredMetadata: {} },
+      { id: 'chat-model', name: 'Chat Model', discoveredMetadata: {}, defaultEnabled: true },
       {
         discoveredMetadata: { name: 'Responses Model' },
         id: 'responses-model',
         name: 'Responses Model',
+        defaultEnabled: true,
         route: {
           baseUrl: 'https://editable.example/api/v1',
           wireProtocol: 'openai-responses',
@@ -1076,7 +1077,7 @@ it('imports the same discovered OpenRouter identity, capabilities and prices int
       cost: { input: 0.75864, output: 1.51728 } });
     expect(modelProtocolComparison(provider, { [agent]: model }).forAgent(agent)?.mode)
       .toBe(agent === 'pi' ? 'matching' : 'compatibility');
-    expect(model.defaultEnabled).toBe(agent === 'pi');
+    expect(model.defaultEnabled).toBe(true);
   }
 });
 
@@ -1104,7 +1105,7 @@ it('imports an OpenCode Go Responses model into all three engines', async () => 
   expect(model).toMatchObject({ piApi: 'openai-responses', supportsImageInput: true });
   const projected = buildUserProvider(saved, { presets: [preset] });
   for (const agent of projected.agents) {
-    expect(projected.models[agent]?.find(m => m.id === 'gpt-5.6-luna')).toMatchObject({ api: 'openai-responses', defaultEnabled: agent !== 'claude-code' });
+    expect(projected.models[agent]?.find(m => m.id === 'gpt-5.6-luna')).toMatchObject({ api: 'openai-responses', defaultEnabled: true });
     expect(saved.runtimes[agent]?.models.find(m => m.id === 'gpt-5.6-luna')).not.toHaveProperty('route');
   }
 });
@@ -1246,7 +1247,7 @@ it('imports the full Hermes inventory immediately, enables selected Pi models an
   expect(provider.agents).toEqual(['claude-code', 'codex', 'pi']);
   for (const agent of provider.agents) {
     expect(provider.models[agent]?.map(m => m.id)).toEqual(['google/gemini-test', 'other']);
-    expect(provider.models[agent]?.find(m => m.id === 'google/gemini-test')?.defaultEnabled).toBe(agent === 'pi');
+    expect(provider.models[agent]?.find(m => m.id === 'google/gemini-test')?.defaultEnabled).toBe(true);
     expect(provider.models[agent]?.find(m => m.id === 'other')?.defaultEnabled).toBe(false);
   }
 });
