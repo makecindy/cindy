@@ -21,6 +21,7 @@ import {
   createEmptyThinkingRecoveryRule,
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
+  createMissingReasoningItemRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
   createToolUseProviderSpecificFieldsRecoveryRule,
   createVllmResponsesCompatibilityRule,
@@ -82,6 +83,13 @@ const ENC_ERROR_BODY = JSON.stringify({
 const XAI_ENC_ERROR_BODY = JSON.stringify({
   code: 'invalid-argument',
   error: 'Could not decrypt the provided encrypted_content. Ensure the value is the unmodified encrypted_content from a previous response.',
+});
+
+const MISSING_REASONING_ERROR_BODY = JSON.stringify({
+  error: {
+    message: "Item with id 'rs_missing' not found. Items are not persisted when `store` is set to false. Try again with `store` set to true, or remove this item from your input.",
+    type: 'invalid_request_error',
+  },
 });
 
 const IMAGE_GENERATION_ID_ERROR_BODY = JSON.stringify({
@@ -1482,6 +1490,184 @@ describe('anthropic-compat-proxy encrypted content retry', () => {
     expect(r.status).toBe(400);
     expect(upstream.bodies).toHaveLength(2);
     expect(upstream.bodies[1]).not.toContain('encrypted_content');
+  });
+});
+
+describe('anthropic-compat-proxy missing reasoning item retry', () => {
+  it('recovers once from 404 without invoking existing encrypted or image recovery strippers', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      res.writeHead(idx === 0 ? 404 : 200, { 'content-type': 'application/json' });
+      res.end(idx === 0 ? MISSING_REASONING_ERROR_BODY : JSON.stringify({ ok: true }));
+    });
+    upstreamClose = upstream.close;
+    const onRetry = vi.fn();
+    const encryptedRetry = vi.fn();
+    const imageRetry = vi.fn();
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+      recoveryRules: [
+        createEncryptedContentRecoveryRule({ enabled: () => true, onRetry: encryptedRetry }),
+        createImageGenerationIdRecoveryRule({ onRetry: imageRetry }),
+        createMissingReasoningItemRecoveryRule({ onRetry }),
+      ],
+    });
+    const kept = [
+      { type: 'reasoning', id: 'rs_valid', encrypted_content: 'VALID' },
+      { type: 'reasoning', id: 'rs_other', summary: [] },
+      { type: 'item_reference', id: 'rs_saved' },
+      { type: 'compaction', id: 'cmp_1', encrypted_content: 'BLOB' },
+      { type: 'message', role: 'user', content: 'continue' },
+      { type: 'function_call', call_id: 'call_1', name: 'test', arguments: '{}' },
+      { type: 'function_call_output', call_id: 'call_1', output: 'done' },
+      { type: 'image_generation_end', call_id: 'ig_1' },
+    ];
+    const body = {
+      model: 'gpt-6-astra', store: false, previous_response_id: 'resp_keep',
+      input: [
+        { type: 'reasoning', id: 'rs_missing', summary: [{ type: 'summary_text', text: 'prior reasoning' }], content: null },
+        { type: 'item_reference', id: 'rs_missing' },
+        ...kept,
+      ],
+    };
+    const result = await post(proxy.url, body);
+    expect(result).toEqual({ status: 200, text: JSON.stringify({ ok: true }) });
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[0]!)).toEqual(body);
+    expect(JSON.parse(upstream.bodies[1]!)).toEqual({ ...body, input: kept });
+    expect(onRetry).toHaveBeenCalledExactlyOnceWith('thread-a', 'gpt-6-astra');
+    expect(encryptedRetry).not.toHaveBeenCalled();
+    expect(imageRetry).not.toHaveBeenCalled();
+  });
+
+  it('returns a second missing-id error without deleting another unconfirmed id or retrying again', async () => {
+    const secondError = MISSING_REASONING_ERROR_BODY.replace('rs_missing', 'rs_second');
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(idx === 0 ? MISSING_REASONING_ERROR_BODY : secondError);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createMissingReasoningItemRecoveryRule()],
+    });
+    const result = await post(proxy.url, {
+      store: false, input: [{ type: 'reasoning', id: 'rs_missing' }, { type: 'item_reference', id: 'rs_second' }],
+    });
+    expect(result).toEqual({ status: 404, text: secondError });
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]!)).toEqual({
+      store: false, input: [{ type: 'item_reference', id: 'rs_second' }],
+    });
+  });
+
+  it('decodes a gzip 404, forwards retry SSE intact, and leaves later successful requests unchanged', async () => {
+    const sse = 'data: {"type":"response.completed","response":{"id":"resp_ok"}}\n\n';
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      if (idx === 0) {
+        res.writeHead(404, { 'content-type': 'application/json', 'content-encoding': 'gzip' });
+        res.end(gzipSync(MISSING_REASONING_ERROR_BODY));
+      } else {
+        res.writeHead(200, { 'content-type': 'text/event-stream' });
+        res.end(sse);
+      }
+    });
+    upstreamClose = upstream.close;
+    const observedStatuses: number[] = [];
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createMissingReasoningItemRecoveryRule()],
+      responseObserver: ({ status }) => { observedStatuses.push(status); },
+    });
+    const body = { store: false, input: [{ type: 'reasoning', id: 'rs_missing', summary: [] }] };
+    expect(await post(proxy.url, body)).toEqual({ status: 200, text: sse });
+    expect(await post(proxy.url, body)).toEqual({ status: 200, text: sse });
+    expect(upstream.bodies).toEqual([
+      JSON.stringify(body), JSON.stringify({ store: false, input: [] }), JSON.stringify(body),
+    ]);
+    expect(observedStatuses).toEqual([200, 200]);
+  });
+
+  it.each([
+    { store: false, input: [{ type: 'reasoning', id: 'rs_missing', encrypted_content: 'VALID' }] },
+    { store: false, input: [{ type: 'item_reference', id: 'msg_saved' }] },
+    { store: false, input: [{ type: 'item_reference', id: 'rs_saved' }] },
+    { store: false, metadata: { input: [{ type: 'reasoning', id: 'rs_missing' }] } },
+    { store: false, input: 'hello' },
+  ])('returns the precise 404 unchanged when there is nothing safe to remove %#', async (body) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(MISSING_REASONING_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    const observedStatuses: number[] = [];
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createMissingReasoningItemRecoveryRule()],
+      responseObserver: ({ status }) => { observedStatuses.push(status); },
+    });
+    expect(await post(proxy.url, body)).toEqual({ status: 404, text: MISSING_REASONING_ERROR_BODY });
+    expect(upstream.bodies).toEqual([JSON.stringify(body)]);
+    expect(observedStatuses).toEqual([404]);
+  });
+
+  it.each([
+    { status: 404, error: '{"error":"route not found"}', store: false, enabled: true },
+    { status: 404, error: MISSING_REASONING_ERROR_BODY.replace('rs_missing', 'msg_missing'), store: false, enabled: true },
+    { status: 400, error: MISSING_REASONING_ERROR_BODY, store: false, enabled: true },
+    { status: 422, error: MISSING_REASONING_ERROR_BODY, store: false, enabled: true },
+    { status: 503, error: MISSING_REASONING_ERROR_BODY, store: false, enabled: true },
+    { status: 404, error: MISSING_REASONING_ERROR_BODY, store: true, enabled: true },
+    { status: 404, error: MISSING_REASONING_ERROR_BODY, store: undefined, enabled: true },
+    { status: 404, error: MISSING_REASONING_ERROR_BODY, store: false, enabled: false },
+  ])('passes through non-recoverable errors without retry %#', async ({ status, error, store, enabled }) => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(status, { 'content-type': 'application/json' });
+      res.end(error);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createMissingReasoningItemRecoveryRule({ enabled: () => enabled })],
+    });
+    const body = { store, input: [{ type: 'reasoning', id: 'rs_missing' }] };
+    expect(await post(proxy.url, body)).toEqual({ status, text: error });
+    expect(upstream.bodies).toEqual([JSON.stringify(body)]);
+  });
+
+  it('keeps the new 404-only stripper out of legacy 400 recovery', async () => {
+    const upstream = await startFakeUpstream((idx, _body, res) => {
+      res.writeHead(idx === 0 ? 400 : 200, { 'content-type': 'application/json' });
+      res.end(idx === 0 ? IMAGE_GENERATION_ID_ERROR_BODY : '{}');
+    });
+    upstreamClose = upstream.close;
+    const onRetry = vi.fn();
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createImageGenerationIdRecoveryRule(), createMissingReasoningItemRecoveryRule({ onRetry })],
+    });
+    const reasoning = { type: 'reasoning', id: 'rs_missing', summary: [] };
+    const result = await post(proxy.url, {
+      store: false, input: [reasoning, { type: 'image_generation_end' }],
+    });
+    expect(result.status).toBe(200);
+    expect(upstream.bodies).toHaveLength(2);
+    expect(JSON.parse(upstream.bodies[1]!)).toEqual({ store: false, input: [reasoning] });
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
+  it('does not run legacy 400/422 rules on a matching-text 404', async () => {
+    const upstream = await startFakeUpstream((_idx, _body, res) => {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(ENC_ERROR_BODY);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url, transformRequest: [],
+      recoveryRules: [createEncryptedContentRecoveryRule({ enabled: () => true }), createMissingReasoningItemRecoveryRule()],
+    });
+    expect((await post(proxy.url, { store: false, input: [{ encrypted_content: 'VALID' }] })).status).toBe(404);
+    expect(upstream.bodies).toHaveLength(1);
   });
 });
 

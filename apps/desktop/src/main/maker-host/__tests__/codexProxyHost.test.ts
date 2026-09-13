@@ -2722,6 +2722,7 @@ describe('codex proxy host', () => {
         recoveryRules: expect.arrayContaining([
           expect.objectContaining({ id: 'encrypted_content' }),
           expect.objectContaining({ id: 'image_generation_id' }),
+          expect.objectContaining({ id: 'missing_reasoning_item', statusCodes: [404] }),
           expect.objectContaining({ id: 'xai_model_input' }),
         ]),
       }),
@@ -2827,14 +2828,21 @@ describe('codex proxy host', () => {
       threadId: 'thread-image',
       message: 'Image generation items without `id` are not supported for this request.',
     })).toBe('image_generation_id');
+    expect(host.armCodexHttpRecovery({
+      sessionId: 'session-missing-reasoning',
+      threadId: 'thread-missing-reasoning',
+      message: "Item with id 'rs_foreign_history' not found. Items are not persisted when `store` is set to false.",
+    })).toBe('missing_reasoning_item');
 
     expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-encrypted'))).toBeNull();
     expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-image'))).toBeNull();
+    expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-missing-reasoning'))).toBeNull();
     expect(proxyOpts.resolveWebSocketUpstream(ctxForThread('thread-safe'))).toBe(
       'https://chatgpt.com/backend-api/codex',
     );
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-encrypted');
     expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-image');
+    expect(disconnectWebSocketsForThread).toHaveBeenCalledWith('thread-missing-reasoning');
   });
 
   it.each(['shared', 'custom-context', 'control-plane'] as const)(

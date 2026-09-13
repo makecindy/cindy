@@ -1123,15 +1123,17 @@ function forward(
     }
     const status = upstreamRes.statusCode ?? 502;
 
-    // ── 上游 400/422 的透明重试 ──────────────────────────────────────────────
-    // 只对启用恢复规则的客户端错误(400/422)缓冲判定:
+    // ── 上游错误的透明重试 ──────────────────────────────────────────────────
+    // 只对规则允许的状态码且有 enabled recovery rule 的请求缓冲判定:
     // 先把(很小的) 错误体完整缓冲下来, 在 'end' 找第一条 match 命中且 strip 出东西的规则,
     // 剥字段重发最多一次, 对客户端透明；重试后只分类不可恢复的错误，不再重发。
     // xAI 对不可反序列化 / 解不开的 encrypted_content 可能回 422 invalid-argument, 不能只认 400。
-    // 2xx 流式响应 / 其它 4xx5xx / 无适用规则走下面原有的 writeHead + pipe, 零额外延迟。
-    const activeRules = (status === 400 || status === 422)
-      ? recoveryRules.filter((r) => r.enabled() && (canRetry || r.unrecoverableCode))
-      : [];
+    // 默认仍只认 400/422。其它状态必须逐规则 opt in;额外 strip 同样只在该状态的
+    // activeRules 内选择,避免恢复 missing-item 404 时顺手剥掉有效 encrypted_content。
+    // 无适用规则走下面原有的 writeHead + pipe,零额外延迟;重试后仅保留 terminal classifier。
+    const activeRules = recoveryRules.filter((r) => (
+      r.statusCodes ? r.statusCodes.includes(status) : status === 400 || status === 422
+    ) && r.enabled() && (canRetry || r.unrecoverableCode));
     if (activeRules.length > 0) {
       const chunks: Buffer[] = [];
       const failBufferedResponse = (
@@ -1153,14 +1155,14 @@ function forward(
             forwardLifecycle.onFailure?.(failure, status),
           );
         }
-        logger.error?.('upstream response stream error (during 400 buffering)', {
+        logger.error?.('upstream response stream error (during recovery buffering)', {
           reqId,
           err: String(err),
           reason,
           status,
           bytes: chunks.reduce((sum, chunk) => sum + chunk.length, 0),
         });
-        // 400/422 buffering never creates a responseObserver sink; only the
+        // Recovery buffering never creates a responseObserver sink; only the
         // streaming path below owns observer start/data/end/error callbacks.
         finishClientAfterUpstreamFailure(err);
       };
@@ -1184,7 +1186,7 @@ function forward(
         for (const [matchedIndex, rule] of activeRules.entries()) {
           if (!canRetry) break;
           if (!rule.matches(decodedText)) continue;
-          const stripped = rule.strip(body);
+          const stripped = rule.strip(body, decodedText);
           if (!stripped) continue;
           let retryBody = stripped;
           const appliedRules: RecoveryRule[] = [rule];
@@ -1198,7 +1200,7 @@ function forward(
             for (const [extraIndex, extraRule] of activeRules.entries()) {
               if (extraIndex === matchedIndex) continue;
               if (extraRule.applyOnUnmatchedRetry === false) continue;
-              const extraStripped = extraRule.strip(retryBody);
+              const extraStripped = extraRule.strip(retryBody, decodedText);
               if (!extraStripped) continue;
               retryBody = extraStripped;
               appliedRules.push(extraRule);
@@ -1291,10 +1293,9 @@ function forward(
           });
           return;
         }
-        // 无规则命中: 把这条 400 原样回给客户端 + 记 warn 日志 (与下方非 2xx 分支同语义)。
-        // responseObserver 在此分支同样要喂到:这条 400 是客户端真实收到的失败,不喂会让
-        // 「带 enabled recovery rule 的 400」(如 MODEL_NOT_FOUND) 静默绕过上游错误观察。
-        // (规则命中并透明重试的那次 400 刻意不喂——客户端从未见到它,重试结果会正常过观察器。)
+        // 无规则命中: 原样返回上游错误 + 记 warn 日志(与下方非 2xx 分支同语义)。
+        // responseObserver 同样要喂到,否则缓冲过的普通错误(如 MODEL_NOT_FOUND)
+        // 会静默绕过上游错误观察。成功触发恢复的中间失败刻意不喂,客户端只会看到重试结果。
         if (responseObserver) {
           try {
             const sink = responseObserver({
@@ -1312,7 +1313,7 @@ function forward(
             sink?.onData?.(errBody);
             sink?.onEnd?.();
           } catch (err) {
-            logger.warn?.('responseObserver threw on buffered 400', { reqId, err: String(err) });
+            logger.warn?.('responseObserver threw on buffered recovery response', { reqId, err: String(err) });
           }
         }
         const errorType = extractErrorType(decodedErrBody, String(upstreamRes.headers['content-type'] ?? ''));
