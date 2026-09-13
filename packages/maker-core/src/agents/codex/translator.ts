@@ -340,6 +340,8 @@ interface TranslatorLog {
 export interface CodexTranslateContext {
   rt: CodexRuntimeState;
   log: TranslatorLog;
+  /** Stable host classification that is known only from surrounding turn state. */
+  errorReasonOverride?: string;
   /**
    * Maker Memory flush 观察器 — codex contextCompaction completed 时调,
    * controller 重置 fired 阈值 (compact 后 context 又有空间, 可重新触发)。
@@ -557,7 +559,10 @@ export function translateErrorNotification(
   const errorStatus = classified.errorStatus;
   const isCapacityError = classified.isCapacityError;
   const errorInfoTag = classified.errorInfoTag;
-  const safeErrorData = classified.data;
+  const safeErrorData = {
+    ...classified.data,
+    ...(ctx.errorReasonOverride ? { reason: ctx.errorReasonOverride } : {}),
+  };
   // willRetry=true 的暂时错误 (transient API blip / 5xx blip), server 自己会重试 — 默认
   // 不 emit error event 给 UI,否则会把瞬时错误暴露成用户可见失败。**但** auth 缺失
   // (401/Unauthorized/Missing bearer) 是 daemon 怎么 retry 也不可能自愈的 —— 必须

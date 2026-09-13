@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON } from '@cindy/maker-core';
 
 import {
   INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
@@ -96,6 +97,9 @@ describe('isInterruptedTurnError', () => {
     expect(isAcceptedTurnContinuationOnlyReason('turn_no_event_timeout')).toBe(true);
     expect(isAcceptedTurnContinuationOnlyReason('upstream_response_idle_timeout')).toBe(true);
     expect(isAcceptedTurnContinuationOnlyReason('codex_reconnect_stalled')).toBe(true);
+    expect(
+      isAcceptedTurnContinuationOnlyReason(CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON),
+    ).toBe(true);
     expect(isAcceptedTurnContinuationOnlyReason('empty-response')).toBe(false);
     expect(isAcceptedTurnContinuationOnlyReason('upstream-overload')).toBe(false);
     expect(isAcceptedTurnContinuationOnlyReason('turn-failed')).toBe(false);

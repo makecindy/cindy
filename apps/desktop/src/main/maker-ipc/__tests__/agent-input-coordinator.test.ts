@@ -1,4 +1,9 @@
-import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
+import {
+  AUTO_REVIEW_SOURCE_CONTENT,
+  AUTO_REVIEW_USER_INTENT,
+  CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON,
+  appendAutoReviewUserIntent,
+} from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import { createOrcaInterAgentDispatcher } from '../orcaInterAgentDispatcher.js';
@@ -10893,11 +10898,12 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     h: ReturnType<typeof createHarness>,
     sid: string,
     item = makeItem('q-first', 'original long task'),
+    signals: { sdkError?: string; reason?: string } = truncationSignals,
   ) {
     h.coordinator.enqueue(sid, item);
     await flush();
     h.setRunning(false);
-    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, signals);
     await flush();
     return h;
   }
@@ -11352,6 +11358,25 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(2);
   });
 
+  it('压缩断流后的人工 Retry 不重放原始任务', async () => {
+    const h = createHarness();
+    const sid = 'manual-retry-after-compaction-transport-interrupt';
+    h.setHasAssistantProgressAfter(async () => false);
+    await failAfterDispatch(h, sid, undefined, {
+      reason: CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON,
+    });
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: CONTINUE_AFTER_ERROR_PROMPT,
+    });
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBeUndefined();
+  });
+
   it('自动续跑再次失败后,人工 Retry 会清掉上一轮隐藏标记并重置真人额度', async () => {
     const h = createHarness();
     const sid = 'manual-retry-after-auto-failure';
@@ -11424,6 +11449,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     ['turn_no_event_timeout', false, true],
     ['upstream_response_idle_timeout', false, true],
     ['codex_reconnect_stalled', true, true],
+    [CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON, false, true],
     ['turn_no_event_timeout', true, false],
     ['upstream_response_idle_timeout', true, undefined],
     ['empty-response', true, true],
