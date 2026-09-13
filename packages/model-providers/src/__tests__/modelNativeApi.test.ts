@@ -43,6 +43,16 @@ describe('native declarations for verified catalog identities', () => {
     r.models.push({ ...r.models[0], nativeApi: 'openai-responses' });
     expect(resolveCatalogModelNativeApi(r, 'google/gemini-99')).toBeNull();
   });
+  it('does not let a retired sibling suppress the active catalog identity', () => {
+    const r = registry();
+    r.baseModels = [{ id: 'gemini-99', name: 'Gemini 99', aliases: [] }];
+    r.models = [
+      { id: 'google/gemini-99', name: 'Gemini', modelRef: 'gemini-99', nativeApi: 'google-generative-ai', routes: [] },
+      { id: 'google/gemini-99-preview', name: 'Gemini preview', modelRef: 'gemini-99', status: 'retired', nativeApi: 'google-generative-ai', routes: [] },
+    ];
+    expect(resolveCatalogModelNativeApi(r, 'google/gemini-99')).toBe('google-generative-ai');
+    expect(resolveCatalogModelNativeApi(r, 'google/gemini-99-preview')).toBeNull();
+  });
   it('does not let a native declaration manufacture endpoint or capability data', () => {
     const r = registry();
     expect(resolveCatalogModelNativeApi(r, 'gemini-99')).toBe('google-generative-ai');

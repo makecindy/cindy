@@ -77,9 +77,11 @@ export function resolveCatalogModelNativeApi(
   const entries = registry.models.filter(entry =>
     entry.id === modelId || (base && (entry.id === base.id || entry.modelRef === base.id)),
   );
-  if (entries.some(entry => entry.status === 'retired')) return null;
+  const target = entries.find(entry => entry.id === modelId);
+  if (target?.status === 'retired') return null;
   if (registry.schemaVersion < 3) return undefined;
-  const declarations = new Set(entries.flatMap(entry =>
+  const live = entries.filter(entry => entry.status !== 'retired');
+  const declarations = new Set(live.flatMap(entry =>
     entry.nativeApi !== undefined ? [entry.nativeApi] : [],
   ));
   if (declarations.size) return declarations.size === 1 ? [...declarations][0] : null;

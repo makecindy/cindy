@@ -37,10 +37,14 @@ export function parseModelsListResponse(
   const out: DiscoveredModel[] = [];
   const seen = new Set<string>();
   for (const item of list) {
+    const generationMethods = item && typeof item === 'object'
+      ? (item as { supportedGenerationMethods?: unknown }).supportedGenerationMethods
+      : undefined;
     const google = item && typeof item === 'object'
       && typeof (item as { name?: unknown }).name === 'string'
       && (item as { name: string }).name.startsWith('models/')
-      && Array.isArray((item as { supportedGenerationMethods?: unknown }).supportedGenerationMethods)
+      && Array.isArray(generationMethods)
+      && generationMethods.includes('generateContent')
       ? item as { name: string; displayName?: string; inputTokenLimit?: number; outputTokenLimit?: number }
       : undefined;
     const id =

@@ -20,6 +20,14 @@ describe('shared provider discovery', () => {
         cost: { input: 1, output: 3, cacheRead: 0 } });
     }
   });
+  it('keeps Google embedding models out of chat discovery', () => {
+    const models = parseModelsListResponse({ models: [
+      { name: 'models/gemini-3.5-flash', displayName: 'Gemini', supportedGenerationMethods: ['generateContent', 'countTokens'] },
+      { name: 'models/text-embedding-004', displayName: 'Embedding', supportedGenerationMethods: ['embedContent', 'batchEmbedContents'] },
+      { name: 'models/aqa', displayName: 'AQA', supportedGenerationMethods: ['generateAnswer'] },
+    ] });
+    expect(models?.map(model => model.id)).toEqual(['gemini-3.5-flash']);
+  });
   it('keeps non-language Vercel models out of chat and does not treat per-image prices as tokens', () => {
     const [m] = parseModelsListResponse({ data: [{ id: 'vendor/image', type: 'image',
       modalities: { input: ['text'], output: ['image'] }, pricing: { output: '0.04' },
