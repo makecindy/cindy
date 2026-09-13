@@ -11641,6 +11641,7 @@
       "dingtalkBotDisconnectFailed": "Failed to unbind DingTalk bot"
     },
     "errors": {
+      "malformedToolMarkup": "The model returned a malformed tool call, so no tools ran in this turn. Resend your message to retry.",
       "openFileFailed": "Cannot open file in system",
       "emptyResponse": "The model returned an empty response — please retry. (Nothing was produced this turn; this often happens when the model gateway short-circuits under large context or high load.)",
       "turnFailed": "The task failed (the model returned no error detail) — please retry.",

@@ -11625,6 +11625,7 @@
       "dingtalkBotDisconnectFailed": "釘釘機器人解綁失敗"
     },
     "errors": {
+      "malformedToolMarkup": "模型傳回了格式錯誤的工具呼叫，本輪工具未執行。請重新傳送訊息重試",
       "openFileFailed": "無法在系統中開啟檔案",
       "emptyResponse": "模型返回了空響應，請重試。(本輪未產出任何內容，常見於模型閘道器在大上下文 / 高負載下返回空流)",
       "turnFailed": "任務執行失敗（模型未返回錯誤詳情），請重試。",
