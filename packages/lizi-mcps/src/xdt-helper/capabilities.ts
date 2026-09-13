@@ -109,6 +109,8 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       'Rewind:在当前会话回到历史点,改写发送内容后重新运行,原分支被替换。',
       'agent 批量整理:control 类工具 rename_sessions(批量改名)、archive_sessions / unarchive_sessions(批量归档/取消归档,把 status 在 active↔archived 间切换)。',
       '归档可逆、不删数据,经统一权威出口写库并广播 sessions:patched,侧栏即时收敛;不能归档当前正在运行的会话。',
+      '侧栏会话菜单里的移动与分叉 agent 同样可代办(都在 cindy_helper control 类,与 GUI 走同一条主进程路径,侧栏即时刷新):move_sessions(移动到项目 / 移回对话)、fork_session(在某条消息处分叉出新会话)。远程会话、运行中、被 IM 接管中的会话这些操作都会被拦下。',
+      '「复制任务链接」不需要工具:链接格式固定为 cindy://session/<session_id>,粘贴到对话里会渲染成会话 chip。',
       '以上操作都不破坏原数据,可放心试错。',
     ].join(' '),
   },

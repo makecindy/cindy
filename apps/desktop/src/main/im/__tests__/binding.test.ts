@@ -161,6 +161,35 @@ describe('SqliteBindingStore single-owner reverse index', () => {
     ]);
   });
 
+  it('runExclusive holds attachments until the exclusive task settles', async () => {
+    const store = new SqliteBindingStore();
+    const task = deferred<undefined>();
+    await store.preload();
+
+    const seenInsideTask: Array<IdentityKey | null> = [];
+    const exclusive = store.runExclusive(async () => {
+      seenInsideTask.push(store.findByTarget('desktop-session'));
+      await task.promise;
+      seenInsideTask.push(store.findByTarget('desktop-session'));
+      return 'moved';
+    });
+    const attach = store.attach(feishuIdentity, 'desktop-session', {
+      attachedViaCardMessageId: 'feishu-card',
+    });
+
+    await Promise.resolve();
+    expect(mocks.tx).not.toHaveBeenCalled();
+    expect(store.findByTarget('desktop-session')).toBeNull();
+
+    task.resolve(undefined);
+    await expect(exclusive).resolves.toBe('moved');
+    await attach;
+
+    expect(seenInsideTask).toEqual([null, null]);
+    expect(mocks.tx).toHaveBeenCalledTimes(1);
+    expect(store.findByTarget('desktop-session')).toEqual(feishuIdentity);
+  });
+
   it('ignores a queued detach after the identity moves to another target', async () => {
     const store = new SqliteBindingStore();
     await store.preload();
