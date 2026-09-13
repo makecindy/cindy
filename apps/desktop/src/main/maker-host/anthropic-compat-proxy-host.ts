@@ -803,7 +803,7 @@ export function createModelRoutingTransform(): RoutingTransform {
         // wire 缺省推断与 provider-route 的 implicitBridgeWire 同口径:claude-code 的
         // 用户 Anthropic 兼容上游在目录里省略 wireProtocol(buildUserProvider 约定)。
         const bridgeWire = bridgeRoute?.routing.wireProtocol ?? 'anthropic-messages';
-        if (bridgeRoute && bridgeRoute.providerId !== 'xd' && ['anthropic-messages', 'openai-chat', 'openai-responses'].includes(bridgeWire)) {
+        if (bridgeRoute && bridgeRoute.providerId !== 'xd' && ['anthropic-messages', 'openai-chat', 'openai-responses', 'google-generative-ai'].includes(bridgeWire)) {
           const bridged = buildRouteDecision(
             bridgeRoute.routing,
             gatewayKey,

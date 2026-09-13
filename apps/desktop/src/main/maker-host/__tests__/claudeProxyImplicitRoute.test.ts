@@ -192,6 +192,23 @@ describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 i
     } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
   });
 
+  it('implicit Google connection uses the native serializer before session binding', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'google-direct', name: 'Google',
+      runtimes: { 'claude-code': {
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        wireProtocol: 'google-generative-ai',
+        models: [{ id: 'gemini-2.5-flash', name: 'Gemini' }],
+      } },
+    })]);
+    setCustomProviderKeyReader(() => 'goog-key');
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'google-direct': true }));
+    const decision = await Promise.resolve(
+      transform({ model: 'gemini-2.5-flash' }, ctxWith({ 'x-api-key': 'sk-gw' })),
+    );
+    expect(decision?.localHandler).toBeTypeOf('function');
+  });
+
   it('无会话头的裸 glm-5.3 → 路由到用户智谱上游并换用户 key,不再透传默认网关', async () => {
     const decision = await Promise.resolve(
       transform({ model: 'glm-5.3' }, ctxWith({ 'x-api-key': 'sk-gw' })),
