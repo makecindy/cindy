@@ -581,6 +581,8 @@ import {
 } from '../maker-host/pi-package-mutation-grant.js';
 import { readXaiSubscriptionUsageSnapshotForDeviceLink, readClaudeSubscriptionUsageSnapshotForDeviceLink } from './usage.js';
 import { requireEnum, requireObject, throwIpcError } from '../utils/ipcValidate.js';
+import { requireAgentKind, requireDraftAgentKind } from './agentKindGate.js';
+import { requireQueuedMessageShape } from './queuedMessageGate.js';
 import { applyPersistedCindyMakeMarker } from './cindyMakeSessionStart.js';
 import { CINDY_MAKE_SESSION_SOURCE } from '../../shared/cindyMakeSession.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
@@ -589,7 +591,11 @@ import {
   runPiPackageListIpcBoundary,
   runPiPackageMutationIpcBoundary,
 } from './piPackageMutationIpc.js';
-import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import {
+  dbToMakerAgentKind,
+  makerToDbAgentKind,
+  normalizeDbAgentKind,
+} from '../../shared/agentKindConversion.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
@@ -2184,11 +2190,6 @@ function createBridgeWorkerLabel(task: string): string {
 export function stopOrcaIdleWatcher(): void {
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
-}
-
-function requireAgentKind(value: unknown): AgentKind {
-  if (value === 'claude-code' || value === 'codex' || value === 'pi') return value;
-  throwIpcError('INVALID_PARAMS', 'agentKind required');
 }
 
 type IpcUserMessage =
@@ -5256,7 +5257,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // (model/effort/fast/permission/source/是否显式选过模型)。控制端经隧道调用 → seed 远程项目草稿。
   // 缓存未就绪 / 该 vendor 无草稿 model → 返回 {},控制端按 capabilities 默认兜底。
   ipcMain.handle(MAKER_INVOKE.GET_NEW_MAKER_DEFAULTS, (_e, agentKind: unknown) => {
-    return getRemoteNewMakerDefaults(requireAgentKind(agentKind));
+    return getRemoteNewMakerDefaults(requireDraftAgentKind(agentKind));
   });
 
   // device-link 草稿「模型 effort/fast」写穿:控制端经隧道调用 → 跑在**被控端**。被控端不直接改
@@ -5275,9 +5276,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       active?: unknown;
       markModelChoice?: unknown;
     };
-    if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') {
-      throwIpcError('INVALID_PARAMS', 'agent must be claude-code|codex|pi');
-    }
+    const draftAgent = requireDraftAgentKind(p.agent, 'agent');
     if (p.providerId !== undefined && typeof p.providerId !== 'string') {
       throwIpcError('INVALID_PARAMS', 'providerId must be string');
     }
@@ -5300,7 +5299,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('INVALID_PARAMS', 'markModelChoice must be boolean');
     }
     broadcastToAllWindows(MAKER_PUSH.DRAFT_PREF_APPLY, {
-      agent: p.agent,
+      agent: draftAgent,
       providerId: p.providerId ?? '',
       modelId: p.modelId,
       active: p.active === true,
@@ -5893,10 +5892,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             : undefined;
         const sessionMeta = sessionId ? await maker.getSessionMeta(sessionId) : null;
         const builtins = maker.listAgentCommands(kind);
+        // Pi 包体系只存在于 Pi 会话;其它 agent(含 grok-build)按「不是本机普通 Pi
+        // 任务」传 null,与 shouldListPiPackageCommands 内部的 fail-closed 判定同义。
+        const piSessionMeta =
+          sessionMeta?.agentKind === 'pi' ? { ...sessionMeta, agentKind: 'pi' as const } : null;
         const mayListPackageCommands = shouldListPiPackageCommands(
           kind,
           sessionId !== undefined,
-          sessionMeta,
+          piSessionMeta,
           params.allowManagedPiPackagePreview !== false,
         );
         let packageCommands: Array<{ name: string; description: string }> = [];
@@ -12454,7 +12457,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ? 'codex'
           : sessionKindRow?.agentKind === 'pi'
             ? 'pi'
-            : 'cc';
+            : sessionKindRow?.agentKind === 'grok-build'
+              ? 'grok-build'
+              : 'cc';
       broadcastSessionPatched(
         sessionId,
         {
@@ -14269,28 +14274,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     value: unknown,
     opts?: { allowMissingTrustedContexts?: boolean },
   ): AgentInputQueuedMessage => {
-    if (!value || typeof value !== 'object')
-      throwIpcError('INVALID_PARAMS', 'queued message required');
-    const msg = value as AgentInputQueuedMessage;
-    if (typeof msg.clientId !== 'string' || !msg.clientId) {
-      throwIpcError('INVALID_PARAMS', 'queued.clientId required');
-    }
-    if (typeof msg.text !== 'string') throwIpcError('INVALID_PARAMS', 'queued.text required');
-    if (typeof msg.persistedContent !== 'string')
-      throwIpcError('INVALID_PARAMS', 'queued.persistedContent required');
-    if (!msg.chatMessage || typeof msg.chatMessage !== 'object') {
-      throwIpcError('INVALID_PARAMS', 'queued.chatMessage required');
-    }
-    if (!msg.createOpts || typeof msg.createOpts !== 'object') {
-      throwIpcError('INVALID_PARAMS', 'queued.createOpts required');
-    }
-    if (
-      msg.createOpts.agentKind !== 'claude-code' &&
-      msg.createOpts.agentKind !== 'codex' &&
-      msg.createOpts.agentKind !== 'pi'
-    ) {
-      throwIpcError('INVALID_PARAMS', 'queued.createOpts.agentKind invalid');
-    }
+    const msg = requireQueuedMessageShape(value);
     const normalized: AgentInputQueuedMessage = { ...msg };
     delete normalized.autoReviewUserText;
     const refs = requireSessionRefs(normalized.sessionRefs);
@@ -17976,7 +17960,9 @@ async function checkWorkDirExists(
   if (remoteHostId) return true;
   if (!workingDir?.trim()) return true;
   workingDir = workingDirectoryRecovery.resolve(sessionId, workingDir);
-  const source: AgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
+  // 已知 agent 原样透传(否则 grok-build 会被写成 claude-code);只有老 session 的
+  // 未知来源才按注释里的 'claude-code' 兜底。
+  const source: AgentKind = agentKind ?? 'claude-code';
   // suppressMissingBroadcast: 调用方(SEND 事务)手里还有 DB 权威值可兜底时,
   // 首检失败只记日志不广播错误横幅——兜底成功的话用户不该看到假错误。
   const suppress = opts?.suppressMissingBroadcast === true;

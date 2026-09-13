@@ -18,6 +18,7 @@ import type { ModelDescriptor } from '@cindy/maker-core';
 
 import {
   deriveAvailableModels,
+  deriveGrokBuildAvailableModels,
   refreshCatalogDerivedModels,
   resolvePiGatewayDescriptorProviderId,
   resolvePiRuntimeModelDescriptor,
@@ -680,12 +681,17 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const piModels: ModelDescriptor[] = [
       { id: 'stale-pi', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null },
     ];
+    const grokBuildModels: ModelDescriptor[] = [
+      { id: 'stale-grok-build', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null },
+    ];
     const claudeRef = claudeModels;
     const codexRef = codexModels;
     const piRef = piModels;
+    const grokBuildRef = grokBuildModels;
     const target = {
-      getCapabilities(agent: 'claude-code' | 'codex' | 'pi') {
+      getCapabilities(agent: 'claude-code' | 'codex' | 'pi' | 'grok-build') {
         if (agent === 'pi') return { availableModels: piModels };
+        if (agent === 'grok-build') return { availableModels: grokBuildModels };
         return { availableModels: agent === 'claude-code' ? claudeModels : codexModels };
       },
     };
@@ -695,9 +701,11 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(claudeModels).toBe(claudeRef);
     expect(codexModels).toBe(codexRef);
     expect(piModels).toBe(piRef);
+    expect(grokBuildModels).toBe(grokBuildRef);
     expect(claudeModels).toEqual(deriveAvailableModels(injectedCatalog(), 'claude-code'));
     expect(codexModels).toEqual(deriveAvailableModels(injectedCatalog(), 'codex'));
     expect(piModels).toEqual(deriveAvailableModels(injectedCatalog(), 'pi'));
+    expect(grokBuildModels).toEqual(deriveGrokBuildAvailableModels(injectedCatalog()));
   });
 });
 
@@ -829,6 +837,23 @@ describe('resolveModelDefaultContextWindow — settings defaults configure the s
   });
 });
 
+describe('deriveGrokBuildAvailableModels', () => {
+  it('projects exclusive Grok catalog slugs and never a grok-build model row', () => {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    for (const provider of catalog.providers) {
+      if (provider.id !== 'xai') continue;
+      provider.models.pi = [
+        model('xai/grok-4.6', { name: 'Grok 4.6', group: 'grok' }),
+        model('grok-4.5', { name: 'Grok 4.5', group: 'grok' }),
+        model('claude-opus-5', { name: 'Opus 5' }),
+      ];
+    }
+    const models = deriveGrokBuildAvailableModels(catalog);
+    expect(models.some((entry) => entry.id === 'grok-build')).toBe(false);
+    expect(models.some((entry) => entry.id === 'claude-opus-5')).toBe(false);
+    expect(models.map((entry) => entry.id)).toEqual(expect.arrayContaining(['xai/grok-4.6', 'grok-4.5']));
+  });
+});
 
 describe('context settings for provider-less routes', () => {
   it('keeps Pi default gateway budgets isolated from same-name subscription models', () => {

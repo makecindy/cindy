@@ -45,7 +45,6 @@ import { extractIpcError } from '@/utils/ipcError';
 import { useAgentCapabilities, type AgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
-import type { MakerVendor } from '@/lib/ccAgent.types';
 import {
   getProviderModelEffort,
   setProviderModelChoice,
@@ -490,8 +489,9 @@ function PrefsField({
 }
 
 /** hook prefs 的 agentKind → 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
-  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' | 'grok-build' {
+  if (agentKind === 'codex' || agentKind === 'pi' || agentKind === 'grok-build') return agentKind;
+  return 'cc';
 }
 
 /** 目录卡片内的偏好编辑行(完整模型配置 / 权限)。alias 为该行当前生效别名。 */
@@ -508,14 +508,16 @@ export function WorkspacePrefsEditor({
   const claudeCaps = useAgentCapabilities('claude-code');
   const codexCaps = useAgentCapabilities('codex');
   const piCaps = useAgentCapabilities('pi');
+  const grokBuildCaps = useAgentCapabilities('grok-build');
   const capsByAgent = useMemo(
     () =>
       ({
         'claude-code': claudeCaps.capabilities,
         codex: codexCaps.capabilities,
         pi: piCaps.capabilities,
+        'grok-build': grokBuildCaps.capabilities,
       }) as Record<KnownAgent, AgentCapabilities | null>,
-    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities],
+    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities, grokBuildCaps.capabilities],
   );
   const capsOf = useCallback(
     (agentKind: string): AgentCapabilities | null =>
@@ -529,7 +531,7 @@ export function WorkspacePrefsEditor({
   const disabled = !state.editable || state.pendingWs === alias;
   const vendorKey = toVendorKey(eff.agentKind.id);
 
-  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex');
+  const pickerAgents = useModelPickerAgents(vendorKey === 'cc' ? 'claude-code' : vendorKey);
 
   /** 落一个模型选择(分段行与 flat 行共用): 随手写入 (agent, model) 配对并校准 effort。 */
   const applyModel = (next: string) => {

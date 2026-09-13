@@ -746,9 +746,14 @@ export function CreateWorkerPopover({
               )}
               <ModelSelector
                 fastModeConfigurable={['codex', 'pi']}
-                unifiedAgents={sshRemote ? (pickerAgents ?? ['claude-code', 'codex']).filter((kind) => kind !== 'pi') : pickerAgents}
+                unifiedAgents={(sshRemote
+                  ? (pickerAgents ?? ['claude-code', 'codex']).filter((kind) => kind !== 'pi')
+                  : pickerAgents
+                )?.filter((kind) => kind !== 'grok-build')}
                 onUnifiedSelect={deviceId && remoteProviders.unsupported ? undefined : (selection) => {
                   const nextAgent = selection.engine === 'cc' ? 'claude-code' : selection.engine;
+                  // Grok Build is a session harness, not a teammate/worker engine (#3969).
+                  if (nextAgent === 'grok-build') return;
                   updateAgent(nextAgent);
                   setModel(selection.modelId);
                   setProviderSource(selection.providerId);

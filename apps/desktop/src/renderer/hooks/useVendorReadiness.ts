@@ -3,11 +3,10 @@
  * ---------------------------------------------------------------------------
  * 输出统一的 Readiness 枚举。判定分两条**正交**的轴：
  *
- *   1. 有没有可用来源（与 agent 类型无关，唯一真相）：
- *        connectedProvidersForAgent(providers, agent).length > 0 → 'ready' | 'unauthenticated'
- *      cc 由 XD 网关 key / claude.ai 订阅满足；codex 由 codex OAuth / XD key 满足 —— 同一条规则，
+ *   1. 有没有可用来源（hasUsableConnectedSource）：
+ *        cc / codex / pi 看目录已连接供应商；grok-build 看 SuperGrok / xAI。
  *      与 useConnectedSource（渲染期空態判定）同源，这里在 send 门禁时刻现拉一次避免 stale。
- *   2. 运行时前提（codex / pi）：本地二进制缺失时先拦截。
+ *   2. 运行时前提（codex / pi / grok-build）：本地 hosted-loop 二进制缺失时先拦截。
  *      cc 二进制随包分发、永远在，无此轴。
  *
  * revalidate() 供 send 门禁 / DropdownMenu onOpenChange(true) 时手动触发，不自动轮询。
@@ -15,7 +14,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 
-import { connectedProvidersForAgent, type AgentKind, type ProviderView } from '@cindy/model-providers';
+import { hasUsableConnectedSource, type AgentKind, type ProviderView } from '@cindy/model-providers';
 
 export type Readiness = 'ready' | 'unauthenticated' | 'binary-missing' | 'loading';
 
@@ -24,20 +23,20 @@ export type Readiness = 'ready' | 'unauthenticated' | 'binary-missing' | 'loadin
  * 两种不同的恢复路径，不能把 Pi 的缺包状态伪装成未授权。
  */
 export function readinessFromBinaryStatus(
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build',
   binaryReady: boolean,
 ): Readiness | null {
   return vendorKey !== 'cc' && !binaryReady ? 'binary-missing' : null;
 }
 
-export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi'): {
+export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build'): {
   readiness: Readiness;
   revalidate: (opts?: { includeSuspended?: boolean }) => Promise<Readiness>;
 } {
   const [readiness, setReadiness] = useState<Readiness>('loading');
 
   const revalidate = useCallback(async (opts?: { includeSuspended?: boolean }): Promise<Readiness> => {
-    const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : 'codex';
+    const agent: AgentKind = vendorKey === 'cc' ? 'claude-code' : vendorKey === 'pi' ? 'pi' : vendorKey === 'grok-build' ? 'grok-build' : 'codex';
 
     // 轴 2(codex / pi,正交于来源):本地二进制是运行时前提,缺了连发都发不了 → 优先返回
     // binary-missing。binary 状态走 maker:agent:status(其 authReady 是 codex OAuth 专属,已被
@@ -61,8 +60,8 @@ export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi'): {
       }
     }
 
-    // 轴 1(与 agent 类型无关,唯一真相):该 agent 有没有「已连接的可选来源」。连接态走本地 IPC
-    // listProviders(极快),send 门禁时刻现拉避免 stale;失败按空列表处理(判未就绪,引导去连接)。
+    // 轴 1:该 agent 有没有可用来源。Grok Build 看 SuperGrok / xAI,其余走目录
+    // connectedProvidersForAgent。listProviders 极快;失败按空列表处理。
     let providers: ProviderView[] = [];
     try {
       providers = (await window.electronAPI.maker.listProviders()).providers;
@@ -72,12 +71,11 @@ export function useVendorReadiness(vendorKey: 'cc' | 'codex' | 'pi'): {
     // includeSuspended:已建会话的发送门禁传 true —— 供应商级停用是准入轴,不打断
     // 运行中会话,门禁只回答「凭证还连着吗」;全停时把继续发送判成 unauthenticated
     // 会误堵旧会话(PR #744 review 第十七轮)。新路由(草稿)保持准入口径。
-    const next: Readiness =
-      connectedProvidersForAgent(providers, agent, {
-        includeSuspended: opts?.includeSuspended === true,
-      }).length > 0
-        ? 'ready'
-        : 'unauthenticated';
+    const next: Readiness = hasUsableConnectedSource(providers, agent, undefined, {
+      includeSuspended: opts?.includeSuspended === true,
+    })
+      ? 'ready'
+      : 'unauthenticated';
     setReadiness(next);
     return next;
   }, [vendorKey]);

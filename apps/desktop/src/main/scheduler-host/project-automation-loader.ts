@@ -47,9 +47,9 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
-  agentKind?: 'claude-code' | 'codex' | 'pi';
+  agentKind?: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   /** 显式模型选择的 Harness；省略时保留旧配置的跟随绑定任务语义。 */
-  modelAgentKind?: 'claude-code' | 'codex' | 'pi';
+  modelAgentKind?: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */
   providerId?: string;
@@ -604,7 +604,7 @@ function optionalNumber(value: unknown): boolean {
 }
 
 function optionalAgentKind(value: unknown): boolean {
-  return value === undefined || value === 'claude-code' || value === 'codex' || value === 'pi';
+  return value === undefined || value === 'claude-code' || value === 'codex' || value === 'pi' || value === 'grok-build';
 }
 
 function optionalNotify(value: unknown): boolean {

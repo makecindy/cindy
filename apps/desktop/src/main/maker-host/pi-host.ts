@@ -926,6 +926,8 @@ export interface BuildPiAgentOpts {
   ) => Promise<{ url: string; close: () => void }>;
   /** 远端 agent-proxy env(HTTPS_PROXY/HTTP_PROXY/NO_PROXY 经 SSH remote-forward)。 */
   getRemotePiAgentProxyEnv?: AgentDeps['getRemotePiAgentProxyEnv'];
+  /** Override session home. Grok Build uses a sibling directory so Pi JSONL does not mix. */
+  resolvePiAgentHome?: AgentDeps['resolvePiAgentHome'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -1782,15 +1784,20 @@ function isLoopbackUrl(baseUrl: string): boolean {
   }
 }
 
-/** pi 二进制缺失时返回 null(调用方跳过注册);其余情况构造 PiAgent。 */
-export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
+function defaultPiAgentHome(remoteHostId?: string | null): string {
+  if (remoteHostId) return '$HOME/.xdt-server/v1/pi-agent-home';
+  return path.join(app.getPath('userData'), 'pi-agent-home');
+}
+
+/** Cindy-hosted Pi loop deps. Used by Pi and Grok Build (same tools / model plane). */
+export function buildDesktopPiLoopDeps(opts: BuildPiAgentOpts): AgentDeps | null {
   const binaryPath = resolvePiBinaryPath();
   if (!binaryPath) {
-    log.warn('pi binary unavailable after managed prepare; pi agent disabled for this launch');
+    log.warn('pi binary unavailable after managed prepare; hosted loop disabled for this launch');
     return null;
   }
-  log.info('pi agent enabled', { binaryPath });
-  return new PiAgent({
+  log.info('cindy hosted loop enabled', { binaryPath });
+  return {
     getDisabledSkillPaths: readDisabledSkillPaths,
     resolveModelContextLimit: (providerId, modelId) => {
       const catalog = getActiveCatalog();
@@ -1814,15 +1821,7 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     // 可信 server 的工具落进 Auto-review 灰区被模型静默 block(详见 pi/index.ts 权限门)。
     getMcpToolApprovalPolicy: getDesktopMcpToolApprovalPolicy,
     getMcpToolApprovalPresentation: getDesktopMcpToolApprovalPresentation,
-    resolvePiAgentHome: (remoteHostId) => {
-      // 轮 40-w4-t3 CRITICAL:远端 agentHome 承载 session 历史(sessions/*.jsonl,
-      // 与 DB sdk_session_id 持久关联)—— 必须落远端持久目录, 不能用本机
-      // userData(远端 fileOps 会创建含反斜杠的字面目录)或 /tmp(重启即丢)。
-      // $HOME 由远端 fileOps 的 bash 统一展开;DB 里存 $HOME/... 字面, 跨会话
-      // 一致。run-tmp 等短生命周期内容仍走 agentHome/run-tmp。
-      if (remoteHostId) return '$HOME/.xdt-server/v1/pi-agent-home';
-      return path.join(app.getPath('userData'), 'pi-agent-home');
-    },
+    resolvePiAgentHome: opts.resolvePiAgentHome ?? defaultPiAgentHome,
     resolvePiGlobalContextHome: (remoteHostId) => {
       if (remoteHostId) return '$HOME/.pi/agent';
       const override = process.env.PI_CODING_AGENT_DIR;
@@ -1947,5 +1946,11 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     resolveRemotePiBinaryPath: opts.resolveRemotePiBinaryPath,
     remotePiSkipMcpBridge: opts.remotePiSkipMcpBridge,
     getRemotePiAgentProxyEnv: opts.getRemotePiAgentProxyEnv,
-  });
+  };
+}
+
+/** pi 二进制缺失时返回 null(调用方跳过注册);其余情况构造 PiAgent。 */
+export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
+  const deps = buildDesktopPiLoopDeps(opts);
+  return deps ? new PiAgent(deps) : null;
 }

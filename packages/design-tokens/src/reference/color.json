@@ -6741,6 +6741,44 @@
           }
         }
       },
+      "engine-badge-grok-build": {
+        "light": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.419608,
+              0.447059,
+              0.501961
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        },
+        "dark": {
+          "$type": "color",
+          "$value": {
+            "colorSpace": "srgb",
+            "components": [
+              0.419608,
+              0.447059,
+              0.501961
+            ]
+          },
+          "$extensions": {
+            "com.cindy.desktop": {
+              "format": "hex",
+              "uppercase": false,
+              "alpha": false
+            }
+          }
+        }
+      },
       "perm-item-selected-bg": {
         "light": {
           "$type": "color",

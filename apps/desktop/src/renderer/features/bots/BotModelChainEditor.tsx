@@ -5,6 +5,7 @@ import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import type { MakerVendor } from '@/lib/ccAgent.types';
+import type { SelectableVendor } from '@/lib/agentVendors';
 import { cn } from '@/lib/utils';
 import {
   BOT_MODEL_CHAIN_MAX,
@@ -18,7 +19,9 @@ function vendorFor(harness: BotHarness): 'cc' | 'codex' | 'pi' {
   return harness === 'claude' ? 'cc' : harness;
 }
 
-function harnessFor(vendor: 'cc' | 'codex' | 'pi'): BotHarness {
+function harnessFor(vendor: SelectableVendor): BotHarness | null {
+  // Bot model chains only host claude/codex/pi; Grok Build is a chat harness, not a bot route.
+  if (vendor === 'grok-build') return null;
   return vendor === 'cc' ? 'claude' : vendor;
 }
 
@@ -27,7 +30,9 @@ function agentKindFor(vendor: 'cc' | 'codex' | 'pi'): AgentKind {
 }
 
 function defaultRoute(vendor: 'cc' | 'codex' | 'pi'): BotModelRoute {
-  return { harness: harnessFor(vendor), ...getEffectiveBotModelSettings(vendor, null) };
+  const harness = harnessFor(vendor);
+  if (!harness) throw new Error(`unsupported bot harness vendor: ${vendor}`);
+  return { harness, ...getEffectiveBotModelSettings(vendor, null) };
 }
 
 export function BotModelChainEditor({
@@ -121,9 +126,13 @@ export function BotModelChainEditor({
         unifiedPanel
         unifiedAgents={unifiedAgents}
         onUnifiedSelect={(selection) => {
-          if (!visibleVendors.includes(selection.engine)) return;
+          const engine = selection.engine;
+          if (engine !== 'cc' && engine !== 'codex' && engine !== 'pi') return;
+          if (!visibleVendors.includes(engine)) return;
+          const harness = harnessFor(engine);
+          if (!harness) return;
           replace(index, {
-            harness: harnessFor(selection.engine),
+            harness,
             providerId: selection.providerId,
             model: selection.modelId,
             effort: selection.effort ?? '',

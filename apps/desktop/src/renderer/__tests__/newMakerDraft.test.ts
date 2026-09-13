@@ -70,6 +70,24 @@ describe('newMakerDraft store', () => {
     expect(d.defaultTupleSelectionCustomized).toBe(false);
   });
 
+  it('rewrites leftover grok-build model sentinel to a real Grok catalog slug', async () => {
+    const { coldStartModelIdForVendor } = await import('@/lib/modelDefinitions');
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'grok-build',
+        lastByVendor: {
+          'grok-build': { model: 'grok-build', providerId: 'grok-build', effort: 'high' },
+        },
+      }),
+    );
+    vi.resetModules();
+    const { getDraft } = await loadModule();
+    expect(getDraft().lastByVendor['grok-build'].model).toBe(coldStartModelIdForVendor('grok-build'));
+    expect(getDraft().lastByVendor['grok-build'].model).not.toBe('grok-build');
+    expect(getDraft().lastByVendor['grok-build'].providerId).toBeNull();
+  });
+
   it('产品默认原子写入完整组合，但不伪装成用户显式选模', async () => {
     const { applySuggestedDefaultTuple, getDraft } = await loadModule();
     expect(

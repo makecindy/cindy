@@ -36,6 +36,7 @@ import {
   extractMessagePreview,
 } from '../mapper';
 import { throwIpcError, requireString } from '../../utils/ipcValidate';
+import type { DbAgentKind } from '../../../shared/agentKindConversion';
 import * as broadcastTap from '../../device-link/broadcast-tap';
 import { createLogger } from '../../logger';
 import { collectCindyMediaHashes, commitMessageMediaRefs } from '../../cindy-media/chatAttachments';
@@ -1100,7 +1101,7 @@ export async function commitContextRebuild(
     reason:
       'context-overflow' | 'model-window-switch' | 'pi-prompt-timeout' | 'native-session-recovery';
     sourceUserClientId: string | null;
-    sourceAgentKind?: 'cc' | 'codex' | 'pi';
+    sourceAgentKind?: DbAgentKind;
     sourceModel?: string | null;
     sourceProviderId?: string | null;
     expectedClearedAt?: number | null;
@@ -1532,7 +1533,7 @@ export async function createMessage(
      * agentMeta 需要它;main 侧 SDK 事件落库路径必传,renderer pending echo 等
      * 无 SDK 元信息的行留空(null 回落 session.agentKind)。
      */
-    agentKind?: 'cc' | 'codex' | 'pi' | null;
+    agentKind?: DbAgentKind | null;
     createdAt?: number;
   },
   opts?: {
@@ -2635,7 +2636,7 @@ export interface ParkedEngineSession {
  */
 export async function findParkedEngineSession(
   sessionId: string,
-  targetDbKind: 'cc' | 'codex' | 'pi',
+  targetDbKind: DbAgentKind,
 ): Promise<ParkedEngineSession | null> {
   const db = getDbClient().drizzle;
   const [sessRow] = await db

@@ -34,7 +34,7 @@ export interface SessionTaskItem {
   /** 标题链取不到任何来源时为 ''(UI 层负责 i18n 兜底)。 */
   title: string;
   status: AgentTaskStatus;
-  provider: 'claude-code' | 'codex' | 'pi';
+  provider: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   update?: AgentTaskUpdate;
   toolCallClientId?: string;
   toolUseId?: string;

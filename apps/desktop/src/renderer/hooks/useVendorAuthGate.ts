@@ -24,7 +24,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import {
-  connectedProvidersForAgent,
+  hasUsableConnectedSource,
   type AgentKind as ProviderAgentKind,
 } from '@cindy/model-providers';
 
@@ -54,7 +54,9 @@ type CopyKey =
   | 'voice-direct-api-key-unauth'
   | 'codex-voice-unauth'
   | 'codex-binary-missing'
-  | 'pi-binary-missing';
+  | 'pi-binary-missing'
+  | 'grok-build-binary-missing'
+  | 'grok-build-unauth';
 
 function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
   return {
@@ -103,6 +105,20 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       cancelText: t('logic.confirm.cancel'),
       settingsTab: 'providers',
     },
+    'grok-build-binary-missing': {
+      title: t('logic.confirm.grokBuildBinaryMissingTitle'),
+      description: t('logic.confirm.grokBuildBinaryMissingDescription'),
+      confirmText: t('logic.confirm.goToSettings'),
+      cancelText: t('logic.confirm.cancel'),
+      settingsTab: 'providers',
+    },
+    'grok-build-unauth': {
+      title: t('logic.confirm.grokBuildUnauthenticatedTitle'),
+      description: t('logic.confirm.grokBuildUnauthenticatedDescription'),
+      confirmText: t('logic.confirm.goToSettings'),
+      cancelText: t('logic.confirm.cancel'),
+      settingsTab: 'providers',
+    },
   };
 }
 
@@ -122,8 +138,9 @@ function pickCopy(
 ): DialogCopy | null {
   if (readiness === 'binary-missing' && vendor === 'codex') return copy['codex-binary-missing'];
   if (readiness === 'binary-missing' && vendor === 'pi') return copy['pi-binary-missing'];
+  if (readiness === 'binary-missing' && vendor === 'grok-build') return copy['grok-build-binary-missing'];
   if (readiness !== 'unauthenticated') return null;
-  // 无可用来源:cc / codex 走同一条「连接来源」文案(send 门禁,与 agent 类型无关)。
+  // 无可用来源:cc / codex / grok-build 同构,跳「设置 → 模型供应商」(SuperGrok / 网关)。
   return copy['no-source'];
 }
 
@@ -172,9 +189,9 @@ export function sourceReadyFromProviderList(
 ): boolean | null {
   try {
     const { providers } = parseDeviceProvidersPayload(value);
-    return connectedProvidersForAgent(providers, agent, {
+    return hasUsableConnectedSource(providers, agent, undefined, {
       includeSuspended: opts?.includeSuspended === true,
-    }).length > 0;
+    });
   } catch {
     return null;
   }
@@ -237,6 +254,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
   const cc = useVendorReadiness('cc');
   const codex = useVendorReadiness('codex');
   const pi = useVendorReadiness('pi');
+  const grokBuild = useVendorReadiness('grok-build');
 
   const checkAndConfirm = useCallback(
     async (
@@ -271,7 +289,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       const deviceId = options?.deviceId;
       if (deviceId) {
         const providerAgent: ProviderAgentKind =
-          vendor === 'codex' ? 'codex' : vendor === 'pi' ? 'pi' : 'claude-code';
+          vendor === 'codex' ? 'codex' : vendor === 'pi' ? 'pi' : vendor === 'grok-build' ? 'grok-build' : 'claude-code';
         const [statusRes, providersRes] = await Promise.allSettled([
           window.electronAPI.deviceLink.invoke(deviceId, 'maker:agent:status', [providerAgent]),
           window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', []),
@@ -317,13 +335,20 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         let title: string;
         let description: string;
         if (remoteReadiness === 'binary-missing') {
-          title = t(vendor === 'pi'
-            ? 'logic.confirm.remotePiBinaryMissingTitle'
-            : 'logic.confirm.remoteCodexBinaryMissingTitle');
+          title = t(
+            vendor === 'pi'
+              ? 'logic.confirm.remotePiBinaryMissingTitle'
+              : vendor === 'grok-build'
+                ? 'logic.confirm.remoteGrokBuildBinaryMissingTitle'
+                : 'logic.confirm.remoteCodexBinaryMissingTitle',
+          );
           description = t('logic.confirm.remoteAuthDescription', { device });
         } else if (vendor === 'codex') {
           title = t('logic.confirm.remoteCodexNoSourceTitle');
           description = t('logic.confirm.remoteCodexNoSourceDescription', { device });
+        } else if (vendor === 'grok-build') {
+          title = t('logic.confirm.remoteGrokBuildNoSourceTitle');
+          description = t('logic.confirm.remoteGrokBuildNoSourceDescription', { device });
         } else {
           title = t('logic.confirm.remoteCcNoSourceTitle');
           description = t('logic.confirm.remoteCcNoSourceDescription', { device });
@@ -339,7 +364,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       }
 
       // 触发一次最新检查——避免 stale state 误放行。
-      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : cc;
+      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : vendor === 'grok-build' ? grokBuild : cc;
       // 已建会话的发送门禁计入 suspended 来源(见 useVendorReadiness 注释);草稿不传。
       const readiness = await target.revalidate({
         includeSuspended: options?.existingSessionRoute === true,
@@ -361,7 +386,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       }
       return { proceed: false };
     },
-    [cc, codex, pi, confirm, copy, navigate, t],
+    [cc, codex, pi, grokBuild, confirm, copy, navigate, t],
   );
 
   return { checkAndConfirm };

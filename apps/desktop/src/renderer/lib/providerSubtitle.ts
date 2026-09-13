@@ -4,15 +4,26 @@ const AGENT_DISPLAY_LABELS: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
   pi: 'Pi',
+  'grok-build': 'Grok Build',
 };
 
-export function providerAgentSupportLabel(provider?: Pick<ProviderView, 'agents'> | null): string {
+type ProviderSubtitleView = Pick<ProviderView, 'agents'> & Partial<Pick<ProviderView, 'id'>>;
+
+export function providerAgentSupportLabel(
+  provider?: ProviderSubtitleView | null,
+): string {
   if (!provider?.agents.length) return '';
-  return provider.agents.map((agent) => AGENT_DISPLAY_LABELS[agent] ?? agent).join(' / ');
+  const agents = [...provider.agents];
+  // Grok Build is a Cindy harness on SuperGrok, not a catalog runtime. Settings
+  // still needs to list it next to Claude Code / Codex / Pi.
+  if (provider.id === 'xai' && !agents.includes('grok-build')) {
+    agents.push('grok-build');
+  }
+  return agents.map((agent) => AGENT_DISPLAY_LABELS[agent] ?? agent).join(' / ');
 }
 
 export function providerSubtitleForDisplay(
-  provider: Pick<ProviderView, 'agents'> | null | undefined,
+  provider: ProviderSubtitleView | null | undefined,
   modelLabel: string,
   options?: {
     suffix?: string | null;

@@ -41,7 +41,7 @@ const PERMISSION_ALLOWED = new Set(['plan', 'acceptEdits', 'auto']);
 const ERRAND_EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max', 'ultra']);
 
 interface ErrandConfig {
-  agentKind?: 'cc' | 'codex' | 'pi';
+  agentKind?: 'cc' | 'codex' | 'pi' | 'grok-build';
   model?: string;
   effort?: string;
   fastMode?: boolean;
@@ -92,9 +92,12 @@ export function GhostErrandPrefs({
   // 保证非空,种子默认兜底)。不能用 getPersistedVendorModel:那是调度专用的严格口径,
   // 仅当用户在新建对话里显式选过该 vendor 模型才返回,否则返回 '',会让 trigger 落到
   // 「选择模型」占位(2026-07-31 Lizi 反馈:应像草稿一样直接显示当前模型)。
-  const followVendor: 'cc' | 'codex' | 'pi' =
-    draft.vendor === 'pi' ? 'pi' : draft.vendor === 'codex' ? 'codex' : 'cc';
-  const vendor: 'cc' | 'codex' | 'pi' = config.agentKind ?? followVendor;
+  const followVendor: 'cc' | 'codex' | 'pi' | 'grok-build' =
+    draft.vendor === 'pi' ? 'pi'
+      : draft.vendor === 'codex' ? 'codex'
+        : draft.vendor === 'grok-build' ? 'grok-build'
+          : 'cc';
+  const vendor: 'cc' | 'codex' | 'pi' | 'grok-build' = config.agentKind ?? followVendor;
   const pickerAgents = useModelPickerAgents(vendor === 'cc' ? 'claude-code' : vendor);
 
   const shownModel = config.model ?? draft.lastByVendor[vendor].model;
@@ -150,6 +153,7 @@ export function GhostErrandPrefs({
       >
         {t('settings.ghosts.detail.errandPrefs.desc')}
       </p>
+
 
       {/* 模型选择器占满整行(标题在上、控件 w-full 在下,与 IM 默认配置同款):
           field 形态的面板宽度绑定 trigger 宽度(DESIGN.md §4),压到 60% 会让下拉

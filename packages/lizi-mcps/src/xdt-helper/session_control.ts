@@ -320,7 +320,7 @@ export function registerSetSessionRuntimeTool(
       '提供 harness 时必须同时指定 model：完整选择会保存到目标任务，并在下一条消息发送时切换（返回 next_send）；' +
       '省略 harness 保持临时调整语义。不修改全局默认选择。',
     inputShape: {
-      harness: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
+      harness: z.enum(['claude-code', 'codex', 'pi', 'grok-build']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
       session_id: z.string().min(1).optional().describe('目标 session id；省略时使用当前任务。'),
       provider_id: z
         .string()

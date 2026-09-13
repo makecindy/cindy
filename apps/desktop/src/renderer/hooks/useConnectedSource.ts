@@ -16,7 +16,7 @@
 
 import { useMemo } from 'react';
 
-import { chatEligibleSourcesForModel, connectedProvidersForAgent, type AgentKind } from '@cindy/model-providers';
+import { hasUsableConnectedSource, type AgentKind } from '@cindy/model-providers';
 
 import { useProviders } from './useProviders';
 
@@ -31,14 +31,9 @@ export function useConnectedSource(agent: AgentKind | null, modelId?: string): U
   const { providers, loading } = useProviders();
   const hasConnectedSource = useMemo(
     () => {
-      if (!agent) return false;
-      // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型不该被判定为
-      // "有可用来源"(issue #882 第 3 点,2026-07 review)——本 hook 是整个产品"要不要
-      // 进连接来源空态"的唯一真相,漏这个过滤会让 ModelSelector CTA 和 Send 按钮对
-      // 一个非聊天模型显示"已连接、可以发"。
-      return modelId
-        ? chatEligibleSourcesForModel(providers, modelId, agent).length > 0
-        : connectedProvidersForAgent(providers, agent).length > 0;
+      // hasUsableConnectedSource 是 picker / Send 同源判定。Grok Build + 独占 Grok
+      // 不要求目录供应商声明 grok-build;其余 agent 仍走 chatEligibleSourcesForModel。
+      return hasUsableConnectedSource(providers, agent, modelId);
     },
     [providers, agent, modelId],
   );

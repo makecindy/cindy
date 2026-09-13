@@ -1913,6 +1913,16 @@
           "$value": "{reference.defaults.engine-badge-pi.dark}"
         }
       },
+      "engine-badge-grok-build": {
+        "light": {
+          "$type": "color",
+          "$value": "{reference.defaults.engine-badge-grok-build.light}"
+        },
+        "dark": {
+          "$type": "color",
+          "$value": "{reference.defaults.engine-badge-grok-build.dark}"
+        }
+      },
       "perm-item-selected-bg": {
         "light": {
           "$type": "color",

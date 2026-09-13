@@ -1,6 +1,7 @@
 interface LocalSkillRouteEntry {
   id: string;
-  engine: 'claude-code' | 'codex' | 'pi';
+  // Track the scanner's engine union so a new agent runtime cannot break the constraint.
+  engine: SkillhubSkill['engine'];
   kind: SkillhubKind;
   scope: SkillhubScope;
   name: string;

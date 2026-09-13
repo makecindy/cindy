@@ -14,7 +14,7 @@ import {
 } from './vendorIconPaths';
 
 export interface MobileAgentMarkProps {
-  agentKind: 'claude-code' | 'codex' | 'pi';
+  agentKind: 'claude-code' | 'codex' | 'pi' | 'grok-build';
   color: string;
   size?: number;
 }
@@ -26,6 +26,8 @@ export function MobileAgentMark({ agentKind, color, size = iconSize.sm }: Mobile
     <Svg accessible={false} height={size} viewBox="0 0 24 24" width={size}>
       {agentKind === 'pi' ? (
         <SvgText fill={color} fontSize="19" fontWeight="600" textAnchor="middle" x="12" y="18">π</SvgText>
+      ) : agentKind === 'grok-build' ? (
+        <SvgText fill={color} fontSize="16" fontWeight="700" textAnchor="middle" x="12" y="17">G</SvgText>
       ) : agentKind === 'codex' ? (
         <G transform="translate(12 12) scale(1.1) translate(-12 -12)">
           <Path

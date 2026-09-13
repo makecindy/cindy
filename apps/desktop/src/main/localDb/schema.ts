@@ -728,7 +728,7 @@ export const subagentRuns = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
-    provider: text('provider', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    provider: text('provider', { enum: ['claude-code', 'codex', 'pi', 'grok-build'] }).notNull(),
     logicalAgentId: text('logical_agent_id').notNull(),
     parentToolUseId: text('parent_tool_use_id'),
     /** JSON string[] containing task/tool aliases observed for this logical child. */
@@ -798,7 +798,7 @@ export const subagentRunAliases = sqliteTable(
     sessionId: text('session_id')
       .notNull()
       .references((): AnySQLiteColumn => sessions.id, { onDelete: 'cascade' }),
-    provider: text('provider', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    provider: text('provider', { enum: ['claude-code', 'codex', 'pi', 'grok-build'] }).notNull(),
     alias: text('alias').notNull(),
     runId: text('run_id')
       .notNull()
@@ -1148,9 +1148,9 @@ export const schedules = sqliteTable(
      * 引擎 fireOne 优先用 intervalMs 算 nextFireAt；旧 cron 数据 0015 migration 自动回填。
      */
     intervalMs: integer('interval_ms'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'grok-build'] }).notNull(),
     /** NULL preserves legacy bound-task Harness inheritance. */
-    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi'] }),
+    modelAgentKind: text('model_agent_kind', { enum: ['claude-code', 'codex', 'pi', 'grok-build'] }),
     model: text('model'),
     /**
      * 显式选定的供应商(来源)id。NULL = 回落该 agent 原生默认来源(no-break,
@@ -1269,7 +1269,7 @@ export const sessionGoals = sqliteTable(
     /** usageLimited 时记录的限额重置时刻(unix ms);到点自动续跑。其它状态为 null。 */
     usageResetAt: integer('usage_reset_at'),
     lastReason: text('last_reason'),
-    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi'] }).notNull(),
+    agentKind: text('agent_kind', { enum: ['claude-code', 'codex', 'pi', 'grok-build'] }).notNull(),
     startedAt: integer('started_at').notNull(),
     updatedAt: integer('updated_at').notNull(),
   },

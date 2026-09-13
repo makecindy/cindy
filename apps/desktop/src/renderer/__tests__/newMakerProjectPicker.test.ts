@@ -580,8 +580,9 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain('hiddenVendors={hiddenSwitcherVendors}');
     expect(chatInputSource).toMatch(/useAvailableAgents\(deviceLinkDeviceId\)/);
     expect(chatInputSource).toContain('unifiedAgents={effectiveUnifiedAgents}');
-    // fail-open:注册结果没回来之前不隐藏任何引擎;当前引擎恒在列。
-    expect(chatInputSource).toContain('if (!runtimeAgentsLoaded) return undefined;');
+    // fail-open:注册结果没回来之前只露出随包分发的引擎;grok-build 跟 hosted
+    // loop,未确认前不 fail-open。当前引擎恒在列。
+    expect(chatInputSource).toContain('if (!runtimeAgentsLoaded) return catalogKinds;');
     expect(chatInputSource).toContain(
       'kind === agentKind || runtimeAvailableVendors.has(agentKindToVendor(kind)),',
     );

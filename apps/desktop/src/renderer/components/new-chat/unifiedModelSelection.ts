@@ -30,12 +30,18 @@ export type UnifiedEngine = SelectableVendor;
 
 /** vendor → AgentKind(查目录 / 能力 / 记忆时用)。 */
 export function agentKindOfEngine(engine: UnifiedEngine): AgentKind {
-  return engine === 'cc' ? 'claude-code' : engine === 'codex' ? 'codex' : 'pi';
+  if (engine === 'cc') return 'claude-code';
+  if (engine === 'codex') return 'codex';
+  if (engine === 'grok-build') return 'grok-build';
+  return 'pi';
 }
 
 /** AgentKind → vendor(落 store / draft 时用)。未知值回落 cc,与既有 sanitize 方向一致。 */
 export function engineOfAgentKind(agent: AgentKind): UnifiedEngine {
-  return agent === 'codex' ? 'codex' : agent === 'pi' ? 'pi' : 'cc';
+  if (agent === 'codex') return 'codex';
+  if (agent === 'pi') return 'pi';
+  if (agent === 'grok-build') return 'grok-build';
+  return 'cc';
 }
 
 /**
@@ -340,10 +346,16 @@ export function buildUnifiedRail(
   // 只在有收藏时出现会让功能不可发现(Chris 2026-08-13 实测:「分类栏直接砍了?」)。
   items.push({ kind: 'favorites' });
   if (sessionAgent) items.push({ kind: 'engine', agent: sessionAgent });
+  // Grok Build 是 harness:目录行带 grok-build 候选时露出引擎格,不当成供应商分类。
+  const hasGrokBuild = entries.some((entry) => entry.candidates.includes('grok-build'));
+  if (hasGrokBuild && sessionAgent !== 'grok-build') {
+    items.push({ kind: 'engine', agent: 'grok-build' });
+  }
   items.push({ kind: 'all' });
   const seen = new Set<string>();
   const firstSeen: string[] = [];
   for (const entry of entries) {
+    if (entry.providerId === 'grok-build') continue;
     if (seen.has(entry.providerId)) continue;
     seen.add(entry.providerId);
     firstSeen.push(entry.providerId);

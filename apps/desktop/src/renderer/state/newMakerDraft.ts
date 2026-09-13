@@ -21,12 +21,12 @@
 import { useSyncExternalStore } from 'react';
 import { isDataOwnerPushStampCurrent } from '@/contexts/dataOwnerGeneration';
 import { sameModelRoute, type AppDefaultModelSelection } from '../../shared/appDefaultModelSelection';
-import type { BotModelRoute } from '../../shared/botModelChain';
+import { botHarnessFromMakerVendor, type BotModelRoute } from '../../shared/botModelChain';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { isSelectableVendor } from '@/lib/agentVendors';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
-import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
+import { coldStartModelIdForVendor, getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { isKnownProductDefaultTupleIdentity } from '@/lib/newMakerDefaultTuple';
 import type { OrcaWorkerPermissionMode } from '../../shared/orca-worker-permission-mode';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
@@ -178,6 +178,15 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+  if (vendor === 'grok-build') {
+    return {
+      model: getDefaultModelForVendor('grok-build').id,
+      effort: 'high',
+      permissionMode: 'auto',
+      planMode: false,
+      providerId: null,
+    };
+  }
   if (vendor === 'pi') {
     return {
       // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
@@ -235,6 +244,7 @@ function makeDefault(): NewMakerDraft {
       pi: defaultVendorPrefs('pi'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
+      'grok-build': defaultVendorPrefs('grok-build'),
     },
     modelChosenByVendor: {},
     defaultTupleCustomized: false,
@@ -347,8 +357,11 @@ function sanitize(raw: unknown): NewMakerDraft {
     // 计划模式独立成一级开关后, 历史草稿里 permissionMode='plan' 迁移为
     // planMode=true + 该 vendor 默认权限档(与 DB 迁移同语义)。
     const legacyPlanPermission = p.permissionMode === 'plan';
+    const rawModel = typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model;
+    // Grok Build is a harness, not a model. Old drafts used the sentinel as a model id.
+    const model = rawModel === 'grok-build' ? coldStartModelIdForVendor('grok-build') : rawModel;
     return {
-      model: typeof p.model === 'string' && p.model.length > 0 ? p.model : fallback.model,
+      model,
       effort: typeof p.effort === 'string' ? (p.effort as Effort) : fallback.effort,
       permissionMode:
         typeof p.permissionMode === 'string' && !legacyPlanPermission
@@ -356,8 +369,11 @@ function sanitize(raw: unknown): NewMakerDraft {
           : fallback.permissionMode,
       planMode: p.planMode === true || legacyPlanPermission,
       // providerId: 接受非空 string 或 null;脏数据 / 缺字段一律落 null(跟随默认路由)。
+      // grok-build 不是目录供应商。
       providerId:
-        typeof p.providerId === 'string' && p.providerId.length > 0 ? p.providerId : null,
+        typeof p.providerId === 'string' && p.providerId.length > 0 && p.providerId !== 'grok-build'
+          ? p.providerId
+          : null,
     };
   };
   // modelChosenByVendor: 老版本 localStorage 没有这个字段 → 空对象兜底
@@ -461,6 +477,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
+      'grok-build': sanitizeVendorPrefs(lastByVendorRaw['grok-build'], 'grok-build'),
     },
     modelChosenByVendor,
     defaultTupleCustomized,
@@ -916,7 +933,7 @@ export function applyAppDefaultModelSelection(selection: AppDefaultModelSelectio
   const base = stored ? sanitize(stored) : currentDraft;
   const prefs = base.lastByVendor[base.vendor];
   const current: BotModelRoute | null = prefs.model ? {
-    harness: base.vendor === 'cc' || base.vendor === 'orca' ? 'claude' : base.vendor,
+    harness: botHarnessFromMakerVendor(base.vendor),
     model: prefs.model, providerId: prefs.providerId ?? null, effort: prefs.effort ?? '',
     fastMode: base.fastModeByModel[prefs.model] === true,
   } : null;

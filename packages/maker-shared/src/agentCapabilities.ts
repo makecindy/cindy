@@ -9,7 +9,7 @@ export interface MobileModelOption {
   /** Host-advertised catalog window when available; omitted by older Desktop versions. */
   contextWindow?: number;
   /** 区域门控后的新任务默认标记。 */
-  newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
+  newSessionDefault?: ('claude-code' | 'codex' | 'pi' | 'grok-build')[];
 }
 
 export interface MobileChoiceOption {
@@ -347,8 +347,8 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
       : undefined;
   const newSessionDefault = Array.isArray(value.newSessionDefault)
     ? [...new Set(value.newSessionDefault.filter(
-      (item): item is 'claude-code' | 'codex' | 'pi' =>
-        item === 'claude-code' || item === 'codex' || item === 'pi',
+      (item): item is 'claude-code' | 'codex' | 'pi' | 'grok-build' =>
+        item === 'claude-code' || item === 'codex' || item === 'pi' || item === 'grok-build',
     ))]
     : [];
   return {

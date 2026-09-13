@@ -52,6 +52,18 @@ describe('agentAuthGateVerdict', () => {
     expect(agentAuthGateVerdict({ ...base, providers, agentKind: 'claude-code' })).toBe('unauthenticated');
     expect(agentAuthGateVerdict({ ...base, providers, agentKind: 'codex' })).toBe('ready');
   });
+
+  it('treats grok-build as ready when SuperGrok/xAI is connected', () => {
+    const providers = [
+      provider({ id: 'xai', agents: ['claude-code', 'pi'], connected: true }),
+    ];
+    expect(agentAuthGateVerdict({ ...base, providers, agentKind: 'grok-build' })).toBe('ready');
+    expect(agentAuthGateVerdict({
+      ...base,
+      providers: [provider({ id: 'xai', agents: ['pi'], connected: false })],
+      agentKind: 'grok-build',
+    })).toBe('unauthenticated');
+  });
 });
 
 describe('agentAuthGateHint', () => {
@@ -59,5 +71,6 @@ describe('agentAuthGateHint', () => {
     expect(agentAuthGateHint('claude-code')).toContain('Claude');
     expect(agentAuthGateHint('claude-code')).toContain('设置 → 模型供应商');
     expect(agentAuthGateHint('codex')).toContain('Codex');
+    expect(agentAuthGateHint('grok-build')).toContain('Grok Build');
   });
 });
