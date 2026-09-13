@@ -151,6 +151,55 @@ describe('FilteredAgent.getIdentities', () => {
     expect(keys).toEqual([]);
   });
 
+  it('records how many allowed identities were actually offered (#4201)', async () => {
+    const keyA = makeKey(Buffer.from('keyA-pub-bytes'));
+    const keyB = makeKey(Buffer.from('keyB-pub-bytes'));
+    const loaded = new FilteredAgent(new MockUpstreamAgent([keyA, keyB]), [sshFingerprint(keyB)]);
+    expect(loaded.lastOfferedCount).toBeNull();
+    await new Promise<void>((resolve, reject) => {
+      loaded.getIdentities((err) => (err ? reject(err) : resolve()));
+    });
+    expect(loaded.lastOfferedCount).toBe(1);
+
+    const notLoaded = new FilteredAgent(new MockUpstreamAgent([keyA]), [sshFingerprint(keyB)]);
+    await new Promise<void>((resolve, reject) => {
+      notLoaded.getIdentities((err) => (err ? reject(err) : resolve()));
+    });
+    expect(notLoaded.lastOfferedCount).toBe(0);
+  });
+
+  it('tracks sign outcomes after enumeration so a local signer failure is not mistaken for a remote rejection', async () => {
+    const keyA = makeKey(Buffer.from('keyA-pub-bytes'));
+    const upstream = new MockUpstreamAgent([keyA]);
+    const filtered = new FilteredAgent(upstream, [sshFingerprint(keyA)]);
+    await new Promise<void>((resolve, reject) => {
+      filtered.getIdentities((err) => (err ? reject(err) : resolve()));
+    });
+    expect(filtered.signedCount).toBe(0);
+    expect(filtered.signFailureCount).toBe(0);
+
+    upstream.sign = (_k, _d, optsOrCb, cb) => {
+      const done = typeof optsOrCb === 'function' ? optsOrCb : cb!;
+      done(undefined, Buffer.from('sig'));
+    };
+    await new Promise<void>((resolve) => filtered.sign(keyA, Buffer.from('d'), () => resolve()));
+    expect(filtered.signedCount).toBe(1);
+
+    upstream.sign = (_k, _d, optsOrCb, cb) => {
+      const done = typeof optsOrCb === 'function' ? optsOrCb : cb!;
+      done(new Error('agent locked'));
+    };
+    await new Promise<void>((resolve) => filtered.sign(keyA, Buffer.from('d'), {}, () => resolve()));
+    expect(filtered.signFailureCount).toBe(1);
+
+    // 重新枚举即重置计数(新一次 connect attempt)
+    await new Promise<void>((resolve, reject) => {
+      filtered.getIdentities((err) => (err ? reject(err) : resolve()));
+    });
+    expect(filtered.signedCount).toBe(0);
+    expect(filtered.signFailureCount).toBe(0);
+  });
+
   it('propagates upstream errors', async () => {
     const boom = new Error('agent unreachable');
     const upstream = new MockUpstreamAgent([], boom);
