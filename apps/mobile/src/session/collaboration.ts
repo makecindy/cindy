@@ -1,4 +1,5 @@
 import { i18n } from '@/i18n';
+import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
 import {
   isCollaborationSession,
   type SessionCollaborationLike,
@@ -36,4 +37,12 @@ export function sessionCollaborationComposerReadOnlyReason(
 ): string | null {
   if (!isCollaborationSession(session) || session?.orcaRole === 'lead') return null;
   return i18n.t('session.presentation.collaboration.composerReadOnlyReason');
+}
+
+/** Only an Orca Lead may resume its own quota-limited goal on mobile. */
+export function canResumeOrcaLeadGoalOnMobile(
+  session: SessionCollaborationLike | null,
+  goal: Pick<MobileGoalStatusPayload, 'status'> | null | undefined,
+): boolean {
+  return session?.orcaRole === 'lead' && goal?.status === 'usageLimited';
 }
