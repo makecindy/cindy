@@ -54,8 +54,13 @@ const requiredFlows = [
 
 const requiredFlowMarkers = [
   'appId: ${APP_ID}',
-  'login.debugButton',
-  'login.devLoginButton',
+  // 登录前置走真实登录 UI + 登录 scenario harness(dev-only 调试登录入口已随
+  // auth-server 迁移删除),锚点即真实登录链路上的 testID。
+  'login.identifierInput',
+  'login.continueButton',
+  'login.consentAgree',
+  'login.codeInput',
+  'login.verifyButton',
   'devices.screen',
   'devices.list',
   'devices.settingsButton',
@@ -182,8 +187,13 @@ const requiredFlowMarkers = [
 
 const requiredSourceAnchors = [
   'login.screen',
-  'login.debugButton',
-  'login.devLoginButton',
+  'login.identifierInput',
+  'login.continueButton',
+  'login.consentDialog',
+  'login.consentAgree',
+  'login.emailCodeButton',
+  'login.codeInput',
+  'login.verifyButton',
   'devices.screen',
   'devices.list',
   'devices.settingsButton',

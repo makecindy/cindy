@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -57,6 +57,15 @@ for (const flow of resolvedFlows) {
   if (!existsSync(flow)) {
     throw new Error(`Maestro flow does not exist: ${flow}`);
   }
+}
+
+if (resolvedFlows.some((flow) => flowIncludesLogin(flow)) && !process.env.EXPO_PUBLIC_LOGIN_SCENARIO?.trim()) {
+  throw new Error([
+    'Maestro flows include the login scenario, but EXPO_PUBLIC_LOGIN_SCENARIO is unset.',
+    'Start Metro with the deterministic login fixture before running Maestro, for example:',
+    '  EXPO_PUBLIC_LOGIN_SCENARIO=providers:email-only pnpm --filter mobile start -- --port 8081',
+    'Or use the local runner with --start-expo, which injects the scenario before bundling.',
+  ].join('\n'));
 }
 
 if (options.dryRun) {
@@ -209,6 +218,17 @@ function parseArgs(args) {
 
 function sanitizeTestIdSegment(value) {
   return String(value).replace(/[^A-Za-z0-9_-]/g, '_');
+}
+
+function flowIncludesLogin(flow, seen = new Set()) {
+  if (seen.has(flow)) return false;
+  seen.add(flow);
+  const source = readFileSync(flow, 'utf8');
+  if (/runFlow:\s*login_mock(?:_no_clear)?\.yaml/.test(source)) return true;
+  return [...source.matchAll(/runFlow:\s*([^\s#]+\.yaml)/g)].some(([, child]) => {
+    const childPath = resolve(flowRoot, child);
+    return existsSync(childPath) && flowIncludesLogin(childPath, seen);
+  });
 }
 
 function expoUrlWithRoute(url, route) {
