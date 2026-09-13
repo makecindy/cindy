@@ -12,7 +12,13 @@
 
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { isAbsolute } from 'node:path';
-import type { MoveSessionsResult, SessionMoveTarget, SessionOpErrorCode, SessionOpItem } from '@cindy/mcps';
+import type {
+  ForkSessionResult,
+  MoveSessionsResult,
+  SessionMoveTarget,
+  SessionOpErrorCode,
+  SessionOpItem,
+} from '@cindy/mcps';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 
@@ -50,7 +56,13 @@ export interface SessionOperationsDeps {
     patch: Record<string, unknown>,
     hooks?: { beforeWrite?: () => Promise<string | null> },
   ): Promise<unknown>;
-
+  /** history 消息 id → fork 所需的 messages.clientId 及该消息的角色与文本;不存在返回 null。 */
+  resolveMessageClientId(
+    sessionId: string,
+    messageId: string,
+  ): Promise<{ clientId: string; role: string; text: string } | null>;
+  /** maker-orchestration/fork 的 forkSessionAtMessage + 新会话广播。 */
+  forkAtMessage(sessionId: string, messageClientId: string): Promise<{ id: string }>;
 }
 
 type Err<E extends string> = { ok: false; errorCode: E; message: string };
@@ -192,4 +204,60 @@ export async function moveSessions(
     }
   }
   return { ok: true, moved };
+}
+
+/**
+ * 在某条消息处分叉出新会话(GUI Fork 同款):remote / deleted 拒绝,消息 id 先换算成
+ * clientId,fork 编排层的错误码按工具契约映射。
+ */
+export async function forkSession(
+  deps: SessionOperationsDeps,
+  params: { sessionId: string; messageId: string },
+): Promise<ForkSessionResult> {
+  const loaded = await loadAll(deps, [params.sessionId]);
+  if (!Array.isArray(loaded)) return loaded;
+  const [row] = loaded;
+  if (row.status === 'deleted') return err('PRECONDITION_FAILED', `${row.id}: 会话已删除`);
+  if (row.remoteHostId) return err('PRECONDITION_FAILED', `${row.id}: 远程会话不支持在本地 fork`);
+  const target = await deps.resolveMessageClientId(row.id, params.messageId);
+  if (!target) return err('NOT_FOUND', `消息 ${params.messageId} 不存在于 ${row.id}`);
+  let forkedId: string;
+  try {
+    forkedId = (await deps.forkAtMessage(row.id, target.clientId)).id;
+  } catch (e) {
+    const code = (e as { code?: string }).code;
+    const message = e instanceof Error ? e.message : String(e);
+    switch (code) {
+      case 'SOURCE_NOT_FOUND':
+      case 'MESSAGE_NOT_FOUND':
+        return err('NOT_FOUND', message);
+      case 'NOT_USER_MESSAGE':
+        return err('INVALID_ARGS', message);
+      case 'SOURCE_NEVER_RAN':
+      case 'NO_PRIOR_ASSISTANT':
+      case 'REMOTE_NOT_SUPPORTED':
+      case 'CODEX_FORK_STATE_UNAVAILABLE':
+        return err('PRECONDITION_FAILED', message);
+      case 'UNSUPPORTED_HISTORY':
+        return err('UNSUPPORTED_CAPABILITY', message);
+      default:
+        return err('INTERNAL', message);
+    }
+  }
+  const [forked] = await deps.loadSessions([forkedId]);
+  return {
+    ok: true,
+    session: forked
+      ? toItem(forked)
+      : {
+          sessionId: forkedId,
+          title: null,
+          workingDir: row.workingDir,
+          workspaceKind: row.workspaceKind,
+          status: 'active',
+        },
+    // 在 user 消息上分叉时 fork 只复制该消息之前的历史;GUI 会把这条消息放进新会话的作曲器,
+    // MCP 路径没有作曲器,把正文随结果返回,由调用方决定是否作为新会话的首条消息发送。
+    ...(target.role === 'user' && target.text ? { draftText: target.text } : {}),
+  };
 }

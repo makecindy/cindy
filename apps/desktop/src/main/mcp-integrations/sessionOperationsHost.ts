@@ -10,13 +10,16 @@ import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
-import type { MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
+import type { ForkSessionResult, MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
 
 import { bindingStore } from '../im/binding.js';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
-import { orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
+import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import { forkSessionAtMessage } from '../maker-orchestration/fork.js';
 import {
+  forkSession,
   moveSessions,
   type SessionOperationsDeps,
   type SessionOpsRow,
@@ -58,6 +61,25 @@ function toRow(row: {
     orcaRole: row.orcaRole as SessionOpsRow['orcaRole'],
     messageCount: Number(row.messageCount ?? 0),
   };
+}
+
+/** 消息正文可能是纯文本或 JSON 编码的内容块数组:只取 text 块拼成作曲器可用的草稿。 */
+function messageTextForDraft(content: unknown): string {
+  if (typeof content !== 'string') return '';
+  const trimmed = content.trim();
+  if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return content;
+  try {
+    const parsed: unknown = JSON.parse(trimmed);
+    const blocks = Array.isArray(parsed) ? parsed : [parsed];
+    return blocks
+      .map((block) => (block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string'
+        ? (block as { text: string }).text
+        : ''))
+      .filter(Boolean)
+      .join('\n');
+  } catch {
+    return content;
+  }
 }
 
 export function createSessionOperationsDeps(
@@ -108,6 +130,21 @@ export function createSessionOperationsDeps(
       hooks?.beforeWrite
         ? bindingStore.runExclusive(() => updateSessionInDb(sessionId, patch, undefined, hooks))
         : updateSessionInDb(sessionId, patch, undefined, hooks),
+    resolveMessageClientId: async (sessionId, messageId) => {
+      const [row] = await getDbClient()
+        .drizzle.select({ clientId: messages.clientId, role: messages.role, content: messages.content })
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), eq(messages.id, messageId)))
+        .limit(1);
+      if (!row) return null;
+      return { clientId: row.clientId, role: row.role, text: messageTextForDraft(row.content) };
+    },
+    forkAtMessage: async (sessionId, messageClientId) => {
+      const session = await forkSessionAtMessage(sessionId, messageClientId);
+      // 与 maker-ipc/fork.ts 的 IPC handler 同款广播,侧栏与 device-link 控制端即时看到新会话。
+      emitSessionCreated(session.id);
+      return { id: session.id };
+    },
   };
 }
 
@@ -120,6 +157,7 @@ export function createSessionOpsCallbacks(isTurnRunning: (sessionId: string) => 
   return {
     moveSessions: (params: { sessionIds: string[]; target: SessionMoveTarget }): Promise<MoveSessionsResult> =>
       guarded(() => moveSessions(deps, params)),
-
+    forkSession: (params: { sessionId: string; messageId: string }): Promise<ForkSessionResult> =>
+      guarded(() => forkSession(deps, params)),
   };
 }
