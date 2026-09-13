@@ -268,7 +268,10 @@ const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFin
  * 交互被回答(onInteractionResolved)**不**作废记录:message_end 的全文快照与交互
  * 回答是两条竞速路径,用户可能在快照被消费前就答完,此时记录必须还活着,否则同一块
  * 正文会再落一行;窗口改由紧随其后的 tool_result 行(ask_user 工具结果)自然关闭 ——
- * 下一条 assistant 消息只可能在 tool_result 之后产生。
+ * 下一条 assistant 消息只可能在 tool_result 之后产生。复用命中后也不消费记录:终态
+ * 快照可能重复投递,而交互行还占着 lastPersistedMsgBySession 时相邻 DUP-SKIP 看不到
+ * 已落库的 assistant 行,删早了第二次投递就会再落一行。记录只由窗口推进(其它消息
+ * 落库 / 新 delta block / turn reset / clear)作废。
  */
 const lastBoundaryFlushedAssistantBySession = new Map<
   string,
@@ -2113,7 +2116,8 @@ export function onAssistantTextEvent(
     // 复用窗口严格限定在"交互行仍是最后一条已落库消息"期间:窗口内到达的全文快照
     // 按构造属于刚 flush 的同一块;中间落过其它消息(如 ask_user 的 tool_result)/
     // 又开始新 delta block 后,记录已失效,合法的同文本新消息不会被吞。交互被回答
-    // 本身不作废窗口:终态全文可能与回答竞速,迟到的那条仍要更新这一行。
+    // 本身不作废窗口:终态全文可能与回答竞速,迟到的那条仍要更新这一行;一份快照
+    // 重复投递时也走这里(否则第二次会另起一行)。
     const boundaryFlushed = lastBoundaryFlushedAssistantBySession.get(sessionId);
     const lastPersisted = lastPersistedMsgBySession.get(sessionId);
     const atInteractionBoundary =
@@ -2125,7 +2129,9 @@ export function onAssistantTextEvent(
       (!agentMessageId || boundaryFlushed.agentMessageId === agentMessageId) &&
       (boundaryFlushed.text === visible || isFullText)
     ) {
-      lastBoundaryFlushedAssistantBySession.delete(sessionId);
+      // 命中后不删记录:同一份终态快照可能被重复投递(对齐紧邻 DUP-SKIP 的存在意义),
+      // 而此时上一条已落库消息是交互行,相邻 DUP-SKIP 挡不住第二次 —— 记录留到窗口
+      // 被推进(tool_result 等其它消息落库 / 新 delta block / reset)再失效。
       // message_end 的 isFullText 是权威全文:边界 flush 可能只攒到部分文本(尾部
       // delta 未消费 / 流式纠错),此时用全文更新既有行,而不是要求逐字相等后另起
       // 一行(否则仍是"部分文本 + 提问卡 + 完整文本"两行)。
@@ -2138,7 +2144,11 @@ export function onAssistantTextEvent(
               boundaryFlushed.persistId,
               visible,
             );
-            if (updated) broadcastMessageRow(sessionId, updated, ownerScope);
+            if (updated) {
+              // 缓存已落库的全文:重复投递同一份快照时不再重复 UPDATE。
+              boundaryFlushed.text = visible;
+              broadcastMessageRow(sessionId, updated, ownerScope);
+            }
           },
         );
       }

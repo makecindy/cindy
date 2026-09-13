@@ -2485,6 +2485,27 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     );
   });
 
+  it('边界复用窗口内同一份终态快照重复投递两次 → 仍只落一行、复用同一 persistId', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-repeat-final',
+      questions: [{ question: '选哪个?' }],
+    });
+    const meta = { model: 'pi-test', stopReason: 'toolUse', usage: {} };
+    const first = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: true, isFullText: true }, meta);
+    const second = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: true, isFullText: true }, meta);
+    // 上一条已落库消息是交互行 → 相邻 DUP-SKIP 看不到已落库的 assistant 行;
+    // 复用记录不能在第一次命中时就消费掉,否则第二次投递会另起一行。
+    expect(first).toBe(persistId);
+    expect(second).toBe(persistId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+  });
+
   it('交互边界 flush 后,不同 SDK 消息的同文本快照仍单独落行(身份不同不吞)', async () => {
     const firstId = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: false }, null);
     flushAssistantBlock(SESSION, null);
