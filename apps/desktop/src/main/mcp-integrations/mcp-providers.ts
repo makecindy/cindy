@@ -24,6 +24,7 @@ import {
   type ToolResultImageDescription,
 } from './ghost.js';
 import { createGroupHistoryMcpServer } from './groupHistoryMcpServer.js';
+import { createSessionOpsCallbacks } from './sessionOperationsHost.js';
 import { renderHtmlToPdf } from '../doc-tools/htmlPdfRenderer.js';
 import { writeDocsOutput } from '../doc-tools/docsOutputWriter.js';
 import { inspectPdf } from '../doc-tools/pdfInspector.js';
@@ -95,6 +96,11 @@ export interface DesktopMcpProvidersDeps {
   ) => IOSSimulatorMcpAccessDecision;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: ChatHistoryReaderDeps['invokeRemote'];
+  /**
+   * 会话操作工具(move / delete 等)的运行中判断。maker-host 注入 `getSession(id)?.isTurnRunning()`;
+   * 缺失时视为全部空闲(仅测试)。
+   */
+  isSessionTurnRunning?: (sessionId: string) => boolean;
   /** 插件文件交接只认活跃 Session 的实时权限；缺失时由 ghost.ts fail closed。 */
   getLiveSessionGrantState?: (
     sessionId: string,
@@ -420,6 +426,7 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
           return { ok: false, errorCode: 'INTERNAL', message };
         }
       },
+      sessionOps: createSessionOpsCallbacks(deps.isSessionTurnRunning ?? (() => false)),
       setSessionsStatus: async ({ sessionIds, status }) => {
         if (!tryGetDbClient()) {
           return { ok: false, errorCode: 'HOST_NOT_READY', message: 'localDb not ready' };

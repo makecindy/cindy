@@ -38,6 +38,53 @@ export {
   type SessionStatusChangeItem,
   type SetSessionsStatusResult,
 } from './archive_sessions.js';
+// GUI 会话菜单对应的 control 工具(移动 / 置顶 / 删除 / 导出 / 新窗口 / 分叉 / 分支)
+export {
+  SESSION_OPS_MAX_BATCH,
+  type SessionOpErrorCode,
+  type SessionOpItem,
+  type SessionOpResult,
+} from './_session_ops.js';
+export {
+  registerMoveSessionsTool,
+  type MoveSessionsDeps,
+  type MoveSessionsResult,
+  type SessionMoveTarget,
+} from './move_sessions.js';
+export {
+  registerPinSessionsTool,
+  registerUnpinSessionsTool,
+  type PinSessionsDeps,
+  type SetSessionsPinnedResult,
+} from './pin_sessions.js';
+export {
+  registerDeleteSessionsTool,
+  type DeleteSessionPreviewItem,
+  type DeleteSessionsDeps,
+  type DeleteSessionsResult,
+} from './delete_sessions.js';
+export {
+  registerExportSessionTool,
+  type ExportSessionDeps,
+  type ExportSessionOk,
+  type ExportSessionResult,
+} from './export_session.js';
+export {
+  registerOpenSessionInNewWindowTool,
+  type OpenSessionInNewWindowDeps,
+  type OpenSessionInNewWindowResult,
+} from './open_session_in_new_window.js';
+export {
+  registerForkSessionTool,
+  type ForkSessionDeps,
+  type ForkSessionResult,
+} from './fork_session.js';
+export {
+  registerGetSessionBranchesTool,
+  type GetSessionBranchesDeps,
+  type GetSessionBranchesResult,
+  type SessionBranchItem,
+} from './get_session_branches.js';
 // multi-worker Phase 1 control tools
 export {
   registerStartTeamTool,
