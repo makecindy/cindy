@@ -9108,6 +9108,30 @@ describe('CodexAgent MCP thread context hooks', () => {
       expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
       await handle.close();
     });
+    it('marks a completed-only compact disconnect as accepted-turn continuation-only', async () => {
+      const { host, handle, events } = await start();
+      compact(host);
+      const error = {
+        message: 'stream disconnected before completion: Transport error: network error: error decoding response body',
+        codexErrorInfo: { responseStreamDisconnected: { httpStatusCode: null } },
+      };
+      host.getThreadHandlers()!.turnCompleted!({
+        threadId: nativeId,
+        turn: { id: 'turn-1', status: 'failed', error },
+      });
+      await waitForExpectation(() => expect(events).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_compaction_transport_interrupted',
+          isTerminal: true,
+        }),
+      })));
+
+      expect(handle.isTurnRunning?.()).toBe(false);
+      expect(host.request.mock.calls.filter(([m]) => m === Method.ThreadFork)).toHaveLength(0);
+      expect(host.request.mock.calls.filter(([m]) => m === Method.TurnStart)).toHaveLength(1);
+      await handle.close();
+    });
     it.each([502, 503])('recovers explicit compact HTTP %s after the native turn has failed', async (status) => {
       const { host, handle } = await start();
       compact(host);

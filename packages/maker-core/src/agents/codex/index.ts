@@ -10181,6 +10181,14 @@ export class CodexAgent extends BaseAgent {
       // 同一个墓碑也负责拦截该 turn 随后迟到的 item / reasoning / started 事件。
       if (completedTurnIds.has(turn.id)) return;
       completedTurnIds.add(turn.id);
+      // Some app-server versions report a failed remote compaction only via
+      // turn/completed. Capture the marker before terminal cleanup so this
+      // path preserves the same accepted-turn/CONTINUE-only classification as
+      // the preceding error-notification path.
+      const completedCompactionTransportInterrupted =
+        turn.status === 'failed'
+        && compactingTurnIds.has(turn.id)
+        && isUncertainCompactionTransportFailure(turn.error);
       compactingTurnIds.delete(turn.id);
       normalModelWorkTurnIds.delete(turn.id);
       completedSummaryRecoveryTurnIds.delete(turn.id);
@@ -10375,6 +10383,9 @@ export class CodexAgent extends BaseAgent {
             type: 'error',
             data: {
               ...classified.data,
+              ...(completedCompactionTransportInterrupted
+                ? { reason: CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON }
+                : {}),
               isTerminal: true,
             },
             source: 'codex',
