@@ -270,8 +270,10 @@ const sealedAssistantLateFinalBySession = new Map<string, SealedAssistantLateFin
  * 正文会再落一行;窗口改由紧随其后的 tool_result 行(ask_user 工具结果)自然关闭 ——
  * 下一条 assistant 消息只可能在 tool_result 之后产生。复用命中后也不消费记录:终态
  * 快照可能重复投递,而交互行还占着 lastPersistedMsgBySession 时相邻 DUP-SKIP 看不到
- * 已落库的 assistant 行,删早了第二次投递就会再落一行。记录只由窗口推进(其它消息
- * 落库 / 新 delta block / turn reset / clear)作废。
+ * 已落库的 assistant 行,删早了第二次投递就会再落一行。
+ * 记录只在"flush 与交互行紧邻"时成立:flush 之后任何非交互消息先落库都会作废它
+ * (见 notePersistedMessage),否则更晚到达的交互行会仅凭角色把陈旧记录重新激活,
+ * 把当前这条 assistant 的终态全文写到更早那一行上。
  */
 const lastBoundaryFlushedAssistantBySession = new Map<
   string,
@@ -491,6 +493,14 @@ function notePersistedMessage(
   text = '',
   agentMessageId?: string,
 ): void {
+  // 边界复用候选只在"交互行紧随 flush 落库"时有效:flushAssistantBlock 与
+  // onInteractionMessage 在同一段同步代码里先后落库,所以 flush 之后第一条落库的不是
+  // 交互行,就说明这次 flush 不是交互边界(或交互行不是紧邻的那条)。立即作废候选,
+  // 防止更晚到达的 ask_user / plan_review 行仅凭角色把陈旧候选重新激活,把当前这条
+  // assistant 的终态全文写到更早那一行上。
+  if (role !== 'ask_user' && role !== 'plan_review') {
+    lastBoundaryFlushedAssistantBySession.delete(sessionId);
+  }
   lastPersistedMsgBySession.set(sessionId, { role, text, persistId, agentMessageId });
 }
 
@@ -2113,11 +2123,12 @@ export function onAssistantTextEvent(
     // assistant 行、再落交互行,交互行把 lastPersistedMsgBySession 刷成非
     // assistant,相邻 DUP-SKIP 看不到刚落库的行 —— 这里按身份复用,不落第二行。
     //
-    // 复用窗口严格限定在"交互行仍是最后一条已落库消息"期间:窗口内到达的全文快照
-    // 按构造属于刚 flush 的同一块;中间落过其它消息(如 ask_user 的 tool_result)/
-    // 又开始新 delta block 后,记录已失效,合法的同文本新消息不会被吞。交互被回答
-    // 本身不作废窗口:终态全文可能与回答竞速,迟到的那条仍要更新这一行;一份快照
-    // 重复投递时也走这里(否则第二次会另起一行)。
+    // 复用窗口严格限定在"交互行紧随本次 flush 落库"期间:flush 之后先落库了任何非
+    // 交互消息(如 tool_use / tool_result)记录即作废(见 notePersistedMessage),所以
+    // 这里看到 lastPersisted 是交互行,就说明它就是紧邻本次 flush 的那条,不会把更早
+    // 的陈旧记录重新激活;又开始新 delta block 后同样失效,合法的同文本新消息不会被
+    // 吞。交互被回答本身不作废窗口:终态全文可能与回答竞速,迟到的那条仍要更新这一
+    // 行;一份快照重复投递时也走这里(否则第二次会另起一行)。
     const boundaryFlushed = lastBoundaryFlushedAssistantBySession.get(sessionId);
     const lastPersisted = lastPersistedMsgBySession.get(sessionId);
     const atInteractionBoundary =

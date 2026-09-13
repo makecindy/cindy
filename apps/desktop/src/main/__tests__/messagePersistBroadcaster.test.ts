@@ -2459,6 +2459,32 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     expect(assistantCreates).toHaveLength(2);
   });
 
+  it('tool_use 边界留下的记录不会被随后到达的交互行重新激活(陈旧候选不上身)', async () => {
+    // 1) assistant 文本在普通 tool_use 边界 flush(不是交互边界)。
+    const earlyId = onAssistantTextEvent(SESSION, { text: '早些时候的回复', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onToolUseEvent(SESSION, { toolUseId: 'tu_early', toolName: 'Edit', input: {} }, null);
+    // 2) 随后到来的 ask_user 前没有新的文本 block:交互行落库,旧记录不得被角色激活。
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-stale-candidate',
+      questions: [{ question: '继续吗?' }],
+    });
+    // 3) 当前这条 assistant 消息的权威终态全文(无 agentMessageId,只有 isFullText)。
+    const currentId = onAssistantTextEvent(
+      SESSION,
+      { text: '继续吗?', isFinal: true, isFullText: true },
+      { model: 'pi-test', stopReason: 'toolUse', usage: {} },
+    );
+    // 必须另起一行:不能把当前全文写到更早那条上(内容/meta 都被覆盖)。
+    expect(currentId).not.toBe(earlyId);
+    await flushWrites();
+    expect(updateMessageContent).not.toHaveBeenCalledWith(SESSION, earlyId, '继续吗?');
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+
   it('交互被回答后迟到的同源终态全文仍复用该行(resolution 不作废复用窗口)', async () => {
     const persistId = onAssistantTextEvent(SESSION, { text: '同一句话', isFinal: false }, null);
     flushAssistantBlock(SESSION, null);
