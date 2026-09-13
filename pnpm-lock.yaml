@@ -121,6 +121,9 @@ importers:
       '@cindy/mcps':
         specifier: workspace:*
         version: link:../../packages/lizi-mcps
+      '@cindy/model-compat':
+        specifier: workspace:*
+        version: link:../../packages/model-compat
       '@cindy/model-providers':
         specifier: workspace:*
         version: link:../../packages/model-providers
@@ -794,6 +797,10 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   packages/anthropic-compat-proxy:
+    dependencies:
+      '@cindy/model-compat':
+        specifier: workspace:*
+        version: link:../model-compat
     devDependencies:
       '@eslint/js':
         specifier: ^9.0.0
@@ -821,6 +828,10 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   packages/anthropic-responses-bridge:
+    dependencies:
+      '@cindy/model-compat':
+        specifier: workspace:*
+        version: link:../model-compat
     devDependencies:
       '@eslint/js':
         specifier: ^9.0.0
@@ -1292,6 +1303,27 @@ importers:
         specifier: ^3.2.4
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
+  packages/model-compat:
+    devDependencies:
+      '@eslint/js':
+        specifier: ^9.0.0
+        version: 9.39.5
+      '@types/node':
+        specifier: '*'
+        version: 25.9.5
+      eslint:
+        specifier: ^9.0.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.7.0
+        version: 5.9.3
+      typescript-eslint:
+        specifier: ^8.0.0
+        version: 8.64.0(eslint@9.39.5(jiti@2.7.0))(typescript@5.9.3)
+      vitest:
+        specifier: ^3.2.4
+        version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
+
   packages/model-providers:
     devDependencies:
       '@types/node':
@@ -1455,6 +1487,10 @@ importers:
         version: 3.2.7(@types/debug@4.1.13)(@types/node@25.9.5)(jiti@2.7.0)(jsdom@29.1.1(@noble/hashes@1.8.0))(lightningcss@1.32.0)(terser@5.49.0)(tsx@4.23.1)(yaml@2.9.0)
 
   packages/responses-chat-bridge:
+    dependencies:
+      '@cindy/model-compat':
+        specifier: workspace:*
+        version: link:../model-compat
     devDependencies:
       '@eslint/js':
         specifier: ^9.0.0

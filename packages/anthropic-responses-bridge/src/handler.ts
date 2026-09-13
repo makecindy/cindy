@@ -1,3 +1,4 @@
+import { normalizeProviderRequest } from '@cindy/model-compat';
 /**
  * Bridge handler ——
  *
@@ -374,6 +375,13 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
       strictFunctionTools: provider.strictFunctionTools?.(realModel) === true
         || (wireDiagnosticsEnabled && opts.wireDiagnosticsStrict === true),
     });
+    let finalRequest: unknown;
+    try {
+      finalRequest = normalizeProviderRequest(responsesReq, { harness: 'claude-code', protocol: 'openai-responses', upstreamBase: provider.upstreamBase, model: responsesReq.model });
+    } catch {
+      writeJson(res, 400, { type: 'error', error: { type: 'invalid_request_error', message: 'request cannot be represented by the selected provider protocol' } });
+      return;
+    }
     const diagnostics = wireDiagnosticsEnabled
       ? new WireDiagnosticsSession(log, {
         requestId: ctx.reqId ?? reqId,
@@ -400,7 +408,7 @@ export function createResponsesHandler(opts: ResponsesHandlerOptions): Responses
           // 由下游缓冲满足。
           accept: 'text/event-stream',
         },
-        body: JSON.stringify(responsesReq),
+        body: JSON.stringify(finalRequest),
         signal: abort.signal,
       });
     } catch (err) {

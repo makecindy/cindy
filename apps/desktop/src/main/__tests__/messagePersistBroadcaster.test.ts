@@ -2382,6 +2382,176 @@ describe('assistant isFinal burst DUP-SKIP(P1:main 对称去重,防重复 isFina
     expect(assistantCreates).toHaveLength(2);
   });
 
+  it('交互边界 flush 后,同源 isFinal 全文快照复用已落库行(ask_user 行打断相邻守卫)', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: false }, null);
+    // 交互边界:先 flush 在飞 assistant,再落 ask_user 行(会把 lastPersistedMsgBySession
+    // 刷成非 assistant,使相邻 DUP-SKIP 失效)。
+    flushAssistantBlock(SESSION, null);
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-dup-after-flush',
+      questions: [{ question: '选哪个?' }],
+    });
+    // 随后 message_end 的权威全文快照(带 usage meta)到达 —— 必须复用同一行。
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: '选哪个?', isFinal: true, isFullText: true },
+      { model: 'pi-test', stopReason: 'toolUse', usage: {} },
+    );
+    expect(lateFinalId).toBe(persistId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+    expect(assistantCreates[0]?.[1]).toEqual(
+      expect.objectContaining({ clientId: persistId, content: '选哪个?' }),
+    );
+    // message_end 才带来的终态 meta 必须合并回被复用的行,不能因复用而丢失。
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({ model: 'pi-test', stopReason: 'toolUse' }),
+    );
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.anything(),
+    );
+  });
+
+  it('边界 flush 只攒到部分文本时,终态全文更新既有行而不是另起一行', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: '选哪个', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-partial-flush',
+      questions: [{ question: '选哪个?' }],
+    });
+    // message_end 是权威全文,与已 flush 的部分文本不完全相等。
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: '选哪个?', isFinal: true, isFullText: true },
+      { model: 'pi-test', stopReason: 'toolUse', usage: {} },
+    );
+    expect(lateFinalId).toBe(persistId);
+    await flushWrites();
+    expect(updateMessageContent).toHaveBeenCalledWith(SESSION, persistId, '选哪个?');
+    expect(broadcastMessageRow).toHaveBeenCalled();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+  });
+
+  it('边界后落过别的消息(tool_use)时同文本快照不复用,仍单独落行', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: 'Done.', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onToolUseEvent(SESSION, { toolUseId: 'tu_between', toolName: 'Edit', input: {} }, null);
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: 'Done.', isFinal: true, isFullText: true },
+      null,
+    );
+    // 上一条已落库消息不是交互行 → 复用窗口已关闭,不能吞这条合法消息。
+    expect(lateFinalId).not.toBe(persistId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+
+  it('tool_use 边界留下的记录不会被随后到达的交互行重新激活(陈旧候选不上身)', async () => {
+    // 1) assistant 文本在普通 tool_use 边界 flush(不是交互边界)。
+    const earlyId = onAssistantTextEvent(SESSION, { text: '早些时候的回复', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onToolUseEvent(SESSION, { toolUseId: 'tu_early', toolName: 'Edit', input: {} }, null);
+    // 2) 随后到来的 ask_user 前没有新的文本 block:交互行落库,旧记录不得被角色激活。
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-stale-candidate',
+      questions: [{ question: '继续吗?' }],
+    });
+    // 3) 当前这条 assistant 消息的权威终态全文(无 agentMessageId,只有 isFullText)。
+    const currentId = onAssistantTextEvent(
+      SESSION,
+      { text: '继续吗?', isFinal: true, isFullText: true },
+      { model: 'pi-test', stopReason: 'toolUse', usage: {} },
+    );
+    // 必须另起一行:不能把当前全文写到更早那条上(内容/meta 都被覆盖)。
+    expect(currentId).not.toBe(earlyId);
+    await flushWrites();
+    expect(updateMessageContent).not.toHaveBeenCalledWith(SESSION, earlyId, '继续吗?');
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+
+  it('交互被回答后迟到的同源终态全文仍复用该行(resolution 不作废复用窗口)', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: '同一句话', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    const request = { kind: 'ask_user_question' as const, requestId: 'req-reuse-window', questions: [{ question: '同一句话' }] };
+    const askId = onInteractionMessage(SESSION, request);
+    expect(askId).toBeTruthy();
+    // 用户可能在 message_end 的全文快照被消费前就答完(两条路径竞速):回答本身
+    // 不作废复用窗口,否则这块正文会在提问卡之后再落一行。
+    onInteractionResolved(SESSION, askId, 'ask_user_question', request, { answers: { '同一句话': '答' } });
+    const lateFinalId = onAssistantTextEvent(
+      SESSION,
+      { text: '同一句话', isFinal: true, isFullText: true },
+      { model: 'pi-test', stopReason: 'toolUse', usage: {} },
+    );
+    expect(lateFinalId).toBe(persistId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      persistId,
+      expect.objectContaining({ model: 'pi-test', stopReason: 'toolUse' }),
+    );
+  });
+
+  it('边界复用窗口内同一份终态快照重复投递两次 → 仍只落一行、复用同一 persistId', async () => {
+    const persistId = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-repeat-final',
+      questions: [{ question: '选哪个?' }],
+    });
+    const meta = { model: 'pi-test', stopReason: 'toolUse', usage: {} };
+    const first = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: true, isFullText: true }, meta);
+    const second = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: true, isFullText: true }, meta);
+    // 上一条已落库消息是交互行 → 相邻 DUP-SKIP 看不到已落库的 assistant 行;
+    // 复用记录不能在第一次命中时就消费掉,否则第二次投递会另起一行。
+    expect(first).toBe(persistId);
+    expect(second).toBe(persistId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(1);
+  });
+
+  it('交互边界 flush 后,不同 SDK 消息的同文本快照仍单独落行(身份不同不吞)', async () => {
+    const firstId = onAssistantTextEvent(SESSION, { text: '选哪个?', isFinal: false }, null);
+    flushAssistantBlock(SESSION, null);
+    onInteractionMessage(SESSION, {
+      kind: 'ask_user_question',
+      requestId: 'req-dup-distinct',
+      questions: [{ question: '选哪个?' }],
+    });
+    const secondId = onAssistantTextEvent(
+      SESSION,
+      { text: '选哪个?', isFinal: true, isFullText: true, agentMessageId: 'msg-second' },
+      null,
+    );
+    expect(secondId).not.toBe(firstId);
+    await flushWrites();
+    const assistantCreates = vi.mocked(createMessage).mock.calls
+      .filter(([, message]) => message.role === 'assistant');
+    expect(assistantCreates).toHaveLength(2);
+  });
+
   it('P1b:跨 turn(reset 之后)同内容 burst 不去重 → 两次 create、不丢消息', async () => {
     // turn1 非流式 burst "X";turn 结束 reset(用户消息走 renderer、不更新 main tracker,
     // 故必须靠 reset 清 tracker,否则 turn2 同内容 burst 会被误判重复跳 create → 丢回复)。
