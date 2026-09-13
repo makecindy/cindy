@@ -100,9 +100,14 @@ export function createSessionOperationsDeps(
         return false;
       }
     },
+    // 带写入前复核的更新在 IM binding 的串行队列里执行:复核里的 isImAttached 与随后的
+    // 写库之间不可能再有 attach 落地(attach 的持久化 + 内存索引更新在同一队列里排在后面)。
+    // 队列内不得再等待 attach / detach;updateSessionInDb 只取路由锁与状态写锁,
+    // 而 IM 侧没有任何路径在持有这两把锁时等待 binding 变更,不会形成锁序环。
     updateSession: (sessionId, patch, hooks) =>
-      updateSessionInDb(sessionId, patch, undefined, hooks),
-
+      hooks?.beforeWrite
+        ? bindingStore.runExclusive(() => updateSessionInDb(sessionId, patch, undefined, hooks))
+        : updateSessionInDb(sessionId, patch, undefined, hooks),
   };
 }
 

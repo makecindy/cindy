@@ -172,7 +172,8 @@ export async function moveSessions(
   for (const row of loaded) {
     try {
       // 运行中 / IM 接管 / 终态的复核放在 updateSessionInDb 的路由锁内(beforeWrite),
-      // 与写入同一串行区间;Pi/Codex 另有 closeIdleSessionForMove 在锁内二次拦截。
+      // 与写入同一串行区间;host 侧还把整次更新放进 IM binding 的串行队列,复核与写库
+      // 之间不会有新的接管落地。Pi/Codex 另有 closeIdleSessionForMove 在锁内二次拦截。
       const updated = (await deps.updateSession(row.id, { ...patch }, {
         beforeWrite: () => lateGuard(deps, row.id, { allowArchived: false }),
       })) as Partial<SessionOpsRow>;
