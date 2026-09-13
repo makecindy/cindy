@@ -1309,20 +1309,27 @@ describe('maker SEND transaction', () => {
     expect(liveSession.send).toHaveBeenCalled();
   });
 
-  it.skipIf(process.platform !== 'win32')('does not rebuild for a case-only Windows path difference', async () => {
-    const liveSession = createSession({ workDir: 'C:\\repo\\PROJECT' });
-    const { deps } = createDeps({
-      getSession: () => liveSession,
-      readSessionWorkingDirFromDb: vi.fn(async () => 'C:/repo/project'),
-      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
-    });
+  it('does not rebuild for a case-only Windows path difference', async () => {
+    // 大小写折叠只在 win32 生效 —— 在任意平台把 platform 伪造成 win32,避免这条
+    // 分支在非 Windows CI 上永远不被执行(伪造只影响 sameWorkingDir 的判定)。
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      const liveSession = createSession({ workDir: 'C:\\repo\\PROJECT' });
+      const { deps } = createDeps({
+        getSession: () => liveSession,
+        readSessionWorkingDirFromDb: vi.fn(async () => 'C:/repo/project'),
+        statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+      });
 
-    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
-      agentKind: 'codex', workingDir: 'C:\\repo\\PROJECT',
-    })).resolves.toMatchObject({ accepted: true });
+      await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+        agentKind: 'codex', workingDir: 'C:\\repo\\PROJECT',
+      })).resolves.toMatchObject({ accepted: true });
 
-    expect(deps.closeSession).not.toHaveBeenCalled();
-    expect(liveSession.send).toHaveBeenCalled();
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(liveSession.send).toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+    }
   });
 
   it.each(['claude-code', 'pi'] as const)('refreshes a live %s process after same-path recovery and preserves its note', async (agentKind) => {

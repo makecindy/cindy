@@ -983,8 +983,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (sess) {
         // SQLite 里的 working_dir 才是持久真源(启动迁移 / 目录重定位 / 用户移动
         // 会话都会改写它),而活 SDK 可能仍占着旧 cwd。漂移时按下面的规则切到持久
-        // 目录:它必须**真实存在**(纯 stat,绝不为它 mkdir 空文件夹 —— 那会丢掉活
-        // runtime 的上下文),且不被 workingDirectoryRecovery 的 fallback 接管。
+        // 目录:普通目录必须**真实存在**(纯 stat,绝不为它 mkdir 空文件夹 —— 那会丢
+        // 掉活 runtime 的上下文);托管 worktree 必须**就绪**(走 send 侧的 restore /
+        // liveness 判定,可能补齐/恢复 worktree,但不会丢已有代码与快照)。被
+        // workingDirectoryRecovery 的 fallback 接管的目录一律不迁移。
         const dbDir = !sess.remoteHostId
           ? await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null)
           : null;
@@ -1002,15 +1004,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         // 且与 runtime cwd 不一致时,关闭旧 runtime 并按 DB 目录重建;不能等旧目录
         // 消失 —— 旧目录通常还在(2026-09-13 实报:移动后消息仍在旧目录执行)。
         // 仅拼写差异(分隔符 / 尾斜杠 / Windows 大小写)不算漂移,不重建。
-        const persistedDirReady =
-          ok && fallbackDir && !sameWorkingDir(fallbackDir, sess.workDir)
-            ? await isUsablePersistedWorkingDir(
-                sessionId,
-                fallbackDir,
-                sess.agentKind,
-                sess.remoteHostId,
-              )
-            : false;
         // Claude/Pi keep a process whose cwd can still reference the deleted inode.
         // The pending note also covers recovery performed by an earlier preflight.
         const recoveredDir = !sess.remoteHostId
@@ -1018,10 +1011,21 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           : sess.workDir;
         // recovery 语义优先:live 目录已被 fallback 接管(或带 note)时按 fallback
         // 重建,不做 DB 迁移 —— 那批文件在 fallback 里,不能把 session 拉回 DB 路径。
+        // 此时也不探测 DB 目录:结果用不上,而托管 worktree 的就绪探测可能触发一次
+        // 真实的 worktree restore。
         const liveDirNeedsRecovery =
           recoveredDir !== sess.workDir ||
           ((sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
           !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir));
+        const persistedDirReady =
+          ok && !liveDirNeedsRecovery && fallbackDir && !sameWorkingDir(fallbackDir, sess.workDir)
+            ? await isUsablePersistedWorkingDir(
+                sessionId,
+                fallbackDir,
+                sess.agentKind,
+                sess.remoteHostId,
+              )
+            : false;
         const needsCwdRefresh = ok && !sess.remoteHostId &&
           (liveDirNeedsRecovery || persistedDirReady);
         if ((!ok && fallbackDir) || needsCwdRefresh) {
