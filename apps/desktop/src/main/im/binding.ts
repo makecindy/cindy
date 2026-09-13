@@ -377,6 +377,16 @@ export class SqliteBindingStore implements BindingStore<string> {
     }
   }
 
+  /**
+   * 在 attach / detach 同一条串行队列里执行 task:task 期间不会有任何接管变更落地。
+   * 会话操作(移动等)用它把"未被 IM 接管"的复核与随后的写库放进同一原子区间,
+   * 否则 attach 的持久化与内存索引更新可能夹在复核与写库之间完成。
+   * 调用方不得在 task 内再等待本 store 的 attach / detach,否则自锁。
+   */
+  runExclusive<T>(task: () => Promise<T>): Promise<T> {
+    return this.enqueueMutation(task);
+  }
+
   private enqueueMutation<T>(operation: () => Promise<T>): Promise<T> {
     const result = this.mutationQueue.then(operation, operation);
     this.mutationQueue = result.then(

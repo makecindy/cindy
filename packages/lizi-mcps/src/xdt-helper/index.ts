@@ -38,6 +38,9 @@ export {
   type SessionStatusChangeItem,
   type SetSessionsStatusResult,
 } from './archive_sessions.js';
+export { SESSION_OPS_MAX_BATCH, type SessionOpErrorCode, type SessionOpItem, type SessionOpResult } from './_session_ops.js';
+export { registerMoveSessionsTool, type MoveSessionsDeps, type MoveSessionsResult, type SessionMoveTarget } from './move_sessions.js';
+export { registerExportSessionTool, type ExportSessionDeps, type ExportSessionOk, type ExportSessionResult } from './export_session.js';
 // multi-worker Phase 1 control tools
 export {
   registerStartTeamTool,
