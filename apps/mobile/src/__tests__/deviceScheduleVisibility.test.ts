@@ -3,6 +3,7 @@ import ts from 'typescript';
 import { beforeEach, expect, it, vi } from 'vitest';
 import {
   getScheduleIndexInvalidationVersion,
+  invalidateRunningSessionScheduleEntries,
   loadSharedSessionScheduleIndex,
   resetScheduleIndexThrottleForTesting,
 } from '@/session/scheduleIndex';
@@ -56,4 +57,71 @@ it.each(['blur', 'background'] as const)('reloads a cancelled first index after 
   run();
   await Promise.all(pending);
   expect(list).toHaveBeenCalledTimes(1);
+});
+
+// 2026-09-10 Android Maximum update depth 崩溃回归:mirror 失效标记在权威同步
+// 成功前持续存在,effect 必须对同一 generation 只消费一次,不能随 `sessions`
+// 引用变化(离线标记、后台对账)反复把 setScheduleIndex 拉进更新链。
+let mirrorEffectSource = '';
+let mirrorEffectDependencies: string[] = [];
+function visitMirrorEffect(node: ts.Node) {
+  if (ts.isCallExpression(node) && node.expression.getText(source) === 'useEffect'
+    && node.arguments[0]?.getText(source).includes('invalidateRunningSessionScheduleEntries')) {
+    mirrorEffectSource = node.arguments[0].getText(source);
+    mirrorEffectDependencies = (node.arguments[1] as ts.ArrayLiteralExpression).elements.map((e) => e.getText(source));
+  }
+  ts.forEachChild(node, visitMirrorEffect);
+}
+visitMirrorEffect(source);
+const runMirrorEffect = new Function(
+  'deviceId',
+  'scheduleMirrorInvalidations',
+  'consumedMirrorGenerationsRef',
+  'invalidateRunningSessionScheduleEntries',
+  'sessions',
+  'setScheduleIndex',
+  ts.transpile(`(${mirrorEffectSource})();`),
+);
+
+it('consumes a mirror invalidation generation once, with incremental sessions and reset on clear', () => {
+  expect(mirrorEffectDependencies).toEqual(
+    expect.arrayContaining(['deviceId', 'scheduleMirrorInvalidations', 'sessions']),
+  );
+  const consumedMirrorGenerationsRef = {
+    current: new Map<string, { generation: number; sessionIds: Set<string> }>(),
+  };
+  // s3 在 scheduleIndex 里 running,但尚未进入当前可见会话列表。
+  const current = new Map([['s1', { running: true }], ['s3', { running: true }]]);
+  const setScheduleIndex = vi.fn((updater: (map: typeof current) => typeof current) => updater(current));
+  const sessions = [{ id: 's1' }, { id: 's2' }];
+  const run = (generation: number | undefined, nextSessions: Array<{ id: string }>) => runMirrorEffect(
+    'device',
+    generation === undefined ? new Map() : new Map([['device', generation]]),
+    consumedMirrorGenerationsRef,
+    invalidateRunningSessionScheduleEntries,
+    nextSessions,
+    setScheduleIndex,
+  );
+
+  run(1, sessions);
+  // 同一 generation 内 sessions 引用变化(离线标记、对账重渲染)不得再次入链。
+  run(1, [...sessions]);
+  expect(setScheduleIndex).toHaveBeenCalledTimes(1);
+  const cleared = setScheduleIndex.mock.results[0]?.value;
+  expect(cleared?.get('s1')).toMatchObject({ running: false });
+  // 不可见的 s3 本轮不被触碰。
+  expect(cleared?.get('s3')).toMatchObject({ running: true });
+
+  // 代次内后进入可见列表的会话要增量清理 running(greptile P1:遗漏后到会话)。
+  run(1, [...sessions, { id: 's3' }]);
+  expect(setScheduleIndex).toHaveBeenCalledTimes(2);
+  const incremental = setScheduleIndex.mock.results[1]?.value;
+  expect(incremental?.get('s3')).toMatchObject({ running: false });
+
+  // 标记被清除时丢弃消费记录;新一轮失效(更高代次)重新消费
+  // (codex P2:代次跨 marker 清除单调,不回绕)。
+  run(undefined, sessions);
+  expect(consumedMirrorGenerationsRef.current.has('device')).toBe(false);
+  run(2, sessions);
+  expect(setScheduleIndex).toHaveBeenCalledTimes(3);
 });
