@@ -52,7 +52,7 @@ export function registerPassportInputDevice(): void {
   const isEnabled = (): boolean => process.platform === 'darwin' && settings.read().enabled;
   let devices: string[] = [], bluetooth = 0;
   let voiceState: PassportState['voice'] = 'idle';
-  let pending: (PassportDictation & { owner: string; recordingToken: number; page: number; confirmed: boolean; confirmedAt: number; claimed: boolean; sendFailed: boolean }) | null = null;
+  let pending: (PassportDictation & { owner: string; recordingToken: number; page: number; confirmed: boolean; confirmedAt: number; claimed: boolean; claimedAt: number; sendFailed: boolean }) | null = null;
   let reading: { id: string; owner: string; page: number; text: string; createdAt: number | null; rowid: number | null } | null = null;
   let voiceOwner = '';
   let voiceTaskId = '';
@@ -164,6 +164,7 @@ export function registerPassportInputDevice(): void {
     const catalog = await catalogReader.readFresh();
     if (pending !== current || !current.confirmed || current.claimed || current.owner !== activeOwnerScopeKey() || !catalog.options.some((task) => task.id === id)) return null;
     current.claimed = true;
+    current.claimedAt = Date.now();
     return { token: current.token, sessionId: current.sessionId, text: current.text, ownerStamp: current.ownerStamp };
   });
   ipcMain.handle('passport:dictation-ack', (event, value: unknown, accepted: unknown) => {
@@ -205,7 +206,7 @@ export function registerPassportInputDevice(): void {
           if (!current() || !latest.options.some((task) => task.id === result.id)) return;
           if (!transcription.text.trim()) throw new Error('Empty dictation');
           pending = { token: randomUUID(), sessionId: result.id, text: transcription.text, owner, ownerStamp: getActiveDataOwnerPushStamp(),
-            recordingToken: result.token, page: 0, confirmed: false, confirmedAt: 0, claimed: false, sendFailed: false };
+            recordingToken: result.token, page: 0, confirmed: false, confirmedAt: 0, claimed: false, claimedAt: 0, sendFailed: false };
           voiceState = 'draft'; void refresh();
         } catch (error) {
           if (current()) {
@@ -223,6 +224,9 @@ export function registerPassportInputDevice(): void {
     try {
       const catalog = await catalogReader.readForRefresh();
       if (pending && pending.owner !== owner) { pending = null; voiceState = 'idle'; voiceRevision++; }
+      if (pending?.confirmed && pending.claimed && Date.now() - pending.claimedAt > 15_000) {
+        pending.claimed = false; pending.claimedAt = 0; pending.confirmedAt = Date.now();
+      }
       if (pending?.confirmed && !pending.claimed && Date.now() - pending.confirmedAt > 15_000) {
         pending.confirmed = false; pending.sendFailed = true; voiceState = 'draft';
       }

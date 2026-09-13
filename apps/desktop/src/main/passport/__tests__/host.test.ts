@@ -157,6 +157,14 @@ describe('Passport host transcription boundary', () => {
     action(5); await flush();
     expect(await mocks.ipc.get('passport:dictation')!({}, 'task')).not.toBeNull();
   });
+  it('releases a stale renderer claim so a confirmed send can be retried', async () => {
+    record(); await flush(); action(5); await flush();
+    const read = mocks.ipc.get('passport:dictation')!;
+    const first = await read({}, 'task');
+    expect(first).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(16_000); await flush();
+    expect(await read({}, 'task')).toMatchObject({ token: first.token, text: first.text });
+  });
   it('allows leaving a claimed send without automatically sending it again', async () => {
     record(); await flush(); action(5); await flush();
     await mocks.ipc.get('passport:dictation')!({}, 'task');
