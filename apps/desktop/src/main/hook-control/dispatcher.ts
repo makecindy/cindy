@@ -496,7 +496,13 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
   const channelName = boundedNullable(source.channelName, SOURCE_CHANNEL_NAME_MAX);
   const teamId = boundedNullable(source.teamId, SOURCE_TEAM_ID_MAX);
   const teamName = boundedNullable(source.teamName, SOURCE_TEAM_NAME_MAX);
-  const threadContext = source.threadContext?.slice(0, SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
+  // The X wire chain includes the trigger for prompt assembly. Display it only
+  // as userText, not again among referenced messages. Match the original ID
+  // before bounding the snapshot; legacy entries without IDs stay untouched.
+  const displayContext = source.im === 'x' && source.triggerMessageId && source.userText?.trim()
+    ? source.threadContext?.filter((entry) => entry.messageId !== source.triggerMessageId)
+    : source.threadContext;
+  const threadContext = displayContext?.slice(0, SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
     ...(entry.messageId !== undefined ? { messageId: entry.messageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) } : {}),
     ...(entry.authorId !== undefined ? { authorId: entry.authorId.slice(0, SOURCE_THREAD_AUTHOR_MAX) } : {}),
     ...(entry.replyToMessageId !== undefined ? { replyToMessageId: entry.replyToMessageId?.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) ?? null } : {}),

@@ -404,6 +404,21 @@ describe('buildHookSessionTitle', () => {
 });
 
 describe('normalizeTaskSource', () => {
+  it('excludes the X trigger from references without mutating the wire chain', () => {
+    const current = { messageId: 'current', author: '@user', text: '@bot request' };
+    const source = {
+      im: 'x' as const, triggerMessageId: 'current', userText: 'request',
+      threadContext: [current],
+    };
+    expect(normalizeTaskSource(source).threadContext).toEqual([]);
+    expect(source.threadContext).toEqual([current]);
+    expect(normalizeTaskSource({ ...source, userText: undefined }).threadContext).toEqual([current]);
+    expect(normalizeTaskSource({ ...source, im: 'slack' }).threadContext).toEqual([current]);
+    expect(normalizeTaskSource({ ...source, triggerMessageId: undefined }).threadContext).toEqual([current]);
+    const legacy = { author: '@user', text: 'request' };
+    expect(normalizeTaskSource({ ...source, threadContext: [legacy] }).threadContext).toEqual([legacy]);
+  });
+
   it('bounds server-controlled display metadata before session persistence', async () => {
     const source = normalizeTaskSource({
       im: 'telegram',
@@ -712,6 +727,9 @@ describe('dispatcher 核心语义', () => {
     expect(fr.calls[0]?.source).toMatchObject({
       userText: '查看 PR', triggerMessageId: '2', xContext: { requesterId: 'u' },
     });
+    expect(fr.calls[0]?.source?.threadContext).toEqual([
+      expect.objectContaining({ messageId: '1', author: '@other', text: longText.slice(0, 4000) }),
+    ]);
   });
 
   it('标题用 source.userText, 不吃 prompt 里 server 挂的 thread 上下文块', async () => {
