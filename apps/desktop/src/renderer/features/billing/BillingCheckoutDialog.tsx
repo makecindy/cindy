@@ -85,6 +85,8 @@ export function BillingCheckoutDialog({
     if (state.phase === 'CREATING') return t('billing.checkout.creatingTitle');
     if (state.phase === 'AWAITING_PAYMENT') return t('billing.checkout.awaitingTitle');
     if (state.phase === 'COMPLETED') return t('billing.checkout.completedTitle');
+    if (state.phase === 'FULFILLMENT_PENDING') return t('billing.checkout.fulfillmentPendingTitle');
+    if (state.phase === 'FULFILLMENT_FAILED') return t('billing.checkout.fulfillmentFailedTitle');
     if (state.phase === 'EXPIRED') return t('billing.checkout.expiredTitle');
     if (state.phase === 'CANCELED') return t('billing.checkout.canceledTitle');
     return t('billing.checkout.failedTitle');
@@ -246,6 +248,29 @@ export function BillingCheckoutDialog({
                   <Check size={24} />
                 </div>
                 <p className="mt-4 text-sm font-medium">{t('billing.checkout.paymentCompleted')}</p>
+                <p className="mt-2 max-w-[360px] text-12 text-[var(--text-secondary)]">
+                  {t('billing.checkout.fulfillmentSucceeded')}
+                </p>
+              </>
+            )}
+
+            {state.phase === 'FULFILLMENT_PENDING' && (
+              <>
+                <Spinner size={26} className="text-[var(--text-secondary)]" />
+                <p className="mt-4 max-w-[360px] text-sm text-[var(--text-secondary)]">
+                  {t('billing.checkout.fulfillmentPendingBody')}
+                </p>
+              </>
+            )}
+
+            {state.phase === 'FULFILLMENT_FAILED' && (
+              <>
+                <div className="grid size-14 place-items-center rounded-full bg-[var(--surface-chip)]">
+                  <CircleAlert size={23} />
+                </div>
+                <p className="mt-4 max-w-[360px] text-sm text-[var(--text-secondary)]">
+                  {t('billing.checkout.fulfillmentFailedBody')}
+                </p>
               </>
             )}
 
@@ -271,7 +296,9 @@ export function BillingCheckoutDialog({
 
           <div className="flex min-h-16 items-center justify-end gap-3 border-t border-[var(--border-default)] px-6 py-3">
             <div className="flex items-center gap-2">
-              {state.phase === 'AWAITING_PAYMENT' && (
+              {(state.phase === 'AWAITING_PAYMENT' ||
+                state.phase === 'FULFILLMENT_PENDING' ||
+                state.phase === 'FULFILLMENT_FAILED') && (
                 <button
                   type="button"
                   onClick={onRefresh}
@@ -309,5 +336,11 @@ export function BillingCheckoutDialog({
 }
 
 function isTerminalPhase(phase: BillingCheckoutState['phase']): boolean {
-  return phase === 'COMPLETED' || phase === 'FAILED' || phase === 'EXPIRED' || phase === 'CANCELED';
+  return (
+    phase === 'COMPLETED' ||
+    phase === 'FULFILLMENT_FAILED' ||
+    phase === 'FAILED' ||
+    phase === 'EXPIRED' ||
+    phase === 'CANCELED'
+  );
 }
