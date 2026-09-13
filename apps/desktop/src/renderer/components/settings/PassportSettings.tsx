@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { ArrowLeft, Bluetooth, ChevronRight, IdCard, RotateCcw } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Switch } from '@/components/ui/switch';
+import { Tip } from '@/components/ui/tooltip';
 import { InputDeviceConnectionStatus } from './InputDeviceConnectionStatus';
 import type { PassportState } from '../../../shared/passport';
 
@@ -80,10 +81,12 @@ export function PassportSettings({ onBack }: { onBack(): void }) {
   return <div className="flex flex-col gap-[14px]" data-testid="settings-passport-detail">
     <div className="flex items-center justify-between gap-3">
       <div className="flex min-w-0 items-center gap-2">
-        <button type="button" onClick={onBack} aria-label={t('settings.passport.back')}
-          className="flex size-8 shrink-0 items-center justify-center rounded-md text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]">
-          <ArrowLeft size={17} aria-hidden="true" />
-        </button>
+        <Tip text={t('settings.passport.back')} side="bottom">
+          <button type="button" onClick={onBack} aria-label={t('settings.passport.back')}
+            className="flex size-8 shrink-0 items-center justify-center rounded-full text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-chip)] hover:text-[var(--text-primary)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]">
+            <ArrowLeft size={17} aria-hidden="true" />
+          </button>
+        </Tip>
         <h2 className="truncate text-16 font-medium leading-[1.2] text-[var(--settings-section-title)]">{t('settings.passport.title')}</h2>
       </div>
       <button type="button" disabled={busy || !state?.supported} onClick={() => { void run(() => api.setEnabled(null)); }}

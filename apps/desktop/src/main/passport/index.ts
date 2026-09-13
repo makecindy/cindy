@@ -477,9 +477,10 @@ export function registerPassportInputDevice(): void {
   ipcMain.handle('passport:enabled', async (event, value: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (process.platform !== 'darwin') throwIpcError('INVALID_PARAMS', 'Passport requires macOS');
+    const enabled = value === null ? null : requireBoolean(value, 'enabled');
     try {
-      if (value === null) await settings.resetAtomic();
-      else await settings.writePatchAtomic({ enabled: requireBoolean(value, 'enabled') });
+      if (enabled === null) await settings.resetAtomic();
+      else await settings.writePatchAtomic({ enabled });
       if (isEnabled()) await start(); else stop();
     } catch { throwIpcError('INTERNAL', 'Passport settings could not be saved'); }
   });
