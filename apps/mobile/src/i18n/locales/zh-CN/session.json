@@ -39,7 +39,15 @@
       "noticeWorker": "这是桌面端 Orca Worker 任务。手机版第一版只读，不提供发送消息、切换 Worker 焦点、归档 Worker 或停止协同。",
       "noticeOther": "这是桌面端协同任务。手机版第一版只读，协同编排操作请在电脑端完成。",
       "readOnlyReason": "协同模式在手机版第一版中为只读。确认处理、队列编辑和任务修改请在电脑端完成。",
-      "composerReadOnlyReason": "这个协同子任务在手机版中只读，请在电脑端发送消息。"
+      "composerReadOnlyReason": "这个协同子任务在手机版中只读，请在电脑端发送消息。",
+      "workerStatus": {
+        "unknown": "未知",
+        "running": "运行中",
+        "idle": "空闲",
+        "done": "已完成",
+        "error": "错误",
+        "archived": "已归档"
+      }
     },
     "composer": {
       "voice": {

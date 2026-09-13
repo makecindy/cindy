@@ -267,6 +267,9 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:get-capabilities',
   'maker:provider:list',
   'local-db:sessions:get',
+  // Read-only Orca Lead → Worker projection. Older controlled Desktops reject
+  // these channels; Mobile treats that as an unavailable collaboration panel.
+  'local-db:orca-workflows:list-workers-by-lead',
   // 只读任务搜索(对齐桌面侧栏 / Composer @)。老被控端 CHANNEL_NOT_ALLOWED →
   // 手机端降级为已缓存会话的本地匹配,不阻断搜索。
   'local-db:conversations:search',

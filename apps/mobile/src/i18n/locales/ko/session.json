@@ -39,7 +39,15 @@
       "noticeWorker": "컴퓨터의 Orca Worker 세션입니다. 모바일 첫 버전은 읽기 전용이며 메시지 전송, Worker 포커스 변경, Worker 보관 또는 협업 중지를 지원하지 않습니다.",
       "noticeOther": "컴퓨터의 협업 세션입니다. 모바일 첫 버전은 읽기 전용이므로 협업 관리는 컴퓨터에서 진행하세요.",
       "readOnlyReason": "모바일 첫 버전에서 협업 모드는 읽기 전용입니다. 확인 처리, 대기열 편집 및 세션 변경은 컴퓨터에서 진행하세요.",
-      "composerReadOnlyReason": "이 협업 하위 작업은 모바일에서 읽기 전용입니다. 컴퓨터에서 메시지를 보내세요."
+      "composerReadOnlyReason": "이 협업 하위 작업은 모바일에서 읽기 전용입니다. 컴퓨터에서 메시지를 보내세요.",
+      "workerStatus": {
+        "unknown": "알 수 없음",
+        "running": "실행 중",
+        "idle": "유휴",
+        "done": "완료",
+        "error": "오류",
+        "archived": "보관됨"
+      }
     },
     "composer": {
       "voice": {
