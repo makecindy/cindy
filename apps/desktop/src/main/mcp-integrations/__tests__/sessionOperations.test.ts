@@ -1,0 +1,113 @@
+/**
+ * sessionOperations 业务体回归测试:GUI 同口径守卫(远程 / 运行中 / IM 接管 / 已归档 /
+ * 空草稿 / review)、NOT_FOUND 整批不写、逐个应用与中途失败。依赖全部注入,不加载 Electron。
+ */
+
+import { describe, expect, it, vi } from 'vitest';
+
+import {
+  moveSessions,
+  type SessionOperationsDeps,
+  type SessionOpsRow,
+} from '../sessionOperations.js';
+
+function row(id: string, patch: Partial<SessionOpsRow> = {}): SessionOpsRow {
+  return {
+    id,
+    title: `title-${id}`,
+    workingDir: '/tmp/old',
+    workspaceKind: 'project',
+    status: 'active',
+    source: 'user',
+    remoteHostId: null,
+    orcaRole: null,
+    parentSessionId: null,
+    forkedAtMessageId: null,
+    createdAt: 1,
+    messageCount: 3,
+    ...patch,
+  };
+}
+
+function makeDeps(rows: SessionOpsRow[], overrides: Partial<SessionOperationsDeps> = {}) {
+  const byId = new Map(rows.map((r) => [r.id, r]));
+  const updateSession = vi.fn(async (id: string, patch: Record<string, unknown>) => ({
+    ...byId.get(id),
+    ...patch,
+  }));
+  const deps: SessionOperationsDeps = {
+    loadSessions: async (ids) => ids.flatMap((id) => (byId.has(id) ? [byId.get(id) as SessionOpsRow] : [])),
+    loadChildren: async (parentIds) => rows.filter((r) => r.parentSessionId && parentIds.includes(r.parentSessionId)),
+    listWorkerSessionIds: async () => [],
+    isTurnRunning: () => false,
+    isImAttached: () => false,
+    isDirectory: async () => true,
+    updateSession,
+    ...overrides,
+  };
+  return { deps, updateSession };
+}
+
+const toProject = { kind: 'project' as const, workingDir: '/tmp/new' };
+
+describe('moveSessions', () => {
+  it('applies the GUI patch through updateSession for every id', async () => {
+    const { deps, updateSession } = makeDeps([row('a'), row('b')]);
+    const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
+    expect(res.ok).toBe(true);
+    expect(updateSession.mock.calls.map((c) => c[1])).toEqual([
+      { workingDir: '/tmp/new', workspaceKind: 'project' },
+      { workingDir: '/tmp/new', workspaceKind: 'project' },
+    ]);
+    if (res.ok) expect(res.moved.map((m) => m.workingDir)).toEqual(['/tmp/new', '/tmp/new']);
+  });
+
+  it('moves to dialogue with workspaceKind only', async () => {
+    const { deps, updateSession } = makeDeps([row('a')]);
+    await moveSessions(deps, { sessionIds: ['a'], target: { kind: 'dialogue' } });
+    expect(updateSession).toHaveBeenCalledWith('a', { workspaceKind: 'dialogue' });
+  });
+
+  it('NOT_FOUND for any missing id writes nothing', async () => {
+    const { deps, updateSession } = makeDeps([row('a')]);
+    const res = await moveSessions(deps, { sessionIds: ['a', 'ghost'], target: toProject });
+    expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it('INVALID_ARGS when working_dir is not a directory', async () => {
+    const { deps, updateSession } = makeDeps([row('a')], { isDirectory: async () => false });
+    const res = await moveSessions(deps, { sessionIds: ['a'], target: toProject });
+    expect(res).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Partial<SessionOpsRow>, Partial<SessionOperationsDeps>]>([
+    ['remote', { remoteHostId: 'host' }, {}],
+    ['deleted', { status: 'deleted' }, {}],
+    ['archived', { status: 'archived' }, {}],
+    ['review', { source: 'review' }, {}],
+    ['empty draft', { title: 'New Maker', messageCount: 0 }, {}],
+    ['running', {}, { isTurnRunning: (id) => id === 'b' }],
+    ['lead with running worker', { orcaRole: 'lead' }, { listWorkerSessionIds: async () => ['w'], isTurnRunning: (id) => id === 'w' }],
+    ['IM attached', {}, { isImAttached: (id) => id === 'b' }],
+  ])('PRECONDITION_FAILED (%s) blocks the whole batch', async (_name, patch, overrides) => {
+    const { deps, updateSession } = makeDeps([row('a'), row('b', patch)], overrides);
+    const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    if (!res.ok) expect(res.message).toContain('b: ');
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
+  it('reports partial progress when a later update fails', async () => {
+    const { deps } = makeDeps([row('a'), row('b')], {
+      updateSession: vi.fn(async (id: string) => {
+        if (id === 'b') throw new Error('disk on fire');
+        return {};
+      }),
+    });
+    const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
+    expect(res).toMatchObject({ ok: false, errorCode: 'INTERNAL', moved: [{ sessionId: 'a' }] });
+  });
+});
+
