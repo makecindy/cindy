@@ -668,6 +668,91 @@ describe('useFileTree showIgnoredDirs option', () => {
   });
 
   /**
+   * 评审 P1：切开关后根请求**成功**落地就该结束「借来的树」标记 —— 否则之后任何
+   * 一次根刷新失败（SSH / device-link 瞬时中断）都会把已属于本 scope 的树当成
+   * 借来的清掉，丢掉最后一次成功的树。
+   */
+  it('切开关成功落地后再失败:保留已属于本 scope 的树', async () => {
+    const hiddenRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    const revealedRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+      { name: 'node_modules', relPath: 'node_modules', type: 'directory', size: 0, mtimeMs: 2 },
+    ];
+    let failRevealRoot = false;
+    mocks.listDir.mockImplementation((args: { relPath?: string; showIgnoredDirs?: boolean }) => {
+      if (args.showIgnoredDirs) {
+        if (failRevealRoot && !args.relPath) return Promise.reject(new Error('boom'));
+        if (args.relPath) return Promise.resolve([]);
+        return Promise.resolve(revealedRoot);
+      }
+      if (args.relPath) return Promise.resolve([]);
+      return Promise.resolve(hiddenRoot);
+    });
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-seed-clear', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: false } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+
+    // 切 reveal：根请求成功 → 「借来的树」标记到此结束。
+    await act(async () => {
+      view.rerender({ reveal: true });
+    });
+    await waitFor(() => expect(view.result.current.entries.get('')).toHaveLength(2));
+
+    // 之后的根刷新失败：entries 已属于本 scope，应保留而不是清空。
+    failRevealRoot = true;
+    await act(async () => {
+      await view.result.current.refresh();
+    });
+    await waitFor(() => expect(view.result.current.loadError).toBe('load-failed'));
+    expect(view.result.current.entries.get('')).toHaveLength(2);
+    view.unmount();
+  });
+
+  /**
+   * 上面那条 P1 的另一半：根响应与借来的树**结构一致**时走 entriesStructurallyEqual
+   * 的提前 return，同样必须结束「借来的树」标记。漏掉这条分支，store 会长久停在
+   * seeded=true —— 之后一次瞬时失败仍然会把用户最后一次成功的树清掉。
+   */
+  it('根结构与 seed 一致（走等价短路）也同样结束「借来的树」', async () => {
+    const sameRoot: readonly DirEntry[] = [
+      { name: 'src', relPath: 'src', type: 'directory', size: 0, mtimeMs: 1 },
+    ];
+    let failRoot = false;
+    mocks.listDir.mockImplementation((args: { relPath?: string }) => {
+      if (failRoot && !args.relPath) return Promise.reject(new Error('boom'));
+      if (args.relPath) return Promise.resolve([]);
+      return Promise.resolve(sameRoot);
+    });
+
+    const view = renderHook(
+      ({ reveal }: { reveal: boolean }) =>
+        useFileTree({ workdir: '/workdir-seed-equal', showIgnoredDirs: reveal }),
+      { initialProps: { reveal: false } },
+    );
+    await waitFor(() => expect(view.result.current.initialLoading).toBe(false));
+
+    // 切 reveal：新 store 借隐藏态的树（同结构），根响应走结构化等价短路。
+    await act(async () => {
+      view.rerender({ reveal: true });
+    });
+    await waitFor(() => expect(view.result.current.entries.get('')).toHaveLength(1));
+
+    failRoot = true;
+    await act(async () => {
+      await view.result.current.refresh();
+    });
+    await waitFor(() => expect(view.result.current.loadError).toBe('load-failed'));
+    expect(view.result.current.entries.get('')).toHaveLength(1);
+    view.unmount();
+  });
+
+  /**
    * 兄弟 store 还在首次 listDir 上（慢通道）时不能冒充「已加载」：没有可显示内容
    * 就保持 initialLoading，否则 FileTreeView 会把空 rows 渲染成「此文件夹为空」
    * 而不是延迟 loading 态。

@@ -23,7 +23,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Check, ChevronDown, ChevronsDownUp, RefreshCw, Search, X as XIcon } from 'lucide-react';
+import { ArrowLeft, Check, ChevronDown } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -45,8 +45,7 @@ import { useConfirmSwitchAwayIfDirty } from './hooks/useConfirmSwitchAwayIfDirty
 import { useProjectFileList } from './hooks/useProjectFileList';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { FileTreeView, type FileTreeViewHandle, type PendingCreate } from './FileTreeView';
-import { FileTreeIgnoredDirsToggle } from './FileTreeIgnoredDirsToggle';
-import { FILE_TREE_HEADER_ICON_BUTTON_CLASS } from './fileTreeHeaderButtonClass';
+import { FileTreeHeaderActions } from './FileTreeHeaderActions';
 import { useRevealFileInTree } from './hooks/useRevealFileInTree';
 import { FileFilterInput } from './FileFilterInput';
 import { FilterResultList } from './FilterResultList';
@@ -763,55 +762,14 @@ export function WorkdirBrowseSidebar({
           </span>
         )}
         <div className="flex shrink-0 items-center gap-1.5">
-          {mode === 'search' ? (
-            // search 是独立态: refresh / collapse 只对文件树有意义,搜索时不该出现。
-            // 只保留 X = 退出搜索回到 tree 模式。
-            <Tip text={t('ccAgent.workdirBrowse.searchPanel.exit')}>
-              <button
-                type="button"
-                aria-label={t('ccAgent.workdirBrowse.searchPanel.exit')}
-                onClick={handleToggleSearchMode}
-                className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
-              >
-                <XIcon size={14} strokeWidth={2} />
-              </button>
-            </Tip>
-          ) : (
-            <>
-              <Tip text={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}>
-                <button
-                  type="button"
-                  aria-label={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}
-                  onClick={handleToggleSearchMode}
-                  className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
-                >
-                  <Search size={14} strokeWidth={2} />
-                </button>
-              </Tip>
-              {/* 显示被忽略的目录 —— 与 RSB 文件浏览器同一组件、同一位置。 */}
-              <FileTreeIgnoredDirsToggle unsupported={tree.showIgnoredDirsSupported === false} />
-              <Tip text={t('ccAgent.workdirBrowse.treeAction.collapseAll')}>
-                <button
-                  type="button"
-                  aria-label={t('ccAgent.workdirBrowse.treeAction.collapseAll')}
-                  onClick={handleCollapseAll}
-                  className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
-                >
-                  <ChevronsDownUp size={14} strokeWidth={2} />
-                </button>
-              </Tip>
-              <Tip text={t('ccAgent.workdirBrowse.treeAction.refresh')}>
-                <button
-                  type="button"
-                  aria-label={t('ccAgent.workdirBrowse.treeAction.refresh')}
-                  onClick={handleRefresh}
-                  className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
-                >
-                  <RefreshCw size={14} strokeWidth={2} />
-                </button>
-              </Tip>
-            </>
-          )}
+          {/* 搜索 / 显示被忽略的目录 / 收起 / 刷新 —— 与 RSB 文件浏览器同一组件。 */}
+          <FileTreeHeaderActions
+            mode={mode}
+            onToggleSearch={handleToggleSearchMode}
+            onCollapseAll={handleCollapseAll}
+            onRefresh={handleRefresh}
+            ignoredDirsUnsupported={tree.showIgnoredDirsSupported === false}
+          />
         </div>
       </div>
 
@@ -843,6 +801,7 @@ export function WorkdirBrowseSidebar({
             <FileTreeView
               ref={fileTreeRef}
               tree={tree}
+              scrollScope="doc"
               selectedPath={selectedPath}
               onSelectFile={handleSelectFile}
               onNewFile={handleNewFile}

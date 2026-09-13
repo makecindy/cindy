@@ -124,6 +124,12 @@ export interface UseFileTreeReturn {
    */
   showIgnoredDirsSupported: boolean | null;
 
+  /** 当前 store 的稳定标识（workdir + hideMetaFiles + showIgnoredDirs + host/device）。
+   *  切「显示被忽略的目录」会换一份 store，这个值跟着变；同一 store 内因 snapshot
+   *  更新造成的重渲染不会变 —— 需要区分"换视图"与"同一视图刷新"的地方（如滚动
+   *  锚点、DOM 复用判定）用它，而不是靠对象引用。 */
+  storeKey: string;
+
   toggleFolder: (relPath: string) => void;
   /** Collapse every folder back to root. Also clears persisted state. */
   collapseAll: () => void;
@@ -132,8 +138,9 @@ export interface UseFileTreeReturn {
    * 展开 relPath 的所有祖先目录(让该文件可见),触发未 cache 的目录 lazy fetch,
    * 返回 Promise 等所有 listDir 完成。
    *
-   * 用于"筛选文件 / 搜索 / 跳转"等需要把目标��件在树里露出来的场景 —— 上层调
-   * 完 expandToPath 再 scrollIntoView 那一行,visual 节奏稳。
+   * 用于"筛选文件 / 搜索 / 跳转"等需要把目标文件在树里露出来的场景 —— 上层调
+   * 完 expandToPath 再调 FileTreeView 的 scrollToPath 把那一行滚进视口,visual
+   * 节奏稳（虚拟化后由 virtualizer.scrollToIndex 完成）。
    *
    * Root 文件(relPath 不含 '/')直接 no-op return —— 它已经在根级,无需展开。
    */
@@ -453,8 +460,12 @@ async function fetchDirOnce(store: FileTreeStore, relPath: string): Promise<void
     if (store.snapshot.loadError) {
       store.snapshot = { ...store.snapshot, loadError: null };
     }
-    // 结构等价 → 跳过 setEntries,避免子组件无意义重渲(参见函数顶部注释)。
-    // root 仍要 prune 一次:seed 的 root 可能与新 root 结构一致而展开态还是借的。
+    // 根请求**成功**（无论后面是否结构等价而跳过替换）都代表「借来的树」窗口
+    // 结束：之后任何一次根刷新失败都不能再把已属于本 scope 的树当成借来的清掉
+    // （评审 P1；结构等价的路径同样要落定，否则会长久停在"借来"态）。
+    if (relPath === ROOT_KEY) store.seeded = false;
+    // 结构等价 → 跳过 setEntries，避免子组件无意义重渲（参见函数顶部注释）。
+    // root 仍要 prune 一次：seed 的 root 可能与新 root 结构一致而展开态还是借的。
     const prevList = store.snapshot.entries.get(relPath);
     if (prevList && entriesStructurallyEqual(prevList, list)) {
       if (relPath === ROOT_KEY) pruneExpandedForCurrentTree(store);
@@ -827,11 +838,12 @@ export function useFileTree({
       loadError: snapshot.loadError,
       // 非 device 会话恒 true;device 会话见上面探测注释。
       showIgnoredDirsSupported: deviceId ? deviceRevealSupported : true,
+      storeKey: store.key,
       toggleFolder: toggleFolderCb,
       collapseAll: collapseAllCb,
       refresh: refreshCb,
       expandToPath: expandToPathCb,
     }),
-    [snapshot, deviceId, deviceRevealSupported, toggleFolderCb, collapseAllCb, refreshCb, expandToPathCb],
+    [snapshot, deviceId, deviceRevealSupported, store, toggleFolderCb, collapseAllCb, refreshCb, expandToPathCb],
   );
 }

@@ -30,14 +30,12 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, type DragEvent } from 'react';
 import { useTranslation } from 'react-i18next';
-import { ChevronsDownUp, FolderX, RefreshCw, Search, X as XIcon } from 'lucide-react';
-
+import { FolderX } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { useFileBrowserPreference } from '@/hooks/useFileBrowserPreference';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
-import { Tip } from '@/components/ui/tooltip';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import {
   useSessionScopedTreeWidth,
@@ -58,8 +56,7 @@ import { useConfirmSwitchAwayIfDirty } from '@/features/cc-agent/workdir-browse/
 import { useProjectFileList } from '@/features/cc-agent/workdir-browse/hooks/useProjectFileList';
 import { useRevealFileInTree } from '@/features/cc-agent/workdir-browse/hooks/useRevealFileInTree';
 import { SearchPanel } from '@/features/cc-agent/workdir-browse/search/SearchPanel';
-import { FileTreeIgnoredDirsToggle } from '@/features/cc-agent/workdir-browse/FileTreeIgnoredDirsToggle';
-import { FILE_TREE_HEADER_ICON_BUTTON_CLASS } from '@/features/cc-agent/workdir-browse/fileTreeHeaderButtonClass';
+import { FileTreeHeaderActions } from '@/features/cc-agent/workdir-browse/FileTreeHeaderActions';
 import { useProjectSearch } from '@/features/cc-agent/workdir-browse/search/hooks/useProjectSearch';
 import { FileFilterInput } from '@/features/cc-agent/workdir-browse/FileFilterInput';
 import { FilterResultList } from '@/features/cc-agent/workdir-browse/FilterResultList';
@@ -109,8 +106,8 @@ const BODY_MIN_RESERVE = 100;
 interface FileBrowserBodyProps {
   state: FileBrowserState;
   ctx: TabKindHostContext;
-  /** 宿主 tab 是否激活（PluginBodyHost 传入）。隐藏 tab 下不渲染文件树 DOM，
-   *  避免多标签 keep-alive 时并行渲染上千行（见 FileTreeView 的 active）。 */
+  /** 宿主 tab 是否激活（PluginBodyHost 传入）。只用于文件树滚动位置的恢复时机；
+   *  隐藏 tab 的行渲染由虚拟化的 0 视口自然跳过，不再需要门控。 */
   active?: boolean;
 }
 
@@ -685,6 +682,7 @@ function FileBrowserBodyWithWorkdir({
               <FileTreeView
                 ref={fileTreeRef}
                 tree={tree}
+                scrollScope={ctx.tabId}
                 active={active}
                 selectedPath={state.selectedFilePath}
                 onSelectFile={handleSelectFile}
@@ -744,7 +742,7 @@ function FileBrowserBodyWithWorkdir({
  * 视觉对齐 doc 模式 WorkdirBrowseSidebar(参考 L570-678):
  *   - 整行 pt-2 pb-1 pl-3 pr-2(窄栏比 doc 模式 pl-6 pr-3 紧)
  *   - 标题 text-sm font-semibold text-foreground
- *   - icon 按钮 size-5 rounded-full hover:bg-sidebar-item-active text-sidebar-action-icon(与同排四个动作共用 FILE_TREE_HEADER_ICON_BUTTON_CLASS,DESIGN.md §5 控件框 pill 档)
+ *   - icon 按钮共用 FileTreeHeaderActions（DESIGN.md §5 控件框 pill 档）
  */
 function TreeHeader({
   workdir,
@@ -762,7 +760,6 @@ function TreeHeader({
   /** 被控端不支持「显示被忽略的目录」(老 Desktop):开关渲染成不可用 + 说明原因。 */
   ignoredDirsUnsupported: boolean;
 }) {
-  const { t } = useTranslation();
   // workdir basename:POSIX 用最后一段(/Users/sam/Documents/Cindy → Cindy);
   // Windows 'C:\\Users\\sam\\Cindy' 也按 / 和 \ 切。空值兜底空串。
   const displayName = workdir.split(/[/\\]/).filter(Boolean).pop() ?? '';
@@ -773,55 +770,15 @@ function TreeHeader({
         {displayName}
       </span>
       <div className="flex shrink-0 items-center gap-1.5">
-        {mode === 'search' ? (
-          // search 模式:refresh / collapse 只对文件树有意义,搜索时不显示;只留 X
-          // 退出搜索回到 tree 模式(替代 search 按钮位置,跟 doc 模式同 ergonomics)。
-          <Tip text={t('ccAgent.workdirBrowse.searchPanel.exit')}>
-            <button
-              type="button"
-              aria-label={t('ccAgent.workdirBrowse.searchPanel.exit')}
-              onClick={onToggleSearch}
-              className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
-            >
-              <XIcon size={14} strokeWidth={2} />
-            </button>
-          </Tip>
-        ) : (
-          <>
-            <Tip text={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}>
-              <button
-                type="button"
-                aria-label={t('ccAgent.workdirBrowse.searchPanel.searchFiles')}
-                onClick={onToggleSearch}
-                className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
-              >
-                <Search size={14} strokeWidth={2} />
-              </button>
-            </Tip>
-            {/* 显示被忽略的目录 —— 紧跟搜索(两者都是“树里显示什么”)。 */}
-            <FileTreeIgnoredDirsToggle unsupported={ignoredDirsUnsupported} />
-            <Tip text={t('ccAgent.workdirBrowse.treeAction.collapseAll')}>
-              <button
-                type="button"
-                aria-label={t('ccAgent.workdirBrowse.treeAction.collapseAll')}
-                onClick={onCollapseAll}
-                className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
-              >
-                <ChevronsDownUp size={14} strokeWidth={2} />
-              </button>
-            </Tip>
-            <Tip text={t('ccAgent.workdirBrowse.treeAction.refresh')}>
-              <button
-                type="button"
-                aria-label={t('ccAgent.workdirBrowse.treeAction.refresh')}
-                onClick={onRefresh}
-                className={FILE_TREE_HEADER_ICON_BUTTON_CLASS}
-              >
-                <RefreshCw size={14} strokeWidth={2} />
-              </button>
-            </Tip>
-          </>
-        )}
+        {/* 搜索 / 显示被忽略的目录 / 收起 / 刷新（搜索态只剩退出搜索）——
+            与 doc 模式侧栏共用 FileTreeHeaderActions，不再各维护一份。 */}
+        <FileTreeHeaderActions
+          mode={mode}
+          onToggleSearch={onToggleSearch}
+          onCollapseAll={onCollapseAll}
+          onRefresh={onRefresh}
+          ignoredDirsUnsupported={ignoredDirsUnsupported}
+        />
       </div>
     </div>
   );

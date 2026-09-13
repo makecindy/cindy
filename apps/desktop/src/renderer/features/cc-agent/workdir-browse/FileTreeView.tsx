@@ -1,34 +1,42 @@
 /**
- * FileTreeView — vscode-style lazy-expansion file tree.
+ * FileTreeView — vscode-style lazy-expansion file tree（虚拟滚动）。
  *
- * Layout per row:
+ * 每行布局：
  *   [chevron 12 / ghost 12] [icon 14] [name]
  *   indent = depth * 16 px
  *
- * Visual specs match ProjectNode + SessionItem in cc-agent sidebar:
+ * 视觉对齐 cc-agent 侧栏的 ProjectNode + SessionItem：
  *   - h 7 (28 px) rounded-md
- *   - text-sm font-medium for selected, normal otherwise
- *   - hover bg sidebar-item-hover
- *   - selected bg sidebar-item-active
+ *   - 选中 text-sm font-medium，其余 normal
+ *   - hover bg sidebar-item-hover / selected bg sidebar-item-active
  *
- * Right-click context menu (虚拟 trigger 模式,与 ProjectNode 同款):
- *   - 文件夹 → New File / New Folder (callback 收到 parent relPath)
- *   - 文件   → Delete File / Copy File Path
- *  实际副作用(IPC、确认弹窗、剪贴板写入、toast)由父层 props 注入,本组件
- *  只负责呼起菜单 + 派发事件。这样保持 FileTreeView 纯 UI 化。
+ * 虚拟滚动：树是「扁平行数组 + 固定行高」，node_modules 展开后单棵树上千行。
+ * 全量渲染时每行（图标 + i18n wrapper + DOM 创建）实测约 0.25ms，展开一次阻塞
+ * 主线程 ~350ms；@tanstack/react-virtual 只渲染视口内的行（+ overscan），行数
+ * 不再与渲染成本挂钩。隐藏数组（RSB 非激活 tab 是 display:none）的视口高度为 0，
+ * 虚拟器自然产出 0 行 —— 不需要额外的 active prop 做渲染门控（active 仍用于
+ * 滚动位置的恢复时机，见下）。
  *
- * Inline new-file/folder UX (VSCode 风格):
- *   - 父层把 pendingCreate = { kind, parentRel } 传入,树会在父目录下方
- *     插入一个临时输入行(不发 IPC)。
- *   - 用户回车 / 失焦提交 → onPendingSubmit(name);Esc / 空提交 → onPendingCancel。
- *   - 真正的 IPC + 后续选中由 sidebar 负责;本组件只渲染 + 派发。
+ * 滚动位置：顶部行 + 行内偏移作为锚点存在 treeScrollStore，绑定关系是
+ * 「视口身份（scrollScope）+ store key（隐藏态 / 放行态）」。切 tab、切
+ * 「显示被忽略的目录」、组件卸载重挂后都会恢复到同一行；具体见
+ * useTreeScrollRestore 与 lib/treeScrollStore.ts。
  *
- * Virtualization: deferred. Even at 700k total entries the *visible* set is
- * bounded by user expansion (typical: <200 visible rows). If profiling later
- * shows DOM cost, drop in @tanstack/react-virtual on the flat-rendered list.
+ * 右键菜单（虚拟 trigger 模式，与 ProjectNode 同款）：
+ *   - 文件夹 → New File / New Folder / Rename / Show in folder
+ *   - 文件   → Open in file browser / sidebar browser / browser / Copy path /
+ *              Rename / Show in folder / Delete
+ *   菜单项由数据驱动（见 menuActions），实际副作用（IPC、确认弹窗、剪贴板、
+ *   toast）全部由父层 props 注入 —— 本组件只负责呼起菜单 + 派发事件。
+ *   remote 会话不传对应 handler，菜单项随之隐藏，而不是点了没反应。
  *
- * Keyboard: Enter/Space toggles folder or selects file. Arrow keys not yet
- * wired; future iteration.
+ * Inline 新建 / 重命名（VSCode 风格，共用 InlineTreeRow）：
+ *   - 新建：父层传 pendingCreate = { kind, parentRel }，树在父目录下方插一行 input；
+ *     回车 / 失焦提交 → onPendingSubmit(name)，Esc / 空提交 → onPendingCancel。
+ *   - 重命名：父层传 renamingPath，该行换成 prefill 原名的 input（文件选中 basename）；
+ *     回车 / 失焦提交 → onRenameSubmit(newName)，Esc / 同名 → onRenameCancel。
+ *
+ * 键盘：Enter/Space 切换目录 / 选中文件（行内主按钮）；方向键未接线。
  */
 
 import {
@@ -41,8 +49,10 @@ import {
   useRef,
   useState,
   type CSSProperties,
+  type ReactNode,
 } from 'react';
 import { useTranslation } from 'react-i18next';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import {
   ChevronDown,
   ChevronRight,
@@ -58,6 +68,7 @@ import {
   PanelRight,
   Pencil,
   Trash2,
+  type LucideIcon,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -78,30 +89,48 @@ import { pickFileIcon, pickFolderIcon } from './lib/fileIcon';
 import { isLightboxImagePath } from './lib/imageExt';
 import type { DirEntry, UseFileTreeReturn } from './hooks/useFileTree';
 import { useDelayedFlag } from './hooks/useDelayedFlag';
+import { useTreeScrollRestore } from './hooks/useTreeScrollRestore';
+import { makeTreeScrollScope } from './lib/treeScrollStore';
+import {
+  TREE_LIST_PADDING,
+  TREE_ROW_PITCH,
+  flattenTree,
+  treeRowKey,
+  type PendingCreate,
+} from './lib/treeRows';
 
-export interface PendingCreate {
-  kind: 'file' | 'folder';
-  /** workdir-relative POSIX path of the parent folder; '' = root. */
-  parentRel: string;
-}
+export type { PendingCreate } from './lib/treeRows';
+
+/** 视口上下各多渲染几行，滚动不闪白。 */
+const OVERSCAN = 12;
 
 /**
- * Imperative API:让 caller(WorkdirBrowseSidebar / RSB file-browser plugin)能
- * 在筛选选中 / 跳转后,把目标文件行滚到视口中央。和 useFileTree.expandToPath
- * 配套用 —— 先展开父目录链让目标行渲染出来,再 scrollToPath 让用户看见。
- *
- * 不走 prop 信号(避免 caller 每次都需要做 signal++ 之类的 token 计数),用
- * forwardRef 直接 imperative 调,语义更直白。
+ * Imperative API：让 caller（WorkdirBrowseSidebar / RSB file-browser plugin）在
+ * 筛选选中 / 跳转后，把目标文件行滚到视口中央。和 useFileTree.expandToPath 配套用
+ * —— 先展开父目录链让目标行进入虚拟列表，再 scrollToPath 让用户看见。
  */
 export interface FileTreeViewHandle {
-  /** 找到 data-relpath 匹配的行,scrollIntoView({ block: 'center' })。
-   *  目标行未渲染(父目录未展开 / 文件不存在)→ 静默 no-op,caller 应先调
-   *  tree.expandToPath() 并等 React 渲染再调本方法(典型:两次 rAF 之间)。 */
+  /** 找到 relPath 对应的行并滚到视口中央。行不在当前树里（父目录未展开 /
+   *  文件不存在）→ 静默 no-op；caller 应先调 tree.expandToPath() 并等 React
+   *  渲染再调本方法（典型：两次 rAF 之间，见 useRevealFileInTree）。 */
   scrollToPath: (relPath: string) => void;
 }
 
 export interface FileTreeViewProps {
   tree: UseFileTreeReturn;
+  /**
+   * 视口身份。同一份 store（同 workdir / 同开关状态）可能同时挂在多个
+   * FileTreeView 上 —— RSB 每个文件浏览器 tab 一个，doc 侧栏一个 —— 滚动锚点按
+   * 「视口 + store」分片，这个值是视口那一半。同一 tab 生命周期内必须稳定
+   * （RSB 传 ctx.tabId，doc 侧栏传固定字符串）。
+   */
+  scrollScope: string;
+  /**
+   * 宿主是否处于激活状态（RSB 多标签 keep-alive）。仅影响**滚动位置的恢复时机**：
+   * 非激活 → 激活时重新对齐到锚点。不影响渲染 —— 隐藏视口高度为 0，虚拟器本来
+   * 就不渲染行（见 useTreeScrollRestore）。默认真（doc 侧栏等单宿主场景）。
+   */
+  active?: boolean;
   /** Currently selected file relPath (from URL). Used to draw highlight. */
   selectedPath: string | null;
   /** Click on a file row → caller updates URL search param. */
@@ -126,93 +155,42 @@ export interface FileTreeViewProps {
   onOpenInBrowser?: (entry: DirEntry) => void;
   /** Right-click 文件/文件夹 → 重命名。父层负责进入 renaming 态。 */
   onRename?: (entry: DirEntry) => void;
-  /** Inline 输入态:有值时在 parentRel 下方插临时行。 */
+  /** Inline 输入态：有值时在 parentRel 下方插临时行。 */
   pendingCreate?: PendingCreate | null;
-  /** 宿主是否处于激活状态。false = **不渲染行**（RSB 多标签的隐藏 tab）:
-   *  每行有图标 + i18n + DOM 创建成本,node_modules 展开后单棵树上千行 ——
-   *  隐藏 tab 并行渲染会把展开的主线程阻塞翻倍（实测 1373 行/树 ≈ 350ms，
-   *  两棵树 ≈ 570-740ms）。数据层在父组件（useFileTree 的 store / watcher),
-   *  这里只是不产出 DOM。不传 = 始终渲染（doc 侧栏等单宿主场景）。 */
-  active?: boolean;
   /** 用户敲了非空 name + 回车 / 失焦时调用。 */
   onPendingSubmit?: (name: string) => void;
   /** Esc / 空内容失焦 / 父层主动取消。 */
   onPendingCancel?: () => void;
-  /** 当前正处于重命名编辑态的 relPath;非 null 时该行渲染成内联 input。 */
+  /** 当前正处于重命名编辑态的 relPath；非 null 时该行渲染成内联 input。 */
   renamingPath?: string | null;
-  /** 重命名 input 提交回调,新名(basename, 不含父路径)非空时触发。 */
+  /** 重命名 input 提交回调，新名（basename，不含父路径）非空且与原名字不同时触发。 */
   onRenameSubmit?: (newName: string) => void;
-  /** Esc / 空内容失焦 / 父层主动取消。 */
+  /** Esc / 同名 / 空内容失焦。 */
   onRenameCancel?: () => void;
 }
-
-interface EntryRow {
-  kind: 'entry';
-  entry: DirEntry;
-  depth: number;
-}
-
-interface PendingRow {
-  kind: 'pending';
-  pending: PendingCreate;
-  depth: number;
-}
-
-type Row = EntryRow | PendingRow;
 
 interface MenuState {
   pos: { x: number; y: number };
   entry: DirEntry;
 }
 
-function isHtmlPath(filePath: string): boolean {
-  return /\.(html?|xhtml)$/i.test(filePath);
+interface TreeMenuAction {
+  key: string;
+  icon: LucideIcon;
+  label: string;
+  danger?: boolean;
+  onSelect: () => void;
 }
 
-/**
- * Walk the (entries Map × expanded Set) into a flat in-order list of rows
- * to render. Pure function — recomputed when either input changes.
- *
- * pendingCreate 注入位置:在父行被发出后立刻插一个 pending 行(深度 = 父行+1);
- * 父是 root('') 时插在最顶。这样视觉上 pending 行紧贴父目录,即使父目录里
- * 还没有任何 children 也能看到输入框,符合 VSCode 体验。
- */
-function flattenTree(
-  entries: ReadonlyMap<string, readonly DirEntry[]>,
-  expanded: ReadonlySet<string>,
-  pending: PendingCreate | null | undefined,
-): Row[] {
-  const out: Row[] = [];
-  const root = entries.get('') ?? [];
-
-  // Root-level pending 行:在所有顶层 entry 之前。
-  if (pending && pending.parentRel === '') {
-    out.push({ kind: 'pending', pending, depth: 0 });
-  }
-
-  const visit = (list: readonly DirEntry[], depth: number) => {
-    for (const entry of list) {
-      out.push({ kind: 'entry', entry, depth });
-      if (entry.type === 'directory') {
-        // 嵌套 pending 行:父行 push 完之后立刻插 —— 不依赖 children 是否已加载,
-        // 没加载时输入框单独悬挂在父下方,跟 VSCode 行为一致。
-        if (pending && pending.parentRel === entry.relPath) {
-          out.push({ kind: 'pending', pending, depth: depth + 1 });
-        }
-        if (expanded.has(entry.relPath)) {
-          const children = entries.get(entry.relPath);
-          if (children) visit(children, depth + 1);
-        }
-      }
-    }
-  };
-  visit(root, 0);
-  return out;
+function isHtmlPath(filePath: string): boolean {
+  return /\.(html?|xhtml)$/i.test(filePath);
 }
 
 export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(function FileTreeView(
   {
     tree,
+    scrollScope,
+    active = true,
     selectedPath,
     onSelectFile,
     onPreviewImage,
@@ -231,7 +209,6 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     renamingPath,
     onRenameSubmit,
     onRenameCancel,
-    active,
   },
   ref,
 ) {
@@ -241,30 +218,11 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     [tree.entries, tree.expanded, pendingCreate],
   );
 
-  // 稳定引用：每行的 memo 依赖它。用 ref 转发到最新实现，依赖数组留空 —— 这个
-  // 回调的语义是「用当前 props 打开菜单」，不是「捕获首次 props」；直接
-  // useCallback([hasContextActions]) 会连锁要求把 canOpenEntry* / hasContextActions
-  // 一起 useCallback 化。
-  const contextMenuRef = useRef<(entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) => void>(
-    () => {},
-  );
-  contextMenuRef.current = (entry, e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (!hasContextActions(entry)) return;
-    setMenu({ pos: { x: e.clientX, y: e.clientY }, entry });
-  };
-  const handleRowContextMenu = useCallback(
-    (entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) =>
-      contextMenuRef.current(entry, e),
-    [],
-  );
-
-  // 单个 dropdown 实例,通过虚拟 trigger 在右键位置显示。同一时间只可能有
-  // 一个右键菜单打开,把状态提到 view 顶层而不是每行一个,避免 N 个
-  // DropdownMenu 实例的额外开销。
+  // 单个 dropdown 实例，通过虚拟 trigger 在右键位置显示。同一时间只可能有一个
+  // 右键菜单打开，把状态提到 view 顶层而不是每行一个，避免 N 个 DropdownMenu
+  // 实例的额外开销。
   const [menu, setMenu] = useState<MenuState | null>(null);
-  const close = () => setMenu(null);
+
   const canOpenEntryInSidebarBrowser = (entry: DirEntry): boolean =>
     entry.type === 'file' && Boolean(onOpenInSidebarBrowser) && isHtmlPath(entry.relPath);
   const canOpenEntryInBrowser = (entry: DirEntry): boolean =>
@@ -284,117 +242,302 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     );
   };
 
-  // scroll 容器 ref —— scrollToPath 在容器内 querySelector 找到目标行,再
-  // scrollIntoView(用容器自己的 scroll,不是 window scroll)。
+  // 稳定引用：每行的 memo 依赖它。用 ref 转发到最新实现，依赖数组留空 —— 这个
+  // 回调的语义是「用当前 props 打开菜单」，不是「捕获首次 props」。
+  const contextMenuRef = useRef<(entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) => void>(
+    () => {},
+  );
+  contextMenuRef.current = (entry, e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!hasContextActions(entry)) return;
+    setMenu({ pos: { x: e.clientX, y: e.clientY }, entry });
+  };
+  const handleRowContextMenu = useCallback(
+    (entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) =>
+      contextMenuRef.current(entry, e),
+    [],
+  );
+
+  // scroll 容器 ref —— 虚拟器与滚动锚点都以它为坐标原点。
   const containerRef = useRef<HTMLDivElement>(null);
-  // 首载 loading 延迟门控:本地到不了 300ms 保持空白,SSH / device-link 慢
-  // 通道超时后浮现 spinner(见 useDelayedFlag 注释)。
+
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => containerRef.current,
+    estimateSize: () => TREE_ROW_PITCH,
+    overscan: OVERSCAN,
+    paddingStart: TREE_LIST_PADDING,
+    paddingEnd: TREE_LIST_PADDING,
+    // 行内容的稳定 key：展开/折叠后行的 index 会位移，靠 key 复用 measure 缓存。
+    getItemKey: (index) => {
+      const row = rows[index];
+      return row ? treeRowKey(row) : index;
+    },
+  });
+  // imperative handle 的 deps 为空（避免每帧重建），用 ref 取最新值。
+  const rowsRef = useRef(rows);
+  rowsRef.current = rows;
+  const virtualizerRef = useRef(virtualizer);
+  virtualizerRef.current = virtualizer;
+
+  // 滚动位置：onScroll 持续记录锚点；挂载 / 换 store / 重新激活时自动恢复。
+  const handleScroll = useTreeScrollRestore(
+    makeTreeScrollScope(scrollScope, tree.storeKey),
+    rows,
+    containerRef,
+    active,
+  );
+
+  // 首载 loading 延迟门控：本地到不了 300ms 保持空白，SSH / device-link 慢通道
+  // 超时后浮现 spinner（见 useDelayedFlag 注释）。
   const showInitialSpinner = useDelayedFlag(tree.initialLoading);
+
   useImperativeHandle(
     ref,
     () => ({
       scrollToPath: (relPath: string) => {
-        const container = containerRef.current;
-        if (!container) return;
-        // CSS.escape 防 relPath 里的 `.` / `/` / `[]` 等被 querySelector 当成
-        // CSS 语法解析(实际 .pen / node_modules/foo 等路径常带这类字符)。
-        const sel = `[data-relpath="${CSS.escape(relPath)}"]`;
-        const el = container.querySelector<HTMLElement>(sel);
-        if (!el) return; // 行未渲染(父目录未展开 / 文件不存在),静默 no-op
-        // block: 'nearest' 是"已在视口内就不动";筛选场景里命中文件大概率不
-        // 在当前 scroll 位置,改成 'center' 把它放到中部更醒目。
-        el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+        // 虚拟化后目标行多半不在 DOM 里（甚至还没进视口），不能再 querySelector +
+        // scrollIntoView —— 按行索引让虚拟器滚过去，它会把目标行渲染出来。
+        const index = rowsRef.current.findIndex(
+          (row) => row.kind === 'entry' && row.entry.relPath === relPath,
+        );
+        if (index < 0) return; // 行不在当前树里（父目录未展开 / 文件不存在），静默 no-op
+        virtualizerRef.current?.scrollToIndex(index, { align: 'center', behavior: 'smooth' });
       },
     }),
     [],
   );
 
-  // 非激活 tab 不渲染行:RSB 多标签是 keep-alive(同时挂载、CSS hidden 切换),
-  // 而每行(图标 + i18n wrapper + DOM)实测约 0.25ms —— node_modules 展开后单棵树
-  // 就有上千行,两份并行渲染把展开的主线程阻塞直接翻倍。数据层(useFileTree 的
-  // store / watcher / 展开态持久化)都在父组件,这里只是不产出 DOM;切回来时按
-  // 当前 store 一次性渲染,不重新拉盘、不丢展开态。
-  if (active === false) return null;
+  // 右键菜单项：按 entry 类型 + 宿主提供了哪些 handler 动态生成。
+  const menuActions = useMemo<TreeMenuAction[]>(() => {
+    if (!menu) return [];
+    const entry = menu.entry;
+    const close = () => setMenu(null);
+    const actions: TreeMenuAction[] = [];
+    if (entry.type === 'directory') {
+      if (onNewFile) {
+        actions.push({
+          key: 'new-file',
+          icon: FilePlus,
+          label: t('ccAgent.workdirBrowse.treeMenu.newFile'),
+          onSelect: () => {
+            close();
+            onNewFile(entry.relPath);
+          },
+        });
+      }
+      if (onNewFolder) {
+        actions.push({
+          key: 'new-folder',
+          icon: FolderPlus,
+          label: t('ccAgent.workdirBrowse.treeMenu.newFolder'),
+          onSelect: () => {
+            close();
+            onNewFolder(entry.relPath);
+          },
+        });
+      }
+    } else {
+      if (onOpenInFileBrowser) {
+        actions.push({
+          key: 'open-in-file-browser',
+          icon: FolderTree,
+          label: t('ccAgent.workdirBrowse.treeMenu.openInFileBrowser'),
+          onSelect: () => {
+            close();
+            onOpenInFileBrowser(entry);
+          },
+        });
+      }
+      if (canOpenEntryInSidebarBrowser(entry)) {
+        actions.push({
+          key: 'open-in-sidebar-browser',
+          icon: PanelRight,
+          label: t('chat.markdownRenderer.openInSidebarBrowser'),
+          onSelect: () => {
+            close();
+            onOpenInSidebarBrowser?.(entry);
+          },
+        });
+      }
+      if (onCopyFilePath) {
+        actions.push({
+          key: 'copy-path',
+          icon: Clipboard,
+          label: t('ccAgent.workdirBrowse.treeMenu.copyFilePath'),
+          onSelect: () => {
+            close();
+            onCopyFilePath(entry);
+          },
+        });
+      }
+    }
+    if (onRename) {
+      actions.push({
+        key: 'rename',
+        icon: Pencil,
+        label: t('ccAgent.workdirBrowse.treeMenu.rename'),
+        onSelect: () => {
+          close();
+          onRename(entry);
+        },
+      });
+    }
+    // remote 会话不传 onRevealInFolder（文件在远端，本机文件管理器打不开），
+    // 菜单项整个隐藏而不是点了没反应。
+    if (onRevealInFolder) {
+      actions.push({
+        key: 'reveal-in-folder',
+        icon: FolderOpen,
+        label: t('ccAgent.workdirBrowse.treeMenu.showInFolder'),
+        onSelect: () => {
+          close();
+          onRevealInFolder(entry);
+        },
+      });
+    }
+    if (entry.type === 'file') {
+      if (canOpenEntryInBrowser(entry)) {
+        actions.push({
+          key: 'open-in-browser',
+          icon: Globe,
+          label: t('chat.markdownRenderer.openInBrowser'),
+          onSelect: () => {
+            close();
+            onOpenInBrowser?.(entry);
+          },
+        });
+      }
+      if (onDeleteFile) {
+        actions.push({
+          key: 'delete',
+          icon: Trash2,
+          label: t('ccAgent.workdirBrowse.treeMenu.deleteFile'),
+          danger: true,
+          onSelect: () => {
+            close();
+            onDeleteFile(entry);
+          },
+        });
+      }
+    }
+    return actions;
+  }, [
+    menu,
+    onCopyFilePath,
+    onDeleteFile,
+    onNewFile,
+    onNewFolder,
+    onOpenInBrowser,
+    onOpenInFileBrowser,
+    onOpenInSidebarBrowser,
+    onRevealInFolder,
+    onRename,
+    t,
+  ]);
 
-  if (tree.initialLoading) {
-    // 本地首个 listDir <50ms,门控内保持空白(规则 7);远程慢通道超过阈值
-    // 后浮现 spinner + 提示,避免长空白被读成"项目是空的 / 坏了"。
-    return (
-      <div className="flex h-full w-full flex-col items-center justify-center gap-2">
-        {showInitialSpinner && (
-          <>
-            <Spinner size={16} className="text-[var(--cmd-palette-item-meta)]" />
-            <span className="text-12 text-[var(--cmd-palette-item-meta)]">
-              {t('ccAgent.workdirBrowse.treeLoading')}
-            </span>
-          </>
-        )}
-      </div>
-    );
-  }
-
-  if (rows.length === 0) {
-    return (
-      <div className="flex h-full w-full items-center justify-center px-4 text-12 text-[var(--cmd-palette-item-meta)]">
-        {t('ccAgent.workdirBrowse.treeEmpty')}
-      </div>
-    );
-  }
-
-  const isFolderMenu = menu?.entry.type === 'directory';
+  // 空 / loading 也留在**同一个**滚动容器里：容器是虚拟器的 getScrollElement，如果
+  // 这两个分支返回另一个 div，切开关（新 store 首帧 rows 为空，必走空分支）就会让
+  // containerRef 指向别处 —— 虚拟器失去滚动元素后内部 offset 与真实 scrollTop 脱节。
+  const emptyState = tree.initialLoading ? (
+    // 本地首个 listDir <50ms，门控内保持空白（规则 7）；远程慢通道超过阈值后浮现
+    // spinner + 提示，避免长空白被读成"项目是空的 / 坏了"。
+    <div className="flex h-full w-full flex-col items-center justify-center gap-2">
+      {showInitialSpinner && (
+        <>
+          <Spinner size={16} className="text-[var(--cmd-palette-item-meta)]" />
+          <span className="text-12 text-[var(--cmd-palette-item-meta)]">
+            {t('ccAgent.workdirBrowse.treeLoading')}
+          </span>
+        </>
+      )}
+    </div>
+  ) : (
+    <div className="flex h-full w-full items-center justify-center px-4 text-12 text-[var(--cmd-palette-item-meta)]">
+      {t('ccAgent.workdirBrowse.treeEmpty')}
+    </div>
+  );
 
   return (
-    <div ref={containerRef} className="flex h-full w-full flex-col gap-px overflow-y-auto py-2">
-      {rows.map((row) => {
-        if (row.kind === 'pending') {
-          return (
-            <PendingInputRow
-              // key 加 parentRel,避免在不同父目录间复用同一 input 的 value 残留。
-              key={`__pending__:${row.pending.parentRel}:${row.pending.kind}`}
-              pending={row.pending}
-              depth={row.depth}
-              onSubmit={onPendingSubmit}
-              onCancel={onPendingCancel}
-            />
-          );
-        }
-        const { entry, depth } = row;
-        if (renamingPath === entry.relPath) {
-          // 命中 renaming 态:同位置渲染一个 inline input,与新建行复用 PendingInputRow,
-          // 但 prefill 当前 name + 文件类型选区策略走 RenamingInputRow 的逻辑。
-          return (
-            <RenamingInputRow
-              key={`__rename__:${entry.relPath}`}
-              entry={entry}
-              depth={depth}
-              onSubmit={onRenameSubmit}
-              onCancel={onRenameCancel}
-            />
-          );
-        }
-        return (
-          <FileTreeRow
-            key={entry.relPath}
-            entry={entry}
-            depth={depth}
-            selected={entry.type === 'file' && entry.relPath === selectedPath}
-            expanded={tree.expanded.has(entry.relPath)}
-            loading={tree.loadingPaths.has(entry.relPath)}
-            onToggleFolder={tree.toggleFolder}
-            onSelectFile={onSelectFile}
-            onPreviewImage={onPreviewImage}
-            onContextMenu={handleRowContextMenu}
-          />
-        );
-      })}
+    <div
+      ref={containerRef}
+      className="h-full w-full overflow-y-auto"
+      onScroll={handleScroll}
+    >
+      {rows.length === 0 ? (
+        emptyState
+      ) : (
+        <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+          {virtualizer.getVirtualItems().map((vi) => {
+            const row = rows[vi.index];
+            if (!row) return null;
+            let content: ReactNode;
+            if (row.kind === 'pending') {
+              content = (
+                <InlineTreeRow
+                  icon={row.pending.kind === 'folder' ? Folder : File}
+                  depth={row.depth}
+                  placeholder={row.pending.kind === 'folder' ? 'new-folder' : 'untitled'}
+                  onSubmit={onPendingSubmit}
+                  onCancel={onPendingCancel}
+                />
+              );
+            } else if (renamingPath === row.entry.relPath) {
+              content = (
+                <InlineTreeRow
+                  icon={row.entry.type === 'directory' ? Folder : File}
+                  depth={row.depth}
+                  initialValue={row.entry.name}
+                  cancelWhenUnchanged
+                  selection={row.entry.type === 'file' ? 'basename' : 'all'}
+                  onSubmit={onRenameSubmit}
+                  onCancel={onRenameCancel}
+                />
+              );
+            } else {
+              const { entry, depth } = row;
+              content = (
+                <FileTreeRow
+                  entry={entry}
+                  depth={depth}
+                  selected={entry.type === 'file' && entry.relPath === selectedPath}
+                  expanded={tree.expanded.has(entry.relPath)}
+                  loading={tree.loadingPaths.has(entry.relPath)}
+                  onToggleFolder={tree.toggleFolder}
+                  onSelectFile={onSelectFile}
+                  onPreviewImage={onPreviewImage}
+                  onContextMenu={handleRowContextMenu}
+                />
+              );
+            }
+            return (
+              <div
+                key={vi.key}
+                data-index={vi.index}
+                style={{
+                  position: 'absolute',
+                  top: 0,
+                  left: 0,
+                  width: '100%',
+                  height: TREE_ROW_PITCH,
+                  transform: `translateY(${vi.start}px)`,
+                }}
+              >
+                {content}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      {/* 虚拟 trigger 右键菜单 —— 与 ProjectNode 同款做法:点中位置插一个
-          width/height=0 的占位元素当 anchor,DropdownMenu 沿 align="start"
-          展开,Radix 自动处理边界翻转 / 焦点循环 / Esc 关闭 / outside-click。 */}
+      {/* 虚拟 trigger 右键菜单 —— 与 ProjectNode 同款做法：点中位置插一个
+          width/height=0 的占位元素当 anchor，DropdownMenu 沿 align="start"
+          展开，Radix 自动处理边界翻转 / 焦点循环 / Esc 关闭 / outside-click。 */}
       <DropdownMenu
         open={menu !== null}
         onOpenChange={(open) => {
-          if (!open) close();
+          if (!open) setMenu(null);
         }}
       >
         <DropdownMenuTrigger asChild>
@@ -420,160 +563,21 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
             'shadow-[var(--shadow-menu)]',
           )}
         >
-          {isFolderMenu && menu ? (
-            <>
-              {onNewFile && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const parent = menu.entry.relPath;
-                    close();
-                    onNewFile(parent);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <FilePlus className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.newFile')}</span>
-                </DropdownMenuItem>
+          {menuActions.map((action) => (
+            <DropdownMenuItem
+              key={action.key}
+              onClick={action.onSelect}
+              className={cn(
+                'h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)]',
+                'focus:bg-[var(--cmd-palette-item-hover)]',
+                action.danger &&
+                  'text-red-500 dark:text-red-400 focus:bg-red-50 dark:focus:bg-red-500/10',
               )}
-              {onNewFolder && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const parent = menu.entry.relPath;
-                    close();
-                    onNewFolder(parent);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <FolderPlus className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.newFolder')}</span>
-                </DropdownMenuItem>
-              )}
-              {onRename && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onRename(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <Pencil className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.rename')}</span>
-                </DropdownMenuItem>
-              )}
-              {/* remote 会话不传 onRevealInFolder(文件在远端,本机文件管理器
-                  打不开),菜单项整个隐藏而不是点了没反应。 */}
-              {onRevealInFolder && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onRevealInFolder(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <FolderOpen className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.showInFolder')}</span>
-                </DropdownMenuItem>
-              )}
-            </>
-          ) : menu ? (
-            <>
-              {onOpenInFileBrowser && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onOpenInFileBrowser(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <FolderTree className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.openInFileBrowser')}</span>
-                </DropdownMenuItem>
-              )}
-              {canOpenEntryInSidebarBrowser(menu.entry) && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onOpenInSidebarBrowser?.(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <PanelRight className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('chat.markdownRenderer.openInSidebarBrowser')}</span>
-                </DropdownMenuItem>
-              )}
-              {onCopyFilePath && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onCopyFilePath(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <Clipboard className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.copyFilePath')}</span>
-                </DropdownMenuItem>
-              )}
-              {onRename && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onRename(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <Pencil className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.rename')}</span>
-                </DropdownMenuItem>
-              )}
-              {/* remote 会话不传 onRevealInFolder(文件在远端,本机文件管理器
-                  打不开),菜单项整个隐藏而不是点了没反应。 */}
-              {onRevealInFolder && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onRevealInFolder(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <FolderOpen className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.showInFolder')}</span>
-                </DropdownMenuItem>
-              )}
-              {canOpenEntryInBrowser(menu.entry) && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onOpenInBrowser?.(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
-                >
-                  <Globe className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('chat.markdownRenderer.openInBrowser')}</span>
-                </DropdownMenuItem>
-              )}
-              {onDeleteFile && (
-                <DropdownMenuItem
-                  onClick={() => {
-                    const entry = menu.entry;
-                    close();
-                    onDeleteFile(entry);
-                  }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-red-500 dark:text-red-400 focus:bg-red-50 dark:focus:bg-red-500/10"
-                >
-                  <Trash2 className="mr-2 h-3.5 w-3.5 shrink-0" />
-                  <span className="relative top-px">{t('ccAgent.workdirBrowse.treeMenu.deleteFile')}</span>
-                </DropdownMenuItem>
-              )}
-            </>
-          ) : null}
+            >
+              <action.icon className="mr-2 h-3.5 w-3.5 shrink-0" />
+              <span className="relative top-px">{action.label}</span>
+            </DropdownMenuItem>
+          ))}
         </DropdownMenuContent>
       </DropdownMenu>
     </div>
@@ -585,14 +589,13 @@ interface FileTreeRowProps {
   depth: number;
   selected: boolean;
   expanded: boolean;
-  /** 该目录正在懒加载子项(listDir in-flight)。延迟门控后 chevron 原位转圈。 */
+  /** 该目录正在懒加载子项（listDir in-flight）。延迟门控后 chevron 原位转圈。 */
   loading?: boolean;
   onToggleFolder: (relPath: string) => void;
   onSelectFile: (relPath: string) => void;
   onPreviewImage?: (entry: DirEntry) => void;
   /** 稳定回调（entry 由行内回传）。行组件已 memo，父组件传内联箭头会让 memo
-   *  全部失效 —— node_modules 展开时每次 store 更新都会重渲染全部行，几百行
-   *  足以让 renderer 主线程卡住（dev 实测「界面无响应」）。 */
+   *  全部失效 —— node_modules 展开时每次 store 更新都会重渲染全部行。 */
   onContextMenu: (entry: DirEntry, e: React.MouseEvent<HTMLDivElement>) => void;
 }
 
@@ -611,7 +614,7 @@ const FileTreeRow = memo(function FileTreeRow({
   const isFolder = entry.type === 'directory';
   const canPreviewImage =
     !isFolder && Boolean(onPreviewImage) && isLightboxImagePath(entry.relPath);
-  // 展开慢时 chevron 原位换 spinner(同尺寸,行几何零变化);门控见 useDelayedFlag。
+  // 展开慢时 chevron 原位换 spinner（同尺寸，行几何零变化）；门控见 useDelayedFlag。
   const showLoadingChevron = useDelayedFlag(loading && isFolder);
   const Chev = expanded ? ChevronDown : ChevronRight;
   const Icon = isFolder ? pickFolderIcon(expanded) : pickFileIcon(entry.name);
@@ -654,9 +657,6 @@ const FileTreeRow = memo(function FileTreeRow({
       onContextMenu={handleContextMenu}
       onDragStart={handleDragStart}
       style={rowStyle}
-      // data-relpath:让 FileTreeView 的 imperative scrollToPath 能 querySelector
-      // 找到这一行 scrollIntoView(筛选选中 / 跳转命中场景)。文件 + 文件夹都打,
-      // 未来要"展开到某个文件夹"也能直接复用。
       data-relpath={entry.relPath}
       className={cn(
         'group/file-row flex h-7 w-full shrink-0 items-center rounded-md pr-2',
@@ -730,46 +730,43 @@ const FileTreeRow = memo(function FileTreeRow({
   );
 });
 
-interface PendingInputRowProps {
-  pending: PendingCreate;
+interface InlineTreeRowProps {
+  icon: LucideIcon;
   depth: number;
-  onSubmit?: (name: string) => void;
+  /** 初始文本。重命名 = 原名字；新建 = 空。 */
+  initialValue?: string;
+  /** 提交值与原值相同（或为空）时走 onCancel（重命名语义；新建只判空）。 */
+  cancelWhenUnchanged?: boolean;
+  placeholder?: string;
+  /** 聚焦时的选区策略：新建不选、重命名文件只选 basename、文件夹全选。 */
+  selection?: 'none' | 'all' | 'basename';
+  onSubmit?: (value: string) => void;
   onCancel?: () => void;
 }
 
 /**
- * Inline 输入行 —— 与 FileTreeRow 同款几何/缩进,但中间是 input。
+ * Inline 输入行 —— 新建与重命名共用（几何 / 提交语义 / 双提交锁只有一份实现）。
  *
- * 提交语义:
- *   - Enter      → 非空 submit / 空 cancel
- *   - Esc        → cancel
- *   - blur       → 同 Enter (非空 submit / 空 cancel);用 ref 锁防止双提交
- *   - 路径分隔符 / `.` / `..` 在父层校验,这里不做(让 IPC 与父层 toast 处理)
+ * 提交语义：
+ *   - Enter → 非空且（对重命名）有变化 → submit；否则 cancel
+ *   - Esc   → cancel
+ *   - blur  → 同 Enter
+ *   - 路径分隔符 / `.` / `..` 由父层校验，这里不做（父层有更精准的 toast）。
  *
- * commit 状态用 ref 锁:Enter 后立刻 blur 也会触发 onBlur,如果不锁就会调
- * 两次 onSubmit。父层会 setPendingCreate(null) 卸载本组件,但卸载是异步的,
- * 这中间 onBlur 仍会跑一次 —— ref 守住保证 onSubmit 只跑一次。
+ * commit 用 ref 锁：Enter 后立刻 blur 也会触发 onBlur，不锁会提交两次；父层卸载
+ * 本组件是异步的，中间 onBlur 仍会跑。
  */
-interface RenamingInputRowProps {
-  entry: DirEntry;
-  depth: number;
-  onSubmit?: (newName: string) => void;
-  onCancel?: () => void;
-}
-
-/**
- * Inline 重命名行 —— 与 FileTreeRow 同位同款几何,只把 name span 换成 input。
- *
- * 选区策略(VSCode F2 同款):
- *   - 文件:有扩展名时只选 basename(不含 . + ext),方便直接改主名
- *   - 文件夹:全选(没有扩展名概念)
- *   - 没有扩展名的文件(如 README, Dockerfile):全选
- *
- * 提交语义同 PendingInputRow,空 / 与原名一致 → cancel(空算用户后悔,
- * 与原名一致是 no-op,也 cancel 比错误地走 IPC 更省心)。
- */
-function RenamingInputRow({ entry, depth, onSubmit, onCancel }: RenamingInputRowProps) {
-  const [value, setValue] = useState(entry.name);
+function InlineTreeRow({
+  icon: Icon,
+  depth,
+  initialValue = '',
+  cancelWhenUnchanged = false,
+  placeholder,
+  selection = 'none',
+  onSubmit,
+  onCancel,
+}: InlineTreeRowProps) {
+  const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
   const committedRef = useRef(false);
 
@@ -777,25 +774,23 @@ function RenamingInputRow({ entry, depth, onSubmit, onCancel }: RenamingInputRow
     const el = inputRef.current;
     if (!el) return;
     el.focus();
-    if (entry.type === 'file') {
-      const dot = entry.name.lastIndexOf('.');
+    if (selection === 'basename') {
+      // VSCode F2 同款：文件只选 basename（不含 . + ext），方便直接改主名；
+      // 没有扩展名（Dockerfile 等）落回全选。
+      const dot = el.value.lastIndexOf('.');
       if (dot > 0) {
         el.setSelectionRange(0, dot);
         return;
       }
     }
-    el.select();
-  }, [entry.name, entry.type]);
-
-  const isFolder = entry.type === 'directory';
-  const Icon = isFolder ? Folder : File;
-  const paddingLeft = depth * 16 + 8;
+    if (selection !== 'none') el.select();
+  }, [selection]);
 
   const commit = () => {
     if (committedRef.current) return;
     committedRef.current = true;
     const trimmed = value.trim();
-    if (!trimmed || trimmed === entry.name) {
+    if (!trimmed || (cancelWhenUnchanged && trimmed === initialValue)) {
       onCancel?.();
     } else {
       onSubmit?.(trimmed);
@@ -820,7 +815,7 @@ function RenamingInputRow({ entry, depth, onSubmit, onCancel }: RenamingInputRow
 
   return (
     <div
-      style={{ paddingLeft }}
+      style={{ paddingLeft: depth * 16 + 8 }}
       className={cn(
         'flex h-7 w-full shrink-0 items-center gap-1.5 rounded-md pr-2',
         'bg-sidebar-item-active text-sidebar-item-active-foreground',
@@ -839,77 +834,7 @@ function RenamingInputRow({ entry, depth, onSubmit, onCancel }: RenamingInputRow
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKey}
         onBlur={commit}
-        className={cn(
-          'min-w-0 flex-1 bg-transparent text-13 leading-none outline-none',
-          'border border-[var(--cmd-palette-item-meta)] rounded-sm px-1 py-0.5',
-          'text-sidebar-item-active-foreground placeholder:text-[var(--cmd-palette-item-meta)]',
-        )}
-      />
-    </div>
-  );
-}
-
-function PendingInputRow({ pending, depth, onSubmit, onCancel }: PendingInputRowProps) {
-  const [value, setValue] = useState('');
-  const inputRef = useRef<HTMLInputElement>(null);
-  const committedRef = useRef(false);
-
-  useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
-
-  const Icon = pending.kind === 'folder' ? Folder : File;
-  const paddingLeft = depth * 16 + 8;
-
-  const commit = () => {
-    if (committedRef.current) return;
-    committedRef.current = true;
-    const trimmed = value.trim();
-    if (!trimmed) {
-      onCancel?.();
-    } else {
-      onSubmit?.(trimmed);
-    }
-  };
-
-  const cancel = () => {
-    if (committedRef.current) return;
-    committedRef.current = true;
-    onCancel?.();
-  };
-
-  const handleKey = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && !e.nativeEvent.isComposing) {
-      e.preventDefault();
-      commit();
-    } else if (e.key === 'Escape') {
-      e.preventDefault();
-      cancel();
-    }
-  };
-
-  return (
-    <div
-      style={{ paddingLeft }}
-      className={cn(
-        'flex h-7 w-full shrink-0 items-center gap-1.5 rounded-md pr-2',
-        'bg-sidebar-item-active text-sidebar-item-active-foreground',
-      )}
-    >
-      <span aria-hidden className="inline-block w-3 shrink-0" />
-      <Icon
-        size={14}
-        strokeWidth={1.75}
-        className="shrink-0 text-[var(--cmd-palette-item-meta)]"
-      />
-      <input
-        ref={inputRef}
-        type="text"
-        value={value}
-        onChange={(e) => setValue(e.target.value)}
-        onKeyDown={handleKey}
-        onBlur={commit}
-        placeholder={pending.kind === 'folder' ? 'new-folder' : 'untitled'}
+        placeholder={placeholder}
         className={cn(
           'min-w-0 flex-1 bg-transparent text-13 leading-none outline-none',
           'border border-[var(--cmd-palette-item-meta)] rounded-sm px-1 py-0.5',

@@ -114,18 +114,36 @@ describe('FileTreeIgnoredDirsToggle', () => {
  * 「搜索 / 收起 / 刷新」并列(文本顺序在搜索之后、收起之前) —— 用户就是在这
  * 里发现目录被隐藏的,偏好不能只能从设置页改。
  *
- * 只断言「每个宿主文件内存在」与相对位置,不断言总调用点个数(计数式断言会把
- * 「必须重复」写成不变量,见 DESIGN.md §14 的守卫元规则)。
+ * 只断言「每个宿主文件内存在」与相对位置，不断言总调用点个数（计数式断言会把
+ * 「必须重复」写成不变量，见 DESIGN.md §14 的守卫元规则）。
+ *
+ * 2026-09 重构后两个宿主共用 FileTreeHeaderActions（此前各自复制一份，加开关时
+ * 出现了两种圆角）。守卫因此分两层：
+ *   1. 每个宿主确实挂了共享动作组；
+ *   2. 共享动作组里开关存在、位置正确，且几何与可访问名只有一份实现。
  */
 describe('FileTreeIgnoredDirsToggle 接线', () => {
   const hosts = [
     ['RSB 文件浏览器', ['features', 'right-sidebar', 'plugins', 'file-browser', 'FileBrowserBody.tsx']],
     ['doc 模式侧栏', ['features', 'cc-agent', 'workdir-browse', 'WorkdirBrowseSidebar.tsx']],
   ] as const;
+  const sharedActions = [
+    'features',
+    'cc-agent',
+    'workdir-browse',
+    'FileTreeHeaderActions.tsx',
+  ] as const;
 
-  it.each(hosts)('%s 的标题行挂着开关,位置紧跟搜索按钮', (_name, segments) => {
-    const source = readFileSync(resolve(__dirname, '..', '..', '..', '..', ...segments), 'utf8');
-    // 开关带 props(unsupported),只锁组件名出现的位置。
+  function readSource(segments: readonly string[]): string {
+    return readFileSync(resolve(__dirname, '..', '..', '..', '..', ...segments), 'utf8');
+  }
+
+  it.each(hosts)('%s 的标题行挂着共享动作组', (_name, segments) => {
+    expect(readSource(segments)).toContain('<FileTreeHeaderActions');
+  });
+
+  it('共享动作组里开关紧跟搜索按钮、先于收起按钮', () => {
+    const source = readSource(sharedActions);
     const toggleAt = source.indexOf('<FileTreeIgnoredDirsToggle');
     const searchAt = source.indexOf("'ccAgent.workdirBrowse.searchPanel.searchFiles'");
     const collapseAt = source.indexOf("'ccAgent.workdirBrowse.treeAction.collapseAll'");
@@ -138,25 +156,27 @@ describe('FileTreeIgnoredDirsToggle 接线', () => {
   });
 
   /**
-   * 几何守卫:这行里的每个图标钮都拿共享常量,不各自写圆角。
+   * 几何守卫：这行里的每个图标钮都拿共享常量，不各自写圆角。
    *
-   * 起因:开关最初只给自己写了 pill,三个存量按钮各自写 `rounded-md`(6px),
-   * 同一行就出现两种圆角。以后无论谁在这行加按钮,只能拿到同一个值。
+   * 起因：开关最初只给自己写了 pill，三个存量按钮各自写 `rounded-md`(6px)，
+   * 同一行就出现两种圆角。抽成共享动作组后，宿主里不应再出现自写的图标钮。
    */
-  it.each(hosts)('%s 的标题行图标钮全部走共享类名常量', (_name, segments) => {
-    const source = readFileSync(resolve(__dirname, '..', '..', '..', '..', ...segments), 'utf8');
-    expect(source).toContain('FILE_TREE_HEADER_ICON_BUTTON_CLASS');
-    // 这行不再自己写圆角(只剩标题触发器与下拉项等非本行成员)。
-    expect(source).not.toMatch(/className="flex size-5 items-center justify-center rounded-/);
+  it('共享动作组的图标钮全部走共享类名常量', () => {
+    expect(readSource(sharedActions)).toContain('FILE_TREE_HEADER_ICON_BUTTON_CLASS');
+  });
+
+  it.each(hosts)('%s 不再自己写标题行图标钮', (_name, segments) => {
+    expect(readSource(segments)).not.toMatch(
+      /className="flex size-5 items-center justify-center rounded-/,
+    );
   });
 
   /**
-   * 可访问名守卫(DESIGN.md §14.6):纯图标控件的交付合同是**可见 Tip + 本地化
-   * 可访问名**。本次统一圆角碰到了这排存量按钮,它们只有 Tip —— 屏幕阅读器只会
-   * 读出无名称的"按钮"。以后谁在这行新增/改动按钮,同样只能拿到带 aria-label 的形态。
+   * 可访问名守卫（DESIGN.md §14.6）：纯图标控件的交付合同是**可见 Tip + 本地化
+   * 可访问名**。共享动作组的按钮由 HeaderIconButton 统一产出，两个标签同源。
    */
-  it.each(hosts)('%s 的标题行图标钮都带本地化 aria-label', (_name, segments) => {
-    const source = readFileSync(resolve(__dirname, '..', '..', '..', '..', ...segments), 'utf8');
+  it('共享动作组的图标钮都带本地化 aria-label', () => {
+    const source = readSource(sharedActions);
     const buttons = source
       .split('<button')
       .slice(1)
