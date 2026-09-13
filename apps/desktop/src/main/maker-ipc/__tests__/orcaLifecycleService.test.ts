@@ -284,6 +284,7 @@ describe('OrcaLifecycleService', () => {
         agent: 'codex' as AgentKind,
         label: 'reviewer',
         initialTask: 'review PR',
+        workingDir: '/remote/explicit-project',
       }),
     ).resolves.toMatchObject({
       ok: true,
@@ -293,6 +294,7 @@ describe('OrcaLifecycleService', () => {
     });
 
     expect(deps.createActiveTeam).not.toHaveBeenCalled();
+    expect(deps.createWorkerInTeam).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/explicit-project' }));
     expect(calls).toEqual([
       'createWorkerInTeam:team-existing:reviewer',
       'dispatchWorkerTask:create_worker/worker-session-1/initial_task',

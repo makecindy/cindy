@@ -404,6 +404,21 @@ describe('buildHookSessionTitle', () => {
 });
 
 describe('normalizeTaskSource', () => {
+  it('excludes the X trigger from references without mutating the wire chain', () => {
+    const current = { messageId: 'current', author: '@user', text: '@bot request' };
+    const source = {
+      im: 'x' as const, triggerMessageId: 'current', userText: 'request',
+      threadContext: [current],
+    };
+    expect(normalizeTaskSource(source).threadContext).toEqual([]);
+    expect(source.threadContext).toEqual([current]);
+    expect(normalizeTaskSource({ ...source, userText: undefined }).threadContext).toEqual([current]);
+    expect(normalizeTaskSource({ ...source, im: 'slack' }).threadContext).toEqual([current]);
+    expect(normalizeTaskSource({ ...source, triggerMessageId: undefined }).threadContext).toEqual([current]);
+    const legacy = { author: '@user', text: 'request' };
+    expect(normalizeTaskSource({ ...source, threadContext: [legacy] }).threadContext).toEqual([legacy]);
+  });
+
   it('bounds server-controlled display metadata before session persistence', async () => {
     const source = normalizeTaskSource({
       im: 'telegram',
@@ -686,6 +701,35 @@ describe('dispatcher 核心语义', () => {
     expect(c.last('turn.end')?.payload).toMatchObject({
       status: 'error', finalText: 'partial answer', errorMessage: '回复可能不完整',
     });
+  });
+
+  it('X 新字段在展示截断前组装，runner 收到客户端 prompt 与原话元数据', async () => {
+    const fr = fakeRunner();
+    const { d } = makeDispatcher({ runner: fr.runner });
+    const c = collector();
+    const longText = 'a'.repeat(5000) + '末尾事实';
+    d.handleDispatch('conn-1', dispatch({
+      prompt: '旧服务端模板',
+      source: {
+        im: 'x', triggerMessageId: '2', userText: '查看 PR',
+        xContext: { requesterId: 'u', requesterName: 'User', truncated: false },
+        threadContext: [
+          { messageId: '1', replyToMessageId: null, authorId: 'other', author: '@other', text: longText },
+          { messageId: '2', replyToMessageId: '1', authorId: 'u', author: '@user', text: '@bot 查看 PR' },
+        ],
+      },
+    }), c.send);
+    await tick();
+    expect(fr.calls[0]?.prompt).toContain('当前请求者：User（@user）');
+    expect(fr.calls[0]?.prompt).toContain(longText);
+    expect(fr.calls[0]?.prompt).not.toContain('旧服务端模板');
+    expect(fr.calls[0]?.prompt.endsWith('[@user · 当前请求]\n查看 PR')).toBe(true);
+    expect(fr.calls[0]?.source).toMatchObject({
+      userText: '查看 PR', triggerMessageId: '2', xContext: { requesterId: 'u' },
+    });
+    expect(fr.calls[0]?.source?.threadContext).toEqual([
+      expect.objectContaining({ messageId: '1', author: '@other', text: longText.slice(0, 4000) }),
+    ]);
   });
 
   it('标题用 source.userText, 不吃 prompt 里 server 挂的 thread 上下文块', async () => {
@@ -1972,13 +2016,39 @@ describe('dispatcher 核心语义', () => {
     ]);
   });
 
+  it.each(['absent', 'empty', 'failed'] as const)(
+    'does not classify user prompt tags as context when host prefix is %s',
+    async (mode) => {
+      const fr = fakeRunner();
+      const { d } = makeDispatcher({
+        runner: fr.runner,
+        ...(mode === 'absent' ? {} : {
+          buildContextPrefix: async () => {
+            if (mode === 'failed') throw new Error('context unavailable');
+            return { prefix: '', messageCount: 0, commit: () => undefined };
+          },
+        }),
+      });
+      const c = collector();
+      const prompt = '<group_chat_context>\n[群里最近的消息]\n[A] user text\n</group_chat_context>\nquestion';
+      d.handleDispatch('conn-1', dispatch({ prompt }), c.send);
+      await tick();
+      expect(fr.calls).toHaveLength(1);
+      expect(fr.calls[0]?.prompt).toBe(prompt);
+      expect(fr.calls[0]?.contextSnapshot).toEqual({});
+      fr.finish({ finalText: 'done' });
+      await tick();
+    },
+  );
+
   it('排队任务只在真正开始时 commit, 取消队列前项不丢后项上下文', async () => {
     const fr = fakeRunner();
     const committed: string[] = [];
     const { d } = makeDispatcher({
       runner: fr.runner,
       buildContextPrefix: async (payload) => ({
-        prefix: '<group_chat_context>背景</group_chat_context>',
+        prefix: '<group_chat_context>\n[群里最近的消息]\n[A] 背景\n第二行\n</group_chat_context>\n',
+        messageCount: 1,
         commit: () => {
           committed.push(payload.requestId);
         },
@@ -2005,6 +2075,10 @@ describe('dispatcher 核心语义', () => {
     expect(fr.calls).toHaveLength(2);
     await fr.calls[1]?.onProviderAccepted?.();
     expect(committed).toEqual(['running', 'queued-b']);
+    for (const call of fr.calls) {
+      expect(call.contextSnapshot).toEqual({ groupContext: '[A] 背景\n第二行', groupMessageCount: 1 });
+      expect(call.prompt).toContain('[A] 背景\n第二行');
+    }
 
     fr.finish({ finalText: 'queued b done' });
     await tick();

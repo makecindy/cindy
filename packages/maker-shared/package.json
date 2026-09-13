@@ -77,7 +77,10 @@
     "./codex-usage-buckets": "./src/codexUsageBuckets.ts",
     "./botCollaboration": "./src/botCollaboration.ts",
     "./botDirectMessage": "./src/botDirectMessage.ts",
-    "./botDelegation": "./src/botDelegation.ts"
+    "./botDelegation": "./src/botDelegation.ts",
+    "./remote-desktop-viewer": "./src/remote-desktop/viewerRuntime.js",
+    "./remote-desktop-mobile": "./src/remote-desktop/mobileHtml.ts",
+    "./remote-desktop-scripts": "./src/remote-desktop/viewerScripts.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

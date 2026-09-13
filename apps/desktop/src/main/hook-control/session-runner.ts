@@ -1231,7 +1231,19 @@ export function createMakerHookSessionRunner(deps: {
               clientId: turnChangeAnchorClientId,
               role: 'user',
               content: userMessageContent,
-              agentMeta: { origin, ...(req.source ? { hookSource: req.source } : {}) },
+              agentMeta: {
+                origin,
+                ...(req.source
+                  ? {
+                      hookSource: {
+                        ...req.source,
+                        // New messages only persist producer-supplied context.
+                        // Legacy prompt projection belongs to the read path.
+                        contextSnapshot: req.contextSnapshot ?? {},
+                      },
+                    }
+                  : {}),
+              },
             });
             await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
             turnChangeSetStarted = true;

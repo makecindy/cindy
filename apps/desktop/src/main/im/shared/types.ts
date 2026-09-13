@@ -1,3 +1,4 @@
+import type { ImContextSnapshot } from '../../../shared/imMessageSource';
 /**
  * main/im/shared/types.ts
  * ---------------------------------------------------------------------------
@@ -137,6 +138,8 @@ export interface ImSessionNamespace {
  */
 export interface ImChannelAdapter {
   channel: ImChannelName;
+  /** Selected display service; defaults to channel without changing routing identity. */
+  messageSourceIm?(): string;
   /** 所有渠道共有的文本收发能力；富卡片能力由 output.kind 显式收窄。 */
   im: TextChannelIM;
   /** Terminal output strategy; existing channels use rich-card. */
@@ -210,6 +213,10 @@ export interface ImChannelAdapter {
    * 游标推进的时机锚点; 受理前失败不调用, 这批上下文下次仍会进入 prompt。
    * 返回 null = 不改写。钩子抛错按"不改写"降级, 不阻断消息。
    *
+   * contextSnapshot: 从本次实际使用的、过滤后的前缀提取的可展示文本。
+   * 共享 runner 保存到用户消息元数据；不要传入 persona、渠道指令或过滤前原文。
+   * 不提供就表示没有附带上下文，不从用户正文或实时历史反推。
+   *
    * contextAttachments: 上下文附带的附件(群历史里的图片/文件) —— 只拼进
    * 模型消息(buildImUserMessage 的 image/file block), **不落库、不进
    * transcript**(它们不是触发用户发的)。与用户自己 attachments 的语义边界
@@ -217,6 +224,7 @@ export interface ImChannelAdapter {
    */
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
+    contextSnapshot?: ImContextSnapshot;
     contextAttachments?: IMAttachment[];
     commit?: () => void | Promise<void>;
   } | null>;

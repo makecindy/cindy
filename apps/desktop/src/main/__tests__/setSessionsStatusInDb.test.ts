@@ -122,7 +122,9 @@ beforeEach(() => {
   setSessionRouteLockImplementation(h.withSendToSessionLock);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Finish queued cleanup before removing its hooks or resetting the next test's mocks.
+  await queueSessionWorktreeRecycle(async () => {});
   setSessionRemovalCancelOperations(null);
   setSessionRemovalCleanup(null);
   setSessionWorktreeRecycle(null);

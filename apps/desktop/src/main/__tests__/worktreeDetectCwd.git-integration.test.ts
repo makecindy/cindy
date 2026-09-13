@@ -69,6 +69,13 @@ it('preserves real Git snapshots for attached, detached, unborn, missing and nes
   });
 
   if (process.platform !== 'win32') {
+    const spaced = path.join(fixture, 'repo ');
+    await fs.mkdir(spaced);
+    await git('-C', spaced, 'init', '--initial-branch=main');
+    expect((await detectCwd(spaced)).repoRoot).toBe(await fs.realpath(spaced));
+    await git('-C', spaced, '-c', 'user.name=Test', '-c', 'user.email=test@example.invalid',
+      'commit', '--allow-empty', '-m', 'fixture');
+    expect((await detectCwd(spaced)).repoRoot).toBe(await fs.realpath(spaced));
     const newlinePath = path.join(fixture, 'line\nbreak');
     await git('worktree', 'add', '--detach', newlinePath);
     const newlineSnapshot = await detectCwd(newlinePath);

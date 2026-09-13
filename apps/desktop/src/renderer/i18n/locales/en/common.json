@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "Tasks needing attention: {{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "Lock screen control",
     "windowsready": "Enabled for this Cindy process. Restarting Cindy requires administrator authorization again.",
@@ -60,7 +63,50 @@
     "sendText": "Send text",
     "keys": "Keys",
     "showDesktop": "Desktop",
-    "allWindows": "All windows"
+    "allWindows": "All windows",
+    "reconnecting": "Reconnecting…",
+    "connectionBusy": "Another device is connected to this remote desktop. Exit remote desktop on that device, then try connecting again.",
+    "takeoverConnection": "Take over connection",
+    "connectionBusyTakeover": "Another device is connected to this desktop. Taking over will disconnect that device.",
+    "remoteDisabled": "Remote control is disabled on the computer.",
+    "accessRevoked": "Access to this computer was revoked.",
+    "directConnection": "Direct to computer",
+    "videoRelay": "Server video relay",
+    "screenshotRelay": "Server screenshot relay",
+    "shortcut": {
+      "open": "Open remote desktop",
+      "checking": "Checking remote desktop…",
+      "opening": "Opening remote desktop…",
+      "unavailable": "Remote desktop unavailable: {{reason}}",
+      "offline": "This computer is offline.",
+      "controlDisabled": "Allow control of this computer in Remote control settings.",
+      "unsupported": "This device does not support remote desktop.",
+      "checkFailed": "Could not check this computer. Hover again to retry.",
+      "noDisplay": "No available display on this computer."
+    },
+    "viewer": {
+      "settings": "Controls",
+      "sound": "Sound",
+      "fullscreen": "Full screen",
+      "exitFullscreen": "Exit full screen",
+      "fps": "Frame rate",
+      "quality": "Video quality",
+      "automatic": "Automatic",
+      "smooth": "Smooth",
+      "balanced": "Balanced",
+      "clear": "Clear",
+      "resolution": "Computer resolution",
+      "clipboardFailed": "Could not transfer text. Check control access and keep text under 16,384 characters.",
+      "settingsFailed": "Could not change the display setting.",
+      "inputHint": "Click the picture to type. Ctrl+Alt+Esc releases keyboard focus; Cmd/Ctrl+W closes this window.",
+      "controlPending": "Requesting control…",
+      "controlRequired": "View only. Take control to use the clipboard and desktop actions.",
+      "confirmDisconnect": "Disconnect from this computer?",
+      "confirmDisconnectHint": "The remote desktop connection will end. Apps on the computer will keep running.",
+      "disconnectFailed": "Could not disconnect. Try again.",
+      "clipboardShortcutHint": "Use {{modifier}}+C / {{modifier}}+V in the picture to copy and paste text between computers. Images and files are not supported yet.",
+      "resolutionHint": "Resolution changes affect the actual remote monitor."
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
@@ -2553,6 +2599,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "WeCom",
       "title": "WeCom Intelligent Bot",
       "description": "Connect a WeCom intelligent bot and use {{appName}} from direct and group chats.",
       "status": {
@@ -2776,6 +2823,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "DingTalk",
       "title": "DingTalk Bot",
       "description": "Connect your own DingTalk bot and use {{appName}} in DMs and group chats through Stream mode.",
       "status": {
@@ -3596,7 +3644,7 @@
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Controlling this device"
+        "controllingThisMac": "Connected to Cindy"
       },
       "toast": {
         "revoked": "Access revoked for this device",
@@ -5665,9 +5713,9 @@
       "requestChanges": "Request changes",
       "planFeedbackPlaceholder": "Feedback (optional)"
     },
-    "controlledBy": "Controlled by {{name}}",
-    "controlledByMultiple": "Controlled by {{count}} devices",
-    "controlledTooltip": "Another device signed in to the same account is remotely controlling this machine. You can revoke its access.",
+    "controlledBy": "{{name}} is connected to Cindy",
+    "controlledByMultiple": "{{count}} devices are connected to Cindy",
+    "controlledTooltip": "These devices are connected to Cindy sessions. This count does not indicate who controls the desktop mouse and keyboard. You can revoke access.",
     "revokeAccess": "Revoke",
     "viewControllers": "View",
     "collapseControlledNotice": "Collapse remote control notice",
@@ -7982,7 +8030,9 @@
       "loading": "Loading branches…",
       "loadFailed": "Failed to load branches — tap to retry",
       "currentTooltip": "Current branch",
-      "sourceTooltip": "Worktree source branch"
+      "sourceTooltip": "Worktree source branch",
+      "searchPlaceholder": "Search branches",
+      "noMatch": "No matching branches"
     },
     "folderPicker": {
       "selectFolder": "Select folder",
@@ -9058,6 +9108,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · from {{platform}}",
+      "attachedContext": "Context attached to this message",
+      "attachedContextCount": "Context attached to this message ({{count}})",
+      "groupBackgroundCount": "Group chat background ({{count}})",
+      "referencedMessages": "Referenced messages ({{count}})",
+      "referencedContext": "Referenced messages",
+      "groupBackground": "Group chat background",
       "viewThread": "View thread context ({{count}})"
     },
     "rewind": {

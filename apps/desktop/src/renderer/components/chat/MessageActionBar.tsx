@@ -6,7 +6,7 @@
  * Layout:
  *   - Bar gap 2px, align-items: center
  *   - Order is `align`-driven:
- *       align="left"  → [CopyBtn][ForkBtn][MoreMenu][TimeText][CostText] (assistant)
+ *       align="left"  → [CopyBtn][ForkBtn][EditBtn][MoreMenu][TimeText][CostText]
  *       align="right" → [TimeText][CopyBtn][ForkBtn][EditBtn][MoreMenu] (user)
  *   - Action buttons are 24×24; More uses a pill trigger and a 12px menu
  *     containing message deep-link copy and single-message deletion.
@@ -71,7 +71,7 @@ interface MessageActionBarProps {
   /** Message deep link (`cindy://session/<id>?message=<clientId>`) copied by
    *  the More menu's "copy current conversation link" item. */
   copyLinkText?: string;
-  /** Bar alignment + button order: 'left' = assistant, 'right' = user. */
+  /** Visual alignment + order only; callbacks determine available actions. */
   align: 'left' | 'right';
   /** Whether the parent message is currently hovered. Drives the entire
    *  fade lifecycle internally so quick re-enters don't replay from 0. */
@@ -497,7 +497,7 @@ export function MessageActionBar({
   // Edit (Pencil) button — last user message only. Enters the inline edit
   // state owned by UserMessage; keep it disabled while any message action is
   // in flight so editing cannot race with Fork's history read or a menu action.
-  const editBtn = onEdit && align === 'right' && (
+  const editBtn = onEdit && (
     <Tooltip.Root key="edit">
       <Tooltip.Trigger asChild>
         <button
@@ -524,7 +524,7 @@ export function MessageActionBar({
   // Rewind、链接复制与单条删除收进 More 菜单；普通任务仍在菜单里提供
   // “添加到对话”，伙伴对话则将同一动作外显成“回复”。
   // 面板/行几何遵守 12px container + 8px inner-control 两档圆角。
-  const canRewind = Boolean(onRewind && align === 'right');
+  const canRewind = Boolean(onRewind);
   const addToChatInMenu = simplifiedBotConversation ? undefined : onAddToChat;
   const moreMenu = (addToChatInMenu || copyLinkText || canRewind || onDelete) && (
     <DropdownMenu key="more" open={menuOpen} onOpenChange={setMenuOpen}>
@@ -638,7 +638,7 @@ export function MessageActionBar({
   );
 
   // 普通任务:
-  // align='left'  → [copy][share][fork][more][time][cost]   (assistant)
+  // align='left'  → [copy][share][fork][edit][more][time][cost]
   // align='right' → [time][copy][share][fork][edit][more]   (user)
   // 伙伴对话:[copy][share][reply][more][time] / [time][copy][share][reply][edit][more]
   const items =
@@ -648,6 +648,7 @@ export function MessageActionBar({
           shareBtn,
           forkBtn,
           replyBtn,
+          editBtn,
           moreMenu,
           timeText,
           simplifiedBotConversation ? null : costText || tokensText,

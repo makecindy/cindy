@@ -7,6 +7,16 @@ import {
 } from '../workingDir';
 
 describe('workingDir normalization', () => {
+  it('preserves significant whitespace through repeated storage normalization', () => {
+    for (const path of ['/repo ', '/repo /', '/repo\t']) {
+      const expected = path.endsWith('/') ? path.slice(0, -1) : path;
+      expect(normalizeWorkingDirForStorage(path)).toBe(expected);
+      expect(normalizeWorkingDirForStorage(normalizeWorkingDirForStorage(path))).toBe(expected);
+      expect(normalizeWorkingDirForProjectSettings(path)).toBe(expected);
+    }
+    expect(normalizeWorkingDirForStorage(' \t ')).toBeNull();
+  });
+
   it('normalizes Windows-looking paths for storage', () => {
     expect(normalizeWorkingDirForStorage('D:\\repo\\project\\')).toBe('D:/repo/project');
     expect(normalizeWorkingDirForStorage('\\\\?\\D:\\repo\\project\\')).toBe('D:/repo/project');

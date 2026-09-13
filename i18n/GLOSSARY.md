@@ -391,6 +391,10 @@ dev 版登录页区域徽标上的标签值（DESIGN.md §16.3），四语同值
 
 同账号手机查看和操作电脑真实桌面，独立于 Cindy 内部设备控制授权。
 
+### Direct to computer
+
+远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。
+
 ### Lock screen control
 
 Windows 远程桌面设置中的系统服务授权能力；不表示支持开机前解密或无人登录。
@@ -407,9 +411,17 @@ Remote desktop display controls; resolution changes the host display, small wind
 
 Remote desktop display controls; resolution changes the host display, small window uses system picture in picture.
 
+### Server screenshot relay
+
+远程桌面退回通过现有设备连接逐张传送截图的方式，桌面端沿用手机端现有用语，避免仅写兼容模式而隐藏实际传输方式。
+
 ### Take over connection
 
 Explicit user action that replaces the current remote desktop viewer; never used for automatic recovery.
+
+### Server video relay
+
+远程桌面使用服务器中转实时视频，桌面与手机沿用同一用语；区别于逐张截图传输。
 
 ### Remote device
 

@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "需要關注的任務：{{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "鎖定畫面控制",
     "windowsready": "已為本次執行的 Cindy 啟用。重新啟動 Cindy 後需要再次由管理員授權。",
@@ -31,8 +34,8 @@
     "allow": "允許遠端桌面",
     "allowHint": "允許已登入的同帳號裝置檢視和操作這台電腦的所有應用程式。需同時開啟上方的裝置控制。",
     "permissionHint": "請在電腦的系統設定中允許螢幕錄製和輔助使用，然後重新連線。",
-    "beingControlled": "手機正在控制桌面",
-    "beingViewed": "手機正在檢視桌面",
+    "beingControlled": "桌面正在被遠端控制",
+    "beingViewed": "桌面正在被遠端檢視",
     "disconnect": "中斷連線",
     "back": "返回",
     "connect": "連線",
@@ -60,7 +63,50 @@
     "sendText": "傳送文字",
     "keys": "按鍵",
     "showDesktop": "桌面",
-    "allWindows": "所有視窗"
+    "allWindows": "所有視窗",
+    "reconnecting": "正在重新連線…",
+    "connectionBusy": "已有其他裝置連線至此遠端桌面。請先在該裝置上退出遠端桌面，再嘗試連線。",
+    "takeoverConnection": "接管連線",
+    "connectionBusyTakeover": "已有其他裝置連線至此遠端桌面。接管連線後，上一台裝置會中斷。",
+    "remoteDisabled": "電腦端已關閉遠端控制。",
+    "accessRevoked": "對這台電腦的存取權已撤銷。",
+    "directConnection": "電腦直連",
+    "videoRelay": "伺服器影片中繼",
+    "screenshotRelay": "伺服器截圖中繼",
+    "shortcut": {
+      "open": "開啟遠端桌面",
+      "checking": "正在檢查遠端桌面…",
+      "opening": "正在開啟遠端桌面…",
+      "unavailable": "無法連線至遠端桌面：{{reason}}",
+      "offline": "這台電腦已離線。",
+      "controlDisabled": "請先在遠端控制設定中允許控制這台電腦。",
+      "unsupported": "此裝置不支援遠端桌面。",
+      "checkFailed": "無法確認電腦狀態，重新移入游標可重試。",
+      "noDisplay": "這台電腦沒有可用的顯示器。"
+    },
+    "viewer": {
+      "settings": "操作",
+      "sound": "聲音",
+      "fullscreen": "全螢幕",
+      "exitFullscreen": "結束全螢幕",
+      "fps": "影格率",
+      "quality": "畫質",
+      "automatic": "自動",
+      "smooth": "流暢",
+      "balanced": "均衡",
+      "clear": "清晰",
+      "resolution": "電腦解析度",
+      "clipboardFailed": "文字傳輸失敗，請確認已取得控制權，且內容不超過 16,384 字元。",
+      "settingsFailed": "無法修改顯示設定。",
+      "inputHint": "點擊畫面即可輸入。Ctrl+Alt+Esc 釋放鍵盤焦點；Cmd/Ctrl+W 關閉這個視窗。",
+      "controlPending": "正在取得控制權…",
+      "controlRequired": "目前僅供檢視，取得控制權後可使用剪貼簿和桌面操作。",
+      "confirmDisconnect": "中斷與這台電腦的連線？",
+      "confirmDisconnectHint": "將結束遠端桌面連線，電腦上的應用程式仍會繼續執行。",
+      "disconnectFailed": "無法中斷連線，請重試。",
+      "clipboardShortcutHint": "在畫面內使用 {{modifier}}+C / {{modifier}}+V，即可在兩台電腦之間複製貼上文字。暫不支援圖片和檔案。",
+      "resolutionHint": "解析度修改會影響遠端的實際顯示器。"
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "引數無效，請檢查後重試。",
@@ -2552,6 +2598,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "企業微信",
       "title": "企業微信智慧機器人",
       "description": "連線企業微信智慧機器人，在單聊和群聊中使用 {{appName}}。",
       "status": {
@@ -2775,6 +2822,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "釘釘",
       "title": "釘釘機器人",
       "description": "連線你自建的釘釘機器人，透過 Stream 模式在私聊和群聊中使用 {{appName}}。",
       "status": {
@@ -3595,7 +3643,7 @@
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
-        "controllingThisMac": "正在控制本機"
+        "controllingThisMac": "已連接到 Cindy"
       },
       "toast": {
         "revoked": "已撤銷該裝置的訪問權限",
@@ -5663,9 +5711,9 @@
       "requestChanges": "要求修改",
       "planFeedbackPlaceholder": "修改意見(可選)"
     },
-    "controlledBy": "正在被 {{name}} 控制",
-    "controlledByMultiple": "正在被 {{count}} 臺裝置控制",
-    "controlledTooltip": "另一臺登入同帳號的裝置正在遠端控制本機。你可以撤銷其訪問權限。",
+    "controlledBy": "{{name}} 已連接到 Cindy",
+    "controlledByMultiple": "{{count}} 臺裝置已連接到 Cindy",
+    "controlledTooltip": "這些裝置連接了 Cindy 的任務，不代表正在控制桌面滑鼠和鍵盤。你可以撤銷其存取權限。",
     "revokeAccess": "撤銷權限",
     "viewControllers": "檢視",
     "collapseControlledNotice": "收起遠端控制提示",
@@ -7980,7 +8028,9 @@
       "loading": "載入分支中…",
       "loadFailed": "分支列表載入失敗，點此重試",
       "currentTooltip": "當前分支",
-      "sourceTooltip": "worktree 源分支"
+      "sourceTooltip": "worktree 源分支",
+      "searchPlaceholder": "搜尋分支",
+      "noMatch": "無匹配分支"
     },
     "folderPicker": {
       "selectFolder": "選擇資料夾",
@@ -9051,6 +9101,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · 來自 {{platform}}",
+      "attachedContext": "這則訊息附帶的上下文",
+      "attachedContextCount": "這則訊息附帶的上下文（{{count}}）",
+      "groupBackgroundCount": "群組背景（{{count}}）",
+      "referencedMessages": "引用訊息（{{count}}）",
+      "referencedContext": "引用訊息",
+      "groupBackground": "群組背景",
       "viewThread": "檢視 thread 上下文 ({{count}})"
     },
     "rewind": {

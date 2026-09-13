@@ -2808,9 +2808,11 @@ interface ElectronAPI {
     ) => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
     clear: () => Promise<{ configured: boolean; enabled: boolean }>;
   };
-  /** 将对应 session 标记为需要关注，显示 Dock/taskbar app badge。 */
+  /** 主窗口投影全部任务的关注总数；独立于通知事件及逐任务已读回执。 */
+  notificationSetAppAttentionCount: (snapshot: import('../shared/sessionAttention').AppAttentionSnapshot) => Promise<void>;
+  /** 将对应 session 标记为需要关注，同步灵动岛状态。 */
   notificationMarkSessionAttention: (sessionId: string) => Promise<void>;
-  /** 用户查看对应 session 后，清除系统级 Dock/taskbar attention badge。 */
+  /** 用户查看或处置对应 session 后，同步逐任务已读回执。 */
   notificationClearSessionAttention: (
     sessionId: string,
     intent?: 'explicit' | 'passive',
@@ -3798,6 +3800,8 @@ interface ElectronAPI {
   fetchReleaseNotesIndex: () => Promise<string[] | null>;
 
   // ── Device Link (设备互联/跨设备远程控制) ─────────────────────────────
+  openRemoteDesktop: (target: {deviceId: string; name: string}) => Promise<void>;
+  remoteDesktopViewer: import('../shared/remoteDesktopViewer').RemoteDesktopViewerApi;
   remoteDesktop: import('../shared/remoteDesktop').RemoteDesktopApi;
   deviceLink: {
     getState: () => Promise<{

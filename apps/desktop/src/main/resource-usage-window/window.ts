@@ -27,7 +27,12 @@ import { markResourceUsageWebContentsId } from './registry.js';
 
 const log = createLogger('resource-usage-window');
 
-export function createResourceUsageWindow(parent?: BrowserWindow): BrowserWindow {
+/** The same safe window factory also serves lightweight remote desktop viewers. */
+export function createResourceUsageWindow(parent?: BrowserWindow, surface?: {
+  title: string; preload: string; query: string; hash: string;
+  width: number; height: number; register(id: number): void;
+  minWidth?: number; minHeight?: number;
+}): BrowserWindow {
   const platformOptions =
     process.platform === 'darwin'
       ? { titleBarStyle: 'hidden' as const, trafficLightPosition: { x: 12, y: 16 } }
@@ -37,11 +42,11 @@ export function createResourceUsageWindow(parent?: BrowserWindow): BrowserWindow
     process.platform === 'darwin' || !parent || parent.isDestroyed() ? {} : { parent };
 
   const win = new BrowserWindow({
-    width: 580,
-    height: 520,
-    minWidth: 380,
-    minHeight: 320,
-    title: t('titleBar.menuItems.resourceUsage'),
+    width: surface?.width ?? 580,
+    height: surface?.height ?? 520,
+    minWidth: surface?.minWidth ?? 380,
+    minHeight: surface?.minHeight ?? 320,
+    title: surface?.title ?? t('titleBar.menuItems.resourceUsage'),
     icon: app.isPackaged
       ? path.join(process.resourcesPath, 'icon.png')
       : path.join(__dirname, '../../resources/icon.png'),
@@ -51,7 +56,7 @@ export function createResourceUsageWindow(parent?: BrowserWindow): BrowserWindow
     ...platformOptions,
     ...parentOption,
     webPreferences: {
-      preload: path.join(__dirname, 'resourceUsagePreload.js'),
+      preload: surface ? path.join(__dirname, surface.preload) : path.join(__dirname, 'resourceUsagePreload.js'),
       sandbox: true,
       contextIsolation: true,
       nodeIntegration: false,
@@ -71,7 +76,7 @@ export function createResourceUsageWindow(parent?: BrowserWindow): BrowserWindow
   installWindowFullscreenStateBroadcast(win, {
     getDisplayBounds: (bounds) => screen.getDisplayMatching(bounds).bounds,
   });
-  markResourceUsageWebContentsId(win.webContents.id);
+  (surface?.register ?? markResourceUsageWebContentsId)(win.webContents.id);
   markAppContentWindow(win);
   applyAppearanceToWindow(win);
   win.webContents.on('did-finish-load', () => {
@@ -81,18 +86,18 @@ export function createResourceUsageWindow(parent?: BrowserWindow): BrowserWindow
   installSelectionContextMenu(win);
   installExternalLinkGuards(win);
 
-  const hash = '/resource-usage-window';
+  const hash = surface?.hash ?? '/resource-usage-window';
   let loadPromise: Promise<void>;
   if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
     const url = new URL(MAIN_WINDOW_VITE_DEV_SERVER_URL);
-    url.searchParams.set('resourceUsageWindow', '1');
+    url.searchParams.set(surface?.query ?? 'resourceUsageWindow', '1');
     url.hash = hash;
     loadPromise = win.loadURL(url.toString());
   } else {
     loadPromise = win.loadFile(
       path.join(__dirname, `../renderer/${MAIN_WINDOW_VITE_NAME}/index.html`),
       {
-        query: { resourceUsageWindow: '1' },
+        query: { [surface?.query ?? 'resourceUsageWindow']: '1' },
         hash,
       },
     );

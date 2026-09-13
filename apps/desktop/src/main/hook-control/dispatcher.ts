@@ -65,6 +65,7 @@ import {
 import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
+import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
@@ -72,6 +73,7 @@ import { createAckReactions, type AckReactionTask } from './ackReactions.js';
 import type { HookConnectionConfig } from './store.js';
 import type { HookBindingStore } from './bindings.js';
 import { terminalDeliveryExpired } from './requestLedger.js';
+import { composeXPrompt } from './xPrompt.js';
 import type { HookRequestLedger, HookTerminalRecord } from './requestLedger.js';
 
 /** 会话执行器抽象 —— 生产实现 session-runner.ts(包 maker), 测试注入假的。 */
@@ -147,6 +149,8 @@ export interface HookContinuationWatchRequest {
 }
 
 export interface HookRunRequest {
+  /** Local display snapshot; not part of the server wire protocol. */
+  contextSnapshot?: ImContextSnapshot;
   sessionId: string;
   /**
    * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
@@ -273,6 +277,7 @@ export interface HookDispatcherDeps {
    */
   buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
     prefix: string;
+    messageCount?: number;
     commit: (
       guard?: () => boolean | Promise<boolean>,
     ) =>
@@ -491,7 +496,16 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
   const channelName = boundedNullable(source.channelName, SOURCE_CHANNEL_NAME_MAX);
   const teamId = boundedNullable(source.teamId, SOURCE_TEAM_ID_MAX);
   const teamName = boundedNullable(source.teamName, SOURCE_TEAM_NAME_MAX);
-  const threadContext = source.threadContext?.slice(0, SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
+  // The X wire chain includes the trigger for prompt assembly. Display it only
+  // as userText, not again among referenced messages. Match the original ID
+  // before bounding the snapshot; legacy entries without IDs stay untouched.
+  const displayContext = source.im === 'x' && source.triggerMessageId && source.userText?.trim()
+    ? source.threadContext?.filter((entry) => entry.messageId !== source.triggerMessageId)
+    : source.threadContext;
+  const threadContext = displayContext?.slice(0, SOURCE_THREAD_CONTEXT_MAX).map((entry) => ({
+    ...(entry.messageId !== undefined ? { messageId: entry.messageId.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) } : {}),
+    ...(entry.authorId !== undefined ? { authorId: entry.authorId.slice(0, SOURCE_THREAD_AUTHOR_MAX) } : {}),
+    ...(entry.replyToMessageId !== undefined ? { replyToMessageId: entry.replyToMessageId?.slice(0, SOURCE_TRIGGER_MESSAGE_ID_MAX) ?? null } : {}),
     author: entry.author.slice(0, SOURCE_THREAD_AUTHOR_MAX),
     text: entry.text.slice(0, SOURCE_THREAD_TEXT_MAX),
     ...(entry.isBot === true ? { isBot: true } : {}),
@@ -499,6 +513,11 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
 
   return {
     im: source.im,
+    ...(source.xContext ? { xContext: {
+      requesterId: source.xContext.requesterId.slice(0, SOURCE_THREAD_AUTHOR_MAX),
+      ...(source.xContext.requesterName !== undefined ? { requesterName: source.xContext.requesterName.slice(0, SOURCE_THREAD_AUTHOR_MAX) } : {}),
+      truncated: source.xContext.truncated,
+    } } : {}),
     ...(channelName !== undefined ? { channelName } : {}),
     ...(teamId !== undefined ? { teamId } : {}),
     ...(teamName !== undefined ? { teamName } : {}),
@@ -2223,7 +2242,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     if (!accountActive) return;
     const admittedGeneration = accountGeneration;
     const source = payload.source === undefined ? undefined : normalizeTaskSource(payload.source);
-    const dispatchPayload = source === undefined ? payload : { ...payload, source };
+    const dispatchPayload = {
+      ...payload,
+      ...(source === undefined ? {} : { source }),
+      prompt: composeXPrompt(payload.source, payload.prompt),
+    };
     sendFns.set(connectionId, send);
 
     // Durable terminal replay comes first: an auto-update restarts the process
@@ -2311,11 +2334,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
+        let groupMessageCount: number | undefined;
         let commitContextCursor: ContextCursorCommit | undefined;
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
             contextPrefix = assembly.prefix;
+            groupMessageCount = assembly.messageCount;
             commitContextCursor = assembly.commit;
           } catch (error) {
             log.warn(`group context prefix failed, dispatching without it: ${String(error)}`);
@@ -2345,6 +2370,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             ...resolved.run,
             ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
+            contextSnapshot: captureImContext({
+              // Only the host-produced prefix is context; user text may contain
+              // identical tags without becoming an attached background group.
+              groupPrefix: contextPrefix,
+              groupMessageCount,
+            }),
             ...(source ? { source } : {}),
             ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
           },

@@ -61,12 +61,12 @@ function isUnderManagedDialogueRoot(normalizedDir: string): boolean {
 export async function resolveStoredWorkingDirCandidates(
   raw: string | null | undefined,
 ): Promise<string[]> {
-  const trimmed = typeof raw === 'string' ? raw.trim() : '';
-  const target = normalizeWorkingDirForStorage(trimmed);
+  const original = typeof raw === 'string' ? raw : '';
+  const target = normalizeWorkingDirForStorage(original);
   if (!target) return [];
 
   if (isUnderManagedDialogueRoot(target)) {
-    const probes = [...new Set([trimmed, target])];
+    const probes = [...new Set([original, target])];
     const rows = await getDbClient().query<{ workingDir: string | null }>(
       `SELECT DISTINCT working_dir AS workingDir FROM sessions
         WHERE working_dir IN (${probes.map(() => '?').join(',')})`,

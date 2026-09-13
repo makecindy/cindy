@@ -32,6 +32,8 @@ import { CredentialStoreBanner } from '@/components/layout/CredentialStoreBanner
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { pluginScheduleNavigationState } from '@/features/scheduler/lib/pluginScheduleCreateIntent';
 import { ScheduleSessionIndexOwner } from '@/features/scheduler/components/ScheduleSessionIndexOwner';
+import { AppBadgeAttentionSync } from '@/components/layout/AppBadgeAttentionSync';
+import { usePendingAlertAttention } from '@/hooks/usePendingAlertAttention';
 import { FeatureSidebarSlotProvider } from '@/features/feature-context';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
 import { isAppInteractionLocked } from '@/lib/appInteractionLock';
@@ -218,6 +220,8 @@ function SidebarPinSpacer({ width }: { width: number }) {
 }
 
 export function MainLayout() {
+  // 未处理报错的恢复与已处置收敛不依赖当前路由或侧栏是否挂载。
+  usePendingAlertAttention();
   const splitGroup = useSplitGroup();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(getInitialCollapsed);
   const [shareImportRequest, setShareImportRequest] = useState<{
@@ -1370,6 +1374,7 @@ export function MainLayout() {
       isCollapsed={sidebarPeek.isPeekVisible ? false : isSidebarCollapsed || isRailMode}
     >
       <ScheduleSessionIndexOwner />
+      {!isSecondaryWindow() && <AppBadgeAttentionSync />}
       <div
         ref={rowRef}
         className={cn(
