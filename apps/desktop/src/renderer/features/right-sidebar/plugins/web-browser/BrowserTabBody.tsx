@@ -482,6 +482,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
         canGoForward={browser.canGoForward}
         onNavigate={handleNavigate}
         onReload={browser.reload}
+        onHardReload={() => browser.reload({ ignoreCache: true })}
         onStop={browser.stop}
         onGoBack={browser.goBack}
         onGoForward={browser.goForward}

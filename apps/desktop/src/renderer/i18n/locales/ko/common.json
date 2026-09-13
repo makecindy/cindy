@@ -6579,6 +6579,7 @@
       "goBackUnavailable": "이전 페이지가 없습니다",
       "goForwardUnavailable": "다음 페이지가 없습니다",
       "reload": "새로 고침",
+      "hardReload": "캐시를 무시하고 페이지 새로고침",
       "stop": "로드 중지",
       "screenshot": "스크린샷",
       "screenshotCopied": "스크린샷을 클립보드에 복사했습니다",

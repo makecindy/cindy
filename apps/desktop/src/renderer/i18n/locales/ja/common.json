@@ -6579,6 +6579,7 @@
       "goBackUnavailable": "前のページはありません",
       "goForwardUnavailable": "次のページはありません",
       "reload": "再読み込み",
+      "hardReload": "キャッシュを無視してページを再読み込み",
       "stop": "読み込み停止",
       "screenshot": "スクリーンショット",
       "screenshotCopied": "スクリーンショットをクリップボードにコピーしました",
