@@ -1091,6 +1091,21 @@ export function isExactNoRolloutThreadResumeError(error: unknown, threadId: stri
     `codex app-server thread/resume error -32600: no rollout found for thread id ${threadId}`;
 }
 
+/**
+ * Pre-resume `thread/read` 探测只用于取回已保存的 modelProvider 身份。当线程未加载、
+ * 或没有 rollout 时，这里读不到任何身份，应视为可恢复：交给后续 resume 路径
+ * （无 rollout → 新开线程）去处理，而不是把这条本应非致命的探测失败当成致命错误上抛。
+ * 与 isExactNoRolloutThreadResumeError 的 fail-closed 精确匹配不同，这里对 read 的
+ * "未加载 / 无 rollout" 文案做宽松匹配（不同 app-server 版本的措辞可能有细微差异）。
+ */
+export function isThreadNotLoadedReadError(error: unknown, threadId: string): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  if (candidate.code !== -32600 || typeof candidate.message !== 'string') return false;
+  if (!candidate.message.includes(threadId)) return false;
+  return /codex app-server thread\/read error -32600:[\s\S]*?(thread not loaded|no rollout found for thread id)/.test(candidate.message);
+}
+
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
 // 本身没有超时, app-server 卡死时裸 await 会永久挂起 → coordinator steering marker
 // 永久残留 → 后续插话点击被静默吞掉。正常情况下 ack 是毫秒级, 10s 足够宽裕。
@@ -6083,15 +6098,19 @@ export class CodexAgent extends BaseAgent {
             : {}),
       };
     }
-    let threadModelProvider = opts.remoteHostId
-      ? undefined
-      : customProviderModelProvider
-        ? customProviderModelProvider
-        : cindyProviderRemoteCompaction
-          ? host.getCindyRemoteCompactionProviderId?.() ?? undefined
-          : threadCredentialFamily === 'oauth-bearer'
-            ? host.getRemoteCompactionProviderId?.() ?? undefined
-            : undefined;
+    // 默认 thread model provider（未确认保存身份时 resume 使用的值）。抽成函数，
+    // 便于探测失败跳过时复位，避免把远端压缩 provider 当成显式 override 发出去。
+    const defaultThreadModelProvider = (): string | undefined =>
+      opts.remoteHostId
+        ? undefined
+        : customProviderModelProvider
+          ? customProviderModelProvider
+          : cindyProviderRemoteCompaction
+            ? host.getCindyRemoteCompactionProviderId?.() ?? undefined
+            : threadCredentialFamily === 'oauth-bearer'
+              ? host.getRemoteCompactionProviderId?.() ?? undefined
+              : undefined;
+    let threadModelProvider = defaultThreadModelProvider();
 
     const isLikelyValidThreadId = (id: string | undefined): id is string =>
       typeof id === 'string' && id.length > 0 && !id.startsWith('<') && /^[0-9a-fA-F-]+$/.test(id);
@@ -6130,10 +6149,13 @@ export class CodexAgent extends BaseAgent {
       } catch (error) {
         // Let the existing resume path recover an unused thread without a rollout.
         // Other read failures must not silently reset a saved summary identity.
-        if (preparedResumePath || !isExactNoRolloutThreadResumeError(error, opts.resumeSessionId)) {
+        if (preparedResumePath || (!isExactNoRolloutThreadResumeError(error, opts.resumeSessionId) && !isThreadNotLoadedReadError(error, opts.resumeSessionId))) {
           releaseHostBindingLeaseIfNeeded();
           throw error;
         }
+        // 探测因“未加载 / 无 rollout”跳过时，保存身份未知：复位到默认值，避免把远端压缩
+        // provider 当成显式 override 发进 thread/resume，把历史线程悄悄切离其持久化的本地摘要兜底。
+        threadModelProvider = defaultThreadModelProvider();
       }
     }
 

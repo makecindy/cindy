@@ -8968,6 +8968,82 @@ describe('CodexAgent MCP thread context hooks', () => {
         expect(await fs.readFile(source, 'utf8')).toBe(history);
       } finally { await fs.rm(dir, { recursive: true, force: true }); }
     });
+    it('recovers a thread-not-loaded pre-resume read probe for an imported session without a rollout path', async () => {
+      const threadId = '01a03676-c588-7e63-afbd-56b35ed75338';
+      const agent = new CodexAgent(createDeps({}));
+      const host = installFakeHost(agent, (method) => {
+        if (method === 'thread/read') {
+          throw Object.assign(new Error(`codex app-server thread/read error -32600: thread not loaded: ${threadId}`), { code: -32600 });
+        }
+        if (method === Method.ThreadResume) {
+          return { thread: { id: threadId }, model: 'gpt-5.6-luna', modelProvider: 'openai', cwd: '/repo' };
+        }
+        return undefined;
+      }, { localCompactionProviderId: 'cindy_summary' });
+      const handle = await agent.startSession({ sessionId: 'imported-resume', providerId: 'openai', model: 'gpt-5.6-luna', workingDir: '/repo', resumeSessionId: threadId });
+      expect(host.request.mock.calls.some(([m]) => m === 'thread/read')).toBe(true);
+      expect(host.request.mock.calls.some(([m]) => m === Method.ThreadStart || m === Method.ThreadFork)).toBe(false);
+      expect(handle.id).toBe(threadId);
+      await handle.close();
+    });
+    it('does not recover a non-not-loaded thread/read probe failure', async () => {
+      const threadId = '01a03676-c588-7e63-afbd-56b35ed75338';
+      const agent = new CodexAgent(createDeps({}));
+      const host = installFakeHost(agent, (method) => {
+        if (method === 'thread/read') {
+          throw Object.assign(new Error(`codex app-server thread/read error -32600: connection reset by peer`), { code: -32600 });
+        }
+        if (method === Method.ThreadResume) {
+          return { thread: { id: threadId }, model: 'gpt-5.6-luna', modelProvider: 'openai', cwd: '/repo' };
+        }
+        return undefined;
+      }, { localCompactionProviderId: 'cindy_summary' });
+      await expect(agent.startSession({ sessionId: 'imported-resume-strict', providerId: 'openai', model: 'gpt-5.6-luna', workingDir: '/repo', resumeSessionId: threadId })).rejects.toThrow(`thread/read error -32600: connection reset by peer`);
+      expect(host.request.mock.calls.some(([m]) => m === 'thread/read')).toBe(true);
+      await agent.dispose();
+    });
+    it('does not send the local-summary provider as a resume override when the probe reports thread-not-loaded', async () => {
+      const threadId = '01a03676-c588-7e63-afbd-56b35ed75338';
+      const agent = new CodexAgent(createDeps({}));
+      let resumeParams: { modelProvider?: string } = {};
+      const host = installFakeHost(agent, (method, raw) => {
+        if (method === 'thread/read') {
+          throw Object.assign(new Error(`codex app-server thread/read error -32600: thread not loaded: ${threadId}`), { code: -32600 });
+        }
+        if (method === Method.ThreadResume) {
+          resumeParams = raw as { modelProvider?: string };
+          return { thread: { id: threadId }, model: 'gpt-5.6-luna', modelProvider: (raw as { modelProvider?: string }).modelProvider, cwd: '/repo' };
+        }
+        return undefined;
+      }, { localCompactionProviderId: 'cindy_summary', remoteCompactionProviderId: 'remote-compact' });
+      const handle = await agent.startSession({ sessionId: 'imported-resume-provider', providerId: 'openai', model: 'gpt-5.6-luna', workingDir: '/repo', resumeSessionId: threadId });
+      expect(resumeParams.modelProvider).not.toBe('cindy_summary');
+      await handle.close();
+    });
+    it('restores the saved local-summary provider when the probe reads it successfully', async () => {
+      const threadId = '01a03676-c588-7e63-afbd-56b35ed75338';
+      const agent = new CodexAgent(createDeps({}));
+      let resumeParams: { modelProvider?: string } = {};
+      const host = installFakeHost(agent, (method, raw) => {
+        if (method === 'thread/read') {
+          return { thread: { id: threadId, modelProvider: 'cindy_summary' } };
+        }
+        if (method === Method.ThreadResume) {
+          resumeParams = raw as { modelProvider?: string };
+          return { thread: { id: threadId }, model: 'gpt-5.6-luna', modelProvider: (raw as { modelProvider?: string }).modelProvider, cwd: '/repo' };
+        }
+        return undefined;
+      }, { localCompactionProviderId: 'cindy_summary', remoteCompactionProviderId: 'remote-compact' });
+      const handle = await agent.startSession({ sessionId: 'imported-resume-provider-ok', providerId: 'openai', model: 'gpt-5.6-luna', workingDir: '/repo', resumeSessionId: threadId });
+      expect(resumeParams.modelProvider).toBe('cindy_summary');
+      await handle.close();
+    });
+
+
+
+
+
+
 
     it.each(['wrong-id', 'missing-file', 'resume-failure'])('never replaces existing account history on %s', async (failure) => {
       const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-account-resume-error-'));
