@@ -99,6 +99,11 @@ export function useTreeScrollRestore(
   // 漏一次 0 就会丢掉后续的恢复机会。每次回调（可见时）都调 tryRestore —— 用户
   // 没有移动时锚点就是当前顶部行，目标是当前 scrollTop，写入被 eps 守回；只有
   // 浏览器把位置复位（或锚点行被折叠后复活）时才会真的动。
+  //
+  // 这里**不受 pending 门控**：doc 模式隐藏→回显没有 active 翻转，RO 是唯一
+  // 恢复路径。取舍：用户接管后若锚点行 index 在无 scroll 事件的情况下位移（上方
+  // 行增删但 scrollTop 未变），随后一次无关 resize 可能把视图对齐回锚点行 ——
+  // 已知代价，影响是行内/一行级，不因此把 doc 模式的恢复路径废掉。
   useEffect(() => {
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
@@ -109,9 +114,12 @@ export function useTreeScrollRestore(
     return () => observer.disconnect();
   }, [containerRef, tryRestore]);
 
-  // 用户对行的操作（点击展开 / 选中、拖滚动条）也算接管：sticky 锚点只在数据
-  // 分批到达期间需要；一旦交互就交还控制权 —— 否则首次滚动前点击展开锚点行上方
-  // 的目录会被立刻回拉，刚展开的内容被推出视口（reviewer P3）。
+  // 用户对行的操作（点击展开 / 选中）也算接管：sticky 锚点只在数据分批到达
+  // 期间需要；一旦交互就交还控制权 —— 否则首次滚动前点击展开锚点行上方的目录
+  // 会被立刻回拉，刚展开的内容被推出视口（reviewer P3）。
+  // 注意：滚动条拖拽不在此列 —— Chromium 不向页面派发滚动条的 pointer 事件，
+  // 那种接管靠随后的 scroll 事件；且顶部行未变的行内微幅拖动会被 anchoring
+  // 守卫当作非接管（有意的窄代价）。
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;

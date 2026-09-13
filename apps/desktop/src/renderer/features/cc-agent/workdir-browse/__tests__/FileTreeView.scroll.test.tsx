@@ -112,18 +112,20 @@ describe('FileTreeView 虚拟滚动', () => {
     ).toBe(false);
   });
 
-  it('首挂载即隐藏（视口从未测量）不渲染任何行', () => {
-    setTestViewportSize(0);
+  it('首挂载即隐藏（active=false，滚动元素未交给虚拟器）不渲染任何行', () => {
     const entries: DirEntry[] = Array.from({ length: 300 }, (_, i) => file(`f${i}.ts`));
     const { container } = render(
       <FileTreeView
         tree={makeTree({ entries: [['', entries]] })}
         scrollScope="tab-a"
+        active={false}
         selectedPath={null}
         onSelectFile={vi.fn()}
       />,
     );
 
+    // 真实隐藏 tab 的机制：getScrollElement 返回 null → 从未测量 → initialRect
+    // {0,0} → range null → 0 行（而不是依赖容器高度为 0 这条等价路径）。
     expect(viewportOf(container).querySelectorAll('[data-relpath]')).toHaveLength(0);
   });
 

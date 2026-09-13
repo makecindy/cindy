@@ -14,7 +14,7 @@
  */
 
 import { cleanup, fireEvent, render } from '@testing-library/react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -22,9 +22,16 @@ vi.mock('react-i18next', () => ({
 
 import { FileTreeView } from '../FileTreeView';
 import type { DirEntry, UseFileTreeReturn } from '../hooks/useFileTree';
+import { _resetTreeScrollAnchorsForTests } from '../lib/treeScrollStore';
 import { installTreeViewportStub, resetTestViewportSize, setTestViewportSize } from './treeViewportStub';
 
 beforeAll(installTreeViewportStub);
+
+// 锚点是模块级 store：不复位的话上一条用例滚出的锚点会被下一条用例恢复，
+// 用例间串初始位置（reviewer P3）。
+beforeEach(() => {
+  _resetTreeScrollAnchorsForTests();
+});
 
 afterEach(() => {
   cleanup();
