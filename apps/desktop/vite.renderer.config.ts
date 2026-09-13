@@ -340,7 +340,10 @@ const rendererConfig = {
       ...CODEMIRROR_OPTIMIZE_EXCLUDES,
       ...INTERNAL_PURE_PACKAGE_EXCLUDES,
     ],
-    include: ['@tiptap/react'],
+    // The diff highlighter runs in a lazily-created module Worker. Explicitly
+    // include its dependency so the first Review/Diff render does not trigger
+    // Vite's runtime dependency discovery and a full-page reload.
+    include: ['@tiptap/react', 'highlight.js'],
   },
   server: {
     watch: {
