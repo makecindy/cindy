@@ -9884,7 +9884,10 @@
       "treeLoading": "ファイルを読み込み中…",
       "treeAction": {
         "collapseAll": "すべて折りたたむ",
-        "refresh": "更新"
+        "refresh": "更新",
+        "showIgnoredDirs": "無視されるディレクトリを表示",
+        "hideIgnoredDirs": "無視されるディレクトリを隠す",
+        "showIgnoredDirsUnsupported": "相手デバイスの {{appName}} のバージョンが古く、無視されるディレクトリを表示できません"
       },
       "treeMenu": {
         "newFile": "新規ファイル",

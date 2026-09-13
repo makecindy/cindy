@@ -9884,7 +9884,10 @@
       "treeLoading": "正在加载文件…",
       "treeAction": {
         "collapseAll": "收起所有",
-        "refresh": "刷新"
+        "refresh": "刷新",
+        "showIgnoredDirs": "显示被忽略的目录",
+        "hideIgnoredDirs": "隐藏被忽略的目录",
+        "showIgnoredDirsUnsupported": "对方设备的 {{appName}} 版本过旧，暂不支持显示被忽略的目录"
       },
       "treeMenu": {
         "newFile": "新建文件",

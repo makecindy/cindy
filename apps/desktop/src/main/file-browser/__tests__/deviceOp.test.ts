@@ -303,6 +303,7 @@ describe('file-browser device-op', () => {
       relPath: '',
       hideMetaFiles: true,
       docMode: undefined,
+      showIgnoredDirs: false,
     });
   });
 
@@ -323,6 +324,7 @@ describe('file-browser device-op', () => {
         relPath: '',
         hideMetaFiles: true,
         docMode: undefined,
+        showIgnoredDirs: false,
       });
     },
   );
@@ -356,6 +358,7 @@ describe('file-browser device-op', () => {
       relPath: '',
       hideMetaFiles: true,
       docMode: undefined,
+      showIgnoredDirs: false,
     });
     const condition = dbWhereMock.mock.calls.at(-1)?.[0];
     expect(hasDeepValue(condition, '/remote/home/user/proj')).toBe(true);
@@ -412,6 +415,7 @@ describe('file-browser device-op', () => {
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStart', {
       workdir: sshWorkdir,
       hideMetaFiles: true,
+      consumerId: 'device-link',
     });
     onFsWatchReleased(sshWorkdir);
   });
@@ -488,6 +492,7 @@ describe('file-browser device-op', () => {
       expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStart', {
         workdir: sshWorkdir,
         hideMetaFiles: true,
+        consumerId: 'device-link',
       });
     });
     onFsWatchReleased(sshWorkdir);
@@ -496,6 +501,7 @@ describe('file-browser device-op', () => {
 
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
       workdir: sshWorkdir,
+      consumerId: 'device-link',
     });
   });
 
@@ -609,6 +615,7 @@ describe('file-browser device-op', () => {
     });
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
       workdir: sshWorkdir,
+      consumerId: 'device-link',
     });
     onFsWatchReleased(sshWorkdir);
   });
@@ -784,6 +791,7 @@ describe('file-browser device-op', () => {
     });
     expect(sshRequestMock).toHaveBeenCalledWith('host-1', 'watchStop', {
       workdir: sshWorkdir,
+      consumerId: 'device-link',
     });
     const event = {
       event: 'fileTree',
@@ -793,6 +801,68 @@ describe('file-browser device-op', () => {
     expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, event.data, {
       dataOwnerId: 'owner-b',
       ownerGeneration: 8,
+    });
+    onFsWatchReleased(sshWorkdir);
+  });
+
+  /**
+   * 评审 P1：device-link 订阅的是**隐藏态**视图，而 daemon 的 watcher 用的是与
+   * desktop 文件树（可能开着「显示被忽略的目录」）并集后的 matcher —— dist / build
+   * 这类目录内部的事件也会发过来。转发前必须按 device-link 自己的可见性滤一道，
+   * 否则一次构建会把成千上万条控制器根本不会显示的帧推过 relay。
+   */
+  it('watch: SSH 转发前按 device-link 的隐藏态可见性过滤被忽略目录事件', async () => {
+    const sshWorkdir = '/remote/home/user/reveal-union-watch';
+    guardMock.mockResolvedValue({ allowed: false, reason: 'not-found' });
+    dbRowsMock.mockReturnValue([{ remoteHostId: 'host-1' }]);
+    sshRequestMock.mockImplementation(() => Promise.resolve({ ok: true }));
+
+    await onFsWatchSubscribed(sshWorkdir);
+    const handler = sshListenerState.hostEventHandlers.at(-1);
+
+    // 隐藏态不可见的目录内部事件：一律丢弃（一级与嵌套层都要管）。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'dist/bundle.js' },
+    });
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'add', relPath: 'packages/foo/build/out.map' },
+    });
+    // 大小写变体同样按不可见处理：matcher 的 ignorecase 默认让 DIST 与 dist 同义，
+    // 事件不该继续推过 relay（评审 P2）。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'DIST/bundle.js' },
+    });
+    // 名单本身是混合大小写（Library / Temp / Logs），段比较折叠后仍要命中。
+    handler?.({
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'remote/Library/x.dat' },
+    });
+    expect(pushSpy).not.toHaveBeenCalled();
+
+    // 普通路径照常转发。
+    const visible = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'src/app.ts' },
+    };
+    handler?.(visible);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, visible.data, {
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 7,
+    });
+
+    // 与忽略目录同名的**普通文件**（叶子段）不算内部：listDir 会列出它，事件也必须转发
+    // （否则它的行陈旧到手动刷新）—— 忽略名单是目录规则，只判祖先段。
+    const sameNameFile = {
+      event: 'fileTree',
+      data: { workdir: sshWorkdir, type: 'change', relPath: 'dist' },
+    };
+    handler?.(sameNameFile);
+    expect(pushSpy).toHaveBeenCalledWith(FILE_BROWSER_EVENT_CHANNEL, sameNameFile.data, {
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 7,
     });
     onFsWatchReleased(sshWorkdir);
   });
@@ -827,10 +897,15 @@ describe('file-browser device-op', () => {
 
   // ── gzip(应用层压缩)────────────────────────────────────────────────────
 
-  it('caps op advertises gzip; unknown op stays a deterministic negative signal', async () => {
+  it('caps op advertises gzip + showIgnoredDirs; unknown op stays a deterministic negative signal', async () => {
     // caps 与 workdir 无关,guard 之前处理——guard 拒绝也不影响探测。
-    expect(await handleRemoteOp({ op: 'caps', workdir })).toEqual({ ok: true, gzip: true });
-    // 控制端把 unknown op 当"老端不支持压缩"的确定性负信号,形状不能漂。
+    // 控制端用 showIgnoredDirs 决定「显示被忽略的目录」开关是可点还是禁用+升级提示。
+    expect(await handleRemoteOp({ op: 'caps', workdir })).toEqual({
+      ok: true,
+      gzip: true,
+      showIgnoredDirs: true,
+    });
+    // 控制端把 unknown op 当"老端不支持压缩/开关"的确定性负信号,形状不能漂。
     expect(await handleRemoteOp({ op: 'nope', workdir })).toEqual({
       ok: false,
       message: 'unknown op: nope',

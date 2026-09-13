@@ -140,6 +140,7 @@ export function runFileService(
       const matcher = await loadIgnoreMatcher(workdir, {
         hideMetaFiles: p?.hideMetaFiles ?? true,
         honorVcsIgnore: false,
+        showIgnoredDirs: p?.showIgnoredDirs === true,
       });
       const entries = await listDir(workdir, p?.relPath ?? '', matcher, {
         docMode: p?.docMode,
@@ -204,13 +205,21 @@ export function runFileService(
       return { ok: true as const };
     },
     watchStart: async (p) => {
-      await watchManager.start(requireString(p?.workdir, 'workdir'), {
-        hideMetaFiles: p?.hideMetaFiles ?? true,
-      });
+      await watchManager.start(
+        requireString(p?.workdir, 'workdir'),
+        {
+          hideMetaFiles: p?.hideMetaFiles ?? true,
+          showIgnoredDirs: p?.showIgnoredDirs === true,
+        },
+        typeof p?.consumerId === 'string' ? p.consumerId : undefined,
+      );
       return { ok: true as const };
     },
     watchStop: (p) => {
-      watchManager.stop(requireString(p?.workdir, 'workdir'));
+      watchManager.stop(
+        requireString(p?.workdir, 'workdir'),
+        typeof p?.consumerId === 'string' ? p.consumerId : undefined,
+      );
       return { ok: true as const };
     },
   };
