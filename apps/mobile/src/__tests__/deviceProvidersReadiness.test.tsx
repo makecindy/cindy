@@ -20,8 +20,14 @@ import { canUseFlatModelFallback } from '@/session/modelPickerSheetModel';
 import { resolveNewSessionAutoDefault } from '@/session/newSession';
 
 const transport = vi.hoisted(() => ({ listProviders: vi.fn(), epoch: 0 }));
-vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({ connectionEpoch: transport.epoch }) }));
+vi.mock('@/device-link/DeviceLinkContext', () => ({ useDeviceLink: () => ({
+  connectionEpoch: transport.epoch, status: 'online', recoveringDeviceIds: new Set(),
+}) }));
 vi.mock('@/device-link/useMobileMakerTransport', () => ({ useMobileMakerTransport: () => transport }));
+vi.mock('react-native', () => ({ AppState: {
+  currentState: 'active',
+  addEventListener: () => ({ remove() {} }),
+} }));
 
 Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
 let root: Root;
@@ -81,7 +87,7 @@ describe('mobile provider visibility readiness', () => {
     expect(allowsFlatFallback()).toBe(false);
   });
 
-  it('host timeout survives message-only IPC serialization; retries stop and neither picker nor defaults fail open', async () => {
+  it('host timeout survives serialization; exhausted short retries keep defaults closed until recovery', async () => {
     transport.listProviders.mockImplementation(async () => {
       try {
         await waitForModelVisibilityMirror(100);
@@ -93,7 +99,7 @@ describe('mobile provider visibility readiness', () => {
     });
     await act(async () => { root.render(createElement(Probe)); });
     expect(allowsFlatFallback()).toBe(false);
-    await act(async () => { await vi.runAllTimersAsync(); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(1050); });
     expect(transport.listProviders).toHaveBeenCalledTimes(3);
     expect(state).toMatchObject({ ready: false, loading: false, unsupported: false });
     expect(state.error).toContain('[MODEL_VISIBILITY_NOT_READY]');
@@ -106,6 +112,10 @@ describe('mobile provider visibility readiness', () => {
         effortDisplayNames: {}, defaultEffort: 'medium', supportsFastMode: false,
         newSessionDefault: ['codex'] }],
     })).toBeNull();
+    setModelVisibilityMirror({ 'codex:xd:hidden': false }, { fallback: false });
+    await act(async () => { await vi.advanceTimersByTimeAsync(900); });
+    expect(state).toMatchObject({ ready: true, error: null, modelVisibilityOverrides: { 'codex:xd:hidden': false } });
+    expect(allowsFlatFallback()).toBe(false);
   });
 
   it('accepts synchronized switches on retry without an intermediate error or flat fallback', async () => {

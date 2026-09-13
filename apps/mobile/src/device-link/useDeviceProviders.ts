@@ -9,10 +9,11 @@
  * reject → 暴露 unsupported,调用方才回退到基于 capabilities 的扁平模型列表。
  */
 import { useEffect, useState } from 'react';
+import { AppState } from 'react-native';
 
 import type { ProviderView } from '@cindy/model-providers/registry';
 
-import { formatRemoteError } from './remoteStatus';
+import { connectionRecoverySyncRetryDelayMs, formatRemoteError, isAutoRecoveringRemoteError } from './remoteStatus';
 import { useDeviceLink } from './DeviceLinkContext';
 import {
   fetchDeviceProviders,
@@ -51,15 +52,21 @@ export interface UseDeviceProvidersResult {
 
 const EMPTY_PAYLOAD: DeviceProvidersPayload = { providers: [] };
 
+function canRecoverProviderRead(error: unknown): boolean {
+  return isAutoRecoveringRemoteError(error)
+    || formatRemoteError(error).startsWith('[MODEL_VISIBILITY_NOT_READY]');
+}
+
 /** 取被控设备的供应商目录;deviceId 省略 = 不拉取(返回空,调用方回退扁平列表)。 */
-export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult {
+export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDeviceProvidersResult {
   // hooks 规则:无条件取 transport(deviceId 空时其 call 会 reject,但本 hook 不会在空时调用)。
   const maker = useMobileMakerTransport(deviceId ?? '');
   // 连接代际:重连/恢复时 +1。离线驱逐(evict)后重拉失败时,依赖 [deviceId, maker]
   // 的 effect 不会因连接恢复重跑(maker.invoke 跨重连稳定,codex review P2)——把
   // connectionEpoch 纳入 effect 依赖,连接恢复即重跑 effect、经 cache-miss 重新
   // 拉取,不再永久停在 ready=false 的空目录。
-  const { connectionEpoch } = useDeviceLink();
+  const { connectionEpoch, status, recoveringDeviceIds } = useDeviceLink();
+  const recovering = !!deviceId && recoveringDeviceIds.has(deviceId);
   const [payload, setPayload] = useState<DeviceProvidersPayload>(
     deviceId ? getCachedDeviceProviders(deviceId) ?? EMPTY_PAYLOAD : EMPTY_PAYLOAD,
   );
@@ -213,6 +220,50 @@ export function useDeviceProviders(deviceId?: string): UseDeviceProvidersResult 
       unsubscribeError();
     };
   }, [connectionEpoch, deviceId, maker]);
+
+  // A peer link can recover without a new relay epoch. Retry only this failed
+  // catalog read; never reset the transport or turn cached rows into ready data.
+  const needsRecovery = errorDeviceId === deviceId && error !== null && canRecoverProviderRead(error);
+  useEffect(() => {
+    if (!deviceId || !needsRecovery || status !== 'online' || recovering) return;
+    let cancelled = false;
+    let inFlight = false;
+    let attempt = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let generation = getDeviceProvidersGen(deviceId);
+    const current = () => !cancelled && generation === getDeviceProvidersGen(deviceId);
+    const schedule = (delay: number) => {
+      clearTimeout(timer);
+      if (!current() || inFlight || AppState.currentState !== 'active') return;
+      timer = setTimeout(() => { void retry(); }, delay);
+    };
+    const retry = async () => {
+      if (!current() || inFlight || AppState.currentState !== 'active') return;
+      inFlight = true;
+      // Fresh bypasses a retained pre-failure cache and shares its in-flight read
+      // with other consumers. Existing generation guards reject late responses.
+      const request = fetchDeviceProvidersFresh(deviceId, () => maker.listProviders());
+      generation = getDeviceProvidersGen(deviceId);
+      try {
+        await request;
+      } catch (failure) {
+        inFlight = false;
+        if (canRecoverProviderRead(failure)) schedule(connectionRecoverySyncRetryDelayMs(attempt++));
+      } finally {
+        inFlight = false;
+      }
+    };
+    const subscription = AppState.addEventListener('change', (next) => {
+      clearTimeout(timer);
+      if (next === 'active') schedule(0);
+    });
+    schedule(pickerOpen ? 0 : connectionRecoverySyncRetryDelayMs(attempt++));
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+      subscription.remove();
+    };
+  }, [connectionEpoch, deviceId, needsRecovery, maker, pickerOpen, recovering, status]);
 
   return {
     providers: payload.providers,
