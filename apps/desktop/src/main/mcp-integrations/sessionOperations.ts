@@ -12,7 +12,14 @@
 
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { isAbsolute } from 'node:path';
-import type { MoveSessionsResult, SessionMoveTarget, SessionOpErrorCode, SessionOpItem } from '@cindy/mcps';
+import type {
+  DeleteSessionPreviewItem,
+  DeleteSessionsResult,
+  MoveSessionsResult,
+  SessionMoveTarget,
+  SessionOpErrorCode,
+  SessionOpItem,
+} from '@cindy/mcps';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
 
@@ -50,7 +57,8 @@ export interface SessionOperationsDeps {
     patch: Record<string, unknown>,
     hooks?: { beforeWrite?: () => Promise<string | null> },
   ): Promise<unknown>;
-
+  /** WorktreeManager.getRemovalPreview:托管 worktree 是否存在、是否有未提交改动。 */
+  worktreeRemovalPreview(sessionId: string): Promise<{ hasWorktree: boolean; dirty: boolean }>;
 }
 
 type Err<E extends string> = { ok: false; errorCode: E; message: string };
@@ -192,4 +200,60 @@ export async function moveSessions(
     }
   }
   return { ok: true, moved };
+}
+
+/** 预览失败时保守地按 dirty 处理,并标记 unknown,避免把"查不到"呈现成"干净"。 */
+async function previewDelete(
+  deps: SessionOperationsDeps,
+  row: SessionOpsRow,
+): Promise<DeleteSessionPreviewItem> {
+  try {
+    const preview = await deps.worktreeRemovalPreview(row.id);
+    return { ...toItem(row), dirtyWorktree: preview.hasWorktree && preview.dirty, dirtyWorktreeUnknown: false };
+  } catch {
+    return { ...toItem(row), dirtyWorktree: true, dirtyWorktreeUnknown: true };
+  }
+}
+
+/**
+ * 批量软删除(GUI「删除」同款):守卫整批校验;dryRun 只返回预览;真删前把预览状态与
+ * 调用方在 dry_run 时拿到的 expectedDirty 逐个比对,不一致即拒绝(用户批准的是预览时的
+ * 状态);运行态 / IM 接管 / 终态复核放在 updateSessionInDb 的路由锁内(beforeWrite)。
+ */
+export async function deleteSessions(
+  deps: SessionOperationsDeps,
+  params: { sessionIds: string[]; dryRun: boolean; expectedDirty?: Record<string, boolean> },
+): Promise<DeleteSessionsResult> {
+  const loaded = await loadAll(deps, params.sessionIds);
+  if (!Array.isArray(loaded)) return loaded;
+  for (const row of loaded) {
+    const reason = await mutationGuard(deps, row);
+    if (reason) return err('PRECONDITION_FAILED', `${row.id}: ${reason}`);
+  }
+  const previews: DeleteSessionPreviewItem[] = [];
+  for (const row of loaded) previews.push(await previewDelete(deps, row));
+  if (params.dryRun) return { ok: true, items: previews };
+  if (params.expectedDirty) {
+    for (const item of previews) {
+      if (params.expectedDirty[item.sessionId] !== item.dirtyWorktree) {
+        return err(
+          'PRECONDITION_FAILED',
+          `${item.sessionId}: worktree 状态自预览后已变化,请重新 dry_run 并向用户确认`,
+        );
+      }
+    }
+  }
+  const items: DeleteSessionPreviewItem[] = [];
+  for (const preview of previews) {
+    try {
+      await deps.updateSession(preview.sessionId, { status: 'deleted' }, {
+        beforeWrite: () => lateGuard(deps, preview.sessionId, { allowArchived: true }),
+      });
+      items.push({ ...preview, status: 'deleted' });
+    } catch (e) {
+      const mapped = mapIpcError(e);
+      return { ...mapped, message: `${preview.sessionId}: ${mapped.message}`, items } as DeleteSessionsResult;
+    }
+  }
+  return { ok: true, items };
 }

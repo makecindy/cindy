@@ -10,13 +10,15 @@ import { stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
-import type { MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
+import type { DeleteSessionsResult, MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
 
 import { bindingStore } from '../im/binding.js';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import { orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
+import { getRemovalPreview } from '../worktree/WorktreeManager.js';
 import {
+  deleteSessions,
   moveSessions,
   type SessionOperationsDeps,
   type SessionOpsRow,
@@ -108,6 +110,7 @@ export function createSessionOperationsDeps(
       hooks?.beforeWrite
         ? bindingStore.runExclusive(() => updateSessionInDb(sessionId, patch, undefined, hooks))
         : updateSessionInDb(sessionId, patch, undefined, hooks),
+    worktreeRemovalPreview: (sessionId) => getRemovalPreview(sessionId),
   };
 }
 
@@ -120,6 +123,10 @@ export function createSessionOpsCallbacks(isTurnRunning: (sessionId: string) => 
   return {
     moveSessions: (params: { sessionIds: string[]; target: SessionMoveTarget }): Promise<MoveSessionsResult> =>
       guarded(() => moveSessions(deps, params)),
-
+    deleteSessions: (params: {
+      sessionIds: string[];
+      dryRun: boolean;
+      expectedDirty?: Record<string, boolean>;
+    }): Promise<DeleteSessionsResult> => guarded(() => deleteSessions(deps, params)),
   };
 }
