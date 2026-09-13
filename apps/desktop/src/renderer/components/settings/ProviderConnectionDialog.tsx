@@ -1,4 +1,4 @@
-import { classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, classifyModel, isChatEligible, isAgentSelectableModel, mergeModelMetadata } from '@cindy/model-providers';
 /**
  * Connection credentials and advanced routing only. Model capabilities are imported into the
  * shared catalog and edited through standard model settings. Stored per-runtime credentials,
@@ -477,7 +477,7 @@ export function ProviderConnectionDialog({
   const [imageGenerationHelpHovered, setImageGenerationHelpHovered] = useState(false);
   const [imageGenerationHelpFocused, setImageGenerationHelpFocused] = useState(false);
   // 预设模板（仅新建态展示；目录 presets 段，随 OSS 热更）。
-  const [presets, setPresets] = useState<ProviderPreset[]>([]);
+  const [presets, setPresets] = useState<ProviderPreset[]>(() => [...(BUNDLED_CATALOG.presets ?? [])]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
   // 嵌套 dismiss layer 互斥且由表单统一持有：Radix Popover 只负责呈现，
   // 不再让退场中的菜单与新打开的模型选择器同时成为 Escape owner。
@@ -814,10 +814,9 @@ export function ProviderConnectionDialog({
     [restoreHydratedKey, setRtSynced],
   );
 
-  // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
+  // 新建和编辑态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
   // 按实际构建区域排序，不随 UI 语言变化（只排序不过滤，可达性由测试连接实测裁决）。
   useEffect(() => {
-    if (editing) return;
     let cancelled = false;
     void window.electronAPI.maker
       .listProviderPresets()
@@ -1173,11 +1172,12 @@ export function ProviderConnectionDialog({
   /** 切换协议时保留用户已填写的 endpoint，仅使旧测试结果失效。 */
   const changeWireProtocol = useCallback(
     (agent: DialogAgentKind, wireProtocol: ProviderWireProtocol) => {
-      setRtSynced((prev) => ({
+      setRtSynced((prev) => prev[agent].catalogPresetId || prev[agent].wireProtocol === wireProtocol ? prev : ({
         ...prev,
         [agent]: {
           ...prev[agent],
           wireProtocol,
+          requestPath: '',
         },
       }));
       setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
@@ -1186,6 +1186,8 @@ export function ProviderConnectionDialog({
   );
 
   const f = rt[activeTab];
+  const boundPreset = presets.find(preset => preset.id === f.catalogPresetId);
+  const templateBound = Boolean(f.catalogPresetId);
   const canShowImageGenerationAdvanced =
     activeTab === 'codex' && canRuntimeUseNativeImageGeneration(f);
   useEffect(() => {
@@ -1205,7 +1207,7 @@ export function ProviderConnectionDialog({
       toast.error(t('settings.providers.custom.test.needFields'));
       return;
     }
-    const probeRoute = resolveProviderConnectionProbeRoute(agent, probeFields);
+    const probeRoute = resolveProviderConnectionProbeRoute(agent, probeFields, presets);
     if (!probeRoute) {
       toast.error(t('settings.providers.custom.test.unsupportedProtocol'));
       return;
@@ -1286,7 +1288,7 @@ export function ProviderConnectionDialog({
       setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
       if (ipc?.message) toast.error(ipc.message);
     }
-  }, [activeTab, authMode, rt, t, savedBaselineFor, initial]);
+  }, [activeTab, authMode, rt, t, savedBaselineFor, initial, presets]);
 
   // 拉取单飞：任一 runtime（含 Pi）在途时所有 Tab 的拉取按钮都禁用——两个并发请求会竞争
   // 同一个勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
@@ -2251,7 +2253,7 @@ export function ProviderConnectionDialog({
               })}
             </div>
             <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-              {t(TAB_META[activeTab].helpKey)}
+              {templateBound ? (boundPreset ? presetDisplayName(boundPreset, i18n.language) : name) : t(TAB_META[activeTab].helpKey)}
             </span>
           </div>
 
@@ -2263,7 +2265,7 @@ export function ProviderConnectionDialog({
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
-            {(activeTab === 'claude-code' || activeTab === 'codex' || activeTab === 'pi') && (
+            {!templateBound && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
                 <div className="flex flex-wrap gap-1.5">
@@ -2286,7 +2288,7 @@ export function ProviderConnectionDialog({
                       }
                     >
                       {t(
-                        activeTab === 'pi' && option.value !== 'google-generative-ai'
+                        activeTab !== 'codex' && option.value !== 'google-generative-ai'
                           ? `settings.providers.custom.wireProtocol.pi${
                               option.value === 'anthropic-messages'
                                 ? 'Anthropic'
@@ -2299,6 +2301,7 @@ export function ProviderConnectionDialog({
                     </button>
                   ))}
                 </div>
+                {activeTab !== 'claude-code' && (
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
                   {t(
                     activeTab === 'pi' && f.wireProtocol !== 'google-generative-ai'
@@ -2312,6 +2315,7 @@ export function ProviderConnectionDialog({
                       : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey,
                   )}
                 </span>
+                )}
               </div>
             )}
 
@@ -2321,7 +2325,7 @@ export function ProviderConnectionDialog({
                 id={fieldId(`${activeTab}:baseUrl`)}
                 label={t('settings.providers.custom.fields.baseUrl')}
                 error={errorFor(`${activeTab}:baseUrl`)}
-                labelAction={
+                labelAction={!templateBound && (
                   <button
                     ref={runtimeFillTriggerRef}
                     type="button"
@@ -2330,7 +2334,7 @@ export function ProviderConnectionDialog({
                   >
                     {t('settings.providers.custom.runtimeFill.action')}
                   </button>
-                }
+                )}
                 reserveFeedback
               >
                 {(control) => (
@@ -2346,7 +2350,7 @@ export function ProviderConnectionDialog({
             </div>
 
             {/* 精确推理路径：给非标准兼容端点使用；留空仍按所选协议推导。 */}
-            {activeTab !== 'pi' && (
+            {!templateBound && activeTab !== 'pi' && f.wireProtocol !== 'google-generative-ai' && (
               <div className="flex flex-col gap-[7px]">
                 <FormField
                   id={fieldId(`${activeTab}:requestPath`)}

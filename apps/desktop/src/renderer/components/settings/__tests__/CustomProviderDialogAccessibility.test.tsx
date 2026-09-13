@@ -1515,3 +1515,18 @@ it('preserves preset media metadata through probing and saving', async () => {
   await waitFor(() => expect(customProviderMocks.createCustomProvider).toHaveBeenCalledOnce());
   expect(customProviderMocks.createCustomProvider.mock.calls[0][0].runtimes.codex.models[0]).toMatchObject(media);
 });
+
+it('keeps a template connection editable without offering protocol or path switches', async () => {
+  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+  const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
+  customProviderMocks.readCustomProviderKey.mockResolvedValue(null);
+  render(<ProviderConnectionDialog initial={{ id: 'google-test', name: 'Google', runtimes: {
+    codex: { ...preset.runtimes.codex!, catalogPresetId: preset.id,
+      models: [{ id: preset.runtimes.codex!.models[0].id, name: 'Gemini' }] },
+  } }} onSaved={vi.fn()} onClose={vi.fn()} />);
+  await waitFor(() => expect(window.electronAPI.maker.listProviderPresets).toHaveBeenCalled());
+  expect(screen.queryByText('settings.providers.custom.fields.wireProtocol')).toBeNull();
+  expect(screen.queryByRole('button', { name: 'settings.providers.custom.runtimeFill.action' })).toBeNull();
+  expect(screen.getByDisplayValue(preset.runtimes.codex!.baseUrl)).toBeTruthy();
+});

@@ -413,3 +413,31 @@ it('retains LongCat legacy header-only credentials when selecting its Bearer cat
   expect(headers.get('authorization')).toBe('Bearer fixture-legacy-key');
   expect(headers.has('x-api-key')).toBe(false);
 });
+
+it.each(['claude-code', 'codex', 'pi'] as const)('discovers Google native catalog from a saved compatibility entry (%s)', agent => {
+  const request = buildModelsFetchRequest(spec({ agent,
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' }));
+  expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+  expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'sk-test' });
+  expect(request.init.headers).not.toHaveProperty('anthropic-version');
+});
+
+it('does not rewrite private Google-compatible discovery or an explicit catalog', () => {
+  expect(buildModelsFetchRequest(spec({ baseUrl: 'https://private.example/v1beta/openai', wireProtocol: 'openai-chat' })).url)
+    .toBe('https://private.example/v1beta/openai/v1/models');
+  expect(buildModelsFetchRequest(spec({ baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    modelsUrl: 'https://generativelanguage.googleapis.com/custom/models', wireProtocol: 'openai-chat' })).url)
+    .toBe('https://generativelanguage.googleapis.com/custom/models');
+});
+
+ it('normalizes the real bundled Google discovery URL for all generated harnesses', async () => {
+  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+  const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const runtime = preset.runtimes[agent]!;
+    const request = buildModelsFetchRequest(spec({ agent, baseUrl: runtime.baseUrl,
+      modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol }));
+    expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'sk-test' });
+  }
+});

@@ -1,4 +1,6 @@
 import {
+  buildUserProvider,
+  type ProviderPreset,
   isAgentSelectableModel,
   isLoopbackProviderUrl,
   resolvePiModelRoute,
@@ -46,10 +48,18 @@ export function resolveProviderConnectionProbeRoute(
   agent: ProviderProbeAgent,
   fields: Pick<
     ProviderConnectionTestSignatureFields,
-    'baseUrl' | 'requestPath' | 'wireProtocol' | 'models'
+    'baseUrl' | 'requestPath' | 'wireProtocol' | 'models' | 'catalogPresetId'
   >,
+  presets: readonly ProviderPreset[] = [],
 ): ProviderConnectionProbeRoute | null {
-  const firstModel = firstProviderChatModel(fields.models);
+  const projectedModels = fields.catalogPresetId ? buildUserProvider({
+    id: 'connection-probe', name: 'Connection', runtimes: { [agent]: {
+      baseUrl: fields.baseUrl, wireProtocol: fields.wireProtocol,
+      requestPath: fields.requestPath || undefined, catalogPresetId: fields.catalogPresetId,
+      models: fields.models.map(model => ({ ...model, name: model.id })),
+    } },
+  }, { presets }).models[agent] : undefined;
+  const firstModel = firstProviderChatModel(projectedModels ?? fields.models);
   const api = firstModel?.api ?? firstModel?.piApi;
   if (api && ['google-generative-ai', 'google-vertex', 'azure-openai-responses', 'bedrock-converse-stream', 'mistral-conversations'].includes(api)) {
     return { api, baseUrl: firstModel?.route?.baseUrl ?? fields.baseUrl,

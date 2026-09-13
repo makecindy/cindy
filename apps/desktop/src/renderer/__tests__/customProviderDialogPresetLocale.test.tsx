@@ -372,8 +372,8 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
     ['settings.providers.custom.wireProtocol.piChat', 'openai-chat'],
     ['settings.providers.custom.wireProtocol.piAnthropic', 'anthropic-messages'],
   ] as const)(
-    'saves an explicit %s PI default without deleting the model override',
-    async (buttonName, wireProtocol) => {
+    'hides %s for a bound PI preset and preserves its model override',
+    async (buttonName, _wireProtocol) => {
       i18nState.language = 'en';
       renderDialog();
 
@@ -382,17 +382,13 @@ describe('ProviderConnectionDialog preset locale ownership', () => {
       const piTab = screen.getByRole('tab', { name: 'settings.providers.custom.protocol.pi' });
       fireEvent.click(piTab);
       await waitFor(() => expect(piTab.getAttribute('aria-selected')).toBe('true'));
-      fireEvent.click(screen.getByRole('button', { name: buttonName }));
-      await screen.findByText(
-        wireProtocol === 'anthropic-messages'
-          ? 'settings.providers.custom.wireProtocol.piAnthropicHelp'
-          : 'settings.providers.custom.wireProtocol.piChatHelp',
-      );
+      expect(screen.queryByRole('button', { name: buttonName })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
       await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
       expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toMatchObject({
-        wireProtocol,
+        catalogPresetId: piProtocolPreset.id,
+        wireProtocol: 'openai-responses',
         models: [
           {
             id: 'deepseek-v4-pro',

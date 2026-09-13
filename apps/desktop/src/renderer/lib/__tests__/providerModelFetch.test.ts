@@ -510,3 +510,18 @@ it('invalidates a connection test when the actual SDK changes under the same dis
   expect(providerConnectionTestRequestSignature(fields, 'apiKey'))
     .not.toBe(providerConnectionTestRequestSignature(changed, 'apiKey'));
 });
+
+it.each(['claude-code', 'codex', 'pi'] as const)('projects ID-only template models before an edited %s probe', async agent => {
+  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+  const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
+  const runtime = preset.runtimes[agent]!;
+  for (const id of [runtime.models[0].id, 'gemini-future-deployment']) {
+    expect(resolveProviderConnectionProbeRoute(agent, {
+      catalogPresetId: preset.id, baseUrl: runtime.baseUrl,
+      wireProtocol: runtime.wireProtocol!, requestPath: runtime.requestPath ?? '', models: [{ id }],
+    }, BUNDLED_CATALOG.presets)).toMatchObject({
+      api: 'google-generative-ai', wireProtocol: 'google-generative-ai',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    });
+  }
+});

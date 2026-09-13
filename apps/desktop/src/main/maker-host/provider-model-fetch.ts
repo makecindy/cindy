@@ -148,7 +148,16 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
   const baseUrl = parseModelsFetchUrl(spec.baseUrl);
   const explicit = spec.modelsUrl?.trim();
   const modelsUrl = explicit ? parseModelsFetchUrl(explicit) : null;
-  const discoveryUrl = explicit && modelsUrl?.origin === baseUrl.origin
+  // Google's saved compatibility entry is an inference endpoint, not its catalog.
+  // Resolve discovery independently, after Main has selected this connection's credentials.
+  // The old bundled /openai/models address is normalized too. Other explicit
+  // discovery URLs and private proxies remain user-owned.
+  const googleCatalog = (!explicit || /^https:\/\/generativelanguage\.googleapis\.com\/v1(?:beta)?\/openai\/models\/?$/.test(explicit)) && baseUrl.origin === 'https://generativelanguage.googleapis.com'
+    && /^\/v1(?:beta)?(?:\/openai)?\/?$/.test(baseUrl.pathname);
+  const googleProtocol = googleCatalog || spec.wireProtocol === 'google-generative-ai';
+  const discoveryUrl = googleCatalog
+    ? `${baseUrl.origin}${baseUrl.pathname.replace(/\/openai\/?$/, '').replace(/\/+$/, '')}/models`
+    : explicit && modelsUrl?.origin === baseUrl.origin
     ? explicit : spec.wireProtocol === 'google-generative-ai'
       ? `${spec.baseUrl.replace(/\/+$/, '')}/models` : deriveModelsDiscoveryUrl(spec.baseUrl);
   const mustStripCredentialHeaders =
@@ -171,7 +180,7 @@ export function buildModelsFetchRequest(spec: ProviderModelsFetchSpec): {
     delete headers['anthropic-beta'];
     delete headers['x-api-key'];
     if (discoveryKey) headers['authorization'] = `Bearer ${discoveryKey}`;
-  } else if (spec.wireProtocol === 'google-generative-ai') {
+  } else if (googleProtocol) {
     if (spec.apiKey) headers['x-goog-api-key'] = spec.apiKey;
   } else if (anthropicMessages) {
     // Anthropic wire 的所有端点（含 GET /v1/models）都要求 anthropic-version，缺失直接 400。
