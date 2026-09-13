@@ -13,9 +13,10 @@
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
  *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
- *   3. cindy-art ghost_call —— 第一方作图/视频内层工具静默；其它插件仍逐次确认
+ *   3. cindy-art ghost_call —— 第一方作图/视频内层工具静默；其它插件继续走会话审批
  *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
- *   5. 其余                —— 逐次弹窗（第三方 server、cindy_ssh、其它 ghost_call…）
+ *   5. 其余                —— 进入会话审批（第三方 server、cindy_ssh、其它 ghost_call…）
+ * 风险分类不覆盖会话档位：Full Access 免操作审批，Auto 走统一审阅，Ask 才交用户确认。
  */
 
 import type {
@@ -51,6 +52,8 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   // 接受的存在性披露，只读元数据不因此回退为逐次审批或统一成 NOT_FOUND。
   'cindy::ghost_info',
   'cindy::ghost_manual',
+  // Query stays local; market discovery fetches catalog metadata without reconciliation.
+  'cindy::ghost_market_search',
   'cindy::ghost_forge_guide',
   'cindy_browser::list_tools',
   'cindy_android::list_tools',
@@ -76,7 +79,7 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
  *
  * 这里不能按 `cindy_` 前缀放行：namespace 只表示品牌归属，不代表新 provider
  * 已完成权限 review。SSH（在已配置主机上跑任意命令）、插件宿主 `cindy`
- * （`ghost_call` 转发到第三方插件沙箱）与第三方 server 都不在表内，继续逐次确认；
+ * （`ghost_call` 转发到第三方插件沙箱）与第三方 server 都不在表内，继续走会话审批；
  * Contacts 走 inner-tool 细粒度策略。
  */
 const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
@@ -225,6 +228,7 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   if (serverName === 'cindy_contacts') {
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
@@ -232,6 +236,22 @@ export function getDesktopMcpToolApprovalPolicy(
   }
   if (canAutoApproveCindyArtGhostCall(context)) {
     return 'auto-approve';
+  }
+  // Choosing a new Worker root delegates filesystem access. Do not let the
+  // trusted-server shortcut or a cached server grant authorize another root.
+  // Full Access / Auto / Ask still use their existing permission flow.
+  if (serverName === 'cindy_orca') {
+    if (!toolName) return 'prompt-each-time';
+    if (toolName === 'create_worker' || toolName === 'create_workers') {
+      const params = readJsonObject(toolParams);
+      if (!params) return 'prompt-each-time';
+      const workers = toolName === 'create_worker' ? [params] : params.workers;
+      if (!Array.isArray(workers)) return 'prompt-each-time';
+      if (workers.some((worker) => {
+        const spec = readJsonObject(worker);
+        return !spec || Object.hasOwn(spec, 'working_dir');
+      })) return 'prompt-each-time';
+    }
   }
   const iosSimulatorCall = readIOSSimulatorInnerCall(context);
   if (iosSimulatorCall) {

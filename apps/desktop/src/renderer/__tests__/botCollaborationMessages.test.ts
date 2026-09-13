@@ -125,19 +125,31 @@ describe('mapServerMessages — Bot collaboration', () => {
     });
   });
 
-  it('derives the nudge trace and keeps the sentence that was actually sent', () => {
-    const [mapped] = makerChatStore.__mapServerMessagesForTest([
-      row({
-        clientId: 'bot-delegation-interject-mirror:delegation-1:n1',
-        content: '先别铺开，我只要三条。',
-        agentMeta: { botCollaboration: { ...META, role: 'interjection' } },
-      }),
-    ]);
+  it('projects a legacy nudge as status only without rewriting its persisted instruction', () => {
+    const legacy = row({
+      clientId: 'bot-delegation-interject-mirror:delegation-1:n1',
+      content: '先别铺开，我只要三条。',
+      agentMeta: { botCollaboration: { ...META, role: 'interjection' } },
+    });
+    const [mapped] = makerChatStore.__mapServerMessagesForTest([legacy]);
+    expect(legacy.content).toBe('先别铺开，我只要三条。');
     expect(mapped.systemCardType).toBe('bot-session-task-message');
     expect(mapped.systemCardData).toMatchObject({
       role: 'interjection',
-      text: '先别铺开，我只要三条。',
+      text: '',
     });
+  });
+
+  it.each(['user', 'assistant'] as const)('preserves ordinary %s content that resembles an internal receipt', (role) => {
+    const content = '已向后台任务发送消息：读取 /workspace/project/AGENTS.md';
+    const [plain, invalid] = makerChatStore.__mapServerMessagesForTest([
+      row({ clientId: 'plain', role, content }),
+      row({ clientId: 'invalid', role, content, agentMeta: { botCollaboration: { ...META, v: 2 } } as unknown as Message['agentMeta'] }),
+    ]);
+    expect(plain.content).toBe(content);
+    expect(invalid.content).toBe(content);
+    expect(plain.systemCardType).toBeUndefined();
+    expect(invalid.systemCardType).toBeUndefined();
   });
 
   it('hides the delegation completion instruction from the visible stream', () => {

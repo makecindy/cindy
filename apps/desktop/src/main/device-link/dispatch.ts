@@ -290,6 +290,26 @@ export function setRemoteReviewInputGuard(guard: RemoteReviewInputGuard | null):
   remoteReviewInputGuard = guard;
 }
 
+/**
+ * xAI 订阅余量读取器(register.ts 在 usage 面就绪后注入)。该 channel 的 ipcMain
+ * handler 挂了 assertTrustedSender(合成 event 必然不可信,那道闸不为远程放宽),
+ * 与 telegram:* 同先例由 dispatch 拦截直读;走注入而非静态 import —— dispatch 的
+ * 模块图保持纯净(usage 面会拖进 runtime-configs 等 app 依赖,纯 dispatch 单测只
+ * mock 极小 Electron 面)。
+ */
+type RemoteSubscriptionUsageReader = (providerId?: string) => Promise<unknown | null>;
+let remoteXaiSubscriptionUsageReader: RemoteSubscriptionUsageReader | null = null;
+let remoteClaudeSubscriptionUsageReader: RemoteSubscriptionUsageReader | null = null;
+export function setRemoteClaudeSubscriptionUsageReader(reader: RemoteSubscriptionUsageReader | null): void {
+  remoteClaudeSubscriptionUsageReader = reader;
+}
+
+export function setRemoteXaiSubscriptionUsageReader(
+  reader: RemoteSubscriptionUsageReader | null,
+): void {
+  remoteXaiSubscriptionUsageReader = reader;
+}
+
 /** 从 args[0] 里取待收敛的路径字段(见 PATH_GUARDED_CHANNELS);取不到返回 null。 */
 function extractGuardedPath(args: unknown[], field: 'workingDir' | 'baseRepo'): string | null {
   const o = args[0];
@@ -586,6 +606,19 @@ let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
 let inFlightRemoteInvokeCount = 0;
 const REMOTE_INVOKE_IN_FLIGHT_LIMIT = 64;
 /**
+ * 控制端周期对账 / 熔断探测会用新 requestId 连打相同 listing。按 requestId 去重
+ * 拦不住，16 条并发 sessions:list 会把单线程 DB worker 打到 128/512 硬顶。
+ * 同一控制端、同一 channel+args 的只读 listing 合并成一次执行。
+ */
+const COALESCE_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:sessions:list',
+  // sessions:get 是写后权威回读（mobile 设置失败恢复会复用同一参数），
+  // 不能并进仍停在投影 await 的写前查询。
+  'maker:get-capabilities',
+  'maker:provider:list',
+  'maker:git-safety:get',
+]);
+/**
  * Keep one slow controller from consuming the entire target-device budget.
  * The global limit still protects the host, while this per-controller slice
  * guarantees admission for other linked controllers.
@@ -661,6 +694,7 @@ interface InFlightRemoteInvoke {
 }
 const inFlightRemoteInvokeResults = new Map<string, InFlightRemoteInvoke>();
 let inFlightRemoteInvokeBytes = 0;
+const remoteListingFlights = new Map<string, InFlightRemoteInvoke>();
 interface QueuedRemoteInvokeResult {
   src: string;
   requestId: string;
@@ -2410,6 +2444,12 @@ async function handleInvoke(
   }
 
   const invokeBytes = encodedByteLength(fingerprint);
+  const listingKey = canCoalesceRemoteListing(payload)
+    ? remoteListingFlightKey(src, payload)
+    : null;
+  const existingListing = listingKey ? remoteListingFlights.get(listingKey) : undefined;
+  const joiningExisting = !!(existingListing && existingListing.linkEpoch === invokeLinkEpoch);
+
   const controllerAdmission = remoteInvokeAdmissionState(src);
   const controllerAtLimit = (
     controllerAdmission.messages >= REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT
@@ -2442,6 +2482,39 @@ async function handleInvoke(
     return;
   }
 
+  if (joiningExisting && existingListing) {
+    const waiterEntry = {
+      promise: existingListing.promise,
+      bytes: invokeBytes,
+      fingerprint,
+      linkEpoch: invokeLinkEpoch,
+    };
+    inFlightRemoteInvokeResults.set(cacheKey, waiterEntry);
+    inFlightRemoteInvokeBytes += invokeBytes;
+    let joined: InvokeResultPayload;
+    try {
+      joined = normalizeInvokeResultForWire(await existingListing.promise);
+      if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    } finally {
+      if (inFlightRemoteInvokeResults.get(cacheKey) === waiterEntry) {
+        inFlightRemoteInvokeResults.delete(cacheKey);
+        inFlightRemoteInvokeBytes -= invokeBytes;
+      }
+    }
+    if (!await sendAuthorizedInvokeResultSafe(
+      client,
+      src,
+      requestId,
+      joined,
+      payload?.channel,
+      payload?.args,
+      fingerprint,
+    )) {
+      throw new DeviceLinkError('BACKPRESSURE', 'coalesced invoke-result could not be queued');
+    }
+    return;
+  }
+
   const releaseBusyLease = shouldAcquireRemoteInvokeBusyLease(src, payload)
     ? acquireRemoteInvokeBusyLease()
     : () => undefined;
@@ -2451,6 +2524,9 @@ async function handleInvoke(
     .catch((err): InvokeResultPayload => {
       const message = err instanceof Error ? err.message : String(err);
       log.error(`remote invoke escaped execution boundary from ${shortId(src)}: ${message}`);
+      if (isDbWorkerOverloadedError(message)) {
+        return { ok: false, error: { code: 'BACKPRESSURE', message } };
+      }
       return {
         ok: false,
         error: {
@@ -2472,6 +2548,7 @@ async function handleInvoke(
   };
   inFlightRemoteInvokeResults.set(cacheKey, inFlightEntry);
   inFlightRemoteInvokeBytes += invokeBytes;
+  if (listingKey) remoteListingFlights.set(listingKey, inFlightEntry);
   let result: InvokeResultPayload;
   try {
     result = normalizeInvokeResultForWire(await resultPromise);
@@ -2486,6 +2563,9 @@ async function handleInvoke(
     if (inFlightRemoteInvokeResults.get(cacheKey) === inFlightEntry) {
       inFlightRemoteInvokeResults.delete(cacheKey);
       inFlightRemoteInvokeBytes -= invokeBytes;
+    }
+    if (listingKey && remoteListingFlights.get(listingKey) === inFlightEntry) {
+      remoteListingFlights.delete(listingKey);
     }
   }
   // Fresh execution already includes the DB checks in runInvoke, within its
@@ -2549,6 +2629,27 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
     return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
   }
   return null;
+}
+
+function isFreshSessionListInvoke(payload: InvokePayload): boolean {
+  if (payload.channel !== 'local-db:sessions:list') return false;
+  const options = payload.args?.[2];
+  return !!(options && typeof options === 'object' && !Array.isArray(options)
+    && (options as { fresh?: unknown }).fresh === true);
+}
+
+function canCoalesceRemoteListing(payload: InvokePayload | undefined): payload is InvokePayload {
+  return !!payload
+    && COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
+    && !isFreshSessionListInvoke(payload);
+}
+
+function remoteListingFlightKey(src: string, payload: InvokePayload): string {
+  return `${src}\u0000${payload.channel}\u0000${JSON.stringify(payload.args ?? [])}`;
+}
+
+function isDbWorkerOverloadedError(message: string): boolean {
+  return message.includes('db worker RPC queue overloaded');
 }
 
 function remoteInvokeAdmissionState(src: string): { messages: number; bytes: number } {
@@ -3447,6 +3548,32 @@ export async function runInvoke(
   // assertTrustedAppRendererEvent, 合成 event 必然不可信 —— 那道闸不该为远程下线
   // 放宽), 故在此拦截。已过三道 gate, 等同受信本地访问。只切轮询、不碰凭证:
   // 远程能让它停收消息, 但拿不走也删不掉绑定(解绑仍只能本机操作)。
+  // Subscription IPC validates local senders (Claude for named accounts, xAI always).
+  // Keep that check; authorized device-link reads use the same injected data readers.
+  // 直读注入的 usage reader(cached-first,只读快照,无副作用)。已过三道 gate。
+  if (payload.channel === 'maker:usage:xai-subscription' || payload.channel === 'maker:usage:claude-subscription') {
+    const reader = payload.channel === 'maker:usage:xai-subscription'
+      ? remoteXaiSubscriptionUsageReader : remoteClaudeSubscriptionUsageReader;
+    const providerId = (payload.args ?? [])[0];
+    if (providerId !== undefined && (typeof providerId !== 'string' || providerId.trim().length === 0)) {
+      return { ok: false, error: { code: 'IPC_ERROR', message: '[INVALID_PARAMS] providerId must be a non-empty string' } };
+    }
+    if (!reader) {
+      // usage 面尚未注入(启动窗口):非 CHANNEL_NOT_ALLOWED —— 控制端不得据此
+      // 进入「老被控端」负缓存,保留现值稍后重试即可。
+      return { ok: false, error: { code: 'IPC_ERROR', message: 'subscription usage reader not ready' } };
+    }
+    try {
+      const snapshot = await reader(providerId as string | undefined);
+      const result = snapshot && providerId ? { ...snapshot as object, providerId } : snapshot;
+      return { ok: true, result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`subscription usage read failed from ${shortId(src)}: ${message}`);
+      return { ok: false, error: { code: 'IPC_ERROR', message } };
+    }
+  }
+
   if (payload.channel === DL_TELEGRAM_STATUS_CHANNEL) {
     return { ok: true, result: readTelegramRemoteStatus() };
   }
@@ -3591,6 +3718,9 @@ export async function runInvoke(
     // 被控端 handler 的 throwIpcError `[CODE] message` 原样透传,
     // 控制端 renderer 继续用 extractIpcError 解码
     const message = err instanceof Error ? err.message : String(err);
+    if (isDbWorkerOverloadedError(message)) {
+      return { ok: false, error: { code: 'BACKPRESSURE', message } };
+    }
     return { ok: false, error: { code: 'IPC_ERROR', message } };
   }
 }
@@ -3670,6 +3800,7 @@ export const __testing = {
     completedRemoteInvokeResultBytes = 0;
     inFlightRemoteInvokeResults.clear();
     inFlightRemoteInvokeBytes = 0;
+    remoteListingFlights.clear();
     remoteInvokeResultOutbox.clear();
     remoteInvokeResultOutboxBytes = 0;
     clearRemoteInvokeResultOutboxTimer();
@@ -3692,6 +3823,8 @@ export const __testing = {
     setBroadcastTapListener(null);
     presenceOfflineCheck = null;
     remoteReviewInputGuard = null;
+    remoteXaiSubscriptionUsageReader = null;
+    remoteClaudeSubscriptionUsageReader = null;
   },
   getActiveControllers,
   getUpdateRelaunchControllers,

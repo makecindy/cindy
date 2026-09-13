@@ -14,7 +14,11 @@ import type { Session } from '@/lib/ccAgent.types';
 import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
 import { buildBotSessionOwners } from '@/features/bots/botSessionOwners';
 import { useBotProfiles } from '@/features/bots/botStore';
-import { groupSessions, type ProjectGroupsResult } from '../lib/projectGrouping';
+import {
+  groupSessions,
+  type PersistentLocalProject,
+  type ProjectGroupsResult,
+} from '../lib/projectGrouping';
 import {
   collectAmbiguousDeviceNames,
   resolveRemoteProjectMachineIdentity,
@@ -24,6 +28,8 @@ export function useProjectGroups(
   sessions: readonly Session[],
   projectAliases?: ReadonlyMap<string, string>,
   includePinnedInProjects: boolean = false,
+  persistentLocalProjects?: readonly PersistentLocalProject[],
+  localPlatform: string = '',
 ): ProjectGroupsResult {
   const sshHosts = useRemoteSshHosts();
   /*
@@ -38,6 +44,8 @@ export function useProjectGroups(
       projectAliases,
       includePinnedInProjects,
       botOwnerBySessionId,
+      persistentLocalProjects,
+      localPlatform,
     });
     // 撞名判定要看全量项目(哪些设备名对应了多个 deviceId),所以先扫一遍再逐个富化。
     const ambiguousDeviceNames = collectAmbiguousDeviceNames(groups.projects);
@@ -50,5 +58,13 @@ export function useProjectGroups(
         }),
       })),
     };
-  }, [sessions, projectAliases, includePinnedInProjects, sshHosts, botOwnerBySessionId]);
+  }, [
+    sessions,
+    projectAliases,
+    includePinnedInProjects,
+    persistentLocalProjects,
+    localPlatform,
+    sshHosts,
+    botOwnerBySessionId,
+  ]);
 }

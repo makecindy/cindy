@@ -1,4 +1,28 @@
-# macOS input helper trust boundary
+# Remote desktop native helpers
+
+## Windows input desktop access
+
+The Windows helper explicitly attaches its input thread to `OpenInputDesktop`.
+The handle requests `DESKTOP_JOURNALPLAYBACK` together with its existing
+read/write/switch rights: Windows requires this access for `SendInput` on the
+attached desktop, even though Cindy installs no journaling hooks. Without the
+right, attachment succeeds and the helper prints `ready`, but its first input
+is rejected with Win32 `ERROR_ACCESS_DENIED` (5). This affects controllers on
+any OS; it is a Windows host issue, not a Mac-to-Windows wire-format difference.
+
+The desktop ACL, process token, UIPI and secure-desktop service boundary still
+apply. This does not elevate the helper or bypass UAC. An input failure releases
+control while keeping the viewer lease and video; viewers observe the resulting
+`controlling:false` on the existing heartbeat.
+
+`desktop::tests::binding_and_rechecking_preserve_input_access` is an explicit
+native integration check for an unlocked, interactive Windows session. It uses
+zero relative movement (no clicks, typing or pointer displacement) to verify
+binding, rechecking and restoration. Run the Windows crate's `cargo test` with a
+task-specific `--target-dir` outside the checkout. It is separate from Node unit
+tests and does not prove lock/UAC or physical cross-device behavior.
+
+## macOS input helper trust boundary
 
 The input helper authenticates its caller before inspecting any command or
 requesting Accessibility permission. Node's macOS stdio socket pairs carry kernel

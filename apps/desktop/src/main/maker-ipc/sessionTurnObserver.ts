@@ -75,6 +75,7 @@ export function installSessionTurnObserver(deps: InstallSessionTurnObserverDeps,
         // the bounded auto-resume decision runs. Its exact lease is either
         // replaced by the next provider generation or released by settle.
         const scheduled = deps.silentStopTurnLeaseGate.schedule(session.id, event, turnLeaseId);
+        if (scheduled) session.claimHostTurnContinuation(turnGeneration);
         if (!scheduled) {
           deps.log.debug('ignored duplicate silent-stop terminal for the current turn', {
             sessionId: session.id,

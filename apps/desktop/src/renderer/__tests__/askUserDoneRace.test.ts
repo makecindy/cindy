@@ -5,6 +5,8 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/lib/toast', () => ({ toast: { warning: vi.fn() } }));
+
 vi.mock('@/lib/messageService', () => ({
   list: vi.fn(async () => []),
   create: vi.fn(async () => ({}) as unknown),
@@ -193,6 +195,23 @@ describe('ask_user 与 done 的时序', () => {
     expect(pendingAskStatuses()).toEqual(['pending']);
   });
 
+  it('Codex SDK completion does not finish the product while confirmation remains', async () => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+    onEvent?.({ sessionId: SESSION_ID, event: { type: 'status', source: 'codex', data: { isRunning: true } } });
+    emitAskUserRequest('human-1');
+    for (const type of ['status', 'done'] as const) {
+      onEvent?.({ sessionId: SESSION_ID, event: { type, source: 'codex', turnContinuationId: 17,
+        data: { status: 'Done', isRunning: false } } });
+    }
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(true);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('human-1');
+    makerChatStore.answerUserQuestion(SESSION_ID, 'human-1', { 'Proceed?': 'Yes' });
+    await vi.waitFor(() => expect(makerChatStore.getSnapshot(SESSION_ID).pendingAskUser).toBeNull());
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(true);
+    emitDone('codex');
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(false);
+  });
+
   it('codex:done 的 Host 快照重放保留答题状态及 questions 引用', async () => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
     emitAskUserRequest('ask-replay', [{
@@ -304,7 +323,7 @@ describe('ask_user 与 done 的时序', () => {
     });
   });
 
-  it('codex:输家乐观答案会被赢家 dismissal 覆盖', () => {
+  it('codex:晚到的成功回执不覆盖赢家 dismissal', async () => {
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
     emitAskUserRequest('ask-5');
     emitDone('codex');
@@ -313,8 +332,7 @@ describe('ask_user 与 done 的时序', () => {
     });
     expect(makerChatStore.getSnapshot(SESSION_ID).messages.find((m) => m.role === 'ask_user'))
       .toMatchObject({
-        askUserStatus: 'answered',
-        askUserAnswers: { '桌面版这次要采用哪种范围？': '只展示和搜索' },
+        askUserStatus: 'pending',
       });
 
     onInteractionDismissed?.({
@@ -328,10 +346,92 @@ describe('ask_user 与 done 的时序', () => {
       },
     });
 
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(makerChatStore.getSnapshot(SESSION_ID).messages.find((m) => m.role === 'ask_user'))
       .toMatchObject({
         askUserStatus: 'answered',
         askUserAnswers: { '桌面版这次要采用哪种范围？': '完整编辑（推荐）' },
       });
   });
+  it.each(['ask', 'approve', 'revise', 'cancel'] as const)('%s keeps the card until accepted and allows retry after rejection', async (action) => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+    if (action === 'ask') emitAskUserRequest('receipt');
+    else onInteractionRequest?.({ sessionId: SESSION_ID, request: {
+      kind: 'plan_review', requestId: 'receipt', plan: '# Keep this edited plan',
+    }, persistId: 'receipt-message' });
+    emitDone('codex');
+    const original = action === 'ask' ? makerChatStore.getSnapshot(SESSION_ID).pendingAskUser
+      : makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview;
+    const resolveInteraction = vi.mocked(window.electronAPI.maker.resolveInteraction);
+    let resolve!: (receipt: { accepted: boolean }) => void;
+    resolveInteraction.mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    const submit = () => {
+      if (action === 'ask') makerChatStore.answerUserQuestion(SESSION_ID, 'receipt', { 'Choose?': 'A' });
+      else if (action === 'cancel') makerChatStore.cancelPlanReview(SESSION_ID, 'receipt');
+      else makerChatStore.respondToPlanReview(SESSION_ID, 'receipt', action === 'approve', 'Keep my feedback');
+    };
+    const pending = () => action === 'ask' ? makerChatStore.getSnapshot(SESSION_ID).pendingAskUser
+      : makerChatStore.getSnapshot(SESSION_ID).pendingPlanReview;
+    submit(); submit();
+    expect(resolveInteraction).toHaveBeenCalledTimes(1);
+    expect(pending()).toBe(original);
+    resolve({ accepted: false });
+    await new Promise((done) => setTimeout(done, 0));
+    expect(pending()).toBe(original);
+    expect(updateMessageContent).not.toHaveBeenCalled();
+    submit();
+    await vi.waitFor(() => expect(pending()).toBeNull());
+    expect(resolveInteraction).toHaveBeenCalledTimes(2);
+    expect(updateMessageContent).not.toHaveBeenCalled();
+  });
+
+  it.each(['reject', 'missing', 'timeout'] as const)('retains an unanswered card after a %s receipt and can retry', async (failure) => {
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+    emitAskUserRequest('failed-receipt');
+    const resolveInteraction = vi.mocked(window.electronAPI.maker.resolveInteraction);
+    if (failure === 'reject') resolveInteraction.mockRejectedValueOnce(new Error('offline'));
+    if (failure === 'missing') resolveInteraction.mockResolvedValueOnce(undefined as never);
+    if (failure === 'timeout') {
+      vi.useFakeTimers();
+      resolveInteraction.mockImplementationOnce(() => new Promise(() => {}));
+    }
+    try {
+      makerChatStore.answerUserQuestion(SESSION_ID, 'failed-receipt', { 'Choose?': 'A' });
+      if (failure === 'timeout') await vi.advanceTimersByTimeAsync(15_001);
+      else await new Promise((done) => setTimeout(done, 0));
+      expect(makerChatStore.getSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('failed-receipt');
+      expect(pendingAskStatuses()).toEqual(['pending']);
+    } finally { vi.useRealTimers(); }
+    makerChatStore.answerUserQuestion(SESSION_ID, 'failed-receipt', { 'Choose?': 'A' });
+    await vi.waitFor(() => expect(pendingAskStatuses()).toEqual(['answered']));
+  });
+
+  it('ignores a late receipt after the task was purged', async () => {
+    emitAskUserRequest('old');
+    let resolve!: (receipt: { accepted: boolean }) => void;
+    vi.mocked(window.electronAPI.maker.resolveInteraction).mockImplementationOnce(() => new Promise((done) => { resolve = done; }));
+    makerChatStore.answerUserQuestion(SESSION_ID, 'old', { 'Choose?': 'A' });
+    makerChatStore.purgeSession(SESSION_ID);
+    emitAskUserRequest('new');
+    resolve({ accepted: true });
+    await new Promise((done) => setTimeout(done, 0));
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe('new');
+    expect(pendingAskStatuses()).toEqual(['pending']);
+  });
+
+  it('restores a detached question after renderer reload and accepts its answer', async () => {
+    const request = { kind: 'ask_user_question', requestId: 'codex:connection:0',
+      questions: [{ question: 'Choose?' }] };
+    makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
+    emitAskUserRequest(request.requestId, request.questions);
+    emitDone('codex');
+    makerChatStore.purgeSession(SESSION_ID);
+    getPendingInteractions.mockResolvedValue([{ request, persistId: 'persist-reloaded' }]);
+    await makerChatStore.reconcilePendingInteractions(SESSION_ID);
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingAskUser?.requestId).toBe(request.requestId);
+    makerChatStore.answerUserQuestion(SESSION_ID, request.requestId, { 'Choose?': 'A' });
+    await vi.waitFor(() => expect(pendingAskStatuses()).toEqual(['answered']));
+    expect(makerChatStore.getSnapshot(SESSION_ID).pendingAskUser).toBeNull();
+  });
+
 });

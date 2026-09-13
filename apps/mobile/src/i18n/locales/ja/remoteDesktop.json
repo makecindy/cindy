@@ -56,6 +56,7 @@
   "connect": "接続",
   "connecting": "接続中…",
   "reconnecting": "再接続中…",
+  "lockingOnExit": "コンピューターをロック中…",
   "disconnected": "切断済み",
   "compatibility": "互換モード · 低フレームレート",
   "live": "ライブ映像",

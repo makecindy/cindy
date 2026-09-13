@@ -80,6 +80,7 @@ export interface SessionControlDeps {
     targetSessionId: string;
     expectedGeneration?: number;
     patch: {
+      harness?: AgentKind;
       model?: string;
       providerId?: string | null;
       effort?: Effort;
@@ -89,6 +90,7 @@ export interface SessionControlDeps {
     ControlResult<
       {
         status: 'applied' | 'deferred';
+        effectiveBoundary?: 'next_send';
         generation: number;
         effectiveProfile: SessionRuntimeProfile;
         pendingMutation: SessionRuntimeSnapshot['pendingMutation'];
@@ -314,9 +316,11 @@ export function registerSetSessionRuntimeTool(
     category: 'control',
     description:
       '原子调整当前或指定本机任务的模型来源、模型、推理强度与 Fast。省略 session_id 时作用于当前任务；' +
-      '忙碌任务在当前 turn 结束后生效。先用 get_session_runtime 读取 generation，再用 expected_generation 防止覆盖并发修改。' +
-      '不切换 harness，不修改用户保存的默认选择。',
+      '临时调整在忙碌任务的当前 turn 结束后生效。先用 get_session_runtime 读取 generation，再用 expected_generation 防止覆盖并发修改。' +
+      '提供 harness 时必须同时指定 model：完整选择会保存到目标任务，并在下一条消息发送时切换（返回 next_send）；' +
+      '省略 harness 保持临时调整语义。不修改全局默认选择。',
     inputShape: {
+      harness: z.enum(['claude-code', 'codex', 'pi']).optional().describe('目标执行引擎；提供时必须同时指定 model。'),
       session_id: z.string().min(1).optional().describe('目标 session id；省略时使用当前任务。'),
       provider_id: z
         .string()
@@ -335,10 +339,13 @@ export function registerSetSessionRuntimeTool(
           '必填:先调用 get_session_runtime 读取当前 generation 并原样传回,用于防止覆盖并发修改。',
         ),
     },
-    handler: async ({ session_id, provider_id, model, effort, fast, expected_generation }) => {
+    handler: async ({ session_id, harness, provider_id, model, effort, fast, expected_generation }) => {
       const targetSessionId = session_id ?? requireCallerSession(deps);
       if (!targetSessionId) {
         return errorPayload('NO_SESSION_CONTEXT', '当前 MCP 调用没有绑定 session，请显式提供 session_id。');
+      }
+      if (harness !== undefined && !model?.trim()) {
+        return errorPayload('INVALID_ARGS', '提供 harness 时必须同时指定目标 model。');
       }
       if (
         provider_id === undefined &&
@@ -356,6 +363,7 @@ export function registerSetSessionRuntimeTool(
         targetSessionId,
         expectedGeneration: expected_generation,
         patch: {
+          ...(harness !== undefined ? { harness } : {}),
           ...(provider_id !== undefined ? { providerId: provider_id } : {}),
           ...(model !== undefined ? { model } : {}),
           ...(effort !== undefined ? { effort } : {}),
@@ -375,7 +383,7 @@ export function registerSetSessionRuntimeTool(
               profile: runtimeProfilePayload(result.pendingMutation.profile),
             }
           : null,
-        effective_boundary: result.status === 'deferred' ? 'next_turn' : 'immediate',
+        effective_boundary: result.effectiveBoundary ?? (result.status === 'deferred' ? 'next_turn' : 'immediate'),
       });
     },
   });

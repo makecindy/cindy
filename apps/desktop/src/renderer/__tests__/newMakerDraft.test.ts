@@ -1810,3 +1810,48 @@ describe('newMakerDraft store', () => {
     });
   });
 });
+
+
+it('does not stamp a prior owner draft during the synchronous auth handoff', async () => {
+  const { setNewMakerDraftOwner, getDraftForOwnerPreferenceSync, patchCurrentVendorPrefs } = await loadModule();
+  setNewMakerDraftOwner('A');
+  patchCurrentVendorPrefs({ model: 'owner-a-model' });
+  expect(getDraftForOwnerPreferenceSync('B')).toBeNull();
+  setNewMakerDraftOwner('B');
+  expect(getDraftForOwnerPreferenceSync('B')?.lastByVendor.cc.model).not.toBe('owner-a-model');
+  expect(getDraftForOwnerPreferenceSync('A')).toBeNull();
+});
+
+describe('Bot default model write-through', () => {
+  async function setup() {
+    const store = await loadModule();
+    const owner = await import('@/contexts/dataOwnerGeneration');
+    owner.setDataOwnerGeneration('bot-owner', 8);
+    store.setNewMakerDraftOwner('bot-owner');
+    store.patchVendorPrefs('codex', { model: 'luna', providerId: 'openai', effort: 'medium' });
+    store.switchVendor('codex');
+    const route = { harness: 'codex' as const, providerId: 'openai', model: 'luna', effort: 'medium', fastMode: false };
+    return { store, selection: { requestId: "test-default-selection", route: { ...route, effort: 'low' }, expectedRoute: route,
+      ownerStamp: { dataOwnerId: 'bot-owner', ownerGeneration: 8 }, expiresAt: Date.now() + 5000 } };
+  }
+  it('persists the same default used by new tasks and survives reloading', async () => {
+    const { store, selection } = await setup();
+    expect(store.applyAppDefaultModelSelection(selection)).toBe(true);
+    vi.resetModules();
+    const reloaded = await loadModule();
+    reloaded.setNewMakerDraftOwner('bot-owner');
+    expect(reloaded.getDraft().lastByVendor.codex).toMatchObject({ model: 'luna', effort: 'low', providerId: 'openai' });
+    expect(reloaded.getDraft().vendor).toBe('codex');
+    expect(reloaded.getDraft().defaultTupleSelectionCustomized).toBe(true);
+  });
+  it.each(['owner', 'expiry', 'selection', 'disk'] as const)('refuses %s changes without reporting success', async reason => {
+    const { store, selection } = await setup();
+    if (reason === 'owner') selection.ownerStamp.ownerGeneration = 7;
+    if (reason === 'expiry') selection.expiresAt = Date.now() - 1;
+    if (reason === 'selection') store.patchVendorPrefs('codex', { model: 'a-new-user-choice' });
+    if (reason === 'disk') vi.spyOn(memStorage, 'setItem').mockImplementation(() => { throw new Error('full'); });
+    const before = store.getDraft();
+    expect(store.applyAppDefaultModelSelection(selection)).toBe(false);
+    expect(store.getDraft()).toEqual(before);
+  });
+});

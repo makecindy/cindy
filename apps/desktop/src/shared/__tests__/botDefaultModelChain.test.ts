@@ -1,65 +1,49 @@
 import { describe, expect, it } from 'vitest';
-import { type AgentKind, type CatalogModel, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, type ProviderView } from '@cindy/model-providers';
 import { defaultBotModelChain } from '../botDefaultModelChain';
-import { resolveNewMakerDefaultTuple } from '../newMakerDefaultTuple';
-import { nextBotModelRoute } from '../botModelChain';
 
-function provider(id: string, agent: AgentKind, ids: string[], subscription = false): ProviderView {
-  return {
-    id, name: id, source: 'builtin', connected: true, agents: [agent],
-    auth: { method: subscription ? 'oauth' : 'managed' },
-    access: subscription ? { kind: 'subscription', product: id } : { kind: 'managed' },
-    routing: { [agent]: {
-      upstream: 'https://example.invalid',
-      authStrategy: subscription ? 'oauth-passthrough' : 'gateway-key',
-    } },
-    models: { [agent]: ids.map((model, index) => ({
-      id: model, name: model, mode: 'chat', group: 'openai', status: 'active',
-      contextWindow: 200_000, efforts: ['low', 'medium'], defaultEffort: 'medium',
-      supportsFastMode: false, sortOrder: index,
-    } as CatalogModel)) },
-  } as ProviderView;
-}
+const selected = { harness: 'codex' as const, providerId: 'my-connection', model: 'user-chosen-model', effort: 'high', fastMode: false };
+const providers = [{ id: 'my-connection', source: 'user', connected: true, agents: ['codex'], routing: { codex: { upstream: 'https://example.invalid', authStrategy: 'oauth-passthrough' } },
+  models: { codex: ['gpt-5.6-sol', selected.model].map(id => ({ id, mode: 'chat', status: 'active' })) },
+}] as unknown as ProviderView[];
+const args = { providers, providersLoading: false, availableAgents: new Set(['codex'] as const), availableAgentsLoaded: true };
 
-const availableAgents = new Set(['cc', 'codex', 'pi'] as const);
-function resolve(providers: ProviderView[], agents = availableAgents) {
-  return defaultBotModelChain({ providers, providersLoading: false, availableAgents: agents,
-    availableAgentsLoaded: true });
-}
-
-describe('Bot reuses the client default model policy', () => {
-  it('selects Codex and the same default as a normal new task without Gateway', () => {
-    const providers = [provider('openai', 'codex', ['gpt-5.6-sol'], true)];
-    const first = resolveNewMakerDefaultTuple({ providers, providersLoading: false,
-      availableAgents, availableAgentsLoaded: true });
-    expect(resolve(providers)[0]).toEqual({ harness: first!.vendor, providerId: first!.providerId,
-      model: first!.model, effort: first!.effort, fastMode: false });
-    expect(resolve(providers)[0]?.harness).toBe('codex');
+describe('Bot strictly follows the available Cindy default', () => {
+  it('uses the exact selected route and tuning without adding catalog recommendations', () => {
+    expect(defaultBotModelChain({ ...args, preferredRoute: selected })).toEqual([selected]);
   });
-
-  it('uses the exact client Gateway → OpenAI → Anthropic order for fallback', () => {
-    const gateway = provider('xd', 'pi', ['z-ai/glm-5.3-flash']);
-    gateway.models.pi![0]!.newSessionDefault = ['pi'];
-    gateway.models.pi![0]!.supportsImageInput = true;
-    const openai = provider('openai', 'codex', ['gpt-5.6-sol'], true);
-    const anthropic = provider('anthropic', 'claude-code', ['claude-opus-5'], true);
-    const chain = resolve([anthropic, openai, gateway]);
-    expect(chain.map((route) => route.providerId)).toEqual(['xd', 'openai', 'anthropic']);
-    expect(nextBotModelRoute(chain, chain[0]!)).toEqual(chain[1]);
+  it('resolves a legacy implicit source exactly like ordinary new tasks, without changing the model', () => {
+    const preferredRoute = { ...selected, providerId: null };
+    const providerId = effectiveSourceIdForModel(providers, null, selected.model, 'codex');
+    expect(defaultBotModelChain({ ...args, preferredRoute })).toEqual([{ ...selected, providerId }]);
+    expect(defaultBotModelChain({ ...args, preferredRoute, isModelEnabled: () => false })).toEqual([]);
+    expect(defaultBotModelChain({ ...args, preferredRoute: { ...preferredRoute, model: 'removed' } })).toEqual([]);
   });
-
-  it('does not invent GLM when there is no configured source or recommended model', () => {
-    expect(resolve([])).toEqual([]);
-    expect(resolve([provider('openai', 'codex', ['unconfigured-model'], true)])).toEqual([]);
-    expect(resolve([{ ...provider('openai', 'codex', ['gpt-5.6-sol'], true), connected: false }])).toEqual([]);
+  it('resolves implicit sources only among enabled connections offering the selected model', () => {
+    const sameModel = [
+      { ...providers[0], id: 'openai' },
+      { ...providers[0], id: 'other-connection' },
+    ] as ProviderView[];
+    expect(defaultBotModelChain({ ...args, providers: sameModel, preferredRoute: { ...selected, providerId: null },
+      isModelEnabled: (_agent, providerId) => providerId !== 'openai' }))
+      .toEqual([{ ...selected, providerId: 'other-connection' }]);
+    expect(defaultBotModelChain({ ...args, providers: sameModel, preferredRoute: { ...selected, providerId: 'openai' },
+      isModelEnabled: (_agent, providerId) => providerId !== 'openai' })).toEqual([]);
   });
-
-  it('uses the same installed-runtime gate and alternative harness as the client', () => {
-    const openai = provider('openai', 'codex', ['gpt-5.6-sol'], true);
-    expect(resolve([openai], new Set())).toEqual([]);
-    openai.agents.push('pi');
-    openai.models.pi = openai.models.codex;
-    expect(resolve([openai], new Set(['pi']))[0]?.harness).toBe('pi');
-    expect(resolve([openai])).toHaveLength(1);
+  it('returns empty before preferences or catalog/runtime readiness arrive', () => {
+    expect(defaultBotModelChain(args)).toEqual([]);
+    expect(defaultBotModelChain({ ...args, preferredRoute: selected, providersLoading: true })).toEqual([]);
+    expect(defaultBotModelChain({ ...args, preferredRoute: selected, availableAgentsLoaded: false })).toEqual([]);
+  });
+  it('never substitutes another enabled model when the selected model is disabled or removed', () => {
+    expect(defaultBotModelChain({ ...args, preferredRoute: selected, isModelEnabled: (_a, _p, m) => m.id !== selected.model })).toEqual([]);
+    expect(defaultBotModelChain({ ...args, preferredRoute: { ...selected, model: 'removed-model' } })).toEqual([]);
+  });
+  it('requires the selected connection and engine to remain available', () => {
+    for (const patch of [{ connected: false }, { suspended: true }, { modelDiscoveryFailure: 'offline' }]) {
+      expect(defaultBotModelChain({ ...args, preferredRoute: selected, providers: [{ ...providers[0]!, ...patch } as ProviderView] })).toEqual([]);
+    }
+    expect(defaultBotModelChain({ ...args, preferredRoute: selected, availableAgents: new Set() })).toEqual([]);
+    expect(defaultBotModelChain({ ...args, preferredRoute: { ...selected, providerId: 'other-account' } })).toEqual([]);
   });
 });

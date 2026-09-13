@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "Tasks needing attention: {{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "Lock screen control",
     "windowsready": "Enabled for this Cindy process. Restarting Cindy requires administrator authorization again.",
@@ -60,7 +63,50 @@
     "sendText": "Send text",
     "keys": "Keys",
     "showDesktop": "Desktop",
-    "allWindows": "All windows"
+    "allWindows": "All windows",
+    "reconnecting": "Reconnecting…",
+    "connectionBusy": "Another device is connected to this remote desktop. Exit remote desktop on that device, then try connecting again.",
+    "takeoverConnection": "Take over connection",
+    "connectionBusyTakeover": "Another device is connected to this desktop. Taking over will disconnect that device.",
+    "remoteDisabled": "Remote control is disabled on the computer.",
+    "accessRevoked": "Access to this computer was revoked.",
+    "directConnection": "Direct to computer",
+    "videoRelay": "Server video relay",
+    "screenshotRelay": "Server screenshot relay",
+    "shortcut": {
+      "open": "Open remote desktop",
+      "checking": "Checking remote desktop…",
+      "opening": "Opening remote desktop…",
+      "unavailable": "Remote desktop unavailable: {{reason}}",
+      "offline": "This computer is offline.",
+      "controlDisabled": "Allow control of this computer in Remote control settings.",
+      "unsupported": "This device does not support remote desktop.",
+      "checkFailed": "Could not check this computer. Hover again to retry.",
+      "noDisplay": "No available display on this computer."
+    },
+    "viewer": {
+      "settings": "Controls",
+      "sound": "Sound",
+      "fullscreen": "Full screen",
+      "exitFullscreen": "Exit full screen",
+      "fps": "Frame rate",
+      "quality": "Video quality",
+      "automatic": "Automatic",
+      "smooth": "Smooth",
+      "balanced": "Balanced",
+      "clear": "Clear",
+      "resolution": "Computer resolution",
+      "clipboardFailed": "Could not transfer text. Check control access and keep text under 16,384 characters.",
+      "settingsFailed": "Could not change the display setting.",
+      "inputHint": "Click the picture to type. Ctrl+Alt+Esc releases keyboard focus; Cmd/Ctrl+W closes this window.",
+      "controlPending": "Requesting control…",
+      "controlRequired": "View only. Take control to use the clipboard and desktop actions.",
+      "confirmDisconnect": "Disconnect from this computer?",
+      "confirmDisconnectHint": "The remote desktop connection will end. Apps on the computer will keep running.",
+      "disconnectFailed": "Could not disconnect. Try again.",
+      "clipboardShortcutHint": "Use {{modifier}}+C / {{modifier}}+V in the picture to copy and paste text between computers. Images and files are not supported yet.",
+      "resolutionHint": "Resolution changes affect the actual remote monitor."
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "Invalid input. Please check and try again.",
@@ -1487,6 +1533,41 @@
     "providers": {
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
+      "import": {
+        "title": "Import provider",
+        "destination": "Import destination",
+        "newConnection": "Create a new connection",
+        "keyOnly": "Only the supplied API keys will change. Existing models, routes and other settings stay unchanged.",
+        "modelsPending": "{{name}} is configured, but models could not be fetched. Retry in provider settings.",
+        "busyWarning": "This change requires reloading the local Codex service and may interrupt {{count}} running sessions. Continue?",
+        "close": "Close provider import",
+        "loadFailed": "This provider import link is invalid or has expired.",
+        "confirmFailed": "The provider could not be imported. Check the link or endpoint and try again.",
+        "oauthFailed": "The provider was added, but authorization did not finish. Try authorization again.",
+        "done": "{{name}} was imported",
+        "oauthDone": "{{name}} was added and authorized",
+        "cancel": "Cancel",
+        "create": "Import provider",
+        "update": "Update provider",
+        "replaceKey": "Replace API Key",
+        "addAndAuthorize": "Add and authorize",
+        "retryOAuth": "Try authorization again",
+        "harnesses": "Harness configuration",
+        "fetchAfterConfirm": "Models will be fetched after confirmation",
+        "modelCount": "{{count}} models",
+        "keyIncluded": "API Key included (hidden)",
+        "headers": "Headers: {{names}} (values hidden)",
+        "oauthHosts": "Authorization: {{authorizeHost}} · Token exchange: {{tokenHost}}",
+        "browserAuthorizationInProgress": "Complete authorization in the browser window that just opened.",
+        "replaceWarning": "The supplied API keys will replace those on the selected connection.",
+        "confirmNote": "Nothing is saved and no provider endpoint is contacted until you confirm.",
+        "authorizationPendingNote": "The provider was added. Authorization is still pending; you can retry or cancel it here.",
+        "action": {
+          "create": "A new local provider will be created as {{name}}.",
+          "update": "The existing provider {{name}} will be updated.",
+          "replace-key": "The locally stored API Key for {{name}} will be replaced."
+        }
+      },
       "order": {
         "hint": "Drag to reorder",
         "handle": "Reorder {{provider}}, position {{position}} of {{total}}. Use the arrow keys to move.",
@@ -1981,6 +2062,7 @@
       },
       "genericOAuth": {
         "subtitle": "Subscription account",
+        "reopenLoginPage": "Reopen sign-in page",
         "toast": {
           "loggedIn": "Signed in to {{name}}",
           "loginFailed": "Could not sign in to {{name}}. Try again.",
@@ -2520,6 +2602,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "WeCom",
       "title": "WeCom Intelligent Bot",
       "description": "Connect a WeCom intelligent bot and use {{appName}} from direct and group chats.",
       "status": {
@@ -2743,6 +2826,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "DingTalk",
       "title": "DingTalk Bot",
       "description": "Connect your own DingTalk bot and use {{appName}} in DMs and group chats through Stream mode.",
       "status": {
@@ -3198,6 +3282,7 @@
         "packageNotFound": "The package was not found. Check the package name or repository URL.",
         "versionNotFound": "That version was not found. Choose an available version and try again.",
         "stateUnavailable": "Cindy could not read the Pi extension state. Restart Cindy and try again.",
+        "runtimeRetirementFailed": "Pi extensions could not be refreshed. Restart Cindy before using Pi again.",
         "runtimeConvergencePartial": "The Pi extension change was saved, but some local Pi tasks may still be running the old extension. Restart Cindy before using Pi again.",
         "nativeCommandFailed": "Pi's package command failed. Check the source or version and try again."
       },
@@ -3562,7 +3647,7 @@
         "allowInboundAria": "Toggle whether {{name}} can control this device",
         "peerControlOff": "Remote control not enabled on that device",
         "masterOffHint": "Turn on the master switch above first",
-        "controllingThisMac": "Controlling this device"
+        "controllingThisMac": "Connected to Cindy"
       },
       "toast": {
         "revoked": "Access revoked for this device",
@@ -5631,9 +5716,9 @@
       "requestChanges": "Request changes",
       "planFeedbackPlaceholder": "Feedback (optional)"
     },
-    "controlledBy": "Controlled by {{name}}",
-    "controlledByMultiple": "Controlled by {{count}} devices",
-    "controlledTooltip": "Another device signed in to the same account is remotely controlling this machine. You can revoke its access.",
+    "controlledBy": "{{name}} is connected to Cindy",
+    "controlledByMultiple": "{{count}} devices are connected to Cindy",
+    "controlledTooltip": "These devices are connected to Cindy sessions. This count does not indicate who controls the desktop mouse and keyboard. You can revoke access.",
     "revokeAccess": "Revoke",
     "viewControllers": "View",
     "collapseControlledNotice": "Collapse remote control notice",
@@ -7157,6 +7242,7 @@
     }
   },
   "bots": {
+    "creationName": "Name",
     "settingsBack": "Back to Settings",
     "sidebar": {
       "newTaskWith": "Start a task with {{name}}"
@@ -7164,28 +7250,7 @@
     "title": "Teammates",
     "add": "Add teammate",
     "createWizard": {
-      "createFailed": "The teammate could not be created. Try again.",
-      "templates": {
-        "cindy": {
-          "title": "Cindy Assistant",
-          "defaultName": "Cindy",
-          "defaultDescription": "I like bringing a little order to busy days and hearing fresh ideas. Writing, research, everyday odds and ends—let’s work through them together."
-        },
-        "dash": {
-          "title": "Dash, Company CEO",
-          "defaultName": "Dash",
-          "defaultDescription": "I’m curious about good products and good businesses. I enjoy thinking things through, talking about possibilities, and making a clear decision together."
-        },
-        "lizi": {
-          "title": "LiZi, Technical Director",
-          "defaultName": "LiZi",
-          "defaultDescription": "I enjoy taking tricky problems apart and turning ideas into something real. When we hit a snag, we’ll figure it out together."
-        },
-        "custom": {
-          "title": "Custom"
-        }
-      },
-      "chooseTemplate": "Who would you like to invite?"
+      "createFailed": "The teammate could not be created. Try again."
     },
     "homeFolder": {
       "title": "Advanced configuration",
@@ -7331,7 +7396,15 @@
       "trackedTask": "Runs independently and returns its result",
       "stopTask": "Stop task",
       "messageSent": "Message sent to background task",
-      "watchWork": "Watch the work",
+      "watchWork": "Open task",
+      "viewPr": "View PR",
+      "stale": "Details may be outdated. Unable to refresh.",
+      "artifactCount": "{{count}} files",
+      "prCount": "{{count}} PRs",
+      "artifactCount_one": "{{count}} file",
+      "artifactCount_other": "{{count}} files",
+      "prCount_one": "{{count}} PR",
+      "prCount_other": "{{count}} PRs",
       "actionFailed": "That didn't go through. Try again.",
       "retrying": "Hasn't started yet — retrying…",
       "status": {
@@ -7410,6 +7483,47 @@
       "toolset": "Built-in tools",
       "unavailable": "Unavailable",
       "empty": "No matching capabilities"
+    },
+    "guided": {
+      "title": "Create a teammate",
+      "reviewTitle": "Your new teammate",
+      "question": "Briefly describe your expectations.",
+      "placeholder": "For example, help me practice English through everyday conversation and thoughtful corrections.",
+      "generate": "Create teammate",
+      "generating": "Shaping your teammate…",
+      "generationFailed": "Could not generate your teammate. Your idea is still here; please try again.",
+      "modelRequired": "Select an available default model in Cindy first.",
+      "cindyDescription": "I can help you use Cindy, connect your tools, and get things done together.",
+      "cindySummary": "Manage Cindy, connect tools, and get things done.",
+      "openCindy": "Open Cindy",
+      "addCindy": "Add Cindy",
+      "done": "Done",
+      "editName": "Edit name",
+      "duplicateName": "That name is taken. Choose a name you can easily tell apart.",
+      "introduction": "About me",
+      "editIntroduction": "Edit introduction",
+      "refine": "Adjust teammate",
+      "refinePlaceholder": "What would you change? For example, less formal and a little more playful.",
+      "back": "Back",
+      "invite": "Invite teammate",
+      "portrait": "Portrait {{number}}",
+      "upload": "Upload image",
+      "generateAvatar": "Generate portrait",
+      "useAvatar": "Use this portrait",
+      "examples": {
+        "english": {
+          "label": "Practice English",
+          "prompt": "Practice English with me through everyday conversation. Be patient and correct unnatural expressions thoughtfully."
+        },
+        "ideas": {
+          "label": "Explore ideas",
+          "prompt": "An imaginative creative partner with opinions, helping me develop writing and product ideas into practical plans."
+        },
+        "life": {
+          "label": "Talk about life",
+          "prompt": "A warm, funny companion who listens to the little things in my life without rushing to give advice."
+        }
+      }
     }
   },
   "common": {
@@ -7919,7 +8033,9 @@
       "loading": "Loading branches…",
       "loadFailed": "Failed to load branches — tap to retry",
       "currentTooltip": "Current branch",
-      "sourceTooltip": "Worktree source branch"
+      "sourceTooltip": "Worktree source branch",
+      "searchPlaceholder": "Search branches",
+      "noMatch": "No matching branches"
     },
     "folderPicker": {
       "selectFolder": "Select folder",
@@ -8543,7 +8659,9 @@
       "dismissTitle": "Dismiss this interruption notice"
     },
     "unreadFailedScheduleBanner": {
-      "text": "Some scheduled runs did not finish. Check the run history.",
+      "text": "An automatic run failed.",
+      "precheck": "Automatic checks are temporarily blocked.",
+      "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
       "dismissTitle": "Dismiss past failure notice"
     },
     "worktreeRestoreBanner": {
@@ -8993,6 +9111,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · from {{platform}}",
+      "attachedContext": "Context attached to this message",
+      "attachedContextCount": "Context attached to this message ({{count}})",
+      "groupBackgroundCount": "Group chat background ({{count}})",
+      "referencedMessages": "Referenced messages ({{count}})",
+      "referencedContext": "Referenced messages",
+      "groupBackground": "Group chat background",
       "viewThread": "View thread context ({{count}})"
     },
     "rewind": {
@@ -9396,7 +9520,7 @@
       "createProjectFailed": "Failed to create project",
       "projectsToggleExpand": "Expand all project sessions",
       "projectsToggleCollapse": "Collapse all project sessions",
-      "filterAria": "Sidebar display settings (Status: {{status}}, Vendor: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
+      "filterAria": "Sidebar display settings (Status: {{status}}, Harness: {{vendor}}, Last activity: {{lastActivity}}, Group by: {{groupBy}}, Sort by: {{sortBy}}, Projects: {{projects}})",
       "organizeSidebar": "Sidebar display settings",
       "filterAllText": "all",
       "filterSelectedProjects": "{{count}} selected",
@@ -9412,10 +9536,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "Group by project",
+        "project": "By project",
         "flat": "Flat list",
-        "device": "Group by device",
-        "dialogue": "Group chats together"
+        "device": "By device",
+        "dialogue": "By chat"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -9448,14 +9572,14 @@
         "priority": "Waiting on you first, then unread, then running, then by time"
       },
       "filterStatusHeading": "Status",
-      "filterAgentHeading": "Agent",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "Last activity",
       "filterGroupByHeading": "Group by",
       "filterSortByHeading": "Sort by",
       "filterTaskSortHeading": "Session sort",
-      "filterProjectOrderHeading": "Project order",
+      "filterProjectOrderHeading": "Project sorting",
       "filterProjectOrder": {
-        "activity": "Follow Session Sorting",
+        "activity": "Follow sessions",
         "custom": "Manual"
       },
       "filterProjectOrderTip": {
@@ -9702,7 +9826,23 @@
         "projects": "Projects",
         "dialogues": "Chats"
       },
-      "railNavCount": "{{count}} sessions"
+      "railNavCount": "{{count}} sessions",
+      "groupSummary": {
+        "project": "Project",
+        "dialogue": "Chat",
+        "device": "Device"
+      },
+      "taskStatusHeading": "Session status",
+      "taskStatus": {
+        "active": "Active",
+        "archived": "Archived",
+        "all": "All"
+      },
+      "sortTaskBy": {
+        "priority": "By priority",
+        "activity": "By recent activity",
+        "created": "By creation time"
+      }
     },
     "rename": {
       "aiRename": "Rename with AI",
@@ -10299,7 +10439,7 @@
         "enable": "Enable",
         "tooltip": "Runs this script when the task fires: exit code 0 lets the round proceed; exit code 2 skips this round (no agent started, no tokens used); script errors or timeouts block the run and record a failure. The script runs in the task's working directory; on Windows use an explicit interpreter (e.g. node check.mjs).",
         "infoAria": "View pre-run check rules",
-        "protocol": "How to write it: exit code 0 = run the task this round, exit code 2 = skip this round (no usage cost); other exit codes, errors, or timeouts block the run",
+        "protocol": "How to write it: exit code 0 = run the task this round, exit code 2 = skip this round (no usage cost); other exit codes, errors, or timeouts block the run. After a complete successful check, including a normal no-work skip, print CINDY_PRECHECK_OK on its own stdout line before exit 0 or 2. This clears earlier precheck warnings only, not execution failures. Do not print it during rate-limit backoff or incomplete checks.",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "Test",
         "testing": "Testing…",
@@ -11514,6 +11654,7 @@
       "qrExpired": "QR code expired, please start again",
       "registrationFailed": "Creation failed, please retry later",
       "silentStopExhausted": "The model returned empty responses repeatedly; auto-resume is paused. Click \"Continue\" to resume the task.",
+      "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
       "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
       "permissionTightenInterruptFailed": "Failed to stop the running task while tightening permissions; it may keep running without approval prompts until it finishes. Stop it manually if needed.",
       "codexAutoReviewUnavailable": "Auto-review is temporarily unavailable. The current action was blocked and permissions switched to Default. Retry the request; Cindy will ask when needed.",
@@ -12231,7 +12372,6 @@
     "unsavedDescription": "Leaving will discard these changes to the routine.",
     "discard": "Discard Changes",
     "continueEditing": "Keep Editing",
-
     "title": "Routines",
     "add": "Add Routine",
     "back": "Back to Routines",

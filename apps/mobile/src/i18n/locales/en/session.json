@@ -1,6 +1,8 @@
 {
   "failedScheduleNotice": {
-    "text": "Some scheduled runs did not finish. Check the run history.",
+    "text": "An automatic run failed.",
+    "precheck": "Automatic checks are temporarily blocked.",
+    "rateLimited": "Automatic checks are temporarily blocked by a request rate limit.",
     "dismissTitle": "Dismiss past failure notice"
   },
   "common": {
@@ -477,6 +479,7 @@
     "continueTask": "Continue Task",
     "retry": "Retry",
     "ignore": "Ignore",
+    "executionResultUnavailable": "Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.",
     "outputLimit": "The model reached its output limit, so this response may be incomplete. Send the next message to continue.",
     "toolUseLoopDetected": "The model repeated a tool call too many times, so Cindy stopped this turn to prevent an infinite loop. Send a new message to continue.",
     "toolUseLoopDetectedWithCount": "The model kept repeating invalid tool calls, so Cindy stopped this turn after {{count}} failures to prevent an infinite loop. Send a new message to continue.",

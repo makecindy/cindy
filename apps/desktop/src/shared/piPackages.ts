@@ -1,4 +1,6 @@
 import type { PiPackageCommandDiagnostic } from '@cindy/maker-core';
+import type { PiExtensionUiApi } from '@cindy/maker-core/pi-extension-ui';
+export type { PiExtensionUiApi } from '@cindy/maker-core/pi-extension-ui';
 
 export type PiPackageResourceKind = 'extension' | 'skill' | 'prompt' | 'theme';
 
@@ -18,41 +20,6 @@ export type PiPackageCompatibilityIssue =
   | 'tui-rendering'
   | 'cli-flags'
   | 'analysis-incomplete';
-
-export type PiExtensionUiApi =
-  | 'select'
-  | 'confirm'
-  | 'input'
-  | 'editor'
-  | 'notify'
-  | 'setStatus'
-  | 'setWorkingMessage'
-  | 'setWorkingVisible'
-  | 'setWorkingIndicator'
-  | 'setHiddenThinkingLabel'
-  | 'setWidget'
-  | 'setTitle'
-  | 'setEditorText'
-  | 'getEditorText'
-  | 'pasteToEditor'
-  | 'getEditorComponent'
-  | 'addAutocompleteProvider'
-  | 'setEditorComponent'
-  | 'setFooter'
-  | 'setHeader'
-  | 'setToolsExpanded'
-  | 'getToolsExpanded'
-  | 'custom'
-  | 'getAllThemes'
-  | 'getTheme'
-  | 'setTheme'
-  | 'theme'
-  | 'onTerminalInput'
-  | 'registerShortcut'
-  | 'registerFlag'
-  | 'registerMessageRenderer'
-  | 'registerMarkdownTransformer'
-  | 'registerEntryRenderer';
 
 export interface PiPackageResourceView {
   kind: PiPackageResourceKind;

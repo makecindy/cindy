@@ -13,7 +13,7 @@
 // 节流比 resume 通道(5 分钟)短得多:用户此刻正被挡在门外,恢复延迟直接可感;
 // 但仍要节流,避免在阻断屏上反复切前后台把 /latest 打成高频请求。
 
-import { compareVersions, evaluateBundleUpdate, parseLatestRelease } from './bundleUpdate';
+import { compareVersions, evaluateBundleUpdate, isSupportedBundleVersion, parseLatestRelease } from './bundleUpdate';
 import { withTimeout } from './startupOtaUpdate';
 
 export type ForcedUpdateRecheckOutcome = 'still-forced' | 'cleared' | 'error';
@@ -139,9 +139,10 @@ export function createForcedUpdateRechecker(
       const currentRuntimeVersion = String(deps.getCurrentRuntimeVersion() ?? '').trim();
       const currentVersion = String(deps.getCurrentVersion() ?? '').trim();
       if (!record || !currentRuntimeVersion || !currentVersion) return 'error';
+      if (!isSupportedBundleVersion(currentVersion)) return 'error';
       // 新鲜度门:读到的记录不得比正在阻断的目标更旧。可变指针 + 无 cache-buster 的请求
       // 会撞上 CDN 边缘的旧记录,那条记录没有 minVersion → 会把仍需强更的用户放出去。
-      // 记录缺 version(parseLatestRelease 容许空串)同样证明不了新鲜度,一并挡掉。
+      // 记录的 version 格式已在 parseLatestRelease 校验,这里继续挡掉版本更旧的记录。
       // 只有两边都有版本号时才比较。held.version 为空按"无新鲜度约束"处理而不是维持阻断
       // ——否则一条无 version 的记录会把用户永久钉在阻断屏上(定时与回前台核对都过不去)。
       // 这种情况现在不可达:evaluateBundleUpdate 要求 record 带 version 才判 forced,

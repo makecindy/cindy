@@ -72,6 +72,7 @@ import {
 } from './mainWindowMaximizeRecovery';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import {
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
@@ -466,7 +467,11 @@ import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
-import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
+import {
+  initAppBadgeService,
+  clearAllSessionAttention,
+  refreshWindowsAppBadge,
+} from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -633,6 +638,7 @@ import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
+import { RemoteDesktopViewerWindows } from './remote-desktop-viewer/windows.js';
 import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
 import { createResourceUsageWindow } from './resource-usage-window/window.js';
 import { registerResourceUsageWindowIpc } from './resource-usage-window/ipc.js';
@@ -744,6 +750,7 @@ import {
   builtinApiKeyHas,
   builtinApiKeyRemove,
   builtinApiKeyStore,
+  builtinApiKeyPresentationId,
   type BuiltinApiKeyBridgeDeps,
 } from './secrets/builtinApiKeyBridge.js';
 import {
@@ -853,6 +860,7 @@ import {
   handleIncomingOpenFolder,
   handleIncomingShareFile,
   findDeepLinkInArgv,
+  redactConsumedDeepLinkInArgv,
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   setDeepLinkMainWindow,
@@ -1575,6 +1583,7 @@ function clearAccountBoundaryAbortMark(): void {
 }
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
+  remoteDesktopViewerWindows.reset();
   const blockingFailures: unknown[] = [];
   // Goal timers can dispatch through the outgoing Maker while launch-fence
   // acquisition waits behind queued filesystem work. Invalidate them before
@@ -2344,6 +2353,10 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(sender =>
+  isResourceUsageOpenSender({ sender, mainWindow: mainWindowRef, senderWindow: BrowserWindow.fromWebContents(sender), isSecondaryAppWindow }),
+);
+remoteDesktopViewerWindows.register();
 
 setGhostsChangedObserver((ghosts) => {
   ghostPanelWindowsController.reconcile(ghosts);
@@ -2437,6 +2450,8 @@ registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
 setAppSessionCommitBoundaryHook(() => {
+  clearAllSessionAttention();
+  remoteDesktopViewerWindows.reset();
   ghostPanelWindowsController.closeForOwnerChange();
   clearAllSessionProviders();
   clearAllSessionRuntimeAxes();
@@ -2627,6 +2642,9 @@ if (started) {
   if (process.platform === 'linux' && waitedForUpdateLock && lockCleared) {
     try {
       const exe = process.execPath;
+      // Imports are deliberately not carried across an update restart. The user
+      // can click the original link again; never copy its credentials to a child.
+      redactConsumedDeepLinkInArgv(process.argv);
       const args = process.argv.slice(1);
       spawn(exe, args, { stdio: 'inherit', detached: true }).unref();
     } catch {
@@ -2960,7 +2978,9 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  refreshWindowsAppBadge();
   resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
+  remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
   ghostPanelWindowsController.setLocale(currentApplicationMenuLocale);
   refreshGhostLocalization();
@@ -3359,10 +3379,9 @@ function hasFocusedAppWindow(): boolean {
   return BrowserWindow.getAllWindows().some((win) => isFocusedAppContentWindow(win));
 }
 
-function syncAppFocusState(clearAttentionWhenFocused = false): void {
+function syncAppFocusState(): void {
   const appFocused = hasFocusedAppWindow();
   providerModelFocusRefreshTracker.sync(appFocused);
-  if (appFocused && clearAttentionWhenFocused) clearAllSessionAttention();
   getAgentIslandService()?.setAppFocused(appFocused);
 }
 
@@ -3382,7 +3401,7 @@ app.on('browser-window-focus', (_event, win) => {
     appFocusSyncTimer = null;
   }
   const focusedAppContent = isAppContentWindow(win);
-  syncAppFocusState(focusedAppContent);
+  syncAppFocusState();
   if (focusedAppContent) {
     syncPluginMarketForActiveOwner(30_000);
     // OAuth and system settings may complete outside Cindy. Focus is a
@@ -3573,6 +3592,7 @@ if (
       // 的中间态。
       const url = findDeepLinkInArgv(argv);
       if (url) {
+        redactConsumedDeepLinkInArgv(argv, url);
         handleIncomingDeepLink(url, 'second-instance');
       } else {
         const openFolder = findOpenFolderInArgv(argv);
@@ -3609,6 +3629,7 @@ if (
 if (process.platform !== 'darwin') {
   const coldStartUrl = findDeepLinkInArgv(process.argv);
   if (coldStartUrl) {
+    redactConsumedDeepLinkInArgv(process.argv, coldStartUrl);
     handleIncomingDeepLink(coldStartUrl, 'cold-start-argv');
   } else {
     const coldStartOpenFolder = findOpenFolderInArgv(process.argv);
@@ -3767,6 +3788,7 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
     }
     resourceUsageWindowController.destroyWindow();
+    remoteDesktopViewerWindows.reset();
     rsbWindowController.destroyWindow();
     ghostPanelWindowsController.destroyAllWindows();
     if (mainWindowRef === mainWindow) mainWindowRef = null;
@@ -3874,6 +3896,7 @@ const createWindow = () => {
     showMainWindowAndRestoreFullscreen(mainWindow, {
       restoreFullscreen: shouldRestoreMacFullscreen,
     });
+    refreshWindowsAppBadge();
     if (!app.isPackaged) markDesktopDevWindowReady();
     void runComputerUseSmokeIfRequested();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
@@ -3885,6 +3908,8 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
+      remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale ?? getPreferredApplicationLocale());
+      remoteDesktopViewerWindows.prewarm();
       // 右侧栏子窗口预热:复刻资源用量窗口模式,主窗口可见后后台创建
       // 隐藏 BrowserWindow 并加载轻量 renderer,后续 detach 点击仅 show+focus。
       rsbWindowController.prewarm();
@@ -3936,12 +3961,7 @@ const createWindow = () => {
   // Keyboard hello when the window comes back from hide / minimize / Dock.
   attachWorkLouderCodexWindowReveal(mainWindow);
 
-  // App badge: 用户把任意 Cindy 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
-  // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个
-  // 路由 / 开没开会话 —— 之前清除逻辑寄生在 cc-agent sidebar 且只清 activeSessionId,
-  // 离开会话页(设置 / skillhub)或红点属于后台会话时就清不掉。clearAllSessionAttention
-  // 只清 app 级 badge,不向 Agent Island 转发逐 session 已读;in-app 的会话小圆点仍由
-  // renderer 自行管理(点进会话才消),随后通过 clearSessionAttention 显式同步。
+  // App badge 投影当前任务关注总数；窗口聚焦不等于读完所有任务，不清总数。
   // Agent Island smart suppression 同样按 app 级焦点判断:主窗 blur 到「在新窗口打开」
   // 的会话副窗时,用户仍在 Cindy 内,不能把 appFocused 置 false。
 
@@ -4836,6 +4856,9 @@ const registerIpcHandlers = () => {
         /* no-op */
       }
     }
+    // device-link:payload 顶层 sessionId → session:<id> topic,打开该远程会话的
+    // 控制端据此实时切换订阅 / 网关显示形态(每会话生命周期通常仅一次,极低频)。
+    tapWindowBroadcast(MAKER_PUSH.CLAUDE_SESSION_ROUTE_CHANGED, { sessionId, route });
   });
 
   // ── 本机 Claude Code 订阅：只管理 Cindy 的使用许可 ─────────────────────────
@@ -5590,7 +5613,7 @@ const registerIpcHandlers = () => {
     ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       builtinApiKeyStore(builtinApiKeyDeps, providerId, value);
-      await retainProviderPresentationAfterAuthChange(providerId as string);
+      await retainProviderPresentationAfterAuthChange(builtinApiKeyPresentationId(providerId as string));
     },
   );
 
@@ -5601,7 +5624,7 @@ const registerIpcHandlers = () => {
       const active = getActiveAppSession();
       if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       builtinApiKeyRemove(builtinApiKeyDeps, providerId);
-      await retainProviderPresentationAfterAuthChange(providerId as string);
+      await retainProviderPresentationAfterAuthChange(builtinApiKeyPresentationId(providerId as string));
     },
   );
 
@@ -5923,6 +5946,7 @@ const registerIpcHandlers = () => {
         return getMakerCore();
       });
       registerMakerCoreIpc(ipcMaker, {
+        builtinApiKeyDeps,
         onAnySessionTurnKeepaliveChange: (isRunning) => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();
@@ -8009,7 +8033,8 @@ const registerIpcHandlers = () => {
       relaunch: (requestId) => {
         dbClientLog.info('database slimming relaunch requested');
         if (app.isPackaged) {
-          app.relaunch();
+          // Do not replay the native startup argv, which may contain an import Key.
+          app.relaunch({ args: process.argv.slice(1) });
         } else {
           // Forge owns the Vite server. A bare app.relaunch() outlives Forge,
           // then opens a white window against a dead localhost renderer. The
@@ -9816,3 +9841,5 @@ function startReadyWorktreeMaintenance(): void {
     void WorktreePool.recoverPool().catch((error) => dbClientLog.warn('worktree pool recovery postponed', error));
   }
 }
+
+onQuit('remote-desktop-viewer', () => remoteDesktopViewerWindows.reset(), 'sync');

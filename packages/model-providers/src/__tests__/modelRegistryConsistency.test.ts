@@ -1,4 +1,8 @@
-import { expandedRegistryEntries } from "../modelMetadataLayers.js";
+import {
+  expandedRegistryEntries,
+  referencePricesForRoute,
+  resolveModelMetadata,
+} from "../modelMetadataLayers.js";
 import { describe, expect, it } from "vitest";
 
 import modelRegistryJson from "../../catalog/model-registry.json" with { type: "json" };
@@ -38,9 +42,13 @@ function effectiveWindow(
 }
 
 /** 按 (currency, variant, effectiveFrom) 分组 —— 组内 band 构成一条完整价格轴。 */
-function bandGroups(route: ModelRegistryRoute): ModelReferencePrice[][] {
+function bandGroups(
+  entry: ModelRegistryEntry,
+  route: ModelRegistryRoute,
+): ModelReferencePrice[][] {
   const groups = new Map<string, ModelReferencePrice[]>();
-  for (const price of route.referencePrices ?? []) {
+  for (const price of referencePricesForRoute(rawRegistry, entry, route) ??
+    []) {
     const key = `${price.currency}|${price.variant}|${price.effectiveFrom}`;
     const group = groups.get(key);
     if (group) group.push(price);
@@ -54,6 +62,22 @@ function bandGroups(route: ModelRegistryRoute): ModelReferencePrice[][] {
 }
 
 describe("model registry data consistency", () => {
+  it("keeps the XD GLM middle-effort intent separate from public native tiers", () => {
+    expect(
+      resolveModelMetadata(rawRegistry, "new-supplier", "glm-5.3-flash"),
+    ).toMatchObject({ efforts: ["low", "high", "max"], defaultEffort: "high" });
+    expect(
+      resolveModelMetadata(rawRegistry, "xd", "z-ai/glm-5.3-flash", {
+        efforts: ["low", "medium", "high", "max"],
+      }),
+    ).toMatchObject({ defaultEffort: "medium" });
+    expect(
+      resolveModelMetadata(rawRegistry, "xd", "z-ai/glm-5.3-flash", {
+        efforts: [],
+      }),
+    ).toMatchObject({ efforts: [], defaultEffort: null });
+  });
+
   it("window / output declarations are positive and mutually sane", () => {
     for (const entry of registry.models) {
       if (entry.contextWindow !== undefined) {
@@ -96,7 +120,7 @@ describe("model registry data consistency", () => {
   it("price bands tile the input axis without gaps or overlaps", () => {
     for (const entry of registry.models) {
       for (const route of entry.routes) {
-        for (const group of bandGroups(route)) {
+        for (const group of bandGroups(entry, route)) {
           const label = `${entry.id} @ ${route.providerId}`;
           // 第一条必须从 0 起 —— 否则低输入段无价可循
           expect(
@@ -131,7 +155,7 @@ describe("model registry data consistency", () => {
     ]);
     for (const entry of registry.models) {
       for (const route of entry.routes) {
-        for (const group of bandGroups(route)) {
+        for (const group of bandGroups(entry, route)) {
           for (const band of group) {
             const lo = band.minInputTokens ?? 0;
             if (lo === 0) continue;
@@ -167,9 +191,20 @@ describe("model registry data consistency", () => {
     // 要么窗口虚高(#1429 主形态),要么漏了长上下文价档 —— 两者都必须在数据层修。
     for (const entry of registry.models) {
       for (const route of entry.routes) {
-        for (const group of bandGroups(route)) {
+        for (const group of bandGroups(entry, route)) {
           const top = group[group.length - 1]!;
           if (top.maxInputTokens === undefined) continue;
+          // Cyber's model page and consolidated pricing table disagree on long-input
+          // charges. Keep only the verified short quote; the calculator rejects
+          // requests outside this bound instead of extending that price silently.
+          if (
+            entry.id === "openai/gpt-5.6-cyber" &&
+            route.providerId === "openai"
+          ) {
+            expect(group).toHaveLength(1);
+            expect(top.maxInputTokens).toBe(272_001);
+            continue;
+          }
           for (const agent of route.agents) {
             const window = effectiveWindow(entry, agent);
             if (window === undefined) continue;

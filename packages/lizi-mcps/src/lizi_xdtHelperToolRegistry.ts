@@ -74,6 +74,15 @@ export interface XdtHelperToolSummary {
 
 export class XdtHelperToolRegistry {
   private readonly tools = new Map<string, XdtHelperToolDef>();
+  private readonly aliases = new Map<string, string>();
+
+  /** Accept saved legacy calls without advertising a second set of names to the model. */
+  registerAlias(alias: string, name: string): void {
+    if (this.tools.has(alias) || this.aliases.has(alias) || !this.tools.has(name)) {
+      throw new Error(`[cindyHelperToolRegistry] invalid tool alias: ${alias}`);
+    }
+    this.aliases.set(alias, name);
+  }
 
   register<T extends z.ZodRawShape>(def: {
     name: string;
@@ -82,18 +91,18 @@ export class XdtHelperToolRegistry {
     inputShape: T;
     handler: XdtHelperToolHandler<{ [K in keyof T]: z.infer<T[K]> }>;
   }): void {
-    if (this.tools.has(def.name)) {
+    if (this.tools.has(def.name) || this.aliases.has(def.name)) {
       throw new Error(`[cindyHelperToolRegistry] duplicate tool name: ${def.name}`);
     }
     this.tools.set(def.name, def as unknown as XdtHelperToolDef);
   }
 
   has(name: string): boolean {
-    return this.tools.has(name);
+    return this.get(name) !== undefined;
   }
 
   get(name: string): XdtHelperToolDef | undefined {
-    return this.tools.get(name);
+    return this.tools.get(this.aliases.get(name) ?? name);
   }
 
   list(category?: XdtHelperToolCategory): XdtHelperToolSummary[] {
@@ -116,7 +125,7 @@ export class XdtHelperToolRegistry {
   }
 
   async call(name: string, rawArgs: unknown): Promise<XdtHelperToolResult> {
-    const def = this.tools.get(name);
+    const def = this.get(name);
     if (!def) {
       return {
         content: [

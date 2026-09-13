@@ -115,8 +115,9 @@
 
 ### 3.1 安装与自动更新
 
-- 首次安装只来自四种明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
-  `ghost_forge_install`、用户点击某个市场条目的安装，或服务端为当前 owner 下发
+- 首次安装只来自明确依据：用户导入本地 `.cindy`、明确要求当前 Agent 调用
+  `ghost_forge_install`、用户点击某个市场条目的安装、当前 Agent 按用户请求与既有操作授权
+  调用 `ghost_market_install` 安装选定的缺失插件，或服务端为当前 owner 下发
   `defaultInstall`。安装成功默认启用；插件声明哪些能力不改变
   安装动作是否需要确认，因为安装不设能力确认弹窗。
 - 市场安装账本是后续更新来源的唯一事实：服务端市场按 `pluginId + releaseId` 路由，
@@ -300,9 +301,20 @@
   自动批准须区分 Full Access 与 AI 审阅来源，不得伪装为用户点击，也不得写入人工目录授权
   记忆。附件自动交接必须写独立 `ghost-tool-grant`，不得写 `ghost-grant`；这是回退兼容
   边界——旧客户端只认识后者，降级时必须 fail closed，不能把新版自动交接误读成人工永久
-  授权。切回 Ask 后新请求恢复确认。Auto 的工作区草稿创建和媒体路径揭示也逐动作送审，
-  审阅期间任务实例、轮次或权限变化时旧 allow 失效。Full Access 旁路**不适用于** workspace 创建、插件
-  Setup、OAuth、Secret／凭证或其它运行时确认边界，也不改变第 3.1 节的安装／更新策略。
+  授权。切回 Ask 后新请求恢复确认。在途插件操作统一沿用当前会话的操作审批：包括工作区
+  草稿创建、工作目录写入和媒体路径揭示，Full Access 不额外审批，Auto 进入现有统一审阅器，
+  Ask 沿用原确认流程。MCP 的 `prompt-each-time` 仅限制授权记忆，不得覆盖 Full Access，
+  也不得跳过 Auto 审阅。审批期间实例、权限或调用归属失效时，旧 allow 不可执行。
+  Plan 与操作审批档位正交：Host 副作用须先检查实时 Plan 状态，未知或切换中拒绝；
+  Plan 切换代次也参与审批后和落盘前复核，不能以数据库镜像或切回原状态恢复旧授权。
+  一次性 Plan 的 UI 开关在发送后熄灭，不代表当前 Plan 回合结束；授权判定使用 Provider
+  的执行态，不能只读下一轮开关。Claude Code 本地/SSH 的 Full Access 短路同样不能
+  放行当前 Plan 回合里的非只读工具；显式批准计划后才恢复底层操作审批档位。
+  这不扩大本轮来源/执行范围、不改变跨主机路径归属，不替用户填写 Setup、OAuth、Secret
+  等必要信息，也不改变第 3.1 节的安装／更新策略。自主面板或后台调用不得借用前台会话权限。
+  实现与回归见 [Session.reviewHostPermissionAction](../../packages/maker-core/src/session.ts)、
+  [fsSlot.test.ts](../../apps/desktop/src/main/cindy-brain/__tests__/fsSlot.test.ts) 和
+  [ghostWorkdirGate.test.ts](../../apps/desktop/src/main/mcp-integrations/__tests__/ghostWorkdirGate.test.ts)。
   `dir`／`save_dir` 批准的是裁决时解析到的 canonical realpath 快照；出票必须使用该规范路径
   并在票据库内重新解析核对，路径映射已变化时拒绝并要求重新确认。出票后真正读／写时仍须
   再次核对根与目标真身；保存文件必须排他创建且不跟随最终 symlink，不能让短命票据留下消费期

@@ -5,6 +5,7 @@ import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { DevProfileKind } from './devCliFlags.js';
 import { withLocalProfileMigrationStartupBarrier } from './localProfileDataMigration.js';
 import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
+import { readDesktopProcessIdentity, type DesktopProcessIdentity } from './desktopProcessIdentity.js';
 
 export type DesktopDevMode = 'remote' | 'local' | 'unknown';
 export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
@@ -25,6 +26,8 @@ export interface DesktopDevInstanceRecord {
   instanceId: string;
   pid: number;
   startedAtMs: number;
+  /** Optional for legacy readers/writers; absence never claims that a PID is stale. */
+  processIdentity?: DesktopProcessIdentity;
   updatedAtMs: number;
   rootDir: string;
   commit: string | null;
@@ -166,6 +169,21 @@ export async function beginDesktopDevInstance(
     });
     throw error;
   }
+
+  // bootstrap-electron is loaded after registration and must install privileged
+  // schemes before Electron's ready event. Never await an OS subprocess here.
+  // Identity is optional evidence: enrich only the instance we still own, using
+  // its latest readiness state, and never resurrect a record removed on exit.
+  void readDesktopProcessIdentity(pid).then((identity) => {
+    const current = trackedInstance;
+    if (!identity || current?.record.instanceId !== record.instanceId) return;
+    if (readJson(filePath)?.instanceId !== record.instanceId) return;
+    const updated = { ...current.record, processIdentity: identity };
+    atomicWriteJson(filePath, updated);
+    trackedInstance = { filePath, record: updated };
+  }).catch(() => {
+    // Failure to enrich must not affect startup or weaken legacy PID checks.
+  });
 
   return () => {
     if (trackedInstance?.record.instanceId === record.instanceId) trackedInstance = null;

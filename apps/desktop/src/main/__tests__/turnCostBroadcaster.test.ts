@@ -764,8 +764,9 @@ describe('codexUsageToTokens', () => {
         completionTokens: 200,
         reasoningTokens: 300,
         cachedTokens: 4000,
+        cacheCreationTokens: 50,
       }),
-    ).toEqual({ inputTokens: 1000, outputTokens: 200, cacheReadTokens: 4000, cacheCreateTokens: 0 });
+    ).toEqual({ inputTokens: 1000, outputTokens: 200, cacheReadTokens: 4000, cacheCreateTokens: 50 });
   });
 
   it('缺失字段按 0 处理', () => {

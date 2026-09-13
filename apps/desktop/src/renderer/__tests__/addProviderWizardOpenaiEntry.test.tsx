@@ -105,6 +105,7 @@ beforeEach(() => {
       })),
       providerOAuthLogin: vi.fn(async () => ({ ok: true })),
       providerOAuthCancel: vi.fn(),
+      onProviderOAuthProgress: vi.fn(() => () => undefined),
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
     },
   };

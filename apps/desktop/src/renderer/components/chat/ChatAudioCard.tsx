@@ -26,6 +26,7 @@
  * 提供 button-action 机制),所以组件签名只接 track,不接 actions。
  */
 
+import { CHAT_MEDIA_PLAY_BUTTON_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Copy, FolderOpen, Music, Pause, Play } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -221,7 +222,7 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
   return (
     <div
       className={cn(
-        'flex items-center gap-4 rounded-[12px] p-4',
+        'flex items-center gap-4 rounded-xl p-4',
         'border bg-[var(--msg-tool-card-bg)] border-[var(--msg-tool-card-border)]',
       )}
       // 跟 ChatImageView/ChatVideoView 的 tool-output 视觉宽度同步,确保
@@ -280,9 +281,9 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
                 onClick={handleCopyDescription}
                 aria-label={t('chat.media.audioCopyDescription')}
                 className={cn(
-                  'flex h-7 w-7 shrink-0 items-center justify-center rounded-[6px]',
+                  CHAT_ICON_BUTTON_CLASS,
+                  'h-7 w-7',
                   'text-[var(--msg-tool-card-chevron)] hover:bg-[var(--msg-code-inline-bg)]',
-                  'transition-colors',
                 )}
               >
                 <Copy size={16} />
@@ -309,23 +310,21 @@ export function ChatAudioCard({ track, sessionId }: ChatAudioCardProps) {
 
         {/* Player row: play btn + currentTime + progress + duration */}
         <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={handleTogglePlay}
-            aria-label={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}
-            className={cn(
-              'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
-              'bg-[var(--msg-tool-card-text)] text-[var(--msg-tool-card-bg)]',
-              'transition-opacity hover:opacity-90',
-            )}
-          >
-            {playing ? (
-              <Pause size={14} fill="currentColor" />
-            ) : (
-              // 把 play 三角往右挪 1px 视觉居中(三角自身重心偏左)
-              <Play size={14} fill="currentColor" style={{ marginLeft: 1 }} />
-            )}
-          </button>
+          <Tip text={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}>
+            <button
+              type="button"
+              onClick={handleTogglePlay}
+              aria-label={playing ? t('chat.media.audioPause') : t('chat.media.audioPlay')}
+              className={CHAT_MEDIA_PLAY_BUTTON_CLASS}
+            >
+              {playing ? (
+                <Pause size={14} fill="currentColor" />
+              ) : (
+                // 把 play 三角往右挪 1px 视觉居中(三角自身重心偏左)
+                <Play size={14} fill="currentColor" style={{ marginLeft: 1 }} />
+              )}
+            </button>
+          </Tip>
 
           <span className="shrink-0 text-11 font-medium tabular-nums text-[var(--msg-tool-card-chevron)]">
             {currentLabel}

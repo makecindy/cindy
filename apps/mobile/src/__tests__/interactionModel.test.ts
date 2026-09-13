@@ -967,6 +967,22 @@ describe('resolveInteractionResilient', () => {
   const noSleep = async () => undefined;
   const pendingItem = (requestId: string) => ({ request: { requestId } });
 
+  it.each(['ask_user_question', 'plan_review'])('does not treat a rejected %s receipt as success even when the request is absent', async (kind) => {
+    let queries = 0;
+    await expect(mobileInteractionModel.resolveInteractionResilient({
+      resolveInteraction: async () => ({ accepted: false }),
+      getPendingInteractions: async () => { queries++; return []; },
+    }, 's1', 'req-1', { kind }, { sleep: noSleep })).rejects.toThrow(i18n.t('interaction.panel.decisionNotAccepted'));
+    expect(queries).toBe(0);
+  });
+
+  it.each([{ accepted: true }, undefined])('accepts a successful or legacy receipt %j', async (receipt) => {
+    await expect(mobileInteractionModel.resolveInteractionResilient({
+      resolveInteraction: async () => receipt,
+      getPendingInteractions: async () => { throw new Error('should not reconcile'); },
+    }, 's1', 'req-1', {}, { sleep: noSleep })).resolves.toBeUndefined();
+  });
+
   it('NOT_CONNECTED(请求未出本机)自动重试直到成功,不触发权威查询', async () => {
     let resolveCalls = 0;
     let pendingCalls = 0;

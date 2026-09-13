@@ -198,7 +198,7 @@ describe('PiPackagesSection interaction state machine', () => {
     await waitFor(() => expect((updateButtons[1] as HTMLButtonElement).disabled).toBe(false));
   });
 
-  it('routes install directly into the Main-owned confirmation flow and keeps retry state on failure', async () => {
+  it('installs an extension with compatibility limits without a confirmation dialog and keeps retry state on failure', async () => {
     const firstMutation = deferred<{ available: boolean; packages: PiPackageView[] }>();
     const enabledPackage: PiPackageView = {
       ...packageView(1),

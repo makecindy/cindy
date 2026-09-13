@@ -7,6 +7,7 @@ import {
 import { composerDocumentFromSerializedMessage } from '@/session/composerDocument';
 import { buildMobileMessageCopyText } from '@/session/messageActions';
 import { normalizeRemoteMessages } from '@/session/messageNormalize';
+import { isShareableMessage } from '@/session/shareSelectionStore';
 import { buildMobileMessageRenderItems } from '@/session/messageRenderModel';
 import {
   MOBILE_TOOL_INPUT_PROJECTION_THRESHOLD_BYTES,
@@ -1130,6 +1131,29 @@ describe('normalizeRemoteMessages', () => {
     ]);
   });
 
+  it.each(['telegram', 'slack', 'feishu', 'lark', 'discord', 'wechat', 'wecom', 'dingtalk'])(
+    'ignores additive local %s context metadata and retains ordinary user presentation',
+    (im) => {
+      const text = 'a'.repeat(20_100);
+      const url = 'https://example.invalid/image.png';
+      const [item] = normalizeRemoteMessages([message({
+        id: 'local-im',
+        role: 'user',
+        content: { text, images: [{ url, originalName: 'image.png' }] },
+        agentMeta: {
+          imSource: {
+            im, userText: text, contentFormat: 'user-text',
+            contextSnapshot: { groupContext: 'background', groupMessageCount: 1 },
+          },
+        },
+      })]);
+      expect(item).toMatchObject({ body: text, kind: 'user', align: 'user' });
+      expect(item.hookSource).toBeUndefined();
+      expect(item.attachments).toEqual(expect.arrayContaining([expect.objectContaining({ uri: url })]));
+      expect(isShareableMessage(item)).toBe(true);
+    },
+  );
+
   it('normalizes Telegram hook source into a left-aligned Cindy card payload', () => {
     const [item, unknown] = normalizeRemoteMessages([
       message({
@@ -1347,6 +1371,23 @@ describe('normalizeRemoteMessages — /goal 持久记录与 plan_review 状态',
 
 
 describe('companion timeline', () => {
+  it.each([false, true])('keeps task instructions out of live/history display (source order: %s)', (preserveSourceOrder) => {
+    const content = '已向后台任务发送消息：读取 /workspace/project/AGENTS.md 并核对执行授权。';
+    const task = { v: 1, role: 'interjection', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Writer', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Write report' };
+    const legacy = message({ id: 'trace', role: 'assistant', content, agentMeta: { botCollaboration: task } });
+    const rows = normalizeRemoteMessages([
+      legacy,
+      message({ id: 'anchor', role: 'assistant', content, agentMeta: { botCollaboration: { ...task, role: 'delegation-request' } } }),
+      message({ id: 'user', role: 'user', content }),
+      message({ id: 'assistant', role: 'assistant', content }),
+      message({ id: 'invalid', role: 'assistant', content, agentMeta: { botCollaboration: { ...task, v: 2 } } }),
+    ], { preserveSourceOrder });
+    expect(rows.find(row => row.source.id === 'trace')).toMatchObject({ body: '', companion: { kind: 'task' } });
+    expect(rows.find(row => row.source.id === 'anchor')).toMatchObject({ body: '', companion: { kind: 'task' } });
+    for (const id of ['user', 'assistant', 'invalid']) expect(rows.find(row => row.source.id === id)?.body).toBe(content);
+    expect(legacy.content).toBe(content);
+  });
+
   it('preserves empty task anchors and private thread links for the mobile renderer', () => {
     const task = { v: 1, role: 'delegation-request', delegationId: 'job', fromBotId: 'bot', fromBotName: 'Writer', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Write report' };
     const direct = { v: 1, threadId: 'private', viewerBotId: 'bot', peerBotId: 'peer', peerBotName: 'Dash', direction: 'sent', sequence: 1, preview: 'Discuss report' };
@@ -1360,4 +1401,29 @@ describe('companion timeline', () => {
     expect(rows[2]).toMatchObject({ kind: 'assistant', body: 'Regular reply' });
     expect(rows[2].companion).toBeUndefined();
   });
+});
+
+it('keeps one companion task after its initiating explanation and before its completion reply', () => {
+  const meta = { v: 1, role: 'delegation-request', delegationId: 'd', fromBotId: 'bot', fromBotName: 'Cindy', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Change' };
+  const input = [
+    message({ id: 'start', role: 'user', content: 'Change' }),
+    message({ id: 'task', role: 'assistant', content: '', agentMeta: { botCollaboration: meta } }),
+    message({ id: 'intro', role: 'assistant', content: 'Started' }),
+    message({ id: 'trigger', role: 'user', content: 'finished', agentMeta: { synthetic: true } }),
+    message({ id: 'done', role: 'assistant', content: 'Done' }),
+  ];
+  const items = buildMobileMessageRenderItems(input, { preserveSourceOrder: true, isSessionStreaming: true });
+  expect(items.flatMap((item) => item.type === 'message' ? [item.message.source.id] : [])).toEqual(['start', 'intro', 'task', 'trigger', 'done']);
+});
+
+it.each(['steer', 'new', 'completion'])('pairs companion introduction across steer only: %s', (kind) => {
+  const meta = { v: 1, role: 'delegation-request', delegationId: 'd', fromBotId: 'bot', fromBotName: 'Cindy', toBotId: null, toBotName: 'Cindy', parentSessionId: 's1', childSessionId: 'child', objective: 'Change' };
+  const rows = normalizeRemoteMessages([
+    message({ id: 'start', role: 'user', content: 'Change' }),
+    message({ id: 'task', role: 'assistant', content: '', agentMeta: { botCollaboration: meta } }),
+    message({ id: 'interruption', role: 'user', content: 'Also', agentMeta: kind === 'steer' ? { delivery: 'steer' } : kind === 'completion' ? { synthetic: true } : {} }),
+    message({ id: 'intro', role: 'assistant', content: 'Started' }),
+  ], { preserveSourceOrder: true });
+  const ids = rows.map((row) => row.source.id);
+  expect(ids.indexOf('task') > ids.indexOf('intro')).toBe(kind === 'steer');
 });

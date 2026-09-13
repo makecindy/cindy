@@ -1198,6 +1198,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // overrideCongestionCooldown:用户显式回前台是拥塞冷却的合法豁免——
         // 冷却默认只拦请求路径的 un-park(waitUntilOnline),不拦真人操作。
         backgroundConnection.active();
+        // A short background stay can preserve a socket whose route changed.
+        // Probe without the ordinary hint cooldown; never delay content recovery.
+        if (client.getStatus() === 'online') client.notifyNetworkChanged({ urgent: true });
         // 快速切换(连接被宽限保住、始终 online)不会有 online 状态转换,这条显式
         // 补齐就是断档回填的唯一触发点;其余路径下它因 status 未 online 而空转。
         void rehydrateWithClient(client);
@@ -1222,12 +1225,19 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     // existing heartbeat fallback if the optional runtime module is unavailable.
     let disposed = false;
     let networkSubscription: { remove(): void } | undefined;
+    let previousNetwork: { type?: string; isConnected?: boolean; isInternetReachable?: boolean } | undefined;
     void import('expo-network').then(({ addNetworkStateListener }) => {
       if (disposed) return;
       networkSubscription = addNetworkStateListener((network) => {
-        mobileDebugLog('debug', 'device-link', 'network changed', { type: network.type, connected: network.isConnected, reachable: network.isInternetReachable, appState: AppState.currentState });
+        const urgent = previousNetwork !== undefined && (
+          previousNetwork.type !== network.type
+          || previousNetwork.isConnected !== network.isConnected
+          || previousNetwork.isInternetReachable !== network.isInternetReachable
+        );
+        previousNetwork = network;
+        mobileDebugLog('debug', 'device-link', 'network path notification', { type: network.type, connected: network.isConnected, reachable: network.isInternetReachable, appState: AppState.currentState, urgent });
         if (AppState.currentState !== 'active' || network.isConnected === false) return;
-        client.notifyNetworkChanged();
+        client.notifyNetworkChanged({ urgent });
       });
     }).catch(() => {
       console.warn('[device-link] network listener unavailable; using heartbeat recovery');

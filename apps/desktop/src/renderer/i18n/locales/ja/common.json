@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "対応が必要なセッション：{{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "ロック画面の操作",
     "windowsready": "現在の Cindy で有効です。Cindy を再起動すると管理者の再承認が必要です。",
@@ -60,7 +63,50 @@
     "sendText": "文字を送信",
     "keys": "キー",
     "showDesktop": "デスクトップ",
-    "allWindows": "すべてのウィンドウ"
+    "allWindows": "すべてのウィンドウ",
+    "reconnecting": "再接続中…",
+    "connectionBusy": "別のデバイスがこのリモートデスクトップに接続しています。そのデバイスでリモートデスクトップを終了してから、もう一度接続してください。",
+    "takeoverConnection": "接続を引き継ぐ",
+    "connectionBusyTakeover": "別のデバイスが接続中です。接続を引き継ぐと、そのデバイスは切断されます。",
+    "remoteDisabled": "コンピュータのリモート操作が無効になっています。",
+    "accessRevoked": "このコンピュータへのアクセスが取り消されました。",
+    "directConnection": "パソコンに直接接続",
+    "videoRelay": "サーバー経由の映像",
+    "screenshotRelay": "サーバー経由のスクリーンショット",
+    "shortcut": {
+      "open": "リモートデスクトップを開く",
+      "checking": "リモートデスクトップを確認中…",
+      "opening": "リモートデスクトップを開いています…",
+      "unavailable": "リモートデスクトップに接続できません：{{reason}}",
+      "offline": "このコンピュータはオフラインです。",
+      "controlDisabled": "リモートコントロール設定で、このコンピュータの操作を許可してください。",
+      "unsupported": "このデバイスはリモートデスクトップに対応していません。",
+      "checkFailed": "コンピュータの状態を確認できません。もう一度カーソルを合わせて再試行してください。",
+      "noDisplay": "このコンピュータに利用可能なディスプレイがありません。"
+    },
+    "viewer": {
+      "settings": "操作",
+      "sound": "音声",
+      "fullscreen": "全画面表示",
+      "exitFullscreen": "全画面表示を終了",
+      "fps": "フレームレート",
+      "quality": "画質",
+      "automatic": "自動",
+      "smooth": "スムーズ",
+      "balanced": "バランス",
+      "clear": "高画質",
+      "resolution": "コンピュータの解像度",
+      "clipboardFailed": "テキストを転送できません。操作権限を確認し、16,384 文字以内にしてください。",
+      "settingsFailed": "表示設定を変更できませんでした。",
+      "inputHint": "画面をクリックして入力します。Ctrl+Alt+Esc でキーボードのフォーカスを解除し、Cmd/Ctrl+W でこのウィンドウを閉じます。",
+      "controlPending": "操作権限を取得中…",
+      "controlRequired": "表示のみです。クリップボードとデスクトップ操作を使うには操作権限を取得してください。",
+      "confirmDisconnect": "このコンピュータとの接続を切断しますか？",
+      "confirmDisconnectHint": "リモートデスクトップ接続を終了します。コンピュータ上のアプリは動作を続けます。",
+      "disconnectFailed": "切断できませんでした。もう一度お試しください。",
+      "clipboardShortcutHint": "画面内で {{modifier}}+C / {{modifier}}+V を使うと、コンピュータ間でテキストをコピーして貼り付けられます。画像とファイルにはまだ対応していません。",
+      "resolutionHint": "解像度の変更はリモートの実際のモニターに反映されます。"
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "パラメータが無効です。確認して再試行してください。",
@@ -1487,6 +1533,41 @@
     "providers": {
       "title": "モデルプロバイダー",
       "subtitle": "モデルを選ぶときのソースです。各ソースは対応するモデルと課金方式を提供し、セッションごとに切り替えられます。",
+      "import": {
+        "title": "プロバイダーをインポート",
+        "destination": "インポート先",
+        "newConnection": "新しい接続を作成",
+        "keyOnly": "今回指定した API Key のみを変更します。既存のモデル、ルート、その他の設定は保持されます。",
+        "modelsPending": "{{name}} を設定しましたが、モデル一覧を取得できませんでした。プロバイダー設定で再試行してください。",
+        "busyWarning": "この変更にはローカル Codex サービスの再読み込みが必要で、実行中の {{count}} 件のセッションが中断される可能性があります。続行しますか？",
+        "close": "プロバイダーのインポートを閉じる",
+        "loadFailed": "このプロバイダーインポートリンクは無効か、有効期限が切れています。",
+        "confirmFailed": "インポートできませんでした。リンクまたはエンドポイントを確認して再試行してください。",
+        "oauthFailed": "プロバイダーは追加されましたが、認証が完了しませんでした。もう一度お試しください。",
+        "done": "{{name}} をインポートしました",
+        "oauthDone": "{{name}} を追加して認証しました",
+        "cancel": "キャンセル",
+        "create": "プロバイダーをインポート",
+        "update": "プロバイダーを更新",
+        "replaceKey": "API Key を置き換える",
+        "addAndAuthorize": "追加して認証",
+        "retryOAuth": "認証を再試行",
+        "harnesses": "Harness 設定",
+        "fetchAfterConfirm": "確認後にモデル一覧を取得します",
+        "modelCount": "{{count}} モデル",
+        "keyIncluded": "API Key を含む（内容は非表示）",
+        "headers": "ヘッダー：{{names}}（値は非表示）",
+        "oauthHosts": "認証：{{authorizeHost}} · Token 交換：{{tokenHost}}",
+        "browserAuthorizationInProgress": "先ほど開いたブラウザウィンドウで認証を完了してください。",
+        "replaceWarning": "今回指定した API Key で、選択した接続のキーを置き換えます。",
+        "confirmNote": "確認するまで保存もプロバイダーエンドポイントへのアクセスも行いません。",
+        "authorizationPendingNote": "プロバイダーは追加されましたが、認証は完了していません。ここで再試行またはキャンセルできます。",
+        "action": {
+          "create": "ローカルに新しいプロバイダー {{name}} を作成します。",
+          "update": "既存のプロバイダー {{name}} を更新します。",
+          "replace-key": "{{name}} のローカル API Key を置き換えます。"
+        }
+      },
       "order": {
         "hint": "ドラッグして並べ替え",
         "handle": "{{provider}}を並べ替えます。現在{{total}}件中{{position}}番目です。矢印キーで移動できます。",
@@ -1980,6 +2061,7 @@
       },
       "genericOAuth": {
         "subtitle": "サブスクリプションアカウント",
+        "reopenLoginPage": "ログインページを再度開く",
         "toast": {
           "loggedIn": "{{name}} にログインしました",
           "loginFailed": "{{name}} にログインできませんでした。再試行してください。",
@@ -2519,6 +2601,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "WeCom",
       "title": "WeCom インテリジェントボット",
       "description": "WeCom インテリジェントボットを接続し、DM とグループチャットから {{appName}} を利用します。",
       "status": {
@@ -2742,6 +2825,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "DingTalk",
       "title": "DingTalk ボット",
       "description": "自作の DingTalk ボットを接続し、Stream モードで DM やグループから {{appName}} を利用します。",
       "status": {
@@ -3197,6 +3281,7 @@
         "packageNotFound": "パッケージが見つかりません。パッケージ名またはリポジトリ URL を確認してください。",
         "versionNotFound": "そのバージョンが見つかりません。利用可能なバージョンを選んで再試行してください。",
         "stateUnavailable": "Cindy は Pi 拡張機能の状態を読み取れませんでした。Cindy を再起動して再試行してください。",
+        "runtimeRetirementFailed": "Pi 拡張機能を更新できませんでした。Pi を再び使用する前に Cindy を再起動してください。",
         "runtimeConvergencePartial": "Pi 拡張機能の変更は保存されましたが、一部のローカル Pi タスクが古い拡張機能を実行中の可能性があります。Pi を再び使用する前に Cindy を再起動してください。",
         "nativeCommandFailed": "Pi のネイティブパッケージコマンドが失敗しました。ソースまたはバージョンを確認してください。"
       },
@@ -3561,7 +3646,7 @@
         "allowInboundAria": "{{name}} に本機の操作を許可するか切り替え",
         "peerControlOff": "相手側が操作を許可していません",
         "masterOffHint": "先に上のメインスイッチをオンにしてください",
-        "controllingThisMac": "本機を操作中"
+        "controllingThisMac": "Cindy に接続中"
       },
       "toast": {
         "revoked": "このデバイスのアクセス権を撤回しました",
@@ -5629,9 +5714,9 @@
       "requestChanges": "修正を依頼",
       "planFeedbackPlaceholder": "フィードバック(任意)"
     },
-    "controlledBy": "{{name}} が操作中",
-    "controlledByMultiple": "{{count}} 台のデバイスが操作中",
-    "controlledTooltip": "同じアカウントでログイン中の別のデバイスがこの端末をリモート操作しています。アクセス権限を撤回できます。",
+    "controlledBy": "{{name}} が Cindy に接続中",
+    "controlledByMultiple": "{{count}} 台のデバイスが Cindy に接続中",
+    "controlledTooltip": "Cindy のセッションに接続しているデバイスです。この数はデスクトップのマウスやキーボードを操作している台数ではありません。アクセス権限を撤回できます。",
     "revokeAccess": "権限を撤回",
     "viewControllers": "表示",
     "collapseControlledNotice": "リモート操作の通知を折りたたむ",
@@ -7155,6 +7240,7 @@
     }
   },
   "bots": {
+    "creationName": "名前",
     "settingsBack": "設定に戻る",
     "sidebar": {
       "newTaskWith": "{{name}}と新しいタスクを始める"
@@ -7162,28 +7248,7 @@
     "title": "仲間",
     "add": "仲間を追加",
     "createWizard": {
-      "createFailed": "仲間を作成できませんでした。もう一度お試しください。",
-      "templates": {
-        "cindy": {
-          "title": "Cindy アシスタント",
-          "defaultName": "Cindy",
-          "defaultDescription": "忙しい毎日を少し整えることと、新しいアイデアを聞くことが好きです。文章も調べものも、日々のちょっとしたことも一緒に考えましょう。"
-        },
-        "dash": {
-          "title": "Dash 会社 CEO",
-          "defaultName": "Dash",
-          "defaultDescription": "よい製品やビジネスに興味津々です。可能性をじっくり話し合って、一緒に決めていくのが好きです。"
-        },
-        "lizi": {
-          "title": "LiZi 技術責任者",
-          "defaultName": "LiZi",
-          "defaultDescription": "難しい問題を解きほぐし、アイデアを形にするのが好きです。困ったときは一緒に答えを探しましょう。"
-        },
-        "custom": {
-          "title": "カスタム"
-        }
-      },
-      "chooseTemplate": "誰を招待しますか"
+      "createFailed": "仲間を作成できませんでした。もう一度お試しください。"
     },
     "homeFolder": {
       "title": "詳細設定",
@@ -7329,7 +7394,15 @@
       "trackedTask": "独立して実行し、結果を自動で返します",
       "stopTask": "タスクを停止",
       "messageSent": "バックグラウンドタスクにメッセージを送信しました",
-      "watchWork": "作業の様子を見る",
+      "watchWork": "タスクを開く",
+      "viewPr": "PR を見る",
+      "stale": "情報が古い可能性があります。更新できません。",
+      "artifactCount": "ファイル {{count}} 件",
+      "prCount": "PR {{count}} 件",
+      "artifactCount_one": "ファイル {{count}} 件",
+      "artifactCount_other": "ファイル {{count}} 件",
+      "prCount_one": "PR {{count}} 件",
+      "prCount_other": "PR {{count}} 件",
       "actionFailed": "送信できませんでした。もう一度お試しください。",
       "retrying": "まだ開始できていません。再試行中…",
       "status": {
@@ -7408,6 +7481,47 @@
       "toolset": "組み込みツール",
       "unavailable": "利用不可",
       "empty": "一致する機能はありません"
+    },
+    "guided": {
+      "title": "パートナーを作成",
+      "reviewTitle": "新しいパートナー",
+      "question": "期待することを簡単に書いてください。",
+      "placeholder": "例えば、日常の話をしながら英会話を練習して、表現を丁寧に直してほしい。",
+      "generate": "パートナーを生成",
+      "generating": "パートナーを考えています…",
+      "generationFailed": "生成できませんでした。入力内容は残っています。もう一度お試しください。",
+      "modelRequired": "まず Cindy で利用可能な既定のモデルを選択してください。",
+      "cindyDescription": "Cindy の使い方やツールの接続をお手伝いし、一緒にやり遂げます。",
+      "cindySummary": "Cindy の管理、ツールの接続、仕事のお手伝い。",
+      "openCindy": "Cindy を開く",
+      "addCindy": "Cindy を追加",
+      "done": "完了",
+      "editName": "名前を編集",
+      "duplicateName": "同じ名前のパートナーがいます。区別しやすい名前を選んでください。",
+      "introduction": "自己紹介",
+      "editIntroduction": "自己紹介を編集",
+      "refine": "パートナーを調整",
+      "refinePlaceholder": "何を変えたいですか？例えば、もっと気さくでユーモアのある感じに。",
+      "back": "戻る",
+      "invite": "パートナーを招待",
+      "portrait": "アバター {{number}}",
+      "upload": "画像をアップロード",
+      "generateAvatar": "アバターを生成",
+      "useAvatar": "この画像を使う",
+      "examples": {
+        "english": {
+          "label": "英会話の練習",
+          "prompt": "日常の会話で英語を練習したい。辛抱強く聞いて、不自然な表現を丁寧に直してほしい。"
+        },
+        "ideas": {
+          "label": "アイデアを考える",
+          "prompt": "想像力と自分の意見を持つ創作パートナー。文章や製品のアイデアを具体的な計画にしてほしい。"
+        },
+        "life": {
+          "label": "日々の話",
+          "prompt": "温かくユーモアがあり、すぐに助言せず日々の小さな話を聞いてくれるパートナー。"
+        }
+      }
     }
   },
   "common": {
@@ -7917,7 +8031,9 @@
       "loading": "ブランチを読み込み中…",
       "loadFailed": "ブランチの読み込みに失敗しました。タップして再試行",
       "currentTooltip": "現在のブランチ",
-      "sourceTooltip": "worktree のソースブランチ"
+      "sourceTooltip": "worktree のソースブランチ",
+      "searchPlaceholder": "ブランチを検索",
+      "noMatch": "一致するブランチがありません"
     },
     "folderPicker": {
       "selectFolder": "フォルダを選択",
@@ -8537,7 +8653,9 @@
       "dismissTitle": "この中断通知を閉じる"
     },
     "unreadFailedScheduleBanner": {
-      "text": "完了しなかったスケジュール実行があります。実行履歴を確認してください。",
+      "text": "自動実行に失敗した記録があります。",
+      "precheck": "自動チェックが一時的に停止しています。",
+      "rateLimited": "リクエスト制限により自動チェックが一時的に停止しています。",
       "dismissTitle": "過去の失敗通知を閉じる"
     },
     "worktreeRestoreBanner": {
@@ -8987,6 +9105,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}} から",
+      "attachedContext": "このメッセージに添付されたコンテキスト",
+      "attachedContextCount": "このメッセージに添付されたコンテキスト（{{count}}）",
+      "groupBackgroundCount": "グループチャットの背景（{{count}}）",
+      "referencedMessages": "参照メッセージ（{{count}}）",
+      "referencedContext": "参照メッセージ",
+      "groupBackground": "グループチャットの背景",
       "viewThread": "スレッドの文脈を見る ({{count}})"
     },
     "rewind": {
@@ -9381,7 +9505,7 @@
       "createProjectFailed": "プロジェクトの作成に失敗しました",
       "projectsToggleExpand": "すべてのプロジェクトセッションを展開",
       "projectsToggleCollapse": "すべてのプロジェクトセッションを折りたたむ",
-      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Agent：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
+      "filterAria": "サイドバー表示設定（ステータス：{{status}}、Harness：{{vendor}}、最終アクティビティ：{{lastActivity}}、グループ：{{groupBy}}、並び替え：{{sortBy}}、プロジェクト：{{projects}}）",
       "organizeSidebar": "サイドバー表示設定",
       "filterAllText": "すべて",
       "filterSelectedProjects": "{{count}} 件選択",
@@ -9397,10 +9521,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "プロジェクトでグループ化",
+        "project": "プロジェクト別",
         "flat": "フラット表示",
-        "device": "デバイスでグループ化",
-        "dialogue": "チャットをまとめる"
+        "device": "デバイス別",
+        "dialogue": "チャット別"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイスグループを使えません",
       "deviceGroup": {
@@ -9433,14 +9557,14 @@
         "priority": "要対応を最上位に、次に未読、実行中、残りは時間順"
       },
       "filterStatusHeading": "ステータス",
-      "filterAgentHeading": "エージェント",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最終アクティビティ",
       "filterGroupByHeading": "グループ",
       "filterSortByHeading": "並び替え",
       "filterTaskSortHeading": "セッション順",
-      "filterProjectOrderHeading": "プロジェクト順",
+      "filterProjectOrderHeading": "プロジェクトの並び順",
       "filterProjectOrder": {
-        "activity": "セッションの並び順に従う",
+        "activity": "セッションに従う",
         "custom": "手動"
       },
       "filterProjectOrderTip": {
@@ -9687,7 +9811,23 @@
         "projects": "プロジェクト",
         "dialogues": "チャット"
       },
-      "railNavCount": "{{count}} 件のセッション"
+      "railNavCount": "{{count}} 件のセッション",
+      "groupSummary": {
+        "project": "プロジェクト",
+        "dialogue": "チャット",
+        "device": "デバイス"
+      },
+      "taskStatusHeading": "セッションの状態",
+      "taskStatus": {
+        "active": "アクティブ",
+        "archived": "アーカイブ済み",
+        "all": "すべて"
+      },
+      "sortTaskBy": {
+        "priority": "優先度順",
+        "activity": "最近のアクティビティ順",
+        "created": "作成日時順"
+      }
     },
     "rename": {
       "aiRename": "AIで名前を再生成",
@@ -10284,7 +10424,7 @@
         "enable": "有効化",
         "tooltip": "タスクの起動時にこのスクリプトを先に実行します。終了コード 0 で今回の実行を許可し、終了コード 2 で今回をスキップします（Agent は起動せず、トークンも消費しません）。スクリプトのエラーやタイムアウト時は実行を阻止し、失敗結果を記録します。スクリプトはタスクの作業ディレクトリで実行されます。Windows では明示的なインタープリタ（例: node check.mjs）を指定してください。",
         "infoAria": "事前チェックのルールを表示",
-        "protocol": "スクリプトの書き方:終了コード 0 = 今回タスクを実行、終了コード 2 = 今回はスキップ(使用量を消費しません)。その他の終了コード、エラー、タイムアウトは実行を阻止します",
+        "protocol": "スクリプトの書き方:終了コード 0 = 今回タスクを実行、終了コード 2 = 今回はスキップ(使用量を消費しません)。その他の終了コード、エラー、タイムアウトは実行を阻止します。チェックが正常に完了したら（処理対象がない場合も含む）、exit 0/2 の前に stdout の独立した行に CINDY_PRECHECK_OK を出力してください。過去の事前チェックの警告だけを解除し、実行失敗は解除しません。レート制限による待機中やチェックが不完全な場合は出力しないでください。",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "テスト",
         "testing": "テスト中…",
@@ -11498,6 +11638,7 @@
       "qrExpired": "QR コードが期限切れです。最初からやり直してください",
       "registrationFailed": "作成に失敗しました。後でもう一度お試しください",
       "silentStopExhausted": "モデルが空の応答を繰り返し返したため、自動再開を一時停止しました。「続行」をクリックしてタスクを再開してください。",
+      "executionResultUnavailable": "実行結果を取得できなかったため、自動継続を停止しました。既存の実行結果を確認するようアシスタントに依頼してください。",
       "outputLimit": "モデルが出力上限に達したため、この応答は不完全な可能性があります。次のメッセージを送信して続行できます。",
       "permissionTightenInterruptFailed": "権限を厳格化する際に実行中のタスクを停止できませんでした。タスクは終了まで確認なしで実行され続ける可能性があります。必要に応じて手動で停止してください。",
       "codexAutoReviewUnavailable": "自動レビューは一時的に利用できません。現在の操作をブロックし、デフォルト権限に切り替えました。もう一度実行してください。必要な場合は確認します。",
@@ -12214,7 +12355,6 @@
     "unsavedDescription": "戻ると、このルーチンへの変更が破棄されます。",
     "discard": "変更を破棄",
     "continueEditing": "編集を続ける",
-
     "title": "ルーティン",
     "add": "ルーティンを追加",
     "back": "ルーティンに戻る",

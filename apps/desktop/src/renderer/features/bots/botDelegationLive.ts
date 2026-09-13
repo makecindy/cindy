@@ -27,6 +27,7 @@ interface SessionEntry {
    * 不区分的话，第二种情况会被当成第一种，卡片就永远停在带呼吸点的「正在开始」。
    */
   resolved: boolean;
+  stale: boolean;
   listeners: Set<() => void>;
   unsubscribe: (() => void) | null;
   reloadGeneration: number;
@@ -49,6 +50,7 @@ function ensureEntry(sessionId: string): SessionEntry {
   const entry: SessionEntry = {
     rows: [],
     resolved: false,
+    stale: false,
     listeners: new Set(),
     unsubscribe: null,
     reloadGeneration: 0,
@@ -73,12 +75,14 @@ async function reload(sessionId: string): Promise<void> {
     // 短暂读取失败不能把已经显示的持久任务卡抹掉。成功时才替换快照；失败时
     // 保留上一次可核实的状态，并让卡片继续可见。
     if (result.ok) entry.rows = result.delegations;
+    entry.stale = !result.ok;
     entry.resolved = true;
     emit(entry);
   } catch {
     if (!isDataOwnerGenerationCurrent(owner)) return;
     if (sessions.get(sessionId) !== entry || entry.reloadGeneration !== generation) return;
     entry.resolved = true;
+    entry.stale = true;
     emit(entry);
   }
 }
@@ -90,8 +94,12 @@ function subscribe(sessionId: string, listener: () => void): () => void {
     const deviceId = remoteProjectsStore.getSessionDeviceId(sessionId);
     const offPush = deviceId
       ? window.electronAPI.deviceLink.onRemotePush((push, stamp) => {
-          if (push.deviceId !== deviceId || push.channel !== 'maker:bot-delegation:changed'
-            || !isDeviceLinkRemotePushCurrent(push, stamp)) return;
+          if (
+            push.deviceId !== deviceId ||
+            push.channel !== 'maker:bot-delegation:changed' ||
+            !isDeviceLinkRemotePushCurrent(push, stamp)
+          )
+            return;
           const payload = push.payload as { parentSessionId?: string };
           if (payload?.parentSessionId === sessionId) void reload(sessionId);
         })
@@ -99,11 +107,20 @@ function subscribe(sessionId: string, listener: () => void): () => void {
           if (!isDataOwnerPushCurrent(ownerStamp) || payload.parentSessionId !== sessionId) return;
           void reload(sessionId);
         });
-    const offStatus = deviceId ? window.electronAPI.deviceLink.onStatusChanged((state) => {
-      if (state.status === 'online') void reload(sessionId);
-      else entry.reloadGeneration += 1;
-    }) : () => {};
-    entry.unsubscribe = () => { offPush(); offStatus(); };
+    const offStatus = deviceId
+      ? window.electronAPI.deviceLink.onStatusChanged((state) => {
+          if (state.status === 'online') void reload(sessionId);
+          else {
+            entry.reloadGeneration += 1;
+            entry.stale = true;
+            emit(entry);
+          }
+        })
+      : () => {};
+    entry.unsubscribe = () => {
+      offPush();
+      offStatus();
+    };
     void reload(sessionId);
   }
   return () => {
@@ -124,6 +141,7 @@ export interface BotDelegationLive {
    * 调用方必须据此改口，不能继续画「正在进行」。
    */
   resolved: boolean;
+  stale: boolean;
 }
 
 /** 取本会话发起的某一个委派的实时行，附带「首次拉取是否已落地」。 */
@@ -131,19 +149,20 @@ export function useBotDelegation(
   sessionId: string | null,
   delegationId: string,
 ): BotDelegationLive {
-  const [live, setLive] = useState<BotDelegationLive>({ row: null, resolved: false });
+  const [live, setLive] = useState<BotDelegationLive>({ row: null, resolved: false, stale: false });
   const read = useCallback((): BotDelegationLive => {
-    if (!sessionId) return { row: null, resolved: false };
+    if (!sessionId) return { row: null, resolved: false, stale: false };
     const entry = sessions.get(sessionId);
     return {
       row: entry?.rows.find((item) => item.id === delegationId) ?? null,
       resolved: entry?.resolved ?? false,
+      stale: entry?.stale ?? false,
     };
   }, [delegationId, sessionId]);
 
   useEffect(() => {
     if (!sessionId) {
-      setLive({ row: null, resolved: false });
+      setLive({ row: null, resolved: false, stale: false });
       return;
     }
     setLive(read());

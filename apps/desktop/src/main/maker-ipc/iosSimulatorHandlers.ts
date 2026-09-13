@@ -280,7 +280,7 @@ async function callIOSSimulatorHost<T>(
   if (!sessionContext) {
     throwIpcError('PERMISSION_DENIED', 'iOS Simulator access is limited to the current task');
   }
-  const workingDir = sessionContext.workingDir?.trim() || null;
+  const workingDir = sessionContext.workingDir?.trim() ? sessionContext.workingDir : null;
   const ownerScopeKey = deps.getOwnerScopeKey();
   const assertOwnerScopeCurrent = (): void => {
     if (deps.isOwnerBoundaryPending() || deps.getOwnerScopeKey() !== ownerScopeKey) {

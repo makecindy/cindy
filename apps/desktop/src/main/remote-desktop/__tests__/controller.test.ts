@@ -40,6 +40,66 @@ function harness() {
   };
 }
 describe('remote desktop authority and lifecycle', () => {
+  it('keeps viewing and peer isolation after native input fails, and allows explicit control recovery', async () => {
+    const h = harness(),
+      lease = await h.start();
+    await h.controller.request('phone', { op: 'control', lease: lease.lease, enabled: true });
+    h.controller.releaseControl();
+    expect(h.controller.state).toEqual({ peer: 'phone', controlling: false });
+    expect(h.deps.stopInput).toHaveBeenCalledOnce();
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    await expect(
+      h.controller.request('phone', { op: 'heartbeat', lease: lease.lease }),
+    ).resolves.toEqual({ controlling: false });
+    await expect(
+      h.controller.request('phone', { op: 'frame', lease: lease.lease }),
+    ).resolves.toEqual({ jpeg: 'jpeg' });
+    await expect(h.controller.request('other', { op: 'start', displayId: '1' })).rejects.toThrow(
+      'DESKTOP_BUSY',
+    );
+    await expect(
+      h.controller.request('phone', {
+        op: 'input',
+        lease: lease.lease,
+        sequence: 1,
+        events: [{ kind: 'move', x: 0.5, y: 0.5 }],
+      }),
+    ).rejects.toThrow('DESKTOP_VIEW_ONLY');
+    await expect(
+      h.controller.request('phone', { op: 'control', lease: lease.lease, enabled: true }),
+    ).resolves.toEqual({ controlling: true });
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+  });
+
+  it('expires abandoned leases when the host status is polled', async () => {
+    const h = harness();
+    await h.start();
+    h.advance(120_000);
+
+    expect(h.controller.state).toBeNull();
+    expect(h.deps.stopInput).toHaveBeenCalledOnce();
+    expect(h.deps.stopVideo).toHaveBeenCalledOnce();
+  });
+  it('does not grant control after the native helper fails during startup', async () => {
+    const h = harness(),
+      lease = await h.start();
+    let ready!: () => void;
+    h.deps.startInput = () =>
+      new Promise<void>((resolve) => {
+        ready = resolve;
+      });
+    const starting = h.controller.request('phone', {
+      op: 'control',
+      lease: lease.lease,
+      enabled: true,
+    });
+    h.controller.releaseControl();
+    ready();
+    await expect(starting).rejects.toThrow();
+    expect(h.controller.state).toEqual({ peer: 'phone', controlling: false });
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+  });
+
   it('locks only on explicit owner exit and blocks takeover until lock completes', async () => {
     const h = harness(), first = await h.start();
     let finish!: () => void;
@@ -536,6 +596,62 @@ describe('remote desktop authority and lifecycle', () => {
       await expect(pending).resolves.toHaveProperty('lease');
       expect(h.deps.stopVideo).not.toHaveBeenCalled();
     }
+  });
+  it('releases control after an input failure without ending the lease or its media', async () => {
+    const h = harness();
+    const lease = await h.start();
+    await h.controller.request('phone', { op: 'control', lease: lease.lease, enabled: true });
+    h.controller.input(lease.lease, 1, [{ kind: 'release' }]);
+    expect(h.deps.input).toHaveBeenCalledTimes(1);
+    // The helper died: control goes, the picture and the lease stay.
+    h.controller.releaseControl();
+    expect(h.controller.state).toEqual({ peer: 'phone', controlling: false });
+    expect(h.controller.hasLease(lease.lease)).toBe(true);
+    expect(h.deps.stopInput).toHaveBeenCalledTimes(1);
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    expect(h.deps.changed).toHaveBeenCalled();
+    // The viewer learns the truth from its own heartbeat.
+    await expect(
+      h.controller.request('phone', { op: 'heartbeat', lease: lease.lease }),
+    ).resolves.toEqual({ controlling: false });
+    // Later input is an input problem, not a lease problem.
+    await expect(
+      h.controller.request('phone', {
+        op: 'input',
+        lease: lease.lease,
+        sequence: 2,
+        events: [{ kind: 'release' }],
+      }),
+    ).rejects.toThrow('VIEW_ONLY');
+    expect(h.deps.input).toHaveBeenCalledTimes(1);
+    await expect(h.controller.request('phone', { op: 'frame', lease: lease.lease })).resolves.toEqual(
+      { jpeg: 'jpeg' },
+    );
+  });
+  it('lets the same viewer take control again after a release without touching the media', async () => {
+    const h = harness();
+    const lease = await h.start();
+    await h.controller.request('phone', { op: 'control', lease: lease.lease, enabled: true });
+    h.controller.releaseControl();
+    await h.controller.request('phone', { op: 'control', lease: lease.lease, enabled: true });
+    expect(h.controller.state).toEqual({ peer: 'phone', controlling: true });
+    // Taking control again restarts the input helper on the same lease.
+    expect(h.deps.startInput).toHaveBeenCalledTimes(2);
+    // A second viewer is still arbitrated by the same single-viewer rules.
+    await expect(h.controller.request('other', { op: 'start', displayId: '1' })).rejects.toThrow(
+      'BUSY',
+    );
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    expect(h.deps.stopInput).toHaveBeenCalledTimes(1);
+  });
+  it('ignores a release when no viewer controls anything', async () => {
+    const h = harness();
+    const lease = await h.start();
+    h.controller.releaseControl();
+    expect(h.controller.state).toEqual({ peer: 'phone', controlling: false });
+    expect(h.deps.stopInput).not.toHaveBeenCalled();
+    expect(h.deps.stopVideo).not.toHaveBeenCalled();
+    expect(h.controller.hasLease(lease.lease)).toBe(true);
   });
 });
 describe('human / Agent input ownership', () => {

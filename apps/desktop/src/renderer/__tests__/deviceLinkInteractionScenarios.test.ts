@@ -1273,7 +1273,7 @@ describe('远程交互接线不变式', () => {
 
   it('跨窗口 worktree 写穿只合并目标字段，main 镜像读取共享持久快照', () => {
     const src = read('App.tsx');
-    expect(src).toContain('const draft = getDraftForPreferenceSync();');
+    expect(src).toContain('const draft = getDraftForOwnerPreferenceSync(owner.dataOwnerId);');
     expect(src).toContain('setWorktreePreference(worktreeEnabled === true);');
     expect(src).not.toContain('patchDraft({ worktreeEnabled: worktreeEnabled === true });');
   });
@@ -1369,15 +1369,13 @@ describe('远程交互接线不变式', () => {
   //    状态变更未广播收敛」家族残留,锁住防回归 ──────────────────────────────────────────
   const mainSrc = (rel: string) => readFileSync(resolve(__dirname, '../../main', rel), 'utf8');
 
-  it('F1: ask 本地远程都只由 main 落库；plan answered 写库仍远程跳过', () => {
+  it.each(['answerUserQuestion', 'respondToPlanReview', 'cancelPlanReview', 'submitPlanReviewDecision'])(
+    'F1: %s 本地远程都只由 main 落库，避免迟到提交覆盖权威决定', (name) => {
     const src = read('lib/makerChatStore.ts');
-    const askStart = src.indexOf('function answerUserQuestion(');
-    expect(askStart).toBeGreaterThan(-1);
-    const askEnd = src.indexOf('\nfunction ', askStart + 1);
-    const askBody = src.slice(askStart, askEnd === -1 ? undefined : askEnd);
-    expect(askBody).not.toContain('askMsg');
-    expect(askBody).not.toContain('messageService');
-    expect(src).toContain('if (planMsg && !isRemoteSession(sessionId))');
+    const start = src.indexOf(`function ${name}(`);
+    expect(start).toBeGreaterThan(-1);
+    const end = src.indexOf('\nfunction ', start + 1);
+    expect(src.slice(start, end === -1 ? undefined : end)).not.toContain('messageService');
   });
 
   it('F2: fork IPC handler 广播 sessions:created(否则 fork 会话在被控端/其它控制端不出现)', () => {

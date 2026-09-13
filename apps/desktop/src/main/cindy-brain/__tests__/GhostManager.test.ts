@@ -1556,6 +1556,35 @@ describe('GhostManager · 装入/更新崩溃窗口恢复(事务标记)', () => 
   const freshManager = () =>
     new GhostManager({ getRootDir: () => rootDir, getLocale: () => hostLocale, onChanged });
 
+  it('rejects cancellation during install preparation before publishing bytes and allows retry', async () => {
+    const file = await makeCindy('cancelled.cindy', goodManifest());
+    const controller = new AbortController();
+    const writePending = GhostInstallReceiptStore.prototype.writePendingMutation;
+    const pendingSpy = vi.spyOn(GhostInstallReceiptStore.prototype, 'writePendingMutation')
+      .mockImplementation(async function (this: GhostInstallReceiptStore, ...args) {
+        await writePending.apply(this, args);
+        controller.abort();
+      });
+    const guard = vi.fn(() => {
+      expect(fs.existsSync(pendingMarkerPath())).toBe(true);
+      expect(fs.existsSync(path.join(rootDir, 'hello'))).toBe(false);
+      controller.signal.throwIfAborted();
+    });
+    try {
+      await expectRejection(await manager.install(file, { beforePackagePlacement: guard }), 'io');
+      expect(guard).toHaveBeenCalledOnce();
+      expect(manager.list()).toEqual([]);
+      expect(fs.existsSync(pendingMarkerPath())).toBe(false);
+      expect(fs.existsSync(receiptPath())).toBe(false);
+      expect((await fs.promises.readdir(rootDir)).filter(name => name.startsWith('.cindy-installing-'))).toEqual([]);
+      expect(onChanged).not.toHaveBeenCalled();
+    } finally {
+      pendingSpy.mockRestore();
+    }
+    const retried = await manager.install(file);
+    expect(retried).toMatchObject({ ghost: { manifest: { id: 'hello' }, enabled: true } });
+  });
+
   it('崩溃的装入(有 finalDir、无 receipt、有 install 标记)被恢复删除,不被迁移收编', async () => {
     // install 在 rename(staging→final) 之后、写 receipt 之前崩溃:finalDir 完整、无
     // receipt、无 ledger。若不处理,迁移会把它(崩溃窗口内可能被改过 manifest)当 legacy

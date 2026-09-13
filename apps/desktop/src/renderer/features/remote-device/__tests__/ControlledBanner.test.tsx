@@ -106,6 +106,31 @@ describe('ControlledBanner composer collapse state', () => {
 });
 
 describe('ControlledBanner floating fallback', () => {
+  it('does not restore an old two-device snapshot after a disconnect push', async () => {
+    const previous = await window.electronAPI.deviceLink.getState();
+    let resolve!: (value: typeof previous) => void;
+    vi.mocked(window.electronAPI.deviceLink.getState).mockImplementationOnce(
+      () =>
+        new Promise((done) => {
+          resolve = done;
+        }),
+    );
+    render(<ControlledBanner />);
+    const push = vi.mocked(window.electronAPI.deviceLink.onControlledState).mock.calls[0][0];
+    act(() => push({ controllers: [{ deviceId: 'mac', name: 'MacBook' }] }));
+    await act(async () =>
+      resolve({
+        ...previous,
+        controlledBy: [
+          { deviceId: 'mac', name: 'MacBook' },
+          { deviceId: 'phone', name: 'Phone' },
+        ],
+      }),
+    );
+    expect(screen.getByText('Controlled by MacBook')).toBeTruthy();
+    act(() => push({ controllers: [] }));
+    expect(document.querySelector('[data-controlled-banner-chip]')).toBeNull();
+  });
   it('yields to a mounted composer, including its collapsed indicator, and returns after unmount', async () => {
     const fallback = render(<ControlledBanner />);
     await screen.findByText('Controlled by iPhone');

@@ -1,6 +1,8 @@
 {
   "failedScheduleNotice": {
-    "text": "此前有定时任务未完成，可查看运行记录。",
+    "text": "此前有自动运行失败。",
+    "precheck": "自动检查暂时受阻。",
+    "rateLimited": "自动检查暂时受阻：请求限流。",
     "dismissTitle": "关闭历史失败提示"
   },
   "common": {
@@ -473,6 +475,7 @@
     "continueTask": "继续任务",
     "retry": "重试",
     "ignore": "忽略",
+    "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
     "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。",
     "toolUseLoopDetected": "模型重复调用工具次数过多，Cindy 已停止本轮以避免无限循环。可以发送新消息继续。",
     "toolUseLoopDetectedWithCount": "模型连续触发了无效的工具调用，Cindy 已在 {{count}} 次失败后停止本轮，以避免无限循环。可以发送新消息继续。",

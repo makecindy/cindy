@@ -1,4 +1,94 @@
-# Mobile remote desktop
+# Remote desktop
+
+## Desktop viewer
+
+Desktop can open a same-account computer's remote desktop from its device card
+in Remote control settings, or the task-list machine menu's Remote desktop submenu.
+When the sidebar is grouped by machine, hovering or keyboard-focusing a remote
+machine reveals a desktop shortcut. A debounced, read-only capability check
+distinguishes available desktops from offline, disabled, revoked or unsupported
+targets; unavailable shortcuts show a crossed-out monitor with an explanation.
+Hovering never starts desktop capture or takes over another viewer, and clicking
+the shortcut does not expand or collapse the machine group.
+It opens a clean, independent window with native mouse/keyboard input and a small
+toolbar. Reopening the same target focuses its existing window. Full screen,
+view-only/control, display selection, sound, video settings and text
+clipboard shortcuts are available. Resolution changes appear only for a capable
+host and affect its actual monitor. Ctrl+Alt+Esc releases keyboard focus;
+Cmd/Ctrl+W requests closing this viewer, including while it owns keyboard focus.
+The toolbar exit, native window close and close shortcut share a confirmation
+dialog; cancelling keeps the connection and control lease. Confirmation belongs
+to the current window generation and cannot close a later connection.
+
+While controlling, the local cursor is hidden inside the remote picture even
+when Windows embeds its cursor in the video rather than sending cursor metadata.
+Cursor hiding is scoped to the remote picture, not the system or window focus:
+moving outside it immediately restores the local cursor even if the viewer keeps
+focus. Local toolbar controls and dialogs retain their cursor. View-only mode
+also restores the local cursor inside the picture.
+With the picture focused, Cmd+C/V on macOS or Ctrl+C/V on Windows copies selected
+remote text to the local clipboard or pastes local text remotely. Transfers use
+the existing authorized Main bridge, are ordered and user-triggered, and report
+failure without reconnecting. There is no background clipboard monitoring or
+automatic context-menu synchronization; images, files and cut are not bridged.
+
+The shared viewer session marks recovery only when a start is attempted, so an
+initial capability-query timeout does not turn a retry against a legacy host into
+an unsupported resume. Start and stop operations are serialized per viewer,
+including cleanup of a late lease; superseded display choices are discarded before
+they reach the host. An idle stop still dispatches immediately for Mobile exit
+locking. This recovery stays within one viewer's lease and never closes a peer
+link or the shared relay; regression tests cover another peer remaining responsive
+and preserve explicit confirmation before taking over someone else's desktop.
+Main retains the same owner/target cleanup barrier across Renderer replacement;
+rebinding to a different owner or target does not wait on that old barrier.
+
+The window reuses the existing resource-usage auxiliary-window controller and
+factory for hidden prewarming, two-phase readiness, hide/reuse and bounded crash
+recovery. Prewarming loads only the shell and never connects to or captures a
+computer. Closing/minimizing retires its lease, clears pixels and stops polling;
+ordinary focus loss releases held input while retaining viewing. A crashed or
+automatically restored viewer uses `resume`, preserving a host's explicit stop.
+An account boundary destroys the viewer windows. The host's single-viewer lease
+and explicit takeover rules apply equally to phone and Desktop viewers.
+
+No new server, media protocol or native input helper is introduced. `device-link`
+owns the shared viewer lease/signaling adapters; `maker-shared/remote-desktop-viewer`
+owns the browser media, input queue and geometry used by both clients. Desktop
+imports it as a static module without inline scripts or eval. The Mobile HTML
+embeds a generated source literal because Hermes does not preserve function
+source. After editing the common browser module, run:
+
+```sh
+node scripts/sync-remote-desktop-viewer.mjs
+```
+
+The source parity test prevents Mobile from shipping a stale copy. Mobile retains
+its touch UI, native keyboard, PiP and optional unlock integration. Desktop does
+not add password storage, virtual controls, screen rotation or PiP. Its dedicated
+preload exposes only fixed viewer/window operations; Main binds requests to the
+actual window, account generation, target and returned lease. Text clipboard
+contents stay in Main. `stop` never calls `closeLink` or resets the shared relay,
+so other tasks, file views and peers keep their existing connections.
+
+The local real-Chromium harness uses the production Desktop viewer with a
+synthetic canvas host, validates video, keyboard and same-lease media recovery,
+and saves Light/Dark screenshots in a unique system temporary directory:
+
+Only the disposable test browser disables mDNS host-address masking. The fixture
+records both data-channel input and the preload-bridge fallback. Recovery uses an
+explicit closed-peer event and checks decoded frames on the replacement peer;
+it does not measure how quickly a real network outage is detected.
+
+```sh
+node apps/desktop/scripts/remote-desktop-viewer-smoke.mjs http://localhost:<vite-port> /path/to/chrome
+```
+
+This harness does not establish physical Desktop-to-Desktop, cross-NAT, macOS
+keyboard/permission or packaged-build support. Those retain the platform and
+network verification requirements below.
+
+## Mobile viewer
 
 The device detail page opens the real desktop of the selected computer. On the
 computer, enable **Settings → Remote control → Allow remote desktop**, as well
@@ -8,6 +98,14 @@ when the host supports input, using the existing permission and ownership checks
 **Controls → View only** releases control and preserves that choice when reconnecting
 within this page. The computer always has a **Disconnect**
 button while being viewed or controlled.
+
+The host allows one active remote-desktop viewer at a time. Starting a new
+viewer checks and reserves that lease atomically; if another viewer is still
+connected, the controller shows a takeover confirmation. Confirming takeover
+ends the previous viewer's lease before creating the new one. The host status
+banner also expires abandoned viewers after the lease heartbeat timeout, so a
+phone that has already gone away does not keep the computer marked as viewed
+indefinitely.
 
 ## Interaction
 
@@ -137,6 +235,54 @@ This harness does not validate WKWebView, Android WebView, carrier NAT, regional
 STUN availability, TURN relay performance or Windows native capture. Those need
 device/network verification before claiming a measured connection-success gain.
 
+## Input failure releases control (2026-09-11)
+
+Control is a lease-scoped capability, not the session itself. When the host can
+no longer inject input — the native helper died, it reported a failed injection,
+or its write path failed — it releases control and keeps everything else: the
+lease, the capture owner, the video track and the last picture. It does not call
+`stop()`, so an input fault can never surface as an ended desktop session.
+
+The host also releases control when its own input path refuses a batch before
+injecting anything, so the two sides cannot disagree about who controls: a later
+take-control genuinely restarts the helper instead of being skipped as "already
+controlling".
+
+The viewer follows the host's control bit instead of rebuilding the session. A
+rejected input batch, a failed control request or a heartbeat that reports
+`controlling: false` all drop the phone to view only with the existing view-only
+hint and take-control action; media and lease identity are untouched. A dropped
+stalled batch (WebView overflow) also asks the host to drop control: posting
+`control:false` to the WebView clears its queued release without flushing it, so
+only an explicit host `control enabled:false` (which stops the input helper and
+injects a native release) can let go of a held key or button. If that host
+request times out, the viewer keeps the intended control bit and the next
+heartbeat retries the release (or restores local control after a lost
+take-control reply) instead of ignoring a host-`true` while the phone stays
+view-only. A heartbeat that still reports view-only while `startInput()` is
+settling does not consume that pending take-control: only a later beat, after
+the transition, may reconcile. An unconfirmed overflow release stays
+authoritative until the host is view-only: taking control finishes that
+release (`stopInput`) before asking to enable, so the helper restarts. Errors whose outcome is unknown — a lost reply (`INVOKE_TIMEOUT`) or
+a control request that collides with one still settling — do not rebuild the
+session: a batch that may have been injected must not be answered with a
+release that discards its key-up, and the heartbeat still owns liveness. Errors
+that do mean the lease is gone (`DESKTOP_LEASE_EXPIRED`, `DESKTOP_STOPPED`,
+revocation, an unsupported channel) still recover the session as before.
+
+This matters most on Windows, where the SendInput helper reports a failed
+injection as a helper failure whereas the macOS helper posts events without a
+result path. On Windows the helper now costs control only; whether a specific
+machine can inject at all (elevated foreground window, secure desktop, a session
+worker outside the interactive window station) is a separate, still unverified
+question, and the helper's `error` line does not yet carry a reason.
+
+Deterministic tests cover the controller release (lease, media and single-viewer
+arbitration retained; later input refused as view-only; control can be taken
+again), the desktop wiring that turns a refused or failed input batch into a
+release rather than a stop, the failure classification (release, unknown outcome,
+rebuild), and the viewer paths that drop to view only without reconnecting.
+
 ## Authority and lifetime
 
 On macOS, enabling remote desktop automatically checks screen recording in the
@@ -197,6 +343,13 @@ currently offers viewing only. Neither helper bypasses OS security boundaries:
 Windows secure desktop/UAC and elevated applications can reject input, and
 macOS lock/login screens and protected surfaces are not guaranteed controllable.
 System audio and explicit clipboard transfers are supported when advertised by the host. Virtual displays and remote power-on are not included. The phone keyboard sends committed text directly; the computer keyboard supplies modifiers and special keys.
+
+The Windows input helper reports a failed call on the single output line its host
+already treats as "input failed": `error send_input <status>` when Win32 rejects
+an injection, and `error input_desktop <status>` when the desktop binding fails,
+with the Win32 status of the failing call. The line carries no coordinates and no
+typed text, and both consumers (Main's output watch and the SYSTEM service
+worker's failure watch) still classify it by the same rules as before.
 
 Unit tests cover peer/lease isolation, expiry, revocation during asynchronous
 capture, start/stop races, input replay, human/Agent exclusion, portrait/landscape

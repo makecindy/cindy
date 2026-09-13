@@ -29,6 +29,7 @@ const captured = vi.hoisted(() => ({
   args: [] as string[],
   env: {} as Record<string, string | undefined>,
   onEvent: null as ((event: unknown) => void) | null,
+  onExit: null as ((exit: { code: number | null; signal: string | null }) => void) | null,
   requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
   runnerLaunches: [] as Array<{
@@ -96,8 +97,10 @@ vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     isClosed = false;
     constructor(opts: {
-      onEvent: (event: unknown) => void }) {
+      onEvent: (event: unknown) => void;
+      onExit: (exit: { code: number | null; signal: string | null }) => void }) {
       captured.onEvent = opts.onEvent;
+      captured.onExit = opts.onExit;
     }
     async request(
       cmd: Record<string, unknown> & { type: string },
@@ -695,6 +698,105 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       if (previousLegacy === undefined) delete process.env.CINDY_PI_SUBAGENT_NODE;
       else process.env.CINDY_PI_SUBAGENT_NODE = previousLegacy;
     }
+  });
+
+  it.each(['success', 'native-failure'] as const)('consumes the %s package tool result and replies before Session retirement', async (outcome) => {
+    const deps = buildDeps();
+    let session!: Session;
+    let convergenceReceipt: import('../../../types/events.js').AgentEvent | undefined;
+    deps.mutatePiManagedPackage = vi.fn(async () => {
+      if (outcome === 'native-failure') throw new PiManagedPackageMutationFailedError(true, 'native-command-failed');
+      return { changed: true, affectedPackage: { source: 'npm:example-extension', enabled: true } };
+    });
+    deps.onPiManagedPackageMutationSettled = vi.fn(async (_id, publish, createFailureEvent) => {
+      const failure = createFailureEvent();
+      expect(failure).not.toBe(createFailureEvent());
+      expect(failure).toMatchObject({ type: 'text', source: 'pi', data: {
+        isFinal: true, text: expect.stringContaining('restart-cindy-to-refresh-packages'),
+      } });
+      const result = await session.closeAfterCurrentTurn();
+      convergenceReceipt = publish({ runtimeConvergence: result === 'deferred' ? 'deferred' : 'complete' });
+    });
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'mutation-caller', workingDir: cwd, model: 'm' });
+    session = new Session({ id: 'mutation-caller', agentKind: 'pi', workDir: cwd,
+      handle, capabilities: agent.capabilities, logger: deps.logger, turnStallMs: 0 });
+    session.setInteractionListener(async () => ({ kind: 'permission', behavior: 'allow' }));
+    const seen: import('../../../types/events.js').AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+    try {
+      await session.send('Update Pi and explain the result', { turnAttemptToken: 21 });
+      captured.onEvent?.({ type: 'agent_start' });
+      fireManagedPackageRequest('mutation-result', 'update', 'npm:example-extension');
+      const response = await waitForResponse('mutation-result');
+      expect(JSON.parse(String(response.value)).ok).toBe(outcome === 'success');
+      await vi.waitFor(() => expect(deps.onPiManagedPackageMutationSettled).toHaveBeenCalledOnce());
+      await vi.waitFor(() => expect(seen).toContain(convergenceReceipt));
+      expect(captured.closed).toBe(false);
+      expect(session.getStatus()).toBe('active');
+      captured.onEvent?.({ type: 'tool_execution_end', toolCallId: 'mutation-result',
+        toolName: 'cindy_pi_extension', isError: outcome === 'native-failure',
+        result: { content: [{ type: 'text', text: String(response.value) }] } });
+      captured.onEvent?.({ type: 'message_end', message: { role: 'assistant',
+        content: [{ type: 'text', text: 'The package operation finished; here is its result.' }],
+        stopReason: 'stop' } });
+      captured.onEvent?.({ type: 'agent_settled' });
+      await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+      expect(seen.some((event) => event.type === 'text'
+        && (event.data as { text?: string }).text?.includes('here is its result'))).toBe(true);
+      expect(seen.filter((event) => event.type === 'done')).toEqual([
+        expect.objectContaining({ turnAttemptToken: 21, data: expect.objectContaining({ status: 'completed' }) }),
+      ]);
+      expect(deps.mutatePiManagedPackage).toHaveBeenCalledOnce();
+      expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
+    } finally { await session.close(); }
+  });
+
+  it.each([{ code: 0, stopped: false }, { code: 1, stopped: false }, { code: 0, stopped: true }, { code: 1, stopped: true }])('settles Pi exit $code after Stop=$stopped without replay', async ({ code, stopped }) => {
+    const deps = buildDeps();
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'exit-caller', workingDir: cwd, model: 'm' });
+    const session = new Session({ id: 'exit-caller', agentKind: 'pi', workDir: cwd,
+      handle, capabilities: agent.capabilities, logger: deps.logger, turnStallMs: 0 });
+    const seen: import('../../../types/events.js').AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+    await session.send('perform work');
+    captured.onEvent?.({ type: 'agent_start' });
+    if (stopped) await session.abort();
+    captured.onExit?.({ code, signal: null });
+    await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+    expect(seen.filter((event) => event.type === 'error')).toEqual(stopped ? [] : [
+      expect.objectContaining({ data: expect.objectContaining({ isTerminal: true }) }),
+    ]);
+    expect(seen.filter((event) => event.type === 'done')).toEqual(stopped ? [
+      expect.objectContaining({ data: { status: 'cancelled' } }),
+    ] : []);
+    expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
+    await handle.close();
+  });
+
+  it.each([0, 1])('preserves a delivered successful reply when Pi subsequently exits with %s', async (code) => {
+    const deps = buildDeps();
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({ sessionId: 'success-before-exit', workingDir: cwd, model: 'm' });
+    const session = new Session({ id: 'success-before-exit', agentKind: 'pi', workDir: cwd,
+      handle, capabilities: agent.capabilities, logger: deps.logger, turnStallMs: 0 });
+    const seen: import('../../../types/events.js').AgentEvent[] = [];
+    session.onEvent((event) => seen.push(event));
+    await session.send('perform work');
+    captured.onEvent?.({ type: 'agent_start' });
+    captured.onEvent?.({ type: 'message_end', message: { role: 'assistant',
+      content: [{ type: 'text', text: 'Work finished.' }], stopReason: 'stop' } });
+    captured.onEvent?.({ type: 'agent_settled' });
+    await vi.waitFor(() => expect(seen.some((event) => event.type === 'done')).toBe(true));
+    captured.onExit?.({ code, signal: null });
+    await vi.waitFor(() => expect(session.getStatus()).toBe('closed'));
+    expect(seen.filter((event) => event.type === 'error')).toEqual([]);
+    expect(seen.filter((event) => event.type === 'done')).toEqual([
+      expect.objectContaining({ data: expect.objectContaining({ status: 'completed', result: 'Work finished.' }) }),
+    ]);
+    expect(captured.requests.filter((request) => request.type === 'prompt')).toHaveLength(1);
+    await handle.close();
   });
 
   it.each([['desktop', 'new-root-tasks'], ['tool', 'new-root-tasks'], ['desktop', 'new-pi-processes'], ['tool', 'new-pi-processes']] as const)('updates core and preserves the %s caller with %s activation', async (origin, activation) => {
@@ -1356,38 +1458,72 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('surfaces Pi UI requests that Cindy cannot safely adapt at runtime', async () => {
+  it('filters unsupported extension UI across runtimes while preserving real notifications', async () => {
+    // Actual RPC wire methods plus defensive TUI/unknown frames. Reopening a
+    // runtime must stay silent too, not merely reset a per-process warning Set.
+    const methods = [
+      'setStatus', 'setWidget', 'setTitle', 'set_editor_text',
+      'setWorkingMessage', 'setWorkingVisible', 'setWorkingIndicator',
+      'setHiddenThinkingLabel', 'setFooter', 'setHeader', 'setToolsExpanded',
+      'getToolsExpanded', 'setEditorText', 'getEditorText', 'pasteToEditor',
+      'setEditorComponent', 'getEditorComponent', 'addAutocompleteProvider',
+      'custom', 'getAllThemes', 'getTheme', 'setTheme', 'theme',
+      'onTerminalInput', 'registerShortcut', 'registerFlag',
+      'registerMessageRenderer', 'registerMarkdownTransformer', 'registerEntryRenderer',
+      'future_display_feature', '__proto__', 'constructor',
+    ];
+    for (let run = 0; run < 2; run += 1) {
+      const handle = await start();
+      const events: Array<Record<string, unknown>> = [];
+      const resolver = vi.fn();
+      handle.setInteractionResolver(resolver);
+      void (async () => {
+        for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
+      })();
+      try {
+        const sentBefore = captured.sent.length;
+        for (const method of methods) {
+          for (let repeat = 0; repeat < 2; repeat += 1) {
+            captured.onEvent!({
+              type: 'extension_ui_request', id: `${run}-${method}-${repeat}`, method,
+              statusText: 'background status', widgetLines: ['background widget'], text: 'editor text',
+            });
+          }
+        }
+        captured.onEvent!({
+          type: 'extension_ui_request', id: `notify-${run}`, method: 'notify', message: 'Extension command result',
+        });
+        await flush();
+        expect(resolver).not.toHaveBeenCalled();
+        expect(captured.sent).toHaveLength(sentBefore);
+        expect(events.filter((event) => event.type === 'text')).toEqual([
+          { type: 'text', data: { text: 'Extension command result', isFinal: false }, source: 'pi' },
+        ]);
+      } finally {
+        await handle.close();
+      }
+    }
+  });
+
+  it('settles timed extension dialogs silently so the extension does not hang', async () => {
     const handle = await start();
     const events: Array<Record<string, unknown>> = [];
+    const resolver = vi.fn();
+    handle.setInteractionResolver(resolver);
     void (async () => {
       for await (const event of handle.events()) events.push(event as unknown as Record<string, unknown>);
     })();
     try {
-      captured.onEvent!({
-        type: 'extension_ui_request',
-        id: 'timed-select',
-        method: 'select',
-        title: 'Pick quickly',
-        options: ['A', 'B'],
-        timeout: 1_000,
-      });
-      expect(await waitForResponse('timed-select')).toMatchObject({
-        cancelled: true,
-      });
-      captured.onEvent!({
-        type: 'extension_ui_request',
-        id: 'status-1',
-        method: 'setStatus',
-      });
-      captured.onEvent!({
-        type: 'extension_ui_request',
-        id: 'status-2',
-        method: 'setStatus',
-      });
+      for (const method of ['select', 'confirm', 'input', 'editor']) {
+        captured.onEvent!({
+          type: 'extension_ui_request', id: `timed-${method}`, method,
+          title: 'Pick quickly', options: ['A', 'B'], timeout: 1_000,
+        });
+        expect(await waitForResponse(`timed-${method}`)).toMatchObject({ cancelled: true });
+      }
       await flush();
-      const notices = events.filter((event) => event.type === 'text');
-      expect(notices.some((event) => JSON.stringify(event).includes('timed select dialog'))).toBe(true);
-      expect(notices.filter((event) => JSON.stringify(event).includes('setStatus'))).toHaveLength(1);
+      expect(resolver).not.toHaveBeenCalled();
+      expect(events.filter((event) => event.type === 'text')).toEqual([]);
     } finally {
       await handle.close();
     }
@@ -1726,7 +1862,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     }
   });
 
-  it('deterministically handles an exact pi install user command before prompting the model', async () => {
+  it.each(['ask', 'auto', 'bypassPermissions'] as const)('installs an exact user command without additional confirmation in %s', async (permissionMode) => {
     const mutatePiManagedPackage = vi.fn(async () => ({
       changed: true,
       affectedPackage: {
@@ -1751,16 +1887,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     deps.mutatePiManagedPackage = mutatePiManagedPackage;
     deps.onPiManagedPackageMutationSettled = onPiManagedPackageMutationSettled;
     const handle = await new PiAgent(deps).startSession({
+      permissionMode,
       sessionId: 'managed-package-command-session',
       workingDir: cwd,
       model: 'm',
     });
+    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'deny' as const }));
+    handle.setInteractionResolver(resolver);
     try {
       captured.requests = [];
       await handle.send(
         { type: 'user', content: 'pi install npm:context-mode' },
         desktopCommandOptions('pi install npm:context-mode'),
       );
+      expect(resolver).not.toHaveBeenCalled();
       expect(mutatePiManagedPackage).toHaveBeenCalledWith({
         action: 'install',
         source: 'npm:context-mode',
@@ -1771,9 +1911,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(prompt?.message).toContain('"compatibility":"partial"');
       expect(prompt?.message).toContain('"status-display"');
       expect(prompt?.message).toContain('installed and enabled');
-      expect(prompt?.message).toContain('requested active local Pi tasks including this task to stop');
-      expect(prompt?.message).toContain('do not claim every task has already stopped');
-      expect(prompt?.message).toContain('available after starting a new Pi task');
+      expect(prompt?.message).toContain('package changes apply after the current work finishes');
+      expect(prompt?.message).toContain('Active work, including this reply, continues');
+      expect(prompt?.message).toContain('its runtime refreshes');
       expect(prompt?.message).not.toContain('keeps its startup snapshot');
       expect(prompt?.message).toContain('Do not enumerate non-blocking compatibility notices');
       expect(prompt?.message).not.toContain('Settings > General');
@@ -1898,8 +2038,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       const prompt = captured.requests.find((request) => request.type === 'prompt')?.message;
       if (typeof prompt !== 'string') throw new Error('expected prompt message');
       expect(prompt).toContain('"ok":true');
-      expect(prompt).toContain('do not claim every task has already stopped');
-      expect(prompt).toContain('this task remains active');
+      expect(prompt).toContain('Active work, including this reply, continues');
+      expect(prompt).toContain('If runtimeConvergence is partial,');
       expect(prompt).toContain('restart Cindy to finish refreshing Pi packages');
       await vi.waitFor(() => expect(events.some((event) => (
         event.type === 'text'
@@ -4745,10 +4885,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   /**
-   * 放宽档位不得替用户批准他还没表态的**高风险**调用:prompt-each-time 的挂起卡在切到
-   * Full access 时仍按 fail-closed 拒绝(与 CC / Codex 的 forcePrompt 语义一致)。
+   * MCP 逐次审批不能覆盖 Full access；已挂起的操作审批也按新档位结算。
    */
-  it('keeps a pending prompt-each-time card fail-closed even when the mode widens', async () => {
+  it('allows a pending prompt-each-time card when switching to Full access', async () => {
     const handle = await start('ask', undefined, false, {
       serverNames: ['cindy_ssh'],
       policy: () => 'prompt-each-time',
@@ -4762,7 +4901,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(await waitForResponse('r27')).toEqual({
       type: 'extension_ui_response',
       id: 'r27',
-      confirmed: false,
+      confirmed: true,
     });
   });
 
@@ -4776,8 +4915,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       policy: () => 'prompt-each-time',
     });
     handle.setInteractionResolver?.(async () => {
-      // 用户点「拒绝」的同一时刻切到 Full access。
-      await handle.setPermissionMode?.('bypassPermissions');
       return { kind: 'permission', behavior: 'deny' } as never;
     });
     firePermissionRequest('r25', 'mcp__cindy_ssh__ssh_exec', {
@@ -4788,6 +4925,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       id: 'r25',
       confirmed: false,
     });
+    await handle.setPermissionMode?.('bypassPermissions');
+    expect(await waitForResponse('r25')).toMatchObject({ confirmed: false });
   });
 
   /**

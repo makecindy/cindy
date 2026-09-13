@@ -1,3 +1,5 @@
+import { normalizeBotName } from '../../../../shared/botCreation.js';
+import { inferBotTemplatePresetId } from '../../../../shared/botTemplatePreset.js';
 // inproc 回滚口：仅在 XDT_DB_INPROC=true 时使用。
 // 默认热路径走 file worker（dbWorker.ts + dispatcher），这里要和同名 tx handler 保持一致。
 
@@ -77,6 +79,12 @@ export function tx(db: Database.Database, args: unknown): unknown {
       return sessionsRenameTitles(db, txArgs);
     case 'sessions.setStatus':
       return sessionsSetStatus(db, txArgs);
+    case 'recentWorkdirs.mergeWindowsIdentity':
+      return recentWorkdirsMergeWindowsIdentity(db, txArgs);
+    case 'recentWorkdirs.removeWindowsIdentity':
+      return recentWorkdirsRemoveWindowsIdentity(db, txArgs);
+    case 'projectAliases.replaceIdentity':
+      return projectAliasesReplaceIdentity(db, txArgs);
     case 'toolResults.compactSession':
       return compactSessionToolResults(db, txArgs);
     case 'session.agentSwitchFallback':
@@ -174,11 +182,88 @@ export function tx(db: Database.Database, args: unknown): unknown {
   }
 }
 
+function recentWorkdirsMergeWindowsIdentity(db: Database.Database, args: unknown): void {
+  const payload = asRecord(args, 'recentWorkdirs.mergeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  const lastUsedAt = expectNumber(payload.lastUsedAt, 'lastUsedAt');
+  db.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(db, path);
+    const representative = matches
+      .slice()
+      .sort((a, b) => b.lastUsedAt - a.lastUsedAt || a.rowid - b.rowid)[0];
+    const representativePath = representative?.path ?? path;
+    const newestTimestamp = Math.max(lastUsedAt, ...matches.map((row) => row.lastUsedAt));
+    db.prepare(
+      `INSERT INTO recent_workdirs (path, last_used_at) VALUES (?, ?)
+       ON CONFLICT(path) DO UPDATE SET
+         last_used_at = MAX(recent_workdirs.last_used_at, excluded.last_used_at)`,
+    ).run(representativePath, newestTimestamp);
+    const removeVariant = db.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    for (const row of matches) {
+      if (row.path !== representativePath) removeVariant.run(row.path);
+    }
+  })();
+}
+
+function recentWorkdirsRemoveWindowsIdentity(db: Database.Database, args: unknown): { changes: number } {
+  const payload = asRecord(args, 'recentWorkdirs.removeWindowsIdentity args');
+  const path = expectString(payload.path, 'path');
+  return db.transaction(() => {
+    const matches = recentWorkdirWindowsIdentityRows(db, path);
+    const removeVariant = db.prepare('DELETE FROM recent_workdirs WHERE path = ?');
+    let changes = 0;
+    for (const row of matches) changes += removeVariant.run(row.path).changes;
+    return { changes };
+  })();
+}
+
+function recentWorkdirWindowsIdentityRows(
+  db: Database.Database,
+  path: string,
+): Array<{ rowid: number; path: string; lastUsedAt: number }> {
+  const identity = path.toLowerCase();
+  const rows = db
+    .prepare('SELECT rowid, path, last_used_at AS lastUsedAt FROM recent_workdirs')
+    .all() as Array<{ rowid: number; path: string; lastUsedAt: number }>;
+  return rows.filter((row) => row.path.toLowerCase() === identity);
+}
+
+function projectAliasesReplaceIdentity(
+  db: Database.Database,
+  args: unknown,
+): { projectKey: string; alias: string; updatedAt: number } | null {
+  const payload = asRecord(args, 'projectAliases.replaceIdentity args');
+  const projectKey = expectString(payload.projectKey, 'projectKey');
+  const comparisonKey = expectString(payload.comparisonKey, 'comparisonKey');
+  if (typeof payload.foldCase !== 'boolean') throw invalidArgs('foldCase must be a boolean');
+  const alias = nullableString(payload.alias);
+  const updatedAt = expectNumber(payload.updatedAt, 'updatedAt');
+  return db.transaction(() => {
+    const rows = db.prepare('SELECT project_key AS projectKey FROM project_aliases').all() as Array<{ projectKey: string }>;
+    const removeAlias = db.prepare('DELETE FROM project_aliases WHERE project_key = ?');
+    for (const row of rows) {
+      const identity = payload.foldCase ? row.projectKey.toLowerCase() : row.projectKey;
+      if (identity === comparisonKey) removeAlias.run(row.projectKey);
+    }
+    if (alias == null) return null;
+    db.prepare('INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?)').run(projectKey, alias, updatedAt);
+    return { projectKey, alias, updatedAt };
+  })();
+}
+
 function botsCreateProfile(db: Database.Database, args: unknown): void {
   const p = asRecord(args, 'bots.createProfile args');
   const id = expectString(p.id, 'id');
   const now = expectNumber(p.now, 'now');
   db.transaction(() => {
+    const config = JSON.parse(expectString(p.capabilitiesJson, 'capabilitiesJson'));
+    const rows = db.prepare(`SELECT p.id, p.display_name AS name, v.capabilities_json AS config, v.identity_source AS identity
+      FROM bot_profiles p JOIN bot_profile_versions v ON v.bot_id = p.id AND v.version = p.current_version
+      WHERE p.status != 'archived'`).all() as Array<{ id: string; name: string; config: string; identity: string }>;
+    if (rows.some(row => normalizeBotName(row.name) === normalizeBotName(expectString(p.displayName, 'displayName'))) ||
+        (config.templateId === 'cindy' && rows.some(row => JSON.parse(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy'))) {
+      throw Object.assign(new Error('A matching companion already exists'), { code: 'ALREADY_EXISTS' });
+    }
     db.prepare(`INSERT INTO bot_profiles
       (id, display_name, description, avatar, avatar_color, status, current_version,
        canonical_session_id, created_at, updated_at)
@@ -224,14 +309,25 @@ function botsUpdateProfile(db: Database.Database, args: unknown): { currentVersi
     throw new Error('botAvatarRef requires an avatar address');
   }
   return db.transaction(() => {
-    const current = db.prepare('SELECT current_version AS currentVersion FROM bot_profiles WHERE id = ?')
-      .get(id) as { currentVersion: number } | undefined;
+    const current = db.prepare('SELECT current_version AS currentVersion, display_name AS displayName, avatar FROM bot_profiles WHERE id = ?')
+      .get(id) as { currentVersion: number; displayName: string; avatar: string } | undefined;
     if (!current) throw Object.assign(new Error('Bot 不存在'), { code: 'NOT_FOUND' });
     if (current.currentVersion !== expectedVersion) {
       throw Object.assign(new Error('Bot Profile 已被另一处更新，请刷新后重试'), { code: 'PRECONDITION_FAILED' });
     }
-    const fields = ['updated_at = ?'];
-    const values: unknown[] = [now];
+    if (p.expectedAvatar !== undefined && current.avatar !== expectString(p.expectedAvatar, 'expectedAvatar')) {
+      throw Object.assign(new Error('Teammate avatar changed during update'), { code: 'PRECONDITION_FAILED' });
+    }
+    if (p.displayName !== undefined && normalizeBotName(expectString(p.displayName, 'displayName')) !== normalizeBotName(current.displayName)) {
+      const name = normalizeBotName(expectString(p.displayName, 'displayName'));
+      const others = db.prepare("SELECT display_name AS name FROM bot_profiles WHERE id != ? AND status != 'archived'").all(id) as Array<{ name: string }>;
+      if (others.some(row => normalizeBotName(row.name) === name)) throw Object.assign(new Error('A companion with this name already exists'), { code: 'ALREADY_EXISTS' });
+    }
+    if (p.preserveUpdatedAt !== undefined && typeof p.preserveUpdatedAt !== 'boolean') {
+      throw new Error('preserveUpdatedAt must be a boolean');
+    }
+    const fields = p.preserveUpdatedAt === true ? ['updated_at = updated_at'] : ['updated_at = ?'];
+    const values: unknown[] = p.preserveUpdatedAt === true ? [] : [now];
     for (const [key, column] of [
       ['displayName', 'display_name'], ['description', 'description'], ['avatar', 'avatar'],
       ['avatarColor', 'avatar_color'], ['status', 'status'],
@@ -799,6 +895,10 @@ function botsReopenDelegation(
     const session = asRecord(p.session, 'session');
     insertBotSession(db, session);
     const childSessionId = expectString(p.childSessionId, 'childSessionId');
+    if (p.worktreePath != null) {
+      db.prepare('UPDATE sessions SET worktree_path = ? WHERE id = ?')
+        .run(expectString(p.worktreePath, 'worktreePath'), childSessionId);
+    }
     if (targetBotId) {
       db.prepare(`INSERT INTO bot_session_links
         (id, bot_id, session_id, profile_version, role, route_key, created_at, archived_at)
@@ -1694,6 +1794,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
   title: string | null;
   workingDir: string | null;
   workspaceKind: string | null;
+  remoteHostId: string | null;
+  source: string | null;
   status: 'active' | 'archived';
 }> {
   const payload = asRecord(args, 'sessions.setStatus args');
@@ -1708,7 +1810,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     'SELECT id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, status, source FROM sessions WHERE id = ? LIMIT 1',
   );
   const updateSession = db.prepare(
-    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind',
+    'UPDATE sessions SET status = ?, updated_at = ? WHERE id = ? RETURNING id, title, working_dir AS workingDir, workspace_kind AS workspaceKind, remote_host_id AS remoteHostId, source',
   );
   const transaction = db.transaction(() => {
     const applied: Array<{
@@ -1716,6 +1818,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
       title: string | null;
       workingDir: string | null;
       workspaceKind: string | null;
+      remoteHostId: string | null;
+      source: string | null;
       status: 'active' | 'archived';
     }> = [];
     const now = Date.now();
@@ -1735,7 +1839,7 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
         });
       }
       const updated = updateSession.get(status, now, sessionId) as
-        | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null }
+        | { id: string; title: string | null; workingDir: string | null; workspaceKind: string | null; remoteHostId: string | null; source: string | null }
         | undefined;
       if (!updated) {
         throw Object.assign(new Error(`Session 不存在: ${sessionId}`), { code: 'NOT_FOUND' });
@@ -1745,6 +1849,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
         title: updated.title,
         workingDir: updated.workingDir,
         workspaceKind: updated.workspaceKind,
+        remoteHostId: updated.remoteHostId,
+        source: updated.source,
         status,
       });
     }
@@ -1755,6 +1861,8 @@ function sessionsSetStatus(db: Database.Database, args: unknown): Array<{
     title: string | null;
     workingDir: string | null;
     workspaceKind: string | null;
+    remoteHostId: string | null;
+    source: string | null;
     status: 'active' | 'archived';
   }>;
 }

@@ -999,7 +999,7 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     await handle.close();
   });
 
-  it('denies a pending forced prompt when the session switches to a laxer mode', async () => {
+  it('Full access overrides a pending prompt-each-time MCP approval', async () => {
     const { handle, canUseTool } = await startSession(() => 'prompt-each-time', {
       // 决策永不返回：请求挂起，等模式切换来结算。
       decide: () => undefined,
@@ -1014,8 +1014,16 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     // CC agent 实现了 setPermissionMode (接口上可选是因为其他 agent 可缺省)。
     await handle.setPermissionMode!('bypassPermissions');
 
-    // 切到 Full access 也不能替用户批准这一次高风险调用。
-    expect((await pending).behavior).toBe('deny');
+    expect((await pending).behavior).toBe('allow');
+    await handle.close();
+  });
+
+  it('Full access allows MCP calls without an extra resolver or classifier approval', async () => {
+    const policy = vi.fn(() => 'prompt-each-time' as const);
+    const { handle, canUseTool } = await startSession(policy, { permissionMode: 'bypassPermissions', bare: true });
+    expect(await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, { toolUseID: 'full-mcp' }))
+      .toMatchObject({ behavior: 'allow' });
+    expect(policy).not.toHaveBeenCalled();
     await handle.close();
   });
 
@@ -1297,6 +1305,27 @@ describe('fail-closed still precedes the MCP policy', () => {
 });
 
 describe('remote sessions share the same permission semantics', () => {
+  it('remote Full Access respects the active Plan turn until explicit plan approval', async () => {
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'auto-approve', {
+      permissionMode: 'bypassPermissions',
+      attachResolver: (req) => req.kind === 'plan_review'
+        ? { kind: 'plan_review', behavior: 'allow' } : { kind: 'permission', behavior: 'allow' },
+    });
+    await handle.setPlanMode!(true);
+    await handle.send({ type: 'user', content: 'Plan the change.' });
+    expect(handle.getPlanMode?.()).toBe(false);
+    expect(handle.getExecutionPlanMode?.()).toBe(true);
+    for (const toolName of ['Write', 'Bash', 'mcp__cindy_contacts__call_tool']) {
+      expect(await onApprovalRequest({ requestId: `plan-${toolName}`, kind: 'permission', toolName, input: {} })).toMatchObject({ behavior: 'deny' });
+    }
+    expect(await onApprovalRequest({ requestId: 'plan-read', kind: 'permission', toolName: 'Read', input: {} })).toMatchObject({ behavior: 'allow' });
+    expect(seen).toHaveLength(0);
+    expect(await onApprovalRequest({ requestId: 'plan-exit', kind: 'plan_review', plan: 'Apply the change.' })).toMatchObject({ behavior: 'allow' });
+    expect(handle.getExecutionPlanMode?.()).toBe(false);
+    expect(await onApprovalRequest({ requestId: 'plan-done', kind: 'permission', toolName: 'Write', input: {} })).toMatchObject({ behavior: 'allow' });
+    await handle.close();
+  });
+
   /** 起一个远端会话并拿到 daemon 侧的 approval 回调。 */
   async function startRemoteSession(
     policy: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
@@ -1639,6 +1668,29 @@ describe('remote sessions share the same permission semantics', () => {
       input: { file_path: '/tmp/x' },
     });
     expect(allowed.behavior).toBe('allow');
+    await handle.close();
+  });
+
+  it.each([false, true])('remote Auto to Full access retains turn scope without restoring MCP forced prompts (%s)', async (restricted) => {
+    let release!: (decision: { verdict: 'allow' }) => void;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'prompt-each-time', {
+      permissionMode: 'auto', reviewAutoPermissionAction: reviewer,
+      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+    });
+    await handle.send({ type: 'user', content: 'Send the approved report.' }, restricted ? {
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true,
+      },
+    } : undefined);
+    const pending = onApprovalRequest({ requestId: 'remote-scope-switch', kind: 'permission',
+      toolName: 'mcp__cindy_contacts__call_tool', input: { name: 'contacts_merge' },
+    });
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.setPermissionMode!('bypassPermissions');
+    release({ verdict: 'allow' });
+    expect(await pending).toMatchObject({ behavior: restricted ? 'deny' : 'allow' });
+    expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
 

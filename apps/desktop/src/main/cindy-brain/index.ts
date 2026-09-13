@@ -1749,6 +1749,14 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
       getGhost: findAvailableGhost,
       ownerScope: ghostOwnerScope,
       readSecret: (ghostId, secretKey) => readGhostSecret(ghostId, secretKey),
+      resolveOauthSecret: async (ghostId, secretKey, accountId) => {
+        const ghost = findAvailableGhost(ghostId);
+        const source = ghost
+          ? withRuntimeFiloGoogleClient(ghost.manifest).network?.secrets?.find((s) => s.key === secretKey)
+          : undefined;
+        if (source?.source !== 'oauth' || !source.oauth) return { ok: false, error: 'INVALID_DECLARATION' };
+        return getGhostOauthAccountManager().getFreshAccessToken(ghostId, secretKey, source.oauth, accountId);
+      },
       sendToGhost: (ghostId, payload) => {
         sendToGhostLogic(ghostId, payload);
       },
@@ -5263,7 +5271,7 @@ let fsSlotSingleton: GhostFsSlot | null = null;
 
 /**
  * fs 槽单例(写文件,2026-07-14):deps 全部懒取现查——意识清单实扫、
- * session 快照现查 localDb(用户会话中途切 permission 模式,下一单即生效)、
+ * 会话权限由 Maker 注入的活跃 Session 读取器现查、
  * 确认卡桥现取(未初始化时按"确认通道未就绪"拒,不抛)。
  */
 export function getGhostFsSlot(): GhostFsSlot {
@@ -5274,10 +5282,11 @@ export function getGhostFsSlot(): GhostFsSlot {
       // callId → 归属/会话反查:与卡片供片同一本账(ghost_call 派单时
       // cardService.registerCall 登记),不信意识自报。
       callInfo: (callId) => getGhostCardService().callInfoOf(callId),
-      // 严格在途反查:脚本通道(无会话)的 workdir 写盘授权走它——交卷即失效,
+      // 严格在途反查:所有 workdir 写盘授权走它——交卷即失效,
       // 不享宽限窗(目录授权上下文用完即废,与 workspace 槽同一判据)。
       inFlightCallInfo: (callId) => getGhostCardService().inFlightCallInfoOf(callId),
-      getSessionSnapshot: (sessionId) => getSessionFsSnapshot(sessionId),
+      // Maker 未装配实时权限读取器前不能用数据库中的旧 Full Access 放行。
+      getSessionSnapshot: async () => null,
       requestWriteConfirm: async (sessionId, payload) => {
         const bridge = getGhostGrantConfirmBridge();
         if (!bridge) return { confirmed: false, reason: 'session_closed' };
@@ -5692,6 +5701,7 @@ export async function installAndDock(
     enable?: boolean;
     expectedPackageSha256?: string;
     trustOverride?: GhostHostTrustOverride;
+    beforePackagePlacement?: () => void;
   },
 ): Promise<InstalledGhost> {
   return withGhostInstallLock(opts.ghostId, () => installAndDockLocked(manager, lizFilePath, opts));
@@ -5706,6 +5716,7 @@ async function installAndDockLocked(
     expectedPackageSha256?: string;
     trustOverride?: GhostHostTrustOverride;
     installOrigin?: 'agent-forge';
+    beforePackagePlacement?: () => void;
   },
 ): Promise<InstalledGhost> {
   // 初始启用态由入口显式传入；当前用户导入与市场首装都传 true，覆盖更新
@@ -5717,6 +5728,7 @@ async function installAndDockLocked(
       : {}),
     ...(opts.trustOverride ? { trustOverride: opts.trustOverride } : {}),
     ...(opts.installOrigin ? { installOrigin: opts.installOrigin } : {}),
+    ...(opts.beforePackagePlacement ? { beforePackagePlacement: opts.beforePackagePlacement } : {}),
   });
   if ('rejection' in result) throwInstallError(result.rejection);
   // 纵深防御:调用方给错 id 意味着刚才那把锁上在了错误的键上(等于没上锁)。
@@ -6111,11 +6123,11 @@ async function installOrUpdateMarketGhostPackageLocked(
       // inspect 与 install 各自重读磁盘,临时 .cindy 在两读之间被替换时,
       // 所有前置校验(保留前缀/能力上限/签名/解压上限)都会作用在旧字节上。
       // 本地 .cindy 装入通道已强制此对账,市场通道同一口径。
-      expected.beforeCommitInLock?.();
       const installedGhost = await installAndDock(manager, cindyFilePath, {
         ghostId: expected.ghostId,
         enable: true,
         expectedPackageSha256: inspected.packageSha256,
+        beforePackagePlacement: expected.beforeCommitInLock,
         ...(trustOverride ? { trustOverride } : {}),
       });
       await expected.afterCommitInLock?.(installedGhost, commitEvidence);
@@ -6452,7 +6464,7 @@ export function registerGhostIpc(): void {
     const ghost = findAvailableGhost(ghostId);
     if (!ghost) return { status: 404 };
     const networkSecretDecls = ghost.manifest.network?.secrets ?? [];
-    const nodeSecretDecls = ghost.manifest.node?.secretBindings ?? [];
+    const nodeSecretDecls = (ghost.manifest.node?.secretBindings ?? []).filter((s) => !s.oauthSecret);
     const userSecretKeys = networkSecretDecls
       // Host 派生与 oauth(主机托管授权)都没有"用户填值"这回事,
       // 不进 /secrets 收单键集(oauth 的 client 凭证走 /oauth 端点)。

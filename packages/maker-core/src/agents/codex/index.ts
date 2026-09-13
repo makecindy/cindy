@@ -59,6 +59,7 @@ import type {
   InteractionResolver,
   UsageSnapshot,
 } from '../../types/events.js';
+import { isTurnWatchdogLivenessEvent } from '../../types/events.js';
 import type { AuthState, Effort, PermissionMode, UserMessage } from '../../types/common.js';
 import type {
   AgentBuiltinCommand,
@@ -183,6 +184,7 @@ import {
   readCodexRolloutModelProvider,
   sanitizeCodexForkRolloutFileInPlace,
 } from './rollout-sanitize.js';
+import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
@@ -190,6 +192,7 @@ import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
 import { AppServerRequestTimeoutError } from './app-server/client.js';
+import { useCodexHistoryHome, type CodexExternalAuth } from './app-server/external-auth.js';
 import {
   isTerminalRateLimitRetryExhaustion,
   TERMINAL_RATE_LIMIT_RETRY_MAX_ATTEMPTS,
@@ -1136,7 +1139,8 @@ const CRITICAL_THREAD_RPC_TIMEOUT_MS = 60_000;
  * 计时语义与 claude 侧一致: 只在"客户端把 ball 交给上游、等上游回话"期间计时。
  *  - 有未完成的工具类 item (命令执行 / MCP / 动态工具 / web 搜索 / 图像生成) →
  *    停表: 工具执行由 daemon 侧承担, 长 build / 拉大表 / 等审批不该被误杀。
- *  - 任何投递给上层的事件 (reasoning / text delta / status / item 更新) → 重置。
+ *  - 投递给上层的**产品进展**事件 (reasoning / text delta / tool item) → 重置。
+ *    status / account_usage / 非终态 error / turn_diff 不算（见 isTurnWatchdogLivenessEvent）。
  * 触发后走 turn/interrupt (与用户手动 Stop 同路径, 不销毁 thread), 并推一条终态
  * error, reason 与 claude 侧共用 'upstream_response_idle_timeout'。
  */
@@ -1218,12 +1222,25 @@ const CODEX_INHERITED_CAPABILITY_SELECTION = Symbol('codexInheritedCapabilitySel
 const CODEX_AUTO_REVIEW_INTENT = Symbol('codexAutoReviewIntent');
 const CODEX_YIELD_CONTINUATION = Symbol('codexYieldContinuation');
 const CODEX_INTERNAL_CONTINUATION = Symbol('codexInternalContinuation');
+const CODEX_INTERACTION_CONTINUATION = Symbol('codexInteractionContinuation');
 const YIELD_CONTINUATION_MAX_ATTEMPTS = 2;
 type CodexInternalSendOptions = SendOptions & {
   [CODEX_INHERITED_CAPABILITY_SELECTION]?: string;
   [CODEX_AUTO_REVIEW_INTENT]?: string;
   [CODEX_YIELD_CONTINUATION]?: number;
   [CODEX_INTERNAL_CONTINUATION]?: true;
+  [CODEX_INTERACTION_CONTINUATION]?: true;
+};
+type InteractionContinuationClaim = {
+  id: number;
+  state: 'awaiting' | 'active' | 'cancelled';
+  settled: boolean;
+  pendingBoundaryEvents: number;
+  turnIds: Set<string>;
+  requestIds: Set<string>;
+  pendingSends: number;
+  sendTail: Promise<void>;
+  abort: AbortController;
 };
 type YieldContinuationClaim = {
   id: number;
@@ -2291,6 +2308,7 @@ export class CodexAgent extends BaseAgent {
       customContextModel?: string;
       customContextWindow?: number;
       sqliteHome?: string;
+      historyHome?: string;
     } = {},
   ): Promise<AppServerHost> {
     const key = opts.keyOverride ?? (opts.providerId ? `local-account:${opts.providerId}` : hostKey(remoteHostId));
@@ -2495,6 +2513,7 @@ export class CodexAgent extends BaseAgent {
         opts.customContextWindow,
         opts.providerId,
         opts.sqliteHome,
+        opts.historyHome,
       ).finally(() => {
         // 成功: this.hosts 已赋值, 后续走快路径; 失败: 清掉 promise 让下次调用能重试
         const current = this.hostPromises.get(key);
@@ -2533,14 +2552,16 @@ export class CodexAgent extends BaseAgent {
   }
 
   /** Start the local OAuth host used by non-model account control-plane RPCs. */
-  private async getStartedAccountHost(providerId?: string): Promise<AppServerHost> {
+  private async getStartedAccountHost(providerId?: string, startupTimeoutMs?: number): Promise<AppServerHost> {
     const credentialMode = 'oauth-bearer';
     const host = await this.getHost(undefined, credentialMode, {
       providerId,
       keyOverride: providerId ? `local-account:${providerId}:control-plane` : localControlPlaneHostKey(credentialMode),
       hostPurpose: 'control-plane',
     });
-    const init = await host.ensureStarted();
+    const init = startupTimeoutMs
+      ? await host.ensureStartedWithTimeout(startupTimeoutMs, 'account token refresh')
+      : await host.ensureStarted();
     if (init.codexHome && !providerId) this.codexHome = init.codexHome;
     return host;
   }
@@ -2674,6 +2695,7 @@ export class CodexAgent extends BaseAgent {
     customContextWindow?: number,
     providerId?: string,
     sqliteHome?: string,
+    historyHome?: string,
   ): Promise<AppServerHost> {
     const seq = (this.createHostSeqByKey.get(key) ?? 0) + 1;
     this.createHostSeqByKey.set(key, seq);
@@ -2747,6 +2769,10 @@ export class CodexAgent extends BaseAgent {
     let codexOpenAiWebSocketsEnabled = true;
     let codexSubagentRoutingProfile: CodexExtraSpawnConfig['codexSubagentRoutingProfile'] = 'default';
     let hostRetirementCleanup: CodexExtraSpawnConfig['onHostRetired'];
+    // Capture the owner/account reader before any asynchronous authentication work.
+    const readAccountTokens = !remoteHostId && historyHome
+      ? this.deps.createCodexAuthTokenReader?.(providerId)
+      : undefined;
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -2789,6 +2815,7 @@ export class CodexAgent extends BaseAgent {
               remoteHostId,
               ...(providerId ? { providerId } : {}),
               ...(key.startsWith('local-account:') ? { codexHome: env.CODEX_HOME } : {}),
+              ...(!remoteHostId && historyHome ? { runtimeCodexHome: historyHome } : {}),
               ...(key.startsWith('local-account:') ? { accountHostKey: `${key}:${generation}` } : {}),
               credentialMode: spawnCredentialMode,
               ...(spawnCredentialMode !== credentialMode
@@ -2887,6 +2914,41 @@ export class CodexAgent extends BaseAgent {
       break;
     }
     if (!remoteHostId && sqliteHome) extraArgs.push('-c', `sqlite_home=${JSON.stringify(sqliteHome)}`);
+    let externalAuth: CodexExternalAuth | undefined;
+    const requireEphemeralAuth = !remoteHostId && !!historyHome && path.resolve(historyHome) !== path.resolve(env.CODEX_HOME ?? '');
+    if (!remoteHostId && hostPurpose === 'control-plane' && effectiveMode === 'oauth-bearer' && env.CODEX_HOME) {
+      // Managed refresh must read the selected account's file, not an inherited identity.
+      env = useCodexHistoryHome(env, env.CODEX_HOME);
+    }
+    if (requireEphemeralAuth) {
+      // Extra spawn configuration above intentionally uses the TARGET credential
+      // home (proxy auth, model catalogs and account controls). Only the native
+      // runtime uses the canonical history home, including lineage/writer locks.
+      env = useCodexHistoryHome(env, historyHome!);
+      extraArgs.push('-c', 'cli_auth_credentials_store="ephemeral"');
+      if (effectiveMode === 'oauth-bearer') {
+        if (!readAccountTokens) {
+          await hostRetirementCleanup?.();
+          throw new Error('Codex account authentication bridge is unavailable');
+        }
+        externalAuth = {
+          readTokens: async (refresh, staleAccessToken) => {
+            assertCurrentGeneration('external authentication');
+            // Validate scope before opening a native credential control-plane host.
+            let tokens = await readAccountTokens();
+            assertCurrentGeneration('external authentication scope');
+            if (refresh && tokens.accessToken === staleAccessToken) {
+              const accountHost = await this.getStartedAccountHost(providerId, 8_000);
+              assertCurrentGeneration('account token refresh');
+              await accountHost.request('account/read', { refreshToken: true }, { timeoutMs: 8_000 });
+              tokens = await readAccountTokens();
+            }
+            assertCurrentGeneration('external authentication result');
+            return tokens;
+          },
+        };
+      }
+    }
     if (baseExtraArgs.length > 0) {
       this.deps.logger.info('Codex plugin runtime disabled for local app-server', {
         plugins: false,
@@ -2938,6 +3000,8 @@ export class CodexAgent extends BaseAgent {
 
     const host = new AppServerHost({
       createTransport,
+      externalAuth,
+      requireEphemeralAuth,
       logger: this.deps.logger,
       // 自报名只进 codex app-server 的 userAgent 展示串,无门控消费
       // (2026-07-17 随品牌翻转改 cindy;上游 gating 走 originator,与此无关)。
@@ -3213,7 +3277,7 @@ export class CodexAgent extends BaseAgent {
     // ── Maker Memory: 启动时预拉 MEMORY.md 索引 + 写入规范段 ────────────────
     // thread/start 仍把 developerInstructions 写入新 thread; thread/resume 在普通非 proxy
     // 路径只在 host 明确告知历史未含产品 prompt 时补发一次,避免常规 resume 重复堆积。
-    // WS thread 恢复时则始终携带当前值:Codex 的 SessionMeta 不持久化该字段,冷恢复若只
+    // WS 与 teammate thread 恢复时始终携带当前值:Codex 的 SessionMeta 不持久化该字段,冷恢复若只
     // 依赖历史里的旧 developer message,后续 compact 重建 canonical context 时会丢产品
     // prompt。Codex 0.145 对仍在内存中的 loaded thread 会忽略 resume override,且冷恢复
     // 首轮的 steady-state diff 不补一条发生变化的 plain developer_instructions；正常
@@ -3371,6 +3435,9 @@ export class CodexAgent extends BaseAgent {
     let isTurnInFlight = false;
     const yieldedExecCellsByTurnId = new Map<string, Map<string, YieldedExecCell[]>>();
     const yieldContinuationClaims = new Map<number, YieldContinuationClaim>();
+    const interactionContinuationClaims = new Map<number, InteractionContinuationClaim>();
+    let interactionContinuation: InteractionContinuationClaim | null = null;
+    const interactionIdleWaiters = new Set<() => void>();
     const yieldContinuationListeners = new Set<(
       continuationId: number,
       state: 'awaiting' | 'active' | 'cancelled',
@@ -3401,6 +3468,104 @@ export class CodexAgent extends BaseAgent {
       if (!claim.settled || claim.pendingBoundaryEvents > 0) return;
       yieldContinuationClaims.delete(claim.id);
     };
+    // Human replies use the existing product-boundary contract, but never the
+    // yield claim itself: an answer may have to wait for a yielded cell first.
+    const retainInteractionContinuation = (turnId: string, requestId: string): InteractionContinuationClaim => {
+      const claim = interactionContinuation ?? {
+        id: nextYieldContinuationId++, state: 'awaiting' as const, settled: false,
+        pendingBoundaryEvents: 0, turnIds: new Set<string>(), requestIds: new Set<string>(),
+        pendingSends: 0, sendTail: Promise.resolve(), abort: new AbortController(),
+      };
+      interactionContinuation = claim;
+      interactionContinuationClaims.set(claim.id, claim);
+      claim.turnIds.add(turnId);
+      claim.requestIds.add(requestId);
+      claim.state = 'awaiting';
+      return claim;
+    };
+    const releaseInteractionClaim = (claim: InteractionContinuationClaim): void => {
+      if (claim.settled && claim.pendingBoundaryEvents === 0) interactionContinuationClaims.delete(claim.id);
+    };
+    const retireInteractionClaim = (claim: InteractionContinuationClaim, cancelled: boolean, notifyCancellation = cancelled): void => {
+      claim.settled = true;
+      if (interactionContinuation === claim) interactionContinuation = null;
+      if (cancelled) {
+        // Failure must be delivered as an error, not as a cancellation callback:
+        // scheduled consumers treat that callback as successful teardown.
+        claim.state = notifyCancellation ? 'cancelled' : 'active';
+        claim.abort.abort();
+        if (notifyCancellation) emitYieldContinuationState(claim.id, 'cancelled');
+      }
+      releaseInteractionClaim(claim);
+    };
+    const cancelInteractionContinuation = (reason: string, notifyCancellation = false): InteractionContinuationClaim | null => {
+      const claim = interactionContinuation;
+      if (!claim) return null;
+      retireInteractionClaim(claim, true, notifyCancellation);
+      for (const requestId of claim.requestIds) {
+        eventQueue.push({ type: 'interaction_dismissed',
+          data: { requestId, reason, resolvedAs: 'deny' }, source: 'codex' });
+      }
+      claim.requestIds.clear();
+      return claim;
+    };
+    const interactionCanFinish = (claim: InteractionContinuationClaim): boolean =>
+      !claim.settled && claim.requestIds.size === 0 && claim.pendingSends === 0 &&
+      !isTurnInFlight && !isTurnStartPending && !activeYieldContinuationClaim() && !yieldContinuationInFlight;
+    const finishIdleInteraction = (claim: InteractionContinuationClaim, cancelled = false): void => {
+      if (!interactionCanFinish(claim)) return;
+      retireInteractionClaim(claim, cancelled);
+      // SDK usage was already delivered on its claimed boundary. Never replay it.
+      eventQueue.push({ type: 'done', data: { type: 'codex/event/task_complete', cancelled }, source: 'codex' });
+      eventQueue.push({ type: 'status', data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false }, source: 'codex' });
+    };
+    const finishInteractionWithoutFollowUp = (requestId: string): void => {
+      const claim = interactionContinuation;
+      if (!claim?.requestIds.delete(requestId)) return;
+      finishIdleInteraction(claim, true);
+    };
+    const flushInteractionIdleWaiters = (): void => {
+      for (const resolve of [...interactionIdleWaiters]) resolve();
+    };
+    async function sendInteractionContinuation(
+      requestId: string, message: UserMessage, options: CodexInternalSendOptions,
+      failureContext: string,
+    ): Promise<void> {
+      const claim = interactionContinuation;
+      if (!claim || !claim.requestIds.delete(requestId) || claim.settled) return;
+      claim.pendingSends += 1;
+      claim.sendTail = claim.sendTail.then(async () => {
+        if (claim.settled || closed || await waitForYieldContinuationIdle()) return;
+        while (!claim.settled && (isTurnInFlight || isTurnStartPending)) {
+          await new Promise<void>((resolve) => {
+            const wake = () => {
+              interactionIdleWaiters.delete(wake);
+              claim.abort.signal.removeEventListener('abort', wake);
+              resolve();
+            };
+            interactionIdleWaiters.add(wake);
+            claim.abort.signal.addEventListener('abort', wake, { once: true });
+          });
+        }
+        if (claim.settled || closed) return;
+        claim.state = 'active';
+        emitYieldContinuationState(claim.id, 'active');
+        await handle.send(message, { ...options, signal: claim.abort.signal,
+          throwOnStartFailure: true, [CODEX_INTERACTION_CONTINUATION]: true } as CodexInternalSendOptions);
+      }).catch((error: unknown) => {
+        if (claim.settled || closed) return;
+        cancelInteractionContinuation('interaction_continuation_failed');
+        eventQueue.push({ type: 'error', data: {
+          message: `${failureContext}: ${String(error)}`, isTerminal: true,
+        }, source: 'codex' });
+        eventQueue.push({ type: 'status', data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false }, source: 'codex' });
+        eventQueue.push({ type: 'done', data: { type: 'codex/event/task_complete' }, source: 'codex' });
+      }).finally(() => {
+        claim.pendingSends -= 1;
+        finishIdleInteraction(claim);
+      });
+      await claim.sendTail;
+    }
     const yieldItemLedgerKey = (record: Record<string, unknown> | null): string => {
       if (!record) return '';
       for (const key of ['id', 'call_id', 'callId'] as const) {
@@ -3592,21 +3757,28 @@ export class CodexAgent extends BaseAgent {
     };
     const releaseYieldContinuationEvent = (event: AgentEvent): void => {
       if (event.turnContinuationId === undefined) return;
+      const interactionClaim = interactionContinuationClaims.get(event.turnContinuationId);
+      if (interactionClaim) {
+        interactionClaim.pendingBoundaryEvents = Math.max(0, interactionClaim.pendingBoundaryEvents - 1);
+        releaseInteractionClaim(interactionClaim);
+        return;
+      }
       const claim = yieldContinuationClaims.get(event.turnContinuationId);
       if (!claim) return;
       claim.pendingBoundaryEvents = Math.max(0, claim.pendingBoundaryEvents - 1);
       releaseSettledYieldContinuationClaim(claim);
     };
     const emitYieldContinuationFailure = (opts: {
-      reason: 'yield-continuation-start-failed' | 'yield-continuation-lost-handle';
+      reason: 'yield-continuation-start-failed' | 'yield-continuation-incomplete';
       message: string;
       cells: YieldedExecCell[];
       detail?: string;
     }): void => {
+      cancelInteractionContinuation(opts.reason);
       log.warn(
         opts.reason === 'yield-continuation-start-failed'
           ? 'yield continuation turn failed to start'
-          : 'yield continuation lost exec cell',
+          : 'yield continuation did not retrieve execution results',
         {
           reason: opts.reason,
           ...(opts.detail ? { detail: opts.detail } : {}),
@@ -3645,10 +3817,12 @@ export class CodexAgent extends BaseAgent {
         detail: String(error),
       });
     };
-    const emitYieldContinuationLostHandle = (cells: YieldedExecCell[], reason: string): void => {
+    // Missing progress or exhausted retries do not prove a handle was lost.
+    // Even not-found can mean a completed cell was already consumed.
+    const emitYieldContinuationIncomplete = (cells: YieldedExecCell[], reason: string): void => {
       emitYieldContinuationFailure({
-        reason: 'yield-continuation-lost-handle',
-        message: `Foreground exec cell ${cells.map((cell) => cell.cellId).join(', ')} was lost after the previous turn completed.`,
+        reason: 'yield-continuation-incomplete',
+        message: 'Unable to retrieve the execution result. Automatic continuation has stopped. Ask the assistant to check the existing execution result.',
         cells,
         detail: reason,
       });
@@ -4492,11 +4666,12 @@ export class CodexAgent extends BaseAgent {
       : usesCustomContextHost
         ? localCustomContextHostKey(sid)
         : hostKey(opts.remoteHostId);
-    const sessionSqliteHome = !opts.remoteHostId && opts.resumeSessionId
-      ? await this.deps.resolveCodexThreadStorageHome?.(opts.resumeSessionId)
+    const sessionStorage = !opts.remoteHostId && opts.resumeSessionId
+      ? await this.deps.resolveCodexThreadStorage?.(opts.resumeSessionId)
       : undefined;
+    const sessionSqliteHome = sessionStorage?.sqliteHome;
     const currentHostKey = (accountSessionHost ? `local-account:${accountProviderId ?? 'openai'}:session:${sid}` : baseSessionHostKey)
-      + (sessionSqliteHome ? `:storage:${sessionSqliteHome}` : '');
+      + (sessionStorage ? `:storage:${sessionSqliteHome}:history:${sessionStorage.historyHome}` : '');
     let releaseHostBindingLease: (() => void) | null = null;
     const acquireHostBindingLeaseIfNeeded = (): void => {
       if (opts.remoteHostId || releaseHostBindingLease) return;
@@ -4516,6 +4691,7 @@ export class CodexAgent extends BaseAgent {
       return await this.getHost(opts.remoteHostId, credentialMode, {
         ...(accountProviderId ? { providerId: accountProviderId } : {}),
         ...(sessionSqliteHome ? { sqliteHome: sessionSqliteHome } : {}),
+        ...(sessionStorage ? { historyHome: sessionStorage.historyHome } : {}),
         ...(accountSessionHost || reviewMode || usesCustomContextHost || sessionSqliteHome ? { keyOverride: currentHostKey } : {}),
         ignoreBindingLeases: 1,
         ...(reviewMode
@@ -4559,6 +4735,10 @@ export class CodexAgent extends BaseAgent {
       });
     }
     const connectionId = host.getConnectionId();
+    // JSON-RPC IDs are connection-local (often 0). Desktop indexes interaction
+    // requests across sessions, so never expose a raw server ID as a UI ID.
+    const serverInteractionId = (requestId: string | number): string =>
+      `codex:${connectionId}:${String(requestId)}`;
     const isCurrentHost = (): boolean => {
       if (sessionHostForceRetired) return false;
       const currentHost = this.hosts.get(currentHostKey);
@@ -4598,7 +4778,7 @@ export class CodexAgent extends BaseAgent {
       throw error;
     }
     const sessionCodexHome = initResp.codexHome ?? null;
-    if (initResp.codexHome && !accountProviderId) this.codexHome = initResp.codexHome;
+    if (initResp.codexHome && !accountProviderId && !sessionStorage) this.codexHome = initResp.codexHome;
     // reviewer 路由的凭证模式判定: 远程 daemon 用的是 auth sync 推过去的
     // 同一份订阅凭证, reviewer 调用发生在 daemon 本地 — 订阅下走 daemon →
     // chatgpt.com 直连, 与本地订阅同构 (远端出网由用户网络或 agent-proxy
@@ -5193,7 +5373,7 @@ export class CodexAgent extends BaseAgent {
       update: SubagentLiveCardUpdate,
       lifecycle: Pick<AgentEvent, 'turnScope' | 'backgroundTurnStartedAt'> = {},
     ): void => {
-      // 子代理帧**不得**参与主 turn 的存活判定。eventQueue.push 上装了探针:每条事件都会刷新
+      // 子代理帧**不得**参与主 turn 的存活判定。eventQueue.push 上装了探针:产品进展事件会刷新
       // upstreamIdleLastEventAt + armUpstreamIdle(),并喂给 observeReconnectStallEvent ——
       // 而 `agent_task_update` 正在 isReconnectRecoveryEvent 的白名单里(那对 Claude 的主线程
       // Task 更新是对的,不能从白名单里删)。于是子线程一有进展就会重置主线程的静默计时、
@@ -5503,6 +5683,7 @@ export class CodexAgent extends BaseAgent {
     const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
       if (closed) return;
       closed = true;
+      cancelInteractionContinuation(reason);
       resetCodexGenerationTiming(translatorRt);
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
@@ -6067,8 +6248,9 @@ export class CodexAgent extends BaseAgent {
     let threadId!: string;
     let sessionRolloutPath: string | undefined;
     const recordNativeThreadLocation = async (thread: { id: string; [key: string]: unknown }): Promise<void> => {
-      if (opts.remoteHostId || !sessionCodexHome || typeof thread.path !== 'string') return;
+      if (typeof thread.path !== 'string') return;
       sessionRolloutPath = thread.path;
+      if (opts.remoteHostId || !sessionCodexHome) return;
       await this.deps.recordCodexThreadLocation?.(thread.id, sessionSqliteHome ?? sessionCodexHome, thread.path);
     };
     let codexThreadModelProviderId: string | undefined;
@@ -6186,7 +6368,7 @@ export class CodexAgent extends BaseAgent {
       const shouldSendNativeDeveloperInstructions =
         !!developerInstructions
         && !useProxyChannel
-        && (threadUsesWebSocket || opts.codexHistoryHasProductPrompt !== true);
+        && (!!opts.botRuntimeProfile || threadUsesWebSocket || opts.codexHistoryHasProductPrompt !== true);
       const params: ThreadResumeParams = {
         threadId: opts.resumeSessionId,
         ...(preparedResumePath ? { path: preparedResumePath } : {}),
@@ -6233,6 +6415,22 @@ export class CodexAgent extends BaseAgent {
         workspacePermissionProfileActive = currentWorkspacePermissionProfile() !== undefined;
         workspacePermissionProfileFingerprint = currentWorkspacePermissionProfileFingerprint();
         threadMayHaveRollout = true;
+        // A historical developer message is not evidence that the current teammate
+        // baseline reached the model. Native resume overrides update configuration,
+        // but do not replace old model-visible instructions. Append through the
+        // native history API before exposing the refreshed runtime as ready.
+        if (opts.botRuntimeProfile && developerInstructions && !useProxyChannel) {
+          const current = teammateRuntimeInstructionItem(developerInstructions);
+          if (!await hasCurrentTeammateInstructions(sessionRolloutPath, current.marker,
+            opts.remoteHostId ? this.deps.getRemoteAgentFileOps?.(opts.remoteHostId) ?? {} : undefined)) {
+            assertCurrentHost('thread/inject_items');
+            await host.request(Method.ThreadInjectItems, { threadId, items: [current.item] }, {
+              timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS,
+            });
+            assertCurrentHost('thread/inject_items');
+          }
+          codexProductPromptDelivery = { threadId, historyHasProductPrompt: true };
+        }
         // Resumed app-server threads may have sticky collaborationMode='plan' from
         // a previous handle whose plan cycle ended without a follow-up turn. Since
         // that sticky state lives server-side, conservatively send mode:'default'
@@ -6644,8 +6842,8 @@ export class CodexAgent extends BaseAgent {
       reviewing?: boolean;
       turnId: string | null;
       itemId?: string;
-      /** prompt-each-time 高风险审批: 宽松模式也必须弹 UI, dismissAllPending('allow') 不得放行 */
-      forcePrompt?: boolean;
+      /** 本轮来源/执行范围约束独立于 MCP 的逐次审批偏好。 */
+      turnPolicyForcePrompt?: boolean;
       /** Auto 审阅故障降级来的确认:系统收口不能当成用户点了拒绝。 */
       unavailableHandoff?: boolean;
       onSystemDenied?: (reason: string) => void;
@@ -6764,6 +6962,7 @@ export class CodexAgent extends BaseAgent {
     ): Promise<void> {
       planReviewSeq += 1;
       const requestId = `codex-plan-review:${turnId}:${planReviewSeq}`;
+      const continuationClaim = retainInteractionContinuation(turnId, requestId);
       // 计划审批期间用户可能继续发消息(currentAutoReviewIntent 会被覆盖):实施/修订 turn 的审查
       // 意图必须锚在**发起计划时**的原始请求上(codex 报)。
       const planRequestAutoReviewIntent = currentAutoReviewIntent;
@@ -6802,9 +7001,10 @@ export class CodexAgent extends BaseAgent {
       };
       log.debug('plan review ▶ dispatch', { turnId, planChars: plan.length });
       const decision = await dispatchInteraction({ kind: 'plan_review', requestId, plan });
-      if (closed) return;
+      if (closed || continuationClaim.settled) return;
       if (decision.kind !== 'plan_review') {
         log.warn('plan review got mismatched decision', { decKind: decision.kind });
+        finishInteractionWithoutFollowUp(requestId);
         return;
       }
       if (decision.behavior === 'allow') {
@@ -6833,12 +7033,13 @@ export class CodexAgent extends BaseAgent {
         try {
           if (await waitForYieldContinuationIdle()) return;
           if (closed) return;
-          await handle.send(
+          await sendInteractionContinuation(requestId,
             { type: 'user', content: message },
             planFollowUpSendOptions(
               addedCapabilitySelection,
               implementationAutoReviewIntent,
             ),
+            'plan implementation turn failed to start',
           );
         } catch (e) {
           emitPlanFollowUpStartFailure('implementation', e);
@@ -6857,17 +7058,19 @@ export class CodexAgent extends BaseAgent {
           dismissed: decision.dismissed === true,
           reason: decision.reason ?? null,
         });
+        finishInteractionWithoutFollowUp(requestId);
         return;
       }
       log.debug('plan review ◀ revision requested — starting plan revision turn', { turnId });
       try {
         if (await waitForYieldContinuationIdle()) return;
         if (closed) return;
-        await handle.send(
+        await sendInteractionContinuation(requestId,
           { type: 'user', content: feedback },
           // 修订轮同样带上原始审查意图快照:否则 send 会把 auto-review intent 覆盖成这条修改意见,
           // 下一次计划获批后 implementation reviewer 拿到的是"修改意见+计划"而非原始用户请求(codex 报)。
           planFollowUpSendOptions(feedback, planRequestAutoReviewIntent),
+          'plan revision turn failed to start',
         );
       } catch (e) {
         planCycleActive = false;
@@ -6921,20 +7124,19 @@ export class CodexAgent extends BaseAgent {
               : 'The permission confirmation could not be completed. No user rejection was received.';
           emitAutoReviewRuntimeNotice(`[${code}] ${text}`);
         };
-        let forcePrompt =
-          opts?.forcePrompt === true ||
-          (req.kind === 'permission' &&
-            forceTurnConfirmation(req.toolName, req.input));
+        const turnPolicyForcePrompt = req.kind === 'permission'
+          && forceTurnConfirmation(req.toolName, req.input);
+        let forcePrompt = opts?.forcePrompt === true || turnPolicyForcePrompt;
         let unavailableHandoff = false;
         let approvalRequest = req;
         // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
         // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
         // 再由 Cindy reviewer 静默裁决。
-        // forcePrompt 高风险 MCP inner tool
-        // retains its independent confirmation outside Auto.
+        // MCP 的逐次审批标记不能覆盖用户选择的 Full access。
+        // 独立的本轮执行范围约束仍由 turn policy 决定。
         if (
-          !forcePrompt &&
-          mutablePermissionMode === 'bypassPermissions'
+          mutablePermissionMode === 'bypassPermissions' &&
+          !turnPolicyForcePrompt
         ) {
           return Promise.resolve('accept');
         }
@@ -6987,7 +7189,14 @@ export class CodexAgent extends BaseAgent {
           // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
           // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
           const modeAfterReview = mutablePermissionMode as PermissionMode;
-          if (modeAfterReview === 'bypassPermissions') return 'accept';
+          if (modeAfterReview === 'bypassPermissions') {
+            if (turnPolicyForcePrompt) {
+              denialReason = formatPermissionDenial('system', 'Permission mode changed; retry within the authorized turn scope.');
+              reportMcpDenial('system');
+              return 'decline';
+            }
+            return 'accept';
+          }
           if (modeAfterReview !== 'auto') {
             forcePrompt = true;
           } else if (decision.verdict === 'allow') {
@@ -7025,7 +7234,7 @@ export class CodexAgent extends BaseAgent {
             settled: false,
             turnId,
             ...(opts?.itemId ? { itemId: opts.itemId } : {}),
-            forcePrompt,
+            turnPolicyForcePrompt,
             ...(unavailableHandoff ? { unavailableHandoff: true } : {}),
             onSystemDenied: (reason) => reportMcpDenial('system', reason, false),
           };
@@ -7081,7 +7290,7 @@ export class CodexAgent extends BaseAgent {
     /**
      * 强制 resolve 所有挂起的 approval, emit interaction_dismissed 让 UI 关 dialog。
      * 调用场景: setPermissionMode 切换 / close session。
-     *   - resolveAs='allow' (mode 切到 bypass; forcePrompt 仍 fail-closed): decision='accept'
+     *   - resolveAs='allow' (mode 切到 bypass): decision='accept'
      *   - resolveAs='deny'  (mode 切到 ask/auto 或 close): decision='decline'
      */
     function dismissAllPending(reason: string, resolveAs: 'allow' | 'deny', preserveReviewing = false): void {
@@ -7091,11 +7300,7 @@ export class CodexAgent extends BaseAgent {
         if (entry.settled || (preserveReviewing && entry.reviewing)) continue;
         entry.settled = true;
         pendingApprovals.delete(requestId);
-        // forcePrompt(prompt-each-time 高风险审批)不接受"切到宽松模式"的批量放行——
-        // 没拿到用户对这一次调用的明确确认就 fail-closed 拒绝, 与 awaitApprovalDecision
-        // 里宽松模式仍强制弹 UI 的语义一致。
-        const effectiveResolveAs: 'allow' | 'deny' =
-          resolveAs === 'allow' && entry.forcePrompt === true ? 'deny' : resolveAs;
+        const effectiveResolveAs = resolveAs === 'allow' && entry.turnPolicyForcePrompt ? 'deny' : resolveAs;
         if (effectiveResolveAs === 'deny') entry.onSystemDenied?.(reason);
         if (effectiveResolveAs === 'deny' && entry.unavailableHandoff && entry.kind !== 'mcpServerElicitation') {
           autoReviewConfirmUndeliveredNotice.notify();
@@ -7128,7 +7333,7 @@ export class CodexAgent extends BaseAgent {
         cancelledDynamicToolResponse(reason),
       );
       for (const meta of [...cancelledUserInput, ...cancelledDynamicTools]) {
-        const requestId = String(meta.requestId);
+        const requestId = serverInteractionId(meta.requestId);
         if (dismissed.has(requestId)) continue;
         dismissed.add(requestId);
         liveAskUserByRequestId.delete(requestId);
@@ -7170,7 +7375,10 @@ export class CodexAgent extends BaseAgent {
       // 否则被盖住的 resolver 会一直占着 hasPendingAgentInteraction。
       const lives = [...liveAskUserByRequestId.values()].filter((live) => live.turnId === turnId);
       const keep = lives.at(-1) ?? null;
-      if (keep) keep.detached = true;
+      if (keep) {
+        keep.detached = true;
+        retainInteractionContinuation(turnId, keep.requestId);
+      }
       const keepUiRequestIds = new Set(keep ? [keep.requestId] : []);
       const dismissed = new Set<string>();
       const dismiss = (requestId: string, reason: string): void => {
@@ -7189,7 +7397,7 @@ export class CodexAgent extends BaseAgent {
         dismiss(live.requestId, 'superseded');
       }
       for (const meta of [...cancelledUserInput, ...cancelledDynamicTools]) {
-        dismiss(String(meta.requestId), 'turn_completed');
+        dismiss(serverInteractionId(meta.requestId), 'turn_completed');
       }
     }
 
@@ -7228,7 +7436,8 @@ export class CodexAgent extends BaseAgent {
         [CODEX_INTERNAL_CONTINUATION]: true,
       };
       try {
-        await handle.send({ type: 'user', content: message }, sendOptions);
+        await sendInteractionContinuation(live.requestId, { type: 'user', content: message }, sendOptions,
+          'ask_user continuation turn failed to start');
       } catch (error) {
         emitAskUserContinuationStartFailure(error);
       }
@@ -7416,6 +7625,7 @@ export class CodexAgent extends BaseAgent {
       currentTurnId = turnId;
       isTurnInFlight = true;
       bindYieldContinuationTurn(turnId);
+      interactionContinuation?.turnIds.add(turnId);
       if (!isNewTurn) return;
       if (!hasActivatedRootTurn) {
         // Resume replays the previous run's usage window before this run starts.
@@ -7619,7 +7829,8 @@ export class CodexAgent extends BaseAgent {
             message,
           });
         };
-        if (!stalledThreadId || opts.remoteHostId || !stallAgent.hasLocalCodexHome()) {
+        if (!stalledThreadId || opts.remoteHostId ||
+          (!sessionRolloutPath && !sessionCodexHome && !stallAgent.hasLocalCodexHome())) {
           emitStalled('codex_reconnect_stalled', stalledMessage);
           return;
         }
@@ -7760,9 +7971,11 @@ export class CodexAgent extends BaseAgent {
       const msSinceLast =
         upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
       const turnId = currentTurnId ?? pendingTurnId;
+      const timeoutReason = opts?.reason ?? 'upstream_response_idle_timeout';
       const deferTurnCleanupUntilInterrupt =
-        opts?.reason === 'codex_reconnect_stalled' ||
-        opts?.reason === CODEX_HISTORY_OVERSIZED_REASON;
+        timeoutReason === 'codex_reconnect_stalled' ||
+        timeoutReason === CODEX_HISTORY_OVERSIZED_REASON ||
+        timeoutReason === 'upstream_response_idle_timeout';
       if (deferTurnCleanupUntilInterrupt && !pendingTurnId && turnId) {
         // Keep Session.isTurnRunning() true until the interrupt ACK (or the
         // close/retire fallback) settles. Desktop may already have received
@@ -7785,7 +7998,7 @@ export class CodexAgent extends BaseAgent {
         data: {
           // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
           // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
-          reason: opts?.reason ?? 'upstream_response_idle_timeout',
+          reason: timeoutReason,
           message: opts?.message ??
             (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
               'the turn was interrupted automatically to avoid hanging forever. ' +
@@ -7878,8 +8091,9 @@ export class CodexAgent extends BaseAgent {
       }
       resetUpstreamIdleForTurnEnd();
       if (!turnId) return;
-      // 普通 upstream-idle watchdog 仍立即收本地 turn；只有明确的重连停滞
-      // 路径延后这一步，直到 interrupt ACK 成功。
+      // 普通 upstream-idle 与 reconnect-stall 一样延后本地收口：自动续跑可能已经
+      // 排期，ACK 前发新 turn 会撞上还在 interrupt 的旧 transport。compaction-storm
+      // 等其它 reason 仍立即收口。
       if (!deferTurnCleanupUntilInterrupt) {
         handleTurnCompleted({
           threadId,
@@ -7966,7 +8180,15 @@ export class CodexAgent extends BaseAgent {
         } catch (e) {
           log.warn('upstream-idle watchdog close threw', { error: String(e) });
         }
-        if (completedDuringRelease || settleInterruptedTurn()) {
+        const completedDuringClose = completedDuringRelease || settleInterruptedTurn();
+        // closeSessionHandle 不碰 isTurnInFlight。延后收口的 idle / reconnect-stall
+        // 在 ACK 失败后必须把本地 busy 放下，否则 isTurnRunning() 恒 true，自动续跑
+        // 会被 SESSION_RUNNING 挡住，只能干等到 Session 观察到 eventQueue.end()。
+        if (currentTurnId === turnId || currentTurnId === null) {
+          isTurnInFlight = false;
+          currentTurnId = null;
+        }
+        if (completedDuringClose) {
           log.info('reconnect-stall turn completed during handle close; keeping shared host', {
             threadId,
             turnId,
@@ -7997,14 +8219,21 @@ export class CodexAgent extends BaseAgent {
     // 装探针:此处仍远早于 handlers 注册(事件开始流动),不会漏掉任何一条。
     const rawEventQueuePush = eventQueue.push;
     eventQueue.push = (ev: AgentEvent): boolean => {
+      if (ev.type === 'error' && (ev.data as { isTerminal?: boolean }).isTerminal === true) {
+        cancelInteractionContinuation('terminal_error');
+      }
       // 子代理卡帧只是"子线程有进展",不代表主 turn 还活着 —— 不参与静默计时与
       // reconnect 恢复判定,否则主 turn 哑火时会被子代理的心跳一直掩盖(review)。
       if (!emittingDescendantUpdate && ev.turnScope !== 'background') {
-        watchdogActivityVersion += 1;
-        upstreamIdleLastEventType = ev.type;
-        upstreamIdleLastEventAt = Date.now();
-        armUpstreamIdle();
         observeReconnectStallEvent(ev);
+        // 只有产品进展刷新 idle（白名单见 isTurnWatchdogLivenessEvent）；reconnect
+        // 仍要看到 status（isRunning=false 算恢复）。
+        if (isTurnWatchdogLivenessEvent(ev)) {
+          watchdogActivityVersion += 1;
+          upstreamIdleLastEventType = ev.type;
+          upstreamIdleLastEventAt = Date.now();
+          armUpstreamIdle();
+        }
       }
       const accepted = rawEventQueuePush(ev);
       if (!accepted) releaseYieldContinuationEvent(ev);
@@ -8419,8 +8648,7 @@ export class CodexAgent extends BaseAgent {
               ? codexSessionApprovalSuggestions()
               : undefined,
         },
-        // prompt-each-time:Full access 也必须逐次弹 UI,否则高风险 inner tool
-        // (contacts delete/merge/系统回写)会被 awaitApprovalDecision 首分支静默放行。
+        // 逐次标记只限制 Ask/Auto 的授权记忆，不覆盖 Full access。
         {
           forcePrompt:
             turnPolicyForcePrompt || approvalPolicy === 'prompt-each-time',
@@ -8691,6 +8919,7 @@ export class CodexAgent extends BaseAgent {
         });
         if (decision.kind !== 'ask_user_question') {
           log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
+          finishInteractionWithoutFollowUp(requestId);
           return questions.map(() => []);
         }
         const live = liveAskUserByRequestId.get(requestId);
@@ -8713,6 +8942,8 @@ export class CodexAgent extends BaseAgent {
         ) {
           live.continuationStarted = true;
           void startAskUserContinuation(live, decision.answers ?? {}, continuationAutoReviewIntent);
+        } else if (live?.detached && decision.dismissed === true) {
+          finishInteractionWithoutFollowUp(requestId);
         }
         return answersByPosition;
       })();
@@ -8826,11 +9057,11 @@ export class CodexAgent extends BaseAgent {
       const turnGate = gateServerRequestTurn(params.turnId, params.threadId);
       if (turnGate === false) return { answers: {} };
       if (turnGate instanceof Promise && !(await turnGate)) return { answers: {} };
-      const requestId = String(meta.requestId);
+      const requestId = serverInteractionId(meta.requestId);
       // 挂起期间服务端已取消本请求 (greptile R13 P1): 直接回空响应, 不注册
       // broker 不上 UI — 否则 UI 会等一个服务端已结束的交互, 用户提交后向
       // 已结束请求发迟到响应。
-      if (resolvedWhileBufferedRequestIds.delete(requestId)) return { answers: {} };
+      if (resolvedWhileBufferedRequestIds.delete(String(meta.requestId))) return { answers: {} };
       const questions = normalizeRequestUserInputQuestions(params.questions);
       if (questions.length === 0) return { answers: {} };
       // Codex 0.145 emits an MCP tool's item/started notification before it
@@ -8937,10 +9168,10 @@ export class CodexAgent extends BaseAgent {
             success: false,
           };
         }
-        const requestId = String(meta.requestId);
+        const requestId = serverInteractionId(meta.requestId);
         // 挂起期间服务端已取消本请求 (greptile R13 P1): 直接回失败响应, 不注册
         // broker 不上 UI (与 resolved 的 cancel 响应同款文案)。
-        if (resolvedWhileBufferedRequestIds.delete(requestId)) {
+        if (resolvedWhileBufferedRequestIds.delete(String(meta.requestId))) {
           return {
             contentItems: [{ type: 'inputText', text: 'Request was resolved before user input was submitted.' }],
             success: false,
@@ -9051,6 +9282,7 @@ export class CodexAgent extends BaseAgent {
 
     function handleServerRequestResolved(params: ServerRequestResolvedNotification['params']): void {
       const requestId = String(params.requestId);
+      const uiRequestId = serverInteractionId(params.requestId);
       const pendingApproval = pendingApprovals.get(requestId);
       let approvalCancelled = false;
       if (pendingApproval && !pendingApproval.settled) {
@@ -9066,7 +9298,7 @@ export class CodexAgent extends BaseAgent {
         // Wake joined duplicates before settling the owner's outer broker
         // response. This keeps them on the cancellation/reassignment path even
         // if a resolver starts mirroring broker settlement in the future.
-        forgetPendingUserInputRequest(requestId);
+        forgetPendingUserInputRequest(uiRequestId);
       }
       const userInputCancelled = userInputBroker.cancel(
         brokerKey,
@@ -9079,13 +9311,21 @@ export class CodexAgent extends BaseAgent {
           success: false,
         },
       );
-      if (approvalCancelled || userInputCancelled || dynamicCancelled) {
+      if (approvalCancelled) {
         eventQueue.push({
           type: 'interaction_dismissed',
           data: { requestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
           source: 'codex',
         });
-      } else if (bufferedOrphanTurnIds.size > 0) {
+      }
+      if (userInputCancelled || dynamicCancelled) {
+        eventQueue.push({
+          type: 'interaction_dismissed',
+          data: { requestId: uiRequestId, reason: 'server_request_resolved', resolvedAs: 'deny' },
+          source: 'codex',
+        });
+      }
+      if (!approvalCancelled && !userInputCancelled && !dynamicCancelled && bufferedOrphanTurnIds.size > 0) {
         // cancel 未命中且有 buffered turn: 可能是挂起中的请求 (尚未注册到
         // broker) 被服务端取消 (greptile R13 P1) — 记下 requestId, 对账放行
         // 后 handler 自查回空响应, 不上 UI。requestId 是一次性的 (消费即删),
@@ -9525,8 +9765,10 @@ export class CodexAgent extends BaseAgent {
     };
 
     const flushDeferredTerminalTurnCompletionsIfIdle = (): void => {
-      if (isTurnStartPending || currentTurnId !== null) return;
+      if (isTurnStartPending) return;
       for (const [turnId, params] of Array.from(deferredTerminalTurnCompletions.entries())) {
+        if (currentTurnId !== null &&
+          (currentTurnId !== turnId || !interactionContinuation?.turnIds.has(turnId))) continue;
         if (!deferredTerminalTurnCompletions.has(turnId)) continue;
         deferredTerminalTurnCompletions.delete(turnId);
         handleTurnCompleted(params);
@@ -9912,6 +10154,12 @@ export class CodexAgent extends BaseAgent {
         recoveryState.pendingAutomaticRecovery = null;
         terminalErroredTurnIds.delete(turn.id);
       }
+      if (interactionContinuation && !interactionContinuation.turnIds.has(turn.id) && isTurnStartPending) {
+        // A continuation may complete before started/start response identifies
+        // it. Reuse the terminal buffer; do not tombstone an unowned result.
+        deferredTerminalTurnCompletions.set(turn.id, params);
+        return;
+      }
       // turn/start RPC 响应未回时就收到终态 → 记墓碑, 阻止稍后到达的
       // handleTurnStartResp / 乱序 turnStarted 把已终结的 turn 重新置活。
       if (isTurnStartPending) turnsCompletedBeforeStartResp.add(turn.id);
@@ -9942,9 +10190,15 @@ export class CodexAgent extends BaseAgent {
       if (currentTurnId === turn.id || currentTurnId === null) {
         stopActiveRolloutPlanFallback();
       }
+      if (interactionContinuation && !interactionContinuation.turnIds.has(turn.id)) {
+        latestPlanByTurn.delete(turn.id);
+        flushDeferredTerminalTurnCompletionsIfIdle();
+        return;
+      }
       if (turn.status === 'completed') {
         detachPendingAskUserForSuccessfulTurn(turn.id);
       } else {
+        cancelInteractionContinuation(`turn_${turn.status}`);
         dismissPendingUserInputForTurn(turn.id, `turn_${turn.status}`);
         yieldedExecCellsByTurnId.delete(turn.id);
         const claim = activeYieldContinuationClaim();
@@ -9999,6 +10253,7 @@ export class CodexAgent extends BaseAgent {
           0,
         ),
         cachedTokens: realTurnUsage.cacheRead,
+        cacheCreationTokens: realTurnUsage.cacheCreate,
         segments: realTurnUsageSegments,
         // With usage, exclude post-output finalization. Without usage, retain
         // the measured duration metadata (zero output cannot produce a rate).
@@ -10177,7 +10432,7 @@ export class CodexAgent extends BaseAgent {
           // product terminal, not a lost handle.
           flushYieldContinuationIdleWaiters();
         } else if (yieldedCells.length === 0 || retryCount >= YIELD_CONTINUATION_MAX_ATTEMPTS) {
-          emitYieldContinuationLostHandle(
+          emitYieldContinuationIncomplete(
             outstandingCells,
             yieldedCells.length === 0 ? 'empty_completion' : 'retry_exhausted',
           );
@@ -10199,7 +10454,28 @@ export class CodexAgent extends BaseAgent {
         yieldClaim.capabilitySelectionText = completedCapabilitySelectionText;
         yieldClaim.autoReviewIntent = currentAutoReviewIntent;
       }
+      if (!suppressSuccessfulYieldBoundary && yieldClaim?.state !== 'awaiting') {
+        // Register the review before publishing the SDK boundary. Consumers
+        // must never observe an unclaimed Done followed by a necessary review.
+        const livePlan = proposedPlanText?.trim() || null;
+        proposedPlanText = null;
+        const deferredPlan = existingYieldClaim?.deferredPlanText?.trim() || null;
+        const planForReview = livePlan ?? deferredPlan;
+        const planReviewTurnId = livePlan ? turn.id : (existingYieldClaim?.deferredPlanTurnId ?? turn.id);
+        const planCapabilitySelection = livePlan ? completedCapabilitySelectionText
+          : (existingYieldClaim?.deferredPlanCapabilitySelectionText || completedCapabilitySelectionText);
+        if (planCycleActive && (completedTurnWasPlanMode || deferredPlan)) {
+          if (planForReview) {
+            void runPlanReviewFlow(planForReview, planReviewTurnId, planCapabilitySelection);
+          } else {
+            planCycleActive = false;
+          }
+        }
+      }
       if (!suppressSuccessfulYieldBoundary) {
+        if (interactionContinuation && interactionCanFinish(interactionContinuation)) {
+          retireInteractionClaim(interactionContinuation, false);
+        }
         const idleStatusEvent: AgentEvent = {
           type: 'status',
           data: {
@@ -10229,6 +10505,10 @@ export class CodexAgent extends BaseAgent {
         if (yieldClaim?.state === 'awaiting') {
           attachYieldContinuationClaim(idleStatusEvent, yieldClaim);
           attachYieldContinuationClaim(doneEvent, yieldClaim);
+        } else if (interactionContinuation) {
+          idleStatusEvent.turnContinuationId = interactionContinuation.id;
+          doneEvent.turnContinuationId = interactionContinuation.id;
+          interactionContinuation.pendingBoundaryEvents += 2;
         }
         eventQueue.push(idleStatusEvent);
         // 真实 per-turn 用量 (host 的 today chip / daily_model_usage 记账消费):
@@ -10259,36 +10539,8 @@ export class CodexAgent extends BaseAgent {
         }
         proposedPlanText = null;
         void startYieldContinuation(yieldClaim);
-      } else {
-        // 计划模式: 只在产品终态审批。awaiting yield claim 时 SDK turn 边界不是
-        // 产品结束 —— 空跑不得把 planCycleActive 关掉，已有计划也等续段结算后再挂卡。
-        // 放在 done 之后 (AsyncQueue FIFO), renderer 先做完 turn 收尾再挂 plan 卡片。
-        // 空跑(模型没产出 <proposed_plan>, 例如直接回答了问题) → 循环结束,
-        // 下一 turn 经 threadTouchedPlanMode 复位 default。
-        const livePlan = proposedPlanText?.trim() || null;
-        proposedPlanText = null;
-        const deferredPlan = existingYieldClaim?.deferredPlanText?.trim() || null;
-        const planForReview = livePlan ?? deferredPlan;
-        const planReviewTurnId = livePlan
-          ? turn.id
-          : (existingYieldClaim?.deferredPlanTurnId ?? turn.id);
-        const planCapabilitySelection = livePlan
-          ? completedCapabilitySelectionText
-          : (existingYieldClaim?.deferredPlanCapabilitySelectionText
-            || completedCapabilitySelectionText);
-        if (planCycleActive && (completedTurnWasPlanMode || deferredPlan)) {
-          if (planForReview) {
-            void runPlanReviewFlow(
-              planForReview,
-              planReviewTurnId,
-              planCapabilitySelection,
-            );
-          } else {
-            log.debug('plan turn produced no proposed plan — plan cycle ends', { turnId: turn.id });
-            planCycleActive = false;
-          }
-        }
       }
+      flushInteractionIdleWaiters();
       flushDeferredTerminalTurnCompletionsIfIdle();
     }
 
@@ -11224,7 +11476,7 @@ export class CodexAgent extends BaseAgent {
           );
         }
         activateRootTurn(params.turn.id);
-        // turn 开始 → 球在上游,起 idle 表(后续任何事件都会重置它)。
+        // turn 开始 → 球在上游,起 idle 表。后续产品进展会重置;status / account_usage 心跳不算。
         armUpstreamIdle();
         // turn/start 在飞期间权限档或可写根被收紧 (turnStarted 通知可能先于 turn/start resp
         // 到达) → 拿到 id 立即补中断, 与 handleTurnStartResp 互斥消费同一标记。
@@ -11986,7 +12238,8 @@ export class CodexAgent extends BaseAgent {
           isTurnInFlight
           || targetsPendingTurn
           || yieldContinuationInFlight
-          || activeYieldContinuationClaim() != null;
+          || activeYieldContinuationClaim() != null
+          || interactionContinuation != null;
         if (isTerminalError && targetsCurrentTurn && !isTransportError) {
           const recoveryTurnId = effectiveParams.turnId || currentTurnId || '';
           // error notification 只登记恢复意图并保持 logical turn 运行；
@@ -12098,6 +12351,7 @@ export class CodexAgent extends BaseAgent {
     ): Promise<void> {
       if (closed) return;
       closed = true;
+      cancelInteractionContinuation('session_closed', true);
       resetCodexGenerationTiming(translatorRt);
       clearReconnectStall();
       resetUpstreamIdleForTurnEnd();
@@ -12263,7 +12517,7 @@ export class CodexAgent extends BaseAgent {
           log.error('workspace permission profile refresh failed', { error: String(e), threadId });
           // Yield continuation owns its product terminal. Emitting here would
           // duplicate the later yield-continuation-start-failed events.
-          if (yieldAttempt == null) {
+          if (yieldAttempt == null && !internalOpts?.[CODEX_INTERACTION_CONTINUATION]) {
             eventQueue.push({
               type: 'error',
               data: { message, isTerminal: true },
@@ -12889,7 +13143,7 @@ export class CodexAgent extends BaseAgent {
             log.info('turn/start failure suppressed — this send was already settled by cancel', {
               threadId,
             });
-          } else if (yieldAttempt == null) {
+          } else if (yieldAttempt == null && !internalOpts?.[CODEX_INTERACTION_CONTINUATION]) {
             eventQueue.push({
               type: 'error',
               data: { message: `turn/start failed: ${String(finalErr)}`, isTerminal: true },
@@ -12908,6 +13162,7 @@ export class CodexAgent extends BaseAgent {
         if (rejectClosedOrCancelledSend(sendOpts, 'before resolving send')) {
           return;
         }
+        flushInteractionIdleWaiters();
       },
 
       async steer(message: UserMessage, sendOpts?: SendOptions) {
@@ -13074,6 +13329,10 @@ export class CodexAgent extends BaseAgent {
       },
 
       async requestGracefulStop(stopOpts) {
+        if (!currentTurnId && interactionContinuation) {
+          await handle.abort();
+          return;
+        }
         const retryState = overloadRetry;
         if (
           retryState &&
@@ -13172,6 +13431,8 @@ export class CodexAgent extends BaseAgent {
       },
 
       async abort() {
+        const cancelledInteraction = cancelInteractionContinuation('turn_interrupted', true);
+        if (cancelledInteraction) dismissAllPendingUserInput('turn_interrupted');
         const cancelledYield = cancelActiveYieldContinuation('aborted');
         // isolateCancelledTurnStart tombstones an accepted turn whose TurnStart
         // RPC is still pending, and that tombstone swallows interrupted
@@ -13179,7 +13440,8 @@ export class CodexAgent extends BaseAgent {
         // releases currentTurnAttemptToken. After the RPC has returned,
         // provider interrupted already emits one product Done — synthesizing
         // another here would settle the next attempt.
-        if (cancelledYield && isTurnStartPending) {
+        if ((cancelledYield && isTurnStartPending) ||
+          (cancelledInteraction && (!currentTurnId || isTurnStartPending))) {
           emitCancelledYieldProductDone();
         }
         clearReconnectStall();
@@ -13496,6 +13758,10 @@ export class CodexAgent extends BaseAgent {
         return mutablePlanMode;
       },
 
+      getExecutionPlanMode() {
+        return mutablePlanMode || planCycleActive || currentTurnPlanModeActive;
+      },
+
       async setFastMode(enabled: boolean) {
         if (reviewMode) return;
         // 去重以"fast 是否开启"为准: undefined(未覆盖) / null / 'default' 都视为未开,
@@ -13621,12 +13887,14 @@ export class CodexAgent extends BaseAgent {
         return isTurnInFlight
           || overloadRetryPending()
           || yieldContinuationInFlight
-          || activeYieldContinuationClaim() != null;
+          || activeYieldContinuationClaim() != null
+          || interactionContinuation != null;
       },
 
       beginTurnContinuationWait(continuationId?: number) {
         if (continuationId === undefined) return null;
-        return yieldContinuationClaims.get(continuationId)?.state ?? null;
+        return yieldContinuationClaims.get(continuationId)?.state
+          ?? interactionContinuationClaims.get(continuationId)?.state ?? null;
       },
 
       onTurnContinuationChange(listener) {
@@ -13787,12 +14055,14 @@ export class CodexAgent extends BaseAgent {
       }
       // ID-only turn queries must use the source thread's index even when the
       // account supplying credentials has changed. Keep the child in that index.
-      const forkSqliteHome = await this.deps.resolveCodexThreadStorageHome?.(opts.sourceSdkSessionId);
+      const forkStorage = await this.deps.resolveCodexThreadStorage?.(opts.sourceSdkSessionId);
+      const forkSqliteHome = forkStorage?.sqliteHome;
       stage = 'host-create';
       const host = await this.getHost(undefined, forkCredentialMode, {
         keyOverride: forkHostKey,
         ...(forkAccountId ? { providerId: forkAccountId } : {}),
         ...(forkSqliteHome ? { sqliteHome: forkSqliteHome } : {}),
+        ...(forkStorage ? { historyHome: forkStorage.historyHome } : {}),
         hostPurpose: 'control-plane',
       }).catch((error) => {
         // This is the outgoing source's offline fork host, not a target send.
@@ -13808,7 +14078,7 @@ export class CodexAgent extends BaseAgent {
       // Child rollout discovery scans this.codexHome. The fork host may be
       // the first host started by this process, so hydrate it here.
       const forkCodexHome = initResp.codexHome ?? undefined;
-      if (forkCodexHome && !forkAccountId) this.codexHome = forkCodexHome;
+      if (forkCodexHome && !forkAccountId && !forkStorage) this.codexHome = forkCodexHome;
       // Imported Codex threads may still live under another CODEX_HOME. Resume
       // already asks the desktop host to link/adopt their state and rollout;
       // fork must cross the same preparation boundary before thread/fork or the

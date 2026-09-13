@@ -4,6 +4,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router-dom';
+import { transferableAbortController } from 'node:util';
+
+// jsdom supplies its own AbortController while Request remains Node's native
+// fetch implementation. React Router must construct both in the same realm.
+const NativeAbortController = transferableAbortController().constructor;
+beforeEach(() => vi.stubGlobal('AbortController', NativeAbortController));
+afterEach(() => vi.unstubAllGlobals());
 
 const guard = vi.hoisted(() => vi.fn(async () => true));
 beforeEach(() => guard.mockReset().mockResolvedValue(true));
@@ -136,7 +143,7 @@ describe('BotSettingsDrawer', () => {
     expect(backgroundWheel.defaultPrevented).toBe(true);
   });
 
-  it('opens as a right half-window without replacing the current chat route', async () => {
+  it('opens as a compact right drawer without replacing the current chat route', async () => {
     render(
       <RouterProvider
         router={createMemoryRouter(
@@ -159,7 +166,8 @@ describe('BotSettingsDrawer', () => {
 
     const dialog = screen.getByRole('dialog');
     expect(dialog.className).toContain('right-0');
-    expect(dialog.className).toContain('lg:w-1/2');
+    expect(dialog.className).toContain('w-full');
+    expect(dialog.className).toContain('max-w-md');
     expect(screen.getByTestId('chat-underlay')).toBeTruthy();
     expect(screen.getByTestId('simple-bot-settings')).toBeTruthy();
 

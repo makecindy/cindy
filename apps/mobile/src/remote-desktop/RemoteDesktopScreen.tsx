@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useMemo,
   useEffect,
   useRef,
   useState,
@@ -30,6 +31,7 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { WebView, type WebViewMessageEvent } from "react-native-webview";
 import { connectionDiagnostics } from "./connectionDiagnostics";
+import { controlFailureAction, remoteDesktopErrorCode } from "./controlFailure";
 import { transferClipboardContent } from "./clipboardTransfer";
 import * as Clipboard from "expo-clipboard";
 import { RemoteDesktopClipboardButton } from "./RemoteDesktopClipboardButton";
@@ -37,13 +39,11 @@ import { RemoteDesktopPanelButton } from "./RemoteDesktopPanelButton";
 import { useTranslation } from "react-i18next";
 import SegmentedControl from "@expo/ui/community/segmented-control";
 import {
+  RemoteDesktopViewerSession,
+  RemoteDesktopViewerMedia,
+  remoteDesktopFailureKey,
   REMOTE_DESKTOP_CHANNEL,
   REMOTE_DESKTOP_MAX_FRAME_BYTES,
-  isDesktopAttemptId,
-  isDesktopIceCursor,
-  parseDesktopIceCandidates,
-  parseDesktopIceReply,
-  type RemoteDesktopIceReply,
   isRemoteDesktopCursor,
   type RemoteDesktopCursor,
   REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS,
@@ -183,6 +183,8 @@ export default function RemoteDesktopScreen() {
     useLockOnExitPreference(deviceId);
   const exitLock = useRef(false);
   const leaving = useRef(false);
+  const [isLeaving, setIsLeaving] = useState(false);
+  const [exitLockPending, setExitLockPending] = useState(false);
   const linkRef = useRef(link);
   linkRef.current = link;
   const { t } = useTranslation();
@@ -203,6 +205,11 @@ export default function RemoteDesktopScreen() {
   ).current;
   const active = useRef<RemoteDesktopLease | null>(null);
   const wantsControl = useRef(true);
+  // Last control bit we asked the host for but have not confirmed. Overflow and
+  // take-control can time out after the local bit already moved; heartbeats use
+  // this to retry a release or restore local control instead of ignoring host-true.
+  const pendingHostControl = useRef<boolean | null>(null);
+  const controlInFlight = useRef(false);
   const recovery = useRef({
     enabled: true,
     at: 0,
@@ -232,15 +239,20 @@ export default function RemoteDesktopScreen() {
     lockOnExitLoaded && lockOnExit && caps?.lockOnExit === true;
   const [status, setStatus] = useState("connecting");
   const [error, setError] = useState<string | null>(null);
+  const takeoverPromptOpen = useRef(false);
+  const takeoverAction = useRef<() => void>(() => {});
   const [frameReady, setFrameReady] = useState(false);
   const [controlReady, setControlReady] = useState(false);
   const connectionPending = !error && (!lease || !frameReady || !controlReady);
   const showConnectionStatus =
-    connectionPending || (!error && status === "reconnecting");
+    !isLeaving && (connectionPending || (!error && status === "reconnecting"));
+  const showExitLockStatus = isLeaving && exitLockPending;
   const connectionLabel = t(
-    recovery.current.at || status === "reconnecting"
-      ? "remoteDesktop.reconnecting"
-      : "remoteDesktop.connecting",
+    showExitLockStatus
+      ? "remoteDesktop.lockingOnExit"
+      : recovery.current.at || status === "reconnecting"
+        ? "remoteDesktop.reconnecting"
+        : "remoteDesktop.connecting",
   );
   const [busy, setBusy] = useState(false);
   const [inputMode, setInputMode] = useInputModePreference();
@@ -312,6 +324,65 @@ export default function RemoteDesktopScreen() {
         preSend,
       }),
     [deviceId],
+  );
+  const viewerSession = useMemo(
+    () => ({ current: new RemoteDesktopViewerSession(request) }),
+    [request],
+  );
+  const authRef = useRef(auth);
+  authRef.current = auth;
+  const viewerMedia = useMemo(
+    () =>
+      new RemoteDesktopViewerMedia({
+        request,
+        send,
+        loadIce: () =>
+          resolveDesktopIceServers(() =>
+            authRef.current.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
+              baseUrl: DEVICE_LINK_API_BASE_URL,
+              timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
+              cache: "no-store",
+            }),
+          ),
+        current: () => {
+          const lease = active.current,
+            caps = capsRef.current?.value;
+          return lease && caps
+            ? {
+                lease,
+                caps,
+                settings: {
+                  ...videoSettingsRef.current,
+                  audio: Boolean(
+                    caps.systemAudio &&
+                    videoSettingsRef.current.audio &&
+                    !audioUnavailable.current,
+                  ),
+                },
+              }
+            : null;
+        },
+        onAttempt: (attempt) => {
+          mediaAttempt.current = attempt;
+        },
+        onOfferStart: (lease) =>
+          pendingMediaOffers.current.set(
+            lease,
+            (pendingMediaOffers.current.get(lease) ?? 0) + 1,
+          ),
+        onOfferSettled: (lease) => {
+          const remaining = (pendingMediaOffers.current.get(lease) ?? 1) - 1;
+          if (remaining > 0) pendingMediaOffers.current.set(lease, remaining);
+          else pendingMediaOffers.current.delete(lease);
+          if (alive.current) setSettingsRevision((value) => value + 1);
+        },
+        onOfferFailure: () => {
+          setStatus("compatibility");
+          setSettingBusy(false);
+          setSettingNotice(t("remoteDesktop.videoSettingsFailed"));
+        },
+      }),
+    [request, send, t],
   );
   const transferClipboard = async (action: "copy" | "paste") => {
     const current = active.current;
@@ -400,11 +471,15 @@ export default function RemoteDesktopScreen() {
       presentationTimer.current = null;
       void remotePresentation?.playback(false).catch(() => {});
       connecting.current = false;
+      pendingHostControl.current = null;
+      controlInFlight.current = false;
       const previous = active.current;
+      setExitLockPending(Boolean(previous && exiting && exitLock.current));
       active.current = null;
       pendingVideoSettings.current = null;
       if (previous) pendingMediaOffers.current.delete(previous);
       mediaAttempt.current = null;
+      viewerMedia.reset();
       heldKeys.current.clear();
       streaming.current = false;
       receiveWindow.current = {
@@ -426,23 +501,19 @@ export default function RemoteDesktopScreen() {
         setKeyboard(false);
         setBusy(false);
       }
-      if (previous) {
-        const lockScreen = exiting && exitLock.current;
-        return request({
-          op: "stop",
-          lease: previous.lease,
-          ...(lockScreen ? { lockScreen: true } : {}),
-        }).catch(() => {
+      const lockScreen = Boolean(previous && exiting && exitLock.current);
+      return viewerSession
+        .current!.stop(lockScreen)
+        .then(() => {})
+        .catch(() => {
           if (lockScreen)
             Alert.alert(
               t("remoteDesktop.lockOnExit"),
               t("remoteDesktop.lockOnExitFailed"),
             );
         });
-      }
-      return Promise.resolve();
     },
-    [request, send, t],
+    [request, send, t, viewerSession, viewerMedia],
   );
   const stopRef = useRef(stop);
   stopRef.current = stop;
@@ -457,38 +528,43 @@ export default function RemoteDesktopScreen() {
     (cause: unknown) => {
       if (!alive.current) return;
       const message = cause instanceof Error ? cause.message : String(cause);
-      const code =
-        cause &&
-        typeof cause === "object" &&
-        "code" in cause &&
-        typeof cause.code === "string"
-          ? cause.code
-          : message.match(
-              /\b(?:DESKTOP|CHANNEL|DEVICE|INVOKE|REMOTE|ACCESS)_[A-Z_]+\b/,
-            )?.[0];
+      const code = remoteDesktopErrorCode(cause);
       // Keep diagnostics free of device names, input and signaling payloads.
       console.debug("[remote-desktop] connection failed", {
-        code: code && /^[A-Z_]+$/.test(code) ? code : "UNKNOWN",
+        code: code ?? "UNKNOWN",
       });
-      const blocked =
-        code === "ACCESS_REVOKED"
-          ? "accessRevoked"
-          : code === "REMOTE_DISABLED"
-            ? "remoteDisabled"
-            : code === "DESKTOP_BUSY"
-              ? "connectionBusy"
-              : code === "CHANNEL_NOT_ALLOWED"
-                ? "upgrade"
-                : message.includes("DESKTOP_DISABLED")
-                  ? "disabled"
-                  : message.includes("PERMISSION") ||
-                      message.includes("ACCESSIBILITY")
-                    ? "permissionHint"
-                    : message.includes("DESKTOP_STOPPED")
-                      ? "disconnected"
-                      : null;
+      const blocked = remoteDesktopFailureKey(code ?? message);
       stop(!blocked);
       setError(blocked);
+      if (
+        blocked === "connectionBusy" &&
+        capsRef.current?.deviceId === deviceId &&
+        capsRef.current.value.connectionTakeover === true &&
+        !takeoverPromptOpen.current
+      ) {
+        takeoverPromptOpen.current = true;
+        Alert.alert(
+          t("remoteDesktop.connectionBusy"),
+          t("remoteDesktop.connectionBusyTakeover"),
+          [
+            {
+              text: t("remoteDesktop.close"),
+              style: "cancel",
+              onPress: () => {
+                takeoverPromptOpen.current = false;
+              },
+            },
+            {
+              text: t("remoteDesktop.takeoverConnection"),
+              style: "destructive",
+              onPress: () => {
+                takeoverPromptOpen.current = false;
+                takeoverAction.current();
+              },
+            },
+          ],
+        );
+      }
       if (blocked) recovery.current.enabled = false;
       else {
         recovery.current.at = Date.now() + recovery.current.delay;
@@ -496,8 +572,89 @@ export default function RemoteDesktopScreen() {
         setStatus("reconnecting");
       }
     },
-    [stop],
+    [deviceId, stop, t],
   );
+  /**
+   * The host owns the control bit. When it reports that this viewer no longer
+   * controls — input injection failed, the input helper went away, or control
+   * was retracted — drop to view only instead of rebuilding the session: the
+   * lease, the picture and the existing view-only hint all survive, and taking
+   * control again retries from where the user is.
+   */
+  const releaseControl = useCallback(() => {
+    const current = active.current;
+    if (!current?.controlling) return;
+    current.controlling = false;
+    heldKeys.current.clear();
+    send({ type: "control", enabled: false });
+    if (alive.current) {
+      setModifiers([]);
+      setKeyboard(false);
+      setLease({ ...current });
+    }
+  }, [send]);
+  /**
+   * Route a failed input or control request by its blast radius: a control-only
+   * fault drops to view only, an unknown outcome keeps everything as it is, and
+   * anything else rebuilds the session. Sitting next to the two actions it
+   * chooses between keeps the three call sites from drifting apart.
+   */
+  const resolveControlFailure = (cause: unknown) => {
+    switch (controlFailureAction(cause)) {
+      case "release":
+        releaseControl();
+        break;
+      case "ignore":
+        break;
+      default:
+        fail(cause);
+    }
+  };
+  const applyConfirmedControl = (
+    current: RemoteDesktopLease,
+    controlling: boolean,
+  ) => {
+    pendingHostControl.current = null;
+    wantsControl.current = controlling;
+    if (current.controlling !== controlling) {
+      current.controlling = controlling;
+      if (!controlling) {
+        heldKeys.current.clear();
+        if (alive.current) {
+          setModifiers([]);
+          setKeyboard(false);
+        }
+      }
+      if (alive.current) setLease({ ...current });
+    }
+    send({ type: "control", enabled: controlling });
+  };
+  const requestHostControl = (
+    current: RemoteDesktopLease,
+    enabled: boolean,
+  ) => {
+    if (controlInFlight.current) return;
+    controlInFlight.current = true;
+    pendingHostControl.current = enabled;
+    void request<{ controlling: boolean }>({
+      op: "control",
+      lease: current.lease,
+      enabled,
+    })
+      .then((result) => {
+        if (active.current !== current) return;
+        applyConfirmedControl(current, result.controlling);
+      })
+      .catch((cause) => {
+        if (active.current !== current) return;
+        resolveControlFailure(cause);
+      })
+      .finally(() => {
+        if (active.current === current) controlInFlight.current = false;
+      });
+  };
+  const requestHostControlRef = useRef(requestHostControl);
+  requestHostControlRef.current = requestHostControl;
   const connect = useCallback(
     async (displayId?: string, takeover = false) => {
       if (
@@ -525,53 +682,36 @@ export default function RemoteDesktopScreen() {
         await linkRef.current.openLink(deviceId);
         if (current !== generation.current) return;
         mark("link-ready");
-        const result = await request<RemoteDesktopCapabilities>({
-          op: "capabilities",
-        });
-        if (current !== generation.current) return;
-        mark("capabilities");
-        if (result?.version !== 1) throw new Error("CHANNEL_NOT_ALLOWED");
-        capsRef.current = { deviceId, value: result };
-        setHostCaps({ deviceId, value: result });
-        if (!result.enabled) throw new Error("DESKTOP_DISABLED");
-        if (recovery.current.resuming && !result.automaticReconnect)
-          throw new Error("CHANNEL_NOT_ALLOWED");
-        const display =
-          result.displays.find(
-            (d) => d.id === (displayId ?? recovery.current.displayId),
-          ) ?? result.displays[0];
-        if (!display) throw new Error("DESKTOP_DISPLAY_MISSING");
-        if (supportsAutoUnlock(result.platform)) {
-          const firstFrame = new Promise<boolean>((resolve) => {
-            unlockFrame.current = resolve;
+        const resuming = displayId ? false : recovery.current.resuming;
+        const { caps: result, lease: next } =
+          await viewerSession.current!.connect({
+            displayId: displayId ?? recovery.current.displayId,
+            resume: resuming,
+            takeover,
+            onStart: () => { recovery.current.resuming = true; },
+            isCurrent: () => current === generation.current && alive.current,
+            onCapabilities: (result) => {
+              mark("capabilities");
+              capsRef.current = { deviceId, value: result };
+              setHostCaps({ deviceId, value: result });
+              if (supportsAutoUnlock(result.platform)) {
+                const firstFrame = new Promise<boolean>((resolve) => {
+                  unlockFrame.current = resolve;
+                });
+                void securityRef.current.maybeUnlock(async () => {
+                  if (
+                    !(await firstFrame) ||
+                    current !== generation.current ||
+                    !focusedRef.current ||
+                    !recovery.current.enabled
+                  )
+                    throw new Error("CREDENTIAL_CANCELLED");
+                });
+              }
+            },
           });
-          void securityRef.current.maybeUnlock(async () => {
-            if (
-              !(await firstFrame) ||
-              current !== generation.current ||
-              !focusedRef.current ||
-              !recovery.current.enabled
-            )
-              throw new Error("CREDENTIAL_CANCELLED");
-          });
-        }
+        const display = next.display;
         recovery.current.displayId = display.id;
-        const resuming = recovery.current.resuming;
-        // The host may start successfully even when its reply is lost.
-        recovery.current.resuming = true;
-        const next = await request<RemoteDesktopLease>({
-          op: "start",
-          displayId: display.id,
-          ...(takeover && result.connectionTakeover
-            ? { takeover: true }
-            : resuming
-              ? { resume: true }
-              : {}),
-        });
-        if (current !== generation.current) {
-          void request({ op: "stop", lease: next.lease }).catch(() => {});
-          return;
-        }
         mark("capture-started");
         active.current = next;
         receiveWindow.current = {
@@ -611,16 +751,16 @@ export default function RemoteDesktopScreen() {
         // Entering remote desktop is the user's intent to control. The existing
         // host permission and ownership gates still decide whether it is allowed.
         if (result.canControl && wantsControl.current) {
-          const control = await request<{ controlling: boolean }>({
-            op: "control",
-            lease: next.lease,
-            enabled: true,
-          });
-          if (current !== generation.current) return;
-          // Control changes keep the same session identity for in-flight replies.
-          next.controlling = control.controlling;
-          setLease({ ...next });
-          send({ type: "control", enabled: control.controlling });
+          try {
+            const control = await viewerSession.current!.control(true);
+            if (current !== generation.current) return;
+            // Control changes keep the same session identity for in-flight replies.
+            next.controlling = control.controlling;
+            setLease({ ...next });
+            send({ type: "control", enabled: control.controlling });
+          } catch (cause) {
+            if (current === generation.current) resolveControlFailure(cause);
+          }
         }
         mark("control-ready");
         setControlReady(true);
@@ -629,18 +769,20 @@ export default function RemoteDesktopScreen() {
       } finally {
         if (current === generation.current) connecting.current = false;
       }
-    },
-    [
-      deviceId,
-      fail,
-      landscape,
-      mode,
-      request,
-      send,
-      stop,
-      t,
-      videoPreferencesLoaded,
-    ],
+      },
+      [
+        deviceId,
+        fail,
+        landscape,
+        mode,
+        request,
+        resolveControlFailure,
+        send,
+        stop,
+        t,
+        videoPreferencesLoaded,
+        viewerSession,
+      ],
   );
   const connectRef = useRef(connect);
   connectRef.current = connect;
@@ -670,6 +812,7 @@ export default function RemoteDesktopScreen() {
   const leave = async () => {
     if (leaving.current) return;
     leaving.current = true;
+    setIsLeaving(true);
     recovery.current.enabled = false;
     Keyboard.dismiss();
     const ending = stop(false, true);
@@ -690,6 +833,17 @@ export default function RemoteDesktopScreen() {
         undefined,
         error === "connectionBusy" && caps?.connectionTakeover === true,
       );
+  };
+  takeoverAction.current = () => {
+    securityRef.current.resetConnectionAttempt();
+    recovery.current.enabled = true;
+    recovery.current.at = Date.now();
+    recovery.current.delay = 1000;
+    recovery.current.resuming = false;
+    setError(null);
+    setStatus("reconnecting");
+    if (!ready.current) webview.current?.reload();
+    else void connectRef.current(undefined, true);
   };
   const restartViewer = () => {
     ready.current = false;
@@ -750,7 +904,31 @@ export default function RemoteDesktopScreen() {
       )
         return;
       heartbeatBusy = current.lease;
-      void request({ op: "heartbeat", lease: current.lease })
+      void request<{ controlling: boolean }>({
+        op: "heartbeat",
+        lease: current.lease,
+      })
+        .then((result) => {
+          // The host owns the control bit. Follow it when it retracts control;
+          // when a local transition timed out, retry a release or restore the
+          // local bit so a held key cannot stay down behind a view-only phone.
+          if (active.current !== current || presentation.current) return;
+          if (result.controlling === false) {
+            // startInput can still be settling while this heartbeat was in
+            // flight. Clearing a pending take-control here would leave later
+            // host-true beats with nothing to restore after a lost reply.
+            if (pendingHostControl.current === true) return;
+            pendingHostControl.current = null;
+            if (current.controlling) releaseControl();
+            return;
+          }
+          if (pendingHostControl.current === false) {
+            requestHostControlRef.current(current, false);
+            return;
+          }
+          if (!current.controlling && pendingHostControl.current === true)
+            applyConfirmedControl(current, true);
+        })
         .catch((cause) => {
           // A missing reply does not prove renewal failed; the next interval
           // retries within the lease. Explicit host revocation still stops us.
@@ -850,12 +1028,20 @@ export default function RemoteDesktopScreen() {
       clearInterval(metrics);
       stop();
     };
-  }, [request, fail, send, stop, pause]);
+  }, [request, fail, send, stop, pause, releaseControl]);
   useEffect(() => {
     // Route blur means leaving this desktop (including a native back swipe).
     // App background/inactive events use pause() without the exit flag.
-    if (!focused && !presentation.current) pause(true);
-    else if (!active.current) void connectRef.current();
+    if (!focused && !presentation.current) {
+      leaving.current = true;
+      setIsLeaving(true);
+      pause(true);
+    } else if (focused) {
+      leaving.current = false;
+      setIsLeaving(false);
+      setExitLockPending(false);
+      if (!active.current) void connectRef.current();
+    }
   }, [focused, pause, videoPreferencesLoaded]);
   useEffect(() => {
     send({
@@ -928,167 +1114,13 @@ export default function RemoteDesktopScreen() {
     }
     const current = active.current;
     if (!current || message.epoch !== current.lease) return;
-    const requireMediaAttempt = () => {
-      if (
-        active.current !== current ||
-        mediaAttempt.current !== message.attemptId
-      )
-        throw new Error("DESKTOP_VIDEO_STOPPED");
-    };
+    if (["iceConfig", "offer", "ice"].includes(String(message.type))) {
+      void viewerMedia.handle(message).catch((cause) => {
+        if (active.current === current) fail(cause);
+      });
+      return;
+    }
     switch (message.type) {
-      case "iceConfig":
-        if (!isDesktopAttemptId(message.attemptId)) return;
-        mediaAttempt.current = message.attemptId;
-        void resolveDesktopIceServers(() =>
-          auth.apiFetch(REMOTE_DESKTOP_ICE_CONFIG_PATH, {
-            baseUrl: DEVICE_LINK_API_BASE_URL,
-            timeoutMs: REMOTE_DESKTOP_ICE_CONFIG_TIMEOUT_MS,
-            cache: "no-store",
-          }),
-        ).then((iceServers) => {
-          if (
-            !alive.current ||
-            active.current !== current ||
-            mediaAttempt.current !== message.attemptId
-          )
-            return;
-          send({
-            type: "iceConfig",
-            epoch: current.lease,
-            attemptId: message.attemptId,
-            iceServers,
-          });
-        });
-        break;
-      case "offer":
-        if (
-          typeof message.sdp !== "string" ||
-          message.sdp.length > 64_000 ||
-          !isDesktopAttemptId(message.attemptId)
-        )
-          return;
-        mediaAttempt.current = message.attemptId;
-        pendingMediaOffers.current.set(
-          current,
-          (pendingMediaOffers.current.get(current) ?? 0) + 1,
-        );
-        void request<{ sdp: string }>(
-          {
-            op: "offer",
-            lease: current.lease,
-            sdp: message.sdp,
-            ...(caps?.trickleIce ? { attemptId: message.attemptId } : {}),
-            cursorOverlay: caps?.cursorOverlay === true,
-            ...(caps?.videoSettings
-              ? {
-                  settings: {
-                    ...videoSettingsRef.current,
-                    audio: Boolean(
-                      caps.systemAudio &&
-                      videoSettingsRef.current.audio &&
-                      !audioUnavailable.current,
-                    ),
-                  },
-                }
-              : {}),
-          },
-          requireMediaAttempt,
-        )
-          .then((answer) => {
-            if (
-              active.current === current &&
-              mediaAttempt.current === message.attemptId
-            )
-              send({
-                type: "answer",
-                epoch: current.lease,
-                attemptId: message.attemptId,
-                sdp: answer.sdp,
-              });
-          })
-          .catch((error) => {
-            if (
-              active.current === current &&
-              mediaAttempt.current === message.attemptId
-            ) {
-              const permanent =
-                /DESKTOP_(AUDIO_UNAVAILABLE|SCREEN_PERMISSION_REQUIRED|DISABLED|STOPPED|LEASE_EXPIRED)/.test(
-                  String(error),
-                );
-              send({
-                type: "fallback",
-                epoch: current.lease,
-                attemptId: message.attemptId,
-                retry: !permanent,
-              });
-              setStatus("compatibility");
-              setSettingBusy(false);
-              setSettingNotice(t("remoteDesktop.videoSettingsFailed"));
-            }
-          })
-          .finally(() => {
-            const remaining =
-              (pendingMediaOffers.current.get(current) ?? 1) - 1;
-            if (remaining > 0)
-              pendingMediaOffers.current.set(current, remaining);
-            else pendingMediaOffers.current.delete(current);
-            if (alive.current) setSettingsRevision((value) => value + 1);
-          });
-        break;
-      case "ice": {
-        if (
-          !caps?.trickleIce ||
-          message.attemptId !== mediaAttempt.current ||
-          !isDesktopAttemptId(message.attemptId) ||
-          !isDesktopIceCursor(message.after) ||
-          !Number.isSafeInteger(message.exchangeId)
-        )
-          return;
-        let candidates;
-        try {
-          candidates = parseDesktopIceCandidates(message.candidates);
-        } catch {
-          return;
-        }
-        void request<RemoteDesktopIceReply>(
-          {
-            op: "ice",
-            lease: current.lease,
-            attemptId: message.attemptId,
-            after: message.after,
-            candidates,
-          },
-          requireMediaAttempt,
-        )
-          .then((value) => {
-            const reply = parseDesktopIceReply(value);
-            if (
-              active.current === current &&
-              mediaAttempt.current === message.attemptId &&
-              reply.attemptId === message.attemptId
-            )
-              send({
-                type: "ice",
-                epoch: current.lease,
-                exchangeId: message.exchangeId,
-                ...reply,
-              });
-          })
-          .catch(() => {
-            if (
-              active.current === current &&
-              mediaAttempt.current === message.attemptId
-            )
-              send({
-                type: "ice",
-                epoch: current.lease,
-                attemptId: message.attemptId,
-                exchangeId: message.exchangeId,
-                error: true,
-              });
-          });
-        break;
-      }
       case "reconnecting":
         if (message.attemptId === mediaAttempt.current)
           setStatus("reconnecting");
@@ -1175,9 +1207,15 @@ export default function RemoteDesktopScreen() {
         });
         break;
       }
-      case "inputOverflow":
-        fail(new Error("DESKTOP_INPUT_UNAVAILABLE"));
+      case "inputOverflow": {
+        // The viewer replaced a stalled queue with a release, then this handler
+        // posts control:false, which clears that release without flushing it.
+        // Tell the host to drop control (stopInput still injects a native
+        // release) so a held key/button cannot stay down while we view only.
+        releaseControl();
+        requestHostControl(current, false);
         break;
+      }
       case "input": {
         const ack = {
           type: "ack",
@@ -1203,7 +1241,8 @@ export default function RemoteDesktopScreen() {
           events: message.events,
         })
           .catch((cause) => {
-            if (active.current === current) fail(cause);
+            if (active.current !== current) return;
+            resolveControlFailure(cause);
           })
           .finally(() => {
             if (inputBusy.current === current.lease) inputBusy.current = null;
@@ -1215,33 +1254,44 @@ export default function RemoteDesktopScreen() {
   };
   const toggleControl = async () => {
     const current = active.current;
-    if (!current || busy) return;
+    if (!current || busy || controlInFlight.current) return;
     setBusy(true);
     setError(null);
+    controlInFlight.current = true;
     try {
       if (presentation.current) {
         presentation.current = false;
         send({ type: "presentation", enabled: false });
       }
       send({ type: "control", enabled: false });
+      const enabled = !current.controlling;
+      if (pendingHostControl.current === false && enabled) {
+        // Overflow timed out with an unconfirmed host release. Taking control
+        // first would skip stopInput while a key/button may still be held.
+        const released = await request<{ controlling: boolean }>({
+          op: "control",
+          lease: current.lease,
+          enabled: false,
+        });
+        if (active.current !== current) return;
+        applyConfirmedControl(current, released.controlling);
+        if (released.controlling) return;
+      }
+      pendingHostControl.current = enabled;
       const result = await request<{ controlling: boolean }>({
         op: "control",
         lease: current.lease,
-        enabled: !current.controlling,
+        enabled,
       });
       if (active.current !== current) return;
-      wantsControl.current = result.controlling;
-      current.controlling = result.controlling;
-      setLease({ ...current });
-      send({ type: "control", enabled: result.controlling });
-      if (!result.controlling) {
-        heldKeys.current.clear();
-        setModifiers([]);
-        setKeyboard(false);
-      }
+      applyConfirmedControl(current, result.controlling);
     } catch (cause) {
-      if (active.current === current) fail(cause);
+      // Taking control can fail because this computer cannot inject input right
+      // now. Stay in view only and let the user retry; a session rebuild would
+      // cost the picture and the lease for a control-only fault.
+      if (active.current === current) resolveControlFailure(cause);
     } finally {
+      controlInFlight.current = false;
       if (alive.current) setBusy(false);
     }
   };
@@ -1580,15 +1630,23 @@ export default function RemoteDesktopScreen() {
             style={styles.webview}
             testID="remoteDesktop.viewer"
           />
-          {(showConnectionStatus || (!lease && error)) && (
+          {(showConnectionStatus ||
+            showExitLockStatus ||
+            (!lease && error)) && (
             <View
               pointerEvents="box-none"
               style={[
                 styles.connectionStatus,
                 { top: edgePadding.paddingTop + spacing.xs + 44 + spacing.lg },
+                error === "permissionHint" && {
+                  bottom:
+                    (landscape ? insets.bottom : toolbarSize.height) +
+                    spacing.md,
+                  right: (landscape ? toolbarSize.width : 0) + spacing.md,
+                },
               ]}
             >
-              {showConnectionStatus ? (
+              {showConnectionStatus || showExitLockStatus ? (
                 <View
                   style={styles.connectionBadge}
                   accessibilityRole="progressbar"
@@ -1624,12 +1682,14 @@ export default function RemoteDesktopScreen() {
                   retry,
                 )}
               {error === "permissionHint" && focused && (
-                <PermissionGuide
-                  key={deviceId}
-                  initial={caps?.permissions}
-                  request={request}
-                  reconnect={retry}
-                />
+                <ScrollView style={{ flex: 1 }}>
+                  <PermissionGuide
+                    key={deviceId}
+                    initial={caps?.permissions}
+                    request={request}
+                    reconnect={retry}
+                  />
+                </ScrollView>
               )}
             </View>
           )}

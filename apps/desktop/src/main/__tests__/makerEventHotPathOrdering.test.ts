@@ -9,6 +9,8 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ScriptTarget, transpileModule } from 'typescript';
+import type { AgentEvent } from '@cindy/maker-core';
 
 const sourcePath = resolve(__dirname, '..', 'maker-ipc', 'register.ts');
 const source = readFileSync(sourcePath, 'utf8').replace(/\r\n?/g, '\n');
@@ -23,6 +25,30 @@ const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts'
 const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
+  it.each([undefined, null, { text: 'Restart Cindy before using Pi again.', isFinal: true }])(
+    'strips Host recovery metadata from the boundary copy with data %j',
+    (data) => {
+      // Execute the actual boundary function without booting Desktop/register side effects.
+      const start = source.indexOf('function redactEventForRenderer');
+      const code = source.slice(start, source.indexOf('\nfunction ', start + 1));
+      const js = transpileModule(code, {
+        compilerOptions: { target: ScriptTarget.ES2022 },
+      }).outputText;
+      const redact = new Function(`${js}; return redactEventForRenderer;`)() as
+        (event: AgentEvent) => AgentEvent;
+      const original: AgentEvent = {
+        type: 'text', source: 'pi', data, runtimeRecovery: true,
+        sessionInstanceId: 'runtime', sessionTurnGeneration: 7,
+      };
+      const boundary = redact(original);
+      expect(boundary).toEqual({ type: 'text', source: 'pi', data });
+      expect(original.runtimeRecovery).toBe(true);
+      expect(original.sessionInstanceId).toBe('runtime');
+      expect(original.sessionTurnGeneration).toBe(7);
+      expect(boundary).not.toBe(original);
+    },
+  );
+
   it('keeps complete PI Subagent returns on the host side of the event boundary', () => {
     const redactor = source.slice(
       source.indexOf('function redactEventForRenderer'),
@@ -52,6 +78,7 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toMatch(
       /registration\.disposers\.push\(\s*session\.onEvent\(\(event: AgentEvent\) => \{/,
     );
+    expect(wireSessionSource).toContain('session.onRuntimeRecovery(emitWiredSessionEvent)');
     expectOrder(
       wireSessionSource,
       'sessionBindings.attachStatusListener(registration);',
@@ -117,7 +144,7 @@ describe('maker:event hot path ordering', () => {
     expectOrder(
       continuation,
       'productTurnWallClockTracker.preserveForContinuation(session.id);',
-      'const sendResult = await session.send(',
+      'const sendResult = await session.sendHostTurnContinuation(',
     );
   });
 
@@ -383,7 +410,7 @@ describe('maker:event hot path ordering', () => {
     );
     expect(source).toContain('out.push({ request: entry.request, persistId: entry.persistId });');
     expect(source).toContain(
-      'taken.push({ requestId, request: entry.request, resolve: entry.resolve });',
+      'taken.push({ requestId, request: entry.request, resolve:',
     );
   });
 
@@ -418,30 +445,37 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('preserves only a waiting Codex reconnect-stall retry across its exact provider rebuild', () => {
+  it('preserves continuation-only retry across its exact unexpected provider rebuild', () => {
     const closedBlock = extractSessionCloseAdaptersSource();
 
     expect(source).toContain(
-      'const pendingCodexReconnectStalledRebuilds = new WeakMap<Session, number>();',
+      'const pendingContinuationOnlyAutoResumeRebuilds = new WeakMap<Session, number>();',
     );
-    expect(source).toContain("if (signals.reason === 'codex_reconnect_stalled') {");
+    expect(source).toContain('if (isAcceptedTurnContinuationOnlyReason(signals.reason)) {');
     expect(source).toContain(
-      'pendingCodexReconnectStalledRebuilds.set(runtimeSession, decision.attemptToken);',
+      'pendingContinuationOnlyAutoResumeRebuilds.set(runtimeSession, decision.attemptToken);',
     );
-    expect(source).toContain("if (closeReason !== 'unexpected') return false;");
+    expect(source).toContain('shouldPreserveWaitingContinuationOnlyAutoResume({');
+    expect(source).toContain('leasedAttemptToken,');
     expect(source).toContain(
       'interruptedTurnAutoResumeGuard.isCurrentAttempt(session.id, attemptToken)',
     );
-    expect(source).toContain('coordinator.getAutoResumeAttemptToken(session.id) !== attemptToken');
-    expect(source).toContain('autoResumeBookkeeping.hasWaitingSchedule(session.id, attemptToken)');
+    expect(source).toContain('autoResumeBookkeeping.hasLiveSchedule(session.id, attemptToken)');
+    expect(source).toContain('coordinator?.hasQueuedAutoResume(session.id)');
+    expect(source).toContain('isContinuationOnly:');
+    expect(source).toContain('coordinator?.isContinuationOnlyAutoResume(session.id) === true');
+    expect(source).toContain('coordinator?.isContinuationOnlyAutoResume(session.id) !== true');
     expect(closedBlock).toContain(
-      'shouldPreserveCodexReconnectStalledAutoResume(session, closeReason)',
+      'shouldPreserveContinuationOnlyAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain(
       'shouldPreserveSessionRuntimeFallbackAutoResume(session, closeReason)',
     );
     expect(closedBlock).toContain('runSessionCloseCleanup(context.preserveAutoResumeIntent, {');
     expect(closedBlock).toContain('autoResumeBookkeeping.teardown(session.id);');
+    expect(source).toMatch(/onBind: \(session: WiredSession\) => \{\s*advanceSessionTurnBoundaryGeneration\(session.id\);\s*bindContinuationOnlyAutoResumeLease\(session\);/);
+    expect(source).toContain('onUnconfirmedAutoResumeTurn:');
+    expect(source).toContain('autoResumeBookkeeping.abandonUnconfirmedPersistedResume(');
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {
@@ -869,7 +903,7 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
     expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
     expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money: isSubscriptionValue \? unpricedSubscriptionValueMarker\(\) : undefined,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
+      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money: isSubscriptionValue \? unpricedSubscriptionValueMarker\(\) : undefined,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: cacheCreationTokens,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
     );
     expect(codexDoneSource).toMatch(
       /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,

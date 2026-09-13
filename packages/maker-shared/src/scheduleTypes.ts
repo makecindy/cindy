@@ -130,6 +130,10 @@ export interface RemoteScheduleRun {
   finishedAt?: RemoteTimestamp;
   status: RemoteScheduleRunStatus;
   errorMsg?: string;
+  /** Optional lightweight host projection; history and read receipts stay unchanged. */
+  failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  failureRecovered?: boolean;
+  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string };
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;

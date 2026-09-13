@@ -57,6 +57,7 @@ export type SessionRuntimeSetResult =
   | {
       ok: true;
       status: 'applied' | 'deferred';
+      effectiveBoundary?: 'next_send';
       generation: number;
       effectiveProfile: SessionRuntimeProfile;
       pendingMutation: PendingSessionRuntimeMutation | null;
@@ -86,6 +87,7 @@ export interface SessionControlServiceDeps {
     targetSessionId: string;
     expectedGeneration?: number;
     patch: {
+      harness?: AgentKind;
       model?: string;
       providerId?: string | null;
       effort?: Effort;
@@ -165,6 +167,8 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       callerSessionId: string;
       targetSessionId: string;
       message: string;
+      /** Host-owned stable ID; the input coordinator owns acceptance deduplication. */
+      queuedMessageId?: string;
     }): Promise<SessionSteerResult> {
       const missing = await ensureTarget(params.targetSessionId);
       if (missing) return missing;
@@ -196,7 +200,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
         };
       }
       const turnGeneration = live.getTurnGeneration();
-      const queuedMessageId = deps.createId();
+      const queuedMessageId = params.queuedMessageId ?? deps.createId();
       const item = await deps.createQueuedMessage({
         ...params,
         queuedMessageId,
@@ -278,6 +282,7 @@ export function createSessionControlService(deps: SessionControlServiceDeps) {
       targetSessionId: string;
       expectedGeneration?: number;
       patch: {
+        harness?: AgentKind;
         model?: string;
         providerId?: string | null;
         effort?: Effort;

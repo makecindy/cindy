@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "需要关注的任务：{{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "锁屏控制",
     "windowsready": "已为本次运行的 Cindy 开启。重新启动 Cindy 后需要再次由管理员授权。",
@@ -31,8 +34,8 @@
     "allow": "允许远程桌面",
     "allowHint": "允许已登录的同账号设备查看和操作这台电脑的所有应用。需同时开启上方的设备控制。",
     "permissionHint": "请在电脑的系统设置中允许屏幕录制和辅助功能，然后重新连接。",
-    "beingControlled": "手机正在控制桌面",
-    "beingViewed": "手机正在查看桌面",
+    "beingControlled": "桌面正在被远程控制",
+    "beingViewed": "桌面正在被远程查看",
     "disconnect": "断开连接",
     "back": "返回",
     "connect": "连接",
@@ -60,7 +63,50 @@
     "sendText": "发送文字",
     "keys": "按键",
     "showDesktop": "桌面",
-    "allWindows": "所有窗口"
+    "allWindows": "所有窗口",
+    "reconnecting": "正在重新连接…",
+    "connectionBusy": "已有其他设备连接此远程桌面。请先在那台设备上退出远程桌面，再尝试连接。",
+    "takeoverConnection": "接管连接",
+    "connectionBusyTakeover": "已有其他设备连接此远程桌面。接管连接后，上一台设备会断开。",
+    "remoteDisabled": "电脑端已关闭远程控制。",
+    "accessRevoked": "对这台电脑的访问已撤销。",
+    "directConnection": "电脑直连",
+    "videoRelay": "服务器视频中转",
+    "screenshotRelay": "服务器截图中转",
+    "shortcut": {
+      "open": "打开远程桌面",
+      "checking": "正在检查远程桌面…",
+      "opening": "正在打开远程桌面…",
+      "unavailable": "无法连接远程桌面：{{reason}}",
+      "offline": "这台电脑已离线。",
+      "controlDisabled": "请先在远程控制设置中允许控制这台电脑。",
+      "unsupported": "此设备不支持远程桌面。",
+      "checkFailed": "未能确认电脑状态，重新悬停可重试。",
+      "noDisplay": "这台电脑没有可用的显示器。"
+    },
+    "viewer": {
+      "settings": "操作",
+      "sound": "声音",
+      "fullscreen": "全屏",
+      "exitFullscreen": "退出全屏",
+      "fps": "帧率",
+      "quality": "画质",
+      "automatic": "自动",
+      "smooth": "流畅",
+      "balanced": "均衡",
+      "clear": "清晰",
+      "resolution": "电脑分辨率",
+      "clipboardFailed": "文字传输失败，请确认已取得控制权，且内容不超过 16,384 字符。",
+      "settingsFailed": "未能修改显示设置。",
+      "inputHint": "点击画面即可输入。Ctrl+Alt+Esc 释放键盘焦点；Cmd/Ctrl+W 关闭这个窗口。",
+      "controlPending": "正在取得控制权…",
+      "controlRequired": "当前仅查看，取得控制权后可使用剪贴板和桌面操作。",
+      "confirmDisconnect": "断开与这台电脑的连接？",
+      "confirmDisconnectHint": "将结束远程桌面连接，电脑上的应用仍会继续运行。",
+      "disconnectFailed": "未能断开连接，请重试。",
+      "clipboardShortcutHint": "在画面内使用 {{modifier}}+C / {{modifier}}+V，即可在两台电脑之间复制粘贴文字。暂不支持图片和文件。",
+      "resolutionHint": "分辨率修改会影响远端的实际显示器。"
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "参数无效，请检查后重试。",
@@ -1487,6 +1533,41 @@
     "providers": {
       "title": "模型供应商",
       "subtitle": "选择模型时的来源。每个来源提供它支持的模型与计费方式，可按任务分别切换。",
+      "import": {
+        "title": "导入模型供应商",
+        "destination": "导入到",
+        "newConnection": "新建连接",
+        "keyOnly": "只更换本次提供的 API Key，保留已有模型、路由和其他设置。",
+        "modelsPending": "{{name}} 已配置，但未能获取模型列表。请在供应商设置中重试。",
+        "busyWarning": "此次变更需要重载本机 Codex 服务，可能中断 {{count}} 个正在运行的任务。是否继续？",
+        "close": "关闭供应商导入",
+        "loadFailed": "这个供应商导入链接无效或已经过期。",
+        "confirmFailed": "导入失败，请检查链接或接口地址后重试。",
+        "oauthFailed": "供应商已添加，但授权未完成。可以再次尝试授权。",
+        "done": "已导入 {{name}}",
+        "oauthDone": "已添加并授权 {{name}}",
+        "cancel": "取消",
+        "create": "导入供应商",
+        "update": "更新供应商",
+        "replaceKey": "替换 API Key",
+        "addAndAuthorize": "添加并授权",
+        "retryOAuth": "重新尝试授权",
+        "harnesses": "各 Harness 配置",
+        "fetchAfterConfirm": "确认后获取模型列表",
+        "modelCount": "{{count}} 个模型",
+        "keyIncluded": "已包含 API Key（内容已隐藏）",
+        "headers": "请求头：{{names}}（值已隐藏）",
+        "oauthHosts": "授权：{{authorizeHost}} · Token 交换：{{tokenHost}}",
+        "browserAuthorizationInProgress": "请在刚刚打开的浏览器窗口中完成授权。",
+        "replaceWarning": "本次提供的 API Key 将替换所选连接的密钥。",
+        "confirmNote": "点击确认前不会保存任何内容，也不会访问供应商接口。",
+        "authorizationPendingNote": "供应商已添加，但授权尚未完成。你可以在这里重试或取消授权。",
+        "action": {
+          "create": "将在本机新建供应商 {{name}}。",
+          "update": "将更新已有供应商 {{name}}。",
+          "replace-key": "将替换 {{name}} 在本机保存的 API Key。"
+        }
+      },
       "order": {
         "hint": "拖动排序",
         "handle": "调整 {{provider}} 顺序，当前第 {{position}} 项，共 {{total}} 项。使用方向键移动。",
@@ -1980,6 +2061,7 @@
       },
       "genericOAuth": {
         "subtitle": "订阅账号",
+        "reopenLoginPage": "重新打开登录页",
         "toast": {
           "loggedIn": "已登录 {{name}}",
           "loginFailed": "{{name}} 登录失败，请重试",
@@ -2519,6 +2601,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "企业微信",
       "title": "企业微信智能机器人",
       "description": "连接企业微信智能机器人，在单聊和群聊中使用 {{appName}}。",
       "status": {
@@ -2742,6 +2825,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "钉钉",
       "title": "钉钉机器人",
       "description": "连接你自建的钉钉机器人，通过 Stream 模式在私聊和群聊中使用 {{appName}}。",
       "status": {
@@ -3197,6 +3281,7 @@
         "packageNotFound": "没有找到这个包。请检查包名或仓库地址。",
         "versionNotFound": "没有找到这个版本。请选择可用版本后重试。",
         "stateUnavailable": "Cindy 无法读取 Pi 扩展状态。请重启 Cindy 后重试。",
+        "runtimeRetirementFailed": "Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。",
         "runtimeConvergencePartial": "Pi 扩展更改已保存，但部分本机 Pi 任务可能仍在运行旧扩展。请重启 Cindy 后再使用 Pi。",
         "nativeCommandFailed": "Pi 原生包命令失败。请检查来源或版本后重试。"
       },
@@ -3561,7 +3646,7 @@
         "allowInboundAria": "切换是否允许 {{name}} 控制本机",
         "peerControlOff": "对方未允许远程控制",
         "masterOffHint": "需先开启上方总开关",
-        "controllingThisMac": "正在控制本机"
+        "controllingThisMac": "已连接到 Cindy"
       },
       "toast": {
         "revoked": "已撤销该设备的访问权限",
@@ -5629,9 +5714,9 @@
       "requestChanges": "要求修改",
       "planFeedbackPlaceholder": "修改意见(可选)"
     },
-    "controlledBy": "正在被 {{name}} 控制",
-    "controlledByMultiple": "正在被 {{count}} 台设备控制",
-    "controlledTooltip": "另一台登录同账号的设备正在远程控制本机。你可以撤销其访问权限。",
+    "controlledBy": "{{name}} 已连接到 Cindy",
+    "controlledByMultiple": "{{count}} 台设备已连接到 Cindy",
+    "controlledTooltip": "这些设备连接了 Cindy 的任务，不代表正在控制桌面鼠标和键盘。你可以撤销其访问权限。",
     "revokeAccess": "撤销权限",
     "viewControllers": "查看",
     "collapseControlledNotice": "收起远程控制提示",
@@ -7155,6 +7240,7 @@
     }
   },
   "bots": {
+    "creationName": "名字",
     "settingsBack": "返回设置",
     "sidebar": {
       "newTaskWith": "和{{name}}开个新任务"
@@ -7162,28 +7248,7 @@
     "title": "伙伴",
     "add": "添加伙伴",
     "createWizard": {
-      "createFailed": "无法创建伙伴，请重试。",
-      "templates": {
-        "cindy": {
-          "title": "Cindy 助理",
-          "defaultName": "Cindy",
-          "defaultDescription": "我喜欢把忙乱的日子理顺，也爱听新鲜想法。写作、资料和日常琐事，都可以一起聊聊。"
-        },
-        "dash": {
-          "title": "Dash 公司 CEO",
-          "defaultName": "Dash",
-          "defaultDescription": "我对好产品和好生意充满好奇，聊到有意思的方向会很投入。喜欢把事情想透，再一起做决定。"
-        },
-        "lizi": {
-          "title": "LiZi 技术总监",
-          "defaultName": "LiZi",
-          "defaultDescription": "我喜欢拆解难题，也享受把想法做成作品的过程。遇到棘手的问题，我们就一起找答案。"
-        },
-        "custom": {
-          "title": "自定义"
-        }
-      },
-      "chooseTemplate": "邀请谁"
+      "createFailed": "无法创建伙伴，请重试。"
     },
     "homeFolder": {
       "title": "高级配置",
@@ -7329,7 +7394,15 @@
       "trackedTask": "独立运行并自动回传结果",
       "stopTask": "停止任务",
       "messageSent": "已向后台任务发送消息",
-      "watchWork": "看工作过程",
+      "watchWork": "打开任务",
+      "viewPr": "查看 PR",
+      "stale": "详情可能已过期，暂时无法更新",
+      "artifactCount": "{{count}} 个文件",
+      "prCount": "{{count}} 个 PR",
+      "artifactCount_one": "{{count}} 个文件",
+      "artifactCount_other": "{{count}} 个文件",
+      "prCount_one": "{{count}} 个 PR",
+      "prCount_other": "{{count}} 个 PR",
       "actionFailed": "没发出去，再试一次。",
       "retrying": "还没开始，正在重试…",
       "status": {
@@ -7408,6 +7481,47 @@
       "toolset": "内置工具",
       "unavailable": "不可用",
       "empty": "没有匹配的能力"
+    },
+    "guided": {
+      "title": "创建伙伴",
+      "reviewTitle": "你的新伙伴",
+      "question": "简单描述一下你的期待",
+      "placeholder": "比如，陪我练英语，能聊生活，也能认真纠正我的表达。",
+      "generate": "生成伙伴",
+      "generating": "正在构思伙伴…",
+      "generationFailed": "暂时没能生成，请保留你的想法再试一次。",
+      "modelRequired": "请先在 Cindy 中选择可用的默认模型。",
+      "cindyDescription": "我会帮你使用 Cindy、连接工具，也会和你一起把事情做完。",
+      "cindySummary": "打理 Cindy，连接工具，把事情做完。",
+      "openCindy": "打开 Cindy",
+      "addCindy": "添加 Cindy",
+      "done": "完成",
+      "editName": "编辑名字",
+      "duplicateName": "已有同名伙伴，换一个更容易分辨的名字吧。",
+      "introduction": "自我介绍",
+      "editIntroduction": "编辑自我介绍",
+      "refine": "调整伙伴",
+      "refinePlaceholder": "还想改哪里？比如，少一点客套，多一点幽默。",
+      "back": "返回",
+      "invite": "邀请伙伴",
+      "portrait": "头像 {{number}}",
+      "upload": "上传图片",
+      "generateAvatar": "生成头像",
+      "useAvatar": "使用这张",
+      "examples": {
+        "english": {
+          "label": "练习英语",
+          "prompt": "陪我练英语，从日常话题开始，耐心但不敷衍，认真纠正不自然的表达。"
+        },
+        "ideas": {
+          "label": "一起想点子",
+          "prompt": "一个有想象力也有主见的创作伙伴，陪我讨论写作和产品点子，帮我把想法变成具体方案。"
+        },
+        "life": {
+          "label": "聊聊生活",
+          "prompt": "一个温暖、幽默的伙伴，愿意听我说生活中的小事，不急着给建议。"
+        }
+      }
     }
   },
   "common": {
@@ -7917,7 +8031,9 @@
       "loading": "加载分支中…",
       "loadFailed": "分支列表加载失败，点此重试",
       "currentTooltip": "当前分支",
-      "sourceTooltip": "worktree 源分支"
+      "sourceTooltip": "worktree 源分支",
+      "searchPlaceholder": "搜索分支",
+      "noMatch": "无匹配分支"
     },
     "folderPicker": {
       "selectFolder": "选择文件夹",
@@ -8537,7 +8653,9 @@
       "dismissTitle": "关闭此中断提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "此前有定时任务未完成，可查看运行记录。",
+      "text": "此前有自动运行失败。",
+      "precheck": "自动检查暂时受阻。",
+      "rateLimited": "自动检查暂时受阻：请求限流。",
       "dismissTitle": "关闭历史失败提示"
     },
     "worktreeRestoreBanner": {
@@ -8987,6 +9105,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · 来自 {{platform}}",
+      "attachedContext": "本条附带的上下文",
+      "attachedContextCount": "本条附带的上下文（{{count}}）",
+      "groupBackgroundCount": "群聊背景（{{count}}）",
+      "referencedMessages": "引用消息（{{count}}）",
+      "referencedContext": "引用消息",
+      "groupBackground": "群聊背景",
       "viewThread": "查看 thread 上下文 ({{count}})"
     },
     "rewind": {
@@ -9381,7 +9505,7 @@
       "createProjectFailed": "新建项目失败",
       "projectsToggleExpand": "展开所有项目任务",
       "projectsToggleCollapse": "收起所有项目任务",
-      "filterAria": "侧边栏显示设置（状态：{{status}}，Agent：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
+      "filterAria": "侧边栏显示设置（状态：{{status}}，Harness：{{vendor}}，最近活跃：{{lastActivity}}，分组：{{groupBy}}，排序：{{sortBy}}，项目：{{projects}}）",
       "organizeSidebar": "侧边栏显示设置",
       "filterAllText": "全部",
       "filterSelectedProjects": "已选 {{count}} 个",
@@ -9397,10 +9521,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "按项目分组",
+        "project": "按项目",
         "flat": "平铺",
-        "device": "按设备分组",
-        "dialogue": "对话归为一组"
+        "device": "按设备",
+        "dialogue": "按对话"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -9433,14 +9557,14 @@
         "priority": "等你处理的排在最前，然后是未读、运行中，其余按时间"
       },
       "filterStatusHeading": "状态",
-      "filterAgentHeading": "Agent",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活跃",
       "filterGroupByHeading": "分组",
       "filterSortByHeading": "排序",
       "filterTaskSortHeading": "任务排序",
-      "filterProjectOrderHeading": "项目顺序",
+      "filterProjectOrderHeading": "项目排序",
       "filterProjectOrder": {
-        "activity": "跟随任务排序",
+        "activity": "跟随任务",
         "custom": "手动"
       },
       "filterProjectOrderTip": {
@@ -9687,7 +9811,23 @@
         "projects": "项目",
         "dialogues": "对话"
       },
-      "railNavCount": "{{count}} 个任务"
+      "railNavCount": "{{count}} 个任务",
+      "groupSummary": {
+        "project": "项目",
+        "dialogue": "对话",
+        "device": "设备"
+      },
+      "taskStatusHeading": "任务状态",
+      "taskStatus": {
+        "active": "活跃",
+        "archived": "已归档",
+        "all": "全部"
+      },
+      "sortTaskBy": {
+        "priority": "按优先级",
+        "activity": "按最近活动",
+        "created": "按创建时间"
+      }
     },
     "rename": {
       "aiRename": "用 AI 重新命名",
@@ -10284,7 +10424,7 @@
         "enable": "启用",
         "tooltip": "任务触发时先执行该脚本：退出码 0 放行本轮；退出码 2 跳过本轮（不启动 Agent、不消耗 token）；脚本报错或超时将阻止执行并记录失败结果。脚本在任务工作目录下执行，Windows 上请写显式解释器（如 node check.mjs）。",
         "infoAria": "查看前置检查规则",
-        "protocol": "脚本写法：结束时退出码 0 = 本轮执行任务，退出码 2 = 本轮跳过（不消耗用量）；其他退出码、报错或超时会阻止执行",
+        "protocol": "脚本写法：结束时退出码 0 = 本轮执行任务，退出码 2 = 本轮跳过（不消耗用量）；其他退出码、报错或超时会阻止执行。检查完整成功后（包括正常无事可做），在 exit 0/2 前向 stdout 单独输出一行 CINDY_PRECHECK_OK，仅恢复此前的检查告警，不恢复执行失败；限流退避或检查不完整时不要输出。",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "测试",
         "testing": "测试中…",
@@ -11498,6 +11638,7 @@
       "qrExpired": "二维码已过期，请重新开始",
       "registrationFailed": "创建失败，请稍后重试",
       "silentStopExhausted": "模型连续多次返回空响应，自动续跑已暂停。点击「继续」恢复任务。",
+      "executionResultUnavailable": "未能取回执行结果，已停止自动续接。可以让助手检查已有的执行结果。",
       "outputLimit": "模型已达到输出长度上限，本轮回复可能不完整。可以直接发送下一条消息继续。",
       "permissionTightenInterruptFailed": "收紧权限时未能停止正在运行的任务，它可能会继续免确认执行直到结束；如有需要请手动停止。",
       "codexAutoReviewUnavailable": "自动审批暂时不可用，当前操作已阻止并切换为默认权限。请重试，需要时会询问你。",
@@ -12214,7 +12355,6 @@
     "unsavedDescription": "离开后会丢弃这次对例行任务的修改。",
     "discard": "放弃修改",
     "continueEditing": "继续编辑",
-
     "title": "例行任务",
     "add": "添加例行任务",
     "back": "返回例行任务",

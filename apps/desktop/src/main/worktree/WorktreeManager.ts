@@ -33,6 +33,7 @@ import {
   globalSafeDirectoryLockPath,
   safeDirectorySpellings,
 } from './gitExec';
+import { gitPathOutput } from './gitPathOutput';
 import { withCrossProcessLock } from '../device-link/crossProcessLock';
 import { applyWorktreeIncludeFile, listChangedWorktreeIncludeFiles } from './includePatternsEngine';
 import { hasKeepSentinel, isManagedWorktreePath } from './safety';
@@ -43,7 +44,7 @@ import {
 import { hasLiveSessionReference, loadLiveSessionPathKeys } from './liveSessionRefs';
 import { withWorktreeRestoreMutation } from './restoreLock';
 import { recycleManagedWorktree } from './managedRecycle';
-import { withWorktreeResourceLock } from './resourceLock';
+import { physicalWorktreeKey, withWorktreeResourceLock } from './resourceLock';
 import { acquireWorktreeRuntimeLease, releaseWorktreeRuntimeLease } from './runtimeLeases';
 import * as store from './worktreeStore';
 import { createLogger } from '../logger';
@@ -413,15 +414,15 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
       cwd,
       CWD_PROBE_GIT_OPTS,
     );
-    const lines = stdout.trim().split(/\r?\n/);
+    const lines = gitPathOutput(stdout).split(process.platform === 'win32' ? /\r?\n/ : /\n/);
     if (lines.length === 4 && lines.every((line) => line.trim().length > 0)) {
       const [root, branch, gitDir, commonDir] = lines;
       return {
         isGitRepo: true,
-        isInsideWorktree: path.resolve(cwd, gitDir.trim()) !== path.resolve(cwd, commonDir.trim()),
+        isInsideWorktree: path.resolve(cwd, gitDir) !== path.resolve(cwd, commonDir),
         gitInstalled: true,
         supportsRecoveryKeyDiscard: true,
-        repoRoot: path.resolve(root.trim()),
+        repoRoot: path.resolve(root),
         ...(branch !== 'HEAD' ? { currentBranch: branch.trim() } : {}),
       };
     }
@@ -452,7 +453,7 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
   // 2. rev-parse --show-toplevel: 拿 repo 根
   try {
     const { stdout } = await gitExec(['rev-parse', '--show-toplevel'], cwd, CWD_PROBE_GIT_OPTS);
-    const toplevel = stdout.trim();
+    const toplevel = gitPathOutput(stdout);
     if (toplevel) {
       out.isGitRepo = true;
       out.repoRoot = path.resolve(toplevel);
@@ -495,8 +496,8 @@ async function detectCwdOnce(cwd: string): Promise<DetectCwdResp> {
     if (commonDirResult.status === 'rejected') throw commonDirResult.reason;
     const gitDirRaw = gitDirResult.value.stdout;
     const gitCommonDirRaw = commonDirResult.value.stdout;
-    const gitDir = path.resolve(cwd, gitDirRaw.trim());
-    const gitCommonDir = path.resolve(cwd, gitCommonDirRaw.trim());
+    const gitDir = path.resolve(cwd, gitPathOutput(gitDirRaw));
+    const gitCommonDir = path.resolve(cwd, gitPathOutput(gitCommonDirRaw));
     if (gitDir && gitCommonDir && gitDir !== gitCommonDir) {
       out.isInsideWorktree = true;
     }
@@ -614,6 +615,102 @@ export async function resolveAvailableWorktreeName(
 
 export function getForSession(sessionId: string): WorktreeMeta | null {
   return store.get(sessionId);
+}
+
+/** Caller holds the session/resource locks. Unknown DB outcomes retain the intent. */
+async function reconcileSessionTransferLocked(meta: WorktreeMeta): Promise<void> {
+  const transfer = meta.pendingSessionTransfer;
+  if (!transfer) return;
+  if (!transfer.sessionId || transfer.sessionId === meta.sessionId
+    || !transfer.delegationId || !transfer.requestingBotId) {
+    throw new Error('Invalid worktree transfer intent preserved');
+  }
+  const row = await getDbClient().queryOne<{
+    childSessionId: string; requestingBotId: string; worktreePath: string | null; persistedSessionId: string | null;
+    targetExists: number;
+  }>(`SELECT d.child_session_id AS childSessionId, d.requesting_bot_id AS requestingBotId,
+      s.worktree_path AS worktreePath, s.id AS persistedSessionId,
+      EXISTS(SELECT 1 FROM sessions WHERE id = ?) AS targetExists
+    FROM bot_delegations d LEFT JOIN sessions s ON s.id = d.child_session_id WHERE d.id = ?`,
+  [transfer.sessionId, transfer.delegationId]);
+  if (!row || !row.persistedSessionId || row.requestingBotId !== transfer.requestingBotId
+    // The previous registry is authoritative if its historical display snapshot
+    // is absent. A committed target must have the snapshot from the same DB tx.
+    || (row.childSessionId === transfer.sessionId && !row.worktreePath)
+    || (row.worktreePath && await physicalWorktreeKey(row.worktreePath) !== await physicalWorktreeKey(meta.path))
+    || (row.childSessionId !== transfer.sessionId
+      && (row.childSessionId !== meta.sessionId || row.targetExists))) {
+    throw new Error('Worktree ownership changed; pending transfer preserved for reconciliation');
+  }
+  const key = await physicalWorktreeKey(meta.path);
+  for (const other of store.getAll()) {
+    if (other.sessionId !== meta.sessionId && await physicalWorktreeKey(other.path) === key) {
+      throw new Error('Worktree ownership changed; another session owns this resource');
+    }
+  }
+  const next = { ...meta, sessionId: row.childSessionId };
+  delete next.pendingSessionTransfer;
+  await store.replace(meta.sessionId, next.sessionId, next, meta);
+}
+
+/** Startup/dispatch/retry reconciliation, scoped to the affected execution only. */
+export async function reconcileSessionTransfer(sessionId: string): Promise<void> {
+  const pending = store.getAll().find(meta => meta.pendingSessionTransfer
+    && (meta.sessionId === sessionId || meta.pendingSessionTransfer.sessionId === sessionId));
+  if (!pending?.pendingSessionTransfer) return;
+  if (pending.pendingSessionTransfer.sessionId === pending.sessionId) throw new Error('Invalid worktree transfer intent preserved');
+  await withWorktreeRestoreMutation(pending.sessionId, () =>
+    withWorktreeRestoreMutation(pending.pendingSessionTransfer!.sessionId, () =>
+      withWorktreeResourceLock(pending.path, async () => {
+        const current = store.get(pending.sessionId);
+        if (current?.pendingSessionTransfer) await reconcileSessionTransferLocked(current);
+      })));
+}
+
+/** Journal before the DB transaction; move registration only after authoritative readback. */
+export async function withTransferredSession<T extends { reopened: boolean }>(
+  previousSessionId: string,
+  sessionId: string,
+  worktreePath: string,
+  commit: () => Promise<T>,
+  identity: { delegationId: string; requestingBotId: string },
+): Promise<T> {
+  if (previousSessionId === sessionId) throw new Error('Worktree transfer requires a new session');
+  return withWorktreeRestoreMutation(previousSessionId, () =>
+    withWorktreeRestoreMutation(sessionId, () =>
+      withWorktreeResourceLock(worktreePath, async () => {
+        const previous = store.get(previousSessionId);
+        if (!previous || previous.pendingSessionTransfer || path.resolve(previous.path) !== path.resolve(worktreePath)
+          || store.get(sessionId)) {
+          throw new Error('Worktree ownership changed; restore the previous task before continuing');
+        }
+        const key = await physicalWorktreeKey(worktreePath);
+        for (const other of store.getAll()) {
+          if (other.sessionId !== previousSessionId && await physicalWorktreeKey(other.path) === key) {
+            throw new Error('Worktree ownership changed; another session owns this resource');
+          }
+        }
+        const pending = { ...previous, pendingSessionTransfer: { ...identity, sessionId } };
+        await store.replace(previousSessionId, previousSessionId, pending, previous);
+        try {
+          const result = await commit();
+          await reconcileSessionTransferLocked(pending);
+          return result;
+        } catch (error) {
+          // A rejected worker receipt is not proof of rollback. Never reverse a
+          // committed transfer; failed readback leaves durable retry evidence.
+          const current = store.get(previousSessionId);
+          if (JSON.stringify(current) === JSON.stringify(pending)) {
+            await reconcileSessionTransferLocked(pending).catch(reconcileError => {
+              log.warn('Worktree transfer reconciliation deferred', { sessionId: previousSessionId,
+                error: reconcileError instanceof Error ? reconcileError.message : String(reconcileError) });
+            });
+          }
+          throw error;
+        }
+      }),
+    ),
+  );
 }
 
 export function listAll(): WorktreeMeta[] {
@@ -1233,6 +1330,7 @@ async function removeWorktreeForSessionInner(
 ): Promise<void> {
   let meta = store.get(sessionId);
   if (!meta) return;
+  if (meta.pendingSessionTransfer) return;
   if (meta.quarantinePath && !isExpectedQuarantinePath(meta, meta.quarantinePath)) {
     log.warn(`[worktree] preserved worktree at ${meta.path}: invalid persisted quarantine path`);
     return;

@@ -1,3 +1,5 @@
+import { inspectAppDefaultModel, changeAppDefaultModel } from './appDefaultModelControl.js';
+import type { BotCapabilityCallbacks, BotControlState } from '@cindy/mcps';
 import { and, eq } from 'drizzle-orm';
 import { botProfiles, botProfileVersions, botSessionLinks, sessions } from '../localDb/schema.js';
 import { getDbClient } from '../localDb/client/current.js';
@@ -49,6 +51,9 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean }
   const [row] = await db
     .select({
       botId: botProfiles.id,
+      displayName: botProfiles.displayName,
+      description: botProfiles.description,
+      identitySource: botProfileVersions.identitySource,
       version: botProfiles.currentVersion,
       profileStatus: botProfiles.status,
       canonicalSessionId: botProfiles.canonicalSessionId,
@@ -95,14 +100,14 @@ async function context(callerSessionId: string, opts?: { allowPaused?: boolean }
   return { ...row, config, assertOwner };
 }
 
-async function catalog(input: Input, ctx: Awaited<ReturnType<typeof context>>, deps: BotCapabilityServiceDeps,
-  options?: { modelChain?: BotModelRoute[]; forceReload?: boolean }): Promise<Entry[]> {
+async function catalog(input: Input, ctx: Pick<Awaited<ReturnType<typeof context>>, 'config' | 'workingDir' | 'remoteHostId' | 'botId' | 'assertOwner'>, deps: BotCapabilityServiceDeps,
+  options?: { modelChain?: BotModelRoute[]; forceReload?: boolean; agentKind?: AgentKind }): Promise<Entry[]> {
   const joined = new Set(strings(ctx.config[fields[input.kind].list]).filter(
     (id) => input.kind !== 'toolset' || !BOT_BASELINE_PLUGIN_IDS.has(id),
   ));
   const { getMaker, getPluginRegistry, isBotToolsetAvailable } = deps;
   // Grants apply next turn, so use the same preview as settings and send-time reconciliation.
-  const agentKind = await deps.resolveBotAgentKind(input.callerSessionId, options?.modelChain);
+  const agentKind = options?.agentKind ?? await deps.resolveBotAgentKind(input.callerSessionId, options?.modelChain);
   ctx.assertOwner();
   if (!agentKind) throw new Error('Bot next-turn route is unavailable');
   const workingDir = ctx.workingDir ?? '';
@@ -225,6 +230,96 @@ async function selectBotCapability(input: Input & { id: string; joined: boolean 
 /** Host callbacks are bound at initialization, without importing the host singleton. */
 export function createBotCapabilityService(deps: BotCapabilityServiceDeps) {
   return {
+    async models(input: { callerSessionId: string }) {
+      try {
+        const ctx = await context(input.callerSessionId);
+        const selection = await inspectAppDefaultModel();
+        ctx.assertOwner();
+        return { ok: true as const, ...selection };
+      } catch {
+        return { ok: false as const, errorCode: 'MODEL_SETTINGS_UNAVAILABLE', message: '无法读取当前用户的默认模型和可用型号' };
+      }
+    },
+    async setDefaultModel(input: { callerSessionId: string; id: string; effort?: string }) {
+      try {
+        const ctx = await context(input.callerSessionId);
+        const result = await changeAppDefaultModel(input.id, input.effort, ctx.assertOwner);
+        ctx.assertOwner();
+        return { ok: true as const, ...result };
+      } catch {
+        return { ok: false as const, errorCode: 'MODEL_DEFAULT_NOT_CONFIRMED', message: '默认模型未确认保存；型号可能已停用、账号或选择已变化，请重新查询当前设置。' };
+      }
+    },
+    async inspect(input: { callerSessionId: string }) {
+      try {
+        const ctx = await context(input.callerSessionId);
+        const candidates = await readEffectiveBotModelChain(ctx.config);
+        ctx.assertOwner();
+        const state: BotControlState = {
+          profile: { id: ctx.botId, name: ctx.displayName, description: ctx.description,
+            identitySource: ctx.identitySource, version: ctx.version },
+          session: { id: input.callerSessionId, workingDir: ctx.workingDir, remoteHostId: ctx.remoteHostId },
+          model: { source: Array.isArray(ctx.config.modelChainOverride) && ctx.config.modelChainOverride.length > 0 ? 'override'
+            : ctx.config.modelChainOverride === null || ctx.config.modelOverride === null
+            || (!Array.isArray(ctx.config.modelChainOverride) && !Array.isArray(ctx.config.modelChain) && typeof ctx.config.model !== 'string') ? 'default' : 'override', candidates },
+          memory: { enabled: ctx.config.memory !== false, scope: 'self' },
+          references: { skills: strings(ctx.config.skills), mcpServers: strings(ctx.config.mcpServers),
+            toolsets: strings(ctx.config.toolsets) },
+        };
+        return { ok: true as const, state };
+      } catch {
+        return { ok: false as const, errorCode: 'BOT_STATE_UNAVAILABLE', message: '无法读取当前伙伴状态，请稍后重试' };
+      }
+    },
+    async updateProfile(input: Parameters<NonNullable<BotCapabilityCallbacks['updateProfile']>>[0]) {
+      try {
+        const ctx = await context(input.callerSessionId);
+        if (ctx.version !== input.expectedVersion) throw new Error('Profile changed');
+        let modelChain: BotModelRoute[] | null | undefined;
+        if (input.modelChain === null) modelChain = null;
+        else if (input.modelChain !== undefined) {
+          const { available } = await inspectAppDefaultModel();
+          ctx.assertOwner();
+          if (!input.modelChain.length || input.modelChain.length > 5) throw new Error('Invalid model chain');
+          const seen = new Set<string>();
+          modelChain = input.modelChain.map(selection => {
+            const choice = available.find(item => item.id === selection.id);
+            if (!choice || seen.has(selection.id)
+              || (selection.effort !== undefined && selection.effort !== '' && !choice.efforts.some(effort => effort === selection.effort))
+              || (selection.fastMode === true && !choice.supportsFastMode)) {
+              throw new Error('Model route or settings are unavailable');
+            }
+            seen.add(selection.id);
+            return { ...choice.route,
+              ...(selection.effort !== undefined ? { effort: selection.effort } : {}),
+              ...(selection.fastMode !== undefined ? { fastMode: selection.fastMode } : {}),
+            };
+          });
+        }
+        ctx.assertOwner();
+        await updateBotProfile({ id: ctx.botId,
+          ...(input.name !== undefined ? { name: input.name } : {}),
+          ...(input.description !== undefined ? { description: input.description } : {}),
+          ...(input.identitySource !== undefined ? { identitySource: input.identitySource } : {}),
+          ...(modelChain !== undefined ? { capabilities: {
+            modelChainOverride: modelChain, modelOverride: null,
+          } } : {}),
+        }, input.expectedVersion);
+        ctx.assertOwner();
+        return { ok: true as const, effective: 'next-turn' as const };
+      } catch {
+        return { ok: false as const, errorCode: 'BOT_PROFILE_UPDATE_FAILED',
+          message: '伙伴资料已变化，或所选模型及档位不可用；请重新读取伙伴状态和可用型号后重试' };
+      }
+    },
+    /** Read the same metadata before a profile exists; this never joins or executes a capability. */
+    async forCreation(input: { botId: string; workingDir: string; agentKind: AgentKind; assertOwner: () => void }) {
+      const ctx = { ...input, remoteHostId: null, config: {} };
+      const result = {} as Record<Kind, Entry[]>;
+      for (const kind of ['skill', 'mcp', 'toolset'] as const)
+        result[kind] = (await catalog({ callerSessionId: '', kind }, ctx, deps, { agentKind: input.agentKind })).filter(entry => entry.available);
+      return result;
+    },
     list: (input: Input & { query?: string }) => findBotCapabilities(input, deps),
     select: (input: Input & { id: string; joined: boolean }) => selectBotCapability(input, deps),
     /** Renderer saves may contain stale selections; validate only new references before persistence. */

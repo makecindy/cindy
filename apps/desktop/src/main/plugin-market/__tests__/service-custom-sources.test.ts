@@ -2341,3 +2341,49 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(source).toMatch(/readInstalledGhostManifest/);
   });
 });
+
+describe('Agent custom marketplace boundaries', () => {
+  it.each([false, true])('discoveryOnly does not update a tracked custom plugin with server unavailable=%s', async (unavailable) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-agent-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    if (unavailable) h.api.listAll.mockRejectedValue(new Error('offline'));
+    runtime.ghosts = [installedGhost(root, 'alpha', '1.0.0')];
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'alpha'), ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0', sha256: 'custom-unverified', scope: 'public', organizationId: null,
+      source: 'local-market', installed: true, updatedAt: '2026-09-11T00:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')),
+    });
+    const before = h.ledger.read();
+    const result = await h.service.snapshot({ discoveryOnly: true });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ ghostId: 'alpha', installState: 'update-available' });
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.ledger.read()).toEqual(before);
+  });
+
+  it('forwards live authority to custom package placement after packaging', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-agent-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const selected = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    let current = true;
+    const place = vi.fn();
+    runtime.install.mockImplementation(async (_file, options) => {
+      current = false;
+      options.beforeCommitInLock?.();
+      place();
+      throw new Error('unreachable');
+    });
+    await expect(h.service.install(selected.pluginId, {
+      expectedReleaseId: selected.releaseId, expectedManifest: selected.manifest,
+    }, () => { if (!current) throw new Error('authority expired'); })).rejects.toThrow('authority expired');
+    expect(place).not.toHaveBeenCalled();
+    expect(h.ledger.installationForGhost('alpha')).toBeNull();
+  });
+});

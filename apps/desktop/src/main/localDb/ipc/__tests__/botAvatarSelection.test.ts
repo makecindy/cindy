@@ -1,8 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
+import { createHash } from 'node:crypto';
+
+const state = vi.hoisted(() => ({ packaged: false }));
+vi.mock('electron', () => ({ app: {
+  getAppPath: () => path.resolve(__dirname, '../../../../..'),
+  get isPackaged() { return state.packaged; },
+} }));
 
 import {
   BOT_AVATAR_MAX_BYTES,
   decodeBotAvatarImage,
+  readDefaultTeammatePortrait,
   validateBotAvatarBuffer,
 } from '../botAvatarSelection';
 
@@ -45,6 +54,37 @@ describe('Bot avatar selection', () => {
       'A'.repeat(Math.ceil(BOT_AVATAR_MAX_BYTES / 3) * 4 + 4),
     ]) {
       expect(() => decodeBotAvatarImage(value)).toThrow(/INVALID_PARAMS/);
+    }
+  });
+});
+
+describe('bundled teammate portrait fallback', () => {
+  it('provides sixteen distinct real portraits and wraps without reviving a retired role', async () => {
+    const sharp = (await import('sharp')).default;
+    const hashes = new Set<string>();
+    for (let index = 0; index < 16; index++) {
+      const image = await readDefaultTeammatePortrait(index);
+      expect(image.mimeType).toBe('image/png');
+      expect(await sharp(image.buffer).metadata()).toMatchObject({ width: 256, height: 256 });
+      hashes.add(createHash('sha256').update(image.buffer).digest('hex'));
+    }
+    expect(hashes.size).toBe(16);
+    expect(await readDefaultTeammatePortrait(16)).toEqual(await readDefaultTeammatePortrait(0));
+  });
+
+  it('uses the packaged gallery with exactly the same pixels as development', async () => {
+    const expected = await readDefaultTeammatePortrait(3);
+    const original = Object.getOwnPropertyDescriptor(process, 'resourcesPath');
+    Object.defineProperty(process, 'resourcesPath', {
+      configurable: true, value: path.resolve(__dirname, '../../../../../resources'),
+    });
+    state.packaged = true;
+    try {
+      expect(await readDefaultTeammatePortrait(3)).toEqual(expected);
+    } finally {
+      state.packaged = false;
+      if (original) Object.defineProperty(process, 'resourcesPath', original);
+      else Reflect.deleteProperty(process, 'resourcesPath');
     }
   });
 });

@@ -2,6 +2,7 @@ import type { TurnUsageContext } from '../turnUsageContext.js';
 import { Session, type AgentEvent, type AgentSessionHandle } from '@cindy/maker-core';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { handleSessionEvent, type SessionEventDependencies } from '../sessionEventPipeline.js';
+import { setMainLocale } from '../../i18n.js';
 import { installSessionTurnObserver } from '../sessionTurnObserver.js';
 import { createSessionBindingLifecycle } from '../sessionBindingLifecycle.js';
 import { SessionTurnActivityTracker } from '../sessionTurnActivityTracker.js';
@@ -244,7 +245,7 @@ function harness() {
     attemptBotCompactRuntimeRefresh: vi.fn(),
     botDelegationServiceHolder: { settleSession: vi.fn(async () => {}) },
     isFencedStaleSessionTerminal: vi.fn(() => false),
-    redactEventForRenderer: vi.fn((value: AgentEvent) => ({ ...value, data: { redacted: true } })),
+    redactEventForRenderer: vi.fn((value: AgentEvent): AgentEvent => ({ ...value, data: { redacted: true } })),
     interruptedTurnAutoResumeGuard: {
       noteAttemptEvent: vi.fn(),
       noteTurnStarted: vi.fn(),
@@ -373,6 +374,7 @@ beforeEach(() => {
   effects.fn('verdictForModelRoute').mockResolvedValue({ kind: 'pass' });
 });
 afterEach(() => {
+  setMainLocale('en');
   vi.clearAllTimers();
   vi.useRealTimers();
 });
@@ -387,13 +389,68 @@ function ordered(...names: string[]) {
 }
 
 describe('production Session event pipeline', () => {
-  it('keeps continuation segments running, then seals the final product boundary', async () => {
+  it.each([
+    ['zh-CN', 'Pi 扩展未能完成刷新。请重启 Cindy 后再使用 Pi。'],
+    ['zh-TW', 'Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。'],
+    ['en', 'Pi extensions could not be refreshed. Restart Cindy before using Pi again.'],
+    ['ja', 'Pi 拡張機能を更新できませんでした。Pi を再び使用する前に Cindy を再起動してください。'],
+    ['ko', 'Pi 확장을 새로 고치지 못했습니다. Pi를 다시 사용하기 전에 Cindy를 다시 시작하세요.'],
+  ] as const)('persists and broadcasts localized post-terminal recovery in %s', async (locale, text) => {
+    setMainLocale(locale);
     const h = harness();
+    // Production redaction preserves text events; the general harness replaces all data.
+    h.deps.redactEventForRenderer.mockImplementation((value: AgentEvent) => value);
+    h.emit(event('done', { status: 'completed', result: 'saved' }, { source: 'pi' }));
+    const data = { isFinal: true, text: '[Cindy Pi package runtime convergence receipt] {"recoveryAction":"restart-cindy-to-refresh-packages"}' };
+    const receipt = event('text', data, {
+      source: 'pi', runtimeRecovery: true,
+      sessionInstanceId: h.session.instanceId, sessionTurnGeneration: 0,
+    });
+    effects.fn('onAssistantTextEvent').mockClear();
+    effects.fn('broadcast').mockClear();
+    h.emit(receipt);
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', { ...data, text }, null);
+    expect(effects.fn('broadcast')).toHaveBeenCalledWith(expect.any(String), expect.objectContaining({
+      sessionId: 'task', event: { ...receipt, data: { ...data, text } },
+    }));
+    expect(receipt.data).toEqual(data);
+    expect(h.activity.isSessionInTurn('task')).toBe(false);
+    expect(h.handle.send).not.toHaveBeenCalled();
+    await h.dispose();
+  });
+
+  // #4349: the Host recovery notice reaches Desktop through the dedicated
+  // onRuntimeRecovery channel but shares handleSessionEvent with turn text. It is
+  // persisted and broadcast, yet must not be captured as an Orca worker result.
+  it('keeps a Host runtime-recovery notice out of Orca worker capture while still persisting it', async () => {
+    const h = harness();
+    const data = { isFinal: true, text: 'restart-cindy-to-refresh-packages' };
+    h.emit(event('text', data, { source: 'pi', runtimeRecovery: true }));
+    expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).not.toHaveBeenCalled();
+    // Still persisted (with the localized notice text) for the transcript.
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledOnce();
+    // Ordinary worker text is still captured.
+    h.emit(event('text', { isFinal: true, text: 'real worker reply' }, { source: 'pi' }));
+    expect(h.deps.orcaTeamServiceForEvents.captureWorkerText).toHaveBeenCalledWith('task', 'real worker reply', { isFinal: true });
+    await h.dispose();
+  });
+
+  it('preserves ordinary Pi text without the Host recovery marker', async () => {
+    const h = harness();
+    const data = { isFinal: true, text: 'partial: restart-cindy-to-refresh-packages' };
+    h.emit(event('text', data, { source: 'pi' }));
+    expect(effects.fn('onAssistantTextEvent')).toHaveBeenCalledWith('task', data, null);
+    await h.dispose();
+  });
+
+  it.each(['claude-code', 'codex'] as const)('keeps %s continuation segments running, then seals the final product boundary', async (source) => {
+    const h = harness();
+    Object.defineProperty(h.session, 'agentKind', { value: source });
     vi.setSystemTime(1000);
-    h.emit(event('status', { isRunning: true }, { source: 'claude-code' }));
+    h.emit(event('status', { isRunning: true }, { source }));
     effects.fn('consumeLastAssistantPersistId').mockReturnValueOnce('segment-row');
     vi.setSystemTime(3000);
-    h.emit(event('done', {}, { source: 'claude-code', turnContinuationId: 0 }));
+    h.emit(event('done', {}, { source, turnContinuationId: 0 }));
     expect(h.activity.isSessionInTurn('task')).toBe(true);
     expect(h.deps.notifyGoalIdleAfterTurnSettled).not.toHaveBeenCalled();
     expect(effects.fn('turn-drain')).not.toHaveBeenCalled();
@@ -404,15 +461,20 @@ describe('production Session event pipeline', () => {
     expect(h.deps.orcaTeamServiceForEvents.handleWorkerTerminalTurn).not.toHaveBeenCalled();
     effects.fn('recordTurnUsageOnMessage').mockClear();
     vi.setSystemTime(5000);
-    h.emit(event('done', { total_cost_usd: 0, duration_ms: 20 }, { source: 'claude-code' }));
+    h.emit(event('done', { total_cost_usd: 0, duration_ms: 20 }, { source }));
     expect(h.activity.isSessionInTurn('task')).toBe(false);
     expect(h.deps.notifyGoalIdleAfterTurnSettled).toHaveBeenCalledOnce();
     await microtasks();
-    expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith({
-      sessionId: 'task',
-      clientId: 'segment-row',
-      turnUsageDetails: expect.objectContaining({ turnDurationMs: 4000 }),
-    });
+    if (source === 'claude-code') {
+      expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith({
+        sessionId: 'task',
+        clientId: 'segment-row',
+        turnUsageDetails: expect.objectContaining({ turnDurationMs: 4000 }),
+      });
+    } else {
+      // A synthetic Codex terminal carries no second copy of SDK usage.
+      expect(effects.fn('recordTurnUsageOnMessage')).not.toHaveBeenCalled();
+    }
     await h.dispose();
   });
 
@@ -813,6 +875,36 @@ describe('provider turn observer on real Session.send', () => {
     );
     await h.dispose();
   });
+  it.each(['local', 'remote', 'unowned'] as const)('holds idle closure only for a scheduled Host continuation: %s', async (owner) => {
+    const terminal = deferred(), closed = deferred(), deps = observerDeps();
+    const log = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return this; } };
+    const handle = {
+      id: 'provider', agentKind: 'pi', model: 'test-model',
+      send: vi.fn(async () => {}), close: vi.fn(async () => { closed.resolve(); }),
+      isTurnRunning: () => false, setInteractionResolver() {},
+      async *events() {
+        await terminal.promise;
+        yield { type: 'done', source: 'pi', data: { status: 'completed', silentStop: true } } as AgentEvent;
+        await closed.promise;
+      },
+    } as unknown as AgentSessionHandle;
+    const session = new Session({ id: 'task', agentKind: 'pi', workDir: '/unused', handle,
+      capabilities: {} as never, logger: log, turnStallMs: 0 });
+    if (owner === 'remote') Object.defineProperty(session, 'remoteHostId', { value: 'ssh-host' });
+    const dispose = owner === 'unowned' ? () => {} : installSessionTurnObserver(deps, session);
+    const seen: AgentEvent[] = [];
+    session.onEvent(event => seen.push(event));
+    await session.send('work');
+    terminal.resolve();
+    await vi.waitFor(() => expect(seen.some(event => event.type === 'done')).toBe(true));
+    expect(deps.silentStopTurnLeaseGate.schedule).toHaveBeenCalledTimes(owner === 'local' ? 1 : 0);
+    expect(await session.closeIfIdle()).toBe(owner !== 'local');
+    dispose();
+    if (owner === 'local') expect(await session.closeIfIdle()).toBe(true);
+    expect(handle.close).toHaveBeenCalledOnce();
+    expect(handle.send).toHaveBeenCalledOnce();
+  });
+
   it('stops a removed explicit account before lease and provider dispatch', async () => {
     const h = harness(), deps = observerDeps();
     effects.fn('getSessionProvider').mockReturnValue('deleted-account');
@@ -881,6 +973,47 @@ describe('usage through the production event pipeline', () => {
     effects.fn('piUsageToTokens').mockReturnValue(tokens);
     effects.fn('consumeLastAssistantPersistId').mockReturnValue('assistant-row');
   }
+
+  it.each(['priced', 'missing-write-price', 'legacy-summary'] as const)(
+    'preserves Codex cache writes without guessing cost (%s)', async (mode) => {
+      const h = harness();
+      pricing(false);
+      const writes = mode === 'legacy-summary' ? 0 : 50;
+      const allTokens = { ...tokens, cacheCreateTokens: writes };
+      effects.fn('codexUsageToTokens').mockReturnValue(allTokens);
+      effects.fn('getModelPriceQuote').mockReturnValue({
+        providerId: 'xd', modelId: 'test-model', currency: 'USD', source: 'gateway',
+        inputPerMtok: 1, outputPerMtok: 2, cacheReadPerMtok: 0.1,
+        ...(mode !== 'missing-write-price' ? { cacheCreatePerMtok: 1.25 } : {}),
+      });
+      h.emit(event('done', { usage: {
+        promptTokens: 100, completionTokens: 20, cachedTokens: 10,
+        ...(mode !== 'legacy-summary' ? { cacheCreationTokens: 50 } : {}),
+        segments: [{ ...segment, cacheCreateTokens: 50 }],
+      } }, { source: 'codex' }));
+      await microtasks();
+      expect(effects.fn('recordSessionTurnTokens')).toHaveBeenCalledWith('task', 130 + writes);
+      expect(effects.fn('recordModelTurnUsage')).toHaveBeenCalledWith(expect.objectContaining({
+        inputTokensDelta: 100, outputTokensDelta: 20, cacheReadTokensDelta: 10,
+        cacheCreateTokensDelta: writes,
+      }));
+      if (mode === 'priced') {
+        expect(effects.fn('recordSchedulerTurnCost')).toHaveBeenCalledWith(expect.objectContaining({
+          money: expect.objectContaining({ amount: 0.0002035 }),
+          turnUsageDetails: expect.objectContaining({ cacheCreateTokens: 50 }),
+        }));
+        expect(effects.fn('recordModelTurnUsage')).toHaveBeenLastCalledWith(expect.objectContaining({
+          inputTokensDelta: 0, outputTokensDelta: 0, cacheReadTokensDelta: 0, cacheCreateTokensDelta: 0,
+        }));
+      } else {
+        expect(effects.fn('recordTurnSpend')).not.toHaveBeenCalled();
+        expect(effects.fn('recordTurnUsageOnMessage')).toHaveBeenCalledWith(expect.objectContaining({
+          turnUsageDetails: expect.objectContaining({ cacheCreateTokens: writes }),
+        }));
+      }
+      await h.dispose();
+    },
+  );
 
   it.each([
     ['codex', false],

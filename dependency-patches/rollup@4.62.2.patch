@@ -1,0 +1,19 @@
+diff --git a/dist/es/shared/node-entry.js b/dist/es/shared/node-entry.js
+index 0c67f4b0befbb8af05adc5c4b0216cacbf8c169a..d270a376f10c5da4c36f8579914954c824804522 100644
+--- a/dist/es/shared/node-entry.js
++++ b/dist/es/shared/node-entry.js
+@@ -16953,6 +16953,14 @@ function resetSourcemapCache(map, sourcemapChain) {
+     }
+ }
+ function decodedSourcemap(map) {
++    // Watch mode can pass a sourcemap wrapper from the previous graph generation
++    // back through the cache. Re-wrapping it reads the lazy mappings accessor,
++    // copies the decoded array, and leaves the old array retained by the cached
++    // module. Reuse the wrapper so resetSourcemapCache can release its decoded
++    // cache without creating a second large array.
++    if (map && typeof map === 'object' && sourceMapCache.has(map)) {
++        return map;
++    }
+     if (!map)
+         return null;
+     if (typeof map === 'string') {

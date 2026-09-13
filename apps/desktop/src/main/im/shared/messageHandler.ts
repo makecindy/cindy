@@ -308,11 +308,7 @@ export function createMessageHandler(
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: {
-      agentText: string;
-      contextAttachments?: IMAttachment[];
-      commit?: () => void | Promise<void>;
-    } | null = null;
+    let prepared: Awaited<ReturnType<NonNullable<ImChannelAdapter['prepareAgentTurnText']>>> = null;
     // 「已收到」表情先落, 再拼上下文 —— 群上下文拼装要回翻群历史(可能翻页 + 调
     // 轻量模型), 慢的时候几十秒没有任何反馈, 用户只能看着不动的消息猜 bot 是不是
     // 挂了(实测最慢到 87s)。句柄交给 turn 接管(turn 收口时照常撤掉/换成结果
@@ -374,6 +370,7 @@ export function createMessageHandler(
           : {}),
         ...(prePersisted ? { prePersistedUserMessage: prePersisted } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
+        ...(prepared?.contextSnapshot ? { contextSnapshot: prepared.contextSnapshot } : {}),
         // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
         ...(prepared?.contextAttachments?.length
           ? { contextAttachments: prepared.contextAttachments }

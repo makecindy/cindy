@@ -56,6 +56,7 @@
   "connect": "連線",
   "connecting": "連線中…",
   "reconnecting": "正在重新連線…",
+  "lockingOnExit": "正在鎖定電腦…",
   "disconnected": "已中斷",
   "compatibility": "相容模式 · 畫格率較低",
   "live": "即時畫面",

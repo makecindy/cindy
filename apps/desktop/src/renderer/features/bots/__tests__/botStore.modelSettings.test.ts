@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('@/state/newMakerDraft', () => ({
   getDraft: () => ({ lastByVendor: { cc: {}, codex: {}, pi: {} } }),
+  getDraftForPreferenceSync: () => ({ vendor: 'cc', lastByVendor: { cc: { model: '' } }, fastModeByModel: {} }),
   getPersistedVendorModel: () => '',
 }));
 vi.mock('@/lib/modelDefinitions', () => ({

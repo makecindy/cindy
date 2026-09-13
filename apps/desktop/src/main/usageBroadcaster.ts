@@ -43,6 +43,7 @@ import {
 } from '@cindy/maker-shared/codex-usage-buckets';
 
 import { createLogger } from './logger';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import type { RegionalMoney } from '../shared/regionalMoney.js';
 
 const log = createLogger('usageBroadcaster');
@@ -55,6 +56,8 @@ export const USAGE_TODAY_TOKENS_CHANGED = 'usage:today-tokens-changed';
 export const USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed';
 /** IPC channel: main → renderer 推 xAI(SuperGrok bridge)上游限流快照变化。 */
 export const USAGE_XAI_RATE_LIMIT_CHANGED = 'usage:xai-rate-limit-changed';
+/** 独立 xAI 账号(providerId ≠ 'xai')的限流头推送:{ providerId, snapshot },与本机 hook 同形。 */
+export const USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED = 'usage:xai-provider-rate-limit-changed';
 /** IPC channel: main → renderer 推 Claude 订阅账号余量变化 (端点刷新 / headers 旁路)。 */
 export const USAGE_CLAUDE_SUBSCRIPTION_CHANGED = 'usage:claude-subscription-changed';
 /** IPC channel: main → renderer 推 SuperGrok 账号周用量快照。 */
@@ -81,6 +84,7 @@ export interface AgentTodayUsage {
   completionTokens?: number;
   reasoningTokens?: number;
   cachedTokens?: number;
+  cacheCreationTokens?: number;
 }
 
 export interface RateLimitWindow {
@@ -197,6 +201,7 @@ interface CodexTokenSnapshot {
   completionTokens: number;
   reasoningTokens: number;
   cachedTokens: number;
+  cacheCreationTokens: number;
   total: number;
 }
 
@@ -209,6 +214,7 @@ function blankCodexSnapshot(): CodexTokenSnapshot {
     completionTokens: 0,
     reasoningTokens: 0,
     cachedTokens: 0,
+    cacheCreationTokens: 0,
     total: 0,
   };
 }
@@ -219,6 +225,7 @@ interface CodexTurnUsage {
   completionTokens?: number;
   reasoningTokens?: number;
   cachedTokens?: number;
+  cacheCreationTokens?: number;
 }
 
 /**
@@ -239,6 +246,7 @@ export function recordCodexTurnUsage(usage: unknown): void {
   const completionDelta = Number(u.completionTokens) || 0;
   const reasoningDelta = Number(u.reasoningTokens) || 0;
   const cachedDelta = Number(u.cachedTokens) || 0;
+  const cacheCreationDelta = Number(u.cacheCreationTokens) || 0;
 
   codexTodaySnapshot = {
     day: today,
@@ -246,7 +254,8 @@ export function recordCodexTurnUsage(usage: unknown): void {
     completionTokens: codexTodaySnapshot.completionTokens + completionDelta,
     reasoningTokens: codexTodaySnapshot.reasoningTokens + reasoningDelta,
     cachedTokens: codexTodaySnapshot.cachedTokens + cachedDelta,
-    total: codexTodaySnapshot.total + promptDelta + completionDelta + cachedDelta,
+    cacheCreationTokens: codexTodaySnapshot.cacheCreationTokens + cacheCreationDelta,
+    total: codexTodaySnapshot.total + promptDelta + completionDelta + cachedDelta + cacheCreationDelta,
   };
 
   broadcastCodexTokens(codexTodaySnapshot);
@@ -288,6 +297,7 @@ export async function readAgentTodayUsage(agentKind: AgentKind): Promise<AgentTo
       completionTokens: s.completionTokens,
       reasoningTokens: s.reasoningTokens,
       cachedTokens: s.cachedTokens,
+      cacheCreationTokens: s.cacheCreationTokens,
     };
   }
   // 未知 agentKind: 返回空 snapshot (TS 完备性, 不抛错让 UI 优雅 fallback)
@@ -791,9 +801,13 @@ export function recordXaiRateLimitSnapshot(info: Omit<XaiRateLimitSnapshot, 'upd
   for (const win of BrowserWindow.getAllWindows()) {
     if (isTrustedAppRendererWindow(win)) {
       if (providerId === 'xai') win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, snapshot);
-      else win.webContents.send('usage:xai-provider-rate-limit-changed', { providerId, snapshot });
+      else win.webContents.send(USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED, { providerId, snapshot });
     }
   }
+  // device-link:tooltip 尽力显示被控端限流头(bridge 每成功请求至多一帧,低频)。
+  // 与 broadcastCodexAccountUsage 同口径按账号分路:独立账号绝不写进内置远程缓存。
+  if (providerId === 'xai') tapWindowBroadcast(USAGE_XAI_RATE_LIMIT_CHANGED, snapshot);
+  else tapWindowBroadcast(USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED, { providerId, snapshot });
 }
 
 /**
@@ -804,9 +818,13 @@ export function clearXaiRateLimitSnapshot(providerId = 'xai'): void {
   for (const win of BrowserWindow.getAllWindows()) {
     if (isTrustedAppRendererWindow(win)) {
       if (providerId === 'xai') win.webContents.send(USAGE_XAI_RATE_LIMIT_CHANGED, null);
-      else win.webContents.send('usage:xai-provider-rate-limit-changed', { providerId, snapshot: null });
+      else win.webContents.send(USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED, { providerId, snapshot: null });
     }
   }
+  // device-link:登出 / 换号清除同步给控制端(远程 tooltip 不得挂旧账号余量);
+  // 独立账号的清除只清它自己的镜像,不得清空仍登录的内置账号。
+  if (providerId === 'xai') tapWindowBroadcast(USAGE_XAI_RATE_LIMIT_CHANGED, null);
+  else tapWindowBroadcast(USAGE_XAI_PROVIDER_RATE_LIMIT_CHANGED, { providerId, snapshot: null });
 }
 
 
@@ -1149,6 +1167,10 @@ function broadcastCodexAccountUsage(payload: RateLimitSnapshot | null, providerI
       else win.webContents.send('usage:codex-provider-account-changed', { providerId, snapshot: payload });
     }
   }
+  // device-link:控制端远程 codex / chatgpt-bridge 会话 chip 镜像被控端限额窗口。
+  // 频率上限:app-server 每 turn 记录一次、WHAM 刷新 10s 节流;无链路时 O(1) no-op。
+  if (providerId === 'openai') tapWindowBroadcast(USAGE_CODEX_ACCOUNT_CHANGED, payload);
+  else tapWindowBroadcast('usage:codex-provider-account-changed', { providerId, snapshot: payload });
 }
 
 function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapshot | null): void {
@@ -1157,6 +1179,9 @@ function broadcastClaudeSubscriptionUsage(payload: ClaudeSubscriptionUsageSnapsh
       win.webContents.send(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
     }
   }
+  // device-link:控制端远程订阅会话的 chip 镜像被控端余量。频率上限由上游保证
+  // (headers 观察器签名去抖 + 端点 180s 节流),无 active 链路时 tap 是 O(1) no-op。
+  tapWindowBroadcast(USAGE_CLAUDE_SUBSCRIPTION_CHANGED, payload);
 }
 
 export function broadcastSubscriptionAccountUsage(providerId: string, snapshot: ClaudeSubscriptionUsageSnapshot | XaiSubscriptionUsageSnapshot | null): void {
@@ -1164,6 +1189,7 @@ export function broadcastSubscriptionAccountUsage(providerId: string, snapshot: 
     if (!isTrustedAppRendererWindow(win)) continue;
     win.webContents.send('usage:subscription-provider-account-changed', { providerId, snapshot });
   }
+  tapWindowBroadcast('usage:subscription-provider-account-changed', { providerId, snapshot });
 }
 
 function broadcastXaiSubscriptionUsage(payload: XaiSubscriptionUsageSnapshot | null): void {
@@ -1171,4 +1197,6 @@ function broadcastXaiSubscriptionUsage(payload: XaiSubscriptionUsageSnapshot | n
     if (!isTrustedAppRendererWindow(win)) continue;
     win.webContents.send(USAGE_XAI_SUBSCRIPTION_CHANGED, payload);
   }
+  // device-link:控制端远程 xai 形态会话 chip 镜像被控端周用量(账号级,低频)。
+  tapWindowBroadcast(USAGE_XAI_SUBSCRIPTION_CHANGED, payload);
 }

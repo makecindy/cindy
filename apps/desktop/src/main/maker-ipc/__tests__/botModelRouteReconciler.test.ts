@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import { withSendToSessionLock } from '../sendToSessionLock';
 import { createBotModelRouteReconciler } from '../botModelRouteReconciler';
 import type { BotModelRoute } from '../../../shared/botModelChain';
 import type { SessionRuntimeProfile } from '../sessionRuntimeControl';
@@ -11,12 +12,55 @@ function harness() {
     hasRuntimeOverride: false,
   };
   const read = vi.fn(async () => state);
-  const apply = vi.fn(async () => undefined);
+  const apply = vi.fn<Parameters<typeof createBotModelRouteReconciler>[0]['apply']>(async () => undefined);
   const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => owner, read, apply });
   return { state, read, apply, reconcile, changeOwner: () => { owner = 'owner-b'; } };
 }
 
 describe('permanent Bot model selection', () => {
+  it('stops a send instead of retaining the old runtime model when no enabled default remains', async () => {
+    const h = harness();
+    h.state.chain = [];
+    await expect(h.reconcile('canonical')).rejects.toThrow('[PRECONDITION_FAILED]');
+    expect(h.apply).not.toHaveBeenCalled();
+    expect(await h.reconcile.preview('canonical')).toBeNull();
+  });
+  it('replaces an automatic runtime route when the Bot follows Cindy default', async () => {
+    const h = harness();
+    const state = { ...h.state, hasRuntimeOverride: true, followsCindyDefault: true };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply });
+    await expect(reconcile.preview('canonical')).resolves.toMatchObject({ model: 'luna', agentKind: 'codex' });
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical', expect.objectContaining({ model: 'luna' }), state.current);
+  });
+  it('replaces a pending non-default route even when the live model still equals Cindy default', async () => {
+    const h = harness();
+    const current = { agentKind: 'codex' as const, model: 'luna', providerId: 'xd', effort: 'medium' as const, fastMode: false };
+    const state = { ...h.state, current, next: { ...current, model: 'sol' }, hasRuntimeOverride: true, followsCindyDefault: true };
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: async () => state, apply: h.apply });
+    await reconcile('canonical');
+    expect(h.apply).toHaveBeenCalledWith('canonical', current, current);
+  });
+  it('reads a changed default after acquiring the ordinary send lock without deadlocking a lock holder', async () => {
+    const h = harness();
+    const reconcile = createBotModelRouteReconciler({ ownerEpoch: () => 'owner', read: h.read, apply: h.apply, withSessionLock: withSendToSessionLock });
+    let release!: () => void;
+    let inside!: () => Promise<void>;
+    const holder = withSendToSessionLock('queued-model', async () => {
+      inside = () => reconcile('queued-model', true);
+      await new Promise<void>(resolve => { release = resolve; });
+    });
+    await vi.waitFor(() => expect(release).toBeTypeOf('function'));
+    const waiting = reconcile('queued-model');
+    h.state.chain[0]!.model = 'updated-default';
+    // The lock holder can reconcile without waiting for the request behind it.
+    await inside();
+    expect(h.apply).toHaveBeenCalledWith('queued-model', expect.objectContaining({ model: 'updated-default' }), h.state.current);
+    release();
+    await holder;
+    await waiting;
+    expect(h.apply.mock.calls.every(([, route]) => route.model === 'updated-default')).toBe(true);
+  });
   it('reads paused profiles only for previews and does not consume their pending model edits', async () => {
     const h = harness();
     let paused = true;

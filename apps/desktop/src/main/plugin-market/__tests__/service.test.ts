@@ -4866,3 +4866,42 @@ describe('market detail 响应身份绑定', () => {
     await expect(h.service.detail(item.id)).rejects.toThrow('[PRECONDITION_FAILED]');
   });
 });
+
+describe('Agent catalog discovery and install boundary', () => {
+  it.each([false, true])('discoveryOnly skips reconciliation even with deferReconciliation=%s', async (deferReconciliation) => {
+    const item = summary({ ghostId: 'missing-default', defaultInstall: true });
+    const h = harness([item], [removal()]);
+    runtime.ghosts = [ghostEntry('cindy-test')];
+    h.ledger.upsertInstallation(removalRecord());
+    const before = h.ledger.read();
+    const settled = vi.fn();
+    const snapshot = await h.service.snapshot({ discoveryOnly: true, deferReconciliation, onDeferredReconciliationSettled: settled });
+    await Promise.resolve();
+    expect(snapshot.items).toHaveLength(1);
+    expect(h.api.detail).not.toHaveBeenCalled();
+    expect(h.api.download).not.toHaveBeenCalled();
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(runtime.uninstall).not.toHaveBeenCalled();
+    expect(h.ledger.read()).toEqual(before);
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it('forwards live authority through the server download to the locked commit hook', async () => {
+    const item = summary();
+    const h = harness([item]);
+    let current = true;
+    const place = vi.fn();
+    runtime.install.mockImplementation(async (_file, options) => {
+      current = false;
+      options.beforeCommitInLock?.();
+      place();
+      throw new Error('unreachable');
+    });
+    await expect(h.service.install(item.id, reviewedInstallOptions(item), () => {
+      if (!current) throw new Error('authority expired');
+    })).rejects.toThrow('authority expired');
+    expect(h.api.download).toHaveBeenCalledOnce();
+    expect(place).not.toHaveBeenCalled();
+    expect(h.ledger.installationForGhost(item.ghostId)).toBeNull();
+  });
+});

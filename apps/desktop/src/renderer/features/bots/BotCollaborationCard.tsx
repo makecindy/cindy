@@ -1,7 +1,19 @@
 import { useEffect, useState } from 'react';
-import { ExternalLink, Megaphone, Square } from 'lucide-react';
+import { FileText, GitPullRequest, Megaphone, Square, TriangleAlert } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
+
+import { MAX_STATUS_QUERIES, prStatusKey, sessionPrUrl } from '@cindy/maker-shared';
+import { useElementVisible } from '@/cindy-brain/ghostUnreadStore';
+import { usePrActions, usePrRefsForSession, usePrStatuses } from '@/contexts/PrRefsContext';
+import { PR_STATUS_COLOR, PR_STATUS_ICON } from '@/features/cc-agent/gitContextPrVisuals';
+import { Button } from '@/components/ui/button';
+import {
+  DropdownMenu,
+  DropdownMenuTrigger,
+  DropdownMenuContent,
+  DropdownMenuItem,
+} from '@/components/ui/dropdown-menu';
 
 import type { BotCollaborationMeta } from '../../../shared/botCollaboration';
 import { makerApiForSticky } from '@/lib/makerTransport';
@@ -65,9 +77,6 @@ export function BotSessionTaskMessageTrace({ data }: Pick<Props, 'data'>) {
       <Megaphone size={13} className="mt-[3px] shrink-0" aria-hidden="true" />
       <span className="min-w-0">
         {t('bots.collab.messageSent')}
-        {parsed.text ? (
-          <span className="text-[var(--text-secondary)]">{`：${parsed.text}`}</span>
-        ) : null}
       </span>
     </div>
   );
@@ -83,16 +92,45 @@ function SessionTaskCardBody({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const parentSessionId = sessionId ?? meta.parentSessionId ?? null;
-  const [sourceDeviceId] = useState(() => parentSessionId ? remoteProjectsStore.getSessionDeviceId(parentSessionId) : undefined);
+  const [sourceDeviceId] = useState(() =>
+    parentSessionId ? remoteProjectsStore.getSessionDeviceId(parentSessionId) : undefined,
+  );
   const remoteBots = useRemoteBots();
-  const online = !sourceDeviceId || remoteBots.some((bot) => bot.deviceId === sourceDeviceId && bot.online);
-  const { row, resolved } = useBotDelegation(parentSessionId, meta.delegationId);
+  const online =
+    !sourceDeviceId || remoteBots.some((bot) => bot.deviceId === sourceDeviceId && bot.online);
+  const { row, resolved, stale } = useBotDelegation(parentSessionId, meta.delegationId);
   const [pending, setPending] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
 
+  const { ref: observeCard, visible } = useElementVisible();
   const active = row ? isActiveDelegationStatus(row.status) : false;
   const childSessionId = row?.childSessionId ?? meta.childSessionId;
+  const { registerPrConsumer, invalidateRemotePrRefs } = usePrActions();
+  const pullRequests = usePrRefsForSession(childSessionId ?? '').slice(0, MAX_STATUS_QUERIES);
+  const { statuses, successfulStatuses, refreshError } = usePrStatuses(childSessionId ?? '');
+  useEffect(() => {
+    if (!visible || !childSessionId) return;
+    return registerPrConsumer(childSessionId, sourceDeviceId);
+  }, [visible, childSessionId, sourceDeviceId, registerPrConsumer]);
+  useEffect(() => {
+    if (visible && childSessionId && sourceDeviceId && row?.updatedAt !== undefined) {
+      invalidateRemotePrRefs(childSessionId);
+    }
+  }, [visible, childSessionId, sourceDeviceId, row?.updatedAt, invalidateRemotePrRefs]);
+  const prIcon = (ref: (typeof pullRequests)[number]) => {
+    const result = statuses.get(prStatusKey(ref));
+    const confirmed = result?.ok ? result : successfulStatuses.get(prStatusKey(ref));
+    const kind = confirmed?.ok ? confirmed.status : undefined;
+    const Icon = kind ? PR_STATUS_ICON[kind] : GitPullRequest;
+    return (
+      <Icon
+        size={14}
+        aria-hidden="true"
+        style={{ color: kind ? PR_STATUS_COLOR[kind] : 'var(--text-tertiary)' }}
+      />
+    );
+  };
 
   // 只在还在干活时起秒级 tick，收拢后不再空转。
   useEffect(() => {
@@ -131,15 +169,6 @@ function SessionTaskCardBody({
     }
   };
 
-  /*
-    row 为空有两种含义，必须分开说：
-      - 还没拉到（resolved=false）→ 照常显示「正在开始」+ 呼吸点，这是真的在等；
-      - 拉完了却没有这一行（resolved=true）→ 首次列表请求失败，或持久记录不存在。
-        此时我们**核实不了**它现在什么样；不能伪造进行状态，但仍可用锚点里的
-        childSessionId 打开任务过程。
-        以前这里一律回落到「正在开始」，结果就是一张永远在呼吸、永远停不掉的卡 ——
-        一个纯粹画出来的进行中状态。改成如实说「状态查不到了」，并且不再画呼吸点。
-  */
   const unverifiable = resolved && !row;
   const statusLabel = row
     ? t(`bots.collab.status.${row.status}`)
@@ -160,101 +189,140 @@ function SessionTaskCardBody({
           : row.status === 'cancelled'
             ? 'text-[var(--text-tertiary)]'
             : 'text-[var(--status-info)]';
-  const taskTitle = row?.title || meta.objective.trim().split('\n')[0] || t('bots.collab.backgroundTask');
+  const taskTitle =
+    row?.title || meta.objective.trim().split('\n')[0] || t('bots.collab.backgroundTask');
   const artifacts = row?.artifacts ?? [];
+  const actionClass = 'w-full min-w-[104px] gap-1.5 px-3';
+  const openPr = (url: string) => {
+    setActionError(null);
+    void window.electronAPI
+      .openExternal(url)
+      .then((result) => {
+        if (!result.success) setActionError(t('bots.collab.actionFailed'));
+      })
+      .catch(() => setActionError(t('bots.collab.actionFailed')));
+  };
+  const prButton = (
+    <Button
+      variant="secondary"
+      size="md"
+      className={actionClass}
+      onClick={pullRequests.length === 1 ? () => openPr(sessionPrUrl(pullRequests[0])) : undefined}
+    >
+      {pullRequests.length === 1 ? (
+        prIcon(pullRequests[0])
+      ) : (
+        <GitPullRequest size={14} aria-hidden="true" />
+      )}
+      {t('bots.collab.viewPr')}
+    </Button>
+  );
 
   return (
-    <div className="my-2 w-full max-w-[560px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-chip)] px-4 py-3 text-12">
+    <div ref={observeCard} className="my-2 w-full max-w-[560px] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-4 py-3 text-12">
       <div className="flex items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <div className="text-11 text-[var(--text-tertiary)]">
-            {t('bots.collab.backgroundTask')}
-          </div>
-          <div className="mt-0.5 line-clamp-2 break-words text-14 font-medium text-[var(--text-primary)]">
-            {taskTitle}
-          </div>
+        <div
+          title={taskTitle}
+          className="min-w-0 flex-1 line-clamp-2 break-words text-14 font-medium leading-5 text-[var(--text-primary)]"
+        >
+          {taskTitle}
         </div>
         <span
-          className={cn(
-            'shrink-0 rounded-full bg-[var(--surface-subtle)] px-2.5 py-1 text-11 font-medium',
-            taskStatusClass,
-          )}
+          className={cn('flex shrink-0 items-center gap-1.5 text-12 leading-5', taskStatusClass)}
         >
+          <span aria-hidden="true" className="size-1.5 rounded-full bg-current" />
           {statusLabel}
         </span>
       </div>
-      <div className="mt-2.5 flex items-center gap-2 border-t border-[var(--border-default)] pt-2.5 text-[var(--text-tertiary)]">
-        <span
-          aria-hidden="true"
-          className={cn(
-            'size-[7px] shrink-0 rounded-full bg-[var(--text-tertiary)]',
-            (!resolved || active) && !unverifiable && 'animate-pulse motion-reduce:animate-none',
-          )}
-        />
-        <span className="min-w-0 flex-1 truncate">{t('bots.collab.trackedTask')}</span>
-        {duration ? (
-          <span className="shrink-0 tabular-nums text-11 text-[var(--text-tertiary)]">
-            {duration}
+      <div className="mt-1 flex min-h-4 flex-wrap items-center gap-x-3 gap-y-1 text-[var(--text-tertiary)]">
+        {duration ? <span className="tabular-nums">{duration}</span> : null}
+        {artifacts.length > 0 ? (
+          <span>{t('bots.collab.artifactCount', { count: artifacts.length })}</span>
+        ) : null}
+        {pullRequests.length === 1 ? (
+          <span className="min-w-0 truncate" title={pullRequests[0].url}>
+            {pullRequests[0].owner}/{pullRequests[0].repo} #{pullRequests[0].prNumber}
           </span>
         ) : null}
+        {pullRequests.length > 1 ? (
+          <span>{t('bots.collab.prCount', { count: pullRequests.length })}</span>
+        ) : null}
       </div>
-      {row?.status === 'waiting' && row.pendingInteraction ? (
-        <p className="mt-1.5 whitespace-pre-wrap text-11 leading-4 text-[var(--text-tertiary)]">
-          {row.pendingInteraction.summary}
+      {(stale || refreshError ||
+        !online ||
+        pullRequests.some((ref) => statuses.get(prStatusKey(ref))?.ok === false)) &&
+      row ? (
+        <p className="mt-1.5 flex items-center gap-1.5 text-[var(--text-tertiary)]">
+          <TriangleAlert size={13} aria-hidden="true" />
+          {t('bots.collab.stale')}
         </p>
-      ) : row?.status === 'waiting' ? (
-        <p className="mt-1.5 text-11 text-[var(--text-tertiary)]">{t('bots.collab.retrying')}</p>
       ) : null}
-      {row?.resultSummary ? (
-        <p className="mt-2 whitespace-pre-wrap break-words text-[var(--text-secondary)]">
-          {row.resultSummary}
+      {row?.status === 'waiting' ? (
+        <p className="mt-1.5 line-clamp-2 break-words text-[var(--text-secondary)]">
+          {row.pendingInteraction?.summary || t('bots.collab.retrying')}
         </p>
       ) : null}
       {row?.lastError && (row.status === 'failed' || row.status === 'timed-out') ? (
-        <p className="mt-2 whitespace-pre-wrap break-words text-[var(--error-fg)]">
+        <p className="mt-1.5 line-clamp-2 break-words text-[var(--error-fg)]">
           {row.lastError.replace(/^[A-Z_]+:\s*/, '')}
         </p>
       ) : null}
-      {artifacts.length > 0 ? (
-        <ul className="mt-2 space-y-1 text-11 text-[var(--text-tertiary)]">
-          {artifacts.map((artifact) => (
-            <li key={`${artifact.status}:${artifact.path}`} className="truncate">
-              {artifact.path}
-            </li>
-          ))}
-        </ul>
-      ) : null}
-      {active || childSessionId ? (
-        <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+      {active || childSessionId || pullRequests.length > 0 ? (
+        <div
+          className={cn(
+            'mt-2.5 grid w-fit max-w-full items-center gap-2',
+            Number(active) + Number(Boolean(childSessionId)) + Number(pullRequests.length > 0) > 1
+              ? 'grid-cols-2'
+              : 'grid-cols-1',
+          )}
+        >
+          {pullRequests.length === 1 ? (
+            prButton
+          ) : pullRequests.length > 1 ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>{prButton}</DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                {pullRequests.map((pr) => (
+                  <DropdownMenuItem key={pr.url} onSelect={() => openPr(sessionPrUrl(pr))}>
+                    {prIcon(pr)} {pr.owner}/{pr.repo} #{pr.prNumber}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          {childSessionId ? (
+            <Button variant="secondary" size="md" className={actionClass} onClick={openChildTask}>
+              <FileText size={14} aria-hidden="true" />
+              {watchWorkLabel}
+            </Button>
+          ) : null}
           {active ? (
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="md"
+              className={actionClass}
               disabled={pending || !parentSessionId || !online}
               onClick={() => {
                 if (!parentSessionId || !online || pending) return;
                 void runAction(async () =>
-                  makerApiForSticky(parentSessionId).cancelBotDelegation(parentSessionId, meta.delegationId),
+                  makerApiForSticky(parentSessionId).cancelBotDelegation(
+                    parentSessionId,
+                    meta.delegationId,
+                  ),
                 );
               }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)] disabled:opacity-50"
             >
-              <Square size={11} aria-hidden="true" />
+              <Square size={14} aria-hidden="true" />
               {t('bots.collab.stopTask')}
-            </button>
-          ) : null}
-          {childSessionId ? (
-            <button
-              type="button"
-              onClick={openChildTask}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--border-default)] px-2.5 py-1 text-11 text-[var(--text-secondary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
-            >
-              <ExternalLink size={11} aria-hidden="true" />
-              {watchWorkLabel}
-            </button>
+            </Button>
           ) : null}
         </div>
       ) : null}
-      {actionError ? <p className="mt-2 text-11 text-[var(--error-fg)]">{actionError}</p> : null}
+      {actionError ? (
+        <p role="alert" className="mt-2 text-11 text-[var(--error-fg)]">
+          {actionError}
+        </p>
+      ) : null}
     </div>
   );
 }

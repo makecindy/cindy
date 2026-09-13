@@ -55,8 +55,8 @@ export function resolveSessionRoot(sessionCtx: DocsMcpSessionCtx): string {
       '文档工具只能在本机会话里生成文件。请在本地会话中重试,或让用户把内容带回本机后再生成。',
     );
   }
-  const root = typeof ctx.workingDir === 'string' ? ctx.workingDir.trim() : '';
-  if (root.length === 0) {
+  const root = typeof ctx.workingDir === 'string' ? ctx.workingDir : '';
+  if (root.trim().length === 0) {
     throw new DocsPathError(
       'NO_SESSION_CONTEXT',
       '当前调用无法确认所属会话的工作目录',

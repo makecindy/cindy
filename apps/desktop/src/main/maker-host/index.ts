@@ -61,6 +61,7 @@ import { createMakeToolchainEnvironment } from '../cindy-make/toolchainEnvironme
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import { getWorkerLink, updateWorkerStatus } from '../localDb/orcaTeamStore.js';
 import { cleanupSessionTempAttachments } from '../maker-ipc/normalizeAttachments.js';
+import { resolveGhostFsSessionSnapshot } from '../maker-ipc/ghostFsSessionSnapshot.js';
 import { markKnownOrcaWorkerSession } from '../maker-ipc/orcaManualInterrupt.js';
 import { markOrcaMcpHydratedIfNeeded } from '../maker-ipc/orcaMcpHydrationCache.js';
 import { preparePersistedOrcaSessionStart } from '../maker-ipc/orcaSessionStartOptions.js';
@@ -168,7 +169,7 @@ import {
 import { buildPiAgent } from './pi-host.js';
 import {
   captureLocalPiPackageRuntimeInvalidationSnapshot,
-  invalidateLocalPiPackageRuntimeSnapshot,
+  settleLocalPiPackageRuntimeSnapshot,
   type PiPackageRuntimeInvalidationSnapshot,
 } from './pi-package-runtime-invalidation.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
@@ -788,6 +789,10 @@ function createDesktopBotCapabilityService() {
   });
 }
 
+export function listBotCreationCapabilities(input: Parameters<ReturnType<typeof createBotCapabilityService>['forCreation']>[0]) {
+  return createDesktopBotCapabilityService().forCreation(input);
+}
+
 /** Settings IPC reuses the model-side catalog at its save boundary. */
 export async function validateBotCapabilityAdditions(update: BotCapabilityUpdate): Promise<void> {
   await createDesktopBotCapabilityService().validateAdditions(update);
@@ -903,7 +908,7 @@ export function getMaker(): Maker {
     const pluginRegistry = createPluginRegistry();
 
     const resolveIOSSimulatorAccess = (context?: IOSSimulatorMcpCallContext) => {
-      const workingDir = context?.workingDir?.trim() || null;
+      const workingDir = context?.workingDir?.trim() ? context.workingDir : null;
       // Product access is the installed plugin (enable + workdir disable).
       // Leftover Tools-page `builtinTools['ios-simulator']` must not gate runtime.
       return getIOSSimulatorPluginAccessDecision(workingDir);
@@ -929,17 +934,13 @@ export function getMaker(): Maker {
         if (!sessionInstanceId) return null;
         const session = _maker?.getSession(sessionId);
         if (!session || session.instanceId !== sessionInstanceId) return null;
-        const permission = session.stablePermissionModeState;
-        if (!permission) return null;
+        const snapshot = resolveGhostFsSessionSnapshot((id) => _maker?.getSession(id), sessionId, sessionInstanceId);
         return {
-          permissionMode: permission.mode,
+          permissionMode: session.stablePermissionModeState?.mode ?? null,
           remoteHostId: session.remoteHostId,
-          reviewAction: async (action: import('@cindy/maker-core').ReviewableAction) => {
-            const decision = await session.reviewHostPermissionAction(action);
-            return _maker?.getSession(sessionId) === session
-              ? decision
-              : { verdict: 'block' as const, reason: 'The task instance changed during review.' };
-          },
+          isCurrent: () => !!snapshot && !snapshot.planModeEnabled && snapshot.permissionMode !== 'plan'
+            && snapshot.isCurrent?.() === true,
+          reviewAction: snapshot?.reviewAction,
         };
       },
     };
@@ -1648,7 +1649,7 @@ export function getMaker(): Maker {
         }
         const browserCompanion = isControlPlane || isReview
           ? null
-          : await prepareCodexBrowserCompanion({ codexHome: effectiveCodexHome });
+          : await prepareCodexBrowserCompanion({ codexHome: ctx.runtimeCodexHome ?? effectiveCodexHome });
         const browserCompanionSpawnConfig =
           resolveCodexBrowserCompanionSpawnConfig(browserCompanion);
         mcpExtraArgs.push(...browserCompanionSpawnConfig.extraArgs);
@@ -1899,12 +1900,26 @@ export function getMaker(): Maker {
         const locations = new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations'));
         return await locations.read(threadId) ?? await prepareExternalCodexSessionForResume(threadId);
       },
-      resolveCodexThreadStorageHome: async (threadId) => {
+      resolveCodexThreadStorage: async (threadId) => {
         if (!getActiveAppSession().dataOwnerId) return;
-        return new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations')).readStorageHome(threadId, {
+        const ownerScope = activeOwnerScopeKey();
+        const storage = await new CodexThreadLocations(path.join(codexAccountHome('thread-index'), 'locations')).readStorage(threadId, {
           home: getCodexHome(),
           prepare: prepareExternalCodexSessionForResume,
         });
+        if (activeOwnerScopeKey() !== ownerScope) throw new Error('Codex history owner changed during preparation');
+        return storage;
+      },
+      createCodexAuthTokenReader: (providerId) => {
+        const ownerScope = activeOwnerScopeKey();
+        return async () => {
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          const state = await desktopCodexAuthAdapter.getState({ credentialMode: 'oauth-bearer', providerId });
+          if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== ownerScope) throw new Error('Codex authentication owner changed');
+          const credentials = state.authenticated ? desktopCodexAuthAdapter.readOneShotCreds(providerId) : null;
+          if (!credentials) throw new Error('Codex account credentials are unavailable');
+          return { accessToken: credentials.accessToken, chatgptAccountId: credentials.accountId };
+        };
       },
       recordCodexThreadLocation: async (threadId, storageHome, rolloutPath) => {
         if (!rolloutPath || !getActiveAppSession().dataOwnerId) return;
@@ -1946,6 +1961,11 @@ export function getMaker(): Maker {
       // 远端 transport — SSH 连接已有 ConnectionPool (remote-ssh feature 起的) 管,
       // 这里包一层把 RemoteHost + SshDaemonTransport 装起来。
       // 远端机器没在 pool / 未连接 → 抛错, CodexAgent 把它当 startSession 失败传上去。
+      getRemoteAgentFileOps: (remoteHostId) => {
+        const remoteHost = getRemoteSshPool().get(remoteHostId);
+        if (!remoteHost) throw new Error(`remote SSH host "${remoteHostId}" is not connected`);
+        return createRemotePiFileOps(remoteHost);
+      },
       getRemoteCodexTransport: (remoteHostId) => {
         const remoteHost = getRemoteSshPool().get(remoteHostId);
         if (!remoteHost) {
@@ -2178,9 +2198,8 @@ export function getMaker(): Maker {
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
       // Fence in-flight startups at the durable package edge, but do not close
-      // the current caller before maker-core queues its host-owned receipt and
-      // sends the extension response. The settled callback below retires only
-      // the exact local runtimes captured at the mutation's latest byte edge.
+      // the current caller. The settled callback requests retirement of the
+      // captured runtimes only after their current product turns settle.
       onPiManagedPackageMutationCommitted: async (phase = 'commit') => {
         const maker = _maker;
         if (!maker) return;
@@ -2194,7 +2213,7 @@ export function getMaker(): Maker {
           pendingPiPackageRuntimeSnapshots.push(snapshot);
         }
       },
-      onPiManagedPackageMutationSettled: async (callerSessionId, publishOutcome) => {
+      onPiManagedPackageMutationSettled: async (callerSessionId, publishOutcome, createRetirementFailureEvent) => {
         const partial = () => publishOutcome({
           runtimeConvergence: 'partial',
           recoveryAction: 'restart-cindy-to-refresh-packages',
@@ -2205,34 +2224,9 @@ export function getMaker(): Maker {
           partial();
           return;
         }
-        const callerEntries = snapshot.entries.filter(({ session }) => session.id === callerSessionId);
-        const siblingEntries = snapshot.entries.filter(({ session }) => session.id !== callerSessionId);
-        let siblingFailed = false;
-        try {
-          const siblingResult = await invalidateLocalPiPackageRuntimeSnapshot(
-            maker,
-            { entries: siblingEntries },
-          );
-          siblingFailed = siblingResult.failedSessionIds.length > 0;
-        } catch {
-          siblingFailed = true;
-        }
-        const initiallyPartial = siblingFailed
-          || callerEntries.length === 0
-          || callerEntries.some(({ metadataFailed }) => metadataFailed);
-        if (initiallyPartial) partial();
-        else publishOutcome({ runtimeConvergence: 'complete' });
-
-        if (callerEntries.length === 0) return;
-        try {
-          const callerResult = await invalidateLocalPiPackageRuntimeSnapshot(
-            maker,
-            { entries: callerEntries },
-          );
-          if (!initiallyPartial && callerResult.failedSessionIds.length > 0) partial();
-        } catch {
-          if (!initiallyPartial) partial();
-        }
+        // The receipt has been sent, not necessarily consumed by Pi. Keep the
+        // caller and busy siblings alive until their owned turn settles.
+        await settleLocalPiPackageRuntimeSnapshot(maker, snapshot, callerSessionId, publishOutcome, createRetirementFailureEvent);
       },
       getGhostRosterPrompt,
       // 仅为命中视觉桥目标的 Pi 模型注册 Layer C 工具。

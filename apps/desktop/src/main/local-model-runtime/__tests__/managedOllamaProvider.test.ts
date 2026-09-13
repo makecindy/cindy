@@ -21,6 +21,7 @@ import {
   syncManagedOllamaAgentProjections,
   upsertManagedOllamaModel,
   upsertManagedOllamaModels,
+  toPlainRuntimeModel,
 } from '../managedOllamaProvider.js';
 
 function providerWith(id: string) {
@@ -158,5 +159,16 @@ describe('managed Ollama model identity', () => {
     });
     expect(wrote).toBe(false);
     expect(updateCustomProvider).not.toHaveBeenCalled();
+  });
+});
+
+describe('local model display names', () => {
+  it.each([
+    ['hf.co/ornith-ai/Ornith-1.5-35B-A3B-GGUF:Q4_K_M', 'Ornith 1.5 35B A3B (Q4_K_M)'],
+    ['hf.co/team/Example-GGUF:Q8_0', 'Example (Q8_0)'],
+    ['hf.co/team/Example-GGUF:latest', 'Example'],
+    ['custom-model:8b', 'custom-model:8b'],
+  ])('formats %s without changing its execution ID', (id, name) => {
+    expect(toPlainRuntimeModel(id)).toMatchObject({ id, name });
   });
 });

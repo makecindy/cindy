@@ -208,6 +208,23 @@ Worker 不出现在普通 sidebar。renderer 用 `isOrcaWorkerSession(session) =
 
 Worktree 现状：Orca 与普通 session 对齐，worktree 是可选项，不强制；toggle off 时 Lead/Worker 使用用户选的 workingDir，toggle on 时 Lead/Worker 共用同一个 worktree。
 
+`create_worker` / `create_workers` 的每个 Worker 可显式指定 `working_dir`（Worker
+所在主机上已存在的绝对目录）。省略时仍继承 Lead；显式指定时，在 reservation、session
+bootstrap 和首条任务派发之前校验并绑定，项目上下文与 agent 进程使用同一目录。
+本机目录解析真实路径并检查目录及协同开关；SSH 目录通过继承的 remoteHostId 在远端校验，
+探测前复用该主机的就绪/重连入口，不触碰其他主机；解析保留 shell 前置输出兼容与路径空格，
+SSH 行协议不接受含 CR/LF 的输入或物理路径（含 symlink 目标），拒绝后不绑定其他目录。
+不拿本机文件系统判断远端路径。无效目录或目标项目禁用协同时返回错误，不回退到 Lead
+目录，也不创建 Worker。路径解析与会话落库均保留目录名中的空格。
+运行期消费者同样保留目录身份：Git 初始化、仓库根探测与保存点清理只去掉 Git 输出的行结束符，
+文档工具、历史筛选和 iOS 工具项目权限检查不得 trim 路径；trim 仅用于判空。
+策略查询统一将 Cindy 托管 worktree 映射到 base repo，但运行目录与落库目录仍为实际 worktree；用户自建 worktree
+保留独立项目设置。该参数不创建目录或
+Git worktree，不改变供应商、模型与 Worker 创建权限偏好。
+显式 `working_dir` 的单个或批量 MCP 调用走现有会话审批：Full Access 直接执行，Auto
+审阅用户授权，Ask 使用现有确认；不得被可信 server 或缓存的 server 授权直接放行。
+省略时保持原有静默继承；审批缺少工具名或参数证据时不静默放行。无需新增 UI。
+
 ### 协同运行时行为契约
 
 本节记录当前系统必须持续满足的运行时不变量。它们不是远期规划，而是 Lead / Worker 协同时已经依赖的行为契约。

@@ -12,21 +12,21 @@ describe('resolveLocalCollabPolicyWorkingDir', () => {
   it('drops app-managed dialogue cwd so policy queries use only the user/global level', () => {
     expect(
       resolveLocalCollabPolicyWorkingDir(
-        '  /app-managed/dialogues/2026-08-02/session-1  ',
+        '/app-managed/dialogues/2026-08-02/session-1',
         'dialogue',
         isManagedDialogueWorkspace,
       ),
     ).toBeUndefined();
   });
 
-  it('keeps and normalizes an explicitly bound real directory', () => {
+  it('preserves whitespace in an explicitly bound real directory', () => {
     expect(
       resolveLocalCollabPolicyWorkingDir(
-        '  /projects/cindy  ',
+        '/projects/cindy  ',
         'dialogue',
         isManagedDialogueWorkspace,
       ),
-    ).toBe('/projects/cindy');
+    ).toBe('/projects/cindy  ');
   });
 
   it('keeps a project path even when it has the same shape as a managed dialogue cwd', () => {
@@ -54,25 +54,43 @@ describe('assertCollabProjectEnabled', () => {
     ).not.toThrow();
   });
 
+  it.each(['.cindy-worktrees', '.xdt-worktrees'])('enforces the base policy for %s without changing runtime cwd', (folder) => {
+    const context = { ...project, workingDir: `/projects/repo /${folder}/worker/src` };
+    const calls: Array<string | undefined> = [];
+    expect(() => assertCollabProjectEnabled(context, (_plugin, path) => {
+      calls.push(path);
+      return path !== '/projects/repo ';
+    }, neverManagedDialogue)).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
+    expect(calls).toEqual(['/projects/repo ']);
+    expect(context.workingDir).toBe(`/projects/repo /${folder}/worker/src`);
+    expect(resolveLocalCollabPolicyWorkingDir(context.workingDir, 'project', neverManagedDialogue))
+      .toBe('/projects/repo ');
+  });
+
+  it('keeps imported worktree project overrides independent', () => {
+    const path = '/projects/repo/.worktrees/imported';
+    expect(resolveLocalCollabPolicyWorkingDir(path, 'project', neverManagedDialogue)).toBe(path);
+  });
+
   it('rejects a project with collab disabled', () => {
     expect(() =>
       assertCollabProjectEnabled(project, () => false, neverManagedDialogue),
     ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
   });
 
-  it('trims the working directory before checking the project policy', () => {
+  it('checks the exact directory rather than its whitespace-stripped sibling', () => {
     let checkedPath: string | undefined;
     expect(() =>
       assertCollabProjectEnabled(
-        { ...project, workingDir: '  C:\\projects\\cindy  ' },
+        { ...project, workingDir: '/projects/cindy  ' },
         (_pluginId, workingDir) => {
           checkedPath = workingDir;
-          return true;
+          return workingDir !== '/projects/cindy  ';
         },
         neverManagedDialogue,
       ),
-    ).not.toThrow();
-    expect(checkedPath).toBe('C:\\projects\\cindy');
+    ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
+    expect(checkedPath).toBe('/projects/cindy  ');
   });
 
   it('allows dialogue sessions using only the user/global policy', () => {

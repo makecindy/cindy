@@ -32,10 +32,12 @@ Cindy 以 `pi --mode rpc` spawn pi 二进制(JSONL/stdio),`translator.ts` 把 pi
   与 Claude Code／Codex 一致，Pi 会话的 Full Access 也会让插件 `ghost_call` 的
   `attachments`／`dir`／`save_dir` 在 Host 侧免去额外过户确认；实现必须现读活跃 Session
   的稳定状态并同时匹配其 runtime instance identity；权限切换或关闭在途、远程／缺会话／
-  实例不匹配／查询失败均 fail closed，且不得扩到 workspace、Setup、安装／更新、OAuth、
-  Secret／凭证等其它授权面。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
+  实例不匹配／查询失败均 fail closed。工作区草稿、工作目录写入和媒体路径揭示等操作审批
+  同样沿用会话权限；MCP 逐次审批标记不得覆盖 Full Access。Setup、OAuth、Secret 的信息
+  输入与安装／更新策略保持原边界。instance 仅作为 opaque query 写入 Host 生成的 Pi MCP URL；桥接
   注册表不匹配时返回 401。旧 URL 缺 instance 时可兼容普通会话工具，但必须向工具隐藏
   instance，使 Full Access 自动交接保持 fail closed。
+  会话审批及切档回归见 [pi-auto-review-dispatch.test.ts](../../packages/maker-core/src/agents/pi/__tests__/pi-auto-review-dispatch.test.ts)。
 - **MCP 桥**:`piEnvironment.ts` 把 in-process MCP providers 暴露成 localhost streamable-HTTP，
   并把用户显式配置的外部 HTTP / Streamable HTTP MCP 作为 direct remote server 装入；旧式
   SSE transport 不在此链支持（但 Streamable HTTP 的 SSE response framing 受支持）。外部 URL
@@ -160,6 +162,9 @@ Full access 读/搜/bash 与原生对齐的需求正本见 [`pi-full-access-nati
 Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 [`pi-managed-commands.md`](pi-managed-commands.md)。
 
+扩展 UI 能力清单、RPC 静默过滤与设置兼容提示的统一合同见
+[`pi-extension-ui.md`](pi-extension-ui.md)。
+
 ## 4. 维护不变量(改动时不得破坏)
 
 1. **权限档从严到宽**:`capabilities.permissionModes` 必须 `[ask, auto, bypassPermissions]`
@@ -229,6 +234,41 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
    realpath 校验包含关系，传给 runner 的 argv 必须与 `config.runDir` 同一套原始绝对路径。
    dispose 未确认 runner 退出必须失败；Host 观察到的退出要能通过控制协议通知前台等待，不能只靠 status.json。
    Windows 上 SIGTERM 不得带 taskkill /F；前台若已读到终态必须先返回，不得被 Host 退出通知盖成失败。
+
+### 4.1 包变更与执行终态
+
+- 工具或原生包命令的回执写入队列、`extension_ui_response` 发出，只表示发送，不能据此
+  关闭正在消费结果的调用者。包变更仍推进原有 generation 并捕获准确 runtime 实例；
+  空闲实例退役，忙碌调用者和同一快照里的兄弟实例保留当前执行，产品终态送达后再退役。
+  `runtimeConvergence=deferred` 表示旧快照暂时服务在途工作，不表示新包已经加载。
+  provider 已空闲但 Session 尚未消费终态时，待退役实例仍拒绝新 turn；
+  仅当前 generation 已由 Host 明确 claim 的 silent-stop continuation 可继续发送。
+  调用者的现有 Host lease 必须覆盖兄弟关闭结果汇总及准确收敛回执的 Session 分发；
+  不能把回执入队当作已分发。交付等待有界，显式关闭仍可结束旧实例。
+  内部退役尚未真正开始关闭时，显式 Agent 切换／关闭可接管关闭原因；一旦开始关闭
+  （包括退出未确认而失败），原因固定，不得被迟到操作改写。IM 切换保护继续匹配准确实例与原因。
+  Host 已放弃续跑时，即使 turn lease 记账失败，也应按原实例与 generation 释放退役等待；
+  记账失败仍不得据此派发后续工作或重放副作用。只有 Host 实际登记续跑的 generation
+  才能阻止空闲关闭；远端／无 observer 接管的 silent-stop 不得凭终态自行占有续跑门。
+  用户 Stop 发出 abort 后、等待 RPC 回执前即按 generation 撤销 Host 续跑门；
+  挂起的 abort 不得阻止已结算工作的待退役 runtime 关闭，迟到返回不得复活旧实例。
+  延迟退役的实际关闭若失败，应在该实例的监听器清理前补发 `partial` 与
+  `restart-cindy-to-refresh-packages` 恢复回执；不改判此前成功结果，不自动重放工作。
+  恢复回执只走 Session 的 `onRuntimeRecovery`，不得进入产品 `onEvent` 正文流；
+  Desktop 与 IM 显式订阅，Goal／Learn／Orca 等消费者不逐个追加过滤。
+  IM 已在 done 退订时，恢复回执须走独立渠道通知，不能把 post-terminal text fan-out
+  当作已交付。通知保留准确实例和包退役发起 generation，渠道发送与送达确认分开；
+  不借通知重开已完成 turn。官方 Telegram 复用协商后的 msg.op；旧 hook、Slack／X
+  的独立出站缺口及离线／拒收／超时限制见 Telegram 能力台账，不扩大现有 wire 契约。
+- 设置页明确要求停用／移除的即时失效路径仍可关闭运行时；Session 必须在清除监听器和
+  当前 turn 归属前给未结算工作发明确失败。用户 Stop 则保持取消，不触发重放。
+- provider idle、进程退出、事件流结束都不是成功证明。Session 用已有 turn generation／
+  control 判断未结算工作，保留缺终态时的有界 watchdog；已送达的成功终态不能被后续退出
+  改判成失败，provider continuation claim 也不能被当作最终结束。
+- Pi 的 `Request was aborted` 只在无当前 generation 的 Host Stop 时归入请求断流失败；
+  无错误正文的 bare abort 仍保持取消。复用既有错误收口及重试预算，不重放包命令或工具。
+- SDK 成功与正文入库／交付分开取证。只见 JSONL 成功但 SQLite 缺正文时，不能自动重跑
+  已成功的工作；应沿 RPC → translator → Session → persistence 查丢失边界。
 
 ## 5. 已交付(2026-07 里程碑)
 

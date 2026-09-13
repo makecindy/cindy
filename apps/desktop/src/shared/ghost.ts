@@ -255,6 +255,8 @@ export function isGhostNodeMcpReservedMethod(method: string): boolean {
  * Worker 获得明文后仍可能主动回传或泄露。未声明 entry 时只允许主入口。
  */
 export interface GhostNodeSecretBinding {
+  /** 引用本插件 network.secrets 中的 OAuth key；仅注入短期 access token。 */
+  oauthSecret?: string;
   /** 凭证键(插件内唯一):小写字母开头,允许小写/数字/下划线,1–32。 */
   key: string;
   /** 给用户看的名称(插件详情与设置状态使用)。 */
@@ -1975,12 +1977,12 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       const targetEntry = binding.entry ?? manifest.node.entry;
       const stableMethods = [...binding.methods].sort();
       items.unshift({
-        key: `node:secret:${binding.key}:${targetEntry}:${stableMethods.join(',')}`,
+        key: `node:secret:${binding.key}:${targetEntry}:${stableMethods.join(',')}${binding.oauthSecret ? `:oauth:${binding.oauthSecret}` : ''}`,
         kind: 'node',
         labelKey: 'nodeSecret',
         labelArgs: { name: binding.label },
         detailKey: 'nodeSecretDetail',
-        detail: binding.methods.join('\n'),
+        detail: [binding.oauthSecret ? `OAuth: ${binding.oauthSecret}` : '', ...binding.methods].filter(Boolean).join('\n'),
       });
     }
     if (manifest.node.lifecycle === 'resident') {
@@ -2586,6 +2588,7 @@ export function ghostNodeSecretAuthorizationWithinCap(
     );
     if (
       !cap ||
+      binding.oauthSecret !== cap.oauthSecret ||
       binding.label !== cap.label ||
       !binding.methods.every((method) => cap.methods.includes(method))
     ) {
@@ -4452,7 +4455,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         }
         const binding = bindingRaw as Record<string, unknown>;
         const unknownBindingField = Object.keys(binding).find(
-          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url'].includes(key),
+          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url', 'oauthSecret'].includes(key),
         );
         if (unknownBindingField) {
           return {
@@ -4569,7 +4572,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
             };
           }
         }
+        if (binding.oauthSecret !== undefined &&
+          (typeof binding.oauthSecret !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(binding.oauthSecret))) {
+          return { ok: false, reason: 'node.secretBindings[].oauthSecret 必须是本插件 OAuth 凭证键' };
+        }
         nodeSecretBindings.push({
+          ...(binding.oauthSecret !== undefined ? { oauthSecret: binding.oauthSecret as string } : {}),
           key: binding.key,
           label: binding.label,
           methods,
@@ -5794,6 +5802,13 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
   // setup 就绪声明:引用必须指向已声明的凭证/连接(悬空引用在装包期拒,
   // 不留到运行期才发现作者写错);kv 引用要求 settingsHtml(没有设置页
   // 没人填参数);Host 派生源没有用户配置动作,引用它属结构性误解,直接拒装。
+  for (const binding of node?.secretBindings ?? []) {
+    if (binding.oauthSecret === undefined) continue;
+    const source = network?.secrets?.find((secret) => secret.key === binding.oauthSecret);
+    if (source?.source !== 'oauth' || !source.oauth) {
+      return { ok: false, reason: 'node.secretBindings[].oauthSecret 必须引用本插件已声明的 OAuth 凭证' };
+    }
+  }
   let setup: GhostSetupDecl | undefined;
   if (raw.setup !== undefined) {
     if (!isPlainObject(raw.setup)) {
@@ -5827,7 +5842,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
             },
           ] as const,
       ),
-      ...(node?.secretBindings ?? []).map((s) => [s.key, { hostDerivedSource: null }] as const),
+      ...(node?.secretBindings ?? []).filter((s) => !s.oauthSecret).map((s) => [s.key, { hostDerivedSource: null }] as const),
     ]);
     const connectionKeys = new Set((network?.connections ?? []).map((c) => c.key));
     const groups: GhostSetupGroup[] = [];
@@ -6419,6 +6434,8 @@ export const GHOST_NODE_REQUEST_MAX_TOTAL_MS = 15 * 60_000;
 /** 上行:main.js 通过主机中继调用随包 Node 工作进程。 */
 export interface GhostPipeNodeRequest {
   type: 'node-request';
+  /** OAuth 注入的本插件账号 id；缺省使用对应 OAuth 槽的默认账号。 */
+  authAccount?: string;
   /** JSON-RPC 方法名；mcp-stdio 时使用 tools/list、tools/call 等 MCP 方法。 */
   method: string;
   params?: unknown;

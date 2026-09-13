@@ -3182,6 +3182,7 @@ class CindyMcpGateway {
             instruction: { type: 'string', minLength: 1, maxLength: 12000 },
             title: { type: 'string', minLength: 1, maxLength: 120 },
             working_dir: { type: 'string', minLength: 1, maxLength: 1024 },
+            use_worktree: { type: 'boolean' },
             context_refs: { type: 'array', items: { type: 'string' }, maxItems: 32 },
             timeout_ms: { type: 'integer', minimum: 1000, maximum: 86400000 },
           },
@@ -3219,7 +3220,8 @@ class CindyMcpGateway {
         label: 'Check Session task',
         description: 'Read one Session task state when the user asks for progress or automatic completion appears to be missing. Do not poll.',
         parameters: { type: 'object',
-          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 } },
+          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 },
+            queued_message_id: { type: 'string', minLength: 1, maxLength: 256 } },
           required: ['task_id'],
           additionalProperties: false,
         },
@@ -3232,11 +3234,13 @@ class CindyMcpGateway {
       pi.registerTool({
         name: CINDY_MESSAGE_SESSION_TASK_TOOL,
         label: 'Message Session task',
-        description: 'Add instructions to the same Session task, or answer the exact approval/question it is waiting for. A terminal task resumes under the same task ID.',
+        description: 'Queue instructions (default), steer the running turn with mode=steer, or release a reversible pause with mode=resume. Steer never falls back to queue. If paused, resume before answering pending interactions. A terminal task with ordinary input starts a fresh execution under the same task ID.',
         parameters: {
           type: 'object',
           properties: {
             task_id: { type: 'string', minLength: 1, maxLength: 128 },
+            mode: { type: 'string', enum: ['queue', 'steer', 'resume', 'edit', 'withdraw'] },
+            queued_message_id: { type: 'string', minLength: 1, maxLength: 256 },
             message: { type: 'string', minLength: 1, maxLength: 4000 },
             decision: { type: 'string', enum: ['approve', 'deny'] },
             answers: { type: 'object', additionalProperties: { type: 'string' } },
@@ -3255,10 +3259,13 @@ class CindyMcpGateway {
       pi.registerTool({
         name: CINDY_STOP_SESSION_TASK_TOOL,
         label: 'Stop Session task',
-        description: 'Stop one running Session task and its child tasks.',
+        description: 'mode=cancel (default) terminates the task; request-stop requests graceful stop only; pause holds the same task and queued input until explicit resume. Check returned control state: pausing/unconfirmed is not stopped.',
         parameters: {
           type: 'object',
-          properties: { task_id: { type: 'string', minLength: 1, maxLength: 128 } },
+          properties: {
+            task_id: { type: 'string', minLength: 1, maxLength: 128 },
+            mode: { type: 'string', enum: ['cancel', 'request-stop', 'pause'] },
+          },
           required: ['task_id'],
           additionalProperties: false,
         },

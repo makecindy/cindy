@@ -20,6 +20,16 @@
 - 运行时需要持久化秘密时，复用现有 Main／宿主管理的 credential store 或 Electron
   `safeStorage` 边界。不要新增自定义明文凭证文件，也不要把秘密下放给 Renderer、插件
   或不受信任页面。
+- 可信 Node Worker 的显式例外：`node.secretBindings[].oauthSecret` 只能引用本插件
+  已声明的 OAuth key。Host 根据本次 `authAccount`（省略时为默认账号）刷新并注入
+  短期 access token；不得注入 refresh token、返回 Renderer/Agent、写日志或落盘。
+  Worker 启动第三方 CLI 时仅用该次子进程环境传递，不修改全局环境或复用他账号配置。
+  这是高权限 Node 的受审查信任边界，不是系统沙箱或对恶意 Worker 的隔离保证。
+  实现与回归见 [nodeRuntimeBroker.ts](../../apps/desktop/src/main/cindy-brain/nodeRuntimeBroker.ts)
+  和 [nodeRuntimeBroker.test.ts](../../apps/desktop/src/main/cindy-brain/__tests__/nodeRuntimeBroker.test.ts)。
+- 插件自定义的账号昵称、展示偏好和业务配置属于插件数据，使用现有隔离 `/kv`，
+  不扩充 Host OAuth 账号模型、凭证库或专用接口。插件按账号 ID 合并这些数据用于展示
+  和选择账号；传给 Host 的授权身份仍是账号 ID，不能用昵称替代。
 - access token 等只需短期使用的秘密优先保留在内存中。日志、错误、遥测和调试输出不得
   包含凭证明文、完整鉴权头或可直接复用的授权材料。
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、

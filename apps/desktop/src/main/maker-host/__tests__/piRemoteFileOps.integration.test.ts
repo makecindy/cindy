@@ -55,6 +55,14 @@ describe.skipIf(process.platform === 'win32')('remote Pi context filesystem erro
     await expect(ops.stat('$HOME/loop')).rejects.toThrow('remote stat failed');
   });
 
+  it('reads a bounded native history tail on the remote filesystem with literal paths', async () => {
+    const name = "rollout '$() `literal`.jsonl";
+    await fs.writeFile(path.join(root, name), 'old history\n'.repeat(100) + 'CURRENT RECEIPT');
+    await expect(ops.readFile(`$HOME/${name}`, 11)).resolves.toBe('old history');
+    await expect(ops.readFileTail!(`$HOME/${name}`, 15)).resolves.toBe('CURRENT RECEIPT');
+    await expect(ops.readFileTail!('$HOME/missing.jsonl', 15)).rejects.toThrow('remote read failed');
+  });
+
   it('propagates an unsearchable directory as EACCES, including through a symlink', async (ctx) => {
     const denied = path.join(root, 'denied');
     await fs.mkdir(denied);

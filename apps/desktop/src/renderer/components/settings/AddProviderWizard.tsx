@@ -25,6 +25,7 @@ import { createCustomProvider, deleteCustomProvider, type RuntimeKeys } from '@/
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
+import { presetConnectionRuntime } from '../../../shared/presetConnectionRuntime';
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   isLocalRuntimeBetaProviderId,
@@ -41,7 +42,7 @@ import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { acquireCodexLogin, type CodexLoginLease } from '@/hooks/codexAuthLogin';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { LocalOllamaInstall, offersManagedOllamaInstall } from './LocalOllamaInstall';
-import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { SettingsTextInput } from './SettingsTextInput';
 
 import {
@@ -367,13 +368,16 @@ export function AddProviderWizard({
     sel?.kind === 'oauth' && sel.provider.auth.oauth ? sel.provider.id : null;
   const genericDeviceFlow =
     sel?.kind === 'oauth' && sel.provider.auth.oauth?.flow === 'device-code';
+  const accountLoginRef = useRef<{ providerId: string; ownerId: string } | null>(null);
   const {
     deviceCode: genericDeviceCode,
+    browserUrl,
     clearDeviceCode: clearGenericDeviceCode,
     beginOwnedLogin: beginGenericOwnedLogin,
     cancelOwnedLogin: cancelGenericOwnedLogin,
   } = useProviderOAuthDeviceCode(genericOAuthProviderId, {
-    observeProgress: genericDeviceFlow,
+    observeProgress: genericDeviceFlow || (sel?.kind === 'oauth' && sel.provider.id === 'openai'),
+    browserLoginRef: accountLoginRef,
   });
   // Step 3 拉取态
   const [step, setStep] = useState<1 | 2 | 3>(entryProvider ? 2 : 1);
@@ -676,7 +680,6 @@ export function AddProviderWizard({
     if (preset) pickPreset(preset);
   }, [entry, presets, pickPreset]);
 
-  const accountLoginRef = useRef<{ providerId: string; ownerId: string } | null>(null);
   const localLoginRef = useRef<{ cancel: () => void } | null>(null);
   useEffect(() => () => {
     const localLogin = localLoginRef.current;
@@ -761,7 +764,10 @@ export function AddProviderWizard({
             // Keep ok false so finally also removes credentials committed before cancellation.
             ok = result.ok;
           } finally {
-            if (accountLoginRef.current === login) accountLoginRef.current = null;
+            if (accountLoginRef.current === login) {
+              accountLoginRef.current = null;
+              clearGenericDeviceCode();
+            }
             if (created && !ok) await deleteCustomProvider(id);
           }
         } else {
@@ -787,7 +793,8 @@ export function AddProviderWizard({
       } catch {
         toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
       } finally {
-        setLoggingIn(false);
+        // A cancelled account login may settle after a retry or local login has started.
+        if (!accountLoginRef.current && !localLoginRef.current) setLoggingIn(false);
       }
     },
     [sel, clearGenericDeviceCode, beginGenericOwnedLogin, onDone, t],
@@ -1187,19 +1194,12 @@ export function AddProviderWizard({
             };
           });
         if (agentModels.length === 0) continue;
-        runtimes[agent] = {
-          catalogPresetId: preset.id,
-          baseUrl: presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
-          ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
-          ...(rt.requestPath ? { requestPath: rt.requestPath } : {}),
-          ...(agent === 'codex' && rt.supportsImageGeneration === true
-            ? { supportsImageGeneration: true }
-            : {}),
-          models: agentModels,
-          ...(rt.headers ? { headers: rt.headers } : {}),
-          ...(rt.modelsUrl ? { modelsUrl: rt.modelsUrl } : {}),
-          ...(rt.piCatalogProviderId ? { piCatalogProviderId: rt.piCatalogProviderId } : {}),
-        };
+        runtimes[agent] = presetConnectionRuntime(
+          preset,
+          agent,
+          agentModels,
+          presetRuntimeBaseUrl(preset, agent, presetBaseUrls),
+        );
         if (preset.authMethod !== 'none') {
           const k = apiKey.trim();
           if (k) keys[agent] = k;
@@ -1706,6 +1706,7 @@ export function AddProviderWizard({
               {genericDeviceFlow && loggingIn && (
                 <OAuthDeviceCodeCard deviceCode={genericDeviceCode} />
               )}
+              {loggingIn && browserUrl && <OAuthBrowserLink url={browserUrl} />}
               {oauthSingleAgentNote && <InfoLine text={oauthSingleAgentNote} />}
             </div>
           )}

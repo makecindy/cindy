@@ -20,6 +20,11 @@ vi.mock('@/lib/cindyMakeDoctorStream', () => ({
 }));
 vi.mock('@/lib/cindyMakeDoctor', () => ({ cancelMakeDoctor: vi.fn(async () => {}) }));
 vi.mock('@/features/bots/useRemoteBots', () => ({ useRemoteBots: () => [] }));
+// Partner task cards have their own integration suite; isolate this sibling variant.
+vi.mock('@/features/bots/BotCollaborationCard', () => ({
+  BotSessionTaskCard: () => null,
+  BotSessionTaskMessageTrace: () => null,
+}));
 vi.mock('@/features/learn/LearnStatusCard', () => ({ LearnStatusCard: () => null }));
 vi.mock('@/components/chat/MarkdownRenderer', () => ({ MarkdownRenderer: () => null }));
 vi.mock('@/hooks/useReducedMotion', () => ({ useReducedMotion: () => true }));

@@ -1,3 +1,4 @@
+import { placeBotTaskCardsAfterIntroduction } from '@cindy/maker-shared/botCollaboration';
 /**
  * MessageStream
  * ---------------------------------------------------------------------------
@@ -528,7 +529,7 @@ export function simplifyBotRenderItems(
     // not an expanding work/result card. The reverse delivery starts another hidden
     // canonical turn; hiding system cards during that turn used to make the already
     // persisted "sent" stamp flash and disappear until streaming finished.
-    if (item.message.systemCardType === 'bot-direct-message') return true;
+    if (item.message.systemCardType === 'bot-direct-message' || item.message.systemCardType === 'bot-session-task') return true;
     return (
       item.message.role === 'assistant' &&
       !item.message.systemCardType &&
@@ -1509,6 +1510,17 @@ export function buildRenderItems(
   // Modal-only Cindy Make cards are transient UI state. They stay in the
   // shared store for the dialog to observe, but never enter the chat timeline.
   allMessages = allMessages.filter((message) => message.systemCardData?.modalOnly !== true);
+  if (opts?.botSessionId) {
+    allMessages = placeBotTaskCardsAfterIntroduction(allMessages, (message) => {
+      if (message.role === 'user') {
+        return message.delivery !== 'steer' || message.isSyntheticTrigger ? 'boundary' : 'other';
+      }
+      if (isSubagentInternalMessage(message)) return 'other';
+      if (message.systemCardType === 'bot-session-task') return 'task';
+      return message.role === 'assistant' && !message.systemCardType && message.content.trim()
+        ? 'prose' : 'other';
+    });
+  }
   // ── Pass -1: 剔除子代理内部消息 ──
   // 后台 Agent/Task 跑起来后,SDK 会把子代理自己的 thinking / 正文 / 工具调用一并
   // echo 回主流(每条都带 parent_tool_use_id)。这些是**子任务内部的经过**,不是父
@@ -2770,6 +2782,7 @@ export function MessageStream({
         build: (rows) => {
           const chunk = buildRenderItems([...rows], taskUpdates, ghostCardSnapshot, {
             historyWindowIncomplete: true, workingDir,
+            botSessionId: simplifiedBotConversation ? sessionId : undefined,
             markdownImageTargetCache: markdownImageTargetCacheRef.current,
           });
           for (const [key, value] of chunk.singleResultMap) results.set(key, value);
@@ -6256,7 +6269,7 @@ const MessageItem = memo(function MessageItem({
       );
     case 'assistant':
       if (message.systemCardType) {
-        return (
+        const card = (
           <SystemCard
             cardType={message.systemCardType}
             data={message.systemCardData}
@@ -6264,6 +6277,9 @@ const MessageItem = memo(function MessageItem({
             workingDir={workingDir}
           />
         );
+        return simplifiedBotConversation && message.systemCardType === 'bot-session-task'
+          ? withAssistantAvatar(assistantAvatar ? <span aria-hidden="true" className="invisible">{assistantAvatar}</span> : undefined, card)
+          : card;
       }
       return withAssistantAvatar(
         assistantAvatar,

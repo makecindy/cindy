@@ -43,7 +43,8 @@ Catalog (version)
 | Claude Code / Codex 的工作默认 | `models[].perAgent`，引擎必须被该条目 route 声明 | 不把工作预算当供应商承诺容量 |
 | Pi 公共成员和 Pi 默认资料 | `providers[].models.pi`；公共资料仍按 Registry 合并 | 不从其他引擎名单复制出 Pi 路由 |
 | 经核实的错误实报 | 匹配 route 的 `forceOverrides` + `overrideReason` | 不影响其他供应商，也不压过用户配置 |
-| 官方参考价及历史价区间 | `routes[].referencePrices[]` | Gateway 实价/折扣仍归其计费控制面 |
+| 厂商官方参考价及历史价区间 | `baseModels[].referencePriceGroups[].prices[]`（Registry V5） | 按市场分组，保留币种、标准/Fast、输入区间及生效日期 |
+| 接入供应商参考报价 | `routes[].referencePrices[]`；`referencePriceGroup` 指向公共型号的官方价组 | Gateway 实价/折扣仍归其计费控制面，不混填缺失字段 |
 | 内置接入或新增连接模板 | `providers[]` 或 `presets[].runtimes` | 不在公共目录保存真实账号密钥 |
 | 本地候选、包装、门槛、推荐 | `localModels.models` / `featuredIds` | 不自动安装、卸载、切换用户模型 |
 | 某个用户的显式设置 | 本机 `model-catalog-overrides.json` 等既有偏好 | 不写回 Server；刷新保留，恢复默认删除 override |
@@ -107,3 +108,21 @@ localModels 整域缺失才用随包本地域，显式空不兜底。
 | 历史型号与同步记录 | [历史记录](../model-catalog-history.md)；不可当作当前状态 |
 | 字段写法及可执行校验 | [五个示例](../examples/model-catalog.md) |
 | 修改代码与定位测试 | [代码导航](model-catalog-runtime.md#从需求找到代码) |
+
+## 厂商参考价（Registry V5）
+
+公共型号的 `referencePriceGroups` 使用市场标识（当前为 `global` / `cn`），不是供应商 ID。
+每组 `prices` 沿用原价格结构与官方证据：币种、每百万 tokens 单价、缓存读/写及 1h 写入、
+标准/Fast 等变体、输入区间 `[minInputTokens, maxInputTokens)`、生效日期区间。
+缺字段保持未知，明确的 0 才表示零单价；缓存存储每小时费用不能写成缓存写入单价。
+
+`resolveBaseModelReferencePrice` 按公共 ID/唯一 alias 读取，不依赖供应商名单。
+多市场/币种必须明确选择到唯一有效价格；无匹配或有歧义返回未知。
+路由用 `referencePriceGroup` 明确选择所属公共型号的价格组；供应商自己的 `referencePrices`
+优先于该组，整组替换，不逐字段补齐。订阅价值估算指定 `officialOnly`，仅取厂商参考价，
+用户显式价格覆盖仍优先，账号归属不变。XD 计费继续只读 Gateway 实报。
+
+新客户端请求 `registrySchemaVersion=5`。服务端向 V1–V4 展开官方参考价到原路由字段，
+剥离新增组与引用字段；V4 保留公共资料、本地域及原覆盖语义。各版本响应有独立 ETag。
+旧服务端仍可返回旧目录，新客户端保留旧格式读取；应先部署服务端再发布客户端。
+本次只迁移已有、已核实的价格，不补猜测价格，不改变 XD 的缺价处理。

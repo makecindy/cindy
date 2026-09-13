@@ -1187,6 +1187,79 @@ describe('Maker session creation singleflight', () => {
 });
 
 describe('Maker session close events', () => {
+  it('defers retirement of only the captured runtime and ignores its stale identity after rebuild', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    let running = false;
+    const handle = createHandle({ id: 'old-thread', agentKind: 'pi' });
+    handle.send = vi.fn(async () => { running = true; });
+    handle.isTurnRunning = () => running;
+    handle.events = () => queue;
+    const replacement = createHandle({ id: 'new-thread', agentKind: 'pi' });
+    replacement.close = vi.fn(replacement.close);
+    const start = vi.fn().mockResolvedValueOnce(handle).mockResolvedValue(replacement);
+    const maker = new Maker({ agents: { pi: createAgent(start, 'pi') }, storage: createStorage(), logger: createLogger() });
+    const opts = { id: 'retiring', agentKind: 'pi' as const, workingDir: '/repo', model: 'm' };
+    const old = await maker.createSession(opts);
+    await old.send('work');
+    expect(await maker.closeSessionIfCurrent(old, 'requested', { afterCurrentTurn: true })).toBe('deferred');
+    expect(maker.getSession(old.id)).toBe(old);
+    running = false;
+    queue.push({ type: 'done', source: 'pi', data: { status: 'completed', result: 'done' } });
+    await vi.waitFor(() => expect(maker.getSession(old.id)).toBeUndefined());
+    const next = await maker.createSession(opts);
+    await maker.closeSessionIfCurrent(old, 'requested', { afterCurrentTurn: true });
+    expect(maker.getSession(next.id)).toBe(next);
+    expect(replacement.close).not.toHaveBeenCalled();
+    await next.close();
+    queue.end();
+  });
+
+  it.each([
+    { initial: 'runtime-refresh', begun: false, next: 'agent-switch', expected: 'agent-switch' },
+    { initial: 'runtime-refresh', begun: false, next: 'requested', expected: 'requested' },
+    { initial: 'runtime-refresh', begun: true, next: 'agent-switch', expected: 'runtime-refresh' },
+    { initial: 'requested', begun: false, next: 'agent-switch', expected: 'requested' },
+    { initial: 'agent-switch', begun: false, next: 'runtime-refresh', expected: 'agent-switch' },
+  ] as const)('preserves actual close ownership: $initial, begun=$begun, next=$next', async ({ initial, begun, next, expected }) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const exit = createDeferred();
+    const handle = createHandle({ id: 'retiring-thread', agentKind: 'pi' });
+    handle.events = () => queue;
+    handle.close = vi.fn(async () => { await exit.promise; queue.end(); });
+    const maker = new Maker({ agents: { pi: createAgent(async () => handle, 'pi') },
+      storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'retiring', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+    const closed = vi.fn();
+    maker.on(event => { if (event.type === 'session:closed') closed(event); });
+    const release = session.acquireTurnLease()!;
+    expect(await maker.closeSessionIfCurrent(session, initial, { afterCurrentTurn: true })).toBe('deferred');
+    if (begun) {
+      release();
+      await vi.waitFor(() => expect(handle.close).toHaveBeenCalledOnce());
+    }
+    const closing = maker.closeSession(session.id, next);
+    exit.resolve();
+    await closing;
+    release();
+    expect(closed).toHaveBeenCalledExactlyOnceWith({
+      type: 'session:closed', sessionId: session.id, session, reason: expected,
+    });
+    expect(handle.close).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the original cause when an unconfirmed close is retried as a switch', async () => {
+    const handle = createHandle({ id: 'failed-close', agentKind: 'pi' });
+    handle.close = vi.fn().mockRejectedValueOnce(new Error('exit unconfirmed')).mockResolvedValue(undefined);
+    const maker = new Maker({ agents: { pi: createAgent(async () => handle, 'pi') },
+      storage: createStorage(), logger: createLogger() });
+    const session = await maker.createSession({ id: 'failed-close', agentKind: 'pi', workingDir: '/repo', model: 'm' });
+    await expect(maker.closeSession(session.id, 'runtime-refresh')).rejects.toThrow('exit unconfirmed');
+    expect(session.getStatus()).toBe('error');
+    await maker.closeSession(session.id, 'agent-switch');
+    expect(maker.getSessionCloseReason(session)).toBe('runtime-refresh');
+    expect(handle.close).toHaveBeenCalledTimes(2);
+  });
+
   it('preserves the explicit close reason and exact Session identity', async () => {
     const maker = new Maker({
       agents: {

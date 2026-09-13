@@ -177,6 +177,11 @@ export interface AgentInputClearBoundaryOpts {
 export interface AutoResumeInfo {
   /** 中断原文（terminal error 的 message，通常是 SDK 的英文文案）。 */
   error?: string;
+  /**
+   * translator / watchdog 给出的稳定 reason。展示用，自动续跑也靠它决定
+   * CONTINUE-only（已 accept 的 stall/idle/reconnect-stalled）还是可以克隆原文。
+   */
+  reason?: string;
   /** 本轮连续第几次重连（从 1 起）。 */
   attempt: number;
   /** 本轮上限。 */

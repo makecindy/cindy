@@ -80,6 +80,7 @@ export class RemoteDesktopController {
   private lastEnded: { peer: string; lease: string } | null = null;
   constructor(private readonly deps: DesktopControllerDeps) {}
   get state(): { peer: string; controlling: boolean } | null {
+    this.tick();
     return this.active ? { peer: this.active.peer, controlling: this.active.controlling } : null;
   }
   get displayId(): string | null {
@@ -131,6 +132,23 @@ export class RemoteDesktopController {
     this.active = null;
     this.deps.stopInput();
     this.deps.stopVideo();
+    this.deps.changed();
+  }
+  /**
+   * Input injection failed while the lease is still valid. Input belongs to the
+   * control bit, so release control and keep everything else: ending the lease
+   * here would tear down capture and media, and every phone tap would surface as
+   * a reconnect even though the desktop session itself is healthy. The viewer
+   * observes the new state on its next heartbeat or input attempt. A pending
+   * start is also cancelled so a failed helper cannot restore control later.
+   */
+  releaseControl(): void {
+    const active = this.active;
+    if (!active || (!active.controlling && !this.inputStarting)) return;
+    active.controlling = false;
+    this.controlGeneration++;
+    this.clipboardTransfer.reset();
+    this.deps.stopInput();
     this.deps.changed();
   }
   /** Explicit local disconnect must not be undone by the phone's recovery. */

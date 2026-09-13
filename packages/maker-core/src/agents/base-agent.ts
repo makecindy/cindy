@@ -253,6 +253,8 @@ export interface RemoteAgentFileOps {
   listDir(dir: string): Promise<string[]>;
   /** Bounded UTF-8 read used for remote runtime metadata such as SKILL.md. */
   readFile(file: string, maxBytes?: number): Promise<string>;
+  /** Bounded UTF-8 tail for native history receipts; absent on older hosts. */
+  readFileTail?(file: string, maxBytes: number): Promise<string>;
   /** Hash the complete remote file without transferring its contents to the client. */
   sha256File(file: string): Promise<string>;
 }
@@ -635,7 +637,7 @@ export interface PiExtensionUiStrings {
 }
 
 export interface PiManagedPackageRuntimeConvergence {
-  runtimeConvergence: 'complete' | 'partial';
+  runtimeConvergence: 'complete' | 'partial' | 'deferred';
   recoveryAction?: 'restart-cindy-to-refresh-packages';
 }
 
@@ -745,13 +747,18 @@ export interface AgentDeps {
 
   /**
    * Pi-only: host callback after a package mutation receipt has been queued/sent.
-   * Desktop publishes a bounded convergence outcome before retiring the caller,
-   * then retires its exact stale local ordinary Pi snapshot. Native package
-   * success remains authoritative.
+   * Desktop retires idle instances and defers busy captured instances until
+   * their product turn settles. A sent receipt is not proof Pi consumed it.
+   * Native package success remains authoritative; deferred is not a failure.
+   * publishOutcome returns the exact queued event so the Host can retain its
+   * caller lease until Session dispatches that receipt (not a persistence ACK).
+   * The event factory supplies a fresh complete receipt for eventual retirement
+   * failure, without writing into the possibly closed caller queue.
    */
   onPiManagedPackageMutationSettled?: (
     callerSessionId: string | undefined,
-    publishOutcome: (outcome: PiManagedPackageRuntimeConvergence) => void,
+    publishOutcome: (outcome: PiManagedPackageRuntimeConvergence) => AgentEvent,
+    createRetirementFailureEvent: () => AgentEvent,
   ) => Promise<void>;
 
   /**
@@ -985,6 +992,8 @@ export interface AgentDeps {
     ctx: {
       providerId?: string;
       codexHome?: string;
+      /** Actual native config/history root; credential/catalog preparation keeps codexHome above. */
+      runtimeCodexHome?: string;
       accountHostKey?: string;
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
@@ -1277,7 +1286,9 @@ export interface AgentDeps {
    */
   prepareCodexResumeSession?: (threadId: string, context?: { codexHome: string; providerId?: string }) => Promise<string | void>;
   recordCodexThreadLocation?: (threadId: string, codexHome: string, rolloutPath?: string) => Promise<void>;
-  resolveCodexThreadStorageHome?: (threadId: string) => Promise<string | undefined>;
+  resolveCodexThreadStorage?: (threadId: string) => Promise<{ historyHome: string; sqliteHome: string } | undefined>;
+  /** Freeze the owner/account scope before async host startup; never expose tokens to the renderer. */
+  createCodexAuthTokenReader?: (providerId?: string) => () => Promise<import('./codex/app-server/external-auth.js').CodexChatgptTokens>;
 
   /**
    * Codex 专用:把已拼好的产品级 system prompt 同步登记到 host 的 codex proxy registry。
@@ -2266,6 +2277,9 @@ export interface AgentSessionHandle {
   /** 当前 maker 进程内记录的计划模式状态；不支持的 agent 不实现。 */
   getPlanMode?(): boolean | null;
 
+  /** Execution authority, including an active one-shot Plan turn after the UI toggle is consumed. */
+  getExecutionPlanMode?(): boolean | null;
+
   /**
    * 把当前会话导出成 HTML 文件,返回写入的绝对路径。
    * `outputPath` 省略时由 agent 决定默认落盘位置。仅 Capabilities.sessionHtmlExport
@@ -2347,6 +2361,11 @@ export interface AgentSessionHandle {
    * 默认实现为 false (capability 缺失时 host 不该问)。
    */
   isTurnRunning?(): boolean;
+  /** A provider-owned preparatory turn still precedes the accepted user input.
+   * Host timeouts must not resume it with a generic CONTINUE. Read synchronously
+   * before abort clears the provider's existing preparation state.
+   */
+  isPreparingUserTurn?(): boolean;
 }
 
 export abstract class BaseAgent {

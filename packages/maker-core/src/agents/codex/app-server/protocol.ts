@@ -1224,6 +1224,7 @@ export const Method = {
   SkillsList: 'skills/list',
   ThreadStart: 'thread/start',
   ThreadResume: 'thread/resume',
+  ThreadInjectItems: 'thread/inject_items',
   ThreadFork: 'thread/fork',
   ThreadRollback: 'thread/rollback',
   ThreadTurnsList: 'thread/turns/list',

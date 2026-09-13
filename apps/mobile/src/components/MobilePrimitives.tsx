@@ -16,6 +16,7 @@ import {
 } from 'react-native';
 import { Text } from '@/components/AppText';
 import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
+import { mobileInteractionStyles } from './mobileInteractionStyles';
 import { fontWeight, iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
@@ -799,9 +800,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   infoPillTextInverted: {
     color: colors.ctaText,
   },
-  pressed: {
-    opacity: 0.72,
-  },
+  pressed: mobileInteractionStyles.pressed,
   disabled: {
     opacity: 0.45,
   },

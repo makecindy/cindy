@@ -126,6 +126,24 @@ vi.mock('@/hooks/useCodexRateLimits', () => ({
     refresh: mocks.refreshCodexRateLimits,
   }),
 }));
+// device-link 远程会话读被控端镜像 hook(#3789);本文件不铺隧道 API,镜像一律返回 null →
+// 远程会话只显示任务用量(与「不混入本机配额」的既有断言同义)。
+vi.mock('@/hooks/useRemoteDeviceUsage', () => ({
+  useRemoteCodexAccountUsage: () => null,
+  requestRemoteCodexAccountRefresh: () => undefined,
+  useRemoteClaudeAccountUsage: () => null,
+  useRemoteXaiSubscriptionUsage: () => null,
+  requestRemoteXaiSubscriptionRefresh: () => undefined,
+  useRemoteXaiRateLimit: () => null,
+  selectRemoteCodexAccountUsage: () => null,
+}));
+vi.mock('@/hooks/useRemoteClaudeSubscriptionUsage', () => ({
+  useRemoteClaudeSubscriptionUsage: () => null,
+  requestRemoteClaudeSubscriptionRefresh: () => undefined,
+}));
+vi.mock('@/hooks/useRemoteClaudeSessionRoute', () => ({
+  useRemoteClaudeSessionRoute: () => null,
+}));
 vi.mock('@/hooks/useXaiSubscriptionUsage', () => ({
   useXaiSubscriptionUsage: (enabled: boolean) => (enabled ? mocks.xaiSnapshot : null),
   requestXaiSubscriptionRefresh: vi.fn(),
@@ -145,6 +163,7 @@ vi.mock('@/lib/makerChatStore', () => ({
 }));
 
 import { TodaySpendChip } from '../TodaySpendChip';
+import { QuotaFullCelebrations, quotaFullCelebrations } from '../quotaFullCelebrations';
 
 const CLAUDE_USAGE_URL = 'https://claude.ai/settings/usage';
 const TURN_USAGE_DETAILS = {
@@ -202,6 +221,8 @@ function openCardFromHover() {
 }
 
 beforeEach(() => {
+  const history = new QuotaFullCelebrations();
+  vi.spyOn(quotaFullCelebrations, 'observe').mockImplementation(history.observe.bind(history));
   vi.useFakeTimers();
   setLatestUsageMessage();
   mocks.sessionUsage = {
@@ -259,7 +280,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
   );
 
   it.each([false, true])(
-    'only celebrates a Claude reset for the same account (changed: %s)',
+    'does not throw confetti for a partial Claude recovery (account changed: %s)',
     (changed) => {
       mocks.claudeSnapshot = {
         accountFingerprint: 'account-a',
@@ -280,7 +301,7 @@ describe('TodaySpendChip Claude subscription popover', () => {
           sessionId="session-1"
         />,
       );
-      expect(screen.queryByTestId('quota-reset-confetti') !== null).toBe(!changed);
+      expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
       if (changed) {
         expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).textContent).toContain(
           '98%',
@@ -288,6 +309,70 @@ describe('TodaySpendChip Claude subscription popover', () => {
       }
     },
   );
+
+  it('celebrates first 100% once across task switches and remounts', () => {
+    mocks.claudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 0 } };
+    const view = renderClaudeSubscriptionChip();
+    expect(screen.queryByTestId('quota-reset-confetti')).not.toBeNull();
+    view.unmount();
+    const next = render(
+      <TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />,
+    );
+    expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+    mocks.claudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 30 } };
+    next.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />);
+    mocks.claudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 0 } };
+    next.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />);
+    expect(screen.queryByTestId('quota-reset-confetti')).not.toBeNull();
+  });
+
+  it('celebrates an official extra reset without changing the deadline and ignores old task snapshots', () => {
+    const resetsAt = Date.now() / 1000 + 18_000;
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 1000,
+      fiveHour: { utilization: 0, resetsAt },
+    };
+    const first = renderClaudeSubscriptionChip();
+    expect(screen.queryByTestId('quota-reset-confetti')).not.toBeNull();
+    first.unmount();
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 2000,
+      fiveHour: { utilization: 40, resetsAt },
+    };
+    const next = renderClaudeSubscriptionChip();
+    expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 3000,
+      fiveHour: { utilization: 0, resetsAt },
+    };
+    next.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />);
+    expect(screen.queryByTestId('quota-reset-confetti')).not.toBeNull();
+    next.unmount();
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 2000,
+      fiveHour: { utilization: 40, resetsAt },
+    };
+    const stale = renderClaudeSubscriptionChip();
+    mocks.claudeSnapshot = {
+      source: 'oauth-endpoint',
+      updatedAt: 3000,
+      fiveHour: { utilization: 0, resetsAt },
+    };
+    stale.rerender(<TodaySpendChip vendorKey="cc" providerId="anthropic" sessionId="session-2" />);
+    expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+  });
+
+  it('skips full-quota confetti under reduced motion', () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }));
+    mocks.claudeSnapshot = { source: 'oauth-endpoint', fiveHour: { utilization: 0 } };
+    renderClaudeSubscriptionChip();
+    expect(screen.queryByTestId('quota-reset-confetti')).toBeNull();
+    vi.unstubAllGlobals();
+  });
 
   it('完整渲染 Claude 的 5h 与当前模型周窗口', () => {
     mocks.claudeSnapshot = {

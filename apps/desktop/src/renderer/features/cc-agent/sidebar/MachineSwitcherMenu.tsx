@@ -69,7 +69,10 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
+  DropdownMenuSub, DropdownMenuSubTrigger, DropdownMenuSubContent,
 } from '@/components/ui/dropdown-menu';
+import { useDeviceLinkDeviceList } from '@/features/device-link/useDeviceLinkDeviceList';
+import { isMobilePlatform } from '@cindy/maker-shared/device-list';
 import {
   isMachineSelected,
   MACHINE_ALL,
@@ -94,6 +97,7 @@ export function MachineSwitcherMenu({
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { devices, selectedDeviceId, select, toggle } = useMachineSwitcher();
+  const desktopTargets=(useDeviceLinkDeviceList()??[]).filter(device=>!device.isSelf&&!isMobilePlatform(device.platform));
   // 设备列表只看当前是否真有可展示的远程设备。hasRemote 还会把「目录已空、
   // raw 仍记着远端」算进去——那是旧逃生口,标题恒在后会误画出「所有 / 本机」。
   const showDeviceList = devices.length > 0;
@@ -130,6 +134,15 @@ export function MachineSwitcherMenu({
   const triggerLabel = t('ccAgent.sidebar.machineSwitcher.menuTrigger');
   const settingsItems = (
     <>
+      {desktopTargets.length>0 && <DropdownMenuSub>
+        <DropdownMenuSubTrigger className={MENU_ITEM_CLASS}><Monitor size={14}/><span>{t('remoteDesktop.title')}</span></DropdownMenuSubTrigger>
+        <DropdownMenuSubContent className={MENU_CONTENT_CLASS}>{desktopTargets.map(device=><DropdownMenuItem
+          key={device.deviceId} className={MENU_ITEM_CLASS}
+          disabled={!device.online||!device.remoteControlEnabled||!device.controlEnabled}
+          onSelect={()=>void window.electronAPI.openRemoteDesktop({deviceId:device.deviceId,name:device.name}).catch(()=>toast.error(t('remoteDesktop.connectionError')))}>
+          <span>{device.name}</span>
+        </DropdownMenuItem>)}</DropdownMenuSubContent>
+      </DropdownMenuSub>}
       <DropdownMenuItem
         className={MENU_ITEM_CLASS}
         onSelect={() => navigate('/settings?tab=remote-control')}

@@ -715,3 +715,14 @@ it('last-model-only history is evidence of an existing user configuration', asyn
   expect(memory.hasProviderModelHistory()).toBe(true);
   expect(memory.hasAnyProviderModelOverride()).toBe(false);
 });
+
+it('does not stamp previous-owner model tuning during the auth handoff', async () => {
+  const memory = await loadModule();
+  memory.setProviderModelMemoryOwner('A');
+  memory.setProviderModelEffort('codex', 'provider', 'target', 'low');
+  expect(memory.snapshotForSeed('A')?.['codex:provider'].effortByModel.target).toBe('low');
+  expect(memory.snapshotForSeed('B')).toBeNull();
+  memory.setProviderModelMemoryOwner('B');
+  expect(memory.snapshotForSeed('B')).toEqual({});
+  expect(memory.snapshotForSeed('A')).toBeNull();
+});

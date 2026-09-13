@@ -743,6 +743,13 @@
       "when": 1789033649781,
       "tag": "0105_context_window_runtime",
       "breakpoints": true
+    },
+    {
+      "idx": 106,
+      "version": "6",
+      "when": 1789194577226,
+      "tag": "0106_retain_all_recent_workdirs",
+      "breakpoints": true
     }
   ]
 }

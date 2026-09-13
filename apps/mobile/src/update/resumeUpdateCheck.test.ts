@@ -240,6 +240,17 @@ describe('createResumeUpdateChecker 整包路径', () => {
     expect(deps.onForcedUpdate).not.toHaveBeenCalled();
   });
 
+  it.each(['0.1.4', '0.1.5'])('整包 version=%s 不高于本机 → 忽略整包,OTA 仍正常下载', async (version) => {
+    const deps = makeDeps({
+      getCurrentVersion: () => '0.1.5',
+      fetchLatest: vi.fn(async () => latestRecord({ version })),
+      checkForUpdateAsync: vi.fn(async () => ({ isAvailable: true })),
+    });
+    await expect(runOnce(deps)).resolves.toEqual({ ota: 'fetched', bundle: 'up-to-date' });
+    expect(deps.fetchUpdateAsync).toHaveBeenCalledOnce();
+    expect(deps.onForcedUpdate).not.toHaveBeenCalled();
+  });
+
   it('强更(minVersion)→ forced 且回调一次', async () => {
     const deps = makeDeps({ fetchLatest: vi.fn(async () => latestRecord({ minVersion: '2.0.0' })) });
     const { bundle } = await runOnce(deps);

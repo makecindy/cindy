@@ -6,6 +6,42 @@
   "punctuationExempt": ["desktop:settings.help.qnaFeedbackBodyTemplate"],
   "terms": [
     {
+      "id": "remote-desktop-direct",
+      "status": "proposed",
+      "en": "Direct to computer",
+      "translations": {
+        "zh-CN": "电脑直连",
+        "zh-TW": "電腦直連",
+        "ja": "パソコンに直接接続",
+        "ko": "컴퓨터에 직접 연결"
+      },
+      "note": "远程桌面传输状态，桌面端沿用手机端现有用语。表示画面不经过中转服务器；直连也可能穿过公网 NAT，不能据此标成内网直连。"
+    },
+    {
+      "id": "remote-desktop-video-relay",
+      "status": "proposed",
+      "en": "Server video relay",
+      "translations": {
+        "zh-CN": "服务器视频中转",
+        "zh-TW": "伺服器影片中繼",
+        "ja": "サーバー経由の映像",
+        "ko": "서버 영상 중계"
+      },
+      "note": "远程桌面使用服务器中转实时视频，桌面与手机沿用同一用语；区别于逐张截图传输。"
+    },
+    {
+      "id": "remote-desktop-screenshot-relay",
+      "status": "proposed",
+      "en": "Server screenshot relay",
+      "translations": {
+        "zh-CN": "服务器截图中转",
+        "zh-TW": "伺服器截圖中繼",
+        "ja": "サーバー経由のスクリーンショット",
+        "ko": "서버 스크린샷 중계"
+      },
+      "note": "远程桌面退回通过现有设备连接逐张传送截图的方式，桌面端沿用手机端现有用语，避免仅写兼容模式而隐藏实际传输方式。"
+    },
+    {
       "id": "remote-computer",
       "status": "proposed",
       "en": "Remote computer",
@@ -112,7 +148,7 @@
         "ja": "Harness",
         "ko": "Harness"
       },
-      "note": "用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。"
+      "note": "用于任务筛选、搜索筛选，以及用户确认并公开提交 Issue 时显示承载当前 Agent 的运行框架。五语暂统一保留英文 Harness；具体值固定使用 Claude Code、Codex、Pi 的公开全名，不使用 cc/cx/pi 等内部缩写。"
     },
     {
       "id": "model-id",

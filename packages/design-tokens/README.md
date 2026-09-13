@@ -43,9 +43,9 @@ Effort/price 静态表也由 colors.ts 生成并导出，`effortTierColors.ts` i
 
 生产测试在没有 fixture 的临时仓副本生成两次，逐输出注入缺失/手改/过期反例，并验证真实源改值进入输出。Desktop 独立冻结继续从实际 registry/builtin 提取；主题兼容、字号、模块加载与运行矩阵分别验证，不把静态测试称作实机通过。
 
-SC-01—12、实机证据、未测平台和人工审核状态持续登记在桌面唯一主计划；截图不入 Git。DS-8 为本地候选，未提交/发布；DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，合并提交 `4f03ea9a7b5f6425e517acd91071df6d397c6079`。旧 DS-6/7 附件不能充当本版本证据。
+SC-01—12、实机证据、未测平台和人工审核状态持续登记在桌面唯一主计划；截图不入 Git。DS-8 已合并 [#4268](https://github.com/makecindy/cindy/pull/4268)（merge `2e74488d21`）；DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，合并提交 `4f03ea9a7b5f6425e517acd91071df6d397c6079`。旧 DS-6/7 附件不能充当本版本证据。
 
-回退须整体恢复 DS-8 源/生成物/消费者及过渡守卫，保留上游工作；不回写用户数据或只抽掉生成源。G1 仅完成 Desktop 阶段；DS-9 另行授权，Mobile 新方案明确后再定消费接口。原影子层 2026-11-01 复查改为检查实际维护与消费情况，不取消维护责任。
+回退须整体恢复 DS-8 源/生成物/消费者及过渡守卫，保留上游工作；不回写用户数据或只抽掉生成源。G1 仅完成 Desktop 阶段；DS-9 已获授权实施桌面核心呈现，Mobile 新方案明确后再定消费接口。原影子层 2026-11-01 复查改为检查实际维护与消费情况，不取消维护责任。
 
 ## DS-5 历史双端样本（非未来 Mobile 合同）
 
@@ -73,7 +73,7 @@ SC-01—12、实机证据、未测平台和人工审核状态持续登记在桌�
 | 输入尺寸/间距 `composer.geometry` | ChatInput:8115 卡片圆角与 padding、输入高度在组件内 | InputRow:544 单行 pill、:558—559 multiline 专用圆角、:566—569 card `radius.control`；composerTextMetrics:45—55 的平台上下 padding | 平台静态覆盖 + 展开/屏幕/光学运行期计算；D/M 不强制同几何。DS-8/10 纳入被选静态值；动态规则保留，新增外观待裁决 |
 | 发送可用 `composer.send.surface` / `.text` / `.hover` / `.pressed` | SendButton:55—57 → `send-btn-bg/icon/hover-bg/pressed-bg`；colors:1011 起 | 会话页:11646/6838 → `cta/ctaText`；:6826/11663 `sendButtonPressed` 由 RouteActionButton:10850—10852 在按下时叠 opacity 0.86；发送中 indicator 独立读 `textSecondary` | 共享动作用途，M 无对应 hover，pressed 通过透明度表达；保留旧局部覆盖，DS-8/10 |
 | 发送禁用 `composer.send.disabledSurface` / `.disabledText` / `.disabledOpacity` | SendButton:59 在 `disabled && !isStreaming` 时仍读可用色，加 opacity-40；**不消费**注册的 `send-btn-disabled-bg/icon` | 会话页:11656/6838 读 `surfaceChip/border/textSecondary`，通用禁用样式:11664 再叠 opacity 0.45 | 共享状态用途，派生方式不等价；静态透明度候选与状态条件分开，DS-8/10 保留真实效果，不按 registry 猜接线 |
-| 发送触控 `composer.send.geometry` | SendButton:54 会话 h-7/w-7，新建入口另有 30px；pill | 会话页:11646—11654 为 34×34 / `radius.pill`；:6823 引用 :639 的 `COMPOSER_CONTROL_HIT_SLOP` 扩点击区，仍受 InputRow 父布局边界限制 | 平台几何覆盖；DS-10 按触控与无障碍保持 M 命中区域，不能套用 D 图标按钮尺寸；不以相同圆形推断同尺寸 |
-| 用户 / 助手正文 `message.user.text` / `message.assistant.text` | UserMessage:1551 → `msg-user-text`，AssistantMessage:324 → `msg-assistant-text`；colors:1255/1259 默认都 alias `text-primary` | MessageRenderer:7698 → `colors.textPrimary`（用户/助手共用正文样式） | 共享正文用途，D 两个局部覆盖必须各自保留，不能抬升为全局或删除；DS-8 接源、DS-9 核真实消费、DS-10 接 M |
+| 发送触控 `composer.send.geometry` | SendButton:54 会话 h-7/w-7，新建入口另有 30px；pill | 会话页:11646—11654 为 34×34 / `radius.pill`；:6823 引用 :639 的 `COMPOSER_CONTROL_HIT_SLOP` 扩点击区，仍受 InputRow 父布局边界限制 | 平台几何覆盖；Mobile 后续独立阶段 按触控与无障碍保持 M 命中区域，不能套用 D 图标按钮尺寸；不以相同圆形推断同尺寸 |
+| 用户 / 助手正文 `message.user.text` / `message.assistant.text` | UserMessage:1551 → `msg-user-text`，AssistantMessage:324 → `msg-assistant-text`；colors:1255/1259 默认都 alias `text-primary` | MessageRenderer:7698 → `colors.textPrimary`（用户/助手共用正文样式） | 共享正文用途，D 两个局部覆盖必须各自保留，不能抬升为全局或删除；DS-8 接源、DS-9 核真实消费、Mobile 后续独立阶段 接 M |
 | 正文排版 `typography.messageBody` | UserMessage:1550 / AssistantMessage:323 → `text-15 leading-[1.6]`，受用户字号和 compact（globals:330）影响 | MessageRenderer:7698 → `typeScale.bodyLarge/lineHeight.bodyLarge`（当前 17/26） | 共享用途 + 平台静态覆盖与缩放；用途一致不等于像素一致，DS-8/10 等值接管，DS-9 验证 D 长文与流式 |
-| 行内代码 `message.inlineCode.text` / `.surface` / `typography.inlineCode` | 仅助手 MarkdownRenderer:285/1785 → 继承正文颜色，`msg-md-inline-code-bg`、`font-mono text-14`、局部圆角；上游 colors:1301 / Tailwind fontFamily | MessageRenderer:7964—7974 → `chatInlineCodeText`、`typeScale.code/lineHeight.code`、[monoFont](../../apps/mobile/src/theme/monoFont.ts)，有意无底色 | 用途共享、外观/字体平台覆盖；M 原生嵌套 Text 圆角限制已有代码说明。DS-9 保留 D 局部色、DS-10 保留 M 无底色；改观感须先裁决，字体平台选择仍在代码 |
+| 行内代码 `message.inlineCode.text` / `.surface` / `typography.inlineCode` | 仅助手 MarkdownRenderer:285/1785 → 继承正文颜色，`msg-md-inline-code-bg`、`font-mono text-14`、局部圆角；上游 colors:1301 / Tailwind fontFamily | MessageRenderer:7964—7974 → `chatInlineCodeText`、`typeScale.code/lineHeight.code`、[monoFont](../../apps/mobile/src/theme/monoFont.ts)，有意无底色 | 用途共享、外观/字体平台覆盖；M 原生嵌套 Text 圆角限制已有代码说明。DS-9 保留 D 局部色、Mobile 后续独立阶段 保留 M 无底色；改观感须先裁决，字体平台选择仍在代码 |

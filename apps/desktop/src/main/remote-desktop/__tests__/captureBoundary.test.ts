@@ -12,10 +12,13 @@ const h = vi.hoisted(() => ({
   owner: null as any,
   dispose: vi.fn(),
   stop: vi.fn(),
+  releaseControl: vi.fn(),
+  inputFailure: null as null | (() => void),
   nativeStop: vi.fn(),
   nativeFrame: vi.fn(async () => 'frame'),
   input: vi.fn(),
   viewHeartbeat: vi.fn(),
+  hostInput: vi.fn(),
   iceConfig: vi.fn(async (): Promise<any[]> => [
     { urls: ['turn:relay.example.test:3478'], username: 'temporary', credential: 'test-only' },
   ]),
@@ -93,6 +96,9 @@ vi.mock('../controller', () => ({
     stopByUser() {
       this.stop();
     }
+    releaseControl() {
+      h.releaseControl();
+    }
     tick() {}
     input = h.input;
     viewHeartbeat = h.viewHeartbeat;
@@ -106,8 +112,11 @@ vi.mock('../nativeCapture', () => ({
 }));
 vi.mock('../inputHost', () => ({
   DesktopInputHost: class {
+    constructor(onFailure: () => void) {
+      h.inputFailure = onFailure;
+    }
     stop = vi.fn();
-    input = vi.fn();
+    input = h.hostInput;
   },
   readDesktopDisplayModes: vi.fn(),
   setDesktopDisplayMode: vi.fn(),
@@ -158,10 +167,14 @@ beforeEach(() => {
   h.lease = 'lease';
   h.dispose.mockClear();
   h.stop.mockClear();
+  h.releaseControl.mockClear();
   h.nativeStop.mockClear();
   h.nativeFrame.mockClear();
   h.input.mockReset();
   h.viewHeartbeat.mockClear();
+  // The host is constructed once at module load; keep its captured callback.
+  h.releaseControl.mockClear();
+  h.hostInput.mockReset();
   h.iceConfig.mockClear();
   registerRemoteDesktopIpc();
 });
@@ -294,6 +307,32 @@ it('drops view-only input without breaking heartbeats, but still rejects invalid
   }
 });
 
+it('turns an input-helper failure into a control release instead of a session stop', async () => {
+  const pending = offer();
+  h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
+  await flush();
+  h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), h.owner.send.mock.calls[0][1].id, 'answer');
+  await pending;
+  expect(h.inputFailure).toBeTypeOf('function');
+  h.inputFailure?.();
+  // Input is a lease-scoped capability: the desktop session keeps its lease,
+  // its capture owner and its media when the helper dies.
+  expect(h.releaseControl).toHaveBeenCalledTimes(1);
+  expect(h.stop).not.toHaveBeenCalled();
+  expect(h.owner.dead).toBe(false);
+});
+
+it('releases control when the input host refuses a batch before injecting it', () => {
+  h.hostInput.mockImplementationOnce(() => {
+    throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+  });
+  // The refusal still reaches its caller, but control no longer stays set: a
+  // later take-control must actually restart the helper.
+  expect(() => h.deps.input([{ kind: 'release' }])).toThrow('DESKTOP_INPUT_UNAVAILABLE');
+  expect(h.releaseControl).toHaveBeenCalledTimes(1);
+  expect(h.stop).not.toHaveBeenCalled();
+});
+
 it('retains the capture owner on ICE timeout and rejects old-owner replies after replacement', async () => {
   const pending = offer();
   h.handlers.get(DESKTOP_LOCAL.REGISTER)(event());
@@ -382,4 +421,10 @@ it('keeps replacement capture and its in-flight ICE exchange when revoked config
   const reply = { attemptId: 'attempt', candidates: [], next: 0, complete: true };
   h.handlers.get(DESKTOP_LOCAL.REPLY)(event(), exchange.id, reply);
   await expect(ice).resolves.toEqual(reply);
+});
+it('routes native input failure to control release rather than capture teardown', () => {
+  h.inputFailure?.();
+  expect(h.releaseControl).toHaveBeenCalledOnce();
+  expect(h.stop).not.toHaveBeenCalled();
+  expect(h.dispose).not.toHaveBeenCalled();
 });

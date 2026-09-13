@@ -1,5 +1,4 @@
 import { createPiPackageCommandError } from '../pi-package-diagnostic.js';
-import { readFileSync } from 'node:fs';
 
 import { PiManagedPackageMutationCancelledError, PiManagedPackageMutationFailedError } from '@cindy/maker-core';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -107,38 +106,6 @@ describe('Pi managed package Main authorization', () => {
       );
     },
   );
-
-  it('publishes sibling convergence before retiring the exact caller snapshot', () => {
-    const piHostSource = readFileSync(new URL('../pi-host.ts', import.meta.url), 'utf8');
-    const makerHostSource = readFileSync(new URL('../index.ts', import.meta.url), 'utf8');
-
-    expect(piHostSource).toContain(
-      '{ onRuntimeInvalidationPublished: opts.onPiManagedPackageMutationCommitted }',
-    );
-    expect(piHostSource).toContain(
-      'onPiManagedPackageMutationSettled: opts.onPiManagedPackageMutationSettled',
-    );
-    expect(makerHostSource).toContain(
-      "onPiManagedPackageMutationCommitted: async (phase = 'commit') =>",
-    );
-    expect(makerHostSource).toContain(
-      'await captureLocalPiPackageRuntimeInvalidationSnapshot(maker)',
-    );
-    expect(makerHostSource).toContain(
-      'pendingPiPackageRuntimeSnapshots[pendingPiPackageRuntimeSnapshots.length - 1] = snapshot',
-    );
-    expect(makerHostSource).toContain(
-      'snapshot.entries.filter(({ session }) => session.id === callerSessionId)',
-    );
-    expect(makerHostSource).toContain(
-      'snapshot.entries.filter(({ session }) => session.id !== callerSessionId)',
-    );
-    expect(makerHostSource).toContain("recoveryAction: 'restart-cindy-to-refresh-packages'");
-    const publishIndex = makerHostSource.indexOf('if (initiallyPartial) partial()');
-    const callerRetirementIndex = makerHostSource.indexOf('{ entries: callerEntries }');
-    expect(publishIndex).toBeGreaterThan(-1);
-    expect(callerRetirementIndex).toBeGreaterThan(publishIndex);
-  });
 
   it('keeps the exact action and source bound to the one-shot grant', async () => {
     const { deps, grant } = buildDeps();

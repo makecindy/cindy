@@ -239,6 +239,8 @@ export function isGhostNodeMcpReservedMethod(method: string): boolean {
  * Worker 获得明文后仍可能主动回传或泄露。未声明 entry 时只允许主入口。
  */
 export interface GhostNodeSecretBinding {
+  /** 引用本插件 network.secrets 中的 OAuth key；仅注入短期 access token。 */
+  oauthSecret?: string;
   /** 凭证键(插件内唯一):小写字母开头,允许小写/数字/下划线,1–32。 */
   key: string;
   /** 给用户看的名称(插件详情与设置状态使用)。 */
@@ -3148,7 +3150,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
         }
         const binding = bindingRaw as Record<string, unknown>;
         const unknownBindingField = Object.keys(binding).find(
-          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url'].includes(key),
+          (key) => !['key', 'label', 'methods', 'entry', 'hint', 'url', 'oauthSecret'].includes(key),
         );
         if (unknownBindingField) {
           return {
@@ -3262,7 +3264,12 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
             };
           }
         }
+        if (binding.oauthSecret !== undefined &&
+          (typeof binding.oauthSecret !== 'string' || !/^[a-z][a-z0-9_]{0,31}$/.test(binding.oauthSecret))) {
+          return { ok: false, reason: 'node.secretBindings[].oauthSecret 必须是本插件 OAuth 凭证键' };
+        }
         nodeSecretBindings.push({
+          ...(binding.oauthSecret !== undefined ? { oauthSecret: binding.oauthSecret as string } : {}),
           key: binding.key,
           label: binding.label,
           methods,
@@ -3594,6 +3601,13 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
 
   // setup 引用必须在交付边界就与同一份 manifest 的凭证、连接和设置入口对齐；
   // 不能让服务端接受、Desktop 装入时才拒绝。
+  for (const binding of node?.secretBindings ?? []) {
+    if (binding.oauthSecret === undefined) continue;
+    const source = network?.secrets?.find((secret) => secret.key === binding.oauthSecret);
+    if (source?.source !== 'oauth' || !source.oauth) {
+      return { ok: false, reason: 'node.secretBindings[].oauthSecret 必须引用本插件已声明的 OAuth 凭证' };
+    }
+  }
   let setup: GhostSetupDecl | undefined;
   if (raw.setup !== undefined) {
     if (!isPlainObject(raw.setup)) {
@@ -3630,7 +3644,7 @@ export function validateGhostManifest(value: unknown): ManifestValidation {
             },
           ] as const,
       ),
-      ...(node?.secretBindings ?? []).map(
+      ...(node?.secretBindings ?? []).filter((secret) => !secret.oauthSecret).map(
         (secret) => [secret.key, { hostDerivedSource: null }] as const,
       ),
     ]);

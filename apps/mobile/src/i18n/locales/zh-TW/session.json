@@ -1,6 +1,8 @@
 {
   "failedScheduleNotice": {
-    "text": "先前有定時任務未完成，可查看執行記錄。",
+    "text": "先前有自動執行失敗。",
+    "precheck": "自動檢查暫時受阻。",
+    "rateLimited": "自動檢查暫時受阻：請求限流。",
     "dismissTitle": "關閉歷史失敗提示"
   },
   "common": {
@@ -477,6 +479,7 @@
     "continueTask": "繼續任務",
     "retry": "重試",
     "ignore": "忽略",
+    "executionResultUnavailable": "未能取得執行結果，已停止自動接續。可以請助手檢查既有的執行結果。",
     "outputLimit": "模型已達到輸出長度上限，本輪回覆可能不完整。可以直接傳送下一則訊息繼續。",
     "toolUseLoopDetected": "模型重複呼叫工具次數過多，Cindy 已停止這一輪以避免無限迴圈。可以傳送新訊息繼續。",
     "toolUseLoopDetectedWithCount": "模型連續觸發無效的工具呼叫，Cindy 已在 {{count}} 次失敗後停止本輪，以避免無限迴圈。可以傳送新訊息繼續。",

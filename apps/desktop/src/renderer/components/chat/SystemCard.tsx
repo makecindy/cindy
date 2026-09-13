@@ -1,4 +1,3 @@
-import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 /**
  * SystemCard
  * ---------------------------------------------------------------------------
@@ -6,6 +5,7 @@ import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
  * Renders /help, /cost, /context, /pwd, /status as styled info panels in the chat stream.
  */
 
+import { BotAuthorizationCardView } from '@/features/bots/BotAuthorizationCard';
 import { useState, type ReactNode } from 'react';
 import {
   ArrowLeftRight,
@@ -83,7 +83,7 @@ interface SystemCardProps {
 }
 
 const cardClass = cn(
-  'w-full rounded-[12px] border',
+  'w-full rounded-xl border',
   'border-[var(--msg-user-border)]',
   'bg-[var(--msg-user-bg)]',
   'px-5 py-4',
@@ -326,7 +326,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
   return (
     <div
       className={cn(
-        'w-full rounded-[12px] border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)]',
+        'w-full rounded-xl border border-[var(--msg-user-border)] bg-[var(--msg-user-bg)]',
         'px-3 py-3 text-13 leading-none text-[var(--msg-user-text)] select-text',
       )}
     >
@@ -422,7 +422,7 @@ function ContextCard({ data }: { data?: Record<string, unknown> }) {
           </div>
 
           {hasDetails && (
-            <div className="mt-2 flex flex-col gap-[6px]">
+            <div className="mt-2 flex flex-col gap-1.5">
               {visibleDetailRows.map((row) => {
                 const isDetailExpanded = !!expandedDetails[row.key];
                 return (
@@ -1002,13 +1002,13 @@ function AutoResumeActionRow({
         // 图标与 chevron 都是 aria-hidden,可见文本(动词 + 摘要)本身就是正确的无障碍名。
         disabled={!canExpand}
         className={cn(
-          'flex w-full items-center gap-[6px]',
+          'flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
           'px-2 py-[3px]',
           'text-left outline-none',
           canExpand
             ? cn(
-                'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
+                'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
                 ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
                 ACTIVITY_ROW_HOVER_SURFACE_CLASS,
               )
@@ -1294,7 +1294,7 @@ function CindyMakeCompleteCard({ data }: { data?: Record<string, unknown> }) {
 
   return (
     <section
-      className="w-full rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
+      className="w-full rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] text-14 text-[var(--text-primary)]"
       aria-label={t('cindyMake.complete.title')}
     >
       <div className="flex items-start gap-3 px-4 py-4">
@@ -1507,13 +1507,13 @@ function CmdCard({ data }: { data?: Record<string, unknown> }) {
   // 不用红色 (违反 §2 grayscale 硬规则)。
   const blockClass = cn(
     'mt-1 max-h-[320px] overflow-auto whitespace-pre-wrap break-words',
-    'rounded-[12px] px-[12px] py-[10px]',
+    'rounded-xl px-[12px] py-[10px]',
     'font-mono text-[length:calc(var(--app-code-font-size)_-_1.5px)] leading-[1.55]',
     'bg-[var(--msg-code-block-bg)] text-[var(--msg-user-text)]',
     'border border-[var(--msg-code-block-border)]',
   );
   const cmdLineClass = cn(
-    'mt-2 px-[12px] py-[8px] rounded-[12px] overflow-x-auto',
+    'mt-2 px-[12px] py-[8px] rounded-xl overflow-x-auto',
     'font-mono text-[length:calc(var(--app-code-font-size)_-_1px)] leading-[1.5]',
     'bg-[var(--msg-code-block-bg)] text-[var(--msg-user-text)]',
     'border border-[var(--msg-code-block-border)]',
