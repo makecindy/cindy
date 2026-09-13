@@ -31,6 +31,33 @@ export function invocationModelRecord(model: CatalogModel, upstream: string, api
   };
 }
 
+export const NATIVE_ADAPTER_ERROR_BODY_LIMIT = 16 * 1024;
+
+/** Diagnostic prefix only. Cancel the remaining body so a huge error cannot hang the clone. */
+export async function readBoundedResponseText(
+  response: Response,
+  maxBytes = NATIVE_ADAPTER_ERROR_BODY_LIMIT,
+): Promise<string> {
+  const reader = response.body?.getReader();
+  if (!reader) return '';
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+  try {
+    while (size < maxBytes) {
+      const next = await reader.read();
+      if (next.done) break;
+      const value = next.value;
+      if (!value?.byteLength) continue;
+      const take = value.byteLength > maxBytes - size ? value.subarray(0, maxBytes - size) : value;
+      chunks.push(take);
+      size += take.byteLength;
+    }
+  } finally {
+    await reader.cancel().catch(() => undefined);
+  }
+  return Buffer.concat(chunks.map((chunk) => Buffer.from(chunk))).toString('utf8');
+}
+
 const adapters: Record<string, ProviderStreams> = {
   'openai-completions': openaiCompletions,
   'openai-responses': openaiResponses,

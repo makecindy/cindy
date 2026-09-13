@@ -133,6 +133,9 @@ export function parseModelsListResponse(
       try { const url = new URL(sourceUrl); return url.origin === 'https://ai-gateway.vercel.sh'
         && url.pathname.replace(/\/+$/, '') === '/v1/models'; } catch { return false; }
     })();
+    // Vercel marks image/video/etc. as type, but Cindy chat import only executes language models.
+    // Keep them out of the picker instead of saving a mode that later disappears from every list.
+    if (isVercel && record.type !== undefined && record.type !== 'language') continue;
     const discoveredMetadata = pickModelMetadata({
       ...([rec?.display_name, rec?.name, google?.displayName].some(
         (value) => typeof value === "string" && value.trim().length > 0,

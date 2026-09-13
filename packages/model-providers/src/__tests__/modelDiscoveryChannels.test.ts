@@ -29,11 +29,9 @@ describe('shared provider discovery', () => {
     expect(models?.map(model => model.id)).toEqual(['gemini-3.5-flash']);
   });
   it('keeps non-language Vercel models out of chat and does not treat per-image prices as tokens', () => {
-    const [m] = parseModelsListResponse({ data: [{ id: 'vendor/image', type: 'image',
+    expect(parseModelsListResponse({ data: [{ id: 'vendor/image', type: 'image',
       modalities: { input: ['text'], output: ['image'] }, pricing: { output: '0.04' },
-    }] }, 'https://ai-gateway.vercel.sh/v1/models')!;
-    expect(m.discoveredMetadata?.mode).toBe('image');
-    expect(m.discoveredCost).toBeUndefined();
+    }] }, 'https://ai-gateway.vercel.sh/v1/models')).toEqual([]);
   });
   it('preserves IDs on LiteLLM aliases and reads its declared model info', () => {
     const [m] = parseModelsListResponse({ data: [{ model_name: 'my-team-model',

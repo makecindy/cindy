@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
-import { createPiProviderFetch, invocationModelRecord } from '../pi-provider-transport.js';
+import { createPiProviderFetch, invocationModelRecord, NATIVE_ADAPTER_ERROR_BODY_LIMIT, readBoundedResponseText } from '../pi-provider-transport.js';
 
 const reply = [
   { id: 'fixture-reply', object: 'chat.completion.chunk', choices: [{ index: 0, delta: { role: 'assistant', content: 'Hello' } }] },
@@ -149,4 +149,17 @@ it.each(['individual', 'business', 'enterprise'])('sends Copilot Responses edito
   const result = await (await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: 'ping', max_output_tokens: 16 }) })).text();
   expect(result).toContain('response.completed');
   expect(captured).toBe(true);
+});
+
+it('reads only a prefix of native adapter error bodies', async () => {
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      controller.enqueue(Buffer.alloc(NATIVE_ADAPTER_ERROR_BODY_LIMIT, 97));
+      controller.enqueue(Buffer.alloc(NATIVE_ADAPTER_ERROR_BODY_LIMIT, 98));
+      controller.close();
+    },
+  });
+  const text = await readBoundedResponseText(new Response(stream));
+  expect(text).toHaveLength(NATIVE_ADAPTER_ERROR_BODY_LIMIT);
+  expect(text).toBe('a'.repeat(NATIVE_ADAPTER_ERROR_BODY_LIMIT));
 });

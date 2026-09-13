@@ -1,6 +1,6 @@
 import { resolveConversationSessionHeaders, withChatBridgeUserAgent, overrideHeadersCaseInsensitive } from '@cindy/responses-chat-bridge';
 import { providerModelRecord } from '@cindy/model-providers';
-import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, requiresNativeProviderAuth } from './pi-provider-transport.js';
+import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { peekGrokAccessToken } from './grok-oauth-login.js';
@@ -1136,7 +1136,7 @@ function createChatBridgeDecision(
           headers: nativeHeaders,
           fetchImpl: async (url, init) => {
             const response = await outboundFetch(url, init);
-            if (!response.ok && onUpstreamError) onUpstreamError({ status: response.status, body: await response.clone().text() });
+            if (!response.ok && onUpstreamError) onUpstreamError({ status: response.status, body: await readBoundedResponseText(response.clone()) });
             return response;
           },
         });
