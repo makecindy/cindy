@@ -129,7 +129,8 @@ const COALESCE_MS = 50;
 /** watcher 报错后重建的退避参数：起点 / 上限 / 次数上限。 */
 const RECONCILE_RETRY_BASE_MS = 500;
 const RECONCILE_RETRY_MAX_MS = 8_000;
-const RECONCILE_RETRY_LIMIT = 5;
+/** 退避指数的封顶档位:计数到这里后不再变大,转为固定 RECONCILE_RETRY_MAX_MS 重试。 */
+const RECONCILE_RETRY_BACKOFF_CAP = 5;
 
 export class WorkdirWatchManager {
   private readonly entries = new Map<string, WatchEntry>();
@@ -273,26 +274,32 @@ export class WorkdirWatchManager {
   }
 
   /**
-   * watcher 报错后的收敛重试(退避 + 上限)。
+   * watcher 报错后的收敛重试(退避封顶,不设总上限)。
    *
    * 为什么不能只 catch 一下:错误把 entry 拆掉后,如果紧接着的 reconcile 又失败
    * (远程挂载短暂不可用 / 目录正在被替换),消费者意图仍留在 desired、但已经
    * 没有 watcher,也没有任何定时器会再来收敛 —— SSH 连接没断的情况下,后续文件
    * 事件会永久停止,直到用户改开关或重挂载面板(评审 P2)。退避避免持续失败时
    * 形成紧密重建循环。
+   *
+   * 为什么退避到顶还要继续:挂载 / 权限故障持续超过退避窗口(约 15.5s)在真实
+   * 环境里很常见(扩容挂载、目录正在被替换),此时不能永久放弃 —— 意图还在,
+   * watcher 就必须最终建回来,否则故障恢复后事件永久静默、只能靠重挂面板救
+   * (评审 P1)。封顶后按固定频率重试,单次只做一次 matcher 加载 + fs.watch,
+   * 代价可忽略;消费者撤销由 clearReconcileRetry / stopAll 结束这个循环。
    */
   private scheduleReconcileRetry(workdir: string): void {
     if (this.retryTimers.has(workdir)) return;
     if (!this.desired.has(workdir)) return; // 期间消费者全撤了:不再重试
     const attempt = (this.retryAttempts.get(workdir) ?? 0) + 1;
-    if (attempt > RECONCILE_RETRY_LIMIT) {
-      this.retryAttempts.delete(workdir);
-      log.warn('watch reconcile retries exhausted', workdir);
-      return;
+    // 计数封顶:延迟计算不会越界,超限后转为固定频率重试。
+    const capped = Math.min(attempt, RECONCILE_RETRY_BACKOFF_CAP);
+    this.retryAttempts.set(workdir, capped);
+    if (attempt === RECONCILE_RETRY_BACKOFF_CAP + 1) {
+      log.warn('watch reconcile still failing, retrying at capped backoff', workdir);
     }
-    this.retryAttempts.set(workdir, attempt);
     const delay = Math.min(
-      RECONCILE_RETRY_BASE_MS * 2 ** (attempt - 1),
+      RECONCILE_RETRY_BASE_MS * 2 ** (capped - 1),
       RECONCILE_RETRY_MAX_MS,
     );
     const timer = setTimeout(() => {

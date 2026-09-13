@@ -182,6 +182,56 @@ describe('useTreeScrollRestore', () => {
     expect(viewportOf(container).scrollTop).toBe(8 + 3 * 29 + 1);
   });
 
+  it('首次切到没有历史锚点的 scope 时继承切换前的顶部行（评审 P2）', () => {
+    const scopeA = makeTreeScrollScope('tab-1', '/repo');
+    const scopeB = makeTreeScrollScope('tab-1', '/repo::reveal');
+    const { container, rerender } = render(
+      <Harness scope={scopeA} rows={makeRows(['a.ts', 'b.ts', 'c.ts', 'd.ts'])} />,
+    );
+    const el = viewportOf(container);
+
+    // 用户滚动到 c.ts 在顶部：这次滚动同时被记成「最近位置」。
+    el.scrollTop = 8 + 2 * 29;
+    fireEvent.scroll(el);
+
+    // 切到还没有锚点的放行态 store，且新树在 c.ts 上方插入两行（被忽略的目录）。
+    rerender(
+      <Harness scope={scopeB} rows={makeRows(['x.ts', 'y.ts', 'a.ts', 'b.ts', 'c.ts', 'd.ts'])} />,
+    );
+
+    // 继承锚点：c.ts 仍对齐视口顶部，而不是保留旧像素落到 x.ts / y.ts 那一批。
+    expect(loadTreeScrollAnchor(scopeB)).toEqual({ rowKey: 'c.ts', offset: 0 });
+    expect(el.scrollTop).toBe(8 + 4 * 29);
+  });
+
+  it('用户接管后的普通 resize 不回拉过期锚点；重新可见时仍恢复（评审 P2）', () => {
+    const scope = makeTreeScrollScope('tab-1', '/repo');
+    saveTreeScrollAnchor(scope, { rowKey: 'c.ts', offset: 0 });
+    const { container, rerender } = render(
+      <Harness scope={scope} rows={makeRows(['a.ts', 'b.ts', 'c.ts', 'd.ts'])} />,
+    );
+    const el = viewportOf(container);
+    expect(el.scrollTop).toBe(8 + 2 * 29);
+
+    // 用户接管（点击行），随后上方行增删但滚动位置没变、锚点没更新。
+    fireEvent.pointerDown(el);
+    rerender(
+      <Harness scope={scope} rows={makeRows(['x.ts', 'y.ts', 'a.ts', 'b.ts', 'c.ts', 'd.ts'])} />,
+    );
+    expect(el.scrollTop).toBe(8 + 2 * 29);
+
+    // 普通 resize（尺寸未变，例如拖动侧栏）：不能按过期锚点回拉。
+    FakeResizeObserver.instances[0].trigger();
+    expect(el.scrollTop).toBe(8 + 2 * 29);
+
+    // 真正重新可见（0 → 非 0）：display:none 期间 scrollTop 可能被复位，要恢复。
+    setTestViewportSize(0);
+    FakeResizeObserver.instances[0].trigger();
+    setTestViewportSize(600);
+    FakeResizeObserver.instances[0].trigger();
+    expect(el.scrollTop).toBe(8 + 4 * 29);
+  });
+
   it('锚点行因上方插入而位移时，视图继续跟随锚点行（直到用户滚动）', () => {
     const scope = makeTreeScrollScope('tab-1', '/repo');
     saveTreeScrollAnchor(scope, { rowKey: 'c.ts', offset: 0 });

@@ -340,6 +340,38 @@ describe('WorkdirWatchManager 过滤开关', () => {
   });
 
   /**
+   * 评审 P1（PR #4398）：退避到顶（约 15.5s）后不能永久放弃 —— 挂载 / 权限故障
+   * 持续超过退避窗口时旧实现删掉重试状态，故障恢复后再没有定时器收敛；SSH 连接
+   * 没断的情况下文件事件永久静默，只有重挂面板 / 改开关才能救。
+   */
+  it('持续失败超过退避窗口后仍会继续重建（不永久停摆）', async () => {
+    vi.useFakeTimers();
+    try {
+      const manager = new WorkdirWatchManager(() => {});
+      await manager.start('/repo', { showIgnoredDirs: true }, 'desktop-tree');
+      expect(h.created).toHaveLength(1);
+
+      // watcher 报错触发重建，并让之后所有 reconcile 都失败（挂载持续不可用）。
+      h.failNext = Number.MAX_SAFE_INTEGER;
+      const onSpy = h.created[0].watcher.on as unknown as ReturnType<typeof vi.fn>;
+      const handler = onSpy.mock.calls.find(([evt]) => evt === 'error')?.[1] as (err: Error) => void;
+      handler(new Error('boom'));
+
+      // 跑过退避窗口（500+1000+2000+4000+8000 ≈ 15.5s）并再等几轮。
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(h.created.at(-1)?.closed).toBe(true); // 一直在失败，尚未建回
+
+      // 故障恢复：下一次封顶退避（8s）内的重试必须把 watcher 建回来。
+      h.failNext = 0;
+      await vi.advanceTimersByTimeAsync(9_000);
+      expect(h.created.at(-1)?.closed).toBe(false);
+      manager.stopAll();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
    * 评审 P1：回滚后的恢复也失败时同样要退避重试 —— 只记日志的话，原有消费者会在
    * 「选项变化 → 拆旧 watcher → 重建失败 → 回滚恢复意图」之后既没有 watcher、也没
    * 有定时器再收敛。

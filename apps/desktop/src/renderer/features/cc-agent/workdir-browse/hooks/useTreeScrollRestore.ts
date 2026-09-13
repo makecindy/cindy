@@ -11,9 +11,10 @@
  *     绘制前完成，不闪。
  *   - 锚点行还不在树里（新 store 数据未到 / 父目录还没展开）：保持 pending，
  *     每次 rows 变化再试，行一出现就恢复。用户只要一滚动就放弃（用户接管）。
- *   - 容器尺寸变化（RSB 隐藏 tab 切回、doc 模式搜索态切回）：每次 ResizeObserver
- *     回调（可见时）都重新对齐 —— 浏览器对 display:none 期间 scrollTop 的处理
- *     并不一致，不能赌它自己保留。用户没移动时这一步就是 no-op。
+ *   - 容器尺寸变化（RSB 隐藏 tab 切回、doc 模式搜索态切回）：只在容器「从隐藏变
+ *     可见」（0 → 非 0）或仍有待完成的恢复时对齐 —— 浏览器对 display:none 期间
+ *     scrollTop 的处理并不一致，不能赌它自己保留；但用户接管后的普通 resize
+ *     （拖动侧栏 / 缩放窗口）不能无条件回拉可能已过期的锚点（评审 P2）。
  *
  * 不依赖虚拟器：行高固定，目标 scrollTop 由「行索引 × pitch」直接算出，
  * 设置后浏览器会派发 scroll 事件让虚拟器自己跟上。
@@ -26,6 +27,7 @@ import {
   computeTreeScrollAnchor,
   loadTreeScrollAnchor,
   saveTreeScrollAnchor,
+  type TreeScrollAnchor,
 } from '../lib/treeScrollStore';
 import type { TreeRow } from '../lib/treeRows';
 
@@ -41,6 +43,10 @@ export function useTreeScrollRestore(
   const rowsRef = useRef(rows);
   rowsRef.current = rows;
   const scopeRef = useRef(scope);
+  /** 最近一次观察到的视口顶部行（onScroll 更新）。换到没有历史锚点的 scope 时
+   *  继承它 —— 否则新树的 DOM 保留旧像素 scrollTop，而被忽略目录 / 分批数据在
+   *  上方插入行后，视口会落到另一批条目上（评审 P2）。 */
+  const lastAnchorRef = useRef<TreeScrollAnchor | null>(null);
   /** 还有一次「待完成」的恢复：scope 变化 / 重新激活时置位。
    *  注意：找到锚点行后**不**立即清除 —— 换 store 时新树是分批长出来的，锚点行
    *  的 index 会随后续数据到达而位移，要跟到树稳定为止。清除只发生在用户自己
@@ -50,7 +56,14 @@ export function useTreeScrollRestore(
    *  否则会把程序性滚动误判成用户滚动、提前交还控制权。 */
   const programmaticScrollRef = useRef<number | null>(null);
   if (scopeRef.current !== scope) {
+    const previousScope = scopeRef.current;
     scopeRef.current = scope;
+    // 首次进入的 scope（例如第一次打开「显示被忽略的目录」）没有历史锚点：继承
+    // 切换前视口顶部的行，保持「看同一批条目」。只继承一次，之后由滚动 / 接管更新。
+    if (!loadTreeScrollAnchor(scope)) {
+      const inherited = lastAnchorRef.current ?? loadTreeScrollAnchor(previousScope);
+      if (inherited) saveTreeScrollAnchor(scope, inherited);
+    }
     pendingRestoreRef.current = true;
   }
   // 宿主 tab 从非激活变激活（RSB 多标签）：重新尝试恢复。宿主直接告知比赌
@@ -95,20 +108,22 @@ export function useTreeScrollRestore(
 
   // 容器尺寸恢复（补充路径）：隐藏 tab / 隐藏视图切回时恢复视口位置。
   //
-  // 不跟踪 0 → 非 0 的跳变：浏览器对 display:none 是否派发 RO 回调并不一致，
-  // 漏一次 0 就会丢掉后续的恢复机会。每次回调（可见时）都调 tryRestore —— 用户
-  // 没有移动时锚点就是当前顶部行，目标是当前 scrollTop，写入被 eps 守回；只有
-  // 浏览器把位置复位（或锚点行被折叠后复活）时才会真的动。
-  //
-  // 这里**不受 pending 门控**：doc 模式隐藏→回显没有 active 翻转，RO 是唯一
-  // 恢复路径。取舍：用户接管后若锚点行 index 在无 scroll 事件的情况下位移（上方
-  // 行增删但 scrollTop 未变），随后一次无关 resize 可能把视图对齐回锚点行 ——
-  // 已知代价，影响是行内/一行级，不因此把 doc 模式的恢复路径废掉。
+  // 只在两种情况下恢复：
+  //   - 容器刚从隐藏变可见（0 → 非 0）：display:none 期间 scrollTop 可能被浏览器
+  //     复位，这里是唯一可靠的恢复时机；
+  //   - 仍有一次待完成的恢复（pending）：对齐锚点行还在进行中。
+  // 其余 resize（拖动侧栏 / 缩放窗口）不动视口 —— 用户接管后锚点可能已经落后于
+  // 当前行（上方行在无 scroll 事件的情况下增删），无条件恢复会把刚展开的内容
+  // 推出视口（评审 P2：过期锚点）。
   useEffect(() => {
     const el = containerRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
+    let lastHeight = el.clientHeight;
     const observer = new ResizeObserver(() => {
-      if (el.clientHeight > 0) tryRestore();
+      const height = el.clientHeight;
+      const wasHidden = lastHeight === 0;
+      lastHeight = height;
+      if (height > 0 && (pendingRestoreRef.current || wasHidden)) tryRestore();
     });
     observer.observe(el);
     return () => observer.disconnect();
@@ -134,6 +149,9 @@ export function useTreeScrollRestore(
     const el = containerRef.current;
     // 隐藏态 scrollTop 会复位成 0，那不是用户位置，不能覆盖已有锚点。
     if (!el || el.clientHeight === 0) return;
+    const current = computeTreeScrollAnchor(rowsRef.current, el.scrollTop);
+    // 记录最近一次真实视口位置：换到没有历史锚点的 scope 时用它继承（评审 P2）。
+    if (current) lastAnchorRef.current = current;
     if (pendingRestoreRef.current) {
       const anchor = loadTreeScrollAnchor(scopeRef.current);
       const expected = programmaticScrollRef.current;
@@ -142,13 +160,11 @@ export function useTreeScrollRestore(
       if (expected !== null && Math.abs(el.scrollTop - expected) < RESTORE_EPSILON_PX) return;
       // 浏览器 scroll anchoring：行插入/删除时 Chrome 会自行调 scrollTop，但顶部仍是
       // 锚点行 —— 这不代表用户接管，保持 pending，继续跟随树的变化。
-      const currentTop = computeTreeScrollAnchor(rowsRef.current, el.scrollTop);
-      if (anchor && currentTop && currentTop.rowKey === anchor.rowKey) return;
+      if (anchor && current && current.rowKey === anchor.rowKey) return;
     }
-    const anchor = computeTreeScrollAnchor(rowsRef.current, el.scrollTop);
-    if (!anchor) return;
+    if (!current) return;
     pendingRestoreRef.current = false; // 用户自己滚了 = 放弃本次恢复
-    saveTreeScrollAnchor(scopeRef.current, anchor);
+    saveTreeScrollAnchor(scopeRef.current, current);
   }, [containerRef]);
 
   return onScroll;

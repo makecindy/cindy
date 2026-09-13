@@ -79,12 +79,13 @@ RSB 文件浏览器（会话视图右栏）与 doc 模式侧栏（`#/cc-agent/fi
 ## 采集版本源码 SHA-256
 
 哈希按文件内容的 LF 规范化形态计算（`sed 's/\r$//' <file> | sha256sum`，与 Git blob 一致）。
-下表已更新到**评审修复轮之后**的源码：默认态 / 按下态的实测值仍然适用（本轮只加 aria-label、
-unsupported 禁用态与展开态分片），unsupported 禁用态本身未实机目检（见「缺口登记」）。
+下表已更新到**评审修复轮 + 虚拟滚动轮之后**的源码：默认态 / 按下态的实测值仍然适用
+（此后只加过 aria-label、unsupported 禁用态、展开态分片与虚拟滚动接线；标题行控件本身的
+配色 / 圆角 / 尺寸未变），unsupported 禁用态本身未实机目检（见「缺口登记」）。
 
 | 文件 | SHA-256 |
 | --- | --- |
-| `features/cc-agent/workdir-browse/fileTreeHeaderButtonClass.ts` | `9fedf81c4ce1120f241934ddcc72ae8f2373032cc467938ce5196ff85b1b93b8` |
+| `features/cc-agent/workdir-browse/fileTreeHeaderButtonClass.ts` | `571c2021d9589b99141e8ca2c07331f7bab7994384f0a860d3a55534a2232840` |
 | `features/cc-agent/workdir-browse/FileTreeIgnoredDirsToggle.tsx` | `de2b2070c559c3f82410761c34e35f84c6fb0cf62fcc78b2eff49b5991f69726` |
-| `features/right-sidebar/plugins/file-browser/FileBrowserBody.tsx` | `31dd114e80825405e1ef53a7af4fadb4ba716312a02d27f5af5b2ae6f8361562` |
-| `features/cc-agent/workdir-browse/WorkdirBrowseSidebar.tsx` | `096c4eeeb7bc754850b163bb03b4542b21f5bf7f32922a84335da2fffdc29b2b` |
+| `features/right-sidebar/plugins/file-browser/FileBrowserBody.tsx` | `9733c40b3d319a37c1ab79fe060c4216c835f3967a55472a6562b157a73eb1ea` |
+| `features/cc-agent/workdir-browse/WorkdirBrowseSidebar.tsx` | `67a095a2d548546bf7cc39dd1e1a9c2083d9079bbba1db7a939d0defb8cbd0e3` |
