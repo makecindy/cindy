@@ -82,6 +82,13 @@ describe('moveSessions', () => {
     expect(updateSession).not.toHaveBeenCalled();
   });
 
+  it('rejects a relative working_dir before directory lookup', async () => {
+    const { deps, updateSession } = makeDeps([row('a')]);
+    const res = await moveSessions(deps, { sessionIds: ['a'], target: { kind: 'project', workingDir: 'relative' } });
+    expect(res).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(updateSession).not.toHaveBeenCalled();
+  });
+
   it.each<[string, Partial<SessionOpsRow>, Partial<SessionOperationsDeps>]>([
     ['remote', { remoteHostId: 'host' }, {}],
     ['deleted', { status: 'deleted' }, {}],
@@ -109,5 +116,14 @@ describe('moveSessions', () => {
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'INTERNAL', moved: [{ sessionId: 'a' }] });
   });
-});
 
+  it('rechecks running state before each update and preserves moved items', async () => {
+    let checks = 0;
+    const { deps, updateSession } = makeDeps([row('a'), row('b')], {
+      isTurnRunning: (id) => id === 'b' && ++checks > 1,
+    });
+    const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED', moved: [{ sessionId: 'a' }] });
+    expect(updateSession).toHaveBeenCalledTimes(1);
+  });
+});

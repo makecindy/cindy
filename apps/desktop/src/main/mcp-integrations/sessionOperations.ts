@@ -11,6 +11,7 @@
  */
 
 import { isDefaultDraftSessionTitle } from '@cindy/maker-shared/session-title';
+import { isAbsolute } from 'node:path';
 import type { MoveSessionsResult, SessionMoveTarget, SessionOpErrorCode, SessionOpItem } from '@cindy/mcps';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
@@ -113,6 +114,9 @@ export async function moveSessions(
   params: { sessionIds: string[]; target: SessionMoveTarget },
 ): Promise<MoveSessionsResult> {
   if (params.target.kind === 'project') {
+    if (!isAbsolute(params.target.workingDir)) {
+      return err('INVALID_ARGS', `working_dir 必须是绝对路径: ${params.target.workingDir}`);
+    }
     if (!(await deps.isDirectory(params.target.workingDir))) {
       return err('INVALID_ARGS', `working_dir 不是已存在的目录: ${params.target.workingDir}`);
     }
@@ -137,8 +141,13 @@ export async function moveSessions(
       : { workingDir: params.target.workingDir, workspaceKind: 'project' as const };
   const moved: SessionOpItem[] = [];
   for (const row of loaded) {
-    if (await isRunning(deps, row)) {
-      return err('PRECONDITION_FAILED', `${row.id}: 会话在移动前重新进入运行中`);
+    const lateReason = (await isRunning(deps, row))
+      ? '会话在移动前重新进入运行中'
+      : deps.isImAttached(row.id)
+        ? '会话在移动前被 IM 接管'
+        : null;
+    if (lateReason) {
+      return { ...err('PRECONDITION_FAILED', `${row.id}: ${lateReason}`), moved };
     }
     try {
       const updated = (await deps.updateSession(row.id, { ...patch })) as Partial<SessionOpsRow>;
