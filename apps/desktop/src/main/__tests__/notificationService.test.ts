@@ -24,10 +24,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-type IpcHandler = (event: unknown, payload: unknown) => Promise<void> | void;
+type IpcHandler = (event: unknown, ...args: unknown[]) => Promise<unknown> | unknown;
 
 // 捕获被注册的 IPC handlers。每个用例 freshModule 后重置。
 const registeredHandlers = new Map<string, IpcHandler>();
+const appOn = vi.fn();
 
 // Notification 构造调用计数(每条 toast 一次)。
 const notificationCtor = vi.fn();
@@ -62,6 +63,7 @@ vi.mock('electron', () => ({
     // 顶层 IIFE 里读 app.isPackaged 决定 devNotificationIcon;
     // 选 true → 不走 nativeImage 那条路径,免去 fs 依赖。
     isPackaged: true,
+    on: appOn,
   },
   ipcMain: {
     handle: (channel: string, handler: IpcHandler) => {
@@ -131,6 +133,7 @@ function makeFeishuIm(ownerOpenId: string | null): FakeFeishuIM {
 async function freshService() {
   vi.resetModules();
   registeredHandlers.clear();
+  appOn.mockClear();
   notificationCtor.mockClear();
   warn.mockClear();
   notificationSupported = true;
@@ -155,8 +158,14 @@ async function invokeHandler(payload: unknown): Promise<void> {
 /** mobile 分支是 fire-and-forget 的独立 async 块;断言它之前先把微任务队列排空。 */
 const flushAsync = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-const baseDeps = (feishuIm: FakeFeishuIM) => ({
+const baseDeps = (
+  feishuIm: FakeFeishuIM,
+  assertTrustedSender = vi.fn(),
+  isAppFocused = vi.fn(() => false),
+) => ({
   getWindow: () => null,
+  isAppFocused,
+  assertTrustedSender,
   // 实参在主进程是 FeishuIM, 测试里用结构兼容的 fake 就够 — 仅访问
   // getOwnerOpenId / sendMarkdownText 两个方法。
   feishuIm: feishuIm as unknown as Parameters<
@@ -183,6 +192,96 @@ describe('notificationService — channels 分发', () => {
     expect(() => handler?.({}, 'false')).toThrow(
       'notification desktop enabled must be a boolean',
     );
+  });
+
+  it('sound coordination IPC validates the sender and sound kind', async () => {
+    const { initNotificationService } = await freshService();
+    const assertTrustedSender = vi.fn();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner'), assertTrustedSender));
+
+    const claim = registeredHandlers.get('notification:claim-session-event-sound');
+    expect(claim).toBeDefined();
+    expect(claim?.({}, 'done')).toMatchObject({ status: 'play' });
+    expect(assertTrustedSender).toHaveBeenCalledWith({});
+    expect(() => claim?.({}, 'unknown')).toThrow('invalid notification sound kind');
+  });
+
+  it('lets only one renderer own a broadcast session event', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    const claim = registeredHandlers.get('notification:claim-session-event');
+
+    const first = claim?.({}, 'session-1', 'done') as
+      | { status: 'deliver'; token: string }
+      | undefined;
+    expect(first?.status).toBe('deliver');
+    expect(claim?.({}, 'session-1', 'done')).toEqual({ status: 'suppressed' });
+
+    await invokeHandler({
+      sessionId: 'session-1',
+      title: 'One delivery',
+      kind: 'done',
+      deliveryToken: first?.token,
+      channels: { desktop: true },
+    });
+    await invokeHandler({
+      sessionId: 'session-1',
+      title: 'Duplicate delivery',
+      kind: 'done',
+      deliveryToken: first?.token,
+      channels: { desktop: true },
+    });
+
+    expect(notificationCtor).toHaveBeenCalledOnce();
+  });
+
+  it('suppresses pending delivery and wakes sound playback when any Cindy window focuses', async () => {
+    const { initNotificationService } = await freshService();
+    const isAppFocused = vi.fn(() => false);
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner'), vi.fn(), isAppFocused));
+    const claimEvent = registeredHandlers.get('notification:claim-session-event');
+    const claimSound = registeredHandlers.get('notification:claim-session-event-sound');
+    const waitFocus = registeredHandlers.get('notification:wait-session-event-sound-focus');
+
+    const delivery = claimEvent?.({}, 'session-focus', 'done') as {
+      status: 'deliver';
+      token: string;
+    };
+    const sound = claimSound?.({}, 'done', delivery.token) as { status: 'play'; token: string };
+    const pendingFocus = waitFocus?.({}, 'done', sound.token) as Promise<boolean>;
+
+    isAppFocused.mockReturnValue(true);
+    const focusListener = appOn.mock.calls.find(([event]) => event === 'browser-window-focus')?.[1] as
+      | (() => void)
+      | undefined;
+    focusListener?.();
+
+    await expect(pendingFocus).resolves.toBe(true);
+    isAppFocused.mockReturnValue(false);
+    await invokeHandler({
+      sessionId: 'session-focus',
+      title: 'Focused elsewhere',
+      kind: 'done',
+      deliveryToken: delivery.token,
+      channels: { desktop: true, mobile: true, feishu: true },
+    });
+    await flushAsync();
+
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(markSessionNeedsAttention).not.toHaveBeenCalled();
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  });
+
+  it('suppresses claims immediately while another Cindy window is focused', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner'), vi.fn(), vi.fn(() => true)));
+
+    expect(
+      registeredHandlers.get('notification:claim-session-event')?.({}, 'session-focused', 'error'),
+    ).toEqual({ status: 'suppressed' });
+    expect(
+      registeredHandlers.get('notification:claim-session-event-sound')?.({}, 'error'),
+    ).toEqual({ status: 'suppressed' });
   });
 
   it('payload.channels 缺省 → 仅桌面 toast (默认契约,防御漏传)', async () => {
@@ -522,5 +621,91 @@ describe('notificationService — channels 分发', () => {
     expect(notificationCtor).toHaveBeenCalledTimes(1);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(warn.mock.calls[0]![0]).toContain('feishu sendMarkdownText failed');
+  });
+
+  // ── sound 通道(#3177)────────────────────────────────────────────────────
+  // renderer 提示音已开始或本条已被同类声音合并覆盖时传 sound:true →
+  // 本条 toast 必须静音,避免 OS 通知音与应用提示音双响;未传/关闭时保持
+  // Electron 默认(silent 不设,OS 通知音照常),老调用方零改动。
+
+  it('channels.sound:true → toast 置 silent(OS 音不与应用提示音叠加)', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({
+      sessionId: 's1',
+      title: 'Hello',
+      kind: 'done',
+      channels: { desktop: true, feishu: false, sound: true },
+    });
+
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledWith(
+      expect.objectContaining({ title: 'Cindy · Hello', silent: true }),
+    );
+  });
+
+  it('channels.sound 未传/false → toast 不带 silent,OS 通知音照常', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({
+      sessionId: 's1',
+      title: 'Hello',
+      kind: 'done',
+      channels: { desktop: true, feishu: false, sound: false },
+    });
+    expect(notificationCtor).toHaveBeenCalledWith(
+      expect.not.objectContaining({ silent: true }),
+    );
+
+    notificationCtor.mockClear();
+    await invokeHandler({
+      sessionId: 's1',
+      title: 'Hello',
+      kind: 'done',
+      channels: { desktop: true, feishu: false },
+    });
+    expect(notificationCtor).toHaveBeenCalledTimes(1);
+    expect(notificationCtor).toHaveBeenCalledWith(
+      expect.not.objectContaining({ silent: true }),
+    );
+  });
+
+  it('sound:true 且 desktop:false → 无 toast 可静音,其余通道照常分发', async () => {
+    const { initNotificationService } = await freshService();
+    const feishuIm = makeFeishuIm('ou_owner');
+    initNotificationService(baseDeps(feishuIm));
+
+    await invokeHandler({
+      sessionId: 's1',
+      title: 'Hello',
+      kind: 'needs-reply',
+      channels: { desktop: false, feishu: true, mobile: true, sound: true },
+    });
+    await flushAsync();
+
+    expect(notificationCtor).not.toHaveBeenCalled();
+    expect(feishuIm.sendMarkdownText).toHaveBeenCalledTimes(1);
+    expect(sendMobileSessionNotify).toHaveBeenCalled();
+    // 角标不受任何通道开关影响
+    expect(markSessionNeedsAttention).toHaveBeenCalledWith('s1');
+  });
+
+  it('payload 运行时校验:sound 非 boolean 直接 reject', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+
+    await expect(
+      invokeHandler({
+        sessionId: 's1',
+        title: 'x',
+        kind: 'done',
+        channels: { desktop: true, sound: 'yes' },
+      }),
+    ).rejects.toThrow('invalid session event payload');
+    expect(notificationCtor).not.toHaveBeenCalled();
   });
 });

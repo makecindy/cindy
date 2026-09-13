@@ -110,6 +110,23 @@ describe('伙伴创建兼容旧创建链接', () => {
   });
 });
 
+describe('伙伴页通知账号边界', () => {
+  const sidebar = readFileSync(resolve(__dirname, '..', 'BotsSidebar.tsx'), 'utf8');
+
+  it('在查询标题前捕获 owner，并把同一快照传给所有通知分支', () => {
+    const capture = sidebar.indexOf('const dataOwnerAtNotification = getDataOwnerGeneration();');
+    const titleLookup = sidebar.search(/sessionService\s*\.get\(targetSessionId\)/);
+    const calls = [...sidebar.matchAll(/sendSessionEventNotification\(([\s\S]*?)\);/g)].map(
+      (match) => match[1] ?? '',
+    );
+
+    expect(capture).toBeGreaterThan(-1);
+    expect(titleLookup).toBeGreaterThan(capture);
+    expect(calls).toHaveLength(3);
+    expect(calls.every((call) => call.includes('dataOwnerAtNotification'))).toBe(true);
+  });
+});
+
 describe('Bot task creation cannot leave navigation permanently gated', () => {
   const home = readFileSync(resolve(__dirname, '..', 'BotsHomeView.tsx'), 'utf8');
 

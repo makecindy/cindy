@@ -47,7 +47,10 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
-import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerPushCurrent,
+} from '@/contexts/dataOwnerGeneration';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
@@ -1050,20 +1053,34 @@ function ExpandedView({
   const unnamedLabelRef = useRef('');
   unnamedLabelRef.current = t('ccAgent.common.unnamedSession');
   const fireSessionNotification = useCallback(
-    (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+    async (sessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+      // The sound path may await autoplay permission or resource startup. Capture the
+      // current account boundary before that await and drop the event if the user logs
+      // out or switches accounts while the old session notification is still pending.
+      const dataOwnerAtNotification = getDataOwnerGeneration();
+      // 失焦才推 —— 见上注释。
+      if (typeof document !== 'undefined' && document.hasFocus()) return;
       const session = sessionsRef.current.find((s) => s.id === sessionId);
       // Orca worker 自身状态翻转不发独立通知 —— 等 lead 接到 worker_report 处理完
       // 再以 lead 名义统一推一条，避免同一事件双重打扰。语义上用户应回到 lead 主对话
       // 查看，而非跳到 worker 实现细节；与 effectiveRunningSessionIds 的角色聚合口径一致。
       if (session && isOrcaWorkerSession(session)) return;
-      if (session) {
-        const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
-        sendSessionEventNotification(sessionId, title, kind);
+      // Bot-owned 任务不在普通任务列表中，沿用共享通知入口解析标题和通道；
+      // 普通任务也走同一入口，保证声音、焦点和账号边界语义一致。
+      if (!session) {
+        void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {
+          if (typeof document !== 'undefined' && document.hasFocus()) return;
+          void sendSessionEventNotification(
+            sessionId,
+            botTitle ?? unnamedLabelRef.current,
+            kind,
+            dataOwnerAtNotification,
+          );
+        });
         return;
       }
-      void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {
-        sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);
-      });
+      const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);
+      void sendSessionEventNotification(sessionId, title, kind, dataOwnerAtNotification);
     },
     [],
   );

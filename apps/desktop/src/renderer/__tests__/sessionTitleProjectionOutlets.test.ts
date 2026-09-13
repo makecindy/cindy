@@ -120,8 +120,10 @@ describe('desktop 会话标题投影出口', () => {
       'const title = projectDraftSessionTitle(session.title, unnamedLabelRef.current);',
     );
     expect(sidebarUpper).toContain('void botOwnedSessionNotificationTitle(sessionId).then((botTitle) => {');
-    expect(sidebarUpper).toContain(
-      'sendSessionEventNotification(sessionId, botTitle ?? unnamedLabelRef.current, kind);',
+    // Keep the bot-owned notification contract resilient to formatting changes while
+    // retaining the projected title, event kind, and owner-generation fence.
+    expect(sidebarUpper).toMatch(
+      /void sendSessionEventNotification\(\s*sessionId,\s*botTitle \?\? unnamedLabelRef\.current,\s*kind,\s*dataOwnerAtNotification,\s*\);/,
     );
     expect(sidebarUpper).toContain("unnamedLabelRef.current = t('ccAgent.common.unnamedSession');");
   });
