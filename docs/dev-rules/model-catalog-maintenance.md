@@ -96,6 +96,13 @@ localModels 整域缺失才用随包本地域，显式空不兜底。
 它不改窗口、价格、成员资格，也不从 Gateway wireProtocol 或 Pi piApi 猜原生协议。
 旧格式迁移中若两份 Registry 有差异，必须使用不同 revision 并记录原因，不能伪造同版本一致。
 
+## 通用供应商导入
+
+Pi 上游生成资料统一转换为客户端 `catalog/provider-models.json`，供各引擎和设置页补缺；
+不另存 Pi 原始表。目录的 Pi API 是该渠道的执行协议，不冒充 Registry 的厂商原生协议。
+维护命令、覆盖顺序和验收见 [通用供应商目录](provider-catalog-generation.md)。
+渠道多协议与逐模型接口证据见 [供应商接口核查](provider-interface-audit.md)。
+
 ## 按问题继续阅读
 
 | 按需阅读 | 入口 |

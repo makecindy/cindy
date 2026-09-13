@@ -9,9 +9,9 @@
  *   - resolveSavedProbeSpec 从 active-catalog + 注入 key reader 解析（仅 user 供应商）。
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, buildUserProvider, PROVIDER_MODEL_CATALOG, providerPresetOAuth } from '@cindy/model-providers';
 
 import { classifyProviderError } from '../../../shared/providerErrors.js';
 import {
@@ -800,4 +800,126 @@ describe('resolveSavedProbeSpec / testProviderConnection(saved)', () => {
     ).rejects.toThrow(/disabled/);
     expect(fetchCalled).toBe(false);
   });
+});
+
+
+it('probes Google using generateContent instead of falling through to Responses', () => {
+  const request = buildProbeRequest({ agent: 'codex', wireProtocol: 'google-generative-ai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta', modelId: 'new-gemini', apiKey: 'fixture-key' });
+  expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models/new-gemini:generateContent');
+  expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'fixture-key' });
+  expect(request.init.headers).not.toHaveProperty('authorization');
+  expect(JSON.parse(String(request.init.body))).toMatchObject({ contents: [{ role: 'user', parts: [{ text: 'ping' }] }], generationConfig: { maxOutputTokens: 16 } });
+});
+
+
+describe('native SDK connection probes', () => {
+  it.each(['saved', 'adhoc', 'header-only'] as const)('uses the Vertex SDK for a %s connection, not the public Gemini path', async kind => {
+    const row = PROVIDER_MODEL_CATALOG.providers['google-vertex'][0];
+    const baseUrl = 'https://us-central1-aiplatform.googleapis.com';
+    const fetchSpy = vi.fn(async (url: unknown, init?: RequestInit) => {
+      expect(String(url)).toContain('/v1/publishers/google/models/');
+      expect(String(url)).toContain(':streamGenerateContent');
+      expect(JSON.parse(String(init?.body)).generationConfig.maxOutputTokens).toBeGreaterThan(0);
+      expect(JSON.parse(String(init?.body)).generationConfig.maxOutputTokens).toBeLessThanOrEqual(16);
+      return new Response(`data: ${JSON.stringify({ candidates: [{ content: { role: 'model', parts: [{ text: 'ok' }] }, finishReason: 'STOP' }] })}\n\n`,
+        { headers: { 'content-type': 'text/event-stream' } });
+    });
+    vi.stubGlobal('fetch', fetchSpy);
+    const wrongTransport = vi.fn(async () => { throw new Error('must use the native Vertex SDK'); });
+    setCustomProviders([buildUserProvider({ id: 'vertex-test', name: 'Vertex', auth: { method: 'apiKey' },
+      runtimes: { pi: { baseUrl, wireProtocol: 'google-generative-ai', catalogPresetId: 'google-vertex',
+        models: [{ id: row.id, name: row.name, piApi: 'google-vertex' }] } },
+    })]);
+    setDiagnosticsKeyReader(() => 'fixture-vertex-key');
+    try {
+      const result = await testProviderConnection(kind === 'saved'
+        ? { kind, providerId: 'vertex-test', agent: 'pi' }
+        : { kind: 'adhoc', spec: { agent: 'pi', baseUrl, modelId: row.id, api: 'google-vertex',
+          wireProtocol: 'google-generative-ai', ...(kind === 'header-only'
+            ? { headers: { 'X-Goog-Api-Key': 'fixture-vertex-key' } } : { apiKey: 'fixture-vertex-key' }) } }, wrongTransport);
+      expect(result, JSON.stringify(result)).toMatchObject({ ok: true });
+      expect(fetchSpy).toHaveBeenCalledOnce();
+      expect(wrongTransport).not.toHaveBeenCalled();
+    } finally { vi.unstubAllGlobals(); }
+  });
+
+  it('does not turn an SDK authentication error into a successful probe', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{"error":{"code":401,"message":"invalid api key"}}', { status: 401 })));
+    try {
+      const result = await runProviderProbe({ agent: 'pi', baseUrl: 'https://us-central1-aiplatform.googleapis.com',
+        modelId: 'gemini-fixture', api: 'google-vertex', wireProtocol: 'google-generative-ai', apiKey: 'fixture-key' });
+      expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID', status: 401 });
+    } finally { vi.unstubAllGlobals(); }
+  });
+});
+
+
+it('keeps the Copilot SDK identity but uses the assigned enterprise host for connection tests', () => {
+  const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'openai-responses')!;
+  setCustomProviders([buildUserProvider({ id: 'copilot-probe', name: 'Copilot',
+    auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+    runtimes: { codex: { baseUrl: row.upstream, catalogPresetId: 'github-copilot', wireProtocol: 'openai-responses',
+      models: [{ id: row.id, name: row.name, api: 'openai-responses' }] } },
+  })]);
+  setDiagnosticsOAuthTokenReader(() => 'fixture;proxy-ep=proxy.enterprise.githubcopilot.com;');
+  try {
+    expect(resolveSavedProbeSpec('copilot-probe', 'codex')).toMatchObject({
+      baseUrl: 'https://api.enterprise.githubcopilot.com', api: 'openai-responses',
+      nativeModel: { upstream: row.upstream, execution: { pi: { headers: expect.objectContaining({ 'Copilot-Integration-Id': 'vscode-chat' }) } } },
+    });
+  } finally { setDiagnosticsOAuthTokenReader(() => null); }
+});
+
+
+it('does not let a saved Vertex probe inherit Desktop ADC against an unrelated host', async () => {
+  setCustomProviders([buildUserProvider({
+    id: 'vertex-attacker', name: 'Vertex', auth: { method: 'apiKey' },
+    runtimes: { pi: { baseUrl: 'https://attacker.example', wireProtocol: 'google-generative-ai',
+      models: [{ id: 'gemini-fixture', name: 'Gemini', piApi: 'google-vertex' }] } },
+  })]);
+  const fetchSpy = vi.fn(async () => { throw new Error('must not send'); });
+  const result = await testProviderConnection(
+    { kind: 'saved', providerId: 'vertex-attacker', agent: 'pi' }, fetchSpy);
+  expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
+it('does not let a Bedrock probe inherit Desktop IAM against an unrelated host even with a dummy key', async () => {
+  const fetchSpy = vi.fn(async () => { throw new Error('must not send'); });
+  const result = await runProviderProbe({
+    agent: 'pi',
+    baseUrl: 'https://attacker.example',
+    modelId: 'claude-fixture',
+    api: 'bedrock-converse-stream',
+    apiKey: 'not-an-aws-key',
+  }, fetchSpy);
+  expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
+it('does not let an adhoc Vertex probe inherit Desktop ADC against an unrelated host', async () => {
+  const fetchSpy = vi.fn(async () => { throw new Error('must not send');
+  });
+  const result = await runProviderProbe({
+    agent: 'pi',
+    baseUrl: 'https://attacker.example',
+    modelId: 'gemini-fixture',
+    api: 'google-vertex',
+    wireProtocol: 'google-generative-ai',
+    authMethod: 'apiKey',
+  }, fetchSpy);
+  expect(result).toMatchObject({ ok: false, code: 'AUTH_INVALID' });
+  expect(fetchSpy).not.toHaveBeenCalled();
+});
+
+it('does not replace an explicit Chat probe with the preset’s Google SDK', async () => {
+  const fetcher = vi.fn<typeof fetch>(async (url, init) => {
+    expect(String(url)).toBe('https://proxy.example/v1/chat/completions');
+    expect(JSON.parse(String(init?.body))).toMatchObject({ model: 'gemini-2.5-flash', messages: expect.any(Array) });
+    return new Response('data: [DONE]\n\n', { headers: { 'content-type': 'text/event-stream' } });
+  });
+  expect(await runProviderProbe({ agent: 'pi', baseUrl: 'https://proxy.example/v1', modelId: 'gemini-2.5-flash',
+    catalogPresetId: 'google-vertex', wireProtocol: 'openai-chat', apiKey: 'fixture-key' }, fetcher)).toMatchObject({ ok: true });
+  expect(fetcher).toHaveBeenCalledOnce();
 });

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderPreset, ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, type ProviderPreset, type ProviderView } from '@cindy/model-providers';
 
 import {
   beginProviderImportConfirm,
@@ -133,6 +133,36 @@ describe('provider import URL parsing', () => {
     createDraft(customPayload({ endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://api.acme.test/v1', modelsUrl: 'https://api.acme.test:443/catalog/models' }] }));
   });
 
+  it('keeps an explicit defaultEnabled override on imported compatibility routes', () => {
+    const importId = createDraft(customPayload({
+      endpoints: [{
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.acme.test/v1',
+        targets: ['claude-code'],
+        models: [{ id: 'compat-model', name: 'Compat', defaultEnabled: true }],
+      }],
+    }));
+    previewProviderImport(importId, SCOPE, []);
+    const { draft } = beginProviderImportConfirm(importId, SCOPE, []);
+    expect(draft.kind === 'custom' && draft.config.runtimes['claude-code']?.models[0]).toMatchObject({
+      id: 'compat-model',
+      defaultEnabled: true,
+    });
+  });
+
+  it('imports Google generateContent endpoints for all three engines', () => {
+    const importId = createDraft(customPayload({
+      endpoints: [{
+        protocol: 'google-generative-ai',
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        models: ['gemini-2.5-flash'],
+      }],
+    }));
+    const preview = previewProviderImport(importId, SCOPE, []);
+    expect(preview.runtimes.map((runtime) => runtime.agent)).toEqual(['claude-code', 'codex', 'pi']);
+    expect(preview.runtimes.every((runtime) => runtime.protocol === 'google-generative-ai')).toBe(true);
+  });
+
   it.each(['http://localhost:4000/v1', 'http://127.0.0.1:4000/v1', 'http://[::1]:4000/v1'])(
     'accepts no-auth loopback endpoints: %s', (baseUrl) => {
       const id = createDraft(customPayload({
@@ -201,13 +231,16 @@ describe('provider import URL parsing', () => {
           pi: {
             catalogPresetId: preset.id,
             piCatalogProviderId: 'acme',
-            models: [{ piApi: 'openai-completions' }],
+            models: [{ id: 'm1', name: 'M1', discoveredMetadata: {} }],
           },
         },
       },
     });
-    if (draft.kind === 'custom')
+    if (draft.kind === 'custom') {
       expect(draft.config.runtimes.codex!.models[0]).not.toHaveProperty('contextWindow');
+      expect(draft.config.runtimes.pi!.models[0]).not.toHaveProperty('piApi');
+      expect(buildUserProvider(draft.config, { presets: [preset] }).models.pi![0].piApi).toBe('openai-completions');
+    }
   });
 
   it('rejects missing and no-auth presets instead of silently importing a key into another connection', () => {

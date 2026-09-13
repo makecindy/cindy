@@ -48,6 +48,7 @@ const PROTOCOLS: readonly ProviderWireProtocol[] = [
   'anthropic-messages',
   'openai-responses',
   'openai-chat',
+  'google-generative-ai',
 ];
 const PI_EFFORTS: readonly PiReasoningEffort[] = [
   'minimal',
@@ -254,7 +255,7 @@ function parseModel(value: unknown, label: string): ProviderRuntimeModelConfig {
       fail(`${label}.${field} must be a boolean`);
     }
   }
-  if (model.defaultEnabled === false) result.defaultEnabled = false;
+  if (typeof model.defaultEnabled === 'boolean') result.defaultEnabled = model.defaultEnabled;
   if (model.supportsImageInput === true) result.supportsImageInput = true;
   if (model.reasoning === true) {
     if (!Array.isArray(model.reasoningEfforts) || model.reasoningEfforts.length === 0) {
@@ -367,7 +368,7 @@ function parseOAuth(auth: Record<string, unknown>): OAuthProviderDescriptor {
   const common = {
     tokenUrl: httpUrl(auth.tokenUrl, 'auth.tokenUrl', true, true),
     clientId: boundedString(auth.clientId, 'auth.clientId', 512),
-    scopes: boundedString(auth.scopes, 'auth.scopes', 2_048),
+    scopes: auth.scopes === '' ? '' : boundedString(auth.scopes, 'auth.scopes', 2_048),
     ...(auth.modelsDiscoveryUrl !== undefined
       ? {
           modelsDiscoveryUrl: httpUrl(
@@ -451,12 +452,20 @@ function parseOAuth(auth: Record<string, unknown>): OAuthProviderDescriptor {
 }
 
 function defaultTargets(protocol: ProviderWireProtocol): AgentKind[] {
-  if (protocol === 'anthropic-messages') return ['claude-code', 'codex', 'pi'];
+  if (protocol === 'anthropic-messages' || protocol === 'google-generative-ai') {
+    return ['claude-code', 'codex', 'pi'];
+  }
   return ['codex', 'pi'];
 }
 
 function protocolPriority(agent: AgentKind, protocol: ProviderWireProtocol): number {
-  if (agent === 'claude-code') return protocol === 'anthropic-messages' ? 100 : -1;
+  if (agent === 'claude-code') {
+    if (protocol === 'anthropic-messages') return 100;
+    if (protocol === 'google-generative-ai') return 30;
+    if (protocol === 'openai-chat') return 20;
+    if (protocol === 'openai-responses') return 10;
+    return -1;
+  }
   if (agent === 'codex') {
     if (protocol === 'openai-responses') return 30;
     if (protocol === 'openai-chat') return 20;
@@ -584,8 +593,8 @@ function parsePayload(value: unknown): ProviderImportDraft {
         (target) => auth?.method !== 'oauth' || target !== 'pi',
       );
     for (const target of targets) {
-      if (target === 'claude-code' && endpoint.protocol !== 'anthropic-messages') {
-        fail('Claude Code only supports anthropic-messages endpoints');
+      if (target === 'claude-code' && !PROTOCOLS.includes(endpoint.protocol)) {
+        fail('Claude Code endpoint protocol is unsupported');
       }
       if (target === 'pi' && auth?.method === 'oauth')
         fail('custom OAuth providers do not support Pi');

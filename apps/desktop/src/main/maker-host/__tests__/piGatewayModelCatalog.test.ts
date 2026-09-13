@@ -182,7 +182,7 @@ describe('Cindy Server Pi Gateway catalog authority', () => {
 });
 
 describe('Pi Gateway version-matched local supplement catalog', () => {
-  it.each(['google/gemini-3.8-flash', 'gemini-3.8-flash', 'google/gemini-99-pro-preview[1m]'])(
+  it.each(['google/gemini-99-flash', 'gemini-99-flash', 'google/gemini-99-pro-preview[1m]'])(
     'keeps new XD Gemini route %s on Google without a per-model registration',
     (id) =>
       expect(resolveBundledPiGatewayModelProfile(id)).toEqual({ api: 'google-generative-ai' }),

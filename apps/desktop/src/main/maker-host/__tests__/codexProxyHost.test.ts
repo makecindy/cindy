@@ -42,6 +42,8 @@ const mockState = vi.hoisted(() => {
       error: vi.fn(),
     },
     createAnthropicCompatProxy: vi.fn(),
+    createPiProviderFetch: vi.fn(() => vi.fn()),
+    handlePiProviderRequest: vi.fn(async () => undefined),
     createResponsesChatHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
     createResponsesAnthropicHandler: vi.fn(() => ({ handle: vi.fn(async () => undefined) })),
     injectionTransform: vi.fn<(body: unknown, ctx: unknown) => unknown | null>(() => null),
@@ -60,6 +62,8 @@ const mockState = vi.hoisted(() => {
   };
   return state;
 });
+
+vi.mock('../pi-provider-transport.js', async importOriginal => ({ ...await importOriginal<typeof import('../pi-provider-transport.js')>(), createPiProviderFetch: mockState.createPiProviderFetch, handlePiProviderRequest: mockState.handlePiProviderRequest }));
 
 vi.mock('electron', () => ({
   app: {
@@ -895,19 +899,13 @@ describe('chatBridgeCapabilitiesForRoute', () => {
       parsedBody,
       res,
     });
-    const bridgeHandler = mockState.createResponsesChatHandler.mock.results.at(-1)?.value as {
-      handle: ReturnType<typeof vi.fn>;
-    };
-    expect(bridgeHandler.handle).toHaveBeenCalledWith({
-      parsedBody: {
-        ...parsedBody,
-        instructions: [
-          ...originalInstructions,
-          { type: 'input_text', text: '\n\nPRODUCT_PROMPT' },
-        ],
-      },
-      res,
-    });
+    expect(mockState.createPiProviderFetch).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'moonshot-key', row: expect.objectContaining({ id: 'kimi-k3', supportsImageInput: true }),
+    }));
+    expect(mockState.handlePiProviderRequest).toHaveBeenCalledWith(expect.any(Function), {
+      ...parsedBody,
+      instructions: [...originalInstructions, { type: 'input_text', text: '\n\nPRODUCT_PROMPT' }],
+    }, res);
 
     clearSessionProvider('session-kimi-image');
     setCustomProviderKeyReader(() => null);
@@ -1121,35 +1119,58 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     ));
 
     expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
-    expect(mockState.createResponsesAnthropicHandler).toHaveBeenCalledWith(
-      expect.objectContaining({
-        upstreamBase: 'https://api.anthropic.com',
-        buildHeaders: expect.any(Function),
-      }),
-      expect.anything(),
-    );
-    const anthropicHandlerCalls = mockState.createResponsesAnthropicHandler.mock.calls as unknown as Array<[
-      {
-        promptCaching: boolean;
-        automaticPromptCaching: boolean;
-        strictTools: boolean;
-        buildHeaders: () => Promise<Record<string, string>>;
-      },
-    ]>;
-    const config = anthropicHandlerCalls.at(-1)?.[0];
-    expect(config).toBeDefined();
-    if (!config) throw new Error('Anthropic bridge config was not captured');
-    expect(await config.buildHeaders()).toEqual({
-      'x-api-key': 'anthropic-key',
-      authorization: 'Bearer anthropic-key',
-    });
-    expect(config.promptCaching).toBe(true);
-    expect(config.automaticPromptCaching).toBe(true);
-    expect(config.strictTools).toBe(true);
+    const body = { model: 'claude-sonnet-4-6', input: [{ role: 'user', content: 'hello' }] };
+    await (decision as { localHandler: (input: unknown) => Promise<void> }).localHandler({ rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, res: {} });
+    expect(mockState.createPiProviderFetch).toHaveBeenCalledWith(expect.objectContaining({
+      apiKey: 'anthropic-key', row: expect.objectContaining({ id: 'claude-sonnet-4-6', execution: { pi: expect.objectContaining({
+        api: 'anthropic-messages', compat: expect.objectContaining({ supportsStrictTools: true }),
+      }) } }),
+      headers: expect.objectContaining({ 'anthropic-beta': 'context-1m-2025-08-07' }),
+    }));
 
     clearSessionProvider('session-anthropic');
     setCustomProviderKeyReader(() => null);
     setCustomProviders([]);
+  });
+
+  it.each(['individual', 'business', 'enterprise'].flatMap(account => ['anthropic-messages', 'openai-responses'].map(api => ({ account, api }))))('keeps the Copilot adapter for $api on the $account host', async ({ account, api }) => {
+    const host = await freshCodexProxyHost();
+    const { setCustomProviders } = await import('../active-catalog.js');
+    const { setOAuthTokenReader } = await import('../provider-route.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    const { buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG, providerModelAdapterId } = await import('@cindy/model-providers');
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(model => model.execution.pi.api === api)!;
+    const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
+    setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { codex: { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
+        wireProtocol: api as 'anthropic-messages' | 'openai-responses', models: [{ id: row.id, name: row.name, api: api as 'anthropic-messages' | 'openai-responses' }] } },
+    })]);
+    setOAuthTokenReader(() => token);
+    host.registerComposed('session-copilot', 'thread-copilot', 'PRODUCT_PROMPT');
+    setSessionProvider('session-copilot', 'copilot-account');
+    host.setCodexProxyAuthInjection('env-key');
+    try {
+      const body = { model: row.id, input: [{ role: 'user', content: 'hello' }] };
+      const decision = await host.createModelRoutingTransform()(body, {
+        reqId: 1, method: 'POST', url: '/responses', headers: { 'thread-id': 'thread-copilot' },
+      });
+      expect(decision).toEqual(expect.objectContaining({ localHandler: expect.any(Function) }));
+      await (decision as { localHandler: (input: unknown) => Promise<void> }).localHandler({
+        rawBody: Buffer.from(JSON.stringify(body)), parsedBody: body, res: {},
+      });
+      expect(mockState.createPiProviderFetch).toHaveBeenLastCalledWith(expect.objectContaining({
+        apiKey: token,
+        upstream: `https://api.${account}.githubcopilot.com`,
+        row: expect.objectContaining({ id: row.id, upstream: row.upstream }),
+      }));
+      const nativeOptions = (mockState.createPiProviderFetch.mock.calls as unknown as Array<[{ row: typeof row }]>).at(-1)![0];
+      expect(providerModelAdapterId(nativeOptions.row)).toBe('github-copilot');
+    } finally {
+      clearSessionProvider('session-copilot');
+      setOAuthTokenReader(() => null);
+      setCustomProviders([]);
+    }
   });
 
   it('routes the built-in Anthropic subscription through the bridge with host-owned Claude.ai OAuth', async () => {

@@ -3,8 +3,8 @@ import { modelRecordValue } from './upstream/reasoning-effort';
 import profiles from './upstream-profiles.json';
 import { isPlainObject } from './object';
 
-export type CompatibilityHarness = 'codex' | 'claude-code' | 'pi';
-export type CompatibilityProtocol = 'openai-responses' | 'openai-chat' | 'anthropic' | 'google';
+import type { CompatibilityHarness, CompatibilityProtocol } from './protocol';
+export type { CompatibilityHarness, CompatibilityProtocol } from './protocol';
 /** Execution facts, never inferred from the display name or a user's account identity. */
 export interface CompatibilityRoute {
   harness: CompatibilityHarness;

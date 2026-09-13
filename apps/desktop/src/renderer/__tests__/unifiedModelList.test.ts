@@ -365,3 +365,28 @@ describe('canWriteModelVisibility', () => {
     ).toBe(false);
   });
 });
+
+
+it('enables both native Claude and Pi while leaving Codex compatibility opt-in', () => {
+  const entry = { ...model('anthropic/claude-test'), api: 'anthropic-messages' as const,
+    nativeApi: 'anthropic-messages' as const, defaultEnabled: false };
+  const p = { ...provider, agents: ['claude-code', 'codex', 'pi'] as ProviderView['agents'], models: { 'claude-code': [entry], codex: [entry], pi: [entry] } };
+  const row = buildUnionRows(p)[0]!;
+  expect(modelVisibilityTargets(p, row, true)).toEqual([
+    { agent: 'claude-code', modelId: entry.id },
+    { agent: 'pi', modelId: entry.id },
+  ]);
+  expect(modelVisibilityTargets(p, row, false)).toHaveLength(3);
+});
+
+it('enabling an imported Gemini row only enables Pi even when the supplier exposes three APIs', () => {
+  const entry = { ...model('google/gemini-3.8-flash'), nativeApi: 'google-generative-ai' as const, defaultEnabled: false };
+  const p = { ...provider, agents: ['claude-code', 'codex', 'pi'] as ProviderView['agents'], models: {
+    'claude-code': [{ ...entry, api: 'anthropic-messages' as const }],
+    codex: [{ ...entry, api: 'openai-responses' as const }],
+    pi: [{ ...entry, api: 'openai-completions' as const }],
+  } };
+  const row = buildUnionRows(p)[0]!;
+  expect(modelVisibilityTargets(p, row, true)).toEqual([{ agent: 'pi', modelId: entry.id }]);
+  expect(modelVisibilityTargets(p, row, false)).toHaveLength(3);
+});

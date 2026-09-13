@@ -1,4 +1,5 @@
-import { isOpenAiSubscriptionProvider, type Provider } from '@cindy/model-providers';
+import { isOpenAiSubscriptionProvider } from '@cindy/model-providers/provider-identity';
+import type { Provider } from '@cindy/model-providers/types';
 export type OpenAiAccountProvider = Pick<Provider, 'id' | 'auth'>;
 export function isSessionOpenAiAccount(providerId: string | null | undefined, provider?: OpenAiAccountProvider): boolean {
   return providerId === 'openai' || (!!provider && provider.id === providerId && isOpenAiSubscriptionProvider(provider));

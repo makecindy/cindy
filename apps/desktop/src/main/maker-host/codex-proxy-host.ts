@@ -1,3 +1,6 @@
+import { resolveConversationSessionHeaders, withChatBridgeUserAgent, overrideHeadersCaseInsensitive } from '@cindy/responses-chat-bridge';
+import { providerModelRecord } from '@cindy/model-providers';
+import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
 import { normalizeProviderRequest, normalizeMiniMaxResponsesReasoning } from '@cindy/model-compat';
 import { createCodexResponsesCompatibilityAdapter, sanitizeXaiTools, hasCacheOnlySearchProhibition, sanitizeByteDanceSeedTools, normalizeByteDanceSeedInput, sanitizeByteDanceSeedReasoning, normalizeStrictGatewayHistory, sanitizeDeepSeekV4CustomTools } from '@cindy/model-compat';
 import { peekGrokAccessToken } from './grok-oauth-login.js';
@@ -78,6 +81,7 @@ import {
   resolveSessionRouteDecision,
   resolvePendingSessionRouteDecision,
   buildLocalHandlerHeaders,
+  buildRouteDecision,
   inferProviderIdForModel,
   isHostInjectedAuthSession,
   isUserProviderSession,
@@ -1046,7 +1050,9 @@ function createChatBridgeDecision(
   requestModelOverride?: string,
   reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
-  if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
+  if (!route) return null;
+  const nativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
+  if (route.routing.wireProtocol !== 'openai-chat' && !nativeModel?.api) return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
   const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
   const realModel = rewriteChatBridgeModel(wireModel, stripPrefix);
@@ -1111,6 +1117,31 @@ function createChatBridgeDecision(
       // 只把入站头快照交给 bridge 解析稳定会话 ID(→ x-opencode-session,#4073);bridge 不透传
       // 这些头,凭证与 Codex 账号头仍由 buildLocalHandlerHeaders 的隔离边界管。
       // ctx 在生产路径恒有;既有测试与旧调用方可能省略,按「无入站头」处理即不附加会话头。
+      const actualModel = isPlainObject(body) && typeof body.model === 'string'
+        ? rewriteChatBridgeModel(body.model, stripPrefix) : realModel;
+      const selected = getActiveCatalog().providers.find(p => p.id === providerId)?.models.codex?.find(m => m.id === actualModel);
+      const standard = selected?.api ? invocationModelRecord(selected, route.routing.upstream) : !route.routing.requestPath
+        ? providerModelRecord(actualModel, route.routing.upstream, 'openai-chat') : undefined;
+      if (standard && isPlainObject(body)) {
+        const nativeHeaders = overrideHeadersCaseInsensitive(withChatBridgeUserAgent(Object.fromEntries(Object.entries(headers).filter(([name]) =>
+          !['authorization', 'x-api-key'].includes(name.toLowerCase())))), resolveConversationSessionHeaders(ctx?.headers));
+        if (standard.execution.pi.api === 'anthropic-messages' && (actualModel.endsWith('[1m]')
+          || (isOfficialAnthropicUpstream(standard.upstream) && standard.contextWindow >= 1_000_000))) {
+          appendCommaSeparatedHeaderToken(nativeHeaders, 'anthropic-beta', 'context-1m-2025-08-07');
+        }
+        const nativeFetch = createPiProviderFetch({ row: standard, providerId,
+          // Keep the catalog adapter while honoring the host assigned to this account.
+          upstream: buildRouteDecision(route.routing, null, 'codex', route.apiKey, route.oauthToken)?.upstreamOverride ?? route.routing.upstream,
+          apiKey: nativeBridgeApiKey(headers),
+          headers: nativeHeaders,
+          fetchImpl: async (url, init) => {
+            const response = await outboundFetch(url, init);
+            if (!response.ok && onUpstreamError) onUpstreamError({ status: response.status, body: await readBoundedResponseText(response.clone()) });
+            return response;
+          },
+        });
+        return handlePiProviderRequest(nativeFetch, { ...body, model: actualModel } as import('@cindy/responses-chat-bridge').ResponsesRequest, res);
+      }
       return handler.handle({ parsedBody: body, res, requestHeaders: ctx?.headers });
     },
   };
@@ -1471,7 +1502,8 @@ function createLocalBridgeDecision(
   reasoningEffortOverride?: CodexSubagentRouteSnapshot['reasoningEffort'],
 ): RoutingDecision | null {
   if (!route) return null;
-  if (route.routing.wireProtocol === 'openai-chat') {
+  const nativeModel = getActiveCatalog().providers.find(p => p.id === route.providerId)?.models.codex?.find(m => m.id === (requestModelOverride ?? wireModel));
+  if (route.routing.wireProtocol === 'openai-chat' || (nativeModel?.api && (nativeModel.api !== 'openai-responses' || requiresNativeProviderAuth(invocationModelRecord(nativeModel, route.routing.upstream))))) {
     const decision = createChatBridgeDecision(
       route,
       instructions,
@@ -2653,11 +2685,13 @@ export function createModelRoutingTransform(
       : sessionId
         ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
         : null;
+    const selectedModel = getActiveCatalog().providers.find(p => p.id === explicitProviderId)?.models.codex?.find(m => m.id === model);
     const selectedUsesLocalBridge =
       ctx.method === 'POST'
       && Boolean(model)
       && (
-        selectedRouting?.wireProtocol === 'openai-chat'
+        (selectedModel?.api && (selectedModel.api !== 'openai-responses' || (selectedRouting && requiresNativeProviderAuth(invocationModelRecord(selectedModel, selectedRouting.upstream)))))
+        || selectedRouting?.wireProtocol === 'openai-chat'
         || selectedRouting?.wireProtocol === 'anthropic-messages'
       );
     if (explicitProviderId === 'cindy-local-ollama') {

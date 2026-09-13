@@ -433,7 +433,7 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
  * per-(provider, agent) 的 `models[agent].supportsFastMode`(唯一真相),控制端直接从隧道带来的
  * `models` 现查(见 ModelSelector），不再读 routing；routing 只承载上述两项跨端展示/可用性字段。
  */
-type DisplayWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages';
+type DisplayWireProtocol = 'openai-chat' | 'openai-responses' | 'anthropic-messages' | 'google-generative-ai';
 
 function projectRoutingForDisplay(
   routing: unknown,
@@ -449,6 +449,7 @@ function projectRoutingForDisplay(
     const wireProtocol: DisplayWireProtocol | undefined =
       route?.wireProtocol === 'openai-chat' ||
       route?.wireProtocol === 'openai-responses' ||
+      route?.wireProtocol === 'google-generative-ai' ||
       route?.wireProtocol === 'anthropic-messages'
         ? route.wireProtocol
         : route?.authStrategy && route.wireProtocol === undefined

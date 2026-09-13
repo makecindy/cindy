@@ -1,11 +1,13 @@
+import { providerSetupLink, providerPresetOAuth, providerPresetOAuthRuntimes, buildUserProvider } from '@cindy/model-providers';
+import { bindProviderPresetRuntime, providerEndpointBindings, bindProviderEndpoint } from '@cindy/model-providers';
 /**
  * AddProviderWizard —— 「添加供应商」三步向导(2026-07 模型供应商重构)。
  *
  *   Step 1 选择供应商:目录画廊,**一家一张卡**(订阅渠道 = 目录里未连接的 OAuth
  *           供应商;API Key 预设 = 目录 presets 段;自定义端点 = 逃生口,直接打开
- *           完整表单 CustomProviderDialog)。鉴权方式由供应商定义决定,不让用户猜。
- *   Step 2 连接:OAuth 渠道 = 一键授权(复用既有鉴权流,成功即完成,模型走动态
- *           发现链路,无第 3 步);预设 = 名称 + API Key(baseUrl 由预设携带)。
+ *           完整表单 ProviderConnectionDialog)。鉴权方式由供应商定义决定,不让用户猜。
+ *   Step 2 连接:OAuth 渠道 = 一键授权；预设也可用 API Key，配官方获取入口。
+ *           原生订阅保持已有流程，渠道登录后进入模型选择。
  *   Step 3 选择模型(仅预设):自动拉取列模型端点,预设推荐模型预勾;拉取失败
  *           降级为「仅预设推荐模型」仍可完成(不把用户堵死在网络错误上)。
  *
@@ -21,7 +23,7 @@ import { Check, Info, Plus, Search } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
-import { createCustomProvider, deleteCustomProvider, type RuntimeKeys } from '@/lib/customProviders';
+import { createCustomProvider, deleteCustomProvider, updateCustomProvider, providerViewToCustomProviderConfig, type RuntimeKeys } from '@/lib/customProviders';
 import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import { configuredPresetAgents } from '../../../shared/piRuntimeInitialization';
@@ -47,6 +49,8 @@ import { SettingsTextInput } from './SettingsTextInput';
 
 import {
   PROVIDER_MEDIA_FIELDS,
+  providerModelsForRoute,
+  isOpenRouterModelsUrl,
   isLoopbackProviderUrl,
   isProviderRequestPath,
   presetDisplayName,
@@ -102,11 +106,19 @@ function presetRuntimeBaseUrl(
 ): string {
   const runtime = preset.runtimes[agent];
   if (!runtime) return '';
-  return runtime.baseUrlEditable ? (edited[agent] ?? runtime.baseUrl).trim() : runtime.baseUrl;
+  if (!runtime.baseUrlEditable) return runtime.baseUrl;
+  if (edited[agent] !== undefined) return edited[agent]!.trim();
+  for (const [sourceAgent, endpoint] of Object.entries(edited)) {
+    const source = preset.runtimes[sourceAgent as AgentKind];
+    if (!source || !endpoint) continue;
+    const bindings = providerEndpointBindings(source.baseUrl, endpoint.trim());
+    if (bindings && source.baseUrl.includes('{')) return bindProviderEndpoint(runtime.baseUrl, bindings);
+  }
+  return runtime.baseUrl;
 }
 
 function isValidEditablePresetBaseUrl(value: string): boolean {
-  return parseSafePresetHttpUrl(value) !== null;
+  return !/[{}]/.test(value) && parseSafePresetHttpUrl(value) !== null;
 }
 
 function parseSafePresetHttpUrl(value: string): URL | null {
@@ -125,8 +137,8 @@ function isAllowedDiscoveryWireProtocol(
   value: unknown,
 ): value is ProviderModelRouteConfig['wireProtocol'] {
   const supported =
-    value === 'anthropic-messages' || value === 'openai-responses' || value === 'openai-chat';
-  return supported && (agent !== 'claude-code' || value === 'anthropic-messages');
+    value === 'anthropic-messages' || value === 'openai-responses' || value === 'openai-chat' || value === 'google-generative-ai';
+  return supported;
 }
 
 function isDiscoverySourceValidForRuntime(
@@ -164,18 +176,18 @@ function isDiscoverySourceValidForRuntime(
  * runtime(两家无 Anthropic 兼容端点),表单会自动展示实际支持的 runtime。
  */
 const ANTHROPIC_API_MODELS = [
-  { id: 'claude-opus-5', name: 'Claude Opus 5', contextWindow: 1_000_000 },
-  { id: 'claude-sonnet-5', name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
-  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200_000 },
+  { id: 'claude-opus-5', defaultEnabled: true, name: 'Claude Opus 5', contextWindow: 1_000_000 },
+  { id: 'claude-sonnet-5', defaultEnabled: true, name: 'Claude Sonnet 5', contextWindow: 1_000_000 },
+  { id: 'claude-haiku-4-5', defaultEnabled: true, name: 'Claude Haiku 4.5', contextWindow: 200_000 },
 ];
 const OPENAI_API_MODELS = [
-  { id: 'gpt-5.5', name: 'GPT-5.5' },
-  { id: 'gpt-5.4-mini', name: 'GPT-5.4 mini' },
+  { id: 'gpt-5.5', defaultEnabled: true, name: 'GPT-5.5' },
+  { id: 'gpt-5.4-mini', defaultEnabled: true, name: 'GPT-5.4 mini' },
 ];
 const XAI_API_MODELS = [
-  { id: 'grok-4.6', name: 'Grok 4.6', contextWindow: 500_000 },
-  { id: 'grok-4.5', name: 'Grok 4.5', contextWindow: 500_000 },
-  { id: 'grok-4.3', name: 'Grok 4.3', contextWindow: 1_000_000 },
+  { id: 'grok-4.6', defaultEnabled: true, name: 'Grok 4.6', contextWindow: 500_000 },
+  { id: 'grok-4.5', defaultEnabled: true, name: 'Grok 4.5', contextWindow: 500_000 },
+  { id: 'grok-4.3', defaultEnabled: true, name: 'Grok 4.3', contextWindow: 1_000_000 },
 ];
 
 export const OFFICIAL_API_PRESETS: Record<string, ProviderPreset> = {
@@ -361,6 +373,9 @@ export function AddProviderWizard({
   const [apiKey, setApiKey] = useState('');
   const [presetBaseUrls, setPresetBaseUrls] = useState<PresetBaseUrls>({});
   const [saving, setSaving] = useState(false);
+  const savingRef = useRef(false);
+  const oauthDraftRef = useRef<CustomProviderConfig | null>(null);
+  const oauthAttemptRef = useRef(0);
   const [ollamaCanInstall, setOllamaCanInstall] = useState(() =>
     offersManagedOllamaInstall(window.electronAPI.platform),
   );
@@ -419,6 +434,7 @@ export function AddProviderWizard({
         /** 列模型端点上报的上下文窗口,**按 agent 分槽**(同一 id 双端可不同,如
          *  cc=1M / codex=272K);完成创建时按所属 runtime 取值,作为供应商事实单独保存。 */
         contextWindows?: Partial<Record<AgentKind, number>>;
+        discoveredCosts?: Partial<Record<AgentKind, import("@cindy/model-providers").ModelCost>>;
         discoveredMetadata?: Partial<
           Record<AgentKind, import('@cindy/model-providers').ModelMetadata>
         >;
@@ -587,18 +603,33 @@ export function AddProviderWizard({
   const listedLocalPresets = q ? filteredLocalPresets : undetectedLocalPresets;
 
   /**
-   * 拉取请求序号:防过期响应(与 CustomProviderDialog 的 fetchRequestSignature 同模式)。
+   * 拉取请求序号:防过期响应(与 ProviderConnectionDialog 的 fetchRequestSignature 同模式)。
    * 换选供应商 / 返回目录都会推进序号,慢返回的旧请求结果直接丢弃,不污染新预设的勾选清单。
    */
   const fetchSeqRef = useRef(0);
 
+  useEffect(() => () => {
+    oauthAttemptRef.current += 1;
+    if (savingRef.current) return;
+    const draft = oauthDraftRef.current;
+    oauthDraftRef.current = null;
+    if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
+  }, []);
+
   const pickOauth = useCallback((provider: ProviderView) => {
+    const draft = oauthDraftRef.current;
+    oauthDraftRef.current = null;
+    if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
     fetchSeqRef.current += 1;
     setManualModelIds({});
     setSel({ kind: 'oauth', provider });
+    setApiKey('');
     setStep(2);
   }, []);
   const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
+    const draft = oauthDraftRef.current;
+    oauthDraftRef.current = null;
+    if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
     fetchSeqRef.current += 1;
     setManualModelIds({});
     setSel({ kind: 'builtinApiKey', provider });
@@ -606,7 +637,19 @@ export function AddProviderWizard({
     setStep(2);
   }, []);
   const pickPreset = useCallback(
-    (preset: ProviderPreset) => {
+    (preset: ProviderPreset, useApiKey = false) => {
+      const oauth = providerPresetOAuth(preset.id);
+      if (oauth && !useApiKey) {
+        pickOauth({ ...buildUserProvider({
+          id: preset.id, name: preset.name,
+          auth: { method: 'oauth', oauth },
+          runtimes: providerPresetOAuthRuntimes(preset),
+        }), connected: false } as ProviderView);
+        return;
+      }
+      const draft = oauthDraftRef.current;
+      oauthDraftRef.current = null;
+      if (draft) void deleteCustomProvider(draft.id).catch(() => undefined);
       if (
         preset.id === 'lmstudio' &&
         providers.some((p) => p.id === MANAGED_LMSTUDIO_PROVIDER_ID)
@@ -619,17 +662,10 @@ export function AddProviderWizard({
       setSel({ kind: 'preset', preset });
       setName(presetDisplayName(preset, i18n.language));
       setApiKey('');
-      setPresetBaseUrls(
-        Object.fromEntries(
-          configuredPresetAgents(preset).map((agent) => [
-            agent,
-            preset.runtimes[agent]?.baseUrl ?? '',
-          ]),
-        ) as PresetBaseUrls,
-      );
+      setPresetBaseUrls({});
       setStep(2);
     },
-    [i18n.language, onDone, providers],
+    [i18n.language, onDone, providers, pickOauth],
   );
 
   const connectOllama = useCallback(async () => {
@@ -735,16 +771,19 @@ export function AddProviderWizard({
     }
   }, [onDone, t]);
 
-  // ── OAuth 授权(复用既有鉴权流;成功即完成,无第 3 步)────────────────────
+  // ── OAuth 授权（渠道登录后进入模型选择，原生订阅沿用已有流程）────────────────────
   const handleAuthorize = useCallback(
-    async () => {
-      if (!sel || sel.kind !== 'oauth') return;
-      let id = sel.provider.id;
+    async (override?: ProviderView) => {
+      const selected = override ?? (sel?.kind === 'oauth' ? sel.provider : undefined);
+      if (!selected) return;
+      const attempt = ++oauthAttemptRef.current;
+      let id = selected.id;
+      const preset = presets.find(p => p.id === id && providerPresetOAuth(p.id));
       clearGenericDeviceCode();
       setLoggingIn(true);
       try {
         let ok = false;
-        if (id === 'openai' || id === 'anthropic' || id === 'xai') {
+        if (id === 'openai' || id === 'anthropic' || id === 'xai' || preset) {
           const brand = id;
           const native = brand === 'openai' ? 'codex' as const : brand === 'anthropic' ? 'claude' as const : 'xai' as const;
           id = `${brand}-${crypto.randomUUID().slice(0, 8)}`;
@@ -752,8 +791,8 @@ export function AddProviderWizard({
           accountLoginRef.current = login;
           let created = false;
           try {
-            await createCustomProvider({ id, name: sel.provider.name, auth: { method: 'oauth', native },
-              runtimes: brand === 'anthropic'
+            await createCustomProvider({ id, name: selected.name, auth: preset ? { method: 'oauth', oauth: providerPresetOAuth(preset.id)! } : { method: 'oauth', native },
+              runtimes: preset ? providerPresetOAuthRuntimes(preset) : brand === 'anthropic'
                 ? { 'claude-code': { baseUrl: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages', models: [] } }
                 : { codex: { baseUrl: brand === 'openai' ? 'https://chatgpt.com/backend-api/codex' : 'https://api.x.ai/v1', wireProtocol: 'openai-responses', models: [] } },
             }, {});
@@ -783,22 +822,53 @@ export function AddProviderWizard({
             ownedLogin.finish();
           }
         }
+        if (ok && preset) {
+          // Reuse the model picker after login. Credentials stay in Main; only the
+          // discovered, redacted model configuration comes back to the renderer.
+          const snapshot = await window.electronAPI.maker.listProviders();
+          if (oauthAttemptRef.current !== attempt) { await deleteCustomProvider(id); return; }
+          const connected = snapshot.providers.find(p => p.id === id);
+          if (!connected) { await deleteCustomProvider(id); throw new Error('provider_not_found_after_login'); }
+          const config = providerViewToCustomProviderConfig(connected);
+          oauthDraftRef.current = config;
+          const choices: typeof picks = new Map();
+          const recommendedIds = new Set(Object.values(preset.runtimes).flatMap(rt =>
+            rt?.models.filter(m => m.defaultEnabled !== false).map(m => m.id) ?? []));
+          for (const agent of connected.agents) for (const model of connected.models[agent] ?? []) {
+            const recommended = recommendedIds.has(model.id);
+            const existing = choices.get(model.id);
+            choices.set(model.id, { name: model.name, checked: recommended, recommended,
+              agents: [...(existing?.agents ?? []), agent],
+              discoveredMetadata: { ...existing?.discoveredMetadata, [agent]: model.discoveredMetadata },
+              discoveredCosts: { ...existing?.discoveredCosts,
+                [agent]: model.userModelConfig?.discoveredCost ?? model.discoveredCost },
+            });
+          }
+          setSel({ kind: 'preset', preset: { ...preset, runtimes: config.runtimes } });
+          setName(config.name);
+          setPresetBaseUrls(Object.fromEntries(Object.entries(config.runtimes).map(([a, rt]) => [a, rt!.baseUrl])));
+          setPicks(choices);
+          setFetchState({ status: 'done', failed: false, empty: choices.size === 0 });
+          setStep(3);
+          return;
+        }
         if (ok) {
           toast.success(
-            t('settings.providers.wizard.authorizedToast', { name: sel.provider.name }),
+            t('settings.providers.wizard.authorizedToast', { name: selected.name }),
           );
           onDone(id);
         } else {
-          toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
+          toast.error(t('settings.providers.wizard.authorizeFailed', { name: selected.name }));
         }
       } catch {
-        toast.error(t('settings.providers.wizard.authorizeFailed', { name: sel.provider.name }));
+        if (preset && id !== preset.id && !oauthDraftRef.current) await deleteCustomProvider(id).catch(() => undefined);
+        toast.error(t('settings.providers.wizard.authorizeFailed', { name: selected.name }));
       } finally {
         // A cancelled account login may settle after a retry or local login has started.
         if (!accountLoginRef.current && !localLoginRef.current) setLoggingIn(false);
       }
     },
-    [sel, clearGenericDeviceCode, beginGenericOwnedLogin, onDone, t],
+    [sel, presets, clearGenericDeviceCode, beginGenericOwnedLogin, onDone, t],
   );
 
   /**
@@ -806,12 +876,12 @@ export function AddProviderWizard({
    * 都必须能中止 main 侧 login runner,否则浏览器流挂起时用户无法重试。
    */
   const cancelAuthorize = useCallback(() => {
+    oauthAttemptRef.current += 1;
     const localLogin = localLoginRef.current;
     localLoginRef.current = null;
     localLogin?.cancel();
     if (!sel || sel.kind !== 'oauth') return;
-    const id = sel.provider.id;
-    if (id === 'openai' || id === 'anthropic' || id === 'xai') {
+    if (accountLoginRef.current) {
       const login = accountLoginRef.current;
       accountLoginRef.current = null;
       if (login) void window.electronAPI.maker.providerOAuthCancel(login.providerId, { ownerId: login.ownerId, releaseOwner: true });
@@ -821,8 +891,9 @@ export function AddProviderWizard({
     setLoggingIn(false);
   }, [sel, clearGenericDeviceCode, cancelGenericOwnedLogin]);
 
-  /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。 */
+  /** 关闭向导:授权等待中先取消再关,不留挂起的 login runner。保存中不能关，避免删掉正在落盘的 OAuth 连接。 */
   const handleClose = useCallback(() => {
+    if (savingRef.current) return;
     if (loggingIn) cancelAuthorize();
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
@@ -858,7 +929,8 @@ export function AddProviderWizard({
       );
     });
     if (!editableBaseUrlsValid) return;
-    // 预设推荐模型先入清单(预勾);归属 = 预设里列出该模型的全部 runtime。
+    // Curated presets use omission as their legacy default-on; generated catalog additions
+    // explicitly default off. Keep the checkbox and recommendation badge consistent.
     const initial = new Map<
       string,
       {
@@ -867,6 +939,7 @@ export function AddProviderWizard({
         recommended: boolean;
         agents: AgentKind[];
         contextWindows?: Partial<Record<AgentKind, number>>;
+        discoveredCosts?: Partial<Record<AgentKind, import("@cindy/model-providers").ModelCost>>;
         discoveredMetadata?: Partial<
           Record<AgentKind, import('@cindy/model-providers').ModelMetadata>
         >;
@@ -878,17 +951,35 @@ export function AddProviderWizard({
         const existing = initial.get(m.id);
         if (existing) {
           if (!existing.agents.includes(agent)) existing.agents.push(agent);
+          if (m.defaultEnabled !== false) {
+            existing.checked = true;
+            existing.recommended = true;
+          }
           if (m.route && !existing.routes?.[agent]) {
             existing.routes = { ...existing.routes, [agent]: m.route };
           }
         } else {
           initial.set(m.id, {
             name: m.name,
-            checked: true,
-            recommended: true,
+            checked: m.defaultEnabled !== false,
+            recommended: m.defaultEnabled !== false,
             agents: [agent],
             ...(m.route ? { routes: { [agent]: m.route } } : {}),
           });
+        }
+      }
+    }
+    for (const agent of agents) {
+      const runtime = preset.runtimes[agent]!;
+      if (runtime.requestPath) continue;
+      const baseUrl = presetRuntimeBaseUrl(preset, agent, presetBaseUrls);
+      const protocol = runtime.wireProtocol ?? (agent === 'claude-code' ? 'anthropic-messages' : agent === 'pi' ? 'openai-chat' : 'openai-responses');
+      for (const model of providerModelsForRoute(baseUrl, agent === 'pi' ? undefined : protocol)) {
+        const existing = initial.get(model.id);
+        if (existing) {
+          if (!existing.agents.includes(agent)) existing.agents.push(agent);
+        } else {
+          initial.set(model.id, { name: model.name, checked: false, recommended: false, agents: [agent] });
         }
       }
     }
@@ -925,7 +1016,8 @@ export function AddProviderWizard({
     );
     const results = await Promise.all(
       agents.flatMap((agent) => {
-        const rt = preset.runtimes[agent];
+        const originalRuntime = preset.runtimes[agent];
+        const rt = originalRuntime ? bindProviderPresetRuntime(originalRuntime, presetRuntimeBaseUrl(preset, agent, presetBaseUrls)) : undefined;
         if (!rt) {
           return [];
         }
@@ -968,6 +1060,8 @@ export function AddProviderWizard({
             return {
               agent,
               modelsUrl: source.modelsUrl,
+              completeInventory: /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(source.baseUrl)
+                && (!source.modelsUrl || isOpenRouterModelsUrl(source.modelsUrl)),
               route: source.route,
               ok: !!(r.ok && r.models),
               models: r.models ?? [],
@@ -976,6 +1070,7 @@ export function AddProviderWizard({
             return {
               agent,
               modelsUrl: source.modelsUrl,
+              completeInventory: false,
               route: source.route,
               ok: false,
               models: [] as import('@cindy/model-providers').DiscoveredModel[],
@@ -984,6 +1079,17 @@ export function AddProviderWizard({
         });
       }),
     );
+    // A shared endpoint has one inventory, regardless of the consuming harness.
+    // Reuse a successful sibling read if an identical request failed transiently.
+    for (const result of results) {
+      if (result.ok || result.route) continue;
+      const runtime = preset.runtimes[result.agent];
+      const sibling = results.find(other => other.ok && !other.route && other.modelsUrl === result.modelsUrl
+        && presetRuntimeBaseUrl(preset, other.agent, presetBaseUrls) === presetRuntimeBaseUrl(preset, result.agent, presetBaseUrls)
+        && preset.runtimes[other.agent]?.wireProtocol === runtime?.wireProtocol
+        && JSON.stringify(preset.runtimes[other.agent]?.headers ?? {}) === JSON.stringify(runtime?.headers ?? {}));
+      if (sibling) { result.models = sibling.models; result.ok = true; }
+    }
     // 过期响应丢弃:用户已返回 / 换选了其它供应商,旧结果不得合入当前清单。
     if (seq !== fetchSeqRef.current) return;
     const defaultDiscoveredModels = new Set(
@@ -993,6 +1099,13 @@ export function AddProviderWizard({
     );
     setPicks((prev) => {
       const next = new Map(prev);
+      // A successful complete catalog supersedes offline membership, including stale presets.
+      // Failed requests and providers with partial/per-protocol inventories retain their fallback.
+      const complete = results.filter(result => result.ok && result.completeInventory);
+      if (complete.length === results.length && results.length === agents.length) {
+        const available = new Set(complete.flatMap(result => result.models.map(model => model.id)));
+        for (const [id] of next) if (!available.has(id)) next.delete(id);
+      }
       for (const { agent, models, modelsUrl, route } of results) {
         const preservePresetOwnership = !!modelsUrl && splitDiscoveryUrls.has(modelsUrl);
         for (const m of models) {
@@ -1020,10 +1133,14 @@ export function AddProviderWizard({
               mergedAgents !== existing.agents ||
               backfillWindow ||
               discoveredRoute ||
+              existing.name !== m.name ||
+              m.discoveredCost ||
               m.discoveredMetadata
             ) {
               next.set(m.id, {
                 ...existing,
+                name: m.name,
+                ...(m.discoveredCost ? { discoveredCosts: { ...existing.discoveredCosts, [agent]: m.discoveredCost } } : {}),
                 agents: mergedAgents,
                 discoveredMetadata: {
                   ...existing.discoveredMetadata,
@@ -1043,6 +1160,7 @@ export function AddProviderWizard({
           } else if (!preservePresetOwnership) {
             next.set(m.id, {
               name: m.name,
+              ...(m.discoveredCost ? { discoveredCosts: { [agent]: m.discoveredCost } } : {}),
               checked: false,
               recommended: false,
               agents: [agent],
@@ -1141,29 +1259,33 @@ export function AddProviderWizard({
     if (!sel || sel.kind !== 'preset') return;
     const preset = sel.preset;
     const selected = [...picks.entries()]
-      .filter(([, v]) => v.checked)
       .map(([id, v]) => ({
         id,
+        checked: v.checked,
         name: v.name,
         agents: v.agents,
         contextWindows: v.contextWindows,
         discoveredMetadata: v.discoveredMetadata,
+        discoveredCosts: v.discoveredCosts,
         routes: v.routes,
       }));
-    if (selected.length === 0) {
+    if (!selected.some(model => model.checked)) {
       toast.error(t('settings.providers.wizard.noModelSelected'));
       return;
     }
+    const oauthDraft = oauthDraftRef.current;
+    oauthDraftRef.current = null;
+    savingRef.current = true;
     setSaving(true);
     try {
       const existing = new Set(providers.map((p) => p.id));
-      const id =
+      const id = oauthDraft?.id ?? (
         preset.id === 'lmstudio'
           ? MANAGED_LMSTUDIO_PROVIDER_ID
           : uniqueCustomProviderId(
               name.trim() || presetDisplayName(preset, i18n.language),
               existing,
-            );
+            ));
       if (preset.id === 'lmstudio' && existing.has(MANAGED_LMSTUDIO_PROVIDER_ID)) {
         onDone(MANAGED_LMSTUDIO_PROVIDER_ID);
         return;
@@ -1171,10 +1293,11 @@ export function AddProviderWizard({
       const runtimes: CustomProviderConfig['runtimes'] = {};
       const keys: RuntimeKeys = {};
       for (const agent of configuredPresetAgents(preset)) {
-        const rt = preset.runtimes[agent];
+        const originalRuntime = preset.runtimes[agent];
+        const rt = originalRuntime ? bindProviderPresetRuntime(originalRuntime, presetRuntimeBaseUrl(preset, agent, presetBaseUrls)) : undefined;
         if (!rt) continue;
-        // 只写归属该 runtime 的勾选模型;一个模型都没选中的 runtime 整个跳过
-        // (空模型 runtime 无意义,且避免把另一端的模型 id 越界写入)。
+        // 保存该 runtime 的完整目录；勾选控制默认开启，不删除未勾选项。
+        // 独立端点的模型归属仍分开，不能跨端点复制型号。
         const agentModels = selected
           .filter((m) => m.agents.includes(agent))
           .map((m) => {
@@ -1184,13 +1307,16 @@ export function AddProviderWizard({
             return {
               id: m.id,
               name: m.name,
+              defaultEnabled: m.checked,
               discoveredMetadata,
+              ...(m.discoveredCosts?.[agent] ? { discoveredCost: m.discoveredCosts[agent] } : {}),
               ...(presetModel?.mode ? { mode: presetModel.mode } : {}),
               ...(presetModel?.modalities ? { modalities: { input: [...presetModel.modalities.input], output: [...presetModel.modalities.output] } } : {}),
               ...(presetModel?.officialDocs ? { officialDocs: presetModel.officialDocs } : {}),
-              ...(agent === 'pi' && presetModel?.piApi ? { piApi: presetModel.piApi } : {}),
-              ...((presetModel?.route ?? m.routes?.[agent])
-                ? { route: presetModel?.route ?? m.routes?.[agent] }
+              // Known models follow the maintained preset after refresh. Only
+              // independently discovered routes need a saved routing snapshot.
+              ...(!presetModel && m.routes?.[agent]
+                ? { route: m.routes[agent] }
                 : {}),
             };
           });
@@ -1208,10 +1334,12 @@ export function AddProviderWizard({
       }
       if (Object.keys(runtimes).length === 0) {
         toast.error(t('settings.providers.wizard.noModelSelected'));
+        if (oauthDraft) oauthDraftRef.current = oauthDraft;
         return;
       }
-      await createCustomProvider(
+      await (oauthDraft ? updateCustomProvider : createCustomProvider)(
         {
+          ...(oauthDraft ?? {}),
           id,
           name: name.trim() || presetDisplayName(preset, i18n.language),
           ...(preset.authMethod === 'none' ? { auth: { method: 'none' as const } } : {}),
@@ -1226,8 +1354,10 @@ export function AddProviderWizard({
       );
       onDone(id);
     } catch {
+      if (oauthDraft) oauthDraftRef.current = oauthDraft;
       toast.error(t('settings.providers.wizard.createFailed'));
     } finally {
+      savingRef.current = false;
       setSaving(false);
     }
   }, [sel, picks, name, apiKey, presetBaseUrls, providers, onDone, t, i18n.language]);
@@ -1236,7 +1366,7 @@ export function AddProviderWizard({
   // 目录步默认按完整路径显示三步(选择供应商 → 连接 → 选择模型);选中真的
   // 没有第 3 步的两步流程(OAuth 授权即完成、内置 API Key 保存即连接)才收成
   // 两步。未选择时就显示两步会让「选择模型」凭空消失/出现(2026-07-30 用户反馈)。
-  const totalSteps = sel == null || sel.kind === 'preset' ? 3 : 2;
+  const totalSteps = sel == null || sel.kind === 'preset' || (sel.kind === 'oauth' && providerPresetOAuth(sel.provider.id)) ? 3 : 2;
   const stepLabels = [
     t('settings.providers.wizard.stepPick'),
     t('settings.providers.wizard.stepConnect'),
@@ -1517,9 +1647,11 @@ export function AddProviderWizard({
                         })}
                         name={presetDisplayName(p, i18n.language)}
                         meta={t(
-                          p.authMethod === 'none'
-                            ? 'settings.providers.wizard.metaNoAuth'
-                            : 'settings.providers.wizard.metaApiKey',
+                          providerPresetOAuth(p.id)
+                            ? 'settings.providers.wizard.metaLoginOrApi'
+                            : p.authMethod === 'none'
+                              ? 'settings.providers.wizard.metaNoAuth'
+                              : 'settings.providers.wizard.metaApiKey',
                         )}
                         beta={isLocalRuntimeBetaProviderId(p.id)}
                         onClick={() => pickPreset(p)}
@@ -1688,10 +1820,10 @@ export function AddProviderWizard({
                     官方 API 预设表单(填 key),与从目录选预设完全同一条流水线。
                     与「授权」并排的次级描边按钮(White Pill):小灰字形态用户根本
                     注意不到(2026-07-24 实测)。 */}
-                {OFFICIAL_API_PRESETS[sel.provider.id] && (
+                {(OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find(p => p.id === sel.provider.id)) && (
                   <button
                     type="button"
-                    onClick={() => pickPreset(OFFICIAL_API_PRESETS[sel.provider.id])}
+                    onClick={() => pickPreset((OFFICIAL_API_PRESETS[sel.provider.id] ?? presets.find(p => p.id === sel.provider.id))!, true)}
                     disabled={loggingIn}
                     className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:opacity-50"
                     style={{
@@ -1772,6 +1904,17 @@ export function AddProviderWizard({
                   }}
                 />
               </div>
+              {providerSetupLink(sel.preset) && (
+                <a
+                  href={providerSetupLink(sel.preset)!.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-12 underline-offset-2 hover:underline"
+                  style={{ color: 'var(--text-secondary)' }}
+                >
+                  {t(`settings.providers.wizard.setupLink.${providerSetupLink(sel.preset)!.kind}`)}
+                </a>
+              )}
               {presetNeedsApiKey ? (
                 <div className="flex flex-col gap-1.5">
                   <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
@@ -1790,14 +1933,11 @@ export function AddProviderWizard({
               ) : (
                 <InfoLine text={t('settings.providers.wizard.noAuthNote')} />
               )}
-              {/* 官方端点默认只读；本机 / 自托管代理预设可编辑。codex + openai-chat
-                  上游标注「Cindy 桥接」，让用户明确该通道是协议转换而非原生。 */}
               <div className="flex flex-col gap-2">
                 {presetAgents.map((agent) => {
                   const rt = sel.preset.runtimes[agent];
-                  const bridged = agent === 'codex' && rt?.wireProtocol === 'openai-chat';
                   if (rt?.baseUrlEditable) {
-                    const value = presetBaseUrls[agent] ?? rt.baseUrl;
+                    const value = presetRuntimeBaseUrl(sel.preset, agent, presetBaseUrls);
                     const valid = isValidEditablePresetBaseUrl(value.trim());
                     return (
                       <label key={agent} className="flex flex-col gap-1.5">
@@ -1826,38 +1966,14 @@ export function AddProviderWizard({
                             color: 'var(--settings-section-title)',
                           }}
                         />
-                        {bridged && (
-                          <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
-                            {t('settings.providers.wizard.bridgedNote')}
-                          </span>
-                        )}
                       </label>
                     );
                   }
-                  return (
-                    <span
-                      key={agent}
-                      className="truncate text-12"
-                      style={{ color: 'var(--text-tertiary)' }}
-                    >
-                      {AGENT_LABEL[agent]} · {rt?.baseUrl}
-                      {bridged ? ` · ${t('settings.providers.wizard.bridgedNote')}` : ''}
-                    </span>
-                  );
+                  return null;
                 })}
               </div>
               {presetSingleAgentNote && <InfoLine text={presetSingleAgentNote} />}
-              {sel.preset.docsUrl && (
-                <a
-                  href={sel.preset.docsUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-12 underline-offset-2 hover:underline"
-                  style={{ color: 'var(--text-secondary)' }}
-                >
-                  {t('settings.providers.wizard.docsLink')}
-                </a>
-              )}
+
             </div>
           )}
 
@@ -2019,7 +2135,15 @@ export function AddProviderWizard({
           <button
             type="button"
             onClick={() => {
-              if (step === 3) setStep(2);
+              if (savingRef.current) return;
+              if (step === 3) {
+                if (oauthDraftRef.current && sel?.kind === 'preset') {
+                  pickPreset(presets.find(p => p.id === sel.preset.id) ?? sel.preset);
+                } else setStep(2);
+              }
+              else if (step === 2 && sel?.kind === 'preset' && providerPresetOAuth(sel.preset.id)) {
+                pickPreset(sel.preset);
+              }
               else if (step === 2) {
                 // 返回目录前中止等待中的授权,不留挂起的 login runner;
                 // 同时推进拉取序号,让在途的旧模型请求结果作废。
@@ -2041,7 +2165,8 @@ export function AddProviderWizard({
             <button
               type="button"
               onClick={handleClose}
-              className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+              disabled={saving}
+              className="flex h-9 items-center justify-center rounded-full border px-6 text-13 font-medium transition-colors hover:bg-[var(--surface-hover)] disabled:cursor-not-allowed disabled:opacity-50"
               style={{
                 borderColor: 'var(--settings-btn-secondary-border)',
                 color: 'var(--text-primary)',

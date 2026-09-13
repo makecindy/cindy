@@ -2609,6 +2609,19 @@ describe('provider:custom:* CRUD handlers', () => {
 
     await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
       ...oauthConfig,
+      runtimes: {
+        ...oauthConfig.runtimes,
+        codex: { ...oauthConfig.runtimes.codex!, baseUrl: 'https://attacker.example/v1' },
+      },
+    });
+    expect(calls).toEqual(['cancel', 'clear']);
+    expect(removeOAuthCredentials).toHaveBeenCalledWith('openrouter');
+
+    calls.length = 0;
+    removeOAuthCredentials.mockClear();
+    oauthCancel.mockClear();
+    await harness.invoke(MAKER_INVOKE.PROVIDER_CUSTOM_UPDATE, {
+      ...oauthConfig,
       auth: {
         method: 'oauth',
         oauth: {
@@ -4401,4 +4414,30 @@ describe('provider connection management', () => {
     expect(deps.oauthLogout).not.toHaveBeenCalled();
     expect(deps.removeCustomProviderKey).not.toHaveBeenCalled();
   });
+});
+
+
+it.each(['anthropic-messages', 'openai-responses', 'openai-chat', 'google-generative-ai'])('preserves %s discovery through the Claude IPC entry', async wireProtocol => {
+  const harness = new IpcHarness();
+  const fetchModels = vi.fn(async () => ({ ok: true as const, models: [] }));
+  registerProviderHandlers(harness, makeDeps({ fetchModels }));
+  await harness.invoke(MAKER_INVOKE.PROVIDER_MODELS_FETCH, {
+    agent: 'claude-code', wireProtocol, baseUrl: 'https://supplier.example/v1', authMethod: 'apiKey', apiKey: 'fixture-key',
+  });
+  expect(fetchModels).toHaveBeenCalledWith(expect.objectContaining({ wireProtocol, agent: 'claude-code' }));
+});
+
+
+it('preserves the actual Vertex API through the probe IPC and rejects unknown SDK names', async () => {
+  const harness = new IpcHarness();
+  const deps = makeDeps();
+  registerProviderHandlers(harness, deps);
+  const spec = { agent: 'pi', baseUrl: 'https://us-central1-aiplatform.googleapis.com',
+    modelId: 'gemini-fixture', authMethod: 'apiKey', apiKey: 'fixture-key',
+    wireProtocol: 'google-generative-ai', api: 'google-vertex', catalogPresetId: 'google-vertex' };
+  await harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION, { kind: 'adhoc', spec });
+  expect(deps.testConnection).toHaveBeenCalledWith({ kind: 'adhoc', spec: expect.objectContaining(spec) });
+  await expect(harness.invoke(MAKER_INVOKE.PROVIDER_TEST_CONNECTION,
+    { kind: 'adhoc', spec: { ...spec, api: 'invented-sdk' } })).rejects.toThrow(/INVALID_PARAMS/);
+  expect(deps.testConnection).toHaveBeenCalledOnce();
 });

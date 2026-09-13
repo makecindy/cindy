@@ -114,8 +114,8 @@ vi.mock('@/state/modelVisibilityPrefs', () => ({
   useModelVisibilityVersion: () => 0,
 }));
 
-vi.mock('@/components/settings/CustomProviderDialog', () => ({
-  CustomProviderDialog: (props: unknown) => {
+vi.mock('@/components/settings/ProviderConnectionDialog', () => ({
+  ProviderConnectionDialog: (props: unknown) => {
     customDialogSpy(props);
     return React.createElement('div', { 'data-testid': 'custom-provider-dialog-stub' });
   },
@@ -705,7 +705,7 @@ describe('ProvidersSection — 深链定位', () => {
     },
   );
 
-  it('自定义供应商深链会打开编辑表单并定位模型上下文窗口', async () => {
+  it('自定义供应商深链定位统一模型列表，不打开连接编辑器', async () => {
     providersState.providers = [
       makeProvider('custom-provider', {
         name: 'Custom Provider',
@@ -728,14 +728,8 @@ describe('ProvidersSection — 深链定位', () => {
     ];
     renderAt('?tab=providers&connect=custom-provider&model=custom-model&agent=codex');
 
-    expect(await screen.findByTestId('custom-provider-dialog-stub')).not.toBeNull();
-    expect(customDialogSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        focusModelId: 'custom-model',
-        focusAgent: 'codex',
-        initial: expect.objectContaining({ id: 'custom-provider' }),
-      }),
-    );
+    await waitFor(() => expect(document.querySelector('[data-deep-link-target="true"]')).not.toBeNull());
+    expect(customDialogSpy).not.toHaveBeenCalled();
     await waitFor(() => expect(screen.getByTestId('search').textContent).toBe('?tab=providers'));
   });
 

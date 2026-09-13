@@ -208,6 +208,19 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
     decision: { headerOverride: { 'x-api-key': 'k' } },
   };
 
+  it.each(['openai-chat', 'openai-responses', 'google-generative-ai'] as const)(
+    '%s wire is unsupported on remote Claude Code',
+    async (wireProtocol) => {
+      resolveProviderRouteDecision.mockResolvedValue({
+        ...base,
+        routing: { upstream: 'https://x/v1', authStrategy: 'api-key-header', wireProtocol },
+      });
+      await expect(resolveRemoteClaudeRoute({ providerId: 'p', model: 'm' })).rejects.toThrow(
+        /REMOTE_PROVIDER_UNSUPPORTED/,
+      );
+    },
+  );
+
   it('自定义 requestPath → REMOTE_PROVIDER_UNSUPPORTED', async () => {
     resolveProviderRouteDecision.mockResolvedValue({
       ...base,
