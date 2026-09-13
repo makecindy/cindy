@@ -104,6 +104,7 @@ import {
   chatEligibleSourcesForModel,
   actualSourceIdForModel,
   effectiveSourceIdForModel,
+  findCatalogModel,
   getModel,
   modelSupportsFastMode,
   providerOffersModel,
@@ -3395,10 +3396,18 @@ export function ModelSelector({
   );
 
   const routeProvider = currentProviderId ? providers.find((p) => p.id === currentProviderId) : undefined;
-  const routeModel = routeProvider && agentKind ? getModel(routeProvider, modelId, agentKind) : undefined;
+  const routeModel =
+    routeProvider && agentKind ? findCatalogModel(routeProvider, modelId, agentKind) : undefined;
+  const sameIdProviderCount = agentKind
+    ? providers.filter((provider) => providerOffersModel(provider, modelId, agentKind)).length
+    : 0;
+  // 显式来源暂时不在目录里时，只允许无歧义的兼容兜底；同 ID 跨来源若继续取拍平列表，
+  // pill 会稳定借到首个来源的名称/能力，和用户实际选中的路由相矛盾（#4123）。
   const currentModel = routeModel
     ? { ...routeModel, displayName: routeModel.name, id: modelId }
-    : visibleModels.find((m) => m.id === modelId);
+    : currentProviderId && sameIdProviderCount > 1
+      ? undefined
+      : visibleModels.find((m) => m.id === modelId);
   // 已保存模型即使隐藏、断开或下架，实际任务仍保留模型 ID；偏好字段可通过
   // unknownModelLabel 提供诊断文案。没有保存选择的入口才显示选择模型占位符。
   // unknown label 空串/全空白按缺省处理(否则 ?? 不回落,trigger 渲染成空白)。
@@ -3498,7 +3507,7 @@ export function ModelSelector({
   const activeThinkingToggle =
     currentAgentKind === 'pi' &&
     !!triggerProvider &&
-    getModel(triggerProvider, modelId, currentAgentKind)?.thinkingToggle === true;
+    findCatalogModel(triggerProvider, modelId, currentAgentKind)?.thinkingToggle === true;
   const showEffort =
     !fallbackOption?.active &&
     efforts.length > 0 &&
@@ -3526,14 +3535,14 @@ export function ModelSelector({
   // 缺省回落来源供应商标 —— 与列表行、手机版同一套口径(ModelIconMark)。
   const triggerModelIcon =
     triggerActiveProvider && currentAgentKind
-      ? getModel(triggerActiveProvider, modelId, currentAgentKind)?.icon
+      ? findCatalogModel(triggerActiveProvider, modelId, currentAgentKind)?.icon
       : undefined;
   const disconnectedProvider = currentProviderId
     ? providers.find((p) => p.id === currentProviderId)
     : undefined;
   const disconnectedModelIcon =
     disconnectedProvider && currentAgentKind
-      ? getModel(disconnectedProvider, modelId, currentAgentKind)?.icon
+      ? findCatalogModel(disconnectedProvider, modelId, currentAgentKind)?.icon
       : undefined;
   const triggerFastSupported =
     triggerActiveProvider && currentAgentKind

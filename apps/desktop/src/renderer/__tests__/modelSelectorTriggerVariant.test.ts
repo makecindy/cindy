@@ -3037,4 +3037,75 @@ describe('ModelSelector trigger variants', () => {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
     }
   });
+
+  it('does not borrow same-id trigger metadata from another provider', () => {
+    providersRef.providers = [
+      {
+        id: 'kimi-cn',
+        name: 'China source',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'kimi-k3',
+              name: 'China Kimi K3',
+              contextWindow: 262144,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+      {
+        id: 'kimi-global',
+        name: 'Global source',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'kimi-k3',
+              name: 'Global Kimi K3',
+              contextWindow: 262144,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ];
+    visibleModelsRef.models = [
+      {
+        id: 'kimi-k3',
+        displayName: 'Global Kimi K3',
+        contextWindow: 262144,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      },
+    ];
+
+    try {
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'kimi-k3',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'kimi-selected-account',
+          actualRoute: true,
+        }),
+      );
+
+      const trigger = screen.getByRole('button', { name: /Current: kimi-k3/ });
+      expect(trigger.textContent).toContain('kimi-k3');
+      expect(trigger.textContent).not.toContain('Global Kimi K3');
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      visibleModelsRef.models = null;
+    }
+  });
 });
