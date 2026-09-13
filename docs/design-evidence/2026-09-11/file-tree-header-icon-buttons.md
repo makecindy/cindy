@@ -61,6 +61,10 @@ RSB 文件浏览器（会话视图右栏）与 doc 模式侧栏（`#/cc-agent/fi
 按下态反馈、图标变化（EyeOff ↔ Eye）与 tooltip 文案均符合预期；开关打开后
 `node_modules` / `logs` 等目录出现在树里（即本次改动要修的场景）。
 
+2026-09-13 在 `cindy/fierce-goodall-p3@23600c41d` 上重新采集了同规格 4 张
+（RSB / doc × Light / Dark，开关为打开态，树里 `build` / `node_modules` 可见），
+已上传为 PR 评论可见证据（链接见「缺口登记」）。
+
 ## 缺口登记
 
 - **unsupported 禁用态未实机目检**（评审修复轮新增）：该状态只在 device-link 连到不支持
@@ -69,10 +73,12 @@ RSB 文件浏览器（会话视图右栏）与 doc 模式侧栏（`#/cc-agent/fi
   行为（点击不改偏好、树按隐藏态建立）由单测锁定。
 - 远端 SSH 会话未实机验证（无可用远端环境）：远端 `listDir` 的开关透传与
   daemon 事件过滤只在单测层面覆盖，见 PR「未执行的验证」。
-- 截图未上传 PR：GitHub 图片附件端点依赖网页会话，需由人拖拽上传。本地路径
-  `tmp/design-evidence/{rsb,doc}-{light,dark}-flat.png`（gitignore 覆盖的临时目录，
-  栅格不入仓）。上传后可把评论链接回填到本文件。
-- 换肤中间帧未验证：截图前已等主题切换完成（relaunch 后采集），未检查换肤动画时序。
+- 截图已上传 PR：GitHub 图片附件端点依赖网页会话，本次以 fork release asset 作为稳定
+  artifact 承载（`https://github.com/zyjisdog/cindy/releases/tag/design-evidence-4398`），
+  PR 评论入口：<https://github.com/makecindy/cindy/pull/4398#issuecomment-5652260136>。
+  本地同步保留一份 `tmp/design-evidence/{rsb,doc}-{light,dark}-flat.png`（gitignore
+  覆盖的临时目录，栅格不入仓）。
+- 换肤中间帧未验证：截图前已等主题切换完成（设置页切换后等渲染稳定再采集），未检查换肤动画时序。
 - 窗口背景透明（vibrancy），CDP 原图含 `alpha=0` 区域；本目录引用的查看版本已把
   alpha 展平到对应主题表面色上，避免看图工具各自合成底色导致误判明暗。
 
