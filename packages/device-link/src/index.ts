@@ -24,3 +24,4 @@ export * from './remoteDesktopIce.js';
 export * from './remoteDesktopIceConfig.js';
 export * from './remoteClipboard.js';
 export * from './remoteCursor.js';
+export * from './inputDelivery.js';

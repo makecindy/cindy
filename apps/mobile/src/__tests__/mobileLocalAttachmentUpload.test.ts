@@ -101,6 +101,30 @@ describe('isCameraUnavailableOnSimulator', () => {
 });
 
 describe('createMobileLocalAttachmentUploadController', () => {
+  it('bounds a durable handoff whose local preparation never settles, then cleans a late result', async () => {
+    vi.useFakeTimers();
+    try {
+      let finish!: (value: { uri: string }) => void;
+      const cleanupLocalUris = vi.fn(async () => {});
+      const { deps, uploaded } = makeDeps();
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([{ ...candidate('a.jpg'), cleanupLocalUris,
+        resolve: () => new Promise((resolve) => { finish = resolve; }),
+      }], { token: new Promise(() => {}) });
+      const handoff = controller.beginHandoff();
+      const failed = handoff.prepare().catch((error: Error) => error);
+      await vi.advanceTimersByTimeAsync(180_000);
+      expect(await failed).toBeInstanceOf(Error);
+      handoff.release(false);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await controller.waitForIdle()).toEqual({ failedCount: 1 });
+      finish({ uri: 'file:///tmp/late-handoff.jpg' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cleanupLocalUris).toHaveBeenCalledWith(['file:///tmp/late-handoff.jpg']);
+      expect(uploaded).toEqual([]);
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
   it('releases send waiters when credential preparation never settles and preserves the attachment', async () => {
     vi.useFakeTimers();
     try {
@@ -113,6 +137,34 @@ describe('createMobileLocalAttachmentUploadController', () => {
       expect(uploaded).toEqual([]);
       expect(failed).toHaveLength(1);
       expect(pendingSnapshots.at(-1)?.[0]).toMatchObject({ name: 'a.jpg', failed: true });
+      controller.dispose();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it('fences old preparation when the token delay makes the upload deadline expire first', async () => {
+    vi.useFakeTimers();
+    try {
+      let tokenReady!: (value: string) => void;
+      let sourceReady!: (value: { uri: string }) => void;
+      const cleanupLocalUris = vi.fn(async () => {});
+      const original = { ...candidate('a.jpg'), cleanupLocalUris, resolve: vi.fn()
+        .mockImplementationOnce(() => new Promise((resolve) => { sourceReady = resolve; }))
+        .mockResolvedValueOnce({ uri: 'file:///tmp/retry.jpg' }) };
+      const { deps, uploaded } = makeDeps();
+      const controller = createMobileLocalAttachmentUploadController(deps);
+      controller.enqueue([original], { token: new Promise((resolve) => { tokenReady = resolve; }) });
+      await vi.advanceTimersByTimeAsync(100_000);
+      tokenReady('t');
+      await vi.advanceTimersByTimeAsync(80_000);
+      expect(await controller.waitForIdle()).toEqual({ failedCount: 1 });
+      controller.retry('local-attachment-upload-1', { token: 'new-token' });
+      await vi.advanceTimersByTimeAsync(0);
+      await controller.waitForIdle();
+      sourceReady({ uri: 'file:///tmp/old-source.jpg' });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(uploaded).toHaveLength(1);
+      expect(uploaded[0].candidate.uri).toBe('file:///tmp/retry.jpg');
+      expect(cleanupLocalUris).toHaveBeenCalledWith(['file:///tmp/old-source.jpg']);
       controller.dispose();
     } finally { vi.useRealTimers(); }
   });
@@ -851,4 +903,46 @@ describe('in-flight 取消(abort 传递)', () => {
     expect(signals).toHaveLength(2);
     expect(signals[0]).not.toBe(signals[1]);
   });
+  it('hands off prepared bytes without waiting for a network token and fences page disposal', async () => {
+    const token = new Promise<string>(() => undefined);
+    const cleaned: string[] = [];
+    const { deps } = makeDeps();
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([{ ...candidate('a.jpg'), cleanupLocalUris: async (uris) => { cleaned.push(...uris); } }], { token });
+    const handoff = controller.beginHandoff();
+    const sources = await handoff.prepare();
+    expect(sources[0]?.source.uri).toBe('file:///tmp/a.jpg');
+    controller.dispose();
+    expect(cleaned).toEqual([]);
+    handoff.release(true);
+  });
+  it('rolls back a handoff when persistence fails and lets the original upload reach the composer', async () => {
+    const gate = gatedUpload();
+    const { deps, uploaded } = makeDeps({ upload: gate.upload });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([candidate('a.jpg')], { token: 't' });
+    const handoff = controller.beginHandoff(); await handoff.prepare(); await flush();
+    gate.release('a.jpg'); await flush(); expect(uploaded).toHaveLength(0);
+    handoff.release(false); await controller.waitForIdle(); expect(uploaded).toHaveLength(1);
+  });
+  it('discards the old PUT when durable ownership commits even if the PUT completed during copying', async () => {
+    const gate = gatedUpload(); const { deps, uploaded, discarded } = makeDeps({ upload: gate.upload });
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([candidate('a.jpg')], { token: 't' });
+    const handoff = controller.beginHandoff(); await handoff.prepare(); await flush();
+    gate.release('a.jpg'); await flush(); handoff.release(true); await flush();
+    expect(uploaded).toHaveLength(0); expect(discarded).toHaveLength(1);
+  });
+  it('clears the delivery flag and recycles OSS when local staging fails, allowing a later handoff', async () => {
+    const { deps, discarded } = makeDeps();
+    deps.onUploaded = async () => { throw new Error('disk full'); };
+    const controller = createMobileLocalAttachmentUploadController(deps);
+    controller.enqueue([candidate('a.jpg')], { token: 't' });
+    expect((await controller.waitForIdle()).failedCount).toBe(1);
+    expect(discarded).toHaveLength(1);
+    await controller.waitForDelivering();
+    const handoff = controller.beginHandoff();
+    expect(await handoff.prepare()).toHaveLength(1); handoff.release(false);
+  });
+
 });

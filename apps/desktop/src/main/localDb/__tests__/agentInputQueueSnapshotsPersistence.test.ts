@@ -1,19 +1,26 @@
 import Database from 'better-sqlite3';
+import { drizzle } from 'drizzle-orm/better-sqlite3';
 import { describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   getDbClient: vi.fn(),
+  epoch: 1,
 }));
 
 vi.mock('../client/current', () => ({
   getDbClient: mocks.getDbClient,
+  getCurrentDbClientSnapshot: () => ({ client: mocks.getDbClient(), userId: "test", clientEpoch: mocks.epoch }),
 }));
 
 import {
   AgentInputQueueSnapshotTooLargeError,
   awaitAgentInputQueueSnapshotPersistence,
   loadAgentInputQueueSnapshotCounts,
+  loadAgentInputQueueSnapshot,
   saveAgentInputQueueSnapshot,
+  saveCancelledInputDelivery,
+  hasInputDeliveryCancellation,
+  readInputDeliveryReceipts,
 } from '../agentInputQueueSnapshots.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 
@@ -63,6 +70,79 @@ function installDb(
 }
 
 describe('agent input queue snapshot durability boundary', () => {
+  it.each([false, true])('matches restoration when a persisted array contains malformed rows (all malformed: %s)', async (allMalformed) => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec(`
+      CREATE TABLE agent_input_queue_snapshots (session_id TEXT PRIMARY KEY, payload TEXT NOT NULL, updated_at INTEGER);
+      CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, rewind_at INTEGER);
+    `);
+    const sid = `receipt-malformed-${allMalformed}`;
+    const good = allMalformed ? [] : [queued('pending', 'valid'), queued('accepted', 'history')];
+    const payload = JSON.stringify([...good, null, 'legacy row', { clientId: 'bad' }, { clientId: 'removed' }]);
+    sqlite.prepare('INSERT INTO agent_input_queue_snapshots VALUES (?, ?, ?)').run(sid, payload, 1);
+    sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?)').run(sid, 'history', 'user', null);
+    sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?)').run(sid, 'removed', 'message_tombstone', 1);
+    mocks.getDbClient.mockReturnValue({ drizzle: drizzle(sqlite) });
+    try {
+      expect((await loadAgentInputQueueSnapshot(sid)).map((item) => item.clientId)).toEqual(good.map((item) => item.clientId));
+      const expected = [
+        { clientId: 'valid', state: allMalformed ? 'unknown' : 'pending' },
+        { clientId: 'bad', state: 'unknown' },
+        { clientId: 'history', state: 'accepted' },
+        { clientId: 'removed', state: 'removed' },
+      ];
+      await expect(readInputDeliveryReceipts(sid, expected.map((item) => item.clientId))).resolves.toEqual(expected);
+      await expect(readInputDeliveryReceipts(sid, ['bad'])).resolves.toEqual([{ clientId: 'bad', state: 'unknown' }]);
+      expect(sqlite.prepare('SELECT payload FROM agent_input_queue_snapshots').get()).toEqual({ payload });
+    } finally { sqlite.close(); }
+  });
+  it.each(['settled', 'pending', 'receipt-retry'] as const)('does not let %s cancellation replace a failed snapshot boundary', async (timing) => {
+    const sid = `snapshot-cancel-${timing}`;
+    const failure = new Error('snapshot failed');
+    const gate = deferred<void>();
+    const snapshotWrite = vi.fn().mockImplementationOnce(() => gate.promise).mockResolvedValue(undefined);
+    const cancelWrite = vi.fn().mockResolvedValue(undefined);
+    if (timing === 'receipt-retry') cancelWrite.mockRejectedValueOnce(new Error('cancel failed'));
+    const select = vi.fn(() => ({ from: () => ({ where: async () => [{ role: 'message_tombstone' }] }) }));
+    mocks.getDbClient.mockReturnValue({ drizzle: {
+      insert: () => ({ values: () => ({ onConflictDoUpdate: snapshotWrite, onConflictDoNothing: cancelWrite }) }),
+      select,
+    } });
+    const snapshot = saveAgentInputQueueSnapshot(sid, [queued()]);
+    const rejectedSnapshot = expect(snapshot).rejects.toBe(failure);
+    if (timing !== 'pending') { gate.reject(failure); await rejectedSnapshot; }
+    const cancel = saveCancelledInputDelivery(sid, 'cancelled-other');
+    if (timing === 'pending') { gate.reject(failure); await rejectedSnapshot; }
+    if (timing === 'receipt-retry') await expect(cancel).rejects.toThrow('cancel failed');
+    else await expect(cancel).resolves.toBe(true);
+    await expect(awaitAgentInputQueueSnapshotPersistence(sid)).rejects.toBe(failure);
+    const priorReads = select.mock.calls.length;
+    await expect(readInputDeliveryReceipts(sid, ['client-queued'])).rejects.toBe(failure);
+    expect(select.mock.calls.length).toBe(priorReads);
+    expect(cancelWrite).toHaveBeenCalledTimes(timing === 'receipt-retry' ? 2 : 1);
+    await saveAgentInputQueueSnapshot(sid, [queued()]);
+    await expect(awaitAgentInputQueueSnapshotPersistence(sid)).resolves.toBeUndefined();
+  });
+
+  it('rejects through Promise handlers when the database owner is unavailable', async () => {
+    mocks.getDbClient.mockImplementation(() => { throw new Error('DbClient not ready'); });
+    try {
+      const operations = [
+        () => saveAgentInputQueueSnapshot('owner-unavailable', [queued()]),
+        () => saveCancelledInputDelivery('owner-unavailable', 'client-1'),
+        () => awaitAgentInputQueueSnapshotPersistence('owner-unavailable'),
+        () => readInputDeliveryReceipts('owner-unavailable', ['client-1']),
+      ];
+      for (const operation of operations) {
+        const cleanup = vi.fn();
+        await operation().catch(cleanup);
+        expect(cleanup).toHaveBeenCalledWith(expect.objectContaining({ message: 'DbClient not ready' }));
+      }
+    } finally {
+      mocks.getDbClient.mockReset();
+    }
+  });
+
   it('waits for the current session write and resolves after the DB operation', async () => {
     const gate = deferred<void>();
     const { onConflictDoUpdate } = installDb({ write: () => gate.promise });
@@ -238,4 +318,105 @@ describe('agent input queue snapshot durability boundary', () => {
       'db unavailable',
     );
   });
+  it('does not erase a snapshot when cancellation persistence fails, and retries the intent first', async () => {
+    let failing = true;
+    const inserted: Array<Record<string, unknown>> = [];
+    const insert = vi.fn(() => ({ values: (row: Record<string, unknown>) => ({
+      onConflictDoNothing: async () => {
+        if (failing) throw new Error('disk full');
+        inserted.push(row);
+      },
+      onConflictDoUpdate: async () => { inserted.push(row); },
+    }) }));
+    const where = vi.fn(async () => undefined);
+    mocks.getDbClient.mockReturnValue({ drizzle: { insert, delete: () => ({ where }) } });
+    await expect(saveCancelledInputDelivery('cancel-retry', 'cancelled-id')).rejects.toThrow('disk full');
+    await expect(saveAgentInputQueueSnapshot('cancel-retry', [])).rejects.toThrow('disk full');
+    expect(where).not.toHaveBeenCalled();
+    failing = false;
+    await saveAgentInputQueueSnapshot('cancel-retry', []);
+    expect(inserted).toEqual([expect.objectContaining({ role: 'message_tombstone', content: 'null', clientId: 'cancelled-id' })]);
+    expect(where).toHaveBeenCalledOnce();
+    expect(hasInputDeliveryCancellation('cancel-retry', 'cancelled-id')).toBe(true);
+    await expect(awaitAgentInputQueueSnapshotPersistence('cancel-retry')).resolves.toBeUndefined();
+  });
+  it.each(['user', 'rewound-user', 'message_tombstone', 'absent'])('only confirms cancellation when its durable namespace is sealed: %s', async (existing) => {
+    const sqlite = new Database(':memory:');
+    sqlite.exec('CREATE TABLE messages (session_id TEXT, client_id TEXT, role TEXT, content TEXT, rewind_at INTEGER, UNIQUE(session_id, client_id))');
+    const sid = `cancel-conflict-${existing}`;
+    const cid = 'same-client-id';
+    if (existing !== 'absent') sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?)')
+      .run(sid, cid, existing === 'rewound-user' ? 'user' : existing, 'original', existing === 'rewound-user' ? 1 : null);
+    mocks.getDbClient.mockReturnValue({ drizzle: {
+      insert: () => ({ values: (row: Record<string, unknown>) => ({ onConflictDoNothing: async () => {
+        sqlite.prepare('INSERT INTO messages VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING')
+          .run(row.sessionId, row.clientId, row.role, row.content, row.rewindAt);
+      } }) }),
+      select: () => ({ from: () => ({ where: async () => sqlite.prepare('SELECT role FROM messages WHERE session_id = ? AND client_id = ?').all(sid, cid) }) }),
+    } });
+    try {
+      const expected = existing === 'absent' || existing === 'message_tombstone';
+      // Register synchronously to stop a late enqueue while the durable claim is checked.
+      const cancellation = saveCancelledInputDelivery(sid, cid);
+      expect(hasInputDeliveryCancellation(sid, cid)).toBe(true);
+      expect(await cancellation).toBe(expected);
+      // The replay fence stays closed even when executed history beat cancellation.
+      expect(hasInputDeliveryCancellation(sid, cid)).toBe(true);
+      // A repeated cancellation has the same answer and never replaces executed content.
+      expect(await saveCancelledInputDelivery(sid, cid)).toBe(expected);
+      expect(sqlite.prepare('SELECT content FROM messages').get()).toEqual({ content: existing === 'absent' ? 'null' : 'original' });
+    } finally { sqlite.close(); }
+  });
+  it.each(['missing', 'read-error'])('does not acknowledge an unverified cancellation and can retry: %s', async (failure) => {
+    const where = vi.fn();
+    if (failure === 'missing') where.mockResolvedValueOnce([]);
+    else where.mockRejectedValueOnce(new Error('db unavailable'));
+    where.mockResolvedValue([{ role: 'message_tombstone' }]);
+    mocks.getDbClient.mockReturnValue({ drizzle: {
+      insert: () => ({ values: () => ({ onConflictDoNothing: async () => undefined }) }),
+      select: () => ({ from: () => ({ where }) }),
+    } });
+    const sid = `cancel-unverified-${failure}`;
+    await expect(saveCancelledInputDelivery(sid, 'id')).rejects.toThrow();
+    expect(hasInputDeliveryCancellation(sid, 'id')).toBe(true);
+    await expect(saveCancelledInputDelivery(sid, 'id')).resolves.toBe(true);
+  });
+  it('fences queued writes at an account switch without writing to the next account', async () => {
+    const gate = deferred<void>();
+    const first = installDb({ write: () => gate.promise });
+    const write1 = saveAgentInputQueueSnapshot('owner-switch', [queued('a')]);
+    const write2 = saveAgentInputQueueSnapshot('owner-switch', [queued('b')]);
+    await Promise.resolve();
+    mocks.epoch += 1;
+    const second = installDb();
+    gate.resolve();
+    await expect(write1).rejects.toThrow('DbClient not ready');
+    await expect(write2).rejects.toThrow('DbClient not ready');
+    expect(first.insert).toHaveBeenCalledOnce();
+    expect(second.insert).not.toHaveBeenCalled();
+    await saveAgentInputQueueSnapshot('owner-switch', [queued('new-owner')]);
+    expect(second.insert).toHaveBeenCalledOnce();
+  });
+  it('reads the queue before history so a queue-to-message transfer cannot appear unknown', async () => {
+    const events: string[] = [];
+    const where = vi.fn()
+      .mockImplementationOnce(async () => { events.push('queue'); return [{ payload: JSON.stringify([queued('a', 'id-a')]) }]; })
+      .mockImplementationOnce(async () => { events.push('history'); return [
+        { clientId: 'id-a', role: 'user', rewindAt: null },
+        { clientId: 'id-b', role: 'message_tombstone', rewindAt: 123 },
+      ]; });
+    mocks.getDbClient.mockReturnValue({ drizzle: { select: () => ({ from: () => ({ where }) }) } });
+    expect(await readInputDeliveryReceipts('receipt-transfer', ['id-a', 'id-b', 'id-c'])).toEqual([
+      { clientId: 'id-a', state: 'accepted' }, { clientId: 'id-b', state: 'removed' }, { clientId: 'id-c', state: 'unknown' },
+    ]);
+    expect(events).toEqual(['queue', 'history']);
+  });
+  it.each(['{invalid', '{}', 'null'])('does not report unknown when the delivery snapshot is corrupt (%s) or its database read fails', async (payload) => {
+    const where = vi.fn().mockResolvedValue([{ payload }]);
+    mocks.getDbClient.mockReturnValue({ drizzle: { select: () => ({ from: () => ({ where }) }) } });
+    await expect(readInputDeliveryReceipts('receipt-invalid', ['id-a'])).rejects.toThrow();
+    where.mockRejectedValueOnce(new Error('db unavailable'));
+    await expect(readInputDeliveryReceipts('receipt-invalid', ['id-a'])).rejects.toThrow('db unavailable');
+  });
+
 });

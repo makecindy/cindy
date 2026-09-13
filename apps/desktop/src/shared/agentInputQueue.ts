@@ -221,6 +221,8 @@ export interface AgentInputQueuedMessage {
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
   autoReviewUserText?: string;
   clientId: string;
+  /** Opt-in: a cancelled delivery ID must never become a fresh enqueue on reconnect. */
+  durableDelivery?: true;
   text: string;
   /**
    * Host-owned receipt for the first acceptance boundary.  The controlled

@@ -82,6 +82,7 @@ import {
 import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+  readInputDeliveryClientIds,
 } from '@cindy/device-link';
 import { and, desc, eq, gte, inArray, isNull, lt, sql } from 'drizzle-orm';
 import { applyScheduledModelSelection, ScheduledModelSelectionBusyError, type ScheduledModelSelection, type ScheduledModelSelectionLease } from './scheduledModelSelection';
@@ -235,10 +236,13 @@ import { createWorkingDirectoryRecovery, isUnavailableFilesystemError } from './
 import { statWorkingDirectory, mkdirWorkingDirectory, realpathWorkingDirectory, findSimilarWorkingDirectory } from '../workdir-probe-host/index.js';
 import { getMessagesForHistory } from '../localDb/chatHistoryReader.js';
 import {
-  awaitAgentInputQueueSnapshotPersistence,
+  awaitAgentInputQueueSnapshotPersistence as awaitQueuedSnapshotWrite,
   loadAgentInputQueueSnapshot,
   loadAgentInputQueueSnapshotCounts,
   saveAgentInputQueueSnapshot,
+  saveCancelledInputDelivery,
+  readInputDeliveryReceipts,
+  hasInputDeliveryCancellation,
 } from '../localDb/agentInputQueueSnapshots.js';
 import {
   ensureDialogueWorkspaceDir,
@@ -13341,6 +13345,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     });
   };
 
+  async function awaitAgentInputQueueSnapshotPersistence(sessionId: string): Promise<void> {
+    inputCoordinator.retryQueueSnapshotPersistence(sessionId);
+    await awaitQueuedSnapshotWrite(sessionId);
+  }
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -13764,6 +13773,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
+      if (item.durableDelivery === true) {
+        void saveCancelledInputDelivery(sessionId, item.clientId).catch((error) => {
+          log.warn('input delivery cancellation persistence failed', { sessionId, error: String(error) });
+        });
+      }
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'discarded');
       discardQueuedAttachmentOwnership(sessionId, item.clientId);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
@@ -14293,6 +14307,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     const normalized: AgentInputQueuedMessage = { ...msg };
     delete normalized.autoReviewUserText;
+    if (normalized.durableDelivery !== true) delete normalized.durableDelivery;
     const refs = requireSessionRefs(normalized.sessionRefs);
     if (!isDeviceLinkInvoke()) {
       // preload/renderer 不属于可信边界，不能直接注入历史正文。
@@ -14585,9 +14600,16 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     };
   };
 
-  ipcMain.handle(MAKER_INVOKE.INPUT_GET_PROJECTION, async (_e, sessionId: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.INPUT_GET_PROJECTION, async (_e, sessionId: unknown, options?: unknown) => {
     const sid = requireSessionId(sessionId);
     const remote = isDeviceLinkInvoke();
+    if (!remote) assertTrustedAppRendererEvent(_e);
+    let deliveryClientIds: string[] | undefined;
+    try {
+      deliveryClientIds = readInputDeliveryClientIds(options);
+    } catch {
+      throwIpcError('INVALID_PARAMS', 'Invalid deliveryClientIds');
+    }
     assertRemoteInputClearNotInFlight(sid, remote);
     // The queue snapshot is process-local, but the clear boundary is durable.
     // Hydrate it for both renderer and device-link callers before restoring the
@@ -14601,9 +14623,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 崩溃恢复(issue #761):renderer 打开会话首次取 projection 前,先把持久化的
     // 排队输入读回内存态,返回值即含恢复后的队列,不依赖 push 补发。
     // 失败时仍返回当前内存态 projection(宁可漏恢复也不阻塞会话打开)。
-    await inputCoordinator.ensureQueueRestored(sid).catch(() => undefined);
+    if (deliveryClientIds) await inputCoordinator.ensureQueueRestored(sid);
+    else await inputCoordinator.ensureQueueRestored(sid).catch(() => undefined);
     assertRemoteInputClearNotInFlight(sid, remote);
-    return inputCoordinator.getProjection(sid);
+    if (deliveryClientIds) await awaitAgentInputQueueSnapshotPersistence(sid);
+    const deliveryReceipts = deliveryClientIds
+      ? await readInputDeliveryReceipts(sid, deliveryClientIds)
+      : undefined;
+    assertRemoteInputClearNotInFlight(sid, remote);
+    return {
+      ...inputCoordinator.getProjection(sid),
+      inputDeliveryVersion: 1,
+      ...(deliveryReceipts ? { deliveryReceipts } : {}),
+    };
   });
 
   // device-link 出方向:远程入队消息的 OSS 引用(files[] + persistedContent)在入队前一次性物化成本地
@@ -14617,6 +14649,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const deviceLinkInvoke = isDeviceLinkInvoke();
       if (!deviceLinkInvoke) assertTrustedAppRendererEvent(event);
       const parsed = requireQueuedMessage(item);
+      if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
       assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
       const clearBoundaryPrecondition = readRemoteInputClearBoundaryPrecondition(opts);
       if (!deviceLinkInvoke) await observeLocalInputClearBoundary(sid);
@@ -14664,6 +14697,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // coordinator. Return the current projection before materialising a new
       // copy of its attachments.
       if (inputCoordinator.hasKnownClientId(sid, parsed.clientId)) {
+        if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
         return inputCoordinator.getProjection(sid);
       }
       const materialized = await materializeQueuedOssAttachmentsDeferred(sid, parsed);
@@ -14704,6 +14738,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         assertCurrentInputGeneration();
         assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
 
+        if (parsed.durableDelivery) {
+          await awaitAgentInputQueueSnapshotPersistence(sid);
+          const persisted = await remoteInputClientIdWasPersisted(sid, parsed.clientId);
+          assertCurrentInputGeneration();
+          assertRemoteInputClearNotInFlight(sid, deviceLinkInvoke);
+          if (persisted || hasInputDeliveryCancellation(sid, parsed.clientId)) {
+            await materialized.cleanupBeforeAcceptance?.();
+            if (attachmentOwnerId) await discardSpecificQueuedAttachmentOwnership(sid, parsed.clientId, attachmentOwnerId);
+            await awaitAgentInputQueueSnapshotPersistence(sid);
+            return inputCoordinator.getProjection(sid);
+          }
+        }
+
         // 「继续任务」durable ack 延后到 vendor dispatch 成功（onDispatchedUserTurn）：
         // 排队可取消时旧中断提示必须能恢复；accepted 但仍可能 cancelled-before-dispatch
         // 时也不能提前 ack。续跑项本身由 coordinator 插到队首（普通输入仍 FIFO）。
@@ -14724,6 +14771,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             await materialized.cleanupBeforeAcceptance?.();
             await discardSpecificQueuedAttachmentOwnership(sid, parsed.clientId, attachmentOwnerId);
           }
+          if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
           return projection;
         }
         acceptedByCoordinator = true;
@@ -14732,6 +14780,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         }
         markQueuedAttachmentDurableAfterSnapshot(sid, parsed.clientId, attachmentOwnerId);
         commitAutoTitle();
+        if (parsed.durableDelivery) await awaitAgentInputQueueSnapshotPersistence(sid);
         return projection;
       } catch (err) {
         if (!acceptedByCoordinator) {
@@ -15078,11 +15127,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const sid = requireSessionId(sessionId);
       await assertRemoteInputControlBoundary(sid, isDeviceLinkInvoke(), opts);
       const cid = requireClientId(clientId);
+      const durable = !!opts && typeof opts === 'object' && (opts as { durableDelivery?: unknown }).durableDelivery === true;
+      const before = inputCoordinator.getProjection(sid);
+      if (durable && (before.steeringQueueClientIds.includes(cid)
+        || (!before.pendingQueue.some((item) => item.clientId === cid)
+          && inputCoordinator.hasKnownClientId(sid, cid)))) {
+        // Once drain or steer owns the item, removal cannot cancel its in-flight persistence.
+        // Never insert a tombstone in front of that user row.
+        return { ...before, inputDeliveryCancelled: false };
+      }
+      // Register the intent and remove synchronously before drain can take a pending item.
+      const cancellation = durable ? saveCancelledInputDelivery(sid, cid) : undefined;
       const result = inputCoordinator.remove(sid, cid);
+      const inputDeliveryCancelled = await cancellation;
+      await awaitAgentInputQueueSnapshotPersistence(sid);
       if (!inputCoordinator.hasPendingQueuedWork(sid)) {
         getAgentIslandService()?.notifyQueueEmptied(sid);
       }
-      return result;
+      return durable ? { ...result, inputDeliveryCancelled: inputDeliveryCancelled === true } : result;
     },
   );
 

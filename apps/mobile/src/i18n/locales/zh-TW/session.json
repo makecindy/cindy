@@ -502,5 +502,14 @@
     "noExtraDirsSummary": "當前沒有附加目錄",
     "attachmentUploadFailed": "附件上傳失敗，可重試或刪除這條訊息。",
     "authGateHint": "{{agent}} 在這臺電腦上還沒有已連線的模型供應商，傳送會失敗。請在電腦端 {{appName}} 的「設定 → 模型供應商」完成配置。"
+  },
+  "outbox": {
+    "legacyPlanRecovery": "這臺電腦暫不支援在計畫模式下恢復待傳訊息。請關閉計畫模式，或更新電腦上的 Cindy 後重試",
+    "creationRecoveryRequired": "請先重試建立任務，再刪除首則訊息；這則訊息仍保存著後續訊息所需的任務恢復資訊。",
+    "confirmationRequired": "電腦暫時無法確認是否收到這則訊息。請核對訊息記錄，或更新電腦上的 Cindy 後重試。",
+    "taskCleared": "傳送後，這個任務已被清空。訊息仍保存在手機上，請核對後處理。",
+    "restoreFailed": "暫時無法恢復待傳訊息，已保存的內容沒有刪除。請重新啟動 App 後重試。",
+    "recoveryTarget": "恢復這個任務時請保留原來的電腦，後續訊息仍保存在手機上。",
+    "taskAlreadyCreated": "電腦上已建立這個任務，已保存的訊息會在原任務中繼續傳送。"
   }
 }

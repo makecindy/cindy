@@ -29,12 +29,15 @@ describe('send enqueue weak-network retry ordering', () => {
     return loops;
   };
 
-  it('重试门槛必须要求可安全重发的传输错误且非 in-flight(send 与 outbox 两条路径)', () => {
+  it('重试门槛必须要求可安全重发的传输错误且非 in-flight(兼容直发路径)', () => {
     expect(source).toContain("import { isInFlightDeviceLinkError } from '@cindy/device-link';");
     expect(source).toContain("code === 'NOT_CONNECTED' || code === 'BACKPRESSURE'");
     expect(source).toContain("formatted.includes('[BACKPRESSURE]')");
     const loops = extractRetryLoops();
-    expect(loops).toHaveLength(2);
+    expect(loops).toHaveLength(1);
+    const delivery = readFileSync(resolve(process.cwd(), 'src/session/durableOutboxDelivery.ts'), 'utf8');
+    expect(delivery).toContain('record.retrySafe && projection.inputDeliveryVersion === 1');
+    expect(delivery.indexOf('const projection = await deps.projection(record)')).toBeLessThan(delivery.indexOf('await deps.enqueue(record)'));
     for (const loopBody of loops) {
       expect(loopBody).toContain('|| isInFlightDeviceLinkError(err)');
       expect(loopBody).toContain('|| !isRetryableEnqueueTransportError(err)');

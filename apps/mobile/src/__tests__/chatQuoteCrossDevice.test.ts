@@ -28,8 +28,8 @@ describe('mobile cross-device quote wiring', () => {
     expect(source).toContain('quotesEncoded: quotesEncodedAtSend');
     expect(source).toContain('pastedTextRanges: pastedTextRangesAtSend');
     expect(source).toContain('slashCommandRanges: slashCommandRangesAtSend');
-    expect(source).toContain('quotesEncoded: item.quotesEncoded');
-    expect(source).toContain('restoreOutboxItemsToDraft([item])');
+    expect(readSource('src/session/MobileOutboxBridge.tsx')).toContain('quotesEncoded: item.quotesEncoded');
+    expect(source).toContain('await mobileDurableOutbox.add(record)');
     expect(source).toContain('saveComposerDocumentDraft(\n        draftSessionId,\n        recovery.document,');
     expect(source).toContain('createQueueEditTextState(item)');
     expect(source).toContain('resolveQueueEditTextSubmission(queueEditAtSendStart.textState, documentAtSend)');

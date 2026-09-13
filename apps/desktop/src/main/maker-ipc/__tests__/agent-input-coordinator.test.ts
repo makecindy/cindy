@@ -9334,6 +9334,44 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['q-2']);
   });
 
+  it('retries an unchanged failed snapshot at the durable boundary and deduplicates a successful retry', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-boundary-retry';
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.persistQueueSnapshot.mockRejectedValueOnce(new Error('sqlite busy'));
+    h.coordinator.enqueue(sid, makeItem('q-1', 'keep queued'));
+    await flush();
+    h.persistQueueSnapshot.mockClear();
+    h.persistQueueSnapshot.mockRejectedValueOnce(new Error('still busy'));
+    h.coordinator.retryQueueSnapshotPersistence(sid);
+    await flush();
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['q-1']);
+    h.coordinator.retryQueueSnapshotPersistence(sid);
+    await flush();
+    expect(h.persistQueueSnapshot).toHaveBeenCalledTimes(2);
+    h.coordinator.retryQueueSnapshotPersistence(sid);
+    expect(h.persistQueueSnapshot).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent).not.toHaveBeenCalled();
+  });
+
+  it('does not retry an unrestored snapshot or replay old contents after a newer successful write', async () => {
+    const h = createHarness();
+    const sid = 'snapshot-boundary-current';
+    h.coordinator.retryQueueSnapshotPersistence(sid);
+    expect(h.persistQueueSnapshot).not.toHaveBeenCalled();
+    await h.coordinator.ensureQueueRestored(sid);
+    h.setRunning(true);
+    h.persistQueueSnapshot.mockRejectedValueOnce(new Error('sqlite busy'));
+    h.coordinator.enqueue(sid, makeItem('q-1', 'first'));
+    h.coordinator.enqueue(sid, makeItem('q-2', 'second'));
+    await flush();
+    const writes = h.persistQueueSnapshot.mock.calls.length;
+    h.coordinator.retryQueueSnapshotPersistence(sid);
+    expect(h.persistQueueSnapshot).toHaveBeenCalledTimes(writes);
+    expect(latestSnapshotClientIds(h.persistQueueSnapshot)).toEqual(['q-1', 'q-2']);
+  });
+
   it('includes a dispatching-but-unpersisted head in the snapshot (single queued message window)', async () => {
     const h = createHarness();
     const sid = 'snapshot-active-window';

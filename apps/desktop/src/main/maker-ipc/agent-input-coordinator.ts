@@ -1084,6 +1084,11 @@ export class AgentInputCoordinator {
     return this.toProjection(sessionId, this.getState(sessionId));
   }
 
+  /** Retry a failed current snapshot without rewriting successful or unrestored queues. */
+  retryQueueSnapshotPersistence(sessionId: string): void {
+    this.maybePersistQueueSnapshot(sessionId);
+  }
+
   /**
    * Main-only control snapshot. Queue mutation services need the authoritative
    * item rather than the renderer/device-link projection: projected rows omit
