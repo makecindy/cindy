@@ -52,6 +52,18 @@ const log = scopedLogger('file-service/watch');
 const eventAlwaysIgnore = createEventIgnoreMatcher();
 
 /**
+ * `WATCH_ALWAYS_IGNORE` 的小写集合。
+ *
+ * 按段比较的本地判断必须折叠大小写，与 `ignore` 包（createEventIgnoreMatcher
+ * 消费它，`ignorecase` 默认 true）的口径一致：大小写不敏感卷上 `NODE_MODULES` /
+ * `library` 这类变体在开关打开时可见，若本地比较区分大小写，它们**自身**的事件
+ * 会被恒真层吞掉，行陈旧到手动刷新（评审 P2）。
+ */
+const alwaysIgnoreNamesLower = new Set(
+  (WATCH_ALWAYS_IGNORE as readonly string[]).map((name) => name.toLowerCase()),
+);
+
+/**
  * 路径是否落在「开关打开也永远不推事件」目录的**内部**(不含目录自身)。
  *
  * 为什么不直接问 eventAlwaysIgnore:`ignore` 的目录模式(`node_modules/`)同时
@@ -63,7 +75,7 @@ const eventAlwaysIgnore = createEventIgnoreMatcher();
 function isInsideAlwaysIgnoredDir(relPath: string): boolean {
   const segments = relPath.split('/');
   for (let i = 0; i < segments.length - 1; i += 1) {
-    if ((WATCH_ALWAYS_IGNORE as readonly string[]).includes(segments[i])) return true;
+    if (alwaysIgnoreNamesLower.has(segments[i].toLowerCase())) return true;
   }
   return false;
 }
@@ -76,7 +88,7 @@ function isInsideAlwaysIgnoredDir(relPath: string): boolean {
  */
 function isAlwaysIgnoredDirItself(relPath: string): boolean {
   const last = relPath.slice(relPath.lastIndexOf('/') + 1);
-  return (WATCH_ALWAYS_IGNORE as readonly string[]).includes(last);
+  return alwaysIgnoreNamesLower.has(last.toLowerCase());
 }
 
 export interface RemoteFileTreeEvent {

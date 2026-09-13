@@ -206,6 +206,28 @@ describe('WorkdirWatchManager 过滤开关', () => {
     manager.stopAll();
   });
 
+  /**
+   * 评审 P2（PR #4398 轮五）：恒真层的名字比较必须与 matcher 的大小写口径一致。
+   * `ignore` 包默认 `ignorecase=true`（`NODE_MODULES/` 会被恒真层匹配），而本地按
+   * 段比较若区分大小写，大小写变体目录在开关打开时可见、它**自身**的 rename /
+   * unlink 却被吞掉，行陈旧到手动刷新。
+   */
+  it('大小写变体的恒真目录：自身事件放行、内部事件仍然丢', async () => {
+    const manager = new WorkdirWatchManager((event) => emitted.push(event));
+    await manager.start('/repo', { showIgnoredDirs: true });
+    const record = h.created[0];
+
+    // 目录自身（大小写变体）的事件必须推出去，否则树上的这一行会陈旧。
+    const own = await fireEvent(record, 'change', 'NODE_MODULES');
+    expect(own.map((e) => e.relPath)).toEqual(['NODE_MODULES']);
+
+    // 内部事件仍然被恒真层丢掉（不再增长）。
+    const afterInside = await fireEvent(record, 'change', 'NODE_MODULES/react/index.js');
+    expect(afterInside).toHaveLength(1);
+    expect(afterInside[0].relPath).toBe('NODE_MODULES');
+    manager.stopAll();
+  });
+
   it('工作区 matcher 仍然生效(hidden/ 前缀被丢)', async () => {
     const manager = new WorkdirWatchManager((event) => emitted.push(event));
     await manager.start('/repo', { showIgnoredDirs: true });
