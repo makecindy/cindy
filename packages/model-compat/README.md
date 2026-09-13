@@ -127,7 +127,8 @@ conflicts fail with an explicit error. The updater does not fetch or run upstrea
 An update writes `UPSTREAM-CHANGES.json` with new, changed and deleted paths. Review this report as
 well as the ported diff: a new upstream compatibility module outside the imported closure requires
 an explicit port decision. Sync is a reviewed dependency update, not a promise that upstream can
-change arbitrarily without integration work. Preserve upstream license notices on every update.
+change arbitrarily without integration work. Preserve upstream license notices on every update. Run `pnpm licenses:generate` after updating
+the pinned commit/license so Desktop notices and SPDX inventories follow the same revision.
 
 Run package conformance tests and all affected bridge/host tests, package typechecks and the
 repository's `pnpm test:unit:related` gate before delivery. Original Bun tests are transpiled to
