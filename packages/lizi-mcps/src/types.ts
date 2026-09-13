@@ -298,6 +298,14 @@ export interface MemoryMcpDeps {
   workdir: string;
   getSessionContext?: () => LiziMcpSessionContext;
   /**
+   * 测试注入: 替代默认 resolveMemoryScopeKey (慢 resolver / 缓存未命中窗口)。
+   * 生产不传, withStore 走 maker-core 默认实现 (Codex #2519 3971991054)。
+   */
+  resolveMemoryScopeKey?: (
+    workingDir: string,
+    remoteHostId?: string | null,
+  ) => Promise<string>;
+  /**
    * 搜历史对话 (Hermes 风格). 复用 desktop messages 表挂的 FTS5 索引。
    * 缺省 = host 没启用 → session_search tool 不注册 (跟 art video registry 同模式)。
    */

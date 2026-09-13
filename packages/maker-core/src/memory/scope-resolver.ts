@@ -28,14 +28,15 @@
  * `--show-superproject-working-tree` 只给直接父仓库, 二级 submodule 的父是
  * 另一层 submodule 而不是 worktree — 必须沿 superproject 链走到最外层
  * (linked worktree 或主仓) 再归一, 否则 `git worktree list` 会把 `.git`
- * 元数据目录报成唯一 worktree。
+ * 元数据目录报成唯一 worktree (Codex #2399 P1 / #2519 3974808633)。
  * 非仓库目录由 `.git` 标记上溯预检直接短路, 连 git 进程都不 spawn
  * (hasGitMarkerUpward, 与 rev-parse 上溯语义一致)。
  *
  * 缓存: lizi-mcps withStore 在每次 memory 工具调用都经本函数, 不能每次 spawn
- * git 子进程 — 进程内 Map 缓存 (正/负结果同 TTL, in-flight promise 去重)。
- * TTL 兜底「目录身份在进程生命周期内变化」(目录后变成 worktree 等) 的极端
- * 场景; 归一化本身幂等 (主仓路径再解析返回自身), 缓存不破坏正确性。
+ * git 子进程 — 进程内 Map 缓存, in-flight promise 去重。成功的 git 归一化
+ * (含「探测成功但无需映射」) sticky, 无 TTL: 活跃会话不得在 60s 后因探测
+ * 超时/失败从 canonical 漂回 worktree 路径 (Codex #2519 3968440903)。
+ * 失败/非仓库回落仍用 TTL, 以便目录稍后变成仓库时恢复。
  */
 
 import { execFile } from 'node:child_process';
@@ -43,9 +44,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 
-import { buildMemoryScopeKey, SSH_SCOPE_KEY_PREFIX } from './storage.js';
-
-const BOT_SCOPE_KEY_PREFIX = 'bot:';
+import { buildMemoryScopeKey } from './storage.js';
 
 /** git 探测抽象: 跑一条 git 命令, resolve stdout。失败 (非 git 目录/超时/无 git) reject。 */
 export type GitProbe = (args: string[], cwd: string) => Promise<string>;
@@ -125,31 +124,45 @@ export async function resolveMemoryScopeKey(
   // 远端路径是远端机器上的字符串, 控制端不解析远端 git。
   if (remoteHostId) return buildMemoryScopeKey(workingDir, remoteHostId);
   if (!workingDir) return workingDir;
-  // 已经是复合键 (bot: / ssh:) 时不得再当本地路径做 git worktree 归一化。
-  // Bot scope 由 host 显式注入; SSH 复合键若被二次传入同样原样透传。
-  if (workingDir.startsWith(BOT_SCOPE_KEY_PREFIX) || workingDir.startsWith(SSH_SCOPE_KEY_PREFIX)) {
-    return workingDir;
-  }
 
   const execGit = deps?.execGit;
   const now = deps?.now ?? (() => Date.now());
-  // Windows 路径大小写不敏感, 缓存 key 统一小写 (返回值保留原始大小写)。
-  const cacheKey = process.platform === 'win32' ? workingDir.toLowerCase() : workingDir;
+  // Windows: 大小写不敏感 + 正反斜杠/UNC 形态先收成稳定 key, 避免同一目录打两轮 git。
+  const cacheKey =
+    process.platform === 'win32'
+      ? normalizeWindowsLocalScopeKey(workingDir).toLowerCase()
+      : workingDir;
   const hit = scopeKeyCache.get(cacheKey);
   if (hit && hit.expiresAt > now()) return hit.value;
 
-  const value = (async () => {
+  const entry: CacheEntry = {
+    value: Promise.resolve(finalizeLocalScopeKey(workingDir)),
+    expiresAt: now() + CACHE_TTL_MS,
+  };
+  entry.value = (async () => {
     // 非仓库目录预检 (默认探测路径): 没有 .git 标记时 git rev-parse 必然失败,
     // 直接回落, 省掉一次进程 spawn (也避开 Windows 临时目录的 EPERM 竞争)。
     // 注入了 execGit 的调用方显式接管探测, 跳过预检。
     if (!execGit && !(await hasGitMarkerUpward(path.normalize(workingDir)).catch(() => true))) {
-      return workingDir;
+      return finalizeLocalScopeKey(workingDir);
     }
-    // 任何失败都回落 cwd 原样 — 归一化是纯增强, 绝不让 git 探测故障阻断 memory。
-    return canonicalizeLocalWorkdir(workingDir, execGit ?? defaultExecGit).catch(() => workingDir);
+    try {
+      // 探测成功 (含无需映射) 即钉死: TTL 后再探测失败不得把已绑定的
+      // canonical 漂回 raw worktree (Codex #2519 3968440903)。
+      const resolved = await canonicalizeLocalWorkdir(
+        workingDir,
+        execGit ?? defaultExecGit,
+      );
+      entry.expiresAt = Number.POSITIVE_INFINITY;
+      return finalizeLocalScopeKey(resolved);
+    } catch {
+      // 失败回落 cwd 原样 — 归一化是纯增强, 绝不让 git 探测故障阻断 memory。
+      // 负结果保留 TTL, 不 sticky。
+      return finalizeLocalScopeKey(workingDir);
+    }
   })();
-  scopeKeyCache.set(cacheKey, { value, expiresAt: now() + CACHE_TTL_MS });
-  return value;
+  scopeKeyCache.set(cacheKey, entry);
+  return entry.value;
 }
 
 /**
@@ -180,7 +193,7 @@ async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): 
   const directSuper = resolveGitDirOutput(superRaw ?? '', cwd);
   if (!toplevel || !gitDir || !commonDir) return workingDir;
 
-  // 判定链 (Codex #2399 P1, linked-worktree submodule):
+  // 判定链 (Codex #2399 P1 / #2519 3974808633, linked-worktree submodule):
   //  1. gitdir ≠ common-dir → 真 linked worktree, 归一到主仓根 + 相对路径。
   //  2. gitdir == common-dir 且有 superproject → cwd 是 submodule。
   //     主仓内 submodule 的 superproject == 主仓根, 原样返回 (与 round-1 契约一致)。
@@ -230,8 +243,95 @@ async function canonicalizeLocalWorkdir(workingDir: string, execGit: GitProbe): 
   const rel = path.relative(mappingRoot, cwd);
   if (rel === '') return mainRoot;
   // cwd 不在映射根下 (symlink/大小写风格不一致等) — 不猜, 回落。
-  if (rel.startsWith('..') || path.isAbsolute(rel)) return workingDir;
+  // 只拒绝真正的父目录相对路径 (`..` / `../…`); `..config` / `...` 是合法
+  // 子目录名, `rel.startsWith('..')` 会误判逃逸 (Codex #2519 3974018445)。
+  if (isEscapedRelative(rel)) return workingDir;
   return path.join(mainRoot, rel);
+}
+
+/** path.relative 结果是否表示 cwd 已逃出 mappingRoot。 */
+function isEscapedRelative(rel: string): boolean {
+  if (path.isAbsolute(rel)) return true;
+  const norm = rel.replace(/\\/g, '/');
+  return norm === '..' || norm.startsWith('../');
+}
+
+function finalizeLocalScopeKey(key: string): string {
+  if (process.platform === 'win32') return normalizeWindowsLocalScopeKey(key);
+  return key;
+}
+
+/**
+ * Windows 本地 scope key 的稳定形态 (Codex review on #2519 第八/十九轮)。
+ *
+ * MakerMemoryManager 用 raw 字符串当 Map key, memoryScopeDirName 却把
+ * `\` 与 `/` 收成同一磁盘目录。主 checkout (Desktop 正斜杠 / 正斜杠 UNC)
+ * 与 worktree (`path.join` 反斜杠 / `\\server\share`) 必须收成同一 key。
+ *
+ * 规则:
+ *  - 分隔符一律 `/`; UNC 保留 `//server/share` 双斜杠前缀, 不塌成单斜杠
+ *  - `\\?\C:\...` / `\\?\UNC\` 长路径前缀剥掉后再规范化 (否则 sanitize 目录不同);
+ *    `\\?\Volume{GUID}\...` / `\\?\GLOBALROOT\...` 等非 DOS 设备路径保留 `//?/` 根 (Codex 3974674292)
+ *  - 折叠重复斜杠; 去掉尾随斜杠; 根盘保持 `C:/` (保留盘符大小写)
+ *  - **不**把路径段改成小写: sanitizeWorkdir 区分 `C--Users` 与 `c--users`,
+ *    全量小写会把已有分片拆开, 需独立迁移; cache/samePath 已大小写不敏感
+ *  - 相对盘符 `C:foo` / 裸 `C:` 不抬成 `C:/foo` / `C:/` (cwd 相关, 不稳定;
+ *    Codex 3972854297: `C:` 是 drive-relative, 不等于 `C:/`)
+ *  - ssh: / bot: 复合键不碰
+ */
+export function normalizeWindowsLocalScopeKey(input: string): string {
+  if (!input) return input;
+  if (input.startsWith('ssh:') || input.startsWith('bot:')) return input;
+
+  let s = input.replace(/\//g, '\\');
+
+  // `\\?\UNC\server\share` / `\\?\C:\...` — 用 slice 避开正则反斜杠计数。
+  // 只剥盘符绝对与 UNC; Volume/GLOBALROOT 等设备命名空间保留前缀
+  // (Codex #2519 3974674292), 否则会变成相对 `Volume{GUID}/repo`。
+  const longUnc = '\\\\?\\UNC\\';
+  const longDos = '\\\\?\\';
+  if (s.length >= longUnc.length && s.slice(0, longUnc.length).toLowerCase() === longUnc.toLowerCase()) {
+    s = '\\\\' + s.slice(longUnc.length);
+  } else if (s.startsWith(longDos)) {
+    const rest = s.slice(longDos.length);
+    if (/^[A-Za-z]:[\\/]/.test(rest)) {
+      s = rest;
+    }
+  }
+
+  const isUnc = s.startsWith('\\\\');
+  s = s.replace(/\\/g, '/');
+
+  if (isUnc) {
+    s = '//' + s.slice(2).replace(/\/+/g, '/');
+    s = s.replace(/\/+$/, '');
+    if (s === '' || s === '/') return '//';
+    return s;
+  }
+
+  s = s.replace(/\/+/g, '/');
+  const drive = s.match(/^([A-Za-z]:)(.*)$/);
+  if (drive) {
+    const letter = drive[1];
+    const rest = drive[2];
+    if (!rest.startsWith('/')) {
+      // 裸 `C:` 与 `C:foo` 都是 drive-relative, 不抬成根盘 (Codex 3972854297)
+      return `${letter}${rest}`;
+    }
+    const trimmed = rest.replace(/\/+$/, '');
+    if (trimmed === '') return `${letter}/`;
+    return `${letter}${trimmed}`;
+  }
+
+  if (s.length > 1) s = s.replace(/\/+$/, '');
+  return s;
+}
+
+/** Desktop / Windows 形态路径 (盘符、UNC、`\\?\` 长路径), 供 migrate 跨平台复用。 */
+export function looksLikeWindowsLocalPath(p: string): boolean {
+  if (/^[A-Za-z]:/.test(p)) return true;
+  const slashes = p.replace(/\//g, '\\');
+  return slashes.startsWith('\\\\');
 }
 
 /** git rev-parse 输出 → 绝对路径。空输出返 null (调用方回落)。 */
@@ -253,7 +353,13 @@ async function resolveMainWorktreeRoot(cwd: string, execGit: GitProbe): Promise<
 }
 
 function samePath(a: string, b: string): boolean {
-  return process.platform === 'win32' ? a.toLowerCase() === b.toLowerCase() : a === b;
+  if (process.platform === 'win32') {
+    return (
+      normalizeWindowsLocalScopeKey(a).toLowerCase() ===
+      normalizeWindowsLocalScopeKey(b).toLowerCase()
+    );
+  }
+  return a === b;
 }
 
 /**
@@ -267,7 +373,10 @@ async function walkOutermostSuperproject(start: string, execGit: GitProbe): Prom
   let current = start;
   const seen = new Set<string>();
   for (let i = 0; i < 16; i += 1) {
-    const key = process.platform === 'win32' ? current.toLowerCase() : current;
+    const key =
+      process.platform === 'win32'
+        ? normalizeWindowsLocalScopeKey(current).toLowerCase()
+        : current;
     if (seen.has(key)) return current;
     seen.add(key);
     // 与 canonicalize 同一条 4 行 rev-parse, 让既有 cwd-agnostic fake probe

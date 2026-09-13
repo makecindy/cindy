@@ -27,6 +27,8 @@ import * as fsSync from 'node:fs';
 import type Database from 'better-sqlite3';
 
 import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
+import { resolveMemoryScopeKey } from './scope-resolver.js';
+import { SSH_SCOPE_KEY_PREFIX } from './storage.js';
 import {
   MemoryError,
   type MemoryConfig,
@@ -80,6 +82,11 @@ export interface MakerMemoryManagerDeps {
    * the global active-workdir projection/reset directory.
    */
   isIndependentScope?: (scopeKey: string) => boolean;
+  /**
+   * Scope-key 解析 (默认 resolveMemoryScopeKey)。测试注入慢 resolver
+   * 模拟 git 缓存未命中的 3s 窗口, 验证 owner 竞态守卫。
+   */
+  resolveScopeKey?: (workingDir: string) => Promise<string>;
   /** SQLite open 工厂, host 注入 (better-sqlite3 是 native module, 不能在 maker-core require) */
   sqliteFactory: SqliteFactory;
   /** Agent 引用 — 强联动 setMemory(false) 关原生时用 */
@@ -473,6 +480,13 @@ export class MakerMemoryManager {
    * buildMemoryScopeKey 产出的 `ssh:<hostId>:<path>` 复合键 (调用方负责,
    * manager 不自己判远端) — 见 storage.ts buildMemoryScopeKey。
    *
+   * worktree 归一化边界 (#2379): 本层对非 `ssh:` / `bot:` 入参 await
+   * resolveMemoryScopeKey。agent startSession 只传同步 buildMemoryScopeKey
+   * (原始 workdir / ssh 复合键), 打开 store 时才 spawn git, 避免启动路径
+   * 扰动 elicitation/compacting 时序。MCP withStore 可先解析 (缓存命中
+   * 零成本); resetWorkdir/runReview/UI 等旁路即使传入未归一化的 worktree
+   * 路径也落到同一 Store。归一化幂等。
+   *
    * opts.skipDisabledCheck: 清理路径 (resetWorkdir) 用 — 用户关闭 maker memory
    * 后仍需能清空已有记忆, 重置入口按「不论 makerEnabled 值都能清」语义工作
    * (review #2388 Codex 10th P2)。
@@ -484,13 +498,30 @@ export class MakerMemoryManager {
     if (!absWorkdir || absWorkdir.length === 0) {
       throw new Error('MakerMemoryManager.getStore: absWorkdir required');
     }
-    // owner 作用域守卫: 缺 owner 直接拒绝 (不建临时库), scope 变化则换根。
+    // owner 锚点必须在 resolveMemoryScopeKey 的 await 之前捕获 (Codex
+    // review on #2519 3971002568): 缓存未命中时 git 最长 3s, 该窗口内
+    // 账号切换若在 await 之后才 ensureOwnerScope, 会把旧 owner 请求
+    // 绑到新 owner 根, 后续 assertScopeUnchanged 也以新 owner 为入口
+    // 而放行。ensureOwnerScope 现有守卫不覆盖这段 await — 是复核点
+    // 缺失, 不是换根逻辑缺失。
+    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
     this.ensureOwnerScope();
+    const generationAtEntry = this.poolGeneration;
+    const rootAtEntry = this.resolvedBasePath!;
+    const resolveScope = this.deps.resolveScopeKey ?? resolveMemoryScopeKey;
+    const scopeKey = (absWorkdir.startsWith(SSH_SCOPE_KEY_PREFIX) || absWorkdir.startsWith('bot:'))
+      ? absWorkdir
+      : await resolveScope(absWorkdir);
+    absWorkdir = scopeKey;
+    this.assertScopeUnchanged(scopeAtEntry);
     // 打开 store 路径的 disabled 检查 (review #2388 Codex 5th P1): 调用方
     // 可能已持过期 isEnabled()=true 快照 (withStore / session opts) 通过检查,
     // 换根后 enabled=false 不得继续打开新 owner store; 仅 host 提供
     // reloadEnabled 时判定 (静态宿主无 rebind 语义, disabled 由 isEnabled 拦)。
     const independentScope = this.deps.isIndependentScope?.(absWorkdir) === true;
+    if (!independentScope && this.poolGeneration !== generationAtEntry) {
+      throw new MemoryError('not-ready', 'memory reset completed during scope resolve; retry against current state');
+    }
     if (
       !opts?.skipDisabledCheck
       && this.deps.reloadEnabled
@@ -520,14 +551,8 @@ export class MakerMemoryManager {
       this.stores.delete(absWorkdir);
     }
 
-    // 异步初始化期间的竞态锚点 (review #2388 P1): 整个流程用入口捕获的 scope +
-    // root, 不再跨 await re-read 动态根; 完成后复核 scope 未变才提交入池。
-    const scopeAtEntry = this.deps.ownerScopeKey?.() ?? null;
-    // 池世代锚点 (review #2388 Codex 20th P1): init 等待期间并发 resetAll 可能
-    // 开始**并完成** (resetInFlight 已回 0) — 用 generation 对比识别「重置前
-    // 打开、closeAllStores 从未见过的 stale store」。
-    const generationAtEntry = this.poolGeneration;
-    const rootAtEntry = this.resolvedBasePath!;
+    // 异步初始化继续用入口捕获的 scope + root (review #2388 P1 / #2519
+    // 3971002568): 不再跨 await re-read 动态根; 完成后复核 scope 未变才入池。
 
     // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
     // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。

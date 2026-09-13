@@ -19,6 +19,12 @@ import {
   resolveMemoryScopeKey,
 } from './scope-resolver.js';
 
+function expectScope(actual: string, expected: string): void {
+  const want =
+    process.platform === 'win32' ? expected.replace(/\\/g, '/') : expected;
+  expect(actual).toBe(want);
+}
+
 function gitAvailable(): boolean {
   try {
     execFileSync('git', ['--version'], { stdio: 'ignore' });
@@ -67,7 +73,7 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
   it('linked worktree 根 cwd → 主仓根', async () => {
     const f = await makeFixture();
     try {
-      expect(await resolveMemoryScopeKey(f.wt1)).toBe(f.repoRoot);
+      expectScope(await resolveMemoryScopeKey(f.wt1), f.repoRoot);
     } finally {
       await f.cleanup();
     }
@@ -76,7 +82,8 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
   it('worktree 子目录 cwd → 主仓根 + 相对子路径', async () => {
     const f = await makeFixture();
     try {
-      expect(await resolveMemoryScopeKey(path.join(f.wt1, 'apps', 'a'))).toBe(
+      expectScope(
+        await resolveMemoryScopeKey(path.join(f.wt1, 'apps', 'a')),
         path.join(f.repoRoot, 'apps', 'a'),
       );
     } finally {
@@ -87,7 +94,8 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
   it('子目录在主仓不存在也按字符串映射 (scope key 是身份, 不是磁盘事实)', async () => {
     const f = await makeFixture();
     try {
-      expect(await resolveMemoryScopeKey(path.join(f.wt1, 'apps', 'only-in-wt'))).toBe(
+      expectScope(
+        await resolveMemoryScopeKey(path.join(f.wt1, 'apps', 'only-in-wt')),
         path.join(f.repoRoot, 'apps', 'only-in-wt'),
       );
     } finally {
@@ -101,7 +109,7 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
       const k1 = await resolveMemoryScopeKey(path.join(f.wt1, 'apps', 'a'));
       const k2 = await resolveMemoryScopeKey(path.join(f.wt2, 'apps', 'a'));
       expect(k1).toBe(k2);
-      expect(k1).toBe(path.join(f.repoRoot, 'apps', 'a'));
+      expectScope(k1, path.join(f.repoRoot, 'apps', 'a'));
     } finally {
       await f.cleanup();
     }
@@ -110,8 +118,9 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
   it('主仓内 cwd (根与子目录) 原样返回 — 非 worktree 场景行为不变', async () => {
     const f = await makeFixture();
     try {
-      expect(await resolveMemoryScopeKey(f.repoRoot)).toBe(f.repoRoot);
-      expect(await resolveMemoryScopeKey(path.join(f.repoRoot, 'apps', 'b'))).toBe(
+      expectScope(await resolveMemoryScopeKey(f.repoRoot), f.repoRoot);
+      expectScope(
+        await resolveMemoryScopeKey(path.join(f.repoRoot, 'apps', 'b')),
         path.join(f.repoRoot, 'apps', 'b'),
       );
     } finally {
@@ -129,8 +138,8 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
       f.git(['clone', '--separate-git-dir', storage, f.repoRoot, checkout], f.tmpRoot);
       const sub = path.join(checkout, 'apps', 'a');
       await fs.mkdir(sub, { recursive: true });
-      expect(await resolveMemoryScopeKey(checkout)).toBe(checkout);
-      expect(await resolveMemoryScopeKey(sub)).toBe(sub);
+      expectScope(await resolveMemoryScopeKey(checkout), checkout);
+      expectScope(await resolveMemoryScopeKey(sub), sub);
     } finally {
       await f.cleanup();
     }
@@ -152,14 +161,14 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
       // checkout 里跑都一样)。resolver 跟随 git 的 canonical 答案, 该布局下
       // 所有 worktree 共享同一 scope; 主 checkout 会话按契约不归一化。
       const canonical = path.dirname(storage);
-      expect(await resolveMemoryScopeKey(wt3)).toBe(canonical);
-      expect(await resolveMemoryScopeKey(sub)).toBe(path.join(canonical, 'apps', 'a'));
+      expectScope(await resolveMemoryScopeKey(wt3), canonical);
+      expectScope(await resolveMemoryScopeKey(sub), path.join(canonical, 'apps', 'a'));
     } finally {
       await f.cleanup();
     }
   });
 
-  it('linked worktree 内初始化过的 submodule → 主仓 submodule 路径 (Codex #2399 P1)', async () => {
+  it('linked worktree 内初始化过的 submodule → 主仓 submodule 路径 (Codex 3974808633)', async () => {
     const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-sub-')));
     const subRepo = path.join(tmpRoot, 'sub');
     const repoRoot = path.join(tmpRoot, 'repo');
@@ -190,8 +199,8 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
 
       const wtMod = path.join(wt, 'mod');
       const mainMod = path.join(repoRoot, 'mod');
-      expect(await resolveMemoryScopeKey(wtMod)).toBe(mainMod);
-      expect(await resolveMemoryScopeKey(mainMod)).toBe(mainMod);
+      expectScope(await resolveMemoryScopeKey(wtMod), mainMod);
+      expectScope(await resolveMemoryScopeKey(mainMod), mainMod);
     } finally {
       try {
         await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 3 });
@@ -201,8 +210,10 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
     }
   });
 
-  it('linked worktree 内二级 submodule → 主仓嵌套路径 (Codex #2399 P1)', async () => {
-    const tmpRoot = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-nested-sub-')));
+  it('linked worktree 内二级 submodule → 主仓嵌套路径 (Codex 3974808633)', async () => {
+    const tmpRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-nested-sub-')),
+    );
     const innerRepo = path.join(tmpRoot, 'inner');
     const midRepo = path.join(tmpRoot, 'mid');
     const repoRoot = path.join(tmpRoot, 'repo');
@@ -240,8 +251,8 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
 
       const wtInner = path.join(wt, 'mod', 'inner');
       const mainInner = path.join(repoRoot, 'mod', 'inner');
-      expect(await resolveMemoryScopeKey(wtInner)).toBe(mainInner);
-      expect(await resolveMemoryScopeKey(mainInner)).toBe(mainInner);
+      expectScope(await resolveMemoryScopeKey(wtInner), mainInner);
+      expectScope(await resolveMemoryScopeKey(mainInner), mainInner);
     } finally {
       try {
         await fs.rm(tmpRoot, { recursive: true, force: true, maxRetries: 3 });
@@ -254,7 +265,7 @@ describe.skipIf(!gitAvailable())('resolveMemoryScopeKey — 真实临时 git 仓
   it('非 git 目录原样返回', async () => {
     const dir = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'scope-resolver-nogit-')));
     try {
-      expect(await resolveMemoryScopeKey(dir)).toBe(dir);
+      expectScope(await resolveMemoryScopeKey(dir), dir);
     } finally {
       try {
         await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });

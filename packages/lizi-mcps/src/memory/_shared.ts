@@ -67,19 +67,28 @@ export async function withStore(
     // key 定位, 与 agent 启动注入 (claude-code/codex index.ts) 同一键规则;
     // 本地会话在此额外做 git worktree 归一化 (#2379)。已注入的 memoryScopeKey
     // (含 bot: / ssh:) 原样透传, 不再二次解析。
-    scopeKey =
-      ctx?.memoryScopeKey ?? (await resolveMemoryScopeKey(workdir, ctx?.remoteHostId));
+    //
+    // 本地路径的外层 resolveMemoryScopeKey 缓存未命中时最长数秒 (Codex
+    // #2519 3971991054)。该 await 发生在 getStore 的 owner 守卫之前: 期间切
+    // 账号后 getStore 会以新 owner 为入口绑 store, 后置复核只能报错、无法
+    // 撤销已发生的写/删。与 manager.getStore 同款: await 前捕获, await 后
+    // 立刻复核, 不一致 fail-closed, 不调用 getStore。
+    if (ctx?.memoryScopeKey) {
+      scopeKey = ctx.memoryScopeKey;
+    } else {
+      const resolveScope = deps.resolveMemoryScopeKey ?? resolveMemoryScopeKey;
+      scopeKey = await resolveScope(workdir, ctx?.remoteHostId);
+    }
     // git 探测是 await: 期间 logout / 切账号会换 owner, 甚至换掉 getManager()
     // 绑定的 manager。必须在 getStore 前按入口 scope 复核, 否则会把解析到的
-    // key 开到新 owner 的池里 (Codex #2399 P1, 对齐 manager.getStore 的
-    // scopeAtEntry + assertScopeUnchanged)。
+    // key 开到新 owner 的池里 (Codex #2399 P1 / #2519 3971991054)。
     manager = deps.getManager();
     if (scopeAtEntry !== null && manager.currentOwnerScopeKey?.() !== scopeAtEntry) {
       return buildJsonResult(
         {
           ok: false,
           code: 'MAKER_MEMORY_NOT_READY',
-          message: 'owner scope changed during async memory operation; aborting (retry against current scope)',
+          message: 'owner scope changed during scope resolve; refusing to open store',
         },
         true,
       );
