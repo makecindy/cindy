@@ -2227,8 +2227,28 @@ function needsExecFunctionAdapter(
  * this transform exists to prevent. In that state clean unconditionally for
  * implicit routes (PR #2444 Codex P1).
  */
+/**
+ * Grok wire-model ids reach the proxy under several namespaces: the gateway's
+ * legacy `x-ai/grok-*`, the newer shared `xai/grok-*` (the Grok 4.6 ladder is
+ * exposed as `xai/grok-4.6` / bare `grok-4.6` — see `isOfficialGrok46Id`),
+ * and bare `grok-*` ids. The tool-shape cleanup must key on the model family,
+ * not on a single namespace, or requests like `xai/grok-4.6` skip
+ * sanitization entirely and leak Codex's `external_web_access` extension to
+ * the upstream, which rejects it with 400 "Argument not supported:
+ * external_web_access" (issue #4336).
+ */
+function isGrokResponsesWireModel(model: string): boolean {
+  const id = model.toLowerCase();
+  return (
+    id.startsWith('x-ai/grok')
+    || id.startsWith('xai/grok')
+    || id.startsWith('grok-')
+    || id === 'grok'
+  );
+}
+
 function xdProviderClaimsWireModel(wireModel: string): boolean {
-  if (!wireModel.startsWith('x-ai/grok')) return false;
+  if (!isGrokResponsesWireModel(wireModel)) return false;
   const { authoritative, models } = getXdGatewayModelAccessSnapshot();
   if (!authoritative) {
     // Negative evidence is unavailable. The env-key default route and the
@@ -2244,11 +2264,12 @@ function xdProviderClaimsWireModel(wireModel: string): boolean {
 }
 
 /**
- * The XD Gateway also exposes Grok models under the `x-ai/` namespace. They
- * stay on the gateway route (unlike the first-party `xai/` OAuth provider),
- * but the upstream Grok Responses schema still rejects Codex namespace tools.
- * Keep this transform deliberately narrow: gateway routing and the model
- * namespace must both match before applying the same tool-shape cleanup.
+ * The XD Gateway also exposes Grok models, historically under the `x-ai/`
+ * namespace and now also as `xai/grok-4.6` / bare `grok-4.6`. They stay on
+ * the gateway route (unlike the first-party `xai/` OAuth provider), but the
+ * upstream Grok Responses schema still rejects Codex namespace tools and the
+ * `external_web_access` extension. The cleanup keys on the Grok model family
+ * (see `isGrokResponsesWireModel`) while routing stays provider-attributed.
  */
 /**
  * Whether the request's session provider route is actually adopted by the
@@ -2280,7 +2301,7 @@ function createGatewayGrokResponsesCompatTransform(
   return (body, ctx) => {
     if (!isPlainObject(body)) return null;
     const requestModel = typeof body.model === 'string' ? body.model : '';
-    if (!requestModel.startsWith('x-ai/grok')) return null;
+    if (!isGrokResponsesWireModel(requestModel)) return null;
     // Use providerContextForRequest so subagent-frozen routes resolve to xd
     // even when the parent session belongs to a different provider. Only
     // clean tools when the effective provider for THIS request is xd.

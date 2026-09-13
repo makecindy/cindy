@@ -5226,6 +5226,106 @@ describe('codex proxy host', () => {
     }
   });
 
+  it('sanitizes Grok 4.6 (xai/ namespace) tools for explicit XD Gateway sessions', async () => {
+    // Grok 4.6 reaches the gateway as `xai/grok-4.6`, not the legacy
+    // `x-ai/grok-*` namespace. The cleanup is keyed on the Grok model family,
+    // so the namespace tool and the `external_web_access` extension are still
+    // stripped instead of reaching the upstream and triggering the 400
+    // "Argument not supported: external_web_access" (issue #4336).
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+    setXdGatewayModels([{ id: 'xai/grok-4.6', agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-xd-grok-46', 'thread-xd-grok-46', 'PRODUCT_PROMPT');
+    setSessionProvider('session-xd-grok-46', 'xd');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model: 'xai/grok-4.6',
+        tools: [
+          { type: 'function', name: 'exec_command' },
+          { type: 'namespace', name: 'multi_agent_v1', tools: [] },
+          { type: 'web_search', external_web_access: true },
+        ],
+        tool_choice: { type: 'namespace', name: 'multi_agent_v1' },
+        parallel_tool_calls: false,
+      };
+      const ctx = {
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xd-grok-46' },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+
+      expect(current).toEqual({
+        model: 'xai/grok-4.6',
+        tools: [
+          { type: 'function', name: 'exec_command' },
+          { type: 'web_search' },
+        ],
+        tool_choice: 'none',
+        parallel_tool_calls: false,
+      });
+    } finally {
+      clearSessionProvider('session-xd-grok-46');
+      setXdGatewayModels([]);
+    }
+  });
+
+  it('sanitizes bare grok-4.6 tools for implicit sessions on the authoritative gateway catalog', async () => {
+    const host = await freshCodexProxyHost();
+    const { setXdGatewayModels } = await import('../active-catalog.js');
+    const { clearSessionProvider } = await import('../session-provider-store.js');
+    setXdGatewayModels([{ id: 'grok-4.6', agents: ['codex'] }]);
+    mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+      url: 'http://127.0.0.1:43210',
+      dispose: vi.fn(async () => undefined),
+    });
+    await host.ensureCodexProxyReady();
+    host.registerComposed('session-xd-grok-46-bare', 'thread-xd-grok-46-bare', 'PRODUCT_PROMPT');
+    clearSessionProvider('session-xd-grok-46-bare');
+
+    try {
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      let current: unknown = {
+        model: 'grok-4.6',
+        tools: [
+          { type: 'function', name: 'exec_command' },
+          { type: 'web_search', external_web_access: true, search_context_size: 'medium' },
+        ],
+      };
+      const ctx = {
+        method: 'POST',
+        url: '/responses',
+        headers: { 'thread-id': 'thread-xd-grok-46-bare' },
+      };
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+
+      expect(current).toMatchObject({
+        model: 'grok-4.6',
+        tools: [
+          { type: 'function', name: 'exec_command' },
+          { type: 'web_search' },
+        ],
+      });
+    } finally {
+      clearSessionProvider('session-xd-grok-46-bare');
+      setXdGatewayModels([], { authoritative: false });
+    }
+  });
+
   it('sanitizes out-of-scope x-ai/grok tools even when the session belongs to a non-xd provider', async () => {
     // A provider-oauth xAI session that sends an `x-ai/grok*` request falls
     // through the xAI scope gate (xAI modelPrefixes cover `xai/`, not the
