@@ -95,6 +95,14 @@ export interface SortableListProps<T> {
   role?: AriaRole;
   /** 可选 ARIA label，配合 role 使用。 */
   ariaLabel?: string;
+  /** SortableJS drag clone class. */
+  dragClass?: string;
+  /** Existing utility classes applied to the dragged item and fallback clone. */
+  dragClassNames?: readonly string[];
+  /** Keep the fallback clone inside this list instead of attaching it to body. */
+  fallbackOnBody?: boolean;
+  /** Keep the fallback drag clone inside this list's bounds. */
+  constrainToBounds?: boolean;
 }
 
 const DEFAULT_FILTER = 'button, input, textarea, select, a, [data-no-drag]';
@@ -119,6 +127,10 @@ export function SortableList<T>({
   rowClassName,
   role,
   ariaLabel,
+  dragClass = 'xdt-sortable-drag',
+  dragClassNames = [],
+  fallbackOnBody = true,
+  constrainToBounds = false,
 }: SortableListProps<T>) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const sortableRef = useRef<Sortable | null>(null);
@@ -160,11 +172,11 @@ export function SortableList<T>({
       // 自动加 chosen 背景。"拖动时原位置淡出"的视觉走 ghostClass (开拖才触发),
       // 不需要 chosenClass。见文件顶部"设计要点 4"。
       chosenClass: '',
-      dragClass: 'xdt-sortable-drag',
+      dragClass,
       // 见文件顶部"设计要点 5"：强制 JS fallback，绕开 HTML5 DnD 在 React 19 +
       // 嵌套 click/contextmenu 环境下的不稳定行为。
       forceFallback,
-      fallbackOnBody: true,
+      fallbackOnBody,
       fallbackTolerance: 4,
       setData: (dataTransfer, dragEl) => {
         // Keep the browser-required plain-text slot empty: DOM text can contain
@@ -179,8 +191,13 @@ export function SortableList<T>({
       },
       // 真正开拖（移动超过 fallbackTolerance）才触发,不是 pointerdown 即触发——
       // 所以"按下未拖"和"普通 hover"都不会上 grabbing 光标,只有真正拖动中才会。
-      onStart: () => {
+      onStart: (evt?: SortableEvent) => {
         nativeDropDispositionRef.current = null;
+        const clone = (evt as (SortableEvent & { clone?: HTMLElement }) | undefined)?.clone;
+        for (const element of [evt?.item, clone]) {
+          if (!element) continue;
+          element.classList.add(...dragClassNames);
+        }
         document.body.classList.add(SORTING_BODY_CLASS);
         onDragActiveChangeRef.current?.(true);
       },
@@ -194,6 +211,12 @@ export function SortableList<T>({
         abortNextEndRef.current = false;
         const dropDisposition = nativeDropDispositionRef.current;
         nativeDropDispositionRef.current = null;
+
+        const clone = (evt as SortableEvent & { clone?: HTMLElement }).clone;
+        for (const element of [evt.item, clone]) {
+          if (!element) continue;
+          element.classList.remove(...dragClassNames);
+        }
 
         const oldIndex = evt.oldIndex;
         const newIndex = evt.newIndex;
@@ -252,14 +275,45 @@ export function SortableList<T>({
         document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, cancelable: true }));
       }
     };
+    let constrainFrame: number | null = null;
+    const constrainPointer = () => {
+      constrainFrame = null;
+      if (!constrainToBounds || Sortable.active !== instance) return;
+      const ghost = dragClass
+        ? el.querySelector<HTMLElement>(`.${dragClass}`)
+        : null;
+      if (!ghost) return;
+      const bounds = el.getBoundingClientRect();
+      const current = ghost.getBoundingClientRect();
+      const dx = Math.min(0, bounds.right - current.right) + Math.max(0, bounds.left - current.left);
+      const dy = Math.min(0, bounds.bottom - current.bottom) + Math.max(0, bounds.top - current.top);
+      if (dx === 0 && dy === 0) return;
+      const transform = new DOMMatrix(getComputedStyle(ghost).transform);
+      ghost.style.transform = `translate3d(${transform.e + dx}px, ${transform.f + dy}px, 0)`;
+    };
+    const scheduleConstraint = () => {
+      if (!constrainToBounds || constrainFrame !== null) return;
+      constrainFrame = requestAnimationFrame(constrainPointer);
+    };
+    const clearConstraintFrame = () => {
+      if (constrainFrame !== null) cancelAnimationFrame(constrainFrame);
+      constrainFrame = null;
+    };
+    const onPointerMove = () => {
+      if (!constrainToBounds || Sortable.active !== instance) return;
+      scheduleConstraint();
+    };
     const onVisibilityChange = () => {
       if (document.visibilityState === 'hidden') abortIfActive();
     };
     window.addEventListener('blur', abortIfActive);
+    document.addEventListener('pointermove', onPointerMove, false);
     document.addEventListener('visibilitychange', onVisibilityChange);
 
     return () => {
       window.removeEventListener('blur', abortIfActive);
+      document.removeEventListener('pointermove', onPointerMove, false);
+      clearConstraintFrame();
       document.removeEventListener('visibilitychange', onVisibilityChange);
       document.removeEventListener('drop', markDropDisposition, true);
       // 拖动中组件被卸载时兜底清掉标记,避免 grabbing 光标残留到全局。
@@ -305,6 +359,7 @@ export function SortableList<T>({
     <div
       ref={containerRef}
       data-sortable-native-dnd={forceFallback ? undefined : 'true'}
+      data-sortable-session-order={className?.includes('session-order') ? 'true' : undefined}
       role={role}
       aria-label={ariaLabel}
       className={className}

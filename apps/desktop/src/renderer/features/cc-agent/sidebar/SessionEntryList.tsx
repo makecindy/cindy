@@ -21,6 +21,9 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import { useCollapsibleShowAll } from './hooks/useCollapsibleShowAll';
 import { SessionCard } from './SessionCard';
+import { SortableList } from '@/components/sidebar/SortableList';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { mergeVisibleSessionReorder } from './sessionOrder';
 
 /** 条目是否为当前激活会话(group 命中其下任一会话)。 */
 function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): boolean {
@@ -76,6 +79,9 @@ export interface SessionEntryListProps {
    * 场景传 false 关掉顶线;真正的列表首行(置顶段 / 项目内会话)保持默认。
    */
   showFirstDivider?: boolean;
+  /** Project-local manual ordering. When set, automation grouping is bypassed so every session is draggable. */
+  manualOrder?: readonly string[];
+  onReorder?: (orderedIds: string[]) => void;
 }
 
 export interface SessionEntryRowsProps extends Omit<
@@ -194,18 +200,19 @@ export function SessionEntryList({
   collapseLimit,
   disableCollapse = false,
   sectionCollapsed = false,
+  manualOrder,
+  onReorder,
   ...props
 }: SessionEntryListProps) {
   const { t } = useTranslation();
+  const reducedMotion = useReducedMotion();
   const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
   const entries = useMemo(
-    () => groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
-    [notifications, scheduleSessionIndex, sessions],
+    () => manualOrder
+      ? manualOrder.map((id) => sessions.find((session) => session.id === id)).filter((session): session is Session => session != null).map((session) => ({ kind: 'session' as const, session }))
+      : groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
+    [manualOrder, notifications, scheduleSessionIndex, sessions],
   );
-
-  if (!collapsible) {
-    return <SessionEntryRows entries={entries} notifications={notifications} {...props} />;
-  }
 
   // 对话段与项目内会话共用这套折叠:默认前 N 条 + 永远保留 24h 内活动 /
   // 需关注 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
@@ -221,9 +228,49 @@ export function SessionEntryList({
     hasAttentionEntry: (entry) => entryHasAttention(entry, notifications),
   });
 
+  const rows = <SessionEntryRows entries={visibleEntries} notifications={notifications} {...props} />;
+  if (manualOrder && onReorder) {
+    const sortableEntries = visibleEntries.filter(
+      (entry): entry is Extract<SidebarSessionEntry, { kind: 'session' }> => entry.kind === 'session',
+    );
+    return (
+      <>
+        <SortableList
+          items={sortableEntries}
+          getId={(entry) => entry.session.id}
+          onReorder={(orderedIds) => onReorder(mergeVisibleSessionReorder(manualOrder, orderedIds))}
+          reducedMotion={reducedMotion}
+          handle="[data-sidebar-session-row]"
+          dragClass="cc-agent-session-sortable-drag"
+          fallbackOnBody={false}
+          constrainToBounds
+          filter="button, input, textarea, select, a"
+          className="flex flex-col gap-0.5 session-order"
+          rowClassName="cc-agent-session-sortable-row"
+          renderItem={(entry) => <SessionEntryRows entries={[entry]} notifications={notifications} {...props} />}
+        />
+        {isOverflowing && (
+          <button
+            type="button"
+            className={cn(
+              'flex h-6 w-full items-center justify-center rounded-full px-2 text-xs font-normal',
+              'text-[var(--cmd-palette-item-meta)] transition-colors hover:bg-sidebar-item-hover hover:text-foreground',
+              'focus:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+            )}
+            onClick={() => setShowAll(true)}
+          >
+            {t('ccAgent.sidebar.showAllSessions', { count: totalCount })}
+          </button>
+        )}
+      </>
+    );
+  }
+
+  if (!collapsible) return rows;
+
   return (
     <>
-      <SessionEntryRows entries={visibleEntries} notifications={notifications} {...props} />
+      {rows}
       {isOverflowing && (
         <button
           type="button"

@@ -30,6 +30,10 @@ const globalsSource = readFileSync(
   resolve(__dirname, '..', '..', '..', '..', 'styles', 'globals.css'),
   'utf8',
 );
+const sortableStylesSource = readFileSync(
+  resolve(__dirname, '..', '..', '..', '..', 'styles', 'sortable.css'),
+  'utf8',
+);
 
 describe('SessionCard review regressions', () => {
   it('only draws the list top divider on the first overall entry', () => {
@@ -337,6 +341,14 @@ describe('SessionCard review regressions', () => {
     );
     expect(sessionItemSource).toContain(
       "'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground'",
+    );
+  });
+
+  it('keeps sidebar drag wrappers from inventing a selected background', () => {
+    expect(sessionEntryListSource).toContain('dragClass="cc-agent-session-sortable-drag"');
+    expect(sessionEntryListSource).toContain('rowClassName="cc-agent-session-sortable-row"');
+    expect(sortableStylesSource).toMatch(
+      /\.cc-agent-session-sortable-row\.cc-agent-session-sortable-drag\s*\{[\s\S]*background-color:\s*transparent;[\s\S]*box-shadow:\s*none;/,
     );
   });
 

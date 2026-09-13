@@ -107,6 +107,7 @@ import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
+import { loadManualSessionOrder, persistManualSessionOrder, reconcileManualSessionOrder } from '../sessionOrder';
 
 /** 手动排序只从项目标题行起手。点击折叠仍走标题行；SortableJS 的
  *  fallbackTolerance + ignoreNextClick 把点击和拖拽分开。 */
@@ -331,6 +332,18 @@ export function ProjectsSection({
   const [expandedDeviceSections, setExpandedDeviceSections] = useState<ReadonlySet<string>>(
     new Set(),
   );
+  const [manualSessionOrders, setManualSessionOrders] = useState<Record<string, string[]>>({});
+
+  const sessionOrderFor = useCallback((project: ProjectNodeData): string[] => {
+    const source = manualSessionOrders[project.projectKey] ?? loadManualSessionOrder(project.projectKey);
+    return reconcileManualSessionOrder(source, project.sessions);
+  }, [manualSessionOrders]);
+
+  const handleSessionReorder = useCallback((project: ProjectNodeData, orderedIds: string[]) => {
+    const next = reconcileManualSessionOrder(orderedIds, project.sessions);
+    setManualSessionOrders((previous) => ({ ...previous, [project.projectKey]: next }));
+    persistManualSessionOrder(project.projectKey, next);
+  }, []);
 
   const getProjectId = useCallback((p: ProjectNodeData) => p.projectKey, []);
 
@@ -810,10 +823,14 @@ export function ProjectsSection({
     dialogues.length > 0 ||
     filter.isFilterActive;
 
-  const renderProjectNode = (project: ProjectNodeData): ReactNode => (
-    <ProjectNode
-      key={project.projectKey}
-      project={project}
+  const renderProjectNode = (project: ProjectNodeData): ReactNode => {
+    const fullProject =
+      allKnownProjects.find((candidate) => candidate.projectKey === project.projectKey) ?? project;
+    return (
+      <ProjectNode
+        key={project.projectKey}
+        project={fullProject}
+        displaySessions={project.sessions}
       statusFilter={filter.status}
       isCollapsed={collapsed.has(project.projectKey)}
       collapsedAttentionTone={
@@ -849,8 +866,11 @@ export function ProjectsSection({
       linkingCodexProject={linkingCodexProject === project.projectKey}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
-    />
-  );
+      manualSessionOrder={sessionOrderFor(fullProject)}
+      onSessionReorder={(orderedIds) => handleSessionReorder(fullProject, orderedIds)}
+      />
+    );
+  };
 
   // 散排任务行 / 自动任务组 / 「对话」组行。散排行与自动任务组带来源标签(hover);
   // 对话组行 = 可折叠的分组头 + 组内会话(折叠上限与对话段旧口径一致)。dialogueGroupKey 标识

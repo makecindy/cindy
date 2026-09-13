@@ -8,6 +8,7 @@ const projectsSectionSource = readFileSync(
   'utf8',
 );
 const projectNodeSource = readFileSync(resolve(__dirname, '../sections/ProjectNode.tsx'), 'utf8');
+const projectNodeCode = projectNodeSource.replace(/\/\*[\s\S]*?\*\//g, '');
 
 describe('manual project sort drag surface', () => {
   it('starts drag from the project header and does not filter that header out', () => {
@@ -25,6 +26,6 @@ describe('manual project sort drag surface', () => {
       /MANUAL_PROJECT_SORT_FILTER[\s\S]{0,80}\[data-project-header\]/,
     );
     expect(projectNodeSource).toContain('data-project-header="true"');
-    expect(projectNodeSource).toContain('data-no-drag');
+    expect(projectNodeCode).not.toContain('data-no-drag');
   });
 });
