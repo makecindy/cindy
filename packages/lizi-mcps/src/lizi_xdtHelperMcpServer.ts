@@ -41,6 +41,7 @@ import {
   registerArchiveSessionsTool,
   registerUnarchiveSessionsTool,
   registerMoveSessionsTool,
+  registerExportSessionTool,
   registerSendToSessionTool,
   registerListWorkdirsTool,
   registerListSessionsTool,
@@ -60,6 +61,7 @@ import type { SetCurrentSessionTitleDeps } from './xdt-helper/set_current_sessio
 import type { RenameSessionsDeps } from './xdt-helper/rename_sessions.js';
 import type { ArchiveSessionsDeps } from './xdt-helper/archive_sessions.js';
 import type { MoveSessionsDeps } from './xdt-helper/move_sessions.js';
+import type { ExportSessionDeps } from './xdt-helper/export_session.js';
 import type { SendToSessionCallback } from './xdt-helper/send_to_session.js';
 import {
   registerBotSkillTools,
@@ -627,7 +629,10 @@ export interface XdtHelperMcpDeps {
    * unarchive_sessions 会被注册。host 负责存在性校验(全有才写)、写库并广播 sessions:patched。
    */
   setSessionsStatus?: ArchiveSessionsDeps['setSessionsStatus'];
-  sessionOps?: { moveSessions: MoveSessionsDeps['moveSessions'] };
+  sessionOps?: {
+    moveSessions: MoveSessionsDeps['moveSessions'];
+    exportSession: ExportSessionDeps['exportSession'];
+  };
 }
 
 /**
@@ -697,6 +702,10 @@ export function createXdtHelperMcpServer(
     registerMoveSessionsTool(registry, {
       getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
       moveSessions: deps.sessionOps.moveSessions,
+    });
+    registerExportSessionTool(registry, {
+      getSessionContext: () => resolveLiziMcpSessionContext(sessionCtx),
+      exportSession: deps.sessionOps.exportSession,
     });
   }
 
