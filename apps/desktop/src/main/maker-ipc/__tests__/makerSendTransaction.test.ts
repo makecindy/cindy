@@ -1292,6 +1292,45 @@ describe('maker SEND transaction', () => {
     expect(rebuilt.send).toHaveBeenCalled();
   });
 
+  it('skips DB-dir probing while the live directory is under recovery', async () => {
+    // live 目录已被 workingDirectoryRecovery 接管时重建目标只能是 recoveredDir:
+    // 探测 DB 目录的结果用不上,而托管 worktree 的就绪探测可能触发一次真实 restore。
+    const liveSession = createSession({ workDir: '/data/old-project' });
+    const recoveredDir = '/userData/dialogues/recovered';
+    const worktreeDir = '/repo/.cindy-worktrees/steady-goodall';
+    const rebuilt = createSession({ workDir: recoveredDir });
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => worktreeDir),
+      resolveRecoveredWorkingDir: (_id, dir) =>
+        (dir === '/data/old-project' ? recoveredDir : dir),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+      checkWorkDirExists: vi.fn(async (_sid, dir) => dir !== worktreeDir),
+      bootstrapSession: vi.fn(async () => ({
+        session: rebuilt,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    // 只探过 live 目录与 recovery 目标,DB 的 managed worktree 根本没被探测。
+    expect(vi.mocked(deps.checkWorkDirExists).mock.calls.map((call) => call[1])).toEqual([
+      '/data/old-project',
+      recoveredDir,
+    ]);
+    expect(deps.statDirectory).not.toHaveBeenCalled();
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: recoveredDir }),
+    );
+    expect(liveSession.send).not.toHaveBeenCalled();
+    expect(rebuilt.send).toHaveBeenCalled();
+  });
+
   it('does not rebuild a live runtime for a path that only differs in spelling', async () => {
     // 仅分隔符 / 尾斜杠差异不是目录漂移:否则白白关掉并重建一次 runtime。
     const liveSession = createSession({ workDir: 'C:\\repo\\PROJECT' });
