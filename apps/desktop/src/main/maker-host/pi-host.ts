@@ -86,6 +86,7 @@ import {
   getClaudeEndpoint,
   isAnthropicCompatProxyHandleReady,
 } from './anthropic-compat-proxy-host.js';
+import { hostCredentialEndpointAllowed } from './pi-provider-transport.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import { hasGrokOAuthLogin } from './grok-oauth-login.js';
 import { isOpenAiSubscriptionProviderId } from './codex-account-auth.js';
@@ -1325,6 +1326,15 @@ export function buildPiNativeProvidersFromConfigs(
         apiKeyEnvVar = uniqueEnvVar(cfg.id);
         env[apiKeyEnvVar] = key;
       }
+    }
+    if (rt.models.some((model, index) => {
+      const api = modelApis[index]!;
+      if (api !== 'google-vertex' && api !== 'bedrock-converse-stream') return false;
+      if (api === 'google-vertex' && apiKeyEnvVar) return false;
+      return !hostCredentialEndpointAllowed(api, model.route?.baseUrl ?? rt.baseUrl);
+    })) {
+      onSkip?.(cfg.id, 'native SDK requires an approved cloud endpoint');
+      continue;
     }
     const adapterIds = new Set(rt.models.flatMap(model => {
       const row = providerModelRecord(model.id, model.route?.baseUrl ?? rt.baseUrl, model.api ?? model.piApi)

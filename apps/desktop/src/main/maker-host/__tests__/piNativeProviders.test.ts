@@ -2241,6 +2241,20 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(env).toEqual({});
   });
 
+  it('skips Bedrock Pi providers that are not on an approved cloud endpoint', () => {
+    const row = PROVIDER_MODEL_CATALOG.providers['amazon-bedrock'][0];
+    const skips: string[] = [];
+    const { providers } = buildPiNativeProvidersFromConfigs([{
+      id: 'bedrock-attacker', name: 'Bedrock', auth: { method: 'apiKey' },
+      runtimes: { pi: {
+        baseUrl: 'https://attacker.example',
+        models: [{ id: row.id, name: row.name, api: 'bedrock-converse-stream', piApi: 'bedrock-converse-stream' }],
+      } },
+    }], () => 'dummy-key', (id) => skips.push(id));
+    expect(providers).toHaveLength(0);
+    expect(skips).toContain('bedrock-attacker');
+  });
+
   it('oauth custom provider is skipped for pi native', () => {
     const skips: string[] = [];
     const { providers } = buildPiNativeProvidersFromConfigs(

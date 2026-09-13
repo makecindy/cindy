@@ -138,11 +138,19 @@ export function nativeBridgeApiKey(headers: Readonly<Record<string, string>>): s
   return Object.entries(headers).find(([name]) => name.toLowerCase() === 'x-api-key')?.[1] ?? '';
 }
 
+function isNativePlaceholderKey(apiKey: string | undefined): boolean {
+  const token = apiKey?.trim();
+  return !token
+    || token === 'pi-native-keyless'
+    || token === 'cindy-pi-provider-auth-placeholder'
+    || token === 'cindy-local-provider';
+}
+
 function cloudflareGatewayHeaders(
   apiKey: string | undefined,
   headers: Record<string, string> | undefined,
 ): Record<string, string | null> {
-  const token = apiKey?.trim();
+  const token = isNativePlaceholderKey(apiKey) ? undefined : apiKey?.trim();
   return {
     ...headers,
     ...(token ? { 'cf-aig-authorization': `Bearer ${token}` } : {}),

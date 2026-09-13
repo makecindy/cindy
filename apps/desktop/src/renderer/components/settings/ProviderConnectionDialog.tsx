@@ -1386,7 +1386,7 @@ export function ProviderConnectionDialog({
           ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
             ...(m.route ? { route: { ...m.route } } : {}),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+            ...(typeof m.defaultEnabled === 'boolean' ? { defaultEnabled: m.defaultEnabled } : {}),
             ...(m.supportsImageInput !== undefined
               ? { supportsImageInput: m.supportsImageInput }
               : {}),
@@ -1428,7 +1428,7 @@ export function ProviderConnectionDialog({
               ...(agent === 'pi' && cur?.piApi ? { piApi: cur.piApi } : {}),
               ...(cur?.route ? { route: { ...cur.route } } : {}),
               ...(contextWindow !== undefined ? { contextWindow } : {}),
-              ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
+              ...(typeof cur?.defaultEnabled === 'boolean' ? { defaultEnabled: cur.defaultEnabled } : {}),
               ...(cur?.supportsImageInput !== undefined
                 ? { supportsImageInput: cur.supportsImageInput }
                 : {}),
@@ -1517,7 +1517,7 @@ export function ProviderConnectionDialog({
         ...(picker.agent === 'pi' && piApi ? { piApi } : {}),
         ...((latest?.route ?? m.route) ? { route: { ...(latest?.route ?? m.route)! } } : {}),
         ...(contextWindow !== undefined ? { contextWindow } : {}),
-        ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
+        ...(typeof defaultEnabled === 'boolean' ? { defaultEnabled } : {}),
         ...(supportsImageInput !== undefined ? { supportsImageInput } : {}),
         ...(reasoning !== undefined
           ? {
@@ -1544,7 +1544,7 @@ export function ProviderConnectionDialog({
           ...(picker.agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.route ? { route: { ...m.route } } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-          ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+          ...(typeof m.defaultEnabled === 'boolean' ? { defaultEnabled: m.defaultEnabled } : {}),
           ...(m.supportsImageInput !== undefined
             ? { supportsImageInput: m.supportsImageInput }
             : {}),
@@ -1645,7 +1645,7 @@ export function ProviderConnectionDialog({
           ...(a === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
           ...(m.route ? { route: { ...m.route } } : {}),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
-          ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+          ...(typeof m.defaultEnabled === 'boolean' ? { defaultEnabled: m.defaultEnabled } : {}),
           ...(m.supportsImageInput !== undefined
             ? { supportsImageInput: m.supportsImageInput }
             : {}),

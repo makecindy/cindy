@@ -34,8 +34,10 @@ async function registerCindyNativeProviderAdapters(pi: any) {
         const nativeContext = { ...context, messages: context.messages.map((message: any) =>
           message.role === 'assistant' && message.provider === alias.id
             ? { ...message, provider: alias.provider } : message) };
-        const gatewayKey = typeof options?.apiKey === 'string' && options.apiKey.trim()
-          ? 'Bearer ' + options.apiKey.trim() : options?.headers?.['cf-aig-authorization'];
+        const token = typeof options?.apiKey === 'string' ? options.apiKey.trim() : '';
+        const placeholderKey = !token || ['pi-native-keyless', 'cindy-pi-provider-auth-placeholder', 'cindy-local-provider'].includes(token);
+        const gatewayKey = token && !placeholderKey
+          ? 'Bearer ' + token : options?.headers?.['cf-aig-authorization'];
         const nativeOptions = alias.provider === 'cloudflare-ai-gateway'
           ? { ...options, apiKey: undefined, headers: { ...options?.headers,
               ...(gatewayKey ? { 'cf-aig-authorization': gatewayKey } : {}),

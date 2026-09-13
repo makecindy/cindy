@@ -107,6 +107,18 @@ it('does not let Bedrock execution inherit Desktop IAM against an unrelated host
     .rejects.toThrow(/approved cloud endpoint/);
 });
 
+it('does not let a Pi placeholder key overwrite a saved Cloudflare header', async () => {
+  const original = PROVIDER_MODEL_CATALOG.providers['cloudflare-ai-gateway'].find(row => row.execution.pi.api === 'openai-completions')!;
+  const row = { ...original, upstream: original.upstream.replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account').replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway') };
+  let sent: Headers | undefined;
+  const send = createPiProviderFetch({ row, providerId: 'renamed-cloudflare', apiKey: 'pi-native-keyless',
+    headers: { 'cf-aig-authorization': 'Bearer header-only-key' },
+    fetchImpl: async (_url, init) => { sent = new Headers(init?.headers); return new Response(reply, { headers: { 'content-type': 'text/event-stream' } }); },
+  });
+  expect(await (await send('https://unused.invalid', { body: JSON.stringify({ model: row.id, input: 'hello', stream: true }) })).text()).toContain('response.completed');
+  expect(sent?.get('cf-aig-authorization')).toBe('Bearer header-only-key');
+});
+
 it('keeps a saved Cloudflare gateway header when no API key is stored', async () => {
   const original = PROVIDER_MODEL_CATALOG.providers['cloudflare-ai-gateway'].find(row => row.execution.pi.api === 'openai-completions')!;
   const row = { ...original, upstream: original.upstream.replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account').replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway') };

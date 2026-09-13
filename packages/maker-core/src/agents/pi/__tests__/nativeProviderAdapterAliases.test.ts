@@ -14,7 +14,7 @@ describe('nativeProviderAdapterAliases', () => {
   });
 
   it('does not replace a saved Cloudflare header with an empty API key', () => {
-    expect(PI_NATIVE_PROVIDER_ADAPTER_SOURCE).toContain("options.apiKey.trim()");
+    expect(PI_NATIVE_PROVIDER_ADAPTER_SOURCE).toContain('pi-native-keyless');
     expect(PI_NATIVE_PROVIDER_ADAPTER_SOURCE).toContain("options?.headers?.['cf-aig-authorization']");
   });
 });
