@@ -6,7 +6,9 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import {
+  getSessionBranches,
   moveSessions,
+  openSessionInNewWindow,
   type SessionOperationsDeps,
   type SessionOpsRow,
 } from '../sessionOperations.js';
@@ -51,6 +53,7 @@ function makeDeps(rows: SessionOpsRow[], overrides: Partial<SessionOperationsDep
     isImAttached: () => false,
     isDirectory: async () => true,
     updateSession,
+    openInNewWindow: vi.fn(),
     ...overrides,
   };
   return { deps, updateSession };
@@ -188,5 +191,46 @@ describe('moveSessions', () => {
     });
     const res = await moveSessions(deps, { sessionIds: ['a', 'b'], target: toProject });
     expect(res).toMatchObject({ ok: false, errorCode: 'NOT_FOUND', moved: [{ sessionId: 'a' }] });
+  });
+});
+
+describe('openSessionInNewWindow', () => {
+  it('opens existing sessions and rejects deleted ones', async () => {
+    const { deps } = makeDeps([row('a'), row('d', { status: 'deleted' })]);
+    expect(await openSessionInNewWindow(deps, { sessionId: 'a' })).toMatchObject({ ok: true, sessionId: 'a' });
+    expect(deps.openInNewWindow).toHaveBeenCalledWith('a');
+    expect(await openSessionInNewWindow(deps, { sessionId: 'd' })).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+    expect(await openSessionInNewWindow(deps, { sessionId: 'x' })).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
+  });
+});
+
+describe('getSessionBranches', () => {
+  it('walks up to the root and collects all descendants', async () => {
+    const { deps } = makeDeps([
+      row('root'),
+      row('c1', { parentSessionId: 'root', forkedAtMessageId: 'm1' }),
+      row('c2', { parentSessionId: 'root' }),
+      row('gc', { parentSessionId: 'c1' }),
+      row('other'),
+    ]);
+    const res = await getSessionBranches(deps, { sessionId: 'gc' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.rootSessionId).toBe('root');
+      expect(res.family.map((f) => f.sessionId).sort()).toEqual(['c1', 'c2', 'gc', 'root']);
+      expect(res.family.find((f) => f.sessionId === 'c1')).toMatchObject({ parentSessionId: 'root', forkedAtMessageId: 'm1' });
+    }
+  });
+
+  it('drops soft-deleted sessions and their descendants from the family', async () => {
+    const { deps } = makeDeps([
+      row('root'),
+      row('keep', { parentSessionId: 'root' }),
+      row('gone', { parentSessionId: 'root', status: 'deleted' }),
+      row('orphan', { parentSessionId: 'gone' }),
+    ]);
+    const res = await getSessionBranches(deps, { sessionId: 'keep' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.family.map((f) => f.sessionId).sort()).toEqual(['keep', 'root']);
   });
 });
