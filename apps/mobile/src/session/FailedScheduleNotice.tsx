@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { compareFailedScheduleRuns, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
+import { compareFailedScheduleRuns, scheduleFailureMessageKey, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
 import { CircleAlert, X } from 'lucide-react-native';
 import { useEffect, useState } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -37,7 +37,7 @@ export function FailedScheduleNotice({ source, run }: { source: string; run: Fai
   return (
     <View style={styles.box} testID="session.failedScheduleNotice">
       <CircleAlert color={colors.errorText} size={iconSize.md} strokeWidth={iconStroke.regular} />
-      <Text style={styles.text}>{t('session.failedScheduleNotice.text')}</Text>
+      <Text style={styles.text}>{t(`session.failedScheduleNotice.${scheduleFailureMessageKey(run)}`)}</Text>
       <Pressable accessibilityRole="button" accessibilityLabel={t('session.failedScheduleNotice.dismissTitle')}
         onPress={dismiss} style={({ pressed }) => [styles.close, pressed && styles.pressed]}>
         <X color={colors.errorText} size={iconSize.md} strokeWidth={iconStroke.regular} />

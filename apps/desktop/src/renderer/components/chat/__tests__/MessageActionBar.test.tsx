@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +8,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('@/components/ui/tooltip', () => ({
+vi.mock('@/components/ui/tooltip', async (importOriginal) => ({
+  // Keep Tip's real ref/event forwarding for the composed menu trigger.
+  ...(await importOriginal<typeof import('@/components/ui/tooltip')>()),
   Tooltip: {
     Root: ({ children }: { children: ReactNode }) => <>{children}</>,
     Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -123,6 +125,23 @@ describe('MessageActionBar', () => {
       }),
     );
     await waitFor(() => expect(onDelete).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(['left', 'right'] as const)('preserves edit and rewind callbacks with %s alignment', (align) => {
+    const onEdit = vi.fn();
+    const onRewind = vi.fn();
+    render(<MessageActionBar copyText="body" align={align} hovered onEdit={onEdit} onRewind={onRewind} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.edit' }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'chat.messageActionBar.rewind' }));
+    expect(onRewind).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['left', 'right'] as const)('does not invent user actions without callbacks with %s alignment', (align) => {
+    render(<MessageActionBar copyText="body" align={align} hovered />);
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
   });
 
   it('keeps teammate actions visible, exposes Reply, and hides fork and usage', async () => {
@@ -260,7 +279,7 @@ describe('MessageActionBar', () => {
     const trigger = screen.getByRole('button', {
       name: 'chat.messageActionBar.moreActions',
     });
-    trigger.focus();
+    act(() => trigger.focus());
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     const item = await screen.findByRole('menuitem', {
       name: 'chat.quote.addToChat',

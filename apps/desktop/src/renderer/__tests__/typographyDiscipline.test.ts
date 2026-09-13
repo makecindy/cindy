@@ -144,6 +144,16 @@ interface Exemption {
 }
 
 const EXEMPTIONS: Exemption[] = [
+  {
+    file: 'src/main/windowsBadgeIcon.ts',
+    rule: 'inline-size',
+    reason: 'DESIGN.md §2 Windows taskbar attention badge: 16px 系统图标内的 8–12px 拟合数字',
+    signatures: [
+      { match: 'fontSize …1', expected: 1 },
+      { match: 'fontSize …2', expected: 1 },
+      { match: 'fontSize …8', expected: 1 },
+    ],
+  },
   // 登录/Splash 品牌画布域:Tailwind font-bold ×7 + 内联 700 五处形态
   // (238 直接字面量、290 filled/error 三元、300/310 focus/blur style 赋值、748 内联 style)。
   {
@@ -204,10 +214,13 @@ const EXEMPTIONS: Exemption[] = [
     signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
   },
   {
-    file: 'src/renderer/components/chat/DiffView.tsx',
+    file: 'src/renderer/components/chat/chatChrome.ts',
     rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 }],
+    reason: 'DS-9 将既有代码字号与紧凑派生值集中到共享样式；仅迁移签名，不扩大值域',
+    signatures: [
+      { match: 'text-[length:var(--app-code-font-size)]', expected: 1 },
+      { match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 1 },
+    ],
   },
   {
     file: 'src/renderer/components/chat/GhostSummonCard.tsx',
@@ -231,7 +244,7 @@ const EXEMPTIONS: Exemption[] = [
     file: 'src/renderer/components/chat/MarkdownRenderer.tsx',
     rule: 'arb-size',
     reason: '代码字号变量',
-    signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 2 }],
+    signatures: [{ match: 'text-[length:var(--app-code-font-size)]', expected: 1 }],
   },
   {
     file: 'src/renderer/components/chat/SystemCard.tsx',
@@ -241,18 +254,6 @@ const EXEMPTIONS: Exemption[] = [
       { match: 'text-[length:calc(var(--app-code-font-size)_-_1.5px)]', expected: 1 },
       { match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 },
     ],
-  },
-  {
-    file: 'src/renderer/components/chat/ToolCallCard.tsx',
-    rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 2 }],
-  },
-  {
-    file: 'src/renderer/components/chat/ToolPayloadLightbox.tsx',
-    rule: 'arb-size',
-    reason: '紧凑代码字号派生值',
-    signatures: [{ match: 'text-[length:calc(var(--app-code-font-size)_-_1px)]', expected: 3 }],
   },
   {
     file: 'src/renderer/components/chat/UserMessage.tsx',

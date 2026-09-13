@@ -38,6 +38,8 @@ import { randomUUID } from 'node:crypto';
 
 import {
   makeInteractionCancel,
+  makeMessageOp,
+  HOOK_FEATURE_MESSAGE_OPS,
   makeInteractionRequest,
   makeTaskAck,
   type MessageOpResultPayload,
@@ -63,6 +65,7 @@ import {
 import { createTelegramMessageLifecycle, type TelegramMessageLifecycle } from '@cindy/im';
 
 import { HOOK_CHAT_WORKSPACE_ALIAS } from '../../shared/hookControlIpc.js';
+import { captureImContext, type ImContextSnapshot } from '../../shared/imMessageSource.js';
 import type { GroupHistoryAccessScope } from '../im/shared/groupHistoryAccess.js';
 import { groupHistoryAccessForExternalKey } from './groupHistoryScope.js';
 import { isPathWithin } from './paths.js';
@@ -145,6 +148,8 @@ export interface HookContinuationWatchRequest {
 }
 
 export interface HookRunRequest {
+  /** Local display snapshot; not part of the server wire protocol. */
+  contextSnapshot?: ImContextSnapshot;
   sessionId: string;
   /**
    * IM lane 形态(externalKey 派生): 'group' = 群/topic, 'dm' = 私聊。
@@ -210,6 +215,8 @@ export interface HookRunRequest {
    * 连接不在线时直接丢弃, 不缓存不重发(与 turn.end 的离线补发相反)。
    */
   onProgress?: (text: string) => void;
+  /** Independent, acknowledged channel notice after runtime retirement fails. */
+  onRuntimeRecovery?: (text: string) => Promise<boolean>;
   /**
    * 执行中交互卡回调(interaction.request 链路)。runner 把 maker 的
    * InteractionRequest 合成渠道无关卡片后经此发出; 连接不在线时丢弃
@@ -269,6 +276,7 @@ export interface HookDispatcherDeps {
    */
   buildContextPrefix?: (payload: TaskDispatchPayload) => Promise<{
     prefix: string;
+    messageCount?: number;
     commit: (
       guard?: () => boolean | Promise<boolean>,
     ) =>
@@ -739,6 +747,10 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
   }
   /** 每连接当前发送函数(transport 重建后由 onConnected / handleDispatch 刷新)。 */
   const sendFns = new Map<string, (m: HookMessage) => boolean>();
+  const recoveryDeliveries = new Map<string, (delivered: boolean) => void>();
+  const clearRecoveryDeliveries = (): void => {
+    for (const settle of recoveryDeliveries.values()) settle(false);
+  };
   /** 离线积压的 turn.end, 按连接缓存; durable terminal 先记 pending, 发送成功后标 sent。 */
   const pendingTurnEnds = new Map<string, PendingTurnEnd[]>();
   /** 双向 ACK 已协商时，等待 server durable accepted 的完整 turn.end 副本。 */
@@ -1557,6 +1569,36 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         outcome = await runner.run({
           ...task.run,
           onProgress,
+          ...(task.run.source?.im === 'telegram' ? {
+            onRuntimeRecovery: (text: string): Promise<boolean> => {
+              // This is not another turn.end: the original result remains final.
+              // Only the negotiated Telegram executor can send outside that turn.
+              if (!isCurrentGeneration(task.accountGeneration)
+                || !dirStillAllowed(task.connectionId, task.run.workingDir)
+                || !serverFeatures.get(task.connectionId)?.includes(HOOK_FEATURE_MESSAGE_OPS)) {
+                return Promise.resolve(false);
+              }
+              const send = sendFns.get(task.connectionId);
+              if (!send) return Promise.resolve(false);
+              const opId = randomUUID();
+              return new Promise<boolean>((resolve) => {
+                const settle = (delivered: boolean): void => {
+                  clearTimeout(timer);
+                  recoveryDeliveries.delete(opId);
+                  resolve(delivered);
+                };
+                const timer = setTimeout(() => settle(false), 10_000);
+                timer.unref?.();
+                recoveryDeliveries.set(opId, settle);
+                try {
+                  if (!send(makeMessageOp({ opId,
+                    scope: { externalKey: task.run.origin.externalKey },
+                    action: { kind: 'send', text, tier: 'plain' },
+                  }))) settle(false);
+                } catch { settle(false); }
+              });
+            },
+          } : {}),
           onInteraction,
           onInteractionCancel,
           ...(task.commitContextCursor
@@ -2273,11 +2315,13 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     serializeByKey(`${connectionId} ${payload.externalKey}`, async () => {
       try {
         let contextPrefix = '';
+        let groupMessageCount: number | undefined;
         let commitContextCursor: ContextCursorCommit | undefined;
         if (buildContextPrefix) {
           try {
             const assembly = await buildContextPrefix(dispatchPayload);
             contextPrefix = assembly.prefix;
+            groupMessageCount = assembly.messageCount;
             commitContextCursor = assembly.commit;
           } catch (error) {
             log.warn(`group context prefix failed, dispatching without it: ${String(error)}`);
@@ -2307,6 +2351,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
           run: {
             ...resolved.run,
             ...(contextPrefix ? { prompt: `${contextPrefix}${resolved.run.prompt}` } : {}),
+            contextSnapshot: captureImContext({
+              // Only the host-produced prefix is context; user text may contain
+              // identical tags without becoming an attached background group.
+              groupPrefix: contextPrefix,
+              groupMessageCount,
+            }),
             ...(source ? { source } : {}),
             ...(groupHistoryAccess ? { groupHistoryAccess } : {}),
           },
@@ -2425,6 +2475,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       const wasActive = accountActive;
       accountActive = false;
       accountGeneration += 1;
+      clearRecoveryDeliveries();
       if (accountDeactivation !== null) {
         await accountDeactivation;
         return;
@@ -2757,6 +2808,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       serverFeatures.delete(connectionId);
     },
     dispose() {
+      clearRecoveryDeliveries();
       unsubscribeUiContinuation?.();
       unsubscribeUiIntervention?.();
       unsubscribeUiTurnDispatching?.();
@@ -2774,6 +2826,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
       for (const key of [...pendingDeliveryTurnEnds.keys()]) clearPendingDelivery(key);
     },
     onMessageOpResult(payload: MessageOpResultPayload) {
+      recoveryDeliveries.get(payload.opId)?.(payload.ok);
       // 带上按连接取发送函数的钩子: 群限制了可用表情时要用基础款回落一次,
       // 而该发到哪条连接由 ackReactions 自己记的 task 决定。
       ackReactions.onResult(payload, (connectionId) => sendFns.get(connectionId));

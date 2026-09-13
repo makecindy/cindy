@@ -1035,13 +1035,13 @@ export function AgentActionRow({
               : rowVerbLabel
         }
         className={cn(
-          'group flex w-full items-center gap-[6px]',
+          'group flex w-full items-center gap-1.5',
           ACTIVITY_ROW_RADIUS_CLASS,
           'px-2 py-[3px]',
           ACTIVITY_ROW_HOVER_SURFACE_CLASS,
           ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
           'cursor-pointer select-none outline-none',
-          'focus-visible:ring-2 focus-visible:ring-[var(--info-700)]/40',
+          'focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
           'text-left',
         )}
       >

@@ -4,7 +4,7 @@ import { presentationDate, presentationText, type PresentationLocalizer } from '
 import { isSyntheticTriggerText } from './syntheticTrigger.js';
 import { hasPendingSessionInterruption, type SessionInterruptionState } from './sessionActivity.js';
 import type { RemoteSchedule, RemoteScheduleRun } from './scheduleTypes.js';
-import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, isFailedScheduleRun, compareFailedScheduleRuns, type FailedScheduleRunSnapshot } from './scheduleModel.js';
+import { toMillis, isUnreadScheduleRun, isUnreadFailedScheduleRun, activeScheduleFailures, classifyScheduleFailure, compareFailedScheduleRuns, type FailedScheduleRunSnapshot } from './scheduleModel.js';
 import { sessionCollaborationLabel, sessionWorktreeLabel } from './sessionIdentity.js';
 import { isDefaultDraftSessionTitle } from './sessionTitle.js';
 import { getSessionListCollapseView } from './sessionListCollapse.js';
@@ -608,6 +608,7 @@ export function buildSessionScheduleIndex(
   const schedulesById = new Map(schedules.map((schedule) => [schedule.id, schedule]));
   const scheduleIdsBySession = new Map<string, Set<string>>();
   const index = new Map<string, RemoteSessionScheduleInfo>();
+  const activeFailures = activeScheduleFailures([...runsBySchedule.values()].flat());
   const recordScheduleBinding = (sessionId: string, scheduleId: string) => {
     const scheduleIds = scheduleIdsBySession.get(sessionId) ?? new Set<string>();
     scheduleIds.add(scheduleId);
@@ -641,7 +642,7 @@ export function buildSessionScheduleIndex(
       const existing = index.get(run.sessionId);
       const unreadRunIds = existing ? [...existing.unreadRunIds] : [];
       if (isUnreadScheduleRun(run)) unreadRunIds.push(run.id);
-      const candidate = isFailedScheduleRun(run) ? { runId: run.id, firedAt } : undefined;
+      const candidate = activeFailures.has(run.id) ? { runId: run.id, firedAt, scheduleId: run.scheduleId, failureKind: classifyScheduleFailure(run) } : undefined;
       const latestFailedRun = candidate && (!existing?.latestFailedRun || compareFailedScheduleRuns(candidate, existing.latestFailedRun) > 0)
         ? candidate : existing?.latestFailedRun;
       const running = (existing?.running ?? false) || run.status === 'running';

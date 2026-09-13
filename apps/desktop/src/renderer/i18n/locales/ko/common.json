@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "확인이 필요한 세션: {{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "잠금 화면 제어",
     "windowsready": "현재 Cindy 실행에 허용되었습니다. Cindy를 다시 시작하면 관리자 승인이 다시 필요합니다.",
@@ -60,7 +63,50 @@
     "sendText": "텍스트 전송",
     "keys": "키",
     "showDesktop": "데스크톱",
-    "allWindows": "모든 창"
+    "allWindows": "모든 창",
+    "reconnecting": "다시 연결 중…",
+    "connectionBusy": "다른 기기가 이 원격 데스크톱에 연결되어 있습니다. 해당 기기에서 원격 데스크톱을 종료한 후 다시 연결하세요.",
+    "takeoverConnection": "연결 넘겨받기",
+    "connectionBusyTakeover": "다른 기기가 연결되어 있습니다. 연결을 넘겨받으면 해당 기기의 연결이 끊어집니다.",
+    "remoteDisabled": "컴퓨터에서 원격 제어가 꺼져 있습니다.",
+    "accessRevoked": "이 컴퓨터에 대한 접근 권한이 취소되었습니다.",
+    "directConnection": "컴퓨터에 직접 연결",
+    "videoRelay": "서버 영상 중계",
+    "screenshotRelay": "서버 스크린샷 중계",
+    "shortcut": {
+      "open": "원격 데스크톱 열기",
+      "checking": "원격 데스크톱 확인 중…",
+      "opening": "원격 데스크톱 여는 중…",
+      "unavailable": "원격 데스크톱에 연결할 수 없습니다: {{reason}}",
+      "offline": "이 컴퓨터는 오프라인입니다.",
+      "controlDisabled": "원격 제어 설정에서 이 컴퓨터의 제어를 허용하세요.",
+      "unsupported": "이 기기는 원격 데스크톱을 지원하지 않습니다.",
+      "checkFailed": "컴퓨터 상태를 확인하지 못했습니다. 마우스를 다시 올려 재시도하세요.",
+      "noDisplay": "이 컴퓨터에 사용 가능한 디스플레이가 없습니다."
+    },
+    "viewer": {
+      "settings": "조작",
+      "sound": "소리",
+      "fullscreen": "전체 화면",
+      "exitFullscreen": "전체 화면 종료",
+      "fps": "프레임 속도",
+      "quality": "화질",
+      "automatic": "자동",
+      "smooth": "원활",
+      "balanced": "균형",
+      "clear": "선명",
+      "resolution": "컴퓨터 해상도",
+      "clipboardFailed": "텍스트를 전송할 수 없습니다. 제어 권한을 확인하고 내용을 16,384자 이내로 줄이세요.",
+      "settingsFailed": "디스플레이 설정을 변경할 수 없습니다.",
+      "inputHint": "화면을 클릭하여 입력하세요. Ctrl+Alt+Esc로 키보드 포커스를 해제하고 Cmd/Ctrl+W로 이 창을 닫습니다.",
+      "controlPending": "제어 권한을 가져오는 중…",
+      "controlRequired": "보기 전용입니다. 클립보드와 데스크톱 작업을 사용하려면 제어 권한을 가져오세요.",
+      "confirmDisconnect": "이 컴퓨터와의 연결을 끊을까요?",
+      "confirmDisconnectHint": "원격 데스크톱 연결이 종료됩니다. 컴퓨터의 앱은 계속 실행됩니다.",
+      "disconnectFailed": "연결을 끊지 못했습니다. 다시 시도하세요.",
+      "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 컴퓨터 간에 텍스트를 복사하고 붙여넣으세요. 이미지와 파일은 아직 지원하지 않습니다.",
+      "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "매개변수가 잘못되었습니다. 확인 후 다시 시도하세요.",
@@ -1484,6 +1530,41 @@
     "providers": {
       "title": "모델 제공자",
       "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 세션별로 전환할 수 있습니다.",
+      "import": {
+        "title": "제공자 가져오기",
+        "destination": "가져올 대상",
+        "newConnection": "새 연결 만들기",
+        "keyOnly": "이번에 제공한 API Key만 변경합니다. 기존 모델, 경로 및 기타 설정은 유지됩니다.",
+        "modelsPending": "{{name}} 설정을 저장했지만 모델 목록을 가져오지 못했습니다. 제공자 설정에서 다시 시도하세요.",
+        "busyWarning": "이 변경에는 로컬 Codex 서비스 다시 로드가 필요하며 실행 중인 세션 {{count}}개가 중단될 수 있습니다. 계속할까요?",
+        "close": "제공자 가져오기 닫기",
+        "loadFailed": "이 제공자 가져오기 링크가 잘못되었거나 만료되었습니다.",
+        "confirmFailed": "제공자를 가져오지 못했습니다. 링크 또는 엔드포인트를 확인하고 다시 시도하세요.",
+        "oauthFailed": "제공자는 추가되었지만 인증이 완료되지 않았습니다. 인증을 다시 시도하세요.",
+        "done": "{{name}} 가져오기 완료",
+        "oauthDone": "{{name}} 추가 및 인증 완료",
+        "cancel": "취소",
+        "create": "제공자 가져오기",
+        "update": "제공자 업데이트",
+        "replaceKey": "API Key 교체",
+        "addAndAuthorize": "추가 및 인증",
+        "retryOAuth": "인증 다시 시도",
+        "harnesses": "Harness 구성",
+        "fetchAfterConfirm": "확인 후 모델 목록을 가져옵니다",
+        "modelCount": "모델 {{count}}개",
+        "keyIncluded": "API Key 포함(내용 숨김)",
+        "headers": "헤더: {{names}}(값 숨김)",
+        "oauthHosts": "인증: {{authorizeHost}} · Token 교환: {{tokenHost}}",
+        "browserAuthorizationInProgress": "방금 열린 브라우저 창에서 인증을 완료하세요.",
+        "replaceWarning": "이번에 제공한 API Key로 선택한 연결의 키를 교체합니다.",
+        "confirmNote": "확인하기 전에는 아무것도 저장하지 않으며 제공자 엔드포인트에 접근하지 않습니다.",
+        "authorizationPendingNote": "제공자가 추가되었지만 인증이 아직 완료되지 않았습니다. 여기서 다시 시도하거나 취소할 수 있습니다.",
+        "action": {
+          "create": "로컬에 새 제공자 {{name}}을(를) 만듭니다.",
+          "update": "기존 제공자 {{name}}을(를) 업데이트합니다.",
+          "replace-key": "{{name}}에 로컬로 저장된 API Key를 교체합니다."
+        }
+      },
       "order": {
         "hint": "드래그하여 순서 변경",
         "handle": "{{provider}} 순서를 변경합니다. 현재 {{total}}개 중 {{position}}번째입니다. 화살표 키로 이동할 수 있습니다.",
@@ -2517,6 +2598,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "WeCom",
       "title": "WeCom 지능형 봇",
       "description": "WeCom 지능형 봇을 연결하고 DM과 그룹 채팅에서 {{appName}}를 사용하세요.",
       "status": {
@@ -2740,6 +2822,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "DingTalk",
       "title": "DingTalk 봇",
       "description": "직접 만든 DingTalk 봇을 연결하고 Stream 모드로 DM과 그룹에서 {{appName}}를 사용합니다.",
       "status": {
@@ -3195,6 +3278,7 @@
         "packageNotFound": "패키지를 찾지 못했습니다. 패키지 이름이나 저장소 URL을 확인하세요.",
         "versionNotFound": "해당 버전을 찾지 못했습니다. 사용 가능한 버전을 선택해 다시 시도하세요.",
         "stateUnavailable": "Cindy가 Pi 확장 상태를 읽지 못했습니다. Cindy를 다시 시작한 뒤 다시 시도하세요.",
+        "runtimeRetirementFailed": "Pi 확장을 새로 고치지 못했습니다. Pi를 다시 사용하기 전에 Cindy를 다시 시작하세요.",
         "runtimeConvergencePartial": "Pi 확장 변경 사항은 저장되었지만 일부 로컬 Pi 작업에서 이전 확장이 계속 실행 중일 수 있습니다. Pi를 다시 사용하기 전에 Cindy를 다시 시작하세요.",
         "nativeCommandFailed": "Pi 기본 패키지 명령에 실패했습니다. 소스나 버전을 확인한 뒤 다시 시도하세요."
       },
@@ -3559,7 +3643,7 @@
         "allowInboundAria": "{{name}}이(가) 본 기기를 제어하도록 허용할지 전환",
         "peerControlOff": "상대방이 제어를 허용하지 않음",
         "masterOffHint": "먼저 위의 메인 스위치를 켜세요",
-        "controllingThisMac": "본 기기를 제어 중"
+        "controllingThisMac": "Cindy에 연결됨"
       },
       "toast": {
         "revoked": "이 기기의 액세스 권한을 철회했습니다",
@@ -5627,9 +5711,9 @@
       "requestChanges": "수정 요청",
       "planFeedbackPlaceholder": "피드백(선택)"
     },
-    "controlledBy": "{{name}} 가 제어 중",
-    "controlledByMultiple": "{{count}}대 기기가 제어 중",
-    "controlledTooltip": "같은 계정으로 로그인한 다른 기기가 이 기기를 원격 제어하고 있습니다. 접근 권한을 철회할 수 있습니다.",
+    "controlledBy": "{{name}}이(가) Cindy에 연결됨",
+    "controlledByMultiple": "기기 {{count}}대가 Cindy에 연결됨",
+    "controlledTooltip": "Cindy 세션에 연결된 기기입니다. 이 수는 데스크톱 마우스와 키보드를 제어하는 기기 수가 아닙니다. 접근 권한을 철회할 수 있습니다.",
     "revokeAccess": "권한 철회",
     "viewControllers": "보기",
     "collapseControlledNotice": "원격 제어 알림 접기",
@@ -7944,7 +8028,9 @@
       "loading": "브랜치 불러오는 중…",
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
-      "sourceTooltip": "worktree 소스 브랜치"
+      "sourceTooltip": "worktree 소스 브랜치",
+      "searchPlaceholder": "브랜치 검색",
+      "noMatch": "일치하는 브랜치가 없습니다"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",
@@ -8564,7 +8650,9 @@
       "dismissTitle": "이 중단 알림 닫기"
     },
     "unreadFailedScheduleBanner": {
-      "text": "완료되지 않은 예약 실행이 있습니다. 실행 기록을 확인하세요.",
+      "text": "실패한 자동 실행이 있습니다.",
+      "precheck": "자동 확인이 일시적으로 차단되었습니다.",
+      "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
       "dismissTitle": "이전 실패 알림 닫기"
     },
     "worktreeRestoreBanner": {
@@ -9014,6 +9102,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · {{platform}}에서",
+      "attachedContext": "이 메시지에 첨부된 컨텍스트",
+      "attachedContextCount": "이 메시지에 첨부된 컨텍스트 ({{count}})",
+      "groupBackgroundCount": "그룹 채팅 배경 ({{count}})",
+      "referencedMessages": "참조 메시지 ({{count}})",
+      "referencedContext": "참조 메시지",
+      "groupBackground": "그룹 채팅 배경",
       "viewThread": "스레드 컨텍스트 보기 ({{count}})"
     },
     "rewind": {
@@ -9408,7 +9502,7 @@
       "createProjectFailed": "프로젝트 생성 실패",
       "projectsToggleExpand": "모든 프로젝트 세션 펼치기",
       "projectsToggleCollapse": "모든 프로젝트 세션 접기",
-      "filterAria": "사이드바 표시 설정(상태: {{status}}, Agent: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
+      "filterAria": "사이드바 표시 설정(상태: {{status}}, Harness: {{vendor}}, 최근 활동: {{lastActivity}}, 그룹: {{groupBy}}, 정렬: {{sortBy}}, 프로젝트: {{projects}})",
       "organizeSidebar": "사이드바 표시 설정",
       "filterAllText": "전체",
       "filterSelectedProjects": "{{count}}개 선택됨",
@@ -9424,10 +9518,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "프로젝트별 그룹",
+        "project": "프로젝트별",
         "flat": "평면 목록",
-        "device": "기기별 그룹",
-        "dialogue": "대화 묶기"
+        "device": "기기별",
+        "dialogue": "대화별"
       },
       "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
       "deviceGroup": {
@@ -9460,14 +9554,14 @@
         "priority": "확인이 필요한 항목 먼저, 다음 읽지 않음, 실행 중, 나머지는 시간순"
       },
       "filterStatusHeading": "상태",
-      "filterAgentHeading": "에이전트",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "최근 활동",
       "filterGroupByHeading": "그룹",
       "filterSortByHeading": "정렬",
       "filterTaskSortHeading": "세션 정렬",
-      "filterProjectOrderHeading": "프로젝트 순서",
+      "filterProjectOrderHeading": "프로젝트 정렬",
       "filterProjectOrder": {
-        "activity": "세션 정렬 따르기",
+        "activity": "세션 따르기",
         "custom": "수동"
       },
       "filterProjectOrderTip": {
@@ -9714,7 +9808,23 @@
         "projects": "프로젝트",
         "dialogues": "대화"
       },
-      "railNavCount": "세션 {{count}}개"
+      "railNavCount": "세션 {{count}}개",
+      "groupSummary": {
+        "project": "프로젝트",
+        "dialogue": "대화",
+        "device": "기기"
+      },
+      "taskStatusHeading": "세션 상태",
+      "taskStatus": {
+        "active": "활성",
+        "archived": "보관됨",
+        "all": "전체"
+      },
+      "sortTaskBy": {
+        "priority": "우선순위순",
+        "activity": "최근 활동순",
+        "created": "생성 시간순"
+      }
     },
     "rename": {
       "aiRename": "AI로 이름 다시 짓기",
@@ -10311,7 +10421,7 @@
         "enable": "사용",
         "tooltip": "작업이 트리거될 때 이 스크립트를 먼저 실행합니다. 종료 코드 0이면 이번 회차를 진행하고, 종료 코드 2면 이번 회차를 건너뜁니다(Agent를 시작하지 않고 토큰도 사용하지 않음). 스크립트 오류나 시간 초과 시에는 실행을 차단하고 실패 결과를 기록합니다. 스크립트는 작업 디렉터리에서 실행됩니다. Windows에서는 명시적 인터프리터(예: node check.mjs)를 사용하세요.",
         "infoAria": "사전 검사 규칙 보기",
-        "protocol": "스크립트 작성 규칙: 종료 코드 0 = 이번 회차 실행, 종료 코드 2 = 이번 회차 건너뜀(사용량 소모 없음). 그 외 종료 코드, 오류, 시간 초과는 실행을 차단합니다",
+        "protocol": "스크립트 작성 규칙: 종료 코드 0 = 이번 회차 실행, 종료 코드 2 = 이번 회차 건너뜀(사용량 소모 없음). 그 외 종료 코드, 오류, 시간 초과는 실행을 차단합니다. 확인이 완전히 성공한 경우(처리할 내용이 없어 건너뛰는 경우 포함), exit 0/2 전에 stdout의 별도 줄에 CINDY_PRECHECK_OK를 출력하세요. 이전 사전 확인 경고만 해제하며 실행 실패는 해제하지 않습니다. 요청 제한으로 대기 중이거나 확인이 불완전한 경우에는 출력하지 마세요.",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "테스트",
         "testing": "테스트 중…",
@@ -12242,7 +12352,6 @@
     "unsavedDescription": "돌아가면 이 루틴의 변경 사항이 삭제됩니다.",
     "discard": "변경 사항 버리기",
     "continueEditing": "계속 편집",
-
     "title": "루틴",
     "add": "루틴 추가",
     "back": "루틴으로 돌아가기",

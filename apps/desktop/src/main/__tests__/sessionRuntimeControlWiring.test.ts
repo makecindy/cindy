@@ -29,6 +29,10 @@ function handlerBody(source: string, channel: string, nextChannel: string): stri
 }
 
 describe('session runtime control wiring', () => {
+  it('replays Windows attention after the main window is shown independently of inventory loading', () => {
+    const body = handlerBody(bootstrapSource, "mainWindow.once('ready-to-show'", 'if (!app.isPackaged) markDesktopDevWindowReady();');
+    expect(body.indexOf('refreshWindowsAppBadge();')).toBeGreaterThan(body.indexOf('showMainWindowAndRestoreFullscreen('));
+  });
   it('advertises host-side model-window protection to remote controllers', () => {
     const capabilities = handlerBody(
       registerSource,
@@ -171,6 +175,10 @@ describe('session runtime control wiring', () => {
       '// ── Custom protocol registration',
     );
     expect(body).toContain('ghostPanelWindowsController.closeForOwnerChange();');
+    expect(body.indexOf('clearAllSessionAttention();')).toBeGreaterThan(-1);
+    expect(body.indexOf('clearAllSessionAttention();')).toBeLessThan(
+      body.indexOf('authManager.setStableOwnerPostCommitTask('),
+    );
     expect(body).toContain('clearAllSessionProviders();');
     expect(body).toContain('clearAllSessionRuntimeAxes();');
     expect(body.indexOf('clearAllSessionProviders();')).toBeLessThan(

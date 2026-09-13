@@ -32,6 +32,8 @@ const h = vi.hoisted(() => ({
   hasRegisteredWorktreeForSession: vi.fn(),
   recycleWorktreeForRemovedSession: vi.fn(),
   isOwnerScopeCurrent: vi.fn(),
+  upsertRecentWorkdir: vi.fn(async () => true),
+  captureOwnerScope: false,
   drizzle: {},
   readBindings: vi.fn(),
   requestRecycle: vi.fn(),
@@ -59,9 +61,13 @@ vi.mock('../cindy-media/ledger', () => ({
 }));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
-vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
+vi.mock('../localDb/ipc/recentWorkdirs', () => ({
+  upsertRecentWorkdir: h.upsertRecentWorkdir,
+}));
 vi.mock('../device-link/broadcast-tap', () => ({
-  captureDataOwnerBroadcastScope: vi.fn(() => null),
+  captureDataOwnerBroadcastScope: vi.fn(() =>
+    h.captureOwnerScope ? { ownerStamp: { dataOwnerId: 'owner-a', generation: 1 } } : null,
+  ),
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   isDataOwnerBroadcastScopeCurrent: h.isOwnerScopeCurrent,
   tapWindowBroadcast: h.tapWindowBroadcast,
@@ -104,6 +110,8 @@ beforeEach(() => {
   h.hasRegisteredWorktreeForSession.mockReturnValue(true);
   h.recycleWorktreeForRemovedSession.mockResolvedValue(undefined);
   h.isOwnerScopeCurrent.mockReturnValue(true);
+  h.upsertRecentWorkdir.mockResolvedValue(true);
+  h.captureOwnerScope = false;
   h.readBindings.mockReset().mockResolvedValue([]);
   h.requestRecycle.mockReset().mockResolvedValue(undefined);
   Object.assign(h.drizzle, { select: () => ({ from: () => ({ where: () => ({ limit: h.readBindings }) }) }) });
@@ -114,7 +122,9 @@ beforeEach(() => {
   setSessionRouteLockImplementation(h.withSendToSessionLock);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Finish queued cleanup before removing its hooks or resetting the next test's mocks.
+  await queueSessionWorktreeRecycle(async () => {});
   setSessionRemovalCancelOperations(null);
   setSessionRemovalCleanup(null);
   setSessionWorktreeRecycle(null);
@@ -263,6 +273,112 @@ describe('setSessionsStatusInDb', () => {
 
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+  });
+
+  it.each(['desktop', 'plugin'] as const)(
+    'touches retained local %s projects when batch archiving and broadcasts the refresh',
+    async (source) => {
+      h.tx.mockResolvedValueOnce([
+        {
+          sessionId: 's1',
+          title: 'T1',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          remoteHostId: null,
+          source,
+          status: 'archived',
+        },
+      ]);
+      const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_500_200_000);
+
+      try {
+        await setSessionsStatusInDb(['s1'], 'archived');
+      } finally {
+        now.mockRestore();
+      }
+
+      expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+        '/repo',
+        1_786_500_200_000,
+        process.platform,
+        expect.objectContaining({ tx: h.tx, drizzle: h.drizzle }),
+      );
+      expect(h.webContentsSend).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+        path: '/repo',
+      });
+    },
+  );
+
+  it('does not retain remote, dialogue, or scheduler workdirs during batch archive', async () => {
+    h.tx.mockResolvedValueOnce([
+      {
+        sessionId: 'remote',
+        title: 'Remote',
+        workingDir: '/remote/repo',
+        workspaceKind: 'project',
+        remoteHostId: 'host-a',
+        source: 'desktop',
+        status: 'archived',
+      },
+      {
+        sessionId: 'dialogue',
+        title: 'Dialogue',
+        workingDir: '/managed/dialogue',
+        workspaceKind: 'dialogue',
+        remoteHostId: null,
+        source: 'desktop',
+        status: 'archived',
+      },
+      {
+        sessionId: 'scheduled',
+        title: 'Scheduled',
+        workingDir: '/scheduled/repo',
+        workspaceKind: 'project',
+        remoteHostId: null,
+        source: 'scheduler',
+        status: 'archived',
+      },
+    ]);
+
+    await setSessionsStatusInDb(['remote', 'dialogue', 'scheduled'], 'archived');
+
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.webContentsSend).not.toHaveBeenCalledWith(
+      'local-db:recent-workdirs:changed',
+      expect.anything(),
+    );
+  });
+
+  it('touches the entry database but suppresses the batch refresh after an owner switch', async () => {
+    h.captureOwnerScope = true;
+    h.tx.mockImplementationOnce(async () => {
+      h.isOwnerScopeCurrent.mockReturnValue(false);
+      return [
+        {
+          sessionId: 's1',
+          title: 'T1',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          remoteHostId: null,
+          source: 'desktop',
+          status: 'archived',
+        },
+      ];
+    });
+
+    await setSessionsStatusInDb(['s1'], 'archived');
+
+    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+      '/repo',
+      expect.any(Number),
+      process.platform,
+      expect.objectContaining({ tx: h.tx, drizzle: h.drizzle }),
+    );
+    expect(h.webContentsSend).not.toHaveBeenCalledWith(
+      'local-db:recent-workdirs:changed',
+      expect.anything(),
+    );
   });
 
   it('acquires overlapping batch route locks once in stable order', async () => {

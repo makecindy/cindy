@@ -4,6 +4,13 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createMemoryRouter, RouterProvider, useLocation } from 'react-router-dom';
+import { transferableAbortController } from 'node:util';
+
+// jsdom supplies its own AbortController while Request remains Node's native
+// fetch implementation. React Router must construct both in the same realm.
+const NativeAbortController = transferableAbortController().constructor;
+beforeEach(() => vi.stubGlobal('AbortController', NativeAbortController));
+afterEach(() => vi.unstubAllGlobals());
 
 const guard = vi.hoisted(() => vi.fn(async () => true));
 beforeEach(() => guard.mockReset().mockResolvedValue(true));

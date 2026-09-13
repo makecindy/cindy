@@ -177,7 +177,7 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(compact(source)).toContain(
       compact("import { QuotaResetConfetti } from './QuotaResetConfetti';"),
     );
-    expect(compact(source)).toContain(compact('if (celebrating && !prevCelebratingRef.current)'));
+    expect(compact(source)).toContain(compact('const key = quotaFullCelebrations.observe('));
     expect(compact(source)).toContain(compact('segmentElsRef.current[window.key] = el;'));
     expect(compact(source)).toContain(compact('?? chipRef.current;'));
     expect(compact(source)).toContain(compact('<QuotaResetConfetti'));

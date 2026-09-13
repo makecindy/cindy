@@ -49,7 +49,8 @@ export function UnifiedModelRail({
   const activeKey = railItemKey(active);
   return (
     // 设计稿 .rail:宽 48(含 6px 侧距 + 1px 右分隔线)、纵向 8px、格间 2px。
-    <div className="flex min-h-0 w-12 shrink-0 flex-col items-center gap-0.5 overflow-y-auto border-r border-[var(--model-dropdown-border)] px-1.5 py-2">
+    // 与侧栏窄图标栏一致：滚动条不占宽度，避免挤压按钮并触发横向溢出。
+    <div className="flex min-h-0 w-12 shrink-0 flex-col items-center gap-0.5 overflow-x-hidden overflow-y-auto scrollbar-hide border-r border-[var(--model-dropdown-border)] px-1.5 py-2">
       {items.map((item) => {
         const key = railItemKey(item);
         const isActive = activeKey === key;

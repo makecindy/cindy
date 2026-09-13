@@ -1,3 +1,4 @@
+import type { ImMessageSource } from '../../shared/imMessageSource';
 import { readBotAuthorizationCard } from '../../shared/botAuthorization';
 /**
  * makerChatStore — Module-level store for Maker chat (Claude / Codex), sharded by sessionId.
@@ -467,12 +468,7 @@ export interface ChatMessage {
   /** user 消息投递方式:普通新 turn 或运行中 steer。 */
   delivery?: 'turn' | 'steer';
   /** Hook 来源元数据(IM 平台 + 用户干净原文 + thread 上下文),UserMessage 据此渲染 Cindy 任务卡片。 */
-  hookSource?: {
-    im: string;
-    channelName?: string | null;
-    userText?: string;
-    threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
-  };
+  hookSource?: ImMessageSource;
   /** /goal 目标设定/更新标记:该 user 消息是目标文案,renderer 在气泡上方渲「目标 / 目标已更新」徽标。 */
   goalBadge?: { updated: boolean };
   /** F7.2: ask_user message fields */
@@ -15125,50 +15121,80 @@ function updateSystemCardData(
   }
 }
 
-/**
- * F7.4/F7.5: Send all user answers for ask-user-question to the main process.
- * Updates the corresponding ask_user message to 'answered' state.
- */
+// Only an accepted Host receipt may commit a question/plan decision. A rejected
+// or lost receipt leaves the existing card and its draft available for retry.
+const questionDecisionsInFlight = new Set<string>();
+
+function submitQuestionDecision(
+  sessionId: string,
+  requestId: string,
+  decision: Record<string, unknown>,
+  onAccepted: () => void,
+): void {
+  const key = JSON.stringify([sessionId, requestId]);
+  if (questionDecisionsInFlight.has(key)) return;
+  questionDecisionsInFlight.add(key);
+  const owner = getDataOwnerGeneration();
+  const epoch = _messagesEpoch.get(sessionId) ?? 0;
+  const authority = _inputProjectionAuthorityEpoch.get(sessionId) ?? 0;
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  const isCurrent = () => isDataOwnerGenerationCurrent(owner) &&
+    (_messagesEpoch.get(sessionId) ?? 0) === epoch &&
+    (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) === authority &&
+    remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+  bumpInteractionReconcileEpoch(sessionId);
+  void (async () => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const receipt = await Promise.race([
+        makerApiFor(sessionId).resolveInteraction(requestId, decision),
+        new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error('Interaction receipt timeout')), 15_000);
+        }),
+      ]);
+      if (!isCurrent()) return;
+      if (receipt?.accepted !== true) throw new Error('Interaction decision was not accepted');
+      bumpInteractionReconcileEpoch(sessionId);
+      onAccepted();
+    } catch (error) {
+      if (!isCurrent()) return;
+      const state = sessions.get(sessionId);
+      // A winning dismissal from another window/Stop remains authoritative.
+      if (state?.pendingAskUser?.requestId !== requestId &&
+        state?.pendingPlanReview?.requestId !== requestId) return;
+      log.warn('Question decision receipt unavailable', error);
+      toast.warning(i18n.t('newChat.permissionPrompt.submissionFailed'));
+    } finally {
+      if (timer) clearTimeout(timer);
+      questionDecisionsInFlight.delete(key);
+    }
+  })();
+}
+
 function answerUserQuestion(
   sessionId: string,
   requestId: string,
   answers: Record<string, string>,
 ): void {
   if (!sessionId) return;
-  const state = getOrCreateState(sessionId);
-  if (!state.pendingAskUser) return;
-  if (state.pendingAskUser.requestId !== requestId) return;
-  bumpInteractionReconcileEpoch(sessionId);
-
-  // Build a human-readable reply summary
-  const replySummary = formatAskUserReply(answers);
-
-  // Update message to answered + clear pendingAskUser
-  setState(sessionId, (s) => ({
+  if (getOrCreateState(sessionId).pendingAskUser?.requestId !== requestId) return;
+  const submittedAnswers = { ...answers };
+  const replySummary = formatAskUserReply(submittedAnswers);
+  submitQuestionDecision(sessionId, requestId, {
+    kind: 'ask_user_question', answers: submittedAnswers,
+  }, () => setState(sessionId, (s) => ({
     ...s,
-    pendingAskUser: null,
-    // F-AUQ-MIN-5: question resolved — reset viewer for the next one.
-    askUserViewerState: 'expanded',
-    // F-AUQ-DRAFT: question resolved — drop the draft so a future question
-    // (potentially with the same questions[] payload) starts at step 1.
-    askUserDraft: null,
+    pendingAskUser: s.pendingAskUser?.requestId === requestId ? null : s.pendingAskUser,
+    askUserViewerState: s.pendingAskUser?.requestId === requestId ? 'expanded' : s.askUserViewerState,
+    askUserDraft: s.pendingAskUser?.requestId === requestId ? null : s.askUserDraft,
     messages: s.messages.map((m) =>
       m.askUserRequestId === requestId && m.askUserStatus === 'pending'
-        ? {
-            ...m,
-            askUserStatus: 'answered' as const,
-            askUserReply: replySummary,
-            askUserAnswers: answers,
-          }
+        ? { ...m, askUserStatus: 'answered' as const, askUserReply: replySummary, askUserAnswers: submittedAnswers }
         : m,
     ),
-  }));
-
-  // 落库只走 main 的 onInteractionResolved。renderer 先写会让多窗口输家/
-  // Stop-vs-answer 的迟到 updateContent 覆盖赢家或 cancelled。
-  makerApiFor(sessionId)
-    .resolveInteraction(requestId, { kind: 'ask_user_question', answers })
-    .catch((err) => log.error('Failed to answer user question:', err));
+  })));
+  // Persistence belongs exclusively to Main's onInteractionResolved, including
+  // local sessions. A late renderer write must not overwrite a winning decision.
 }
 
 function respondToPluginSetup(
@@ -15495,122 +15521,43 @@ function respondToPlanReview(
   feedback?: string,
 ): void {
   if (!sessionId) return;
-  const state = getOrCreateState(sessionId);
-  if (!state.pendingPlanReview) return;
-  if (state.pendingPlanReview.requestId !== requestId) return;
-
-  const nextStatus = approved ? 'approved' : 'revised';
-  const trimmedFeedback = feedback?.trim() ?? '';
-  bumpInteractionReconcileEpoch(sessionId);
-
-  // Find the clientId for persistence update
-  const planMsg = state.messages.find(
-    (m) =>
-      m.role === 'plan_review' &&
-      m.planReviewRequestId === requestId &&
-      m.planReviewStatus === 'pending',
-  );
-
-  setState(sessionId, (s) => ({
-    ...s,
-    pendingPlanReview: null,
-    // Reset viewer state so the next review starts fresh
-    planViewerState: 'expanded',
-    lastExpandedPlanViewerState: 'expanded',
-    messages: s.messages.map((m) =>
-      m.role === 'plan_review' &&
-      m.planReviewRequestId === requestId &&
-      m.planReviewStatus === 'pending'
-        ? {
-            ...m,
-            planReviewStatus: nextStatus as 'approved' | 'revised',
-            planReviewFeedback: approved ? undefined : trimmedFeedback || undefined,
-          }
-        : m,
-    ),
-  }));
-
-  // Persist answered state via PATCH API。远程会话由被控端权威落库(见 answerUserQuestion 注释),
-  // 控制端跳过避免 dead write;本机会话保持原样。
-  if (planMsg && !isRemoteSession(sessionId)) {
-    messageService
-      .updateContent(sessionId, planMsg.clientId, {
-        requestId,
-        plan: planMsg.planReviewPlan ?? '',
-        planFilePath: planMsg.planReviewFilePath ?? '',
-        status: nextStatus,
-        feedback: approved ? null : trimmedFeedback || null,
-      })
-      .catch((err) => log.error('Failed to persist plan_review state:', err));
-  }
-
-  // Send to maker (InteractionDecision kind: 'plan_review')
-  // approved → behavior='allow' + editedPlan = current pending.plan (用户改过的版本)
-  // 拒绝 → behavior='deny' + reason=feedback (模型读到 feedback 知道为什么被拒)
-  makerApiFor(sessionId)
-    .resolveInteraction(requestId, {
-      kind: 'plan_review',
-      behavior: approved ? 'allow' : 'deny',
-      editedPlan: approved ? state.pendingPlanReview.plan : undefined,
-      reason: approved ? undefined : trimmedFeedback || undefined,
-    })
-    .catch((err) => log.error('Failed to respond to plan review:', err));
+  const pending = getOrCreateState(sessionId).pendingPlanReview;
+  if (pending?.requestId !== requestId) return;
+  const trimmedFeedback = feedback?.trim() || undefined;
+  submitPlanReviewDecision(sessionId, requestId, {
+    kind: 'plan_review',
+    behavior: approved ? 'allow' : 'deny',
+    editedPlan: approved ? pending.plan : undefined,
+    reason: approved ? undefined : trimmedFeedback,
+  }, approved ? 'approved' : 'revised', approved ? undefined : trimmedFeedback);
 }
 
-/**
- * 取消本次计划审阅(issue #475):与批准/反馈并列的第三条出路。
- * 关闭卡片、气泡标 cancelled;决策发 deny + dismissed 标记 ——
- *   - Codex: 结束本轮计划循环,不发修订 turn(dismissed 语义,见 maker-core;下一条消息回常规模式);
- *   - Claude: ExitPlanMode 以默认理由被拒,模型收到后收尾等待,计划模式不变。
- * 持久化与 respondToPlanReview 同款(远程会话由被控端权威落库,本机 PATCH)。
- */
 function cancelPlanReview(sessionId: string, requestId: string): void {
   if (!sessionId) return;
-  const state = getOrCreateState(sessionId);
-  if (!state.pendingPlanReview) return;
-  if (state.pendingPlanReview.requestId !== requestId) return;
-  bumpInteractionReconcileEpoch(sessionId);
+  if (getOrCreateState(sessionId).pendingPlanReview?.requestId !== requestId) return;
+  submitPlanReviewDecision(sessionId, requestId, {
+    kind: 'plan_review', behavior: 'deny', dismissed: true,
+  }, 'cancelled');
+}
 
-  const planMsg = state.messages.find(
-    (m) =>
-      m.role === 'plan_review' &&
-      m.planReviewRequestId === requestId &&
-      m.planReviewStatus === 'pending',
-  );
-
-  setState(sessionId, (s) => ({
+function submitPlanReviewDecision(
+  sessionId: string,
+  requestId: string,
+  decision: Record<string, unknown>,
+  status: 'approved' | 'revised' | 'cancelled',
+  feedback?: string,
+): void {
+  submitQuestionDecision(sessionId, requestId, decision, () => setState(sessionId, (s) => ({
     ...s,
-    pendingPlanReview: null,
-    planViewerState: 'expanded',
-    lastExpandedPlanViewerState: 'expanded',
+    pendingPlanReview: s.pendingPlanReview?.requestId === requestId ? null : s.pendingPlanReview,
+    planViewerState: s.pendingPlanReview?.requestId === requestId ? 'expanded' : s.planViewerState,
+    lastExpandedPlanViewerState: s.pendingPlanReview?.requestId === requestId ? 'expanded' : s.lastExpandedPlanViewerState,
     messages: s.messages.map((m) =>
-      m.role === 'plan_review' &&
-      m.planReviewRequestId === requestId &&
-      m.planReviewStatus === 'pending'
-        ? { ...m, planReviewStatus: 'cancelled' as const, planReviewFeedback: undefined }
+      m.role === 'plan_review' && m.planReviewRequestId === requestId && m.planReviewStatus === 'pending'
+        ? { ...m, planReviewStatus: status, planReviewFeedback: feedback }
         : m,
     ),
-  }));
-
-  if (planMsg && !isRemoteSession(sessionId)) {
-    messageService
-      .updateContent(sessionId, planMsg.clientId, {
-        requestId,
-        plan: planMsg.planReviewPlan ?? '',
-        planFilePath: planMsg.planReviewFilePath ?? '',
-        status: 'cancelled',
-        feedback: null,
-      })
-      .catch((err) => log.error('Failed to persist cancelled plan_review state:', err));
-  }
-
-  makerApiFor(sessionId)
-    .resolveInteraction(requestId, {
-      kind: 'plan_review',
-      behavior: 'deny',
-      dismissed: true,
-    })
-    .catch((err) => log.error('Failed to cancel plan review:', err));
+  })));
 }
 
 /**
@@ -17494,7 +17441,9 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
       const origin = m.agentMeta?.origin;
       const delivery = m.agentMeta?.delivery;
       const goalObjective = m.agentMeta?.goalObjective;
-      const hookSource = m.agentMeta?.hookSource;
+      // Both ingress paths share the Desktop card, but local IM must not opt
+      // older Mobile clients into legacy Hook/system-card semantics.
+      const hookSource = m.agentMeta?.imSource ?? m.agentMeta?.hookSource;
       return {
         clientId: m.clientId,
         role: m.role,

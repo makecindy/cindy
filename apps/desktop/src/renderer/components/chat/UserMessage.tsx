@@ -1,3 +1,5 @@
+import type { ImMessageSource } from '../../../shared/imMessageSource';
+import { hasEmbeddedImPrompt } from './userMessageDisplayText';
 /**
  * UserMessage
  * ---------------------------------------------------------------------------
@@ -12,6 +14,7 @@
  * F-MSG-DOC: document paths rendered inline as @path chips in text content
  */
 
+import { CHAT_BODY_CLASS } from './chatChrome';
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Bot,
@@ -117,7 +120,11 @@ import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
 import { SentAgentReferenceChip, sentAgentReferenceDisplayLabel } from './SentAgentReferenceChip';
-import { parseOrcaCommunicationContent, resolveUserDisplayText } from './userMessageDisplayText';
+import {
+  parseOrcaCommunicationContent,
+  resolveHookGroupContext,
+  resolveUserDisplayText,
+} from './userMessageDisplayText';
 
 /**
  * image-local-cache: a user-message image can be in two shapes:
@@ -195,12 +202,7 @@ interface UserMessageProps {
   /** scheduler 注入的消息来源标记;存在时在气泡上方渲染"由自动化任务发送"标签。 */
   automationOrigin?: MessageAutomationOrigin;
   /** Hook 来源元数据;存在时渲染左对齐 Cindy 署名任务卡片(替代右对齐气泡)。 */
-  hookSource?: {
-    im: string;
-    channelName?: string | null;
-    userText?: string;
-    threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
-  };
+  hookSource?: ImMessageSource;
   /** /goal 目标设定/更新标记:在气泡上方渲一个「目标 / 目标已更新」徽标。 */
   goalBadge?: { updated: boolean };
   /** 订阅槽①:本条消息被意识钩子拦下(未发出)。存在时气泡下方渲一条 error
@@ -1024,6 +1026,10 @@ export function UserMessage({
   // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts;上面已
   // 解析过的 Orca 结果传入复用,渲染热路径不重复 JSON.parse(Copilot review)。
   const displayContent = resolveUserDisplayText({ content, hookSource }, orcaCommunication);
+  const groupContext = useMemo(
+    () => resolveHookGroupContext({ content, hookSource }),
+    [content, hookSource],
+  );
   const validAgentReferences = useMemo(
     () => readAgentInputReferences(agentReferences, content),
     [agentReferences, content],
@@ -1221,7 +1227,7 @@ export function UserMessage({
     !isFirstUserMessage &&
     forkSupported &&
     !orcaCommunication &&
-    !hookSource;
+    !hasEmbeddedImPrompt(hookSource);
 
   // ── rewind ──────────────────────────────────────────────────────────────
   // Dialog open state lives here (UserMessage owns the in-flight period —
@@ -1272,7 +1278,7 @@ export function UserMessage({
     !isFirstUserMessage &&
     rewindSupported &&
     !orcaCommunication &&
-    !hookSource;
+    !hasEmbeddedImPrompt(hookSource);
 
   // ── edit-last-message ──────────────────────────────────────────────────
   // 编辑 = rewind 到本条 + 用编辑后的文本立即重发(见 UserMessageEditBox)。
@@ -1350,6 +1356,24 @@ export function UserMessage({
       : t('chat.userMessage.orcaFromWorker');
 
   // Attachments belong to the user message independently of its visual shell.
+  const messageActions = (
+    <MessageActionBar
+      createdAt={createdAt}
+      copyText={copyText}
+      copyLinkText={messageDeepLink}
+      align={hookSource ? 'left' : 'right'}
+      hovered={hovered}
+      simplifiedBotConversation={simplifiedBotConversation}
+      onFork={!isBlocked && canFork ? handleFork : undefined}
+      onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
+      onShareAsImage={handleShareAsImage}
+      onDelete={!isBlocked && sessionId && messageClientId ? handleDelete : undefined}
+      onEdit={canEdit ? handleEdit : undefined}
+      onRewind={!isBlocked && canRewind ? handleRewind : undefined}
+      rewindInFlight={rewindOpen}
+    />
+  );
+
   // Define each renderer once, then place it inside the hook / ordinary branch
   // so the ordinary message keeps its established badge-before-attachment order.
   const imageAttachmentNodes =
@@ -1457,7 +1481,7 @@ export function UserMessage({
               </div>
             )}
           </div>
-        ) : hookSource ? (
+        ) : hookSource && !editing ? (
           <>
             {/* hook 消息: Cindy 署名任务卡片(左对齐), 替代右对齐用户气泡 +
                 automation 标签。图片 / 文件附件仍属于同一条入站消息。 */}
@@ -1466,8 +1490,14 @@ export function UserMessage({
             <HookTaskCard
               im={hookSource.im}
               userText={displayContent}
+              collapseUserText={hookSource.contentFormat === 'user-text'}
               threadContext={hookSource.threadContext}
+              groupContext={groupContext}
+              replyContext={hookSource.contextSnapshot?.replyContext}
+              groupMessageCount={hookSource.contextSnapshot?.groupMessageCount}
+              replyMessageCount={hookSource.contextSnapshot?.replyMessageCount}
             />
+            {!hasEmbeddedImPrompt(hookSource) && messageActions}
           </>
         ) : (
           <>
@@ -1543,11 +1573,11 @@ export function UserMessage({
                       // 在任意字符处断行，并把内容的 min-content 缩小到一个字符宽。
                       // min-w-0 解除 flex item 默认的 min-width:auto，否则父容器的
                       // max-w-[488px] 会被超长 token 顶穿。两者缺一不可。
-                      'relative min-w-0 max-w-full rounded-[12px]',
+                      'relative min-w-0 max-w-full rounded-xl',
                       'border border-[var(--msg-user-border)]',
                       'bg-[var(--msg-user-bg)]',
                       'px-4 py-3',
-                      'text-15 font-normal leading-[1.6]',
+                      CHAT_BODY_CLASS,
                       'text-[var(--msg-user-text)]',
                       'select-text',
                     )}
@@ -1771,21 +1801,7 @@ export function UserMessage({
                 {/* message-actions V1.2: hover-revealed bar below the bubble,
                 right-aligned, order [time][copy][fork][edit][undo][more]。被拦消息只保留
             编辑和链接复制,fork/rewind/delete 对未发消息无意义。 */}
-                <MessageActionBar
-                  createdAt={createdAt}
-                  copyText={copyText}
-                  copyLinkText={messageDeepLink}
-                  align="right"
-                  hovered={hovered}
-                  simplifiedBotConversation={simplifiedBotConversation}
-                  onFork={!isBlocked && canFork ? handleFork : undefined}
-                  onAddToChat={!isBlocked && messageDeepLink ? handleAddToChat : undefined}
-                  onShareAsImage={handleShareAsImage}
-                  onDelete={!isBlocked && sessionId && messageClientId ? handleDelete : undefined}
-                  onEdit={canEdit ? handleEdit : undefined}
-                  onRewind={!isBlocked && canRewind ? handleRewind : undefined}
-                  rewindInFlight={rewindOpen}
-                />
+                {messageActions}
               </>
             )}
           </>

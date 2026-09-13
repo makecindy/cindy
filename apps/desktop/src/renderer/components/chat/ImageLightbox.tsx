@@ -27,6 +27,7 @@
  *   复用本组件(文件浏览器 / 输入框预览)拿到默认值 undefined,不显示该动作。
  * - 右键：菜单关闭后的同一次背景点击不能顺带关闭 lightbox,见 `lastMenuCloseAt`。
  * - 动画：200ms 透明度淡入淡出。
+ * - 焦点：FocusScope 打开时把焦点移入 overlay 并圈禁 Tab;卸载时还给打开前的焦点元素。
  * - 滚动锁定：打开期间给 `[data-scroll-container]` 设置 `overflowY: hidden`。
  * - 关闭按钮：按设计不显示 X 关闭按钮。
  * - 会话画廊：`enableGallery` 开启后，可用 ←/→ 或屏幕箭头在会话图片间翻页，并显示
@@ -37,6 +38,7 @@
 
 import { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { FocusScope } from '@radix-ui/react-focus-scope';
 import {
   Check,
   ChevronLeft,
@@ -1070,7 +1072,22 @@ export function ImageLightbox({
 
   // 遮罩颜色走统一 token，不再按 Light / Dark 分支判断。
   const overlay = (
-    // biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 全屏 overlay 的键盘关闭由全局 Escape 处理；点击关闭是 lightbox 本身的交互。
+    // FocusScope(trapped+loop):键盘打开后焦点进入弹窗并圈禁在内,Tab 不再
+    // 穿过被遮挡的聊天控件。挂载焦点给 overlay 根(tabIndex=-1 由 FocusScope
+    // 合入,全局 outline:none 保证不闪全屏焦点框):Enter 不触发任何动作,
+    // Tab 依次到达工具栏/翻页按钮;卸载时 FocusScope 默认把焦点还给打开前
+    // 的元素(ChatImageView 键盘路径 = 预览触发器,与 onClose 里的显式恢复
+    // 指向同一元素)。
+    <FocusScope
+      asChild
+      trapped
+      loop
+      onMountAutoFocus={(event) => {
+        event.preventDefault();
+        overlayRef.current?.focus();
+      }}
+    >
+    {/* biome-ignore lint/a11y/noStaticElementInteractions lint/a11y/useKeyWithClickEvents: 全屏 overlay 的键盘关闭由全局 Escape 处理；点击关闭是 lightbox 本身的交互。 */}
     <div
       ref={overlayRef}
       style={{
@@ -1420,6 +1437,7 @@ export function ImageLightbox({
         </>
       ) : null}
     </div>
+    </FocusScope>
   );
 
   return createPortal(overlay, document.body);

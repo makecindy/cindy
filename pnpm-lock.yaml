@@ -37,6 +37,9 @@ patchedDependencies:
   react-native@0.85.3:
     hash: 9442031604caa9cd185e0b2be6867055459fc3a6d2781296027989db098f972d
     path: dependency-patches/react-native@0.85.3.patch
+  rollup@4.62.2:
+    hash: 6d3d17b477e7f051a92906a213d0dfafe6a1f32abd24e526ddfb29603b925037
+    path: dependency-patches/rollup@4.62.2.patch
 
 importers:
 

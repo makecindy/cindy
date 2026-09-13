@@ -466,6 +466,7 @@ function InteractionItem({
     if (optimisticDismiss) remoteSessionStore.beginOptimisticInteractionDismiss(sessionId, currentRequestId);
     try {
       await resolveInteractionResilient(maker, sessionId, currentRequestId, decision);
+      if (kind === 'ask_user_question') clearAskUserDraft(currentRequestId);
       if (kind === 'plan_review') clearPlanReviewDraft(currentRequestId);
       if (optimisticDismiss) {
         remoteSessionStore.settleOptimisticInteractionDismiss(sessionId, currentRequestId, { kind: 'confirmed' });
@@ -808,7 +809,6 @@ function AskUserQuestionCard({
             label={t('interaction.panel.continue')}
             onPress={() => {
               draftCompletedRef.current = true;
-              clearAskUserDraft(requestId);
               onDecision(buildAskUserQuestionDecision({}));
             }}
             requestId={requestId}
@@ -845,7 +845,15 @@ function AskUserQuestionCard({
     setAnswers(nextAnswers);
     if (isLast) {
       draftCompletedRef.current = true;
-      clearAskUserDraft(requestId);
+      // Optimistic dismissal unmounts this form immediately. Save the final
+      // choice now so a refused/lost receipt can restore exactly this draft.
+      const finalSelection = selectionFromAnswer(current, answer);
+      saveAskUserDraft(requestId, {
+        answers: nextAnswers, currentIndex,
+        customInput: finalSelection.customInput,
+        selectedLabels: [...finalSelection.selectedLabels],
+        showCustomInput: finalSelection.showCustomInput,
+      });
       onDecision(buildAskUserQuestionDecision(nextAnswers));
     } else {
       setCurrentIndex((idx) => Math.min(idx + 1, questions.length - 1));

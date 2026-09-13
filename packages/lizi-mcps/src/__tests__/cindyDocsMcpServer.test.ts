@@ -42,7 +42,7 @@ import {
   resolvePptxGenConstructor,
   validateDecodablePptxImage,
 } from '../cindy-docs/make_pptx.js';
-import { DocsPathError, readInputFileWithinLimit } from '../cindy-docs/_paths.js';
+import { DocsPathError, readInputFileWithinLimit, resolveSessionRoot, prepareOutputPath } from '../cindy-docs/_paths.js';
 import { RENDER_PDF_MAX_HTML_BYTES } from '../cindy-docs/render_pdf.js';
 import { MAX_XLSX_ZIP_ENTRIES } from '../cindy-docs/read_sheet.js';
 import type {
@@ -56,6 +56,19 @@ import type {
 
 let workdir: string;
 const created: string[] = [];
+
+it('preserves the authoritative root including trailing whitespace', async () => {
+  const root = `${workdir}/project `;
+  expect(resolveSessionRoot(sessionCtx({ workingDir: root }))).toBe(root);
+  // Windows aliases ordinary trailing-space directory names; lexical identity is tested above.
+  if (process.platform === 'win32') return;
+  await fs.mkdir(root);
+  await fs.mkdir(root.trim());
+  const output = await prepareOutputPath(resolveSessionRoot(sessionCtx({ workingDir: root })), 'result.txt', false);
+  await fs.writeFile(output, 'exact');
+  expect(await fs.readFile(path.join(root, 'result.txt'), 'utf8')).toBe('exact');
+  await expect(fs.stat(path.join(root.trim(), 'result.txt'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
 
 beforeEach(async () => {
   workdir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-test-'));

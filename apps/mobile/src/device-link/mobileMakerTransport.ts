@@ -542,7 +542,7 @@ export interface MobileMakerTransport {
    */
   getVoiceDictionary(): Promise<MobileVoiceDictionarySnapshotResult>;
   getPendingInteractions(sessionId: string): Promise<PendingInteraction[]>;
-  resolveInteraction(requestId: string, decision: Record<string, unknown>): Promise<void>;
+  resolveInteraction(requestId: string, decision: Record<string, unknown>): Promise<{ accepted: boolean } | void>;
   getContextUsage(sessionId: string, createOpts?: Record<string, unknown>): Promise<unknown>;
   fork(sourceSessionId: string, messageClientId: string): Promise<RemoteSession>;
   rewindPreview(sessionId: string, clientId: string): Promise<RewindPreviewPayload>;

@@ -237,6 +237,22 @@ export function getDesktopMcpToolApprovalPolicy(
   if (canAutoApproveCindyArtGhostCall(context)) {
     return 'auto-approve';
   }
+  // Choosing a new Worker root delegates filesystem access. Do not let the
+  // trusted-server shortcut or a cached server grant authorize another root.
+  // Full Access / Auto / Ask still use their existing permission flow.
+  if (serverName === 'cindy_orca') {
+    if (!toolName) return 'prompt-each-time';
+    if (toolName === 'create_worker' || toolName === 'create_workers') {
+      const params = readJsonObject(toolParams);
+      if (!params) return 'prompt-each-time';
+      const workers = toolName === 'create_worker' ? [params] : params.workers;
+      if (!Array.isArray(workers)) return 'prompt-each-time';
+      if (workers.some((worker) => {
+        const spec = readJsonObject(worker);
+        return !spec || Object.hasOwn(spec, 'working_dir');
+      })) return 'prompt-each-time';
+    }
+  }
   const iosSimulatorCall = readIOSSimulatorInnerCall(context);
   if (iosSimulatorCall) {
     const innerName = iosSimulatorCall.name;

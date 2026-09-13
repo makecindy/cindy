@@ -735,10 +735,10 @@ describe('pi translator', () => {
     expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
   });
 
-  it('keeps real aborted Responses stream failures resumable without a Host stop', () => {
+  it.each(['OpenAI Responses stream ended before a terminal response event', 'Request was aborted'])(
+    'keeps real aborted Responses stream failures resumable without a Host stop (%s)', (rawError) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
-    const rawError = 'OpenAI Responses stream ended before a terminal response event';
 
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     translatePiEvent(
@@ -767,13 +767,13 @@ describe('pi translator', () => {
       }),
     ]);
     expect((events.find((event) => event.type === 'error')?.data as { reason?: string }).reason)
-      .toBeUndefined();
+      .toBe(rawError === 'Request was aborted' ? 'upstream-stream-interrupted' : undefined);
   });
 
-  it('treats an aborted Responses stream failure as cancellation after a Host stop', () => {
+  it.each(['OpenAI Responses stream ended before a terminal response event', 'Request was aborted'])(
+    'treats an aborted Responses stream failure as cancellation after a Host stop (%s)', (rawError) => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue, events } = makeQueue();
-    const rawError = 'OpenAI Responses stream ended before a terminal response event';
 
     translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
     markPiHostAbortRequested(ctx);

@@ -73,6 +73,21 @@ describe('sidebar project sorting', () => {
     expect(sorted.map((p) => p.workingDir)).toEqual(['/p/gamma', '/p/alpha', '/p/beta']);
   });
 
+  it('applies a stored Windows order to persistent representatives with different casing', () => {
+    const sorted = sortProjectsForSidebar(
+      [
+        project({ workingDir: 'd:/école/alpha', displayName: 'alpha' }),
+        project({ workingDir: 'd:/école/beta', displayName: 'beta' }),
+      ],
+      'recency',
+      ['local:D:/École/BETA', 'local:D:/École/ALPHA'],
+      'custom',
+      'win32',
+    );
+
+    expect(sorted.map((p) => p.workingDir)).toEqual(['d:/école/beta', 'd:/école/alpha']);
+  });
+
   // 排序时钟 = userSendAt ?? updatedAt(以用户最近一次按下发送为主键)。原先经
   // sortSessionsForSidebar(…, 'time') 间接验证;'time'(最早优先)2026-08-12 用户
   // 裁决删除后,直接对时钟函数断言——不变量本身没变,只是不再借道那个档位。

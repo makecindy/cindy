@@ -2974,7 +2974,7 @@ describe('ClaudeCodeAgent abort stops background wake tasks', () => {
       () => events.some(
         (event) => event.type === 'error' &&
           (event.data as { reason?: unknown } | null | undefined)?.reason ===
-            'upstream_response_idle_timeout',
+            'bridge_upstream_response_idle_timeout',
       ),
       'watchdog timeout observed',
     );

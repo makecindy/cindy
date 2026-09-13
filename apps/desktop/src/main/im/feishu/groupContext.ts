@@ -111,6 +111,8 @@ export interface FeishuGroupContextDeps {
 }
 
 export interface FeishuGroupContextResult {
+  /** Included messages, not lines, attachment sections or omitted older history. */
+  messageCount: number;
   /** 拼在触发消息正文前的完整上下文前缀(含防注入包裹与警告)。 */
   prefix: string;
   /** 历史图片/二进制文件的附件 block(只进模型消息, 不落库)。 */
@@ -371,5 +373,5 @@ export async function buildFeishuGroupContext(args: {
     '只回应当前消息本身的请求。' +
     filteredNote +
     '\n\n';
-  return { prefix, contextAttachments };
+  return { prefix, contextAttachments, messageCount: picked.length };
 }

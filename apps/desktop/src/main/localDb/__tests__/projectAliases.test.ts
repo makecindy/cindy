@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DbClient } from '../client/DbClient.js';
 import { clearCurrentDbClient, setCurrentDbClient } from '../client/current.js';
 import * as schema from '../schema.js';
+import { tx as runDbTx } from '../worker/opHandlers/tx.js';
 
 vi.mock('electron', () => ({
   BrowserWindow: {
@@ -52,6 +53,55 @@ describe('projectAliases localDb helpers', () => {
     expect(await listProjectAliases()).toEqual([]);
   });
 
+  it('atomically replaces every Unicode Windows casing variant', async () => {
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    rawDb!
+      .prepare(
+        'INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?), (?, ?, ?)',
+      )
+      .run(
+        'local:D:/École/Project-A',
+        'Newest alias',
+        2_000,
+        'local:d:/école/project-a',
+        'Older alias',
+        1_000,
+      );
+    const { upsertProjectAlias, listProjectAliases } = await import('../ipc/projectAliases.js');
+
+    await upsertProjectAlias('local:D:/ÉCOLE/PROJECT-A', 'Replacement', 'win32');
+
+    expect(await listProjectAliases()).toEqual([
+      expect.objectContaining({
+        projectKey: 'local:D:/ÉCOLE/PROJECT-A',
+        alias: 'Replacement',
+      }),
+    ]);
+  });
+
+  it('clears every Unicode Windows casing variant', async () => {
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+    rawDb!
+      .prepare(
+        'INSERT INTO project_aliases (project_key, alias, updated_at) VALUES (?, ?, ?), (?, ?, ?)',
+      )
+      .run(
+        'local:D:/École/Project-A',
+        'Newest alias',
+        2_000,
+        'local:d:/école/project-a',
+        'Older alias',
+        1_000,
+      );
+    const { upsertProjectAlias, listProjectAliases } = await import('../ipc/projectAliases.js');
+
+    await upsertProjectAlias('local:D:/ÉCOLE/PROJECT-A', '', 'win32');
+
+    expect(await listProjectAliases()).toEqual([]);
+  });
+
   function createTestDbClient(): DbClient {
     const dbHandle = new Database(':memory:');
     rawDb = dbHandle;
@@ -70,9 +120,8 @@ describe('projectAliases localDb helpers', () => {
       queryOne: async <T = unknown>(sql: string, params: unknown[] = []) =>
         dbHandle.prepare(sql).get(...params) as T | undefined,
       exec: async (sql, params = []) => dbHandle.prepare(sql).run(...params),
-      tx: async () => {
-        throw new Error('tx is not used by this test');
-      },
+      tx: (async (name: string, args: unknown) =>
+        runDbTx(dbHandle, { name, args })) as DbClient['tx'],
       drizzle: db,
       vecAvailable: false,
       dispose: async () => {},

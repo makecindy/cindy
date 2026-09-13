@@ -211,7 +211,7 @@ describe('iOS Simulator IPC handlers', () => {
     const getStatus = vi.fn();
     registerTrusted(harness, {
       getPluginAccess,
-      getSessionContext: async () => ({ workingDir: '/repo/disabled' }),
+      getSessionContext: async () => ({ workingDir: '/repo/disabled ' }),
       getStatus,
     });
 
@@ -220,7 +220,7 @@ describe('iOS Simulator IPC handlers', () => {
         sessionId: 'session-a',
       }),
     ).rejects.toMatchObject({ code: 'IOS_SIMULATOR_DISABLED' });
-    expect(getPluginAccess).toHaveBeenCalledWith('/repo/disabled');
+    expect(getPluginAccess).toHaveBeenCalledWith('/repo/disabled ');
     expect(getStatus).not.toHaveBeenCalled();
   });
 

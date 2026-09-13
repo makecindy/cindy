@@ -1,4 +1,7 @@
 {
+  "appBadge": {
+    "attentionCount": "需要關注的任務：{{count}}"
+  },
   "remoteDesktop": {
     "windowsTitle": "鎖定畫面控制",
     "windowsready": "已為本次執行的 Cindy 啟用。重新啟動 Cindy 後需要再次由管理員授權。",
@@ -31,8 +34,8 @@
     "allow": "允許遠端桌面",
     "allowHint": "允許已登入的同帳號裝置檢視和操作這台電腦的所有應用程式。需同時開啟上方的裝置控制。",
     "permissionHint": "請在電腦的系統設定中允許螢幕錄製和輔助使用，然後重新連線。",
-    "beingControlled": "手機正在控制桌面",
-    "beingViewed": "手機正在檢視桌面",
+    "beingControlled": "桌面正在被遠端控制",
+    "beingViewed": "桌面正在被遠端檢視",
     "disconnect": "中斷連線",
     "back": "返回",
     "connect": "連線",
@@ -60,7 +63,50 @@
     "sendText": "傳送文字",
     "keys": "按鍵",
     "showDesktop": "桌面",
-    "allWindows": "所有視窗"
+    "allWindows": "所有視窗",
+    "reconnecting": "正在重新連線…",
+    "connectionBusy": "已有其他裝置連線至此遠端桌面。請先在該裝置上退出遠端桌面，再嘗試連線。",
+    "takeoverConnection": "接管連線",
+    "connectionBusyTakeover": "已有其他裝置連線至此遠端桌面。接管連線後，上一台裝置會中斷。",
+    "remoteDisabled": "電腦端已關閉遠端控制。",
+    "accessRevoked": "對這台電腦的存取權已撤銷。",
+    "directConnection": "電腦直連",
+    "videoRelay": "伺服器影片中繼",
+    "screenshotRelay": "伺服器截圖中繼",
+    "shortcut": {
+      "open": "開啟遠端桌面",
+      "checking": "正在檢查遠端桌面…",
+      "opening": "正在開啟遠端桌面…",
+      "unavailable": "無法連線至遠端桌面：{{reason}}",
+      "offline": "這台電腦已離線。",
+      "controlDisabled": "請先在遠端控制設定中允許控制這台電腦。",
+      "unsupported": "此裝置不支援遠端桌面。",
+      "checkFailed": "無法確認電腦狀態，重新移入游標可重試。",
+      "noDisplay": "這台電腦沒有可用的顯示器。"
+    },
+    "viewer": {
+      "settings": "操作",
+      "sound": "聲音",
+      "fullscreen": "全螢幕",
+      "exitFullscreen": "結束全螢幕",
+      "fps": "影格率",
+      "quality": "畫質",
+      "automatic": "自動",
+      "smooth": "流暢",
+      "balanced": "均衡",
+      "clear": "清晰",
+      "resolution": "電腦解析度",
+      "clipboardFailed": "文字傳輸失敗，請確認已取得控制權，且內容不超過 16,384 字元。",
+      "settingsFailed": "無法修改顯示設定。",
+      "inputHint": "點擊畫面即可輸入。Ctrl+Alt+Esc 釋放鍵盤焦點；Cmd/Ctrl+W 關閉這個視窗。",
+      "controlPending": "正在取得控制權…",
+      "controlRequired": "目前僅供檢視，取得控制權後可使用剪貼簿和桌面操作。",
+      "confirmDisconnect": "中斷與這台電腦的連線？",
+      "confirmDisconnectHint": "將結束遠端桌面連線，電腦上的應用程式仍會繼續執行。",
+      "disconnectFailed": "無法中斷連線，請重試。",
+      "clipboardShortcutHint": "在畫面內使用 {{modifier}}+C / {{modifier}}+V，即可在兩台電腦之間複製貼上文字。暫不支援圖片和檔案。",
+      "resolutionHint": "解析度修改會影響遠端的實際顯示器。"
+    }
   },
   "ipcError": {
     "INVALID_PARAMS": "引數無效，請檢查後重試。",
@@ -1484,6 +1530,41 @@
     "providers": {
       "title": "模型供應商",
       "subtitle": "選擇模型時的來源。每個來源提供它支援的模型與計費方式，可按任務分別切換。",
+      "import": {
+        "title": "匯入模型供應商",
+        "destination": "匯入至",
+        "newConnection": "建立新連線",
+        "keyOnly": "只更換本次提供的 API Key，保留既有模型、路由和其他設定。",
+        "modelsPending": "{{name}} 已設定，但無法取得模型清單。請在供應商設定中重試。",
+        "busyWarning": "此次變更需要重新載入本機 Codex 服務，可能中斷 {{count}} 個執行中的任務。是否繼續？",
+        "close": "關閉供應商匯入",
+        "loadFailed": "這個供應商匯入連結無效或已經過期。",
+        "confirmFailed": "匯入失敗，請檢查連結或介面位址後再試一次。",
+        "oauthFailed": "供應商已新增，但授權尚未完成。可以再次嘗試授權。",
+        "done": "已匯入 {{name}}",
+        "oauthDone": "已新增並授權 {{name}}",
+        "cancel": "取消",
+        "create": "匯入供應商",
+        "update": "更新供應商",
+        "replaceKey": "取代 API Key",
+        "addAndAuthorize": "新增並授權",
+        "retryOAuth": "重新嘗試授權",
+        "harnesses": "各 Harness 設定",
+        "fetchAfterConfirm": "確認後取得模型清單",
+        "modelCount": "{{count}} 個模型",
+        "keyIncluded": "已包含 API Key（內容已隱藏）",
+        "headers": "請求標頭：{{names}}（值已隱藏）",
+        "oauthHosts": "授權：{{authorizeHost}} · Token 交換：{{tokenHost}}",
+        "browserAuthorizationInProgress": "請在剛剛開啟的瀏覽器視窗中完成授權。",
+        "replaceWarning": "本次提供的 API Key 將取代所選連線的金鑰。",
+        "confirmNote": "點擊確認前不會儲存任何內容，也不會存取供應商介面。",
+        "authorizationPendingNote": "供應商已新增，但授權尚未完成。你可以在這裡重試或取消授權。",
+        "action": {
+          "create": "將在本機新增供應商 {{name}}。",
+          "update": "將更新現有供應商 {{name}}。",
+          "replace-key": "將取代 {{name}} 在本機儲存的 API Key。"
+        }
+      },
       "order": {
         "hint": "拖動排序",
         "handle": "調整 {{provider}} 順序，當前第 {{position}} 項，共 {{total}} 項。使用方向鍵移動。",
@@ -2517,6 +2598,7 @@
       }
     },
     "wecomBot": {
+      "serviceName": "企業微信",
       "title": "企業微信智慧機器人",
       "description": "連線企業微信智慧機器人，在單聊和群聊中使用 {{appName}}。",
       "status": {
@@ -2740,6 +2822,7 @@
       }
     },
     "dingtalkBot": {
+      "serviceName": "釘釘",
       "title": "釘釘機器人",
       "description": "連線你自建的釘釘機器人，透過 Stream 模式在私聊和群聊中使用 {{appName}}。",
       "status": {
@@ -3195,6 +3278,7 @@
         "packageNotFound": "找不到這個套件。請檢查套件名稱或儲存庫網址。",
         "versionNotFound": "找不到這個版本。請選擇可用版本後重試。",
         "stateUnavailable": "Cindy 無法讀取 Pi 擴充功能狀態。請重新啟動 Cindy 後重試。",
+        "runtimeRetirementFailed": "Pi 擴充功能未能完成重新整理。請重新啟動 Cindy 後再使用 Pi。",
         "runtimeConvergencePartial": "Pi 擴充功能變更已儲存，但部分本機 Pi 任務可能仍在執行舊擴充功能。請重新啟動 Cindy 後再使用 Pi。",
         "nativeCommandFailed": "Pi 原生套件命令失敗。請檢查來源或版本後重試。"
       },
@@ -3559,7 +3643,7 @@
         "allowInboundAria": "切換是否允許 {{name}} 控制本機",
         "peerControlOff": "對方未允許遠端控制",
         "masterOffHint": "需先開啟上方總開關",
-        "controllingThisMac": "正在控制本機"
+        "controllingThisMac": "已連接到 Cindy"
       },
       "toast": {
         "revoked": "已撤銷該裝置的訪問權限",
@@ -5627,9 +5711,9 @@
       "requestChanges": "要求修改",
       "planFeedbackPlaceholder": "修改意見(可選)"
     },
-    "controlledBy": "正在被 {{name}} 控制",
-    "controlledByMultiple": "正在被 {{count}} 臺裝置控制",
-    "controlledTooltip": "另一臺登入同帳號的裝置正在遠端控制本機。你可以撤銷其訪問權限。",
+    "controlledBy": "{{name}} 已連接到 Cindy",
+    "controlledByMultiple": "{{count}} 臺裝置已連接到 Cindy",
+    "controlledTooltip": "這些裝置連接了 Cindy 的任務，不代表正在控制桌面滑鼠和鍵盤。你可以撤銷其存取權限。",
     "revokeAccess": "撤銷權限",
     "viewControllers": "檢視",
     "collapseControlledNotice": "收起遠端控制提示",
@@ -7944,7 +8028,9 @@
       "loading": "載入分支中…",
       "loadFailed": "分支列表載入失敗，點此重試",
       "currentTooltip": "當前分支",
-      "sourceTooltip": "worktree 源分支"
+      "sourceTooltip": "worktree 源分支",
+      "searchPlaceholder": "搜尋分支",
+      "noMatch": "無匹配分支"
     },
     "folderPicker": {
       "selectFolder": "選擇資料夾",
@@ -8563,7 +8649,9 @@
       "dismissTitle": "關閉此中斷提示"
     },
     "unreadFailedScheduleBanner": {
-      "text": "先前有定時任務未完成，可查看執行記錄。",
+      "text": "先前有自動執行失敗。",
+      "precheck": "自動檢查暫時受阻。",
+      "rateLimited": "自動檢查暫時受阻：請求限流。",
       "dismissTitle": "關閉歷史失敗提示"
     },
     "worktreeRestoreBanner": {
@@ -9013,6 +9101,12 @@
     },
     "threadContext": {
       "cindyFrom": "Cindy · 來自 {{platform}}",
+      "attachedContext": "這則訊息附帶的上下文",
+      "attachedContextCount": "這則訊息附帶的上下文（{{count}}）",
+      "groupBackgroundCount": "群組背景（{{count}}）",
+      "referencedMessages": "引用訊息（{{count}}）",
+      "referencedContext": "引用訊息",
+      "groupBackground": "群組背景",
       "viewThread": "檢視 thread 上下文 ({{count}})"
     },
     "rewind": {
@@ -9408,7 +9502,7 @@
       "createProjectFailed": "新建專案失敗",
       "projectsToggleExpand": "展開所有專案任務",
       "projectsToggleCollapse": "收起所有專案任務",
-      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Agent：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
+      "filterAria": "側邊欄顯示設定（狀態：{{status}}，Harness：{{vendor}}，最近活躍：{{lastActivity}}，分組：{{groupBy}}，排序：{{sortBy}}，專案：{{projects}}）",
       "organizeSidebar": "側邊欄顯示設定",
       "filterAllText": "全部",
       "filterSelectedProjects": "已選 {{count}} 個",
@@ -9424,10 +9518,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "按專案分組",
+        "project": "按專案",
         "flat": "平鋪",
-        "device": "按裝置分組",
-        "dialogue": "對話歸為一組"
+        "device": "按裝置",
+        "dialogue": "按對話"
       },
       "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
       "deviceGroup": {
@@ -9460,14 +9554,14 @@
         "priority": "等你處理的排在最前，然後是未讀、執行中，其餘按時間"
       },
       "filterStatusHeading": "狀態",
-      "filterAgentHeading": "Agent",
+      "filterAgentHeading": "Harness",
       "filterLastActivityHeading": "最近活躍",
       "filterGroupByHeading": "分組",
       "filterSortByHeading": "排序",
       "filterTaskSortHeading": "任務排序",
-      "filterProjectOrderHeading": "專案順序",
+      "filterProjectOrderHeading": "專案排序",
       "filterProjectOrder": {
-        "activity": "跟隨任務排序",
+        "activity": "跟隨任務",
         "custom": "手動"
       },
       "filterProjectOrderTip": {
@@ -9714,7 +9808,23 @@
         "projects": "專案",
         "dialogues": "對話"
       },
-      "railNavCount": "{{count}} 個任務"
+      "railNavCount": "{{count}} 個任務",
+      "groupSummary": {
+        "project": "專案",
+        "dialogue": "對話",
+        "device": "裝置"
+      },
+      "taskStatusHeading": "任務狀態",
+      "taskStatus": {
+        "active": "活躍",
+        "archived": "已歸檔",
+        "all": "全部"
+      },
+      "sortTaskBy": {
+        "priority": "按優先級",
+        "activity": "按最近活動",
+        "created": "按建立時間"
+      }
     },
     "rename": {
       "aiRename": "用 AI 重新命名",
@@ -10311,7 +10421,7 @@
         "enable": "啟用",
         "tooltip": "任務觸發時先執行該指令碼：退出碼 0 放行本輪；退出碼 2 跳過本輪（不啟動 Agent、不消耗 token）；指令碼報錯或超時將阻止執行並記錄失敗結果。指令碼在任務工作目錄下執行，Windows 上請寫顯式直譯器（如 node check.mjs）。",
         "infoAria": "檢視前置檢查規則",
-        "protocol": "指令碼寫法：結束時退出碼 0 = 本輪執行任務，退出碼 2 = 本輪跳過（不消耗用量）；其他退出碼、報錯或超時會阻止執行",
+        "protocol": "指令碼寫法：結束時退出碼 0 = 本輪執行任務，退出碼 2 = 本輪跳過（不消耗用量）；其他退出碼、報錯或超時會阻止執行。檢查完整成功後（包括正常無事可做），在 exit 0/2 前向 stdout 單獨輸出一行 CINDY_PRECHECK_OK，僅恢復先前的檢查警告，不恢復執行失敗；限流退避或檢查不完整時不要輸出。",
         "commandPlaceholder": "node scripts/schedule-checks/check.mjs",
         "test": "測試",
         "testing": "測試中…",
@@ -12242,7 +12352,6 @@
     "unsavedDescription": "離開後會捨棄這次對例行任務的修改。",
     "discard": "放棄修改",
     "continueEditing": "繼續編輯",
-
     "title": "例行任務",
     "add": "新增例行任務",
     "back": "返回例行任務",

@@ -29,6 +29,10 @@ import { setDeepLinkMainWindow, takePendingDeepLink } from '../../deepLink.js';
 
 const REMOTE_DAEMON_CLOSED_REASON = 'remote_daemon_closed';
 
+vi.mock('../../appSessionState', () => ({
+  getActiveAppSession: () => ({ dataOwnerId: 'test-owner', generation: 1, mode: 'local' }),
+}));
+
 // 受保护目录检测按 path.join(homedir(), ...) 的字面量匹配;测试消息必须用同一
 // 拼法,否则在 Windows 开发机上分隔符对不上,darwin mock 下的用例会失真。
 const protectedFolderFile = (kind: 'Desktop' | 'Documents', file: string): string =>

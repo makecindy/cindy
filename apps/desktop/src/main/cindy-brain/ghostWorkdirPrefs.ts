@@ -39,16 +39,15 @@ const DEFAULTS: GhostWorkdirPrefs = { disabledByWorkdir: {} };
 
 /** 目录键归一化(导出供测试;两端形态判定见文件头注释)。 */
 export function normalizeWorkdirKey(dir: string): string {
-  const trimmed = dir.trim();
-  if (trimmed.length === 0) return '';
-  const looksWindows = /^[A-Za-z]:[\\/]/.test(trimmed) || trimmed.includes('\\');
+  if (dir.trim().length === 0) return '';
+  const looksWindows = /^[A-Za-z]:[\\/]/.test(dir) || dir.includes('\\');
   if (looksWindows) {
     // win32.normalize 统一分隔符并折叠 '..';根目录(C:\)保留尾分隔符。
-    let n = path.win32.normalize(trimmed);
+    let n = path.win32.normalize(dir);
     if (n.length > 3 && (n.endsWith('\\') || n.endsWith('/'))) n = n.slice(0, -1);
     return n.toLowerCase();
   }
-  let n = path.posix.normalize(trimmed);
+  let n = path.posix.normalize(dir);
   if (n.length > 1 && n.endsWith('/')) n = n.slice(0, -1);
   return n;
 }

@@ -1,3 +1,4 @@
+import { REMOTE_VIEWER } from '../shared/remoteDesktopViewer';
 import type { RoutineInput } from '@cindy/maker-scheduler';
 import type { BotToolsetContext } from '../shared/botRemoteCapabilities';
 import { contextBridge, ipcRenderer, webUtils } from 'electron';
@@ -113,7 +114,7 @@ import {
   type TerminateAgentProcessResult,
 } from '../shared/processMonitor';
 import { RESOURCE_USAGE_WINDOW_OPEN_CHANNEL } from '../shared/resourceUsageWindow';
-import { SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
+import { APP_ATTENTION_COUNT_CHANNEL, SESSION_ATTENTION_CLEARED_CHANNEL } from '../shared/sessionAttention';
 import { VOICE_INPUT_POWER_STATE_CHANNEL } from '../shared/voiceInputPowerIpc';
 import {
   VOICE_INPUT_TEST_CONNECTION_CHANNEL,
@@ -3567,6 +3568,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     clear: (): Promise<{ configured: boolean; enabled: boolean }> =>
       ipcRenderer.invoke('wecomGroupNotification:clear'),
   },
+  notificationSetAppAttentionCount: (snapshot: import('../shared/sessionAttention').AppAttentionSnapshot): Promise<void> =>
+    ipcRenderer.invoke(APP_ATTENTION_COUNT_CHANNEL, snapshot),
   notificationMarkSessionAttention: (sessionId: string): Promise<void> =>
     ipcRenderer.invoke('notification:mark-session-attention', sessionId),
   // intent:'explicit' = 用户真实看到了内容(报错 banner 聚焦驻留 / 全部标为已读等);
@@ -3658,6 +3661,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         | { type: 'project'; workingDir: string }
         | { type: 'new-session'; workingDir: string }
         | { type: 'share-import'; filePath: string }
+        | { type: 'provider-import'; importId: string }
         | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string },
     ) => void,
   ): (() => void) =>
@@ -3668,6 +3672,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         id?: unknown;
         workingDir?: unknown;
         filePath?: unknown;
+        importId?: unknown;
         tab?: unknown;
         connect?: unknown;
         messageClientId?: unknown;
@@ -3694,6 +3699,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
           ...(p.tab === 'providers' && p.connect !== undefined ? { connect: p.connect } : {}),
         });
       } else if (
+        p.type === 'provider-import' &&
+        typeof p.importId === 'string' &&
+        p.importId.length > 0
+      ) {
+        callback({ type: 'provider-import', importId: p.importId });
+      } else if (
         p.type === 'project' &&
         typeof p.workingDir === 'string' &&
         p.workingDir.length > 0
@@ -3715,13 +3726,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     }),
 
   // 冷启动时 (mainWindow 未 ready / renderer 未挂 listener) 缓存的 payload。
-  // MainLayout mount 后调一次,take 一次清空——已运行场景始终返回 null。
+  // MainLayout mount 和供应商导入唤醒事件共用此入口，take 一次清空。
   // 详见 main/deepLink.ts 的 pending buffer 段。
   takePendingDeepLink: (): Promise<
     | { type: 'session'; id: string; messageClientId?: string }
     | { type: 'project'; workingDir: string }
     | { type: 'new-session'; workingDir: string }
     | { type: 'share-import'; filePath: string }
+    | { type: 'provider-import'; importId: string }
     | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
     | null
   > => ipcRenderer.invoke('deep-link:take-pending'),
@@ -4251,6 +4263,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // ── Device Link (设备互联/跨设备远程控制) ─────────────────────────────
   // 同账号设备经 server relay 互联;此处只暴露开关 + 设备列表管理面,
   // 隧道(远程会话控制)在 M3 接入。
+  openRemoteDesktop: (target: {deviceId: string; name: string}): Promise<void> => ipcRenderer.invoke(REMOTE_VIEWER.OPEN, target),
   remoteDesktop: {
     state: (checkWindowsSupport) => ipcRenderer.invoke(DESKTOP_LOCAL.STATE, checkWindowsSupport),
     permissions: () => ipcRenderer.invoke(DESKTOP_LOCAL.PERMISSIONS),
@@ -5261,7 +5274,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** 从最近列表移除一条(列表卫生,不动 sessions / 磁盘;再次使用会重新入列)。 */
       remove: (input: { path: string }): Promise<unknown> =>
         ipcRenderer.invoke('local-db:recent-workdirs:remove', input),
-      /** Broadcast: 任一窗口/远程调用删除条目后通知,其它窗口据此重拉列表。 */
+      /** Broadcast: 目录移除或活动时间刷新后通知,renderer 据此重拉列表。 */
       onChanged: createIpcFanOut('local-db:recent-workdirs:changed'),
     },
     rightSidebarTabs: {
@@ -5861,6 +5874,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
       options?: { releaseOwner?: boolean; ownerId?: string },
     ): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:provider:oauth:cancel', providerId, options),
+    previewProviderImport: (
+      importId: string,
+      targetProviderId?: string,
+    ): Promise<import('../shared/providerImport').ProviderImportPreview> =>
+      ipcRenderer.invoke('maker:provider:import:preview', importId, targetProviderId),
+    confirmProviderImport: (
+      importId: string,
+      targetProviderId?: string,
+      interrupt?: true,
+    ): Promise<import('../shared/providerImport').ProviderImportConfirmResult> =>
+      ipcRenderer.invoke('maker:provider:import:confirm', importId, targetProviderId, interrupt),
+    cancelProviderImport: (importId: string): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:provider:import:cancel', importId),
     onProviderOAuthProgress: fanOutMakerProviderOAuthProgress,
     /**
      * renderer → main 单向镜像「模型显示/隐藏」override 整张快照(modelVisibilityPrefs)。

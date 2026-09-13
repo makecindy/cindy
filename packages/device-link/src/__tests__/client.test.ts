@@ -8107,6 +8107,200 @@ describe('定时重发的单趟预算(TRANSPORT_RETRY_PASS_BUDGET)', () => {
     h.client.stop();
   }, 10_000);
 
+  it('发送方向已 ready 时同 stream 重复 open 不再打回 awaiting-confirm', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const capabilities = [
+      DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+      DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+      DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+    ];
+    const sendInboundOpen = async (id: string): Promise<void> => {
+      const off = h.client.onFrame((env) => {
+        if (env.kind !== 'link-open' || env.id !== id || !env.src) return;
+        h.client.sendLinkAccept(env.src, env.id, {
+          appVersion: '1',
+          allowlistHash: 'hash',
+        });
+      });
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id,
+        src: 'dev-b',
+        payload: {
+          controllerName: 'Remote',
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities,
+          transportStreamId: 'same-remote-stream',
+          transportBaseSeq: 1,
+        },
+      });
+      await tick();
+      off();
+    };
+    const confirmInboundOpen = (id: string): void => {
+      const accept = h.current().sent.filter((env) => (
+        env.kind === 'link-accept' && env.id === id
+      )).at(-1)!;
+      const payload = accept.payload as { transportStreamId?: string };
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src: 'dev-b',
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: {
+            streamId: payload.transportStreamId,
+            ackSeq: 0,
+            linkRequestId: id,
+          },
+        },
+      });
+    };
+
+    await sendInboundOpen('ready-open-1');
+    confirmInboundOpen('ready-open-1');
+    h.client.sendInvokeResult('dev-b', 'live-1', { ok: true, result: 1 });
+
+    await sendInboundOpen('ready-open-2');
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string }>;
+      outboundRouteGenerationByPeer: Map<string, Map<string, unknown>>;
+    };
+    expect(internals.peerTransport.get('dev-b')!.sendPhase).toBe('ready');
+    const routeSize = (): number => internals.outboundRouteGenerationByPeer.get('dev-b')?.size ?? 0;
+    const afterFirstDup = routeSize();
+    for (let index = 0; index < 30; index += 1) {
+      await sendInboundOpen(`ready-open-dup-${index}`);
+    }
+    expect(internals.peerTransport.get('dev-b')!.sendPhase).toBe('ready');
+    expect(routeSize()).toBe(afterFirstDup);
+
+    h.client.sendInvokeResult('dev-b', 'live-2', { ok: true, result: 2 });
+    const live2 = h.current().sent.filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    )).at(-1)!;
+    expect(parseTransportPayload(live2.payload)?.meta).toMatchObject({ seq: expect.any(Number) });
+
+    h.client.stop();
+  }, 10_000);
+
+  it('多 peer 拓扑:一个 peer 重复 open 不暂停发送,另一个 peer 的在途请求零感知', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 60_000,
+        transportMaxRetryAttempts: 50,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    const capabilities = [
+      DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+      DEVICE_LINK_CAPABILITY_RELIABLE_LINK_CONFIRM,
+      DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+    ];
+    const sendInboundOpen = async (src: string, streamId: string, id: string): Promise<void> => {
+      const off = h.client.onFrame((env) => {
+        if (env.kind !== 'link-open' || env.id !== id || env.src !== src) return;
+        h.client.sendLinkAccept(env.src, env.id, {
+          appVersion: '1',
+          allowlistHash: 'hash',
+        });
+      });
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-open',
+        id,
+        src,
+        payload: {
+          controllerName: src,
+          protocolVersion: 1,
+          appVersion: '1',
+          capabilities,
+          transportStreamId: streamId,
+          transportBaseSeq: 1,
+        },
+      });
+      await tick();
+      off();
+    };
+    const confirmInboundOpen = (src: string, id: string): void => {
+      const accept = h.current().sent.filter((env) => (
+        env.kind === 'link-accept' && env.id === id && env.dst === src
+      )).at(-1)!;
+      const payload = accept.payload as { transportStreamId?: string };
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'push',
+        src,
+        payload: {
+          channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+          payload: {
+            streamId: payload.transportStreamId,
+            ackSeq: 0,
+            linkRequestId: id,
+          },
+        },
+      });
+    };
+
+    await sendInboundOpen('dev-b', 'stream-b', 'b-open-1');
+    confirmInboundOpen('dev-b', 'b-open-1');
+    await sendInboundOpen('dev-c', 'stream-c', 'c-open-1');
+    confirmInboundOpen('dev-c', 'c-open-1');
+
+    h.client.sendInvokeResult('dev-c', 'c-live-1', { ok: true, result: 'c1' });
+    const ws = h.current();
+    const cReliable = () => ws.sent.filter((env) => (
+      env.kind === 'invoke-result'
+      && env.dst === 'dev-c'
+      && parseTransportPayload(env.payload) !== null
+    ));
+    expect(cReliable()).toHaveLength(1);
+    const cMeta = parseTransportPayload(cReliable()[0]!.payload)!.meta;
+
+    await sendInboundOpen('dev-b', 'stream-b', 'b-open-2');
+    await sendInboundOpen('dev-b', 'stream-b', 'b-open-3');
+
+    const internals = h.client as unknown as {
+      peerTransport: Map<string, { sendPhase: string }>;
+    };
+    expect(internals.peerTransport.get('dev-b')!.sendPhase).toBe('ready');
+    expect(internals.peerTransport.get('dev-c')!.sendPhase).toBe('ready');
+
+    h.client.sendInvokeResult('dev-c', 'c-live-2', { ok: true, result: 'c2' });
+    expect(cReliable()).toHaveLength(2);
+
+    ws.push({
+      v: PROTOCOL_VERSION,
+      kind: 'push',
+      src: 'dev-c',
+      payload: {
+        channel: DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
+        payload: { streamId: cMeta.streamId, ackSeq: 2 },
+      },
+    });
+    const afterAck = h.client.getReliableSendQueueDepth('dev-c');
+    expect(afterAck).toBe(0);
+    expect(h.client.getReliableSendQueueDepth('dev-b')).toBe(0);
+
+    h.client.stop();
+  }, 10_000);
+
   it('对端换 stream 视为真正恢复,按探测预算 replay', async () => {
     const h = makeHarness({
       timing: {

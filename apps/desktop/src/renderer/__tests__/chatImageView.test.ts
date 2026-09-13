@@ -15,7 +15,9 @@ vi.mock('@/hooks/useRemoteMediaUrl', () => ({
 }));
 
 vi.mock('../components/chat/ImageLightbox', () => ({
-  ImageLightbox: () => null,
+  ImageLightbox: ({ onClose }: { onClose: () => void }) => React.createElement(
+    'button', { 'data-testid': 'image-lightbox', onClick: onClose }, 'close preview',
+  ),
 }));
 
 vi.mock('../components/chat/ModelLightbox', () => ({
@@ -39,8 +41,8 @@ describe('ChatImageView', () => {
       }),
     );
 
-    fireEvent.error(screen.getByRole('img', { name: 'shot.png' }));
-    expect(screen.queryByRole('img', { name: 'shot.png' })).toBeNull();
+    fireEvent.error(screen.getByRole('button', { name: 'shot.png' }));
+    expect(screen.queryByRole('button', { name: 'shot.png' })).toBeNull();
     expect(screen.getByText('shot.png')).toBeTruthy();
 
     rerender(
@@ -52,7 +54,7 @@ describe('ChatImageView', () => {
       }),
     );
 
-    const image = screen.getByRole('img', { name: 'shot.png' });
+    const image = screen.getByRole('button', { name: 'shot.png' });
     expect(image.getAttribute('src')).toBe('cindy-remote-media://m/device/shot');
   });
 
@@ -73,7 +75,7 @@ describe('ChatImageView', () => {
         modelFile: { provider: 'cindy', url: 'cindy-media://blobs/' + 'a'.repeat(64) + '.glb', format },
       }),
     );
-    fireEvent.click(screen.getByRole('img', { name: 'preview.png' }));
+    fireEvent.click(screen.getByRole('button', { name: 'preview.png' }));
     expect(screen.queryByTestId('model-lightbox') !== null).toBe(opensModel);
   });
 
@@ -92,7 +94,21 @@ describe('ChatImageView', () => {
         },
       }),
     );
-    fireEvent.click(screen.getByRole('img', { name: 'preview.png' }));
+    fireEvent.click(screen.getByRole('button', { name: 'preview.png' }));
     expect(screen.queryByTestId('model-lightbox')).not.toBeNull();
+  });
+  it.each(['Enter', ' '])('键盘 %s 可打开图片、保持 gallery 定位并在关闭后恢复焦点', (key) => {
+    render(React.createElement(ChatImageView, {
+      src: 'xdt-image://control/keyboard.png', filename: 'keyboard.png', variant: 'tool-output',
+    }));
+    const trigger = screen.getByRole('button', { name: 'keyboard.png' });
+    trigger.focus();
+    fireEvent.keyDown(trigger, { key });
+    expect(screen.getByTestId('image-lightbox')).toBeTruthy();
+    expect(trigger.dataset.galleryActive).toBe('1');
+    const close = screen.getByTestId('image-lightbox');
+    close.focus();
+    fireEvent.click(close);
+    expect(document.activeElement).toBe(trigger);
   });
 });
