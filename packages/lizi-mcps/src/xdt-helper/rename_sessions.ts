@@ -191,7 +191,7 @@ export function registerRenameSessionsTool(
 
       const confirmationPayload =
         !dry_run && confirmation_token
-          ? decodeConfirmationToken(confirmation_token, isRenameConfirmationPayload)
+          ? decodeConfirmationToken('rename_sessions', confirmation_token, isRenameConfirmationPayload)
           : null;
       if (
         !dry_run &&
@@ -212,7 +212,7 @@ export function registerRenameSessionsTool(
         if (!result.ok) {
           return mapRenameSessionsError(result);
         }
-        const token = encodeConfirmationToken(
+        const token = encodeConfirmationToken('rename_sessions',
           createConfirmationPayload(normalized, result.changes),
         );
 
