@@ -74,6 +74,7 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [errorDeviceId, setErrorDeviceId] = useState<string | null>(null);
+  const [catalogGeneration, setCatalogGeneration] = useState(() => deviceId ? getDeviceProvidersGen(deviceId) : 0);
   // ready 的判定载体:payload 已确认属于哪个设备 + 置位时的缓存代际。仅在缓存命中 /
   // 拉取完成(订阅回调)时置位;切设备 cache-miss 立即清 null。首渲染即按
   // `readyFor === deviceId` 计算,不依赖 effect 先跑,故无「loading 初值 false」窗口;
@@ -102,6 +103,7 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
   // 该设备首次标记(正常缓存命中快路径,与原 null 语义一致)。
 
   useEffect(() => {
+    setCatalogGeneration(deviceId ? getDeviceProvidersGen(deviceId) : 0);
     if (!deviceId) {
       setPayload(EMPTY_PAYLOAD);
       setError(null);
@@ -143,6 +145,8 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
     //   响应较晚返回仍通过 isCurrent() 把 fresh 的新目录覆盖回旧目录。
     const unsubscribeGen = subscribeDeviceProvidersGen(deviceId, (reason) => {
       if (cancelled) return;
+      // Restart recovery even when React batches invalidation and an identical error.
+      setCatalogGeneration(getDeviceProvidersGen(deviceId));
       setReadyFor(null);
       if (reason === 'fresh-invalidate') return;
       setPayload(EMPTY_PAYLOAD);
@@ -264,7 +268,7 @@ export function useDeviceProviders(deviceId?: string, pickerOpen = false): UseDe
       clearTimeout(timer);
       subscription.remove();
     };
-  }, [connectionEpoch, deviceId, needsRecovery, maker, pickerOpen, recovering, status]);
+  }, [catalogGeneration, connectionEpoch, deviceId, needsRecovery, maker, pickerOpen, recovering, status]);
 
   return {
     providers: payload.providers,

@@ -7,7 +7,7 @@ import { DeviceLinkClient, PROTOCOL_VERSION, DEVICE_LINK_CAPABILITY_RELIABLE_TRA
   type Envelope, type WsLike } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers/registry';
 import { useDeviceProviders, type UseDeviceProvidersResult } from '@/device-link/useDeviceProviders';
-import { clearAllDeviceProviders, fetchDeviceProvidersFresh } from '@/device-link/deviceProvidersCache';
+import { clearAllDeviceProviders, evictDeviceProviders, fetchDeviceProviders, fetchDeviceProvidersFresh } from '@/device-link/deviceProvidersCache';
 
 const state = vi.hoisted(() => ({
   context: { connectionEpoch: 1, status: 'online', recoveringDeviceIds: new Set<string>() },
@@ -69,6 +69,42 @@ afterEach(async () => {
 });
 
 describe('model catalog failure recovery', () => {
+  it('continues recovery when an external fresh read invalidates an ordinary in-flight read', async () => {
+    const read = state.makers.get('a')!.listProviders;
+    await render();
+    let finish!: (value: ReturnType<typeof catalog>) => void;
+    await act(async () => {
+      const old = fetchDeviceProviders('a', () => new Promise((resolve) => { finish = resolve; }));
+      await fetchDeviceProvidersFresh('a', () => read()).catch(() => undefined);
+      finish(catalog('obsolete'));
+      await old;
+    });
+    expect(values.a.ready).toBe(false);
+    read.mockResolvedValue(catalog('current'));
+    await advance(900);
+    expect(values.a.ready).toBe(true);
+    expect(values.a.providers[0].id).toBe('current');
+  });
+
+  it.each(['evict', 'clearAll'] as const)('continues recovery after %s and an identical immediate failure', async (operation) => {
+    const read = state.makers.get('a')!.listProviders;
+    read.mockRejectedValue(new Error('[DEVICE_UNRESPONSIVE] probe pending'));
+    await render();
+    await advance(400);
+    await act(async () => {
+      if (operation === 'evict') evictDeviceProviders('a');
+      else clearAllDeviceProviders();
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(values.a.ready).toBe(false);
+    read.mockResolvedValue(catalog('new-generation'));
+    await advance(900);
+    expect(read).toHaveBeenCalledTimes(3);
+    expect(values.a.ready).toBe(true);
+    await advance(60_000);
+    expect(read).toHaveBeenCalledTimes(3);
+  });
+
   it('keeps a second controller link and pending request intact when the first controller goes silent', async () => {
     // Three real clients behind an in-memory relay: A and B both control host.
     const sockets = new Map<string, Socket>();
