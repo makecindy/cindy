@@ -116,6 +116,19 @@ export function requiresNativeProviderAuth(row: ProviderModelRecord | undefined)
   return identity === 'github-copilot' || identity === 'cloudflare-ai-gateway';
 }
 
+function cloudflareGatewayHeaders(
+  apiKey: string | undefined,
+  headers: Record<string, string> | undefined,
+): Record<string, string | null> {
+  const token = apiKey?.trim();
+  return {
+    ...headers,
+    ...(token ? { 'cf-aig-authorization': `Bearer ${token}` } : {}),
+    Authorization: null,
+    'x-api-key': null,
+  };
+}
+
 function nativeInvocationModel(options: PiProviderTransportOptions, modelId: string): Model<Api> {
   const row = options.row;
   const model: Model<Api> = { id: modelId, name: row.name, provider: providerModelAdapterId(row) ?? options.providerId,
@@ -142,8 +155,7 @@ export async function probePiProvider(options: PiProviderTransportOptions, signa
   return adapter.streamSimple(model, { messages: [{ role: 'user', content: 'ping', timestamp: 0 }] }, {
     apiKey: cloudflare ? undefined : options.apiKey,
     env: options.env,
-    headers: cloudflare ? { ...options.headers, 'cf-aig-authorization': `Bearer ${options.apiKey}`,
-      Authorization: null, 'x-api-key': null } : options.headers,
+    headers: cloudflare ? cloudflareGatewayHeaders(options.apiKey, options.headers) : options.headers,
     ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)
       ? { fetch: options.fetchImpl } : {}),
     signal, maxRetries: 0, maxTokens: Math.min(16, model.maxTokens),
@@ -199,8 +211,7 @@ export function createPiProviderFetch(options: PiProviderTransportOptions): type
     const cloudflareGateway = model.provider === 'cloudflare-ai-gateway';
     const events = adapter.streamSimple(model, context, {
       apiKey: cloudflareGateway ? undefined : options.apiKey, env: options.env,
-      headers: cloudflareGateway ? { ...options.headers, 'cf-aig-authorization': `Bearer ${options.apiKey}`,
-        Authorization: null, 'x-api-key': null } : options.headers,
+      headers: cloudflareGateway ? cloudflareGatewayHeaders(options.apiKey, options.headers) : options.headers,
       // Pi's Google SDK rejects injected fetch. Its native transport must be used; all other
       // adapters that support injection use Cindy's existing outbound route.
       ...(!['google-generative-ai', 'google-vertex', 'bedrock-converse-stream'].includes(model.api)

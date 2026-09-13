@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { nativeProviderAdapterAliases } from '../native-provider-adapter-source.js';
+import { nativeProviderAdapterAliases, PI_NATIVE_PROVIDER_ADAPTER_SOURCE } from '../native-provider-adapter-source.js';
 
 describe('nativeProviderAdapterAliases', () => {
   it('registers proxy-authenticated adapters without requiring an API key env', () => {
@@ -11,5 +11,10 @@ describe('nativeProviderAdapterAliases', () => {
       { id: 'copilot-oauth', name: 'Copilot', provider: 'github-copilot' },
       { id: 'cloudflare', name: 'Cloudflare', provider: 'cloudflare-ai-gateway', keyEnv: 'CINDY_PI_KEY_CF' },
     ]);
+  });
+
+  it('does not replace a saved Cloudflare header with an empty API key', () => {
+    expect(PI_NATIVE_PROVIDER_ADAPTER_SOURCE).toContain("options.apiKey.trim()");
+    expect(PI_NATIVE_PROVIDER_ADAPTER_SOURCE).toContain("options?.headers?.['cf-aig-authorization']");
   });
 });
