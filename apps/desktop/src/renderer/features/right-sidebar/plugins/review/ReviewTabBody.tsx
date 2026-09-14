@@ -2938,7 +2938,7 @@ export function countEagerExpandedDiffRows(
   return count;
 }
 
-function DiffList({
+export function DiffList({
   diffs,
   expandedSet,
   onToggleDiff,
@@ -3177,9 +3177,10 @@ function DiffList({
     if (diff) scrollToFile(diff);
   }, [diffs, jumpRequest, scrollToFile]);
 
-  const handleImagePreviewLoad = useCallback(() => {
-    requestAnimationFrame(() => fileVirtualizer.measure());
-  }, [fileVirtualizer]);
+  // 不要恢复成 fileVirtualizer.measure(): 那会清空全部已测行高且不回填,整列退回
+  // estimateSize(45/360),卡片互相压叠。异步内容变高由 item wrapper 的
+  // ResizeObserver 兜住。
+  const handleImagePreviewLoad = useCallback(() => undefined, []);
 
   const renderFileRow = (diff: FileDiff) => (
     <FileRow
