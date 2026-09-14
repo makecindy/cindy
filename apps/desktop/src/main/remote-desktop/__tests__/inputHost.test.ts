@@ -34,6 +34,40 @@ function childProcess() {
   };
 }
 describe('native input lifecycle', () => {
+  it.each([false, true])(
+    'pauses remote input while retaining ownership; disconnected=%s',
+    async (disconnected) => {
+      const children = [childProcess(), childProcess()];
+      let index = 0;
+      const spawn = vi.fn(() => {
+        const c = children[index++];
+        queueMicrotask(() => c.child.stdout.emit('data', Buffer.from('ready\n')));
+        return c.typed;
+      });
+      const host = new DesktopInputHost(vi.fn(), {
+        platform: 'darwin',
+        resolveBinary: async () => '/test/helper',
+        spawn,
+      });
+      await host.start('1');
+      const pausing = host.pauseForPrivacy();
+      host.input([{ kind: 'key', code: 'Enter', down: true }]);
+      expect(children[0].child.stdin.write).not.toHaveBeenCalled();
+      children[0].exit();
+      const resume = await pausing;
+      await expect(withAgentDesktopInput(async () => {})).rejects.toThrow('person');
+      if (disconnected) host.stop();
+      await resume();
+      expect(spawn).toHaveBeenCalledTimes(disconnected ? 1 : 2);
+      if (!disconnected) {
+        host.input([{ kind: 'key', code: 'Enter', down: true }]);
+        expect(children[1].child.stdin.write).toHaveBeenCalled();
+      }
+      host.stop();
+      children[1].exit();
+      await expect(withAgentDesktopInput(async () => {})).resolves.toBeUndefined();
+    },
+  );
   it('keeps Agent input excluded until the old helper has actually exited', async () => {
     const c = childProcess();
     const host = new DesktopInputHost(vi.fn(), {

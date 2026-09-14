@@ -105,6 +105,7 @@ const privacyScreen = new PrivacyScreen(
       .stopPrivacyByUser()
       .catch((error) => console.error('[remote-desktop] privacy exit lock failed', error));
   },
+  () => input.pauseForPrivacy(),
 );
 const supportsPrivacyScreen =
   (process.platform === 'darwin' &&

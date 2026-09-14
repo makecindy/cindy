@@ -1,29 +1,42 @@
-import { app, BrowserWindow, dialog, globalShortcut, screen, session } from 'electron';
+import { app, BrowserWindow, dialog, screen, session } from 'electron';
 import { createLogger } from '../logger';
 import { t } from '../i18n';
 import { privacyScreenHtml } from './privacyScreenHtml';
+import { watchPrivacyInput, type PrivacyInputMonitor } from './privacyInput';
 
-const escapeShortcut = 'Control+Alt+Shift+Escape';
 const log = createLogger('remote-desktop:privacy');
 
 /** Ephemeral physical-screen masks, not reusable tool windows.
  * No preload or persistent state. Destroy on
- * every lease end; a local emergency shortcut ends remote control as well.
+ * every lease end; native physical input opens the local disconnect confirmation.
  */
 export class PrivacyScreen {
   private windows: BrowserWindow[] = [];
   private generation = 0;
-  private shortcut = false;
   private partitionConfigured = false;
   private confirming = false;
+  private monitor: PrivacyInputMonitor | null = null;
   constructor(
     private readonly excluded: (ids: number[]) => void,
     private readonly stopped: () => void,
+    private readonly suspendInput: () => Promise<() => Promise<void>>,
+    private readonly watchInput = watchPrivacyInput,
   ) {}
   private async confirmExit(window: BrowserWindow, generation: number): Promise<void> {
     if (this.confirming || generation !== this.generation || window.isDestroyed()) return;
     this.confirming = true;
+    let resumeInput: (() => Promise<void>) | undefined;
     try {
+      // No local dialog exists while the old input helper drains/releases.
+      // Then the native hook blocks even late injected events before focus moves.
+      resumeInput = await this.suspendInput();
+      if (generation !== this.generation || !this.monitor) return;
+      await this.monitor.confirm();
+      if (generation !== this.generation) return;
+      window.setFocusable(true);
+      window.setIgnoreMouseEvents(false);
+      app.focus({ steal: true });
+      window.focus();
       const { response } = await dialog.showMessageBox(window, {
         type: 'question',
         message: t('privacyExit.title'),
@@ -39,8 +52,31 @@ export class PrivacyScreen {
       }
     } catch (error) {
       log.warn('privacy exit confirmation failed', error);
+      if (generation === this.generation) {
+        this.stop();
+        this.stopped();
+      }
     } finally {
-      if (generation === this.generation) this.confirming = false;
+      if (generation === this.generation) {
+        window.setIgnoreMouseEvents(true);
+        window.setFocusable(false);
+        try {
+          // Restore input while the native fence is still up. Only then re-arm
+          // local exit; a fresh physical click cannot be lost during resume.
+          await resumeInput?.();
+          resumeInput = undefined;
+          if (generation === this.generation) {
+            this.confirming = false;
+            await this.monitor?.resume();
+          }
+        } catch {
+          if (generation === this.generation) {
+            this.stop();
+            this.stopped();
+          }
+        }
+      }
+      await resumeInput?.();
     }
   }
   async set(enabled: boolean, current: () => boolean): Promise<void> {
@@ -62,10 +98,6 @@ export class PrivacyScreen {
       );
       this.partitionConfigured = true;
     }
-    this.shortcut = globalShortcut.register(escapeShortcut, () => {
-      this.stop();
-      this.stopped();
-    });
     try {
       for (const display of screen.getAllDisplays()) {
         const window = new BrowserWindow({
@@ -78,7 +110,7 @@ export class PrivacyScreen {
           roundedCorners: false,
           enableLargerThanScreen: true,
           acceptFirstMouse: true,
-          focusable: true,
+          focusable: false,
           resizable: false,
           movable: false,
           minimizable: false,
@@ -111,21 +143,9 @@ export class PrivacyScreen {
         window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
         window.webContents.on('will-navigate', (event) => event.preventDefault());
         window.setContentProtection(true);
-        // Mouse and keyboard share a confirmation while the mask stays up.
-        window.setIgnoreMouseEvents(false);
-        window.webContents.on('before-input-event', (event, input) => {
-          if (input.type === 'keyDown' && generation === this.generation) {
-            event.preventDefault();
-            log.debug('local exit', { input: 'keyboard', windowId: window.id });
-            if (!input.isAutoRepeat) void this.confirmExit(window, generation);
-          }
-        });
-        window.webContents.on('before-mouse-event', (event, input) => {
-          if (input.type !== 'mouseDown' || generation !== this.generation) return;
-          event.preventDefault();
-          log.debug('local exit', { input: 'mouse', windowId: window.id });
-          void this.confirmExit(window, generation);
-        });
+        // Remote system injection must reach the app behind this passive mask.
+        // Physical input is identified and consumed by the native hook instead.
+        window.setIgnoreMouseEvents(true);
         window.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
         window.setAlwaysOnTop(true, 'screen-saver', 1);
         window.on('closed', () => {
@@ -146,13 +166,26 @@ export class PrivacyScreen {
       if (!ids.length || ids.some((id) => !Number.isSafeInteger(id) || id <= 0))
         throw new Error('DESKTOP_PRIVACY_UNAVAILABLE');
       this.excluded(ids);
-      app.focus({ steal: true });
+      const monitor = await this.watchInput(
+        () => {
+          if (generation === this.generation) void this.confirmExit(this.windows[0], generation);
+        },
+        () => {
+          if (generation === this.generation) {
+            this.stop();
+            this.stopped();
+          }
+        },
+      );
+      if (!current() || generation !== this.generation) {
+        monitor.stop();
+        throw new Error('DESKTOP_LEASE_EXPIRED');
+      }
+      this.monitor = monitor;
       for (const window of this.windows) {
         const target = screen.getDisplayMatching(window.getBounds()).bounds;
         window.showInactive();
         window.setBounds(target, false);
-        window.focus();
-        window.webContents.focus();
         log.debug('mask shown', {
           windowId: window.id,
           target,
@@ -170,10 +203,10 @@ export class PrivacyScreen {
   stop(): void {
     this.generation++;
     this.confirming = false;
+    this.monitor?.stop();
+    this.monitor = null;
     const windows = this.windows;
     this.windows = [];
-    if (this.shortcut) globalShortcut.unregister(escapeShortcut);
-    this.shortcut = false;
     for (const window of windows) if (!window.isDestroyed()) window.destroy();
     this.excluded([]);
   }

@@ -3,7 +3,7 @@ import { beforeEach, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ windows: [] as any[], confirm: vi.fn() }));
 vi.mock('../../i18n', () => ({ t: (key: string) => key }));
-vi.mock('../../logger', () => ({ createLogger: () => ({ debug: vi.fn() }) }));
+vi.mock('../../logger', () => ({ createLogger: () => ({ debug: vi.fn(), warn: vi.fn() }) }));
 vi.mock('electron', () => ({
   app: { focus: vi.fn() },
   dialog: { showMessageBox: state.confirm },
@@ -24,7 +24,8 @@ vi.mock('electron', () => ({
     setMenuBarVisibility() {}
     async loadURL() {}
     setContentProtection() {}
-    setIgnoreMouseEvents() {}
+    setIgnoreMouseEvents = vi.fn();
+    setFocusable = vi.fn();
     setVisibleOnAllWorkspaces() {}
     setAlwaysOnTop() {}
     getMediaSourceId() {
@@ -37,7 +38,7 @@ vi.mock('electron', () => ({
       this.bounds = bounds;
     }
     showInactive() {}
-    focus() {}
+    focus = vi.fn();
     isVisible() {
       return true;
     }
@@ -75,42 +76,89 @@ beforeEach(() => {
   state.confirm.mockReset().mockResolvedValue({ response: 1 });
 });
 
-it.each([
-  ['before-mouse-event', 'mouseDown'],
-  ['before-input-event', 'keyDown'],
-])('%s ends the connection once and consumes the local input', async (eventName, type) => {
+function fixture() {
   const stopped = vi.fn();
   const excluded = vi.fn();
-  const masks = new PrivacyScreen(excluded, stopped);
-  await masks.set(true, () => true);
+  const resume = vi.fn(async () => {});
+  const suspend = vi.fn(async () => resume);
+  const monitor = { confirm: vi.fn(async () => {}), resume: vi.fn(async () => {}), stop: vi.fn() };
+  let local!: () => void;
+  let failed!: () => void;
+  const masks = new PrivacyScreen(excluded, stopped, suspend, async (onLocal, onFailed) => {
+    local = onLocal;
+    failed = onFailed;
+    return monitor;
+  });
+  return {
+    masks,
+    stopped,
+    excluded,
+    suspend,
+    resume,
+    monitor,
+    local: () => local(),
+    failed: () => failed(),
+  };
+}
+const settle = async () => {
+  for (let i = 0; i < 12; i++) await Promise.resolve();
+};
+
+it('keeps the full-display mask passive so injected input reaches underlying apps', async () => {
+  const f = fixture();
+  await f.masks.set(true, () => true);
   const window = state.windows[0];
-  const event = { preventDefault: vi.fn() };
-  window.webContents.emit(eventName, event, { type });
-  window.webContents.emit(eventName, event, { type });
-  expect(state.confirm).toHaveBeenCalledTimes(1);
-  expect(stopped).not.toHaveBeenCalled();
-  await Promise.resolve();
-  expect(event.preventDefault).toHaveBeenCalledTimes(2);
-  expect(stopped).toHaveBeenCalledTimes(1);
-  expect(window.destroyed).toBe(true);
-  expect(excluded).toHaveBeenLastCalledWith([]);
+  expect(window.options).toMatchObject({
+    enableLargerThanScreen: true,
+    roundedCorners: false,
+    focusable: false,
+  });
+  expect(window.getBounds()).toEqual({ x: 0, y: 0, width: 1440, height: 900 });
+  expect(window.setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+  expect(window.focus).not.toHaveBeenCalled();
+  window.webContents.emit('before-mouse-event', {}, { type: 'mouseDown' });
+  window.webContents.emit('before-input-event', {}, { type: 'keyDown' });
+  expect(state.confirm).not.toHaveBeenCalled();
+  f.masks.stop();
+  expect(f.monitor.stop).toHaveBeenCalledOnce();
 });
 
-it('keeps the mask and connection on cancel and ignores a stale confirmation', async () => {
-  const stopped = vi.fn();
-  const masks = new PrivacyScreen(vi.fn(), stopped);
-  await masks.set(true, () => true);
+it('drains remote input and fences late injection before showing one local confirmation', async () => {
+  const f = fixture();
+  let drained!: () => void;
+  f.suspend.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        drained = () => resolve(f.resume);
+      }),
+  );
+  await f.masks.set(true, () => true);
+  f.local();
+  f.local();
+  expect(f.suspend).toHaveBeenCalledOnce();
+  expect(state.confirm).not.toHaveBeenCalled();
+  drained();
+  await settle();
+  expect(f.monitor.confirm.mock.invocationCallOrder[0]).toBeLessThan(
+    state.confirm.mock.invocationCallOrder[0],
+  );
+  expect(state.confirm).toHaveBeenCalledOnce();
+  expect(f.stopped).toHaveBeenCalledOnce();
+  expect(state.windows[0].destroyed).toBe(true);
+  expect(f.excluded).toHaveBeenLastCalledWith([]);
+});
+
+it('restores passive masking and input on cancel, but ignores an old dialog after replacement', async () => {
+  const f = fixture();
+  await f.masks.set(true, () => true);
   state.confirm.mockResolvedValueOnce({ response: 0 });
-  const click = () =>
-    state.windows[0].webContents.emit(
-      'before-mouse-event',
-      { preventDefault() {} },
-      { type: 'mouseDown' },
-    );
-  click();
-  await Promise.resolve();
-  expect(state.windows[0].destroyed).toBe(false);
-  expect(stopped).not.toHaveBeenCalled();
+  f.local();
+  await settle();
+  expect(f.stopped).not.toHaveBeenCalled();
+  expect(state.windows[0].setFocusable).toHaveBeenLastCalledWith(false);
+  expect(state.windows[0].setIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+  expect(f.monitor.resume).toHaveBeenCalledOnce();
+  expect(f.resume).toHaveBeenCalledOnce();
   let finish!: (result: { response: number }) => void;
   state.confirm.mockImplementationOnce(
     () =>
@@ -118,23 +166,50 @@ it('keeps the mask and connection on cancel and ignores a stale confirmation', a
         finish = resolve;
       }),
   );
-  click();
-  masks.stop();
-  await masks.set(true, () => true);
+  f.local();
+  await settle();
+  f.masks.stop();
+  await f.masks.set(true, () => true);
   finish({ response: 1 });
-  await Promise.resolve();
-  expect(stopped).not.toHaveBeenCalled();
+  await settle();
+  expect(f.stopped).not.toHaveBeenCalled();
   expect(state.windows[1].destroyed).toBe(false);
-  masks.stop();
+  expect(f.monitor.resume).toHaveBeenCalledOnce();
+  f.masks.stop();
 });
 
-it('requests the entire display including the menu bar and accepts the first click', async () => {
-  const masks = new PrivacyScreen(vi.fn(), vi.fn());
-  await masks.set(true, () => true);
-  expect(state.windows[0].options).toMatchObject({
-    enableLargerThanScreen: true,
-    acceptFirstMouse: true,
-  });
-  expect(state.windows[0].getBounds()).toEqual({ x: 0, y: 0, width: 1440, height: 900 });
-  masks.stop();
+it('does not open a stale dialog if disconnected while input is draining', async () => {
+  const f = fixture();
+  let drained!: () => void;
+  f.suspend.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        drained = () => resolve(f.resume);
+      }),
+  );
+  await f.masks.set(true, () => true);
+  f.local();
+  f.masks.stop();
+  drained();
+  await settle();
+  expect(state.confirm).not.toHaveBeenCalled();
+  expect(f.monitor.confirm).not.toHaveBeenCalled();
+});
+
+it('ends the lease instead of leaving an inescapable mask when its native watcher fails', async () => {
+  const f = fixture();
+  await f.masks.set(true, () => true);
+  f.failed();
+  expect(f.stopped).toHaveBeenCalledOnce();
+  expect(state.windows[0].destroyed).toBe(true);
+});
+
+it('does not expose the confirmation if the native injection fence fails', async () => {
+  const f = fixture();
+  await f.masks.set(true, () => true);
+  f.monitor.confirm.mockRejectedValueOnce(new Error('unavailable'));
+  f.local();
+  await settle();
+  expect(state.confirm).not.toHaveBeenCalled();
+  expect(f.stopped).toHaveBeenCalledOnce();
 });
