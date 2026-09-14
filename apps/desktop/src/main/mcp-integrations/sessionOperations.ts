@@ -62,6 +62,12 @@ export interface SessionOperationsDeps {
     patch: Record<string, unknown>,
     hooks?: { beforeWrite?: () => Promise<string | null> },
   ): Promise<unknown>;
+  /**
+   * 在该会话的路由锁内执行 task。fork 用它把「复核源会话未被删除」与 forkAtMessage
+   * 放进同一串行区间 —— forkSessionAtMessage 自身不取任何锁,且只校验源行存在
+   * (软删除会保留行),不这样做会从已删除任务派生出 active 子任务。
+   */
+  withSessionLock<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
   /** history 消息 id → fork 所需的 messages.clientId 及该消息的角色与文本;不存在返回 null。 */
   resolveMessageClientId(
     sessionId: string,
@@ -228,8 +234,23 @@ export async function forkSession(
   const [row] = loaded;
   if (row.status === 'deleted') return err('PRECONDITION_FAILED', `${row.id}: 会话已删除`);
   if (row.remoteHostId) return err('PRECONDITION_FAILED', `${row.id}: 远程会话不支持在本地 fork`);
-  const target = await deps.resolveMessageClientId(row.id, params.messageId);
-  if (!target) return err('NOT_FOUND', `消息 ${params.messageId} 不存在于 ${row.id}`);
+  return deps.withSessionLock(row.id, async () => {
+    // 锁内重新确认源会话仍未被删除:软删除保留行与消息,forkSessionAtMessage 只查
+    // "行是否存在",单靠上面的预检会从已删除任务派生出 active 子任务。
+    const [fresh] = await deps.loadSessions([row.id]);
+    if (!fresh) return err('NOT_FOUND', `${row.id}: 会话已不存在`);
+    if (fresh.status === 'deleted') return err('PRECONDITION_FAILED', `${row.id}: 会话已在此期间被删除`);
+    return forkSessionLocked(deps, fresh, params.messageId);
+  });
+}
+
+async function forkSessionLocked(
+  deps: SessionOperationsDeps,
+  row: SessionOpsRow,
+  messageId: string,
+): Promise<ForkSessionResult> {
+  const target = await deps.resolveMessageClientId(row.id, messageId);
+  if (!target) return err('NOT_FOUND', `消息 ${messageId} 不存在于 ${row.id}`);
   let forkedId: string;
   try {
     forkedId = (await deps.forkAtMessage(row.id, target.clientId)).id;

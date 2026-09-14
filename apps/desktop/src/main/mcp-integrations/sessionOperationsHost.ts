@@ -10,11 +10,13 @@ import { realpath, stat } from 'node:fs/promises';
 import { isAbsolute } from 'node:path';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 
+import { joinChatQuoteTextSegments, parseChatQuoteSegments } from '@cindy/maker-shared/chat-quotes';
 import type { ForkSessionResult, MoveSessionsResult, SessionMoveTarget } from '@cindy/mcps';
 
 import { bindingStore } from '../im/binding.js';
 import { getDbClient, tryGetDbClient } from '../localDb/client/current.js';
 import { updateSessionInDb } from '../localDb/ipc/sessions.js';
+import { withSessionRouteLock } from '../localDb/sessionRouteLock.js';
 import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { messages, orcaTeams, orcaWorkers, sessions } from '../localDb/schema.js';
 import { forkSessionAtMessage } from '../maker-orchestration/fork.js';
@@ -80,13 +82,21 @@ export function messageTextForDraft(content: unknown): string {
   return draftBlocksToText(parsed);
 }
 
-/** 取文本的口径与 maker-ipc/sessionReferenceResolver 的 contentToText 一致。 */
+/**
+ * 取文本的口径与 maker-ipc/sessionReferenceResolver 的 contentToText 一致;
+ * 带 `quotesEncoded` 的 envelope 额外按 autoReviewUserIntent 的同款投影剥掉引用私有标记,
+ * 否则标记会原样进入 draft_text 被模型读到。
+ */
 function draftBlocksToText(value: unknown): string {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value.map(draftBlocksToText).filter(Boolean).join('\n');
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>;
-    if (typeof record.text === 'string') return record.text;
+    if (typeof record.text === 'string') {
+      return record.quotesEncoded === true
+        ? joinChatQuoteTextSegments(parseChatQuoteSegments(record.text))
+        : record.text;
+    }
     if (typeof record.content === 'string') return record.content;
   }
   return '';
@@ -138,6 +148,7 @@ export function createSessionOperationsDeps(
     // 写库之间不可能再有 attach 落地(attach 的持久化 + 内存索引更新在同一队列里排在后面)。
     // 队列内不得再等待 attach / detach;updateSessionInDb 只取路由锁与状态写锁,
     // 而 IM 侧没有任何路径在持有这两把锁时等待 binding 变更,不会形成锁序环。
+    withSessionLock: (sessionId, task) => withSessionRouteLock(sessionId, task),
     updateSession: (sessionId, patch, hooks) =>
       hooks?.beforeWrite
         ? bindingStore.runExclusive(() => updateSessionInDb(sessionId, patch, undefined, hooks))

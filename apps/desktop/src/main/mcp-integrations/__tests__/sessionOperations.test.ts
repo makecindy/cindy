@@ -51,6 +51,7 @@ function makeDeps(rows: SessionOpsRow[], overrides: Partial<SessionOperationsDep
     isTurnRunning: () => false,
     isImAttached: () => false,
     resolveDirectory: async (path: string) => path,
+    withSessionLock: async <T,>(_sessionId: string, task: () => Promise<T>) => task(),
     updateSession,
     resolveMessageClientId: async () => ({ clientId: 'client-1', role: 'assistant', text: '' }),
     forkAtMessage: async () => ({ id: 'forked' }),
@@ -236,6 +237,26 @@ describe('forkSession', () => {
     expect(await forkSession(withCode('SOMETHING_ELSE'), { sessionId: 'a', messageId: 'm' })).toMatchObject({ errorCode: 'INTERNAL' });
     const { deps: noMsg } = makeDeps([row('a')], { resolveMessageClientId: async () => null });
     expect(await forkSession(noMsg, { sessionId: 'a', messageId: 'm' })).toMatchObject({ errorCode: 'NOT_FOUND' });
+  });
+
+  it('refuses to fork a source deleted inside the session lock', async () => {
+    // forkSessionAtMessage 只校验源行存在,软删除会保留行 —— 预检通过后被并发删除时
+    // 必须在锁内复核拦下,否则会从已删除任务派生出 active 子任务。
+    const base = row('a');
+    let loads = 0;
+    const { deps } = makeDeps([base], {
+      loadSessions: async (ids) => {
+        loads += 1;
+        const status = loads === 1 ? ('active' as const) : ('deleted' as const);
+        return ids.flatMap((id) => (id === 'a' ? [{ ...base, status }] : []));
+      },
+      forkAtMessage: async () => {
+        throw new Error('forkAtMessage must not run for a deleted source');
+      },
+    });
+    const res = await forkSession(deps, { sessionId: 'a', messageId: 'm' });
+    expect(loads).toBeGreaterThan(1);
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
   });
 
   it('returns the selected user message as draftText so the caller can seed the new session', async () => {

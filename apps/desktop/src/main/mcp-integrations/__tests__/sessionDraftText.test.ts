@@ -27,6 +27,15 @@ describe('messageTextForDraft', () => {
     expect(messageTextForDraft('[{"type":"text","text":"x"},{"type":"image"}]')).toBe('x');
   });
 
+  it('strips private quote markers from a quotesEncoded envelope', () => {
+    // 作曲器引用会存成 {text, quotesEncoded:true},正文里带私有标记行;
+    // 直接回传会让模型读到标记,口径对齐 autoReviewUserIntent 的投影。
+    const raw = JSON.stringify({ text: '> quoted\nmy question', quotesEncoded: true });
+    const out = messageTextForDraft(raw);
+    expect(out).not.toContain('quotesEncoded');
+    expect(out).toContain('my question');
+  });
+
   it('falls back to the raw string when the content is not JSON', () => {
     expect(messageTextForDraft('hello')).toBe('hello');
   });
