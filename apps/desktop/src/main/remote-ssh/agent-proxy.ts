@@ -69,6 +69,12 @@ export function clearAgentProxyTunnelState(hostId: string): void {
   void stopTunnelForHost(hostId);
 }
 
+/** Awaited endpoint-edit variant so a late tunnel stop cannot race rehydrate. */
+export async function clearAgentProxyTunnelStateAndWait(hostId: string): Promise<void> {
+  tunnelStates.delete(hostId);
+  await stopTunnelForHost(hostId);
+}
+
 /**
  * 主控制连接断开时的处理: 隧道保活挂起 (不空转重试), 但**存活的隧道不拆**
  * — 独立连接可能还在正常服务 LLM 流量, 主连接的断链不该牵连它。主连接

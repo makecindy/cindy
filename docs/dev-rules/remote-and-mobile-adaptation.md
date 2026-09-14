@@ -68,6 +68,29 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 一起打掉线，由 #1405 收窄止损半径修复。协议兼容、allowlist、单测三层防线对这类问题
 全部免疫，只有 review 时点名问「半径」才拦得住。
 
+## 模块通过 Remote Resource 接入移动端
+
+面向移动端新增独立产品入口时，默认通过 `@cindy/device-link` 的 Remote Resource
+协议接入，不为每个业务模块复制 DTO、store、channel 与 push reason。稳定 wire 入口只有：
+
+- `maker:remote-resources:manifest`：主机声明 collection、placement 与客户端可展示的有限原语；
+- `maker:remote-resources:list` / `maker:remote-resources:get`：读取资源投影；
+- `maker:remote-resources:invoke`：调用主机已注册、已校验的 opaque action；
+- `maker:remote-resources:changed`：只表达 collection/ref 失效，控制端据此重拉。
+
+Desktop 功能模块通过 `RemoteResourceRegistry` 注册 provider；主机保留业务权威和安全边界，
+provider 只投影用户可见信息。密钥、Token、渠道凭证、系统路径、内部 prompt 与运行时对象不得
+进入资源响应。Mobile shell 只理解有限的展示/交互原语，不按 Bot、Schedule 或 Plugin 的内部
+enum 编译分支，也不接受任意 HTML、React 或无限 UI DSL。
+
+资源身份必须包含 `deviceId + collectionId + kind + id`。资源路由打开时应重新调用 `resource:get`
+解析 `conversation` 等 link，不能把可能 rollover 的 Session id 当成永久资源身份。已有对话继续
+复用 canonical Session 的消息、输入、确认与恢复链路，不复制一套模块专属聊天协议。
+
+协议按字段追加演进。未知字段、未知 collection 和未知 action 不得导致整个首页或会话崩溃；
+结构化 Session 内容必须携带可读 `fallbackMarkdown`，旧客户端至少能阅读并继续任务。只有新增
+移动端此前无法表达的内容或交互原语时，才要求客户端发版。
+
 ## PR 门禁
 
 功能类 PR 的 Description 必须写明上述每一项的结论，三选一：

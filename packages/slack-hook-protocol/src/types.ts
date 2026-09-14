@@ -378,6 +378,10 @@ export function isSupportedImageMime(mime: string): boolean {
  * 文本里正则解析 <thread_context> 块。
  */
 export interface ThreadContextEntry {
+  /** 可选的平台消息身份与回复关系，不从正文推断。 */
+  messageId?: string;
+  replyToMessageId?: string | null;
+  authorId?: string;
   author: string;
   text: string;
   /** 该条目是否为 bot 自身的回复(渲染时可视觉区分)。 */
@@ -389,6 +393,12 @@ export interface ThreadContextEntry {
  * 字段全部可选(im 除外); 旧 server 不发时 desktop 降级为纯文本渲染。
  */
 export interface TaskSource {
+  /**
+   * X 结构化组装标记：threadContext 按祖先到当前请求排列，末项对应
+   * triggerMessageId / requesterId；userText 为完整请求本体。
+   * 新客户端据此组装 prompt，缺失时继续使用服务端兼容 prompt。
+   */
+  xContext?: { requesterId: string; requesterName?: string; truncated: boolean };
   /** IM 平台标识(开放集合): 'slack' | 'feishu' | 'discord' | ... */
   im: string;
   /** 来源显示名(频道名 "#general"、群名等); null = 未知。 */
@@ -854,7 +864,7 @@ export type ProviderBindStatePayload = ProviderBindStatusPayload;
 // ── 阶段 6(v2): 实时问答 ────────────────────────────────────────────────────
 
 /** 可查询的清单种类。 */
-export const QUERY_KINDS = ['workspaces', 'models', 'sessions'] as const;
+export const QUERY_KINDS = ['workspaces', 'models', 'sessions', 'session-new'] as const;
 export type QueryKind = (typeof QUERY_KINDS)[number];
 
 /**
@@ -864,6 +874,14 @@ export type QueryKind = (typeof QUERY_KINDS)[number];
 export interface QueryRequestPayload {
   queryId: string;
   kind: QueryKind;
+  /** kind=session-new: create and bind a blank task immediately for `/new`. */
+  sessionNew?: {
+    previousExternalKey: string;
+    externalKey: string;
+    workspace: string;
+    options?: TaskDispatchOptions;
+    source?: TaskSource;
+  };
 }
 
 /**
@@ -926,6 +944,8 @@ export interface QueryResponsePayload {
   agents?: QueryAgentModels[];
   /** kind=sessions 且 ok 时必填: at most 20 privacy-minimised entries. */
   sessions?: QuerySessionEntry[];
+  /** kind=session-new 且 ok 时必填。 */
+  sessionId?: string;
 }
 
 // ── 阶段 7(v2): 任务取消 ────────────────────────────────────────────────────
@@ -1268,6 +1288,9 @@ export const HOOK_FEATURE_PROVIDER_BEHAVIOR = 'provider-behavior-v1';
 
 /** Both peers must advertise this before query.kind=sessions is used. */
 export const HOOK_FEATURE_SESSION_PICKER = 'session-picker-v1';
+
+/** Both peers support immediate blank-task creation for provider `/new`. */
+export const HOOK_FEATURE_SESSION_NEW = 'session-new-v1';
 
 /** Server capability announcing that its provider registry enables Telegram. */
 export const HOOK_FEATURE_PROVIDER_TELEGRAM = 'provider:telegram';

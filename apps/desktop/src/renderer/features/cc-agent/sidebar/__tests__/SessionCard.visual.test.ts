@@ -97,6 +97,14 @@ vi.mock('@/components/sidebar/WorktreeBadge', () => ({
       : null,
 }));
 
+vi.mock('@/contexts/WorktreeContext', () => {
+  const reportLiveness = vi.fn();
+  return {
+    useWorktreeForSession: () => null,
+    useReportWorktreeLiveness: () => reportLiveness,
+  };
+});
+
 vi.mock('@/state/agentIslandActivity', () => ({
   useAgentIslandActivity: (sessionId: string) => {
     const compactDetail = mocks.runningDetailBySession.get(sessionId);
@@ -150,6 +158,7 @@ vi.mock('@/features/scheduler/lib/scheduleSessionBinding', () => ({
 
 vi.mock('@/features/scheduler/lib/scheduleSidebarIndexRuns', () => ({
   loadScheduleSidebarIndexRuns: async () => [],
+  findLatestSidebarIndexRunForSession: () => undefined,
 }));
 
 function scheduleForCase(id: string, status: 'active' | 'paused') {

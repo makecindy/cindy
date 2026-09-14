@@ -22,7 +22,7 @@ vi.mock('electron', () => ({
   app: {
     getPath: () => h.userDataDir,
     getAppPath: () => h.userDataDir,
-    isPackaged: false,
+    isPackaged: true,
   },
   safeStorage: { isEncryptionAvailable: () => false },
 }));

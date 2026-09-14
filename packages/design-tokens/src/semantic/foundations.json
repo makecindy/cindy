@@ -1,0 +1,370 @@
+{
+  "semantic": {
+    "foundations": {
+      "app-font-ui-default": {
+        "$type": "fontFamily",
+        "$value": "{reference.foundations.app-font-ui-default}"
+      },
+      "app-font-code-default": {
+        "$type": "fontFamily",
+        "$value": "{reference.foundations.app-font-code-default}"
+      },
+      "app-code-font-size": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.app-code-font-size}"
+      },
+      "app-ui-font-size": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.app-ui-font-size}"
+      },
+      "text-xs": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-xs}"
+      },
+      "text-sm": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-sm}"
+      },
+      "text-base": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-base}"
+      },
+      "text-lg": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-lg}"
+      },
+      "text-xl": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-xl}"
+      },
+      "text-2xl": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-2xl}"
+      },
+      "text-3xl": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-3xl}"
+      },
+      "text-4xl": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-4xl}"
+      },
+      "text-5xl": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-5xl}"
+      },
+      "text-xs-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-xs-line-height}"
+      },
+      "text-sm-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-sm-line-height}"
+      },
+      "text-base-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-base-line-height}"
+      },
+      "text-lg-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-lg-line-height}"
+      },
+      "text-xl-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-xl-line-height}"
+      },
+      "text-2xl-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-2xl-line-height}"
+      },
+      "text-3xl-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-3xl-line-height}"
+      },
+      "text-4xl-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-4xl-line-height}"
+      },
+      "text-5xl-line-height": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-5xl-line-height}"
+      },
+      "text-10": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-10}"
+      },
+      "text-11": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-11}"
+      },
+      "text-12": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-12}"
+      },
+      "text-13": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-13}"
+      },
+      "text-14": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-14}"
+      },
+      "text-15": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-15}"
+      },
+      "text-16": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-16}"
+      },
+      "text-18": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-18}"
+      },
+      "text-20": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-20}"
+      },
+      "text-24": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-24}"
+      },
+      "text-28": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.text-28}"
+      },
+      "motion-instant": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-instant}"
+      },
+      "motion-fast": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-fast}"
+      },
+      "motion-base": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-base}"
+      },
+      "motion-enter": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-enter}"
+      },
+      "motion-exit": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-exit}"
+      },
+      "motion-spinner-cycle": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-spinner-cycle}"
+      },
+      "motion-sidebar-title-marquee-per-viewport": {
+        "$type": "duration",
+        "$value": "{reference.foundations.motion-sidebar-title-marquee-per-viewport}"
+      },
+      "motion-ease-out": {
+        "$type": "cubicBezier",
+        "$value": "{reference.foundations.motion-ease-out}"
+      },
+      "motion-ease-in": {
+        "$type": "cubicBezier",
+        "$value": "{reference.foundations.motion-ease-in}"
+      },
+      "motion-ease-move": {
+        "$type": "cubicBezier",
+        "$value": "{reference.foundations.motion-ease-move}"
+      },
+      "space-0": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-0}"
+      },
+      "space-1": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-1}"
+      },
+      "space-2": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-2}"
+      },
+      "space-3": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-3}"
+      },
+      "space-4": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-4}"
+      },
+      "space-5": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-5}"
+      },
+      "space-6": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-6}"
+      },
+      "space-7": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-7}"
+      },
+      "space-8": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-8}"
+      },
+      "space-9": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-9}"
+      },
+      "space-10": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-10}"
+      },
+      "space-11": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-11}"
+      },
+      "space-12": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-12}"
+      },
+      "space-14": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-14}"
+      },
+      "space-16": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-16}"
+      },
+      "space-20": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-20}"
+      },
+      "space-24": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-24}"
+      },
+      "space-28": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-28}"
+      },
+      "space-32": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-32}"
+      },
+      "space-36": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-36}"
+      },
+      "space-40": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-40}"
+      },
+      "space-44": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-44}"
+      },
+      "space-48": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-48}"
+      },
+      "space-52": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-52}"
+      },
+      "space-56": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-56}"
+      },
+      "space-60": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-60}"
+      },
+      "space-64": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-64}"
+      },
+      "space-72": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-72}"
+      },
+      "space-80": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-80}"
+      },
+      "space-96": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-96}"
+      },
+      "space-px": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-px}"
+      },
+      "space-0_5": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-0_5}"
+      },
+      "space-1_5": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-1_5}"
+      },
+      "space-2_5": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-2_5}"
+      },
+      "space-3_5": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-3_5}"
+      },
+      "radius-none": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.radius-none}"
+      },
+      "radius-default": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.radius-default}"
+      },
+      "radius-xl": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.radius-xl}"
+      },
+      "radius-2xl": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.radius-2xl}"
+      },
+      "radius-3xl": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.radius-3xl}"
+      },
+      "radius-full": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.radius-full}"
+      },
+      "size-input-lg": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.size-input-lg}"
+      },
+      "space-input-lg": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.space-input-lg}"
+      },
+      "radius-offset-md": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.radius-offset-md}"
+      },
+      "radius-offset-sm": {
+        "$type": "dimension",
+        "$value": "{reference.foundations.radius-offset-sm}"
+      },
+      "font-weight-normal": {
+        "$type": "fontWeight",
+        "$value": "{reference.foundations.font-weight-normal}"
+      },
+      "font-weight-medium": {
+        "$type": "fontWeight",
+        "$value": "{reference.foundations.font-weight-medium}"
+      },
+      "font-weight-semibold": {
+        "$type": "fontWeight",
+        "$value": "{reference.foundations.font-weight-semibold}"
+      }
+    }
+  }
+}

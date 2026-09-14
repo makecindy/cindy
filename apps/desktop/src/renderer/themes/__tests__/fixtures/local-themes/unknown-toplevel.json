@@ -1,0 +1,11 @@
+{
+  "id": "ds2b-unknown-toplevel",
+  "name": "DS2b Unknown Toplevel",
+  "type": "light",
+  "author": "not-a-real-user",
+  "comment": "fake extra field for DS-2b gap freeze",
+  "version": 2,
+  "colors": {
+    "surface": "#ffffff"
+  }
+}

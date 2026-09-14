@@ -1,9 +1,9 @@
 import { deleteSecureItem, getSecureItem, setSecureItem } from '@/auth/secureStorage';
+import { compactVoiceInputHistoryIfNeeded, normalizeVoiceHistoryText } from '@cindy/voice-input-core';
+export { MAX_REFINEMENT_HISTORY_ITEM_CHARS as MAX_MOBILE_VOICE_HISTORY_ITEM_CHARS } from '@cindy/voice-input-core';
 
 const STORAGE_KEY_PREFIX = 'xdt.mobileVoiceHistory.v1';
 const STORAGE_INDEX_KEY = `${STORAGE_KEY_PREFIX}.hosts`;
-export const MAX_MOBILE_VOICE_HISTORY_ENTRIES = 100;
-export const MAX_MOBILE_VOICE_HISTORY_ITEM_CHARS = 360;
 
 type StoredMobileVoiceHistoryEntry = {
   id: string;
@@ -11,8 +11,33 @@ type StoredMobileVoiceHistoryEntry = {
   createdAt: number;
 };
 
-export async function getMobileVoiceInputHistoryForHost(hostDeviceId: string): Promise<string[]> {
-  return (await readMobileVoiceHistoryEntries(hostDeviceId)).map((entry) => entry.text);
+type StoredMobileVoiceHistory = {
+  entries: StoredMobileVoiceHistoryEntry[];
+  desktopSnapshot?: string;
+};
+
+export async function getMobileVoiceInputHistoryForHost(
+  hostDeviceId: string,
+  syncedDesktopHistory?: readonly string[],
+): Promise<string[]> {
+  const state = await readMobileVoiceHistory(hostDeviceId);
+  if (syncedDesktopHistory?.length) {
+    const desktopEntries = normalizeHistoryEntries(syncedDesktopHistory.map((text, index) => ({
+      text, id: `desktop-${index}-${fnv1a(text)}`, createdAt: 1,
+    })));
+    const snapshot = JSON.stringify(desktopEntries.map((entry) => entry.text));
+    // Remember the imported snapshot separately from the legacy history array.
+    // Otherwise each dictation reimports entries removed by the last compaction.
+    if (state.desktopSnapshot !== snapshot) {
+      const localEntries = state.entries.filter((entry) => !entry.id.startsWith('desktop-'));
+      const priorDesktopEntries = state.entries.filter((entry) => entry.id.startsWith('desktop-'));
+      state.entries = normalizeHistoryEntries([...localEntries, ...desktopEntries, ...priorDesktopEntries]);
+      state.desktopSnapshot = snapshot;
+      // History is advisory; unavailable secure storage must not block recording.
+      await writeMobileVoiceHistory(hostDeviceId, state).catch(() => undefined);
+    }
+  }
+  return state.entries.map((entry) => entry.text);
 }
 
 export async function recordMobileVoiceInputHistoryForHost(
@@ -63,22 +88,41 @@ export async function updateMobileVoiceInputHistoryEntryForHost(
 export async function clearAllMobileVoiceInputHistories(): Promise<void> {
   const hosts = await readHistoryHostIndex();
   await Promise.all(
-    hosts.map((hostDeviceId) =>
+    hosts.flatMap((hostDeviceId) => [
       deleteSecureItem(storageKeyForHostDevice(hostDeviceId)).catch(() => undefined),
-    ),
+      deleteSecureItem(snapshotKeyForHostDevice(hostDeviceId)).catch(() => undefined),
+    ]),
   );
   await deleteSecureItem(STORAGE_INDEX_KEY).catch(() => undefined);
 }
 
 async function readMobileVoiceHistoryEntries(hostDeviceId: string): Promise<StoredMobileVoiceHistoryEntry[]> {
-  const raw = await getSecureItem(storageKeyForHostDevice(normalizeHostDeviceId(hostDeviceId))).catch(() => null);
-  if (!raw) return [];
+  return (await readMobileVoiceHistory(hostDeviceId)).entries;
+}
+
+async function readMobileVoiceHistory(hostDeviceId: string): Promise<StoredMobileVoiceHistory> {
+  const normalizedHost = normalizeHostDeviceId(hostDeviceId);
+  const [raw, snapshot] = await Promise.all([
+    getSecureItem(storageKeyForHostDevice(normalizedHost)).catch(() => null),
+    getSecureItem(snapshotKeyForHostDevice(normalizedHost)).catch(() => null),
+  ]);
+  if (!raw) return { entries: [] };
   try {
     const parsed = JSON.parse(raw) as unknown;
-    if (!Array.isArray(parsed)) return [];
-    return normalizeHistoryEntries(parsed);
+    if (Array.isArray(parsed)) return {
+      entries: normalizeHistoryEntries(parsed),
+      desktopSnapshot: snapshot ?? undefined,
+    };
+    // Recover development builds that wrote an object; the next write restores
+    // the array understood by installed bundles and OTA rollback versions.
+    if (!parsed || typeof parsed !== 'object') return { entries: [] };
+    const state = parsed as Partial<StoredMobileVoiceHistory>;
+    return {
+      entries: normalizeHistoryEntries(Array.isArray(state.entries) ? state.entries : []),
+      desktopSnapshot: typeof state.desktopSnapshot === 'string' ? state.desktopSnapshot : undefined,
+    };
   } catch {
-    return [];
+    return { entries: [] };
   }
 }
 
@@ -86,9 +130,20 @@ async function writeMobileVoiceHistoryEntries(
   hostDeviceId: string,
   entries: StoredMobileVoiceHistoryEntry[],
 ): Promise<void> {
+  const state = await readMobileVoiceHistory(hostDeviceId);
+  await writeMobileVoiceHistory(hostDeviceId, { ...state, entries });
+}
+
+async function writeMobileVoiceHistory(hostDeviceId: string, state: StoredMobileVoiceHistory): Promise<void> {
   const normalizedHost = normalizeHostDeviceId(hostDeviceId);
-  await setSecureItem(storageKeyForHostDevice(normalizedHost), JSON.stringify(normalizeHistoryEntries(entries)));
+  const entries = normalizeHistoryEntries(state.entries);
   await addHostToHistoryIndex(normalizedHost);
+  // Always keep this v1 value readable by older bundles. Commit history before
+  // its advisory marker so a failed history write cannot suppress a later import.
+  await setSecureItem(storageKeyForHostDevice(normalizedHost), JSON.stringify(entries));
+  if (state.desktopSnapshot) {
+    await setSecureItem(snapshotKeyForHostDevice(normalizedHost), state.desktopSnapshot);
+  }
 }
 
 function normalizeHistoryEntries(input: unknown[]): StoredMobileVoiceHistoryEntry[] {
@@ -108,15 +163,13 @@ function normalizeHistoryEntries(input: unknown[]): StoredMobileVoiceHistoryEntr
       text,
       createdAt,
     });
-    if (entries.length >= MAX_MOBILE_VOICE_HISTORY_ENTRIES) break;
   }
-  return entries;
+  return compactVoiceInputHistoryIfNeeded(entries);
 }
 
 function normalizeHistoryText(value: unknown): string {
   if (typeof value !== 'string') return '';
-  const normalized = value.replace(/\s+/g, ' ').trim();
-  return normalized.slice(0, MAX_MOBILE_VOICE_HISTORY_ITEM_CHARS).trim();
+  return normalizeVoiceHistoryText(value);
 }
 
 function normalizeHostDeviceId(hostDeviceId: string): string {
@@ -132,6 +185,10 @@ function storageKeyForHostDevice(hostDeviceId: string): string {
 
 function createMobileVoiceHistoryId(text: string, timestamp: number): string {
   return `voice-${timestamp.toString(36)}-${fnv1a(`${timestamp}:${text}`)}`;
+}
+
+function snapshotKeyForHostDevice(hostDeviceId: string): string {
+  return `${storageKeyForHostDevice(hostDeviceId)}.desktopSnapshot`;
 }
 
 async function addHostToHistoryIndex(hostDeviceId: string): Promise<void> {
@@ -192,4 +249,5 @@ export const __testing = {
   readHistoryHostIndex,
   storageIndexKey: STORAGE_INDEX_KEY,
   storageKeyForHostDevice,
+  snapshotKeyForHostDevice,
 };

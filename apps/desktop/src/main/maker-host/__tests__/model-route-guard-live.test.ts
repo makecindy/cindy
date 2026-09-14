@@ -6,7 +6,8 @@ const h = vi.hoisted(() => ({
   effectiveSourceIdForModel: vi.fn(),
 }));
 
-vi.mock('@cindy/model-providers', () => ({
+vi.mock('@cindy/model-providers', async (importOriginal) => ({
+  findCatalogModel: (await importOriginal<typeof import('@cindy/model-providers')>()).findCatalogModel,
   connectedProvidersForAgent: vi.fn(() => []),
   effectiveSourceIdForModel: h.effectiveSourceIdForModel,
   getModel: vi.fn(() => null),
@@ -40,6 +41,7 @@ vi.mock('../model-plane/modelPlanePolicy.js', () => ({
 
 import {
   resolveDefaultScheduleRoute,
+  resolveScheduledModelSelectionLive,
   resolveLenientSessionRoute,
 } from '../model-route-guard-live.js';
 
@@ -129,5 +131,19 @@ describe('resolveLenientSessionRoute provider-list outage', () => {
       providerId: null,
       degraded: true,
     });
+  });
+});
+
+
+describe('scheduled selection uses the live source copy', () => {
+  it('reads the current catalog without claiming credentials and preserves the requested route', async () => {
+    const selection = { agentKind: 'pi' as const, model: 'same-model', providerId: 'selected', effort: 'ultra' as const, fastMode: true };
+    h.listProviders.mockResolvedValue([
+      { id: 'other', connected: true, models: { pi: [{ id: 'same-model', efforts: ['ultra'], defaultEffort: 'ultra', supportsFastMode: true }] } },
+      { id: 'selected', connected: true, models: { pi: [{ id: 'same-model', efforts: ['medium'], defaultEffort: 'medium', supportsFastMode: false }] } },
+    ]);
+    await expect(resolveScheduledModelSelectionLive(selection)).resolves.toEqual({ ...selection, effort: 'medium', fastMode: false });
+    expect(h.listProviders).toHaveBeenLastCalledWith({ allowSideEffects: false, catalog: h.catalog });
+    expect(selection).toMatchObject({ effort: 'ultra', fastMode: true });
   });
 });

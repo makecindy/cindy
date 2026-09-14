@@ -34,22 +34,32 @@ export function registerSessionSearchTool(
     name: 'session_search',
     category: 'search',
     description:
-      'FTS5 全文检索本地存档的历史对话内容 (跨所有 session)。返回按相关度排序的 message ' +
+      'FTS5 全文检索当前身份可访问的本地历史对话。普通任务按现有全局历史权限检索；' +
+      'Cindy Bot 只检索同一 Bot 关联的主任务、通道任务和归档任务。返回按相关度排序的 message ' +
       '命中 (sessionId / messageId / role / snippet 高亮 / ts)。' +
       ' 跟 memory_search 区别: memory_search 搜提炼后的 memory 分片, session_search 搜原始对话。' +
       ' 用于 "上次怎么解决这个 bug" / "用户提到过 X 在哪轮" 类场景。',
     inputShape: {
-      query: z.string().min(1).describe('搜索关键词 (短语精确匹配)'),
+      query: z.string().min(1).max(256).describe('搜索关键词 (中文按字相邻匹配, 多词 AND, 最长 256)'),
       sessionId: z.string().optional().describe('限定某 session'),
       role: z.enum(['user', 'assistant', 'system']).optional().describe('限定 message role'),
       limit: z.number().int().min(1).max(50).optional().describe('默认 10'),
     },
     handler: async ({ query, sessionId, role, limit }) => {
       try {
-        const opts: { sessionId?: string; role?: typeof role; limit?: number } = {};
+        const context = deps.getSessionContext?.();
+        const opts: {
+          sessionId?: string;
+          role?: typeof role;
+          limit?: number;
+          callerSessionId?: string;
+          callerMemoryScopeKey?: string;
+        } = {};
         if (sessionId) opts.sessionId = sessionId;
         if (role) opts.role = role;
         if (limit) opts.limit = limit;
+        if (context?.sessionId) opts.callerSessionId = context.sessionId;
+        if (context?.memoryScopeKey) opts.callerMemoryScopeKey = context.memoryScopeKey;
         const hits = await searchFn(query, opts);
         return buildJsonResult({ ok: true, data: { hits, count: hits.length } });
       } catch (err) {

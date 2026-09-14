@@ -80,16 +80,15 @@ export class SessionActivityRelay {
    * 远端删除不存在的条目是 no-op)并记入 terminal replay(重连 replay 时补发,
    * 推送当下丢失也能收敛)。
    *
-   * 为什么需要:publish() 的隐式收敛(clear 不在 list 里的 entry / attention 翻
-   * false 的 entry)依赖 entries 里还留着该会话 —— 桌面重启(entries 清零)或
-   * 收尾包推送丢失后,远端列表行可能仍挂着 attention=true 的旧条目,而 entries
-   * 已无记录,任何后续 publish 都不会再为它发出任何帧,绿/红点永久挂死。
+   * 为什么需要:publish() 的隐式收敛依赖 list 里还留着该会话。桌面重启(entries
+   * 清零)或收尾包推送丢失后,远端列表行可能仍挂着 attention=true 的旧条目,而
+   * entries 已无记录,任何后续 publish 都不会再为它发出任何帧。
    *
    * 为什么 entries 有条目时必须不动:条目存在说明本进程与远端就该会话有活跃
-   * 同步流 —— 它可能是 running / needs-interaction 的 live 帧(此刻发收尾包会把
-   * 远端正在展示的运行 / 等待授权指示误清成"已完成",needs-interaction 是稳定态,
-   * 没有后续事件能补回),也可能是刚发出的未读终态;两者都由紧随的 publish()
-   * 正常路径收敛(live 继续、已读走 clear 发收尾包),这里插手只会产生误清或重复帧。
+   * 同步流 —— 可能是 running / needs-interaction,也可能是刚发出的未读终态。
+   * 异步 not-found 回执若在查询窗口内碰上新一轮 completed/error,动手清掉会把
+   * 新绿点/红点误清,并绕过 error 的 passive 免疫。live 与未读终态都由紧随的
+   * publish() / 独立未读账本收敛。
    */
   ensureSessionTerminalClear(sessionId: string): void {
     if (this.entries.has(sessionId)) return;

@@ -130,10 +130,21 @@ export function listAllFiles(args: ListAllFilesArgs): Promise<ListAllFilesResult
       reader.close();
       const elapsedMs = Date.now() - start;
       // truncated 时 rg 因被我们 SIGTERM 退出,code/signal 不一定 0 — 仍当 success。
-      if (!truncated && code !== 0 && code !== null) {
-        // rg exit code 1 = no matches(--files 模式下不会出现);其它非零是真错。
-        // 但 --files 即使工作目录空也是 exit 0,所以非 0 必然异常。
-        log.warn('rg exited non-zero', { code, signal, elapsedMs, files: files.length });
+      // signal 非空 = 被 OOM killer / SIGKILL 等意外终止(code 为 null)。
+      if (!truncated && signal !== null) {
+        log.warn('rg killed by signal', { signal, elapsedMs, files: files.length });
+        reject(new Error(`ripgrep killed by signal ${signal}`));
+        return;
+      }
+      // exit code 1 = no matches (--files 模式下空目录/全部被忽略);>= 2 = 致命错误。
+      if (!truncated && code !== null && code >= 2) {
+        log.warn('rg exited with fatal error', { code, signal, elapsedMs, files: files.length });
+        reject(new Error(`ripgrep exited with code ${code}${signal ? ` (signal: ${signal})` : ''}`));
+        return;
+      }
+      if (!truncated && code === 1) {
+        // exit 1 = 空目录或全部被 .gitignore 排除;合法的空清单。
+        log.debug('rg exited 1 (no files)', { elapsedMs });
       }
       log.debug('rg done', { workdir: args.workdir, files: files.length, truncated, elapsedMs });
       resolve({ files, truncated, elapsedMs });

@@ -31,6 +31,12 @@ function createDeps(overrides: Partial<OrcaDiagnosticsDeps> = {}): OrcaDiagnosti
       },
     }]),
     getSessionStatus: vi.fn((sessionId) => sessionId === 'worker-session-1' ? 'not_running' : 'active'),
+    getWorkerFlowStatus: vi.fn(async () => ({
+      isWorking: false,
+      willQueue: false,
+      queuedCount: 0,
+      queuePaused: false,
+    })),
     readLatestAssistantMessage: vi.fn(async () => 'latest assistant output'),
     ...overrides,
   };
@@ -77,6 +83,10 @@ describe('orca diagnostics read-only helpers', () => {
         status: 'done',
         session_status: 'not_running',
         restored_from_storage: true,
+        is_working: false,
+        will_queue: false,
+        queued_count: 0,
+        queue_paused: false,
         label: 'dev',
         role: 'developer',
         agent_kind: 'codex',
@@ -88,6 +98,38 @@ describe('orca diagnostics read-only helpers', () => {
     });
     if (!result.ok) throw new Error('expected ok result');
     expect(result.workers[0]?.idle_ms).toEqual(expect.any(Number));
+  });
+
+  it('reports an empty paused worker queue', async () => {
+    const deps = createDeps({
+      getWorkerFlowStatus: vi.fn(async () => ({
+        isWorking: false,
+        willQueue: true,
+        queuedCount: 0,
+        queuePaused: true,
+      })),
+    });
+
+    await expect(getOrcaWorkspaceInfoReadOnly(deps, 'lead-1')).resolves.toMatchObject({
+      ok: true,
+      workers: [{ queued_count: 0, queue_paused: true }],
+    });
+  });
+
+  it('reports a consuming queue entry even after the pending queue is empty', async () => {
+    const deps = createDeps({
+      getWorkerFlowStatus: vi.fn(async () => ({
+        isWorking: true,
+        willQueue: true,
+        queuedCount: 1,
+        queuePaused: false,
+      })),
+    });
+
+    await expect(getOrcaWorkspaceInfoReadOnly(deps, 'lead-1')).resolves.toMatchObject({
+      ok: true,
+      workers: [{ is_working: true, queued_count: 1, queue_paused: false }],
+    });
   });
 
   it('returns worker_status fields and accepts worker session id as diagnostic ref', async () => {

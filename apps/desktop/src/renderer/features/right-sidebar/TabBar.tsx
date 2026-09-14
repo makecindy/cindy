@@ -36,6 +36,7 @@ import {
   Minimize2,
   PanelRightClose,
   PictureInPicture2,
+  Wrench,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { TFunction } from 'i18next';
@@ -96,6 +97,7 @@ interface TabBarProps {
   chromeWindowDrag?: boolean;
   /** Whether the installed product plugin currently exposes the Host viewer. */
   iosSimulatorAvailable?: boolean;
+  subagentsAvailable?: boolean;
 }
 
 interface TabStripProps {
@@ -127,6 +129,7 @@ interface TabStripProps {
   addButtonClassName?: string;
   /** Whether the installed product plugin currently exposes the Host viewer. */
   iosSimulatorAvailable?: boolean;
+  subagentsAvailable?: boolean;
 }
 
 const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
@@ -138,7 +141,9 @@ const KIND_ICON: Record<BuiltinTabKindId, LucideIcon> = {
   'orca-workers': UsersRound,
   subagents: Bot,
   'background-tasks': ListTodo,
+  routines: ListTodo,
   'resource-usage': Activity,
+  'cindy-make': Wrench,
 };
 
 const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
@@ -150,7 +155,9 @@ const KIND_LABEL_KEY: Record<BuiltinTabKindId, string> = {
   'orca-workers': 'rightSidebar.tabs.kinds.collaboration',
   subagents: 'rightSidebar.tabs.kinds.subagents',
   'background-tasks': 'rightSidebar.tabs.kinds.backgroundTasks',
+  routines: 'routines.title',
   'resource-usage': 'rightSidebar.tabs.kinds.resourceUsage',
+  'cindy-make': 'settings.cindyMake.title',
 };
 
 /**
@@ -214,6 +221,7 @@ export function TabBar({
   onDetach,
   chromeWindowDrag = true,
   iosSimulatorAvailable = false,
+  subagentsAvailable = false,
 }: TabBarProps) {
   const { t } = useTranslation();
 
@@ -239,6 +247,7 @@ export function TabBar({
         addButtonWrapperClassName="h-[36px]"
         addButtonClassName="mt-[3px]"
         iosSimulatorAvailable={iosSimulatorAvailable}
+        subagentsAvailable={subagentsAvailable}
       />
 
       {/* Right: window controls. 仅 showWindowControls=true(Win 端)时渲染;
@@ -306,6 +315,7 @@ export function TabStrip({
   addButtonWrapperClassName,
   addButtonClassName,
   iosSimulatorAvailable = false,
+  subagentsAvailable = false,
 }: TabStripProps) {
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
@@ -457,6 +467,7 @@ export function TabStrip({
         {dropdownOpen && (
           <AddTabDropdown
             anchorRef={addButtonWrapperRef}
+            sessionId={sessionId}
             onClose={() => setDropdownOpen(false)}
             onSelect={(kind) => {
               onAdd(kind);
@@ -464,6 +475,7 @@ export function TabStrip({
             }}
             existingKinds={existingKinds}
             iosSimulatorAvailable={iosSimulatorAvailable}
+            subagentsAvailable={subagentsAvailable}
           />
         )}
       </div>

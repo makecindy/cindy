@@ -42,7 +42,8 @@ describe('mobile session sheet styling variants', () => {
     expect(actionSheet).toContain('colors.sheetActionBorder');
     expect(actionSheet).toContain('colors.destructive');
     expect(actionSheet).not.toContain('colors.statusError');
-    expect(actionSheet).toContain('<BlurBackdrop intensity={32} overlayColor={colors.sheetActionSurface} />');
+    expect(actionSheet).toContain('intensity={32}');
+    expect(actionSheet).toContain('overlayColor={colors.sheetActionSurface}');
   });
 
   it('keeps the session menu status chips left aligned inside the sheet body', () => {

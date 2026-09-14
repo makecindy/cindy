@@ -3,6 +3,12 @@ import type {
   MobileCodexRateLimitResetCredit,
   MobileCodexRateLimitsResult,
 } from './deviceLinkContract.js';
+import {
+  presentationDate,
+  presentationText,
+  presentationTime,
+  type PresentationLocalizer,
+} from './presentationLocalization.js';
 
 export interface SessionControlsSessionLike {
   contextTokens?: number;
@@ -21,13 +27,15 @@ export interface SessionControlsSessionLike {
 export function summarizeSessionSpend(session: Pick<
   SessionControlsSessionLike,
   'contextTokens' | 'contextWindow' | 'totalCostUsd' | 'totalTokenUsage'
-> | null): {
+> | null, localizer?: PresentationLocalizer): {
   title: string;
   detail: string;
   available: boolean;
 } {
+  const title = presentationText(localizer, 'session.presentation.controls.spend.title', 'Session spend');
+  const unavailable = presentationText(localizer, 'session.presentation.controls.spend.unavailable', '暂无任务用量');
   if (!session) {
-    return { title: 'Session spend', detail: '暂无任务用量', available: false };
+    return { title, detail: unavailable, available: false };
   }
 
   const totalCostUsd = readNumber(session.totalCostUsd);
@@ -37,7 +45,8 @@ export function summarizeSessionSpend(session: Pick<
   const parts: string[] = [];
 
   if (totalCostUsd !== null && totalCostUsd > 0) {
-    parts.push(`本任务 ${formatUsd(totalCostUsd)}`);
+    const cost = formatUsd(totalCostUsd);
+    parts.push(presentationText(localizer, 'session.presentation.controls.spend.taskCost', `本任务 ${cost}`, { cost }));
   }
   if (totalTokenUsage !== null && totalTokenUsage > 0) {
     parts.push(`${formatCompactNumber(totalTokenUsage)} tokens`);
@@ -45,25 +54,38 @@ export function summarizeSessionSpend(session: Pick<
   if (contextTokens !== null && contextTokens > 0) {
     if (contextWindow !== null && contextWindow > 0) {
       const percent = Math.min(100, Math.max(0, (contextTokens / contextWindow) * 100));
-      parts.push(`上下文 ${formatCompactNumber(contextTokens)} / ${formatCompactNumber(contextWindow)} · ${formatPercent(percent)}`);
+      const used = formatCompactNumber(contextTokens);
+      const total = formatCompactNumber(contextWindow);
+      const percentage = formatPercent(percent);
+      parts.push(presentationText(localizer, 'session.presentation.controls.spend.contextWithLimit', `上下文 ${used} / ${total} · ${percentage}`, {
+        percentage,
+        total,
+        used,
+      }));
     } else {
-      parts.push(`上下文 ${formatCompactNumber(contextTokens)} tokens`);
+      const used = formatCompactNumber(contextTokens);
+      parts.push(presentationText(localizer, 'session.presentation.controls.spend.context', `上下文 ${used} tokens`, { used }));
     }
   }
 
   if (parts.length === 0) {
-    return { title: 'Session spend', detail: '暂无任务用量', available: false };
+    return { title, detail: unavailable, available: false };
   }
-  return { title: 'Session spend', detail: parts.join(' · '), available: true };
+  return { title, detail: parts.join(' · '), available: true };
 }
 
-export function summarizeContextUsage(value: unknown): {
+export function summarizeContextUsage(value: unknown, localizer?: PresentationLocalizer): {
   title: string;
   detail: string;
   rows: Array<{ label: string; value: string }>;
 } {
+  const title = presentationText(localizer, 'session.presentation.controls.context.title', 'Context usage');
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return { title: 'Context usage', detail: '暂无上下文数据', rows: [] };
+    return {
+      title,
+      detail: presentationText(localizer, 'session.presentation.controls.context.unavailable', '暂无上下文数据'),
+      rows: [],
+    };
   }
   const record = value as Record<string, unknown>;
   const contextTokens = readNumber(record.totalTokens ?? record.contextTokens);
@@ -91,9 +113,9 @@ export function summarizeContextUsage(value: unknown): {
   }
   const rows = buildContextUsageRows(record, maxContextTokens);
   if (parts.length > 0) {
-    return { title: 'Context usage', detail: parts.join(' · '), rows };
+    return { title, detail: parts.join(' · '), rows };
   }
-  return { title: 'Context usage', detail: messageContentToPreview(value), rows };
+  return { title, detail: messageContentToPreview(value), rows };
 }
 
 /**
@@ -105,7 +127,11 @@ export function summarizeContextUsage(value: unknown): {
  * TodaySpendChip 的 formatWindowLabel 同规则。解析不到任何可展示内容 → null
  * (调用方不渲染整个区块,不显示 loading / 空态)。
  */
-export function summarizeAccountRateLimits(value: unknown, nowMs: number): {
+export function summarizeAccountRateLimits(
+  value: unknown,
+  nowMs: number,
+  localizer?: PresentationLocalizer,
+): {
   rows: Array<{ label: string; value: string }>;
 } | null {
   const record = readRecord(value);
@@ -113,7 +139,12 @@ export function summarizeAccountRateLimits(value: unknown, nowMs: number): {
   const rows: Array<{ label: string; value: string }> = [];
 
   const planType = readString(record.planType);
-  if (planType) rows.push({ label: '套餐', value: formatPlanTypeLabel(planType) });
+  if (planType) {
+    rows.push({
+      label: presentationText(localizer, 'session.presentation.controls.rateLimit.plan', '套餐'),
+      value: formatPlanTypeLabel(planType),
+    });
+  }
 
   for (const window of [readRecord(record.primary), readRecord(record.secondary)]) {
     if (!window) continue;
@@ -121,13 +152,21 @@ export function summarizeAccountRateLimits(value: unknown, nowMs: number): {
     if (usedPercent === null) continue;
     const used = Math.min(100, Math.max(0, usedPercent));
     const parts = [
-      `剩余 ${formatRateLimitPercent(100 - used)}`,
-      `已用 ${formatRateLimitPercent(used)}`,
+      presentationText(localizer, 'session.presentation.controls.rateLimit.remaining', `剩余 ${formatRateLimitPercent(100 - used)}`, {
+        percent: formatRateLimitPercent(100 - used),
+      }),
+      presentationText(localizer, 'session.presentation.controls.rateLimit.used', `已用 ${formatRateLimitPercent(used)}`, {
+        percent: formatRateLimitPercent(used),
+      }),
     ];
-    const resetText = formatRateLimitResetAt(readNumber(window.resetsAt), nowMs);
-    if (resetText) parts.push(`${resetText} 重置`);
+    const resetText = formatRateLimitResetAt(readNumber(window.resetsAt), nowMs, localizer);
+    if (resetText) {
+      parts.push(presentationText(localizer, 'session.presentation.controls.rateLimit.resetsAt', `${resetText} 重置`, {
+        time: resetText,
+      }));
+    }
     rows.push({
-      label: rateLimitWindowLabel(readNumber(window.windowMinutes)),
+      label: rateLimitWindowLabel(readNumber(window.windowMinutes), localizer),
       value: parts.join(' · '),
     });
   }
@@ -135,7 +174,10 @@ export function summarizeAccountRateLimits(value: unknown, nowMs: number): {
   // credits_depleted 是「去充值」语义,不属于窗口限流,不在限额区提示。
   const reached = readString(record.rateLimitReachedType);
   if (reached && !reached.includes('credits_depleted')) {
-    rows.push({ label: '状态', value: '已触发账号限额' });
+    rows.push({
+      label: presentationText(localizer, 'session.presentation.controls.rateLimit.status', '状态'),
+      value: presentationText(localizer, 'session.presentation.controls.rateLimit.reached', '已触发账号限额'),
+    });
   }
 
   return rows.length > 0 ? { rows } : null;
@@ -160,23 +202,39 @@ export interface CodexRateLimitResetSummary {
 export function summarizeCodexRateLimitReset(
   value: MobileCodexRateLimitsResult | null,
   nowMs: number,
+  localizer?: PresentationLocalizer,
 ): CodexRateLimitResetSummary | null {
   if (!value) return null;
   const rows: Array<{ label: string; value: string }> = [];
-  if (value.account.email) rows.push({ label: '账号', value: value.account.email });
+  if (value.account.email) {
+    rows.push({
+      label: presentationText(localizer, 'session.presentation.controls.rateLimit.account', '账号'),
+      value: value.account.email,
+    });
+  }
   if (value.account.accountId) rows.push({ label: 'Workspace', value: value.account.accountId });
 
   const hasResetCreditCount = Boolean(value.rateLimitResetCredits);
   const availableCount = Math.max(0, Math.floor(value.rateLimitResetCredits?.availableCount ?? 0));
   if (hasResetCreditCount) {
-    rows.push({ label: '可用重置', value: `${availableCount} 次` });
+    rows.push({
+      label: presentationText(localizer, 'session.presentation.controls.rateLimit.availableResets', '可用重置'),
+      value: presentationText(localizer, 'session.presentation.controls.rateLimit.resetCount', `${availableCount} 次`, {
+        count: availableCount,
+      }),
+    });
   }
 
   const earliestExpiryAt = value.resetOffer?.expiresAt ?? earliestCreditExpiry(
     value.rateLimitResetCredits?.credits ?? null,
   );
-  const expiryText = formatRateLimitResetAt(earliestExpiryAt, nowMs);
-  if (expiryText) rows.push({ label: '最早过期', value: expiryText });
+  const expiryText = formatRateLimitResetAt(earliestExpiryAt, nowMs, localizer);
+  if (expiryText) {
+    rows.push({
+      label: presentationText(localizer, 'session.presentation.controls.rateLimit.earliestExpiry', '最早过期'),
+      value: expiryText,
+    });
+  }
 
   const snapshots = [
     value.rateLimits,
@@ -219,10 +277,20 @@ function earliestCreditExpiry(
 }
 
 /** 窗口名由服务端下发的时长动态派生(与桌面 formatWindowLabel 同规则);缺数据 → 中性「限额」,不猜具体窗口名。 */
-function rateLimitWindowLabel(minutes: number | null): string {
-  if (minutes === null || minutes <= 0) return '限额';
-  if (minutes % (24 * 60) === 0 && minutes < 7 * 24 * 60) return `${minutes / (24 * 60)}天`;
-  if (minutes >= 7 * 24 * 60) return '周';
+function rateLimitWindowLabel(
+  minutes: number | null,
+  localizer?: PresentationLocalizer,
+): string {
+  if (minutes === null || minutes <= 0) {
+    return presentationText(localizer, 'session.presentation.controls.rateLimit.window.default', '限额');
+  }
+  if (minutes % (24 * 60) === 0 && minutes < 7 * 24 * 60) {
+    const count = minutes / (24 * 60);
+    return presentationText(localizer, 'session.presentation.controls.rateLimit.window.days', `${count}天`, { count });
+  }
+  if (minutes >= 7 * 24 * 60) {
+    return presentationText(localizer, 'session.presentation.controls.rateLimit.window.week', '周');
+  }
   if (minutes % 60 === 0) return `${minutes / 60}h`;
   return `${Math.round(minutes)}m`;
 }
@@ -234,15 +302,25 @@ function formatRateLimitPercent(value: number): string {
 }
 
 /** reset 时间点文案:当天只显时分,跨天带月日;缺失 / 非法 → null。 */
-function formatRateLimitResetAt(epochSeconds: number | null, nowMs: number): string | null {
+function formatRateLimitResetAt(
+  epochSeconds: number | null,
+  nowMs: number,
+  localizer?: PresentationLocalizer,
+): string | null {
   if (epochSeconds === null || epochSeconds <= 0) return null;
   const date = new Date(epochSeconds * 1000);
   const now = new Date(nowMs);
-  const hhmm = `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
+  const hhmm = localizer
+    ? presentationTime(localizer, date)
+    : `${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`;
   const sameDay = date.getFullYear() === now.getFullYear()
     && date.getMonth() === now.getMonth()
     && date.getDate() === now.getDate();
-  return sameDay ? hhmm : `${date.getMonth() + 1}月${date.getDate()}日 ${hhmm}`;
+  return sameDay
+    ? hhmm
+    : localizer
+      ? `${presentationDate(localizer, date)} ${hhmm}`
+      : `${date.getMonth() + 1}月${date.getDate()}日 ${hhmm}`;
 }
 
 /** planType 透传字符串('plus' / 'enterprise_cbp_usage_based' 等)→ 展示名(title-case)。 */

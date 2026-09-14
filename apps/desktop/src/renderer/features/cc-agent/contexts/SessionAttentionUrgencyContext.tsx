@@ -4,7 +4,7 @@
  * sessionAttentionStore 已经承担了主流程 attention 语义(kind: done / awaiting / error),
  * 由 useSessionRunningStatus 边缘触发写入。但有些 urgent 信号不属于 attention store 的
  * 生命周期,又不适合直接跨 store 写入(会污染 dock badge 与 auto-clear 语义),典型例子:
- * "定时任务未读且失败/中断/aborted"的 session —— 该信号来自 useAutomationScheduleSessionIndex
+ * "定时任务未读且失败/中断"的 session —— 该信号来自 useAutomationScheduleSessionIndex
  * 的 hasUnreadFailedRun,只想让侧栏右侧涂红,不想触发系统级 attention 广播。
  *
  * 本 context 由 CCAgentSidebarUpper 在其子树顶部 provide,SessionItem 用
@@ -27,6 +27,7 @@ import {
   createContext,
   useContext,
   useEffect,
+  useMemo,
   useRef,
   useSyncExternalStore,
   type ReactNode,
@@ -129,4 +130,28 @@ export function useSessionsAttentionUrgencyAny(sessionIds: readonly string[]): b
     return sessionIds.some((id) => set.has(id));
   };
   return useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+}
+
+/**
+ * @returns 一组 session 里命中 urgent 的**子集** —— 折叠容器既要汇总红点、又要指出
+ * 是哪几条时用(定时任务分组头收起态把告警行提上来,见
+ * sidebar/projectCollapsedAttention.ts 的 errorSessionIds)。
+ * 快照是序列化 key(primitive),Set 由 useMemo 派生:组外成员变化、组内成员变化但
+ * 本组命中结果不变时都不重渲染 —— 不要改成直接返回新 Set(等同退回整集订阅)。
+ * 只需要布尔的场景用更省的 useSessionsAttentionUrgencyAny。
+ */
+export function useSessionsAttentionUrgencyIdSet(
+  sessionIds: readonly string[],
+): ReadonlySet<string> {
+  const store = useContext(SessionAttentionUrgencyContext);
+  const getSnapshot = () => {
+    const set = store.getSet();
+    let key = '';
+    for (const id of sessionIds) {
+      if (set.has(id)) key += `${id}|`;
+    }
+    return key;
+  };
+  const key = useSyncExternalStore(store.subscribe, getSnapshot, getSnapshot);
+  return useMemo(() => new Set(key.split('|').filter(Boolean)), [key]);
 }

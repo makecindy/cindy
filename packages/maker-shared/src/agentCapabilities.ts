@@ -6,6 +6,8 @@ export interface MobileModelOption {
   effortDisplayNames: Record<string, string>;
   defaultEffort: string | null;
   supportsFastMode: boolean;
+  /** Host-advertised catalog window when available; omitted by older Desktop versions. */
+  contextWindow?: number;
   /** 区域门控后的新任务默认标记。 */
   newSessionDefault?: ('claude-code' | 'codex' | 'pi')[];
 }
@@ -25,6 +27,8 @@ export interface MobileAgentCapabilities {
   planModeSupported: boolean;
   /** desktop host 是否支持同一会话 Claude Code / Codex pending-intent 切换；旧 host 缺省 false。 */
   supportsSessionAgentSwitch?: boolean;
+  /** host 是否在 set-model 内执行强制模型窗口保护；旧 host 缺省 false。 */
+  supportsModelWindowSwitchGuard?: boolean;
 }
 
 export interface MobileSessionRuntimeOptions {
@@ -88,27 +92,28 @@ export const MOBILE_EFFORT_LABELS: Record<string, string> = {
 };
 
 const ENGLISH_COMPACT_EFFORT_LABELS: Record<string, string> = {
-  auto: 'Aut',
-  balanced: 'Bal',
-  default: 'Def',
-  extrahigh: 'XHi',
-  high: 'Hi',
-  low: 'Lo',
+  auto: 'Auto',
+  balanced: 'Balanced',
+  default: 'Default',
+  extrahigh: 'Extra',
+  high: 'High',
+  low: 'Low',
   max: 'Max',
   maximum: 'Max',
-  medium: 'Mid',
-  minimal: 'Min',
+  medium: 'Medium',
+  minimal: 'Minimal',
   none: 'Off',
   off: 'Off',
-  standard: 'Std',
-  ultra: 'Ult',
-  xhigh: 'XHi',
+  standard: 'Standard',
+  ultra: 'Ultra',
+  xhigh: 'Extra',
 };
 
 /**
- * Windows、macOS 与移动端模型选择器共用的英文 effort 短码。
- * 仅已知标准档位缩写；未知档位保留下发的完整显示名（没有显示名时保留完整 id），
- * 避免不同技术 id 被截成同一个不可区分的前三字符。
+ * Windows、macOS 与移动端模型选择器共用的英文 effort 紧凑标签。
+ * 只压缩确实偏长的标准档位(Extra High → Extra、Maximum → Max)，其余保留完整名称；
+ * 未知档位保留下发的完整显示名（没有显示名时保留完整 id），避免把 provider-specific
+ * 能力截成不可区分的短码。
  */
 export function compactEnglishEffortLabel(effort: string, displayName?: string): string {
   const normalizedEffort = effort.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -153,7 +158,37 @@ export function normalizeMobileAgentCapabilities(value: unknown): MobileAgentCap
     hasFastMode: value.hasFastMode === true,
     planModeSupported: isRecord(value.planMode) && value.planMode.supported === true,
     supportsSessionAgentSwitch: value.supportsSessionAgentSwitch === true,
+    supportsModelWindowSwitchGuard: value.supportsModelWindowSwitchGuard === true,
   };
+}
+
+export function shouldBlockLegacyRemoteModelWindowSwitch(args: {
+  hostGuardSupported: boolean;
+  agentKind: string | null | undefined;
+  contextTokens: number | null | undefined;
+  currentContextWindow: number | null | undefined;
+  targetContextWindow: number | null | undefined;
+}): boolean {
+  if (args.hostGuardSupported) return false;
+  if (args.agentKind === 'pi') return true;
+  const { contextTokens, currentContextWindow, targetContextWindow } = args;
+  const hasKnownWindows =
+    typeof currentContextWindow === 'number' &&
+    Number.isFinite(currentContextWindow) &&
+    currentContextWindow > 0 &&
+    typeof targetContextWindow === 'number' &&
+    Number.isFinite(targetContextWindow) &&
+    targetContextWindow > 0;
+  if (!hasKnownWindows) return true;
+  if (targetContextWindow >= currentContextWindow) return false;
+  if (
+    typeof contextTokens !== 'number' ||
+    !Number.isFinite(contextTokens) ||
+    contextTokens < 0
+  ) {
+    return true;
+  }
+  return contextTokens / targetContextWindow >= 0.9;
 }
 
 export function buildSessionRuntimeOptions(
@@ -304,6 +339,12 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
       typeof entry[1] === 'string',
     ))
     : {};
+  const contextWindow =
+    typeof value.contextWindow === 'number' &&
+    Number.isFinite(value.contextWindow) &&
+    value.contextWindow > 0
+      ? value.contextWindow
+      : undefined;
   const newSessionDefault = Array.isArray(value.newSessionDefault)
     ? [...new Set(value.newSessionDefault.filter(
       (item): item is 'claude-code' | 'codex' | 'pi' =>
@@ -320,6 +361,7 @@ function normalizeModelOption(value: unknown): MobileModelOption | null {
     effortDisplayNames,
     defaultEffort: readString(value.defaultEffort),
     supportsFastMode: value.supportsFastMode === true,
+    ...(contextWindow ? { contextWindow } : {}),
     ...(newSessionDefault.length > 0 ? { newSessionDefault } : {}),
   };
 }

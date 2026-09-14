@@ -35,7 +35,7 @@ export type MobileAttachmentFileUploader = (
   putUrl: string,
   fileUri: string,
   headers: Record<string, string>,
-  opts?: { signal?: AbortSignal },
+  opts?: { signal?: AbortSignal; onProgress?: (bytesSent: number) => void },
 ) => Promise<{ status: number; body?: string }>;
 
 interface UploadDeps {
@@ -86,14 +86,6 @@ export async function presignMobileAttachmentUpload(
   return normalizePresignResult(result);
 }
 
-/**
- * Blob PUT 的整体超时:Android 的 RN fetch 没有默认超时,弱网僵死会让上传
- * (以及等它的发送按钮)无限挂起。上限放宽到 2 分钟,给慢速蜂窝网上传大附件
- * 留足余量;body 是 Blob 可复用,传输层失败(拿不到 HTTP 响应)重试一次,
- * 与原生文件直传路径(putMobileAttachmentUploadFromFile)同口径。
- */
-const PUT_BLOB_TIMEOUT_MS = 120_000;
-
 export async function putMobileAttachmentUpload(
   putUrl: string,
   body: MobileAttachmentUploadBody,
@@ -101,31 +93,18 @@ export async function putMobileAttachmentUpload(
   deps: UploadDeps = {},
 ): Promise<void> {
   const fetchImpl = deps.fetch ?? fetch;
-  let transportError: unknown;
-  for (let attempt = 0; attempt < UPLOAD_TRANSPORT_ATTEMPTS; attempt += 1) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), PUT_BLOB_TIMEOUT_MS);
-    let response: Response;
-    try {
-      response = await fetchImpl(putUrl, {
-        method: 'PUT',
-        headers: buildMobileAttachmentUploadHeaders(mimeType),
-        body,
-        signal: controller.signal,
-      });
-    } catch (err) {
-      transportError = err;
-      continue;
-    } finally {
-      clearTimeout(timer);
-    }
-    if (!response.ok) {
-      const code = extractOssErrorCode(await readResponseTextSafe(response));
-      throw new Error(i18n.t('composer.upload.failedHttp', { status: response.status, code: code ? ` (${code})` : '' }));
-    }
-    return;
-  }
-  throw new Error(i18n.t('composer.upload.failedNetwork', { detail: summarizeTransportError(transportError) }));
+  await putAttachmentWithRecovery(async (signal) => {
+    const response = await fetchImpl(putUrl, {
+      method: 'PUT',
+      headers: buildMobileAttachmentUploadHeaders(mimeType),
+      body,
+      signal,
+    });
+    return {
+      status: response.status,
+      body: response.ok ? undefined : await readResponseTextSafe(response),
+    };
+  });
 }
 
 function buildMobileAttachmentUploadHeaders(mimeType: string | undefined): Record<string, string> {
@@ -169,7 +148,7 @@ async function uploadFileNative(
   putUrl: string,
   fileUri: string,
   headers: Record<string, string>,
-  opts: { signal?: AbortSignal } = {},
+  opts: { signal?: AbortSignal; onProgress?: (bytesSent: number) => void } = {},
 ): Promise<{ status: number; body?: string }> {
   const FileSystem = await import('expo-file-system/legacy');
   if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
@@ -178,7 +157,7 @@ async function uploadFileNative(
     httpMethod: 'PUT',
     sessionType: FileSystem.FileSystemSessionType.FOREGROUND,
     uploadType: FileSystem.FileSystemUploadType.BINARY_CONTENT,
-  });
+  }, (progress) => opts.onProgress?.(progress.totalBytesSent));
   const onAbort = () => {
     void task.cancelAsync().catch(() => undefined);
   };
@@ -193,68 +172,109 @@ async function uploadFileNative(
   }
 }
 
-/** 传输层异常(拿不到 HTTP 响应)总尝试次数:失败自动重试 1 次。 */
+/** 同一签名地址、同一份不可变字节最多两次 PUT，不重新创建附件或发送消息。 */
 const UPLOAD_TRANSPORT_ATTEMPTS = 2;
-
-/**
- * 原生文件直传的单次尝试超时,与 Blob 版 PUT_BLOB_TIMEOUT_MS 同口径:iOS 前台
- * NSURLSession 只在「60s 完全无字节流动」时才自行超时,慢速蜂窝网上传大附件
- * (上限 30MB)可以合法地涓涓细流挂很多分钟,期间发送等待没有任何出口。
- * 超时不进传输层重试(两轮 120s 太久),直接报错让用户看到失败卡原地重试。
- */
-const PUT_FILE_TIMEOUT_MS = 120_000;
+const PUT_IDLE_TIMEOUT_MS = 60_000;
+const PUT_ATTEMPT_TIMEOUT_MS = 120_000;
+const PUT_RETRY_DELAY_MS = 800;
 
 // i18n 文案取值放函数里(而非模块顶层常量):模块顶层求值会把语言冻结在加载时刻,
 // LocaleProvider 挂载后的语言切换就读不到,故在抛错点当场求值。
 const uploadAbortedMessage = () => i18n.t('composer.upload.cancelled');
 const uploadTimeoutMessage = () => i18n.t('composer.upload.timeout');
 
+interface UploadRecoveryOptions {
+  signal?: AbortSignal;
+  /** 最终失败后原生 PUT 仍迟到成功时，再回收中转对象。 */
+  onLateSuccess?: () => void;
+}
+
+async function putAttachmentWithRecovery(
+  send: (signal: AbortSignal, onProgress: (bytesSent: number) => void) => Promise<{ status: number; body?: string }>,
+  opts: UploadRecoveryOptions = {},
+  reportsProgress = false,
+): Promise<void> {
+  let terminalFailure = false;
+  let lastError: unknown;
+  try {
+    for (let attempt = 0; attempt < UPLOAD_TRANSPORT_ATTEMPTS; attempt += 1) {
+      if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
+      const controller = new AbortController();
+      let rejectWait!: (error: Error) => void;
+      const interrupted = new Promise<never>((_resolve, reject) => { rejectWait = reject; });
+      const cancel = () => {
+        rejectWait(new Error(uploadAbortedMessage()));
+        controller.abort();
+      };
+      opts.signal?.addEventListener('abort', cancel);
+      // Reject the JS wait independently of native cancellation. Some native calls
+      // never settle even after cancelAsync; their late result cannot win this attempt.
+      const expire = () => {
+        rejectWait(new Error(uploadTimeoutMessage()));
+        controller.abort();
+      };
+      const timer = setTimeout(expire, PUT_ATTEMPT_TIMEOUT_MS);
+      // fetch 没有进度事件，保留完整单次预算；原生上传只在字节停滞时提前恢复。
+      let idleTimer = setTimeout(expire, reportsProgress ? PUT_IDLE_TIMEOUT_MS : PUT_ATTEMPT_TIMEOUT_MS);
+      let lastBytesSent = 0;
+      let settled = false;
+      const onProgress = (bytesSent: number) => {
+        if (settled || controller.signal.aborted || !Number.isFinite(bytesSent) || bytesSent <= lastBytesSent) return;
+        lastBytesSent = bytesSent;
+        clearTimeout(idleTimer);
+        idleTimer = setTimeout(expire, PUT_IDLE_TIMEOUT_MS);
+      };
+      let result: { status: number; body?: string };
+      try {
+        result = await Promise.race([
+          send(controller.signal, onProgress).then((value) => {
+            if (terminalFailure && value.status >= 200 && value.status < 300) opts.onLateSuccess?.();
+            return value;
+          }),
+          interrupted,
+        ]);
+      } catch (error) {
+        if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
+        lastError = controller.signal.aborted
+          ? new Error(uploadTimeoutMessage())
+          : new Error(i18n.t('composer.upload.failedNetwork', { detail: summarizeTransportError(error) }));
+        result = { status: 0 };
+      } finally {
+        settled = true;
+        clearTimeout(timer);
+        clearTimeout(idleTimer);
+        opts.signal?.removeEventListener('abort', cancel);
+      }
+      if (result.status >= 200 && result.status < 300) return;
+      if (result.status !== 0) {
+        const code = extractOssErrorCode(result.body);
+        lastError = new Error(i18n.t('composer.upload.failedHttp', {
+          status: result.status, code: code ? ` (${code})` : '',
+        }));
+        // 权限、签名和内容错误不会因重试恢复；仅自动恢复临时传输/服务错误。
+        if (result.status !== 408 && result.status !== 429 && result.status < 500) throw lastError;
+      }
+      if (attempt + 1 < UPLOAD_TRANSPORT_ATTEMPTS) {
+        await new Promise<void>((resolve) => setTimeout(resolve, PUT_RETRY_DELAY_MS));
+      }
+    }
+    throw lastError;
+  } catch (error) {
+    terminalFailure = true;
+    throw error;
+  }
+}
+
 export async function putMobileAttachmentUploadFromFile(
   putUrl: string,
   fileUri: string,
   mimeType: string | undefined,
   deps: UploadDeps = {},
-  opts: { signal?: AbortSignal } = {},
+  opts: UploadRecoveryOptions = {},
 ): Promise<void> {
   const uploadFile = deps.uploadFile ?? uploadFileNative;
   const headers = buildMobileAttachmentUploadHeaders(mimeType);
-  // 原生传输层异常(如 iOS NSURLError,连 HTTP 响应都没拿到)自动重试一次;
-  // 拿到 HTTP 状态码的失败(403 签名/权限类)重试无意义,直接抛。
-  let transportError: unknown;
-  for (let attempt = 0; attempt < UPLOAD_TRANSPORT_ATTEMPTS; attempt += 1) {
-    if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
-    // 每次尝试独立的超时窗;外部取消(用户 X 掉 / 页面退出)与超时共用一个
-    // 传给传输层的 signal,层内只管断传输,这里负责把两种中止分诊成不同结局。
-    const timeout = new AbortController();
-    const timer = setTimeout(() => timeout.abort(), PUT_FILE_TIMEOUT_MS);
-    const onOuterAbort = () => timeout.abort();
-    if (opts.signal) opts.signal.addEventListener('abort', onOuterAbort);
-    let status: number;
-    let body: string | undefined;
-    try {
-      ({ status, body } = await uploadFile(putUrl, fileUri, headers, {
-        signal: timeout.signal,
-      }));
-    } catch (err) {
-      // 外部取消:立刻收手,不重试(调用方自己发起的中止,静默语义由上层决定)。
-      if (opts.signal?.aborted) throw new Error(uploadAbortedMessage());
-      // 超时:不进第二轮(再等 120s 只会让用户在失败卡出现前多干等一轮),直接报错。
-      if (timeout.signal.aborted) throw new Error(uploadTimeoutMessage());
-      transportError = err;
-      continue;
-    } finally {
-      clearTimeout(timer);
-      if (opts.signal) opts.signal.removeEventListener('abort', onOuterAbort);
-    }
-    if (status < 200 || status >= 300) {
-      // 拿到 HTTP 状态码的失败重试无意义,直接抛;带上 OSS 错误 Code
-      // (SignatureDoesNotMatch / AccessDenied / …),否则裸 403 无法定位。
-      const code = extractOssErrorCode(body);
-      throw new Error(i18n.t('composer.upload.failedHttp', { status, code: code ? ` (${code})` : '' }));
-    }
-    return;
-  }
-  throw new Error(i18n.t('composer.upload.failedNetwork', { detail: summarizeTransportError(transportError) }));
+  await putAttachmentWithRecovery((signal, onProgress) => uploadFile(putUrl, fileUri, headers, { signal, onProgress }), opts, true);
 }
 
 /** 原生 NSError 描述冗长(整条预签名 URL 都在里面),截前段给用户当排查线索即可。 */
@@ -337,7 +357,10 @@ export async function uploadMobileAttachmentFromFile(
         snapshot.uri,
         candidate.mimeType,
         options.deps,
-        { signal: options.signal },
+        {
+          signal: options.signal,
+          onLateSuccess: () => { void deleteMobileAttachmentUpload(presigned.key, options).catch(() => undefined); },
+        },
       );
     } catch (error) {
       await deleteMobileAttachmentUpload(presigned.key, options).catch(() => undefined);

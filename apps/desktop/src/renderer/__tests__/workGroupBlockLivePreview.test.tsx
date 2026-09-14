@@ -129,6 +129,44 @@ function clickGroup(label: string) {
 }
 
 describe('WorkGroupBlock — running latest-five preview', () => {
+  it('rebinds visible detail interest when the Host changes without changing the group key', () => {
+    const first = vi.fn();
+    const second = vi.fn();
+    const deferred = (owner: object, setVisible: typeof first) => ({ owner, key: 'range',
+      expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible });
+    const props = { blockId: 'work:same-key', isStreaming: true,
+      childItems: [tools('tools', Array.from({ length: 6 }, (_, index) => mkTool(`t${index}`)))] };
+    const { rerender, unmount } = render(createElement(WorkGroupBlock, { ...props, deferred: deferred({}, first) }));
+    expect(first).toHaveBeenLastCalledWith(false, true);
+    expect(screen.getAllByTestId('direct-tool')).toHaveLength(5);
+    clickGroup('chat.workGroup.working');
+    expect(first).toHaveBeenLastCalledWith(true, true);
+    rerender(createElement(WorkGroupBlock, { ...props, deferred: deferred({}, second) }));
+    expect(first).toHaveBeenLastCalledWith(false, false);
+    expect(second).toHaveBeenLastCalledWith(true, true);
+    unmount();
+    expect(second).toHaveBeenLastCalledWith(false, false);
+  });
+
+  it('keeps an outer summary independent from inner detail visibility and remembers the inner toggle', async () => {
+    const setVisible = vi.fn();
+    const child: WorkGroupChild = { kind: 'group', key: 'inner', blockId: 'work:inner', durationMs: 1000,
+      isStreaming: false, childItems: [tools('tools', [mkTool('inside')])],
+      deferred: { owner: {}, key: 'range', expanded: false, loading: false, failed: false, toggle: vi.fn(), retry: vi.fn(), setVisible } };
+    render(createElement(WorkGroupBlock, { blockId: 'work:summary', durationMs: 3000,
+      childItems: [rendered('progress', 'Checking'), child] }));
+    expect(setVisible).not.toHaveBeenCalled();
+    clickGroup('chat.workGroup.worked:3s');
+    expect(setVisible).toHaveBeenLastCalledWith(false, false);
+    expect(screen.queryByTestId('direct-tool')).toBeNull();
+    clickGroup('chat.workGroup.worked:1s');
+    expect(setVisible).toHaveBeenLastCalledWith(true, false);
+    clickGroup('chat.workGroup.worked:3s');
+    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(false, false));
+    clickGroup('chat.workGroup.worked:3s');
+    await waitFor(() => expect(setVisible).toHaveBeenLastCalledWith(true, false));
+  });
+
   it('keeps the latest five tools/reasoning rows in chronological order and drops empty thinking', async () => {
     const children: WorkGroupChild[] = [
       tools('seg-1', [mkTool('t1'), mkTool('t2')]),
@@ -508,6 +546,35 @@ describe('WorkGroupBlock — running latest-five preview', () => {
     fireEvent.click(thinkingButton);
     expect(thinkingButton.getAttribute('aria-expanded')).toBe('true');
     expect(thinkingButton.textContent).toContain('first line\nsecond line');
+  });
+
+  it('always reserves the 18px trailing chevron slot on thinking rows', () => {
+    render(
+      createElement(WorkGroupBlock, {
+        blockId: 'work:t1',
+        isStreaming: true,
+        childItems: [
+          thinking(mkThinking('short', 'brief')),
+          thinking(mkThinking('long', 'first line\nsecond line')),
+        ],
+      }),
+    );
+
+    const rows = document.querySelectorAll<HTMLButtonElement>(
+      '[data-live-work-activity="thinking"]',
+    );
+    expect(rows).toHaveLength(2);
+    for (const row of rows) {
+      expect(row.className).toContain('rounded-[8px]');
+      const slot = row.lastElementChild;
+      expect(slot?.className).toContain('w-[18px]');
+      expect(slot?.className).toContain('h-[18px]');
+      expect(slot?.className).toContain('ml-auto');
+      expect(slot?.className).toContain('rounded-[8px]');
+      expect(slot?.className).toContain('group-hover:bg-[var(--cmd-palette-item-hover)]');
+    }
+    expect(rows[0]?.querySelector('svg.lucide-chevron-right')).toBeNull();
+    expect(rows[1]?.querySelector('svg.lucide-chevron-right')).toBeTruthy();
   });
 
   it('drops empty thinking and renders redacted thinking directly', () => {

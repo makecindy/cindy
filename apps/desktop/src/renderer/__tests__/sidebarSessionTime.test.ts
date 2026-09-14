@@ -97,7 +97,8 @@ describe('SessionItem activity time', () => {
     expect(sessionItemSource).toMatch(
       /buildSessionInfoPieces\(\s*session,\s*taskInfoFields,\s*activityIso,\s*t,/,
     );
-    expect(sessionItemSource).toContain('<SessionInfoMeta pieces={infoPieces}');
+    expect(sessionItemSource).toContain('<SessionInfoMeta');
+    expect(sessionItemSource).toContain('pieces={infoPieces}');
     expect(sessionInfoMetaSource).toContain('formatSidebarTime(activityIso, t)');
     expect(sessionInfoMetaSource).toContain('text-sidebar-action-icon');
     expect(sessionItemSource).toContain('transition-opacity');
@@ -111,7 +112,7 @@ describe('SessionItem activity time', () => {
     expect(sessionItemSource).not.toMatch(
       /group\/slot relative ml-auto flex h-6 shrink-0 items-center justify-end min-w-14/,
     );
-    expect(sessionItemSource).toContain('<WorktreeBadge sessionId={session.id}');
+    expect(sessionItemSource).toContain('worktree={infoWorktree ?? undefined}');
     expect(sessionItemSource).toContain('canQuickArchive && archivePending &&');
     expect(sessionItemSource).toContain(
       "!archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0'",

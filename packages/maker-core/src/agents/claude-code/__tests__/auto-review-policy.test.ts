@@ -22,10 +22,14 @@ function verdict(toolName: string, input: unknown, workspaceRoots = roots) {
 }
 
 describe('classifyBuiltinToolForAutoReview — 只读与安全状态工具', () => {
-  it('只读内省工具一律 auto-approve', () => {
-    for (const t of ['Read', 'Glob', 'Grep', 'LS', 'NotebookRead']) {
-      expect(verdict(t, { file_path: '/anywhere/x' })).toBe('auto-approve');
-    }
+  it('工作区内只读工具 auto-approve，区外路径逐次确认', () => {
+    expect(verdict('Read', { file_path: '/repo/x' })).toBe('auto-approve');
+    expect(verdict('NotebookRead', { notebook_path: '/extra/n.ipynb' })).toBe('auto-approve');
+    expect(verdict('Grep', { pattern: 'x', path: '/repo' })).toBe('auto-approve');
+    expect(verdict('Glob', { pattern: '*.ts', path: '/extra' })).toBe('auto-approve');
+    expect(verdict('LS', { path: '/repo' })).toBe('auto-approve');
+    expect(verdict('Read', { file_path: '/outside/x' })).toBe('prompt-each-time');
+    expect(verdict('LS', { path: '/outside' })).toBe('prompt-each-time');
   });
   it('会话内状态/控制工具 auto-approve(TodoWrite/Task/BashOutput/KillShell)', () => {
     for (const t of ['TodoWrite', 'Task', 'BashOutput', 'KillShell', 'KillBash']) {
@@ -63,6 +67,15 @@ describe('classifyBuiltinToolForAutoReview — 文件写(结构化 path 精确�
     expect(verdict('Write', { file_path: '/repo/x.ts' })).toBe('auto-approve');
     // /extra 是只读引用目录(additionalDirectories),写入须升级(codex 报)。
     expect(verdict('Write', { file_path: '/extra/y.ts' })).toBe('prompt');
+  });
+  it('显式可写附加目录通过，旁边的只读引用目录仍升级', () => {
+    const ctx = { workspaceRoots: ['/repo', '/reference', '/output'], writableRoots: ['/repo', '/output'] };
+    expect(classifyBuiltinToolForAutoReview({
+      toolName: 'Write', input: { file_path: '/output/a.ts' }, ...ctx,
+    })).toBe('auto-approve');
+    expect(classifyBuiltinToolForAutoReview({
+      toolName: 'Write', input: { file_path: '/reference/a.ts' }, ...ctx,
+    })).toBe('prompt');
   });
   it('工作区外(非系统)写 → prompt(升级);系统目录写 → prompt-each-time', () => {
     expect(verdict('Write', { file_path: '/tmp/leak.txt' })).toBe('prompt');
@@ -134,15 +147,14 @@ describe('classifyBuiltinToolForAutoReview — 内置 Read/Grep/LS 读凭证升�
     expect(verdict('Glob', { pattern: '**/*.ts' })).toBe('auto-approve');
     expect(verdict('LS', { path: '/repo' })).toBe('auto-approve');
   });
-  it('目录级读工具(Grep/Glob/LS)根在工作区外 → prompt(防遍历进区外凭证子路径)', () => {
+  it('目录级与单文件读工具根在工作区外 → prompt-each-time', () => {
     // Grep {path:'/Users/me'} 递归能读出 ~/.aws/credentials,而 path 本身不含凭证名 → 升级。
-    expect(verdict('Grep', { pattern: 'AKIA', path: '/Users/me' })).toBe('prompt');
-    expect(verdict('LS', { path: '/' })).toBe('prompt');
-    expect(verdict('LS', { path: '/etc' })).toBe('prompt');
-    expect(verdict('Glob', { pattern: '*', path: '/var/log' })).toBe('prompt');
-    // 单文件 Read 读区外具名文件仍放行(scope='file',非目录级递归)。
-    expect(verdict('Read', { file_path: '/Users/me/notes.txt' })).toBe('auto-approve');
-    expect(verdict('NotebookRead', { notebook_path: '/tmp/n.ipynb' })).toBe('auto-approve');
+    expect(verdict('Grep', { pattern: 'AKIA', path: '/Users/me' })).toBe('prompt-each-time');
+    expect(verdict('LS', { path: '/' })).toBe('prompt-each-time');
+    expect(verdict('LS', { path: '/etc' })).toBe('prompt-each-time');
+    expect(verdict('Glob', { pattern: '*', path: '/var/log' })).toBe('prompt-each-time');
+    expect(verdict('Read', { file_path: '/Users/me/notes.txt' })).toBe('prompt-each-time');
+    expect(verdict('NotebookRead', { notebook_path: '/tmp/n.ipynb' })).toBe('prompt-each-time');
   });
 });
 

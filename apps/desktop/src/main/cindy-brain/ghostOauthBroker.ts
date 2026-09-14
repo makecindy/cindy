@@ -1,8 +1,10 @@
 /**
  * ghostOauthBroker.ts — tokenBroker 声明的 XDT server 授权 broker 调用器。
  * ---------------------------------------------------------------------------
- * oauth 详单声明 `tokenBroker: "<slug>"` 的意识(仅第一方,门控在装入闸与
- * 连接闸),code 换 token 与 refresh 不直连服务商 tokenUrl,改经 XDT server
+ * oauth 详单声明 `tokenBroker: "<slug>"` 的意识。静态官方前缀照旧放行；
+ * 其余资格由装入来源与当前组织事实共同判定。校验层保持纯函数不感知装入语境，
+ * 门控在装入闸与连接闸。符合资格后，code 换 token 与 refresh 不直连服务商
+ * tokenUrl,改经 XDT server
  * 的授权 broker 端点(`/api/integrations/<slug>/oauth/exchange|refresh`,JWT
  * 保护)——client secret 由服务端持有,不随包分发。本模块只做两件事:
  * 调 server + 把响应映射成 GhostOauthTokenBundle,授权流程本体仍在

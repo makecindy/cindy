@@ -2,7 +2,7 @@ import type { ProviderWireProtocol } from '@cindy/model-providers';
 
 export type CustomProviderCodexWireProtocol = Extract<
   ProviderWireProtocol,
-  'openai-responses' | 'openai-chat' | 'anthropic-messages'
+  'openai-responses' | 'openai-chat' | 'anthropic-messages' | 'google-generative-ai'
 >;
 
 interface CustomProviderWireProtocolOption {
@@ -30,6 +30,12 @@ export const CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS = [
     labelKey: 'settings.providers.custom.wireProtocol.anthropic',
     helpKey: 'settings.providers.custom.wireProtocol.anthropicHelp',
     defaultRequestPath: '/v1/messages',
+  },
+  {
+    value: 'google-generative-ai',
+    labelKey: 'settings.providers.custom.modelProtocol.google',
+    helpKey: 'settings.providers.custom.wireProtocol.googleHelp',
+    defaultRequestPath: '',
   },
 ] as const satisfies readonly CustomProviderWireProtocolOption[];
 

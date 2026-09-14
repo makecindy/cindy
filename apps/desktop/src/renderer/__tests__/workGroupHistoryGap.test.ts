@@ -422,8 +422,8 @@ describe('历史窗口空洞 — 正常 turn 不受影响', () => {
 //
 // ghost_card(意识供卡)是那次调用在流里的**唯一**呈现——工具行被卡片取代、不再
 // 单独渲染。它原先在 renderItemStartMs / renderItemEndMs 里没有分支,一律报 null。
-// (agent_plan 卡曾同属此类;计划卡现已整体移出流内,唯一呈现改为 composer 上方的
-// PinnedPlanPanel,不再参与流内时间判定。)
+// agent_plan 也属于同类:计划工具行被流内卡取代,卡片本身必须继续参与时间判定;
+// composer 上方的 PinnedPlanPanel 只在流内卡离开可见区域后接力。
 //
 // 实测过后果的具体形状(两侧都跑过,只留能真正区分的断言):
 //  - 工作组切分本身**不受影响**:卡会被 groupAnsweredTurnItems 提到组外,而空洞后

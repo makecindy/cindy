@@ -1,8 +1,9 @@
 /**
  * Unit tests for the pure helpers of `markdownImageLivePreview`:
  *   - `findImageTargets(doc)` — scans for image-only blocks (markdown
- *     `![](...)` lines, HTML `<img>` lines, `<p>`-wrapped blocks), skipping
- *     fenced code so documentation samples never render as live images.
+ *     `![](...)` lines, HTML `<img>` lines, `<p>`-wrapped blocks, Obsidian
+ *     `![[...]]` wiki-link embeds), skipping fenced code so documentation
+ *     samples never render as live images.
  *   - `resolveImageSrcToUrl(src, baseDir)` — maps a raw markdown src to the
  *     URL the <img> actually loads (xdt-file:// for local paths).
  *
@@ -90,6 +91,95 @@ describe('findImageTargets — markdown form', () => {
 
   it('ignores empty srcs', () => {
     expect(findImageTargets(docOf('![alt](<>)'))).toEqual([]);
+  });
+});
+
+describe('findImageTargets — Obsidian wiki-link form', () => {
+  it('extracts a bare wiki-link embed', () => {
+    const doc = docOf('before', '![[image.png]]', 'after');
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({
+      from: doc.line(2).from,
+      to: doc.line(2).to,
+      align: null,
+      images: [{ src: 'image.png', alt: '', title: '', width: null, height: null }],
+    });
+  });
+
+  it('resolves a subfolder-relative wiki-link path', () => {
+    const doc = docOf('![[subfolder/image.png]]');
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].images[0].src).toBe('subfolder/image.png');
+  });
+
+  it('parses a width-only size suffix', () => {
+    const doc = docOf('![[image.png|300]]');
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].images[0]).toMatchObject({
+      src: 'image.png',
+      width: 300,
+      height: null,
+    });
+  });
+
+  it('parses a width x height size suffix', () => {
+    const doc = docOf('![[image.png|300x200]]');
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].images[0]).toMatchObject({
+      src: 'image.png',
+      width: 300,
+      height: 200,
+    });
+  });
+
+  it('allows spaces in the path without angle brackets', () => {
+    const doc = docOf('![[Some Image.png]]');
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].images[0].src).toBe('Some Image.png');
+  });
+
+  it('does not render a plain [[note]] link (no leading !) as an image', () => {
+    const doc = docOf('see [[note]] for details');
+    expect(findImageTargets(doc)).toEqual([]);
+  });
+
+  it('does not render a wiki-link with a non-numeric size suffix', () => {
+    const doc = docOf('![[image.png|alt text]]');
+    expect(findImageTargets(doc)).toEqual([]);
+  });
+
+  it('does not render a wiki-link note embed (no image extension)', () => {
+    const doc = docOf('![[Project overview]]');
+    expect(findImageTargets(doc)).toEqual([]);
+  });
+
+  it('does not render a wiki-link PDF/non-image file embed', () => {
+    const doc = docOf('![[manual.pdf]]');
+    expect(findImageTargets(doc)).toEqual([]);
+  });
+
+  it('accepts a recognized image extension case-insensitively', () => {
+    const doc = docOf('![[photo.PNG]]');
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].images[0].src).toBe('photo.PNG');
+  });
+
+  it('skips wiki-link image examples inside fenced code blocks', () => {
+    const doc = docOf('```markdown', '![[sample.png]]', '```', '![[real.png]]');
+    const targets = findImageTargets(doc);
+    expect(targets).toHaveLength(1);
+    expect(targets[0].images[0].src).toBe('real.png');
+  });
+
+  it('leaves an inline wiki-link mid-paragraph as raw source', () => {
+    const doc = docOf('see ![[icon.png]] inline');
+    expect(findImageTargets(doc)).toEqual([]);
   });
 });
 
@@ -243,6 +333,14 @@ describe('resolveImageSrcToUrl', () => {
     );
     expect(resolveImageSrcToUrl('file:///C:/imgs/a.png', '/base')).toBe(
       `xdt-file://local/?path=${encodeURIComponent('C:/imgs/a.png')}`,
+    );
+  });
+
+  it('joins a wiki-link-style relative path with a literal space and subfolder', () => {
+    // Wiki-link parsing hands resolveImageSrcToUrl the raw path as typed
+    // (spaces intact, no percent-encoding) — unlike markdown srcs.
+    expect(resolveImageSrcToUrl('subfolder/Some Image.png', '/repo/notes')).toBe(
+      `xdt-file://local/?path=${encodeURIComponent('/repo/notes/subfolder/Some Image.png')}`,
     );
   });
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
+import { useTranslation } from 'react-i18next';
 import {
   Link2,
   MessageSquarePlus,
@@ -35,6 +36,7 @@ export function MessageActionSheet({
   onClose(): void;
   visible: boolean;
 }) {
+  const { t } = useTranslation();
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const insets = useSafeAreaInsets();
@@ -101,14 +103,14 @@ export function MessageActionSheet({
           })}
         </View>
         <Pressable
-          accessibilityLabel="取消"
+          accessibilityLabel={t('session.common.cancel')}
           accessibilityRole="button"
           onPress={closeWithoutAction}
           style={({ pressed }) => [styles.cancelCard, pressed && styles.pressed]}
           testID="message.actions.cancel"
         >
           <BlurBackdrop intensity={32} overlayColor={colors.sheetActionSurface} />
-          <Text style={styles.cancelText}>取消</Text>
+          <Text style={styles.cancelText}>{t('session.common.cancel')}</Text>
         </Pressable>
       </View>
     </SheetModal>

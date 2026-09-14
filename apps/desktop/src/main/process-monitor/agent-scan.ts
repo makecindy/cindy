@@ -22,6 +22,8 @@ import { allUserDataDirNames } from '@cindy/maker-shared/brand-identity';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import { classifyAgentCommandLine } from '../agent-process-priority.js';
+import { WINDOWS_PROCESS_SCAN_SCRIPT } from './windowsProcessScanProtocol.js';
+import { runWindowsProcessScanWorker } from './windowsProcessScanWorkerClient.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -114,15 +116,6 @@ const POSIX_PS_ROW_RE =
   /^(\d+)\s+(\d+)\s+(\S+)\s+([\d.]+)\s+(\d+)\s+(\S+\s+\S+\s+\d{1,2}\s+\d{2}:\d{2}:\d{2}\s+\d{4})\s+(.+)$/;
 
 const POSIX_PS_ARGS = ['-Aww', '-o', 'pid=,ppid=,stat=,%cpu=,rss=,lstart=,command='];
-
-const WINDOWS_PROCESS_SCAN_SCRIPT = [
-  'Get-CimInstance Win32_Process |',
-  'ForEach-Object {',
-  '  $cmd = ([string]$_.CommandLine) -replace "`r|`n", " "',
-  '  $created = if ($null -eq $_.CreationDate) { "" } else { $_.CreationDate.ToUniversalTime().Ticks }',
-  '  Write-Output ("{0}|{1}|{2}|{3}|{4}|{5}" -f $_.ProcessId, $_.ParentProcessId, $_.WorkingSetSize, ($_.UserModeTime + $_.KernelModeTime), $created, $cmd)',
-  '}',
-].join('\n');
 
 /** lstart 不携带时区；固定 UTC，避免 DST 回拨时一小时内出现重复出生字符串。 */
 export function buildPosixProcessScanEnv(baseEnv: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -228,18 +221,38 @@ async function scanPosix(): Promise<OsProcessSnapshot> {
   return { rows, childrenByParent: buildChildrenByParent(rows) };
 }
 
-async function scanWindows(): Promise<OsProcessSnapshot> {
-  // 全表(无 Name filter):agent 树里的 bash/node 子孙也要计入聚合。
-  // 行尾管道符不可省 —— 否则两条语句独立执行、parse 恒 0 行
-  // (claude-orphan-reaper 2026-07-14 实锤的坑)。
-  const { stdout } = await execFileAsync(
-    'powershell.exe',
-    ['-NoProfile', '-NonInteractive', '-Command', WINDOWS_PROCESS_SCAN_SCRIPT],
-    { encoding: 'utf8', timeout: 10_000, windowsHide: true, maxBuffer: 8 * 1024 * 1024 },
-  );
-  const rows = parseWindowsProcessTable(stdout);
-  return { rows, childrenByParent: buildChildrenByParent(rows) };
+export const WINDOWS_PROCESS_SCAN_FAILURE_BACKOFF_MS = 30_000;
+
+interface WindowsProcessScannerOptions {
+  runWorker(): Promise<string>;
+  now?: () => number;
+  failureBackoffMs?: number;
 }
+
+export function createWindowsProcessScanner(
+  options: WindowsProcessScannerOptions,
+): () => Promise<OsProcessSnapshot> {
+  const now = options.now ?? Date.now;
+  const failureBackoffMs = options.failureBackoffMs ?? WINDOWS_PROCESS_SCAN_FAILURE_BACKOFF_MS;
+  let retryAfterMs = Number.NEGATIVE_INFINITY;
+
+  return async () => {
+    if (now() < retryAfterMs) return { rows: [], childrenByParent: new Map() };
+    try {
+      // 全表(无 Name filter):agent 树里的 bash/node 子孙也要计入聚合。PowerShell
+      // 管道放进一次性 worker，ENOTCONN / 崩溃 / 超时只让本轮快照降级。
+      const stdout = await options.runWorker();
+      retryAfterMs = Number.NEGATIVE_INFINITY;
+      const rows = parseWindowsProcessTable(stdout);
+      return { rows, childrenByParent: buildChildrenByParent(rows) };
+    } catch (error) {
+      retryAfterMs = now() + failureBackoffMs;
+      throw error;
+    }
+  };
+}
+
+const scanWindows = createWindowsProcessScanner({ runWorker: runWindowsProcessScanWorker });
 
 /** 生产扫描入口(sampler / terminate 校验共用)。 */
 export function scanOsProcesses(): Promise<OsProcessSnapshot> {

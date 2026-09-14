@@ -71,7 +71,7 @@ describe('model-catalog-override-store', () => {
       },
     });
     const read = readModelCatalogOverrides();
-    expect(Object.keys(read.patches)).toEqual(['openai:gpt-6']);
+    expect(Object.keys(read.patches)).toEqual(['openai:gpt-6', 'xd:fake']);
     expect(read.patches['openai:gpt-6']).toEqual({ base: { name: 'Hand Edited' } });
   });
 

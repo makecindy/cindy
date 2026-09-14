@@ -141,8 +141,9 @@ function projectAttachments(
 ): ConversationShareAttachment[] {
   const { imageAttachments, fileAttachments } =
     partitionMessageAttachments(attachments);
-  return [...imageAttachments, ...fileAttachments].map(({ kind, name }) => ({
+  return [...imageAttachments, ...fileAttachments].map(({ kind, name, uri }) => ({
     kind,
     name,
+    ...(kind === 'image' && uri ? { uri } : {}),
   }));
 }

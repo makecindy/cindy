@@ -1,58 +1,27 @@
 /**
- * Cindy 托管的子代理模型覆盖与 Codex 子代理护栏。
- *
- * `null` 表示不指定，agent 必须保留其原生子代理模型选择逻辑。
+ * Cindy 托管的 Subagent 设置。
  *
  * 派发通道按 agent 分两条：
  * - Claude Code：env `CLAUDE_CODE_SUBAGENT_MODEL`，每会话独立 spawn，新会话即生效。
- * - Codex：护栏仍通过 spawn 时 `-c agents.*` 注入；锁定模型、Provider 与 effort 由
- *   本地 Proxy 对已确认的子线程请求强制应用（见 maker-host/codex-subagent-config.ts）。
+ * - Codex：默认完全保留 Codex 原生的 Subagent 调配；只有用户显式开启「智能调配」时，
+ *   Cindy 才扩展可供 spawn_agent 选择的模型目录，并按每个子线程实际请求的模型路由。
  *   本地 codex app-server 跨会话共享，变更经 DeferredCodexRestartService 在全部本地
- *   Codex 会话空闲后重启生效；remote 会话不注入。用户指定 Codex 模型后，它与 effort
- *   作为强制路由冻结在本地 Proxy：Codex 创建子线程时继承父模型，不接收 model/effort
- *   override，从而避开 spawn_agent 的目录白名单；真正请求只在已确认的子线程上改写。
+ *   Codex 会话空闲后重启生效；remote 会话不注入。
  *
- * `*ProviderId` 是标准模型选择面板的「来源」维度（2026-07 用户定稿基准：全软件一个
- * 模型选择面板，处处同行为）。它是纯客户端偏好：派发通道只带模型 id；订阅前缀模型
- * （chatgpt/ / xai/）由 loopback proxy 按 model 前缀 per-request 路由到订阅，其余模型
- * 跟随会话自身路由。providerId 用于选择器按来源选模型与回显真实来源，不改写子代理
- * 请求的凭证路由。
+ * `claudeCodeProviderId` 是 Claude Code 标准模型选择面板的来源维度。
+ *
+ * 旧版 Codex 固定模型、固定来源、固定 effort 与护栏字段不再属于有效设置协议。读取旧
+ * 文件时会忽略并迁移掉这些键，避免已经废弃的配置继续暗中改变 Codex 原生行为。
  */
 export interface SubagentModelSettings {
   claudeCode: string | null;
   claudeCodeProviderId: string | null;
-  codex: string | null;
-  codexProviderId: string | null;
-  /** null = 锁定路由移除父线程继承的 effort，让目标模型使用默认档。 */
-  codexEffort: CodexSubagentEffort | null;
-  /** false → 注入 `-c agents.enabled=false`，对旧版多代理(V1)与 Sol/Terra(V2)都硬生效。 */
-  codexSubagentsEnabled: boolean;
-  /** false → 不注入 Cindy 的 multi-agent mode hint，保留 Codex 原生调度策略。 */
-  codexUseCindySubagentPolicy: boolean;
-  /** null = 跟随上游默认(V1=6 / V2=3 个子代理)；1..8 → 注入 max_concurrent_threads_per_session=N。 */
-  codexMaxConcurrentSubagents: number | null;
-  /** true → 注入 `-c agents.max_depth=2`。上游该键仅 V1 生效，V2 忽略（UI hint 已注明）。 */
-  codexAllowNestedSubagents: boolean;
+  /** false = Codex 原生 Sol/Terra 调配；true = Cindy 扩展可用模型并按实际选择路由。 */
+  codexSmartSubagentRouting: boolean;
 }
 
-/**
- * 与 codex-model-discovery.ts 的 CODEX_EFFORTS 透传白名单一致（不含 minimal——codex
- * 运行时不透传 minimal）。某模型实际支持的子集由目录 efforts 决定，渲染层收窄。
- */
+/** Codex Subagent 卡片可展示的 reasoning effort。 */
 export const CODEX_SUBAGENT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max', 'ultra'] as const;
-export type CodexSubagentEffort = (typeof CODEX_SUBAGENT_EFFORTS)[number];
-
-export function isCodexSubagentEffort(value: unknown): value is CodexSubagentEffort {
-  return (
-    typeof value === 'string' && (CODEX_SUBAGENT_EFFORTS as readonly string[]).includes(value)
-  );
-}
-
-/** 并发上限的合法区间。上游在 Ultra 档 + 并发 ≥8 时会警告，故上限取 8。 */
-export const CODEX_SUBAGENT_CONCURRENCY_MIN = 1;
-export const CODEX_SUBAGENT_CONCURRENCY_MAX = 8;
-/** 开启自定义并发时的初始值（= V2 默认的 3 个并发子代理，V1 从 6 收紧）。 */
-export const CODEX_SUBAGENT_CONCURRENCY_INITIAL = 3;
 
 export type SubagentModelSettingsPatch = Partial<SubagentModelSettings>;
 
@@ -74,13 +43,7 @@ export type SubagentModelSettingsWriteResult = SubagentModelSettingsState & {
 export const SUBAGENT_MODEL_SETTINGS_DEFAULTS: SubagentModelSettings = {
   claudeCode: null,
   claudeCodeProviderId: null,
-  codex: null,
-  codexProviderId: null,
-  codexEffort: null,
-  codexSubagentsEnabled: true,
-  codexUseCindySubagentPolicy: true,
-  codexMaxConcurrentSubagents: null,
-  codexAllowNestedSubagents: false,
+  codexSmartSubagentRouting: false,
 };
 
 /** 设置 UI 的 Claude Code 模型行键组。 */
@@ -91,9 +54,7 @@ export const CLAUDE_SUBAGENT_MODEL_KEYS = [
 
 /** 设置 UI 的 Codex 模型行键组。 */
 export const CODEX_SUBAGENT_MODEL_KEYS = [
-  'codex',
-  'codexProviderId',
-  'codexEffort',
+  'codexSmartSubagentRouting',
 ] as const satisfies readonly (keyof SubagentModelSettings)[];
 
 /** 设置 UI 的「Subagent 模型」卡片全部键组。 */
@@ -102,26 +63,11 @@ export const SUBAGENT_MODEL_CARD_KEYS = [
   ...CODEX_SUBAGENT_MODEL_KEYS,
 ] as const satisfies readonly (keyof SubagentModelSettings)[];
 
-/** 设置 UI 的「Codex 子代理护栏」卡片键组。 */
-export const SUBAGENT_GUARDRAIL_KEYS = [
-  'codexSubagentsEnabled',
-  'codexUseCindySubagentPolicy',
-  'codexMaxConcurrentSubagents',
-  'codexAllowNestedSubagents',
-] as const satisfies readonly (keyof SubagentModelSettings)[];
-
 /**
- * 影响 Codex spawn `-c` 护栏或锁定 Subagent Proxy 路由的键。claude* 走 env 通道，
- * 不在此列表内；Codex 模型、Provider 或 effort 变化都需要重启共享的 app-server。
+ * 影响 Codex spawn 智能目录注入的键。claude* 走 env 通道，不在此列表内。
  */
 export const CODEX_SPAWN_AFFECTING_KEYS = [
-  'codex',
-  'codexProviderId',
-  'codexEffort',
-  'codexSubagentsEnabled',
-  'codexUseCindySubagentPolicy',
-  'codexMaxConcurrentSubagents',
-  'codexAllowNestedSubagents',
+  'codexSmartSubagentRouting',
 ] as const satisfies readonly (keyof SubagentModelSettings)[];
 
 /** 两份设置在 codex spawn 注入维度上是否有差异（决定是否需要重启 codex app-server）。 */
@@ -130,26 +76,6 @@ export function codexSpawnConfigChanged(
   b: SubagentModelSettings,
 ): boolean {
   return CODEX_SPAWN_AFFECTING_KEYS.some((key) => a[key] !== b[key]);
-}
-
-/** 磁盘读取的宽松归一化：round + clamp 到 [MIN, MAX]，非有限数回退「跟随上游默认」。 */
-export function normalizeCodexSubagentConcurrency(value: unknown): number | null {
-  if (typeof value !== 'number' || !Number.isFinite(value)) return null;
-  const rounded = Math.round(value);
-  if (rounded < CODEX_SUBAGENT_CONCURRENCY_MIN) return CODEX_SUBAGENT_CONCURRENCY_MIN;
-  if (rounded > CODEX_SUBAGENT_CONCURRENCY_MAX) return CODEX_SUBAGENT_CONCURRENCY_MAX;
-  return rounded;
-}
-
-/** IPC 边界的严格校验：null 或 [MIN, MAX] 内整数。clamp 事实源在 main store，这里不救。 */
-export function isValidCodexSubagentConcurrencyInput(value: unknown): value is number | null {
-  if (value === null) return true;
-  return (
-    typeof value === 'number' &&
-    Number.isInteger(value) &&
-    value >= CODEX_SUBAGENT_CONCURRENCY_MIN &&
-    value <= CODEX_SUBAGENT_CONCURRENCY_MAX
-  );
 }
 
 export const MAX_SUBAGENT_MODEL_ID_LENGTH = 256;
@@ -178,19 +104,15 @@ export function normalizeSubagentModelId(value: unknown): string | null {
  * review),以及模型本就未指定时的 provider-only patch(codex review,会造成
  * 「显示不指定却 isCustomized=true」)。UI 已原子写,这里是 IPC 契约边界的兜底。
  *
- * codexEffort 有意不参与配对清理：没有指定模型时，它仍可作为上游原生隐藏配置单独
- * 注入；指定模型时则随冻结路由由 Proxy 强制应用。UI 侧选「不指定」会原子清
- * {codex, codexProviderId, codexEffort} 三键，不产生意外孤儿。护栏四键互相独立。
  */
 export function reconcileSubagentModelSettingsPatch(
   patch: SubagentModelSettingsPatch,
   current: SubagentModelSettings,
 ): SubagentModelSettingsPatch {
   const next = { ...patch };
-  const clearOrphan = (
-    modelKey: 'claudeCode' | 'codex',
-    providerKey: 'claudeCodeProviderId' | 'codexProviderId',
-  ) => {
+  const clearOrphan = () => {
+    const modelKey = 'claudeCode' as const;
+    const providerKey = 'claudeCodeProviderId' as const;
     const effectiveModel = next[modelKey] !== undefined ? next[modelKey] : current[modelKey];
     if (effectiveModel !== null) return;
     const effectiveProvider =
@@ -201,8 +123,7 @@ export function reconcileSubagentModelSettingsPatch(
       next[providerKey] = null;
     }
   };
-  clearOrphan('claudeCode', 'claudeCodeProviderId');
-  clearOrphan('codex', 'codexProviderId');
+  clearOrphan();
   return next;
 }
 
@@ -212,8 +133,5 @@ export function isValidSubagentModelIdInput(value: unknown): value is string | n
   if (typeof value !== 'string') return false;
   const trimmed = value.trim();
   if (!trimmed) return true;
-  return (
-    trimmed.length <= MAX_SUBAGENT_MODEL_ID_LENGTH &&
-    !containsControlCharacter(trimmed)
-  );
+  return trimmed.length <= MAX_SUBAGENT_MODEL_ID_LENGTH && !containsControlCharacter(trimmed);
 }

@@ -321,6 +321,66 @@ describe('useUpdateNotice automatic popup', () => {
     expect(result.current.releaseNotes?.[0]?.topics[0]?.title).toBe('ja-1.4.2');
   });
 
+  it('retries a transient automatic notice miss before giving up', async () => {
+    (window as unknown as { electronAPI: unknown }).electronAPI = { appVersion: '1.4.2' };
+    localStorage.setItem(STORAGE_KEY, '1.4.1');
+    let currentFetch = 0;
+    mocks.fetchReleaseNotes.mockImplementation(async (version: string, locale: string) => {
+      if (version === '1.4.2' && currentFetch++ === 0) return null;
+      return notesFor(version, locale);
+    });
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useUpdateNotice());
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.open).toBe(false);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(2000);
+      });
+      expect(result.current.open).toBe(true);
+      expect(result.current.releaseNotes?.map((n) => n.version)).toEqual(['1.4.2']);
+      expect(currentFetch).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not reopen an automatic notice after manual history is opened and dismissed during retry delay', async () => {
+    (window as unknown as { electronAPI: unknown }).electronAPI = { appVersion: '1.4.2' };
+    localStorage.setItem(STORAGE_KEY, '1.4.1');
+    let currentFetch = 0;
+    mocks.fetchReleaseNotes.mockImplementation(async (version: string, locale: string) => {
+      if (version === '1.4.2' && currentFetch++ === 0) return null;
+      return notesFor(version, locale);
+    });
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() => useUpdateNotice());
+
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(result.current.open).toBe(false);
+
+      act(() => { result.current.onOpen(); });
+      await act(async () => { await Promise.resolve(); });
+      expect(result.current.open).toBe(true);
+
+      act(() => { result.current.dismiss(); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+      expect(result.current.open).toBe(false);
+      expect(currentFetch).toBe(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('does not reopen an automatic notice dismissed during a locale refresh', async () => {
     (window as unknown as { electronAPI: unknown }).electronAPI = { appVersion: '1.4.2' };
     localStorage.setItem(STORAGE_KEY, '1.4.1');

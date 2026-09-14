@@ -33,6 +33,8 @@ const MOBILE_DIR = path.join(REPO_ROOT, "apps", "mobile");
 const NOTICES_DIR = path.join(REPO_ROOT, "docs", "legal", "notices");
 const SBOM_DIR = path.join(NOTICES_DIR, "sbom");
 const CARGO_MANIFESTS = [
+  path.join(DESKTOP_DIR, "native", "remote-desktop", "windows-input", "Cargo.toml"),
+  path.join(DESKTOP_DIR, "native", "remote-desktop", "windows-host", "Cargo.toml"),
   path.join(DESKTOP_DIR, "cindy-updater", "src-tauri", "Cargo.toml"),
   path.join(
     DESKTOP_DIR,
@@ -61,6 +63,29 @@ function discoverWorkspaceDirs() {
 const PACKAGE_POLICIES = {
   // https://github.com/fabiospampinato/khroma (仓库内 LICENSE 为 MIT,npm 包漏带字段)
   khroma: { license: "MIT", url: "https://github.com/fabiospampinato/khroma" },
+  // 以下三个 substack 旧包经 exceljs → unzipper → binary 进入 desktop 闭包,
+  // 上游仓库已随作者删号下线,包内元数据缺失或写作 "MIT/X11"(非法 SPDX 表达)。
+  // 人工核验结论只对 verifiedVersion 生效:版本升级后 override 自动失效,
+  // license audit 会重新报错,强制重走核验而不是静默沿用旧结论。
+  // buffers@0.1.1 包内无 license 字段:上游仓库后续 commit(1b745ee)补声明 MIT,
+  // Debian node-buffers/0.1.1-5 copyright 与 ClearlyDefined 均审定为 Expat/MIT。
+  buffers: {
+    license: "MIT",
+    url: "https://github.com/substack/node-buffers",
+    verifiedVersion: "0.1.1",
+  },
+  // package.json 声明 "MIT/X11",归一为 MIT。
+  chainsaw: {
+    license: "MIT",
+    url: "https://github.com/substack/node-chainsaw",
+    verifiedVersion: "0.1.0",
+  },
+  // 包内 LICENSE 文件明示 MIT/X11,归一为 MIT。
+  traverse: {
+    license: "MIT",
+    url: "https://github.com/substack/js-traverse",
+    verifiedVersion: "0.3.9",
+  },
   // 明确选择双许可证中的宽松分支,避免声明口径含糊。
   jszip: { license: "MIT" },
   "node-forge": { license: "BSD-3-Clause" },
@@ -335,7 +360,13 @@ function collectClosure(entryDirs, target) {
         );
       }
 
-      const policy = PACKAGE_POLICIES[depJson.name];
+      // 带 verifiedVersion 的 override 只对核验过的那个版本生效;版本变化后
+      // 回落到包自身元数据,让 license audit 重新把关。
+      const rawPolicy = PACKAGE_POLICIES[depJson.name];
+      const policy =
+        rawPolicy?.verifiedVersion && rawPolicy.verifiedVersion !== depJson.version
+          ? undefined
+          : rawPolicy;
       if (policy?.category) {
         excluded.set(key, {
           ecosystem: "npm",
@@ -582,6 +613,23 @@ function readAndroidPlatformToolsVersion() {
   }
 }
 
+function readWindowsUpdaterRuntimeVersion() {
+  try {
+    return readJson(
+      path.join(
+        REPO_ROOT,
+        "apps",
+        "desktop",
+        "resources",
+        "cindy-updater-runtime",
+        "manifest.json",
+      ),
+    ).version;
+  } catch {
+    return "bundled";
+  }
+}
+
 function bundledComponent(component) {
   return { ecosystem: "bundled", ...component };
 }
@@ -662,6 +710,18 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
       license: "MIT",
       url: "https://github.com/earendil-works/pi",
       licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2025 Mario Zechner"),
+    }),
+  );
+
+  entries.push(
+    bundledComponent({
+      name: "oh-my-pi Windows Git PATH helpers (adapted)",
+      version: "326d24bd40d9858e24e1036ae739c27c72eeb543",
+      license: "MIT",
+      url: "https://github.com/can1357/oh-my-pi/tree/326d24bd40d9858e24e1036ae739c27c72eeb543",
+      licenseText: MIT_TEXT(
+        "MIT License\n\nCopyright (c) 2025 Mario Zechner\nCopyright (c) 2025-2026 Can Bölük",
+      ),
     }),
   );
 
@@ -809,6 +869,19 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
     }),
   );
 
+  // Workspace packages are skipped by npm closure discovery. The vendored
+  // OpenCodex helpers are also bundled into Desktop main, not only the SSH proxy.
+  const opencodex = readJson(path.join(REPO_ROOT, "packages/model-compat/UPSTREAM.json"));
+  entries.push(
+    bundledComponent({
+      name: "OpenCodex compatibility sources (vendored)",
+      version: opencodex.commit,
+      license: "MIT",
+      url: `${opencodex.repository}/tree/${opencodex.commit}`,
+      licenseText: readBundledLicense("packages/model-compat/LICENSE.opencodex"),
+    }),
+  );
+
   // Tencent's public iLink client is the pinned protocol reference for the
   // Cindy-owned, host-agnostic implementation under packages/wechat-ilink.
   entries.push(
@@ -829,8 +902,19 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
   return entries;
 }
 
+function remoteCredentialSwiftEntry() {
+  return bundledComponent({
+    name: "JOSESwift",
+    version: "3.0.0",
+    license: "Apache-2.0",
+    url: "https://github.com/airsidemobile/JOSESwift/tree/3.0.0",
+    licenseText: readBundledLicense("packages/remote-credentials-native/LICENSE.JOSESwift"),
+  });
+}
+
 function buildMacEntries() {
   return [
+    remoteCredentialSwiftEntry(),
     // agent-island Swift helper 中的 NotchShape 轮廓与 SpriteMascotConfig 皮肤
     // 参数改编自 Code Island(见 macos-agent-island-helper.swift 内注释)。
     bundledComponent({
@@ -872,6 +956,7 @@ function buildMobileEntries(apacheText, platform) {
   ];
   if (platform === "ios") {
     entries.push(
+      remoteCredentialSwiftEntry(),
       bundledComponent({
         name: "TapTapSDK/Core",
         version: "4.10.5",
@@ -882,6 +967,20 @@ function buildMobileEntries(apacheText, platform) {
     );
   } else {
     entries.push(
+      bundledComponent({
+        name: "com.nimbusds:nimbus-jose-jwt",
+        version: "10.9.1",
+        license: "Apache-2.0",
+        url: "https://bitbucket.org/connect2id/nimbus-jose-jwt",
+        licenseText: apacheText,
+      }),
+      bundledComponent({
+        name: "androidx.biometric:biometric",
+        version: "1.1.0",
+        license: "Apache-2.0",
+        url: "https://developer.android.com/jetpack/androidx/releases/biometric",
+        licenseText: apacheText,
+      }),
       bundledComponent({
         name: "com.taptap.sdk:tap-core and declared TapTap modules",
         version: "4.10.5",
@@ -1327,6 +1426,12 @@ function assertTrackedBinariesRegistered() {
     "apps/desktop/native/sqlite-vec/",
     "apps/mobile/assets/fonts/JetBrainsMono-",
   ];
+  // Windows updater 内置 VC++ Runtime 按精确文件登记(披露条目见
+  // restrictedManualEntries):目录内新增其它二进制时这里会重新拦下要求补披露。
+  const registeredFiles = new Set([
+    "apps/desktop/resources/cindy-updater-runtime/vcruntime140.dll",
+    "apps/desktop/resources/cindy-updater-runtime/vcruntime140_1.dll",
+  ]);
   const files = execFileSync("git", ["ls-files", "-z"], {
     cwd: REPO_ROOT,
     encoding: "utf8",
@@ -1337,6 +1442,7 @@ function assertTrackedBinariesRegistered() {
   const unregistered = files.filter(
     (file) =>
       binaryExtensions.has(path.extname(file).toLowerCase()) &&
+      !registeredFiles.has(file) &&
       !registeredPrefixes.some((prefix) => file.startsWith(prefix)),
   );
   if (unregistered.length) {
@@ -1480,6 +1586,16 @@ const projectManual = mergeComponents(
 auditArtifact("project-aggregate", projectClosure, projectManual);
 
 const restrictedManualEntries = [
+  {
+    ecosystem: "bundled",
+    name: "Microsoft Visual C++ Runtime (Windows updater app-local DLLs)",
+    version: readWindowsUpdaterRuntimeVersion(),
+    license: "LicenseRef-Microsoft-Visual-Studio-Distributable-Code",
+    category: "proprietary",
+    url: "https://learn.microsoft.com/en-us/visualstudio/releases/2022/redistribution",
+    note: "Bundled only with the Windows x64 updater; not covered by Cindy's Apache-2.0 license. Exact Microsoft source, hashes, sizes and signer identities are recorded in apps/desktop/resources/cindy-updater-runtime/manifest.json.",
+    artifacts: ["desktop-win"],
+  },
   {
     ecosystem: "bundled",
     name: "Claude Code CLI",

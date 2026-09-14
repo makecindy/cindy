@@ -1,3 +1,5 @@
+import type { TFunction } from 'i18next';
+
 /**
  * cronCodexPreset — codex 8 种 schedule mode ↔ 5-field cron 双向转换
  * ---------------------------------------------------------------------------
@@ -311,29 +313,43 @@ export function switchScheduleTimingMode(
 }
 
 /** chip 文案：mode + 关键参数；"每天 09:00" / "工作日 09:00" / "每 2 小时" */
-export function summarizeConfig(c: CodexScheduleConfig): string {
-  const t = `${pad(c.hour)}:${pad(c.minute)}`;
+export function summarizeConfig(c: CodexScheduleConfig, translate?: TFunction): string {
+  const time = `${pad(c.hour)}:${pad(c.minute)}`;
+  const text = (key: string, fallback: string, values?: Record<string, string | number>) =>
+    translate?.(key, { defaultValue: fallback, ...values }) ?? fallback;
   switch (c.mode) {
     case 'minute':
-      return 'Every minute';
+      return text('scheduler.chips.schedulePreview.everyMinute', 'Every minute');
     case 'hourly':
-      return 'Hourly';
+      return text('scheduler.presentation.summary.hourly', 'Hourly');
     case 'daily':
-      return `Daily at ${t}`;
+      return text('scheduler.presentation.summary.daily', `Daily at ${time}`, { time });
     case 'weekly':
-      return `${WEEKDAY_LABELS[c.weekday]} at ${t}`;
+      return text('scheduler.presentation.summary.weekly', `${WEEKDAY_LABELS[c.weekday]} at ${time}`, {
+        weekday: text(`scheduler.presentation.weekday.full.${c.weekday}`, WEEKDAY_LABELS[c.weekday]),
+        time,
+      });
     case 'weekdays':
-      return `Weekdays at ${t}`;
+      return text('scheduler.presentation.summary.weekdays', `Weekdays at ${time}`, { time });
     case 'weekends':
-      return `Weekends at ${t}`;
+      return text('scheduler.presentation.summary.weekends', `Weekends at ${time}`, { time });
     case 'monthly':
-      return `Monthly on day ${c.monthDay} at ${t}`;
+      return text('scheduler.presentation.summary.monthly', `Monthly on day ${c.monthDay} at ${time}`, {
+        day: c.monthDay,
+        time,
+      });
     case 'interval':
-      return `Every ${c.intervalHours} hours`;
+      return text('scheduler.chips.schedulePreview.everyHours', `Every ${c.intervalHours} hours`, {
+        count: c.intervalHours,
+      });
     case 'intervalMinutes':
-      return c.intervalMinutes === 1 ? 'Every minute' : `Every ${c.intervalMinutes} minutes`;
+      return c.intervalMinutes === 1
+        ? text('scheduler.chips.schedulePreview.everyMinute', 'Every minute')
+        : text('scheduler.chips.schedulePreview.everyMinutes', `Every ${c.intervalMinutes} minutes`, {
+            count: c.intervalMinutes,
+          });
     case 'custom':
-      return c.customCron || 'Custom';
+      return c.customCron || text('scheduler.presentation.summary.custom', 'Custom');
   }
 }
 

@@ -13,6 +13,8 @@ const PUBLISH_ERROR_CODES = new Set<SkillhubPublishErrorCode>([
   'OSS_OBJECT_NOT_FOUND',
   'API_KEY_MISSING',
   'CANCELLED',
+  'SKILL_HUB_READ_ONLY',
+  'INVALID_VISIBILITY',
   'INTERNAL',
 ]);
 

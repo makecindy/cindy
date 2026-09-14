@@ -19,7 +19,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const rendererSource = readFileSync(resolve(process.cwd(), 'src/session/MessageRenderer.tsx'), 'utf8');
     const routeSource = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
 
-    // 首同步期消息区渲染 SyncingMessages(spinner + 「正在同步」,延迟显形防快速路径闪烁),
+    // 首同步期消息区立即渲染 SyncingMessages(spinner + 「正在同步」),
     // 而不是干净空白——手机消息要走 device-link 往返桌面,空白会被读成"卡住了"。
     const syncingStart = rendererSource.indexOf('function SyncingMessages');
     expect(syncingStart).toBeGreaterThan(-1);
@@ -27,7 +27,7 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const syncingSource = rendererSource.slice(syncingStart, syncingEnd);
     expect(syncingSource).toContain('message.renderer.syncing');
     expect(syncingSource).toContain('ActivityIndicator');
-    expect(rendererSource).toContain('SYNCING_PLACEHOLDER_DELAY_MS');
+    expect(syncingSource).not.toContain('setTimeout');
     expect(rendererSource).toContain('ListEmptyComponent={syncingWhileEmpty');
     expect(rendererSource).toContain('<SyncingMessages />');
     expect(routeSource).toContain('syncingWhileEmpty={syncingWhileEmpty}');
@@ -44,9 +44,10 @@ describe('mobile session main layer desktop-first noise budget', () => {
 
     // banner 渲染条件(useShowConnectionBanner):请求级 / transport hold error、可分类连接问题、
     // 目标设备熔断 open(电脑端未响应)立即显示;普通弱网断线经防闪窗口后也显示,不再彻底静默。
-    expect(routeSource).toContain('{showConnectionBanner ? (');
+    expect(routeSource).toContain('{showConnectionBanner || showCachedHistoryNotice ? (');
+    expect(routeSource).toContain('cachedOnly={showCachedHistoryNotice}');
     expect(source.replace(/\r\n/g, '\n'))
-      .toContain('useShowConnectionBanner(\n    status,\n    connectionRecoveryError,');
+      .toContain('useShowConnectionBanner(\n    status,\n    bannerError,');
     expect(routeSource).not.toContain('connectionError || (loading && !currentSession)');
     expect(syncSource).toContain("t('session.screen.awaitingSync')");
     expect(syncSource).toContain("t('session.screen.resync')");
@@ -87,7 +88,9 @@ describe('mobile session main layer desktop-first noise budget', () => {
     // 输入框换成只读卡片,而它们只表示还不能 enqueue。composer 保持可用,发送改走 outbox
     // 排队(见 optimisticSessionComposer.test.ts),这两条理由只留给队列行操作。
     expect(source).toContain('      readOnlyReason: composerReadOnlyReason,\n');
-    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason\n    ?? cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueAvailabilityReason = cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason ?? queueAvailabilityReason');
+    expect(source).toContain('const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason');
     expect(source).toContain('readOnlyReason={composerReadOnlyReason}');
     // header notice:协作会话(可聊天的 Lead)显示协作标签而非"只读模式"。
     expect(source).toContain('const collaborationLabel = sessionCollaborationLabel(session);');
@@ -117,11 +120,12 @@ describe('mobile session main layer desktop-first noise budget', () => {
     const staleOfferStart = resetSource.indexOf('if (!offer');
     const refresh = resetSource.indexOf('await refreshAccountUsage();', staleOfferStart);
     const sessionGuard = resetSource.indexOf(
-      'if (contextUsageSessionRef.current !== sessionId) return;',
+      'if (accountControlScopeRef.current !== accountControlScope) return;',
       refresh,
     );
     const alert = resetSource.indexOf("Alert.alert(t('session.screen.resetReconfirmTitle'), t('session.screen.resetOfferExpired'))", refresh);
 
+    expect(source).toContain('const accountControlScope = `${deviceId}\\0${sessionId}\\0${accountProviderId}`;');
     expect(refresh).toBeGreaterThan(-1);
     expect(sessionGuard).toBeGreaterThan(refresh);
     expect(alert).toBeGreaterThan(sessionGuard);

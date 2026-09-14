@@ -4,6 +4,7 @@ import { XdtHelperToolRegistry, type XdtHelperToolResult } from '../lizi_xdtHelp
 import {
   registerCancelSessionQueuedMessageTool,
   registerGetSessionRuntimeTool,
+  registerSetSessionRuntimeTool,
   registerSteerSessionTool,
   registerStopSessionTurnTool,
   registerUpdateSessionQueuedMessageTool,
@@ -54,6 +55,19 @@ function setup(opts?: { sessionId?: string | undefined }) {
         gracefulStopState: 'waiting-for-safe-point' as const,
       },
     })),
+    setSessionRuntime: vi.fn(async ({ patch }) => ({
+      ok: true as const,
+      status: 'applied' as const,
+      generation: 2,
+      effectiveProfile: {
+        agentKind: 'codex' as const,
+        model: patch.model ?? 'gpt-5.6-sol',
+        providerId: patch.providerId ?? 'openai',
+        effort: patch.effort ?? 'high',
+        fastMode: patch.fastMode ?? false,
+      },
+      pendingMutation: null,
+    })),
   };
   const registry = new XdtHelperToolRegistry();
   registerUpdateSessionQueuedMessageTool(registry, deps);
@@ -61,10 +75,87 @@ function setup(opts?: { sessionId?: string | undefined }) {
   registerSteerSessionTool(registry, deps);
   registerStopSessionTurnTool(registry, deps);
   registerGetSessionRuntimeTool(registry, deps);
+  registerSetSessionRuntimeTool(registry, deps);
   return { deps, registry };
 }
 
 describe('cindy_helper session control tools', () => {
+  it('forwards a complete harness selection and reports the next-send boundary', async () => {
+    const { deps, registry } = setup();
+    const old = { agentKind: 'claude-code' as const, model: 'claude-fable-5', providerId: null, effort: 'high' as const, fastMode: false };
+    vi.mocked(deps.setSessionRuntime).mockResolvedValueOnce({
+      ok: true, status: 'deferred', effectiveBoundary: 'next_send', generation: 2,
+      effectiveProfile: old,
+      pendingMutation: { generation: 2, source: 'agent', profile: { ...old, agentKind: 'codex', model: 'gpt-6-astra', providerId: 'openai' } },
+    });
+    expect(parse(await registry.call('set_session_runtime', {
+      session_id: 'target', harness: 'codex', model: 'gpt-6-astra', provider_id: 'openai', expected_generation: 1,
+    }))).toMatchObject({
+      ok: true, effective_boundary: 'next_send', effective: { harness: 'claude-code' },
+      pending: { profile: { harness: 'codex', model: 'gpt-6-astra' } },
+    });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({ targetSessionId: 'target', expectedGeneration: 1,
+      patch: { harness: 'codex', model: 'gpt-6-astra', providerId: 'openai' } });
+  });
+
+  it.each([{ harness: 'codex' }, { harness: 'unknown', model: 'gpt-6-astra' }])('rejects invalid complete selection %j', async (patch) => {
+    const { deps, registry } = setup();
+    expect(parse(await registry.call('set_session_runtime', { ...patch, expected_generation: 1 }))).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(deps.setSessionRuntime).not.toHaveBeenCalled();
+  });
+
+  it('atomically changes the current session runtime with generation CAS', async () => {
+    const { deps, registry } = setup();
+    const result = parse(
+      await registry.call('set_session_runtime', {
+        model: 'gpt-5.6-sol',
+        effort: 'high',
+        fast: true,
+        expected_generation: 1,
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      session_id: 'caller-session',
+      status: 'applied',
+      generation: 2,
+      effective_boundary: 'immediate',
+      effective: {
+        harness: 'codex',
+        model: 'gpt-5.6-sol',
+        provider_id: 'openai',
+        effort: 'high',
+        fast: true,
+      },
+    });
+    expect(deps.setSessionRuntime).toHaveBeenCalledWith({
+      targetSessionId: 'caller-session',
+      expectedGeneration: 1,
+      patch: { model: 'gpt-5.6-sol', effort: 'high', fastMode: true },
+    });
+  });
+
+  it('requires a bound current session when session_id is omitted', async () => {
+    // expected_generation 已是 schema 必填(#3535):带上合法值,隔离验证
+    // 会话上下文缺失的分支。
+    const { registry } = setup({ sessionId: undefined });
+    expect(
+      parse(await registry.call('set_session_runtime', { effort: 'high', expected_generation: 1 })),
+    ).toMatchObject({ ok: false, errorCode: 'NO_SESSION_CONTEXT' });
+  });
+
+  it('requires a read-before-write generation token', async () => {
+    // #3535:schema 曾标 optional 而 handler 强制必传 —— 契约矛盾让缺参调用
+    // 只拿到裸 INVALID_ARGS。现在 schema 即必填:zod 层拒绝并回吐 schema 与
+    // 校验明细,调用方一轮自纠。
+    const { registry } = setup();
+    const result = parse(await registry.call('set_session_runtime', { effort: 'high' }));
+    expect(result).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
+    expect(JSON.stringify(result.data?.validation_errors ?? result)).toContain('expected_generation');
+    expect(result.data?.schema).toBeTruthy();
+  });
+
   it('updates and cancels only through the caller-bound ownership context', async () => {
     const { deps, registry } = setup();
 
@@ -156,6 +247,11 @@ describe('cindy_helper session control tools', () => {
       last_activity_at: '2026-08-16T01:00:05.000Z',
       current_action_summary: '正在运行工具 Bash',
       graceful_stop_state: 'waiting-for-safe-point',
+      generation: 0,
+      baseline: null,
+      effective: null,
+      pending: null,
+      fallback_enabled: false,
     });
   });
 

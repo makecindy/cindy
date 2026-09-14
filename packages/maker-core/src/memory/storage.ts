@@ -69,14 +69,47 @@ export function sanitizeWorkdir(absPath: string): string {
  * 裸拼接时 ('/x:/repo','prod') 与 ('/repo','prod:/x') 会撞成同一个 key
  * (review R5 P2);常规 alias 编码前后相同,键仍可读。数据仍存控制端本机,
  * 目录名经 memoryScopeDirName 派生。所有 getStore 调用方 (agent 启动注入 /
- * MCP withStore) 必须统一经本函数取键,不得各自拼接。
+ * MCP withStore) 必须统一取键,不得各自拼接——**统一入口是 async 的
+ * resolveMemoryScopeKey (scope-resolver.ts)**: 它在本地会话上额外做 git
+ * linked-worktree 归一化 (#2379), 本函数保持同步原契约不变。
  */
 export function buildMemoryScopeKey(workingDir: string, remoteHostId?: string | null): string {
   return remoteHostId ? `ssh:${encodeURIComponent(remoteHostId)}:${workingDir}` : workingDir;
 }
 
+/**
+ * Cindy Bot 的长期记忆作用域。
+ *
+ * Bot 可以在多个项目、route 和远端 Host 上工作；用 workingDir 分区会让同一个 Bot
+ * 的记忆被切碎，也会让两个 Bot 在同一项目里互相污染。Profile runtime 因此把
+ * Bot id 映射成独立且稳定的 scope key，所有 harness prompt 与 cindy_memory MCP
+ * 都使用同一个 key。
+ */
+export function buildBotMemoryScopeKey(botId: string): string {
+  if (!botId.trim()) throw new Error('buildBotMemoryScopeKey: botId required');
+  return `bot:${encodeURIComponent(botId.trim())}`;
+}
+
+/**
+ * Reverse a Bot memory scope without teaching the generic memory manager about
+ * Desktop's Bot Home layout. Invalid/non-Bot keys return null and therefore
+ * remain ordinary Maker Memory scopes.
+ */
+export function parseBotMemoryScopeKey(scopeKey: string): string | null {
+  if (!scopeKey.startsWith('bot:')) return null;
+  const encoded = scopeKey.slice('bot:'.length);
+  if (!encoded) return null;
+  try {
+    const botId = decodeURIComponent(encoded).trim();
+    return botId || null;
+  } catch {
+    return null;
+  }
+}
+
 /** buildMemoryScopeKey 的远端键前缀。本地键恒为绝对路径, 不会以它开头。 */
-const SSH_SCOPE_KEY_PREFIX = 'ssh:';
+export const SSH_SCOPE_KEY_PREFIX = 'ssh:';
+const BOT_SCOPE_KEY_PREFIX = 'bot:';
 
 /**
  * scope key → 落盘目录名。本地键沿用 sanitizeWorkdir(既有目录不迁移);远端
@@ -88,6 +121,11 @@ const SSH_SCOPE_KEY_PREFIX = 'ssh:';
  * 只为肉眼可辨识。
  */
 export function memoryScopeDirName(scopeKey: string): string {
+  if (scopeKey.startsWith(BOT_SCOPE_KEY_PREFIX)) {
+    const botSegment = scopeKey.slice(BOT_SCOPE_KEY_PREFIX.length);
+    const digest = createHash('sha256').update(scopeKey, 'utf8').digest('hex').slice(0, 16);
+    return `bot-${sanitizeWorkdir(botSegment).slice(0, 24)}-${digest}`;
+  }
   if (!scopeKey.startsWith(SSH_SCOPE_KEY_PREFIX)) return sanitizeWorkdir(scopeKey);
   const hostSegment = scopeKey.slice(SSH_SCOPE_KEY_PREFIX.length).split(':', 1)[0] ?? '';
   const digest = createHash('sha256').update(scopeKey, 'utf8').digest('hex').slice(0, 16);

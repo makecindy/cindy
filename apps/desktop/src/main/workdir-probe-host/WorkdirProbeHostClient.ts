@@ -51,6 +51,7 @@ export class WorkdirProbeClientError extends Error {
 }
 
 interface ProbeEntry {
+  kind: WorkdirProbeRequest['kind'];
   id: number;
   dir: string;
   key: string;
@@ -84,7 +85,8 @@ export class WorkdirProbeHostClient {
     this.maxQueued = deps.maxQueued ?? DEFAULT_MAX_QUEUED;
   }
 
-  probe(dir: string, key: string, timeoutMs: number): Promise<WorkdirProbeResult> {
+  probe(dir: string, key: string, timeoutMs: number, kind: WorkdirProbeRequest['kind'] = 'probe'): Promise<WorkdirProbeResult> {
+    key = `${kind}:${key}`;
     if (this.disposed) {
       return Promise.reject(
         new WorkdirProbeClientError('WORKDIR_PROBE_UNAVAILABLE', 'probe host is disposed'),
@@ -101,6 +103,7 @@ export class WorkdirProbeHostClient {
     let entry!: ProbeEntry;
     const probe = new Promise<WorkdirProbeResult>((resolve, reject) => {
       entry = {
+        kind,
         id: this.nextId++,
         dir,
         key,
@@ -221,7 +224,7 @@ export class WorkdirProbeHostClient {
     entry.probeTimer.unref?.();
 
     const request: WorkdirProbeRequest = {
-      kind: 'probe',
+      kind: entry.kind,
       id: entry.id,
       dir: entry.dir,
     };

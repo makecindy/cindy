@@ -16,10 +16,14 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   STATUS_KEY,
+  VENDOR_KEY,
+  loadVendor,
+  persistVendor,
   PROJECTS_KEY,
   GROUP_BY_KEY,
   LAST_ACTIVITY_KEY,
   SORT_BY_KEY,
+  PROJECT_ORDER_KEY,
   TASK_INFO_KEY,
   MANUAL_PROJECT_ORDER_KEY,
   DIALOGUE_GROUP_COLLAPSED_KEY,
@@ -38,13 +42,15 @@ import {
   persistGroupBy,
   persistLastActivity,
   persistSortBy,
+  persistProjectOrder,
   persistTaskInfoFields,
   nextTaskInfoAfterToggle,
   persistManualProjectOrder,
   DIALOGUE_FILTER_KEY,
   nextProjectsAfterToggle,
-  nextSortByAfterGroupByChange,
   includeProjectInFilter,
+  loadProjectOrder,
+  migrateLegacyManualSort,
   projectFilterIncludes,
   removeProjectsFromFilter,
   gcProjectsAgainstActive,
@@ -52,6 +58,7 @@ import {
   moveManualProjectOrder,
   normalizeManualPinnedOrder,
   mergeVisibleReorder,
+  snapshotManualProjectOrder,
   type FilterProjects,
 } from '@/features/cc-agent/hooks/helpers/sidebarFilterCore';
 import { sidebarOwnerStorageKey } from '@/lib/sidebarOwnerStorage';
@@ -246,8 +253,6 @@ describe('loadSortBy', () => {
   it('returns persisted sort modes', () => {
     localStorage.setItem(SORT_BY_KEY, 'priority');
     expect(loadSortBy()).toBe('priority');
-    localStorage.setItem(SORT_BY_KEY, 'manual');
-    expect(loadSortBy()).toBe('manual');
     localStorage.setItem(SORT_BY_KEY, 'recency');
     expect(loadSortBy()).toBe('recency');
   });
@@ -276,12 +281,83 @@ describe('loadSortBy', () => {
   });
 });
 
-describe('nextSortByAfterGroupByChange', () => {
-  it('flat + manual 回落到 recency;其它组合保持', () => {
-    expect(nextSortByAfterGroupByChange('flat', 'manual')).toBe('recency');
-    expect(nextSortByAfterGroupByChange('flat', 'priority')).toBe('priority');
-    expect(nextSortByAfterGroupByChange('flat', 'recency')).toBe('recency');
-    expect(nextSortByAfterGroupByChange('project', 'manual')).toBe('manual');
+describe('loadProjectOrder', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it("defaults to 'activity' when storage is empty", () => {
+    expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it('returns persisted project order', () => {
+    persistProjectOrder('custom');
+    expect(loadProjectOrder()).toBe('custom');
+    persistProjectOrder('activity');
+    expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it('maps leftover sortBy=manual to custom when projectOrder is unset', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    expect(loadProjectOrder()).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+  });
+});
+
+describe('migrateLegacyManualSort', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it('rewrites sortBy=manual to recency + custom project order', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    migrateLegacyManualSort();
+    expect(localStorage.getItem(SORT_BY_KEY)).toBe('recency');
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+    expect(loadProjectOrder()).toBe('custom');
+  });
+
+  it('does not overwrite an explicit projectOrder', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    persistProjectOrder('activity');
+    migrateLegacyManualSort();
+    expect(loadSortBy()).toBe('recency');
+    expect(loadProjectOrder()).toBe('activity');
+  });
+
+  it('still maps leftover sortBy=manual if only projectOrder was written', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    persistProjectOrder('custom');
+    expect(loadProjectOrder()).toBe('custom');
+    expect(loadSortBy()).toBe('recency');
+  });
+
+  it('keeps sortBy=manual when projectOrder write fails so the next launch can retry', () => {
+    localStorage.setItem(SORT_BY_KEY, 'manual');
+    const originalSetItem = localStorage.setItem.bind(localStorage);
+    localStorage.setItem = (key: string, value: string) => {
+      if (key === PROJECT_ORDER_KEY) throw new Error('quota');
+      originalSetItem(key, value);
+    };
+    try {
+      migrateLegacyManualSort();
+    } finally {
+      localStorage.setItem = originalSetItem;
+    }
+    expect(localStorage.getItem(SORT_BY_KEY)).toBe('manual');
+    expect(localStorage.getItem(PROJECT_ORDER_KEY)).toBeNull();
+    expect(loadProjectOrder()).toBe('custom');
+  });
+});
+
+describe('snapshotManualProjectOrder', () => {
+  it('merges the pre-switch visual order into the full baseline without moving hidden keys', () => {
+    expect(
+      snapshotManualProjectOrder(['local:b', 'local:a'], ['local:a', 'local:hidden', 'local:b']),
+    ).toEqual(['local:b', 'local:hidden', 'local:a']);
+  });
+
+  it('falls back to the baseline when there is no visual snapshot', () => {
+    expect(snapshotManualProjectOrder([], ['local:a', 'local:b'])).toEqual(['local:a', 'local:b']);
   });
 });
 
@@ -299,8 +375,8 @@ describe('taskInfoFields（任务行右侧信息复选）', () => {
   });
 
   it('persist → load round-trips and drops illegal / duplicate entries', () => {
-    persistTaskInfoFields(['pr', 'tokens', 'cost', 'time']);
-    expect(loadTaskInfoFields()).toEqual(['pr', 'tokens', 'cost', 'time']);
+    persistTaskInfoFields(['pr', 'worktree', 'tokens', 'cost', 'time']);
+    expect(loadTaskInfoFields()).toEqual(['pr', 'worktree', 'tokens', 'cost', 'time']);
     localStorage.setItem(TASK_INFO_KEY, JSON.stringify(['time', 'bogus', 'time', 42, 'cost']));
     expect(loadTaskInfoFields()).toEqual(['time', 'cost']);
   });
@@ -421,10 +497,10 @@ describe('persist round-trip', () => {
   });
 
   it('persistSortBy → loadSortBy returns the same value', () => {
+    persistSortBy('created');
+    expect(loadSortBy()).toBe('created');
     persistSortBy('priority');
     expect(loadSortBy()).toBe('priority');
-    persistSortBy('manual');
-    expect(loadSortBy()).toBe('manual');
     persistSortBy('recency');
     expect(loadSortBy()).toBe('recency');
   });
@@ -490,15 +566,15 @@ describe('nextProjectsAfterToggle', () => {
     ).toBe('all');
   });
 
-  it("toggles the dialogue sentinel without treating it as a project path", () => {
+  it('toggles the dialogue sentinel without treating it as a project path', () => {
     expect(nextProjectsAfterToggle('all', DIALOGUE_FILTER_KEY)).toEqual([DIALOGUE_FILTER_KEY]);
     expect(nextProjectsAfterToggle([DIALOGUE_FILTER_KEY], 'local:/proj-a')).toEqual([
       DIALOGUE_FILTER_KEY,
       'local:/proj-a',
     ]);
-    expect(nextProjectsAfterToggle([DIALOGUE_FILTER_KEY, 'local:/proj-a'], DIALOGUE_FILTER_KEY)).toEqual([
-      'local:/proj-a',
-    ]);
+    expect(
+      nextProjectsAfterToggle([DIALOGUE_FILTER_KEY, 'local:/proj-a'], DIALOGUE_FILTER_KEY),
+    ).toEqual(['local:/proj-a']);
   });
 });
 
@@ -755,5 +831,25 @@ describe('项目拖拽(机器过滤态):mergeVisibleReorder + normalizeManualPro
     expect(merged).toEqual([p2, h1, p1, h2]);
     // setManualProjectOrder 内部会再归一化一次 → 必须幂等(不追加、不打乱)。
     expect(normalizeManualProjectOrder(merged, all)).toEqual([p2, h1, p1, h2]);
+  });
+});
+
+describe('Harness filter persistence', () => {
+  beforeEach(() => installMemoryLocalStorage());
+  afterEach(() => uninstallLocalStorage());
+
+  it.each(['all', 'cc', 'codex', 'pi'] as const)(
+    'restores %s from the existing preference key',
+    (vendor) => {
+      persistVendor(vendor);
+      expect(localStorage.getItem(VENDOR_KEY)).toBe(vendor);
+      expect(loadVendor()).toBe(vendor);
+    },
+  );
+
+  it('keeps the all default for absent or unknown harness values', () => {
+    expect(loadVendor()).toBe('all');
+    localStorage.setItem(VENDOR_KEY, 'unknown');
+    expect(loadVendor()).toBe('all');
   });
 });

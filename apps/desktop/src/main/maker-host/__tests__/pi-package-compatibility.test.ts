@@ -72,6 +72,63 @@ describe('Pi extension compatibility parser', () => {
     expect(result.compatibilityIssues).toEqual([]);
   });
 
+  it('allows native theme access while reporting theme switching and ignored RPC display methods', async () => {
+    const pkg = await makePackage({
+      'index.ts': `
+        export default function setup(pi: any) {
+          pi.on('session_start', (_event, ctx) => {
+            ctx.ui.notify(ctx.ui.theme.fg('accent', 'Ready'));
+          });
+        }
+      `,
+    });
+    await expect(analyzePiExtensionCompatibility(pkg.entry, pkg.root)).resolves.toMatchObject({
+      compatibility: 'supported', compatibilityIssues: [], detectedApis: ['notify', 'theme'],
+    });
+    await fs.writeFile(pkg.entry, `
+      export default function setup(pi: any) {
+        pi.on('session_start', (_event, ctx) => {
+          ctx.ui.setStatus('key', 'status');
+          ctx.ui.setWidget('key', ['line']);
+          ctx.ui.setTitle('title');
+          ctx.ui.setEditorText('text');
+          ctx.ui.pasteToEditor('text');
+          ctx.ui.setTheme('light');
+        });
+      }
+    `);
+    await expect(analyzePiExtensionCompatibility(pkg.entry, pkg.root)).resolves.toMatchObject({
+      compatibility: 'partial',
+      compatibilityIssues: ['editor-integration', 'status-display', 'terminal-title', 'theme-control', 'widgets'],
+      detectedApis: ['pasteToEditor', 'setEditorText', 'setStatus', 'setTheme', 'setTitle', 'setWidget'],
+    });
+  });
+
+  it('reports explicit timed dialogs in Settings but not TUI-only timers', async () => {
+    const pkg = await makePackage({
+      'index.ts': `
+        export default function setup(pi: any) {
+          pi.on('session_start', async (_event, ctx) => {
+            if (ctx.mode === 'tui') await ctx.ui.confirm('TUI', '', { timeout: 1000 });
+            await ctx.ui.select('Choose', ['a']);
+          });
+        }
+      `,
+    });
+    expect((await analyzePiExtensionCompatibility(pkg.entry, pkg.root)).compatibilityIssues).toEqual([]);
+    await fs.writeFile(pkg.entry, `
+      export default function setup(pi: any) {
+        pi.on('session_start', async (_event, ctx) => {
+          const confirm = ctx.ui.confirm;
+          await confirm('Confirm', '', { timeout: 1000 });
+        });
+      }
+    `);
+    await expect(analyzePiExtensionCompatibility(pkg.entry, pkg.root)).resolves.toMatchObject({
+      compatibility: 'partial', compatibilityIssues: ['interactive-dialogs'], detectedApis: ['confirm'],
+    });
+  });
+
   it('ignores comments and string literals that only mention Pi UI APIs', async () => {
     const pkg = await makePackage({
       'index.ts': `
@@ -137,7 +194,6 @@ describe('Pi extension compatibility parser', () => {
         'editor-integration',
         'status-display',
         'terminal-input',
-        'theme-control',
         'tui-rendering',
       ],
       detectedApis: [

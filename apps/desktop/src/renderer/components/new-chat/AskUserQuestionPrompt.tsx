@@ -20,8 +20,11 @@ import {
   type RefObject,
   type TextareaHTMLAttributes,
 } from 'react';
+import { useTranslation } from 'react-i18next';
+import { ArrowRight } from 'lucide-react';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
+import { Tip } from '@/components/ui/tooltip';
 import { useAutoResize } from '@/hooks/useAutoResize';
 import { cn } from '@/lib/utils';
 import type { AskUserDraft, AskUserViewerState, PendingAskUser } from '@/lib/makerChatStore';
@@ -98,6 +101,25 @@ interface AskUserQuestionPromptProps {
 // ---------------------------------------------------------------------------
 
 export function AskUserQuestionPrompt({
+  sessionId,
+  ...props
+}: AskUserQuestionPromptProps & { sessionId: string | undefined }) {
+  // Match the store's content comparison, including option order and metadata.
+  // Fixed field order avoids treating JSON property order as a new question;
+  // absent and empty options are equivalent, as in the reducer.
+  const questionsIdentity = props.pending.questions.map((question) => [
+    question.question,
+    question.header,
+    question.multiSelect,
+    (question.options ?? []).map((option) => [option.label, option.description]),
+  ]);
+  const formKey = JSON.stringify([sessionId, props.pending.requestId, questionsIdentity]);
+  // Repeated snapshots keep this form mounted. A changed session, request or
+  // question starts from its own draft (cleared by the store on content changes).
+  return <AskUserQuestionForm key={formKey} {...props} />;
+}
+
+function AskUserQuestionForm({
   pending,
   onAnswer,
   viewerState,
@@ -105,6 +127,7 @@ export function AskUserQuestionPrompt({
   draft,
   onDraftChange,
 }: AskUserQuestionPromptProps) {
+  const { t } = useTranslation();
   const { requestId, questions } = pending;
   const totalQuestions = questions.length;
 
@@ -116,10 +139,9 @@ export function AskUserQuestionPrompt({
   // batch — a stale draft from a previous question batch must be ignored.
   // Note: `requestId` is captured in the lazy initializer closure on first
   // render; subsequent prop updates do NOT re-run the initializer (that is
-  // useState's documented behavior). For a brand-new question batch the
-  // store has already cleared `askUserDraft` to null on the
-  // `ask_user_question` reducer path, so the lazy init falls through to
-  // defaults — no stale leak across batches.
+  // useState's documented behavior). The public wrapper remounts this form
+  // when the session, request or question content changes. For a new or changed
+  // question batch the store clears `askUserDraft`, so the form starts fresh.
   const [currentIndex, setCurrentIndex] = useState<number>(() =>
     draft && draft.requestId === requestId ? draft.currentIndex : 0,
   );
@@ -221,7 +243,7 @@ export function AskUserQuestionPrompt({
       'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)]',
     );
     const showNext =
-      isMultiSelect || (existingAnswer !== undefined && !isMultiSelect) || isLastQuestion;
+      isMultiSelect || (!isLastQuestion && existingAnswer !== undefined && !isMultiSelect);
     const nextDisabled = isMultiSelect
       ? selectedLabels.size === 0 && !customInput.trim()
       : existingAnswer === undefined;
@@ -238,15 +260,29 @@ export function AskUserQuestionPrompt({
           <div className={skipClass}>
             <span className="flex items-center gap-[6px]">
               <span>&#8592;</span>
-              <span>Back</span>
+              <span>{t('chat.askUserQuestion.back')}</span>
             </span>
           </div>
         )}
-        <div className={skipClass}>Skip</div>
-        {showNext && <div className={nextClass}>{isLastQuestion ? 'Submit' : 'Next'}</div>}
+        <div className={skipClass}>{t('chat.askUserQuestion.skip')}</div>
+        {showNext && (
+          <div className={nextClass}>
+            {isLastQuestion
+              ? t('chat.askUserQuestion.submit')
+              : t('chat.askUserQuestion.next')}
+          </div>
+        )}
       </>
     );
-  }, [currentIndex, isMultiSelect, isLastQuestion, existingAnswer, selectedLabels, customInput]);
+  }, [
+    currentIndex,
+    isMultiSelect,
+    isLastQuestion,
+    existingAnswer,
+    selectedLabels,
+    customInput,
+    t,
+  ]);
 
   // ── Advance to next question or submit all ──
   const advance = useCallback(
@@ -452,7 +488,7 @@ export function AskUserQuestionPrompt({
             >
               <span className="flex items-center gap-[6px]">
                 <span>&#8592;</span>
-                <span>Back</span>
+                <span>{t('chat.askUserQuestion.back')}</span>
               </span>
             </button>
           )}
@@ -465,12 +501,11 @@ export function AskUserQuestionPrompt({
               'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
             )}
           >
-            Skip
+            {t('chat.askUserQuestion.skip')}
           </button>
 
           {(isMultiSelect ||
-            (existingAnswer !== undefined && !isMultiSelect) ||
-            isLastQuestion) && (
+            (!isLastQuestion && existingAnswer !== undefined && !isMultiSelect)) && (
             <button
               type="button"
               onClick={() => {
@@ -496,7 +531,9 @@ export function AskUserQuestionPrompt({
                   : 'border border-[var(--confirm-btn-secondary-border)] bg-transparent text-[var(--confirm-btn-secondary-text)] transition-colors hover:bg-[var(--confirm-btn-secondary-hover)]',
               )}
             >
-              {isLastQuestion ? 'Submit' : 'Next'}
+              {isLastQuestion
+                ? t('chat.askUserQuestion.submit')
+                : t('chat.askUserQuestion.next')}
             </button>
           )}
         </>
@@ -509,10 +546,10 @@ export function AskUserQuestionPrompt({
     <InteractionPromptCardShell
       viewerState={viewerState}
       onViewerStateChange={onViewerStateChange}
-      minimizedTitle="Question pending"
+      minimizedTitle={t('chat.askUserQuestion.pendingTitle')}
       minimizedMeta={totalQuestions > 1 ? `${currentIndex + 1} / ${totalQuestions}` : undefined}
-      restoreAriaLabel="Restore question prompt"
-      minimizeAriaLabel="Minimize question prompt"
+      restoreAriaLabel={t('chat.askUserQuestion.restoreAriaLabel')}
+      minimizeAriaLabel={t('chat.askUserQuestion.minimizeAriaLabel')}
       minimizeDisabled={isAnimating}
       headerLeading={
         currentQ?.header ? (
@@ -654,7 +691,7 @@ export function AskUserQuestionPrompt({
                       setCustomInput('');
                     }
                   }}
-                  placeholder="Type your answer..."
+                  placeholder={t('chat.askUserQuestion.answerPlaceholder')}
                   className={cn(
                     'min-h-[22px] min-w-0 flex-1 bg-transparent text-14 font-normal leading-[1.571] outline-none',
                     'text-[var(--ask-input-text)] placeholder:text-[var(--ask-input-placeholder)]',
@@ -662,20 +699,30 @@ export function AskUserQuestionPrompt({
                   )}
                 />
                 {!isMultiSelect && (
-                  <button
-                    type="button"
-                    onClick={handleCustomSubmit}
-                    disabled={!customInput.trim()}
-                    className={cn(
-                      'self-end shrink-0 rounded-[9999px] px-[16px] py-[6px]',
-                      'text-13 font-medium',
-                      customInput.trim()
-                        ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
-                        : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
-                    )}
-                  >
-                    Send
-                  </button>
+                  <Tip text={isLastQuestion ? null : t('chat.askUserQuestion.next')}>
+                    <button
+                      type="button"
+                      onClick={handleCustomSubmit}
+                      disabled={!customInput.trim()}
+                      data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
+                      aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
+                      className={cn(
+                        'self-end shrink-0 rounded-[9999px] text-13 font-medium',
+                        isLastQuestion
+                          ? 'px-[16px] py-[6px]'
+                          : 'flex h-8 w-8 items-center justify-center',
+                        customInput.trim()
+                          ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
+                          : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
+                      )}
+                    >
+                      {isLastQuestion ? (
+                        t('chat.askUserQuestion.submit')
+                      ) : (
+                        <ArrowRight size={15} strokeWidth={2} aria-hidden="true" />
+                      )}
+                    </button>
+                  </Tip>
                 )}
               </div>
             ) : (
@@ -692,7 +739,7 @@ export function AskUserQuestionPrompt({
                     <div className="h-[18px] w-[18px] shrink-0 rounded-[4px] border-[1.5px] border-[var(--ask-checkbox-border)]" />
                   )}
                   <span className="text-14 italic text-[var(--ask-option-custom)]">
-                    Type something else...
+                    {t('chat.askUserQuestion.customAnswer')}
                   </span>
                 </div>
                 <div className="ml-3 flex h-[28px] w-[28px] shrink-0 items-center justify-center rounded-[8px] bg-[var(--ask-badge-bg)] text-13 font-medium text-[var(--ask-badge-text)]">
@@ -720,7 +767,7 @@ export function AskUserQuestionPrompt({
                   handleSkip();
                 }
               }}
-              placeholder="Type your answer..."
+              placeholder={t('chat.askUserQuestion.answerPlaceholder')}
               autoFocus
               className={cn(
                 'min-h-10 min-w-0 flex-1 rounded-[8px] border px-3 py-[8px] text-14 leading-[1.571] outline-none',
@@ -728,19 +775,28 @@ export function AskUserQuestionPrompt({
                 'placeholder:text-[var(--ask-input-placeholder)]',
               )}
             />
-            <button
-              type="button"
-              onClick={() => customInput.trim() && advance(customInput.trim())}
-              disabled={!customInput.trim()}
-              className={cn(
-                'h-10 rounded-[9999px] px-4 text-14 font-medium transition-colors',
-                customInput.trim()
-                  ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
-                  : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
-              )}
-            >
-              Send
-            </button>
+            <Tip text={isLastQuestion ? null : t('chat.askUserQuestion.next')}>
+              <button
+                type="button"
+                onClick={() => customInput.trim() && advance(customInput.trim())}
+                disabled={!customInput.trim()}
+                data-testid={isLastQuestion ? undefined : 'ask-user-custom-next'}
+                aria-label={isLastQuestion ? undefined : t('chat.askUserQuestion.next')}
+                className={cn(
+                  'h-10 rounded-[9999px] text-14 font-medium transition-colors',
+                  isLastQuestion ? 'px-4' : 'flex w-10 items-center justify-center',
+                  customInput.trim()
+                    ? 'bg-[var(--ask-send-bg)] text-[var(--ask-send-text)]'
+                    : 'bg-[var(--ask-send-disabled-bg)] text-[var(--ask-send-disabled-text)]',
+                )}
+              >
+                {isLastQuestion ? (
+                  t('chat.askUserQuestion.submit')
+                ) : (
+                  <ArrowRight size={17} strokeWidth={2} aria-hidden="true" />
+                )}
+              </button>
+            </Tip>
           </div>
         )}
       </div>

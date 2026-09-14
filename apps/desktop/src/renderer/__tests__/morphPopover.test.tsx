@@ -7,6 +7,8 @@
  * 故本文件按新语义重写(取代旧 ghost/left-定位/focus-first-action/scroll-close 契约):
  *   - 打开聚焦 [data-morph-autofocus] → 首个 input → 面板容器(不抢焦到首个按钮,§14.2)
  *   - 关闭仅键盘(Esc)归还 trigger 焦点;鼠标关闭(选项/outside)不回焦(防误弹 trigger tooltip)
+ *   - 传了 restoreFocusTarget 时,指针关闭立刻回该目标(选完模型能接着打字);
+ *     Esc 仍回 trigger(§14.2);其它控件已接走则不抢
  *   - outside pointerdown 关闭,但嵌套 Radix portal(data-radix-popper-content-wrapper)内不算 outside
  *   - trigger chip 全程可见(不隐藏),再点即关(toggle)
  *   - 无 ghost 幽灵层
@@ -225,6 +227,159 @@ describe('MorphPopover interaction contract', () => {
 
     await waitFor(() => expect(screen.queryByRole('button', { name: 'Select action' })).toBeNull());
     expect(document.activeElement).not.toBe(trigger);
+  });
+
+  it('restoreFocusTarget:鼠标选完后把焦点送回指定输入,而不是 trigger 或 body', async () => {
+    function RestoreHomeHarness() {
+      const [open, setOpen] = useState(false);
+      const composerRef = useRef<HTMLTextAreaElement>(null);
+      return (
+        <>
+          <textarea ref={composerRef} aria-label="Composer" />
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            restoreFocusTarget={() => composerRef.current}
+            trigger={
+              <button type="button" onClick={() => setOpen((current) => !current)}>
+                Toggle
+              </button>
+            }
+          >
+            <button type="button" onClick={() => setOpen(false)}>
+              Select model
+            </button>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<RestoreHomeHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const action = await screen.findByRole('button', { name: 'Select model' });
+    action.focus();
+    fireEvent.pointerDown(action);
+    fireEvent.click(action);
+
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'Select model' })).toBeNull());
+    expect(document.activeElement).toBe(screen.getByLabelText('Composer'));
+  });
+
+  it('restoreFocusTarget:鼠标选完在收合动画开始时就把焦点送回输入,不等卸掉', async () => {
+    setReducedMotion(false);
+    function RestoreHomeImmediateHarness() {
+      const [open, setOpen] = useState(false);
+      const composerRef = useRef<HTMLTextAreaElement>(null);
+      return (
+        <>
+          <textarea ref={composerRef} aria-label="Composer" />
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            restoreFocusTarget={() => composerRef.current}
+            panelAriaLabel="Immediate restore panel"
+            trigger={
+              <button type="button" onClick={() => setOpen((current) => !current)}>
+                Toggle
+              </button>
+            }
+          >
+            <button type="button" onClick={() => setOpen(false)}>
+              Select model
+            </button>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<RestoreHomeImmediateHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    const action = await screen.findByRole('button', { name: 'Select model' });
+    action.focus();
+    fireEvent.pointerDown(action);
+    fireEvent.click(action);
+
+    await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('Composer')));
+    expect(screen.getByRole('group', { name: 'Immediate restore panel' })).toBeTruthy();
+  });
+
+  it('restoreFocusTarget:Esc 关闭仍回 trigger,不改 §14.2 键盘归还', async () => {
+    function RestoreHomeEscHarness() {
+      const [open, setOpen] = useState(false);
+      const composerRef = useRef<HTMLTextAreaElement>(null);
+      return (
+        <>
+          <textarea ref={composerRef} aria-label="Composer" />
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            restoreFocusTarget={() => composerRef.current}
+            panelAriaLabel="Restore home panel"
+            trigger={
+              <button type="button" onClick={() => setOpen(true)}>
+                Toggle
+              </button>
+            }
+          >
+            <button type="button">First action</button>
+          </MorphPopover>
+        </>
+      );
+    }
+
+    render(<RestoreHomeEscHarness />);
+    const trigger = screen.getByRole('button', { name: 'Toggle' });
+    fireEvent.click(trigger);
+    await screen.findByRole('group', { name: 'Restore home panel' });
+    fireEvent.keyDown(document, { key: 'Escape' });
+    await waitFor(() =>
+      expect(screen.queryByRole('group', { name: 'Restore home panel' })).toBeNull(),
+    );
+    expect(document.activeElement).toBe(trigger);
+  });
+
+  it('restoreFocusTarget:焦点已被其它控件接走时不抢回', async () => {
+    function RestoreHomeHandoffHarness() {
+      const [open, setOpen] = useState(false);
+      const composerRef = useRef<HTMLTextAreaElement>(null);
+      const destinationRef = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <textarea ref={composerRef} aria-label="Composer" />
+          <MorphPopover
+            open={open}
+            onOpenChange={setOpen}
+            restoreFocusTarget={() => composerRef.current}
+            trigger={
+              <button type="button" onClick={() => setOpen(true)}>
+                Toggle
+              </button>
+            }
+          >
+            <button
+              type="button"
+              onClick={() => {
+                destinationRef.current?.focus();
+                setOpen(false);
+              }}
+            >
+              Continue elsewhere
+            </button>
+          </MorphPopover>
+          <button ref={destinationRef} type="button">
+            Destination
+          </button>
+        </>
+      );
+    }
+
+    render(<RestoreHomeHandoffHarness />);
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Continue elsewhere' }));
+    await waitFor(() =>
+      expect(screen.queryByRole('button', { name: 'Continue elsewhere' })).toBeNull(),
+    );
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: 'Destination' }));
   });
 
   it('动作延迟打开下一层交互面时不在收合结束后抢回 trigger', async () => {

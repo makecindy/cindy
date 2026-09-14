@@ -11,9 +11,11 @@
  *     <InvisibleWindowDragStrip />。
  *
  * ⚠️ Electron 拖拽区域是纯几何计算：drag 矩形减 no-drag 矩形，与 z-index /
- * DOM 层级无关。交互元素漏标 no-drag 会变成"点了就拖窗口"；反之 drag 条
- * 叠在交互元素上同样会吞掉点击 —— InvisibleWindowDragStrip 只能用在顶部
- * 确实无交互元素的页面。
+ * paint 顺序无关；但 no-drag 挖洞只在 drag 元素自己的**后代**上可靠生效，
+ * 浮层／兄弟节点上的 no-drag 不被计入（实机结论，见 ContentHeader.tsx:155-157
+ * ／ FileTabsBar.tsx:421-425）。交互元素漏标 no-drag 会变成"点了就拖窗口"；
+ * 反之 drag 条叠在交互元素上同样会吞掉点击 —— InvisibleWindowDragStrip
+ * 只能用在顶部确实无交互元素的页面。
  *
  * Windows 上通用 header 不隐藏（窗口控制按钮常驻），这些拖拽区是纯增益。
  */

@@ -15,6 +15,11 @@ import { interceptHtmlNavigation } from "@/session/htmlNavigationPolicy";
 const EXPORT_TIMEOUT_MS = 20_000;
 const EXPORT_SCALE = 2;
 const EXPORT_DIR_NAME = "conversation-share";
+// 分享扩展在 shareAsync 返回前后都可能读取 URL。保留最近几份成功产物，
+// 下次开始分享时再回收更早的文件，避免成功预览与清理竞态，同时限制 cache
+// 目录无限增长。
+const SHARE_PNG_RETAIN_COUNT = 3;
+const SHARE_PNG_CLEANUP_BATCH = 8;
 
 export interface ConversationShareWebViewHandle {
   exportPng(options?: { scale?: number }): Promise<string>;
@@ -263,6 +268,38 @@ export async function writeConversationSharePngTemp(
   } catch {
     if (fileUri) await deleteConversationSharePngTemp(fileUri);
     return null;
+  }
+}
+
+/**
+ * 回收消息分享产生的旧 PNG。
+ *
+ * 只在下一次分享开始前调用，当前这次刚写入的文件不会被删除；保留最近
+ * 几份成功产物给系统分享扩展读取，旧文件按批次回收。清理是 best-effort，
+ * 不能影响当前分享流程。
+ */
+export async function cleanupConversationSharePngTemps(): Promise<void> {
+  try {
+    const directory = new Directory(Paths.cache, EXPORT_DIR_NAME);
+    if (!directory.exists) return;
+    const files = directory
+      .list()
+      .filter(
+        (entry): entry is File =>
+          entry instanceof File
+          && entry.name.startsWith("conversation-")
+          && entry.extension.toLowerCase() === ".png"
+          && entry.exists,
+      )
+      .sort(
+        (left, right) =>
+          (right.modificationTime ?? right.creationTime ?? 0)
+          - (left.modificationTime ?? left.creationTime ?? 0),
+      );
+    const stale = files.slice(SHARE_PNG_RETAIN_COUNT, SHARE_PNG_RETAIN_COUNT + SHARE_PNG_CLEANUP_BATCH);
+    await Promise.all(stale.map((file) => deleteConversationSharePngTemp(file.uri)));
+  } catch {
+    // 一次性缓存清理是 best-effort，不覆盖当前分享操作。
   }
 }
 

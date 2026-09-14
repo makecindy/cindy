@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -7,6 +8,20 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { createComputerMcpServer } from './server.js';
 import type { ComputerMcpDeps } from '../types.js';
+
+const canLinkFile = (() => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'computer-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 /** Temp session workingDir for path-boundary-constrained tools (recording/replay). */
 async function makeWorkingDir(): Promise<string> {
@@ -54,6 +69,20 @@ async function makeHarness(
 }
 
 describe('createComputerMcpServer', () => {
+  it('halts replay after an unknown action effect even with stop_on_error false', async () => {
+    const root = await makeWorkingDir();
+    const h = await makeHarness({ getStatus: vi.fn(), callTool: vi.fn(async () => ({ effect: 'unverifiable' })) }, {
+      sessionId: 'replay-unknown', getSessionContext: () => ({ sessionId: 'replay-unknown', agentKind: 'test', workingDir: root }),
+    });
+    try {
+      const dir = await writeTrajectory(root, [
+        { tool: 'click', arguments: { pid: 1, window_id: 2, x: 1, y: 2 } },
+        { tool: 'click', arguments: { pid: 1, window_id: 2, x: 3, y: 4 } },
+      ]);
+      const payload = textPayload(await h.client.callTool({ name: 'call_tool', arguments: { name: 'replay_trajectory', args: { dir, stop_on_error: false } } }));
+      expect(payload).toMatchObject({ data: { attempted: 1, succeeded: 0, failed: 1 } });
+    } finally { await h.cleanup(); await fs.rm(root, { recursive: true, force: true }); }
+  });
   it('lists desktop computer-use tools', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),
@@ -79,6 +108,7 @@ describe('createComputerMcpServer', () => {
     expect(payload.tools.map((tool) => tool.name)).toContain('replay_trajectory');
     expect(payload.tools.map((tool) => tool.name)).toContain('type_text');
     const listWindows = payload.tools.find((tool) => tool.name === 'list_windows');
+    const typeText = payload.tools.find((tool) => tool.name === 'type_text');
     expect(listWindows?.inputSchema?.properties).toHaveProperty('query');
     expect(listWindows?.inputSchema?.properties).toHaveProperty('workspace_root');
     expect(listWindows?.inputSchema?.properties).toHaveProperty('process_name');
@@ -86,7 +116,7 @@ describe('createComputerMcpServer', () => {
     expect(listWindows?.description).toContain('{"process_name":"Simulator"}');
     expect(payload.workflow).toContain('{"process_name":"Simulator"}');
     expect(payload.tools.find((tool) => tool.name === 'get_window_state')?.description)
-      .toContain('{"capture_mode":"vision"}');
+      .toContain('include_screenshot:false');
     expect(payload.tools.find((tool) => tool.name === 'click')?.description)
       .toContain('Always include pid');
     expect(payload.tools.find((tool) => tool.name === 'launch_app')?.description)
@@ -95,8 +125,9 @@ describe('createComputerMcpServer', () => {
       .not.toHaveProperty('use_external_simulator');
     expect(payload.tools.find((tool) => tool.name === 'hotkey')?.inputSchema?.properties)
       .not.toHaveProperty('use_external_ios_workflow');
+    expect(typeText?.inputSchema?.properties).toHaveProperty('delivery_mode');
     expect(payload.workflow).toContain('always for coordinates');
-    expect(payload.workflow).toContain('{"capture_mode":"vision"}');
+    expect(payload.workflow).toContain('include_screenshot:false');
     await h.cleanup();
   });
 
@@ -176,7 +207,7 @@ describe('createComputerMcpServer', () => {
     })) as { ok: boolean };
 
     expect(payload.ok).toBe(true);
-    expect(deps.callTool).toHaveBeenCalledWith('get_accessibility_tree', {});
+    expect(deps.callTool).toHaveBeenCalledWith('get_accessibility_tree', {}, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -205,7 +236,7 @@ describe('createComputerMcpServer', () => {
       workspace_root: '/repo',
       process_name: 'Electron',
       session: 'agent-session-1',
-    }, { sessionId: 'agent-session-1' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'agent-session-1' });
     await h.cleanup();
   });
 
@@ -228,7 +259,7 @@ describe('createComputerMcpServer', () => {
     expect(deps.callTool).toHaveBeenCalledWith('list_windows', {
       process_name: 'Simulator',
       session: 'agent-session-1',
-    }, { sessionId: 'agent-session-1' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'agent-session-1' });
     await h.cleanup();
   });
 
@@ -250,7 +281,7 @@ describe('createComputerMcpServer', () => {
     expect(payload.ok).toBe(true);
     expect(deps.callTool).toHaveBeenCalledWith('list_windows', {
       process_name: 'Simulator',
-    });
+    }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -303,7 +334,7 @@ describe('createComputerMcpServer', () => {
       window_id: 7,
       capture_mode: 'vision',
       session: 'agent-session-1',
-    }, { sessionId: 'agent-session-1' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'agent-session-1' });
     await h.cleanup();
   });
 
@@ -327,7 +358,7 @@ describe('createComputerMcpServer', () => {
       pid: 123,
       window_id: 7,
       capture_mode: 'vision',
-    });
+    }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -409,6 +440,30 @@ describe('createComputerMcpServer', () => {
     await h.cleanup();
   });
 
+  it('forwards an explicit type_text delivery mode to cua-driver', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const h = await makeHarness(deps);
+
+    const result = await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'type_text',
+        args: { pid: 123, text: 'hello', delivery_mode: 'foreground' },
+      },
+    });
+
+    expect(textPayload(result)).toMatchObject({ ok: true });
+    expect(deps.callTool).toHaveBeenCalledWith('type_text', {
+      pid: 123,
+      text: 'hello',
+      delivery_mode: 'foreground',
+    }, { signal: expect.any(AbortSignal) });
+    await h.cleanup();
+  });
+
   it('dispatches zoom with cua-driver 0.5 region bounds', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),
@@ -431,7 +486,7 @@ describe('createComputerMcpServer', () => {
       y1: 20,
       x2: 110,
       y2: 120,
-    });
+    }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -461,7 +516,7 @@ describe('createComputerMcpServer', () => {
       creates_new_application_instance: true,
       electron_debugging_port: 9222,
       additional_arguments: ['--flag'],
-    });
+    }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -483,7 +538,7 @@ describe('createComputerMcpServer', () => {
     expect(payload.ok).toBe(true);
     expect(deps.callTool).toHaveBeenCalledWith('launch_app', {
       name: 'Simulator',
-    });
+    }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -511,7 +566,7 @@ describe('createComputerMcpServer', () => {
       name: 'Xcode',
       bundle_id: 'com.apple.dt.Xcode',
       urls: ['file:///repo/App.xcworkspace'],
-    });
+    }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -539,8 +594,7 @@ describe('createComputerMcpServer', () => {
       expect(deps.callTool).toHaveBeenCalledWith(
         name,
         { ...args, session: 'agent-session-1' },
-        { sessionId: 'agent-session-1' },
-      );
+        { signal: expect.any(AbortSignal), sessionId: 'agent-session-1' });
       await h.cleanup();
     },
   );
@@ -615,7 +669,7 @@ describe('createComputerMcpServer', () => {
       window_id: 7,
       element_index: 2,
       value: 'Option',
-    });
+    }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -662,7 +716,7 @@ describe('createComputerMcpServer', () => {
       direction: 'down',
       amount: 3,
       by: 'page',
-    });
+    }, { signal: expect.any(AbortSignal) });
     await h.cleanup();
   });
 
@@ -688,7 +742,7 @@ describe('createComputerMcpServer', () => {
       x: 10,
       y: 20,
       session: 'agent-session-1',
-    }, { sessionId: 'agent-session-1' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'agent-session-1' });
     await h.cleanup();
   });
 
@@ -730,14 +784,14 @@ describe('createComputerMcpServer', () => {
       x: 10,
       y: 20,
       session: 'dynamic-session-1',
-    }, { sessionId: 'dynamic-session-1', agentKind: 'codex' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'dynamic-session-1', agentKind: 'codex' });
     expect(deps.callTool).toHaveBeenNthCalledWith(2, 'click', {
       pid: 123,
       window_id: 7,
       x: 11,
       y: 21,
       session: 'dynamic-session-2',
-    }, { sessionId: 'dynamic-session-2', agentKind: 'codex' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'dynamic-session-2', agentKind: 'codex' });
     await h.cleanup();
   });
 
@@ -762,7 +816,7 @@ describe('createComputerMcpServer', () => {
       y: 20,
       cursor_id: 'agent-session-1',
       session: 'agent-session-1',
-    }, { sessionId: 'agent-session-1' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'agent-session-1' });
     await h.cleanup();
   });
 
@@ -784,7 +838,7 @@ describe('createComputerMcpServer', () => {
     expect(payload.ok).toBe(true);
     expect(deps.callTool).toHaveBeenCalledWith('get_agent_cursor_state', {
       cursor_id: 'agent-session-1',
-    }, { sessionId: 'agent-session-1' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'agent-session-1' });
     await h.cleanup();
   });
 
@@ -817,7 +871,7 @@ describe('createComputerMcpServer', () => {
       output_dir: path.join(root, 'rec'),
       record_video: true,
       session: 'recording-session',
-    }, { sessionId: 'recording-session', agentKind: 'claude-code' });
+    }, { signal: expect.any(AbortSignal), sessionId: 'recording-session', agentKind: 'claude-code' });
     await h.cleanup();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -951,8 +1005,7 @@ describe('createComputerMcpServer', () => {
     expect(deps.callTool).toHaveBeenCalledWith(
       'click',
       { pid: 123, window_id: 7, x: 10, y: 20 },
-      { agentKind: 'claude-code' },
-    );
+      { signal: expect.any(AbortSignal), agentKind: 'claude-code' });
     expect(deps.callTool).not.toHaveBeenCalledWith(
       'replay_trajectory',
       expect.anything(),
@@ -962,7 +1015,7 @@ describe('createComputerMcpServer', () => {
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'replays inside a workingDir reached through a symbolic link',
     async () => {
       const deps: ComputerMcpDeps = {
@@ -973,7 +1026,11 @@ describe('createComputerMcpServer', () => {
       const realWorkingDir = path.join(container, 'real-workspace');
       const linkedWorkingDir = path.join(container, 'linked-workspace');
       await fs.mkdir(realWorkingDir);
-      await fs.symlink(realWorkingDir, linkedWorkingDir, 'dir');
+      await fs.symlink(
+        realWorkingDir,
+        linkedWorkingDir,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
       await writeTrajectory(realWorkingDir, [
         {
           tool: 'get_window_state',
@@ -1007,8 +1064,7 @@ describe('createComputerMcpServer', () => {
           window_id: 1,
           screenshot_out_file: path.join(realWorkingDir, 'screens', 'state.png'),
         },
-        { agentKind: 'claude-code' },
-      );
+        { signal: expect.any(AbortSignal), agentKind: 'claude-code' });
       await h.cleanup();
       await fs.rm(container, { recursive: true, force: true });
     },
@@ -1044,13 +1100,13 @@ describe('createComputerMcpServer', () => {
       1,
       'launch_app',
       { name: 'Simulator' },
-      { agentKind: 'claude-code' },
+      { signal: expect.any(AbortSignal), agentKind: 'claude-code' },
     );
     expect(deps.callTool).toHaveBeenNthCalledWith(
       2,
       'click',
       { pid: 202, window_id: 2, x: 30, y: 40 },
-      { agentKind: 'claude-code' },
+      { signal: expect.any(AbortSignal), agentKind: 'claude-code' },
     );
     await h.cleanup();
     await fs.rm(root, { recursive: true, force: true });
@@ -1090,14 +1146,13 @@ describe('createComputerMcpServer', () => {
     expect(callTool).toHaveBeenCalledWith(
       'type_text',
       { pid: 616, text: 'original text' },
-      { agentKind: 'claude-code' },
-    );
+      { signal: expect.any(AbortSignal), agentKind: 'claude-code' });
     expect(callTool).not.toHaveBeenCalledWith('launch_app', expect.anything());
     await h.cleanup();
     await fs.rm(root, { recursive: true, force: true });
   });
 
-  it.skipIf(process.platform === 'win32')(
+  it(
     'rejects a recorded turn that escapes through a symlink',
     async () => {
       const deps: ComputerMcpDeps = {
@@ -1112,7 +1167,11 @@ describe('createComputerMcpServer', () => {
         JSON.stringify({ tool: 'get_screen_size', arguments: {} }),
         'utf8',
       );
-      await fs.symlink(outside, path.join(root, 'rec', 'turn-00001'), 'dir');
+      await fs.symlink(
+        outside,
+        path.join(root, 'rec', 'turn-00001'),
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
       const h = await makeHarness(deps, {
         getSessionContext: () => ({
           agentKind: 'claude-code',
@@ -1140,7 +1199,7 @@ describe('createComputerMcpServer', () => {
     },
   );
 
-  it.skipIf(process.platform === 'win32')(
+  it.skipIf(!canLinkFile)(
     'rejects a symbolic-link action file even when its target stays in the task',
     async () => {
       const deps: ComputerMcpDeps = {

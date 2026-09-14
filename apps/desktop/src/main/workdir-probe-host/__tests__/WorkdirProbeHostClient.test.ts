@@ -47,6 +47,25 @@ afterEach(() => {
 });
 
 describe('WorkdirProbeHostClient', () => {
+  it.each(['mkdir', 'realpath', 'similar'] as const)('isolates %s from stat and ignores its late timeout response', async (kind) => {
+    vi.useFakeTimers();
+    const { client, children } = createHarness({ maxWorkers: 1 });
+    const operation = client.probe('/share/a', '/share/a', 50, kind);
+    const failure = operation.catch((error) => error);
+    const stat = client.probe('/share/a', '/share/a', 150);
+    expect(children[0].posted[0].kind).toBe(kind);
+    await vi.advanceTimersByTimeAsync(50);
+    await expect(failure).resolves.toMatchObject({ code: 'WORKDIR_PROBE_TIMEOUT' });
+    expect(children[0].kill).toHaveBeenCalledOnce();
+    children[0].respond();
+    expect(children).toHaveLength(1);
+    children[0].emit('exit', 0);
+    expect(children[1].posted[0].kind).toBe('probe');
+    children[1].respond();
+    await expect(stat).resolves.toEqual({ ok: true, isDirectory: true });
+    client.dispose();
+  });
+
   it('single-flights equivalent paths', async () => {
     const { client, children } = createHarness();
 

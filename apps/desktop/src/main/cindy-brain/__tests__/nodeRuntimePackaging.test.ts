@@ -21,6 +21,29 @@ describe('Node runtime packaging contract', () => {
     expect(forge).toContain('[FuseV1Options.OnlyLoadAppFromAsar]: true');
   });
 
+  it('Pi Subagent 与正式包的 RunAsNode=false 契约使用同一受支持入口', () => {
+    const forge = fs.readFileSync(path.join(desktopRoot, 'forge.config.ts'), 'utf8');
+    const piHost = fs.readFileSync(path.join(desktopRoot, 'src/main/maker-host/pi-host.ts'), 'utf8');
+    const runtime = fs.readFileSync(path.join(desktopRoot, 'src/main/cindy-brain/piSubagentRunnerHost.ts'), 'utf8');
+    const repoRoot = path.resolve(desktopRoot, '..', '..');
+    const subagentSource = fs.readFileSync(
+      path.join(repoRoot, 'packages/maker-core/src/agents/pi/cindy-subagent-source.ts'),
+      'utf8',
+    );
+    const piAgent = fs.readFileSync(
+      path.join(repoRoot, 'packages/maker-core/src/agents/pi/index.ts'),
+      'utf8',
+    );
+
+    expect(forge).toContain("entry: 'src/main/cindy-brain/piSubagentRunnerProcess.ts'");
+    expect(forge).toContain('[FuseV1Options.RunAsNode]: false');
+    expect(runtime).toContain('utilityProcess.fork');
+    expect(piHost).toContain('spawnPiSubagentRunner,');
+    expect(subagentSource).not.toContain('ELECTRON_RUN_AS_NODE');
+    expect(subagentSource).not.toContain('CINDY_PI_SUBAGENT_NODE');
+    expect(piAgent).not.toContain('[CINDY_SUBAGENT_ENV.nodeExecutable]');
+  });
+
   it('scaffold worker is parentPort-only and does not reopen RunAsNode', () => {
     const worker = fs.readFileSync(
       path.join(desktopRoot, 'src/main/cindy-brain/forgeScaffoldWorkerProcess.ts'),
@@ -51,6 +74,40 @@ describe('Node runtime packaging contract', () => {
     expect(worker).toContain('requireFromWorker(entryPath)');
     expect(broker).toContain('utilityProcess.fork');
     expect(broker).not.toContain("ELECTRON_RUN_AS_NODE: '1'");
+  });
+
+  it('启动上下文只做每次 attempt 粗粒度快照，不注册窗口/电源时间线', () => {
+    const bootstrap = fs.readFileSync(
+      path.join(desktopRoot, 'src/main/bootstrap-electron.ts'),
+      'utf8',
+    );
+    const start = bootstrap.indexOf('setGhostNodeRuntimeStartAttemptContextReader(() => {');
+    const end = bootstrap.indexOf('installWindowHiddenBroadcast(mainWindow);', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const contextReader = bootstrap.slice(start, end);
+    for (const state of [
+      'absent',
+      'hidden',
+      'minimized',
+      'visible-unfocused',
+      'focused',
+      'unknown',
+    ]) {
+      expect(contextReader).toContain(`'${state}'`);
+    }
+    expect(contextReader).toContain('powerMonitor.getSystemIdleState(60)');
+    expect(contextReader).toContain('observedScreenState');
+    expect(contextReader).not.toMatch(
+      /\.on\(|getSystemIdleTime|systemIdleSec|msSinceVisibility|title|URL|bounds|windowHidden/,
+    );
+  });
+
+  it('appRunId 在 cindy-brain main singleton 边界生成一次并注入每代 broker', () => {
+    const brain = fs.readFileSync(path.join(desktopRoot, 'src/main/cindy-brain/index.ts'), 'utf8');
+    expect(brain).toContain('const nodeRuntimeAppRunId = (() => {');
+    expect(brain).toContain("randomUUID().replaceAll('-', '')");
+    expect(brain).toContain('appRunId: nodeRuntimeAppRunId');
   });
 
   it('代启子进程(childSpawn)仍走同一 utilityProcess 通道,worker 侧只暴露窄接口', () => {

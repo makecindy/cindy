@@ -33,6 +33,11 @@ describe('isContextOverflowErrorMessage', () => {
       ),
     ).toBe(true);
     expect(isContextOverflowErrorMessage('{"code": "context_length_exceeded"}')).toBe(true);
+    expect(
+      isContextOverflowErrorMessage(
+        'API Error: 400 litellm.BadRequestError: XaiException - {"code":"invalid-argument","error":"This model\'s maximum prompt length is 500000 but the request contains 637815 tokens."}',
+      ),
+    ).toBe(true);
   });
 
   it('does NOT confuse rate, output, or tool argument limits with context overflow', () => {

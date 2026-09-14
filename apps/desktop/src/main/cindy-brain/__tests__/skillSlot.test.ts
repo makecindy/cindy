@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { app } from 'electron';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -32,9 +33,15 @@ beforeEach(async () => {
   approvalStateRoot = path.join(workDir, 'owners', 'aaa', 'cindy-brain-install-state');
   await fs.promises.mkdir(homeDir, { recursive: true });
   await fs.promises.mkdir(brainRoot, { recursive: true });
+  // Keep real mutation leases and settings inside this fixture too. The shared
+  // Electron stub root can retain another test/worktree's pending Skill lease.
+  const getPath = app.getPath.bind(app);
+  vi.spyOn(app, 'getPath').mockImplementation((name) =>
+    name === 'appData' || name === 'userData' ? workDir : getPath(name));
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await fs.promises.rm(workDir, { recursive: true, force: true });
 });
 
@@ -70,7 +77,6 @@ function ghost(
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['skill'],
     skill: {
       items: skills.map((s) => ({ ...s, description: s.description ?? '说明' })),
     },
@@ -662,13 +668,13 @@ describe('skillSlot · 全链路(打包 → 装入 → 对账 → 双端可见)'
     await write(
       'ghost.json',
       JSON.stringify({
-        schemaVersion: 2,
+        schemaVersion: 3,
+        minCindyVersion: '0.1.61',
         id: 'e2e-ghost',
         name: '全链路演示',
         version: '1.0.0',
         kind: 'chip',
         entry: 'main.js',
-        slots: ['tool', 'skill'],
         tools: [{ name: 'do_thing', description: '做点事' }],
         skill: { items: [{ dir: 'skills/demo', name: 'demo', description: '演示技能' }] },
       }),

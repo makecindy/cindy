@@ -515,9 +515,9 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(bridgeOnly, 'openai', 'gpt-legacy')).toBe('claude-code');
   });
 
-  it('xai 双 root → claude-code(piRoot 也是 cc)', () => {
-    expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('claude-code');
-    expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('claude-code');
+  it('xai 未声明原生协议和专属底座时默认 Pi', () => {
+    expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('pi');
+    expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('pi');
   });
 
   it('xd 网关:按家族推荐 —— gpt 系(含 codex/ 折扣)→ codex,claude 系 → claude-code', () => {
@@ -558,7 +558,7 @@ describe('recommendedAgentForModel', () => {
     );
   });
 
-  it('user provider:按配置的 runtime 取,多个时 cc > codex > pi', () => {
+  it('user provider:缺少推荐依据时默认 Pi，仍受可用 runtime 限制', () => {
     const byom = (agents: AgentKind[]): ProviderView[] => [
       view({
         id: 'byom',
@@ -570,17 +570,39 @@ describe('recommendedAgentForModel', () => {
       }),
     ];
     expect(recommendedAgentForModel(byom(['claude-code', 'codex', 'pi']), 'byom', 'my-model')).toBe(
+      'pi',
+    );
+    expect(recommendedAgentForModel(byom(['codex', 'pi']), 'byom', 'my-model')).toBe('pi');
+    expect(recommendedAgentForModel(byom(['claude-code', 'codex']), 'byom', 'my-model')).toBe(
       'claude-code',
     );
-    expect(recommendedAgentForModel(byom(['codex', 'pi']), 'byom', 'my-model')).toBe('codex');
     expect(recommendedAgentForModel(byom(['pi']), 'byom', 'my-model')).toBe('pi');
   });
 
-  it('pi 永不作为推荐(除非唯一候选)', () => {
+  it.each([
+    ['openai-responses', 'codex'],
+    ['anthropic-messages', 'claude-code'],
+  ] as const)('本地模型声明 %s 时保留 %s 推荐', (nativeApi, expected) => {
+    const local = view({
+      id: 'cindy-local-ollama',
+      source: 'user',
+      models: {
+        'claude-code': [m('local-model', { nativeApi })],
+        codex: [m('local-model', { nativeApi })],
+        pi: [m('local-model', { nativeApi, piApi: nativeApi })],
+      },
+    });
+    expect(recommendedAgentForModel([local], local.id, 'local-model')).toBe(expected);
+  });
+
+  it('未配置推荐依据的模型默认 Pi', () => {
     const codexAndPi = [
-      view({ id: 'unknown-vendor', models: { codex: [m('vendor-x')], pi: [m('vendor-x')] } }),
+      view({
+        id: 'unknown-vendor',
+        models: { codex: [m('vendor-x')], pi: [m('vendor-x')] },
+      }),
     ];
-    expect(recommendedAgentForModel(codexAndPi, 'unknown-vendor', 'vendor-x')).toBe('codex');
+    expect(recommendedAgentForModel(codexAndPi, 'unknown-vendor', 'vendor-x')).toBe('pi');
   });
 
   it('无候选时返回 null,不编一个不可路由的推荐', () => {
@@ -602,6 +624,9 @@ describe('resolveAgentCapability', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')).toEqual({
       agent: 'claude-code',
       wireModelId: 'claude-opus-5',
+      protocolMode: 'matching',
+      nativeApi: 'anthropic-messages',
+      outboundApi: 'anthropic-messages',
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',
@@ -671,6 +696,33 @@ describe('resolveAgentCapability', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'gpt-5.5', 'codex')).toBeNull();
     expect(resolveAgentCapability(providers, 'nope', 'gpt-5.5', 'codex')).toBeNull();
   });
+
+  it('efforts 防御性规范升序:任何来源的降序/乱序数组经统一选择路径吐升序(Grok 4.5 反轴回归)', () => {
+    // efforts 是外部输入(服务端目录 / 三家 discovery / 用户 override),而消费端(滑杆按
+    // 下标画轴、efforts[0]=最低 / at(-1)=最高)契约都是升序 —— capabilityOf 的这道排序是
+    // 「任一来源漏排就反轴」整类缺陷的单点防线,必须直接锁在共享路径上,不能只靠 xAI
+    // 解析层 / 目录合并层各自的测试(那两层删了排序,这里要能红)。fixture 刻意用非 xAI
+    // 的网关来源。
+    const p = view({
+      id: 'xd',
+      authStrategy: 'gateway-key',
+      models: {
+        'claude-code': [
+          m('desc-order', { efforts: ['high', 'medium', 'low'], defaultEffort: 'high' }),
+          m('shuffled', { efforts: ['xhigh', 'low', 'high'], defaultEffort: null }),
+        ],
+      },
+    });
+    const cap = (id: string) => resolveAgentCapability([p], 'xd', id, 'claude-code');
+    expect(cap('desc-order')?.efforts).toEqual(['low', 'medium', 'high']);
+    // 排序只动表示,不动语义:目录声明的合法默认档原样保留(低→高轴上 high 落在右端)。
+    expect(cap('desc-order')?.defaultEffort).toBe('high');
+    expect(cap('desc-order')?.defaultEffortSource).toBe('catalog');
+    expect(cap('shuffled')?.efforts).toEqual(['low', 'high', 'xhigh']);
+    // 默认档回落判据按集合走(不含 medium → none),与顺序无关。
+    expect(cap('shuffled')?.defaultEffort).toBeNull();
+    expect(cap('shuffled')?.defaultEffortSource).toBe('none');
+  });
 });
 
 // ── unifiedModelEntries ───────────────────────────────────────────────────────
@@ -692,6 +744,20 @@ describe('unifiedModelEntries', () => {
     expect(row.capabilities.pi?.wireModelId).toBe('chatgpt/gpt-5.6-luna');
     // 展示元数据取推荐引擎(codex root)那条。
     expect(row.displayName).toBe('GPT-5.6-Luna');
+  });
+
+  it('行能力的 efforts 同样规范升序(user provider 降序数组 —— capabilityOf 的第二个入口)', () => {
+    // capabilityOf 只有两个调用方:resolveAgentCapability(浮层实时能力)与本函数的行合成。
+    // 两条路径都必须直接锁住排序 —— 只锁一条,另一条把排序改错时不会被发现。
+    const byom = view({
+      id: 'custom:mine',
+      source: 'user',
+      models: { codex: [m('my-model', { efforts: ['high', 'low'], defaultEffort: 'low' })] },
+    });
+    const entries = unifiedModelEntries({ providers: [byom], isVisible: alwaysVisible });
+    const row = entries.find((entry) => entry.modelId === 'my-model');
+    expect(row?.capabilities.codex?.efforts).toEqual(['low', 'high']);
+    expect(row?.capabilities.codex?.defaultEffort).toBe('low');
   });
 
   it('每个候选都有 wire id,且 wire id 必在该引擎目录里真实存在', () => {
@@ -767,7 +833,7 @@ describe('unifiedModelEntries', () => {
     const entries = unifiedModelEntries({ providers: [byom], isVisible: alwaysVisible });
     expect(entries).toHaveLength(1);
     expect(entries[0].candidates).toEqual(['codex', 'pi']);
-    expect(entries[0].recommended).toBe('codex');
+    expect(entries[0].recommended).toBe('pi');
     // BYOM 没有 root 概念 → 无主场(null),在任何引擎视图都不降级。
     expect(entries[0].nativeAgent).toBeNull();
   });
@@ -879,6 +945,32 @@ describe('unifiedModelEntries', () => {
     expect(find(entries, 'zhipu', 'glm-5.2[1m]')?.candidates).toEqual(['claude-code']);
     expect(find(entries, 'zhipu', 'glm-5.2[1m]')?.capabilities.codex).toBeUndefined();
     expect(find(entries, 'zhipu', 'glm-5.2')?.candidates).toEqual(['claude-code', 'codex']);
+  });
+
+  it('付费模型仅在显式展示模式下进入联合列表，并保留锁定状态', () => {
+    const gated = view({
+      id: 'xd',
+      models: {
+        'claude-code': [
+          m('free-model', { availability: 'available' }),
+          m('paid-model', { availability: 'requires_payment' }),
+        ],
+      },
+    });
+
+    expect(
+      unifiedModelEntries({ providers: [gated], isVisible: alwaysVisible }).map(
+        (entry) => entry.modelId,
+      ),
+    ).toEqual(['free-model']);
+
+    const visible = unifiedModelEntries({
+      providers: [gated],
+      isVisible: alwaysVisible,
+      includePaymentRequired: true,
+    });
+    expect(visible.map((entry) => entry.modelId)).toEqual(['free-model', 'paid-model']);
+    expect(find(visible, 'xd', 'paid-model')?.availability).toBe('requires_payment');
   });
 
   it('选中行豁免(keepModel):停用 / retired 的选中条目仍成行,并带上候选与能力', () => {

@@ -56,6 +56,8 @@ packages/*
 !packages/maker-shared/**
 !packages/model-providers
 !packages/model-providers/**
+!packages/model-compat
+!packages/model-compat/**
 !packages/voice-input-core
 !packages/voice-input-core/**
 

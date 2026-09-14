@@ -204,7 +204,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     // legacy /orca 路由(orcaMode)必须先被 `!orcaMode &&` 短路掉,否则它也会去跑项目
     // 策略查询并订阅刷新。
     expect(sessionViewSource).toContain(
-      'const collabPolicyEligible = !orcaMode && collabEntry.eligible;',
+      'const collabPolicyEligible = !orcaMode && !botChatIdentity && collabEntry.eligible;',
     );
     expect(sessionViewSource).toContain('resolveCollabEntryPolicy({');
   });
@@ -255,7 +255,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     );
     // The composer is also temporarily read-only during the bounded effort-runtime
     // preflight, so a pending send cannot clear text entered after its snapshot.
-    expect(chatInputSource).toContain('editor?.setEditable(!composerMutationLocked)');
+    expect(chatInputSource).toContain('editor?.setEditable(!composerTypingLocked)');
   });
 
   it('does not block collaboration tab opening on worker SDK bootstrap', () => {
@@ -364,7 +364,23 @@ describe('OrcaWorkflowRoute source invariants', () => {
 
   it('sets passive collaboration sidebar collapsed state during the route layout declaration', () => {
     expect(sessionViewSource).toContain('useLayoutEffect(() => {');
-    expect(sessionViewSource).toContain('declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord });');
+    expect(sessionViewSource).toContain(
+      'declare(sessionId, { initialCollapsed, writeInitialCollapsedRecord, subagentsAvailable });',
+    );
+    // The declaration is multi-line since the Subagents entry also follows
+    // durable Pi runs (a task switched off Pi keeps the tab while its runs
+    // exist), so the attribute and its expression are pinned separately.
+    expect(sessionViewSource).toContain('subagentsAvailable={');
+    expect(sessionViewSource).toContain(
+      "(session.agentKind === 'pi' && !session.remoteHostId) || durablePiRunsPresent",
+    );
+    // The harness alone must not declare the entry for an SSH-hosted task:
+    // `agents/pi` disables the durable Subagent extension whenever
+    // `remoteHostId` is set, so such a task can never produce a run and the tab
+    // would stay empty while its controls addressed the local filesystem.
+    expect(sessionViewSource).not.toContain(
+      "session ? session.agentKind === 'pi' || durablePiRunsPresent : undefined",
+    );
     expect(mainLayoutSource).toContain('const declareRightSidebarSessionId = useCallback');
     expect(mainLayoutSource).toContain('const nextCollapsed = hasInitialCollapsed');
     expect(mainLayoutSource).toContain('setIsRightSidebarCollapsed(nextCollapsed);');
@@ -437,7 +453,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
       /sidebarPanelHostSessionId=\{\s*ownsRoute \|\| navigationMode === 'split-pane' \? sessionId : undefined\s*\}/,
     );
     expect(sessionViewSource).toContain(
-      'onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}',
+      '!readOnly && canNavigateSession ? handleForkStripEncrypted : undefined',
     );
   });
 
@@ -447,6 +463,11 @@ describe('OrcaWorkflowRoute source invariants', () => {
     expect(mainLayoutSource).toContain("routeSidebarCommand({ type: 'open-terminal', sessionId })");
     expect(mainLayoutSource).toContain('const windowState = getRsbWindowUiState();');
     expect(mainLayoutSource).toContain('const currentSessionId = rightSidebarSessionIdRef.current;');
+    expect(mainLayoutSource).toContain('sessionId: targetSessionId');
+    expect(mainLayoutSource).toContain(
+      "if (visibility === 'open' && opts.userInitiated !== false)",
+    );
+    expect(mainLayoutSource).toContain('navigateToSessionRef.current?.(targetSessionId)');
   });
 
   it('passes Orca lead vendor options when sending from the plain lead route', () => {

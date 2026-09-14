@@ -15,6 +15,7 @@ import { useEffect, useState } from 'react';
 
 import { CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2 } from '@cindy/device-link';
 import type { ProviderView } from '@cindy/model-providers';
+import { defaultEffortForCapabilities } from '@cindy/model-providers';
 
 import { createLogger } from '@/lib/logger';
 import { extractIpcError } from '@/utils/ipcError';
@@ -64,7 +65,8 @@ function isProviderWireProtocol(value: unknown): boolean {
     value === undefined ||
     value === 'anthropic-messages' ||
     value === 'openai-responses' ||
-    value === 'openai-chat'
+    value === 'openai-chat' ||
+    value === 'google-generative-ai'
   );
 }
 
@@ -81,7 +83,7 @@ function isProviderModel(value: unknown): boolean {
     value.contextWindow > 0 &&
     Array.isArray(efforts) &&
     efforts.every((effort) => typeof effort === 'string') &&
-    (defaultEffort === null ||
+    (defaultEffort === undefined || defaultEffort === null ||
       (typeof defaultEffort === 'string' && efforts.includes(defaultEffort))) &&
     isOptionalBoolean(value.disabled) &&
     isOptionalBoolean(value.supportsFastMode) &&
@@ -104,7 +106,11 @@ function sanitizeProviderModels(
   const sanitized: Record<string, unknown[]> = {};
   for (const [agent, entries] of Object.entries(models)) {
     if (!Array.isArray(entries)) return null;
-    sanitized[agent] = entries.filter(isProviderModel);
+    sanitized[agent] = entries.filter(isProviderModel).map((entry: Record<string, unknown>) =>
+      entry.defaultEffort === undefined
+        ? { ...entry, defaultEffort: defaultEffortForCapabilities(entry.efforts as string[]) }
+        : entry,
+    );
   }
   return sanitized;
 }
@@ -204,13 +210,20 @@ async function fetchDeviceProviders(deviceId: string): Promise<DeviceProvidersPa
 
   const dl = getDeviceLink();
   if (!dl) throw new Error('device-link IPC not available');
-  const p = (
-    dl.invoke(deviceId, 'maker:provider:list', [
-      {
-        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-      },
-    ]) as Promise<DeviceProvidersPayload>
-  )
+  const request = async (): Promise<DeviceProvidersPayload> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await dl.invoke(deviceId, 'maker:provider:list', [
+          { capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2] },
+        ]) as DeviceProvidersPayload;
+      } catch (error) {
+        if (extractIpcError(error)?.code !== 'MODEL_VISIBILITY_NOT_READY' || attempt >= 2 || !isCurrent()) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 250 * 2 ** attempt));
+        if (!isCurrent()) throw error;
+      }
+    }
+  };
+  const p = request()
     .then((res) => {
       const payload = parseDeviceProvidersPayload(res);
       if (isCurrent()) {

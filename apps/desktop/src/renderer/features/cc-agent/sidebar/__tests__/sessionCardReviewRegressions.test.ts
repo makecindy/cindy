@@ -7,6 +7,7 @@ const sidebarDir = resolve(__dirname, '..');
 const sessionCardSource = readFileSync(resolve(sidebarDir, 'SessionCard.tsx'), 'utf8');
 const sessionEntryListSource = readFileSync(resolve(sidebarDir, 'SessionEntryList.tsx'), 'utf8');
 const sessionItemSource = readFileSync(resolve(sidebarDir, 'SessionItem.tsx'), 'utf8');
+const sessionOrdinalBadgeSource = readFileSync(resolve(sidebarDir, 'sessionOrdinalBadges.tsx'), 'utf8');
 const railNavSource = readFileSync(resolve(sidebarDir, 'RailNav.tsx'), 'utf8');
 const sessionRenameInputSource = readFileSync(
   resolve(sidebarDir, '..', 'SessionRenameInput.tsx'),
@@ -43,7 +44,7 @@ describe('SessionCard review regressions', () => {
 
   it('keeps awaiting text in list mode previews', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
     expect(sessionCardSource).toContain('{listPreview}');
   });
@@ -143,8 +144,9 @@ describe('SessionCard review regressions', () => {
 
   it('keeps card preview line budgets stable across content sources', () => {
     expect(sessionCardSource).toContain(
-      'const cardPreviewLineClamp = session.summary ? 3 : isRunning ? 2 : isAutomationGenerated ? 1 : 2',
+      "const usesPinnedCardSummary = variant === 'card' && isPinned && Boolean(session.summary)",
     );
+    expect(sessionCardSource).toContain('const cardPreviewLineClamp = usesPinnedCardSummary');
     expect(sessionCardSource).toContain('style={{ WebkitLineClamp: cardPreviewLineClamp }}');
   });
 
@@ -195,6 +197,7 @@ describe('SessionCard review regressions', () => {
     );
     expect(sessionItemSource).toContain('invisible col-start-1 row-start-1 inline-flex');
     expect(sessionItemSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
+    expect(sessionOrdinalBadgeSource).toContain('rounded-[4px]');
     expect(sessionCardSource).toContain('invisible col-start-1 row-start-1 inline-flex');
     expect(sessionCardSource).toContain('<SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />');
     expect(sessionItemSource).not.toContain(
@@ -234,11 +237,11 @@ describe('SessionCard review regressions', () => {
 
   it('keeps running card previews stable instead of streaming compact activity text', () => {
     expect(sessionCardSource).toContain(
-      'const listPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const listPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
-    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? summaryPreview');
+    expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? bodyPreview');
     expect(sessionCardSource).not.toContain(
-      'const cardPreview = awaitingText ?? runningDetail ?? summaryPreview',
+      'const cardPreview = awaitingText ?? runningDetail ?? bodyPreview',
     );
   });
 

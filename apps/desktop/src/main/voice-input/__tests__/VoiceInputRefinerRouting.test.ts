@@ -38,7 +38,7 @@ describe('VoiceInputRefinerRouting', () => {
     resetVoiceInputProviderHealthForTests();
   });
 
-  it('uses Kimi as the second built-in refiner when Codex is ready', () => {
+  it('keeps configured order when Codex is ready', () => {
     expect(orderVoiceInputRefinerChainForRuntime(defaultSelection, readiness([
       'codex-gpt-5.4-mini',
       'litellm-gpt-5.4-mini',
@@ -46,22 +46,22 @@ describe('VoiceInputRefinerRouting', () => {
       'litellm-deepseek-v4-flash',
     ]))).toEqual([
       'codex-gpt-5.4-mini',
-      'litellm-kimi-k2.6',
       'litellm-gpt-5.4-mini',
+      'litellm-kimi-k2.6',
       'litellm-deepseek-v4-flash',
     ]);
   });
 
-  it('uses LiteLLM GPT first when Codex is unavailable', () => {
+  it('keeps configured order when Codex is unavailable', () => {
     expect(orderVoiceInputRefinerChainForRuntime(defaultSelection, readiness([
       'litellm-gpt-5.4-mini',
       'litellm-kimi-k2.6',
       'litellm-deepseek-v4-flash',
     ]))).toEqual([
+      'codex-gpt-5.4-mini',
       'litellm-gpt-5.4-mini',
       'litellm-kimi-k2.6',
       'litellm-deepseek-v4-flash',
-      'codex-gpt-5.4-mini',
     ]);
   });
 
@@ -102,7 +102,7 @@ describe('VoiceInputRefinerRouting', () => {
     ]);
   });
 
-  it('applies cooldown after the built-in readiness policy', () => {
+  it('applies health cooldown without Codex readiness reorder', () => {
     markVoiceInputProviderFailure('refiner', 'codex-gpt-5.4-mini', 'timeout');
 
     expect(orderVoiceInputRefinerChainForRuntime(defaultSelection, readiness([
@@ -111,8 +111,8 @@ describe('VoiceInputRefinerRouting', () => {
       'litellm-kimi-k2.6',
       'litellm-deepseek-v4-flash',
     ]))).toEqual([
-      'litellm-kimi-k2.6',
       'litellm-gpt-5.4-mini',
+      'litellm-kimi-k2.6',
       'litellm-deepseek-v4-flash',
       'codex-gpt-5.4-mini',
     ]);

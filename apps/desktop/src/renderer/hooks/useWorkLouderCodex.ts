@@ -4,6 +4,7 @@ import type {
   WorkLouderCodexSettings,
   WorkLouderCodexSettingsPatch,
   WorkLouderCodexState,
+  WorkLouderModel,
 } from '../../shared/workLouderCodex';
 
 export interface WorkLouderCodexViewState {
@@ -18,6 +19,7 @@ export interface WorkLouderCodexViewState {
 }
 
 export interface WorkLouderCodexOptions {
+  model?: WorkLouderModel;
   /**
    * Poll the device while this view is on screen.
    *
@@ -34,13 +36,14 @@ export interface WorkLouderCodexOptions {
 const CONNECTION_PROBE_MS = 2_000;
 
 export function useWorkLouderCodex(options: WorkLouderCodexOptions = {}): WorkLouderCodexViewState {
-  const { watchConnection = false } = options;
+  const { model = 'codex-micro', watchConnection = false } = options;
   const [state, setState] = useState<WorkLouderCodexState | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<'load' | 'save' | null>(null);
   const mountedRef = useRef(true);
   const mutationIdRef = useRef(0);
+  const inFlightMutationRef = useRef(0);
   const pushVersionRef = useRef(0);
   const confirmedSettingsRef = useRef<WorkLouderCodexSettings | null>(null);
 
@@ -61,9 +64,10 @@ export function useWorkLouderCodex(options: WorkLouderCodexOptions = {}): WorkLo
     try {
       const next = await api.getState();
       if (!mountedRef.current) return;
+      const slice = next[model];
       if (pushVersion === pushVersionRef.current) {
-        confirmedSettingsRef.current = { ...next.settings };
-        setState(next);
+        confirmedSettingsRef.current = { ...slice.settings };
+        setState(slice);
       }
       setError(null);
     } catch {
@@ -71,23 +75,29 @@ export function useWorkLouderCodex(options: WorkLouderCodexOptions = {}): WorkLo
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, []);
+  }, [model]);
 
   useEffect(() => {
     mountedRef.current = true;
     const api = window.electronAPI?.workLouderCodex;
     const unsubscribe = api?.onStateChanged((next) => {
       if (!mountedRef.current) return;
+      const slice = next[model];
       pushVersionRef.current += 1;
-      confirmedSettingsRef.current = { ...next.settings };
-      setState(next);
+      setState((current) => {
+        if (inFlightMutationRef.current !== 0 && current) {
+          return { ...slice, settings: current.settings };
+        }
+        confirmedSettingsRef.current = { ...slice.settings };
+        return slice;
+      });
     });
     void reload();
     return () => {
       mountedRef.current = false;
       unsubscribe?.();
     };
-  }, [reload]);
+  }, [model, reload]);
 
   /**
    * Poll for an unplug while the caller is showing connection state.
@@ -138,6 +148,7 @@ export function useWorkLouderCodex(options: WorkLouderCodexOptions = {}): WorkLo
         return;
       }
       const requestId = ++mutationIdRef.current;
+      inFlightMutationRef.current = requestId;
       const previous = state;
       if (mountedRef.current) {
         setSaving(true);
@@ -147,10 +158,11 @@ export function useWorkLouderCodex(options: WorkLouderCodexOptions = {}): WorkLo
         );
       }
       try {
-        const next = await api.setSettings(patch);
+        const next = await api.setSettings(model, patch);
         if (!mountedRef.current || requestId !== mutationIdRef.current) return;
-        confirmedSettingsRef.current = { ...next.settings };
-        setState(next);
+        const slice = next[model];
+        confirmedSettingsRef.current = { ...slice.settings };
+        setState(slice);
       } catch {
         if (!mountedRef.current || requestId !== mutationIdRef.current) return;
         const rollbackSettings = confirmedSettingsRef.current ?? previous?.settings;
@@ -165,10 +177,11 @@ export function useWorkLouderCodex(options: WorkLouderCodexOptions = {}): WorkLo
         }
         setError('save');
       } finally {
+        if (requestId === mutationIdRef.current) inFlightMutationRef.current = 0;
         if (mountedRef.current && requestId === mutationIdRef.current) setSaving(false);
       }
     },
-    [state],
+    [model, state],
   );
 
   const resetSettings = useCallback(async () => {
@@ -178,21 +191,24 @@ export function useWorkLouderCodex(options: WorkLouderCodexOptions = {}): WorkLo
       return;
     }
     const requestId = ++mutationIdRef.current;
+    inFlightMutationRef.current = requestId;
     if (mountedRef.current) {
       setSaving(true);
       setError(null);
     }
     try {
-      const next = await api.resetSettings();
+      const next = await api.resetSettings(model);
       if (!mountedRef.current || requestId !== mutationIdRef.current) return;
-      confirmedSettingsRef.current = { ...next.settings };
-      setState(next);
+      const slice = next[model];
+      confirmedSettingsRef.current = { ...slice.settings };
+      setState(slice);
     } catch {
       if (mountedRef.current && requestId === mutationIdRef.current) setError('save');
     } finally {
+      if (requestId === mutationIdRef.current) inFlightMutationRef.current = 0;
       if (mountedRef.current && requestId === mutationIdRef.current) setSaving(false);
     }
-  }, []);
+  }, [model]);
 
   const openInputMonitoringSettings = useCallback(async () => {
     try {

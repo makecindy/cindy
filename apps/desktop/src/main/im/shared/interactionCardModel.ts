@@ -11,6 +11,10 @@
  *   - IM 侧渲染 @cindy/im InteractiveCardSpec(按钮 payload 是历史兼容契约);
  *   - hook 侧渲染 slack-hook-protocol 的按钮卡 + buttonId -> 决策映射。
  *
+ * ask 的多题/多选打勾卡(仅支持卡片原地更新的 IM 渠道, 目前飞书)也出自这里:
+ * questions 保留全部问题, 单问字段维持 v1 投影供其余渲染侧, 见
+ * needsAskMultiCard 与 AskQuestionModel。
+ *
  * **渠道差异不在这里统一**(统一是产品决策, 不归本模块): 按钮文案(IM 走 ui 文案包 /
  * hook 走本端硬编码)、卡片标题格式、截断省略号样式、permission 入参摘要上限
  * (hook 600 单行 / IM 800 pretty)都是渲染参数, 由各自渲染侧持有, 本模块只提供
@@ -27,7 +31,7 @@ import type {
 
 // ── 语义常量 ────────────────────────────────────────────────────────────────
 
-/** ask 卡渲染的最大选项数(v1: 单选, 超出部分丢弃)。 */
+/** ask 卡渲染的最大选项数(单选超出部分丢弃; 多题打勾卡每问同上限)。 */
 export const MAX_OPTIONS = 6;
 /** plan 正文截断长度。 */
 export const MAX_PLAN_LEN = 1500;
@@ -41,6 +45,37 @@ export const HOOK_PERMISSION_INPUT_SUMMARY_MAX = 600;
 export const IM_PERMISSION_INPUT_PREVIEW_MAX = 800;
 /** 无选项降级时唯一按钮的文案(两侧一致)。 */
 export const ASK_CONTINUE_LABEL = '继续';
+/**
+ * 把打勾卡勾选结果编成 answers value。
+ *
+ * 多选必须是 JSON 数组字符串(`["A","B"]`), 与 AskUserQuestion 原生 UI
+ * (`encodeMultiSelectAnswer` / `AskUserQuestionPrompt.handleNext`) 以及
+ * Codex `responseFromAskUserAnswers` 一致; 单选仍是裸 label。
+ */
+export function encodeAskOptionAnswers(
+  multiSelect: boolean,
+  labels: readonly string[],
+): string {
+  if (labels.length === 0) return '';
+  return multiSelect ? JSON.stringify(labels) : labels[0]!;
+}
+
+/** 收口卡展示: JSON 数组解成逗号分隔, 多问之间用分号。 */
+export function formatAskAnswersForDisplay(answers: Record<string, string>): string {
+  return Object.values(answers)
+    .map((value) => {
+      try {
+        const parsed = JSON.parse(value) as unknown;
+        if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
+          return parsed.join(', ');
+        }
+      } catch {
+        // 单选是裸 label
+      }
+      return value;
+    })
+    .join('；');
+}
 
 // ── 截断工具 ────────────────────────────────────────────────────────────────
 
@@ -77,6 +112,15 @@ export function buildAskAnswerDecision(
 /** ask 的安全默认: 空 answers(超时 / turn 收口 = "未回答"继续)。 */
 export function buildAskNoAnswerDecision(): InteractionDecision {
   return { kind: 'ask_user_question', answers: {} };
+}
+
+/**
+ * ask 多题/多选打勾卡的提交决策: answers 由全部已答问题合成。
+ * key 仍是问题全文(同 buildAskAnswerDecision 的 SDK 匹配约束); 未作答的
+ * 问题**不写入** key —— 与空 answers 的"未回答"语义一致, agent 会追问。
+ */
+export function buildAskAnswersDecision(answers: Record<string, string>): InteractionDecision {
+  return { kind: 'ask_user_question', answers };
 }
 
 /** permission: 只允许这一次。 */
@@ -159,16 +203,38 @@ interface BaseInteractionModel {
   buildDefaultDecision(reason: string): InteractionDecision;
 }
 
-export interface AskInteractionModel extends BaseInteractionModel {
-  kind: 'ask_user_question';
-  /** v1: 只取第一问。 */
+/**
+ * 多题/多选模式下**单问**的语义模型。多题打勾卡(目前仅飞书 IM 渠道)按
+ * questions 逐问渲染; 单问字段(question/choices/...)仍代表第一问 —— hook 侧
+ * 与未提供打勾卡的渠道继续按 v1 单问渲染, 零改动。
+ */
+export interface AskQuestionModel {
+  /** 原始问题项。 */
   question: AskUserQuestionItem;
   /** 卡片标题文本: header 优先, 缺省用问题全文。 */
   headerText: string;
   /** header 与 question 不同才把 question 放正文, 否则空串。 */
   questionBody: string;
+  /** 该问是否多选(多题打勾卡保留语义; v1 单问卡仍降级单选)。 */
+  multiSelect: boolean;
   /** true = 自由问答无选项, 降级为唯一的「继续」(空答案)。 */
   degraded: boolean;
+  /** 该问的选项(至多 MAX_OPTIONS, 与 v1 单问卡同上限)。 */
+  choices: InteractionChoice[];
+}
+
+export interface AskInteractionModel extends BaseInteractionModel {
+  kind: 'ask_user_question';
+  /** v1 单问投影: 第一问(不支持多题卡的渠道只渲染这一问)。 */
+  question: AskUserQuestionItem;
+  /** 卡片标题文本: header 优先, 缺省用问题全文。 */
+  headerText: string;
+  /** header 与 question 不同才把 question 放正文, 否则空串。 */
+  questionBody: string;
+  /** true = 第一问自由问答无选项, 降级为唯一的「继续」(空答案)。 */
+  degraded: boolean;
+  /** 全部问题(按请求顺序); 多题打勾卡据此逐问渲染。 */
+  questions: AskQuestionModel[];
 }
 
 export interface PlanInteractionModel extends BaseInteractionModel {
@@ -197,6 +263,10 @@ export type InteractionModel =
  *   - ask 只渲染第一道问题;
  *   - 至多 MAX_OPTIONS 个选项, multiSelect 降级单选;
  *   - 无选项时降级成单个「继续」(空答案) —— 无人值守链路给不了自由文本。
+ *
+ * 例外: 顶层 questions 保留全部问题与 multiSelect 语义, 供支持卡片原地更新
+ * 的 IM 渠道(目前仅飞书, ui.cards.ask.multi)渲染多题/多选打勾卡 —— 顶层单问
+ * 字段仍是 hook 侧与其余渠道的 v1 投影, 两套视图出自同一份合成逻辑。
  */
 export function composeInteractionModel(
   req: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
@@ -210,39 +280,52 @@ export function composeInteractionModel(
 export function composeInteractionModel(req: InteractionRequest): InteractionModel | null;
 export function composeInteractionModel(req: InteractionRequest): InteractionModel | null {
   if (req.kind === 'ask_user_question') {
-    const question = req.questions[0];
-    if (!question) return null;
-    const headerText = question.header || question.question;
-    const options = (question.options ?? []).slice(0, MAX_OPTIONS);
-    const questionBody =
-      question.header && question.header !== question.question ? question.question : '';
-    const choices: InteractionChoice[] =
-      options.length === 0
-        ? [
-            {
-              choiceId: 'ask:continue',
-              index: 0,
-              label: ASK_CONTINUE_LABEL,
-              answerText: '',
-              style: 'default',
-              decision: buildAskAnswerDecision(question.question, ''),
-            },
-          ]
-        : options.map((opt, index) => ({
-            choiceId: `ask:option:${index}`,
-            index,
-            label: opt.label,
-            answerText: opt.label,
-            style: 'default' as const,
-            decision: buildAskAnswerDecision(question.question, opt.label),
-          }));
+    if (req.questions.length === 0) return null;
+    const questions: AskQuestionModel[] = req.questions.map((question) => {
+      const headerText = question.header || question.question;
+      const options = (question.options ?? []).slice(0, MAX_OPTIONS);
+      const questionBody =
+        question.header && question.header !== question.question ? question.question : '';
+      const choices: InteractionChoice[] =
+        options.length === 0
+          ? [
+              {
+                choiceId: 'ask:continue',
+                index: 0,
+                label: ASK_CONTINUE_LABEL,
+                answerText: '',
+                style: 'default',
+                decision: buildAskAnswerDecision(question.question, ''),
+              },
+            ]
+          : options.map((opt, index) => ({
+              choiceId: `ask:option:${index}`,
+              index,
+              label: opt.label,
+              answerText: opt.label,
+              style: 'default' as const,
+              decision: buildAskAnswerDecision(question.question, opt.label),
+            }));
+      return {
+        question,
+        headerText,
+        questionBody,
+        multiSelect: question.multiSelect === true,
+        degraded: options.length === 0,
+        choices,
+      };
+    });
+    // v1 单问投影: 顶层字段继续代表第一问, hook 侧与未提供打勾卡的渠道
+    // (含它们的既有测试)零改动。
+    const primary = questions[0];
     return {
       kind: 'ask_user_question',
-      question,
-      headerText,
-      questionBody,
-      degraded: options.length === 0,
-      choices,
+      question: primary.question,
+      headerText: primary.headerText,
+      questionBody: primary.questionBody,
+      degraded: primary.degraded,
+      choices: primary.choices,
+      questions,
       buildDefaultDecision: () => buildAskNoAnswerDecision(),
     };
   }
@@ -307,4 +390,21 @@ export function composeInteractionModel(req: InteractionRequest): InteractionMod
 
   // 未来未知 kind: 不出卡, 调用方按 kind 安全默认就地自决
   return null;
+}
+
+/**
+ * ask 是否需要多题/多选打勾卡: 一次问了多道题, 或任一题是多选。
+ * 打勾卡依赖渠道的卡片原地更新能力, 由渲染侧按自己的 ui 文案包
+ * (ui.cards.ask.multi)是否提供来决定真正启用; 本函数只做语义判定。
+ *
+ * 至少一问要有预设选项 — 打勾卡只能通过按钮收集答案。无选项的自由文本
+ * 问题仍渲染在卡上(只展示正文、不出按钮), 提交时按未答省略, agent 会追问。
+ * 全部问题都没有选项时保持 v1 单问卡, 并不存在逐问单卡调度。
+ */
+export function needsAskMultiCard(
+  req: Extract<InteractionRequest, { kind: 'ask_user_question' }>,
+): boolean {
+  const hasAnyOptions = req.questions.some((q) => (q.options?.length ?? 0) > 0);
+  if (!hasAnyOptions) return false;
+  return req.questions.length > 1 || req.questions.some((q) => q.multiSelect === true);
 }

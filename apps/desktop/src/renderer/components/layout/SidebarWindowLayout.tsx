@@ -29,6 +29,7 @@ import { useTranslation } from 'react-i18next';
 import { PanelRight } from 'lucide-react';
 
 import { RightSidebarShell } from '@/features/right-sidebar/RightSidebarShell';
+import { ToastContainer } from '@/components/ui/toast';
 import { useDeviceLinkRemoteProjects } from '@/features/device-link/useDeviceLinkRemoteProjects';
 import { onRequestRightSidebarVisibility } from '@/features/right-sidebar/lib/sidebarCommands';
 import { executeSidebarCommand } from '@/features/right-sidebar/lib/executeSidebarCommand';
@@ -60,13 +61,13 @@ interface SidebarWindowContext {
   workdir: string | null;
   remoteHostId: string | null;
   deviceLinkDeviceId?: string | null;
+  subagentsAvailable?: boolean;
   available: boolean;
 }
 
 export function SidebarWindowLayout() {
   const { t } = useTranslation();
   const { effectiveLocale, setLocale } = useLocale();
-  useDeviceLinkRemoteProjects();
   // 意识面板注册:子窗口没有 LayoutRoot,必须自行初始化 ghost 面板注册表
   // 并订阅 ghosts:changed(停靠形态所需;历史持久化的 ghost 页签也靠它识别 kind)。
   ensureGhostPanelsRegistered();
@@ -80,6 +81,7 @@ export function SidebarWindowLayout() {
   const [ctx, setCtx] = useState<SidebarWindowContext | null>(null);
   // 预热窗口初始隐藏；由 main 的 visibility push 驱动 Shell 内各子面板暂停/恢复。
   const [windowVisible, setWindowVisible] = useState(false);
+  useDeviceLinkRemoteProjects(windowVisible, 'sidebar');
   const visibilityRevisionRef = useRef(0);
   const contextRevisionRef = useRef(0);
   const presentationReadySentRef = useRef(false);
@@ -325,6 +327,7 @@ export function SidebarWindowLayout() {
           workdir={ctx?.workdir ?? ''}
           remoteHostId={ctx?.remoteHostId ?? null}
           deviceLinkDeviceId={ctx?.deviceLinkDeviceId}
+          subagentsAvailable={ctx?.subagentsAvailable}
           shellVisible={windowVisible}
           isMac={isMac}
         />
@@ -336,6 +339,7 @@ export function SidebarWindowLayout() {
           </div>
         )}
       </div>
+      <ToastContainer />
       <GhostMediaLightboxHost
         key={interactiveSessionId ?? 'hidden'}
         sessionId={interactiveSessionId ?? undefined}

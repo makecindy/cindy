@@ -442,11 +442,13 @@ wave6 追加 · 2026-07-27（登录改版新稿手机帧）：两帧共用主容
 
 ### 6.1 回调结果卡片
 
-卡片尺寸 680 x 680，radius 36。Light 卡片 fill `#FBFBFB`、stroke `#D4D4D4`；Dark 卡片 fill `#312F2F`、stroke `#434343`。
+失败 / Warning 卡片尺寸 680 x 680，radius 36。Light 卡片 fill `#FBFBFB`、stroke `#D4D4D4`；Dark 卡片 fill `#312F2F`、stroke `#434343`。
+
+**现行 Desktop 登录成功回调覆盖（2026-09-02）**：成功态不显示返回按钮，使用 560 x 500、radius 36 的紧凑内容流卡片；标题 / 正文 / 立绘改为流式排列，卡片底部显示本地化 3 秒倒计时，结束时移除倒计时文字并调用 `window.close()`。以下成功态 Figma 节点与 680 x 680 + CTA 参数保留为历史设计来源，不再约束当前客户端成功页；失败 / Warning 仍沿用下表的 680 x 680 几何与 CTA。
 
 | 状态 | 国区 Light | 国区 Dark | 国际区 Light | 国际区 Dark | 文案 | 图像参数 |
 |---|---|---|---|---|---|---|
-| 成功 | `343:355` | `347:2503` | `347:3149` | `347:3155` | 标题 `登录成功`；副文案 `你可以关闭此页面，回到 Cindy 继续`；按钮 `回到 CINDY` | emoj x=200 y=60，280 x 280；成功图 image crop w=311.89%, h=313.21%, left=-100.32%, top=-202.18% |
+| 成功（历史 Figma 来源） | `343:355` | `347:2503` | `347:3149` | `347:3155` | 旧标题 `登录成功`；旧副文案 `你可以关闭此页面，回到 Cindy 继续`；旧按钮 `回到 CINDY`。现行实现见上方覆盖条目 | 旧稿 emoj x=200 y=60，280 x 280；成功图 image crop w=311.89%, h=313.21%, left=-100.32%, top=-202.18% |
 | 失败 | `347:1353` | `347:2509` | `347:3161` | `347:3167` | 标题 `登录未完成`；副文案 `请回到 CINDY 重新登录`；按钮 `回到 CINDY` | emoj x=200 y=60，280 x 280 |
 | Warning | `347:1461` | `347:2515` | `347:3173` | `347:3179` | 标题 `需要继续操作`；副文案 `请返回 Cindy，完成当前工作区的安装后继续`；按钮 `返回 CINDY` | emoj frame 280 x 280；可见图层 273 x 272；image w=327.4%, h=329.15%, left=-212.69%, top=-112.97% |
 
@@ -459,21 +461,23 @@ wave6 追加 · 2026-07-27（登录改版新稿手机帧）：两帧共用主容
 | CTA | x=70 y=529，540 x 80；fill `#2A2828`，stroke `#434343`，radius 40；文字 Bold 24 `#D4D4D4` | fill `#EEEEEE`，stroke `#FFFFFF`，radius 40；文字 `#2A2828` |
 | hover | 仅桌面端，Light CTA 可用 `log_in_button:hover` 参数 | 仅桌面端，Dark CTA 可用 `white_button:hover` 参数 |
 
+成功态当前实现的内部几何：卡片 560 x 500；内边距 `48px 40px 44px`；立绘 240 x 240；标题 / 正文采用内容流排列；底部倒计时字号 16、行高 23。该布局仅适用于成功态，不改变失败 / Warning 的共享 680 x 680 卡片几何。
+
 ### 6.2 桌面浏览器页壳
 
 | 场景 | nodeId | 画板 / 背景 | 卡片放置 |
 |---|---|---|---|
-| 国区 Browser 页壳 | `347:3016` | 1831 x 1831；内容区域 x=0 y=146.630，1831 x 1684.370；顶部控件 `#FEFEFE` x=169.189 y=26.318，203.027 x 48.877；地址栏 `#F1F2F3` x=259.423 y=95.874，404.174 x 33.838 | success card x=576 y=226，680 x 680 |
-| 国际区 Browser 页壳 | `347:3185` | 与国区同构；同一 browser chrome 参数 | success card x=576 y=226，680 x 680 |
+| 国区 Browser 页壳 | `347:3016` | 1831 x 1831；内容区域 x=0 y=146.630，1831 x 1684.370；顶部控件 `#FEFEFE` x=169.189 y=26.318，203.027 x 48.877；地址栏 `#F1F2F3` x=259.423 y=95.874，404.174 x 33.838 | 历史 success card x=576 y=226，680 x 680；现行 Desktop 成功页由 U-10 wrapper 居中缩放 560 x 500，失败 / Warning 保持 680 x 680 |
+| 国际区 Browser 页壳 | `347:3185` | 与国区同构；同一 browser chrome 参数 | 历史 success card x=576 y=226，680 x 680；现行 Desktop 成功页由 U-10 wrapper 居中缩放 560 x 500，失败 / Warning 保持 680 x 680 |
 
 ### 6.3 移动 Chrome 回调页
 
 | 场景 | nodeId | 画板 / 内容底色 | 卡片放置 |
 |---|---|---|---|
-| 国区 Mobile Chrome Dark 成功 | `347:3052` | 750 x 1623；内容底色块 x=0 y=171，750 x 1315，`#2A2828` | success card x=35 y=251，680 x 680 |
-| 国区 Mobile Chrome White 成功 | `347:3066` | 750 x 1623；内容底色块 x=0 y=160，750 x 1315，`#EEEEEE` | success card x=35 y=251，680 x 680 |
-| 国际区 Mobile Chrome Dark 成功 | `347:3203` | 与国区 Dark 同构 | success card x=35 y=251，680 x 680 |
-| 国际区 Mobile Chrome White 成功 | `347:3212` | 与国区 White 同构 | success card x=35 y=251，680 x 680 |
+| 国区 Mobile Chrome Dark 成功 | `347:3052` | 750 x 1623；内容底色块 x=0 y=171，750 x 1315，`#2A2828` | 历史 success card x=35 y=251，680 x 680；现行 Desktop 成功页使用 560 x 500 紧凑卡，失败 / Warning 保持 680 x 680 |
+| 国区 Mobile Chrome White 成功 | `347:3066` | 750 x 1623；内容底色块 x=0 y=160，750 x 1315，`#EEEEEE` | 历史 success card x=35 y=251，680 x 680；现行 Desktop 成功页使用 560 x 500 紧凑卡，失败 / Warning 保持 680 x 680 |
+| 国际区 Mobile Chrome Dark 成功 | `347:3203` | 与国区 Dark 同构 | 历史 success card x=35 y=251，680 x 680；现行 Desktop 成功页使用 560 x 500 紧凑卡，失败 / Warning 保持 680 x 680 |
+| 国际区 Mobile Chrome White 成功 | `347:3212` | 与国区 White 同构 | 历史 success card x=35 y=251，680 x 680；现行 Desktop 成功页使用 560 x 500 紧凑卡，失败 / Warning 保持 680 x 680 |
 
 ## 7. 国区 / 国际区 / 移动端差异清单
 

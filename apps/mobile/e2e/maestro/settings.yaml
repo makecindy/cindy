@@ -2,6 +2,10 @@ appId: ${APP_ID}
 ---
 - runFlow: login_mock.yaml
 - assertVisible:
+    id: "home.chromeMenu"
+- tapOn:
+    id: "home.chromeMenu"
+- assertVisible:
     id: "devices.settingsButton"
 - tapOn:
     id: "devices.settingsButton"
