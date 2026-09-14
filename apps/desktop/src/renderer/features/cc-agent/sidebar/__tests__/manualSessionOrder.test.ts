@@ -57,7 +57,7 @@ describe('manual project session ordering', () => {
     expect(collapseView.isOverflowing).toBe(true);
     expect(collapseView.totalCount).toBe(6);
     expect(sessionEntryListSource.indexOf('getSessionListCollapseView')).toBeLessThan(
-      sessionEntryListSource.indexOf('if (manualOrder && onReorder)'),
+      sessionEntryListSource.indexOf('if (onReorder)'),
     );
     expect(sessionEntryListSource).toContain('{isOverflowing && (');
     expect(sessionEntryListSource).toContain('showAllSessions');
@@ -80,6 +80,20 @@ describe('manual project session ordering', () => {
       group,
       plain,
     ]);
+  });
+
+  it('keeps the first drag based on the current full order and isolates native drag handles', () => {
+    expect(sessionEntryListSource).toContain('initialOrder?: readonly string[];');
+    expect(sessionEntryListSource).toContain('const baseOrder = manualOrder?.length');
+    expect(sessionEntryListSource).toContain('a, [data-no-drag]');
+  });
+
+  it('exposes automation group headers as session-order drag handles', () => {
+    const automationGroupSource = readFileSync(
+      resolve(__dirname, '../AutomationSessionGroupItem.tsx'),
+      'utf8',
+    );
+    expect(automationGroupSource).toContain('data-sidebar-session-row="true"');
   });
 
   it('isolates saved order by data owner', () => {

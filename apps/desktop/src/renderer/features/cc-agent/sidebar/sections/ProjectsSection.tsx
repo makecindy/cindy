@@ -71,6 +71,7 @@ import {
   advanceViewedPriorityHold,
   buildMainListEntries,
   getMainListEntrySessions,
+  sortSessionsForMainList,
   holdViewedPriorityRank,
   splitEntriesByDevice,
   type MainListDeviceSection,
@@ -336,12 +337,20 @@ export function ProjectsSection({
   );
   const [manualSessionOrders, setManualSessionOrders] = useState<Record<string, string[]>>({});
 
-  const sessionOrderFor = useCallback((project: ProjectNodeData): string[] => {
+  const sessionOrderFor = useCallback((project: ProjectNodeData): string[] | undefined => {
     const source =
       manualSessionOrders[project.projectKey] ??
       loadManualSessionOrder(dataOwnerId, project.projectKey);
-    return reconcileManualSessionOrder(source, project.sessions);
+    return source.length > 0 ? reconcileManualSessionOrder(source, project.sessions) : undefined;
   }, [dataOwnerId, manualSessionOrders]);
+
+  const initialSessionOrderFor = useCallback(
+    (project: ProjectNodeData): string[] =>
+      sortSessionsForMainList(project.sessions, filter.sortBy).map(
+        (session) => session.id,
+      ),
+    [filter.sortBy],
+  );
 
   const handleSessionReorder = useCallback((project: ProjectNodeData, orderedIds: string[]) => {
     const next = reconcileManualSessionOrder(orderedIds, project.sessions);
@@ -871,6 +880,9 @@ export function ProjectsSection({
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
       manualSessionOrder={filter.sortBy === 'recency' ? sessionOrderFor(fullProject) : undefined}
+      initialSessionOrder={
+        filter.sortBy === 'recency' ? initialSessionOrderFor(fullProject) : undefined
+      }
       onSessionReorder={
         filter.sortBy === 'recency'
           ? (orderedIds) => handleSessionReorder(fullProject, orderedIds)

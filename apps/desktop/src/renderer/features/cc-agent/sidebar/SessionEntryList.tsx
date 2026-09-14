@@ -85,6 +85,8 @@ export interface SessionEntryListProps {
   showFirstDivider?: boolean;
   /** Project-local manual ordering. When set, automation grouping is bypassed so every session is draggable. */
   manualOrder?: readonly string[];
+  /** Initial full order used to merge the first drag before a manual order exists. */
+  initialOrder?: readonly string[];
   onReorder?: (orderedIds: string[]) => void;
 }
 
@@ -205,6 +207,7 @@ export function SessionEntryList({
   disableCollapse = false,
   sectionCollapsed = false,
   manualOrder,
+  initialOrder,
   onReorder,
   ...props
 }: SessionEntryListProps) {
@@ -216,7 +219,7 @@ export function SessionEntryList({
       notifications,
       scheduleSessionIndex,
     });
-    if (!manualOrder) return groupedEntries;
+    if (!manualOrder?.length) return groupedEntries;
 
     return orderManualSidebarEntries(groupedEntries, manualOrder);
   }, [manualOrder, notifications, scheduleSessionIndex, sessions]);
@@ -237,8 +240,13 @@ export function SessionEntryList({
 
   const displayEntries = collapsible ? visibleEntries : entries;
   const rows = <SessionEntryRows entries={displayEntries} notifications={notifications} {...props} />;
-  if (manualOrder && onReorder) {
+  if (onReorder) {
     const sortableEntries = displayEntries;
+    const baseOrder = manualOrder?.length
+      ? manualOrder
+      : initialOrder?.length
+        ? initialOrder
+        : entries.flatMap(sessionIdsForSidebarEntry);
     const entryById = new Map(
       entries.map((entry) => [
         entry.kind === 'session' ? entry.session.id : 'automation-group:' + entry.group.id,
@@ -257,14 +265,14 @@ export function SessionEntryList({
               const entry = entryById.get(id);
               return entry ? sessionIdsForSidebarEntry(entry) : [];
             });
-            onReorder(mergeVisibleSessionReorder(manualOrder, visibleOrder));
+            onReorder(mergeVisibleSessionReorder(baseOrder, visibleOrder));
           }}
           reducedMotion={reducedMotion}
           handle="[data-sidebar-session-row]"
           dragClass="cc-agent-session-sortable-drag"
           fallbackOnBody={false}
           constrainToBounds
-          filter="button, input, textarea, select, a"
+          filter="button, input, textarea, select, a, [data-no-drag]"
           className="flex flex-col gap-0.5 session-order"
           rowClassName="cc-agent-session-sortable-row"
           renderItem={(entry) => <SessionEntryRows entries={[entry]} notifications={notifications} {...props} />}

@@ -120,6 +120,7 @@ export interface ProjectNodeProps {
   /** 右键菜单 → 归档该 project 下所有非执行中的 session（带二次确认）。 */
   onArchiveAll: (project: ProjectNodeData) => void;
   manualSessionOrder?: readonly string[];
+  initialSessionOrder?: readonly string[];
   onSessionReorder?: (orderedIds: string[]) => void;
 }
 
@@ -159,6 +160,7 @@ export const ProjectNode = memo(function ProjectNode({
   onBrowseFiles,
   onArchiveAll,
   manualSessionOrder,
+  initialSessionOrder,
   onSessionReorder,
 }: ProjectNodeProps) {
   const { t } = useTranslation();
@@ -624,6 +626,7 @@ export const ProjectNode = memo(function ProjectNode({
             indented
             sessionVariant={sessionVariant}
             manualOrder={manualSessionOrder}
+            initialOrder={initialSessionOrder}
             onReorder={onSessionReorder}
           />
         </div>

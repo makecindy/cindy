@@ -442,6 +442,7 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
             会冒泡穿过内部按钮的 stopPropagation(click 语义)造成双触发。键盘可达性由内部
             标题 <button>(Tab focus + Enter/Space)天然提供。 */}
         <div
+          data-sidebar-session-row="true"
           onClick={openLatestSession}
           onContextMenu={(event) => {
             // 整行右键 = 打开「更多操作」同一份菜单(不再另做一份隐形锚点菜单)。
