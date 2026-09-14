@@ -21,6 +21,8 @@ const normalizeEolPlugin = {
   },
 };
 
+const opencodexLicense = (await readFile(new URL('../model-compat/LICENSE.opencodex', import.meta.url), 'utf8')).replace(/\r\n/g, '\n');
+
 await esbuild.build({
   entryPoints: ['src/bin/proxy.ts'],
   bundle: true,
@@ -28,7 +30,8 @@ await esbuild.build({
   target: 'node20',
   format: 'esm',
   outfile: 'dist/proxy.mjs',
-  banner: { js: '#!/usr/bin/env node' },
+  // SSH deployment copies this single file, so its third-party notice must travel with it.
+  banner: { js: '#!/usr/bin/env node\n/*\n' + opencodexLicense.replace(/\*\//g, '* /') + '\n*/' },
   external: [],
   legalComments: 'none',
   minify: false,

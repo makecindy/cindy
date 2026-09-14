@@ -47,6 +47,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 
 import { makerChatStore } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
+import * as sessionService from '@/lib/sessionService';
 import {
   markSessionAutomaticHistoryLoadCompleted,
   restoreSessionAutomaticHistoryLoadAttempts,
@@ -238,6 +239,20 @@ describe('makerChatStore active view tracking', () => {
     // 非空泛验证:回收确实发生了 —— 最早创建的 idle 会话(非 active)已被 purge,
     // 重新 getSnapshot 只会拿到重建的空 slice。
     expect(makerChatStore.getSnapshot(otherIds[0]).messages).toHaveLength(0);
+  });
+
+  it.each([0, 9_000])('keeps read-projected windows replaceable unless history has %s used tokens', async (contextTokens) => {
+    const sessionId = sid('projected-context');
+    vi.mocked(sessionService.get).mockResolvedValueOnce({
+      agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false,
+      contextTokens, contextWindow: 272_000, totalCostUsd: 0,
+    } as Awaited<ReturnType<typeof sessionService.get>>);
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow).toBe(272_000);
+    makerChatStore.setContextWindow(sessionId, 1_000_000);
+    expect(makerChatStore.getSnapshot(sessionId).agentStatus.contextWindow)
+      .toBe(contextTokens > 0 ? 272_000 : 1_000_000);
   });
 
   it('initial history load backfills to the latest plan boundary', async () => {
@@ -974,7 +989,7 @@ describe('makerChatStore active view tracking', () => {
     await makerChatStore.loadAroundMessage(sessionId, 'hit', { radius: 60 });
     // 阶段一:窗口里只有孤岛 → 必须播种,游标为 null 会让下一次翻页从最新重开、把跳转位置顶掉。
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-hit-context');
-    expect(makerChatStore.getSnapshot(sessionId).historyWindowHasIsland).toBe(true);
+    expect(makerChatStore.getSnapshot(sessionId).historyWindowIslands).toHaveLength(1);
     expect(makerChatStore.getLightSnapshot(sessionId).historyWindowHasIsland).toBe(true);
 
     resolveInitialList([
@@ -994,8 +1009,8 @@ describe('makerChatStore active view tracking', () => {
     ]);
     // 阶段二:最新页落地 → 游标交还给它的下沿,往上翻才会穿过孤岛与尾段之间的缺失区间。
     expect(snapshot.oldestMessageId).toBe('latest-page-oldest');
-    // 洞还在,孤岛标记不清 —— 下一次跳转仍会尝试补齐。
-    expect(snapshot.historyWindowHasIsland).toBe(true);
+    // 洞还在,孤岛区间不清 —— 下一次跳转仍会尝试补齐。
+    expect(snapshot.historyWindowIslands).toHaveLength(1);
   });
 
   it('keeps loadOlder history chronological after thinking timestamps are backdated', async () => {
@@ -1322,4 +1337,56 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).messages).toHaveLength(0);
     expect(makerChatStore.getSnapshot(sessionId).historyLoaded).toBe(false);
   });
+
+  // Regression: when ensureInitialMessages backfill is invalidated by an epoch
+  // change (e.g. reloadMessages), isLoadingMore must be released so that
+  // loadOlderMessages is not permanently blocked.
+  it('releases isLoadingMore when initial backfill is invalidated by epoch change', async () => {
+    const sessionId = sid('initial-backfill-invalidation-lock');
+    const latestPage = Array.from({ length: 49 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
+      ),
+    );
+    const latestPlan = dbToolUseMessage(
+      sessionId,
+      'latest-plan',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 120_000).toISOString(),
+    );
+    let resolveOlderPage!: (rows: Message[]) => void;
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce([...latestPage, latestPlan])
+      .mockReturnValueOnce(
+        new Promise<Message[]>((resolve) => {
+          resolveOlderPage = resolve;
+        }),
+      );
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(4);
+
+    // Backfill is in progress, lock held.
+    expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(true);
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+
+    // Epoch change invalidates the in-flight backfill.
+    makerChatStore.reloadMessages(sessionId);
+    await Promise.resolve();
+
+    // Resolve the pending backfill — it should detect invalidation and exit.
+    resolveOlderPage([
+      dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
+    ]);
+    await flushPromises();
+
+    // isLoadingMore must have been released despite the invalidation path.
+    expect(makerChatStore.getSnapshot(sessionId).isLoadingMore).toBe(false);
+  });
+
+
 });

@@ -1284,6 +1284,22 @@ async function quarantineBlockedTarget(opts: {
   }
 }
 
+/**
+ * Mark a target unusable WITHOUT closing it.
+ *
+ * closeBlockedNavigationTarget awaits page.close(), which an adversarial or
+ * hung page can stall indefinitely. Quarantine is the part that must not
+ * depend on the page cooperating: marking is synchronous bookkeeping, so a
+ * target can be made unselectable even when its close never returns.
+ */
+export async function quarantineTargetWithoutClosing(opts: {
+  cdpUrl: string;
+  page: Page;
+  targetId?: string;
+}): Promise<void> {
+  await quarantineBlockedTarget(opts);
+}
+
 // Quarantine and close a tab that OpenClaw itself navigated to a blocked URL.
 // Only callers that own the navigation lifecycle (gotoPageWithNavigationGuard
 // and the navigate-style entry points that wrap it) may invoke this — closing

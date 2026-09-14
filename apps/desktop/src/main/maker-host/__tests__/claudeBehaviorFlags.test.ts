@@ -4,6 +4,14 @@ import { claudeBehaviorFlagsForSpawn, claudeToolSearchMode } from '../claude-beh
 import { shouldCloseSessionForCredentialSwitch } from '../codex-credential-switch.js';
 
 describe('claudeBehaviorFlagsForSpawn', () => {
+  it('preserves native subscription flags for independent Claude accounts', () => {
+    const flags = claudeBehaviorFlagsForSpawn({ providerId: 'anthropic-work',
+      nativeAuth: 'claude', credentialMode: 'provider-oauth', oauthConnected: () => true });
+    expect(flags.CLAUDE_CODE_ATTRIBUTION_HEADER).toBe('1');
+    expect(flags.ENABLE_TOOL_SEARCH).toBe('auto');
+    expect(claudeToolSearchMode('grok-work', 'provider-oauth', 'xai')).toBe('false');
+  });
+
   it('disables attribution for gateway-key spawns without touching the keychain', () => {
     // 显式 XD source / SSH remote 恒为 gateway-key:请求全走网关,无订阅直连路径。
     // oauthConnected 必须不被调用 —— spawn 热路径不为此分支付出钥匙串读取。

@@ -3,7 +3,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 const MAX_LOG_STRING_CHARS = 20_000;
 const MAX_LOG_DEPTH = 24;
 const SENSITIVE_PARAM_NAME =
-  /(?:^|[-_.])(authorization|proxy[-_]?authorization|api[-_]?key|access[-_]?key(?:[-_]?id)?|private[-_]?key|key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|signature|credential|cookie|session)(?:$|[-_.])/i;
+  /(?:^|[-_.])(authorization|proxy[-_]?authorization|api[-_]?key|access[-_]?key(?:[-_]?id)?|private[-_]?key|key|access[-_]?token|refresh[-_]?token|id[-_]?token|token|secret|password|passwd|sig|signature|ossaccesskeyid|credential|cookie|session)(?:$|[-_.])/i;
 
 function boundedText(value: string): string {
   const redacted = redactSensitiveText(value);
@@ -95,4 +95,12 @@ export function mediaRequestParamsForLog(value: unknown): unknown {
   };
 
   return visit(value, null, 0);
+}
+
+/** Keep diagnostic reasons without logging error payloads, stacks, or credential-bearing URLs. */
+export function mediaErrorForLog(error: unknown): string {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string' ? error : `Non-Error thrown (${typeof error})`;
+  return redactSensitiveText(message.replace(/\bhttps?:\/\/[^\s"'<>]+/gi, '[REDACTED_URL]')).slice(0, 1_000);
 }

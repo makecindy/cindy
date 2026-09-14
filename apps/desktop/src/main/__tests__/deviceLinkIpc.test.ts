@@ -105,6 +105,7 @@ import {
   type DeviceLinkIpcDeps,
 } from '../device-link/ipc';
 import { DeviceLinkError } from '@cindy/device-link';
+import { invokeWithClosedLinkRecovery } from '../device-link/linkRecovery';
 import { ServerApiError } from '../serverApiClient';
 import {
   __testing as settingsTesting,
@@ -898,6 +899,28 @@ describe('device-link controller handlers', () => {
     );
   });
 
+  it('invoke: a second peer reset stops retrying and becomes a disconnected IPC error', async () => {
+    const reset = new DeviceLinkError('PEER_RESET', 'peer reset during read');
+    reset.inFlight = true;
+    const invoke = vi.fn().mockRejectedValue(reset);
+    const reopen = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({ invoke: () => invokeWithClosedLinkRecovery(invoke, reopen) });
+    await expect(handleInvoke(deps, 'dev-2', 'local-db:messages:list', ['session'])).rejects.toMatchObject({
+      code: 'DEVICE_LINK_NOT_CONNECTED', message: '[DEVICE_LINK_NOT_CONNECTED] peer reset during read',
+    });
+    expect(invoke).toHaveBeenCalledTimes(2);
+    expect(reopen).toHaveBeenCalledTimes(1);
+  });
+
+  it('invoke: a peer reset result envelope uses the same IPC mapping', async () => {
+    const deps = makeDeps({ invoke: vi.fn().mockResolvedValue({
+      ok: false, error: { code: 'PEER_RESET', message: 'peer reset' },
+    }) });
+    await expect(handleInvoke(deps, 'dev-2', 'local-db:messages:list', ['session'])).rejects.toMatchObject({
+      code: 'DEVICE_LINK_NOT_CONNECTED', message: '[DEVICE_LINK_NOT_CONNECTED] peer reset',
+    });
+  });
+
   it('invoke:出方向附件改写失败 → DEVICE_LINK_MEDIA_TRANSFER_FAILED,不发 invoke(整条不发)', async () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });
     const deps = makeDeps({
@@ -1170,6 +1193,7 @@ describe('device-link revoke / restore handlers', () => {
 describe('device-link settings normalize', () => {
   it('非法输入回落默认值,布尔严格校验', () => {
     expect(settingsTesting.normalize(null)).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
@@ -1177,6 +1201,7 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({})).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
@@ -1184,6 +1209,7 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: 'true' })).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
@@ -1191,6 +1217,7 @@ describe('device-link settings normalize', () => {
       lastKnownDeviceNames: {},
     });
     expect(settingsTesting.normalize({ remoteControlEnabled: true })).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: true,
       keepAwake: false,
       revokedControllers: [],
@@ -1205,6 +1232,7 @@ describe('device-link settings normalize', () => {
         disabledControlDeviceIds: [' dev-1 ', 'dev-1', '', 42, 'dev-2'],
       }),
     ).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],
@@ -1224,6 +1252,7 @@ describe('device-link settings normalize', () => {
         },
       }),
     ).toEqual({
+      remoteDesktopEnabled: false,
       remoteControlEnabled: false,
       keepAwake: false,
       revokedControllers: [],

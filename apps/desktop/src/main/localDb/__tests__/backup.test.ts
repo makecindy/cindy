@@ -20,6 +20,7 @@ import {
   isoBackupTotalBudgetBytes,
   listIsoBackups,
   pruneIsoBackupsToBudget,
+  tryRestoreWithFallback,
 } from '../backup';
 
 const GB = 1024 ** 3;
@@ -117,6 +118,21 @@ describe('pruneIsoBackupsToBudget', () => {
     });
     expect(fs.existsSync(clean)).toBe(true);
   });
+
+  it('不识别或清理数据库瘦身备份', () => {
+    const slimming = `${dbFilePath}.slimming-backup`;
+    fs.writeFileSync(slimming, 'slimming');
+    makeBackup('2026-07-01T00-00-00-000Z', 100);
+
+    expect(listIsoBackups(dbFilePath)).toHaveLength(1);
+    pruneIsoBackupsToBudget(dbFilePath, {
+      maxCount: 0,
+      maxTotalBytes: 0,
+      keepNewest: false,
+    });
+
+    expect(fs.readFileSync(slimming, 'utf8')).toBe('slimming');
+  });
 });
 
 describe('isoBackupTotalBudgetBytes', () => {
@@ -125,6 +141,15 @@ describe('isoBackupTotalBudgetBytes', () => {
   });
   it('大库按 1.5 倍 db 大小', () => {
     expect(isoBackupTotalBudgetBytes(13 * GB)).toBe(Math.floor(13 * GB * 1.5));
+  });
+});
+
+describe('tryRestoreWithFallback', () => {
+  it('自动损坏恢复不会读取数据库瘦身备份', () => {
+    fs.writeFileSync(`${dbFilePath}.slimming-backup`, 'not an automatic recovery source');
+
+    expect(tryRestoreWithFallback(dbFilePath)).toBeNull();
+    expect(fs.existsSync(dbFilePath)).toBe(false);
   });
 });
 

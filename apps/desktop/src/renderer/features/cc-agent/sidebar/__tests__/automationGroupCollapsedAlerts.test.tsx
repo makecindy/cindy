@@ -112,11 +112,13 @@ function GroupHarness({
   notifications,
   urgentSessionIds,
   initialCollapsed,
+  onSessionClick = noop,
 }: {
   sessions: Session[];
   notifications: string[];
   urgentSessionIds: ReadonlySet<string>;
   initialCollapsed: boolean;
+  onSessionClick?: (sessionId: string) => void;
 }) {
   const [collapsed, setCollapsed] = useState(initialCollapsed);
   return createElement(SessionAttentionUrgencyProvider, {
@@ -135,7 +137,7 @@ function GroupHarness({
       notifications: new Set(notifications),
       collapsed,
       onCollapsedChange: setCollapsed,
-      onSessionClick: noop,
+      onSessionClick,
       onAction: noop,
       onRename: noop,
       onTogglePin: noop,
@@ -149,11 +151,13 @@ function renderGroup({
   notifications = [],
   urgentSessionIds = new Set<string>(),
   collapsed = true,
+  onSessionClick,
 }: {
   sessions?: Session[];
   notifications?: string[];
   urgentSessionIds?: ReadonlySet<string>;
   collapsed?: boolean;
+  onSessionClick?: (sessionId: string) => void;
 } = {}) {
   return render(
     createElement(GroupHarness, {
@@ -161,6 +165,7 @@ function renderGroup({
       notifications,
       urgentSessionIds,
       initialCollapsed: collapsed,
+      onSessionClick,
     }),
   );
 }
@@ -213,6 +218,18 @@ describe('AutomationSessionGroupItem — 收起态的未处理告警', () => {
     expect(screen.getByLabelText('Completed — click to view')).toBeTruthy();
     expect(screen.queryByLabelText('Failed — click to view')).toBeNull();
     expect(childRunIds(container)).toEqual([]);
+  });
+
+  it('收起且整组是红时,点组头打开告警那条而不是最新一条', () => {
+    const onSessionClick = vi.fn();
+    renderGroup({
+      urgentSessionIds: new Set(['run-3']),
+      onSessionClick,
+    });
+
+    fireEvent.click(screen.getByText('产品决策巡检'));
+    expect(onSessionClick).toHaveBeenCalledWith('run-3');
+    expect(onSessionClick).not.toHaveBeenCalledWith('run-0');
   });
 
   it('等待回复(蓝)不升格成组头状态,也不提行', () => {

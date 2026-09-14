@@ -568,6 +568,32 @@ describe('session list get / put', () => {
     expect((cache.writeSessionList.mock.calls[0]?.[0] as unknown[]).length).toBe(64);
   });
 
+  it('先投影会话字段再做预算,未缓存的大字段不会阻塞有效会话', async () => {
+    await handleMirrorCachePutSessionList(cache, [
+      {
+        deviceId: 'dev-1',
+        deviceName: 'Mac',
+        sessions: [{
+          id: 's1',
+          status: 'active',
+          title: 'Keep me',
+          summary: 'x'.repeat(600 * 1024),
+          extraRuntimeState: { nested: 'also ignored' },
+        }],
+      },
+    ]);
+
+    expect(cache.writeSessionList).toHaveBeenCalledWith(
+      [{
+        deviceId: 'dev-1',
+        deviceName: 'Mac',
+        sessions: [{ id: 's1', status: 'active', title: 'Keep me' }],
+      }],
+      undefined,
+      undefined,
+    );
+  });
+
   it('列表账号代际只接受非负整数,opaque token 验证后才还原内部 root', async () => {
     const devices = [{ deviceId: 'dev-1', deviceName: 'Mac', sessions: [] }];
     const { ownerToken } = await handleMirrorCacheGetSessionList(cache);

@@ -404,7 +404,7 @@ describe('outboxDisplayItem', () => {
       readyPreviews: ['file:///tmp/ready-preview.jpg'],
       claimedUploads: [
         { localId: 'u-img', failed: false, kind: 'image', previewUri: 'file:///tmp/pending.jpg' },
-        { localId: 'u-pdf', failed: false, kind: 'file', previewUri: 'file:///tmp/scan.pdf' },
+        { localId: 'u-pdf', failed: false, kind: 'file', previewUri: 'file:///tmp/scan.pdf', name: 'scan.pdf' },
       ],
     });
     let display = outboxDisplayItem(item);
@@ -419,6 +419,7 @@ describe('outboxDisplayItem', () => {
       { key: 'c-1-slot-1', uri: 'file:///tmp/pending.jpg', ossRef: null, uploading: true },
     ]);
     expect(display.fileCount).toBe(1);
+    expect(display.fileNames).toEqual(['scan.pdf']);
     // 上传落定后:uploading 归零,ossRef 补上,本地预览保留(第一帧到落定零跳变)。
     item = outboxItemWithUpload(item, 'u-img', attachmentFor('landed.jpg'));
     display = outboxDisplayItem(item);

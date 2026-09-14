@@ -223,7 +223,7 @@ describe('responsivenessTracker', () => {
     expect(h.probeInvoke).toHaveBeenCalledWith(
       DEV,
       DEVICE_RESPONSIVENESS_PROBE_CHANNEL,
-      [1, 'all', { includePinned: true }],
+      [1, 'all', { includePinned: false }],
     );
     // 在途探测占住单飞席位:再 tick 不重复发
     h.tracker.probeTick();

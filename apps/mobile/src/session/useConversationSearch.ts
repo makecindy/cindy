@@ -18,6 +18,7 @@ import {
   type ConversationSearchProjectSelection,
 } from '@/session/conversationSearch';
 import { remoteSessionStore } from '@/session/remoteSessionStore';
+import { useStableValue } from '@/utils/useStableValue';
 import type {
   ConversationSearchAgentFilter,
   ConversationSearchLastActivityFilter,
@@ -80,15 +81,21 @@ export function useConversationSearch({
     () => (lockedWorkingDirs?.length ? [...lockedWorkingDirs] : null),
     [lockedWorkingDirs?.join('|') ?? ''],
   );
-  const scopedOrigins = useMemo(
-    () => (lockedDirs ? [...origins] : scopedConversationSearchOrigins(origins, projectSelection, projects ?? [])),
-    [lockedDirs, origins, projectSelection, projects],
-  );
-  const originKey = useMemo(
-    () => scopedOrigins.map((origin) => (
-      `${origin.deviceId}:${origin.reachable ? '1' : '0'}:${(origin.workingDirs ?? []).join(',')}`
-    )).join('|'),
-    [scopedOrigins],
+  const scopedOrigins = useStableValue(
+    useMemo(
+      () =>
+        (lockedDirs
+          ? [...origins]
+          : scopedConversationSearchOrigins(origins, projectSelection, projects ?? [])
+        )
+          .map((origin) => ({
+            ...origin,
+            workingDirs: origin.workingDirs ? [...origin.workingDirs].sort() : null,
+          }))
+          .sort((a, b) => a.deviceId.localeCompare(b.deviceId)),
+      [lockedDirs, origins, projectSelection, projects],
+    ),
+    (a, b) => JSON.stringify(a) === JSON.stringify(b),
   );
 
   useEffect(() => {
@@ -167,6 +174,7 @@ export function useConversationSearch({
     }, CONVERSATION_SEARCH_DEBOUNCE_MS);
 
     return () => {
+      requestSeq.current += 1;
       clearTimeout(timer);
     };
   }, [
@@ -174,7 +182,6 @@ export function useConversationSearch({
     enabled,
     invoke,
     lastActivityFilter,
-    originKey,
     scopedOrigins,
     query,
     sortBy,

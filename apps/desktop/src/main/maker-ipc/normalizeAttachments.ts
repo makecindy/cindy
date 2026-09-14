@@ -55,6 +55,7 @@ let tempAttachmentOwner: ReviewRunOwner = {
   instanceId: randomUUID(),
   processId: process.pid,
 };
+let ensureTempAttachmentOwnerLiveness: (() => Promise<void>) | null = null;
 
 interface TempAttachmentOwnerRecord {
   version: 1;
@@ -64,8 +65,12 @@ interface TempAttachmentOwnerRecord {
 }
 
 /** Share the exact Main-process identity used by Review lifecycle recovery. */
-export function configureTempAttachmentOwner(owner: ReviewRunOwner): void {
+export function configureTempAttachmentOwner(
+  owner: ReviewRunOwner,
+  ensureOwnerLiveness?: () => Promise<void>,
+): void {
   tempAttachmentOwner = owner;
+  ensureTempAttachmentOwnerLiveness = ensureOwnerLiveness ?? null;
 }
 
 const EXT_BY_MIME: Record<string, string> = {
@@ -191,6 +196,11 @@ async function ensureTempOwnerRoot(): Promise<string> {
   const pending = TEMP_OWNER_ROOT_PREPARATIONS.get(ownerRoot);
   if (pending) return pending;
   const preparation = (async () => {
+    // The cleanup boundary is shared across Desktop instances. Persist an
+    // exact incarnation proof before any ordinary turn can leave temporary
+    // attachment bytes behind; PID-only records become ambiguous after PID
+    // reuse and cannot safely be reclaimed on a fixed deadline.
+    await ensureTempAttachmentOwnerLiveness?.();
     await fs.mkdir(sharedRoot, { recursive: true, mode: 0o700 });
     await assertRealTempDirectory(sharedRoot);
     await fs.chmod(sharedRoot, 0o700);

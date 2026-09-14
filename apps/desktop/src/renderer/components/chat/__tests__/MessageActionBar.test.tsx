@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -8,7 +8,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
 }));
 
-vi.mock('@/components/ui/tooltip', () => ({
+vi.mock('@/components/ui/tooltip', async (importOriginal) => ({
+  // Keep Tip's real ref/event forwarding for the composed menu trigger.
+  ...(await importOriginal<typeof import('@/components/ui/tooltip')>()),
   Tooltip: {
     Root: ({ children }: { children: ReactNode }) => <>{children}</>,
     Trigger: ({ children }: { children: ReactNode }) => <>{children}</>,
@@ -125,6 +127,76 @@ describe('MessageActionBar', () => {
     await waitFor(() => expect(onDelete).toHaveBeenCalledTimes(1));
   });
 
+  it.each(['left', 'right'] as const)('preserves edit and rewind callbacks with %s alignment', (align) => {
+    const onEdit = vi.fn();
+    const onRewind = vi.fn();
+    render(<MessageActionBar copyText="body" align={align} hovered onEdit={onEdit} onRewind={onRewind} />);
+    fireEvent.click(screen.getByRole('button', { name: 'chat.messageActionBar.edit' }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'chat.messageActionBar.moreActions' }), { button: 0, ctrlKey: false });
+    fireEvent.click(screen.getByRole('menuitem', { name: 'chat.messageActionBar.rewind' }));
+    expect(onRewind).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(['left', 'right'] as const)('does not invent user actions without callbacks with %s alignment', (align) => {
+    render(<MessageActionBar copyText="body" align={align} hovered />);
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.edit' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.moreActions' })).toBeNull();
+  });
+
+  it('keeps teammate actions visible, exposes Reply, and hides fork and usage', async () => {
+    const onFork = vi.fn(async () => undefined);
+    const onAddToChat = vi.fn();
+    const onDelete = vi.fn(async () => undefined);
+    const deepLink = 'cindy://session/session-a?message=message-a';
+
+    const { container } = render(
+      <MessageActionBar
+        copyText="message body"
+        copyLinkText={deepLink}
+        align="left"
+        hovered={false}
+        simplifiedBotConversation
+        onFork={onFork}
+        onAddToChat={onAddToChat}
+        onDelete={onDelete}
+        turnMoney={{ amount: 1.5, currency: 'CNY', approximate: false, kind: 'actual-cost' }}
+        turnUsageDetails={{
+          inputTokens: 10,
+          outputTokens: 5,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+          totalTokens: 15,
+          cacheHitRate: 0,
+        }}
+      />,
+    );
+
+    const actionBar = container.firstElementChild;
+    expect(actionBar?.classList.contains('opacity-100')).toBe(true);
+    expect(actionBar?.classList.contains('pointer-events-none')).toBe(false);
+    expect(screen.queryByRole('button', { name: 'chat.messageActionBar.fork' })).toBeNull();
+    expect(screen.queryByText('¥1.50')).toBeNull();
+    expect(screen.queryByText('chat.messageActionBar.turnTokens')).toBeNull();
+
+    const reply = screen.getByRole('button', { name: 'chat.messageActionBar.reply' });
+    expect(reply.querySelector('.lucide-message-square-reply')).toBeTruthy();
+    fireEvent.click(reply);
+    expect(onAddToChat).toHaveBeenCalledTimes(1);
+
+    const trigger = screen.getByRole('button', {
+      name: 'chat.messageActionBar.moreActions',
+    });
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false });
+    expect(screen.queryByRole('menuitem', { name: 'chat.quote.addToChat' })).toBeNull();
+    expect(screen.getByRole('menuitem', {
+      name: 'chat.messageActionBar.copyLink',
+    })).toBeTruthy();
+    expect(screen.getByRole('menuitem', {
+      name: 'chat.messageActionBar.delete',
+    })).toBeTruthy();
+  });
+
   it('does not restore pointer focus to the ellipsis trigger after close', async () => {
     render(
       <MessageActionBar
@@ -179,7 +251,7 @@ describe('MessageActionBar', () => {
     });
 
     fireEvent.click(forkButton);
-    await waitFor(() => expect(forkButton.querySelector('.animate-spin')).toBeTruthy());
+    await waitFor(() => expect(forkButton.querySelector('.animate-spinner')).toBeTruthy());
     expect(moreButton.querySelector('.lucide-ellipsis')).toBeTruthy();
     expect(moreButton.querySelector('.lucide-loader-circle')).toBeNull();
     expect((moreButton as HTMLButtonElement).disabled).toBe(false);
@@ -189,7 +261,7 @@ describe('MessageActionBar', () => {
 
     resolveFork();
     await waitFor(() => {
-      expect(forkButton.querySelector('.animate-spin')).toBeNull();
+      expect(forkButton.querySelector('.animate-spinner')).toBeNull();
       expect((editButton as HTMLButtonElement).disabled).toBe(false);
     });
   });
@@ -207,7 +279,7 @@ describe('MessageActionBar', () => {
     const trigger = screen.getByRole('button', {
       name: 'chat.messageActionBar.moreActions',
     });
-    trigger.focus();
+    act(() => trigger.focus());
     fireEvent.keyDown(trigger, { key: 'ArrowDown' });
     const item = await screen.findByRole('menuitem', {
       name: 'chat.quote.addToChat',

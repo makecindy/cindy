@@ -21,6 +21,7 @@ export {
   piCanonicalPathsEqual,
   piProjectKey,
 } from './agents/pi/project-trust.js';
+export * from './agents/pi/managed-command.js';
 export {
   assertReviewMessageContentPaths,
   buildReviewReadGrants,
@@ -67,12 +68,21 @@ export {
   MemoryStorage,
   sanitizeWorkdir,
   buildMemoryScopeKey,
+  buildBotMemoryScopeKey,
+  parseBotMemoryScopeKey,
   memoryScopeDirName,
   buildFilename,
   parseFilename,
   validateSlug,
+  SSH_SCOPE_KEY_PREFIX,
   type MemoryStorageMeta,
 } from './memory/storage.js';
+export {
+  resolveMemoryScopeKey,
+  __clearMemoryScopeKeyCacheForTests,
+  type GitProbe,
+  type ResolveMemoryScopeKeyDeps,
+} from './memory/scope-resolver.js';
 export { MemoryFts } from './memory/fts.js';
 export {
   MakerMemoryStore,
@@ -87,6 +97,7 @@ export {
   type SetEnabledResult,
   type SqliteFactory,
 } from './memory/manager.js';
+export { isBotMcpServerAllowed } from './agents/shared/bot-runtime-policy.js';
 export {
   MemoryFlushController,
   DEFAULT_FLUSH_THRESHOLDS,

@@ -32,7 +32,8 @@ export interface SpinnerProps extends Omit<React.HTMLAttributes<HTMLSpanElement>
  * DESIGN.md 设计实现规范(常驻动画必须 compositor-only,SVG 一律静止):
  * CSS animation on SVG roots or SVG children wakes the renderer main thread every
  * frame. Keep the icon SVG static, and animate only this inline-flex wrapper with
- * transform-based Tailwind `animate-spin`.
+ * `animate-spinner` (`--motion-spinner-cycle`, DESIGN.md §14.4)。不复用 Tailwind
+ * `animate-spin` 的硬编码 1s。
  *
  * Usage notes:
  * - The wrapper hugs the icon, so pass `size` only — don't add h/w classes that
@@ -40,7 +41,7 @@ export interface SpinnerProps extends Omit<React.HTMLAttributes<HTMLSpanElement>
  * - The svg sits one level deeper than a bare icon; parent `[&>svg]:` direct-child
  *   selectors won't match it — use `[&_svg]` or style the Spinner wrapper instead.
  * - Don't put translate utilities on the Spinner itself: while spinning, the
- *   `animate-spin` keyframe overwrites `transform` every frame. Nudge an outer
+ *   `animate-spinner` keyframe overwrites `transform` every frame. Nudge an outer
  *   static wrapper instead (never the svg inside — it would orbit off-center).
  */
 const Spinner = React.forwardRef<HTMLSpanElement, SpinnerProps>(function Spinner(
@@ -59,7 +60,7 @@ const Spinner = React.forwardRef<HTMLSpanElement, SpinnerProps>(function Spinner
       ref={ref}
       className={cn(
         'inline-flex shrink-0 items-center justify-center',
-        spinning && 'animate-spin motion-reduce:animate-none',
+        spinning && 'animate-spinner motion-reduce:animate-none',
         className,
       )}
       {...props}

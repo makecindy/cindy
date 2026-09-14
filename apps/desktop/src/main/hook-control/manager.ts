@@ -29,6 +29,7 @@ import {
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
+  HOOK_FEATURE_SESSION_NEW,
   HOOK_FEATURE_SLACK_TOOLS,
   HOOK_FEATURE_TURN_DELIVERY,
   makeBindRevoke,
@@ -210,9 +211,15 @@ export interface HookControlManagerDeps {
    * 快照，因此连接抖动不会反复重建；重连到不同版本 server 时会准确刷新。
    */
   onSlackToolProviderEnabledChanged?: (enabled: boolean) => void;
-  /** 目录偏好快照推送(prefs.state 到达时广播; 含请求回执与 /model 卡主动推)。 */
+  /** 目录偏好快照推送：仅 /model 卡主动推送(replyTo null)时调用。回执不再广播。 */
   notifyPrefs?: (view: HookPrefsView) => void;
   notifyProviderPrefs?: (view: ProviderPrefsView) => void;
+  /**
+   * Slack / Telegram / X 进入「已连接 ∧ live 已绑定」时通知, 供本机偏好做一次
+   * 迁移导入并镜像到 /model 卡。只在权威绑定快照之后触发, 不用缓存身份在
+   * welcome 时抢跑。可重入, 调用方自行去重。
+   */
+  onHookReadyForPrefsMirror?: (provider: HookProvider) => void;
   notifyTelegramBehavior?: (view: TelegramHookBehaviorState) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
   prefsTimeoutMs?: number;
@@ -621,6 +628,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     notifyStatus,
     onSlackToolProviderEnabledChanged,
     notifyPrefs,
+    onHookReadyForPrefsMirror,
     notifyTelegramBehavior,
     prefsTimeoutMs,
     autoBindDeferMs = AUTO_BIND_DEFER_MS,
@@ -685,6 +693,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 只给 Telegram 声明: msg.op 目前只有 Telegram 的执行器, X 的渲染路径
       // 不接入(#1855 的红线之一)。
       HOOK_FEATURE_MESSAGE_OPS,
+      HOOK_FEATURE_SESSION_NEW,
     ],
     isEnabled: () => store.get().telegramEnabled,
     setEnabled: (enabled) => {
@@ -958,6 +967,15 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   /** (multi-team)当前可用(未 displaced)的绑定行。 */
   function activeBindings(): HookTeamBindingView[] {
     return multiBindings.filter((b) => !b.displaced);
+  }
+
+  /** Slack 偏好镜像只认 live confirmed, 不含离线乐观绑定。 */
+  function slackBoundForPrefsMirror(): boolean {
+    return multiTeamKnown() ? activeBindings().length > 0 : binding?.state === 'confirmed';
+  }
+
+  function maybeMirrorSlackPrefs(): void {
+    if (slackBoundForPrefsMirror()) onHookReadyForPrefsMirror?.('slack');
   }
 
   /** 只在 provider 构建期 gate 真翻转时通知 host 失效 Codex MCP 缓存。 */
@@ -1395,13 +1413,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         // 这一刻 lane.binding 可能还是旧值, 用刚确认的 bindingId。
         primeTelegramEmojiReactions(view.bindingId ?? null);
-      } else if (
-        view.state === 'revoked' ||
-        view.state === 'none' ||
-        view.state === 'superseded'
-      ) {
+        onHookReadyForPrefsMirror?.('telegram');
+      } else if (view.state === 'revoked' || view.state === 'none' || view.state === 'superseded') {
         resetTelegramEmojiReactions();
       }
+    } else if (lane.config.provider === 'x' && view.state === 'confirmed') {
+      onHookReadyForPrefsMirror?.('x');
     }
     try {
       if (
@@ -1928,6 +1945,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // teamId 缺失属异常(multi server 恒下发): 不猜行, 等随后的 bind.state 对齐
       notifySlackToolProviderEnabledIfChanged();
       notifyStatus(toView());
+      maybeMirrorSlackPrefs();
       return;
     }
     if (state === 'revoked') {
@@ -2158,6 +2176,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
       }
       notifyStatus(toView());
+      maybeMirrorSlackPrefs();
       log.info(`bind.state: ${snap.length} bindings`);
       return;
     }
@@ -2188,8 +2207,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       return;
     }
     if (msg.type === 'prefs.state') {
-      // 全量快照 latest-wins: 回执(replyTo 命中在途请求)与主动推送(/model
-      // 卡写入后)都无条件广播 —— 多窗口/面板保持同步
+      // 回执只配对在途 get/set, 不再广播 —— 设置页读的是本机正本, 回执里的
+      // server 快照不能盖掉本地写入。/model 卡改动走 replyTo=null 主动推。
       const view: HookPrefsView = {
         bound: msg.payload.bound,
         prefs: msg.payload.prefs.map((p) => ({ ...p })),
@@ -2201,6 +2220,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           clearTimeout(pending.timer);
           pending.resolve(view);
         }
+        return;
       }
       notifyPrefs?.(view);
       return;
@@ -2251,13 +2271,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         lane.pendingPrefs.delete(msg.payload.replyTo);
         clearTimeout(pending.timer);
         pending.resolve(view);
-      } else {
-        const currentBindingId =
-          lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
-        if (msg.payload.bindingId !== currentBindingId) {
-          log.warn('stale provider prefs push for a different binding, dropped');
-          return;
-        }
+        return;
+      }
+      const currentBindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
+      if (msg.payload.bindingId !== currentBindingId) {
+        log.warn('stale provider prefs push for a different binding, dropped');
+        return;
       }
       deps.notifyProviderPrefs?.(view);
       return;
@@ -2401,6 +2420,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         log.info(`slack hook auto-disabled on bind.update=${msg.payload.state}`);
       }
       notifyStatus(toView());
+      if (msg.payload.state === 'confirmed') maybeMirrorSlackPrefs();
       log.info(`bind.update: ${msg.payload.state}`);
       return;
     }
@@ -2424,6 +2444,17 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
               )
                 ? (listRecentSessions?.() ?? [])
                 : Promise.reject(new Error('session-picker-v1 was not negotiated')),
+            createSession: (request) => {
+              if (
+                expectedProvider !== 'telegram' ||
+                lane === null ||
+                !lane.serverFeatures.includes(HOOK_FEATURE_SESSION_NEW) ||
+                !dispatcher
+              ) {
+                return Promise.reject(new Error('session-new-v1 was not negotiated'));
+              }
+              return dispatcher.createSession(dispatchId('telegram'), request);
+            },
           },
           msg.payload,
         ).then((response) => {
@@ -2835,7 +2866,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       for (const lane of lanes) {
         if (lane.transport !== null && lane.status === 'connected') {
           attempted = true;
-          sent = lane.transport.send(makeHello(buildHello(lane.config.helloFeatures, false, lane.config.provider))) && sent;
+          sent =
+            lane.transport.send(
+              makeHello(buildHello(lane.config.helloFeatures, false, lane.config.provider)),
+            ) && sent;
         }
       }
       return attempted && sent;

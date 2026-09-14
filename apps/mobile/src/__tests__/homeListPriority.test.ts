@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LIVE_TASK_PRIORITY } from '@cindy/maker-shared/live-task-priority';
 import {
+  advanceCurrentViewedPriorityHold,
   advanceViewedPriorityHold,
   collectHomePriorityContext,
   createViewedPriorityHoldState,
@@ -89,6 +90,58 @@ describe('homeListPriority hold', () => {
       .toBe(LIVE_TASK_PRIORITY.waiting);
     expect(naturalPriorityRankForId('ask-1', cleared)).toBe(LIVE_TASK_PRIORITY.rest);
   });
+
+  it('releases an old unread hold when the viewed task starts running', () => {
+    const state = createViewedPriorityHoldState();
+    const unread = {
+      runningSessionIds: new Set<string>(),
+      unreadSessionIds: new Set(['task-1']),
+      waitingSessionIds: new Set<string>(),
+    };
+    holdViewedPriorityRank(state, 'task-1', unread);
+    advanceViewedPriorityHold(state, 'task-1', unread, 0);
+
+    const running = {
+      runningSessionIds: new Set(['task-1']),
+      unreadSessionIds: new Set<string>(),
+      waitingSessionIds: new Set<string>(),
+    };
+    expect(advanceCurrentViewedPriorityHold(state, running, 10)).toBe(true);
+    expect(state.heldPriorityRanks.get('task-1')).toBe(LIVE_TASK_PRIORITY.running);
+    expect(sessionPriorityRank('task-1', { ...running, heldPriorityRanks: state.heldPriorityRanks }))
+      .toBe(LIVE_TASK_PRIORITY.running);
+
+    const finished = {
+      ...running,
+      runningSessionIds: new Set<string>(),
+      heldPriorityRanks: state.heldPriorityRanks,
+    };
+    expect(advanceCurrentViewedPriorityHold(state, finished, 15)).toBe(false);
+    expect(sessionPriorityRank('task-1', finished)).toBe(LIVE_TASK_PRIORITY.running);
+
+    advanceViewedPriorityHold(state, undefined, finished, 20);
+    expect(state.recentlyViewedAtMs.has('task-1')).toBe(false);
+  });
+
+  it('still promotes a viewed running task to waiting, then releases waiting when running resumes', () => {
+    const state = createViewedPriorityHoldState();
+    const running = {
+      runningSessionIds: new Set(['task-1']),
+      unreadSessionIds: new Set<string>(),
+      waitingSessionIds: new Set<string>(),
+    };
+    holdViewedPriorityRank(state, 'task-1', running);
+
+    const waiting = {
+      ...running,
+      waitingSessionIds: new Set(['task-1']),
+    };
+    advanceViewedPriorityHold(state, 'task-1', waiting, 10);
+    expect(state.heldPriorityRanks.get('task-1')).toBe(LIVE_TASK_PRIORITY.waiting);
+
+    advanceViewedPriorityHold(state, 'task-1', running, 20);
+    expect(state.heldPriorityRanks.get('task-1')).toBe(LIVE_TASK_PRIORITY.running);
+  });
 });
 
 describe('collectHomePriorityContext', () => {
@@ -110,7 +163,7 @@ describe('collectHomePriorityContext', () => {
     expect(naturalPriorityRankForId('idle', ctx)).toBe(LIVE_TASK_PRIORITY.rest);
   });
 
-  it('ranks an unread + running task as unread, not running', () => {
+  it('ranks an unread + running task as running for its current turn', () => {
     const hold = createViewedPriorityHoldState();
     // 定时任务同时「完成未读」(scheduleInfo.unreadCount>0) 又「下一轮运行中」。
     const ctx = collectHomePriorityContext(
@@ -122,7 +175,7 @@ describe('collectHomePriorityContext', () => {
     // 独立收集:该任务同时进 unread 与 running 集合。
     expect(ctx.unreadSessionIds.has('both')).toBe(true);
     expect(ctx.runningSessionIds.has('both')).toBe(true);
-    // 尺子 waiting > unread > running:落 unread 档而非 running 档。
-    expect(naturalPriorityRankForId('both', ctx)).toBe(LIVE_TASK_PRIORITY.unread);
+    // 当前轮 running 压过上一轮 done 未读;纯完成未读仍在纯 running 前面。
+    expect(naturalPriorityRankForId('both', ctx)).toBe(LIVE_TASK_PRIORITY.running);
   });
 });

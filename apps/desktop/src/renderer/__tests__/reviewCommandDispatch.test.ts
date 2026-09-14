@@ -10,6 +10,9 @@ const sessionViewSource = readFileSync(
 const dispatchStart = sessionViewSource.indexOf('const maybeDispatchDesktopSlashCommand');
 const dispatchEnd = sessionViewSource.indexOf('const maybeShowContextUsage', dispatchStart);
 const dispatchSource = sessionViewSource.slice(dispatchStart, dispatchEnd);
+const handleSendStart = sessionViewSource.indexOf('const handleSend = useCallback');
+const handleSendEnd = sessionViewSource.indexOf('const handleStopSession', handleSendStart);
+const handleSendSource = sessionViewSource.slice(handleSendStart, handleSendEnd);
 
 describe('/review command dispatch', () => {
   it('keeps a known Pi Skill draft when loaded runtime proof is unavailable', () => {
@@ -85,5 +88,14 @@ describe('/review command dispatch', () => {
     expect(dispatchSource).toContain('if (slashDispatch.accepted) {');
     expect(dispatchSource).toContain('pending.onDeferredAccepted?.();');
     expect(dispatchSource).toContain('waitForLeadHistory: false');
+  });
+
+  it('re-consumes an accepted desktop command without overwriting newer input', () => {
+    expect(handleSendSource).toMatch(
+      /if \(slashDispatch\.handled\) \{\s+if \(slashDispatch\.accepted\) \{\s+\/\/ Desktop commands[\s\S]*?opts\?\.onDeferredAccepted\?\.\(\);/,
+    );
+    expect(handleSendSource.indexOf('opts?.onDeferredAccepted?.();')).toBeLessThan(
+      handleSendSource.indexOf('return slashDispatch.accepted;'),
+    );
   });
 });

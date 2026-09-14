@@ -1,7 +1,7 @@
 /**
  * GhostLibrarySection — 插件详情页的「持久作品库」设置区(2026-08-20)。
  * ---------------------------------------------------------------------------
- * 只在 manifest 声明 library 槽时渲染。职责:
+ * 只在 manifest 声明 library 能力时渲染。职责:
  *   - 展示位置(默认/自定义)、占用、磁盘余量、状态横幅(漂移/只读/orphaned);
  *   - 更改位置(宿主弹原生选择器 → 候选校验 → 确认 → 迁移状态机);
  *   - 恢复默认位置(反向迁移 + 撤销 binding);漂移时的「解除位置记录」恢复;
@@ -36,11 +36,11 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * 外层:未声明 library 槽直接不挂载内层(内层用了 useConfirmDialog,测试环境
+ * 外层:未声明 library 能力直接不挂载内层(内层用了 useConfirmDialog,测试环境
  * 无 Provider——不声明就不进 hook,老用例零影响)。
  */
-export function GhostLibrarySection({ ghostId, slots }: { ghostId: string; slots: readonly string[] }) {
-  if (!slots.includes('library')) return null;
+export function GhostLibrarySection({ ghostId, enabled }: { ghostId: string; enabled: boolean }) {
+  if (!enabled) return null;
   return <GhostLibrarySectionInner ghostId={ghostId} />;
 }
 

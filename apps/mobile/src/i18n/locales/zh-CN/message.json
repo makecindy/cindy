@@ -116,6 +116,11 @@
     "controlFork": "分叉任务",
     "markdownDocAriaLabel": "消息正文",
     "toolOutputTitle": "{{label}} 输出",
+    "toolInputTitle": "{{label}} 输入",
+    "viewToolInput": "查看完整输入",
+    "loadingToolInput": "正在读取完整输入",
+    "retryToolInput": "读取失败，重试",
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "空 Mermaid 图表。",
     "diffEditCount": "{{n}} 处编辑"
   },
@@ -148,6 +153,7 @@
     "systemInstruction": "系统指令",
     "retrySend": "重试发送",
     "clearError": "清除错误",
+    "noRetryContent": "没有可重发的内容，请清除错误后重新输入。",
     "piImageInputUnsupported": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
     "codexResumeNotReady": "Codex 暂时无法恢复这个任务，请稍后重试",
     "credentialSwitchWait": "正在等待其它 Codex 任务结束，结束后自动发送",
@@ -174,6 +180,19 @@
     "retry": "重试"
   },
   "systemCard": {
+    "contextRebuild": {
+      "labelOverflow": "已整理上下文并继续",
+      "labelTimeout": "上一轮没有响应，已整理后继续",
+      "labelStrip": "已去掉过大图片并继续",
+      "handoffTitle": "交接内容——整理后发送给后续对话的上下文摘要(不计入对话记录，仅在此展示)",
+      "handoffTitleEnglishSource": "交接内容——整理后发送给后续对话的上下文摘要，原文为英文(不计入对话记录，仅在此展示)"
+    },
+    "compact": {
+      "savedTokens": "节省 {{tokens}} tokens",
+      "manual": "手动压缩",
+      "auto": "自动压缩",
+      "aria": "对话已压缩"
+    },
     "goalComplete": "目标已达成 · {{turns}} 轮 · 耗时 {{duration}}",
     "goalResumed": "用量已恢复，继续目标",
     "goalCapacityRetry": "模型服务繁忙，正在重试目标",

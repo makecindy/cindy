@@ -20,6 +20,16 @@
 - 运行时需要持久化秘密时，复用现有 Main／宿主管理的 credential store 或 Electron
   `safeStorage` 边界。不要新增自定义明文凭证文件，也不要把秘密下放给 Renderer、插件
   或不受信任页面。
+- 可信 Node Worker 的显式例外：`node.secretBindings[].oauthSecret` 只能引用本插件
+  已声明的 OAuth key。Host 根据本次 `authAccount`（省略时为默认账号）刷新并注入
+  短期 access token；不得注入 refresh token、返回 Renderer/Agent、写日志或落盘。
+  Worker 启动第三方 CLI 时仅用该次子进程环境传递，不修改全局环境或复用他账号配置。
+  这是高权限 Node 的受审查信任边界，不是系统沙箱或对恶意 Worker 的隔离保证。
+  实现与回归见 [nodeRuntimeBroker.ts](../../apps/desktop/src/main/cindy-brain/nodeRuntimeBroker.ts)
+  和 [nodeRuntimeBroker.test.ts](../../apps/desktop/src/main/cindy-brain/__tests__/nodeRuntimeBroker.test.ts)。
+- 插件自定义的账号昵称、展示偏好和业务配置属于插件数据，使用现有隔离 `/kv`，
+  不扩充 Host OAuth 账号模型、凭证库或专用接口。插件按账号 ID 合并这些数据用于展示
+  和选择账号；传给 Host 的授权身份仍是账号 ID，不能用昵称替代。
 - access token 等只需短期使用的秘密优先保留在内存中。日志、错误、遥测和调试输出不得
   包含凭证明文、完整鉴权头或可直接复用的授权材料。
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、
@@ -58,6 +68,8 @@
 | Cindy 管理的持久数据 | Desktop 使用 `app.getPath('userData')`，共享 package 由宿主注入等价根目录 |
 | 可丢弃的临时数据 | `app.getPath('temp')` 或 `os.tmpdir()` 下的任务专属目录 |
 | 测试生成物 | `os.tmpdir()` 下通过 `mkdtemp` 创建的独立目录，并在测试结束时清理 |
+| Skill 卸载清理回执 | `app.getPath('userData')/skillhub/uninstall-cleanups/<token>.json`，记录操作 owner、旧文件/注册/偏好身份与完成阶段；跨窗口和重启保留，当前 owner 重试完成后删除，不作为授权凭据 |
+| 跨 profile 的共享 Skill 文件互斥 | `app.getPath('appData')/Cindy/shared-skill-mutation-locks`，仅存文件锁及未完成操作的 token/名称哈希，保证正式版/dev/isolated 共用；短期锁复用既有崩溃回收，持久屏障必须等对应清理完成后删除，读取损坏只阻止相关名称 |
 | 用户明确导出的文件 | 用户选择或任务明确指定的目标路径 |
 
 - 禁止把 `process.cwd()`、仓库根或源码目录作为 userData、凭证目录或临时目录的默认回退。

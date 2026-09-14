@@ -7,18 +7,16 @@
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
-import type { GhostManifest, GhostPermissionDiff } from '../../../../shared/ghost';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
 /**
- * 批量更新策略(设计定稿):权限无变化的自动串行完成;权限有扩张的
- * 停在 `needs-confirm`,由用户逐项同意或跳过,绝不自动放行扩权。
+ * 批量更新只维护执行进度。真实包由统一安装事务校验并落位，
+ * 本模型不再保存目录 manifest、能力基线或另一套更新状态。
  */
 export type UpdateAllRowStatus =
   | 'pending'
   | 'installing'
   | 'done'
-  | 'needs-confirm'
   | 'skipped'
   | 'failed';
 
@@ -29,32 +27,6 @@ export interface UpdateAllRow {
   fromVersion: string;
   toVersion: string;
   status: UpdateAllRowStatus;
-  /** 目标 release(needs-confirm 时由运行器填充,approve 用它做并发防护)。 */
-  releaseId?: string;
-  /** 扩权详情(status 为 needs-confirm 时由运行器填充)。 */
-  permissionDiff?: GhostPermissionDiff;
-  /**
-   * 待确认期间插件被外部路径(从文件更新等)换掉了权限基线:审阅过的
-   * 权限差异已不对应现实,弹窗提示"需要重新审阅",按钮点下去先重算再决定。
-   */
-  staleReview?: boolean;
-  /**
-   * 审阅所依据的**已装 manifest 权限指纹**(不是版本号)。
-   * `ghosts.update()` 允许同版本整体替换 manifest,所以版本号不是可靠的
-   * 审阅基线。Renderer 先检查、Main 在安装锁内复核。
-   */
-  reviewedBaseline?: string;
-  /**
-   * 审阅时 Host 下发的批准态 token。manifest 权限指纹相同也不代表授权事实
-   * 相同：approved receipt 失效成 invalid / legacy-unapproved 后，旧的局部 diff
-   * 必须作废并按“无批准基线”重新展示全部权限。
-   */
-  reviewedApproval?: string;
-  /**
-   * 审阅时取得的 manifest:主进程强制要求安装时传回同一份清单，
-   * approve 必须原样带上，否则 INVALID_PARAMS。
-   */
-  expectedManifest?: GhostManifest;
   /** status 为 failed 时的用户可读错误(已经过 i18n 映射)。 */
   errorText?: string;
 }
@@ -90,9 +62,9 @@ export function isBatchSettled(rows: readonly UpdateAllRow[]): boolean {
   return rows.every((row) => row.status !== 'pending' && row.status !== 'installing');
 }
 
-/** 批次是否完全结束:连待确认的扩权行都已被用户处理。 */
+/** 批次是否完全结束。 */
 export function isBatchFinished(rows: readonly UpdateAllRow[]): boolean {
-  return isBatchSettled(rows) && rows.every((row) => row.status !== 'needs-confirm');
+  return isBatchSettled(rows);
 }
 
 /** 完成摘要:成功 / 跳过 / 失败计数,供收尾 toast 使用。 */

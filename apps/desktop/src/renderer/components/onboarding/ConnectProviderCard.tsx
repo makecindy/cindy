@@ -36,11 +36,14 @@ function rowIcon(id: string, name: string, routing?: ProviderLogoRouting): React
   return <span className="text-13 font-semibold leading-none">{providerMonogram(name)}</span>;
 }
 
-export function ConnectProviderCard({ className }: { className?: string }) {
+export function ConnectProviderCard({ className, dismissible = true }: {
+  className?: string;
+  dismissible?: boolean;
+}) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
   const signInToCindy = useSignInToCindy();
-  const onboarding = useProviderOnboarding({ loadPresets: true });
+  const onboarding = useProviderOnboarding({ loadPresets: true, dismissible });
   const [othersOpen, setOthersOpen] = useState(false);
 
   if (!onboarding.visible) return null;
@@ -149,14 +152,16 @@ export function ConnectProviderCard({ className }: { className?: string }) {
         )}
       </div>
 
-      <div className="mt-4 flex items-center justify-between">
-        <button
-          type="button"
-          onClick={onboarding.dismiss}
-          className="rounded-full px-3 py-1.5 text-13 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
-        >
-          {t('onboarding.connectProvider.dismiss')}
-        </button>
+      <div className={cn('mt-4 flex items-center', dismissible ? 'justify-between' : 'justify-end')}>
+        {dismissible ? (
+          <button
+            type="button"
+            onClick={onboarding.dismiss}
+            className="rounded-full px-3 py-1.5 text-13 text-[var(--text-tertiary)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
+          >
+            {t('onboarding.connectProvider.dismiss')}
+          </button>
+        ) : null}
         <button
           type="button"
           onClick={() => navigate('/settings?tab=providers&wizard=1')}

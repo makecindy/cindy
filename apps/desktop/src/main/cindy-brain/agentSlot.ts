@@ -130,7 +130,7 @@ export class GhostAgentSlot {
   issueUserActionToken(ghostId: string, sessionId: string | null): string | null {
     if (!sessionId) return null;
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('agent')) return null;
+    if (!ghost?.enabled || !ghost.manifest.agent) return null;
 
     this.sweepExpiredGrants();
     while (this.grants.size >= MAX_LIVE_TOKENS) {
@@ -169,7 +169,7 @@ export class GhostAgentSlot {
   /** 处理电子脑的 agent-request；所有失败都折叠成结构化返回。 */
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeAgentResult> {
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('agent')) {
+    if (!ghost?.enabled || !ghost.manifest.agent) {
       return {
         ok: false,
         errorCode: 'PERMISSION_DENIED',

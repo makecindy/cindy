@@ -1092,6 +1092,10 @@ export class RealtimeAsrWebSocketProvider implements AsrProvider {
   // pending refines). Ensures the recorder flushes its WAV/meta before the
   // provider is GC'd.
   async dispose(): Promise<void> {
+    // Fallback candidates can be disposed directly when their start attempt
+    // times out or loses a hedge. Make dispose self-contained so a provider
+    // cannot leave a connecting websocket alive when the wrapper skips it.
+    if (!this.stopRequested) await this.stop();
     this.stopHealthLog();
     if (this.recorder) {
       await this.recorder.finalize({

@@ -14,6 +14,11 @@ describe('useProviderOAuthDeviceCode', () => {
     verificationUrl: string;
     userCode: string;
     expiresAt?: number;
+  } | {
+    providerId: string;
+    ownerId: string;
+    phase: 'browser-url';
+    url: string | null;
   }) => void) | null = null;
 
   beforeEach(() => {
@@ -32,6 +37,15 @@ describe('useProviderOAuthDeviceCode', () => {
         },
       },
     });
+  });
+
+  it('shows the new account device code rather than the preset identity', () => {
+    const browserLoginRef = { current: { providerId: 'nous-new-account', ownerId: 'owner' } };
+    const { result } = renderHook(() => useProviderOAuthDeviceCode('nous', { browserLoginRef }));
+    act(() => listener?.({ providerId: 'nous-new-account', phase: 'device-code', verificationUrl: 'https://portal.nousresearch.com', userCode: 'ABCD' }));
+    expect(result.current.deviceCode?.userCode).toBe('ABCD');
+    act(() => listener?.({ providerId: 'nous', phase: 'device-code', verificationUrl: 'https://portal.nousresearch.com', userCode: 'WRONG' }));
+    expect(result.current.deviceCode?.userCode).toBe('ABCD');
   });
 
   it('keeps only matching progress in memory', () => {
@@ -58,6 +72,32 @@ describe('useProviderOAuthDeviceCode', () => {
       userCode: 'AAAA',
       expiresAt: 123,
     });
+  });
+  it('keeps browser links only for the active owner and clears on cancel, finish and provider switch', () => {
+    const { result, rerender } = renderHook(({ id }) => useProviderOAuthDeviceCode(id), {
+      initialProps: { id: 'provider-a' },
+    });
+    let first!: ReturnType<typeof result.current.beginOwnedLogin>;
+    act(() => { first = result.current.beginOwnedLogin(); });
+    const progress = (ownerId = first.ownerId!, url: string | null = 'https://auth.openai.com/authorize?fake=1') =>
+      listener?.({ providerId: 'provider-a', ownerId, phase: 'browser-url', url });
+    act(() => progress('unrelated'));
+    expect(result.current.browserUrl).toBeNull();
+    act(() => progress());
+    expect(result.current.browserUrl).toContain('fake=1');
+    act(() => result.current.cancelOwnedLogin());
+    expect(result.current.browserUrl).toBeNull();
+    let next!: typeof first;
+    act(() => { next = result.current.beginOwnedLogin(); progress(next.ownerId); });
+    act(() => { progress(); first.finish(); });
+    expect(result.current.browserUrl).toContain('fake=1');
+    act(() => next.finish());
+    expect(result.current.browserUrl).toBeNull();
+    act(() => progress(next.ownerId));
+    expect(result.current.browserUrl).toBeNull();
+    act(() => { next = result.current.beginOwnedLogin(); progress(next.ownerId); });
+    rerender({ id: 'provider-b' });
+    expect(result.current.browserUrl).toBeNull();
   });
 
   it('unsubscribes without cancelling a login observed from another view', () => {

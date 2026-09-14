@@ -55,10 +55,15 @@ vi.mock('../../appSessionState.js', () => ({
 // 本机凭证库:*Unbound 是「blob 里有凭证吗」,无绑定语义;带绑定的读取叠加 owner 校验,
 // 与真实实现(readClaudeAiOAuth / hasGrokOAuthLogin)的分层一致。
 vi.mock('../claude-credentials-store.js', () => ({
+  readClaudeAiOAuth: () =>
+    h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
+      ? { accessToken: 'fake-token', identity: 'claude@example.test' }
+      : null,
   hasClaudeAiOAuthUnbound: () => h.claudeCredentialPresent,
   hasClaudeAiOAuth: () => h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
 }));
 vi.mock('../grok-oauth-login.js', () => ({
+  grokAccountIdentity: () => 'grok@example.test',
   hasGrokOAuthLoginUnbound: () => h.grokCredentialPresent,
   hasGrokOAuthLogin: () => h.grokCredentialPresent && isBoundToCurrentOwner('xai'),
   getGrokAccessToken: () => null,
@@ -97,6 +102,7 @@ vi.mock('../auth-adapters.js', () => ({
   desktopCodexAuthAdapter: {
     hasCodexOAuthLogin: h.codexLoginWithSideEffects,
     hasCodexOAuthLoginReadOnly: h.codexLoginReadOnly,
+    readAccountPresentationState: async () => ({ authenticated: h.codexLoginReadOnly() }),
     hasCodexOAuthLoginUnbound: () => false,
   },
 }));
@@ -171,6 +177,27 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
+  it('projects only bound native account identities without exposing credentials', async () => {
+    const before = await listProviders(false);
+    for (const id of ['anthropic', 'xai']) {
+      expect(before.find((p) => p.id === id)?.subscriptionAccount?.identity).toBeUndefined();
+    }
+    bindNativeProviderAuth('anthropic', { sharedSystem: true });
+    bindNativeProviderAuth('xai');
+    const after = await listProviders(false);
+    expect(after.find((p) => p.id === 'anthropic')?.subscriptionAccount).toEqual({
+      source: 'local', identity: 'claude@example.test',
+    });
+    expect(after.find((p) => p.id === 'xai')?.subscriptionAccount).toEqual({
+      source: 'oauth', identity: 'grok@example.test',
+    });
+    h.dataOwnerId = 'owner-b';
+    h.generation += 1;
+    const switched = await listProviders(false);
+    for (const id of ['anthropic', 'xai']) {
+      expect(switched.find((p) => p.id === id)?.subscriptionAccount?.identity).toBeUndefined();
+    }
+  });
   it('认领本机 anthropic 凭证并补拉一次清单(修「已连接 + 零模型」)', async () => {
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
 

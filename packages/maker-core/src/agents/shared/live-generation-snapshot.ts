@@ -3,13 +3,12 @@ import type { UsageSnapshot } from '../../types/events.js';
 export interface LiveGenerationTiming {
   /** Turn-cumulative output tokens, including reasoning. */
   outputTokens: number;
-  /** Closed model-active intervals for this turn. */
-  closedDurationMs: number;
+  /** Duration captured with outputTokens; sparse usage must not include later in-flight time. */
+  durationMs: number;
   /** Open interval start, or null while tools/user waits own the turn. */
   openStartedAt: number | null;
   /** False when any output lacks a compatible generation-only denominator. */
   reliable: boolean;
-  now?: number;
 }
 
 /**
@@ -36,22 +35,24 @@ export function attachLiveGeneration(
     };
   }
 
-  const now = timing.now ?? Date.now();
-  const closed =
-    typeof timing.closedDurationMs === 'number' && Number.isFinite(timing.closedDurationMs)
-      ? Math.max(0, timing.closedDurationMs)
-      : 0;
-  const openMs =
-    timing.openStartedAt != null && Number.isFinite(timing.openStartedAt)
-      ? Math.max(0, now - timing.openStartedAt)
-      : 0;
-  const generationDurationMs = closed + openMs;
+  const generationDurationMs = timing.durationMs;
   const generationActive = timing.openStartedAt != null && Number.isFinite(timing.openStartedAt);
 
   return {
     ...next,
     generationReliable: true,
     generationActive,
-    ...(generationDurationMs > 0 ? { generationDurationMs } : {}),
+    ...(Number.isFinite(generationDurationMs) && generationDurationMs > 0
+      ? { generationDurationMs }
+      : {}),
   };
+}
+
+/** Capture the cumulative model time at the same boundary as an output-usage update. */
+export function sampleGenerationDuration(
+  closedDurationMs: number,
+  openStartedAt: number | null,
+  now = Date.now(),
+): number {
+  return closedDurationMs + (openStartedAt === null ? 0 : Math.max(0, now - openStartedAt));
 }

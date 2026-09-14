@@ -1,10 +1,9 @@
 /**
  * ChatFileChipMenuSheet — 聊天正文文件 chip 长按操作菜单。
  *
- * 复用模型选择面板同一套浮动面板组件(ContextSheet → SheetSurface:同款
- * grabber / header / 半屏吸附 / 遮罩关闭),不另造菜单容器,保证全 app 面板
- * 观感一致(产品 2026-07-05 要求)。动作行走 ContextSheetGroup / ContextSheetRow
- * (自带分组卡片、hairline 分隔、busy spinner)。
+ * iOS 不再挂本组件:会话页长按直接走系统 ActionSheetIOS。本文件只服务 Android。
+ * Android 仍复用 ContextSheet → SheetSurface,与其它内容面板同结构。
+ * 2026-07-05「必须和内容面板长得一样」的口径已更新:纯动作菜单在 iOS 交给系统。
  *
  * 动作语义对齐桌面 chip 右键菜单(useFileChipContextMenu)的手机等价物:
  *   - 快速预览 / 打开文件浏览器:与 chip 点击同路;
@@ -14,28 +13,41 @@
  *   - 导出 / 分享(仅文件):两段式导出 → 系统分享单(与文件浏览器同链路)。
  */
 
-import { Copy, Eye, FolderOpen, MessageSquarePlus, Share as ShareIcon } from 'lucide-react-native';
-import { useRef } from 'react';
-import { useTranslation } from 'react-i18next';
+import {
+  Copy,
+  Eye,
+  FolderOpen,
+  MessageSquarePlus,
+  Share as ShareIcon,
+} from "lucide-react-native";
+import { useRef } from "react";
+import { useTranslation } from "react-i18next";
 
-import { ContextSheet, ContextSheetGroup, ContextSheetRow } from '@/session/ContextSheet';
+import {
+  ContextSheet,
+  ContextSheetGroup,
+  ContextSheetRow,
+} from "@/session/ContextSheet";
 import {
   chatFileChipMenuRows,
   chatFileChipMenuTitle,
   type ChatFileChipMenuActionKey,
-} from '@/session/chatFileChipMenuModel';
-import type { ChatFilePathTarget } from '@/session/chatFilePathContext';
-import { iconSize, iconStroke } from '@/theme/tokens';
-import { useTheme } from '@/theme';
+} from "@/session/chatFileChipMenuModel";
+import type { ChatFilePathTarget } from "@/session/chatFilePathContext";
+import { iconSize, iconStroke } from "@/theme/tokens";
+import { useTheme } from "@/theme";
 
 export interface ChatFileChipMenuSheetProps {
   /** null = 关闭。 */
   target: ChatFilePathTarget | null;
-  keyboardAvoidingBehavior: 'height' | 'padding' | undefined;
+  keyboardAvoidingBehavior: "height" | "padding" | undefined;
   onClose: () => void;
   /** 「导出 / 分享」进行中(行内 spinner,面板保持打开直到完成/失败)。 */
   shareBusy: boolean;
-  onAction: (key: ChatFileChipMenuActionKey, target: ChatFilePathTarget) => void;
+  onAction: (
+    key: ChatFileChipMenuActionKey,
+    target: ChatFilePathTarget,
+  ) => void;
 }
 
 export function ChatFileChipMenuSheet({
@@ -54,18 +66,26 @@ export function ChatFileChipMenuSheet({
   if (target) lastTargetRef.current = target;
   const renderTarget = target ?? lastTargetRef.current;
   if (!renderTarget) return null;
-  const iconProps = { color: colors.textSecondary, size: iconSize.md, strokeWidth: iconStroke.regular } as const;
+  const iconProps = {
+    color: colors.textSecondary,
+    size: iconSize.md,
+    strokeWidth: iconStroke.regular,
+  } as const;
   const iconOf = (key: ChatFileChipMenuActionKey) => {
     switch (key) {
-      case 'open':
-        return renderTarget.kind === 'directory' ? <FolderOpen {...iconProps} /> : <Eye {...iconProps} />;
-      case 'revealInBrowser':
+      case "open":
+        return renderTarget.kind === "directory" ? (
+          <FolderOpen {...iconProps} />
+        ) : (
+          <Eye {...iconProps} />
+        );
+      case "revealInBrowser":
         return <FolderOpen {...iconProps} />;
-      case 'sendToSession':
+      case "sendToSession":
         return <MessageSquarePlus {...iconProps} />;
-      case 'copyPath':
+      case "copyPath":
         return <Copy {...iconProps} />;
-      case 'share':
+      case "share":
         return <ShareIcon {...iconProps} />;
     }
   };
@@ -77,10 +97,16 @@ export function ChatFileChipMenuSheet({
       title={chatFileChipMenuTitle(renderTarget)}
       visible={target != null}
     >
-      <ContextSheetGroup label={renderTarget.kind === 'directory' ? t('composer.attachments.fileMenu.folder') : t('composer.attachments.fileMenu.file')}>
+      <ContextSheetGroup
+        label={
+          renderTarget.kind === "directory"
+            ? t("composer.attachments.fileMenu.folder")
+            : t("composer.attachments.fileMenu.file")
+        }
+      >
         {chatFileChipMenuRows(renderTarget).map((row) => (
           <ContextSheetRow
-            busy={row.key === 'share' && shareBusy}
+            busy={row.key === "share" && shareBusy}
             icon={iconOf(row.key)}
             key={row.key}
             label={row.label}

@@ -80,6 +80,8 @@ import {
 } from '../../shared/ghost.js';
 import type { CindyProxySearchService } from '../mcp-integrations/cindyProxySearch.js';
 import { probeImageSize } from './imageProbe.js';
+import { isLibraryBlobRelPath, isLibrarySidecarRelPath } from './librarySlot.js';
+import { assertLibraryEditImageSource } from './imageChannelRegistry.js';
 import {
   decodeCatalogPin,
   type OneshotRoute,
@@ -201,10 +203,11 @@ export interface CindySlotDeps {
    */
   videoCapabilities?(model: string, providerId?: string): CindyVideoCapabilities | null;
   /**
-   * 指纹 → 磁盘路径,且仅当该媒体在此意识名下(出生或画廊,查账本);
+   * 指纹或 library 相对键 → 磁盘路径,且仅当该媒体在此意识名下;
    * 不属于它 / 查无此账 / 文件缺失一律 null(不区分,不给探测空间)。
    * ownerScopeKey 是任务受理时捕获的稳定作用域；宿主须锁定同一 DB，并在
    * 每个查询 await 边界复核，禁止通过动态 defaultDb 跨到新账号。
+   * editImage 消费口:正本只认 assets/<2>/<hash>/blob.<ext>;sidecar 禁止当像素。
    */
   resolveOwnedMedia(ghostId: string, hash: string, ownerScopeKey: string): Promise<string | null>;
   /**
@@ -816,8 +819,8 @@ export class GhostCindySlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
     }
-    if (!ghost.manifest.slots?.includes('cindy')) {
-      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
+    if (!ghost.manifest.cindy) {
+      return { ok: false, message: '本意识未声明 cindy 能力,无权请 Cindy 代办' };
     }
     // 能力粒度资格审:详单里没申请的动作点不了(缺详单 = 零能力,提示作者补声明)。
     const declaredActions: readonly string[] = ghost.manifest.cindy?.[info.category] ?? [];
@@ -947,7 +950,15 @@ export class GhostCindySlot {
         return { ok: false, message: `源图过多(上限 ${maxSources} 张)` };
       }
       for (const h of p.hashes) {
-        if (typeof h !== 'string' || !HASH_RE.test(h)) {
+        if (typeof h !== 'string') {
+          return { ok: false, message: '源图指纹格式不合法' };
+        }
+        const blobKey = h.startsWith('library:') ? h.slice('library:'.length) : h;
+        if (isLibrarySidecarRelPath(blobKey) || (blobKey.includes('/') && !isLibraryBlobRelPath(blobKey))) {
+          return { ok: false, message: '源图必须是 library 正本 blob,sidecar 禁止当像素' };
+        }
+        if (isLibraryBlobRelPath(blobKey)) continue;
+        if (!HASH_RE.test(h)) {
           return { ok: false, message: '源图指纹格式不合法' };
         }
       }
@@ -1028,10 +1039,24 @@ export class GhostCindySlot {
       // (统一话术不泄露细节)。异步模式也在受理期同步校验,拒绝立即可见。
       const imagePaths: string[] = [];
       for (const hash of hashes) {
-        const abs = await this.deps.resolveOwnedMedia(ghostId, hash, ownerScopeKey);
+        const lookup = hash.startsWith('library:') ? hash.slice('library:'.length) : hash;
+        if (isLibrarySidecarRelPath(lookup)) {
+          return { ok: false, message: '源图必须是 library 正本 blob,sidecar 禁止当像素' };
+        }
+        const abs = await this.deps.resolveOwnedMedia(ghostId, lookup, ownerScopeKey);
         assertOwnerScopeCurrent();
         if (!abs) {
           return { ok: false, message: '源图不在本意识名下(仅能改自己生成或画廊里的媒体)' };
+        }
+        if (isLibraryBlobRelPath(lookup)) {
+          try {
+            assertLibraryEditImageSource(abs);
+          } catch (err) {
+            return {
+              ok: false,
+              message: err instanceof Error ? err.message : '源图必须是 library 正本 blob,sidecar 禁止当像素',
+            };
+          }
         }
         imagePaths.push(abs);
       }
@@ -1277,8 +1302,8 @@ export class GhostCindySlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
     }
-    if (!ghost.manifest.slots?.includes('cindy')) {
-      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
+    if (!ghost.manifest.cindy) {
+      return { ok: false, message: '本意识未声明 cindy 能力,无权请 Cindy 代办' };
     }
     const declared: readonly string[] = ghost.manifest.cindy?.media ?? [];
     if (!declared.includes('deposit')) {
@@ -1308,10 +1333,10 @@ export class GhostCindySlot {
         errorCode: 'PERMISSION_DENIED',
       };
     }
-    if (!ghost.manifest.slots?.includes('cindy')) {
+    if (!ghost.manifest.cindy) {
       return {
         ok: false,
-        message: '本意识未声明 cindy 卡槽，无权请 Cindy 搜索',
+        message: '本意识未声明 cindy 能力，无权请 Cindy 搜索',
         errorCode: 'PERMISSION_DENIED',
       };
     }
@@ -1518,10 +1543,10 @@ export class GhostCindySlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态', errorCode: 'PERMISSION_DENIED' };
     }
-    if (!ghost.manifest.slots?.includes('cindy')) {
+    if (!ghost.manifest.cindy) {
       return {
         ok: false,
-        message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办',
+        message: '本意识未声明 cindy 能力,无权请 Cindy 代办',
         errorCode: 'PERMISSION_DENIED',
       };
     }
@@ -1694,10 +1719,10 @@ export class GhostCindySlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态', errorCode: 'PERMISSION_DENIED' };
     }
-    if (!ghost.manifest.slots?.includes('cindy')) {
+    if (!ghost.manifest.cindy) {
       return {
         ok: false,
-        message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办',
+        message: '本意识未声明 cindy 能力,无权请 Cindy 代办',
         errorCode: 'PERMISSION_DENIED',
       };
     }
@@ -2213,8 +2238,8 @@ export class GhostCindySlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
     }
-    if (!ghost.manifest.slots?.includes('cindy')) {
-      return { ok: false, message: '本意识未声明 cindy 卡槽,无权请 Cindy 代办' };
+    if (!ghost.manifest.cindy) {
+      return { ok: false, message: '本意识未声明 cindy 能力,无权请 Cindy 代办' };
     }
     if (typeof p.jobId !== 'string' || p.jobId.length === 0 || p.jobId.length > MAX_JOB_ID_LEN) {
       return { ok: false, message: 'jobId 不合法(mode:submit 受理时返回的任务号)' };

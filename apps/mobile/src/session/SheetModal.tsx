@@ -25,6 +25,7 @@ import {
 } from 'react-native';
 import { useTranslation } from 'react-i18next';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
+import { GestureHandlerRootView } from '@/platform/gestureHandler';
 import { useModalFadeLifecycle } from '@/session/useModalFadeLifecycle';
 import { useThemedStyles, type ThemeColors } from '@/theme';
 
@@ -118,6 +119,7 @@ export function SheetModal({
       transparent
       visible={mounted}
     >
+      <GestureHandlerRootView style={styles.gestureRoot}>
       <Animated.View style={backdropStyle}>
         <BlurBackdrop />
         <Pressable
@@ -145,12 +147,14 @@ export function SheetModal({
       ) : (
         content
       )}
+      </GestureHandlerRootView>
     </Modal>
   );
 }
 
 function makeStyles(colors: ThemeColors) {
   return {
+    gestureRoot: { flex: 1 },
     backdrop: {
       ...StyleSheet.absoluteFill,
     },

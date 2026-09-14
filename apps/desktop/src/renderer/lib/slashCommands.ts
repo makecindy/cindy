@@ -95,6 +95,83 @@ export function agentSkillInvocationForDispatch(
   };
 }
 
+/**
+ * Rewrite a selected Skill alias only at dispatch time so Pi receives its
+ * runtime command name without changing the user-visible composer text.
+ */
+export function rewriteAgentSkillInvocationForDispatch(
+  message: string,
+  command: UnifiedCommand | undefined,
+): string {
+  if (
+    !command
+    || command.kind !== 'agent-skill'
+    || !command.runtimeCommandName
+    || isSlashCommandUnavailable(command)
+  ) {
+    return message;
+  }
+  const leading = leadingSlashInvocation(message);
+  if (!leading || leading.name.toLowerCase() !== command.name.toLowerCase()) return message;
+  return `${message.slice(0, leading.start)}/${command.runtimeCommandName}${message.slice(leading.end)}`;
+}
+
+/** Rewrite a Pi Skill alias even while its project entry is pending discovery. */
+export function rewritePiSkillAliasFromCommand(
+  message: string,
+  command: UnifiedCommand | undefined,
+): string {
+  const leading = leadingSlashInvocation(message);
+  if (
+    !leading
+    || command?.kind !== 'agent-skill'
+    || !command.runtimeCommandName
+    || leading.name.toLowerCase() !== command.name.toLowerCase()
+  ) {
+    return rewriteAgentSkillInvocationForDispatch(message, command);
+  }
+  return `${message.slice(0, leading.start)}/${command.runtimeCommandName}${message.slice(leading.end)}`;
+}
+
+/** First-message/worktree send paths that bypass SessionView dispatch. */
+export async function rewritePiSkillMessageForSend(params: {
+  agentKind: AgentKind;
+  message: string;
+  workingDir?: string | null;
+  sessionId?: string;
+}): Promise<string> {
+  if (params.agentKind !== 'pi') return params.message;
+  const leading = leadingSlashInvocation(params.message);
+  if (!leading) return params.message;
+  const commands = await loadAllCommands(params.agentKind, params.workingDir, {
+    ...(params.sessionId ? { sessionId: params.sessionId } : {}),
+  });
+  const hit = commands.find((command) => command.name.toLowerCase() === leading.name.toLowerCase());
+  return rewritePiSkillAliasFromCommand(params.message, hit);
+}
+
+/** Rebase inline ranges after the leading slash-command token changes length. */
+export function rebaseInlineRangesAfterSlashCommandRewrite<T extends { start: number; end: number }>(
+  ranges: readonly T[],
+  originalMessage: string,
+  rewrittenMessage: string,
+): T[] {
+  if (originalMessage === rewrittenMessage) return [...ranges];
+  const originalCommand = leadingSlashInvocation(originalMessage);
+  const rewrittenCommand = leadingSlashInvocation(rewrittenMessage);
+  if (!originalCommand || !rewrittenCommand) return [...ranges];
+
+  const boundary = originalCommand.end;
+  const delta = (rewrittenCommand.end - rewrittenCommand.start)
+    - (originalCommand.end - originalCommand.start);
+  if (delta === 0) return [...ranges];
+  return ranges.map((range) => ({
+    ...range,
+    start: range.start >= boundary ? range.start + delta : range.start,
+    end: range.end >= boundary ? range.end + delta : range.end,
+  }));
+}
+
 /** First available command index, or 0 when nothing is available/present. */
 export function firstAvailableSlashCommandIndex(
   commands: readonly UnifiedCommand[],
@@ -675,6 +752,7 @@ export async function rollbackUnclaimedPiProjectSkillSession(params: {
  */
 export interface DispatchContext {
   sessionId?: string;
+  remoteHostId?: string;
   workingDir?: string;
   /** `/name args...` 中 name 后面的剩余文本; 没有则空串。 */
   args?: string;
@@ -705,6 +783,7 @@ export async function dispatchCommand(
         ...(ctx.workingDir ? { workingDir: ctx.workingDir } : {}),
         ...(ctx.args ? { args: ctx.args } : {}),
         ...(ctx.deviceId ? { deviceId: ctx.deviceId } : {}),
+        ...(ctx.remoteHostId ? { remoteHostId: ctx.remoteHostId } : {}),
       });
     } catch (err) {
       log.warn(

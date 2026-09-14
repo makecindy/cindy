@@ -1,19 +1,7 @@
-/**
- * useXaiSubscriptionUsage — SuperGrok 账号周用量推送。
- *
- * IPC: getXaiSubscription / onXaiSubscriptionChanged。
- * push 与 warm-start read 共用一份 epoch:push 先到时,迟到的旧 read 不得把
- * 已清除/已更新的 lastSnapshot 盖回去。
- */
-
-import { useEffect, useState } from 'react';
-
+/** Cached-first Xai subscription quota; Main owns account identity and expiry. */
 import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage';
-
+import { createSubscriptionUsageCache } from './subscriptionUsageCache';
 export type { XaiSubscriptionUsageSnapshot };
-
-let lastSnapshot: XaiSubscriptionUsageSnapshot | null = null;
-let snapshotEpoch = 0;
 
 function isSnapshot(v: unknown): v is XaiSubscriptionUsageSnapshot {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -47,106 +35,33 @@ export function shouldApplyXaiSubscriptionRead(
   return epochAtStart === currentEpoch;
 }
 
-function readUsageApi(): {
-  getXaiSubscription?: () => Promise<unknown | null>;
-  onXaiSubscriptionChanged?: (cb: (payload: unknown) => void) => () => void;
-} | undefined {
-  return (window as unknown as {
-    electronAPI?: {
-      maker?: {
-        usage?: {
-          getXaiSubscription?: () => Promise<unknown | null>;
-          onXaiSubscriptionChanged?: (cb: (payload: unknown) => void) => () => void;
-        };
-      };
-    };
-  }).electronAPI?.maker?.usage;
+const caches = new Map<
+  string,
+  ReturnType<typeof createSubscriptionUsageCache<XaiSubscriptionUsageSnapshot>>
+>();
+function usageCache(providerId: string) {
+  let cache = caches.get(providerId);
+  if (!cache) {
+    cache = createSubscriptionUsageCache<XaiSubscriptionUsageSnapshot>(() => ({
+      read: window.electronAPI?.maker?.usage?.getXaiSubscription
+        ? () => window.electronAPI.maker.usage.getXaiSubscription(providerId)
+        : undefined,
+      subscribe: window.electronAPI?.maker?.usage?.onXaiSubscriptionChanged
+        ? (cb) => window.electronAPI.maker.usage.onXaiSubscriptionChanged(cb, providerId)
+        : undefined,
+    }));
+    caches.set(providerId, cache);
+  }
+  return cache;
 }
 
-function applyPush(payload: unknown): void {
-  snapshotEpoch += 1;
-  lastSnapshot = reduceXaiSubscriptionPush(lastSnapshot, payload);
-}
-
-let moduleSubscriptionInstalled = false;
-function ensureModuleSubscription(): void {
-  if (moduleSubscriptionInstalled) return;
-  const api = readUsageApi();
-  if (!api?.onXaiSubscriptionChanged) return;
-  moduleSubscriptionInstalled = true;
-  api.onXaiSubscriptionChanged((payload: unknown) => {
-    applyPush(payload);
-  });
-}
-
-export function requestXaiSubscriptionRefresh(): void {
-  const api = readUsageApi();
-  if (!api?.getXaiSubscription) return;
-  void api.getXaiSubscription().catch(() => {
-    /* Best-effort nudge */
-  });
+export function requestXaiSubscriptionRefresh(providerId = 'xai'): void {
+  usageCache(providerId).refresh();
 }
 
 export function useXaiSubscriptionUsage(
   enabled: boolean,
+  providerId = 'xai',
 ): XaiSubscriptionUsageSnapshot | null {
-  ensureModuleSubscription();
-  const [snapshot, setSnapshot] = useState<XaiSubscriptionUsageSnapshot | null>(() =>
-    enabled ? lastSnapshot : null,
-  );
-
-  useEffect(() => {
-    setSnapshot(enabled ? lastSnapshot : null);
-  }, [enabled]);
-
-  useEffect(() => {
-    if (!enabled) return;
-    const api = readUsageApi();
-    if (!api?.getXaiSubscription) return;
-
-    let cancelled = false;
-    const epochAtStart = snapshotEpoch;
-    void api
-      .getXaiSubscription()
-      .then((persisted) => {
-        if (cancelled) return;
-        if (!shouldApplyXaiSubscriptionRead(epochAtStart, snapshotEpoch)) return;
-        const resolved = resolvePersistedXaiSubscriptionRead(persisted);
-        if (resolved.action === 'clear') {
-          lastSnapshot = null;
-          setSnapshot(null);
-          return;
-        }
-        if (resolved.action === 'apply') {
-          lastSnapshot = resolved.snapshot;
-          setSnapshot(resolved.snapshot);
-        }
-      })
-      .catch(() => {
-        /* Best-effort warm start */
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [enabled]);
-
-  useEffect(() => {
-    if (!enabled) return;
-    const api = readUsageApi();
-    if (!api?.onXaiSubscriptionChanged) return;
-
-    let cancelled = false;
-    const unsubscribe = api.onXaiSubscriptionChanged((payload: unknown) => {
-      if (cancelled) return;
-      applyPush(payload);
-      setSnapshot(lastSnapshot);
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [enabled]);
-
-  return snapshot;
+  return usageCache(providerId).useSnapshot(enabled);
 }

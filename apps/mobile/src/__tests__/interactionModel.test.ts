@@ -727,11 +727,15 @@ describe('interactionModel', () => {
     expect(storeSource).toContain('pendingInteractionsAuthoritative.add(sessionId);');
     expect(storeSource).toContain('hasAuthoritativePendingInteractions(sessionId: string): boolean');
     expect(storeSource).toContain('export function useSessionPendingInteractionsAuthoritative(');
-    // markDeviceOffline 与 removeDevice 都要撤销权威,否则离线期的空列表会被当权威用。
-    const offlineStart = storeSource.indexOf('markDeviceOffline(deviceId: string): void {');
+    // markDeviceOffline(经共享清扫 sweepDevicesOffline,批量版 markDevicesOffline
+    // 同样复用)与 removeDevice 都要撤销权威,否则离线期的空列表会被当权威用。
+    const sweepStart = storeSource.indexOf('function sweepDevicesOffline(');
+    const markStart = storeSource.indexOf('markDeviceOffline(deviceId: string): void {');
     const offlineEnd = storeSource.indexOf('removeDevice(deviceId: string): void {');
-    expect(offlineStart).toBeGreaterThan(0);
-    expect(storeSource.slice(offlineStart, offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
+    expect(sweepStart).toBeGreaterThan(0);
+    expect(markStart).toBeGreaterThan(sweepStart);
+    expect(storeSource.slice(markStart, offlineEnd)).toContain('sweepDevicesOffline([deviceId])');
+    expect(storeSource.slice(sweepStart, offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
     expect(storeSource.slice(offlineEnd)).toContain('pendingInteractionsAuthoritative.delete(sessionId)');
     // []→[] 的权威快照必须能通知出去,否则消费方永远等不到清理时机。
     expect(storeSource).toContain('if (streamingChanged || authorityChanged) emit();');
@@ -962,6 +966,22 @@ describe('interactionModel', () => {
 describe('resolveInteractionResilient', () => {
   const noSleep = async () => undefined;
   const pendingItem = (requestId: string) => ({ request: { requestId } });
+
+  it.each(['ask_user_question', 'plan_review'])('does not treat a rejected %s receipt as success even when the request is absent', async (kind) => {
+    let queries = 0;
+    await expect(mobileInteractionModel.resolveInteractionResilient({
+      resolveInteraction: async () => ({ accepted: false }),
+      getPendingInteractions: async () => { queries++; return []; },
+    }, 's1', 'req-1', { kind }, { sleep: noSleep })).rejects.toThrow(i18n.t('interaction.panel.decisionNotAccepted'));
+    expect(queries).toBe(0);
+  });
+
+  it.each([{ accepted: true }, undefined])('accepts a successful or legacy receipt %j', async (receipt) => {
+    await expect(mobileInteractionModel.resolveInteractionResilient({
+      resolveInteraction: async () => receipt,
+      getPendingInteractions: async () => { throw new Error('should not reconcile'); },
+    }, 's1', 'req-1', {}, { sleep: noSleep })).resolves.toBeUndefined();
+  });
 
   it('NOT_CONNECTED(请求未出本机)自动重试直到成功,不触发权威查询', async () => {
     let resolveCalls = 0;

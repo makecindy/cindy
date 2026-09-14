@@ -15,6 +15,7 @@
  */
 
 import type { DesktopCommandMeta } from '@cindy/maker-core';
+import type { MakeDoctorCommandContext } from '../../shared/cindyMakeDoctor.js';
 
 /**
  * 命令执行上下文 —— 调用方 (renderer 通过 IPC) 把当前会话信息透传过来,
@@ -23,7 +24,7 @@ import type { DesktopCommandMeta } from '@cindy/maker-core';
  * 字段刻意保留可选 —— 不是所有 desktop command 都关心 sessionId
  * (比如纯应用级的"打开 settings"); 关心的命令自己 narrow / 校验。
  */
-export interface DesktopCommandContext {
+export interface DesktopCommandContext extends MakeDoctorCommandContext {
   /** 触发命令时的 maker session id, 草稿态可为空字符串。 */
   sessionId?: string;
   /** 触发命令时的工作目录, 草稿态可为空字符串。 */
@@ -59,7 +60,7 @@ export interface DesktopCommandDefinition {
    * 主入口 —— 命中此命令时由 main 执行。
    * 同步/异步皆可; 抛错由调用方 catch + 上报, 不会自动 swallow。
    */
-  execute(ctx: DesktopCommandContext): void | Promise<void>;
+  execute(ctx: DesktopCommandContext): void | Promise<unknown>;
 }
 
 export class DesktopCommandRegistry {
@@ -89,11 +90,11 @@ export class DesktopCommandRegistry {
    * 按名字执行一条命令。
    * 找不到时抛错(由 IPC handler 翻译成 success:false 回 renderer); execute 自身的错由调用方处理。
    */
-  async execute(name: string, ctx: DesktopCommandContext): Promise<void> {
+  async execute(name: string, ctx: DesktopCommandContext): Promise<unknown> {
     const cmd = this.commands.get(name);
     if (!cmd) {
       throw new Error(`DesktopCommandRegistry: unknown command "/${name}"`);
     }
-    await cmd.execute(ctx);
+    return cmd.execute(ctx);
   }
 }

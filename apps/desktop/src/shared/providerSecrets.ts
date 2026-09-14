@@ -28,6 +28,11 @@ export type ProviderSecretId =
   | 'gemini'
   | 'openai-images';
 
+/** The dedicated builtin key bridge and its UI must expose the same supported IDs. */
+export function isBuiltinApiKeyProviderId(providerId: unknown): providerId is ProviderSecretId {
+  return providerId === 'gemini' || providerId === 'openai-images';
+}
+
 /**
  * providerId → safeStorage 存储键名(.enc 文件名,不含后缀)。
  * 改动须谨慎:键名变了等于"换文件",会让用户本机已存的 key 读不到。

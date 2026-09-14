@@ -1,6 +1,6 @@
 /**
- * 供应商展示名 —— 三个内置 id 复用设置页 i18n 标题 (settings.providers.<id>.title),
- * 自定义供应商回退目录里的 provider.name, 都拿不到时才回退裸 id。
+ * 所有可改名连接优先显示目录中的名称；Cindy AI 保留统一的本地化产品名。
+ * 缺少目录时才回退内置名称或连接 ID。
  *
  * 从 ModelSelector 提取到这里: 用量历史的任务表也要把 Session.providerId 渲染成人话,
  * 两处必须同源, 否则同一个 'xd' 在模型选择器里是「Cindy AI」、在用量页却是「xd」。
@@ -18,7 +18,7 @@ type TFunc = (key: string) => string;
 
 export function providerDisplayName(provider: ProviderView, t: TFunc): string {
   const key = PROVIDER_TITLE_KEY[provider.id];
-  return key ? t(key) : provider.name;
+  return provider.id === 'xd' && key ? t(key) : provider.name || (key ? t(key) : provider.id);
 }
 
 /**
@@ -30,7 +30,8 @@ export function providerDisplayNameById(
   providers: readonly ProviderView[],
   t: TFunc,
 ): string {
+  const provider = providers.find((item) => item.id === providerId);
+  if (provider) return providerDisplayName(provider, t);
   const key = PROVIDER_TITLE_KEY[providerId];
-  if (key) return t(key);
-  return providers.find((provider) => provider.id === providerId)?.name ?? providerId;
+  return key ? t(key) : providerId;
 }

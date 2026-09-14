@@ -1,11 +1,18 @@
+import { chatCompatibilityCapabilities, normalizeProviderRequest } from '@cindy/model-compat';
 import type { ServerResponse } from 'node:http';
 
 import { ChatSseTranslator } from './chat-sse-translator.js';
-import { translateResponsesRequestWithContext } from './translate-request.js';
+import {
+  overrideHeadersCaseInsensitive,
+  resolveConversationSessionHeaders,
+  withChatBridgeUserAgent,
+} from './session-header.js';
+import { coalesceLeadingSystemMessages, translateResponsesRequestWithContext } from './translate-request.js';
 import {
   UnsupportedResponsesFeatureError,
   type ChatBridgeLogger,
   type ChatBridgeProviderConfig,
+  type ChatMessage,
   type ResponsesChatBridgeHandler,
   type ResponsesRequest,
 } from './types.js';
@@ -26,6 +33,28 @@ function classifyUpstreamErrorBody(text: string): 'empty' | 'json' | 'text' {
   } catch {
     return 'text';
   }
+}
+
+function isSystemMessageOrderError(status: number, text: string): boolean {
+  if (status !== 400) return false;
+  try {
+    const body: unknown = JSON.parse(text);
+    return isPlainObject(body)
+      && isPlainObject(body.error)
+      && typeof body.error.message === 'string'
+      && /^system message must be at the beginning\.?$/i.test(body.error.message.trim());
+  } catch {
+    return false;
+  }
+}
+
+/** Only retry a prefix merge; moving later instructions across a turn changes their scope. */
+function hasConsecutiveSystemPrefix(messages: ChatMessage[]): boolean {
+  let prefixLength = 0;
+  while (messages[prefixLength]?.role === 'system') prefixLength += 1;
+  return prefixLength > 1 && messages.every((message, index) => (
+    index < prefixLength || (message.role !== 'system' && message.role !== 'developer')
+  ));
 }
 
 function writeJson(res: ServerResponse, status: number, body: unknown): void {
@@ -162,18 +191,19 @@ export function createResponsesChatHandler(
   const fetchImpl = opts.fetchImpl ?? fetch;
 
   return {
-    async handle({ parsedBody, res }): Promise<void> {
+    async handle({ parsedBody, res, requestHeaders }): Promise<void> {
       if (!isPlainObject(parsedBody) || typeof parsedBody.model !== 'string') {
         writeJson(res, 400, responsesError(400, 'invalid_request', 'invalid Responses request body'));
         return;
       }
       const request = parsedBody as ResponsesRequest;
       const realModel = provider.rewriteModel?.(request.model) ?? request.model;
+      const compatibilityRoute = { harness: 'codex' as const, protocol: 'openai-chat' as const, upstreamBase: provider.upstreamBase, model: realModel };
       let translated;
       try {
         translated = translateResponsesRequestWithContext(request, {
           model: realModel,
-          capabilities: provider.capabilities,
+          capabilities: chatCompatibilityCapabilities(compatibilityRoute, provider.capabilities),
           onDroppedTool: (type, index) => {
             if (type === 'web_search') {
               log.warn?.('responses-chat bridge dropped unsupported built-in tool', {
@@ -235,17 +265,50 @@ export function createResponsesChatHandler(
       const abortUpstream = (): void => abort.abort();
       res.once('close', abortUpstream);
       let upstream: Response;
+      let upstreamErrorText: string | undefined;
       try {
-        upstream = await fetchImpl(upstreamUrl, {
+        // 出站头 = 供应商凭证/自定义头(缺 UA 时补 bridge 标识)+ 稳定会话头 + 协议头。
+        // 会话头按每个对话从入站 thread-id 映射,优先于供应商静态配置里同名的固定值
+        // (整机共用一个 ID 达不到上游「每个对话稳定」的要求,见 #4073);其余入站头不出网。
+        // 覆盖按头名大小写不敏感进行,否则 `X-OpenCode-Session` 与 `x-opencode-session`
+        // 会被 fetch 合并成一个非法复合值。
+        const sessionHeaders = resolveConversationSessionHeaders(requestHeaders);
+        const send = (): Promise<Response> => fetchImpl(upstreamUrl, {
           method: 'POST',
           headers: {
-            ...providerHeaders,
+            ...overrideHeadersCaseInsensitive(withChatBridgeUserAgent(providerHeaders), sessionHeaders),
             'content-type': 'application/json',
             accept: 'text/event-stream',
           },
-          body: JSON.stringify(chatRequest),
+          body: JSON.stringify(normalizeProviderRequest(chatRequest, compatibilityRoute, { reasoningEffortAlreadyMapped: provider.capabilities?.reasoningEffortMap !== undefined })),
           signal: abort.signal,
         });
+        upstream = await send();
+        if (!upstream.ok) {
+          upstreamErrorText = await readErrorText(upstream);
+          // Qwen can reject instructions + developer even before the first user (#3583).
+          // Retry only a precise pre-generation rejection, once and within this request.
+          // Explicit policies and native developer-role semantics remain authoritative.
+          if (
+            provider.capabilities?.systemMessagePolicy === undefined
+            && provider.capabilities?.developerRole !== 'developer'
+            && isSystemMessageOrderError(upstream.status, upstreamErrorText)
+            && !abort.signal.aborted
+            && hasConsecutiveSystemPrefix(chatRequest.messages)
+          ) {
+            const coalesced = coalesceLeadingSystemMessages(chatRequest.messages);
+            if (coalesced !== chatRequest.messages) {
+              chatRequest.messages = coalesced;
+              upstream = await send();
+              upstreamErrorText = upstream.ok ? undefined : await readErrorText(upstream);
+            }
+          }
+        }
+        if (abort.signal.aborted) {
+          res.off('close', abortUpstream);
+          void upstream.body?.cancel().catch(() => {});
+          return;
+        }
       } catch (error) {
         res.off('close', abortUpstream);
         if (abort.signal.aborted) return;
@@ -271,7 +334,7 @@ export function createResponsesChatHandler(
       };
 
       if (!upstream.ok || !upstream.body) {
-        const text = await readErrorText(upstream);
+        const text = upstreamErrorText ?? await readErrorText(upstream);
         log.warn?.('responses-chat bridge upstream error', {
           model: request.model,
           status: upstream.status,

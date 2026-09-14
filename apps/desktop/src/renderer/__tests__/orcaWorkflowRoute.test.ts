@@ -204,7 +204,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     // legacy /orca 路由(orcaMode)必须先被 `!orcaMode &&` 短路掉,否则它也会去跑项目
     // 策略查询并订阅刷新。
     expect(sessionViewSource).toContain(
-      'const collabPolicyEligible = !orcaMode && collabEntry.eligible;',
+      'const collabPolicyEligible = !orcaMode && !botChatIdentity && collabEntry.eligible;',
     );
     expect(sessionViewSource).toContain('resolveCollabEntryPolicy({');
   });
@@ -255,7 +255,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
     );
     // The composer is also temporarily read-only during the bounded effort-runtime
     // preflight, so a pending send cannot clear text entered after its snapshot.
-    expect(chatInputSource).toContain('editor?.setEditable(!composerMutationLocked)');
+    expect(chatInputSource).toContain('editor?.setEditable(!composerTypingLocked)');
   });
 
   it('does not block collaboration tab opening on worker SDK bootstrap', () => {
@@ -453,7 +453,7 @@ describe('OrcaWorkflowRoute source invariants', () => {
       /sidebarPanelHostSessionId=\{\s*ownsRoute \|\| navigationMode === 'split-pane' \? sessionId : undefined\s*\}/,
     );
     expect(sessionViewSource).toContain(
-      'onForkStripEncrypted={canNavigateSession ? handleForkStripEncrypted : undefined}',
+      '!readOnly && canNavigateSession ? handleForkStripEncrypted : undefined',
     );
   });
 

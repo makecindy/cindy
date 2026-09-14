@@ -24,6 +24,12 @@ describe('pluginMarketErrorKey', () => {
     );
   });
 
+  it('reuses the existing Cindy compatibility reminder', () => {
+    expect(pluginMarketErrorKey(serializedIpcError('GHOST_HOST_UNSUPPORTED'))).toBe(
+      'settings.ghosts.errors.hostUnsupported',
+    );
+  });
+
   it('never exposes a plain main-process error message', () => {
     expect(pluginMarketErrorKey(new Error('不应显示给 renderer 的内部错误'))).toBe(
       'settings.ghosts.market.errors.generic',

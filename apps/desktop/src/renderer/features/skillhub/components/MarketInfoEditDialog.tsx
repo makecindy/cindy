@@ -13,10 +13,11 @@ import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 
 import { marketActionErrorMessage } from '../lib/marketErrors';
-import { SelectInput } from '../PublishDialog';
+import { PlatformTagSelector } from './PlatformTagSelector';
 import type { MarketCategory } from '../../../../shared/skillhubCategory';
+import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../../shared/locale';
 
-const DESCRIPTION_LIMIT = 280;
+const DESCRIPTION_LIMIT = 2_000;
 const DISPLAY_NAME_LIMIT = 100;
 
 function FieldLabel({ children }: { children: React.ReactNode }) {
@@ -48,7 +49,7 @@ export function MarketInfoEditDialog({
   onSaved,
   readOnly = false,
 }: MarketInfoEditDialogProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   // loading 初始为 true,且关闭时复位 —— Dialog 在数据就绪前不挂载,
   // 避免"先弹出矮窗再撑开"的跳变(设计规范:拿到数据后一次成型)。
   const [loading, setLoading] = useState(true);
@@ -56,7 +57,7 @@ export function MarketInfoEditDialog({
   const [saving, setSaving] = useState(false);
   const [displayName, setDisplayName] = useState('');
   const [description, setDescription] = useState('');
-  const [categorySlug, setCategorySlug] = useState('');
+  const [categorySlugs, setCategorySlugs] = useState<string[]>([]);
   const [categories, setCategories] = useState<MarketCategory[]>([]);
   const [categoriesLoading, setCategoriesLoading] = useState(true);
 
@@ -82,17 +83,39 @@ export function MarketInfoEditDialog({
       }
       setDisplayName(infoRes.info.displayName);
       setDescription(infoRes.info.description);
-      setCategorySlug(infoRes.info.categories?.[0] ?? currentCategories[0] ?? '');
-      if (catRes.success) setCategories(catRes.categories ?? []);
+      const platformBySlug = new Map(
+        (catRes.success ? catRes.categories ?? [] : []).map((category) => [category.slug, category]),
+      );
+      // Preserve current Platform tags that are hidden from this category result
+      // so an unrelated metadata edit does not silently clear them.
+      for (const tag of infoRes.info.tags ?? []) {
+        if (platformBySlug.has(tag.slug)) continue;
+        platformBySlug.set(tag.slug, {
+          slug: tag.slug,
+          name: tag.name,
+          count: 0,
+          myCount: 1,
+          source: 'platform',
+        });
+      }
+      const platformCategories = [...platformBySlug.values()];
+      const currentTagSlugs = [...new Set([
+        ...(infoRes.info.tags ?? []).map((tag) => tag.slug),
+        ...(infoRes.info.categories ?? []),
+        ...currentCategories,
+      ].filter((slug) => platformBySlug.has(slug)))];
+      setCategorySlugs(currentTagSlugs);
+      setCategories(platformCategories);
     });
     return () => { cancelled = true; };
   }, [open, skillName, currentCategories]);
 
   const displayNameMissing = displayName.trim().length === 0;
   const displayNameOverLimit = displayName.length > DISPLAY_NAME_LIMIT;
-  const descriptionOverLimit = description.length > DESCRIPTION_LIMIT;
-  const categoryMissing = categories.length > 0 && !categorySlug;
-  const invalid = displayNameMissing || displayNameOverLimit || descriptionOverLimit || categoryMissing;
+  const descriptionLength = Array.from(description).length;
+  const descriptionOverLimit = descriptionLength > DESCRIPTION_LIMIT;
+  const invalid = displayNameMissing || displayNameOverLimit || descriptionOverLimit
+    || categorySlugs.length > 50;
 
   const handleSave = async () => {
     if (invalid || saving) return;
@@ -103,7 +126,11 @@ export function MarketInfoEditDialog({
         fields: {
           displayName: displayName.trim(),
           summary: description,
-          categories: categorySlug ? [categorySlug] : [],
+          description,
+          contentLocale: (SUPPORTED_LOCALES as readonly string[]).includes(i18n.resolvedLanguage ?? '')
+            ? i18n.resolvedLanguage as SupportedLocale
+            : 'en',
+          tags: categorySlugs,
         },
       });
       if (!res.success) {
@@ -200,7 +227,7 @@ export function MarketInfoEditDialog({
                         descriptionOverLimit ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
                       )}
                     >
-                      {description.length}/{DESCRIPTION_LIMIT}
+                      {descriptionLength}/{DESCRIPTION_LIMIT}
                     </span>
                   </div>
                   <textarea
@@ -219,33 +246,24 @@ export function MarketInfoEditDialog({
                   />
                 </div>
 
-                {/* 分类 */}
+                {/* 平台标签 */}
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('skillhub.publishDialog.categoryLabel')}</FieldLabel>
-                  <SelectInput
-                    value={categorySlug}
+                  <PlatformTagSelector
+                    categories={categories}
+                    value={categorySlugs}
+                    onChange={setCategorySlugs}
                     disabled={readOnly || categoriesLoading || categories.length === 0}
-                    onChange={setCategorySlug}
-                    placeholder={
-                      categoriesLoading
-                        ? t('skillhub.publishDialog.categoryLoading')
-                        : categories.length === 0
-                          ? t('skillhub.publishDialog.categoryEmpty')
-                          : t('skillhub.publishDialog.categoryPlaceholder')
-                    }
-                    options={[
-                      ...(categorySlug && !categories.some((category) => category.slug === categorySlug)
-                        ? [{ value: categorySlug, label: categorySlug }]
-                        : []),
-                      ...categories.map((category) => ({
-                        value: category.slug,
-                        label: category.name,
-                      })),
-                    ]}
+                    ariaLabel={t('skillhub.publishDialog.categoryLabel')}
+                    placeholder={t('skillhub.publishDialog.categoryPlaceholder')}
                   />
-                  {categoryMissing ? (
+                  {categoriesLoading ? (
                     <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
-                      {t('skillhub.publishDialog.categoryRequired')}
+                      {t('skillhub.publishDialog.categoryLoading')}
+                    </p>
+                  ) : categories.length === 0 ? (
+                    <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
+                      {t('skillhub.publishDialog.categoryEmpty')}
                     </p>
                   ) : null}
                 </div>

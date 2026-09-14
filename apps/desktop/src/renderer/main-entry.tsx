@@ -67,8 +67,8 @@ const disposeHiddenAnimationGate = installHiddenAnimationGate();
 migrateLegacyVoiceInputRendererStorage();
 void syncVoiceInputGlobalShortcut(getVoiceInputSettings().shortcut);
 void bootstrapSilentEncryptedRetryFromMain();
-// chat embedding 开关 (Phase 1.2) — 同款镜像同步方式, 让 Settings UI 第一次渲染时
-// localStorage 已是真值, 用户能看到正确的初始 toggle 状态。
+// 对话语义索引开关 —— 先同步 signed-out 镜像；AuthContext 提交稳定 owner 后会切换
+// owner 分区并重拉 Main 真值，迟到的启动响应会被 revision fence 丢弃。
 void bootstrapChatEmbeddingFromMain();
 // LSP Beta 开关 (Phase 1) — admin-only, 默认 false; 同款镜像同步方式。
 void bootstrapLspModeFromMain();

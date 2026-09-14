@@ -10,14 +10,14 @@ describe('ghostInstallErrorKey', () => {
       'settings.ghosts.errors.hostUnsupported',
     );
     expect(ghostInstallErrorKey('GHOST_FILE_INVALID')).toBe('settings.ghosts.errors.fileInvalid');
+    expect(ghostInstallErrorKey('PRECONDITION_FAILED')).toBe(
+      'settings.ghosts.errors.generic',
+    );
   });
 
   it('maps Broker authorization failures without changing generic invalid-file copy', () => {
     expect(ghostInstallErrorKey('GHOST_BROKER_MANUAL_INSTALL_NOT_AUTHORIZED')).toBe(
       'settings.ghosts.errors.brokerManualInstallNotAuthorized',
-    );
-    expect(ghostInstallErrorKey('GHOST_BROKER_NOT_AUTHORIZED')).toBe(
-      'settings.ghosts.errors.brokerNotAuthorized',
     );
     expect(ghostInstallErrorKey('GHOST_BROKER_REDIRECT_PORT_REQUIRED')).toBe(
       'settings.ghosts.errors.brokerRedirectPortRequired',
@@ -28,16 +28,13 @@ describe('ghostInstallErrorKey', () => {
   });
 
   it.each(['zh-CN', 'en', 'ja', 'ko', 'zh-TW'])(
-    'keeps both Broker authorization reasons actionable in %s',
+    'keeps the local-install Broker authorization reason actionable in %s',
     (locale) => {
-      for (const code of [
-        'GHOST_BROKER_MANUAL_INSTALL_NOT_AUTHORIZED',
-        'GHOST_BROKER_NOT_AUTHORIZED',
-      ]) {
-        const message = i18n.getFixedT(locale)(ghostInstallErrorKey(code)).toString();
-        expect(message).toContain('ghost_forge_pack');
-        expect(message).not.toBe(i18n.getFixedT(locale)('settings.ghosts.errors.fileInvalid'));
-      }
+      const message = i18n
+        .getFixedT(locale)(ghostInstallErrorKey('GHOST_BROKER_MANUAL_INSTALL_NOT_AUTHORIZED'))
+        .toString();
+      expect(message).not.toContain('ghost_forge_pack');
+      expect(message).not.toBe(i18n.getFixedT(locale)('settings.ghosts.errors.fileInvalid'));
     },
   );
 
@@ -85,29 +82,28 @@ describe('ghostInstallErrorKey', () => {
   );
 
   it.each([
-    { locale: 'zh-CN', fragments: ['拖入', '选择文件', 'ghost_forge_pack', '自定义插件市场'] },
+    { locale: 'zh-CN', fragments: ['拖入', '选择文件', '自定义插件市场'] },
     {
       locale: 'en',
       fragments: [
         'dragging in a package',
         'choosing a file',
-        'ghost_forge_pack',
         'custom plugin marketplace',
       ],
     },
     {
       locale: 'ja',
-      fragments: ['ドラッグ', 'ファイル選択', 'ghost_forge_pack', 'カスタムプラグインマーケット'],
+      fragments: ['ドラッグ', 'ファイル選択', 'カスタムプラグインマーケット'],
     },
     {
       locale: 'ko',
-      fragments: ['끌어다 놓기', '파일 선택', 'ghost_forge_pack', '사용자 지정 플러그인 마켓'],
+      fragments: ['끌어다 놓기', '파일 선택', '사용자 지정 플러그인 마켓'],
     },
     {
       locale: 'zh-TW',
-      fragments: ['拖入', '選取檔案', 'ghost_forge_pack', '自訂插件市場'],
+      fragments: ['拖入', '選取檔案', '自訂插件市場'],
     },
-  ])('keeps all four user install channels in the $locale marketplace guide', ({ locale, fragments }) => {
+  ])('keeps all three user install channels in the $locale marketplace guide', ({ locale, fragments }) => {
     const rawMessage = i18n.getResource(
       locale,
       'common',
@@ -117,6 +113,7 @@ describe('ghostInstallErrorKey', () => {
     // 只钉四个必要语义点，排除说明被重新写窄成仅禁止某一个装入来源。
     expect(rawMessage).toEqual(expect.any(String));
     for (const fragment of fragments) expect(rawMessage).toContain(fragment);
+    expect(rawMessage).not.toContain('ghost_forge_pack');
   });
 
   it.each([

@@ -1,16 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { Animated, PanResponder, type GestureResponderHandlers } from 'react-native';
-import {
-  applyContextSheetDrag,
-  settleContextSheetDrag,
-  type ContextSheetSnap,
-  type ContextSheetSnapHeights,
-} from '@/session/contextSheetModel';
-
-/** 松手时位移小于该值视为轻点而非拖动，不触发档位结算。 */
-const DRAG_ACTIVATION_THRESHOLD = 3;
-/** 档位吸附动画时长；与 Modal slide 的节奏保持接近。 */
-const SNAP_ANIMATION_DURATION_MS = 180;
+import { useCallback, useEffect, useMemo, useRef } from 'react';
+import { PanResponder } from 'react-native';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { cancelAnimation, Easing, runOnJS, runOnUI, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { Gesture } from '@/platform/gestureHandler';
+import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
+import { motionDuration, motionEasing } from '@/theme';
+import { applyContextSheetDrag, settleContextSheetDrag, type ContextSheetSnap, type ContextSheetSnapHeights } from '@/session/contextSheetModel';
 
 export interface UseContextSheetDragInput {
   heights: ContextSheetSnapHeights;
@@ -19,113 +14,140 @@ export interface UseContextSheetDragInput {
   onDismiss: () => void;
 }
 
-export interface UseContextSheetDragResult {
-  /** 面板当前呈现高度；拖动 / 吸附动画期间由 Animated 驱动，不触发整页 re-render。 */
-  animatedHeight: Animated.Value;
-  /** 拖动进行中（内容区可据此暂停滚动等）。 */
-  dragging: boolean;
-  /** 传给 grabber / header 拖动区的手势 handlers。 */
-  panHandlers: GestureResponderHandlers;
+const isStoreClient = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+
+function hasDragMoved(start: number, current: number): boolean {
+  'worklet';
+  return Math.abs(current - start) >= 3;
 }
 
-/**
- * Context 面板拖动换档的手势与动画编排。
- *
- * 沿用 useComposerResize 的模式：拖动期间只 setValue（JS 驱动布局高度），
- * 松手按 contextSheet 纯函数结算——吸附到 half / full 时先动画到目标高度再落 state，
- * 判定 dismiss 时直接回调关闭（Modal 自带滑出动画）。
- */
-export function useContextSheetDrag(input: UseContextSheetDragInput): UseContextSheetDragResult {
-  const [dragging, setDragging] = useState(false);
-
-  const heightAnim = useRef(new Animated.Value(input.heights[input.snap])).current;
-
-  // PanResponder 回调生命周期长于 render，经 ref 读取最新值。
-  const heightsRef = useRef(input.heights);
-  heightsRef.current = input.heights;
-  const snapRef = useRef(input.snap);
-  snapRef.current = input.snap;
-  const onSnapChangeRef = useRef(input.onSnapChange);
-  onSnapChangeRef.current = input.onSnapChange;
-  const onDismissRef = useRef(input.onDismiss);
-  onDismissRef.current = input.onDismiss;
-  const draggingRef = useRef(false);
-  const dragStartRef = useRef(0);
-  const dragLastRef = useRef(0);
-
-  // 非拖动期间，snap / 屏幕尺寸变化时把高度动画到当前档位。
+/** Pointer updates and snap animations stay on UI; JS only receives the result. */
+export function useContextSheetDrag(input: UseContextSheetDragInput) {
+  const latest = useRef(input);
+  latest.current = input;
+  const reduceMotion = useReduceMotionEnabled();
+  const height = useSharedValue(input.heights[input.snap]);
+  const startHeight = useSharedValue(height.value);
+  const active = useSharedValue(false);
+  // Keep the release destination even before JS acknowledges the snap.
+  // A tap that interrupts an in-flight snap animation must return here.
+  const settledSnap = useSharedValue(input.snap);
+  const gestureId = useSharedValue(0);
+  const mounted = useRef(true);
+  const lastNotification = useRef<{ snap: ContextSheetSnap; id: number } | null>(null);
+  const geometry = useSharedValue({ heights: input.heights, snap: input.snap });
+  const notify = useCallback((target: ContextSheetSnap | 'dismiss', id: number) => {
+    if (!mounted.current || id !== gestureId.value) return;
+    if (target === 'dismiss') latest.current.onDismiss();
+    else {
+      lastNotification.current = { snap: target, id };
+      // Do not compare with props: an earlier notification can still be waiting
+      // for React to commit, including a full -> half return to the old value.
+      latest.current.onSnapChange(target);
+    }
+  }, [gestureId]);
   useEffect(() => {
-    if (draggingRef.current) return;
-    Animated.timing(heightAnim, {
-      duration: SNAP_ANIMATION_DURATION_MS,
-      toValue: input.heights[input.snap],
-      useNativeDriver: false,
-    }).start();
-  }, [heightAnim, input.heights, input.snap]);
+    const nextGeometry = { heights: input.heights, snap: input.snap };
+    const duration = reduceMotion === false ? motionDuration.fast : 0;
+    const notification = lastNotification.current;
+    const observedGesture = notification?.snap === input.snap ? notification.id : gestureId.value;
+    runOnUI((next: typeof nextGeometry, durationMs: number, observed: number) => {
+      'worklet';
+      if (next.snap !== geometry.value.snap && observed === gestureId.value) settledSnap.value = next.snap;
+      geometry.value = next;
+      // Rotation/reduced-motion changes retain the user's release destination.
+      // Only an explicit external snap change replaces it.
+      if (active.value) {
+        height.value = Math.min(height.value, next.heights.full);
+        return;
+      }
+      height.value = withTiming(next.heights[settledSnap.value], {
+        duration: durationMs,
+        easing: Easing.bezier(...motionEasing.move),
+      });
+    })(nextGeometry, duration, observedGesture);
+  }, [active, geometry, gestureId, height, input.heights.half, input.heights.full, input.snap, reduceMotion, settledSnap]);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+      cancelAnimation(height);
+    };
+  }, [height]);
 
-  const panResponder = useMemo(() => {
-    const settle = () => {
-      draggingRef.current = false;
-      setDragging(false);
-      const moved = Math.abs(dragLastRef.current - dragStartRef.current) >= DRAG_ACTIVATION_THRESHOLD;
-      if (!moved) {
-        heightAnim.setValue(heightsRef.current[snapRef.current]);
-        return;
-      }
-      const target = settleContextSheetDrag({
-        draggedHeight: dragLastRef.current,
-        heights: heightsRef.current,
-      });
+  const gesture = useMemo(() => Gesture.Pan()
+    // Header buttons remain tappable; only a vertical drag claims the header.
+    .activeOffsetY([-3, 3])
+    .failOffsetX([-12, 12])
+    .onBegin(() => {
+      'worklet';
+      cancelAnimation(height);
+      gestureId.value += 1;
+      active.value = true;
+      startHeight.value = height.value;
+    })
+    .onUpdate((event) => {
+      'worklet';
+      height.value = applyContextSheetDrag({ heights: geometry.value.heights, startHeight: startHeight.value, translationY: event.translationY });
+    })
+    .onFinalize((_event, successful) => {
+      'worklet';
+      active.value = false;
+      const current = geometry.value;
+      const id = gestureId.value;
+      const target = successful && hasDragMoved(startHeight.value, height.value)
+        ? settleContextSheetDrag({ draggedHeight: height.value, heights: current.heights })
+        : settledSnap.value;
       if (target === 'dismiss') {
-        onDismissRef.current();
+        runOnJS(notify)(target, id);
         return;
       }
-      Animated.timing(heightAnim, {
-        duration: SNAP_ANIMATION_DURATION_MS,
-        toValue: heightsRef.current[target],
-        useNativeDriver: false,
-      }).start(() => {
-        if (target !== snapRef.current) onSnapChangeRef.current(target);
+      settledSnap.value = target;
+      // The semantic result survives animation cancellation (rotation, a new
+      // touch, reduced motion); animation completion is presentation only.
+      runOnJS(notify)(target, id);
+      height.value = withTiming(current.heights[target], {
+        duration: reduceMotion === false ? motionDuration.fast : 0,
+        easing: Easing.bezier(...motionEasing.move),
       });
+    }), [active, geometry, gestureId, height, notify, reduceMotion, settledSnap, startHeight]);
+
+  // Preserve Expo Go's adapter fallback. Installed apps attach only the UI gesture.
+  const panHandlers = useMemo(() => {
+    if (!isStoreClient) return {};
+    const settle = (successful: boolean) => {
+      active.value = false;
+      // A tap or cancellation resumes the release destination, even while its
+      // animation or React acknowledgement is still pending.
+      if (!successful || !hasDragMoved(startHeight.value, height.value)) {
+        height.value = withTiming(latest.current.heights[settledSnap.value], { duration: reduceMotion === false ? motionDuration.fast : 0 });
+        return;
+      }
+      const target = settleContextSheetDrag({ draggedHeight: height.value, heights: latest.current.heights });
+      if (target === 'dismiss') notify(target, gestureId.value);
+      else {
+        settledSnap.value = target;
+        height.value = withTiming(latest.current.heights[target], { duration: reduceMotion === false ? motionDuration.fast : 0 });
+        notify(target, gestureId.value);
+      }
     };
     return PanResponder.create({
-      // 兜底保留 move 阶段协商;但在 Fabric 新架构下 Modal 内 move 阶段的 responder
-      // 协商不会被触发(start 阶段与已授权 responder 的 move 事件均正常——面板内
-      // Pressable 可点、backdrop 能跨 move 收到 release),所以真正生效的是下面的
-      // touch-down 认领。
-      onMoveShouldSetPanResponder: (_event, gestureState) =>
-        Math.abs(gestureState.dy) > DRAG_ACTIVATION_THRESHOLD
-        && Math.abs(gestureState.dy) > Math.abs(gestureState.dx),
-      onPanResponderGrant: () => {
-        dragStartRef.current = heightsRef.current[snapRef.current];
-        dragLastRef.current = dragStartRef.current;
-        heightAnim.setValue(dragStartRef.current);
-        draggingRef.current = true;
-        setDragging(true);
-      },
-      onPanResponderMove: (_event, gestureState) => {
-        const next = applyContextSheetDrag({
-          heights: heightsRef.current,
-          startHeight: dragStartRef.current,
-          translationY: gestureState.dy,
-        });
-        dragLastRef.current = next;
-        heightAnim.setValue(next);
-      },
-      onPanResponderRelease: settle,
-      onPanResponderTerminate: settle,
-      // touch-down 即认领:拖动区(grabber + header 底)没有可点内容,header 里的
-      // 关闭 / 返回按钮是更深层的 Pressable、协商时优先于本区,不受影响;轻点无位移
-      // 时 settle 的 moved 阈值会直接复位,不产生档位变化。
       onStartShouldSetPanResponder: () => true,
-      // 已接管的拖动不许被父级(ScrollView 等)中途抢走,避免拖到一半面板卡在中间。
+      onPanResponderGrant: () => {
+        cancelAnimation(height);
+        gestureId.value += 1;
+        startHeight.value = height.value;
+        active.value = true;
+      },
+      onPanResponderMove: (_event, event) => {
+        height.value = applyContextSheetDrag({ heights: latest.current.heights, startHeight: startHeight.value, translationY: event.dy });
+      },
+      onPanResponderRelease: () => settle(true),
+      onPanResponderTerminate: () => settle(false),
       onPanResponderTerminationRequest: () => false,
-    });
-  }, [heightAnim]);
+    }).panHandlers;
+  }, [active, gestureId, height, notify, reduceMotion, settledSnap, startHeight]);
 
-  return {
-    animatedHeight: heightAnim,
-    dragging,
-    panHandlers: panResponder.panHandlers,
-  };
+  const animatedStyle = useAnimatedStyle(() => ({ height: height.value }));
+  return { animatedStyle, gesture, panHandlers };
 }

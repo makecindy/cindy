@@ -116,6 +116,11 @@
     "controlFork": "세션 분기",
     "markdownDocAriaLabel": "메시지 본문",
     "toolOutputTitle": "{{label}} 출력",
+    "toolInputTitle": "{{label}} 입력",
+    "viewToolInput": "전체 입력 보기",
+    "loadingToolInput": "전체 입력 불러오는 중",
+    "retryToolInput": "입력을 불러오지 못했습니다. 다시 시도",
+    "toolResultCompacted": "Full tool output was released (original size {{size}})",
     "mermaidEmpty": "빈 Mermaid 다이어그램.",
     "diffEditCount": "{{n}}개 편집"
   },
@@ -148,6 +153,7 @@
     "systemInstruction": "시스템 지시",
     "retrySend": "전송 재시도",
     "clearError": "오류 지우기",
+    "noRetryContent": "다시 보낼 내용이 없습니다. 오류를 지운 후 다시 입력해 주세요.",
     "piImageInputUnsupported": "현재 Pi 모델에는 이미지 입력이 활성화되어 있지 않습니다. 이미지를 지원하는 모델로 전환하세요. 사용자 지정 모델이라면 제공자 설정에서 ‘이미지 입력 지원’을 켠 다음 새 Pi 작업을 시작하세요.",
     "codexResumeNotReady": "Codex에서 현재 이 작업을 재개할 수 없습니다. 잠시 후 다시 시도해 주세요.",
     "credentialSwitchWait": "다른 Codex 작업이 끝나기를 기다리는 중입니다. 끝나면 자동으로 전송합니다",
@@ -174,6 +180,19 @@
     "retry": "재시도"
   },
   "systemCard": {
+    "contextRebuild": {
+      "labelOverflow": "컨텍스트를 정리하고 계속합니다",
+      "labelTimeout": "직전 응답이 없어 정리한 뒤 계속합니다",
+      "labelStrip": "큰 이미지를 빼고 계속합니다",
+      "handoffTitle": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약(대화 기록에 포함되지 않으며 여기에서만 표시)",
+      "handoffTitleEnglishSource": "인계 내용——정리 후 이 대화의 이어서 넘긴 컨텍스트 요약. 원문은 영어(대화 기록에 포함되지 않으며 여기에서만 표시)"
+    },
+    "compact": {
+      "savedTokens": "{{tokens}} 토큰 절약",
+      "manual": "수동 압축",
+      "auto": "자동 압축",
+      "aria": "대화가 압축되었습니다"
+    },
     "goalComplete": "목표 달성 · {{turns}}회 · 소요 {{duration}}",
     "goalResumed": "사용량이 회복되어 목표를 계속합니다",
     "goalCapacityRetry": "모델 서비스가 혼잡했습니다. 목표를 다시 시도합니다",

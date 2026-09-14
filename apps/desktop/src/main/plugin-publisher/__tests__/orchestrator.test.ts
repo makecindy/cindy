@@ -168,16 +168,26 @@ describe('PluginPublisherOrchestrator', () => {
       });
 
       const first = orch.start(filePath);
+      await vi.waitFor(() => expect(confirmations).toHaveLength(1));
       orch.start(filePath);
       await vi.waitFor(() => expect(confirmations).toHaveLength(2));
-      if (outcome === 'accepted') confirmations[0].resolve(true);
-      else if (outcome === 'rejected') confirmations[0].resolve(false);
+      if (outcome === 'accepted') {
+        confirmations[0].resolve(true);
+        // Acceptance continues through hashing and prepare in the background. The
+        // quota under test is released as soon as the transfer leaves confirmation,
+        // so do not couple this assertion to the duration of those later stages.
+        await vi.waitFor(() =>
+          expect(orch.snapshot(first.transferId)?.stage).not.toBe('confirming'),
+        );
+      } else if (outcome === 'rejected') confirmations[0].resolve(false);
       else if (outcome === 'aborted') {
         expect(orch.cancel(first.transferId)).toEqual({ cancelled: true });
       } else confirmations[0].reject(new Error('confirmation failed'));
-      await vi.waitFor(() =>
-        expect(orch.snapshot(first.transferId)?.stage).toMatch(/^(failed|cancelled)$/),
-      );
+      if (outcome !== 'accepted') {
+        await vi.waitFor(() =>
+          expect(orch.snapshot(first.transferId)?.stage).toMatch(/^(failed|cancelled)$/),
+        );
+      }
 
       const next = orch.start(filePath);
       // Excludes a leaked counter on the accept, reject, and abort exits respectively.

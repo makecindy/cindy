@@ -27,7 +27,7 @@ describe('AuthContext xd org beta wiring', () => {
       coldStart + 1,
     );
     const readSession = source.indexOf(
-      'let storedSession = await readPersistedAuthSession()',
+      'let storedSession = signedOutTombstone',
     );
 
     expect(preparation).toBeGreaterThan(-1);
@@ -59,10 +59,10 @@ describe('AuthContext xd org beta wiring', () => {
   it('schedules the xd default after both login and refresh identity are applied', () => {
     expect(
       source.match(/scheduleCanaryChannelSync\([^)]*generation\);/g),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
     expect(
       source.match(/scheduleXdOrgBetaDefault\([^)]*generation\);/g),
-    ).toHaveLength(2);
+    ).toHaveLength(3);
 
     const loginApply = source.indexOf(
       'mergeMembershipWithExisting(outcome.membership',
@@ -96,7 +96,7 @@ describe('AuthContext xd org beta wiring', () => {
 
   it('invalidates auth before logout performs asynchronous cleanup', () => {
     const clearLocalSession = source.indexOf(
-      'const clearLocalSession = useCallback(async () => {',
+      'const clearLocalSession = useCallback(async (',
     );
     const invalidateAuth = source.indexOf(
       'authGenerationRef.current += 1;',

@@ -21,6 +21,8 @@ export function pluginMarketErrorKey(error: unknown): string {
       return 'settings.ghosts.errors.idReserved';
     case 'GHOST_BROKER_REDIRECT_PORT_REQUIRED':
       return 'settings.ghosts.market.errors.brokerRedirectPortRequired';
+    case 'GHOST_HOST_UNSUPPORTED':
+      return 'settings.ghosts.errors.hostUnsupported';
     default:
       return 'settings.ghosts.market.errors.generic';
   }

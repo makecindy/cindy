@@ -30,6 +30,7 @@ vi.mock('../slashCommands', () => ({
 }));
 
 import { createMessageHandler, isStopCommand } from '../messageHandler';
+import { enterControl, exitControl } from '../controlState';
 import {
   activateImAccountBoundary,
   captureImAccountGeneration,
@@ -135,6 +136,7 @@ describe('messageHandler !stop routing', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    exitControl('bot-ctx', 'U123456789');
     activateImAccountBoundary();
     wire(true);
   });

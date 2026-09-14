@@ -48,12 +48,22 @@ import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
  * 词表 = 'CindyDev' | 默认身份名 'Cindy',其它内容一律视为身份不确定)。
  */
 export const KEYCHAIN_IDENTITY_MARKER_FILE = 'keychain-identity';
+export const ISOLATED_AUTH_LAUNCH_PROOF_FILE = '.isolated-auth-launch-proof.json';
 
 /** 该目录项是否属于身份标记机制自己的产物(最终标记 或 `<marker>.<pid>-<uuid>.tmp` 半成品)。 */
 export function isKeychainIdentityMarkerArtifact(entryName: string): boolean {
   if (entryName === KEYCHAIN_IDENTITY_MARKER_FILE) return true;
   return (
     entryName.startsWith(`${KEYCHAIN_IDENTITY_MARKER_FILE}.`) && entryName.endsWith('.tmp')
+  );
+}
+
+/** 该目录项是否只属于 dev profile 启动/身份认领机制，不构成存量用户数据。 */
+export function isDevProfileFreshnessArtifact(entryName: string): boolean {
+  if (isKeychainIdentityMarkerArtifact(entryName)) return true;
+  if (entryName === ISOLATED_AUTH_LAUNCH_PROOF_FILE) return true;
+  return (
+    entryName.startsWith(`${ISOLATED_AUTH_LAUNCH_PROOF_FILE}.`) && entryName.endsWith('.tmp')
   );
 }
 
@@ -95,7 +105,7 @@ export interface KeychainIdentityIo {
   claimMarker(name: string): 'claimed' | 'exists' | 'error';
   /**
    * profile 目录是否已有**真实数据**(读失败按 true,方向安全)。实现必须用
-   * isKeychainIdentityMarkerArtifact 排除标记文件与其 .tmp 半成品。
+   * isDevProfileFreshnessArtifact 排除身份标记、launch proof 与它们的 .tmp 半成品。
    */
   profileHasData(): boolean;
   /**

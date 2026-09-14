@@ -50,12 +50,12 @@ describe('ChatInput steer shortcut contract', () => {
     );
     expect(windowKeydownBlock).toContain("(enterIntent === 'queue' || enterIntent === 'steer')");
     expect(windowKeydownBlock).toContain("currentState !== 'listening'");
-    expect(windowKeydownBlock).toContain('void dispatchSendRef.current(enterIntent);');
+    expect(windowKeydownBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
     const paletteGuard = windowComposerCaptureBlock.indexOf(
       'panelBridgeRef.current?.captureKey(event)',
     );
     const modifiedSend = windowComposerCaptureBlock.indexOf(
-      'void dispatchSendRef.current(enterIntent);',
+      'void voiceInputStopAndSendRef.current(enterIntent);',
     );
     expect(paletteGuard).toBeGreaterThan(-1);
     expect(paletteGuard).toBeLessThan(modifiedSend);
@@ -69,7 +69,7 @@ describe('ChatInput steer shortcut contract', () => {
     expect(editorEnterBlock).toContain('platform: window.electronAPI?.platform');
     expect(editorEnterBlock).toContain("if (enterIntent === 'native') return false;");
     expect(editorEnterBlock).toContain("if (enterIntent === 'ignore')");
-    expect(editorEnterBlock).toContain('void dispatchSendRef.current(enterIntent);');
+    expect(editorEnterBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
     // Tiptap's document is current before React's send-button effect updates
     // composerCanSubmitRef. The resolver must not use that lagging UI mirror.
     expect(windowComposerCaptureBlock).not.toContain('composerCanSubmitRef.current');

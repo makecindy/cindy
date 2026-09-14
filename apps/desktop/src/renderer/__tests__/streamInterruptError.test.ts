@@ -6,6 +6,20 @@ import {
   unwrapProviderErrorDisplay,
 } from '@/utils/streamInterruptError';
 
+/** 与 Pi + LiteLLM + xAI 实锤信封同构,避免手写转义把 JSON 写坏。 */
+function xaiRejectedEnvelope(
+  innerMessage = 'Upstream rejected the request!',
+): string {
+  return `OpenAI API error (400): ${JSON.stringify({
+    message: `litellm.BadRequestError: XaiException - ${JSON.stringify({
+      error: { message: innerMessage, type: 'invalid_request_error' },
+    })}`,
+    type: null,
+    param: null,
+    code: '400',
+  })}`;
+}
+
 describe('isStreamInterruptedErrorMessage', () => {
   it('accepts the classified reason even when the message has been rewritten', () => {
     expect(
@@ -39,6 +53,12 @@ describe('unwrapProviderErrorDisplay', () => {
     ).toBe('XaiException - too long');
   });
 
+  it('peels the nested xAI invalid_request JSON down to the inner message', () => {
+    expect(unwrapProviderErrorDisplay(xaiRejectedEnvelope())).toBe(
+      'Upstream rejected the request!',
+    );
+  });
+
   it('leaves unrelated messages alone', () => {
     expect(unwrapProviderErrorDisplay('Network error: fetch failed')).toBe(
       'Network error: fetch failed',
@@ -61,5 +81,15 @@ describe('unwrapProviderErrorDisplay', () => {
     expect(
       unwrapProviderErrorDisplay('OpenAI API error (400): {"message":"invalid_prompt"}'),
     ).toBe('OpenAI API error (400): {"message":"invalid_prompt"}');
+  });
+
+  it('does not rewrite the other Pi API error dialects', () => {
+    const anthropic =
+      'API Error: 400 {"type":"error","error":{"type":"invalid_request_error","message":"prompt is too long"}}';
+    const google = 'GoogleGenerativeAI Error: [400] Invalid JSON payload received';
+    const completions = 'OpenAI API error (429): rate_limit_exceeded';
+    expect(unwrapProviderErrorDisplay(anthropic)).toBe(anthropic);
+    expect(unwrapProviderErrorDisplay(google)).toBe(google);
+    expect(unwrapProviderErrorDisplay(completions)).toBe(completions);
   });
 });

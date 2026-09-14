@@ -3,7 +3,10 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import { createXboxGamepadDefaultLayout, type XboxGamepadPreviewInput } from '../../../../shared/xboxGamepad';
+import {
+  createXboxGamepadDefaultLayout,
+  type XboxGamepadPreviewInput,
+} from '../../../../shared/xboxGamepad';
 import {
   XboxGamepadLayout,
   type XboxGamepadEditablePart,
@@ -38,7 +41,19 @@ describe('XboxGamepadLayout', () => {
     expect(screen.getByTestId('xbox-gamepad-stick-right')).toBeTruthy();
     expect(screen.getByTestId('xbox-gamepad-dpad')).toBeTruthy();
     expect(screen.getByTestId('xbox-gamepad-face')).toBeTruthy();
-    for (const part of ['a', 'b', 'x', 'y', 'lb', 'rb', 'lt', 'rt', 'view', 'menu', 'xbox'] as const) {
+    for (const part of [
+      'a',
+      'b',
+      'x',
+      'y',
+      'lb',
+      'rb',
+      'lt',
+      'rt',
+      'view',
+      'menu',
+      'xbox',
+    ] as const) {
       expect(screen.getByRole('button', { name: part })).toBeTruthy();
     }
   });
@@ -49,8 +64,24 @@ describe('XboxGamepadLayout', () => {
     expect(onEdit).toHaveBeenCalledWith('a');
   });
 
+  it('draws Nintendo face letters on the Switch variant', () => {
+    render(
+      <XboxGamepadLayout
+        layout={createXboxGamepadDefaultLayout()}
+        hintFor={hintFor}
+        onEdit={vi.fn()}
+        preview={null}
+        labels={LABELS}
+        variant="nintendo"
+      />,
+    );
+    expect(screen.getByTestId('switch-gamepad-layout')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'a' })).toBeTruthy();
+  });
+
   it('marks a pressed physical button', () => {
     const preview = {
+      family: 'xbox' as const,
       buttons: { a: true },
       sticks: { left: { x: 0, y: 0 }, right: { x: 0, y: 0 } },
       triggers: { lt: 0, rt: 0 },

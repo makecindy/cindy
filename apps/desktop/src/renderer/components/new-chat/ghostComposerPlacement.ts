@@ -25,7 +25,7 @@ export interface HostCapabilityChipMatch {
 }
 
 export function hostCapabilityForGhost(ghost: InstalledGhost): ComposerHostCapability | null {
-  return ghost.manifest.slots.includes(IOS_SIMULATOR_HOST_CAPABILITY)
+  return ghost.manifest.iosSimulator === true
     ? IOS_SIMULATOR_HOST_CAPABILITY
     : null;
 }

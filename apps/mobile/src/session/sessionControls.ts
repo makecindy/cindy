@@ -1,3 +1,9 @@
+import { isOpenAiSubscriptionProvider } from '@cindy/model-providers/provider-identity';
+import type { Provider } from '@cindy/model-providers/types';
+export type OpenAiAccountProvider = Pick<Provider, 'id' | 'auth'>;
+export function isSessionOpenAiAccount(providerId: string | null | undefined, provider?: OpenAiAccountProvider): boolean {
+  return providerId === 'openai' || (!!provider && provider.id === providerId && isOpenAiSubscriptionProvider(provider));
+}
 import type { RemoteSession } from '@/session/types';
 import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
 export {
@@ -10,11 +16,12 @@ export {
 /** Local ChatGPT quota controls are only relevant to local Codex subscription sessions. */
 export function canUseLocalCodexRateLimitControl(
   session: Pick<RemoteSession, 'agentKind' | 'model' | 'providerId' | 'remoteHostId'> | null,
+  provider?: OpenAiAccountProvider,
 ): boolean {
   if (session?.agentKind !== 'codex' || session.remoteHostId?.trim()) return false;
   const providerId = session.providerId?.trim() ?? '';
   const model = session.model.trim();
-  return (providerId === '' || providerId === 'openai')
+  return (providerId === '' || isSessionOpenAiAccount(providerId, provider))
     && !model.startsWith('codex/')
     && !model.startsWith('chatgpt/')
     && !model.startsWith('xai/');

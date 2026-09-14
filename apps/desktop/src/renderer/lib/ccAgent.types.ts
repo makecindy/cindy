@@ -1,3 +1,4 @@
+import type { ImMessageSource } from '../../shared/imMessageSource';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import type { SessionSource } from '../../shared/sessionSource';
 import type { TurnUsageDetails } from '../../shared/turnUsageDetails';
@@ -5,6 +6,7 @@ import type { RegionalMoney } from '../../shared/regionalMoney';
 import type { AutoResumeInfo, RecoveryCheckpoint } from '../../shared/agentInputQueue';
 import type { ReviewRunMeta } from '../../shared/reviewRun';
 import type { AgentTaskTerminalStatus } from '@cindy/maker-shared/agent-task';
+import type { ToolLoopErrorDetails } from '@cindy/maker-core';
 
 export type SessionStatus = 'active' | 'archived' | 'deleted';
 export type WorkspaceKind = 'project' | 'dialogue';
@@ -18,6 +20,14 @@ export type DeviceLinkConnectionStatus = 'connected' | 'disconnected';
 export type AgentKind = 'cc' | 'codex' | 'pi';
 export type MakerVendor = AgentKind | 'orca';
 export type OrcaRole = 'lead' | 'worker';
+
+/** Provider-native fork boundary. Extend this union when another Agent adopts it. */
+export type NativeForkAnchor = {
+  agentKind: 'codex';
+  sdkSessionId: string;
+  kind: 'turn';
+  id: string;
+};
 
 /**
  * Host-side 消息来源标记：标识一条 user 消息是自动化任务注入的，
@@ -47,6 +57,8 @@ export interface CcMeta {
   /** Claude transcript chain parent. Do not confuse with parentUuid, which is parent_tool_use_id. */
   transcriptParentUuid?: string;
   sdkSessionId?: string;
+  /** Exact provider boundary used by message-level fork when available. */
+  nativeForkAnchor?: NativeForkAnchor;
 
   // assistant 专属
   model?: string;
@@ -114,7 +126,9 @@ export interface CcMeta {
    * hook session-runner 注入; renderer 据此渲染 Cindy 署名任务卡片
    * (userText 为卡片正文, 与发给 agent 的完整 prompt 分离)。
    */
-  hookSource?: { im: string; channelName?: string | null; userText?: string; threadContext?: Array<{ author: string; text: string; isBot?: boolean }> };
+  hookSource?: ImMessageSource;
+  /** Local IM metadata stays separate so older clients retain ordinary user actions. */
+  imSource?: ImMessageSource;
 
   /** 历史 per-turn USD；新数据以 turnCost 为区域金额事实。 */
   turnCostUsd?: number;
@@ -169,8 +183,44 @@ export interface CcMeta {
    */
   goalNotice?: 'usage-resumed' | 'capacity-resumed';
 
+  /**
+   * Host-side marker:个人版制作任务里 Agent 调用 cindy_make.report_complete 后落的
+   * 完成记录(role:'assistant' + 空 content)。renderer 渲成完成卡片,不进 prompt。
+   */
+  cindyMakeCompletion?: import('../../shared/cindyMakeSession').CindyMakeCompletionMeta;
+
   /** /review 创建的独立只读审查任务及其来源卡状态。 */
   reviewRun?: ReviewRunMeta;
+
+  /**
+   * Host-side marker: 后台 Session 任务的持久卡片锚点或后续消息留痕。
+   * renderer 只用它呈现和打开对应任务，不进 prompt。历史角色仍由
+   * shared/botCollaboration.ts 严格解析，但新数据不再创建伙伴客座镜像。
+   */
+  botCollaboration?: import('../../shared/botCollaboration').BotCollaborationMeta;
+
+  /**
+   * Host-side marker for the read-only entrance to a hidden Bot pair conversation.
+   * The actual messages live in the dedicated Bot DM tables and never enter the
+   * normal task transcript through this metadata field.
+   */
+  /** Automatic reply to a private Bot message; retained without unread attention. */
+  botPrivateReply?: boolean;
+  botAuthorization?: import('../../shared/botAuthorization').BotAuthorizationCard;
+  botDirectMessage?: import('../../shared/botDirectMessage').BotDirectMessageMeta;
+
+  /**
+   * Host-side marker for a Hermes-style Bot group room message. The text still
+   * lives in Cindy's normal messages table; this metadata only identifies who
+   * spoke so the room renderer can label it without parsing display text.
+   */
+  botGroup?: {
+    roomId: string;
+    threadId: string;
+    senderKind: 'user' | 'bot';
+    botId?: string;
+    name: string;
+  };
 
   /**
    * Host-side marker:这条 user 消息是一个 /goal 目标的设定 / 更新(goal-host 在新建或
@@ -222,6 +272,11 @@ export interface Session {
   contextTokens: number;
   contextWindow: number;
   fastMode: boolean;
+  /** Host-only temporary route; absent on older Desktop/device-link peers. */
+  runtimeGeneration?: number;
+  runtimeBaseline?: SessionRuntimeProfileProjection;
+  runtimeEffective?: SessionRuntimeProfileProjection;
+  runtimePending?: SessionRuntimePendingProjection | null;
   /**
    * 计划模式一级开关(与 permissionMode 正交):开启时 agent 先产出计划、经审批后再执行。
    * 计划批准后 agent 自动退出并经 plan_mode_changed → sessions:patched 回流为 false。
@@ -254,6 +309,8 @@ export interface Session {
    * 消费方按 null 兜底(不提示)。
    */
   activeTurnStartedAt?: number | null;
+  /** Host-confirmed pre-boot interruption generation; absent on older hosts. */
+  interruptedTurnStartedAt?: number | null;
   lastTurnEndedAt?: number | null;
   /**
    * worktree-parallel-sessions: 本 session 绑定的 git worktree 绝对路径（null = 无 worktree）。
@@ -268,11 +325,12 @@ export interface Session {
    */
   usedProjectContext?: boolean;
   /**
-   * 附加只读引用目录列表(绝对路径)。Claude session 才会真正用到;
-   * Codex session 此字段恒为空数组(capability 不支持,UI 不暴露入口)。
+   * 附加只读引用目录列表(绝对路径)。支持该能力的 Harness 都保持只读语义。
    * 未升级到 0019 migration 之前的老 session 反序列化时也是 [],无追溯。
    */
   extraDirs: string[];
+  /** 用户为本任务明确授予的附加可读写目录；旧版远程 payload 可能缺失。 */
+  writableDirs?: string[];
   /**
    * Remote codex (P2): 远端 SSH host alias (`@cindy/maker-remote-ssh`
    * ConnectionPool 里的 id)。设置后 codex agent 跑在远端机器, workingDir
@@ -308,6 +366,39 @@ export interface Session {
   summary?: string | null;
 }
 
+/**
+ * 用量历史任务榜单的最小 wire DTO。
+ *
+ * 该查询会覆盖整个本地 sessions 表，因此不能把完整 Session 行送进
+ * Renderer；榜单只需要这些统计与展示字段。
+ */
+export type UsageHistorySession = Pick<
+  Session,
+  | 'id'
+  | 'title'
+  | 'model'
+  | 'providerId'
+  | 'totalTokenUsage'
+  | 'contextTokens'
+  | 'contextWindow'
+  | 'userSendAt'
+  | 'updatedAt'
+>;
+
+export interface SessionRuntimeProfileProjection {
+  agentKind: 'claude-code' | 'codex' | 'pi';
+  model: string;
+  providerId: string | null;
+  effort: Effort | null;
+  fastMode: boolean;
+}
+
+export interface SessionRuntimePendingProjection {
+  generation: number;
+  source: 'agent' | 'fallback';
+  profile: SessionRuntimeProfileProjection;
+}
+
 // 'error':turn 失败的 terminal error 持久化行(main 的 onTurnErrorEvent 落库)。
 // 让"你没开着会话时发生的失败"重开会话 / 重启 app 后仍可见 —— 此前 error 只存
 // 内存(coordinator projection + store.error),事后点进会话毫无痕迹,红点无从追溯。
@@ -325,6 +416,9 @@ export interface AgentSwitchContent {
   toAgentKind: 'cc' | 'codex' | 'pi';
   fromModel: string | null;
   toModel: string | null;
+  /** Agent 切换时的来源快照；缺失表示旧版边界数据。 */
+  fromProviderId?: string | null;
+  toProviderId?: string | null;
   handoff: string;
   /** Phase 2:true = 目标引擎续接(resume)了自己的停泊原生会话,交接为增量模式。 */
   resumed?: boolean;
@@ -353,5 +447,7 @@ export interface Message {
    * null = 切换功能上线前的老消息(回落 session.agentKind)。
    */
   agentKind?: 'cc' | 'codex' | 'pi' | null;
+  /** Structured guard details for a persisted tool-loop terminal error. */
+  toolLoop?: ToolLoopErrorDetails;
   createdAt: string; // ISO 8601
 }

@@ -33,6 +33,18 @@ vi.mock('../custom-provider-header-secrets.js', () => ({
       },
     },
     {
+      id: 'openrouter-oauth',
+      name: 'OpenRouter OAuth',
+      auth: { method: 'oauth', oauth: { authorizeUrl: 'https://openrouter.ai/auth' } },
+      runtimes: {
+        pi: {
+          baseUrl: 'https://openrouter.ai/api/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'google/gemini-test', api: 'openai-completions' }],
+        },
+      },
+    },
+    {
       id: 'xai',
       name: 'Legacy custom xAI',
       auth: { method: 'apiKey' },
@@ -162,5 +174,17 @@ describe('Pi pure BYOM auth without a Cindy account', () => {
       }),
     );
     expect(Object.values(resolved.env)).toContain('legacy-custom-key');
+  });
+
+  it('does not give remote OAuth Pi a local proxy endpoint', async () => {
+    const resolved = await resolvePiNativeProviders({
+      workingDir: '/remote/project',
+      remoteHostId: 'remote-1',
+      providerId: 'openrouter-oauth',
+      model: 'google/gemini-test',
+    });
+    expect(resolved.providers.some((provider) => provider.id.includes('openrouter-oauth'))).toBe(false);
+    expect(resolved.providers.some((provider) =>
+      provider.baseUrl?.includes('127.0.0.1:18765') && !provider.hostProxyForward)).toBe(false);
   });
 });

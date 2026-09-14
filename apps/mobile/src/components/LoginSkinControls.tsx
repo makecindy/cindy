@@ -1171,16 +1171,41 @@ export function LoginResendCountdown({
     );
   }
   return (
+    <LoginTextAction
+      disabled={disabled}
+      label={resendLabel}
+      onPress={onResend}
+      testID={testID}
+    />
+  );
+}
+
+/** 登录面板内的次要文字动作，与验证码重发共用同一定位和视觉。 */
+export function LoginTextAction({
+  disabled,
+  label,
+  onPress,
+  testID,
+  top,
+}: {
+  disabled?: boolean;
+  label: string;
+  onPress: () => void;
+  testID?: string;
+  top?: number;
+}) {
+  const styles = useThemedStyles(makeStyles);
+  return (
     <Pressable
       accessibilityRole="button"
       accessibilityState={{ disabled }}
       disabled={disabled}
-      onPress={onResend}
-      style={styles.textLinkSlotBox}
+      onPress={onPress}
+      style={[styles.textLinkSlotBox, top != null && { top }]}
       testID={testID}
     >
       <Text numberOfLines={1} style={styles.resendLinkText}>
-        {resendLabel}
+        {label}
       </Text>
     </Pressable>
   );

@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
 import {
+  buildClaudeAskUserQuestionCallerProvenanceHooks,
   buildClaudeOrcaCallerProvenanceHooks,
   buildClaudeRemoteOrcaCallerGuards,
+  buildClaudeRemoteRootOnlyToolGuards,
   buildClaudeLocalToolGuardHooks,
   buildClaudeRemoteToolGuards,
   buildClaudeSkillOverrides,
   mergeClaudeHookSets,
+  CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
+  CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
   ORCA_SEND_TO_LEAD_TOOL_NAME,
 } from '../capability-routing.js';
 
@@ -43,6 +47,41 @@ describe('Claude Orca caller provenance', () => {
       denialMessage: 'NESTED_AGENT_NOT_ALLOWED: nested agent cannot report directly to the lead',
     }]);
     expect(buildClaudeRemoteOrcaCallerGuards(false)).toEqual([]);
+  });
+
+  it('allows the root but denies a native subagent from asking the user', async () => {
+    const hook = buildClaudeAskUserQuestionCallerProvenanceHooks().PreToolUse?.[0]?.hooks[0];
+    if (!hook) throw new Error('expected AskUserQuestion caller provenance hook');
+    const input = {
+      hook_event_name: 'PreToolUse' as const,
+      session_id: 'session-ask-user-question',
+      transcript_path: '/tmp/transcript',
+      cwd: '/repo',
+      tool_name: CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
+      tool_input: { questions: [] },
+      tool_use_id: 'tool-ask-user-question',
+    };
+
+    await expect(hook(input, 'tool-ask-user-question', {
+      signal: new AbortController().signal,
+    })).resolves.toEqual({ continue: true });
+    await expect(hook({ ...input, agent_id: 'native-child-1' }, 'tool-ask-user-question', {
+      signal: new AbortController().signal,
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
+      },
+    });
+  });
+
+  it('serializes the native AskUserQuestion root-only guard for remote Claude', () => {
+    expect(buildClaudeRemoteRootOnlyToolGuards()).toEqual([{
+      toolNamePrefix: CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
+      sourceServerId: 'claude-code',
+      invocation: 'root-only',
+      denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
+    }]);
   });
 });
 

@@ -76,7 +76,8 @@ export async function runPluginStorageSmoke(ownerId: string): Promise<PluginStor
   fs.writeFileSync(
     path.join(ghostDir, 'ghost.json'),
     `${JSON.stringify({
-      schemaVersion: 2,
+      schemaVersion: 3,
+      minCindyVersion: '0.1.61',
       id: GHOST_ID,
       name: 'Plugin storage smoke',
       description: 'Packaged smoke fixture',
@@ -84,7 +85,7 @@ export async function runPluginStorageSmoke(ownerId: string): Promise<PluginStor
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['notify'],
+      notify: true,
     })}\n`,
   );
   fs.writeFileSync(path.join(ghostDir, 'main.js'), '// packaged plugin storage smoke\n');

@@ -19,6 +19,7 @@
  * 时长缺失(老历史数据没有 createdAt)时退化为「工作过程」文案,不显示时间。
  */
 
+import { CHAT_CHEVRON_TRANSITION_CLASS } from './chatChrome';
 import {
   Fragment,
   useCallback,
@@ -37,6 +38,7 @@ import type { ChatMessage } from '@/lib/makerChatStore';
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
 
 import {
   ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
@@ -73,6 +75,7 @@ export type WorkGroupChild =
       isStreaming: boolean;
       startedAtMs?: number;
       childItems: WorkGroupChild[];
+      deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
     }
   | { kind: 'rendered'; key: string; renderNode: () => ReactNode };
 
@@ -103,6 +106,7 @@ export function collectLiveWorkActivities(
 }
 
 export interface WorkGroupBlockProps {
+  deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
   /** Stable persistence key:动作段 `work:<clientId>`,外层 `work:summary-<clientId>`. */
   blockId: string;
   /** Wall-clock span of the run; undefined when timestamps are unavailable. */
@@ -166,11 +170,12 @@ function ThinkingActivityRow({
       data-live-work-activity="thinking"
       data-message-client-id={activity.key}
       data-work-thinking-expandable={canExpand ? 'true' : 'false'}
+      data-scroll-disclosure-header=""
       disabled={!canExpand}
       aria-expanded={canExpand ? expanded : undefined}
       onClick={() => setExpanded((value) => !value)}
       className={cn(
-        'flex w-full min-w-0 gap-[6px] px-2 py-[3px] text-left outline-none',
+        'flex w-full min-w-0 gap-1.5 px-2 py-[3px] text-left outline-none',
         ACTIVITY_ROW_RADIUS_CLASS,
         expanded ? 'items-start' : 'items-center',
         canExpand
@@ -203,7 +208,7 @@ function ThinkingActivityRow({
           <ChevronRight
             size={13}
             className={cn(
-              'transition-transform duration-[var(--motion-fast,150ms)]',
+              CHAT_CHEVRON_TRANSITION_CLASS,
               expanded && 'rotate-90',
             )}
           />
@@ -261,6 +266,7 @@ function ExpandedWorkGroupChild({
         isStreaming={child.isStreaming}
         startedAtMs={child.startedAtMs}
         childItems={child.childItems}
+        deferred={child.deferred}
       />
     );
   }
@@ -268,6 +274,7 @@ function ExpandedWorkGroupChild({
 }
 
 export function WorkGroupBlock({
+  deferred,
   blockId,
   durationMs,
   isStreaming = false,
@@ -275,7 +282,15 @@ export function WorkGroupBlock({
   childItems,
 }: WorkGroupBlockProps) {
   const { t } = useTranslation();
-  const { expanded, setExpanded } = useExpandedBlockMemory(blockId);
+  const { expanded: rememberedExpanded, setExpanded } = useExpandedBlockMemory(blockId);
+  const expanded = deferred?.setVisible ? rememberedExpanded : deferred?.expanded ?? rememberedExpanded;
+  const deferredRef = useRef(deferred);
+  deferredRef.current = deferred;
+  useEffect(() => {
+    const current = deferredRef.current;
+    current?.setVisible?.(expanded, isStreaming);
+    return () => current?.setVisible?.(false, false);
+  }, [deferred?.owner, deferred?.key, expanded, isStreaming]);
   const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
@@ -310,7 +325,7 @@ export function WorkGroupBlock({
   );
   // 运行中预览已经等于全部内容时，折叠/展开是视觉空操作 — 组头不提供交互。
   const canToggle =
-    !isStreaming
+    (!!deferred && !deferred.previewComplete) || !isStreaming
     || hasBeyondPreviewChild
     || recentActivities.length > MAX_LIVE_WORK_ACTIVITIES;
   const effectiveExpanded = expanded && canToggle;
@@ -329,10 +344,11 @@ export function WorkGroupBlock({
   // 外层完成态组展开成文字 + 内层动作组;内层动作组与运行态组复用本组件,
   // 展开后直接渲染 thinking /工具行,不再多套一层子卡摘要。
   const onToggle = useCallback(() => {
+    if (deferred && !deferred.setVisible) { deferred.toggle(); return; }
     setExpanded((v) => !v);
-  }, [setExpanded]);
+  }, [deferred, setExpanded]);
 
-  if (childItems.length === 0) return null;
+  if (childItems.length === 0 && !deferred) return null;
 
   // durationMs === 0(同毫秒时间戳的极短 run)也显示时长 — formatDuration
   // 自带最小 1s 钳制;只有时间戳缺失(undefined)才退化为无时长文案。
@@ -370,9 +386,10 @@ export function WorkGroupBlock({
         <button
           type="button"
           onClick={canToggle ? onToggle : undefined}
+          data-scroll-disclosure-header=""
           disabled={!canToggle}
           className={cn(
-            'flex w-full items-center gap-[6px] py-[2px]',
+            'flex w-full items-center gap-1.5 py-[2px]',
             'select-none',
             'text-left',
             canToggle && 'cursor-pointer hover:opacity-80 transition-opacity',
@@ -403,7 +420,7 @@ export function WorkGroupBlock({
               size={14}
               className={cn(
                 'shrink-0 text-[var(--msg-tool-card-chevron)]',
-                'transition-transform duration-[var(--motion-fast,150ms)]',
+                CHAT_CHEVRON_TRANSITION_CLASS,
                 effectiveExpanded && 'rotate-90',
               )}
             />
@@ -448,6 +465,12 @@ export function WorkGroupBlock({
                 />
               </Fragment>
             ))}
+            {deferred?.loading && <Spinner size={14} />}
+            {deferred?.failed && (
+              <Button variant="secondary" disabled={deferred.loading} onClick={deferred.retry}>
+                {t('chat.errorBanner.retry')}
+              </Button>
+            )}
           </div>
         </Collapse>
       </div>

@@ -44,3 +44,10 @@ describe('feishu group turn permission policy', () => {
     ).toBe(true);
   });
 });
+
+
+it('keeps trusted requester authority separate from message text', () => {
+  expect(createFeishuGroupTurnPermissionPolicy('message', true).autoReviewContext).toEqual({ requesterAuthority: 'owner', source: 'group' });
+  expect(createFeishuGroupTurnPermissionPolicy('message', false).autoReviewContext).toEqual({ requesterAuthority: 'guest', source: 'group' });
+  expect(createFeishuGroupTurnPermissionPolicy('message').autoReviewContext?.requesterAuthority).toBe('unknown');
+});

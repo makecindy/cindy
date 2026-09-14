@@ -23,7 +23,7 @@ export interface ScheduleStorage {
   updateRun(id: string, patch: Partial<ScheduleRun>): Promise<ScheduleRun | null>;
   listRuns(scheduleId: string, limit?: number): Promise<ScheduleRun[]>;
   /** Returns the deleted run for callers that want to know its scheduleId, or null if not found. */
-  deleteRun(id: string): Promise<ScheduleRun | null>;
+  deleteRun(id: string, options?: { excludeBotSchedules?: boolean }): Promise<ScheduleRun | null>;
 
   /**
    * 僵尸 run 清理：把**心跳已过期**的 'running' run 改写为 'interrupted'。

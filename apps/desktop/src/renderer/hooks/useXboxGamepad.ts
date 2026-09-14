@@ -1,13 +1,16 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import type {
+  GamepadFamily,
   XboxGamepadSettings,
   XboxGamepadSettingsPatch,
   XboxGamepadState,
 } from '../../shared/xboxGamepad';
 
-export function useXboxGamepad(options: { watchConnection?: boolean } = {}) {
-  const { watchConnection = false } = options;
+export function useXboxGamepad(
+  options: { family?: GamepadFamily; watchConnection?: boolean } = {},
+) {
+  const { family = 'xbox', watchConnection = false } = options;
   const [state, setState] = useState<XboxGamepadState | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -30,21 +33,21 @@ export function useXboxGamepad(options: { watchConnection?: boolean } = {}) {
     try {
       const next = await api.getState();
       if (!mountedRef.current) return;
-      setState(next);
+      setState(next[family]);
       setError(null);
     } catch {
       if (mountedRef.current) setError('load');
     } finally {
       if (mountedRef.current) setLoading(false);
     }
-  }, []);
+  }, [family]);
 
   useEffect(() => {
     mountedRef.current = true;
     const api = window.electronAPI?.xboxGamepad;
     const unsubscribe = api?.onStateChanged((next) => {
       if (!mountedRef.current) return;
-      setState(next);
+      setState(next[family]);
       setLoading(false);
     });
     void reload();
@@ -52,7 +55,7 @@ export function useXboxGamepad(options: { watchConnection?: boolean } = {}) {
       mountedRef.current = false;
       unsubscribe?.();
     };
-  }, [reload]);
+  }, [family, reload]);
 
   useEffect(() => {
     if (!watchConnection) return;
@@ -65,31 +68,34 @@ export function useXboxGamepad(options: { watchConnection?: boolean } = {}) {
     return () => window.clearInterval(timer);
   }, [watchConnection]);
 
-  const setSettings = useCallback(async (patch: XboxGamepadSettingsPatch) => {
-    const api = window.electronAPI?.xboxGamepad;
-    if (!api) return;
-    setSaving(true);
-    try {
-      const next = await api.setSettings(patch);
-      if (mountedRef.current) {
-        setState(next);
-        setError(null);
+  const setSettings = useCallback(
+    async (patch: XboxGamepadSettingsPatch) => {
+      const api = window.electronAPI?.xboxGamepad;
+      if (!api) return;
+      setSaving(true);
+      try {
+        const next = await api.setSettings(family, patch);
+        if (mountedRef.current) {
+          setState(next[family]);
+          setError(null);
+        }
+      } catch {
+        if (mountedRef.current) setError('save');
+      } finally {
+        if (mountedRef.current) setSaving(false);
       }
-    } catch {
-      if (mountedRef.current) setError('save');
-    } finally {
-      if (mountedRef.current) setSaving(false);
-    }
-  }, []);
+    },
+    [family],
+  );
 
   const resetSettings = useCallback(async () => {
     const api = window.electronAPI?.xboxGamepad;
     if (!api) return;
     setSaving(true);
     try {
-      const next = await api.resetSettings();
+      const next = await api.resetSettings(family);
       if (mountedRef.current) {
-        setState(next);
+        setState(next[family]);
         setError(null);
       }
     } catch {
@@ -97,7 +103,7 @@ export function useXboxGamepad(options: { watchConnection?: boolean } = {}) {
     } finally {
       if (mountedRef.current) setSaving(false);
     }
-  }, []);
+  }, [family]);
 
   return { state, loading, saving, error, setSettings, resetSettings, reload };
 }

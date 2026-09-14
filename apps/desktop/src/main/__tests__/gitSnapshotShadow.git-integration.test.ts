@@ -7,6 +7,8 @@
  */
 
 import { promises as fs } from 'node:fs';
+import fsSync from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
 import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -32,6 +34,20 @@ import { gitExec } from '../worktree/gitExec';
 
 const REAL_GIT_TEST_TIMEOUT_MS = process.platform === 'win32' ? 60_000 : 20_000;
 const SESSION = 'shadow-sess-1';
+
+const canLinkFile = (() => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'shadow-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 let repoPath: string;
 const originalGitLocaleEnv = {
@@ -226,8 +242,8 @@ describe('createShadowSavepoint', () => {
     expect(entries[0]?.baseHead).toBeUndefined();
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
-  it('treats tracked files behind an out-of-repo symlinked parent as deleted', async () => {
-    if (process.platform === 'win32') return; // 符号链接在 Windows CI 上需要特权
+  it.skipIf(!canLinkFile)('treats tracked files behind an out-of-repo symlinked parent as deleted', async () => {
+    await gitExec(['config', 'core.symlinks', 'true'], repoPath);
     await commitSeed();
     await writeRepoFile('evil/target.txt', 'tracked base\n');
     await gitExec(['add', '-A'], repoPath);
@@ -238,7 +254,7 @@ describe('createShadowSavepoint', () => {
     try {
       await fs.writeFile(path.join(outside, 'target.txt'), 'external secret\n', 'utf8');
       await fs.rm(path.join(repoPath, 'evil'), { recursive: true });
-      await fs.symlink(outside, path.join(repoPath, 'evil'));
+      await fs.symlink(outside, path.join(repoPath, 'evil'), 'dir');
 
       const result = await createShadowSavepoint(repoPath, {
         sessionId: SESSION,

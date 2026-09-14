@@ -10,7 +10,7 @@ import type { TabState } from './types';
  */
 export function isIOSSimulatorPluginAvailable(ghosts: readonly InstalledGhost[]): boolean {
   return ghosts.some(
-    ({ enabled, manifest }) => enabled === true && manifest.slots.includes('ios-simulator'),
+    ({ enabled, manifest }) => enabled === true && manifest.iosSimulator === true,
   );
 }
 

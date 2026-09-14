@@ -44,15 +44,20 @@ function stubElectron() {
   const localMessages = {
     estimatedSessionValue: vi.fn().mockResolvedValue({ totalValueUsd: 0, entries: [] }),
   };
+  const localSessions = {
+    get: vi.fn().mockRejectedValue(new Error('[NOT_FOUND] Session does not exist')),
+    update: vi.fn(),
+  };
   const invoke = vi.fn().mockResolvedValue(undefined);
+  const getState = vi.fn().mockResolvedValue({ disabledControlDeviceIds: [] });
   vi.stubGlobal('window', {
     electronAPI: {
       maker: makerSpies,
-      localDb: { orcaWorkflows, messages: localMessages },
-      deviceLink: { invoke },
+      localDb: { orcaWorkflows, messages: localMessages, sessions: localSessions },
+      deviceLink: { invoke, getState },
     },
   });
-  return { makerSpies, orcaWorkflows, localMessages, invoke };
+  return { makerSpies, orcaWorkflows, localMessages, localSessions, invoke, getState };
 }
 
 const sess = (id: string): Session => ({ id }) as unknown as Session;
@@ -262,6 +267,60 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:sessions:patch-meta', [
       'rs',
       { status: 'active' },
+    ]);
+  });
+
+  it.each([
+    ['archived', { status: 'archived', pinnedAt: null }],
+    ['deleted', { status: 'deleted' }],
+  ] as const)(
+    'setStatus routes a disabled remote-id collision to the verified local row for %s',
+    async (status, expectedPatch) => {
+      const { getState, invoke, localSessions } = stubElectron();
+      const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+      const { getStickySessionDeviceId } = await import(
+        '@/features/device-link/stickySessionOrigin'
+      );
+      const sessionService = await import('@/lib/sessionService');
+      const localRow = sess('collision');
+
+      remoteProjectsStore.setDeviceSessions('dev-disabled', 'Old desktop', [localRow]);
+      expect(getStickySessionDeviceId('collision')).toBe('dev-disabled');
+      remoteProjectsStore.removeDevice('dev-disabled');
+      getState.mockResolvedValue({ disabledControlDeviceIds: ['dev-disabled'] });
+      localSessions.get.mockResolvedValue(localRow);
+      localSessions.update.mockResolvedValue({ ...localRow, status });
+
+      await sessionService.setStatus('collision', status);
+
+      expect(getState).toHaveBeenCalledOnce();
+      expect(localSessions.get).toHaveBeenCalledWith('collision');
+      expect(localSessions.update).toHaveBeenCalledWith('collision', expectedPatch);
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
+
+  it('setStatus keeps a disabled true remote session pinned when no local row exists', async () => {
+    const { getState, invoke, localSessions } = stubElectron();
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    const { getStickySessionDeviceId } = await import(
+      '@/features/device-link/stickySessionOrigin'
+    );
+    const sessionService = await import('@/lib/sessionService');
+
+    remoteProjectsStore.setDeviceSessions('dev-disabled', 'Old desktop', [sess('remote-only')]);
+    expect(getStickySessionDeviceId('remote-only')).toBe('dev-disabled');
+    remoteProjectsStore.removeDevice('dev-disabled');
+    getState.mockResolvedValue({ disabledControlDeviceIds: ['dev-disabled'] });
+
+    await sessionService.setStatus('remote-only', 'archived');
+
+    expect(getState).toHaveBeenCalledOnce();
+    expect(localSessions.get).toHaveBeenCalledWith('remote-only');
+    expect(localSessions.update).not.toHaveBeenCalled();
+    expect(invoke).toHaveBeenCalledWith('dev-disabled', 'local-db:sessions:patch-meta', [
+      'remote-only',
+      { status: 'archived', pinnedAt: null },
     ]);
   });
 

@@ -26,7 +26,6 @@ function ghost(command: string | undefined, enabled = true): InstalledGhost {
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: ['tool', 'model'],
       tools: [{ name: 'gen_image', description: 'x' }],
       ...(command !== undefined ? { command } : {}),
     },

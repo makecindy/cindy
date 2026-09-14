@@ -11,6 +11,13 @@
 
 ## 当前规则
 
+模型相关工作先读 [模型配置与下发](../dev-rules/model-catalog-maintenance.md)，再按任务进入：
+
+- [模型资料优先级](model-metadata-precedence.md)：公共资料、默认/实报/用户覆盖、多账号身份与成员空值语义。
+- [本地模型筛选](local-model-selection.md)：候选、推荐、量化包装和硬件证据。
+- [供应商设置](provider-settings.md)：连接身份、状态、操作与用量展示。
+- [V4 全类型规范](../model-registry-v4-media.md)：媒体字段、成员投影及额外发布条件。
+
 - [`core-product-principles.md`](core-product-principles.md)：Cindy 的目的、连接本质、
   Core 边界，以及 Agent、Skill、插件的产品分工。
 - [`review-product-direction.md`](review-product-direction.md)：Cindy Review 的北极星、
@@ -19,3 +26,7 @@
   身份命名与默认值方向、区域相关 UI 标注与对外口径。
 - [`task-and-conversation-naming.md`](task-and-conversation-naming.md)：`session` 的中文
   叫「任务」，任务 / 对话 / 消息的分层定义与判定规则，以及「任务」与 `task` 的歧义处理。
+- [`document-workshop-quality.md`](document-workshop-quality.md)：无插件文档基础能力的
+  HTML-first 工序、四格式统一视觉语言、Session 作品卡和插件增强层边界。
+- [`session-runtime-control.md`](session-runtime-control.md)：Agent 调整任务模型、来源、
+  推理强度与 Fast 的统一控制面，baseline/effective/pending 状态和自动降级边界。

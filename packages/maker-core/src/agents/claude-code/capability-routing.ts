@@ -20,6 +20,9 @@ import { ORCA_NESTED_REPORT_DENIAL_REASON } from '../shared/orca-report-policy.j
 
 const CLAUDE_CODE_HARNESS_ID = 'claude-code';
 export const ORCA_SEND_TO_LEAD_TOOL_NAME = 'mcp__orca_worker_bridge__send_to_lead';
+export const CLAUDE_ASK_USER_QUESTION_TOOL_NAME = 'AskUserQuestion';
+export const CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON =
+  'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.';
 
 /** Claude root calls have no agent_id; native subagents always carry one. */
 export function buildClaudeOrcaCallerProvenanceHooks(): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
@@ -38,6 +41,25 @@ export function buildClaudeOrcaCallerProvenanceHooks(): Partial<Record<HookEvent
     };
   };
   return { PreToolUse: [{ matcher: ORCA_SEND_TO_LEAD_TOOL_NAME, hooks: [guardTool] }] };
+}
+
+/** Native Claude subagents must report questions to the root agent. */
+export function buildClaudeAskUserQuestionCallerProvenanceHooks(): Partial<Record<HookEvent, HookCallbackMatcher[]>> {
+  const guardTool: HookCallback = async (input) => {
+    if (input.hook_event_name !== 'PreToolUse') return { continue: true };
+    const pre = input as PreToolUseHookInput;
+    if (pre.tool_name !== CLAUDE_ASK_USER_QUESTION_TOOL_NAME) return { continue: true };
+    if (typeof pre.agent_id !== 'string' || pre.agent_id.length === 0) return { continue: true };
+    return {
+      continue: true,
+      hookSpecificOutput: {
+        hookEventName: 'PreToolUse',
+        permissionDecision: 'deny',
+        permissionDecisionReason: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
+      },
+    };
+  };
+  return { PreToolUse: [{ matcher: CLAUDE_ASK_USER_QUESTION_TOOL_NAME, hooks: [guardTool] }] };
 }
 
 function isClaudeSkillDirective(directive: CapabilityRouteOverride): boolean {
@@ -93,6 +115,16 @@ export function buildClaudeRemoteOrcaCallerGuards(isOrcaWorker: boolean): Claude
     sourceServerId: 'orca_worker_bridge',
     invocation: 'root-only',
     denialMessage: ORCA_NESTED_REPORT_DENIAL_REASON,
+  }];
+}
+
+/** JSON-safe remote equivalent of the native subagent user-input guard. */
+export function buildClaudeRemoteRootOnlyToolGuards(): ClaudeRemoteToolGuard[] {
+  return [{
+    toolNamePrefix: CLAUDE_ASK_USER_QUESTION_TOOL_NAME,
+    sourceServerId: 'claude-code',
+    invocation: 'root-only',
+    denialMessage: CLAUDE_SUBAGENT_ASK_USER_QUESTION_DENIAL_REASON,
   }];
 }
 

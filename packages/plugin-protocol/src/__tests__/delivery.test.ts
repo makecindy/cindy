@@ -6,10 +6,8 @@ import {
   parsePluginDownloadResponse,
   PluginProtocolError,
 } from '../delivery.js';
-import { GHOST_MANIFEST_SCHEMA_VERSION } from '../manifest.js';
-
 const validManifest = {
-  schemaVersion: GHOST_MANIFEST_SCHEMA_VERSION,
+  schemaVersion: 2,
   id: 'acme-helper',
   name: 'Acme Helper',
   version: '1.0.0',
@@ -221,6 +219,36 @@ describe('plugin delivery contract', () => {
 
     expect(response.plugin.currentRelease.manifest.slots).toEqual(['ios-simulator']);
     expect(response.plugin.currentRelease.manifest.minCindyVersion).toBe('1.2.3');
+  });
+
+  it('preserves unknown slot declarations for the client capability check', () => {
+    const manifest = {
+      ...validManifest,
+      slots: ['tool', 'vendor-runtime'],
+    } as const;
+    const response = parseGetPluginResponse({
+      schemaVersion: PLUGIN_API_SCHEMA_VERSION,
+      plugin: {
+        id: pluginId,
+        ghostId: manifest.id,
+        name: manifest.name,
+        description: null,
+        author: null,
+        scope: 'public',
+        organizationId: null,
+        defaultInstall: false,
+        currentRelease: {
+          id: 'release-vendor-runtime',
+          version: manifest.version,
+          sha256: 'a'.repeat(64),
+          sizeBytes: 1024,
+          publishedAt: '2026-07-19T00:00:00.000Z',
+          manifest,
+        },
+      },
+    });
+
+    expect(response.plugin.currentRelease.manifest.slots).toEqual(['tool', 'vendor-runtime']);
   });
 
   it('allows oidc-token only in organization Plugin details', () => {

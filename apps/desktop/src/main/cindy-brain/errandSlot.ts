@@ -5,7 +5,7 @@
  * 插件**专属 errand 会话**里的 agent 跑一轮,把最终回复文字取回给插件。
  *
  * 安全边界(全部由本层与注入 runner 的主机代码强制,prompt 不构成边界):
- * - 插件必须声明 `agent` 槽 + `agent.errand: true`(装入确认高风险单列);
+ * - 插件必须声明 `agent` 槽 + `agent.errand: true`(插件详情高风险能力单列);
  * - 任务文本只进普通 user 消息,绝不进 system prompt;
  * - errand 会话的 agent/模型/权限档/工作目录由用户配置(runner 侧解析;
  *   权限档默认 plan 只读,协议层就没有 bypassPermissions)。唯一例外:
@@ -201,7 +201,7 @@ export class GhostErrandSlot {
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeAgentErrandResult> {
     this.sweepJobs();
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('agent') || ghost.manifest.agent?.errand !== true) {
+    if (!ghost?.enabled || ghost.manifest.agent?.errand !== true) {
       return fail('PERMISSION_DENIED', '插件未申请「派活取件」权限(身份卡 agent.errand),或当前未启用');
     }
     if (!isPlainObject(payload) || payload.type !== 'agent-errand-request') {

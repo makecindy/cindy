@@ -1,7 +1,7 @@
 import { and, eq, inArray, isNotNull, isNull } from 'drizzle-orm';
 
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
-import { normalizeWorkingDirForGrouping } from '../../shared/workingDir.js';
+import { normalizeWorkingDirForGrouping, normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
 
@@ -10,7 +10,7 @@ export function deriveAllowedSkillhubProjectRoots(
 ): string[] {
   return [...new Set(
     workingDirs
-      .map((workingDir) => normalizeWorkingDirForGrouping(workingDir))
+      .flatMap((workingDir) => [normalizeWorkingDirForGrouping(workingDir), normalizeWorkingDirForStorage(workingDir)])
       .filter((workingDir): workingDir is string => workingDir !== null),
   )];
 }

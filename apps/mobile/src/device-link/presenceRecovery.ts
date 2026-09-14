@@ -63,10 +63,13 @@ export function getOrCreatePresenceTrackedRequest<T>(
   options: {
     /** 成功的 link 在当前 presence / 连接代保持可复用；失败仍立即清除。 */
     retainSuccessful?: boolean;
+    /** 重试已失效的 link 时替换已结算缓存；仍复用当前在途请求以保持单飞。 */
+    refreshSettled?: boolean;
   } = {},
 ): PresenceTrackedRequest<T> {
   const existing = inFlight.get(deviceId);
-  if (existing) return existing;
+  if (existing && (!options.refreshSettled || existing.pending)) return existing;
+  if (existing) inFlight.delete(deviceId);
 
   const tracked: PresenceTrackedRequest<T> = {
     capturedPresenceEpoch: capturePresenceAvailabilityEpoch(epochs, deviceId),

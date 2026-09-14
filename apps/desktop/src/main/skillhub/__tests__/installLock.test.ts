@@ -28,6 +28,24 @@ describe('installLock(final-switch 共享互斥)', () => {
     release!();
   });
 
+  it('shares case variants across mutation owners and keeps release tokens isolated', () => {
+    const first = tryAcquireSkillInstallLock('Mixed-Case', 'market-uninstall')!;
+    try {
+      expect(getSkillInstallLockOwner('mixed-case')).toBe('market-uninstall');
+      for (const owner of ['market-install', 'learn-apply', 'local-import', 'local-rename'] as const) {
+        const conflicting = tryAcquireSkillInstallLock('MIXED-CASE', owner);
+        conflicting?.();
+        expect(conflicting).toBeNull();
+      }
+    } finally { first(); }
+    const second = tryAcquireSkillInstallLock('mixed-case', 'market-install')!;
+    try {
+      first();
+      expect(getSkillInstallLockOwner('Mixed-Case')).toBe('market-install');
+    } finally { second(); }
+    expect(getSkillInstallLockOwner('MIXED-CASE')).toBeNull();
+  });
+
   it('不同名互不阻塞', () => {
     const a = tryAcquireSkillInstallLock('skill-c', 'market-install');
     const b = tryAcquireSkillInstallLock('skill-d', 'learn-apply');

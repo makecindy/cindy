@@ -5,6 +5,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   isAgentIslandVisibleSessionOwnedByWorkdirBrowseRoute,
+  isAgentIslandVisibleSessionOwnedByBotRoute,
+  resolveAgentIslandVisibleSessionsFromPath,
   resolveAgentIslandVisibleSessionFromRouteTarget,
   resolveAgentIslandVisibleSessionIdForWorkdirBrowseRail,
   resolveAgentIslandVisibleSessionIdFromPath,
@@ -34,6 +36,44 @@ const ccAgentSessionViewSource = readTextLf(
   resolve(__dirname, '..', 'features', 'cc-agent', 'CCAgentSessionView.tsx'),
   'utf8',
 );
+
+describe('bot and split route visibility', () => {
+  it.each([
+    ['/bots/bot-a/session/chat-a', true],
+    ['/bots/bot-a/history/history-a', true],
+    ['/bots/bot-a', false],
+    ['/bots', false],
+    ['/bots/roster', false],
+    ['/bots/bot-a/session', false],
+  ])('delegates %s to the validating view', (pathname, expected) => {
+    expect(isAgentIslandVisibleSessionOwnedByBotRoute(pathname)).toBe(expected);
+  });
+
+  it('keeps stale splits out of bot pages across navigation and settings', () => {
+    const splits = ['task-a', 'task-b'];
+    const targets = [
+      '/cc-agent/task-a',
+      '/bots/bot-a',
+      '/bots/bot-a?settings=1',
+      '/bots/bot-a/session/chat-a',
+      // The session settings drawer keeps the chat mounted underneath it.
+      '/bots/bot-a/session/chat-a?settings=1',
+      '/bots/bot-a/history/history-a',
+      '/settings',
+      '/cc-agent/files/task-a',
+      '/cc-agent/task-a',
+    ];
+    expect(targets.map((target) => resolveAgentIslandVisibleSessionsFromPath(
+      new URL(target, 'https://cindy.invalid').pathname,
+      splits,
+    ))).toEqual([
+      ['task-a', 'task-b'], null, null, null, null, null, null, null,
+      ['task-a', 'task-b'],
+    ]);
+    expect(resolveAgentIslandVisibleSessionsFromPath('/cc-agent/task-a', [])).toBe('task-a');
+    expect(resolveAgentIslandVisibleSessionsFromPath('/cc-agent/task-a', ['task-b'])).toBe('task-a');
+  });
+});
 
 describe('resolveAgentIslandVisibleSessionIdFromPath', () => {
   it('returns the session id only for routes that visibly show a session', () => {

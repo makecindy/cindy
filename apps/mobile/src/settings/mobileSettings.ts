@@ -87,12 +87,6 @@ export function buildMobileSettingsOverview(input: MobileSettingsOverviewInput):
             label: i18n.t('settings.about.platform'),
             value: platformLabel(input.platform),
           },
-          {
-            id: 'about.remoteControl',
-            label: i18n.t('settings.about.remoteControl'),
-            value: i18n.t('settings.about.remoteControlValue'),
-            detail: i18n.t('settings.about.remoteControlDetail'),
-          },
         ]),
       },
       {

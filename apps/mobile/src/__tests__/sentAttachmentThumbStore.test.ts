@@ -58,7 +58,8 @@ function makeFsDeps(overrides: Partial<SentAttachmentThumbFsDeps> = {}) {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  await __testing.flushPersist();
   __testing.reset();
   storage.clear();
 });
@@ -110,7 +111,7 @@ describe('sentAttachmentThumbStore', () => {
     expect(getSentAttachmentThumbUri(mediaRef)).toContain('sent-attachment-thumbs/');
   });
 
-  it('非兜底引用 / 空 sourceUri / 重复引用 / 超大文件不注册', async () => {
+  it('非兜底引用 / 空 sourceUri / 重复引用不注册', async () => {
     const { deps, copies } = makeFsDeps();
     await registerSentAttachmentThumb('https://example.com/a.jpg', 'file:///cache/a.jpg', deps);
     await registerSentAttachmentThumb(undefined, 'file:///cache/a.jpg', deps);
@@ -123,11 +124,11 @@ describe('sentAttachmentThumbStore', () => {
     await registerSentAttachmentThumb(OSS_REF, 'file:///cache/other.jpg', deps);
     expect(copies).toHaveLength(1);
 
-    // 超过单文件上限的不做兜底(gif / 原样直传的大文件)。
-    const big = makeFsDeps({ statSize: async () => __testing.maxSourceBytes + 1 });
+    // 大文件通过原生文件拷贝留底,不再按磁盘预算拒绝。
+    const big = makeFsDeps({ statSize: async () => 30 * 1024 * 1024 });
     await registerSentAttachmentThumb(OSS_REF_2, 'file:///cache/huge.gif', big.deps);
-    expect(big.copies).toHaveLength(0);
-    expect(getSentAttachmentThumbUri(OSS_REF_2)).toBeNull();
+    expect(big.copies).toHaveLength(1);
+    expect(getSentAttachmentThumbUri(OSS_REF_2)).not.toBeNull();
   });
 
   it('拷贝失败静默:不写映射、不抛错', async () => {
@@ -140,22 +141,21 @@ describe('sentAttachmentThumbStore', () => {
     expect(getSentAttachmentThumbUri(OSS_REF)).toBeNull();
   });
 
-  it('超过条目上限时 LRU 淘汰最老条目并删除其文件', async () => {
+  it('超过旧 64 条上限仍保留最老文件', async () => {
     const { deps, removed } = makeFsDeps();
-    for (let index = 0; index < __testing.maxEntries + 1; index += 1) {
+    for (let index = 0; index < 65; index += 1) {
       await registerSentAttachmentThumb(`cindy-oss-attach://m/ref-${index}`, `file:///cache/${index}.jpg`, deps);
     }
-    expect(getSentAttachmentThumbUri('cindy-oss-attach://m/ref-0')).toBeNull();
-    expect(getSentAttachmentThumbUri(`cindy-oss-attach://m/ref-${__testing.maxEntries}`)).not.toBeNull();
-    expect(removed).toHaveLength(1);
-    expect(removed[0]?.startsWith(`${THUMB_DIR}/thumb-`)).toBe(true);
+    expect(getSentAttachmentThumbUri('cindy-oss-attach://m/ref-0')).not.toBeNull();
+    expect(getSentAttachmentThumbUri(`cindy-oss-attach://m/ref-64`)).not.toBeNull();
+    expect(removed).toHaveLength(0);
   });
 
-  it('hydrate 回填持久化映射,清过期条目与目录孤儿文件', async () => {
+  it('hydrate 保留旧映射,只清目录孤儿文件', async () => {
     const now = Date.now();
     storage.set(__testing.storageKey, JSON.stringify([
       { ossRef: OSS_REF, file: 'thumb-fresh.jpg', at: now - 1000 },
-      { ossRef: OSS_REF_2, file: 'thumb-stale.jpg', at: now - __testing.maxAgeMs - 1000 },
+      { ossRef: OSS_REF_2, file: 'thumb-stale.jpg', at: now - 30 * 24 * 60 * 60 * 1000 },
     ]));
     const { deps, removed, setDirFiles } = makeFsDeps();
     setDirFiles(['thumb-fresh.jpg', 'thumb-stale.jpg', 'thumb-orphan.jpg']);
@@ -163,16 +163,15 @@ describe('sentAttachmentThumbStore', () => {
     await ensureSentAttachmentThumbsHydrated(deps);
 
     expect(getSentAttachmentThumbUri(OSS_REF)).toBe(`${THUMB_DIR}/thumb-fresh.jpg`);
-    expect(getSentAttachmentThumbUri(OSS_REF_2)).toBeNull();
-    // 过期条目的文件与目录孤儿统一清理。
+    expect(getSentAttachmentThumbUri(OSS_REF_2)).toBe(`${THUMB_DIR}/thumb-stale.jpg`);
+    // 仍被引用的旧文件保留。
     expect(removed.sort()).toEqual([
       `${THUMB_DIR}/thumb-orphan.jpg`,
-      `${THUMB_DIR}/thumb-stale.jpg`,
     ]);
-    // 过期裁剪后的映射写回持久层。
+    // 旧映射仍可供重启恢复。
     await __testing.flushPersist();
     const parsed = JSON.parse(storage.get(__testing.storageKey)!) as Array<{ ossRef: string }>;
-    expect(parsed.map((entry) => entry.ossRef)).toEqual([OSS_REF]);
+    expect(parsed.map((entry) => entry.ossRef)).toEqual([OSS_REF, OSS_REF_2]);
   });
 
   it('损坏的持久化内容按空映射处理', async () => {

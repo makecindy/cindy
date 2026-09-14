@@ -8,6 +8,7 @@ class PCM16kWorklet extends AudioWorkletProcessor {
     this.timeOriginMs = 0;
     this.pending = [];
     this.carry = 0;
+    this.previousSample = 0;
     this.chunkIndex = 0;
     this.active = true;
 
@@ -35,6 +36,7 @@ class PCM16kWorklet extends AudioWorkletProcessor {
       if (event.data.reset) {
         this.pending = [];
         this.carry = 0;
+        this.previousSample = 0;
       }
       this.active = event.data.active;
     };
@@ -90,6 +92,7 @@ class PCM16kWorklet extends AudioWorkletProcessor {
   }
 
   resample(input, fromRate, toRate) {
+    if (input.length === 0) return [];
     if (fromRate === toRate) return Array.from(input);
 
     const ratio = fromRate / toRate;
@@ -100,11 +103,15 @@ class PCM16kWorklet extends AudioWorkletProcessor {
       const left = Math.floor(sourceIndex);
       const right = Math.min(left + 1, input.length - 1);
       const fraction = sourceIndex - left;
-      output.push(input[left] + (input[right] - input[left]) * fraction);
+      // carry can be in [-1, 0): this interpolation straddles two input blocks.
+      // Keep the previous block's last sample instead of reading input[-1].
+      const leftSample = left < 0 ? this.previousSample : input[left];
+      output.push(leftSample + (input[right] - leftSample) * fraction);
       sourceIndex += ratio;
     }
 
     this.carry = sourceIndex - input.length;
+    this.previousSample = input[input.length - 1];
     return output;
   }
 
