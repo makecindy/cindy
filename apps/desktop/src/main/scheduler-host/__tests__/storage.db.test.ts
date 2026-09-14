@@ -481,6 +481,40 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  it('caps unread terminal runs so the sidebar index stays bounded', async () => {
+    const harness = createStorageHarness();
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at)
+        VALUES ('sess-unread-cap', 'Unread cap', 'desktop', 'dialogue', 1, 1)
+      `);
+      await harness.storage.insert(baseSchedule({ id: 'sch-unread-cap' }));
+      for (let i = 0; i < 250; i += 1) {
+        await harness.storage.insertRun({
+          id: `unread-${i}`,
+          scheduleId: 'sch-unread-cap',
+          sessionId: 'sess-unread-cap',
+          status: 'failed',
+          firedAt: i,
+        });
+      }
+      await harness.storage.insertRun({
+        id: 'latest-read',
+        scheduleId: 'sch-unread-cap',
+        sessionId: 'sess-unread-cap',
+        status: 'success',
+        firedAt: 1000,
+        readAt: 1001,
+      });
+      const runs = await harness.storage.listSidebarIndexRuns();
+      expect(runs.some((run) => run.runId === 'latest-read')).toBe(true);
+      expect(runs.filter((run) => run.runId.startsWith('unread-'))).toHaveLength(200);
+      expect(runs).toHaveLength(201);
+    } finally {
+      harness.close();
+    }
+  });
+
   it('recovers warnings per automation without erasing unread history; healthy skips only recover checks', async () => {
     const harness = createStorageHarness();
     try {

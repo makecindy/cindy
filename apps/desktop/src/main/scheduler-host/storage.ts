@@ -206,6 +206,9 @@ const LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:';
 const unreadTerminalRunWhere = () =>
   sql`${scheduleRuns.readAt} IS NULL AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted', 'interrupted')`;
 
+/** 侧栏未读终态硬上限：红点累计用最近失败，避免随空打次数把远程回包顶过 4MB。 */
+const SIDEBAR_UNREAD_RUN_LIMIT = 200;
+
 function toScheduleSource(value: string | null): Schedule['source'] | undefined {
   if (value === 'user' || value === 'project' || value === 'bot') return value;
   return undefined;
@@ -665,7 +668,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .select(projection)
         .from(scheduleRuns)
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere())),
+        .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
+        .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
+        .limit(SIDEBAR_UNREAD_RUN_LIMIT),
       db
         .select(projection)
         .from(scheduleRuns)
@@ -691,9 +696,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .where(publicScheduleRunWhere()),
     ]);
     const latestRunIds = new Set(latestSessionRows.map((row) => row.runId));
-    const unreadRunIds = new Set(unreadRows.map((row) => row.runId));
+    // SQL 按 fired_at 新→旧截 200 条；组装仍把其中较旧的未读放前面，红点累计后再用尾部最新映射裁决归属。
+    const unreadOldestFirst = unreadRows.slice().reverse();
+    const unreadRunIds = new Set(unreadOldestFirst.map((row) => row.runId));
     const rows = [
-      ...unreadRows.filter((row) => !latestRunIds.has(row.runId)),
+      ...unreadOldestFirst.filter((row) => !latestRunIds.has(row.runId)),
       ...latestFailedRows.filter(
         (row) => !latestRunIds.has(row.runId) && !unreadRunIds.has(row.runId),
       ),
