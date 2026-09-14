@@ -30,16 +30,16 @@
 
 .resource-usage-unavailable-title {
   color: var(--text-primary);
-  font-size: 13px;
+  font-size: var(--text-13);
   font-weight: 500;
-  line-height: 18px;
+  line-height: 1.384615;
 }
 
 .resource-usage-unavailable-description {
   margin-top: 3px;
   color: var(--text-secondary);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--text-12);
+  line-height: 1.500000;
 }
 
 .resource-usage-table {
@@ -59,7 +59,7 @@
   padding: 0 10px;
   border-bottom: 1px solid var(--border-default);
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--text-11);
   font-weight: 500;
 }
 
@@ -104,9 +104,9 @@
   height: 28px;
   padding: 10px 4px 4px;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--text-11);
   font-weight: 500;
-  line-height: 14px;
+  line-height: 1.272727;
   text-transform: uppercase;
   letter-spacing: 0.5px;
 }
@@ -169,8 +169,8 @@
 .resource-usage-name {
   overflow: hidden;
   color: var(--text-primary);
-  font-size: 13px;
-  line-height: 18px;
+  font-size: var(--text-13);
+  line-height: 1.384615;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -179,8 +179,8 @@
   min-height: 14px;
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 14px;
+  font-size: var(--text-11);
+  line-height: 1.272727;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -188,9 +188,9 @@
 .resource-usage-number {
   overflow: hidden;
   color: var(--text-secondary);
-  font-size: 12px;
+  font-size: var(--text-12);
   font-variant-numeric: tabular-nums;
-  line-height: 18px;
+  line-height: 1.500000;
   text-align: right;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -212,8 +212,8 @@
   gap: 7px;
   padding: 8px 4px;
   color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 18px;
+  font-size: var(--text-12);
+  line-height: 1.500000;
 }
 
 .resource-usage-footer {
@@ -230,8 +230,8 @@
   min-width: 0;
   overflow: hidden;
   color: var(--text-tertiary);
-  font-size: 11px;
-  line-height: 18px;
+  font-size: var(--text-11);
+  line-height: 1.636364;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -247,7 +247,7 @@
   background: var(--surface-elevated);
   padding: 0 12px;
   color: var(--text-primary);
-  font-size: 12px;
+  font-size: var(--text-12);
   font-weight: 500;
   transition: color 120ms ease, background-color 120ms ease, border-color 120ms ease;
 }

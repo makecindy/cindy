@@ -14,6 +14,14 @@ const exemptions = readExemptions(root);
 const renderer = 'apps/desktop/src/renderer/';
 const inspect = (file, source) => inspectFile(file, source, new Set(source.split('\n').map((_, i) => i + 1)), exemptions);
 
+test('Tailwind palette candidates report light/dark variants without expanding blocking scope', () => {
+  const hits = inspect(`${renderer}components/Example.tsx`, '<div className="bg-red-50 dark:bg-red-950/30 text-red-600 border-[var(--error-border)]" />');
+  const palette = hits.filter(hit => hit.rule === 'named-palette-candidate');
+  assert.deepEqual(palette.map(hit => hit.value), ['bg-red-50', 'bg-red-950/30', 'text-red-600']);
+  assert.ok(palette.every(hit => hit.disposition === 'report'));
+  assert.deepEqual(inspect(`${renderer}components/Example.tsx`, '// text-red-500\n<div className="text-[var(--error-fg)]" />'), []);
+});
+
 test('semantic colours, PR prose, URL and comments are not literals; numeric hex still is', () => {
   for (const source of ['hsl(var(--destructive))', 'hsla(var(--x) / .5)', 'rgb(var(--x))',
     'color-mix(in srgb, var(--a), var(--b))', 'PR #4135', '/* #4135 */',
@@ -128,6 +136,70 @@ test('malformed diff/config and invalid refs fail closed', () => {
   assert.throws(() => audit({baseRef:'HEAD; printf nope'}));
 });
 
+test('spacing reports distinguish real generated references, unknown variables and mixed values', () => {
+  const file = renderer + 'components/new-chat/PermissionPrompt.tsx';
+  for (const [value, classification] of [
+    ['p-[var(--space-4)]', 'spacing-source-reference'],
+    ['gap-x-[var(--space-2)]', 'spacing-source-reference'],
+    ['gap-y-[var(--space-0_5)]', 'spacing-source-reference'],
+    ['hover:ps-[var(--space-4)]', 'spacing-source-reference'],
+    ['pl-[var(--space-input-lg)]', 'spacing-source-reference'],
+    ['md:!gap-y-[13px]', 'literal-spacing'],
+    ['py-[1px]', 'literal-spacing'],
+    ['pe-[.5rem]', 'literal-spacing'],
+    ['gap-x-[var(--spacing-2)]', 'unknown-spacing-reference'],
+    ['p-[var(--space-999)]', 'unknown-spacing-reference'],
+    ['p-[var(--text-14)]', 'unknown-spacing-reference'],
+    ['p-[var(--size-input-lg)]', 'unknown-spacing-reference'],
+    ['px-[calc(var(--space-4)+1px)]', 'mixed-spacing-expression'],
+    ['p-[var(--space-4,13px)]', 'mixed-spacing-expression'],
+    ['p-[var(--space-4,initial)]', 'mixed-spacing-expression'],
+    ['p-[var(--space-4,auto)]', 'mixed-spacing-expression'],
+    ['p-[var(--space-4,var(--space-2))]', 'mixed-spacing-expression'],
+    ['p-[calc(var(--space-4)*2)]', 'mixed-spacing-expression'],
+    ['gap-[calc(var(--space-4)-var(--space-2))]', 'spacing-expression'],
+    ['p-[calc(var(--space-4)_+_env(safe-area-inset-top))]', 'mixed-spacing-expression'],
+    ['p-[calc(min(var(--space-2),var(--space-4)))]', 'mixed-spacing-expression'],
+    ['p-[var(--space-4,var(--missing))]', 'unknown-spacing-reference'],
+    ['p-[env(safe-area-inset-top)]', 'unclassified-spacing'],
+    ['p-[calc(100%-4px)]', 'unclassified-spacing'],
+    ['mt-[var(--space-4)]', 'spacing-source-reference'],
+    ['space-x-[var(--space-4)]', 'spacing-source-reference'],
+    ['space-y-[4px]', 'literal-spacing'],
+    ['ms-[var(--space-4,initial)]', 'mixed-spacing-expression'],
+    ['mt-[3px]', 'literal-spacing'],
+    ['mx-[7px]', 'literal-spacing'],
+    ['me-[13px]', 'literal-spacing'],
+    ['p-[14px_16px]', 'literal-spacing'],
+    ['px-[8px_12px]', 'literal-spacing'],
+    ['p-[-14px_-16px]', 'literal-spacing'],
+    ['p-[1lh]', 'literal-spacing'],
+    ['mt-[2dvh]', 'literal-spacing'],
+    ['gap-[1cqw]', 'literal-spacing'],
+    ['p-[12PX]', 'literal-spacing'],
+    ['p-[17pt]', 'literal-spacing'],
+    ['p-[1lh_2dvh]', 'literal-spacing'],
+  ]) {
+    const source = `<div className="${value}" />`;
+    const [hit] = inspect(file, source);
+    assert.equal(hit?.classification, classification, value);
+    assert.equal(hit.disposition, 'report');
+    assert.equal(hit.rule, 'role-spacing');
+    assert.equal(hit.line, 1);
+    assert.equal(source.slice(hit.column - 1, hit.column - 1 + hit.value.length), hit.value);
+    assert.match(hit.suggestion, /foundations.spacing/);
+    assert.doesNotMatch(hit.suggestion, /radius overrides/);
+  }
+  for (const value of ['p-4', 'm-4', 'mt-2', 'gap-x-2', 'gap-y-2', 'space-x-2', 'space-y-reverse', 'gapx-[13px]', 'gapy-[13px]']) {
+    assert.deepEqual(inspect(file, `<div className="${value}" />`), [], value);
+  }
+  const source = '// gap-x-[13px]\n<div className="gap-x-[13px]" />\n<div className="p-[var(--space-4)]" />';
+  const result = inspectFile(file, source, new Set([3]), exemptions);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].line, 3);
+  assert.equal(result[0].classification, 'spacing-source-reference');
+});
+
 test('worktree includes staged, unstaged and untracked source; commit mode excludes them', t => {
   // Isolated Git fixture only. No task-branch commit/index/worktree is changed.
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-design-audit-'));
@@ -147,6 +219,14 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   fs.appendFileSync(path.join(temp,file), "const c = 'var(--x, #abc123)';\n");
   fs.writeFileSync(path.join(temp,renderer+'new.tsx'), "const style = { color: 'rgb(4,5,6)' };\n");
   fs.writeFileSync(path.join(temp,renderer+'plain.tsx'), "const label = 'RGB(1, 2, 3)';\n");
+  // The isolated repo carries its own contract inputs: audit({root}) must
+  // read and hash bindings and the DTCG source from root, not this checkout.
+  const bindings = 'packages/design-tokens/src/desktop-bindings.json';
+  const dtcg = 'packages/design-tokens/src/semantic/foundations.json';
+  fs.mkdirSync(path.dirname(path.join(temp, bindings)), {recursive:true});
+  fs.copyFileSync(path.join(root, bindings), path.join(temp, bindings));
+  fs.mkdirSync(path.dirname(path.join(temp, dtcg)), {recursive:true});
+  fs.copyFileSync(path.join(root, dtcg), path.join(temp, dtcg));
   const result = audit({root:temp,baseRef:commit,worktree:true});
   assert.equal(result.counts.unexpected,3);
   assert.deepEqual(result.findings.filter(f=>f.file===file).map(f=>f.line),[2,3]);
@@ -155,6 +235,23 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   assert.deepEqual(result.findings.filter(f=>f.file===renderer+'plain.tsx'),[]);
   assert.equal(audit({root:temp,baseRef:commit}).counts.unexpected,0);
   assert.equal(audit({root:temp,baseRef:commit,worktree:true}).candidateHash,result.candidateHash);
+  // The isolated root's own bindings drive classification and fail-closed
+  // validation — a custom valid source registers, and corruption introduced
+  // between two audit calls must not be served from any stale copy.
+  const localBindings = JSON.parse(fs.readFileSync(path.join(root, bindings), 'utf8'));
+  localBindings.foundations.css['space-local'] = 'semantic.foundations.space-local';
+  fs.writeFileSync(path.join(temp,bindings), JSON.stringify(localBindings));
+  const localDtcg = JSON.parse(fs.readFileSync(path.join(root, dtcg), 'utf8'));
+  localDtcg.semantic.foundations['space-local'] = { $type: 'dimension', $value: '{reference.foundations.space-4}' };
+  fs.writeFileSync(path.join(temp,dtcg), JSON.stringify(localDtcg));
+  fs.writeFileSync(path.join(temp,renderer+'LocalSpacing.tsx'), 'export const L = <div className="p-[var(--space-local)]" />;\n');
+  const local = audit({root:temp,baseRef:commit,worktree:true});
+  assert.equal(local.findings.find(f=>f.rule==='role-spacing')?.classification,'spacing-source-reference');
+  fs.writeFileSync(path.join(temp,bindings),'{bad json');
+  assert.throws(()=>audit({root:temp,baseRef:commit,worktree:true}));
+  fs.copyFileSync(path.join(root, bindings), path.join(temp, bindings));
+  fs.copyFileSync(path.join(root, dtcg), path.join(temp, dtcg));
+  fs.rmSync(path.join(temp,renderer+'LocalSpacing.tsx'));
   // Execute the real CLI against this isolated candidate, then the actual CI
   // aggregation shell. A process failure must not turn into a green summary.
   for (const rel of ['hardcoded-color-audit.mjs', 'shared/hardcoded-color-match.mjs', 'shared/design-layer-report.mjs']) {
@@ -181,6 +278,46 @@ test('worktree includes staged, unstaged and untracked source; commit mode exclu
   assert.notEqual(propagated.status,0);
   fs.writeFileSync(path.join(temp,'scripts/hardcoded-color-exemptions.json'),'{bad json');
   assert.throws(()=>audit({root:temp,baseRef:commit,worktree:true}));
+  assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
+  fs.writeFileSync(path.join(temp,'scripts/hardcoded-color-exemptions.json'),'[]');
+  // Corrupt bindings must fail closed even with no spacing candidate in the
+  // diff: classifySpacing's lazy read never runs for colour-/docs-only
+  // candidates, so the audit itself has to validate the contract it hashes.
+  fs.writeFileSync(path.join(temp,bindings),'{bad json');
+  assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
+  // Arrays pass typeof checks yet carry no entries, and a mapping without
+  // space-* foundations silently degrades every spacing report to unknown.
+  fs.writeFileSync(path.join(temp,bindings),'{"foundations":{"css":[]}}');
+  assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
+  fs.writeFileSync(path.join(temp,bindings),'{"foundations":{"css":{"text":"semantic.foundations.text-14"}}}');
+  assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
+  // A prefix-correct but non-existent target must not invent a real source:
+  // the binding has to resolve against the DTCG generation source.
+  const poisoned = JSON.parse(fs.readFileSync(path.join(root, bindings), 'utf8'));
+  poisoned.foundations.css['space-typo'] = 'semantic.foundations.space-typo';
+  fs.writeFileSync(path.join(temp,bindings), JSON.stringify(poisoned));
+  assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
+  fs.copyFileSync(path.join(root, bindings), path.join(temp, bindings));
+  fs.rmSync(path.join(temp,dtcg));
+  assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
+  fs.copyFileSync(path.join(root, dtcg), path.join(temp, dtcg));
+  // A target that exists as a key but is not a leaf dimension token — an
+  // empty object or a group — never reaches generation output either.
+  const leafless = JSON.parse(fs.readFileSync(path.join(root, dtcg), 'utf8'));
+  leafless.semantic.foundations['space-4'] = {};
+  fs.writeFileSync(path.join(temp,dtcg), JSON.stringify(leafless));
+  assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
+  fs.copyFileSync(path.join(root, dtcg), path.join(temp, dtcg));
+  fs.appendFileSync(path.join(temp,file), '\nconst spacing = "gap-x-[var(--space-4)]";\n');
+  const reported = cli('--base-ref',commit,'--worktree','--report','--json');
+  assert.equal(reported.status,0,reported.stderr);
+  const report = JSON.parse(reported.stdout);
+  assert.equal(report.findings.find(f=>f.rule==='role-spacing')?.classification,'spacing-source-reference');
+  assert.match(report.scriptHashes[bindings],/^[a-f0-9]{64}$/);
+  assert.match(report.scriptHashes[dtcg],/^[a-f0-9]{64}$/);
+  fs.writeFileSync(path.join(temp,bindings),'{bad json');
+  assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
+  fs.rmSync(path.join(temp,bindings));
   assert.equal(cli('--base-ref',commit,'--worktree','--report').status,2);
 });
 

@@ -4,6 +4,7 @@
  */
 
 import { fireEvent, render } from '@testing-library/react';
+import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { MarketSkill } from '../../hooks/useMarketList';
@@ -39,6 +40,19 @@ const MARKET_SKILL: MarketSkill = {
 };
 
 describe('MarketCard Skill icon', () => {
+  it('opens details from its keyboard action without invoking Clone or double firing', async () => {
+    const onClick = vi.fn();
+    const onClone = vi.fn();
+    const { getByRole, unmount } = render(<MarketCard skill={MARKET_SKILL} onClick={onClick} onClone={onClone} />);
+    const detail = getByRole('button', { name: 'Demo Skill' });
+    detail.focus();
+    await userEvent.keyboard('{Enter}');
+    expect(onClick).toHaveBeenCalledExactlyOnceWith(MARKET_SKILL);
+    expect(onClone).not.toHaveBeenCalled();
+    await userEvent.keyboard(' ');
+    expect(onClick).toHaveBeenCalledTimes(2);
+    unmount();
+  });
   it('renders only a custom Skill icon and falls back to the local Package icon on load failure', () => {
     const { container } = render(
       <MarketCard

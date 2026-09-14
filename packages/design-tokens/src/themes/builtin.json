@@ -4297,6 +4297,10 @@
       "update-btn-text": {
         "$type": "color",
         "$value": "{reference.themes.one-dark-pro.palette-BLUE_PRIMARY}"
+      },
+      "form-field-hint": {
+        "$type": "color",
+        "$value": "{reference.themes.one-dark-pro.palette-HINT_TEXT}"
       }
     },
     "solarized-light": {
@@ -4737,6 +4741,10 @@
       "update-btn-text": {
         "$type": "color",
         "$value": "{reference.themes.solarized-light.palette-GREEN_PRIMARY}"
+      },
+      "form-field-hint": {
+        "$type": "color",
+        "$value": "{reference.themes.solarized-light.palette-HINT_TEXT}"
       }
     }
   }

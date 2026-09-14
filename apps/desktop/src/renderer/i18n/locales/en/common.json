@@ -6142,6 +6142,7 @@
     "loadFailed": "Unable to load usage history. Reopen Settings to try again.",
     "range": {
       "label": "Time range",
+      "date": "Date",
       "ariaLabel": "Filter usage time range",
       "all": "All time",
       "30d": "Last 30 days",

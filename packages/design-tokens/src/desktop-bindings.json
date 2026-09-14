@@ -2087,6 +2087,10 @@
     "cmd-palette-shadow": {
       "light": "component.defaults.cmd-palette-shadow.light",
       "dark": "component.defaults.cmd-palette-shadow.dark"
+    },
+    "form-field-hint": {
+      "light": "component.defaults.form-field-hint.light",
+      "dark": "component.defaults.form-field-hint.dark"
     }
   },
   "retained": {
@@ -3151,7 +3155,8 @@
         "tooltip-bg": "themes.one-dark-pro.tooltip-bg",
         "tooltip-text": "themes.one-dark-pro.tooltip-text",
         "update-btn-border": "themes.one-dark-pro.update-btn-border",
-        "update-btn-text": "themes.one-dark-pro.update-btn-text"
+        "update-btn-text": "themes.one-dark-pro.update-btn-text",
+        "form-field-hint": "themes.one-dark-pro.form-field-hint"
       },
       "retained": {},
       "type": "dark"
@@ -3266,7 +3271,8 @@
         "tooltip-bg": "themes.solarized-light.tooltip-bg",
         "tooltip-text": "themes.solarized-light.tooltip-text",
         "update-btn-border": "themes.solarized-light.update-btn-border",
-        "update-btn-text": "themes.solarized-light.update-btn-text"
+        "update-btn-text": "themes.solarized-light.update-btn-text",
+        "form-field-hint": "themes.solarized-light.form-field-hint"
       },
       "retained": {},
       "type": "light"

@@ -699,10 +699,9 @@ const baseComponents: Components = {
     return <h6 className="text-[var(--md-h6-fg)]" {...props}>{children}</h6>;
   },
 
-  // 加粗:同上,只接颜色 token。font-weight 仍由 Tailwind preflight 的
-  // `b, strong { font-weight: bolder }` 提供,这里不覆盖。
+  // Content strong is absolute 700: nested emphasis must not accumulate to 900.
   strong({ children, ...props }) {
-    return <strong className="text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
+    return <strong className="font-bold text-[var(--md-strong-fg)]" {...props}>{children}</strong>;
   },
 
   // Blockquote

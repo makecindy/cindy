@@ -1,4 +1,5 @@
 import { CircleCheck, CircleX, Info, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { useLayoutEffect, useRef, useState } from 'react';
 
 import { cn } from '@/lib/utils';
 import { toast, type ToastItem, type ToastVariant } from '@/lib/toast';
@@ -45,20 +46,65 @@ export interface ToastProps {
 export function Toast({ item }: ToastProps) {
   const meta = VARIANT_MAP[item.variant];
   const Icon = meta.icon;
+  const panelRef = useRef<HTMLDivElement>(null);
+  const messageRef = useRef<HTMLSpanElement>(null);
+  const [multiline, setMultiline] = useState(false);
+  useLayoutEffect(() => {
+    const panel = panelRef.current;
+    const message = messageRef.current;
+    if (!panel || !message) return;
+    const measure = () => {
+      const lineHeight = Number.parseFloat(getComputedStyle(message).lineHeight);
+      const action = panel.querySelector('button');
+      const actionStyle = action && getComputedStyle(action);
+      const actionWraps = action && actionStyle
+        ? action.clientHeight > Number.parseFloat(actionStyle.lineHeight)
+          + Number.parseFloat(actionStyle.paddingTop) + Number.parseFloat(actionStyle.paddingBottom) + 1
+        : false;
+      setMultiline(message.getBoundingClientRect().height > lineHeight + 1 || Boolean(actionWraps));
+    };
+    measure();
+    if (typeof ResizeObserver === 'undefined') return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(panel);
+    return () => observer.disconnect();
+  }, [item.message, item.source?.name, item.action?.label]);
+  const hovering = useRef(false);
+  const focused = useRef(false);
+  const resumeIfIdle = () => {
+    if (!hovering.current && !focused.current) toast.resumeAutoDismiss(item.id);
+  };
 
   return (
     <div
+      ref={panelRef}
       role={meta.role}
       aria-live={meta.ariaLive}
       data-state={item.exiting ? 'exiting' : 'entering'}
-      // hover 悬停时暂停自动关闭，移开后按剩余时长继续（正在阅读时不消失）
-      onMouseEnter={() => toast.pauseAutoDismiss(item.id)}
-      onMouseLeave={() => toast.resumeAutoDismiss(item.id)}
+      // Hover and keyboard focus independently pause the remaining duration.
+      onMouseEnter={() => {
+        hovering.current = true;
+        toast.pauseAutoDismiss(item.id);
+      }}
+      onMouseLeave={() => {
+        hovering.current = false;
+        resumeIfIdle();
+      }}
+      onFocusCapture={() => {
+        focused.current = true;
+        toast.pauseAutoDismiss(item.id);
+      }}
+      onBlurCapture={(event) => {
+        if (event.relatedTarget instanceof Node && event.currentTarget.contains(event.relatedTarget)) return;
+        focused.current = false;
+        resumeIfIdle();
+      }}
       className={cn(
-        // 基础布局：单行 pill，内容驱动宽度
-        'pointer-events-auto inline-flex items-center gap-2',
-        // pill 外观：完全圆角 + Card + Board
-        'rounded-full border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
+        // Short messages stay compact; long content and actions wrap within the viewport.
+        'pointer-events-auto inline-flex max-w-full items-center gap-2',
+        // Multiline notifications are content containers; short notifications keep the pill.
+        multiline ? 'rounded-xl' : 'rounded-full',
+        'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
         // padding 对称
         'px-4 py-[10px]',
       )}
@@ -71,9 +117,10 @@ export function Toast({ item }: ToastProps) {
         strokeWidth={2}
       />
 
+      <span ref={messageRef} className="min-w-0 max-w-[480px] text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)] whitespace-pre-line [overflow-wrap:anywhere]">
       {/* 来源身份头（第三方供文案时宿主画:图标+名字,内容是谁说的一眼可辨） */}
       {item.source && (
-        <span className="inline-flex shrink-0 items-center gap-1.5">
+        <span className="mr-2 inline-flex max-w-full items-center gap-1.5 align-bottom">
           {item.source.iconDataUrl && (
             <img
               src={item.source.iconDataUrl}
@@ -91,10 +138,7 @@ export function Toast({ item }: ToastProps) {
         </span>
       )}
 
-      {/* Message — 默认单行 nowrap, 但允许多行 (whitespace-pre-line) 给诊断类
-          toast 用 (例如 silent install 失败时把 install log 尾巴拼进 message)。
-          单行短文本仍然展示成一行不变化, 因为没有 \n 就不会换。 */}
-      <span className="text-13 font-medium leading-snug text-[var(--cmd-palette-item-text)] whitespace-pre-line max-w-[480px] break-words">
+      {/* Preserve diagnostic newlines and allow unbroken URLs to fit. */}
         {item.message}
       </span>
 
@@ -109,7 +153,7 @@ export function Toast({ item }: ToastProps) {
             }
           }}
           className={cn(
-            'ml-1 shrink-0 rounded-full px-2.5 py-1 text-12 font-medium',
+            'ml-1 max-w-[40%] shrink-0 rounded-full px-2.5 py-1 text-12 font-medium whitespace-normal [overflow-wrap:anywhere]',
             'text-[var(--text-primary)] transition-colors hover:bg-[var(--surface-hover)]',
             'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
           )}

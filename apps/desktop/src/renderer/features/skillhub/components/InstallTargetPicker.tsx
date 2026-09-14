@@ -12,8 +12,9 @@
  *   - 其他目录：dialog.showOpenDirectory 拿到 basePath，拼完整路径传入
  */
 
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useRef, useState } from 'react';
+import * as Dialog from '@radix-ui/react-dialog';
+import { Button } from '@/components/ui/button';
 import { useTranslation } from 'react-i18next';
 import { Check, ChevronRight, FolderOpen, Globe } from 'lucide-react';
 
@@ -101,6 +102,9 @@ export function InstallTargetPicker({
   const { projects, loading: projectsLoading } = useProjectsForPicker();
   const { confirm } = useConfirmDialog();
   const [installing, setInstalling] = useState(false);
+  const installingRef = useRef(false);
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
   const [bannerError, setBannerError] = useState<string | null>(null);
   const [installedPaths, setInstalledPaths] = useState<Map<string, string>>(new Map());
 
@@ -147,6 +151,8 @@ export function InstallTargetPicker({
   })();
 
   const handleInstall = async (installPath?: string) => {
+    if (installingRef.current) return;
+    installingRef.current = true;
     setBannerError(null);
     setInstalling(true);
     try {
@@ -193,6 +199,7 @@ export function InstallTargetPicker({
     } catch (err) {
       setBannerError(err instanceof Error ? err.message : String(err));
     } finally {
+      installingRef.current = false;
       setInstalling(false);
     }
   };
@@ -206,44 +213,51 @@ export function InstallTargetPicker({
 
   const versionForSubtitle = String(skill.versionLabel ?? skill.latestVersion ?? '');
 
-  const dialog = (
-    <div className="fixed inset-0 z-[9000] flex items-center justify-center">
-      <button
-        type="button"
-        aria-label={t('skillhub.common.close')}
-        className="absolute inset-0 h-full w-full cursor-default"
-        style={{ backgroundColor: 'var(--overlay-modal)' }}
-        onClick={onClose}
-      />
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={INSTALL_PICKER_TITLE_ID}
-        className={cn(
-          'relative flex flex-col rounded-xl bg-[var(--cmd-palette-bg)] shadow-[var(--shadow-menu)]',
-          'border border-[var(--cmd-palette-border)]',
-        )}
-        style={{ width: '480px' }}
-      >
+  return (
+    <Dialog.Root open={open} onOpenChange={(next) => { if (!next && !installingRef.current) onClose(); }}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="fixed inset-0 z-[9000] bg-[var(--overlay-modal)]" />
+        <Dialog.Content
+          aria-labelledby={INSTALL_PICKER_TITLE_ID}
+          className={cn(
+            'fixed inset-0 z-[9000] m-auto flex h-fit max-h-[88vh] w-[min(480px,calc(100vw-32px))] flex-col overflow-y-auto rounded-xl outline-none',
+            'bg-[var(--cmd-palette-bg)] shadow-[var(--shadow-menu)] border border-[var(--cmd-palette-border)]',
+            '[&_button:focus-visible]:outline-none [&_button:focus-visible]:ring-2 [&_button:focus-visible]:ring-inset [&_button:focus-visible]:ring-[var(--focus-ring-soft)]',
+          )}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            // Capture before moving focus: this dialog may be mounted already open.
+            returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+            cancelRef.current?.focus();
+          }}
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            if (returnFocusRef.current?.isConnected) returnFocusRef.current.focus();
+          }}
+          onEscapeKeyDown={(event) => {
+            if (installingRef.current || event.isComposing || event.keyCode === 229) event.preventDefault();
+          }}
+          onPointerDownOutside={(event) => { if (installingRef.current) event.preventDefault(); }}
+        >
         <div
           className="flex items-start justify-between gap-3"
           style={{ padding: '20px 18px 12px 18px' }}
         >
           <div className="flex min-w-0 flex-col" style={{ gap: '6px' }}>
-            <span
+            <Dialog.Title
               id={INSTALL_PICKER_TITLE_ID}
               className="text-[var(--msg-assistant-text)]"
-              style={{ fontSize: '16px', fontWeight: 500 }}
+              style={{ fontSize: 'var(--text-16)', fontWeight: 500 }}
             >
               {t(titleKey)}
-            </span>
-            <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '12px' }}>
+            </Dialog.Title>
+            <Dialog.Description className="text-[var(--cmd-palette-item-meta)] [overflow-wrap:anywhere]" style={{ fontSize: 'var(--text-12)' }}>
               {t(subtitleKey, {
                 name: skill.name,
                 version: versionForSubtitle,
                 description: skill.description ?? '',
               })}
-            </span>
+            </Dialog.Description>
           </div>
           <button
             type="button"
@@ -254,10 +268,10 @@ export function InstallTargetPicker({
             className={cn(
               'flex shrink-0 items-center gap-[6px] rounded-full transition-colors',
               'border border-[var(--confirm-btn-secondary-border)] bg-[var(--cmd-palette-bg)] text-[var(--settings-btn-secondary-text)]',
-              'hover:bg-[var(--surface-hover)]',
-              'disabled:opacity-50 disabled:cursor-not-allowed',
+              'enabled:hover:bg-[var(--surface-hover)]',
+              'disabled:opacity-60 disabled:cursor-default',
             )}
-            style={{ height: '32px', padding: '0 12px', fontSize: '12px', fontWeight: 500 }}
+            style={{ height: '32px', padding: '0 12px', fontSize: 'var(--text-12)', fontWeight: 500 }}
           >
             <FolderOpen size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
             {t('skillhub.installPicker.otherDirectory')}
@@ -282,7 +296,7 @@ export function InstallTargetPicker({
               'border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
               globalInstalledVersion
                 ? 'opacity-50 cursor-default'
-                : 'hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed',
+                : 'enabled:hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-60 disabled:cursor-default',
             )}
             style={{ height: `${PROJECT_ROW_H}px`, padding: '0 12px' }}
           >
@@ -293,17 +307,17 @@ export function InstallTargetPicker({
               <Globe size={14} className="shrink-0 text-[var(--settings-section-desc)]" />
             </div>
             <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '2px' }}>
-              <span className="text-[var(--msg-assistant-text)]" style={{ fontSize: '13px', fontWeight: 500 }}>
+              <span className="text-[var(--msg-assistant-text)]" style={{ fontSize: 'var(--text-13)', fontWeight: 500 }}>
                 {t('skillhub.installPicker.global')}
               </span>
-              <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '11px' }}>
+              <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: 'var(--text-11)' }}>
                 ~/.agents/skills/{skill.name}
               </span>
             </div>
             {globalInstalledVersion ? (
               <span
                 className="flex shrink-0 items-center gap-1 text-[var(--cmd-palette-item-meta)]"
-                style={{ fontSize: '11px' }}
+                style={{ fontSize: 'var(--text-11)' }}
               >
                 <Check size={12} /> v{globalInstalledVersion}
               </span>
@@ -315,7 +329,7 @@ export function InstallTargetPicker({
           <div className="flex items-center gap-[10px]" style={{ padding: '10px 8px 6px 8px' }}>
             <span
               className="shrink-0 text-[var(--settings-theme-icon)]"
-              style={{ fontSize: '10px', fontWeight: 500, letterSpacing: '0.5px' }}
+              style={{ fontSize: 'var(--text-10)', fontWeight: 500, letterSpacing: '0.5px' }}
             >
               {t('skillhub.installPicker.projects')}
             </span>
@@ -361,7 +375,7 @@ export function InstallTargetPicker({
                       'border border-[var(--cmd-palette-border)] bg-[hsl(var(--content-area))]',
                       isRowInstalled
                         ? 'opacity-50 cursor-default'
-                        : 'hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-50 disabled:cursor-not-allowed',
+                        : 'enabled:hover:bg-[var(--settings-menu-bg-hover)] disabled:opacity-60 disabled:cursor-default',
                     )}
                     style={{ height: `${PROJECT_ROW_H}px`, padding: '0 12px' }}
                   >
@@ -374,18 +388,18 @@ export function InstallTargetPicker({
                     <div className="flex min-w-0 flex-1 flex-col" style={{ gap: '2px' }}>
                       <span
                         className="truncate text-[var(--msg-assistant-text)]"
-                        style={{ fontSize: '13px', fontWeight: 500 }}
+                        style={{ fontSize: 'var(--text-13)', fontWeight: 500 }}
                       >
                         {p.displayName}
                       </span>
-                      <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: '11px' }}>
+                      <span className="truncate text-[var(--cmd-palette-item-meta)]" style={{ fontSize: 'var(--text-11)' }}>
                         {installPath}
                       </span>
                     </div>
                     {isRowInstalled ? (
                       <span
                         className="flex shrink-0 items-center gap-1 text-[var(--cmd-palette-item-meta)]"
-                        style={{ fontSize: '11px' }}
+                        style={{ fontSize: 'var(--text-11)' }}
                       >
                         <Check size={12} /> v{rowVersion}
                       </span>
@@ -398,9 +412,13 @@ export function InstallTargetPicker({
             </div>
           )}
         </div>
-      </div>
-    </div>
+          <div className="flex justify-end px-4 pb-4">
+            <Button ref={cancelRef} variant="secondary" disabled={installing} onClick={onClose}>
+              {t('skillhub.detail.cancel')}
+            </Button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
-
-  return createPortal(dialog, document.body);
 }

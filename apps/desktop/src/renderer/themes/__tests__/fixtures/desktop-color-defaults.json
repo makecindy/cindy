@@ -1,6 +1,6 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
-  "count": 541,
+  "count": 542,
   "colors": [
     {
       "id": "surface",
@@ -2706,6 +2706,11 @@
       "id": "button-cta-pressed",
       "light": "color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))",
       "dark": "color-mix(in srgb, var(--button-cta-hover) 90%, var(--accent-pure-cta-fg))"
+    },
+    {
+      "id": "form-field-hint",
+      "light": "var(--text-secondary-mid)",
+      "dark": "var(--text-secondary-mid)"
     }
   ]
 }
