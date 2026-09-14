@@ -57,15 +57,24 @@ function singleTextContent(message: unknown): string | null {
 }
 
 /**
- * Claude Code 内置命令必须位于消息开头；手机客户端说明不能抢占这个位置。
- * 只放行已由 palette 明确暴露的 `/compact`，其它 slash 文本继续保留来源说明。
+ * 原生命令必须位于消息开头；环境说明不能抢占这个位置。
+ * Claude 旁路 /compact；Pi 的 slash 输入交由运行时自己的命令发现处理。
  */
 export function shouldPrependMobileClientPromptNote(
   message: unknown,
   agentKind: string,
 ): boolean {
-  if (agentKind !== 'claude-code') return true;
   const text = singleTextContent(message);
+  // Pi owns command discovery. Leave slash inputs intact so its runtime can
+  // execute installed commands (or treat unknown ones as literal text).
+  if (agentKind === 'pi') {
+    const content = message && typeof message === 'object'
+      ? (message as { content?: unknown }).content : null;
+    const parts = Array.isArray(content) ? content : [];
+    const firstText = parts.find((part) => part?.type === 'text' && typeof part.text === 'string')?.text;
+    return !(text ?? firstText ?? '').trimStart().startsWith('/');
+  }
+  if (agentKind !== 'claude-code') return true;
   return text === null || !/^\/compact(?:\s|$)/.test(text);
 }
 
@@ -145,6 +154,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   const opts = sendOpts as Record<string, unknown>;
   if (
     !('fromMobileClient' in opts) &&
+    !('fromDeviceLinkClient' in opts) &&
     !('expectedInputGeneration' in opts) &&
     !('expectedTurnSession' in opts) &&
     !('expectedTurnGeneration' in opts) &&
@@ -156,6 +166,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
   }
   const {
     fromMobileClient: _ignoredMobile,
+    fromDeviceLinkClient: _ignoredDeviceLink,
     expectedInputGeneration: _ignoredGeneration,
     expectedTurnSession: _ignoredTurnSession,
     expectedTurnGeneration: _ignoredTurnGeneration,

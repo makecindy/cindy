@@ -1,5 +1,6 @@
 import { performance } from 'node:perf_hooks';
 import { beforeAll, describe, expect, it } from 'vitest';
+import { resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
 import { i18n } from '@/i18n';
 import {
   buildSessionMessagePreviewIndex,
@@ -108,7 +109,7 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: '未命名任务',
       subtitle: 'Codex · gpt-5.4 · dialogue',
-      detail: '活跃 · 5 分钟前 · 12 条消息',
+      detail: '活跃 · 5 minutes ago · 12 条消息',
       messagePreview: null,
       lastActivityAt: '2026-01-01T00:05:00.000Z',
     });
@@ -121,6 +122,19 @@ describe('sessionList', () => {
     expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now)).toBe('5 分钟');
     expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now)).toBe('3 小时');
     expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now)).toBe('2 天');
+  });
+
+  it('formats sidebar activity time in English when the app language is English', async () => {
+    const now = new Date('2026-01-01T12:00:00.000Z').getTime();
+    await i18n.changeLanguage('en');
+    try {
+      expect(formatRemoteSessionSidebarTime('2026-01-01T11:59:30.000Z', now)).toBe('Just now');
+      expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now)).toBe('5 min');
+      expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now)).toBe('3 hr');
+      expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now)).toBe('2 d');
+    } finally {
+      await i18n.changeLanguage('zh-CN');
+    }
   });
 
   it('includes the latest message preview in rendered session rows', () => {
@@ -221,7 +235,7 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: 'Legacy title',
       subtitle: 'Claude Code · claude-sonnet-4-6',
-      detail: '活跃 · 10 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '活跃 · 10 minutes ago · 自动化执行中 · 1 个自动化未读',
     });
     expect(item.scheduleInfo).toMatchObject({
       scheduleId: 'sched-1',
@@ -669,3 +683,28 @@ function createLargeSessionFixture(count: number): RemoteSession[] {
     });
   });
 }
+
+it('schedule unread follows desktop: failed/interrupted are urgent, aborted is read', () => {
+  const index = buildSessionScheduleIndex([schedule('auto')], new Map([['auto', [
+    run('failed', 'auto', { sessionId: 's1', status: 'failed' }),
+    run('interrupted', 'auto', { sessionId: 's2', status: 'interrupted' }),
+    run('aborted', 'auto', { sessionId: 's3', status: 'aborted' }),
+    run('seen', 'auto', { sessionId: 's4', status: 'failed', readAt: 1 }),
+  ]]]));
+  expect(index.get('s1')).toMatchObject({ unreadCount: 1, hasUnreadFailedRun: true });
+  expect(index.get('s2')).toMatchObject({ unreadCount: 1, hasUnreadFailedRun: true });
+  expect(index.get('s3')).toMatchObject({ unreadCount: 0, hasUnreadFailedRun: false });
+  expect(index.get('s4')).toMatchObject({ unreadCount: 0, hasUnreadFailedRun: false });
+});
+
+it('collapsed errors open the failed run; expanded headers mirror the latest running row', () => {
+  const older = toRemoteSessionListItem(session('older'));
+  older.liveActivity = { sessionId: 'older', phase: 'error', attention: true, compactDetail: '' };
+  const latest = toRemoteSessionListItem(session('latest', { updatedAt: '2026-01-02T00:00:00.000Z' }));
+  const group = { ...older, automationGroup: {
+    key: 'g', baseKey: 'g', title: 'g', sessionIds: ['older', 'latest'], sessionCount: 2,
+    primarySessionId: 'older', children: [], items: [older, latest],
+  } };
+  expect(resolveMobileSessionRowStatus(group, true)).toEqual({ status: 'error', target: older });
+  expect(resolveMobileSessionRowStatus(group, true, true)).toEqual({ status: 'running', target: latest });
+});

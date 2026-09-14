@@ -8,12 +8,16 @@ import { fileURLToPath } from "node:url";
 
 import {
 	applyDesktopStartupConfigForPhase,
+	clearInheritedIsolatedAuthAuthorization,
 	clearDesktopDevCaches,
 	commandUsesUserDataDir,
+	createIsolatedAuthLaunchProof,
 	defaultIsolatedUserDataDir,
 	desktopDevCacheDirs,
 	devEnvPrefix,
 	hasIsolationIntent,
+	isTrustedIsolatedAuthUserDataDir,
+	ISOLATED_AUTH_LAUNCH_PROOF_FILE,
 	isOfficialProductionUserDataDir,
 	isRepositoryDesktopDevProcess,
 	officialProductionUserDataDirs,
@@ -317,6 +321,125 @@ test("env-only XDT_ISOLATED=1 derives the default sandbox, not the official prof
 	assert.equal(named, defaultIsolatedUserDataDir("review", "global"));
 });
 
+test("isolated auth accepts only the epoch sandbox derived by this restart", () => {
+	const isolatedArg = "--isolated=oauth-review";
+	const derived = defaultIsolatedUserDataDir("oauth-review", "global");
+	const trusted = {
+		isolatedArg,
+		userDataDir: derived,
+		userDataDirEpoch: "1",
+		userDataDerivedByRestart: true,
+		selectedRegion: "global",
+	};
+
+	// A freshly derived sandbox does not need an existing credential file.
+	assert.equal(isTrustedIsolatedAuthUserDataDir(trusted), true);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDerivedByRestart: false,
+	}), false);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDirEpoch: undefined,
+	}), false);
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		...trusted,
+		userDataDir: path.join(os.tmpdir(), "shared-cindy-profile"),
+	}), false);
+});
+
+test("isolated auth rejects an explicit userData even when it spoofs the derived path and epoch", () => {
+	const isolatedArg = "--isolated=oauth-review";
+	assert.equal(isTrustedIsolatedAuthUserDataDir({
+		isolatedArg,
+		userDataDir: defaultIsolatedUserDataDir("oauth-review", "global"),
+		userDataDirEpoch: "1",
+		userDataDerivedByRestart: false,
+		selectedRegion: "global",
+	}), false);
+});
+
+test("isolated auth rejects a derived userData symlink or junction before minting proof", () => {
+	const root = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-isolated-alias-"));
+	const savedEnv = {
+		APPDATA: process.env.APPDATA,
+		HOME: process.env.HOME,
+		USERPROFILE: process.env.USERPROFILE,
+		XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME,
+	};
+	try {
+		if (process.platform === "win32") {
+			process.env.APPDATA = path.join(root, "appdata");
+			process.env.USERPROFILE = root;
+		} else if (process.platform === "darwin") {
+			process.env.HOME = root;
+		} else {
+			process.env.XDG_CONFIG_HOME = path.join(root, "config");
+		}
+		const isolatedArg = "--isolated=link-guard";
+		const derived = defaultIsolatedUserDataDir("link-guard", "global");
+		const unrelatedProfile = path.join(root, "unrelated-profile");
+		fs.mkdirSync(path.dirname(derived), { recursive: true });
+		fs.mkdirSync(unrelatedProfile, { recursive: true });
+		fs.symlinkSync(
+			unrelatedProfile,
+			derived,
+			process.platform === "win32" ? "junction" : "dir",
+		);
+
+		assert.equal(isTrustedIsolatedAuthUserDataDir({
+			isolatedArg,
+			userDataDir: derived,
+			userDataDirEpoch: "1",
+			userDataDerivedByRestart: true,
+			selectedRegion: "global",
+		}), false);
+		assert.throws(
+			() => createIsolatedAuthLaunchProof({ userDataDir: derived }),
+			/symlink or junction/,
+		);
+		assert.equal(
+			fs.existsSync(path.join(unrelatedProfile, ISOLATED_AUTH_LAUNCH_PROOF_FILE)),
+			false,
+		);
+	} finally {
+		for (const [key, value] of Object.entries(savedEnv)) {
+			if (value === undefined) delete process.env[key];
+			else process.env[key] = value;
+		}
+		fs.rmSync(root, { recursive: true, force: true });
+	}
+});
+
+test("isolated auth launch proof binds the current derived sandbox and is private", () => {
+	const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "cindy-isolated-proof-"));
+	try {
+		const nonce = "b".repeat(64);
+		assert.equal(createIsolatedAuthLaunchProof({
+			userDataDir,
+			isolationName: "oauth-review",
+			now: 123_000,
+			nonce,
+		}), nonce);
+		const proofPath = path.join(userDataDir, ISOLATED_AUTH_LAUNCH_PROOF_FILE);
+		const proof = JSON.parse(fs.readFileSync(proofPath, "utf8"));
+		assert.deepEqual(proof, {
+			version: 1,
+			nonce,
+			userDataDir: canonicalizeUserDataDir(userDataDir),
+			profileKind: "isolated-sandbox",
+			epoch: 1,
+			isolationName: "oauth-review",
+			issuedAtMs: 123_000,
+			expiresAtMs: 723_000,
+		});
+		if (process.platform !== "win32") assert.equal(fs.statSync(proofPath).mode & 0o077, 0);
+		assert.deepEqual(fs.readdirSync(userDataDir), [ISOLATED_AUTH_LAUNCH_PROOF_FILE]);
+	} finally {
+		fs.rmSync(userDataDir, { recursive: true, force: true });
+	}
+});
+
 test("isolated=@worktree derives the named sandbox from the checkout directory", () => {
 	const root = path.join("/repo", "cindy-local-ollama-models");
 	const name = isolationNameFromWorktree(root);
@@ -362,6 +485,39 @@ test("isolated official-profile refuse happens before mkdir in the restart main 
 	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
 	assert.ok(refuseIdx > 0);
 	assert.ok(mkdirIdx > refuseIdx);
+});
+
+test("isolated auth trust gate runs before credential write flags and userData creation", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const trustIdx = source.lastIndexOf("if (!isTrustedIsolatedAuthUserDataDir({");
+	const authFlagIdx = source.indexOf("process.env.XDT_ISOLATED_AUTH = '1';");
+	const mkdirIdx = source.indexOf("fs.mkdirSync(process.env.XDT_USER_DATA_DIR");
+	assert.ok(trustIdx > 0);
+	assert.ok(authFlagIdx > trustIdx);
+	assert.ok(mkdirIdx > authFlagIdx);
+});
+
+test("isolated auth proof is minted only by this invocation's accepted flag path", () => {
+	const source = fs.readFileSync(new URL("../restart-desktop-remote.mjs", import.meta.url), "utf8");
+	const ambientDeleteIdx = source.indexOf("clearInheritedIsolatedAuthAuthorization();");
+	const authorizeIdx = source.indexOf("isolatedAuthAuthorizedByRestart = true;");
+	const mintGuardIdx = source.indexOf("if (isolatedAuthAuthorizedByRestart) {");
+	const mintIdx = source.indexOf("createIsolatedAuthLaunchProof({", mintGuardIdx);
+	assert.ok(ambientDeleteIdx > 0);
+	assert.ok(authorizeIdx > ambientDeleteIdx);
+	assert.ok(mintGuardIdx > authorizeIdx);
+	assert.ok(mintIdx > mintGuardIdx);
+});
+
+test("ordinary restart drops inherited isolated-auth capabilities", () => {
+	const env = {
+		XDT_ISOLATED_AUTH: "1",
+		XDT_ALLOW_DEV_OAUTH_WRITE: "1",
+		XDT_ISOLATED_AUTH_PROOF: "stale-proof",
+		XDT_ISOLATED: "1",
+	};
+	clearInheritedIsolatedAuthAuthorization(env);
+	assert.deepEqual(env, { XDT_ISOLATED: "1" });
 });
 
 test("preserve-running only shares a target with live records from the same region", () => {
@@ -753,7 +909,7 @@ test("devEnvPrefix passes XDT_LOGIN_SCENARIO and VITE_SPLASH_PHASE_FIXTURE throu
 	);
 	assert.equal(
 		prefix,
-		"XDT_LOGIN_SCENARIO='error:verify-code:INVALID_CODE' VITE_SPLASH_PHASE_FIXTURE='spawn_failed' ",
+		"XDT_LOGIN_SCENARIO='error:verify-code:INVALID_CODE' VITE_SPLASH_PHASE_FIXTURE='spawn_failed' CINDY_CUA_SMOKE='0' ",
 	);
 });
 
@@ -774,12 +930,45 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 	);
 	assert.equal(
 		prefix,
-		'set "XDT_LOGIN_SCENARIO=providers:both" && set "VITE_SPLASH_PHASE_FIXTURE=updating" && ',
+		'set "XDT_LOGIN_SCENARIO=providers:both" && set "VITE_SPLASH_PHASE_FIXTURE=updating" && set "CINDY_CUA_SMOKE=0" && ',
 	);
 });
 
+test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell", () => {
+	for (const value of [undefined, "", "0", "1"]) {
+		const env = value === undefined ? {} : { CINDY_CUA_SMOKE: value };
+		const node = process.platform === "win32" ? "%CINDY_TEST_NODE%" : "$CINDY_TEST_NODE";
+		const result = spawnSync(
+			`${devEnvPrefix(env)}"${node}" -p "process.env.CINDY_CUA_SMOKE"`,
+			{
+				shell: true,
+				env: { ...process.env, CINDY_CUA_SMOKE: "1", CINDY_TEST_NODE: process.execPath },
+				encoding: "utf8",
+				timeout: 5000,
+			},
+		);
+		assert.equal(result.status, 0, result.stderr);
+		assert.equal(result.stdout.trim(), value === "1" ? "1" : "0", `caller value: ${value}`);
+	}
+});
+
 test("devEnvPrefix omits harness envs when unset (whitelist stays opt-in)", () => {
-	assert.equal(devEnvPrefix({}, "darwin"), "");
+	assert.equal(devEnvPrefix({}, "darwin"), "CINDY_CUA_SMOKE='0' ");
+});
+
+test("devEnvPrefix passes the explicit isolated OAuth write escape hatch", () => {
+	assert.equal(
+		devEnvPrefix(
+			{
+				XDT_ISOLATED_AUTH: "1",
+				XDT_ALLOW_DEV_OAUTH_WRITE: "1",
+				XDT_ISOLATED_AUTH_PROOF: "proof-nonce",
+			},
+			"darwin",
+		),
+		"XDT_ISOLATED_AUTH='1' XDT_ALLOW_DEV_OAUTH_WRITE='1' " +
+			"XDT_ISOLATED_AUTH_PROOF='proof-nonce' CINDY_CUA_SMOKE='0' ",
+	);
 });
 
 test("devEnvPrefix passes explicit model catalog test controls to Desktop", () => {
@@ -793,7 +982,7 @@ test("devEnvPrefix passes explicit model catalog test controls to Desktop", () =
 	);
 	assert.equal(
 		prefix,
-		"XDT_MODELS_URL='http://127.0.0.1:43181/api/model-catalog/catalog' " +
+		"CINDY_CUA_SMOKE='0' XDT_MODELS_URL='http://127.0.0.1:43181/api/model-catalog/catalog' " +
 			"XDT_MODELS_PATH='/tmp/model catalog.json' XDT_DISABLE_MODELS_FETCH='1' ",
 	);
 });
@@ -807,7 +996,7 @@ test("devEnvPrefix passes native iOS dev switches to Electron", () => {
 			},
 			"darwin",
 		),
-		"CINDY_IOS_SIMULATOR_NATIVE_H264='1' CINDY_IOS_SIMULATOR_NATIVE_HID='1' ",
+		"CINDY_CUA_SMOKE='0' CINDY_IOS_SIMULATOR_NATIVE_H264='1' CINDY_IOS_SIMULATOR_NATIVE_HID='1' ",
 	);
 });
 

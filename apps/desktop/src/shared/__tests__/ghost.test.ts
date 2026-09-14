@@ -4933,6 +4933,13 @@ describe('ghostPermissionProjectionFingerprint', () => {
     expect(ghostNodeSecretAuthorizationWithinCap(reviewed.manifest, changedHint.manifest)).toBe(
       false,
     );
+    const oauthRebind = structuredClone(reviewed.manifest);
+    oauthRebind.node!.secretBindings![0]!.oauthSecret = 'mail_account';
+    expect(ghostNodeSecretAuthorizationWithinCap(reviewed.manifest, oauthRebind)).toBe(false);
+    const differentAccountSource = structuredClone(oauthRebind);
+    differentAccountSource.node!.secretBindings![0]!.oauthSecret = 'other_account';
+    expect(ghostNodeSecretAuthorizationWithinCap(oauthRebind, differentAccountSource)).toBe(false);
+    expect(ghostNodeSecretAuthorizationWithinCap(oauthRebind, structuredClone(oauthRebind))).toBe(true);
   });
 
   it('语义相同时指纹稳定(与字段/条目顺序无关)', () => {

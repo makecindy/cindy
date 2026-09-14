@@ -1,18 +1,31 @@
+import { isOpenAiSubscriptionProvider, providerCatalogId } from '@cindy/model-providers';
 import {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
-  resolveAgentCredentialMode,
+  isCindyProviderCodexRemoteCompactionRoute,
+  resolveAgentCredentialMode as resolveBaseCredentialMode,
   type AgentCredentialMode,
   type AgentKind,
 } from '@cindy/maker-core';
 
 import { claudeToolSearchMode } from './claude-behavior-flags.js';
 import {
+  CODEX_CINDY_COMPACT_PROVIDER_ID,
+  CODEX_SUMMARY_COMPACT_PROVIDER_ID,
   CODEX_GATEWAY_PROVIDER_ID,
   CODEX_OPENAI_COMPACT_PROVIDER_ID,
 } from './codex-gateway-config.js';
+import { crossesCodexAppliedCustomProviderIdentity } from './codex-custom-provider-route.js';
 import type { CodexProxyAuthInjection } from './codex-proxy-host.js';
 import { withRehydrateCloseSuppressed } from './rehydrateCloseSuppression.js';
+import { getActiveCatalog } from './active-catalog.js';
+
+function resolveAgentCredentialMode(input: Parameters<typeof resolveBaseCredentialMode>[0]): AgentCredentialMode | undefined {
+  if (input.agentKind === 'codex' && getActiveCatalog().providers.some(
+    (provider) => provider.id === input.providerId && provider.auth.native === 'codex',
+  )) return 'oauth-bearer';
+  return resolveBaseCredentialMode(input);
+}
 
 export interface ShouldCloseSessionForCredentialSwitchInput {
   agentKind: AgentKind;
@@ -31,6 +44,8 @@ export interface ShouldCloseSessionForCredentialSwitchInput {
    * 它是 thread 级冻结身份，不能用可能已被 UI 提前覆盖的 provider store 代替。
    */
   currentCodexThreadModelProviderId?: string | null;
+  /** 当前 host 的独立 Subagent 路由是否兼容 Cindy Codex 远程压缩。 */
+  currentCodexCindyRemoteCompactionCompatible?: boolean | null;
   /**
    * 当前本地 Codex app-server spawn 的鉴权注入形态(getCodexProxyAuthInjectionState())。
    * 用于把隐式来源(resolveAgentCredentialMode 解析出 undefined)落到实际凭证家族,
@@ -91,7 +106,10 @@ export interface PrepareLocalSessionCredentialModeSwitchResult {
 export class CredentialModeSwitchBusyError extends Error {
   readonly sessionIds: string[];
 
-  constructor(sessionIds: string[], message = `Cannot switch credential mode while local session(s) are busy: ${sessionIds.join(', ')}`) {
+  constructor(
+    sessionIds: string[],
+    message = `Cannot switch credential mode while local session(s) are busy: ${sessionIds.join(', ')}`,
+  ) {
     super(message);
     this.name = 'CredentialModeSwitchBusyError';
     this.sessionIds = sessionIds;
@@ -145,13 +163,25 @@ function normalizeProviderId(providerId: string | null | undefined): string | nu
 export function isCodexThreadModelProviderIdentityMismatch(
   input: ShouldCloseSessionForCredentialSwitchInput,
 ): boolean {
-  if (
-    input.remoteHostId ||
-    input.agentKind !== 'codex' ||
-    input.currentCodexProxyActive !== true
-  ) {
+  if (input.remoteHostId || input.agentKind !== 'codex' || input.currentCodexProxyActive !== true) {
     return false;
   }
+
+  if (
+    crossesCodexAppliedCustomProviderIdentity({
+      agentKind: input.agentKind,
+      remoteHostId: input.remoteHostId,
+      currentCodexProxyActive: input.currentCodexProxyActive,
+      currentThreadModelProviderId: input.currentCodexThreadModelProviderId,
+      targetProviderId: input.nextProviderId,
+      targetModel: input.nextModel,
+    })
+  ) {
+    return true;
+  }
+
+  // This native identity records a sticky summary fallback, not a broken route.
+  if (input.currentCodexThreadModelProviderId === CODEX_SUMMARY_COMPACT_PROVIDER_ID) return false;
 
   const nextProviderId = normalizeProviderId(input.nextProviderId);
   const nextMode = resolveAgentCredentialMode({
@@ -161,16 +191,22 @@ export function isCodexThreadModelProviderIdentityMismatch(
   });
   const effectiveNextMode = nextMode ?? credentialFamilyFromAuthInjection(input.codexAuthInjection);
   const expectedThreadModelProviderId =
-    effectiveNextMode === 'oauth-bearer'
+    isCindyProviderCodexRemoteCompactionRoute({
+      providerId: nextProviderId,
+      model: input.nextModel,
+    })
+      ? input.currentCodexCindyRemoteCompactionCompatible === false
+        ? CODEX_GATEWAY_PROVIDER_ID
+        : CODEX_CINDY_COMPACT_PROVIDER_ID
+      : effectiveNextMode === 'oauth-bearer'
       ? CODEX_OPENAI_COMPACT_PROVIDER_ID
       : effectiveNextMode !== undefined
         ? CODEX_GATEWAY_PROVIDER_ID
         : null;
-  const actualThreadModelProviderId = normalizeProviderId(
-    input.currentCodexThreadModelProviderId,
-  );
+  const actualThreadModelProviderId = normalizeProviderId(input.currentCodexThreadModelProviderId);
   const actualThreadIdentityKnown =
     actualThreadModelProviderId === CODEX_OPENAI_COMPACT_PROVIDER_ID ||
+    actualThreadModelProviderId === CODEX_CINDY_COMPACT_PROVIDER_ID ||
     actualThreadModelProviderId === CODEX_GATEWAY_PROVIDER_ID;
 
   return (
@@ -210,10 +246,29 @@ function throwIfCredentialSwitchAborted(signal: AbortSignal | undefined): void {
 }
 
 /**
+ * Pi loopback proxy identity that must agree across request header
+ * `x-cindy-pi-provider-id`, `registerPiProxySession`, and `sessions.provider_id`.
+ *
+ * Cindy gateway (`xd` / `cindy` / unset) sends no provider header. Native
+ * subscription and BYOM sources pin that id. Pi `set_model` does not reread
+ * spawn-time `models.json`, so crossing this identity on a live process leaves
+ * a stale header and the proxy returns 403 `pi_provider_mismatch`.
+ */
+export function piProxyProviderIdentity(
+  providerId: string | null | undefined,
+): string | null {
+  const normalized = normalizeProviderId(providerId);
+  if (!normalized || normalized === 'xd' || normalized === 'cindy') return null;
+  return normalized;
+}
+
+/**
  * 判断运行中的本地会话是否必须关闭后重建。
  *
  * provider route 可以在空闲时或 turn 边界热切，但 agent 子进程的凭证形态是 spawn-time 状态；
  * 只要旧/新来源解析出的 credential family 不同，就不能继续复用当前进程。
+ * Pi 还要额外对齐 proxy 供应商身份：Grok/xAI 与 GPT/OpenAI 同属
+ * `provider-oauth`，但活进程仍会带旧 `x-cindy-pi-provider-id`。
  */
 export function shouldCloseSessionForCredentialSwitch(
   input: ShouldCloseSessionForCredentialSwitchInput,
@@ -222,6 +277,22 @@ export function shouldCloseSessionForCredentialSwitch(
 
   const currentProviderId = normalizeProviderId(input.currentProviderId);
   const nextProviderId = normalizeProviderId(input.nextProviderId);
+  if (
+    input.agentKind === 'pi'
+    && piProxyProviderIdentity(currentProviderId) !== piProxyProviderIdentity(nextProviderId)
+  ) {
+    // Native ChatGPT accounts have independent startup provider blocks and placeholder
+    // credentials. Pi's verified set_model switches the live proxy/subagent identity;
+    // no account token is frozen in the process. Missing startup routes still fail
+    // before RPC inside Pi, preserving the old route and pending message.
+    const providers = getActiveCatalog().providers;
+    const current = providers.find(provider => provider.id === currentProviderId);
+    const next = providers.find(provider => provider.id === nextProviderId);
+    if (current && next && isOpenAiSubscriptionProvider(current) && isOpenAiSubscriptionProvider(next)) {
+      return false;
+    }
+    return true;
+  }
   const currentMode = resolveAgentCredentialMode({
     agentKind: input.agentKind,
     providerId: currentProviderId,
@@ -233,14 +304,18 @@ export function shouldCloseSessionForCredentialSwitch(
     model: input.nextModel,
   });
 
-  // Tool Search 是 Claude 子进程的 spawn-time env。跨越上游 capability 边界时即使
-  // provider-oauth 凭证家族可复用，也必须重建本会话，不能把旧 flag 热切到新来源。
-  if (
-    input.agentKind === 'claude-code' &&
-    claudeToolSearchMode(currentProviderId, currentMode) !==
-      claudeToolSearchMode(nextProviderId, nextMode)
-  ) {
-    return true;
+  if (input.agentKind === 'claude-code') {
+    const providers = getActiveCatalog().providers;
+    const current = providers.find(provider => provider.id === currentProviderId);
+    const next = providers.find(provider => provider.id === nextProviderId);
+    // Native Claude tokens and account IDs are frozen in the spawn env. Equal
+    // credential families do not make two accounts interchangeable in a live process.
+    if (currentProviderId !== nextProviderId && [current, next].some(
+      provider => provider && providerCatalogId(provider) === 'anthropic',
+    )) return true;
+    // Tool Search is also spawn-time state, independent of the credential family.
+    if (claudeToolSearchMode(currentProviderId, currentMode, current?.auth.native) !==
+      claudeToolSearchMode(nextProviderId, nextMode, next?.auth.native)) return true;
   }
 
   // ── 远端压缩身份边界(codex, proxy-active)────────────────────────────────
@@ -328,10 +403,10 @@ export async function prepareLocalCodexCredentialModeSwitch(
   input: PrepareLocalCodexCredentialModeSwitchInput,
 ): Promise<PrepareLocalCodexCredentialModeSwitchResult> {
   throwIfCredentialSwitchAborted(input.signal);
-  const localCodexSessions = input.maker
-    .listActiveSessions()
-    .filter(isLocalCodexSession);
-  const busySessions = localCodexSessions.filter((session) => isSessionBusy(session, input.isSessionInTurn));
+  const localCodexSessions = input.maker.listActiveSessions().filter(isLocalCodexSession);
+  const busySessions = localCodexSessions.filter((session) =>
+    isSessionBusy(session, input.isSessionInTurn),
+  );
   if (busySessions.length > 0) {
     throw new CodexCredentialModeSwitchBusyError(
       busySessions.map((session) => session.id),

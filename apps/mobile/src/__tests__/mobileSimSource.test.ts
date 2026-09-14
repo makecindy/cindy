@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, posix, win32 } from 'node:path';
 import {
   gitSourceIdentity,
   isDedicatedMetroProcessGroup,
+  isInside,
+  parseWindowsNetstatListener,
   terminateMetro,
 } from '../../scripts/sim-metro.mjs';
 
@@ -48,6 +50,41 @@ describe('mobile simulator source identity', () => {
 });
 
 describe('mobile simulator Metro takeover', () => {
+  it.each([
+    ['C:\\repo', 'C:\\repo', true],
+    ['C:\\repo', 'c:\\repo\\apps\\mobile', true],
+    ['C:\\repo', 'C:\\repo\\..notes', true],
+    ['C:\\repo', 'D:\\repo\\apps\\mobile', false],
+    ['C:\\repo', 'C:\\repo-other\\apps\\mobile', false],
+    ['C:\\repo', 'C:\\repo\\..\\other\\apps\\mobile', false],
+    ['C:\\repo', 'C:\\', false],
+    ['\\\\server\\repo', '\\\\server\\other\\apps\\mobile', false],
+    ['\\\\server\\repo', '\\\\other\\repo\\apps\\mobile', false],
+    ['\\\\server\\repo', '\\\\server\\repo\\apps\\mobile', true],
+  ])('checks Windows Metro worktree boundaries: %s -> %s', (root, cwd, expected) => {
+    expect(isInside(root, cwd, win32)).toBe(expected);
+  });
+
+  it.each([
+    ['/repo', '/repo', true],
+    ['/repo', '/repo/apps/mobile', true],
+    ['/repo', '/repo/..notes', true],
+    ['/repo', '/repo-other/apps/mobile', false],
+    ['/repo', '/repo/../other/apps/mobile', false],
+    ['/repo', '/', false],
+  ])('checks POSIX Metro worktree boundaries: %s -> %s', (root, cwd, expected) => {
+    expect(isInside(root, cwd, posix)).toBe(expected);
+  });
+
+  it('parses a Windows netstat listener without accepting another port', () => {
+    const output = [
+      '  TCP    0.0.0.0:8081    0.0.0.0:0    LISTENING    4242',
+      '  TCP    0.0.0.0:8082    0.0.0.0:0    LISTENING    4343',
+    ].join('\r\n');
+    expect(parseWindowsNetstatListener(output, 8081)).toBe('4242');
+    expect(parseWindowsNetstatListener(output, 8083)).toBeNull();
+  });
+
   it('recognizes only dedicated Metro process groups', () => {
     expect(isDedicatedMetroProcessGroup([
       'pnpm mobile:sim:start',
@@ -78,6 +115,7 @@ describe('mobile simulator Metro takeover', () => {
     const run = vi.fn();
     let alive = true;
     const stopped = await terminateMetro(123, {
+      platform: 'darwin',
       execFile: run,
       groupId: '456',
       currentGroupId: '789',
@@ -95,9 +133,35 @@ describe('mobile simulator Metro takeover', () => {
     expect(run).toHaveBeenCalledWith('kill', ['-TERM', '-456']);
   });
 
+  it('uses taskkill tree termination for a confirmed Windows launcher', async () => {
+    const run = vi.fn();
+    let alive = true;
+    const stopped = await terminateMetro(123, {
+      platform: 'win32',
+      execFile: run,
+      isAlive: () => alive,
+      wait: async () => { alive = false; },
+      timeoutMs: 100,
+      pollMs: 10,
+    });
+
+    expect(stopped).toBe(true);
+    expect(run).toHaveBeenCalledWith(
+      'taskkill',
+      ['/PID', '123', '/T', '/F'],
+      { stdio: 'ignore', windowsHide: true },
+    );
+  });
+
+  it('normalizes the Windows owner metadata cwd to the mobile directory', () => {
+    const source = readFileSync(join(process.cwd(), 'scripts/sim-metro.mjs'), 'utf8');
+    expect(source).toContain("cwd: owner.worktreeRoot ? join(owner.worktreeRoot, 'apps/mobile') : null");
+  });
+
   it('falls back to the listener PID when the group is unavailable', async () => {
     const run = vi.fn();
     const stopped = await terminateMetro(123, {
+      platform: 'darwin',
       execFile: run,
       groupId: null,
       currentGroupId: '789',
@@ -111,6 +175,7 @@ describe('mobile simulator Metro takeover', () => {
   it('falls back to the listener PID when the current process group is unknown', async () => {
     const run = vi.fn();
     const stopped = await terminateMetro(123, {
+      platform: 'darwin',
       execFile: run,
       groupId: '456',
       currentGroupId: null,
@@ -125,6 +190,7 @@ describe('mobile simulator Metro takeover', () => {
   it('falls back to the listener PID for a process group with unrelated members', async () => {
     const run = vi.fn();
     const stopped = await terminateMetro(123, {
+      platform: 'darwin',
       execFile: run,
       groupId: '456',
       currentGroupId: '789',
@@ -139,6 +205,7 @@ describe('mobile simulator Metro takeover', () => {
   it('returns success when the listener exits before kill', async () => {
     const run = vi.fn(() => { throw new Error('ESRCH'); });
     const stopped = await terminateMetro(123, {
+      platform: 'darwin',
       execFile: run,
       groupId: null,
       isAlive: () => false,
@@ -153,6 +220,7 @@ describe('mobile simulator Metro takeover', () => {
 
   it('times out instead of claiming a process was stopped', async () => {
     const stopped = await terminateMetro(123, {
+      platform: 'darwin',
       execFile: vi.fn(),
       groupId: null,
       isAlive: () => true,

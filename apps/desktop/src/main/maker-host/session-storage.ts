@@ -10,7 +10,7 @@
  * 原子写 source='review'，自动化 runner 仍会在创建后 backfill 为 'scheduler'。
  */
 
-import { and, eq, inArray } from 'drizzle-orm';
+import { and, eq, inArray, ne } from 'drizzle-orm';
 
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
 
@@ -142,12 +142,12 @@ export class DesktopSessionStorage implements SessionStorage {
     expectedSdkSessionId: string,
   ): Promise<boolean> {
     const db = getDbClient().drizzle;
-    const changed = await db
+    const result = await db
       .update(sessions)
       .set({ sdkSessionId: null, updatedAt: Date.now() })
       .where(and(eq(sessions.id, id), eq(sessions.sdkSessionId, expectedSdkSessionId)))
-      .returning({ id: sessions.id });
-    return changed.length > 0;
+      .run();
+    return result.changes > 0;
   }
 
   async delete(id: string): Promise<void> {
@@ -230,4 +230,37 @@ export async function readSessionExtraDirsFromDb(id: string): Promise<string[]> 
     /* fall through */
   }
   return [];
+}
+
+/** 读 sessions.writable_dirs；旧库迁移后默认 []，绝不从 extra_dirs 推导。 */
+export async function readSessionWritableDirsFromDb(id: string): Promise<string[]> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({ writableDirs: sessions.writableDirs })
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .limit(1);
+  const raw = rows[0]?.writableDirs;
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed) && parsed.every((x) => typeof x === 'string')) return parsed;
+  } catch {
+    /* fall through */
+  }
+  return [];
+}
+
+/** 当前 owner 可见、未删除的桌面会话(含 plugin 入口)。review 不注入 library 槽。 */
+export async function listVisibleActiveSessionDirectoryGrants(): Promise<Array<{ id: string; extraDirs: string | null }>> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({ id: sessions.id, extraDirs: sessions.extraDirs })
+    .from(sessions)
+    .where(and(
+      inArray(sessions.source, DESKTOP_VISIBLE_SESSION_SOURCES),
+      eq(sessions.status, 'active'),
+      ne(sessions.source, 'review'),
+    ));
+  return rows;
 }

@@ -18,6 +18,7 @@ import {
   ghostInstallApprovalToken,
   ghostIconMimeType,
   isValidGhostId,
+  ghostManifestToLegacyV2DigestFormat,
   resolveGhostManifestLocale,
   validateGhostManifest,
   validateGhostManifestLocaleResource,
@@ -1033,6 +1034,19 @@ export class GhostManager {
     } catch {
       return 'manual';
     }
+  }
+
+  /**
+   * 自动接管只能把一份成功读取且仍为 approved 的 receipt 当作来源证据。
+   * 与授权链的宽松投影不同，这里任何缺失、损坏或 I/O 异常都必须上抛。
+   */
+  readApprovedInstallOriginStrict(id: string): 'manual' | 'agent-forge' {
+    this.ensureCurrentOwnerContextSync();
+    const approval = this.readApproval(id);
+    if (approval.state !== 'approved') {
+      throw new Error(`approved Plugin receipt is unavailable: ${approval.state}`);
+    }
+    return effectiveInstallOrigin(approval.receipt);
   }
 
   /**
@@ -2142,6 +2156,10 @@ export class GhostManager {
         unsupportedLegacySlots: string[];
         trust: GhostTrustInfo;
         packageSha256: string;
+        /** SHA-256 of the exact ghost.json entry bytes in this package. */
+        rawManifestSha256: string;
+        /** Exact normalized shape emitted by the released v0.1.61 v2 validator. */
+        releasedLegacyDigestFormat: unknown;
         iconDataUrl?: string;
       }
     | { rejection: InstallRejection }
@@ -2154,6 +2172,8 @@ export class GhostManager {
       unsupportedLegacySlots: parsed.unsupportedLegacySlots,
       trust: parsed.trust,
       packageSha256: parsed.packageSha256,
+      rawManifestSha256: parsed.rawManifestSha256,
+      releasedLegacyDigestFormat: parsed.releasedLegacyDigestFormat,
       ...(parsed.iconDataUrl !== undefined ? { iconDataUrl: parsed.iconDataUrl } : {}),
     };
   }
@@ -2170,6 +2190,8 @@ export class GhostManager {
         unsupportedLegacySlots: string[];
         trust: GhostTrustInfo;
         packageSha256: string;
+        rawManifestSha256: string;
+        releasedLegacyDigestFormat: unknown;
         iconDataUrl?: string;
         allEntries: JSZip.JSZipObject[];
         prefix: string;
@@ -2274,16 +2296,14 @@ export class GhostManager {
 
     // 3) 校验清单
     let manifestRaw: unknown;
+    let manifestBytes: Buffer;
     try {
-      manifestRaw = JSON.parse(
-        (
-          await readZipEntryBufferWithLimit(
-            manifestEntry,
-            MAX_GHOST_MANIFEST_BYTES,
-            GHOST_MANIFEST_FILE,
-          )
-        ).toString('utf8'),
+      manifestBytes = await readZipEntryBufferWithLimit(
+        manifestEntry,
+        MAX_GHOST_MANIFEST_BYTES,
+        GHOST_MANIFEST_FILE,
       );
+      manifestRaw = JSON.parse(manifestBytes.toString('utf8'));
     } catch {
       return {
         rejection: { code: 'file-invalid', reason: `${GHOST_MANIFEST_FILE} 不是合法 JSON` },
@@ -2555,6 +2575,11 @@ export class GhostManager {
       unsupportedLegacySlots: v.unsupportedLegacySlots,
       trust: signature.trust,
       packageSha256: crypto.createHash('sha256').update(buf).digest('hex'),
+      rawManifestSha256: crypto.createHash('sha256').update(manifestBytes).digest('hex'),
+      releasedLegacyDigestFormat: ghostManifestToLegacyV2DigestFormat(
+        v.manifest,
+        manifestRaw,
+      ),
       ...(iconDataUrl !== undefined ? { iconDataUrl } : {}),
       allEntries,
       prefix,
@@ -2568,6 +2593,8 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      /** Synchronous live-authority check immediately before publishing the staged package. */
+      beforePackagePlacement?: () => void;
     },
   ) {
     return this.runExclusiveMutation(() => this.installUnlocked(lizFilePath, opts));
@@ -2580,6 +2607,7 @@ export class GhostManager {
       expectedPackageSha256?: string;
       trustOverride?: GhostHostTrustOverride;
       installOrigin?: 'agent-forge';
+      beforePackagePlacement?: () => void;
     },
   ): Promise<{ ghost: InstalledGhost } | { rejection: InstallRejection }> {
     // 装入初始启用态由调用方决定；缺省 true 保持既有调用方语义不变。
@@ -2669,6 +2697,15 @@ export class GhostManager {
         ...(clearBuiltinTombstoneOnCommit ? { clearBuiltinTombstone: true } : {}),
       });
       this.untrustedApprovals.add(this.isolationKey(manifest.id));
+      try {
+        opts?.beforePackagePlacement?.();
+      } catch (error) {
+        // No package bytes were published. Clear the prepared journal so a
+        // cancelled request cannot leave an installation waiting for recovery.
+        await this.receiptStore.clearPendingMutation(manifest.id);
+        this.untrustedApprovals.delete(this.isolationKey(manifest.id));
+        throw error;
+      }
       await fs.promises.rename(stagingDir, finalDir);
       try {
         receipt = createGhostInstallReceipt({

@@ -369,14 +369,11 @@ function VoiceInputServiceSourceCard() {
     ready,
     selection,
     asrProfiles,
-    refinerProfiles,
     readiness,
     customAsrApiKeyConfigured,
     saving,
     setServiceMode,
     setAsrProvider,
-    setRefinerProvider,
-    setRefinerFallbackProvider,
     saveCustomAsr,
     clearCustomAsrApiKey,
     resetToDefault,
@@ -441,6 +438,12 @@ function VoiceInputServiceSourceCard() {
     setSearchParams(next, { replace: true });
   }, [searchParams, setSearchParams]);
 
+  const openPersonalizationTab = useCallback(() => {
+    const next = new URLSearchParams(searchParams);
+    next.set('tab', 'personalization');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
+
   const modeOptions = useMemo<ReadonlyArray<VoiceInputSelectOption<VoiceInputServiceModeData>>>(() => {
     const byokOption: VoiceInputSelectOption<VoiceInputServiceModeData> = {
       value: 'byok',
@@ -483,31 +486,11 @@ function VoiceInputServiceSourceCard() {
       }))
   ), [asrProfiles, credentialSourceLabel, t]);
 
-  const refinerOptions = useMemo<ReadonlyArray<VoiceInputSelectOption<string>>>(() => (
-    refinerProfiles.map((profile) => ({
-      value: profile.id,
-      label: profile.model,
-      description: credentialSourceLabel(profile),
-    }))
-  ), [refinerProfiles, credentialSourceLabel]);
-
-  // Explicit BYOK fallback (opt-in): "none" keeps the primary running alone,
-  // mirroring the single-credential reality of most BYOK setups.
-  const refinerFallbackValue = selection?.refinerProviderChain?.[1] ?? '';
-  const refinerFallbackOptions = useMemo<ReadonlyArray<VoiceInputSelectOption<string>>>(() => ([
-    {
-      value: '',
-      label: t('settings.voiceInput.serviceSource.refinerFallback.none'),
-      description: t('settings.voiceInput.serviceSource.refinerFallback.noneDescription'),
-    },
-    ...refinerProfiles
-      .filter((profile) => profile.id !== selection?.refinerProvider)
-      .map((profile) => ({
-        value: profile.id,
-        label: profile.model,
-        description: credentialSourceLabel(profile),
-      })),
-  ]), [refinerProfiles, selection?.refinerProvider, credentialSourceLabel, t]);
+  const cannotRefineWithAuxiliary = Boolean(
+    selection
+    && selection.refinerProviderChainSource === 'configured'
+    && selection.refinerProviderChain.length === 0,
+  );
 
   // BYOK credential problems map to i18n by credential source instead of the
   // raw main-process message (which is an untranslated profile constant).
@@ -837,26 +820,26 @@ function VoiceInputServiceSourceCard() {
 
           <VoiceInputInlineSettingRow
             label={t('settings.voiceInput.serviceSource.refiner.label')}
-            hint={t('settings.voiceInput.serviceSource.refiner.hint')}
+            hint={
+              cannotRefineWithAuxiliary
+                ? t('settings.voiceInput.serviceSource.refiner.cannotRefine')
+                : t('settings.voiceInput.serviceSource.refiner.followHint')
+            }
           >
-            <VoiceInputSelect
-              value={selection?.refinerProvider ?? ''}
-              options={refinerOptions}
-              onChange={(value) => void setRefinerProvider(value)}
-              ariaLabel={t('settings.voiceInput.serviceSource.refiner.ariaLabel')}
-            />
-          </VoiceInputInlineSettingRow>
-
-          <VoiceInputInlineSettingRow
-            label={t('settings.voiceInput.serviceSource.refinerFallback.label')}
-            hint={t('settings.voiceInput.serviceSource.refinerFallback.hint')}
-          >
-            <VoiceInputSelect
-              value={refinerFallbackValue}
-              options={refinerFallbackOptions}
-              onChange={(value) => void setRefinerFallbackProvider(value)}
-              ariaLabel={t('settings.voiceInput.serviceSource.refinerFallback.ariaLabel')}
-            />
+            <div className="flex items-center justify-end gap-2">
+              <span className="text-12 leading-[1.4] text-[var(--settings-section-sublabel)]">
+                {t('settings.voiceInput.serviceSource.refiner.followAuxiliary')}
+              </span>
+              <button
+                type="button"
+                onClick={openPersonalizationTab}
+                className={cn(
+                  'h-8 shrink-0 rounded-full border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] px-3 text-12 font-medium text-[var(--settings-section-title)] outline-none transition-colors hover:border-[var(--settings-input-border-focus)] focus-visible:border-[var(--settings-input-border-focus)]',
+                )}
+              >
+                {t('settings.voiceInput.serviceSource.refiner.openAuxiliary')}
+              </button>
+            </div>
           </VoiceInputInlineSettingRow>
 
           {byokCredentialErrorText ? (

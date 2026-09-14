@@ -104,6 +104,8 @@ type CodexResponsesTextModelClientOptions = {
    * "重新登录 Codex" flow.
    */
   onAuthInvalidated?: (reason: string) => void;
+  /** Called after request-time awaits and immediately before each fetch. */
+  beforeDispatch?: () => void;
 };
 
 /**
@@ -124,6 +126,7 @@ export class CodexResponsesTextModelClient implements TextModelClient {
   private readonly timeoutMs: number;
   private readonly onUsage?: (usage: CodexTokenUsage) => void;
   private readonly onAuthInvalidated?: (reason: string) => void;
+  private readonly beforeDispatch?: () => void;
   private authInvalidationNotified = false;
 
   constructor(options: CodexResponsesTextModelClientOptions) {
@@ -133,6 +136,7 @@ export class CodexResponsesTextModelClient implements TextModelClient {
     this.timeoutMs = options.timeoutMs ?? 8_000;
     this.onUsage = options.onUsage;
     this.onAuthInvalidated = options.onAuthInvalidated;
+    this.beforeDispatch = options.beforeDispatch;
   }
 
   async requestJson<T>(input: {
@@ -212,6 +216,7 @@ export class CodexResponsesTextModelClient implements TextModelClient {
     // 代理解析放在看门狗与 timing 起表之前:它是本机一次解析(带 30s 缓存),
     // 不该算进 response-headers 预算,也不该污染 send 耗时。
     const dispatcher = await resolveRefinerDispatcher(this.baseUrl, codexResponsesDispatcher);
+    this.beforeDispatch?.();
     armIdleTimeout('response headers');
     const sendStart = performance.now();
     let firstByteAt: number | null = null;

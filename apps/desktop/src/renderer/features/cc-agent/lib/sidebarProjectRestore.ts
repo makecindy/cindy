@@ -2,7 +2,11 @@ import type { Session } from '@/lib/ccAgent.types';
 
 import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
 import { sessionActivityMs } from './dateSessionGrouping';
-import { groupSessions, projectIdentityKeyForSession } from './projectGrouping';
+import {
+  groupSessions,
+  projectIdentityKeyForSession,
+  type PersistentLocalProject,
+} from './projectGrouping';
 import { isProjectHidden } from './sidebarProjectVisibility';
 
 type SidebarProjectRestoreHandler = (projectKey: string) => Promise<boolean>;
@@ -42,13 +46,15 @@ export function requestSidebarProjectRestore(projectKey: string): Promise<boolea
   return handler?.(projectKey) ?? Promise.resolve(false);
 }
 
-type RestoreVendorPredicate = (session: Pick<Session, 'agentKind'>) => boolean;
+type RestoreVendorPredicate = (session: { agentKind?: string | null }) => boolean;
 
 interface CollectRestorableProjectKeysOptions {
   sessions: readonly Session[];
+  persistentLocalProjects?: readonly PersistentLocalProject[];
   lastActivityCutoff: number | null;
   pinnedProjectKeys: ReadonlySet<string>;
   vendorPredicate: RestoreVendorPredicate | null;
+  localPlatform?: string;
 }
 
 /**
@@ -62,24 +68,52 @@ interface CollectRestorableProjectKeysOptions {
  */
 export function collectRestorableProjectKeys({
   sessions,
+  persistentLocalProjects = [],
   lastActivityCutoff,
   pinnedProjectKeys,
   vendorPredicate,
+  localPlatform = '',
 }: CollectRestorableProjectKeysOptions): ReadonlySet<string> {
   const vendorSessions = vendorPredicate ? sessions.filter(vendorPredicate) : sessions;
+  const vendorProjects = vendorPredicate
+    ? persistentLocalProjects.filter(
+        (project) =>
+          project.knownAgentKinds.length === 0 ||
+          project.knownAgentKinds.some((agentKind) => vendorPredicate({ agentKind })),
+      )
+    : persistentLocalProjects;
   const activitySessions =
     lastActivityCutoff === null
       ? vendorSessions
       : vendorSessions.filter((session) => sessionActivityMs(session) >= lastActivityCutoff);
-  const activityGroups = groupSessions(activitySessions, { includePinnedInProjects: true });
-  const allGroups =
+  const activityProjects =
     lastActivityCutoff === null
-      ? activityGroups
-      : groupSessions(vendorSessions, { includePinnedInProjects: true });
+      ? vendorProjects
+      : vendorProjects.filter(
+          (project) => new Date(project.lastUsedAt).getTime() >= lastActivityCutoff,
+        );
+  const activityGroups = groupSessions(activitySessions, {
+    includePinnedInProjects: true,
+    persistentLocalProjects: activityProjects,
+    localPlatform,
+  });
+  const allGroups = groupSessions(sessions, {
+    includePinnedInProjects: true,
+    persistentLocalProjects,
+    localPlatform,
+  });
   const projectKeys = new Set(activityGroups.projects.map((project) => project.projectKey));
+  const pinnedComparisonKeys = new Set(
+    Array.from(pinnedProjectKeys)
+      .map((projectKey) => projectKeyComparisonKey(projectKey, localPlatform))
+      .filter((projectKey): projectKey is string => projectKey != null),
+  );
 
   for (const project of allGroups.projects) {
-    if (pinnedProjectKeys.has(project.projectKey)) projectKeys.add(project.projectKey);
+    const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
+    if (comparisonKey != null && pinnedComparisonKeys.has(comparisonKey)) {
+      projectKeys.add(project.projectKey);
+    }
   }
   for (const session of allGroups.pinned) {
     if (session.workspaceKind === 'dialogue') continue;

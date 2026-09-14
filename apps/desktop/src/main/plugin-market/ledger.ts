@@ -41,6 +41,12 @@ export interface PluginMarketInstallationRecord {
    * 更新覆盖。新写入的市场、自定义市场和 legacy adoption 记录均应携带。
    */
   manifestDigest?: string;
+  /**
+   * SHA-256 of the exact installed ghost.json bytes. New clients use this
+   * serialization-exact identity; manifestDigest remains unchanged for released
+   * clients that still interpret it as a normalized digest.
+   */
+  rawManifestSha256?: string;
 }
 
 /** 递归按键排序的规范化 JSON(摘要必须与对象键序无关,两侧独立算也一致)。 */
@@ -61,6 +67,15 @@ export function ghostManifestDigest(manifest: unknown): string {
     .createHash('sha256')
     .update(canonicalJson(ghostManifestToLegacyV2DigestFormat(manifest)))
     .digest('hex');
+}
+
+/**
+ * Exact digest emitted by the released capability-decoupling build before v2
+ * rollback projection was restored. Migration-only: normal writers must keep
+ * using ghostManifestDigest so released clients can read the ledger.
+ */
+export function legacyNoSlotsGhostManifestDigest(manifest: unknown): string {
+  return crypto.createHash('sha256').update(canonicalJson(manifest)).digest('hex');
 }
 
 interface PluginMarketLedgerData {
@@ -115,37 +130,68 @@ function validRecord(value: unknown): value is PluginMarketInstallationRecord {
     typeof record.installed === 'boolean' &&
     typeof record.updatedAt === 'string' &&
     (record.sourceKey === undefined || typeof record.sourceKey === 'string') &&
-    (record.manifestDigest === undefined || typeof record.manifestDigest === 'string')
+    (record.manifestDigest === undefined || typeof record.manifestDigest === 'string') &&
+    (record.rawManifestSha256 === undefined ||
+      (typeof record.rawManifestSha256 === 'string' &&
+        /^[a-f0-9]{64}$/.test(record.rawManifestSha256)))
   );
 }
 
+type InstallationsFileRead = {
+  kind: 'absent' | 'ok' | 'invalid';
+  installations: Record<string, PluginMarketInstallationRecord>;
+  raw: Record<string, unknown> | null;
+};
+
 /** 读取并解析一个账本 JSON 文件的 installations 段;文件不存在返回空。 */
-function readInstallationsFile(
-  filePath: string,
-): { installations: Record<string, PluginMarketInstallationRecord>; raw: Record<string, unknown> | null } {
+function readInstallationsFile(filePath: string): InstallationsFileRead {
   // 读失败与解析失败分开处理:文件不存在(ENOENT)才是空;文件在但读不到(文件锁/
   // 权限/瞬时 I/O)或备份救不回来时由 readAtomicFileSync **上抛**——降级成空会让
   // 紧接着的写入把真实记录覆盖掉。只有"内容确实不是合法 JSON"才按空重建。
   const text = readAtomicFileSync(filePath);
-  if (text === null) return { installations: {}, raw: null };
+  if (text === null) return { kind: 'absent', installations: {}, raw: null };
   let parsed: unknown;
   try {
     parsed = JSON.parse(text);
   } catch {
-    return { installations: {}, raw: null };
+    return { kind: 'invalid', installations: {}, raw: null };
   }
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return { installations: {}, raw: null };
+    return { kind: 'invalid', installations: {}, raw: null };
   }
   const value = parsed as Record<string, unknown>;
-  if (value.schemaVersion !== LEDGER_SCHEMA_VERSION) return { installations: {}, raw: null };
-  const installations: Record<string, PluginMarketInstallationRecord> = {};
-  if (value.installations && typeof value.installations === 'object') {
-    for (const [ghostId, record] of Object.entries(value.installations)) {
-      if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
-    }
+  if (value.schemaVersion !== LEDGER_SCHEMA_VERSION) {
+    return { kind: 'invalid', installations: {}, raw: null };
   }
-  return { installations, raw: value };
+  const rawInstallations = value.installations;
+  if (
+    rawInstallations === undefined ||
+    rawInstallations === null ||
+    typeof rawInstallations !== 'object' ||
+    Array.isArray(rawInstallations)
+  ) {
+    return { kind: 'invalid', installations: {}, raw: value };
+  }
+  const installations: Record<string, PluginMarketInstallationRecord> = {};
+  for (const [ghostId, record] of Object.entries(rawInstallations)) {
+    if (validRecord(record) && record.ghostId === ghostId) installations[ghostId] = record;
+  }
+  return { kind: 'ok', installations, raw: value };
+}
+
+function rawMentionsGhost(file: InstallationsFileRead, ghostId: string): boolean {
+  const installations = file.raw?.installations;
+  if (!installations || typeof installations !== 'object' || Array.isArray(installations)) {
+    return false;
+  }
+  if (Object.prototype.hasOwnProperty.call(installations, ghostId)) return true;
+  return Object.values(installations).some(
+    (record) =>
+      record &&
+      typeof record === 'object' &&
+      !Array.isArray(record) &&
+      (record as { ghostId?: unknown }).ghostId === ghostId,
+  );
 }
 
 /**
@@ -188,10 +234,17 @@ export class PluginMarketLedger {
     return path.join(path.dirname(this.filePath()), CUSTOM_LEDGER_FILE);
   }
 
-  read(): PluginMarketLedgerData {
-    const main = readInstallationsFile(this.filePath());
-    const custom = readInstallationsFile(this.customFilePath());
+  private readFiles(): { main: InstallationsFileRead; custom: InstallationsFileRead } {
+    return {
+      main: readInstallationsFile(this.filePath()),
+      custom: readInstallationsFile(this.customFilePath()),
+    };
+  }
 
+  private mergeInstallations(
+    main: InstallationsFileRead,
+    custom: InstallationsFileRead,
+  ): PluginMarketLedgerData {
     const installations: Record<string, PluginMarketInstallationRecord> = {};
     for (const [ghostId, record] of Object.entries(main.installations)) {
       // 主账本里的自定义记录是早期开发版写入的存量,一并纳入(下次写入时归位)。
@@ -222,14 +275,84 @@ export class PluginMarketLedger {
     return { schemaVersion: LEDGER_SCHEMA_VERSION, installations, defaultInstallOptOuts };
   }
 
+  read(): PluginMarketLedgerData {
+    const { main, custom } = this.readFiles();
+    return this.mergeInstallations(main, custom);
+  }
+
   installationForGhost(ghostId: string): PluginMarketInstallationRecord | null {
     return this.read().installations[ghostId] ?? null;
+  }
+
+  /**
+   * Connection OIDC lookup. Missing files are absent; a present but unreadable
+   * or schema-invalid ledger is a hard failure so callers cannot treat
+   * corruption as "no market record".
+   */
+  lookupInstallationForOidc(
+    ghostId: string,
+  ): { kind: 'absent' } | { kind: 'found'; record: PluginMarketInstallationRecord } | { kind: 'invalid' } {
+    const { main, custom } = this.readFiles();
+    if (main.kind === 'invalid' || custom.kind === 'invalid') return { kind: 'invalid' };
+    const record = this.mergeInstallations(main, custom).installations[ghostId];
+    if (record) return { kind: 'found', record };
+    if (rawMentionsGhost(main, ghostId) || rawMentionsGhost(custom, ghostId)) {
+      return { kind: 'invalid' };
+    }
+    return { kind: 'absent' };
   }
 
   upsertInstallation(record: PluginMarketInstallationRecord): void {
     const data = this.read();
     data.installations[record.ghostId] = record;
     this.write(data);
+  }
+
+  /**
+   * Add the serialization-exact manifest identity without changing
+   * routing order or any legacy field. Full-record comparison makes this a CAS:
+   * an install/update/source change that won the race is never overwritten.
+   */
+  backfillRawManifestSha256(
+    expected: PluginMarketInstallationRecord,
+    rawManifestSha256: string,
+  ): boolean {
+    if (!/^[a-f0-9]{64}$/.test(rawManifestSha256)) return false;
+    const data = this.read();
+    const current = data.installations[expected.ghostId];
+    if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
+    if (current.rawManifestSha256 !== undefined) {
+      return current.rawManifestSha256 === rawManifestSha256;
+    }
+    data.installations[current.ghostId] = { ...current, rawManifestSha256 };
+    this.write(data);
+    return true;
+  }
+
+  /**
+   * Replace both Manifest identities after an authorized package commit. Unlike
+   * migration backfill, this may replace an existing raw hash because the
+   * package itself was just atomically replaced. Full-record CAS prevents a
+   * concurrent route change from being overwritten.
+   */
+  replaceManifestIdentityAfterPackageCommit(
+    expected: PluginMarketInstallationRecord,
+    manifestDigest: string,
+    rawManifestSha256: string,
+  ): boolean {
+    if (!/^[a-f0-9]{64}$/.test(manifestDigest) || !/^[a-f0-9]{64}$/.test(rawManifestSha256)) {
+      return false;
+    }
+    const data = this.read();
+    const current = data.installations[expected.ghostId];
+    if (!current || canonicalJson(current) !== canonicalJson(expected)) return false;
+    data.installations[current.ghostId] = {
+      ...current,
+      manifestDigest,
+      rawManifestSha256,
+    };
+    this.write(data);
+    return true;
   }
 
   /** 换源落位前失败时，将旧路由和原有默认安装退订状态一起原子恢复。 */
@@ -266,7 +389,11 @@ export class PluginMarketLedger {
   restoreDisconnectedInstallation(
     expected: PluginMarketInstallationRecord,
     userId: string,
+    rawManifestSha256?: string,
   ): boolean {
+    if (rawManifestSha256 !== undefined && !/^[a-f0-9]{64}$/.test(rawManifestSha256)) {
+      return false;
+    }
     const data = this.read();
     const current = data.installations[expected.ghostId];
     if (
@@ -285,6 +412,7 @@ export class PluginMarketLedger {
           : current.source,
       installed: true,
       updatedAt: new Date().toISOString(),
+      ...(rawManifestSha256 !== undefined ? { rawManifestSha256 } : {}),
     };
     const remainingOptOuts = (data.defaultInstallOptOuts[userId] ?? []).filter(
       (pluginId) => pluginId !== current.pluginId,

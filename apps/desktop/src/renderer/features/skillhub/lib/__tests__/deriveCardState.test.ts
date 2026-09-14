@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
-import { deriveCardState } from '../../hooks/useMarketList';
+import { deriveCardState, localGroupForItem, type LocalSkillIndex } from '../../hooks/useMarketList';
+import { skillhubCatalogKey } from '../../../../../shared/skillhubCatalog';
 
 const item = (over: Record<string, unknown> = {}) => ({
   name: 'x',
@@ -37,5 +38,28 @@ describe('deriveCardState — isMine 按目录判已装', () => {
 
   it('installing 优先级最高', () => {
     expect(deriveCardState(item({ isMine: true }), grp(undefined), true)).toBe('installing');
+  });
+});
+
+describe('market install catalog matching', () => {
+  const entry = (version: string) => ({
+    version,
+    absolutePath: `/p/${version}`,
+    hasRegistryEntry: true,
+  });
+  const index: LocalSkillIndex = {
+    byCatalogKey: new Map([
+      [skillhubCatalogKey('same', 'market'), { global: entry('1.0.0'), projects: [] }],
+      [skillhubCatalogKey('same', 'team'), { global: entry('2.0.0'), projects: [] }],
+    ]),
+    untrackedByName: new Map(),
+  };
+
+  it('keeps same-slug market and team installs independent', () => {
+    expect(localGroupForItem({ name: 'same', isMine: false, catalogScope: 'market' }, index)?.global?.version)
+      .toBe('1.0.0');
+    expect(localGroupForItem({ name: 'same', isMine: false, catalogScope: 'team' }, index)?.global?.version)
+      .toBe('2.0.0');
+    expect(localGroupForItem({ name: 'same', isMine: false }, index)).toBeUndefined();
   });
 });

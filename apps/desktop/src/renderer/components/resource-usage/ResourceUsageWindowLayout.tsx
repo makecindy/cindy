@@ -24,6 +24,7 @@ import { LocaleProvider, useLocale } from '@/hooks/useLocale';
 import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import { ToastContainer } from '@/components/ui/toast';
 import { useAppShortcut } from '@/hooks/useAppShortcut';
+import { useMacFullscreen } from '@/hooks/useMacFullscreen';
 import { createLogger } from '@/lib/logger';
 
 const log = createLogger('ResourceUsageWindowLayout');
@@ -44,7 +45,7 @@ const EMPTY_STATE: ResourceUsageState = {};
 export function ResourceUsageWindowLayout() {
   const { t } = useTranslation();
   const { effectiveLocale, setLocale } = useLocale();
-  const isMac = window.electronAPI?.platform === 'darwin';
+  const { isMac, isFullscreen } = useMacFullscreen();
   const presentationReadySentRef = useRef(false);
   const presentationReadyInFlightRef = useRef(false);
   const presentationReadyAttemptRef = useRef(0);
@@ -145,7 +146,10 @@ export function ResourceUsageWindowLayout() {
         className="relative flex h-[46px] shrink-0 items-center border-b border-[var(--border-default)] bg-[var(--panel-bg)]"
         style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}
       >
-        <div className={isMac ? 'w-20 shrink-0' : 'w-3 shrink-0'} />
+        <div
+          data-testid="resource-window-title-spacer"
+          className={isMac && !isFullscreen ? 'w-20 shrink-0' : 'w-3 shrink-0'}
+        />
         <div className="flex min-w-0 flex-1 items-center gap-2">
           <Activity size={14} className="shrink-0 text-[var(--text-tertiary)]" />
           <span className="truncate text-13 text-[var(--text-secondary)]">

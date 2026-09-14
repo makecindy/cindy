@@ -1,9 +1,9 @@
 /**
- * xAI Imagine image channel backed by the user's existing SuperGrok OAuth login.
+ * xAI Imagine image channel backed by SuperGrok OAuth or an xAI platform API key.
  *
- * The OAuth bearer used by the xAI agent bridge also works on the OpenAI-compatible
- * Imagine endpoints. Credentials stay in Main; local source images are sent as data
- * URIs and the response is normalized to ImageChannelResult.
+ * Both credential families use the same OpenAI-compatible Imagine endpoints. Credentials
+ * stay in Main; local source images are sent as data URIs and the response is normalized
+ * to ImageChannelResult.
  */
 
 import fs from 'node:fs/promises';
@@ -27,8 +27,12 @@ interface XaiImageResponse {
 }
 
 export interface CreateXaiImageChannelOptions {
+  /** Alternative API-key source; when present it takes precedence over OAuth. */
+  hasApiKey?(): boolean;
+  getApiKey?(): string | null | Promise<string | null>;
   hasOAuthLogin(): boolean;
-  getAccessToken(): Promise<string>;
+  /** SuperGrok OAuth 凭证;仅在未提供 API key 源时必填。 */
+  getAccessToken?(): Promise<string>;
   getCredentialGeneration(): number;
   getOwnerScopeKey(): string;
   isOwnerBoundaryPending(): boolean;
@@ -126,6 +130,24 @@ function assertRequestScopeCurrent(
   }
 }
 
+async function readCredential(
+  opts: CreateXaiImageChannelOptions,
+  ownerScopeKey: string,
+): Promise<string> {
+  if (opts.hasApiKey?.() === true) {
+    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    const apiKey = await opts.getApiKey?.();
+    assertOwnerScopeCurrent(opts, ownerScopeKey);
+    const normalized = apiKey?.trim();
+    if (!normalized) throw new Error('xAI 图像 API key 已不可用,请到设置中重新配置');
+    return normalized;
+  }
+  if (!opts.getAccessToken) {
+    throw new Error('xAI 图像通道缺少可用凭证,请配置 xAI API key 或登录 SuperGrok');
+  }
+  return opts.getAccessToken();
+}
+
 async function readBoundedImageResponse(
   response: Response,
   maxBytes: number,
@@ -193,7 +215,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
       assertRequestScopeCurrent(opts, ownerScopeKey, credentialGeneration);
     assertStillCurrent();
     const [token, images] = await Promise.all([
-      opts.getAccessToken(),
+      readCredential(opts, ownerScopeKey),
       Promise.all(paths.map(sourceImage)),
     ]);
     const isEdit = images.length > 0;
@@ -278,7 +300,7 @@ export function createXaiImageChannel(opts: CreateXaiImageChannelOptions): Image
   }
 
   return {
-    ready: opts.hasOAuthLogin,
+    ready: () => opts.hasApiKey?.() === true || opts.hasOAuthLogin(),
     maxEditImages: MAX_EDIT_SOURCES,
     generateImage: ({ model, prompt, aspectRatio }) => call({ model, prompt, aspectRatio }),
     editImage: ({ model, prompt, imagePaths, aspectRatio }) =>

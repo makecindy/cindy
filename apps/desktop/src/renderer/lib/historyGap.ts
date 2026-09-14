@@ -3,7 +3,7 @@
  *
  * 桌面消费方:`components/chat/MessageStream` —— tool_segment 按它切段、工作组按它切组。
  * makerChatStore 用同一把尺子识别裁剪后窗口里「孤岛 + 最新连续尾段」的缺口,好把
- * 向上翻页的游标留在尾段下沿(见 oldestMessageOfNewestContiguousRun);跳转补齐预算
+ * 向上翻页的游标留在尾段下沿(见 makerChatStore 的 oldestMessageOfMainContiguousRun);跳转补齐预算
  * 本身仍按行数取保守上界(JUMP_BACKFILL_MAX_ITEMS),不按本常量估算。
  *
  * 为什么保留这层 re-export 而不让 MessageStream 直接引 shared:阈值原本是桌面常量,

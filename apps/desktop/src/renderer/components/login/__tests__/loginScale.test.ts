@@ -6,8 +6,9 @@ import {
   panelPlacement,
   PANEL_FIXED_SCALE,
   sloganShiftX,
+  splashBrandPlacement,
 } from '../loginScale';
-import { CONTROL, PANEL, SSO_ORG_HISTORY } from '../loginDesignTokens';
+import { CONTROL, HERO, LOGIN_GROUP, PANEL, SSO_ORG_HISTORY, WORDMARK } from '../loginDesignTokens';
 
 /**
  * 缩放公式行为单测(implementation-plan Step 2 WHAT1 锚点数值,demo v3.1 拍板)。
@@ -91,11 +92,9 @@ describe('panelPlacement(面板恒定 1x,用户拍板 2026-07-23,design.md §11)
     ['16 寸级大窗口', 1728, 1117],
   ])('%s下 SSO 候选层都锚定输入框下沿并收在面板内', (_label, width, height) => {
     const placement = panelPlacement(width, height, 1227);
-    const inputBottom =
-      placement.topY + (CONTROL.inputY + CONTROL.height) * placement.scale;
+    const inputBottom = placement.topY + (CONTROL.inputY + CONTROL.height) * placement.scale;
     const historyTop = placement.topY + SSO_ORG_HISTORY.y * placement.scale;
-    const historyBottom =
-      historyTop + SSO_ORG_HISTORY.maxHeight * placement.scale;
+    const historyBottom = historyTop + SSO_ORG_HISTORY.maxHeight * placement.scale;
     const panelBottom = placement.topY + PANEL.height * placement.scale;
 
     expect(historyTop - inputBottom).toBe(8 * placement.scale);
@@ -135,12 +134,64 @@ describe('brandPlacement(品牌块整体让位,用户拍板 2026-07-23 第二轮
     expect(blockBottomAfter).toBeCloseTo(366 - 12, 2);
   });
 
-  it('品牌让位与登录 footer 使用同一 bottom reserve，避免面板上移后再次遮挡品牌', () => {
-    const panelTop = panelPlacement(800, 600, 1229, 124).topY;
-    const r = brandPlacement(800, 600, 124);
-    const blockBottomAfter = 300 + 160 * r.scale + r.translateY;
-    // 组高 620 后本组合落进压缩档:块底代数上恰好等于 limit(= panelTop-12),
-    // 浮点余量 1e-9(压缩档 scale = (limit-12)/934,乘回 934 未必位精确;实测误差 ~1e-13)。
-    expect(blockBottomAfter).toBeLessThanOrEqual(panelTop - 12 + 1e-9);
+  it('短窗口以字标底部为碰撞边界,立绘尾部可自然落入面板下方', () => {
+    const width = 1280;
+    const height = 600;
+    const panelTop = panelPlacement(width, height, 1229, 124).topY;
+    const r = brandPlacement(width, height, 124);
+    const blockTopAfter = height / 2 + (275 - 2098 / 2) * r.scale + r.translateY;
+    const wordmarkBottomAfter = height / 2 + (1191 - 2098 / 2) * r.scale + r.translateY;
+    const heroBottomAfter = height / 2 + (1209 - 2098 / 2) * r.scale + r.translateY;
+
+    expect(blockTopAfter).toBeCloseTo(12, 6);
+    expect(wordmarkBottomAfter).toBeLessThanOrEqual(panelTop + 1e-9);
+    expect(heroBottomAfter).toBeGreaterThan(panelTop);
+  });
+
+  it('768px 与 769px 之间按可用空间连续变化,没有高度阈值 scale cliff', () => {
+    const width = 1280;
+    const reserve = 124;
+    const at768 = brandPlacement(width, 768, reserve);
+    const at769 = brandPlacement(width, 769, reserve);
+    const panelTop768 = panelPlacement(width, 768, 1229, reserve).topY;
+    const panelTop769 = panelPlacement(width, 769, 1229, reserve).topY;
+    const expected768 = (panelTop768 - 12) / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y);
+    const expected769 = (panelTop769 - 12) / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y);
+
+    expect(at768.scale).toBeCloseTo(expected768, 6);
+    expect(at769.scale).toBeCloseTo(expected769, 6);
+    expect(at769.scale - at768.scale).toBeCloseTo(
+      1 / (WORDMARK.inner.y + WORDMARK.inner.height - HERO.y),
+      6,
+    );
+
+    for (const [height, placement, panelTop] of [
+      [768, at768, panelTop768],
+      [769, at769, panelTop769],
+    ] as const) {
+      const wordmarkBottom =
+        height / 2 +
+        (WORDMARK.inner.y + WORDMARK.inner.height - 2098 / 2) * placement.scale +
+        placement.translateY;
+      expect(wordmarkBottom).toBeLessThanOrEqual(panelTop + 1e-9);
+    }
+  });
+});
+
+describe('splashBrandPlacement(Splash 使用 desktopScale 的品牌块布局)', () => {
+  it.each([
+    ['4:3 小窗口', 800, 600],
+    ['4:3 常见窗口', 1024, 768],
+    ['16:9 窗口', 1280, 720],
+    ['16:10 窗口', 1280, 800],
+    ['16 寸级窗口', 1728, 1117],
+  ])('%s保持原始 desktopScale,并与 Splash 面板保留安全间距', (_label, width, height) => {
+    const base = desktopScale(width, height).scale;
+    const placement = splashBrandPlacement(width, height);
+    expect(placement.scale).toBe(base);
+
+    const splashPanelTop = height / 2 + (LOGIN_GROUP.yDefault - 2098 / 2) * base;
+    const brandBottom = height / 2 + (1209 - 2098 / 2) * base + placement.translateY;
+    expect(brandBottom).toBeLessThanOrEqual(splashPanelTop - 12 + 1e-9);
   });
 });

@@ -31,6 +31,9 @@ import {
   withWorktreeRestoreMutation,
 } from './restoreLock';
 import { copyClaudeSiviDirs } from './WorktreeManager';
+import { restoreRecordedWorktree } from './restoreRecovery';
+import { readRecycleRecord, worktreeGeneration } from './recycleJournal';
+import { withWorktreeResourceLock } from './resourceLock';
 import * as store from './worktreeStore';
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
@@ -362,6 +365,15 @@ async function getWorktreeRestorePlan(sessionId: string): Promise<WorktreeRestor
   if (!worktreePath) return { status: { state: 'no-worktree' } };
   const parsed = parseManagedWorktreePath(worktreePath);
   if (!parsed) return { status: { state: 'no-worktree' } };
+  const recovery = await readRecycleRecord(worktreePath, sessionId);
+  if (recovery?.phase === 'restored' && registeredMeta
+    && [recovery.generation, recovery.restoredGeneration].includes(worktreeGeneration(registeredMeta))
+    && await pathExists(worktreePath)) {
+    return { status: { state: 'present', worktreePath, hasSnapshot: false }, parsed };
+  }
+  if (recovery?.snapshot && recovery.archive && ['removed', 'removing', 'restoring'].includes(recovery.phase)) {
+    return { status: { state: 'restorable', worktreePath, hasSnapshot: true }, parsed };
+  }
 
   const registeredForPath =
     registeredMeta && pathKey(registeredMeta.path) === pathKey(worktreePath)
@@ -434,6 +446,14 @@ export async function getWorktreeRestoreStatus(sessionId: string): Promise<Workt
 async function restoreWorktreeForSessionOnce(sessionId: string): Promise<WorktreeRestoreResult> {
   const plan = await getWorktreeRestorePlan(sessionId);
   const { status } = plan;
+  if ('worktreePath' in status) {
+    try {
+      const restored = await restoreRecordedWorktree(sessionId, status.worktreePath);
+      if (restored !== null) return { ok: restored, snapshotApplied: restored, ...(restored ? {} : { reason: 'git-error' as const }) };
+    } catch (error) {
+      return { ok: false, reason: 'git-error', detail: error instanceof Error ? error.message : String(error) };
+    }
+  }
   if (status.state === 'present') {
     const parsed = plan.parsed ?? parseManagedWorktreePath(status.worktreePath);
     if (!parsed) return { ok: true, snapshotApplied: true };
@@ -457,7 +477,7 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
       parsed.name,
     );
     if (!snapshotApplied) {
-      store.del(sessionId);
+      await store.del(sessionId);
       return { ok: true, snapshotApplied: false };
     }
     if (!store.get(sessionId) && plan.branch) {
@@ -486,7 +506,7 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
       parsed.name,
     );
     if (!snapshotApplied) {
-      store.del(sessionId);
+      await store.del(sessionId);
       return { ok: true, snapshotApplied: false };
     }
     await finishRestoredWorktree(sessionId, parsed, status.worktreePath, branch);
@@ -506,8 +526,12 @@ async function restoreWorktreeForSessionOnce(sessionId: string): Promise<Worktre
 export function restoreWorktreeForSession(sessionId: string): Promise<WorktreeRestoreResult> {
   const existing = restoreInFlight.get(sessionId);
   if (existing) return existing;
-  const tracked = withWorktreeRestoreMutation(sessionId, () =>
-    restoreWorktreeForSessionOnce(sessionId),
+  const tracked = withWorktreeRestoreMutation(sessionId, async () => {
+    const worktreePath = store.get(sessionId)?.path ?? (await readSessionWorktreeBinding(sessionId))?.worktreePath;
+    return worktreePath
+      ? withWorktreeResourceLock(worktreePath, () => restoreWorktreeForSessionOnce(sessionId))
+      : restoreWorktreeForSessionOnce(sessionId);
+  },
   ).finally(() => {
     if (restoreInFlight.get(sessionId) === tracked) {
       restoreInFlight.delete(sessionId);

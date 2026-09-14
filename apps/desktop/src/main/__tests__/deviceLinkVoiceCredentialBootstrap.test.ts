@@ -44,11 +44,18 @@ describe('mobile voice credential sync desktop bootstrap path', () => {
 
     expect(deviceLinkHost).toContain('const available = snap.online && snap.remoteControlEnabled;');
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后首帧
-    // presence(wasAvailable=undefined)同样必须触发重放——它是 DEVICE_OFFLINE
-    // 永久放弃后的唯一恢复事件(#1520 review P1)。
+    // presence(wasAvailable=undefined)同样必须触发重放,接续 DEVICE_OFFLINE
+    // 结束的恢复轮次(#1520 review P1)。
     expect(deviceLinkHost).toContain('if (available && wasAvailable !== true)');
     expect(deviceLinkHost).toContain('replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);');
     expect(deviceLinkHost).toContain('createSubscriptionReplayScheduler({');
+    // Preserve unknown after reconnect; only explicit unavailability stops retries.
+    expect(deviceLinkHost).toContain(
+      'getPresenceAvailability: (deviceId) => presenceAvailableByDevice.get(deviceId)',
+    );
+    expect(deviceLinkHost).toContain('?? (presenceOnlineByDevice.get(deviceId) === false ? false : undefined)');
+    expect(deviceLinkHost).toContain("replayActiveSubscriptions('directory-online', deviceId);");
+    expect(deviceLinkHost).toContain('isPermanentSubscriptionReplayError(error, presenceAvailableByDevice.get(deviceId))');
   });
 
   it('每个 relay 连接代上线时从设备目录补齐展示名与已在线桌面', () => {

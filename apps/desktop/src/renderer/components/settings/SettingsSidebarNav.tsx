@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next';
 import type { LucideProps } from 'lucide-react';
 import {
   Boxes,
+  Hammer,
   ChartColumn,
   CircleDollarSign,
   CircleHelp,
+  Database,
   FileUp,
   Info,
   Keyboard,
@@ -71,9 +73,11 @@ const TAB_ICON: Record<VisibleSettingsTab, SettingsNavIcon> = {
   ghosts: Plug,
   'builtin-tools': Wrench,
   'computer-use': MonitorCog,
+  'cindy-make': Hammer,
   'im-bot': MessageCircle,
   help: CircleHelp,
   about: Info,
+  storage: Database,
 };
 
 interface SettingsSidebarNavProps {

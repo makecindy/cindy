@@ -12,9 +12,14 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import type { Schedule, CreateScheduleInput, UpdateScheduleInput } from '@cindy/maker-scheduler';
+import { BUILTIN_TEMPLATES, Scheduler } from '@cindy/maker-scheduler';
+import { applyTemplateToMobileScheduleDraft, buildMobileScheduleInput, createMobileScheduleDraft, updateDraftBoundSessionId } from '@cindy/maker-shared/schedule-form';
+
+const handlers = vi.hoisted(() => new Map<string, (...args: unknown[]) => Promise<unknown>>());
 
 vi.mock('electron', () => ({
-  ipcMain: { handle: vi.fn() },
+  ipcMain: { handle: vi.fn((name, handler) => handlers.set(name, handler)) },
   BrowserWindow: { getAllWindows: vi.fn(() => []) },
   app: {
     getPath: vi.fn(() => '/tmp/cindy-test-user-data'),
@@ -28,12 +33,17 @@ vi.mock('../../device-link/broadcast-tap.js', () => ({
   tapWindowBroadcast: vi.fn(),
 }));
 
+vi.mock('../../device-link/invoke-context.js', () => ({ isDeviceLinkInvoke: () => true }));
+
 vi.mock('../../agent-island/service.js', () => ({
   getAgentIslandService: () => null,
 }));
 
 import {
   normalizeLegacyDeviceLinkIntervalClear,
+  normalizeLegacyDeviceLinkModelSelection,
+  registerScheduleHandlers,
+  setSchedulerReady,
   normalizeNullableIntervalMs,
 } from '../schedule';
 
@@ -112,5 +122,94 @@ describe('normalizeLegacyDeviceLinkIntervalClear(旧版 mobile 的清空兼容)'
   it('device-link 的非全量 partial(缺 manual/notify 标记)不被伪造成清空', () => {
     const partial = { cronExpr: '0 9 * * *' };
     expect(normalizeLegacyDeviceLinkIntervalClear(partial, true)).toBe(partial);
+  });
+});
+
+
+describe('scheduled model selection IPC compatibility', () => {
+  const existing = { id: 'bound-schedule', targetSessionId: 'bound', agentKind: 'codex',
+    modelAgentKind: 'pi', model: 'pi-model', providerId: 'pi-source', effort: 'high', fastMode: true } as Schedule;
+  const fullForm = { cronExpr: '0 9 * * *', manual: false, notify: { desktop: true, feishu: false },
+    targetSessionId: 'bound', agentKind: 'codex', model: 'pi-model' } as UpdateScheduleInput;
+
+  it('normalizes an old Mobile full form inside the update handler before partial merge', async () => {
+    const updateFromCurrent = vi.fn(async (_id, update) => ({ ...existing, ...await update(existing) }));
+    setSchedulerReady({ updateFromCurrent } as never, {} as never);
+    registerScheduleHandlers();
+    const wire = JSON.parse(JSON.stringify({ ...fullForm, model: 'codex-model' }));
+    const result = await handlers.get('maker:schedule:update')!(null, existing.id, wire);
+    expect(result).toMatchObject({ agentKind: 'codex', modelAgentKind: 'codex', model: 'codex-model', fastMode: false });
+    expect(result).toHaveProperty('providerId', undefined);
+    expect(result).toHaveProperty('effort', undefined);
+    expect(updateFromCurrent).toHaveBeenCalledTimes(1);
+    expect(existing).toMatchObject({ modelAgentKind: 'pi', providerId: 'pi-source', fastMode: true });
+  });
+
+  it('preserves an untouched old full form and genuine local/remote partial updates', () => {
+    expect(normalizeLegacyDeviceLinkModelSelection(existing, fullForm, true)).toBe(fullForm);
+    const partial = { model: 'other' };
+    expect(normalizeLegacyDeviceLinkModelSelection(existing, partial, true)).toBe(partial);
+    const local = { ...fullForm, model: 'other' };
+    expect(normalizeLegacyDeviceLinkModelSelection(existing, local, false)).toBe(local);
+    const modern = { ...fullForm, model: 'other', modelAgentKind: 'pi' as const };
+    expect(normalizeLegacyDeviceLinkModelSelection(existing, modern, true)).toBe(modern);
+  });
+
+  it('clears the old explicit route when the old full form clears its model', () => {
+    const wire = JSON.parse(JSON.stringify({ ...fullForm, model: undefined }));
+    expect(normalizeLegacyDeviceLinkModelSelection(existing, wire, true)).toMatchObject({
+      modelAgentKind: undefined, model: undefined, providerId: undefined, effort: undefined, fastMode: false,
+    });
+  });
+
+  it.each([
+    { model: '', rebind: false }, { model: '   ', rebind: false }, { model: '', rebind: true },
+  ])('saves and reopens a Mobile bound form after clearing its model: %j', async ({ model, rebind }) => {
+    let saved = { ...existing, ...fullForm, name: 'Bound', prompt: 'Run',
+      recurring: true, timezone: 'UTC', status: 'active', workspaceKind: 'dialogue' } as Schedule;
+    const storage = {
+      get: vi.fn(async () => ({ ...saved })),
+      update: vi.fn(async (_id: string, patch: Partial<Schedule>) => {
+        saved = { ...saved, ...patch };
+        return { ...saved };
+      }),
+    };
+    const scheduler = new Scheduler({ storage: storage as never, runner: { fire: vi.fn() } });
+    setSchedulerReady(scheduler, storage as never);
+    registerScheduleHandlers();
+    const originalDraft = createMobileScheduleDraft({ ...saved, source: 'user' });
+    const draft = rebind
+      ? { ...updateDraftBoundSessionId(originalDraft, 'new-codex', 'codex'), persistentSession: true }
+      : originalDraft;
+    const targetSessionId = rebind ? 'new-codex' : 'bound';
+    const wire = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...draft, model })));
+    expect(wire).not.toHaveProperty('modelAgentKind');
+    const result = await handlers.get('maker:schedule:update')!(null, existing.id, wire);
+    expect(result).toMatchObject({ agentKind: 'codex', targetSessionId, persistentSession: rebind,
+      modelAgentKind: undefined, model: undefined, providerId: undefined, effort: 'high', fastMode: false });
+    expect(storage.update).toHaveBeenCalledTimes(1);
+    const reopened = createMobileScheduleDraft({ ...saved, source: 'user' });
+    expect(reopened).toMatchObject({ agentKind: 'codex', model: '', modelAgentKind: undefined });
+    const unchanged = JSON.parse(JSON.stringify(buildMobileScheduleInput({ ...reopened, name: 'Renamed' })));
+    await handlers.get('maker:schedule:update')!(null, existing.id, unchanged);
+    expect(saved).toMatchObject({ name: 'Renamed', agentKind: 'codex', model: undefined, modelAgentKind: undefined });
+  });
+
+  it.each([true, false])('passes a Mobile template choice and Fast=%s through the real creation handler', async (fastMode) => {
+    const template = BUILTIN_TEMPLATES[0]!;
+    const draft = applyTemplateToMobileScheduleDraft(createMobileScheduleDraft(), {
+      ...template, agentKind: 'pi', model: 'pi-model', providerId: 'pi-source', fastMode: true,
+      useWorktree: false,
+    });
+    const input = buildMobileScheduleInput({ ...draft, targetSessionId: 'bound', effort: 'high', fastMode });
+    const create = vi.fn(async (input: CreateScheduleInput) => input);
+    setSchedulerReady({ create } as never, {} as never);
+    registerScheduleHandlers();
+    const wire = JSON.parse(JSON.stringify({ templateId: template.id, overrides: input }));
+    await handlers.get('maker:schedule:create-from-template')!(null, wire);
+    expect(create).toHaveBeenCalledWith(expect.objectContaining({
+      targetSessionId: 'bound', agentKind: 'pi', modelAgentKind: 'pi', model: 'pi-model',
+      providerId: 'pi-source', effort: 'high', fastMode,
+    }));
   });
 });

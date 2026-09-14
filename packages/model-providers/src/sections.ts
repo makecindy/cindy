@@ -34,6 +34,7 @@ export interface SectionModel {
   displayName: string;
   description?: string;
   efforts: readonly Effort[];
+  displayEfforts?: readonly Effort[];
   defaultEffort: Effort | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
@@ -45,6 +46,7 @@ export interface SectionModel {
   contextWindow: number;
   /** 展示图标 id(AI Gateway / 目录设定,见 CatalogModel.icon);缺省回落来源供应商标。 */
   icon?: string;
+  availability?: CatalogModel['availability'];
 }
 
 export interface ProviderSection {
@@ -143,6 +145,7 @@ export function buildProviderSections(args: {
   selectedProviderId?: string | null;
   isVisible: (providerId: string, modelId: string) => boolean;
   query?: string;
+  includePaymentRequired?: boolean;
 }): ProviderSection[] {
   // 薄壳: 标准分段派生(modelList.ts)+ SectionModel 字段投影。历史语义逐项保持:
   //   - providerScope 'as-given': 本函数从不收窄供应商(调用方已自行收窄),薄壳不得
@@ -166,6 +169,7 @@ export function buildProviderSections(args: {
       ? { keepSelected: { providerId: args.selectedProviderId, modelId: args.selectedModelId } }
       : {}),
     ...(args.query !== undefined ? { query: args.query } : {}),
+    includePaymentRequired: args.includePaymentRequired === true,
   });
   return sections.map(({ provider, models }) => ({
     provider,
@@ -174,6 +178,7 @@ export function buildProviderSections(args: {
         id: m.id,
         displayName: m.name,
         efforts: m.efforts,
+        ...(m.displayEfforts ? { displayEfforts: m.displayEfforts } : {}),
         defaultEffort: m.defaultEffort,
         contextWindow: m.contextWindow,
       };
@@ -186,6 +191,7 @@ export function buildProviderSections(args: {
         sm.codexCompatibilityWireProtocol = m.codexCompatibilityWireProtocol;
       }
       if (m.icon !== undefined) sm.icon = m.icon;
+      if (m.availability !== undefined) sm.availability = m.availability;
       return sm;
     }),
   }));

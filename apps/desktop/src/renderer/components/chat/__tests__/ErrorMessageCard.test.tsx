@@ -18,6 +18,15 @@ const STREAM_RAW =
 afterEach(cleanup);
 
 describe('ErrorMessageCard', () => {
+  it('uses the same model access guidance for persisted failures as the live banner', () => {
+    render(createElement(ErrorMessageCard, {
+      message: 'Failed to authenticate. API Error: 403 user not allowed to access model',
+      reason: 'user_model_access_denied',
+      providerId: 'custom-provider',
+    }));
+    expect(screen.getByText('chat.errorBanner.modelAccessDenied')).toBeTruthy();
+    expect(screen.queryByText(/Failed to authenticate/)).toBeNull();
+  });
   it('shows friendly stream-interrupt copy plus a raw-error expander', () => {
     render(
       createElement(ErrorMessageCard, {
@@ -30,6 +39,32 @@ describe('ErrorMessageCard', () => {
     expect(screen.queryByText(STREAM_RAW)).toBeNull();
     fireEvent.click(screen.getByText('chat.errorBanner.networkShowRaw'));
     expect(screen.getByText(STREAM_RAW)).toBeTruthy();
+  });
+
+  it('localizes tool-loop terminal errors without exposing the internal category', () => {
+    render(
+      createElement(ErrorMessageCard, {
+        message: '内部熔断详情：missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      }),
+    );
+
+    expect(screen.getByText('logic.errors.toolUseLoopDetectedWithCount')).toBeTruthy();
+    expect(screen.queryByText('内部熔断详情：missing_required_field')).toBeNull();
+  });
+
+  it('uses the count wording for consecutive-call loops', () => {
+    render(
+      createElement(ErrorMessageCard, {
+        message: '内部熔断详情：consecutive',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'consecutive', count: 4 },
+      }),
+    );
+
+    expect(screen.getByText('logic.errors.toolUseLoopDetectedConsecutiveWithCount')).toBeTruthy();
+    expect(screen.queryByText('logic.errors.toolUseLoopDetectedWithCount')).toBeNull();
   });
 
   it('keeps genuine OpenAI errors as-is without an expander', () => {

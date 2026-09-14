@@ -9,6 +9,8 @@ import {
   KEY_FILE_NOT_FOUND_CODE,
   KEY_FILE_UNREADABLE_CODE,
   PINNED_AGENT_FAILED_CODE,
+  SSH_AGENT_UNAVAILABLE_CODE,
+  SSH_CONFIG_AUTH_UNSUPPORTED_CODE,
 } from '@cindy/maker-remote-ssh';
 
 import { classifyConnectFailure } from '../connect-failure.js';
@@ -54,5 +56,23 @@ describe('classifyConnectFailure', () => {
     expect(classifyConnectFailure(new Error('connect ETIMEDOUT 10.0.0.5:22')).code).toBe('SSH_CONNECT_FAILED');
     expect(classifyConnectFailure('connection closed before ready').code).toBe('SSH_CONNECT_FAILED');
     expect(classifyConnectFailure(undefined).code).toBe('SSH_CONNECT_FAILED');
+  });
+
+  it('surfaces the explicit Cindy authentication subset error', () => {
+    const err = new Error('SSH config authentication is outside Cindy\'s supported subset: IdentityAgent none');
+    (err as { code?: string }).code = SSH_CONFIG_AUTH_UNSUPPORTED_CODE;
+    expect(classifyConnectFailure(err)).toMatchObject({
+      code: 'SSH_CONFIG_AUTH_UNSUPPORTED',
+      msg: err.message,
+    });
+  });
+
+  it('surfaces an unavailable local SSH Agent separately from unsupported config', () => {
+    const err = new Error('$SSH_AUTH_SOCK is not set');
+    (err as { code?: string }).code = SSH_AGENT_UNAVAILABLE_CODE;
+    expect(classifyConnectFailure(err)).toEqual({
+      code: 'SSH_AGENT_UNAVAILABLE',
+      msg: err.message,
+    });
   });
 });

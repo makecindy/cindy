@@ -4,7 +4,7 @@
  *
  * 选择器复用草稿页同一套组件(2026-07-31 Lizi 要求,不另搭下拉),展示与
  * 交互与新建对话一致,不暴露「跟随默认 / 钉住」这层概念:
- * - Agent = VendorSegmentedSwitcher(cc/codex/pi 分段);
+ * - Harness 与模型作为完整配置由共享选择器一起保存;
  * - 模型/推理强度/Fast/供应商 = ModelSelector 的 field 形态,占满整行(标题在上、
  *   控件 w-full 在下,与 IM 默认配置同款);面板宽度绑定 trigger(DESIGN.md §4);
  * - 动手权限 = PermissionSelector(权限下拉全仓只此一份,不得私搭),
@@ -19,6 +19,7 @@
  * 亲选(与 pick 槽同一哲学)。
  */
 
+import { useModelPickerAgents } from '@/hooks/useAvailableAgents';
 import { useCallback, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Bot, FolderOpen, X } from 'lucide-react';
@@ -27,7 +28,6 @@ import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { PermissionSelector } from '@/components/new-chat/PermissionSelector';
-import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
 import {
   getEffortForModel,
   getFastModeForModel,
@@ -76,9 +76,11 @@ export function GhostErrandPrefs({
           next as Record<string, unknown>,
         );
         setConfig((result.config ?? {}) as ErrandConfig);
+        return true;
       } catch {
         setConfig(prev);
         toast.error(t('settings.ghosts.errors.generic'));
+        return false;
       }
     },
     [config, ghostId, t],
@@ -93,6 +95,8 @@ export function GhostErrandPrefs({
   const followVendor: 'cc' | 'codex' | 'pi' =
     draft.vendor === 'pi' ? 'pi' : draft.vendor === 'codex' ? 'codex' : 'cc';
   const vendor: 'cc' | 'codex' | 'pi' = config.agentKind ?? followVendor;
+  const pickerAgents = useModelPickerAgents(vendor === 'cc' ? 'claude-code' : vendor);
+
   const shownModel = config.model ?? draft.lastByVendor[vendor].model;
   const shownEffort = (config.effort ??
     getEffortForModel(shownModel) ??
@@ -147,35 +151,21 @@ export function GhostErrandPrefs({
         {t('settings.ghosts.detail.errandPrefs.desc')}
       </p>
 
-      {row(
-        'agent',
-        <VendorSegmentedSwitcher
-          value={vendor}
-          dense
-          width={200}
-          ariaLabel={t('settings.ghosts.detail.errandPrefs.agent')}
-          onChange={(next) => {
-            if (next === vendor && config.agentKind !== undefined) return;
-            // 换 agent 连带清掉模型组(跨 agent 的模型 id 互不通用);点选即把该组
-            // 值钉进本插件配置(未选过时才实时跟随草稿)。
-            void save({
-              ...config,
-              agentKind: next === 'pi' ? 'pi' : next === 'codex' ? 'codex' : 'cc',
-              model: undefined,
-              effort: undefined,
-              fastMode: undefined,
-              providerId: undefined,
-            });
-          }}
-        />,
-      )}
-
       {/* 模型选择器占满整行(标题在上、控件 w-full 在下,与 IM 默认配置同款):
           field 形态的面板宽度绑定 trigger 宽度(DESIGN.md §4),压到 60% 会让下拉
           窄到把模型名截断,所以这里给它整行宽度。 */}
       <div className="flex min-w-0 flex-col gap-2">
         <span className={labelCls}>{t('settings.ghosts.detail.errandPrefs.model')}</span>
         <ModelSelector
+          unifiedAgents={pickerAgents}
+          onUnifiedSelect={({ engine, providerId, modelId, effort, fast }) => save({
+            ...config,
+            agentKind: engine,
+            providerId,
+            model: modelId,
+            effort: ERRAND_EFFORTS.has(effort ?? '') ? effort : undefined,
+            fastMode: fast,
+          })}
           modelId={shownModel}
           effort={shownEffort}
           fastMode={shownFast}
@@ -186,17 +176,17 @@ export function GhostErrandPrefs({
           ariaContext={t('settings.ghosts.detail.errandPrefs.model')}
           onModelChange={(modelId) =>
             // 选模型即整组钉住(agent 一起钉,防草稿随后换 vendor 让模型悬空)。
-            void save({ ...config, agentKind: vendor, model: modelId, effort: undefined })
+            save({ ...config, agentKind: vendor, model: modelId, effort: undefined })
           }
           onEffortChange={(effort) => {
             if (!ERRAND_EFFORTS.has(effort)) return;
-            void save({ ...config, agentKind: vendor, model: shownModel, effort });
+            return save({ ...config, agentKind: vendor, model: shownModel, effort });
           }}
           onFastModeChange={(enabled) =>
-            void save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
+            save({ ...config, agentKind: vendor, model: shownModel, fastMode: enabled })
           }
-          onProviderChange={(providerId, modelId, reconciledEffort) =>
-            void save({
+          onProviderChange={(providerId, modelId, reconciledEffort, reconciledFast) =>
+            save({
               ...config,
               agentKind: vendor,
               model: modelId ?? shownModel,
@@ -204,6 +194,7 @@ export function GhostErrandPrefs({
                 ? reconciledEffort
                 : undefined,
               providerId: providerId ?? undefined,
+              fastMode: reconciledFast ?? false,
             })
           }
         />
@@ -225,7 +216,7 @@ export function GhostErrandPrefs({
             // disabledModes 已灰置非法档;这里再执一道白名单(UI 不是安全边界,
             // 存储层与协议层各有一道,三道口径一致)。
             if (!PERMISSION_ALLOWED.has(mode)) return;
-            void save({
+            save({
               ...config,
               permissionMode: mode === 'plan' ? undefined : (mode as 'acceptEdits' | 'auto'),
             });
@@ -248,7 +239,7 @@ export function GhostErrandPrefs({
           {config.workingDir ? (
             <button
               type="button"
-              onClick={() => void save({ ...config, workingDir: undefined })}
+              onClick={() => save({ ...config, workingDir: undefined })}
               aria-label={t('settings.ghosts.detail.errandPrefs.workdirClear')}
               className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[var(--text-tertiary)] hover:bg-[var(--surface-hover)] hover:text-[var(--text-secondary)]"
             >

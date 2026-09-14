@@ -12,6 +12,7 @@ import path from 'node:path';
 
 import { createLogger } from '../logger';
 import { gitExec, GitExecError } from '../worktree/gitExec';
+import { gitPathOutput } from '../worktree/gitPathOutput';
 import {
   buildSnapshotFilePlan,
   resolveSnapshotGitPath,
@@ -950,7 +951,7 @@ async function detectBlockedGitState(repoPath: string): Promise<SnapshotBlockedG
 
 async function resolveGitInternalPath(repoPath: string, marker: string): Promise<string | null> {
   const { stdout } = await gitExec(['rev-parse', '--git-path', marker], repoPath);
-  const gitPath = stdout.trim();
+  const gitPath = gitPathOutput(stdout);
   if (!gitPath) return null;
   return path.isAbsolute(gitPath) ? gitPath : path.resolve(repoPath, gitPath);
 }

@@ -32,6 +32,11 @@ describe('normalizeWorkdirKey(纯字符串归一化,不碰 fs)', () => {
 });
 
 describe('normalize(坏形态清洗)', () => {
+  it('preserves existing literal keys and keeps whitespace-distinct project policies separate', () => {
+    const prefs = { disabledByWorkdir: { '/repo': ['old-plugin'], '/repo ': ['other-plugin'] } };
+    expect(__testing.normalize(prefs)).toEqual(prefs);
+    expect(__testing.normalizeWorkdirKey('/repo ')).toBe('/repo ');
+  });
   it('合法条目保留(id 去重排序);空数组、非数组、空目录键全部清掉', () => {
     expect(
       __testing.normalize({

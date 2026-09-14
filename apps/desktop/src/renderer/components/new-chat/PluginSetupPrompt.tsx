@@ -1,5 +1,5 @@
 import { AlertCircle, Check, Circle, ExternalLink, LoaderCircle } from 'lucide-react';
-import { useEffect, useId, useState } from 'react';
+import { useEffect, useId, useState, type ComponentProps } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { InteractionPromptCardShell } from '@/components/interaction-portal';
@@ -14,6 +14,7 @@ import type {
 import type { GhostSetupStepPhase } from '../../../shared/ghost';
 
 interface PluginSetupPromptProps {
+  compact?: boolean;
   pending: PendingPluginSetup;
   viewerState: PluginSetupViewerState;
   commandInFlight: PluginSetupCommandInFlight | null;
@@ -52,6 +53,7 @@ export function PluginSetupPrompt({ pending, ...props }: PluginSetupPromptProps)
 
 function PluginSetupPromptStateful({
   pending,
+  compact = false,
   viewerState,
   commandInFlight,
   remote,
@@ -60,6 +62,7 @@ function PluginSetupPromptStateful({
 }: PluginSetupPromptProps) {
   const { t } = useTranslation();
   const inputId = useId();
+  const [iconFailed, setIconFailed] = useState(false);
   const [formValues, setFormValues] = useState<Record<string, string>>({});
   const [formTouched, setFormTouched] = useState<Record<string, boolean>>({});
   const [linkOpenFailed, setLinkOpenFailed] = useState<Record<string, boolean>>({});
@@ -90,8 +93,8 @@ function PluginSetupPromptStateful({
     pending.steps.some((step) => step.phase === 'cancelled') &&
     pending.steps.every((step) => isTerminalPhase(step.phase));
   const terminal = pending.terminal === true || allSatisfied || cancelledTerminal;
-  const busy = !!commandInFlight || (!!currentStep && RUNNING_PHASES.has(currentStep.phase));
-  const title = t('newChat.pluginSetup.title', { name: pending.ghost.name });
+  const busy = !!commandInFlight || (!compact && !!currentStep && RUNNING_PHASES.has(currentStep.phase));
+  const title = compact ? pending.ghost.name : t('newChat.pluginSetup.title', { name: pending.ghost.name });
   const inlineFormAction = currentStep?.action?.kind === 'inline_form' ? currentStep.action : null;
   const inlineFormField = inlineFormAction?.form.fields[0];
   const compactInlineForm = pending.steps.length === 1 && !!currentStep && !!inlineFormField;
@@ -141,6 +144,7 @@ function PluginSetupPromptStateful({
       return t('newChat.pluginSetup.saveConfiguration');
     }
     if (step.phase === 'failed') return t('newChat.pluginSetup.retry');
+    if (compact && (step.phase === 'waiting_external' || step.phase === 'action_running')) return t('newChat.pluginSetup.retry');
     if (step.phase === 'waiting_external' && step.action) {
       return t(`newChat.pluginSetup.action.${step.action.kind}`);
     }
@@ -390,7 +394,12 @@ function PluginSetupPromptStateful({
   };
 
   const footer = (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
+      {compact && pending.reopenActionId && !terminal && !remote ? <button type="button"
+        disabled={!!commandInFlight} onClick={() => onCommand(pending.requestId, 'run_action', pending.reopenActionId)}
+        className="h-9 rounded-[9999px] border border-[var(--border-default)] px-4 text-13 text-[var(--text-primary)] disabled:opacity-50">
+        {t('newChat.pluginSetup.reopen')}
+      </button> : null}
       {currentStep?.action && !terminal && !hasCurrentGroupAlternatives ? (
         <button
           type="button"
@@ -433,8 +442,9 @@ function PluginSetupPromptStateful({
     </div>
   );
 
+  const Shell = compact ? AuthorizationShell : InteractionPromptCardShell;
   return (
-    <InteractionPromptCardShell
+    <Shell
       viewerState={viewerState}
       onViewerStateChange={onViewerStateChange}
       collapsible={false}
@@ -444,20 +454,21 @@ function PluginSetupPromptStateful({
       minimizeAriaLabel={t('newChat.pluginSetup.minimizeAria', { name: pending.ghost.name })}
       headerLeading={
         <div className="flex min-w-0 items-center gap-[10px]">
-          <span className="h-6 w-6 shrink-0">
-            <GhostPluginIcon
+          {(!compact || (pending.ghost.iconDataUrl && !iconFailed)) ? <span className="h-6 w-6 shrink-0">
+            {compact ? <img src={pending.ghost.iconDataUrl} alt="" className="h-6 w-6 rounded-lg object-contain" onError={() => setIconFailed(true)} /> : <GhostPluginIcon
               iconId={pending.ghost.id}
               iconName={pending.ghost.name}
               iconDataUrl={pending.ghost.iconDataUrl}
               size="mini"
-            />
-          </span>
+            />}
+          </span> : null}
           <span className="truncate text-14 font-semibold text-[var(--ask-header-text)]">
             {title}
           </span>
+          {compact && minimizedStatus ? <span className="ml-auto shrink-0 text-12 text-[var(--text-secondary)]">{minimizedStatus}</span> : null}
         </div>
       }
-      footer={footer}
+      footer={terminal ? undefined : footer}
     >
       <div className="flex flex-col gap-[10px]" role="status" aria-live="polite" aria-label={title}>
         {!compactInlineForm && pending.intro ? (
@@ -470,7 +481,7 @@ function PluginSetupPromptStateful({
           </div>
         ) : null}
 
-        {compactInlineForm && currentStep && inlineFormField ? (
+        {compact && terminal ? null : compactInlineForm && currentStep && inlineFormField ? (
           <div className="flex flex-col gap-2">
             {inlineLead ? (
               <p className="text-14 leading-5 text-[var(--ask-option-desc)]">{inlineLead}</p>
@@ -531,7 +542,7 @@ function PluginSetupPromptStateful({
                       index > 0 && 'border-t border-[var(--ask-option-divider)]',
                     )}
                   >
-                    {!alternativeStep ? (
+                    {!alternativeStep && !(compact && pending.steps.length === 1) ? (
                       <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center text-[var(--ask-page-text)]">
                         {satisfied ? (
                           <Check aria-hidden="true" size={16} />
@@ -557,7 +568,7 @@ function PluginSetupPromptStateful({
                           </label>
                         ) : (
                           <span className="text-14 font-medium text-[var(--ask-option-label)]">
-                            {step.title}
+                            {compact && normalizedCopy(step.title) === normalizedCopy(pending.ghost.name) ? null : step.title}
                           </span>
                         )}
                         {!flatStepList ? (
@@ -604,6 +615,15 @@ function PluginSetupPromptStateful({
           </div>
         )}
       </div>
-    </InteractionPromptCardShell>
+    </Shell>
   );
+}
+
+/** Transcript variant shares all setup controls without the floating prompt chrome. */
+function AuthorizationShell({ headerLeading, footer, children }: ComponentProps<typeof InteractionPromptCardShell>) {
+  return <section className="rounded-[12px] border border-[var(--border-default)] bg-[var(--surface-elevated)] p-4">
+    {headerLeading}
+    <div className="mt-3 empty:hidden">{children}</div>
+    {footer ? <div className="mt-4">{footer}</div> : null}
+  </section>;
 }

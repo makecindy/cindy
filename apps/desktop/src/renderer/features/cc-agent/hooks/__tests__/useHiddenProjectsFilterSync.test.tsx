@@ -194,3 +194,38 @@ describe('hidden-project filter synchronization', () => {
     });
   });
 });
+
+describe('sidebar content filter reset', () => {
+  it('preserves archived status and display preferences while clearing project, Pi and activity filters', () => {
+    const view = renderHook(() => useSyncedSidebarFilter());
+    act(() => {
+      view.result.current.setStatus('archived');
+      view.result.current.toggleProject(PROJECT_A);
+      view.result.current.setVendor('pi');
+      view.result.current.setLastActivity('7d');
+      view.result.current.setSortBy('priority');
+      view.result.current.setGroupBy('flat');
+    });
+    act(() => view.result.current.resetContentFilters());
+    expect(view.result.current).toMatchObject({
+      status: 'archived',
+      projects: 'all',
+      vendor: 'all',
+      lastActivity: 'all',
+      sortBy: 'priority',
+      groupBy: 'flat',
+      isSessionContentFiltered: true,
+    });
+    view.unmount();
+    const restored = renderHook(() => useSyncedSidebarFilter());
+    expect(restored.result.current).toMatchObject({
+      status: 'archived',
+      projects: 'all',
+      vendor: 'all',
+      lastActivity: 'all',
+      sortBy: 'priority',
+      groupBy: 'flat',
+    });
+    restored.unmount();
+  });
+});

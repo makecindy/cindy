@@ -181,7 +181,7 @@ describe('PrRefsProvider owner 切换的在飞隔离', () => {
     const { result, rerender } = renderHook(
       () => {
         const { registerPrConsumer } = usePrActions();
-        const status = usePrStatus('octo/repo#9');
+        const status = usePrStatus('session-s', 'octo/repo#9');
         return { registerPrConsumer, status };
       },
       { wrapper },

@@ -8,7 +8,8 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   collectKnownUserMessageIds,
@@ -26,6 +27,7 @@ import {
   resolveNearBottomOnScroll,
   resolveRenderPinDecision,
   resolveSendWindowHandoff,
+  resolveWindowCoverageLossAction,
   selectTailUserMessageId,
   isVerticalScrollbarPress,
   shouldRepinOnDownIntent,
@@ -594,7 +596,7 @@ describe('send follow cancel generation', () => {
     expect(readSendFollowCancelGeneration('session-b')).toBe(bStart + 1);
   });
 
-  it('bumps on scrollbar unpin and continued user up-scroll, not on content growth while following', () => {
+  it('bumps only when leaving the tail, not on leftover up-scroll while already away', () => {
     expect(
       shouldBumpSendFollowCancelOnScroll({
         wasNearBottom: true,
@@ -610,7 +612,7 @@ describe('send follow cancel generation', () => {
         scrollDelta: -40,
         directionDeadZonePx: 2,
       }),
-    ).toBe(true);
+    ).toBe(false);
     expect(
       shouldBumpSendFollowCancelOnScroll({
         wasNearBottom: true,
@@ -711,6 +713,30 @@ describe('resolveSendWindowHandoff', () => {
   });
 });
 
+describe('resolveWindowCoverageLossAction', () => {
+  it('hands an automatically expanded window back to the tail when append breaks coverage', () => {
+    expect(
+      resolveWindowCoverageLossAction({
+        hasWindowAnchor: true,
+        wasCoveringEnd: true,
+        windowCoversEnd: false,
+        wasFollowingTail: true,
+      }),
+    ).toBe('handoff-to-tail');
+  });
+
+  it('preserves an active history anchor when append breaks coverage away from the tail', () => {
+    expect(
+      resolveWindowCoverageLossAction({
+        hasWindowAnchor: true,
+        wasCoveringEnd: true,
+        windowCoversEnd: false,
+        wasFollowingTail: false,
+      }),
+    ).toBe('preserve-anchor');
+  });
+});
+
 describe('resolveLastUserMessageObservation', () => {
   it('seeds a restored user tail hydrated after mount without treating it as a send', () => {
     expect(
@@ -777,9 +803,49 @@ describe('resolveLastUserMessageObservation', () => {
 });
 
 describe('MessageStream send-window handoff wiring', () => {
+  it.each([true, false])('upward intent ends restoration and cancels follow only when pinned (%s)', (nearBottom) => {
+    const source = ts.createSourceFile('MessageStream.tsx',
+      readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8'),
+      ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const component = source.statements.find((node): node is ts.FunctionDeclaration =>
+      ts.isFunctionDeclaration(node) && node.name?.text === 'MessageStream');
+    const declaration = component?.body?.statements
+      .filter(ts.isVariableStatement)
+      .flatMap((node) => Array.from(node.declarationList.declarations))
+      .find((node) => node.name.getText(source) === 'unpinAutoFollowForUserUpIntent');
+    if (!declaration?.initializer || !ts.isCallExpression(declaration.initializer)) {
+      throw new Error('Upward-intent callback not found');
+    }
+    const callback = declaration.initializer.arguments[0];
+    const code = ts.transpileModule(`(${callback.getText(source)})();`, {
+      compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None },
+    }).outputText;
+    const bindings = {
+      restoringRef: { current: true },
+      isNearBottomRef: { current: nearBottom },
+      sessionId: `up-intent-${nearBottom}`,
+      bumpSendFollowCancelGeneration,
+      setIsNearBottom: vi.fn(),
+    };
+    const startGeneration = readSendFollowCancelGeneration(bindings.sessionId);
+    const unpin = new Function(...Object.keys(bindings), code);
+    unpin(...Object.values(bindings));
+    expect(bindings.restoringRef.current).toBe(false);
+    expect(bindings.isNearBottomRef.current).toBe(false);
+    expect(readSendFollowCancelGeneration(bindings.sessionId)).toBe(startGeneration + Number(nearBottom));
+    if (nearBottom) expect(bindings.setIsNearBottom).toHaveBeenCalledExactlyOnceWith(false);
+    else expect(bindings.setIsNearBottom).not.toHaveBeenCalled();
+    // Leftover upward input away from the tail must not cancel another send.
+    unpin(...Object.values(bindings));
+    expect(readSendFollowCancelGeneration(bindings.sessionId)).toBe(startGeneration + Number(nearBottom));
+  });
+
   it('clears any anchored window on a local send and only defers pin for stale slices', () => {
     const source = readFileSync(resolve(__dirname, '../components/chat/MessageStream.tsx'), 'utf8');
     expect(source).toContain('resolveSendWindowHandoff({');
+    expect(source).toContain('resolveWindowCoverageLossAction({');
+    expect(source).toContain("if (coverageLossAction === 'handoff-to-tail')");
+    expect(source).toContain("if (coverageLossAction === 'preserve-anchor')");
     expect(source).toContain('if (windowHandoff.clearWindowAnchor)');
     expect(source).toContain('if (decision.pinToBottom && !windowHandoff.deferPinToNextRender)');
     expect(source).not.toContain('realTailUserSendOutsideWindow');
@@ -787,7 +853,6 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('subscribeFollowLatestRequests');
     expect(source).toContain('readFollowLatestRequestKey(sessionId)');
     expect(source).toContain('pinToBottom();');
-    expect(source).toContain('bumpSendFollowCancelGeneration(sessionId)');
     expect(source).toContain('shouldBumpSendFollowCancelOnScroll({');
     expect(source).toContain('knownUserMessageIds: knownUserMessageIdsRef.current');
     expect(source).toContain('collectKnownUserMessageIds(messages,');
@@ -799,19 +864,28 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain('cancelFocusJump({ consumeDeferredDelete: true });');
   });
 
-  it('session view commits follow-latest only after accept and unchanged scroll generation', () => {
+  it('session view requests follow-latest at send dispatch, not after accept', () => {
     const source = readFileSync(
       resolve(__dirname, '../features/cc-agent/CCAgentSessionView.tsx'),
       'utf8',
     );
     expect(source).toContain('tryRequestFollowLatest({');
-    expect(source).toContain('requestFollowLatest(sessionId, followStartGeneration)');
     expect(source).toContain(
       'const followStartGeneration = readSendFollowCancelGeneration(sessionId);',
     );
+    expect(source).toContain('if (sessionId) requestFollowLatest(sessionId, followStartGeneration);');
+    expect(source).toMatch(
+      /if \(sessionId\) requestFollowLatest\(sessionId, followStartGeneration\);\s*const accepted = await sendMessage\(/,
+    );
+    expect(source).toMatch(
+      /if \(sessionId\) requestFollowLatest\(sessionId, followStartGeneration\);\s*const accepted = await steerMessage\(/,
+    );
+    expect(source).not.toMatch(
+      /const accepted = await sendMessage\([\s\S]{0,400}requestFollowLatest\(sessionId, followStartGeneration\)/,
+    );
   });
 
-  it('edit-resend and blocked resend request follow-latest through the same owner', () => {
+  it('edit-resend and blocked resend request follow-latest at dispatch', () => {
     const source = readFileSync(
       resolve(__dirname, '../components/chat/UserMessageEditBox.tsx'),
       'utf8',
@@ -820,6 +894,8 @@ describe('MessageStream send-window handoff wiring', () => {
     expect(source).toContain(
       'const followStartGeneration = readSendFollowCancelGeneration(sessionId);',
     );
-    expect(source).toContain('if (accepted)');
+    expect(source).toMatch(
+      /tryRequestFollowLatest\(\{[\s\S]*?\}\);\s*if \(onCommitOverride\)/,
+    );
   });
 });

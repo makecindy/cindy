@@ -14,7 +14,7 @@
  * 统一 spinner + "正在发布中"文案,不分步展示。
  */
 
-import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
@@ -24,8 +24,9 @@ import { X, CloudUpload, Globe, Users, Lock, RefreshCw, CircleAlert, Check, Chev
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
+import { useAuth } from '@/contexts/AuthContext';
+import { getDataOwnerGeneration, isDataOwnerGenerationCurrent, isDataOwnerIdCurrent } from '@/contexts/dataOwnerGeneration';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { AudiencePicker, PublisherPicker } from './components/TeamScopePicker';
 import { pickDefaultVersion } from './versionUtils';
 import { triggerIncrementalSync } from './hooks/useSkillSync';
 import { invalidateHash } from './hooks/useSkillFolderHash';
@@ -33,15 +34,16 @@ import { refresh as refreshSkillhub } from './hooks/useSkillhub';
 import { getPublishErrorCopy, type PublishActionType } from './lib/publishErrorMap';
 import { shouldHandlePublishProgressEvent } from './lib/publishProgressFilter';
 import { buildPublishFailureEvent, shouldDispatchPublishResultFallback } from './lib/publishFailureFallback';
-import { selectableUserTeams } from './lib/userTeams';
+import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 import {
   buildSkillhubPublishParams,
-  validateRequiredCategory,
+  validatePlatformTagSelection,
   validateVisibilityScope,
   type PublishFormValues,
   type PublishVisibility,
 } from './lib/publishForm';
 import type { MarketCategory } from '../../../shared/skillhubCategory';
+import { PlatformTagSelector } from './components/PlatformTagSelector';
 
 // ── State machine types ───────────────────────────────────────────────────────
 
@@ -61,6 +63,7 @@ interface FailurePayload {
 
 export interface ScanResultPayload {
   status: string;
+  rejectionReason?: string;
   gates?: Array<{ name: string; label?: Record<string, string>; status: string; issues?: unknown[] }>;
 }
 
@@ -148,8 +151,8 @@ const INITIAL_STATE: PublishState = {
   scanGates: [],
 };
 
-const AUTO_CATEGORY_VALUE = '__auto_category__';
-const PUBLISH_TEXT_LIMIT = 280;
+const DESCRIPTION_LIMIT = 2_000;
+const CHANGELOG_LIMIT = 280;
 
 /** working = 5 种 active phase 的合并语义,UI 上统一处理 */
 function isWorkingPhase(phase: PublishPhase): boolean {
@@ -487,10 +490,6 @@ export interface PublishDialogProps {
   latestVersionStatus?: string | null;
   /** Latest version submitted to Hub and its review status. Rejected versions can be reused. */
   pendingVersion?: { version?: string | null; status?: string | null } | null;
-  /** Dept ids the current user can see. */
-  currentUserDeptIds: string[];
-  /** Dept display names parallel to currentUserDeptIds. */
-  currentUserDeptNames: string[];
   /**
    * 仅 autoCleanName 改名流程触发:本地 skill 已被改名(目录 + frontmatter)。
    * DetailView 拿到新 absolutePath/name 后,刷新 scanner 并导航到新 URL,
@@ -511,8 +510,6 @@ export function PublishDialog({
   latestVersion,
   latestVersionStatus,
   pendingVersion,
-  currentUserDeptIds,
-  currentUserDeptNames,
   onLocalRenamed,
   onScanResult,
 }: PublishDialogProps) {
@@ -520,6 +517,12 @@ export function PublishDialog({
   const [pubState, dispatch] = useReducer(publishReducer, INITIAL_STATE);
   const { confirm } = useConfirmDialog();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const identityPolicy = useSkillhubIdentityPolicy(user);
+  // A same-membership auth realm change preserves this route, but must not
+  // preserve a dialog opened for the previous identity or its continuations.
+  const dialogOwner = useMemo(() => getDataOwnerGeneration(), [open]);
+  const isDialogOwnerCurrent = isDataOwnerGenerationCurrent(dialogOwner);
 
   // refresh/sync 延迟到 dialog 关闭后才触发，isFirstPublish 在 dialog 生命周期内不会翻转
   const effectiveFirstPublish = isFirstPublish;
@@ -531,6 +534,11 @@ export function PublishDialog({
   const renamedToRef = useRef<{ absolutePath: string; name: string } | null>(null);
   const activePublishNameRef = useRef<string | null>(null);
   const failedProgressNameRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
   /** 拿当前应使用的 (absolutePath, name) — rename 之后是新值,否则用 prop。 */
   const effectiveSkill = useCallback(
     (): { absolutePath: string; name: string } => ({
@@ -553,19 +561,21 @@ export function PublishDialog({
     }
   }, [onLocalRenamed]);
 
+  const reconcileCommittedRename = useCallback(() => {
+    // A committed filesystem rename remains real across auth realms sharing
+    // this local owner. Repair its mounted route without resuming publication.
+    if (mountedRef.current && isDataOwnerIdCurrent(dialogOwner)) notifyRenameAndReset();
+    else renamedToRef.current = null;
+  }, [dialogOwner, notifyRenameAndReset]);
 
-  // ── User teams (for multi-team visibility) ──────────────────────────────
-  const [userTeams, setUserTeams] = useState<Array<{ slug: string; name: string; type: string }>>([]);
   useEffect(() => {
-    if (!open || !effectiveFirstPublish) return;
-    void window.electronAPI.skillhub.listUserTeams().then((res) => {
-      if (res.success) {
-        const teams = selectableUserTeams(res.teams)
-          .map((t) => ({ slug: t.slug, name: t.name, type: t.type ?? 'team' }));
-        setUserTeams(teams);
-      }
-    });
-  }, [open, effectiveFirstPublish, currentUserDeptIds]);
+    if (!open || isDialogOwnerCurrent) return;
+    activePublishNameRef.current = null;
+    failedProgressNameRef.current = null;
+    reconcileCommittedRename();
+    dispatch({ type: 'CLOSE' });
+    onOpenChange(false);
+  }, [open, isDialogOwnerCurrent, onOpenChange, reconcileCommittedRename]);
 
   // ── Hub categories (required for first publish only) ─────────────────────
   const [categoryState, setCategoryState] = useState<CategoryState>({
@@ -573,11 +583,13 @@ export function PublishDialog({
     categories: [],
     error: null,
   });
+  const platformCategories = useMemo(() => categoryState.categories, [categoryState.categories]);
 
   const loadCategories = useCallback(async () => {
     setCategoryState({ loading: true, categories: [], error: null });
     try {
       const res = await window.electronAPI.skillhub.listCategories();
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       if (res.success) {
         setCategoryState({
           loading: false,
@@ -592,13 +604,14 @@ export function PublishDialog({
         error: res.error ?? 'Failed to load categories',
       });
     } catch (err) {
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       setCategoryState({
         loading: false,
         categories: [],
         error: err instanceof Error ? err.message : String(err),
       });
     }
-  }, []);
+  }, [dialogOwner]);
 
   useEffect(() => {
     if (!open || !effectiveFirstPublish) return;
@@ -614,7 +627,7 @@ export function PublishDialog({
   const frontmatterVersion = (skill.frontmatter?.['version'] as string | undefined) ?? '';
 
   const defaultVersion = pickDefaultVersion(frontmatterVersion || undefined, latestVersion, pendingVersion, latestVersionStatus);
-  // 默认对齐 SkillHub:公开 · 个人发布者
+  // 新服务以当前 membership 固定归属，客户端不再允许跨归属发布。
   const [form, setForm] = useState<PublishFormValues>(() => ({
     name: autoCleanName ? '' : skill.name,
     version: defaultVersion,
@@ -622,13 +635,12 @@ export function PublishDialog({
     summary: frontmatterSummary,
     description: frontmatterSummary,
     visibility: 'PUBLIC',
-    publisherMode: 'personal',
+    publisherMode: identityPolicy.ownerType === 'organization' ? 'team' : 'personal',
     ownerTeamSlug: '',
     visibleDeptIds: [],
     sharedTeamSlugs: [],
     changelog: '',
-    categoryMode: 'auto',
-    categorySlug: '',
+    categorySlugs: [],
   }));
 
   // Reset form when dialog opens or latestVersion loads (info API async)
@@ -641,21 +653,21 @@ export function PublishDialog({
         summary: frontmatterSummary,
         description: frontmatterSummary,
         visibility: 'PUBLIC',
-        publisherMode: 'personal',
+        publisherMode: identityPolicy.ownerType === 'organization' ? 'team' : 'personal',
         ownerTeamSlug: '',
         visibleDeptIds: [],
         sharedTeamSlugs: [],
         changelog: '',
-        categoryMode: 'auto',
-        categorySlug: '',
+        categorySlugs: [],
       });
     }
-  }, [open, latestVersion, latestVersionStatus, pendingVersion]);
+  }, [open, latestVersion, latestVersionStatus, pendingVersion, identityPolicy.ownerType]);
 
   // ── Progress event subscription ───────────────────────────────────────────
   useEffect(() => {
     if (!open) return;
     const unsubscribe = window.electronAPI.skillhub.onPublishProgress((event) => {
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
       const activeName = activePublishNameRef.current;
       if (!shouldHandlePublishProgressEvent(event, activeName)) return;
       if (event.phase === 'done') {
@@ -669,11 +681,13 @@ export function PublishDialog({
         return;
       }
       if (event.phase === 'scan-result') {
+        const owner = getDataOwnerGeneration();
         const eff = effectiveSkill();
         if (event.name !== eff.name) return;
         void (async () => {
           invalidateHash(eff.absolutePath);
           await refreshSkillhub();
+          if (!isDataOwnerGenerationCurrent(owner)) return;
           void triggerIncrementalSync([event.name]);
           dispatch({ type: 'CLOSE' });
           onOpenChange(false);
@@ -683,7 +697,9 @@ export function PublishDialog({
           }
           activePublishNameRef.current = null;
           failedProgressNameRef.current = null;
-          onScanResult?.({ status: event.status, gates: event.gates });
+          if (isDataOwnerGenerationCurrent(owner)) {
+            onScanResult?.({ status: event.status, gates: event.gates, rejectionReason: event.rejectionReason });
+          }
         })();
         return;
       }
@@ -693,25 +709,28 @@ export function PublishDialog({
       dispatch({ type: 'PROGRESS', event });
     });
     return unsubscribe;
-  }, [open, onOpenChange, onLocalRenamed, onScanResult, effectiveSkill]);
+  }, [open, onOpenChange, onLocalRenamed, onScanResult, effectiveSkill, dialogOwner]);
 
   // ── Form validation ───────────────────────────────────────────────────────
   const nameMissing = effectiveFirstPublish && form.name.length === 0;
   const nameError = form.name.length > 0 && !isValidName(form.name);
   const displayNameError = form.displayName.length > 64;
-  const summaryError = form.summary.length > PUBLISH_TEXT_LIMIT;
+  const descriptionLength = Array.from(form.summary).length;
+  const descriptionError = descriptionLength > DESCRIPTION_LIMIT;
   const changelogRequired = !effectiveFirstPublish && form.changelog.trim().length === 0;
-  const changelogError = !effectiveFirstPublish && form.changelog.length > PUBLISH_TEXT_LIMIT;
+  const changelogError = !effectiveFirstPublish && form.changelog.length > CHANGELOG_LIMIT;
   const versionError = form.version.length > 0 && !isValidVersion(form.version);
 
-  const visibilityScopeValidation = validateVisibilityScope(form);
+  const visibilityScopeValidation = identityPolicy.ownerType
+    ? { ok: true as const }
+    : validateVisibilityScope(form);
+  const visibilityAllowed = identityPolicy.allowedVisibilities.includes(form.visibility);
   const categoryValidation = effectiveFirstPublish
-    ? validateRequiredCategory({
+    ? validatePlatformTagSelection({
       loading: categoryState.loading,
       error: categoryState.error,
-      categories: categoryState.categories,
-      categoryMode: form.categoryMode,
-      selectedSlug: form.categorySlug,
+      categories: platformCategories,
+      selectedSlugs: form.categorySlugs,
     })
     : { ok: true as const };
 
@@ -720,9 +739,10 @@ export function PublishDialog({
     isValidVersion(form.version) &&
     categoryValidation.ok &&
     (effectiveFirstPublish ? !displayNameError : true) &&
-    (effectiveFirstPublish ? !summaryError : true) &&
+    (effectiveFirstPublish ? !descriptionError : true) &&
     !changelogRequired &&
     !changelogError &&
+    visibilityAllowed &&
     (effectiveFirstPublish ? visibilityScopeValidation.ok : true);
 
   const buildCurrentPublishParams = useCallback(
@@ -731,15 +751,19 @@ export function PublishDialog({
       publishAbsolutePath,
       submitName,
       isFirstPublish: effectiveFirstPublish,
+      ownerType: identityPolicy.ownerType,
+      categories: platformCategories,
     }),
-    [form, effectiveFirstPublish],
+    [form, effectiveFirstPublish, identityPolicy.ownerType, platformCategories],
   );
 
   const runPublish = useCallback((params: SkillhubPublishParams) => {
+    if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
     activePublishNameRef.current = params.name;
     failedProgressNameRef.current = null;
     void window.electronAPI.skillhub.publish(params)
       .then((res) => {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         if (res.success) {
           if (activePublishNameRef.current !== params.name) return;
           if (res.result) {
@@ -754,17 +778,18 @@ export function PublishDialog({
         });
       })
       .catch((err) => {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         if (!shouldDispatchPublishResultFallback(params.name, activePublishNameRef.current, failedProgressNameRef.current)) return;
         dispatch({
           type: 'PROGRESS',
           event: buildPublishFailureEvent(params.name, 'INTERNAL', err),
         });
       });
-  }, []);
+  }, [dialogOwner]);
 
   // ── Submit ────────────────────────────────────────────────────────────────
   const handleSubmit = useCallback(async () => {
-    if (!canSubmit) return;
+    if (!canSubmit || !isDataOwnerGenerationCurrent(dialogOwner)) return;
 
     const eff = effectiveSkill();
     const submitName = effectiveFirstPublish
@@ -781,7 +806,7 @@ export function PublishDialog({
       confirmText: t('skillhub.publishDialog.confirmPublish'),
       cancelText: t('skillhub.publishDialog.confirmReconsider'),
     });
-    if (!ok) return;
+    if (!ok || !isDataOwnerGenerationCurrent(dialogOwner)) return;
 
     // ── autoCleanName(撞名后改名)流程:先在本地改名,再走 publish ──────────
     // 不改名(autoCleanName=false 或新旧名一致)时跳过这一步。
@@ -797,6 +822,7 @@ export function PublishDialog({
         newName: submitName,
       });
       if (!renameRes.success) {
+        if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
         toast.error(t('skillhub.publishDialog.renameFailed', { error: renameRes.error }));
         return;
       }
@@ -804,6 +830,10 @@ export function PublishDialog({
       publishAbsolutePath = renameRes.newAbsolutePath;
       // 旧路径的 hash 缓存清掉(它指向已不存在的目录)
       invalidateHash(eff.absolutePath);
+      if (!isDataOwnerGenerationCurrent(dialogOwner)) {
+        reconcileCommittedRename();
+        return;
+      }
     }
 
     dispatch({ type: 'SUBMIT' });
@@ -825,10 +855,13 @@ export function PublishDialog({
     buildCurrentPublishParams,
     runPublish,
     skill.discoveredPath,
+    dialogOwner,
+    reconcileCommittedRename,
   ]);
 
   // ── Cancel publish in progress (working / failure 都可调) ────────────────
   const handleCancelWorking = useCallback(async () => {
+    if (!isDataOwnerGenerationCurrent(dialogOwner)) return;
     if (pubState.phase === 'scanning') {
       activePublishNameRef.current = null;
       failedProgressNameRef.current = null;
@@ -843,14 +876,14 @@ export function PublishDialog({
       confirmText: t('skillhub.publishDialog.cancelDialog.confirm'),
       cancelText: t('skillhub.publishDialog.cancelDialog.cancel'),
     });
-    if (!ok) return;
+    if (!ok || !isDataOwnerGenerationCurrent(dialogOwner)) return;
     void window.electronAPI.skillhub.cancelPublish();
     activePublishNameRef.current = null;
     failedProgressNameRef.current = null;
     dispatch({ type: 'CLOSE' });
     notifyRenameAndReset();
     onOpenChange(false);
-  }, [pubState.phase, onOpenChange, confirm, notifyRenameAndReset, t]);
+  }, [pubState.phase, onOpenChange, confirm, notifyRenameAndReset, t, dialogOwner]);
 
   // ── 关闭整个 dialog (X / Esc / backdrop) ────────────────────────────────
   const handleClose = useCallback(() => {
@@ -941,9 +974,6 @@ export function PublishDialog({
       ? getPublishErrorCopy(pubState.failurePayload.errorCode)
       : null;
 
-  // ── Dept section available? ───────────────────────────────────────────────
-  const hasDepts = currentUserDeptIds.length > 0;
-
   // dlg-head subtitle — 优先 frontmatter displayName，fallback 到目录名
   const skillDisplayTitle = frontmatterDisplayName !== skill.name ? frontmatterDisplayName : skill.name;
   const baseSubtitle = effectiveFirstPublish
@@ -958,7 +988,7 @@ export function PublishDialog({
     <>
       {/* ── Main PublishDialog (Empty / Working / Failure 共用) ───────────── */}
       <Dialog.Root
-        open={open}
+        open={open && isDialogOwnerCurrent}
         onOpenChange={(v) => {
           if (!v) handleClose();
         }}
@@ -1073,45 +1103,33 @@ export function PublishDialog({
                     <span
                       className={cn(
                         'px-0.5 text-xs tabular-nums',
-                        summaryError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
+                        descriptionError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
                       )}
                     >
-                      {form.summary.length}/{PUBLISH_TEXT_LIMIT}
+                      {descriptionLength}/{DESCRIPTION_LIMIT}
                     </span>
                   </div>
                   <TextareaInput
                     value={form.summary}
                     onChange={(v) => setForm((f) => ({ ...f, summary: v, description: v }))}
                     placeholder={t('skillhub.publishDialog.descriptionPlaceholder')}
-                    maxLength={PUBLISH_TEXT_LIMIT}
                   />
                 </div>
               )}
 
-              {/* Category — first publish only, sourced from XD Skill Hub */}
+              {/* Platform tags — first publish only, sourced from Skill Hub */}
               {effectiveFirstPublish && (
                 <div className="flex flex-col gap-1.5">
                   <FieldLabel>{t('skillhub.publishDialog.categoryLabel')}</FieldLabel>
-                  <SelectInput
-                    value={form.categoryMode === 'auto' ? AUTO_CATEGORY_VALUE : form.categorySlug}
-                    disabled={isLocked}
-                    onChange={(v) => setForm((f) => (
-                      v === AUTO_CATEGORY_VALUE
-                        ? { ...f, categoryMode: 'auto', categorySlug: '' }
-                        : { ...f, categoryMode: 'manual', categorySlug: v }
-                    ))}
-                    options={[
-                      {
-                        value: AUTO_CATEGORY_VALUE,
-                        label: t('skillhub.publishDialog.categoryAuto'),
-                      },
-                      ...categoryState.categories.map((category) => ({
-                        value: category.slug,
-                        label: category.name,
-                      })),
-                    ]}
+                  <PlatformTagSelector
+                    categories={platformCategories}
+                    value={form.categorySlugs}
+                    onChange={(categorySlugs) => setForm((f) => ({ ...f, categorySlugs }))}
+                    disabled={isLocked || categoryState.loading || platformCategories.length === 0}
+                    ariaLabel={t('skillhub.publishDialog.categoryLabel')}
+                    placeholder={t('skillhub.publishDialog.categoryPlaceholder')}
                   />
-                  {!categoryValidation.ok && categoryValidation.reason !== 'required' && (
+                  {!categoryValidation.ok && (
                     <div className="flex items-center justify-between gap-3 px-0.5">
                       <p className="min-w-0 text-xs text-[var(--cmd-palette-item-meta)]">
                         {categoryValidation.reason === 'loading'
@@ -1136,11 +1154,6 @@ export function PublishDialog({
                       )}
                     </div>
                   )}
-                  {!categoryValidation.ok && categoryValidation.reason === 'required' && (
-                    <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">
-                      {t('skillhub.publishDialog.categoryRequired')}
-                    </p>
-                  )}
                 </div>
               )}
 
@@ -1148,8 +1161,8 @@ export function PublishDialog({
               {effectiveFirstPublish && (
                 <div className="flex flex-col gap-2">
                   <FieldLabel>{t('skillhub.publishDialog.visibilityLabel')}</FieldLabel>
-                  {/* 三档横排,对齐 SkillHub:公开 / 团队 / 仅自己使用 */}
-                  <div className="grid grid-cols-3 gap-2">
+                  {/* 归属由当前 membership 固定：个人=公开/私有，组织=公开/组织。 */}
+                  <div className="grid grid-cols-2 gap-2">
                     <div data-visibility-card>
                       <VisibilityCard
                         value="PUBLIC"
@@ -1165,100 +1178,30 @@ export function PublishDialog({
                         }))}
                       />
                     </div>
-                    <div data-visibility-card>
-                      <VisibilityCard
-                        value="DEPARTMENT_SCOPED"
-                        label={t('skillhub.publishDialog.visibilityTeamTitle')}
-                        description={t('skillhub.publishDialog.visibilityTeamDesc')}
-                        icon={<Users size={14} strokeWidth={1.75} />}
-                        selected={form.visibility === 'DEPARTMENT_SCOPED'}
-                        disabled={!hasDepts && userTeams.length === 0}
-                        onSelect={(v) => setForm((f) => ({ ...f, visibility: v }))}
-                      />
-                    </div>
-                    <div data-visibility-card>
-                      <VisibilityCard
-                        value="PRIVATE"
-                        label={t('skillhub.publishDialog.visibilityPrivateTitle')}
-                        description={t('skillhub.publishDialog.visibilityPrivateDesc')}
-                        icon={<Lock size={14} strokeWidth={1.75} />}
-                        selected={form.visibility === 'PRIVATE'}
-                        onSelect={(v) => setForm((f) => ({
-                          ...f,
-                          visibility: v,
-                          // 私有强制个人归属(对齐 SkillHub)
-                          publisherMode: 'personal',
-                          ownerTeamSlug: '',
-                          visibleDeptIds: [],
-                          sharedTeamSlugs: [],
-                        }))}
-                      />
-                    </div>
-                  </div>
-                  {!hasDepts && userTeams.length === 0 && (
-                    <p className="px-0.5 text-xs text-[var(--cmd-palette-item-meta)]">{t('skillhub.publishDialog.noTeamsHint')}</p>
-                  )}
-
-                  {/* 发布者 — SkillHub 同款常驻区块(个人/团队两卡 + 发布团队下拉);私有档锁定个人 */}
-                  <div className="pt-2">
-                    <PublisherPicker
-                      mode={form.publisherMode}
-                      ownerTeamSlug={form.ownerTeamSlug}
-                      deptIds={currentUserDeptIds}
-                      deptNames={currentUserDeptNames}
-                      teams={userTeams}
-                      disabled={isLocked}
-                      teamChoiceDisabled={form.visibility === 'PRIVATE'}
-                      onChange={({ mode, ownerTeamSlug }) => {
-                        const nextOwnerSlug = mode === 'team' && !ownerTeamSlug
-                          ? (currentUserDeptIds[0] ?? userTeams[0]?.slug ?? '')
-                          : ownerTeamSlug;
-                        setForm((f) => ({
-                          ...f,
-                          publisherMode: mode,
-                          ownerTeamSlug: nextOwnerSlug,
-                          visibleDeptIds: mode === 'team' && nextOwnerSlug
-                            ? f.visibleDeptIds.filter((id) => id !== nextOwnerSlug)
-                            : f.visibleDeptIds,
-                          sharedTeamSlugs: mode === 'team' && nextOwnerSlug
-                            ? f.sharedTeamSlugs.filter((slug) => slug !== nextOwnerSlug)
-                            : f.sharedTeamSlugs,
-                        }));
-                      }}
-                    />
-                    {visibilityScopeValidation.ok === false && visibilityScopeValidation.reason === 'publisher-team-required' && (
-                      <p className="px-0.5 pt-1 text-xs text-[var(--cmd-palette-item-meta)]">
-                        {t('skillhub.publishDialog.publisherTeamRequired')}
-                      </p>
+                    {identityPolicy.ownerType === 'organization' ? (
+                      <div data-visibility-card>
+                        <VisibilityCard
+                          value="DEPARTMENT_SCOPED"
+                          label={t('skillhub.publishDialog.visibilityTeamTitle')}
+                          description={t('skillhub.publishDialog.visibilityTeamDesc')}
+                          icon={<Users size={14} strokeWidth={1.75} />}
+                          selected={form.visibility === 'DEPARTMENT_SCOPED'}
+                          onSelect={(v) => setForm((f) => ({ ...f, visibility: v }))}
+                        />
+                      </div>
+                    ) : (
+                      <div data-visibility-card>
+                        <VisibilityCard
+                          value="PRIVATE"
+                          label={t('skillhub.publishDialog.visibilityPrivateTitle')}
+                          description={t('skillhub.publishDialog.visibilityPrivateDesc')}
+                          icon={<Lock size={14} strokeWidth={1.75} />}
+                          selected={form.visibility === 'PRIVATE'}
+                          onSelect={(v) => setForm((f) => ({ ...f, visibility: v }))}
+                        />
+                      </div>
                     )}
                   </div>
-
-                  {/* 谁可以使用 — 仅团队可见档显示 */}
-                  {form.visibility === 'DEPARTMENT_SCOPED' && (hasDepts || userTeams.length > 0) && (
-                    <div className="pt-2">
-                      <AudiencePicker
-                        value={{
-                          visibleDeptIds: form.visibleDeptIds,
-                          sharedTeamSlugs: form.sharedTeamSlugs,
-                        }}
-                        deptIds={currentUserDeptIds}
-                        deptNames={currentUserDeptNames}
-                        teams={userTeams}
-                        lockedOwnerSlug={form.publisherMode === 'team' && form.ownerTeamSlug ? form.ownerTeamSlug : undefined}
-                        disabled={isLocked}
-                        onChange={(value) => setForm((f) => ({
-                          ...f,
-                          visibleDeptIds: value.visibleDeptIds,
-                          sharedTeamSlugs: value.sharedTeamSlugs,
-                        }))}
-                      />
-                      {visibilityScopeValidation.ok === false && visibilityScopeValidation.reason === 'audience-required' && (
-                        <p className="px-0.5 pt-1 text-xs text-[var(--cmd-palette-item-meta)]">
-                          {t('skillhub.publishDialog.audienceRequired')}
-                        </p>
-                      )}
-                    </div>
-                  )}
                 </div>
               )}
 
@@ -1274,7 +1217,7 @@ export function PublishDialog({
                         changelogError ? 'text-[var(--error-fg)]' : 'text-[var(--settings-source-meta)]',
                       )}
                     >
-                      {form.changelog.length}/{PUBLISH_TEXT_LIMIT}
+                      {form.changelog.length}/{CHANGELOG_LIMIT}
                     </span>
                   </div>
                   <TextareaInput
@@ -1283,7 +1226,7 @@ export function PublishDialog({
                     placeholder={t('skillhub.publishDialog.changelogPlaceholder')}
                     rows={3}
                     readOnly={isLocked}
-                    maxLength={PUBLISH_TEXT_LIMIT}
+                    maxLength={CHANGELOG_LIMIT}
                   />
                 </div>
               )}

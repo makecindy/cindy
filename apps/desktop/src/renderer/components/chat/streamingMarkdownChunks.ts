@@ -87,6 +87,36 @@ function needsWholeDocumentContext(markdown: string): boolean {
   );
 }
 
+export const STREAMING_MARKDOWN_THROTTLE_BASE_MS = 100;
+export const STREAMING_MARKDOWN_THROTTLE_MAX_MS = 400;
+
+/**
+ * Choose a bounded stream update interval from the amount of Markdown work.
+ *
+ * Multi-heading documents intentionally stay one ReactMarkdown tree so heading
+ * ids, reference definitions, and raw HTML keep their document-wide context.
+ * Increasing the interval for those expensive trees reduces repeated parse /
+ * highlight work without changing the rendered source or chunk boundaries.
+ * The caller still flushes the latest value when streaming ends.
+ */
+export function getStreamingMarkdownThrottleInterval(markdown: string): number {
+  const length = markdown.length;
+  let interval = STREAMING_MARKDOWN_THROTTLE_BASE_MS;
+
+  if (length > 12_000) interval = 125;
+  if (length > 32_000) interval = 175;
+  if (length > 80_000) interval = 250;
+  if (length > 160_000) interval = 325;
+  if (length > 320_000) interval = STREAMING_MARKDOWN_THROTTLE_MAX_MS;
+
+  // Length is intentionally the only signal here. This function runs on
+  // every incoming token before the throttle can coalesce it; scanning for
+  // headings or HTML at that point would recreate the O(n) work we are trying
+  // to avoid. The length buckets conservatively cover long multi-heading,
+  // fenced-code, and HTML-heavy documents alike.
+  return Math.min(interval, STREAMING_MARKDOWN_THROTTLE_MAX_MS);
+}
+
 /**
  * 把流式 Markdown 切成已经封口的顶层前缀块与仍在增长的尾块。
  *

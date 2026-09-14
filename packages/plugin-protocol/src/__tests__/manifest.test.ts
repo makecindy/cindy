@@ -1182,6 +1182,29 @@ describe('Ghost manifest contract', () => {
     ]);
   });
 
+  it('accepts only plugin-local declared OAuth references for Node bindings', () => {
+    const manifest = {
+      ...validManifest, settingsHtml: 'settings.html', slots: ['tool', 'network', 'node'],
+      network: { hosts: ['example.test'], secrets: [{
+        key: 'mail_account', label: 'Mail', source: 'oauth',
+        inject: { header: 'Authorization', format: 'Bearer {value}' },
+        oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+      }] },
+      node: { entry: 'node/worker.cjs', protocol: 'json-rpc-stdio', secretBindings: [{
+        key: 'access_token', label: 'Mail', methods: ['run'], oauthSecret: 'mail_account',
+      }] },
+    };
+    const result = validateGhostManifest(manifest);
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(result.manifest.node?.secretBindings?.[0]?.oauthSecret).toBe('mail_account');
+    const missing = structuredClone(manifest);
+    missing.node.secretBindings[0].oauthSecret = 'other_plugin';
+    expect(validateGhostManifest(missing).ok).toBe(false);
+    const staticSource = structuredClone(manifest);
+    staticSource.network.secrets[0].source = 'user';
+    expect(validateGhostManifest(staticSource).ok).toBe(false);
+  });
+
   it('rejects unsafe Node secret bindings and shared credential-key collisions', () => {
     const base = {
       ...validManifest,

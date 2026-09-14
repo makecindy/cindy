@@ -7,11 +7,14 @@
  */
 
 const urlParams = new URLSearchParams(window.location.search);
+const isRemoteDesktopViewer = urlParams.get('remoteDesktopViewer') === '1';
 const isResourceUsageWindow = urlParams.get('resourceUsageWindow') === '1';
 const isSidebarWindow = urlParams.get('sidebarWindow') === '1';
 const ghostPanelWindowId = urlParams.get('ghostPanelWindow');
 
-void (isResourceUsageWindow
+void (isRemoteDesktopViewer
+  ? import('./remote-desktop-viewer-entry')
+  : isResourceUsageWindow
   ? import('./resource-usage-entry')
   : isSidebarWindow
     ? import('./sidebar-window-entry')

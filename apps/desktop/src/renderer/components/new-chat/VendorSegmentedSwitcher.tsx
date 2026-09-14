@@ -40,7 +40,7 @@ interface VendorSegmentedSwitcherProps {
    * default 的暗色 active 填充(#3c3c3a 级)几乎同色,选中段会融进背景看不清;
    * 该变体把 active 段换成黑白反转强 CTA(--accent-cta-bg),当前 Agent 一眼可辨。
    */
-  visualVariant?: 'default' | 'create-agent' | 'dropdown';
+  visualVariant?: 'default' | 'create-agent' | 'dropdown' | 'settings';
   /**
    * 点击**当前选中段**时也回调 onChange(默认 false = 无操作)。
    * 供「当前值是解析出的继承值、重选 = 钉成显式值」的调用方(IM 工作目录偏好)使用;
@@ -79,11 +79,13 @@ export function VendorSegmentedSwitcher({
   hiddenVendors,
 }: VendorSegmentedSwitcherProps) {
   const isCreateAgentVariant = visualVariant === 'create-agent';
+  const isSettingsVariant = visualVariant === 'settings';
   // 隐藏 runtime 未注册 / 当前上下文不支持的 vendor;当前选中值即便被隐藏也保留一段(调用方
   // coerce 前的过渡帧),避免 tablist 出现"无选中段"。
-  const visibleOptions = hiddenVendors && hiddenVendors.length > 0
-    ? OPTIONS.filter((opt) => opt.vendor === value || !hiddenVendors.includes(opt.vendor))
-    : OPTIONS;
+  const visibleOptions =
+    hiddenVendors && hiddenVendors.length > 0
+      ? OPTIONS.filter((opt) => opt.vendor === value || !hiddenVendors.includes(opt.vendor))
+      : OPTIONS;
   return (
     <div
       className={cn(
@@ -94,11 +96,16 @@ export function VendorSegmentedSwitcher({
               'bg-[var(--create-agent-segment-track-bg)]',
               'focus-within:ring-2 focus-within:ring-[var(--create-agent-focus-ring)]',
             ]
-          : [
-              'gap-0.5 p-[3px]',
-              dense ? 'h-[30px]' : 'h-9',
-              'bg-[var(--chat-input-bg)] dark:border dark:border-[var(--cmd-palette-border)]',
-            ],
+          : isSettingsVariant
+            ? [
+                'h-10 gap-1 border border-[var(--border-default)] bg-[var(--settings-input-bg)] p-[3px]',
+                'focus-within:border-[var(--focus-ring)] focus-within:ring-2 focus-within:ring-[var(--focus-ring-soft)]',
+              ]
+            : [
+                'gap-0.5 p-[3px]',
+                dense ? 'h-[30px]' : 'h-9',
+                'bg-[var(--chat-input-bg)] dark:border dark:border-[var(--cmd-palette-border)]',
+              ],
         disabled && 'opacity-60 pointer-events-none',
         className,
       )}
@@ -131,34 +138,44 @@ export function VendorSegmentedSwitcher({
             className={cn(
               'flex h-full flex-1 items-center justify-center rounded-full',
               !iconOnly && 'gap-1.5',
-              dense ? 'text-12 leading-none transition-colors' : 'text-14 leading-none transition-colors',
+              isSettingsVariant
+                ? 'text-13 leading-none transition-colors'
+                : dense
+                  ? 'text-12 leading-none transition-colors'
+                  : 'text-14 leading-none transition-colors',
               isActive
                 ? cn(
                     'font-medium',
                     isCreateAgentVariant
                       ? 'border border-[var(--create-agent-control-border)] bg-[var(--create-agent-control-bg)] text-[var(--create-agent-control-text)]'
-                      : visualVariant === 'dropdown'
-                        ? // 浮层内:黑白反转强对比(同 emptyState CTA 的 token 对),
-                          // default 的 Card 色凸起在深色浮层表面上分不出来。
-                          'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
-                        : [
-                            // Active: Card 色凸起 + 1px Board 描边
-                            'bg-[var(--chat-input-chip-bg)] text-[var(--chat-input-chip-text)] border border-[var(--cmd-palette-border)]',
-                            'dark:border-transparent',
-                          ],
+                      : isSettingsVariant
+                        ? 'bg-[var(--surface-chip)] text-[var(--text-primary)]'
+                        : visualVariant === 'dropdown'
+                          ? // 浮层内:黑白反转强对比(同 emptyState CTA 的 token 对),
+                            // default 的 Card 色凸起在深色浮层表面上分不出来。
+                            'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]'
+                          : [
+                              // Active: Card 色凸起 + 1px Board 描边
+                              'bg-[var(--chat-input-chip-bg)] text-[var(--chat-input-chip-text)] border border-[var(--cmd-palette-border)]',
+                              'dark:border-transparent',
+                            ],
                   )
                 : cn(
                     'font-normal',
                     isCreateAgentVariant
                       ? 'text-[var(--create-agent-segment-inactive-text)] hover:text-[var(--create-agent-control-text)]'
-                      : 'text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]',
+                      : isSettingsVariant
+                        ? 'text-[var(--text-secondary)] hover:bg-[var(--surface-hover-soft)] hover:text-[var(--text-primary)]'
+                        : 'text-[var(--cmd-palette-item-meta)] hover:text-[var(--msg-assistant-text)]',
                   ),
             )}
           >
-            <opt.Mark size={dense ? 13 : 14} className="shrink-0" />
+            <opt.Mark size={isSettingsVariant ? 14 : dense ? 13 : 14} className="shrink-0" />
             {/* 文字下沉 0.5px —— Inter 在 leading-none 下视觉重心偏上,与 vendor mark
                 光学居中对齐微调,见 NewChat 视觉走查 2026-05-03。 */}
-            {!iconOnly && <span className="translate-y-[0.5px] whitespace-nowrap">{opt.label}</span>}
+            {!iconOnly && (
+              <span className="translate-y-[0.5px] whitespace-nowrap">{opt.label}</span>
+            )}
           </button>
         );
       })}

@@ -93,6 +93,32 @@ describe('session runtime control state', () => {
     });
   });
 
+  it('deferred pending profile keeps the clicked high + Fast until settle', () => {
+    const sessionId = 'runtime-pending-keeps-axes';
+    const selected: SessionRuntimeProfile = {
+      agentKind: 'claude-code',
+      model: 'claude-fable-5',
+      providerId: 'cindy',
+      effort: 'high',
+      fastMode: true,
+    };
+    const generation = acceptSessionRuntimeMutation({
+      sessionId,
+      source: 'agent',
+      profile: selected,
+      deferred: true,
+    });
+    expect(getSessionRuntimeControlSnapshot(sessionId).pending).toMatchObject({
+      generation,
+      profile: selected,
+    });
+    expect(settlePendingSessionRuntimeMutation(sessionId, generation)).toBe(true);
+    expect(getSessionRuntimeControlSnapshot(sessionId)).toMatchObject({
+      pending: null,
+      effectiveOverride: selected,
+    });
+  });
+
   it('a user selection invalidates pending and fallback state', () => {
     const sessionId = 'runtime-user-wins';
     acceptSessionRuntimeMutation({
@@ -539,7 +565,7 @@ describe('session runtime fallback selection', () => {
     expect(afterFailure).toMatchObject({
       generation: observed.generation,
       fallbackHop: observed.fallbackHop,
-      visitedRoutes: ['xd\u0000gpt-main'],
+      visitedRoutes: ['codex\u0000xd\u0000gpt-main'],
     });
 
     expect(
@@ -724,7 +750,7 @@ describe('session runtime fallback selection', () => {
       pickSessionRuntimeFallback({
         providers,
         current,
-        visitedRoutes: ['xd\u0000gpt-main'],
+        visitedRoutes: ['codex\u0000xd\u0000gpt-main'],
         currentHop: 1,
         maxHops: 2,
       }),
@@ -752,7 +778,10 @@ describe('session runtime fallback selection', () => {
     });
     const state = getSessionRuntimeControlSnapshot(sessionId);
     expect(state.visitedRoutes).toEqual(
-      expect.arrayContaining(['openai\u0000gpt-main', 'xd\u0000gpt-main']),
+      expect.arrayContaining([
+        'codex\u0000openai\u0000gpt-main',
+        'codex\u0000xd\u0000gpt-main',
+      ]),
     );
     expect(
       pickSessionRuntimeFallback({

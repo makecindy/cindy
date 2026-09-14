@@ -1,3 +1,4 @@
+import { rehydrateCloseSuppression } from '../../maker-host/rehydrateCloseSuppression.js';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -26,7 +27,7 @@ function rememberSession(sessionId: string): string {
 
 interface HarnessSession {
   id: string;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   remoteHostId?: string | null;
   isTurnRunning?: () => boolean;
 }
@@ -56,6 +57,27 @@ function createHarness(
 }
 
 describe('PendingCredentialSwitchService', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('retains a failed remote %s context reload until it succeeds', async (agentKind) => {
+    const sessionId = rememberSession(`remote-context-${agentKind}`);
+    const h = createHarness([{ id: sessionId, agentKind, remoteHostId: 'remote-test', isTurnRunning: () => false }]);
+    h.service.register(sessionId, { model: 'same-model', providerId: 'xd', forceSessionRebuild: true });
+    const cleanup = vi.fn(async () => {});
+    h.closeSession.mockImplementation(async () => {
+      await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, cleanup);
+    }).mockRejectedValueOnce(new Error('transport disconnected'));
+    await h.service.onTurnSettled(sessionId);
+    expect(h.service.has(sessionId)).toBe(true);
+    expect(h.broadcastApplied).not.toHaveBeenCalled();
+    expect(rehydrateCloseSuppression.isSuppressed(sessionId)).toBe(false);
+    await h.service.onTurnSettled(sessionId);
+    expect(h.closeSession).toHaveBeenCalledTimes(2);
+    expect(cleanup).not.toHaveBeenCalled();
+    await rehydrateCloseSuppression.runOnCloseSideEffects(sessionId, cleanup);
+    expect(cleanup).toHaveBeenCalledOnce();
+    expect(h.service.has(sessionId)).toBe(false);
+    expect(h.broadcastApplied).toHaveBeenCalledWith({ sessionId, model: 'same-model', providerId: 'xd' });
+  });
+
   it('keeps the pending switch while the session is still running', async () => {
     const sessionId = rememberSession('pending-switch-still-busy');
     setSessionProvider(sessionId, 'openai');

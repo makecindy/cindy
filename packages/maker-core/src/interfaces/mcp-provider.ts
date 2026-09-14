@@ -5,6 +5,8 @@ export type McpCallerKind = 'root' | 'descendant' | 'unknown';
 export interface McpProviderContext {
   agentKind: AgentKind;
   workingDir: string;
+  /** Host-owned memory namespace override (for example a stable Cindy Bot scope). */
+  memoryScopeKey?: string;
   vendorOptions?: Record<string, unknown>;
   /**
    * Business 层 session id (host 通过 createSession 的 opts.id 提供, 由 maker.ts

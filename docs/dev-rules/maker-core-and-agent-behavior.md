@@ -37,8 +37,128 @@ controller／进程内；重启后没有 live handle 时不凭估算换窗。Orc
 fail closed。compact 失败触发的换窗同样 fail closed，不得自动 replay 已有副作用的用户消息。
 PI 的 `pi-prompt-timeout` 是唯一保留的 timeout 交接入口；Claude Code／Codex 的普通
 timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoCompactController` 对等的 host
-自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。手动压缩入口不受此规则影响，
+自动 `/compact` 注入路径；未来若增加，仍须遵守同一评估和交接边界。Codex 订阅远端压缩若因
+`invalid_encrypted_content` 硬失败（`Error running remote compact task`），视为官方 compact
+确定性失败，走同一套 host-controlled rollover；单独的 `invalid_encrypted_content`（HTTP 静默剥
+推理密文范围）不得当成换窗。手动压缩入口不受此规则影响，
 手动 compact 失败不得锁存换窗。
+
+Cindy 保底压缩是**一套**流程，不是剥图 / 换窗两套功能。装得进当前约束就不动；
+字节预算破了（可剥的超大内联图）就剥图；token 预算破了或剥图失败，就交接重建。
+决定函数见 `cindyContextCompression.ts`。字节预算目前只有 Codex 能测量。工具输出
+不另开一档：官方 compact 会先清旧工具结果；官方失败后交接不带 tool_result 正文。
+可剥图不足一半的混合大尾巴有意不救。打开会话不触发；只在终态错误或下次发送时
+由 main 侧 claim。SSH 不承诺。不确定 fail closed。救援摘要不得依赖额外模型调用。
+Codex 剥图保留原生历史后，普通用户任务可在同一任务内自动续接未完成工作，
+不重放原用户请求或已完成的工具操作；每条用户输入最多自动续接一次。
+停止／清空或新输入接管会取消待续接的恢复；已有排队输入时不抢先续接。
+取消也覆盖剥图失败后的重建、提交与发送边界。interrupt／unsubscribe 等待期间到达的
+权威成功结果优先于 oversized 错误；事件队列关闭前统一结算，不能再触发自动续接。
+续接沿用原输入的插件能力选择，不把隐藏续接提示或历史授权当作新选择。
+外部分发者仍拥有自己的重试；IM 原生任务、仍绑定 IM 的任务及尚未结束的外部分发 turn
+不进入 Desktop 图片历史自动恢复，不以缺失消息 origin 推定桌面授权。成功仅展示上下文整理分隔条，
+恢复或续接失败才显示错误与手动继续指引。发送前恢复不额外续接，避免与用户新输入重复。
+切模型预检的数学仍在 `assessModelSwitchContext`。本机普通任务的用户选模只登记待应用意图，
+不改当前 route 或原生线程；用户反复改选时覆盖意图，以实际发送时的最终选择为准。
+沿用跨引擎的 pending registry 与发送入口，不能在 turn 结束或定时巡检时自动消费选模意图。
+设备互联控制本机任务同样适用；SSH 与 Orca 保留各自的运行时边界。
+同引擎切到更小窗口时，main 在实际 send 持有的 session 锁内按目标窗口评估；
+用户发送即同意为最终选择执行必要的上下文整理，不再弹出二次确认。
+仅选择或反复切换模型不构成整理授权；同窗或扩窗不因此触发摘要重建。
+Claude Code／Codex／Pi 的强制换窗线
+统一固定为目标窗口 90%，与各 harness 的日常 auto-compaction 百分比解耦；Claude Code
+与 Pi 的日常默认值也设为 90%，对齐 Codex 口径，但用户已有显式 override 继续生效。命中
+`danger`／`overflow` 的本机会话先走同一套 `context_rebuild` bounded handoff，再落目标
+route，不能 resume 旧原生窗口。
+Codex 跨凭证时先按目标来源 resume 同一个原生线程，不因 `ordinal` / `history_base` 或来源
+变化而 fork、改写历史或交接。本地恢复与分叉必须同时固定该线程的原生历史根
+（`CODEX_HOME`，含 `sessions` / `archived_sessions`）和数据库根（`sqlite_home`）；
+仅固定 SQLite 不足以恢复分页祖先，原生按不可变 rollout ID 在历史根内查找祖先。
+凭证、代理路由和模型目录仍按本轮选中账号准备，不能把历史根写回全局账号配置。
+跨历史根的原生进程从启动参数要求 `cli_auth_credentials_store="ephemeral"`，清除继承的
+原生身份环境变量；OAuth 通过独立的 external-auth adapter 在进程内安装目标账号 token，
+网关与第三方 OAuth 继续使用既有代理认证。所有跨根进程在分发任务前检查生效的临时凭证
+配置；每次重连重新认证，刷新必须匹配冻结的 owner、host 代次及账号，且不能复用刚被
+拒绝的 token。owner 切换 pending 期间，即使 owner key 尚未提交变化，也必须在异步认证
+读取前后拒绝提供 token。刷新有超时，失败走正常错误路径，不切回历史所属账号。
+该 adapter 依赖 Codex 实验性的 `chatgptAuthTokens` 协议，0.145.0 已支持该协议且通过
+真实登录及 401 刷新契约验证，不能把 0.153.4 当作协议最低版本。更换原生运行时前必须
+用目标二进制运行 `CINDY_CODEX_TEST_BINARY=<绝对路径> pnpm --filter @cindy/maker-core exec
+vitest run src/agents/codex/app-server/external-auth.native.test.ts`，覆盖分页祖先、归档、
+分叉、重连、实际请求身份和 401 刷新。测试只用临时历史、假凭证和本地 HTTP 服务。
+管理员 requirements 可能覆盖 CLI 临时凭证设置：客户端可阻止后续任务，但启动后的
+配置检查不能证明原生初始化阶段从未读取历史根中的认证；不得声称具备这一保证，
+也不得自行复制上游策略加载器或改写用户认证文件规避策略。
+普通加密推理失败继续使用现有 HTTP 透明重试；只有上游明确
+拒绝且请求里仅剩不可剥除的压缩块密文时，proxy 才标记
+`CINDY_ENCRYPTED_COMPACTION_INCOMPATIBLE`，交给既有 compact 失败恢复流程。
+裸 `invalid_encrypted_content`、网络错误和切换来源本身都不足以触发该恢复；保留同一用户消息
+最多一次重放及已有产出／工具副作用禁止重放的边界。
+跨来源恢复必须在共享、独立上下文和控制面代理中按同一 thread 身份查找并关闭连接，
+关闭任务时也清理这些实例里的同 thread 保活状态；不能只查共享代理而漏掉实际承载连接。
+分支优先使用已保存的原生 turn 锚点。Codex 0.153.4 起，旧消息或失败轮没有锚点时，
+先用 `thread/turns/list(itemsView: notLoaded)` 查询终态边界，再 `thread/fork(lastTurnId)`，
+不能对分页线程执行 rollback。界面软删重试不代表原生 turn 消失，有复制事件时间时据此
+定位，不按可见 user 行数猜边界；复制事件时间缺失、原生时间缺失或秒级精度无法确定顺序时明确失败，不截错
+历史。查询与 fork 使用同一隔离控制面 host，关闭其写入进程后才发布子线程身份。
+HTTP 回退遇到缺失 `Content-Type` 的成功响应时，只允许从明文 SSE 前缀（可带注释心跳）
+确认事件流并补齐响应头；显式非 SSE 类型、HTML／JSON、空响应与只有心跳的正文不能放行。
+正在运行的 turn、SSH 远端缺少本地交接能力、或已有恢复动作在途时必须 fail closed，不能
+先热切再发送。三个 harness 的同模型自动压缩所有权保持不变。token 破了只认：终态超限、
+占用 ≥ 100%、官方 compact 确定性失败；普通 timeout 不算。
+
+Codex 已选远端压缩的本地任务，在原生 `contextCompaction` 生命周期内收到终态失败时，
+只有明确的 HTTP 400/404/405/422/500/501/502/503 拒绝或失败响应，才自动改用同一模型的
+原生摘要压缩；包括远端压缩耗尽内部重试后的短时 429，使用同一账号
+仅接替一次。明确的账号／任务额度耗尽、鉴权与已有密文硬失败交接分类保持原处理。
+这不是换窗交接：native fork 保留完整历史，Cindy 业务任务不变，不改模型或全局压缩设置。
+Codex 0.153 的 unsubscribe 会延迟卸载 30 分钟，不能靠立即 resume 假称 provider 已更新。
+接替身份保存在原生任务的 modelProvider 中，重新打开继续沿用，无 UI 开关、无自动切回。
+已有本轮模型/工具输出时以空输入续接，不重放用户请求；尚未进入生成的 pre-turn 失败才重投
+冻结输入。本地摘要再失败即正常报错，不循环切换。尚未结算的原生 exec continuation 无法跨
+线程迁移，不得重建后声称它仍可恢复。普通生成 502 与 stderr 文案不得触发此路径。
+
+Codex 的 120 秒 reconnect watchdog 只是 fallback 收口，不是根因诊断。stderr 仍只作诊断日志，
+不得用 `remote compaction v2` 文案驱动恢复动作。普通 timeout、纯文本大历史和网络失败
+不得进入这套压缩，也不得进入自动续跑死循环。`status` / `account_usage` 是传输层或用量
+心跳，不得刷新 Session 零事件看门狗或 Codex upstream-idle 计时。`text` / `thinking`
+只有包含实质文字才刷新；仅空白、Unicode 格式字符或控制字符不算进展，原事件仍无损传递。
+这两类超时与
+`codex_reconnect_stalled` 同类，进入 interrupted-turn 自动续跑；自动续跑对这三类
+**只发 CONTINUE 指令，绝不克隆原始用户 prompt**（turn 已被 accept，克隆会重放已执行的
+工具副作用）。Claude rewind / cancellation bridge 的 `/compact` 位于真实用户输入之前，
+Claude idle 超时使用 `bridge_upstream_response_idle_timeout`；共享 Session stall 同步查询
+handle 的只读 `isPreparingUserTurn()`，使用 `bridge_turn_no_event_timeout`。两者不进入
+该自动续跑白名单；查询复用 Claude 唯一的 `bridgeStateActive()`，包含 compact result 后
+到下一 SDK 消息前的间隙，不新增桥接状态。保持既有
+清队列、保留重建目标与人工重试行为，不能对尚未执行的用户输入发送 CONTINUE。
+引用内容解析等异步准备仍属于未派发态；完成后复核 active 身份，再在真正调用 send 前
+标记 sendStarted，迟到的准备结果不得发送或修改已经交给 replacement 的项。
+自动 CONTINUE 保留原请求的 Plan 与权限选项；超时恢复不等于 ExitPlanMode 批准，
+不得强制 planMode=false。若原计划已批准后执行失败，缺少可靠的审批周期记录时仍保守
+保留原 Plan 选项，可能重新进入计划模式；不为避免重入新增审批状态。人工 Retry 沿用
+既有合成 UI 动作策略，本自动恢复修复不调整该策略。
+退避窗口内 provider / Session 因 stall abort 复核、terminal-error drain
+或 interrupt ACK 失败而 `unexpected` close 时，必须用实例 + attemptToken 精确保留交棒，
+不得 teardown 已批准的自动续跑——包括 timer 已 fire、CONTINUE 已因 SESSION_RUNNING
+回队、CONTINUE 已进入 drain 但尚未 vendor dispatch、以及 CONTINUE 已 sendStarted 但
+send outcome 尚未返回的窗口。尚未 sendStarted 的未派发项必须重新入队再唤醒 replacement；
+send 已开始则等真实 outcome——vendor 已 accept 必须 commit、禁止二次 CONTINUE；
+`TurnDispatchUnconfirmedError`（adapter 已发出请求但无法确定 provider 是否 accept）
+不得自动再发 CONTINUE，按可能已 accept 提交本次 attempt，并结算 AutoResumeBookkeeping
+（pendingOutcome=failed、丢弃 suppressed、rollback guard）；不得走会补落旧错误、恢复
+recovery 或再入队的 undispatched finalize。确认失败且 attemptToken 仍匹配才重新入队。
+显式关闭 / 停止已清 token 后，sendStarted 且已落库的隐藏 CONTINUE 必须丢弃，不得落成
+可重试 recovery。unexpected close 的 preserve 只认三类 CONTINUE-only reason
+（stall / idle / reconnect-stall）；generic clone-原文 retry fail-closed 不交棒。
+连续 replacement `unexpected` close 时 WeakMap lease 可能已随旧实例消失，必须按同一
+attemptToken 把 lease 绑到新 Session，或在 coordinator / guard / book 仍一致且队里 /
+live schedule 仍活着时继续 preserve。预算内不能 discard 或只留人工 recovery，也不能清掉
+sessionRunningRetry 就停。每次因 replacement 关闭而重新入队都计入同一份三次派发预算，
+包括尚在 pendingQueue、已取出但尚未发送、以及发送确认失败的窗口；一次 close 不能对
+刚放回队列的 active 项重复计数。等待发送结果本身不重复计数，耗尽后恢复原错误并停止交棒。
+用户显式关闭 / 停止仍取消。连续失败上限与人工介入周期硬上限止损，额度耗尽才把 Continue 交还用户。
+
 
 > **适用范围与增量原则**：Agent 能力归属（下节 1）与代码优先确定性（下节 2）按增量
 > 适用——约束新增和正在修改的代码，不要求为统一形式专项重构存量。但**核心指标不变量
@@ -79,18 +199,32 @@ timeout 不得触发自动换窗或 replay。Codex 当前没有与 Claude `AutoC
   交给模型自由发挥，会引入不可复现的行为漂移，属于本规则明确禁止的做法。
 - **产品 turn 未结算不得结束。** provider `turn/completed` 可以立刻给 SDK turn 落墓碑并
   结算 usage；只有原子挂在该终态边界上的显式 continuation claim 才能挡住产品结束。
+  Codex 提问／计划审阅尚待用户确认时同样保留产品边界：底层可继续独立工作并结束
+  SDK turn，但不能触发完成通知、队列收口或协作任务完成。人工等待使用独立 claim，
+  复用 `turnContinuationId`，不能塞进 yield claim 造成回答续跑等待自身。计划审阅必须
+  在发布边界前登记；回答／批准后沿原意图续跑，取消／Stop 单次结束且不重复结算 usage。
+  起跑回执之前到达的终态先缓冲再核对归属；失败只能走失败终态，不能先以取消回调
+  触发定时任务的成功收口。回归见 `agents/codex/index.test.ts` 的 pending confirmation
+  与 human continuation 用例，以及 Desktop `sessionEventPipeline.test.ts`。
   Codex `functions.exec` yield 没有协议级 execution handle（cell / wait 活在
   `codex-rs` daemon），近期检测只能是 adapter 内、用真实 rollout fixture 锁死的启发式，
-  用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。无 `id`／`call_id`
+  用来铸造有界 claim，再由宿主确定性开续段让模型 wait 同一 cell。
+  `commandExecution` 带数字 `exitCode` 时，结构化退出结果优先于正文：即使 stdout
+  完整复刻 running 状态头，也不得铸造 claim；不能仅凭 `status: completed` 排除
+  没有退出码的旧版 yield 包装。实现与回归见 `agents/codex/yielded-exec-cell.ts`
+  及其测试（均位于 `packages/maker-core/src/`）。无 `id`／`call_id`
   的 item 只认 `itemCompleted` 快照：`itemUpdated` 不得入账，不得给匿名条目发明身份。
   无 yield marker 的 nameless 完成不得清匿名桶；匿名 `wait` 若按 `cell_id` 结算了其中一个
   cell，只从匿名桶拿掉该 cell，不得清空仍在跑的其它匿名 cell。同 turn 或续段里
   后续 `wait` 输出 `Script completed` / `Script terminated` 后视为该 cell 已结算，不得
-  再铸 claim，也不得报 lost-handle。Plan Mode 审批只在产品终态跑：存在 awaiting
+  再铸 claim，也不得报 lost-handle。Plan Mode 审批只在执行段结算后跑：存在 awaiting
   yield claim 时不得把空计划当循环结束，也不得在 SDK `turn/completed` 上提前挂审批；
   origin 已产出的计划挂在 claim 上，续段结算后再审。禁止把 `last_agent_message == null` 或开场白当结算
-  判据；cell 跨 turn 存活性未证实前，续段失败必须诚实报 lost-handle，不得 replay 原请求
-  或重跑已执行命令。续段 claim 一旦挡住产品结束，所有非重试终态错误路径（不限
+  判据；空续段或重试耗尽只证明未取回结果，统一报 `yield-continuation-incomplete`，
+  不得推断 cell 丢失或由跨 turn 导致。用户错误不带 cell 编号，原因和编号保留在诊断日志。
+  真实 `not found` 也可能来自重复等待已消费的 cell，不等同于底层命令丢失；
+  已结算 cell 不因后续重复等待失败而重新入账。不得 replay 原请求或重跑已执行命令。
+  续段 claim 一旦挡住产品结束，所有非重试终态错误路径（不限
   transport）都必须同步结算它，不能只推 Done 而让 `isTurnRunning()` 仍为 true。
   续段 `turn/start` 已被服务端接受后若本地取消，必须先凭响应里的 turn id 落墓碑并
   best-effort interrupt，再抛/返回取消；`wait` 仍输出 running marker 视为 cell

@@ -13,8 +13,10 @@
  * 判定顺序（从最窄到最宽）：
  *   1. READ_ONLY_MCP_TOOLS —— 精确到工具的只读发现入口，server 未整体可信也放行
  *   2. cindy_contacts     —— 按内层 action 细粒度判定（见 contacts/approval.ts）
- *   3. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
- *   4. 其余                —— 逐次弹窗（第三方 server、cindy_ssh、插件 ghost_call…）
+ *   3. cindy-art ghost_call —— 第一方作图/视频内层工具静默；其它插件继续走会话审批
+ *   4. TRUSTED_MCP_SERVERS —— 已 review 的第一方 server，整体静默
+ *   5. 其余                —— 进入会话审批（第三方 server、cindy_ssh、其它 ghost_call…）
+ * 风险分类不覆盖会话档位：Full Access 免操作审批，Auto 走统一审阅，Ask 才交用户确认。
  */
 
 import type {
@@ -50,6 +52,8 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
   // 接受的存在性披露，只读元数据不因此回退为逐次审批或统一成 NOT_FOUND。
   'cindy::ghost_info',
   'cindy::ghost_manual',
+  // Query stays local; market discovery fetches catalog metadata without reconciliation.
+  'cindy::ghost_market_search',
   'cindy::ghost_forge_guide',
   'cindy_browser::list_tools',
   'cindy_android::list_tools',
@@ -75,7 +79,7 @@ const READ_ONLY_MCP_TOOLS: ReadonlySet<string> = new Set([
  *
  * 这里不能按 `cindy_` 前缀放行：namespace 只表示品牌归属，不代表新 provider
  * 已完成权限 review。SSH（在已配置主机上跑任意命令）、插件宿主 `cindy`
- * （`ghost_call` 转发到第三方插件沙箱）与第三方 server 都不在表内，继续逐次确认；
+ * （`ghost_call` 转发到第三方插件沙箱）与第三方 server 都不在表内，继续走会话审批；
  * Contacts 走 inner-tool 细粒度策略。
  */
 const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
@@ -92,6 +96,9 @@ const TRUSTED_MCP_SERVERS: ReadonlySet<string> = new Set([
   // (resolveWorkerLink 按 session ctx 校验 worker link 归属), 逐次弹窗只会
   // 让远端 daemon 等审批超时、worker 回报断链。
   'orca_worker_bridge',
+  // 个人版制作任务的完成回报通道。只落一条完成记录,不碰文件;执行边界在工具内部
+  // fail-closed(按 session ctx 的 cindy-make 标记),普通任务调不到。
+  'cindy_make',
   'cindy_lsp',
 ]);
 
@@ -173,6 +180,29 @@ function skipsRoutelessDeviceApproval(args: unknown): boolean {
   return !hasIOSSimulatorInstanceRoute(parsed);
 }
 
+/** 第一方 Cindy Art 的媒体生成工具。风险是额度而非越权，用户点名作图即授权。 */
+const CINDY_ART_MEDIA_TOOLS: ReadonlySet<string> = new Set([
+  'gen_image',
+  'edit_image',
+  'gen_video',
+  'edit_video',
+]);
+
+/**
+ * ghost_call 是聚合入口，默认逐次确认。Cindy Art 的作图/改图/视频是第一方媒体
+ * 能力，用户发「画一张」即构成授权；Auto-review 下再弹卡会把常规作图变成手动授权。
+ * 读不出 ghost_id / tool 时 fail closed，其它插件不受影响。
+ */
+function canAutoApproveCindyArtGhostCall(context: McpToolApprovalContext): boolean {
+  if (context.serverName !== 'cindy') return false;
+  if (context.toolName !== 'ghost_call' && context.toolName !== undefined) return false;
+  const params = readJsonObject(context.toolParams);
+  if (!params) return false;
+  const ghostId = typeof params.ghost_id === 'string' ? params.ghost_id.trim() : '';
+  const tool = typeof params.tool === 'string' ? params.tool.trim() : '';
+  return ghostId === 'cindy-art' && CINDY_ART_MEDIA_TOOLS.has(tool);
+}
+
 /** Claude SDK 工具名格式固定为 `mcp__<server>__<tool>`。 */
 function toClaudeToolName(key: string): string {
   const [serverName, toolName] = key.split('::');
@@ -198,10 +228,30 @@ export function getDesktopMcpToolApprovalPolicy(
   if (toolName && READ_ONLY_MCP_TOOLS.has(`${serverName}::${toolName}`)) {
     return 'auto-approve';
   }
+  if (serverName === 'cindy' && toolName === 'ghost_market_install') return 'prompt-each-time';
   if (serverName === 'cindy_contacts') {
     return canAutoApproveContactsMcpTool({ toolName, toolParams })
       ? 'auto-approve'
       : 'prompt-each-time';
+  }
+  if (canAutoApproveCindyArtGhostCall(context)) {
+    return 'auto-approve';
+  }
+  // Choosing a new Worker root delegates filesystem access. Do not let the
+  // trusted-server shortcut or a cached server grant authorize another root.
+  // Full Access / Auto / Ask still use their existing permission flow.
+  if (serverName === 'cindy_orca') {
+    if (!toolName) return 'prompt-each-time';
+    if (toolName === 'create_worker' || toolName === 'create_workers') {
+      const params = readJsonObject(toolParams);
+      if (!params) return 'prompt-each-time';
+      const workers = toolName === 'create_worker' ? [params] : params.workers;
+      if (!Array.isArray(workers)) return 'prompt-each-time';
+      if (workers.some((worker) => {
+        const spec = readJsonObject(worker);
+        return !spec || Object.hasOwn(spec, 'working_dir');
+      })) return 'prompt-each-time';
+    }
   }
   const iosSimulatorCall = readIOSSimulatorInnerCall(context);
   if (iosSimulatorCall) {

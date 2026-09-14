@@ -12,6 +12,9 @@
  * active-catalog 统一持有；连接状态每次实时读（凭证变化要立即反映）。
  */
 
+import { createLogger } from '../logger.js';
+import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
+
 import {
   buildRegistry,
   type Catalog,
@@ -20,7 +23,10 @@ import {
   type ModelDiscoveryFailureState,
   type ProviderModelDiscoveryFailure,
   type ProviderView,
+  type Provider,
 } from '@cindy/model-providers';
+
+const log = createLogger('provider-service');
 
 /**
  * 读取连接态时是否允许附带**本机副作用**（绑定自愈、随之而来的清单拉取）。
@@ -66,6 +72,7 @@ export interface ProviderConnectionReaders {
 }
 
 export interface ProviderServiceDeps {
+  getProviderPresentation?: (providerId: string) => { name?: string; removed?: boolean };
   /** 返回当前生效目录（同步）。桌面端注入 active-catalog 的 getActiveCatalog。 */
   getCatalog: () => Catalog;
   /** 连接状态判定器。 */
@@ -75,12 +82,20 @@ export interface ProviderServiceDeps {
    * （生产 = generic-oauth 的 hasGenericOAuthLogin）。缺省 = 一律未连接。
    */
   genericOAuthConnected?: (providerId: string) => boolean;
+  codexAccountConnected?: (providerId: string) => boolean;
+  subscriptionAccountConnected?: (providerId: string) => boolean;
+  subscriptionAccountInfo?: (providerId: string) => Promise<ProviderView['subscriptionAccount']>;
+  openAiAccountInfo?: (providerId: string) => Promise<ProviderView['openAiAccount']>;
   /**
    * 内置 API-key 供应商(auth.method 'apiKey' 且 source 'builtin',如 Gemini 图像来源,
    * 2026-07)的连接态判定:连接 = 该供应商的 key 已存(生产 = providerSecretStore.has)。
    * 缺省 = 一律未连接。
    */
   builtinApiKeyConnected?: (providerId: string) => boolean;
+  /** Saved custom configuration is not evidence that its credential still exists. */
+  customApiKeyConnected?: (provider: Provider) => boolean;
+  /** Runtime-owned media readiness, not inferred from chat authentication. */
+  getAvailableMediaModels?: () => readonly { providerId: string; id: string }[];
   /**
    * 动态清单发现的最近一次失败（生产 = anthropic 的 getAnthropicModelDiscoveryFailure）。
    * 只有「清单唯一来源是动态发现」的供应商需要，缺席 = 该供应商没有这种失败态。
@@ -135,8 +150,6 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
     ]);
     const catalog = opts?.getCatalog?.() ?? opts?.catalog ?? deps.getCatalog();
     const connected: ConnectionState = { xd, anthropic, openai, xai };
-    // 自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」替代「连接 / 断开」，
-    // 没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
     for (const p of catalog.providers) {
       // 无鉴权供应商无需任何登录或密钥：只要目录声明有效，就可立即参与模型选择。
       // 该规则与 source 无关，覆盖远端目录下发的 built-in/self-hosted 条目。
@@ -148,12 +161,15 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
       }
       // 通用 OAuth 供应商（带 auth.oauth 描述符，内置目录下发或用户自建皆同）：
       // 连接态 = 本机是否有凭证 blob（登录过才算连接）。
-      else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
+      else if (p.auth.native === 'claude' || p.auth.native === 'xai') {
+        connected[p.id] = deps.subscriptionAccountConnected?.(p.id) ?? false;
+      } else if (p.auth.native === 'codex') {
+        connected[p.id] = deps.codexAccountConnected?.(p.id) ?? false;
+      } else if (p.auth.method === 'oauth' && p.auth.oauth && !(p.id in connected)) {
         connected[p.id] = deps.genericOAuthConnected?.(p.id) ?? false;
+      } else if (p.source === 'user') {
+        connected[p.id] = deps.customApiKeyConnected?.(p) ?? false;
       }
-      // API key 形态的自定义（user）供应商：存在于目录即视为「已连接」——用「编辑 / 删除」
-      // 替代「连接 / 断开」，没有独立鉴权握手（密钥缺失则请求失败，但 UI 连接态为已配置）。
-      else if (p.source === 'user') connected[p.id] = true;
       // 内置 API-key 供应商(如 Gemini 图像来源):连接 = key 已存。与自定义供应商
       // 不同,内置条目常驻目录,「存在即连接」会让没配 key 的用户看到一个假连接行。
       else if (p.auth.method === 'apiKey' && !(p.id in connected)) {
@@ -167,7 +183,50 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         if (failure) discoveryFailures[p.id] = failure;
       }
     }
-    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.());
+    let media: readonly { providerId: string; id: string }[] | undefined;
+    try {
+      media = deps.getAvailableMediaModels?.();
+    } catch (error) {
+      // Media is optional enrichment; configuration and chat providers remain usable.
+      media = [];
+      log.warn(
+        'Media readiness unavailable; returning provider configuration without media readiness',
+        { error: mediaErrorForLog(error) },
+      );
+    }
+    const accountInfo = new Map<string, ProviderView['openAiAccount']>();
+    if (deps.openAiAccountInfo) {
+      await Promise.all(catalog.providers.filter((p) => p.id === 'openai' || p.auth.native === 'codex').map(async (p) => {
+        accountInfo.set(p.id, await deps.openAiAccountInfo!(p.id));
+      }));
+    }
+    const subscriptionInfo = new Map<string, ProviderView['subscriptionAccount']>();
+    if (deps.subscriptionAccountInfo) await Promise.all(catalog.providers
+      .filter(p => p.id === 'anthropic' || p.id === 'xai' || p.auth.native === 'claude' || p.auth.native === 'xai')
+      .map(async p => subscriptionInfo.set(p.id, await deps.subscriptionAccountInfo!(p.id))));
+    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.()).map((provider) => ({
+      ...(subscriptionInfo.get(provider.id) ? { subscriptionAccount: subscriptionInfo.get(provider.id) } : {}),
+      ...provider, ...(provider.source === 'builtin' ? deps.getProviderPresentation?.(provider.id) ?? {} : {}), ...(accountInfo.get(provider.id) ? { openAiAccount: accountInfo.get(provider.id) } : {}),
+      // Deletion disconnects first. A live binding wins over a stale removed flag if
+      // restoring display preferences failed after authentication was committed.
+      ...(provider.connected ? { removed: false } : {}),
+    })).map(
+      (provider) =>
+        media === undefined
+          ? provider
+          : {
+              ...provider,
+              availableMediaModelIds: provider.suspended
+                ? []
+                : [
+                    ...new Set(
+                      media
+                        .filter((model) => model.providerId === provider.id)
+                        .map((model) => model.id),
+                    ),
+                  ],
+            },
+    );
   }
 
   return { listProviders };

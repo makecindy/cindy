@@ -1,8 +1,9 @@
 /**
  * ControlledBanner —— 被控端可见性指示。
  *
- * 当本机正在被同账号的其它设备远程控制时,在聊天输入框上方或全局兜底位置显示一条 chip:
- * 「动态状态点 + 正在被 <设备名> 控制 + 撤销访问权限」。主聊天页展开时与计划胶囊
+ * 同账号设备持有任务订阅时，在输入框上方或全局兜底位置显示连接提示；
+ * 订阅数量不是桌面键鼠控制者数量，实际桌面控制由 RemoteDesktopHost 显示。
+ * 「动态状态点 + <设备名> 已连接到 Cindy + 撤销访问权限」。主聊天页展开时与计划胶囊
  * 组成一组共同居中;点胶囊内的叉后,只把呼吸灯放到 RunningStatusBar 右侧 token 统计
  * 之前。其它页面全局挂载(MainLayout),与 FeishuConflictDialogHost 同级。状态订阅来自
  * device-link:controlled-state push,初值经 getState().controlledBy。
@@ -14,7 +15,14 @@
  * 完整设备名 + 远程控制逻辑说明。
  */
 
-import { useCallback, useEffect, useState, useSyncExternalStore, type CSSProperties } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useSyncExternalStore,
+  type CSSProperties,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Eye, MonitorOff, X } from 'lucide-react';
@@ -41,7 +49,39 @@ interface Controller {
  */
 let cachedControllers: Controller[] = [];
 let pushSubscribed = false;
+let controllerRevision = 0;
 const controllerListeners = new Set<(c: Controller[]) => void>();
+
+// 按实际挂载的内联提示让全局浮条退让，不猜路由（伙伴也复用聊天视图）。
+// 多个 pane / 路由过渡可短暂共存，必须等最后一个内联提示卸载才恢复兜底。
+const inlineBannerOwners = new Set<symbol>();
+const inlineBannerListeners = new Set<() => void>();
+const getInlineBannerSnapshot = () => inlineBannerOwners.size > 0;
+function subscribeInlineBanners(listener: () => void) {
+  inlineBannerListeners.add(listener);
+  return () => {
+    inlineBannerListeners.delete(listener);
+  };
+}
+
+function useInlineBannerPresence(inline: boolean): boolean {
+  const hasInlineBanner = useSyncExternalStore(
+    subscribeInlineBanners,
+    getInlineBannerSnapshot,
+    getInlineBannerSnapshot,
+  );
+  useLayoutEffect(() => {
+    if (!inline) return;
+    const owner = Symbol();
+    inlineBannerOwners.add(owner);
+    for (const listener of inlineBannerListeners) listener();
+    return () => {
+      inlineBannerOwners.delete(owner);
+      for (const listener of inlineBannerListeners) listener();
+    };
+  }, [inline]);
+  return hasInlineBanner;
+}
 
 // composer 被控提示的折叠状态只在当前 renderer 生命周期内保存,并严格按 sessionId
 // 分桶。它不是全局偏好,不写 localStorage / DB / 服务端;切换任务时直接读取对应桶,
@@ -72,12 +112,16 @@ export function useComposerCollapsed(sessionId: string | null): boolean {
 export function __resetControlledBannerForTests(): void {
   cachedControllers = [];
   pushSubscribed = false;
+  controllerRevision++;
   controllerListeners.clear();
   collapsedComposerSessionIds.clear();
   collapsedComposerListeners.clear();
+  inlineBannerOwners.clear();
+  inlineBannerListeners.clear();
 }
 
 function emitControllers(next: Controller[]) {
+  controllerRevision++;
   cachedControllers = next;
   for (const listener of controllerListeners) listener(next);
 }
@@ -88,11 +132,15 @@ function ensureControllerSubscription() {
   if (pushSubscribed) return;
   if (typeof window === 'undefined' || !window.electronAPI?.deviceLink) return;
   pushSubscribed = true;
+  window.electronAPI.deviceLink.onControlledState((p) => emitControllers(p.controllers ?? []));
+  const revision = controllerRevision;
   void window.electronAPI.deviceLink
     .getState()
-    .then((s) => emitControllers(s.controlledBy ?? []))
+    .then((s) => {
+      // A device may disconnect while the initial snapshot is in flight.
+      if (revision === controllerRevision) emitControllers(s.controlledBy ?? []);
+    })
     .catch(() => {});
-  window.electronAPI.deviceLink.onControlledState((p) => emitControllers(p.controllers ?? []));
 }
 
 // 读共享的被控状态:首帧同步返回模块级缓存(remount 不再闪空),后续随 push 更新。
@@ -138,8 +186,11 @@ export function ControlledBanner({
   const controllers = useControlledBy();
   const composerSessionId = placement === 'composer' ? sessionId : null;
   const composerCollapsed = useComposerCollapsed(composerSessionId);
+  const hasInlineBanner = useInlineBannerPresence(
+    placement !== 'floating' && controllers.length > 0,
+  );
 
-  if (controllers.length === 0) return null;
+  if (controllers.length === 0 || (placement === 'floating' && hasInlineBanner)) return null;
 
   const label =
     controllers.length === 1
@@ -180,6 +231,9 @@ export function ControlledBanner({
   const tooltipContent = (
     <div className="space-y-1">
       <div className="font-medium">{label}</div>
+      {hasMultipleControllers && (
+        <div>{controllers.map((controller) => controller.name).join(' · ')}</div>
+      )}
       <div className="opacity-80">{t('remoteDevice.controlledTooltip')}</div>
     </div>
   );

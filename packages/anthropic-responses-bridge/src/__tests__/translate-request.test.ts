@@ -21,6 +21,63 @@ describe('translateRequest', () => {
     ]);
   });
 
+  it('strict 逐工具判定:开关开启时合规工具 strict:true,不合规工具回落 strict:false', () => {
+    const req: AnthropicMessagesRequest = {
+      model: 'xai/grok-4.6',
+      messages: [],
+      tools: [
+        {
+          // 合规:全必填 + additionalProperties:false
+          name: 'Conforming',
+          input_schema: {
+            type: 'object',
+            properties: { file_path: { type: 'string' } },
+            required: ['file_path'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // Edit 真实形态:replace_all 是 optional → 不合规,回落 strict:false
+          name: 'Edit',
+          input_schema: {
+            type: 'object',
+            properties: {
+              file_path: { type: 'string' },
+              old_string: { type: 'string' },
+              new_string: { type: 'string' },
+              replace_all: { type: 'boolean' },
+            },
+            required: ['file_path', 'old_string', 'new_string'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // 复杂 MCP schema 形态:propertyNames 在 strict 子集外 → 不合规
+          name: 'ghost_call',
+          input_schema: {
+            type: 'object',
+            properties: {
+              args: { type: 'object', propertyNames: { type: 'string' } },
+            },
+            required: ['args'],
+            additionalProperties: false,
+          },
+        },
+        {
+          // 无 input_schema → 兜底 {} 不合规,strict:false
+          name: 'NoSchema',
+        },
+      ],
+    };
+    const strictFlags = (opts: Parameters<typeof translateRequest>[1]): boolean[] =>
+      (translateRequest(req, opts).tools ?? []).map((t) => (t as { strict?: boolean }).strict === true);
+
+    // 开关关闭(默认,所有非启用 provider):全部 strict:false
+    expect(strictFlags({ model: 'grok-4.6' })).toEqual([false, false, false, false]);
+    // 开关开启:只有合规工具 strict:true,其余回落
+    expect(strictFlags({ model: 'grok-4.6', strictFunctionTools: true })).toEqual([true, false, false, false]);
+  });
+
   it('上游恒流式:调用方 stream:false 也发 stream:true(codex 对 stream:false 返 400)', () => {
     // chatgpt.com/backend-api/codex 实测:stream:false → 400
     // `{"detail":"Stream must be set to true"}`。非流式调用方由 handler 在下游缓冲满足。
@@ -450,4 +507,21 @@ describe('translateRequest', () => {
     const normal = translateRequest({ model: 'gpt-5.5', messages: [] }, { model: 'gpt-5.5' });
     expect(normal.service_tier).toBeUndefined();
   });
+});
+
+it('round-trips bare-model native tool state with thinking disabled without accepting another connection', async () => {
+  const { SseTranslator } = await import('../translate-sse.js');
+  const namespace = 'cindy-provider-fixture/';
+  const translator = new SseTranslator('bare-model', 'default', namespace);
+  const events = [
+    { type: 'response.created', response: { id: 'resp_native', model: 'bare-model' } },
+    { type: 'response.output_item.added', output_index: 0, item: { id: 'rs_native', type: 'reasoning', summary: [] } },
+    { type: 'response.output_item.done', output_index: 0, item: { id: 'rs_native', type: 'reasoning', summary: [], encrypted_content: 'opaque-tool-state' } },
+  ].flatMap(event => translator.push(event));
+  const block = events.find(event => event.event === 'content_block_start')!.data.content_block;
+  const request = { model: 'bare-model', messages: [{ role: 'assistant', content: [block] }] } as AnthropicMessagesRequest;
+  const settings = { model: 'bare-model', reasoningEffort: 'none' as const, providerPrefix: namespace, preserveReasoningState: true };
+  expect(translateRequest(request, settings).input).toEqual([{ type: 'reasoning', id: 'rs_native', summary: [], encrypted_content: 'opaque-tool-state' }]);
+  expect(translateRequest(request, { ...settings, providerPrefix: 'another-connection/' }).input).toEqual([]);
+  expect(translateRequest(request, { ...settings, preserveReasoningState: false }).input).toEqual([]);
 });

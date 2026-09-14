@@ -11,6 +11,8 @@
  *   into Markdown image nodes before HTML filtering.
  */
 
+import { Tip } from '@/components/ui/tooltip';
+import { CHAT_CODE_CLASS, CHAT_CODE_SURFACE_CLASS, CHAT_ICON_BUTTON_CLASS } from './chatChrome';
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -38,7 +40,11 @@ import {
 } from './rehypeStreamWordFade';
 import { repairStreamingMarkdown } from './repairStreamingMarkdown';
 import { StreamingMarkdownChunk } from './StreamingMarkdownChunk';
-import { splitStreamingMarkdownChunks } from './streamingMarkdownChunks';
+import {
+  getStreamingMarkdownThrottleInterval,
+  splitStreamingMarkdownChunks,
+  STREAMING_MARKDOWN_THROTTLE_BASE_MS,
+} from './streamingMarkdownChunks';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useStreamFadeEnabled } from '@/hooks/useStreamFadePreference';
 import { CopyAsImageBlock, mathBlockToLatex, tableToTsv } from './CopyAsImageBlock';
@@ -201,7 +207,7 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // remarkHtmlImages(<img> HTML → mdast image)与 remarkLocalPathLinks(正文裸路径
 // → link)。remarkSessionLinks 产出的 cindy:// 深链带 scheme,被它的判据跳过,
 // 顺序无关。
-const REMARK_PLUGINS: PluggableList = [
+export const REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
   remarkMath,
@@ -211,7 +217,7 @@ const REMARK_PLUGINS: PluggableList = [
   remarkLocalPathLinks,
   remarkPreserveRawLocalDestinations,
 ];
-const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
+export const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   [remarkGfm, { singleTilde: false }],
   remarkCjkFriendly,
   remarkMath,
@@ -242,6 +248,14 @@ const REHYPE_PLUGINS: PluggableList = [
   rehypeHighlight,
   rehypeFencedCodeMarker,
 ];
+
+/** MarkdownRenderer 与所有“实际是否渲染”判定共用的输入归一化。 */
+export function normalizeMarkdownRendererContent(
+  content: string,
+  preserveLineCount = false,
+): string {
+  return normalizeMathDelimiters(content, { preserveLineCount });
+}
 /**
  * 聊天正文里一切「可点」的行内元素共用这一套外观:**正文色 + 常显下划线**。
  *
@@ -312,8 +326,8 @@ interface MarkdownRendererProps {
    *  Stable per-session — only changes on session switch (parent remount). */
   workingDir: string;
   content: string;
-  /** When true, react-markdown re-parse + rehype-highlight runs at most
-   *  ~10fps via useStreamingThrottle. The final value is always flushed
+  /** When true, react-markdown re-parse + rehype-highlight is rate-limited
+   *  (10fps for short content, slower for long documents). The final value is always flushed
    *  synchronously when this flag flips back to false, so the completed
    *  message never misses its last token. Default false (static content
    *  paths like TextLightbox bypass the throttle entirely). */
@@ -374,8 +388,8 @@ function parseSessionCardHref(href: string): {
 }
 
 /**
- * Throttle a rapidly-changing string to at most one render per
- * `intervalMs`. Caps react-markdown re-parse + rehype-highlight CPU
+ * Throttle a rapidly-changing string to at most one render per adaptive
+ * interval. Caps react-markdown re-parse + rehype-highlight CPU
  * during SDK streaming, where text deltas can land 30-60 times/s even
  * after the main-process IPC batcher.
  *
@@ -385,11 +399,22 @@ function parseSessionCardHref(href: string): {
  *   guaranteed (no-token-lost). Switching back to false flushes the
  *   latest value synchronously.
  */
-function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100): string {
+function useStreamingThrottle(value: string, enabled: boolean): string {
+  const intervalMs = enabled
+    ? getStreamingMarkdownThrottleInterval(value)
+    : STREAMING_MARKDOWN_THROTTLE_BASE_MS;
   const [throttled, setThrottled] = useState(value);
+  const throttledRef = useRef(value);
   const latestRef = useRef(value);
   const lastEmitRef = useRef(0);
   const timerRef = useRef<number | null>(null);
+
+  const emit = useCallback((nextValue: string, now: number) => {
+    lastEmitRef.current = now;
+    if (throttledRef.current === nextValue) return;
+    throttledRef.current = nextValue;
+    setThrottled(nextValue);
+  }, []);
 
   useEffect(() => {
     latestRef.current = value;
@@ -401,27 +426,39 @@ function useStreamingThrottle(value: string, enabled: boolean, intervalMs = 100)
       }
       // Stream just ended — flush whatever the most recent value is so
       // the final frame is never the last throttled snapshot.
-      if (throttled !== value) setThrottled(value);
+      if (throttledRef.current !== value) {
+        throttledRef.current = value;
+        setThrottled(value);
+      }
+      // A new stream should get a leading frame even if it starts shortly
+      // after the previous one ended.
+      lastEmitRef.current = 0;
       return;
     }
 
     const now = performance.now();
     const elapsed = now - lastEmitRef.current;
     if (elapsed >= intervalMs) {
-      lastEmitRef.current = now;
-      setThrottled(value);
+      if (timerRef.current != null) {
+        window.clearTimeout(timerRef.current);
+        timerRef.current = null;
+      }
+      emit(value, now);
       return;
     }
-    if (timerRef.current == null) {
-      timerRef.current = window.setTimeout(() => {
+
+    // Re-arm on every update so an interval bucket change cannot leave a
+    // timer using the previous (shorter) delay. The latest ref keeps the
+    // trailing edge lossless even when several batches arrive in between.
+    if (timerRef.current != null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(
+      () => {
         timerRef.current = null;
-        lastEmitRef.current = performance.now();
-        setThrottled(latestRef.current);
-      }, intervalMs - elapsed);
-    }
-    // No new timer needed — an in-flight one will pick up latestRef
-    // when it fires.
-  }, [value, enabled, intervalMs, throttled]);
+        emit(latestRef.current, performance.now());
+      },
+      Math.max(0, intervalMs - elapsed),
+    );
+  }, [emit, value, enabled, intervalMs]);
 
   useEffect(() => {
     return () => {
@@ -473,11 +510,9 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       <pre
         ref={preRef}
         className={cn(
-          'rounded-[12px]',
-          'border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)]',
-          'p-4 font-mono text-[length:var(--app-code-font-size)] leading-[1.5]',
-          'select-text',
+          CHAT_CODE_SURFACE_CLASS,
+          CHAT_CODE_CLASS,
+          'p-4',
           // 取消横向滚动:长行/长 token 自动折行,避免出现横滚条
           'whitespace-pre-wrap break-all',
         )}
@@ -485,22 +520,23 @@ function CodeBlockPre({ children, ...props }: HTMLAttributes<HTMLPreElement>) {
       >
         {children}
       </pre>
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
-        title={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copy')}
-        className={cn(
-          'absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center',
-          'rounded-md border border-[var(--msg-code-block-border)]',
-          'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
-          'opacity-0 transition-opacity duration-150',
-          'group-hover:opacity-100 focus-visible:opacity-100',
-          'hover:bg-[var(--cmd-palette-item-hover)] hover:text-[var(--msg-assistant-text)]',
-        )}
-      >
-        {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
-      </button>
+      <Tip text={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}>
+        <button
+          type="button"
+          onClick={handleCopy}
+          aria-label={copied ? t('chat.markdownRenderer.codeCopied') : t('chat.markdownRenderer.copyCode')}
+          className={cn(
+            CHAT_ICON_BUTTON_CLASS,
+            'absolute right-2 top-2 h-7 w-7 border border-[var(--msg-code-block-border)]',
+            'bg-[var(--msg-code-block-bg)] text-[var(--msg-tool-text)]',
+            'opacity-0 transition-[color,background-color,opacity] duration-[var(--motion-fast)]',
+            'group-hover:opacity-100 focus-visible:opacity-100',
+            'enabled:hover:bg-[var(--cmd-palette-item-hover)] enabled:hover:text-[var(--msg-assistant-text)]',
+          )}
+        >
+          {copied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
+        </button>
+      </Tip>
     </div>
   );
 }
@@ -937,6 +973,8 @@ function localKindFromAbsPath(absPath: string, fallback: MarkdownLocalKind): Mar
 function FileTargetChip({
   resolvedAbsPath,
   localKind,
+  line,
+  column,
   onOpen,
   title,
   children,
@@ -944,6 +982,8 @@ function FileTargetChip({
 }: {
   resolvedAbsPath: string;
   localKind: MarkdownLocalKind;
+  line?: number;
+  column?: number;
   onOpen: () => void | Promise<void>;
   title?: string;
   children: ReactNode;
@@ -978,6 +1018,7 @@ function FileTargetChip({
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
     getAbsPath: async () => resolvedAbsPath,
+    location: { absPath: resolvedAbsPath, line, column },
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
     sidebarFileBrowserKind: localKind === 'directory' ? 'directory' : 'file',
     sidebarOpenSessionId: htmlWithSession,
@@ -1072,6 +1113,8 @@ function FileTargetChip({
 function ResolvedLocalLink({
   resolvedAbsPath,
   localKind,
+  line,
+  column,
   href,
   onOpen,
   anchorProps,
@@ -1080,6 +1123,8 @@ function ResolvedLocalLink({
 }: {
   resolvedAbsPath: string;
   localKind: MarkdownLocalKind;
+  line?: number;
+  column?: number;
   href: string;
   onOpen: () => void | Promise<void>;
   anchorProps: Record<string, unknown>;
@@ -1097,6 +1142,7 @@ function ResolvedLocalLink({
   const sidebarTargetSessionId = useSidebarTargetSessionId(htmlWithSession);
   const ctxMenu = useFileChipContextMenu({
     getAbsPath: () => resolvedAbsPath,
+    location: { absPath: resolvedAbsPath, line, column },
     canOpenInBrowser: localKind !== 'directory' && isBrowserOpenablePath(resolvedAbsPath),
     sidebarFileBrowserKind: localKind === 'directory' ? 'directory' : 'file',
     sidebarOpenSessionId: htmlWithSession,
@@ -1475,6 +1521,8 @@ function MarkdownTargetLink({
         <ResolvedLocalLink
           resolvedAbsPath={target.absPath}
           localKind={target.localKind}
+          line={target.line}
+          column={target.column}
           href={target.href}
           onOpen={openResolvedTarget}
           anchorProps={anchorProps}
@@ -1488,6 +1536,8 @@ function MarkdownTargetLink({
       <FileTargetChip
         resolvedAbsPath={target.absPath}
         localKind={target.localKind}
+        line={target.line}
+        column={target.column}
         title={target.href}
         onOpen={openResolvedTarget}
         sessionId={sessionId}
@@ -1607,6 +1657,8 @@ function InlineCodeWithTarget({
     <FileTargetChip
       resolvedAbsPath={target.absPath}
       localKind={target.localKind}
+      line={target.line}
+      column={target.column}
       title={target.absPath}
       onOpen={() =>
         activateResolvedLocalTarget(
@@ -1668,7 +1720,7 @@ export const MarkdownRenderer = memo(function MarkdownRenderer({
     [throttledContent, streamFade],
   );
   const renderedContent = useMemo(
-    () => normalizeMathDelimiters(repairedContent, { preserveLineCount: emitSourceLines }),
+    () => normalizeMarkdownRendererContent(repairedContent, emitSourceLines),
     [repairedContent, emitSourceLines],
   );
   const streamingChunks = useMemo(

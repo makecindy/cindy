@@ -17,7 +17,6 @@ import { createLogger } from '../logger.js';
 
 const CODEX_RESPONSES_URL = 'https://chatgpt.com/backend-api/codex/responses';
 const HOST_MODEL = 'gpt-5.5';
-const IMAGE_MODEL = 'gpt-image-2';
 const USER_AGENT = `codex_cli_rs/cindy (${process.platform}; ${process.arch})`;
 const SSE_EVENT_BOUNDARY = /(?:\r\n|\r|\n){2}/;
 const SSE_LINE_ENDING = /\r\n|\r|\n/;
@@ -29,6 +28,7 @@ const SIZE_BY_ASPECT = {
 } as const;
 
 export interface CreateCodexImageChannelOptions {
+  providerId?: string;
   hasOAuthLogin(): boolean;
   getAuth(): Promise<{ accessToken: string; accountId: string | null }>;
   /** Best-effort handoff to the shared token-aware invalidation coordinator. */
@@ -147,7 +147,8 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     aspectRatio?: '1:1' | '3:2' | '2:3';
     signal?: AbortSignal;
   }): Promise<ImageChannelResult> {
-    if (params.model !== `openai/${IMAGE_MODEL}`) {
+    const modelPrefix = `${opts.providerId ?? 'openai'}/`;
+    if (!params.model.startsWith(modelPrefix) || !params.model.slice(modelPrefix.length).trim()) {
       throw new Error(`Codex 图像通道不支持模型:${params.model}`);
     }
     // 先在 token 刷新 / 本地参考图读取之前拦停，后面的二次检查继续覆盖
@@ -157,6 +158,10 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
       opts.getAuth(),
       Promise.all((params.imagePaths ?? []).map(inputImage)),
     ]);
+    const currentAuth = await opts.getAuth();
+    if (currentAuth.accessToken !== auth.accessToken || currentAuth.accountId !== auth.accountId) {
+      throw new Error('Codex image account changed before dispatch');
+    }
     opts.beforeDispatch?.(params.model);
     const content: Array<Record<string, unknown>> = [
       { type: 'input_text', text: params.prompt },
@@ -171,7 +176,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
       tools: [
         {
           type: 'image_generation',
-          model: IMAGE_MODEL,
+          model: params.model.slice(modelPrefix.length),
           ...(params.aspectRatio ? { size: SIZE_BY_ASPECT[params.aspectRatio] } : {}),
           quality: 'medium',
           output_format: 'png',
@@ -184,7 +189,7 @@ export function createCodexImageChannel(opts: CreateCodexImageChannelOptions): I
     const startedAt = Date.now();
     const requestLog = {
       requestId,
-      providerId: 'openai',
+      providerId: opts.providerId ?? 'openai',
       modelId: params.model,
       method: 'POST',
       url: mediaRequestUrlForLog(CODEX_RESPONSES_URL),

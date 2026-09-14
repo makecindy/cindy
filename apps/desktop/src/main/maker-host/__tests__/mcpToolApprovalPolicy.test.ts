@@ -50,6 +50,7 @@ describe('desktop Claude read-only allowlist', () => {
       'mcp__cindy__ghost_list',
       'mcp__cindy__ghost_info',
       'mcp__cindy__ghost_manual',
+      'mcp__cindy__ghost_market_search',
       'mcp__cindy__ghost_forge_guide',
       'mcp__cindy_browser__list_tools',
       'mcp__cindy_android__list_tools',
@@ -152,10 +153,11 @@ describe('desktop MCP approval policy', () => {
       'cindy_scheduler',
       'cindy_memory',
       'cindy_helper',
-      'cindy_orca',
       // worker → lead 回报通道:执行边界在工具内部 fail-closed, 逐次弹窗
       // 会让远端 daemon 等审批超时断链。
       'orca_worker_bridge',
+      // 个人版制作任务的完成回报:执行边界在工具内部按 cindy-make 标记 fail-closed。
+      'cindy_make',
       'cindy_lsp',
     ]) {
       expect(getDesktopMcpToolApprovalPolicy({ serverName })).toBe('auto-approve');
@@ -358,6 +360,61 @@ describe('desktop MCP approval policy', () => {
     );
   });
 
+  it('auto-approves first-party Cindy Art media ghost_call tools without prompting', () => {
+    for (const tool of ['gen_image', 'edit_image', 'gen_video', 'edit_video']) {
+      expect(
+        getDesktopMcpToolApprovalPolicy({
+          serverName: 'cindy',
+          toolName: 'ghost_call',
+          toolParams: { ghost_id: 'cindy-art', tool, args: { prompt: 'a cat' } },
+        }),
+        `${tool} should be auto-approved`,
+      ).toBe('auto-approve');
+    }
+
+    // Codex elicitation 可能省略外层 toolName，仍按内层 ghost_id / tool 判定。
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolParams: { ghost_id: 'cindy-art', tool: 'gen_image', args: { prompt: 'a cat' } },
+      }),
+    ).toBe('auto-approve');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: JSON.stringify({
+          ghost_id: 'cindy-art',
+          tool: 'gen_image',
+          args: { prompt: 'a cat' },
+        }),
+      }),
+    ).toBe('auto-approve');
+
+    // 其它插件、未知工具、缺内层身份仍 fail closed。
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: { ghost_id: 'google-gmail', tool: 'gmail', args: { action: 'send' } },
+      }),
+    ).toBe('prompt');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: { ghost_id: 'cindy-art', tool: 'unknown_tool' },
+      }),
+    ).toBe('prompt');
+    expect(
+      getDesktopMcpToolApprovalPolicy({
+        serverName: 'cindy',
+        toolName: 'ghost_call',
+        toolParams: { tool: 'gen_image' },
+      }),
+    ).toBe('prompt');
+  });
+
   it('auto-approves the browser call_tool entry that Claude used to prompt for every time', () => {
     // 回归锚点: cindy_browser 的真实动作全部走 call_tool。Claude 侧过去只静态放行
     // list_tools, 于是每次 navigate / snapshot / click 都弹一次窗。
@@ -368,5 +425,51 @@ describe('desktop MCP approval policy', () => {
         toolParams: { name: 'browser', args: { action: 'navigate', url: 'https://example.com' } },
       }),
     ).toBe('auto-approve');
+  });
+});
+
+describe('Cindy market action authorization', () => {
+  it('allows catalog discovery but reviews each selected installation', () => {
+    expect(getDesktopMcpToolApprovalPolicy({serverName: 'cindy', toolName: 'ghost_market_search'})).toBe('auto-approve');
+    expect(getDesktopMcpToolApprovalPolicy({serverName: 'cindy', toolName: 'ghost_market_install'})).toBe('prompt-each-time');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy__ghost_market_install');
+  });
+});
+
+describe('Orca Worker directory authorization', () => {
+  const policy = (toolName: string | undefined, toolParams?: unknown) =>
+    getDesktopMcpToolApprovalPolicy({ serverName: 'cindy_orca', toolName, toolParams });
+
+  it('reviews every explicit root, including batch entries and JSON payloads', () => {
+    for (const working_dir of ['/private/project', '/remote/project ', '', null]) {
+      for (const [name, params] of [
+        ['create_worker', { working_dir }],
+        ['create_workers', { workers: [{ label: 'inherits' }, { working_dir }] }],
+      ] as const) {
+        expect(policy(name, params)).toBe('prompt-each-time');
+        expect(policy(name, JSON.stringify(params))).toBe('prompt-each-time');
+      }
+    }
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_orca__create_worker');
+    expect(getDesktopClaudeReadOnlyAllowedTools()).not.toContain('mcp__cindy_orca__create_workers');
+  });
+
+  it('preserves inherited-directory creation and other Orca operations', () => {
+    expect(policy('create_worker', { label: 'inherits' })).toBe('auto-approve');
+    expect(policy('create_workers', { workers: [{ label: 'a' }, { label: 'b' }] })).toBe('auto-approve');
+    expect(policy('send_to_worker', { worker_id: 'a', message: 'continue' })).toBe('auto-approve');
+    expect(policy('list_workers')).toBe('auto-approve');
+  });
+
+  it('does not infer directory inheritance from missing approval evidence', () => {
+    expect(policy(undefined)).toBe('prompt-each-time');
+    expect(policy(undefined, { working_dir: '/other' })).toBe('prompt-each-time');
+    for (const name of ['create_worker', 'create_workers']) {
+      for (const params of [undefined, 'invalid JSON', [], null]) {
+        expect(policy(name, params)).toBe('prompt-each-time');
+      }
+    }
+    expect(policy('create_workers', {})).toBe('prompt-each-time');
+    expect(policy('create_workers', { workers: [null] })).toBe('prompt-each-time');
   });
 });

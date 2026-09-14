@@ -1,3 +1,5 @@
+import { colorRegistry } from '../themes/color-registry';
+import '../themes/colors';
 /**
  * markdownDiffBlock.test.ts
  * ---------------------------------------------------------------------------
@@ -53,39 +55,37 @@ const diffBlockSrc = readFileSync(diffBlockPath, 'utf8');
 const colorsSrc = readFileSync(colorsPath, 'utf8');
 const globalsSrc = readFileSync(globalsPath, 'utf8');
 
-function registeredColorBlock(name: string): string {
-  const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const match = colorsSrc.match(new RegExp(`registerColor\\('${escaped}'[\\s\\S]*?\\n\\}, '[^']+'\\);`));
-  expect(match, `registerColor('${name}') not found`).toBeTruthy();
-  if (!match) throw new Error(`registerColor('${name}') not found`);
-  return match[0];
+function registeredColorBlock(name: string) {
+  const entry = colorRegistry.getColors().find(color => color.id === name);
+  expect(entry, `registerColor('${name}') not found`).toBeTruthy();
+  return entry!.defaults;
 }
 
 describe('F1 — theme tokens use GitHub-standard diff foregrounds', () => {
   it(':root light --diff-add-fg = #22863a', () => {
-    expect(registeredColorBlock('diff-add-fg')).toMatch(/light:\s*'#22863a'/);
+    expect(registeredColorBlock('diff-add-fg')).toMatchObject({ light: '#22863a' });
   });
 
   it(':root light --diff-del-fg = #b31d28', () => {
-    expect(registeredColorBlock('diff-del-fg')).toMatch(/light:\s*'#b31d28'/);
+    expect(registeredColorBlock('diff-del-fg')).toMatchObject({ light: '#b31d28' });
   });
 
   it('.dark --diff-add-fg = #7ee787', () => {
-    expect(registeredColorBlock('diff-add-fg')).toMatch(/dark:\s*'#7ee787'/);
+    expect(registeredColorBlock('diff-add-fg')).toMatchObject({ dark: '#7ee787' });
   });
 
   it('.dark --diff-del-fg = #ff7b72', () => {
-    expect(registeredColorBlock('diff-del-fg')).toMatch(/dark:\s*'#ff7b72'/);
+    expect(registeredColorBlock('diff-del-fg')).toMatchObject({ dark: '#ff7b72' });
   });
 
   it('backgrounds use GitHub-standard red/green for full-row fill', () => {
     // diff 颜色现在由主题 token 注册,组件只消费 var(--diff-*)。
-    expect(registeredColorBlock('diff-add-bg')).toMatch(/light:\s*'#f0fff4'/);
-    expect(registeredColorBlock('diff-del-bg')).toMatch(/light:\s*'#ffeef0'/);
-    expect(registeredColorBlock('diff-add-bg')).toMatch(/dark:\s*'#033a16'/);
-    expect(registeredColorBlock('diff-del-bg')).toMatch(/dark:\s*'#67060c'/);
-    expect(registeredColorBlock('diff-line-num')).toMatch(/light:\s*'var\(--text-tertiary-stone\)'/);
-    expect(registeredColorBlock('diff-line-num')).toMatch(/dark:\s*'var\(--text-tertiary-stone\)'/);
+    expect(registeredColorBlock('diff-add-bg')).toMatchObject({ light: '#f0fff4' });
+    expect(registeredColorBlock('diff-del-bg')).toMatchObject({ light: '#ffeef0' });
+    expect(registeredColorBlock('diff-add-bg')).toMatchObject({ dark: '#033a16' });
+    expect(registeredColorBlock('diff-del-bg')).toMatchObject({ dark: '#67060c' });
+    expect(registeredColorBlock('diff-line-num')).toMatchObject({ light: 'var(--text-tertiary-stone)' });
+    expect(registeredColorBlock('diff-line-num')).toMatchObject({ dark: 'var(--text-tertiary-stone)' });
   });
 
   it('hljs-addition / hljs-deletion are display:block so backgrounds reach the right edge', () => {
@@ -103,10 +103,10 @@ describe('F1 — theme tokens use GitHub-standard diff foregrounds', () => {
 
     // The old light-mode add was #262626 (Near Black) and dark-mode add was
     // #d4d4d4 (Soft Gray). Those must no longer be tied to --diff-add-fg.
-    expect(addFgBlock).not.toMatch(/#262626/);
-    expect(addFgBlock).not.toMatch(/#d4d4d4/);
+    expect(Object.values(addFgBlock)).not.toContain('#262626');
+    expect(Object.values(addFgBlock)).not.toContain('#d4d4d4');
     // Old del was Stone #737373 in both modes.
-    expect(delFgBlock).not.toMatch(/#737373/);
+    expect(Object.values(delFgBlock)).not.toContain('#737373');
   });
 });
 

@@ -209,7 +209,12 @@ export function UserMessageEditBox({
           ? [rebuiltSlashRange]
           : undefined;
       const followStartGeneration = readSendFollowCancelGeneration(sessionId);
-      let accepted = true;
+      // 点发送就跟底。等受理会让阅读历史时的残留上翻把票作废。
+      tryRequestFollowLatest({
+        sourceSessionId: sessionId,
+        currentSessionId: sessionId,
+        startGeneration: followStartGeneration,
+      });
       if (onCommitOverride) {
         // 被拦消息:普通重发(不 rewind)。失败抛错落入下方 catch 保留编辑态。
         await onCommitOverride({
@@ -220,7 +225,7 @@ export function UserMessageEditBox({
           ...(preservedSlashCommandRanges !== undefined ? { slashCommandRanges: preservedSlashCommandRanges } : {}),
         });
       } else {
-        accepted = await commitEditAndResendWithRunningRetry({
+        await commitEditAndResendWithRunningRetry({
           sessionId,
           clientId: messageClientId,
           text: submitText,
@@ -231,18 +236,6 @@ export function UserMessageEditBox({
           ...(preservedAgentReferences ? { agentReferences: preservedAgentReferences } : {}),
           ...(preservedPastedTextRanges ? { pastedTextRanges: preservedPastedTextRanges } : {}),
           ...(preservedSlashCommandRanges !== undefined ? { slashCommandRanges: preservedSlashCommandRanges } : {}),
-        });
-      }
-      // 先归零守卫再 onSent:onSent 让父组件立刻卸载本组件,晚于它的 setState
-      // 在已卸载组件上是无效 no-op(bot review 指出的死代码顺序问题)。
-      // 编辑框挂在 MessageStream(key=sessionId) 里,切走即卸载;跟底 store 按
-      // session 隔离,这里 bump 不会钉到别的会话。CCAgentSessionView 会在
-      // `/cc-agent/:id` 切换后存活,所以那边才比对 sessionIdRef.current。
-      if (accepted) {
-        tryRequestFollowLatest({
-          sourceSessionId: sessionId,
-          currentSessionId: sessionId,
-          startGeneration: followStartGeneration,
         });
       }
       submittingRef.current = false;

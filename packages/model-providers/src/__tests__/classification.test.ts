@@ -152,6 +152,8 @@ describe('categorize', () => {
   it('图像生成类归 image(issue #882)', () => {
     expect(categorize('gemini-3.1-flash-image')).toBe('image');
     expect(categorize('gpt-image-1.5')).toBe('image');
+    expect(categorize('gpt-image-2.5-sunburst')).toBe('image');
+    expect(categorize('openai/gpt-image-2.5-flare')).toBe('image');
   });
 
   it('id 里不含类型关键词的知名非聊天模型家族(dall-e / sora / veo)也不误判为可聊天(2026-07 review:走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group 兜底,全靠这份正则)', () => {
@@ -318,6 +320,8 @@ describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', ()
     { id: 'gemini-3-pro-image', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-1.5', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-2', mode: 'image_generation', category: 'image' },
+    { id: 'gpt-image-2.5-sunburst', mode: 'image_generation', category: 'image' },
+    { id: 'gpt-image-2.5-flare', mode: 'image_generation', category: 'image' },
     { id: 'text-embedding-3-large', mode: 'embedding', category: 'embedding' },
     { id: 'text-embedding-3-small', mode: 'embedding', category: 'embedding' },
     { id: 'gemini-embedding-2-preview', mode: 'embedding', category: 'embedding' },

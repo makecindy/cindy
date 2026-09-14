@@ -100,13 +100,14 @@ export function isDeviceProbeDue(deviceId: string): boolean {
  * runInvoke → dispatchLocalInvoke → local-db 读路径才算数——link-accept 与
  * subscribe/unsubscribe 都在 dispatch 里于 runInvoke **之前**特判应答,
  * IPC/DB 子系统卡死时它们照常回包,不能作为恢复证据。sessions:list limit=1
- * 是最便宜的真实 DB 读,恰好就是事故里被卡死的那类请求;args 形状与
- * devices 页的正常拉取一致([limit, statusFilter, opts])。
+ * 是最便宜的真实 DB 读,恰好就是事故里被卡死的那类请求;探测刻意不加载全部置顶
+ * 会话,只验证远端 DB / IPC 是否恢复;args 形状与 devices 页的正常拉取一致
+ * ([limit, statusFilter, opts])。
  */
 export const DEVICE_RESPONSIVENESS_PROBE_CHANNEL = 'local-db:sessions:list';
 
 export function buildDeviceResponsivenessProbeArgs(): unknown[] {
-  return [1, 'all', { includePinned: true }];
+  return [1, 'all', { includePinned: false }];
 }
 
 /**

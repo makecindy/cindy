@@ -31,7 +31,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('remoteUnavailableReason: composerRemoteUnavailableReason,');
     expect(source).toContain('describeRemoteComposerBlockingError(connectionError)');
     // 会话尚未在被控端建成时,队列行(取消 / 编辑 / 插队)仍然只读。
-    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason\n    ?? cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueAvailabilityReason = cacheSeededReason\n    ?? pendingCreationReason');
+    expect(source).toContain('const queueInlineReadOnlyReason = collaborationReadOnlyReason ?? queueAvailabilityReason');
+    expect(source).toContain('const errorRecoveryReadOnlyReason = composerReadOnlyReason ?? queueAvailabilityReason');
   });
 
   it('matches Desktop control behavior during a transient disconnect', () => {
@@ -274,7 +276,9 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(retry).toContain('|| isDeviceUnresponsive');
     expect(syncCatch).toContain('latchOutboxTransportHold(formatted);');
     expect(syncCatch).not.toContain('? null : current');
-    expect(source).toContain('error={connectionRecoveryError}');
+    expect(source).toContain('error={bannerError}');
+    expect(source).toContain('const bannerError = connectionRecoveryError ?? historyError;');
+    expect(source).toContain('requestErrorAutoRecovering={bannerRetriesHistory ? false : undefined}');
   });
 
   it('separates the interrupted metadata fence from the full read-ack sync gate', () => {
@@ -445,9 +449,10 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(screen).toContain('const showComposerActivity = isSessionStreaming || streamingSticky === sessionId;');
 
     const bubble = readSource('src/session/PendingSendBubble.tsx');
-    expect(bubble).toContain("const identity = `${thumb.uri ?? ''}|${thumb.ossRef ?? ''}`;");
-    expect(bubble).toContain("const shown = shownRef.current?.identity === identity ? shownRef.current.uri : null;");
-    expect(bubble).toContain('remoteState?.identity === identity ? remoteState.uri : null');
+    // 上传补齐 ossRef 不改变本地图片身份；附件替换仍重置预览。
+    expect(bubble).toContain('const identity = thumb.uri ?? thumb.ossRef ?? thumb.key;');
+    expect(bubble).toContain('shownRef.current?.identity === identity && !failedUris.includes(shownRef.current.uri)');
+    expect(bubble).toContain('remoteState?.identity === identity && !failedUris.includes(remoteState.uri)');
   });
 
   it('routes every remote-session-dependent entry through one judgement', () => {

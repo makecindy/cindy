@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../shared/openPathResult';
 import { toast } from './toast';
 import { isTextPreviewSupported } from './textPreview';
 import { i18n } from '@/i18n';
@@ -14,7 +15,7 @@ export async function shouldOpenTextLightbox(filePath: string): Promise<boolean>
 
   try {
     const res = await window.electronAPI.openPath(filePath);
-    if (!res.success) {
+    if (shouldShowOpenPathError(res)) {
       toast.error(res.error || i18n.t('logic.errors.openFileFailed'));
     }
   } catch (err) {

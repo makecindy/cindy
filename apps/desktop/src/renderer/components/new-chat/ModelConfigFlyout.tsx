@@ -1,4 +1,6 @@
-import { Check, Star, Zap } from 'lucide-react';
+import { useModelContextLimit } from '@/hooks/useModelContextLimit';
+import { localizedModelName } from '@/lib/modelDisplayNames';
+import { Star, Zap } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { formatContextWindow, type UnifiedModelEntry } from '@cindy/model-providers';
@@ -13,13 +15,9 @@ import type { Effort } from '@/lib/userPreferences.types';
 import { EFFORT_TIER_COLORS } from '@/themes/effortTierColors';
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 
-import { agentOptionOf } from './agentOptions';
+import { ModelHarnessPicker } from './ModelHarnessPicker';
 import { EffortSlider } from './EffortSlider';
-import {
-  engineOfAgentKind,
-  type UnifiedEngine,
-  type UnifiedRowConfig,
-} from './unifiedModelSelection';
+import type { UnifiedEngine, UnifiedRowConfig } from './unifiedModelSelection';
 
 /** 底栏三态(等高,切态不改变浮层高度 —— 规格 §1.3「高度恒定」)。 */
 export type ModelConfigFlyoutState = 'recommended' | 'customized' | 'favorite';
@@ -37,6 +35,8 @@ export interface ModelConfigFlyoutProps {
   /** 刚刚点过 ☆ 的 0.7s 反馈态(规格 §1.5)。 */
   justFavorited?: boolean;
   disabled?: boolean;
+  /** Same-engine views show the current harness without offering a cross-engine switch. */
+  engineLocked?: boolean;
   onEngineChange: (engine: UnifiedEngine) => void;
   onEffortChange: (effort: Effort) => void;
   onFastChange: (enabled: boolean) => void;
@@ -48,13 +48,13 @@ export interface ModelConfigFlyoutProps {
 /**
  * ModelConfigFlyout —— 模型行的**配置浮层**(model-selector-unified §1.3 / §1.5)。
  *
- * 自上而下:标题(+☆) → 来源 · 上下文 → 推理强度滑杆(+⚡) → 引擎胶囊 → 价格 → 状态底栏。
- * 无字段标题,组件自表达。
+ * 自上而下:标题(+☆) → 来源 · 上下文 → 推理强度滑杆(+⚡) → 引擎选项 → 价格 → 状态底栏。
+ * 原生协议作为简短参考；具体选项展示当前路由的原生/兼容关系。
  *
  * 两条「不做假按钮」的硬边界:
  *   - 滑杆只在该 (模型, 引擎) 真实支持 ≥2 个档位时出现;1 档或 0 档 = 不可调,整块不画。
  *   - ⚡ 只在该 (模型, 引擎) 的 `supportsFastMode` × agent 运行时能力都为真时出现。
- * 引擎胶囊只列**候选引擎**(M1 已按生效来源解析);单候选时是静态块,不可点。
+ * 引擎选项只列**候选引擎**，标注原生/兼容；单候选或同引擎轨锁定时不可切换。
  *
  * 切引擎后价格 / 上下文 / 档位集合会立刻变 —— 它们全部由调用方按新引擎现查后传下来
  * (同一模型跨引擎的上下文窗口真的不同,如 gpt-5.5 在 cc 1M / codex 272K)。
@@ -68,6 +68,7 @@ export function ModelConfigFlyout({
   effortLabelOf,
   justFavorited = false,
   disabled = false,
+  engineLocked = false,
   onEngineChange,
   onEffortChange,
   onFastChange,
@@ -76,26 +77,31 @@ export function ModelConfigFlyout({
   onRemoveFavorite,
 }: ModelConfigFlyoutProps) {
   const { t } = useTranslation();
-  const recommendedEngine = engineOfAgentKind(entry.recommended);
-  const candidates = entry.candidates.map(engineOfAgentKind);
-  const multiEngine = candidates.length > 1;
+  const displayName = localizedModelName(entry.displayName, t);
   const showSlider = config.efforts.length > 1;
-  const contextWindow = config.capability?.contextWindow ?? 0;
+  const contextLimit = useModelContextLimit({
+    providerId: entry.providerId,
+    agent: config.engine === 'cc' ? 'claude-code' : config.engine,
+    modelId: config.wireModelId ?? entry.modelId,
+  });
+  const contextWindow = contextLimit.limit ?? config.capability?.contextWindow ?? 0;
+  const codexDefaultContext = config.engine === 'codex';
+  const codexContext = codexDefaultContext ? contextLimit.codexContext ?? null : null;
   const starred = state === 'favorite' || justFavorited;
 
   const discount = price?.kind === 'priced' ? price.discount : undefined;
-  const priceRows = price?.kind === 'priced' ? modelPriceDetailRows(price.current, price.original) : [];
+  const priceRows =
+    price?.kind === 'priced' ? modelPriceDetailRows(price.current, price.original) : [];
   // 折后价那一行的 hover 全文:逐项「标准价 X」;没有原价对比时不挂 title。
-  const priceDetailTitle =
-    priceRows.some((row) => row.originalValue)
-      ? priceRows
-          .filter((row) => row.originalValue)
-          .map(
-            (row) =>
-              `${t(`newChat.modelSelector.pricing.${row.kind}`)} ${row.value} ← ${row.originalValue}`,
-          )
-          .join(' · ')
-      : null;
+  const priceDetailTitle = priceRows.some((row) => row.originalValue)
+    ? priceRows
+        .filter((row) => row.originalValue)
+        .map(
+          (row) =>
+            `${t(`newChat.modelSelector.pricing.${row.kind}`)} ${row.value} ← ${row.originalValue}`,
+        )
+        .join(' · ')
+    : null;
   const priceFootnote =
     price?.kind === 'priced'
       ? price.current.source === 'subscription-reference'
@@ -108,15 +114,15 @@ export function ModelConfigFlyout({
   return (
     <div
       role="group"
-      aria-label={`${entry.displayName} ${t('newChat.modelSelector.options')}`}
+      aria-label={`${displayName} ${t('newChat.modelSelector.options')}`}
       className="flex flex-col"
     >
       <div className="flex items-start gap-2">
         <span
-          title={entry.displayName}
+          title={displayName}
           className="line-clamp-2 min-w-0 flex-1 text-14 font-semibold leading-[1.35] text-[var(--model-item-text)]"
         >
-          {entry.displayName}
+          {displayName}
         </span>
         <button
           type="button"
@@ -150,11 +156,19 @@ export function ModelConfigFlyout({
           <>
             {' · '}
             {t('newChat.modelSelector.meta.context', {
-              value: formatContextWindow(contextWindow),
+              value: codexDefaultContext
+                ? codexContext ? formatContextWindow(codexContext.contextWindow) : t('settings.providers.models.advanced.codexContextUnknown')
+                : formatContextWindow(contextWindow),
             })}
           </>
         )}
       </div>
+
+      {codexDefaultContext && (
+        <p className="pt-1.5 text-11 leading-relaxed text-[var(--text-tertiary)]">
+          {t('ccAgent.layout.contextRing.codexAutoHint')}
+        </p>
+      )}
 
       {(showSlider || config.fastCapable) && (
         // 设计稿 .fly-ctrl:first-of-type:第一个控件行上距 14px。
@@ -203,49 +217,13 @@ export function ModelConfigFlyout({
         </div>
       )}
 
-      <div className="flex flex-wrap gap-[3px] pt-1.5">
-        {candidates.map((engine) => {
-          const option = agentOptionOf(engine);
-          const active = config.engine === engine;
-          const isRecommended = engine === recommendedEngine;
-          return (
-            <button
-              key={engine}
-              type="button"
-              disabled={disabled || !multiEngine}
-              onClick={() => multiEngine && onEngineChange(engine)}
-              aria-pressed={active}
-              title={
-                isRecommended && multiEngine
-                  ? t('newChat.modelSelector.unified.recommended')
-                  : undefined
-              }
-              data-engine-capsule={engine}
-              data-engine-active={active ? 'true' : undefined}
-              className={cn(
-                // 设计稿 `.h-seg-btn`:高 26、左右 11、图标与名之间 5、圆角胶囊、无边框。
-                'inline-flex h-[26px] shrink-0 items-center gap-[5px] rounded-full px-[11px] text-12 transition-colors',
-                active
-                  // 选中态的「浮起感」:chip 底 + 一圈极淡的内描边 + 贴地阴影,
-                  // 让它从同色系的胶囊行里浮出来(纯换底色在 Dark 下几乎看不出)。
-                  ? 'bg-[var(--surface-chip)] font-medium text-[var(--model-item-text)] shadow-[var(--shadow-chip-raised)] ring-1 ring-inset ring-[var(--model-dropdown-border)]'
-                  : 'text-[var(--text-tertiary)]',
-                !active && multiEngine && 'hover:bg-[var(--model-item-hover)]',
-                // 推荐项(未选中时)细描边指路;不写「Recommended」字样(英文太长,§1.7)。
-                !active && isRecommended && multiEngine && 'ring-1 ring-inset ring-[var(--model-dropdown-border)]',
-                multiEngine ? 'cursor-pointer' : 'cursor-default',
-                disabled && 'cursor-not-allowed opacity-50',
-              )}
-            >
-              <option.Mark size={12} className="shrink-0" />
-              <span className="max-w-[92px] truncate">{option.label}</span>
-              {active && isRecommended && multiEngine && (
-                <Check size={10} className="shrink-0" />
-              )}
-            </button>
-          );
-        })}
-      </div>
+      <ModelHarnessPicker
+        entry={entry}
+        value={config.engine}
+        disabled={disabled}
+        locked={engineLocked}
+        onChange={onEngineChange}
+      />
 
       {price && (
         // 价格区(设计稿 v4 定稿):**紧凑两行**,不画删除线表格。
@@ -257,18 +235,12 @@ export function ModelConfigFlyout({
           <div className="flex flex-wrap items-baseline gap-x-1">
             <span>{t('newChat.modelSelector.pricing.title')}</span>
             {price.kind === 'free' ? (
-              <span
-                className="font-semibold"
-                style={{ color: EFFORT_TIER_COLORS.low }}
-              >
+              <span className="font-semibold" style={{ color: EFFORT_TIER_COLORS.low }}>
                 · {t('newChat.modelSelector.pricing.free')}
               </span>
             ) : (
               discount !== undefined && (
-                <span
-                  className="font-semibold"
-                  style={{ color: EFFORT_TIER_COLORS.low }}
-                >
+                <span className="font-semibold" style={{ color: EFFORT_TIER_COLORS.low }}>
                   ·{' '}
                   {t(
                     'newChat.modelSelector.pricing.discountedVsStandard',
@@ -303,9 +275,7 @@ export function ModelConfigFlyout({
       <div className="mt-2 flex min-h-[22px] items-center justify-between border-t border-[var(--model-dropdown-border)] pt-2 text-11">
         <span
           className={
-            state === 'recommended'
-              ? 'text-[var(--text-tertiary)]'
-              : 'text-[var(--text-secondary)]'
+            state === 'recommended' ? 'text-[var(--text-tertiary)]' : 'text-[var(--text-secondary)]'
           }
         >
           {state === 'favorite'

@@ -515,9 +515,9 @@ describe('recommendedAgentForModel', () => {
     expect(recommendedAgentForModel(bridgeOnly, 'openai', 'gpt-legacy')).toBe('claude-code');
   });
 
-  it('xai 双 root → claude-code(piRoot 也是 cc)', () => {
-    expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('claude-code');
-    expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('claude-code');
+  it('xai 未声明原生协议和专属底座时默认 Pi', () => {
+    expect(recommendedAgentForModel(providers, 'xai', 'grok-4.5')).toBe('pi');
+    expect(recommendedAgentForModel(providers, 'xai', 'xai/grok-4.5')).toBe('pi');
   });
 
   it('xd 网关:按家族推荐 —— gpt 系(含 codex/ 折扣)→ codex,claude 系 → claude-code', () => {
@@ -558,7 +558,7 @@ describe('recommendedAgentForModel', () => {
     );
   });
 
-  it('user provider:按配置的 runtime 取,多个时 cc > codex > pi', () => {
+  it('user provider:缺少推荐依据时默认 Pi，仍受可用 runtime 限制', () => {
     const byom = (agents: AgentKind[]): ProviderView[] => [
       view({
         id: 'byom',
@@ -570,17 +570,39 @@ describe('recommendedAgentForModel', () => {
       }),
     ];
     expect(recommendedAgentForModel(byom(['claude-code', 'codex', 'pi']), 'byom', 'my-model')).toBe(
+      'pi',
+    );
+    expect(recommendedAgentForModel(byom(['codex', 'pi']), 'byom', 'my-model')).toBe('pi');
+    expect(recommendedAgentForModel(byom(['claude-code', 'codex']), 'byom', 'my-model')).toBe(
       'claude-code',
     );
-    expect(recommendedAgentForModel(byom(['codex', 'pi']), 'byom', 'my-model')).toBe('codex');
     expect(recommendedAgentForModel(byom(['pi']), 'byom', 'my-model')).toBe('pi');
   });
 
-  it('pi 永不作为推荐(除非唯一候选)', () => {
+  it.each([
+    ['openai-responses', 'codex'],
+    ['anthropic-messages', 'claude-code'],
+  ] as const)('本地模型声明 %s 时保留 %s 推荐', (nativeApi, expected) => {
+    const local = view({
+      id: 'cindy-local-ollama',
+      source: 'user',
+      models: {
+        'claude-code': [m('local-model', { nativeApi })],
+        codex: [m('local-model', { nativeApi })],
+        pi: [m('local-model', { nativeApi, piApi: nativeApi })],
+      },
+    });
+    expect(recommendedAgentForModel([local], local.id, 'local-model')).toBe(expected);
+  });
+
+  it('未配置推荐依据的模型默认 Pi', () => {
     const codexAndPi = [
-      view({ id: 'unknown-vendor', models: { codex: [m('vendor-x')], pi: [m('vendor-x')] } }),
+      view({
+        id: 'unknown-vendor',
+        models: { codex: [m('vendor-x')], pi: [m('vendor-x')] },
+      }),
     ];
-    expect(recommendedAgentForModel(codexAndPi, 'unknown-vendor', 'vendor-x')).toBe('codex');
+    expect(recommendedAgentForModel(codexAndPi, 'unknown-vendor', 'vendor-x')).toBe('pi');
   });
 
   it('无候选时返回 null,不编一个不可路由的推荐', () => {
@@ -602,6 +624,9 @@ describe('resolveAgentCapability', () => {
     expect(resolveAgentCapability(providers, 'anthropic', 'claude-opus-5', 'claude-code')).toEqual({
       agent: 'claude-code',
       wireModelId: 'claude-opus-5',
+      protocolMode: 'matching',
+      nativeApi: 'anthropic-messages',
+      outboundApi: 'anthropic-messages',
       efforts: ['low', 'medium', 'high'],
       defaultEffort: 'high',
       defaultEffortSource: 'catalog',
@@ -808,7 +833,7 @@ describe('unifiedModelEntries', () => {
     const entries = unifiedModelEntries({ providers: [byom], isVisible: alwaysVisible });
     expect(entries).toHaveLength(1);
     expect(entries[0].candidates).toEqual(['codex', 'pi']);
-    expect(entries[0].recommended).toBe('codex');
+    expect(entries[0].recommended).toBe('pi');
     // BYOM 没有 root 概念 → 无主场(null),在任何引擎视图都不降级。
     expect(entries[0].nativeAgent).toBeNull();
   });
@@ -920,6 +945,32 @@ describe('unifiedModelEntries', () => {
     expect(find(entries, 'zhipu', 'glm-5.2[1m]')?.candidates).toEqual(['claude-code']);
     expect(find(entries, 'zhipu', 'glm-5.2[1m]')?.capabilities.codex).toBeUndefined();
     expect(find(entries, 'zhipu', 'glm-5.2')?.candidates).toEqual(['claude-code', 'codex']);
+  });
+
+  it('付费模型仅在显式展示模式下进入联合列表，并保留锁定状态', () => {
+    const gated = view({
+      id: 'xd',
+      models: {
+        'claude-code': [
+          m('free-model', { availability: 'available' }),
+          m('paid-model', { availability: 'requires_payment' }),
+        ],
+      },
+    });
+
+    expect(
+      unifiedModelEntries({ providers: [gated], isVisible: alwaysVisible }).map(
+        (entry) => entry.modelId,
+      ),
+    ).toEqual(['free-model']);
+
+    const visible = unifiedModelEntries({
+      providers: [gated],
+      isVisible: alwaysVisible,
+      includePaymentRequired: true,
+    });
+    expect(visible.map((entry) => entry.modelId)).toEqual(['free-model', 'paid-model']);
+    expect(find(visible, 'xd', 'paid-model')?.availability).toBe('requires_payment');
   });
 
   it('选中行豁免(keepModel):停用 / retired 的选中条目仍成行,并带上候选与能力', () => {

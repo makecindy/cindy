@@ -1,11 +1,10 @@
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 /**
  * useAccountUsage — 订阅 codex 账号配额 (rate limits) 实时推送。
  *
  * 数据通道:
  *   maker-core codex translator emit AgentEvent { type: 'account_usage', source: 'codex', data: RateLimitSnapshot }
- *   → main register.ts wireSessionToIpc broadcast `maker:event` { sessionId, event }
- *   → preload window.electronAPI.maker.onEvent
- *   → 本 hook 按 sessionId 过滤
+ *   → main 按实际运行账号归档并推送账号级快照
  *   ChatGPT WHAM 后台刷新 emit `usage:codex-account-changed`
  *   → preload window.electronAPI.maker.usage.onCodexAccountChanged
  *   → 本 hook 直接更新账号级快照
@@ -18,7 +17,7 @@
  * (绝不显示不是这个会话在消耗的配额)。
  *
  * 设计与 useSessionSpend 对齐:
- *   - 按 sessionId 过滤 (虽然 host 端是 fan-out 给所有 active subscriber, 每个 session 都收一份)
+ *   - 只消费按 providerId 隔离的账号读取与推送；待生效选择不代表当前回合账号
  *   - Codex 账号用量是账号级数据, 切 session 时复用最近一次快照, 避免 chip 闪回占位态
  *   - vendorKey !== 'codex' 直接返 null (claude session 不订阅, 节省一次回调过滤开销)
  *
@@ -83,32 +82,36 @@ interface CodexAccountUsageSlots {
   web: RateLimitSnapshot | null;
 }
 
-let lastCodexAccountUsage: CodexAccountUsageSlots = {
-  appServer: null,
-  appServerBuckets: Object.create(null) as Record<string, RateLimitSnapshot>,
-  web: null,
-};
-
-/**
- * 最近观察到的 app-server 桶键 —— 稀疏更新缺 limitId 时并入它(与 main 的
- * codexAppServerLatestBucketKey 同口径)。account/rateLimits/updated 契约:
- * "merge available values into the most recent read response"; 直接按缺省桶
- * 归类会把模型专属窗口暴露成通用桶(review 反馈)。
- */
-let lastCodexAppServerBucketKey: string | null = null;
-
-/**
- * 桶表代号 —— app-server 桶表每次被替换时 +1, 供陈旧重选定时器判断「该重算下
- * 一个到期时刻了」。不能拿 snapshot 当这个信号: 变化的桶不是当前选中桶时
- * snapshot 不变(漏重算), 反过来 snapshot 变了也不必然意味着桶表变了(白重排
- * 定时器, review 反馈)。
- */
-let codexBucketTableGeneration = 0;
+interface AccountUsageState {
+  slots: CodexAccountUsageSlots;
+  latestBucketKey: string | null;
+  generation: number;
+  revision: number;
+  subscribed: boolean;
+  unsubscribe?: () => void;
+}
+const accountUsageStates = new Map<string, AccountUsageState>();
+let accountUsageOwner = getDataOwnerGeneration();
+function accountUsageState(providerId: string): AccountUsageState {
+  const owner = getDataOwnerGeneration();
+  if (owner !== accountUsageOwner) {
+    for (const cached of accountUsageStates.values()) cached.unsubscribe?.();
+    accountUsageStates.clear();
+    accountUsageOwner = owner;
+  }
+  let state = accountUsageStates.get(providerId);
+  if (!state) {
+    state = { slots: { appServer: null, appServerBuckets: emptyBucketTable(), web: null },
+      latestBucketKey: null, generation: 0, revision: 0, subscribed: false };
+    accountUsageStates.set(providerId, state);
+  }
+  return state;
+}
 
 /** 稀疏更新的落桶键: 带 limitId 用它自己的桶; 缺失则并入最近观察到的桶。 */
-function resolveIncrementalBucketKey(incoming: RateLimitSnapshot): string {
+function resolveIncrementalBucketKey(incoming: RateLimitSnapshot, state: AccountUsageState): string {
   if (incoming.limitId) return codexLimitBucketKey(incoming);
-  return lastCodexAppServerBucketKey ?? codexLimitBucketKey(incoming);
+  return state.latestBucketKey ?? codexLimitBucketKey(incoming);
 }
 
 /**
@@ -120,27 +123,28 @@ function resolveIncrementalBucketKey(incoming: RateLimitSnapshot): string {
  */
 function selectCodexSlot(
   quotaSource: CodexQuotaSource,
-  modelId?: string | null,
+  modelId: string | null | undefined,
+  state: AccountUsageState,
 ): RateLimitSnapshot | null {
-  if (quotaSource === 'openai-web') return lastCodexAccountUsage.web;
-  const buckets = lastCodexAccountUsage.appServerBuckets;
+  if (quotaSource === 'openai-web') return state.slots.web;
+  const buckets = state.slots.appServerBuckets;
   // 桶表已建立: 选桶结果就是最终答案 —— 匹配不到宁可不显示 app-server 配额,
   // 也不回退顶层兼容位(它可能正是别的模型的桶, review 反馈)。
   if (Object.keys(buckets).length > 0) return matchCodexBucketForModel(buckets, modelId);
   // 桶表为空(旧 main / 尚无 app-server 数据): 保持旧行为用顶层兼容位。
-  return lastCodexAccountUsage.appServer;
+  return state.slots.appServer;
 }
 
 function readUsageApi(): {
-  getAccount?: (agentKind: 'claude-code' | 'codex') => Promise<unknown | null>;
-  onCodexAccountChanged?: (cb: (payload: unknown) => void) => () => void;
+  getAccount?: (agentKind: 'claude-code' | 'codex', providerId?: string) => Promise<unknown | null>;
+  onCodexAccountChanged?: (cb: (payload: unknown) => void, providerId?: string) => () => void;
 } | undefined {
   return (window as unknown as {
     electronAPI?: {
       maker?: {
         usage?: {
-          getAccount?: (agentKind: 'claude-code' | 'codex') => Promise<unknown | null>;
-          onCodexAccountChanged?: (cb: (payload: unknown) => void) => () => void;
+          getAccount?: (agentKind: 'claude-code' | 'codex', providerId?: string) => Promise<unknown | null>;
+          onCodexAccountChanged?: (cb: (payload: unknown) => void, providerId?: string) => () => void;
         };
       };
     };
@@ -323,30 +327,33 @@ export function splitCodexAccountUsagePayload(incoming: RateLimitSnapshot): {
 }
 
 function applyCodexAccountUsageSnapshot(
+  state: AccountUsageState,
   incoming: unknown,
   onApplied: () => void,
   options: { clearOnNull?: boolean } = {},
 ): void {
   if (incoming === null) {
     if (options.clearOnNull === false) return;
-    lastCodexAccountUsage = { appServer: null, appServerBuckets: emptyBucketTable(), web: null };
-    lastCodexAppServerBucketKey = null;
-    codexBucketTableGeneration += 1;
+    state.revision += 1;
+    state.slots = { appServer: null, appServerBuckets: emptyBucketTable(), web: null };
+    state.latestBucketKey = null;
+    state.generation += 1;
     onApplied();
     return;
   }
   if (!isRateLimitSnapshot(incoming)) return;
+  state.revision += 1;
   const parts = splitCodexAccountUsagePayload(incoming);
   // 键存在即生效: 快照 → 槽内 merge; null → 显式清空(组合 payload 是权威全量,
   // 见 splitCodexAccountUsagePayload); 键缺失 → 保留现值(裸快照只带自己的槽)。
   if ('appServer' in parts) {
     if ('appServerBuckets' in parts) {
       // 权威全量: 顶层兼容位就是 main 记录的最近更新桶。
-      lastCodexAppServerBucketKey = parts.appServer
+      state.latestBucketKey = parts.appServer
         ? codexLimitBucketKey(parts.appServer)
         : null;
     } else if (parts.appServer) {
-      lastCodexAppServerBucketKey = resolveIncrementalBucketKey(parts.appServer);
+      state.latestBucketKey = resolveIncrementalBucketKey(parts.appServer, state);
     }
     // 组合 payload 是 main 的权威全量: 顶层直接替换。跨桶 merge 会造出
     // 「B 的 limitId + A 的窗口」杂交体(windowless 兜底会保留旧窗口),
@@ -355,10 +362,10 @@ function applyCodexAccountUsageSnapshot(
     const nextAppServer = parts.appServer
       ? isAuthoritative
         ? parts.appServer
-        : mergeCodexAccountUsageSnapshot(lastCodexAccountUsage.appServer, parts.appServer)
+        : mergeCodexAccountUsageSnapshot(state.slots.appServer, parts.appServer)
       : null;
-    lastCodexAccountUsage = {
-      ...lastCodexAccountUsage,
+    state.slots = {
+      ...state.slots,
       appServer: nextAppServer,
       // 桶表: 组合 payload 带全量 → 覆盖; 裸 turn 事件 → 只更新自己那个桶
       // (同桶 merge, 跨桶隔离, 与 main 同口径)。
@@ -366,19 +373,19 @@ function applyCodexAccountUsageSnapshot(
         ? parts.appServerBuckets ?? emptyBucketTable()
         : parts.appServer
           ? withCodexBucket(
-              lastCodexAccountUsage.appServerBuckets,
-              resolveIncrementalBucketKey(parts.appServer),
+              state.slots.appServerBuckets,
+              resolveIncrementalBucketKey(parts.appServer, state),
               parts.appServer,
             )
           : emptyBucketTable(),
     };
-    codexBucketTableGeneration += 1;
+    state.generation += 1;
   }
   if ('web' in parts) {
-    lastCodexAccountUsage = {
-      ...lastCodexAccountUsage,
+    state.slots = {
+      ...state.slots,
       web: parts.web
-        ? mergeCodexAccountUsageSnapshot(lastCodexAccountUsage.web, parts.web)
+        ? mergeCodexAccountUsageSnapshot(state.slots.web, parts.web)
         : null,
     };
   }
@@ -389,15 +396,14 @@ function applyCodexAccountUsageSnapshot(
 // 换号时, main 的 null / 新 payload 广播也要同步进 module 缓存, 否则下次 mount
 // 的 useState initializer 会先 seed 旧账号槽数据闪一帧。幂等安装, 随 renderer
 // 进程存活, 不退订(与 useClaudeSubscriptionUsage 的常驻语义一致)。
-let moduleSubscriptionInstalled = false;
-function ensureModuleSubscription(): void {
-  if (moduleSubscriptionInstalled) return;
+function ensureModuleSubscription(providerId: string, state: AccountUsageState): void {
+  if (state.subscribed) return;
   const api = readUsageApi();
   if (!api?.onCodexAccountChanged) return;
-  moduleSubscriptionInstalled = true;
-  api.onCodexAccountChanged((payload: unknown) => {
-    applyCodexAccountUsageSnapshot(payload, () => {});
-  });
+  state.subscribed = true;
+  state.unsubscribe = api.onCodexAccountChanged((payload: unknown) => {
+    applyCodexAccountUsageSnapshot(state, payload, () => {});
+  }, providerId);
 }
 
 /**
@@ -406,10 +412,10 @@ function ensureModuleSubscription(): void {
  * in-flight 去重), 重复调用安全;新快照经 usage:codex-account-changed push 回流,
  * 这里不消费返回值。
  */
-export function requestCodexAccountRefresh(): void {
+export function requestCodexAccountRefresh(providerId?: string): void {
   const api = readUsageApi();
   if (!api?.getAccount) return;
-  void api.getAccount('codex').catch(() => {
+  void api.getAccount('codex', providerId).catch(() => {
     /* Best-effort nudge; push 更新仍会刷新 chip。 */
   });
 }
@@ -420,31 +426,36 @@ export function useAccountUsage(
   quotaSource: CodexQuotaSource = 'app-server',
   /** 当前会话模型 —— app-server 形态下据它匹配限额桶(见 matchCodexBucketForModel)。 */
   modelId?: string | null,
+  providerId = 'openai',
 ): RateLimitSnapshot | null {
+  const state = accountUsageState(providerId);
   // 幂等; 首个 codex 实例装上 module 常驻订阅, 保证之后卸载窗口内的广播(尤其
   // 换号清空)不丢。非 codex 会话不装 —— 从没有 codex chip 消费过就没有可残留
   // 的缓存, 常驻监听纯属白耗(review 反馈)。
-  if (vendorKey === 'codex') ensureModuleSubscription();
-  const [snapshot, setSnapshot] = useState<RateLimitSnapshot | null>(() =>
-    vendorKey === 'codex' ? selectCodexSlot(quotaSource, modelId) : null,
-  );
+  if (vendorKey === 'codex') ensureModuleSubscription(providerId, state);
+  const [, setStored] = useState<{ state: AccountUsageState; value: RateLimitSnapshot | null }>(() => ({
+    state, value: vendorKey === 'codex' ? selectCodexSlot(quotaSource, modelId, state) : null,
+  }));
+  // Select synchronously from the current connection/source/model cache.
+  const snapshot = vendorKey === 'codex' ? selectCodexSlot(quotaSource, modelId, state) : null;
+  const setSnapshot = useCallback((value: RateLimitSnapshot | null) => setStored({ state, value }), [state]);
   // 订阅 effect 不把 modelId 放进依赖(切模型不该重装 IPC 订阅, 重装窗口还会漏
   // push);回调经 ref 读最新模型。模型变化时由下方 reselect effect 立即重选。
   const modelIdRef = useRef(modelId);
   modelIdRef.current = modelId;
   // 桶表代号进 state 才能当定时器依赖; 桶表没变时 setState 同值被 React bail
   // out, 不会多一次渲染。
-  const [bucketGeneration, setBucketGeneration] = useState(codexBucketTableGeneration);
+  const [bucketGeneration, setBucketGeneration] = useState(state.generation);
   const reselect = useCallback(() => {
-    setSnapshot(selectCodexSlot(quotaSource, modelIdRef.current));
-    setBucketGeneration(codexBucketTableGeneration);
-  }, [quotaSource]);
+    setSnapshot(selectCodexSlot(quotaSource, modelIdRef.current, state));
+    setBucketGeneration(state.generation);
+  }, [quotaSource, state]);
 
   // Codex rate limits 是账号级数据, 不是 session 级数据。切回 Codex session /
   // 切模型时按新模型重新选桶(桶表已在缓存里, 无需等下一次 push)。
   useEffect(() => {
-    setSnapshot(vendorKey === 'codex' ? selectCodexSlot(quotaSource, modelId) : null);
-  }, [sessionId, vendorKey, quotaSource, modelId]);
+    setSnapshot(vendorKey === 'codex' ? selectCodexSlot(quotaSource, modelId, state) : null);
+  }, [sessionId, vendorKey, quotaSource, modelId, state]);
 
   // 陈旧转变是纯时间驱动的: 没有新 payload 时也要在到点那一刻重选一次, 否则
   // 常驻挂载的 chip 会一直显示已过期的促销桶(review 反馈)。
@@ -452,7 +463,7 @@ export function useAccountUsage(
   useEffect(() => {
     if (vendorKey !== 'codex' || quotaSource !== 'app-server') return undefined;
     const now = Date.now();
-    const staleAt = nextCodexBucketStaleAtMs(lastCodexAccountUsage.appServerBuckets, now);
+    const staleAt = nextCodexBucketStaleAtMs(state.slots.appServerBuckets, now);
     if (staleAt === null) return undefined;
     // setTimeout 上限 ~24.8 天, 超出就分段等待(到期再重算)。
     const delay = Math.min(Math.max(staleAt - now, 0) + 1_000, 6 * 60 * 60 * 1000);
@@ -471,24 +482,26 @@ export function useAccountUsage(
     if (!api?.getAccount) return;
 
     let cancelled = false;
+    const revision = state.revision;
     void api
-      .getAccount('codex')
+      .getAccount('codex', providerId)
       .then((persisted) => {
-        if (cancelled) return;
+        if (cancelled || state.revision !== revision) return;
+        if (providerId !== 'openai' && persisted && (persisted as { providerId?: string }).providerId !== providerId) return;
         applyCodexAccountUsageSnapshot(
-          persisted,
+          state, persisted,
           reselect,
           { clearOnNull: false },
         );
       })
       .catch(() => {
-        /* Best-effort warm start; live account_usage events still update the chip. */
+        /* Best-effort warm start; account-scoped pushes still update the chip. */
       });
 
     return () => {
       cancelled = true;
     };
-  }, [vendorKey, quotaSource, reselect]);
+  }, [vendorKey, quotaSource, reselect, providerId, state]);
 
   useEffect(() => {
     if (vendorKey !== 'codex') return;
@@ -498,48 +511,15 @@ export function useAccountUsage(
     let cancelled = false;
     const unsubscribe = api.onCodexAccountChanged((payload: unknown) => {
       if (cancelled) return;
-      applyCodexAccountUsageSnapshot(payload, reselect);
-    });
+      applyCodexAccountUsageSnapshot(state, payload, reselect);
+    }, providerId);
     return () => {
       cancelled = true;
       unsubscribe();
     };
-  }, [vendorKey, quotaSource, reselect]);
+  }, [vendorKey, quotaSource, reselect, providerId, state]);
 
-  useEffect(() => {
-    if (vendorKey !== 'codex' || !sessionId) return;
-    const api = (window as unknown as {
-      electronAPI?: {
-        maker?: {
-          onEvent?: (cb: (data: unknown) => void) => () => void;
-        };
-      };
-    }).electronAPI?.maker;
-    if (!api?.onEvent) return;
-    let cancelled = false;
-    // 注: 这里不再在 turn 事件后拉 getAccount 触发 WHAM 刷新 —— CLI chip 只显示
-    // app-server 槽, WHAM 刷新帮不上它, 白耗后台请求(旧行为还会把 WHAM 桶合并
-    // 进单槽缓存, 正是「turn 刚结束数据被顶掉」的来源)。bridge 槽的保鲜由
-    // main 的 bridge turn-done 触发 + mount 读 + 悬念期催刷负责。
-    const unsubscribe = api.onEvent((data: unknown) => {
-      if (cancelled) return;
-      const payload = data as {
-        sessionId?: string;
-        event?: { type?: string; source?: string; data?: RateLimitSnapshot };
-      };
-      if (payload.sessionId !== sessionId) return;
-      if (payload.event?.type !== 'account_usage') return;
-      if (payload.event.source !== 'codex') return;
-      if (!payload.event.data) return;
-      // 只更新桶表(事件带 limitId, 进它自己的桶); **不**据此判会话归属 ——
-      // 这是账号级 fan-out 事件(见 matchCodexBucketForModel 注释)。
-      applyCodexAccountUsageSnapshot(payload.event.data, reselect);
-    });
-    return () => {
-      cancelled = true;
-      unsubscribe();
-    };
-  }, [sessionId, vendorKey, quotaSource, reselect]);
-
+  // 不直接消费无 providerId 的 maker:account_usage：同一 session 的待生效账号
+  // 可能已切换，事件仍属于旧回合。Main 归档后发出的账号级推送是唯一实时入口。
   return snapshot;
 }

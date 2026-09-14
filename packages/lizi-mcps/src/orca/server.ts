@@ -98,6 +98,7 @@ export interface OrcaMcpDeps {
     effort?: 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
     fast?: boolean;
     label: string;
+    workingDir?: string;
     initialTask?: string;
   }) => Promise<
     ControlResult<

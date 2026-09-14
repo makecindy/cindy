@@ -25,6 +25,7 @@ function cfg(partial: Partial<HostConfig>): HostConfig {
     user: 'deploy',
     authMethod: 'agent',
     source: 'manual',
+    managedByCindy: false,
     ...partial,
   };
 }
@@ -38,10 +39,30 @@ describe('isAuthFailure recognizes every authFailureHint variant', () => {
     expect(isAuthFailure(authFailureHint(cfg({ authMethod: 'agent', port: 2222 })))).toBe(true);
   });
 
+  it('pinned agent hint tells the user to load the matching key', () => {
+    const hint = authFailureHint(cfg({
+      authMethod: 'agent',
+      sshAuthentication: {
+        identitiesOnly: true,
+        configuredIdentityFiles: ['/home/u/.ssh/id_ed25519'],
+        identityFileDirectiveSeen: true,
+        identityFileNoneSeen: false,
+        allowedAgentFingerprints: ['SHA256:test'],
+      },
+    }));
+    expect(hint).toContain('ssh-add');
+    expect(isAuthFailure(hint)).toBe(true);
+  });
+
   it('key mode hint (with and without identityFile)', () => {
-    expect(
-      isAuthFailure(authFailureHint(cfg({ authMethod: 'key', identityFile: '/home/u/.ssh/id_ed25519' }))),
-    ).toBe(true);
+    const hint = authFailureHint(cfg({
+      authMethod: 'key',
+      identityFile: '/home/u/.ssh/custom-private.key',
+    }));
+    expect(isAuthFailure(hint)).toBe(true);
+    expect(hint).toContain('<public-key-file>');
+    expect(hint).not.toContain('/home/u/.ssh');
+    expect(hint).not.toContain('custom-private.key.pub');
     expect(isAuthFailure(authFailureHint(cfg({ authMethod: 'key' })))).toBe(true);
   });
 

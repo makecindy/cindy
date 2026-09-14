@@ -484,7 +484,8 @@ describe('buildAgentTaskCardModel', () => {
       toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
       result: '/root/survey_startup',
     });
-    expect(model.spawnedAgentName).toBe('/root/survey_startup');
+    expect(model.spawnedAgentName).toBe('survey_startup');
+    expect(model.title).toBe('survey_startup');
     // 裸路径不进 summary,各端用 spawnedAgentName 按 locale 组装句子。
     expect(model.summary).toBeUndefined();
     expect(model.status).toBe('completed');
@@ -513,6 +514,23 @@ describe('buildAgentTaskCardModel', () => {
     expect(model.totalTokens).toBe(1200);
     expect(model.toolUses).toBe(3);
     expect(model.durationMs).toBe(4200);
+    expect(model.title).toBe('survey_startup');
+  });
+
+  it('strips nested Codex addresses before truncation without changing the source', () => {
+    const update: AgentTaskUpdate = {
+      provider: 'codex', taskId: 'nested', status: 'running',
+      title: `/root/${'parent_'.repeat(24)}/cache_rules`,
+    };
+    expect(buildAgentTaskCardModel({ update }).title).toBe('cache_rules');
+    expect(update.title).toContain('/root/');
+    for (const provider of ['claude-code', 'pi'] as const) {
+      expect(buildAgentTaskCardModel({ update: { ...update, provider, title: '/root/cache_rules' } }).title)
+        .toBe('/root/cache_rules');
+    }
+    for (const title of ['检查缓存规则', 'Read /root/cache_rules', '/tmp/cache_rules']) {
+      expect(buildAgentTaskCardModel({ update: { ...update, title } }).title).toBe(title);
+    }
   });
 
   it('leaves future rich collab:spawn results (agentsStates summaries) untouched', () => {

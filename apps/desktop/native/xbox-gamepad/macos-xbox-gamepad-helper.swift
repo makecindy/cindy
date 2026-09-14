@@ -24,15 +24,40 @@ func emit(_ payload: [String: Any]) {
   fflush(stdout)
 }
 
-func isXboxController(_ controller: GCController) -> Bool {
-  if controller.extendedGamepad is GCXboxGamepad { return true }
+func isSupportedGamepad(_ controller: GCController) -> Bool {
+  controller.extendedGamepad != nil
+}
+
+func resolveGamepadFamily(from controller: GCController) -> String {
+  if controller.extendedGamepad is GCXboxGamepad { return "xbox" }
+  if controller.extendedGamepad is GCDualShockGamepad { return "playstation" }
   let vendor = controller.vendorName?.lowercased() ?? ""
   let category = controller.productCategory.lowercased()
   let haystack = vendor + " " + category
+  if haystack.contains("dualsense")
+    || haystack.contains("dualshock")
+    || haystack.contains("playstation")
+    || haystack.contains("sony")
+    || haystack.range(of: #"\bps[45]\b"#, options: .regularExpression) != nil
+  {
+    return "playstation"
+  }
+  if haystack.contains("nintendo")
+    || haystack.contains("switch")
+    || haystack.contains("joy-con")
+    || haystack.contains("joycon")
+  {
+    return "nintendo"
+  }
   // Wired Xbox pads often advertise USB product "Controller" and vendor Microsoft.
-  return haystack.contains("xbox")
+  if haystack.contains("xbox")
+    || haystack.contains("elite")
     || haystack.contains("microsoft")
     || vendor == "controller"
+  {
+    return "xbox"
+  }
+  return "generic"
 }
 
 func homePressed(_ controller: GCController) -> Bool {
@@ -54,7 +79,12 @@ func controllerTransport(for controller: GCController) -> String {
   if controllerTokens.isEmpty { return "unknown" }
 
   let manager = IOHIDManagerCreate(kCFAllocatorDefault, IOOptionBits(kIOHIDOptionsTypeNone))
-  IOHIDManagerSetDeviceMatching(manager, [kIOHIDVendorIDKey as String: 0x45e] as CFDictionary)
+  let matching = [
+    [kIOHIDVendorIDKey as String: 0x045E],
+    [kIOHIDVendorIDKey as String: 0x054C],
+    [kIOHIDVendorIDKey as String: 0x057E],
+  ] as CFArray
+  IOHIDManagerSetDeviceMatchingMultiple(manager, matching)
   IOHIDManagerOpen(manager, IOOptionBits(kIOHIDOptionsTypeNone))
   defer { IOHIDManagerClose(manager, IOOptionBits(kIOHIDOptionsTypeNone)) }
   guard let devices = IOHIDManagerCopyDevices(manager) as? Set<IOHIDDevice> else { return "unknown" }
@@ -84,7 +114,10 @@ func transportMatchTokens(_ values: String?...) -> Set<String> {
     }
   }
   // Generic Microsoft HID tokens would match keyboards, mice, and dongles.
-  tokens.subtract(["usb", "hid", "device", "microsoft", "controller"])
+  tokens.subtract([
+    "usb", "hid", "device", "microsoft", "sony", "nintendo", "controller",
+    "interactive", "entertainment",
+  ])
   return tokens
 }
 
@@ -102,6 +135,7 @@ func presencePayload(from controller: GCController) -> [String: Any] {
     "present": true,
     "name": controller.vendorName ?? controller.productCategory,
     "category": controller.productCategory,
+    "family": resolveGamepadFamily(from: controller),
     "transport": controllerTransport(for: controller),
     "batteryState": "unknown",
   ]
@@ -115,11 +149,15 @@ func presencePayload(from controller: GCController) -> [String: Any] {
   return payload
 }
 
+let GAMEPAD_FAMILIES = ["xbox", "playstation", "nintendo", "generic"]
+
 final class XboxGamepadReporter {
-  private var observed: GCController?
+  private var observed: [String: GCController] = [:]
   /// nil until the first refresh, so an empty device list still gets logged once.
   private var lastSeenSummary: String?
-  private var lastPresenceSignature = ""
+  private var lastPresenceSignature: [String: String] = [:]
+  private var switch2UsbWanted = false
+  private var switch2PollTimer: Timer?
 
   func start() {
     if #available(macOS 11.3, *) {
@@ -142,14 +180,36 @@ final class XboxGamepadReporter {
     refresh()
   }
 
+  func setSwitch2UsbWanted(_ wanted: Bool) {
+    if switch2UsbWanted == wanted { return }
+    switch2UsbWanted = wanted
+    if wanted {
+      _ = switch2_usb_ensure()
+      if switch2PollTimer == nil {
+        switch2PollTimer = Timer.scheduledTimer(withTimeInterval: 0.008, repeats: true) { [weak self] _ in
+          self?.refreshSwitch2IfNeeded()
+        }
+      }
+      refreshSwitch2IfNeeded()
+      return
+    }
+    switch2PollTimer?.invalidate()
+    switch2PollTimer = nil
+    switch2_usb_shutdown()
+    if observed["nintendo"] == nil, lastPresenceSignature["nintendo"] != "absent" {
+      lastPresenceSignature["nintendo"] = "absent"
+      emit(["kind": "presence", "present": false, "family": "nintendo"])
+    }
+  }
+
   func refresh() {
     let all = GCController.controllers()
     let summary = all
       .map { controller in
         let vendor = controller.vendorName ?? "?"
         let category = controller.productCategory
-        let xboxPad = controller.extendedGamepad is GCXboxGamepad
-        return "\(vendor)/\(category)/xboxPad=\(xboxPad)"
+        let family = resolveGamepadFamily(from: controller)
+        return "\(vendor)/\(category)/family=\(family)"
       }
       .joined(separator: "; ")
     if summary != lastSeenSummary {
@@ -160,37 +220,126 @@ final class XboxGamepadReporter {
         "message": summary.isEmpty ? "no GameController devices" : "controllers: \(summary)",
       ])
     }
-    let next = all.first(where: isXboxController)
-    if next == nil {
-      observed = nil
-      lastPresenceSignature = ""
-      emit(["kind": "presence", "present": false])
+
+    var next: [String: GCController] = [:]
+    for controller in all where isSupportedGamepad(controller) {
+      let family = resolveGamepadFamily(from: controller)
+      if next[family] == nil { next[family] = controller }
+    }
+
+    for family in GAMEPAD_FAMILIES {
+      guard let controller = next[family] else {
+        if family == "nintendo" {
+          observed[family] = nil
+          if switch2UsbWanted {
+            continue
+          }
+        }
+        if observed[family] != nil || lastPresenceSignature[family] != "absent" {
+          observed[family] = nil
+          lastPresenceSignature[family] = "absent"
+          emit(["kind": "presence", "present": false, "family": family])
+        }
+        continue
+      }
+      if observed[family] !== controller {
+        observed[family] = controller
+        attach(controller)
+      }
+      emitPresence(from: controller, family: family)
+      emitFrame(from: controller, family: family)
+    }
+    if next["nintendo"] == nil {
+      refreshSwitch2IfNeeded()
+    }
+  }
+
+  private func refreshSwitch2IfNeeded() {
+    if !switch2UsbWanted { return }
+    if observed["nintendo"] != nil { return }
+    var state = Switch2UsbState()
+    switch2_usb_copy_state(&state)
+    if !state.present {
+      if lastPresenceSignature["nintendo"] != "absent" {
+        lastPresenceSignature["nintendo"] = "absent"
+        emit(["kind": "presence", "present": false, "family": "nintendo"])
+      }
       return
     }
-    if observed !== next {
-      observed = next
-      attach(next!)
+    emitSwitch2(state)
+  }
+
+  private func emitSwitch2(_ state: Switch2UsbState) {
+    let payload: [String: Any] = [
+      "kind": "presence",
+      "present": true,
+      "name": "Pro Controller",
+      "category": "Nintendo Switch 2",
+      "family": "nintendo",
+      "transport": "usb",
+      "batteryState": "unknown",
+    ]
+    let signature = "switch2-usb:Pro Controller"
+    if signature != lastPresenceSignature["nintendo"] {
+      lastPresenceSignature["nintendo"] = signature
+      emit(payload)
+      emit([
+        "kind": "log",
+        "level": "info",
+        "message": "controllers: Nintendo/Pro Controller/family=nintendo (switch2-usb)",
+      ])
     }
-    emitPresence(from: next!)
-    emitFrame(from: next!)
+    emit([
+      "kind": "frame",
+      "family": "nintendo",
+      "buttons": [
+        "a": state.a,
+        "b": state.b,
+        "x": state.x,
+        "y": state.y,
+        "lb": state.lb,
+        "rb": state.rb,
+        "lt": state.lt,
+        "rt": state.rt,
+        "view": state.view,
+        "menu": state.menu,
+        "xbox": state.xbox,
+        "ls": state.ls,
+        "rs": state.rs,
+        "dpadUp": state.dpad_up,
+        "dpadDown": state.dpad_down,
+        "dpadLeft": state.dpad_left,
+        "dpadRight": state.dpad_right,
+      ],
+      "axes": [
+        "lx": state.lx,
+        "ly": state.ly,
+        "rx": state.rx,
+        "ry": state.ry,
+      ],
+      "ltAnalog": state.lt ? 1.0 : 0.0,
+      "rtAnalog": state.rt ? 1.0 : 0.0,
+    ])
   }
 
   private func attach(_ controller: GCController) {
     guard let pad = controller.extendedGamepad else { return }
     pad.valueChangedHandler = { [weak self] _, _ in
-      self?.emitFrame(from: controller)
+      let family = resolveGamepadFamily(from: controller)
+      self?.emitFrame(from: controller, family: family)
     }
   }
 
-  private func emitPresence(from controller: GCController) {
-    let payload = presencePayload(from: controller)
+  private func emitPresence(from controller: GCController, family: String) {
+    var payload = presencePayload(from: controller)
+    payload["family"] = family
     let signature = String(describing: payload)
-    if signature == lastPresenceSignature { return }
-    lastPresenceSignature = signature
+    if signature == lastPresenceSignature[family] { return }
+    lastPresenceSignature[family] = signature
     emit(payload)
   }
 
-  private func emitFrame(from controller: GCController) {
+  private func emitFrame(from controller: GCController, family: String) {
     guard let pad = controller.extendedGamepad else { return }
     let buttons: [String: Any] = [
       "a": pad.buttonA.isPressed,
@@ -219,6 +368,7 @@ final class XboxGamepadReporter {
     ]
     emit([
       "kind": "frame",
+      "family": family,
       "buttons": buttons,
       "axes": axes,
       "ltAnalog": Double(pad.leftTrigger.value),
@@ -239,6 +389,16 @@ DispatchQueue.global(qos: .utility).async {
     if trimmed == "probe" {
       DispatchQueue.main.async {
         reporter.refresh()
+      }
+    }
+    if trimmed == "switch2-usb on" {
+      DispatchQueue.main.async {
+        reporter.setSwitch2UsbWanted(true)
+      }
+    }
+    if trimmed == "switch2-usb off" {
+      DispatchQueue.main.async {
+        reporter.setSwitch2UsbWanted(false)
       }
     }
   }

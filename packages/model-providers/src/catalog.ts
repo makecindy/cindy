@@ -10,6 +10,8 @@
  * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
 
+import { projectProviderMediaModels } from './providerMediaModels.js';
+import { validModelMetadata } from './modelMetadataLayers.js';
 import { parseModelRegistry } from './modelAccessValidator.js';
 
 import { PI_MODEL_APIS, PI_REASONING_EFFORTS } from './types.js';
@@ -31,17 +33,17 @@ export { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 
 const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
-const WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses', 'openai-chat'] as const;
+const WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses', 'openai-chat', 'google-generative-ai'] as const;
 
 function isWireProtocol(value: unknown): value is (typeof WIRE_PROTOCOLS)[number] {
   return typeof value === 'string' && (WIRE_PROTOCOLS as readonly string[]).includes(value);
 }
 
 function isWireProtocolAllowedForAgent(
-  agent: AgentKind,
+  _agent: AgentKind,
   value: unknown,
 ): value is (typeof WIRE_PROTOCOLS)[number] {
-  return isWireProtocol(value) && (agent !== 'claude-code' || value === 'anthropic-messages');
+  return isWireProtocol(value);
 }
 
 function isValidModelRoute(
@@ -147,6 +149,12 @@ function validateModel(
 ): void {
   assert(typeof m.id === 'string' && m.id.length > 0, `model.id missing in provider '${providerId}'`);
   assert(typeof m.name === 'string' && m.name.length > 0, `model.name missing for '${m.id}'`);
+  if (m.nativeApi !== undefined && m.nativeApi !== null) {
+    assert(isPiModelApi(m.nativeApi), `model.nativeApi invalid for '${m.id}'`);
+  }
+  if (m.api !== undefined) {
+    assert(isPiModelApi(m.api), `model.api invalid for '${m.id}'`);
+  }
   if (m.piApi !== undefined) {
     assert(isPiModelApi(m.piApi), `model.piApi invalid for '${m.id}'`);
   }
@@ -182,7 +190,7 @@ function validateOAuthDescriptor(p: Provider): void {
     `provider '${p.id}' auth.oauth.flow invalid`,
   );
   for (const field of ['tokenUrl', 'clientId', 'scopes'] as const) {
-    assert(typeof raw[field] === 'string' && raw[field].length > 0, `provider '${p.id}' auth.oauth.${field} missing`);
+    assert(typeof raw[field] === 'string' && (field === 'scopes' || raw[field].length > 0), `provider '${p.id}' auth.oauth.${field} missing`);
   }
   const requireHttpsUrl = (field: string): void => {
     const value = raw[field];
@@ -262,7 +270,7 @@ function validateOAuthDescriptor(p: Provider): void {
 }
 
 /** 轻量校验一个 provider。 */
-function validateProvider(p: Provider): void {
+function validateProvider(p: Provider, allowEmptyModalities = false): void {
   assert(typeof p.id === 'string' && p.id.length > 0, 'provider.id missing');
   // id 会被 host 直接拼进 safeStorage 键名/文件名（provider_oauth_<id> 等），
   // 必须限定 slug 字符集，防被投毒目录用 `../` 之类字符把凭证写出存储目录。
@@ -288,6 +296,7 @@ function validateProvider(p: Provider): void {
   const hasMediaModels =
     (Array.isArray(p.imageModels) && p.imageModels.length > 0) ||
     (Array.isArray(p.videoModels) && p.videoModels.length > 0) ||
+    (Array.isArray(p.audioModels) && p.audioModels.length > 0) ||
     (Array.isArray(p.embeddingModels) && p.embeddingModels.length > 0);
   assert(
     Array.isArray(p.agents) && (p.agents.length > 0 || hasMediaModels),
@@ -364,11 +373,13 @@ function validateProvider(p: Provider): void {
   }
   // 约束：若声明了 titleModel（标题 oneShot 用的最经济模型），它必须存在于本供应商任一
   // agent 的模型清单里 —— 防把不存在 / 拼错的 id 配进去导致运行时静默起不出标题。
-  // 豁免:动态清单供应商(全部 models 数组为空,清单运行时注入——2026-07-19 统一重构后
-  // 的 anthropic/openai/xd)无静态清单可校验,titleModel 指向的是运行时会出现的 id。
+  // 豁免:Claude/Codex 动态清单供应商在这两个 harness 下都为空时无静态清单可校验；
+  // 独立的 Pi 原生名单不应把它误判为静态 root，也不要求沿用同一 model id 命名空间。
   if (p.titleModel !== undefined) {
     assert(typeof p.titleModel === 'string' && p.titleModel.length > 0, `provider '${p.id}' titleModel must be a non-empty string`);
-    const hasStaticModels = p.agents.some((agent) => (p.models[agent] ?? []).length > 0);
+    const hasStaticModels = p.agents.some(
+      (agent) => agent !== 'pi' && (p.models[agent] ?? []).length > 0,
+    );
     if (hasStaticModels) {
       const known = p.agents.some((agent) => (p.models[agent] ?? []).some((m) => m.id === p.titleModel));
       assert(known, `provider '${p.id}' titleModel '${p.titleModel}' not found in any agent's models`);
@@ -377,8 +388,8 @@ function validateProvider(p: Provider): void {
   // 媒体模型清单与默认选型(图像/视频同一套规则):
   // 清单 id/name 非空、id 不重复,不参与 agent/routing 约束(媒体模型不经
   // agent runtime);默认选型必须与清单配套且每个值指向在册 id。
-  validateMediaModels(p.id, 'imageModels', p.imageModels, 'imageDefaults', p.imageDefaults);
-  validateMediaModels(p.id, 'videoModels', p.videoModels, 'videoDefaults', p.videoDefaults);
+  validateMediaModels(p.id, 'imageModels', p.imageModels, 'imageDefaults', p.imageDefaults, allowEmptyModalities);
+  validateMediaModels(p.id, 'videoModels', p.videoModels, 'videoDefaults', p.videoDefaults, allowEmptyModalities);
   // 向量清单同一套规则(PR #1707 review):不校验的话,远端把 embeddingModels 写成
   // 对象、给重复/空 id、或让 embeddingDefaults 指向清单外型号,都能通过
   // parseCatalog();前一种随后在 deriveCindyMediaConfig 的 for...of 里抛错,被上层
@@ -389,7 +400,12 @@ function validateProvider(p: Provider): void {
     p.embeddingModels,
     'embeddingDefaults',
     p.embeddingDefaults,
+    allowEmptyModalities,
   );
+  validateMediaModels(p.id, 'audioModels', p.audioModels, 'audioDefaults', undefined, allowEmptyModalities);
+  for (const m of p.audioModels ?? []) {
+    assert(['audio_speech', 'audio_transcription', 'audio_generation', 'realtime'].includes(m.mode ?? ''), `provider '${p.id}' audio model '${m.id}' requires an audio mode`);
+  }
   validateAccess(p);
   validateOAuthDescriptor(p);
 }
@@ -403,9 +419,11 @@ function validateMediaModels(
     name: string;
     modalities?: { input: string[]; output: string[] };
     officialDocs?: string;
+    mode?: string;
   }> | undefined,
   defaultsField: string,
   defaults: { standard: string; draft?: string; best?: string } | undefined,
+  allowEmptyModalities = false,
 ): void {
   if (models !== undefined) {
     assert(Array.isArray(models), `provider '${providerId}' ${modelsField} must be an array`);
@@ -416,6 +434,7 @@ function validateMediaModels(
       assert(typeof m.name === 'string' && m.name.length > 0, `provider '${providerId}' ${modelsField} '${m.id}' missing name`);
       assert(!seen.has(m.id), `provider '${providerId}' ${modelsField} has duplicate id '${m.id}'`);
       seen.add(m.id);
+      assert(m.mode === undefined || validModelMetadata({ mode: m.mode }), `model '${m.id}' mode invalid`);
       if (m.modalities !== undefined) {
         assert(
           m.modalities && typeof m.modalities === 'object' && !Array.isArray(m.modalities),
@@ -424,7 +443,7 @@ function validateMediaModels(
         for (const key of ['input', 'output'] as const) {
           const values = m.modalities[key];
           assert(
-            Array.isArray(values) && values.length > 0 && values.length <= 16,
+            Array.isArray(values) && (allowEmptyModalities || values.length > 0) && values.length <= 16,
             `provider '${providerId}' ${modelsField} '${m.id}' modalities.${key} must be a non-empty bounded array`,
           );
           assert(
@@ -533,6 +552,7 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       const mm = m as Record<string, unknown>;
       if (typeof mm.id !== 'string' || mm.id.length === 0) return false;
       if (typeof mm.name !== 'string' || mm.name.length === 0) return false;
+      if (mm.api !== undefined && !isPiModelApi(mm.api)) return false;
       if (mm.piApi !== undefined && !isPiModelApi(mm.piApi)) return false;
       if (
         mm.contextWindow !== undefined
@@ -544,7 +564,24 @@ function isValidPreset(v: unknown): v is ProviderPreset {
       if (!hasValidPresetReasoningCapability(agent, mm)) return false;
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
-    if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
+    if (
+      r.supportsImageGeneration !== undefined &&
+      typeof r.supportsImageGeneration !== 'boolean'
+    ) {
+      return false;
+    }
+    if (r.supportsImageGeneration === true && agent !== 'codex') return false;
+    const defaultWireProtocol = r.wireProtocol ?? (agent === 'codex' ? 'openai-responses' : undefined);
+    const hasResponsesRoute =
+      defaultWireProtocol === 'openai-responses' ||
+      r.models.some((model) => {
+        if (!model || typeof model !== 'object') return false;
+        const route = (model as Record<string, unknown>).route;
+        return route && typeof route === 'object' && !Array.isArray(route)
+          ? (route as Record<string, unknown>).wireProtocol === 'openai-responses'
+          : false;
+      });
+    if (r.supportsImageGeneration === true && !hasResponsesRoute) return false;
     if (r.headers !== undefined) {
       if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) return false;
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;
@@ -559,12 +596,12 @@ function isValidPreset(v: unknown): v is ProviderPreset {
   return true;
 }
 
-/** 是否合法 http(s) URL（modelsUrl 归一化用）。 */
+/** 是否为不含内嵌凭据的 http(s) URL（模型发现地址归一化用）。 */
 function isHttpUrl(v: unknown): boolean {
   if (typeof v !== 'string' || v.length === 0) return false;
   try {
     const u = new URL(v);
-    return u.protocol === 'https:' || u.protocol === 'http:';
+    return (u.protocol === 'https:' || u.protocol === 'http:') && !u.username && !u.password;
   } catch {
     return false;
   }
@@ -605,7 +642,7 @@ function isLegacyAnthropicPiRuntime(
 }
 
 /**
- * runtime.modelsUrl 非法（非 http(s) URL）时剥掉该字段、保留预设本体——OSS 推错一个
+ * runtime.modelsUrl 非法（非 http(s) URL 或含内嵌凭据）时剥掉该字段、保留预设本体——OSS 推错一个
  * 不可见字段不该让整条预设消失，更不该让用户保存时撞 main 侧 URL 校验无法自助修复。
  */
 function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
@@ -647,9 +684,6 @@ function normalizePresetRuntimeOptions(p: ProviderPreset): ProviderPreset {
             const sourceUrl = httpUrl(source.baseUrl);
             if (!runtimeUrl || !sourceUrl || sourceUrl.origin !== runtimeUrl.origin) return false;
             if (!isWireProtocol(source.wireProtocol)) return false;
-            if (agent === 'claude-code' && source.wireProtocol !== 'anthropic-messages') {
-              return false;
-            }
             if (
               source.modelsUrl !== undefined &&
               (!isHttpUrl(source.modelsUrl) ||
@@ -775,8 +809,6 @@ export function parseCatalog(input: string | unknown): Catalog {
   const catalog = obj as Catalog;
   assert(typeof catalog.version === 'string', 'catalog.version missing');
   assert(Array.isArray(catalog.providers) && catalog.providers.length > 0, 'catalog.providers missing/empty');
-  for (const p of catalog.providers) validateProvider(p);
-  validateModelConsistency(catalog);
   // presets 容错清洗（坏条目丢弃，不让预设错误拖垮整份目录）。
   const presets = sanitizePresets((catalog as { presets?: unknown }).presets);
   if (presets.length > 0) catalog.presets = presets;
@@ -786,11 +818,21 @@ export function parseCatalog(input: string | unknown): Catalog {
     assert(registry.ok, registry.ok ? '' : registry.error);
     catalog.modelRegistry = registry.value;
   }
+  // Validate authored lists before projection so malformed input cannot be repaired or crash mapping.
+  for (const provider of catalog.providers) {
+    for (const field of ['imageModels', 'videoModels', 'audioModels', 'embeddingModels'] as const)
+      validateMediaModels(provider.id, field, provider[field], field === 'audioModels' ? '' : field.replace('Models', 'Defaults'),
+        field === 'imageModels' ? provider.imageDefaults : field === 'videoModels' ? provider.videoDefaults : field === 'embeddingModels' ? provider.embeddingDefaults : undefined, (catalog.modelRegistry?.schemaVersion ?? 0) >= 4);
+  }
+  const projected = { ...catalog, providers: catalog.providers.map((provider) =>
+    projectProviderMediaModels(provider, catalog.modelRegistry, { addDeclared: true })) };
+  for (const provider of projected.providers) validateProvider(provider, (catalog.modelRegistry?.schemaVersion ?? 0) >= 4);
+  validateModelConsistency(projected);
   // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
   // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。
   //
   // 刻意**不**原地替换 catalog.providers:入参可能就是 BUNDLED_CATALOG(共享的 import 对象),
   // 原地改会把标记悄悄写回那份共享目录 —— 既是跨调用方的副作用,也会让「bundled 自己有没有
   // 标记」这类断言变成假通过。
-  return { ...catalog, providers: catalog.providers.map(withVerifiedStaticWindows) };
+  return { ...projected, providers: projected.providers.map(withVerifiedStaticWindows) };
 }

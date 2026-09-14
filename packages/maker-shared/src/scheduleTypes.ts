@@ -30,6 +30,7 @@ export interface RemoteScheduleWriteInput {
    */
   intervalMs?: number | null;
   agentKind: RemoteScheduleAgentKind;
+  modelAgentKind?: RemoteScheduleAgentKind;
   model?: string;
   providerId?: string;
   effort?: string;
@@ -100,6 +101,7 @@ export interface RemoteSchedule {
   manual?: boolean;
   intervalMs?: number;
   agentKind?: RemoteScheduleAgentKind;
+  modelAgentKind?: RemoteScheduleAgentKind;
   model?: string;
   providerId?: string;
   effort?: string;
@@ -128,6 +130,10 @@ export interface RemoteScheduleRun {
   finishedAt?: RemoteTimestamp;
   status: RemoteScheduleRunStatus;
   errorMsg?: string;
+  /** Optional lightweight host projection; history and read receipts stay unchanged. */
+  failureKind?: 'precheck' | 'rate-limit' | 'execution';
+  failureRecovered?: boolean;
+  preRunHookResult?: { decision?: string; checkSucceeded?: boolean; stderr?: string };
   resultText?: string;
   costUsd?: number;
   estimatedValueUsd?: number;

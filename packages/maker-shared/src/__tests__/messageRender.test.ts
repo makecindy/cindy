@@ -54,6 +54,25 @@ function at(seconds: number): string {
 }
 
 describe('message render shared model', () => {
+  it('keeps sealed work folded while subsequent work in the same turn remains active', () => {
+    const messages = [
+      message({ kind: 'user', source: source('u1', 'start', 1), body: 'start' }),
+      message({ kind: 'thinking', source: source('think1', 'Checking', 2), body: 'Checking' }),
+      message({ kind: 'assistant', source: source('progress1', 'Checking more', 3), body: 'Checking more' }),
+      message({ kind: 'tool', source: source('read1', { toolName: 'Read', input: {} }, 4), body: 'Read', label: 'Read' }),
+      message({ kind: 'assistant', source: source('final1', 'Done', 5), body: 'Done', turnCompleted: true }),
+    ];
+    const completed = buildMessageRenderItems(messages);
+    expect(completed.map((item) => item.key)).toEqual(['message-u1', 'work-summary-think1', 'message-final1']);
+    expect(buildMessageRenderItems(messages, { isSessionStreaming: true })).toEqual(completed);
+    const continued = buildMessageRenderItems([
+      ...messages,
+      message({ kind: 'thinking', source: source('next-think', 'Continuing', 6), body: 'Continuing', isStreaming: true }),
+    ], { isSessionStreaming: true });
+    expect(continued.slice(0, completed.length)).toEqual(completed);
+    expect(continued.at(-1)).toMatchObject({ key: 'work-next-think', isStreaming: true });
+  });
+
   it('groups consecutive normalized tools before the final answer', () => {
     const items = buildMessageRenderItems([
       message({

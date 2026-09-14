@@ -23,10 +23,11 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).not.toContain('sessionHeaderIconBadgeText');
     expect(source).not.toContain('badge={');
     expect(source).not.toContain("if (queueCount > 0) return `队列 ${queueCount}`;");
-    expect(source).toContain("if (!session) return syncing ? i18n.t('session.screen.syncingSession') : null;\n  if (syncing) return i18n.t('session.screen.syncing');");
-    // 后台静默刷新:同步提示由 showSyncingIndicator gate —— 仅首次加载、还没有任何内容时显示,
-    // 已有 messages(重开已看过的会话)时后台对账静默,不再弹"正在同步"。
-    expect(source).toContain('const showSyncingIndicator = loading && messages.length === 0;');
+    expect(source).toContain('if (!session) return null;');
+    // Routine work uses the trailing title indicator, without an extra subtitle.
+    expect(source).toContain('const showSyncingIndicator = !showConnectionBanner && !showCachedHistoryNotice');
+    expect(source).toContain('<QuietSyncIndicator active={syncing} immediate={syncingImmediately} />');
+    expect(source).not.toContain("if (syncing) return i18n.t('session.screen.syncing');");
     expect(source).toContain("if (queuePaused) return i18n.t('session.screen.queuePausedNotice');\n  return null;");
     expect(source).toContain('attention ? (');
   });
@@ -188,8 +189,8 @@ describe('mobile session header desktop-first surface', () => {
     expect(draftScopeEnd).toBeGreaterThan(draftScopeStart);
     expect(draftScope).toContain('if (composerDraftStateKey !== activeComposerDraftScopeKey) {');
     expect(draftScope).toContain('const nextScope = readImmediateComposerDraftScope(sessionId, routeDraft);');
-    expect(draftScope).toContain('setComposerDocumentState(nextScope.document);');
-    expect(draftScope).toContain('setDraft(nextDraft);');
+    expect(draftScope).toContain('setComposerDraftSource(createComposerDraftSource(nextScope.document));');
+    expect(draftScope).toContain('draftRef.current = nextDraft;');
     expect(draftScope).toContain('setComposerDraftHydrated(false);');
     expect(draftScope).toContain('appliedRouteDraftRef.current = null;');
     expect(draftScope).toContain('composerDocumentRef.current = nextScope.document;');

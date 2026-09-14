@@ -21,7 +21,7 @@
  * DraggableCardColumns 错落瀑布(每列独立 SortableJS 实例 + 跨列 group,多列也可整卡拖拽)。
  */
 
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
 import type {
   DragEvent as ReactDragEvent,
   MouseEvent as ReactMouseEvent,
@@ -83,12 +83,16 @@ import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { resolveSessionCardBody } from './sessionCardPreview';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
+import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProjectsStore';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import {
   useSessionBoundSchedules,
   scheduleFocusPath,
 } from '@/features/scheduler/lib/scheduleSessionBinding';
-import { loadScheduleSidebarIndexRuns } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import {
+  findLatestSidebarIndexRunForSession,
+  loadScheduleSidebarIndexRuns,
+} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
@@ -137,7 +141,7 @@ export type SessionCardProps = SessionItemProps & {
   hideBottomDivider?: boolean;
 };
 
-export function SessionCard({
+export const SessionCard = memo(function SessionCard({
   session,
   isActive,
   isRunning,
@@ -168,15 +172,17 @@ export function SessionCard({
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
   const remoteActivity = useRemoteSessionActivity(session.id);
+  const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
   const sessionActivity = projectSidebarSessionActivity({
+    interruption: session,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,
     liveActivity: remoteActivity ?? islandActivity,
     attentionKind,
-    isUrgentFromContext,
+    isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
     isRunning,
-    hasAttentionNotification,
+    hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;
   const rightStatusKind = resolveSidebarRightStatus(sessionActivity);
@@ -492,7 +498,7 @@ export function SessionCard({
       e.stopPropagation();
       try {
         const runs = await loadScheduleSidebarIndexRuns();
-        const hit = runs.find((r) => r.sessionId === session.id);
+        const hit = findLatestSidebarIndexRunForSession(runs, session.id);
         navigate(hit ? scheduleFocusPath(hit.scheduleId) : '/cc-agent/scheduled');
       } catch {
         navigate('/cc-agent/scheduled');
@@ -1183,7 +1189,7 @@ export function SessionCard({
       )}
     </div>
   );
-}
+});
 
 /** 右上角时间槽位——card / list 变体共用。默认显示 [worktree + 时间];hover/菜单打开
  *  时整组让位给操作按钮(More + Archive/Undo),archivePending 时显示红色二次确认胶囊。

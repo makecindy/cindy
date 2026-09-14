@@ -1,15 +1,16 @@
 import { BrowserWindow } from 'electron';
-import { and, desc, eq, inArray, ne } from 'drizzle-orm';
+import { and, desc, eq, gt, inArray, ne } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from './client/current.js';
-import { orcaWorkers, orcaTeams, sessions } from './schema.js';
+import { orcaWorkers, orcaTeams, orcaWorkerCreationReservations, sessions } from './schema.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { notifyAgentIslandSessionPatch } from './agentIslandSessionPatch.js';
 import { withSessionRouteLock, withSessionRouteLocks } from './sessionRouteLock.js';
 import { cleanupSessionRuntimeForTerminalStatus } from './sessionRuntimeCleanup.js';
+import { compactSessionToolResultsBestEffort } from './toolResultCompaction.js';
 
 const log = createLogger('orca-team-store');
 
@@ -201,6 +202,47 @@ export async function getActiveTeamByLead(
 }
 
 /**
+ * #3555:判定 active team 是否为「初始化被进程退出打断」遗留的孤儿。
+ * 判据取最保守的一档:该 team 从未挂上任何 worker 行(任意状态,含归档——
+ * 全员归档的 team 是用户可继续 create_worker 的合法状态,不算孤儿),且没有
+ * 仍在租期内的创建 reservation(有则说明另一进程正在为它建 worker)。两条都
+ * 满足的 team 不可能承载任何用户状态,调用方可安全按 failed 收口重新启用。
+ */
+/** #3555 review:太年轻的 team 视为「可能仍在别处初始化」,不判孤儿。 */
+const ORPHAN_TEAM_MIN_AGE_MS = 60_000;
+
+export async function isOrphanedTeamInit(teamId: string): Promise<boolean> {
+  const db = getDbClient().drizzle;
+  // 并发初始化兜底(同进程窗口已由 lifecycle 的 in-flight 集合覆盖,这里
+  // 挡住其余场景):创建后不足 ORPHAN_TEAM_MIN_AGE_MS 的 team 不判孤儿——
+  // 进程中断遗留的孤儿在用户重启重试时天然老于该地板,收敛性不受影响。
+  const [team] = await db
+    .select({ createdAt: orcaTeams.createdAt })
+    .from(orcaTeams)
+    .where(eq(orcaTeams.id, teamId))
+    .limit(1);
+  if (!team) return false;
+  if (Date.now() - team.createdAt < ORPHAN_TEAM_MIN_AGE_MS) return false;
+  const [worker] = await db
+    .select({ id: orcaWorkers.id })
+    .from(orcaWorkers)
+    .where(eq(orcaWorkers.teamId, teamId))
+    .limit(1);
+  if (worker) return false;
+  const [reservation] = await db
+    .select({ id: orcaWorkerCreationReservations.id })
+    .from(orcaWorkerCreationReservations)
+    .where(
+      and(
+        eq(orcaWorkerCreationReservations.teamId, teamId),
+        gt(orcaWorkerCreationReservations.expiresAt, Date.now()),
+      ),
+    )
+    .limit(1);
+  return !reservation;
+}
+
+/**
  * F-COLLAB: 直接插入新的 active team。
  * 跟 createOrGetTeamForLead 不同 — 不查 existing,任何已有的同 lead team
  * 必须先被显式 markTeamEnded(completed/cancelled/failed)。调用方 (OrcaLifecycleService)
@@ -248,9 +290,10 @@ export async function markTeamEnded(
  * orca_role 字段保留 'worker' 不动 — 历史上下文识别需要它。
  */
 export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
+  const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForTeam(teamId);
   const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
-    const ids = await getDbClient().tx('orca.archiveWorkersByTeam', {
+    const ids = await client.tx('orca.archiveWorkersByTeam', {
       teamId,
       sessionIds: candidateIds,
       now: Date.now(),
@@ -258,7 +301,10 @@ export async function archiveWorkersByTeam(teamId: string): Promise<string[]> {
     for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
     return ids;
   });
-  for (const id of updatedIds) broadcastSessionPatch(id, { status: 'archived' });
+  for (const id of updatedIds) {
+    broadcastSessionPatch(id, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId: id });
+  }
   return updatedIds;
 }
 
@@ -291,9 +337,10 @@ export async function markWorkersStatusByTeam(
 export async function reconcileInactiveTeamWorkersForLead(
   leadSessionId: string,
 ): Promise<string[]> {
+  const client = getDbClient();
   const candidateIds = await listActiveWorkerSessionIdsForInactiveTeams(leadSessionId);
   const updatedIds = await withSessionRouteLocks(candidateIds, async () => {
-    const ids = await getDbClient().tx('orca.reconcileInactiveTeamWorkersForLead', {
+    const ids = await client.tx('orca.reconcileInactiveTeamWorkersForLead', {
       leadSessionId,
       sessionIds: candidateIds,
       now: Date.now(),
@@ -301,7 +348,10 @@ export async function reconcileInactiveTeamWorkersForLead(
     for (const id of ids) cleanupSessionRuntimeForTerminalStatus(id, 'archived');
     return ids;
   });
-  for (const id of updatedIds) broadcastSessionPatch(id, { status: 'archived' });
+  for (const id of updatedIds) {
+    broadcastSessionPatch(id, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId: id });
+  }
   return updatedIds;
 }
 
@@ -500,12 +550,14 @@ export async function restoreWorkerDoneIfIdle(workerId: string): Promise<boolean
  * 这条路径只服务失败清理，不影响正常协同结束时保留历史 worker link 的语义。
  */
 export async function removeWorker(workerId: string): Promise<void> {
-  const removedSessionId = await getDbClient().tx('orca.removeWorker', {
+  const client = getDbClient();
+  const removedSessionId = await client.tx('orca.removeWorker', {
     workerId,
     now: Date.now(),
   });
   if (removedSessionId) {
     broadcastSessionPatch(removedSessionId, { status: 'archived', orcaRole: null });
+    void compactSessionToolResultsBestEffort({ client, sessionId: removedSessionId });
   }
 }
 
@@ -524,8 +576,9 @@ export async function setWorkerFocus(teamId: string, workerId: string): Promise<
  * 归档单个 worker session, 不牵连同 team 其他 worker。
  */
 export async function archiveSingleWorkerSession(sessionId: string): Promise<void> {
+  const client = getDbClient();
   const changed = await withSessionRouteLock(sessionId, async () => {
-    const result = await getDbClient().drizzle
+    const result = await client.drizzle
       .update(sessions)
       .set({ status: 'archived', updatedAt: Date.now() })
       .where(and(eq(sessions.id, sessionId), ne(sessions.status, 'deleted')))
@@ -534,7 +587,10 @@ export async function archiveSingleWorkerSession(sessionId: string): Promise<voi
     cleanupSessionRuntimeForTerminalStatus(sessionId, 'archived');
     return true;
   });
-  if (changed) broadcastSessionPatch(sessionId, { status: 'archived' });
+  if (changed) {
+    broadcastSessionPatch(sessionId, { status: 'archived' });
+    void compactSessionToolResultsBestEffort({ client, sessionId });
+  }
 }
 
 async function listActiveWorkerSessionIdsForTeam(teamId: string): Promise<string[]> {

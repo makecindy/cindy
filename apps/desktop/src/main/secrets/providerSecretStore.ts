@@ -435,14 +435,23 @@ export function readCustomProviderHeaders(
 }
 
 /**
+ * 严格快照的第三态：密文文件存在，但用当前 safeStorage 主密钥解不开（钥匙串条目变更、
+ * 由另一签名 / 构建写入等，见 #871）。重试无意义，只有显式替换值才允许覆盖它；回滚时
+ * 不尝试恢复这份旧 blob，而是删掉本次写入的新值（#3821）。
+ */
+export const UNRECOVERABLE_PROVIDER_CREDENTIAL = Symbol('unrecoverable-provider-credential');
+export type UnrecoverableProviderCredential = typeof UNRECOVERABLE_PROVIDER_CREDENTIAL;
+
+/**
  * 配置 CRUD 回滚前的严格 API key 快照读取。
- * 仅 ENOENT 表示“没有旧 key”；owner / 加密不可用、文件读取或解密失败都必须抛错，
- * 防止调用方把暂时不可读的现有凭证误判为空并永久删除。
+ * 仅 ENOENT 表示“没有旧 key”；密文存在但解不开返回 UNRECOVERABLE_PROVIDER_CREDENTIAL；
+ * owner / 加密不可用、文件读取失败都必须抛错，防止调用方把暂时不可读的现有凭证误判为空
+ * 并永久删除。
  */
 export function readCustomProviderKeyForMutation(
   providerId: string,
   agent: string,
-): string | null {
+): string | null | UnrecoverableProviderCredential {
   const logicalKey = customProviderSecretStorageKey(providerId, agent);
   const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
   if (!scopedKey) throw new Error('provider secret owner is unavailable');
@@ -469,15 +478,19 @@ export function readCustomProviderKeyForMutation(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
       'decrypt custom provider key snapshot failed',
     );
-    throw new Error('existing provider credential is unreadable');
+    return UNRECOVERABLE_PROVIDER_CREDENTIAL;
   }
 }
 
-/** Strict mutation snapshot for an encrypted runtime header blob. */
+/**
+ * Strict mutation snapshot for an encrypted runtime header blob. Same three states as
+ * readCustomProviderKeyForMutation: a blob that exists but cannot be decrypted (or parsed)
+ * is reported as UNRECOVERABLE_PROVIDER_CREDENTIAL instead of thrown.
+ */
 export function readCustomProviderHeadersForMutation(
   providerId: string,
   agent: string,
-): Record<string, string> | null {
+): Record<string, string> | null | UnrecoverableProviderCredential {
   const logicalKey = customProviderHeaderStorageKey(providerId, agent);
   const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
   if (!scopedKey) throw new Error('provider secret owner is unavailable');
@@ -500,7 +513,7 @@ export function readCustomProviderHeadersForMutation(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
       'decrypt custom provider headers snapshot failed',
     );
-    throw new Error('existing provider header credentials are unreadable');
+    return UNRECOVERABLE_PROVIDER_CREDENTIAL;
   }
 }
 

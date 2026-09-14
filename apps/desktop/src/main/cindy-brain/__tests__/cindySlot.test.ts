@@ -1336,6 +1336,46 @@ describe('改图代办(edit_image)', () => {
     expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:owner-a:1');
     expect(editImage).not.toHaveBeenCalled();
   });
+
+  it('library 正本 blob 相对键可消费;sidecar 禁止当像素', async () => {
+    const HASH = 'a'.repeat(64);
+    const blob = `assets/${HASH.slice(0, 2)}/${HASH}/blob.png`;
+    const resolveOwnedMedia = vi.fn(async (_g: string, key: string) =>
+      key === blob ? `/library/${blob}` : null,
+    );
+    const { slot, editImage } = makeSlot({
+      resolveOwnedMedia,
+    } as Partial<CindySlotDeps>);
+    const ok = await slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: [blob],
+    });
+    expect(ok).toMatchObject({ ok: true });
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', blob, 'cloud:test-owner:1');
+    expect(editImage).toHaveBeenCalledWith(expect.objectContaining({ imagePaths: [`/library/${blob}`] }));
+
+    const sidecar = makeSlot();
+    const rejected = await sidecar.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: [`assets/${HASH.slice(0, 2)}/${HASH}/preview.webp`],
+    });
+    expect(rejected).toMatchObject({ ok: false });
+    expect((rejected as { message: string }).message).toContain('sidecar');
+    expect(sidecar.editImage).not.toHaveBeenCalled();
+
+    const prefixedResolve = vi.fn();
+    const prefixedSidecar = makeSlot({
+      resolveOwnedMedia: prefixedResolve,
+    } as Partial<CindySlotDeps>);
+    const prefixedRejected = await prefixedSidecar.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: [`library:assets/${HASH.slice(0, 2)}/${HASH}/preview.webp`],
+    });
+    expect(prefixedRejected).toMatchObject({ ok: false });
+    expect((prefixedRejected as { message: string }).message).toContain('sidecar');
+    expect(prefixedSidecar.editImage).not.toHaveBeenCalled();
+    expect(prefixedResolve).not.toHaveBeenCalled();
+  });
 });
 
 describe('管子续命挂钩(同步视频代办 hold/release)', () => {

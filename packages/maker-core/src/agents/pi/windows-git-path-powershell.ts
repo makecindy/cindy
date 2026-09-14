@@ -5,7 +5,11 @@ import type { Logger } from '../../interfaces/logger.js';
 export type WindowsGitPathLogger = Pick<Logger, 'warn'>;
 
 const DIAGNOSTIC_PREFIX = '__CINDY_WINDOWS_GIT_PATH_DIAGNOSTIC__';
-const WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS = 2_000;
+// 忙碌的 Windows 宿主(如 CI hosted runner)上 PowerShell 冷启动就可能超过
+// 5 秒:2 秒预算会让清理进程在 Stop-Process 执行前就被 execFileSync 超时
+// 杀掉,后代进程泄漏(#3574 的偶发失败正是这个竞态)。清理只在探测已经
+// 失败的收尾路径运行,放宽预算不影响任何成功路径的耗时。
+const WINDOWS_DESCENDANT_CLEANUP_TIMEOUT_MS = 10_000;
 
 type WindowsPowerShellProbe = 'registry' | 'network-drives' | 'path-kinds' | 'path-cleanup';
 
@@ -100,10 +104,10 @@ function windowsPathKindProbeLines(outputLine: string): string[] {
   ];
 }
 
-export function maxWindowsPathKindProbeBatchCount(timeoutMs: number): number {
+export function maxWindowsPathKindProbeBatchCount(timeoutMs: number, requestedOperationTimeoutMs = 1_250): number {
   const budgetMs = Math.max(timeoutMs - 250, 1);
   const availableOperationBudgetMs = Math.max(budgetMs - 250, 1);
-  const operationTimeoutMs = Math.min(availableOperationBudgetMs, 1_250);
+  const operationTimeoutMs = Math.min(availableOperationBudgetMs, Math.max(requestedOperationTimeoutMs, 1));
   const maxOperationWaves = Math.max(Math.floor(availableOperationBudgetMs / operationTimeoutMs), 1);
   return 4 * maxOperationWaves;
 }
@@ -112,6 +116,7 @@ export function buildWindowsPathKindProbeScript(
   candidateCount: number,
   timeoutMs: number,
   batchCount = candidateCount,
+  options: { operationTimeoutMs?: number } = {},
 ): string {
   const inputPrelude = [
     '$stdin = [Console]::OpenStandardInput()',
@@ -130,8 +135,8 @@ export function buildWindowsPathKindProbeScript(
   const operationCount = Math.min(Math.max(batchCount, 1), Math.max(candidateCount, 1));
   const maxConcurrency = Math.min(operationCount, 4);
   const availableOperationBudgetMs = Math.max(budgetMs - 250, 1);
-  const operationTimeoutMs = Math.min(availableOperationBudgetMs, 1_250);
-  const maxOperationCount = Math.min(operationCount, maxWindowsPathKindProbeBatchCount(timeoutMs));
+  const operationTimeoutMs = Math.min(availableOperationBudgetMs, Math.max(options.operationTimeoutMs ?? 1_250, 1));
+  const maxOperationCount = Math.min(operationCount, maxWindowsPathKindProbeBatchCount(timeoutMs, operationTimeoutMs));
   const encodedProbeCommand = Buffer.from([
     '$paths = @(([string]$env:CINDY_WINDOWS_GIT_PATH_CANDIDATES | ConvertFrom-Json))',
     'foreach ($pathValue in $paths) {',
@@ -161,7 +166,7 @@ export function buildWindowsPathKindProbeScript(
     '      }',
     '    }',
     '  } catch {',
-    `    [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `    [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-output")`,
     '  }',
     '}',
     'try {',
@@ -183,7 +188,7 @@ export function buildWindowsPathKindProbeScript(
     '        [void]$process.Start()',
     '        [void]$operations.Add([PSCustomObject]@{ Process = $process; StartedAt = $clock.ElapsedMilliseconds })',
     '      } catch {',
-    `        [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `        [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-start")`,
     '        if ($null -ne $process) {',
     '          $process.Dispose()',
     '        }',
@@ -200,22 +205,22 @@ export function buildWindowsPathKindProbeScript(
     '      try {',
     '        Write-ProbeOutput $operation.Process',
     '        if ($operation.Process.ExitCode -ne 0) {',
-    `          [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `          [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-exit")`,
     '        }',
     '      } catch {',
-    `        [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `        [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-complete")`,
     '      } finally {',
     '        $operation.Process.Dispose()',
     '        [void]$operations.Remove($operation)',
     '      }',
     '    }',
     '    foreach ($operation in $expired) {',
-    `      [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `      [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-timeout")`,
     '      try {',
     '        $operation.Process.Kill()',
     '        $operation.Process.WaitForExit()',
     '      } catch {',
-    `        [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `        [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-cleanup")`,
     '      } finally {',
     '        if ($operation.Process.HasExited) {',
     '          Write-ProbeOutput $operation.Process',
@@ -226,10 +231,10 @@ export function buildWindowsPathKindProbeScript(
     '    }',
     '  }',
     '  if ($nextGroupIndex -lt $groups.Count -or $operations.Count -gt 0) {',
-    `    [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `    [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-budget")`,
     '  }',
     '} catch {',
-    `  [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `  [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-coordinator")`,
     '} finally {',
     '  foreach ($operation in @($operations)) {',
     '    try {',
@@ -238,7 +243,7 @@ export function buildWindowsPathKindProbeScript(
     '        $operation.Process.WaitForExit()',
     '      }',
     '    } catch {',
-    `      [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process")`,
+    `      [Console]::Out.WriteLine("${DIAGNOSTIC_PREFIX}\`tpath-process-cleanup")`,
     '    } finally {',
     '      if ($operation.Process.HasExited) {',
     '        Write-ProbeOutput $operation.Process',

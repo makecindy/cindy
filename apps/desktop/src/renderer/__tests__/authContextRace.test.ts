@@ -30,7 +30,7 @@ describe('AuthContext auth-state races', () => {
   });
 
   it('repartitions every owner-scoped renderer store at the same boundary', () => {
-    // 统一模型选择器新增的两根轴(引擎 override / 收藏副本)与 newMakerDraft 同待遇:
+    // 模型选择器持久轴(模型预设 / 引擎 override / 收藏副本)与 newMakerDraft 同待遇:
     // 同一处、同一个 state.dataOwnerId(登出快照里就是 null)。漏接任一个 = 多账号串号 ——
     // 这正是 providerModelMemory 不分账号踩过的坑,不能在新 store 上重演。
     const applyStart = source.indexOf('const applyIncomingState = useCallback');
@@ -38,6 +38,7 @@ describe('AuthContext auth-state races', () => {
     const applyBlock = source.slice(applyStart, source.indexOf('[applyIncomingUser]', applyStart));
     for (const call of [
       'setNewMakerDraftOwner(state.dataOwnerId);',
+      'setProviderModelMemoryOwner(state.dataOwnerId);',
       'setModelEnginePrefsOwner(state.dataOwnerId);',
       'setModelFavoritesOwner(state.dataOwnerId);',
     ]) {
@@ -71,6 +72,7 @@ describe('AuthContext auth-state races', () => {
   it('publishes a data-owner generation at every auth boundary', () => {
     expect(source).toContain('cancelRemoteOptimisticSendsForDataOwnerBoundary();');
     expect(source).toContain('setDataOwnerGeneration(dataOwnerId, ownerGeneration);');
+    expect(source).toContain('recentWorkdirsStore.setDataOwner(getDataOwnerGeneration());');
     expect(source).toContain('invalidateProvidersSnapshot();');
     expect(source).toContain(
       'publishDataOwnerGeneration(state.dataOwnerId, state.ownerGeneration);',

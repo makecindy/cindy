@@ -1,4 +1,10 @@
 {
+  "failedScheduleNotice": {
+    "text": "실패한 자동 실행이 있습니다.",
+    "precheck": "자동 확인이 일시적으로 차단되었습니다.",
+    "rateLimited": "요청 한도 초과로 자동 확인이 일시적으로 차단되었습니다.",
+    "dismissTitle": "이전 실패 알림 닫기"
+  },
   "common": {
     "cancel": "취소",
     "delete": "삭제",
@@ -113,12 +119,16 @@
         "usage": { "label": "사용량", "a11y": "작업 사용량 보기" },
         "files": { "label": "파일", "a11y": "원격 파일 탐색" },
         "queue": { "label": "대기열", "a11y": "대기열 패널 열기" },
-        "search": { "label": "검색", "openA11y": "메시지 검색", "closeA11y": "메시지 검색 닫기" }
+        "search": {
+          "label": "검색",
+          "openA11y": "메시지 검색",
+          "closeA11y": "메시지 검색 닫기"
+        }
       },
       "disabled": {
         "files": "이 작업에는 원격 작업 디렉터리가 없어 파일을 탐색할 수 없습니다.",
         "search": "검색할 메시지가 아직 없습니다.",
-        "queueUnavailable": "제어 중인 컴퓨터를 일시적으로 사용할 수 없습니다. 다시 동기화한 후 대기열을 확인하세요.",
+        "queueUnavailable": "원격 컴퓨터를 일시적으로 사용할 수 없습니다. 다시 동기화한 후 대기열을 확인하세요.",
         "queuePending": "먼저 보류 중인 요청을 처리하세요. 완료되면 대기열 패널을 사용할 수 있습니다.",
         "queuePausedEmpty": "대기열이 일시 중지되었지만 다시 시작할 메시지가 없습니다.",
         "queueEmpty": "대기열에 메시지가 없습니다.",
@@ -174,6 +184,7 @@
     "composerSessionNotSynced": "이 세션은 아직 동기화가 끝나지 않았습니다.",
     "composerCreating": "세션을 만드는 중입니다. 첫 메시지가 전송되면 계속 보낼 수 있습니다.",
     "nextAgentSwitch": "다음부터 {{agent}} · {{model}}(으)로 전환",
+    "nextModelSelection": "다음 메시지 · {{model}}",
     "createFailedTitle": "세션 생성 실패",
     "createFailedDefault": "세션 생성에 실패했습니다.",
     "createFailedNotice": "세션 생성 실패: {{message}}",
@@ -250,7 +261,8 @@
   },
   "shareImage": {
     "title": "대화 공유",
-    "selectedCount": "{{count}}개 선택됨",
+    "subtitle_one": "메시지 {{count}}개 선택",
+    "subtitle_other": "메시지 {{count}}개 선택",
     "selectAll": "전체 선택",
     "clearAll": "선택 해제",
     "cancel": "공유 취소",
@@ -267,6 +279,14 @@
     "composerPlaceholder": "오늘 무엇을 해볼까요~",
     "voiceSelectDeviceFirst": "기기를 선택한 후 음성 입력을 사용하세요.",
     "creatingSession": "세션 생성 중",
+    "slowSend": {
+      "preparing": "전송 준비 중…",
+      "uploading": "첨부 파일 업로드 중…",
+      "connecting": "컴퓨터에 연결 중…",
+      "checkingModel": "모델 설정 확인 중…",
+      "creating": "세션 생성 중…",
+      "sending": "메시지 전송 중…"
+    },
     "createAndSend": "세션을 만들고 첫 메시지 보내기",
     "modelAccessibility": "모델: {{model}}",
     "voiceInput": "음성 입력",
@@ -274,11 +294,11 @@
     "enterProjectPath": "컴퓨터의 프로젝트 경로를 입력하세요.",
     "enterModel": "모델을 입력하세요.",
     "enterFirstMessageOrAttachment": "첫 메시지를 입력하거나 첨부를 추가하세요.",
-    "noSessionIdReturned": "컴퓨터에서 새 세션 ID를 반환하지 않았습니다.",
-    "sessionIdNotAdopted": "컴퓨터가 미리 생성된 세션 ID를 사용하지 않았습니다(컴퓨터 버전 이상). 컴퓨터를 업데이트한 후 다시 시도하세요.",
+    "noSessionIdReturned": "원격 컴퓨터에서 새 세션이 생성되었는지 확인할 수 없습니다. 다시 동기화하여 확인하세요.",
+    "sessionIdNotAdopted": "원격 컴퓨터의 Cindy 버전이 호환되지 않습니다. 업데이트한 후 다시 시도하세요.",
     "firstMessageMissingConfirm": "첫 메시지가 전송되지 않았습니다. 내용이 입력창에 복원되었습니다. 보내기 전에 이 메시지가 세션에 없는지 확인하세요.",
     "firstMessageUnconfirmed": "첫 메시지의 전송 상태를 확인할 수 없습니다. 내용이 입력창에 복원되었습니다. 보내기 전에 이 메시지가 이미 세션에 있는지 확인하세요.",
-    "selectControlledDevice": "제어할 기기 선택",
+    "selectControlledDevice": "원격 기기 선택",
     "selectDeviceNamed": "기기 {{name}} 선택",
     "selectAgent": "에이전트 선택",
     "switchToAgent": "{{label}}(으)로 전환",
@@ -322,6 +342,7 @@
     "worktreeBranchSaving": "선택한 브랜치 동기화 중…",
     "worktreeBranchSyncFailed": "저장된 소스 브랜치를 확인할 수 없습니다. 브랜치를 다시 선택해 주세요",
     "worktreeSettingsSaving": "worktree 설정 동기화 중…",
+    "worktreeSettingsSyncFailed": "worktree 기본 설정을 저장하지 못했습니다. 현재 선택으로 계속할 수 있습니다.",
     "worktreeBranchesRetry": "브랜치를 불러오지 못했습니다. 탭하여 다시 시도",
     "worktreeDetecting": "환경 감지 중…",
     "worktreeRecovering": "연결을 복구하는 중이며 자동으로 다시 시도하고 있습니다…",
@@ -384,6 +405,37 @@
       "system": "시스템"
     },
     "usageSection": "사용량",
+    "usage": {
+      "quota": "할당량",
+      "week": "이번 주",
+      "hours": "{{count}}시간",
+      "minutes": "{{count}}분",
+      "remaining": "{{percent}}% 남음",
+      "resets": "{{time}}에 초기화",
+      "awaitingRefresh": "새로고침 대기 중",
+      "balance": "사용 가능한 잔액",
+      "cycle": "이번 주기 사용액",
+      "today": "오늘 사용액",
+      "unavailable": "가져오지 못함",
+      "quotaUnavailable": "계정 할당량을 가져오지 못했습니다",
+      "accountOnly": "ChatGPT 계정 할당량이며, 이 작업이 해당 요금제를 사용하는지는 확인되지 않았습니다",
+      "lastUpdated": "마지막 업데이트 {{time}}",
+      "taskUsage": "작업 사용량",
+      "taskValue": "작업 가치",
+      "taskCost": "작업 비용",
+      "actualCost": "실제 비용",
+      "estimatedValue": "추정 가치",
+      "totalTokens": "누적 토큰",
+      "seeDetails": "내역 보기",
+      "valueUnavailable": "일부 작업 가치를 가져오지 못했습니다",
+      "valueExplanation": "가치는 사용량과 참고 단가로 추정하며 실제 청구액이 아닙니다.",
+      "source": {
+        "chatgpt": "ChatGPT 구독",
+        "claude": "Claude 구독",
+        "xai": "SuperGrok 구독",
+        "gateway": "Cindy AI"
+      }
+    },
     "refreshContextUsage": "컨텍스트 사용량 새로 고침",
     "currentSessionSpend": "이번 세션",
     "noSessionSpend": "아직 세션 사용량이 없습니다",
@@ -423,6 +475,13 @@
     "continueTask": "작업 계속",
     "retry": "다시 시도",
     "ignore": "무시",
+    "executionResultUnavailable": "실행 결과를 가져오지 못해 자동 계속 진행을 중단했습니다. 어시스턴트에게 기존 실행 결과를 확인하도록 요청하세요.",
+    "outputLimit": "모델이 출력 한도에 도달하여 이번 응답은 불완전할 수 있습니다. 다음 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetected": "모델이 도구 호출을 너무 많이 반복하여 무한 루프를 방지하기 위해 이번 턴을 중지했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetectedWithCount": "모델이 잘못된 도구 호출을 반복하여 무한 루프를 방지하기 위해 {{count}}회 실패 후 이번 턴을 중지했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetectedConsecutiveWithCount": "모델이 동일한 도구 호출을 {{count}}회 반복하여 무한 루프를 막기 위해 이번 턴을 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetectedPingPongWithCount": "모델이 여러 도구 호출 사이를 오가며 반복하여 이번 턴에서 {{count}}회의 호출을 감지한 뒤 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
+    "toolUseLoopDetectedRotationWithCount": "모델이 여러 도구 호출을 계속 순환하여 이번 턴에서 {{count}}회의 호출을 감지한 뒤 중단했습니다. 새 메시지를 보내 계속할 수 있습니다.",
     "codexThreadLost": "Codex 인증 모드가 전환되어 이 세션을 계속할 수 없습니다 —— 새 세션을 만들면 적용됩니다.",
     "encryptedContentInvalid": "제공자 변경으로 암호화를 사용할 수 없게 되어 이 세션은 원래 제공자에서만 사용할 수 있습니다. 컴퓨터에서 처리하세요(Fork하여 프로토콜 암호화 콘텐츠를 버린 후 새 세션에서 계속할 수 있습니다)."
   },

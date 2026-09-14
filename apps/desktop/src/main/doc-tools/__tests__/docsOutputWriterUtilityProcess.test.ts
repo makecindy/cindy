@@ -241,7 +241,8 @@ describe('docs output cwd-bound writer', () => {
             `
 const fs = (await import('node:fs')).default;
 const path = (await import('node:path')).default;
-const { runDocsOutputWrite } = await import(process.env.CINDY_WRITER_MODULE);
+const writerModule = await import(process.env.CINDY_WRITER_MODULE);
+const { runDocsOutputWrite } = writerModule.default ?? writerModule;
 const root = process.env.CINDY_WRITER_ROOT;
 const safe = process.env.CINDY_WRITER_SAFE;
 const moved = process.env.CINDY_WRITER_MOVED;

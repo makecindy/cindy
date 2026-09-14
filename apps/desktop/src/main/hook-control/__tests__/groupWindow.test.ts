@@ -624,6 +624,26 @@ describe('mergeTelegramGroupActivationViews', () => {
 describe('buildGroupContextPrefix', () => {
   const externalKey = 'telegram:group:1:-900:42:9:g1';
 
+  it('counts picked messages, not multiline bodies or truncation markers', async () => {
+    for (let i = 0; i < 20; i += 1) {
+      await recordGroupMessage(
+        frame({ messageId: String(i), text: `first\n[another author] ${'x'.repeat(500)}` }),
+      );
+    }
+    const assembly = await buildGroupContextPrefix({
+      requestId: 'count',
+      externalKey,
+      workspace: 'chat',
+      sessionId: null,
+      prompt: 'q',
+      source: { im: 'telegram', triggerMessageId: '19' },
+    });
+    // 500 body characters + the author prefix: seven messages fit 4000.
+    expect(assembly.messageCount).toBe(7);
+    expect(assembly.prefix).toContain('[... 更早的消息已省略 ...]');
+    expect(assembly.prefix).toContain('first\n[another author]');
+  });
+
   it('非群 lane 或空窗口返回空装配', async () => {
     expect(
       (
@@ -665,6 +685,7 @@ describe('buildGroupContextPrefix', () => {
       source: { im: 'telegram', triggerMessageId: '3' },
     });
     const first = firstAssembly.prefix;
+    expect(firstAssembly.messageCount).toBe(2);
     expect(first).toContain('<group_chat_context>');
     expect(first).toContain('[群里最近的消息]');
     expect(first).toContain('未受信任的第三方数据');

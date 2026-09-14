@@ -11,6 +11,11 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+const retainPresentation = vi.hoisted(() => vi.fn());
+vi.mock('../provider-presentation-store.js', () => ({
+  retainInvalidatedProviderPresentation: retainPresentation,
+}));
+
 vi.mock('electron', () => ({
   shell: { openExternal: vi.fn() },
   app: {
@@ -28,11 +33,18 @@ vi.mock('../../secrets/providerSecretStore.js', () => ({
     get: (id: string) => store.get(id) ?? null,
     set: (id: string, value: string) => {
       store.set(id, value);
+      return true;
     },
     remove: (id: string) => {
       store.delete(id);
+      return { success: true };
     },
   }),
+  genericOAuthSecretIo: {
+    read: (id: string) => store.get(id) ?? null,
+    write: (id: string, value: string) => { store.set(id, value); return true; },
+    remove: (id: string) => { store.delete(id); return true; },
+  },
 }));
 
 let bound = true;
@@ -51,10 +63,13 @@ vi.mock('../outbound-fetch.js', () => ({
 }));
 
 import {
+  CallbackListener,
+  runGrokOAuthLogin,
   getGrokOAuthCredentialGeneration,
   logoutGrok,
   recoverGrokAuthAfterRejection,
   resetGrokOAuthMemoryCache,
+  peekGrokAccessToken,
 } from '../grok-oauth-login.js';
 
 const SECRET_ID = 'xai';
@@ -90,6 +105,7 @@ function tokenResponse(status: number, body: unknown): Response {
 }
 
 beforeEach(() => {
+  retainPresentation.mockClear();
   store.clear();
   bound = true;
   resetGrokOAuthMemoryCache();
@@ -101,6 +117,31 @@ afterEach(() => {
 });
 
 describe('recoverGrokAuthAfterRejection', () => {
+  it('does not report stale logout after credentials change during presentation persistence', async () => {
+    seedCredentials({ refresh_token: undefined });
+    retainPresentation.mockImplementationOnce(async () => {
+      bound = true;
+      seedCredentials({ access_token: 'new-login-token' });
+      resetGrokOAuthMemoryCache();
+    });
+    await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('superseded');
+    expect(peekGrokAccessToken()).toBe('new-login-token');
+  });
+  it('refresh and logout affect only the selected account', async () => {
+    seedCredentials();
+    store.set('xai-second', JSON.stringify({ access_token: 'second-token', refresh_token: 'second-refresh', expires_at: Date.now() + 3600_000 }));
+    vi.stubGlobal('fetch', vi.fn(async (_url, init) => {
+      expect(new URLSearchParams(init.body).get('refresh_token')).toBe('second-refresh');
+      return tokenResponse(200, { access_token: 'second-renewed', refresh_token: 'second-refresh-v2', expires_in: 3600 });
+    }));
+    await expect(recoverGrokAuthAfterRejection('second-token', 'xai-second')).resolves.toBe('refreshed');
+    expect(peekGrokAccessToken()).toBe(REJECTED_TOKEN);
+    expect(peekGrokAccessToken('xai-second')).toBe('second-renewed');
+    logoutGrok('xai-second');
+    expect(peekGrokAccessToken('xai-second')).toBeNull();
+    expect(peekGrokAccessToken()).toBe(REJECTED_TOKEN);
+    expect(bound).toBe(true);
+  });
   it('凭证边界代际单调推进,重复清理或登出不会复活旧任务', () => {
     const initial = getGrokOAuthCredentialGeneration();
     resetGrokOAuthMemoryCache();
@@ -139,6 +180,7 @@ describe('recoverGrokAuthAfterRejection', () => {
 
     await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('logged_out');
     expect(readStored()).toBeNull();
+    expect(retainPresentation).toHaveBeenCalledWith('xai');
   });
 
   it('收口开始时凭证已换成别的账号 —— 不拿新凭证承担旧 token 的失败', async () => {
@@ -152,6 +194,7 @@ describe('recoverGrokAuthAfterRejection', () => {
     await expect(recoverGrokAuthAfterRejection(REJECTED_TOKEN)).resolves.toBe('superseded');
     expect(fetchMock).not.toHaveBeenCalled();
     expect(readStored()?.access_token).toBe('another-account-token');
+    expect(retainPresentation).not.toHaveBeenCalled();
   });
 
   it('本地没有 refresh_token 时无从自愈,登出但不消耗冷却', async () => {
@@ -343,4 +386,27 @@ describe('recoverGrokAuthAfterRejection', () => {
     expect(readStored()?.access_token).toBe('rejected-access-token');
     expect(fetchMock).not.toHaveBeenCalled();
   });
+});
+
+it.each(['boundary', 'policy'] as const)('preserves credentials when %s becomes invalid during token exchange', async (reason) => {
+  seedCredentials();
+  const before = store.get(SECRET_ID);
+  const generation = getGrokOAuthCredentialGeneration();
+  let current = true;
+  vi.spyOn(CallbackListener.prototype, 'start').mockResolvedValue(56121);
+  vi.spyOn(CallbackListener.prototype, 'waitForCode').mockResolvedValue('fake-code');
+  vi.stubGlobal('fetch', vi.fn(async (_input, init) => {
+    if (init?.method === 'POST') {
+      current = false;
+      return tokenResponse(200, { access_token: 'new-fake-access', refresh_token: 'new-fake-refresh' });
+    }
+    return tokenResponse(200, {});
+  }));
+  const result = await runGrokOAuthLogin({
+    assertCurrent: () => { if (reason === 'boundary' && !current) throw new Error('card withdrawn'); },
+    beforeCommit: async () => { if (reason === 'policy' && !current) throw new Error('card withdrawn'); },
+  });
+  expect(result).toMatchObject({ ok: false, reason: 'card withdrawn' });
+  expect(store.get(SECRET_ID)).toBe(before);
+  expect(getGrokOAuthCredentialGeneration()).toBe(generation);
 });

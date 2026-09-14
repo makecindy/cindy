@@ -120,25 +120,26 @@ describe('PluginRegistry — scoped priority', () => {
     expect(state.projectOverride).toBeNull();
   });
 
-  it('enables the embedded iOS Simulator by default but respects an explicit project disable', async () => {
+  it('hides the embedded iOS Simulator from Tools and ignores leftover Tools settings at runtime freeze', async () => {
+    expect(HOSTED_ELSEWHERE_PLUGIN_IDS.has('ios-simulator')).toBe(true);
     expect(registry.isEnabled('ios-simulator')).toBe(true);
     expect(registry.isEnabled('ios-simulator', workingDir)).toBe(true);
-    await expect(registry.getEnableState('ios-simulator', workingDir)).resolves.toMatchObject({
-      effectiveEnabled: true,
-      productDefaultEnabled: true,
-      projectOverride: null,
-      userOverride: null,
-    });
+    expect((await registry.listPlugins(workingDir)).map((item) => item.id)).not.toContain(
+      'ios-simulator',
+    );
+    expect((await registry.listPlugins()).map((item) => item.id)).not.toContain('ios-simulator');
+    expect(registry.getDisabledRuntimePluginIds(workingDir)).not.toContain('ios-simulator');
 
     writeProjectSettings(workingDir, { 'ios-simulator': false });
     registry = createRegistry();
 
+    // Leftover xdtMaker.builtinTools['ios-simulator'] still parses, but must not
+    // freeze Codex/Pi MCP off — live access is the Plugins-page gate.
     expect(registry.isEnabled('ios-simulator', workingDir)).toBe(false);
-    await expect(registry.getEnableState('ios-simulator', workingDir)).resolves.toMatchObject({
-      effectiveEnabled: false,
-      productDefaultEnabled: true,
-      projectOverride: { enabled: false, workingDir },
-    });
+    expect(registry.getDisabledRuntimePluginIds(workingDir)).not.toContain('ios-simulator');
+    expect((await registry.listPlugins(workingDir)).map((item) => item.id)).not.toContain(
+      'ios-simulator',
+    );
   });
 
   it('returns true by default with workingDir', () => {
@@ -378,6 +379,15 @@ describe('PluginRegistry — scoped priority', () => {
 
   // ── listPlugins ───────────────────────────────────────────────────────
 
+  it('exposes hosted and essential tools to capability pickers without changing authorization', async () => {
+    await registry.setProjectEnabled('browser', workingDir, false);
+    const list = await registry.listPlugins(workingDir, true);
+    expect(list.find((item) => item.id === 'browser')).toMatchObject({ effectiveEnabled: false });
+    expect(list.find((item) => item.id === 'scheduler')).toMatchObject({ essential: true, effectiveEnabled: true });
+    expect(list.some((item) => item.id === 'contacts')).toBe(true);
+    expect((await registry.listPlugins(workingDir)).some((item) => item.id === 'scheduler')).toBe(false);
+  });
+
   it('listPlugins returns project-scoped builtin plugins (essential + hosted-elsewhere hidden)', async () => {
     const list = await registry.listPlugins(workingDir);
     const visiblePluginIds = registry
@@ -423,6 +433,7 @@ describe('PluginRegistry — scoped priority', () => {
     expect(list.find((item) => item.id === 'android')).toBeUndefined();
     expect(list.find((item) => item.id === 'computer')).toBeUndefined();
     expect(list.find((item) => item.id === 'contacts')).toBeUndefined();
+    expect(list.find((item) => item.id === 'ios-simulator')).toBeUndefined();
   });
 
   it('listPlugins: non-essential defaults to true', async () => {

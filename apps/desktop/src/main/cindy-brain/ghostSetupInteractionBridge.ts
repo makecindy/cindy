@@ -1,3 +1,4 @@
+import { readBotAuthorizationCard } from '../../shared/botAuthorization.js';
 /**
  * Desktop interaction bridge for Host-owned plugin setup cards.
  *
@@ -280,6 +281,36 @@ export class GhostSetupInteractionBridge {
       request: snapshot,
     });
   }
+}
+
+/** Persist only presentation fields, plus validated Desktop credential-page links. */
+export function sanitizeGhostSetupSnapshotForDesktop(
+  snapshot: GhostSetupInteractionSnapshot,
+): GhostSetupInteractionSnapshot {
+  const safe = sanitizeGhostSetupSnapshotForRemote(snapshot);
+  safe.steps.forEach((step, index) => {
+    const source = snapshot.steps[index].action;
+    if (step.action?.kind !== 'inline_form' || source?.kind !== 'inline_form') return;
+    const url = source.form.fields[0].externalLink?.url;
+    if (!url || url.length > 200) return;
+    try {
+      const parsed = new URL(url);
+      if (parsed.protocol === 'https:' && !parsed.username && !parsed.password)
+        step.action.form.fields[0].externalLink = { url };
+    } catch { /* omit invalid credential-page links */ }
+  });
+  return safe;
+}
+
+/** Local durable cards retain Desktop helpers; every remote message path strips them. */
+export function sanitizeBotAuthorizationMetaForRemote(meta: Record<string, unknown>): Record<string, unknown> {
+  if (!('botAuthorization' in meta)) return meta;
+  const { botAuthorization: raw, ...rest } = meta;
+  const card = readBotAuthorizationCard(raw);
+  return card ? {
+    ...rest,
+    botAuthorization: { ...card, snapshot: sanitizeGhostSetupSnapshotForRemote(card.snapshot) },
+  } : rest;
 }
 
 /**

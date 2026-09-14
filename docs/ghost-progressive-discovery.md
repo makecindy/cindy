@@ -91,6 +91,19 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - 纯格式化函数下沉在 `packages/cindy-tools`，主进程与 MCP server 共用，避免两处
   实现漂移。
 
+伙伴仅保留插件发现网关，不默认注入全量花名册；按需调用 `ghost_list` / `ghost_info`
+复用同账号已有插件。伙伴内置工具集的冻结名单不适用于插件 ID，插件仍由 §4 的实时可见性与
+调用授权守门。
+
+已安装插件无法满足请求时，伙伴经 `ghost_market_search` 查询 Cindy 服务端市场与用户配置的
+自定义市场；不以 Skill/MCP 搜索或模型供应商 Apps 市场代替。搜索只发现目录，不触发默认
+安装、更新、移除或账本修复。结果区分已装状态、实时可用性和来源不可用，失败不能解释为
+能力不存在。选定缺失插件后，`ghost_market_install` 绑定真实 plugin/release，复用现有
+安装事务与当前 Agent 操作授权；既有安装不重装、不启用、不换源。安装不等于登录，仍须
+经 `ghost_info` 与现有 `connect_account` / setup 链路连接，再续接原请求。宿主没有市场
+工具时如实说明并引导可信桌面插件页。实现见 `plugin-market/agentTools.ts`，回归覆盖
+`agentTools.test.ts`、市场 service 测试与 `ghostWorkdirGate.test.ts`。
+
 ### 3.3 快照语义
 
 - 花名册在**会话装配时求值一次，会话内恒定**——这是 prompt 前缀缓存安全的前提，
@@ -102,9 +115,12 @@ frontmatter `name + description` 的召回作用；`manual.items` 只是插件�
 - formatter 的调用方必须传入**已解析的会话 workingDir**；拿不到语境（ALS 缺失、
   bridge 建线期 `workingDir === ''`）时**不注入，绝不回退全量**——否则会把当前
   目录已停用插件的元数据送进高权重 prompt。
-- 远端 SSH 会话（`remoteHostId`）一律不注入：固定 `cindy` MCP server 不在远端
-  注入白名单，远端 agent 调不到 ghost 工具；且远端 workingDir 是远程路径，
-  无法匹配本地的目录停用记录。Claude 与 Codex 行为一致；Pi 仅支持本地会话。
+- 远端 SSH 的 Claude / Codex（`remoteHostId`）不注入花名册：固定 `cindy` MCP
+  不在远端注入白名单，agent 调不到 ghost 工具；且远端 workingDir 是远程路径，
+  无法匹配本地的目录停用记录。远端 Pi 经 MCP bridge 隧道可达 in-process
+  `cindy`，伙伴提示词与 helper 工具描述应保留 `ghost_list` / `ghost_info` /
+  `ghost_call`；花名册 system 段仍 fail-closed（远端路径对不上本地停用记录，
+  伙伴会话也不注入全量花名册，按需 `ghost_list`）。
 - 空花名册 = 零注入（不留空壳标签）。
 
 ## 4. 安全设计（威胁模型：插件作者不守约）

@@ -92,6 +92,18 @@ export const LOGIN_LOCAL_MODE = {
  * 500,见 SPLASH_PANEL.height。
  */
 export const PANEL = { width: 680, height: 500, radius: 36 } as const;
+
+/**
+ * 身份选择列表视口。标题区固定不动，身份超过三项时只滚动卡片区；首行的
+ * 面板坐标仍为 y=148，避免修复可达性时改变既有登录构图。
+ */
+export const ACCOUNT_LIST = {
+  top: 136,
+  bottom: 12,
+  rowTop: 12,
+  rowStep: 120,
+  bottomPadding: 12,
+} as const;
 export const TITLE = { y: 31, height: 38, fontSize: 32 } as const;
 /** 副标题:540@70 ≤2 行顶对齐,槽高 = 行高 × 最大行数(DESIGN.md §16.2,2026-07-24 拍板)。 */
 export const SUBTITLE = { x: 70, y: 75, width: 540, fontSize: 20, lineHeight: 23, maxLines: 2 } as const;
@@ -250,6 +262,14 @@ export const SPLASH_PANEL = {
   progress: { x: 90, y: 346, width: 501, height: 16, radius: 12 },
   /** 明细行 20px Regular @(41,375) 599×23(379:574,与副文案同栏宽居中) */
   stats: { x: 41, y: 375, width: 599, height: 23, fontSize: 20 },
+  /** 启动数据库清理：阶段标题下依次为进度、时间、取消入口和安全提示。 */
+  databaseCleanup: {
+    progressY: 160,
+    statsY: 190,
+    actionY: 235,
+    actionHeight: 50,
+    hint: { x: 70, y: 315, width: 540, height: 48, fontSize: 16, lineHeight: 22 },
+  },
 } as const;
 
 /**

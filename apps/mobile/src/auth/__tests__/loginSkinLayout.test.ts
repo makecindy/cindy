@@ -274,6 +274,49 @@ describe("loginSkin 42s 重发倒计时纯函数(Step 3a 契约)", () => {
 });
 
 describe("loginSkin §3.6 平板/横竖屏 surface 构图(PR4b Step 5b.3;adaptation §3.6 + demo resolveMobileStage/ipadPortrait/ipadLandscape 仲裁)", () => {
+  it.each([
+    [667, 375],
+    [812, 375],
+    [852, 393],
+    [932, 430],
+    [1100, 600],
+    [375, 667],
+    [393, 852],
+  ])("%i×%i 启动立绘按实际视口居中，字标与加载圈不越出屏幕", (width, height) => {
+    const surface = resolveLoginSurface(width, height);
+    const { scale, splashOffset, cindy, word, spinner } = surface;
+    expect(surface.mode).toBe("phone");
+    const heroTop = (cindy.y + splashOffset) * scale;
+    const heroBottom = heroTop + cindy.h * scale;
+    // splashOffset 取整最多产生半个设计像素误差。
+    expect(Math.abs((heroTop + heroBottom) / 2 - height / 2)).toBeLessThanOrEqual(
+      scale / 2,
+    );
+    expect(heroTop).toBeGreaterThanOrEqual(0);
+    expect(heroBottom).toBeLessThanOrEqual(height);
+    expect((word.y + splashOffset) * scale).toBeGreaterThanOrEqual(0);
+    expect((word.y + word.h + splashOffset) * scale).toBeLessThanOrEqual(height);
+    expect(spinner.y * scale).toBeGreaterThanOrEqual(0);
+    expect((spinner.y + spinner.size) * scale).toBeLessThanOrEqual(height);
+    expect(Math.abs(spinner.y - (word.y + word.h + splashOffset + 44))).toBeLessThanOrEqual(0.5);
+  });
+
+  it.each([
+    [375, 667, 247, 893],
+    [393, 852, 256, 1101],
+    [430, 932, 256, 1101],
+    [320, 768, 343, 1188],
+    [320, 1000, 343, 1188],
+    [600, 600, 270, 465],
+    [744, 1133, 158, 804],
+    [820, 1180, 158, 804],
+  ])("%i×%i 竖屏保留修复前的启动落位", (width, height, splashOffset, spinnerY) => {
+    // 修复前基线实值，包含触发 designHeight 上限的超长竖屏与正方形边界。
+    const surface = resolveLoginSurface(width, height);
+    expect(surface.splashOffset).toBe(splashOffset);
+    expect(surface.spinner.y).toBe(spinnerY);
+  });
+
   it("断点三分支:landscape∧w≥1000∧h≥690→pad-landscape;portrait∧w≥700→pad-portrait;其余→phone", () => {
     // 基准画布
     expect(resolveLoginSurfaceMode(1180, 820)).toBe("pad-landscape");

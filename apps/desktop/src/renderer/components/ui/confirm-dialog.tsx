@@ -5,9 +5,12 @@ import { useTranslation } from 'react-i18next';
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 
 export interface ConfirmDialogProps {
+  /** Explicit pilot opt-in; unselected callers retain their existing presentation. */
+  presentation?: 'standard';
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -89,6 +92,7 @@ export interface ConfirmDialogProps {
 
 export function ConfirmDialog({
   open,
+  presentation,
   onOpenChange,
   title,
   description,
@@ -306,73 +310,106 @@ export function ConfirmDialog({
                 />
               </div>
             )}
-            <div className="mt-6 flex shrink-0 justify-end gap-2.5">
-              <AlertDialog.Action asChild>
-                <button
-                  ref={confirmBtnRef}
-                  disabled={confirmBlocked}
-                  aria-busy={loading || undefined}
-                  aria-label={resolvedConfirmText}
-                  onClick={() => onConfirm?.({ dontShowAgain })}
-                  className={cn(
-                    'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                    'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                    'active:scale-[0.98]',
-                    confirmVariant === 'destructive'
-                      ? 'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] hover:opacity-90 focus-visible:ring-[var(--focus-ring)]'
-                      : 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)] focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                    loading &&
-                      confirmVariant === 'default' &&
-                      'cursor-default opacity-80 active:scale-100 hover:bg-[var(--confirm-btn-primary-bg)]',
-                    loading &&
-                      confirmVariant === 'destructive' &&
-                      'cursor-default opacity-80 active:scale-100 hover:opacity-80',
-                    confirmDisabled && 'cursor-not-allowed opacity-50 active:scale-100',
-                  )}
-                >
-                  {loading ? (
-                    <Spinner size={14} />
-                  ) : (
-                    <>
-                      {confirmIcon && (
-                        <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
-                          {confirmIcon}
-                        </span>
-                      )}
-                      {resolvedConfirmText}
-                    </>
-                  )}
-                </button>
-              </AlertDialog.Action>
-              {tertiaryText && (
-                // tertiary 走 secondary 同款轮廓样式 —— 视觉上 "中性可选";
-                // 不用 AlertDialog.Action / Cancel,自己 onClick 触发,Radix 不会
-                // 自动关 dialog,因此外层得在 onTertiary 里手动 onOpenChange(false)。
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => onTertiary?.()}
-                  className={cn(
-                    'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                    'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                    'active:scale-[0.98]',
-                    'border bg-transparent',
-                    'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                    'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                    'focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                    loading && 'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
-                  )}
-                >
-                  {tertiaryText}
-                </button>
-              )}
-              {showCancel && (
-                <AlertDialog.Cancel asChild>
-                  <button
-                    disabled={loading}
-                    onClick={() => onCancel?.()}
+            {presentation === 'standard' ? (
+              <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
+                <AlertDialog.Action asChild>
+                  <Button
+                    ref={confirmBtnRef}
+                    size="lg"
+                    variant="primary"
+                    disabled={confirmBlocked}
+                    loading={loading}
+                    aria-label={resolvedConfirmText}
+                    onClick={() => onConfirm?.({ dontShowAgain })}
                     className={cn(
-                      'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
+                      'h-auto min-h-9 min-w-[96px] max-w-full gap-1.5 whitespace-normal [overflow-wrap:anywhere] py-1.5',
+                      confirmVariant === 'destructive'
+                        ? 'border-transparent bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[hsl(var(--destructive))] enabled:active:bg-[hsl(var(--destructive))] enabled:hover:opacity-90'
+                        : 'border-transparent bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[var(--confirm-btn-primary-hover)] enabled:active:bg-[var(--confirm-btn-primary-hover)]',
+                    )}
+                  >
+                    {confirmIcon && (
+                      <span aria-hidden="true" className="inline-flex shrink-0">
+                        {confirmIcon}
+                      </span>
+                    )}
+                    {resolvedConfirmText}
+                  </Button>
+                </AlertDialog.Action>
+                {tertiaryText && (
+                  <Button
+                    size="lg"
+                    variant="secondary"
+                    disabled={loading}
+                    onClick={() => onTertiary?.()}
+                    className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] border-[var(--confirm-btn-secondary-border)] bg-transparent py-1.5 text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+                  >
+                    {tertiaryText}
+                  </Button>
+                )}
+                {showCancel && (
+                  <AlertDialog.Cancel asChild>
+                    <Button
+                      size="lg"
+                      variant="secondary"
+                      disabled={loading}
+                      onClick={() => onCancel?.()}
+                      className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] border-[var(--confirm-btn-secondary-border)] bg-transparent py-1.5 text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+                    >
+                      {resolvedCancelText}
+                    </Button>
+                  </AlertDialog.Cancel>
+                )}
+              </div>
+            ) : (
+              <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
+                <AlertDialog.Action asChild>
+                  <button
+                    ref={confirmBtnRef}
+                    disabled={confirmBlocked}
+                    aria-busy={loading || undefined}
+                    aria-label={resolvedConfirmText}
+                    onClick={() => onConfirm?.({ dontShowAgain })}
+                    className={cn(
+                      'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
+                      'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+                      'active:scale-[0.98]',
+                      confirmVariant === 'destructive'
+                        ? 'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] hover:opacity-90 focus-visible:ring-[var(--focus-ring)]'
+                        : 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)] focus-visible:ring-[var(--confirm-btn-primary-bg)]',
+                      loading &&
+                        confirmVariant === 'default' &&
+                        'cursor-default opacity-80 active:scale-100 hover:bg-[var(--confirm-btn-primary-bg)]',
+                      loading &&
+                        confirmVariant === 'destructive' &&
+                        'cursor-default opacity-80 active:scale-100 hover:opacity-80',
+                      confirmDisabled && 'cursor-not-allowed opacity-50 active:scale-100',
+                    )}
+                  >
+                    {loading ? (
+                      <Spinner size={14} />
+                    ) : (
+                      <>
+                        {confirmIcon && (
+                          <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
+                            {confirmIcon}
+                          </span>
+                        )}
+                        {resolvedConfirmText}
+                      </>
+                    )}
+                  </button>
+                </AlertDialog.Action>
+                {tertiaryText && (
+                  // tertiary 走 secondary 同款轮廓样式 —— 视觉上 "中性可选";
+                  // 不用 AlertDialog.Action / Cancel,自己 onClick 触发,Radix 不会
+                  // 自动关 dialog,因此外层得在 onTertiary 里手动 onOpenChange(false)。
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => onTertiary?.()}
+                    className={cn(
+                      'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
                       'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                       'active:scale-[0.98]',
                       'border bg-transparent',
@@ -382,11 +419,32 @@ export function ConfirmDialog({
                       loading && 'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
                     )}
                   >
-                    {resolvedCancelText}
+                    {tertiaryText}
                   </button>
-                </AlertDialog.Cancel>
-              )}
-            </div>
+                )}
+                {showCancel && (
+                  <AlertDialog.Cancel asChild>
+                    <button
+                      disabled={loading}
+                      onClick={() => onCancel?.()}
+                      className={cn(
+                        'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
+                        'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+                        'active:scale-[0.98]',
+                        'border bg-transparent',
+                        'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
+                        'hover:bg-[var(--confirm-btn-secondary-hover)]',
+                        'focus-visible:ring-[var(--confirm-btn-secondary-border)]',
+                        loading &&
+                          'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
+                      )}
+                    >
+                      {resolvedCancelText}
+                    </button>
+                  </AlertDialog.Cancel>
+                )}
+              </div>
+            )}
           </AlertDialog.Content>
         </AlertDialog.Overlay>
       </AlertDialog.Portal>

@@ -44,7 +44,15 @@ describe('message mapper internal citation compatibility', () => {
     } as Parameters<typeof messageToCamel>[0];
 
     expect(messageToCamel(row).content).toBe('');
+    expect(
+      messageToCamel({
+        ...row,
+        id: 'message-eos-repeat',
+        content: JSON.stringify('<|eos|><|eos|>'),
+      }).content,
+    ).toBe('');
     expect(extractMessagePreview(JSON.stringify('<|eos|>'), 'assistant')).toBeNull();
+    expect(extractMessagePreview(JSON.stringify('<|eos|><|eos|>'), 'assistant')).toBeNull();
     expect(extractMessagePreview(JSON.stringify('The token is <|eos|>'), 'assistant')).toBe(
       'The token is <|eos|>',
     );

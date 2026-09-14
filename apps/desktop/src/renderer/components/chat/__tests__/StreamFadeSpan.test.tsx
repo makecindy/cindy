@@ -167,6 +167,38 @@ describe('StreamFadeSpan', () => {
     ]);
   });
 
+  it('追加内容不改写既有词的 delay，既不重算旧样式也不快进活动动画', () => {
+    const state = createWordFadeState();
+    let now = 0;
+    state.timeline.nowFn = () => now;
+    const view = render(<StreamingMarkdownHarness content="one two three" state={state} />);
+    const first = view.container.querySelector<HTMLSpanElement>('[data-wf-key]')!;
+    const write = vi.spyOn(first.style, 'setProperty');
+    now = 50;
+    view.rerender(<StreamingMarkdownHarness content="one two three four" state={state} />);
+    expect(write).not.toHaveBeenCalled();
+    expect(first.style.getPropertyValue('--wf-delay')).toBe('0ms');
+    fireAnimationEnd(first);
+    now = 500;
+    view.rerender(<StreamingMarkdownHarness content="one two three four five" state={state} />);
+    expect(write).not.toHaveBeenCalled();
+    expect(view.container.querySelector('[data-wf-key]')).toBe(first);
+    expect(first.classList.contains('stream-word')).toBe(false);
+    write.mockRestore();
+  });
+
+  it('活动词重挂载才根据绝对开始时刻恢复负 delay', () => {
+    const state = createWordFadeState();
+    let now = 0;
+    state.timeline.nowFn = () => now;
+    const first = render(<StreamingMarkdownHarness content="one two" state={state} />);
+    first.unmount();
+    now = 75;
+    const second = render(<StreamingMarkdownHarness content="one two" state={state} />);
+    expect(Array.from(second.container.querySelectorAll<HTMLElement>('[data-wf-key]'),
+      (node) => node.style.getPropertyValue('--wf-delay'))).toEqual(['-75ms', '-59ms']);
+  });
+
   it('千级突发段把透明等待限制在 160ms 内，同时保留前段节奏', () => {
     const state = createWordFadeState();
     state.timeline.nowFn = () => 0;

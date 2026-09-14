@@ -1,3 +1,5 @@
+import { diagnosticUploadConfigured, uploadMobileDiagnostics } from '@/debug/mobileDiagnosticUpload';
+import { clearDiagnostics, diagnosticsEnabled, exportDiagnostics, hydrateDiagnostics, setDiagnosticsEnabled } from '@/debug/localDiagnostics';
 import Constants from 'expo-constants';
 import * as Clipboard from 'expo-clipboard';
 import * as Updates from 'expo-updates';
@@ -6,6 +8,7 @@ import { useRouter } from 'expo-router';
 import { Children, Fragment, isValidElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import {
   Alert,
+  DevSettings,
   FlatList,
   Image,
   Linking,
@@ -13,13 +16,12 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   View,
   useWindowDimensions,
 } from 'react-native';
 import { Text, TextInput } from '@/components/AppText';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronDown, ChevronRight, X } from 'lucide-react-native';
+import { ChevronDown, ChevronRight, Ellipsis, X } from 'lucide-react-native';
 import { useTranslation } from 'react-i18next';
 import type { DeviceView } from '@cindy/device-link';
 import { useAuth } from '@/auth/AuthContext';
@@ -40,9 +42,15 @@ import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import {
   MainWindowActionButton,
   MainWindowActionGroup,
-  ScreenHeader,
   StatusDot,
 } from '@/components/MobilePrimitives';
+import {
+  NativePullDownMenu,
+  NativeSwitch,
+  SimpleStackHeader,
+  simpleScreenSafeAreaEdges,
+  usesNativePullDownMenu,
+} from '@/platform/chrome';
 import {
   APP_BINARY_VERSION,
   AUTH_API_BASE_URL,
@@ -53,6 +61,12 @@ import {
   IS_TESTFLIGHT_BUILD,
   REVIEW_MODE,
 } from '@/config/env';
+import {
+  DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED,
+  switchDevServerEnvironmentAndReload,
+  type DevServerEnvironment,
+} from '@/config/devServerEnvironment';
+import { useDevServerEnvironment } from '@/config/useDevServerEnvironment';
 import { LEGAL_LINKS } from '@/config/legalLinks';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
 import { buildMobileDeviceName } from '@/device-link/mobileDeviceIdentity';
@@ -89,6 +103,7 @@ import {
   runManualUpdateCheck,
   type ManualUpdateCheckOutcome,
 } from '@/update/manualUpdateCheck';
+import { runSelfHostedOtaRequest } from '@/update/otaRequestCoordinator';
 import { useBundleUpdatePrompt } from '@/update/useBundleUpdatePrompt';
 import { useUpdateChannelGate } from '@/update/useUpdateChannelGate';
 import { useBetaChannel } from '@/update/useBetaChannel';
@@ -126,6 +141,48 @@ export default function SettingsScreen() {
   const { lastPresenceSnapshot, status, invoke } = useDeviceLink();
   const [copiedRowId, setCopiedRowId] = useState<string | null>(null);
   const [loggingOut, setLoggingOut] = useState(false);
+  const [localLogsEnabled, setLocalLogsEnabled] = useState(false);
+  const [localLogsReady, setLocalLogsReady] = useState(false);
+  const [localLogsBusy, setLocalLogsBusy] = useState(false);
+  const [localLogsConsent, setLocalLogsConsent] = useState(false);
+  const [localLogUploadMessage, setLocalLogUploadMessage] = useState<string | null>(null);
+  const localLogsLock = useRef(false);
+  useEffect(() => {
+    let mounted = true;
+    void hydrateDiagnostics().then(() => {
+      if (mounted) {
+        setLocalLogsEnabled(diagnosticsEnabled());
+        setLocalLogsReady(true);
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, []);
+  const runLocalLogAction = async (action: () => Promise<void>) => {
+    if (localLogsLock.current) return;
+    localLogsLock.current = true;
+    setLocalLogsBusy(true);
+    try {
+      await action();
+    } catch {
+      Alert.alert(
+        t('settings.localLogs.title'),
+        t('settings.localLogs.failed'),
+      );
+    } finally {
+      setLocalLogsEnabled(diagnosticsEnabled());
+      setLocalLogsBusy(false);
+      localLogsLock.current = false;
+    }
+  };
+  const handleLocalLogOption = (id: string) => {
+    if (!localLogsReady || localLogsBusy) return;
+    if (id === 'clear') Alert.alert(t('settings.localLogs.clear'), t('settings.localLogs.clearHint'), [
+      { text: t('settings.localLogs.cancel'), style: 'cancel' },
+      { text: t('settings.localLogs.clear'), style: 'destructive', onPress: () => void runLocalLogAction(clearDiagnostics) },
+    ]);
+  };
   const [accountDeletionAvailable, setAccountDeletionAvailable] =
     useState(false);
   const [debugExpanded, setDebugExpanded] = useState(false);
@@ -148,6 +205,13 @@ export default function SettingsScreen() {
   const { enabled: betaEnabled, ready: betaReady, setEnabled: setBetaEnabled } = useBetaChannel();
   const [betaBusy, setBetaBusy] = useState(false);
   const showBetaBadge = betaReady && betaEnabled;
+  const {
+    environment: devServerEnvironment,
+    ready: devServerEnvironmentReady,
+    setEnvironment: setDevServerEnvironment,
+  } = useDevServerEnvironment();
+  const [devServerEnvironmentBusy, setDevServerEnvironmentBusy] =
+    useState(false);
   const updateCheckInFlightRef = useRef(false);
   // 语音词典:手机只读展示被控桌面的词典快照(正本在桌面,手机不参与合并)。
   const [dictionaryScreenOpen, setDictionaryScreenOpen] = useState(false);
@@ -325,10 +389,16 @@ export default function SettingsScreen() {
       const outcome = await runManualUpdateCheck({
         checkBundleUpdate: bundleCheckEnabled ? checkBundleUpdate : undefined,
         otaEnabled: updatesEnabled,
-        // OTA 检查会携带 eas-client-id,须经隐私同意闸门(企业 SSO 豁免协议门,可能未
-        // 同意;且检查进行中登出会撤销同意)。整包 /latest 为匿名请求,不在此列。动态
-        // 判定而非调用瞬间快照,manifest 请求前与资源下载前各问一次。
-        isConsented: hasPrivacyConsent,
+        // 自建线由事务协调器覆盖共享 UUID，因此不再借用 analytics consent；EAS /
+        // TestFlight 仍保留原同意闸门，TapDB 的 consent 状态也完全不在这里修改。
+        ...(IS_OTA_SELFHOST
+          ? {
+              withOtaClient: (operation) => runSelfHostedOtaRequest(
+                updateChannel.channel,
+                operation,
+              ),
+            }
+          : { isConsented: hasPrivacyConsent }),
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
@@ -360,6 +430,7 @@ export default function SettingsScreen() {
     checkBundleUpdate,
     currentlyRunning.isEmergencyLaunch,
     t,
+    updateChannel.channel,
     updateCheckEnabled,
     updatesEnabled,
   ]);
@@ -534,10 +605,95 @@ export default function SettingsScreen() {
     try {
       await auth.logout();
       router.replace('/login');
+    } catch (error) {
+      Alert.alert(t('devices.list.alert.actionFailed'), formatRemoteError(error));
     } finally {
       setLoggingOut(false);
     }
-  }, [auth, loggingOut, router]);
+  }, [auth, loggingOut, router, t]);
+
+  const switchDevServerEnvironment = useCallback(
+    async (next: DevServerEnvironment) => {
+      if (
+        !DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ||
+        devServerEnvironmentBusy ||
+        !devServerEnvironmentReady ||
+        next === devServerEnvironment
+      ) {
+        return;
+      }
+      const reload = __DEV__
+        ? () => DevSettings.reload()
+        : Updates.isEnabled
+          ? () => Updates.reloadAsync()
+          : null;
+      if (!reload) {
+        Alert.alert(
+          t('settings.devServerEnvironment.title'),
+          t('settings.devServerEnvironment.switchFailed'),
+        );
+        return;
+      }
+      setDevServerEnvironmentBusy(true);
+      try {
+        // 旧环境的 push 注销、token 与账号缓存必须先在旧端点仍生效时清理。
+        await auth.logout();
+        await switchDevServerEnvironmentAndReload({
+          current: devServerEnvironment,
+          next,
+          reload,
+          setEnvironment: setDevServerEnvironment,
+        });
+      } catch {
+        Alert.alert(
+          t('settings.devServerEnvironment.title'),
+          t('settings.devServerEnvironment.switchFailed'),
+        );
+      } finally {
+        setDevServerEnvironmentBusy(false);
+      }
+    },
+    [
+      auth,
+      devServerEnvironment,
+      devServerEnvironmentBusy,
+      devServerEnvironmentReady,
+      setDevServerEnvironment,
+      t,
+    ],
+  );
+
+  const confirmDevServerEnvironmentSwitch = useCallback(() => {
+    if (
+      !DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED ||
+      devServerEnvironmentBusy ||
+      !devServerEnvironmentReady
+    ) {
+      return;
+    }
+    const next: DevServerEnvironment =
+      devServerEnvironment === 'dev' ? 'release' : 'dev';
+    Alert.alert(
+      t('settings.devServerEnvironment.confirmTitle', {
+        environment: t(`settings.devServerEnvironment.options.${next}`),
+      }),
+      t('settings.devServerEnvironment.confirmBody'),
+      [
+        { text: t('settings.devServerEnvironment.cancel'), style: 'cancel' },
+        {
+          text: t('settings.devServerEnvironment.switchAction'),
+          style: 'destructive',
+          onPress: () => void switchDevServerEnvironment(next),
+        },
+      ],
+    );
+  }, [
+    devServerEnvironment,
+    devServerEnvironmentBusy,
+    devServerEnvironmentReady,
+    switchDevServerEnvironment,
+    t,
+  ]);
 
   const openAccountDeletion = useCallback(() => {
     router.push('/account-deletion');
@@ -561,6 +717,7 @@ export default function SettingsScreen() {
     const sync = () => {
       if (cancelled) return;
       const snapshot = getAnalyticsConsentState();
+      setLocalLogsConsent(snapshot.consent);
       setAnalyticsEnabledState(snapshot.enabled);
       setAnalyticsCustomized(snapshot.enabledCustomized);
     };
@@ -821,8 +978,8 @@ export default function SettingsScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.screen">
+      <SimpleStackHeader
         backTestID="settings.backButton"
         onBack={() => goBackGuarded(router)}
         title={t('settings.title')}
@@ -933,12 +1090,12 @@ export default function SettingsScreen() {
                     <Text style={styles.hint} testID="settings.pushMessage">{pushMessage}</Text>
                   ) : null}
                 </View>
-                <Switch
+                <NativeSwitch
                   accessibilityLabel={t('settings.notifications.taskDone')}
                   disabled={pushBusy}
                   onValueChange={() => void togglePushNotifications()}
+                  seedColor={colors.inputCaret}
                   testID="settings.pushToggle"
-                  trackColor={{ true: colors.inputCaret }}
                   value={pushEnabled}
                 />
               </View>,
@@ -968,13 +1125,22 @@ export default function SettingsScreen() {
           footer={t('settings.language.hint')}
           title={t('settings.language.title')}
         >
-          <LanguagePickerRow
-            expanded={languagePickerOpen}
-            label={t('settings.language.title')}
-            onPress={openLanguagePicker}
-            testID="settings.language.picker"
-            value={t(`settings.language.options.${locale}`)}
-          />
+          <NativePullDownMenu
+            actions={LANGUAGE_OPTIONS.map((option) => ({
+              id: option,
+              state: option === locale ? 'on' : 'off',
+              title: t(`settings.language.options.${option}`),
+            }))}
+            onAction={selectLanguage}
+          >
+            <LanguagePickerRow
+              expanded={languagePickerOpen}
+              label={t('settings.language.title')}
+              onPress={usesNativePullDownMenu() ? () => undefined : openLanguagePicker}
+              testID="settings.language.picker"
+              value={t(`settings.language.options.${locale}`)}
+            />
+          </NativePullDownMenu>
         </SettingsGroup>
 
         {/* 关于这台手机 */}
@@ -1007,6 +1173,101 @@ export default function SettingsScreen() {
           >
             {debugExpanded
               ? [
+                  <View
+                    key="local-logs-toggle"
+                    style={styles.switchRow}
+                    testID="settings.localLogs"
+                  >
+                    <View style={styles.switchTexts}>
+                      <Text style={styles.rowLabel}>
+                        {t('settings.localLogs.title')}
+                      </Text>
+                      <Text style={styles.hint}>
+                        {t('settings.localLogs.hint')}
+                      </Text>
+                    </View>
+                    <NativeSwitch
+                      accessibilityLabel={t('settings.localLogs.record')}
+                      disabled={!localLogsReady || localLogsBusy}
+                      value={localLogsEnabled}
+                      seedColor={colors.inputCaret}
+                      onValueChange={(value) =>
+                        void runLocalLogAction(() =>
+                          setDiagnosticsEnabled(value),
+                        )
+                      }
+                    />
+                    <NativePullDownMenu
+                      actions={[
+                        { id: 'clear', title: t('settings.localLogs.clear'), destructive: true, disabled: !localLogsReady || localLogsBusy },
+                      ]}
+                      onAction={handleLocalLogOption}
+                    >
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={t('settings.localLogs.options')}
+                        disabled={!localLogsReady || localLogsBusy}
+                        style={styles.localLogOptions}
+                        onPress={usesNativePullDownMenu() ? undefined : () => Alert.alert(t('settings.localLogs.options'), undefined, [
+                          { text: t('settings.localLogs.clear'), style: 'destructive', onPress: () => handleLocalLogOption('clear') },
+                          { text: t('settings.localLogs.cancel'), style: 'cancel' },
+                        ])}
+                      >
+                        <Ellipsis color={colors.textTertiary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
+                      </Pressable>
+                    </NativePullDownMenu>
+                  </View>,
+                  <ActionInfoRow
+                    key="local-logs-export"
+                    accessibilityLabel={t('settings.localLogs.export')}
+                    label={t('settings.localLogs.export')}
+                    detail={t('settings.localLogs.exportHint')}
+                    disabled={!localLogsReady || localLogsBusy}
+                    value={localLogsBusy ? t('settings.localLogs.busy') : ''}
+                    onPress={() => void runLocalLogAction(exportDiagnostics)}
+                  />,
+                  <ActionInfoRow
+                    key="local-logs-upload"
+                    accessibilityLabel={t('settings.localLogs.upload')}
+                    label={t('settings.localLogs.upload')}
+                    disabled={!localLogsReady || localLogsBusy || !diagnosticUploadConfigured() || !localLogsConsent}
+                    detail={!diagnosticUploadConfigured()
+                      ? t('settings.localLogs.uploadResult.unavailable')
+                      : !localLogsConsent ? t('settings.localLogs.uploadResult.consentRequired')
+                      : localLogUploadMessage ?? t('settings.localLogs.uploadHint')}
+                    value={
+                      localLogsBusy ? t('settings.localLogs.busy') : ''
+                    }
+                    onPress={() =>
+                      void runLocalLogAction(async () => {
+                        const result = await uploadMobileDiagnostics();
+                        if (result.kind === 'uploaded') {
+                          let copied = false;
+                          try { await Clipboard.setStringAsync(result.uploadCode); copied = true; } catch { /* upload already succeeded */ }
+                          setLocalLogUploadMessage(t(copied ? 'settings.localLogs.uploadCopied' : 'settings.localLogs.uploadSucceeded', { code: result.uploadCode }));
+                        } else setLocalLogUploadMessage(t(`settings.localLogs.uploadResult.${result.kind}`));
+                      })
+                    }
+                  />,
+                ...(DEV_SERVER_ENVIRONMENT_SWITCH_ENABLED
+                  ? [
+                      <ActionInfoRow
+                        accessibilityLabel={t('settings.devServerEnvironment.accessibility')}
+                        detail={t('settings.devServerEnvironment.description')}
+                        key="dev-server-environment"
+                        label={t('settings.devServerEnvironment.title')}
+                        onPress={confirmDevServerEnvironmentSwitch}
+                        testID="settings.devServerEnvironment"
+                        value={
+                          devServerEnvironmentBusy
+                            ? t('settings.devServerEnvironment.switching')
+                            : t(
+                                `settings.devServerEnvironment.options.${devServerEnvironment}`,
+                              )
+                        }
+                      />,
+                    ]
+                  : []),
                 ...debugSection.rows.map((row) => (
                   row.copyValue ? (
                     <CopyRow copied={copiedRowId === row.id} key={row.id} onCopy={copyRow} row={row} />
@@ -1019,12 +1280,12 @@ export default function SettingsScreen() {
                     <Text style={styles.rowLabel}>{t('settings.betaChannel.title')}</Text>
                     <Text style={styles.hint}>{t('settings.betaChannel.description')}</Text>
                   </View>
-                  <Switch
+                  <NativeSwitch
                     accessibilityLabel={t('settings.betaChannel.title')}
                     disabled={betaBusy || !betaReady}
                     onValueChange={() => void toggleBeta()}
+                    seedColor={colors.inputCaret}
                     testID="settings.betaChannelToggle"
-                    trackColor={{ true: colors.inputCaret }}
                     value={betaEnabled}
                   />
                 </View>,
@@ -1048,12 +1309,12 @@ export default function SettingsScreen() {
                 <Text style={styles.hint} testID="settings.analyticsMessage">{analyticsMessage}</Text>
               ) : null}
             </View>
-            <Switch
+            <NativeSwitch
               accessibilityLabel={t('settings.legal.analytics')}
               disabled={analyticsBusy || !analyticsReady}
               onValueChange={() => void toggleAnalytics()}
+              seedColor={colors.inputCaret}
               testID="settings.analyticsToggle"
-              trackColor={{ true: colors.inputCaret }}
               value={analyticsEnabled}
             />
           </View>
@@ -1285,6 +1546,7 @@ function ActionInfoRow({
   accessibilityLabel,
   accessibilityRole = 'button',
   detail,
+  disabled = false,
   label,
   onPress,
   testID,
@@ -1293,6 +1555,7 @@ function ActionInfoRow({
   accessibilityLabel: string;
   accessibilityRole?: 'button' | 'link';
   detail?: string;
+  disabled?: boolean;
   label: string;
   onPress(): void;
   testID?: string;
@@ -1304,8 +1567,10 @@ function ActionInfoRow({
     <Pressable
       accessibilityLabel={accessibilityLabel}
       accessibilityRole={accessibilityRole}
+      accessibilityState={{ disabled }}
+      disabled={disabled}
       onPress={onPress}
-      style={({ pressed }) => [styles.row, pressed && styles.pressed]}
+      style={({ pressed }) => [styles.row, (pressed || disabled) && styles.pressed]}
       testID={testID}
     >
       <View style={styles.rowLine}>
@@ -1351,8 +1616,8 @@ function VoiceDictionaryScreen({
       : t('settings.voiceDictionary.readOnlyHint');
 
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.voiceDictionary.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.voiceDictionary.screen">
+      <SimpleStackHeader
         backTestID="settings.voiceDictionary.backButton"
         onBack={onBack}
         title={t('settings.voiceDictionary.screenTitle')}
@@ -1439,8 +1704,8 @@ function RenameSelfDeviceScreen({
   const { colors } = useTheme();
   const { t } = useTranslation();
   return (
-    <SafeAreaView style={styles.safeArea} testID="settings.renameSelfDevice.screen">
-      <ScreenHeader
+    <SafeAreaView edges={simpleScreenSafeAreaEdges()} style={styles.safeArea} testID="settings.renameSelfDevice.screen">
+      <SimpleStackHeader
         backTestID="settings.renameSelfDevice.backButton"
         onBack={onDone}
         title={t('settings.deviceNameEditor.screenTitle')}
@@ -1607,6 +1872,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   rowLabel: { color: colors.textSecondary, flexShrink: 0, fontSize: typeScale.code },
   rowValue: { color: colors.textPrimary, flex: 1, fontSize: typeScale.code, textAlign: 'right' },
   rowDetail: { color: colors.textTertiary, fontSize: typeScale.caption, lineHeight: lineHeight.caption },
+  localLogOptions: { minWidth: 44, minHeight: 44, alignItems: 'center', justifyContent: 'center' },
   switchRow: {
     alignItems: 'center',
     flexDirection: 'row',

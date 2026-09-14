@@ -259,11 +259,12 @@ export function ensureGhostProtocolRegistered(
 
 /**
  * 意识页面(html 响应)统一佩戴的 CSP:脚本/样式/资源只许同源(= 自己的
- * 安装目录),img/media 额外放行 data:/blob:(生成图等内存产物使用)。
+ * 安装目录),img 额外放行 data:/blob:/https:(远程图片),media 额外放行
+ * data:/blob:。
  * 与分区级断网(onBeforeRequest)构成双保险。
  */
 const GHOST_HTML_CSP =
-  "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:";
+  "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob: https:; media-src 'self' data: blob:";
 
 function registerGhostProtocol(
   partition: string,
@@ -289,13 +290,20 @@ function registerGhostProtocol(
   ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
   ses.setPermissionCheckHandler(() => false);
   ses.on('will-download', (event) => event.preventDefault());
-  // 分区级断网(docs/dev-rules/plugin-security-and-authoring.md 的"网络永远不直连"):本分区发出的一切
-  // 请求,只放行自己协议同 id 下的资源;http(s) / ws / 其它协议一律掐断。
-  // 进程沙箱不管网络,这里才是"零网络"承诺的真正闸门;外部数据未来走
-  // 主机代发(管子服务),不走这里。devtools 前端跑在自己的进程,不受影响。
+  // 分区级网络闸：默认只放行自己协议同 id 下的资源；唯一外部例外是
+  // 任意插件页面发出的 HTTPS image 请求（<img> 与 CSS 图片共用该资源类型）。
+  // HTTP 图片、XHR/fetch、脚本、样式、字体、媒体、WebSocket 与其它协议继续拒绝。
   const selfPrefix = `${SCHEME}://${ghostId}/`;
   ses.webRequest.onBeforeRequest((details, callback) => {
-    callback({ cancel: !details.url.startsWith(selfPrefix) });
+    let allowed = details.url.startsWith(selfPrefix);
+    if (!allowed && isGhostProtocolOwnerActive(owner) && details.resourceType === 'image') {
+      try {
+        allowed = new URL(details.url).protocol === 'https:';
+      } catch {
+        allowed = false;
+      }
+    }
+    callback({ cancel: !allowed });
   });
   ses.protocol.handle(SCHEME, async (request) => {
     try {

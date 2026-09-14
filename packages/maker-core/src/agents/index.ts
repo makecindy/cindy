@@ -7,6 +7,13 @@ export type {
   ClaudeSubagentModelAccessStatus,
 } from './claude-code/subagent-model-access.js';
 export { CodexAgent } from './codex/index.js';
+export { isCodexHistoryRecoveryRequired } from './codex/history-recovery.js';
+export {
+  CODEX_HISTORY_OVERSIZED_REASON,
+  CODEX_LIVE_TAIL_OVERSIZED_BYTES,
+  isOversizedLiveTailStats,
+  measureRolloutLiveTailStats,
+} from './codex/rollout-sanitize.js';
 // host 导入本地 Codex rollout 历史时也要做 citation 归一化(流式路径在 translator
 // 内部做,导入路径拿到的是 rollout 原文),复用同一实现避免口径分叉。
 // finalizeCodexCitationText = 剥截断残尾 + 归一化(与流式 completed 完全同口径)。
@@ -15,6 +22,7 @@ export { PiAgent } from './pi/index.js';
 export {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,
+  isCindyProviderCodexRemoteCompactionRoute,
   resolveAgentCredentialMode,
 } from './credential-mode.js';
 // host 在 boot 阶段需要的 env 守卫(详见 claude-code/env-builder.ts 注释)
@@ -65,6 +73,7 @@ export {
   CONTEXT_OVERFLOW_REASON,
   isContextOverflowErrorMessage,
 } from './shared/context-overflow-error.js';
+export { isRemoteCompactEncryptedContentError } from './shared/remote-compact-encrypted-error.js';
 export { isDeterministicHostCompactFailure } from './shared/auto-compact-controller.js';
 // ErrorBanner 用人话替换 LiteLLM / Responses 空壳流中断,不驱动自动续跑。
 export {
@@ -85,6 +94,8 @@ export {
   AUTO_REVIEW_RETRY_SCHEDULING_SLACK_MS,
   autoReviewRetryBudgetMs,
   DEFAULT_AUTO_REVIEW_TIMEOUT_POLICY,
+  extractAutoReviewUserIntent,
+  appendAutoReviewUserIntent,
   getAutoReviewActionTextLength,
   getAutoReviewDelegateHardCeilingMs,
   isAutoReviewConfirmUndeliveredNotice,
@@ -97,6 +108,7 @@ export {
   type AutoReviewRequest,
   type AutoReviewTimeoutPolicy,
 } from './shared/auto-review-decision.js';
+export { toolAutoReviewAction } from './shared/auto-review-decision.js';
 export type { ReviewableAction } from './shared/auto-review.js';
 export {
   ORCA_NESTED_REPORT_DENIAL_REASON,
