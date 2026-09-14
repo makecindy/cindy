@@ -33,8 +33,12 @@ export type SessionMoveTarget =
   | { kind: 'dialogue' };
 
 /**
- * host 回调:全部守卫通过后逐个应用。`moved` 为已成功移动的会话;中途失败时 host 返回
- * INTERNAL 并把已完成部分放进 partial(工具层原样透传给模型,便于如实汇报)。
+ * host 回调:批量预检全部通过后逐个应用。`moved` 为已成功移动的会话。
+ *
+ * 两类失败要分清:**预检**阶段失败(某 id 不存在 / 守卫不过 / 参数非法)时一条都没写,
+ * `moved` 为空;**逐个应用**阶段失败时前面的会话已经落库,host 会带回已完成的 `moved`,
+ * 错误码保持映射后的业务码(写锁内复核到运行中 / 被接管 / 终态会是 PRECONDITION_FAILED,
+ * 并非只有 INTERNAL)。工具层原样透传给模型,便于如实汇报而不是整批重试。
  */
 export type MoveSessionsResult = SessionOpResult<{ moved: SessionOpItem[] }>;
 
@@ -52,8 +56,12 @@ const DESCRIPTION =
   '主进程会同步搬迁 agent 转录目录并即时刷新侧栏。' +
   '限制:远程会话、运行中(含协同 worker 运行中)、被 IM 接管中、已归档、空草稿、review 会话都不能移动;' +
   '不能移动当前正在运行的 session 自己。建议先用 history/list_sessions 找到目标 session_id。' +
-  '失败码: NOT_FOUND(某些 id 不存在,整批不写) / PRECONDITION_FAILED(某个会话被上述守卫拦下,整批不写) / ' +
-  'INVALID_ARGS / NO_SESSION_CONTEXT / HOST_NOT_READY / INTERNAL(逐个应用途中失败,data.moved 为已完成部分)。';
+  '失败码: NOT_FOUND(某些 id 不存在) / PRECONDITION_FAILED(某个会话被上述守卫拦下) / ' +
+  'INVALID_ARGS / NO_SESSION_CONTEXT / HOST_NOT_READY / INTERNAL。' +
+  '**部分成功**:批量预检不过时一条都不会写(data.moved 为空);预检通过后逐个应用,' +
+  '若中途某个会话在写锁内复核失败(重新进入运行中 / 被 IM 接管 / 被并发归档删除),' +
+  '错误码可能是 PRECONDITION_FAILED / NOT_FOUND / INTERNAL,此时 data.moved 是**已经移动成功**的部分 —— ' +
+  '请按 data.moved 如实汇报,不要把整批当作未执行去重试。';
 
 export function registerMoveSessionsTool(
   registry: XdtHelperToolRegistry,

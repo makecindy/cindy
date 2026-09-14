@@ -230,6 +230,19 @@ export async function openSessionInNewWindow(
 }
 
 /** 会话分叉家族:沿 parentSessionId 向上找根(链断即根),再 BFS 收集全部未删除的派生会话。 */
+/**
+ * 分支家族只收侧栏可见的会话 —— GUI 的 SessionBranchTreeDialog 拿到的就是侧栏列表,
+ * 伙伴(Bot)会话与 Orca worker 不在其中,所以那里从来不会把它们画成分支。
+ *
+ * 判据**不能**用 `forkedAtMessageId != null`:`maker-orchestration/fork.ts` 的
+ * forkSessionStripEncrypted 会写 parentSessionId 但把 forkedAtMessageId 留空,
+ * 那是合法分支;而 botDelegationService 给委派子会话写的 parentSessionId
+ * (见 botDelegationService.ts:806)对应的会话 source 是 'bot'。
+ */
+function isBranchVisible(row: SessionOpsRow): boolean {
+  return row.source !== 'bot' && row.orcaRole !== 'worker';
+}
+
 export async function getSessionBranches(
   deps: SessionOperationsDeps,
   params: { sessionId: string },
@@ -242,8 +255,8 @@ export async function getSessionBranches(
   const seen = new Set<string>([root.id]);
   while (root.parentSessionId && !seen.has(root.parentSessionId)) {
     const [parent] = await deps.loadSessions([root.parentSessionId]);
-    // 源会话已软删除时链在此断开:GUI 分支树同样不展示 deleted 墓碑。
-    if (!parent || parent.status === 'deleted' || root.forkedAtMessageId == null) break;
+    // 源会话已软删除、或父节点是侧栏不可见的会话时链在此断开:GUI 分支树同样不展示。
+    if (!parent || parent.status === 'deleted' || !isBranchVisible(parent)) break;
     seen.add(parent.id);
     root = parent;
   }
@@ -252,9 +265,9 @@ export async function getSessionBranches(
   let frontier = [root.id];
   const visited = new Set<string>([root.id]);
   while (frontier.length > 0) {
-    // 软删除的子会话及其后代整体不进家族(与 GUI includeArchived:'all' 列表排除 deleted 一致)。
+    // 软删除、以及侧栏不可见的会话(伙伴会话 / Orca worker)及其后代整体不进家族。
     const children = (await deps.loadChildren(frontier)).filter(
-      (row) => !visited.has(row.id) && row.status !== 'deleted' && row.forkedAtMessageId != null,
+      (row) => !visited.has(row.id) && row.status !== 'deleted' && isBranchVisible(row),
     );
     for (const child of children) visited.add(child.id);
     family.push(...children);

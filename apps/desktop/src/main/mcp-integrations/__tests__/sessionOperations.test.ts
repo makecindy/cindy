@@ -219,12 +219,11 @@ describe('openSessionInNewWindow', () => {
 
 describe('getSessionBranches', () => {
   it('walks up to the root and collects all descendants', async () => {
-    // fork 派生的会话必带 forkedAtMessageId —— 没有它的父子关系不是分叉(见伙伴委派用例)。
     const { deps } = makeDeps([
       row('root'),
       row('c1', { parentSessionId: 'root', forkedAtMessageId: 'm1' }),
-      row('c2', { parentSessionId: 'root', forkedAtMessageId: 'm2' }),
-      row('gc', { parentSessionId: 'c1', forkedAtMessageId: 'm3' }),
+      row('c2', { parentSessionId: 'root' }),
+      row('gc', { parentSessionId: 'c1' }),
       row('other'),
     ]);
     const res = await getSessionBranches(deps, { sessionId: 'gc' });
@@ -236,17 +235,22 @@ describe('getSessionBranches', () => {
     }
   });
 
-  it('excludes Bot delegation children, which carry parentSessionId but no fork point', async () => {
-    // botDelegationService 会给委派子会话写 sessions.parentSessionId(见 botDelegationService.ts:806),
-    // 但它不是 fork —— 没有 forkedAtMessageId,不该出现在分叉家族里。
+  it('excludes Bot delegation children but keeps forks that have no message anchor', async () => {
+    // botDelegationService 给委派子会话写 sessions.parentSessionId(botDelegationService.ts:806),
+    // 那些会话 source='bot',侧栏不展示;而 forkSessionStripEncrypted 建的分支
+    // 是 parentSessionId 有值、forkedAtMessageId 为空的合法分支,必须留下。
     const { deps } = makeDeps([
       row('root'),
-      row('forked', { parentSessionId: 'root', forkedAtMessageId: 'm1' }),
-      row('delegated', { parentSessionId: 'root' }),
+      row('anchored', { parentSessionId: 'root', forkedAtMessageId: 'm1' }),
+      row('stripFork', { parentSessionId: 'root' }),
+      row('delegated', { parentSessionId: 'root', source: 'bot' }),
+      row('worker', { parentSessionId: 'root', orcaRole: 'worker' }),
     ]);
     const res = await getSessionBranches(deps, { sessionId: 'root' });
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.family.map((f) => f.sessionId).sort()).toEqual(['forked', 'root']);
+    if (res.ok) {
+      expect(res.family.map((f) => f.sessionId).sort()).toEqual(['anchored', 'root', 'stripFork']);
+    }
   });
 
   it('refuses a soft-deleted session as the family entry point', async () => {
@@ -260,9 +264,9 @@ describe('getSessionBranches', () => {
   it('drops soft-deleted sessions and their descendants from the family', async () => {
     const { deps } = makeDeps([
       row('root'),
-      row('keep', { parentSessionId: 'root', forkedAtMessageId: 'm1' }),
-      row('gone', { parentSessionId: 'root', status: 'deleted', forkedAtMessageId: 'm2' }),
-      row('orphan', { parentSessionId: 'gone', forkedAtMessageId: 'm3' }),
+      row('keep', { parentSessionId: 'root' }),
+      row('gone', { parentSessionId: 'root', status: 'deleted' }),
+      row('orphan', { parentSessionId: 'gone' }),
     ]);
     const res = await getSessionBranches(deps, { sessionId: 'keep' });
     expect(res.ok).toBe(true);
