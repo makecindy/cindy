@@ -7,7 +7,7 @@
  *    独立窗」的插件,就渲染**一枚**幽灵球(lucide Ghost 脸 + 数量角标),
  *    不再按数量分形态。点球纵向展开各插件自己的气泡(向下,空间不够则
  *    向上),点谁恢复谁的面板;点球或空白处收拢。全部面板都开着(没有
- *    最小化的)整层消失 —— 幽灵球只在有面板可恢复时在场。
+ *    最小化的)整层消失 —— 幽灵球只在有面板可恢复且用户选择气泡入口时在场。
  *  - 子气泡脸 = 插件图标(InstalledGhost.iconDataUrl,主窗拿不到
  *    cindy-ghost://,data URL 直接 <img>;缺图标兜底 lucide Ghost);
  *  - 定位用 left/top 而非 transform(2026-07-31 Lizi 实测:草稿页气泡拖
@@ -36,11 +36,11 @@ import { createPortal } from 'react-dom';
 import { Ghost } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
-import { ghostPanelKind, type GhostManifest } from '../../shared/ghost';
+import type { GhostManifest } from '../../shared/ghost';
 import { WINDOW_NO_DRAG_STYLE } from '../components/layout/windowDrag';
-import { restoreGhostPanel, useGhostPanelBubbleState } from '../lib/ghostPanelBubbleState';
-import { isGhostPanelKindDetached, useGhostPanelWindowsState } from '../lib/ghostPanelWindowState';
-import { useInstalledGhosts } from './useInstalledGhosts';
+import { restoreGhostPanel } from '../lib/ghostPanelBubbleState';
+import { useGhostPanelRestoreMode } from '../hooks/useGhostPanelRestoreMode';
+import { useMinimizedGhostPanels } from './useMinimizedGhostPanels';
 
 const BUBBLE_SIZE = 48;
 const EDGE_MARGIN = 12;
@@ -301,7 +301,7 @@ function Bubble({ manifest, iconDataUrl, pos, registerEl }: BubbleProps): ReactN
   );
 }
 
-/** 幽灵球:被最小化面板的唯一入口(Ghost 脸 + 数量角标),点击切换展开。 */
+/** 幽灵球:气泡模式下被最小化面板的聚合入口(Ghost 脸 + 数量角标)。 */
 function StackBubble({
   count,
   pos,
@@ -364,10 +364,8 @@ function StackBubble({
 
 /** 气泡层:没有最小化面板时不渲染;窗口缩放防抖重渲以重算 clamp/默认位。 */
 export function GhostPanelBubbleLayer(): ReactNode {
-  const ghosts = useInstalledGhosts();
-  const bubbles = useGhostPanelBubbleState();
-  // 订阅抽离状态:detach 期间气泡隐藏,合并回来自动复现。
-  useGhostPanelWindowsState();
+  const { mode } = useGhostPanelRestoreMode();
+  const minimized = useMinimizedGhostPanels();
   // 展开态(纯运行时,不落盘;落盘会让"重启后自动摊开一排"变成惊吓)。
   const [expanded, setExpanded] = useState(false);
   const [stackPos, setStackPos] = useState<{ x: number; y: number } | null>(() => loadStackPos());
@@ -388,15 +386,7 @@ export function GhostPanelBubbleLayer(): ReactNode {
     };
   }, []);
 
-  const minimized = ghosts.filter(
-    (g) =>
-      g.enabled !== false &&
-      g.manifest.panel !== undefined &&
-      g.manifest.panel.position !== 'tab' &&
-      bubbles[g.manifest.id]?.minimized === true &&
-      !isGhostPanelKindDetached(ghostPanelKind(g.manifest.id)),
-  );
-  const empty = minimized.length === 0;
+  const empty = mode !== 'bubble' || minimized.length === 0;
 
   // 整层退场(全部面板都开着)时收拢,防下次出现直接摊开一排。
   useEffect(() => {

@@ -5,6 +5,8 @@
  * 解析主 + 历史 scheme 都认——存量消息里的 xdt-maker:// 老链接不能死):
  *   cindy://session/<sessionId>             —— sessionId 直接是 string id
  *   cindy://project/<urlencoded-workingDir> —— workingDir 全路径 URL-encoded
+ *   cindy://settings/providers[?connect=<providerId>] —— 打开设置「模型供应商」页,
+ *     可选 connect 直达指定内置渠道或预设的接入流程(白名单校验,见 parseDeepLink)
  *
  * 命令行参数形态 (右键菜单 / 命令行):
  *   --open-folder <absolute-path>   或   --open-folder=<absolute-path>
@@ -26,15 +28,15 @@
  * Pending 缓存 + pull-on-mount:
  *   - 冷启动期间 mainWindow 还没 ready / renderer 还没挂 listener → 进 pendingDeepLink
  *   - 已登录用户:MainLayout mount 后会通过 IPC 'deep-link:take-pending' 拉一次,
- *     拉到非空 payload 就分发。已运行场景 pendingDeepLink 一直为 null,no-op。
+ *     拉到非空 payload 就分发。供应商导入始终先入 pending，事件仅唤醒同一 take 路径。
  *   - 未登录用户:冷启动 + deep link 后 LoginPage 接管,pendingDeepLink 保留;
  *     用户完成 Feishu OAuth → MainLayout 第一次 mount → 同一条 pull 路径消费 payload,
  *     不会因为登录流程跳过而丢失"点击右键打开"这个意图。
  *
  * dev 模式说明:
- *   非 packaged 模式下系统协议 / 右键菜单注册不会生效 (操作系统识别的是已安装的
- *   .app/.exe,不是临时跑的 Electron 解释器)。本模块的解析 / 派发逻辑可以单测,
- *   但端到端 "点链接 / 右键唤起" 必须打 release 包验证。
+ *   setAsDefaultProtocolClient 可把 scheme 临时注册到 Electron 解释器,因此能在 dev
+ *   实例运行期间验证系统 URL 唤起;但协议归属受最后注册的正式版 / dev 实例影响,
+ *   发布前仍需用 packaged build 做最终跨平台验证。
  */
 
 import { app, BrowserWindow } from 'electron';
@@ -44,8 +46,10 @@ import {
   DEEP_LINK_PRIMARY_SCHEME,
   DEEP_LINK_SCHEMES,
   DEEP_LINK_URL_PREFIX,
+  isDeepLinkProviderConnectId,
   matchDeepLinkPrefix,
 } from '../shared/deepLinkSchemes';
+import { cancelProviderImport, createProviderImportDraftFromRest } from './provider-import/providerImport';
 
 const log = createLogger('deepLink');
 
@@ -68,12 +72,16 @@ export type DeepLinkPayload =
    */
   | { type: 'new-session'; workingDir: string }
   | { type: 'share-import'; filePath: string }
+  /** 外部 URL 内的凭证已在 Main 转成短期草稿；跨进程只传随机 id。 */
+  | { type: 'provider-import'; importId: string }
   /**
-   * 主进程内部发起的设置页导航。它不由自定义 URL 解析产生；复用现有的
-   * main-window focus + renderer dispatch 通道，供全局浮层等独立窗口把用户
-   * 带回主窗口的准确设置页。
+   * 设置页导航。两个来源:
+   *   1. 主进程内部发起(全局浮层等独立窗口把用户带回主窗口的准确设置页);
+   *   2. cindy://settings/providers[?connect=<providerId>] 深链(外部工具一键拉起
+   *      供应商接入流程)。URL 域只开放 tab=providers;connect 是可选的内置
+   *      provider / preset id,经白名单校验后透传给 renderer 已有的消费逻辑。
    */
-  | { type: 'settings'; tab: 'voice-input' | 'providers' }
+  | { type: 'settings'; tab: 'voice-input' | 'providers'; connect?: string }
   /**
    * 纯"把窗口拉回前台"意图,不携带导航语义 (典型来源:OAuth 授权成功页的
    * "打开 xdt-maker" 按钮 / 自动唤起)。main 进程内消化,不发给 renderer、
@@ -95,6 +103,11 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   const prefix = matchDeepLinkPrefix(url);
   if (prefix === null) return null;
   const rest = url.slice(prefix.length);
+  // provider/import 是双段精确路径，必须在通用 type/value 解析前消费。
+  if (rest.startsWith('provider/')) {
+    const importId = createProviderImportDraftFromRest(rest);
+    return importId ? { type: 'provider-import', importId } : null;
+  }
   const slashIdx = rest.indexOf('/');
   if (slashIdx <= 0) return null;
   const type = rest.slice(0, slashIdx);
@@ -122,6 +135,44 @@ export function parseDeepLink(url: string): DeepLinkPayload | null {
   if (type === 'focus') {
     // value 只作来源标记 (如 google-auth),解析后不参与行为分发。
     return { type: 'focus' };
+  }
+  if (type === 'settings') {
+    // URL 域只开放精确的 providers 路径(尾随 `/` 可忽略);不能沿用上方对其它
+    // payload 的“首段即值”语义,否则 settings/providers/anything 也会被接收。
+    const rawSettingsPath = rawValue.replace(/[?#].*$/, '').replace(/\/+$/, '');
+    if (rawSettingsPath !== 'providers' || decoded !== 'providers') return null;
+    // connect 是可选 provider / preset id;深链是不可信输入,值必须过共享白名单,
+    // 不合法就整条拒绝,避免 main/preload 规则漂移。
+    const connect = parseSettingsConnectParam(rawValue);
+    if (connect === INVALID_CONNECT) return null;
+    return connect
+      ? { type: 'settings', tab: 'providers', connect }
+      : { type: 'settings', tab: 'providers' };
+  }
+  return null;
+}
+
+/** 区分"没带 connect"(null)与"带了但非法"(INVALID_CONNECT → 整条深链拒绝)。 */
+const INVALID_CONNECT = Symbol('invalid-connect');
+
+function parseSettingsConnectParam(rawValue: string): string | null | typeof INVALID_CONNECT {
+  const hashIdx = rawValue.indexOf('#');
+  const noHash = hashIdx >= 0 ? rawValue.slice(0, hashIdx) : rawValue;
+  const queryIdx = noHash.indexOf('?');
+  if (queryIdx < 0) return null;
+  const query = noHash.slice(queryIdx + 1);
+  for (const pair of query.split('&')) {
+    const eqIdx = pair.indexOf('=');
+    if (eqIdx <= 0 || pair.slice(0, eqIdx) !== 'connect') continue;
+    const rawParam = pair.slice(eqIdx + 1);
+    if (!rawParam) return INVALID_CONNECT;
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(rawParam);
+    } catch {
+      return INVALID_CONNECT;
+    }
+    return isDeepLinkProviderConnectId(decoded) ? decoded : INVALID_CONNECT;
   }
   return null;
 }
@@ -222,6 +273,10 @@ export function setDeepLinkMainWindow(win: BrowserWindow | null): void {
   mainWindowRef = win;
 }
 
+export function getDeepLinkMainWindow(): BrowserWindow | null {
+  return mainWindowRef && !mainWindowRef.isDestroyed() ? mainWindowRef : null;
+}
+
 /**
  * 处理一条入站 URL。会内部解析、根据 mainWindow 状态选择直接发送 or 缓存。
  * 即使解析失败也只 log 不抛,避免污染调用方(open-url / second-instance / argv)。
@@ -229,7 +284,8 @@ export function setDeepLinkMainWindow(win: BrowserWindow | null): void {
 export function handleIncomingDeepLink(url: string, source: string): void {
   const payload = parseDeepLink(url);
   if (!payload) {
-    log.warn('ignoring unparseable url', { url, source });
+    // 入站 URL 现在可能含 API key；失败路径也不能把原文写进持久日志。
+    log.warn('ignoring unparseable deep link', { source });
     return;
   }
   log.info('received deep link', { source, payload });
@@ -288,9 +344,9 @@ export function handleIncomingShareFile(filePath: string, source: string): void 
 }
 
 /**
- * 把主窗口拉回前台 (show + restore + focus)。Windows 的外部协议唤起需要先
- * 激活应用并提升目标窗口 z-order；macOS 额外使用 app.focus steal——
- * 从浏览器等其它前台应用手里抢焦点，单靠 win.focus() 不可靠。
+ * 把主窗口拉回前台。Windows 的外部协议唤起需要先激活应用并提升目标窗口
+ * z-order；其它平台短暂置顶后 focus，macOS 再使用 app.focus steal 从其它
+ * 前台应用手里抢回焦点。
  * 窗口不存在 / 已销毁时返回 false,调用方自行决定是否忽略。
  */
 export function focusMainWindow(platform: NodeJS.Platform = process.platform): boolean {
@@ -305,8 +361,15 @@ export function focusMainWindow(platform: NodeJS.Platform = process.platform): b
     // 不会把后台 Ghost workspace 请求扩大为强制抢前台。
     app.focus();
     win.moveTop();
+    win.focus();
+    return true;
   }
-  win.focus();
+  win.setAlwaysOnTop(true);
+  try {
+    win.focus();
+  } finally {
+    if (!win.isDestroyed()) win.setAlwaysOnTop(false);
+  }
   if (platform === 'darwin') app.focus({ steal: true });
   return true;
 }
@@ -323,24 +386,45 @@ export function openMainWindowVoiceSettings(tab: 'voice-input' | 'providers'): v
  * 主进程内部发起的会话聚焦(workspace 槽 focus:true)。复用 deep link 的
  * 前台 + renderer dispatch 通道,行为与用户点 cindy://session/<id> 一致。
  */
-export function openMainWindowSession(sessionId: string): void {
-  dispatchDeepLink({ type: 'session', id: sessionId });
+export function openMainWindowSession(sessionId: string, options?: { focus?: boolean }): void {
+  dispatchDeepLink({ type: 'session', id: sessionId }, options?.focus !== false);
 }
 
-function dispatchDeepLink(payload: DeepLinkPayload): void {
+/** Sends a typed internal event to the primary renderer without broadcasting to utility windows. */
+export function sendMainWindowMessage(channel: string, payload: unknown): boolean {
+  const win = mainWindowRef;
+  if (
+    !win ||
+    win.isDestroyed() ||
+    !win.webContents ||
+    win.webContents.isDestroyed() ||
+    win.webContents.isLoading()
+  ) {
+    return false;
+  }
+  win.webContents.send(channel, payload);
+  return true;
+}
+
+function dispatchDeepLink(payload: DeepLinkPayload, shouldFocus = true): void {
   // 纯前台意图:main 进程内消化。冷启动时窗口还没建,app 启动流程本身会前台,直接丢弃。
   if (payload.type === 'focus') {
-    focusMainWindow();
+    if (shouldFocus) focusMainWindow();
     return;
   }
   const win = mainWindowRef;
-  // mainWindow 尚未创建(冷启动) / webContents 未就绪 → 缓存等 MainLayout pull
-  if (!win || win.isDestroyed() || !win.webContents || win.webContents.isLoading()) {
+  const windowReady = win && !win.isDestroyed() && win.webContents && !win.webContents.isLoading();
+  // A loaded login/LocalDbGate page has no MainLayout listener yet. Imports stay
+  // in the existing pending slot until the authenticated consumer takes them.
+  if (!windowReady || payload.type === 'provider-import') {
     // 保留"用户最后意图"语义:同一次冷启动如果先后入站多条 (例如 argv 同时含
     // deep link URL 和 --open-folder, 现实场景极罕见但 bootstrap 两条 scan 都
     // 会触发),后到的覆盖前者。但 warn log 留下排查线索,事后能从日志识别这种
     // 情况;若未来收到反馈再改为"先到先得"或"显式拒绝后者"。
     if (pendingDeepLink) {
+      if (pendingDeepLink.type === 'provider-import') {
+        cancelProviderImport(pendingDeepLink.importId);
+      }
       log.warn('overwriting buffered pending payload', {
         previous: pendingDeepLink,
         next: payload,
@@ -348,25 +432,23 @@ function dispatchDeepLink(payload: DeepLinkPayload): void {
     }
     pendingDeepLink = payload;
     log.debug('buffered pending deep link until renderer pull', payload);
-    if (win && !win.isDestroyed()) {
-      // 把窗口拉前台(用户点链接 / 右键的意图就是 focus app)
-      if (!win.isVisible()) win.show();
-      if (win.isMinimized()) win.restore();
-      win.focus();
+    // Agent-key first tap may switch in the background. A buffered deep link
+    // from that path must not steal the frontmost app.
+    if (!windowReady) {
+      if (shouldFocus) focusMainWindow();
+      return;
     }
-    return;
   }
-  // 已运行场景:listener 必然挂着(MainLayout 已 mount),直接 send,不进 pending。
+  // Imports use this event only as a wake-up; MainLayout consumes the pending slot.
+  // Other existing navigation events retain their direct-delivery behavior.
   // 同时把窗口拉前台 — open-url / second-instance 本身不会唤起,用户点链接的
   // 意图就是要看到 app。
-  if (!win.isVisible()) win.show();
-  if (win.isMinimized()) win.restore();
-  win.focus();
-  win.webContents.send('deep-link:navigate', payload);
+  if (shouldFocus) focusMainWindow();
+  win!.webContents.send('deep-link:navigate', payload);
 }
 
 /**
- * 给 IPC handler 用:取走 pendingDeepLink 并清空。pull-on-mount 路径专用,
+ * 给 IPC handler 用:取走 pendingDeepLink 并清空。供 mount 和导入唤醒事件调用,
  * 重复调用是安全的——第一次拿到 payload,后续调用返回 null,不会双发。
  *
  * 命名上故意用 "take" 而非 "consume" / "get" 表达 pop 语义,避免和老的
@@ -396,6 +478,20 @@ export function findDeepLinkInArgv(argv: readonly string[]): string | null {
 }
 
 /**
+ * Remove all provider-import arguments (even invalid/unselected ones), plus every
+ * copy of the consumed URL. The caller retains the selected URL for delivery.
+ * This sanitizes JS argv and future copies, not the OS's original command line.
+ */
+export function redactConsumedDeepLinkInArgv(argv: string[], deepLink?: string): void {
+  for (let i = argv.length - 1; i >= 0; i -= 1) {
+    const arg = argv[i];
+    const prefix = typeof arg === 'string' ? matchDeepLinkPrefix(arg) : null;
+    if (arg !== deepLink && !(prefix && arg.slice(prefix.length).startsWith('provider/'))) continue;
+    argv[i] = `${DEEP_LINK_PRIMARY_SCHEME}://consumed`;
+  }
+}
+
+/**
  * 从 argv 找 --open-folder 参数对应的路径。两种形态都支持:
  *   --open-folder <absolute-path>
  *   --open-folder=<absolute-path>
@@ -420,14 +516,19 @@ function findAbsolutePathAfterFlag(argv: readonly string[], flag: string): strin
     if (typeof arg !== 'string') continue;
     if (arg === flag) {
       const next = argv[i + 1];
-      if (typeof next === 'string' && next.length > 0 && isAbsoluteFilesystemPath(next)) return next;
+      if (typeof next === 'string' && next.length > 0 && isAbsoluteFilesystemPath(next))
+        return next;
 
       // Electron's Windows second-instance argv can interleave Chromium switches
       // between our custom flag and Explorer's folder path. Recover by taking the
       // first absolute path after the flag instead of returning a Chromium flag.
       for (let j = i + 1; j < argv.length; j++) {
         const candidate = argv[j];
-        if (typeof candidate === 'string' && candidate.length > 0 && isAbsoluteFilesystemPath(candidate)) {
+        if (
+          typeof candidate === 'string' &&
+          candidate.length > 0 &&
+          isAbsoluteFilesystemPath(candidate)
+        ) {
           return candidate;
         }
       }
@@ -470,9 +571,7 @@ export function registerDeepLinkProtocol(): void {
     if (process.defaultApp) {
       // dev:用 Electron 解释器跑 main 入口
       if (process.argv.length >= 2) {
-        app.setAsDefaultProtocolClient(scheme, process.execPath, [
-          path.resolve(process.argv[1]),
-        ]);
+        app.setAsDefaultProtocolClient(scheme, process.execPath, [path.resolve(process.argv[1])]);
       } else {
         app.setAsDefaultProtocolClient(scheme);
       }

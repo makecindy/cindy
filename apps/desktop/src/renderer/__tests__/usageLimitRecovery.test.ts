@@ -31,7 +31,36 @@ describe('usage limit recovery detection', () => {
         },
         NOW,
       ),
-    ).toEqual({ resetAtMs: NOW + 75 * 60_000 });
+    ).toEqual({ resetAtMs: NOW + 75 * 60_000, isAccountUsageLimit: true });
+  });
+
+  it('extracts the organization plan and reset time from the Codex 429 payload', () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          message:
+            'API Error: Request rejected (429) · {"error":{"type":"usage_limit_reached","message":"The usage limit has been reached","plan_type":"business","resets_at":1788220709,"eligible_promo":null,"resets_in_seconds":1264528}}',
+        },
+        Date.parse('2026-08-17T00:00:00.000Z'),
+      ),
+    ).toEqual({
+      resetAtMs: Date.parse('2026-08-31T23:58:29.000Z'),
+      isAccountUsageLimit: true,
+      planType: 'business',
+    });
+  });
+
+  it('does not classify a transient Codex 429 as an account usage limit', () => {
+    expect(
+      extractUsageLimitRecoveryHint(
+        {
+          errorStatus: 429,
+          codexErrorInfo: { responseTooManyFailedAttempts: { httpStatusCode: 429 } },
+          message: 'Too many requests',
+        },
+        NOW,
+      ),
+    ).toEqual({ resetAtMs: null });
   });
 
   it('parses the real Claude session-limit wording with a named timezone', () => {

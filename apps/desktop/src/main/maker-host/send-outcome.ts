@@ -57,7 +57,11 @@ export type DesktopSendOutcome = HostSendOutcome | DesktopSessionDispatchOutcome
 export type DesktopMakerSendResult =
   | { accepted: true; outcome: DesktopSessionDispatchSuccess }
   | { accepted: false; reason: HostSendFailureCode; outcome: HostSendOutcome }
-  | { accepted: false; reason: 'cancelled-before-dispatch'; outcome: DesktopSessionDispatchFailure };
+  | {
+      accepted: false;
+      reason: DesktopSessionDispatchFailure['reason'];
+      outcome: DesktopSessionDispatchFailure;
+    };
 
 export interface SendOutcomeLogContext {
   owner: string;

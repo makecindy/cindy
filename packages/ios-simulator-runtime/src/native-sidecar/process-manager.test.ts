@@ -305,6 +305,7 @@ describe("IOSSimulatorNativeSidecarProcessManager", () => {
     expect(createChannel).not.toHaveBeenCalled();
     expect(manager.diagnostics("instance-a")).toMatchObject({
       running: false,
+      recoveryEligible: false,
       sandbox: {
         required: true,
         enforced: false,
@@ -330,6 +331,52 @@ describe("IOSSimulatorNativeSidecarProcessManager", () => {
     });
     expect(verifyBinaryIntegrity).toHaveBeenCalledTimes(1);
     expect(createChannel).not.toHaveBeenCalled();
+    const diagnostics = manager.diagnostics("instance-a");
+    expect(diagnostics).toMatchObject({
+      running: false,
+      state: "failed",
+      admission: {
+        processState: "failed",
+        launch: { active: false, reasonCode: "PROCESS_NOT_RUNNING" },
+      },
+    });
+    expect(
+      diagnostics.admission?.capabilities.continuousInput.reasonCode,
+    ).not.toBe("AWAITING_PROBE");
+  });
+
+  it("finishes the native probe when the sidecar binary is unavailable", async () => {
+    const temporaryRoot = await mkdtemp(
+      path.join(os.tmpdir(), "cindy-ios-sidecar-missing-test-"),
+    );
+    try {
+      const manager = new IOSSimulatorNativeSidecarProcessManager({
+        binaryPath: path.join(temporaryRoot, "missing-sidecar"),
+        enableH264Stream: true,
+        enableContinuousInput: true,
+      });
+
+      await expect(manager.start(input())).rejects.toMatchObject({
+        code: "BINARY_UNAVAILABLE",
+        message: "Native sidecar executable is unavailable",
+      });
+      expect(manager.diagnostics("instance-a")).toMatchObject({
+        running: false,
+        state: "failed",
+        lastFailure: "Native sidecar executable is unavailable",
+        recoveryEligible: false,
+        admission: {
+          processState: "failed",
+          launch: { active: false, reasonCode: "PROCESS_NOT_RUNNING" },
+          capabilities: {
+            h264Stream: { reasonCode: "PROCESS_NOT_RUNNING" },
+            continuousInput: { reasonCode: "PROCESS_NOT_RUNNING" },
+          },
+        },
+      });
+    } finally {
+      await rm(temporaryRoot, { recursive: true, force: true });
+    }
   });
 
   it("rechecks packaged artifact integrity before a channel restart", async () => {
@@ -451,6 +498,7 @@ describe("IOSSimulatorNativeSidecarProcessManager", () => {
       running: true,
       state: "running",
       crashCount: 0,
+      recoveryEligible: true,
     });
     await manager.stop("instance-a");
     expect(channel.requests.at(-1)?.op).toBe("detach");
@@ -458,6 +506,7 @@ describe("IOSSimulatorNativeSidecarProcessManager", () => {
     expect(manager.diagnostics("instance-a")).toMatchObject({
       running: false,
       state: "stopped",
+      recoveryEligible: false,
       admission: {
         processState: "stopped",
         launch: { active: false },
@@ -493,6 +542,7 @@ describe("IOSSimulatorNativeSidecarProcessManager", () => {
     expect(manager.diagnostics("instance-a")).toMatchObject({
       running: false,
       state: "failed",
+      recoveryEligible: true,
       lastFailure: "Native sidecar exited beside <redacted-path>",
       lastTermination: {
         reasonCode: "process-exit",

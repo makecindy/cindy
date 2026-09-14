@@ -25,6 +25,7 @@ const log = createLogger('agent-input-queue-snapshots');
 
 /** 单会话快照体量上限(16MB):正常队列远小于此,超限基本是多张大图的 base64。 */
 const MAX_PAYLOAD_BYTES = 16 * 1024 * 1024;
+const SNAPSHOT_COUNT_QUERY_BATCH_SIZE = 200;
 
 /** per-session 写链:只做覆盖写/删除排队保序,无读改写。 */
 const _writeChains = new Map<string, Promise<void>>();
@@ -177,6 +178,89 @@ export async function loadAllQueueSnapshotPayloads(): Promise<string[]> {
     .select({ payload: agentInputQueueSnapshots.payload })
     .from(agentInputQueueSnapshots);
   return rows.map((r) => r.payload);
+}
+
+/**
+ * Count restorable snapshot rows in SQLite without returning or parsing their message bodies in JS.
+ *
+ * The messages anti-join closes the crash window where the user row committed before the
+ * snapshot-delete write: restoreQueueSnapshot applies the same clientId de-duplication, so cold
+ * list_sessions counts cannot temporarily disagree with list_session_queue after restoration.
+ */
+export async function loadAgentInputQueueSnapshotCounts(
+  sessionIds: readonly string[],
+): Promise<Record<string, number>> {
+  const uniqueIds = [...new Set(sessionIds)];
+  const counts = Object.fromEntries(uniqueIds.map((sessionId) => [sessionId, 0]));
+  for (let offset = 0; offset < uniqueIds.length; offset += SNAPSHOT_COUNT_QUERY_BATCH_SIZE) {
+    const batch = uniqueIds.slice(offset, offset + SNAPSHOT_COUNT_QUERY_BATCH_SIZE);
+    if (batch.length === 0) continue;
+    const placeholders = batch.map(() => '?').join(', ');
+    const rows = await getDbClient().query<{
+      sessionId: string;
+      itemCount: number | null;
+    }>(
+      `SELECT snapshot.session_id AS sessionId,
+              CASE
+                WHEN json_valid(snapshot.payload) = 1 AND json_type(snapshot.payload) = 'array'
+                THEN (
+                  SELECT COUNT(*)
+                  FROM json_each(snapshot.payload) AS snapshot_item
+                  WHERE CASE
+                    WHEN snapshot_item.type = 'object'
+                    THEN
+                      json_type(snapshot_item.value, '$.clientId') = 'text'
+                      AND length(json_extract(snapshot_item.value, '$.clientId')) > 0
+                      AND json_type(snapshot_item.value, '$.text') = 'text'
+                      AND json_type(snapshot_item.value, '$.persistedContent') = 'text'
+                      AND json_type(snapshot_item.value, '$.chatMessage') = 'object'
+                      AND json_type(snapshot_item.value, '$.createOpts') = 'object'
+                      AND json_extract(snapshot_item.value, '$.createOpts.agentKind')
+                          IN ('claude-code', 'codex', 'pi')
+                      AND COALESCE(
+                        json_extract(snapshot_item.value, '$.origin.kind'),
+                        ''
+                      ) <> 'scheduler'
+                    ELSE 0
+                  END
+                    AND (
+                      session.cleared_at IS NULL
+                      OR (
+                        json_type(snapshot_item.value, '$.hostAcceptedAtMs')
+                            IN ('integer', 'real')
+                        AND json_extract(snapshot_item.value, '$.hostAcceptedAtMs')
+                            > session.cleared_at
+                        AND json_extract(snapshot_item.value, '$.hostAcceptedAtMs')
+                            <= 1.7976931348623157e308
+                      )
+                    )
+                    AND NOT EXISTS (
+                      SELECT 1
+                      FROM messages
+                      WHERE messages.session_id = snapshot.session_id
+                        AND messages.client_id = json_extract(
+                          snapshot_item.value,
+                          '$.clientId'
+                        )
+                    )
+                )
+                ELSE NULL
+              END AS itemCount
+       FROM agent_input_queue_snapshots AS snapshot
+       JOIN sessions AS session ON session.id = snapshot.session_id
+       WHERE snapshot.session_id IN (${placeholders})`,
+      batch,
+    );
+    for (const row of rows) {
+      if (!Number.isSafeInteger(row.itemCount) || (row.itemCount ?? -1) < 0) {
+        // One malformed snapshot is session-local damage. Keep its fail-closed zero while
+        // preserving valid counts from the same list_sessions page; query failures still throw.
+        continue;
+      }
+      counts[row.sessionId] = row.itemCount!;
+    }
+  }
+  return counts;
 }
 
 export function isRestorableQueuedMessage(value: unknown): value is AgentInputQueuedMessage {

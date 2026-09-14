@@ -11,10 +11,17 @@ describe('useMacFullscreen', () => {
     delete (window as { electronAPI?: unknown }).electronAPI;
   });
 
-  it('does not crash when an older preload has no fullscreen bridge', () => {
+  it.each([
+    ['missing', { platform: 'darwin' }],
+    ['incompatible', {
+      platform: 'darwin',
+      getFullscreenState: false,
+      onFullscreenChange: {},
+    }],
+  ])('does not crash when an older preload has a %s fullscreen bridge', (_name, electronAPI) => {
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
-      value: { platform: 'darwin' },
+      value: electronAPI,
     });
 
     const { result } = renderHook(() => useMacFullscreen());

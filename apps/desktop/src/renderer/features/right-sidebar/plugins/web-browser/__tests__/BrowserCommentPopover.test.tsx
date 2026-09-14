@@ -21,11 +21,13 @@ const EMPTY_DRAFT: BrowserCommentEditorDraft = {
 function ControlledPopover({
   initialDraft = EMPTY_DRAFT,
   designBaseline = null,
+  submitting = false,
   onEditorDraftChange = vi.fn(),
   onPreviewDesign = vi.fn(),
 }: {
   initialDraft?: BrowserCommentEditorDraft;
   designBaseline?: BrowserCommentDesignBaseline | null;
+  submitting?: boolean;
   onEditorDraftChange?: (draft: BrowserCommentEditorDraft) => void;
   onPreviewDesign?: (payload: { styles: Record<string, string>; text: string | null }) => void;
 }) {
@@ -34,7 +36,7 @@ function ControlledPopover({
     <div>
       <BrowserCommentPopover
         anchor={{ x: 120, y: 80 }}
-        submitting={false}
+        submitting={submitting}
         designBaseline={designBaseline}
         editorDraft={draft}
         onEditorDraftChange={(next) => {
@@ -86,7 +88,7 @@ describe('BrowserCommentPopover', () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.styleTweaks' }));
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.styleTweaksExpand' }));
     fireEvent.change(screen.getByDisplayValue('Save'), {
       target: { value: 'Save changes' },
     });
@@ -100,6 +102,27 @@ describe('BrowserCommentPopover', () => {
       styles: {},
       text: 'Save changes',
     });
+  });
+
+  it('describes the next style-toggle action and the submitting disabled reason', () => {
+    const designBaseline: BrowserCommentDesignBaseline = {
+      styles: {},
+      editableText: 'Save',
+      provenance: {},
+    };
+    const { rerender } = render(<ControlledPopover designBaseline={designBaseline} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.styleTweaksExpand' }));
+    expect(
+      screen.getByRole('button', { name: 'rightSidebar.browser.styleTweaksCollapse' }),
+    ).toBeTruthy();
+
+    rerender(<ControlledPopover designBaseline={designBaseline} submitting />);
+    expect(
+      screen
+        .getByRole('button', { name: 'rightSidebar.browser.styleTweaksSubmitting' })
+        .getAttribute('aria-disabled'),
+    ).toBe('true');
   });
 
   it('replays restored design edits when it binds to a replacement target', async () => {

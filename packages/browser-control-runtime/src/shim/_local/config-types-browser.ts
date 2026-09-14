@@ -20,6 +20,11 @@ export type BrowserProfileConfig = {
   attachOnly?: boolean;
   /** Profile color (hex). Auto-assigned at creation. */
   color: string;
+  /**
+   * Chrome profile-chip label. Optional host extension (not upstream): the map
+   * key is still the on-disk folder under `browser/<key>/user-data`.
+   */
+  displayName?: string;
 };
 export type BrowserSnapshotDefaults = {
   /** Default snapshot mode (applies when mode is not provided). */

@@ -19,6 +19,16 @@
 /** 可检测的本机 CLI 标识。 */
 export type LocalCliId = 'claude-cli' | 'codex-cli';
 
+/** 插进「检测到 {{cli}}」等句子的商品名；各语言共用，不走 i18n。 */
+const LOCAL_CLI_DISPLAY_NAME: Record<LocalCliId, string> = {
+  'claude-cli': 'Claude Code CLI',
+  'codex-cli': 'Codex CLI',
+};
+
+export function localCliDisplayName(cli: LocalCliId): string {
+  return LOCAL_CLI_DISPLAY_NAME[cli];
+}
+
 /** 登录态探测方式:文件存在性 / Claude 跨平台凭证存(Keychain + 文件)。 */
 export type CredentialProbe = 'file' | 'claude-oauth';
 

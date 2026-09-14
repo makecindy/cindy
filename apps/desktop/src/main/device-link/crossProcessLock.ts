@@ -274,10 +274,23 @@ export async function withSecurityBoundaryLock<T>(
         break;
       }
 
+      if (publishingAfterTakeover && Date.now() >= deadline) {
+        reason = 'busy';
+        break;
+      }
       if (
         publishingAfterTakeover
-        && (Date.now() >= deadline || takeovers >= MAX_TAKEOVERS)
+        && takeovers >= MAX_TAKEOVERS
+        && (code === 'EBUSY' || code === 'EPERM' || code === 'EACCES')
+        && Date.now() < deadline
       ) {
+        // Windows can keep a just-quarantined path busy for a tick. The final
+        // takeover already spent its reclaim budget; retry publication only.
+        reason = 'busy';
+        await sleep(LOCK_RETRY_MS);
+        continue;
+      }
+      if (publishingAfterTakeover && takeovers >= MAX_TAKEOVERS) {
         reason = 'busy';
         break;
       }

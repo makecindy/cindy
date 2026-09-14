@@ -1,0 +1,226 @@
+.remote-viewer-window {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--surface);
+  color: var(--text-primary);
+}
+.remote-viewer-toolbar {
+  position: relative;
+  display: flex;
+  flex: none;
+  height: 52px;
+  min-width: 0;
+  padding-right: var(--space-3);
+  gap: 6px;
+  align-items: center;
+  border-bottom: 1px solid var(--border-default);
+  background: var(--surface);
+  -webkit-app-region: drag;
+  z-index: 5;
+}
+.remote-viewer-toolbar button {
+  -webkit-app-region: no-drag;
+}
+.remote-viewer-heading {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.remote-viewer-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+.remote-viewer-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-12);
+  line-height: 1.4;
+}
+/* Button owns colors, states, radii and typography; the viewer sizes its toolbar. */
+.remote-viewer-toolbar > .remote-viewer-action {
+  width: var(--space-9);
+  height: var(--space-9);
+  padding: 0;
+}
+.remote-viewer-content {
+  --foreground: var(--text-primary);
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.remote-viewer-content #stage {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+}
+.remote-viewer-content #stage > img,
+.remote-viewer-content video {
+  position: absolute;
+  max-width: none;
+  pointer-events: none;
+  transform-origin: 0 0;
+}
+.remote-viewer-content video {
+  display: none;
+  z-index: 0;
+}
+.remote-viewer-content #image {
+  z-index: 1;
+}
+.remote-viewer-content img:not([src]) {
+  visibility: hidden;
+}
+.remote-viewer-content #cursor {
+  position: absolute;
+  z-index: 3;
+  width: 18px;
+  height: 18px;
+  border: 0;
+  pointer-events: none;
+  display: none;
+}
+.remote-viewer-content #cursor-image {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.remote-viewer-content #keyboard-input {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0.01;
+  pointer-events: none;
+  border: 0;
+  padding: 0;
+  resize: none;
+}
+.remote-viewer-connection {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  max-width: 90%;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  padding: 12px 20px;
+  background: var(--surface);
+  font-size: 13px;
+  z-index: 4;
+}
+.remote-viewer-network {
+  color: var(--text-primary);
+  font-size: var(--text-12);
+  white-space: nowrap;
+}
+.remote-viewer-notice {
+  position: absolute;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-xl);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  color: var(--text-primary);
+  font-size: var(--text-13);
+  pointer-events: none;
+  z-index: 4;
+}
+.remote-viewer-latency {
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.remote-viewer-network-overlay {
+  position: absolute;
+  bottom: 12px;
+  left: 12px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  background: var(--surface);
+  border: 1px solid var(--border-default);
+  pointer-events: none;
+  z-index: 4;
+}
+@media (max-width: 900px) {
+  .remote-viewer-latency {
+    display: none;
+  }
+}
+.remote-viewer-settings {
+  position: absolute;
+  right: 12px;
+  top: calc(100% + var(--space-2));
+  max-height: calc(100vh - 100% - var(--space-5));
+  overflow: auto;
+  width: 320px;
+  max-width: calc(100vw - 24px);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  border: 1px solid var(--border-default);
+  border-radius: 12px;
+  background: var(--surface);
+  z-index: 6;
+  -webkit-app-region: no-drag;
+}
+.remote-viewer-field {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, var(--space-40));
+  align-items: center;
+}
+.remote-viewer-display-select {
+  flex: 0 1 var(--space-40);
+  width: var(--space-40);
+}
+@media (max-width: 620px) {
+  .remote-viewer-toolbar {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    padding-block: var(--space-1);
+  }
+  .remote-viewer-heading {
+    flex-basis: var(--space-28);
+  }
+}
+.remote-viewer-settings p {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.remote-viewer-fullscreen .remote-viewer-toolbar {
+  position: absolute;
+  inset: 0 0 auto;
+  transition: transform 150ms ease-out;
+  transform: translateY(calc(-100% + 8px));
+}
+.remote-viewer-fullscreen .remote-viewer-toolbar:hover,
+.remote-viewer-fullscreen .remote-viewer-toolbar:focus-within,
+.remote-viewer-fullscreen .remote-viewer-toolbar[data-settings-open='true'],
+.remote-viewer-fullscreen .remote-viewer-toolbar[data-select-open='true'] {
+  transform: translateY(0);
+}
+@media (prefers-reduced-motion: reduce) {
+  .remote-viewer-fullscreen .remote-viewer-toolbar {
+    transition: none;
+  }
+}

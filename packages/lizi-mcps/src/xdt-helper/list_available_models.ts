@@ -13,13 +13,21 @@ import { okPayload, errorPayload } from './_payload.js';
 export interface ModelDescriptor {
   id: string;
   label: string;
+  /** 当前已连接且可为该 agent 路由此模型的来源。 */
+  providers?: Array<{ id: string; name: string }>;
+  /** 未显式指定来源时,host 当前会采用的 provider id。 */
+  defaultProviderId?: string | null;
 }
 
 /** tier: 'budget' = codex/ 前缀的 gateway 折扣路由, 'standard' = 官方原版。仅出现在返回值, 供 agent 精准选型。 */
 type ModelTier = 'budget' | 'standard';
 
-interface TaggedModel extends ModelDescriptor {
+interface TaggedModel {
+  id: string;
+  label: string;
   tier: ModelTier;
+  providers?: Array<{ provider_id: string; provider_name: string }>;
+  default_provider_id?: string | null;
 }
 
 /**
@@ -34,8 +42,20 @@ interface TaggedModel extends ModelDescriptor {
 function tagTier(models: ModelDescriptor[] | undefined): TaggedModel[] | undefined {
   if (!models) return undefined;
   return models.map((m) => ({
-    ...m,
+    id: m.id,
+    label: m.label,
     tier: m.id.startsWith('codex/') ? 'budget' : 'standard',
+    ...(m.providers
+      ? {
+          providers: m.providers.map((provider) => ({
+            provider_id: provider.id,
+            provider_name: provider.name,
+          })),
+        }
+      : {}),
+    ...(m.defaultProviderId !== undefined
+      ? { default_provider_id: m.defaultProviderId }
+      : {}),
   }));
 }
 
@@ -54,11 +74,14 @@ const DESCRIPTION = [
   'Codex 和 Claude Code 支持的 model 完全不同, 不可跨用。',
   '',
   '参数:',
-  '- agent: 可选, codex 或 claude-code; 不传返两者',
+  '- agent: 可选, codex / claude-code / pi; 不传返三者',
   '',
   '返回值:',
-  '- codex: Codex agent 的可用 model 列表 [{id, label, tier}]',
-  '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier}]',
+  '- codex: Codex agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
+  '- claude_code: Claude Code agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
+  '- pi: Pi agent 的可用 model 列表 [{id, label, tier, providers, default_provider_id}]',
+  '- providers: 当前已连接且实际提供该模型的来源 [{provider_id, provider_name}]。创建 Worker 时把选定的 provider_id 原样传给 create_worker/create_workers。',
+  '- default_provider_id: 未显式选择来源时 host 当前解析出的默认来源；providers 只有一项时直接使用该项。',
   '',
   'tier 字段 (用于精准选型, 不要靠 label 推断):',
   "- tier='budget': codex/ 前缀的 gateway 折扣路由 (如 codex/gpt-5.5)",

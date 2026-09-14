@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   consumeNewMakerDialogueTargetRequest,
+  consumeNewMakerFolderPickerRequest,
   makeDialogueNewMakerRouteState,
+  makeFolderPickerNewMakerRouteState,
   readNewMakerDialogueTargetRequest,
+  readNewMakerFolderPickerRequest,
 } from '@/features/cc-agent/lib/newMakerRouteState';
 
 describe('new maker dialogue route target request', () => {
@@ -74,5 +77,27 @@ describe('new maker dialogue route target request', () => {
     const unrelated = { workspacePrompt: 'generic' };
     expect(consumeNewMakerDialogueTargetRequest(unrelated)).toBe(unrelated);
     expect(consumeNewMakerDialogueTargetRequest(null)).toBeNull();
+  });
+});
+
+describe('new maker folder picker request', () => {
+  it('opens the picker again when the same route is already mounted', () => {
+    vi.spyOn(Date, 'now').mockReturnValue(5678);
+    const first = readNewMakerFolderPickerRequest(makeFolderPickerNewMakerRouteState());
+    const second = readNewMakerFolderPickerRequest(makeFolderPickerNewMakerRouteState());
+    expect(first?.requestId).toBeTruthy();
+    expect(first?.requestId).not.toBe(second?.requestId);
+  });
+
+  it('consumes a folder picker request without dropping other route state', () => {
+    const original = {
+      workspacePrompt: 'generic',
+      folderPickerRequest: { requestId: 'picker-1' },
+      preserved: true,
+    };
+    const consumed = consumeNewMakerFolderPickerRequest(original);
+    expect(consumed).toEqual({ workspacePrompt: 'generic', preserved: true });
+    expect(readNewMakerFolderPickerRequest(consumed)).toBeNull();
+    expect(readNewMakerFolderPickerRequest(original)).toEqual({ requestId: 'picker-1' });
   });
 });

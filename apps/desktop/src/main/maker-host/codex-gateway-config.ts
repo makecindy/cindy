@@ -38,6 +38,15 @@ export const CODEX_GATEWAY_PROVIDER_ID = 'cindy_gateway';
 export const CODEX_OPENAI_COMPACT_PROVIDER_ID = 'cindy_openai';
 
 /**
+ * Cindy Provider codex/* 的内部 transport identity。产品 Provider 和上游不变；
+ * name="OpenAI" 只用于让 Codex 启用远程压缩，HTTP 与订阅 WS identity 分开冻结。
+ */
+export const CODEX_CINDY_COMPACT_PROVIDER_ID = 'cindy_codex';
+
+/** Sticky per-thread native summary fallback; model and credential routing are unchanged. */
+export const CODEX_SUMMARY_COMPACT_PROVIDER_ID = 'cindy_summary';
+
+/**
  * 注入 codex 子进程的环境变量名 —— codex 通过 config 的 `env_key` 来这里读 API key。
  * 用专名避免撞用户机器上已有的同名变量。
  */
@@ -71,10 +80,14 @@ export function buildCodexGatewayBaseUrl(upstream = claudeUpstreamEndpoint()): s
  *     proxy 直转 gateway(不破坏现有纯 key 用户)。
  *   - provider-oauth (如 xAI): env_key=XDT_CODEX_API_KEY → codex 带占位 key,
  *     proxy 按会话用供应商 OAuth token 覆盖 Authorization。
- * cindy_gateway 显式冻成 false；仅 oauth-bearer 额外定义的 cindy_openai 打开 WS。
- * 后者的 upgrade 由 loopback proxy 按 thread 转发，任何建连不兼容都会用 426 回到旧 HTTP。
+ * cindy_gateway 显式冻成 false；oauth-bearer 额外定义的 cindy_openai 始终打开 WS。
+ * 独立子代理 Provider 路由由 loopback proxy 根据 upgrade 携带的 thread / subagent 血缘
+ * 单独回 426，使对应子 thread 降到 HTTP；父 thread 继续保留原生 WS。
  */
-export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySpawnAuthMode): string[] {
+export function buildCodexProxySpawnArgs(
+  baseUrl: string,
+  authMode: CodexProxySpawnAuthMode,
+): string[] {
   const p = CODEX_GATEWAY_PROVIDER_ID;
   const authArg = authMode === 'oauth-bearer'
     ? `model_providers.${p}.requires_openai_auth=true`
@@ -93,6 +106,27 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
     // 只有不依赖请求体改写的订阅直连 provider(下面的 cindy_openai)才放开 WS。
     '-c', `model_providers.${p}.supports_websockets=false`,
   ];
+  // Same HTTP endpoint and authentication as the normal proxy identity. Its
+  // distinct id is persisted by native Codex so a reopened task stays on summaries.
+  const summary = CODEX_SUMMARY_COMPACT_PROVIDER_ID;
+  args.push(
+    '-c', `model_providers.${summary}.name="Cindy Summary"`,
+    '-c', `model_providers.${summary}.base_url="${baseUrl}"`,
+    '-c', `model_providers.${summary}.wire_api="responses"`,
+    '-c', authArg.replace(`model_providers.${p}.`, `model_providers.${summary}.`),
+    '-c', `model_providers.${summary}.supports_websockets=false`,
+  );
+  const c = CODEX_CINDY_COMPACT_PROVIDER_ID;
+  const cindyCompactAuthArg = authMode === 'oauth-bearer'
+    ? `model_providers.${c}.requires_openai_auth=true`
+    : `model_providers.${c}.env_key="${CODEX_GATEWAY_ENV_KEY}"`;
+  args.push(
+    '-c', `model_providers.${c}.name="OpenAI"`,
+    '-c', `model_providers.${c}.base_url="${baseUrl}"`,
+    '-c', `model_providers.${c}.wire_api="responses"`,
+    '-c', cindyCompactAuthArg,
+    '-c', `model_providers.${c}.supports_websockets=false`,
+  );
   if (authMode === 'oauth-bearer') {
     // OpenAI 身份 provider(见 CODEX_OPENAI_COMPACT_PROVIDER_ID):默认 model_provider
     // 仍是 cindy_gateway(本地压缩,安全缺省),订阅直连 thread 由 maker-core 在
@@ -125,12 +159,17 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
       //  - prompt 改走原生 developerInstructions:Codex 0.145 自动 compact 会把当前
       //    session 的 canonical developer context 重新注入 replacement history(中途
       //    compact)或下一次正常采样(pre-turn compact),无需 proxy 逐请求重复注入。
+      // Codex 的 WS 会话按 thread 建立；upgrade 带 thread id，collab_spawn 还会带
+      // subagent 身份与 parent thread id。loopback proxy 因此可以只对命中独立
+      // Subagent Provider 路由的子 thread 回 426，让该会话降到 HTTP transform，
+      // 无需牺牲父 thread 的原生 WS。
       '-c', `model_providers.${o}.supports_websockets=true`,
       // is_openai + codex-backend OAuth 命中时 codex 默认对 /responses 请求体做 zstd
       // 压缩(enable_request_compression 默认开);loopback proxy 要整段 JSON.parse
       // 改写请求体,无法解 zstd,必须显式关掉(仅少传输优化,无功能损失)。
-      '-c', 'features.enable_request_compression=false',
     );
   }
+  // OpenAI identity 可能启用 zstd；loopback proxy 需要解析 JSON 做路由和 prompt 注入。
+  args.push('-c', 'features.enable_request_compression=false');
   return args;
 }

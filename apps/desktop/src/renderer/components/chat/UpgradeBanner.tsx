@@ -43,6 +43,8 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 
 interface UpgradeBannerProps {
   hostId: string;
+  /** 轮 22-F2:该 banner 属于哪个 daemon —— 'cc' | 'pi'(store 按 hostId+agent 双键)。 */
+  agent: 'cc' | 'pi';
   /**
    * Session that owns this banner instance (one banner per ChatView). If set
    * and the session has a last user message, U3 will auto-resend it after the
@@ -174,14 +176,14 @@ async function snapshotRetryCandidate(sessionId: string): Promise<RetryCandidate
  * Hook — 订阅 ccMgrUpgradeStore 中给定 hostId 的 pending state。
  * Returns null when no upgrade is pending for this host (banner 自身渲染 null)。
  */
-function useCcMgrUpgrade(hostId: string): { currentVersion: string; availableVersion: string } | null {
-  const getSnapshot = useCallback(() => getCcMgrUpgradeSnapshot(hostId), [hostId]);
+function useCcMgrUpgrade(hostId: string, agent: 'cc' | 'pi'): { currentVersion: string; availableVersion: string; agent: 'cc' | 'pi' } | null {
+  const getSnapshot = useCallback(() => getCcMgrUpgradeSnapshot(hostId, agent), [hostId, agent]);
   return useSyncExternalStore(subscribeCcMgrUpgradeStore, getSnapshot, getSnapshot);
 }
 
-export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBannerProps) {
+export function UpgradeBanner({ hostId, agent, sessionId, className, style }: UpgradeBannerProps) {
   const { t } = useTranslation();
-  const pending = useCcMgrUpgrade(hostId);
+  const pending = useCcMgrUpgrade(hostId, agent);
   const [upgrading, setUpgrading] = useState(false);
 
   if (!pending) return null;
@@ -197,7 +199,8 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
     // (sessionService.get is IPC) — see snapshotRetryCandidate doc.
     const retry = sessionId ? await snapshotRetryCandidate(sessionId) : null;
     try {
-      const { daemonReady } = await forceUpgradeCcMgr(hostId, sessionId ?? undefined);
+      // 轮 22:传 pending.agent —— cc-mgr 或 pi-manager 升级走不同 force-upgrade。
+      const { daemonReady } = await forceUpgradeCcMgr(hostId, sessionId ?? undefined, pending.agent);
       // 成功 → main 推 available=null, store 自动清空 → 本 banner 渲染 null。
       // 不需要这里主动 setUpgrading(false), 组件直接 unmount。
       //
@@ -221,7 +224,7 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
           retry.mentions,
         );
       } else if (retry && !daemonReady) {
-        toast.error(t('chat.upgradeBanner.daemonNotReady'), { duration: 8000 });
+        toast.error(t('chat.upgradeBanner.daemonNotReady', { manager: mgrName }), { duration: 8000 });
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -233,12 +236,13 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
   const handleDismiss = async (): Promise<void> => {
     if (upgrading) return;
     try {
-      await dismissCcMgrUpgrade(hostId);
+      await dismissCcMgrUpgrade(hostId, agent);
     } catch {
       // dismiss 失败无害, 用户下次重启 desktop 还会再提示
     }
   };
 
+  const mgrName = pending.agent === 'pi' ? 'pi-manager' : 'cc-manager';
   return (
     <div
       className={cn(
@@ -255,8 +259,8 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
       )}
       <span className="text-xs text-[var(--upgrade-banner-fg)] flex-1 break-all">
         {upgrading
-          ? t('chat.upgradeBanner.upgrading', { hostId })
-          : t('chat.upgradeBanner.description', { hostId })}
+          ? t('chat.upgradeBanner.upgrading', { hostId, manager: mgrName })
+          : t('chat.upgradeBanner.description', { hostId, manager: mgrName })}
       </span>
       {!upgrading && (
         <button
@@ -267,7 +271,7 @@ export function UpgradeBanner({ hostId, sessionId, className, style }: UpgradeBa
             'text-[var(--upgrade-banner-fg)]',
             'hover:opacity-70 transition-opacity',
           )}
-          title={t('chat.upgradeBanner.upgradeTitle')}
+          title={t('chat.upgradeBanner.upgradeTitle', { manager: mgrName })}
         >
           <ArrowUpCircle size={12} />
           {t('chat.upgradeBanner.upgrade')}

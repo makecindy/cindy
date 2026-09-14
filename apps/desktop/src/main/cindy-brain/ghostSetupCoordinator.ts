@@ -543,7 +543,7 @@ function findAllowedAction(
   return null;
 }
 
-function validatePlan(
+export function validatePlan(
   plan: GhostSetupPlan | undefined,
   assessment: GhostSetupAssessment,
 ): GhostSetupPlan | null {
@@ -611,7 +611,7 @@ function validateReauthPlan(
 }
 
 /** 把 ready assessment 的建议映射成现有卡流程可消费的单项 expired assessment。 */
-function toReauthInteractionAssessment(
+export function toReauthInteractionAssessment(
   assessment: GhostSetupAssessment,
 ): GhostSetupAssessment | null {
   if (assessment.state !== 'ready' || !assessment.reauthSuggest) return null;
@@ -637,7 +637,7 @@ function toReauthInteractionAssessment(
   };
 }
 
-function defaultPlan(assessment: GhostSetupAssessment): GhostSetupPlan {
+export function defaultPlan(assessment: GhostSetupAssessment): GhostSetupPlan {
   const steps = assessment.groups.flatMap((group, index) => {
     if (group.items.some((item) => item.state === 'satisfied')) return [];
     return group.items.flatMap((item, itemIndex) => {
@@ -660,7 +660,7 @@ function defaultPlan(assessment: GhostSetupAssessment): GhostSetupPlan {
   return { assessmentRevision: assessment.revision, steps };
 }
 
-function toSnapshot(
+export function toSnapshot(
   requestId: string,
   identity: GhostSetupInteractionSnapshot['ghost'],
   assessment: GhostSetupAssessment,

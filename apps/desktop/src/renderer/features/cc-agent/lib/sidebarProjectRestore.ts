@@ -2,15 +2,59 @@ import type { Session } from '@/lib/ccAgent.types';
 
 import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
 import { sessionActivityMs } from './dateSessionGrouping';
-import { groupSessions, projectIdentityKeyForSession } from './projectGrouping';
+import {
+  groupSessions,
+  projectIdentityKeyForSession,
+  type PersistentLocalProject,
+} from './projectGrouping';
+import { isProjectHidden } from './sidebarProjectVisibility';
 
-type RestoreVendorPredicate = (session: Pick<Session, 'agentKind'>) => boolean;
+type SidebarProjectRestoreHandler = (projectKey: string) => Promise<boolean>;
+
+let sidebarProjectRestoreHandler: SidebarProjectRestoreHandler | null = null;
+
+function findMatchingProjectKey(
+  projectKey: string,
+  candidates: ReadonlySet<string>,
+  localPlatform: string,
+): string | null {
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
+  if (comparisonKey == null) return null;
+  return (
+    Array.from(candidates).find(
+      (candidate) => projectKeyComparisonKey(candidate, localPlatform) === comparisonKey,
+    ) ?? null
+  );
+}
+
+/**
+ * The sidebar owns both the hidden-project snapshot and the active Project
+ * filter. Creation routes live in a sibling React tree, so they delegate the
+ * restore transaction here instead of duplicating those two pieces of state.
+ */
+export function registerSidebarProjectRestoreHandler(
+  handler: SidebarProjectRestoreHandler,
+): () => void {
+  sidebarProjectRestoreHandler = handler;
+  return () => {
+    if (sidebarProjectRestoreHandler === handler) sidebarProjectRestoreHandler = null;
+  };
+}
+
+export function requestSidebarProjectRestore(projectKey: string): Promise<boolean> {
+  const handler = sidebarProjectRestoreHandler;
+  return handler?.(projectKey) ?? Promise.resolve(false);
+}
+
+type RestoreVendorPredicate = (session: { agentKind?: string | null }) => boolean;
 
 interface CollectRestorableProjectKeysOptions {
   sessions: readonly Session[];
+  persistentLocalProjects?: readonly PersistentLocalProject[];
   lastActivityCutoff: number | null;
   pinnedProjectKeys: ReadonlySet<string>;
   vendorPredicate: RestoreVendorPredicate | null;
+  localPlatform?: string;
 }
 
 /**
@@ -24,24 +68,52 @@ interface CollectRestorableProjectKeysOptions {
  */
 export function collectRestorableProjectKeys({
   sessions,
+  persistentLocalProjects = [],
   lastActivityCutoff,
   pinnedProjectKeys,
   vendorPredicate,
+  localPlatform = '',
 }: CollectRestorableProjectKeysOptions): ReadonlySet<string> {
   const vendorSessions = vendorPredicate ? sessions.filter(vendorPredicate) : sessions;
+  const vendorProjects = vendorPredicate
+    ? persistentLocalProjects.filter(
+        (project) =>
+          project.knownAgentKinds.length === 0 ||
+          project.knownAgentKinds.some((agentKind) => vendorPredicate({ agentKind })),
+      )
+    : persistentLocalProjects;
   const activitySessions =
     lastActivityCutoff === null
       ? vendorSessions
       : vendorSessions.filter((session) => sessionActivityMs(session) >= lastActivityCutoff);
-  const activityGroups = groupSessions(activitySessions, { includePinnedInProjects: true });
-  const allGroups =
+  const activityProjects =
     lastActivityCutoff === null
-      ? activityGroups
-      : groupSessions(vendorSessions, { includePinnedInProjects: true });
+      ? vendorProjects
+      : vendorProjects.filter(
+          (project) => new Date(project.lastUsedAt).getTime() >= lastActivityCutoff,
+        );
+  const activityGroups = groupSessions(activitySessions, {
+    includePinnedInProjects: true,
+    persistentLocalProjects: activityProjects,
+    localPlatform,
+  });
+  const allGroups = groupSessions(sessions, {
+    includePinnedInProjects: true,
+    persistentLocalProjects,
+    localPlatform,
+  });
   const projectKeys = new Set(activityGroups.projects.map((project) => project.projectKey));
+  const pinnedComparisonKeys = new Set(
+    Array.from(pinnedProjectKeys)
+      .map((projectKey) => projectKeyComparisonKey(projectKey, localPlatform))
+      .filter((projectKey): projectKey is string => projectKey != null),
+  );
 
   for (const project of allGroups.projects) {
-    if (pinnedProjectKeys.has(project.projectKey)) projectKeys.add(project.projectKey);
+    const comparisonKey = projectKeyComparisonKey(project.projectKey, localPlatform);
+    if (comparisonKey != null && pinnedComparisonKeys.has(comparisonKey)) {
+      projectKeys.add(project.projectKey);
+    }
   }
   for (const session of allGroups.pinned) {
     if (session.workspaceKind === 'dialogue') continue;
@@ -84,18 +156,51 @@ export async function restoreHiddenProjectIfPresent({
     return false;
   }
 
-  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
-  const currentProjectKey =
-    comparisonKey == null
-      ? null
-      : Array.from(getCurrentProjectKeys()).find(
-          (candidate) =>
-            projectKeyComparisonKey(candidate, localPlatform) === comparisonKey,
-        ) ?? null;
+  const currentProjectKey = findMatchingProjectKey(
+    projectKey,
+    getCurrentProjectKeys(),
+    localPlatform,
+  );
   if (currentProjectKey == null) return false;
 
   // A restored project must also be admitted by an explicit Project filter.
   // This operation is idempotent, unlike the user-facing filter toggle.
   ensureProjectIncluded(currentProjectKey);
   return true;
+}
+
+interface RestoreSelectedHiddenProjectOptions {
+  projectKey: string;
+  hiddenProjectKeys: ReadonlySet<string>;
+  setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
+  getCurrentProjectKeys: () => ReadonlySet<string>;
+  ensureProjectIncluded: (projectKey: string) => void;
+  localPlatform: string;
+}
+
+/**
+ * Restore a project explicitly selected from the new-task folder picker.
+ *
+ * Unlike the old sidebar "New Project" action, selection must continue into
+ * the draft after restoring. The chosen path itself is therefore the future
+ * project key even when the restored project currently has no visible tasks.
+ * Every explicit selection is admitted by the current Project filter, while
+ * the persisted hidden-project state is only touched when the snapshot says
+ * this project is actually hidden.
+ */
+export async function restoreSelectedHiddenProject({
+  projectKey,
+  hiddenProjectKeys,
+  setProjectHidden,
+  getCurrentProjectKeys,
+  ensureProjectIncluded,
+  localPlatform,
+}: RestoreSelectedHiddenProjectOptions): Promise<boolean> {
+  const wasHidden = isProjectHidden(projectKey, hiddenProjectKeys, localPlatform);
+  if (wasHidden) await setProjectHidden(projectKey, false);
+
+  ensureProjectIncluded(
+    findMatchingProjectKey(projectKey, getCurrentProjectKeys(), localPlatform) ?? projectKey,
+  );
+  return wasHidden;
 }

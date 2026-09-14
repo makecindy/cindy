@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ModelRegistry } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type ModelRegistry } from '@cindy/model-providers';
 
 import type { ModelAccessGatewayModel } from '../modelAccess.js';
 import {
@@ -87,9 +87,79 @@ describe('gatewayPricingCatalog', () => {
       costDiscount: 0.4,
     });
   });
+
+  it('preserves Fast/Priority baseline and long-context prices', () => {
+    const catalog = gatewayPricingCatalog(
+      [
+        model('fast-model', {
+          inputCostPerTokenPriority: 0.00001,
+          outputCostPerTokenPriority: 0.00006,
+          cacheReadInputTokenCostPriority: 0.000001,
+          inputCostPerTokenAbove272kTokensPriority: 0.00002,
+          outputCostPerTokenAbove272kTokensPriority: 0.00009,
+          cacheReadInputTokenCostAbove272kTokensPriority: 0.000002,
+        }),
+      ],
+      'USD',
+    );
+
+    expect(catalog.xd['fast-model']?.priority).toMatchObject({
+      inputPerMtok: 10,
+      outputPerMtok: 60,
+      cacheReadPerMtok: 1,
+      inputTokenPriceBands: [
+        { minInputTokens: 272_001, inputPerMtok: 20, outputPerMtok: 90, cacheReadPerMtok: 2 },
+      ],
+    });
+  });
 });
 
 describe('registryPricingCatalog', () => {
+  it('projects the audited public tariffs without backfilling Gateway sale prices', () => {
+    const registry = BUNDLED_CATALOG.modelRegistry!;
+    const luna = providerReferencePriceQuote('openai', 'gpt-5.6-luna', registry, { at: '2026-09-11' });
+    expect(luna).toMatchObject({ inputPerMtok: 0.2, cacheCreatePerMtok: 0.25,
+      priority: { inputPerMtok: 0.4, cacheCreatePerMtok: 0.5,
+        inputTokenPriceBands: expect.arrayContaining([
+          expect.objectContaining({ minInputTokens: 272001, inputPerMtok: 0.8, cacheCreatePerMtok: 1 }),
+        ]),
+      },
+    });
+    expect(providerReferencePriceQuote('openai', 'gpt-5.4-pro', registry, { at: '2026-09-11', inputTokens: 272001 }))
+      .toMatchObject({ inputPerMtok: 60, outputPerMtok: 270 });
+    expect(providerReferencePriceQuote('anthropic', 'claude-fable-5-1', registry, { at: '2026-09-11' }))
+      .toMatchObject({ inputPerMtok: 10, cacheReadPerMtok: 0.25, cacheCreatePerMtok: 12.5 });
+    expect(providerReferencePriceQuote('minimax-cn', 'MiniMax-M2.7', registry, { at: '2026-09-11' }))
+      .toMatchObject({ currency: 'CNY', inputPerMtok: 2.1, cacheCreatePerMtok: 2.625 });
+    expect(providerReferencePriceQuote('minimax-global', 'MiniMax-M2.7', registry, { at: '2026-09-11' }))
+      .toMatchObject({ currency: 'USD', inputPerMtok: 0.3, cacheCreatePerMtok: 0.375 });
+    expect(registryPricingCatalog(registry).xd).toBeUndefined();
+    const gateway = gatewayPricingCatalog([model('openai/gpt-5.6-luna', {
+      currency: 'USD', inputCostPerToken: 0.0000002, outputCostPerToken: 0.0000012,
+      cacheReadInputTokenCost: 0.00000002,
+    })], 'USD');
+    expect(gateway.xd['openai/gpt-5.6-luna'].cacheCreatePerMtok).toBeUndefined();
+  });
+
+  it.each(['fast', 'priority'] as const)('projects declared %s prices without inventing unavailable tariffs', (variant) => {
+    const entry = structuredClone(BUNDLED_CATALOG.modelRegistry!.models.find((model) => model.id === 'openai/gpt-6-astra')!);
+    const prices = structuredClone(BUNDLED_CATALOG.modelRegistry!.baseModels!.find(model => model.id === entry.modelRef)!.referencePriceGroups![0].prices);
+    entry.routes[0]!.referencePrices = prices;
+    prices.find((price) => price.variant === 'fast')!.variant = variant;
+    const registry: ModelRegistry = { schemaVersion: 1, updatedAt: '2026-09-04T00:00:00Z', models: [entry] };
+    const getQuote = (at = '2026-09-04') => providerReferencePriceQuote('openai', 'gpt-6-astra', registry, { at });
+    expect(getQuote()).toMatchObject({ inputPerMtok: 10, priority: { inputPerMtok: 20, cacheCreatePerMtok: 25 } });
+
+    const fast = prices.find((price) => price.variant === variant)!;
+    fast.effectiveFrom = '2026-09-05';
+    expect(getQuote()?.priority).toBeUndefined();
+    expect(getQuote('2026-09-05')?.priority).toBeDefined();
+    fast.currency = 'CNY';
+    expect(getQuote('2026-09-05')?.priority).toBeUndefined();
+    entry.routes[0]!.referencePrices = prices.filter((price) => price.variant === 'standard');
+    expect(getQuote()?.priority).toBeUndefined();
+  });
+
   it('preserves the bounds of a single reference-price interval', () => {
     const registry: ModelRegistry = {
       schemaVersion: 1,

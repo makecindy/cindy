@@ -1,3 +1,5 @@
+import { codexAccountState } from '../maker-host/codex-account-auth.js';
+import { readClaudeAccountOAuth } from '../maker-host/subscription-account-auth.js';
 /**
  * oneshotProviderUsability.ts — 快问快答钉档的「已配置凭证」同步探测。
  *
@@ -6,7 +8,7 @@
  * 选项是清单的失职。这里全部走同步缓存态(cindy-prefs 读 handler 是 sendSync,
  * 不能 async);它是展示层过滤,不是安全边界——执行侧仍逐候选现查现验。
  */
-import type { AgentKind, Provider } from '@cindy/model-providers';
+import { storedCustomProviderId, type AgentKind, type Provider } from '@cindy/model-providers';
 
 import { readClaudeApiKey } from '../maker-host/auth-adapters.js';
 import { getClaudeAiOAuthForSpawn } from '../maker-host/claude-oauth-refresh.js';
@@ -21,6 +23,11 @@ import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
  * 自定义供应商分支)的凭证判读逐一对应;内置只认执行侧可执行的四家。
  */
 export function hasOneshotProviderCredential(provider: Provider, agentKind: AgentKind): boolean {
+  if (provider.source !== 'builtin') {
+    if (provider.auth.native === 'claude') return Boolean(readClaudeAccountOAuth(provider.id)?.accessToken);
+    if (provider.auth.native === 'xai') return hasGrokOAuthLogin(provider.id);
+    if (provider.auth.native === 'codex') return codexAccountState(provider.id).authenticated;
+  }
   if (provider.source === 'builtin') {
     switch (provider.id) {
       case 'xd':
@@ -39,7 +46,10 @@ export function hasOneshotProviderCredential(provider: Provider, agentKind: Agen
   if (!routing) return false;
   if (routing.authStrategy === 'none') return true;
   if (routing.authStrategy === 'oauth-token') {
-    return readCachedGenericOAuthAccessToken(provider.id, provider.auth?.oauth) != null;
+    return readCachedGenericOAuthAccessToken(
+      storedCustomProviderId(provider.id),
+      provider.auth?.oauth,
+    ) != null;
   }
   if (routing.authStrategy === 'api-key-header') {
     if (readCustomProviderKey(provider.id, agentKind)) return true;

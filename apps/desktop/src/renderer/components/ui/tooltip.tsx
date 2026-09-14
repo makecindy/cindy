@@ -62,9 +62,8 @@ const TooltipContent = React.forwardRef<
         // select-none:tooltip 是 hover 提示 chrome,role="tooltip" 不在
         // globals.css 的全局禁选名单里,不加会让全 app 提示文字可被划选。
         'z-[60] select-none rounded-xl px-2.5 py-1.5 text-13 leading-snug shadow-lg',
-        // Light：白底深字 + 浅边框；Dark：近黑底白字
-        'border border-[var(--cmd-palette-border)] bg-[var(--tooltip-bg)] text-[var(--tooltip-text)]',
-        'dark:border-transparent',
+        // Cindy tooltip 两模式都是深底白字；Board 浅描边叠在深底上会看成一圈白边。
+        'border border-transparent bg-[var(--tooltip-bg)] text-[var(--tooltip-text)]',
         'max-w-[420px] break-all', // 长路径允许任意位置截断换行
         variant === 'mono' && 'font-mono',
         // 入场/出场动画:tooltip 是信息不是对象,入场纯 opacity 不缩放,
@@ -132,8 +131,8 @@ export interface TipProps {
 // 注意:不写出 React.HTMLAttributes 的具体类型,因为外层 Trigger(Popover/Dropdown 等)
 // 注入的 props 形态各异——用 ...rest 直接转发即可,Radix 的 Slot 会正确合并。
 // ref 类型用 unknown:外层 Trigger 可能是任何元素(button/span/img 等),Tip 不该限定。
-export const Tip = React.forwardRef<unknown, TipProps>(function Tip(
-  {
+export const Tip = React.forwardRef<unknown, TipProps>(function Tip(props, forwardedRef) {
+  const {
     text,
     children,
     mono,
@@ -144,14 +143,25 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(
     controlledOpen,
     contentClassName,
     ...rest
-  },
-  forwardedRef,
-) {
+  } = props;
   const isEmpty =
     disabled ||
     text === null ||
     text === undefined ||
     (typeof text === 'string' && text.length === 0);
+
+  // Radix Tooltip 要求 open 在整个生命周期里要么一直受控、要么一直非受控,来回切换
+  // 会抛 "changing from uncontrolled to controlled"。调用方常按状态临时受控(拖拽、
+  // 录音精修中),之后又交回 hover 驱动 —— 只要调用方**声明了**受控意图(传了
+  // controlledOpen / forceOpen 这两个 prop,哪怕当前值是 undefined),就从挂载起
+  // 走受控路径,交回时用本地 hover 状态模拟非受控行为。
+  const requestedOpen = controlledOpen ?? (forceOpen ? true : undefined);
+  const [hoverOpen, setHoverOpen] = React.useState(false);
+  const controlledRef = React.useRef(
+    'controlledOpen' in props || 'forceOpen' in props || requestedOpen !== undefined,
+  );
+  if (requestedOpen !== undefined) controlledRef.current = true;
+  const open = requestedOpen ?? (controlledRef.current ? hoverOpen : undefined);
 
   // 没有 tooltip 内容时,Tip 仍要保持"透明传递":把外层 props/ref 直接合并到 children,
   // 避免在复合 trigger 里成为 ref/事件断点。React 18 的 cloneElement 类型签名不接受 ref
@@ -165,7 +175,7 @@ export const Tip = React.forwardRef<unknown, TipProps>(function Tip(
 
   return (
     <TooltipProvider delayDuration={delay}>
-      <TooltipRoot open={controlledOpen ?? (forceOpen ? true : undefined)}>
+      <TooltipRoot open={open} onOpenChange={setHoverOpen}>
         <TooltipTrigger
           asChild
           ref={forwardedRef as React.Ref<HTMLButtonElement>}

@@ -4,7 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 import userEvent from '@testing-library/user-event';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ModelPickerOverlay } from '../CustomProviderDialog';
+import { ModelPickerOverlay } from '../ProviderConnectionDialog';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -59,6 +59,10 @@ describe('ModelPickerOverlay', () => {
 
     const user = userEvent.setup();
     render(<Harness />);
+
+    expect(
+      screen.queryAllByRole('button', { name: 'settings.providers.custom.cancel' }),
+    ).toHaveLength(1);
 
     await waitFor(() =>
       expect(document.activeElement).toBe(

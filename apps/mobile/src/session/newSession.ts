@@ -1,5 +1,9 @@
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { collapseWorktreeDirForGrouping } from '@cindy/maker-shared/worktree-paths';
+import {
+  DEFAULT_DRAFT_SESSION_TITLE,
+  deriveOptimisticSessionTitle,
+} from '@cindy/maker-shared/session-title';
 import { i18n } from '@/i18n';
 import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/mobileMakerTransport';
 import type { DeviceProvidersPayload } from '@/device-link/deviceProvidersCache';
@@ -72,11 +76,19 @@ export interface NewSessionDeviceOption {
 export interface NewSessionStoredPreferences {
   agentKind: NewSessionAgentKind | null;
   device: NewSessionDeviceOption | null;
+  /** 上次显式选择的项目/对话模式；null 表示尚未选择，沿用入口默认。 */
+  workspaceKind: NewSessionWorkspaceKind | null;
   /**
    * 每个 agent 上次在新建页显式选过的权限档(对齐桌面 lastByVendor 的权限记忆语义);
    * 没选过 = 缺失,回落该 agent 的安全种子默认。'plan' 不入记忆(计划模式是独立开关)。
    */
   permissionModeByAgent: Partial<Record<NewSessionAgentKind, string>>;
+  /**
+   * 每台被控电脑上次在新建页**显式选择**的项目目录(deviceId → 绝对路径,#4103)。
+   * 只在用户点选最近项目 / 在目录浏览器里确认时写入;自动取最近项目首项不算显式选择。
+   * 按设备归属,避免把一台电脑的路径套到另一台;没有记忆的设备沿用最近项目默认逻辑。
+   */
+  workingDirByDevice: Record<string, string>;
 }
 
 export interface NewSessionDraftSummary {
@@ -445,6 +457,8 @@ export function resolveRecentModelAndProvider(
  *   (循环 ≤3,防代际持续抖动死循环);重拉失败且代际稳定 → 未知 → 信任(fail-open)。
  */
 export async function resolveSubmitGuardCatalog(args: {
+  /** 普通创建保留用户选择，由后台建链后的权威目录终检；Goal 不适用。 */
+  deferRefreshToCreation?: boolean;
   /** 设备缓存读取(驱逐即清空;写入受代际门控)。 */
   cached: () => DeviceProvidersPayload | undefined;
   /** 当前设备缓存代际(驱逐 +1;0 = 从未驱逐)。 */
@@ -455,6 +469,10 @@ export async function resolveSubmitGuardCatalog(args: {
   buildRows: (payload: DeviceProvidersPayload) => readonly ProviderModelRow[];
 }): Promise<{ rows: readonly ProviderModelRow[]; catalogKnown: boolean; genAt: number }> {
   const { cached, gen, fetch, buildRows } = args;
+  if (args.deferRefreshToCreation) {
+    // 旧缓存可能缺少刚连接的来源，不能先把用户选择回退、再让 fresh 校验这个回退值。
+    return { rows: [], catalogKnown: false, genAt: gen() };
+  }
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const genAt = gen();
     const hit = cached();
@@ -728,11 +746,8 @@ export function resolveNewSessionAutoDefault(input: {
   rowsAgentKind: NewSessionAgentKind;
   /** 供应商目录是否已就绪;未就绪时来源校验信任最近会话(见 validateModelProviderId)。 */
   catalogReady: boolean;
-  /** 目录是否「明确不可用」(拉取失败,典型:旧被控端无 maker:provider:list 通道)。
-   *  与 catalogReady=false(仍在加载/切设备间隙)区分:仅明确不可用才放行
-   *  capabilities 扁平回退,否则回退被 !catalogReady 的 return null 挡死
-   *  (codex review P2)。 */
-  providersUnavailable?: boolean;
+  /** Only an explicitly unsupported provider:list channel permits capabilities fallback. */
+  providersUnsupported?: boolean;
   /** 仅在 provider-aware 列表不可用时传入,避免绕过被控端的模型可见性设置(上游 main 移植)。 */
   availableModels?: readonly MobileModelOption[];
   currentEffort: string;
@@ -745,7 +760,7 @@ export function resolveNewSessionAutoDefault(input: {
     modelRows,
     rowsAgentKind,
     catalogReady,
-    providersUnavailable = false,
+    providersUnsupported = false,
     availableModels = [],
     currentEffort,
   } = input;
@@ -786,9 +801,9 @@ export function resolveNewSessionAutoDefault(input: {
   // (上游 main 移植);provider-aware 列表由调用方传空 availableModels,避免区域
   // 默认绕过用户隐藏设置。目录未就绪(加载中/切设备间隙残留旧设备目录,
   // ready=false)则不动,等就绪后 effect 重算(codex review P1);目录「明确不可用」
-  // (旧被控端无 provider:list 通道或请求持续失败,error 非空)则放行扁平回退,
+  // (旧被控端明确不支持 provider:list 通道)才放行扁平回退,
   // 否则下方 availableModels 分支永远不可达(codex review P2)。
-  if (!catalogReady && !providersUnavailable) return null;
+  if (!catalogReady && !providersUnsupported) return null;
   // 在 ProviderModelRow 层面选行,保留来源身份(codex review P2):同 modelId 多
   // provider 时按 id 回查会把标记行错绑到首见 provider;标记行优先、无标记取
   // 首行,模型与 provider 同源。modelRows 为空(旧被控端/目录不可用)才走扁平回退。
@@ -798,7 +813,7 @@ export function resolveNewSessionAutoDefault(input: {
     : undefined;
   const flatDefault = providerRow
     ? undefined
-    : pickRegionalNewSessionDefault(availableModels, rowsAgentKind);
+    : providersUnsupported ? pickRegionalNewSessionDefault(availableModels, rowsAgentKind) : undefined;
   const defaultModel = providerRow?.model ?? flatDefault;
   if (!defaultModel) return null;
   return {
@@ -812,11 +827,19 @@ export function resolveNewSessionAutoDefault(input: {
   };
 }
 
+/**
+ * 空白新建的初始项目目录:草稿已有目录 → 不动;否则先用该设备记住的上次显式选择
+ * (#4103,不要求它仍在最近列表里——列表只保留 6 项,且用户本就有目录浏览入口),
+ * 没有记忆再取最近项目首项。
+ */
 export function pickInitialNewSessionWorkspace(
   currentWorkingDir: string,
   recentWorkspaces: readonly RecentWorkspaceOption[],
+  rememberedWorkingDir?: string | null,
 ): string | null {
   if (currentWorkingDir.trim()) return null;
+  // 记忆目录原样返回(首尾空格可能是路径的一部分),只用 trim 判空。
+  if (rememberedWorkingDir?.trim()) return rememberedWorkingDir;
   return recentWorkspaces[0]?.workingDir ?? null;
 }
 
@@ -858,14 +881,28 @@ export function normalizeCreateSessionResult(value: unknown): CreateSessionResul
 
 export function sessionFromCreateResult(
   result: CreateSessionResult,
-  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId'>,
+  fallback: Pick<NewSessionDraft, 'agentKind' | 'workspaceKind' | 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'workingDir' | 'providerId'> & {
+    firstMessage?: string;
+    attachments?: readonly { name?: string; originalName?: string; path?: string; category?: string }[];
+  },
   now = new Date(),
 ): RemoteSession {
   const iso = now.toISOString();
+  const first = fallback.attachments?.[0];
+  const optimisticTitle = deriveOptimisticSessionTitle({
+    text: fallback.firstMessage,
+    fileNames: (fallback.attachments ?? [])
+      .filter((file) => !file.path?.startsWith('clipboard://'))
+      .map((file) => file.originalName || file.name || '')
+      .filter(Boolean),
+    imageLabel: i18n.t('session.common.photo'),
+    fileLabel: i18n.t('session.common.file'),
+    firstFileIsImage: first?.category === 'image',
+  });
   return {
     id: result.sessionId,
     userId: '',
-    title: 'New remote session',
+    title: optimisticTitle || DEFAULT_DRAFT_SESSION_TITLE,
     workingDir: result.workDir ?? fallback.workingDir,
     workspaceKind: fallback.workspaceKind,
     model: fallback.model,

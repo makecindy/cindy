@@ -13,6 +13,7 @@
  * 构建 Claude 特定的目录列表和排序规则。
  */
 
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -75,4 +76,21 @@ export async function scanClaudeCustomizations(
   });
 
   return result;
+}
+
+/** Native project discovery walks to the nearest Git root (or filesystem root).
+ * Keep this runtime view separate from SkillHub's explicitly owned project list.
+ * Ancestors precede descendants so same-name winner selection keeps the closest source.
+ */
+export async function scanClaudeRuntimeSkills(workingDir: string): Promise<ListCustomizationsResult> {
+  let current = fs.realpathSync(workingDir);
+  const workingDirs: string[] = [];
+  while (true) {
+    workingDirs.unshift(current);
+    if (fs.existsSync(path.join(current, '.git'))) break;
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  return scanClaudeCustomizations({ workingDirs, kinds: ['skill'] });
 }

@@ -10,6 +10,7 @@ import {
   getAppShortcutPlatform,
   subscribeAppShortcuts,
 } from '../lib/appShortcutStore';
+import { isAppInteractionLocked } from '../lib/appInteractionLock';
 
 export interface UseAppShortcutOptions {
   /** false 时不挂监听 (如 BrowserTabBody 仅 active tab 响应)。默认 true。 */
@@ -53,6 +54,12 @@ export function useAppShortcut(
       const combos = getAppShortcutCombos(id);
       if (combos.length === 0) return;
       if (!combos.some((combo) => matchesKeyboardEvent(event, combo))) return;
+      if (isAppInteractionLocked()) {
+        event.preventDefault();
+        event.stopPropagation();
+        if (stopImmediate) event.stopImmediatePropagation();
+        return;
+      }
       if (!handlerRef.current(event)) return;
       event.preventDefault();
       event.stopPropagation();

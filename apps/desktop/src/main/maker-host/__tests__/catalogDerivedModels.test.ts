@@ -3,9 +3,9 @@
  *
  * 历史:本文件曾是「迁移前硬编码清单的逐字快照」守卫(规则 10 no-break)。统一重构后
  * 静态清单**按设计**退役——anthropic/openai/xd 的清单运行时动态注入(SDK 发现 /
- * codex 注册表 / 网关下发,见 active-catalog + model-discovery),bundled 只剩 xai。
+ * codex 注册表 / 网关下发,见 active-catalog + model-discovery),bundled 的 xai 仅作离线 fallback。
  * 冻结快照随之退役;本守卫改为守派生机制本身的契约:
- *   1. bundled 派生 = 仅 xai 静态清单(动态供应商零静态模型,不用假数据冒充);
+ *   1. bundled 派生 = xai 离线 fallback(账号发现成功后由账号快照收缩成员);
  *   2. 注入后的目录按 provider 序 flatMap + id 首见去重,per-agent 分叉字段透传;
  *   3. refreshCatalogDerivedModels 原地 splice(已建会话持引用可见新目录)。
  */
@@ -22,7 +22,10 @@ import {
   resolvePiGatewayDescriptorProviderId,
   resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
+  resolveModelDefaultContextWindow,
+  resolveModelContextProviderId,
 } from '../catalog-to-descriptors.js';
+import { sanitizeModelCatalogOverrides } from '../model-plane/localCatalogOverrides.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };
@@ -34,26 +37,67 @@ function injectedCatalog(): Catalog {
   for (const p of clone.providers) {
     if (p.id === 'anthropic') {
       p.models['claude-code'] = [
-        model('claude-opus-4-8', { name: 'Opus 4.8', contextWindow: 1_000_000, efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high', supportsFastMode: true, group: 'anthropic', sortOrder: 1 }),
+        model('claude-opus-4-8', {
+          name: 'Opus 4.8',
+          contextWindow: 1_000_000,
+          efforts: ['low', 'medium', 'high', 'xhigh', 'max'],
+          defaultEffort: 'high',
+          supportsFastMode: true,
+          group: 'anthropic',
+          sortOrder: 1,
+        }),
       ];
     }
     if (p.id === 'openai') {
       p.models.codex = [
-        model('gpt-5.5', { name: 'GPT-5.5', contextWindow: 272_000, efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true, group: 'gpt', sortOrder: 20 }),
+        model('gpt-5.5', {
+          name: 'GPT-5.5',
+          contextWindow: 272_000,
+          efforts: ['low', 'medium', 'high', 'xhigh'],
+          defaultEffort: 'high',
+          supportsFastMode: true,
+          group: 'gpt',
+          sortOrder: 20,
+        }),
       ];
       p.models['claude-code'] = [
-        model('chatgpt/gpt-5.5', { name: 'GPT-5.5', contextWindow: 272_000, group: 'gpt', sortOrder: 20 }),
+        model('chatgpt/gpt-5.5', {
+          name: 'GPT-5.5',
+          contextWindow: 272_000,
+          group: 'gpt',
+          sortOrder: 20,
+        }),
       ];
     }
     if (p.id === 'xd') {
       p.models['claude-code'] = [
         // 同 id 跨 provider:anthropic first-wins,xd 的这条在派生时被去重掉。
-        model('claude-opus-4-8', { name: 'Opus 4.8', contextWindow: 1_000_000, supportsFastMode: false, group: 'anthropic', sortOrder: 1 }),
+        model('claude-opus-4-8', {
+          name: 'Opus 4.8',
+          contextWindow: 1_000_000,
+          supportsFastMode: false,
+          group: 'anthropic',
+          sortOrder: 1,
+        }),
         // per-agent 分叉:同 id 在 cc=1M / codex=272k。
-        model('gpt-5.5', { name: 'GPT-5.5', contextWindow: 1_000_000, efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', group: 'gpt', sortOrder: 20 }),
+        model('gpt-5.5', {
+          name: 'GPT-5.5',
+          contextWindow: 1_000_000,
+          efforts: ['low', 'medium', 'high', 'xhigh'],
+          defaultEffort: 'high',
+          group: 'gpt',
+          sortOrder: 20,
+        }),
       ];
       p.models.codex = [
-        model('gpt-5.5', { name: 'GPT-5.5', contextWindow: 272_000, efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', group: 'gpt', sortOrder: 20 }),
+        model('gpt-5.5', {
+          name: 'GPT-5.5',
+          contextWindow: 272_000,
+          efforts: ['low', 'medium', 'high', 'xhigh'],
+          defaultEffort: 'high',
+          group: 'gpt',
+          sortOrder: 20,
+        }),
       ];
     }
   }
@@ -61,10 +105,78 @@ function injectedCatalog(): Catalog {
 }
 
 describe('deriveAvailableModels — dynamic-first catalog contract', () => {
-  it('adds native minimal thinking to reasoning-capable Pi models only', () => {
+  it('keeps explicit GPT-6 Pi effort capabilities in the picker and runtime descriptor', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const efforts = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
+    catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [
+      model('chatgpt/gpt-6-astra', {
+        contextWindow: 272_000,
+        maxOutput: 128_000,
+        efforts: [...efforts],
+        defaultEffort: 'medium',
+        reasoning: true,
+        reasoningEfforts: [...efforts],
+        reasoningDefaultEffort: 'medium',
+        supportsImageInput: true,
+      }),
+    ];
+    const expected = {
+      contextWindow: 272_000,
+      maxOutputTokens: 128_000,
+      efforts: [...efforts],
+      defaultEffort: 'medium',
+      supportsImageInput: true,
+    };
+    expect(deriveAvailableModels(catalog, 'pi').find((entry) => entry.id === 'chatgpt/gpt-6-astra'))
+      .toMatchObject(expected);
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-6-astra'))
+      .toMatchObject(expected);
+  });
+
+  it.each([
+    ['missing fields', {}],
+    ['null efforts', { reasoningEfforts: null, reasoningDefaultEffort: 'medium' }],
+    ['string efforts', { reasoningEfforts: 'medium', reasoningDefaultEffort: 'medium' }],
+    ['empty efforts', { reasoningEfforts: [], reasoningDefaultEffort: 'medium' }],
+    ['invalid effort', { reasoningEfforts: ['medium', 'ultra'], reasoningDefaultEffort: 'medium' }],
+    ['non-string effort', { reasoningEfforts: ['medium', null], reasoningDefaultEffort: 'medium' }],
+    ['missing default', { reasoningEfforts: ['medium'] }],
+    ['null default', { reasoningEfforts: ['medium'], reasoningDefaultEffort: null }],
+    ['default outside efforts', { reasoningEfforts: ['low'], reasoningDefaultEffort: 'medium' }],
+  ])('keeps legacy Pi minimal compatibility for %s in both descriptors', (_label, fields) => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    // Remote JSON can violate the static CatalogModel type at runtime.
+    const entry = {
+      ...model('legacy-reasoner', { efforts: ['low', 'medium', 'high'], defaultEffort: 'medium' }),
+      ...fields,
+    } as unknown as CatalogModel;
+    catalog.providers.find((provider) => provider.id === 'openai')!.models.pi = [entry];
+    const expected = { efforts: ['minimal', 'low', 'medium', 'high'], defaultEffort: 'medium' };
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === entry.id))
+      .toMatchObject(expected);
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', entry.id)).toMatchObject(expected);
+  });
+
+  it('publishes Pi effort controls only when the official catalog has an explicit thinking map', () => {
     const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
-    expect(pi.find((m) => m.id === 'xai/grok-4.3')?.efforts[0]).toBe('minimal');
-    expect(pi.find((m) => m.id === 'xai/grok-code-fast')?.efforts).toEqual([]);
+    expect(pi.find((m) => m.id === 'grok-4.3')?.efforts).toEqual([
+      'minimal',
+      'low',
+      'medium',
+      'high',
+    ]);
+    expect(pi.find((m) => m.id === 'grok-4.5')?.efforts).toEqual([
+      'minimal',
+      'low',
+      'medium',
+      'high',
+    ]);
+    expect(pi.find((m) => m.id === 'grok-4.6')?.efforts).toEqual([
+      'low',
+      'medium',
+      'high',
+      'xhigh',
+    ]);
   });
 
   it('preserves the explicit effort subset of a Pi BYOM model in remote capabilities', () => {
@@ -95,7 +207,9 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       efforts: ['low', 'high'],
       defaultEffort: 'high',
     });
-    expect(resolvePiRuntimeModelDescriptor(catalog, 'explicit-reasoning', 'reasoner')).toMatchObject({
+    expect(
+      resolvePiRuntimeModelDescriptor(catalog, 'explicit-reasoning', 'reasoner'),
+    ).toMatchObject({
       efforts: ['low', 'high'],
       defaultEffort: 'high',
     });
@@ -114,13 +228,13 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
             wireProtocol: 'openai-responses',
             models: [
               {
-                id: 'xai/grok-4.3',
+                id: 'grok-4.3',
                 name: 'Grok 4.3 through BYOM',
                 reasoning: true,
                 reasoningEfforts: ['low'],
               },
               {
-                id: 'xai/grok-4.5',
+                id: 'grok-4.5',
                 name: 'Grok 4.5 without declared reasoning',
               },
             ],
@@ -130,25 +244,25 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     );
 
     const flatModels = deriveAvailableModels(catalog, 'pi');
-    const flat = flatModels.filter((m) => m.id === 'xai/grok-4.3');
+    const flat = flatModels.filter((m) => m.id === 'grok-4.3');
     expect(flat).toHaveLength(1);
     expect(flat[0]).toMatchObject({
       efforts: ['low'],
       defaultEffort: 'low',
     });
     expect(
-      resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'xai/grok-4.3'),
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'grok-4.3'),
     ).toMatchObject({
       efforts: ['low'],
       defaultEffort: 'low',
     });
-    expect(flatModels.find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+    expect(flatModels.find((m) => m.id === 'grok-4.5')).toMatchObject({
       efforts: [],
       defaultEffort: null,
     });
   });
 
-  it('resolves the cindy gateway descriptor from built-ins when a non-reasoning BYOM claims the same id first', () => {
+  it('resolves the native xAI descriptor when a non-reasoning BYOM claims the same id first', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.providers.unshift(
       buildUserProvider({
@@ -159,22 +273,22 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
           pi: {
             baseUrl: 'http://127.0.0.1:11434/v1',
             wireProtocol: 'openai-responses',
-            models: [{ id: 'xai/grok-4.5', name: 'Grok 4.5 without reasoning' }],
+            models: [{ id: 'grok-4.5', name: 'Grok 4.5 without reasoning' }],
           },
         },
       }),
     );
 
-    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'grok-4.5')).toMatchObject({
       efforts: [],
       defaultEffort: null,
     });
     expect(
-      resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'xai/grok-4.5'),
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'grok-4.5'),
     ).toMatchObject({ efforts: [], defaultEffort: null });
-    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'xai/grok-4.5')).toMatchObject({
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'xai', 'grok-4.5')).toMatchObject({
       efforts: ['minimal', 'low', 'medium', 'high'],
-      defaultEffort: 'high',
+      defaultEffort: 'medium',
     });
   });
 
@@ -184,25 +298,37 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const xd = catalog.providers.find((provider) => provider.id === 'xd');
     expect(openai).toBeDefined();
     expect(xd).toBeDefined();
-    openai!.models.pi = [model('shared-default-route', {
-      name: 'Subscription Shared',
-      contextWindow: 128_000,
-    })];
-    xd!.models.pi = [model('shared-default-route', {
-      name: 'XD Shared',
-      contextWindow: 200_000,
-    })];
+    openai!.models.pi = [
+      model('shared-default-route', {
+        name: 'Subscription Shared',
+        contextWindow: 128_000,
+        efforts: ['low'],
+        defaultEffort: 'low',
+      }),
+    ];
+    xd!.models.pi = [
+      model('shared-default-route', {
+        name: 'XD Shared',
+        contextWindow: 200_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }),
+    ];
 
     expect(resolvePiGatewayDescriptorProviderId(null)).toBe('xd');
     expect(resolvePiGatewayDescriptorProviderId('cindy')).toBe('xd');
-    expect(resolvePiGatewayDescriptorProviderId('openai')).toBe('openai');
-    expect(resolvePiRuntimeModelDescriptor(
-      catalog,
-      resolvePiGatewayDescriptorProviderId(null),
-      'shared-default-route',
-    )).toMatchObject({
+    expect(resolvePiGatewayDescriptorProviderId('openai')).toBe('xd');
+    expect(
+      resolvePiRuntimeModelDescriptor(
+        catalog,
+        resolvePiGatewayDescriptorProviderId('openai'),
+        'shared-default-route',
+      ),
+    ).toMatchObject({
       displayName: 'XD Shared',
       contextWindow: 200_000,
+      efforts: ['high'],
+      defaultEffort: 'high',
     });
   });
 
@@ -227,23 +353,42 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     );
   });
 
-  it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {
+  it('bundled(未注入)派生 = xai 离线 fallback,其它动态供应商不贡献条目', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
     expect(cc.map((m) => m.id)).toEqual([
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
-      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
-      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.6',
+      'xai/grok-4.5',
+      'xai/grok-4.3',
+      'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309',
+      'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning',
+      'xai/grok-4.20',
+      'xai/grok-code-fast',
     ]);
     expect(codex.map((m) => m.id)).toEqual([
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
-      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
-      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.6',
+      'xai/grok-4.5',
+      'xai/grok-4.3',
+      'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309',
+      'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning',
+      'xai/grok-4.20',
+      'xai/grok-code-fast',
     ]);
   });
 
   it('xai 静态条目字段透传(窗口 / effort / 分组)', () => {
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
+    expect(codex.find((m) => m.id === 'xai/grok-4.6')).toMatchObject({
+      displayName: 'Grok 4.6',
+      contextWindow: 500_000,
+      efforts: ['low', 'medium', 'high'],
+      defaultEffort: 'high',
+      group: 'grok',
+    });
     expect(codex.find((m) => m.id === 'xai/grok-4.3')).toMatchObject({
       displayName: 'Grok 4.3',
       contextWindow: 1_000_000,
@@ -263,7 +408,9 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
     for (const p of catalog.providers) {
       if (p.id !== 'openai') continue;
-      p.models.codex = [model('verified/known', { contextWindow: 372_000, contextWindowVerified: true })];
+      p.models.codex = [
+        model('verified/known', { contextWindow: 372_000, contextWindowVerified: true }),
+      ];
     }
     const d = deriveAvailableModels(catalog, 'codex').find((m) => m.id === 'verified/known');
     expect(d?.contextWindow).toBe(372_000);
@@ -278,9 +425,15 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(ids).toEqual([
       'claude-opus-4-8',
       'chatgpt/gpt-5.5',
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
-      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
-      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.6',
+      'xai/grok-4.5',
+      'xai/grok-4.3',
+      'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309',
+      'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning',
+      'xai/grok-4.20',
+      'xai/grok-code-fast',
       'gpt-5.5',
     ]);
     // 首见胜出:opus 取 anthropic 条目(supportsFastMode=true),不是 xd 的 false。
@@ -298,19 +451,13 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
         : entry,
     );
     xd.models.codex = (xd.models.codex ?? []).map((entry) =>
-      entry.id === 'gpt-5.5'
-        ? { ...entry, newSessionDefault: ['claude-code', 'codex'] }
-        : entry,
+      entry.id === 'gpt-5.5' ? { ...entry, newSessionDefault: ['claude-code', 'codex'] } : entry,
     );
     anthropic.models.pi = [model('shared-default')];
-    xd.models.pi = [
-      model('shared-default', { newSessionDefault: ['pi'] }),
-    ];
+    xd.models.pi = [model('shared-default', { newSessionDefault: ['pi'] })];
 
     expect(
-      deriveAvailableModels(catalog, 'claude-code').find(
-        (entry) => entry.id === 'claude-opus-4-8',
-      ),
+      deriveAvailableModels(catalog, 'claude-code').find((entry) => entry.id === 'claude-opus-4-8'),
     ).toMatchObject({ supportsFastMode: true, newSessionDefault: ['claude-code'] });
     expect(
       deriveAvailableModels(catalog, 'codex').find((entry) => entry.id === 'gpt-5.5'),
@@ -322,8 +469,12 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
 
   it('per-agent 分叉透传:gpt-5.5 cc=1M / codex=272k', () => {
     const cat = injectedCatalog();
-    expect(deriveAvailableModels(cat, 'claude-code').find((m) => m.id === 'gpt-5.5')?.contextWindow).toBe(1_000_000);
-    expect(deriveAvailableModels(cat, 'codex').find((m) => m.id === 'gpt-5.5')?.contextWindow).toBe(272_000);
+    expect(
+      deriveAvailableModels(cat, 'claude-code').find((m) => m.id === 'gpt-5.5')?.contextWindow,
+    ).toBe(1_000_000);
+    expect(deriveAvailableModels(cat, 'codex').find((m) => m.id === 'gpt-5.5')?.contextWindow).toBe(
+      272_000,
+    );
   });
 
   it('跳过 routing.disabled runtime，且不占用同模型的 first-wins', () => {
@@ -340,9 +491,7 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
       model('disabled-only', { name: 'Disabled only' }),
       model('gpt-5.5', { name: 'Disabled first', contextWindow: 111 }),
     ];
-    xd.models.codex = [
-      model('gpt-5.5', { name: 'Enabled later', contextWindow: 222 }),
-    ];
+    xd.models.codex = [model('gpt-5.5', { name: 'Enabled later', contextWindow: 222 })];
 
     const derived = deriveAvailableModels(cat, 'codex');
     expect(derived.some((candidate) => candidate.id === 'disabled-only')).toBe(false);
@@ -382,12 +531,13 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const retired = provider!.models['claude-code']![0]!;
     retired.status = 'retired';
 
-    expect(deriveAvailableModels(catalog, 'claude-code').some((entry) => entry.id === retired.id))
-      .toBe(false);
+    expect(
+      deriveAvailableModels(catalog, 'claude-code').some((entry) => entry.id === retired.id),
+    ).toBe(false);
     expect(provider!.models['claude-code']!.some((entry) => entry.id === retired.id)).toBe(true);
   });
 
-  it('纯 Registry retired 不进入公开清单,但可按统一投影重建 Pi 续跑描述符', () => {
+  it('纯 Registry retired 不会被重建成 Pi 续跑描述符', () => {
     const catalog = structuredClone(BUNDLED_CATALOG);
     catalog.modelRegistry = {
       schemaVersion: 1,
@@ -400,26 +550,136 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
         maxOutputTokens: 96_000,
         efforts: ['low', 'max'],
         defaultEffort: 'max',
+        perAgent: {
+          codex: {
+            contextWindow: 272_000,
+            efforts: ['low'],
+            defaultEffort: 'low',
+          },
+        },
         routes: [{ providerId: 'openai', modelId: 'gpt-retired', agents: ['codex'] }],
       }],
     };
 
     expect(deriveAvailableModels(catalog, 'pi').some((m) => m.id === 'chatgpt/gpt-retired')).toBe(false);
-    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-retired')).toMatchObject({
-      id: 'chatgpt/gpt-retired',
-      displayName: 'GPT Retired',
-      contextWindow: 300_000,
-      maxOutputTokens: 96_000,
-      efforts: ['minimal', 'low'],
-      defaultEffort: 'low',
-    });
+    const localOverrides = sanitizeModelCatalogOverrides({
+      patches: {
+        'openai:gpt-retired': {
+          base: {
+            contextWindow: 444_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'high',
+          },
+        },
+      },
+    }).overrides;
+    expect(resolvePiRuntimeModelDescriptor(
+      catalog,
+      'openai',
+      'chatgpt/gpt-retired',
+      { localOverrides },
+    )).toBeNull();
     expect(resolvePiRuntimeModelDescriptor(catalog, 'anthropic', 'chatgpt/gpt-retired')).toBeNull();
   });
 
+  it('本地 Codex addition/patch 也不能重建 retired Pi fallback', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+      models: [{
+        id: 'openai/gpt-local-revival',
+        name: 'Registry baseline',
+        status: 'retired',
+        contextWindow: 300_000,
+        efforts: ['low'],
+        defaultEffort: 'low',
+        routes: [{ providerId: 'openai', modelId: 'gpt-local-revival', agents: ['codex'] }],
+      }],
+    };
+    const localOverrides = sanitizeModelCatalogOverrides({
+      additions: {
+        'openai:gpt-local-revival': {
+          agents: ['codex'],
+          base: {
+            name: 'Local addition',
+            contextWindow: 500_000,
+            efforts: ['medium', 'high'],
+            defaultEffort: 'medium',
+            status: 'active',
+          },
+        },
+      },
+      patches: {
+        'openai:gpt-local-revival': {
+          base: { contextWindow: 600_000, defaultEffort: 'high' },
+        },
+      },
+    }).overrides;
+
+    expect(resolvePiRuntimeModelDescriptor(
+      catalog,
+      'openai',
+      'chatgpt/gpt-local-revival',
+      { localOverrides },
+    )).toBeNull();
+  });
+
+  it('retired OpenAI context profile 不会跨 harness 重建 Pi 私有描述符', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-08-17T00:00:00.000Z',
+      models: [
+        {
+          id: 'openai/gpt-5.6-sol',
+          name: 'GPT-5.6-Sol',
+          status: 'active',
+          contextWindow: 272_000,
+          efforts: ['low', 'medium', 'high'],
+          defaultEffort: 'medium',
+          routes: [{ providerId: 'openai', modelId: 'gpt-5.6-sol', agents: ['codex'] }],
+        },
+        {
+          id: 'openai/gpt-5.6-sol[1m]',
+          name: 'GPT-5.6-Sol (1M · Higher usage)',
+          status: 'retired',
+          contextWindow: 1_000_000,
+          maxOutputTokens: 128_000,
+          efforts: ['low', 'medium', 'high', 'xhigh'],
+          defaultEffort: 'medium',
+          routes: [{ providerId: 'openai', modelId: 'gpt-5.6-sol', agents: ['claude-code'] }],
+        },
+      ],
+    };
+
+    expect(
+      resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-5.6-sol[1m]'),
+    ).toBeNull();
+  });
+
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
-    const claudeModels: ModelDescriptor[] = [{ id: 'stale-claude', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
-    const codexModels: ModelDescriptor[] = [{ id: 'stale-codex', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
-    const piModels: ModelDescriptor[] = [{ id: 'stale-pi', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
+    const claudeModels: ModelDescriptor[] = [
+      {
+        id: 'stale-claude',
+        displayName: 'Stale',
+        contextWindow: 1,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
+    const codexModels: ModelDescriptor[] = [
+      {
+        id: 'stale-codex',
+        displayName: 'Stale',
+        contextWindow: 1,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
+    const piModels: ModelDescriptor[] = [
+      { id: 'stale-pi', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null },
+    ];
     const claudeRef = claudeModels;
     const codexRef = codexModels;
     const piRef = piModels;
@@ -469,7 +729,9 @@ describe('resolveVerifiedContextWindow — 按路由解析已核实窗口', () =
   });
 
   it('没给 providerId 且该 id 跨 provider 有歧义时不收敛', () => {
-    expect(resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', null, 'gpt-5.6-sol')).toBeNull();
+    expect(
+      resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', null, 'gpt-5.6-sol'),
+    ).toBeNull();
   });
 
   it('没给 providerId 但该 id 无歧义时照常返回(折扣路由只由网关提供)', () => {
@@ -492,7 +754,9 @@ describe('resolveVerifiedContextWindow — 按路由解析已核实窗口', () =
   });
 
   it('目录未覆盖的模型 → null', () => {
-    expect(resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', 'xd', 'nope/unknown')).toBeNull();
+    expect(
+      resolveVerifiedContextWindow(dualProviderCatalog(), 'codex', 'xd', 'nope/unknown'),
+    ).toBeNull();
   });
 
   it('该 agent 上被 disabled 的 provider 不参与解析', () => {
@@ -503,5 +767,90 @@ describe('resolveVerifiedContextWindow — 按路由解析已核实窗口', () =
       p.routing.codex = { ...(p.routing.codex ?? {}), disabled: true } as typeof p.routing.codex;
     }
     expect(resolveVerifiedContextWindow(catalog, 'codex', 'xd', 'xd/only')).toBeNull();
+  });
+});
+
+describe('resolveModelDefaultContextWindow — settings defaults configure the same native route', () => {
+  function catalogWithCustom(solContextWindow?: number): Catalog {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    catalog.providers.push(
+      buildUserProvider({
+        id: 'mygpt',
+        name: 'My GPT',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://example.invalid/v1',
+            models: [
+              {
+                id: 'gpt-5.6-sol',
+                name: 'gpt-5.6-sol',
+                ...(solContextWindow !== undefined ? { contextWindow: solContextWindow } : {}),
+              },
+              { id: 'gpt-5.4-mini', name: 'gpt-5.4-mini' },
+            ],
+          },
+        },
+      }),
+    );
+    return catalog;
+  }
+
+  it('用户显式填写的窗口返回该值', () => {
+    const catalog = catalogWithCustom(1_050_000);
+    expect(
+      resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol'),
+    ).toBe(1_050_000);
+  });
+
+  it('applies the displayed default for custom models without a saved override', () => {
+    const catalog = catalogWithCustom();
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(200_000);
+  });
+
+  it('applies Gateway and subscription defaults independently for the same model id', () => {
+    const catalog = catalogWithCustom(500_000);
+    for (const [id, window] of [['xd', 1_050_000], ['openai', 272_000]] as const) {
+      const provider = catalog.providers.find(p => p.id === id)!;
+      const model = catalog.providers.find(p => p.id === 'mygpt')!.models.codex![0]!;
+      provider.models.codex = [{ ...model, contextWindow: window }];
+      expect(resolveModelDefaultContextWindow(catalog, 'codex', id, model.id)).toBe(window);
+    }
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'mygpt', 'gpt-5.6-sol')).toBe(500_000);
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'missing')).toBeNull();
+    catalog.providers.find(p => p.id === 'xd')!.routing.codex!.disabled = true;
+    expect(resolveModelDefaultContextWindow(catalog, 'codex', 'xd', 'gpt-5.6-sol')).toBeNull();
+  });
+
+  it('没有 providerId 不注入', () => {
+    const catalog = catalogWithCustom(1_050_000);
+    expect(
+      resolveModelDefaultContextWindow(catalog, 'codex', null, 'gpt-5.6-sol'),
+    ).toBeNull();
+  });
+});
+
+
+describe('context settings for provider-less routes', () => {
+  it('keeps Pi default gateway budgets isolated from same-name subscription models', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    for (const provider of catalog.providers) {
+      for (const agent of ['claude-code', 'pi'] as const) {
+        provider.models[agent] = ['xd', 'anthropic'].includes(provider.id)
+          ? [model('shared-model', { contextWindow: provider.id === 'xd' ? 100_000 : 200_000 })] : [];
+      }
+    }
+    for (const id of [null, undefined, 'cindy']) {
+      const source = resolveModelContextProviderId(catalog, 'pi', id, 'shared-model');
+      expect(source).toBe('xd');
+      expect(resolveModelDefaultContextWindow(catalog, 'pi', source, 'shared-model')).toBe(100_000);
+    }
+    expect(resolveModelContextProviderId(catalog, 'pi', 'anthropic', 'shared-model')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model')).toBeNull();
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model', 'xd')).toBe('xd');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model', 'anthropic')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', 'anthropic', 'shared-model', 'xd')).toBe('anthropic');
+    expect(resolveModelContextProviderId(catalog, 'claude-code', 'xd', 'shared-model')).toBe('xd');
+    catalog.providers.find((provider) => provider.id === 'anthropic')!.models['claude-code'] = [];
+    expect(resolveModelContextProviderId(catalog, 'claude-code', null, 'shared-model')).toBe('xd');
   });
 });

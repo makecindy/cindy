@@ -3,12 +3,14 @@ import { describe, expect, it } from 'vitest';
 import {
   createVoiceInputShortcutFromMacNativeKeys,
   getDefaultVoiceInputSettings,
+  isVoiceInputBareFunctionKeyShortcut,
   isVoiceInputMacNativeKeyboardShortcutPressed,
   isVoiceInputMacNativeKeyboardShortcutTargetDown,
   isVoiceInputModifierShortcut,
   normalizeVoiceInputSettings,
   normalizeVoiceInputShortcut,
   voiceInputShortcutNeedsMacNativeListener,
+  voiceInputShortcutNeedsWindowsNativeListener,
 } from '../../../shared/voiceInputData';
 import {
   createVoiceInputModifierShortcut,
@@ -199,7 +201,7 @@ describe('voice input shortcut recording helpers', () => {
     expect(isVoiceInputMacNativeKeyboardShortcutPressed(['Fn', 'ShiftRight', 'KeyCode:19'], shortcut!)).toBe(false);
   });
 
-  it('keeps macOS function-key shortcuts on Electron globalShortcut unless Fn is involved', () => {
+  it('routes standalone F1-F24 shortcuts through native press/release listeners', () => {
     const shortcut = normalizeVoiceInputShortcut({
       trigger: 'keyboard',
       code: 'F16',
@@ -214,12 +216,40 @@ describe('voice input shortcut recording helpers', () => {
     });
 
     expect(shortcut).not.toBeNull();
-    expect(voiceInputShortcutNeedsMacNativeListener(shortcut, 'darwin')).toBe(false);
+    expect(isVoiceInputBareFunctionKeyShortcut(shortcut)).toBe(true);
+    expect(voiceInputShortcutNeedsMacNativeListener(shortcut, 'darwin')).toBe(true);
     expect(voiceInputShortcutNeedsMacNativeListener(shortcut, 'win32')).toBe(false);
-    expect(isVoiceInputMacNativeKeyboardShortcutPressed(['KeyCode:106'], shortcut!)).toBe(false);
-    expect(isVoiceInputMacNativeKeyboardShortcutPressed(['Fn', 'KeyCode:106'], shortcut!)).toBe(false);
-    expect(isVoiceInputMacNativeKeyboardShortcutPressed(['ShiftLeft', 'KeyCode:106'], shortcut!)).toBe(false);
-    expect(isVoiceInputMacNativeKeyboardShortcutTargetDown(['ShiftLeft', 'KeyCode:106'], shortcut!)).toBe(false);
-    expect(isVoiceInputMacNativeKeyboardShortcutTargetDown(['KeyCode:105'], shortcut!)).toBe(false);
+    expect(voiceInputShortcutNeedsWindowsNativeListener(shortcut, 'win32')).toBe(true);
+    expect(isVoiceInputMacNativeKeyboardShortcutPressed(['Function:F16'], shortcut!)).toBe(true);
+    expect(isVoiceInputMacNativeKeyboardShortcutPressed(['Fn', 'Function:F16'], shortcut!)).toBe(
+      false,
+    );
+    expect(
+      isVoiceInputMacNativeKeyboardShortcutPressed(['ShiftLeft', 'Function:F16'], shortcut!),
+    ).toBe(false);
+    expect(
+      isVoiceInputMacNativeKeyboardShortcutTargetDown(['ShiftLeft', 'Function:F16'], shortcut!),
+    ).toBe(true);
+    expect(isVoiceInputMacNativeKeyboardShortcutTargetDown(['Function:F15'], shortcut!)).toBe(
+      false,
+    );
+
+    const f24 = normalizeVoiceInputShortcut({
+      trigger: 'keyboard',
+      code: 'F24',
+      key: 'F24',
+      modifiers: { meta: false, ctrl: false, alt: false, shift: false, fn: false },
+    });
+    expect(isVoiceInputMacNativeKeyboardShortcutPressed(['Function:F24'], f24!)).toBe(true);
+
+    const modified = normalizeVoiceInputShortcut({
+      trigger: 'keyboard',
+      code: 'F16',
+      key: 'F16',
+      modifiers: { meta: false, ctrl: true, alt: false, shift: false, fn: false },
+    });
+    expect(isVoiceInputBareFunctionKeyShortcut(modified)).toBe(false);
+    expect(voiceInputShortcutNeedsMacNativeListener(modified, 'darwin')).toBe(false);
+    expect(voiceInputShortcutNeedsWindowsNativeListener(modified, 'win32')).toBe(false);
   });
 });

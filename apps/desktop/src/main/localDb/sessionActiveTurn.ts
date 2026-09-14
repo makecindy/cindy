@@ -52,6 +52,10 @@
 import { and, desc, eq, gt, inArray, isNull, lt, sql } from 'drizzle-orm';
 
 import { getDbClient } from './client/current';
+import {
+  getSessionInterruptionBootAt,
+  setSessionInterruptionBootAtForTests,
+} from './sessionInterruptionBoot';
 import { messages, sessions } from './schema';
 import { createLogger } from '../logger';
 import { DESKTOP_VISIBLE_SESSION_SOURCES } from '../../shared/sessionSource.js';
@@ -329,11 +333,9 @@ function enqueueEndedWrite(sessionId: string, endedAt: number, notifyContext: un
  * 检测不到(PR #879 review P1,两个 reviewer 独立指出)。现在把边界下沉进查询本身,
  * 调用时机不再影响正确性。
  */
-let _bootAtMs = Date.now();
-
 /** 测试专用:定格「本进程启动时刻」,让中断判定不依赖真实时钟。 */
 export function _setBootAtMsForTests(ms: number): void {
-  _bootAtMs = ms;
+  setSessionInterruptionBootAtForTests(ms);
 }
 
 /**
@@ -360,11 +362,13 @@ export async function listInterruptedPendingRows(): Promise<
         gt(sessions.activeTurnStartedAt, sql`COALESCE(${sessions.lastTurnEndedAt}, 0)`),
         gt(sessions.activeTurnStartedAt, sql`COALESCE(${sessions.clearedAt}, 0)`),
         // 只认「开始于本进程启动之前」的 turn —— 排除正在跑的(见 _bootAtMs 注释)。
-        lt(sessions.activeTurnStartedAt, _bootAtMs),
+        lt(sessions.activeTurnStartedAt, getSessionInterruptionBootAt()),
       ),
     );
   // startedAt 必非 null(上面的 gt/lt 比较已排除),类型收窄用于批量处置的 CAS。
-  return rows.flatMap((r) => (r.startedAt == null ? [] : [{ sessionId: r.id, startedAt: r.startedAt }]));
+  return rows.flatMap((r) =>
+    r.startedAt == null ? [] : [{ sessionId: r.id, startedAt: r.startedAt }],
+  );
 }
 
 /** 同上,只要会话 id —— 红点首拉用。 */
@@ -612,5 +616,5 @@ export function _resetSessionActiveTurnStateForTests(): void {
   // bootAt 一并重置:它在模块 import 时定格,而用例常以「相对 now 的 startedAt」
   // 造数据 —— 文件内前置用例的累计耗时一旦超过该相对差,后续用例的中断判定就会
   // 因 startedAt >= bootAt 静默翻转(时钟脆弱)。每个用例重新定基消除顺序耦合。
-  _bootAtMs = Date.now();
+  setSessionInterruptionBootAtForTests(Date.now());
 }

@@ -5,6 +5,7 @@ import path from 'node:path';
 import type { Readable } from 'node:stream';
 
 import {
+  isVoiceInputBareFunctionKeyShortcut,
   isVoiceInputMacNativeKeyboardShortcut,
   isVoiceInputMacNativeKeyboardShortcutPressed,
   isVoiceInputMacNativeKeyboardShortcutTargetDown,
@@ -12,6 +13,7 @@ import {
   type VoiceInputShortcut,
 } from '../../shared/voiceInputData.js';
 import { createLogger } from '../logger.js';
+import { ShortcutHoldPhaseController } from './ShortcutHoldPhaseController.js';
 
 const log = createLogger('voice-input:modifier-shortcut');
 
@@ -30,6 +32,7 @@ const LISTENER_START_TIMEOUT_MS = 1_500;
 const LISTENER_RESTART_MAX_ATTEMPTS = 3;
 const LISTENER_RESTART_BASE_DELAY_MS = 1_000;
 const LISTENER_RESTART_MAX_DELAY_MS = 5_000;
+const LISTENER_RESTART_STABLE_MS = 10_000;
 
 type ListenerTriggerPhase = 'tap' | 'start' | 'end';
 
@@ -65,6 +68,7 @@ type ListenerPayload = {
 type MacModifierShortcutListenerOptions = {
   onTrigger: (phase: ListenerTriggerPhase) => void;
   onKeys?: (keys: string[]) => void;
+  onRestartLimitReached?: () => void;
 };
 
 type ListenerProcess = ChildProcessByStdio<null, Readable, Readable>;
@@ -108,11 +112,15 @@ export class MacModifierShortcutListener {
   private pressedKeys = new Set<string>();
   private startTimer: NodeJS.Timeout | null = null;
   private restartTimer: NodeJS.Timeout | null = null;
+  private stableTimer: NodeJS.Timeout | null = null;
   private restartAttempts = 0;
   private triggered = false;
   private holdThresholdReached = false;
   private keyboardShortcutPressed = false;
   private canceledUntilRelease = false;
+  private readonly functionKeyPhaseController = new ShortcutHoldPhaseController({
+    onTrigger: (phase) => this.options.onTrigger(phase),
+  });
 
   constructor(private readonly options: MacModifierShortcutListenerOptions) {}
 
@@ -143,6 +151,7 @@ export class MacModifierShortcutListener {
     }
     this.shortcut = shortcut;
     this.clearRestartTimer();
+    this.clearStableTimer();
     this.restartAttempts = 0;
     this.endActiveTriggerIfNeeded();
     this.resetState();
@@ -155,6 +164,7 @@ export class MacModifierShortcutListener {
 
   async startKeyCapture(): Promise<ListenerStartResult> {
     this.clearRestartTimer();
+    this.clearStableTimer();
     this.restartAttempts = 0;
     this.resetState();
     if (this.child) {
@@ -213,9 +223,52 @@ export class MacModifierShortcutListener {
   releaseShortcutKeepingCapture(): void {
     this.shortcut = null;
     this.clearRestartTimer();
+    this.clearStableTimer();
     this.restartAttempts = 0;
     this.endActiveTriggerIfNeeded();
     this.resetState();
+  }
+
+  /**
+   * System suspend / lock can consume the physical key-up event. End the
+   * delivered push-to-talk activation now and forget the native snapshot so a
+   * late release cannot leave the voice-input state stuck.
+   */
+  releaseActiveTrigger(): void {
+    const shouldRestart = this.isReady();
+    this.endActiveTriggerIfNeeded();
+    this.resetState();
+    if (!shouldRestart) return;
+
+    // The helper owns the pressed-key snapshot. A suspend/lock transition can
+    // consume key-up, so restart the process itself instead of leaving a stale
+    // F-key in that snapshot. This also preserves a capture-only helper when a
+    // shortcut recorder is open.
+    this.startGeneration += 1;
+    const child = this.child;
+    this.child = null;
+    this.ready = false;
+    this.clearRestartTimer();
+    this.clearStableTimer();
+    this.restartAttempts = 0;
+    if (child && !child.killed) child.kill();
+    void this.startChildProcess({ preserveShortcutOnFailure: true })
+      .then((result) => {
+        if (!result.ok && !result.superseded) {
+          log.warn('modifier shortcut listener did not restart after system release', {
+            error: result.error,
+            shortcut: this.shortcut ? getShortcutLogLabel(this.shortcut) : null,
+          });
+          if (this.shortcut) this.scheduleRestart(null, null);
+        }
+      })
+      .catch((error: unknown) => {
+        log.warn('modifier shortcut listener restart after system release crashed', {
+          error: error instanceof Error ? error.message : String(error),
+          shortcut: this.shortcut ? getShortcutLogLabel(this.shortcut) : null,
+        });
+        if (this.shortcut) this.scheduleRestart(null, null);
+      });
   }
 
   stop(): void {
@@ -227,6 +280,7 @@ export class MacModifierShortcutListener {
     this.ready = false;
     this.shortcut = null;
     this.clearRestartTimer();
+    this.clearStableTimer();
     this.restartAttempts = 0;
     this.endActiveTriggerIfNeeded();
     this.resetState();
@@ -293,7 +347,10 @@ export class MacModifierShortcutListener {
         // 录制框重开。就绪状态同理：只认当前 child 报的 ready。
         const stale = generation !== this.startGeneration || this.child !== child;
         const outcome = stale ? supersededStart() : result;
-        if (result.ok && !stale) this.ready = true;
+        if (result.ok && !stale) {
+          this.ready = true;
+          this.armStableTimer();
+        }
         if (!result.ok && this.child === child) {
           this.child = null;
           this.ready = false;
@@ -346,6 +403,7 @@ export class MacModifierShortcutListener {
         if (this.child === child) {
           this.child = null;
           this.ready = false;
+          this.clearStableTimer();
           this.endActiveTriggerIfNeeded();
           this.resetState();
         }
@@ -452,6 +510,13 @@ export class MacModifierShortcutListener {
   }
 
   private handleMacNativeKeyboardPressedKeys(keys: string[], shortcut: VoiceInputShortcut): void {
+    if (isVoiceInputBareFunctionKeyShortcut(shortcut)) {
+      this.functionKeyPhaseController.setPressed(
+        isVoiceInputMacNativeKeyboardShortcutPressed(keys, shortcut),
+        isVoiceInputMacNativeKeyboardShortcutTargetDown(keys, shortcut),
+      );
+      return;
+    }
     const pressed = isVoiceInputMacNativeKeyboardShortcutPressed(keys, shortcut);
     const targetDown = isVoiceInputMacNativeKeyboardShortcutTargetDown(keys, shortcut);
     if (!pressed) {
@@ -511,6 +576,7 @@ export class MacModifierShortcutListener {
     this.holdThresholdReached = false;
     this.keyboardShortcutPressed = false;
     this.canceledUntilRelease = false;
+    this.functionKeyPhaseController.reset();
   }
 
   private clearStartTimer(): void {
@@ -520,6 +586,7 @@ export class MacModifierShortcutListener {
   }
 
   private endActiveTriggerIfNeeded(): void {
+    this.functionKeyPhaseController.releaseIfPressed();
     if (!this.triggered) return;
     this.triggered = false;
     this.options.onTrigger('end');
@@ -534,6 +601,8 @@ export class MacModifierShortcutListener {
         signal,
         shortcut: shortcutLabel,
       });
+      this.shortcut = null;
+      this.options.onRestartLimitReached?.();
       return;
     }
     this.restartAttempts += 1;
@@ -562,7 +631,6 @@ export class MacModifierShortcutListener {
             this.scheduleRestart(null, null);
             return;
           }
-          this.restartAttempts = 0;
           log.info('modifier shortcut listener restarted', {
             shortcut: this.shortcut ? getShortcutLogLabel(this.shortcut) : null,
           });
@@ -582,6 +650,20 @@ export class MacModifierShortcutListener {
     if (!this.restartTimer) return;
     clearTimeout(this.restartTimer);
     this.restartTimer = null;
+  }
+
+  private armStableTimer(): void {
+    this.clearStableTimer();
+    this.stableTimer = setTimeout(() => {
+      this.stableTimer = null;
+      this.restartAttempts = 0;
+    }, LISTENER_RESTART_STABLE_MS);
+  }
+
+  private clearStableTimer(): void {
+    if (!this.stableTimer) return;
+    clearTimeout(this.stableTimer);
+    this.stableTimer = null;
   }
 }
 
@@ -667,7 +749,8 @@ async function runMacInputMonitoringPermissionCommand(command: string): Promise<
     return {
       ok: false,
       status: 'denied',
-      error: 'Input Monitoring permission is required for Fn and single-modifier voice input shortcuts.',
+      error:
+        'Input Monitoring permission is required for Fn, F1-F24, and single-modifier voice input shortcuts.',
     };
   } catch (error) {
     return {

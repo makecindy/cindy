@@ -15,10 +15,27 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+} from '../components/chat/activityRowChrome';
+import { CHAT_COLOR_TRANSITION_CLASS } from '../components/chat/chatChrome';
 
 describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
   const source = readFileSync(
     resolve(__dirname, '..', 'components', 'chat', 'WorkGroupBlock.tsx'),
+    'utf8',
+  );
+  const chrome = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'activityRowChrome.ts'),
+    'utf8',
+  );
+  const actionRow = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'AgentActionRow.tsx'),
+    'utf8',
+  );
+  const systemCard = readFileSync(
+    resolve(__dirname, '..', 'components', 'chat', 'SystemCard.tsx'),
     'utf8',
   );
 
@@ -36,6 +53,51 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     expect(source).toMatch(/child\.kind === 'tools'[\s\S]*?<ToolActivityRow/);
     expect(source).toMatch(/child\.kind === 'thinking'[\s\S]*?<ExpandedThinkingRow/);
     expect(source).not.toMatch(/AgentActionsBlock/);
+  });
+
+  it('exposes thinking rows as viewport child anchors', () => {
+    expect(source).toMatch(
+      /function ThinkingActivityRow[\s\S]*data-message-client-id=\{activity\.key\}/,
+    );
+    expect(source).toMatch(
+      /function ExpandedThinkingRow[\s\S]*data-message-client-id=\{message\.clientId\}/,
+    );
+  });
+
+  it('thinking 行右侧三角与工具行共用同一套槽和 hover 浮起', () => {
+    expect(chrome).toMatch(/group-hover:bg-\[var\(--cmd-palette-item-hover\)\]/);
+    expect(chrome).toMatch(/hover:bg-\[var\(--msg-code-inline-bg\)\]/);
+    expect(chrome).toMatch(/h-\[18px\] w-\[18px\]/);
+    expect(chrome).toMatch(/ACTIVITY_ROW_RADIUS_CLASS = 'rounded-\[8px\]'/);
+    expect(chrome).toMatch(/rounded-\[8px\]/);
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toBe(CHAT_COLOR_TRANSITION_CLASS);
+    expect(ACTIVITY_ROW_CHEVRON_SLOT_CLASS).toContain(ACTIVITY_ROW_COLOR_TRANSITION_CLASS);
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toContain('transition-colors');
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toContain('duration-[var(--motion-fast)]');
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toContain('ease-[var(--motion-ease-out)]');
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toContain('motion-reduce:transition-none');
+    expect(chrome).not.toMatch(/rounded-lg/);
+    expect(chrome).not.toMatch(/var\(--radius\)/);
+    expect(chrome).not.toMatch(/rounded-\[4px\]/);
+    expect(source).toMatch(/from '\.\/activityRowChrome'/);
+    expect(source).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
+    expect(source).toMatch(/ACTIVITY_ROW_HOVER_SURFACE_CLASS/);
+    expect(source).toMatch(/ACTIVITY_ROW_RADIUS_CLASS/);
+    expect(source).toMatch(/ACTIVITY_ROW_COLOR_TRANSITION_CLASS/);
+    expect(source).not.toMatch(/function ThinkingActivityRow[\s\S]*rounded-\[6px\]/);
+    expect(actionRow).toMatch(/from '\.\/activityRowChrome'/);
+    expect(actionRow).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
+    expect(actionRow).toMatch(/ACTIVITY_ROW_RADIUS_CLASS/);
+    expect(actionRow).toMatch(/ACTIVITY_ROW_COLOR_TRANSITION_CLASS/);
+    expect(systemCard).toMatch(/ACTIVITY_ROW_CHEVRON_SLOT_CLASS/);
+    // 槽位始终占位;只有可展开时才画三角。旧写法把整个 span 按 canExpand 卸掉,
+    // 短思考行 / 仅有 outcome 的中断行会比工具行更靠右。
+    expect(source).not.toMatch(
+      /\{canExpand && \(\s*<span aria-hidden="true" className="inline-flex h-\[18px\]/,
+    );
+    expect(systemCard).not.toMatch(
+      /\{canExpand && \(\s*<span aria-hidden="true" className=\{ACTIVITY_ROW_CHEVRON_SLOT_CLASS\}/,
+    );
   });
 
   it('完成态内层工作组递归复用 WorkGroupBlock', () => {

@@ -31,7 +31,7 @@ export const GHOST_PANEL_WINDOW_VISIBILITY_CHANGED_CHANNEL =
   'ghost-panel-window:visibility-changed';
 export const GHOST_PANEL_WINDOW_CLOSE_REQUESTED_CHANNEL =
   'ghost-panel-window:close-requested';
-/** main → renderer(send)：原生窗口最小化也统一收进主窗口 Ghost 气泡。 */
+/** main → renderer(send)：原生窗口最小化也统一进入插件面板的最小化状态。 */
 export const GHOST_PANEL_WINDOW_MINIMIZE_REQUESTED_CHANNEL =
   'ghost-panel-window:minimize-requested';
 export const GHOST_PANEL_WINDOW_CLOSE_REQUEST_RESOLVED_CHANNEL =

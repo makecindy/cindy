@@ -3,6 +3,8 @@
  *
  * Inputs: active tab, shared search state, optional labels with tab-derived defaults, and actions.
  * Outputs: one width, focus-order-aligned adaptive toolbar, scrolling frame, and transitions.
+ * Settings embeds the same catalog and can intercept Plugins / Skills tab
+ * clicks via `onSelectTab` so the switcher stays inside Settings.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  */
 
@@ -23,6 +25,9 @@ interface PluginManagementLayoutProps {
   searchPlaceholder?: string;
   clearSearchLabel?: string;
   headerActions?: ReactNode;
+  showPrimaryTabs?: boolean;
+  embedded?: boolean;
+  onSelectTab?: (tab: 'plugins' | 'skills') => void;
 }
 
 interface PluginManagementHeaderProps {
@@ -32,6 +37,8 @@ interface PluginManagementHeaderProps {
   onQueryChange?: (query: string) => void;
   searchPlaceholder?: string;
   clearSearchLabel?: string;
+  showPrimaryTabs?: boolean;
+  onSelectTab?: (tab: 'plugins' | 'skills') => void;
 }
 
 interface PluginManagementPageProps {
@@ -72,15 +79,25 @@ export function PluginManagementLayout({
   searchPlaceholder,
   clearSearchLabel,
   headerActions,
+  showPrimaryTabs = true,
+  embedded = false,
+  onSelectTab,
 }: PluginManagementLayoutProps) {
   return (
-    <div className="plugin-management-layout-root plugin-motion-root flex h-full min-h-0 w-full flex-col bg-[var(--surface)]">
+    <div
+      className={cn(
+        'plugin-management-layout-root plugin-motion-root flex h-full min-h-0 w-full flex-col',
+        embedded ? 'bg-transparent' : 'bg-[var(--surface)]',
+      )}
+    >
       <PluginManagementHeader
         activeTab={activeTab}
         query={query}
         onQueryChange={onQueryChange}
         searchPlaceholder={searchPlaceholder}
         clearSearchLabel={clearSearchLabel}
+        showPrimaryTabs={showPrimaryTabs}
+        onSelectTab={onSelectTab}
       >
         {headerActions}
       </PluginManagementHeader>
@@ -97,6 +114,8 @@ export function PluginManagementHeader({
   onQueryChange,
   searchPlaceholder,
   clearSearchLabel,
+  showPrimaryTabs = true,
+  onSelectTab,
 }: PluginManagementHeaderProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -125,7 +144,7 @@ export function PluginManagementHeader({
     return () => observer.disconnect();
   }, []);
 
-  const tabs = (
+  const tabs = showPrimaryTabs ? (
     <div
       key="plugin-management-tabs"
       className="plugin-motion-tabs inline-flex shrink-0 rounded-full border p-0.5 backdrop-blur-md"
@@ -141,15 +160,15 @@ export function PluginManagementHeader({
       <TabButton
         active={activeTab === 'plugins'}
         label={t('settings.ghosts.title')}
-        onClick={() => navigate('/plugins')}
+        onClick={() => (onSelectTab ? onSelectTab('plugins') : navigate('/plugins'))}
       />
       <TabButton
         active={activeTab === 'skills'}
         label={t('skillhub.home.title')}
-        onClick={() => navigate('/skillhub/local')}
+        onClick={() => (onSelectTab ? onSelectTab('skills') : navigate('/skillhub/local'))}
       />
     </div>
-  );
+  ) : null;
 
   const tools =
     searchable || children ? (

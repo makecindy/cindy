@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type {
@@ -7,6 +8,10 @@ import type {
 } from '../types.js';
 import type { LiziMcpLogger } from '@cindy/mcps';
 import type { CindyProxyMediaMaybePromise, CindyProxyMediaProxyConfig } from '../types.js';
+import {
+  mediaRequestParamsForLog,
+  mediaRequestUrlForLog,
+} from '../../cindy-media/mediaRequestLog.js';
 
 export class GatewayImageError extends Error {
   constructor(
@@ -151,6 +156,43 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
   const editUrl = joinProxyUrl(baseUrl, opts.proxy.editPath);
   const doFetch = opts.fetchImplementation ?? fetch;
 
+  async function loggedFetch(
+    url: string,
+    init: RequestInit,
+    model: string,
+    params: unknown,
+  ): Promise<Response> {
+    const requestId = randomUUID();
+    const startedAt = Date.now();
+    const requestLog = {
+      requestId,
+      provider: brandLabel,
+      modelId: model,
+      method: init.method ?? 'GET',
+      url: mediaRequestUrlForLog(url),
+    };
+    opts.logger?.info('media request dispatch', {
+      ...requestLog,
+      params: mediaRequestParamsForLog(params),
+    });
+    try {
+      const response = await doFetch(url, init);
+      opts.logger?.info('media request response', {
+        ...requestLog,
+        status: response.status,
+        durationMs: Date.now() - startedAt,
+      });
+      return response;
+    } catch (error) {
+      opts.logger?.warn('media request failed', {
+        ...requestLog,
+        durationMs: Date.now() - startedAt,
+        error: mediaRequestParamsForLog(error instanceof Error ? error.message : String(error)),
+      });
+      throw error;
+    }
+  }
+
   async function requireApiKey(): Promise<string> {
     const key = await Promise.resolve(opts.getApiKey());
     if (!key) {
@@ -190,15 +232,20 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     // 停用轴派发前重查(PR #744 review 第二十一轮):凭证获取是 await,期间该
     // (供应商, 模型) 可能被用户停用 —— payload 就绪、请求发出的紧前再验一次。
     beforeDispatch?.(params.model);
-    const res = await doFetch(generateUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json',
+    const res = await loggedFetch(
+      generateUrl,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(body),
+        signal,
       },
-      body: JSON.stringify(body),
-      signal,
-    });
+      params.model,
+      body,
+    );
     return parseResponse(res, params.model, brandLabel);
   }
 
@@ -223,22 +270,37 @@ export function createGatewayImageClient(opts: CreateGatewayImageClientOptions):
     if (allowSizeQuality) form.append('size', params.size ?? 'auto');
     if (params.quality) form.append('quality', params.quality);
 
+    const imageParams: Array<{ filename: string; mimeType: string; bytes: number }> = [];
     for (const p of params.imagePaths) {
       const buf = await fs.readFile(p);
       const filename = path.basename(p);
-      form.append('image[]', new Blob([buf], { type: mimeFromFilename(filename) }), filename);
+      const mimeType = mimeFromFilename(filename);
+      form.append('image[]', new Blob([buf], { type: mimeType }), filename);
+      imageParams.push({ filename, mimeType, bytes: buf.byteLength });
     }
 
     // 同上:凭证获取 + 逐张 fs.readFile 都是 await,提交紧前重查。
     beforeDispatch?.(params.model);
-    const res = await doFetch(editUrl, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
+    const res = await loggedFetch(
+      editUrl,
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: form as unknown as BodyInit,
+        signal,
       },
-      body: form as unknown as BodyInit,
-      signal,
-    });
+      params.model,
+      {
+        model: params.model,
+        prompt: params.prompt,
+        n: params.n ?? 1,
+        ...(allowSizeQuality ? { size: params.size ?? 'auto' } : {}),
+        ...(params.quality ? { quality: params.quality } : {}),
+        images: imageParams,
+      },
+    );
     return parseResponse(res, params.model, brandLabel);
   }
 

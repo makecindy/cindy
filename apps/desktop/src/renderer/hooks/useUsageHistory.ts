@@ -50,6 +50,10 @@ export interface UsageHistoryModelDay {
   apiMoney: RegionalMoney;
   subscriptionEstimateMoney: RegionalMoney;
   tokens: number;
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreateTokens?: number;
 }
 
 export interface UsageHistoryPayload {
@@ -59,7 +63,7 @@ export interface UsageHistoryPayload {
   estimatesPending?: boolean;
   /** tokens: 当日合计 (旧快照可能缺该字段, 消费端用 ?? 0 兜底)。 */
   days: Array<{ day: string; money: RegionalMoney; tokens?: number }>;
-  /** 近 30 天每日 × 模型明细 (旧快照缺该字段时补 [])。 */
+  /** 按请求的 modelDays 窗口返回每日 × 模型明细 (旧快照缺该字段时补 [])。 */
   modelDaily: UsageHistoryModelDay[];
   models: UsageHistoryModel[];
   streak: { current: number; longest: number };
@@ -76,6 +80,7 @@ export interface UsageHistoryPayload {
 
 /** 热力图窗口: 20 周 = 140 天。 */
 const HISTORY_WINDOW_DAYS = 140;
+const MODEL_WINDOW_DAYS = 30;
 const REFRESH_DEBOUNCE_MS = 2000;
 /** 价格表冷启动未就绪时的补拉延迟 (对齐 main 侧 5s fetch 超时 + 余量)。 */
 const PRICING_RETRY_DELAY_MS = 6000;
@@ -109,6 +114,10 @@ interface StoredUsageHistoryModelDay {
   subscriptionEstimateMoney?: unknown;
   subscriptionEstimateUsd?: unknown;
   tokens?: unknown;
+  inputTokens?: unknown;
+  outputTokens?: unknown;
+  cacheReadTokens?: unknown;
+  cacheCreateTokens?: unknown;
 }
 
 interface StoredUsageHistoryModel {
@@ -209,6 +218,18 @@ function readSnapshot(scopeKey: string): UsageHistoryPayload | null {
           normalizeRegionalMoney(row.subscriptionEstimateMoney) ??
           legacyEstimate(row.subscriptionEstimateUsd),
         tokens: finiteNumber(row.tokens),
+        ...(typeof row.inputTokens === 'number' && Number.isFinite(row.inputTokens)
+          ? { inputTokens: row.inputTokens }
+          : {}),
+        ...(typeof row.outputTokens === 'number' && Number.isFinite(row.outputTokens)
+          ? { outputTokens: row.outputTokens }
+          : {}),
+        ...(typeof row.cacheReadTokens === 'number' && Number.isFinite(row.cacheReadTokens)
+          ? { cacheReadTokens: row.cacheReadTokens }
+          : {}),
+        ...(typeof row.cacheCreateTokens === 'number' && Number.isFinite(row.cacheCreateTokens)
+          ? { cacheCreateTokens: row.cacheCreateTokens }
+          : {}),
       }));
     const models = (parsed.models as StoredUsageHistoryModel[])
       .filter(
@@ -303,6 +324,11 @@ interface UsageHistoryScopeState {
   listeners: Set<(p: UsageHistoryPayload | null) => void>;
   statusListeners: Set<(refreshing: boolean) => void>;
   refreshing: boolean;
+  request: {
+    days: number | 'all';
+    modelDays: number | 'all';
+    allowPendingEstimates: boolean;
+  };
 }
 
 const scopes = new Map<string, UsageHistoryScopeState>();
@@ -311,7 +337,18 @@ function normalizeScopeKey(userId?: string | null): string {
   return userId || DEFAULT_SCOPE_KEY;
 }
 
-function getScope(scopeKey: string): UsageHistoryScopeState {
+function getScope(
+  scopeKey: string,
+  request: {
+    days: number | 'all';
+    modelDays: number | 'all';
+    allowPendingEstimates: boolean;
+  } = {
+    days: HISTORY_WINDOW_DAYS,
+    modelDays: MODEL_WINDOW_DAYS,
+    allowPendingEstimates: false,
+  },
+): UsageHistoryScopeState {
   let state = scopes.get(scopeKey);
   if (!state) {
     const snapshot = readSnapshot(scopeKey);
@@ -326,6 +363,7 @@ function getScope(scopeKey: string): UsageHistoryScopeState {
       listeners: new Set<(p: UsageHistoryPayload | null) => void>(),
       statusListeners: new Set<(refreshing: boolean) => void>(),
       refreshing: false,
+      request,
     };
     scopes.set(scopeKey, state);
   }
@@ -365,7 +403,11 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
   const seq = ++scope.loadSeq;
   setRefreshing(scope, true);
   scope.inflight = window.electronAPI.maker.usage
-    .getHistory({ days: HISTORY_WINDOW_DAYS, ...(opts?.forceRefresh ? { forceRefresh: true } : {}) })
+    .getHistory({
+      days: scope.request.days,
+      modelDays: scope.request.modelDays,
+      ...(opts?.forceRefresh ? { forceRefresh: true } : {}),
+    })
     .then((res) => {
       if (seq === scope.loadSeq) scope.inflight = null;
       if (!res || typeof res !== 'object') return null;
@@ -398,9 +440,14 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
             void load(scopeKey, { forceRefresh: true });
           }, PRICING_RETRY_DELAY_MS);
         }
-        return scope.cache;
+        // Amount-bearing consumers wait for pricing so they never present a
+        // misleading value. Token-only consumers can render this payload now;
+        // the delayed force-refresh above still replaces it once estimates are
+        // available.
+        if (!scope.request.allowPendingEstimates) return scope.cache;
+      } else {
+        scope.pricingRetryDone = false;
       }
-      scope.pricingRetryDone = false;
       // dirty-check: 数据未变 (仅 generatedAt 不同) → 不换 cache 引用、不写快照、
       // 不通知监听 — 等价数据不触发重渲染与 JSON 落盘
       const nextSerialized = serializeForCompare(nextForCache);
@@ -422,23 +469,64 @@ async function load(scopeKey: string, opts?: { forceRefresh?: boolean; resetPric
   return scope.inflight;
 }
 
-export function useUsageHistory(opts?: { paused?: boolean; userId?: string | null }): {
+export type UsageHistoryWindow = number | 'all';
+
+function normalizeWindow(value: UsageHistoryWindow | undefined, fallback: number): number | 'all' {
+  if (value === 'all') return 'all';
+  return Math.min(366, Math.max(1, Math.floor(value ?? fallback)));
+}
+
+function scopeKeyForRequest(
+  scopeKey: string,
+  request: {
+    days: number | 'all';
+    modelDays: number | 'all';
+    allowPendingEstimates: boolean;
+  },
+): string {
+  if (
+    request.days === HISTORY_WINDOW_DAYS &&
+    request.modelDays === MODEL_WINDOW_DAYS &&
+    !request.allowPendingEstimates
+  ) {
+    return scopeKey;
+  }
+  return `${scopeKey}|days=${request.days}|modelDays=${request.modelDays}|allowPendingEstimates=${request.allowPendingEstimates ? 1 : 0}`;
+}
+
+export function useUsageHistory(opts?: {
+  paused?: boolean;
+  userId?: string | null;
+  days?: UsageHistoryWindow;
+  modelDays?: UsageHistoryWindow;
+  /** Token-only consumers may render the payload while prices finish loading. */
+  allowPendingEstimates?: boolean;
+}): {
   history: UsageHistoryPayload | null;
   refreshing: boolean;
 } {
   const paused = opts?.paused ?? false;
   const scopeKey = normalizeScopeKey(opts?.userId);
-  const scope = getScope(scopeKey);
+  const request = {
+    days: normalizeWindow(opts?.days, HISTORY_WINDOW_DAYS),
+    modelDays: normalizeWindow(opts?.modelDays, MODEL_WINDOW_DAYS),
+    allowPendingEstimates: opts?.allowPendingEstimates ?? false,
+  };
+  const scopedKey = scopeKeyForRequest(scopeKey, request);
+  const scope = getScope(scopedKey, request);
   const [historyState, setHistoryState] = useState<{ scopeKey: string; value: UsageHistoryPayload | null }>(() => ({
-    scopeKey,
+    scopeKey: scopedKey,
     value: scope.cache,
   }));
-  const [isRefreshing, setIsRefreshing] = useState(scope.refreshing);
+  // A null payload is pending until the first request settles. Keeping that
+  // invariant in the hook lets consumers distinguish initial loading from a
+  // settled load failure without adding a second lifecycle state owner.
+  const [isRefreshing, setIsRefreshing] = useState(scope.cache === null || scope.refreshing);
 
   useEffect(() => {
-    const activeScope = getScope(scopeKey);
+    const activeScope = getScope(scopedKey, request);
     const setScopedHistory = (value: UsageHistoryPayload | null) => {
-      setHistoryState({ scopeKey, value });
+      setHistoryState({ scopeKey: scopedKey, value });
     };
     activeScope.listeners.add(setScopedHistory);
     activeScope.statusListeners.add(setIsRefreshing);
@@ -446,10 +534,10 @@ export function useUsageHistory(opts?: { paused?: boolean; userId?: string | nul
     // load() 在 render 与本 effect 之间更新了 cache, 且后续 load 都命中 dirty-check
     // (不再广播), 本实例会停在旧值。引用相同时 React 自动 bail out, 无重渲染成本。
     setScopedHistory(activeScope.cache);
-    setIsRefreshing(activeScope.refreshing);
     // mount 与 paused→false (展开瞬间) 都拉一次 — 折叠摘要 / 图表数据都保持新鲜。
     // 收起时跳过后续 push 订阅, 避免每个 turn 触发后台重拉。
-    void load(scopeKey);
+    void load(scopedKey);
+    setIsRefreshing(activeScope.refreshing);
 
     // paused (卡片收起): 不订阅消费推送, 收起用户的 per-turn 重拉成本归零
     if (paused) {
@@ -466,7 +554,7 @@ export function useUsageHistory(opts?: { paused?: boolean; userId?: string | nul
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => {
         timer = null;
-        void load(scopeKey, { forceRefresh: true, resetPricingRetry: true });
+        void load(scopedKey, { forceRefresh: true, resetPricingRetry: true });
       }, REFRESH_DEBOUNCE_MS);
     };
     const offSpend = window.electronAPI.maker.usage.onTodaySpendChanged(scheduleRefresh);
@@ -482,10 +570,10 @@ export function useUsageHistory(opts?: { paused?: boolean; userId?: string | nul
       offTokens();
       offPricing();
     };
-  }, [paused, scopeKey]);
+  }, [paused, scopedKey]);
 
-  return {
-    history: historyState.scopeKey === scopeKey ? historyState.value : scope.cache,
-    refreshing: isRefreshing,
-  };
+  const history = historyState.scopeKey === scopedKey ? historyState.value : scope.cache;
+  const refreshing =
+    historyState.scopeKey === scopedKey ? isRefreshing : scope.cache === null || scope.refreshing;
+  return { history, refreshing };
 }

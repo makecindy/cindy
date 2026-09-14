@@ -12,7 +12,6 @@ function manifest(id: string, cindy = false): GhostManifest {
     version: '1',
     kind: 'chip',
     entry: 'main.js',
-    slots: cindy ? ['tool', 'cindy'] : ['tool'],
     tools: [{ name: 'run', description: 'run' }],
     ...(cindy ? { cindy: { image: ['generate' as const] } } : {}),
   };

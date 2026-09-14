@@ -1,3 +1,4 @@
+import type { ImContextSnapshot } from '../../../shared/imMessageSource';
 /**
  * main/im/shared/types.ts
  * ---------------------------------------------------------------------------
@@ -68,6 +69,15 @@ export interface ImSessionNamespace {
    * (feishu)忽略 scopeKey, 同一 (botContextId, userId) 恒同一 id。
    */
   sessionIdFor(botContextId: string, userId: string, scopeKey?: string): string;
+  /**
+   * `/new` creates a separate Cindy task instead of clearing the SDK context on
+   * the deterministic legacy row. The active task is then resolved by the
+   * channel identity columns rather than by `sessionIdFor`.
+   *
+   * Telegram enables this. Other adapters keep their existing single-row
+   * semantics until their routing contracts are migrated deliberately.
+   */
+  createTaskOnNew?: boolean;
   /** 新建 session 行的初始 title。 */
   defaultTitle(userId: string): string;
   /**
@@ -81,8 +91,12 @@ export interface ImSessionNamespace {
   /** 渠道专属列(feishu: feishuBotAppId/feishuOpenId;slack: imBotContextId/imUserId)。 */
   extraInsertColumns(botContextId: string, userId: string): Record<string, unknown>;
   /**
-   * 按 userId 收紧新会话的权限档(telegram guest lane → 'plan' 只读探索)。
-   * 返回 null/缺省 = 用渠道默认。只影响**新建**行; 已存在行的权限归 owner 管。
+   * 按 userId 覆写新会话的权限档:
+   *   - telegram guest lane → 'plan' 只读探索(收紧);
+   *   - feishu 群/话题 lane → 渠道设置「群聊新建任务权限档」(可比私聊那档宽,
+   *     那是用户对群的显式选择)。
+   * 返回 null/缺省 = 用渠道默认。只影响**新建**行(含 `/new` 重开上下文);
+   * 已存在行的权限归 owner 管(`/permission`)。
    */
   permissionModeFor?(userId: string): PermissionMode | null;
   /**
@@ -124,6 +138,8 @@ export interface ImSessionNamespace {
  */
 export interface ImChannelAdapter {
   channel: ImChannelName;
+  /** Selected display service; defaults to channel without changing routing identity. */
+  messageSourceIm?(): string;
   /** 所有渠道共有的文本收发能力；富卡片能力由 output.kind 显式收窄。 */
   im: TextChannelIM;
   /** Terminal output strategy; existing channels use rich-card. */
@@ -197,6 +213,10 @@ export interface ImChannelAdapter {
    * 游标推进的时机锚点; 受理前失败不调用, 这批上下文下次仍会进入 prompt。
    * 返回 null = 不改写。钩子抛错按"不改写"降级, 不阻断消息。
    *
+   * contextSnapshot: 从本次实际使用的、过滤后的前缀提取的可展示文本。
+   * 共享 runner 保存到用户消息元数据；不要传入 persona、渠道指令或过滤前原文。
+   * 不提供就表示没有附带上下文，不从用户正文或实时历史反推。
+   *
    * contextAttachments: 上下文附带的附件(群历史里的图片/文件) —— 只拼进
    * 模型消息(buildImUserMessage 的 image/file block), **不落库、不进
    * transcript**(它们不是触发用户发的)。与用户自己 attachments 的语义边界
@@ -204,6 +224,7 @@ export interface ImChannelAdapter {
    */
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
+    contextSnapshot?: ImContextSnapshot;
     contextAttachments?: IMAttachment[];
     commit?: () => void | Promise<void>;
   } | null>;
@@ -215,23 +236,18 @@ export interface ImChannelAdapter {
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
   /**
-   * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 返回 true 的档位在
-   * dispatch 时不挂 turnPermissionPolicy(maker 不再 fail-closed, 按用户显式
-   * 选择直接执行)。飞书用它在用户于渠道设置中显式选择「完全访问」后取缔
-   * 群护栏; 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道
-   * 不实现即保持 fail-closed。
+   * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 同时传入本轮 policy，
+   * 让渠道能把会话档位授权限定到具体触发者。返回 true 时 dispatch 不挂
+   * turnPermissionPolicy(maker 不再 fail-closed, 按用户显式选择直接执行)。
+   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道不实现即保持
+   * fail-closed。
    */
-  turnPolicyOptionalForMode?(permissionMode: PermissionMode): boolean;
+  turnPolicyOptionalForMode?(
+    permissionMode: PermissionMode,
+    turnPermissionPolicy: TurnPermissionPolicy,
+  ): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
-  /**
-   * slash 命令事件的渠道钩子 — 在 handleSlashCommand 之前调用。飞书用它记住
-   * 「群主流 @ 开话题」事件带的群主流取数 lane(groupContextLane): /ctr 等
-   * slash 不经过 prepareAgentTurnText, 开话题那条事件攒下的 thread 前上下文
-   * 会丢失; 记住后由话题里第一条 agent 消息领走(见 adapter 实现)。
-   * 其它渠道不实现即 no-op。
-   */
-  onSlashCommandEvent?(event: IMMessageEvent): void;
 }
 
 // ── UI 文案包 ─────────────────────────────────────────────────────────────────
@@ -342,6 +358,21 @@ export interface ImUiTextPack {
       title: (header: string) => string;
       noOptionsHint: string;
       resolved: (optionLabel: string) => string;
+      /**
+       * 多题/多选打勾卡文案 — 仅支持卡片原地更新(updateInteractiveCard)
+       * 的渠道提供(目前飞书), 缺省渠道不提供: ask 保持 v1 单问卡
+       * (只渲染第一问 / multiSelect 降级单选)。
+       */
+      multi?: {
+        /** 卡片标题 — 一次问了多道题, 不再借用第一问的 header。 */
+        title: string;
+        /** 多选题的问题行后缀。 */
+        multiSelectHint: string;
+        /** 提交按钮文案。 */
+        submitLabel: string;
+        /** 已选选项的按钮前缀(打勾标记)。 */
+        selectedMark: string;
+      };
     };
     plan: {
       title: string;
@@ -418,6 +449,13 @@ export interface ImUiTextPack {
       resolvedSessionPick: (sessionTitle: string, workspaceName: string) => string;
       resolvedNewSession: (workspaceName: string) => string;
       attachFailed: (reason: string) => string;
+      /**
+       * 群卡片认不出「自己发在哪条话题里」时的收口文案(飞书: 应用重启后
+       * 老卡再被点, 回调 senderId 回落成点击人的私聊 open_id)。此时**不能**
+       * 按它建绑定 —— 会把群里的接管挂到私聊身份上。缺省时回落
+       * attachFailed(通用错因), 不实现该场景的渠道无需提供。
+       */
+      staleGroupCard?: string;
       sessionBusyOldCardPlaceholder: string;
       sessionBusyPrompts: ReadonlyArray<(sessionTitle: string) => string>;
       takeoverLoadingPrompts: ReadonlyArray<(sessionTitle: string) => string>;

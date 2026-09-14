@@ -1,6 +1,7 @@
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 import { escapeWecomMarkdown, type IMMessageEvent, type WecomIM } from '@cindy/im';
 
+import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
 import { isStopCommand } from '../shared/controlCommands';
 
 interface PendingInteraction {
@@ -44,16 +45,15 @@ export class WecomTextInteractions {
 
     try {
       await this.im.sendMarkdownText(userId, formatWecomInteractionPrompt(request));
-    } catch (error) {
+    } catch {
       const current = this.pending.get(userId);
       if (current?.request.requestId === request.requestId) {
         clearTimeout(current.timer);
         this.pending.delete(userId);
       }
-      return defaultDecision(
-        request,
-        error instanceof Error ? error.message : 'wecom_interaction_send_failed',
-      );
+      // Denial reasons are classified by exact/prefix match. Raw Error.message
+      // is not a system code and would be presented as a user rejection.
+      return defaultDecision(request, 'wecom_interaction_send_failed');
     }
     return result;
   }
@@ -109,8 +109,9 @@ function previewPermissionInput(input: Record<string, unknown>): string {
 export function formatWecomInteractionPrompt(request: InteractionRequest): string {
   if (request.kind === 'permission') {
     const toolName = escapeWecomMarkdown(request.displayName ?? request.toolName);
+    const unavailable = autoReviewUnavailablePromptLine(request);
     return `需要确认工具“${toolName}”。
-
+${unavailable ? `\n${unavailable}\n` : ''}
 参数：
 \`\`\`json
 ${previewPermissionInput(request.input)}

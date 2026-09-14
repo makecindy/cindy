@@ -10,16 +10,35 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach } from 'vites
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import fs from 'node:fs';
+import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { LedgerDb } from '../ledger';
 import type { MediaRefCompensationScope } from '../refCompensationJournal';
+import { fileSymlinkFixture } from './fileSymlinkFixture';
 
 let tmpUserData = '';
 const OWNER_ID = 'owner-a';
 const OWNER_KEY = 'a'.repeat(20);
 const OWNER_SCOPE_KEY = 'cloud:owner-a:1';
+
+const symlinkSupported = (() => {
+  const probeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-ingest-symlink-probe-'));
+  const target = path.join(probeRoot, 'target');
+  const link = path.join(probeRoot, 'link');
+  try {
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, link);
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeRoot, { recursive: true, force: true });
+  }
+})();
+
+const symlinkIt = symlinkSupported ? it : it.skip;
 
 vi.mock('electron', () => ({
   app: { getPath: () => tmpUserData },
@@ -171,6 +190,34 @@ describe('ingestMedia(主路径)', () => {
 });
 
 describe('ingestMedia(全局去重)', () => {
+  it('Host 文件分块入库，沿用相同指纹、去重和引用账本，不整体读入内存', async () => {
+    const sourcePath = path.join(tmpUserData, 'download-fixture.png');
+    fs.writeFileSync(sourcePath, PNG_BYTES);
+    const fsp = await import('node:fs/promises');
+    const readFile = vi.spyOn(fsp.default, 'readFile');
+    const concat = vi.spyOn(Buffer, 'concat');
+    try {
+      const first = await ingest.ingestMedia({
+        filePath: sourcePath, mimeType: 'image/png',
+        refs: [{ refKind: 'message', refId: 'download-message', originSessionId: 'download-session' }],
+      }, db);
+      const second = await ingest.ingestMedia({ buffer: PNG_BYTES, mimeType: 'image/png', refs: [] }, db);
+      expect(first.hash).toBe(PNG_HASH);
+      expect(first.bytes).toBe(PNG_BYTES.length);
+      expect(first.url).toBe(second.url);
+      expect(second.deduplicated).toBe(true);
+      expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(1);
+      expect(db.select().from(schema.mediaRefs).all()).toHaveLength(1);
+      expect(readFile).not.toHaveBeenCalled();
+      expect(concat).not.toHaveBeenCalled();
+      expect(fs.readFileSync(sourcePath)).toEqual(PNG_BYTES);
+    } finally {
+      readFile.mockRestore();
+      concat.mockRestore();
+      fs.rmSync(sourcePath, { force: true });
+    }
+  });
+
   it('cache 先入、非 cache 后到:去重命中时 isCache 降为 false(只降不升)', async () => {
     await ingest.ingestMedia(
       { buffer: PNG_BYTES, mimeType: 'image/png', isCache: true, refs: [] },
@@ -219,6 +266,87 @@ describe('ingestMedia(全局去重)', () => {
     expect(fs.readdirSync(shard)).toHaveLength(1);
     expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(1);
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(2);
+  });
+
+  it('已存在损坏副本先按输入 hash 修复再记账,不把坏文件当去重', async () => {
+    const dest = blobPathOf(PNG_HASH, '.png');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, Buffer.from('poisoned-media-copy'));
+    const result = await ingest.ingestMedia(
+      {
+        buffer: PNG_BYTES,
+        mimeType: 'image/png',
+        refs: [{ refKind: 'session-attachment', refId: 's-repaired' }],
+      },
+      db,
+    );
+    expect(result.deduplicated).toBe(false);
+    expect(fs.readFileSync(dest)).toEqual(PNG_BYTES);
+    expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(1);
+    expect(db.select().from(schema.mediaRefs).all()).toHaveLength(1);
+  });
+
+  symlinkIt('symlink 拒绝后账本零副作用,不追随链接改仓外文件', async () => {
+    const dest = blobPathOf(PNG_HASH, '.png');
+    const outsideDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-media-ingest-outside-'));
+    const outside = path.join(outsideDir, 'leave-me-alone.bin');
+    fs.writeFileSync(outside, Buffer.from('leave-me-alone'));
+    let link: ReturnType<typeof fileSymlinkFixture> | undefined;
+    try {
+      fs.mkdirSync(path.dirname(dest), { recursive: true });
+      fs.rmSync(dest, { recursive: true, force: true });
+      link = fileSymlinkFixture(outside, dest);
+      await expect(
+        ingest.ingestMedia(
+          {
+            buffer: PNG_BYTES,
+            mimeType: 'image/png',
+            refs: [{ refKind: 'session-attachment', refId: 's-symlink' }],
+          },
+          db,
+        ),
+      ).rejects.toThrow(/symlink/);
+      link.expectIntact();
+      expect(fs.readFileSync(outside).toString()).toBe('leave-me-alone');
+      expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(0);
+      expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
+    } finally {
+      link?.restore();
+      fs.rmSync(dest, { force: true });
+      fs.rmSync(outsideDir, { recursive: true, force: true });
+    }
+  });
+  it('注入 symlink 元数据后仍拒绝,字节和账本零副作用', async () => {
+    const dest = blobPathOf(PNG_HASH, '.png');
+    fs.mkdirSync(path.dirname(dest), { recursive: true });
+    fs.writeFileSync(dest, PNG_BYTES);
+    const originalLstat = fsp.lstat.bind(fsp);
+    const lstat = vi.spyOn(fsp, 'lstat').mockImplementation(async (target, opts) => {
+      const st = await originalLstat(target, opts);
+      return path.resolve(String(target)) === path.resolve(dest)
+        ? Object.assign(Object.create(Object.getPrototypeOf(st)), st, { isSymbolicLink: () => true })
+        : st;
+    });
+    const open = vi.spyOn(fsp, 'open');
+    const rename = vi.spyOn(fsp, 'rename');
+    try {
+      await expect(
+        ingest.ingestMedia(
+          { buffer: PNG_BYTES, mimeType: 'image/png', refs: [{ refKind: 'session-attachment', refId: 's-injected-symlink' }] },
+          db,
+        ),
+      ).rejects.toThrow(/symlink/);
+      expect(open).not.toHaveBeenCalled();
+      expect(rename).not.toHaveBeenCalled();
+      expect(fs.readFileSync(dest)).toEqual(PNG_BYTES);
+      expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(0);
+      expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
+      expect(fs.readdirSync(path.dirname(dest)).some((name) => name.startsWith('.tmp-'))).toBe(false);
+    } finally {
+      lstat.mockRestore();
+      open.mockRestore();
+      rename.mockRestore();
+    }
   });
 });
 

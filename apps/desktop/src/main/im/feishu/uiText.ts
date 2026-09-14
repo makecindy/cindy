@@ -13,6 +13,7 @@
 
 import type { IMUnsupportedEntry } from '@cindy/im';
 
+import { t } from '../../i18n';
 import type { ImUiTextPack } from '../shared/types';
 
 export const ui = {
@@ -92,16 +93,8 @@ export const ui = {
   error: {
     agentUnsupported:
       '🤔 当前选择的 Agent 在这个渠道需要逐条权限确认，暂时上不了场，换一个 Agent 再试~',
-    permissionModeUnsupported: (permissionMode: string) => {
-      // 「完全访问」已由渠道设置显式放行(护栏取缔), 这里实际只剩
-      // acceptEdits(自动接受编辑)会被群强确认策略拒绝 — 按档位点名报错。
-      const modeLabel =
-        permissionMode === 'acceptEdits' ? '「自动接受编辑」' : '当前权限档';
-      return (
-        `⚠️ 群/话题会话不能用${modeLabel} — 群上下文里有成员可控的内容，必须保留操作确认。\n` +
-        '我往你私聊发了张修复卡，去点一下切回「自动审批」就能继续~（也可以发 /permission 手动切）'
-      );
-    },
+    permissionModeUnsupported: () =>
+      t('settings.imBot.defaults.permissionModeUnsupportedOnChannelHint'),
   },
 
   // ── card text (sent via @cindy/im InteractiveCardSpec) ──────────────────────
@@ -123,6 +116,14 @@ export const ui = {
       title: (header: string) => `❓ ${header}`,
       noOptionsHint: '_（这个问题没有预设选项，直接发文字回我吧）_',
       resolved: (optionLabel: string) => `✅ 已选：${optionLabel}`,
+      // 多题/多选打勾卡: 依赖飞书卡片原地更新(im.v1.message.patch), 提供
+      // 这份文案即启用 buildAskUserCard 的多题分发(见 cardBuilders)。
+      multi: {
+        title: '❓ 需要你确认几件事',
+        multiSelectHint: '（可多选）',
+        submitLabel: '提交答案',
+        selectedMark: '✓ ',
+      },
     },
     plan: {
       title: '📋 我打算这么干',
@@ -192,6 +193,11 @@ export const ui = {
       resolvedNewSession: (workspaceName: string) =>
         `✨ 新存档已建 + 接管完成（在 **${workspaceName}** 里）\n直接发指令开聊；想退就 \`/exctr\``,
       attachFailed: (reason: string) => `❌ 没接上：${reason}`,
+      // 群卡认不出自己在哪条话题(应用重启过, 卡片和话题的对应关系只存在内存里)。
+      // 这时候按回调身份接管会把绑定挂到私聊上, 所以宁可不接, 让用户重发一次。
+      staleGroupCard:
+        '❌ 没接上：这张卡片是应用重启前发的，已经认不出它属于哪条话题了。\n' +
+        '请在你想接管的那条话题里重新发一次 `/ctr`（绑定只跟话题走，不会串到别处）',
       /** 旧卡片(被点了 busy session 那张)被 freeze 时的占位文字, 让用户知道这张
        *  卡片不再活跃, 下面会新发一张可重选的卡片。 */
       sessionBusyOldCardPlaceholder: '⏳ 那个任务还在跑——下方给你刷了张新卡片，重选一下吧',

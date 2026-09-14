@@ -20,6 +20,9 @@ import {
   type GhostTrustInfo,
   validateGhostManifest,
 } from '../../shared/ghost.js';
+import {
+  unixPermissionsForRepackedEntry,
+} from './ghostZipPermissions.js';
 
 export const GHOST_SIGNATURE_FILE = 'cindy-signatures.json';
 export const MAX_SIGNATURE_FILE_BYTES = 64 * 1024;
@@ -394,6 +397,17 @@ export interface SignGhostPackageOptions {
   privateKey: crypto.KeyLike;
 }
 
+/**
+ * Signing and review regenerate the ZIP central directory. Pin sanitized UNIX
+ * modes first so those pipeline steps do not erase Forge/export executable
+ * bits or propagate special/file-type bits from an untrusted input package.
+ */
+function preserveSafeUnixPermissionsForRepack(zip: JSZip): void {
+  for (const entry of Object.values(zip.files)) {
+    entry.unixPermissions = unixPermissionsForRepackedEntry(entry.unixPermissions, entry.dir);
+  }
+}
+
 /** 发布流水线使用：给一个未签名/重签的 .cindy Buffer 添加 Ed25519 发布者签名。 */
 export async function signGhostPackage(
   packageBuffer: Buffer,
@@ -429,7 +443,8 @@ export async function signGhostPackage(
     },
   };
   zip.file(`${prefix}${GHOST_SIGNATURE_FILE}`, `${JSON.stringify(document, null, 2)}\n`);
-  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  preserveSafeUnixPermissionsForRepack(zip);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', platform: 'UNIX' });
 }
 
 export interface ReviewGhostPackageOptions {
@@ -465,7 +480,8 @@ export async function reviewGhostPackage(
     },
   };
   zip.file(`${prefix}${GHOST_SIGNATURE_FILE}`, `${JSON.stringify(document, null, 2)}\n`);
-  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
+  preserveSafeUnixPermissionsForRepack(zip);
+  return zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE', platform: 'UNIX' });
 }
 
 function detectSingleTopFolderPrefix(names: string[]): string {

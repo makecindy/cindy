@@ -16,6 +16,8 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   app: { getVersion: () => '1.0.0' },
 }));
+// This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
+vi.mock('../remote-desktop/iceConfig', () => ({ loadDesktopIceServers: vi.fn(async () => []) }));
 // media:fetch 拦截走 mediaFetch.fetchLocalMediaToOss;mock 掉避免拉起 OSS/cache-store 真实依赖。
 const fetchLocalMediaToOssMock = vi.hoisted(() => vi.fn());
 vi.mock('../device-link/mediaFetch', () => ({ fetchLocalMediaToOss: fetchLocalMediaToOssMock }));
@@ -30,6 +32,8 @@ import {
   markRemoteSettingPersistedInsideHandler,
   runInvoke,
   setRemoteReviewInputGuard,
+  setRemoteClaudeSubscriptionUsageReader,
+  setRemoteXaiSubscriptionUsageReader,
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
   handleControllerOffline,
@@ -43,6 +47,7 @@ import {
   isDeviceLinkInvoke,
 } from '../device-link/invoke-context';
 import * as subscriptions from '../device-link/subscriptions';
+import { createDesktopOnlyConfirmationRequestId } from '../cindy-brain/desktopOnlyConfirmationProjection';
 
 beforeEach(() => {
   remoteControlEnabled = true;
@@ -177,6 +182,20 @@ describe('runInvoke 双层校验', () => {
     expect(r).toMatchObject({
       ok: false,
       error: { code: 'IPC_ERROR', message: '[SESSION_RUNNING] busy' },
+    });
+  });
+
+  it('DB worker 队列打满时远程 listing 回 BACKPRESSURE', async () => {
+    registry.register('local-db:sessions:list', () => {
+      throw new Error('db worker RPC queue overloaded: op="rawAll" inFlight=128 queued=512');
+    });
+    const r = await runInvoke('ctrl', { channel: 'local-db:sessions:list', args: [1, 'all'] });
+    expect(r).toMatchObject({
+      ok: false,
+      error: {
+        code: 'BACKPRESSURE',
+        message: expect.stringContaining('db worker RPC queue overloaded'),
+      },
     });
   });
 
@@ -448,12 +467,20 @@ import {
   setControllersChangedListener,
   setRemoteInvokeBusyChangedListener,
   setSessionsSubscribedListener,
+  setControllerDisplayName,
+  setControllerFallbackDisplayName,
+  purgeRevokedController,
   getActiveControllers,
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
   dropAllControllers,
   pushSessionActivityToController,
 } from '../device-link/dispatch';
+import {
+  applyControllerDisplayNameDirectorySnapshot,
+  applyControllerDisplayNamePresence,
+  createControllerDisplayNameFreshnessTracker,
+} from '../device-link/controllerDisplayNameFreshness';
 import { hasBroadcastTapListener, tapWindowBroadcast } from '../device-link/broadcast-tap';
 import {
   CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
@@ -537,6 +564,187 @@ describe('被控端控制链路生命周期', () => {
     expect(calls.closed).toEqual([{ dst: 'ctrl-a', reason: 'user' }]);
     expect(getActiveControllers()).toHaveLength(0);
     expect(hasBroadcastTapListener()).toBe(false);
+  });
+
+  it('目录刷新在无 active link 时预存数据库名，并让活跃提示立即响应改名与清空', () => {
+    remoteControlEnabled = true;
+    const changes: ActiveController[][] = [];
+    setControllersChangedListener((controllers) => changes.push(controllers));
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const freshness = createControllerDisplayNameFreshnessTracker();
+    const applyDirectoryName = (name: string): void => {
+      applyControllerDisplayNameDirectorySnapshot({
+        devices: [{ deviceId: 'ctrl-a', name }],
+        cachedNames: {},
+        freshness,
+        requestEpoch: freshness.epoch,
+        normalizeName: (value) => value.trim() || null,
+        setDisplayName: setControllerDisplayName,
+        rememberName: vi.fn(),
+        forgetName: vi.fn(),
+      });
+    };
+
+    // 目录先于 link 到达时先预存名称，之后的控制帧仍以数据库名展示。
+    applyDirectoryName('MacBook-Pro-2');
+    feed(subFrame('ctrl-a', SUB, ['session:s1'], 'Chriss-MacBook-Pro-2.local'));
+    expect(getActiveControllers()).toEqual([
+      { deviceId: 'ctrl-a', name: 'MacBook-Pro-2' },
+    ]);
+
+    applyDirectoryName('工作电脑');
+    expect(getActiveControllers()).toEqual([{ deviceId: 'ctrl-a', name: '工作电脑' }]);
+    expect(changes.at(-1)).toEqual([{ deviceId: 'ctrl-a', name: '工作电脑' }]);
+
+    applyDirectoryName('');
+    expect(getActiveControllers()).toEqual([
+      { deviceId: 'ctrl-a', name: 'Chriss-MacBook-Pro-2.local' },
+    ]);
+    expect(changes.at(-1)).toEqual([
+      { deviceId: 'ctrl-a', name: 'Chriss-MacBook-Pro-2.local' },
+    ]);
+  });
+
+  it('数据库展示名为空或被清空时回退到控制端自报名，再缺失时回退到设备 ID 短码', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    setControllerDisplayName('ctrl-reported', '数据库名称');
+    feed(subFrame('ctrl-reported', SUB, ['session:s1'], 'Host.local'));
+    expect(getActiveControllers()).toContainEqual({
+      deviceId: 'ctrl-reported',
+      name: '数据库名称',
+    });
+
+    setControllerDisplayName('ctrl-reported', '   ');
+    expect(getActiveControllers()).toContainEqual({
+      deviceId: 'ctrl-reported',
+      name: 'Host.local',
+    });
+
+    setControllerDisplayName('1234567890abcdef', '');
+    feed(subFrame('1234567890abcdef', SUB, ['session:s2']));
+    expect(getActiveControllers()).toContainEqual({
+      deviceId: '1234567890abcdef',
+      name: '12345678',
+    });
+  });
+
+  it('没有历史 presence 时先显示自报名，设备目录补齐后立即切换到数据库展示名', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+
+    feed(subFrame('ctrl-late-directory', SUB, ['session:s1'], 'Host.local'));
+    expect(getActiveControllers()).toEqual([
+      { deviceId: 'ctrl-late-directory', name: 'Host.local' },
+    ]);
+
+    setControllerDisplayName('ctrl-late-directory', '数据库展示名');
+    expect(getActiveControllers()).toEqual([
+      { deviceId: 'ctrl-late-directory', name: '数据库展示名' },
+    ]);
+  });
+
+  it('旧协议 presence 临时名不遮蔽同一链路后到的控制端自报名', () => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const deviceId = '1234567890abcdef';
+    const freshness = createControllerDisplayNameFreshnessTracker();
+    const rememberName = vi.fn();
+    const forgetName = vi.fn();
+
+    feed(subFrame(deviceId, SUB, ['session:s1']));
+    expect(getActiveControllers()).toEqual([{ deviceId, name: '12345678' }]);
+
+    applyControllerDisplayNamePresence({
+      deviceId,
+      name: 'Old-Host.local',
+      freshness,
+      normalizeName: (name) => name.trim() || null,
+      setDisplayName: setControllerDisplayName,
+      setFallbackDisplayName: setControllerFallbackDisplayName,
+      rememberName,
+      forgetName,
+    });
+    expect(getActiveControllers()).toEqual([{ deviceId, name: 'Old-Host.local' }]);
+    expect(freshness.epoch).toBe(0);
+    expect(rememberName).not.toHaveBeenCalled();
+    expect(forgetName).not.toHaveBeenCalled();
+
+    // 旧协议 presence 只改过当前 metadata，没有写入权威 map；空目录名仍必须
+    // 强制重算回退，不能因 delete(false) 留下旧主机名。
+    setControllerDisplayName(deviceId, '');
+    expect(getActiveControllers()).toEqual([{ deviceId, name: '12345678' }]);
+
+    feed(subFrame(deviceId, SUB, ['session:s2'], 'New-Host.local'));
+    expect(getActiveControllers()).toEqual([{ deviceId, name: 'New-Host.local' }]);
+
+    applyControllerDisplayNamePresence({
+      deviceId,
+      name: 'Older-Host.local',
+      freshness,
+      normalizeName: (name) => name.trim() || null,
+      setDisplayName: setControllerDisplayName,
+      setFallbackDisplayName: setControllerFallbackDisplayName,
+      rememberName,
+      forgetName,
+    });
+    expect(getActiveControllers()).toEqual([{ deviceId, name: 'New-Host.local' }]);
+
+    setControllerDisplayName(deviceId, '');
+    expect(getActiveControllers()).toEqual([{ deviceId, name: 'New-Host.local' }]);
+  });
+
+  it.each([
+    ['显式断链', (feed: (env: Envelope) => unknown, deviceId: string) => feed({
+      v: 1,
+      kind: 'link-close',
+      src: deviceId,
+      payload: { reason: 'user' },
+    })],
+    ['presence 离线', (_feed: (env: Envelope) => unknown, deviceId: string) => {
+      handleControllerOffline(deviceId);
+    }],
+    ['撤销访问', (_feed: (env: Envelope) => unknown, deviceId: string) => {
+      purgeRevokedController(deviceId);
+    }],
+  ] as const)('%s 会清掉旧链路自报名，新链路缺名时回退设备 ID 短码', (_label, close) => {
+    remoteControlEnabled = true;
+    const { client, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const deviceId = '1234567890abcdef';
+
+    setControllerDisplayName(deviceId, '数据库展示名');
+    feed(subFrame(deviceId, SUB, ['session:s1'], 'Old-Host.local'));
+    setControllerDisplayName(deviceId, '');
+    expect(getActiveControllers()).toEqual([{ deviceId, name: 'Old-Host.local' }]);
+
+    close(feed, deviceId);
+    feed(subFrame(deviceId, SUB, ['session:s2']));
+    expect(getActiveControllers()).toEqual([{ deviceId, name: '12345678' }]);
+  });
+
+  it.each([
+    ['topics 为空', []],
+    ['topics 全被过滤', ['*', 'invalid-topic']],
+  ] as const)('%s 的 subscribe 自报名也会在整体断开时清理', (_label, topics) => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const deviceId = '1234567890abcdef';
+
+    feed(subFrame(deviceId, SUB, [...topics], 'Old-Host.local'));
+    expect(getActiveControllers()).toEqual([]);
+
+    dropAllControllers(client, 'user');
+    expect(calls.closed).toContainEqual({ dst: deviceId, reason: 'user' });
+
+    feed(subFrame(deviceId, SUB, ['session:s1']));
+    expect(getActiveControllers()).toEqual([{ deviceId, name: '12345678' }]);
   });
 
   it('link-open(开关关)→ 不 accept、不记录', () => {
@@ -914,6 +1122,148 @@ describe('被控端控制链路生命周期', () => {
     expect(payload.ok).toBe(true);
     expect(payload.result.some((message) => message.clientId === 'anchor')).toBe(true);
     expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('同一控制端相同 listing 并发只执行一次并把结果复用到各 requestId', async () => {
+    remoteControlEnabled = true;
+    let resolveList: ((value: unknown[]) => void) | undefined;
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolveList = resolve;
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = {
+      channel: 'local-db:sessions:list',
+      args: [20, 'all', { includePinned: true }],
+    };
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'list-1',
+      src: 'ctrl-a',
+      payload,
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'list-2',
+      src: 'ctrl-a',
+      payload,
+    });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    resolveList?.([{ id: 's1' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'list-1' || call.requestId === 'list-2',
+      )).toHaveLength(2);
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        requestId: 'list-1',
+        payload: { ok: true, result: [{ id: 's1' }] },
+      }),
+      expect.objectContaining({
+        requestId: 'list-2',
+        payload: { ok: true, result: [{ id: 's1' }] },
+      }),
+    ]));
+  });
+
+  it('listing 合并 waiter 仍计入 per-controller 准入上限', async () => {
+    remoteControlEnabled = true;
+    let resolveList: ((value: unknown[]) => void) | undefined;
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolveList = resolve;
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = { channel: 'local-db:sessions:list', args: [20, 'all'] };
+    const limit = dispatchTesting.remoteInvokeInFlightPerControllerLimit;
+    for (let index = 0; index < limit + 1; index += 1) {
+      feed({
+        v: 1,
+        kind: 'invoke',
+        id: `list-admit-${index}`,
+        src: 'ctrl-a',
+        payload,
+      });
+    }
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: `list-admit-${limit}`,
+      payload: {
+        ok: false,
+        error: {
+          code: 'BACKPRESSURE',
+          message: 'remote invoke execution queue is full',
+        },
+      },
+    }));
+    resolveList?.([{ id: 's1' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter((call) => call.payload && (call.payload as { ok?: boolean }).ok === true))
+        .toHaveLength(limit);
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {
+    remoteControlEnabled = true;
+    let resolvers: Array<(value: unknown[]) => void> = [];
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = {
+      channel: 'local-db:sessions:list',
+      args: [20, 'all', { includePinned: true, fresh: true }],
+    };
+    feed({ v: 1, kind: 'invoke', id: 'fresh-1', src: 'ctrl-a', payload });
+    feed({ v: 1, kind: 'invoke', id: 'fresh-2', src: 'ctrl-a', payload });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    resolvers[0]?.([{ id: 'old' }]);
+    resolvers[1]?.([{ id: 'new' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'fresh-1' || call.requestId === 'fresh-2',
+      )).toHaveLength(2);
+    });
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: 'fresh-1', payload: { ok: true, result: [{ id: 'old' }] } }),
+      expect.objectContaining({ requestId: 'fresh-2', payload: { ok: true, result: [{ id: 'new' }] } }),
+    ]));
+  });
+
+  it('sessions:get 写后回读不并入已有查询', async () => {
+    remoteControlEnabled = true;
+    const resolvers: Array<(value: unknown) => void> = [];
+    const handler = vi.fn(() => new Promise<unknown>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    registry.register('local-db:sessions:get', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = { channel: 'local-db:sessions:get', args: ['sess-1'] };
+    feed({ v: 1, kind: 'invoke', id: 'get-stale', src: 'ctrl-a', payload });
+    feed({ v: 1, kind: 'invoke', id: 'get-after-write', src: 'ctrl-a', payload });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    resolvers[0]?.({ id: 'sess-1', model: 'old' });
+    resolvers[1]?.({ id: 'sess-1', model: 'new' });
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'get-stale' || call.requestId === 'get-after-write',
+      )).toHaveLength(2);
+    });
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: 'get-stale', payload: { ok: true, result: { id: 'sess-1', model: 'old' } } }),
+      expect.objectContaining({ requestId: 'get-after-write', payload: { ok: true, result: { id: 'sess-1', model: 'new' } } }),
+    ]));
   });
 
   it('显式 link-close 后丢弃旧世代晚到 IPC 结果，快速重开也不串进新链路', async () => {
@@ -2259,7 +2609,7 @@ describe('被控端订阅 registry + topic 转发', () => {
     'issue_confirm',
     'rename_sessions_confirm',
     'ghost_grant_confirm',
-  ])('device-link does not forward Desktop-only %s live pushes', (kind) => {
+  ])('device-link forwards a redacted Desktop-only %s live status', (kind) => {
     remoteControlEnabled = true;
     const { client, calls, feed } = makeFakeClient();
     wireInboundDispatch(client);
@@ -2275,7 +2625,46 @@ describe('被控端订阅 registry + topic 转发', () => {
       },
     });
 
-    expect(calls.push).toEqual([]);
+    expect(calls.push).toHaveLength(1);
+    expect(calls.push[0]).toMatchObject({
+      dst: 'ctrl-a',
+      channel: MAKER_PUSH.INTERACTION_REQUEST,
+      payload: {
+        sessionId: 's1',
+        request: { kind, requestId: expect.stringMatching(/^desktop-confirm-/) },
+      },
+    });
+    expect(JSON.stringify(calls.push[0].payload)).not.toContain('private');
+    expect(JSON.stringify(calls.push[0].payload)).not.toContain(`${kind}-1`);
+  });
+
+  it('device-link dismisses a Desktop-only status with its opaque request id', () => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-a', SUB, ['session:s1']));
+
+    const sourceRequestId = createDesktopOnlyConfirmationRequestId();
+    tapWindowBroadcast(MAKER_PUSH.INTERACTION_REQUEST, {
+      sessionId: 's1',
+      request: { kind: 'issue_confirm', requestId: sourceRequestId, draft: { title: 'private' } },
+    });
+    const remoteRequestId = (calls.push[0].payload as {
+      request: { requestId: string };
+    }).request.requestId;
+
+    tapWindowBroadcast(MAKER_PUSH.INTERACTION_DISMISSED, {
+      sessionId: 's1',
+      requestId: sourceRequestId,
+      reason: 'resolved',
+    });
+
+    expect(calls.push[1]).toMatchObject({
+      dst: 'ctrl-a',
+      channel: MAKER_PUSH.INTERACTION_DISMISSED,
+      payload: { sessionId: 's1', requestId: remoteRequestId, reason: 'resolved' },
+    });
+    expect(JSON.stringify(calls.push[1].payload)).not.toContain(sourceRequestId);
   });
 
   it('explicit unsubscribe removes the final remembered topic and stops the tap', () => {
@@ -2357,6 +2746,43 @@ describe('远程 set-* 持久化回流', () => {
     expect(persist).toHaveBeenCalledWith('sess-1', { model: 'claude-x' });
   });
 
+  it('set-model 最终窗口待确认时不提前持久化 model/provider', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const confirmation = {
+      deferred: false,
+      superseded: false,
+      contextWindowConfirmationRequired: 272_000,
+      contextTokensForConfirmation: 244_800,
+    };
+    registry.register('maker:set-model', () => confirmation);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'small-pi-model', 'pi-provider'],
+    });
+
+    expect(r).toEqual({ ok: true, result: confirmation });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ contextTokensForConfirmation: 244_800 }],
+    [{ contextWindowConfirmationRequired: '272000' }],
+  ])('set-model 最终窗口确认字段不完整时也不得提前持久化 %#', async (confirmation) => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    registry.register('maker:set-model', () => confirmation);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'small-pi-model', 'pi-provider'],
+    });
+
+    expect(r).toEqual({ ok: true, result: confirmation });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('set-model 持久化 trim 后的 providerId', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
@@ -2391,8 +2817,12 @@ describe('远程 set-* 持久化回流', () => {
   it('set-model handler 已在 session 锁内持久化时 dispatch 不重复回流', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
-    const handlerResult = { deferred: false, superseded: false };
-    markRemoteSettingPersistedInsideHandler(handlerResult);
+    const response = { deferred: false, superseded: false };
+    markRemoteSettingPersistedInsideHandler(response);
+    const handlerResult = Object.assign(response, {
+      generation: 2,
+      effectiveProviderId: 'anthropic',
+    });
     registry.register('maker:set-model', () => handlerResult);
 
     const r = await runInvoke('ctrl-a', {
@@ -2475,5 +2905,33 @@ describe('远程 set-* 持久化回流', () => {
     registry.register('maker:set-model', () => undefined);
     const r = await runInvoke('ctrl-a', { channel: 'maker:set-model', args: ['sess-1', 'm'] });
     expect(r).toMatchObject({ ok: true });
+  });
+});
+
+
+describe('remote subscription data reads', () => {
+  it.each([
+    ['maker:usage:claude-subscription', setRemoteClaudeSubscriptionUsageReader],
+    ['maker:usage:xai-subscription', setRemoteXaiSubscriptionUsageReader],
+  ] as const)('%s uses the local reader with the selected account after authorization', async (channel, setReader) => {
+    const reader = vi.fn(async () => ({ fiveHour: { utilization: 12 } }));
+    const ipcHandler = vi.fn(() => { throw new Error('Untrusted synthetic sender'); });
+    registry.register(channel, ipcHandler);
+    setReader(reader);
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toEqual({
+      ok: true, result: { providerId: 'account-2', fiveHour: { utilization: 12 } },
+    });
+    expect(reader).toHaveBeenCalledWith('account-2');
+    expect(ipcHandler).not.toHaveBeenCalled();
+    reader.mockClear();
+    await expect(runInvoke('ctrl', { channel, args: [42] })).resolves.toMatchObject({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[INVALID_PARAMS]') } });
+    expect(reader).not.toHaveBeenCalled();
+    remoteControlEnabled = false;
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
+    expect(reader).not.toHaveBeenCalled();
+    remoteControlEnabled = true;
+    revokedControllers = ['ctrl'];
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
+    expect(reader).not.toHaveBeenCalled();
   });
 });

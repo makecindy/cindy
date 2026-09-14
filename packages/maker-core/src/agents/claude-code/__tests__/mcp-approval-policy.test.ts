@@ -206,6 +206,10 @@ async function startSession(
     }>;
     turnChangeCapture?: AgentDeps['turnChangeCapture'];
     getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
+    resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
+    resolveVerifiedContextWindow?: AgentDeps['resolveVerifiedContextWindow'];
+    availableModels?: NonNullable<AgentDeps['capabilityAdditions']>['availableModels'];
+    model?: string;
   },
 ) {
   const configDir = await makeTempDir();
@@ -223,20 +227,26 @@ async function startSession(
   deps.capabilityRouting = options?.capabilityRouting;
   deps.turnChangeCapture = options?.turnChangeCapture;
   deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
+  deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
+  deps.resolveVerifiedContextWindow = options?.resolveVerifiedContextWindow;
+  deps.capabilityAdditions = options?.availableModels
+    ? { availableModels: options.availableModels }
+    : undefined;
   const agent = new ClaudeCodeAgent(deps);
   const handle = await agent.startSession({
     sessionId: 'session-mcp-policy',
-    model: 'claude-opus-4-6',
+    model: options?.model ?? 'claude-opus-4-6',
     workingDir,
     permissionMode: options?.permissionMode ?? 'default',
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
     | {
         canUseTool?: CanUseToolFn;
-        hooks?: Record<
+      hooks?: Record<
           string,
-          Array<{ hooks: Array<(input: unknown) => Promise<unknown>> }>
+          Array<{ matcher?: string; hooks: Array<(input: unknown) => Promise<unknown>> }>
         >;
+        env?: Record<string, string>;
       }
     | undefined;
   if (!queryOptions?.canUseTool) throw new Error('expected sdk query canUseTool');
@@ -258,6 +268,7 @@ async function startSession(
     handle,
     canUseTool: queryOptions.canUseTool,
     hooks: queryOptions.hooks,
+    env: queryOptions.env,
     seen,
     workingDir,
   };
@@ -288,6 +299,10 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     const { handle, hooks, workingDir } = await startSession(undefined, {
       turnChangeCapture: { beforeKnownFileWrite, noteOpaqueWrite },
     });
+    const realDir = await makeTempDir();
+    const linkedDir = path.join(workingDir, 'linked-output');
+    await fs.symlink(realDir, linkedDir, process.platform === 'win32' ? 'junction' : 'dir');
+    const canonicalRealDir = await fs.realpath(realDir);
     const pre = hooks?.PreToolUse?.[0]?.hooks[0];
     const post = hooks?.PostToolUse?.[0]?.hooks[0];
     if (!pre || !post) throw new Error('expected turn change capture hooks');
@@ -295,7 +310,7 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
     await pre({
       hook_event_name: 'PreToolUse',
       tool_name: 'Write',
-      tool_input: { file_path: 'a.ts', content: 'next' },
+      tool_input: { file_path: path.join(linkedDir, 'a.ts'), content: 'next' },
     });
     await pre({
       hook_event_name: 'PreToolUse',
@@ -306,7 +321,7 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
       sessionId: 'session-mcp-policy',
       provider: 'claude-code',
       cwd: workingDir,
-      targetPath: 'a.ts',
+      targetPath: path.join(canonicalRealDir, 'a.ts'),
     });
     expect(noteOpaqueWrite).not.toHaveBeenCalled();
 
@@ -371,6 +386,183 @@ describe('ClaudeCodeAgent canUseTool honors the host MCP approval policy', () =>
         '/feishu-delegate:message-feishu-coworkers 改用这个来源',
     });
     await expect(preToolUse(toolInput)).resolves.toEqual({ continue: true });
+    await handle.close();
+  });
+
+  it('denies an unavailable Agent model in Full access before canUseTool', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'denied' }),
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'sonnet', run_in_background: true },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: expect.stringContaining('sonnet'),
+      },
+    });
+    await handle.close();
+  });
+
+  it('rewrites a catalog 1M Agent model at the real session hook boundary', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'allowed' }),
+      availableModels: [{
+        id: 'z-ai/glm-5.3',
+        displayName: 'GLM-5.3',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'z-ai/glm-5.3', run_in_background: true },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: {
+        updatedInput: {
+          model: 'z-ai/glm-5.3[1m]',
+          run_in_background: true,
+        },
+      },
+    });
+    await handle.close();
+  });
+
+  it('keeps a catalog 272K Agent model on its bare wire id', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'allowed' }),
+      availableModels: [{
+        id: 'codex/gpt-5.6-sol',
+        displayName: 'GPT-5.6 Sol',
+        contextWindow: 272_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'codex/gpt-5.6-sol[1m]', run_in_background: true },
+    })).resolves.toMatchObject({
+      continue: true,
+      hookSpecificOutput: {
+        updatedInput: {
+          model: 'codex/gpt-5.6-sol',
+          run_in_background: true,
+        },
+      },
+    });
+    await handle.close();
+  });
+
+  it('falls back to the catalog when verified route context is unavailable', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'allowed' }),
+      resolveVerifiedContextWindow: () => null,
+      availableModels: [{
+        id: 'z-ai/glm-5.3',
+        displayName: 'GLM-5.3',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'z-ai/glm-5.3' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { updatedInput: { model: 'z-ai/glm-5.3[1m]' } },
+    });
+    await handle.close();
+  });
+
+  it('falls back to the catalog when verified route context throws', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'allowed' }),
+      resolveVerifiedContextWindow: (_providerId, modelId) => {
+        if (modelId === 'z-ai/glm-5.3') throw new Error('route unavailable');
+        return null;
+      },
+      availableModels: [{
+        id: 'z-ai/glm-5.3',
+        displayName: 'GLM-5.3',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'z-ai/glm-5.3' },
+    })).resolves.toMatchObject({
+      hookSpecificOutput: { updatedInput: { model: 'z-ai/glm-5.3[1m]' } },
+    });
+    await handle.close();
+  });
+
+  it('does not invent a context window when route and catalog metadata are invalid', async () => {
+    const { handle, hooks } = await startSession(undefined, {
+      permissionMode: 'bypassPermissions',
+      resolveClaudeSubagentModelAccess: async () => ({ status: 'allowed' }),
+      resolveVerifiedContextWindow: () => Number.NaN,
+      availableModels: [{
+        id: 'z-ai/glm-5.3',
+        displayName: 'GLM-5.3',
+        contextWindow: 0,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+    const preToolUse = hooks?.PreToolUse?.find((entry) => entry.matcher === 'Agent')?.hooks[0];
+    if (!preToolUse) throw new Error('expected subagent model access hook');
+
+    await expect(preToolUse({
+      hook_event_name: 'PreToolUse',
+      tool_name: 'Agent',
+      tool_input: { model: 'z-ai/glm-5.3' },
+    })).resolves.toEqual({ continue: true });
+    await handle.close();
+  });
+
+  it('injects the selected catalog model window into the real Claude Code session env', async () => {
+    const { handle, env } = await startSession(undefined, {
+      model: 'z-ai/glm-5.3',
+      availableModels: [{
+        id: 'z-ai/glm-5.3',
+        displayName: 'GLM-5.3',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      }],
+    });
+
+    expect(env?.CLAUDE_CODE_MAX_CONTEXT_TOKENS).toBe('1000000');
     await handle.close();
   });
 
@@ -807,7 +999,7 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     await handle.close();
   });
 
-  it('denies a pending forced prompt when the session switches to a laxer mode', async () => {
+  it('Full access overrides a pending prompt-each-time MCP approval', async () => {
     const { handle, canUseTool } = await startSession(() => 'prompt-each-time', {
       // 决策永不返回：请求挂起，等模式切换来结算。
       decide: () => undefined,
@@ -822,8 +1014,16 @@ describe('prompt-each-time never turns into a persisted grant', () => {
     // CC agent 实现了 setPermissionMode (接口上可选是因为其他 agent 可缺省)。
     await handle.setPermissionMode!('bypassPermissions');
 
-    // 切到 Full access 也不能替用户批准这一次高风险调用。
-    expect((await pending).behavior).toBe('deny');
+    expect((await pending).behavior).toBe('allow');
+    await handle.close();
+  });
+
+  it('Full access allows MCP calls without an extra resolver or classifier approval', async () => {
+    const policy = vi.fn(() => 'prompt-each-time' as const);
+    const { handle, canUseTool } = await startSession(policy, { permissionMode: 'bypassPermissions', bare: true });
+    expect(await canUseTool('mcp__cindy_contacts__call_tool', { name: 'contacts_delete' }, { toolUseID: 'full-mcp' }))
+      .toMatchObject({ behavior: 'allow' });
+    expect(policy).not.toHaveBeenCalled();
     await handle.close();
   });
 
@@ -845,6 +1045,31 @@ describe('prompt-each-time never turns into a persisted grant', () => {
 });
 
 describe('a custom server cannot take over a builtin name', () => {
+  it('passes read-only and read-write directory grants through one SDK directory allowlist', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const agent = new ClaudeCodeAgent(createDeps());
+    const handle = await agent.startSession({
+      sessionId: 'session-directory-grants',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'auto',
+      extraDirs: ['/reference-only'],
+      writableDirs: ['/shared-output'],
+    });
+    const options = sdkMock.query.mock.calls.at(-1)?.[0]?.options as {
+      additionalDirectories?: string[];
+      permissionMode?: string;
+    };
+    expect(options.additionalDirectories).toEqual(['/reference-only', '/shared-output']);
+    // Native Auto cannot distinguish the two grants; Cindy's canUseTool path owns review.
+    expect(options.permissionMode).toBe('default');
+    expect(agent.capabilities.writableDirs).toEqual({ supported: true });
+    await handle.close();
+  });
+
   it('把 session 花名册快照追加到 Claude systemPrompt', async () => {
     const configDir = await makeTempDir();
     process.env.CLAUDE_CONFIG_DIR = configDir;
@@ -900,6 +1125,36 @@ describe('a custom server cannot take over a builtin name', () => {
     await handle.close();
   });
 
+  it('omits a locally hosted MCP server disabled by the frozen Bot Toolset snapshot', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    const deps = createDeps();
+    deps.mcpProviders = [{
+      name: 'cindy_browser',
+      isEnabled: (context) => {
+        const disabled = context.vendorOptions?.__cindyDisabledBuiltinPluginIds;
+        return !Array.isArray(disabled) || !disabled.includes('browser');
+      },
+      toClaudeSdkConfig: () => ({ type: 'sdk', marker: 'browser' }),
+    }] as McpProvider[];
+
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'bot-local-claude-toolset',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+      vendorOptions: { __cindyDisabledBuiltinPluginIds: ['browser'] },
+    });
+
+    const mcpServers = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.mcpServers as
+      | Record<string, unknown>
+      | undefined;
+    expect(mcpServers?.cindy_browser).toBeUndefined();
+    await handle.close();
+  });
+
   it('keeps the first registration when two providers share a name', async () => {
     const configs: Array<{ name: string; marker: string }> = [];
     const contexts: McpToolApprovalContext[] = [];
@@ -933,6 +1188,32 @@ describe('a custom server cannot take over a builtin name', () => {
     configs.push({ name: 'cindy_browser', marker: mcpServers?.cindy_browser?.marker ?? 'missing' });
 
     expect(configs).toEqual([{ name: 'cindy_browser', marker: 'builtin' }]);
+    await handle.close();
+  });
+
+  it('keeps Claude on direct per-server MCP registration instead of the Pi gateway', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+
+    const agent = new ClaudeCodeAgent(createDeps(() => 'prompt', [
+      'cindy_browser',
+      'cindy_contacts',
+    ]));
+    const handle = await agent.startSession({
+      sessionId: 'session-direct-mcp-contract',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+
+    const mcpServers = sdkMock.query.mock.calls.at(-1)?.[0]?.options?.mcpServers as
+      | Record<string, unknown>
+      | undefined;
+    expect(Object.keys(mcpServers ?? {}).sort()).toEqual(['cindy_browser', 'cindy_contacts']);
+    expect(Object.keys(mcpServers ?? {})).not.toContain('cindy_mcp_list_tools');
+    expect(Object.keys(mcpServers ?? {})).not.toContain('cindy_mcp_call_tool');
     await handle.close();
   });
 
@@ -994,16 +1275,16 @@ describe('fail-closed still precedes the MCP policy', () => {
     await handle.close();
   });
 
-  it('denies trusted MCP tools in auto mode too when no resolver is attached', async () => {
+  it('allows trusted MCP tools in auto mode too when no resolver is attached', async () => {
     const { handle, canUseTool } = await startSession(() => 'auto-approve', {
       bare: true,
       permissionMode: 'auto',
     });
 
-    // Auto 只让**内建**工具在无 UI 下由本地规则/轻量 reviewer 自决;mcp__* 被刻意排除。
+    // Auto can decide trusted MCP actions without a UI resolver.
     const result = await canUseTool('mcp__cindy_browser__call_tool', {}, { toolUseID: 't-bare-auto' });
 
-    expect(result.behavior).toBe('deny');
+    expect(result.behavior).toBe('allow');
     await handle.close();
   });
 
@@ -1024,6 +1305,27 @@ describe('fail-closed still precedes the MCP policy', () => {
 });
 
 describe('remote sessions share the same permission semantics', () => {
+  it('remote Full Access respects the active Plan turn until explicit plan approval', async () => {
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'auto-approve', {
+      permissionMode: 'bypassPermissions',
+      attachResolver: (req) => req.kind === 'plan_review'
+        ? { kind: 'plan_review', behavior: 'allow' } : { kind: 'permission', behavior: 'allow' },
+    });
+    await handle.setPlanMode!(true);
+    await handle.send({ type: 'user', content: 'Plan the change.' });
+    expect(handle.getPlanMode?.()).toBe(false);
+    expect(handle.getExecutionPlanMode?.()).toBe(true);
+    for (const toolName of ['Write', 'Bash', 'mcp__cindy_contacts__call_tool']) {
+      expect(await onApprovalRequest({ requestId: `plan-${toolName}`, kind: 'permission', toolName, input: {} })).toMatchObject({ behavior: 'deny' });
+    }
+    expect(await onApprovalRequest({ requestId: 'plan-read', kind: 'permission', toolName: 'Read', input: {} })).toMatchObject({ behavior: 'allow' });
+    expect(seen).toHaveLength(0);
+    expect(await onApprovalRequest({ requestId: 'plan-exit', kind: 'plan_review', plan: 'Apply the change.' })).toMatchObject({ behavior: 'allow' });
+    expect(handle.getExecutionPlanMode?.()).toBe(false);
+    expect(await onApprovalRequest({ requestId: 'plan-done', kind: 'permission', toolName: 'Write', input: {} })).toMatchObject({ behavior: 'allow' });
+    await handle.close();
+  });
+
   /** 起一个远端会话并拿到 daemon 侧的 approval 回调。 */
   async function startRemoteSession(
     policy: (context: McpToolApprovalContext) => McpToolApprovalPolicy,
@@ -1036,6 +1338,8 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames?: readonly string[];
       getGhostRosterPrompt?: AgentDeps['getGhostRosterPrompt'];
       getMcpToolApprovalPresentation?: AgentDeps['getMcpToolApprovalPresentation'];
+      resolveClaudeSubagentModelAccess?: AgentDeps['resolveClaudeSubagentModelAccess'];
+      reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
     },
   ) {
     const configDir = await makeTempDir();
@@ -1043,10 +1347,13 @@ describe('remote sessions share the same permission semantics', () => {
     const workingDir = await makeTempDir();
 
     let onApprovalRequest: ((raw: unknown) => Promise<{ behavior?: string }>) | undefined;
+    let onSubagentModelAccessRequest: ((raw: unknown) => Promise<{ status?: string }>) | undefined;
     const deps = createDeps(policy);
     deps.getGhostRosterPrompt = options?.getGhostRosterPrompt;
     deps.getMcpToolApprovalPresentation = options?.getMcpToolApprovalPresentation;
     deps.capabilityRouting = options?.capabilityRouting;
+    deps.resolveClaudeSubagentModelAccess = options?.resolveClaudeSubagentModelAccess;
+    deps.reviewAutoPermissionAction = options?.reviewAutoPermissionAction;
     // 远端只装得到 stdio / sse / http 类 server —— in-process 的会被 filter 掉。
     deps.mcpProviders = (
       options?.mcpServerNames ?? ['cindy_browser', 'cindy_contacts']
@@ -1060,9 +1367,11 @@ describe('remote sessions share the same permission semantics', () => {
       sessionId: string;
       sessionInstanceId?: string;
       onApprovalRequest: (raw: unknown) => Promise<{ behavior?: string }>;
+      onSubagentModelAccessRequest: (raw: unknown) => Promise<{ status?: string }>;
       startParams: Record<string, unknown>;
     }) => {
       onApprovalRequest = args.onApprovalRequest;
+      onSubagentModelAccessRequest = args.onSubagentModelAccessRequest;
       remoteStartParams = args.startParams;
       remoteIdentity = {
         sessionId: args.sessionId,
@@ -1093,8 +1402,61 @@ describe('remote sessions share the same permission semantics', () => {
       });
     }
     if (!onApprovalRequest) throw new Error('expected remote onApprovalRequest');
-    return { handle, onApprovalRequest, seen, remoteStartParams, remoteIdentity };
+    if (!onSubagentModelAccessRequest) throw new Error('expected remote model access callback');
+    return {
+      handle,
+      onApprovalRequest,
+      onSubagentModelAccessRequest,
+      seen,
+      remoteStartParams,
+      remoteIdentity,
+      workingDir,
+    };
   }
+
+  it.each(['http', 'sse'] as const)('forwards a selected custom %s MCP to a remote Bot without the host bridge', async (transport) => {
+    process.env.CLAUDE_CONFIG_DIR = await makeTempDir();
+    const workingDir = await makeTempDir();
+    const deps = createDeps();
+    const selected = { type: transport, url: 'https://mcp.example.test/service' };
+    deps.mcpProviders = [
+      { name: 'custom-selected', toClaudeSdkConfig: () => selected },
+      { name: 'custom-unselected', toClaudeSdkConfig: () => selected },
+      { name: 'in-process', toClaudeSdkConfig: () => ({ type: 'sdk', name: 'in-process', instance: {} }) },
+    ];
+    let remoteStartParams: Record<string, unknown> | undefined;
+    deps.remoteCcQueryFactory = async ({ startParams }) => {
+      remoteStartParams = startParams as unknown as Record<string, unknown>;
+      return createFakeQuery() as never;
+    };
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'remote-bot-custom-mcp',
+      model: 'claude-opus-4-6',
+      workingDir,
+      remoteHostId: 'remote-1',
+      permissionMode: 'default',
+      botRuntimeProfile: {
+        botId: 'bot-1', profileVersion: 1,
+        skillPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        toolsetPolicy: { mode: 'allowlist', configured: [], catalog: [] },
+        mcpPolicy: {
+          mode: 'allowlist', configured: ['custom-selected', 'in-process'],
+          catalog: [
+            { name: 'custom-selected', source: 'custom', available: true },
+            { name: 'custom-unselected', source: 'custom', available: true },
+            { name: 'in-process', source: 'builtin', available: true },
+          ],
+        },
+      },
+    });
+    try {
+      // This is the actual serialized input handed to the remote factory:
+      // the shared bridge is not involved in forwarding HTTP/SSE providers.
+      expect(remoteStartParams?.mcpServers).toEqual({ 'custom-selected': selected });
+    } finally {
+      await handle.close();
+    }
+  });
 
   it('passes the runtime session instance id into the remote Claude factory', async () => {
     const { handle, remoteIdentity } = await startRemoteSession(() => 'auto-approve');
@@ -1103,6 +1465,26 @@ describe('remote sessions share the same permission semantics', () => {
       sessionId: 'session-remote-mcp-policy',
       sessionInstanceId: 'instance-remote-mcp-policy',
     });
+    await handle.close();
+  });
+
+  it('keeps remote Full access on the same live tri-state resolver', async () => {
+    const resolveClaudeSubagentModelAccess = vi.fn(async () => ({ status: 'denied' as const }));
+    const { handle, onSubagentModelAccessRequest, remoteStartParams } = await startRemoteSession(
+      () => 'auto-approve',
+      {
+        permissionMode: 'bypassPermissions',
+        resolveClaudeSubagentModelAccess,
+      },
+    );
+
+    await expect(onSubagentModelAccessRequest({ model: 'sonnet' }))
+      .resolves.toEqual({ status: 'denied' });
+    expect(resolveClaudeSubagentModelAccess).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'sonnet',
+      parentModel: 'claude-opus-4-6',
+    }));
+    expect(remoteStartParams).not.toHaveProperty('subagentModelPolicy');
     await handle.close();
   });
 
@@ -1132,6 +1514,27 @@ describe('remote sessions share the same permission semantics', () => {
 
     expect(result.behavior).toBe('allow');
     expect(seen).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('prompts for remote structured writes when the controller cannot prove the real target', async () => {
+    const { handle, onApprovalRequest, seen, workingDir } = await startRemoteSession(
+      () => 'auto-approve',
+      {
+        permissionMode: 'auto',
+        attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+      },
+    );
+
+    const result = await onApprovalRequest({
+      requestId: 'r-remote-write',
+      kind: 'permission',
+      toolName: 'Write',
+      input: { file_path: path.join(workingDir, 'result.txt') },
+    });
+
+    expect(result.behavior).toBe('allow');
+    expect(permissionRequests(seen)).toHaveLength(1);
     await handle.close();
   });
 
@@ -1268,6 +1671,54 @@ describe('remote sessions share the same permission semantics', () => {
     await handle.close();
   });
 
+  it.each([false, true])('remote Auto to Full access retains turn scope without restoring MCP forced prompts (%s)', async (restricted) => {
+    let release!: (decision: { verdict: 'allow' }) => void;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'allow' }>((resolve) => { release = resolve; }));
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'prompt-each-time', {
+      permissionMode: 'auto', reviewAutoPermissionAction: reviewer,
+      attachResolver: () => ({ kind: 'permission', behavior: 'allow' }),
+    });
+    await handle.send({ type: 'user', content: 'Send the approved report.' }, restricted ? {
+      turnPermissionPolicy: {
+        origin: { kind: 'im', channel: 'telegram' }, confirmationSurface: 'channel', forceConfirmToolCall: () => true,
+      },
+    } : undefined);
+    const pending = onApprovalRequest({ requestId: 'remote-scope-switch', kind: 'permission',
+      toolName: 'mcp__cindy_contacts__call_tool', input: { name: 'contacts_merge' },
+    });
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.setPermissionMode!('bypassPermissions');
+    release({ verdict: 'allow' });
+    expect(await pending).toMatchObject({ behavior: restricted ? 'deny' : 'allow' });
+    expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('reviews remote destructive paths with explicit unavailable realpath evidence', async () => {
+    const reviewer = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const { handle, onApprovalRequest, seen } = await startRemoteSession(
+      () => 'prompt',
+      {
+        permissionMode: 'auto',
+        reviewAutoPermissionAction: reviewer,
+        attachResolver: () => ({ kind: 'permission', behavior: 'deny' }),
+      },
+    );
+
+    const result = await onApprovalRequest({
+      requestId: 'r-remote-rm',
+      kind: 'permission',
+      toolName: 'Bash',
+      input: { command: 'rm -rf build' },
+    });
+
+    expect(result.behavior).toBe('allow');
+    expect(reviewer).toHaveBeenCalledOnce();
+    expect(reviewer).toHaveBeenCalledWith(expect.objectContaining({ action: expect.objectContaining({ kind: 'exec', command: 'rm -rf build', destructivePathResolution: 'unavailable' }) }));
+    expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
+  });
+
   it('guards plugin MCPs on remote sessions, including bypass mode, while preserving explicit selection', async () => {
     const capabilityRouting = {
       overrides: [
@@ -1320,6 +1771,13 @@ describe('remote sessions share the same permission semantics', () => {
         ],
         denialMessage:
           'This downstream source was not explicitly selected. Use Cindy capability xd-feishu.',
+      },
+      {
+        toolNamePrefix: 'AskUserQuestion',
+        sourceServerId: 'claude-code',
+        invocation: 'root-only',
+        denialMessage:
+          'NATIVE_SUBAGENT_USER_INPUT_NOT_ALLOWED: report the question to the parent agent, which can decide whether to ask the user.',
       },
     ]);
     await expect(
@@ -1430,7 +1888,7 @@ describe('remote sessions share the same permission semantics', () => {
       mcpServerNames: [userServerId],
     });
 
-    expect(remote.remoteStartParams?.toolGuards).toHaveLength(1);
+    expect(remote.remoteStartParams?.toolGuards).toHaveLength(2);
     await expect(
       remote.onApprovalRequest({
         requestId: 'r-user-mcp-collision',
@@ -1512,7 +1970,7 @@ describe('remote sessions share the same permission semantics', () => {
       failedInitMcpServerNames: [userServerId],
     });
     await new Promise<void>((resolve) => setTimeout(resolve, 0));
-    expect(failed.remoteStartParams?.toolGuards).toHaveLength(1);
+    expect(failed.remoteStartParams?.toolGuards).toHaveLength(2);
     await expect(
       failed.onApprovalRequest({
         requestId: 'r-failed-settings-mcp-collision',

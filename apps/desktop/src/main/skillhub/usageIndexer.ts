@@ -6,16 +6,24 @@ import type Database from 'better-sqlite3';
 import { brandUserDataDirName } from '@cindy/maker-shared/brand-identity';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 
-import { getRawDb } from '../localDb';
+import type { DbClient } from '../localDb/client/DbClient.js';
+import { getCurrentDbClientSnapshot, getDbClient, type CurrentDbClientSnapshot } from '../localDb/client/current.js';
 
 import { analyzeSkillUsageTranscript, hashSkillContent, type SkillUsageAgentKind } from './usageAnalyzer';
 import {
   deleteSkillUsageRecordsBefore,
+  deleteSkillUsageRecordsBeforeWithClient,
+  getSkillUsageDiagnosisContextFromClient,
   getSkillUsageDiagnosisContextFromDb,
+  getSkillUsageSummaryFromClient,
   getSkillUsageSummaryFromDb,
   listSkillUsageSourcesWithRecentExposures,
+  listSkillUsageSourcesWithRecentExposuresFromClient,
   markSkillUsageSourceFailed,
+  markSkillUsageSourceFailedWithClient,
   persistSkillUsageAnalysis,
+  persistSkillUsageAnalysisWithClient,
+  promoteSkillUsageAnalyzerVersionWithClient,
   type SkillUsageDiagnosisContext,
   type SkillUsageRecentSourceRecord,
   type SkillUsageSummary,
@@ -76,6 +84,8 @@ interface CachedSourceStat {
   status: string;
 }
 
+type SkillUsageDatabase = Database.Database | DbClient;
+
 export interface SkillUsageSummaryResult {
   success: true;
   summary: SkillUsageSummary;
@@ -95,28 +105,40 @@ const ANALYZER_VERSION_META_KEY = 'skill_usage_analyzer_version';
 const MIN_BACKGROUND_REFRESH_INTERVAL_MS = 15_000;
 // 解析规则变化时递增。新版完整构建完成前，UI 继续读取旧 active 版本。
 const ANALYZER_VERSION = '6';
-let refreshPromise: Promise<void> | null = null;
-let lastBackgroundRefreshFinishedAt = 0;
+interface SkillUsageRefreshState {
+  promise: Promise<void> | null;
+  lastBackgroundRefreshFinishedAt: number;
+}
+const refreshStateByDatabase = new WeakMap<object, SkillUsageRefreshState>();
+let activeRefreshCount = 0;
 
 export async function getLocalSkillUsageSummary(params: {
   skillName: string;
   currentSkillContent?: string | null;
   db?: Database.Database;
+  client?: DbClient;
 }): Promise<SkillUsageSummaryResult> {
   const currentDocumentHash = params.currentSkillContent
     ? hashSkillContent(params.currentSkillContent)
     : null;
-  const db = params.db ?? getRawDb();
-  const analyzerVersion = readActiveAnalyzerVersion(db);
+  const database = params.db ?? params.client ?? getDbClient();
+  const analyzerVersion = await readActiveAnalyzerVersion(database);
   return {
     success: true,
-    summary: getSkillUsageSummaryFromDb(db, {
-      skillName: params.skillName,
-      currentDocumentHash,
-      currentDocumentContent: params.currentSkillContent ?? null,
-      analyzerVersion,
-    }),
-    refreshing: isLocalSkillUsageAnalyticsRefreshing(),
+    summary: isRawDatabase(database)
+      ? getSkillUsageSummaryFromDb(database, {
+          skillName: params.skillName,
+          currentDocumentHash,
+          currentDocumentContent: params.currentSkillContent ?? null,
+          analyzerVersion,
+        })
+      : await getSkillUsageSummaryFromClient(database, {
+          skillName: params.skillName,
+          currentDocumentHash,
+          currentDocumentContent: params.currentSkillContent ?? null,
+          analyzerVersion,
+        }),
+    refreshing: isLocalSkillUsageAnalyticsRefreshing(database),
   };
 }
 
@@ -125,81 +147,118 @@ export async function getLocalSkillUsageDiagnosisContext(params: {
   currentSkillContent?: string | null;
   skillPath?: string | null;
   db?: Database.Database;
+  client?: DbClient;
 }): Promise<SkillUsageDiagnosisContextResult> {
   const currentDocumentHash = params.currentSkillContent
     ? hashSkillContent(params.currentSkillContent)
     : null;
-  const db = params.db ?? getRawDb();
-  await refreshLocalSkillUsageAnalytics(db);
-  const analyzerVersion = readActiveAnalyzerVersion(db);
+  const database = params.db ?? params.client ?? getDbClient();
+  await refreshLocalSkillUsageAnalytics(database);
+  const analyzerVersion = await readActiveAnalyzerVersion(database);
   return {
     success: true,
-    context: getSkillUsageDiagnosisContextFromDb(db, {
-      skillName: params.skillName,
-      currentDocumentHash,
-      currentDocumentContent: params.currentSkillContent ?? null,
-      analyzerVersion,
-      skillPath: params.skillPath ?? null,
-    }),
+    context: isRawDatabase(database)
+      ? getSkillUsageDiagnosisContextFromDb(database, {
+          skillName: params.skillName,
+          currentDocumentHash,
+          currentDocumentContent: params.currentSkillContent ?? null,
+          analyzerVersion,
+          skillPath: params.skillPath ?? null,
+        })
+      : await getSkillUsageDiagnosisContextFromClient(database, {
+          skillName: params.skillName,
+          currentDocumentHash,
+          currentDocumentContent: params.currentSkillContent ?? null,
+          analyzerVersion,
+          skillPath: params.skillPath ?? null,
+        }),
   };
 }
 
-export function isLocalSkillUsageAnalyticsRefreshing(): boolean {
-  return refreshPromise !== null;
+export function isLocalSkillUsageAnalyticsRefreshing(database?: SkillUsageDatabase): boolean {
+  return database
+    ? getRefreshState(database).promise !== null
+    : activeRefreshCount > 0;
 }
 
-export function requestLocalSkillUsageAnalyticsRefresh(db: Database.Database): Promise<void> | null {
-  if (refreshPromise) return refreshPromise;
+export function requestLocalSkillUsageAnalyticsRefresh(
+  database: SkillUsageDatabase = getDbClient(),
+): Promise<void> | null {
+  const state = getRefreshState(database);
+  if (state.promise) return state.promise;
   const now = Date.now();
-  if (now - lastBackgroundRefreshFinishedAt < MIN_BACKGROUND_REFRESH_INTERVAL_MS) return null;
-  return startLocalSkillUsageAnalyticsRefresh(db);
+  if (now - state.lastBackgroundRefreshFinishedAt < MIN_BACKGROUND_REFRESH_INTERVAL_MS) return null;
+  return startLocalSkillUsageAnalyticsRefresh(database);
 }
 
 export function refreshLocalSkillUsageAnalytics(
-  db: Database.Database,
+  database: SkillUsageDatabase = getDbClient(),
   options: SkillUsageRefreshOptions = {},
 ): Promise<void> {
-  return startLocalSkillUsageAnalyticsRefresh(db, options);
+  return startLocalSkillUsageAnalyticsRefresh(database, options);
 }
 
 function startLocalSkillUsageAnalyticsRefresh(
-  db: Database.Database,
+  database: SkillUsageDatabase,
   options: SkillUsageRefreshOptions = {},
 ): Promise<void> {
-  if (!refreshPromise) {
-    refreshPromise = runLocalSkillUsageAnalyticsRefresh(db, options).finally(() => {
-      lastBackgroundRefreshFinishedAt = Date.now();
-      refreshPromise = null;
+  const state = getRefreshState(database);
+  if (!state.promise) {
+    activeRefreshCount += 1;
+    state.promise = runLocalSkillUsageAnalyticsRefresh(database, options).finally(() => {
+      state.lastBackgroundRefreshFinishedAt = Date.now();
+      state.promise = null;
+      activeRefreshCount -= 1;
     });
   }
-  return refreshPromise;
+  return state.promise;
+}
+
+function getRefreshState(database: SkillUsageDatabase): SkillUsageRefreshState {
+  const existing = refreshStateByDatabase.get(database);
+  if (existing) return existing;
+  const state: SkillUsageRefreshState = {
+    promise: null,
+    lastBackgroundRefreshFinishedAt: 0,
+  };
+  refreshStateByDatabase.set(database, state);
+  return state;
 }
 
 async function runLocalSkillUsageAnalyticsRefresh(
-  db: Database.Database,
+  database: SkillUsageDatabase,
   options: SkillUsageRefreshOptions = {},
 ): Promise<void> {
-  const activeBeforeRefresh = readActiveAnalyzerVersion(db);
-  ensureActiveAnalyzerVersionMeta(db, activeBeforeRefresh);
+  // In-process DbClient resolves getRawDb() dynamically. Keep the refresh tied
+  // to the owner/epoch it started with so an account switch cannot redirect a
+  // later write, cleanup, or promotion into the next owner's database.
+  const snapshot = captureRefreshSnapshot(database);
+  if (!isRefreshDatabaseStable(snapshot)) return;
+  const activeBeforeRefresh = await readActiveAnalyzerVersion(database);
+  if (!isRefreshDatabaseStable(snapshot)) return;
+  await ensureActiveAnalyzerVersionMeta(database, activeBeforeRefresh);
   const nowMs = options.nowMs ?? Date.now();
   const recentSince = recentWindowStartMs(nowMs);
   const platform = options.platform ?? process.platform;
   const discovery = await discoverTranscriptSourcesForRefresh({ ...options, nowMs });
   const cachedRecent = await statCachedRecentSources(
-    db,
+    database,
     activeBeforeRefresh,
     recentSince,
     options.statSource ?? statSource,
   );
+  if (!isRefreshDatabaseStable(snapshot)) return;
   const readTranscriptFile = options.readTranscriptFile ?? ((file: string) => fs.readFile(file, 'utf-8'));
   const sourceBatchSize = Math.max(1, options.maxSourcesPerRefresh ?? MAX_SOURCES_PER_REFRESH);
   const sources = mergeTranscriptSources(discovery.sources, cachedRecent.sources, platform);
-  const dirtySources = sources.filter((source) => !isCachedSourceFresh(db, source));
+  const cachedSourceStats = await readCachedSourceStats(database, sources.map((source) => source.rawFilePath));
+  const dirtySources = sources.filter((source) => !isCachedSourceFresh(cachedSourceStats, source));
   const scannedAt = Date.now();
   let failedCount = 0;
   for (let start = 0; start < dirtySources.length; start += sourceBatchSize) {
     const batch = dirtySources.slice(start, start + sourceBatchSize);
     for (const source of batch) {
+      if (!isRefreshDatabaseStable(snapshot)) return;
       try {
         const text = await readTranscriptFile(source.rawFilePath);
         const analysis = analyzeSkillUsageTranscript({
@@ -209,7 +268,8 @@ async function runLocalSkillUsageAnalyticsRefresh(
           rawFilePath: source.rawFilePath,
           lines: text.split(/\r?\n/),
         });
-        persistSkillUsageAnalysis(db, {
+        if (!isRefreshDatabaseStable(snapshot)) return;
+        await persistSkillUsageAnalysisInDatabase(database, {
           rawFilePath: source.rawFilePath,
           analyzerVersion: ANALYZER_VERSION,
           agentKind: source.agentKind,
@@ -221,7 +281,8 @@ async function runLocalSkillUsageAnalyticsRefresh(
         }, analysis);
       } catch (err) {
         failedCount += 1;
-        markSkillUsageSourceFailed(db, {
+        if (!isRefreshDatabaseStable(snapshot)) return;
+        await markSkillUsageSourceFailedInDatabase(database, {
           rawFilePath: source.rawFilePath,
           analyzerVersion: ANALYZER_VERSION,
           agentKind: source.agentKind,
@@ -236,54 +297,126 @@ async function runLocalSkillUsageAnalyticsRefresh(
     }
     if (start + sourceBatchSize < dirtySources.length) await yieldToEventLoop();
   }
+  if (!isRefreshDatabaseStable(snapshot)) return;
   if (!discovery.hadDiscoveryFailure && !cachedRecent.hadStatFailure) {
-    deleteSkillUsageRecordsBefore(db, ANALYZER_VERSION, recentSince);
+    await deleteSkillUsageRecordsBeforeInDatabase(database, ANALYZER_VERSION, recentSince);
   }
   if (!discovery.hadDiscoveryFailure && !cachedRecent.hadStatFailure && failedCount === 0) {
-    promoteAnalyzerVersion(db, ANALYZER_VERSION);
+    await promoteAnalyzerVersion(database, ANALYZER_VERSION);
   }
 }
 
-function readActiveAnalyzerVersion(db: Database.Database): string {
-  const row = db.prepare('SELECT value FROM migration_meta WHERE key = ?').get(ANALYZER_VERSION_META_KEY) as
-    | { value: string | null }
-    | undefined;
+type RefreshSnapshot = CurrentDbClientSnapshot | null;
+
+function captureRefreshSnapshot(database: SkillUsageDatabase): RefreshSnapshot {
+  if (isRawDatabase(database)) return null;
+  const snapshot = getCurrentDbClientSnapshot();
+  return snapshot?.client === database ? snapshot : null;
+}
+
+function isRefreshDatabaseStable(snapshot: RefreshSnapshot): boolean {
+  if (!snapshot) return true;
+  const current = getCurrentDbClientSnapshot();
+  return current?.client === snapshot.client
+    && current.userId === snapshot.userId
+    && current.clientEpoch === snapshot.clientEpoch;
+}
+
+async function readActiveAnalyzerVersion(database: SkillUsageDatabase): Promise<string> {
+  const row = isRawDatabase(database)
+    ? database.prepare('SELECT value FROM migration_meta WHERE key = ?').get(ANALYZER_VERSION_META_KEY) as
+      | { value: string | null }
+      | undefined
+    : await database.queryOne<{ value: string | null }>(
+        'SELECT value FROM migration_meta WHERE key = ?', [ANALYZER_VERSION_META_KEY],
+      );
   if (row?.value) return row.value;
-  const latestPreviousExposure = db.prepare(`
+  const previousSql = `
     SELECT analyzer_version AS analyzerVersion
     FROM skill_usage_exposures
     WHERE analyzer_version <> ?
     ORDER BY seen_at DESC
     LIMIT 1
-  `).get(ANALYZER_VERSION) as { analyzerVersion: string | null } | undefined;
+  `;
+  const latestPreviousExposure = isRawDatabase(database)
+    ? database.prepare(previousSql).get(ANALYZER_VERSION) as { analyzerVersion: string | null } | undefined
+    : await database.queryOne<{ analyzerVersion: string | null }>(previousSql, [ANALYZER_VERSION]);
   if (latestPreviousExposure?.analyzerVersion) return latestPreviousExposure.analyzerVersion;
-  const latestExposure = db.prepare(`
+  const latestSql = `
     SELECT analyzer_version AS analyzerVersion
     FROM skill_usage_exposures
     ORDER BY seen_at DESC
     LIMIT 1
-  `).get() as { analyzerVersion: string | null } | undefined;
+  `;
+  const latestExposure = isRawDatabase(database)
+    ? database.prepare(latestSql).get() as { analyzerVersion: string | null } | undefined
+    : await database.queryOne<{ analyzerVersion: string | null }>(latestSql);
   return latestExposure?.analyzerVersion || ANALYZER_VERSION;
 }
 
-function ensureActiveAnalyzerVersionMeta(db: Database.Database, analyzerVersion: string): void {
-  db.prepare(`
+async function ensureActiveAnalyzerVersionMeta(
+  database: SkillUsageDatabase,
+  analyzerVersion: string,
+): Promise<void> {
+  const sql = `
     INSERT INTO migration_meta (key, value)
     VALUES (?, ?)
     ON CONFLICT(key) DO NOTHING
-  `).run(ANALYZER_VERSION_META_KEY, analyzerVersion);
+  `;
+  if (isRawDatabase(database)) {
+    database.prepare(sql).run(ANALYZER_VERSION_META_KEY, analyzerVersion);
+  } else {
+    await database.exec(sql, [ANALYZER_VERSION_META_KEY, analyzerVersion]);
+  }
 }
 
-function promoteAnalyzerVersion(db: Database.Database, analyzerVersion: string): void {
-  const tx = db.transaction(() => {
-    db.prepare(`
+async function promoteAnalyzerVersion(
+  database: SkillUsageDatabase,
+  analyzerVersion: string,
+): Promise<void> {
+  if (!isRawDatabase(database)) {
+    await promoteSkillUsageAnalyzerVersionWithClient(database, analyzerVersion);
+    return;
+  }
+  const tx = database.transaction(() => {
+    database.prepare(`
       INSERT INTO migration_meta (key, value)
       VALUES (?, ?)
       ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `).run(ANALYZER_VERSION_META_KEY, analyzerVersion);
-    db.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version <> ?').run(analyzerVersion);
+    database.prepare('DELETE FROM skill_usage_exposures WHERE analyzer_version <> ?').run(analyzerVersion);
   });
   tx();
+}
+
+function isRawDatabase(database: SkillUsageDatabase): database is Database.Database {
+  return 'prepare' in database && typeof database.prepare === 'function';
+}
+
+async function persistSkillUsageAnalysisInDatabase(
+  database: SkillUsageDatabase,
+  source: Parameters<typeof persistSkillUsageAnalysis>[1],
+  analysis: Parameters<typeof persistSkillUsageAnalysis>[2],
+): Promise<void> {
+  if (isRawDatabase(database)) persistSkillUsageAnalysis(database, source, analysis);
+  else await persistSkillUsageAnalysisWithClient(database, source, analysis);
+}
+
+async function markSkillUsageSourceFailedInDatabase(
+  database: SkillUsageDatabase,
+  source: Parameters<typeof markSkillUsageSourceFailed>[1],
+): Promise<void> {
+  if (isRawDatabase(database)) markSkillUsageSourceFailed(database, source);
+  else await markSkillUsageSourceFailedWithClient(database, source);
+}
+
+async function deleteSkillUsageRecordsBeforeInDatabase(
+  database: SkillUsageDatabase,
+  analyzerVersion: string,
+  recentSince: number,
+): Promise<void> {
+  if (isRawDatabase(database)) deleteSkillUsageRecordsBefore(database, analyzerVersion, recentSince);
+  else await deleteSkillUsageRecordsBeforeWithClient(database, analyzerVersion, recentSince);
 }
 
 export async function discoverTranscriptSources(options: TranscriptDiscoveryOptions = {}): Promise<TranscriptSource[]> {
@@ -497,12 +630,14 @@ function isMissingCollectionRoot(root: string, dir: string, err: unknown): boole
 }
 
 async function statCachedRecentSources(
-  db: Database.Database,
+  database: SkillUsageDatabase,
   analyzerVersion: string,
   recentSince: number,
   statFile: (file: string) => Promise<SourceStat | null>,
 ): Promise<{ sources: TranscriptSource[]; hadStatFailure: boolean }> {
-  const cachedSources = listSkillUsageSourcesWithRecentExposures(db, analyzerVersion, recentSince);
+  const cachedSources = isRawDatabase(database)
+    ? listSkillUsageSourcesWithRecentExposures(database, analyzerVersion, recentSince)
+    : await listSkillUsageSourcesWithRecentExposuresFromClient(database, analyzerVersion, recentSince);
   if (cachedSources.length === 0) return { sources: [], hadStatFailure: false };
   const result = await statTranscriptSourcesWithoutRecentFilter(cachedSources, statFile);
   return result;
@@ -583,8 +718,11 @@ function compareTranscriptSourcesByRecency(a: TranscriptSource, b: TranscriptSou
   return b.mtimeMs - a.mtimeMs || a.rawFilePath.localeCompare(b.rawFilePath);
 }
 
-function isCachedSourceFresh(db: Database.Database, source: TranscriptSource): boolean {
-  const cached = readCachedSourceStat(db, source.rawFilePath);
+function isCachedSourceFresh(
+  cachedSourceStats: ReadonlyMap<string, CachedSourceStat>,
+  source: TranscriptSource,
+): boolean {
+  const cached = cachedSourceStats.get(source.rawFilePath);
   return (
     cached?.status === 'ok' &&
     cached.analyzerVersion === ANALYZER_VERSION &&
@@ -603,13 +741,27 @@ async function statSource(file: string): Promise<SourceStat | null> {
   }
 }
 
-function readCachedSourceStat(db: Database.Database, rawFilePath: string): CachedSourceStat | null {
-  const row = db.prepare(`
-    SELECT analyzer_version AS analyzerVersion, mtime_ms AS mtimeMs, size_bytes AS sizeBytes, status
-    FROM skill_usage_sources
-    WHERE raw_file_path = ?
-  `).get(rawFilePath) as CachedSourceStat | undefined;
-  return row ?? null;
+async function readCachedSourceStats(
+  database: SkillUsageDatabase,
+  rawFilePaths: string[],
+): Promise<Map<string, CachedSourceStat>> {
+  if (rawFilePaths.length === 0) return new Map();
+  const sql = `
+    SELECT
+      s.raw_file_path AS rawFilePath,
+      s.analyzer_version AS analyzerVersion,
+      s.mtime_ms AS mtimeMs,
+      s.size_bytes AS sizeBytes,
+      s.status
+    FROM json_each(?) wanted
+    JOIN skill_usage_sources s
+      ON s.raw_file_path = CAST(wanted.value AS TEXT)
+  `;
+  const params = [JSON.stringify(rawFilePaths)];
+  const rows = isRawDatabase(database)
+    ? database.prepare(sql).all(...params) as Array<CachedSourceStat & { rawFilePath: string }>
+    : await database.query<CachedSourceStat & { rawFilePath: string }>(sql, params);
+  return new Map(rows.map((row) => [row.rawFilePath, row]));
 }
 
 function yieldToEventLoop(): Promise<void> {

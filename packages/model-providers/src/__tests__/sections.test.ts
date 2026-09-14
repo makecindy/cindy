@@ -267,3 +267,15 @@ describe('visibleModelUnion', () => {
     expect(out.map((m) => m.id)).toEqual(['gpt-5.5']);
   });
 });
+
+
+it('passes display-only tiers to the selector without opening runtime efforts', () => {
+  const sections = buildProviderSections({
+    providers: [provider('xd', 'Gateway', [{
+      ...model('openai/gpt-6-astra', 'Astra'), efforts: ['medium'], displayEfforts: ['low', 'medium', 'max'],
+      defaultEffort: 'medium',
+    }])],
+    agent: 'claude-code', isVisible: () => true,
+  });
+  expect(sections[0].models[0]).toMatchObject({ efforts: ['medium'], displayEfforts: ['low', 'medium', 'max'] });
+});

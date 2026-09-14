@@ -20,7 +20,10 @@ const h = vi.hoisted(() => ({
   catalog: null as Catalog | null,
   claudeCredentialPresent: true,
   grokCredentialPresent: true,
-  refreshAnthropicModels: vi.fn(),
+  refreshAnthropicModels: vi.fn(async () => true),
+  refreshXaiModels: vi.fn(async () => true),
+  loadXaiDiskCache: vi.fn(async () => false),
+  refreshXaiMediaModels: vi.fn(async () => true),
   loadAnthropicDiskCache: vi.fn(async () => {}),
   codexLoginWithSideEffects: vi.fn(async () => false),
   codexLoginReadOnly: vi.fn(() => false),
@@ -42,6 +45,7 @@ vi.mock('../../appSessionState.js', () => ({
     dataOwnerId: h.dataOwnerId,
     generation: h.generation,
   }),
+  activeOwnerScopeKey: () => `local:${h.dataOwnerId ?? 'none'}:${h.generation}`,
   isAppSessionBoundaryPending: () => false,
   // model-disable-store(经 createDesktopProviderService 引入)按 owner 定位 override
   // 文件;指到本用例的临时 userData 即可(store 是惰性读,文件缺席 = 全启用)。
@@ -51,14 +55,19 @@ vi.mock('../../appSessionState.js', () => ({
 // 本机凭证库:*Unbound 是「blob 里有凭证吗」,无绑定语义;带绑定的读取叠加 owner 校验,
 // 与真实实现(readClaudeAiOAuth / hasGrokOAuthLogin)的分层一致。
 vi.mock('../claude-credentials-store.js', () => ({
+  readClaudeAiOAuth: () =>
+    h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic')
+      ? { accessToken: 'fake-token', identity: 'claude@example.test' }
+      : null,
   hasClaudeAiOAuthUnbound: () => h.claudeCredentialPresent,
-  hasClaudeAiOAuth: () =>
-    h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
+  hasClaudeAiOAuth: () => h.claudeCredentialPresent && isBoundToCurrentOwner('anthropic'),
 }));
 vi.mock('../grok-oauth-login.js', () => ({
+  grokAccountIdentity: () => 'grok@example.test',
   hasGrokOAuthLoginUnbound: () => h.grokCredentialPresent,
   hasGrokOAuthLogin: () => h.grokCredentialPresent && isBoundToCurrentOwner('xai'),
   getGrokAccessToken: () => null,
+  peekGrokAccessToken: () => null,
   resetGrokOAuthMemoryCache: () => {},
 }));
 
@@ -66,6 +75,15 @@ vi.mock('../model-discovery/anthropic.js', () => ({
   loadAnthropicModelsFromDiskCache: h.loadAnthropicDiskCache,
   refreshAnthropicModelsFromHttp: h.refreshAnthropicModels,
   getAnthropicModelDiscoveryFailure: () => h.anthropicDiscoveryFailure,
+}));
+vi.mock('../model-discovery/xai.js', () => ({
+  clearXaiDiscoveredModels: vi.fn(),
+  loadXaiModelsFromDiskCache: h.loadXaiDiskCache,
+  refreshXaiModelsFromHttp: h.refreshXaiModels,
+}));
+vi.mock('../model-discovery/xai-media.js', () => ({
+  refreshXaiMediaModels: h.refreshXaiMediaModels,
+  clearXaiMediaModels: vi.fn(),
 }));
 
 vi.mock('../active-catalog.js', async () => {
@@ -84,15 +102,26 @@ vi.mock('../auth-adapters.js', () => ({
   desktopCodexAuthAdapter: {
     hasCodexOAuthLogin: h.codexLoginWithSideEffects,
     hasCodexOAuthLoginReadOnly: h.codexLoginReadOnly,
+    readAccountPresentationState: async () => ({ authenticated: h.codexLoginReadOnly() }),
     hasCodexOAuthLoginUnbound: () => false,
   },
 }));
 
-vi.mock('../../authManager.js', () => ({ getAuthState: () => ({ mode: 'local' as const, user: null }) }));
-vi.mock('../../appCapabilities.js', () => ({ getAppCapabilities: () => ({ canUseCindyGateway: false }) }));
+vi.mock('../../authManager.js', () => ({
+  getAuthState: () => ({ mode: 'local' as const, user: null }),
+}));
+vi.mock('../../appCapabilities.js', () => ({
+  getAppCapabilities: () => ({ canUseCindyGateway: false }),
+}));
 vi.mock('../../ownerNamespaceMigration.js', () => ({ hasLegacyOwnerNamespaceClaim: () => false }));
-vi.mock('../../manifestService.js', () => ({ isDev: () => true, getBaseUrl: () => 'https://example.invalid' }));
-vi.mock('../../clientEndpointsService.js', () => ({ getBuildClientEndpoint: () => 'https://example.invalid', getClientEndpoint: () => 'https://example.invalid' }));
+vi.mock('../../manifestService.js', () => ({
+  isDev: () => true,
+  getBaseUrl: () => 'https://example.invalid',
+}));
+vi.mock('../../clientEndpointsService.js', () => ({
+  getBuildClientEndpoint: () => 'https://example.invalid',
+  getClientEndpoint: () => 'https://example.invalid',
+}));
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   genericOAuthSecretIo: {},
   setProviderSecretsClearedListener: () => {},
@@ -107,7 +136,11 @@ import {
   getDesktopProviderService,
   setNativeProviderClaimListener,
 } from '../createDesktopProviderService.js';
-import { isNativeProviderAuthBound } from '../nativeProviderAuthBinding.js';
+import {
+  bindNativeProviderAuth,
+  getNativeProviderAuthSource,
+  isNativeProviderAuthBound,
+} from '../nativeProviderAuthBinding.js';
 
 function isBoundToCurrentOwner(provider: 'anthropic' | 'xai'): boolean {
   return isNativeProviderAuthBound(provider);
@@ -131,6 +164,9 @@ beforeEach(() => {
   h.grokCredentialPresent = true;
   h.anthropicDiscoveryFailure = null;
   h.refreshAnthropicModels.mockClear();
+  h.refreshXaiModels.mockClear();
+  h.loadXaiDiskCache.mockClear();
+  h.refreshXaiMediaModels.mockClear();
   h.loadAnthropicDiskCache.mockClear();
   h.codexLoginWithSideEffects.mockClear();
   h.codexLoginReadOnly.mockClear();
@@ -141,11 +177,33 @@ afterEach(() => {
 });
 
 describe('native provider connection claim on read', () => {
+  it('projects only bound native account identities without exposing credentials', async () => {
+    const before = await listProviders(false);
+    for (const id of ['anthropic', 'xai']) {
+      expect(before.find((p) => p.id === id)?.subscriptionAccount?.identity).toBeUndefined();
+    }
+    bindNativeProviderAuth('anthropic', { sharedSystem: true });
+    bindNativeProviderAuth('xai');
+    const after = await listProviders(false);
+    expect(after.find((p) => p.id === 'anthropic')?.subscriptionAccount).toEqual({
+      source: 'local', identity: 'claude@example.test',
+    });
+    expect(after.find((p) => p.id === 'xai')?.subscriptionAccount).toEqual({
+      source: 'oauth', identity: 'grok@example.test',
+    });
+    h.dataOwnerId = 'owner-b';
+    h.generation += 1;
+    const switched = await listProviders(false);
+    for (const id of ['anthropic', 'xai']) {
+      expect(switched.find((p) => p.id === id)?.subscriptionAccount?.identity).toBeUndefined();
+    }
+  });
   it('认领本机 anthropic 凭证并补拉一次清单(修「已连接 + 零模型」)', async () => {
     expect(isNativeProviderAuthBound('anthropic')).toBe(false);
 
     expect((await connectedMap()).anthropic).toBe(true);
     expect(isNativeProviderAuthBound('anthropic')).toBe(true);
+    expect(getNativeProviderAuthSource('anthropic')).toBe('native-harness-inherited');
     // 绑定刚建立 —— 启动期那次发现早被登录态 gate 掉,必须在这里补一次。
     expect(h.refreshAnthropicModels).toHaveBeenCalledTimes(1);
     // 磁盘缓存同样要补:启动期那次 load 也因未绑定而早退了。不先摆出上次成功的清单,
@@ -312,20 +370,29 @@ describe('native provider connection claim on read', () => {
     expect(secondProviders.find((provider) => provider.id === 'anthropic')?.connected).toBe(true);
   });
 
-  it('认领本机 xai 凭证(清单不走动态发现,不触发拉取)', async () => {
+  it('不把 Cindy 存在的 xAI token 当本机 CLI 凭证自动认领', async () => {
+    expect((await connectedMap()).xai).toBe(false);
+    expect(isNativeProviderAuthBound('xai')).toBe(false);
+    expect(h.refreshXaiModels).not.toHaveBeenCalled();
+    expect(h.loadXaiDiskCache).not.toHaveBeenCalled();
+
+    bindNativeProviderAuth('xai');
     expect((await connectedMap()).xai).toBe(true);
-    expect(isNativeProviderAuthBound('xai')).toBe(true);
+    expect(getNativeProviderAuthSource('xai')).toBe('explicit-provider-oauth');
+    expect(h.refreshXaiModels).not.toHaveBeenCalled();
+    // Explicit OAuth/login owns discovery refresh. Merely reading connection state after
+    // a durable binding must stay side-effect free and must not re-run media discovery.
+    expect(h.refreshXaiMediaModels).not.toHaveBeenCalled();
   });
 
   it('认领成功要广播:其它窗口与 device-link 对端只认这条推送来失效快照', async () => {
-    // xai 的自愈没有清单拉取顺带广播那条路,不显式通知就只有触发这次读取的调用方看到
-    // 「已连接」,配对的手机会一直留着 connected:false 的缓存(PR #548 review)。
+    // Claude 本机凭证自愈后要广播；xAI 不走本机凭证认领。
+    h.grokCredentialPresent = false;
     const onClaimed = vi.fn();
     setNativeProviderClaimListener(onClaimed);
     try {
-      h.claudeCredentialPresent = false; // 只让 xai 认领,避免与 anthropic 混淆计数
-      await connectedMap();
-      expect(isNativeProviderAuthBound('xai')).toBe(true);
+      await listProviders(true, true);
+      expect(isNativeProviderAuthBound('anthropic')).toBe(true);
       expect(onClaimed).toHaveBeenCalledTimes(1);
 
       // 已绑定后不再重复广播。
@@ -341,10 +408,16 @@ describe('native provider connection claim on read', () => {
     let releaseCache!: () => void;
     let releaseRefresh!: () => void;
     h.loadAnthropicDiskCache.mockImplementationOnce(
-      () => new Promise<void>((resolve) => { releaseCache = resolve; }),
+      () =>
+        new Promise<void>((resolve) => {
+          releaseCache = resolve;
+        }),
     );
     h.refreshAnthropicModels.mockImplementationOnce(
-      () => new Promise<boolean>((resolve) => { releaseRefresh = () => resolve(true); }),
+      () =>
+        new Promise<boolean>((resolve) => {
+          releaseRefresh = () => resolve(true);
+        }),
     );
     const onClaimed = vi.fn();
     setNativeProviderClaimListener(onClaimed);
@@ -367,8 +440,8 @@ describe('native provider connection claim on read', () => {
       throw new Error('broadcast boom');
     });
     try {
-      await expect(connectedMap()).resolves.toMatchObject({ xai: true });
-      expect(isNativeProviderAuthBound('xai')).toBe(true);
+      await expect(connectedMap()).resolves.toMatchObject({ anthropic: true });
+      expect(isNativeProviderAuthBound('anthropic')).toBe(true);
     } finally {
       setNativeProviderClaimListener(null);
     }
@@ -436,6 +509,19 @@ describe('native provider connection claim on read', () => {
 
     const connected = await connectedMap();
     expect(connected.anthropic).toBe(false);
+    expect(h.refreshAnthropicModels).not.toHaveBeenCalled();
+  });
+
+  it('durable disconnect 后即使本机 Claude 凭证仍在，也不绑定、不发现、不回灌', async () => {
+    fs.writeFileSync(
+      path.join(h.userDataDir, 'native-provider-auth.json'),
+      JSON.stringify({ revoked: { anthropic: 'owner-a' } }),
+    );
+
+    const connected = await connectedMap();
+    expect(connected.anthropic).toBe(false);
+    expect(isNativeProviderAuthBound('anthropic')).toBe(false);
+    expect(h.loadAnthropicDiskCache).not.toHaveBeenCalled();
     expect(h.refreshAnthropicModels).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,4 @@
+import { parseMessageToolUse } from '@cindy/maker-shared/message-normalize';
 import type {
   SessionTreeEntryKind,
   SessionTreeHistoryMessage,
@@ -263,7 +264,11 @@ export function activePiHistoryFromTree(
             clientId: `pi-tree-${entryId}-tool-${index}`,
             role: 'tool_use',
             toolUseId: block.id,
-            content: { toolUseId: block.id, toolName, input: safeToolArguments(block.arguments) },
+            content: parseMessageToolUse({
+              role: 'tool_use',
+              toolUseId: block.id,
+              content: { toolName, input: safeToolArguments(block.arguments) },
+            }),
             agentMeta: meta,
           }, baseTs + index);
         }

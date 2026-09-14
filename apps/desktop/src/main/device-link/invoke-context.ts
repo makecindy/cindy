@@ -31,6 +31,8 @@ export interface DeviceLinkInvokeContext {
    * 跳过校验或做任何安全判定。
    */
   controllerPlatform?: string;
+  /** Captured before asynchronous dispatch checks; cannot mutate a replacement subscription. */
+  historyView?: ReturnType<typeof subscriptions.prepareHistoryView>;
 }
 
 const storage = new AsyncLocalStorage<DeviceLinkInvokeContext>();

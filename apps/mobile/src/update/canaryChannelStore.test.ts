@@ -54,9 +54,10 @@ describe('canaryChannelStore', () => {
     expect(storage.has(__testing.storageKey)).toBe(false);
   });
 
-  it('只有 canary 请求携带公开通道 header', () => {
-    expect(updateChannelRequestHeaders(false)).toEqual({});
-    expect(updateChannelRequestHeaders(true)).toEqual({ 'x-cindy-update-channel': 'canary' });
+  it('按发布通道决定 header:release 无 header,canary/beta 携带对应值', () => {
+    expect(updateChannelRequestHeaders('release')).toEqual({});
+    expect(updateChannelRequestHeaders('canary')).toEqual({ 'x-cindy-update-channel': 'canary' });
+    expect(updateChannelRequestHeaders('beta')).toEqual({ 'x-cindy-update-channel': 'beta' });
   });
 
   it('登录/登出切换会通知订阅者，且取消订阅后不再通知', async () => {

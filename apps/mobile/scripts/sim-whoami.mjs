@@ -10,9 +10,9 @@
 // 的 Metro(配合模拟器里的 __DEV__ build label)。
 //
 // 用法:
-//   pnpm mobile:sim:whoami                     # cn(默认)
-//   pnpm mobile:sim:whoami -- --region=global # global
-//   pnpm mobile:sim:whoami -- --port 8082      # 已手动连接到显式 Metro 端口
+//   pnpm mobile:sim:whoami                     # Global(默认)
+//   pnpm mobile:sim:whoami -- --region=cn      # 中国大陆版
+//   pnpm mobile:sim:whoami -- --json           # Skill 可消费的结构化状态
 
 import { execFileSync, execSync } from "node:child_process";
 import { dirname, resolve } from "node:path";
@@ -40,7 +40,6 @@ const PORTS = [8081, 8082, 8083, 8084, 8085, 8086];
 const mobileDir = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const worktreeRoot = resolve(mobileDir, "../..");
 
-/** 解析用户指定的 region 及其实际 Simulator bundle id。 */
 const jsonOutput = process.argv.slice(2).includes("--json");
 
 function resolveTarget() {
@@ -65,14 +64,17 @@ function resolveTarget() {
 let target;
 try {
   const localConfigResult = ensureMobileLocalRegionConfig({ mobileDir });
-  const localConfigStatus = formatMobileLocalConfigStatus(
-    localConfigResult,
-    worktreeRoot,
-  );
-  if (localConfigStatus) console.log(localConfigStatus);
+  if (!jsonOutput) {
+    const localConfigStatus = formatMobileLocalConfigStatus(
+      localConfigResult,
+      worktreeRoot,
+    );
+    if (localConfigStatus) console.log(localConfigStatus);
+  }
   target = resolveTarget();
 } catch (error) {
-  console.error(`✗ ${error instanceof Error ? error.message : String(error)}`);
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(jsonOutput ? JSON.stringify({ healthy: false, error: message }) : `✗ ${message}`);
   process.exit(1);
 }
 const { region, port: expectedPort, simulatorUdid, bundleId } = target;
@@ -102,99 +104,124 @@ function shFile(command, args) {
   }
 }
 
-console.log(`==> Mobile dev region: ${region}`);
-console.log("==== booted 模拟器 ====");
+if (!jsonOutput) {
+  console.log(`==> Mobile dev region: ${region}`);
+  console.log("==== booted 模拟器 ====");
+}
 const allBooted = sh("xcrun simctl list devices booted").split("\n");
 const booted = bootedSimulatorLinesForTarget(allBooted, null);
 const targetBooted = bootedSimulatorLinesForTarget(allBooted, simulatorUdid);
 if (booted.length === 0) {
-  console.log("  (没有 booted 模拟器)");
+  if (!jsonOutput) console.log("  (没有 booted 模拟器)");
   healthy = false;
-} else booted.forEach((l) => console.log("  " + l.trim()));
+} else if (!jsonOutput) booted.forEach((l) => console.log("  " + l.trim()));
 if (simulatorUdid && targetBooted.length === 0) {
-  console.log(`  (目标模拟器 ${simulatorUdid} 未启动)`);
+  if (!jsonOutput) console.log(`  (目标模拟器 ${simulatorUdid} 未启动)`);
   healthy = false;
 }
 
-console.log(`\n==== 模拟器里装的 ${bundleId}(native 安装包版本)====`);
+if (!jsonOutput) console.log(`\n==== 模拟器里装的 ${bundleId}(native 安装包版本)====`);
 const container = getSimulatorAppContainer(shFile, simulatorUdid, bundleId);
+let installed = null;
 if (!container) {
-  console.log(
-    simulatorUdid
-      ? `  (目标模拟器 ${simulatorUdid} 未安装 / 未启动)`
-      : "  (未安装 / 无 booted 设备)",
-  );
+  if (!jsonOutput) {
+    console.log(
+      simulatorUdid
+        ? `  (目标模拟器 ${simulatorUdid} 未安装 / 未启动)`
+        : "  (未安装 / 无 booted 设备)",
+    );
+  }
   healthy = false;
 } else {
   const plist = `${container}/Info.plist`;
   const pb = (key) =>
     shFile("/usr/libexec/PlistBuddy", ["-c", `Print :${key}`, plist]);
-  console.log("  version    :", pb("CFBundleShortVersionString"));
-  console.log("  buildNumber:", pb("CFBundleVersion"));
-  console.log(
-    "  ⚠️ 版本号只证明装的是哪个 dev client,证明不了 JS bundle 是不是当前分支最新。",
-  );
+  installed = {
+    version: pb("CFBundleShortVersionString"),
+    buildNumber: pb("CFBundleVersion"),
+  };
+  if (!jsonOutput) {
+    console.log("  version    :", installed.version);
+    console.log("  buildNumber:", installed.buildNumber);
+    console.log(
+      "  ⚠️ 版本号只证明装的是哪个 dev client,证明不了 JS bundle 是不是当前分支最新。",
+    );
+  }
 }
 
-console.log("\n==== Metro 端口归属(哪个端口 = 哪个 worktree)====");
+if (!jsonOutput) console.log("\n==== Metro 端口归属(哪个端口 = 哪个 worktree)====");
 let anyMetro = false;
 let currentSourceOnExpectedPort = false;
+const metros = [];
 for (const port of ports) {
   const pids = sh(`lsof -nP -iTCP:${port} -sTCP:LISTEN -t`)
     .split("\n")
     .filter(Boolean);
   for (const pid of pids) {
     const cwd = cwdOfPid(pid);
-    // Metro 由 sim:start 以 cwd=<worktree>/apps/mobile 启动,故进程 cwd 即 worktree 位置。
-    const wt = cwd ? cwd.replace(/\/apps\/mobile$/, "") : "(无法读取进程 cwd)";
+    const worktree = cwd ? cwd.replace(/\/apps\/mobile$/, "") : null;
     const isMetro = /expo|metro/i.test(sh(`ps -p ${pid} -o command=`));
     const runningSource = isMetro ? gitSourceOfPid(pid) : null;
     if (isMetro) anyMetro = true;
-    console.log(
-      `  :${port}  pid ${pid}  →  ${wt}${runningSource ? `  source=${runningSource}` : isMetro ? "  source=(未注入)" : "  (非 Metro?)"}`,
-    );
+    metros.push({
+      port,
+      pid: Number(pid),
+      cwd: cwd ?? null,
+      worktree,
+      isMetro,
+      source: runningSource,
+    });
+    if (!jsonOutput) {
+      console.log(
+        `  :${port}  pid ${pid}  →  ${worktree || "(无法读取进程 cwd)"}${runningSource ? `  source=${runningSource}` : isMetro ? "  source=(未注入)" : "  (非 Metro?)"}`,
+      );
+    }
     if (port === expectedPort && isMetro) {
-      currentSourceOnExpectedPort = Boolean(
+      currentSourceOnExpectedPort ||= Boolean(
         cwd && isInside(worktreeRoot, cwd) && runningSource === expectedSource,
       );
-      if (!currentSourceOnExpectedPort) healthy = false;
     }
   }
 }
-if (!anyMetro)
+if (!anyMetro && !jsonOutput)
   console.log(
     `  (检查的端口上没发现 Metro;用 \`pnpm mobile:sim:start -- --port ${expectedPort}\` 启一个)`,
   );
 if (!currentSourceOnExpectedPort) healthy = false;
 
-console.log(`\n当前 worktree 源码指纹:${expectedSource}`);
-console.log(
-  `build label 必须显示这个指纹,且 host:port 必须是当前 worktree 的 ${expectedPort}。`,
-);
-if (healthy) {
+if (!jsonOutput) {
+  console.log(`\n当前 worktree 源码指纹:${expectedSource}`);
   console.log(
-    `✓ PASS:booted dev client、${expectedPort} Metro 归属和源码指纹一致。`,
+    `build label 必须显示这个指纹,且 host:port 必须是当前 worktree 的 ${expectedPort}。`,
   );
+  if (healthy) {
+    console.log(
+      `✓ PASS:booted dev client、${expectedPort} Metro 归属和源码指纹一致。`,
+    );
+  } else {
+    console.error(
+      "✗ FAIL:当前模拟器验证链不完整或源码不一致;不要声称“已经启动当前版本”。",
+    );
+  }
 } else {
-  console.error(
-    "✗ FAIL:当前模拟器验证链不完整或源码不一致;不要声称“已经启动当前版本”。",
-  );
-  process.exitCode = 1;
-}
-
-if (jsonOutput) {
   console.log(
     JSON.stringify({
       healthy,
       region,
-      expectedPort,
+      bundleId,
+      worktree: worktreeRoot,
+      source: expectedSource,
       expectedSource,
+      expectedPort,
       currentSourceOnExpectedPort,
       anyMetro,
-      bootedCount: booted.length,
+      booted: booted.map((line) => line.trim()),
+      installed,
+      metros,
       targetSimulatorUdid: simulatorUdid,
-      targetBooted: targetBooted.length === 1,
-      bundleId,
+      targetBooted: simulatorUdid ? targetBooted.length === 1 : null,
     }),
   );
 }
+
+if (!healthy) process.exitCode = 1;

@@ -19,7 +19,8 @@
     "allowOnce": "1回だけ許可",
     "allowOnceAccessibility": "権限リクエストを1回だけ許可",
     "allowOnceConfirm": "1回だけ許可を確認",
-    "highRisk": "高リスク"
+    "highRisk": "高リスク",
+    "autoReviewUnavailable": "自動レビューを完了できませんでした。この操作を許可するか確認してください。"
   },
   "planMode": {
     "label": "プランモード",
@@ -36,7 +37,7 @@
     "queuePositionNth": "{{index}} 番目",
     "composerBlockedByPending": "パソコンからの保留中のリクエストを処理してから入力を続けてください。",
     "missingRequestId": "このリモート操作には requestId がないため、決定を返信できません。",
-    "issueConfirmUnsupported": "Issue の送信確認はパソコンでのみ行えます。デスクトップアプリに戻って確認またはキャンセルしてください。",
+    "desktopConfirmUnsupported": "この確認はリモートのパソコンでのみ処理できます。デスクトップアプリに戻って続けてください。",
     "unsupportedType": "このリモート操作タイプはモバイルではまだ対応していません。",
     "unsupportedKind": "未対応",
     "desktopOnlyKind": "パソコンで処理",
@@ -56,6 +57,7 @@
     "collapsedHint": "タップして回答",
     "selectAnswer": "回答 {{label}} を選択",
     "submittingHint": "決定をパソコンに送信中です。重複して送信しないでください。",
+    "decisionNotAccepted": "回答を送信できませんでした。もう一度お試しください。",
     "customAnswerInputAccessibility": "カスタム回答を入力",
     "customAnswerPlaceholder": "その他の回答を入力",
     "customAnswerButtonText": "その他の回答を入力…",
@@ -105,6 +107,14 @@
     "issue_confirm": {
       "title": "Issue の内容を確認してください",
       "label": "Issue"
+    },
+    "rename_sessions_confirm": {
+      "title": "セッション名の変更を確認してください",
+      "label": "名前変更"
+    },
+    "ghost_grant_confirm": {
+      "title": "ファイルアクセスを確認してください",
+      "label": "ファイルアクセス"
     },
     "plugin_setup": {
       "title": "パソコンでプラグインの設定が必要です",
@@ -162,7 +172,7 @@
     "goalObjectiveAccessibility": "ゴールの内容",
     "goalPlaceholder": "何を達成したいですか？エージェントは完了するか制限に達するまで、このゴールに沿って自動で続行します。",
     "advancedSettings": "詳細設定",
-    "limitsHint": "変更しない場合は操作対象パソコンのデフォルト制限に従います。いずれかの上限に達するとゴールは自動的に停止し、いつでも手動で終了できます。「無制限」はその上限を設定しないことを意味します。",
+    "limitsHint": "変更しない場合はリモートのパソコンのデフォルト制限に従います。いずれかの上限に達するとゴールは自動的に停止し、いつでも手動で終了できます。「無制限」はその上限を設定しないことを意味します。",
     "maxTurns": "最大ターン数",
     "tokenBudget": "トークン予算",
     "noProgressLimit": "無進展の上限",
@@ -184,7 +194,7 @@
     "photoNotReadable": "この写真は現在読み込めません（iCloud からのダウンロードが未完了の可能性があります）。後でもう一度お試しください。"
   },
   "pluginSetup": {
-    "completeOnDesktop": "操作対象のデスクトップで設定を完了してください。このカードは自動的に更新されます。",
+    "completeOnDesktop": "リモートのパソコンで設定を完了してください。このカードは自動的に更新されます。",
     "chooseOne": "設定方法を1つ選択してください",
     "progress": "{{satisfied}}/{{total}} 完了",
     "desktopActionHint": "パソコンで{{action}}",
@@ -221,5 +231,46 @@
     },
     "inlineFormAction": "パソコンで{{label}}を入力",
     "inlineFormActionGeneric": "パソコンで設定を入力"
+  },
+  "presentation": {
+    "action": { "submitting": "送信中" },
+    "permission": {
+      "highRiskTitle": "高リスクの権限は再確認が必要です",
+      "highRiskDetail": "コマンドを確認し、もう一度許可を確定してください。不明な場合は拒否してください。",
+      "sessionAllowTitle": "今回だけ許可するか、このタスクで常に許可できます",
+      "allowTitle": "許可するとコンピューターで実行を続けます",
+      "tool": "ツール：{{tool}}",
+      "title": "{{tool}} の使用を許可しますか？",
+      "risk": "このコマンドはシステム、リポジトリ、または外部サービスの状態を変更する可能性があります。許可する前に、現在のタスクとコマンドを信頼できることを確認してください。"
+    },
+    "ask": {
+      "progress": "質問 {{current}}/{{total}}",
+      "multiSelect": "複数選択または別の回答を入力できます。",
+      "singleSelect": "回答を 1 つ選ぶか、別の回答を入力してください。",
+      "emptyTitle": "具体的な質問はありません",
+      "emptyDetail": "空の回答を送信して、コンピューターの処理を続けられます。",
+      "waiting": "Agent が確認を待っています"
+    },
+    "plan": {
+      "outlineCount": "{{count}} セクション",
+      "noOutline": "目次なし",
+      "hasFile": "計画ファイルあり",
+      "noFile": "計画ファイルのパスなし",
+      "editedTitle": "計画を編集済みです。承認すると現在の版で実行します",
+      "approveTitle": "承認するとコンピューターで計画の実行を続けます"
+    },
+    "queue": {
+      "count": "{{count}} 件",
+      "readOnlyHint": "コラボレーションは読み取り専用です。コンピューターからのリクエストだけを表示します。",
+      "empty": "保留中のリクエストはありません",
+      "hint": {
+        "plan_review": "計画を確認し、必要なら修正を依頼してください。承認後にコンピューターで実行を続けます。",
+        "permission": "今回の決定だけをコンピューター上の現在のタスクへ返します。",
+        "ask_user_question": "回答は下書きとして保存され、送信後にコンピューターで処理を続けます。",
+        "issue_confirm": "タイトルと本文を確認してから送信してください。",
+        "plugin_setup": "設定はコンピューターで完了する必要があります。ここではリクエストをキャンセルできます。",
+        "fallback": "モバイルではデスクトップから届いた順にリモートリクエストを処理します。"
+      }
+    }
   }
 }

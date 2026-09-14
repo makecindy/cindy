@@ -25,6 +25,7 @@ import {
 } from '@cindy/wechat-ilink';
 import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core';
 
+import { autoReviewUnavailablePromptLine } from '../shared/autoReviewUnavailablePrompt';
 import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
@@ -503,16 +504,15 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     this.#pendingInteractions.set(userId, { request, resolve: resolvePending, timer });
     try {
       await this.sendText(userId, formatWechatInteractionPrompt(request));
-    } catch (error) {
+    } catch {
       const pending = this.#pendingInteractions.get(userId);
       if (pending?.request.requestId === request.requestId) {
         clearTimeout(pending.timer);
         this.#pendingInteractions.delete(userId);
       }
-      return defaultWechatInteractionDecision(
-        request,
-        error instanceof Error ? error.message : 'wechat_interaction_send_failed',
-      );
+      // Denial reasons are classified by exact/prefix match. Raw Error.message
+      // is not a system code and would be presented as a user rejection.
+      return defaultWechatInteractionDecision(request, 'wechat_interaction_send_failed');
     }
     return result;
   }
@@ -1934,8 +1934,9 @@ function hasWechatTaskContent(text: string, attachments: readonly WechatTaskAtta
 
 function formatWechatInteractionPrompt(request: InteractionRequest): string {
   if (request.kind === 'permission') {
+    const unavailable = autoReviewUnavailablePromptLine(request);
     return `需要确认工具“${request.displayName ?? request.toolName}”。
-回复“允许”执行一次，或回复“拒绝”取消本次操作。微信内不支持永久授权。`;
+${unavailable ? `${unavailable}\n` : ''}回复“允许”执行一次，或回复“拒绝”取消本次操作。微信内不支持永久授权。`;
   }
   if (request.kind === 'plan_review') {
     const plan = request.plan.length > 6_000 ? `${request.plan.slice(0, 6_000)}…` : request.plan;

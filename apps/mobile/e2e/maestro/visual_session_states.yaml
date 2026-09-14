@@ -3,15 +3,27 @@ appId: ${APP_ID}
 - runFlow: login_mock_no_clear.yaml
 - assertVisible:
     id: "devices.list"
-# 设备 chip 现在位于 DeviceMenuModal 内,菜单关闭时未挂载;先点 devices.title 打开范围菜单。
+# 设备详情从左侧菜单的设备管理进入；标题下拉只负责筛选。
 - tapOn:
-    id: "devices.title"
+    id: "home.chromeMenu"
+- tapOn:
+    id: "home.chromeDrawer.devices"
 - extendedWaitUntil:
     visible:
-      id: "${XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID}"
+      id: "deviceManagement.open.${XDT_MOBILE_E2E_HOST_DEVICE_ID}"
     timeout: 15000
-- longPressOn:
-    id: "${XDT_MOBILE_E2E_HOST_DEVICE_CHIP_ID}"
+- tapOn:
+    id: "deviceManagement.open.${XDT_MOBILE_E2E_HOST_DEVICE_ID}"
+- extendedWaitUntil:
+    visible:
+      id: "deviceInformation.screen"
+    timeout: 15000
+- scrollUntilVisible:
+    element:
+      id: "deviceInformation.tasks"
+    direction: DOWN
+- tapOn:
+    id: "deviceInformation.tasks"
 - extendedWaitUntil:
     visible:
       id: "deviceDetail.screen"

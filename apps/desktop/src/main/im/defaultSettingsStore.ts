@@ -14,6 +14,7 @@ import {
   IM_DEFAULT_SETTINGS_CHANNELS,
   type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
+  type ImDefaultPermissionMode,
   type ImDefaultSettingsChannel,
   type ImDefaultSettingsPatch,
   type ImDefaultSettings,
@@ -62,9 +63,9 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
     permissionMode: isImDefaultPermissionMode(r.permissionMode)
       ? r.permissionMode
       : IM_DEFAULT_SETTINGS.permissionMode,
-    groupCtrPermissionMode: isImDefaultPermissionMode(r.groupCtrPermissionMode)
-      ? r.groupCtrPermissionMode
-      : IM_DEFAULT_SETTINGS.groupCtrPermissionMode,
+    // 旧键 `groupCtrPermissionMode` 只在「群 /ctr」时期存在过, 读侧回落一次 ——
+    // 已经存过该键的用户升级后必须保持原选择, 不能静默回默认(存量兼容)。
+    groupPermissionMode: readGroupPermissionMode(r),
     agents: {
       'claude-code': normalizeAgentSettings(
         'claude-code',
@@ -82,6 +83,19 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
       ),
     },
   };
+}
+
+/**
+ * 群聊新建会话权限档的读取:新键优先, 回落旧键 `groupCtrPermissionMode`。
+ *
+ * 该设置最初叫「群聊 /ctr 新建任务权限档」, 作用域扩到「群里新建的所有会话」后
+ * 键名改成 `groupPermissionMode`。写侧只写新键, 但已经存了旧键的配置文件必须继续
+ * 生效 —— 用户升级后什么都不做, 原来选的档位照旧。
+ */
+function readGroupPermissionMode(r: Record<string, unknown>): ImDefaultPermissionMode {
+  if (isImDefaultPermissionMode(r.groupPermissionMode)) return r.groupPermissionMode;
+  if (isImDefaultPermissionMode(r.groupCtrPermissionMode)) return r.groupCtrPermissionMode;
+  return IM_DEFAULT_SETTINGS.groupPermissionMode;
 }
 
 function normalizeChannelSettings(raw: unknown): ImDefaultSettings {
@@ -330,8 +344,8 @@ function settingsOverrides(
   if (value.permissionMode !== defaults.permissionMode) {
     overrides.permissionMode = value.permissionMode;
   }
-  if (value.groupCtrPermissionMode !== defaults.groupCtrPermissionMode) {
-    overrides.groupCtrPermissionMode = value.groupCtrPermissionMode;
+  if (value.groupPermissionMode !== defaults.groupPermissionMode) {
+    overrides.groupPermissionMode = value.groupPermissionMode;
   }
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings>> = {};
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
@@ -347,8 +361,8 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   const keys: string[] = [];
   if (value.agentKind !== defaults.agentKind) keys.push('agentKind');
   if (value.permissionMode !== defaults.permissionMode) keys.push('permissionMode');
-  if (value.groupCtrPermissionMode !== defaults.groupCtrPermissionMode) {
-    keys.push('groupCtrPermissionMode');
+  if (value.groupPermissionMode !== defaults.groupPermissionMode) {
+    keys.push('groupPermissionMode');
   }
   for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
@@ -366,7 +380,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
   return {
     agentKind: settings.agentKind,
     permissionMode: settings.permissionMode,
-    groupCtrPermissionMode: settings.groupCtrPermissionMode,
+    groupPermissionMode: settings.groupPermissionMode,
     agents: {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },

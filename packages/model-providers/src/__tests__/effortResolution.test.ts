@@ -4,7 +4,14 @@
  */
 import { describe, it, expect } from 'vitest';
 
-import { resolveEffort, resolveProviderSwitchEffort, clampEffortToSupported } from '../effortResolution.js';
+import {
+  resolveEffort,
+  resolveRequestedEffort,
+  composeAtomicModelSelection,
+  resolveIntentReselectEffort,
+  resolveProviderSwitchEffort,
+  clampEffortToSupported,
+} from '../effortResolution.js';
 import type { Effort } from '../types.js';
 
 describe('resolveEffort —— 选中模型后 effort 落档优先级', () => {
@@ -108,6 +115,151 @@ describe('resolveEffort —— defaultEffort 兜底校验(catalog 病态数据�
     expect(
       resolveEffort({ efforts: ['minimal', 'low'], defaultEffort: null, activeEffort: 'xhigh' }),
     ).toBe('minimal');
+  });
+});
+
+describe('resolveRequestedEffort —— 面板/收藏显式档 vs 本端再查目录', () => {
+  const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh'];
+
+  it('目录查空时保留显式档,不落 resolveEffort 的占位 low', () => {
+    expect(
+      resolveRequestedEffort({
+        requested: 'high',
+        efforts: [],
+        defaultEffort: null,
+        activeEffort: 'low',
+        providerEffort: 'low',
+      }),
+    ).toBe('high');
+  });
+
+  it('目录支持该档 → 用显式档,压过记忆/当前档', () => {
+    expect(
+      resolveRequestedEffort({
+        requested: 'high',
+        efforts: EFFORTS,
+        defaultEffort: 'low',
+        activeEffort: 'low',
+        providerEffort: 'low',
+      }),
+    ).toBe('high');
+  });
+
+  it('目录非空但不含显式档 → 回落 resolveEffort,不硬塞', () => {
+    expect(
+      resolveRequestedEffort({
+        requested: 'xhigh',
+        efforts: ['low', 'medium', 'high'],
+        defaultEffort: 'medium',
+        activeEffort: 'low',
+      }),
+    ).toBe('low');
+  });
+
+  it('没有显式档 → 与 resolveEffort 同结果', () => {
+    expect(
+      resolveRequestedEffort({
+        efforts: EFFORTS,
+        defaultEffort: 'medium',
+        activeEffort: 'low',
+      }),
+    ).toBe('low');
+  });
+});
+
+describe('composeAtomicModelSelection —— 点选快照不能把 UI 占位写进运行时', () => {
+  it.each([
+    {
+      name: '有档 + 支持 Fast:原样带上 high 和 Fast',
+      args: {
+        efforts: ['low', 'medium', 'high'] as const,
+        effort: 'high',
+        fastSupported: true,
+        requestedFast: true,
+      },
+      want: { effort: 'high', fastMode: true },
+    },
+    {
+      name: '有档但不支持 Fast:Fast 必须关,不能带着上一个模型的插队状态',
+      args: {
+        efforts: ['low', 'medium', 'high'] as const,
+        effort: 'high',
+        fastSupported: false,
+        requestedFast: true,
+      },
+      want: { effort: 'high', fastMode: false },
+    },
+    {
+      name: '无档本地/BYOM:effort 写 null 而不是 UI 占位 low',
+      args: {
+        efforts: [] as const,
+        effort: 'low',
+        fastSupported: false,
+        requestedFast: false,
+      },
+      want: { effort: null, fastMode: false },
+    },
+    {
+      name: '无档但 resolveEffort 给了 high 占位:仍然 null,避免胶囊显示 thinking high',
+      args: {
+        efforts: [] as const,
+        effort: 'high',
+        fastSupported: false,
+        requestedFast: true,
+      },
+      want: { effort: null, fastMode: false },
+    },
+    {
+      name: '收藏 Fast 关:显式 false 压过记忆里的开',
+      args: {
+        efforts: ['high'] as const,
+        effort: 'high',
+        fastSupported: true,
+        requestedFast: false,
+      },
+      want: { effort: 'high', fastMode: false },
+    },
+  ])('$name', ({ args, want }) => {
+    expect(composeAtomicModelSelection(args)).toEqual(want);
+  });
+
+  it('目录暂缺时 resolveRequestedEffort 保住 high；传空 efforts 进原子快照则按无档写 null',
+    () => {
+      const requested = resolveRequestedEffort({
+        requested: 'high',
+        efforts: [],
+        defaultEffort: null,
+        activeEffort: 'low',
+      });
+      expect(requested).toBe('high');
+      expect(
+        composeAtomicModelSelection({
+          efforts: [],
+          effort: requested,
+          fastSupported: false,
+          requestedFast: false,
+        }),
+      ).toEqual({ effort: null, fastMode: false });
+    },
+  );
+});
+
+describe('resolveIntentReselectEffort —— 意图期改选不把空串回落成旧 high', () => {
+  it('空串 = 目标明确无档,不继承旧意图 high', () => {
+    expect(resolveIntentReselectEffort('', 'high')).toBeUndefined();
+  });
+
+  it('非空新档压过旧意图', () => {
+    expect(resolveIntentReselectEffort('medium', 'high')).toBe('medium');
+  });
+
+  it('调用方没给新档 → 才继承旧意图', () => {
+    expect(resolveIntentReselectEffort(undefined, 'high')).toBe('high');
+  });
+
+  it('两边都空 → 不传 override', () => {
+    expect(resolveIntentReselectEffort(undefined, undefined)).toBeUndefined();
+    expect(resolveIntentReselectEffort('', '')).toBeUndefined();
   });
 });
 

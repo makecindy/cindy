@@ -1,14 +1,15 @@
 /**
- * attachmentGrant.ts — 用户图片过户(docs/dev-rules/plugin-security-and-authoring.md)。
+ * attachmentGrant.ts — 用户或 Agent 工具媒体过户(docs/dev-rules/plugin-security-and-authoring.md)。
  * ---------------------------------------------------------------------------
  * 归属铁律不动:意识永远只能读自己名下的账。用户想让意识处理**自己的图**,
  * 走"显式引渡":AI 调 ghost_call 时把当前会话里用户图片的 xdt-image:// 地址
  * 放进顶层 attachments → 本模块逐张解析、读字节、落媒体总仓(blob)、给目标
- * 意识记一条可读引用(人工交接 = ghost-grant；Host 工具代办 =
+ * 意识记一条可读引用(人工交接 = ghost-grant；Host 工具代办 / 工具结果 =
  * ghost-tool-grant)→ 返回指纹数组。调用方把指纹注入 args.attachments 交给意识——
  * 意识拿到的仍只是字符串,摸不到路径与字节(平台结构保证不破)。
  *
- * 语义:用户把图和请求一起发出 = 对这批图的授权意图明确,不再弹框。
+ * 语义:用户随请求交出的媒体按用户授权处理；当前 Agent / Core 工具生成的
+ * 结果由 Agent 显式传入时按工具来源处理，不冒充用户永久授权。
  * **不做**:意识主动申请读任意会话附件的 API(等价于开相册权限)。
  *
  * 依赖注入(规则 14):解析/读盘/落仓/记账全经 deps,单测内存直测。
@@ -28,6 +29,8 @@ export interface ResolvedGrantSource {
 }
 
 export interface AttachmentGrantDeps {
+  /** 同一次审批的实时有效性；异步落仓期间失效后不得继续授予插件引用。 */
+  isCurrent?: () => boolean;
   /**
    * 附件地址 → 磁盘路径与 mime(越界/非法/账本闸不过一律 throw)。真身是
    * ghostAttachmentResolve + 总仓 blob 形态的账本出生闸(异步查账),故允许
@@ -59,7 +62,7 @@ export interface AttachmentGrantDeps {
   };
 }
 
-/** 单次过户张数上限(与改图源图上限同量级)。 */
+/** 单次过户项数上限(与改图源图上限同量级)。 */
 export const MAX_GRANT_ATTACHMENTS = 4;
 
 /** grant_only 批量预授权的张数上限(一张确认卡批一整批,后续免弹)。 */
@@ -73,12 +76,15 @@ export const MAX_GRANT_ONLY_ATTACHMENTS = 32;
  */
 export class GrantPolicyError extends Error {}
 
+export const GRANT_AUTHORIZATION_CHANGED_MESSAGE =
+  'Task or Plan permissions changed; retry with the current scope.';
+
 export type AttachmentGrantResult =
   | { ok: true; hashes: string[] }
   | { ok: false; message: string };
 
 /**
- * 把一批用户图片过户给目标意识。任何一张失败整批拒(不做半成品授权——
+ * 把一批媒体过户给目标意识。任何一项失败整批拒(不做半成品授权——
  * AI 拿到部分指纹会以为全部就绪,后续改图缺图更难排查)。
  */
 export async function grantAttachmentsToGhost(
@@ -86,16 +92,19 @@ export async function grantAttachmentsToGhost(
   params: { ghostId: string; urls: string[]; maxCount?: number },
 ): Promise<AttachmentGrantResult> {
   const { ghostId, urls } = params;
+  const expired = () => deps.isCurrent?.() === false;
+  const denied = { ok: false as const, message: GRANT_AUTHORIZATION_CHANGED_MESSAGE };
   const maxCount = params.maxCount ?? MAX_GRANT_ATTACHMENTS;
   if (urls.length === 0) return { ok: true, hashes: [] };
   if (urls.length > maxCount) {
-    return { ok: false, message: `附件过多(单次上限 ${maxCount} 张)` };
+    return { ok: false, message: `附件过多(单次上限 ${maxCount} 项)` };
   }
   // 两阶段:先整批解析(纯校验零副作用,最常见的"地址不对"在这里整批拒,
-  // 不留半批授权),再逐张落库(读盘/落仓/记账,中途失败仍整批报错;已写入
-  // 的授权行无害——那张图确实是用户随消息给出的,留着不构成越权)。
+  // 不留半批授权),再逐张落库。中途失败不返回部分指纹；先前在授权仍有效
+  // 时提交的引用不回滚，但失效后不再落仓、授权或把整批派发给插件。
   const resolved: ResolvedGrantSource[] = [];
   for (const url of urls) {
+    if (expired()) return denied;
     try {
       resolved.push(await deps.resolveImageUrl(url));
     } catch (err) {
@@ -110,15 +119,18 @@ export async function grantAttachmentsToGhost(
       }
       return {
         ok: false,
-        message: `附件地址无法解析:${url}(接受 xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>,或该图片在本机图片缓存 / 媒体总仓内的绝对路径)`,
+        message: `附件地址无法解析:${url}(接受 xdt-image://<会话ID>/<文件名>、cindy-media://blobs/<指纹>.<后缀>,或该媒体在本机图片缓存 / 媒体总仓内的绝对路径)`,
       };
     }
   }
   const hashes: string[] = [];
   for (const r of resolved) {
     try {
+      if (expired()) return denied;
       const buffer = r.buffer ?? (await deps.readFile(r.absPath));
+      if (expired()) return denied;
       const written = await deps.writeBlob({ buffer, mimeType: r.mimeType });
+      if (expired()) return denied;
       await deps.recordBlob({
         hash: written.hash,
         ext: written.ext,
@@ -127,6 +139,7 @@ export async function grantAttachmentsToGhost(
         isCache: false,
       });
       const originKind = r.originKind ?? 'user';
+      if (expired()) return denied;
       await deps.addRef({
         hash: written.hash,
         // refKind 本身就是回退兼容边界:旧客户端只把 ghost-grant 当成人工
@@ -142,6 +155,7 @@ export async function grantAttachmentsToGhost(
       return { ok: false, message: `附件过户失败:${message}` };
     }
   }
+  if (expired()) return denied;
   deps.log?.info('ghost attachment grant: done', { ghostId, count: hashes.length });
   return { ok: true, hashes };
 }

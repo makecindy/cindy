@@ -73,6 +73,26 @@ describe('Goal dormant session restore', () => {
     expect(deps.wireSession).toHaveBeenCalledOnce();
   });
 
+  it('rebuilds an error Session instead of returning the poisoned live object', async () => {
+    const poisoned = {
+      ...fakeSession(),
+      getStatus: vi.fn().mockReturnValue('error'),
+    } as unknown as Session;
+    const replacement = fakeSession();
+    const deps = baseDeps({
+      maker: {
+        getSession: vi.fn().mockReturnValue(poisoned),
+        getSessionMeta: vi.fn().mockResolvedValue(META),
+        createSession: vi.fn().mockResolvedValue(replacement),
+      },
+    });
+
+    await expect(restoreSessionForGoal('session-1', deps)).resolves.toBe(replacement);
+
+    expect(deps.maker.createSession).toHaveBeenCalledOnce();
+    expect(deps.wireSession).toHaveBeenCalledWith(replacement);
+  });
+
   it('preserves a persisted null provider route when restoring a Pi session', async () => {
     const deps = baseDeps({
       maker: {

@@ -1,4 +1,7 @@
+import { groupWorkRuns } from './workRunGrouping.js';
+export { groupWorkRuns, type WorkRunGroupingAdapter } from './workRunGrouping.js';
 import {
+  type AgentTaskTerminalStatus,
   type AgentTaskUpdate,
   deriveAgentTaskStatus,
   findAgentTaskUpdate,
@@ -97,6 +100,8 @@ export interface MessageRenderNormalizedMessage<
    * `createdAt`。
    */
   settledAt?: string;
+  /** Durable terminal lifecycle for an Agent/Task tool call. */
+  agentTaskStatus?: AgentTaskTerminalStatus;
   /** Host 在 SDK done 边界写入；每个 true 都是一条不应折入工作过程的正式回复。 */
   turnCompleted?: boolean;
   /** tool 消息专用:配对 tool_result 提取出的产出媒体(驱动 tool_media 独立渲染项)。 */
@@ -204,6 +209,7 @@ export interface MessageRenderWorkGroupItem<
   type: 'work_group';
   key: string;
   children: MessageRenderWorkChildItem<TMessage>[];
+  deferred?: import('./historyView.js').DeferredHistoryWork;
   durationMs?: number;
   /** True only for the trailing activity run in an active turn. */
   isStreaming?: boolean;
@@ -227,6 +233,8 @@ export type MessageRenderTodoSource = 'todo' | 'codex' | 'task';
 export interface MessageRenderTodoInsertion {
   key: string;
   todos: MessageRenderTodoItem[];
+  /** 组成同一计划 session 的全部工具行，用于历史 prepend 后恢复旧滚动锚点。 */
+  sourceClientIds: string[];
   createdAt?: string;
   updatedAtMs?: number;
   source: MessageRenderTodoSource;
@@ -240,7 +248,8 @@ export interface MessageRenderTodoInsertion {
   sealedAtMs?: number;
   /**
    * host 在中断/失败 turn 给该计划行盖的 `turnCompleted: false`(见
-   * `persistCodexPlanOnDone`):任务还活着,常驻面板不得按"全勾完"兜底退场。
+   * `persistCodexPlanOnDone`):在下一个真实 user turn 取代它前,常驻面板不得按
+   * "全勾完"兜底退场。
    */
   turnFailed?: boolean;
 }
@@ -497,6 +506,16 @@ function isSyntheticUserRow(message: MessageRenderSourceMessageLike): boolean {
   );
 }
 
+/**
+ * 会为计划开启新所有权 turn 的真实 user 行。
+ *
+ * 计划分组、失败回扫与置顶计划退场必须共用同一判据，避免一个界面已经把
+ * 输入视为新 turn，另一个界面却继续展示上一轮计划。
+ */
+export function isPlanUserBoundary(message: MessageRenderSourceMessageLike): boolean {
+  return message.role === 'user' && !isSyntheticUserRow(message);
+}
+
 function isHookUserRow(message: MessageRenderSourceMessageLike): boolean {
   const hookSource =
     (message as Record<string, unknown>).hookSource ??
@@ -577,6 +596,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   const resultByToolUseId = buildToolResultLookup(messages);
   const sessions: Array<{
     todos: MessageRenderTodoItem[];
+    sourceClientIds: string[];
     firstIndex: number;
     lastIndex: number;
     source: MessageRenderTodoSource;
@@ -590,7 +610,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
   for (let index = 0; index < messages.length; index++) {
     const message = messages[index];
     if (message.role === 'user') {
-      if (!isSyntheticUserRow(message)) lastUserIndex = index;
+      if (isPlanUserBoundary(message)) lastUserIndex = index;
       continue;
     }
     const source = agentPlanSource(toolNameOf(message));
@@ -618,10 +638,12 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     // 普通 user turn 也是所有权边界:用户开了新话题,旧的未完成计划不得把新计划
     // 吞成"续期"(历史病 §3.1.2/3.1.3——串号后新计划复用旧 key、Task 状态跨
     // turn 拼接)。task source 例外:显式指向已有任务的操作(TaskUpdate/TaskGet
-    // 带已知 id)仍是同一份清单的合法续写。
+    // 带已知 id)仍是同一份清单的合法续写,但不能因此把 session 的所有权锚点
+    // 搬进新 turn:后续 TaskCreate 仍应另起清单,否则一个长期未完成项会把跨阶段
+    // 新任务持续吸进来,最终出现几十步历史与陈旧 active 项混在一张卡里。
     const crossesUserBoundary =
       Boolean(previous)
-      && lastUserIndex > (previous?.lastIndex ?? -1)
+      && lastUserIndex > (previous?.userBoundaryIndex ?? -1)
       && !(source === 'task' && taskToolTargetsExistingTask(message, resultText, taskState));
     const startsNewSession =
       !previous
@@ -643,10 +665,12 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
 
     if (!startsNewSession && previous) {
       previous.todos = parsed;
+      previous.sourceClientIds.push(sourceClientId(message));
       previous.lastIndex = index;
     } else {
       const session = {
         todos: parsed,
+        sourceClientIds: [sourceClientId(message)],
         firstIndex: index,
         lastIndex: index,
         source,
@@ -665,6 +689,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     out.set(session.lastIndex, {
       key: `${keyPrefix}-${sourceClientId(first)}`,
       todos: session.todos,
+      sourceClientIds: session.sourceClientIds,
       createdAt: lastRow?.createdAt,
       updatedAtMs: lastRow?.planUpdatedAtMs,
       source: session.source,
@@ -903,7 +928,7 @@ export function markCodexPlanTurnFailed<TMessage extends MessageRenderSourceMess
 ): { messages: readonly TMessage[]; changed: boolean; toolUseId: string | null } {
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index];
-    if (message.role === 'user' && !isSyntheticUserRow(message)) break;
+    if (isPlanUserBoundary(message)) break;
     if (message.role !== 'tool_use' || toolNameOf(message) !== 'update_plan') continue;
     if (planRowSealOf(message).sealed || planRowTurnFailed(message)) {
       return { messages, changed: false, toolUseId: null };
@@ -1057,11 +1082,18 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
   let previousTaskTodos: MessageRenderTodoItem[] | null = null;
   let sawTaskEvent = false;
   let currentSessionBoundaryKnown = !hasEarlierMessages;
+  let lastUserBoundaryIndex = -1;
+  let currentSessionUserBoundaryIndex = -1;
 
   for (let index = 0; index <= latestPlanIndex; index += 1) {
     const message = messages[index];
+    if (isPlanUserBoundary(message)) {
+      lastUserBoundaryIndex = index;
+      continue;
+    }
     if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
 
+    const toolName = toolNameOf(message);
     const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const resultTasks = taskRecordsFromResult(resultText);
     const input = readRecord(toolInputOf(message)) ?? {};
@@ -1074,22 +1106,40 @@ function isTaskPlanWindowResolved<TMessage extends MessageRenderSourceMessageLik
       [...unresolvedTaskStatuses.values()].every(
         (status) => status === 'completed' || status === 'deleted',
       );
+    const targetsExistingTask = taskToolTargetsExistingTask(message, resultText, taskState);
     const continuesCompletedTaskSession =
       previousAllDone &&
-      (taskToolTargetsExistingTask(message, resultText, taskState) ||
+      (targetsExistingTask ||
         Boolean(targetTaskId && unresolvedTaskStatuses.has(targetTaskId)));
+    // 与 findMessageTodoInsertions 保持同一条所有权边界：真实 user turn 后的
+    // 新 TaskCreate / 新清单不能继承前一轮的孤儿状态；显式更新当前已知 Task
+    // 仍允许跨 turn 续写，且不移动 session 的原始所有权锚点。
+    const crossesUserBoundary =
+      sawTaskEvent &&
+      lastUserBoundaryIndex > currentSessionUserBoundaryIndex &&
+      !targetsExistingTask;
     const startsNewSession =
       !sawTaskEvent ||
+      crossesUserBoundary ||
       (previousAllDone && !continuesCompletedTaskSession);
     if (startsNewSession) {
+      const startsAfterCompletedSession =
+        sawTaskEvent && previousAllDone && !continuesCompletedTaskSession;
+      const startsWithTaskCreateAfterVisibleUser =
+        toolName === 'TaskCreate' &&
+        lastUserBoundaryIndex >= 0 &&
+        (!sawTaskEvent || crossesUserBoundary);
       taskState.clear();
       unresolvedTaskStatuses.clear();
       previousTaskTodos = null;
-      if (sawTaskEvent) currentSessionBoundaryKnown = true;
+      currentSessionBoundaryKnown =
+        !hasEarlierMessages ||
+        startsAfterCompletedSession ||
+        startsWithTaskCreateAfterVisibleUser;
+      currentSessionUserBoundaryIndex = lastUserBoundaryIndex;
     }
     sawTaskEvent = true;
 
-    const toolName = toolNameOf(message);
     if (toolName === 'TaskList') {
       if (taskListResultIsAuthoritative(resultText)) {
         currentSessionBoundaryKnown = true;
@@ -1464,217 +1514,28 @@ function tryParseJsonRecord(text: string | undefined): Record<string, unknown> |
   }
 }
 
-function groupMessageWorkRuns<
-  TMessage extends MessageRenderNormalizedMessage,
->(
+function groupMessageWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
   items: readonly MessageRenderItem<TMessage>[],
   isSessionStreaming: boolean,
 ): MessageRenderItem<TMessage>[] {
-  const out: MessageRenderItem<TMessage>[] = [];
-  let currentTurn: MessageRenderItem<TMessage>[] = [];
-
-  const flushTurn = (activeTail: boolean) => {
-    if (currentTurn.length === 0) return;
-    if (activeTail && isSessionStreaming) {
-      out.push(...groupActiveWorkRuns(currentTurn));
-      currentTurn = [];
-      return;
-    }
-    const grouped = groupAnsweredTurnItems(currentTurn);
-    out.push(...(grouped.handled ? grouped.items : groupLegacyWorkRuns(currentTurn)));
-    currentTurn = [];
-  };
-
-  // 空洞判定的锚点:上一个 item 的**结束**时间(见 itemEndTimestamp)。用开始时间会让一个
-  // 正常的长时段工具组/thinking 把紧随其后的 item 误判成空洞。取已见过的最大值而非无条件
-  // 覆盖:并行的 Agent/Task 可能乱序完成,锚点回退会让后面的最终答复被误切、时长被低报。
-  // 无时间戳的 item 不重置锚点,让间隔判定跨过它继续比对上一个有时间的动作。
-  let prevEndMs: number | null = null;
-  const noteEnd = (item: MessageRenderItem<TMessage>) => {
-    const endMs = itemEndTimestamp(item);
-    if (endMs === null) return;
-    prevEndMs = prevEndMs === null ? endMs : Math.max(prevEndMs, endMs);
-  };
-
-  for (const item of items) {
-    if (item.type === 'message' && item.message.kind === 'user') {
-      flushTurn(false);
-      out.push(item);
-      noteEnd(item);
-      continue;
-    }
-    // 窗口空洞:user 行是唯一的 turn 边界,窗口里缺了它,两段不相干的历史就会被折进同一个
-    // 「已工作 Xs」并谎报时长(手机端实测一条组吞掉整场会话的 6 轮对话)。相邻动作间隔超过
-    // 阈值时同样切断 —— 见 HISTORY_GAP_SPLIT_MS 的完整理由。
-    const startMs = itemTimestamp(item);
-    if (
-      prevEndMs !== null
-      && startMs !== null
-      && startMs - prevEndMs > HISTORY_GAP_SPLIT_MS
-    ) {
-      flushTurn(false);
-    }
-    currentTurn.push(item);
-    noteEnd(item);
-  }
-  flushTurn(true);
-  return out;
-}
-
-function groupAnsweredTurnItems<
-  TMessage extends MessageRenderNormalizedMessage,
->(items: readonly MessageRenderItem<TMessage>[]): {
-  items: MessageRenderItem<TMessage>[];
-  handled: boolean;
-} {
-  const sealedAnswers = new Set<number>();
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (isAssistantAnswerCandidate(item) && isCompletedAssistantMessage(item.message)) {
-      sealedAnswers.add(index);
-    }
-  }
-
-  let lastAnswerIndex = -1;
-  for (let index = items.length - 1; index >= 0; index--) {
-    if (isAssistantAnswerCandidate(items[index])) {
-      lastAnswerIndex = index;
-      break;
-    }
-  }
-  if (lastAnswerIndex < 0) return { items: [...items], handled: false };
-
-  // 新数据按 SDK done seal 分段；旧数据没有 seal 时保持原有 last-answer 兼容行为。
-  if (sealedAnswers.size > 0) {
-    let segmentStartIndex = 0;
-    for (const sealedIndex of [...sealedAnswers]) {
-      let lastWorkActivityIndex = -1;
-      for (let index = sealedIndex - 1; index >= segmentStartIndex; index--) {
-        if (isWorkActivityItem(items[index])) {
-          lastWorkActivityIndex = index;
-          break;
-        }
-      }
-      let answerStartIndex = sealedIndex;
-      while (
-        answerStartIndex > lastWorkActivityIndex + 1
-        && answerStartIndex > segmentStartIndex
-        && isAssistantAnswerCandidate(items[answerStartIndex - 1])
-      ) {
-        answerStartIndex--;
-      }
-      for (let index = answerStartIndex; index <= sealedIndex; index++) {
-        if (isAssistantAnswerCandidate(items[index])) sealedAnswers.add(index);
-      }
-      segmentStartIndex = sealedIndex + 1;
-    }
-  } else {
-    const hasWorkAfterLastAnswer = items.some(
-      (item, index) => index > lastAnswerIndex && isWorkActivityItem(item),
-    );
-    if (hasWorkAfterLastAnswer) return { items: [...items], handled: false };
-
-    let lastWorkActivityIndex = -1;
-    for (let index = lastAnswerIndex - 1; index >= 0; index--) {
-      if (isWorkActivityItem(items[index])) {
-        lastWorkActivityIndex = index;
-        break;
-      }
-    }
-    let finalAnswerStartIndex = lastAnswerIndex;
-    if (lastWorkActivityIndex >= 0) {
-      while (
-        finalAnswerStartIndex > lastWorkActivityIndex + 1
-        && isAssistantAnswerCandidate(items[finalAnswerStartIndex - 1])
-      ) {
-        finalAnswerStartIndex--;
-      }
-    }
-    for (let index = finalAnswerStartIndex; index <= lastAnswerIndex; index++) {
-      if (isAssistantAnswerCandidate(items[index])) sealedAnswers.add(index);
-    }
-  }
-
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(createCompletedWorkGroup(run, nextItem));
-    run = [];
-  };
-
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (
-      !sealedAnswers.has(index)
-      && !isRunningAgentTaskItem(item)
-      && !isDeliveryProseItem(item)
-      && isWorkChild(item)
-    ) {
-      run.push(item);
-    } else {
-      flushRun(item);
-      out.push(item);
-    }
-  }
-  flushRun();
-  return { items: out, handled: true };
-}
-
-function groupLegacyWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
-  items: readonly MessageRenderItem<TMessage>[],
-): MessageRenderItem<TMessage>[] {
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem));
-    run = [];
-  };
-  for (const item of items) {
-    if (isWorkActivityItem(item)) run.push(item);
-    else {
-      flushRun(item);
-      out.push(item);
-    }
-  }
-  flushRun();
-  return out;
-}
-
-/** Active turn: assistant text and compact cards close the previous activity run. */
-function groupActiveWorkRuns<TMessage extends MessageRenderNormalizedMessage>(
-  items: readonly MessageRenderItem<TMessage>[],
-): MessageRenderItem<TMessage>[] {
-  let lastCompletedBoundaryIndex = -1;
-  for (let index = 0; index < items.length; index++) {
-    if (isAssistantAnswerCandidate(items[index]) || isCompactBoundaryItem(items[index])) {
-      lastCompletedBoundaryIndex = index;
-    }
-  }
-
-  const out: MessageRenderItem<TMessage>[] = [];
-  let run: MessageRenderWorkChildItem<TMessage>[] = [];
-  let runLastIndex = -1;
-  const flushRun = (nextItem?: MessageRenderItem<TMessage>) => {
-    if (run.length === 0) return;
-    out.push(createWorkGroup(run, nextItem, runLastIndex > lastCompletedBoundaryIndex));
-    run = [];
-  };
-  for (let index = 0; index < items.length; index++) {
-    const item = items[index];
-    if (isWorkActivityItem(item)) {
-      run.push(item);
-      runLastIndex = index;
-    } else {
-      flushRun(item);
-      out.push(item.type === 'todo'
-        ? { ...item, isStreaming: index > lastCompletedBoundaryIndex }
-        : item);
-    }
-  }
-  flushRun();
-  return out;
+  return groupWorkRuns<MessageRenderItem<TMessage>, MessageRenderWorkChildItem<TMessage>>(
+    items, isSessionStreaming, {
+      isUserBoundary: (item) => item.type === 'message' && item.message.kind === 'user',
+      isAnswer: isAssistantAnswerCandidate,
+      isSealedAnswer: (item) => item.type === 'message' && isCompletedAssistantMessage(item.message),
+      isCompactBoundary: isCompactBoundaryItem,
+      isActivity: isWorkActivityItem,
+      isArchivable: (item): item is MessageRenderWorkChildItem<TMessage> =>
+        !isRunningAgentTaskItem(item) && !isDeliveryProseItem(item) && isWorkChild(item),
+      startTimestamp: itemTimestamp,
+      endTimestamp: itemEndTimestamp,
+      boundaryTimestamp,
+      userBoundaryEnd: (item, previousEnd) => maxTimestamp(previousEnd, itemEndTimestamp(item)),
+      createGroup: createWorkGroup,
+      createCompletedGroup: createCompletedWorkGroup,
+      activeStandalone: (item, isStreaming) => item.type === 'todo' ? { ...item, isStreaming } : item,
+    },
+  );
 }
 
 /**
@@ -1689,6 +1550,7 @@ function isRunningAgentTaskItem<
 >(item: MessageRenderItem<TMessage>): boolean {
   if (item.type !== 'agent_task') return false;
   const status = deriveAgentTaskStatus(item.update?.status, item.toolCall?.secondaryBody, {
+    persistedStatus: item.toolCall?.agentTaskStatus,
     resultIsLaunchReceipt:
       item.toolCall !== undefined &&
       (subagentSpawnReceiptName(
@@ -1803,16 +1665,33 @@ function isWorkActivityItem<TMessage extends MessageRenderNormalizedMessage>(
     && (item.type === 'thinking' || item.type === 'tool_group' || item.type === 'agent_task');
 }
 
+/** 边界项（用户消息 / assistant 正文）的时间戳；非 message 卡片不作为时间边界。 */
+function boundaryTimestamp<TMessage extends MessageRenderNormalizedMessage>(
+  item: MessageRenderItem<TMessage> | undefined,
+): number | null {
+  return item?.type === 'message' ? itemTimestamp(item) : null;
+}
+
 function createWorkGroup<
   TMessage extends MessageRenderNormalizedMessage,
 >(
   children: MessageRenderWorkChildItem<TMessage>[],
   nextItem?: MessageRenderItem<TMessage>,
   isStreaming = false,
+  previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const firstActivity = children.find((item) => item.type !== 'message' || item.message.kind === 'thinking');
-  const start = itemTimestamp(firstActivity ?? children[0]);
-  const end = nextItem ? itemTimestamp(nextItem) : workRunFallbackEnd(children);
+  const anchor = itemTimestamp(firstActivity ?? children[0]);
+  // 段起点优先锚上一个边界（用户消息 / 上一句正文），与桌面活表口径一致。
+  // 边界缺失（窗口截断）或时序异常时退回段内首个活动。
+  const start =
+    previousBoundaryMs !== null && (anchor === null || previousBoundaryMs <= anchor)
+      ? previousBoundaryMs
+      : anchor;
+  const end =
+    nextItem?.type === 'message'
+      ? itemTimestamp(nextItem)
+      : workRunFallbackEnd(children);
   const durationMs = start !== null && end !== null && end >= start ? end - start : undefined;
   return {
     type: 'work_group',
@@ -1827,17 +1706,21 @@ function createWorkGroup<
 function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessage>(
   run: MessageRenderWorkChildItem<TMessage>[],
   nextItem?: MessageRenderItem<TMessage>,
+  previousBoundaryMs: number | null = null,
 ): MessageRenderWorkGroupItem<TMessage> {
   const hasAssistantText = run.some(
     (item) => item.type === 'message' && item.message.kind === 'assistant',
   );
-  if (!hasAssistantText) return createWorkGroup(run, nextItem);
+  if (!hasAssistantText) return createWorkGroup(run, nextItem, false, previousBoundaryMs);
 
   const children: MessageRenderWorkChildItem<TMessage>[] = [];
   let activityRun: MessageRenderWorkChildItem<TMessage>[] = [];
+  let innerPreviousBoundaryMs = previousBoundaryMs;
   const flushActivityRun = (activityNextItem?: MessageRenderItem<TMessage>) => {
     if (activityRun.length === 0) return;
-    children.push(createWorkGroup(activityRun, activityNextItem));
+    children.push(
+      createWorkGroup(activityRun, activityNextItem, false, innerPreviousBoundaryMs),
+    );
     activityRun = [];
   };
   for (const item of run) {
@@ -1846,10 +1729,11 @@ function createCompletedWorkGroup<TMessage extends MessageRenderNormalizedMessag
     } else {
       flushActivityRun(item);
       children.push(item);
+      innerPreviousBoundaryMs = boundaryTimestamp(item);
     }
   }
   flushActivityRun(nextItem);
-  const outer = createWorkGroup(run, nextItem);
+  const outer = createWorkGroup(run, nextItem, false, previousBoundaryMs);
   const firstActivity = run.find((item) => item.type !== 'message' || item.message.kind === 'thinking');
   return {
     ...outer,

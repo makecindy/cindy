@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, providerMediaField } from '@cindy/model-providers';
 
 import {
   commitModelPlaneFromCatalog,
@@ -9,7 +9,9 @@ import {
   setActiveCatalog,
   setActiveCatalogChangedListener,
   setAnthropicDiscoveredModels,
+  setCustomProviderConfigs,
   setDiscoveredCodexModels,
+  setXaiDiscoveredModels,
 } from '../active-catalog.js';
 
 describe('active catalog revision', () => {
@@ -18,6 +20,8 @@ describe('active catalog revision', () => {
     setActiveCatalog(BUNDLED_CATALOG);
     setAnthropicDiscoveredModels([]);
     setDiscoveredCodexModels([]);
+    setXaiDiscoveredModels(null);
+    setCustomProviderConfigs([]);
   });
 
   it('invalidates the merged catalog before notifying one monotonic revision', () => {
@@ -45,6 +49,130 @@ describe('active catalog revision', () => {
     expect(listener.mock.results[0]?.value.ids).toContain('gpt-next-live');
   });
 
+  it('keeps legacy custom xai isolated across catalog refresh and owner config reload', () => {
+    setCustomProviderConfigs([
+      {
+        id: 'xai',
+        name: 'Private xAI-compatible endpoint',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://private-xai.example/v1',
+            models: [{ id: 'private-grok', name: 'Private Grok' }],
+          },
+        },
+      },
+    ]);
+    setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+
+    const active = getActiveCatalog();
+    expect(active.providers.find((provider) => provider.id === 'xai')?.source).toBe('builtin');
+    expect(active.providers.find((provider) => provider.id === 'custom:xai')).toMatchObject({
+      source: 'user',
+      routing: { codex: { upstream: 'https://private-xai.example/v1' } },
+    });
+
+    setCustomProviderConfigs([]);
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'custom:xai')).toBe(
+      false,
+    );
+    expect(getActiveCatalog().providers.some((provider) => provider.id === 'xai')).toBe(true);
+  });
+
+  it('refreshes custom media defaults without losing discovered or explicit fields', () => {
+    const current = structuredClone(BUNDLED_CATALOG);
+    const base = current.modelRegistry!.baseModels!.find((m) => m.id === 'openai/gpt-4o-mini-tts')!;
+    setActiveCatalog(current);
+    setCustomProviderConfigs([
+      {
+        id: 'private-audio',
+        name: 'Private',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://private.example/v1',
+            models: [
+              {
+                id: 'gpt-4o-mini-tts',
+                name: 'Live',
+                nameExplicit: false,
+                mode: 'audio_speech',
+                modalities: { input: [], output: [] },
+                discoveredMetadata: { name: 'Live', officialDocs: 'https://private.example/docs' },
+              },
+            ],
+          },
+        },
+      },
+    ]);
+    const read = () => getActiveCatalog().providers.find((p) => p.id === 'private-audio')!;
+    expect(read().audioModels![0]).toMatchObject({
+      name: 'Live',
+      mode: 'audio_speech',
+      officialDocs: 'https://private.example/docs',
+      modalities: { input: [], output: [] },
+    });
+    base.defaults.description = 'Updated public description';
+    current.modelRegistry!.updatedAt = '2099-09-09T00:00:00.000Z';
+    setActiveCatalog(current);
+    expect(read().audioModels![0]).toMatchObject({
+      name: 'Live',
+      description: 'Updated public description',
+      officialDocs: 'https://private.example/docs',
+      modalities: { input: [], output: [] },
+    });
+    expect(read().routing.codex?.upstream).toBe('https://private.example/v1');
+  });
+
+  it.each([1, 2, 3, 5] as const)('publishes Gemini defaults before notifying and retains native declarations across sparse V%s refresh', schemaVersion => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = { schemaVersion, updatedAt: '2099-09-13T00:00:00Z', models: [] };
+    setActiveCatalog(catalog);
+    const preset = BUNDLED_CATALOG.presets!.find(p => p.id === 'openrouter')!;
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const id = 'google/gemini-3.8-flash';
+    const read = () => getActiveCatalog().providers.find(p => p.id === 'openrouter-test')!;
+    const listener = vi.fn(() => read());
+    setActiveCatalogChangedListener(listener);
+    setCustomProviderConfigs([{ id: 'openrouter-test', name: 'OpenRouter', runtimes: Object.fromEntries(
+      agents.map(agent => [agent, { ...preset.runtimes[agent]!, catalogPresetId: preset.id, models: [{ id, name: 'Gemini' }] }]),
+    ) }]);
+    const check = (provider: ReturnType<typeof read>) => {
+      for (const agent of agents) expect(provider.models[agent]![0]).toMatchObject({
+        id, nativeApi: 'google-generative-ai', defaultEnabled: agent === 'pi',
+        contextWindow: 1_048_576, maxOutput: 65_536, supportsImageInput: true,
+      });
+    };
+    expect(listener).toHaveBeenCalledOnce();
+    check(listener.mock.results[0].value);
+    setActiveCatalog(structuredClone(catalog));
+    check(read());
+  });
+
+  it.each([
+    ['chat', 'image_generation'],
+    ['image_generation', 'chat'],
+    ['image_generation', 'video_generation'],
+    ['video_generation', 'image_generation'],
+  ])('keeps duplicate IDs scoped to their producing runtime: %s / %s', (claudeMode, codexMode) => {
+    setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+    setCustomProviderConfigs([{
+      id: 'duplicate-media', name: 'Duplicate', runtimes: {
+        'claude-code': { baseUrl: 'https://claude.example/v1', models: [{ id: 'shared', name: 'Claude Row', mode: claudeMode }] },
+        codex: { baseUrl: 'https://codex.example/v1', models: [{ id: 'shared', name: 'Codex Row', mode: codexMode }] },
+      },
+    }]);
+    const check = () => {
+      const provider = getActiveCatalog().providers.find((p) => p.id === 'duplicate-media')!;
+      for (const [agent, mode, name] of [['claude-code', claudeMode, 'Claude Row'], ['codex', codexMode, 'Codex Row']] as const) {
+        const field = providerMediaField(mode);
+        expect(provider.models[agent]?.[0].mode).toBe(mode);
+        if (field) expect(provider[field]).toContainEqual(expect.objectContaining({ id: 'shared', mode, name, sourceAgent: agent }));
+      }
+    };
+    check();
+    setActiveCatalog(structuredClone(BUNDLED_CATALOG));
+    check();
+  });
+
   it('routes Anthropic discovery through the same revision listener', () => {
     const start = getActiveCatalogRevision();
     const listener = vi.fn((revision: number) => ({
@@ -70,8 +198,10 @@ describe('active catalog revision', () => {
     expect(listener.mock.results[0]?.value.ids).toContain('claude-opus-next');
   });
 
-  it('refreshes one provider model snapshot without replacing live routing or other providers', () => {
-    // registry-free 克隆:本用例只验「换模型快照不换路由」机制,隔离 registry 实体化层。
+  it('refreshes xAI catalog metadata and routing without replacing other providers', () => {
+    // registry-free 克隆：server Catalog 可更新 xAI routing/metadata；账号快照只在
+    // computeMerged 阶段决定 membership。这里隔离 registry 实体化层，只验证 provider
+    // plane 更新不会连带替换其他 provider。
     const current = structuredClone(BUNDLED_CATALOG);
     delete (current as { modelRegistry?: unknown }).modelRegistry;
     const incoming = structuredClone(current);
@@ -117,7 +247,7 @@ describe('active catalog revision', () => {
       incomingXai.models.codex,
     );
     expect(active.providers.find((provider) => provider.id === 'xai')?.routing.codex).toEqual(
-      currentXai.routing.codex,
+      incomingXai.routing.codex,
     );
     expect(active.providers.find((provider) => provider.id === 'openai')?.models.codex).toEqual(
       currentOpenAi.models.codex,

@@ -1,23 +1,32 @@
 import type {
   BrowserBackendHealth,
   BrowserBackendRecoveryResult,
+  BrowserBackendSourceReadAccess,
 } from '../../../shared/browserBackend.js';
-import { requireEnum, requireObject } from '../../utils/ipcValidate.js';
+import { requireBoolean, requireEnum, requireObject } from '../../utils/ipcValidate.js';
 import type { BackendKind } from './types.js';
 
 export interface BrowserBackendSettingsState {
   active: BackendKind;
   systemDefault: BackendKind;
   isOverride: boolean;
+  useRealProfile: boolean;
+}
+
+export interface BrowserUseRealProfileResult {
+  ok: true;
+  enabled: boolean;
 }
 
 interface BrowserBackendIpcDeps<Event> {
   assertTrusted(event: Event): void;
   getState(): BrowserBackendSettingsState;
   setKind(kind: BackendKind): Promise<BackendKind>;
+  setUseRealProfile(enabled: boolean): Promise<boolean>;
   reset(): Promise<BackendKind>;
   getHealth(): Promise<BrowserBackendHealth>;
   recover(): Promise<BrowserBackendRecoveryResult>;
+  probeSourceRead(): BrowserBackendSourceReadAccess;
 }
 
 /** Pure handler factory so trust gates and response contracts stay testable. */
@@ -33,6 +42,12 @@ export function createBrowserBackendIpcHandlers<Event>(deps: BrowserBackendIpcDe
       const kind = requireEnum(obj.kind, ['external', 'rsb-webview'] as const, 'kind');
       return { ok: true as const, active: await deps.setKind(kind) };
     },
+    async setUseRealProfile(event: Event, payload: unknown) {
+      deps.assertTrusted(event);
+      const obj = requireObject(payload, 'set-use-real-profile payload');
+      const enabled = requireBoolean(obj.enabled, 'enabled');
+      return { ok: true as const, enabled: await deps.setUseRealProfile(enabled) };
+    },
     async reset(event: Event) {
       deps.assertTrusted(event);
       return { ok: true as const, active: await deps.reset() };
@@ -44,6 +59,10 @@ export function createBrowserBackendIpcHandlers<Event>(deps: BrowserBackendIpcDe
     recover(event: Event) {
       deps.assertTrusted(event);
       return deps.recover();
+    },
+    probeSourceRead(event: Event) {
+      deps.assertTrusted(event);
+      return deps.probeSourceRead();
     },
   };
 }

@@ -47,6 +47,7 @@ beforeEach(() => {
         pinnedOrderIsAuthoritative: false,
         pinnedOrder: [],
         hiddenProjectKeys: initialHiddenProjectKeys,
+        hiddenMainViewGhostIds: [],
       }),
       onHiddenProjectKeysChanged: (listener: HiddenProjectsListener) => {
         if (hiddenProjectKeysBeforeListenerRegistration !== null) {
@@ -86,16 +87,19 @@ describe('hidden-project filter synchronization', () => {
     });
     expect(firstWindow.result.current.projects).toEqual([PROJECT_B]);
     expect(secondWindow.result.current.projects).toEqual([PROJECT_B]);
+  });
+
+  it('keeps project restore scoped to the renderer that requested it', () => {
+    window.localStorage.setItem(PROJECTS_KEY, JSON.stringify([PROJECT_B]));
+    const restoringWindow = renderHook(() => useSyncedSidebarFilter());
+    const otherWindow = renderHook(() => useSyncedSidebarFilter());
 
     act(() => {
-      for (const listener of hiddenProjectsListeners) listener([], OWNER_STAMP);
-    });
-    act(() => {
-      firstWindow.result.current.ensureProjectIncluded(PROJECT_A);
+      restoringWindow.result.current.ensureProjectIncluded(PROJECT_A);
     });
 
-    expect(firstWindow.result.current.projects).toEqual([PROJECT_B, PROJECT_A]);
-    expect(secondWindow.result.current.projects).toEqual([PROJECT_B]);
+    expect(restoringWindow.result.current.projects).toEqual([PROJECT_B, PROJECT_A]);
+    expect(otherWindow.result.current.projects).toEqual([PROJECT_B]);
     expect(JSON.parse(window.localStorage.getItem(OWNER_PROJECTS_KEY) ?? 'null')).toEqual([
       PROJECT_B,
       PROJECT_A,
@@ -175,6 +179,7 @@ describe('hidden-project filter synchronization', () => {
       pinnedOrderIsAuthoritative: true,
       pinnedOrder: ['owner-b-session'],
       hiddenProjectKeys: [PROJECT_A],
+      hiddenMainViewGhostIds: [],
     });
 
     const view = renderHook(() => useHiddenProjects());
@@ -185,6 +190,42 @@ describe('hidden-project filter synchronization', () => {
       pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
     });
+  });
+});
+
+describe('sidebar content filter reset', () => {
+  it('preserves archived status and display preferences while clearing project, Pi and activity filters', () => {
+    const view = renderHook(() => useSyncedSidebarFilter());
+    act(() => {
+      view.result.current.setStatus('archived');
+      view.result.current.toggleProject(PROJECT_A);
+      view.result.current.setVendor('pi');
+      view.result.current.setLastActivity('7d');
+      view.result.current.setSortBy('priority');
+      view.result.current.setGroupBy('flat');
+    });
+    act(() => view.result.current.resetContentFilters());
+    expect(view.result.current).toMatchObject({
+      status: 'archived',
+      projects: 'all',
+      vendor: 'all',
+      lastActivity: 'all',
+      sortBy: 'priority',
+      groupBy: 'flat',
+      isSessionContentFiltered: true,
+    });
+    view.unmount();
+    const restored = renderHook(() => useSyncedSidebarFilter());
+    expect(restored.result.current).toMatchObject({
+      status: 'archived',
+      projects: 'all',
+      vendor: 'all',
+      lastActivity: 'all',
+      sortBy: 'priority',
+      groupBy: 'flat',
+    });
+    restored.unmount();
   });
 });

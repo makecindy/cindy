@@ -42,12 +42,14 @@ export {
   createEncryptedContentRecoveryRule,
   createImageGenerationIdRecoveryRule,
   createToolExchangeAdjacencyRecoveryRule,
+  compactOversizedImageHistory,
   createToolUseProviderSpecificFieldsRecoveryRule,
   dedupeDuplicateToolUseIds,
   dedupeDuplicateToolUseIdsFromBody,
   repairToolExchangeAdjacency,
   repairToolExchangeAdjacencyFromBody,
   repairToolExchangeStructureFromBody,
+  replaceToolResultImagesWithNotice,
   stripEmptyAssistantMessagesFromBody,
   stripEmptyTextFromBody,
   stripEmptyThinkingFromBody,
@@ -57,6 +59,17 @@ export {
   stripToolUseProviderSpecificFields,
   stripToolUseProviderSpecificFieldsFromBody,
 } from './transform.js';
+export {
+  createXaiModelInputRecoveryRule,
+  createXaiModelInputSanitizeTransform,
+  looksLikeXaiResponsesModel,
+  sanitizeXaiModelInputBody,
+  sanitizeXaiModelInputFromBody,
+  supportsXaiReasoningModel,
+  xaiBareModelId,
+} from './xai-model-input.js';
+export { createVllmResponsesCompatibilityRule } from './vllm-responses-compatibility.js';
+export { createVisionBridgeTransform } from './vision-bridge-transform.js';
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';
 export {
@@ -69,7 +82,10 @@ export type {
   InstructionsRegistry,
 } from './instructions-injection.js';
 export type {
+  ForwardLifecycleObserver,
+  ForwardLifecycleFailure,
   LocalRequestHandler,
+  OversizedRequestCompactor,
   ProxyHandle,
   ProxyLogger,
   ProxyOptions,
@@ -77,6 +93,7 @@ export type {
   ResponseObserver,
   ResponseObserverCtx,
   ResponseObserverSink,
+  ResponseTransform,
   RequestTransform,
   RequestTransformCtx,
   RoutingDecision,

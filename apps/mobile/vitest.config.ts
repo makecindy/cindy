@@ -29,6 +29,9 @@ export default defineConfig({
       // (checkout 路径含空格时 alias 指向不存在的 %20 路径,255 个测试文件整体
       // TEST_COLLECT_FAILED);无空格路径下两者逐字节一致,CI 行为零变化。
       '@': fileURLToPath(new URL('./src', import.meta.url)),
+      'expo-application': fileURLToPath(
+        new URL('./src/__tests__/expo-application.mock.ts', import.meta.url),
+      ),
       'expo-constants': fileURLToPath(new URL('./src/__tests__/expo-constants.mock.ts', import.meta.url)),
       // expo-localization 同款处理:真模块拖 react-native(Flow 语法)依赖链;
       // 需要控制语言的测试用 vi.mock 覆盖(优先于 alias)。

@@ -16,7 +16,9 @@ import {
   sessionRowMessagePreview,
   summarizeRemoteSessionOverview,
   toRemoteSessionListItem,
+  formatRemoteSessionSidebarTime,
 } from '../sessionList.js';
+import type { PresentationLocalizer } from '../presentationLocalization.js';
 import type { RemoteSchedule, RemoteScheduleRun } from '../scheduleTypes.js';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../syntheticTrigger.js';
 
@@ -203,7 +205,25 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: '未命名任务',
       subtitle: 'Codex · gpt-5.4 · dialogue',
-      detail: '活跃 · 5 分钟前 · 12 条消息',
+      detail: '活跃 · 5 minutes ago · 12 条消息',
+      messagePreview: null,
+      lastActivityAt: '2026-01-01T00:05:00.000Z',
+    });
+  });
+
+  it('caps oversized message counts at 1000+', () => {
+    const item = toRemoteSessionListItem(session('s-big', {
+      title: '大库',
+      workingDir: null,
+      workspaceKind: 'dialogue',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      userSendAt: '2026-01-01T00:05:00.000Z',
+      _count: { messages: 1001 },
+    }), new Date('2026-01-01T00:10:00.000Z').getTime());
+
+    expect(item).toMatchObject({
+      detail: '活跃 · 5 minutes ago · 1000+ 条消息',
       messagePreview: null,
       lastActivityAt: '2026-01-01T00:05:00.000Z',
     });
@@ -269,6 +289,22 @@ describe('sessionList', () => {
       session: { ...base.session, source: 'scheduler' },
     }, { running: true })).toBe('自动化执行中');
     expect(buildRemoteSessionCardPreview(base, { running: false })).toBe('旧的消息摘要');
+  });
+
+  it('localizes generated preview states without treating message text as a state marker', () => {
+    const message = toRemoteSessionListItem(
+      session('s1', { title: 'Run tests' }),
+      new Date('2026-01-01T00:10:00.000Z').getTime(),
+      undefined,
+      0,
+      '运行中',
+    );
+    const localizer = {
+      translate: (key: string, fallback: string) => key.endsWith('.running') ? 'Running' : fallback,
+    };
+
+    expect(buildRemoteSessionCardPreview(message, { localizer })).toBe('运行中');
+    expect(buildRemoteSessionCardPreview(message, { localizer, running: true })).toBe('Running');
   });
 
   it('prefers human awaiting copy over stale tool status when interaction is pending', () => {
@@ -390,7 +426,7 @@ describe('sessionList', () => {
     expect(item).toMatchObject({
       title: 'Legacy title',
       subtitle: 'Claude Code · claude-sonnet-4-6',
-      detail: '活跃 · 10 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '活跃 · 10 minutes ago · 自动化执行中 · 1 个自动化未读',
     });
     expect(item.scheduleInfo).toMatchObject({
       scheduleId: 'sched-1',
@@ -439,7 +475,7 @@ describe('sessionList', () => {
     expect(group).toMatchObject({
       title: '移动端巡检',
       subtitle: '自动化 · 2 个任务 · Claude Code · claude-sonnet-4-6',
-      detail: '2 个任务 · 4 分钟前 · 自动化执行中 · 1 个自动化未读',
+      detail: '2 个任务 · 4 minutes ago · 自动化执行中 · 1 个自动化未读',
       automationGroup: {
         key: 'schedule:sched-1',
         sessionIds: ['running', 'old'],
@@ -635,7 +671,7 @@ describe('sessionList', () => {
     });
     expect(remoteSessionFilterLabel('waiting', overview)).toBe('待处理 1');
     expect(remoteSessionFilterLabel('all', overview)).toBe('全部 5');
-    expect(remoteSessionControlsSummary('automation', 'date', overview)).toBe('自动化 2 · 时间分组');
+    expect(remoteSessionControlsSummary('automation', overview)).toBe('自动化 2 · 项目分组');
     expect(remoteSessionOverviewCopy(overview)).toBe('1 个置顶 · 3 个项目 · 1 个自动化执行中');
   });
 
@@ -667,7 +703,6 @@ describe('sessionList', () => {
     });
 
     expect(buildRemoteSessionListContext({
-      groupMode: 'project',
       overview: activeOverview,
       searchQuery: 'billing',
       sections: searchSections,
@@ -699,7 +734,6 @@ describe('sessionList', () => {
     });
 
     expect(buildRemoteSessionListContext({
-      groupMode: 'project',
       overview: automationOverview,
       searchQuery: '',
       sections: automationSections,
@@ -837,27 +871,6 @@ describe('sessionList', () => {
     expect(genuineContinueIndex.get('s5')).toBe('继续');
   });
 
-  it('can group non-pinned sessions by recent activity date', () => {
-    const now = new Date(2026, 0, 8, 12, 0, 0).getTime();
-    const sections = buildRemoteSessionSections([
-      session('today', { updatedAt: localIso(2026, 0, 8, 1), userSendAt: localIso(2026, 0, 8, 1) }),
-      session('yesterday', { updatedAt: localIso(2026, 0, 7, 23), userSendAt: localIso(2026, 0, 7, 23), workingDir: '/repo/b' }),
-      session('last7', { updatedAt: localIso(2026, 0, 3, 1), userSendAt: localIso(2026, 0, 3, 1), workingDir: '/repo/c' }),
-      session('earlier', { updatedAt: localIso(2025, 11, 1, 1), userSendAt: localIso(2025, 11, 1, 1), workingDir: '/repo/d' }),
-      session('pinned', { pinnedAt: localIso(2026, 0, 8, 2), updatedAt: localIso(2025, 11, 1, 1), userSendAt: localIso(2025, 11, 1, 1) }),
-    ], now, {
-      groupMode: 'date',
-    });
-
-    expect(sections.map((section) => [section.key, section.title, section.data.map((item) => item.session.id)])).toEqual([
-      ['pinned', '置顶', ['pinned']],
-      ['date:today', '今天', ['today']],
-      ['date:yesterday', '昨天', ['yesterday']],
-      ['date:last7', '最近 7 天', ['last7']],
-      ['date:earlier', '更早', ['earlier']],
-    ]);
-  });
-
   it('builds sections for a 1000-session remote device without duplicate rendered rows', () => {
     const now = new Date('2026-01-08T12:00:00.000Z').getTime();
     const sessions = createLargeSessionFixture(1000);
@@ -884,7 +897,6 @@ describe('sessionList', () => {
 
     const start = performance.now();
     const projectSections = buildRemoteSessionSections(sessions, now, {
-      groupMode: 'project',
       scheduleIndex,
     });
     const durationMs = performance.now() - start;
@@ -1046,10 +1058,6 @@ describe('getRemoteSessionPreviewCollapse', () => {
   });
 });
 
-function localIso(year: number, monthIndex: number, day: number, hour: number): string {
-  return new Date(year, monthIndex, day, hour, 0, 0).toISOString();
-}
-
 function createLargeSessionFixture(count: number): RemoteSession[] {
   const base = Date.parse('2026-01-08T12:00:00.000Z');
   return Array.from({ length: count }, (_, index) => {
@@ -1073,3 +1081,43 @@ function createLargeSessionFixture(count: number): RemoteSession[] {
     });
   });
 }
+
+function zhTimeLocalizer(): PresentationLocalizer {
+  const dict: Record<string, string> = {
+    'devices.presentation.sessionList.time.justNow': '刚刚',
+    'devices.presentation.sessionList.time.minutesAgo': '{{count}} 分钟前',
+    'devices.presentation.sessionList.time.hoursAgo': '{{count}} 小时前',
+    'devices.presentation.sessionList.time.daysAgo': '{{count}} 天前',
+    'devices.presentation.sessionList.time.minutes': '{{count}} 分钟',
+    'devices.presentation.sessionList.time.hours': '{{count}} 小时',
+    'devices.presentation.sessionList.time.days': '{{count}} 天',
+    'devices.presentation.sessionList.time.weeks': '{{count}} 周',
+    'devices.presentation.sessionList.time.months': '{{count}} 月',
+    'devices.presentation.sessionList.time.years': '{{count}} 年',
+  };
+  return {
+    translate: (key, fallback, values) => {
+      const template = dict[key] ?? fallback;
+      return template.replace(/\{\{(\w+)\}\}/g, (_, name: string) => String(values?.[name] ?? ''));
+    },
+  };
+}
+
+describe('formatRemoteSessionSidebarTime', () => {
+  const now = new Date('2026-01-01T12:00:00.000Z').getTime();
+
+  it('falls back to English when no localizer is passed', () => {
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:59:30.000Z', now)).toBe('Just now');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now)).toBe('5 min');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now)).toBe('3 hr');
+    expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now)).toBe('2 d');
+  });
+
+  it('uses translated compact strings when a localizer is passed', () => {
+    const t = zhTimeLocalizer();
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:59:30.000Z', now, t)).toBe('刚刚');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T11:55:00.000Z', now, t)).toBe('5 分钟');
+    expect(formatRemoteSessionSidebarTime('2026-01-01T09:00:00.000Z', now, t)).toBe('3 小时');
+    expect(formatRemoteSessionSidebarTime('2025-12-30T12:00:00.000Z', now, t)).toBe('2 天');
+  });
+});

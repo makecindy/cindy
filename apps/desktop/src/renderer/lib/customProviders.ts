@@ -1,3 +1,4 @@
+import { mergeDiscoveredRuntimeModels, isOpenRouterModelsUrl, type DiscoveredModel } from '@cindy/model-providers';
 /**
  * customProviders —— 自定义供应商「配置 + per-runtime 密钥」的 renderer 侧写入编排。
  *
@@ -10,8 +11,18 @@
  */
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
+import type {
+  CustomProviderUpdateOptions,
+  CustomProviderUpdateResult,
+} from '@/../shared/customProviderUpdate';
 
-import { DEFAULT_CUSTOM_CONTEXT_WINDOW, PI_REASONING_EFFORTS } from '@cindy/model-providers';
+import {
+  DEFAULT_CUSTOM_CONTEXT_WINDOW,
+  effectivePiWireProtocol,
+  PI_REASONING_EFFORTS,
+  preservesPiCatalogModels,
+  storedCustomProviderId,
+} from '@cindy/model-providers';
 import type {
   AgentKind,
   CatalogModel,
@@ -19,83 +30,42 @@ import type {
   PiReasoningEffort,
   ProviderView,
   ProviderRuntimeModelConfig,
+  ProviderWireProtocol,
 } from '@cindy/model-providers';
 
-/** 开启 Pi reasoning 时的保守常用档位；xhigh/max 仍需用户明确勾选。 */
-export const DEFAULT_PI_CUSTOM_REASONING_EFFORTS: readonly PiReasoningEffort[] = [
-  'minimal',
-  'low',
-  'medium',
-  'high',
-];
+interface PiCatalogRouteDraft {
+  baseUrl: string;
+  wireProtocol?: ProviderWireProtocol;
+  piCatalogProviderId?: string;
+  models?: readonly ProviderRuntimeModelConfig[];
+}
+
+/** The catalog marker is valid while the route and every existing model's capability fields stay unchanged. */
+export function piCatalogProviderIdAfterRouteEdit(
+  agent: AgentKind,
+  previous: PiCatalogRouteDraft,
+  next: PiCatalogRouteDraft,
+): string | undefined {
+  const marker = next.piCatalogProviderId;
+  if (agent !== 'pi' || !marker || marker !== previous.piCatalogProviderId) return marker;
+  const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, '');
+  return normalizeBaseUrl(previous.baseUrl) === normalizeBaseUrl(next.baseUrl) &&
+    effectivePiWireProtocol(previous.wireProtocol) === effectivePiWireProtocol(next.wireProtocol) &&
+    preservesPiCatalogModels(previous.models, next.models)
+    ? marker
+    : undefined;
+}
 
 /** per-runtime 密钥输入：键为 agent，值为该 runtime 的 API key（空串 = 不改 / 不存）。 */
 export type RuntimeKeys = Partial<Record<AgentKind, string>>;
 
-/**
- * 模型 id 代表模型身份；一旦改变，旧模型携带的 contextWindow 等隐藏元数据不再可信。
- * id 未变时保留原引用，避免无意义地丢掉仍有效的预设元数据。
- */
-export function replaceCustomProviderModelId(
-  model: ProviderRuntimeModelConfig,
-  nextId: string,
-): ProviderRuntimeModelConfig {
-  if (nextId === model.id) return model;
-  return { id: nextId, name: model.name };
-}
-
-export function setCustomProviderModelSupportsImageInput(
-  models: readonly ProviderRuntimeModelConfig[],
-  targetIndex: number,
-  supportsImageInput: boolean,
-): ProviderRuntimeModelConfig[] {
-  return models.map((model, index) => {
-    if (index !== targetIndex) return model;
-    return { ...model, supportsImageInput };
-  });
-}
-
-export function setCustomProviderModelReasoning(
-  models: readonly ProviderRuntimeModelConfig[],
-  targetIndex: number,
-  reasoning: boolean,
-): ProviderRuntimeModelConfig[] {
-  return models.map((model, index) => {
-    if (index !== targetIndex) return model;
-    if (!reasoning) {
-      const rest = { ...model };
-      delete rest.reasoning;
-      delete rest.reasoningEfforts;
-      return rest;
-    }
-    return {
-      ...model,
-      reasoning: true,
-      reasoningEfforts: model.reasoningEfforts?.length
-        ? [...model.reasoningEfforts]
-        : [...DEFAULT_PI_CUSTOM_REASONING_EFFORTS],
-    };
-  });
-}
-
-export function setCustomProviderModelReasoningEffort(
-  models: readonly ProviderRuntimeModelConfig[],
-  targetIndex: number,
-  effort: PiReasoningEffort,
-  enabled: boolean,
-): ProviderRuntimeModelConfig[] {
-  return models.map((model, index) => {
-    if (index !== targetIndex || model.reasoning !== true) return model;
-    const current = model.reasoningEfforts ?? [];
-    if (!enabled && current.length <= 1 && current.includes(effort)) return model;
-    const selected = new Set(current);
-    if (enabled) selected.add(effort);
-    else selected.delete(effort);
-    return {
-      ...model,
-      reasoningEfforts: PI_REASONING_EFFORTS.filter((candidate) => selected.has(candidate)),
-    };
-  });
+/** PI always persists the selected protocol, including its common Chat default. */
+export function customProviderWireProtocolForSave(
+  agent: AgentKind,
+  wireProtocol: ProviderWireProtocol,
+  defaultWireProtocol: ProviderWireProtocol,
+): ProviderWireProtocol | undefined {
+  return agent === 'pi' || wireProtocol !== defaultWireProtocol ? wireProtocol : undefined;
 }
 
 /**
@@ -111,12 +81,19 @@ export function customProviderModelConfigFromCatalogModel(
     | 'name'
     | 'contextWindow'
     | 'contextWindowExplicit'
+    | 'userModelConfig'
+    | 'discoveredMetadata'
+    | 'discoveredCost'
+    | 'nameExplicit'
     | 'defaultEnabled'
     | 'supportsImageInput'
+    | 'piApi'
+    | 'route'
   > &
-    Partial<Pick<CatalogModel, 'efforts'>>,
+    Partial<Pick<CatalogModel, 'efforts' | 'defaultEffort'>>,
   agent?: AgentKind,
 ): ProviderRuntimeModelConfig {
+  if (model.userModelConfig) return structuredClone(model.userModelConfig);
   const reasoningEfforts =
     agent === 'pi'
       ? (model.efforts ?? []).filter((effort): effort is PiReasoningEffort =>
@@ -126,35 +103,62 @@ export function customProviderModelConfigFromCatalogModel(
   return {
     id: model.id,
     name: model.name,
-    ...(model.contextWindowExplicit === true || model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW
+    discoveredMetadata: model.discoveredMetadata,
+    discoveredCost: model.discoveredCost,
+    nameExplicit: model.nameExplicit,
+    ...(agent === 'pi' && model.piApi ? { piApi: model.piApi } : {}),
+    ...(model.route ? { route: { ...model.route } } : {}),
+    ...(model.contextWindowExplicit === true ||
+    (model.contextWindowExplicit === undefined &&
+      !model.discoveredMetadata &&
+      model.contextWindow !== DEFAULT_CUSTOM_CONTEXT_WINDOW)
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
     ...(model.supportsImageInput === true ? { supportsImageInput: true } : {}),
     ...(reasoningEfforts.length > 0 ? { reasoning: true, reasoningEfforts } : {}),
+    ...(agent === 'pi' &&
+    model.defaultEffort &&
+    reasoningEfforts.includes(model.defaultEffort as PiReasoningEffort)
+      ? { reasoningDefaultEffort: model.defaultEffort as PiReasoningEffort }
+      : {}),
   };
 }
 
 /** ProviderView → 编辑表单配置；必须无损保留所有非密钥路由/鉴权字段。 */
 export function providerViewToCustomProviderConfig(p: ProviderView): CustomProviderConfig {
+  if (p.auth.native) {
+    const native = p.auth.native;
+    return {
+      id: storedCustomProviderId(p.id), name: p.name, auth: { method: 'oauth', native },
+      runtimes: native === 'claude'
+        ? { 'claude-code': { baseUrl: 'https://api.anthropic.com', wireProtocol: 'anthropic-messages', models: [] } }
+        : { codex: { baseUrl: native === 'codex' ? 'https://chatgpt.com/backend-api/codex' : 'https://api.x.ai/v1', wireProtocol: 'openai-responses', models: native === 'codex' ? (p.models.codex ?? []).map(model => customProviderModelConfigFromCatalogModel(model, 'codex')) : [] } },
+    };
+  }
   const runtimes: CustomProviderConfig['runtimes'] = {};
   for (const agent of p.agents) {
     const routing = p.routing[agent];
     const models = p.models[agent] ?? [];
     runtimes[agent] = {
       baseUrl: routing?.upstream ?? '',
+      ...(models[0]?.catalogPresetId ? { catalogPresetId: models[0].catalogPresetId } : {}),
       ...(routing?.requestPath ? { requestPath: routing.requestPath } : {}),
       ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
+      ...(agent === 'codex' && routing?.supportsImageGeneration === true
+        ? { supportsImageGeneration: true }
+        : {}),
       models: models.map((model) => customProviderModelConfigFromCatalogModel(model, agent)),
       ...(routing?.headerOverride && Object.keys(routing.headerOverride).length > 0
         ? { headers: { ...routing.headerOverride } }
         : {}),
       ...(routing?.headerOverrideState ? { headersState: routing.headerOverrideState } : {}),
       ...(routing?.modelsUrl ? { modelsUrl: routing.modelsUrl } : {}),
+      ...(routing?.piCatalogProviderId ? { piCatalogProviderId: routing.piCatalogProviderId } : {}),
     };
   }
   return {
-    id: p.id,
+    id: storedCustomProviderId(p.id),
     name: p.name,
     ...(p.auth.method === 'oauth' && p.auth.oauth
       ? { auth: { method: 'oauth' as const, oauth: p.auth.oauth } }
@@ -168,27 +172,35 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
 /** 刷新时只追加接口新发现的模型，并让新增模型默认隐藏。端点声明的 contextWindow 随发现带入(#386)。 */
 export function appendDiscoveredCustomProviderModels(
   existing: readonly ProviderRuntimeModelConfig[],
-  discovered: readonly Pick<ProviderRuntimeModelConfig, 'id' | 'name' | 'contextWindow'>[],
+  discovered: readonly DiscoveredModel[],
+  discoveryUrl?: string,
 ): { models: ProviderRuntimeModelConfig[]; addedIds: string[] } {
-  const known = new Set(existing.map((m) => m.id));
-  const models = [...existing];
-  const addedIds: string[] = [];
-  for (const model of discovered) {
-    if (!model.id || !model.name || known.has(model.id)) continue;
-    models.push({
-      id: model.id,
-      name: model.name,
-      ...(typeof model.contextWindow === 'number' &&
-      Number.isFinite(model.contextWindow) &&
-      model.contextWindow > 0
-        ? { contextWindow: Math.floor(model.contextWindow) }
-        : {}),
-      defaultEnabled: false,
-    });
-    known.add(model.id);
-    addedIds.push(model.id);
+  let prior = existing;
+  if (discoveryUrl && isOpenRouterModelsUrl(discoveryUrl)) {
+    const actual = new Map(discovered.map(model => [model.id, model]));
+    // Repair only discovery-created Anthropic wrappers confirmed by the complete
+    // canonical response. Keep manual IDs and never guess another supplier's aliases.
+    const canonicalId = (model: ProviderRuntimeModelConfig) => {
+      if (actual.has(model.id) || !model.discoveredMetadata || model.nameExplicit || model.route || model.piApi || !model.id.startsWith('anthropic/')) return model.id;
+      const candidate = model.id.slice('anthropic/'.length).replace(/\[1m\]$/, '');
+      return actual.has(candidate) ? candidate : model.id;
+    };
+    const normalized = new Map(existing.filter(model => canonicalId(model) === model.id).map(model => [model.id, model]));
+    for (const model of existing) {
+      const id = canonicalId(model);
+      if (id === model.id) continue;
+      const canonical = normalized.get(id);
+      normalized.set(id, { ...model, ...canonical, id,
+        name: canonical?.nameExplicit ? canonical.name : actual.get(id)?.name ?? model.name });
+    }
+    prior = [...normalized.values()];
   }
-  return { models, addedIds };
+  const models = mergeDiscoveredRuntimeModels(prior, discovered, true);
+  const known = new Set(existing.map((model) => model.id));
+  return {
+    models,
+    addedIds: models.filter((model) => !known.has(model.id)).map((model) => model.id),
+  };
 }
 
 /**
@@ -201,7 +213,7 @@ export async function readCustomProviderKey(
   agent: AgentKind,
 ): Promise<string | null> {
   const value = await window.electronAPI.safeStorageRead(
-    customProviderSecretStorageKey(providerId, agent),
+    customProviderSecretStorageKey(storedCustomProviderId(providerId), agent),
   );
   return value && value.length > 0 ? value : null;
 }
@@ -214,19 +226,28 @@ export async function readCustomProviderKey(
 export async function createCustomProvider(
   config: CustomProviderConfig,
   keys: RuntimeKeys,
-): Promise<void> {
-  await window.electronAPI.maker.createCustomProvider(config, keys);
+  options?: CustomProviderUpdateOptions,
+): Promise<CustomProviderUpdateResult> {
+  return options === undefined
+    ? window.electronAPI.maker.createCustomProvider(config, keys)
+    : window.electronAPI.maker.createCustomProvider(config, keys, options);
 }
 
 /** 编辑：main 在同一 provider mutation queue 内提交配置与 runtime 密钥。 */
 export async function updateCustomProvider(
   config: CustomProviderConfig,
   keys: RuntimeKeys,
-): Promise<void> {
-  await window.electronAPI.maker.updateCustomProvider(config, keys);
+  options?: CustomProviderUpdateOptions,
+): Promise<CustomProviderUpdateResult> {
+  const storedConfig = { ...config, id: storedCustomProviderId(config.id) };
+  return options === undefined
+    ? window.electronAPI.maker.updateCustomProvider(storedConfig, keys)
+    : window.electronAPI.maker.updateCustomProvider(storedConfig, keys, options);
 }
 
 /** 删除：main 在同一 provider mutation queue 内清配置与所有凭证。 */
-export async function deleteCustomProvider(providerId: string): Promise<void> {
-  await window.electronAPI.maker.deleteCustomProvider(providerId);
+export async function deleteCustomProvider(providerId: string, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }, options?: CustomProviderUpdateOptions): Promise<CustomProviderUpdateResult> {
+  if (options !== undefined) return window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId), ownerScope, options);
+  if (ownerScope === undefined) return window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId));
+  return window.electronAPI.maker.deleteCustomProvider(storedCustomProviderId(providerId), ownerScope);
 }

@@ -70,6 +70,18 @@ async function writeZip(files: Record<string, string | Buffer>): Promise<string>
 }
 
 describe('importLocalSkill zip / installPath guards', () => {
+  it('does not import over a directory leased by another client', async () => {
+    const { acquireSharedSkillMutationLease } = await import('../sharedMutationLease');
+    const { importLocalSkill } = await import('../importLocalSkill');
+    const zipPath = await writeZip({ 'SKILL.md': '---\nname: leased-import\ndescription: fixture\n---\n' });
+    const target = path.join(TEST_ROOT, '.agents', 'skills', 'leased-import');
+    const release = await acquireSharedSkillMutationLease(['leased-import']);
+    try {
+      expect(await importLocalSkill({ filePath: zipPath, installPath: target })).toMatchObject({ success: false, errorCode: 'BUSY' });
+      expect(fs.existsSync(target)).toBe(false);
+    } finally { await release!(); }
+  });
+
   it('inspect rejects an oversized SKILL.md before full-budget inflate', async () => {
     const { inspectLocalSkill } = await import('../importLocalSkill');
     const huge = `---

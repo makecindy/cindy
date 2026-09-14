@@ -19,9 +19,12 @@ import {
   type ExperimentalFeatureMeta,
 } from '@/hooks/useExperimentalFeatures';
 import { LspBetaCell } from './LspBetaCell';
+import { BetaChannelCell } from './BetaChannelCell';
 
 export function ExperimentalSection() {
   const { t } = useTranslation();
+  const betaChannelSupported =
+    window.electronAPI?.supportsBetaUpdateChannel ?? window.electronAPI?.platform !== 'linux';
 
   return (
     <div className="flex flex-col gap-[14px]">
@@ -31,6 +34,7 @@ export function ExperimentalSection() {
 
       <div className="flex flex-col gap-3">
         <LspBetaCell />
+        {betaChannelSupported ? <BetaChannelCell /> : null}
         {EXPERIMENTAL_FEATURES.map((feature) => (
           <ExperimentalFeatureRow key={feature.key} feature={feature} />
         ))}

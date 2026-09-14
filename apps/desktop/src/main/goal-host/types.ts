@@ -10,6 +10,7 @@ import type {
   AgentKind,
   SendOrigin,
   SessionSendResult,
+  SessionStatus,
   UserMessage,
 } from '@cindy/maker-core';
 
@@ -150,6 +151,7 @@ export interface SessionLike {
     },
   ): Promise<SessionSendResult>;
   onEvent(listener: (event: AgentEvent) => void): () => void;
+  getStatus?(): SessionStatus;
   isTurnRunning(): boolean;
   abort(): Promise<void>;
 }

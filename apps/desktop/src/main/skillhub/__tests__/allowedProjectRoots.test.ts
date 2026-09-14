@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { deriveAllowedSkillhubProjectRoots } from '../allowedProjectRoots';
 
 describe('deriveAllowedSkillhubProjectRoots', () => {
-  it('matches renderer grouping by folding managed and conventional worktrees to the base repo', () => {
+  it('allows both the grouped repo and real cwd of managed and conventional worktrees', () => {
     const repo = path.resolve('/repo');
     const normalizedRepo = repo.replaceAll(path.sep, '/');
 
@@ -13,6 +13,6 @@ describe('deriveAllowedSkillhubProjectRoots', () => {
       path.join(repo, '.worktrees', 'user-task'),
       repo,
       null,
-    ])).toEqual([normalizedRepo]);
+    ])).toEqual([normalizedRepo, `${normalizedRepo}/.cindy-worktrees/managed-task`, `${normalizedRepo}/.worktrees/user-task`]);
   });
 });

@@ -31,6 +31,12 @@ test("generated artifact notices are platform-scoped and disclose restricted com
   const windowsRestricted = read(
     "docs/legal/notices/desktop-win-restricted.txt",
   );
+  const macosRestricted = read(
+    "docs/legal/notices/desktop-macos-restricted.txt",
+  );
+  const linuxRestricted = read(
+    "docs/legal/notices/desktop-linux-restricted.txt",
+  );
   const iosRestricted = read("docs/legal/notices/mobile-ios-restricted.txt");
   const androidRestricted = read(
     "docs/legal/notices/mobile-android-restricted.txt",
@@ -51,6 +57,9 @@ test("generated artifact notices are platform-scoped and disclose restricted com
   assert.match(linux, /@img\/sharp-linux-x64@/);
   assert.doesNotMatch(windowsRestricted, /@codesandbox\/nodebox/);
   assert.doesNotMatch(windowsRestricted, /Sustainable Use License/);
+  assert.match(windowsRestricted, /Microsoft Visual C\+\+ Runtime/);
+  assert.doesNotMatch(macosRestricted, /Microsoft Visual C\+\+ Runtime/);
+  assert.doesNotMatch(linuxRestricted, /Microsoft Visual C\+\+ Runtime/);
   assert.match(iosRestricted, /WeChat OpenSDK for iOS@2\.0\.5/);
   assert.match(iosRestricted, /docs\/legal\/wechat-open-sdk-compliance\.md/);
   assert.match(iosRestricted, /Mobile_App\/agreement\/sdk\.html/);
@@ -220,6 +229,10 @@ test("desktop resources include both open-source and restricted disclosures", ()
     read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
     /LiteLLM mascot SVG path \(adapted\).*Copyright \(c\) 2026 Berri AI/s,
   );
+  assert.match(
+    read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
+    /oh-my-pi Windows Git PATH helpers \(adapted\).*Copyright \(c\) 2025 Mario Zechner.*Copyright \(c\) 2025-2026 Can Bölük/s,
+  );
   assert.doesNotMatch(
     read("apps/desktop/resources/THIRD-PARTY-NOTICES.txt"),
     /LiteLLM mascot SVG path \(adapted\) adapted/,
@@ -249,4 +262,23 @@ test("desktop resources include both open-source and restricted disclosures", ()
       path.join(repoRoot, "apps/desktop/cindy-updater/src-tauri/Cargo.lock"),
     ),
   );
+});
+
+test("all shipped desktop notices contain the complete pinned OpenCodex license", () => {
+  const upstream = JSON.parse(read("packages/model-compat/UPSTREAM.json"));
+  const license = read("packages/model-compat/LICENSE.opencodex").replace(/\r\n/g, "\n").trim();
+  for (const artifact of ["desktop-win", "desktop-macos", "desktop-linux"]) {
+    const notice = read(`docs/legal/notices/${artifact}.txt`).replace(/\r\n/g, "\n");
+    assert.ok(notice.includes(license), `${artifact} includes the full MIT text`);
+    const sbom = JSON.parse(read(`docs/legal/notices/sbom/${artifact}.spdx.json`));
+    const component = sbom.packages.find(pkg => pkg.name === "OpenCodex compatibility sources (vendored)");
+    assert.ok(component, `${artifact} inventories OpenCodex`);
+    assert.equal(component.versionInfo, upstream.commit);
+    assert.equal(component.licenseDeclared, "MIT");
+  }
+  for (const file of ["apps/desktop/resources/THIRD-PARTY-NOTICES.txt", "docs/legal/notices/THIRD-PARTY-NOTICES.txt"]) {
+    const notice = read(file).replace(/\r\n/g, "\n");
+    assert.ok(notice.includes(license), `${file} includes the full MIT text`);
+    assert.ok(notice.includes(`${upstream.repository}/tree/${upstream.commit}`));
+  }
 });

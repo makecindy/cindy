@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { app, type BrowserWindow } from 'electron';
+import { previewProviderImport } from '../provider-import/providerImport';
 
 // vitest 跑测试时不会真的初始化 Electron app, 单 import 需要 mock electron。
 // deepLink.ts 只在 registerDeepLinkProtocol / dispatchDeepLink 用到 app /
@@ -34,15 +35,34 @@ import {
   buildSessionDeepLink,
   buildSessionMessageDeepLink,
   findDeepLinkInArgv,
+  redactConsumedDeepLinkInArgv,
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   DEEP_LINK_PROTOCOL,
   OPEN_FOLDER_FLAG,
   OPEN_SHARE_FILE_FLAG,
   focusMainWindow,
+  handleIncomingDeepLink,
   openMainWindowVoiceSettings,
   setDeepLinkMainWindow,
+  takePendingDeepLink,
 } from '../deepLink';
+
+function providerImportUrl(scheme: 'cindy' | 'xdt-maker'): string {
+  const payload = {
+    kind: 'custom',
+    name: 'Deep Link Import',
+    auth: { method: 'apiKey', apiKey: 'sk-must-stay-in-main' },
+    endpoints: [
+      {
+        protocol: 'openai-chat',
+        baseUrl: 'https://api.example.test/v1',
+        models: ['demo-model'],
+      },
+    ],
+  };
+  return `${scheme}://provider/import?v=1&data=${Buffer.from(JSON.stringify(payload), 'utf8').toString('base64url')}`;
+}
 
 describe('user-initiated main-window focus', () => {
   it('activates and raises the target window before focusing on Windows', () => {
@@ -75,7 +95,9 @@ describe('internal main-window navigation', () => {
       isMinimized: () => true,
       show: vi.fn(),
       restore: vi.fn(),
+      moveTop: vi.fn(),
       focus: vi.fn(),
+      setAlwaysOnTop: vi.fn(),
       webContents: {
         isLoading: () => false,
         send,
@@ -88,6 +110,13 @@ describe('internal main-window navigation', () => {
     expect(mainWindow.show).toHaveBeenCalledOnce();
     expect(mainWindow.restore).toHaveBeenCalledOnce();
     expect(mainWindow.focus).toHaveBeenCalledOnce();
+    if (process.platform === 'win32') {
+      expect(mainWindow.moveTop).toHaveBeenCalledOnce();
+      expect(mainWindow.setAlwaysOnTop).not.toHaveBeenCalled();
+    } else {
+      expect(mainWindow.setAlwaysOnTop).toHaveBeenNthCalledWith(1, true);
+      expect(mainWindow.setAlwaysOnTop).toHaveBeenNthCalledWith(2, false);
+    }
     expect(send).toHaveBeenCalledWith('deep-link:navigate', {
       type: 'settings',
       tab: 'providers',
@@ -198,6 +227,54 @@ describe('parseDeepLink', () => {
   it('returns null for focus without a source value', () => {
     expect(parseDeepLink('xdt-maker://focus/')).toBeNull();
   });
+
+  it('parses settings/providers payload with and without a connect target', () => {
+    expect(parseDeepLink('cindy://settings/providers')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+    });
+    expect(parseDeepLink('cindy://settings/providers/')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+    });
+    expect(parseDeepLink('cindy://settings/providers?connect=openrouter')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'openrouter',
+    });
+    // connect 同时覆盖 provider id 与 preset id 的字符契约;其它 query 参数忽略。
+    expect(parseDeepLink('cindy://settings/providers?foo=bar&connect=Vendor_2')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'Vendor_2',
+    });
+    // 历史 scheme 同样可用
+    expect(parseDeepLink('xdt-maker://settings/providers?connect=deepseek')).toEqual({
+      type: 'settings',
+      tab: 'providers',
+      connect: 'deepseek',
+    });
+  });
+
+  it('rejects settings deep links outside the providers tab', () => {
+    // voice-input 仍是主进程内部专用 payload,不开放给外部 URL 注入
+    expect(parseDeepLink('cindy://settings/voice-input')).toBeNull();
+    expect(parseDeepLink('cindy://settings/anything-else')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers/anything-else')).toBeNull();
+    expect(parseDeepLink('cindy://settings/')).toBeNull();
+  });
+
+  it('rejects settings deep links whose connect value fails the shared id whitelist', () => {
+    // 深链是不可信输入:非法 connect 整条拒绝,不做"半执行"。
+    expect(parseDeepLink('cindy://settings/providers?connect=')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=a.b')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=a%20b')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=%3Cscript%3E')).toBeNull();
+    expect(parseDeepLink('cindy://settings/providers?connect=%E4%ZZ')).toBeNull();
+    expect(
+      parseDeepLink(`cindy://settings/providers?connect=${'a'.repeat(129)}`),
+    ).toBeNull();
+  });
 });
 
 // 双 scheme 收敛(2026-07 品牌翻转):解析 cindy 主 + 历史 xdt-maker 都认,
@@ -220,6 +297,60 @@ describe('dual scheme (cindy primary + legacy xdt-maker)', () => {
     expect(parseDeepLink('cindy://focus/google-auth')).toEqual({ type: 'focus' });
     expect(parseDeepLink('cindy://unknown/x')).toBeNull();
     expect(parseDeepLink('cindy://session/')).toBeNull();
+  });
+
+  it.each(['cindy', 'xdt-maker'] as const)(
+    'parses %s provider imports into an opaque Main-only draft id',
+    (scheme) => {
+      const result = parseDeepLink(providerImportUrl(scheme));
+      expect(result).toEqual({
+        type: 'provider-import',
+        importId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+      });
+      expect(JSON.stringify(result)).not.toContain('sk-must-stay-in-main');
+    },
+  );
+
+  it('buffers only the opaque provider import id during cold start', () => {
+    setDeepLinkMainWindow(null);
+    handleIncomingDeepLink(providerImportUrl('cindy'), 'test');
+
+    const pending = takePendingDeepLink();
+    expect(pending).toEqual({
+      type: 'provider-import',
+      importId: expect.stringMatching(/^[0-9a-f-]{36}$/),
+    });
+    expect(JSON.stringify(pending)).not.toContain('sk-must-stay-in-main');
+    expect(takePendingDeepLink()).toBeNull();
+  });
+
+  it('retains an import on a loaded login page until MainLayout takes it, only once', () => {
+    const send = vi.fn();
+    const win = {
+      isDestroyed: () => false, isVisible: () => true, isMinimized: () => false,
+      focus: vi.fn(), moveTop: vi.fn(), setAlwaysOnTop: vi.fn(),
+      webContents: { isLoading: () => false, send },
+    };
+    setDeepLinkMainWindow(win as unknown as BrowserWindow);
+    try {
+      handleIncomingDeepLink(providerImportUrl('cindy'), 'test');
+      const first = send.mock.calls[0]![1];
+      handleIncomingDeepLink(providerImportUrl('xdt-maker'), 'test');
+      const last = send.mock.calls[1]![1];
+      expect(() => previewProviderImport(first.importId, { dataOwnerId: null, generation: 0 }, [])).toThrow();
+      expect(takePendingDeepLink()).toEqual(last);
+      // Whichever wins (mount pull or push wake-up), the other sees no import.
+      expect(takePendingDeepLink()).toBeNull();
+      expect(JSON.stringify(send.mock.calls)).not.toContain('sk-must-stay-in-main');
+    } finally {
+      setDeepLinkMainWindow(null);
+    }
+  });
+
+  it('rejects malformed provider import paths and repeated parameters', () => {
+    const valid = providerImportUrl('cindy');
+    expect(parseDeepLink(valid.replace('provider/import', 'providers/import'))).toBeNull();
+    expect(parseDeepLink(`${valid}&data=duplicate`)).toBeNull();
   });
 
   it('generates all builders with the primary cindy:// scheme', () => {
@@ -249,6 +380,47 @@ describe('findDeepLinkInArgv', () => {
     expect(findDeepLinkInArgv(['electron.exe', 'xdt-maker://session/a'])).toBe(
       'xdt-maker://session/a',
     );
+  });
+});
+
+describe('redactConsumedDeepLinkInArgv', () => {
+  it('drops both schemes before restart without selecting or retaining an import', () => {
+    const argv = ['electron', '--flag', 'cindy://session/keep', providerImportUrl('cindy'), providerImportUrl('xdt-maker')];
+    redactConsumedDeepLinkInArgv(argv);
+    expect(argv).toEqual(['electron', '--flag', 'cindy://session/keep', 'cindy://consumed', 'cindy://consumed']);
+  });
+  it('removes every import, including invalid and duplicate arguments, while retaining the selected URL for parsing', () => {
+    const selected = providerImportUrl('xdt-maker');
+    const argv = ['electron.exe', '--flag', 'cindy://session/keep', 'cindy://provider/import?invalid=FAKE', selected, selected];
+    const url = findDeepLinkInArgv(argv)!;
+    redactConsumedDeepLinkInArgv(argv, url);
+    expect(argv).toEqual(['electron.exe', '--flag', 'cindy://session/keep', 'cindy://consumed', 'cindy://consumed', 'cindy://consumed']);
+    expect(parseDeepLink(url)?.type).toBe('provider-import');
+  });
+
+  it('releases an overwritten cold-start draft before a renderer ever mounts', () => {
+    setDeepLinkMainWindow(null);
+    for (let i = 0; i < 130; i++) {
+      const data = Buffer.from(JSON.stringify({
+        kind: 'custom', name: `Draft ${i}`, auth: { method: 'apiKey', apiKey: 'FAKE-KEY' },
+        endpoints: [{ protocol: 'openai-chat', baseUrl: 'https://example.invalid/v1' }],
+      })).toString('base64url');
+      handleIncomingDeepLink(`cindy://provider/import?v=1&data=${data}`, 'cold-start-argv');
+    }
+    const draft = takePendingDeepLink();
+    if (draft?.type !== 'provider-import') throw new Error('missing draft');
+    expect(previewProviderImport(draft.importId, { dataOwnerId: null, generation: 0 }, []).name).toBe('Draft 129');
+  });
+  it('replaces a consumed URL without changing unrelated argv entries', () => {
+    const argv = ['electron.exe', '--flag', 'cindy://provider/import?v=1&data=secret'];
+    redactConsumedDeepLinkInArgv(argv, argv[2]!);
+    expect(argv).toEqual(['electron.exe', '--flag', 'cindy://consumed']);
+  });
+
+  it('does nothing when the URL is no longer present', () => {
+    const argv = ['electron.exe', 'cindy://other'];
+    redactConsumedDeepLinkInArgv(argv, 'cindy://provider/import?v=1&data=secret');
+    expect(argv).toEqual(['electron.exe', 'cindy://other']);
   });
 });
 

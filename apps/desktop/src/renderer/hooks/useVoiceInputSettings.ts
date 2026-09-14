@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { DictationDictionaryLearningAction } from '@cindy/voice-input-core';
 
@@ -202,6 +202,7 @@ export function useVoiceInputSettings(): {
   addDictionaryEntry: (text: string) => Promise<boolean>;
   importDictionaryEntries: (texts: string[]) => Promise<boolean>;
   renameDictionaryEntry: (entryId: string, text: string) => Promise<boolean>;
+  editDictionaryEntry: (entryId: string, text: string, aliases: string[]) => Promise<boolean>;
   deleteDictionaryEntry: (entryId: string) => Promise<boolean>;
   recordDictionaryLearningActions: (actions: DictationDictionaryLearningAction[]) => void;
   setShortcut: (shortcut: VoiceInputShortcut | null) => Promise<VoiceInputShortcutUpdateResult>;
@@ -309,6 +310,14 @@ export function useVoiceInputSettings(): {
     [runDictionaryMutation],
   );
 
+  const editDictionaryEntry = useCallback(
+    (entryId: string, text: string, aliases: string[]) =>
+      runDictionaryMutation(() =>
+        window.electronAPI.voiceInput.editDictionaryEntry(entryId, text, aliases),
+      ),
+    [runDictionaryMutation],
+  );
+
   const deleteDictionaryEntry = useCallback(
     (entryId: string) =>
       runDictionaryMutation(() => window.electronAPI.voiceInput.deleteDictionaryEntries([entryId])),
@@ -348,9 +357,17 @@ export function useVoiceInputSettings(): {
     [],
   );
 
+  // Every main-side data-changed broadcast (history appends after each
+  // dictation included) delivers a freshly cloned settings object, so keying
+  // this effect on `settings.shortcut` re-syncs after every recording — and
+  // re-logs a registration failure each time when the accelerator is held by
+  // another process. Key on the shortcut's value instead.
+  const shortcutKey = serializeVoiceInputShortcut(settings.shortcut);
+  const shortcutRef = useRef(settings.shortcut);
+  shortcutRef.current = settings.shortcut;
   useEffect(() => {
-    void syncVoiceInputGlobalShortcut(settings.shortcut);
-  }, [settings.shortcut]);
+    void syncVoiceInputGlobalShortcut(shortcutRef.current);
+  }, [shortcutKey]);
 
   useEffect(() => subscribeVoiceInputSettings(setSettings), []);
 
@@ -368,6 +385,7 @@ export function useVoiceInputSettings(): {
     addDictionaryEntry,
     importDictionaryEntries,
     renameDictionaryEntry,
+    editDictionaryEntry,
     deleteDictionaryEntry,
     recordDictionaryLearningActions,
     setShortcut,
@@ -383,9 +401,24 @@ function formatVoiceInputPersistenceError(
   return t('settings.voiceInput.saveFailed', { message });
 }
 
+function serializeVoiceInputShortcut(shortcut: VoiceInputShortcut | null): string {
+  if (!shortcut) return '';
+  const { modifiers } = shortcut;
+  return [
+    shortcut.trigger ?? '',
+    shortcut.code,
+    shortcut.key,
+    modifiers.meta ? '1' : '0',
+    modifiers.ctrl ? '1' : '0',
+    modifiers.alt ? '1' : '0',
+    modifiers.shift ? '1' : '0',
+    modifiers.fn ? '1' : '0',
+  ].join('|');
+}
+
 function areVoiceInputShortcutsEqual(
   lhs: VoiceInputShortcut | null,
   rhs: VoiceInputShortcut | null,
 ): boolean {
-  return JSON.stringify(lhs) === JSON.stringify(rhs);
+  return serializeVoiceInputShortcut(lhs) === serializeVoiceInputShortcut(rhs);
 }

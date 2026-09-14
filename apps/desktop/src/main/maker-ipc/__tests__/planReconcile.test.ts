@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildCompletedPlanGuardNote,
   buildPlanReconcileNote,
   summarizeOpenPlan,
   type PlanReconcileCandidateRow,
@@ -201,5 +202,16 @@ describe('buildPlanReconcileNote', () => {
     expect(note).toContain('- f');
     expect(note).not.toContain('- g');
     expect(note).toContain('另有 2 项未列出');
+  });
+});
+
+describe('buildCompletedPlanGuardNote', () => {
+  it('prevents an ambiguous continue from reopening a completed plan', () => {
+    const note = buildCompletedPlanGuardNote();
+
+    expect(note).toContain('已全部完成并收口');
+    expect(note).toContain('不要因为用户只说“继续”');
+    expect(note).toContain('没有未完成计划');
+    expect(note).toContain('以下是用户的新消息');
   });
 });

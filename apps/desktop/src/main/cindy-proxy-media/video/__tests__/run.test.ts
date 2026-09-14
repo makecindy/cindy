@@ -202,6 +202,36 @@ describe('submitAndAwaitVideo · 画面参数', () => {
     expect('audio' in r.effectiveParams).toBe(false);
   });
 
+  it('型号固定有声但没有开关:不写请求字段,回执仍报告真实默认', async () => {
+    const submitted: VideoGenerationRequest[] = [];
+    const registry = makeRegistry(
+      makeProvider({ submitted, supportsAudio: false, audioDefault: true }),
+    );
+    const result = await submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p' });
+    expect('audio' in submitted[0]).toBe(false);
+    expect(result.effectiveParams.audio).toBe(true);
+  });
+
+  it('保留 ratio 是否由调用方显式选择,供图生视频决定是否覆盖源图比例', async () => {
+    const submitted: VideoGenerationRequest[] = [];
+    const registry = makeRegistry(makeProvider({ submitted }));
+    await submitAndAwaitVideo(registry, {
+      alias: 'fake-fast',
+      prompt: 'p',
+      imageDataUris: ['data:image/png;base64,AAAA'],
+    });
+    await submitAndAwaitVideo(registry, {
+      alias: 'fake-fast',
+      prompt: 'p',
+      ratio: '9:16',
+      imageDataUris: ['data:image/png;base64,AAAA'],
+    });
+    expect(submitted[0].ratio).toBe('16:9');
+    expect(submitted[0].ratioWasExplicit).toBe(false);
+    expect(submitted[1].ratio).toBe('9:16');
+    expect(submitted[1].ratioWasExplicit).toBe(true);
+  });
+
   it('参考图超出型号上限 → 抛错且不提交', async () => {
     const submitted: VideoGenerationRequest[] = [];
     const registry = makeRegistry(makeProvider({ submitted, maxImagesByRefMode: { first_and_last_frame: 1 } }));

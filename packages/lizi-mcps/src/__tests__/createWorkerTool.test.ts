@@ -50,6 +50,24 @@ function setupWorkerSession() {
 }
 
 describe('create_worker tool', () => {
+  it('forwards the explicit working_dir to the host', async () => {
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker', working_dir: '/tmp/candidate with spaces ',
+    });
+    expect(result.isError).toBeUndefined();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/tmp/candidate with spaces ' }));
+  });
+
+  it('rejects an empty explicit directory instead of silently inheriting', async () => {
+    const { registry, createWorker } = setup();
+    const result = await registry.call('create_worker', {
+      role: 'developer', agent: 'codex', label: 'worker', working_dir: '  ',
+    });
+    expect(result.isError).toBe(true);
+    expect(createWorker).not.toHaveBeenCalled();
+  });
+
   it('describes the subagent distinction before creating a worker', () => {
     const { registry } = setup();
 
@@ -142,10 +160,29 @@ describe('create_worker tool', () => {
       agent: 'codex',
       label: 'reviewer_1',
       model: undefined,
+      providerId: undefined,
       effort: undefined,
       fast: undefined,
       initialTask: undefined,
     });
+  });
+
+  it('trims and forwards provider_id to the host creation boundary', async () => {
+    const { registry, createWorker } = setup();
+
+    const res = await registry.call('create_worker', {
+      role: 'reviewer',
+      agent: 'codex',
+      model: 'deepseek/deepseek-v4-pro',
+      provider_id: ' xd ',
+      label: 'reviewer_1',
+    });
+
+    expect(res.isError).toBeUndefined();
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      model: 'deepseek/deepseek-v4-pro',
+      providerId: 'xd',
+    }));
   });
 
   it('accepts pi as a first-class worker agent and passes it through to host', async () => {

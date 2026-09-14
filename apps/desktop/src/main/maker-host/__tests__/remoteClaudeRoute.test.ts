@@ -11,6 +11,11 @@ const resolveProviderRouteDecision = vi.fn<(...args: unknown[]) => Promise<unkno
 const gatewayDefaultRouteDecision = vi.fn<(...args: unknown[]) => unknown>();
 const isProviderRouteMutationInProgress = vi.fn<(...args: unknown[]) => boolean>(() => false);
 
+// Account discovery persistence is outside this runtime/route fixture.
+vi.mock('../model-discovery/xai.js', () => ({
+  discardXaiModelsDiskCache: vi.fn(async () => {}),
+}));
+
 vi.mock('../auth-adapters.js', () => ({ readClaudeApiKey: () => readClaudeApiKey() }));
 vi.mock('../claude-oauth-refresh.js', () => ({
   getClaudeAiOAuthForSpawn: () => getClaudeAiOAuthForSpawn(),
@@ -202,6 +207,19 @@ describe('resolveRemoteClaudeRoute — 远端无法表达的能力 → 明确报
     providerId: 'p',
     decision: { headerOverride: { 'x-api-key': 'k' } },
   };
+
+  it.each(['openai-chat', 'openai-responses', 'google-generative-ai'] as const)(
+    '%s wire is unsupported on remote Claude Code',
+    async (wireProtocol) => {
+      resolveProviderRouteDecision.mockResolvedValue({
+        ...base,
+        routing: { upstream: 'https://x/v1', authStrategy: 'api-key-header', wireProtocol },
+      });
+      await expect(resolveRemoteClaudeRoute({ providerId: 'p', model: 'm' })).rejects.toThrow(
+        /REMOTE_PROVIDER_UNSUPPORTED/,
+      );
+    },
+  );
 
   it('自定义 requestPath → REMOTE_PROVIDER_UNSUPPORTED', async () => {
     resolveProviderRouteDecision.mockResolvedValue({

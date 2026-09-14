@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 
 import {
   DEFAULT_DRAFT_SESSION_TITLE,
+  deriveOptimisticSessionTitle,
   isDefaultDraftSessionTitle,
   normalizeAutoTitle,
   projectDraftSessionTitle,
@@ -81,5 +82,47 @@ describe('projectDraftSessionTitle', () => {
     // 渲染与搜索 haystack 各自调一次,两次都必须收敛到同一个串。
     const once = projectDraftSessionTitle(DEFAULT_DRAFT_SESSION_TITLE, '未命名任务');
     expect(projectDraftSessionTitle(once, '未命名任务')).toBe(once);
+  });
+});
+
+describe('deriveOptimisticSessionTitle', () => {
+  it('有用户文字 → 原文截断,附件名不插手', () => {
+    expect(deriveOptimisticSessionTitle({
+      text: '  帮我排查登录失败  ',
+      fileNames: ['shot.png'],
+      imageLabel: '图片',
+      firstFileIsImage: true,
+    })).toBe('帮我排查登录失败');
+  });
+
+  it('没文字、有附件名 → 用文件名', () => {
+    expect(deriveOptimisticSessionTitle({
+      text: '   ',
+      fileNames: ['需求评审.pdf', 'shot.png'],
+      fileLabel: '文件',
+    })).toBe('需求评审.pdf');
+  });
+
+  it('附件名是绝对路径 → 只取 basename,与权威链路一致', () => {
+    expect(deriveOptimisticSessionTitle({
+      fileNames: ['/Users/dash/Downloads/需求评审.pdf'],
+    })).toBe('需求评审.pdf');
+    expect(deriveOptimisticSessionTitle({
+      fileNames: ['C:\\Users\\dash\\Downloads\\shot.png'],
+    })).toBe('shot.png');
+  });
+
+  it('没文字也没文件名、是图片 → 类别词', () => {
+    expect(deriveOptimisticSessionTitle({
+      fileNames: [],
+      imageLabel: '图片',
+      fileLabel: '文件',
+      firstFileIsImage: true,
+    })).toBe('图片');
+  });
+
+  it('什么都没有 → 空串,交给显示层兜底', () => {
+    expect(deriveOptimisticSessionTitle({ text: '' })).toBe('');
+    expect(deriveOptimisticSessionTitle({})).toBe('');
   });
 });

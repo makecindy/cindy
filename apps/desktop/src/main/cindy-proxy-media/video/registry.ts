@@ -11,6 +11,8 @@ import type { VideoModelAlias, VideoProvider, VideoRefMode } from './types.js';
 
 interface ResolvedAlias {
   provider: VideoProvider;
+  /** 模型目录中的来源 id（例如 xd / xai），与内部执行器 id 分离。 */
+  catalogProviderId: string;
   internalModel: string;
   summary: string;
   expectedSeconds: number;
@@ -20,7 +22,7 @@ export class VideoProviderRegistry {
   private readonly providers = new Map<string, VideoProvider>();
   private readonly aliasIndex = new Map<string, ResolvedAlias>();
 
-  register(provider: VideoProvider): void {
+  register(provider: VideoProvider, catalogProviderId = 'xd'): void {
     if (this.providers.has(provider.id)) {
       throw new Error(
         `[videoRegistry] duplicate provider id: ${provider.id}`,
@@ -36,9 +38,45 @@ export class VideoProviderRegistry {
         provider.capabilities.expectedSecondsByAlias[a.alias] ?? 120;
       this.aliasIndex.set(a.alias, {
         provider,
+        catalogProviderId,
         internalModel: a.internalModel,
         summary: a.summary,
         expectedSeconds: expected,
+      });
+    }
+    this.providers.set(provider.id, provider);
+  }
+
+  /**
+   * 用同一 provider 的新能力快照补充／更新 alias。旧 alias 索引不删除：目录热更
+   * 期间已经提交的长视频任务仍要能继续 poll/download；新请求是否可用由当前目录
+   * 白名单在提交前重查。其它 provider 已占用的 alias 仍严格拒绝。
+   */
+  registerOrExtend(provider: VideoProvider, catalogProviderId = 'xd'): void {
+    const existing = this.providers.get(provider.id);
+    if (!existing) {
+      this.register(provider, catalogProviderId);
+      return;
+    }
+    for (const alias of provider.capabilities.modelAliases) {
+      const occupied = this.aliasIndex.get(alias.alias);
+      if (
+        occupied &&
+        (occupied.provider.id !== provider.id ||
+          occupied.catalogProviderId !== catalogProviderId)
+      ) {
+        throw new Error(
+          `[videoRegistry] duplicate alias: ${alias.alias} (already registered by ${occupied.provider.id})`,
+        );
+      }
+    }
+    for (const alias of provider.capabilities.modelAliases) {
+      this.aliasIndex.set(alias.alias, {
+        provider,
+        catalogProviderId,
+        internalModel: alias.internalModel,
+        summary: alias.summary,
+        expectedSeconds: provider.capabilities.expectedSecondsByAlias[alias.alias] ?? 120,
       });
     }
     this.providers.set(provider.id, provider);
@@ -48,6 +86,15 @@ export class VideoProviderRegistry {
    *  from the catalog when this is false (no models = no callable tools). */
   hasAny(): boolean {
     return this.aliasIndex.size > 0;
+  }
+
+  /** 目录热更可能先于客户端通道代码；未知 alias 必须从可选清单中过滤。 */
+  hasAlias(alias: string, catalogProviderId?: string): boolean {
+    const resolved = this.aliasIndex.get(alias);
+    return Boolean(
+      resolved &&
+        (catalogProviderId === undefined || resolved.catalogProviderId === catalogProviderId),
+    );
   }
 
   /** Throws on unknown alias — handler converts that to INVALID_ARGS. */

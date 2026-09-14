@@ -6,6 +6,16 @@ import type {
   DictationRefinementContext,
 } from '@cindy/voice-input-core';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import { coalesceDictionaryLearningActions, DICTIONARY_CANDIDATE_PROMOTION_COUNT } from '@cindy/voice-input-core';
+export {
+  compactVoiceInputHistoryIfNeeded,
+  estimateVoiceInputHistoryContextChars,
+  MAX_REFINEMENT_HISTORY_ITEM_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS,
+  VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES,
+  VOICE_INPUT_HISTORY_HEADER,
+} from '@cindy/voice-input-core';
 
 import { CURRENT_CINDY_REGION } from './brandRegion';
 import { SUPPORTED_LOCALES, type SupportedLocale } from './locale';
@@ -125,15 +135,6 @@ export const MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS = 120;
 export const MAX_VOICE_INPUT_DICTIONARY_ALIASES = 8;
 export const MAX_VOICE_INPUT_DICTIONARY_CSV_BYTES = 5 * 1024 * 1024;
 export const MAX_VISIBLE_VOICE_INPUT_HISTORY_ENTRIES = 5;
-// 历史块只作术语/口语风格参考，术语纠错主要由用户字典 + alias hints 承载。
-// 线上日志实测（2026-06-21 ~ 07-04，1050 次听写）：历史从 33k 涨到 96k chars
-// 期间采纳率 / no_change 率 / 术语修正率均无变化，而它占 refine prompt 约八成
-// token（单次 42k+）。预算据此收紧到 ~12k chars（≈ 最近三四十条）。
-export const VOICE_INPUT_HISTORY_COMPACT_CHARS = 12_000;
-export const VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS = 8_000;
-export const VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES = 40;
-export const MAX_REFINEMENT_HISTORY_ITEM_CHARS = 360;
-export const VOICE_INPUT_HISTORY_HEADER = '语音输入历史（旧到新，仅作术语、别名和用词风格参考）：';
 export const VOICE_INPUT_MODIFIER_SHORTCUT_CODES: readonly VoiceInputModifierShortcutCode[] = [
   'MetaLeft',
   'MetaRight',
@@ -228,6 +229,8 @@ export const VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE: Readonly<Record<string, nu
   Object.entries(MAC_NATIVE_KEY_CODE_TO_VOICE_INPUT_KEY).map(([keyCode, value]) => [value.code, Number(keyCode)]),
 );
 
+const VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN = /^F(?:[1-9]|1[0-9]|2[0-4])$/;
+
 export const DEFAULT_VOICE_INPUT_REFINEMENT_INSTRUCTIONS = [
   '让文本清楚自然，不明显改写；保留我的语气，不改成公文或客服话术。',
   '保留技术词、模型名、产品名、变量、路径、命令和大小写。',
@@ -320,25 +323,47 @@ export function isVoiceInputModifierShortcut(
   return Boolean(shortcut?.trigger === 'modifier' && isVoiceInputModifierShortcutCode(shortcut.code));
 }
 
+export function isVoiceInputBareFunctionKeyShortcut(
+  shortcut: VoiceInputShortcut | null | undefined,
+): shortcut is VoiceInputShortcut & { trigger: 'keyboard' } {
+  if (!shortcut || shortcut.trigger === 'modifier') return false;
+  return (
+    VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN.test(shortcut.code) &&
+    !shortcut.modifiers.meta &&
+    !shortcut.modifiers.ctrl &&
+    !shortcut.modifiers.alt &&
+    !shortcut.modifiers.shift &&
+    !shortcut.modifiers.fn
+  );
+}
+
 export function isVoiceInputMacNativeKeyboardShortcut(
   shortcut: VoiceInputShortcut | null | undefined,
 ): shortcut is VoiceInputShortcut & { trigger: 'keyboard' } {
   if (!shortcut || shortcut.trigger === 'modifier') return false;
-  if (!(shortcut.code in VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE)) return false;
-  // Only Fn-based keyboard shortcuts need the listen-only native helper.
-  // Plain function keys such as F16 can be registered by Electron's
-  // globalShortcut without prompting for macOS Input Monitoring permission.
-  return Boolean(shortcut.modifiers.fn);
+  if (isVoiceInputBareFunctionKeyShortcut(shortcut)) return true;
+  if (!shortcut.modifiers.fn) return false;
+  return (
+    shortcut.code in VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE ||
+    VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN.test(shortcut.code)
+  );
 }
 
 export function voiceInputShortcutNeedsMacNativeListener(
   shortcut: VoiceInputShortcut | null | undefined,
   platform: string,
 ): boolean {
+  if (platform !== 'darwin') return false;
   if (isVoiceInputModifierShortcut(shortcut)) return true;
   if (!shortcut || shortcut.trigger === 'modifier') return false;
-  if (shortcut.modifiers.fn) return isVoiceInputMacNativeKeyboardShortcut(shortcut);
-  return platform === 'darwin' && isVoiceInputMacNativeKeyboardShortcut(shortcut);
+  return isVoiceInputMacNativeKeyboardShortcut(shortcut);
+}
+
+export function voiceInputShortcutNeedsWindowsNativeListener(
+  shortcut: VoiceInputShortcut | null | undefined,
+  platform: string,
+): boolean {
+  return platform === 'win32' && isVoiceInputBareFunctionKeyShortcut(shortcut);
 }
 
 export function createVoiceInputShortcutFromMacNativeKeys(keys: readonly string[]): VoiceInputShortcut | null {
@@ -360,10 +385,21 @@ export function createVoiceInputShortcutFromMacNativeKeys(keys: readonly string[
     };
   }
 
-  const nonModifierKeys = keys.filter((key) => key.startsWith('KeyCode:'));
+  const nonModifierKeys = keys.filter(
+    (key) => key.startsWith('KeyCode:') || key.startsWith('Function:'),
+  );
   if (nonModifierKeys.length !== 1) return null;
-  const keyCode = Number(nonModifierKeys[0].slice('KeyCode:'.length));
-  const mapped = MAC_NATIVE_KEY_CODE_TO_VOICE_INPUT_KEY[keyCode];
+  const nativeKey = nonModifierKeys[0];
+  const functionCode = nativeKey.startsWith('Function:')
+    ? nativeKey.slice('Function:'.length)
+    : null;
+  const keyCode = nativeKey.startsWith('KeyCode:')
+    ? Number(nativeKey.slice('KeyCode:'.length))
+    : Number.NaN;
+  const mapped =
+    functionCode && VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN.test(functionCode)
+      ? { code: functionCode, key: functionCode }
+      : MAC_NATIVE_KEY_CODE_TO_VOICE_INPUT_KEY[keyCode];
   if (!mapped) return null;
 
   return {
@@ -386,10 +422,12 @@ export function isVoiceInputMacNativeKeyboardShortcutPressed(
 ): boolean {
   if (!isVoiceInputMacNativeKeyboardShortcut(shortcut)) return false;
   const keySet = new Set(keys);
-  const expectedKeyCode = VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE[shortcut.code];
-  if (typeof expectedKeyCode !== 'number') return false;
-  const nonModifierKeys = keys.filter((key) => key.startsWith('KeyCode:'));
-  if (nonModifierKeys.length !== 1 || nonModifierKeys[0] !== `KeyCode:${expectedKeyCode}`) return false;
+  const expectedNativeKey = getMacNativeShortcutKey(shortcut);
+  if (!expectedNativeKey) return false;
+  const nonModifierKeys = keys.filter(
+    (key) => key.startsWith('KeyCode:') || key.startsWith('Function:'),
+  );
+  if (nonModifierKeys.length !== 1 || nonModifierKeys[0] !== expectedNativeKey) return false;
 
   return (
     keySet.has('Fn') === shortcut.modifiers.fn &&
@@ -405,8 +443,16 @@ export function isVoiceInputMacNativeKeyboardShortcutTargetDown(
   shortcut: VoiceInputShortcut,
 ): boolean {
   if (!isVoiceInputMacNativeKeyboardShortcut(shortcut)) return false;
+  const expectedNativeKey = getMacNativeShortcutKey(shortcut);
+  return Boolean(expectedNativeKey && keys.includes(expectedNativeKey));
+}
+
+function getMacNativeShortcutKey(shortcut: VoiceInputShortcut): string | null {
+  if (VOICE_INPUT_FUNCTION_KEY_CODE_PATTERN.test(shortcut.code)) {
+    return `Function:${shortcut.code}`;
+  }
   const expectedKeyCode = VOICE_INPUT_CODE_TO_MAC_NATIVE_KEY_CODE[shortcut.code];
-  return typeof expectedKeyCode === 'number' && keys.includes(`KeyCode:${expectedKeyCode}`);
+  return typeof expectedKeyCode === 'number' ? `KeyCode:${expectedKeyCode}` : null;
 }
 
 export function getDefaultVoiceInputSettings(
@@ -696,19 +742,20 @@ export function applyVoiceInputDictionaryLearningActions(
   const now = Date.now();
   let changed = false;
 
-  actions.forEach((action) => {
+  coalesceDictionaryLearningActions(actions).forEach((action) => {
     const text = normalizeVoiceInputDictionaryEntryText(action.term);
     const aliasTexts = action.aliases
       .map(normalizeVoiceInputDictionaryEntryText)
       .filter((alias): alias is string => Boolean(alias && alias !== text));
-    if (!text || aliasTexts.length === 0 || action.confidence === 'low') return;
+    if (!text || action.confidence === 'low') return;
 
     const key = dictionaryTextKey(text);
     const entryIndex = dictionaryEntries.findIndex((entry) => dictionaryTextKey(entry.text) === key);
     const candidateIndex = dictionaryCandidates.findIndex((entry) => dictionaryTextKey(entry.text) === key);
     const existingCandidate = candidateIndex >= 0 ? dictionaryCandidates[candidateIndex] : null;
 
-    if (entryIndex >= 0 || action.action === 'add_entry' || action.action === 'update_entry') {
+    if (entryIndex >= 0 || action.action === 'add_entry' || action.action === 'update_entry'
+      || (existingCandidate?.evidenceCount ?? 0) + 1 >= DICTIONARY_CANDIDATE_PROMOTION_COUNT) {
       if (entryIndex >= 0) {
         const entry = dictionaryEntries[entryIndex];
         const nextEntry: VoiceInputDictionaryEntry = {
@@ -839,35 +886,6 @@ export function normalizeVoiceInputHistory(raw: unknown): VoiceInputHistoryEntry
     .map(normalizeVoiceInputHistoryEntry)
     .filter((entry): entry is VoiceInputHistoryEntry => Boolean(entry))
     .sort((a, b) => b.createdAt - a.createdAt);
-}
-
-export function compactVoiceInputHistoryIfNeeded(entries: VoiceInputHistoryEntry[]): VoiceInputHistoryEntry[] {
-  if (estimateVoiceInputHistoryContextChars(entries) <= VOICE_INPUT_HISTORY_COMPACT_CHARS) {
-    return entries;
-  }
-  // This is intentionally a rare reset, not a sliding cap. The history prefix
-  // grows append-only for prompt-cache reuse until it crosses the context
-  // budget, then we rewrite it to a compact recent base with enough headroom
-  // to accumulate a long new prefix. The lower target avoids re-compacting on
-  // the next few dictations, which would repeatedly invalidate the cache.
-  const recent = entries.slice(0, VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES);
-  let keepCount = recent.length;
-  while (
-    keepCount > 1 &&
-    estimateVoiceInputHistoryContextChars(recent.slice(0, keepCount)) > VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS
-  ) {
-    keepCount -= 1;
-  }
-  return recent.slice(0, keepCount);
-}
-
-export function estimateVoiceInputHistoryContextChars(newestFirst: ReadonlyArray<{ text: string }>): number {
-  const oldestFirst = normalizeVoiceInputHistoryTextEntries(newestFirst);
-  if (oldestFirst.length === 0) return 0;
-  return oldestFirst.reduce(
-    (total, entry) => total + 3 + entry.length,
-    VOICE_INPUT_HISTORY_HEADER.length,
-  );
 }
 
 export function createVoiceInputHistoryEntry(text: string, timestamp = Date.now()): VoiceInputHistoryEntry | null {
@@ -1220,20 +1238,6 @@ function normalizeVoiceInputHistoryEntry(raw: unknown): VoiceInputHistoryEntry |
     text,
     createdAt,
   };
-}
-
-function normalizeVoiceInputHistoryTextEntries(newestFirst: ReadonlyArray<{ text: string }>): string[] {
-  return newestFirst
-    .slice()
-    .reverse()
-    .map((entry) => truncateContextText(entry.text, MAX_REFINEMENT_HISTORY_ITEM_CHARS))
-    .filter(Boolean);
-}
-
-function truncateContextText(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(0, maxChars).trim();
 }
 
 function createId(prefix: string, timestamp = Date.now(), seed = ''): string {

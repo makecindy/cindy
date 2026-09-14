@@ -12,6 +12,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import {
   applyRemoteSessionActivity,
   clearRemoteSessionActivity,
+  dropStaleRemoteTerminalActivity,
   getRemoteSessionActivity,
   isRemoteSessionActivityActive,
   removeRemoteSessionActivityEntry,
@@ -122,6 +123,32 @@ describe('remoteSessionActivityStore', () => {
 
     removeRemoteSessionActivityEntry('s2');
     expect(getRemoteSessionActivity('s2')).toBeUndefined();
+  });
+
+  it('drops unread completed/error mirrors but keeps an in-flight remote turn', () => {
+    applyRemoteSessionActivity('dev-1', {
+      sessionId: 'done',
+      phase: 'completed',
+      compactDetail: '',
+      attention: true,
+    });
+    applyRemoteSessionActivity('dev-1', {
+      sessionId: 'err',
+      phase: 'error',
+      compactDetail: '',
+      attention: true,
+    });
+    applyRemoteSessionActivity('dev-1', {
+      sessionId: 'run',
+      phase: 'running',
+      compactDetail: '',
+    });
+    dropStaleRemoteTerminalActivity('done');
+    dropStaleRemoteTerminalActivity('err');
+    dropStaleRemoteTerminalActivity('run');
+    expect(getRemoteSessionActivity('done')).toBeUndefined();
+    expect(getRemoteSessionActivity('err')).toBeUndefined();
+    expect(getRemoteSessionActivity('run')).toMatchObject({ phase: 'running' });
   });
 
   it('keeps snapshot reference stable when payload content is unchanged', () => {

@@ -21,7 +21,10 @@ import {
   isBudgetModel,
   isChatEligible,
   isModelSelectableForNewRoute,
+  exclusiveXaiCatalogModelId,
+  isExclusiveXaiModelId,
   isSubscriptionDirectModel,
+  isSubscriptionDirectRoute,
   modelBadges,
   type ModelCategory,
 } from '../classification.js';
@@ -149,6 +152,8 @@ describe('categorize', () => {
   it('图像生成类归 image(issue #882)', () => {
     expect(categorize('gemini-3.1-flash-image')).toBe('image');
     expect(categorize('gpt-image-1.5')).toBe('image');
+    expect(categorize('gpt-image-2.5-sunburst')).toBe('image');
+    expect(categorize('openai/gpt-image-2.5-flare')).toBe('image');
   });
 
   it('id 里不含类型关键词的知名非聊天模型家族(dall-e / sora / veo)也不误判为可聊天(2026-07 review:走 {id,name} 极简发现的自定义 OAuth 供应商没有 mode/group 兜底,全靠这份正则)', () => {
@@ -315,6 +320,8 @@ describe('classifyModel — mode 权威,缺省时回退 groupOf(issue #882)', ()
     { id: 'gemini-3-pro-image', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-1.5', mode: 'image_generation', category: 'image' },
     { id: 'gpt-image-2', mode: 'image_generation', category: 'image' },
+    { id: 'gpt-image-2.5-sunburst', mode: 'image_generation', category: 'image' },
+    { id: 'gpt-image-2.5-flare', mode: 'image_generation', category: 'image' },
     { id: 'text-embedding-3-large', mode: 'embedding', category: 'embedding' },
     { id: 'text-embedding-3-small', mode: 'embedding', category: 'embedding' },
     { id: 'gemini-embedding-2-preview', mode: 'embedding', category: 'embedding' },
@@ -480,6 +487,35 @@ describe('isSubscriptionDirectModel(下沉自 shared/subscriptionModels,签名�
   });
   it('前缀清单恒为 chatgpt/ + xai/(路由/记账/排除三方共用,改动即破坏)', () => {
     expect(SUBSCRIPTION_DIRECT_MODEL_PREFIXES).toEqual(['chatgpt/', 'xai/']);
+  });
+});
+
+describe('isExclusiveXaiModelId / isSubscriptionDirectRoute', () => {
+  it('认 xai/ 前缀与裸 grok id,不认网关 x-ai/ 或其它厂商', () => {
+    expect(isExclusiveXaiModelId('xai/grok-4.6')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-4.6')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-4.6[1m]')).toBe(true);
+    expect(isExclusiveXaiModelId('grok-build-0.1')).toBe(true);
+    expect(isExclusiveXaiModelId('x-ai/grok-4.6')).toBe(false);
+    expect(isExclusiveXaiModelId('xai/not-grok')).toBe(false);
+    expect(isExclusiveXaiModelId('claude-opus-5')).toBe(false);
+    expect(isExclusiveXaiModelId('chatgpt/gpt-5.5')).toBe(false);
+    expect(isExclusiveXaiModelId(null)).toBe(false);
+  });
+
+  it('isSubscriptionDirectRoute 覆盖前缀与独占裸 id', () => {
+    expect(isSubscriptionDirectRoute('xai/grok-4.6')).toBe(true);
+    expect(isSubscriptionDirectRoute('grok-4.6')).toBe(true);
+    expect(isSubscriptionDirectRoute('chatgpt/gpt-5.5')).toBe(true);
+    expect(isSubscriptionDirectRoute('x-ai/grok-4.6')).toBe(false);
+    expect(isSubscriptionDirectRoute('claude-opus-5')).toBe(false);
+  });
+
+  it('exclusiveXaiCatalogModelId 把裸 grok 归一成 xai/ 目录 id', () => {
+    expect(exclusiveXaiCatalogModelId('grok-4.6')).toBe('xai/grok-4.6');
+    expect(exclusiveXaiCatalogModelId('xai/grok-4.6')).toBe('xai/grok-4.6');
+    expect(exclusiveXaiCatalogModelId('x-ai/grok-4.6')).toBeNull();
+    expect(exclusiveXaiCatalogModelId('claude-opus-5')).toBeNull();
   });
 });
 

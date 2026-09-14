@@ -10,6 +10,9 @@ export type QuotaSeverity = 'normal' | 'warn' | 'crit';
 
 export interface QuotaBarProps {
   usedPercent: number;
+  /** Invert only the displayed value; warnings still follow usage. */
+  showRemaining?: boolean;
+  'aria-valuetext'?: string;
   size?: 'regular' | 'mini';
   /** 调用方已合并本地阈值与上游信号后的展示级别。 */
   severity?: QuotaSeverity;
@@ -40,6 +43,8 @@ const FILL_COLOR_CLASSES: Record<QuotaSeverity, string> = {
 
 export function QuotaBar({
   usedPercent,
+  showRemaining = false,
+  'aria-valuetext': ariaValueText,
   size = 'regular',
   severity: severityOverride,
   ariaLabel,
@@ -47,6 +52,7 @@ export function QuotaBar({
   className,
 }: QuotaBarProps) {
   const clampedPercent = clampPercent(usedPercent);
+  const displayedPercent = showRemaining ? 100 - clampedPercent : clampedPercent;
   const severity = severityOverride ?? quotaSeverity(clampedPercent);
   const isMini = size === 'mini';
 
@@ -55,7 +61,8 @@ export function QuotaBar({
       role="progressbar"
       aria-valuemin={0}
       aria-valuemax={100}
-      aria-valuenow={Math.round(clampedPercent)}
+      aria-valuenow={Math.round(displayedPercent)}
+      aria-valuetext={ariaValueText}
       aria-label={ariaLabel}
       aria-labelledby={ariaLabelledBy}
       data-severity={severity}
@@ -68,10 +75,10 @@ export function QuotaBar({
       <div
         className={cn(
           'h-full rounded-full transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
-          clampedPercent > 0 && (isMini ? 'min-w-[4px]' : 'min-w-[7px]'),
+          displayedPercent > 0 && (isMini ? 'min-w-[4px]' : 'min-w-[7px]'),
           FILL_COLOR_CLASSES[severity],
         )}
-        style={{ width: `${clampedPercent}%` }}
+        style={{ width: `${displayedPercent}%` }}
       />
     </div>
   );

@@ -88,6 +88,51 @@ describe('runManualUpdateCheck', () => {
     expect(input.checkOtaUpdate).not.toHaveBeenCalled();
   });
 
+  it('skips OTA when consent is false at manifest time, before any request', async () => {
+    const input = deps({
+      checkBundleUpdate: bundleCheck('up-to-date'),
+      isConsented: () => false,
+    });
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'ota-unavailable' });
+    expect(input.checkOtaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('re-checks consent before downloading after the manifest resolves', async () => {
+    // manifest 请求期间用户登出撤销同意:下载前再问一次,不得继续拉取带标识的 bundle。
+    let consented = true;
+    const input = deps({
+      isConsented: () => consented,
+      checkOtaUpdate: vi.fn(async () => {
+        consented = false;
+        return { isAvailable: true };
+      }),
+    });
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'ota-unavailable' });
+    expect(input.checkOtaUpdate).toHaveBeenCalledOnce();
+    expect(input.fetchOtaUpdate).not.toHaveBeenCalled();
+  });
+
+  it('自建线用同一个包装器覆盖完整 check → fetch → reload 事务', async () => {
+    const wrappedCheck = vi.fn(async () => ({ isAvailable: true }));
+    const wrappedFetch = vi.fn(async () => ({ isNew: true }));
+    const wrappedReload = vi.fn(async () => undefined);
+    const withOtaClient: NonNullable<ManualUpdateCheckDeps['withOtaClient']> =
+      async (operation) => operation({
+        checkForUpdateAsync: wrappedCheck,
+        fetchUpdateAsync: wrappedFetch,
+        reloadAsync: wrappedReload,
+      });
+    const input = deps({ withOtaClient });
+
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'reloading' });
+    expect(wrappedCheck).toHaveBeenCalledOnce();
+    expect(wrappedFetch).toHaveBeenCalledOnce();
+    expect(wrappedReload).toHaveBeenCalledOnce();
+    expect(input.checkOtaUpdate).not.toHaveBeenCalled();
+    expect(input.fetchOtaUpdate).not.toHaveBeenCalled();
+    expect(input.reload).not.toHaveBeenCalled();
+  });
+
   // emergency launch(没有 launchedUpdate)时 reloadAsync 会被原生层拒绝,但 bundle 已落盘:
   // 这不是一次失败的检查,必须导向"重开 App 生效",否则用户只看到一条无从下手的红字报错。
   it('asks for a manual restart when an emergency launch blocks reloading the downloaded bundle', async () => {
@@ -105,7 +150,7 @@ describe('runManualUpdateCheck', () => {
     expect(input.reload).toHaveBeenCalledOnce();
   });
 
-  it('still reports a failure when reload fails without any downloaded bundle', async () => {
+  it('does not reload when fetch reports that no new bundle was downloaded', async () => {
     const input = deps({
       checkOtaUpdate: vi.fn(async () => ({ isAvailable: true })),
       fetchOtaUpdate: vi.fn(async () => ({ isNew: false })),
@@ -115,11 +160,8 @@ describe('runManualUpdateCheck', () => {
       isEmergencyLaunch: vi.fn(() => true),
     });
 
-    await expect(runManualUpdateCheck(input)).resolves.toEqual({
-      kind: 'error',
-      reason: 'ota-check',
-      detail: 'reload rejected',
-    });
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'up-to-date' });
+    expect(input.reload).not.toHaveBeenCalled();
   });
 
   // 非应急启动下的 reload 失败原因未知,原始详情是唯一线索:不能被重启指引盖掉。

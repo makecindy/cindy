@@ -22,6 +22,22 @@ function base64UrlDecode(segment: string): string | null {
   }
 }
 
+/** 读取 access token 的组织稳定标识；个人身份、旧 token 或解码失败返回 null。 */
+export function decodeJwtOrgSlug(token: string): string | null {
+  const parts = token.split('.');
+  if (parts.length < 2) return null;
+  const json = base64UrlDecode(parts[1]);
+  if (json === null) return null;
+  try {
+    const payload = JSON.parse(json) as { orgSlug?: unknown };
+    return typeof payload.orgSlug === 'string' && payload.orgSlug.length > 0
+      ? payload.orgSlug
+      : null;
+  } catch {
+    return null;
+  }
+}
+
 /** The token's `exp` claim in epoch milliseconds, or null when it can't be determined. */
 export function decodeJwtExpMs(token: string): number | null {
   const parts = token.split('.');

@@ -37,6 +37,8 @@ describe('useDeviceLinkSettings ownership state', () => {
   it('keeps a newer ownership push when the initial getState snapshot resolves late', async () => {
     type State = Awaited<ReturnType<typeof window.electronAPI.deviceLink.getState>>;
     const state = deferred<State>();
+    let controlledChanged:
+      ((payload: { controllers: { deviceId: string; name: string }[] }) => void) | undefined;
     let ownershipChanged: ((payload: { standby: boolean }) => void) | undefined;
     const off = vi.fn();
     const subscribe = vi.fn(() => off);
@@ -50,7 +52,10 @@ describe('useDeviceLinkSettings ownership state', () => {
       onPresenceChanged: subscribe,
       onStatusChanged: subscribe,
       onConnectionIssue: subscribe,
-      onControlledState: subscribe,
+      onControlledState: vi.fn((callback: typeof controlledChanged) => {
+        controlledChanged = callback;
+        return off;
+      }),
       onControlTargetChanged: subscribe,
     };
     (window as unknown as { electronAPI: { deviceLink: typeof api } }).electronAPI = {
@@ -64,6 +69,7 @@ describe('useDeviceLinkSettings ownership state', () => {
     );
     act(() => ownershipChanged?.({ standby: true }));
     expect(result.current.standby).toBe(true);
+    act(() => controlledChanged?.({ controllers: [{ deviceId: 'mac', name: 'MacBook' }] }));
 
     await act(async () => {
       state.resolve({
@@ -72,7 +78,10 @@ describe('useDeviceLinkSettings ownership state', () => {
         linkStatus: 'online',
         connectionIssue: null,
         standby: false,
-        controlledBy: [],
+        controlledBy: [
+          { deviceId: 'mac', name: 'MacBook' },
+          { deviceId: 'phone', name: 'Phone' },
+        ],
         revokedControllers: [],
         disabledControlDeviceIds: [],
         unresponsiveDeviceIds: [],
@@ -81,6 +90,7 @@ describe('useDeviceLinkSettings ownership state', () => {
     });
 
     expect(result.current.standby).toBe(true);
+    expect(result.current.controlledBy).toEqual([{ deviceId: 'mac', name: 'MacBook' }]);
     unmount();
   });
 });

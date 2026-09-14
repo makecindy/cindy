@@ -5,7 +5,7 @@
  */
 
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { MemoryRouter, useLocation } from 'react-router-dom';
+import { MemoryRouter, useLocation, useNavigate } from 'react-router-dom';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('react-i18next', () => ({
@@ -44,6 +44,18 @@ function ActiveMainView() {
   return <output data-testid="active-main-view">{useActiveMainView().activeKey}</output>;
 }
 
+function ActiveMainViewNavigationProbe() {
+  const navigate = useNavigate();
+  return (
+    <>
+      <ActiveMainView />
+      <button type="button" onClick={() => navigate('/apps/workspace')}>
+        Open main view
+      </button>
+    </>
+  );
+}
+
 describe('PluginManagementLayout', () => {
   it('presents Plugins and Skills as peer tabs and navigates to the skill home', async () => {
     render(
@@ -64,6 +76,21 @@ describe('PluginManagementLayout', () => {
     });
   });
 
+  it('keeps Plugins / Skills inside Settings when onSelectTab is provided', () => {
+    const onSelectTab = vi.fn();
+    render(
+      <MemoryRouter initialEntries={['/settings?tab=ghosts']}>
+        <PluginManagementLayout activeTab="plugins" embedded onSelectTab={onSelectTab}>
+          <CurrentPath />
+        </PluginManagementLayout>
+      </MemoryRouter>,
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Skills' }));
+    expect(onSelectTab).toHaveBeenCalledWith('skills');
+    expect(screen.getByTestId('current-path').textContent).toBe('/settings');
+  });
+
   it('keeps the Plugin sidebar view active for a direct Skill deep link', () => {
     render(
       <MemoryRouter initialEntries={['/skillhub/local/skill/global/example']}>
@@ -72,6 +99,20 @@ describe('PluginManagementLayout', () => {
     );
 
     expect(screen.getByTestId('active-main-view').textContent).toBe('plugins');
+  });
+
+  it('clears the sticky Plugin active state when entering a plugin main view', async () => {
+    render(
+      <MemoryRouter initialEntries={['/plugins']}>
+        <ActiveMainViewNavigationProbe />
+      </MemoryRouter>,
+    );
+
+    expect(screen.getByTestId('active-main-view').textContent).toBe('plugins');
+    fireEvent.click(screen.getByRole('button', { name: 'Open main view' }));
+    await waitFor(() => {
+      expect(screen.getByTestId('active-main-view').textContent).toBe('');
+    });
   });
 
   it('uses the same constrained frame for the tab row and page content', () => {

@@ -70,6 +70,30 @@ function parseRgb(v: string): RGB {
   return [parts[0], parts[1], parts[2]];
 }
 
+function parseCssColor(v: string | undefined): { rgb: RGB; alpha: number } {
+  if (!v) throw new Error('empty color literal');
+  const t = v.trim();
+  const hsl = t.match(
+    /^([\d.]+)\s+([\d.]+)%\s+([\d.]+)%(?:\s*\/\s*(0|1|0?\.\d+))?$/,
+  );
+  if (hsl) {
+    return {
+      rgb: hslToRgb(parseFloat(hsl[1]), parseFloat(hsl[2]), parseFloat(hsl[3])),
+      alpha: hsl[4] === undefined ? 1 : parseFloat(hsl[4]),
+    };
+  }
+  const rgb = t.match(/^rgba?\(([^)]+)\)$/);
+  if (rgb) {
+    const parts = rgb[1].split(',').map((x) => parseFloat(x));
+    return {
+      rgb: [parts[0], parts[1], parts[2]],
+      alpha: parts[3] === undefined ? 1 : parts[3],
+    };
+  }
+  if (t === 'transparent') return { rgb: [0, 0, 0], alpha: 0 };
+  return { rgb: toRgb(t), alpha: 1 };
+}
+
 /** 把任意 CSS 色值归一成 RGB(hex / HSL 三元组 / rgb() / rgba())。 */
 function toRgb(v: string | undefined): RGB {
   if (!v) throw new Error("empty color literal");
@@ -95,11 +119,20 @@ function luminance(rgb: RGB): number {
   return 0.2126 * f[0] + 0.7152 * f[1] + 0.0722 * f[2];
 }
 
-function contrast(c1: string | undefined, c2: string | undefined): number {
-  const l1 = luminance(toRgb(c1));
-  const l2 = luminance(toRgb(c2));
+function compositeOver(foreground: string | undefined, background: RGB): RGB {
+  const { rgb, alpha } = parseCssColor(foreground);
+  return rgb.map((channel, index) => channel * alpha + background[index] * (1 - alpha)) as RGB;
+}
+
+function rgbContrast(c1: RGB, c2: RGB): number {
+  const l1 = luminance(c1);
+  const l2 = luminance(c2);
   const [hi, lo] = l1 > l2 ? [l1, l2] : [l2, l1];
   return (hi + 0.05) / (lo + 0.05);
+}
+
+function contrast(c1: string | undefined, c2: string | undefined): number {
+  return rgbContrast(toRgb(c1), toRgb(c2));
 }
 
 const BRAND_RED_HEX = '#DF0C27';
@@ -435,6 +468,35 @@ describe('CINDY · ⑦ WCAG 复算 + U2 例外 allowlist + text-secondary 反向
     // ③ exact 已守,此处补层级:选中 pill 前景×中性底 ≥4.5。
     expect(contrast(cindyLight.colors['sidebar-item-active-foreground']!, cindyLight.colors['sidebar-item-active']!), 'light 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
     expect(contrast(cindyDark.colors['sidebar-item-active-foreground']!, cindyDark.colors['sidebar-item-active']!), 'dark 选中胶囊 前景×中性底').toBeGreaterThanOrEqual(4.5);
+  });
+
+  it('CINDY 侧栏草稿铅笔×普通/悬停行底色对比度 ≥3:1', () => {
+    const draftLight = colorRegistry.resolveDefault('sidebar-draft-indicator', 'light') ?? '';
+    const draftDarkAlias = colorRegistry.resolveDefault('sidebar-draft-indicator', 'dark') ?? '';
+    const awaitingDark = colorRegistry.resolveDefault('card-status-awaiting', 'dark') ?? '';
+
+    expect(draftLight).toBe('#0B726B');
+    expect(draftDarkAlias).toBe('var(--card-status-awaiting)');
+    for (const [name, colors, draft] of [
+      ['light', light, draftLight],
+      ['dark', dark, awaitingDark],
+    ] as const) {
+      for (const [wallpaperName, wallpaper] of [
+        ['black wallpaper', '#000000'],
+        ['white wallpaper', '#FFFFFF'],
+      ] as const) {
+        const sidebar = compositeOver(colors['surface-translucent-sidebar'], toRgb(wallpaper));
+        const hover = compositeOver(colors['sidebar-item-hover'], sidebar);
+        expect(
+          rgbContrast(toRgb(draft), sidebar),
+          `${name} 草稿铅笔×侧栏(${wallpaperName})`,
+        ).toBeGreaterThanOrEqual(3);
+        expect(
+          rgbContrast(toRgb(draft), hover),
+          `${name} 草稿铅笔×悬停行(${wallpaperName})`,
+        ).toBeGreaterThanOrEqual(3);
+      }
+    }
   });
 });
 

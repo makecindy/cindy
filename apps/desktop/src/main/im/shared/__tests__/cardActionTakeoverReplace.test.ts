@@ -20,8 +20,10 @@ const mocks = vi.hoisted(() => ({
   getMaker: vi.fn(),
   closeSession: vi.fn(async () => {}),
   getDesktopCcPrefs: vi.fn<() => DesktopCcPrefs | null>(() => null),
+  resolveLenientSessionRoute: vi.fn(),
   applyRuntimeSetModelChange:
     vi.fn<(input: unknown) => Promise<{ status: 'applied' | 'deferred' }>>(),
+  actualApplyRuntimeSetModelChange: null as null | ((input: never) => Promise<unknown>),
   registerPendingCredentialSwitchForSession: vi.fn(),
   clearPendingCredentialSwitchForSession: vi.fn(),
   wakeSessionInputAfterCredentialSwitch: vi.fn(),
@@ -36,9 +38,7 @@ const mocks = vi.hoisted(() => ({
   setSessionProvider: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
   cancelPendingAgentSwitchForSession: vi.fn(),
-  withSendToSessionLock: vi.fn(
-    async (_sessionId: string, task: () => Promise<unknown>) => task(),
-  ),
+  withSendToSessionLock: vi.fn(async (_sessionId: string, task: () => Promise<unknown>) => task()),
   // 禁止回落 cwd:TEMP 是 Windows 独有变量,macOS 上回落 cwd 会让传递 import 的
   // 写盘副作用落进仓库工作区(见 authAdaptersImportPurity.test.ts 记录的事故)。
   userDataDir: process.env.TMPDIR ?? process.env.TEMP ?? '/tmp',
@@ -54,6 +54,9 @@ vi.mock('electron', () => ({
 }));
 vi.mock('../../../logger', () => ({ createLogger: () => mocks.logger }));
 vi.mock('../../../maker-host', () => ({ getMaker: mocks.getMaker }));
+vi.mock('../../../maker-host/model-route-guard-live', () => ({
+  resolveLenientSessionRoute: mocks.resolveLenientSessionRoute,
+}));
 vi.mock('../../index', () => ({ getDesktopCcPrefs: mocks.getDesktopCcPrefs }));
 vi.mock('../controlProjects', () => ({
   listProjectsForControl: vi.fn(async () => []),
@@ -87,9 +90,11 @@ vi.mock('../../../maker-host/session-provider-store', () => ({
     providerId === undefined ? undefined : providerId?.trim() || null,
   setSessionProvider: mocks.setSessionProvider,
 }));
-vi.mock('../../../maker-ipc/runtimeSetModel', () => ({
-  applyRuntimeSetModelChange: mocks.applyRuntimeSetModelChange,
-}));
+vi.mock('../../../maker-ipc/runtimeSetModel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../maker-ipc/runtimeSetModel')>();
+  mocks.actualApplyRuntimeSetModelChange = actual.applyRuntimeSetModelChange as never;
+  return { applyRuntimeSetModelChange: mocks.applyRuntimeSetModelChange };
+});
 vi.mock('../../../maker-ipc/register', () => ({
   cancelPendingAgentSwitchForSession: mocks.cancelPendingAgentSwitchForSession,
   isSessionInTurn: mocks.isSessionInTurn,
@@ -117,6 +122,10 @@ import {
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImChannelAdapter } from '../types';
 import type { ImTurnRunner } from '../turnRunner';
+import {
+  setCodexAppliedCustomProviderRoutes,
+  type CodexCustomProviderRoute,
+} from '../../../maker-host/codex-custom-provider-route';
 
 function makeIm() {
   const im = {
@@ -199,6 +208,7 @@ async function pressSessionPick(
 }
 
 beforeEach(() => {
+  setCodexAppliedCustomProviderRoutes([]);
   vi.clearAllMocks();
   activateImAccountBoundary();
   (resolvePending as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -214,14 +224,19 @@ beforeEach(() => {
     createSession: vi.fn(async () => ({ id: 'sess-new' })),
     closeSession: mocks.closeSession,
     getCapabilities: vi.fn(() => ({
-      permissionModes: [
-        { id: 'ask' },
-        { id: 'auto' },
-        { id: 'bypassPermissions' },
-      ],
+      permissionModes: [{ id: 'ask' }, { id: 'auto' }, { id: 'bypassPermissions' }],
     })),
   });
   mocks.getDesktopCcPrefs.mockReturnValue(null);
+  // 路由裁决默认「原样放行」：真实 model-route-guard-live 会读 provider 目录,
+  // 本 harness 不搭目录 fixture; 需要裁决语义的用例自己 mockResolvedValue 覆盖。
+  mocks.resolveLenientSessionRoute.mockImplementation(
+    async (_agent: string, model: string | undefined, providerId: string | null) => ({
+      model,
+      providerId,
+      degraded: false,
+    }),
+  );
   (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockReturnValue(null);
 });
 
@@ -600,10 +615,7 @@ describe('model:pick 持久化失败', () => {
 
     const pickPromise = pressModelPick(im);
     await vi.waitFor(() => {
-      expect(mocks.withSendToSessionLock).toHaveBeenCalledWith(
-        'sess-target',
-        expect.any(Function),
-      );
+      expect(mocks.withSendToSessionLock).toHaveBeenCalledWith('sess-target', expect.any(Function));
     });
     expect(mocks.updateModelEffort).not.toHaveBeenCalled();
     expect(mocks.applyRuntimeSetModelChange).not.toHaveBeenCalled();
@@ -629,6 +641,74 @@ describe('model:pick 持久化失败', () => {
     );
     expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledWith(
       expect.objectContaining({ providerId: 'anthropic' }),
+    );
+  });
+
+  it('IM 模型卡片跨 dynamic Provider 时关闭旧 thread，下一次发送再按新路由创建', async () => {
+    const routeA: CodexCustomProviderRoute = {
+      providerId: 'provider-a',
+      routeId: 'a'.repeat(20),
+      modelProviderId: `cindy_custom_${'a'.repeat(20)}`,
+      capabilities: { imageGeneration: true },
+      responseModels: ['shared-model'],
+      routing: {
+        upstream: 'https://a.invalid/v1',
+        wireProtocol: 'openai-responses',
+        authStrategy: 'none',
+      },
+      responseRoutingByModel: {},
+      credentialRevision: 1,
+    };
+    const routeB: CodexCustomProviderRoute = {
+      ...routeA,
+      providerId: 'provider-b',
+      routeId: 'b'.repeat(20),
+      modelProviderId: `cindy_custom_${'b'.repeat(20)}`,
+      capabilities: { imageGeneration: true },
+      responseModels: ['claude-opus-4-7'],
+    };
+    setCodexAppliedCustomProviderRoutes([routeA, routeB]);
+    let livePresent = true;
+    const live = {
+      id: 'sess-target',
+      agentKind: 'codex' as const,
+      remoteHostId: null,
+      codexProxyActive: true,
+      codexThreadModelProviderId: routeA.modelProviderId,
+      model: 'shared-model',
+      setModel: vi.fn(async () => {}),
+      setEffort: vi.fn(async () => {}),
+      isTurnRunning: () => false,
+    };
+    const closeSession = vi.fn(async () => {
+      livePresent = false;
+    });
+    mocks.getSessionProvider.mockReturnValue('provider-a');
+    mocks.getMaker.mockReturnValue({
+      getSession: () => (livePresent ? live : undefined),
+      listActiveSessions: () => (livePresent ? [live] : []),
+      closeSession,
+      getCapabilities: vi.fn(() => ({ permissionModes: [] })),
+    });
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      livePresent ? live : null,
+    );
+    mocks.applyRuntimeSetModelChange.mockImplementationOnce(async (input: unknown) => {
+      if (!mocks.actualApplyRuntimeSetModelChange) throw new Error('actual runtime switch missing');
+      return mocks.actualApplyRuntimeSetModelChange(input as never) as Promise<{
+        status: 'applied' | 'deferred';
+      }>;
+    });
+    const im = makeIm();
+
+    await pressModelPick(im, 'provider-b');
+
+    expect(closeSession).toHaveBeenCalledWith('sess-target');
+    expect(live.setModel).not.toHaveBeenCalled();
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', 'provider-b');
+    expect(im.updateInteractiveCard).toHaveBeenCalledWith(
+      'model-card',
+      expect.objectContaining({ body: slackUi.cards.model.resolved('Opus 4.7', 'high') }),
     );
   });
 
@@ -781,7 +861,9 @@ describe('model:pick 持久化失败', () => {
       'openrouter',
     );
     expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', 'openrouter');
-    expect(live.setModel).toHaveBeenCalledWith('claude-sonnet-4-6');
+    expect(live.setModel).toHaveBeenCalledWith('claude-sonnet-4-6', {
+      providerId: 'openrouter',
+    });
     expect(live.setEffort).toHaveBeenNthCalledWith(1, 'high');
     expect(live.setEffort).toHaveBeenNthCalledWith(2, 'medium');
     expect(im.updateInteractiveCard).toHaveBeenCalledWith(
@@ -821,6 +903,9 @@ describe('model:pick 持久化失败', () => {
       null,
     );
     expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', null);
+    expect(live.setModel).toHaveBeenCalledWith('claude-sonnet-4-6', {
+      providerId: null,
+    });
   });
 });
 
@@ -949,5 +1034,129 @@ describe('control:thread-exit 收口卡', () => {
         buttons: [expect.objectContaining({ id: 'control:start' })],
       }),
     );
+  });
+});
+
+describe('control:new 新建会话（非 threadScoped 分支 — feishu 实际路径）', () => {
+  // feishu 是非 threadScoped 渠道（见 shared/types.ts），群 /ctr 永远走
+  // 非 thread 分支 —— 权限档治理与 providerId 落地都必须在这一分支生效。
+  const feishuAdapter = {
+    channel: 'feishu',
+    threadScoped: false,
+    ui: slackUi,
+    config: { agentKind: 'claude-code', defaultModel: 'm', defaultPermissionMode: 'acceptEdits' },
+  } as unknown as ImChannelAdapter;
+
+  async function pressControlNew(
+    im: ChannelIM,
+    overrides?: Partial<IMCardActionEvent>,
+    testAdapter: ImChannelAdapter = feishuAdapter,
+  ): Promise<void> {
+    const attach = createCardActionHandler(testAdapter, cards, turnRunner);
+    let handler: ((e: IMCardActionEvent) => Promise<void>) | null = null;
+    (im.onCardAction as ReturnType<typeof vi.fn>).mockImplementation((cb) => {
+      handler = cb;
+      return () => {};
+    });
+    attach(im)();
+    await registeredHandler(handler)({
+      messageId: 'ctr-new',
+      // 群卡回调的 senderId 是**发卡那条话题 lane**(transport 侧
+      // outbound.resolveCardLane 归一) —— 接管只跟话题走。群 chatId + 私聊
+      // open_id 的组合是「卡片认不出自己在哪条话题」的失效态, 会被 fail-closed
+      // 拦掉(见 cardActionGroupLaneGuard.test.ts), 不是群 /ctr 的正常形态。
+      senderId: 'g/oc_12345/omt_t1',
+      chatId: 'oc_12345',
+      buttonId: 'control:new',
+      scopeKey: '',
+      payload: {
+        botAppId: 'BOT1',
+        workingDir: 'E:/Cindy/cindy',
+        displayName: 'cindy',
+      },
+      ...overrides,
+    } as IMCardActionEvent);
+  }
+
+  function setupDesktopPrefs(prefs: DesktopCcPrefs): ReturnType<typeof vi.fn> {
+    mocks.getDesktopCcPrefs.mockReturnValue(prefs);
+    const createSession = vi.fn(async () => ({ id: 'sess-new' }));
+    mocks.getMaker.mockReturnValue({ createSession, closeSession: mocks.closeSession });
+    return createSession;
+  }
+
+  it('feishu 群 /ctr：权限档用渠道设置（默认 auto），providerId 随桌面偏好传入 createSession', async () => {
+    const createSession = setupDesktopPrefs({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      effort: 'max',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+    });
+    mocks.resolveLenientSessionRoute.mockResolvedValue({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      effort: 'max',
+      degraded: false,
+    });
+
+    await pressControlNew(makeIm());
+
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: 'deepseek-v4-pro',
+        providerId: 'deepseek',
+        permissionMode: 'auto',
+      }),
+    );
+  });
+
+  it('feishu 私聊 /ctr：权限档保持 desktop 偏好', async () => {
+    const createSession = setupDesktopPrefs({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      effort: 'max',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+    });
+    mocks.resolveLenientSessionRoute.mockResolvedValue({
+      model: 'deepseek-v4-pro',
+      providerId: 'deepseek',
+      effort: 'max',
+      degraded: false,
+    });
+
+    // 私聊卡: chatId 是对方 open_id, senderId 也是 open_id(私聊不登记 lane)。
+    await pressControlNew(makeIm(), { chatId: 'ou_peer_openid', senderId: 'ou_user1' });
+
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerId: 'deepseek',
+        permissionMode: 'bypassPermissions',
+      }),
+    );
+  });
+
+  it('桌面偏好缺 providerId 时仍走隐式路由（不传 providerId，与修复前一致）', async () => {
+    const createSession = setupDesktopPrefs({
+      model: 'deepseek-v4-pro',
+      providerId: null,
+      effort: 'max',
+      permissionMode: 'bypassPermissions',
+      fastMode: false,
+    });
+    mocks.resolveLenientSessionRoute.mockResolvedValue({
+      model: 'deepseek-v4-pro',
+      providerId: null,
+      effort: 'max',
+      degraded: false,
+    });
+
+    await pressControlNew(makeIm());
+
+    expect(createSession).toHaveBeenCalledTimes(1);
+    const arg = createSession.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg.model).toBe('deepseek-v4-pro');
+    expect(arg.providerId).toBeUndefined();
   });
 });

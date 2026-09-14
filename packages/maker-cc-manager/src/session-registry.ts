@@ -17,6 +17,7 @@
 import type {
   QueryEventNotification,
   QueryToolGuard,
+  SubagentModelAccessResult,
   SessionClosedNotification,
   SessionListEntry,
   ClientReplacedNotification,
@@ -258,6 +259,11 @@ export type OAuthRefreshForwarder = (
   params: import('./protocol.js').OAuthRefreshParams,
 ) => Promise<import('./protocol.js').OAuthRefreshResult>;
 
+export type SubagentModelAccessForwarder = (
+  sessionId: string,
+  params: import('./protocol.js').SubagentModelAccessParams,
+) => Promise<import('./protocol.js').SubagentModelAccessResult>;
+
 export interface SessionRegistryOptions {
   sdkQueryFactory: SdkQueryFactory;
   /**
@@ -283,6 +289,8 @@ export interface SessionRegistryOptions {
    * provided (or if no client is attached), the registry defaults to 'deny'.
    */
   onApprovalRequest?: ApprovalRequestForwarder;
+  /** Agent/Task 执行前向当前 desktop 查询实时账号模型准入。异常必须降级 unknown。 */
+  onSubagentModelAccessRequest?: SubagentModelAccessForwarder;
   /**
    * Called when a session's SDK getOAuthToken fires (401 on the subscription
    * token). Implementation should send a reverse-request RPC to the client.
@@ -307,6 +315,7 @@ export class SessionRegistry {
   private readonly logger: NonNullable<SessionRegistryOptions['logger']>;
   private readonly bufferCapacity: number;
   private readonly onApprovalRequest?: ApprovalRequestForwarder;
+  private readonly onSubagentModelAccessRequest?: SubagentModelAccessForwarder;
   private readonly onOAuthRefresh?: OAuthRefreshForwarder;
   private readonly killSettleWatchdogMs: number;
   private readonly killCloseGraceMs: number;
@@ -315,6 +324,7 @@ export class SessionRegistry {
     this.factory = opts.sdkQueryFactory;
     this.bufferCapacity = opts.bufferCapacity ?? DEFAULT_BUFFER_CAPACITY;
     this.onApprovalRequest = opts.onApprovalRequest;
+    this.onSubagentModelAccessRequest = opts.onSubagentModelAccessRequest;
     this.onOAuthRefresh = opts.onOAuthRefresh;
     this.killSettleWatchdogMs = opts.killSettleWatchdogMs ?? DEFAULT_KILL_SETTLE_WATCHDOG_MS;
     this.killCloseGraceMs = opts.killCloseGraceMs ?? DEFAULT_KILL_CLOSE_GRACE_MS;
@@ -484,8 +494,34 @@ export class SessionRegistry {
           }
         : undefined;
 
+    const resolveSubagentModelAccess = this.onSubagentModelAccessRequest
+      ? async (toolName: string, toolInput: unknown): Promise<SubagentModelAccessResult & { model?: string }> => {
+          const model = effectiveSubagentModel(
+            opts.env.CLAUDE_CODE_SUBAGENT_MODEL,
+            toolName,
+            toolInput,
+          );
+          if (!model) return { status: 'unknown' };
+          try {
+            const result = await this.onSubagentModelAccessRequest!(opts.sessionId, {
+              sessionId: opts.sessionId,
+              model,
+            });
+            return { ...result, model };
+          } catch (err) {
+            this.logger.warn('subagent model access preflight unavailable — allowing', {
+              sessionId: opts.sessionId,
+              model,
+              error: (err as Error).message,
+            });
+            return { status: 'unknown', model };
+          }
+        }
+      : undefined;
+
     const hooks = createToolGuardHooks(
       opts.toolGuards,
+      resolveSubagentModelAccess,
       () => sessionRef?.toolGuardSelectionText ?? '',
       () => sessionRef?.toolGuardMcpServerNames ?? EMPTY_MCP_SERVER_NAMES,
       (toolName, guard) => {
@@ -1160,13 +1196,42 @@ function findDeniedToolGuard(
   return guard;
 }
 
+function normalizeSubagentModel(model: string): string {
+  const normalized = model.trim().toLowerCase();
+  return normalized.endsWith('[1m]')
+    ? normalized.slice(0, -'[1m]'.length)
+    : normalized;
+}
+
+function effectiveSubagentModel(
+  forcedModel: string | undefined,
+  toolName: string,
+  toolInput: unknown,
+): string | undefined {
+  if (toolName !== 'Agent' && toolName !== 'Task') return undefined;
+  const input = typeof toolInput === 'object' && toolInput !== null
+    ? toolInput as Record<string, unknown>
+    : {};
+  const requested = typeof input.model === 'string' ? input.model : '';
+  const effectiveModel = normalizeSubagentModel(forcedModel ?? requested);
+  return !effectiveModel || effectiveModel === 'inherit' ? undefined : effectiveModel;
+}
+
+function subagentModelDenialReason(model: string): string {
+  return `Subagent model "${model}" is not available from the current account and provider. Choose an available model, or remove the unavailable override from the Agent call or Subagent Model setting.`;
+}
+
 function createToolGuardHooks(
   toolGuards: readonly QueryToolGuard[] | undefined,
+  resolveSubagentModelAccess: ((
+    toolName: string,
+    toolInput: unknown,
+  ) => Promise<SubagentModelAccessResult & { model?: string }>) | undefined,
   getSelectionText: () => string,
   getMcpServerNames: () => ReadonlySet<string>,
   onDeny: (toolName: string, guard: QueryToolGuard) => void,
 ): SdkHooks | undefined {
-  if (!toolGuards || toolGuards.length === 0) return undefined;
+  if ((!toolGuards || toolGuards.length === 0) && !resolveSubagentModelAccess) return undefined;
 
   const guardTool: SdkHookCallback = async (rawInput) => {
     if (typeof rawInput !== 'object' || rawInput === null) return { continue: true };
@@ -1175,6 +1240,18 @@ function createToolGuardHooks(
       return { continue: true };
     }
     const toolName = input.tool_name;
+    const modelAccess = await resolveSubagentModelAccess?.(toolName, input.tool_input);
+    if (modelAccess?.status === 'denied' && modelAccess.model) {
+      return {
+        continue: true,
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason: modelAccess.reason?.trim()
+            || subagentModelDenialReason(modelAccess.model),
+        },
+      };
+    }
     const guard = findDeniedToolGuard(
       toolGuards,
       toolName,

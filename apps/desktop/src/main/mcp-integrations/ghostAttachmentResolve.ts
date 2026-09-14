@@ -5,11 +5,11 @@
  * 三层归一化:
  *   1. imageCacheStore.resolveSessionImageLenient —— 规范 xdt-image 地址、
  *      缓存内绝对路径、丢会话段地址(历史会话图缓存);
- *   2. 媒体总仓 blob —— 聊天附件迁总仓(cindy-media)后,新消息里用户图的
+ *   2. 媒体总仓 blob —— 聊天附件或当前 Agent 工具结果进入总仓(cindy-media)后,
  *      落盘身份就是总仓 blob,模型手里的地址是 blob 绝对路径(prompt 附件
  *      路径透传)或 cindy-media://blobs/ 地址。绝对路径按文件名解出指纹后
  *      用 resolveHashRef 反推规范路径逐字节比对(分桶目录 = 指纹前两位),
- *      杜绝构造路径;过户语义是"用户的图",mime 限 image/*;
+ *      杜绝构造路径;媒体类型与扩展名由 blobStore 白名单和账本共同约束;
  *   3. maker-core 缩图缓存(默认 os.tmpdir()/maker-core-image-resize)——
  *      大图(典型:截图)送进模型前被 image-resizer 透明替换为缩图副本,
  *      prompt 里的 @mention 只有副本路径(claude-code/index.ts),模型手上
@@ -39,9 +39,9 @@ const RESIZE_CACHE_MIME_BY_EXT: Record<string, string> = {
  * 媒体总仓 blob 的两种写法 → 磁盘位置;不合格返回 null(由调用方回落其它层)。
  * 两种写法都收敛到 resolveHashRef 的规范校验(指纹 64 位 hex + 扩展名白名单 +
  * 落在字节仓内的前缀双保险);绝对路径额外要求与按指纹反推的规范路径完全一致
- * (win32 大小写不敏感比较),文件必须真实存在,mime 限 image/*(过户 = 用户的图)。
+ * (win32 大小写不敏感比较),文件必须真实存在。类型由 resolveHashRef 白名单判定。
  */
-function resolveCindyMediaBlobImage(
+function resolveCindyMediaBlob(
   input: string,
 ): { absPath: string; mimeType: string; blobHash: string } | null {
   let hash: string;
@@ -76,7 +76,6 @@ function resolveCindyMediaBlobImage(
         : canonical.absPath === abs;
     if (!eq) return null;
   }
-  if (!canonical.mimeType.startsWith('image/')) return null;
   if (!fs.existsSync(canonical.absPath)) return null;
   return { absPath: canonical.absPath, mimeType: canonical.mimeType, blobHash: hash };
 }
@@ -93,7 +92,7 @@ export function resolveGhostAttachmentUrl(
     return resolveSessionImageLenient(input);
   } catch (err) {
     if (typeof input === 'string' && !input.includes('\0')) {
-      const blob = resolveCindyMediaBlobImage(input);
+      const blob = resolveCindyMediaBlob(input);
       if (blob) return blob;
     }
     if (typeof input === 'string' && !input.includes('\0') && path.isAbsolute(input)) {

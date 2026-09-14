@@ -346,8 +346,8 @@ export const LOGIN_PHONE_SPLASH_SPINNER_SIZE = 64;
 
 /**
  * 纯函数:物理 viewport → 登录 surface 构图(§3.6 断点 + 三构图布局统一出口)。
- * phone 分支复用 resolveLoginStage 两档插值;splash 簇偏移 = demo phoneStage
- * off = round((designHeight - cindy.h)/2 - cindy.y),spinner 居字标下方 44。
+ * phone 分支复用 resolveLoginStage 两档插值;横屏 splash 簇按实际视口高度居中
+ * (先除以 scale 换回 stage 坐标),竖屏沿用设计高,spinner 居字标下方 44。
  */
 export function resolveLoginSurface(
   viewportWidth: number,
@@ -361,8 +361,13 @@ export function resolveLoginSurface(
     return padSurface(mode, LOGIN_PAD_LANDSCAPE_STAGE, viewportWidth, viewportHeight);
   }
   const stage = resolveLoginStage(viewportWidth, viewportHeight);
+  // designHeight 的上下限只约束登录构图。横屏时它可能高于可见视口，
+  // 用它居中会把启动立绘、字标和 spinner 一起推到屏幕下方。
+  const splashHeight = viewportWidth > viewportHeight
+    ? viewportHeight / stage.scale
+    : stage.designHeight;
   const splashOffset = Math.round(
-    (stage.designHeight - stage.cindy.h) / 2 - stage.cindy.y,
+    (splashHeight - stage.cindy.h) / 2 - stage.cindy.y,
   );
   return {
     mode,
@@ -447,6 +452,28 @@ export const LOGIN_LOADING_RING = { x: 308, yBrowser: 158, yPreparing: 193, size
 export const LOGIN_TEXT_LINK = { x: 70, y: 238, width: 540, height: 50, font: 20, lineHeight: LOGIN_COPY_LINE_HEIGHT } as const;
 /** sso-org 帮助行槽顶:输入框底 238+6 呼吸间距,两行至 290 < 主按钮 300(DESIGN.md §16.2 折行分级 2,与桌面 SSO_ORG_HINT 同值)。 */
 export const LOGIN_SSO_ORG_HINT_TOP = 244;
+/**
+ * 最近组织浮层：紧贴输入框下沿并与输入框等宽，作为浮层覆盖后续提示与主按钮。
+ * 它与输入框同处登录组坐标系，phone 短屏/长屏与 pad 都随各自 surface scale
+ * 一起移动；最大高度收在手机 440 高面板内，其余条目在无可见滚动条的浮层内滚动。
+ */
+export const LOGIN_SSO_ORG_HISTORY = {
+  x: LOGIN_CONTROL.x,
+  y: LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8,
+  width: LOGIN_CONTROL.width,
+  maxHeight:
+    LOGIN_ERROR_TEXT.y +
+    LOGIN_ERROR_TEXT.height -
+    (LOGIN_CONTROL.inputY + LOGIN_CONTROL.height + 8) -
+    10,
+  rowMinHeight: 88,
+  radius: 22,
+  rowRadius: 16,
+  font: 20,
+  lineHeight: LOGIN_COPY_LINE_HEIGHT,
+  paddingX: LOGIN_CONTROL.textPadLeft,
+  paddingY: 16,
+} as const;
 
 /**
  * 协议同意行(consent PR;figma 600:660「服务条款」行,与桌面 CONSENT_ROW 同参数源):

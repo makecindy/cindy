@@ -35,7 +35,7 @@ describe("startup splash overlay", () => {
     const index = read("app/index.tsx");
 
     expect(layout).toContain("if (!otaReady) {\n    return null;\n  }");
-    expect(layout).toContain("if (!channel.ready) return null;");
+    expect(layout).toContain("if (!channelGate.ready) return null;");
     expect(index).toContain("if (!auth.initialized) return null;");
     expect(index).not.toContain('variant="splash"');
   });

@@ -45,6 +45,16 @@ function okImage(dataUrl = 'data:image/png;base64,AAA') {
   return { isEmpty: () => false, toDataURL: () => dataUrl };
 }
 
+async function withPlatform<T>(platform: NodeJS.Platform, run: () => Promise<T>): Promise<T> {
+  const descriptor = Object.getOwnPropertyDescriptor(process, 'platform');
+  Object.defineProperty(process, 'platform', { ...descriptor, value: platform });
+  try {
+    return await run();
+  } finally {
+    if (descriptor) Object.defineProperty(process, 'platform', descriptor);
+  }
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   __clearFileThumbnailCacheForTest();
@@ -105,6 +115,31 @@ describe('readFileThumbnail — 授权边界', () => {
 });
 
 describe('readFileThumbnail — 兜底与缓存', () => {
+  it.each(['.md', '.markdown', '.mdown', '.mkd', '.mdx', '.MD'])(
+    'Windows Markdown %s 不进入会阻塞窗口的 Shell 缩略图链,保留字节数供现有图标 fallback 使用',
+    async (ext) => {
+      // Win10 实测:createThumbnailFromPath 对极小 .md 会阻塞 Electron main event loop,
+      // 连同进程的 5s timer 都无法运行;Promise.race 的超时因此无法解冻窗口。
+      await withPlatform('win32', async () => {
+        await expect(readFileThumbnail({ path: `/tmp/notes${ext}`, size: 80 })).resolves.toEqual({
+          dataUrl: null,
+          byteSize: 10,
+        });
+      });
+      expect(createThumbnailFromPath).not.toHaveBeenCalled();
+    },
+  );
+
+  it('macOS Markdown 继续走 QuickLook 内容预览', async () => {
+    await withPlatform('darwin', async () => {
+      await expect(readFileThumbnail({ path: '/tmp/notes.md', size: 80 })).resolves.toEqual({
+        dataUrl: 'data:image/png;base64,AAA',
+        byteSize: 10,
+      });
+    });
+    expect(createThumbnailFromPath).toHaveBeenCalledTimes(1);
+  });
+
   it('系统服务抛错时 dataUrl 为 null,不把异常抛给 renderer', async () => {
     createThumbnailFromPath.mockRejectedValue(new Error('unsupported'));
     await expect(readFileThumbnail({ path: '/tmp/a.zzz', size: 80 })).resolves.toEqual({

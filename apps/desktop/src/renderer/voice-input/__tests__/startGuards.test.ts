@@ -3,6 +3,9 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { resolveVoiceInputStartGuards } from '../startGuards';
 
 const grantedPermission = { ok: true as const, status: 'granted' };
+type PermissionSnapshot =
+  | { ok: true; status: string }
+  | { ok: false; status: string; error: string };
 const ready = {
   ok: true,
   provider: 'litellm',
@@ -11,7 +14,10 @@ const ready = {
   settingsTab: 'api-keys' as const,
 };
 
-function stubVoiceInputApis(platform: 'darwin' | 'win32') {
+function stubVoiceInputApis(
+  platform: 'darwin' | 'win32',
+  microphonePermission: PermissionSnapshot = grantedPermission,
+) {
   const getUserMedia = vi.fn();
   const setRendererMicrophonePermissionVerified = vi.fn(async () => ({ ok: true as const }));
   const requestMicrophonePermission = vi.fn();
@@ -22,7 +28,7 @@ function stubVoiceInputApis(platform: 'darwin' | 'win32') {
     electronAPI: {
       platform,
       voiceInput: {
-        getMicrophonePermissionCached: vi.fn(() => grantedPermission),
+        getMicrophonePermissionCached: vi.fn(() => microphonePermission),
         getSystemPermissionsCached: vi.fn(() => ({
           microphone: grantedPermission,
           inputMonitoring: grantedPermission,
@@ -51,8 +57,26 @@ beforeEach(() => {
 });
 
 describe('resolveVoiceInputStartGuards', () => {
-  it('revalidates a positive Windows cache before allowing voice input to start', async () => {
+  it('uses a positive Windows permission cache without opening a probe stream', async () => {
     const apis = stubVoiceInputApis('win32');
+    const result = await resolveVoiceInputStartGuards();
+
+    expect(result).toMatchObject({
+      ok: true,
+      permission: grantedPermission,
+      permissionSource: 'cache',
+    });
+    expect(apis.getUserMedia).not.toHaveBeenCalled();
+    expect(apis.setRendererMicrophonePermissionVerified).not.toHaveBeenCalled();
+  });
+
+  it('refreshes a missing Windows permission cache before allowing voice input to start', async () => {
+    const unknownPermission = {
+      ok: false as const,
+      status: 'unknown',
+      error: 'Microphone permission is required for voice input. Enable it in Windows Settings.',
+    };
+    const apis = stubVoiceInputApis('win32', unknownPermission);
     const denial = {
       ok: false as const,
       status: 'denied',
@@ -76,27 +100,6 @@ describe('resolveVoiceInputStartGuards', () => {
     });
     expect(apis.getUserMedia).toHaveBeenCalledWith({ audio: true });
     expect(apis.setRendererMicrophonePermissionVerified).toHaveBeenCalledWith(false);
-  });
-
-  it('allows Windows voice input after renderer permission is granted', async () => {
-    const apis = stubVoiceInputApis('win32');
-    const stop = vi.fn();
-    apis.getUserMedia.mockResolvedValue({ getTracks: () => [{ stop }] });
-    apis.getSystemPermissions.mockResolvedValue({
-      microphone: grantedPermission,
-      inputMonitoring: grantedPermission,
-      accessibility: grantedPermission,
-    });
-
-    const result = await resolveVoiceInputStartGuards();
-
-    expect(result).toMatchObject({
-      ok: true,
-      permission: grantedPermission,
-      permissionSource: 'async',
-    });
-    expect(stop).toHaveBeenCalledOnce();
-    expect(apis.setRendererMicrophonePermissionVerified).toHaveBeenCalledWith(true);
   });
 
   it('keeps trusting a positive macOS cache on the start path', async () => {

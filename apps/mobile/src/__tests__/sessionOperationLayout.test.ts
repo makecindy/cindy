@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
+import { i18n } from "@/i18n";
 import {
   buildSessionOperationLayout,
   composerDisabledReasonI18nKey,
 } from "@/session/sessionOperationLayout";
+
+beforeAll(async () => {
+  await i18n.changeLanguage("zh-CN");
+});
 
 describe("session operation layout", () => {
   it("keeps the footer empty except the resync hint when the session is not synchronized", () => {

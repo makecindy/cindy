@@ -30,12 +30,15 @@ import {
 import { AttentionDot } from '@/components/sidebar/AttentionDot';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { useSidebarCardMode } from '@/hooks/useSidebarCardMode';
+import { Tip } from '@/components/ui/tooltip';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import { projectIdentityKeyForSession } from '../lib/projectGrouping';
 import { getSessionDisplayTitle } from '../lib/sessionDisplayTitle';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { formatSidebarTime } from '../lib/formatSidebarTime';
 import { railPanelStore, type RailPanelSection } from './railPanelStore';
+import { resolveSessionCardBody } from './sessionCardPreview';
 
 /** 预览卡宽度(px)——旧 RailFlyout 同宽。 */
 const PREVIEW_WIDTH = 208;
@@ -125,7 +128,13 @@ function SessionPreviewCard({ preview }: { preview: PreviewState }) {
   }, [preview]);
 
   const { session, isRunning, hasUnread } = preview;
-  const body = session.summary ?? session.preview ?? null;
+  const { mode: pinnedViewMode } = useSidebarCardMode();
+  const body = resolveSessionCardBody({
+    variant: pinnedViewMode === 'card' ? 'card' : 'list',
+    pinned: session.pinnedAt != null,
+    summary: session.summary,
+    preview: session.preview,
+  });
   const meta = [
     formatSidebarTime(session.updatedAt, t),
     hasUnread ? t('ccAgent.sidebar.railUnreadHint') : null,
@@ -354,7 +363,7 @@ export function RailNav({
                 // 反相胶囊主题下混用功能钮 chip-bg 会得到白字浮浅灰的断层)。
                 isActive
                   ? 'bg-sidebar-item-active border border-[var(--sidebar-item-active-border)]'
-                  : 'text-[hsl(var(--titlebar-icon))] group-hover/pin:bg-[var(--update-btn-hover)]',
+                  : 'text-[hsl(var(--titlebar-icon))] group-hover/pin:bg-sidebar-item-hover',
               )}
             >
               <SessionStatusIcon
@@ -398,48 +407,53 @@ export function RailNav({
           ['dialogues', <MessageCircle key="i" size={18} aria-hidden />, dialoguesAgg],
         ] as const
       ).map(([key, icon, agg]) => (
-        <button
+        <Tip
           key={key}
-          data-rail-panel-trigger={key}
-          aria-label={t(`ccAgent.sidebar.railNav.${key}`)}
-          title={t(`ccAgent.sidebar.railNav.${key}`)}
-          aria-haspopup="menu"
-          aria-expanded={panelState.openSection === key}
-          // 同 section 已打开时 hover 不重复 open:重复调用会把键盘打开态
-          // (openedViaKeyboard)覆写成 false、并清掉已展开的项目三级,破坏
-          // popover 显式关闭契约(copilot review);锚点不变,重开本无意义。
-          onMouseEnter={(e) => {
-            if (panelState.openSection !== key) {
-              openSectionAt(key, e.currentTarget);
-            } else {
-              // 不重开,但要取消可能在途的收回计时(离开瓷砖 120ms 内折返;
-              // copilot review)——全局 pointermove 保活通常已覆盖,这里兜底。
-              railPanelStore.cancelClose();
-            }
-          }}
-          onMouseLeave={() => railPanelStore.scheduleClose()}
-          // 键盘激活(Enter/Space 的合成 click,detail===0):按 popover 焦点契约
-          // 打开——焦点移入面板、hover 收回让位、显式关闭(codex review)。
-          onClick={(e) => openSectionAt(key, e.currentTarget, e.detail === 0)}
-          className={cn(
-            'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors duration-150',
-            panelState.openSection === key
-              ? 'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]'
-              : 'text-[hsl(var(--titlebar-icon))] hover:bg-[var(--update-btn-hover)]',
-          )}
+          text={t(`ccAgent.sidebar.railNav.${key}`)}
+          side="right"
+          controlledOpen={panelState.openSection === key ? false : undefined}
         >
-          <span
+          <button
+            data-rail-panel-trigger={key}
+            aria-label={t(`ccAgent.sidebar.railNav.${key}`)}
+            aria-haspopup="menu"
+            aria-expanded={panelState.openSection === key}
+            // 同 section 已打开时 hover 不重复 open:重复调用会把键盘打开态
+            // (openedViaKeyboard)覆写成 false、并清掉已展开的项目三级,破坏
+            // popover 显式关闭契约(copilot review);锚点不变,重开本无意义。
+            onMouseEnter={(e) => {
+              if (panelState.openSection !== key) {
+                openSectionAt(key, e.currentTarget);
+              } else {
+                // 不重开,但要取消可能在途的收回计时(离开瓷砖 120ms 内折返;
+                // copilot review)——全局 pointermove 保活通常已覆盖,这里兜底。
+                railPanelStore.cancelClose();
+              }
+            }}
+            onMouseLeave={() => railPanelStore.scheduleClose()}
+            // 键盘激活(Enter/Space 的合成 click,detail===0):按 popover 焦点契约
+            // 打开——焦点移入面板、hover 收回让位、显式关闭(codex review)。
+            onClick={(e) => openSectionAt(key, e.currentTarget, e.detail === 0)}
             className={cn(
-              'inline-flex',
-              agg.running && 'text-[var(--status-bar-accent)] session-status-breathing',
+              'relative flex h-9 w-9 shrink-0 items-center justify-center rounded-full transition-colors duration-150',
+              panelState.openSection === key
+                ? 'bg-[var(--chat-input-chip-bg)] text-[var(--msg-assistant-text)]'
+                : 'text-[hsl(var(--titlebar-icon))] hover:bg-sidebar-item-hover',
             )}
           >
-            {icon}
-          </span>
-          {agg.dotTone && (
-            <AttentionDot size={6} tone={agg.dotTone} className="absolute right-1.5 top-1.5" />
-          )}
-        </button>
+            <span
+              className={cn(
+                'inline-flex',
+                agg.running && 'text-[var(--status-bar-accent)] session-status-breathing',
+              )}
+            >
+              {icon}
+            </span>
+            {agg.dotTone && (
+              <AttentionDot size={6} tone={agg.dotTone} className="absolute right-1.5 top-1.5" />
+            )}
+          </button>
+        </Tip>
       ))}
 
       {preview && <SessionPreviewCard preview={preview} />}

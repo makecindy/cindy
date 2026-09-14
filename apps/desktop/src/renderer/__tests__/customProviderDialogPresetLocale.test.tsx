@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, createEvent, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderPreset } from '@cindy/model-providers';
+import type { PiModelApi, ProviderPreset } from '@cindy/model-providers';
 
 const i18nState = vi.hoisted(() => ({ language: 'zh-TW' }));
 
@@ -24,7 +24,30 @@ vi.mock('@/lib/customProviderId', () => ({
 }));
 
 vi.mock('@/lib/customProviders', () => ({
+  setCustomProviderModelPiApi: vi.fn(
+    (models: Array<Record<string, unknown>>, index: number, piApi?: string) =>
+      models.map((model, modelIndex) => {
+        if (modelIndex !== index) return model;
+        const next = { ...model };
+        if (piApi) next.piApi = piApi;
+        else delete next.piApi;
+        return next;
+      }),
+  ),
   createCustomProvider: vi.fn(async () => undefined),
+  customProviderWireProtocolForSave: vi.fn(
+    (agent: string, wireProtocol: string, defaultWireProtocol: string) =>
+      agent === 'pi' || wireProtocol !== defaultWireProtocol ? wireProtocol : undefined,
+  ),
+  piCatalogProviderIdAfterRouteEdit: (
+    _agent: string,
+    previous: { baseUrl: string; wireProtocol: string; piCatalogProviderId?: string },
+    next: { baseUrl: string; wireProtocol: string; piCatalogProviderId?: string },
+  ) =>
+    next.piCatalogProviderId === previous.piCatalogProviderId &&
+    (next.baseUrl !== previous.baseUrl || next.wireProtocol !== previous.wireProtocol)
+      ? undefined
+      : next.piCatalogProviderId,
   readCustomProviderKey: vi.fn(),
   replaceCustomProviderModelId: vi.fn(),
   setCustomProviderModelReasoning: vi.fn(),
@@ -33,7 +56,9 @@ vi.mock('@/lib/customProviders', () => ({
   updateCustomProvider: vi.fn(),
 }));
 
-import { CustomProviderDialog } from '@/components/settings/CustomProviderDialog';
+import {
+  ProviderConnectionDialog,
+} from '@/components/settings/ProviderConnectionDialog';
 import { createCustomProvider } from '@/lib/customProviders';
 
 const localizedPreset: ProviderPreset = {
@@ -45,7 +70,53 @@ const localizedPreset: ProviderPreset = {
   runtimes: {
     codex: {
       baseUrl: 'http://127.0.0.1:4000/v1',
-      models: [{ id: 'local-model', name: 'Local Model' }],
+      models: [
+        {
+          id: 'local-model',
+          name: 'Local Model',
+          route: {
+            baseUrl: 'http://127.0.0.1:4000/v1',
+            wireProtocol: 'openai-responses',
+            requestPath: '/responses',
+          },
+        },
+      ],
+    },
+  },
+};
+
+const piProtocolPreset: ProviderPreset = {
+  id: 'pi-protocol-preset',
+  name: 'PI Protocol Preset',
+  nameEn: 'PI Protocol Preset',
+  authMethod: 'none',
+  runtimes: {
+    pi: {
+      baseUrl: 'http://127.0.0.1:4001/v1',
+      wireProtocol: 'openai-responses',
+      models: [
+        {
+          id: 'deepseek-v4-pro',
+          name: 'DeepSeek V4 Pro',
+          piApi: 'openai-responses',
+        },
+      ],
+    },
+  },
+};
+
+const legacyMissingPiProtocolPreset: ProviderPreset = {
+  id: 'legacy-missing-pi-protocol',
+  name: 'Legacy Missing Pi Protocol',
+  authMethod: 'none',
+  runtimes: {
+    'claude-code': {
+      baseUrl: 'http://127.0.0.1:4010/anthropic',
+      models: [{ id: 'model-a', name: 'Model A' }],
+    },
+    pi: {
+      baseUrl: 'http://127.0.0.1:4010/pi',
+      models: [{ id: 'model-a', name: 'Model A' }],
     },
   },
 };
@@ -53,13 +124,26 @@ const localizedPreset: ProviderPreset = {
 function renderDialog(onClose = vi.fn()) {
   return {
     onClose,
-    ...render(<CustomProviderDialog onSaved={vi.fn()} onClose={onClose} existingIds={[]} />),
+    ...render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={onClose} existingIds={[]} />),
   };
 }
 
-// jsdom 的 KeyboardEvent.keyCode 只读且恒为 0。fireEvent 会再造一发事件，
-// Windows CI 上 229 赋完又丢，IME Escape 被当成普通关闭键。
-// 必须对同一条原生事件 dispatch，监听器读到的才是我们钉上的 keyCode。
+async function findReadyPresetTrigger() {
+  const trigger = await screen.findByRole('button', {
+    name: 'settings.providers.custom.presets.label',
+  });
+  // The dialog moves focus in rAF after mounting. Opening the Radix Popover before
+  // that focus settles can immediately dismiss it and leave tests using a stale node.
+  await waitFor(() => {
+    expect(document.activeElement).toBe(
+      screen.getByPlaceholderText('settings.providers.custom.fields.namePlaceholder'),
+    );
+  });
+  return trigger;
+}
+
+// jsdom exposes keyCode as read-only. Testing Library's keyDown helper can recreate
+// the event and lose 229 on Windows, so dispatch the exact native event we configure.
 function dispatchEscape(
   target: Document | Element,
   init: { isComposing?: boolean; keyCode?: number } = {},
@@ -83,26 +167,12 @@ function dispatchEscape(
   target.dispatchEvent(event);
 }
 
-function overlayOf(dialog: HTMLElement): HTMLElement {
-  const overlay = dialog.parentElement;
-  if (!overlay) throw new Error('dialog overlay is missing');
-  return overlay;
-}
-
-function pointerDownOn(element: Element) {
-  element.dispatchEvent(
-    new PointerEvent('pointerdown', {
-      button: 0,
-      bubbles: true,
-      cancelable: true,
-    }),
-  );
-}
-
 beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
-      listProviderPresets: vi.fn(async () => ({ presets: [localizedPreset] })),
+      listProviderPresets: vi.fn(async () => ({
+        presets: [localizedPreset, piProtocolPreset, legacyMissingPiProtocolPreset],
+      })),
       fetchProviderModels: vi.fn(async () => ({
         ok: true,
         models: [
@@ -119,21 +189,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('CustomProviderDialog preset locale ownership', () => {
-  it('keeps keyCode 229 on the native Escape event jsdom delivers', () => {
-    let seen = 0;
-    const onKeyDown = (event: KeyboardEvent) => {
-      seen = event.keyCode;
-    };
-    document.addEventListener('keydown', onKeyDown);
-    try {
-      dispatchEscape(document, { keyCode: 229 });
-    } finally {
-      document.removeEventListener('keydown', onKeyDown);
-    }
-    expect(seen).toBe(229);
-  });
-
+describe('ProviderConnectionDialog preset locale ownership', () => {
   it.each([
     ['zh-TW', '繁體供應商'],
     ['en', 'English Provider'],
@@ -143,17 +199,17 @@ describe('CustomProviderDialog preset locale ownership', () => {
       i18nState.language = locale;
       renderDialog();
 
-      const trigger = await screen.findByRole('button', {
-        name: 'settings.providers.custom.presets.label',
-      });
+      const trigger = await findReadyPresetTrigger();
       expect(trigger.textContent).toContain('settings.providers.custom.presets.placeholder');
 
       fireEvent.click(trigger);
       const option = await screen.findByRole('option', { name: expectedName });
       fireEvent.click(option);
 
-      expect(trigger.textContent).toContain(expectedName);
-      expect(screen.getByDisplayValue(expectedName)).not.toBeNull();
+      await waitFor(() => {
+        expect(trigger.textContent).toContain(expectedName);
+        expect(screen.getByDisplayValue(expectedName)).not.toBeNull();
+      });
 
       fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
       await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
@@ -161,13 +217,22 @@ describe('CustomProviderDialog preset locale ownership', () => {
     },
   );
 
+  it('skips a legacy preset Pi runtime instead of guessing Chat', async () => {
+    renderDialog();
+    const trigger = await findReadyPresetTrigger();
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: 'Legacy Missing Pi Protocol' }));
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toBeUndefined();
+  });
+
   it('dismisses only the topmost preset menu on Escape and preserves unsaved form edits', async () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
 
-    const trigger = await screen.findByRole('button', {
-      name: 'settings.providers.custom.presets.label',
-    });
+    const trigger = await findReadyPresetTrigger();
 
     const heading = screen.getByRole('heading', {
       name: 'settings.providers.custom.dialog.createTitle',
@@ -192,35 +257,152 @@ describe('CustomProviderDialog preset locale ownership', () => {
 
   it('dismisses only the topmost preset menu on a scrim gesture', async () => {
     i18nState.language = 'zh-TW';
-    const { onClose } = renderDialog();
+    const { container, onClose } = renderDialog();
 
-    const trigger = await screen.findByRole('button', {
-      name: 'settings.providers.custom.presets.label',
-    });
+    const trigger = await findReadyPresetTrigger();
     fireEvent.click(trigger);
-    expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+    const option = await screen.findByRole('option', { name: '繁體供應商' });
+    // 等 layout effect 把 childLayer 写进 childLayerRef。只等 option 出现不够:
+    // Windows CI 上 rAF 也可能早于 useLayoutEffect, 第一个 pointerDown 会关整表。
+    await waitFor(() => {
+      expect(option.isConnected).toBe(true);
+    });
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
 
-    const scrim = overlayOf(
-      screen.getByRole('dialog', { name: 'settings.providers.custom.dialog.createTitle' }),
-    );
-    pointerDownOn(scrim);
+    const scrim = container.firstElementChild as Element;
+    fireEvent.pointerDown(scrim);
     await waitFor(() => {
       expect(screen.queryByRole('option', { name: '繁體供應商' })).toBeNull();
     });
     expect(onClose).not.toHaveBeenCalled();
 
-    pointerDownOn(scrim);
-    await waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    fireEvent.pointerDown(scrim);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not consume runtime tab or input pointerdowns while a child layer is open', async () => {
+    i18nState.language = 'zh-TW';
+    const { onClose } = renderDialog();
+
+    const trigger = await screen.findByRole('button', {
+      name: 'settings.providers.custom.presets.label',
+    });
+    const openPresetMenu = async () => {
+      fireEvent.click(trigger);
+      expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+    };
+
+    await openPresetMenu();
+    const piTab = screen.getByRole('tab', {
+      name: 'settings.providers.custom.protocol.pi',
+    });
+    const tabPointerDown = createEvent.pointerDown(piTab, { button: 0 });
+    fireEvent(piTab, tabPointerDown);
+    expect(tabPointerDown.defaultPrevented).toBe(false);
+    fireEvent.click(piTab);
+    expect(piTab.getAttribute('aria-selected')).toBe('true');
+
+    await openPresetMenu();
+    const baseUrl = screen.getByPlaceholderText(
+      'settings.providers.custom.fields.baseUrlPlaceholder',
+    );
+    const inputPointerDown = createEvent.pointerDown(baseUrl, { button: 0 });
+    fireEvent(baseUrl, inputPointerDown);
+    expect(inputPointerDown.defaultPrevented).toBe(false);
+    fireEvent.change(baseUrl, { target: { value: 'https://runtime.example.test/v1' } });
+    expect((baseUrl as HTMLInputElement).value).toBe('https://runtime.example.test/v1');
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('keeps Cancel as a direct form dismissal without a duplicate top-right button', async () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
 
-    await screen.findByRole('button', { name: 'settings.providers.custom.presets.label' });
+    await findReadyPresetTrigger();
     fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.cancel' }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+
+
+  it('keeps an existing model route through fetch picker confirmation and save', async () => {
+    i18nState.language = 'zh-TW';
+    renderDialog();
+
+    const trigger = await findReadyPresetTrigger();
+    fireEvent.click(trigger);
+    fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.fetch.button' }));
+    await screen.findByRole('heading', {
+      name: 'settings.providers.custom.fetch.pickerTitle',
+    });
+    fireEvent.click(
+      screen.getByRole('button', { name: /settings\.providers\.custom\.fetch\.confirm/ }),
+    );
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('heading', {
+          name: 'settings.providers.custom.fetch.pickerTitle',
+        }),
+      ).toBeNull();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models[0]).toEqual({
+      discoveredMetadata: {},
+      nameExplicit: false,
+      id: 'local-model',
+      name: 'Local Model',
+      route: {
+        baseUrl: 'http://127.0.0.1:4000/v1',
+        wireProtocol: 'openai-responses',
+        requestPath: '/responses',
+      },
+    });
+  });
+
+  it.each([
+    ['settings.providers.custom.wireProtocol.piChat', 'openai-chat'],
+    ['settings.providers.custom.wireProtocol.piAnthropic', 'anthropic-messages'],
+  ] as const)(
+    'hides %s for a bound PI preset and preserves its model override',
+    async (buttonName, _wireProtocol) => {
+      i18nState.language = 'en';
+      renderDialog();
+
+      fireEvent.click(await findReadyPresetTrigger());
+      fireEvent.click(await screen.findByRole('option', { name: 'PI Protocol Preset' }));
+      const piTab = screen.getByRole('tab', { name: 'settings.providers.custom.protocol.pi' });
+      fireEvent.click(piTab);
+      await waitFor(() => expect(piTab.getAttribute('aria-selected')).toBe('true'));
+      expect(screen.queryByRole('button', { name: buttonName })).toBeNull();
+      fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
+
+      await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+      expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toMatchObject({
+        catalogPresetId: piProtocolPreset.id,
+        wireProtocol: 'openai-responses',
+        models: [
+          {
+            id: 'deepseek-v4-pro',
+            name: 'DeepSeek V4 Pro',
+            piApi: 'openai-responses',
+          },
+        ],
+      });
+    },
+  );
+
+
+
+
 
   it.each([
     ['isComposing', { isComposing: true }],
@@ -229,11 +411,12 @@ describe('CustomProviderDialog preset locale ownership', () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
 
-    const trigger = await screen.findByRole('button', {
-      name: 'settings.providers.custom.presets.label',
-    });
+    const trigger = await findReadyPresetTrigger();
     fireEvent.click(trigger);
     expect(await screen.findByRole('option', { name: '繁體供應商' })).not.toBeNull();
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
 
     dispatchEscape(document, eventInit);
     expect(screen.getByRole('option', { name: '繁體供應商' })).not.toBeNull();
@@ -244,9 +427,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
 
-    const trigger = await screen.findByRole('button', {
-      name: 'settings.providers.custom.presets.label',
-    });
+    const trigger = await findReadyPresetTrigger();
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
 
@@ -284,9 +465,7 @@ describe('CustomProviderDialog preset locale ownership', () => {
     i18nState.language = 'zh-TW';
     const { onClose } = renderDialog();
 
-    const trigger = await screen.findByRole('button', {
-      name: 'settings.providers.custom.presets.label',
-    });
+    const trigger = await findReadyPresetTrigger();
     fireEvent.click(trigger);
     fireEvent.click(await screen.findByRole('option', { name: '繁體供應商' }));
     fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.codex' }));

@@ -13,7 +13,7 @@ let focusListener:
   null;
 let installedGhosts: Array<{
   enabled: boolean;
-  manifest: { id: string; slots: string[] };
+  manifest: { id: string; iosSimulator?: true };
 }> = [];
 
 vi.mock('@/lib/secondaryWindow', () => ({ isSecondaryWindow: () => false }));
@@ -45,7 +45,7 @@ describe('iOS Simulator focus bridge', () => {
     installedGhosts = [
       {
         enabled: true,
-        manifest: { id: 'ios-simulator', slots: ['ios-simulator'] },
+        manifest: { id: 'ios-simulator', iosSimulator: true },
       },
     ];
     focusListener = null;
@@ -80,7 +80,7 @@ describe('iOS Simulator focus bridge', () => {
     installedGhosts = [
       {
         enabled: false,
-        manifest: { id: 'ios-simulator', slots: ['ios-simulator'] },
+        manifest: { id: 'ios-simulator', iosSimulator: true },
       },
     ];
     focusListener?.({ sessionId: 'session-a', instanceId: 'instance-a' });

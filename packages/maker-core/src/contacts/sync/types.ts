@@ -25,6 +25,21 @@ export interface ContactsStampedValue<T> {
   stamp: ContactsSyncStamp;
 }
 
+/** 一次确认写入时已知的同身份冲突成员指纹。 */
+export interface ContactsSyncConflictMembership {
+  platform: string;
+  normalizedValue: string;
+  membershipHash: string;
+}
+
+export interface ContactsSyncStatusValue extends ContactsStampedValue<ContactStatus> {
+  /**
+   * 跟随 status 写入，旧客户端会把未知字段随整个 stamped value 原样转发；
+   * 若旧客户端自己改写 status，则视为一次没有因果确认信息的新裁决。
+   */
+  acknowledgedConflicts?: ContactsSyncConflictMembership[];
+}
+
 export interface ContactsSyncContact {
   id: string;
   kind: ContactsStampedValue<ContactKind>;
@@ -33,7 +48,7 @@ export interface ContactsSyncContact {
   summary: ContactsStampedValue<string>;
   narrative: ContactsStampedValue<string>;
   agentNotes: ContactsStampedValue<string>;
-  status: ContactsStampedValue<ContactStatus>;
+  status: ContactsSyncStatusValue;
   source: ContactsStampedValue<ContactSource>;
   createdAt: ContactsStampedValue<string>;
   updatedAt: ContactsStampedValue<string>;

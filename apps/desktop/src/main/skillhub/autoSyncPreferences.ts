@@ -31,6 +31,8 @@ interface PreferenceStore {
   schemaVersion: 1;
   ignoredSkills: IgnoredSkill[];
   autoSyncCandidates: AutoSyncCandidateSkill[];
+  /** Offline removals affect shared device files until an explicit manual install. */
+  pendingOfflineUninstalls: string[];
 }
 
 interface ReadStoreResult {
@@ -47,7 +49,7 @@ function normalizeSkillName(name: string): string {
 }
 
 function emptyStore(): PreferenceStore {
-  return { schemaVersion: STORE_VERSION, ignoredSkills: [], autoSyncCandidates: [] };
+  return { schemaVersion: STORE_VERSION, ignoredSkills: [], autoSyncCandidates: [], pendingOfflineUninstalls: [] };
 }
 
 function parseStore(value: unknown): PreferenceStore {
@@ -95,7 +97,11 @@ function parseStore(value: unknown): PreferenceStore {
       });
     }
   }
+  const pending = (value as { pendingOfflineUninstalls?: unknown }).pendingOfflineUninstalls;
   return {
+    pendingOfflineUninstalls: Array.isArray(pending)
+      ? [...new Set(pending.filter((name): name is string => typeof name === 'string').map(normalizeSkillName).filter(Boolean))]
+      : [],
     schemaVersion: STORE_VERSION,
     ignoredSkills: Array.from(byName.values()),
     autoSyncCandidates: Array.from(byCandidate.values()),
@@ -145,21 +151,25 @@ function enqueueMutation(task: () => Promise<void>): Promise<void> {
   return next;
 }
 
-export async function listIgnoredAutoSyncSkills(userId: string): Promise<Set<string>> {
+export async function listIgnoredAutoSyncSkills(userId?: string): Promise<Set<string>> {
   const { store, resetFromError } = await readStoreResult({ resetOnError: true });
   if (resetFromError) {
     await writeStore(store);
   }
-  return new Set(store.ignoredSkills
+  return new Set([...store.pendingOfflineUninstalls, ...store.ignoredSkills
     .filter((skill) => skill.userId === userId)
-    .map((skill) => skill.name));
+    .map((skill) => skill.name)]);
 }
 
-export async function ignoreAutoSyncSkill(name: string, userId: string): Promise<void> {
+export async function ignoreAutoSyncSkill(name: string, userId?: string): Promise<void> {
   const normalized = normalizeSkillName(name);
-  if (!normalized || !userId) return;
+  if (!normalized) return;
   await enqueueMutation(async () => {
     const { store } = await readStoreResult({ resetOnError: true });
+    if (!userId) {
+      await writeStore({ ...store, pendingOfflineUninstalls: [...new Set([...store.pendingOfflineUninstalls, normalized])] });
+      return;
+    }
     const ignoredAt = Math.floor(Date.now() / 1000);
     const next = store.ignoredSkills.filter((skill) => !(skill.name === normalized && skill.userId === userId));
     next.push({ name: normalized, userId, ignoredAt });
@@ -167,14 +177,15 @@ export async function ignoreAutoSyncSkill(name: string, userId: string): Promise
   });
 }
 
-export async function clearIgnoredAutoSyncSkill(name: string, userId: string): Promise<void> {
+export async function clearIgnoredAutoSyncSkill(name: string, userId?: string): Promise<void> {
   const normalized = normalizeSkillName(name);
-  if (!normalized || !userId) return;
+  if (!normalized) return;
   await enqueueMutation(async () => {
     const { store, resetFromError } = await readStoreResult({ resetOnError: true });
     const next = store.ignoredSkills.filter((skill) => !(skill.name === normalized && skill.userId === userId));
-    if (!resetFromError && next.length === store.ignoredSkills.length) return;
-    await writeStore({ ...store, schemaVersion: STORE_VERSION, ignoredSkills: next });
+    const pending = store.pendingOfflineUninstalls.filter((name) => name !== normalized);
+    if (!resetFromError && next.length === store.ignoredSkills.length && pending.length === store.pendingOfflineUninstalls.length) return;
+    await writeStore({ ...store, schemaVersion: STORE_VERSION, ignoredSkills: next, pendingOfflineUninstalls: pending });
   });
 }
 
@@ -202,9 +213,9 @@ export async function recordAutoSyncCandidateSkills(
   });
 }
 
-export async function isKnownAutoSyncCandidateSkill(name: string, userId: string): Promise<boolean> {
+export async function isKnownAutoSyncCandidateSkill(name: string, userId?: string): Promise<boolean> {
   const normalized = normalizeSkillName(name);
-  if (!normalized || !userId) return false;
+  if (!normalized) return false;
   const store = await readStore();
-  return store.autoSyncCandidates.some((skill) => skill.userId === userId && skill.name === normalized);
+  return store.autoSyncCandidates.some((skill) => (!userId || skill.userId === userId) && skill.name === normalized);
 }

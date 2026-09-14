@@ -129,6 +129,7 @@ vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('@/lib/toast', () => ({ toast: { error: vi.fn() } }));
+vi.mock('@/components/ui/toast', () => ({ ToastContainer: () => null }));
 vi.mock('@/utils/ipcError', () => ({ extractIpcError: () => null }));
 vi.mock('lucide-react', () => ({
   PanelRight: () => null,
@@ -273,7 +274,7 @@ describe('reusable auxiliary window chrome', () => {
     render(<GhostPanelWindowLayout />);
 
     const mergeBack = screen.getByRole('button', { name: 'rightSidebar.window.mergeBack' });
-    expect(mergeBack.getAttribute('title')).toBe('rightSidebar.window.mergeBack');
+    expect(mergeBack.getAttribute('title')).toBeNull();
     expect(mergeBack.textContent).not.toContain('rightSidebar.window.mergeBack');
     fireEvent.click(mergeBack);
 
@@ -283,7 +284,7 @@ describe('reusable auxiliary window chrome', () => {
     );
   });
 
-  it('minimizes a detached plugin window into the main-window Ghost bubble', async () => {
+  it('minimizes a detached plugin window through the main-window restore flow', async () => {
     render(<GhostPanelWindowLayout />);
 
     fireEvent.click(screen.getByRole('button', { name: 'titleBar.minimize' }));

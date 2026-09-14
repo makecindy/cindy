@@ -183,6 +183,28 @@ describe('interaction shared model', () => {
     });
   });
 
+  it('marks auto-review unavailable handoffs so mobile can localize the confirmation copy', () => {
+    const presentation = buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-unavailable',
+      toolName: 'Bash',
+      description: 'Automatic review could not finish, so this action needs your confirmation.',
+      metadata: { autoReviewUnavailable: true },
+      input: { command: 'npx tsc --noEmit' },
+    });
+
+    expect(presentation.autoReviewUnavailable).toBe(true);
+    expect(presentation.description).toBe(
+      'Automatic review could not finish, so this action needs your confirmation.',
+    );
+    expect(buildPermissionReviewPresentation({
+      kind: 'permission',
+      requestId: 'p-plain',
+      toolName: 'Bash',
+      description: 'Allow this command?',
+    }).autoReviewUnavailable).toBe(false);
+  });
+
   it('builds ask question review presentation for mobile answer cards', () => {
     const presentation = buildAskQuestionReviewPresentation({
       currentIndex: 4,
@@ -236,12 +258,14 @@ describe('interaction shared model', () => {
         platform: 'darwin',
         arch: 'arm64',
         osVersion: 'fixture',
+        harness: 'Pi',
+        modelId: 'claude-sonnet-4-5',
       },
       uiLanguage: 'zh-CN',
     })).toEqual({
       bodyCharCount: 45,
       canSubmit: true,
-      envLabel: '0.0.0-mobile-e2e / darwin / arm64 / fixture / zh-CN',
+      envLabel: '0.0.0-mobile-e2e / darwin / arm64 / fixture / Pi / claude-sonnet-4-5 / zh-CN',
       issueTypeLabel: 'Bug',
       summary: {
         title: '草稿完整，可以确认提交',
@@ -438,7 +462,7 @@ describe('interaction shared model', () => {
     });
 
     expect(buildPendingInteractionQueuePresentation(interactions, { readOnly: true }).hint)
-      .toBe('协作只读模式，仅展示电脑端请求。');
+      .toBe('协同只读模式，仅展示电脑端请求。');
     expect(buildPendingInteractionQueuePresentation([])).toMatchObject({
       active: null,
       countLabel: '当前',
@@ -507,12 +531,24 @@ describe('interaction shared model', () => {
       kind: 'issue_confirm',
       requestId: 'i1',
       draft: { title: 'Bug', body: 'Steps', type: 'bug' },
-      env: { appVersion: '0.1.0', platform: 'darwin', arch: 'arm64' },
+      env: {
+        appVersion: '0.1.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        harness: 'Claude Code',
+        modelId: ' custom\nmodel ',
+      },
     });
 
     expect(payload).toMatchObject({
       draft: { title: 'Bug', body: 'Steps', type: 'bug' },
-      env: { appVersion: '0.1.0', platform: 'darwin', arch: 'arm64' },
+      env: {
+        appVersion: '0.1.0',
+        platform: 'darwin',
+        arch: 'arm64',
+        harness: 'Claude Code',
+        modelId: 'custom model',
+      },
     });
     expect(buildIssueConfirmDecision(true, payload!.draft, 'zh-CN')).toEqual({
       confirmed: true,

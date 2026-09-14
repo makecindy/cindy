@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 import {
   collectRestorableProjectKeys,
+  registerSidebarProjectRestoreHandler,
+  requestSidebarProjectRestore,
   restoreHiddenProjectIfPresent,
+  restoreSelectedHiddenProject,
 } from '@/features/cc-agent/lib/sidebarProjectRestore';
 import type { Session } from '@/lib/ccAgent.types';
 
@@ -98,6 +101,85 @@ describe('collectRestorableProjectKeys', () => {
     });
 
     expect(Array.from(keys)).toEqual([PROJECT_KEY]);
+  });
+
+  it('restores a persistent project with no visible tasks', async () => {
+    const keys = collectRestorableProjectKeys({
+      sessions: [],
+      persistentLocalProjects: [
+        {
+          workingDir: '/workspace/cindy',
+          lastUsedAt: '2026-08-02T08:00:00.000Z',
+          knownAgentKinds: [],
+        },
+      ],
+      lastActivityCutoff: null,
+      pinnedProjectKeys: new Set(),
+      vendorPredicate: null,
+      localPlatform: 'linux',
+    });
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreHiddenProjectIfPresent({
+        projectKey: PROJECT_KEY,
+        wasHiddenAtPickerOpen: true,
+        setProjectHidden: vi.fn().mockResolvedValue(true),
+        getCurrentProjectKeys: () => keys,
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('applies activity and vendor filters to unpinned persistent projects', () => {
+    const persistentLocalProjects = [
+      {
+        workingDir: '/workspace/cindy',
+        lastUsedAt: '2026-01-01T00:00:00.000Z',
+        knownAgentKinds: ['cc'],
+      },
+    ];
+
+    expect(
+      collectRestorableProjectKeys({
+        sessions: [],
+        persistentLocalProjects,
+        lastActivityCutoff: Date.parse('2026-08-01T00:00:00.000Z'),
+        pinnedProjectKeys: new Set(),
+        vendorPredicate: null,
+      }).has(PROJECT_KEY),
+    ).toBe(false);
+    expect(
+      collectRestorableProjectKeys({
+        sessions: [],
+        persistentLocalProjects,
+        lastActivityCutoff: null,
+        pinnedProjectKeys: new Set(),
+        vendorPredicate: (session) => session.agentKind === 'codex',
+      }).has(PROJECT_KEY),
+    ).toBe(false);
+  });
+
+  it('lets a pinned persistent project bypass activity and vendor filters', () => {
+    const keys = collectRestorableProjectKeys({
+      sessions: [],
+      persistentLocalProjects: [
+        {
+          workingDir: 'C:/Workspace/Cindy',
+          lastUsedAt: '2026-01-01T00:00:00.000Z',
+          knownAgentKinds: ['cc'],
+        },
+      ],
+      lastActivityCutoff: Date.parse('2026-08-01T00:00:00.000Z'),
+      pinnedProjectKeys: new Set(['local:c:/workspace/cindy']),
+      vendorPredicate: (session) => session.agentKind === 'codex',
+      localPlatform: 'win32',
+    });
+
+    expect(Array.from(keys)).toEqual(['local:C:/Workspace/Cindy']);
   });
 });
 
@@ -233,5 +315,123 @@ describe('restoreHiddenProjectIfPresent', () => {
 
     await expect(result).resolves.toBe(false);
     expect(ensureProjectIncluded).not.toHaveBeenCalled();
+  });
+});
+
+describe('restoreSelectedHiddenProject', () => {
+  it('unhides a selected project and admits it to an explicit Project filter', async () => {
+    const setProjectHidden = vi.fn().mockResolvedValue(true);
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set([PROJECT_KEY]),
+        setProjectHidden,
+        getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(true);
+
+    expect(setProjectHidden).toHaveBeenCalledWith(PROJECT_KEY, false);
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('skips hidden-state persistence but re-admits an already-visible project', async () => {
+    const setProjectHidden = vi.fn().mockResolvedValue(false);
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set(),
+        setProjectHidden,
+        getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(false);
+
+    expect(setProjectHidden).not.toHaveBeenCalled();
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('admits a newly selected path without acquiring the hidden-project write lock', async () => {
+    const setProjectHidden = vi.fn().mockResolvedValue(false);
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set(),
+        setProjectHidden,
+        getCurrentProjectKeys: () => new Set(),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(false);
+
+    expect(setProjectHidden).not.toHaveBeenCalled();
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+
+  it('finishes restoration when another window already cleared the hidden marker', async () => {
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: 'local:c:/workspace/cindy',
+        hiddenProjectKeys: new Set(['local:C:/Workspace/Cindy']),
+        setProjectHidden: vi.fn().mockResolvedValue(false),
+        getCurrentProjectKeys: () => new Set(['local:C:/Workspace/Cindy']),
+        ensureProjectIncluded,
+        localPlatform: 'win32',
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureProjectIncluded).toHaveBeenCalledWith('local:C:/Workspace/Cindy');
+  });
+
+  it('uses the selected path when the restored project has no remaining tasks', async () => {
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreSelectedHiddenProject({
+        projectKey: PROJECT_KEY,
+        hiddenProjectKeys: new Set([PROJECT_KEY]),
+        setProjectHidden: vi.fn().mockResolvedValue(true),
+        getCurrentProjectKeys: () => new Set(),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
+  });
+});
+
+describe('sidebar project restore coordinator', () => {
+  it('delegates selection restoration to the mounted sidebar owner', async () => {
+    const handler = vi.fn().mockResolvedValue(true);
+    const unregister = registerSidebarProjectRestoreHandler(handler);
+
+    await expect(requestSidebarProjectRestore(PROJECT_KEY)).resolves.toBe(true);
+    expect(handler).toHaveBeenCalledWith(PROJECT_KEY);
+
+    unregister();
+    await expect(requestSidebarProjectRestore(PROJECT_KEY)).resolves.toBe(false);
+  });
+
+  it('does not let an older cleanup unregister the current sidebar owner', async () => {
+    const unregisterFirst = registerSidebarProjectRestoreHandler(vi.fn().mockResolvedValue(false));
+    const currentHandler = vi.fn().mockResolvedValue(true);
+    const unregisterCurrent = registerSidebarProjectRestoreHandler(currentHandler);
+
+    unregisterFirst();
+    await expect(requestSidebarProjectRestore(PROJECT_KEY)).resolves.toBe(true);
+    expect(currentHandler).toHaveBeenCalledOnce();
+
+    unregisterCurrent();
   });
 });

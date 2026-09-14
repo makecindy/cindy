@@ -4,6 +4,7 @@ import {
   effectiveSourceIdForModel,
   findModelRegistryRoute,
   isModelSelectableForNewRoute,
+  isLocalOnlyProviderForAgent,
   type Catalog,
   type ProviderView,
 } from '@cindy/model-providers';
@@ -72,8 +73,8 @@ export async function readOrcaWorkerProviderRoutingContext(deps: {
         requiresExplicitRoute: providerRouteRequiresExplicitSelection(
           provider.routing[agent]?.authStrategy,
         ),
-        chatBridgedCodex:
-          agent === 'codex' && provider.routing[agent]?.wireProtocol === 'openai-chat',
+        localOnlyForSsh:
+          isLocalOnlyProviderForAgent(provider, agent),
       };
     });
 

@@ -12,9 +12,10 @@
  */
 
 import {
-  getModel,
+  findCatalogModel,
   isModelSelectableForNewRoute,
   isModelVisible,
+  isLocalOnlyProviderForAgent,
   providerOffersModel,
   providersForAgent,
   sessionModelSupportsFastMode,
@@ -28,12 +29,29 @@ import {
 import type { AgentCapabilities, ModelDescriptor } from '@/hooks/useAgentCapabilities';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels';
 
+/** Resolve a context window by the complete runtime route, never a first-wins model id. */
+export function resolveProviderModelContextWindow(params: {
+  providers: ProviderView[];
+  providerId: string;
+  modelId: string;
+  agentKind: AgentKind;
+}): number | undefined {
+  const { providers, providerId, modelId, agentKind } = params;
+  const provider = providersForAgent(providers, agentKind).find((entry) => entry.id === providerId);
+  return findCatalogModel(provider, modelId, agentKind)?.contextWindow;
+}
+
 /**
  * 按目标 `(provider, agent, model)` 读取 effort 能力。
  *
  * 不能复用 `deriveModelsFromProviders`：后者是 picker 的跨来源 union，按目录顺序
  * first-wins；同一模型 id 在内置来源与 BYOM 上的显式 effort 子集可以不同。运行时切换
  * 若读拍平条目，会把另一来源支持的档位写给目标 provider。
+ *
+ * 查找走 `findCatalogModel`(精确 id 优先,失配再按 bridge 前缀 / 裸 id 归一)。
+ * 不能只用 `getModel` 精确匹配:同一逻辑模型在 Pi 目录是 `grok-4.6`、在
+ * Codex/订阅目录是 `xai/grok-4.6`。精确匹配失败会让调用方把 efforts 收成空数组,
+ * 面板已解析好的 high 被 `resolveEffort` 占位成 low。
  */
 export function resolveProviderModelEfforts(params: {
   providers: ProviderView[];
@@ -43,7 +61,7 @@ export function resolveProviderModelEfforts(params: {
 }): Pick<ModelDescriptor, 'efforts' | 'defaultEffort'> | null {
   const { providers, providerId, modelId, agentKind } = params;
   const provider = providersForAgent(providers, agentKind).find((entry) => entry.id === providerId);
-  const model = provider ? getModel(provider, modelId, agentKind) : undefined;
+  const model = findCatalogModel(provider, modelId, agentKind);
   if (!model) return null;
   return { efforts: model.efforts, defaultEffort: model.defaultEffort };
 }
@@ -132,18 +150,16 @@ export function isDeviceModelVisible(
   );
 }
 
-/** Whether a provider relies on the local Responses-to-Chat handler for Codex. */
-export function isChatBridgedCodexProvider(provider: ProviderView): boolean {
-  return provider.routing?.codex?.wireProtocol === 'openai-chat';
-}
+export { isLocalOnlyProviderForAgent } from '@cindy/model-providers';
 
+/** Legacy name: the SSH filter covers both local bridges and independent accounts. */
 export function filterChatBridgedCodexProviders(
   providers: ProviderView[],
   agent: AgentKind,
   exclude: boolean,
 ): ProviderView[] {
-  return exclude && agent === 'codex'
-    ? providers.filter((provider) => !isChatBridgedCodexProvider(provider))
+  return exclude
+    ? providers.filter((provider) => !isLocalOnlyProviderForAgent(provider, agent))
     : providers;
 }
 
@@ -217,7 +233,9 @@ export function selectVisibleModels(params: {
    * 而是保留在清单中由调用方按 isSubscriptionDirectModel 标记禁用(置灰 + 原因提示)。
    * 远端 cc 不经本地 compat-proxy 的 responses-bridge,选了必失败;静默消失会让用户
    * 误以为订阅掉了。device-link 远程不受影响(被控端跑完整 app,其本地 proxy 上
-   * bridge 可用,模型清单本就来自被控端)。
+   * bridge 可用,模型清单本就来自被控端)。唯一例外是 Pi 的 OpenAI `[1m]` context
+   * profile:它依赖 Desktop 本地 subscription adapter 剥离 profile 后缀,SSH 没有等价
+   * 改写链,所以不向远程 Pi picker 发布。
    */
   excludeSubscriptionDirect?: boolean;
   /**
@@ -238,15 +256,21 @@ export function selectVisibleModels(params: {
     excludeSubscriptionDirect,
     excludeChatBridgedCodex,
   } = params;
-  // excludeSubscriptionDirect 不再过滤(见参数文档):行保留,准入由调用方按
-  // isSubscriptionDirectModel 打 disabled。保留参数是为了不破坏既有调用签名。
+  // 普通 subscription-direct 行继续保留,准入由调用方按 isSubscriptionDirectModel
+  // 打 disabled。Pi 的 `[1m]` profile 是仅本地可改写的 catalog identity,SSH 侧必须隐藏。
   const pass = (list: ModelDescriptor[]): ModelDescriptor[] => list;
-  const codexDeriveOpts = excludeChatBridgedCodex
-    ? { excludeProvider: isChatBridgedCodexProvider }
+  const deriveOpts = (agent: AgentKind) => excludeChatBridgedCodex
+    ? { excludeProvider: (provider: ProviderView) => isLocalOnlyProviderForAgent(provider, agent) }
     : undefined;
-  const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
-  const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
-  const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi'));
+  const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code', deriveOpts('claude-code')));
+  const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', deriveOpts('codex')));
+  const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi', deriveOpts('pi')))
+    .filter((model) => !(
+      excludeSubscriptionDirect === true &&
+      agentKind === 'pi' &&
+      model.id.startsWith('chatgpt/') &&
+      model.id.endsWith('[1m]')
+    ));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   if (agentKind === 'pi') return pi;

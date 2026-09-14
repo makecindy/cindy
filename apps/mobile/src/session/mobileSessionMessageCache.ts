@@ -27,6 +27,92 @@ type StoredSessionMessageCache = {
   messages: RemoteMessage[];
 };
 
+// 同一缓存 key 的写/删严格串行。schedule 分类晚到时会在旧写之后排一个删除，
+// 不允许较早开始、较晚结束的 setItem 把已经清掉的完整正文复活。
+const pendingOperations = new Map<string, Promise<void>>();
+const keyWriteEpochs = new Map<string, number>();
+let globalWriteEpoch = 0;
+let globalClearInProgress = false;
+let activeGlobalClear: Promise<void> | null = null;
+
+export interface SessionMessageCacheWriteAuthority {
+  readonly key: string;
+  readonly globalEpoch: number;
+  readonly keyEpoch: number;
+}
+
+function enqueueCacheOperation(key: string, operation: () => Promise<void>): Promise<void> {
+  const previous = pendingOperations.get(key) ?? Promise.resolve();
+  const next = previous.catch(() => undefined).then(operation).catch(() => undefined);
+  pendingOperations.set(key, next);
+  void next.finally(() => {
+    if (pendingOperations.get(key) === next) pendingOperations.delete(key);
+  });
+  return next;
+}
+
+export function isSessionMessageCacheWriteAuthorityCurrent(
+  authority: SessionMessageCacheWriteAuthority | null | undefined,
+): authority is SessionMessageCacheWriteAuthority {
+  if (!authority) return false;
+  return authority.globalEpoch === globalWriteEpoch
+    && authority.keyEpoch === (keyWriteEpochs.get(authority.key) ?? 0);
+}
+
+export function captureSessionMessageCacheWriteAuthority(
+  deviceId: string,
+  sessionId: string,
+): SessionMessageCacheWriteAuthority | null {
+  // 登出全清从推进 global epoch 到 multiRemove 完成之间禁止铸造新写权。
+  // 否则卸载 flush 可在 getAllKeys 已取完快照后创建新 key，并晚于删除落盘。
+  if (globalClearInProgress) return null;
+  const key = safeStorageKey(deviceId, sessionId);
+  if (!key) return null;
+  return {
+    key,
+    globalEpoch: globalWriteEpoch,
+    keyEpoch: keyWriteEpochs.get(key) ?? 0,
+  };
+}
+
+/**
+ * 去抖/卸载 flush 使用的条件写：显式删除、rewind 或 schedule 改判会推进 epoch，
+ * 此后才触发的旧 timer 即使携带旧快照也不能覆盖新语义。
+ */
+export async function cacheSessionMessagesIfCurrent(
+  authority: SessionMessageCacheWriteAuthority | null,
+  messages: readonly RemoteMessage[],
+): Promise<void> {
+  if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+  const normalized = normalizeCachedMessages(messages);
+  await enqueueCacheOperation(authority.key, async () => {
+    if (!isSessionMessageCacheWriteAuthorityCurrent(authority)) return;
+    if (normalized.length === 0) {
+      await AsyncStorage.removeItem(authority.key);
+      return;
+    }
+    const payload: StoredSessionMessageCache = {
+      version: 1,
+      updatedAt: Date.now(),
+      messages: normalized,
+    };
+    await AsyncStorage.setItem(authority.key, JSON.stringify(payload));
+  });
+}
+
+/** 显式替换/删除会推进 key epoch，使已排队但尚未提交的旧 render 快照失效。 */
+export async function replaceCachedSessionMessages(
+  deviceId: string,
+  sessionId: string,
+  messages: readonly RemoteMessage[],
+): Promise<void> {
+  const key = safeStorageKey(deviceId, sessionId);
+  if (!key) return;
+  keyWriteEpochs.set(key, (keyWriteEpochs.get(key) ?? 0) + 1);
+  const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
+  await cacheSessionMessagesIfCurrent(authority, messages);
+}
+
 // 读取某 (host, session) 的缓存消息;无缓存 / 解析失败一律返回空数组(乐观 hydrate 不应抛错)。
 export async function getCachedSessionMessages(
   deviceId: string,
@@ -34,6 +120,7 @@ export async function getCachedSessionMessages(
 ): Promise<RemoteMessage[]> {
   const key = safeStorageKey(deviceId, sessionId);
   if (!key) return [];
+  await pendingOperations.get(key)?.catch(() => undefined);
   const raw = await AsyncStorage.getItem(key).catch(() => null);
   if (!raw) return [];
   try {
@@ -56,30 +143,34 @@ export async function cacheSessionMessages(
   sessionId: string,
   messages: readonly RemoteMessage[],
 ): Promise<void> {
-  const key = safeStorageKey(deviceId, sessionId);
-  if (!key) return;
-  const normalized = normalizeCachedMessages(messages);
-  if (normalized.length === 0) {
-    await AsyncStorage.removeItem(key).catch(() => undefined);
-    return;
-  }
-  const payload: StoredSessionMessageCache = {
-    version: 1,
-    updatedAt: Date.now(),
-    messages: normalized,
-  };
-  await AsyncStorage.setItem(key, JSON.stringify(payload)).catch(() => undefined);
+  const authority = captureSessionMessageCacheWriteAuthority(deviceId, sessionId);
+  await cacheSessionMessagesIfCurrent(authority, messages);
 }
 
 // 登出清空:遍历所有本前缀的 key 一次性删除(AsyncStorage 支持枚举,无需手动维护 host 索引)。
-export async function clearCachedSessionMessages(): Promise<void> {
-  const keys = await AsyncStorage.getAllKeys().catch(() => [] as readonly string[]);
-  const owned = keys.filter((key) => key.startsWith(`${STORAGE_KEY_PREFIX}.`));
-  if (owned.length === 0) return;
-  await AsyncStorage.multiRemove(owned).catch(() => undefined);
+export function clearCachedSessionMessages(): Promise<void> {
+  if (activeGlobalClear) return activeGlobalClear;
+  // 先让所有旧条件写失效，再等已经进入 AsyncStorage 的旧操作结束；删除必须排在
+  // 它们之后，否则较慢的 setItem 会在登出清理完成后复活缓存。清理完成前保持
+  // globalClearInProgress=true，禁止卸载 flush 等路径在 getAllKeys 后铸造新写权。
+  globalWriteEpoch += 1;
+  globalClearInProgress = true;
+  activeGlobalClear = (async () => {
+    await Promise.all([...pendingOperations.values()].map((operation) =>
+      operation.catch(() => undefined)));
+    const keys = await AsyncStorage.getAllKeys().catch(() => [] as readonly string[]);
+    const owned = keys.filter((key) => key.startsWith(`${STORAGE_KEY_PREFIX}.`));
+    if (owned.length > 0) await AsyncStorage.multiRemove(owned).catch(() => undefined);
+    keyWriteEpochs.clear();
+  })().finally(() => {
+    globalClearInProgress = false;
+    activeGlobalClear = null;
+  });
+  return activeGlobalClear;
 }
 
-// 排序(升序 createdAt)+ 按 messageKey 去重(对账:同 id 保留最后一次)+ 取最新 N 条 + 剥 content 大块。
+// 排序(升序 createdAt)+ 按 messageKey 去重(对账:同 id 保留最后一次)+ 取最新 N 条。
+// mobile-system-* 没有服务端副本，必须跨窗口保留；保护行可以让软上限略微超出。
 function normalizeCachedMessages(input: readonly unknown[]): RemoteMessage[] {
   const byKey = new Map<string, RemoteMessage>();
   for (const item of input) {
@@ -88,7 +179,12 @@ function normalizeCachedMessages(input: readonly unknown[]): RemoteMessage[] {
     byKey.set(messageKey(message), message);
   }
   const sorted = [...byKey.values()].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  return sorted.slice(-MAX_CACHED_SESSION_MESSAGES);
+  const protectedRows = sorted.filter((message) => messageKey(message).startsWith('mobile-system-'));
+  const protectedKeys = new Set(protectedRows.map(messageKey));
+  const latestRows = sorted
+    .filter((message) => !protectedKeys.has(messageKey(message)))
+    .slice(-MAX_CACHED_SESSION_MESSAGES);
+  return [...protectedRows, ...latestRows].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
 }
 
 // 与 remoteSessionStore.messageKey 对齐:id → clientId → role:createdAt,保证对账去重口径一致。

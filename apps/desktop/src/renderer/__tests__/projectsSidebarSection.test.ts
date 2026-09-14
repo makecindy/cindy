@@ -49,9 +49,7 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).toContain(
       "const hasVisibleProjectGroups = mixedEntries.some((entry) => entry.kind === 'project')",
     );
-    expect(projectsSectionSource).toContain(
-      'const allGroupsCollapsed = hasVisibleProjectGroups',
-    );
+    expect(projectsSectionSource).toContain('(!hasVisibleProjectGroups || isAllCollapsed)');
     // 平铺时来源标签要覆盖从项目摊出来的会话,不能只喂 dialogues。
     expect(projectsSectionSource).toContain('flattenedSessionsForSourceLabels');
     expect(projectsSectionSource).toContain(
@@ -118,6 +116,9 @@ describe('Projects sidebar section', () => {
     );
     // 三个集合作为一个整体喂给混排模型。
     expect(projectsSectionSource).toContain('priorityContext,');
+    expect(projectsSectionSource).toContain('advanceViewedPriorityHold(');
+    expect(projectsSectionSource).toContain('holdViewedPriorityRank(');
+    expect(projectsSectionSource).toContain('viewedSessionId ?? activeSessionId');
     // 折叠豁免与排序同一口径(含远程),不再用只有本地的 notifications。
     expect(projectsSectionSource).toContain(
       'entrySessions(entry).some((s) => priorityContext.attentionSessionIds.has(s.id))',
@@ -143,12 +144,35 @@ describe('Projects sidebar section', () => {
     expect(projectsSectionSource).toContain('{!deviceGroupingActive && projectsOverflow && (');
   });
 
-  // 2026-08-13 复核 P1:manual 与设备分组"渲染不叠加"是定稿,生效判定必须跟着
-  // 排除——否则机器标签被藏、批量折叠键按逐设备派生、折叠状态机进入
-  // collapse-devices 却没有可见效果(派生态以为在设备分组、渲染实际是单段)。
-  it('deviceGroupingActive excludes manual sort so derived state matches the rendered mode', () => {
+  it('device grouping can stay on with custom project order', () => {
     expect(projectsSectionSource).toContain(
-      "deviceGroupingAvailable && filter.groupDevice && filter.sortBy !== 'manual'",
+      'const deviceGroupingActive = deviceGroupingAvailable && filter.groupDevice;',
+    );
+    expect(projectsSectionSource).not.toContain("filter.sortBy !== 'manual'");
+  });
+
+  it('renders pre-grouped automation entries as one flat-list row', () => {
+    expect(projectsSectionSource).toContain(
+      "entry.kind === 'session' || entry.kind === 'automation-group'",
+    );
+    expect(projectsSectionSource).toContain('<SessionEntryRows');
+    expect(projectsSectionSource).toContain('entries={[entry]}');
+    expect(projectsSectionSource).not.toContain('sessions={[entry.session]}');
+  });
+
+  it('includes automation groups in the header batch fold state machine', () => {
+    expect(projectsSectionSource).toContain(
+      "const hasGroupLayer = mixedEntries.some((entry) => entry.kind !== 'session')",
+    );
+    expect(projectsSectionSource).toContain('useAutomationGroupsCollapsed(');
+    expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(true)');
+    expect(projectsSectionSource).toContain('setAllAutomationGroupsCollapsed(false)');
+    expect(projectsSectionSource).toContain('allAutomationGroupsCollapsed');
+    expect(projectsSectionSource).toContain(
+      'automationGroupCollapsed={isAutomationGroupCollapsed}',
+    );
+    expect(projectsSectionSource).toContain(
+      'onAutomationGroupCollapsedChange={setAutomationGroupCollapsed}',
     );
   });
 });

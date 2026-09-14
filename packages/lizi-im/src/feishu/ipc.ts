@@ -19,6 +19,7 @@ import { feishuEvents } from './events.js';
 import * as wsClient from './wsClient.js';
 import * as storage from './storage.js';
 import * as ownerGuard from './ownerGuard.js';
+import * as outbound from './outbound.js';
 import {
   pollAppRegistration,
   requestAppRegistration,
@@ -213,6 +214,7 @@ export async function saveAndConnect(
   await wsClient.stop({
     reason: 'credentials-replaced',
     clearOwnerBeforeIdle: saved?.appId !== appId || saved.service !== service,
+    nextAccount: { appId, service },
   });
   if (options.replacementOwnerOpenId) {
     persistReplacementOwner(options.replacementOwnerOpenId);
@@ -240,7 +242,11 @@ export async function reconnectSavedCredentials(): Promise<{
   if (!creds) {
     throw new Error('[NO_CREDENTIALS] IM bot credentials are not configured');
   }
-  await wsClient.stop({ announceOffline: false, reason: 'manual-reconnect' });
+  await wsClient.stop({
+    announceOffline: false,
+    reason: 'manual-reconnect',
+    nextAccount: { appId: creds.appId, service: creds.service },
+  });
   const verdict = await wsClient.start(creds, {
     announceLifecycle: false,
     reason: 'manual-reconnect',
@@ -386,6 +392,12 @@ export async function clearAndDisconnect(): Promise<void> {
   await wsClient.stop({
     reason: 'credentials-cleared',
     clearOwnerBeforeIdle: true,
+    discardPendingTopicLeases: true,
   });
+  // 逻辑凭证清除(而非 transport 重连): 清掉账号态并重置 lastBoundCreds —
+  // 之后重新保存相同 appId/service 不会被误判为同账号重连, 登出前的
+  // opener/锚点不会被新一轮会话认领; 挂起的孤儿提示重试同样丢弃。
+  outbound.forgetBoundAccount();
+  wsClient.clearOrphanRetriesForCredentialClear();
   storage.clearAll();
 }

@@ -641,6 +641,7 @@ export class HostIOSSimulatorSidecarSupervisor implements IOSSimulatorSidecarSup
       crashCount: 0,
       probe: null,
       lastFailure: "Native capability provider admission was denied.",
+      recoveryEligible: false,
       lastTermination: null,
       admission: decision,
     });

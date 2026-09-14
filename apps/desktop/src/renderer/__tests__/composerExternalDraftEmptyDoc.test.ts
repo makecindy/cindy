@@ -33,7 +33,7 @@ describe('external draft notification empty-document handling', () => {
     expect(end).toBeGreaterThan(start);
     const block = chatInput.slice(start, end);
 
-    expect(block).toContain('normalizeComposerDocumentJSON(draft.text)');
+    expect(block).toContain('normalizeRestoredComposerDraft(draft.text)');
     // 判空必须走共享实现,与 draftHasContent / isEditorEmpty 同源。
     expect(block).toContain('tiptapDocHasContent(');
     expect(block).not.toMatch(/const normalizedDraftText = draft\.text\s*\n?\s*\?/);

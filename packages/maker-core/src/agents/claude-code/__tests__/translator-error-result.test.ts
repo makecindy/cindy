@@ -25,12 +25,13 @@ function createTurnState(): TurnState {
   };
 }
 
-function createCtx(tracker: UsageTracker) {
+function createCtx(tracker: UsageTracker, providerId: string | null = 'xd') {
   return {
     rt: newRuntimeState(),
     turn: createTurnState(),
     log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     getModel: () => 'codex/gpt-5.5',
+    getProviderId: () => providerId,
     getEffort: () => 'high' as const,
     getPermissionMode: () => 'auto' as const,
     onSessionId: vi.fn(),
@@ -49,6 +50,27 @@ async function drain(queue: ReturnType<typeof createAsyncQueue<AgentEvent>>): Pr
 }
 
 describe('Claude Code translator is_error result guard', () => {
+  it.each([
+    'Failed to authenticate. API Error: 403 user not allowed to access model. This user can only access models=[private-model]. Tried to access claude-opus-5',
+    'API Error: 403 {"error":{"type":"user_model_access_denied","message":"Access denied"}}',
+    'API Error: 403 {"error":{"code":"user_model_access_denied","param":"model","message":"Access denied"}}',
+  ])('classifies model access denial separately from SDK authentication_failed: %s', async (message) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: message }] } }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true, result: message }, queue, ctx);
+    const events = await drain(queue);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      reason: 'user_model_access_denied', errorStatus: 403,
+      sdkError: 'user_model_access_denied', isTerminal: true,
+    });
+    expect(JSON.stringify(events)).not.toContain('Failed to authenticate');
+    expect(JSON.stringify(events)).not.toContain('private-model');
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(1);
+    expect(events.some((event) => event.type === 'done')).toBe(true);
+  });
+
   it('carries the assistant API message id into done for Vertex lag detection', async () => {
     const tracker = new UsageTracker();
     const queue = createAsyncQueue<AgentEvent>();
@@ -88,6 +110,63 @@ describe('Claude Code translator is_error result guard', () => {
     const events = await drain(queue);
     const done = events.find((event) => event.type === 'done');
     expect(done?.data).toMatchObject({ assistant_message_id: 'msg_vrtx_123' });
+  });
+
+  it.each([
+    'API Error: 401 invalid API key',
+    'API Error: 403 permission denied',
+    'API Error: 401 user not allowed to access model',
+    'Connection error',
+    'API Error: 403 {"error":{"type":"authentication_error","message":"Invalid credentials"}}',
+  ])('does not turn a different failure into model access denial: %s', async (message) => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    // A later error envelope replaces the earlier diagnosis in the same turn.
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: 'API Error: 403 user not allowed to access model' }] },
+    }, queue, ctx);
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text: message }] } }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true, result: message }, queue, ctx);
+    const events = await drain(queue);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      sdkError: 'authentication_failed', message,
+    });
+    expect(events.find((event) => event.type === 'error')?.data).not.toHaveProperty('reason');
+  });
+
+  it('classifies a result-only model denial without losing usage accounting', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    translateSdkMessage({ type: 'result', is_error: true,
+      result: 'API Error: 403 user not allowed to access model',
+      total_cost_usd: 0.25, usage: { input_tokens: 100, output_tokens: 2 },
+    }, queue, ctx);
+    const events = await drain(queue);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      reason: 'user_model_access_denied', errorStatus: 403,
+    });
+    expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+      total_cost_usd: 0.25, usage: { input_tokens: 100, output_tokens: 2 },
+    });
+  });
+
+  it('keeps a structured denial signal across redaction and SDK retry metadata', async () => {
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(new UsageTracker(), 'custom-provider');
+    translateSdkMessage({ type: 'assistant', error: 'authentication_failed',
+      message: { content: [{ type: 'text', text:
+        'API Error: 403 {"error":{"type":"user_model_access_denied","message":"Denied","api_key":"fake-never-valid-key"}}',
+      }] } }, queue, ctx);
+    translateSdkMessage({ type: 'system', subtype: 'api_retry', error: 'authentication_failed',
+      error_status: 403, attempt: 1, max_retries: 2, retry_delay_ms: 1,
+    }, queue, ctx);
+    translateSdkMessage({ type: 'result', is_error: true, result: '' }, queue, ctx);
+    const events = await drain(queue);
+    expect(events.find((event) => event.type === 'error')?.data).toMatchObject({
+      reason: 'user_model_access_denied', errorStatus: 403,
+    });
+    expect(JSON.stringify(events)).not.toContain('fake-never-valid-key');
   });
 
   it('surfaces a terminal error AND keeps the Done/done tail when is_error arrives without a prior envelope', async () => {
@@ -176,12 +255,51 @@ describe('Claude Code translator is_error result guard', () => {
     expect(serialized).not.toContain('secret-token');
     expect(serialized).not.toContain('hash-abc');
     expect(serialized).toContain('[REDACTED]');
+    expect(error?.data).toMatchObject({
+      reason: 'gateway-proxy-token-invalid',
+    });
     expect(JSON.stringify(ctx.log.debug.mock.calls)).not.toContain('secret-token');
     expect(JSON.stringify(ctx.log.warn.mock.calls)).not.toContain('secret-token');
     expect(ctx.log.warn).toHaveBeenCalledWith(
       'SDK ◀ turn ended with error',
       expect.objectContaining({ output: 'Authorization: [REDACTED]' }),
     );
+  });
+
+  it('does not classify a custom LiteLLM provider error as a Cindy credential failure', async () => {
+    const tracker = new UsageTracker();
+    const queue = createAsyncQueue<AgentEvent>();
+    const ctx = createCtx(tracker, 'custom-litellm');
+
+    translateSdkMessage(
+      {
+        type: 'result',
+        is_error: true,
+        result:
+          'Invalid proxy server token; Unable to find token in LiteLLM_VerificationTokenTable',
+        stop_reason: 'end_turn',
+        total_cost_usd: 0,
+        usage: { input_tokens: 1, output_tokens: 0 },
+        modelUsage: {
+          'codex/gpt-5.5': {
+            inputTokens: 1,
+            outputTokens: 0,
+            costUSD: 0,
+            contextWindow: 272_000,
+          },
+        },
+      },
+      queue,
+      ctx,
+    );
+
+    const events = await drain(queue);
+    const error = events.find((event) => event.type === 'error');
+    expect(error?.data).toMatchObject({
+      message: 'Invalid proxy server token; Unable to find token in LiteLLM_VerificationTokenTable',
+      isTerminal: true,
+    });
+    expect(error?.data).not.toHaveProperty('reason');
   });
 
   it('preserves non-secret status and quota signals from a redacted terminal result', async () => {

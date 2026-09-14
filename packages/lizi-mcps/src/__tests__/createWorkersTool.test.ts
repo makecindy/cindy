@@ -55,6 +55,18 @@ function hardLimitFailure(hardLimit: number) {
 }
 
 describe('create_workers tool', () => {
+  it('preserves each worker directory independently in a batch', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>()
+      .mockResolvedValueOnce(created(1, 5)).mockResolvedValueOnce(created(2, 5));
+    const registry = setup(createWorker);
+    await registry.call('create_workers', { workers: [
+      { ...worker(1), working_dir: '/tmp/first' },
+      { ...worker(2), working_dir: '/tmp/second with spaces ' },
+    ] });
+    expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({ workingDir: '/tmp/first' }));
+    expect(createWorker).toHaveBeenNthCalledWith(2, expect.objectContaining({ workingDir: '/tmp/second with spaces ' }));
+  });
+
   it('routes multi-worker requests to one deterministic batch tool', () => {
     const createWorker = vi.fn<CreateWorkerDeps['createWorker']>();
     const registry = setup(createWorker);
@@ -91,6 +103,28 @@ describe('create_workers tool', () => {
     expect(result.isError).toBe(true);
     expect(parse(result)).toMatchObject({ ok: false, errorCode: 'INVALID_ARGS' });
     expect(createWorker).not.toHaveBeenCalled();
+  });
+
+  it('forwards each worker provider_id through the shared batch schema', async () => {
+    const createWorker = vi.fn<CreateWorkerDeps['createWorker']>(async (_params) => created(1, 8));
+    const registry = setup(createWorker);
+
+    const result = await registry.call('create_workers', {
+      workers: [
+        { ...worker(1), model: 'deepseek/deepseek-v4-pro', provider_id: 'xd' },
+        { ...worker(2), model: 'gpt-5.5', provider_id: 'openai' },
+      ],
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(createWorker).toHaveBeenNthCalledWith(1, expect.objectContaining({
+      model: 'deepseek/deepseek-v4-pro',
+      providerId: 'xd',
+    }));
+    expect(createWorker).toHaveBeenNthCalledWith(2, expect.objectContaining({
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    }));
   });
 
   it('stops a hard=3 batch after the first limit failure and summarizes all nine requests', async () => {

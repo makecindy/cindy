@@ -16,8 +16,12 @@
 import { useCallback, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { BotAvatar } from '@/features/bots/BotAvatar';
+import type { BotChatIdentity } from '@/features/bots/BotSessionContentHeader';
+
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
+import { Button } from '@/components/ui/button';
 import type { PendingPermission } from '@/lib/makerChatStore';
 import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope';
 
@@ -27,6 +31,7 @@ import { describeSessionPermissionScope } from '@/lib/permissionSuggestionScope'
 
 interface PermissionPromptProps {
   permission: PendingPermission;
+  companion?: BotChatIdentity | null;
   onRespond: (result: CCAgentPermissionResult) => void;
 }
 
@@ -46,11 +51,12 @@ function firstString(input: Record<string, unknown>, keys: string[]): string | u
 // 按语义分组(命令 / 文件 / 模式)归一化,任一命名命中就抽出清爽正文,否则回退 JSON。
 export function formatToolInput(toolName: string, input: Record<string, unknown>): string {
   const name = toolName.toLowerCase();
+  if (name === 'cindy.media.download' && typeof input.source === 'string') return input.source;
   const fallback = () => {
     const text = JSON.stringify(input, null, 2);
     return text.length > 500 ? text.slice(0, 500) + '...' : text;
   };
-  if (name === 'bash') {
+  if (name === 'bash' || name === 'powershell') {
     return firstString(input, ['command']) ?? fallback();
   }
   if (name === 'read' || name === 'edit' || name === 'write') {
@@ -72,13 +78,35 @@ function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {
   );
 }
 
+// Button supplies geometry, focus and disabled behavior. Permission keeps its
+// historic local aliases (including a separately themed Allow once action).
+// DS-9: user chose existing emphasis, neutral information and current density.
+const actionClass = 'h-auto min-h-9 max-w-full gap-2 px-3 py-1.5';
+const secondaryActionClass = cn(
+  actionClass,
+  'border-[var(--chat-input-border)] bg-transparent text-[var(--chat-input-text)]',
+  'enabled:hover:bg-[var(--perm-code-bg)]',
+  'enabled:active:bg-[color-mix(in_srgb,var(--perm-code-bg)_90%,var(--chat-input-text))]',
+);
+const allowActionClass = cn(
+  actionClass,
+  'border-[var(--chat-input-border)] bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
+  'enabled:hover:bg-[color-mix(in_srgb,var(--perm-allow-btn-bg)_90%,var(--perm-allow-btn-text))]',
+  'enabled:active:bg-[color-mix(in_srgb,var(--perm-allow-btn-bg)_80%,var(--perm-allow-btn-text))]',
+);
+
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export function PermissionPrompt({ permission, onRespond }: PermissionPromptProps) {
+export function PermissionPrompt({ permission, onRespond, companion }: PermissionPromptProps) {
   const { t } = useTranslation();
-  const { toolName, input, title, displayName, description, suggestions } = permission;
+  const { toolName, input, title, displayName, description, suggestions, autoReviewUnavailable,
+    submitting, submissionFailed } = permission;
+  const isMediaDownload = toolName === 'cindy.media.download';
+  const promptDescription = autoReviewUnavailable
+    ? t('newChat.permissionPrompt.autoReviewUnavailable')
+    : description;
 
   const displayTitle = displayName
     ? t('agentIsland.native.permissionPromptTitleWithTool', { toolName: displayName })
@@ -99,12 +127,14 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
   // ── Action handlers ──
 
   const handleAllowOnce = useCallback(() => {
+    if (submitting) return;
     onRespond({
       behavior: 'allow',
     });
-  }, [onRespond]);
+  }, [onRespond, submitting]);
 
   const handleAlwaysAllow = useCallback(() => {
+    if (submitting) return;
     if (!canAlwaysAllowForSession) {
       handleAllowOnce();
       return;
@@ -114,15 +144,16 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
       updatedPermissions: sessionSuggestions,
       decisionClassification: 'user_permanent',
     });
-  }, [canAlwaysAllowForSession, handleAllowOnce, onRespond, sessionSuggestions]);
+  }, [canAlwaysAllowForSession, handleAllowOnce, onRespond, sessionSuggestions, submitting]);
 
   const handleDeny = useCallback(() => {
+    if (submitting) return;
     onRespond({
       behavior: 'deny',
       message: 'User denied',
       decisionClassification: 'user_reject',
     });
-  }, [onRespond]);
+  }, [onRespond, submitting]);
 
   // ── Keyboard shortcuts ──
 
@@ -155,19 +186,27 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
   return (
     <div
       className={cn(
-        'w-full max-w-[914px] rounded-[12px] border p-4',
+        'w-full max-w-[914px] rounded-xl border p-4',
         'border-[var(--chat-input-border)] bg-[var(--chat-input-bg)]',
       )}
     >
-      {/* Title */}
-      <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
-        {displayTitle}
-      </p>
+      {/* Keep the request in the conversation, with the exact operation below. */}
+      <div className="flex items-center gap-2.5">
+        {companion ? <BotAvatar bot={companion} size="sm" /> : null}
+        <div className="min-w-0">
+          <p className="text-15 font-semibold leading-tight text-[var(--chat-input-text)]">
+            {companion ? t('bots.permissionRequest', { name: companion.name }) : displayTitle}
+          </p>
+          {companion ? (
+            <p className="mt-1 text-12 text-[var(--status-bar-meta)]">{displayTitle}</p>
+          ) : null}
+        </div>
+      </div>
 
       {/* Description */}
-      {description && (
+      {promptDescription && (
         <p className="mt-1.5 text-13 font-normal leading-tight text-[var(--status-bar-meta)]">
-          {description}
+          {promptDescription}
         </p>
       )}
 
@@ -185,23 +224,25 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
       {/* Action buttons — inline text + kbd badges, right-aligned.
           flex-wrap:带范围的「本对话都允许 …」按钮会比原来长,窄宽(doc rail portal)
           下允许整行折行,而不是把 Deny / Allow once 挤出容器。 */}
-      <div className="mt-4 flex flex-wrap items-center justify-end gap-2">
+      {(submitting || submissionFailed) && (
+        <p role="status" className="mt-3 text-13 text-[var(--status-bar-meta)]">
+          {t(submitting ? 'newChat.permissionPrompt.submitting' : 'newChat.permissionPrompt.submissionFailed')}
+        </p>
+      )}
+      <div className="mt-4 flex flex-wrap items-center justify-end gap-2 [&_button:disabled]:cursor-wait [&_button:disabled]:opacity-50">
         {/* Deny */}
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="lg"
           onClick={handleDeny}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)] bg-transparent',
-            'text-13 font-medium text-[var(--chat-input-text)]',
-            'transition-colors hover:bg-[var(--perm-code-bg)]',
-          )}
+          disabled={submitting}
+          className={secondaryActionClass}
         >
-          <span>{t('agentIsland.native.deny')}</span>
+          <span>{t(isMediaDownload ? 'newChat.mediaDownload.defer' : 'agentIsland.native.deny')}</span>
           <kbd className="rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
             Esc
           </kbd>
-        </button>
+        </Button>
 
         {canAlwaysAllowForSession && (
           // 有具体规则就把范围写进按钮(`本对话都允许 Bash(curl:*)`),没有则退回原文案。
@@ -218,16 +259,12 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
             side="top"
             contentClassName="max-w-[320px] whitespace-pre-line break-all text-left"
           >
-            <button
-              type="button"
+            <Button
+              variant="secondary"
+              size="lg"
               onClick={handleAlwaysAllow}
-              className={cn(
-                // max-w:规则可能很长(完整命令串),截断后完整内容看 tooltip。
-                'flex min-w-0 max-w-[460px] items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-                'border-[var(--chat-input-border)] bg-transparent',
-                'text-13 font-medium text-[var(--chat-input-text)]',
-                'transition-colors hover:bg-[var(--perm-code-bg)]',
-              )}
+              disabled={submitting}
+              className={cn(secondaryActionClass, 'min-w-0 max-w-[min(100%,460px)]')}
             >
               <span className="min-w-0 truncate">
                 {allowScope
@@ -240,27 +277,23 @@ export function PermissionPrompt({ permission, onRespond }: PermissionPromptProp
               <kbd className="-ml-1 shrink-0 rounded-[4px] border border-[var(--chat-input-border)] bg-[var(--perm-code-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--status-bar-meta)]">
                 Enter
               </kbd>
-            </button>
+            </Button>
           </Tip>
         )}
 
         {/* Allow once (primary) */}
-        <button
-          type="button"
+        <Button
+          variant="secondary"
+          size="lg"
           onClick={handleAllowOnce}
-          className={cn(
-            'flex items-center gap-2 rounded-[8px] border px-3 py-[7px]',
-            'border-[var(--chat-input-border)]',
-            'bg-[var(--perm-allow-btn-bg)] text-[var(--perm-allow-btn-text)]',
-            'text-13 font-medium',
-            'transition-colors hover:opacity-90',
-          )}
+          disabled={submitting}
+          className={allowActionClass}
         >
-          <span>{t('agentIsland.native.allowOnce')}</span>
+          <span>{t(isMediaDownload ? 'newChat.mediaDownload.allow' : 'agentIsland.native.allowOnce')}</span>
           <kbd className="rounded-[4px] border border-[var(--perm-allow-kbd-border)] bg-[var(--perm-allow-kbd-bg)] px-1.5 py-[1px] text-11 font-normal text-[var(--perm-allow-btn-text)] opacity-70">
             Enter
           </kbd>
-        </button>
+        </Button>
       </div>
     </div>
   );

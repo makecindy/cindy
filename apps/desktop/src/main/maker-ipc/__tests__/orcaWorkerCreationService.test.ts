@@ -1,4 +1,5 @@
-import type { AgentKind } from '@cindy/maker-core';
+import path from 'node:path';
+import { resolveAgentCredentialMode, type AgentKind } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 
 import {
@@ -95,6 +96,7 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     })),
     getWorkerDefaults: vi.fn(() => ({})),
     getWorkerPermissionMode: vi.fn(() => 'auto' as const),
+    resolveWorkerWorkingDir: vi.fn(async (dir) => dir),
     getAvailableModels: vi.fn((agent: AgentKind) => (
       agent === 'codex'
         ? [
@@ -185,6 +187,74 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     service: createOrcaWorkerCreationService(deps),
   };
 }
+
+describe('Orca worker working directory', () => {
+  const params: OrcaWorkerCreateParams = {
+    leadSessionId: 'lead-1', role: 'developer', agent: 'codex', label: 'worker',
+    initialTask: 'Run in the assigned project',
+  };
+
+  it('binds the resolved directory before bootstrap (dispatch belongs to lifecycle)', async () => {
+    const requested = path.resolve('candidate link ');
+    const resolved = path.resolve('candidate real ');
+    const { deps, service } = createDeps({
+      resolveWorkerWorkingDir: vi.fn(async () => resolved),
+    });
+    const result = await service.createWorker({ ...params, workingDir: requested });
+    expect(result.ok).toBe(true);
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith(requested, expect.objectContaining({ id: 'lead-1' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({
+      workingDir: resolved, workspaceKind: 'project',
+    }));
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+    expect(vi.mocked(deps.resolveWorkerWorkingDir).mock.invocationCallOrder[0])
+      .toBeLessThan(vi.mocked(deps.bootstrapSession).mock.invocationCallOrder[0]!);
+  });
+
+  it('preserves Lead directory inheritance when the override is omitted', async () => {
+    const { deps, service } = createDeps();
+    await service.createWorker(params);
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: 'C:\\repo' }));
+  });
+
+  it.each(['', ' ', 'relative/project', './project', 'a\0b'])('rejects invalid directory %j before creating anything', async (workingDir) => {
+    const { deps, service } = createDeps();
+    expect(await service.createWorker({ ...params, workingDir })).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.resolveWorkerWorkingDir).not.toHaveBeenCalled();
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
+  it.each(['missing directory', 'not a directory', 'collaboration disabled'])('does not fall back when resolution fails: %s', async (reason) => {
+    const { deps, service } = createDeps({ resolveWorkerWorkingDir: vi.fn(async () => { throw new Error(reason); }) });
+    expect(await service.createWorker({ ...params, workingDir: path.resolve('candidate') }))
+      .toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(deps.dispatchWorkerTask).not.toHaveBeenCalled();
+  });
+
+  it('uses project context when a dialogue Lead explicitly selects a directory', async () => {
+    const { deps, service } = createDeps();
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...lead!, workspaceKind: 'dialogue' });
+    const workingDir = path.resolve('explicit project');
+    expect(await service.createWorker({ ...params, workingDir })).toMatchObject({ ok: true });
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir, workspaceKind: 'project' }));
+  });
+
+  it('resolves SSH paths on the inherited host and binds the result', async () => {
+    const { deps, service } = createDeps();
+    const lead = await deps.getLeadSessionRow('lead-1');
+    vi.mocked(deps.getLeadSessionRow).mockResolvedValue({ ...lead!, remoteHostId: 'host-1' });
+    vi.mocked(deps.resolveWorkerWorkingDir).mockResolvedValue('/remote/real');
+    expect(await service.createWorker({ ...params, workingDir: '/remote/project' })).toMatchObject({ ok: true });
+    expect(deps.resolveWorkerWorkingDir).toHaveBeenCalledWith('/remote/project', expect.objectContaining({ remoteHostId: 'host-1' }));
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: '/remote/real', remoteHostId: 'host-1' }));
+  });
+});
 
 describe('OrcaWorkerCreationService', () => {
   const workerStatus = (status: OrcaWorkerStatus): OrcaWorkerStatus => status;
@@ -713,13 +783,13 @@ describe('OrcaWorkerCreationService', () => {
 
       await expect(service.createWorker(workerParams())).resolves.toMatchObject({
         ok: true,
-        resolved: { model: canonicalId, providerId: null },
+        resolved: { model: canonicalId, providerId: 'xd' },
       });
 
       expect(legacyDefaults).toEqual({ model: shortId, providerId: 'deleted-custom' });
       expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
         model: canonicalId,
-        providerId: null,
+        providerId: 'xd',
       }));
     });
 
@@ -1488,7 +1558,189 @@ describe('OrcaWorkerCreationService', () => {
     }));
   });
 
-  it('falls back from a stale New Maker provider to the current native default route', async () => {
+  it('prefers a compatible Lead route before a cached New Maker route', async () => {
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: '/repo',
+        model: 'claude-opus-5',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'anthropic',
+        remoteHostId: null,
+      })),
+      getWorkerDefaults: vi.fn(() => ({
+        model: 'claude-sonnet-4-6',
+        providerId: 'xd',
+      })),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [
+          { id: 'xd', name: 'Cindy AI', models: ['claude-sonnet-4-6'] },
+          {
+            id: 'anthropic',
+            name: 'Anthropic',
+            models: ['claude-opus-5', 'claude-sonnet-4-6'],
+          },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'claude-code',
+      label: 'developer',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: 'anthropic', model: 'claude-sonnet-4-6' },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'anthropic',
+      model: 'claude-sonnet-4-6',
+    }));
+  });
+
+  it.each([
+    {
+      name: 'trims a cached provider ID before inheriting it',
+      providerId: ' custom-codex ',
+      expectedProviderId: 'custom-codex',
+    },
+    {
+      name: 'treats a whitespace-only cached provider ID as not selected',
+      providerId: '   ',
+      expectedProviderId: 'xd',
+    },
+  ])('$name', async ({ providerId, expectedProviderId }) => {
+    const cachedDefaults = { model: 'gpt-5.4', providerId };
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: '/repo',
+        model: 'claude-sonnet-4-6',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'anthropic',
+        remoteHostId: null,
+      })),
+      getWorkerDefaults: vi.fn(() => cachedDefaults),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [
+          { id: 'xd', name: 'Cindy AI', models: ['gpt-5.4'] },
+          { id: 'custom-codex', name: 'Custom Codex', models: ['gpt-5.4'] },
+        ],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'reviewer',
+      agent: 'codex',
+      label: 'reviewer',
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { providerId: expectedProviderId, model: 'gpt-5.4' },
+    });
+    expect(cachedDefaults.providerId).toBe(providerId);
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: expectedProviderId,
+      model: 'gpt-5.4',
+    }));
+  });
+
+  it('keeps the compatible Anthropic Lead route for an explicit Claude Worker model', async () => {
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: '/repo',
+        model: 'claude-opus-5',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'anthropic',
+        remoteHostId: null,
+      })),
+      getAvailableModels: vi.fn(() => [
+        { id: 'claude-opus-5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
+      ]),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [
+          { id: 'xd', name: 'Cindy AI', models: ['claude-opus-5'] },
+          { id: 'anthropic', name: 'Anthropic', models: ['claude-opus-5'] },
+        ],
+      })),
+    });
+
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'claude-code',
+      label: 'developer',
+      model: 'claude-opus-5',
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      resolved: { providerId: 'anthropic', model: 'claude-opus-5' },
+    });
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'anthropic',
+      model: 'claude-opus-5',
+    }));
+    expect(resolveAgentCredentialMode({
+      agentKind: 'claude-code',
+      providerId: result.ok ? result.resolved.providerId : null,
+      model: result.ok ? result.resolved.model : null,
+    })).toBe('oauth-bearer');
+  });
+
+  it('rejects a missing Anthropic Lead route before falling back to Cindy AI', async () => {
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'claude-code' as const,
+        workspaceKind: 'project' as const,
+        workingDir: '/repo',
+        model: 'claude-opus-5',
+        effort: 'high',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'anthropic',
+        remoteHostId: null,
+      })),
+      getAvailableModels: vi.fn(() => [
+        { id: 'claude-opus-5', efforts: ['low', 'medium', 'high', 'xhigh', 'max'], defaultEffort: 'high' },
+      ]),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [{ id: 'xd', name: 'Cindy AI', models: ['claude-opus-5'] }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'claude-code',
+      label: 'developer',
+      model: 'claude-opus-5',
+    })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROVIDER_ROUTE_UNAVAILABLE',
+      message: expect.stringContaining('"anthropic" 当前未连接'),
+    });
+    expect(deps.reserveWorkerCreation).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('persists the current native route when a stale New Maker provider falls back', async () => {
     const { deps, service } = createDeps({
       getWorkerDefaults: vi.fn(() => ({ model: 'gpt-5.4', providerId: 'deleted-custom' })),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
@@ -1504,11 +1756,11 @@ describe('OrcaWorkerCreationService', () => {
       label: 'reviewer',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: null, model: 'gpt-5.4' },
+      resolved: { providerId: 'xd', model: 'gpt-5.4' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: null,
+      providerId: 'xd',
       model: 'gpt-5.4',
     }));
   });
@@ -1543,7 +1795,7 @@ describe('OrcaWorkerCreationService', () => {
     }));
   });
 
-  it('keeps a model-only legacy default on the current native default route', async () => {
+  it('persists the current native route for a model-only legacy default', async () => {
     const { deps, service } = createDeps({
       getWorkerDefaults: vi.fn(() => ({ model: 'gpt-5.5' })),
     });
@@ -1555,11 +1807,11 @@ describe('OrcaWorkerCreationService', () => {
       label: 'reviewer',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: null, model: 'gpt-5.5' },
+      resolved: { providerId: 'xd', model: 'gpt-5.5' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: null,
+      providerId: 'xd',
     }));
   });
 
@@ -1596,7 +1848,7 @@ describe('OrcaWorkerCreationService', () => {
     }));
   });
 
-  it('keeps the default route while validating connected sources when only the worker model is explicit', async () => {
+  it('pins the sole runtime provider when only the worker model is explicit', async () => {
     const availability = {
       'claude-code': [],
       codex: [
@@ -1618,12 +1870,47 @@ describe('OrcaWorkerCreationService', () => {
       model: 'gpt-5.4',
     })).resolves.toMatchObject({
       ok: true,
-      resolved: { providerId: null, model: 'gpt-5.4' },
+      resolved: { providerId: 'xd', model: 'gpt-5.4' },
     });
 
     expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
-      providerId: null,
+      providerId: 'xd',
       model: 'gpt-5.4',
+    }));
+  });
+
+  it('uses the sole XD catalog route for an explicit DeepSeek model instead of Codex native auth', async () => {
+    const model = 'deepseek/deepseek-v4-pro';
+    const { deps, service } = createDeps({
+      getAvailableModels: vi.fn(() => [
+        { id: model, efforts: ['high'], defaultEffort: 'high', supportsFastMode: false },
+      ]),
+      getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
+        'claude-code': [],
+        codex: [{
+          id: 'xd',
+          name: 'XD Gateway',
+          models: [model],
+          // gateway-key 不属于 requiresExplicitRoute；唯一来源仍必须固化。
+          requiresExplicitRoute: false,
+        }],
+      })),
+    });
+
+    await expect(service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'codex',
+      label: 'deepseek_worker',
+      model,
+    })).resolves.toMatchObject({
+      ok: true,
+      resolved: { model, providerId: 'xd' },
+    });
+
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      model,
+      providerId: 'xd',
     }));
   });
 
@@ -1921,7 +2208,7 @@ describe('buildNoProviderMessage', () => {
     }));
   });
 
-  it('treats an empty-string providerId as not-explicit and keeps the forced default route', async () => {
+  it('treats an empty-string providerId as not-explicit and pins a sole runtime source', async () => {
     const { service } = createDeps();
 
     await expect(service.createWorker({
@@ -1933,8 +2220,8 @@ describe('buildNoProviderMessage', () => {
       providerId: '',
     })).resolves.toMatchObject({
       ok: true,
-      // 与「显式 model 未显式来源」同语义:providerId 强制默认路由,不进显式 preflight。
-      resolved: { providerId: null, model: 'gpt-5.5' },
+      // 空串仍按未显式处理；唯一可用来源由运行时目录解析,不按模型名写死。
+      resolved: { providerId: 'xd', model: 'gpt-5.5' },
     });
   });
 
@@ -2247,15 +2534,15 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     });
   });
 
-  it('rejects chat-bridged codex providers for a remote lead (wireProtocol=openai-chat)', async () => {
-    const { service } = createDeps({
+  it.each([['deepseek', 'codex'], ['user-openai-account', 'codex'], ['user-claude-account', 'pi']] as const)('rejects local-only source %s/%s before allocating a remote worker', async (providerId, agent) => {
+    const { service, deps } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       getAvailableModels: vi.fn(() => [
         { id: 'deepseek-v4', efforts: ['low', 'medium', 'high', 'xhigh'], defaultEffort: 'high', supportsFastMode: true },
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        [agent]: [{ id: providerId, name: providerId, models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2263,16 +2550,17 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       service.createWorker({
         leadSessionId: 'lead-1',
         role: 'reviewer',
-        agent: 'codex',
+        agent,
         label: 'reviewer',
         model: 'deepseek-v4',
-        providerId: 'deepseek',
+        providerId,
       }),
     ).resolves.toMatchObject({
       ok: false,
       errorCode: 'INVALID_PARAMS',
       message: expect.stringContaining('not available for SSH remote workers'),
     });
+    expect(deps.createSessionId).not.toHaveBeenCalled();
   });
 
   it('still allows SSH-compatible models for a remote lead', async () => {
@@ -2289,9 +2577,10 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
     ).resolves.toMatchObject({ ok: true });
   });
 
-  it('rejects Pi workers for a remote lead before bootstrap (pi sessions are local-only)', async () => {
-    // codex-connector 回归:PiAgent.startSession 对 remoteHostId 一律 NotSupportedError,
-    // 不在 preflight 拒绝会让远程 Lead + Pi 组合在 bootstrap 期落成笼统 INTERNAL。
+  it('allows Pi workers for a remote lead (pi SSH remote runtime landed — round 42)', async () => {
+    // 轮 42:原闸(pi sessions are local-only)写于 Pi SSH remote 能力落地前;
+    // 现 remote pi 全链路可用,worker 继承 lead.remoteHostId 走通用 remote 路径,
+    // preflight 不再拒绝,直接进 bootstrap。
     const { service, deps } = createDeps({
       getLeadSessionRow: vi.fn(async () => remoteLeadRow),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
@@ -2300,19 +2589,22 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
         pi: [{ id: 'xd', name: 'XD Gateway', models: ['claude-sonnet-4-6'] }],
       })),
     });
-    await expect(
-      service.createWorker({
-        leadSessionId: 'lead-1',
-        role: 'developer',
-        agent: 'pi',
-        label: 'pi-dev',
-      }),
-    ).resolves.toMatchObject({
-      ok: false,
-      errorCode: 'INVALID_PARAMS',
-      message: expect.stringContaining('local-only'),
+    const result = await service.createWorker({
+      leadSessionId: 'lead-1',
+      role: 'developer',
+      agent: 'pi',
+      label: 'pi-dev',
     });
-    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ ok: true });
+    // worker bootstrap 继承 lead 的 remoteHostId + workingDir(同远端主机 spawn)。
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentKind: 'pi',
+        remoteHostId: 'remote-host-1',
+        workingDir: '/srv/repo',
+        orcaRole: 'worker',
+      }),
+    );
   });
 });
 
@@ -2337,7 +2629,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 
@@ -2379,7 +2671,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       ]),
       getProviderRoutingContext: vi.fn(async () => providerRoutingContext({
         'claude-code': [],
-        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], chatBridgedCodex: true }],
+        codex: [{ id: 'deepseek', name: 'DeepSeek', models: ['deepseek-v4'], localOnlyForSsh: true }],
       })),
     });
 

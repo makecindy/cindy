@@ -252,6 +252,32 @@ describe('resolveDeviceLinkDraftDefaults', () => {
     expect(sel.effort).toBe('xhigh');
     expect(sel.fastMode).toBe(true);
   });
+
+  it('provider 槽优先于 * 槽', () => {
+    const sel = resolveDeviceLinkDraftDefaults(
+      caps(),
+      {
+        model: 'claude-opus-4-8',
+        providerId: 'anthropic',
+        effort: 'high',
+        fastMode: false,
+        providerModelMemory: {
+          'claude-code:*': {
+            effortByModel: { 'claude-opus-4-8': 'low' },
+            fastByModel: {},
+          },
+          'claude-code:anthropic': {
+            effortByModel: { 'claude-opus-4-8': 'xhigh' },
+            fastByModel: { 'claude-opus-4-8': true },
+          },
+        },
+      },
+      undefined,
+      'claude-code',
+    );
+    expect(sel.effort).toBe('xhigh');
+    expect(sel.fastMode).toBe(true);
+  });
 });
 
 describe('shouldReseedDeviceLinkDraftDefaults', () => {
@@ -312,6 +338,58 @@ describe('shouldReseedDeviceLinkDraftDefaults', () => {
         currentSeedKey: 'device-a:claude-code',
         nextSeedKey: 'device-b:codex',
         capabilitiesChanged: false,
+        controllerTouched: true,
+        remoteModelChosenByUser: true,
+      }),
+    ).toBe(true);
+  });
+
+  /**
+   * 统一面板的跨引擎选择(2026-08-17 review 第三轮 G1)。
+   *
+   * 「新目标一律重种」这条本身没错 —— 错的是**谁先到**:控制端在远程草稿里跨引擎选了一行,
+   * switchVendor 让下一帧的 agent 变成目标引擎,seed key 随之变新,于是这条规则拿被控端的
+   * 远程默认值把用户刚点的模型盖掉。修法是让那次显式选择**前置**把 key 推到目标引擎,
+   * 这一组就是那前后两种输入的对照。
+   */
+  it('treats a cross-engine pick as its own seed once the key was advanced', () => {
+    // 没前置(旧行为):agent 一变就是「新目标」→ 无条件重种 → 用户刚选的模型被远程默认覆盖。
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:claude-code',
+        nextSeedKey: 'device-a:codex',
+        capabilitiesChanged: true,
+        controllerTouched: true,
+        remoteModelChosenByUser: true,
+      }),
+    ).toBe(true);
+    // 前置之后:同一目标 + 控制端已编辑 → 不重种。目标引擎的 capabilities 到货那一帧只做
+    // 合法性夹紧(保留 current.model),用户的选择留在草稿里。
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:codex',
+        nextSeedKey: 'device-a:codex',
+        capabilitiesChanged: true,
+        controllerTouched: true,
+        remoteModelChosenByUser: true,
+      }),
+    ).toBe(false);
+    // 重复渲染 / 重复播种窗口:key 已被显式选择占住,后续每一帧都判成同一目标,同样不重种。
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:codex',
+        nextSeedKey: 'device-a:codex',
+        capabilitiesChanged: false,
+        controllerTouched: true,
+        remoteModelChosenByUser: false,
+      }),
+    ).toBe(false);
+    // 换设备仍然照常重种(这次前置只影响「同设备换引擎」,不能顺手把换机也挡掉)。
+    expect(
+      shouldReseedDeviceLinkDraftDefaults({
+        currentSeedKey: 'device-a:codex',
+        nextSeedKey: 'device-b:codex',
+        capabilitiesChanged: true,
         controllerTouched: true,
         remoteModelChosenByUser: true,
       }),

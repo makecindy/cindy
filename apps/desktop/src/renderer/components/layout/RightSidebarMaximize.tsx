@@ -13,6 +13,7 @@
 import { Maximize2, Minimize2 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 interface RightSidebarMaximizeProps {
@@ -32,25 +33,28 @@ export function RightSidebarMaximize({
   const { t } = useTranslation();
   const isToolbar = size === 'toolbar';
   const Icon = isMaximized ? Minimize2 : Maximize2;
+  const label = t(
+    isMaximized
+      ? 'rightSidebar.tabs.controls.restoreAria'
+      : 'rightSidebar.tabs.controls.maximizeAria',
+  );
 
   return (
-    <button
-      type="button"
-      className={cn(
-        'pointer-events-auto flex h-7 w-7 items-center justify-center',
-        isToolbar ? 'rounded-md' : 'rounded-full',
-        'text-titlebar-icon',
-        'transition-colors',
-        'hover:bg-titlebar-button-hover',
-      )}
-      onClick={onMaximize}
-      aria-label={t(
-        isMaximized
-          ? 'rightSidebar.tabs.controls.restoreAria'
-          : 'rightSidebar.tabs.controls.maximizeAria',
-      )}
-    >
-      <Icon size={14} />
-    </button>
+    <Tip text={label} side="bottom">
+      <button
+        type="button"
+        className={cn(
+          'pointer-events-auto flex h-7 w-7 items-center justify-center',
+          isToolbar ? 'rounded-md' : 'rounded-full',
+          'text-titlebar-icon',
+          'transition-colors',
+          'hover:bg-titlebar-button-hover',
+        )}
+        onClick={onMaximize}
+        aria-label={label}
+      >
+        <Icon size={14} />
+      </button>
+    </Tip>
   );
 }

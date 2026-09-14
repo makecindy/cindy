@@ -9,10 +9,13 @@
   "exports": {
     ".": "./src/index.ts",
     "./catalog": "./catalog/providers.json",
+    "./provider-model-catalog": "./catalog/provider-models.json",
+    "./pi-thinking-levels": "./src/piThinkingLevels.mjs",
     "./sections": "./src/sections.ts",
     "./branding": "./src/providerBranding.ts",
     "./registry": "./src/registry.ts",
     "./types": "./src/types.ts",
+    "./provider-identity": "./src/provider-identity.ts",
     "./effort-resolution": "./src/effortResolution.ts",
     "./model-list": "./src/modelList.ts",
     "./classification": "./src/classification.ts",
@@ -31,5 +34,8 @@
     "@types/node": "*",
     "typescript": "^5.7.0",
     "vitest": "^3.2.4"
+  },
+  "dependencies": {
+    "@cindy/model-compat": "workspace:*"
   }
 }

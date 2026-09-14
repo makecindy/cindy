@@ -14,11 +14,16 @@ import type { CustomMcpConfig } from '../../../shared/customMcp.js';
 
 const storeMock = vi.hoisted(() => ({ listCustomMcpServers: vi.fn() }));
 
-vi.mock('../../maker-host/custom-mcp-store.js', () => ({
-  listCustomMcpServers: storeMock.listCustomMcpServers,
-  // 只把读库这一步换成 mock；判定逻辑用真实实现，避免名单在测试里漂移。
-  isUnsafeMcpServerId: (id: string) => ['__proto__', 'constructor', 'prototype'].includes(id),
-}));
+vi.mock('../../maker-host/custom-mcp-store.js', async () => {
+  const actual = await vi.importActual<typeof import('../../maker-host/custom-mcp-store.js')>(
+    '../../maker-host/custom-mcp-store.js',
+  );
+  return {
+    ...actual,
+    // 只把读库这一步换成 mock；校验 / 判定逻辑用真实实现，避免名单在测试里漂移。
+    listCustomMcpServers: storeMock.listCustomMcpServers,
+  };
+});
 
 vi.mock('../../secrets/providerSecretStore.js', () => ({
   readCustomMcpToken: () => null,
@@ -111,6 +116,19 @@ describe('refreshCustomMcpProviders', () => {
     expect(arr.map((p) => p.name)).toEqual(['cindy_browser', 'safe_one']);
     // 没有污染原型：普通对象仍然干净。
     expect(Object.getPrototypeOf({} as Record<string, unknown>)).toBe(Object.prototype);
+  });
+
+  it('quarantines persisted configs with invalid custom headers', async () => {
+    const arr: McpProvider[] = [builtin('cindy_browser')];
+    registerCustomMcpArrays(arr);
+    storeMock.listCustomMcpServers.mockResolvedValue([
+      { ...config('bad_header'), headers: { 'X-Feishu-Name': '中文' } },
+      config('safe_one'),
+    ]);
+
+    await refreshCustomMcpProviders();
+
+    expect(arr.map((p) => p.name)).toEqual(['cindy_browser', 'safe_one']);
   });
 
   it('still allows ids that merely resemble a builtin name', async () => {

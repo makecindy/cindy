@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import type { DeviceView } from '@cindy/device-link';
+import { i18n } from '@/i18n';
 import {
   deviceAccessState,
   isControllableDevice,
@@ -7,6 +8,10 @@ import {
   toDeviceListItems,
   visibleDeviceListItems,
 } from '@/device-link/devices';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 function device(patch: Partial<DeviceView> = {}): DeviceView {
   return {

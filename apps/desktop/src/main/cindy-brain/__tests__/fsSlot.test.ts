@@ -3,17 +3,19 @@
  * 确认记忆 / save 票据透传 / 远程工作区拒绝。全部走注入 deps + os.tmpdir
  * 临时目录(规则 23:凭证与生成物不落仓库工作区),零 Electron。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Session } from '@cindy/maker-core';
 
 import { GhostFsSlot, validateFsRelPath, workdirWriteVerdict, type FsSlotDeps, type FsSessionSnapshot } from '../fsSlot.js';
+import { resolveGhostFsSessionSnapshot } from '../../maker-ipc/ghostFsSessionSnapshot.js';
 import { GHOST_FS_WRITE_MAX_BYTES, type InstalledGhost } from '../../../shared/ghost.js';
 
 const GHOST_ID = 'test-ghost';
 
-function makeGhost(slots: string[]): InstalledGhost {
+function makeGhost(fsCapability: boolean): InstalledGhost {
   return {
     manifest: {
       schemaVersion: 2,
@@ -22,7 +24,7 @@ function makeGhost(slots: string[]): InstalledGhost {
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: slots as InstalledGhost['manifest']['slots'],
+      ...(fsCapability ? { fs: true } : {}),
     },
     dir: '/tmp/fake-install-dir',
     enabled: true,
@@ -31,7 +33,7 @@ function makeGhost(slots: string[]): InstalledGhost {
 }
 
 interface HarnessOverrides {
-  slots?: string[];
+  fs?: boolean;
   session?: FsSessionSnapshot | null;
   confirm?: (sessionId: string) => Promise<{ confirmed: boolean }>;
   saveWrite?: FsSlotDeps['writeSaveDeposit'];
@@ -44,7 +46,7 @@ interface HarnessOverrides {
   /** 条目通道;缺省按 callSessionId 推导(null ⇒ script,否则 session)。 */
   callChannel?: 'session' | 'script';
   /** 严格在途查询结果:false = 模拟已交卷/已清扫(返回 null)。缺省 true。 */
-  inFlight?: boolean;
+  inFlight?: boolean | (() => boolean);
 }
 
 function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
@@ -54,16 +56,22 @@ function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
       ? {
           ghostId: overrides.callGhostId ?? GHOST_ID,
           sessionId: overrides.callSessionId === undefined ? 'sess-1' : overrides.callSessionId,
+          sessionInstanceId: 'instance-1',
           scriptWorkdir: overrides.callScriptWorkdir ?? null,
           scriptWritePath: overrides.callScriptWritePath ?? null,
           channel: overrides.callChannel ?? (overrides.callSessionId === null ? 'script' as const : 'session' as const),
         }
       : null;
   const deps: FsSlotDeps = {
-    getGhost: (id) => (id === GHOST_ID ? makeGhost(overrides.slots ?? ['fs']) : null),
+    getGhost: (id) => (id === GHOST_ID ? makeGhost(overrides.fs ?? true) : null),
     dataRootDir: () => dataRoot,
     callInfo: entryFor,
-    inFlightCallInfo: (callId) => (overrides.inFlight === false ? null : entryFor(callId)),
+    inFlightCallInfo: (callId) => {
+      const isInFlight = typeof overrides.inFlight === 'function'
+        ? overrides.inFlight()
+        : overrides.inFlight !== false;
+      return isInFlight ? entryFor(callId) : null;
+    },
     getSessionSnapshot: async () => (overrides.session === undefined ? null : overrides.session),
     requestWriteConfirm: async (sessionId) => {
       confirmCalls.push(sessionId);
@@ -80,11 +88,32 @@ function makeHarness(dataRoot: string, overrides: HarnessOverrides = {}) {
   return { slot: new GhostFsSlot(deps), confirmCalls };
 }
 
+/** Real Session authority with an in-memory provider, so the production resolver is exercised. */
+function makeLiveSession(workDir: string, permissionMode: 'auto' | 'ask' | 'bypassPermissions') {
+  let planMode: boolean | null = false;
+  let close!: () => void;
+  const closed = new Promise<void>((resolve) => { close = resolve; });
+  const logger = { trace() {}, debug() {}, info() {}, warn() {}, error() {}, fatal() {}, child() { return logger; } };
+  const handle = {
+    id: 'provider-session', agentKind: 'pi', model: 'test',
+    async *events() { await closed; },
+    async close() { close(); },
+    setInteractionResolver() {},
+    getPlanMode: () => planMode,
+    setPlanMode: async (enabled: boolean) => { planMode = enabled; },
+    reviewAutoPermissionAction: vi.fn(async () => ({ verdict: 'allow' as const })),
+  };
+  const session = new Session({ id: 'sess-1', sessionInstanceId: 'instance-1', agentKind: 'pi', workDir,
+    permissionMode, handle: handle as never, capabilities: { planMode: { supported: true } } as never, logger,
+  });
+  return { session, handle, setProviderPlan: (enabled: boolean | null) => { planMode = enabled; } };
+}
+
 describe('workdirWriteVerdict(权限映射表)', () => {
   it('免批模式直写,逐条模式确认,plan 拒,未知模式保守确认', () => {
     expect(workdirWriteVerdict('acceptEdits', false)).toBe('allow');
     expect(workdirWriteVerdict('bypassPermissions', false)).toBe('allow');
-    expect(workdirWriteVerdict('auto', false)).toBe('allow');
+    expect(workdirWriteVerdict('auto', false)).toBe('review');
     expect(workdirWriteVerdict('ask', false)).toBe('confirm');
     expect(workdirWriteVerdict('default', false)).toBe('confirm');
     expect(workdirWriteVerdict('plan', false)).toBe('deny');
@@ -133,13 +162,93 @@ describe('GhostFsSlot', () => {
     await fs.promises.rm(tmpRoot, { recursive: true, force: true });
   });
 
-  it('未声明 fs 卡槽一律拒', async () => {
-    const { slot } = makeHarness(dataRoot, { slots: ['tool'] });
+  it('未声明 fs 能力一律拒', async () => {
+    const { slot } = makeHarness(dataRoot, { fs: false });
     const r = await slot.handleFsRequest(GHOST_ID, {
       type: 'fs-request', op: 'write', root: 'data', path: 'a.txt', content: 'hi',
     });
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('fs');
+  });
+
+  it('未声明 fs 时，Agent 在途调用仍可按会话权限写 workdir', async () => {
+    const { slot } = makeHarness(dataRoot, {
+      fs: false,
+      session: {
+        workingDir: workdir,
+        permissionMode: 'acceptEdits',
+        planModeEnabled: false,
+        remoteHostId: null,
+      },
+    });
+    const r = await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request',
+      op: 'write',
+      root: 'workdir',
+      path: 'agent/output.txt',
+      content: 'ok',
+      callId: 'call-1',
+    });
+    expect(r).toMatchObject({ ok: true, op: 'write' });
+    expect(await fs.promises.readFile(path.join(workdir, 'agent/output.txt'), 'utf8')).toBe('ok');
+  });
+
+  it('未声明 fs 时，确认期间交卷会让 workdir 写盘授权失效且不记住确认', async () => {
+    let inFlight = true;
+    let confirmations = 0;
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      fs: false,
+      inFlight: () => inFlight,
+      session: {
+        workingDir: workdir,
+        permissionMode: 'default',
+        planModeEnabled: false,
+        remoteHostId: null,
+      },
+      confirm: async () => {
+        confirmations += 1;
+        if (confirmations === 1) inFlight = false;
+        return { confirmed: true };
+      },
+    });
+    const request = {
+      type: 'fs-request',
+      op: 'write',
+      root: 'workdir',
+      path: 'agent/late.txt',
+      content: 'blocked',
+      callId: 'call-1',
+    };
+
+    const denied = await slot.handleFsRequest(GHOST_ID, request);
+    expect(denied).toMatchObject({ ok: false });
+    expect((denied as { message: string }).message).toContain('授权已失效');
+    expect(fs.existsSync(path.join(workdir, 'agent', 'late.txt'))).toBe(false);
+
+    inFlight = true;
+    const allowed = await slot.handleFsRequest(GHOST_ID, request);
+    expect(allowed).toMatchObject({ ok: true, op: 'write' });
+    expect(confirmCalls).toHaveLength(2);
+    expect(await fs.promises.readFile(path.join(workdir, 'agent', 'late.txt'), 'utf8')).toBe('blocked');
+  });
+
+  it('未声明 fs 时，脚本通道不能复用 Agent 的 workdir 授权', async () => {
+    const { slot } = makeHarness(dataRoot, {
+      fs: false,
+      callSessionId: null,
+      callScriptWorkdir: workdir,
+      callChannel: 'script',
+    });
+    expect(
+      await slot.handleFsRequest(GHOST_ID, {
+        type: 'fs-request',
+        op: 'write',
+        root: 'workdir',
+        path: 'script/output.txt',
+        content: 'blocked',
+        callId: 'call-1',
+      }),
+    ).toMatchObject({ ok: false });
   });
 
   it('未知 op / root 拒', async () => {
@@ -309,6 +418,99 @@ describe('GhostFsSlot', () => {
     expect(await forged.slot.handleFsRequest(GHOST_ID, {
       type: 'fs-request', op: 'write', root: 'workdir', path: 'x.md', content: 'x', callId: 'call-1',
     })).toMatchObject({ ok: false });
+  });
+
+  it.each(['allow', 'block', 'ask', 'unavailable'] as const)('workdir Auto follows review %s for every write', async (verdict) => {
+    const reviewAction = vi.fn(async () => {
+      if (verdict === 'unavailable') throw new Error('review unavailable');
+      return { verdict };
+    });
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      session: { workingDir: workdir, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null, reviewAction },
+    });
+    for (let i = 0; i < 2; i++) {
+      expect(await slot.handleFsRequest(GHOST_ID, {
+        type: 'fs-request', op: 'write', root: 'workdir', path: `auto-${i}.txt`, content: 'hello', callId: 'call-1',
+      })).toMatchObject({ ok: verdict !== 'block' });
+      expect(fs.existsSync(path.join(workdir, `auto-${i}.txt`))).toBe(verdict !== 'block');
+    }
+    expect(reviewAction).toHaveBeenCalledTimes(2);
+    expect(reviewAction).toHaveBeenCalledWith(expect.objectContaining({ kind: 'file-write', resolvedWritableRoots: [await fs.promises.realpath(workdir)] }));
+    expect(confirmCalls).toHaveLength(verdict === 'ask' || verdict === 'unavailable' ? 2 : 0);
+  });
+
+  it.each([false, true])('workdir rejects expired live permission even with fs declared (%s)', async (fsCapability) => {
+    let current = true;
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      fs: fsCapability,
+      session: { workingDir: workdir, permissionMode: 'auto', planModeEnabled: false, remoteHostId: null,
+        isCurrent: () => current, reviewAction: async () => { current = false; return { verdict: 'allow' }; } },
+    });
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'expired.txt', content: 'hello', callId: 'call-1',
+    })).toMatchObject({ ok: false });
+    expect(fs.existsSync(path.join(workdir, 'expired.txt'))).toBe(false);
+    expect(confirmCalls).toHaveLength(0);
+  });
+
+  it('workdir uses the injected live instance resolver, not the database permission snapshot', async () => {
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      session: { workingDir: workdir, permissionMode: 'bypassPermissions', planModeEnabled: false, remoteHostId: null },
+    });
+    const resolve = vi.fn(async () => ({ workingDir: workdir, permissionMode: 'ask', planModeEnabled: false, remoteHostId: null }));
+    slot.setSessionSnapshotResolver(resolve);
+    expect(await slot.handleFsRequest(GHOST_ID, {
+      type: 'fs-request', op: 'write', root: 'workdir', path: 'live.txt', content: 'hello', callId: 'call-1',
+    })).toMatchObject({ ok: true });
+    expect(resolve).toHaveBeenCalledWith('sess-1', 'instance-1');
+    expect(confirmCalls).toHaveLength(1);
+  });
+
+  it.each(['auto', 'ask', 'bypassPermissions'] as const)('workdir %s honors live Plan even when the database mirror says false', async (mode) => {
+    const { session, handle, setProviderPlan } = makeLiveSession(workdir, mode);
+    const { slot, confirmCalls } = makeHarness(dataRoot, {
+      session: { workingDir: workdir, permissionMode: mode, planModeEnabled: false, remoteHostId: null },
+    });
+    slot.setSessionSnapshotResolver(async (id, instance) => resolveGhostFsSessionSnapshot(() => session, id, instance));
+    try {
+      for (const enabled of [true, null]) {
+        setProviderPlan(enabled);
+        expect(await slot.handleFsRequest(GHOST_ID, {
+          type: 'fs-request', op: 'write', root: 'workdir', path: 'plan.txt', content: 'blocked', callId: 'call-1',
+        })).toMatchObject({ ok: false });
+      }
+      expect(fs.existsSync(path.join(workdir, 'plan.txt'))).toBe(false);
+      expect(confirmCalls).toHaveLength(0);
+      expect(handle.reviewAutoPermissionAction).not.toHaveBeenCalled();
+    } finally {
+      await session.close();
+    }
+  });
+
+  it.each(['review', 'confirm', 'mkdir'] as const)('workdir invalidates live Plan authority during %s', async (phase) => {
+    const { session, handle } = makeLiveSession(workdir, phase === 'review' ? 'auto' : phase === 'confirm' ? 'ask' : 'bypassPermissions');
+    const { slot } = makeHarness(dataRoot, {
+      confirm: async () => { await session.setPlanMode(true); return { confirmed: true }; },
+    });
+    slot.setSessionSnapshotResolver(async (id, instance) => resolveGhostFsSessionSnapshot(() => session, id, instance));
+    handle.reviewAutoPermissionAction.mockImplementation(async () => {
+      await session.setPlanMode(true);
+      return { verdict: 'allow' };
+    });
+    const originalMkdir = fs.promises.mkdir;
+    const mkdir = phase === 'mkdir' ? vi.spyOn(fs.promises, 'mkdir').mockImplementationOnce(async (...args) => {
+      await session.setPlanMode(true);
+      return originalMkdir(...args);
+    }) : null;
+    try {
+      expect(await slot.handleFsRequest(GHOST_ID, {
+        type: 'fs-request', op: 'write', root: 'workdir', path: 'late-plan.txt', content: 'blocked', callId: 'call-1',
+      })).toMatchObject({ ok: false });
+      expect(fs.existsSync(path.join(workdir, 'late-plan.txt'))).toBe(false);
+    } finally {
+      mkdir?.mockRestore();
+      await session.close();
+    }
   });
 
   it('workdir:read/list/delete 一律拒(仅 write)', async () => {

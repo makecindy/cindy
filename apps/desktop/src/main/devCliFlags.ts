@@ -111,6 +111,12 @@ function defaultCanonicalizePath(p: string): string {
  */
 const ISOLATION_NAME_RE = /^[A-Za-z0-9_-]{1,32}$/;
 
+/**
+ * 同机所有正式区域 profile 的目录名。当前构建区域只决定默认目录和沙箱派生，
+ * 不能缩小保护集合：Global 启动指到 CN 的 Cindy、反向同理，都仍是正式 profile。
+ */
+export const OFFICIAL_USER_DATA_DIR_NAMES = ['Cindy', 'CindyGlobal', 'CindyDev'] as const;
+
 export interface DevCliFlagsInput {
   argv: readonly string[];
   isPackaged: boolean;
@@ -125,6 +131,12 @@ export interface DevCliFlagsInput {
   canonicalizePath?: (p: string) => string;
   /** app.getPath('userData') 的默认值;隔离模式在其后缀 '-dev2[-<名字>]' 生成沙箱目录。 */
   defaultUserDataDir: string;
+  /**
+   * Electron app.getPath('appData')。正式 profile 只从这里派生 Cindy /
+   * CindyGlobal / CindyDev，不得用当前 userData 覆写的父目录猜。
+   * 缺省回落到 dirname(defaultUserDataDir)，仅给旧测试。
+   */
+  appDataDir?: string;
   /**
    * XDT_ISOLATED 环境变量:严格 '1' = 隔离开关开,其它任何值(含 '0'/'false'/名字)
    * 一律视为关。名字**不**挤在这个变量里——否则名叫 "1" 的沙箱会和开关标记值撞车
@@ -148,11 +160,18 @@ export interface DevCliFlagsInput {
   envEndpointsCdn: string | undefined;
 }
 
+/** 解析后的实际 profile 归属。安全权限必须看这个，不能只看启动旗标。 */
+export type DevProfileKind = 'production-shared' | 'isolated-sandbox' | 'custom';
+
 export interface DevCliFlags {
   /** --passive:本实例定时任务不自动触发(scheduler-host 读 XDT_SCHEDULER_PASSIVE)。 */
   schedulerPassive: boolean;
   /** 是否由 --isolated / XDT_ISOLATED 明确进入独立 userData 沙箱。 */
   isolated: boolean;
+  /** 实际落地的 profile 种类。isolated 旗标指向正式目录时仍是 production-shared。 */
+  profileKind: DevProfileKind;
+  /** isolated 身份却落在正式 profile 上：启动器必须拒绝。 */
+  isolatedOnProductionProfile: boolean;
   /**
    * 生效的 userData 覆写目录;null = 不覆写。来源优先级:
    * 显式 XDT_USER_DATA_DIR > 隔离模式默认沙箱目录(<userData>-dev2[-<名字>])> 不覆写。
@@ -224,18 +243,84 @@ export function resolveSingleInstanceLockUserDataDir(input: {
 }
 
 /**
- * passive 只有在共享 userData 时才需要禁止 migration。
+ * passive 只有在共享正式 profile 时才需要禁止 migration。
  *
  * 显式 isolated 沙箱没有其它实例替它初始化数据库，仍按正常启动路径迁移；packaged
  * 不接受任何 dev-only passive 语义。调用方会把这个纯判定同步成内部 env，供延后加载
  * 的 localDb 模块在首次打开用户数据库时执行硬闸。
+ *
+ * 判定看解析后的真实 profile：正式目录与非隔离 custom 覆写（两进程共一个裸
+ * XDT_USER_DATA_DIR）都受保护；只有真正的 isolated-sandbox 自己迁、自己删。
  */
 export function shouldEnforcePassiveMigrationCompatibility(input: {
   isPackaged: boolean;
   schedulerPassive: boolean;
-  isolated: boolean;
+  profileKind: DevProfileKind;
 }): boolean {
-  return !input.isPackaged && input.schedulerPassive && !input.isolated;
+  return !input.isPackaged && input.schedulerPassive && input.profileKind !== 'isolated-sandbox';
+}
+
+export function resolveOfficialUserDataDirs(appDataDir: string): string[] {
+  // 正式集合永远从 appData 派生。不能用当前 userData 覆写的父目录猜：
+  // `--user-data-dir=/tmp/custom` + `XDT_USER_DATA_DIR=$HOME/.../Cindy` 时，
+  // 用 /tmp 当父目录会把真正的 Cindy 目录判成 custom。
+  return OFFICIAL_USER_DATA_DIR_NAMES.map((name) => join(appDataDir, name));
+}
+
+function isOfficialUserDataDir(
+  dir: string,
+  officialDirs: readonly string[],
+  canonicalize: (value: string) => string,
+): boolean {
+  const target = canonicalize(dir);
+  return officialDirs.some((official) => canonicalize(official) === target);
+}
+
+function officialDirsFromInput(input: {
+  officialUserDataDirs?: readonly string[];
+  appDataDir?: string;
+  productionUserDataDir?: string;
+  effectiveUserDataDir?: string;
+}): readonly string[] {
+  if (input.officialUserDataDirs) return input.officialUserDataDirs;
+  const appDataDir =
+    input.appDataDir ??
+    dirname(input.productionUserDataDir ?? input.effectiveUserDataDir ?? '');
+  return resolveOfficialUserDataDirs(appDataDir);
+}
+
+export function isIsolatedIdentityOnProductionProfile(input: {
+  isolated: boolean;
+  effectiveUserDataDir: string;
+  productionUserDataDir?: string;
+  appDataDir?: string;
+  officialUserDataDirs?: readonly string[];
+  canonicalizePath?: (value: string) => string;
+}): boolean {
+  if (!input.isolated) return false;
+  const canonicalize = input.canonicalizePath ?? defaultCanonicalizePath;
+  return isOfficialUserDataDir(
+    input.effectiveUserDataDir,
+    officialDirsFromInput(input),
+    canonicalize,
+  );
+}
+
+export function resolveDevProfileKind(input: {
+  isolatedDirIsEpochDerived: boolean;
+  effectiveUserDataDir: string;
+  productionUserDataDir?: string;
+  appDataDir?: string;
+  officialUserDataDirs?: readonly string[];
+  canonicalizePath?: (value: string) => string;
+}): DevProfileKind {
+  const canonicalize = input.canonicalizePath ?? defaultCanonicalizePath;
+  const officialDirs = officialDirsFromInput(input);
+  if (isOfficialUserDataDir(input.effectiveUserDataDir, officialDirs, canonicalize)) {
+    return 'production-shared';
+  }
+  if (input.isolatedDirIsEpochDerived) return 'isolated-sandbox';
+  return 'custom';
 }
 
 export function resolveDevCliFlags(input: DevCliFlagsInput): DevCliFlags {
@@ -243,6 +328,8 @@ export function resolveDevCliFlags(input: DevCliFlagsInput): DevCliFlags {
     return {
       schedulerPassive: false,
       isolated: false,
+      profileKind: 'production-shared',
+      isolatedOnProductionProfile: false,
       userDataDirOverride: null,
       isolatedDirIsEpochDerived: false,
       needsIsolatedDeviceId: false,
@@ -310,9 +397,27 @@ export function resolveDevCliFlags(input: DevCliFlagsInput): DevCliFlags {
     explicitDirTrusted &&
     userDataDirOverride !== null &&
     canonicalize(userDataDirOverride) === canonicalize(epochDerivedDir);
+  const effectiveUserDataDir = userDataDirOverride ?? input.defaultUserDataDir;
+  const officialUserDataDirs = resolveOfficialUserDataDirs(
+    input.appDataDir ?? dirname(input.defaultUserDataDir),
+  );
+  const isolatedOnProductionProfile = isIsolatedIdentityOnProductionProfile({
+    isolated,
+    effectiveUserDataDir,
+    officialUserDataDirs,
+    canonicalizePath: canonicalize,
+  });
+  const profileKind = resolveDevProfileKind({
+    isolatedDirIsEpochDerived,
+    effectiveUserDataDir,
+    officialUserDataDirs,
+    canonicalizePath: canonicalize,
+  });
   return {
     schedulerPassive: input.argv.includes('--passive') || input.envSchedulerPassive === '1',
     isolated,
+    profileKind,
+    isolatedOnProductionProfile,
     userDataDirOverride,
     isolatedDirIsEpochDerived,
     needsIsolatedDeviceId: isolated && !input.envDeviceIdOverride?.trim(),

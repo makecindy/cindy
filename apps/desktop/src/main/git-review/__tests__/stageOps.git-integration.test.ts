@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -14,6 +15,20 @@ import { readStatus } from '../statusReader';
 import type { DiffSelection, FileDiff, ReviewDiffReadOptions, ReviewFileTarget, ReviewScope } from '../types';
 
 let repoPath: string;
+
+const canLinkFile = (() => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'git-review-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(root, { recursive: true, force: true });
+  }
+})();
 
 const repoTemplate = new TestDirectoryTemplate('xdt-git-review-stage-', async (dir) => {
   await runGit(['init'], { cwd: dir });
@@ -395,7 +410,8 @@ describe('git-review stageOps', () => {
     await expect(applyHunkSelection(scope(), current, 'unstage', diff, selectLines(diff))).rejects.toThrow(GitReviewStageError);
   });
 
-  it.skipIf(process.platform === 'win32')('rejects partial typechange staging while whole-file staging remains valid', async () => {
+  it.skipIf(!canLinkFile)('rejects partial typechange staging while whole-file staging remains valid', async () => {
+    await runGit(['config', 'core.symlinks', 'true'], { cwd: repoPath });
     await fs.rm(path.join(repoPath, 'file.txt'));
     await fs.symlink('target.txt', path.join(repoPath, 'file.txt'));
 

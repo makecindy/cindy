@@ -43,6 +43,12 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     );
   });
 
+  it('maps force-retired errors to location-neutral copy for persisted rows', () => {
+    expect(ERROR_REASON_I18N_KEYS['app-server-force-retired']).toBe(
+      'chat.errorBanner.codexAppServerRetired',
+    );
+  });
+
   it('maps upstream overload to the same copy the tail banner uses', () => {
     // 本表注释的一致性诉求: 同一条过载错误不能出现「尾部红条本地化、历史静态卡
     // 英文原文」的分裂。复用 banner 那条 key(不新增文案), 且 codex 改措辞也不影响
@@ -58,8 +64,25 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     );
   });
 
+  it('maps oversized Codex history to its own copy, not the reconnect timeout', () => {
+    expect(ERROR_REASON_I18N_KEYS.codex_history_oversized).toBe(
+      'logic.errors.codexHistoryOversized',
+    );
+    expect(ERROR_REASON_I18N_KEYS.codex_history_oversized).not.toBe(
+      ERROR_REASON_I18N_KEYS.codex_reconnect_stalled,
+    );
+  });
+
   it('maps an event-loop crash to the generic terminal failure copy', () => {
     expect(ERROR_REASON_I18N_KEYS.session_event_loop_crashed).toBe('logic.errors.turnFailed');
+  });
+
+  it('restores a Pi output limit for localized history rendering', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('output-limit', { message: 'Pi reached the model output limit.', reason: 'output-limit' }),
+    ]);
+    expect(mapped[0]).toMatchObject({ role: 'error', errorReason: 'output-limit', isStreaming: false });
+    expect(ERROR_REASON_I18N_KEYS[mapped[0]!.errorReason!]).toBe('logic.errors.outputLimit');
   });
 
   it('restores the overload reason from persisted rows so history can localize it', () => {
@@ -92,6 +115,21 @@ describe('mapServerMessages — persisted terminal error rows', () => {
       content: '任务执行失败（模型未返回错误详情）。',
       errorReason: 'turn-failed',
       isStreaming: false,
+    });
+  });
+
+  it('restores bounded tool-loop details for localized history rendering', () => {
+    const mapped = makerChatStore.__mapServerMessagesForTest([
+      errorRow('e-tool-loop', {
+        message: '内部熔断详情：missing_required_field',
+        reason: 'tool_use_loop_detected',
+        toolLoop: { kind: 'contract', count: 3 },
+      }),
+    ]);
+
+    expect(mapped[0]).toMatchObject({
+      errorReason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
     });
   });
 

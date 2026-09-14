@@ -32,8 +32,11 @@ describe('maker-shared desktop parity fixture', () => {
       expect(hasOwn(input, 'effort')).toBe(true);
       expect(input.model).toBeUndefined();
       expect(input.effort).toBeUndefined();
-      expect(hasOwn(input, 'fastMode')).toBe(false);
     }
+    // Mobile has no explicit follow/override action and preserves a saved Fast
+    // choice. Desktop's full follow selection must clear it for future recovery.
+    expect(hasOwn(sharedInput, 'fastMode')).toBe(false);
+    expect(desktopInput).toHaveProperty('fastMode', undefined);
   });
 
   it('keeps shared file preview categories compatible with desktop attachment categories', () => {

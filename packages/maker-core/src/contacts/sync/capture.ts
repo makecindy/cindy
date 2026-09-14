@@ -10,10 +10,12 @@ import {
   nextContactsSyncStamp,
   stableContactsSyncJson,
 } from "./merge.js";
+import { collectContactsIdentityConflicts } from "./conflicts.js";
 import {
   type ContactsDataSnapshot,
   type ContactsSnapshotContact,
   type ContactsSyncContact,
+  type ContactsSyncConflictMembership,
   type ContactsSyncEntity,
   type ContactsSyncStamp,
   type ContactsSyncState,
@@ -164,49 +166,110 @@ export function captureContactsSnapshot(
   current: ContactsDataSnapshot,
   nodeId: string,
 ): { state: ContactsSyncState; changed: boolean } {
-  if (equal(previous, current)) return { state, changed: false };
-  const next = nextContactsSyncStamp(state, nodeId);
-  return {
-    changed: true,
-    state: {
+  const snapshotChanged = !equal(previous, current);
+  let stamp: ContactsSyncStamp | undefined;
+  let capturedState = state;
+  if (snapshotChanged) {
+    const next = nextContactsSyncStamp(state, nodeId);
+    stamp = next.stamp;
+    capturedState = {
       ...next.state,
       contacts: captureContacts(
         state.contacts,
         previous.contacts,
         current.contacts,
-        next.stamp,
+        stamp,
       ),
       identities: captureEntities(
         state.identities,
         previous.identities,
         current.identities,
-        next.stamp,
+        stamp,
       ),
       events: captureEntities(
         state.events,
         previous.events,
         current.events,
-        next.stamp,
+        stamp,
       ),
       groups: captureEntities(
         state.groups,
         previous.groups,
         current.groups,
-        next.stamp,
+        stamp,
       ),
       memberships: captureEntities(
         state.memberships,
         previous.memberships,
         current.memberships,
-        next.stamp,
+        stamp,
         { reusableId: true },
       ),
       relations: captureEntities(
         state.relations,
         previous.relations,
         current.relations,
-        next.stamp,
+        stamp,
       ),
+    };
+  }
+  const beforeContacts = new Map(
+    previous.contacts.map((contact) => [contact.id, contact]),
+  );
+  const currentContacts = new Map(
+    current.contacts.map((contact) => [contact.id, contact]),
+  );
+  const conflicts = collectContactsIdentityConflicts(capturedState);
+  const explicitlyConfirmed = new Set(
+    [...currentContacts.keys()].filter(
+      (contactId) =>
+        beforeContacts.get(contactId)?.status === "pending" &&
+        currentContacts.get(contactId)?.status === "confirmed",
+    ),
+  );
+  if (explicitlyConfirmed.size === 0) {
+    return { state: capturedState, changed: snapshotChanged };
+  }
+  const membershipsByContact = new Map<
+    string,
+    ContactsSyncConflictMembership[]
+  >();
+  for (const conflict of conflicts) {
+    for (const contactId of conflict.owners) {
+      if (!explicitlyConfirmed.has(contactId)) continue;
+      const memberships = membershipsByContact.get(contactId) ?? [];
+      memberships.push({
+        platform: conflict.platform,
+        normalizedValue: conflict.normalizedValue,
+        membershipHash: conflict.membershipHash,
+      });
+      membershipsByContact.set(contactId, memberships);
+    }
+  }
+  return {
+    changed: true,
+    state: {
+      ...capturedState,
+      contacts: capturedState.contacts.map((contact) => {
+        if (!explicitlyConfirmed.has(contact.id)) return contact;
+        const acknowledgedConflicts = (
+          membershipsByContact.get(contact.id) ?? []
+        ).sort((left, right) =>
+          compareContactsSyncText(
+            `${left.platform}\u0000${left.normalizedValue}`,
+            `${right.platform}\u0000${right.normalizedValue}`,
+          ),
+        );
+        return {
+          ...contact,
+          status: {
+            ...contact.status,
+            ...(acknowledgedConflicts.length > 0
+              ? { acknowledgedConflicts }
+              : {}),
+          },
+        };
+      }),
     },
   };
 }

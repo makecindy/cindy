@@ -148,9 +148,11 @@ export function registerCreateWorkersTool(
           role: worker.role,
           agent: worker.agent,
           model: worker.model,
+          providerId: worker.provider_id,
           effort: worker.effort,
           fast: worker.fast,
           label: worker.label,
+          ...(worker.working_dir !== undefined ? { workingDir: worker.working_dir } : {}),
           initialTask: worker.initial_task,
         });
         limit = result.limit ?? limit;

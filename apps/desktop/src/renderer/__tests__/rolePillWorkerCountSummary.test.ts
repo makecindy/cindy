@@ -20,8 +20,8 @@ describe('RolePillDropdown worker count summary', () => {
 
     const gateBlock = extractBetween(
       source,
-      '{/* ── Create new worker row (3 上限态) ── */}',
-      '        </div>\n      )}',
+      'function CreateWorkerTabButton({',
+      'function WorkerTabsList({',
     );
     expect(gateBlock).toContain('activeCount >= hardLimit');
     expect(gateBlock).toContain('activeCount >= softLimit');

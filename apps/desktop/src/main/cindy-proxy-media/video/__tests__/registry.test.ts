@@ -61,6 +61,7 @@ describe('VideoProviderRegistry', () => {
   it('starts empty', () => {
     const r = new VideoProviderRegistry();
     expect(r.hasAny()).toBe(false);
+    expect(r.hasAlias('missing')).toBe(false);
     expect(r.collectAllAliases()).toEqual([]);
   });
 
@@ -73,9 +74,24 @@ describe('VideoProviderRegistry', () => {
       }),
     );
     expect(r.hasAny()).toBe(true);
+    expect(r.hasAlias('fast')).toBe(true);
     const resolved = r.resolveByAlias('fast');
     expect(resolved.provider.id).toBe('fakeprov');
     expect(resolved.internalModel).toBe('fp-fast');
+  });
+
+  it('keeps catalog provider identity when aliases collide across sources', () => {
+    const r = new VideoProviderRegistry();
+    r.register(
+      makeFakeProvider({
+        id: 'gateway-video',
+        aliases: [{ alias: 'shared/video-model', internalModel: 'gateway-model' }],
+      }),
+      'xd',
+    );
+
+    expect(r.hasAlias('shared/video-model', 'xd')).toBe(true);
+    expect(r.hasAlias('shared/video-model', 'third-party')).toBe(false);
   });
 
   it('throws on unknown alias', () => {
@@ -111,6 +127,20 @@ describe('VideoProviderRegistry', () => {
         makeFakeProvider({ id: 'p2', aliases: [{ alias: 'shared', internalModel: 'm2' }] }),
       ),
     ).toThrow(/duplicate alias/);
+  });
+
+  it('extends a provider with newly discovered aliases without removing in-flight aliases', () => {
+    const r = new VideoProviderRegistry();
+    r.register(
+      makeFakeProvider({ id: 'xai-video', aliases: [{ alias: 'xai/old', internalModel: 'old' }] }),
+    );
+    r.registerOrExtend(
+      makeFakeProvider({ id: 'xai-video', aliases: [{ alias: 'xai/new', internalModel: 'new' }] }),
+    );
+
+    expect(r.resolveByAlias('xai/old').internalModel).toBe('old');
+    expect(r.resolveByAlias('xai/new').internalModel).toBe('new');
+    expect(r.collectAllAliases().map((alias) => alias.alias)).toEqual(['xai/new']);
   });
 
   it('preserves registration order in collectAllAliases (first alias = default)', () => {

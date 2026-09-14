@@ -15,16 +15,18 @@ describe('buildClaudeFlagSettings', () => {
           fastMode,
         });
         expect(settings.apiKeyHelper).toBe('');
+        expect(settings.attribution).toEqual({ commit: '', pr: '' });
       }
     }
   });
 
-  it('默认形态(无 memory override / fast 关)只含 showThinkingSummaries + apiKeyHelper', () => {
+  it('默认形态(无 memory override / fast 关)只含 showThinkingSummaries + apiKeyHelper + 空 attribution', () => {
     expect(
       buildClaudeFlagSettings({ showThinkingSummaries: true, fastMode: false }),
     ).toEqual({
       showThinkingSummaries: true,
       apiKeyHelper: '',
+      attribution: { commit: '', pr: '' },
     });
   });
 
@@ -34,6 +36,7 @@ describe('buildClaudeFlagSettings', () => {
     ).toEqual({
       showThinkingSummaries: false,
       apiKeyHelper: '',
+      attribution: { commit: '', pr: '' },
       autoMemoryEnabled: true,
       autoDreamEnabled: true,
     });
@@ -83,6 +86,26 @@ describe('buildClaudeFlagSettings', () => {
 
     expect(settings.skillOverrides).toEqual({
       'feishu-delegate:message-feishu-coworkers': 'user-invocable-only',
+    });
+  });
+
+  it('enforces a Bot Skill allowlist with native Claude skill overrides', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      botSkillPolicy: {
+        mode: 'allowlist',
+        configured: ['release'],
+        catalog: [
+          { name: 'release-notes', runtimeCommandName: 'release' },
+          { name: 'incident-response' },
+        ],
+      },
+    });
+
+    expect(settings.skillOverrides).toEqual({
+      'release-notes': 'on',
+      'incident-response': 'off',
     });
   });
 });

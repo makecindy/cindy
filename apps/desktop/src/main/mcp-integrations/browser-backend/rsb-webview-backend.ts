@@ -363,6 +363,13 @@ export class RsbWebviewBackend implements BrowserBackend {
         return this.handleDoctor(request);
       case 'start':
       case 'stop':
+        if (request.proxyServer !== undefined) {
+          return actionFailed(
+            request.action,
+            'proxyServer is unsupported by the embedded browser backend; switch to the managed browser backend',
+            'BROWSER_RUNTIME_INVALID_REQUEST',
+          );
+        }
         // Webview lifecycle is owned by the RSB itself — these are no-ops.
         return actionOk(request.action, { ready: true });
       case 'profiles':
@@ -1226,18 +1233,27 @@ export class RsbWebviewBackend implements BrowserBackend {
     tabId: string,
   ): Promise<{ ok: true; wc: WebContents } | { ok: false; result: BrowserControlResult }> {
     const ensureHost = this.opts.bridge.ensureHost;
+    const requestSessionId = this.resolveSessionId(req);
     if (ensureHost) {
       try {
         this.assertActive();
-        await ensureHost();
+        await ensureHost(requestSessionId ?? undefined);
         this.assertActive();
       } catch (err) {
-        // Window failed to come up (ready timeout etc.) — fall through, the
-        // resolve below surfaces the concrete tab error to the agent.
         this.opts.logger.warn('ensureHost failed before direct action', {
           action: req.action,
           err,
         });
+        if (requestSessionId) {
+          return {
+            ok: false,
+            result: actionFailed(
+              req.action,
+              err instanceof Error ? err.message : String(err),
+              'BROWSER_RUNTIME_UNAVAILABLE',
+            ),
+          };
+        }
       }
     }
     let resolved = this.resolveTabInActiveSession(req, tabId);

@@ -7,6 +7,7 @@ import {
   registerIOSSimulatorTools,
   type IOSSimulatorMcpDeps,
 } from '@cindy/mcps';
+import { isFrozenBuiltinPluginAllowed } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 
 const NAMESPACE = 'cindy_ios_simulator';
 const FLAT_TOOL_SEPARATOR = '__';
@@ -84,10 +85,28 @@ export function createIOSSimulatorCodexDynamicToolProvider(options: {
   deps: IOSSimulatorMcpDeps;
 }): CodexHostDynamicToolProvider {
   return {
-    listTools: () => (process.platform === 'darwin' ? TOOLS : []),
+    listTools: (context) => (
+      process.platform === 'darwin'
+      && isFrozenBuiltinPluginAllowed(context.vendorOptions, 'ios-simulator')
+        ? TOOLS
+        : []
+    ),
     callTool: async (params, context) => {
       const toolName = innerToolName(params);
       if (!toolName) return undefined;
+      if (!isFrozenBuiltinPluginAllowed(context.vendorOptions, 'ios-simulator')) {
+        return textResponse(
+          {
+            ok: false,
+            errorCode: 'IOS_SIMULATOR_DISABLED',
+            data: {
+              reason: 'disabled-by-bot-profile',
+              message: 'The embedded iOS Simulator is not enabled in this Bot runtime snapshot.',
+            },
+          },
+          false,
+        );
+      }
       if (process.platform !== 'darwin') {
         return textResponse(
           {

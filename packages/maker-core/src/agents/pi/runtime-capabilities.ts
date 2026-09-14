@@ -1,10 +1,12 @@
 import type { PiRpcResponse } from './rpc-client.js';
+import path from 'node:path';
 import type {
   PiRuntimeCapabilityError,
   PiRuntimeCapabilityErrorStage,
   PiRuntimeCapabilityManifest,
   PiRuntimeCommand,
   PiRuntimeCommandSourceInfo,
+  PiManagedPackageSkillRuntimeSnapshot,
 } from '../../types/pi-runtime-capabilities.js';
 
 const MAX_RESPONSE_BYTES = 256_000;
@@ -70,7 +72,6 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
   }
   if (serializedLength > MAX_RESPONSE_BYTES) return { ok: false };
 
-  const seen = new Set<string>();
   const parsed: PiRuntimeCommand[] = [];
   for (const value of commands) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) return { ok: false };
@@ -81,12 +82,11 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
     const name = boundedString(raw.name, MAX_NAME_LENGTH);
     const source = boundedString(raw.source, MAX_SOURCE_LENGTH);
     const sourceInfo = parseSourceInfo(raw.sourceInfo);
-    if (!name || !source || !sourceInfo || seen.has(name)) return { ok: false };
+    if (!name || !source || !sourceInfo) return { ok: false };
     const description = raw.description === undefined
       ? undefined
       : boundedString(raw.description, MAX_DESCRIPTION_LENGTH);
     if (raw.description !== undefined && !description) return { ok: false };
-    seen.add(name);
     parsed.push({
       name,
       ...(description ? { description } : {}),
@@ -95,6 +95,95 @@ export function parsePiRuntimeCommands(data: unknown): RuntimeCommandParseResult
     });
   }
   return { ok: true, commands: parsed };
+}
+
+function isPathWithin(root: string, candidate: string): boolean {
+  if (!path.isAbsolute(root) || !path.isAbsolute(candidate)) return false;
+  const relative = path.relative(path.resolve(root), path.resolve(candidate));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function commandSourcePaths(sourceInfo: PiRuntimeCommandSourceInfo): string[] {
+  const values = [sourceInfo.path, sourceInfo.source, sourceInfo.origin]
+    .filter((value): value is string => typeof value === 'string' && path.isAbsolute(value));
+  if (sourceInfo.baseDir && path.isAbsolute(sourceInfo.baseDir)) {
+    values.push(sourceInfo.baseDir);
+    if (sourceInfo.path && !path.isAbsolute(sourceInfo.path)) {
+      values.push(path.resolve(sourceInfo.baseDir, sourceInfo.path));
+    }
+  }
+  return values;
+}
+
+/**
+ * Mark only commands whose Pi-owned provenance points inside an enabled
+ * Cindy-managed package root. The result is later used both by the palette and
+ * by the prompt escape boundary; static filenames alone never authorize an
+ * extension command.
+ */
+export function identifyManagedPiPackageCommandNames(
+  commands: readonly PiRuntimeCommand[],
+  packageRoots: readonly string[],
+): string[] {
+  const roots = packageRoots.filter(path.isAbsolute).map((root) => path.resolve(root));
+  if (roots.length === 0) return [];
+  const provenanceByName = new Map<string, boolean[]>();
+  for (const command of commands) {
+    const managed = commandSourcePaths(command.sourceInfo)
+      .some((candidate) => roots.some((root) => isPathWithin(root, candidate)));
+    const provenance = provenanceByName.get(command.name) ?? [];
+    provenance.push(managed);
+    provenanceByName.set(command.name, provenance);
+  }
+  // Pi may legitimately expose an Extension command and a Prompt with the
+  // same name. Authorize that name only when every colliding catalog entry is
+  // from a managed package; mixed provenance could dispatch a Cindy internal
+  // or user command instead of the package command shown in the menu.
+  return [...provenanceByName.entries()].flatMap(([name, provenance]) => (
+    provenance.length > 0 && provenance.every(Boolean) ? [name] : []
+  ));
+}
+
+function canonicalRuntimePath(value: string): string {
+  const resolved = path.resolve(value);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function managedSkillCommandMatchesSource(command: PiRuntimeCommand, sourcePath: string): boolean {
+  if (command.source !== 'skill' || !command.name.startsWith('skill:') || !path.isAbsolute(sourcePath)) return false;
+  const expectedFile = canonicalRuntimePath(sourcePath);
+  const commandFile = command.sourceInfo.path;
+  if (commandFile && path.isAbsolute(commandFile) && canonicalRuntimePath(commandFile) === expectedFile) return true;
+  const commandBaseDir = command.sourceInfo.baseDir;
+  return path.basename(sourcePath).toLowerCase() === 'skill.md'
+    && typeof commandBaseDir === 'string'
+    && path.isAbsolute(commandBaseDir)
+    && canonicalRuntimePath(commandBaseDir) === canonicalRuntimePath(path.dirname(sourcePath));
+}
+
+/**
+ * Freeze the managed-skill roster passed to one runtime and attach a command
+ * name only when that runtime's own catalog proves an unambiguous loaded match.
+ */
+export function snapshotManagedPiPackageSkills(
+  skills: readonly { path: string; name: string; description?: string }[],
+  commands: readonly PiRuntimeCommand[],
+  managedPackageCommandNames: readonly string[],
+): PiManagedPackageSkillRuntimeSnapshot[] {
+  const managedNames = new Set(managedPackageCommandNames);
+  return skills.map((skill) => {
+    const matches = [...new Set(commands.flatMap((command) => (
+      managedNames.has(command.name) && managedSkillCommandMatchesSource(command, skill.path)
+        ? [command.name]
+        : []
+    )))];
+    return {
+      sourcePath: skill.path,
+      name: skill.name,
+      ...(skill.description ? { description: skill.description } : {}),
+      ...(matches.length === 1 ? { runtimeCommandName: matches[0] } : {}),
+    };
+  });
 }
 
 function classifyExplicitRpcFailure(raw: string): Pick<PiRuntimeCapabilityError, 'code' | 'message'> {

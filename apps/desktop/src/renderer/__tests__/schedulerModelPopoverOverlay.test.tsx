@@ -65,7 +65,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     overlayContentClassName?: string;
     selectedRowClickOpensConfiguration?: boolean;
     reselectEmitsChange?: boolean;
-    onProviderChange?: unknown;
+    onProviderChange?: (providerId: string | null) => void;
   }) => (
     <div
       data-testid="model-selector-content"
@@ -75,39 +75,13 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
       )}
       data-reselect-emits-change={String(reselectEmitsChange === true)}
       data-provider-change={String(onProviderChange !== undefined)}
+      onClick={() => onProviderChange?.('openai')}
     />
   ),
   ModelIconMark: () => null,
 }));
 
-vi.mock('@/components/new-chat/AgentSelect', () => ({
-  AgentSelect: ({
-    value,
-    onChange,
-    disabled,
-    side,
-    useMorphPopover,
-    overlayContentClassName,
-  }: {
-    value: string;
-    onChange: (value: 'codex') => void;
-    disabled?: boolean;
-    side?: string;
-    useMorphPopover?: boolean;
-    overlayContentClassName?: string;
-  }) => (
-    <button
-      type="button"
-      data-testid="scheduler-agent-select"
-      data-value={value}
-      data-disabled={String(disabled === true)}
-      data-side={side}
-      data-use-morph={String(useMorphPopover === true)}
-      data-overlay-class={overlayContentClassName}
-      onClick={() => onChange('codex')}
-    />
-  ),
-}));
+vi.mock('@/hooks/useAvailableAgents', () => ({ useModelPickerAgents: () => ['claude-code', 'codex', 'pi'] }));
 
 vi.mock('@/hooks/useAgentCapabilities', () => ({
   getCachedCapabilities: () => null,
@@ -126,10 +100,14 @@ vi.mock('@/hooks/useAgentCapabilities', () => ({
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: [] }),
+  useProviders: () => ({ providers: [{
+    id: 'openai', name: 'OpenAI', connected: true, agents: ['codex'],
+    auth: { method: 'oauth' }, source: 'builtin', routing: { codex: {} },
+    models: { codex: [{ id: 'gpt-5.5', name: 'GPT', contextWindow: 272000, efforts: [] }] },
+  }] }),
 }));
 
-import { AgentTabs, ModelEffortChip } from '@/features/scheduler/components/ScheduleChips';
+import { ModelEffortChip } from '@/features/scheduler/components/ScheduleChips';
 
 const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const }));
 
@@ -141,26 +119,23 @@ beforeEach(() => {
 });
 
 describe('scheduler model popover overlay behavior', () => {
-  it('raises the shared harness dropdown above the schedule dialog', () => {
-    const onChange = vi.fn();
-    render(<AgentTabs value="claude-code" onChange={onChange} />);
-
-    const selector = screen.getByTestId('scheduler-agent-select');
-    expect(selector.getAttribute('data-value')).toBe('cc');
-    expect(selector.getAttribute('data-side')).toBe('top');
-    expect(selector.getAttribute('data-use-morph')).toBe('false');
-    expect(selector.getAttribute('data-overlay-class')).toBe('z-[10010]');
-
-    fireEvent.click(selector);
-    expect(onChange).toHaveBeenCalledWith('codex');
+  it('pins an explicitly selected native default instead of storing automatic selection', () => {
+    const onChangeProviderId = vi.fn();
+    render(<ModelEffortChip onSelect={vi.fn()} onFollowSession={vi.fn()}
+      agentKind="codex" modelValue="gpt-5.5"
+      onChangeModel={vi.fn()} effortValue="" onChangeEffort={vi.fn()}
+      providerId="" onChangeProviderId={onChangeProviderId} />);
+    fireEvent.click(screen.getByTestId('model-selector-content'));
+    expect(onChangeProviderId).toHaveBeenCalledWith('openai');
   });
-
   it('keeps wheel events inside the model popover and raises nested model options above it', () => {
     const onOuterWheel = vi.fn();
 
     render(
       <div onWheel={onOuterWheel}>
         <ModelEffortChip
+          onSelect={vi.fn()}
+          onFollowSession={vi.fn()}
           agentKind="claude-code"
           modelValue="claude-opus-4-8"
           onChangeModel={vi.fn()}
@@ -194,6 +169,8 @@ describe('scheduler model popover overlay behavior', () => {
   it('requests a silent refresh when the scheduler model selector opens', async () => {
     render(
       <ModelEffortChip
+          onSelect={vi.fn()}
+          onFollowSession={vi.fn()}
         agentKind="claude-code"
         modelValue="claude-opus-4-8"
         onChangeModel={vi.fn()}
@@ -215,6 +192,8 @@ describe('scheduler model popover overlay behavior', () => {
   it('keeps an effort-only bound override labeled as following the session model', () => {
     render(
       <ModelEffortChip
+          onSelect={vi.fn()}
+          onFollowSession={vi.fn()}
         agentKind="claude-code"
         modelValue=""
         onChangeModel={vi.fn()}

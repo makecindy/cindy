@@ -22,6 +22,7 @@
 import { PanelLeft, PanelRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Tip } from '@/components/ui/tooltip';
 import { cn } from '@/lib/utils';
 
 interface RightSidebarToggleProps {
@@ -50,37 +51,33 @@ export function RightSidebarToggle({
   const { t } = useTranslation();
   const isToolbar = size === 'toolbar';
   const Icon = side === 'left' ? PanelLeft : PanelRight;
+  // B2c:文案只说动作(折叠/展开),不提"右栏"等方位名词 —— 按钮按位置寻址,
+  // 管的是"贴这条缘的面板",绑定方位词会在面板换侧后说谎。
+  const label = t(
+    action === 'show'
+      ? 'rightSidebar.tabs.controls.showAria'
+      : collapsed
+        ? 'contentHeader.expandPanel'
+        : 'contentHeader.collapsePanel',
+  );
 
   return (
-    <button
-      type="button"
-      className={cn(
-        'pointer-events-auto flex h-7 w-7 items-center justify-center',
-        isToolbar ? 'rounded-md' : 'rounded-full',
-        'text-titlebar-icon',
-        'transition-colors',
-        'hover:bg-titlebar-button-hover',
-      )}
-      onClick={onToggle}
-      // B2c:文案只说动作(折叠/展开),不提"右栏"等方位名词 —— 按钮按位置寻址,
-      // 管的是"贴这条缘的面板",绑定方位词会在面板换侧后说谎。
-      aria-label={t(
-        action === 'show'
-          ? 'rightSidebar.tabs.controls.showAria'
-          : collapsed
-            ? 'contentHeader.expandPanel'
-            : 'contentHeader.collapsePanel',
-      )}
-      title={t(
-        action === 'show'
-          ? 'rightSidebar.tabs.controls.showAria'
-          : collapsed
-            ? 'contentHeader.expandPanel'
-            : 'contentHeader.collapsePanel',
-      )}
-      aria-expanded={!collapsed}
-    >
-      <Icon size={15} />
-    </button>
+    <Tip text={label} side="bottom">
+      <button
+        type="button"
+        className={cn(
+          'pointer-events-auto flex h-7 w-7 items-center justify-center',
+          isToolbar ? 'rounded-md' : 'rounded-full',
+          'text-titlebar-icon',
+          'transition-colors',
+          'hover:bg-titlebar-button-hover',
+        )}
+        onClick={onToggle}
+        aria-label={label}
+        aria-expanded={!collapsed}
+      >
+        <Icon size={15} />
+      </button>
+    </Tip>
   );
 }

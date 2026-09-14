@@ -31,12 +31,14 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
-import { app, BrowserWindow } from 'electron';
+import { app } from 'electron';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
+import { MAIN_OWNED_SEND_CONTEXT } from '@cindy/maker-core';
 
 import type {
   AgentKind,
   PermissionMode,
+  TurnPermissionOrigin,
   UserContentBlock,
   UserMessage,
 } from '@cindy/maker-core';
@@ -46,12 +48,14 @@ import {
   visibleModelUnion,
 } from '@cindy/model-providers';
 
-import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { emitSessionCreated } from '../localDb/ipc/sessionCreatedBroadcast.js';
 import { getMaker } from '../maker-host/index.js';
+import { desktopSessionStorage } from '../maker-host/session-storage.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
   beginTurnChangeSetAtDispatch,
+  prepareUnhealthySessionForSend,
   wireSessionToIpc,
   isSessionInTurn,
   noteSilentStopUserSend,
@@ -64,7 +68,11 @@ import {
   type InteractionRouteLease,
   type TurnOrigin as RoutedTurnOrigin,
 } from '../maker-ipc/interactionRouter.js';
-import { prependHandoffToUserMessage, prependNoteToWireUserMessage } from '../maker-ipc/agentHandoff.js';
+import {
+  buildHandoffText,
+  prependHandoffToUserMessage,
+  prependNoteToWireUserMessage,
+} from '../maker-ipc/agentHandoff.js';
 import { agentHandoffPending } from '../maker-ipc/agentHandoffPendingSingleton.js';
 import { summarizeOpenPlan, buildPlanReconcileNote } from '../maker-ipc/planReconcile.js';
 import { listMessagesForAgentHandoff } from '../localDb/ipc/messages.js';
@@ -90,9 +98,16 @@ import { ingestMedia, supportedMime as isCindyMediaMime } from '../cindy-media/i
 import { worktreeStore, WorktreeManager } from '../worktree/index.js';
 import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
 import { getWorkspaceProviderSource } from './workspaceProviderSourceStore.js';
+import {
+  getWorkspacePref,
+  isWorkspacePrefsMigrated,
+  resolveWorkspacePrefOverrides,
+  type HookPrefsChannel,
+} from './workspacePrefsStore.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
 import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
+import { bindRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice.js';
 import { beginGroupHistoryAccess } from '../im/shared/groupHistoryAccess.js';
 
 import type {
@@ -108,6 +123,27 @@ import {
   registerHookInteraction,
 } from './interactions.js';
 import { collectOutboundAttachments, buildHookPromptNote, hasOutboundRefs } from './outbound.js';
+
+type MainOwnedImChannel = Extract<TurnPermissionOrigin, { kind: 'im' }>['channel'];
+
+function mainOwnedChannelOrigin(value: string | undefined): TurnPermissionOrigin | null {
+  switch (value) {
+    case 'telegram':
+      // `source.im=telegram` identifies the official server-backed hook here,
+      // not the authenticated personal-bot adapter. Keep managed package
+      // mutations on the Desktop confirmation path.
+      return { kind: 'hook', source: value };
+    case 'feishu':
+    case 'discord':
+    case 'slack':
+    case 'wechat':
+    case 'dingtalk':
+    case 'wecom':
+      return { kind: 'im', channel: value as MainOwnedImChannel };
+    default:
+      return value ? { kind: 'hook', source: value } : null;
+  }
+}
 
 /**
  * 新会话 agent/model/effort/permissionMode/providerId 合成: IM provider 按目录偏好
@@ -136,6 +172,19 @@ async function resolveNewSessionConfig(
     );
   }
 
+  const prefsChannel: HookPrefsChannel | null =
+    sourceIm === 'telegram' || sourceIm === 'x' || sourceIm === 'slack' ? sourceIm : null;
+  const workspaceAlias = workspaceCtx?.alias;
+  const localPref =
+    prefsChannel !== null && workspaceAlias
+      ? getWorkspacePref(prefsChannel, workspaceCtx.teamId, workspaceAlias)
+      : null;
+  const mergedOverrides = resolveWorkspacePrefOverrides(
+    localPref,
+    overrides,
+    prefsChannel !== null && workspaceAlias !== undefined && isWorkspacePrefsMigrated(prefsChannel),
+  );
+
   const resolved = resolveHookSessionConfig(
     {
       readDefaults: () =>
@@ -157,7 +206,7 @@ async function resolveNewSessionConfig(
           .permissionModes.map((pm) => pm.id),
       log,
     },
-    overrides,
+    mergedOverrides,
   );
 
   // 目录级来源偏好(纯本地, 用户在工作目录映射行显式选的来源)优先于草稿默认来源。
@@ -175,13 +224,13 @@ async function resolveNewSessionConfig(
       : null;
   const preferredProviderId = workdirProviderId ?? resolved.providerId;
 
-  // 目录可用时始终把最终模型收敛到一个真实已连接、且确实提供它的来源。
-  // 目录读取失败才保留旧行为(**只**透传草稿来源, 不透传目录级来源 —— 后者未经
-  // 收窄校验, 降级窗口直接钉给会话会绕过连接态/供给校验; 数据不足不猜, 维持
-  // 加目录来源之前的降级语义, codex review)。
+  // 显式连接失效时不能将 null 再解释为默认账号；未指定连接才可选择默认来源。
   const providerId = providers
     ? effectiveSourceIdForModel(providers, preferredProviderId, resolved.model, resolved.agentKind)
-    : resolved.providerId;
+    : preferredProviderId;
+  if (providers && preferredProviderId && !providerId) {
+    throw new Error(`hook session route unavailable: selected provider "${preferredProviderId}" cannot serve model "${resolved.model}"`);
+  }
   // 停用收口(PR #744 review 第十、十四轮):两条路径都必须经宽松降级裁决 ——
   //   · 目录读取失败:冻结的 availableModels 不带停用标志、saved provider 未经校验,
   //     live 壳的目录故障分支 = override-only 保守裁决(只凭本地 override 文件判);
@@ -193,6 +242,9 @@ async function resolveNewSessionConfig(
   const lenient = providers
     ? resolveLenientRoute(providers, resolved.agentKind, resolved.model, providerId ?? null)
     : await resolveLenientSessionRoute(resolved.agentKind, resolved.model, providerId ?? null);
+  if (preferredProviderId && lenient.providerId !== preferredProviderId) {
+    throw new Error(`hook session route unavailable: selected provider "${preferredProviderId}" is unavailable`);
+  }
   if (!lenient.model) {
     throw new Error('hook session route unavailable: model disabled in settings');
   }
@@ -207,18 +259,9 @@ async function resolveNewSessionConfig(
 /**
  * 广播「新会话已建」给所有窗口 + device-link tap —— renderer sessionsStore
  * 收到即重拉列表, 新 hook 会话实时出现在侧边栏(不广播的话要等手动刷新)。
- * 与 fork.ts / cardActionHandler.ts / learn-host 同款(各模块本地副本是既有惯例)。
  */
 function broadcastSessionCreated(sessionId: string): void {
-  tapWindowBroadcast('local-db:sessions:created', { sessionId });
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    try {
-      win.webContents.send('local-db:sessions:created', { sessionId });
-    } catch {
-      // best-effort UI refresh
-    }
-  }
+  emitSessionCreated(sessionId);
 }
 
 // ── turn 时长策略: hook 侧**不设任何**上限(2026-08-01 定) ────────────────────
@@ -502,9 +545,9 @@ export function createMakerHookSessionRunner(deps: {
         rowProviderId = row?.providerId ?? null;
       }
 
-      const fail = (msg: string): HookRunOutcome => ({
+      const fail = (msg: string, finalText = ''): HookRunOutcome => ({
         status: 'error',
-        finalText: '',
+        finalText,
         errorMessage: msg,
         durationMs: Date.now() - startedAt,
       });
@@ -608,7 +651,54 @@ export function createMakerHookSessionRunner(deps: {
           : {}),
         resumeSessionId,
       };
+      if (req.createOnly) {
+        if (!req.isNew) return fail('create-only requires a new task');
+        try {
+          // `/new` only needs a durable, sidebar-visible task boundary. Do not
+          // start an Agent process here: that turns a local metadata mutation
+          // into a slow websocket RPC and can leave server/client state split
+          // if the response times out. The first real message cold-opens this
+          // same row through the ordinary reuse path.
+          await desktopSessionStorage.create({
+            id: req.sessionId,
+            agentKind: effectiveAgentKind,
+            workDir: workingDir,
+            title: req.title ?? 'New task',
+            model: effectiveModel,
+            ...(req.workspaceKind !== undefined ? { workspaceKind: req.workspaceKind } : {}),
+            ...(effort !== undefined ? { effort } : {}),
+            permissionMode,
+          });
+          if (providerId) {
+            setSessionProvider(req.sessionId, providerId);
+            await setSessionProviderIdInDb(req.sessionId, providerId);
+          }
+          if (req.source?.im === 'telegram' || req.source?.im === 'x') {
+            await setSessionSourceInDb(req.sessionId, req.source.im);
+          }
+          await touchUserSendInDb(req.sessionId).catch((err) => {
+            log.warn(
+              `hook create-only touchUserSend failed: ${err instanceof Error ? err.message : String(err)}`,
+            );
+          });
+          const wtMeta = worktreeStore.get(req.sessionId);
+          if (wtMeta) await setWorktreePathInDb(req.sessionId, wtMeta.path);
+          broadcastSessionCreated(req.sessionId);
+          return {
+            status: 'ok',
+            finalText: '',
+            errorMessage: '',
+            durationMs: Date.now() - startedAt,
+          };
+        } catch (err) {
+          if (worktreeStore.get(req.sessionId)) {
+            void WorktreeManager.removeWorktreeForSession(req.sessionId).catch(() => undefined);
+          }
+          return fail(err instanceof Error ? err.message : String(err));
+        }
+      }
       try {
+        await prepareUnhealthySessionForSend(req.sessionId);
         session = await maker.createSession(createOpts);
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
@@ -956,10 +1046,89 @@ export function createMakerHookSessionRunner(deps: {
       // 用 xdt-file 引用回传文件而非误用 cindy_feishu_bot(规则 9,实踩背景
       // 见 outbound.ts 的常量注释)。
       const promptWithNote = `${req.prompt}\n\n${buildHookPromptNote(req.source?.im)}`;
-      const sendContent =
+      let replacementHandoff: string | null = null;
+      if (req.isNew && req.replacementOfSessionId && req.source?.im === 'slack') {
+        try {
+          const previousMessages = await enqueueDurableWrite(
+            `hook-replacement-handoff:${req.replacementOfSessionId}`,
+            () => listMessagesForAgentHandoff(req.replacementOfSessionId!, 400),
+          );
+          let handoffMessages: typeof previousMessages;
+          if (previousMessages.length > 0) {
+            const hasFirstUserMessage = previousMessages.some(
+              (m, i) => i === 0 && m.role === 'user',
+            );
+            if (!hasFirstUserMessage && req.replacementPrompt) {
+              handoffMessages = [
+                {
+                  clientId: 'hook-replacement-memory',
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: previousMessages[0].createdAt - 1,
+                  agentMeta: null,
+                  toolUseId: null,
+                },
+                ...previousMessages,
+              ];
+            } else {
+              handoffMessages = previousMessages;
+            }
+          } else {
+            const sessionRow = await getSessionRowSnapshotStrict(
+              req.replacementOfSessionId,
+            );
+            const sessionPersistedAndCleared = sessionRow !== null;
+            if (!sessionPersistedAndCleared && req.replacementPrompt) {
+              handoffMessages = [
+                {
+                  clientId: 'hook-replacement-memory',
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: startedAt,
+                  agentMeta: null,
+                  toolUseId: null,
+                },
+              ];
+            } else {
+              handoffMessages = [];
+            }
+          }
+          if (handoffMessages.length > 0) {
+            replacementHandoff = buildHandoffText(handoffMessages, {
+              fromLabel: 'Cindy',
+              toLabel: 'Cindy',
+            });
+          }
+        } catch (err) {
+          if (req.replacementPrompt) {
+            replacementHandoff = buildHandoffText(
+              [
+                {
+                  role: 'user',
+                  content: req.replacementPrompt,
+                  createdAt: startedAt,
+                },
+              ],
+              { fromLabel: 'Cindy', toLabel: 'Cindy' },
+            );
+          }
+          log.warn(
+            `hook replacement history unavailable; ${
+              replacementHandoff ? 'using in-memory dispatch context' : 'continuing without handoff'
+            }: ${err instanceof Error ? err.name : 'unknown-error'}`,
+          );
+        }
+      }
+      const sendContentBase =
         imageBlocks.length > 0 || fileBlocks.length > 0
           ? [{ type: 'text' as const, text: promptWithNote }, ...imageBlocks, ...fileBlocks]
           : promptWithNote;
+      const sendContent = replacementHandoff
+        ? (prependHandoffToUserMessage(
+            { type: 'user', content: sendContentBase },
+            replacementHandoff,
+          ) as UserMessage).content
+        : sendContentBase;
       // 落库形态: 有附件用 {text, images, files} 对象(createMessage safeStringify
       // 存 JSON, 读回 parseUserContent 提取 images/files); 无附件纯文本 string。
       const userMessageContent =
@@ -991,9 +1160,23 @@ export function createMakerHookSessionRunner(deps: {
         const outgoingMessage: UserMessage = planReconcileNote
           ? (prependNoteToWireUserMessage(withHandoff, planReconcileNote) as UserMessage)
           : withHandoff;
+        const trustedChannelOrigin = mainOwnedChannelOrigin(req.source?.im);
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
+          ...(trustedChannelOrigin
+            ? {
+                [MAIN_OWNED_SEND_CONTEXT]: {
+                  origin: trustedChannelOrigin,
+                  // Slack/X thread prompts may already contain Main-owned
+                  // context decoration. The server-provided userText is the
+                  // clean channel message used for deterministic managed Pi
+                  // package commands; only older servers that omit the field
+                  // fall back to the decorated prompt.
+                  rawChannelText: req.source?.userText ?? req.prompt,
+                },
+              }
+            : {}),
           afterTurnReserved: () => {
             // 只取 lease, 不动权限档(用户配的就是最终档)。取在预约之后:
             // 忙的 Desktop 轮次已在 send 预约阶段被拒, 轮到这里就是本轮的世界。
@@ -1002,6 +1185,10 @@ export function createMakerHookSessionRunner(deps: {
             }
           },
           beforeProviderStart: () => {
+            if (req.onRuntimeRecovery) bindRuntimeRecoveryNotice(session, async (text) => {
+              if (getMaker().getSession(session.id) !== session) return false;
+              return req.onRuntimeRecovery!(text);
+            }, log);
             if (req.groupHistoryAccess) {
               releaseGroupHistoryAccess = beginGroupHistoryAccess({
                 sessionId: session.id,
@@ -1044,7 +1231,19 @@ export function createMakerHookSessionRunner(deps: {
               clientId: turnChangeAnchorClientId,
               role: 'user',
               content: userMessageContent,
-              agentMeta: { origin, ...(req.source ? { hookSource: req.source } : {}) },
+              agentMeta: {
+                origin,
+                ...(req.source
+                  ? {
+                      hookSource: {
+                        ...req.source,
+                        // New messages only persist producer-supplied context.
+                        // Legacy prompt projection belongs to the read path.
+                        contextSnapshot: req.contextSnapshot ?? {},
+                      },
+                    }
+                  : {}),
+              },
             });
             await beginTurnChangeSetAtDispatch(session, turnChangeAnchorClientId);
             turnChangeSetStarted = true;
@@ -1097,7 +1296,12 @@ export function createMakerHookSessionRunner(deps: {
         await observer.finished;
       } catch (err) {
         observer.stop();
-        return fail(err instanceof Error ? err.message : String(err));
+        return fail(
+          err instanceof Error ? err.message : String(err),
+          observer.errorReason === 'output-limit'
+            ? stripInternalWebCitations(observer.finalText())
+            : '',
+        );
       } finally {
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
@@ -1213,10 +1417,12 @@ function beginContinuationWatch(
       return;
     }
     if (errorMessage !== null) {
-      // 与 run() 的失败收口同形(finalText 空, 错误交给渠道渲染)。
+      // 与 run() 一致：只有确定的输出上限失败携带已累计正文。
       req.onEnd({
         status: 'error',
-        finalText: '',
+        finalText: observer.errorReason === 'output-limit'
+          ? stripInternalWebCitations(observer.finalText())
+          : '',
         errorMessage,
         durationMs: Date.now() - startedAt,
       });

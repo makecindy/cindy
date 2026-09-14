@@ -38,6 +38,47 @@ describe('syncCanaryFlagAfterAuth', () => {
     expect(deps.persistFlag).toHaveBeenCalledWith(isCanary);
   });
 
+  it('extracts an optional beta default without changing canary validation', async () => {
+    const deps = makeDeps({
+      ok: true,
+      status: 200,
+      data: { isCanary: false, defaultEnableBeta: true },
+    });
+    await expect(syncCanaryFlagAfterAuth(REQUEST, deps)).resolves.toEqual({
+      kind: 'synced',
+      isCanary: false,
+      defaultEnableBeta: true,
+    });
+  });
+
+  it.each([false, undefined, 'true', 1])(
+    'ignores non-true defaultEnableBeta values: %j',
+    async (defaultEnableBeta) => {
+      const deps = makeDeps({
+        ok: true,
+        status: 200,
+        data: { isCanary: false, defaultEnableBeta },
+      });
+      const outcome = await syncCanaryFlagAfterAuth(REQUEST, deps);
+      expect(outcome).toEqual({ kind: 'synced', isCanary: false });
+      expect(outcome).not.toHaveProperty('defaultEnableBeta', true);
+    },
+  );
+
+  it('preserves canary while retaining a valid beta default when isCanary is invalid', async () => {
+    const deps = makeDeps({
+      ok: true,
+      status: 200,
+      data: { isCanary: 'true', defaultEnableBeta: true },
+    });
+    await expect(syncCanaryFlagAfterAuth(REQUEST, deps)).resolves.toEqual({
+      kind: 'preserved',
+      reason: 'invalid-response',
+      status: 200,
+      defaultEnableBeta: true,
+    });
+  });
+
   it('preserves the existing flag when the server request fails', async () => {
     const deps = makeDeps({
       ok: false,
@@ -51,6 +92,12 @@ describe('syncCanaryFlagAfterAuth', () => {
       status: 503,
     });
     expect(deps.persistFlag).not.toHaveBeenCalled();
+    expect(
+      await syncCanaryFlagAfterAuth(
+        REQUEST,
+        makeDeps({ ok: false, status: 503, data: { defaultEnableBeta: true } }),
+      ),
+    ).not.toHaveProperty('defaultEnableBeta');
   });
 
   it('preserves the existing flag when the request throws', async () => {

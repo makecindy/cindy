@@ -89,7 +89,7 @@ describe('CCAgentSessionView 接线不变式', () => {
     // device-link 远程交接期间仍要禁用(见 remoteHandoffPreparing):那几段 await
     // 可能数十秒,不禁用的话用户补发的消息会插到草稿提交的首条之前。
     expect(sessionViewSrc).toContain(
-      "disabled={remoteHandoffPreparing || session?.source === 'review'}",
+      "disabled={readOnly || remoteHandoffPreparing || session?.source === 'review'}",
     );
   });
   it('补选目录后的续发保持 delivery mode，并按本地/远端策略清理原 composer', () => {
@@ -105,7 +105,7 @@ describe('CCAgentSessionView 接线不变式', () => {
     );
     expect(chatInputSrc).toContain('onDeferredAccepted,');
     expect(chatInputSrc).toMatch(
-      /if \(optimisticallyClearRemoteComposer\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n){2}\s*optimisticComposerRestored = false;\s*clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\} else \{[\s\S]*?clearSentComposer\(\);\s*\}/,
+      /if \(optimisticallyClearRemoteComposer\) \{\s*\/\/[^\n]*\n(?:\s*\/\/[^\n]*\n){2}\s*optimisticComposerRestored = false;\s*clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\} else \{[\s\S]*?clearSentComposer\(\{ preserveNewerContent: true \}\);\s*\}/,
     );
   });
   it('已有远程 session 断线时跳过来源门禁，远程草稿与本地任务仍保留门禁', () => {

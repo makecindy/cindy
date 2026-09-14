@@ -364,7 +364,7 @@ export function CustomProviderRuntimeFillOverlay({
                               aria-checked={selected}
                               onClick={() => onToggleField(target.agent, row.fields[0])}
                               className={cn(
-                                'flex w-full items-center gap-2.5 rounded-[9px] border border-[var(--border-default)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--surface-hover)] active:scale-[0.98]',
+                                'flex w-full items-center gap-2.5 rounded-[9px] border border-[var(--border-default)] px-3 py-2.5 text-left transition-colors hover:bg-[var(--settings-menu-bg-hover)] active:scale-[0.98]',
                                 FOCUS_RING,
                               )}
                             >

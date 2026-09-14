@@ -280,6 +280,48 @@ describe('billing IPC', () => {
     });
   });
 
+  it('resumes the current subscription through one fixed provider-neutral POST', async () => {
+    const { call, fetch } = harness();
+    const resumed = {
+      subscriptionId: 'subscription_1',
+      status: 'ACTIVE',
+      currentPeriodStartAt: '2026-07-01T00:00:00.000Z',
+      currentPeriodEndAt: '2026-08-01T00:00:00.000Z',
+      entitlementValidUntil: '2026-08-02T00:00:00.000Z',
+      cancelAtPeriodEnd: false,
+      resumable: false,
+      effectivePlan: null,
+      purchaseAttemptId: null,
+      paymentAction: null,
+    };
+    fetch.mockResolvedValueOnce(resumed);
+
+    await expect(call(BILLING_INVOKE.RESUME_CURRENT_SUBSCRIPTION)).resolves.toEqual(resumed);
+    expect(fetch).toHaveBeenCalledWith('/api/billing/subscription/resume', {
+      baseUrl: expect.any(Function),
+      timeoutMs: 20_000,
+      redactErrorDetails: true,
+      method: 'POST',
+      allowedRedactedErrorCodes: ['RESUME_NOT_AVAILABLE'],
+    });
+  });
+
+  it('preserves the safe subscription-resume rejection code across IPC', async () => {
+    const { call, fetch } = harness();
+    fetch.mockRejectedValueOnce(
+      new ServerApiError(
+        'RESUME_NOT_AVAILABLE',
+        409,
+        'upstream detail must not reach the renderer',
+      ),
+    );
+
+    await expect(call(BILLING_INVOKE.RESUME_CURRENT_SUBSCRIPTION)).rejects.toMatchObject({
+      code: 'RESUME_NOT_AVAILABLE',
+      message: '[RESUME_NOT_AVAILABLE] subscription is not resumable',
+    });
+  });
+
   it('rejects non-main-window senders before network access', async () => {
     const { call, fetch } = harness();
     await expect(call(BILLING_INVOKE.GET_CATALOG, undefined, { id: 2 })).rejects.toMatchObject({

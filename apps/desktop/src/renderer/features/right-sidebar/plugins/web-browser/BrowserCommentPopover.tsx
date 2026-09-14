@@ -25,6 +25,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import { SlidersHorizontal } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Tip } from '@/components/ui/tooltip';
 import { parseCssColor } from '@/lib/browserComments';
 import { cn } from '@/lib/utils';
 
@@ -182,7 +183,10 @@ export function BrowserCommentPopover({
       const styles: Record<string, string> = {};
       for (const [property, value] of Object.entries(nextEdits)) {
         const trimmed = value.trim();
-        if (trimmed && !isSameStyleValue(property, trimmed, designBaseline.styles[property] ?? '')) {
+        if (
+          trimmed &&
+          !isSameStyleValue(property, trimmed, designBaseline.styles[property] ?? '')
+        ) {
           styles[property] = trimmed;
         }
       }
@@ -266,6 +270,29 @@ export function BrowserCommentPopover({
     'px-2 py-1 text-12 leading-[1.4] text-[var(--text-primary)]',
     'placeholder:text-[var(--text-tertiary)] outline-none',
     'focus:border-[var(--focus-ring)] focus:ring-1 focus:ring-[var(--focus-ring-soft)]',
+  );
+  const styleTweaksLabel = submitting
+    ? t('rightSidebar.browser.styleTweaksSubmitting')
+    : showStyles
+      ? t('rightSidebar.browser.styleTweaksCollapse')
+      : t('rightSidebar.browser.styleTweaksExpand');
+  const styleTweaksButton = (
+    <button
+      type="button"
+      aria-label={styleTweaksLabel}
+      aria-hidden={submitting ? true : undefined}
+      onClick={() => setShowStyles((v) => !v)}
+      disabled={submitting}
+      className={cn(
+        'flex size-6 items-center justify-center rounded-md transition-colors',
+        'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+        showStyles || changes.length > 0
+          ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
+          : 'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
+      )}
+    >
+      <SlidersHorizontal size={13} strokeWidth={2} />
+    </button>
   );
 
   return (
@@ -360,21 +387,21 @@ export function BrowserCommentPopover({
       <div className="flex items-center justify-between gap-1.5">
         {/* 左:样式编辑开关(Codex "config icon next to the text input")。 */}
         {designBaseline ? (
-          <button
-            type="button"
-            aria-label={t('rightSidebar.browser.styleTweaks')}
-            title={t('rightSidebar.browser.styleTweaks')}
-            onClick={() => setShowStyles((v) => !v)}
-            disabled={submitting}
-            className={cn(
-              'flex size-6 items-center justify-center rounded-md transition-colors',
-              showStyles || changes.length > 0
-                ? 'bg-sidebar-item-active text-sidebar-item-active-foreground'
-                : 'text-sidebar-action-icon hover:bg-sidebar-item-active hover:text-sidebar-item-active-foreground',
+          <Tip text={styleTweaksLabel} side="bottom">
+            {submitting ? (
+              <span
+                role="button"
+                aria-disabled="true"
+                aria-label={styleTweaksLabel}
+                tabIndex={0}
+                className="inline-flex rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]"
+              >
+                {styleTweaksButton}
+              </span>
+            ) : (
+              styleTweaksButton
             )}
-          >
-            <SlidersHorizontal size={13} strokeWidth={2} />
-          </button>
+          </Tip>
         ) : (
           <span />
         )}

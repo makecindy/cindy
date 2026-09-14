@@ -107,7 +107,7 @@ describe('custom provider runtime fill', () => {
     });
   });
 
-  it('reports unsupported endpoint fields and refuses to apply them', () => {
+  it('copies Responses, Chat and Google endpoints onto Claude Code', () => {
     const source = draft({
       baseUrl: 'https://openai.example/v1',
       requestPath: '/responses',
@@ -123,22 +123,7 @@ describe('custom provider runtime fill', () => {
       sourceAgent: 'codex',
       targetAgent: 'claude-code',
     });
-
-    expect(
-      diffs
-        .filter((diff) =>
-          ['baseUrl', 'requestPath', 'wireProtocol', 'headers'].includes(diff.field),
-        )
-        .every((diff) => diff.targetState === 'incompatible'),
-    ).toBe(true);
-    expect(
-      diffs
-        .filter((diff) =>
-          ['baseUrl', 'requestPath', 'wireProtocol', 'headers'].includes(diff.field),
-        )
-        .every((diff) => diff.incompatibilityReason === 'protocol'),
-    ).toBe(true);
-    expect(runtimeFillFieldsForToggle('baseUrl', diffs)).toEqual([]);
+    expect(diffs.find((diff) => diff.field === 'wireProtocol')?.targetState).toBe('conflict');
     expect(
       applyRuntimeFillFields(
         target,
@@ -149,7 +134,11 @@ describe('custom provider runtime fill', () => {
           targetAgent: 'claude-code',
         },
       ),
-    ).toEqual(target);
+    ).toMatchObject({
+      baseUrl: 'https://openai.example/v1',
+      requestPath: '/responses',
+      wireProtocol: 'openai-responses',
+    });
   });
 
   it('rejects the whole inference endpoint when a non-empty request path crosses Pi', () => {
@@ -576,6 +565,7 @@ describe('custom provider runtime fill', () => {
           supportsImageInput: true,
           reasoning: true,
           reasoningEfforts: ['low', 'high'],
+          reasoningDefaultEffort: 'high',
         },
       ],
     });
@@ -592,8 +582,34 @@ describe('custom provider runtime fill', () => {
         supportsImageInput: true,
         reasoning: true,
         reasoningEfforts: ['low', 'high'],
+        reasoningDefaultEffort: 'high',
       },
     ]);
+  });
+
+  it('preserves model-level routes when runtime-fill copies models', () => {
+    const source = draft({
+      models: [
+        {
+          id: 'glm-5.3',
+          name: 'GLM-5.3',
+          route: {
+            baseUrl: 'https://open.bigmodel.cn/api/v1',
+            wireProtocol: 'openai-responses',
+            requestPath: '/responses',
+          },
+        },
+      ],
+    });
+    const result = applyRuntimeFillFields(
+      draft({ models: [{ id: 'glm-5.3', name: 'Old GLM-5.3' }] }),
+      source,
+      ['models'],
+      { sourceAgent: 'codex', targetAgent: 'codex' },
+    );
+
+    expect(result.models).toEqual(source.models);
+    expect(result.models[0]?.route).not.toBe(source.models[0]?.route);
   });
 
   it('ignores Pi-only capabilities when comparing or filling a non-Pi target', () => {
@@ -653,17 +669,29 @@ describe('custom provider runtime fill', () => {
 
   it('takes a deep snapshot for review and apply', () => {
     const source = draft({
-      models: [{ id: 'model-a', name: 'Model A', reasoningEfforts: ['low'] }],
+      models: [
+        {
+          id: 'model-a',
+          name: 'Model A',
+          route: {
+            baseUrl: 'https://api.example/v1',
+            wireProtocol: 'openai-responses',
+          },
+          reasoningEfforts: ['low'],
+        },
+      ],
       headers: [{ name: 'X-Test', value: 'one' }],
     });
     const snapshot = cloneRuntimeFillDraft(source);
 
     source.models[0].name = 'Changed';
+    source.models[0].route!.baseUrl = 'https://changed.example/v1';
     source.models[0].reasoningEfforts?.push('high');
     source.headers[0].value = 'two';
 
     expect(snapshot.models[0]).toMatchObject({
       name: 'Model A',
+      route: { baseUrl: 'https://api.example/v1' },
       reasoningEfforts: ['low'],
     });
     expect(snapshot.headers[0]).toEqual({ name: 'X-Test', value: 'one' });

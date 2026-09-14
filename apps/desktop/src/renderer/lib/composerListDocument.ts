@@ -307,6 +307,57 @@ export function normalizeComposerDocumentJSON(document: JSONContent): JSONConten
   return { ...document, content: normalized };
 }
 
+/**
+ * Remove Host capability chips (`mentionChip` with `attrs.kind === 'plugin-capability'`)
+ * from a composer document, recursively.
+ *
+ * Host capability chips carry routing intent that only makes sense on a
+ * confirmed-local composer. They are serialized into the saved draft's `text`,
+ * so when a draft that was authored locally is restored into a remote/unresolved
+ * session (SSH `remoteHostId`, or device-link `deviceLinkDeviceId !== null`), the
+ * generic `setContent` restore path would otherwise bring the chip back and make
+ * the send path abort with TARGET_UNAVAILABLE — forcing the user to delete it by
+ * hand. Stripping the chip at restore time keeps that path consistent with the
+ * `pendingHostCapabilityGhostId` guard, which already refuses to place the chip
+ * for non-local sessions.
+ */
+export function stripHostCapabilityChips(document: JSONContent): JSONContent {
+  if (!document || typeof document !== 'object' || !Array.isArray(document.content)) {
+    return document;
+  }
+  const nextContent = document.content
+    .map((node) => {
+      if (node?.type === 'mentionChip' && node.attrs?.kind === 'plugin-capability') {
+        return null;
+      }
+      return stripHostCapabilityChips(node);
+    })
+    .filter((node): node is JSONContent => node !== null);
+  return { ...document, content: nextContent };
+}
+
+/**
+ * Whether a composer document contains at least one Host capability chip
+ * (`mentionChip` with `attrs.kind === 'plugin-capability'`), recursively.
+ *
+ * Used to decide whether a confirmed-remote ownership resolution needs to
+ * re-run {@link stripHostCapabilityChips} over the live editor content, without
+ * rebuilding the whole document (and resetting the caret) when there is nothing
+ * to strip.
+ */
+export function composerDocumentContainsHostCapabilityChip(document: JSONContent): boolean {
+  if (!document || typeof document !== 'object' || !Array.isArray(document.content)) {
+    return false;
+  }
+  return document.content.some((node) => {
+    if (!node || typeof node !== 'object') return false;
+    if (node.type === 'mentionChip' && node.attrs?.kind === 'plugin-capability') {
+      return true;
+    }
+    return composerDocumentContainsHostCapabilityChip(node);
+  });
+}
+
 export interface ComposerRestoreInsertion {
   document: JSONContent;
   insertedBlocks: JSONContent[];

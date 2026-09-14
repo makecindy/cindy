@@ -19,25 +19,46 @@ const captured = vi.hoisted(() => ({
   rewindStateFailure: false,
 }));
 
+vi.mock('../transport.js', () => ({
+  createPiStdioTransport: (opts: {
+    args: string[];
+    env: Record<string, string | undefined>;
+    onProcessSpawned?: (pid: number) => void | (() => void);
+  }) => {
+    // session 身份/env/args 断言移到 transport 工厂(spawn 行为在 stdio transport)。
+    const state = {
+      sessionId: opts.env.CINDY_PI_SESSION_ID ?? '',
+      sdkSessionId: `/mock/${opts.env.CINDY_PI_SESSION_ID || 'fork'}.jsonl`,
+      args: [...opts.args],
+      requests: [] as Array<Record<string, unknown>>,
+      closed: false,
+      onExit: undefined as undefined | ((info: { code: number | null; signal: string | null }) => void),
+    };
+    captured.instances.push(state);
+    opts.onProcessSpawned?.(1234);
+    return {
+      writeLine: async () => {},
+      onLine: () => () => {},
+      onStderr: () => () => {},
+      onClose: () => () => {},
+      close: async () => {},
+      pid: 1234,
+      isClosed: () => false,
+    };
+  },
+  attachJsonlReader: () => {},
+}));
+
 vi.mock('../rpc-client.js', () => ({
   PiRpcProcess: class {
     private readonly state: (typeof captured.instances)[number];
     isClosed = false;
     constructor(opts: {
-      args: string[];
-      env: Record<string, string | undefined>;
       onEvent: (event: unknown) => void;
       onExit?: (info: { code: number | null; signal: string | null }) => void;
     }) {
-      this.state = {
-        sessionId: opts.env.CINDY_PI_SESSION_ID ?? '',
-        sdkSessionId: `/mock/${opts.env.CINDY_PI_SESSION_ID || 'fork'}.jsonl`,
-        args: [...opts.args],
-        requests: [],
-        closed: false,
-        onExit: opts.onExit,
-      };
-      captured.instances.push(this.state);
+      this.state = captured.instances[captured.instances.length - 1];
+      this.state.onExit = opts.onExit;
       void opts.onEvent;
     }
     async request(command: Record<string, unknown>): Promise<{ type?: string; command?: string; success: boolean; data?: unknown; error?: string }> {

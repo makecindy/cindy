@@ -17,6 +17,7 @@
 
 import { EventEmitter } from 'node:events';
 import net from 'node:net';
+import { StringDecoder } from 'node:string_decoder';
 import { Client, type ConnectConfig, type ClientChannel, type TcpConnectionDetails } from 'ssh2';
 
 import type { HostConfig, HostSnapshot, RemoteStatus } from './types.js';
@@ -84,6 +85,12 @@ export interface ExecResult {
 export interface ExecStreamOpts {
   pty?: boolean;
   env?: Record<string, string>;
+  /**
+   * 建立阶段超时(ms):exec callback 在 timeoutMs 内未返回则 reject, 并确保
+   * 晚到的 channel 被 kill(轮 40-w4-t6 HIGH —— 否则调用方卡死在 setup 且
+   * late channel 逃逸成孤儿)。0/undefined = 不设超时(默认, 兼容现有调用)。
+   */
+  timeoutMs?: number;
 }
 
 // ── Remote TCP forwarding (OpenSSH `ssh -R` 等价物) ─────────────────────────
@@ -137,6 +144,14 @@ interface ForwardRecord {
   armed: boolean;
   /** 进行中的 arm, 去重 ensureRemoteForward 与 rearmForwards 的并发竞争。 */
   arming?: Promise<void>;
+  /**
+   * 轮 42 P1(codex-connector):句柄引用计数。同一 (localHost, localPort) 的
+   * forward 可能被多个会话共用(同 host 多 Pi 会话共享同一 in-process MCP
+   * bridge 端口), 任一方 dispose 不能拆掉别人还在用的隧道 —— 全部句柄释放
+   * (refCount 归 0)才真正 unforward。closeRemoteForward / closeAllRemoteForwards
+   * 是强制路径(pref 关闭 / 陈旧清理), 清零后直接拆。
+   */
+  refCount: number;
   /** 本地 Proxy 连接失败的节流日志状态。 */
   lastLocalErrorAt: number;
   localErrorCount: number;
@@ -157,7 +172,9 @@ function forwardKey(spec: Pick<RemoteForwardSpec, 'localHost' | 'localPort'>): s
 }
 
 export interface ExecStreamHandle {
-  write(data: string | Buffer): void;
+  /** 轮 23-H4 HIGH:返回 boolean —— false = ssh2 内部缓冲满(背压信号),
+   *  调用方须等待 'drain' 后再写, 避免无界积压。 */
+  write(data: string | Buffer): boolean;
   end(data?: string | Buffer): void;
   /** UTF-8 解码后的文本流; 二进制 transport (codex app-server proxy 的 WS frame)
    *  必须改用 `onStdoutBytes`, 否则 toString 会破坏字节。 */
@@ -165,6 +182,8 @@ export interface ExecStreamHandle {
   /** 原始字节流; 用于在 ssh channel 上跑二进制协议 (e.g. WebSocket frames). */
   onStdoutBytes(cb: (chunk: Buffer) => void): () => void;
   onStderr(cb: (chunk: string) => void): () => void;
+  /** 轮 23-H4 HIGH:ssh2 channel 缓冲 drain(背压恢复信号)。 */
+  onDrain(cb: () => void): () => void;
   onClose(cb: (info: { code: number | null; signal: string | null }) => void): () => void;
   onError(cb: (err: Error) => void): () => void;
   /**
@@ -216,11 +235,16 @@ export function isAuthFailure(msg: string): boolean {
 export function authFailureHint(cfg: HostConfig): string {
   const portArg = cfg.port && cfg.port !== 22 ? `-p ${cfg.port} ` : '';
   if (cfg.authMethod === 'agent') {
+    const pinned = !!cfg.identityFile
+      || (cfg.sshAuthentication?.allowedAgentFingerprints?.length ?? 0) > 0;
+    if (pinned) {
+      return 'SSH agent has no key the remote accepts from the configured identity set. '
+        + 'Load the matching private key with `ssh-add`, then try again.';
+    }
     return `SSH agent has no key the remote accepts. Run \`ssh-copy-id ${portArg}${cfg.user}@${cfg.hostname}\` from your terminal to install your pubkey, or re-add this host with "Identity file" auth.`;
   }
   if (cfg.authMethod === 'key') {
-    const file = cfg.identityFile ?? '(unset)';
-    return `Identity file ${file} was rejected by the remote. Verify the file is the right key for ${cfg.user}@${cfg.hostname}, or run \`ssh-copy-id ${portArg}-i ${file}.pub ${cfg.user}@${cfg.hostname}\` to install it.`;
+    return `The configured identity file was rejected by the remote. Verify it is the right key for ${cfg.user}@${cfg.hostname}, or run \`ssh-copy-id ${portArg}-i <public-key-file> ${cfg.user}@${cfg.hostname}\` with its matching public key.`;
   }
   return `Authentication failed connecting as ${cfg.user}@${cfg.hostname}.`;
 }
@@ -229,8 +253,13 @@ function wrapChannel(channel: ClientChannel): ExecStreamHandle {
   const stdoutListeners = new Set<(s: string) => void>();
   const stdoutBytesListeners = new Set<(b: Buffer) => void>();
   const stderrListeners = new Set<(s: string) => void>();
+  const drainListeners = new Set<() => void>();
   const closeListeners = new Set<(i: { code: number | null; signal: string | null }) => void>();
   const errorListeners = new Set<(e: Error) => void>();
+  // 轮 40-w4-t9 HIGH:文本流按 chunk toString('utf8') 会损坏跨 chunk 的多字节
+  // 字符(中文/emoji 切在边界 → U+FFFD)。用持续 StringDecoder 按流解码。
+  const stdoutDecoder = new StringDecoder('utf8');
+  const stderrDecoder = new StringDecoder('utf8');
 
   channel.on('data', (chunk: Buffer) => {
     // Bytes 路径优先 (二进制协议如 WS frame), 然后 text 路径 — 同一 chunk 可能两边
@@ -239,27 +268,48 @@ function wrapChannel(channel: ClientChannel): ExecStreamHandle {
       for (const cb of stdoutBytesListeners) cb(chunk);
     }
     if (stdoutListeners.size > 0) {
-      const s = chunk.toString('utf8');
-      for (const cb of stdoutListeners) cb(s);
+      const s = stdoutDecoder.write(chunk);
+      if (s.length > 0) {
+        for (const cb of stdoutListeners) cb(s);
+      }
     }
   });
   channel.stderr.on('data', (chunk: Buffer) => {
-    const s = chunk.toString('utf8');
-    for (const cb of stderrListeners) cb(s);
+    const s = stderrDecoder.write(chunk);
+    if (s.length > 0) {
+      for (const cb of stderrListeners) cb(s);
+    }
   });
   channel.on('close', (code: number | null, signal: string | null) => {
+    // 轮 40-w4-t12 LOW:flush decoder 尾部残留(通道在字符中间关闭时丢尾码点)。
+    const tail = stdoutDecoder.end();
+    if (tail.length > 0) {
+      for (const cb of stdoutListeners) cb(tail);
+    }
+    const tailErr = stderrDecoder.end();
+    if (tailErr.length > 0) {
+      for (const cb of stderrListeners) cb(tailErr);
+    }
     for (const cb of closeListeners) cb({ code, signal });
   });
   channel.on('error', (err: Error) => {
     for (const cb of errorListeners) cb(err);
   });
+  // 轮 23-H4 HIGH:背压恢复信号 —— channel.write 返回 false 后缓冲 drain 时触发。
+  channel.on('drain', () => {
+    for (const cb of drainListeners) cb();
+  });
 
   return {
-    write: (data) => { channel.write(data); },
+    // 轮 23-H4 HIGH:返回 channel.write 的 boolean —— false = ssh2 内部缓冲满
+    // (背压信号)。调用方(pi-remote-transport 的 drainPending)据此等待 drain,
+    // 避免大输入在慢链路上无界堆积进 Node/ssh2 缓冲。
+    write: (data): boolean => channel.write(data),
     end: (data) => { if (data != null) channel.end(data); else channel.end(); },
     onStdout: (cb) => { stdoutListeners.add(cb); return () => { stdoutListeners.delete(cb); }; },
     onStdoutBytes: (cb) => { stdoutBytesListeners.add(cb); return () => { stdoutBytesListeners.delete(cb); }; },
     onStderr: (cb) => { stderrListeners.add(cb); return () => { stderrListeners.delete(cb); }; },
+    onDrain: (cb) => { drainListeners.add(cb); return () => { drainListeners.delete(cb); }; },
     onClose: (cb) => { closeListeners.add(cb); return () => { closeListeners.delete(cb); }; },
     onError: (cb) => { errorListeners.add(cb); return () => { errorListeners.delete(cb); }; },
     kill: (signal = 'TERM') => {
@@ -295,6 +345,14 @@ export class RemoteHost {
   private client: Client | null = null;
   private reconnectAttempts = 0;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  /**
+   * Monotonic connection-attempt generation. disconnect() advances it before
+   * ending the current client, so an async resolveAuth() or late ssh2 event
+   * from the previous endpoint cannot publish status or resurrect a session.
+   */
+  private connectionEpoch = 0;
+  /** The currently running connect attempt, including reconnect attempts. */
+  private inFlightConnect: Promise<void> | null = null;
   /** true = user explicitly asked to disconnect; suppress auto-reconnect. */
   private userDisconnected = false;
   private events = new EventEmitter();
@@ -367,10 +425,15 @@ export class RemoteHost {
   async connect(): Promise<void> {
     if (this.status === 'ready') return;
     if (this.status === 'connecting' || this.status === 'authenticating') {
-      // Wait for the in-flight attempt to settle (success or fail). After
-      // the await `this.status` is mutated; TS still has the pre-await
-      // narrowing, so we re-read through `getStatus()`.
-      await this.waitForTerminal();
+      // Share the actual in-flight attempt instead of waiting only for a
+      // future status event. A disconnect can invalidate an attempt after it
+      // has emitted its terminal status; joining the Promise guarantees that
+      // every caller still receives the cancellation/error outcome.
+      if (this.inFlightConnect) {
+        await this.inFlightConnect;
+      } else {
+        await this.waitForTerminal();
+      }
       if (this.getStatus() === 'ready') return;
       // Prefer the last resolveAuth error so the structured `.code` survives
       // (classifyConnectFailure needs it); fall back to the string otherwise.
@@ -385,7 +448,7 @@ export class RemoteHost {
     this.clearReconnectTimer();
     this.userDisconnected = false;
     this.reconnectAttempts = 0;
-    await this.doConnect();
+    await this.startConnectAttempt();
   }
 
   /**
@@ -394,6 +457,7 @@ export class RemoteHost {
    */
   async disconnect(): Promise<void> {
     this.userDisconnected = true;
+    this.connectionEpoch += 1;
     this.clearReconnectTimer();
     this.markForwardsDisarmed();
     if (this.client) {
@@ -427,6 +491,11 @@ export class RemoteHost {
     const client = this.requireReady();
     const timeoutMs = opts?.timeoutMs ?? 60_000;
     const label = opts?.label ?? 'exec';
+    // 轮 40-w4-t7 HIGH:默认输出上限 —— 远端命令失控 flood 时无上限缓冲会把
+    // 主进程内存/CPU 拉爆。显式传 maxOutputBytes 的调用可覆盖(保持向后兼容;
+    // 0 = 显式无上限)。
+    const maxOutputBytes = opts?.maxOutputBytes ?? 16 * 1024 * 1024;
+    const capActive = maxOutputBytes !== 0;
 
     return await new Promise<ExecResult>((resolve, reject) => {
       client.exec(cmd, { env: opts?.env }, (err, channel) => {
@@ -450,7 +519,6 @@ export class RemoteHost {
         // 防止任意命令把无上限输出攒进 main 进程内存。teardown 后照常等
         // 'close' 事件 resolve(truncated 标记),与超时路径共用 TERM+close
         // 兜底(channel.signal 可能被 sshd 静默拒绝,close 触发 SIGHUP)。
-        const maxOutputBytes = opts?.maxOutputBytes;
         let stdoutBytes = 0;
         let stderrBytes = 0;
         let truncated = false;
@@ -461,29 +529,37 @@ export class RemoteHost {
           try { channel.close(); } catch { /* already gone */ }
         };
         const takeCapped = (chunk: Buffer, usedBytes: number): Buffer | null => {
-          if (maxOutputBytes == null) return chunk;
+          if (!capActive) return chunk;
           if (usedBytes >= maxOutputBytes) { teardownOnCap(); return null; }
           if (usedBytes + chunk.length <= maxOutputBytes) return chunk;
           teardownOnCap();
           return chunk.subarray(0, maxOutputBytes - usedBytes);
         };
 
+        // 轮 40-w4-t12 MEDIUM:按 chunk toString('utf8') 会损坏跨 chunk 多字节
+        // 字符(中文/emoji 切在边界 → U+FFFD)。用持续 StringDecoder 按流解码,
+        // close 时 end() flush 尾部残留。
+        const stdoutDecoder = new StringDecoder('utf8');
+        const stderrDecoder = new StringDecoder('utf8');
         channel.on('data', (chunk: Buffer) => {
           const kept = takeCapped(chunk, stdoutBytes);
           if (!kept) return;
           stdoutBytes += kept.length;
-          stdout += kept.toString('utf8');
+          stdout += stdoutDecoder.write(kept);
         });
         channel.stderr.on('data', (chunk: Buffer) => {
           const kept = takeCapped(chunk, stderrBytes);
           if (!kept) return;
           stderrBytes += kept.length;
-          stderr += kept.toString('utf8');
+          stderr += stderrDecoder.write(kept);
         });
         channel.on('close', (code: number | null, sig: string | null) => {
           if (settled) return;
           settled = true;
           clearTimeout(timer);
+          // 轮 40-w4-t12 LOW:flush decoder 尾部残留(通道在字符中间关闭)。
+          stdout += stdoutDecoder.end();
+          stderr += stderrDecoder.end();
           exitCode = code;
           signal = sig;
           resolve({ stdout, stderr, exitCode, signal, ...(truncated ? { truncated: true } : {}) });
@@ -518,7 +594,30 @@ export class RemoteHost {
       if (opts?.pty) execOpts.pty = true;
       if (opts?.env) execOpts.env = opts.env;
 
+      // 轮 40-w4-t6 HIGH:建立阶段超时 —— exec callback 晚到时 kill 晚到
+      // channel 并 reject, 防调用方无限挂起 + channel 逃逸成孤儿。
+      let settled = false;
+      let timer: NodeJS.Timeout | undefined;
+      const cleanup = (): void => {
+        if (timer) { clearTimeout(timer); timer = undefined; }
+      };
+      if (opts?.timeoutMs && opts.timeoutMs > 0) {
+        timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          reject(new Error(`execStream setup timed out after ${opts.timeoutMs}ms`));
+        }, opts.timeoutMs);
+        timer.unref?.();
+      }
       client.exec(cmd, execOpts, (err, channel) => {
+        if (settled) {
+          // 超时已 reject:晚到 channel 必须关闭(防孤儿;ClientChannel 无 kill,
+          // close 关闭 ssh2 channel 流)。
+          try { channel?.close(); } catch { /* best-effort */ }
+          return;
+        }
+        settled = true;
+        cleanup();
         if (err) return reject(err);
         resolve(wrapChannel(channel));
       });
@@ -580,6 +679,7 @@ export class RemoteHost {
       spec,
       remotePort: spec.preferredRemotePort ?? DEFAULT_REMOTE_FORWARD_PORT_BASE,
       armed: false,
+      refCount: 0,
       lastLocalErrorAt: 0,
       localErrorCount: 0,
       lastLocalErrorLoggedCount: 0,
@@ -630,7 +730,11 @@ export class RemoteHost {
     const key = `${localHost}:${localPort}`;
     const record = this.forwards.get(key);
     if (!record) return;
-    await this.forwardHandle(key, record).close();
+    // 强制路径(陈旧 forward 清理): 无视引用计数直接拆 —— 调用方语义是「目标
+    // 已失效, 旧隧道必须拆除」, 共享者同样不再能指向旧目标。剩余句柄的 close
+    // 幂等 no-op(record 已摘除)。
+    record.refCount = 0;
+    await this.closeForwardRecord(key, record);
   }
 
   /** 关闭并清除所有已登记 forward (pref 关闭路径)。连接断开时是纯本地清理。 */
@@ -639,46 +743,63 @@ export class RemoteHost {
     for (const key of keys) {
       const record = this.forwards.get(key);
       if (!record) continue;
-      await this.forwardHandle(key, record).close();
+      record.refCount = 0;
+      await this.closeForwardRecord(key, record);
     }
   }
 
   private forwardHandle(key: string, record: ForwardRecord): RemoteForward {
+    record.refCount += 1;
+    let closed = false;
     return {
       get remotePort() {
         return record.remotePort;
       },
       close: async () => {
-        if (!this.forwards.delete(key)) return;
-        record.armed = false;
-        // 连接活着就显式 unforward; 断线时服务端侧随连接消失, 无需操作。
-        if (this.status === 'ready' && this.client) {
-          // 与 forwardIn 对称的看门狗 (review: PR #715 五轮审核 P2): 半开连接
-          // 上 ssh2 global request 回调可能丢失, 裸 await 会把 Settings 的
-          // 关闭 proxy / 更新 host 流程永久挂住。超时后照常返回 — record 已
-          // 摘除, 服务端残留随连接死亡消失。
-          await new Promise<void>((resolve) => {
-            const timer = setTimeout(() => {
-              this.log.warn('unforwardIn timed out — proceeding (server remnant dies with connection)', {
-                id: this.id,
-                port: record.remotePort,
-              });
-              resolve();
-            }, 5_000);
-            timer.unref?.();
-            try {
-              this.client!.unforwardIn('127.0.0.1', record.remotePort, () => {
-                clearTimeout(timer);
-                resolve();
-              });
-            } catch {
-              clearTimeout(timer);
-              resolve();
-            }
-          });
-        }
+        // 同 handle 幂等: 只释放一次计数(调用方 dispose 与 catch 兜底可能双调)。
+        if (closed) return;
+        closed = true;
+        record.refCount -= 1;
+        // 轮 42 P1(codex-connector):引用计数 —— 同一 (localHost, localPort) 的
+        // forward 被多个会话共享(同 host 多 Pi 会话共用同一 in-process MCP
+        // bridge 端口)时, 一个会话 dispose 不得拆掉别人还在用的隧道。
+        // 只剩自己(refCount 归 0)才真正 unforward 并摘除 record。
+        if (record.refCount > 0) return;
+        await this.closeForwardRecord(key, record);
       },
     };
+  }
+
+  /** 真正拆除 forward(引用计数归 0 / 强制关闭路径共用)。幂等。 */
+  private async closeForwardRecord(key: string, record: ForwardRecord): Promise<void> {
+    if (!this.forwards.delete(key)) return;
+    record.armed = false;
+    // 连接活着就显式 unforward; 断线时服务端侧随连接消失, 无需操作。
+    if (this.status === 'ready' && this.client) {
+      // 与 forwardIn 对称的看门狗 (review: PR #715 五轮审核 P2): 半开连接
+      // 上 ssh2 global request 回调可能丢失, 裸 await 会把 Settings 的
+      // 关闭 proxy / 更新 host 流程永久挂住。超时后照常返回 — record 已
+      // 摘除, 服务端残留随连接死亡消失。
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          this.log.warn('unforwardIn timed out — proceeding (server remnant dies with connection)', {
+            id: this.id,
+            port: record.remotePort,
+          });
+          resolve();
+        }, 5_000);
+        timer.unref?.();
+        try {
+          this.client!.unforwardIn('127.0.0.1', record.remotePort, () => {
+            clearTimeout(timer);
+            resolve();
+          });
+        } catch {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    }
   }
 
   /**
@@ -965,11 +1086,21 @@ export class RemoteHost {
    * onError maps to `hostKeyError`). Fails closed: a missing store or a read
    * error refuses the connect rather than trusting an unverified key.
    */
-  private async verifyHostKey(hostKey: Buffer): Promise<boolean> {
+  private async verifyHostKey(
+    hostKey: Buffer,
+    storeKey: string,
+    isCurrentAttempt: () => boolean,
+  ): Promise<boolean> {
+    // A cancelled client must not even touch the shared TOFU store. In
+    // particular, updateConfig() may already have published a new endpoint
+    // while the old ssh2 client delivers a late hostVerifier callback.
+    if (!isCurrentAttempt()) return false;
     const store = this.hostKeys;
     if (!store) {
-      this.hostKeyError =
-        'SSH host key verification is not configured; refusing to connect without it.';
+      if (isCurrentAttempt()) {
+        this.hostKeyError =
+          'SSH host key verification is not configured; refusing to connect without it.';
+      }
       this.log.error('ssh host key store missing — refusing connect', { id: this.id });
       return false;
     }
@@ -977,36 +1108,43 @@ export class RemoteHost {
     // (e.g. removed a stale entry after a legitimate server re-key) sees the
     // update on reconnect without restarting the app.
     store.reload();
+    if (!isCurrentAttempt()) return false;
     const presented = hostKeyFingerprint(hostKey);
-    const storeKey = hostKeyId(this.cfg.hostname, this.cfg.port);
     let stored: string | null;
     try {
       stored = await store.get(storeKey);
     } catch (err) {
-      this.hostKeyError = `failed to read trusted host keys: ${(err as Error).message}`;
+      if (isCurrentAttempt()) {
+        this.hostKeyError = `failed to read trusted host keys: ${(err as Error).message}`;
+      }
       this.log.error('ssh known-hosts read failed — refusing connect', {
         id: this.id,
         error: (err as Error).message,
       });
       return false;
     }
+    if (!isCurrentAttempt()) return false;
 
     const decision = decideHostKey(stored, presented);
     if (decision === 'match') return true;
     if (decision === 'trust-new') {
+      if (!isCurrentAttempt()) return false;
       try {
-        await store.set(storeKey, presented);
+        await store.set(storeKey, presented, isCurrentAttempt);
       } catch (err) {
         // Cannot persist the trusted fingerprint — refuse the connection.
         // Proceeding without persistence means the next reconnect would
         // re-enter trust-new and silently accept any key, defeating TOFU.
-        this.hostKeyError = `failed to persist trusted host key: ${(err as Error).message}`;
+        if (isCurrentAttempt()) {
+          this.hostKeyError = `failed to persist trusted host key: ${(err as Error).message}`;
+        }
         this.log.error('ssh known-hosts write failed — refusing connect', {
           id: this.id,
           error: (err as Error).message,
         });
         return false;
       }
+      if (!isCurrentAttempt()) return false;
       this.log.info('ssh host key trusted on first use', {
         id: this.id,
         host: storeKey,
@@ -1015,11 +1153,13 @@ export class RemoteHost {
       return true;
     }
     // mismatch
-    this.hostKeyError =
-      `Remote host key for ${storeKey} changed (${presented}) and no longer matches the ` +
-      `previously trusted key. This can mean the server was reinstalled — or a ` +
-      `man-in-the-middle. Connection refused. If you trust the change, remove the stale ` +
-      `entry from maker's known hosts and reconnect.`;
+    if (isCurrentAttempt()) {
+      this.hostKeyError =
+        `Remote host key for ${storeKey} changed (${presented}) and no longer matches the ` +
+        `previously trusted key. This can mean the server was reinstalled — or a ` +
+        `man-in-the-middle. Connection refused. If you trust the change, remove the stale ` +
+        `entry from maker's known hosts and reconnect.`;
+    }
     this.log.error('ssh host key mismatch — refusing connect', {
       id: this.id,
       host: storeKey,
@@ -1030,14 +1170,38 @@ export class RemoteHost {
   }
 
   private async doConnect(): Promise<void> {
+    const attemptEpoch = ++this.connectionEpoch;
+    const isCurrentAttempt = (): boolean => attemptEpoch === this.connectionEpoch;
+    const cancelledError = (): Error => new Error('SSH connection attempt cancelled');
+    const attemptConfig: HostConfig = {
+      ...this.cfg,
+      ...(this.cfg.sshAuthentication
+        ? {
+            sshAuthentication: {
+              ...this.cfg.sshAuthentication,
+              configuredIdentityFiles: [
+                ...this.cfg.sshAuthentication.configuredIdentityFiles,
+              ],
+              ...(this.cfg.sshAuthentication.allowedAgentFingerprints
+                ? {
+                    allowedAgentFingerprints: [
+                      ...this.cfg.sshAuthentication.allowedAgentFingerprints,
+                    ],
+                  }
+                : {}),
+            },
+          }
+        : {}),
+    };
     this.setStatus('connecting');
     this.hostKeyError = null;
     this.lastAuthError = null;
 
     let auth;
     try {
-      auth = await resolveAuth(this.cfg);
+      auth = await resolveAuth(attemptConfig);
     } catch (err) {
+      if (!isCurrentAttempt()) throw cancelledError();
       const msg = (err as Error).message;
       this.lastError = msg;
       // Keep the full error so concurrent connect() joiners can rethrow it
@@ -1047,19 +1211,33 @@ export class RemoteHost {
       throw err;
     }
 
+    // disconnect() may have run while local credentials were being resolved.
+    // Do not create an ssh2 client after that cancellation boundary.
+    if (!isCurrentAttempt()) throw cancelledError();
+
+    // Unsupported configuration fails in resolveAuth above. Only a usable,
+    // fully-resolved endpoint may participate in TOFU identity calculation.
+    const attemptHostKeyId = hostKeyId(attemptConfig.hostname, attemptConfig.port);
     const client = new Client();
     this.client = client;
 
     const connectConfig: ConnectConfig = {
-      host: this.cfg.hostname,
-      port: this.cfg.port,
-      username: this.cfg.user,
+      host: attemptConfig.hostname,
+      port: attemptConfig.port,
+      username: attemptConfig.user,
       readyTimeout: READY_TIMEOUT_MS,
       keepaliveInterval: KEEPALIVE_INTERVAL_MS,
       keepaliveCountMax: KEEPALIVE_COUNT_MAX,
       // TOFU host key check — without this ssh2 trusts any presented key (MITM).
       hostVerifier: (hostKey: Buffer, verify: (valid: boolean) => void): void => {
-        void this.verifyHostKey(hostKey).then(verify, () => verify(false));
+        if (!isCurrentAttempt()) {
+          verify(false);
+          return;
+        }
+        void this.verifyHostKey(hostKey, attemptHostKeyId, isCurrentAttempt).then(
+          (valid) => verify(isCurrentAttempt() ? valid : false),
+          () => verify(false),
+        );
       },
       ...(auth.agent ? { agent: auth.agent } : {}),
       ...(auth.privateKey ? { privateKey: auth.privateKey } : {}),
@@ -1068,8 +1246,8 @@ export class RemoteHost {
 
     this.log.debug('ssh connecting', {
       id: this.id,
-      hostname: this.cfg.hostname,
-      port: this.cfg.port,
+      hostname: attemptConfig.hostname,
+      port: attemptConfig.port,
       auth: auth.label,
     });
 
@@ -1078,6 +1256,12 @@ export class RemoteHost {
 
       const onReady = () => {
         if (settled) return;
+        if (!isCurrentAttempt()) {
+          settled = true;
+          try { client.end(); } catch { /* stale client is already closing */ }
+          reject(cancelledError());
+          return;
+        }
         settled = true;
         this.lastError = undefined;
         this.lastAuthLabel = auth.label;
@@ -1091,6 +1275,13 @@ export class RemoteHost {
       };
 
       const onError = (err: Error) => {
+        if (!isCurrentAttempt()) {
+          if (!settled) {
+            settled = true;
+            reject(cancelledError());
+          }
+          return;
+        }
         if (settled) {
           // Post-ready error — feed into reconnect path, not the connect promise.
           this.handlePostReadyError(err);
@@ -1105,7 +1296,7 @@ export class RemoteHost {
         this.lastError = this.hostKeyError
           ? this.hostKeyError
           : isAuthFailure(err.message)
-            ? authFailureHint(this.cfg)
+            ? authFailureHint(attemptConfig)
             : err.message;
         this.client = null;
         this.setStatus('failed');
@@ -1119,6 +1310,13 @@ export class RemoteHost {
       };
 
       const onClose = () => {
+        if (!isCurrentAttempt()) {
+          if (!settled) {
+            settled = true;
+            reject(cancelledError());
+          }
+          return;
+        }
         if (!settled) {
           settled = true;
           const msg = this.lastError ?? 'connection closed before ready';
@@ -1135,7 +1333,9 @@ export class RemoteHost {
       // ssh2 emits 'handshake' before 'ready' — repurpose to advance state
       // so renderer can show "authenticating" instead of staying on
       // "connecting" throughout auth.
-      client.on('handshake', () => this.setStatus('authenticating'));
+      client.on('handshake', () => {
+        if (isCurrentAttempt()) this.setStatus('authenticating');
+      });
       client.on('ready', onReady);
       client.on('error', onError);
       client.on('close', onClose);
@@ -1146,6 +1346,21 @@ export class RemoteHost {
         onError(err as Error);
       }
     });
+  }
+
+  /** Start and register a connect attempt so concurrent callers can join it. */
+  private startConnectAttempt(): Promise<void> {
+    const attempt = this.doConnect();
+    this.inFlightConnect = attempt;
+    void attempt.then(
+      () => {
+        if (this.inFlightConnect === attempt) this.inFlightConnect = null;
+      },
+      () => {
+        if (this.inFlightConnect === attempt) this.inFlightConnect = null;
+      },
+    );
+    return attempt;
   }
 
   private handlePostReadyError(err: Error): void {
@@ -1196,10 +1411,11 @@ export class RemoteHost {
     });
     this.reconnectTimer = setTimeout(() => {
       this.reconnectTimer = null;
-      void this.doConnect().catch((err) => {
+      void this.startConnectAttempt().catch((err) => {
         // doConnect already set status=failed and recorded lastError.
         // If we still have attempts left, schedule again.
-        if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS && !this.userDisconnected) {
+        if (this.userDisconnected) return;
+        if (this.reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
           this.scheduleReconnect();
         } else {
           this.log.error('ssh reconnect exhausted', { id: this.id, error: (err as Error).message });
@@ -1239,6 +1455,9 @@ export class RemoteHost {
 
   /** Wait until status leaves {connecting, authenticating}. */
   private waitForTerminal(): Promise<void> {
+    if (this.status !== 'connecting' && this.status !== 'authenticating') {
+      return Promise.resolve();
+    }
     return new Promise((resolve) => {
       const off = this.onStatus((snap) => {
         if (snap.status !== 'connecting' && snap.status !== 'authenticating') {

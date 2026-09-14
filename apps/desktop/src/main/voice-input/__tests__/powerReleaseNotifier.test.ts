@@ -26,10 +26,12 @@ describe('installVoiceInputPowerRelease', () => {
   it('broadcasts a release reason on suspend and lock-screen', () => {
     const powerMonitor = createFakePowerMonitor();
     const broadcast = vi.fn();
+    const releaseActiveShortcut = vi.fn();
 
     installVoiceInputPowerRelease({
       powerMonitor,
       broadcast,
+      releaseActiveShortcut,
       logger: { debug: vi.fn() },
     });
 
@@ -42,6 +44,10 @@ describe('installVoiceInputPowerRelease', () => {
     expect(broadcast).toHaveBeenNthCalledWith(2, VOICE_INPUT_POWER_STATE_CHANNEL, {
       reason: 'screen_locked',
     });
+    expect(releaseActiveShortcut).toHaveBeenCalledTimes(2);
+    expect(releaseActiveShortcut.mock.invocationCallOrder[0]).toBeLessThan(
+      broadcast.mock.invocationCallOrder[0],
+    );
   });
 
   it('keeps broadcasting after one window fails mid-teardown', () => {

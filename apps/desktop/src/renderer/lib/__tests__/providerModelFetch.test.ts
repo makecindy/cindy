@@ -1,12 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  firstProviderChatModel,
   areProviderRequestUrlsAllowed,
   canSendHydratedApiKey,
   connectionTestCanUseSaved,
   modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
+  resolveProviderConnectionProbeRoute,
   restoreHydratedApiKey,
   type SavedProviderProbeBaseline,
 } from '../providerModelFetch';
@@ -71,7 +73,7 @@ describe('providerModelFetchRequestSignature', () => {
 describe('providerConnectionTestRequestSignature', () => {
   const connectionFields = {
     ...fields,
-    wireProtocol: 'openai-responses',
+    wireProtocol: 'openai-responses' as const,
     models: [{ id: ' model-a ' }, { id: 'model-b' }],
   };
 
@@ -96,6 +98,74 @@ describe('providerConnectionTestRequestSignature', () => {
       ),
     ).not.toBe(original);
     expect(providerConnectionTestRequestSignature(connectionFields, 'none')).not.toBe(original);
+    expect(
+      providerConnectionTestRequestSignature(
+        { ...connectionFields, models: [{ id: 'model-a', piApi: 'anthropic-messages' }] },
+        'apiKey',
+      ),
+    ).not.toBe(original);
+    expect(
+      providerConnectionTestRequestSignature(
+        {
+          ...connectionFields,
+          models: [
+            {
+              id: 'model-a',
+              route: {
+                baseUrl: 'https://api.example/anthropic',
+                wireProtocol: 'anthropic-messages',
+              },
+            },
+          ],
+        },
+        'apiKey',
+      ),
+    ).not.toBe(original);
+  });
+});
+
+describe('resolveProviderConnectionProbeRoute', () => {
+  it.each(['claude-code', 'codex'] as const)(
+    'uses the first model route for %s instead of the provider default',
+    (agent) => {
+      const modelWireProtocol =
+        agent === 'claude-code' ? ('anthropic-messages' as const) : ('openai-responses' as const);
+      expect(
+        resolveProviderConnectionProbeRoute(agent, {
+          baseUrl: 'https://api.example/provider',
+          requestPath: '/provider-path',
+          wireProtocol: agent === 'claude-code' ? 'anthropic-messages' : 'openai-chat',
+          models: [
+            {
+              id: 'model-a',
+              route: {
+                baseUrl: 'https://api.example/model',
+                wireProtocol: modelWireProtocol,
+                requestPath: '/model-responses',
+              },
+            },
+          ],
+        }),
+      ).toEqual({
+        baseUrl: 'https://api.example/model',
+        wireProtocol: modelWireProtocol,
+        requestPath: '/model-responses',
+      });
+    },
+  );
+
+  it('keeps Pi on its explicit per-model protocol resolver', () => {
+    expect(
+      resolveProviderConnectionProbeRoute('pi', {
+        baseUrl: 'https://api.example/provider',
+        requestPath: '/ignored',
+        wireProtocol: 'openai-chat',
+        models: [{ id: 'model-a', piApi: 'openai-responses' }],
+      }),
+    ).toEqual({
+      baseUrl: 'https://api.example/provider',
+      wireProtocol: 'openai-responses',
+    });
   });
 });
 
@@ -305,7 +375,7 @@ describe('connectionTestCanUseSaved', () => {
     modelsUrl: 'https://gw.example/v1/models',
     apiKey: '',
     headers: [] as ReadonlyArray<{ name: string; value: string }>,
-    wireProtocol: 'openai-responses',
+    wireProtocol: 'openai-responses' as const,
     models: [{ id: 'm-1' }],
   };
 
@@ -313,21 +383,79 @@ describe('connectionTestCanUseSaved', () => {
     expect(connectionTestCanUseSaved(connForm, headerAuthBaseline, 'none')).toBe(true);
   });
 
+  it('falls back to adhoc when the first model protocol override changed', () => {
+    expect(
+      connectionTestCanUseSaved(
+        { ...connForm, models: [{ id: 'm-1', piApi: 'anthropic-messages' }] },
+        headerAuthBaseline,
+        'none',
+      ),
+    ).toBe(false);
+    expect(
+      connectionTestCanUseSaved(
+        { ...connForm, models: [{ id: 'm-1', piApi: 'anthropic-messages' }] },
+        { ...headerAuthBaseline, modelPiApi: 'anthropic-messages' },
+        'none',
+      ),
+    ).toBe(true);
+  });
+
+  it('falls back to adhoc when the first model route changed', () => {
+    const modelRoute = {
+      baseUrl: 'https://gw.example/anthropic',
+      wireProtocol: 'anthropic-messages' as const,
+    };
+    expect(
+      connectionTestCanUseSaved(
+        { ...connForm, models: [{ id: 'm-1', route: modelRoute }] },
+        { ...headerAuthBaseline, modelRoute },
+        'none',
+      ),
+    ).toBe(true);
+    expect(
+      connectionTestCanUseSaved(
+        {
+          ...connForm,
+          models: [
+            {
+              id: 'm-1',
+              route: { ...modelRoute, baseUrl: 'https://gw.example/anthropic-v2' },
+            },
+          ],
+        },
+        { ...headerAuthBaseline, modelRoute },
+        'none',
+      ),
+    ).toBe(false);
+  });
+
   it('falls back to adhoc when endpoint, protocol or auth mode changed', () => {
     expect(
-      connectionTestCanUseSaved({ ...connForm, baseUrl: 'https://gw.example/v2' }, headerAuthBaseline, 'none'),
+      connectionTestCanUseSaved(
+        { ...connForm, baseUrl: 'https://gw.example/v2' },
+        headerAuthBaseline,
+        'none',
+      ),
     ).toBe(false);
     expect(
       connectionTestCanUseSaved({ ...connForm, requestPath: '/chat' }, headerAuthBaseline, 'none'),
     ).toBe(false);
     expect(
-      connectionTestCanUseSaved({ ...connForm, wireProtocol: 'openai-chat' }, headerAuthBaseline, 'none'),
+      connectionTestCanUseSaved(
+        { ...connForm, wireProtocol: 'openai-chat' },
+        headerAuthBaseline,
+        'none',
+      ),
     ).toBe(false);
     expect(connectionTestCanUseSaved(connForm, headerAuthBaseline, 'apiKey')).toBe(false);
   });
 
   it('falls back to adhoc when the user changed the api key so the new key is what gets tested', () => {
-    const apiKeyBaseline: SavedProviderProbeBaseline = { ...headerAuthBaseline, authMode: 'apiKey', apiKey: 'saved-key' };
+    const apiKeyBaseline: SavedProviderProbeBaseline = {
+      ...headerAuthBaseline,
+      authMode: 'apiKey',
+      apiKey: 'saved-key',
+    };
     expect(
       connectionTestCanUseSaved({ ...connForm, apiKey: 'saved-key' }, apiKeyBaseline, 'apiKey'),
     ).toBe(true);
@@ -353,4 +481,47 @@ describe('connectionTestCanUseSaved', () => {
       ),
     ).toBe(true);
   });
+});
+
+it('uses the same eligible chat model for probe ID, route and request signature', () => {
+  const media = { id: 'image', mode: 'image_generation', route: { baseUrl: 'https://image.example', wireProtocol: 'openai-chat' as const } };
+  const chat = { id: 'flux-image-x', route: { baseUrl: 'https://chat.example', wireProtocol: 'openai-chat' as const } };
+  const input = { ...fields, wireProtocol: 'openai-chat' as const, models: [media, chat] };
+  expect(firstProviderChatModel(input.models)).toBe(chat);
+  expect(resolveProviderConnectionProbeRoute('codex', input)?.baseUrl).toBe('https://chat.example');
+  expect(providerConnectionTestRequestSignature(input, 'apiKey')).toBe(providerConnectionTestRequestSignature({ ...input, models: [chat] }, 'apiKey'));
+  expect(firstProviderChatModel([media])).toBeUndefined();
+});
+
+
+it.each(['pi', 'codex', 'claude-code'] as const)('retains Vertex SDK identity for the %s connection test', agent => {
+  expect(resolveProviderConnectionProbeRoute(agent, { baseUrl: 'https://us-central1-aiplatform.googleapis.com',
+    requestPath: '', wireProtocol: 'google-generative-ai',
+    models: [{ id: 'gemini-fixture', piApi: 'google-vertex' }] })).toEqual({
+      baseUrl: 'https://us-central1-aiplatform.googleapis.com', wireProtocol: 'google-generative-ai', api: 'google-vertex',
+    });
+});
+
+
+it('invalidates a connection test when the actual SDK changes under the same display protocol', () => {
+  const fields = { baseUrl: 'https://example.test', requestPath: '', modelsUrl: '', apiKey: 'fixture', headers: [],
+    wireProtocol: 'google-generative-ai' as const, models: [{ id: 'gemini', api: 'google-generative-ai' as const }] };
+  const changed = { ...fields, models: [{ id: 'gemini', api: 'google-vertex' as const }] };
+  expect(providerConnectionTestRequestSignature(fields, 'apiKey'))
+    .not.toBe(providerConnectionTestRequestSignature(changed, 'apiKey'));
+});
+
+it.each(['claude-code', 'codex', 'pi'] as const)('projects ID-only template models before an edited %s probe', async agent => {
+  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+  const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
+  const runtime = preset.runtimes[agent]!;
+  for (const id of [runtime.models[0].id, 'gemini-future-deployment']) {
+    expect(resolveProviderConnectionProbeRoute(agent, {
+      catalogPresetId: preset.id, baseUrl: runtime.baseUrl,
+      wireProtocol: runtime.wireProtocol!, requestPath: runtime.requestPath ?? '', models: [{ id }],
+    }, BUNDLED_CATALOG.presets)).toMatchObject({
+      api: 'google-generative-ai', wireProtocol: 'google-generative-ai',
+      baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    });
+  }
 });

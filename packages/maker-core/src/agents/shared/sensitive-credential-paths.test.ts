@@ -7,11 +7,28 @@ import {
   isSensitiveCredentialPath,
 } from "./sensitive-credential-paths.js";
 
-describe("Review credential path policy", () => {
-  it("adds dotenv files without treating arbitrary .env text as a path", () => {
-    expect(isSensitiveCredentialPath("/repo/.env.local")).toBe(false);
-    expect(isReviewSensitiveCredentialPath("/repo/.env.local")).toBe(true);
-    expect(isReviewSensitiveCredentialPath("jq .env data.json")).toBe(false);
+describe("credential path policy", () => {
+  it("treats dotenv files as credentials without matching similar text", () => {
+    for (const dotenvPath of [
+      ".env",
+      ".env.local",
+      "/repo/.env",
+      "/repo/.env.production.local",
+      "C:\\repo\\.ENV.test",
+    ]) {
+      expect(isSensitiveCredentialPath(dotenvPath)).toBe(true);
+      expect(isReviewSensitiveCredentialPath(dotenvPath)).toBe(true);
+    }
+
+    for (const ordinary of [
+      "/repo/.environment",
+      "/repo/.envrc",
+      "/repo/env.local",
+      "jq .env data.json",
+    ]) {
+      expect(isSensitiveCredentialPath(ordinary)).toBe(false);
+      expect(isReviewSensitiveCredentialPath(ordinary)).toBe(false);
+    }
   });
 
   it("retains the shared credential path protections", () => {

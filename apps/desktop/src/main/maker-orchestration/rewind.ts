@@ -21,7 +21,7 @@
  *     tailTurnsToDrop 调 thread/rollback。
  */
 
-import { and, asc, eq, gt, gte, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, gte, isNull, lt, or, sql } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions, messages } from '../localDb/schema';
@@ -33,6 +33,7 @@ import type { RewindFilesResult } from '@cindy/maker-core';
 import { createLogger } from '../logger';
 import { setLastAssistantTranscriptUuid } from '../messagePersistBroadcaster.js';
 import { recomputePrRefsForSession } from '../git-context/prRefsStore.js';
+import { resolveCodexForkEventTimestamp, resolveCodexTurnAnchor } from './fork';
 import {
   buildCodexFileRewindPlan,
   CodexFileRewindPlanError,
@@ -149,6 +150,8 @@ interface RewindContext {
   /** 不可为 null：前置校验通过后必有 LiveSession entry。 */
   // 业务函数自己读 isRunning / 拿 query；这里只暴露 sessionId 之类的元数据
   targetCreatedAt: number;
+  /** target 行的 rowid(同 createdAt 时的次序键);Codex 原生边界查询用。 */
+  targetRowid?: number;
   targetMessageId: string;
   targetClientId: string;
   /** 当前 agent kind；Claude checkpoint 与 conversation-tree rollback 机制不同。 */
@@ -223,14 +226,25 @@ async function loadRewindContext(
   // agent_switch 行 = target 属于上一个引擎时代——当前引擎的原生会话里没有那些
   // turn 的锚点(Claude 的 assistant uuid / Codex 的 tail turn 计数都会错配),
   // 强行执行要么报错要么错删。v1 每次切换重新交接,不保留切回指针,故直接拒绝。
+  // Codex / Pi 还要拦 context_rebuild(原生会话重建):重建后的 live thread 里没有
+  // 重建前那些 turn,按 tail turn 数 rollback 或按边界 fork 都对不上目标(#4423
+  // review P1)。Claude 路径按 assistant uuid 锚点回退,不在此处拦。
+  // context_rebuild 的写入契约是 rewind_at 固定非 NULL(schema.ts),与 fork.ts 的
+  // 边界查询一样对它豁免可见性过滤,否则守卫永远不命中(review P2)。
+  const boundaryRole =
+    agentKind === 'claude-code'
+      ? and(eq(messages.role, 'agent_switch'), isNull(messages.rewindAt))
+      : or(
+          and(eq(messages.role, 'agent_switch'), isNull(messages.rewindAt)),
+          eq(messages.role, 'context_rebuild'),
+        );
   const [boundaryAfterTarget] = await db
     .select({ rowid: messageRowid })
     .from(messages)
     .where(
       and(
         eq(messages.sessionId, sessionId),
-        eq(messages.role, 'agent_switch'),
-        isNull(messages.rewindAt),
+        boundaryRole,
         or(
           gt(messages.createdAt, target.createdAt),
           and(eq(messages.createdAt, target.createdAt), gt(messageRowid, target.rowid)),
@@ -241,7 +255,7 @@ async function loadRewindContext(
   if (boundaryAfterTarget) {
     throw rewindError(
       'REWIND_UNSUPPORTED_HISTORY',
-      '目标消息在引擎切换边界之前,当前引擎的会话历史无法回滚到那里',
+      '目标消息在引擎切换或会话重建边界之前,当前引擎的会话历史无法回滚到那里',
     );
   }
 
@@ -276,6 +290,7 @@ async function loadRewindContext(
     );
     return {
       targetCreatedAt: target.createdAt,
+      targetRowid: target.rowid,
       targetMessageId: target.id,
       targetClientId: target.clientId,
       agentKind,
@@ -557,6 +572,50 @@ async function loadCodexFileRewindRepoContext(makerSession: { workDir: string; r
  * → 标记丢失, 下次启动 resume 走老 jsonl 模型仍能看到被 hide 的消息。建议用户
  * commit 后立即发一条消息把 rewind 应用掉。后续可持久化到 sessions 表新列。
  */
+/**
+ * Codex 原地回退的原生边界(#4421):target 之前的时间线里,最近一个已完成 turn 的
+ * 持久化 nativeForkAnchor(lastTurnId);没有锚点(旧数据/上一轮失败)时退到最近一条
+ * 真实模型/工具输出的时间戳,由 maker-core 经 thread/turns/list 解析。两者都没有
+ * 就什么都不传——只有分页线程才会用到,普通线程仍走 thread/rollback。判定逻辑与
+ * fork 共用,原生 turn 计数含失败/重试轮次,不能拿可见 user 消息数去数。
+ */
+async function loadCodexRewindNativeBoundary(
+  sessionId: string,
+  ctx: Pick<RewindContext, 'targetCreatedAt' | 'targetRowid'>,
+  liveSdkSessionId: string | undefined,
+): Promise<{ sdkSessionId?: string; lastTurnId?: string; forkAtTimestampMs?: number }> {
+  const currentSessionMeta = await getMaker().getSessionMeta(sessionId);
+  const sdkSessionId =
+    activeSdkSessionId(liveSdkSessionId) ??
+    activeSdkSessionId(currentSessionMeta?.sdkSessionId ?? undefined);
+  if (!sdkSessionId) return {};
+  const db = getDbClient().drizzle;
+  const beforeTarget =
+    ctx.targetRowid === undefined
+      ? lt(messages.createdAt, ctx.targetCreatedAt)
+      : or(
+          lt(messages.createdAt, ctx.targetCreatedAt),
+          and(eq(messages.createdAt, ctx.targetCreatedAt), lt(messageRowid, ctx.targetRowid)),
+        );
+  // 只需回看到上一条 user / 引擎切换边界;取最近 200 行足够覆盖一轮的工具输出。
+  const recent = await db
+    .select({
+      role: messages.role,
+      content: messages.content,
+      agentMeta: messages.agentMeta,
+      createdAt: messages.createdAt,
+    })
+    .from(messages)
+    .where(and(eq(messages.sessionId, sessionId), isNull(messages.rewindAt), beforeTarget))
+    .orderBy(desc(messages.createdAt), desc(messageRowid))
+    .limit(200);
+  const rows = [...recent].reverse();
+  const lastTurnId = resolveCodexTurnAnchor(rows, sdkSessionId);
+  if (lastTurnId) return { sdkSessionId, lastTurnId };
+  const forkAtTimestampMs = resolveCodexForkEventTimestamp(rows);
+  return forkAtTimestampMs !== undefined ? { sdkSessionId, forkAtTimestampMs } : { sdkSessionId };
+}
+
 export async function commitRewindAtMessage(
   sessionId: string,
   clientId: string,
@@ -574,10 +633,17 @@ export async function commitRewindAtMessage(
   // userUuid 缺失 (老消息) 时跳 SDK 文件回滚, 直接进 DB 段; ctx.assistantUuid 设进
   // pendingRewindTo, 下次 send 仍走三件套 (forkSession=true CLI 端兜底回滚)。
   let rewindResult: Awaited<ReturnType<typeof makerSession.commitRewindFiles>> | undefined;
+  let nativeForkAnchorSessionMap: Array<[string, string]> | undefined;
   if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
     const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
+    // Codex 分页线程拒绝 thread/rollback(#4421):把 target 之前的原生 turn 边界
+    // (持久化锚点或事件时间戳)一并交给 maker-core,遇拒绝时改走 thread/fork。
+    const { sdkSessionId: previousSdkSessionId, ...nativeBoundary } =
+      ctx.agentKind === 'codex'
+        ? await loadCodexRewindNativeBoundary(sessionId, ctx, makerSession.sdkSessionId)
+        : {};
     const commitThreadRollback = () =>
-      makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop });
+      makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop, ...nativeBoundary });
     const logCompensationError = (compErr: unknown, rollbackCommit: string | null) => {
       log.error(`[rewind commit] ${ctx.agentKind} file rewind compensation failed`, {
         sessionId,
@@ -600,6 +666,17 @@ export async function commitRewindAtMessage(
               logCompensationError(compErr, execution.rollbackCommit),
           });
     rewindResult = result.threadRollback;
+    // thread/rollback 或分页 fork 换出新 thread id 时,保留消息里的 nativeForkAnchor
+    // 仍指向旧 thread,下一次回退/fork 会把它们判为异线程锚点丢弃(#4423 review
+    // P2)。与 fork.session 一样在同一事务里把 sdkSessionId 重映射到新 thread。
+    if (
+      ctx.agentKind === 'codex' &&
+      previousSdkSessionId &&
+      rewindResult?.sdkSessionId &&
+      rewindResult.sdkSessionId !== previousSdkSessionId
+    ) {
+      nativeForkAnchorSessionMap = [[previousSdkSessionId, rewindResult.sdkSessionId]];
+    }
   } else if (ctx.userUuid) {
     rewindResult = await makerSession.commitRewindFiles(ctx.userUuid, ctx.assistantUuid!);
   } else {
@@ -631,6 +708,7 @@ export async function commitRewindAtMessage(
       sdkSessionId: rewindResult?.sdkSessionId,
       now,
       ...(opts?.requireLatestUser ? { requireLatestUser: true } : {}),
+      ...(nativeForkAnchorSessionMap ? { nativeForkAnchorSessionMap } : {}),
     });
     if (ctx.assistantUuid) {
       setLastAssistantTranscriptUuid(sessionId, ctx.assistantUuid);
@@ -647,9 +725,17 @@ export async function commitRewindAtMessage(
         'target 之后已有更新的 user 消息,编辑重发拒绝执行(防止误删新轮次)',
       );
     }
-    log.warn(
-      `DB transaction after marking pendingRewindTo failed for ${sessionId}:`,
+    // 轮 40-w4-t13 HIGH:一般 DB 事务失败(SQLite 锁/IO 等)同样必须上抛 ——
+    // SDK 侧 rewind 已把 Pi 运行态切到新 session/sdkSessionId, 若 DB 停在旧
+    // 身份, 调用方误以为 rewind 成功, 重启后会恢复错分支(运行态与持久化
+    // 分叉)。fail-closed: 显式报错, 不把旧 row 当成功结果返回。
+    log.error(
+      `[rewind commit] sid=${sessionId.slice(0, 8)} DB 事务失败——SDK 已切新身份但持久化未落, rewind 状态分叉`,
       err,
+    );
+    throw rewindError(
+      'REWIND_GIT_FAILED',
+      `rewind 持久化失败(运行态已切换但 DB 未提交): ${err instanceof Error ? err.message : String(err)}`,
     );
   }
 

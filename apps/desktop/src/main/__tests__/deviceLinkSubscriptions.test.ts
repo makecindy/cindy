@@ -86,4 +86,13 @@ describe('subscriptions registry', () => {
     subs.subscribe('dev-1234567890', ['session:s2'], 'RealName');
     expect(subs.getControlControllers()[0].name).toBe('RealName');
   });
+
+  it('updateControllerMetadata 只更新已有控制端并报告展示名是否变化', () => {
+    expect(subs.updateControllerMetadata('missing', 'Ignored')).toBe(false);
+
+    subs.subscribe('ctrl', ['session:s1'], 'Old');
+    expect(subs.updateControllerMetadata('ctrl', 'Old')).toBe(false);
+    expect(subs.updateControllerMetadata('ctrl', 'New')).toBe(true);
+    expect(subs.getControlControllers()).toEqual([{ deviceId: 'ctrl', name: 'New' }]);
+  });
 });

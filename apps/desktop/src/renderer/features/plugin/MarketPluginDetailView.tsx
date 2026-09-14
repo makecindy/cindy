@@ -2,6 +2,7 @@ import { useId } from 'react';
 import { Download, ShieldCheck } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import { ghostPermissionItems } from '../../../shared/ghost';
 import type { PluginMarketDetail } from '../../../shared/pluginMarket';
@@ -14,7 +15,7 @@ interface MarketPluginDetailViewProps {
   detail: PluginMarketDetail;
   busy: boolean;
   onBack: () => void;
-  onInstall: () => void;
+  onInstall?: () => void;
   onIconLoadError: () => void;
 }
 /** 尚未安装的市场 Plugin 详情；只展示协议事实，不创建 renderer 侧安装逻辑。 */
@@ -44,9 +45,7 @@ export function MarketPluginDetailView({
   // 同 id 已装时仍展示明确的替换语义；用户点击后才会进入真实包事务。
   const replacementDescriptionId = useId();
   const replacementDescription =
-    detail.installState === 'conflict'
-      ? t('settings.ghosts.market.replaceDescription')
-      : undefined;
+    detail.installState === 'conflict' ? t('settings.ghosts.market.replaceDescription') : undefined;
 
   return (
     <main
@@ -86,24 +85,34 @@ export function MarketPluginDetailView({
                 ) : null}
               </div>
             </div>
-            <button
-              type="button"
-              onClick={onInstall}
-              disabled={actionDisabled}
-              aria-describedby={
-                replacementDescription ? replacementDescriptionId : undefined
-              }
-              className={cn(
-                'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
-                'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
-                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
-              )}
-            >
-              <Download size={15} aria-hidden="true" />
-              {t(actionKey)}
-            </button>
+            {onInstall ? (
+              <button
+                type="button"
+                onClick={onInstall}
+                disabled={actionDisabled}
+                aria-label={t(actionKey)}
+                aria-busy={busy || undefined}
+                aria-describedby={
+                  replacementDescription ? replacementDescriptionId : undefined
+                }
+                className={cn(
+                  'plugin-detail-primary-action inline-flex h-10 min-w-[104px] items-center justify-center gap-2 whitespace-nowrap rounded-full px-4 text-13 font-medium',
+                  'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
+                  'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                  'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
+                )}
+              >
+                {busy ? (
+                  <Spinner size={14} />
+                ) : (
+                  <>
+                    <Download size={15} aria-hidden="true" />
+                    {t(actionKey)}
+                  </>
+                )}
+              </button>
+            ) : null}
           </div>
           <p
             id={replacementDescription ? replacementDescriptionId : undefined}
@@ -137,33 +146,33 @@ export function MarketPluginDetailView({
         </section>
 
         <section className="mt-10" aria-labelledby="market-permissions-title">
-            <div className="flex items-baseline gap-2">
-              <h2
-                id="market-permissions-title"
-                className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]"
-              >
-                {t('settings.ghosts.perm.grantsTitle')}
-              </h2>
-              <span className="text-12 text-[var(--text-tertiary)]">
-                {t('settings.ghosts.perm.itemCount', { count: permissions.length })}
-              </span>
-            </div>
-            <div className="mt-5 max-w-[760px] divide-y divide-[var(--border-default)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5">
-              {permissions.length > 0 ? (
-                permissions.map((permission, index) => (
-                  <div
-                    key={`${permission.kind}-${permission.labelKey}-${index}`}
-                    className="py-3.5 text-13 leading-5 text-[var(--text-secondary)]"
-                  >
-                    {t(`settings.ghosts.perm.${permission.labelKey}`, permission.labelArgs)}
-                  </div>
-                ))
-              ) : (
-                <div className="py-4 text-13 text-[var(--text-tertiary)]">
-                  {t('settings.ghosts.market.noPermissions')}
+          <div className="flex items-baseline gap-2">
+            <h2
+              id="market-permissions-title"
+              className="text-18 font-medium leading-[1.444] text-[var(--text-primary)]"
+            >
+              {t('settings.ghosts.perm.grantsTitle')}
+            </h2>
+            <span className="text-12 text-[var(--text-tertiary)]">
+              {t('settings.ghosts.perm.itemCount', { count: permissions.length })}
+            </span>
+          </div>
+          <div className="mt-5 max-w-[760px] divide-y divide-[var(--border-default)] rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5">
+            {permissions.length > 0 ? (
+              permissions.map((permission, index) => (
+                <div
+                  key={`${permission.kind}-${permission.labelKey}-${index}`}
+                  className="py-3.5 text-13 leading-5 text-[var(--text-secondary)]"
+                >
+                  {t(`settings.ghosts.perm.${permission.labelKey}`, permission.labelArgs)}
                 </div>
-              )}
-            </div>
+              ))
+            ) : (
+              <div className="py-4 text-13 text-[var(--text-tertiary)]">
+                {t('settings.ghosts.market.noPermissions')}
+              </div>
+            )}
+          </div>
         </section>
       </article>
     </main>

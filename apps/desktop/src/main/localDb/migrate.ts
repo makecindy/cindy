@@ -32,6 +32,10 @@ import {
   readSchemaVersion,
   runMigrationReplay,
 } from './migrationRunner';
+import {
+  officialProfileWriterMigrationMessage,
+  shouldRefuseOfficialProfileWriterMigration,
+} from './officialProfileMigrationPolicy';
 
 const log = createLogger('migrate');
 
@@ -91,6 +95,17 @@ export async function runMigrations(
       JSON.stringify({ event: 'localDb.migrate.upToDate', currentVersion }),
     );
     return;
+  }
+  if (
+    shouldRefuseOfficialProfileWriterMigration({
+      isPackaged: app.isPackaged,
+      officialSharedProfile: process.env.XDT_OFFICIAL_SHARED_PROFILE === '1',
+      pendingCount: pending.length,
+    })
+  ) {
+    throw new Error(
+      officialProfileWriterMigrationMessage(pending.map((migration) => migration.fileName)),
+    );
   }
 
   // 备份前先做磁盘侧准备：腾旧备份预算 + 剩余空间预检。

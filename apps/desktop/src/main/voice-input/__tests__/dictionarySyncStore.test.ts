@@ -44,9 +44,17 @@ const { voiceDictionarySyncStore } = await import('../VoiceDictionarySyncStore.j
 const { sanitizeDictionaryLearningActions, voiceInputDataStore } = await import(
   '../VoiceInputDataStore.js'
 );
-const { addManualEntry, createEmptySyncState, createHlcClock, deleteTerms, recordLearningEvent } = await import(
-  '@cindy/voice-input-core'
-);
+const {
+  DEFAULT_MATERIALIZE_LIMITS,
+  addManualEntry,
+  buildStateVersionVector,
+  formatHlc,
+  createEmptySyncState,
+  createHlcClock,
+  deleteTerms,
+  materializeDictionary,
+  recordLearningEvent,
+} = await import('@cindy/voice-input-core');
 
 const DATA_FILE = 'voice-input-data.v1.json';
 const SYNC_FILE = 'voice-dictionary-sync.v1.json';
@@ -96,7 +104,7 @@ describe('词典同步落盘 —— 首次迁移', () => {
         { id: 'legacy-2', text: 'LiteLLM', source: 'automatic', frequency: 5, aliases: [] },
       ],
       dictionaryCandidates: [
-        { text: 'Orca', evidenceCount: 2, aliases: [], createdAt: 1, updatedAt: 1 },
+        { text: 'Orca', evidenceCount: 1, aliases: [], createdAt: 1, updatedAt: 1 },
       ],
       suppressedAutomaticDictionaryTexts: ['Cindy'],
     });
@@ -120,7 +128,7 @@ describe('词典同步落盘 —— 首次迁移', () => {
 });
 
 describe('词典同步落盘 —— 写入路径', () => {
-  it('手动添加、改写、删除都落到同步状态并回投影到词典文件', () => {
+  it('手动添加、改写主词与误识别写法、删除都落到同步状态并回投影到词典文件', () => {
     writeDictionaryFile({ dictionaryEntries: [] });
     voiceInputDataStore.getSettings();
 
@@ -131,8 +139,84 @@ describe('词典同步落盘 —— 写入路径', () => {
     voiceInputDataStore.renameDictionaryEntry(entryId, 'LiteLLM');
     expect(readDictionaryFile().dictionaryEntries.map((entry) => entry.text)).toEqual(['LiteLLM']);
 
+    voiceInputDataStore.editDictionaryEntry(entryId, 'LiteLLM', ['light llm', '莱特 LLM']);
+    expect(
+      voiceInputDataStore.getSettings().dictionaryEntries[0].aliases.map((alias) => alias.text),
+    ).toEqual(['light llm', '莱特 LLM']);
+
     voiceInputDataStore.deleteDictionaryEntries([entryId]);
     expect(readDictionaryFile().dictionaryEntries).toEqual([]);
+  });
+
+  it('编辑可见别名时保留物化上限之外的历史别名', () => {
+    writeDictionaryFile({ dictionaryEntries: [] });
+    voiceInputDataStore.getSettings();
+    const aliases = Array.from({ length: 10 }, (_, index) => `alias-${index}`);
+    voiceDictionarySyncStore.mutate((state, clock) =>
+      recordLearningEvent(state, clock, {
+        text: 'Vibe Coding',
+        aliases,
+        stage: 'entry',
+        nowMs: 1_000,
+      }),
+    );
+    const entry = voiceDictionarySyncStore.materialize().entries[0];
+    expect(entry.aliases).toHaveLength(8);
+
+    voiceInputDataStore.editDictionaryEntry(
+      entry.id,
+      entry.text,
+      entry.aliases.map((alias) => alias.text),
+    );
+
+    const allAliases = materializeDictionary(voiceDictionarySyncStore.getState(), {
+      ...DEFAULT_MATERIALIZE_LIMITS,
+      maxAliases: Number.MAX_SAFE_INTEGER,
+    }).entries[0].aliases;
+    expect(allAliases.map((alias) => alias.text).sort()).toEqual(aliases.sort());
+
+    voiceInputDataStore.editDictionaryEntry(entry.id, entry.text, []);
+    expect(
+      materializeDictionary(voiceDictionarySyncStore.getState(), {
+        ...DEFAULT_MATERIALIZE_LIMITS,
+        maxAliases: Number.MAX_SAFE_INTEGER,
+      }).entries[0].aliases,
+    ).toEqual([]);
+  });
+
+  it('替换可见别名时以提交集合为准，不让隐藏高频别名挤掉新值', () => {
+    writeDictionaryFile({ dictionaryEntries: [] });
+    voiceInputDataStore.getSettings();
+    const aliases = Array.from({ length: 10 }, (_, index) => `alias-${index}`);
+    for (const [index, alias] of aliases.entries()) {
+      for (let count = 0; count < aliases.length - index; count += 1) {
+        voiceDictionarySyncStore.mutate((state, clock) =>
+          recordLearningEvent(state, clock, {
+            text: 'Vibe Coding',
+            aliases: [alias],
+            stage: 'entry',
+            nowMs: 1_000 + index,
+          }),
+        );
+      }
+    }
+    const entry = voiceDictionarySyncStore.materialize().entries[0];
+    expect(entry.aliases).toHaveLength(8);
+
+    const submittedAliases = [
+      ...entry.aliases.slice(1).map((alias) => alias.text),
+      'brand new alias',
+    ];
+    voiceInputDataStore.editDictionaryEntry(entry.id, entry.text, submittedAliases);
+
+    const visibleAliases = voiceDictionarySyncStore.materialize().entries[0].aliases;
+    expect(visibleAliases.map((alias) => alias.text)).toContain('brand new alias');
+    expect(visibleAliases.map((alias) => alias.text)).not.toContain(entry.aliases[0].text);
+    const allAliases = materializeDictionary(voiceDictionarySyncStore.getState(), {
+      ...DEFAULT_MATERIALIZE_LIMITS,
+      maxAliases: Number.MAX_SAFE_INTEGER,
+    }).entries[0].aliases;
+    expect(allAliases.map((alias) => alias.text).sort()).toEqual(submittedAliases.sort());
   });
 
   it('通用 settings 更新不能整份覆盖词典(会绕过同步状态)', () => {
@@ -153,22 +237,130 @@ describe('词典同步落盘 —— 写入路径', () => {
     expect(settings.suppressedAutomaticDictionaryTexts).toEqual([]);
   });
 
-  it('自动学习按 action 记录证据,低置信度与无别名的建议被丢弃', () => {
+  it('自动学习允许没有纠错别名的词汇,仍丢弃低置信度建议', () => {
     writeDictionaryFile({ dictionaryEntries: [], refinementEnabled: true, autoDictionaryEnabled: true });
     voiceInputDataStore.getSettings();
 
     const result = voiceInputDataStore.recordDictionaryLearningActions([
       { action: 'add_entry', term: 'Vibe Coding', aliases: ['web coding'], type: 'phrase', confidence: 'high' },
       { action: 'add_entry', term: '低置信', aliases: ['低置心'], type: 'other', confidence: 'low' },
-      { action: 'add_entry', term: '无证据', aliases: [], type: 'other', confidence: 'high' },
+      { action: 'add_entry', term: 'Slack', aliases: [], type: 'product_name', confidence: 'high' },
     ]);
 
-    expect(result.settings.dictionaryEntries.map((entry) => entry.text)).toEqual(['Vibe Coding']);
-    expect(result.newAutomaticEntries.map((entry) => entry.text)).toEqual(['Vibe Coding']);
+    expect(result.settings.dictionaryEntries.map((entry) => entry.text).sort()).toEqual(['Slack', 'Vibe Coding']);
+    expect(result.newAutomaticEntries.map((entry) => entry.text).sort()).toEqual(['Slack', 'Vibe Coding']);
+    resetStoreCaches();
+    expect(voiceInputDataStore.getSettings().dictionaryEntries).toEqual(result.settings.dictionaryEntries);
+  });
+
+  it('无别名候选可以晋升、补充别名,删除后不会被自动学习恢复', () => {
+    writeDictionaryFile({ dictionaryEntries: [], refinementEnabled: true, autoDictionaryEnabled: true });
+    const term = 'Slack';
+    const base = { term, aliases: [], type: 'product_name' as const, confidence: 'high' as const };
+    voiceInputDataStore.recordDictionaryLearningActions([{ ...base, action: 'add_candidate' }]);
+    resetStoreCaches();
+    expect(voiceInputDataStore.getSettings().dictionaryCandidates).toEqual([
+      expect.objectContaining({ text: term, aliases: [], evidenceCount: 1 }),
+    ]);
+    voiceInputDataStore.recordDictionaryLearningActions([{ ...base, action: 'add_entry' }]);
+    const result = voiceInputDataStore.recordDictionaryLearningActions([
+      { ...base, action: 'update_entry', aliases: ['Slate'] },
+    ]);
+    expect(result.settings.dictionaryCandidates).toEqual([]);
+    expect(result.settings.dictionaryEntries[0]).toMatchObject({
+      text: term, frequency: 3, aliases: [{ text: 'Slate', count: 1 }],
+    });
+    voiceInputDataStore.deleteDictionaryEntries([result.settings.dictionaryEntries[0].id]);
+    voiceInputDataStore.recordDictionaryLearningActions([{ ...base, action: 'add_entry' }]);
+    expect(voiceInputDataStore.getSettings().dictionaryEntries).toEqual([]);
+  });
+
+  it('候选第二次自动入库,同次重复动作只算一次,重启保留历史别名', () => {
+    writeDictionaryFile({ dictionaryEntries: [], refinementEnabled: true, autoDictionaryEnabled: true });
+    const base = { action: 'add_candidate' as const, term: 'Slack', type: 'product_name' as const, confidence: 'medium' as const };
+    voiceInputDataStore.recordDictionaryLearningActions([
+      { ...base, aliases: ['Slate'] }, { ...base, aliases: ['Slak'] },
+    ]);
+    expect(voiceInputDataStore.getSettings().dictionaryCandidates[0].evidenceCount).toBe(1);
+    expect(voiceInputDataStore.getSettings().dictionaryEntries).toEqual([]);
+    const second = voiceInputDataStore.recordDictionaryLearningActions([{ ...base, aliases: ['Slate'] }]);
+    expect(second.newAutomaticEntries.map(e => e.text)).toEqual(['Slack']);
+    expect(second.settings.dictionaryCandidates).toEqual([]);
+    expect(second.settings.dictionaryEntries[0]).toMatchObject({
+      frequency: 2, aliases: [{ text: 'Slate', count: 2 }, { text: 'Slak', count: 1 }],
+    });
+    resetStoreCaches();
+    expect(voiceInputDataStore.getSettings().dictionaryEntries).toEqual(second.settings.dictionaryEntries);
+  });
+
+  it('旧快照中已满两次的候选加载后持久化为正式,不增加计数', () => {
+    writeDictionaryFile({ dictionaryEntries: [], dictionaryCandidates: [
+      { text: 'Slack', evidenceCount: 2, aliases: [{ text: 'Slate', count: 2, lastSeenAt: 1000 }], createdAt: 1000, updatedAt: 1000 },
+    ] });
+    const first = voiceInputDataStore.getSettings();
+    expect(first.dictionaryEntries[0]).toMatchObject({ text: 'Slack', frequency: 2 });
+    expect(first.dictionaryCandidates).toEqual([]);
+    resetStoreCaches();
+    expect(voiceInputDataStore.getSettings().dictionaryEntries).toEqual(first.dictionaryEntries);
+    const state = JSON.parse(fs.readFileSync(ownerPath(SYNC_FILE), 'utf8')).state;
+    expect(Object.values(state.records.slack.incarnations)).toEqual([
+      expect.objectContaining({ stage: 'entry' }),
+    ]);
+    // Simulate an old client sidecar that has the counts but has not promoted the stage.
+    const stored = JSON.parse(fs.readFileSync(ownerPath(SYNC_FILE), 'utf8'));
+    delete stored.state.mutationVector;
+    for (const item of Object.values(stored.state.records.slack.incarnations) as Array<{ stage: string }>) {
+      item.stage = 'candidate';
+    }
+    fs.writeFileSync(ownerPath(SYNC_FILE), JSON.stringify(stored));
+    resetStoreCaches();
+    expect(voiceInputDataStore.getSettings().dictionaryEntries[0]).toMatchObject({ text: 'Slack', frequency: 2 });
+    const persisted = JSON.parse(fs.readFileSync(ownerPath(SYNC_FILE), 'utf8'));
+    const reloaded = persisted.state;
+    expect(reloaded.mutationVector[persisted.nodeId]).toBe(formatHlc({ ...persisted.clock, nodeId: persisted.nodeId }));
+    resetStoreCaches();
+    expect(voiceDictionarySyncStore.getState().mutationVector).toEqual(reloaded.mutationVector);
+    expect(Object.values(reloaded.records.slack.incarnations)).toEqual([
+      expect.objectContaining({ stage: 'entry' }),
+    ]);
   });
 });
 
 describe('词典同步落盘 —— 合并与回收', () => {
+  it('无别名计数和版本进度一起持久化，重启和旧副本重放不回退', () => {
+    writeDictionaryFile({ dictionaryEntries: [], refinementEnabled: true, autoDictionaryEnabled: true });
+    const action = { action: 'add_candidate' as const, term: 'Slack', aliases: [], type: 'product_name' as const, confidence: 'medium' as const };
+    voiceInputDataStore.recordDictionaryLearningActions([action]);
+    const stale = voiceDictionarySyncStore.getState();
+    voiceInputDataStore.recordDictionaryLearningActions([action]);
+    const fresh = voiceDictionarySyncStore.getState();
+    expect(buildStateVersionVector(fresh)).not.toEqual(buildStateVersionVector(stale));
+    resetStoreCaches();
+    expect(buildStateVersionVector(voiceDictionarySyncStore.getState())).toEqual(buildStateVersionVector(fresh));
+    voiceInputDataStore.mergeRemoteDictionaryState(stale);
+    expect(buildStateVersionVector(voiceDictionarySyncStore.getState())).toEqual(buildStateVersionVector(fresh));
+    expect(voiceInputDataStore.getSettings().dictionaryEntries[0]).toMatchObject({ text: 'Slack', frequency: 2 });
+  });
+
+  it('本机一次候选加远端一次后转正式,同步重放和重启不重复累加', () => {
+    writeDictionaryFile({ dictionaryEntries: [], refinementEnabled: true, autoDictionaryEnabled: true });
+    const action = { action: 'add_candidate' as const, term: 'Slack', aliases: ['Slate'], type: 'product_name' as const, confidence: 'medium' as const };
+    voiceInputDataStore.recordDictionaryLearningActions([action]);
+    expect(voiceInputDataStore.getSettings().dictionaryCandidates[0].evidenceCount).toBe(1);
+    const remote = recordLearningEvent(createEmptySyncState(), createHlcClock('remote-node'), {
+      text: 'Slack', aliases: ['Slak'], stage: 'candidate', nowMs: 1000,
+    });
+    voiceInputDataStore.mergeRemoteDictionaryState(remote.state);
+    const promoted = voiceInputDataStore.getSettings();
+    expect(promoted.dictionaryCandidates).toEqual([]);
+    expect(promoted.dictionaryEntries[0]).toMatchObject({ frequency: 2, aliases: [
+      { text: 'Slate', count: 1 }, { text: 'Slak', count: 1 },
+    ] });
+    voiceInputDataStore.mergeRemoteDictionaryState(remote.state);
+    resetStoreCaches();
+    expect(voiceInputDataStore.getSettings().dictionaryEntries).toEqual(promoted.dictionaryEntries);
+  });
+
   it('合并远端状态后物化落盘,且不会把远端计数重复记成本地增量', () => {
     writeDictionaryFile({ dictionaryEntries: [] });
     voiceInputDataStore.getSettings();
@@ -814,6 +1006,18 @@ describe('词典同步落盘 —— 第十轮收口', () => {
     const body = handler.slice(0, handler.indexOf('});'));
     expect(body).toContain('assertTrustedAppRendererEvent');
     expect(body).toContain('sanitizeDictionaryEntryIds');
+  });
+
+  it('编辑误识别写法的 IPC 校验 sender，并限制条数与单条长度', () => {
+    const source = fs.readFileSync(
+      path.join(__dirname, '..', 'VoiceInputDataStore.ts'),
+      'utf-8',
+    );
+    const handler = source.slice(source.indexOf("'voice-input:dictionary:edit-entry'"));
+    const body = handler.slice(0, handler.indexOf('});'));
+    expect(body).toContain('assertTrustedAppRendererEvent');
+    expect(body).toContain('MAX_VOICE_INPUT_DICTIONARY_ENTRY_CHARS');
+    expect(body).toContain('MAX_VOICE_INPUT_DICTIONARY_ALIASES');
   });
 
   it('用户显式打开同步会被记成 override,即使它和当前默认值相同', () => {

@@ -75,8 +75,8 @@ export class GhostNotifySlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
     }
-    if (!ghost.manifest.slots?.includes('notify')) {
-      return { ok: false, message: '本意识未声明 notify 卡槽,无权弹系统提示' };
+    if (ghost.manifest.notify !== true) {
+      return { ok: false, message: '本意识未声明 notify 能力,无权弹系统提示' };
     }
 
     if (typeof p?.text !== 'string') {

@@ -24,12 +24,52 @@ export const membershipSchema = z.object({
 });
 export type AuthMembership = z.infer<typeof membershipSchema>;
 
+/**
+ * 人机验证（CAPTCHA）配置：auth-server 开启时经 GET /api/auth/providers 下发。
+ * requiredFor 声明哪些动作发起前必须先完成挑战。
+ * 客户端预认邮箱与短信发码；服务端当前可只下发邮箱动作，后续下发短信动作
+ * 即可启用既有客户端闸门，无需变更 wire 结构。
+ * 关闭时服务端整字段省略 → undefined = 不需要人机验证。
+ */
+export const captchaRequiredActionSchema = z.enum([
+  "email_request_code",
+  "phone_request_code",
+]);
+export type CaptchaRequiredAction = z.infer<typeof captchaRequiredActionSchema>;
+
+export const captchaConfigSchema = z.object({
+  provider: z.literal("turnstile"),
+  siteKey: z.string().min(1),
+  // 服务端可 append-only 扩展动作；当前客户端预认邮箱与短信发码，其他未知
+  // 动作忽略，避免一个未来动作让整份 providers 响应解析失败。
+  requiredFor: z
+    .array(z.string())
+    .transform((actions) =>
+      actions.filter(
+        (action): action is CaptchaRequiredAction =>
+          captchaRequiredActionSchema.safeParse(action).success,
+      ),
+    ),
+});
+export type CaptchaConfig = z.infer<typeof captchaConfigSchema>;
+
+/**
+ * auth-server 托管 Turnstile 挑战页的固定路径(wire 契约)。
+ * 完整地址 = authApiBaseUrl + 本路径 +
+ * `?action=<email_request_code|phone_request_code>&theme=<light|dark>&lang=<BCP-47>`;
+ * 页面把结果写进 location.hash(`cindy-captcha=ok.<token>` / `err.<code>`)
+ * 或经 ReactNativeWebView.postMessage 回传(双宿主同页兼容)。
+ */
+export const CAPTCHA_CHALLENGE_PAGE_PATH = "/captcha/turnstile";
+
 export const providerConfigSchema = z.object({
   region: authRegionSchema,
   attribution: z.enum(["phone", "email"]),
   email: z.boolean(),
   phone: z.boolean(),
   social: z.array(socialProviderSchema),
+  // optional 兼容尚未升级的旧 auth-server 响应(缺字段不整份拒绝)。
+  captcha: captchaConfigSchema.optional(),
 });
 export type ProviderConfig = z.infer<typeof providerConfigSchema>;
 
@@ -65,8 +105,36 @@ export const loginMethodSchema = z.discriminatedUnion("type", [
 export type LoginMethod = z.infer<typeof loginMethodSchema>;
 
 /**
- * 把企业 SSO discovery 结果映射成 LoginMethod 列表，复用 method-choice 步骤
- * 渲染连接选择（ssoRequired=false：入口本身即用户主动选 SSO，无需再提示强制）。
+ * Discovery 允许服务端 append-only 增加未知登录方式。未知项丢弃，避免整份
+ * `methods` 校验失败变成 INVALID_RESPONSE，把已经认识的 email_code / sso
+ * 一起挡掉（移动端会落到「登录未完成」兜底，验证码发不出去）。
+ */
+const knownLoginMethodTypes = new Set(["email_code", "sso"]);
+
+export function recognizeLoginMethods(items: readonly unknown[]): LoginMethod[] {
+  return items.flatMap((item) => {
+    // 有 string type 且不在已知集 = 服务端新增方式,向前兼容丢弃。
+    if (
+      typeof item === "object" &&
+      item !== null &&
+      "type" in item &&
+      typeof item.type === "string" &&
+      item.type.length > 0 &&
+      !knownLoginMethodTypes.has(item.type)
+    ) {
+      return [];
+    }
+    // 其余(已知 type、缺 type、type 非字符串)一律严格 parse,
+    // 字段残缺抛错由调用方转为 INVALID_RESPONSE,不静默丢弃。
+    return [loginMethodSchema.parse(item)];
+  });
+}
+
+/**
+ * 把企业 SSO discovery 结果映射成 LoginMethod 列表。
+ * 多连接时复用 method-choice 让用户选 IdP；唯一连接由
+ * `soleAutoStartSsoMethod` 判定后，UI 直接投影 browser-redirect
+ * （ssoRequired=false：入口本身即用户主动选 SSO，无需再提示强制）。
  */
 export function ssoOrgDiscoveryToMethods(
   discovery: SsoOrgDiscovery,
@@ -81,12 +149,40 @@ export function ssoOrgDiscoveryToMethods(
   }));
 }
 
+export type SsoLoginMethod = Extract<LoginMethod, { type: "sso" }>;
+
+/**
+ * method-choice 只在真正有选择时出现。探测结果只剩一种方式时，
+ * 调用方应直接发起它，不要再出「选择登录方式」。
+ *
+ * 覆盖：唯一 SSO；唯一邮箱验证码。不覆盖：SSO + 个人邮箱；多条 SSO。
+ */
+export function soleLoginMethod(
+  methods: readonly LoginMethod[],
+): LoginMethod | null {
+  return methods.length === 1 ? (methods[0] ?? null) : null;
+}
+
+/** 唯一 SSO、没有个人邮箱替补时，应直接打开该 SSO。 */
+export function soleAutoStartSsoMethod(
+  methods: readonly LoginMethod[],
+): SsoLoginMethod | null {
+  const sole = soleLoginMethod(methods);
+  return sole?.type === "sso" ? sole : null;
+}
+
 export const tokenPairSchema = z.object({
   accessToken: z.string().min(1),
   refreshToken: z.string().min(1),
   membership: membershipSchema,
 });
 export type AuthTokenPair = z.infer<typeof tokenPairSchema>;
+
+export const accountTokenPairSchema = z.object({
+  accountToken: z.string().min(1),
+  accountRefreshToken: z.string().min(1),
+});
+export type AccountTokenPair = z.infer<typeof accountTokenPairSchema>;
 
 const optionalAccountTokenFields = {
   accountToken: z.string().min(1).optional(),
@@ -212,6 +308,13 @@ export type DesktopAuthorizationPoll = z.infer<
 export type AuthClientType = "desktop" | "mobile" | "web";
 export type VerificationKind = "email" | "phone";
 export type SsoVerificationChannel = "email" | "sms";
+
+/** 发码类型到 providers.captcha.requiredFor wire action 的唯一映射。 */
+export function captchaRequiredActionForVerificationKind(
+  kind: VerificationKind,
+): CaptchaRequiredAction {
+  return kind === "email" ? "email_request_code" : "phone_request_code";
+}
 
 export type AuthFlowState =
   | { step: "identifier"; providers: ProviderConfig }

@@ -27,8 +27,10 @@ const mocks = vi.hoisted(() => {
     insertConflict,
     insertValues,
     selectLimit,
+    tx: vi.fn(async () => ({ previousStatus: 'active' as const })),
     webContentsSend: vi.fn(),
     tapWindowBroadcast: vi.fn(),
+    retireDeletedPiSubagentState: vi.fn(async () => undefined),
   };
 });
 
@@ -37,6 +39,8 @@ const mocks = vi.hoisted(() => {
 // 的 SET, 这里只看判据的形状 —— 它在真 SQLite 下的语义由
 // sessionRepoWorkspaceKind.test.ts 覆盖。
 vi.mock('drizzle-orm', () => ({
+  and: (...conditions: unknown[]) => ({ and: conditions }),
+  desc: (col: unknown) => ({ desc: col }),
   eq: (col: unknown, val: unknown) => ({ col, val }),
   sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
     sqlText: strings.raw
@@ -61,9 +65,15 @@ vi.mock('../../../logger', () => ({
 }));
 vi.mock('../../../localDb/client/current', () => ({
   getDbClient: () => ({
+    tx: mocks.tx,
     drizzle: {
       select: () => ({
-        from: () => ({ where: () => ({ limit: mocks.selectLimit }) }),
+        from: () => ({
+          where: () => ({
+            limit: mocks.selectLimit,
+            orderBy: () => ({ limit: mocks.selectLimit }),
+          }),
+        }),
       }),
       update: () => ({ set: mocks.updateSet }),
       insert: () => ({ values: mocks.insertValues }),
@@ -75,7 +85,14 @@ vi.mock('../../../localDb/schema', () => ({
     id: 'sessions.id',
     workingDir: 'sessions.working_dir',
     workspaceKind: 'sessions.workspace_kind',
+    source: 'sessions.source',
+    imBotContextId: 'sessions.im_bot_context_id',
+    imUserId: 'sessions.im_user_id',
+    createdAt: 'sessions.created_at',
   },
+}));
+vi.mock('../../../localDb/ipc/piSubagentDeletion', () => ({
+  retireDeletedPiSubagentState: mocks.retireDeletedPiSubagentState,
 }));
 vi.mock('../../../maker-host/session-provider-store', () => ({
   setSessionProvider: vi.fn(),
@@ -150,6 +167,8 @@ describe('sessionRepo.findActiveSession 软删行复活(#748)', () => {
     mocks.tapWindowBroadcast.mockClear();
     mocks.selectLimit.mockReset();
     mocks.selectLimit.mockResolvedValue([]);
+    mocks.retireDeletedPiSubagentState.mockClear();
+    mocks.tx.mockClear();
   });
 
   it.each(['archived', 'deleted'] as const)(
@@ -183,6 +202,11 @@ describe('sessionRepo.findActiveSession 软删行复活(#748)', () => {
         sessionId: 'feishu_bot_user',
       });
       expect(routeLock).toHaveBeenCalledWith('feishu_bot_user', expect.any(Function));
+      if (status === 'deleted') {
+        expect(mocks.retireDeletedPiSubagentState).toHaveBeenCalledWith('feishu_bot_user');
+      } else {
+        expect(mocks.retireDeletedPiSubagentState).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -221,6 +245,13 @@ describe('sessionRepo.createSession upsert 兜竞态(#748)', () => {
     mocks.insertConflict.mockClear();
     mocks.selectLimit.mockReset();
     mocks.selectLimit.mockResolvedValue([]);
+    mocks.retireDeletedPiSubagentState.mockClear();
+  });
+
+  it('冲突撞到 deleted 残留行时先撤回墓碑再 upsert', async () => {
+    mocks.selectLimit.mockResolvedValue([dbRow('deleted')]);
+    await makeRepo().createSession('bot', 'user', undefined, preparedDefaults);
+    expect(mocks.retireDeletedPiSubagentState).toHaveBeenCalledWith('feishu_bot_user');
   });
 
   it('INSERT 带 onConflictDoUpdate:冲突时只翻 status/渠道列,不碰上下文列', async () => {
@@ -270,19 +301,14 @@ describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
 
   /** 开着 `/project` 的渠道(个人 Telegram): 归属可以按路径推断。 */
   function makeDialogueRepo() {
-    return createImSessionRepo(
-      { agentKind: 'claude-code' } as ImOrchestratorConfig,
-      dialogueNs,
-      { projectSwitching: true },
-    );
+    return createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, dialogueNs, {
+      projectSwitching: true,
+    });
   }
 
   /** 没有 `/project` 的渠道(微信这类): 只有托管目录, 且它用户可改。 */
   function makePlainDialogueRepo() {
-    return createImSessionRepo(
-      { agentKind: 'claude-code' } as ImOrchestratorConfig,
-      dialogueNs,
-    );
+    return createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, dialogueNs);
   }
 
   beforeEach(() => {
@@ -349,5 +375,101 @@ describe('sessionRepo workspaceKind(渠道声明 dialogue 归组时)', () => {
       set: Record<string, unknown>;
     };
     expect(conflictArg.set).not.toHaveProperty('workspaceKind');
+  });
+});
+
+/**
+ * 渠道按 userId 覆写新会话权限档的接线(飞书群 lane → 渠道设置「群聊新建任务
+ * 权限档」; telegram guest lane → 只读探索)。钩子返回值必须真的落到新建行上,
+ * 否则设置项形同虚设 —— 建会话的两条路径(turnRunner 建行、`/new` 重置)都从
+ * prepareNewSession 取这份 row。
+ */
+describe('sessionRepo.prepareNewSession 权限档覆写钩子', () => {
+  function makeRepoWithPermissionHook(mode: string | null) {
+    const hookNs = {
+      ...ns,
+      permissionModeFor: () => mode,
+    } as unknown as ImSessionNamespace;
+    return createImSessionRepo({ agentKind: 'claude-code' } as ImOrchestratorConfig, hookNs);
+  }
+
+  it('钩子返回权限档时覆写 resolveImSessionDefaults 的默认档(可宽可紧)', async () => {
+    const row = await makeRepoWithPermissionHook('bypassPermissions').prepareNewSession(
+      'bot',
+      'g/oc_chat1/omt_t1',
+    );
+
+    // 默认档是 auto(见 defaultSessionSettings mock), 群 lane 的显式设置压过它。
+    expect(row.permissionMode).toBe('bypassPermissions');
+  });
+
+  it('钩子返回 null(私聊)时保持渠道默认档', async () => {
+    const row = await makeRepoWithPermissionHook(null).prepareNewSession('bot', 'ou_owner');
+
+    expect(row.permissionMode).toBe('auto');
+  });
+});
+
+describe('sessionRepo.createFreshSession', () => {
+  it('creates a new Telegram task from current defaults, preserves the project, and archives the old task', async () => {
+    const telegramNs: ImSessionNamespace = {
+      source: 'telegram',
+      createTaskOnNew: true,
+      sessionIdFor: () => 'telegram_bot_user',
+      defaultTitle: () => 'Telegram',
+      workspaceKind: 'dialogue',
+      ensureWorkingDir: () => '/tmp/telegram',
+      extraInsertColumns: (bot, user) => ({ imBotContextId: bot, imUserId: user }),
+    };
+    const old = {
+      ...dbRow('active'),
+      id: 'old-task',
+      source: 'telegram',
+      workingDir: '/projects/current',
+      workspaceKind: 'project' as const,
+      imBotContextId: 'bot',
+      imUserId: 'user',
+      createdAt: 1,
+    };
+    const prepared: ImSessionRow = {
+      ...preparedDefaults,
+      id: 'telegram_bot_user',
+      agentKind: 'pi',
+      model: 'grok-4.6',
+      providerId: 'xai',
+      permissionMode: 'bypassPermissions',
+      workingDir: '/tmp/telegram',
+    };
+    mocks.selectLimit.mockResolvedValueOnce([old]);
+    const repo = createImSessionRepo(
+      { agentKind: 'claude-code' } as ImOrchestratorConfig,
+      telegramNs,
+      { projectSwitching: true },
+    );
+
+    const result = await repo.createFreshSession!('bot', 'user', undefined, prepared);
+
+    expect(result.previous?.id).toBe('old-task');
+    expect(result.current.id).not.toBe('old-task');
+    expect(mocks.tx).toHaveBeenCalledWith(
+      'im.rotateSession',
+      expect.objectContaining({
+        previousSessionId: 'old-task',
+        detachBinding: null,
+        session: expect.objectContaining({
+          id: result.current.id,
+          agentKind: 'pi',
+          model: 'grok-4.6',
+          providerId: 'xai',
+          permissionMode: 'bypassPermissions',
+          workingDir: '/projects/current',
+          workspaceKind: 'project',
+          imBotContextId: 'bot',
+          imUserId: 'user',
+        }),
+      }),
+    );
+    expect(routeLock).toHaveBeenCalledWith('telegram_bot_user', expect.any(Function));
+    expect(routeLock).toHaveBeenCalledWith('old-task', expect.any(Function));
   });
 });

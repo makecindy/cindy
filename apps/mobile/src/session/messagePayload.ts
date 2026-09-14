@@ -7,23 +7,23 @@ import type {
 import {
   buildAttachmentPayload as buildSharedAttachmentPayload,
   buildDiffPayload as buildSharedDiffPayload,
-  buildFilePayload,
+  buildFilePayload as buildSharedFilePayload,
   buildMediaPayload as buildSharedMediaPayload,
-  buildMermaidPayload,
+  buildMermaidPayload as buildSharedMermaidPayload,
   buildPayloadToolDiff,
   buildTextPayload,
   extractPayloadToolResultMedia,
   formatPayloadToolUseSummary,
-  formatDiffPayload,
-  formatDiffPayloadRows,
-  formatDiffPayloadView,
-  formatMediaActionNotice,
+  formatDiffPayload as formatSharedDiffPayload,
+  formatDiffPayloadRows as formatSharedDiffPayloadRows,
+  formatDiffPayloadView as formatSharedDiffPayloadView,
+  formatMediaActionNotice as formatSharedMediaActionNotice,
   isPayloadDesktopLocalMediaUrl,
   isPayloadDirectPreviewableUrl,
-  payloadMediaKindLabel,
-  summarizeMessagePayloadBody,
-  summarizeMessagePayloadPreview,
-  summarizeMessagePayload,
+  payloadMediaKindLabel as sharedPayloadMediaKindLabel,
+  summarizeMessagePayloadBody as summarizeSharedMessagePayloadBody,
+  summarizeMessagePayloadPreview as summarizeSharedMessagePayloadPreview,
+  summarizeMessagePayload as summarizeSharedMessagePayload,
   type FormattedDiffPayloadLine,
   type FormattedDiffPayloadRow,
   type FormattedDiffPayloadRowKind,
@@ -39,26 +39,17 @@ import {
   type SharedMessagePayload,
 } from '@cindy/maker-shared/payload-summary';
 import { i18n } from '@/i18n';
+import { mobilePresentationLocalizer } from '@/i18n/presentationLocalizer';
 
 export type MessagePayload = SharedMessagePayload<NormalizedToolDiff, NormalizedToolMedia>;
 
 export {
-  buildFilePayload,
-  buildMermaidPayload,
   buildPayloadToolDiff,
   buildTextPayload,
   extractPayloadToolResultMedia,
-  formatDiffPayload,
-  formatDiffPayloadRows,
-  formatDiffPayloadView,
-  formatMediaActionNotice,
   formatPayloadToolUseSummary,
   isPayloadDesktopLocalMediaUrl,
   isPayloadDirectPreviewableUrl,
-  payloadMediaKindLabel,
-  summarizeMessagePayloadBody,
-  summarizeMessagePayloadPreview,
-  summarizeMessagePayload,
   type FormattedDiffPayloadLine,
   type FormattedDiffPayloadRow,
   type FormattedDiffPayloadRowKind,
@@ -79,16 +70,59 @@ export function buildToolResultPayload(tool: NormalizedRemoteMessage): MessagePa
 }
 
 export function buildDiffPayload(diff: NormalizedToolDiff): MessagePayload {
-  return buildSharedDiffPayload(diff);
+  return buildSharedDiffPayload(diff, mobilePresentationLocalizer);
 }
 
 export function buildMediaPayload(
   media: NormalizedToolMedia,
   label: string,
 ): Extract<MessagePayload, { kind: 'media' }> {
-  return buildSharedMediaPayload(media, label);
+  return buildSharedMediaPayload(media, label, mobilePresentationLocalizer);
 }
 
 export function buildAttachmentPayload(attachment: NormalizedAttachment): MessagePayload {
-  return buildSharedAttachmentPayload(attachment);
+  return buildSharedAttachmentPayload(attachment, mobilePresentationLocalizer);
+}
+
+export function buildFilePayload(title: string, sourcePath: string): Extract<MessagePayload, { kind: 'file' }> {
+  return buildSharedFilePayload(title, sourcePath, mobilePresentationLocalizer);
+}
+
+export function buildMermaidPayload(source: string): Extract<MessagePayload, { kind: 'mermaid' }> {
+  return buildSharedMermaidPayload(source, mobilePresentationLocalizer);
+}
+
+export function summarizeMessagePayload(payload: MessagePayload): MessagePayloadSummary {
+  return summarizeSharedMessagePayload(payload, mobilePresentationLocalizer);
+}
+
+export function summarizeMessagePayloadBody(payload: MessagePayload): MessagePayloadBodyPresentation {
+  return summarizeSharedMessagePayloadBody(payload, mobilePresentationLocalizer);
+}
+
+export function summarizeMessagePayloadPreview(
+  payload: MessagePayload,
+  options: MessagePayloadPreviewOptions = {},
+): MessagePayloadPreview {
+  return summarizeSharedMessagePayloadPreview(payload, options, mobilePresentationLocalizer);
+}
+
+export function payloadMediaKindLabel(kind: NormalizedToolMedia['kind']): string {
+  return sharedPayloadMediaKindLabel(kind, mobilePresentationLocalizer);
+}
+
+export function formatDiffPayload(diff: NormalizedToolDiff): string {
+  return formatSharedDiffPayload(diff, mobilePresentationLocalizer);
+}
+
+export function formatDiffPayloadRows(diff: NormalizedToolDiff): FormattedDiffPayloadRow[] {
+  return formatSharedDiffPayloadRows(diff, mobilePresentationLocalizer);
+}
+
+export function formatDiffPayloadView(diff: NormalizedToolDiff): FormattedDiffPayloadView {
+  return formatSharedDiffPayloadView(diff, mobilePresentationLocalizer);
+}
+
+export function formatMediaActionNotice(media: NormalizedToolMedia): string {
+  return formatSharedMediaActionNotice(media, mobilePresentationLocalizer);
 }

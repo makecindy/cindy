@@ -13,7 +13,8 @@ export type AutoRelaunchBlockReason =
   | 'recent-busy'
   | 'recent-resume'
   | 'user-active'
-  | 'screen-state-unknown';
+  | 'screen-state-unknown'
+  | 'interactive-auth';
 
 export interface AutoRelaunchReadinessInput {
   enabled: boolean;
@@ -29,6 +30,8 @@ export interface AutoRelaunchReadinessInput {
   idleThresholdSeconds?: number;
   busyQuietPeriodMs?: number;
   resumeCooldownMs?: number;
+  /** Linux pkexec 需要用户在场输入密码，禁止无人值守 / 启动自动安装。 */
+  requiresInteractiveAuth?: boolean;
 }
 
 export function getAutoRelaunchBlockReason(
@@ -39,6 +42,7 @@ export function getAutoRelaunchBlockReason(
   const resumeCooldownMs = input.resumeCooldownMs ?? AUTO_UPDATE_RESUME_COOLDOWN_MS;
 
   if (!input.enabled) return 'disabled';
+  if (input.requiresInteractiveAuth) return 'interactive-auth';
   if (input.isDev) return 'dev';
   if (input.status !== 'ready') return 'not-ready';
   if (input.isRelaunching) return 'relaunching';

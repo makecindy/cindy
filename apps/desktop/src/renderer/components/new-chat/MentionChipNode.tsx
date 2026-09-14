@@ -8,6 +8,7 @@ import { Node, mergeAttributes } from '@tiptap/core';
 import { NodeViewWrapper, ReactNodeViewRenderer, type NodeViewProps } from '@tiptap/react';
 import { useEffect, useState } from 'react';
 import {
+  Bot,
   CornerDownRight,
   File,
   Folder,
@@ -37,6 +38,7 @@ export interface MentionChipAttrs {
     | 'project'
     | 'browser-tab'
     | 'desktop-window'
+    | 'bot'
     | 'plugin-resource'
     | 'plugin-capability';
   /** Visible basename, Agent name, command, conversation title/message or project name. */
@@ -71,6 +73,7 @@ function MentionIcon({ attrs }: { attrs: MentionChipAttrs }) {
   if (attrs.kind === 'project') return <FolderOpen aria-hidden />;
   if (attrs.kind === 'browser-tab') return <Globe2 aria-hidden />;
   if (attrs.kind === 'desktop-window') return <Monitor aria-hidden />;
+  if (attrs.kind === 'bot') return <Bot aria-hidden />;
   if (attrs.kind === 'plugin-resource') return <Plug aria-hidden />;
   return parseSessionDeepLinkHref(attrs.path)?.messageClientId ? (
     <MessageSquareQuote aria-hidden />
@@ -308,6 +311,14 @@ const ICON_PATHS: Record<Exclude<MentionChipAttrs['kind'], 'slash'>, string[]> =
     'M20 3H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Z',
     'M8 21h8',
     'M12 17v4',
+  ],
+  bot: [
+    'M12 8V4H8',
+    'M2 14h2',
+    'M20 14h2',
+    'M15 13v2',
+    'M9 13v2',
+    'M6 18h12a2 2 0 0 0 2-2v-4a6 6 0 0 0-6-6h-4a6 6 0 0 0-6 6v4a2 2 0 0 0 2 2Z',
   ],
   'plugin-resource': ['M12 22v-5', 'M9 8V2', 'M15 8V2', 'M18 8v5a6 6 0 0 1-12 0V8Z'],
   'plugin-capability': [
