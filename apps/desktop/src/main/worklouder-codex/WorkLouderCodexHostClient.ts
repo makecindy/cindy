@@ -14,6 +14,8 @@ import type {
 } from '../../shared/workLouderCodex.js';
 import type { WorkLouderCodexLightingSink } from './WorkLouderCodexLightingController.js';
 
+const MAX_CONSECUTIVE_CRASHES = 5;
+
 export interface WorkLouderCodexChildLike {
   postMessage(message: unknown): void;
   on(event: 'message', listener: (message: unknown) => void): void;
@@ -41,6 +43,8 @@ export interface WorkLouderCodexHostClientDeps {
   resolveSdk(): WorkLouderSdkLocation | null;
   fork(sdkEntry: string): WorkLouderCodexChildLike;
   log: WorkLouderCodexLoggerLike;
+  /** Owner-scoped directory for a Creator Micro 2 keymap backup. */
+  keymapBackupDir?: () => string | null;
   connectTimeoutMs?: number;
   disposeTimeoutMs?: number;
   /** How long a connection must stay up before the crash budget resets. */
@@ -65,6 +69,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   private disposePromise: Promise<void> | null = null;
   private finishDispose: (() => void) | null = null;
   private disposeTimer: ReturnType<typeof setTimeout> | null = null;
+  private disconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private agentKeyPressHandler: ((slot: number) => void) | null = null;
   private deviceActivityHandler: (() => void) | null = null;
   private hidInputHandler: ((event: WorkLouderCodexHidEvent) => void) | null = null;
@@ -74,9 +79,25 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     null;
   private connectionStatusHandler: ((status: WorkLouderCodexConnectionStatus) => void) | null =
     null;
+  private pendingCreatorKeymap: string[][] | null = null;
+  private presenceHandler:
+    | ((
+        present: boolean,
+        identity?: {
+          deviceType: 'codex-micro' | 'creator-micro-2';
+          isUsbConnection: boolean;
+        },
+      ) => void)
+    | null = null;
   private connectionStatus: WorkLouderCodexConnectionStatus = 'connecting';
   private connectionReason: WorkLouderCodexConnectionReason = null;
   private wantsHidInput = false;
+  private deviceEnabled = true;
+  private wantsPresence = false;
+  /** Permission failures are user-actionable; stop automatic recovery until an explicit retry or toggle. */
+  private permissionBlocked = false;
+  /** True while the current host is stopping so re-enable cannot talk to it. */
+  private hostStopping = false;
 
   constructor(private readonly deps: WorkLouderCodexHostClientDeps) {}
 
@@ -106,11 +127,30 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     handler?.(this.connectionReason);
   }
 
+  setDeviceEnabled(enabled: boolean): void {
+    if (this.deviceEnabled === enabled) return;
+    this.deviceEnabled = enabled;
+    this.permissionBlocked = false;
+    if (enabled) {
+      this.updateHidListeningIntent();
+      if (this.latestFrame) this.update(this.latestFrame);
+      // Occupancy can turn the device on after the host already posted
+      // `connected`. Lighting drops that status while disabled, and
+      // lastStatus === connected prevents a resend — replay it.
+      if (this.lastStatus === 'connected' || this.connectionStatus === 'connected') {
+        this.connectionStatusHandler?.('connected');
+      }
+      return;
+    }
+    this.disconnectHost();
+  }
+
   private updateHidListeningIntent(): void {
     this.wantsHidInput =
-      this.agentKeyPressHandler !== null ||
-      this.hidInputHandler !== null ||
-      this.joystickInputHandler !== null;
+      this.deviceEnabled &&
+      (this.agentKeyPressHandler !== null ||
+        this.hidInputHandler !== null ||
+        this.joystickInputHandler !== null);
     if (this.wantsHidInput) this.requestHidListening();
   }
 
@@ -125,9 +165,24 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     handler?.(this.connectionStatus);
   }
 
+  setPresenceHandler(
+    handler:
+      | ((
+          present: boolean,
+          identity?: {
+            deviceType: 'codex-micro' | 'creator-micro-2';
+            isUsbConnection: boolean;
+          },
+        ) => void)
+      | null,
+  ): void {
+    this.presenceHandler = handler;
+  }
+
   update(frame: WorkLouderCodexLightingFrame): void {
     if (this.disposed) return;
     this.latestFrame = frame;
+    if (!this.deviceEnabled) return;
     if (isWorkLouderCodexLightingFrameOff(frame) && this.restartTimer) {
       clearTimeout(this.restartTimer);
       this.restartTimer = null;
@@ -148,6 +203,21 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
         // A failed message channel commonly means the child already exited.
       }
       this.handleExit(child, 1);
+    }
+  }
+
+  rebindCreatorKeymap(keymap: string[][]): void {
+    this.pendingCreatorKeymap = keymap;
+    if (this.disposed || !this.child) return;
+    try {
+      this.child.postMessage({
+        kind: 'rebind-creator-keymap',
+        keymap,
+      } satisfies WorkLouderCodexHostRequest);
+    } catch (error) {
+      this.deps.log.warn('failed to rebind Creator keymap', {
+        error: error instanceof Error ? error.message : String(error),
+      });
     }
   }
 
@@ -180,11 +250,20 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private ensureChild(): WorkLouderCodexChildLike | null {
+    if (this.hostStopping) return null;
+    // A scheduled recycle owns recovery; work/presence callers must not
+    // recreate the host early and bypass its exponential backoff.
+    if (this.restartTimer) return null;
+    if (this.permissionBlocked) return null;
+    if (this.isCrashBudgetExhausted()) return null;
+    if (!this.deviceEnabled && !this.wantsPresence) return null;
     if (this.child) return this.child;
     const sdk = this.deps.resolveSdk();
     if (!sdk) {
-      this.updateConnectionReason('sdk-unavailable');
-      this.updateConnectionStatus('unavailable');
+      if (this.deviceEnabled) {
+        this.updateConnectionReason('sdk-unavailable');
+        this.updateConnectionStatus('unavailable');
+      }
       if (!this.unavailableLogged) {
         this.unavailableLogged = true;
         this.deps.log.info('Codex Micro lighting unavailable: official Work Louder SDK not found');
@@ -194,7 +273,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     let child: WorkLouderCodexChildLike | null = null;
     try {
       this.updateConnectionReason(null);
-      this.updateConnectionStatus('connecting');
+      if (this.deviceEnabled) this.updateConnectionStatus('connecting');
       const startedChild = this.deps.fork(sdk.entry);
       child = startedChild;
       this.child = startedChild;
@@ -205,9 +284,15 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
           type: type instanceof Error ? type.name : type,
         });
       });
-      const initRequest: WorkLouderCodexHostRequest = { kind: 'init', sdkEntry: sdk.entry };
+      const keymapBackupDir = this.deps.keymapBackupDir?.() ?? undefined;
+      const initRequest: WorkLouderCodexHostRequest = {
+        kind: 'init',
+        sdkEntry: sdk.entry,
+        ...(keymapBackupDir ? { keymapBackupDir } : {}),
+        ...(this.pendingCreatorKeymap ? { creatorKeymap: this.pendingCreatorKeymap } : {}),
+      };
       startedChild.postMessage(initRequest);
-      this.startConnectWatchdog(startedChild);
+      if (this.deviceEnabled) this.startConnectWatchdog(startedChild);
       this.deps.log.info('Codex Micro lighting host started', { sdkSource: sdk.source });
       return startedChild;
     } catch (error) {
@@ -222,9 +307,11 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deps.log.warn('failed to start Codex Micro lighting host', {
         error: error instanceof Error ? error.message : String(error),
       });
-      this.updateConnectionReason('connection-failed');
-      this.updateConnectionStatus('error');
-      this.scheduleRestart();
+      if (this.deviceEnabled) {
+        this.updateConnectionReason('connection-failed');
+        this.updateConnectionStatus('error');
+        this.scheduleRestart();
+      }
       return null;
     }
   }
@@ -241,7 +328,15 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
    * no such keyboard.
    */
   probe(): void {
-    if (this.disposed || !this.child) return;
+    if (this.disposed || this.permissionBlocked) return;
+    if (!this.deviceEnabled) {
+      this.discoverPresence();
+      return;
+    }
+    // A background probe is observational only. If the host is gone, either
+    // the restart backoff or the crash budget owns recovery; do not recreate
+    // it indirectly through requestHidListening/update.
+    if (!this.child || this.restartTimer) return;
     try {
       const request: WorkLouderCodexHostRequest = { kind: 'probe' };
       this.child.postMessage(request);
@@ -250,6 +345,24 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
         error: error instanceof Error ? error.message : String(error),
       });
     }
+  }
+
+  /**
+   * Clear a permission breaker only for an explicit recovery signal.
+   *
+   * Background connection polling must stay observational: repeatedly
+   * recreating a host while macOS still denies HID access is the restart storm
+   * this client is designed to prevent. The settings toggle and system unlock
+   * paths call this method when a permission change may have happened.
+   */
+  retryPermission(): void {
+    if (this.disposed || !this.permissionBlocked) return;
+    this.permissionBlocked = false;
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.restartHost();
   }
 
   private requestHidListening(): void {
@@ -284,6 +397,12 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     }
     if (message.kind === 'hid') {
       this.clearConnectWatchdog();
+      if (/^(?:AG|ACT)/.test(message.event.key)) {
+        this.deps.log.debug('Work Louder HID', {
+          key: message.event.key,
+          act: message.event.act,
+        });
+      }
       this.hidInputHandler?.(message.event);
       const slot = parseWorkLouderCodexAgentKeyPress(message.event);
       if (slot !== null) {
@@ -302,17 +421,45 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       this.deviceStateHandler?.(message.device);
       return;
     }
+    if (message.kind === 'presence') {
+      this.clearConnectWatchdog();
+      this.armStableConnection();
+      this.presenceHandler?.(
+        message.present,
+        message.present && message.deviceType
+          ? {
+              deviceType: message.deviceType,
+              isUsbConnection: message.isUsbConnection === true,
+            }
+          : undefined,
+      );
+      return;
+    }
     if (message.kind === 'activity') {
       this.deviceActivityHandler?.();
       return;
     }
     if (message.kind !== 'state') return;
     this.clearConnectWatchdog();
+    if (this.permissionBlocked && message.status === 'connected') return;
     this.updateConnectionReason(message.reason ?? null);
-    if (message.status === this.lastStatus) return;
+    const permissionRequired =
+      message.status === 'error' && message.reason === 'permission-required';
+    if (permissionRequired) this.permissionBlocked = true;
     const previousStatus = this.lastStatus;
-    this.lastStatus = message.status;
-    this.updateConnectionStatus(message.status);
+    const statusChanged = message.status !== this.lastStatus;
+    if (statusChanged) {
+      this.lastStatus = message.status;
+      this.updateConnectionStatus(message.status);
+    }
+    // Permission errors own teardown even when a previous connection error
+    // already published the same coarse `error` status. The breaker must not
+    // leave a permission-blocked child alive and unable to honor retry.
+    if (permissionRequired) {
+      this.stopHostAfterPermission(child);
+      return;
+    }
+    if (!statusChanged) return;
     if (message.status === 'connected') {
       this.armStableConnection();
       this.deps.log.info('Codex Micro lighting connected');
@@ -326,7 +473,34 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     // Pairing / USB re-enumeration leaves the native SDK handle alive but
     // unusable. ChatGPT recovers by opening a fresh transport; we do the same
     // by recycling the utility process once the live session drops.
-    if (previousStatus === 'connected') this.recycleStaleHost(child);
+    // Permission / HID contention is not a dropped cable — recycling it storms
+    // `0xE00002E2` and never lets Creator Micro 2 finish binding agent keys.
+    if (
+      previousStatus === 'connected' &&
+      message.reason !== 'permission-required' &&
+      message.reason !== 'device-in-use'
+    ) {
+      this.recycleStaleHost(child);
+    }
+  }
+
+  private stopHostAfterPermission(child: WorkLouderCodexChildLike): void {
+    if (this.disposed || this.child !== child) return;
+    this.clearConnectWatchdog();
+    this.clearStableConnection();
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.deps.log.warn(
+      'Codex Micro lighting paused because HID permission is required; retry after permission changes',
+    );
+    try {
+      child.kill();
+    } catch {
+      // Permission failure owns the stop; the host may already have exited.
+    }
+    this.handleExit(child, 0);
   }
 
   private recycleStaleHost(child: WorkLouderCodexChildLike): void {
@@ -350,13 +524,25 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     this.clearConnectWatchdog();
     this.clearStableConnection();
     this.child = null;
+    this.hostStopping = false;
     this.lastStatus = null;
     if (this.disposed) {
       this.completeDispose(child);
       return;
     }
+    if (!this.deviceEnabled) {
+      this.updateConnectionReason(null);
+      this.updateConnectionStatus('disabled');
+      if (this.wantsPresence) this.scheduleRestart();
+      return;
+    }
+    if (this.permissionBlocked) {
+      this.updateConnectionReason('permission-required');
+      this.updateConnectionStatus('error');
+      return;
+    }
     if (recycled) {
-      this.restartHost();
+      this.scheduleRestart();
       return;
     }
     this.deps.log.warn('Codex Micro lighting host exited', { code });
@@ -368,35 +554,43 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private restartHost(): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.deviceEnabled) return;
     if (this.wantsHidInput) this.requestHidListening();
     if (this.latestFrame) this.update(this.latestFrame);
   }
 
   private scheduleRestart(): void {
-    if (
-      this.restartTimer ||
-      (!this.latestFrame && !this.wantsHidInput) ||
-      (this.latestFrame &&
-        isWorkLouderCodexLightingFrameOff(this.latestFrame) &&
-        !this.wantsHidInput)
-    ) {
-      return;
-    }
+    if (this.restartTimer || this.permissionBlocked || !this.shouldRestartHost()) return;
     this.consecutiveCrashes += 1;
-    if (this.consecutiveCrashes > 5) {
+    if (this.isCrashBudgetExhausted()) {
       this.deps.log.error('Codex Micro lighting host repeatedly crashed; disabled until restart');
       return;
     }
     const delayMs = Math.min(10_000, 500 * 2 ** (this.consecutiveCrashes - 1));
     this.restartTimer = setTimeout(() => {
       this.restartTimer = null;
-      const frame = this.latestFrame;
-      if (this.disposed) return;
+      if (this.disposed || !this.shouldRestartHost()) return;
+      if (!this.deviceEnabled) {
+        this.discoverPresence();
+        return;
+      }
       if (this.wantsHidInput) this.requestHidListening();
-      if (frame) this.update(frame);
+      if (this.latestFrame) this.update(this.latestFrame);
     }, delayMs);
     this.restartTimer.unref?.();
+  }
+
+  private isCrashBudgetExhausted(): boolean {
+    return this.consecutiveCrashes > MAX_CONSECUTIVE_CRASHES;
+  }
+
+  private shouldRestartHost(): boolean {
+    if (this.disposed) return false;
+    if (!this.deviceEnabled) return this.wantsPresence;
+    return (
+      this.wantsHidInput ||
+      Boolean(this.latestFrame && !isWorkLouderCodexLightingFrameOff(this.latestFrame))
+    );
   }
 
   private startConnectWatchdog(child: WorkLouderCodexChildLike): void {
@@ -424,7 +618,7 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
   }
 
   private armStableConnection(): void {
-    this.clearStableConnection();
+    if (this.stableConnectionTimer) return;
     this.stableConnectionTimer = setTimeout(() => {
       this.stableConnectionTimer = null;
       this.consecutiveCrashes = 0;
@@ -445,17 +639,26 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
       clearTimeout(this.disposeTimer);
       this.disposeTimer = null;
     }
-    if (this.child === child) {
+    if (this.disconnectTimer) {
+      clearTimeout(this.disconnectTimer);
+      this.disconnectTimer = null;
+    }
+    const owned = this.child === child;
+    if (owned) {
       try {
         child.kill();
       } catch {
         // The utility process may already have exited after acknowledging stop.
       }
       this.child = null;
+      this.hostStopping = false;
     }
     const finish = this.finishDispose;
     this.finishDispose = null;
     finish?.();
+    if (this.disposed || !owned || this.child) return;
+    if (this.deviceEnabled) this.restartHost();
+    else if (this.wantsPresence) this.discoverPresence();
   }
 
   private updateConnectionStatus(status: WorkLouderCodexConnectionStatus): void {
@@ -468,5 +671,51 @@ export class WorkLouderCodexHostClient implements WorkLouderCodexLightingSink {
     if (reason === this.connectionReason) return;
     this.connectionReason = reason;
     this.connectionReasonHandler?.(reason);
+  }
+
+  private disconnectHost(): void {
+    if (this.restartTimer) {
+      clearTimeout(this.restartTimer);
+      this.restartTimer = null;
+    }
+    this.clearConnectWatchdog();
+    this.clearStableConnection();
+    const child = this.child;
+    if (child) {
+      this.hostStopping = true;
+      if (this.disconnectTimer) {
+        clearTimeout(this.disconnectTimer);
+        this.disconnectTimer = null;
+      }
+      this.disconnectTimer = setTimeout(
+        () => this.completeDispose(child),
+        this.deps.disposeTimeoutMs ?? 1_000,
+      );
+      this.disconnectTimer.unref?.();
+      try {
+        child.postMessage({ kind: 'stop' } satisfies WorkLouderCodexHostRequest);
+      } catch {
+        this.completeDispose(child);
+      }
+    }
+    this.lastStatus = null;
+    this.consecutiveCrashes = 0;
+    this.permissionBlocked = false;
+    this.updateConnectionReason(null);
+    this.updateConnectionStatus('disabled');
+  }
+
+  private discoverPresence(): void {
+    this.wantsPresence = true;
+    const child = this.ensureChild();
+    if (!child) return;
+    try {
+      const request: WorkLouderCodexHostRequest = { kind: 'discover' };
+      child.postMessage(request);
+    } catch (error) {
+      this.deps.log.debug('failed to discover Work Louder presence', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
   }
 }

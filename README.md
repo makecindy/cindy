@@ -122,6 +122,11 @@ developers don't need to self-host a server: sign in with your own Cindy
 account in a dev build and develop / test directly against the official
 servers.
 
+Skill Hub migration uses two separate manifest fields: released clients keep
+using `skillhubApiBaseUrl` (the deprecated XD proxy), while current clients use
+`cindySkillHubApiBaseUrl`. The current client deliberately does not fall back to
+the legacy field when the new endpoint is absent.
+
 ## Architecture
 
 - [`DESIGN.md`](DESIGN.md) — visual design system, color tokens, and UI conventions

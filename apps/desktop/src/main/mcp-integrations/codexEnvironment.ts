@@ -10,7 +10,14 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { Logger, McpProvider, McpProviderContext } from '@cindy/maker-core';
 import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcps';
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
+import {
+  CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY,
+  CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY,
+} from './codexBuiltinToolPolicy.js';
+import {
+  CINDY_MAKE_MCP_SERVER_NAME,
+  isCindyMakeVendorOptions,
+} from '../../shared/cindyMakeSession.js';
 
 import {
   startCodexHttpBridge,
@@ -43,8 +50,14 @@ export interface CodexExtraSpawnConfig {
   bridge: CodexHttpBridge | null;
   /** bridge 上实际挂出的 server 名 (远端注入 config.toml 时按此渲染 mcp_servers 段)。 */
   bridgeServerNames: string[];
-  /** 为本地 app-server 的具体 thread 绑定 Session instance 的 URL overrides。 */
-  buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
+  /**
+   * 为本地 app-server 的具体 thread 绑定 Session instance 的 URL overrides;
+   * session 事实(vendorOptions)用于按线程隐藏任务专属 server(如 cindy_make)。
+   */
+  buildSessionMcpConfig?: (
+    sessionInstanceId: string,
+    session?: { vendorOptions?: Record<string, unknown> },
+  ) => Record<string, unknown>;
 }
 
 export interface GetCodexExtraSpawnConfigOptions {
@@ -57,7 +70,7 @@ let activeBridge: CodexHttpBridge | null = null;
 let activeBridgeServerNames: string[] | null = null;
 const disabledPluginPolicyByThread = new Map<
   string,
-  { sessionInstanceId?: string; policy: unknown }
+  { sessionInstanceId?: string; disabledPolicy: unknown; allowedPolicy: unknown }
 >();
 const callerProvenanceByThread = new Map<
   string,
@@ -157,14 +170,17 @@ export function registerCodexMcpThreadContext(
   ctx: LiziMcpSessionContext,
 ): void {
   const requestedPolicy = ctx.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
+  const requestedAllowedPolicy = ctx.vendorOptions?.[CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY];
   const frozen = disabledPluginPolicyByThread.get(threadId);
   if (!frozen || frozen.sessionInstanceId !== ctx.sessionInstanceId) {
     disabledPluginPolicyByThread.set(threadId, {
       ...(ctx.sessionInstanceId ? { sessionInstanceId: ctx.sessionInstanceId } : {}),
-      policy: requestedPolicy,
+      disabledPolicy: requestedPolicy,
+      allowedPolicy: requestedAllowedPolicy,
     });
   }
-  const effectivePolicy = disabledPluginPolicyByThread.get(threadId)?.policy;
+  const effectivePolicy = disabledPluginPolicyByThread.get(threadId)?.disabledPolicy;
+  const effectiveAllowedPolicy = disabledPluginPolicyByThread.get(threadId)?.allowedPolicy;
   const previousProvenance = callerProvenanceByThread.get(threadId);
   const sameSessionInstance =
     ctx.sessionInstanceId !== undefined &&
@@ -202,6 +218,7 @@ export function registerCodexMcpThreadContext(
     vendorOptions: {
       ...ctx.vendorOptions,
       [CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY]: effectivePolicy,
+      [CODEX_ALLOWED_BUILTIN_PLUGIN_IDS_KEY]: effectiveAllowedPolicy,
     },
   });
 }
@@ -248,6 +265,7 @@ async function doStart(
       return {
         agentKind: active.agentKind,
         workingDir: active.workingDir,
+        ...(active.memoryScopeKey ? { memoryScopeKey: active.memoryScopeKey } : {}),
         // SSH remote 会话的 ctx 字段必须透传 — cindy_memory 用它算 scope key
         // (buildMemoryScopeKey);丢掉的话远端工具会落到本地路径 key 的 store,
         // 与 agent prompt 注入读的 ssh:<hostId>:<path> store 分家 (review R4 P1)。
@@ -407,14 +425,33 @@ async function doStart(
     bridgeServerNames,
     ...(bridge
       ? {
-          buildSessionMcpConfig: (sessionInstanceId: string) =>
-            Object.fromEntries(
+          buildSessionMcpConfig: (
+            sessionInstanceId: string,
+            session?: { vendorOptions?: Record<string, unknown> },
+          ) => ({
+            ...Object.fromEntries(
               bridgeServerNames.map((name) => [
                 `mcp_servers.${name}.url`,
                 withMcpRouteIdentity(bridge.url(name), { sessionInstanceId }),
               ]),
             ),
+            // Cindy Make 个人版工具:app-server 共享一份 spawn 级 transport,只能按
+            // 线程关。transport 与本 config 同源(上面刚写了 url),所以 enabled=false
+            // 不会落成"只有 enabled 没有 transport"的非法条目(codex 先解析 transport)。
+            ...(bridgeServerNames.includes(CINDY_MAKE_MCP_SERVER_NAME)
+              && !isCindyMakeVendorOptions(session?.vendorOptions)
+              ? { [`mcp_servers.${CINDY_MAKE_MCP_SERVER_NAME}.enabled`]: false }
+              : {}),
+          }),
         }
       : {}),
   };
+}
+
+/** Native startup discovery is earlier than the thread registration callback. */
+export function withCodexMcpDiscoveryContext<T>(
+  ctx: LiziMcpSessionContext,
+  run: () => Promise<T>,
+): Promise<T> {
+  return activeBridge ? activeBridge.withDiscoveryContext(ctx, run) : run();
 }

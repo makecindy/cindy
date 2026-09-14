@@ -150,6 +150,8 @@ describe('buildHookScriptPrompt', () => {
       currentScript: 'process.exit(0)',
     });
     expect(prompt).toContain('Exit code 0');
+    expect(prompt).toContain('CINDY_PRECHECK_OK as a standalone stdout line before exit 0 or 2');
+    expect(prompt).toContain('Never emit it for rate-limit/backoff skips or incomplete/degraded checks');
     expect(prompt).toContain('Windows');
     expect(prompt).toContain('有新 PR 才跑');
     expect(prompt).toContain('C:/repo');

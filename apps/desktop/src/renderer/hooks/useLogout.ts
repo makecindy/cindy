@@ -3,6 +3,8 @@ import { useTranslation } from 'react-i18next';
 
 import { useAuth } from '@/contexts/AuthContext';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 
 export function useLogout(): { handleLogout: () => Promise<void> } {
   const { logout } = useAuth();
@@ -15,9 +17,18 @@ export function useLogout(): { handleLogout: () => Promise<void> } {
       description: t('logic.confirm.logoutDescription'),
       confirmText: t('logic.confirm.logoutConfirm'),
       cancelText: t('logic.confirm.cancel'),
+      confirmVariant: 'destructive',
     });
-    if (confirmed) {
+    if (!confirmed) return;
+
+    try {
       await logout();
+    } catch (error) {
+      toast.error(
+        t(mapIpcErrorToI18nKey(error, { fallback: 'ipcError.INTERNAL' }), {
+          defaultValue: t('ipcError.INTERNAL'),
+        }),
+      );
     }
   }, [logout, confirm, t]);
 

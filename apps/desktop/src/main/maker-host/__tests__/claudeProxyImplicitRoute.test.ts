@@ -1,0 +1,379 @@
+/**
+ * claudeProxyImplicitRoute.test.ts
+ * ---------------------------------------------------------------------------
+ * 回归:cc routingTransform ①.5 段 —— 未绑定/未反解出供应商的请求按模型隐式路由。
+ *
+ * 现场(智谱 GLM-5.3 事故):会话模型选了用户智谱来源的裸 catalog id(glm-5.3),
+ * 会话启动/切模的首批请求抢在 session↔provider 绑定(session header 反解 / set-model
+ * 落库)之前到达 proxy —— ① 段因 getSessionProvider 为 null 放空,② 段把请求透传给
+ * 默认网关(LiteLLM)。网关只注册命名空间 id(z-ai/glm-5.3),裸 id 在模型校验层被拒:
+ *   400 {'error': 'anthropic_messages: Invalid model name passed in model=glm-5.3. ...'}
+ * Claude Code 把它 surface 成 API Error 400,靠重试恢复,用户侧表现为偶发报错。
+ *
+ * 本测试用真实 provider-route + active-catalog fixture,只 mock 触电模块,验证
+ * 决策级行为(codex 侧同语义见 codexProxyHost ①.5;cc 侧为本次补齐):
+ *   - 无会话 + 裸 glm-5.3 → ①.5 路由到用户智谱上游,鉴权头换成用户 key;
+ *   - 会话已反解但未绑定供应商 + 裸 glm-5.3 → 同上(启动竞态的真实形态);
+ *   - 网关命名空间 id(z-ai/glm-5.3)/ anthropic wire 模型(claude-*)/ 目录外模型
+ *     → 不受 ①.5 影响,保持 ② 段默认路径(passthrough),#886 语义不回归。
+ */
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { createServer } from 'node:http';
+import { once } from 'node:events';
+import type { AddressInfo } from 'node:net';
+
+const outbound = vi.hoisted(() => vi.fn<typeof fetch>());
+vi.mock('../outbound-fetch.js', () => ({ outboundFetch: outbound }));
+
+vi.mock('../../appCapabilities.js', () => ({
+  getAppCapabilities: () => ({ canUseCindyGateway: true }),
+}));
+
+vi.mock('../logger-adapter', () => ({
+  createMakerLogger: () => ({
+    trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
+    child: vi.fn(function self() { return { trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: self }; }),
+  }),
+  desktopMakerLogger: {
+    trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
+    child: vi.fn(() => ({ trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() })),
+  },
+}));
+vi.mock('../runtime-configs', () => ({
+  claudeUpstreamEndpoint: () => 'https://gateway.example.com',
+}));
+vi.mock('../silent-encrypted-retry-store', () => ({
+  readSilentEncryptedRetrySettings: () => ({ enabled: false }),
+}));
+vi.mock('../claude-fast-mode-log', () => ({
+  createClaudeFastModeRequestTransform: () => () => null,
+  createClaudeFastModeResponseObserver: () => () => undefined,
+}));
+
+import {
+  createModelRoutingTransform,
+  setClaudeProxyGatewayKeyReader,
+  setClaudeProxySessionIdResolver,
+} from '../anthropic-compat-proxy-host';
+import {
+  setCustomProviderKeyReader,
+  setPendingCredentialSwitchReader,
+  setProviderOAuthTokenReader,
+  setOAuthTokenReader,
+  setProviderViewsReader,
+} from '../provider-route';
+import { getActiveCatalog, setCustomProviders } from '../active-catalog';
+import * as providerRoute from '../provider-route';
+import { buildRegistry, buildUserProvider, providerPresetOAuth, PROVIDER_MODEL_CATALOG } from '@cindy/model-providers';
+import { clearSessionProvider, setSessionProvider } from '../session-provider-store';
+import {
+  readClaudeSessionRoute,
+  resetClaudeSessionRouteRegistryForTest,
+} from '../claude-session-route-registry';
+
+const ZHIPU_UPSTREAM = 'https://open.bigmodel.example/api/anthropic';
+
+function ctxWith(headers: Record<string, string>) {
+  return { reqId: 1, method: 'POST', url: '/v1/messages', headers } as never;
+}
+
+function installZhipuProvider(): void {
+  setCustomProviders([
+    buildUserProvider({
+      id: 'zhipu-plan',
+      name: 'Zhipu Plan',
+      runtimes: {
+        'claude-code': {
+          baseUrl: ZHIPU_UPSTREAM,
+          wireProtocol: 'anthropic-messages',
+          models: [{ id: 'glm-5.3', name: 'GLM-5.3' }],
+        },
+      },
+    }),
+  ]);
+  setCustomProviderKeyReader(() => 'glm-user-key');
+  setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'zhipu-plan': true }));
+}
+
+describe('cc routingTransform — ①.5 隐式来源路由 (智谱 glm-5.3 裸 id 事故回归)', () => {
+  let transform: ReturnType<typeof createModelRoutingTransform>;
+
+  beforeEach(() => {
+    resetClaudeSessionRouteRegistryForTest();
+    setClaudeProxyGatewayKeyReader(() => 'sk-gw');
+    setClaudeProxySessionIdResolver(() => null);
+    setPendingCredentialSwitchReader(() => undefined);
+    setProviderOAuthTokenReader(() => null);
+    clearSessionProvider('sess-race');
+    installZhipuProvider();
+    transform = createModelRoutingTransform();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    setCustomProviders([]);
+    setCustomProviderKeyReader(() => null);
+    setOAuthTokenReader(() => null);
+    outbound.mockReset();
+    setProviderViewsReader(async () => []);
+    clearSessionProvider('sess-race');
+    resetClaudeSessionRouteRegistryForTest();
+  });
+
+  it.each(['openai-chat', 'openai-responses', 'google-generative-ai'] as const)('selects the Claude translation handler for a saved %s connection', wireProtocol => {
+    setCustomProviders([buildUserProvider({ id: 'zhipu-plan', name: 'Fixture', runtimes: {
+      'claude-code': { baseUrl: 'https://supplier.example/v1', wireProtocol, models: [{ id: 'model', name: 'Model' }] },
+    } })]);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'zhipu-plan');
+    const decision = transform({ model: 'model' }, ctxWith({ 'x-claude-code-session-id': 'sdk-race' }));
+    return Promise.resolve(decision).then(route => expect(route?.localHandler).toBeTypeOf('function'));
+  });
+
+  it.each(['github-copilot', 'cloudflare-ai-gateway'])('keeps %s native authentication for Claude Messages routes', async sourceId => {
+    const row = PROVIDER_MODEL_CATALOG.providers[sourceId].find(row => row.execution.pi.api === 'anthropic-messages')!;
+    const baseUrl = row.upstream.replace('{CLOUDFLARE_ACCOUNT_ID}', 'fixture-account').replace('{CLOUDFLARE_GATEWAY_ID}', 'fixture-gateway');
+    setCustomProviders([buildUserProvider({ id: 'zhipu-plan', name: 'Fixture', runtimes: {
+      'claude-code': { baseUrl, catalogPresetId: sourceId, wireProtocol: 'anthropic-messages', models: [{ id: row.id, name: row.name, api: 'anthropic-messages' }] },
+    } })]);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'zhipu-plan');
+    const route = await transform({ model: row.id }, ctxWith({ 'x-claude-code-session-id': 'sdk-race' }));
+    expect(route?.localHandler).toBeTypeOf('function');
+  });
+
+  it.each(['individual', 'business', 'enterprise'])('sends Copilot %s requests with native headers to the assigned host', async account => {
+    const row = PROVIDER_MODEL_CATALOG.providers['github-copilot'].find(row => row.execution.pi.api === 'anthropic-messages')!;
+    const token = `fixture-token;proxy-ep=proxy.${account}.githubcopilot.com;`;
+    setCustomProviders([buildUserProvider({ id: 'copilot-account', name: 'Copilot',
+      auth: { method: 'oauth', oauth: providerPresetOAuth('github-copilot')! },
+      runtimes: { 'claude-code': { baseUrl: row.upstream, catalogPresetId: 'github-copilot',
+        wireProtocol: 'anthropic-messages', models: [{ id: row.id, name: row.name, api: 'anthropic-messages' }] } },
+    })]);
+    setOAuthTokenReader(() => token);
+    setClaudeProxySessionIdResolver(() => 'sess-race');
+    setSessionProvider('sess-race', 'copilot-account');
+    const body = { model: row.id, stream: true, max_tokens: 2048,
+      messages: [{ role: 'user', content: [{ type: 'text', text: 'hello' },
+        { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'AAAA' } }] }] };
+    const ctx = ctxWith({ 'x-claude-code-session-id': 'sdk-race' });
+    const route = await transform(body, ctx);
+    expect(route?.upstreamOverride).toBe(`https://api.${account}.githubcopilot.com`);
+    expect(route?.localHandler).toBeTypeOf('function');
+    let sent: Request | undefined;
+    outbound.mockImplementation(async (url, init) => {
+      sent = new Request(url, init);
+      const events = [
+        { type: 'message_start', message: { id: 'fixture-reply', type: 'message', role: 'assistant', model: row.id, content: [], usage: { input_tokens: 2, output_tokens: 0 } } },
+        { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+        { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'Hello' } },
+        { type: 'content_block_stop', index: 0 },
+        { type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 1 } },
+        { type: 'message_stop' },
+      ];
+      return new Response(events.map(event => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join(''),
+        { headers: { 'content-type': 'text/event-stream' } });
+    });
+    const server = createServer((_req, res) => {
+      void Promise.resolve(route!.localHandler!({ parsedBody: body, rawBody: Buffer.from(JSON.stringify(body)), ctx, res }))
+        .catch(() => { res.statusCode = 500; res.end(); });
+    });
+    server.listen(0, '127.0.0.1'); await once(server, 'listening');
+    try {
+      const response = await fetch(`http://127.0.0.1:${(server.address() as AddressInfo).port}/v1/messages`);
+      expect(await response.text()).toContain('Hello');
+      const target = new URL(sent!.url);
+      expect(target.origin + target.pathname).toBe(`https://api.${account}.githubcopilot.com/v1/messages`);
+      expect(sent?.headers.get('authorization')).toBe(`Bearer ${token}`);
+      expect(sent?.headers.get('x-api-key')).toBeNull();
+      expect(sent?.headers.get('x-initiator')).toBe('user');
+      expect(sent?.headers.get('copilot-vision-request')).toBe('true');
+    } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+  });
+
+  it('implicit Google connection uses the native serializer before session binding', async () => {
+    setCustomProviders([buildUserProvider({
+      id: 'google-direct', name: 'Google',
+      runtimes: { 'claude-code': {
+        baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+        wireProtocol: 'google-generative-ai',
+        models: [{ id: 'gemini-2.5-flash', name: 'Gemini' }],
+      } },
+    })]);
+    setCustomProviderKeyReader(() => 'goog-key');
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), { 'google-direct': true }));
+    const decision = await Promise.resolve(
+      transform({ model: 'gemini-2.5-flash' }, ctxWith({ 'x-api-key': 'sk-gw' })),
+    );
+    expect(decision?.localHandler).toBeTypeOf('function');
+  });
+
+  it('无会话头的裸 glm-5.3 → 路由到用户智谱上游并换用户 key,不再透传默认网关', async () => {
+    const decision = await Promise.resolve(
+      transform({ model: 'glm-5.3' }, ctxWith({ 'x-api-key': 'sk-gw' })),
+    );
+    // 修复前:① 段放空 → ② 段 passthrough → LiteLLM 对裸 id 400。
+    expect(decision).toMatchObject({
+      upstreamOverride: ZHIPU_UPSTREAM,
+      headerOverride: {
+        'x-api-key': 'glm-user-key',
+        authorization: 'Bearer glm-user-key',
+      },
+    });
+  });
+
+  it('会话已反解但 provider 绑定未落(启动竞态)→ 同样走 ①.5 用户上游', async () => {
+    setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-race' ? 'sess-race' : null));
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'glm-5.3' },
+        ctxWith({ 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' }),
+      ),
+    );
+    expect(decision).toMatchObject({
+      upstreamOverride: ZHIPU_UPSTREAM,
+      headerOverride: { 'x-api-key': 'glm-user-key' },
+    });
+  });
+
+  it('同一裸 model 有多个已连接来源时拒绝请求,不外发默认网关或写计费路由', async () => {
+    const provider = (id: string, baseUrl: string) => buildUserProvider({
+      id,
+      name: id,
+      runtimes: {
+        'claude-code': {
+          baseUrl,
+          wireProtocol: 'anthropic-messages',
+          models: [{ id: 'shared-model', name: 'Shared Model' }],
+        },
+      },
+    });
+    setCustomProviders([
+      provider('provider-a', 'https://a.example/v1'),
+      provider('provider-b', 'https://b.example/v1'),
+    ]);
+    setCustomProviderKeyReader((id) => `${id}-key`);
+    setProviderViewsReader(async () => buildRegistry(getActiveCatalog(), {
+      'provider-a': true,
+      'provider-b': true,
+    }));
+    setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-race' ? 'sess-race' : null));
+
+    const decision = await Promise.resolve(
+      transform(
+        { model: 'shared-model' },
+        ctxWith({ 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' }),
+      ),
+    );
+
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({
+      'retry-after': '1',
+    }));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'provider_route_ambiguous' },
+    });
+    expect(readClaudeSessionRoute('sess-race')).toBeNull();
+  });
+
+  it('网关命名空间 id(z-ai/glm-5.3)不受 ①.5 影响,保持默认 passthrough', async () => {
+    const decision = await Promise.resolve(
+      transform({ model: 'z-ai/glm-5.3' }, ctxWith({ 'x-api-key': 'sk-gw' })),
+    );
+    expect(decision).toBeNull();
+  });
+
+  it('anthropic wire 模型(claude-*)保持 ② 段默认路径 (#886 语义)', async () => {
+    const decision = await Promise.resolve(
+      transform({ model: 'claude-haiku-4-5' }, ctxWith({ 'x-api-key': 'sk-gw' })),
+    );
+    expect(decision).toBeNull();
+  });
+
+  it.each(['missing-provider', 'missing-runtime'] as const)(
+    'bound custom provider fails closed while %s, then recovers on the next request (#3631)',
+    async (missing) => {
+      setClaudeProxySessionIdResolver(() => 'sess-race');
+      setSessionProvider('sess-race', 'zhipu-plan');
+      const headers = { 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' };
+      // The real catalog refresh API can remove a provider or its Claude runtime
+      // while the persisted session still points at that provider.
+      setCustomProviders(missing === 'missing-provider' ? [] : [buildUserProvider({
+        id: 'zhipu-plan', name: 'Zhipu Plan', runtimes: {},
+      })]);
+      const decision = await transform({ model: 'claude-opus-5' }, ctxWith(headers));
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision?.localHandler?.({ res: { writeHead, end } } as never);
+      expect(writeHead).toHaveBeenCalledWith(503, expect.objectContaining({ 'retry-after': '1' }));
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: 'provider_route_unavailable' },
+      });
+      expect(readClaudeSessionRoute('sess-race')).toBeNull();
+
+      installZhipuProvider();
+      const retry = await transform({ model: 'claude-opus-5' }, ctxWith(headers));
+      expect(retry).toMatchObject({ upstreamOverride: ZHIPU_UPSTREAM });
+    },
+  );
+
+  it('session resolver failure is not an unbound request and cannot borrow gateway credentials (#3631)', async () => {
+    setClaudeProxySessionIdResolver(() => { throw new Error('session lookup unavailable'); });
+    const decision = await transform({ model: 'claude-opus-5' }, ctxWith({
+      'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw',
+    }));
+    const writeHead = vi.fn();
+    const end = vi.fn();
+    await decision?.localHandler?.({ res: { writeHead, end } } as never);
+    expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+    expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+      error: { code: 'routing_temporarily_unavailable' },
+    });
+  });
+
+  it.each(['async-null', 'sync-throw', 'async-reject'] as const)(
+    'an explicit custom route cannot fall through on %s (#3631)',
+    async (failure) => {
+      setClaudeProxySessionIdResolver(() => 'sess-race');
+      setSessionProvider('sess-race', 'zhipu-plan');
+      vi.spyOn(providerRoute, 'resolveSessionRouteDecision').mockImplementation(() => {
+        if (failure === 'async-null') return Promise.resolve(null);
+        if (failure === 'async-reject') return Promise.reject(new Error('route unavailable'));
+        throw new Error('route unavailable');
+      });
+      const decision = await transform({ model: 'claude-opus-5' }, ctxWith({
+        'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw',
+      }));
+      const writeHead = vi.fn();
+      const end = vi.fn();
+      await decision?.localHandler?.({ res: { writeHead, end } } as never);
+      expect(writeHead).toHaveBeenCalledWith(503, expect.any(Object));
+      expect(JSON.parse(end.mock.calls[0][0])).toMatchObject({
+        error: { code: failure === 'async-null' ? 'provider_route_unavailable' : 'routing_temporarily_unavailable' },
+      });
+      expect(decision?.upstreamOverride).toBeUndefined();
+      expect(decision?.headerOverride).toBeUndefined();
+    },
+  );
+
+  it('目录外未知模型 → ①.5 解析落空,回落 ② 段默认(与修复前一致)', async () => {
+    const decision = await Promise.resolve(
+      transform({ model: 'who-knows-9' }, ctxWith({ 'x-api-key': 'sk-gw' })),
+    );
+    expect(decision).toBeNull();
+  });
+
+  it('未绑定会话的默认 passthrough 仍记 gateway 计费路由(② 段行为保留)', async () => {
+    setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-race' ? 'sess-race' : null));
+    await Promise.resolve(
+      transform(
+        { model: 'z-ai/glm-5.3' },
+        ctxWith({ 'x-claude-code-session-id': 'sdk-race', 'x-api-key': 'sk-gw' }),
+      ),
+    );
+    expect(readClaudeSessionRoute('sess-race')).toBe('gateway');
+  });
+});

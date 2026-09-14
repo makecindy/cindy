@@ -1,3 +1,7 @@
+import { codexAccountState } from '../../maker-host/codex-account-auth.js';
+import { readClaudeAccountOAuth } from '../../maker-host/subscription-account-auth.js';
+vi.mock('../../maker-host/codex-account-auth.js', () => ({ codexAccountState: vi.fn() }));
+vi.mock('../../maker-host/subscription-account-auth.js', () => ({ readClaudeAccountOAuth: vi.fn() }));
 /**
  * oneshotProviderUsability.test.ts — 凭证同步探测单测(store 全 mock)。
  */
@@ -136,4 +140,22 @@ describe('hasOneshotProviderCredential · 自定义供应商', () => {
     const noRouting = custom('c5', {});
     expect(hasOneshotProviderCredential(noRouting, 'codex')).toBe(false);
   });
+});
+
+it('probes each native account instead of borrowing the builtin login', () => {
+  vi.mocked(readClaudeAccountOAuth).mockReturnValue({ accessToken: 'a' } as never);
+  vi.mocked(codexAccountState).mockReturnValue({ authenticated: true });
+  vi.mocked(hasGrokOAuthLogin).mockReturnValue(true);
+  for (const native of ['claude', 'codex', 'xai'] as const) {
+    const p = provider({ id: `${native}-work`, source: 'user', auth: { method: 'oauth', native } });
+    expect(hasOneshotProviderCredential(p, 'codex')).toBe(true);
+  }
+  expect(readClaudeAccountOAuth).toHaveBeenCalledWith('claude-work');
+  expect(codexAccountState).toHaveBeenCalledWith('codex-work');
+  expect(hasGrokOAuthLogin).toHaveBeenCalledWith('xai-work');
+  vi.mocked(readClaudeAccountOAuth).mockReturnValue(null);
+  vi.mocked(codexAccountState).mockReturnValue({ authenticated: false });
+  vi.mocked(hasGrokOAuthLogin).mockReturnValue(false);
+  for (const native of ['claude', 'codex', 'xai'] as const)
+    expect(hasOneshotProviderCredential(provider({ id: `${native}-work`, source: 'user', auth: { method: 'oauth', native } }), 'codex')).toBe(false);
 });

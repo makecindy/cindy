@@ -6,18 +6,23 @@ describe('mobile remote session bootstrap', () => {
   it('asks the controlled desktop to include active pinned sessions outside the recent window', () => {
     const homeSource = readFileSync(resolve(process.cwd(), 'app/devices/index.tsx'), 'utf8');
     const detailSource = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
-    const listWithPinned = /local-db:sessions:list'[\s\S]{0,220}\{ includePinned: true \}/;
+    const listWithPinned =
+      /local-db:sessions:list'[\s\S]{0,280}\{ includePinned: true, fresh: true \}/;
 
     expect(homeSource).toMatch(listWithPinned);
     expect(detailSource).toMatch(listWithPinned);
   });
 
-  it('forces detail schedule-index refreshes for schedule-list and unread-clear events', () => {
+  it('shares centrally invalidated detail refreshes for schedule-list and unread-clear events', () => {
     const detailSource = readFileSync(resolve(process.cwd(), 'app/devices/[deviceId].tsx'), 'utf8');
+    const eventSource = readFileSync(resolve(process.cwd(), 'src/scheduler/remoteScheduleEvents.ts'), 'utf8');
 
     expect(detailSource).toContain('scheduleEventSnapshot.scheduleListVersion === 0');
     expect(detailSource).toContain('scheduleEventSnapshot.unreadClearVersion === 0');
-    expect(detailSource).toContain('{ force: true }');
+    expect(detailSource).toContain('loadSharedSessionScheduleIndex(deviceId, maker, canLoadScheduleIndex)');
+    expect(detailSource).not.toContain('{ force: true }');
+    expect(eventSource).toContain('projection.refresh.sessionIndex || projection.refresh.scheduleList || clearsUnread');
+    expect(eventSource).toContain('invalidateScheduleIndexForDevice(deviceId)');
     expect(detailSource).toContain('scheduleEventSnapshot.scheduleListVersion,');
     expect(detailSource).toContain('scheduleEventSnapshot.unreadClearVersion,');
   });

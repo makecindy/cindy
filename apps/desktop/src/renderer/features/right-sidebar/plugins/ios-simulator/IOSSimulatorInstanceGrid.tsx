@@ -582,7 +582,7 @@ export function IOSSimulatorInstanceGrid({
                     <img
                       src={tile.frameUrl}
                       alt={instance.simulatorName}
-                      className={`max-h-full max-w-full touch-none select-none object-contain ${busy ? 'cursor-wait opacity-70' : 'cursor-crosshair'}`}
+                      className={`max-h-full max-w-full touch-none select-none object-contain ${busy ? 'cursor-wait opacity-70' : ''}`}
                       draggable={false}
                       onPointerDown={(event) => onTilePointerDown(instance, event)}
                       onPointerUp={(event) => onTilePointerUp(instance, event)}

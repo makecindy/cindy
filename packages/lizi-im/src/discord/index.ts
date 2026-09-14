@@ -1194,6 +1194,7 @@ export class DiscordIM extends BaseIM implements ChannelIM {
         download: downloadUrl,
         media: this.host.media,
       });
+      if (!event) return;
       if (
         this.disposing ||
         this.inboundConfigVersion !== acceptedContext.inboundConfigVersion ||

@@ -57,6 +57,7 @@ function makeHarness(options: {
   const openExternal = vi.fn<(url: string) => Promise<void>>(async () => undefined);
   const debug = vi.fn();
   const warn = vi.fn();
+  let ownerActive = true;
   const translate = vi.fn((key: string) => {
     const labels: Record<string, string> = {
       'ghostPanel.externalLinkConfirm.title': '是否要 Cindy 打开外部网站',
@@ -78,6 +79,9 @@ function makeHarness(options: {
     destroyOwner: () => {
       ownerDestroyed = true;
     },
+    setOwnerActive: (active: boolean) => {
+      ownerActive = active;
+    },
     deps: {
       gate,
       resolveOwner,
@@ -85,6 +89,7 @@ function makeHarness(options: {
       openExternal,
       translate,
       logger: { debug, warn },
+      isOwnerActive: () => ownerActive,
     },
   };
 }
@@ -180,6 +185,7 @@ describe('runGhostExternalLinkNavigation', () => {
       openExternal,
       translate: (key: string) => key,
       logger: { debug: vi.fn(), warn: vi.fn() },
+      isOwnerActive: () => true,
     };
 
     for (const { surface, contents, owner } of entries) {
@@ -285,6 +291,36 @@ describe('runGhostExternalLinkNavigation', () => {
     );
 
     expect(harness.showMessageBox).toHaveBeenCalledTimes(2);
+  });
+
+  it('owner 在确认期间切换后，即使旧确认返回打开也不执行', async () => {
+    const contents = makeContents();
+    const harness = makeHarness({});
+    let finishDialog!: (value: { response: number }) => void;
+    harness.showMessageBox.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishDialog = resolve;
+        }),
+    );
+
+    const pending = runGhostExternalLinkNavigation(
+      {
+        ghostId: 'xd-sites',
+        url: 'https://example.com/owner-a-data',
+        hostContents: contents.host,
+        guestContents: contents.guest,
+      },
+      harness.deps,
+    );
+    await vi.waitFor(() => expect(harness.showMessageBox).toHaveBeenCalledOnce());
+
+    harness.setOwnerActive(false);
+    finishDialog({ response: 0 });
+    await pending;
+
+    expect(harness.openExternal).not.toHaveBeenCalled();
+    expect(harness.warn).not.toHaveBeenCalled();
   });
 
   it('guest 已脱离原宿主时不弹窗也不打开', async () => {

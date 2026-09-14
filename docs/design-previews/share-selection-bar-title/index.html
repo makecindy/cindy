@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Cindy Mobile · ShareSelectionBar 复刻预览</title>
+<style>
+  :root {
+    --surface: #EDEDED;
+    --surface-elevated: #F8F8F8;
+    --surface-translucent: rgba(237, 237, 237, 0.78);
+    --border-translucent: rgba(198, 201, 206, 0.62);
+    --text-primary: #3C3F43;
+    --text-secondary: #8C8E94;
+    --cta: #3C3F43;
+    --cta-text: #FCFCFC;
+    --border: #C6C9CE;
+  }
+  html[data-mode="dark"] {
+    --surface: #2A2828;
+    --surface-elevated: #312F2F;
+    --surface-translucent: rgba(42, 40, 40, 0.78);
+    --border-translucent: rgba(67, 67, 67, 0.62);
+    --text-primary: #D4D4D4;
+    --text-secondary: #6F6F6F;
+    --cta: #EEEEEE;
+    --cta-text: #252222;
+    --border: #434343;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    background: var(--surface);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+      "Helvetica Neue", Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  .phone {
+    width: 390px;
+    height: 320px;
+    border-radius: 40px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 18px 50px rgba(0, 0, 0, 0.18);
+  }
+  .chat {
+    flex: 1;
+    padding: 18px 14px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+  }
+  .bubble {
+    max-width: 78%;
+    padding: 9px 12px;
+    border-radius: 16px;
+    font-size: 15px;
+    line-height: 21px;
+    color: var(--text-primary);
+  }
+  .bubble.assistant {
+    align-self: flex-start;
+    background: var(--surface-elevated);
+    border: 1px solid var(--border);
+  }
+  .bubble.user {
+    align-self: flex-end;
+    background: var(--surface-translucent);
+    border: 1px solid var(--border);
+  }
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-height: 64px;
+    padding: 8px 12px;
+    background: var(--surface-translucent);
+    border-top: 1px solid var(--border-translucent);
+  }
+  .bar .icon-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 44px;
+    width: 44px;
+    color: var(--text-secondary);
+  }
+  .bar .info { flex: 1; min-width: 0; }
+  .bar .title {
+    color: var(--text-primary);
+    font-size: 16px;
+    font-weight: 500;
+    line-height: 22px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bar .subtitle {
+    margin-top: 4px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    line-height: 18px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bar .share {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    min-height: 44px;
+    min-width: 112px;
+    padding: 0 16px;
+    border-radius: 9999px;
+    background: var(--cta);
+    color: var(--cta-text);
+    font-size: 16px;
+    font-weight: 500;
+  }
+  svg { display: block; }
+</style>
+</head>
+<body>
+  <div class="phone">
+    <div class="chat">
+      <div class="bubble assistant" data-i18n="b1">可以，我把这段改好了。</div>
+      <div class="bubble user" data-i18n="b2">收到，另外麻烦看一下分享图片的标题。</div>
+      <div class="bubble assistant" data-i18n="b3">已经加上了标题行，选中的消息会显示数量。</div>
+    </div>
+    <div class="bar">
+      <div class="icon-btn" role="img" aria-label="取消分享">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+      </div>
+      <div class="info">
+        <div class="title" data-i18n="title"></div>
+        <div class="subtitle" data-i18n="subtitle"></div>
+      </div>
+      <div class="share">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" x2="12" y1="2" y2="15"/></svg>
+        <span data-i18n="share"></span>
+      </div>
+    </div>
+  </div>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const mode = params.get('mode') === 'dark' ? 'dark' : 'light';
+    const locale = params.get('locale') === 'en' ? 'en' : 'zh-CN';
+    document.documentElement.dataset.mode = mode;
+    document.documentElement.lang = locale;
+    const copy = {
+      'zh-CN': {
+        title: '分享对话',
+        subtitle: '已选 2 条消息',
+        share: '分享图片',
+        b1: '可以，我把这段改好了。',
+        b2: '收到，另外麻烦看一下分享图片的标题。',
+        b3: '已经加上了标题行，选中的消息会显示数量。',
+      },
+      en: {
+        title: 'Share Conversation',
+        subtitle: '2 messages selected',
+        share: 'Share image',
+        b1: 'Done, I fixed that part.',
+        b2: 'Got it — also, please check the share-image title.',
+        b3: 'Added the title row; the count shows how many messages are selected.',
+      },
+    };
+    for (const [key, value] of Object.entries(copy[locale])) {
+      document.querySelector('[data-i18n="' + key + '"]').textContent = value;
+    }
+  </script>
+</body>
+</html>

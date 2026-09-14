@@ -15,6 +15,11 @@ import {
 } from '../topics.js';
 
 describe('topicForPush', () => {
+  it('delivers companion task state to the parent and private-thread changes to the account topic', () => {
+    expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: 'parent', childSessionId: 'child' })).toBe('session:parent');
+    expect(topicForPush('maker:bot-delegation:changed', { parentSessionId: null })).toBeNull();
+    expect(topicForPush('maker:bot-direct-message:changed', { threadId: 'private' })).toBe('sessions');
+  });
   it('会话列表级 channel → sessions', () => {
     expect(topicForPush('local-db:sessions:created', { sessionId: 's1' })).toBe('sessions');
     expect(
@@ -34,6 +39,7 @@ describe('topicForPush', () => {
 
   it('账号 / 全局级 channel → sessions(随列表订阅走)', () => {
     expect(topicForPush('maker:provider:changed', { revision: 42 })).toBe('sessions');
+    expect(topicForPush('maker:agents:changed', {})).toBe('sessions');
     expect(topicForPush('maker:schedule:event', { kind: 'x' })).toBe('sessions');
     expect(topicForPush('maker:project-automation:event', {})).toBe('sessions');
     // 被控端当前草稿全量变更(无 sessionId)→ 并入 sessions topic。
@@ -45,6 +51,31 @@ describe('topicForPush', () => {
       sourceBranch: 'feature/mobile',
       revision: 2,
     })).toBe('sessions');
+    expect(topicForPush('sidebar-settings:project-order-changed', {
+      projectOrder: 'custom',
+      manualProjectOrder: ['local:/a'],
+    })).toBe('sessions');
+    // Claude 订阅余量快照(账号级,无 sessionId;null = 登出清除)→ 并入 sessions topic。
+    expect(topicForPush('usage:claude-subscription-changed', {
+      fiveHour: { utilization: 4, resetsAt: 1788345000 },
+    })).toBe('sessions');
+    expect(topicForPush('usage:claude-subscription-changed', null)).toBe('sessions');
+    // 其余账号级用量快照同口径。
+    expect(topicForPush('usage:codex-account-changed', {
+      primary: { usedPercent: 3 }, webSnapshot: null,
+    })).toBe('sessions');
+    expect(topicForPush('usage:claude-account-changed', {
+      spend: 0.06, maxBudget: 10000,
+    })).toBe('sessions');
+    expect(topicForPush('usage:xai-subscription-changed', { creditUsagePercent: 2 })).toBe('sessions');
+    expect(topicForPush('usage:xai-rate-limit-changed', null)).toBe('sessions');
+  });
+
+  it('claude-session-route-changed → session:<id>(payload 顶层 sessionId 兜底路由)', () => {
+    expect(topicForPush('maker:claude-session-route-changed', {
+      sessionId: 'sess-1',
+      route: 'subscription',
+    })).toBe('session:sess-1');
   });
 
   it('learn:event → sessions(账号级:run 关联触发/蒸馏两个任务,单 sessionId 路由会漏)', () => {
@@ -166,3 +197,11 @@ describe('expandMakerEventBatchPayload', () => {
       .toBe('session:s7');
   });
 });
+
+
+it.each(['usage:codex-provider-account-changed', 'usage:subscription-provider-account-changed', 'usage:xai-provider-rate-limit-changed'])(
+  '%s forwards both scoped usage and account clears on the sessions topic', channel => {
+    expect(topicForPush(channel, { providerId: 'account-2', snapshot: { primary: { usedPercent: 10 } } })).toBe('sessions');
+    expect(topicForPush(channel, { providerId: 'account-2', snapshot: null })).toBe('sessions');
+  },
+);

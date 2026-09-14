@@ -24,6 +24,7 @@ describe('lacksTeamManagePermission', () => {
   it('团队归属 + 我是 viewer → 无权,拦截', () => {
     const map = roleMap({ 'team-c': 'viewer' });
     expect(lacksTeamManagePermission({ ownerType: 'org', authorId: 'team-c' }, map)).toBe(true);
+    expect(lacksTeamManagePermission({ ownerType: 'organization', authorId: 'team-c' }, map)).toBe(true);
   });
 
   it('角色未知(团队不在列表 / Hub 未返回 myRole)→ 不主动拦截,留给 403 兜底', () => {

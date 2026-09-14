@@ -65,6 +65,7 @@ export function createMessageHandler(
       return false;
     }
   }
+
   const log = createLogger(`im:${channel}:msg`);
 
   /** Per-user serial lock — same shape as legacy messageRouter.turnLocks. */
@@ -307,11 +308,7 @@ export function createMessageHandler(
 
     // ── invoke agent ────────────────────────────────────────────────────────
     // 送模型正文改写钩子(群上下文拼装): 失败按"不改写"降级, 不阻断消息。
-    let prepared: {
-      agentText: string;
-      contextAttachments?: IMAttachment[];
-      commit?: () => void | Promise<void>;
-    } | null = null;
+    let prepared: Awaited<ReturnType<NonNullable<ImChannelAdapter['prepareAgentTurnText']>>> = null;
     // 「已收到」表情先落, 再拼上下文 —— 群上下文拼装要回翻群历史(可能翻页 + 调
     // 轻量模型), 慢的时候几十秒没有任何反馈, 用户只能看着不动的消息猜 bot 是不是
     // 挂了(实测最慢到 87s)。句柄交给 turn 接管(turn 收口时照常撤掉/换成结果
@@ -373,6 +370,7 @@ export function createMessageHandler(
           : {}),
         ...(prePersisted ? { prePersistedUserMessage: prePersisted } : {}),
         ...(prepared ? { agentText: prepared.agentText } : {}),
+        ...(prepared?.contextSnapshot ? { contextSnapshot: prepared.contextSnapshot } : {}),
         // 群历史附件只进模型消息、不落库(见 ImRunAgentTurnArgs.contextAttachments)。
         ...(prepared?.contextAttachments?.length
           ? { contextAttachments: prepared.contextAttachments }
@@ -414,12 +412,13 @@ export function createMessageHandler(
       log.error(`runAgentTurn threw: ${msg}`);
       // 本条消息自己开了话题(groupContextLane)时, 开场白卡还没被流式认领 —
       // 用内部错误内容收口它, 否则卡永久残留且同话题下一条会 patch 错卡。
+      const errorText = ui.agent.sendInternalError(msg);
       const openerConsumed = event.groupContextLane
-        ? await consumeOpenerWithText(event.senderId, ui.agent.sendInternalError(msg))
+        ? await consumeOpenerWithText(event.senderId, errorText)
         : false;
       if (!openerConsumed) {
         try {
-          await im.sendText(event.senderId, ui.agent.sendInternalError(msg), {
+          await im.sendText(event.senderId, errorText, {
             threadTs: event.scopeKey,
             fallbackOpenerId: richIm?.takeNotedFallbackOpenerId?.(event.senderId, 'markdown'),
           });

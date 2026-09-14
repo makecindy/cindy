@@ -5,6 +5,7 @@
 //  - 崩溃恢复有界
 //  - getHostWebContents 三态(detached+open → 子窗;否则主窗)
 //  - setContext 缓存 + 仅窗口活跃时转发;routeCommand 原子裁决宿主
+//  - 跨 session 呼起 adopt/pin,不被主窗焦点抢回
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BrowserWindow, WebContents } from 'electron';
@@ -99,7 +100,10 @@ function fakeWindow(id = 1): FakeWindow {
   return win;
 }
 
-function makeHarness(initial: Partial<RsbWindowSettings> = {}) {
+function makeHarness(
+  initial: Partial<RsbWindowSettings> = {},
+  extras: Pick<RsbWindowControllerDeps, 'resolveHostContext'> = {},
+) {
   let settings: RsbWindowSettings = { detached: false, lastOpen: false, ...initial };
   let quitting = false;
   const windows: FakeWindow[] = [];
@@ -142,6 +146,7 @@ function makeHarness(initial: Partial<RsbWindowSettings> = {}) {
     commandChannel: 'cmd-channel',
     tabHandoffChannel: 'handoff-channel',
     isQuitting: () => quitting,
+    resolveHostContext: extras.resolveHostContext,
     log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
   };
   const controller = new RsbWindowController(deps);
@@ -327,6 +332,21 @@ describe('open / close (hide-reuse)', () => {
     expect(h.controller.getState().open).toBe(true);
   });
 
+  it('native minimize releases a cross-session pin', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    expect(h.controller.getContext()?.sessionId).toBe('s1');
+    win.emitWindowEvent('minimize');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
   it('native taskbar restore updates the main-window state mirror', () => {
     const h = makeHarness({ detached: true });
     h.controller.prewarm();
@@ -360,6 +380,30 @@ describe('open / close (hide-reuse)', () => {
     expect(win.show).toHaveBeenCalledOnce();
     expect(win.focus).toHaveBeenCalledOnce();
     expect(h.controller.getState().open).toBe(true);
+  });
+
+  it('hot reopen after a focus switch records the visible host', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
+    h.controller.prewarm();
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.open();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+
+    h.controller.close();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+    expect(h.broadcasts.at(-1)).toMatchObject({
+      detached: true,
+      open: false,
+      hostSessionId: 's1',
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+
+    h.controller.open();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+    expect(h.controller.getState().hostSessionId).toBe('s2');
   });
 
   it('open repairs stale controller visibility using the native window state', () => {
@@ -745,12 +789,136 @@ describe('ensureOpenForAutomation', () => {
     await assertion;
   });
 
+  it('ready timeout with a session pin lets a later context take the host', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const assertion = expect(pending).rejects.toThrow(/ready timeout/);
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    markReady(h.controller, h.windows[0]);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
   it('window closed before ready rejects', async () => {
     const h = makeHarness({ detached: true });
     const pending = h.controller.ensureOpenForAutomation();
     const assertion = expect(pending).rejects.toThrow(/closed before ready/);
     h.windows[0].emitClosed();
     await assertion;
+  });
+
+  it('waits for the target session context before resolving a tab-op host', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    expect(h.controller.getContext()).toBeNull();
+    lookup = resolved;
+    await vi.advanceTimersByTimeAsync(400);
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.controller.getContext()).toEqual(resolved);
+  });
+
+  it('resolves a host waiter when Main reports the pinned session', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    h.controller.setContext({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/from-main',
+    });
+    await expect(pending).resolves.toBeUndefined();
+    expect(h.controller.getContext()).toEqual({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/from-main',
+    });
+  });
+
+  it('cancels an in-flight adopt after Main leaves chat', async () => {
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let finishLookup!: (value: typeof resolved) => void;
+    const lookup = new Promise<typeof resolved>((resolve) => {
+      finishLookup = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    finishLookup(resolved);
+    await expect(pending).rejects.toThrow(/cancelled/);
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({
+      sessionId: null,
+      workdir: null,
+      remoteHostId: null,
+      available: false,
+    });
+  });
+
+  it('does not show a pending window after Main leaves chat', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    expect(h.windows).toHaveLength(1);
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    await expect(pending).rejects.toThrow(/cancelled/);
+    markReady(h.controller, h.windows[0]);
+    expect(h.windows[0].show).not.toHaveBeenCalled();
+    expect(h.windows[0].showInactive).not.toHaveBeenCalled();
+    expect(h.controller.getState().open).toBe(false);
+  });
+
+  it('fails closed when the target session context never arrives', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pending = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const assertion = expect(pending).rejects.toThrow(/host context not ready/);
+    await vi.advanceTimersByTimeAsync(8000);
+    await assertion;
+    expect(h.controller.getContext()).toBeNull();
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
   });
 });
 
@@ -912,10 +1080,512 @@ describe('setContext / routeCommand', () => {
     });
   });
 
-  it('context mismatch returns stale-context', async () => {
+  it('context mismatch adopts the command session and routes', async () => {
+    const remote = {
+      sessionId: 's1',
+      workdir: '/remote/app',
+      remoteHostId: 'ssh-1',
+      deviceLinkDeviceId: 'device-1',
+      subagentsAvailable: true,
+      available: true,
+    };
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? remote : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toEqual(remote);
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+    expect(h.sends.at(-1)).toEqual({
+      channel: 'cmd-channel',
+      payload: { type: 'open-terminal', sessionId: 's1' },
+    });
+    h.controller.close();
+    expect(h.controller.getState().hostSessionId).toBe('s1');
+  });
+
+  it('does not forge a local host when resolve misses', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    expect(h.controller.getContext()).toEqual(focused);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+  });
+
+  it('starts a bounded waiter when allowOpen arrives before any context', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getContext()?.sessionId).not.toBe('s2');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
+  });
+
+  it('releases a visible-window pin when allowOpen host never resolves', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
+  it('opens a hidden window after a missed allowOpen lookup is adopted', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open();
+    h.controller.close();
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    expect(h.controller.getContext()).toBeNull();
+    lookup = resolved;
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.controller.getState().open).toBe(true);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
+  it('retries a missed host lookup and flushes the queued reveal', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    lookup = resolved;
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
+  it('does not flush a pinned session queue into a foreign host context', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    h.controller.refreshContext(h.windows[0].webContents as unknown as WebContents);
+    expect(h.controller.getContext()).toEqual(focused);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+  });
+
+  it('keeps retrying a missed lookup after the fast budget without another focus change', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(h.controller.getContext()).toEqual(focused);
+    lookup = resolved;
+    h.sends.length = 0;
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
+  it('retries an exhausted lookup when the main window reports another context', async () => {
+    const focused = { ...ctx, sessionId: 's2' };
+    const resolved = {
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/device/app',
+      deviceLinkDeviceId: 'dev-1',
+    };
+    let lookup: typeof resolved | null = null;
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: () => lookup,
+    });
+    h.controller.setContext(focused);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('queued');
+    await vi.advanceTimersByTimeAsync(2_500);
+    expect(h.controller.getContext()).toEqual(focused);
+    lookup = resolved;
+    h.sends.length = 0;
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    await vi.advanceTimersByTimeAsync(400);
+    expect(h.controller.getContext()).toEqual(resolved);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
+  });
+
+  it('reuses a previously reported host context instead of forging a local one', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/visited',
+      remoteHostId: 'ssh-visited',
+      deviceLinkDeviceId: 'dev-visited',
+      subagentsAvailable: true,
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toMatchObject({
+      sessionId: 's1',
+      workdir: '/visited',
+      remoteHostId: 'ssh-visited',
+      deviceLinkDeviceId: 'dev-visited',
+      subagentsAvailable: true,
+    });
+  });
+
+  it('does not switch a visible host for passive commands from another session', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext({ ...ctx, sessionId: 's2' });
-    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('stale-context');
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.sends.length = 0;
+    const cmd = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    await expect(
+      h.controller.routeCommand({ command: cmd, allowOpen: false }),
+    ).resolves.toBe('queued');
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([]);
+    expect(h.sends.filter((entry) => entry.channel === 'ctx-channel')).toEqual([]);
+  });
+
+  it('keeps another session queued when a later reveal adopts a different host', async () => {
+    const s3 = { ...ctx, sessionId: 's3' };
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's3' ? s3 : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const first = { type: 'open-web-browser' as const, sessionId: 's1', url: 'https://a.example' };
+    await expect(
+      h.controller.routeCommand({ command: first, allowOpen: false }),
+    ).resolves.toBe('queued');
+    const pending = h.controller.routeCommand(terminalRequest('s3'));
+    markReady(h.controller, h.windows[0]);
+    await expect(pending).resolves.toBe('routed');
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's3' } },
+    ]);
+
+    h.sends.length = 0;
+    h.controller.setContext(s3);
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: first },
+    ]);
+  });
+
+  it('remembers an earlier resolve after a later pin takes the host', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    const resolvedB = { ...ctx, sessionId: 's3', workdir: '/from-b' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return lookupA;
+        if (sessionId === 's3') return resolvedB;
+        return null;
+      },
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    await expect(h.controller.routeCommand(terminalRequest('s3'))).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    expect(h.controller.getContext()).toEqual(resolvedA);
+  });
+
+  it('does not let a replaced async route steal the host', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    const resolvedB = { ...ctx, sessionId: 's3', workdir: '/from-b' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return lookupA;
+        if (sessionId === 's3') return resolvedB;
+        return null;
+      },
+    });
+    const pendingA = h.controller.routeCommand(terminalRequest('s1'));
+    const pendingB = h.controller.routeCommand(terminalRequest('s3'));
+    markReady(h.controller, h.windows[0]);
+    await expect(pendingB).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).resolves.toBe('queued');
+    expect(h.controller.getContext()).toEqual(resolvedB);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      { type: 'open-terminal', sessionId: 's3' },
+    ]);
+  });
+
+  it('flushes only the current host on attach, then the focused session later', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    const closeA = { type: 'close-orca-workers-tab' as const, sessionId: 's1' };
+    const closeB = { type: 'close-orca-workers-tab' as const, sessionId: 's2' };
+    await expect(
+      h.controller.routeCommand({ command: closeA, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    await expect(
+      h.controller.routeCommand({ command: closeB, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setDetached(false);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeB,
+    ]);
+    h.sends.length = 0;
+    h.controller.setContext(ctx);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeA,
+    ]);
+  });
+
+  it('flushes the main-window focus queue when merging back from a pinned host', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const closeB = { type: 'close-orca-workers-tab' as const, sessionId: 's2' };
+    await expect(
+      h.controller.routeCommand({ command: closeB, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setDetached(false);
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel').map((entry) => entry.payload)).toEqual([
+      closeB,
+    ]);
+  });
+
+  it('lets a user raise of the current host cancel a foreign pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.open({ userInitiated: true });
+    finishA(resolvedA);
+    await Promise.resolve();
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('lets a command for the visible host replace a foreign async pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.routeCommand(terminalRequest('s1'));
+    await expect(h.controller.routeCommand(terminalRequest('s2'))).resolves.toBe('routed');
+    finishA(resolvedA);
+    await expect(pendingA).resolves.toBe('queued');
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('lets ensureOpen for the visible host cancel a foreign pin', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    await expect(h.controller.ensureOpenForAutomation({ sessionId: 's2' })).resolves.toBeUndefined();
+    finishA(resolvedA);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    expect(h.controller.getContext()?.sessionId).toBe('s2');
+  });
+
+  it('submits adopted context before revealing a pending window', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open();
+    h.controller.close();
+    h.sends.length = 0;
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    const channels = h.sends.map((entry) => entry.channel);
+    expect(channels.indexOf('ctx-channel')).toBeGreaterThanOrEqual(0);
+    expect(channels.indexOf('ctx-channel')).toBeLessThan(
+      channels.indexOf('rsb-window:visibility-changed'),
+    );
+    expect(h.sends.find((entry) => entry.channel === 'ctx-channel')?.payload).toMatchObject({
+      sessionId: 's1',
+    });
+  });
+
+  it('cancels an earlier ready waiter when a later pin takes the host', async () => {
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => {
+        if (sessionId === 's1') return { ...ctx, sessionId: 's1' };
+        if (sessionId === 's3') return { ...ctx, sessionId: 's3' };
+        return null;
+      },
+    });
+    const pendingA = h.controller.ensureOpenForAutomation({ sessionId: 's1' });
+    const pendingB = h.controller.ensureOpenForAutomation({ sessionId: 's3' });
+    markReady(h.controller, h.windows[0]);
+    await expect(pendingA).rejects.toThrow(/cancelled/);
+    await expect(pendingB).resolves.toBeUndefined();
+    expect(h.controller.getContext()?.sessionId).toBe('s3');
+  });
+
+  it('does not reopen a left session after adopt returns', async () => {
+    const resolvedA = { ...ctx, sessionId: 's1', workdir: '/from-a' };
+    let finishA!: (value: typeof resolvedA) => void;
+    const lookupA = new Promise<typeof resolvedA>((resolve) => {
+      finishA = resolve;
+    });
+    const h = makeHarness({ detached: true }, {
+      resolveHostContext: (sessionId) => (sessionId === 's1' ? lookupA : null),
+    });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const pending = h.controller.routeCommand(terminalRequest());
+    h.controller.setContext({ sessionId: null, workdir: null, remoteHostId: null, available: false });
+    finishA(resolvedA);
+    await expect(pending).resolves.toBe('queued');
+    expect(h.controller.getContext()).toBeNull();
+  });
+
+  it('does not advertise a cancelled pending reveal as a user close', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    await vi.advanceTimersByTimeAsync(8000);
+    expect(h.broadcasts.at(-1)).toMatchObject({ open: false, userClose: false });
+  });
+
+  it('pinned host session ignores later focus switches until the user arrives', () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    const win = h.windows[0];
+    markReady(h.controller, win);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()).toEqual(ctx);
+
+    h.controller.setContext({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/adopted',
+    });
+    expect(h.controller.getContext()).toEqual({
+      ...ctx,
+      sessionId: 's1',
+      workdir: '/adopted',
+    });
+  });
+
+  it('releases a fire-and-forget open pin when the host never resolves', async () => {
+    const h = makeHarness({ detached: true }, { resolveHostContext: () => null });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    h.controller.prewarm();
+    markReady(h.controller, h.windows[0]);
+    h.controller.open({ userInitiated: false, sessionId: 's1' });
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    expect(h.controller.getContext()?.sessionId).not.toBe('s3');
+    await vi.advanceTimersByTimeAsync(8000);
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    h.controller.open();
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's3' });
+  });
+
+  it('does not pin an already-active host, so a later focus switch is applied', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext(ctx);
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    await expect(h.controller.routeCommand(terminalRequest())).resolves.toBe('routed');
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    expect(h.controller.getContext()).toEqual({ ...ctx, sessionId: 's2' });
   });
 
   it('allowOpen=false + window hidden: stays queued through prewarm and flushes on open', async () => {
@@ -968,14 +1638,37 @@ describe('setContext / routeCommand', () => {
     expect(h.sends.filter(e => e.channel === 'cmd-channel')).toEqual([]);
   });
 
-  it('context switch during ready wait: returns stale-context', async () => {
+  it('pins the opening session so a focus switch during ready wait cannot drop it', async () => {
     const h = makeHarness({ detached: true });
     h.controller.setContext(ctx);
     const pending = h.controller.routeCommand(terminalRequest());
     h.controller.setContext({ ...ctx, sessionId: 's2' });
     const win = h.windows[0];
     markReady(h.controller, win);
-    await expect(pending).resolves.toBe('stale-context');
+    await expect(pending).resolves.toBe('routed');
+    expect(h.controller.getContext()).toEqual(ctx);
+    expect(h.sends.at(-1)).toEqual({
+      channel: 'cmd-channel',
+      payload: { type: 'open-terminal', sessionId: 's1' },
+    });
+  });
+
+  it('keeps another session queued across an ordinary focus switch', async () => {
+    const h = makeHarness({ detached: true });
+    h.controller.setContext({ ...ctx, sessionId: 's2' });
+    const first = { type: 'open-web-browser' as const, sessionId: 's1', url: 'https://a.example' };
+    await expect(
+      h.controller.routeCommand({ command: first, allowOpen: false }),
+    ).resolves.toBe('queued');
+    h.controller.setContext({ ...ctx, sessionId: 's3' });
+    await expect(h.controller.routeCommand(terminalRequest('s1'))).resolves.toBe('queued');
+    h.controller.open();
+    markReady(h.controller, h.windows[0]);
+    h.controller.setContext({ ...ctx, sessionId: 's1' });
+    expect(h.sends.filter((entry) => entry.channel === 'cmd-channel')).toEqual([
+      { channel: 'cmd-channel', payload: first },
+      { channel: 'cmd-channel', payload: { type: 'open-terminal', sessionId: 's1' } },
+    ]);
   });
 });
 

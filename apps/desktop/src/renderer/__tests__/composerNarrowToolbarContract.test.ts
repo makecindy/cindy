@@ -12,13 +12,13 @@ const modelSelectorSource = read('ModelSelector.tsx');
 const permissionSelectorSource = read('PermissionSelector.tsx');
 
 describe('composer narrow toolbar contract', () => {
-  it('uses measured card width for both default-session and create-agent composers', () => {
+  it('uses discrete card-width modes for both default-session and create-agent composers', () => {
+    expect(chatInputSource).toContain("useState<ToolbarWidthMode>('unmeasured')");
+    expect(chatInputSource).toContain('currentMode === nextMode ? currentMode : nextMode');
     expect(chatInputSource).toContain(
-      'const useNarrowToolbar = narrowToolbar || (toolbarWidth != null && toolbarWidth < 600);',
+      'const useNarrowToolbar = narrowToolbar || autoNarrowToolbar;',
     );
-    expect(chatInputSource).not.toContain(
-      'isCreateAgentVariant &&\n    (narrowToolbar || (toolbarWidth != null && toolbarWidth < 600))',
-    );
+    expect(chatInputSource).not.toContain('setToolbarWidth(el.clientWidth)');
     expect(chatInputSource).toContain('compactToolbar={useNarrowToolbar}');
     expect(chatInputSource).toContain('ultraCompactToolbar={useUltraCompactToolbar}');
     expect(chatInputSource).toContain('iconOnly={useUltraCompactToolbar}');
@@ -38,6 +38,8 @@ describe('composer narrow toolbar contract', () => {
     expect(modelSelectorSource).toContain(
       'const showTriggerTail = engineMarkOption ? !isUltraCompactToolbar : !isCompactToolbar;',
     );
+    // 长英文档名在固定宽度的紧凑 trigger 内允许省略显示，完整值仍由 title / aria-label 提供。
+    expect(modelSelectorSource).toContain("? 'min-w-0 shrink truncate'");
     expect(modelSelectorSource).toContain('{effortLabel && showTriggerTail && (');
     expect(permissionSelectorSource).toContain(
       'const isIconOnly = iconOnly && !isFieldTrigger;',

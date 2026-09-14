@@ -7,6 +7,20 @@ export interface ResolveAgentCredentialModeOptions {
   model?: string | null;
 }
 
+/** Cindy Provider 中由 Codex Responses 上游实现远程压缩的模型路由。 */
+export function isCindyProviderCodexRemoteCompactionRoute(input: {
+  providerId: string | null | undefined;
+  model: string | null | undefined;
+}): boolean {
+  const providerId = input.providerId?.trim() || null;
+  const model = input.model?.trim() ?? '';
+  return (
+    (providerId === null || providerId === 'xd') &&
+    model.startsWith('codex/') &&
+    model.length > 'codex/'.length
+  );
+}
+
 /**
  * 根据本次会话的显式来源推导子进程凭证形态。
  *

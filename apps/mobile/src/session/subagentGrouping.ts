@@ -6,7 +6,7 @@
  * 消息的 `agentMeta.parentUuid`;Agent 的最终 tool_result(子 agent 终稿)经 tool_use_id 配对;codex
  * 无 parentUuid → 自然不触发;嵌套真实存在(深度通常 1,极少 2)。
  *
- * 纯函数,可单测。归一化 / 分桶不靠模型判断(规则 9):全程按 parentUuid 精确归属 + createdAt 定序。
+ * 纯函数,可单测。按 parentUuid 精确归属;历史视图保留来源顺序,旧路径按 createdAt 定序。
  */
 import {
   buildMessageRenderItems,
@@ -50,7 +50,7 @@ export function hasSubagentMessages(normalized: readonly NormalizedRemoteMessage
 export function buildSubagentAwareRenderItems(
   normalized: readonly NormalizedRemoteMessage[],
   resultMeta: ReadonlyMap<string, SubagentResultMeta>,
-  options: MessageRenderOptions,
+  options: MessageRenderOptions & { preserveSourceOrder?: boolean },
 ): MobileMessageRenderItem[] {
   // 不变量:每条 normalized 消息在输出里恰好出现一次。
   // 生产是 80 条最近窗口(分页),Agent tool_use 的 createdAt 早于其 children → 窗口边界可能把某子 agent
@@ -77,20 +77,23 @@ export function buildSubagentAwareRenderItems(
       topLevel.push(message);
     }
   }
-  // 各桶按 createdAt 稳定定序,保证确定性(归一化已大致有序,这里兜底)。
-  for (const bucket of byParent.values()) bucket.sort(compareByCreatedAt);
+  // 历史视图已给出权威顺序,不能再按流式消息的临时时间排序。
+  if (!options.preserveSourceOrder) {
+    for (const bucket of byParent.values()) bucket.sort(compareByCreatedAt);
+  }
 
   const consumed = new Set<string>();
   const out = buildLevel(topLevel, byParent, resultMeta, options, 0, consumed);
 
   // F2 兜底:深度上限(MAX_SUBAGENT_NEST_DEPTH)导致未被任何 subagent_group 消费的桶。真实嵌套 ≤2 够不到
   // cap=5,纯防御异常数据;但绝不 silent drop —— 把这些 children 追加 flat 渲染,保住"恰好出现一次"不变量。
-  const leftover: NormalizedRemoteMessage[] = [];
-  for (const [parentId, bucket] of byParent) {
-    if (!consumed.has(parentId)) leftover.push(...bucket);
-  }
+  // 从原序列取回未消费行,避免拼接多个 parent 桶打乱交错段落。
+  const leftover = normalized.filter((message) => {
+    const parent = parentUuidOf(message);
+    return parent !== null && byParent.has(parent) && !consumed.has(parent);
+  });
   if (leftover.length > 0) {
-    leftover.sort(compareByCreatedAt);
+    if (!options.preserveSourceOrder) leftover.sort(compareByCreatedAt);
     out.push(...buildMessageRenderItems(leftover, options));
   }
   return out;
@@ -142,7 +145,11 @@ function buildSubagentGroup(
   const subagentType = readString(input?.subagent_type);
   const summary = agent.secondaryBody && agent.secondaryBody.trim() ? agent.secondaryBody : null;
   const result = id ? resultMeta.get(id) : undefined;
-  const status = computeStatus(!!result, options.isSessionStreaming === true);
+  const status = computeStatus(
+    agent.agentTaskStatus,
+    !!result,
+    options.isSessionStreaming === true,
+  );
   const startMs = Date.parse(agent.createdAt);
   const durationMs = result && Number.isFinite(startMs) && result.createdAtMs >= startMs
     ? result.createdAtMs - startMs
@@ -158,15 +165,13 @@ function buildSubagentGroup(
   };
 }
 
-// status:有 closing tool_result → 完成;无 result → 仍流式则运行中,否则按完成兜底。
-// 不再产出 'failed':坐实自被控机 local DB —— Agent 的 tool_result 既无 is_error 结构化列、content 也是
-// 纯总结字符串(833 条 0 个 JSON 对象 / 0 个结构化 isError),没有可靠的失败信号。此前用关键词扫总结正文
-// 判失败会把 code-review/research 类(正文天然讨论 error/失败)误判成失败(规则 9:别靠正文启发式猜状态)。
-// 桌面同样不判失败。宁可不标失败,也绝不假阳性。
+// 精确结构化终态优先；存量历史缺字段时保留原有 result/streaming 兼容兜底。
 function computeStatus(
+  persistedStatus: MobileSubagentGroupItem['status'] | undefined,
   hasResult: boolean,
   streaming: boolean,
 ): MobileSubagentGroupItem['status'] {
+  if (persistedStatus) return persistedStatus;
   if (hasResult) return 'completed';
   return streaming ? 'running' : 'completed';
 }

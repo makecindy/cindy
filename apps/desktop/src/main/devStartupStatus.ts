@@ -3,6 +3,9 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import type { DevProfileKind } from './devCliFlags.js';
+import { withLocalProfileMigrationStartupBarrier } from './localProfileDataMigration.js';
+import { atomicWriteFileSync } from './utils/atomicWriteFile.js';
+import { readDesktopProcessIdentity, type DesktopProcessIdentity } from './desktopProcessIdentity.js';
 
 export type DesktopDevMode = 'remote' | 'local' | 'unknown';
 export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
@@ -19,9 +22,12 @@ export type DesktopDevInstanceState = 'starting' | 'ready' | 'failed';
  */
 export interface DesktopDevInstanceRecord {
   schemaVersion: 1;
+  worktreeLeaseProtocol?: 1;
   instanceId: string;
   pid: number;
   startedAtMs: number;
+  /** Optional for legacy readers/writers; absence never claims that a PID is stale. */
+  processIdentity?: DesktopProcessIdentity;
   updatedAtMs: number;
   rootDir: string;
   commit: string | null;
@@ -46,6 +52,7 @@ export interface DesktopDevInstanceRecord {
 
 export interface BeginDesktopDevInstanceOptions {
   userDataDir: string;
+  dbFilePrefix: string;
   rootDir: string;
   commit?: string | null;
   mode?: DesktopDevMode;
@@ -65,15 +72,7 @@ let applicationReady = false;
 let startupSettled = false;
 
 function atomicWriteJson(filePath: string, value: unknown): void {
-  const tempPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
-  try {
-    fs.mkdirSync(path.dirname(filePath), { recursive: true });
-    fs.writeFileSync(tempPath, `${JSON.stringify(value)}\n`, { mode: 0o600 });
-    fs.renameSync(tempPath, filePath);
-  } catch (error) {
-    fs.rmSync(tempPath, { force: true });
-    throw error;
-  }
+  atomicWriteFileSync(filePath, `${JSON.stringify(value)}\n`);
 }
 
 function readJson(filePath: string): Record<string, unknown> | null {
@@ -127,9 +126,9 @@ function updateTrackedInstance(
  * Register this Electron main process before single-instance arbitration.
  * The returned cleanup only removes the record when its random instanceId still owns it.
  */
-export function beginDesktopDevInstance(
+export async function beginDesktopDevInstance(
   options: BeginDesktopDevInstanceOptions,
-): () => void {
+): Promise<() => void> {
   mainWindowReady = false;
   applicationReady = false;
   startupSettled = false;
@@ -137,6 +136,7 @@ export function beginDesktopDevInstance(
   const startedAtMs = options.startedAtMs ?? Date.now();
   const record: DesktopDevInstanceRecord = {
     schemaVersion: 1,
+    worktreeLeaseProtocol: 1,
     instanceId: options.instanceId ?? randomUUID(),
     pid,
     startedAtMs,
@@ -155,11 +155,35 @@ export function beginDesktopDevInstance(
   const filePath = path.join(record.userDataDir, '.dev-instances', `${pid}.json`);
 
   try {
-    atomicWriteJson(filePath, record);
-    trackedInstance = { filePath, record };
-  } catch {
-    trackedInstance = null;
+    await withLocalProfileMigrationStartupBarrier(record.userDataDir, options.dbFilePrefix, () => {
+      // Initial registration is part of the adoption safety protocol. If it
+      // cannot be published, fail startup rather than continuing invisibly and
+      // writing local-v1 while another process snapshots it.
+      atomicWriteJson(filePath, record);
+      trackedInstance = { filePath, record };
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    markDesktopDevStartupFailed('INSTANCE_REGISTRATION_FAILED', message, {
+      phase: 'instance-registration',
+    });
+    throw error;
   }
+
+  // bootstrap-electron is loaded after registration and must install privileged
+  // schemes before Electron's ready event. Never await an OS subprocess here.
+  // Identity is optional evidence: enrich only the instance we still own, using
+  // its latest readiness state, and never resurrect a record removed on exit.
+  void readDesktopProcessIdentity(pid).then((identity) => {
+    const current = trackedInstance;
+    if (!identity || current?.record.instanceId !== record.instanceId) return;
+    if (readJson(filePath)?.instanceId !== record.instanceId) return;
+    const updated = { ...current.record, processIdentity: identity };
+    atomicWriteJson(filePath, updated);
+    trackedInstance = { filePath, record: updated };
+  }).catch(() => {
+    // Failure to enrich must not affect startup or weaken legacy PID checks.
+  });
 
   return () => {
     if (trackedInstance?.record.instanceId === record.instanceId) trackedInstance = null;

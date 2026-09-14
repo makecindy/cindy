@@ -20,11 +20,15 @@ describe('groupMineByOwner', () => {
   });
 
   it('没有个人 item 时不出现个人组(空组不显示)', () => {
-    const groups = groupMineByOwner([s('a', 'org', 't1', 'T1')]);
+    const groups = groupMineByOwner([
+      s('a', 'org', 't1', 'T1'),
+      s('b', 'organization', 't1', 'T1'),
+    ]);
     expect(groups.map((g) => g.key)).toEqual(['t1']);
+    expect(groups[0].skills.map((x: { name: string }) => x.name)).toEqual(['a', 'b']);
   });
 
-  it("ownerType 非 'org'(user / personal / 缺省)都归个人组", () => {
+  it("ownerType 非 'org'/'organization'(user / personal / 缺省)都归个人组", () => {
     const groups = groupMineByOwner([s('a', 'user', 'u', 'U'), s('b', '', 'u2', 'U2')]);
     expect(groups).toHaveLength(1);
     expect(groups[0].isPersonal).toBe(true);

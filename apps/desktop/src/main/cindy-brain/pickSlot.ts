@@ -75,8 +75,8 @@ export class GhostPickSlot {
 
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipePickResult> {
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('pick')) {
-      return fail('PERMISSION_DENIED', '插件未申请目录选择权限(pick 槽),或当前未启用');
+    if (!ghost?.enabled || ghost.manifest.pick !== true) {
+      return fail('PERMISSION_DENIED', '插件未申请目录选择权限(pick),或当前未启用');
     }
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return fail('INVALID_REQUEST', 'pick-request 载荷必须是对象');
@@ -92,7 +92,7 @@ export class GhostPickSlot {
       return fail('INVALID_REQUEST', 'deposit 必须是布尔值');
     }
     const wantDeposit = request.deposit === true;
-    const hasNode = ghost.manifest.slots.includes('node');
+    const hasNode = ghost.manifest.node !== undefined;
     if (!hasNode && !wantDeposit) {
       return fail(
         'INVALID_REQUEST',

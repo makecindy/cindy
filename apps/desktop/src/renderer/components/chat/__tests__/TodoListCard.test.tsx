@@ -3,7 +3,7 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { TodoListCard } from '../TodoListCard';
+import { InlinePlanCard, TodoListCard } from '../TodoListCard';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -46,12 +46,12 @@ describe('TodoListCard flyout interaction', () => {
     expect(container.firstElementChild?.classList.contains('pointer-events-none')).toBe(true);
     expect(trigger.parentElement?.classList.contains('pointer-events-auto')).toBe(true);
     expect(trigger.querySelector('svg[data-plan-progress-ring="true"]')).not.toBeNull();
-    expect(container.querySelector('.animate-spin')).toBeNull();
+    expect(container.querySelector('.animate-spinner')).toBeNull();
     expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 
   it('keeps the active row static when the session is idle', () => {
-    // 计划因停止/失败/中断留在屏幕上时会话已空闲:继续呼吸等于谎报"这步还在跑"。
+    // 计划因停止/失败/中断留在屏幕上时会话已空闲:继续转等于谎报"这步还在跑"。
     const { container } = render(<TodoListCard todos={TODOS} animated={false} />);
 
     const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
@@ -59,27 +59,27 @@ describe('TodoListCard flyout interaction', () => {
 
     const wrapper = container.querySelector('span[data-plan-step-active="true"]');
     expect(wrapper).not.toBeNull();
-    expect(wrapper?.classList.contains('session-status-breathing')).toBe(false);
-    expect(wrapper?.getAttribute('data-plan-step-breathing')).toBe('false');
+    expect(wrapper?.classList.contains('animate-spinner')).toBe(false);
     expect(wrapper?.querySelector('svg')).not.toBeNull();
   });
 
-  it('breathes the active row on an HTML wrapper when the flyout is open', () => {
+  it('spins the active LoaderCircle on an HTML wrapper when the flyout is open', () => {
     const { container } = render(<TodoListCard todos={TODOS} animated />);
 
     const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
     fireEvent.mouseEnter(trigger.parentElement as HTMLElement);
 
-    // 正在执行的步骤用侧栏运行态同款呼吸(session-status-breathing,已在
-    // reduced-motion 白名单)。按 SVG 常驻动画红线,动画必须挂 span wrapper,
-    // SVG 本体静态;不用旋转,不用 Tailwind 硬编码 pulse/spin。
-    const wrapper = container.querySelector('span[data-plan-step-active="true"]');
+    // 正在执行的步骤与「正在工作…」同款圆弧 spinner。按 SVG 常驻动画红线,
+    // 旋转必须挂 span wrapper,SVG 本体静态;不用 pulse,不用侧栏呼吸。
+    const wrapper = container.querySelector('span[data-plan-step-active="true"]') as HTMLElement;
     expect(wrapper?.tagName).toBe('SPAN');
-    expect(wrapper?.classList.contains('session-status-breathing')).toBe(true);
-    expect(wrapper?.querySelector('svg')).not.toBeNull();
-    expect(container.querySelector('svg.session-status-breathing')).toBeNull();
-    expect(container.querySelector('.animate-spin')).toBeNull();
-    expect(container.querySelector('.animate-spinner')).toBeNull();
+    expect(wrapper?.classList.contains('animate-spinner')).toBe(true);
+    expect(wrapper?.classList.contains('animate-spin')).toBe(false);
+    const arc = wrapper?.querySelector('svg[data-plan-loader-arc="true"]');
+    expect(arc).not.toBeNull();
+    expect(arc?.querySelector('path')?.getAttribute('d')).toContain('a10 10');
+    expect(container.querySelector('svg.animate-spinner')).toBeNull();
+    expect(container.querySelector('.session-status-breathing')).toBeNull();
     expect(container.querySelector('.animate-pulse')).toBeNull();
   });
 
@@ -227,5 +227,49 @@ describe('TodoListCard flyout interaction', () => {
 
     expect(document.getElementById(flyoutId)).toBe(positioner);
     expect(animatedContent.getAttribute('aria-hidden')).toBe('true');
+  });
+});
+
+describe('InlinePlanCard', () => {
+  it('shows the shared focus ring when the collapse control is keyboard-focused', () => {
+    render(<InlinePlanCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button');
+    expect(trigger.classList.contains('focus-visible:outline-none')).toBe(true);
+    expect(trigger.classList.contains('focus-visible:ring-2')).toBe(true);
+    expect(trigger.classList.contains('focus-visible:ring-[var(--focus-ring)]')).toBe(true);
+  });
+
+  it('starts expanded and can collapse back to a compact summary', () => {
+    const { container } = render(<InlinePlanCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button');
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(container.querySelector('[data-inline-plan-step-active="true"]')).not.toBeNull();
+
+    fireEvent.click(trigger);
+
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(container.querySelector('[data-inline-plan-step-active="true"]')).toBeNull();
+  });
+
+  it('spins the active inline LoaderCircle only while the session is running', () => {
+    const view = render(<InlinePlanCard todos={TODOS} animated />);
+    const active = view.container.querySelector(
+      '[data-inline-plan-step-active="true"]',
+    ) as HTMLElement;
+
+    expect(active?.classList.contains('animate-spinner')).toBe(true);
+    expect(active?.classList.contains('animate-spin')).toBe(false);
+    const arc = active?.querySelector('svg[data-plan-loader-arc="true"]');
+    expect(arc).not.toBeNull();
+    expect(arc?.querySelector('path')?.getAttribute('d')).toContain('a10 10');
+    expect(active?.querySelector('svg.animate-spinner')).toBeNull();
+
+    view.rerender(<InlinePlanCard todos={TODOS} animated={false} />);
+    const idle = view.container.querySelector(
+      '[data-inline-plan-step-active="true"]',
+    ) as HTMLElement;
+    expect(idle?.classList.contains('animate-spinner')).toBe(false);
   });
 });

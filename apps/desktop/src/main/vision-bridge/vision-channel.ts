@@ -216,7 +216,8 @@ function wireProtocolFor(
     const model = provider.models.pi?.find((candidate) => candidate.id === modelId);
     return resolvePiModelWireProtocol(model, provider.routing.pi?.wireProtocol);
   }
-  return provider.routing[agent]?.wireProtocol ?? defaultWireProtocol(agent);
+  const wire = provider.routing[agent]?.wireProtocol ?? defaultWireProtocol(agent);
+  return wire === 'google-generative-ai' ? null : wire;
 }
 
 /** 视觉桥请求应带的路由额外头（headerOverride 去掉客户端凭证头）。

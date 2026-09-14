@@ -289,6 +289,13 @@ describe('icon-only button tooltip coverage', () => {
     expect(chromeActions).toContain('aria-label={sidebarToggleLabel}');
     expect(menuButton).toContain("import { Tip } from '@/components/ui/tooltip';");
     expect(menuButton).toContain("text={t('titleBar.menu')}");
+    expect(menuButton).toContain('const [menuOpen, setMenuOpen] = useState(false)');
+    expect(menuButton).toContain(
+      '<DropdownMenu open={menuOpen} onOpenChange={setMenuOpen}>',
+    );
+    expect(menuButton).toContain(
+      '<Tip text={t(\'titleBar.menu\')} side="bottom" controlledOpen={menuOpen ? false : undefined}>',
+    );
   });
 
   it('keeps Windows system window controls accessible without visible tips', () => {
@@ -312,7 +319,7 @@ describe('icon-only button tooltip coverage', () => {
     const source = rendererSource('components/sidebar/UserInfoSection.tsx');
 
     expect(source).toContain("import { Tip } from '@/components/ui/tooltip';");
-    expect(source).toContain('<Tip text={settingsLinkLabel} side="right">');
+    expect(source).toContain('<Tip text={moreLabel} side="right">');
     expect(source).toContain("text={t('sidebar.user.downloadMobile')}");
     expect(source).toMatch(
       /text=\{\s*isFlameReopen\s*\? t\('sidebar\.user\.reopenUpdateBanner'\)\s*: t\('sidebar\.user\.viewReleaseNotes'\)\s*\}/,

@@ -7,7 +7,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   queryOne: vi.fn(),
   exec: vi.fn(async () => undefined),
-  getCurrentUserId: vi.fn(() => 'user-1'),
+  getCurrentDbClientUserId: vi.fn(() => 'user-1'),
 }));
 
 vi.mock('electron', () => ({
@@ -26,9 +26,7 @@ vi.mock('../localDb/dailyModelUsage', () => ({
 }));
 vi.mock('../localDb/client/current', () => ({
   getDbClient: () => ({ queryOne: mocks.queryOne, exec: mocks.exec, drizzle: {} }),
-}));
-vi.mock('../localDb/index', () => ({
-  getCurrentUserId: mocks.getCurrentUserId,
+  getCurrentDbClientUserId: mocks.getCurrentDbClientUserId,
 }));
 
 describe('xai subscription snapshot hydration', () => {
@@ -36,7 +34,7 @@ describe('xai subscription snapshot hydration', () => {
     vi.resetModules();
     mocks.queryOne.mockReset();
     mocks.exec.mockReset().mockResolvedValue(undefined);
-    mocks.getCurrentUserId.mockReturnValue('user-1');
+    mocks.getCurrentDbClientUserId.mockReturnValue('user-1');
   });
 
   it('does not serve a disk snapshot until this process records one', async () => {
@@ -110,6 +108,27 @@ describe('xai subscription snapshot hydration', () => {
       planLabel: 'SuperGrok Heavy',
       creditUsagePercent: 5,
       accountFingerprint: 'bbbb',
+    });
+  });
+
+  it('lets a reset to 0% overwrite a previously exhausted weekly percent', async () => {
+    const broadcaster = await import('../usageBroadcaster');
+    mocks.queryOne.mockResolvedValue(null);
+    await broadcaster.recordXaiSubscriptionUsageSnapshot({
+      planLabel: 'SuperGrok Heavy',
+      creditUsagePercent: 100,
+      accountFingerprint: 'bbbb',
+      updatedAt: 2,
+    });
+    await broadcaster.recordXaiSubscriptionUsageSnapshot({
+      planLabel: 'SuperGrok Heavy',
+      creditUsagePercent: 0,
+      accountFingerprint: 'bbbb',
+      updatedAt: 3,
+    });
+    await expect(broadcaster.readXaiSubscriptionUsageSnapshot()).resolves.toMatchObject({
+      creditUsagePercent: 0,
+      updatedAt: 3,
     });
   });
 });

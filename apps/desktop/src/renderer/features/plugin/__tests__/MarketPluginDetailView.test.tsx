@@ -23,7 +23,7 @@ const manifest: GhostManifest = {
   version: '1.3.11',
   kind: 'chip',
   entry: 'main.js',
-  slots: ['notify'],
+  notify: true,
 };
 
 const detail: PluginMarketDetail = {
@@ -121,7 +121,7 @@ describe('MarketPluginDetailView', () => {
       name: /settings\.ghosts\.market\.install/,
     });
     expect(action.getAttribute('aria-busy')).toBe('true');
-    expect(action.querySelector('.animate-spin')).toBeTruthy();
+    expect(action.querySelector('.animate-spinner')).toBeTruthy();
     expect(action.textContent).toBe('');
   });
 });

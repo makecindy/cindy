@@ -6,6 +6,25 @@ import {
 } from '../transportTimeoutReopen';
 
 describe('shouldAbortTransportTimeoutReopen', () => {
+  it('invalidates only the reset peer before reopen, including resets coalesced into an active attempt', () => {
+    const order: string[] = [];
+    const reopen = vi.fn((deviceId: string) => {
+      order.push(`open:${deviceId}`);
+      return new Promise(() => {});
+    });
+    const loop = createTransportTimeoutReopenLoop({
+      reopen,
+      shouldAbort: () => false,
+      onReset: (deviceId) => order.push(`reset:${deviceId}`),
+    });
+    routeLinkCloseForReopen('transport-timeout', loop, 'affected');
+    loop.trigger('affected');
+    expect(order).toEqual(['reset:affected', 'open:affected', 'reset:affected']);
+    expect(reopen).toHaveBeenCalledTimes(1);
+    expect(loop.isActive('neighbor')).toBe(false);
+    loop.dispose();
+  });
+
   const base = {
     clientOnline: true,
     isOwner: true,

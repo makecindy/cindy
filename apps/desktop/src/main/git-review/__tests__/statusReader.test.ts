@@ -71,6 +71,28 @@ describe('git-review statusReader', () => {
     expect(status.untrackedCount).toBe(1);
     expect(status.unmergedCount).toBe(1);
     expect(status.writeDisabledReasons).toContain('unmerged');
+    // 普通文件冲突不是 submodule;XY 取自记录本身,不再硬编码。
+    const conflict = status.files.find((f) => f.path === 'conflict.txt');
+    expect(conflict?.isSubmodule).toBe(false);
+    expect(conflict?.rawXY).toBe('UU');
+  });
+
+  it('keeps submodule identity on unmerged gitlink records (#2463 review)', () => {
+    // 顶层 gitlink 的合并冲突:porcelain=2 的 u 记录 sub 字段为 S 开头 ——
+    // 丢掉它会让冲突 gitlink 绕过 submodule reader,目录被普通文件指纹器
+    // 拒绝、合法冲突无法启动 Review。
+    const status = parsePorcelainV2Status(
+      [
+        'u AA S... 160000 160000 160000 160000 aaaaaaa bbbbbbb ccccccc vendor/lib',
+        '',
+      ].join('\0'),
+      scope,
+    );
+
+    const gitlink = status.files.find((f) => f.path === 'vendor/lib');
+    expect(gitlink?.isSubmodule).toBe(true);
+    expect(gitlink?.isUnmerged).toBe(true);
+    expect(gitlink?.rawXY).toBe('AA');
   });
 
   it('marks SSH workspace status as view-only', () => {
@@ -105,5 +127,29 @@ describe('git-review statusReader', () => {
       cwd: '/repo',
       maxStdoutBytes: 128 * 1024 * 1024,
     });
+  });
+
+  it('passes --ignore-submodules=none so ignore-configured submodules stay visible (#2463 review)', async () => {
+    // submodule.<name>.ignore=all/dirty 会让 status 省略脏子仓,dirty 内容进不了
+    // Review 发现链;submoduleEvidencePaths() 的 status 兜底显式依赖这个 flag。
+    // flag 被静默丢掉时新鲜度绕过会复现,必须有断言拦住。
+    runGitMock.mockImplementation(async (args: readonly string[]) => {
+      if (args[0] === 'status') {
+        return {
+          stdout: ['# branch.oid abcdef', '# branch.head main', ''].join('\0'),
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+      if (args[0] === 'rev-parse') {
+        return { stdout: `/repo/.git/${args.at(-1) ?? 'marker'}\n`, stderr: '', exitCode: 0 };
+      }
+      throw new Error(`unexpected git args: ${args.join(' ')}`);
+    });
+
+    await readStatus(scope);
+
+    const statusCall = runGitMock.mock.calls.find(([args]) => (args as readonly string[])[0] === 'status');
+    expect(statusCall?.[0]).toContain('--ignore-submodules=none');
   });
 });

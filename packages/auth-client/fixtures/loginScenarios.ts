@@ -34,6 +34,7 @@ export const LOGIN_SCENARIO_TOKENS = Object.freeze([
   "providers:both",
   "providers:cn-social",
   "providers:global-social",
+  "providers:email-captcha",
   "sso:single",
   "sso:multi",
   "sso:required",
@@ -71,6 +72,9 @@ export const LOGIN_SCENARIO_ERROR_CODES = Object.freeze([
   "INVALID_CODE",
   "CODE_ATTEMPTS_EXCEEDED",
   "RATE_LIMITED",
+  "CAPTCHA_REQUIRED",
+  "CAPTCHA_INVALID",
+  "CAPTCHA_UNAVAILABLE",
   "SSO_LOGIN_REQUIRED",
   "ORG_SSO_NOT_FOUND",
   "SOCIAL_TOKEN_INVALID",
@@ -217,6 +221,20 @@ function providersFor(
       return { region, attribution: "phone", email: false, phone: true, social: [] };
     case "email-only":
       return { region, attribution: "email", email: true, phone: false, social: [] };
+    case "email-captcha":
+      // global 邮箱发码前必须过人机验证(captcha 字段驱动客户端 overlay 触发路径)
+      return {
+        region,
+        attribution: "email",
+        email: true,
+        phone: false,
+        social: [],
+        captcha: {
+          provider: "turnstile",
+          siteKey: fakeValue("captcha-sitekey"),
+          requiredFor: ["email_request_code"],
+        },
+      };
     case "both":
       return { ...defaults, social: [] };
     case "cn-social":

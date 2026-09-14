@@ -40,6 +40,8 @@ import type {
   ApprovalRequestResult,
   OAuthRefreshParams,
   OAuthRefreshResult,
+  SubagentModelAccessParams,
+  SubagentModelAccessResult,
 } from '@cindy/maker-cc-manager';
 import {
   REMOTE_CC_MGR_BUNDLE_PATH,
@@ -290,6 +292,10 @@ export async function openCcManagerSession(opts: {
    * are denied (same as the old hardcoded acceptEdits behavior).
    */
   onApprovalRequest?: (params: ApprovalRequestParams) => Promise<ApprovalRequestResult>;
+  /** Remote Agent/Task PreToolUse 的实时账号模型准入回调。 */
+  onSubagentModelAccessRequest?: (
+    params: SubagentModelAccessParams,
+  ) => Promise<SubagentModelAccessResult>;
   /**
    * 强制 fresh start:daemon 侧 session alive 时也先 kill 再走 start 路径
    * (而非 attach)。用于本机 HTTP MCP bridge 重启 (app 重启) 后首轮注入:
@@ -360,6 +366,20 @@ export async function openCcManagerSession(opts: {
         }
       }
       return { kind: p.kind, behavior: 'deny', reason: 'no approval handler registered' } satisfies ApprovalRequestResult;
+    });
+
+    client.setRequestHandler(SERVER_METHODS.SUBAGENT_MODEL_ACCESS, async (params) => {
+      const p = params as SubagentModelAccessParams;
+      if (!opts.onSubagentModelAccessRequest) return { status: 'unknown' };
+      try {
+        return await opts.onSubagentModelAccessRequest(p);
+      } catch (err) {
+        log.warn('subagent model access handler rejected; allowing as unknown', {
+          sessionId: p.sessionId,
+          error: (err as Error)?.message,
+        });
+        return { status: 'unknown' } satisfies SubagentModelAccessResult;
+      }
     });
 
     // OAuth refresh handler — daemon sends these when the remote cc SDK's

@@ -70,6 +70,26 @@ function collectSourceIds(items: readonly MobileMessageRenderItem[]): string[] {
 }
 
 describe('subagent grouping (buildMobileMessageRenderItems)', () => {
+  it.each([1, 2, 7])('preserves history paragraph order through %s nesting levels and fallback', (depth) => {
+    const parents = Array.from({ length: depth }, (_, index) => agentToolUse(`order-A${index}`, {
+      parentUuid: index === 0 ? undefined : `order-A${index - 1}`,
+      createdAt: `2026-01-01T00:00:0${index}.000Z`,
+    }));
+    const paragraphs = ['first', 'second', 'third'].map((id, index) => msg({
+      id, role: 'assistant', content: id,
+      agentMeta: { parentUuid: `order-A${depth === 7 && index === 1 ? 5 : depth - 1}`, isStreaming: index > 0 },
+      createdAt: `2026-01-01T00:00:${30 - index}.000Z`,
+    }));
+    const messages = [...parents, ...paragraphs];
+    const original = structuredClone(messages);
+    const paragraphIds = (preserveSourceOrder: boolean) => collectSourceIds(buildMobileMessageRenderItems(
+      messages, { preserveSourceOrder, isSessionStreaming: true },
+    )).filter(id => paragraphs.some(message => message.id === id));
+    expect(paragraphIds(true)).toEqual(['first', 'second', 'third']);
+    expect(paragraphIds(false)).toEqual(['third', 'second', 'first']);
+    expect(messages).toEqual(original);
+  });
+
   it('replaces a top-level Agent tool_use with a subagent_group nesting its children', () => {
     const items = buildMobileMessageRenderItems([
       msg({ id: 'u', role: 'user', content: { text: 'go' }, createdAt: '2026-01-01T00:00:01.000Z' }),
@@ -145,7 +165,7 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
 
   it('stays completed even when the summary text mentions error/失败 (no keyword false-positive)', () => {
     // 回归:code-review/research 类子 agent 的总结天然讨论 "error/失败/exception",此前关键词扫正文
-    // 会把成功完成误判成失败。坐实 DB 无可靠失败信号 → 只要有 closing tool_result 即 completed。
+    // 会把成功完成误判成失败。缺少结构化终态的旧历史仍只按 closing tool_result 判 completed。
     const items = buildMobileMessageRenderItems([
       agentToolUse('A1', { subagentType: 'general-purpose', createdAt: '2026-01-01T00:00:01.000Z' }),
       agentResult(
@@ -158,6 +178,29 @@ describe('subagent grouping (buildMobileMessageRenderItems)', () => {
     expect(group.status).toBe('completed');
     expect(group.status).not.toBe('failed');
   });
+
+  it.each(['failed', 'stopped'] as const)(
+    'uses the persisted %s terminal state for a nested Agent group',
+    (status) => {
+      const items = buildMobileMessageRenderItems([
+        msg({
+          id: 'agent',
+          role: 'tool_use',
+          toolUseId: 'toolu-agent',
+          content: { toolUseId: 'toolu-agent', toolName: 'Agent', input: { description: 'Review' } },
+          agentMeta: { agentTaskStatus: status },
+        }),
+        msg({
+          id: 'result',
+          role: 'tool_result',
+          toolUseId: 'toolu-agent',
+          content: 'finished with a terminal outcome',
+        }),
+      ]);
+
+      expect(subagentGroups(items)[0].status).toBe(status);
+    },
+  );
 
   it('leaves an ordinary session (no Agent / no parentUuid) byte-identical to the shared builder', () => {
     const messages = [

@@ -35,8 +35,9 @@ export interface UpdateQueuedMessageDeps {
 
 const DESCRIPTION =
   '修改一条尚未被 worker 消费的排队消息(整条正文替换)。' +
-  'queued_message_id 来自 send_to_worker / create_worker 的排队回传或 list_worker_queue。' +
+  'queued_message_id 来自 send_to_worker / create_worker 的排队回传或 get_worker_queue_status。' +
   '只能修改你自己(lead)发出的排队条目;用户或 scheduler 的排队消息不可修改。' +
+  '需要把多条相关消息合成一条时用 merge_queued_messages,不要连续 update/cancel 模拟。' +
   '失败码: LEAD_NOT_SUPPORTED / WORKER_NOT_FOUND / QUEUED_MESSAGE_NOT_FOUND(已被消费或已撤回) / ' +
   'NOT_LEAD_MESSAGE / MESSAGE_CONSUMING(正在投递中)。';
 
@@ -56,7 +57,7 @@ export function registerUpdateQueuedMessageTool(
       queued_message_id: z
         .string()
         .min(1)
-        .describe('要修改的排队消息 id(来自排队回传或 list_worker_queue)'),
+        .describe('要修改的排队消息 id(来自排队回传或 get_worker_queue_status)'),
       message: z
         .string()
         .min(1)

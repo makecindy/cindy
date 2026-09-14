@@ -61,6 +61,119 @@ describe('WorkLouderCodexHostClient', () => {
     expect(child.postMessage).toHaveBeenCalledWith({ kind: 'apply', frame });
   });
 
+  it('releases the HID host when this instance turns the keyboard off', async () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    const status = vi.fn();
+    client.setConnectionStatusHandler(status);
+    client.setAgentKeyPressHandler(vi.fn());
+
+    client.setDeviceEnabled(false);
+
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'stop' });
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(status).toHaveBeenCalledWith('disabled');
+    expect(fork).toHaveBeenCalledTimes(1);
+
+    child.emit('message', { kind: 'stopped' });
+    expect(child.kill).toHaveBeenCalledOnce();
+
+    client.probe();
+    expect(fork).toHaveBeenCalledTimes(2);
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'discover' });
+
+    client.setDeviceEnabled(true);
+    expect(fork).toHaveBeenCalledTimes(2);
+  });
+
+  it('replays a live connection when occupancy turns the device back on', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+    });
+    const status = vi.fn();
+    client.setConnectionStatusHandler(status);
+    client.setHidInputHandler(vi.fn());
+
+    client.setDeviceEnabled(false);
+    child.emit('message', { kind: 'state', status: 'connected' });
+    status.mockClear();
+
+    client.setDeviceEnabled(true);
+    expect(status).toHaveBeenCalledWith('connected');
+  });
+
+  it('restarts a still-wanted host after disable finishes stopping', () => {
+    const stopping = new FakeChild();
+    const restarted = new FakeChild();
+    const children = [stopping, restarted];
+    const fork = vi.fn(() => children.shift()!);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    expect(fork).toHaveBeenCalledTimes(1);
+
+    client.setDeviceEnabled(false);
+    stopping.postMessage.mockClear();
+    client.setDeviceEnabled(true);
+
+    expect(fork).toHaveBeenCalledTimes(1);
+    expect(stopping.postMessage).not.toHaveBeenCalled();
+
+    stopping.emit('message', { kind: 'stopped' });
+
+    expect(fork).toHaveBeenCalledTimes(2);
+    expect(restarted.postMessage).toHaveBeenCalledWith({ kind: 'init', sdkEntry: '/sdk' });
+    expect(restarted.postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
+  it('forwards the owner-scoped keymap backup directory on init', () => {
+    const child = new FakeChild();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork: () => child,
+      log: logger(),
+      keymapBackupDir: () => '/tmp/cindy-owner/worklouder-creator-micro-2',
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    expect(child.postMessage).toHaveBeenCalledWith({
+      kind: 'init',
+      sdkEntry: '/sdk',
+      keymapBackupDir: '/tmp/cindy-owner/worklouder-creator-micro-2',
+    });
+  });
+
+  it('kills a host that never acknowledges stop after disable', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork: () => child,
+        log: logger(),
+        disposeTimeoutMs: 50,
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      client.setDeviceEnabled(false);
+
+      expect(child.kill).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(50);
+      expect(child.kill).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('starts HID listening even when there is no lighting activity', () => {
     const child = new FakeChild();
     const fork = vi.fn(() => child);
@@ -94,6 +207,109 @@ describe('WorkLouderCodexHostClient', () => {
     client.probe();
 
     expect(child.postMessage).toHaveBeenLastCalledWith({ kind: 'probe' });
+  });
+
+  it('discovers presence without occupying HID when this instance is off', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    const presence = vi.fn();
+    const status = vi.fn();
+    client.setPresenceHandler(presence);
+    client.setConnectionStatusHandler(status);
+    client.setDeviceEnabled(false);
+    status.mockClear();
+    client.probe();
+
+    expect(fork).toHaveBeenCalledWith('/sdk');
+    expect(child.postMessage).toHaveBeenCalledWith({ kind: 'discover' });
+    expect(child.postMessage).not.toHaveBeenCalledWith({ kind: 'listen' });
+
+    child.emit('message', {
+      kind: 'presence',
+      present: true,
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+    });
+    expect(presence).toHaveBeenCalledWith(true, {
+      deviceType: 'codex-micro',
+      isUsbConnection: true,
+    });
+    expect(status).not.toHaveBeenCalled();
+  });
+
+  it('backs off presence-only host crashes instead of forking in a loop', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const fork = vi.fn(() => child);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setDeviceEnabled(false);
+      client.probe();
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      child.emit('exit', 1);
+      client.probe();
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+
+      for (let crash = 0; crash < 5; crash += 1) {
+        child.emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      const forksAfterBudget = fork.mock.calls.length;
+      child.emit('exit', 1);
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(fork).toHaveBeenCalledTimes(forksAfterBudget);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let repeated presence probes postpone the crash-budget reset', async () => {
+    vi.useFakeTimers();
+    try {
+      const child = new FakeChild();
+      const fork = vi.fn(() => child);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+        stableConnectionMs: 30,
+      });
+      client.setDeviceEnabled(false);
+      client.probe();
+
+      for (let crash = 0; crash < 5; crash += 1) {
+        child.emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(10_000);
+      }
+      expect(fork.mock.calls.length).toBeGreaterThan(1);
+
+      child.emit('message', { kind: 'presence', present: true, deviceType: 'codex-micro' });
+      await vi.advanceTimersByTimeAsync(10);
+      child.emit('message', { kind: 'presence', present: true, deviceType: 'codex-micro' });
+      await vi.advanceTimersByTimeAsync(10);
+      child.emit('message', { kind: 'presence', present: true, deviceType: 'codex-micro' });
+      await vi.advanceTimersByTimeAsync(30);
+
+      const forksBefore = fork.mock.calls.length;
+      child.emit('exit', 1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(forksBefore + 1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('asks the host to turn lighting off before shutdown', async () => {
@@ -171,7 +387,6 @@ describe('WorkLouderCodexHostClient', () => {
       'connecting',
       'connected',
       'not-detected',
-      'connecting',
     ]);
     expect(child.kill).toHaveBeenCalledOnce();
   });
@@ -341,7 +556,136 @@ describe('WorkLouderCodexHostClient', () => {
     }
   });
 
-  it('recycles the host immediately after a live session drops', () => {
+  it('does not let probes or lighting updates bypass an exhausted crash budget', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = Array.from({ length: 7 }, () => new FakeChild());
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      const frame = createWorkLouderCodexLightingFrame([
+        {
+          sessionId: 'session-1',
+          phase: 'running',
+          compactDetail: '',
+          attention: false,
+        },
+      ]);
+      client.setAgentKeyPressHandler(vi.fn());
+
+      for (let index = 0; index < 6; index += 1) {
+        children[index].emit('exit', 1);
+        await vi.advanceTimersByTimeAsync(Math.min(10_000, 500 * 2 ** index));
+      }
+
+      const forksAfterBudget = fork.mock.calls.length;
+      client.probe();
+      client.probe();
+      client.update(frame);
+
+      expect(fork).toHaveBeenCalledTimes(forksAfterBudget);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('backs off a host recycle after a live session drops', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', { kind: 'state', status: 'not-detected' });
+
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(fork).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not let background probes bypass host recycle backoff', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', { kind: 'state', status: 'not-detected' });
+
+      expect(fork).toHaveBeenCalledTimes(1);
+      client.probe();
+      client.probe();
+      client.update(
+        createWorkLouderCodexLightingFrame([
+          {
+            sessionId: 'session-1',
+            phase: 'running',
+            compactDetail: '',
+            attention: false,
+          },
+        ]),
+      );
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(500);
+      expect(fork).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('does not restart after a permission-required failure during background probes', async () => {
+    vi.useFakeTimers();
+    try {
+      const children = [new FakeChild(), new FakeChild()];
+      const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
+      const client = new WorkLouderCodexHostClient({
+        resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+        fork,
+        log: logger(),
+      });
+      client.setAgentKeyPressHandler(vi.fn());
+      children[0].emit('message', { kind: 'state', status: 'connected' });
+      children[0].emit('message', {
+        kind: 'state',
+        status: 'error',
+        reason: 'permission-required',
+      });
+
+      expect(children[0].kill).toHaveBeenCalledOnce();
+      expect(fork).toHaveBeenCalledTimes(1);
+      client.probe();
+      client.probe();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(fork).toHaveBeenCalledTimes(1);
+
+      client.retryPermission();
+      expect(fork).toHaveBeenCalledTimes(2);
+      expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stops a host when permission-required follows another error status', () => {
     const children = [new FakeChild(), new FakeChild()];
     const fork = vi.fn(() => children[fork.mock.calls.length - 1]);
     const client = new WorkLouderCodexHostClient({
@@ -350,12 +694,57 @@ describe('WorkLouderCodexHostClient', () => {
       log: logger(),
     });
     client.setAgentKeyPressHandler(vi.fn());
-    children[0].emit('message', { kind: 'state', status: 'connected' });
-    children[0].emit('message', { kind: 'state', status: 'not-detected' });
+    children[0].emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'connection-failed',
+    });
+    children[0].emit('message', {
+      kind: 'state',
+      status: 'error',
+      reason: 'permission-required',
+    });
 
     expect(children[0].kill).toHaveBeenCalledOnce();
+    expect(fork).toHaveBeenCalledTimes(1);
+
+    client.retryPermission();
+
     expect(fork).toHaveBeenCalledTimes(2);
     expect(children[1].postMessage).toHaveBeenCalledWith({ kind: 'listen' });
+  });
+
+  it('does not discover presence when unlock arrives without a permission breaker', () => {
+    const fork = vi.fn(() => new FakeChild());
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+
+    client.setDeviceEnabled(false);
+    client.retryPermission();
+
+    expect(fork).not.toHaveBeenCalled();
+  });
+
+  it('does not recycle a live host whose vendor HID is already occupied', () => {
+    const child = new FakeChild();
+    const fork = vi.fn(() => child);
+    const onReason = vi.fn();
+    const client = new WorkLouderCodexHostClient({
+      resolveSdk: () => ({ entry: '/sdk', source: 'openai-app' }),
+      fork,
+      log: logger(),
+    });
+    client.setAgentKeyPressHandler(vi.fn());
+    client.setConnectionReasonHandler(onReason);
+    child.emit('message', { kind: 'state', status: 'connected' });
+    child.emit('message', { kind: 'state', status: 'error', reason: 'device-in-use' });
+
+    expect(child.kill).not.toHaveBeenCalled();
+    expect(fork).toHaveBeenCalledTimes(1);
+    expect(onReason).toHaveBeenLastCalledWith('device-in-use');
   });
 });
 

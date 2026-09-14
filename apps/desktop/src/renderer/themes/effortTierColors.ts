@@ -1,38 +1,24 @@
 /**
- * effortTierColors —— 推理强度**档位绝对色**的单一事实源(统一模型选择器
- * model-selector-unified §1.3)。
+ * effortTierColors —— 推理强度档位的运行时适配器（统一模型选择器
+ * model-selector-unified §1.3）。静态值的唯一编辑源是
+ * packages/design-tokens/src/reference/color.json；生成器把表写入 colors.ts。
  *
  * 为什么是「跨主题固定」的功能色而不是普通语义 token:
  *   档色表达的是**这一档有多强**,不是界面的明暗层次 —— 同一个 `high` 在 Light / Dark 下
  *   必须是同一个蓝,否则用户在两种主题间切换时会以为自己换了档。这与 DESIGN.md §10
- *   「语义豁免色(theme-invariant)」是同一类:值绑在事物本身、不绑主题。故下表的每个
- *   hex 都以同值注册进 colors.ts(`effort-tier-*`),light / dark 一致。
+ *   「语义豁免色(theme-invariant)」是同一类:值绑在事物本身、不绑主题。生成到
+ *   colors.ts 的 EFFORT_TIER_COLORS 每项都以同值注册进 `effort-tier-*`，light / dark 一致。
  *
- * 为什么表放在这里、而不是只写在 colors.ts 里:
- *   滑杆拖动时条色要在**相邻档色之间逐像素插值**(§1.3「拖动中滑块连续跟手、条色按位置
- *   在相邻档色值间连续过渡」),插值必须拿到数值 hex —— CSS 变量在拖动帧里读 computed
- *   style 既贵又会被主题层间接引用打断。所以数值表在 TS 里定义一次,colors.ts 从这里
- *   `import` 去注册 token,组件从这里取值做插值:**两处同源,不可能漂移**。
+ * 静态表由 DTCG 经 Terrazzo 原位生成到 colors.ts；本模块只适配档位和插值。
+ * 导入本模块会初始化同一 ColorRegistry（无 DOM / 磁盘访问），模块缓存保证只注册一次。
+ * 插值仍直接拿 hex，不在拖动帧读取 computed style。
  *
  * 紫色只属于真正的顶档:色映射按**档位 key 绝对取值**,不按「该模型的第几档」相对取值 ——
  * 封顶 `high` 的模型拉满也是蓝,只有真的支持 `max` / `ultra` 的模型才出现紫(§1.3)。
  */
 
-/**
- * 档位 key → 绝对色。键集覆盖 `EFFORT_VALUES` 全部七档:
- *   - `minimal` 与 `low` 同绿:两者都在「更高效」那一端,产品文案上也常合并表达;
- *     给 minimal 单独造一个色只会在同一段色带里塞进第二个难分辨的绿。
- *   - `ultra` 与 `max` 同紫:规格 §1.3 明写 `max·ultra` 共用顶档紫。
- */
-export const EFFORT_TIER_COLORS = {
-  minimal: '#2AAE5B',
-  low: '#2AAE5B',
-  medium: '#14B8A6',
-  high: '#3B82F6',
-  xhigh: '#4F46E5',
-  max: '#8B5CF6',
-  ultra: '#8B5CF6',
-} as const satisfies Record<string, string>;
+import { EFFORT_TIER_COLORS, PRICE_TIER_COLORS } from './colors';
+export { EFFORT_TIER_COLORS, PRICE_TIER_COLORS };
 
 /** 未知档位(服务端新下发、客户端还没认识)的兜底色 —— 落中间档,不谎报成顶档。 */
 export const EFFORT_TIER_FALLBACK_COLOR = EFFORT_TIER_COLORS.medium;
@@ -40,18 +26,6 @@ export const EFFORT_TIER_FALLBACK_COLOR = EFFORT_TIER_COLORS.medium;
 // Fast(插队加速)开启态的蓝不在本表:它没有插值需求,数值直接注册成语义 token
 // `--fast-accent`(colors.ts),组件一律 `var(--fast-accent)` 消费 —— TS 侧不再持有它的
 // hex,也就不会出现「组件拿常量、主题拿 token」两条路各画各的。
-
-/**
- * 价格档($ 串)的档位色 —— 设计稿 v4 定稿(saveStyle F)的三档:便宜绿 / 中档琥珀 /
- * 高价红。与档位色同理是跨主题固定的功能色(价格档表达「这个模型贵不贵」,不随明暗
- * 主题变),同值注册进 colors.ts(`price-tier-*`)。t1 与推理强度 low 共用同一支绿 ——
- * 折扣填充亮段也是它,同一支绿在面板里统一表达「省」。
- */
-export const PRICE_TIER_COLORS = {
-  t1: EFFORT_TIER_COLORS.low,
-  t2: '#B58A1F',
-  t3: '#C05353',
-} as const satisfies Record<string, string>;
 
 /** 取某档位的绝对色;未知档回落中间档色。 */
 export function effortTierColor(effort: string | null | undefined): string {

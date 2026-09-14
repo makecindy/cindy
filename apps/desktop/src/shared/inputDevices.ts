@@ -27,6 +27,7 @@ export const INPUT_DEVICE_COMMAND_IDS = [
   'toggleSidebar',
   'toggleRightSidebar',
   'navigateBack',
+  'toggleFullscreen',
   'composer.focus',
   'conversation.scrollUp',
   'conversation.scrollDown',

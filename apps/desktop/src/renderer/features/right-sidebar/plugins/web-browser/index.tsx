@@ -18,6 +18,7 @@
 import { Globe, Volume2 } from 'lucide-react';
 import type { TFunction } from 'i18next';
 import { lazy, useState } from 'react';
+import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
 
@@ -77,6 +78,7 @@ function WebBrowserTabPillTitle({
  * favicon onError(404 / 取不到)→ 也走 fallback,不让破图占位。
  */
 export function WebBrowserTabPillIcon({ state }: { state: WebBrowserState }) {
+  const { t } = useTranslation();
   const base = state.favicon ? (
     <FaviconImage
       key={state.favicon}
@@ -95,7 +97,7 @@ export function WebBrowserTabPillIcon({ state }: { state: WebBrowserState }) {
         size={9}
         strokeWidth={2.5}
         className="pointer-events-none absolute -bottom-0.5 -right-1 text-[var(--accent-cta-bg)]"
-        aria-label="audible"
+        aria-label={t('rightSidebar.browser.audible')}
       />
     </span>
   );

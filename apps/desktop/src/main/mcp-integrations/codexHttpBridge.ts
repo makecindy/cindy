@@ -28,7 +28,7 @@ import {
   createCodexMcpThreadContextStore,
   isSameCodexMcpSessionContext,
 } from './codexMcpThreadContextStore.js';
-import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
+import { isFrozenBuiltinPluginAllowed } from './codexBuiltinToolPolicy.js';
 
 const SERVER_HEADER = 'Lizi_MCPS/1.0';
 const MCP_PATH_PREFIX = '/mcp/';
@@ -48,10 +48,12 @@ export const REMOTE_COLLAB_SERVER_NAMES: ReadonlySet<string> = new Set([
  * 本机 store (per hostId+远端路径 分区, 见 maker-core buildMemoryScopeKey)。
  */
 export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
+/** Remote helper is enabled only for Bot Sessions and rechecks their live surface. */
+export const REMOTE_BOT_HELPER_SERVER_NAME = 'cindy_helper';
 /**
  * 远端 (SSH remote-forward) 允许暴露的 server 全集 — additionalBearerTokens
  * (persistent token) 认证的请求只能访问这些 server, 鉴权层按它 scope。
- * 只放协同 (cindy_orca / orca_worker_bridge) 与 Maker Memory (cindy_memory,
+ * 放行协同、按 Session 限定的伙伴 helper 与 Maker Memory (cindy_memory,
  * 2026-07 放行: 工具面固定、只触达本机 maker-memory 目录, 与协同同威胁模型);
  * 拿到 persistent token 的远端进程仍不得经 bridge 初始化 cindy_ssh 等其余
  * 本机 server。
@@ -59,6 +61,7 @@ export const REMOTE_MEMORY_SERVER_NAME = 'cindy_memory';
 export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
   ...REMOTE_COLLAB_SERVER_NAMES,
   REMOTE_MEMORY_SERVER_NAME,
+  REMOTE_BOT_HELPER_SERVER_NAME,
 ]);
 
 /**
@@ -71,10 +74,13 @@ export const REMOTE_ALLOWED_SERVER_NAMES: ReadonlySet<string> = new Set([
  */
 export function selectRemoteInjectableServerNames(
   available: readonly string[],
-  gates: { collabEnabled: boolean; memoryEnabled: boolean },
+  gates: { collabEnabled: boolean; memoryEnabled: boolean; botHelperEnabled?: boolean },
 ): string[] {
   return [
     ...(gates.collabEnabled ? available.filter((n) => REMOTE_COLLAB_SERVER_NAMES.has(n)) : []),
+    ...(gates.botHelperEnabled && available.includes(REMOTE_BOT_HELPER_SERVER_NAME)
+      ? [REMOTE_BOT_HELPER_SERVER_NAME]
+      : []),
     ...(gates.memoryEnabled && available.includes(REMOTE_MEMORY_SERVER_NAME)
       ? [REMOTE_MEMORY_SERVER_NAME]
       : []),
@@ -138,6 +144,8 @@ export interface CodexHttpBridge {
   instanceId: string;
   /** 拼出 codex 端 config 用的 URL，例如 http://127.0.0.1:54321/mcp/lizi_feishu */
   url(serverName: string): string;
+  /** Temporary startup identity, usable only by tools/list before thread registration. */
+  withDiscoveryContext<T>(ctx: LiziMcpSessionContext, run: () => Promise<T>): Promise<T>;
   registerThreadContext(threadId: string, ctx: LiziMcpSessionContext): void;
   unregisterThreadContext(threadId: string, expectedSessionInstanceId?: string): void;
   /**
@@ -213,6 +221,7 @@ export async function startCodexHttpBridge(
     transportsByServer.set(name, new Map());
   }
   const threadContextStore = createCodexMcpThreadContextStore();
+  const discoveryContexts = new Map<string, LiziMcpSessionContext>();
   // sessionId → ctx (远端 cc 的身份通道, 经 ?session= query 路由, 见 interface 注释)。
   const sessionCtxById = new Map<string, LiziMcpSessionContext>();
   // sessionId → per-session bearer token 注册代次(pi 会话, 见 interface 注释)。
@@ -242,7 +251,7 @@ export async function startCodexHttpBridge(
       // (persistent, 远端常驻 codex daemon 与远端 cc 共用) / per-session token
       // (pi 会话, 按 ?session= 隔离, 见 interface 注释)。主 token 与 pi
       // per-session token 全通;额外 token 只允许访问 REMOTE_ALLOWED_SERVER_NAMES
-      // 白名单 (协同 + cindy_memory; 远端进程拿到 token 也不得初始化其余本机 server)。
+      // 白名单 (协同、记忆、伙伴 helper；helper 另有 Session 实例与能力面校验)。
       // URL 解析提前:per-session token 匹配需要 session query,纯解析无副作用。
       const url = new URL(req.url ?? '/', 'http://127.0.0.1');
       const sessionQuery = url.searchParams.get('session');
@@ -336,7 +345,7 @@ export async function startCodexHttpBridge(
         res.end();
         return;
       }
-      // scoped (persistent) token 仅限远端白名单 server (协同 + cindy_memory):
+      // scoped (persistent) token 仅限远端白名单 server:
       // 同一 remote-forward 能摸到完整 /mcp/<name> 路由, 不得经它初始化
       // cindy_ssh 等其余本机 server — codex-connector P1。
       if (isScopedRemoteToken && !REMOTE_ALLOWED_SERVER_NAMES.has(serverName)) {
@@ -362,9 +371,11 @@ export async function startCodexHttpBridge(
         serverName,
         log,
         threadContextStore,
+        discoveryContexts,
         pluginId: opts.pluginIdByServerName?.[serverName],
         sessionTokenCtx,
         threadInstanceQuery: sessionQuery === null ? instanceQuery : null,
+        remoteBotHelper: isScopedRemoteToken && serverName === REMOTE_BOT_HELPER_SERVER_NAME,
       });
     } catch (err) {
       log.error('request handler threw', {
@@ -487,6 +498,15 @@ export async function startCodexHttpBridge(
     token,
     instanceId: randomBytes(8).toString('hex'),
     url: (serverName) => `http://127.0.0.1:${port}${MCP_PATH_PREFIX}${encodeURIComponent(serverName)}`,
+    withDiscoveryContext: async (ctx, run) => {
+      const instance = ctx.sessionInstanceId;
+      if (!instance) return run();
+      // Each lease owns its exact object, so late completion cannot delete a replacement.
+      const lease = { ...ctx };
+      discoveryContexts.set(instance, lease);
+      try { return await run(); }
+      finally { if (discoveryContexts.get(instance) === lease) discoveryContexts.delete(instance); }
+    },
     registerThreadContext: threadContextStore.registerThreadContext,
     unregisterThreadContext: threadContextStore.unregisterThreadContext,
     registerSessionCtx: (sessionId, ctx) => {
@@ -552,6 +572,8 @@ interface DispatchOpts {
   serverName: string;
   log: Logger;
   threadContextStore: ReturnType<typeof createCodexMcpThreadContextStore>;
+  discoveryContexts: ReadonlyMap<string, LiziMcpSessionContext>;
+  remoteBotHelper?: boolean;
   pluginId?: string;
   /** per-session token 命中时解析出的 ctx;存在即优先于 _meta.threadId 路由。 */
   sessionTokenCtx?: LiziMcpSessionContext;
@@ -582,9 +604,11 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
     serverName,
     log,
     threadContextStore,
+    discoveryContexts,
     pluginId,
     sessionTokenCtx,
     threadInstanceQuery,
+    remoteBotHelper,
   } = opts;
 
   const sessionIdHeader = req.headers['mcp-session-id'];
@@ -620,6 +644,14 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
           threadContextStore,
           threadInstanceQuery,
         );
+        // Native Codex lists tools before thread/start returns. Only that exact
+        // request may use the startup lease; batches, calls and claimed thread ids
+        // still require the real registered execution context.
+        if (!activeContext && !threadId && threadInstanceQuery !== null
+          && parsedBody && !Array.isArray(parsedBody)
+          && (parsedBody as { method?: unknown }).method === 'tools/list') {
+          activeContext = discoveryContexts.get(threadInstanceQuery);
+        }
         let decision:
           | 'no_thread_id'
           | 'thread_unregistered'
@@ -640,6 +672,16 @@ async function dispatchToTransport(opts: DispatchOpts): Promise<void> {
           registeredThreadCount: threadContextStore.registeredThreadCount(),
         });
       }
+    }
+    // The remote token must never open the ordinary local helper surface.
+    // Startup discovery may list tools, but calls still need the registered thread.
+    if (remoteBotHelper && (hasToolCall(parsedBody) ||
+      (parsedBody as { method?: unknown } | undefined)?.method === 'tools/list') &&
+      (!activeContext?.remoteHostId || !activeContext.sessionInstanceId ||
+        (activeContext.agentKind !== 'codex' && activeContext.agentKind !== 'claude-code'))) {
+      res.statusCode = 401;
+      res.end('Remote helper requires a bound Session instance');
+      return;
     }
     if (
       !sessionTokenCtx &&
@@ -787,8 +829,7 @@ function findBlockedToolCall(
     toolCallContexts.push(context);
   }
   for (const context of toolCallContexts) {
-    const raw = context?.vendorOptions?.[CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY];
-    if (Array.isArray(raw) && raw.some((id) => id === pluginId)) {
+    if (!isFrozenBuiltinPluginAllowed(context?.vendorOptions, pluginId)) {
       return { reason: 'disabled', context };
     }
   }

@@ -27,6 +27,7 @@
 import { refreshRemoteDeviceSessions } from '@/features/device-link/refreshRemoteSessions';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import { createLogger } from '@/lib/logger';
+import { markSessionStarting } from '@/lib/sessionStartingStore';
 
 import { buildProvisionalRemoteSession, type DeviceLinkCreateArgs } from './deviceLinkCreateArgs';
 
@@ -67,6 +68,8 @@ export interface RemoteSessionHandoffParams {
 export function commitRemoteSessionHandoff(p: RemoteSessionHandoffParams): void {
   // ① 归属先落地:回流失败时它是首条消息能路由到对端的唯一依据。
   remoteProjectsStore.pinSessionOrigin(p.deviceId, p.remoteSessionId);
+  // 刚提交的远程任务在对端 isRunning 回流前先按运行中排序,避免先沉底再跳顶。
+  markSessionStarting(p.remoteSessionId);
   // ② 临时行:让 SessionView 的 delayed-create 交接不必等权威快照。
   if (p.workDir) {
     remoteProjectsStore.mergeDeviceSessions(p.deviceId, p.deviceName, [

@@ -1,7 +1,11 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
-import { createRemoteSyncCoordinator, createRemoteSyncRunner } from '@/device-link/remoteSyncTask';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  createRemoteSyncCoordinator,
+  createRemoteSyncReopenCoordinator,
+  createRemoteSyncRunner,
+} from '@/device-link/remoteSyncTask';
 
 function deferred() {
   let resolve!: () => void;
@@ -20,6 +24,44 @@ function readSessionScreenSource(): string {
 }
 
 describe('remote sync task runner', () => {
+  it('shares one successful peer reopen across staggered retries in the same sync run', async () => {
+    const reopen = vi.fn(async () => undefined);
+    const coordinator = createRemoteSyncReopenCoordinator(reopen);
+    const failedAtVersion = coordinator.captureVersion();
+
+    const first = coordinator.reopenAfter(failedAtVersion);
+    await first;
+    const later = coordinator.reopenAfter(failedAtVersion);
+
+    expect(later).toBe(first);
+    await later;
+    expect(reopen).toHaveBeenCalledTimes(1);
+  });
+
+  it('allows a new reopen when an operation fails after the previous recovery', async () => {
+    const reopen = vi.fn(async () => undefined);
+    const coordinator = createRemoteSyncReopenCoordinator(reopen);
+
+    await coordinator.reopenAfter(coordinator.captureVersion());
+    const requestStartedAfterRecovery = coordinator.captureVersion();
+    await coordinator.reopenAfter(requestStartedAfterRecovery);
+
+    expect(reopen).toHaveBeenCalledTimes(2);
+    expect(coordinator.captureVersion()).toBe(2);
+  });
+
+  it('allows the same sync run to retry after a failed peer reopen', async () => {
+    const reopen = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce(undefined);
+    const coordinator = createRemoteSyncReopenCoordinator(reopen);
+    const failedAtVersion = coordinator.captureVersion();
+
+    await expect(coordinator.reopenAfter(failedAtVersion)).rejects.toThrow('offline');
+    await expect(coordinator.reopenAfter(failedAtVersion)).resolves.toBeUndefined();
+    expect(reopen).toHaveBeenCalledTimes(2);
+  });
+
   it('coalesces repeated triggers into one in-flight run and one follow-up run', async () => {
     const gates = [deferred(), deferred()];
     const starts: number[] = [];
@@ -176,6 +218,22 @@ describe('remote sync coordinator', () => {
     const source = readSessionScreenSource();
     expect(source).toContain(
       'setRewindState({ kind: \'idle\' });\n    setMessageActionBusy(null);\n    setLoading(false);',
+    );
+  });
+
+  it('uses the force-reopen callback for subscription and snapshot retries', () => {
+    const source = readSessionScreenSource();
+    expect(source).toContain(
+      'reopenLink: () => syncReopenCoordinator.reopenAfter(subscriptionAttemptVersion)',
+    );
+    expect(source).toContain(
+      'await syncReopenCoordinator.reopenAfter(failedAtVersion);',
+    );
+    expect(source).toContain(
+      'const syncReopenCoordinator = createRemoteSyncReopenCoordinator(',
+    );
+    expect(source).not.toContain(
+      'reopenLink: async () => {\n          await openLink(deviceId);\n        }',
     );
   });
 

@@ -9,7 +9,7 @@
  * 本 store 补上这个空档:上传成功时把实际 PUT 的文件(降采样产物,通常几百 KB)
  * 拷贝进 app 自有目录,记录「ossRef → 本地相对文件名」映射并持久化;渲染用户消息
  * 图片时 url 仍是 `cindy-oss-attach://` 且映射命中 → 用本地图当缩略图。桌面端物化后
- * url 变成 `xdt-image://`,兜底自然退场,条目由过期清理回收。
+ * url 变成 `xdt-image://`,兜底自然退场,本地副本保留供再次查看。
  *
  * 设计要点:
  *   - 映射存**相对文件名**:iOS app 容器绝对路径会随更新变化,不能持久化绝对路径;
@@ -27,23 +27,13 @@ import { isPayloadDesktopLocalMediaUrl } from '@cindy/maker-shared/payload-summa
 const STORAGE_KEY = 'xdt.sentAttachmentThumbs.v1';
 /** documentDirectory 下的自有子目录(不放 cache:系统清缓存会把兜底图清裂)。 */
 const THUMB_DIR_NAME = 'sent-attachment-thumbs';
-/** 条目上限(LRU,按注册时间淘汰)。窗口期本来就短,64 条覆盖极端连发场景。 */
-const MAX_ENTRIES = 64;
-/** 过期时长:桌面端物化通常秒级完成,7 天足够覆盖「电脑长期离线」的长尾。 */
-const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
-/**
- * 单文件体积上限:降采样产物典型几百 KB;gif / 原样直传可到 30MB(上传上限),
- * 超限的不做本地兜底(气泡回落占位卡,可接受降级),防兜底目录无界膨胀。
- */
-const MAX_SOURCE_BYTES = 8 * 1024 * 1024;
-
 /** 拷贝产物扩展名白名单(其余回落 .jpg;只影响文件名,不影响渲染)。 */
 const KNOWN_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp']);
 
 interface ThumbEntry {
   /** THUMB_DIR_NAME 下的相对文件名。 */
   file: string;
-  /** 注册时间戳(LRU 淘汰 + 过期清理用)。 */
+  /** 注册时间戳。 */
   at: number;
 }
 
@@ -104,7 +94,7 @@ function thumbDir(): string | null {
 }
 
 /**
- * 冷启动回填:读持久化映射进内存,顺带清过期条目与目录孤儿文件。幂等,
+ * 冷启动回填:读持久化映射进内存,顺带清目录孤儿文件。幂等,
  * 首次查询 / 注册时惰性触发。
  */
 export function ensureSentAttachmentThumbsHydrated(
@@ -119,22 +109,13 @@ export function ensureSentAttachmentThumbsHydrated(
 async function hydrateInternal(deps: SentAttachmentThumbFsDeps): Promise<void> {
   cachedDocDir = await deps.documentDirectory().catch(() => null);
   const raw = await AsyncStorage.getItem(STORAGE_KEY).catch(() => null);
-  const now = Date.now();
-  const keep: Array<[string, ThumbEntry]> = [];
-  let dropped = 0;
-  for (const [ossRef, entry] of parseStoredEntries(raw)) {
-    if (now - entry.at > MAX_AGE_MS) {
-      dropped += 1;
-      continue;
-    }
-    keep.push([ossRef, entry]);
-  }
+  const keep = parseStoredEntries(raw);
   // 内存以磁盘为底、保留 hydrate 期间已注册的新条目(register 先 await hydrate,
   // 实际不会先写;防御性合并保证后写胜)。
   for (const [ossRef, entry] of keep) {
     if (!entries.has(ossRef)) entries.set(ossRef, entry);
   }
-  // 目录孤儿清理:磁盘上存在但映射不再引用的文件(过期条目的文件也在此统一删)。
+  // 目录孤儿清理:磁盘上存在但映射不再引用的文件。
   const dir = thumbDir();
   if (dir) {
     const kept = new Set([...entries.values()].map((entry) => entry.file));
@@ -143,7 +124,6 @@ async function hydrateInternal(deps: SentAttachmentThumbFsDeps): Promise<void> {
       if (!kept.has(name)) void deps.remove(`${dir}/${name}`).catch(() => undefined);
     }
   }
-  if (dropped > 0) schedulePersist();
   bump();
 }
 
@@ -175,28 +155,11 @@ export async function registerSentAttachmentThumb(
     if (entries.has(ossRef)) return;
     const dir = thumbDir();
     if (!dir) return;
-    const size = await deps.statSize(sourceUri).catch(() => 0);
-    if (size > MAX_SOURCE_BYTES) return;
     const at = Date.now();
     fileSeq += 1;
     const file = `thumb-${at}-${fileSeq}.${extForUri(sourceUri)}`;
     await deps.makeDirectory(dir);
     await deps.copy(sourceUri, `${dir}/${file}`);
-    // LRU 淘汰:超上限先删最老条目(含其文件),再入新条目。
-    while (entries.size >= MAX_ENTRIES) {
-      let oldestKey: string | null = null;
-      let oldestAt = Number.POSITIVE_INFINITY;
-      for (const [key, entry] of entries) {
-        if (entry.at < oldestAt) {
-          oldestAt = entry.at;
-          oldestKey = key;
-        }
-      }
-      if (!oldestKey) break;
-      const evicted = entries.get(oldestKey);
-      entries.delete(oldestKey);
-      if (evicted) void deps.remove(`${dir}/${evicted.file}`).catch(() => undefined);
-    }
     entries.set(ossRef, { file, at });
     schedulePersist();
     bump();
@@ -301,9 +264,6 @@ function schedulePersist(): void {
 }
 
 export const __testing = {
-  maxAgeMs: MAX_AGE_MS,
-  maxEntries: MAX_ENTRIES,
-  maxSourceBytes: MAX_SOURCE_BYTES,
   storageKey: STORAGE_KEY,
   thumbDirName: THUMB_DIR_NAME,
   /** 等持久化队列排空(测试断言 AsyncStorage 内容前调用)。 */

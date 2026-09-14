@@ -50,7 +50,7 @@ export function SessionOrdinalBadgeKbd({ label }: { label: string }) {
   return (
     <kbd
       aria-hidden
-      className="flex select-none items-center gap-px rounded-md bg-[color-mix(in_srgb,currentColor_10%,transparent)] px-1.5 py-[2px] text-11 font-normal leading-none text-current"
+      className="flex select-none items-center gap-px rounded-[4px] bg-[color-mix(in_srgb,currentColor_10%,transparent)] px-1.5 py-[2px] text-11 font-normal leading-none text-current"
     >
       {macParts ? (
         <>

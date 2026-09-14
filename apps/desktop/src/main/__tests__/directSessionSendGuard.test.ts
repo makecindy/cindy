@@ -180,9 +180,10 @@ function findDirectSendViolations(program: ts.Program): SendViolation[] {
 
 function isMakerSessionSendCall(node: ts.CallExpression, checker: ts.TypeChecker): boolean {
   if (!ts.isPropertyAccessExpression(node.expression)) return false;
-  if (node.expression.name.text !== 'send') return false;
+  const methodName = node.expression.name.text;
+  if (methodName !== 'send' && methodName !== 'sendHostTurnContinuation') return false;
   const receiverType = checker.getTypeAtLocation(node.expression.expression);
-  const sendSymbol = receiverType.getProperty('send') ?? checker.getSymbolAtLocation(node.expression.name);
+  const sendSymbol = receiverType.getProperty(methodName) ?? checker.getSymbolAtLocation(node.expression.name);
   const declarations = sendSymbol?.getDeclarations() ?? [];
   return declarations.some((declaration) => {
     const sourceFile = normalizePath(declaration.getSourceFile().fileName);

@@ -10,7 +10,6 @@
  *     cleanup-session / cleanup-files)
  *   - xdt-image:// protocol handler
  *   - agentManager.buildContentBlocks (F5 temporary base64 read)
- *   - startup orphan sweep for unsent draft images
  *
  * Security model: every URL→absPath resolution funnels through `resolveSafe`
  * which path-resolves against the cache root and rejects anything that escapes.

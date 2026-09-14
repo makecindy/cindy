@@ -16,20 +16,19 @@ describe('shared-passive schema lease worker takeover wiring', () => {
       'utf8',
     );
     const unchangedGuard = bootstrap.indexOf("dbClientTakeover.mode === 'unchanged'");
-    const attachmentSweep = bootstrap.indexOf('sweepStagedChatAttachmentsOnStartup({');
+    const unchangedReturn = bootstrap.indexOf('return;', unchangedGuard);
     const takeoverStart = bootstrap.indexOf(
       'if (dbClientTakeover.shouldReleaseMainDb',
-      attachmentSweep,
+      unchangedReturn,
     );
     const takeoverEnd = bootstrap.indexOf('custom-mcp-account-switch', takeoverStart);
     const takeoverBlock = bootstrap.slice(takeoverStart, takeoverEnd);
     expect(unchangedGuard).toBeGreaterThanOrEqual(0);
-    expect(attachmentSweep).toBeGreaterThan(unchangedGuard);
-    expect(takeoverStart).toBeGreaterThan(attachmentSweep);
+    expect(unchangedReturn).toBeGreaterThan(unchangedGuard);
+    expect(takeoverStart).toBeGreaterThan(unchangedReturn);
     expect(takeoverBlock).toContain(
       'localDbCloseDb({ preserveSchemaMigrationLease: true })',
     );
-    expect(bootstrap.slice(unchangedGuard, attachmentSweep)).toContain('return;');
   });
 
   it('preserves the real lease across takeover close and releases it on logout/quit close', () => {

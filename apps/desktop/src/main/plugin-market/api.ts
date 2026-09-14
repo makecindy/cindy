@@ -49,9 +49,10 @@ export class PluginMarketApi {
 
   async listAll(
     query?: string,
-  ): Promise<Pick<ListPluginsResponse, 'plugins' | 'removals'>> {
+  ): Promise<Pick<ListPluginsResponse, 'plugins' | 'removals' | 'currentOrganization'>> {
     const plugins: ListPluginsResponse['plugins'] = [];
     const removalsByPluginId = new Map<string, PluginRemovalNotice>();
+    let currentOrganization: ListPluginsResponse['currentOrganization'] = null;
     let cursor: string | null = null;
     const seen = new Set<string>();
     for (let page = 0; page < 100; page += 1) {
@@ -74,6 +75,11 @@ export class PluginMarketApi {
           removalsByPluginId.set(removal.pluginId, removal);
         }
       }
+      // 取**第一个非 null** 的值，不要每页覆盖。服务端是否每页都重复下发
+      // `currentOrganization` 并没有写进契约(PLAN §6 没有这一条),若它只在首页带，
+      // 逐页覆盖会让第二页的 null 把身份事实抹掉——多页目录的组织就永远缓存不到前缀。
+      // 两种服务端行为下这个写法都对，且结果确定。
+      currentOrganization ??= response.currentOrganization;
       if (!response.nextCursor) {
         // 在架优先(契约:通告与**任一页** plugins 有交集即作废)的作用域是
         // 未经 owner 过滤的完整目录,必须留在聚合层;挪到 service 的 owner
@@ -85,7 +91,7 @@ export class PluginMarketApi {
           });
           return false;
         });
-        return { plugins, removals };
+        return { plugins, removals, currentOrganization };
       }
       if (response.nextCursor === cursor) throw new Error('Plugin 市场分页游标未前进');
       cursor = response.nextCursor;

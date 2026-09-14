@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { DeviceLinkError } from '@cindy/device-link';
 import {
   connectionRecoverySyncRetryDelayMs,
@@ -13,6 +13,10 @@ import {
   relayStatusLabel,
 } from '@/device-link/remoteStatus';
 import { i18n } from '@/i18n';
+
+beforeAll(async () => {
+  await i18n.changeLanguage('zh-CN');
+});
 
 describe('remoteStatus', () => {
   it('backs repeated connection recovery syncs off and caps the delay', () => {

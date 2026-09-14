@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { Navigate, useLocation, useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { Search, ChevronDown, ArrowLeft } from 'lucide-react';
 import {
@@ -9,7 +9,6 @@ import {
   DropdownMenuItem,
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
-import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import {
   useCategoryList,
@@ -20,21 +19,18 @@ import {
   type Visibility,
 } from './hooks/useMarketList';
 import { refresh as refreshSkillhub } from './hooks/useSkillhub';
+import { MarketManagementDialogs, useMarketManagement } from './hooks/useMarketManagement';
 import { getMarketSelected, setMarketSelected } from './hooks/useMarketSelection';
-import { MarketCard, type MarketCardManageAction } from './components/MarketCard';
+import { MarketCard } from './components/MarketCard';
 import { InstallTargetPicker } from './components/InstallTargetPicker';
-import { MarketInfoEditDialog } from './components/MarketInfoEditDialog';
-import { VisibilityEditorDialog, type VisibilityTier } from './components/VisibilityEditorDialog';
 import { SkillhubMarketPreviewPanel } from './SkillhubMarketPreviewPanel';
 import { marketCardPrimaryAction } from './lib/marketDetailViewModel';
 import { groupMineByOwner } from './lib/mineGrouping';
-import { lacksTeamManagePermission } from './lib/manageGuard';
-import { marketActionErrorMessage } from './lib/marketErrors';
 import { nextMarketPreviewName } from './lib/marketPreviewSelection';
 import { syncMarketPreviewSelection } from './lib/marketPreviewSync';
-import { canAccessSkillhubMarket } from './lib/marketAccess';
 import { useAuth } from '@/contexts/AuthContext';
 import { CATEGORY_ALL } from '../../../shared/skillhubCategory';
+import { useSkillhubIdentityPolicy } from './hooks/useSkillhubIdentityPolicy';
 
 const FILTER_CHIP_STYLE = { height: '32px', padding: '0 12px', fontSize: '12px' };
 // Must match the global native scrollbar width in styles/globals.css.
@@ -74,27 +70,19 @@ function FilterChip({
   );
 }
 
-/**
- * 市场路由门禁包装:市场不可见的账号(个人 / 非 xd 组织,见 lib/marketAccess.ts)
- * 通过深链 / 历史记录直达 /skillhub/market 时,重定向回本地技能首页。
- * 登录态初始化期间(user 尚未水合)不误判,先按原样渲染。
- */
 export function SkillhubMarketListView() {
-  const { user, isInitializing } = useAuth();
-  if (!isInitializing && !canAccessSkillhubMarket(user)) {
-    return <Navigate to="/skillhub/local" replace />;
-  }
   return <SkillhubMarketListViewInner />;
 }
 
 function SkillhubMarketListViewInner() {
   const { t } = useTranslation();
+  const { user, isInitializing } = useAuth();
+  const identityPolicy = useSkillhubIdentityPolicy(user);
   const location = useLocation();
   const navigate = useNavigate();
   const marketState = location.state as { freshEntry?: boolean; initialVisibility?: Visibility } | null;
   const initialVisibility = marketState?.initialVisibility === 'all' ||
-    marketState?.initialVisibility === 'mine' ||
-    marketState?.initialVisibility === 'available'
+    marketState?.initialVisibility === 'mine'
     ? marketState.initialVisibility
     : undefined;
   const {
@@ -113,7 +101,7 @@ function SkillhubMarketListViewInner() {
     setVisibility,
     loadMore,
     reload,
-  } = useMarketList(initialVisibility);
+  } = useMarketList(initialVisibility, { initialScope: 'market' });
   const { categories } = useCategoryList();
 
   // 「我的发布」按归属(个人 / 各团队)分组渲染;空组不显示(groupMineByOwner 只对有 item 的 owner 建组)。
@@ -137,6 +125,10 @@ function SkillhubMarketListViewInner() {
     isFreshEntry ? null : getMarketSelected()?.name ?? null,
   );
   const [previewSkill, setPreviewSkill] = useState<MarketSkill | null>(null);
+
+  useEffect(() => {
+    if (!isInitializing && !user && visibility === 'mine') setVisibility('all');
+  }, [isInitializing, setVisibility, user, visibility]);
 
   useEffect(() => {
     if (isFreshEntry) {
@@ -200,25 +192,6 @@ function SkillhubMarketListViewInner() {
   // Picker 状态 — Clone 按钮触发
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSkill, setPickerSkill] = useState<MarketSkill | null>(null);
-  const [visibilityTarget, setVisibilityTarget] = useState<MarketSkill | null>(null);
-  const [editTarget, setEditTarget] = useState<MarketSkill | null>(null);
-  const { confirm } = useConfirmDialog();
-
-  // 「我的管理」按团队角色拦截写操作:viewer 团队的 skill 照常显示,但点
-  // 编辑/可见性/删除时提示「权限不足」。角色取自 Hub /users/teams 的 myRole
-  // (一次性拉取);拿不到时不主动拦,留给保存时 Hub 的 403 兜底。
-  const [myRoleByTeamSlug, setMyRoleByTeamSlug] =
-    useState<Map<string, 'admin' | 'publisher' | 'viewer' | undefined>>(() => new Map());
-  useEffect(() => {
-    // myRoleByTeamSlug 只在「我的管理」tab 用,非该 tab 不发请求,省一次无意义的网络往返
-    if (!isMineView) return;
-    let cancelled = false;
-    void window.electronAPI.skillhub.listUserTeams().then((res) => {
-      if (cancelled || !res.success) return;
-      setMyRoleByTeamSlug(new Map(res.teams.map((team) => [team.slug, team.myRole])));
-    });
-    return () => { cancelled = true; };
-  }, [isMineView]);
 
   // 订阅 install progress 事件：done 时 refresh 本地 scan + toast
   useEffect(() => {
@@ -258,73 +231,35 @@ function SkillhubMarketListViewInner() {
     setPickerSkill(skill);
     setPickerOpen(true);
   };
-
-  const handleDelete = async (skill: MarketSkill) => {
-    const skillName = skill.displayName || skill.name;
-    const ok = await confirm({
-      title: t('skillhub.marketConfirm.deleteTitle', { name: skillName }),
-      description: t('skillhub.marketConfirm.deleteDesc', { name: skillName }),
-      confirmText: t('skillhub.marketConfirm.deleteConfirm'),
-      cancelText: t('skillhub.publishDialog.cancel'),
-    });
-    if (!ok) return;
-    const res = await window.electronAPI.skillhub.deletePublished(skill.name);
-    if (!res.success) {
-      toast.error(marketActionErrorMessage(res.error, res.errorCode, t));
-      return;
-    }
-    toast.success(t('skillhub.marketActions.deleteSuccess'));
-    if (previewSkill?.name === skill.name || selectedName === skill.name) {
+  const management = useMarketManagement({
+    active: isMineView,
+    reload,
+    onClone: handleClone,
+    onDeleted: (skill) => {
+      if (previewSkill?.name !== skill.name && selectedName !== skill.name) return;
       setPreviewSkill(null);
       setSelectedName(null);
       setMarketSelected(null);
-    }
-    reload();
-    void refreshSkillhub();
-  };
-
-  const handleManageAction = (skill: MarketSkill, action: MarketCardManageAction) => {
-    // viewer 对团队 skill 没有写权限:
-    // - 编辑信息 / 改可见性:放行打开弹窗,但弹窗内只读 + 顶部提示(各弹窗 readOnly prop)。
-    // - 删除:确认框无表单可禁用,直接 toast 拦下。
-    // 克隆/安装是只读操作,照常放行。
-    if (action === 'delete' && lacksTeamManagePermission(skill, myRoleByTeamSlug)) {
-      toast.error(t('skillhub.market.noManagePermission'));
-      return;
-    }
-    switch (action) {
-      case 'edit':
-        setEditTarget(skill);
-        break;
-      case 'manageVisibility':
-        setVisibilityTarget(skill);
-        break;
-      case 'clone':
-        handleClone(skill);
-        break;
-      case 'delete':
-        void handleDelete(skill);
-        break;
-    }
-  };
-
-  const tierForSkill = (skill: MarketSkill): VisibilityTier => {
-    const pv = skill.publishedVisibility ?? (skill.visibility === 'PUBLIC' ? 'public' : 'shared');
-    return pv === 'shared' ? 'team' : pv;
-  };
+    },
+  });
 
   const renderCard = (skill: MarketSkill) => (
     <MarketCard
       key={skill.name}
       skill={skill}
-      primaryAction={marketCardPrimaryAction({
-        isMine: skill.isMine,
-        listVisibility: visibility,
-        cardState: skill.cardState,
-      })}
+      primaryAction={user
+        ? (() => {
+            const action = marketCardPrimaryAction({
+              isMine: skill.isMine,
+              listVisibility: visibility,
+              cardState: skill.cardState,
+            });
+            return action === 'manage' && !identityPolicy.canWrite ? 'clone' : action;
+          })()
+        : 'none'}
       allowPrivateVisibilityLabel={visibility === 'mine'}
       onClone={handleClone}
-      onManageAction={handleManageAction}
+      onManageAction={management.handleManageAction}
       onClick={handleCardClick}
       selected={skill.name === selectedName}
     />
@@ -445,22 +380,18 @@ function SkillhubMarketListViewInner() {
             </DropdownMenu>
           ) : null}
 
-          {/* 可获取默认选中,语义对齐 SkillHub 徽标 */}
-          <FilterChip
-            active={visibility === 'available'}
-            label={t('skillhub.market.chipAvailable')}
-            onClick={() => setVisibility('available')}
-          />
           <FilterChip
             active={visibility === 'all'}
             label={t('skillhub.market.chipAll')}
             onClick={() => setVisibility('all')}
           />
-          <FilterChip
-            active={visibility === 'mine'}
-            label={t('skillhub.market.chipMine')}
-            onClick={() => setVisibility('mine')}
-          />
+          {user ? (
+            <FilterChip
+              active={visibility === 'mine'}
+              label={t('skillhub.market.chipMine')}
+              onClick={() => setVisibility('mine')}
+            />
+          ) : null}
         </div>
       </div>
 
@@ -562,45 +493,20 @@ function SkillhubMarketListViewInner() {
         open={previewSkill !== null}
         skill={previewSkill}
         onClose={handlePreviewClose}
-        primaryAction={previewSkill
-          ? marketCardPrimaryAction({
-            isMine: previewSkill.isMine,
-            listVisibility: visibility,
-            cardState: previewSkill.cardState,
-          })
+        primaryAction={previewSkill && user
+          ? (() => {
+              const action = marketCardPrimaryAction({
+                isMine: previewSkill.isMine,
+                listVisibility: visibility,
+                cardState: previewSkill.cardState,
+              });
+              return action === 'manage' && !identityPolicy.canWrite ? 'clone' : action;
+            })()
           : 'none'}
         onClone={handleClone}
-        onManageAction={handleManageAction}
+        onManageAction={management.handleManageAction}
       />
-      {editTarget ? (
-        <MarketInfoEditDialog
-          open
-          onOpenChange={(v) => { if (!v) setEditTarget(null); }}
-          skillName={editTarget.name}
-          currentCategories={editTarget.categories}
-          readOnly={lacksTeamManagePermission(editTarget, myRoleByTeamSlug)}
-          onSaved={() => {
-            setEditTarget(null);
-            reload();
-          }}
-        />
-      ) : null}
-      {visibilityTarget ? (
-        <VisibilityEditorDialog
-          open
-          onOpenChange={(v) => { if (!v) setVisibilityTarget(null); }}
-          skillName={visibilityTarget.name}
-          currentTier={tierForSkill(visibilityTarget)}
-          currentOwnerType={visibilityTarget.ownerType}
-          currentOwnerSlug={visibilityTarget.authorId}
-          readOnly={lacksTeamManagePermission(visibilityTarget, myRoleByTeamSlug)}
-          onSaved={() => {
-            setVisibilityTarget(null);
-            reload();
-            void refreshSkillhub();
-          }}
-        />
-      ) : null}
+      <MarketManagementDialogs controller={management} />
     </div>
   );
 }

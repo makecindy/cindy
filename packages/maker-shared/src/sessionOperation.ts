@@ -1,3 +1,8 @@
+import {
+  presentationText,
+  type PresentationLocalizer,
+} from './presentationLocalization.js';
+
 export type ComposerVoiceState =
   | 'idle'
   | 'listening'
@@ -116,18 +121,21 @@ export interface SessionOperationLayout {
   showQueue: boolean;
 }
 
-export function composerVoiceStateLabel(state: ComposerVoiceState): string {
+export function composerVoiceStateLabel(
+  state: ComposerVoiceState,
+  localizer?: PresentationLocalizer,
+): string {
   switch (state) {
     case 'listening':
-      return '正在听';
+      return presentationText(localizer, 'session.presentation.composer.voice.listening', '正在听');
     case 'submitting':
-      return '转写中';
+      return presentationText(localizer, 'session.presentation.composer.voice.submitting', '转写中');
     case 'refining':
-      return '正在润色';
+      return presentationText(localizer, 'session.presentation.composer.voice.refining', '正在润色');
     case 'error':
-      return '语音出错';
+      return presentationText(localizer, 'session.presentation.composer.voice.error', '语音出错');
     default:
-      return '语音';
+      return presentationText(localizer, 'session.presentation.composer.voice.idle', '语音');
   }
 }
 
@@ -139,7 +147,10 @@ function isVoiceInputProcessing(state: ComposerVoiceState): boolean {
   return state === 'submitting' || state === 'refining';
 }
 
-export function buildSessionComposerLayout(input: SessionComposerLayoutInput): SessionComposerLayout {
+export function buildSessionComposerLayout(
+  input: SessionComposerLayoutInput,
+  localizer?: PresentationLocalizer,
+): SessionComposerLayout {
   const hasDraft = input.draftText.trim().length > 0;
   const hasAttachments = input.attachmentCount > 0;
   const hasQuotes = (input.quoteCount ?? 0) > 0;
@@ -152,15 +163,24 @@ export function buildSessionComposerLayout(input: SessionComposerLayoutInput): S
   const sendVisible = canSend || input.sending || voiceBusy;
   const stopVisible = input.canStop || input.queueBusy;
   const sendUnavailableReason = normalizeOptionalReason(input.sendUnavailableReason);
-  const voiceLabel = composerVoiceStateLabel(input.voiceState);
-  const attachmentDisabledReason = buildAttachmentDisabledReason(input);
-  const inputDisabledReason = buildComposerInputDisabledReason(input);
+  const voiceLabel = composerVoiceStateLabel(input.voiceState, localizer);
+  const attachmentDisabledReason = buildAttachmentDisabledReason(input, localizer);
+  const inputDisabledReason = buildComposerInputDisabledReason(input, localizer);
   return {
     attachment: {
       active: input.attachmentPickerOpen || hasAttachments,
       disabled: attachmentDisabledReason !== null,
       disabledReason: attachmentDisabledReason,
-      label: hasAttachments ? `附件 ${input.attachmentCount}` : input.attachmentPickerOpen ? '收起附件' : '附件',
+      label: hasAttachments
+        ? presentationText(
+          localizer,
+          'session.presentation.composer.attachment.count',
+          `附件 ${input.attachmentCount}`,
+          { count: input.attachmentCount },
+        )
+        : input.attachmentPickerOpen
+          ? presentationText(localizer, 'session.presentation.composer.attachment.collapse', '收起附件')
+          : presentationText(localizer, 'session.presentation.composer.attachment.label', '附件'),
       remove: {
         disabled: attachmentDisabledReason !== null,
         disabledReason: attachmentDisabledReason,
@@ -170,9 +190,7 @@ export function buildSessionComposerLayout(input: SessionComposerLayoutInput): S
     input: {
       disabled: inputDisabledReason !== null,
       disabledReason: inputDisabledReason,
-      placeholder: buildComposerPlaceholder({
-        voiceState: input.voiceState,
-      }),
+      placeholder: buildComposerPlaceholder(input.voiceState, localizer),
     },
     primaryAction: resolveComposerPrimaryAction({
       canSend,
@@ -191,37 +209,43 @@ export function buildSessionComposerLayout(input: SessionComposerLayoutInput): S
         || isVoiceInputProcessing(input.voiceState)
         || (!canSend && input.voiceState !== 'listening'),
       disabledReason: input.sending
-        ? '消息正在发送到电脑端。'
+        ? presentationText(localizer, 'session.presentation.composer.send.sendingReason', '消息正在发送到电脑端。')
         : input.attachmentBusy
-          ? '附件上传中，完成后再发送。'
+          ? presentationText(localizer, 'session.presentation.composer.send.attachmentBusyReason', '附件上传中，完成后再发送。')
           : sendUnavailableReason
             ?? (isVoiceInputProcessing(input.voiceState)
-              ? '语音正在处理，完成后再发送。'
+              ? presentationText(localizer, 'session.presentation.composer.send.voiceBusyReason', '语音正在处理，完成后再发送。')
               : canSend || input.voiceState === 'listening'
                 ? null
-                : '输入文字、添加附件或引用后才能发送。'),
-      label: input.sending ? '发送中' : '发送',
+                : presentationText(localizer, 'session.presentation.composer.send.emptyReason', '输入文字、添加附件或引用后才能发送。')),
+      label: input.sending
+        ? presentationText(localizer, 'session.presentation.composer.send.sending', '发送中')
+        : presentationText(localizer, 'session.presentation.composer.send.label', '发送'),
       visible: sendVisible,
     },
     stop: {
       disabled: input.queueBusy || !input.canStop,
       disabledReason: input.queueBusy
-        ? '队列操作同步中，暂时不能停止。'
+        ? presentationText(localizer, 'session.presentation.composer.stop.queueBusyReason', '队列操作同步中，暂时不能停止。')
         : input.canStop
           ? null
-          : '电脑端当前没有可停止的执行。',
-      label: input.queueBusy ? '处理中' : '停止',
+          : presentationText(localizer, 'session.presentation.composer.stop.unavailableReason', '电脑端当前没有可停止的执行。'),
+      label: input.queueBusy
+        ? presentationText(localizer, 'session.presentation.composer.stop.processing', '处理中')
+        : presentationText(localizer, 'session.presentation.composer.stop.label', '停止'),
       visible: stopVisible,
     },
     voice: {
       active: input.voiceState === 'listening',
       disabled: input.sending || isVoiceInputProcessing(input.voiceState),
       disabledReason: input.sending
-        ? '消息正在发送到电脑端，完成后再录音。'
-        : isVoiceInputProcessing(input.voiceState) ? '语音正在处理，完成后再录音。' : null,
+        ? presentationText(localizer, 'session.presentation.composer.voice.sendingReason', '消息正在发送到电脑端，完成后再录音。')
+        : isVoiceInputProcessing(input.voiceState)
+          ? presentationText(localizer, 'session.presentation.composer.voice.processingReason', '语音正在处理，完成后再录音。')
+          : null,
       label: voiceLabel,
     },
-    guidanceText: buildComposerGuidanceText(input),
+    guidanceText: buildComposerGuidanceText(input, localizer),
     statusText: buildComposerStatusText({
       attachmentBusy: input.attachmentBusy,
       attachmentCount: input.attachmentCount,
@@ -231,7 +255,7 @@ export function buildSessionComposerLayout(input: SessionComposerLayoutInput): S
       sending: input.sending,
       voiceLabel,
       voiceState: input.voiceState,
-    }),
+    }, localizer),
   };
 }
 
@@ -247,14 +271,26 @@ function shouldUseCompactComposer(input: SessionComposerLayoutInput): boolean {
     && !input.sending;
 }
 
-function buildAttachmentDisabledReason(input: SessionComposerLayoutInput): string | null {
-  if (input.attachmentBusy) return '附件处理中，完成后再继续添加。';
-  if (input.sending) return '消息正在发送到电脑端，完成后再调整附件。';
+function buildAttachmentDisabledReason(
+  input: SessionComposerLayoutInput,
+  localizer?: PresentationLocalizer,
+): string | null {
+  if (input.attachmentBusy) {
+    return presentationText(localizer, 'session.presentation.composer.attachment.busyReason', '附件处理中，完成后再继续添加。');
+  }
+  if (input.sending) {
+    return presentationText(localizer, 'session.presentation.composer.attachment.sendingReason', '消息正在发送到电脑端，完成后再调整附件。');
+  }
   return null;
 }
 
-function buildComposerInputDisabledReason(input: SessionComposerLayoutInput): string | null {
-  if (input.sending) return '消息正在发送到电脑端。';
+function buildComposerInputDisabledReason(
+  input: SessionComposerLayoutInput,
+  localizer?: PresentationLocalizer,
+): string | null {
+  if (input.sending) {
+    return presentationText(localizer, 'session.presentation.composer.input.sendingReason', '消息正在发送到电脑端。');
+  }
   return null;
 }
 
@@ -263,11 +299,18 @@ function normalizeOptionalReason(reason: string | null | undefined): string | nu
   return normalized ? normalized : null;
 }
 
-export function buildSessionOperationLayout(input: SessionOperationLayoutInput): SessionOperationLayout {
+export function buildSessionOperationLayout(
+  input: SessionOperationLayoutInput,
+  localizer?: PresentationLocalizer,
+): SessionOperationLayout {
   if (!input.hasCurrentSession) {
     return {
       canUseComposer: false,
-      composerDisabledReason: '当前任务还没有同步完成。',
+      composerDisabledReason: presentationText(
+        localizer,
+        'session.presentation.composer.operation.sessionSyncing',
+        '当前任务还没有同步完成。',
+      ),
       composerDisabledReasonSource: 'session-syncing',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
@@ -294,7 +337,11 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
   if (input.hasActivePendingInteraction && blocksComposer) {
     return {
       canUseComposer: false,
-      composerDisabledReason: '先处理电脑端的待处理请求后才能继续输入。',
+      composerDisabledReason: presentationText(
+        localizer,
+        'session.presentation.composer.operation.pendingInteraction',
+        '先处理电脑端的待处理请求后才能继续输入。',
+      ),
       composerDisabledReasonSource: 'pending-interaction',
       composerSlot: 'pending-interaction',
       messageHistoryMode: 'visible',
@@ -346,43 +393,59 @@ function resolveComposerPrimaryAction(input: {
   return 'none';
 }
 
-function buildComposerPlaceholder(input: Pick<SessionComposerLayoutInput, 'voiceState'>): string {
-  if (input.voiceState === 'listening') return '正在听……';
-  if (input.voiceState === 'submitting') return '正在转写语音';
-  if (input.voiceState === 'refining') return '正在润色语音';
-  return DESKTOP_SESSION_CHAT_PLACEHOLDER_ZH_CN;
+function buildComposerPlaceholder(
+  voiceState: ComposerVoiceState,
+  localizer?: PresentationLocalizer,
+): string {
+  if (voiceState === 'listening') {
+    return presentationText(localizer, 'session.presentation.composer.placeholder.listening', '正在听……');
+  }
+  if (voiceState === 'submitting') {
+    return presentationText(localizer, 'session.presentation.composer.placeholder.submitting', '正在转写语音');
+  }
+  if (voiceState === 'refining') {
+    return presentationText(localizer, 'session.presentation.composer.placeholder.refining', '正在润色语音');
+  }
+  return presentationText(
+    localizer,
+    'session.presentation.composer.placeholder.default',
+    DESKTOP_SESSION_CHAT_PLACEHOLDER_ZH_CN,
+  );
 }
 
-function buildComposerGuidanceText(input: SessionComposerLayoutInput): string {
+function buildComposerGuidanceText(
+  input: SessionComposerLayoutInput,
+  localizer?: PresentationLocalizer,
+): string {
   const hasDraft = input.draftText.trim().length > 0;
   const hasAttachments = input.attachmentCount > 0;
   const hasQuotes = (input.quoteCount ?? 0) > 0;
-  if (input.sending) return '消息正在写入桌面端队列，完成前请不要重复发送。';
-  if (input.queueBusy) return '正在同步队列操作，完成后会刷新队列状态。';
+  if (input.sending) return presentationText(localizer, 'session.presentation.composer.guidance.sending', '消息正在写入桌面端队列，完成前请不要重复发送。');
+  if (input.queueBusy) return presentationText(localizer, 'session.presentation.composer.guidance.queueBusy', '正在同步队列操作，完成后会刷新队列状态。');
   if (input.voiceState === 'listening' && hasDraft) {
-    return '点发送会结束语音并发送当前文字；点输入框会结束语音并弹出键盘。';
+    return presentationText(localizer, 'session.presentation.composer.guidance.listeningWithDraft', '点发送会结束语音并发送当前文字；点输入框会结束语音并弹出键盘。');
   }
-  if (input.voiceState === 'listening') return '正在听；点发送会结束语音并发送识别的文字，点输入框可结束语音并弹出键盘。';
-  if (input.voiceState === 'submitting') return '正在转写语音，输入框会暂时锁定。';
-  if (input.voiceState === 'refining') return '正在润色语音，完成后会更新输入框。';
-  if (input.attachmentBusy) return '正在检查或上传附件，完成后会出现在附件列表。';
+  if (input.voiceState === 'listening') return presentationText(localizer, 'session.presentation.composer.guidance.listening', '正在听；点发送会结束语音并发送识别的文字，点输入框可结束语音并弹出键盘。');
+  if (input.voiceState === 'submitting') return presentationText(localizer, 'session.presentation.composer.guidance.submitting', '正在转写语音，输入框会暂时锁定。');
+  if (input.voiceState === 'refining') return presentationText(localizer, 'session.presentation.composer.guidance.refining', '正在润色语音，完成后会更新输入框。');
+  if (input.attachmentBusy) return presentationText(localizer, 'session.presentation.composer.guidance.attachmentBusy', '正在检查或上传附件，完成后会出现在附件列表。');
   if (input.sendUnavailableReason && (hasDraft || hasAttachments || hasQuotes)) return input.sendUnavailableReason;
-  if (hasAttachments && hasDraft) return `将发送 ${input.attachmentCount} 个附件和输入框里的文字。`;
-  if (hasAttachments) return `将只发送 ${input.attachmentCount} 个附件，也可以补充说明后再发送。`;
-  if (input.attachmentPickerOpen) return '可以添加手机上的照片、截图或文件。';
-  if (hasDraft) return '点发送后会进入桌面端队列，按当前任务设置执行。';
-  if (hasQuotes) return `将发送 ${input.quoteCount} 处引用，也可以补充说明后再发送。`;
-  if (input.canStop) return '电脑端正在执行；可继续排队输入，或点停止保留当前队列。';
-  return '输入文字开始，使用 / 调命令，使用 @ 引用项目资源。';
+  if (hasAttachments && hasDraft) return presentationText(localizer, 'session.presentation.composer.guidance.attachmentsWithText', `将发送 ${input.attachmentCount} 个附件和输入框里的文字。`, { count: input.attachmentCount });
+  if (hasAttachments) return presentationText(localizer, 'session.presentation.composer.guidance.attachmentsOnly', `将只发送 ${input.attachmentCount} 个附件，也可以补充说明后再发送。`, { count: input.attachmentCount });
+  if (input.attachmentPickerOpen) return presentationText(localizer, 'session.presentation.composer.guidance.attachmentPickerOpen', '可以添加手机上的照片、截图或文件。');
+  if (hasDraft) return presentationText(localizer, 'session.presentation.composer.guidance.draft', '点发送后会进入桌面端队列，按当前任务设置执行。');
+  if (hasQuotes) return presentationText(localizer, 'session.presentation.composer.guidance.quotesOnly', `将发送 ${input.quoteCount} 处引用，也可以补充说明后再发送。`, { count: input.quoteCount });
+  if (input.canStop) return presentationText(localizer, 'session.presentation.composer.guidance.canStop', '电脑端正在执行；可继续排队输入，或点停止保留当前队列。');
+  return presentationText(localizer, 'session.presentation.composer.guidance.empty', '输入文字开始，使用 / 调命令，使用 @ 引用项目资源。');
 }
 
 function buildComposerStatusText(input: Pick<
   SessionComposerLayoutInput,
   'attachmentBusy' | 'attachmentCount' | 'canStop' | 'draftText' | 'queueBusy' | 'sending' | 'voiceState'
-> & { voiceLabel: string }): string {
-  if (input.sending) return '正在发送到电脑端';
-  if (input.queueBusy) return '正在处理队列操作';
+> & { voiceLabel: string }, localizer?: PresentationLocalizer): string {
+  if (input.sending) return presentationText(localizer, 'session.presentation.composer.status.sending', '正在发送到电脑端');
+  if (input.queueBusy) return presentationText(localizer, 'session.presentation.composer.status.queueBusy', '正在处理队列操作');
   if (isVoiceInputBusy(input.voiceState)) return input.voiceLabel;
-  if (input.attachmentBusy) return '正在处理附件';
-  return '就绪';
+  if (input.attachmentBusy) return presentationText(localizer, 'session.presentation.composer.status.attachmentBusy', '正在处理附件');
+  return presentationText(localizer, 'session.presentation.composer.status.ready', '就绪');
 }

@@ -65,10 +65,12 @@ describe('useProviders', () => {
     );
   });
 
-  it('refetches the atomic providers and capabilities snapshot', () => {
+  it('awaits the atomic providers and capabilities snapshot refresh', async () => {
     const { result } = renderHook(() => useProviders());
 
-    act(() => result.current.refetch());
+    await act(async () => {
+      expect(await result.current.refetch()).toBe(true);
+    });
 
     expect(mocks.refreshLocalCatalogSnapshot).toHaveBeenCalledOnce();
   });

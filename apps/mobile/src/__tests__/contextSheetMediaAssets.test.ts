@@ -58,6 +58,15 @@ beforeEach(() => {
 });
 
 describe('prefetchContextSheetMediaAssets', () => {
+  it('Android 不读取媒体库,由系统照片选择器承担图片选择', async () => {
+    platform.os = 'android';
+
+    await prefetchContextSheetMediaAssets('recent');
+
+    expect(mediaLibrary.getPermissionsAsync).not.toHaveBeenCalled();
+    expect(mediaLibrary.getAssetsAsync).not.toHaveBeenCalled();
+  });
+
   it('iOS 受限照片权限不在页面预取时读取资产,避免每次冷启动弹系统提醒', async () => {
     platform.os = 'ios';
     mediaLibrary.getPermissionsAsync.mockResolvedValue({

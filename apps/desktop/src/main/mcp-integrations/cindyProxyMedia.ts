@@ -6,11 +6,10 @@ import {
 } from '../cindy-proxy-media/video/providers/seedance.js';
 import { createHappyhorseProvider } from '../cindy-proxy-media/video/providers/happyhorse.js';
 import { resolveSafe as resolveXdtImage } from '../imageCacheStore.js';
-import {
-  createBlobImageStorage,
-  createBlobVideoStorage,
-} from '../cindy-media/generatedMedia.js';
+import { createBlobImageStorage, createBlobVideoStorage } from '../cindy-media/generatedMedia.js';
+import { VideoProviderRegistry } from '../cindy-proxy-media/video/registry.js';
 import { createLogger } from '../logger.js';
+import { mediaErrorForLog } from '../cindy-media/mediaRequestLog.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { getAppCapabilities } from '../appCapabilities.js';
@@ -53,32 +52,7 @@ export function getCindyProxyMediaService(): CindyProxyMediaService {
       resolveLegacyImageRef: (ref) => resolveXdtImage(ref),
     });
     const videoStore = createBlobVideoStorage();
-    // 视频 provider 装配点 — 加新模型(kling/luma/wan)就在这个数组追加一行,
-    // cindy 槽 handler / 渲染层 / 协议层零改动。
-    //
-    // 顺序敏感:数组首个 alias 就是出厂默认(GATEWAY_VIDEO_MODELS 首项同源
-    // 守卫锁定),seedance-fast 必须永远排第一个。happyhorse 是 opt-in,
-    // 只有用户显式点名才切。
-    const videoProviders = [
-      createSeedanceProvider({
-        baseUrl: getGatewayBaseUrl(),
-        getApiKey: readApiKey,
-        logger: log,
-      }),
-      // Seedance 2.5 是独立 provider(值域与 2.0 差太远,capabilities 是
-      // per-provider 的,详见 seedance.ts 文件头)。同样是 opt-in:排在
-      // seedance-fast 之后,不抢出厂默认。
-      createSeedance25Provider({
-        baseUrl: getGatewayBaseUrl(),
-        getApiKey: readApiKey,
-        logger: log,
-      }),
-      createHappyhorseProvider({
-        baseUrl: getGatewayBaseUrl(),
-        getApiKey: readApiKey,
-        logger: log,
-      }),
-    ];
+    const videoProviders = createGatewayVideoProviders(artServiceBaseUrl);
     artService = createCindyProxyMediaService({
       imageApi: {
         getApiKey: readApiKey,
@@ -100,4 +74,52 @@ export function getCindyProxyMediaService(): CindyProxyMediaService {
     });
   }
   return artService;
+}
+
+/** Shared factory: execution keeps the same aliases and ordering as discovery. */
+function createGatewayVideoProviders(baseUrl: string) {
+  return [
+    createSeedanceProvider({
+      baseUrl,
+      getApiKey: readApiKey,
+      logger: log,
+    }),
+    // Seedance 2.5 是独立 provider(值域与 2.0 差太远,capabilities 是
+    // per-provider 的,详见 seedance.ts 文件头)。同样是 opt-in:排在
+    // seedance-fast 之后,不抢出厂默认。
+    createSeedance25Provider({
+      baseUrl,
+      getApiKey: readApiKey,
+      logger: log,
+    }),
+    createHappyhorseProvider({
+      baseUrl,
+      getApiKey: readApiKey,
+      logger: log,
+    }),
+  ];
+}
+
+let videoRegistry: VideoProviderRegistry | null = null;
+let videoRegistryBaseUrl: string | null = null;
+
+/** Video discovery must work without constructing the Gateway image client or media storage. */
+export function getCindyVideoProviderRegistry(): VideoProviderRegistry {
+  const baseUrl = getGatewayBaseUrl();
+  if (!videoRegistry || videoRegistryBaseUrl !== baseUrl) {
+    const next = new VideoProviderRegistry();
+    if (baseUrl.trim()) {
+      try {
+        for (const provider of createGatewayVideoProviders(baseUrl)) next.register(provider);
+      } catch (error) {
+        // A broken optional Gateway must not prevent independent providers from registering.
+        log.warn('Gateway video providers unavailable during registry initialization', {
+          error: mediaErrorForLog(error),
+        });
+      }
+    }
+    videoRegistry = next;
+    videoRegistryBaseUrl = baseUrl;
+  }
+  return videoRegistry;
 }

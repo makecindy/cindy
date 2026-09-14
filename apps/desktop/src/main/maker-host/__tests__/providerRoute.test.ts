@@ -20,13 +20,17 @@ import {
   beginProviderRouteMutation,
   buildLocalHandlerHeaders,
   buildRouteDecision,
+  getProviderRouteCredentialRevision,
   getSessionRoutingDescriptor,
   resolveSessionRoute,
   resolveSessionRouteDecision,
+  resolveFrozenProviderRouteDecision,
   resolveImplicitLocalBridgeRoute,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
+  setCustomProviderHeaderReader,
+  setOAuthTokenReader,
   setPendingCredentialSwitchReader,
   setProviderOAuthTokenReader,
   setProviderViewsReader,
@@ -45,6 +49,7 @@ import {
   setXdGatewayModels,
 } from '../active-catalog.js';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
+import { migrateManagedOllamaProvider } from '../../local-model-runtime/managedOllamaProvider.js';
 import { ANTHROPIC_DIRECT_UPSTREAM } from '../claude-gateway-config.js';
 
 // CODEX_OAUTH_UPSTREAM 不直接 import —— codex-proxy-host.ts 在 import 期触电(app.getPath),
@@ -75,6 +80,7 @@ const CODEX_ACCOUNT_HEADER_DELETE = [
 afterEach(() => {
   mockGetAppCapabilities.mockReturnValue({ canUseCindyGateway: true });
   setProviderOAuthTokenReader(() => null);
+  setOAuthTokenReader(() => null);
   setPendingCredentialSwitchReader(() => undefined);
   clearSessionProvider('s-xai');
   clearSessionProvider('s-xai-rewrite');
@@ -83,6 +89,7 @@ afterEach(() => {
   setXdGatewayModels([]);
   setAnthropicDiscoveredModels([]);
   setProviderViewsReader(async () => []);
+  setCustomProviderHeaderReader(() => null);
 });
 
 describe('Pi per-model protocol routing', () => {
@@ -310,7 +317,6 @@ describe('pi: provider-aware Anthropic wire routing', () => {
       upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
       headerOverride: {
         'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
         authorization: 'Bearer claude-live-token',
       },
       headerDelete: ['x-api-key'],
@@ -849,6 +855,47 @@ describe('none (无鉴权自定义代理 buildRouteDecision)', () => {
 });
 
 describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 key)', () => {
+  it('routes independent Claude accounts with their own bearer and removes the CLI API key', async () => {
+    setCustomProviders(['anthropic-a', 'anthropic-b'].map(id => buildUserProvider({
+      id, name: 'Claude subscription', auth: { method: 'oauth', native: 'claude' },
+      runtimes: { 'claude-code': { baseUrl: ANTHROPIC_DIRECT_UPSTREAM, models: [] } },
+    })));
+    const readToken = vi.fn(async (id: string) => `test-token-${id}`);
+    setProviderOAuthTokenReader(readToken);
+    for (const id of ['anthropic-a', 'anthropic-b', 'anthropic-a']) {
+      setSessionProvider('s-user', id);
+      expect(await resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'claude-opus-4-6')).toEqual({
+        upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+        headerOverride: { authorization: `Bearer test-token-${id}` },
+        headerDelete: ['x-api-key'],
+      });
+      expect(readToken).toHaveBeenLastCalledWith(id, 'claude-code');
+    }
+    setProviderOAuthTokenReader(() => null);
+    expect(await resolveSessionRouteDecision('s-user', 'claude-code', KEY, 'claude-opus-4-6')).toMatchObject({
+      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+      headerOverride: { authorization: 'Bearer xdt-missing-provider-oauth-token' },
+      headerDelete: ['x-api-key'],
+    });
+  });
+
+  it('routes A → B → A by connection id despite identical provider and model names', () => {
+    setCustomProviders(['account-a', 'account-b'].map(id => buildUserProvider({
+      id, name: 'Same provider', runtimes: { codex: {
+        baseUrl: `https://${id}.example/v1`,
+        models: [{ id: 'same-model', name: 'Same model' }],
+      } },
+    })));
+    setCustomProviderKeyReader(id => `test-key-${id}`);
+    for (const id of ['account-a', 'account-b', 'account-a']) {
+      setSessionProvider('s-user', id);
+      expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'same-model')).toEqual({
+        upstreamOverride: `https://${id}.example/v1`,
+        headerOverride: { authorization: `Bearer test-key-${id}` },
+        headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+      });
+    }
+  });
   afterEach(() => {
     setCustomProviders([]);
     setCustomProviderKeyReader(() => null);
@@ -1190,6 +1237,198 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
     });
   });
 
+  it('keeps frozen image routes and credentials on one generation and closes async read races', async () => {
+    const providerId = 'image-route-generation';
+    const makeProvider = (baseUrl: string) =>
+      buildUserProvider({
+        id: providerId,
+        name: 'Image Route Generation',
+        runtimes: {
+          codex: {
+            baseUrl,
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = makeProvider('https://old-images.example/v1');
+    setCustomProviders([oldProvider]);
+    setCustomProviderKeyReader(() => 'old-key');
+    const oldRevision = getProviderRouteCredentialRevision(providerId);
+    const oldRouting = oldProvider.routing.codex!;
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toMatchObject({
+      decision: {
+        upstreamOverride: 'https://old-images.example/v1',
+        headerOverride: { authorization: 'Bearer old-key' },
+      },
+    });
+
+    const finishMutation = beginProviderRouteMutation(providerId);
+    setCustomProviders([makeProvider('https://new-images.example/v1')]);
+    setCustomProviderKeyReader(() => 'new-key');
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+    finishMutation.commit();
+    finishMutation();
+
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+    const newRevision = getProviderRouteCredentialRevision(providerId);
+    const newProvider = makeProvider('https://new-images.example/v1');
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        newProvider.routing.codex!,
+        newRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toMatchObject({
+      decision: {
+        upstreamOverride: 'https://new-images.example/v1',
+        headerOverride: { authorization: 'Bearer new-key' },
+      },
+    });
+
+    let finishTokenRead!: (token: string) => void;
+    setProviderOAuthTokenReader(
+      () =>
+        new Promise<string>((resolve) => {
+          finishTokenRead = resolve;
+        }),
+    );
+    const asyncRouting = {
+      ...newProvider.routing.codex!,
+      authStrategy: 'provider-oauth-header' as const,
+    };
+    const pending = resolveFrozenProviderRouteDecision(
+      providerId,
+      asyncRouting,
+      newRevision,
+      'codex',
+      KEY,
+    );
+    await vi.waitFor(() => expect(finishTokenRead).toBeTypeOf('function'));
+    const finishTokenMutation = beginProviderRouteMutation(providerId);
+    finishTokenMutation.commit();
+    finishTokenMutation();
+    finishTokenRead('new-oauth-token');
+    await expect(pending).resolves.toBeNull();
+
+    // Recreating the same stored id cannot revive an older Host snapshot (ABA).
+    setCustomProviders([]);
+    const finishDelete = beginProviderRouteMutation(providerId);
+    finishDelete.commit();
+    finishDelete();
+    setCustomProviders([oldProvider]);
+    const finishRecreate = beginProviderRouteMutation(providerId);
+    finishRecreate.commit();
+    finishRecreate();
+    expect(getProviderRouteCredentialRevision(providerId)).not.toBe(newRevision);
+    await expect(
+      resolveFrozenProviderRouteDecision(providerId, oldRouting, oldRevision, 'codex', KEY),
+    ).resolves.toBeNull();
+  });
+
+  it('reads custom headers at request time and rejects a stale frozen route after header mutation', async () => {
+    const providerId = 'image-header-generation';
+    const makeProvider = (header: string) =>
+      buildUserProvider({
+        id: providerId,
+        name: 'Image Header Generation',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://header-images.example/v1',
+            wireProtocol: 'openai-responses',
+            supportsImageGeneration: true,
+            headers: { Authorization: header, 'x-vendor-token': header },
+            models: [{ id: 'image-chat', name: 'Image Chat' }],
+          },
+        },
+      });
+    const oldProvider = makeProvider('Bearer old-header-secret');
+    setCustomProviders([oldProvider]);
+    setCustomProviderKeyReader(() => null);
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer old-header-secret',
+      'x-vendor-token': 'old-header-secret',
+    }));
+    const oldRevision = getProviderRouteCredentialRevision(providerId);
+    const frozenRouting = { ...oldProvider.routing.codex! };
+    delete frozenRouting.headerOverride;
+
+    const oldDecision = await resolveFrozenProviderRouteDecision(
+      providerId,
+      frozenRouting,
+      oldRevision,
+      'codex',
+      KEY,
+    );
+    expect(oldDecision).toMatchObject({
+      decision: {
+        headerOverride: {
+          authorization: 'Bearer old-header-secret',
+          'x-vendor-token': 'old-header-secret',
+        },
+      },
+    });
+    expect(oldDecision?.routing).not.toHaveProperty('headerOverride');
+    expect(oldDecision?.decision?.dispatchGenerationValid?.()).toBe(true);
+
+    const finishMutation = beginProviderRouteMutation(providerId);
+    expect(oldDecision?.decision?.dispatchGenerationValid?.()).toBe(false);
+    setCustomProviders([makeProvider('Bearer new-header-secret')]);
+    setCustomProviderHeaderReader(() => ({
+      Authorization: 'Bearer new-header-secret',
+      'x-vendor-token': 'new-header-secret',
+    }));
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        frozenRouting,
+        oldRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toBeNull();
+    finishMutation.commit();
+    finishMutation();
+
+    await expect(
+      resolveFrozenProviderRouteDecision(
+        providerId,
+        frozenRouting,
+        oldRevision,
+        'codex',
+        KEY,
+      ),
+    ).resolves.toBeNull();
+    const newProvider = makeProvider('Bearer new-header-secret');
+    const newFrozenRouting = { ...newProvider.routing.codex! };
+    delete newFrozenRouting.headerOverride;
+    const newDecision = await resolveFrozenProviderRouteDecision(
+      providerId,
+      newFrozenRouting,
+      getProviderRouteCredentialRevision(providerId),
+      'codex',
+      KEY,
+    );
+    expect(newDecision).toMatchObject({
+      decision: {
+        headerOverride: {
+          authorization: 'Bearer new-header-secret',
+          'x-vendor-token': 'new-header-secret',
+        },
+      },
+    });
+    expect(newDecision?.routing).not.toHaveProperty('headerOverride');
+  });
+
   it('精确请求路径只覆盖带 model 的推理请求，不改写无 body 的控制面请求', () => {
     setCustomProviders([
       buildUserProvider({
@@ -1263,6 +1502,74 @@ describe('resolveSessionRouteDecision — 自定义供应商(resolve 时注入 k
         type: 'provider_route_disabled',
         code: 'provider_route_disabled',
       },
+    });
+  });
+
+  it('catalog refresh 形态:旧 Responses 行迁完后 Codex 选 Chat 桥', () => {
+    const migrated = migrateManagedOllamaProvider({
+      id: 'cindy-local-ollama',
+      name: 'Ollama',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+        'claude-code': {
+          baseUrl: 'http://127.0.0.1:11434',
+          wireProtocol: 'anthropic-messages',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+        codex: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-responses',
+          models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+        },
+      },
+    });
+    expect(migrated).not.toBeNull();
+    setCustomProviders([buildUserProvider(migrated!)]);
+    setSessionProvider('s-user', 'cindy-local-ollama');
+    const routing = getSessionRoutingDescriptor('s-user', 'codex', 'qwen3.8:27b-mxfp8');
+    expect(routing?.wireProtocol).toBe('openai-chat');
+    expect(routing?.upstream).toBe('http://127.0.0.1:11434/v1');
+  });
+
+  it('managed Ollama: Codex 打本机 11434 并剥掉订阅凭证', () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'cindy-local-ollama',
+        name: 'Ollama',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+          'claude-code': {
+            baseUrl: 'http://127.0.0.1:11434',
+            wireProtocol: 'anthropic-messages',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+          codex: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-chat',
+            models: [{ id: 'qwen3.8:27b-mxfp8', name: 'Qwen3.8' }],
+          },
+        },
+      }),
+    ]);
+    setSessionProvider('s-user', 'cindy-local-ollama');
+
+    expect(isUserProviderSession('s-user')).toBe(true);
+    expect(
+      getSessionRoutingDescriptor('s-user', 'codex', 'qwen3.8:27b-mxfp8')?.wireProtocol,
+    ).toBe('openai-chat');
+    expect(resolveSessionRouteDecision('s-user', 'codex', KEY, 'qwen3.8:27b-mxfp8')).toEqual({
+      upstreamOverride: 'http://127.0.0.1:11434/v1',
+      headerDelete: ['authorization', 'x-api-key', ...CODEX_ACCOUNT_HEADER_DELETE],
     });
   });
 

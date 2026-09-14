@@ -14,6 +14,7 @@ const combo = {
 const mocks = vi.hoisted(() => ({
   getOverrides: vi.fn(),
   getCombos: vi.fn(),
+  workLouderPresent: false as boolean,
 }));
 
 vi.mock('@/features/skillhub/hooks/useSkillhub', () => ({
@@ -43,11 +44,60 @@ vi.mock('@/hooks/useVoiceInputSettings', () => ({
   getVoiceInputSettings: () => ({ shortcut: null }),
 }));
 
+vi.mock('@/hooks/useWorkLouderCodex', async () => {
+  const { WORKLOUDER_CODEX_EMPTY_DEVICE_STATE, createWorkLouderCodexDefaultSettings } =
+    await import('../../../../shared/workLouderCodex');
+  return {
+    useWorkLouderCodex: () => ({
+      state: {
+        connectionStatus: mocks.workLouderPresent ? 'connected' : 'not-detected',
+        connectionReason: null,
+        devicePresent: mocks.workLouderPresent,
+        device: { ...WORKLOUDER_CODEX_EMPTY_DEVICE_STATE },
+        settings: createWorkLouderCodexDefaultSettings(),
+        agentSlots: [],
+        taskOptions: [],
+        agentSlotCount: 6,
+      },
+      loading: false,
+      saving: false,
+      error: null,
+      setSettings: vi.fn(),
+      resetSettings: vi.fn(),
+      openInputMonitoringSettings: vi.fn(),
+      reload: vi.fn(),
+    }),
+  };
+});
+
+vi.mock('@/hooks/useXboxGamepad', async () => {
+  const { XBOX_GAMEPAD_EMPTY_DEVICE, createXboxGamepadDefaultSettings } =
+    await import('../../../../shared/xboxGamepad');
+  return {
+    useXboxGamepad: () => ({
+      state: {
+        connectionStatus: 'not-detected',
+        devicePresent: false,
+        deviceName: null,
+        device: { ...XBOX_GAMEPAD_EMPTY_DEVICE },
+        settings: createXboxGamepadDefaultSettings(),
+      },
+      loading: false,
+      saving: false,
+      error: null,
+      setSettings: vi.fn(),
+      resetSettings: vi.fn(),
+      reload: vi.fn(),
+    }),
+  };
+});
+
 import { KeyboardShortcutsSection } from '../KeyboardShortcutsSection';
 
 describe('KeyboardShortcutsSection mutation ordering', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.workLouderPresent = false;
   });
 
   afterEach(() => {
@@ -65,6 +115,7 @@ describe('KeyboardShortcutsSection mutation ordering', () => {
       },
     });
 
+    mocks.workLouderPresent = true;
     render(<KeyboardShortcutsSection />);
     fireEvent.click(screen.getByLabelText('settings.shortcuts.workLouderCodex.openAria'));
 

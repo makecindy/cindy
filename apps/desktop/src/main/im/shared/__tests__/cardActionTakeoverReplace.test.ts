@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   resolveLenientSessionRoute: vi.fn(),
   applyRuntimeSetModelChange:
     vi.fn<(input: unknown) => Promise<{ status: 'applied' | 'deferred' }>>(),
+  actualApplyRuntimeSetModelChange: null as null | ((input: never) => Promise<unknown>),
   registerPendingCredentialSwitchForSession: vi.fn(),
   clearPendingCredentialSwitchForSession: vi.fn(),
   wakeSessionInputAfterCredentialSwitch: vi.fn(),
@@ -37,9 +38,7 @@ const mocks = vi.hoisted(() => ({
   setSessionProvider: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
   cancelPendingAgentSwitchForSession: vi.fn(),
-  withSendToSessionLock: vi.fn(
-    async (_sessionId: string, task: () => Promise<unknown>) => task(),
-  ),
+  withSendToSessionLock: vi.fn(async (_sessionId: string, task: () => Promise<unknown>) => task()),
   // 禁止回落 cwd:TEMP 是 Windows 独有变量,macOS 上回落 cwd 会让传递 import 的
   // 写盘副作用落进仓库工作区(见 authAdaptersImportPurity.test.ts 记录的事故)。
   userDataDir: process.env.TMPDIR ?? process.env.TEMP ?? '/tmp',
@@ -91,9 +90,11 @@ vi.mock('../../../maker-host/session-provider-store', () => ({
     providerId === undefined ? undefined : providerId?.trim() || null,
   setSessionProvider: mocks.setSessionProvider,
 }));
-vi.mock('../../../maker-ipc/runtimeSetModel', () => ({
-  applyRuntimeSetModelChange: mocks.applyRuntimeSetModelChange,
-}));
+vi.mock('../../../maker-ipc/runtimeSetModel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('../../../maker-ipc/runtimeSetModel')>();
+  mocks.actualApplyRuntimeSetModelChange = actual.applyRuntimeSetModelChange as never;
+  return { applyRuntimeSetModelChange: mocks.applyRuntimeSetModelChange };
+});
 vi.mock('../../../maker-ipc/register', () => ({
   cancelPendingAgentSwitchForSession: mocks.cancelPendingAgentSwitchForSession,
   isSessionInTurn: mocks.isSessionInTurn,
@@ -121,6 +122,10 @@ import {
 import type { ImCardBuilders } from '../cardBuilders';
 import type { ImChannelAdapter } from '../types';
 import type { ImTurnRunner } from '../turnRunner';
+import {
+  setCodexAppliedCustomProviderRoutes,
+  type CodexCustomProviderRoute,
+} from '../../../maker-host/codex-custom-provider-route';
 
 function makeIm() {
   const im = {
@@ -203,6 +208,7 @@ async function pressSessionPick(
 }
 
 beforeEach(() => {
+  setCodexAppliedCustomProviderRoutes([]);
   vi.clearAllMocks();
   activateImAccountBoundary();
   (resolvePending as ReturnType<typeof vi.fn>).mockReturnValue(false);
@@ -218,11 +224,7 @@ beforeEach(() => {
     createSession: vi.fn(async () => ({ id: 'sess-new' })),
     closeSession: mocks.closeSession,
     getCapabilities: vi.fn(() => ({
-      permissionModes: [
-        { id: 'ask' },
-        { id: 'auto' },
-        { id: 'bypassPermissions' },
-      ],
+      permissionModes: [{ id: 'ask' }, { id: 'auto' }, { id: 'bypassPermissions' }],
     })),
   });
   mocks.getDesktopCcPrefs.mockReturnValue(null);
@@ -613,10 +615,7 @@ describe('model:pick 持久化失败', () => {
 
     const pickPromise = pressModelPick(im);
     await vi.waitFor(() => {
-      expect(mocks.withSendToSessionLock).toHaveBeenCalledWith(
-        'sess-target',
-        expect.any(Function),
-      );
+      expect(mocks.withSendToSessionLock).toHaveBeenCalledWith('sess-target', expect.any(Function));
     });
     expect(mocks.updateModelEffort).not.toHaveBeenCalled();
     expect(mocks.applyRuntimeSetModelChange).not.toHaveBeenCalled();
@@ -642,6 +641,74 @@ describe('model:pick 持久化失败', () => {
     );
     expect(mocks.applyRuntimeSetModelChange).toHaveBeenCalledWith(
       expect.objectContaining({ providerId: 'anthropic' }),
+    );
+  });
+
+  it('IM 模型卡片跨 dynamic Provider 时关闭旧 thread，下一次发送再按新路由创建', async () => {
+    const routeA: CodexCustomProviderRoute = {
+      providerId: 'provider-a',
+      routeId: 'a'.repeat(20),
+      modelProviderId: `cindy_custom_${'a'.repeat(20)}`,
+      capabilities: { imageGeneration: true },
+      responseModels: ['shared-model'],
+      routing: {
+        upstream: 'https://a.invalid/v1',
+        wireProtocol: 'openai-responses',
+        authStrategy: 'none',
+      },
+      responseRoutingByModel: {},
+      credentialRevision: 1,
+    };
+    const routeB: CodexCustomProviderRoute = {
+      ...routeA,
+      providerId: 'provider-b',
+      routeId: 'b'.repeat(20),
+      modelProviderId: `cindy_custom_${'b'.repeat(20)}`,
+      capabilities: { imageGeneration: true },
+      responseModels: ['claude-opus-4-7'],
+    };
+    setCodexAppliedCustomProviderRoutes([routeA, routeB]);
+    let livePresent = true;
+    const live = {
+      id: 'sess-target',
+      agentKind: 'codex' as const,
+      remoteHostId: null,
+      codexProxyActive: true,
+      codexThreadModelProviderId: routeA.modelProviderId,
+      model: 'shared-model',
+      setModel: vi.fn(async () => {}),
+      setEffort: vi.fn(async () => {}),
+      isTurnRunning: () => false,
+    };
+    const closeSession = vi.fn(async () => {
+      livePresent = false;
+    });
+    mocks.getSessionProvider.mockReturnValue('provider-a');
+    mocks.getMaker.mockReturnValue({
+      getSession: () => (livePresent ? live : undefined),
+      listActiveSessions: () => (livePresent ? [live] : []),
+      closeSession,
+      getCapabilities: vi.fn(() => ({ permissionModes: [] })),
+    });
+    (turnRunner.getMakerSessionById as ReturnType<typeof vi.fn>).mockImplementation(() =>
+      livePresent ? live : null,
+    );
+    mocks.applyRuntimeSetModelChange.mockImplementationOnce(async (input: unknown) => {
+      if (!mocks.actualApplyRuntimeSetModelChange) throw new Error('actual runtime switch missing');
+      return mocks.actualApplyRuntimeSetModelChange(input as never) as Promise<{
+        status: 'applied' | 'deferred';
+      }>;
+    });
+    const im = makeIm();
+
+    await pressModelPick(im, 'provider-b');
+
+    expect(closeSession).toHaveBeenCalledWith('sess-target');
+    expect(live.setModel).not.toHaveBeenCalled();
+    expect(mocks.setSessionProvider).toHaveBeenCalledWith('sess-target', 'provider-b');
+    expect(im.updateInteractiveCard).toHaveBeenCalledWith(
+      'model-card',
+      expect.objectContaining({ body: slackUi.cards.model.resolved('Opus 4.7', 'high') }),
     );
   });
 

@@ -25,9 +25,36 @@ describe('provider branding', () => {
     }
   });
 
+  it.each(['https://chatgpt.com/backend-api/codex', 'https://api.openai.com/v1'])(
+    'uses the same OpenAI mark for independent account/API connections: %s', upstream => {
+      expect(resolveProviderLogoKind('openai-independent', {
+        codex: { upstream }, 'claude-code': { upstream }, pi: { upstream },
+      })).toBe(resolveProviderLogoKind('openai'));
+      expect(resolveProviderLogoKind('renamed-work-account', { codex: { upstream } })).toBe('openai');
+    },
+  );
+
+  it('does not brand lookalike ChatGPT endpoints as OpenAI', () => {
+    expect(resolveProviderLogoKind('custom', {
+      codex: { upstream: 'https://chatgpt.com.example.org/v1' },
+    })).toBeNull();
+  });
+
   it('uses a dedicated xAI mark', () => {
     expect(resolveProviderLogoKind('xai')).toBe('xai');
     expect(PROVIDER_LOGO_PATHS.xai).not.toBe(PROVIDER_LOGO_PATHS.openrouter);
+  });
+
+  it.each([
+    ['ollama', 'ollama'],
+    ['cindy-local-ollama', 'ollama'],
+    ['lmstudio', 'lmstudio'],
+    ['cindy-local-lmstudio', 'lmstudio'],
+    ['llamacpp', 'llamacpp'],
+    ['vllm', 'vllm'],
+  ] as const)('maps local runtime %s to %s', (providerId, logoKind) => {
+    expect(resolveProviderLogoKind(providerId)).toBe(logoKind);
+    expect(hasProviderLogo(providerId)).toBe(true);
   });
 
   it('only infers Vercel branding from the exact AI Gateway host', () => {

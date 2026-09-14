@@ -86,9 +86,21 @@ function buttonElement(text: string, type: 'primary' | 'default' | 'danger', val
 }
 
 /**
- * Build a feishu v1 interactive card JSON from an InteractiveCardSpec. Buttons
- * are flattened into a single action row (feishu允许一个 action element 内多
- * button — UI 会自动 wrap).
+ * 飞书 v1 单个 action 模块最多 5 个交互组件。超出时拆成多个 action 模块,
+ * 否则 sendInteractiveCard 会被拒绝, 调用方按空 answers 继续。
+ */
+export const FEISHU_V1_ACTION_MAX_COMPONENTS = 5;
+
+function chunkButtons<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size) as T[]);
+  return out;
+}
+
+/**
+ * Build a feishu v1 interactive card JSON from an InteractiveCardSpec.
+ * Buttons are split across action modules of FEISHU_V1_ACTION_MAX_COMPONENTS
+ * (同一模块内飞书会自动换行, 但单模块不能超过 5 个).
  */
 export function buildInteractiveCardV1(spec: InteractiveCardSpec): unknown {
   const elements: unknown[] = [];
@@ -106,15 +118,17 @@ export function buildInteractiveCardV1(spec: InteractiveCardSpec): unknown {
     });
   }
   if (spec.buttons.length > 0) {
-    elements.push({
-      tag: 'action',
-      actions: spec.buttons.map((b) =>
-        buttonElement(b.label, b.type ?? 'default', {
-          id: b.id,
-          ...(b.payload ?? {}),
-        }),
-      ),
-    });
+    for (const group of chunkButtons(spec.buttons, FEISHU_V1_ACTION_MAX_COMPONENTS)) {
+      elements.push({
+        tag: 'action',
+        actions: group.map((b) =>
+          buttonElement(b.label, b.type ?? 'default', {
+            id: b.id,
+            ...(b.payload ?? {}),
+          }),
+        ),
+      });
+    }
   }
 
   return {

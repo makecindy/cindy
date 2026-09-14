@@ -55,6 +55,30 @@ beforeEach(() => {
   h.webContentsSend.mockClear();
 });
 
+describe('/cindy-make composer entry', () => {
+  it('appears in the built-in catalog under the final command name', () => {
+    const { registry } = makeHarness();
+    expect(registry.list()).toContainEqual({
+      kind: 'desktop',
+      name: 'cindy-make',
+      description: expect.stringContaining('/cindy-make'),
+    });
+    expect(registry.list().some((command) => command.name === 'cindy-maker')).toBe(false);
+  });
+
+  it.each([undefined, 'remote-device'])(
+    'rejects unbound IPC without broadcasting or routing (%s)',
+    async (deviceId) => {
+      const { registry, remoteInvoke } = makeHarness();
+      await expect(registry.execute('cindy-make', { sessionId: 'source', deviceId })).rejects.toThrow(
+        '[INVALID_PARAMS]',
+      );
+      expect(h.webContentsSend).not.toHaveBeenCalled();
+      expect(remoteInvoke).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe('/goal 远程路由', () => {
   it('deviceId + objective → 隧道 maker:goal:set,不触本机 controller', async () => {
     const { registry, goalController, remoteInvoke } = makeHarness();
@@ -112,6 +136,22 @@ describe('/learn 远程路由', () => {
     await registry.execute('learn', { sessionId: 'rs', deviceId: 'dev-1', args: 'hub:my-skill 精简点' });
     expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'learn:start', [
       { input: '精简点', sourceKind: 'hub', hubSlug: 'my-skill', originSessionId: 'rs' },
+    ]);
+  });
+
+  it('deviceId + hub:<scope>:<slug> → 保留目录作用域', async () => {
+    const { remoteInvoke, registry } = makeHarness({
+      remoteInvoke: async () => ({ runId: 'r-scope' }),
+    });
+    await registry.execute('learn', { sessionId: 'rs', deviceId: 'dev-1', args: 'hub:team:my-skill 精简点' });
+    expect(remoteInvoke).toHaveBeenCalledWith('dev-1', 'learn:start', [
+      {
+        input: '精简点',
+        sourceKind: 'hub',
+        hubSlug: 'my-skill',
+        hubCatalogScope: 'team',
+        originSessionId: 'rs',
+      },
     ]);
   });
 

@@ -16,12 +16,15 @@
  * 无依赖叶子模块,两边都能安全引用,且平台事实只有一份。
  */
 
-/**
- * 手机平台取值(手机侧 `Platform.OS` 的全集)。
- * 对应的桌面侧判据是 voice-input/dictionarySyncDriver 的 `DESKTOP_PLATFORMS`
- * (`darwin` / `win32` / `linux`);两张表互不重叠,新增平台时同步。
- */
+/** 桌面平台取值(Node.js `process.platform` 中客户端支持的全集)。 */
+const DESKTOP_PLATFORMS = new Set(['darwin', 'win32', 'linux']);
+/** 手机平台取值(手机侧 `Platform.OS` 的全集)。 */
 const MOBILE_PLATFORMS = new Set(['ios', 'android']);
+
+/** 是否桌面平台。未知值保持 fail-closed，不参与桌面词典同步。 */
+export function isDesktopPlatform(platform: string | undefined | null): boolean {
+  return typeof platform === 'string' && DESKTOP_PLATFORMS.has(platform);
+}
 
 /**
  * 是否手机平台。
@@ -35,11 +38,17 @@ export function isMobilePlatform(platform: string | undefined | null): boolean {
   return typeof platform === 'string' && MOBILE_PLATFORMS.has(platform);
 }
 
+/** 是否当前客户端认识的平台；目录只用这些值初始化在线设备。 */
+export function isSupportedControllerPlatform(platform: string | undefined | null): boolean {
+  return isDesktopPlatform(platform) || isMobilePlatform(platform);
+}
+
 const platformByDevice = new Map<string, string>();
 
-/** presence 变更时登记(唯一写入点在 device-link/index.ts 的 onPresenceChanged)。 */
-export function setControllerPlatform(deviceId: string, platform: string): void {
-  platformByDevice.set(deviceId, platform);
+/** presence / 冷启动目录快照变更时登记；未知值删除旧连接代残留，保持 fail-closed。 */
+export function setControllerPlatform(deviceId: string, platform: string | null): void {
+  if (platform) platformByDevice.set(deviceId, platform);
+  else platformByDevice.delete(deviceId);
 }
 
 /** 未登记(presence 未到 / 已清空)返回 undefined —— 调用方按未知处理,不要猜。 */

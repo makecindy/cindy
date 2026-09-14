@@ -1,6 +1,14 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
-import { buildGroupedHomeRows, buildHomeSections, buildMixedHomeRows, homeRowBefore } from '@/session/homeSections';
+import {
+  buildGroupedHomeRows,
+  buildHomeSections,
+  buildMixedHomeRows,
+  HOME_MAIN_SECTION_KEY,
+  homeFolderRowsShareRenderData,
+  homeRowsShareRenderData,
+  homeRowBefore,
+} from '@/session/homeSections';
 import type { MobileHomePresentation, MobileHomeProjectGroup } from '@/session/mobileHome';
 import type { RemoteSessionListItem } from '@/session/sessionList';
 
@@ -12,7 +20,7 @@ beforeAll(async () => {
 // 最小 fixture:buildHomeSections / rows 只读取下面这几个字段,其余字段对本测试无关,
 // 用 cast 避免构造完整 RemoteSessionListItem / MobileHomeProjectGroup。
 function listItem(id: string, lastActivityAt: string): RemoteSessionListItem {
-  return { session: { id }, lastActivityAt } as unknown as RemoteSessionListItem;
+  return { session: { id }, lastActivityAt, pendingInteractionCount: 0 } as unknown as RemoteSessionListItem;
 }
 
 function projectGroup(
@@ -65,10 +73,53 @@ describe('buildHomeSections', () => {
       chats: [listItem('c1', '2026-06-01T00:00:00Z')],
       projects: [projectGroup('proj-a', '2026-06-02T00:00:00Z', [listItem('s1', '2026-06-02T00:00:00Z')])],
     });
-    expect(buildHomeSections(home, false, false).find((s) => s.title === null)?.key).toBe('mixed');
+    expect(buildHomeSections(home, false, false).find((s) => s.title === null)?.key).toBe(HOME_MAIN_SECTION_KEY);
     expect(buildHomeSections(home, true, false).map((s) => [s.key, s.title])).toEqual([
-      ['grouped', null],
+      [HOME_MAIN_SECTION_KEY, null],
     ]);
+  });
+
+  it('recognizes a rebuilt large folder backed by the same session items', () => {
+    const home = presentation({
+      chats: Array.from({ length: 112 }, (_, index) => (
+        listItem(`chat-${index}`, `2026-06-${String((index % 28) + 1).padStart(2, '0')}T00:00:00Z`)
+      )),
+    });
+    const previous = buildGroupedHomeRows(home, { groupDialogue: true })
+      .find((row) => row.kind === 'dialogue');
+    const next = buildMixedHomeRows(home, { groupDialogue: true })
+      .find((row) => row.kind === 'dialogue');
+
+    expect(previous).toBeDefined();
+    expect(next).toBeDefined();
+    expect(previous).not.toBe(next);
+    expect(homeFolderRowsShareRenderData(previous!, next!)).toBe(true);
+    if (!next || next.kind !== 'dialogue') throw new Error('expected dialogue row');
+    const changed = {
+      ...next,
+      project: {
+        ...next.project,
+        sessions: [{ ...next.project.sessions[0] }, ...next.project.sessions.slice(1)],
+      },
+    };
+    expect(homeFolderRowsShareRenderData(previous!, changed)).toBe(false);
+  });
+
+  it('recognizes rebuilt session row wrappers backed by the same list item', () => {
+    const item = listItem('chat-1', '2026-06-01T00:00:00Z');
+    const home = presentation({ chats: [item] });
+    const previous = buildGroupedHomeRows(home)[0];
+    const next = buildGroupedHomeRows(home)[0];
+
+    if (previous.kind !== 'session' || next.kind !== 'session') {
+      throw new Error('expected session rows');
+    }
+    expect(previous).not.toBe(next);
+    expect(homeRowsShareRenderData(previous, next)).toBe(true);
+    expect(homeRowsShareRenderData(previous, {
+      ...next,
+      sourceLabel: 'Chat',
+    })).toBe(false);
   });
 });
 
@@ -90,21 +141,21 @@ describe('homeRowBefore(跨 section 邻接:分割线唯一化的 prevIsBlock 依
 
   it('置顶区 → 主列表首行:跨区取到末位置顶会话', () => {
     const sections = buildHomeSections(home, true, false);
-    const prev = homeRowBefore(sections, 'grouped', 0);
+    const prev = homeRowBefore(sections, HOME_MAIN_SECTION_KEY, 0);
     expect(prev?.kind).toBe('session');
     expect(prev && prev.kind === 'session' ? prev.item.session.id : null).toBe('pin-1');
   });
 
   it('同区内仍取 index-1,不受跨区逻辑影响', () => {
     const sections = buildHomeSections(home, true, false);
-    const prev = homeRowBefore(sections, 'grouped', 1);
+    const prev = homeRowBefore(sections, HOME_MAIN_SECTION_KEY, 1);
     expect(prev?.kind).toBe('session');
     expect(prev && prev.kind === 'session' ? prev.item.session.id : null).toBe('auto-1');
   });
 
   it('置顶收起时 pinned 区 data 为空:跨区回溯要跳过空区', () => {
     const sections = buildHomeSections(home, true, true);
-    const prev = homeRowBefore(sections, 'grouped', 0);
+    const prev = homeRowBefore(sections, HOME_MAIN_SECTION_KEY, 0);
     expect(prev).toBeUndefined();
   });
 
@@ -142,10 +193,96 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
 
   it('分组:项目保留 folder 行,与普通对话按活动时间倒序混排', () => {
     const rows = buildGroupedHomeRows(home);
-    expect(rows.map((row) => row.kind === 'project' ? row.project.key : row.item.session.id)).toEqual([
+    expect(rows.map((row) => row.kind === 'session' ? row.item.session.id : row.project.key)).toEqual([
       'chat-new',
       'proj-new',
       'chat-old',
+    ]);
+  });
+
+  it('对话归组:分组模式下对话收成 folder,平铺时项目会话仍展平', () => {
+    const grouped = buildGroupedHomeRows(home, { groupDialogue: true, dialogueTitle: '对话' });
+    expect(grouped.map((row) => row.kind === 'session' ? row.item.session.id : row.kind)).toEqual([
+      'dialogue',
+      'project',
+    ]);
+    const mixed = buildMixedHomeRows(home, { groupDialogue: true, dialogueTitle: '对话' });
+    expect(mixed.map((row) => row.kind === 'session' ? row.item.session.id : row.kind)).toEqual([
+      'dialogue',
+      's1',
+      's2',
+    ]);
+    expect(mixed.find((row) => row.kind === 'dialogue')?.project.title).toBe('对话');
+  });
+
+  it('手动项目顺序:项目行按存档序排在前面,对话仍按任务排序跟在后面', () => {
+    const twoProjects = presentation({
+      chats: [listItem('chat-new', '2026-06-09T00:00:00Z')],
+      projects: [
+        projectGroup('proj-old', '2026-06-01T00:00:00Z', [listItem('old', '2026-06-01T00:00:00Z')]),
+        projectGroup('proj-new', '2026-06-08T00:00:00Z', [listItem('fresh', '2026-06-08T00:00:00Z')]),
+      ],
+    });
+    const rows = buildGroupedHomeRows(twoProjects, {
+      projectOrder: 'custom',
+      manualProjectOrder: ['proj-old', 'proj-new'],
+    });
+    expect(rows.map((row) => row.kind === 'session' ? row.item.session.id : row.project.key)).toEqual([
+      'proj-old',
+      'proj-new',
+      'chat-new',
+    ]);
+  });
+
+  it('平铺时给项目会话和对话会话带来源标签,分组模式不带', () => {
+    const mixed = buildMixedHomeRows(home, { dialogueTitle: '对话' });
+    expect(mixed.filter((row): row is Extract<typeof row, { kind: 'session' }> => row.kind === 'session')
+      .map((row) => [row.item.session.id, row.sourceLabel])).toEqual([
+      ['chat-new', '对话'],
+      ['s1', undefined],
+      ['s2', undefined],
+      ['chat-old', '对话'],
+    ]);
+    // project.title 来自 fixture 里缺省的 undefined —— 上面只断言对话标签。补一个带 title 的项目。
+    const named = presentation({
+      chats: [listItem('chat-new', '2026-06-06T00:00:00Z')],
+      projects: [{
+        ...projectGroup('proj-new', '2026-06-05T00:00:00Z', [listItem('s1', '2026-06-05T00:00:00Z')]),
+        title: 'Cindy',
+      }],
+    });
+    const namedMixed = buildMixedHomeRows(named, { dialogueTitle: '对话' });
+    expect(namedMixed.map((row) => row.kind === 'session' ? [row.item.session.id, row.sourceLabel] : row.kind)).toEqual([
+      ['chat-new', '对话'],
+      ['s1', 'Cindy'],
+    ]);
+    const grouped = buildGroupedHomeRows(named, { dialogueTitle: '对话' });
+    expect(grouped.filter((row) => row.kind === 'session').map((row) => row.kind === 'session' ? row.sourceLabel : null))
+      .toEqual([undefined]);
+  });
+
+  it('优先级:等你处理 > 完成未读 > 运行中 > 其余,同档按时间', () => {
+    const waiting = listItem('wait', '2026-06-01T00:00:00Z');
+    const unread = listItem('unread', '2026-06-04T00:00:00Z');
+    const running = listItem('run', '2026-06-03T00:00:00Z');
+    const rest = listItem('rest', '2026-06-05T00:00:00Z');
+    const ranked = presentation({
+      chats: [rest, unread],
+      projects: [projectGroup('proj', '2026-06-03T00:00:00Z', [waiting, running])],
+    });
+    const rows = buildMixedHomeRows(ranked, {
+      sortBy: 'priority',
+      priorityContext: {
+        runningSessionIds: new Set(['run']),
+        unreadSessionIds: new Set(['unread']),
+        waitingSessionIds: new Set(['wait']),
+      },
+    });
+    expect(rows.map((row) => row.kind === 'session' ? row.item.session.id : row.kind)).toEqual([
+      'wait',
+      'unread',
+      'run',
+      'rest',
     ]);
   });
 

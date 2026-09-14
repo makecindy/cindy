@@ -5,9 +5,12 @@ import { useTranslation } from 'react-i18next';
 import { flashScrollbar } from '@/lib/scrollbarAutoHide';
 import { cn } from '@/lib/utils';
 import { WINDOW_DRAG_STYLE, WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
+import { Button } from '@/components/ui/button';
 import { Spinner } from '@/components/ui/spinner';
 
 export interface ConfirmDialogProps {
+  /** Explicit pilot opt-in; unselected callers retain their existing presentation. */
+  presentation?: 'standard';
   open: boolean;
   onOpenChange: (open: boolean) => void;
   title: string;
@@ -24,7 +27,7 @@ export interface ConfirmDialogProps {
    */
   content?: ReactNode;
   /**
-   * 弹窗最大宽度(px),缺省 400。带富内容清单的弹窗(如意识装入确认)
+   * 弹窗最大宽度(px),缺省 400。带富内容清单的弹窗
    * 用默认宽会折行到累,可适度放宽;普通二选一确认别动它。
    */
   maxWidth?: number;
@@ -38,8 +41,7 @@ export interface ConfirmDialogProps {
   dontShowAgainLabel?: string;
   /**
    * 复选框初始勾选态,缺省 false。"下次不再提示"类弹窗保持缺省;
-   * 业务复选框(confirmWithCheckbox)按调用方语义决定,如装意识的
-   * "立即开启"默认勾选。
+   * 业务复选框(confirmWithCheckbox)按调用方语义决定初始状态。
    */
   checkboxDefaultChecked?: boolean;
   /**
@@ -50,6 +52,14 @@ export interface ConfirmDialogProps {
   autoFocusConfirm?: boolean;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
+  /** 要求逐字输入 expected 才能确认；匹配不做 trim 或大小写折叠。 */
+  requireTypedConfirmation?: {
+    expected: string;
+    label: ReactNode;
+    placeholder?: string;
+  };
+  /** 允许正文和富内容被框选复制；缺省保持普通确认框的防误选行为。 */
+  contentSelectable?: boolean;
   /** 嵌套在其它 Dialog 内时提升层级；普通确认继续使用默认层级。 */
   zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
@@ -82,6 +92,7 @@ export interface ConfirmDialogProps {
 
 export function ConfirmDialog({
   open,
+  presentation,
   onOpenChange,
   title,
   description,
@@ -96,6 +107,8 @@ export function ConfirmDialog({
   checkboxDefaultChecked = false,
   autoFocusConfirm,
   confirmDisabled = false,
+  requireTypedConfirmation,
+  contentSelectable = false,
   confirmVariant = 'default',
   confirmIcon,
   describeContent = false,
@@ -115,7 +128,15 @@ export function ConfirmDialog({
   useEffect(() => {
     if (open) setDontShowAgain(checkboxDefaultChecked);
   }, [open, checkboxDefaultChecked]);
+  const [typedConfirmation, setTypedConfirmation] = useState('');
+  useEffect(() => {
+    if (open) setTypedConfirmation('');
+  }, [open]);
+  const typedConfirmationSatisfied =
+    !requireTypedConfirmation || typedConfirmation === requireTypedConfirmation.expected;
+  const confirmBlocked = loading || confirmDisabled || !typedConfirmationSatisfied;
   const confirmBtnRef = useRef<HTMLButtonElement>(null);
+  const typedConfirmationRef = useRef<HTMLInputElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   // 滚动条 thumb 默认透明(globals.css),不滚不 hover 就看不见"下面还有内容"。
   // 授权确认场景里这不是观感问题:权限清单被折在视口下面而用户不知道,等于
@@ -166,7 +187,8 @@ export function ConfirmDialog({
               // inset-0 + m-auto + h-fit：布局矩形即视觉矩形，挖洞与弹窗严格重合。
               'fixed inset-0 z-[10000] m-auto h-fit',
               'flex max-h-[85vh] flex-col',
-              'w-full select-none rounded-xl p-4',
+              'w-full rounded-xl p-4',
+              contentSelectable ? 'select-text' : 'select-none',
               'bg-[var(--confirm-bg)] shadow-[var(--confirm-shadow)]',
               // 布局居中弹窗用无 translate 的 layout keyframes;共享
               // confirm-content-in/out 的每一帧都烘 translate(-50%, -50%),
@@ -185,11 +207,15 @@ export function ConfirmDialog({
               if (loading) e.preventDefault();
             }}
             onOpenAutoFocus={
-              autoFocusConfirm
+              requireTypedConfirmation || autoFocusConfirm
                 ? (e) => {
+                    e.preventDefault();
+                    if (requireTypedConfirmation) {
+                      typedConfirmationRef.current?.focus();
+                      return;
+                    }
                     // Radix 默认聚焦第一个可聚焦元素 / Cancel —— 这里覆盖,
                     // 把焦点交给主按钮,避免"取消"天然带 focus ring。
-                    e.preventDefault();
                     confirmBtnRef.current?.focus();
                   }
                 : undefined
@@ -206,7 +232,7 @@ export function ConfirmDialog({
             {(description || content) && (
               // 富内容 / 长正文可能超过视口高度:包一层限高滚动区,让标题与底部按钮
               // 固定、中间内容纵向滚动,避免整个弹窗被撑出屏幕后无法滚动到被裁掉的内容
-              // (典型:插件更新确认框的权限变更清单)。
+              // (典型:带分组和折叠区的长确认内容)。
               <div
                 ref={scrollRef}
                 id={describeContent && content ? bodyId : undefined}
@@ -215,6 +241,7 @@ export function ConfirmDialog({
                 onClickCapture={revealScrollbar}
                 className={cn(
                   'min-h-0 flex-1 overflow-y-auto overscroll-contain',
+                  contentSelectable && 'select-text',
                   // 保持旧间距:有 description 时紧跟标题 mt-2;仅富内容(无正文)
                   // 时沿用原 content 的 mt-3,避免 content-only 弹窗间距变化。
                   description ? 'mt-2' : 'mt-3',
@@ -246,73 +273,143 @@ export function ConfirmDialog({
                 {dontShowAgainLabel}
               </label>
             )}
-            <div className="mt-6 flex shrink-0 justify-end gap-2.5">
-              <AlertDialog.Action asChild>
-                <button
-                  ref={confirmBtnRef}
-                  disabled={loading || confirmDisabled}
-                  aria-busy={loading || undefined}
-                  aria-label={resolvedConfirmText}
-                  onClick={() => onConfirm?.({ dontShowAgain })}
-                  className={cn(
-                    'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                    'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                    'active:scale-[0.98]',
-                    confirmVariant === 'destructive'
-                      ? 'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] hover:opacity-90 focus-visible:ring-[var(--focus-ring)]'
-                      : 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)] focus-visible:ring-[var(--confirm-btn-primary-bg)]',
-                    loading &&
-                      confirmVariant === 'default' &&
-                      'cursor-default opacity-80 active:scale-100 hover:bg-[var(--confirm-btn-primary-bg)]',
-                    loading &&
-                      confirmVariant === 'destructive' &&
-                      'cursor-default opacity-80 active:scale-100 hover:opacity-80',
-                    confirmDisabled && 'cursor-not-allowed opacity-50 active:scale-100',
-                  )}
+            {requireTypedConfirmation && (
+              <div className="mt-4 shrink-0">
+                <label
+                  htmlFor={`${bodyId}-typed`}
+                  className="block text-13 leading-[1.5] text-[var(--confirm-desc)]"
                 >
-                  {loading ? (
-                    <Spinner size={14} />
-                  ) : (
-                    <>
-                      {confirmIcon && (
-                        <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
-                          {confirmIcon}
-                        </span>
-                      )}
-                      {resolvedConfirmText}
-                    </>
-                  )}
-                </button>
-              </AlertDialog.Action>
-              {tertiaryText && (
-                // tertiary 走 secondary 同款轮廓样式 —— 视觉上 "中性可选";
-                // 不用 AlertDialog.Action / Cancel,自己 onClick 触发,Radix 不会
-                // 自动关 dialog,因此外层得在 onTertiary 里手动 onOpenChange(false)。
-                <button
-                  type="button"
+                  {requireTypedConfirmation.label}
+                </label>
+                <input
+                  ref={typedConfirmationRef}
+                  id={`${bodyId}-typed`}
+                  type="text"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  value={typedConfirmation}
                   disabled={loading}
-                  onClick={() => onTertiary?.()}
+                  onChange={(e) => setTypedConfirmation(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !confirmBlocked) {
+                      e.preventDefault();
+                      onConfirm?.({ dontShowAgain });
+                    }
+                  }}
+                  placeholder={
+                    requireTypedConfirmation.placeholder ?? requireTypedConfirmation.expected
+                  }
                   className={cn(
-                    'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
-                    'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
-                    'active:scale-[0.98]',
-                    'border bg-transparent',
-                    'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
-                    'hover:bg-[var(--confirm-btn-secondary-hover)]',
-                    'focus-visible:ring-[var(--confirm-btn-secondary-border)]',
-                    loading && 'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
+                    'mt-1.5 h-9 w-full rounded-lg border px-3 text-13',
+                    'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
+                    'text-[var(--settings-input-text)] placeholder:text-[var(--text-placeholder)]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
                   )}
-                >
-                  {tertiaryText}
-                </button>
-              )}
-              {showCancel && (
-                <AlertDialog.Cancel asChild>
-                  <button
-                    disabled={loading}
-                    onClick={() => onCancel?.()}
+                />
+              </div>
+            )}
+            {presentation === 'standard' ? (
+              <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
+                <AlertDialog.Action asChild>
+                  <Button
+                    ref={confirmBtnRef}
+                    size="lg"
+                    variant="primary"
+                    disabled={confirmBlocked}
+                    loading={loading}
+                    aria-label={resolvedConfirmText}
+                    onClick={() => onConfirm?.({ dontShowAgain })}
                     className={cn(
-                      'inline-flex min-w-[96px] items-center justify-center rounded-full px-6 py-2.5 text-13 font-medium',
+                      'h-auto min-h-9 min-w-[96px] max-w-full gap-1.5 whitespace-normal [overflow-wrap:anywhere] py-1.5',
+                      confirmVariant === 'destructive'
+                        ? 'border-transparent bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[hsl(var(--destructive))] enabled:active:bg-[hsl(var(--destructive))] enabled:hover:opacity-90'
+                        : 'border-transparent bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] enabled:hover:border-transparent enabled:active:border-transparent enabled:hover:bg-[var(--confirm-btn-primary-hover)] enabled:active:bg-[var(--confirm-btn-primary-hover)]',
+                    )}
+                  >
+                    {confirmIcon && (
+                      <span aria-hidden="true" className="inline-flex shrink-0">
+                        {confirmIcon}
+                      </span>
+                    )}
+                    {resolvedConfirmText}
+                  </Button>
+                </AlertDialog.Action>
+                {tertiaryText && (
+                  <Button
+                    size="lg"
+                    variant="secondary"
+                    disabled={loading}
+                    onClick={() => onTertiary?.()}
+                    className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] border-[var(--confirm-btn-secondary-border)] bg-transparent py-1.5 text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+                  >
+                    {tertiaryText}
+                  </Button>
+                )}
+                {showCancel && (
+                  <AlertDialog.Cancel asChild>
+                    <Button
+                      size="lg"
+                      variant="secondary"
+                      disabled={loading}
+                      onClick={() => onCancel?.()}
+                      className="h-auto min-h-9 min-w-[96px] max-w-full whitespace-normal [overflow-wrap:anywhere] border-[var(--confirm-btn-secondary-border)] bg-transparent py-1.5 text-[var(--confirm-btn-secondary-text)] enabled:hover:bg-[var(--confirm-btn-secondary-hover)] enabled:active:bg-[var(--confirm-btn-secondary-hover)]"
+                    >
+                      {resolvedCancelText}
+                    </Button>
+                  </AlertDialog.Cancel>
+                )}
+              </div>
+            ) : (
+              <div className="mt-6 flex shrink-0 flex-wrap justify-end gap-2.5">
+                <AlertDialog.Action asChild>
+                  <button
+                    ref={confirmBtnRef}
+                    disabled={confirmBlocked}
+                    aria-busy={loading || undefined}
+                    aria-label={resolvedConfirmText}
+                    onClick={() => onConfirm?.({ dontShowAgain })}
+                    className={cn(
+                      'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
+                      'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+                      'active:scale-[0.98]',
+                      confirmVariant === 'destructive'
+                        ? 'bg-[hsl(var(--destructive))] text-[var(--accent-pure-cta-fg)] hover:opacity-90 focus-visible:ring-[var(--focus-ring)]'
+                        : 'bg-[var(--confirm-btn-primary-bg)] text-[var(--confirm-btn-primary-text)] hover:bg-[var(--confirm-btn-primary-hover)] focus-visible:ring-[var(--confirm-btn-primary-bg)]',
+                      loading &&
+                        confirmVariant === 'default' &&
+                        'cursor-default opacity-80 active:scale-100 hover:bg-[var(--confirm-btn-primary-bg)]',
+                      loading &&
+                        confirmVariant === 'destructive' &&
+                        'cursor-default opacity-80 active:scale-100 hover:opacity-80',
+                      confirmDisabled && 'cursor-not-allowed opacity-50 active:scale-100',
+                    )}
+                  >
+                    {loading ? (
+                      <Spinner size={14} />
+                    ) : (
+                      <>
+                        {confirmIcon && (
+                          <span className="mr-1.5 inline-flex shrink-0" aria-hidden="true">
+                            {confirmIcon}
+                          </span>
+                        )}
+                        {resolvedConfirmText}
+                      </>
+                    )}
+                  </button>
+                </AlertDialog.Action>
+                {tertiaryText && (
+                  // tertiary 走 secondary 同款轮廓样式 —— 视觉上 "中性可选";
+                  // 不用 AlertDialog.Action / Cancel,自己 onClick 触发,Radix 不会
+                  // 自动关 dialog,因此外层得在 onTertiary 里手动 onOpenChange(false)。
+                  <button
+                    type="button"
+                    disabled={loading}
+                    onClick={() => onTertiary?.()}
+                    className={cn(
+                      'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
                       'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
                       'active:scale-[0.98]',
                       'border bg-transparent',
@@ -322,11 +419,32 @@ export function ConfirmDialog({
                       loading && 'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
                     )}
                   >
-                    {resolvedCancelText}
+                    {tertiaryText}
                   </button>
-                </AlertDialog.Cancel>
-              )}
-            </div>
+                )}
+                {showCancel && (
+                  <AlertDialog.Cancel asChild>
+                    <button
+                      disabled={loading}
+                      onClick={() => onCancel?.()}
+                      className={cn(
+                        'inline-flex min-w-[96px] shrink-0 items-center justify-center whitespace-nowrap rounded-full px-6 py-2.5 text-13 font-medium',
+                        'transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-2',
+                        'active:scale-[0.98]',
+                        'border bg-transparent',
+                        'border-[var(--confirm-btn-secondary-border)] text-[var(--confirm-btn-secondary-text)]',
+                        'hover:bg-[var(--confirm-btn-secondary-hover)]',
+                        'focus-visible:ring-[var(--confirm-btn-secondary-border)]',
+                        loading &&
+                          'cursor-default opacity-50 active:scale-100 hover:bg-transparent',
+                      )}
+                    >
+                      {resolvedCancelText}
+                    </button>
+                  </AlertDialog.Cancel>
+                )}
+              </div>
+            )}
           </AlertDialog.Content>
         </AlertDialog.Overlay>
       </AlertDialog.Portal>

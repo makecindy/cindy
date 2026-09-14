@@ -17,6 +17,35 @@ const base = {
   scheduleUnreadCount: 0,
 } as const;
 
+it('shows the host interruption without live activity, survives read ACK and clears on resolution', () => {
+  const interruption = {
+    status: 'active',
+    activeTurnStartedAt: 1000,
+    interruptedTurnStartedAt: 1000,
+    lastTurnEndedAt: 900,
+  };
+  expect(resolveMobileSessionRightStatus({ ...base, interruption })).toBe('error');
+  expect(
+    resolveMobileSessionRightStatus({
+      ...base,
+      interruption,
+      liveAttention: false,
+    }),
+  ).toBe('error');
+  expect(
+    resolveMobileSessionRightStatus({
+      ...base,
+      interruption: { ...interruption, lastTurnEndedAt: 1000 },
+    }),
+  ).toBe('time');
+  expect(
+    resolveMobileSessionRightStatus({
+      ...base,
+      interruption: { ...interruption, interruptedTurnStartedAt: undefined },
+    }),
+  ).toBe('time');
+});
+
 describe('resolveMobileSessionRightStatus', () => {
   it('error 未读压过一切(含 running 与待处理交互)', () => {
     expect(resolveMobileSessionRightStatus({
@@ -75,4 +104,10 @@ describe('resolveMobileSessionRightStatus', () => {
   it('无任何信号显示时间', () => {
     expect(resolveMobileSessionRightStatus(base)).toBe('time');
   });
+});
+
+it('unread failed automation is red even without a live activity, and clears after read', () => {
+  expect(resolveMobileSessionRightStatus({ ...base, scheduleUnreadCount: 1, scheduleHasUnreadFailedRun: true })).toBe('error');
+  expect(resolveMobileSessionRightStatus({ ...base, scheduleUnreadCount: 1, scheduleHasUnreadFailedRun: true, running: true })).toBe('error');
+  expect(resolveMobileSessionRightStatus({ ...base, scheduleUnreadCount: 0, scheduleHasUnreadFailedRun: false })).toBe('time');
 });

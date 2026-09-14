@@ -21,6 +21,7 @@ const SNAPSHOT = {
   pinnedOrderIsAuthoritative: false,
   pinnedOrder: [] as string[],
   hiddenProjectKeys: [] as string[],
+  hiddenMainViewGhostIds: [] as string[],
 };
 
 type PinnedListener = (order: string[], ownerStamp: DataOwnerPushStamp) => void;
@@ -120,6 +121,24 @@ function renderFilter() {
 }
 
 describe('pinned sidebar persistence', () => {
+  it('optimistically removes every legacy Windows project-pin casing variant', () => {
+    (window.electronAPI as { platform: string }).platform = 'win32';
+    durablePinnedOrder = [
+      'project:local:D:/École/Project-A',
+      'session-a',
+      'project:local:d:/école/project-a',
+    ];
+    pinnedOrderIsAuthoritative = true;
+    mutatePinnedOrder.mockImplementationOnce(() => new Promise<string[]>(() => {}));
+    const view = renderFilter();
+
+    act(() => {
+      void view.result.current.removePin('project:local:D:/ÉCOLE/PROJECT-A');
+    });
+
+    expect(view.result.current.manualPinnedOrder).toEqual(['session-a']);
+  });
+
   it('rolls back an optimistic project pin when durable persistence fails', async () => {
     mutatePinnedOrder.mockRejectedValueOnce(new Error('disk full'));
     const view = renderFilter();
@@ -435,6 +454,7 @@ describe('pinned sidebar persistence', () => {
       pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
     });
 
     const view = renderFilter();
@@ -494,6 +514,7 @@ describe('pinned sidebar persistence', () => {
       pinnedOrderIsAuthoritative: false,
       pinnedOrder: [],
       hiddenProjectKeys: [],
+      hiddenMainViewGhostIds: [],
     };
     window.electronAPI.sidebarSettings.loadSnapshot = () => ownerBSnapshot;
     mutatePinnedOrder.mockClear();

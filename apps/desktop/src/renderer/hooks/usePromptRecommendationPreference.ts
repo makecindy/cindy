@@ -6,6 +6,12 @@ export const PROMPT_RECOMMENDATION_KEY = 'prompt-recommendation-enabled';
 let memoryValue: boolean | null = null;
 
 const listeners = new Set<() => void>();
+const lifecycleListeners = new Set<(enabled: boolean) => void>();
+
+function notifyPreferenceChanged(enabled: boolean): void {
+  listeners.forEach((fn) => fn());
+  lifecycleListeners.forEach((fn) => fn(enabled));
+}
 
 function readFromStorage(): boolean {
   try {
@@ -18,6 +24,15 @@ function readFromStorage(): boolean {
 export function getPromptRecommendationPreference(): boolean {
   if (memoryValue !== null) return memoryValue;
   memoryValue = readFromStorage();
+  return memoryValue;
+}
+
+/** 跨窗口 storage push 同步模块级真值；Store 与 hook 共用，避免首次 render 读旧缓存。 */
+export function syncPromptRecommendationPreferenceFromStorageValue(
+  storageValue: string | null,
+): boolean {
+  memoryValue = storageValue !== 'false';
+  notifyPreferenceChanged(memoryValue);
   return memoryValue;
 }
 
@@ -37,7 +52,7 @@ export function usePromptRecommendationPreference(): {
     } catch {
       // localStorage 不可用 → 静默; 模块级内存值仍在本渲染进程内生效。
     }
-    listeners.forEach((fn) => fn());
+    notifyPreferenceChanged(next);
   }, []);
 
   useEffect(() => {
@@ -52,8 +67,7 @@ export function usePromptRecommendationPreference(): {
     listeners.add(sync);
     const onStorage = (event: StorageEvent) => {
       if (event.key !== PROMPT_RECOMMENDATION_KEY) return;
-      memoryValue = event.newValue !== 'false';
-      sync();
+      syncPromptRecommendationPreferenceFromStorageValue(event.newValue);
     };
     window.addEventListener('storage', onStorage);
     return () => {
@@ -65,8 +79,17 @@ export function usePromptRecommendationPreference(): {
   return { enabled, setEnabled };
 }
 
+/** 运行期消费者订阅偏好变化（推荐状态 Store 用于全局清理）。 */
+export function subscribePromptRecommendationPreference(
+  listener: (enabled: boolean) => void,
+): () => void {
+  lifecycleListeners.add(listener);
+  return () => lifecycleListeners.delete(listener);
+}
+
 /** Test-only reset for the module-level source of truth. */
 export function _resetPromptRecommendationPreferenceForTests(): void {
   memoryValue = null;
   listeners.clear();
+  lifecycleListeners.clear();
 }

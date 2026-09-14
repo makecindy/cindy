@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   isXdOrgUser,
   maybeEnableXdOrgBetaDefault,
+  maybeEnableNonXdOrgBetaDefault,
+  shouldAttemptOrgBetaDefault,
   type XdOrgBetaDefaultDeps,
   type XdOrgBetaDefaultRequest,
   type XdOrgBetaUser,
@@ -36,7 +38,10 @@ function makeDeps(
     available: boolean;
     probeThrows: boolean;
   }> = {},
-): XdOrgBetaDefaultDeps & { enableBeta: ReturnType<typeof vi.fn>; probeBetaManifest: ReturnType<typeof vi.fn> } {
+): XdOrgBetaDefaultDeps & {
+  enableBeta: ReturnType<typeof vi.fn>;
+  probeBetaManifest: ReturnType<typeof vi.fn>;
+} {
   return {
     readCurrentAuthIdentity: vi.fn(() => ({
       authEpoch: overrides.authEpoch ?? REQUEST.expectedAuthEpoch,
@@ -74,6 +79,42 @@ describe('isXdOrgUser', () => {
     expect(isXdOrgUser(user({ membershipKind: 'personal', orgSlug: 'xd' }))).toBe(false);
     expect(isXdOrgUser(null)).toBe(false);
   });
+
+});
+
+describe('shouldAttemptOrgBetaDefault', () => {
+  it.each([
+    ['false', false],
+    ['missing', undefined],
+    ['string', 'true' as unknown as boolean],
+    ['number', 1 as unknown as boolean],
+  ])('非 xd + %s 走 skip', (_label, defaultEnableBeta) => {
+    expect(
+      shouldAttemptOrgBetaDefault({
+        user: user({ orgSlug: 'other' }),
+        defaultEnableBeta,
+      }),
+    ).toBe('skip');
+  });
+
+  it('非 xd 只有 flag=true 才尝试，xd 无论 flag 都走老逻辑', () => {
+    expect(shouldAttemptOrgBetaDefault({ user: user(), defaultEnableBeta: false })).toBe(
+      'xd-legacy',
+    );
+    expect(shouldAttemptOrgBetaDefault({ user: user(), defaultEnableBeta: true })).toBe(
+      'xd-legacy',
+    );
+    expect(
+      shouldAttemptOrgBetaDefault({ user: user({ orgSlug: 'other' }), defaultEnableBeta: true }),
+    ).toBe('flag-enable');
+    expect(shouldAttemptOrgBetaDefault({ user: user() })).toBe('xd-legacy');
+    expect(
+      shouldAttemptOrgBetaDefault({
+        user: user({ membershipKind: 'personal', orgSlug: 'xd' }),
+        defaultEnableBeta: true,
+      }),
+    ).toBe('skip');
+  });
 });
 
 describe('maybeEnableXdOrgBetaDefault', () => {
@@ -100,11 +141,62 @@ describe('maybeEnableXdOrgBetaDefault', () => {
     const deps = makeDeps();
 
     await expect(
-      maybeEnableXdOrgBetaDefault({ ...REQUEST, user: user({ orgSlug: 'other', orgName: 'Other' }) }, deps),
+      maybeEnableXdOrgBetaDefault(
+        { ...REQUEST, user: user({ orgSlug: 'other', orgName: 'Other' }) },
+        deps,
+      ),
     ).resolves.toEqual({ kind: 'skipped', reason: 'not-xd-org' });
     expect(deps.probeBetaManifest).not.toHaveBeenCalled();
     expect(deps.enableBeta).not.toHaveBeenCalled();
   });
+
+  it('enables beta for non-xd accounts only when feature flag allows it', async () => {
+    const deps = makeDeps();
+    await expect(
+      maybeEnableNonXdOrgBetaDefault(
+        { ...REQUEST, user: user({ orgSlug: 'other', orgName: 'Other' }) },
+        deps,
+      ),
+    ).resolves.toEqual({ kind: 'enabled' });
+    expect(deps.enableBeta).toHaveBeenCalledOnce();
+  });
+
+  it('non-xd rejects customized devices before probing or writing', async () => {
+    const deps = makeDeps({ isCustomized: true });
+    await expect(
+      maybeEnableNonXdOrgBetaDefault(
+        { ...REQUEST, user: user({ orgSlug: 'other', orgName: 'Other' }) },
+        deps,
+      ),
+    ).resolves.toEqual({ kind: 'skipped', reason: 'user-customized' });
+    expect(deps.probeBetaManifest).not.toHaveBeenCalled();
+    expect(deps.enableBeta).not.toHaveBeenCalled();
+  });
+
+  it('non-xd rejects stale auth before writing', async () => {
+    const deps = makeDeps({ authEpoch: REQUEST.expectedAuthEpoch + 1 });
+    await expect(
+      maybeEnableNonXdOrgBetaDefault(
+        { ...REQUEST, user: user({ orgSlug: 'other', orgName: 'Other' }) },
+        deps,
+      ),
+    ).resolves.toEqual({ kind: 'skipped', reason: 'stale-auth' });
+    expect(deps.enableBeta).not.toHaveBeenCalled();
+  });
+
+  it.each([{ available: false }, { probeThrows: true }])(
+    'non-xd rejects unavailable manifest without writing: %j',
+    async (overrides) => {
+      const deps = makeDeps(overrides);
+      await expect(
+        maybeEnableNonXdOrgBetaDefault(
+          { ...REQUEST, user: user({ orgSlug: 'other', orgName: 'Other' }) },
+          deps,
+        ),
+      ).resolves.toEqual({ kind: 'skipped', reason: 'beta-unavailable' });
+      expect(deps.enableBeta).not.toHaveBeenCalled();
+    },
+  );
 
   it('skips when beta is already on', async () => {
     const deps = makeDeps({ enableBeta: true, isCustomized: true });
@@ -117,18 +209,18 @@ describe('maybeEnableXdOrgBetaDefault', () => {
     expect(deps.enableBeta).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { available: false },
-    { probeThrows: true },
-  ])('skips when the beta manifest is unavailable: %j', async (overrides) => {
-    const deps = makeDeps(overrides);
+  it.each([{ available: false }, { probeThrows: true }])(
+    'skips when the beta manifest is unavailable: %j',
+    async (overrides) => {
+      const deps = makeDeps(overrides);
 
-    await expect(maybeEnableXdOrgBetaDefault(REQUEST, deps)).resolves.toEqual({
-      kind: 'skipped',
-      reason: 'beta-unavailable',
-    });
-    expect(deps.enableBeta).not.toHaveBeenCalled();
-  });
+      await expect(maybeEnableXdOrgBetaDefault(REQUEST, deps)).resolves.toEqual({
+        kind: 'skipped',
+        reason: 'beta-unavailable',
+      });
+      expect(deps.enableBeta).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([
     { authEpoch: REQUEST.expectedAuthEpoch + 1, userId: REQUEST.expectedUserId },

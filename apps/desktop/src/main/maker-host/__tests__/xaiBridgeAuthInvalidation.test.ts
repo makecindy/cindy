@@ -4,6 +4,13 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { ResponseObserverCtx } from '@cindy/anthropic-compat-proxy';
 
+const accountAuth = vi.hoisted(() => ({
+  peekGrokAccessToken: vi.fn(() => 'token-a'),
+  recoverGrokAuthAfterRejection: vi.fn(async () => 'logged_out'),
+}));
+vi.mock('../grok-oauth-login.js', () => accountAuth);
+import { createXaiProxyAuthInvalidationObserver, setXaiAuthInvalidatedHandler } from '../xai-auth-invalidation-host.js';
+
 import {
   createXaiAuthInvalidationObserver,
   createXaiBridgeAuthInvalidator,
@@ -165,6 +172,22 @@ function observerCtx(overrides: Partial<ResponseObserverCtx> = {}): ResponseObse
 }
 
 describe('xAI codex-proxy auth invalidation observer', () => {
+  it('keeps a delayed rejection scoped to the original account', async () => {
+    const loggedOut = vi.fn();
+    setXaiAuthInvalidatedHandler(loggedOut);
+    let providerId = 'xai-second';
+    const observe = createXaiProxyAuthInvalidationObserver(() => providerId);
+    const sink = observe(observerCtx());
+    providerId = 'xai';
+    sink!.onData?.(Buffer.from(REJECTED_BODY));
+    sink!.onEnd?.();
+    await vi.waitFor(() => expect(loggedOut).toHaveBeenCalledWith('xai-second'));
+    expect(accountAuth.peekGrokAccessToken).toHaveBeenCalledWith('xai-second');
+    expect(accountAuth.recoverGrokAuthAfterRejection).toHaveBeenCalledWith('token-a', 'xai-second');
+    expect(loggedOut).not.toHaveBeenCalledWith('xai');
+    setXaiAuthInvalidatedHandler(() => {});
+  });
+
   it('成功响应与非认证状态码零开销跳过', () => {
     const handleFailure = vi.fn(async () => undefined);
     const observe = createXaiAuthInvalidationObserver(handleFailure);

@@ -1,20 +1,22 @@
 import type { DictationRefinementContext } from '@cindy/voice-input-core';
+import type { Node as PMNode } from '@tiptap/pm/model';
 import {
-  MAX_REFINEMENT_HISTORY_ITEM_CHARS,
-  VOICE_INPUT_HISTORY_COMPACT_CHARS,
-  VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES,
-  VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS,
-  VOICE_INPUT_HISTORY_HEADER,
-} from '../../shared/voiceInputData';
-
-export const MAX_REFINEMENT_SIDE_CONTEXT_CHARS = 1_200;
-export const MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS = 500;
-export const VOICE_INPUT_REFINEMENT_CACHE_SCOPE = 'voice-input-refinement';
+  formatVoiceInputHistoryContext,
+  takeRefinementContextHead,
+  takeRefinementContextTail,
+  truncateRefinementReply,
+  MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS,
+} from '@cindy/voice-input-core';
 export {
+  MAX_REFINEMENT_SIDE_CONTEXT_CHARS,
+  MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS,
+  estimateVoiceInputHistoryContextChars,
   VOICE_INPUT_HISTORY_COMPACT_CHARS,
   VOICE_INPUT_HISTORY_COMPACT_KEEP_ENTRIES,
   VOICE_INPUT_HISTORY_COMPACT_TARGET_CHARS,
-};
+} from '@cindy/voice-input-core';
+
+export const VOICE_INPUT_REFINEMENT_CACHE_SCOPE = 'voice-input-refinement';
 
 export type VoiceInputChatMessage = {
   role: string;
@@ -22,10 +24,16 @@ export type VoiceInputChatMessage = {
   isStreaming?: boolean;
 };
 
+export function buildEditorSelectionContext(doc: PMNode, range: { from: number; to: number }) {
+  return {
+    selectionBefore: takeRefinementContextTail(doc.textBetween(0, range.from, '\n', '\n')),
+    selectedText: takeRefinementContextHead(doc.textBetween(range.from, range.to, '\n', '\n')),
+    selectionAfter: takeRefinementContextHead(doc.textBetween(range.to, doc.content.size, '\n', '\n')),
+  };
+}
+
 export function truncateContextText(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(0, maxChars).trim();
+  return takeRefinementContextHead(text, maxChars);
 }
 
 export function buildReplyToMessageFromChatMessages(messages: VoiceInputChatMessage[] | undefined): string | undefined {
@@ -33,7 +41,7 @@ export function buildReplyToMessageFromChatMessages(messages: VoiceInputChatMess
   for (let i = messages.length - 1; i >= 0; i -= 1) {
     const message = messages[i];
     if (!message || message.isStreaming || message.role !== 'assistant') continue;
-    return truncateContextText(message.content, MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS) || undefined;
+    return truncateRefinementReply(message.content, MAX_REFINEMENT_REPLY_TO_MESSAGE_CHARS) || undefined;
   }
   return undefined;
 }
@@ -48,31 +56,8 @@ export function buildReplyToMessageFromChatMessages(messages: VoiceInputChatMess
 export function buildVoiceInputHistoryContext(
   newestFirst: ReadonlyArray<{ text: string }>,
 ): Pick<DictationRefinementContext, 'voiceInputHistory'> {
-  const oldestFirst = normalizeVoiceInputHistoryEntries(newestFirst);
-  if (oldestFirst.length === 0) return {};
-  return {
-    voiceInputHistory: [
-      VOICE_INPUT_HISTORY_HEADER,
-      ...oldestFirst.map((entry) => `- ${entry}`),
-    ].join('\n'),
-  };
-}
-
-export function estimateVoiceInputHistoryContextChars(newestFirst: ReadonlyArray<{ text: string }>): number {
-  const oldestFirst = normalizeVoiceInputHistoryEntries(newestFirst);
-  if (oldestFirst.length === 0) return 0;
-  return oldestFirst.reduce(
-    (total, entry) => total + 3 + entry.length,
-    VOICE_INPUT_HISTORY_HEADER.length,
-  );
-}
-
-function normalizeVoiceInputHistoryEntries(newestFirst: ReadonlyArray<{ text: string }>): string[] {
-  return newestFirst
-    .slice()
-    .reverse()
-    .map((entry) => truncateContextText(entry.text, MAX_REFINEMENT_HISTORY_ITEM_CHARS))
-    .filter(Boolean);
+  const voiceInputHistory = formatVoiceInputHistoryContext(newestFirst);
+  return voiceInputHistory ? { voiceInputHistory } : {};
 }
 
 export function takeContextHead(text: string, maxChars: number): string {
@@ -80,7 +65,5 @@ export function takeContextHead(text: string, maxChars: number): string {
 }
 
 export function takeContextTail(text: string, maxChars: number): string {
-  const normalized = text.replace(/\s+/g, ' ').trim();
-  if (normalized.length <= maxChars) return normalized;
-  return normalized.slice(-maxChars).trim();
+  return takeRefinementContextTail(text, maxChars);
 }

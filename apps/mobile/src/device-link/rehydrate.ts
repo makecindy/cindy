@@ -1,8 +1,10 @@
 import type { Topic } from '@cindy/device-link';
 import type { RehydratePlan } from '@/device-link/topicRegistry';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
+import { SnapshotReadSupersededError } from '@/device-link/sessionSnapshotSingleFlight';
 
 export interface DeviceLinkRehydrateSendOptions {
+  subscriptionIdentity?: number | null;
   /** 同一设备的一轮快照 fan-out 共享一个响应性观测 cohort。 */
   responsivenessCohort?: number;
 }
@@ -46,6 +48,11 @@ export interface DeviceLinkRehydrateResult {
   transientFailures: number;
 }
 
+export interface DeviceLinkPeerRehydrateResult extends DeviceLinkRehydrateResult {
+  /** True only when this peer's link-open step actually resolved successfully. */
+  linkOpened: boolean;
+}
+
 /**
  * Replays controller intent after mobile foreground/background or relay
  * reconnect. Every step is best-effort because the host remains authoritative:
@@ -58,18 +65,36 @@ export async function rehydrateDeviceLinkTopics(
   deps: DeviceLinkRehydrateDeps,
 ): Promise<DeviceLinkRehydrateResult> {
   let transientFailures = 0;
+  for (const plan of plans) {
+    if (deps.isCancelled?.()) break;
+    const result = await rehydrateDeviceLinkPeer(plan, deps);
+    transientFailures += result.transientFailures;
+  }
+  return { transientFailures };
+}
+
+/**
+ * Rehydrates one remote machine only. Scheduling peers belongs to the caller,
+ * so a timeout from this plan never serializes unrelated desktops behind it.
+ */
+export async function rehydrateDeviceLinkPeer(
+  plan: RehydratePlan,
+  deps: DeviceLinkRehydrateDeps,
+): Promise<DeviceLinkPeerRehydrateResult> {
+  let transientFailures = 0;
+  let linkOpened = false;
   const track = async (
     deviceId: string,
     capturedPresenceEpoch: number,
     capturedResponseEvidenceEpoch: number,
     step: Promise<unknown>,
-  ): Promise<'continue' | 'unavailable'> => {
+  ): Promise<'succeeded' | 'failed' | 'unavailable'> => {
     try {
       await step;
       if (deps.isPresenceEpochCurrent(deviceId, capturedPresenceEpoch)) {
         deps.onDeviceReachable?.(deviceId);
       }
-      return 'continue';
+      return 'succeeded';
     } catch (err) {
       const epochCurrent = deps.isPresenceEpochCurrent(
         deviceId,
@@ -105,63 +130,66 @@ export async function rehydrateDeviceLinkTopics(
       ) {
         transientFailures += 1;
       }
-      return unavailable ? 'unavailable' : 'continue';
+      return unavailable ? 'unavailable' : 'failed';
     }
   };
 
-  for (const plan of plans) {
-    if (deps.isCancelled?.()) return { transientFailures };
-    if (plan.openLink) {
-      // openLink 可能与页面请求共用一条在途请求;它必须连同底层请求真正创建时
-      // 捕获的 epoch 一起复用,不能在 dedupe 时补拍一个更新的 epoch。
-      const openLinkStep = deps.openLink(plan.deviceId);
-      if (await track(
-        plan.deviceId,
-        openLinkStep.capturedPresenceEpoch,
-        openLinkStep.capturedResponseEvidenceEpoch,
-        openLinkStep.request,
-      ) === 'unavailable') {
-        continue;
-      }
+  if (deps.isCancelled?.()) return { linkOpened, transientFailures };
+  // Honor plan.openLink. Listing-only owners (Home `sessions`) subscribe without a control
+  // link so Desktop does not show「正在被控」. ACK-reset recovery already promotes the plan
+  // through resolvePeerRecoveryPlan when the peer queue actually needs a reopen.
+  if (plan.openLink) {
+    // openLink 可能与页面请求共用一条在途请求;它必须连同底层请求真正创建时
+    // 捕获的 epoch 一起复用,不能在 dedupe 时补拍一个更新的 epoch。
+    const openLinkStep = deps.openLink(plan.deviceId);
+    const openResult = await track(
+      plan.deviceId,
+      openLinkStep.capturedPresenceEpoch,
+      openLinkStep.capturedResponseEvidenceEpoch,
+      openLinkStep.request,
+    );
+    if (openResult === 'unavailable') {
+      return { linkOpened, transientFailures };
     }
+    linkOpened = openResult === 'succeeded';
+  }
 
-    if (plan.topics.length === 0) continue;
-    if (deps.isCancelled?.()) return { transientFailures };
-    if (
-      await track(
+  if (plan.topics.length === 0) return { linkOpened, transientFailures };
+  if (deps.isCancelled?.()) return { linkOpened, transientFailures };
+  if (
+    await track(
+      plan.deviceId,
+      deps.capturePresenceEpoch(plan.deviceId),
+      deps.captureResponseEvidenceEpoch(plan.deviceId),
+      deps.subscribe(plan.deviceId, plan.topics),
+    ) === 'unavailable'
+  ) {
+    return { linkOpened, transientFailures };
+  }
+
+  for (const topic of plan.topics) {
+    if (deps.isCancelled?.()) return { linkOpened, transientFailures };
+    if (topic === 'sessions') {
+      deps.requestSessionsReseed(plan.deviceId);
+      continue;
+    }
+    const sessionId = readSessionTopic(topic);
+    if (sessionId) {
+      // 每个 session snapshot 自身包含四路 Promise.allSettled fan-out;只把
+      // 同一批真正并发的请求合并,不要把多个串行 session 的超时压成一次观测。
+      if (await track(
         plan.deviceId,
         deps.capturePresenceEpoch(plan.deviceId),
         deps.captureResponseEvidenceEpoch(plan.deviceId),
-        deps.subscribe(plan.deviceId, plan.topics),
-      ) === 'unavailable'
-    ) {
-      continue;
-    }
-
-    for (const topic of plan.topics) {
-      if (deps.isCancelled?.()) return { transientFailures };
-      if (topic === 'sessions') {
-        deps.requestSessionsReseed(plan.deviceId);
-        continue;
-      }
-      const sessionId = readSessionTopic(topic);
-      if (sessionId) {
-        // 每个 session snapshot 自身包含四路 Promise.allSettled fan-out;只把
-        // 同一批真正并发的请求合并,不要把多个串行 session 的超时压成一次观测。
-        if (await track(
-          plan.deviceId,
-          deps.capturePresenceEpoch(plan.deviceId),
-          deps.captureResponseEvidenceEpoch(plan.deviceId),
-          deps.rebuildSessionSnapshot(plan.deviceId, sessionId, {
-            responsivenessCohort: deps.createDeviceSendCohort(plan.deviceId),
-          }),
-        ) === 'unavailable') {
-          break;
-        }
+        deps.rebuildSessionSnapshot(plan.deviceId, sessionId, {
+          responsivenessCohort: deps.createDeviceSendCohort(plan.deviceId),
+        }),
+      ) === 'unavailable') {
+        break;
       }
     }
   }
-  return { transientFailures };
+  return { linkOpened, transientFailures };
 }
 
 export function hasDeviceLinkErrorCode(
@@ -207,6 +235,12 @@ export function classifySnapshotBatchFailure(
       && !isRemoteDisabledError(result.reason),
   );
   if (availabilityRejections.length === 0) {
+    // A detail caller may invalidate a shared physical response while this peer's
+    // recovery is still current. Reuse the existing retry path rather than mark
+    // recovery complete or allow that old response to overwrite a fresh window.
+    if (rejections.some((result) => result.reason instanceof SnapshotReadSupersededError)) {
+      return { kind: 'partial-transient' };
+    }
     return otherTransient
       ? { kind: 'reject', error: otherTransient.reason }
       : { kind: 'none' };

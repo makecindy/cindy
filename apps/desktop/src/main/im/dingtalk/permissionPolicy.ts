@@ -13,9 +13,10 @@ import { channelForceConfirmToolCall } from '../shared/channelToolPolicy';
  * (nested unwrap covers Claude call_tool, Codex MCP elicitation, and Pi bridged
  * MCP / secondary-dispatch plugins).
  */
-export function createDingTalkTurnPermissionPolicy(taskId: string): TurnPermissionPolicy {
+export function createDingTalkTurnPermissionPolicy(taskId: string, isOwner?: boolean): TurnPermissionPolicy {
   return {
     origin: { kind: 'im', channel: 'dingtalk', taskId },
+    autoReviewContext: { requesterAuthority: isOwner === true ? 'owner' : isOwner === false ? 'guest' : 'unknown', source: 'group' },
     confirmationSurface: 'channel',
     confirmationTimeoutMs: 30 * 60 * 1_000,
     forceConfirmToolCall: channelForceConfirmToolCall,

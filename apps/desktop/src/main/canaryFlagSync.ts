@@ -28,11 +28,12 @@ export interface CanaryFlagSyncDeps {
 
 /** Observable result used by the caller for structured logging. */
 export type CanaryFlagSyncOutcome =
-  | { kind: 'synced'; isCanary: boolean }
+  | { kind: 'synced'; isCanary: boolean; defaultEnableBeta?: boolean }
   | {
       kind: 'preserved';
       reason: 'request-failed' | 'invalid-response' | 'stale-auth';
       status?: number;
+      defaultEnableBeta?: boolean;
     };
 
 /**
@@ -59,12 +60,19 @@ export async function syncCanaryFlagAfterAuth(
     return { kind: 'preserved', reason: 'request-failed', status: result.status };
   }
 
-  const isCanary =
+  const flags =
     result.data && typeof result.data === 'object'
-      ? (result.data as { isCanary?: unknown }).isCanary
+      ? (result.data as { isCanary?: unknown; defaultEnableBeta?: unknown })
       : undefined;
+  const isCanary = flags?.isCanary;
+  const defaultEnableBeta = readOptionalDefaultEnableBeta(flags?.defaultEnableBeta);
   if (typeof isCanary !== 'boolean') {
-    return { kind: 'preserved', reason: 'invalid-response', status: result.status };
+    return {
+      kind: 'preserved',
+      reason: 'invalid-response',
+      status: result.status,
+      ...defaultEnableBeta,
+    };
   }
 
   const current = deps.readCurrentAuthIdentity();
@@ -72,9 +80,15 @@ export async function syncCanaryFlagAfterAuth(
     current.authEpoch !== request.expectedAuthEpoch ||
     current.userId !== request.expectedUserId
   ) {
-    return { kind: 'preserved', reason: 'stale-auth' };
+    return { kind: 'preserved', reason: 'stale-auth', ...defaultEnableBeta };
   }
 
   deps.persistFlag(isCanary);
-  return { kind: 'synced', isCanary };
+  return { kind: 'synced', isCanary, ...defaultEnableBeta };
+}
+
+function readOptionalDefaultEnableBeta(
+  value: unknown,
+): { defaultEnableBeta: true } | Record<string, never> {
+  return value === true ? { defaultEnableBeta: true } : {};
 }

@@ -52,6 +52,7 @@ vi.mock('../device-link/settings-store', () => ({
   readDeviceLinkSettings: () => h.settings,
 }));
 import {
+  markRemoteSettingPersistedInsideHandler,
   runInvoke,
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
@@ -263,6 +264,35 @@ describe('device-link host dispatch (runInvoke) — real gate + async fs guard +
       channel: 'maker:set-extra-dirs',
       args: ['sess-1', ['/some/dir']],
     })) as Extract<InvokeResultPayload, { ok: true }>;
+    expect(res.ok).toBe(true);
+    expect(persistSpy).not.toHaveBeenCalled();
+  });
+
+  it('set-writable-dirs 回流持久化 handler 实际应用的可写目录子集', async () => {
+    registerHandler('maker:set-writable-dirs', (_sessionId: unknown, dirs: unknown) =>
+      (dirs as string[]).filter((d) => d !== '/rejected'),
+    );
+    const res = (await runInvoke(SRC, {
+      channel: 'maker:set-writable-dirs',
+      args: ['sess-1', ['/output/a', '/rejected', '/output/b']],
+    })) as Extract<InvokeResultPayload, { ok: true }>;
+    expect(res.ok).toBe(true);
+    expect(persistSpy).toHaveBeenCalledWith('sess-1', {
+      writableDirs: ['/output/a', '/output/b'],
+    });
+  });
+
+  it('目录 handler 已在 session 锁内持久化时不再做锁外尾写', async () => {
+    registerHandler('maker:set-writable-dirs', () => {
+      const applied: string[] = [];
+      markRemoteSettingPersistedInsideHandler(applied);
+      return applied;
+    });
+    const res = await runInvoke(SRC, {
+      channel: 'maker:set-writable-dirs',
+      args: ['sess-1', []],
+    });
+
     expect(res.ok).toBe(true);
     expect(persistSpy).not.toHaveBeenCalled();
   });

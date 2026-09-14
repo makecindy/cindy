@@ -8,7 +8,7 @@
  *     Claude Code / Codex CLI 时置一条建议行,点击直达该渠道的授权步。
  *   - 右栏:选中供应商的详情 = 鉴权头部(复用既有各 Row 的连接/断开/授权逻辑,
  *     **不发明新的连接 IPC**)+ 统一模型可见性列表(UnifiedModelList:并集 +
- *     单开关同写双 agent,「分别调整」兜底,见该组件头注释)。
+ *     单开关选推荐引擎，高级设置逐引擎调整,见该组件头注释)。
  *
  * 鉴权通道(与重构前一致):
  *   - Anthropic: maker.claudeOAuth*;OpenAI: useCodexAuth();xAI: maker.xaiOAuth*。
@@ -37,11 +37,16 @@ import {
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
+import { codexRecoveryActionKey, codexRecoveryDescriptionKey } from '@/hooks/codexAuthRecovery';
 import { useApiKey } from '@/hooks/useApiKey';
 import { extractIpcError } from '@/utils/ipcError';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
-import { useModelAccessCreditUsage } from '@/hooks/useModelAccessCreditUsage';
+import { useModelAccessCreditUsageResult } from '@/hooks/useModelAccessCreditUsage';
+import { useClaudeAccountUsageResult } from '@/hooks/useClaudeAccountUsage';
+import { useXdAssetPrimaryAction } from '@/hooks/useXdAssetPrimaryAction';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
+import { Button } from '@/components/ui/button';
+import { Tip } from '@/components/ui/tooltip';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
@@ -54,8 +59,10 @@ import {
   readCustomProviderKey,
   updateCustomProvider,
 } from '@/lib/customProviders';
+import { providerDisplayName } from '@/lib/providerDisplayName';
 import { providerMonogram } from '@/lib/providerModels';
-import { PROVIDER_SECRET_IDS, type ProviderSecretId } from '../../../shared/providerSecrets';
+import { isBuiltinApiKeyProviderId } from '../../../shared/providerSecrets';
+import type { CustomProviderUpdateOptions, CustomProviderUpdateResult } from '../../../shared/customProviderUpdate';
 
 import {
   customProviderSubtitleForDisplay,
@@ -71,17 +78,18 @@ import {
 import { BILLING_CURRENCY, formatBillingAmount } from '@/features/billing/money';
 import { canAccessBillingSettings } from './billingVisibility';
 import { resolveXdAssetModuleState } from './providerAssetModule';
-import {
-  requestXaiSubscriptionRefresh,
-  useXaiSubscriptionUsage,
-} from '@/hooks/useXaiSubscriptionUsage';
-import {
-  formatXaiProductLabel,
-  isXaiWeeklyUsageCurrent,
-} from '../../../shared/xaiSubscriptionUsage';
-import { CustomProviderDialog } from './CustomProviderDialog';
+import { useProviderSubscriptionCard } from './useProviderSubscriptionCard';
+import { QuotaHoverCard } from '../status/QuotaHoverCard';
+import { ProviderConnectionDialog } from './ProviderConnectionDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
-import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { OllamaProviderDetail } from './OllamaProviderDetail';
+import {
+  isLocalRuntimeBetaProviderId,
+  MANAGED_LMSTUDIO_PROVIDER_ID,
+  MANAGED_OLLAMA_PROVIDER_ID,
+} from '../../../shared/localModelRuntime';
+import { OAuthBrowserLink, OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { ProviderImportDialog } from './ProviderImportDialog';
 import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
@@ -90,10 +98,10 @@ import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { SortableList } from '@/components/sidebar/SortableList';
 
-import type { LocalCliDetection } from '../../../shared/localCliDetect';
+import { localCliDisplayName, type LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
 import { applyProviderOrder } from '../../../shared/providerOrder';
-import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers';
+import type { AgentKind, CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 // ---------------------------------------------------------------------------
 // 工具
@@ -108,6 +116,7 @@ function providerHasModels(provider: ProviderView): boolean {
     provider.agents.some((a) => (provider.models[a]?.length ?? 0) > 0) ||
     (provider.imageModels?.length ?? 0) > 0 ||
     (provider.videoModels?.length ?? 0) > 0 ||
+    (provider.audioModels?.length ?? 0) > 0 ||
     (provider.embeddingModels?.length ?? 0) > 0
   );
 }
@@ -167,22 +176,6 @@ function ReconnectRequiredPill() {
   );
 }
 
-/** 摘要只展示去重后的模型数，避免把「模型 × Agent」误读成模型数量。 */
-function ModelCountChip({ count }: { count: number }) {
-  const { t } = useTranslation();
-  return (
-    <span
-      className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium tabular-nums"
-      style={{
-        backgroundColor: 'var(--settings-btn-secondary-bg)',
-        color: 'var(--settings-section-desc)',
-      }}
-    >
-      {t('settings.providers.models.modelCount', { count })}
-    </span>
-  );
-}
-
 function PillButton({
   label,
   onClick,
@@ -193,23 +186,9 @@ function PillButton({
   disabled?: boolean;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      className={cn(
-        'flex h-8 shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-colors',
-        'border',
-        disabled && 'cursor-not-allowed opacity-60',
-      )}
-      style={{
-        backgroundColor: 'var(--settings-btn-secondary-bg)',
-        borderColor: 'var(--settings-btn-secondary-border)',
-        color: 'var(--settings-btn-secondary-text)',
-      }}
-    >
+    <Button variant="secondary" size="md" onClick={onClick} disabled={disabled}>
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -230,24 +209,9 @@ function CtaPillButton({
   className?: string;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        'flex shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-opacity hover:opacity-90',
-        size === 'lg' ? 'h-9' : 'h-8',
-        className,
-      )}
-      style={{
-        // Black Pill(最高强调档)按 DESIGN.md §4 用 pure 对:--accent-cta-bg-pure
-        // (Light 纯黑 / Dark 纯白反转)配 --accent-pure-cta-fg。--accent-cta-bg 在
-        // 默认 Light 下是 #262626,与规范的 #000000 差一档,不能混用。
-        backgroundColor: 'var(--accent-cta-bg-pure)',
-        color: 'var(--accent-pure-cta-fg)',
-      }}
-    >
+    <Button variant="cta" size={size} onClick={onClick} className={className}>
       {label}
-    </button>
+    </Button>
   );
 }
 
@@ -265,25 +229,11 @@ function CustomTag({ label }: { label: string }) {
   );
 }
 
-function RowIconButton({
-  icon,
-  label,
-  onClick,
-}: {
-  icon: ReactNode;
-  label: string;
-  onClick: () => void;
-}) {
+function BetaTag({ label }: { label: string }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
-      style={{ color: 'var(--text-tertiary)' }}
-    >
-      {icon}
-    </button>
+    <span className="shrink-0 rounded-full border border-[var(--settings-badge-border)] bg-[var(--settings-badge-bg)] px-2 py-[1px] text-10 font-medium uppercase leading-[1.5] tracking-wide text-[var(--text-secondary)]">
+      {label}
+    </span>
   );
 }
 
@@ -292,11 +242,146 @@ function RowIconButton({
 // (重构前的 ProviderCell 去掉展开逻辑;模型列表由详情容器统一渲染。)
 // ---------------------------------------------------------------------------
 
+type ProviderOwnerScope = { dataOwnerId: string | null; ownerGeneration: number };
+function supportsBuiltinConnectionManagement(provider: ProviderView): boolean {
+  return provider.source === 'builtin' && provider.id !== 'xd' && (
+    ['openai', 'anthropic', 'xai'].includes(provider.id) ||
+    (provider.auth.method === 'oauth' && !!provider.auth.oauth) ||
+    (provider.auth.method === 'apiKey' && isBuiltinApiKeyProviderId(provider.id))
+  );
+}
+/** Reuse the image Host restart confirmation for settings mutations that remove its source. */
+function useProviderChangeConfirmation() {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  return useCallback(async (change: (options: CustomProviderUpdateOptions) => Promise<CustomProviderUpdateResult | void>) => {
+    const result = await change({ source: 'manual-settings' });
+    if (!result || result.ok) return true;
+    if (!(await confirm({
+      title: t('settings.providers.custom.imageGenerationReload.title'),
+      description: t('settings.providers.custom.imageGenerationReload.description'),
+      confirmText: t('settings.providers.custom.imageGenerationReload.interrupt'),
+      cancelText: t('settings.providers.custom.imageGenerationReload.cancel'),
+    }))) return false;
+    const retry = await change({ source: 'manual-settings', codexImageGenerationRestartPolicy: 'interrupt' });
+    return !retry || retry.ok;
+  }, [confirm, t]);
+}
+async function disconnectProvider(
+  provider: ProviderView,
+  scope: ProviderOwnerScope,
+  options?: CustomProviderUpdateOptions,
+): Promise<CustomProviderUpdateResult | void> {
+  if (provider.source === 'builtin') {
+    if (!supportsBuiltinConnectionManagement(provider)) throw new Error('Provider connection management is unavailable');
+    // Keep the entry available for reconnect, even when the original source was auto-detected.
+    await window.electronAPI.maker.setProviderPresentation({
+      providerId: provider.id,
+      action: 'restore',
+      ...scope,
+    });
+    if (provider.id === 'openai') await window.electronAPI.maker.auth.logout('codex', scope);
+    else if (provider.id === 'anthropic') await window.electronAPI.maker.claudeOAuthLogout(scope);
+    else if (provider.id === 'xai') await window.electronAPI.maker.xaiOAuthLogout(scope);
+    else if (provider.auth.method === 'oauth') return window.electronAPI.maker.providerOAuthLogout(provider.id, scope, options);
+    else await window.electronAPI.builtinApiKeyRemove(provider.id, scope);
+  } else if (provider.auth.method === 'oauth') {
+    return window.electronAPI.maker.providerOAuthLogout(provider.id, scope, options);
+  } else {
+    return window.electronAPI.maker.disconnectCustomProvider(provider.id, scope, options);
+  }
+}
+
+function useProviderManagement(provider?: ProviderView) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const confirmProviderChange = useProviderChangeConfirmation();
+  const { refetch } = useProviders();
+  const [busy, setBusy] = useState(false);
+  const rename = async () => {
+    if (!provider || busy) return;
+    try {
+      const scope = await window.electronAPI.maker.listProviders();
+      let name = provider.name;
+      if (
+        !(await confirm({
+          title: t('settings.providers.pill.rename'),
+          content: (
+            <LocalProviderNameInput
+              initialName={name}
+              onChange={(next) => {
+                name = next;
+              }}
+            />
+          ),
+          confirmText: t('settings.providers.custom.save'),
+          cancelText: t('settings.providers.custom.cancel'),
+        }))
+      )
+        return;
+      setBusy(true);
+      await window.electronAPI.maker.setProviderPresentation({
+        providerId: provider.id,
+        action: 'rename',
+        name,
+        dataOwnerId: scope.dataOwnerId,
+        ownerGeneration: scope.ownerGeneration,
+      });
+      refetch();
+    } catch {
+      toast.error(t('settings.providers.custom.toast.saveFailed'));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const removeBuiltin = async () => {
+    if (!provider || busy) return;
+    try {
+      const scope = await window.electronAPI.maker.listProviders();
+      if (
+        !(await confirm({
+          title: t('settings.providers.custom.deleteConfirm.title'),
+          description: t('settings.providers.custom.deleteConfirm.description', {
+            name: provider.name,
+          }),
+          confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
+          cancelText: t('settings.providers.custom.cancel'),
+        }))
+      )
+        return;
+      setBusy(true);
+      if (!(await confirmProviderChange(options => disconnectProvider(provider, scope, options)))) return;
+      // Deleting the whole provider also revokes its legacy image API connection.
+      // Keep this separate from disconnecting only the ChatGPT subscription.
+      if (provider.id === 'openai') {
+        await window.electronAPI.builtinApiKeyRemove('openai-images', scope);
+      }
+      await window.electronAPI.maker.setProviderPresentation({
+        providerId: provider.id,
+        action: 'remove',
+        dataOwnerId: scope.dataOwnerId,
+        ownerGeneration: scope.ownerGeneration,
+      });
+      toast.success(t('settings.providers.custom.toast.deleted'));
+    } catch {
+      toast.error(t('settings.providers.custom.toast.deleteFailed'));
+    } finally {
+      setBusy(false);
+      refetch();
+    }
+  };
+  return { busy, rename, removeBuiltin };
+}
+
 function DetailHeader({
   icon,
   title,
+  identityBadge,
   subtitle,
-  trailing,
+  status,
+  primaryAction,
+  editAction,
+  deleteAction,
   provider,
   detail,
   badge,
@@ -306,8 +391,13 @@ function DetailHeader({
 }: {
   icon: ReactNode;
   title: string;
+  /** 供应商身份附加标签（如免费套餐）。 */
+  identityBadge?: ReactNode;
   subtitle: string;
-  trailing: ReactNode;
+  status?: { kind: 'connected' | 'reconnect-required' | 'neutral'; label?: string };
+  primaryAction?: { label: string; onClick: () => void; disabled?: boolean };
+  editAction?: { label: string; onClick: () => void; disabled?: boolean };
+  deleteAction?: { label: string; onClick: () => void };
   provider?: ProviderView;
   detail?: ReactNode;
   badge?: ReactNode;
@@ -322,11 +412,17 @@ function DetailHeader({
   assetModule?: ReactNode;
 }) {
   const { t } = useTranslation();
-  const hasModels = !!provider && providerHasModels(provider);
-  const modelCount = useMemo(
-    () => (hasModels && provider ? buildUnionRows(provider).length : null),
-    [hasModels, provider],
-  );
+  const management = useProviderManagement(provider);
+  const canRename = !!provider && provider.id !== 'xd';
+  const resolvedDelete =
+    deleteAction ??
+    (provider && supportsBuiltinConnectionManagement(provider)
+      ? {
+          label: t('settings.providers.custom.deleteAria'),
+          onClick: () => void management.removeBuiltin(),
+        }
+      : undefined);
+  const subscription = useProviderSubscriptionCard(provider);
   const subscriptionProduct =
     provider?.access?.kind === 'subscription' ? provider.access.product : null;
   // 单 agent 供应商在头部统一说明(行级不再逐条标注,见 UnifiedModelList 头注释)。
@@ -350,7 +446,7 @@ function DetailHeader({
         <div className="flex flex-wrap items-center gap-3 gap-y-2">
           <div
             data-testid="provider-detail-identity"
-            className="flex min-w-0 flex-auto items-center gap-3"
+            className="flex min-w-0 flex-auto basis-[220px] items-center gap-3"
           >
             <div
               className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
@@ -372,17 +468,27 @@ function DetailHeader({
                   className="min-w-0 truncate text-14 font-medium leading-tight"
                   style={{ color: 'var(--settings-section-title)' }}
                 >
-                  {title}
+                  {provider ? providerDisplayName(provider, t) : title}
                 </span>
-                {modelCount !== null && <ModelCountChip count={modelCount} />}
+                {identityBadge}
                 {subscriptionProduct && (
                   <CustomTag
-                    label={t('settings.providers.models.subscriptionProduct', {
-                      product: subscriptionProduct,
-                    })}
+                    label={
+                      subscription?.planLabel
+                        ? subscription.planLabel
+                            .toLowerCase()
+                            .startsWith(subscriptionProduct.toLowerCase())
+                          ? subscription.planLabel
+                          : `${subscriptionProduct} ${subscription.planLabel}`
+                        : t('settings.providers.models.subscriptionProduct', {
+                            product: subscriptionProduct,
+                          })
+                    }
                   />
                 )}
-                {provider?.suspended && <CustomTag label={t('settings.providers.pill.suspended')} />}
+                {provider?.suspended && (
+                  <CustomTag label={t('settings.providers.pill.suspended')} />
+                )}
                 {badge}
               </div>
               <span
@@ -395,47 +501,115 @@ function DetailHeader({
             </div>
           </div>
 
-          {trailing}
-          {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
+          <div className="flex shrink-0 items-center gap-2.5">
+            <div
+              data-testid="provider-detail-actions"
+              className="flex shrink-0 items-center gap-2.5"
+            >
+              {status?.kind === 'connected' ? (
+                <ConnectedPill />
+              ) : status?.kind === 'reconnect-required' ? (
+                <ReconnectRequiredPill />
+              ) : status?.label ? (
+                <span role="status" className="text-12 text-[var(--text-tertiary)]">
+                  {status.label}
+                </span>
+              ) : null}
+              {primaryAction && <PillButton {...primaryAction} />}
+            </div>
+            {/* 供应商级低频动作(停用/启用):所有供应商详情头统一入口。停用 = 保留凭证、
               整体不可路由(model-disable-store);恢复入口在菜单与下方的已停用条带都有。 */}
-          {provider && (
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button
-                  type="button"
-                  aria-label={t('settings.providers.detail.moreActionsAria')}
-                  className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
-                  style={{ color: 'var(--text-tertiary)' }}
-                >
-                  <MoreHorizontal size={15} />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="end">
-                {menuItems}
-                <DropdownMenuItem
-                  onClick={() =>
-                    writeProviderDisabled(
-                      provider.id,
-                      !provider.suspended,
-                      t('settings.providers.models.accessWriteFailed'),
-                    )
-                  }
-                >
-                  {t(
-                    provider.suspended
-                      ? 'settings.providers.menu.enableProvider'
-                      : 'settings.providers.menu.disableProvider',
+            {provider && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Tip text={t('settings.providers.detail.moreActionsAria')}>
+                    <button
+                      type="button"
+                      aria-label={t('settings.providers.detail.moreActionsAria')}
+                      className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
+                      style={{ color: 'var(--text-tertiary)' }}
+                    >
+                      <MoreHorizontal size={18} />
+                    </button>
+                  </Tip>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  {canRename && (
+                    <DropdownMenuItem
+                      onClick={() => void management.rename()}
+                      disabled={management.busy}
+                    >
+                      <Pencil size={18} className="mr-2.5" />
+                      {t('settings.providers.pill.rename')}
+                    </DropdownMenuItem>
                   )}
-                </DropdownMenuItem>
-                {menuFooter}
-              </DropdownMenuContent>
-            </DropdownMenu>
-          )}
+                  {editAction && !provider?.auth.native && (
+                    <DropdownMenuItem onClick={editAction.onClick} disabled={editAction.disabled}>
+                      <Pencil size={18} className="mr-2.5" />
+                      {editAction.label}
+                    </DropdownMenuItem>
+                  )}
+                  {menuItems}
+                  <DropdownMenuItem
+                    onClick={() =>
+                      writeProviderDisabled(
+                        provider.id,
+                        !provider.suspended,
+                        t('settings.providers.models.accessWriteFailed'),
+                      )
+                    }
+                  >
+                    {t(
+                      provider.suspended
+                        ? 'settings.providers.menu.enableProvider'
+                        : 'settings.providers.menu.disableProvider',
+                    )}
+                  </DropdownMenuItem>
+                  {menuFooter}
+                  {resolvedDelete && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onClick={resolvedDelete.onClick} disabled={management.busy}>
+                        <Trash2 size={18} className="mr-2.5" />
+                        {resolvedDelete.label}
+                      </DropdownMenuItem>
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         </div>
 
         {detail}
       </div>
-      {assetModule}
+      {assetModule ??
+        (subscription && (
+          <div
+            data-testid="provider-usage-module"
+            className="border-t px-1 py-2"
+            style={{ borderColor: 'var(--settings-theme-card-border)' }}
+          >
+            <QuotaHoverCard
+              variant="embedded"
+              account={subscription}
+              dashboardLabel={
+                provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+                  ? t('settings.providers.usage.openClaudeUsage')
+                  : provider?.id === 'xai' || provider?.auth.native === 'xai'
+                    ? t('settings.providers.xai.asset.openUsage')
+                    : undefined
+              }
+              onOpenDashboard={
+                provider?.id === 'anthropic' || provider?.auth.native === 'claude'
+                  ? () => void window.electronAPI.openExternal('https://claude.ai/settings/usage')
+                  : provider?.id === 'xai' || provider?.auth.native === 'xai'
+                    ? () => void window.electronAPI.openExternal('https://grok.com')
+                    : undefined
+              }
+            />
+          </div>
+        ))}
     </div>
   );
 }
@@ -456,39 +630,56 @@ function AnthropicHeader({
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const connected = provider?.connected ?? false;
+  const loginRef = useRef<string | null>(null);
+  const cancelLogin = useCallback(() => {
+    if (!loginRef.current) return;
+    const loginKey = loginRef.current;
+    loginRef.current = null;
+    void window.electronAPI.maker.claudeOAuthCancel(loginKey).catch(() => undefined);
+  }, []);
+  useEffect(() => cancelLogin, [cancelLogin]);
 
   const handleLogin = useCallback(async () => {
+    const login = crypto.randomUUID();
+    loginRef.current = login;
     setLoggingIn(true);
     try {
-      const r = await window.electronAPI.maker.claudeOAuthLogin();
+      const r = await window.electronAPI.maker.claudeOAuthLogin(login);
+      if (loginRef.current !== login) return;
       if (r.ok) {
         toast.success(t('settings.connections.claude.toast.loggedIn'));
         onChanged();
       } else if (r.reason === 'login_cancelled') {
         /* 用户取消,不弹错 */
+      } else if (r.reason === 'local_unavailable') {
+        toast.error(t('settings.providers.localAccount.unavailable'));
       } else if (r.reason === 'not_a_subscription') {
         toast.error(t('settings.connections.claude.toast.notSubscription'));
       } else {
         toast.error(t('settings.connections.claude.toast.loginFailed'));
       }
     } catch {
-      toast.error(t('settings.connections.claude.toast.loginFailed'));
+      if (loginRef.current === login) toast.error(t('settings.connections.claude.toast.loginFailed'));
     } finally {
-      setLoggingIn(false);
+      if (loginRef.current === login) {
+        loginRef.current = null;
+        setLoggingIn(false);
+      }
     }
   }, [onChanged, t]);
 
   const handleLogout = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.connections.claude.logoutConfirm.title'),
-      description: t('settings.connections.claude.logoutConfirm.description'),
-      confirmText: t('settings.connections.claude.logoutConfirm.confirm'),
-      cancelText: t('settings.connections.claude.logoutConfirm.cancel'),
-    });
-    if (!confirmed) return;
-    setBusy(true);
     try {
-      await window.electronAPI.maker.claudeOAuthLogout();
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.connections.claude.logoutConfirm.title'),
+        description: t('settings.connections.claude.logoutConfirm.description'),
+        confirmText: t('settings.connections.claude.logoutConfirm.confirm'),
+        cancelText: t('settings.connections.claude.logoutConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      if (provider) await disconnectProvider(provider, scope);
       toast.success(t('settings.connections.claude.toast.loggedOut'));
       onChanged();
     } catch {
@@ -496,41 +687,45 @@ function AnthropicHeader({
     } finally {
       setBusy(false);
     }
-  }, [confirm, onChanged, t]);
+  }, [confirm, provider, onChanged, t]);
 
-  const trailing = connected ? (
-    <div className="flex shrink-0 items-center gap-2.5">
-      <ConnectedPill />
-      <PillButton
-        label={t('settings.providers.button.disconnect')}
-        onClick={() => void handleLogout()}
-        disabled={busy}
-      />
-    </div>
-  ) : (
-    <PillButton
-      label={
-        loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')
+  const status = {
+    kind: connected ? 'connected' : 'neutral',
+    label: t(
+      loggingIn ? 'settings.providers.pill.connecting' : 'settings.providers.pill.disconnected',
+    ),
+  } as const;
+  const primaryAction = connected
+    ? {
+        label: t('settings.providers.button.disconnect'),
+        onClick: () => void handleLogout(),
+        disabled: busy,
       }
-      onClick={() => {
-        if (loggingIn) {
-          void window.electronAPI.maker.claudeOAuthCancel();
-          setLoggingIn(false);
-        } else {
-          void handleLogin();
-        }
-      }}
-    />
-  );
+    : {
+        label: t(
+          loggingIn
+            ? 'settings.providers.button.cancel'
+            : 'settings.providers.localAccount.useClaude',
+        ),
+        onClick: () => {
+          if (loggingIn) {
+            cancelLogin();
+            setLoggingIn(false);
+          } else {
+            void handleLogin();
+          }
+        },
+      };
 
   return (
     <DetailHeader
       icon={<AnthropicMark size={18} />}
-      title={t('settings.providers.anthropic.title')}
+      title={provider?.name ?? t('settings.providers.anthropic.title')}
       subtitle={providerSubtitleForDisplay(provider, t('settings.providers.anthropic.modelLabel'), {
         fallback: t('settings.providers.anthropic.subtitle'),
       })}
-      trailing={trailing}
+      status={status}
+      primaryAction={primaryAction}
       provider={provider}
     />
   );
@@ -539,6 +734,29 @@ function AnthropicHeader({
 // ---------------------------------------------------------------------------
 // OpenAI —— OAuth(ChatGPT 订阅 / Codex),复用 useCodexAuth()。
 // ---------------------------------------------------------------------------
+
+function LocalProviderNameInput({
+  initialName,
+  onChange,
+}: {
+  initialName: string;
+  onChange: (name: string) => void;
+}) {
+  const { t } = useTranslation();
+  const [name, setName] = useState(initialName);
+  return (
+    <SettingsTextInput
+      aria-label={t('settings.providers.pill.rename')}
+      value={name}
+      maxLength={128}
+      autoFocus
+      onChange={(value) => {
+        setName(value);
+        onChange(value);
+      }}
+    />
+  );
+}
 
 function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged: () => void }) {
   const { t } = useTranslation();
@@ -552,47 +770,44 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     cancelLogin,
     logout,
   } = useCodexAuth();
-  // 图像 API key 行(2026-07 图像多来源):ChatGPT 订阅 OAuth 调不了平台 images API
-  // (实测缺 scope),图像通道用独立的平台 key。仅当目录给 openai 声明了 imageModels
-  // 才渲染(远端目录可能撤掉该能力)。
-  const imagesKeyRow = (provider?.imageModels?.length ?? 0) > 0 && (
-    <ImageApiKeyRow secretId="openai-images" provider={provider} />
-  );
   const reconnectRequired = state.kind === 'reconnect-required';
   const loggingIn = state.kind === 'login-pending';
   const connected = isChatGptConnectionConnected(state, provider?.connected ?? false);
   const credentialScope = reconnectRequired
     ? (state.credentialScope ?? 'unknown')
     : (reconnectCredentialScope ?? 'unknown');
-
+  const oauthWritesBlocked = state.oauthWritesBlocked === true;
   const handleLogout = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.connections.codex.logoutConfirm.title'),
-      description: t('settings.connections.codex.logoutConfirm.description'),
-      confirmText: t('settings.connections.codex.logoutConfirm.confirm'),
-      cancelText: t('settings.connections.codex.logoutConfirm.cancel'),
-    });
-    if (!confirmed) return;
     try {
-      await logout();
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.connections.codex.logoutConfirm.title'),
+        description: t('settings.connections.codex.logoutConfirm.description'),
+        confirmText: t('settings.connections.codex.logoutConfirm.confirm'),
+        cancelText: t('settings.connections.codex.logoutConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      if (provider) await disconnectProvider(provider, scope);
       toast.success(t('settings.connections.codex.toast.loggedOut'));
     } catch {
       toast.error(t('settings.connections.codex.toast.logoutFailed'));
     } finally {
       onChanged();
     }
-  }, [confirm, logout, onChanged, t]);
+  }, [confirm, provider, onChanged, t]);
 
   const handleLogin = useCallback(async () => {
-    const outcome = await triggerLogin();
+    const outcome = await triggerLogin(reconnectRequired && credentialScope !== 'system-shared' ? 'browser' : 'local');
     if (outcome === 'authenticated') {
       onChanged();
     } else if (outcome === 'unverified') {
       toast.error(t('chatgptAuthRecovery.verificationFailed'));
+    } else if (outcome === 'blocked') {
+      toast.error(t('chatgptAuthRecovery.devWriteBlocked'));
     } else if (outcome === 'failed') {
       toast.error(t('settings.connections.codex.toast.loginFailed'));
     }
-  }, [triggerLogin, onChanged, t]);
+  }, [triggerLogin, reconnectRequired, credentialScope, onChanged, t]);
 
   const handleRecovery = useCallback(async () => {
     if (recoveryCheck === 'checking' || loggingIn) return;
@@ -600,264 +815,73 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       await refresh();
       return;
     }
-    await handleLogin();
-  }, [handleLogin, loggingIn, recoveryCheck, refresh]);
+    if (reconnectRequired && credentialScope === 'system-shared') {
+      try {
+        const opened = await window.electronAPI.openChatGPTApp();
+        if (!opened.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      } catch {
+        toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      }
+      return;
+    }
+    if (reconnectRequired) await handleLogin();
+  }, [credentialScope, handleLogin, loggingIn, reconnectRequired, recoveryCheck, refresh, t]);
 
   const recoveryDetail = reconnectRequired ? (
     <p className="text-12 leading-relaxed text-[var(--settings-integration-subtitle)]">
-      {t(
-        credentialScope === 'system-shared'
-          ? 'chatgptAuthRecovery.systemSharedInvalidated'
-          : credentialScope === 'instance-isolated'
-            ? 'chatgptAuthRecovery.instanceIsolatedInvalidated'
-            : 'chatgptAuthRecovery.unknownInvalidated',
-      )}
+      {t(codexRecoveryDescriptionKey(credentialScope))}
     </p>
   ) : null;
 
-  const trailing = connected ? (
-    <div className="flex shrink-0 items-center gap-2.5">
-      <ConnectedPill />
-      <PillButton
-        label={t('settings.providers.button.disconnect')}
-        onClick={() => void handleLogout()}
-      />
-    </div>
-  ) : reconnectRequired ? (
-    <div className="flex shrink-0 items-center gap-2.5">
-      <ReconnectRequiredPill />
-      <PillButton
-        label={t(
-          recoveryCheck === 'checking' || loggingIn
-            ? 'chatgptAuthRecovery.checking'
-            : recoveryCheck === 'failed'
-              ? 'chatgptAuthRecovery.recheck'
-              : 'chatgptAuthRecovery.relogin',
-        )}
-        onClick={() => void handleRecovery()}
-        disabled={recoveryCheck === 'checking' || loggingIn}
-      />
-    </div>
-  ) : (
-    <PillButton
-      label={
-        loggingIn
-          ? t('settings.providers.openai.cancelConnect')
-          : t('settings.providers.openai.connect')
+  const status = {
+    kind: connected ? 'connected' : reconnectRequired ? 'reconnect-required' : 'neutral',
+    label: t(
+      loggingIn ? 'settings.providers.pill.connecting' : 'settings.providers.pill.disconnected',
+    ),
+  } as const;
+  const primaryAction = connected
+    ? {
+        label: t('settings.providers.button.disconnect'),
+        onClick: () => void handleLogout(),
       }
-      onClick={() => {
-        if (loggingIn) void cancelLogin();
-        else void handleLogin();
-      }}
-    />
-  );
+    : reconnectRequired
+      ? {
+          label: t(codexRecoveryActionKey(credentialScope, loggingIn ? 'checking' : recoveryCheck)),
+          onClick: () => void handleRecovery(),
+          disabled:
+            recoveryCheck === 'checking' ||
+            loggingIn ||
+            (oauthWritesBlocked && credentialScope !== 'system-shared'),
+        }
+      : {
+          label: loggingIn
+            ? t('settings.providers.openai.cancelConnect')
+            : t('settings.providers.openai.connect'),
+          onClick: () => {
+            if (loggingIn) void cancelLogin();
+            else void handleLogin();
+          },
+        };
 
   return (
     <DetailHeader
       icon={<OpenAIMark size={18} />}
-      title={t('settings.providers.openai.title')}
-      subtitle={t('settings.providers.openai.subtitle')}
-      trailing={trailing}
-      provider={provider}
-      detail={
-        recoveryDetail || imagesKeyRow ? (
-          <div className="flex flex-col gap-3">
-            {recoveryDetail}
-            {imagesKeyRow}
-          </div>
-        ) : undefined
+      title={provider?.name ?? t('settings.providers.openai.title')}
+      subtitle={
+        provider?.openAiAccount
+          ? [
+              t(`settings.providers.openai.accountSource.${provider.openAiAccount.source}`),
+              provider.openAiAccount.identity,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : t('settings.providers.openai.subtitle')
       }
+      status={status}
+      primaryAction={primaryAction}
+      provider={provider}
+      detail={recoveryDetail}
     />
-  );
-}
-
-/**
- * 「图像生成 API key」行(2026-07 图像多来源):订阅 OAuth 供应商(OpenAI/xAI)的
- * 图像通道走独立的平台 key,与登录态解耦。已配置显示掩码尾巴 + 清除;未配置显示
- * 输入 + 保存。key 是 MAIN_ONLY 键,走内置 API-key 专用 IPC(builtinApiKey*),
- * renderer 只能查存在性/写/删,通用 safeStorage 桥读不到明文。
- */
-function ImageApiKeyRow({
-  secretId,
-  provider,
-}: {
-  secretId: ProviderSecretId;
-  /**
-   * 供应商快照(useProviders)。别的窗口保存/清除 key 会广播 PROVIDER_CHANGED →
-   * 快照刷新 → 对象换新 → 本 effect 重查存在性,多窗口状态不滞留。
-   */
-  provider?: ProviderView;
-}) {
-  const { t } = useTranslation();
-  const [busy, setBusy] = useState(false);
-  const [configured, setConfigured] = useState<boolean | null>(null);
-  const [draftKey, setDraftKey] = useState('');
-
-  useEffect(() => {
-    let cancelled = false;
-    void window.electronAPI.builtinApiKeyHas(secretId).then((has) => {
-      if (!cancelled) setConfigured(has);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [secretId, provider]);
-
-  const handleSave = useCallback(async () => {
-    const key = draftKey.trim();
-    if (!key) return;
-    setBusy(true);
-    try {
-      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
-      await window.electronAPI.builtinApiKeyStore(secretId, key);
-      toast.success(t('settings.providers.imagesKey.toast.saved'));
-      setDraftKey('');
-      setConfigured(true);
-    } catch {
-      toast.error(t('settings.providers.imagesKey.toast.saveFailed'));
-    } finally {
-      setBusy(false);
-    }
-  }, [draftKey, secretId, t]);
-
-  const handleClear = useCallback(async () => {
-    setBusy(true);
-    try {
-      await window.electronAPI.builtinApiKeyRemove(secretId);
-      toast.success(t('settings.providers.imagesKey.toast.cleared'));
-      setConfigured(false);
-    } catch {
-      toast.error(t('settings.providers.imagesKey.toast.clearFailed'));
-    } finally {
-      setBusy(false);
-    }
-  }, [secretId, t]);
-
-  if (configured === null) return null;
-  return (
-    /* 可折行:最小窗口(右栏 ~250px 内容区)下「标签 + 掩码/输入框 + 按钮」
-       放不下时换行,操作始终可达(PR #1102 review 第八轮;与详情头折行同口径)。 */
-    <div className="flex flex-wrap items-center gap-2 gap-y-2 pt-2">
-      <span className="shrink-0 text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
-        {t('settings.providers.imagesKey.label')}
-      </span>
-      {configured ? (
-        <>
-          <span className="font-mono text-12" style={{ color: 'var(--text-tertiary)' }}>
-            ••••••••
-          </span>
-          <PillButton
-            label={t('settings.providers.imagesKey.clear')}
-            onClick={() => void handleClear()}
-            disabled={busy}
-          />
-        </>
-      ) : (
-        <>
-          <SettingsTextInput
-            value={draftKey}
-            onChange={setDraftKey}
-            placeholder={t('settings.providers.imagesKey.placeholder')}
-            size="sm"
-            mono
-            secret
-            className="min-w-0 flex-1"
-          />
-          <PillButton
-            label={t('settings.providers.imagesKey.save')}
-            onClick={() => void handleSave()}
-            disabled={busy || draftKey.trim().length === 0}
-          />
-        </>
-      )}
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// xAI —— OAuth(SuperGrok 订阅),复用 maker.xaiOAuth*。
-// ---------------------------------------------------------------------------
-
-function formatXaiResetLabel(resetsAt: number | null | undefined, locale: string): string | null {
-  if (typeof resetsAt !== 'number' || !Number.isFinite(resetsAt) || resetsAt <= 0) return null;
-  try {
-    return new Date(resetsAt * 1000).toLocaleString(locale, {
-      month: 'numeric',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    });
-  } catch {
-    return null;
-  }
-}
-
-function XaiAssetModule({ connected }: { connected: boolean }) {
-  const { t, i18n } = useTranslation();
-  const usage = useXaiSubscriptionUsage(connected);
-  const [nowMs, setNowMs] = useState(() => Date.now());
-  useEffect(() => {
-    if (!connected) return undefined;
-    const timer = window.setInterval(() => setNowMs(Date.now()), 60_000);
-    return () => window.clearInterval(timer);
-  }, [connected]);
-  useEffect(() => {
-    if (!connected) return;
-    if (isXaiWeeklyUsageCurrent(usage, nowMs)) return;
-    requestXaiSubscriptionRefresh();
-  }, [connected, usage, nowMs]);
-  if (!connected || !usage) return null;
-  const hasWeekly = isXaiWeeklyUsageCurrent(usage, nowMs);
-  if (!usage.planLabel && !hasWeekly) return null;
-  const resetLabel = formatXaiResetLabel(usage.resetsAt, i18n.resolvedLanguage ?? i18n.language);
-  return (
-    <div
-      className="flex flex-wrap justify-between gap-x-6 gap-y-4 border-t px-5 py-5"
-      style={{ borderColor: 'var(--settings-theme-card-border)' }}
-    >
-      <div className="min-w-0">
-        <p className="text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
-          {usage.planLabel ?? t('settings.providers.xai.asset.weeklyTitle')}
-        </p>
-        {hasWeekly && (
-          <p
-            className="mt-1.5 text-20 font-medium leading-[1.3] tracking-[-0.02em] tabular-nums"
-            style={{ color: 'var(--text-primary)' }}
-          >
-            {t('settings.providers.xai.asset.weeklyUsed', {
-              percent: Math.round(usage.creditUsagePercent ?? 0),
-            })}
-          </p>
-        )}
-        {hasWeekly && resetLabel && (
-          <p className="mt-1 text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
-            {t('settings.providers.xai.asset.resetsAt', { at: resetLabel })}
-          </p>
-        )}
-        {hasWeekly && (usage.productUsage ?? []).map((product) => (
-          <p
-            key={product.product}
-            className="mt-1 text-12 leading-tight tabular-nums"
-            style={{ color: 'var(--text-secondary)' }}
-          >
-            {t('settings.providers.xai.asset.productLine', {
-              product: formatXaiProductLabel(product.product),
-              percent: Math.round(product.usagePercent),
-            })}
-          </p>
-        ))}
-      </div>
-      <div className="flex shrink-0 items-center pt-3.5">
-        <button
-          type="button"
-          onClick={() => void window.electronAPI.openExternal('https://grok.com')}
-          className="text-13 transition-colors hover:text-[var(--text-primary)]"
-          style={{ color: 'var(--text-secondary)' }}
-        >
-          {t('settings.providers.xai.asset.openUsage')}
-        </button>
-      </div>
-    </div>
   );
 }
 
@@ -888,16 +912,17 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
   }, [onChanged, t]);
 
   const handleLogout = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.connections.xai.logoutConfirm.title'),
-      description: t('settings.connections.xai.logoutConfirm.description'),
-      confirmText: t('settings.connections.xai.logoutConfirm.confirm'),
-      cancelText: t('settings.connections.xai.logoutConfirm.cancel'),
-    });
-    if (!confirmed) return;
-    setBusy(true);
     try {
-      await window.electronAPI.maker.xaiOAuthLogout();
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.connections.xai.logoutConfirm.title'),
+        description: t('settings.connections.xai.logoutConfirm.description'),
+        confirmText: t('settings.connections.xai.logoutConfirm.confirm'),
+        cancelText: t('settings.connections.xai.logoutConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      if (provider) await disconnectProvider(provider, scope);
       toast.success(t('settings.connections.xai.toast.loggedOut'));
       onChanged();
     } catch {
@@ -905,43 +930,44 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
     } finally {
       setBusy(false);
     }
-  }, [confirm, onChanged, t]);
+  }, [confirm, provider, onChanged, t]);
 
-  const trailing = connected ? (
-    <div className="flex shrink-0 items-center gap-2.5">
-      <ConnectedPill />
-      <PillButton
-        label={t('settings.providers.button.disconnect')}
-        onClick={() => void handleLogout()}
-        disabled={busy}
-      />
-    </div>
-  ) : (
-    <PillButton
-      label={
-        loggingIn ? t('settings.providers.button.cancel') : t('settings.providers.button.authorize')
+  const status = {
+    kind: connected ? 'connected' : 'neutral',
+    label: t(
+      loggingIn ? 'settings.providers.pill.connecting' : 'settings.providers.pill.disconnected',
+    ),
+  } as const;
+  const primaryAction = connected
+    ? {
+        label: t('settings.providers.button.disconnect'),
+        onClick: () => void handleLogout(),
+        disabled: busy,
       }
-      onClick={() => {
-        if (loggingIn) {
-          void window.electronAPI.maker.xaiOAuthCancel();
-          setLoggingIn(false);
-        } else {
-          void handleLogin();
-        }
-      }}
-    />
-  );
+    : {
+        label: t(
+          loggingIn ? 'settings.providers.button.cancel' : 'settings.providers.button.authorize',
+        ),
+        onClick: () => {
+          if (loggingIn) {
+            void window.electronAPI.maker.xaiOAuthCancel();
+            setLoggingIn(false);
+          } else {
+            void handleLogin();
+          }
+        },
+      };
 
   return (
     <DetailHeader
       icon={<ProviderLogoMark providerId="xai" size={18} />}
-      title={t('settings.providers.xai.title')}
+      title={provider?.name ?? t('settings.providers.xai.title')}
       subtitle={providerSubtitleForDisplay(provider, t('settings.providers.xai.modelLabel'), {
         fallback: t('settings.providers.xai.subtitle'),
       })}
-      trailing={trailing}
+      status={status}
+      primaryAction={primaryAction}
       provider={provider}
-      assetModule={<XaiAssetModule connected={connected} />}
     />
   );
 }
@@ -953,20 +979,33 @@ function XaiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged
 function GenericOAuthHeader({
   provider,
   onChanged,
+  onEdit,
+  onDelete,
 }: {
   provider: ProviderView;
   onChanged: () => void;
+  onEdit?: () => void;
+  onDelete?: () => void;
 }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
+  const confirmProviderChange = useProviderChangeConfirmation();
   const [busy, setBusy] = useState(false);
   const [loggingIn, setLoggingIn] = useState(false);
   const connected = provider.connected;
+  const loginAttempt = useRef(0);
+  useEffect(
+    () => () => {
+      loginAttempt.current += 1;
+    },
+    [],
+  );
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
-    useProviderOAuthDeviceCode(provider.id, { observeProgress: deviceFlow });
+  const { deviceCode, browserUrl, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
+    useProviderOAuthDeviceCode(provider.id, { observeProgress: deviceFlow || provider.auth.native === 'codex' });
 
   const handleLogin = useCallback(async () => {
+    const attempt = ++loginAttempt.current;
     clearDeviceCode();
     setLoggingIn(true);
     const ownedLogin = beginOwnedLogin();
@@ -974,6 +1013,7 @@ function GenericOAuthHeader({
       const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
         ownerId: ownedLogin.ownerId,
       });
+      if (attempt !== loginAttempt.current) return;
       if (r.ok) {
         toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
         onChanged();
@@ -985,26 +1025,30 @@ function GenericOAuthHeader({
         );
       }
     } catch {
-      toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
+      if (attempt === loginAttempt.current)
+        toast.error(
+          t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }),
+        );
     } finally {
       ownedLogin.finish();
-      setLoggingIn(false);
+      if (attempt === loginAttempt.current) setLoggingIn(false);
     }
   }, [beginOwnedLogin, clearDeviceCode, onChanged, provider.id, provider.name, t]);
 
   const handleLogout = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.providers.genericOAuth.logoutConfirm.title', { name: provider.name }),
-      description: t('settings.providers.genericOAuth.logoutConfirm.description', {
-        name: provider.name,
-      }),
-      confirmText: t('settings.providers.genericOAuth.logoutConfirm.confirm'),
-      cancelText: t('settings.providers.genericOAuth.logoutConfirm.cancel'),
-    });
-    if (!confirmed) return;
-    setBusy(true);
     try {
-      await window.electronAPI.maker.providerOAuthLogout(provider.id);
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.providers.genericOAuth.logoutConfirm.title', { name: provider.name }),
+        description: t('settings.providers.genericOAuth.logoutConfirm.description', {
+          name: provider.name,
+        }),
+        confirmText: t('settings.providers.genericOAuth.logoutConfirm.confirm'),
+        cancelText: t('settings.providers.genericOAuth.logoutConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      if (!(await confirmProviderChange(options => disconnectProvider(provider, scope, options)))) return;
       toast.success(t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }));
       onChanged();
     } catch {
@@ -1012,48 +1056,89 @@ function GenericOAuthHeader({
     } finally {
       setBusy(false);
     }
-  }, [confirm, onChanged, provider.id, provider.name, t]);
+  }, [confirm, confirmProviderChange, onChanged, provider, t]);
 
-  const trailing = connected ? (
-    <div className="flex shrink-0 items-center gap-2.5">
-      <ConnectedPill />
-      <PillButton
-        label={t('settings.providers.button.disconnect')}
-        onClick={() => void handleLogout()}
-        disabled={busy}
-      />
-    </div>
-  ) : (
-    <PillButton
-      label={
-        loggingIn
-          ? t('settings.providers.button.cancel')
-          : t(
-              deviceFlow
-                ? 'settings.providers.wizard.authorizeWithDeviceCode'
-                : 'settings.providers.button.authorize',
-            )
-      }
-      onClick={() => {
-        if (loggingIn) {
-          cancelOwnedLogin();
-          clearDeviceCode();
-          setLoggingIn(false);
-        } else {
-          void handleLogin();
+  const reconnectRequired = provider.openAiAccount?.reconnectRequired === true;
+  const status = {
+    kind: reconnectRequired ? 'reconnect-required' : connected ? 'connected' : 'neutral',
+    label: t(
+      loggingIn ? 'settings.providers.pill.connecting' : 'settings.providers.pill.disconnected',
+    ),
+  } as const;
+  const primaryAction =
+    connected && !reconnectRequired
+      ? {
+          label: t('settings.providers.button.disconnect'),
+          onClick: () => void handleLogout(),
+          disabled: busy,
         }
-      }}
-    />
-  );
+      : {
+          label: t(
+            loggingIn
+              ? 'settings.providers.button.cancel'
+              : reconnectRequired
+                ? 'settings.providers.openai.reconnect'
+                : deviceFlow
+                  ? 'settings.providers.wizard.authorizeWithDeviceCode'
+                  : 'settings.providers.button.authorize',
+          ),
+          onClick: () => {
+            if (loggingIn) {
+              loginAttempt.current += 1;
+              cancelOwnedLogin();
+              clearDeviceCode();
+              setLoggingIn(false);
+            } else {
+              void handleLogin();
+            }
+          },
+          disabled: busy,
+        };
   const detail =
-    loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined;
+    loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} />
+      : loggingIn && browserUrl ? <OAuthBrowserLink url={browserUrl} /> : undefined;
 
   return (
     <DetailHeader
       icon={providerIcon(provider, 18)}
       title={provider.name}
-      subtitle={t('settings.providers.genericOAuth.subtitle')}
-      trailing={trailing}
+      subtitle={
+        provider.openAiAccount
+          ? [
+              t(`settings.providers.openai.accountSource.${provider.openAiAccount.source}`),
+              provider.openAiAccount.identity,
+            ]
+              .filter(Boolean)
+              .join(' · ')
+          : provider.subscriptionAccount
+            ? [
+                t('settings.providers.openai.accountSource.oauth'),
+                provider.subscriptionAccount.identity,
+              ]
+                .filter(Boolean)
+                .join(' · ')
+            : t('settings.providers.genericOAuth.subtitle')
+      }
+      status={status}
+      primaryAction={primaryAction}
+      editAction={
+        onEdit
+          ? {
+              label: t(
+                provider.auth.native
+                  ? 'settings.providers.pill.rename'
+                  : 'settings.providers.custom.editAria',
+              ),
+              onClick: onEdit,
+              disabled: busy || loggingIn,
+            }
+          : undefined
+      }
+      deleteAction={
+        onDelete
+          ? { label: t('settings.providers.custom.deleteAria'), onClick: onDelete }
+          : undefined
+      }
       provider={provider}
       detail={detail}
     />
@@ -1064,8 +1149,8 @@ function GenericOAuthHeader({
  * 内置 API-key 供应商详情头(如 Gemini 图像来源,2026-07 图像多来源)。
  * 连接态 = key 已存(provider-service builtinApiKeyConnected);「更换」重写 key,
  * 「断开」删除 key(safeStorage),断开后左栏行按既有契约消失、重连入口回向导。
- * **已存 key 永不回显**:它是 MAIN_ONLY 键,renderer 只能查存在性/写/删(见
- * ImageApiKeyRow 注释),架构上拿不到明文。输入框的明文切换只显形用户本次输入的
+ * **已存 key 永不回显**:它是 MAIN_ONLY 键,renderer 只能查存在性/写/删，
+ * 架构上拿不到明文。输入框的明文切换只显形用户本次输入的
  * 草稿(草稿本就在 renderer state 里),不构成凭证下放。
  */
 function BuiltinApiKeyHeader({
@@ -1100,18 +1185,21 @@ function BuiltinApiKeyHeader({
   }, [draftKey, onChanged, provider.id, provider.name, t]);
 
   const handleDisconnect = useCallback(async () => {
-    const confirmed = await confirm({
-      title: t('settings.providers.builtinApiKey.disconnectConfirm.title', { name: provider.name }),
-      description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
-        name: provider.name,
-      }),
-      confirmText: t('settings.providers.builtinApiKey.disconnectConfirm.confirm'),
-      cancelText: t('settings.providers.builtinApiKey.disconnectConfirm.cancel'),
-    });
-    if (!confirmed) return;
-    setBusy(true);
     try {
-      await window.electronAPI.builtinApiKeyRemove(provider.id);
+      const scope = await window.electronAPI.maker.listProviders();
+      const confirmed = await confirm({
+        title: t('settings.providers.builtinApiKey.disconnectConfirm.title', {
+          name: provider.name,
+        }),
+        description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
+          name: provider.name,
+        }),
+        confirmText: t('settings.providers.builtinApiKey.disconnectConfirm.confirm'),
+        cancelText: t('settings.providers.builtinApiKey.disconnectConfirm.cancel'),
+      });
+      if (!confirmed) return;
+      setBusy(true);
+      if (provider) await disconnectProvider(provider, scope);
       toast.success(
         t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
       );
@@ -1125,33 +1213,30 @@ function BuiltinApiKeyHeader({
     }
   }, [confirm, onChanged, provider.id, provider.name, t]);
 
-  const trailing = (
-    /* 三控件组自身可折行:最小窗口(内容区 ~235px)下「已连接 / 更换 key / 断开」
-       放不下时组内换行,不再作为整体溢出被裁(PR #1102 review 第九轮)。 */
-    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5 gap-y-2">
-      {provider.connected && <ConnectedPill />}
-      <PillButton
-        label={t(
-          editing
-            ? 'settings.providers.button.cancel'
-            : 'settings.providers.builtinApiKey.replaceKey',
-        )}
-        onClick={() => {
+  const editAction = {
+    label: t('settings.providers.builtinApiKey.replaceKey'),
+    onClick: () => {
+      setDraftKey('');
+      setEditing(true);
+    },
+    disabled: busy,
+  };
+  const primaryAction = editing
+    ? {
+        label: t('settings.providers.button.cancel'),
+        onClick: () => {
           setDraftKey('');
-          setEditing((v) => !v);
-        }}
-        disabled={busy}
-      />
-      {provider.connected && (
-        <PillButton
-          label={t('settings.providers.button.disconnect')}
-          onClick={() => void handleDisconnect()}
-          disabled={busy}
-        />
-      )}
-    </div>
-  );
-
+          setEditing(false);
+        },
+        disabled: busy,
+      }
+    : provider.connected
+      ? {
+          label: t('settings.providers.button.disconnect'),
+          onClick: () => void handleDisconnect(),
+          disabled: busy,
+        }
+      : editAction;
   const detail = editing ? (
     <div className="flex items-center gap-2 pt-2">
       <SettingsTextInput
@@ -1176,7 +1261,16 @@ function BuiltinApiKeyHeader({
       icon={providerIcon(provider, 18)}
       title={provider.name}
       subtitle={t('settings.providers.builtinApiKey.subtitle')}
-      trailing={trailing}
+      status={{
+        kind: 'neutral',
+        label: t(
+          provider.connected
+            ? 'settings.providers.pill.configured'
+            : 'settings.providers.pill.unconfigured',
+        ),
+      }}
+      primaryAction={primaryAction}
+      editAction={provider.connected ? editAction : undefined}
       provider={provider}
       detail={detail}
     />
@@ -1191,7 +1285,8 @@ function BuiltinApiKeyHeader({
 // 脱敏 key / 轮换 / 重新获取这三件用户几乎不碰的事,而给「我还剩多少钱、去哪充」:
 //   - 标题行右端只留一个「···」溢出菜单(与所有供应商共用 DetailHeader 那一个),
 //     凭证管理三项 + 只读脱敏 key 收在里面,各自保留原有的二次确认;
-//   - 标题行下方是账户资产模块(1px 发丝线分隔):可用余额 + 查看用量 + 余额充值;
+//   - 标题行下方是账户资产模块(1px 发丝线分隔):可用余额 + 查看用量始终在;
+//     右侧一颗 Black Pill 按套餐状态切换购买 / 升级 / 充值（升满后才充值）;
 //   - 故障恢复(重试)只在凭据同步失败时浮现,正常态版面上没有重试按钮。
 // ---------------------------------------------------------------------------
 
@@ -1225,12 +1320,21 @@ function XdGatewayHeader({
   // 余额取三池账本的 available —— 与计费页余额卡、状态栏用量 chip 同一口径同一币种
   // (见 TodaySpendChip 的「同一笔钱、必须同口径」注释)。该 hook 的防闪烁缓存按
   // accountId 绑定,切号当帧失效,不会把上一个账号的余额显示给新账号。
-  const creditUsage = useModelAccessCreditUsage(billingAccessible);
+  const credit = useModelAccessCreditUsageResult(billingAccessible);
+  const quotaAccessible =
+    (connected || hasSavedKey) &&
+    (mode === 'local' || (mode === 'cloud' && user?.membershipKind === 'org'));
+  const quota = useClaudeAccountUsageResult(quotaAccessible);
   const assetState = resolveXdAssetModuleState({
     billingAccessible,
     syncState: syncStatus.state,
-    available: creditUsage?.available ?? null,
+    available: credit.usage?.available ?? null,
+    quotaAccessible,
+    quota: quota.usage,
+    loading: billingAccessible ? credit.loading : quota.loading,
   });
+  const primaryAction = useXdAssetPrimaryAction(assetState.kind === 'balance');
+  const refreshAccount = billingAccessible ? credit.refresh : quota.refresh;
 
   // 凭据一律由服务端自动下发(个人 / 已接入企业),**无手填入口**(2026-07-17 定案)。
   const serverManaged = syncStatus.state === 'ok' && syncStatus.source === 'server';
@@ -1279,7 +1383,7 @@ function XdGatewayHeader({
     } finally {
       setRotating(false);
     }
-  }, [confirm, onChanged, t]);
+  }, [confirm, provider, onChanged, t]);
 
   const maskedKey = useMemo(() => maskKey(hasSavedKey ? key : ''), [hasSavedKey, key]);
 
@@ -1297,43 +1401,31 @@ function XdGatewayHeader({
   }, [hasSavedKey, key, t]);
 
   const goToBilling = useCallback(
-    (intent?: 'topup') => {
-      navigate(intent ? '/settings?tab=billing&intent=topup' : '/settings?tab=billing');
+    (intent?: 'topup' | 'subscribe' | 'plan-change') => {
+      navigate(intent ? `/settings?tab=billing&intent=${intent}` : '/settings?tab=billing');
     },
     [navigate],
   );
 
   // 标题行右端只剩状态位:「已连接」pill,或未连接/同步中的一句状态说明。凭证动作
   // 全部退进「···」菜单;故障态刻意**不显示**「已连接」—— 凭据没同步上,说已连接是假的。
-  const trailing = (() => {
-    switch (syncStatus.state) {
-      case 'unsupported':
-        return (
-          <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
-            {t('settings.providers.xd.sync.unsupported')}
-          </span>
-        );
-      case 'syncing':
-        return (
-          <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
-            {t('settings.providers.xd.sync.syncing')}
-          </span>
-        );
-      case 'failed':
-        return null;
-      default:
-        break;
-    }
-    return connected ? (
-      <ConnectedPill />
-    ) : (
-      <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
-        {syncStatus.state === 'disabled'
-          ? t('settings.providers.xd.sync.disabled')
-          : t('settings.providers.xd.sync.autoProvision')}
-      </span>
-    );
-  })();
+  const status =
+    syncStatus.state === 'unsupported'
+      ? ({ kind: 'neutral', label: t('settings.providers.xd.sync.unsupported') } as const)
+      : syncStatus.state === 'syncing'
+        ? ({ kind: 'neutral', label: t('settings.providers.xd.sync.syncing') } as const)
+        : syncStatus.state === 'failed'
+          ? undefined
+          : connected
+            ? ({ kind: 'connected' } as const)
+            : ({
+                kind: 'neutral',
+                label: t(
+                  syncStatus.state === 'disabled'
+                    ? 'settings.providers.xd.sync.disabled'
+                    : 'settings.providers.xd.sync.autoProvision',
+                ),
+              } as const);
 
   // 凭证管理三项:各自保留原有的二次确认弹窗(重新获取凭据本身无确认,与改造前一致)。
   const menuItems = (
@@ -1380,16 +1472,16 @@ function XdGatewayHeader({
   const assetModule =
     assetState.kind === 'hidden' ? undefined : (
       <div
+        data-testid="cindy-ai-asset-module"
         className={cn(
-          'flex flex-wrap justify-between gap-x-6 gap-y-4 border-t px-5 py-5',
-          assetState.kind === 'fault' ? 'items-center gap-y-3' : 'items-start',
+          'flex flex-wrap items-center justify-between gap-x-6 gap-y-4 border-t px-5 py-4',
+          billingAccessible ? 'min-h-[88px]' : 'min-h-[112px]',
         )}
         style={{ borderColor: 'var(--settings-theme-card-border)' }}
       >
         {assetState.kind === 'fault' ? (
           <>
-            {/* 「本该有、这次拿不到」——讲清发生了什么 + 下一步,并就地给恢复入口
-                (DESIGN「Errors = what happened + what to do」)。 */}
+            {/* 「本该有、这次拿不到」——讲清发生了什么 + 下一步,并就地给恢复入口。 */}
             <p
               className="max-w-[400px] text-13 leading-relaxed"
               style={{ color: 'var(--text-secondary)' }}
@@ -1398,9 +1490,66 @@ function XdGatewayHeader({
             </p>
             <PillButton label={t('settings.providers.xd.sync.retry')} onClick={handleRetry} />
           </>
+        ) : assetState.kind === 'loading' || assetState.kind === 'unavailable' ? (
+          <>
+            <div>
+              <p className="text-12 text-[var(--text-secondary)]">
+                {t(
+                  assetState.scope === 'quota'
+                    ? 'settings.providers.xd.asset.quotaTitle'
+                    : 'billing.balance.title',
+                )}
+              </p>
+              <p className="mt-1 text-13 text-[var(--text-tertiary)]" role="status">
+                {t(
+                  assetState.kind === 'loading'
+                    ? 'settings.providers.xd.asset.loading'
+                    : 'settings.providers.xd.asset.unavailable',
+                )}
+              </p>
+            </div>
+            <button
+              type="button"
+              disabled={assetState.kind === 'loading'}
+              onClick={refreshAccount}
+              className="rounded-full px-3 py-1.5 text-12 text-[var(--text-secondary)] hover:bg-[var(--surface-hover)] disabled:opacity-50"
+            >
+              {t('settings.providers.xd.asset.refresh')}
+            </button>
+          </>
+        ) : assetState.kind === 'quota' ? (
+          <>
+            <div>
+              <p className="text-12 text-[var(--text-secondary)]">
+                {t('settings.providers.xd.asset.quotaTitle')}
+              </p>
+              <p className="mt-1.5 text-20 font-medium tabular-nums text-[var(--text-primary)]">
+                {formatBillingAmount(
+                  String(Math.max(0, assetState.quota.maxBudget - assetState.quota.spend)),
+                  assetState.quota.currency,
+                  i18n.resolvedLanguage ?? i18n.language,
+                )}
+              </p>
+              <p className="mt-1 text-11 text-[var(--text-tertiary)]">
+                {t('settings.providers.xd.asset.quotaUsed', {
+                  used: formatBillingAmount(
+                    String(assetState.quota.spend),
+                    assetState.quota.currency,
+                    i18n.resolvedLanguage ?? i18n.language,
+                  ),
+                  total: formatBillingAmount(
+                    String(assetState.quota.maxBudget),
+                    assetState.quota.currency,
+                    i18n.resolvedLanguage ?? i18n.language,
+                  ),
+                })}
+              </p>
+            </div>
+            <PillButton label={t('settings.providers.xd.asset.refresh')} onClick={refreshAccount} />
+          </>
         ) : (
           <>
-            <div className="min-w-0">
+            <div className="min-w-[120px]">
               <p className="text-12 leading-tight" style={{ color: 'var(--text-secondary)' }}>
                 {t('billing.balance.title')}
               </p>
@@ -1416,20 +1565,32 @@ function XdGatewayHeader({
                 )}
               </p>
             </div>
-            {/* pt 与金额基线光学对齐(标签 12px + 6px 间距的一半)。 */}
-            <div className="flex shrink-0 items-center gap-4 pt-3.5">
-              <button
-                type="button"
-                onClick={() => goToBilling()}
-                className="text-13 transition-colors hover:text-[var(--text-primary)]"
-                style={{ color: 'var(--text-secondary)' }}
-              >
-                {t('settings.providers.xd.asset.viewUsage')}
-              </button>
-              <CtaPillButton
-                label={t('billing.settings.topupCard.action')}
-                onClick={() => goToBilling('topup')}
+            {/* 一屏一颗 Black Pill。查看用量始终是次动作；右侧按套餐状态切换。 */}
+            <div className="flex shrink-0 items-center gap-3">
+              <PillButton
+                label={t('settings.providers.xd.asset.refresh')}
+                onClick={refreshAccount}
               />
+              <PillButton
+                label={t('settings.providers.xd.asset.viewUsage')}
+                onClick={() => goToBilling()}
+              />
+              {primaryAction === 'buy-plan' ? (
+                <CtaPillButton
+                  label={t('settings.providers.xd.asset.buyPlan')}
+                  onClick={() => goToBilling('subscribe')}
+                />
+              ) : primaryAction === 'upgrade-plan' ? (
+                <CtaPillButton
+                  label={t('settings.providers.xd.asset.upgradePlan')}
+                  onClick={() => goToBilling('plan-change')}
+                />
+              ) : primaryAction === 'topup' ? (
+                <CtaPillButton
+                  label={t('billing.settings.topupCard.action')}
+                  onClick={() => goToBilling('topup')}
+                />
+              ) : null}
             </div>
           </>
         )}
@@ -1440,15 +1601,40 @@ function XdGatewayHeader({
     <DetailHeader
       icon={<XDIncMark size={18} />}
       title={t('settings.providers.xd.title')}
-      subtitle={providerSubtitleForDisplay(provider, t('settings.providers.xd.modelLabel'), {
-        suffix: t('settings.providers.xd.billingLabel'),
-        fallback: t('settings.providers.xd.subtitle'),
-      })}
-      trailing={trailing}
+      identityBadge={
+        syncStatus.accountTier === 'free' ? (
+          <span
+            data-testid="cindy-ai-free-tier-badge"
+            className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-11 font-medium leading-[1.45] text-[var(--text-secondary)]"
+          >
+            {t('settings.providers.xd.accountTier.free')}
+          </span>
+        ) : undefined
+      }
+      subtitle={t('settings.providers.xd.simpleSubtitle')}
+      status={status}
       provider={provider}
       menuItems={menuItems}
       menuFooter={menuFooter}
       assetModule={assetModule}
+    />
+  );
+}
+
+function OllamaHeader({ provider, onDelete }: { provider: ProviderView; onDelete: () => void }) {
+  const { t } = useTranslation();
+  return (
+    <DetailHeader
+      icon={providerIcon(provider, 18)}
+      title={provider.name || t('settings.providers.local.title')}
+      subtitle={t('settings.providers.local.subtitle')}
+      status={{
+        kind: provider.connected ? 'connected' : 'neutral',
+        label: t('settings.providers.pill.disconnected'),
+      }}
+      provider={provider}
+      badge={<BetaTag label={t('settings.providers.local.beta')} />}
+      deleteAction={{ label: t('settings.providers.local.deleteFromCindy'), onClick: onDelete }}
     />
   );
 }
@@ -1461,107 +1647,84 @@ function CustomProviderHeader({
   provider,
   onEdit,
   onDelete,
+  onChanged,
 }: {
   provider: ProviderView;
   onEdit: () => void;
   onDelete: () => void;
+  onChanged: () => void;
 }) {
   const { t } = useTranslation();
-  const [loggingIn, setLoggingIn] = useState(false);
-  const isOAuth = provider.auth.method === 'oauth' && !!provider.auth.oauth;
-  const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
-    useProviderOAuthDeviceCode(isOAuth ? provider.id : null, { observeProgress: deviceFlow });
-  const handleOAuthClick = useCallback(async () => {
-    if (provider.connected) {
-      try {
-        await window.electronAPI.maker.providerOAuthLogout(provider.id);
-        toast.success(
-          t('settings.providers.genericOAuth.toast.loggedOut', { name: provider.name }),
-        );
-      } catch {
-        toast.error(
-          t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name }),
-        );
-      }
-      return;
-    }
-    if (loggingIn) {
-      cancelOwnedLogin();
-      clearDeviceCode();
-      setLoggingIn(false);
-      return;
-    }
-    clearDeviceCode();
-    setLoggingIn(true);
-    const ownedLogin = beginOwnedLogin();
+  const { confirm } = useConfirmDialog();
+  const confirmProviderChange = useProviderChangeConfirmation();
+  const [disconnecting, setDisconnecting] = useState(false);
+  const disconnect = async () => {
     try {
-      const r = await window.electronAPI.maker.providerOAuthLogin(provider.id, {
-        ownerId: ownedLogin.ownerId,
-      });
-      if (r.ok)
-        toast.success(t('settings.providers.genericOAuth.toast.loggedIn', { name: provider.name }));
-      else if (r.reason !== 'login_cancelled') {
-        toast.error(
-          t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }),
-        );
-      }
+      const scope = await window.electronAPI.maker.listProviders();
+      if (
+        !(await confirm({
+          title: t('settings.providers.genericOAuth.logoutConfirm.title', { name: provider.name }),
+          description: t('settings.providers.genericOAuth.logoutConfirm.description', {
+            name: provider.name,
+          }),
+          confirmText: t('settings.providers.button.disconnect'),
+          cancelText: t('settings.providers.custom.cancel'),
+        }))
+      )
+        return;
+      setDisconnecting(true);
+      if (!(await confirmProviderChange(options => disconnectProvider(provider, scope, options)))) return;
     } catch {
-      toast.error(t('settings.providers.genericOAuth.toast.loginFailed', { name: provider.name }));
+      toast.error(t('settings.providers.genericOAuth.toast.logoutFailed', { name: provider.name }));
     } finally {
-      ownedLogin.finish();
-      setLoggingIn(false);
+      setDisconnecting(false);
+      onChanged();
     }
-  }, [
-    beginOwnedLogin,
-    cancelOwnedLogin,
-    clearDeviceCode,
-    loggingIn,
-    provider.connected,
-    provider.id,
-    provider.name,
-    t,
-  ]);
-
-  const trailing = (
-    <div className="flex shrink-0 items-center gap-1">
-      {isOAuth && (
-        <PillButton
-          label={
-            provider.connected
-              ? t('settings.providers.button.disconnect')
-              : loggingIn
-                ? t('settings.providers.button.cancel')
-                : t(
-                    deviceFlow
-                      ? 'settings.providers.wizard.authorizeWithDeviceCode'
-                      : 'settings.providers.button.authorize',
-                  )
-          }
-          onClick={() => void handleOAuthClick()}
-        />
-      )}
-      <RowIconButton
-        icon={<Pencil size={16} />}
-        label={t('settings.providers.custom.editAria')}
-        onClick={onEdit}
+  };
+  const isOAuth =
+    provider.auth.method === 'oauth' && (!!provider.auth.oauth || !!provider.auth.native);
+  if (isOAuth)
+    return (
+      <GenericOAuthHeader
+        key={provider.id}
+        provider={provider}
+        onChanged={onChanged}
+        onEdit={onEdit}
+        onDelete={onDelete}
       />
-      <RowIconButton
-        icon={<Trash2 size={16} />}
-        label={t('settings.providers.custom.deleteAria')}
-        onClick={onDelete}
-      />
-    </div>
-  );
+    );
   return (
     <DetailHeader
       icon={providerIcon(provider, 18)}
       title={provider.name}
       subtitle={customProviderSubtitleForDisplay(provider)}
-      trailing={trailing}
       provider={provider}
-      badge={<CustomTag label={t('settings.providers.custom.tag')} />}
-      detail={loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined}
+      status={{
+        kind: 'neutral',
+        label: t(
+          provider.connected
+            ? 'settings.providers.pill.configured'
+            : 'settings.providers.pill.unconfigured',
+        ),
+      }}
+      primaryAction={
+        !provider.connected
+          ? { label: t('settings.providers.custom.editAria'), onClick: onEdit }
+          : provider.auth.method === 'apiKey'
+            ? {
+                label: t('settings.providers.button.disconnect'),
+                onClick: () => void disconnect(),
+                disabled: disconnecting,
+              }
+            : undefined
+      }
+      editAction={{ label: t('settings.providers.custom.editAria'), onClick: onEdit }}
+      deleteAction={{ label: t('settings.providers.custom.deleteAria'), onClick: onDelete }}
+      badge={
+        isLocalRuntimeBetaProviderId(provider.id) ? (
+          <BetaTag label={t('settings.providers.local.beta')} />
+        ) : undefined
+      }
     />
   );
 }
@@ -1639,6 +1802,22 @@ function ListRow({
   sortable: boolean;
 }) {
   const { t } = useTranslation();
+  const management = useProviderManagement(provider);
+  const [ollamaLive, setOllamaLive] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (provider.id !== MANAGED_OLLAMA_PROVIDER_ID) return;
+    let cancelled = false;
+    void window.electronAPI.maker.localModelStatus().then((next) => {
+      if (!cancelled) setOllamaLive(next.kind === 'ready' || next.kind === 'pulling');
+    });
+    const off = window.electronAPI.maker.onLocalModelStatus((next) => {
+      setOllamaLive(next.kind === 'ready' || next.kind === 'pulling');
+    });
+    return () => {
+      cancelled = true;
+      off();
+    };
+  }, [provider.id]);
   const modelCount = useMemo(
     () => (providerHasModels(provider) ? buildUnionRows(provider).length : null),
     [provider],
@@ -1673,63 +1852,73 @@ function ListRow({
           <GripVertical size={12} />
         </button>
       )}
-      <button
-        type="button"
-        onClick={onSelect}
-        aria-current={selected}
-        className="flex min-w-0 flex-1 items-center gap-2.5 py-2 pl-3 pr-2.5 text-left"
-      >
-        <div
-          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-          style={{
-            backgroundColor: 'var(--settings-integration-avatar-bg)',
-            border: '1px solid var(--settings-integration-avatar-border)',
-            color: 'var(--settings-integration-avatar-icon)',
-          }}
+      <Tip text={title} side="right" contentClassName="max-w-[360px] break-words">
+        <button
+          type="button"
+          onClick={onSelect}
+          onDoubleClick={provider.id === 'xd' ? undefined : () => void management.rename()}
+          aria-current={selected}
+          className="flex min-w-0 flex-1 items-center gap-2.5 py-2 pl-3 pr-2.5 text-left"
         >
-          {providerIcon(provider, 14)}
-        </div>
-        <span
-          className="min-w-0 flex-1 truncate text-13 font-medium"
-          style={{
-            color: provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)',
-          }}
-        >
-          {title}
-        </span>
-        {reconnectRequired ? (
-          <span
-            className="shrink-0 select-none text-11"
-            style={{ color: 'var(--settings-integration-warning)' }}
+          <div
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+            style={{
+              backgroundColor: 'var(--settings-integration-avatar-bg)',
+              border: '1px solid var(--settings-integration-avatar-border)',
+              color: 'var(--settings-integration-avatar-icon)',
+            }}
           >
-            {t('settings.providers.openai.reconnectRequired')}
+            {providerIcon(provider, 14)}
+          </div>
+          <span
+            className="min-w-0 flex-1 truncate text-13 font-medium"
+            style={{
+              color: provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)',
+            }}
+          >
+            {title}
           </span>
-        ) : provider.suspended ? (
-          // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
-          <span className="shrink-0 select-none text-11" style={{ color: 'var(--text-tertiary)' }}>
-            {t('settings.providers.pill.suspended')}
-          </span>
-        ) : (
-          modelCount !== null && (
+          {reconnectRequired ? (
             <span
-              className="shrink-0 text-11 tabular-nums"
+              className="shrink-0 select-none text-11"
+              style={{ color: 'var(--settings-integration-warning)' }}
+            >
+              {t('settings.providers.openai.reconnectRequired')}
+            </span>
+          ) : provider.suspended ? (
+            // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
+            <span
+              className="shrink-0 select-none text-11"
               style={{ color: 'var(--text-tertiary)' }}
             >
-              {t('settings.providers.models.modelCount', { count: modelCount })}
+              {t('settings.providers.pill.suspended')}
             </span>
-          )
-        )}
-        <span
-          className="h-1.5 w-1.5 shrink-0 rounded-full"
-          style={{
-            backgroundColor: reconnectRequired
-              ? 'var(--remote-status-failed)'
-              : provider.connected && !provider.suspended
-                ? 'var(--remote-status-ready)'
-                : 'var(--border-default)',
-          }}
-        />
-      </button>
+          ) : (
+            modelCount !== null && (
+              <span
+                className="shrink-0 text-11 tabular-nums"
+                style={{ color: 'var(--text-tertiary)' }}
+              >
+                {t('settings.providers.models.modelCount', { count: modelCount })}
+              </span>
+            )
+          )}
+          <span
+            className="h-1.5 w-1.5 shrink-0 rounded-full"
+            style={{
+              backgroundColor: reconnectRequired
+                ? 'var(--remote-status-failed)'
+                : provider.id === MANAGED_OLLAMA_PROVIDER_ID
+                  ? ollamaLive
+                    ? 'var(--remote-status-ready)'
+                    : 'var(--border-default)'
+                  : provider.connected && !provider.suspended
+                    ? 'var(--remote-status-ready)'
+                    : 'var(--border-default)',
+            }}
+          />
+        </button>
+      </Tip>
     </div>
   );
 }
@@ -1745,7 +1934,7 @@ function SuggestionRow({
   onClick: () => void;
 }) {
   const { t } = useTranslation();
-  const cliName = detection.cli === 'claude-cli' ? 'Claude Code CLI' : 'Codex CLI';
+  const cliName = localCliDisplayName(detection.cli);
   const title = provider.id === 'xd' ? t('settings.providers.xd.title') : provider.name;
   return (
     <button
@@ -1795,6 +1984,7 @@ export function ProvidersSection() {
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
+  const confirmProviderChange = useProviderChangeConfirmation();
   const { providers, providerOrder, ownerGeneration, loading, refetch } = useProviders();
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
@@ -1819,8 +2009,29 @@ export function ProvidersSection() {
   const [wizard, setWizard] = useState<null | { entry?: WizardEntry }>(null);
   // 自定义供应商完整表单(编辑,或从向导「自定义端点」进入新建)。
   const [dialog, setDialog] = useState<
-    null | { mode: 'create' } | { mode: 'edit'; config: CustomProviderConfig }
+    | null
+    | { mode: 'create' }
+    | {
+        mode: 'edit';
+        config: CustomProviderConfig;
+        focusAgent?: AgentKind;
+      }
   >(null);
+  const [focusedModel, setFocusedModel] = useState<{
+    providerId: string;
+    modelId: string;
+    agent?: AgentKind;
+  } | null>(null);
+  const [providerImportId, setProviderImportId] = useState<string | null>(null);
+  const closeProviderImport = useCallback(() => setProviderImportId(null), []);
+  const finishProviderImport = useCallback(
+    (providerId: string) => {
+      setProviderImportId(null);
+      setSelectedId(providerId);
+      refetch();
+    },
+    [refetch],
+  );
   const addProviderButtonRef = useRef<HTMLButtonElement>(null);
   const [detections, setDetections] = useState<LocalCliDetection[]>([]);
   const [rediscovering, setRediscovering] = useState(false);
@@ -1881,6 +2092,7 @@ export function ProvidersSection() {
   const visibleProviders = useMemo(() => {
     const rows: ProviderView[] = [];
     for (const p of providers) {
+      if (p.removed) continue;
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
         // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
@@ -1889,6 +2101,7 @@ export function ProvidersSection() {
         if (
           p.id === 'xd' ||
           p.connected ||
+          p.removed === false ||
           (p.id === 'openai' && openaiReconnectRequired) ||
           openaiHasImageCap
         ) {
@@ -1898,7 +2111,10 @@ export function ProvidersSection() {
       }
       if (
         p.source === 'user' &&
-        (providerHasModels(p) || (p.auth.method === 'oauth' && !!p.auth.oauth))
+        (p.id === MANAGED_OLLAMA_PROVIDER_ID ||
+          p.id === MANAGED_LMSTUDIO_PROVIDER_ID ||
+          providerHasModels(p) ||
+          (p.auth.method === 'oauth' && (!!p.auth.oauth || !!p.auth.native)))
       ) {
         rows.push(p);
       }
@@ -2043,12 +2259,12 @@ export function ProvidersSection() {
       .map((d) => ({ detection: d, provider: byId.get(d.providerId) }))
       .filter(
         (s): s is { detection: LocalCliDetection; provider: ProviderView } =>
-          !!s.provider && !s.provider.connected,
+          !!s.provider && !s.provider.connected && !s.provider.removed,
       );
   }, [detections, byId, listProviders]);
 
   /**
-   * 深链定位(?connect=<id> / ?wizard=1,来自「连接供应商」引导卡等):providers
+   * 深链定位(?connect=<id> / ?wizard=1 / ?import=<opaque-id>):providers
    * 就绪后一次性消费,消费即从 URL 摘除(replace,防返回/刷新重复触发)。
    *   - connect 命中左栏占行的供应商(如 xd)→ 直接选中;
    *   - connect 命中目录内置渠道 → 向导直达该渠道授权步;
@@ -2060,16 +2276,30 @@ export function ProvidersSection() {
     if (loading) return;
     const connect = searchParams.get('connect');
     const wizardFlag = searchParams.get('wizard');
-    if (!connect && !wizardFlag) return;
+    const model = searchParams.get('model')?.trim() || null;
+    const agentParam = searchParams.get('agent');
+    const agent =
+      agentParam === 'claude-code' || agentParam === 'codex' || agentParam === 'pi'
+        ? agentParam
+        : undefined;
+    const importId = searchParams.get('import');
+    if (!connect && !wizardFlag && !importId) return;
     // 不用一次性 ref:消费后立即删参(下方 replace)即防重放;组件常驻期间
     // 再次带参导航(如二次深链)仍应生效(review 反馈)。
-    if (connect) {
+    if (importId) {
+      setProviderImportId(importId);
+    } else if (connect) {
       const target = byId.get(connect);
       if (listProviders.some((p) => p.id === connect)) {
         setSelectedId(connect);
+        setFocusedModel(
+          model ? { providerId: connect, modelId: model, ...(agent ? { agent } : {}) } : null,
+        );
       } else if (connect === 'xd') {
         // 无账号会话目录不含 xd → 落到登录引导行(不能当 preset 交给向导)。
         setSelectedId(CINDY_SIGNIN_ID);
+      } else if (connect === MANAGED_OLLAMA_PROVIDER_ID) {
+        setWizard({});
       } else if (target && target.source === 'builtin') {
         setWizard({ entry: { kind: 'builtin', providerId: connect } });
       } else {
@@ -2081,6 +2311,9 @@ export function ProvidersSection() {
     const next = new URLSearchParams(searchParams);
     next.delete('connect');
     next.delete('wizard');
+    next.delete('model');
+    next.delete('agent');
+    next.delete('import');
     setSearchParams(next, { replace: true });
   }, [loading, searchParams, setSearchParams, byId, listProviders]);
 
@@ -2093,30 +2326,53 @@ export function ProvidersSection() {
 
   // 选中项:默认第一行;所选供应商被删除/消失时回退第一行(不留空详情)。
   const effectiveSelected = useMemo(() => {
-    if (selectedId && listProviders.some((p) => p.id === selectedId)) {
-      return listProviders.find((p) => p.id === selectedId) ?? null;
-    }
-    return listProviders[0] ?? null;
-  }, [selectedId, listProviders]);
+    const selected = listProviders.find((p) => p.id === selectedId) ?? listProviders[0] ?? null;
+    // Match the connection header immediately, including auth invalidation before catalog refresh.
+    return selected?.id === 'openai'
+      ? {
+          ...selected,
+          connected: isChatGptConnectionConnected(codexAuth.state, selected.connected),
+        }
+      : selected;
+  }, [selectedId, listProviders, codexAuth.state]);
 
   const handleDelete = useCallback(
     async (p: ProviderView) => {
-      const ok = await confirm({
-        title: t('settings.providers.custom.deleteConfirm.title'),
-        description: t('settings.providers.custom.deleteConfirm.description', { name: p.name }),
-        confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
-        cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
-      });
-      if (!ok) return;
       try {
-        await deleteCustomProvider(p.id);
+        const scope = await window.electronAPI.maker.listProviders();
+        const ok = await confirm({
+          presentation: 'standard',
+          title: t('settings.providers.custom.deleteConfirm.title'),
+          description: t('settings.providers.custom.deleteConfirm.description', { name: p.name }),
+          confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
+          cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
+        });
+        if (!ok) return;
+        if (!(await confirmProviderChange(options => deleteCustomProvider(p.id, scope, options)))) return;
         toast.success(t('settings.providers.custom.toast.deleted'));
       } catch {
         toast.error(t('settings.providers.custom.toast.deleteFailed'));
       }
     },
-    [confirm, t],
+    [confirm, confirmProviderChange, t],
   );
+
+  const handleDeleteOllama = useCallback(async () => {
+    try {
+      const scope = await window.electronAPI.maker.listProviders();
+      const ok = await confirm({
+        title: t('settings.providers.local.deleteConfirmTitle'),
+        description: t('settings.providers.local.deleteConfirmBody'),
+        confirmText: t('settings.providers.custom.deleteConfirm.confirm'),
+        cancelText: t('settings.providers.custom.deleteConfirm.cancel'),
+      });
+      if (!ok) return;
+      await deleteCustomProvider(MANAGED_OLLAMA_PROVIDER_ID, scope);
+      toast.success(t('settings.providers.custom.toast.deleted'));
+    } catch {
+      toast.error(t('settings.providers.custom.toast.deleteFailed'));
+    }
+  }, [confirm, t]);
 
   /**
    * 自定义供应商「刷新模型」:读回各 runtime 密钥 → fetchProviderModels →
@@ -2148,8 +2404,15 @@ export function ProvidersSection() {
             savedProviderId: p.id,
           });
           if (!r.ok || !r.models) continue;
+          if (p.auth.native) {
+            toast.success(t('settings.providers.models.refreshDone'));
+            refetch();
+            return;
+          }
           anyOk = true;
-          const merged = appendDiscoveredCustomProviderModels(rt.models, r.models);
+          const openRouterCatalog = /^https:\/\/openrouter\.ai\/api(?:\/v1)?\/?$/.test(rt.baseUrl)
+            ? rt.modelsUrl ?? 'https://openrouter.ai/api/v1/models' : undefined;
+          const merged = appendDiscoveredCustomProviderModels(rt.models, r.models, openRouterCatalog);
           rt.models = merged.models;
           added += merged.addedIds.length;
         }
@@ -2157,8 +2420,8 @@ export function ProvidersSection() {
           toast.error(t('settings.providers.models.refreshFailed'));
           return;
         }
+        await updateCustomProvider(config, {});
         if (added > 0) {
-          await updateCustomProvider(config, {});
           toast.success(t('settings.providers.models.refreshAdded', { count: added }));
         } else {
           toast.success(t('settings.providers.models.refreshNoNew'));
@@ -2236,14 +2499,22 @@ export function ProvidersSection() {
     if (
       p.source === 'builtin' &&
       p.auth.method === 'apiKey' &&
-      (PROVIDER_SECRET_IDS as readonly string[]).includes(p.id)
+      isBuiltinApiKeyProviderId(p.id)
     ) {
-      return <BuiltinApiKeyHeader provider={p} onChanged={refetch} />;
+      return <BuiltinApiKeyHeader key={p.id} provider={p} onChanged={refetch} />;
     }
-    if (p.source === 'builtin') return <GenericOAuthHeader provider={p} onChanged={refetch} />;
+    if (p.source === 'builtin') {
+      if (supportsBuiltinConnectionManagement(p)) return <GenericOAuthHeader key={p.id} provider={p} onChanged={refetch} />;
+      return <DetailHeader icon={providerIcon(p, 18)} title={p.name} subtitle={providerSubtitleForDisplay(p, '')} provider={p} />;
+    }
+    if (p.id === MANAGED_OLLAMA_PROVIDER_ID) {
+      return <OllamaHeader provider={p} onDelete={() => void handleDeleteOllama()} />;
+    }
     return (
       <CustomProviderHeader
+        key={p.id}
         provider={p}
+        onChanged={refetch}
         onEdit={() => setDialog({ mode: 'edit', config: providerViewToCustomProviderConfig(p) })}
         onDelete={() => void handleDelete(p)}
       />
@@ -2251,8 +2522,8 @@ export function ProvidersSection() {
   };
 
   return (
-    <div className="flex flex-col gap-[14px]">
-      <div className="flex flex-col gap-1">
+    <div className="flex h-full min-h-0 flex-col gap-[14px]">
+      <div className="flex shrink-0 flex-col gap-1">
         <h2
           className="text-16 font-medium leading-[1.2]"
           style={{ color: 'var(--settings-section-title)' }}
@@ -2265,12 +2536,14 @@ export function ProvidersSection() {
       </div>
 
       {/* 先取数据再渲染卡片(规则 7:首帧即终态高度,不出现连接态翻转的跳变帧)。
-          高度跟随视口(减去标题栏 + 设置页 chrome + section 标题的约 14rem),窗口越大
-          卡片越高、能显示越多模型;min-h 保底小窗口不塌陷。左右栏各自内部滚动。
-          原来写死 560px 会在大窗口下截断模型列表(不随框体撑高)。 */}
+          高度**吃掉父容器的剩余空间**,不按视口算:写死 560px 会在大窗口下截断列表,
+          而 calc(100vh-14rem) 是在猜「标题栏 + 设置页 chrome + section 标题」有多高 ——
+          猜多了下方空一条(叠上外层 pb-32 就是那 128px),猜少了则溢出。设置页右栏本身
+          已是 h-full min-h-0 的 flex 列(providers 与 import / ghosts 同属内部滚动一档),
+          所以这里 flex-1 就是真实可用高度。min-h-0 允许小窗口收缩,左右栏各自内部滚动。 */}
       {!loading && (
         <div
-          className="flex h-[calc(100vh-14rem)] min-h-[460px] overflow-hidden rounded-xl border"
+          className="flex min-h-0 flex-1 overflow-hidden rounded-xl border"
           style={{
             backgroundColor: 'var(--settings-theme-card-bg)',
             borderColor: 'var(--settings-theme-card-border)',
@@ -2303,8 +2576,14 @@ export function ProvidersSection() {
                   <ListRow
                     provider={provider}
                     selected={!cindySigninActive && effectiveSelected?.id === provider.id}
-                    reconnectRequired={provider.id === 'openai' && openaiReconnectRequired}
-                    onSelect={() => setSelectedId(provider.id)}
+                    reconnectRequired={
+                      (provider.id === 'openai' && openaiReconnectRequired) ||
+                      provider.openAiAccount?.reconnectRequired === true
+                    }
+                    onSelect={() => {
+                      setFocusedModel(null);
+                      setSelectedId(provider.id);
+                    }}
                     position={index + 1}
                     total={listProviders.length}
                     onMove={(delta) => moveProviderWithKeyboard(provider.id, delta)}
@@ -2413,117 +2692,51 @@ export function ProvidersSection() {
             ) : effectiveSelected ? (
               <>
                 {renderDetailHeader(effectiveSelected)}
-                {/* 供应商已停用:条带讲清「发生了什么 + 下一步」并就地给恢复入口。整个
+                <>
+                  {/* 供应商已停用:条带讲清「发生了什么 + 下一步」并就地给恢复入口。整个
                     模型区随之收起(2026-07-28 用户反馈:停用了就别再列模型)——停用是
                     盖在上面的一层,凭证与逐模型配置不丢,启用即原样回来。 */}
-                {effectiveSelected.suspended && (
-                  <div
-                    className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
-                    style={{ borderColor: 'var(--settings-theme-card-border)' }}
-                  >
-                    <span style={{ color: 'var(--text-tertiary)' }}>
-                      {t('settings.providers.detail.suspendedBanner')}
-                    </span>
-                    <PillButton
-                      label={t('settings.providers.button.enableProvider')}
-                      onClick={() =>
-                        writeProviderDisabled(
-                          effectiveSelected.id,
-                          false,
-                          t('settings.providers.models.accessWriteFailed'),
-                        )
-                      }
-                    />
-                  </div>
-                )}
-                {/* 发现失败与「有没有模型」是正交的:失败时刻意保留上次成功的清单(它是陈旧
-                    但可溯源的真数据),于是老用户清单照常显示 —— 若把提示只放进空态分支,他
-                    就完全看不到「这份清单已经不代表当前状态」,还以为供应商一切正常
-                    (DESIGN.md「Errors = what happened + what to do」)。有清单时以条带形式
-                    置于列表上方,无清单时走下面的空态居中版。 */}
-                {!effectiveSelected.suspended &&
-                  effectiveSelected.modelDiscoveryFailure &&
-                  providerHasModels(effectiveSelected) && (
+                  {effectiveSelected.suspended && (
                     <div
                       className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
                       style={{ borderColor: 'var(--settings-theme-card-border)' }}
                     >
                       <span style={{ color: 'var(--text-tertiary)' }}>
-                        {/* 有清单时必须换一套措辞:空态那套说的是「拿不到模型列表」,而列表就
-                          显示在这条横幅下面 —— 照搬等于当着用户的面说一句他能一眼看穿的假话。
-                          这里讲的是「没能刷新,你看到的是上次的结果」,每个归因各自的处置建议
-                          照旧保留(DESIGN.md「Errors = what happened + what to do」)。 */}
-                        {t(
-                          `settings.providers.detail.discoveryFailedStale.${effectiveSelected.modelDiscoveryFailure.kind}`,
-                        )}
+                        {t('settings.providers.detail.suspendedBanner')}
                       </span>
                       <PillButton
-                        label={t(
-                          rediscovering
-                            ? 'settings.providers.button.retrying'
-                            : 'settings.providers.button.retry',
-                        )}
-                        onClick={() => void handleRediscoverModels(effectiveSelected)}
-                        disabled={rediscovering}
+                        label={t('settings.providers.button.enableProvider')}
+                        onClick={() =>
+                          writeProviderDisabled(
+                            effectiveSelected.id,
+                            false,
+                            t('settings.providers.models.accessWriteFailed'),
+                          )
+                        }
                       />
                     </div>
                   )}
-                {!effectiveSelected.suspended &&
-                  (providerHasModels(effectiveSelected) ||
-                    (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
-                      !effectiveSelected.modelDiscoveryFailure)) && (
-                    <>
+                  {/* 发现失败与「有没有模型」是正交的:失败时刻意保留上次成功的清单(它是陈旧
+                    但可溯源的真数据),于是老用户清单照常显示 —— 若把提示只放进空态分支,他
+                    就完全看不到「这份清单已经不代表当前状态」,还以为供应商一切正常
+                    (DESIGN.md「Errors = what happened + what to do」)。有清单时以条带形式
+                    置于列表上方,无清单时走下面的空态居中版。 */}
+                  {!effectiveSelected.suspended &&
+                    effectiveSelected.modelDiscoveryFailure &&
+                    providerHasModels(effectiveSelected) && (
                       <div
-                        className="border-t"
+                        className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
                         style={{ borderColor: 'var(--settings-theme-card-border)' }}
-                      />
-                      <UnifiedModelList
-                        provider={effectiveSelected}
-                        emptyMessage={t(
-                          effectiveSelected.connected
-                            ? 'settings.providers.detail.emptyModelsConnected'
-                            : 'settings.providers.detail.emptyModels',
-                        )}
-                        {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
-                          ? {
-                              onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
-                              refreshing: refreshingProviderId === effectiveSelected.id,
-                              refreshDisabled: refreshingProviderId !== null,
-                              refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
-                            }
-                          : effectiveSelected.source === 'user' &&
-                              effectiveSelected.auth.method !== 'oauth'
-                            ? {
-                                onRefresh: () => void handleRefreshModels(effectiveSelected),
-                                refreshing: refreshingProviderId === effectiveSelected.id,
-                                refreshDisabled: refreshingProviderId !== null,
-                              }
-                            : {})}
-                      />
-                    </>
-                  )}
-                {!effectiveSelected.suspended &&
-                  !providerHasModels(effectiveSelected) &&
-                  (Boolean(effectiveSelected.modelDiscoveryFailure) ||
-                    !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
-                    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
-                      {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
-                        不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。
-                        动态发现明确失败时更进一步:讲清**发生了什么 + 下一步**并给出重试入口
-                        (DESIGN.md「Errors = what happened + what to do」)——被地域拒绝或凭证
-                        被拒的用户不会等来任何自动恢复,继续说「正在发现」就是假话。 */}
-                      <span style={{ color: 'var(--text-tertiary)' }}>
-                        {effectiveSelected.modelDiscoveryFailure
-                          ? t(
-                              `settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`,
-                            )
-                          : t(
-                              effectiveSelected.connected
-                                ? 'settings.providers.detail.emptyModelsConnected'
-                                : 'settings.providers.detail.emptyModels',
-                            )}
-                      </span>
-                      {effectiveSelected.modelDiscoveryFailure && (
+                      >
+                        <span style={{ color: 'var(--text-tertiary)' }}>
+                          {/* 有清单时必须换一套措辞:空态那套说的是「拿不到模型列表」,而列表就
+                          显示在这条横幅下面 —— 照搬等于当着用户的面说一句他能一眼看穿的假话。
+                          这里讲的是「没能刷新,你看到的是上次的结果」,每个归因各自的处置建议
+                          照旧保留(DESIGN.md「Errors = what happened + what to do」)。 */}
+                          {t(
+                            `settings.providers.detail.discoveryFailedStale.${effectiveSelected.modelDiscoveryFailure.kind}`,
+                          )}
+                        </span>
                         <PillButton
                           label={t(
                             rediscovering
@@ -2533,9 +2746,104 @@ export function ProvidersSection() {
                           onClick={() => void handleRediscoverModels(effectiveSelected)}
                           disabled={rediscovering}
                         />
-                      )}
-                    </div>
+                      </div>
+                    )}
+                  {!effectiveSelected.suspended &&
+                    (providerHasModels(effectiveSelected) ||
+                      effectiveSelected.source === 'user' ||
+                      (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
+                        !effectiveSelected.modelDiscoveryFailure) ||
+                      effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID) && (
+                      <>
+                        {(providerHasModels(effectiveSelected) ||
+                          effectiveSelected.id !== MANAGED_OLLAMA_PROVIDER_ID) && (
+                          <div
+                            className="border-t"
+                            style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                          />
+                        )}
+                        <UnifiedModelList
+                          provider={effectiveSelected}
+                          focusModelId={
+                            focusedModel?.providerId === effectiveSelected.id
+                              ? focusedModel.modelId
+                              : undefined
+                          }
+                          focusAgent={
+                            focusedModel?.providerId === effectiveSelected.id
+                              ? focusedModel.agent
+                              : undefined
+                          }
+                          emptyMessage={
+                            effectiveSelected.source === 'user' && effectiveSelected.modelDiscoveryFailure
+                              ? t(`settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`)
+                              : effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID
+                              ? t('settings.providers.local.emptyInstalled')
+                              : t(
+                                  effectiveSelected.connected
+                                    ? 'settings.providers.detail.emptyModelsConnected'
+                                    : 'settings.providers.detail.emptyModels',
+                                )
+                          }
+                          compactWhenEmpty={effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID}
+                          compact={effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID}
+                          {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
+                            ? {
+                                onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
+                                refreshing: refreshingProviderId === effectiveSelected.id,
+                                refreshDisabled: refreshingProviderId !== null,
+                                refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
+                              }
+                            : effectiveSelected.source === 'user'
+                              ? {
+                                  onRefresh: () => void handleRefreshModels(effectiveSelected),
+                                  refreshing: refreshingProviderId === effectiveSelected.id,
+                                  refreshDisabled: refreshingProviderId !== null,
+                                }
+                              : {})}
+                        />
+                      </>
+                    )}
+                  {!effectiveSelected.suspended &&
+                    !providerHasModels(effectiveSelected) &&
+                    effectiveSelected.source !== 'user' &&
+                    effectiveSelected.id !== MANAGED_OLLAMA_PROVIDER_ID &&
+                    (Boolean(effectiveSelected.modelDiscoveryFailure) ||
+                      !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
+                      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
+                        {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
+                        不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。
+                        动态发现明确失败时更进一步:讲清**发生了什么 + 下一步**并给出重试入口
+                        (DESIGN.md「Errors = what happened + what to do」)——被地域拒绝或凭证
+                        被拒的用户不会等来任何自动恢复,继续说「正在发现」就是假话。 */}
+                        <span style={{ color: 'var(--text-tertiary)' }}>
+                          {effectiveSelected.modelDiscoveryFailure
+                            ? t(
+                                `settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`,
+                              )
+                            : t(
+                                effectiveSelected.connected
+                                  ? 'settings.providers.detail.emptyModelsConnected'
+                                  : 'settings.providers.detail.emptyModels',
+                              )}
+                        </span>
+                        {effectiveSelected.modelDiscoveryFailure && (
+                          <PillButton
+                            label={t(
+                              rediscovering
+                                ? 'settings.providers.button.retrying'
+                                : 'settings.providers.button.retry',
+                            )}
+                            onClick={() => void handleRediscoverModels(effectiveSelected)}
+                            disabled={rediscovering}
+                          />
+                        )}
+                      </div>
+                    )}
+                  {effectiveSelected.id === MANAGED_OLLAMA_PROVIDER_ID && (
+                    <OllamaProviderDetail onChanged={refetch} />
                   )}
+                </>
               </>
             ) : (
               <div
@@ -2558,17 +2866,18 @@ export function ProvidersSection() {
             setDialog({ mode: 'create' });
           }}
           onClose={() => setWizard(null)}
-          onDone={(providerId) => {
+          onDone={async (providerId) => {
+            await refetch();
             setWizard(null);
             if (providerId) setSelectedId(providerId);
-            refetch();
           }}
         />
       )}
 
       {dialog && (
-        <CustomProviderDialog
+        <ProviderConnectionDialog
           initial={dialog.mode === 'edit' ? dialog.config : undefined}
+          focusAgent={dialog.mode === 'edit' ? dialog.focusAgent : undefined}
           existingIds={providers.map((p) => p.id)}
           returnFocusRef={dialog.mode === 'create' ? addProviderButtonRef : undefined}
           onClose={() => setDialog(null)}
@@ -2576,6 +2885,15 @@ export function ProvidersSection() {
             setDialog(null);
             refetch();
           }}
+        />
+      )}
+
+      {providerImportId && (
+        <ProviderImportDialog
+          key={`${dataOwnerId}:${ownerGeneration}:${providerImportId}`}
+          importId={providerImportId}
+          onClose={closeProviderImport}
+          onDone={finishProviderImport}
         />
       )}
     </div>
