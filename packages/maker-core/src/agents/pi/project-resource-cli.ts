@@ -145,12 +145,36 @@ export function collectPiProjectResourceCliPaths(workingDir: string): PiProjectR
     }
   }
 
-  const byPath = (left: string, right: string) => left.localeCompare(right);
   return Object.freeze({
-    skills: Object.freeze([...skills].sort(byPath)),
-    promptTemplates: Object.freeze([...promptTemplates].sort(byPath)),
-    extensions: Object.freeze([...extensions].sort(byPath)),
+    skills: Object.freeze([...skills].sort(comparePiResourcePaths)),
+    promptTemplates: Object.freeze([...promptTemplates].sort(comparePiResourcePaths)),
+    extensions: Object.freeze([...extensions].sort(comparePiResourcePaths)),
   });
+}
+
+/** Locale-independent path order so duplicate Skill names pick the same winner everywhere. */
+export function comparePiResourcePaths(left: string, right: string): number {
+  if (left < right) return -1;
+  if (left > right) return 1;
+  return 0;
+}
+
+/** Conservative CreateProcess command-line budget; the hard Windows cap is 32767. */
+export const PI_WINDOWS_SPAWN_ARGV_BUDGET = 30_000;
+
+export function estimateWin32CommandLineLength(args: readonly string[]): number {
+  return args.reduce((total, arg) => total + arg.length + 3, 0);
+}
+
+export function assertPiSpawnArgvFitsPlatform(
+  args: readonly string[],
+  platform: NodeJS.Platform = process.platform,
+): void {
+  if (platform !== 'win32') return;
+  if (estimateWin32CommandLineLength(args) <= PI_WINDOWS_SPAWN_ARGV_BUDGET) return;
+  throw new Error(
+    'This project has too many Pi skills, prompts, or extensions to start a task on Windows. Remove some and try again.',
+  );
 }
 
 export function filterPiProjectCliSkills(

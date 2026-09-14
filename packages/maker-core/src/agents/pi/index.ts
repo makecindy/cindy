@@ -196,6 +196,7 @@ import {
 } from './project-resource-assembly.js';
 import { applyPiBotSkillPolicy } from './bot-skill-policy.js';
 import {
+  assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   emptyPiProjectResourceCliPaths,
   filterPiProjectCliSkills,
@@ -3731,6 +3732,7 @@ export class PiAgent extends BaseAgent {
         ? piProjectResourceCliArgs(projectResourceCli)
         : botSkillSelection.explicitSkillPaths.flatMap((skillPath) => ['--skill', skillPath])),
     ];
+    assertPiSpawnArgvFitsPlatform(args);
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);

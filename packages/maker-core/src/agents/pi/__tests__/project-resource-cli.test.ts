@@ -4,8 +4,12 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
+  assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
+  comparePiResourcePaths,
+  estimateWin32CommandLineLength,
   filterPiProjectCliSkills,
+  PI_WINDOWS_SPAWN_ARGV_BUDGET,
   piProjectResourceCliArgs,
 } from '../project-resource-cli.js';
 
@@ -105,5 +109,21 @@ describe('collectPiProjectResourceCliPaths', () => {
     const realSkill = realpathSync(skillDir);
     expect(filterPiProjectCliSkills([realSkill], [path.join(realSkill, 'SKILL.md')])).toEqual([]);
     expect(filterPiProjectCliSkills([realSkill], [])).toEqual([realSkill]);
+  });
+});
+
+describe('pi project resource path order and Windows argv budget', () => {
+  it('orders paths by code units so locale cannot change Skill precedence', () => {
+    expect(['b', 'A'].sort(comparePiResourcePaths)).toEqual(['A', 'b']);
+  });
+
+  it('rejects an oversized Windows command line before spawn', () => {
+    const args = Array.from(
+      { length: 400 },
+      (_, index) => `C:\\Users\\very\\long\\cindy\\project\\.pi\\skills\\skill-${String(index).padStart(3, '0')}\\with\\nested\\folders`,
+    );
+    expect(estimateWin32CommandLineLength(args)).toBeGreaterThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'win32')).toThrow(/too many Pi skills/);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).not.toThrow();
   });
 });
