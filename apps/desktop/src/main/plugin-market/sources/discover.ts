@@ -15,6 +15,7 @@ import path from 'node:path';
 import { app } from 'electron';
 
 import { isOfficialGhostId, validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
+import { shouldRejectReservedGhostIds } from '../../cindy-brain/reservedGhostIdGate.js';
 import { createLogger } from '../../logger.js';
 import {
   GHOST_MANIFEST_MAX_BYTES,
@@ -360,11 +361,12 @@ async function resolvePluginDir(
   }
   const validated = validateGhostManifest(raw);
   if (!validated.ok) return { kind: 'invalid', reason: 'manifest-invalid' };
-  // packaged 版本的自定义市场安装闸会拒绝官方保留前缀(cindy- / filo- / xd-),
-  // 因此发现层同步过滤,避免展示必然失败的安装按钮。dev 构建刻意豁免安装闸,
-  // 供官方插件开发迭代,发现层也必须保留这条路径。install 侧闸保留不动
-  // (纵深防御:防发现后目录被改的 TOCTOU)。
-  if (app.isPackaged && isOfficialGhostId(validated.manifest.id)) {
+  // 自定义市场安装闸会拒绝官方保留前缀(cindy- / filo- / xd-),因此发现层
+  // 同步过滤,避免展示必然失败的安装按钮。判定复用 shouldRejectReservedGhostIds:
+  // packaged 始终过滤;dev 默认豁免以供官方插件开发迭代,仅当
+  // XDT_GHOST_RESERVED_PREFIX_GATE=1 时收紧到与 packaged 相同。install 侧闸
+  // 保留不动(纵深防御:防发现后目录被改的 TOCTOU)。
+  if (shouldRejectReservedGhostIds(app.isPackaged) && isOfficialGhostId(validated.manifest.id)) {
     return { kind: 'invalid', reason: 'reserved-ghost-id' };
   }
   return {

@@ -21,8 +21,10 @@ vi.mock('../../logger.js', () => ({
 }));
 
 import { discoverMarketplace } from '../sources/discover';
+import { GHOST_RESERVED_PREFIX_GATE_ENV } from '../../cindy-brain/reservedGhostIdGate.js';
 
 const roots: string[] = [];
+const originalGateEnv = process.env[GHOST_RESERVED_PREFIX_GATE_ENV];
 const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
 
 const canSymlink = (() => {
@@ -42,10 +44,14 @@ const canSymlink = (() => {
 beforeEach(() => {
   mocks.warn.mockClear();
   electronRuntime.isPackaged = true;
+  if (originalGateEnv === undefined) delete process.env[GHOST_RESERVED_PREFIX_GATE_ENV];
+  else process.env[GHOST_RESERVED_PREFIX_GATE_ENV] = originalGateEnv;
 });
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
+  if (originalGateEnv === undefined) delete process.env[GHOST_RESERVED_PREFIX_GATE_ENV];
+  else process.env[GHOST_RESERVED_PREFIX_GATE_ENV] = originalGateEnv;
 });
 
 function makeRoot(): string {
@@ -265,6 +271,36 @@ describe('discoverMarketplace', () => {
         expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual([reservedId]);
         expect(result.marketplace.skippedCount).toBe(0);
       }
+    },
+  );
+
+  it.each(['cindy-fake', 'filo-fake', 'xd-fake'])(
+    'skips reserved-prefix plugin %s in unpackaged builds when XDT_GHOST_RESERVED_PREFIX_GATE=1',
+    async (reservedId) => {
+      electronRuntime.isPackaged = false;
+      process.env[GHOST_RESERVED_PREFIX_GATE_ENV] = '1';
+      const root = makeRoot();
+      writePlugin(root, 'plugins/good', 'good-one');
+      writePlugin(root, 'plugins/reserved', reservedId);
+      writeManifest(root, {
+        name: 'reserved-dev-gate-market',
+        plugins: [
+          { name: 'good', source: 'plugins/good' },
+          { name: 'reserved', source: 'plugins/reserved' },
+        ],
+      });
+
+      const result = await discoverMarketplace(root);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual(['good-one']);
+      expect(result.marketplace.skippedCount).toBe(1);
+      expect(result.marketplace.unreadableCount).toBe(0);
+      const logged = lastSkipLog();
+      expect(logged.entries).toEqual([
+        { index: 1, path: 'plugins/reserved', reason: 'reserved-ghost-id' },
+      ]);
     },
   );
 
