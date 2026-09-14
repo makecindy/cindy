@@ -393,9 +393,32 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         n: sql<number>`count(*)`.mapWith(Number),
         maxFired: sql<number>`coalesce(max(${scheduleRuns.firedAt}), 0)`.mapWith(Number),
         maxRead: sql<number>`coalesce(max(${scheduleRuns.readAt}), 0)`.mapWith(Number),
+        maxFinished: sql<number>`coalesce(max(${scheduleRuns.finishedAt}), 0)`.mapWith(Number),
+        running: sql<number>`coalesce(sum(case when ${scheduleRuns.status} = 'running' then 1 else 0 end), 0)`.mapWith(Number),
       })
       .from(scheduleRuns);
-    return `${latest?.n ?? 0}:${runStats?.n ?? 0}:${runStats?.maxFired ?? 0}:${runStats?.maxRead ?? 0}`;
+    // nextFireAt / status 会被另一 Cindy 进程改（dev/release 双开共用 DB，见 claimDueFire），
+    // 本进程 generation 不会 bump。行数和 max(firedAt/readAt) 覆盖不到这些 UPDATE。
+    const [scheduleStats] = await db
+      .select({
+        n: sql<number>`count(*)`.mapWith(Number),
+        nextFireSum: sql<number>`coalesce(sum(${schedules.nextFireAt}), 0)`.mapWith(Number),
+        nextFireN: sql<number>`coalesce(sum(case when ${schedules.nextFireAt} is not null then 1 else 0 end), 0)`.mapWith(Number),
+        activeN: sql<number>`coalesce(sum(case when ${schedules.status} = 'active' then 1 else 0 end), 0)`.mapWith(Number),
+      })
+      .from(schedules);
+    return [
+      latest?.n ?? 0,
+      runStats?.n ?? 0,
+      runStats?.maxFired ?? 0,
+      runStats?.maxRead ?? 0,
+      runStats?.maxFinished ?? 0,
+      runStats?.running ?? 0,
+      scheduleStats?.n ?? 0,
+      scheduleStats?.nextFireSum ?? 0,
+      scheduleStats?.nextFireN ?? 0,
+      scheduleStats?.activeN ?? 0,
+    ].join(':');
   }
 
   // ---------- Schedule CRUD ----------
