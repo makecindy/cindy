@@ -22,7 +22,8 @@ export interface SessionBranchItem extends SessionOpItem {
 
 export type GetSessionBranchesResult = ControlResult<
   { rootSessionId: string; family: SessionBranchItem[] },
-  'NOT_FOUND' | 'HOST_NOT_READY' | 'INTERNAL'
+  // 已软删除的会话不能作为家族入口(与 fork_session 对已删除会话同口径),故含 PRECONDITION_FAILED。
+  'NOT_FOUND' | 'PRECONDITION_FAILED' | 'HOST_NOT_READY' | 'INTERNAL'
 >;
 
 export interface GetSessionBranchesDeps {
