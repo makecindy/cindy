@@ -870,11 +870,19 @@ function reconcilePiStartupEffort(requested: Effort | undefined, model: ModelDes
  * 有效)—— 防止误触扩展命令让 Cindy 侧状态镜像脱同步(如 /plan),也堵住未来扩展/包
  * 新增命令带来的攻击面。内部控制路径(setPlanMode 的 /plan)不走本函数。
  */
+function isAuthorizedPiSlashCommandName(
+  name: string,
+  manifest: PiRuntimeCapabilityManifest | undefined,
+): boolean {
+  if (name.startsWith('skill:')) return true;
+  if (manifest?.status !== 'loaded') return false;
+  return manifest.managedPackageCommandNames?.includes(name) === true
+    || manifest.explicitProjectCommandNames?.includes(name) === true;
+}
+
 function isExecutablePiSlashCommand(text: string, manifest: PiRuntimeCapabilityManifest | undefined): boolean {
   const match = text.trimStart().match(/^\/([^\s]+)(?:\s|$)/);
-  if (!match?.[1]) return false;
-  if (match[1].startsWith('skill:')) return true;
-  return manifest?.status === 'loaded' && manifest.managedPackageCommandNames?.includes(match[1]) === true;
+  return Boolean(match?.[1] && isAuthorizedPiSlashCommandName(match[1], manifest));
 }
 
 function managedExtensionSlashCommandName(
@@ -883,7 +891,7 @@ function managedExtensionSlashCommandName(
 ): string | undefined {
   const match = text.trimStart().match(/^\/([^\s]+)(?:\s|$)/);
   if (!match?.[1] || manifest?.status !== 'loaded') return undefined;
-  if (manifest.managedPackageCommandNames?.includes(match[1]) !== true) return undefined;
+  if (!isAuthorizedPiSlashCommandName(match[1], manifest)) return undefined;
   if (!manifest.commands.some((command) => command.name === match[1] && command.source === 'extension')) {
     return undefined;
   }
@@ -5457,9 +5465,14 @@ export class PiAgent extends BaseAgent {
         capturedManifest.commands,
         [...nativePackageRoots, ...managedPackageResources.packageRoots],
       );
+      const explicitProjectCommandNames = identifyManagedPiPackageCommandNames(
+        capturedManifest.commands,
+        [...projectResourceCli.skills, ...projectResourceCli.promptTemplates, ...projectResourceCli.extensions],
+      );
       const manifest = {
         ...capturedManifest,
         managedPackageCommandNames,
+        explicitProjectCommandNames,
         managedPackageSkills: snapshotManagedPiPackageSkills(
           managedPackageResources.skills,
           capturedManifest.commands,

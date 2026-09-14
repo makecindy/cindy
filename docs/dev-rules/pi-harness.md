@@ -173,9 +173,10 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 2. **凭证路径判定三处同步**:`shared/auto-review.ts CREDENTIAL_PATH_PATTERNS`、
    `cindy-bridge-source.ts touchesCredentialPath`、`auto-review-policy.ts` 只读分支全字段扫描
    必须同口径。bridge 自包含不能 import,改一处记得改三处。
-3. **斜杠命令转义**:`escapeLeadingSlashCommand` 对 `/` 开头用户输入前置空格转字面(仅放行
-   `/skill:`)—— pi RPC prompt 会执行扩展命令(`/plan` 被 plan-mode 吃掉且不留痕),不转义会让
-   Cindy 状态镜像脱同步并暴露未来扩展命令攻击面。
+3. **斜杠命令转义**:`escapeLeadingSlashCommand` 对 `/` 开头用户输入前置空格转字面。仅放行
+   `/skill:`、本次 `get_commands` 证明 provenance 落在 Cindy-managed package 根内的命令，以及
+   本次显式传入的项目 Skill/prompt/extension 路径所证明的命令。其余扩展命令(如 `/plan`)
+   转义成字面，避免 Cindy 状态镜像脱同步，也堵住未装配来源的命令攻击面。
 4. **auto 档 dispatcher fail-closed**:分类抛错 / 无 resolver 一律不放行。
 5. **成本计量**:models.json 的 cost 来自 host 模型目录(`ModelDescriptor.cost`),缺省按 0;
    派生链 `catalog-to-descriptors.ts` → `capabilities.availableModels` → `writeModelsJson`。
