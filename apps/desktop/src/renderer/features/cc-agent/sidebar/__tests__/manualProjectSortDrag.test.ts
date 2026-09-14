@@ -26,6 +26,8 @@ describe('manual project sort drag surface', () => {
       /MANUAL_PROJECT_SORT_FILTER[\s\S]{0,80}\[data-project-header\]/,
     );
     expect(projectNodeSource).toContain('data-project-header="true"');
-    expect(projectNodeCode).not.toContain('data-no-drag');
+    expect(projectNodeCode).toContain(
+      "data-no-drag={onSessionReorder ? undefined : 'true'}",
+    );
   });
 });

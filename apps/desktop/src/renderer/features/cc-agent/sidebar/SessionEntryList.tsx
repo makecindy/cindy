@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -220,6 +220,11 @@ export function SessionEntryList({
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
+  const [dragSnapshot, setDragSnapshot] = useState<{
+    sortableEntries: readonly SidebarSessionEntry[];
+    entries: readonly SidebarSessionEntry[];
+    baseOrder: readonly string[];
+  } | null>(null);
   const entries = useMemo(() => {
     const groupedEntries = groupAutomationSidebarEntries(sessions, {
       notifications,
@@ -247,14 +252,16 @@ export function SessionEntryList({
   const displayEntries = collapsible ? visibleEntries : entries;
   const rows = <SessionEntryRows entries={displayEntries} notifications={notifications} {...props} />;
   if (onReorder) {
-    const sortableEntries = displayEntries;
-    const baseOrder = manualOrder?.length
+    const currentBaseOrder = manualOrder?.length
       ? manualOrder
       : initialOrder?.length
         ? initialOrder
         : entries.flatMap(sessionIdsForSidebarEntry);
+    const sortableEntries = dragSnapshot?.sortableEntries ?? displayEntries;
+    const reorderEntries = dragSnapshot?.entries ?? entries;
+    const baseOrder = dragSnapshot?.baseOrder ?? currentBaseOrder;
     const entryById = new Map(
-      entries.map((entry) => [
+      reorderEntries.map((entry) => [
         entry.kind === 'session' ? entry.session.id : 'automation-group:' + entry.group.id,
         entry,
       ]),
@@ -274,6 +281,13 @@ export function SessionEntryList({
             onReorder(mergeVisibleSessionReorder(baseOrder, visibleOrder));
           }}
           reducedMotion={reducedMotion}
+          onDragActiveChange={(active) => {
+            setDragSnapshot(
+              active
+                ? { sortableEntries: displayEntries, entries, baseOrder: currentBaseOrder }
+                : null,
+            );
+          }}
           handle="[data-sidebar-session-order-handle]"
           dragClass="cc-agent-session-sortable-drag"
           fallbackOnBody={false}

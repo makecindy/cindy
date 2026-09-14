@@ -92,9 +92,19 @@ describe('manual project session ordering', () => {
 
   it('keeps the first drag based on the current full order and isolates native drag handles', () => {
     expect(sessionEntryListSource).toContain('initialOrder?: readonly string[];');
-    expect(sessionEntryListSource).toContain('const baseOrder = manualOrder?.length');
+    expect(sessionEntryListSource).toContain('const currentBaseOrder = manualOrder?.length');
     expect(sessionEntryListSource).toContain('a, [data-no-drag]');
     expect(sessionEntryListSource).toContain('handle="[data-sidebar-session-order-handle]"');
+    expect(sessionEntryListSource).toContain(
+      'const sortableEntries = dragSnapshot?.sortableEntries ?? displayEntries',
+    );
+    expect(sessionEntryListSource).toContain(
+      'const reorderEntries = dragSnapshot?.entries ?? entries',
+    );
+    expect(sessionEntryListSource).toContain(
+      'const baseOrder = dragSnapshot?.baseOrder ?? currentBaseOrder',
+    );
+    expect(sessionEntryListSource).toContain('onDragActiveChange={(active) => {');
   });
 
   it('exposes automation group headers as session-order drag handles', () => {
