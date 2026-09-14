@@ -92,8 +92,8 @@ export interface PiRuntimeCapabilityManifest {
   commands: readonly PiRuntimeCommand[];
   /** Commands whose get_commands provenance resolves inside an enabled Cindy-managed Pi package. */
   managedPackageCommandNames?: readonly string[];
-  /** Commands whose get_commands provenance resolves to this session's explicit project Skill/prompt/extension paths. */
-  explicitProjectCommandNames?: readonly string[];
+  /** Slash names whose every catalog entry is inside a managed package root or this session's explicit project paths. */
+  authorizedSlashCommandNames?: readonly string[];
   /** Exact managed skills passed to this runtime at launch; never re-read from the global store. */
   managedPackageSkills?: readonly PiManagedPackageSkillRuntimeSnapshot[];
   error?: PiRuntimeCapabilityError;

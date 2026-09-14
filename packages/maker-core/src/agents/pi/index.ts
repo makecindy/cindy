@@ -877,8 +877,7 @@ function isAuthorizedPiSlashCommandName(
 ): boolean {
   if (name.startsWith('skill:')) return true;
   if (manifest?.status !== 'loaded') return false;
-  return manifest.managedPackageCommandNames?.includes(name) === true
-    || manifest.explicitProjectCommandNames?.includes(name) === true;
+  return manifest.authorizedSlashCommandNames?.includes(name) === true;
 }
 
 function isExecutablePiSlashCommand(text: string, manifest: PiRuntimeCapabilityManifest | undefined): boolean {
@@ -5463,18 +5462,24 @@ export class PiAgent extends BaseAgent {
         generation,
         stage,
       );
+      const managedPackageRoots = [...nativePackageRoots, ...managedPackageResources.packageRoots];
       const managedPackageCommandNames = identifyManagedPiPackageCommandNames(
         capturedManifest.commands,
-        [...nativePackageRoots, ...managedPackageResources.packageRoots],
+        managedPackageRoots,
       );
-      const explicitProjectCommandNames = identifyManagedPiPackageCommandNames(
+      const authorizedSlashCommandNames = identifyManagedPiPackageCommandNames(
         capturedManifest.commands,
-        [...projectResourceCli.skills, ...projectResourceCli.promptTemplates, ...projectResourceCli.extensions],
+        [
+          ...managedPackageRoots,
+          ...projectResourceCli.skills,
+          ...projectResourceCli.promptTemplates,
+          ...projectResourceCli.extensions,
+        ],
       );
       const manifest = {
         ...capturedManifest,
         managedPackageCommandNames,
-        explicitProjectCommandNames,
+        authorizedSlashCommandNames,
         managedPackageSkills: snapshotManagedPiPackageSkills(
           managedPackageResources.skills,
           capturedManifest.commands,

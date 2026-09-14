@@ -109,6 +109,23 @@ describe('Pi runtime capability parsing', () => {
     ], [promptFile, extensionFile]).sort()).toEqual(['hook-cmd', 'review']);
   });
 
+  it('authorizes a colliding name when every catalog entry is in package or project roots', () => {
+    expect(identifyManagedPiPackageCommandNames([
+      {
+        ...command,
+        name: 'foo',
+        source: 'extension',
+        sourceInfo: { path: '/private/cindy/pi-packages/sample/index.ts' },
+      },
+      {
+        ...command,
+        name: 'foo',
+        source: 'prompt',
+        sourceInfo: { path: '/repo/.pi/prompts/foo.md' },
+      },
+    ], ['/private/cindy/pi-packages/sample', '/repo/.pi/prompts/foo.md'])).toEqual(['foo']);
+  });
+
   it('snapshots managed skills and marks only unambiguous runtime-proven commands loaded', () => {
     const packageRoot = path.resolve('managed-package-fixture');
     const loadedSkill = path.join(packageRoot, 'skills', 'loaded', 'SKILL.md');
