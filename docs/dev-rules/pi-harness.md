@@ -279,9 +279,9 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - 自动化安全网:maker-core PI 定向 + 端到端集成(真 pi 二进制 + 真 bridge + 假模型工具调用)
   覆盖安全命令静默执行 / 危险命令升级并 deny 拦截 / 区内写落盘 / 凭证读升级 / 普通读直通 /
   斜杠转义 / models.json 计费透传。
-- PR4 项目资源桥:只装配 Cindy 明确批准的 `.pi/skills` 与 cwd→git root 范围内
-  `.agents/skills`；真实 pinned Pi RPC 夹具覆盖未批准/显式 skills、重复名、并发隔离，以及
-  项目声明 npm/git/local packages 与 extensions 时零 install/clone/第三方执行。
+- PR4 项目资源桥(2026-07,已废止):当时只装配 Cindy 明确批准的 Skill，项目 packages/extensions
+  不执行。现行口径见 §8：本地根任务用 `--skill` / `--prompt-template` / `--extension` 原地加载
+  仓库原路径，不走批准快照；项目 `.pi/extensions` 会进入该会话。项目 packages 仍不自动安装。
 
 ### SSH 远端能力(2026-08 里程碑,轮 39 补记)
 
