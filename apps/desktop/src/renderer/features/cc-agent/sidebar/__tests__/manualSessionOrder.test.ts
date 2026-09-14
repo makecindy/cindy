@@ -1,10 +1,18 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+
+import { beforeEach, describe, expect, it } from 'vitest';
 
 import { getSessionListCollapseView } from '../../lib/sessionListCollapse';
-import { mergeVisibleSessionReorder } from '../sessionOrder';
+import type { SidebarSessionEntry } from '../../lib/automationSidebarGrouping';
+import {
+  loadManualSessionOrder,
+  mergeVisibleSessionReorder,
+  orderManualSidebarEntries,
+  persistManualSessionOrder,
+} from '../sessionOrder';
 
 const sessionEntryListSource = readFileSync(
   resolve(__dirname, '../SessionEntryList.tsx'),
@@ -15,6 +23,10 @@ const nowMs = Date.parse('2026-09-14T12:00:00.000Z');
 const oldActivityMs = nowMs - 7 * 24 * 60 * 60 * 1000;
 
 describe('manual project session ordering', () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
   it('keeps hidden sessions in place when visible sessions are reordered', () => {
     expect(
       mergeVisibleSessionReorder(
@@ -49,5 +61,32 @@ describe('manual project session ordering', () => {
     );
     expect(sessionEntryListSource).toContain('{isOverflowing && (');
     expect(sessionEntryListSource).toContain('showAllSessions');
+  });
+
+  it('keeps automation groups together while ordering project entries', () => {
+    const group = {
+      kind: 'automation-group' as const,
+      group: {
+        id: 'schedule-1',
+        sessions: [{ id: 'run-1' }, { id: 'run-2' }],
+      },
+    } as unknown as SidebarSessionEntry;
+    const plain = {
+      kind: 'session' as const,
+      session: { id: 'plain-1' },
+    } as unknown as SidebarSessionEntry;
+
+    expect(orderManualSidebarEntries([plain, group], ['run-1', 'run-2', 'plain-1'])).toEqual([
+      group,
+      plain,
+    ]);
+  });
+
+  it('isolates saved order by data owner', () => {
+    persistManualSessionOrder('owner-a', 'project-1', ['a']);
+    persistManualSessionOrder('owner-b', 'project-1', ['b']);
+
+    expect(loadManualSessionOrder('owner-a', 'project-1')).toEqual(['a']);
+    expect(loadManualSessionOrder('owner-b', 'project-1')).toEqual(['b']);
   });
 });

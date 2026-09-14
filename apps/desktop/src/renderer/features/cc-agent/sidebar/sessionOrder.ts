@@ -1,4 +1,5 @@
 import type { Session } from '@/lib/ccAgent.types';
+import type { SidebarSessionEntry } from '../lib/automationSidebarGrouping';
 
 const PREFIX = 'cc-agent.sidebar.manualSessionOrder:';
 
@@ -10,11 +11,18 @@ function storage(): Storage | null {
   }
 }
 
-export function loadManualSessionOrder(projectKey: string): string[] {
+function storageKey(ownerId: string | null | undefined, projectKey: string): string {
+  return PREFIX + (ownerId ?? 'signed-out') + ':' + projectKey;
+}
+
+export function loadManualSessionOrder(
+  ownerId: string | null | undefined,
+  projectKey: string,
+): string[] {
   const store = storage();
   if (!store) return [];
   try {
-    const raw = store.getItem(`${PREFIX}${projectKey}`);
+    const raw = store.getItem(storageKey(ownerId, projectKey));
     const parsed: unknown = raw ? JSON.parse(raw) : [];
     return Array.isArray(parsed)
       ? parsed.filter((id): id is string => typeof id === 'string' && id.length > 0)
@@ -24,11 +32,15 @@ export function loadManualSessionOrder(projectKey: string): string[] {
   }
 }
 
-export function persistManualSessionOrder(projectKey: string, order: readonly string[]): void {
+export function persistManualSessionOrder(
+  ownerId: string | null | undefined,
+  projectKey: string,
+  order: readonly string[],
+): void {
   const store = storage();
   if (!store) return;
   try {
-    store.setItem(`${PREFIX}${projectKey}`, JSON.stringify(order));
+    store.setItem(storageKey(ownerId, projectKey), JSON.stringify(order));
   } catch {
     // Storage can be unavailable in private or restricted renderer contexts.
   }
@@ -68,4 +80,32 @@ export function mergeVisibleSessionReorder(
   return previous.map((id) =>
     visibleIds.has(id) ? visibleOrder[visibleIndex++] ?? id : id,
   );
+}
+
+export function orderManualSidebarEntries(
+  entries: readonly SidebarSessionEntry[],
+  manualOrder: readonly string[],
+): SidebarSessionEntry[] {
+  const rank = new Map(manualOrder.map((id, index) => [id, index]));
+  return entries
+    .map((entry, index) => ({
+      entry,
+      index,
+      rank:
+        entry.kind === 'session'
+          ? rank.get(entry.session.id) ?? manualOrder.length
+          : Math.min(
+              ...entry.group.sessions.map(
+                (session) => rank.get(session.id) ?? manualOrder.length,
+              ),
+            ),
+    }))
+    .sort((a, b) => a.rank - b.rank || a.index - b.index)
+    .map(({ entry }) => entry);
+}
+
+export function sessionIdsForSidebarEntry(entry: SidebarSessionEntry): string[] {
+  return entry.kind === 'session'
+    ? [entry.session.id]
+    : entry.group.sessions.map((session) => session.id);
 }

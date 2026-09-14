@@ -108,6 +108,7 @@ import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopov
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
 import { loadManualSessionOrder, persistManualSessionOrder, reconcileManualSessionOrder } from '../sessionOrder';
+import { useAuth } from '@/contexts/AuthContext';
 
 /** 手动排序只从项目标题行起手。点击折叠仍走标题行；SortableJS 的
  *  fallbackTolerance + ignoreNextClick 把点击和拖拽分开。 */
@@ -291,6 +292,7 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const { dataOwnerId } = useAuth();
   const localPlatform = window.electronAPI.platform;
   const projectComparisonKey = useCallback(
     (projectKey: string) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
@@ -335,15 +337,17 @@ export function ProjectsSection({
   const [manualSessionOrders, setManualSessionOrders] = useState<Record<string, string[]>>({});
 
   const sessionOrderFor = useCallback((project: ProjectNodeData): string[] => {
-    const source = manualSessionOrders[project.projectKey] ?? loadManualSessionOrder(project.projectKey);
+    const source =
+      manualSessionOrders[project.projectKey] ??
+      loadManualSessionOrder(dataOwnerId, project.projectKey);
     return reconcileManualSessionOrder(source, project.sessions);
-  }, [manualSessionOrders]);
+  }, [dataOwnerId, manualSessionOrders]);
 
   const handleSessionReorder = useCallback((project: ProjectNodeData, orderedIds: string[]) => {
     const next = reconcileManualSessionOrder(orderedIds, project.sessions);
     setManualSessionOrders((previous) => ({ ...previous, [project.projectKey]: next }));
-    persistManualSessionOrder(project.projectKey, next);
-  }, []);
+    persistManualSessionOrder(dataOwnerId, project.projectKey, next);
+  }, [dataOwnerId]);
 
   const getProjectId = useCallback((p: ProjectNodeData) => p.projectKey, []);
 
@@ -866,8 +870,12 @@ export function ProjectsSection({
       linkingCodexProject={linkingCodexProject === project.projectKey}
       onBrowseFiles={onBrowseFiles}
       onArchiveAll={onArchiveAll}
-      manualSessionOrder={sessionOrderFor(fullProject)}
-      onSessionReorder={(orderedIds) => handleSessionReorder(fullProject, orderedIds)}
+      manualSessionOrder={filter.sortBy === 'recency' ? sessionOrderFor(fullProject) : undefined}
+      onSessionReorder={
+        filter.sortBy === 'recency'
+          ? (orderedIds) => handleSessionReorder(fullProject, orderedIds)
+          : undefined
+      }
       />
     );
   };

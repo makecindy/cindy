@@ -628,7 +628,7 @@ export const SessionItem = memo(function SessionItem({
     });
   }, []);
   const needsSplitDragHandle = needsDedicatedSplitGroupDragHandle(dragContainerState);
-  const splitDragEnabled = !dragContainerState.projectSessionOrder && isSplitGroupDragSource({
+  const splitDragEnabled = isSplitGroupDragSource({
     editing: isEditing,
     orcaRole: session.orcaRole,
     ...dragContainerState,

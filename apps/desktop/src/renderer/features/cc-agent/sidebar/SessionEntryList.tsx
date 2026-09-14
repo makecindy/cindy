@@ -23,7 +23,11 @@ import { useCollapsibleShowAll } from './hooks/useCollapsibleShowAll';
 import { SessionCard } from './SessionCard';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
-import { mergeVisibleSessionReorder } from './sessionOrder';
+import {
+  mergeVisibleSessionReorder,
+  orderManualSidebarEntries,
+  sessionIdsForSidebarEntry,
+} from './sessionOrder';
 
 /** 条目是否为当前激活会话(group 命中其下任一会话)。 */
 function entryIsActive(entry: SidebarSessionEntry, activeSessionId?: string): boolean {
@@ -207,12 +211,15 @@ export function SessionEntryList({
   const { t } = useTranslation();
   const reducedMotion = useReducedMotion();
   const [showAll, setShowAll] = useCollapsibleShowAll(sectionCollapsed);
-  const entries = useMemo(
-    () => manualOrder
-      ? manualOrder.map((id) => sessions.find((session) => session.id === id)).filter((session): session is Session => session != null).map((session) => ({ kind: 'session' as const, session }))
-      : groupAutomationSidebarEntries(sessions, { notifications, scheduleSessionIndex }),
-    [manualOrder, notifications, scheduleSessionIndex, sessions],
-  );
+  const entries = useMemo(() => {
+    const groupedEntries = groupAutomationSidebarEntries(sessions, {
+      notifications,
+      scheduleSessionIndex,
+    });
+    if (!manualOrder) return groupedEntries;
+
+    return orderManualSidebarEntries(groupedEntries, manualOrder);
+  }, [manualOrder, notifications, scheduleSessionIndex, sessions]);
 
   // 对话段与项目内会话共用这套折叠:默认前 N 条 + 永远保留 24h 内活动 /
   // 需关注 / 当前打开的会话;超出收起,底部「显示全部 N 个」一次展开。
@@ -228,17 +235,30 @@ export function SessionEntryList({
     hasAttentionEntry: (entry) => entryHasAttention(entry, notifications),
   });
 
-  const rows = <SessionEntryRows entries={visibleEntries} notifications={notifications} {...props} />;
+  const displayEntries = collapsible ? visibleEntries : entries;
+  const rows = <SessionEntryRows entries={displayEntries} notifications={notifications} {...props} />;
   if (manualOrder && onReorder) {
-    const sortableEntries = visibleEntries.filter(
-      (entry): entry is Extract<SidebarSessionEntry, { kind: 'session' }> => entry.kind === 'session',
+    const sortableEntries = displayEntries;
+    const entryById = new Map(
+      entries.map((entry) => [
+        entry.kind === 'session' ? entry.session.id : 'automation-group:' + entry.group.id,
+        entry,
+      ]),
     );
     return (
       <>
         <SortableList
           items={sortableEntries}
-          getId={(entry) => entry.session.id}
-          onReorder={(orderedIds) => onReorder(mergeVisibleSessionReorder(manualOrder, orderedIds))}
+          getId={(entry) =>
+            entry.kind === 'session' ? entry.session.id : 'automation-group:' + entry.group.id
+          }
+          onReorder={(orderedIds) => {
+            const visibleOrder = orderedIds.flatMap((id) => {
+              const entry = entryById.get(id);
+              return entry ? sessionIdsForSidebarEntry(entry) : [];
+            });
+            onReorder(mergeVisibleSessionReorder(manualOrder, visibleOrder));
+          }}
           reducedMotion={reducedMotion}
           handle="[data-sidebar-session-row]"
           dragClass="cc-agent-session-sortable-drag"
