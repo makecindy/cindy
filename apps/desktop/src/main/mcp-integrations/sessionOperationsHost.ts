@@ -64,24 +64,18 @@ function toRow(row: {
 }
 
 /** 消息正文可能是纯文本或 JSON 编码的内容块数组:只取 text 块拼成作曲器可用的草稿。 */
-function messageTextForDraft(content: unknown): string {
+export function messageTextForDraft(content: unknown): string {
   if (typeof content !== 'string') return '';
-  const trimmed = content.trim();
-  if (!trimmed.startsWith('[') && !trimmed.startsWith('{')) return content;
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    const blocks = Array.isArray(parsed) ? parsed : [parsed];
-    return blocks
-      .map((block) => (block && typeof block === 'object' && typeof (block as { text?: unknown }).text === 'string'
-        ? (block as { text: string }).text
-        : ''))
-      .filter(Boolean)
-      .join('\n');
-  } catch {
-    return content;
-  }
+  const trimmed = content.trim(); if (!trimmed) return '';
+  let parsed: unknown; try { parsed = JSON.parse(trimmed); } catch { return content; }
+  return draftBlocksToText(parsed);
 }
-
+function draftBlocksToText(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(draftBlocksToText).filter(Boolean).join('\n');
+  if (value && typeof value === 'object') { const r = value as Record<string, unknown>; if (typeof r.text === 'string') return r.text; if (typeof r.content === 'string') return r.content; }
+  return '';
+}
 export function createSessionOperationsDeps(
   isTurnRunning: (sessionId: string) => boolean,
 ): SessionOperationsDeps {
