@@ -309,6 +309,9 @@ async function mergePiRuntimeSkillStatuses(
     const explicitPath = piExplicitSkillRuntimePath(command);
     if (explicitPath) {
       loadedExplicitSkills.set(canonicalPiRuntimePath(explicitPath), command.name);
+      if (typeof command.sourceInfo.path === 'string') {
+        loadedExplicitSkills.set(canonicalPiRuntimePath(command.sourceInfo.path), command.name);
+      }
     }
   }
   if (
@@ -328,7 +331,8 @@ async function mergePiRuntimeSkillStatuses(
         const canonicalSkillPath = canonicalPiRuntimePath(skill.path);
         if (!changedProjectSkills.has(canonicalSkillPath)) {
           runtimeCommandName = loadedExplicitSkills.get(canonicalSkillPath)
-            ?? [skill.path, path.dirname(path.dirname(skill.path))]
+            ?? loadedExplicitSkills.get(canonicalPiRuntimePath(path.dirname(skill.path)))
+            ?? [skill.path, path.dirname(skill.path), path.dirname(path.dirname(skill.path))]
               .map(canonicalPiRuntimePath)
               .map((skillPath) => loadedLegacyProjectSkills.get([skill.name, skillPath].join('\0')))
               .find((commandName) => commandName !== undefined);

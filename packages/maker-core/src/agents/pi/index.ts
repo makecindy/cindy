@@ -196,6 +196,12 @@ import {
 } from './project-resource-assembly.js';
 import { applyPiBotSkillPolicy } from './bot-skill-policy.js';
 import {
+  collectPiProjectResourceCliPaths,
+  emptyPiProjectResourceCliPaths,
+  filterPiProjectCliSkills,
+  piProjectResourceCliArgs,
+} from './project-resource-cli.js';
+import {
   createPiTranslateContext,
   disposePiTranslateContext,
   isCurrentTurnHostAbortRequested,
@@ -3669,13 +3675,28 @@ export class PiAgent extends BaseAgent {
       typeof entry === 'string' ? entry : entry.source
     ));
 
+    // Local root tasks load project skills/prompts/extensions in place via
+    // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
+    const loadProjectResourcesInPlace = !reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId;
+    const collectedProjectResources = loadProjectResourcesInPlace
+      ? collectPiProjectResourceCliPaths(opts.workingDir)
+      : emptyPiProjectResourceCliPaths();
+    const projectResourceCli = loadProjectResourcesInPlace
+      ? {
+          ...collectedProjectResources,
+          skills: filterPiProjectCliSkills(
+            collectedProjectResources.skills,
+            currentDisabledSkillLaunchPaths(disabledSkillLaunch),
+          ),
+        }
+      : collectedProjectResources;
+
     const args = [
       '--mode',
       'rpc',
-      // --no-approve remains the hard project-resource gate. Only a local
-      // runtime with Main-supplied user package roots omits --no-extensions, so
-      // Pi can discover those runtime-settings packages without trusting the
-      // task's .pi/extensions or .pi/settings.json.
+      // --no-approve remains the hard project-settings gate. Explicit --skill /
+      // --prompt-template / --extension pass original in-repo paths without
+      // trusting `.pi/settings.json` or auto-installing project packages.
       '--no-approve',
       ...(nativePackagePaths.length === 0 ? ['--no-extensions'] : []),
       '--session-dir',
@@ -3694,7 +3715,9 @@ export class PiAgent extends BaseAgent {
       bridgeExtensionPath,
       ...(localSubagentSupported ? ['--extension', subagentExtensionPath] : []),
       ...(!reviewMode && planModeExtAvailable ? ['--extension', planModeExtPath] : []),
-      ...botSkillSelection.explicitSkillPaths.flatMap((skillPath) => ['--skill', skillPath]),
+      ...(loadProjectResourcesInPlace
+        ? piProjectResourceCliArgs(projectResourceCli)
+        : botSkillSelection.explicitSkillPaths.flatMap((skillPath) => ['--skill', skillPath])),
     ];
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
