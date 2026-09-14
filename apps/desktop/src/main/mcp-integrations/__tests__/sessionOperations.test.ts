@@ -233,6 +233,36 @@ describe('setSessionsPinned', () => {
     expect(updateSession.mock.calls[1][2]?.beforeWrite).toBeTypeOf('function');
   });
 
+  it('pins a running session — including the caller itself, which is always running', async () => {
+    // pin 只写 pinnedAt 元数据,不触碰工作区:复用带运行态检查的 lateGuard 会让 agent
+    // 连自己所在的会话都置顶不了(执行工具调用时它必然 isTurnRunning),而 GUI 是允许的。
+    const { deps, updateSession } = makeDeps([row('a')], {
+      isTurnRunning: () => true,
+      isImAttached: () => true,
+    });
+    const res = await setSessionsPinned(deps, { sessionIds: ['a'], pinned: true });
+    expect(res).toMatchObject({ ok: true, changed: [{ sessionId: 'a' }] });
+    expect(updateSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('still rejects a session deleted inside the write lock even when runtime checks are off', async () => {
+    // 关掉运行态复核不能连终态复核一起关掉:预检时还是 active,进写锁后才被另一窗口删除。
+    const base = row('a');
+    let loads = 0;
+    const { deps } = makeDeps([base], {
+      isTurnRunning: () => true,
+      loadSessions: async (ids) => {
+        loads += 1;
+        // 第一次是批量预检,之后是 beforeWrite 的锁内复核。
+        const status = loads === 1 ? ('active' as const) : ('deleted' as const);
+        return ids.flatMap((id) => (id === 'a' ? [{ ...base, status }] : []));
+      },
+    });
+    const res = await setSessionsPinned(deps, { sessionIds: ['a'], pinned: true });
+    expect(loads).toBeGreaterThan(1);
+    expect(res).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
+  });
+
   it('pins SSH remote sessions like the GUI patchMeta path does', async () => {
     const { deps, updateSession } = makeDeps([row('a', { remoteHostId: 'host' })]);
     const res = await setSessionsPinned(deps, { sessionIds: ['a'], pinned: true });
