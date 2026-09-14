@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   activePinnedSidebarEntryIds,
+  buildPinnedSidebarRank,
   isPinnedProjectEntryId,
   pinnedProjectEntryId,
+  pinnedSidebarEntryComparisonKey,
   projectKeyFromPinnedEntryId,
 } from '@/features/cc-agent/lib/pinnedSidebarOrder';
 import {
@@ -32,6 +34,24 @@ describe('pinned sidebar mixed project/conversation order', () => {
     expect(
       normalizeManualPinnedOrder(['stale-conversation', project, 'active-conversation'], active),
     ).toEqual([project, 'active-conversation']);
+  });
+
+  it('deduplicates Windows project pins by comparison identity while preserving stored spelling', () => {
+    const stored = pinnedProjectEntryId('local:D:/École/Project-A');
+    const live = pinnedProjectEntryId('local:d:/école/project-a');
+
+    expect(activePinnedSidebarEntryIds([stored, live], [], 'win32')).toEqual([stored]);
+  });
+
+  it('keeps the first persisted rank for duplicate Windows project identities', () => {
+    const stored = pinnedProjectEntryId('local:D:/École/Project-A');
+    const duplicate = pinnedProjectEntryId('local:d:/école/project-a');
+    const identity = pinnedSidebarEntryComparisonKey(stored, 'win32');
+
+    expect(Array.from(buildPinnedSidebarRank([stored, 'session-a', duplicate], 'win32'))).toEqual([
+      [identity, 0],
+      ['session-a', 1],
+    ]);
   });
 
   it('reorders visible projects and conversations together while hidden entries keep their slots', () => {

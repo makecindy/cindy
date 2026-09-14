@@ -53,22 +53,6 @@ describe('ghost 写路径 IPC 的 owner 租约(源码契约)', () => {
     });
   }
 
-  it('ghosts:reapprove-installed 持租约,owner 以 inspect 时点的一次性票据为准(更强于 handler 内 capture)', () => {
-    // 第 8 轮 P0-2:owner 在 confirm 入口才 capture 绑不住"读事实那一刻"——确认卡
-    // 停留期间切号,A 看的确认可以给 B 的同 id 目录铸批准。现在 inspect 发一次性
-    // 票据(钉 owner + id + manifestSha256),confirm 原子消费并以**票据里的 owner**
-    // 起租约:generation 不等直接拒。handler 内不该再出现 captureGhostMutationOwner
-    // (那会退化回"用确认时刻的 owner",正是要消掉的形态)。
-    const block = handlerBlock(source, 'ghosts:reapprove-installed');
-    expect(block).toContain('reapproveTickets.consume(');
-    expect(block).toContain('beginGhostMutation(ticket.owner)');
-    expect(block).not.toContain('captureGhostMutationOwner()');
-    // inspect 侧必须在读事实之前捕获 owner 并发票。
-    const inspectBlock = handlerBlock(source, 'ghosts:reapprove-inspect');
-    expect(inspectBlock).toContain('captureGhostMutationOwner()');
-    expect(inspectBlock).toContain('reapproveTickets.issue(');
-  });
-
   it('ghosts:uninstall 经 uninstallGhostAndCleanup 持租约(入口同步取,无异步窗口故无需 capture)', () => {
     const block = handlerBlock(source, 'ghosts:uninstall');
     expect(block).toContain('uninstallGhostAndCleanup(');

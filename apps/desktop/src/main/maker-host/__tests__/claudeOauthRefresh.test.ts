@@ -18,6 +18,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createClaudeOAuthRefresher,
+  claudeOAuthCredentialDigest,
   EXPIRY_MARGIN_MS,
   type ClaudeOAuthRefresherDeps,
 } from '../claude-oauth-refresh.js';
@@ -528,7 +529,7 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     expect(written).toHaveLength(0); // 「已断开」状态凭证不复活
   });
 
-  it('invalid_grant 但库已被换账号 → 采信新凭证,不触发 invalidate', async () => {
+  it.each([false, true])('invalid_grant after account replacement or lost binding does not invalidate the new owner (%s)', async (lostBinding) => {
     // review P2:旧账号刷新失败(invalid_grant)不能 invalidate 掉在途换号登录的新账号。
     const stale = fixtureOAuth({ expiresAt: NOW - 1 });
     const switched = fixtureOAuth({
@@ -543,7 +544,7 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     });
     const onInvalidGrant = vi.fn();
     const { deps } = makeDeps({
-      readOAuth: () => (swapped ? switched : stale),
+      readOAuth: () => (swapped ? (lostBinding ? null : switched) : stale),
       onInvalidGrant,
       fetchFn: (() => gate) as unknown as typeof fetch,
     });
@@ -553,7 +554,7 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     swapped = true; // HTTP 在途期间换账号登录
     resolveFetch(jsonResponse(400, { error: 'invalid_grant' }));
     const out = await pending;
-    expect(out?.accessToken).toBe('at-new-account');
+    expect(out?.accessToken).toBe(lostBinding ? undefined : 'at-new-account');
     expect(onInvalidGrant).not.toHaveBeenCalled();
   });
 
@@ -569,6 +570,7 @@ describe('claude-oauth-refresh — 收尾语义', () => {
     const r = createClaudeOAuthRefresher(deps);
     expect(await r.getValidOAuth({ forceRefresh: true })).toBeNull();
     expect(onInvalidGrant).toHaveBeenCalledTimes(1);
+    expect(onInvalidGrant).toHaveBeenCalledWith(claudeOAuthCredentialDigest(current));
 
     const onInvalidGrant2 = vi.fn();
     const { deps: deps2 } = makeDeps({

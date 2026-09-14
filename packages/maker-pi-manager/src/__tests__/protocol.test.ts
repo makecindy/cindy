@@ -58,220 +58,64 @@ describe('NOTIFICATIONS', () => {
 // isRpcMessage — 主守卫
 // ---------------------------------------------------------------------------
 describe('isRpcMessage', () => {
-  // ---- 合法通过 ----
-  describe('valid messages', () => {
-    it('accepts a valid request', () => {
-      expect(isRpcMessage({ type: 'request', id: 1, method: 'test' })).toBe(true);
-    });
-
-    it('accepts a request with id = 0', () => {
-      expect(isRpcMessage({ type: 'request', id: 0, method: 't' })).toBe(true);
-    });
-
-    it('accepts a valid response with result', () => {
-      expect(
-        isRpcMessage({ type: 'response', id: 1, result: 'ok' }),
-      ).toBe(true);
-    });
-
-    it('accepts a valid response with error', () => {
-      expect(
-        isRpcMessage({
-          type: 'response',
-          id: 42,
-          error: { code: 'INTERNAL', message: 'boom' },
-        }),
-      ).toBe(true);
-    });
-
-    it('accepts a response without result/error (ack pattern)', () => {
-      expect(isRpcMessage({ type: 'response', id: 99 })).toBe(true);
-    });
-
-    it('accepts a valid notification', () => {
-      expect(isRpcMessage({ type: 'notification', method: 'session/closed' })).toBe(
-        true,
-      );
-    });
-
-    it('accepts a notification with params', () => {
-      expect(
-        isRpcMessage({
-          type: 'notification',
-          method: 'session/closed',
-          params: { sessionId: 'abc' },
-        }),
-      ).toBe(true);
-    });
+  // Each row remains an independently reported case, including omitted fields.
+  it.each<[string, unknown]>([
+    ['accepts a valid request', { type: 'request', id: 1, method: 'test' }],
+    ['accepts a request with id = 0', { type: 'request', id: 0, method: 't' }],
+    ['accepts a valid response with result', { type: 'response', id: 1, result: 'ok' }],
+    ['accepts a valid response with error', {
+      type: 'response', id: 42, error: { code: 'INTERNAL', message: 'boom' },
+    }],
+    ['accepts a response without result/error (ack pattern)', { type: 'response', id: 99 }],
+    ['accepts a valid notification', { type: 'notification', method: 'session/closed' }],
+    ['accepts a notification with params', {
+      type: 'notification', method: 'session/closed', params: { sessionId: 'abc' },
+    }],
+    // Negative IDs belong to the server-to-client reverse request namespace.
+    ['accepts request with id = -1 (used by server→client reverse request)', {
+      type: 'request', id: -1, method: 'test',
+    }],
+    ['accepts request with id = Number.MIN_SAFE_INTEGER', {
+      type: 'request', id: Number.MIN_SAFE_INTEGER, method: 'test',
+    }],
+    ['accepts response with id = -1 (client responds to server reverse request)', {
+      type: 'response', id: -1,
+    }],
+    ['accepts response with decrementing negative id = -10', { type: 'response', id: -10 }],
+    ['accepts request with params = undefined (implicit)', {
+      type: 'request', id: 1, method: 'test',
+    }],
+  ])('%s', (_name, input) => {
+    expect(isRpcMessage(input)).toBe(true);
   });
 
-  // ---- NaN id 拒绝 ----
-  describe('NaN id', () => {
-    it('rejects request with NaN id', () => {
-      expect(
-        isRpcMessage({ type: 'request', id: NaN, method: 'test' }),
-      ).toBe(false);
-    });
-
-    it('rejects response with NaN id', () => {
-      expect(isRpcMessage({ type: 'response', id: NaN })).toBe(false);
-    });
-  });
-
-  // ---- Infinity id 拒绝 ----
-  describe('Infinity id', () => {
-    it('rejects request with Infinity id', () => {
-      expect(
-        isRpcMessage({ type: 'request', id: Infinity, method: 'test' }),
-      ).toBe(false);
-    });
-
-    it('rejects request with -Infinity id', () => {
-      expect(
-        isRpcMessage({ type: 'request', id: -Infinity, method: 'test' }),
-      ).toBe(false);
-    });
-
-    it('rejects response with Infinity id', () => {
-      expect(isRpcMessage({ type: 'response', id: Infinity })).toBe(false);
-    });
-  });
-
-  // ---- 负数 id 允许(server→client 反向请求需要负数 id 命名空间) ----
-  describe('negative id (accepted for bidirectional use)', () => {
-    it('accepts request with id = -1 (used by server→client reverse request)', () => {
-      expect(
-        isRpcMessage({ type: 'request', id: -1, method: 'test' }),
-      ).toBe(true);
-    });
-
-    it('accepts request with id = Number.MIN_SAFE_INTEGER', () => {
-      expect(
-        isRpcMessage({
-          type: 'request',
-          id: Number.MIN_SAFE_INTEGER,
-          method: 'test',
-        }),
-      ).toBe(true);
-    });
-
-    it('accepts response with id = -1 (client responds to server reverse request)', () => {
-      expect(isRpcMessage({ type: 'response', id: -1 })).toBe(true);
-    });
-
-    it('accepts response with decrementing negative id = -10', () => {
-      expect(isRpcMessage({ type: 'response', id: -10 })).toBe(true);
-    });
-  });
-
-  // ---- float id 拒绝 ----
-  describe('float id', () => {
-    it('rejects request with float id', () => {
-      expect(
-        isRpcMessage({ type: 'request', id: 1.5, method: 'test' }),
-      ).toBe(false);
-    });
-
-    it('rejects request with id = 0.1', () => {
-      expect(
-        isRpcMessage({ type: 'request', id: 0.1, method: 'test' }),
-      ).toBe(false);
-    });
-
-    it('rejects response with float id', () => {
-      expect(isRpcMessage({ type: 'response', id: 1.5 })).toBe(false);
-    });
-  });
-
-  // ---- 缺 id ----
-  describe('missing id', () => {
-    it('rejects request without id', () => {
-      expect(
-        isRpcMessage({ type: 'request', method: 'test' }),
-      ).toBe(false);
-    });
-
-    it('rejects response without id', () => {
-      expect(isRpcMessage({ type: 'response' })).toBe(false);
-    });
-  });
-
-  // ---- 缺 method ----
-  describe('missing method', () => {
-    it('rejects request without method', () => {
-      expect(isRpcMessage({ type: 'request', id: 1 })).toBe(false);
-    });
-
-    it('rejects notification without method', () => {
-      expect(
-        isRpcMessage({ type: 'notification', params: {} }),
-      ).toBe(false);
-    });
-  });
-
-  // ---- 未知 type ----
-  describe('unknown type', () => {
-    it('rejects unknown type string', () => {
-      expect(isRpcMessage({ type: 'event', id: 1 })).toBe(false);
-    });
-
-    it('rejects empty type', () => {
-      expect(isRpcMessage({ type: '', id: 1 })).toBe(false);
-    });
-  });
-
-  // ---- 非 object ----
-  describe('non-object values', () => {
-    it('rejects null', () => {
-      expect(isRpcMessage(null)).toBe(false);
-    });
-
-    it('rejects undefined', () => {
-      expect(isRpcMessage(undefined)).toBe(false);
-    });
-
-    it('rejects string', () => {
-      expect(isRpcMessage('not an object')).toBe(false);
-    });
-
-    it('rejects number', () => {
-      expect(isRpcMessage(42)).toBe(false);
-    });
-
-    it('rejects boolean', () => {
-      expect(isRpcMessage(true)).toBe(false);
-    });
-
-    it('rejects array', () => {
-      expect(isRpcMessage([1, 2, 3])).toBe(false);
-    });
-
-    it('rejects function', () => {
-      expect(isRpcMessage(() => {})).toBe(false);
-    });
-  });
-
-  // ---- 边缘 ----
-  describe('edge cases', () => {
-    it('rejects request with null method', () => {
-      expect(
-        isRpcMessage({ type: 'request', id: 1, method: null }),
-      ).toBe(false);
-    });
-
-    it('rejects request with id as string', () => {
-      expect(
-        isRpcMessage({ type: 'request', id: '42', method: 'test' }),
-      ).toBe(false);
-    });
-
-    it('rejects object without type', () => {
-      expect(isRpcMessage({ id: 1, method: 'test' })).toBe(false);
-    });
-
-    it('accepts request with params = undefined (implicit)', () => {
-      expect(isRpcMessage({ type: 'request', id: 1, method: 'test' })).toBe(true);
-    });
+  it.each<[string, unknown]>([
+    ['rejects request with NaN id', { type: 'request', id: NaN, method: 'test' }],
+    ['rejects response with NaN id', { type: 'response', id: NaN }],
+    ['rejects request with Infinity id', { type: 'request', id: Infinity, method: 'test' }],
+    ['rejects request with -Infinity id', { type: 'request', id: -Infinity, method: 'test' }],
+    ['rejects response with Infinity id', { type: 'response', id: Infinity }],
+    ['rejects request with float id', { type: 'request', id: 1.5, method: 'test' }],
+    ['rejects request with id = 0.1', { type: 'request', id: 0.1, method: 'test' }],
+    ['rejects response with float id', { type: 'response', id: 1.5 }],
+    ['rejects request without id', { type: 'request', method: 'test' }],
+    ['rejects response without id', { type: 'response' }],
+    ['rejects request without method', { type: 'request', id: 1 }],
+    ['rejects notification without method', { type: 'notification', params: {} }],
+    ['rejects unknown type string', { type: 'event', id: 1 }],
+    ['rejects empty type', { type: '', id: 1 }],
+    ['rejects null', null],
+    ['rejects undefined', undefined],
+    ['rejects string', 'not an object'],
+    ['rejects number', 42],
+    ['rejects boolean', true],
+    ['rejects array', [1, 2, 3]],
+    ['rejects function', () => {}],
+    ['rejects request with null method', { type: 'request', id: 1, method: null }],
+    ['rejects request with id as string', { type: 'request', id: '42', method: 'test' }],
+    ['rejects object without type', { id: 1, method: 'test' }],
+  ])('%s', (_name, input) => {
+    expect(isRpcMessage(input)).toBe(false);
   });
 });
 

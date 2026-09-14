@@ -1,7 +1,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
-import { desc, eq } from 'drizzle-orm';
+import { desc } from 'drizzle-orm';
 
-import { normalizeProjectKey } from '../../../shared/projectKeys.js';
+import { normalizeProjectKey, projectKeyComparisonKey } from '../../../shared/projectKeys.js';
 import type { ProjectAlias } from '../../../shared/projectAliases.js';
 import { getDbClient } from '../client/current';
 import { projectAliases } from '../schema';
@@ -53,34 +53,42 @@ export async function listProjectAliases(): Promise<ProjectAlias[]> {
   return rows.map(aliasToCamel);
 }
 
-export async function upsertProjectAlias(projectKeyRaw: unknown, aliasRaw: unknown): Promise<ProjectAlias | null> {
+export async function upsertProjectAlias(
+  projectKeyRaw: unknown,
+  aliasRaw: unknown,
+  localPlatform: NodeJS.Platform = process.platform,
+): Promise<ProjectAlias | null> {
   const projectKey = requireProjectKey(projectKeyRaw);
   const alias = sanitizeAlias(aliasRaw);
-  const db = getDbClient().drizzle;
-
-  if (alias == null) {
-    await db.delete(projectAliases).where(eq(projectAliases.projectKey, projectKey));
-    broadcastProjectAliasesChanged();
-    return null;
-  }
-
   const now = Date.now();
-  await db
-    .insert(projectAliases)
-    .values({ projectKey, alias, updatedAt: now })
-    .onConflictDoUpdate({
-      target: projectAliases.projectKey,
-      set: { alias, updatedAt: now },
-    });
+  const workingDir = projectKey.startsWith('local:') ? projectKey.slice('local:'.length) : '';
+  const foldCase =
+    localPlatform === 'win32' && (/^[A-Za-z]:\//.test(workingDir) || workingDir.startsWith('//'));
+  const comparisonKey = foldCase
+    ? (projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey)
+    : projectKey;
+  const saved = await getDbClient().tx('projectAliases.replaceIdentity', {
+    projectKey,
+    comparisonKey,
+    foldCase,
+    alias,
+    updatedAt: now,
+  });
   broadcastProjectAliasesChanged();
-  return { projectKey, alias, updatedAt: new Date(now).toISOString() };
+  return saved == null
+    ? null
+    : {
+        projectKey: saved.projectKey,
+        alias: saved.alias,
+        updatedAt: new Date(saved.updatedAt).toISOString(),
+      };
 }
 
-export async function deleteProjectAlias(projectKeyRaw: unknown): Promise<void> {
-  const projectKey = requireProjectKey(projectKeyRaw);
-  const db = getDbClient().drizzle;
-  await db.delete(projectAliases).where(eq(projectAliases.projectKey, projectKey));
-  broadcastProjectAliasesChanged();
+export async function deleteProjectAlias(
+  projectKeyRaw: unknown,
+  localPlatform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  await upsertProjectAlias(projectKeyRaw, '', localPlatform);
 }
 
 export function registerProjectAliasesIpc(): void {

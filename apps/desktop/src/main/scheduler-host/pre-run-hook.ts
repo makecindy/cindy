@@ -154,6 +154,8 @@ export async function executePreRunHook(input: PreRunHookInput): Promise<PreRunH
                 : 'failed';
       resolve({
         status,
+        ...((status === 'passed' || status === 'skipped') && !stdoutTruncated
+          && stdout.split(/\r?\n/).includes('CINDY_PRECHECK_OK') ? { checkSucceeded: true as const } : {}),
         decision: status === 'passed' ? 'run' : status === 'skipped' ? 'skip' : 'block',
         exitCode,
         durationMs: Date.now() - startedAt,

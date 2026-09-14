@@ -26,8 +26,12 @@ import {
   type ProviderView,
 } from '@cindy/model-providers';
 
+import { resolveScheduledModelSelection, type ScheduledModelSelection } from '../maker-ipc/scheduledModelSelection';
 import { getDesktopProviderService } from './createDesktopProviderService.js';
-import { getActiveCatalog } from './active-catalog.js';
+import {
+  getActiveCatalog,
+  isXdGatewayPaymentRequiredRoute,
+} from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import {
   isRegistryTombstoneForConsumer,
@@ -57,6 +61,9 @@ function tombstoneGuardOptions(
   catalog: ReturnType<typeof getActiveCatalog>,
 ): ModelRouteGuardOptions {
   return {
+    isPaymentRequiredTombstone: (providerId, modelId, agent) =>
+      (providerId === null || providerId === 'xd') &&
+      isXdGatewayPaymentRequiredRoute(modelId, agent),
     isRetiredTombstone: (providerId, modelId, agent) => {
       const providerIds = providerId ? [providerId] : MODEL_PLANE_POLICIES.keys();
       return [...providerIds].some((id) =>
@@ -269,6 +276,16 @@ export async function resolveLenientSessionRoute(
     }
   }
   return route;
+}
+
+/** Resolve one provider-specific snapshot after route admission for fresh and bound sends. */
+export async function resolveScheduledModelSelectionLive(
+  selection: ScheduledModelSelection,
+): Promise<ScheduledModelSelection> {
+  const providers = await getDesktopProviderService().listProviders({
+    allowSideEffects: false, catalog: getActiveCatalog(),
+  });
+  return resolveScheduledModelSelection(selection, providers);
 }
 
 /**

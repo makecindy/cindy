@@ -51,6 +51,59 @@ function planMessage(
   };
 }
 
+function legacyPlanMessages(source: 'todo' | 'task'): ChatMessage[] {
+  if (source === 'todo') {
+    return [
+      {
+        clientId: 'todo-1',
+        role: 'tool_use',
+        content: '',
+        toolName: 'TodoWrite',
+        toolUseId: 'todo:turn-1',
+        toolInput: {
+          todos: [
+            { content: 'Inspect renderer', status: 'in_progress' },
+            { content: 'Run tests', status: 'pending' },
+          ],
+        },
+        createdAt: new Date(T0).toISOString(),
+      },
+    ];
+  }
+  return [
+    {
+      clientId: 'task-1',
+      role: 'tool_use',
+      content: '',
+      toolName: 'TaskCreate',
+      toolUseId: 'create-1',
+      toolInput: { subject: 'Inspect renderer' },
+      createdAt: new Date(T0).toISOString(),
+    },
+    {
+      clientId: 'result-1',
+      role: 'tool_result',
+      content: 'Task #1 created successfully: Inspect renderer',
+      toolUseId: 'create-1',
+    },
+    {
+      clientId: 'task-2',
+      role: 'tool_use',
+      content: '',
+      toolName: 'TaskCreate',
+      toolUseId: 'create-2',
+      toolInput: { subject: 'Run tests' },
+      createdAt: new Date(T0 + 1_000).toISOString(),
+    },
+    {
+      clientId: 'result-2',
+      role: 'tool_result',
+      content: 'Task #2 created successfully: Run tests',
+      toolUseId: 'create-2',
+    },
+  ];
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(T0);
@@ -59,6 +112,111 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+});
+
+describe('PinnedPlanPanel inline handoff', () => {
+  it('waits while the inline observer is not ready, then shows when the card is offscreen', () => {
+    const messages = [planMessage('in_progress')];
+    const view = render(
+      <PinnedPlanPanel
+        sessionId="inline-pending"
+        messages={messages}
+        animated
+        width={400}
+        inlinePlanVisibility={null}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+
+    view.rerender(
+      <PinnedPlanPanel
+        sessionId="inline-pending"
+        messages={messages}
+        animated
+        width={400}
+        inlinePlanVisibility={{ key: 'todo-plan-1', visible: false }}
+      />,
+    );
+    expect(screen.getByTestId('plan-pill')).not.toBeNull();
+  });
+
+  it('hides only for the matching visible inline plan card', () => {
+    const messages = [planMessage('in_progress')];
+    const view = render(
+      <PinnedPlanPanel
+        sessionId="inline-visible"
+        messages={messages}
+        animated
+        width={400}
+        inlinePlanVisibility={{ key: 'todo-plan-1', visible: true }}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+
+    view.rerender(
+      <PinnedPlanPanel
+        sessionId="inline-visible"
+        messages={messages}
+        animated
+        width={400}
+        inlinePlanVisibility={{ key: 'todo-older-plan', visible: true }}
+      />,
+    );
+    expect(screen.getByTestId('plan-pill')).not.toBeNull();
+  });
+
+  it('never hands off a completed plan after the inline card scrolls offscreen', () => {
+    const completed = planMessage('completed');
+    const view = render(
+      <PinnedPlanPanel
+        sessionId="inline-completed"
+        messages={[completed]}
+        animated={false}
+        width={400}
+        inlinePlanVisibility={{ key: 'todo-plan-1', visible: true }}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+    act(() => vi.advanceTimersByTime(2_000));
+
+    view.rerender(
+      <PinnedPlanPanel
+        sessionId="inline-completed"
+        messages={[completed]}
+        animated={false}
+        width={400}
+        inlinePlanVisibility={{ key: 'todo-plan-1', visible: false }}
+      />,
+    );
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('removes an offscreen pill as soon as its inline plan completes', () => {
+    const view = render(
+      <PinnedPlanPanel
+        sessionId="inline-running-completes"
+        messages={[planMessage('in_progress')]}
+        animated
+        width={400}
+        inlinePlanVisibility={{ key: 'todo-plan-1', visible: false }}
+      />,
+    );
+    expect(screen.getByTestId('plan-pill')).not.toBeNull();
+
+    view.rerender(
+      <PinnedPlanPanel
+        sessionId="inline-running-completes"
+        messages={[planMessage('completed', T0, T0 + 1_000)]}
+        animated={false}
+        width={400}
+        inlinePlanVisibility={{ key: 'todo-plan-1', visible: false }}
+      />,
+    );
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
 });
 
 describe('PinnedPlanPanel completed plan lifetime', () => {
@@ -526,6 +684,153 @@ describe('PinnedPlanPanel terminal seal', () => {
     );
 
     act(() => vi.advanceTimersByTime(30_000));
+    expect(screen.queryByTestId('plan-pill')).not.toBeNull();
+  });
+
+  it('retires an interrupted plan after a later real user turn supersedes it', () => {
+    const interrupted: ChatMessage = {
+      ...planMessage('in_progress'),
+      turnCompleted: false,
+    };
+    vi.setSystemTime(T0 + 60_000);
+
+    render(
+      <PinnedPlanPanel
+        sessionId="interrupted-then-new-turn"
+        messages={[
+          interrupted,
+          {
+            clientId: 'new-turn-user',
+            role: 'user',
+            content: 'Do something else instead',
+            createdAt: new Date(T0 + 30_000).toISOString(),
+            delivery: 'turn',
+          },
+        ]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('retires an open legacy codex plan after a later real user turn supersedes it', () => {
+    vi.setSystemTime(T0 + 60_000);
+
+    render(
+      <PinnedPlanPanel
+        sessionId="legacy-open-then-new-turn"
+        messages={[
+          planMessage('in_progress'),
+          {
+            clientId: 'new-turn-user',
+            role: 'user',
+            content: 'Change direction',
+            createdAt: new Date(T0 + 30_000).toISOString(),
+            delivery: 'turn',
+          },
+        ]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it.each(['todo', 'task'] as const)(
+    'retires an open legacy %s plan after a later real user turn supersedes it',
+    (source) => {
+      vi.setSystemTime(T0 + 60_000);
+
+      render(
+        <PinnedPlanPanel
+          sessionId={`${source}-open-then-new-turn`}
+          messages={[
+            ...legacyPlanMessages(source),
+            {
+              clientId: 'new-turn-user',
+              role: 'user',
+              content: 'Change direction',
+              createdAt: new Date(T0 + 30_000).toISOString(),
+              delivery: 'turn',
+            },
+          ]}
+          animated={false}
+          width={400}
+          inlinePlanVisibility={{
+            key: source === 'todo' ? 'todo-todo-1' : 'todo-task-1',
+            visible: false,
+          }}
+        />,
+      );
+
+      expect(screen.queryByTestId('plan-pill')).toBeNull();
+    },
+  );
+
+  it('keeps an interrupted plan across synthetic continuation user rows', () => {
+    const interrupted: ChatMessage = {
+      ...planMessage('in_progress'),
+      turnCompleted: false,
+    };
+    vi.setSystemTime(T0 + 60_000);
+
+    render(
+      <PinnedPlanPanel
+        sessionId="interrupted-auto-resume"
+        messages={[
+          interrupted,
+          {
+            clientId: 'auto-resume-user',
+            role: 'user',
+            content: '',
+            createdAt: new Date(T0 + 30_000).toISOString(),
+            delivery: 'turn',
+            isSyntheticTrigger: true,
+          },
+        ]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).not.toBeNull();
+  });
+
+  it('shows a plan again when the later user turn explicitly updates it', () => {
+    const interrupted: ChatMessage = {
+      ...planMessage('in_progress'),
+      turnCompleted: false,
+    };
+    const reclaimed: ChatMessage = {
+      ...planMessage('in_progress', T0 + 30_000),
+      clientId: 'plan-2',
+      toolUseId: 'plan:turn-2',
+    };
+    vi.setSystemTime(T0 + 60_000);
+
+    render(
+      <PinnedPlanPanel
+        sessionId="interrupted-then-reclaimed"
+        messages={[
+          interrupted,
+          {
+            clientId: 'new-turn-user',
+            role: 'user',
+            content: 'Continue this work',
+            createdAt: new Date(T0 + 20_000).toISOString(),
+            delivery: 'turn',
+          },
+          reclaimed,
+        ]}
+        animated
+        streaming
+        width={400}
+      />,
+    );
+
     expect(screen.queryByTestId('plan-pill')).not.toBeNull();
   });
 

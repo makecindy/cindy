@@ -1,11 +1,13 @@
 import { useEffect, useId, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Building2, Copy, Pencil, UserRound } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
+import { Building2, Copy, LogOut, Pencil, UserPlus, UserRound } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
+import { useOptionalConfirmDialog } from '@/components/ui/confirm-dialog-provider';
+import { useLogout } from '@/hooks/useLogout';
 import { ProfileEditDialog } from './ProfileEditDialog';
 
 const ORGANIZATION_ROLE_I18N_KEYS = {
@@ -24,14 +26,17 @@ function getOrganizationRoleI18nKey(role: string) {
   return ORGANIZATION_ROLE_I18N_KEYS[isOrganizationRole(role) ? role : 'member'];
 }
 
-// 展示用缩写:长 ID 只露头尾便于目视比对,点击复制的仍是完整值。
+// ID 只是邮箱旁的辅助标识:只露末 4 位,点击复制的仍是完整值。
 function abbreviateUserId(id: string): string {
-  return id.length > 14 ? `${id.slice(0, 6)}…${id.slice(-4)}` : id;
+  return id.length > 4 ? `…${id.slice(-4)}` : id;
 }
 
 export function UserProfileCard() {
   const { user, mode, exitLocalMode } = useAuth();
+  const confirmDialog = useOptionalConfirmDialog();
+  const { handleLogout } = useLogout();
   const navigate = useNavigate();
+  const location = useLocation();
   const [avatarError, setAvatarError] = useState(false);
   const [orgLogoError, setOrgLogoError] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -120,6 +125,29 @@ export function UserProfileCard() {
     }
   };
 
+  const confirmRunningTaskInterruption = async (): Promise<boolean> => {
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+    const hasRunningTask = [...makerChatStore.getRunningSnapshot().values()].some(
+      (status) => status.isRunning,
+    );
+    if (!hasRunningTask) return true;
+    if (!confirmDialog) return false;
+    return confirmDialog.confirm({
+      title: t('sidebar.accountSwitcher.runningTaskTitle'),
+      description: t('sidebar.accountSwitcher.runningTaskDescription'),
+      confirmText: t('sidebar.accountSwitcher.runningTaskConfirm'),
+      cancelText: t('logic.confirm.cancel'),
+      confirmVariant: 'destructive',
+    });
+  };
+
+  const openAddAccount = async () => {
+    if (!(await confirmRunningTaskInterruption())) return;
+    navigate('/add-account', {
+      state: { returnTo: `${location.pathname}${location.search}` },
+    });
+  };
+
   return (
     <div
       className={cn(
@@ -166,28 +194,52 @@ export function UserProfileCard() {
       </button>
 
       <div className="min-w-0 flex-1">
-        <p className="min-w-0 truncate text-18 font-medium leading-[1.2] text-[var(--settings-profile-name)]">
-          {displayName}
-        </p>
-        {/* User ID — 显式展示,整行点击复制;常驻小图标明示可复制。 */}
-        <button
-          type="button"
-          onClick={() => void handleCopyUserId()}
-          aria-label={t('settings.userProfile.copyUserId.action')}
-          aria-describedby={userIdDescriptionId}
-          title={t('settings.userProfile.copyUserId.action')}
-          className={cn(
-            '-ml-1.5 mt-0.5 flex min-w-0 max-w-full cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-left',
-            'text-12 text-[var(--text-tertiary)] transition-colors',
-            'hover:bg-[var(--settings-profile-avatar-bg)] hover:text-[var(--text-secondary)]',
-            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-          )}
-        >
-          <span id={userIdDescriptionId} className="min-w-0 truncate">
-            {t('settings.userProfile.copyUserId.display', { id: abbreviateUserId(user.id) })}
-          </span>
-          <Copy aria-hidden="true" size={11} className="shrink-0" />
-        </button>
+        <div className="flex min-w-0 items-center gap-1">
+          <p className="min-w-0 truncate text-18 font-medium leading-[1.2] text-[var(--settings-profile-name)]">
+            {displayName}
+          </p>
+          {/* 编辑名字 / 头像(直写服务端,弹窗见 ProfileEditDialog) */}
+          <button
+            type="button"
+            onClick={() => setEditOpen(true)}
+            aria-label={t('settings.userProfile.edit.open')}
+            title={t('settings.userProfile.edit.open')}
+            className={cn(
+              'flex h-7 w-7 shrink-0 items-center justify-center rounded-full',
+              'text-[var(--text-tertiary)] transition-colors',
+              'hover:bg-[var(--settings-profile-avatar-bg)] hover:text-[var(--text-primary)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+            )}
+          >
+            <Pencil size={14} />
+          </button>
+        </div>
+        <div className="mt-0.5 flex min-w-0 items-center gap-2">
+          {user.email ? (
+            <p className="min-w-0 truncate text-12 text-[var(--text-secondary)]" title={user.email}>
+              {user.email}
+            </p>
+          ) : null}
+          {/* User ID 仅作辅助核对:只显示末 4 位,点击仍复制完整值。 */}
+          <button
+            type="button"
+            onClick={() => void handleCopyUserId()}
+            aria-label={t('settings.userProfile.copyUserId.action')}
+            aria-describedby={userIdDescriptionId}
+            title={t('settings.userProfile.copyUserId.action')}
+            className={cn(
+              'flex shrink-0 cursor-pointer items-center gap-1 rounded-full px-1.5 py-0.5 text-left',
+              'text-10 text-[var(--text-tertiary)] transition-colors',
+              'hover:bg-[var(--settings-profile-avatar-bg)] hover:text-[var(--text-secondary)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+            )}
+          >
+            <span id={userIdDescriptionId}>
+              {t('settings.userProfile.copyUserId.display', { id: abbreviateUserId(user.id) })}
+            </span>
+            <Copy aria-hidden="true" size={10} className="shrink-0" />
+          </button>
+        </div>
         {organizationName && organizationRole && (
           <div className="mt-1 flex min-w-0 items-center gap-1.5 text-sm leading-5 text-[var(--text-secondary)]">
             {orgLogoUrl && !orgLogoError ? (
@@ -216,21 +268,38 @@ export function UserProfileCard() {
         )}
       </div>
 
-      {/* 编辑名字 / 头像(直写服务端,弹窗见 ProfileEditDialog) */}
-      <button
-        type="button"
-        onClick={() => setEditOpen(true)}
-        aria-label={t('settings.userProfile.edit.open')}
-        title={t('settings.userProfile.edit.open')}
-        className={cn(
-          'flex h-8 w-8 shrink-0 items-center justify-center rounded-full',
-          'text-[var(--text-tertiary)] transition-colors',
-          'hover:bg-[var(--settings-profile-avatar-bg)] hover:text-[var(--text-primary)]',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
-        )}
-      >
-        <Pencil size={15} />
-      </button>
+      {mode === 'cloud' && (
+        <div className="flex shrink-0 flex-col items-stretch gap-2">
+          <button
+            type="button"
+            onClick={() => void handleLogout()}
+            aria-label={t('settings.logout.aria')}
+            className={cn(
+              'flex h-8 items-center justify-center gap-1.5 rounded-full border px-3 text-12 font-medium',
+              'border-[var(--settings-logout-border)] bg-[var(--settings-logout-bg)]',
+              'text-[var(--settings-logout-text)] transition-colors hover:bg-[var(--settings-logout-hover-bg)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+            )}
+          >
+            <LogOut size={14} aria-hidden="true" />
+            {t('settings.logout.button')}
+          </button>
+          <button
+            type="button"
+            onClick={() => void openAddAccount()}
+            aria-label={t('sidebar.user.menuAddAccount')}
+            className={cn(
+              'flex h-8 items-center justify-center gap-1.5 rounded-full border px-3 text-12 font-medium',
+              'border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)]',
+              'text-[var(--settings-btn-secondary-text)] transition-colors hover:bg-[var(--settings-btn-secondary-hover-bg)]',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+            )}
+          >
+            <UserPlus size={14} aria-hidden="true" />
+            {t('sidebar.user.menuAddAccount')}
+          </button>
+        </div>
+      )}
 
       <ProfileEditDialog open={editOpen} onOpenChange={setEditOpen} />
     </div>

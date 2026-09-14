@@ -85,6 +85,22 @@ import {
 import type { SessionChatState } from '@/lib/makerChatStore';
 import type { Message } from '@/lib/ccAgent.types';
 
+describe('makerChatStore IM source projection', () => {
+  it.each(['imSource', 'hookSource'] as const)('projects %s into the common Desktop card', (field) => {
+    const source = {
+      im: 'telegram', userText: 'question', contentFormat: 'user-text' as const,
+      contextSnapshot: { groupContext: 'background', groupMessageCount: 1 },
+    };
+    const [mapped] = makerChatStore.__mapServerMessagesForTest([{
+      id: 'im-row', clientId: 'im-client', sessionId: 's1', role: 'user',
+      content: 'question', agentMeta: { [field]: source },
+      toolUseId: null,
+      createdAt: '2026-09-12T00:00:00.000Z',
+    } satisfies Message]);
+    expect(mapped).toMatchObject({ role: 'user', content: 'question', hookSource: source });
+  });
+});
+
 describe('makerChatStore agent task updates', () => {
   it('restores an agent task terminal state from persisted tool_use metadata', () => {
     const [mapped] = makerChatStore.__mapServerMessagesForTest([{
@@ -847,6 +863,28 @@ describe('getRunningSnapshot 后台 subagent 折算(真 store)', () => {
       const cleared2 = makerChatStore.getRunningSnapshot();
       expect(cleared1.has(sid)).toBe(false);
       expect(cleared2).toBe(cleared1);
+    } finally {
+      makerChatStore.purgeSession(sid);
+    }
+  });
+
+  it('seedBackgroundTaskSnapshots 保留 Pi provider,不把持久子会话标成 Claude', () => {
+    const sid = `seed-pi-${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      makerChatStore.seedBackgroundTaskSnapshots(sid, [
+        {
+          taskId: 'pi-run-1',
+          taskType: 'pi_subagent',
+          toolUseId: 'pi-run-1',
+          title: 'Inspect auth',
+          provider: 'pi',
+        },
+      ]);
+      const update = makerChatStore.getSnapshot(sid).taskUpdates?.get('pi-run-1');
+      expect(update?.provider).toBe('pi');
+      expect(update?.taskType).toBe('pi_subagent');
+      expect(update?.status).toBe('running');
+      expect(update?.title).toBe('Inspect auth');
     } finally {
       makerChatStore.purgeSession(sid);
     }

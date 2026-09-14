@@ -1,3 +1,5 @@
+import { net } from 'electron';
+
 import { createLogger } from '../logger.js';
 import type { CreditsSnapshot, RateLimitSnapshot, RateLimitWindow } from '../usageBroadcaster.js';
 
@@ -139,7 +141,11 @@ export async function fetchCodexWebUsageSnapshot(
     };
     if (opts.accountId) headers['ChatGPT-Account-Id'] = opts.accountId;
 
-    const res = await (opts.fetchFn ?? fetch)(CODEX_WEB_USAGE_URL, {
+    // Electron net.fetch uses Chromium's network stack, so it honors the
+    // system proxy/PAC configuration. A bare Node fetch bypasses that stack;
+    // on managed or poisoned-DNS networks it can resolve chatgpt.com to the
+    // wrong host even while the desktop app's proxied requests work normally.
+    const res = await (opts.fetchFn ?? net.fetch)(CODEX_WEB_USAGE_URL, {
       method: 'GET',
       headers,
       signal: controller.signal,

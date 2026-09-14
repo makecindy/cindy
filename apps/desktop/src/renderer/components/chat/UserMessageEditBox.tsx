@@ -42,6 +42,10 @@ import { ListComposerTextarea } from '@/components/new-chat/ListComposerTextarea
 import { toast } from '@/lib/toast';
 import { ApiError } from '@/lib/httpClient';
 import { rewindPreview } from '@/lib/sessionService';
+import {
+  readSendFollowCancelGeneration,
+  tryRequestFollowLatest,
+} from '@/components/chat/autoFollowIntent';
 import { commitEditAndResendWithRunningRetry } from '@/lib/editLastUserMessage';
 import type { RewindDraftImage } from '@/lib/rewindDraftAttachments';
 import type { FileRef, PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
@@ -204,6 +208,13 @@ export function UserMessageEditBox({
         : submitTokenIsRuntimeAlias && originalHadConfirmedRange && rebuiltSlashRange
           ? [rebuiltSlashRange]
           : undefined;
+      const followStartGeneration = readSendFollowCancelGeneration(sessionId);
+      // 点发送就跟底。等受理会让阅读历史时的残留上翻把票作废。
+      tryRequestFollowLatest({
+        sourceSessionId: sessionId,
+        currentSessionId: sessionId,
+        startGeneration: followStartGeneration,
+      });
       if (onCommitOverride) {
         // 被拦消息:普通重发(不 rewind)。失败抛错落入下方 catch 保留编辑态。
         await onCommitOverride({
@@ -227,8 +238,6 @@ export function UserMessageEditBox({
           ...(preservedSlashCommandRanges !== undefined ? { slashCommandRanges: preservedSlashCommandRanges } : {}),
         });
       }
-      // 先归零守卫再 onSent:onSent 让父组件立刻卸载本组件,晚于它的 setState
-      // 在已卸载组件上是无效 no-op(bot review 指出的死代码顺序问题)。
       submittingRef.current = false;
       setSubmitting(false);
       onSent();

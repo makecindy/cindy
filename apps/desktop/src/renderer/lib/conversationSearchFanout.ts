@@ -320,7 +320,8 @@ export function searchCachedSessionsByTitle(
   }> = [];
 
   sessions.forEach((session, index) => {
-    if (isOrcaWorkerSession(session)) return;
+    // The mirror includes companion chat metadata; ordinary search must not expose it.
+    if (session.source === 'bot' || isOrcaWorkerSession(session)) return;
     if (allowed && !allowed.has(session.id)) return;
     if (!matchesWorkingDirSet(session.workingDir, workingDirs)) return;
     if (!matchesStatus(session.status, filters.status ?? 'all')) return;

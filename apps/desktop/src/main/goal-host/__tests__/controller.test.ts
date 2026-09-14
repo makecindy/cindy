@@ -64,6 +64,17 @@ describe('decideNextGoalState', () => {
     expect(d.lastReason).toContain('boom');
   });
 
+  it('projects a tool-loop terminal error as a stable reason', () => {
+    const d = decideNextGoalState(BASE, outcome({
+      errored: true,
+      errorMessage: '上游模型疑似陷入死循环: missing_required_field',
+      errorReason: 'tool_use_loop_detected',
+    }));
+    expect(d.status).toBe('blocked');
+    expect(d.lastReason).toBe('tool_use_loop_detected');
+    expect(d.lastReason).not.toContain('missing_required_field');
+  });
+
   it('pauses (not blocks) when the turn was aborted by the user', () => {
     const d = decideNextGoalState(BASE, outcome({ errored: true, errorMessage: 'AbortError: aborted' }));
     expect(d.status).toBe('paused');
@@ -238,6 +249,10 @@ class FakeSession implements SessionLike {
     return () => {
       if (this.listener === listener) this.listener = null;
     };
+  }
+
+  hasListener(): boolean {
+    return this.listener !== null;
   }
 
   isTurnRunning(): boolean {
@@ -2509,6 +2524,67 @@ describe('GoalController', () => {
     expect(local.updates.filter((update) => update.goal === null)).toHaveLength(1);
   });
 
+  it('drains a pending completion commit before controller disposal completes', async () => {
+    let completionCalls = 0;
+    let releaseCompletion!: () => void;
+    const blockedCompletion = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const local = makeController({
+      persistGoalCompletion: async () => {
+        completionCalls += 1;
+        await blockedCompletion;
+      },
+    });
+    const clear = vi.spyOn(local.storage, 'clear');
+    await startGoal(local);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(completionCalls).toBe(1));
+
+    const disposing = local.controller.dispose();
+    releaseCompletion();
+    await disposing;
+    await tick();
+
+    expect(clear).toHaveBeenCalledWith('s1');
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.filter((update) => update.goal === null)).toHaveLength(0);
+  });
+
+  it('drains an in-flight completion clear during disposal without publishing stale status', async () => {
+    const local = makeController();
+    const originalClear = local.storage.clear.bind(local.storage);
+    let clearCalls = 0;
+    let releaseClear!: () => void;
+    const blockedClear = new Promise<void>((resolve) => {
+      releaseClear = resolve;
+    });
+    vi.spyOn(local.storage, 'clear').mockImplementation(async (sessionId) => {
+      clearCalls += 1;
+      await blockedClear;
+      await originalClear(sessionId);
+    });
+    await startGoal(local);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(clearCalls).toBe(1));
+
+    const disposing = local.controller.dispose();
+    releaseClear();
+    await disposing;
+    await tick();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.filter((update) => update.goal === null)).toHaveLength(0);
+  });
+
   it('finishes the completion commit if Stop arrives while clearing goal storage', async () => {
     const local = makeController();
     const originalClear = local.storage.clear.bind(local.storage);
@@ -3178,6 +3254,47 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.status).toBe('paused');
     expect(h.updates.at(-1)?.goal?.status).toBe('paused');
     expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('does not let a startup resume scan repopulate runtime state after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseList!: (states: GoalState[]) => void;
+    const blockedList = new Promise<GoalState[]>((resolve) => {
+      releaseList = resolve;
+    });
+    vi.spyOn(local.storage, 'listActive').mockReturnValueOnce(blockedList);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    local.controller.dispose();
+    releaseList([active]);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
+  });
+
+  it('does not let a per-goal startup lookup attach after disposal', async () => {
+    const local = makeController();
+    const active = seededGoal({ status: 'active', objective: 'old account goal' });
+    await local.storage.set(active);
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    vi.spyOn(local.storage, 'get').mockReturnValueOnce(blockedGet);
+
+    const startupResume = local.controller.resumeActiveGoals();
+    await vi.waitFor(() => expect(local.storage.get).toHaveBeenCalledWith('s1'));
+    local.controller.dispose();
+    releaseGet(active);
+    await startupResume;
+
+    expect(local.session.hasListener()).toBe(false);
+    expect(local.session.sends).toHaveLength(0);
+    expect(local.updates).toHaveLength(0);
   });
 
   it('resumeOnOpen 在释放 route 锁前挂 listener，并在会话随即关闭后迁移到重建会话', async () => {
@@ -3957,16 +4074,49 @@ describe('GoalController', () => {
     expect(h.session.sends).toHaveLength(1); // 本应续跑,但被改判,不续
   });
 
-  it('auto-resumes at resetAt: posts a usage-resumed notice and continues', async () => {
-    h.setAccountLimit({ limited: true, resetAtMs: 1000 }); // == now → delay 0,tick 内触发
-    await startGoal(h);
-    h.session.emitErrorTurn({ sdkError: 'rate_limit' });
-    await tick(); // usageLimited → schedule(delay 0) → autoResume → resumeGoal
-    expect(h.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
-    const st = await h.storage.get('s1');
-    expect(st?.status).toBe('active');
-    expect(st?.usageResetAt).toBeNull(); // resume 清掉
-    expect(h.session.sends.length).toBeGreaterThanOrEqual(2); // 自动续了一轮
+  it.each([false, true])('auto-resumes at resetAt: posts a usage-resumed notice and continues (deferred hydration: %s)', async (deferHydration) => {
+    let releaseEnsure!: () => void;
+    const blockedEnsure = new Promise<void>((resolve) => { releaseEnsure = resolve; });
+    let restoring = false;
+    let ensurePending = false;
+    const local = makeController({
+      ensureSession: async () => {
+        if (restoring && deferHydration) {
+          ensurePending = true;
+          await blockedEnsure;
+        }
+        return local.session;
+      },
+    });
+    try {
+      local.setAccountLimit({ limited: true, resetAtMs: 1000 }); // == now → real timer, delay 0
+      await startGoal(local);
+      restoring = true;
+      local.session.emitErrorTurn({ sdkError: 'rate_limit' });
+
+      if (deferHydration) {
+        await vi.waitFor(() => expect(ensurePending).toBe(true));
+        // Even after the old 10ms wait, hydration can still be pending legitimately.
+        await tick();
+        expect(local.notices).toEqual([]);
+        expect(await local.storage.get('s1')).toMatchObject({ status: 'usageLimited', usageResetAt: 1000 });
+        expect(local.session.sends).toHaveLength(1);
+      }
+
+      // Observe the entire chain, not just the first notice or elapsed wall time.
+      const resumed = vi.waitFor(async () => {
+        expect(local.notices).toEqual([{ sessionId: 's1', kind: 'usage-resumed' }]);
+        const st = await local.storage.get('s1');
+        expect(st?.status).toBe('active');
+        expect(st?.usageResetAt).toBeNull();
+        expect(local.session.sends.length).toBeGreaterThanOrEqual(2);
+      });
+      releaseEnsure();
+      await resumed;
+    } finally {
+      releaseEnsure();
+      await local.controller.dispose();
+    }
   });
 
   it('Stop cancels auto-resume while session hydration is pending without persisting a recovery notice', async () => {
@@ -4070,6 +4220,20 @@ describe('GoalController', () => {
     expect(st?.usageResetAt).toBe(1000 + 60_000); // now() + OVERLOAD_RESUME_DELAY_MS
     expect(st?.lastReason).toBe('model service at capacity');
     expect(h.session.sends).toHaveLength(1); // 不立即续轮
+  });
+
+  it('persists a stable reason for a tool-loop terminal error', async () => {
+    await startGoal(h);
+    h.session.emitErrorTurn({
+      message: '上游模型疑似陷入死循环: missing_required_field',
+      reason: 'tool_use_loop_detected',
+      toolLoop: { kind: 'contract', count: 3 },
+    });
+    await tick();
+    const st = await h.storage.get('s1');
+    expect(st?.status).toBe('blocked');
+    expect(st?.lastReason).toBe('tool_use_loop_detected');
+    expect(st?.lastReason).not.toContain('missing_required_field');
   });
 
   it('prefers the overload window over the account snapshot for a 529 turn error', async () => {
@@ -4304,4 +4468,140 @@ describe('GoalController', () => {
     expect(st?.lastReason).toBe('usage limit reached');
   });
 
+});
+
+// ── dispose / GoalControllerDisposedError ───────────────────────────────────
+
+describe('GoalController disposal', () => {
+  it('setGoal rejects after dispose', async () => {
+    const h = makeController();
+    h.controller.dispose();
+    await expect(
+      h.controller.setGoal({ sessionId: 's1', objective: 'x', agentKind: 'claude-code' }),
+    ).rejects.toThrow('GoalController has been disposed');
+  });
+
+  it('resumeGoal is no-op after dispose (auto)', async () => {
+    const h = makeController();
+    await startGoal(h);
+    h.controller.dispose();
+    // resumeGoal with auto:true returns early when turns map is empty (no throw).
+    await expect(h.controller.resumeGoal('s1', { auto: true })).resolves.toBeUndefined();
+  });
+
+  it('clearGoal is no-op after dispose', async () => {
+    const h = makeController();
+    await startGoal(h);
+    h.controller.dispose();
+    // clearGoal does not call assertActive — it is a safe cleanup operation.
+    // After dispose it should not throw; the turns map is already empty.
+    await expect(h.controller.clearGoal('s1')).resolves.toBeUndefined();
+  });
+
+  it('all public lifecycle entry points stay inert after dispose', async () => {
+    const h = makeController();
+    await h.storage.set(seededGoal({ status: 'paused' }));
+    h.controller.dispose();
+
+    await expect(h.controller.updateGoal('s1', { objective: 'later' })).resolves.toBeNull();
+    await expect(h.controller.pauseGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.maybeContinueActiveGoal('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeOnOpen('s1')).resolves.toBeUndefined();
+    await expect(h.controller.resumeActiveGoals()).resolves.toBeUndefined();
+    await expect(h.controller.getStatus('s1')).resolves.toBeNull();
+    await expect(
+      h.controller.applyClarificationAnswer(
+        's1',
+        { objective: 'later' },
+        [{ options: [{ label: 'task' }] }],
+      ),
+    ).resolves.toBeUndefined();
+
+    expect(await h.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      objective: 'old objective',
+    });
+    expect(h.session.sends).toHaveLength(0);
+    expect(h.updates).toHaveLength(0);
+  });
+
+  it('dispose clears turns and listeners', async () => {
+    const h = makeController();
+    await startGoal(h);
+    // Start a turn to register listeners.
+    h.session.emitGoalTurn({ toolUse: true, tokens: 100 });
+    await new Promise((r) => setTimeout(r, 0));
+    const updatesBefore = h.updates.length;
+    h.controller.dispose();
+    // After dispose, no more status updates should be emitted.
+    h.session.emitGoalTurn({ toolUse: true, tokens: 200 });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(h.updates.length).toBe(updatesBefore);
+  });
+
+  it('dispose is idempotent', () => {
+    const h = makeController();
+    h.controller.dispose();
+    h.controller.dispose(); // should not throw
+  });
+
+  it('drains a create marker before disposal completes', async () => {
+    const h = makeController();
+    const originalUpsert = h.storage.upsert.bind(h.storage);
+    let markUpsertStarted!: () => void;
+    const upsertStarted = new Promise<void>((resolve) => {
+      markUpsertStarted = resolve;
+    });
+    let releaseUpsert!: () => void;
+    const blockedUpsert = new Promise<void>((resolve) => {
+      releaseUpsert = resolve;
+    });
+    vi.spyOn(h.storage, 'upsert').mockImplementationOnce(async (state) => {
+      markUpsertStarted();
+      await blockedUpsert;
+      return originalUpsert(state);
+    });
+
+    const create = h.controller.setGoal({ sessionId: 's1', objective: 'outgoing objective' });
+    await upsertStarted;
+    const disposing = h.controller.dispose();
+    releaseUpsert();
+    await disposing;
+
+    await expect(create).resolves.toBeNull();
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', objective: 'outgoing objective' });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('drains an edit marker before disposal completes', async () => {
+    const h = makeController();
+    await h.storage.set(seededGoal({ status: 'paused', objective: 'old objective' }));
+    const originalUpdate = h.storage.update.bind(h.storage);
+    let markUpdateStarted!: () => void;
+    const updateStarted = new Promise<void>((resolve) => {
+      markUpdateStarted = resolve;
+    });
+    let releaseUpdate!: () => void;
+    const blockedUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(h.storage, 'update').mockImplementationOnce(async (sessionId, patch) => {
+      markUpdateStarted();
+      await blockedUpdate;
+      return originalUpdate(sessionId, patch);
+    });
+
+    const edit = h.controller.setGoal({ sessionId: 's1', objective: 'outgoing edit' });
+    await updateStarted;
+    const disposing = h.controller.dispose();
+    releaseUpdate();
+    await disposing;
+
+    await expect(edit).resolves.toBeNull();
+    expect(await h.storage.get('s1')).toMatchObject({ status: 'active', objective: 'outgoing edit' });
+    expect(h.userMessages).toHaveLength(1);
+    expect(h.session.sends).toHaveLength(0);
+  });
 });

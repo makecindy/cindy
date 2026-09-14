@@ -1,5 +1,10 @@
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { normalizeIssuePublicName } from '../../shared/issuePublicName';
+import {
+  normalizeIssueModelId,
+  parseIssueHarness,
+  type IssueHarness,
+} from '../../shared/issueRuntimeMetadata';
 
 /**
  * issue_confirm IPC 里的构建区域。非法或缺失一律返回 undefined —— 确认卡片宁可
@@ -12,6 +17,16 @@ import { normalizeIssuePublicName } from '../../shared/issuePublicName';
  */
 export function parseIssueEnvRegion(raw: unknown): CindyRegion | undefined {
   return raw === 'cn' || raw === 'global' || raw === 'dev' ? raw : undefined;
+}
+
+/** issue_confirm IPC 里的公开 Harness 名称；内部缩写或未知值一律不展示。 */
+export function parseIssueEnvHarness(raw: unknown): IssueHarness | undefined {
+  return parseIssueHarness(raw);
+}
+
+/** 与 Main 使用同一规范化函数，保证确认卡展示的值可安全落入单行 Markdown。 */
+export function parseIssueEnvModelId(raw: unknown): string | undefined {
+  return normalizeIssueModelId(raw);
 }
 
 /** issue_confirm IPC 中可由用户在确认卡选择的实际提交身份。 */

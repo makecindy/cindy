@@ -98,10 +98,43 @@ export interface NodeWorkerProcess {
   once(event: 'error', listener: (error: Error) => void): this;
   once(event: 'exit', listener: (code: number | null, signal: string | null) => void): this;
   kill(signal?: NodeJS.Signals): boolean;
+  /**
+   * 诊断-only 的 main 侧观测；不得用于放行业务请求。晚订阅只安全回放已
+   * 观测的 utility-process-spawned。
+   */
+  onStartupObservation?(listener: (observation: NodeWorkerStartupObservation) => void): void;
+  /** Diagnostic-only adapter facts; absent on test/custom process implementations. */
+  readStartupState?(): NodeWorkerStartupState;
   /** 订阅 worker 引导层就绪后经 parentPort 上行的控制帧(代启子进程用;可选)。 */
   onControl?(listener: (message: unknown) => void): void;
   /** 给 worker 引导层下行一条控制帧(代启结果/子进程输出等;可选)。 */
   sendControl?(message: unknown): boolean;
+}
+
+export type NodeWorkerStartupStage = 'utility-process-spawned' | 'parent-port-ready';
+
+export interface NodeWorkerStartupObservation {
+  stage: NodeWorkerStartupStage;
+  pid?: number;
+}
+
+/** Main-only facts sampled at a failed startup deadline; never gate readiness. */
+export interface NodeWorkerStartupState {
+  messageCount: number;
+  readySeen: boolean;
+  adapterReady: boolean;
+}
+
+type NodeWorkerObservedTimeoutClass = 'native-not-observed' | 'native-observed-ready-not-observed';
+
+export type NodeRuntimeObservedMainWindowState =
+  'absent' | 'hidden' | 'minimized' | 'visible-unfocused' | 'focused' | 'unknown';
+
+export type NodeRuntimeObservedScreenState = 'active' | 'idle' | 'locked' | 'unknown';
+
+export interface NodeRuntimeStartAttemptContext {
+  observedMainWindowState: NodeRuntimeObservedMainWindowState;
+  observedScreenState: NodeRuntimeObservedScreenState;
 }
 
 export interface GhostNodeRuntimeBrokerDeps {
@@ -112,6 +145,10 @@ export interface GhostNodeRuntimeBrokerDeps {
    * 未保存或保险库不可用。调用方不得记录返回值。
    */
   readSecret?: (ghostId: string, secretKey: string) => string | null;
+  /** 只解析本插件显式引用的 OAuth 槽；不交付 refresh token。 */
+  resolveOauthSecret?: (ghostId: string, secretKey: string, accountId?: string) => Promise<
+    { ok: true; accessToken: string } | { ok: false; error: string }
+  >;
   spawnProcess?: (entryPath: string, cwd: string, ghostId: string) => NodeWorkerProcess;
   /** 代启原样 stdio 子进程(childSpawn;缺省用 utilityProcess 适配器)。 */
   spawnChildProcess?: (
@@ -122,12 +159,108 @@ export interface GhostNodeRuntimeBrokerDeps {
   ) => NodeWorkerProcess;
   sendToGhost?: (ghostId: string, payload: GhostPipeEventPush) => void;
   now?: () => number;
+  /** 测试注入；生产诊断时钟与业务计时分离。 */
+  diagnosticNow?: () => number;
   setTimer?: (callback: () => void, delayMs: number) => NodeJS.Timeout;
   clearTimer?: (timer: NodeJS.Timeout) => void;
+  /** 每次启动尝试恰好读取一次的粗粒度宿主快照；异常不得影响 fork。 */
+  getStartAttemptContext?: () => NodeRuntimeStartAttemptContext;
+  /** 生产由 main 单例注入；测试可显式注入。 */
+  appRunId?: string;
+  /** 测试注入；生产每次 startWorkerOnce 生成随机 128-bit 标识。 */
+  createAttemptId?: () => string;
   log?: {
+    debug?(message: string, meta?: Record<string, unknown>): void;
     info(message: string, meta?: Record<string, unknown>): void;
     warn(message: string, meta?: Record<string, unknown>): void;
   };
+}
+
+function debugDiagnostic(
+  log: GhostNodeRuntimeBrokerDeps['log'],
+  message: string,
+  meta: Record<string, unknown>,
+): void {
+  try {
+    log?.debug?.(message, meta);
+  } catch {
+    // 诊断输出永不影响进程生命周期。
+  }
+}
+
+function warnDiagnostic(
+  log: GhostNodeRuntimeBrokerDeps['log'],
+  message: string,
+  meta: Record<string, unknown>,
+): void {
+  try {
+    log?.warn(message, meta);
+  } catch {
+    // 诊断输出永不影响进程生命周期。
+  }
+}
+
+function readDiagnosticPid(child: NodeWorkerProcess): number | undefined {
+  try {
+    const pid = child.pid;
+    return typeof pid === 'number' && Number.isInteger(pid) && pid > 0 ? pid : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+type NodeWorkerStartupDiagnosticState = {
+  messageCount: number | 'unknown';
+  readySeen: boolean | 'unknown';
+  adapterReady: boolean | 'unknown';
+};
+
+function readDiagnosticStartupState(child: NodeWorkerProcess): NodeWorkerStartupDiagnosticState {
+  const unknown: NodeWorkerStartupDiagnosticState = {
+    messageCount: 'unknown',
+    readySeen: 'unknown',
+    adapterReady: 'unknown',
+  };
+  try {
+    const state = child.readStartupState?.();
+    if (!state) return unknown;
+    let messageCount: number | 'unknown' = 'unknown';
+    let readySeen: boolean | 'unknown' = 'unknown';
+    let adapterReady: boolean | 'unknown' = 'unknown';
+    try {
+      const value = state.messageCount;
+      messageCount = Number.isSafeInteger(value) && value >= 0 ? value : 'unknown';
+    } catch {
+      // A custom adapter may expose throwing diagnostic fields.
+    }
+    try {
+      readySeen = typeof state.readySeen === 'boolean' ? state.readySeen : 'unknown';
+    } catch {
+      // A custom adapter may expose throwing diagnostic fields.
+    }
+    try {
+      adapterReady = typeof state.adapterReady === 'boolean' ? state.adapterReady : 'unknown';
+    } catch {
+      // A custom adapter may expose throwing diagnostic fields.
+    }
+    return {
+      messageCount,
+      readySeen,
+      adapterReady,
+    };
+  } catch {
+    return unknown;
+  }
+}
+
+/** Best-effort state exposed by Electron's UtilityProcess adapter, not OS polling. */
+/** Adapter fact only; false means the adapter has not marked it killed, not OS liveness. */
+function readDiagnosticAdapterKilled(child: NodeWorkerProcess): boolean | 'unknown' {
+  try {
+    return typeof child.killed === 'boolean' ? child.killed : 'unknown';
+  } catch {
+    return 'unknown';
+  }
 }
 
 interface PendingRpc {
@@ -168,6 +301,14 @@ interface WorkerEntry {
   child: NodeWorkerProcess;
   /** 就绪握手完成前为 true:此阶段的退出由 ensureWorker 统一报告(可能重试),handleExit 不发 crashed。 */
   startupPhase: boolean;
+  /** 诊断-only 启动阶段；不参与 ready 放行。 */
+  startupStages: Set<NodeWorkerStartupStage>;
+  /** 诊断相关性；不参与任何生命周期判定。 */
+  appRunId: string;
+  attemptId: string;
+  diagnosticPid?: number;
+  /** 主动停止开始时间，仅供既有 exit 回调计算观测延迟。 */
+  stoppingStartedAt?: number;
   /** 启动期 stderr 头部截存,失败时提取一行诊断拼进错误消息(如杀软拦截的 EPERM)。 */
   startupStderr: string;
   /** stderr 尾部按段带时间戳截存,退出时只取回看窗口内的段拼接诊断。 */
@@ -187,10 +328,18 @@ interface WorkerEntry {
   hardKillTimer: NodeJS.Timeout | null;
   mcpInitPromise: Promise<void> | null;
   stopping: boolean;
-  /** 曾发给本 worker 的凭证明文(退出诊断脱敏用;settleExit 后立即清空)。 */
+  /** 曾发给本 worker 的凭证明文(stderr 及退出诊断脱敏用;settleExit 后立即清空)。 */
   exposedSecretValues: Set<string>;
   /** exit 后 stderr drain 用:非 null 表示进程已退出、正在等待管道排空。 */
-  exitDrain: { code: number | null; signal: string | null; error: Error | null; timer: NodeJS.Timeout; exitedAt: number; gen: number } | null;
+  exitDrain: {
+    code: number | null;
+    signal: string | null;
+    error: Error | null;
+    timer: NodeJS.Timeout;
+    exitedAt: number;
+    exitObservedAt: number;
+    gen: number;
+  } | null;
 }
 
 class NodeRpcError extends Error {
@@ -213,10 +362,41 @@ class WorkerStartError extends Error {
     readonly retryable: boolean,
     readonly silent = false,
     readonly ownerBoundary = false,
+    readonly diagnostic?: {
+      error: string;
+    },
   ) {
     super(message);
   }
 }
+
+interface StartAttemptDiagnostic {
+  appRunId: string;
+  attemptId: string;
+  observedMainWindowState: NodeRuntimeObservedMainWindowState;
+  observedScreenState: NodeRuntimeObservedScreenState;
+  observedStages: Set<NodeWorkerStartupStage>;
+  messageCount?: number | 'unknown';
+  readySeen?: boolean | 'unknown';
+  adapterReady?: boolean | 'unknown';
+  adapterKilledAtDeadline?: boolean | 'unknown';
+  pid?: number;
+  observedTimeoutClass?: NodeWorkerObservedTimeoutClass;
+  observedStagesAtDeadline?: NodeWorkerStartupStage[];
+}
+
+function randomDiagnosticId(): string | null {
+  try {
+    return randomUUID().replaceAll('-', '');
+  } catch {
+    return null;
+  }
+}
+
+const STARTUP_STAGE_ORDER: readonly NodeWorkerStartupStage[] = [
+  'utility-process-spawned',
+  'parent-port-ready',
+];
 
 /**
  * 从 stderr 里挑最有诊断价值的一行(优先含 error 的行),截短拼进失败消息。
@@ -325,10 +505,46 @@ export function createUtilityNodeWorkerProcess(
 
   const events = new EventEmitter();
   const controlListeners = new Set<(message: unknown) => void>();
+  const startupObservationListeners = new Set<
+    (observation: NodeWorkerStartupObservation) => void
+  >();
+  let nativeSpawnObservation: NodeWorkerStartupObservation | null = null;
   let destroyed = false;
   let killed = false;
   let ready = false;
+  let messageCount = 0;
+  let readySeen = false;
+  const readNativePid = (): number | undefined => {
+    try {
+      const value = child.pid;
+      return typeof value === 'number' && Number.isInteger(value) && value > 0
+        ? value
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const publishNativeSpawnObservation = (pid = readNativePid()): void => {
+    try {
+      if (nativeSpawnObservation) return;
+      const observation: NodeWorkerStartupObservation = {
+        stage: 'utility-process-spawned',
+        ...(pid !== undefined ? { pid } : {}),
+      };
+      nativeSpawnObservation = observation;
+      for (const listener of startupObservationListeners) {
+        try {
+          listener(observation);
+        } catch {
+          // 诊断 observer 不能中断原有 ready/spawn 传播。
+        }
+      }
+    } catch {
+      // 整条 native-spawn diagnostic 发布链 fail-open。
+    }
+  };
   const onMessage = (message: unknown) => {
+    messageCount += 1;
     if (
       !ready &&
       message &&
@@ -337,6 +553,7 @@ export function createUtilityNodeWorkerProcess(
       (message as Record<string, unknown>).type === 'ready'
     ) {
       ready = true;
+      readySeen = true;
       events.emit('spawn');
       // 子进程原样模式:就绪后一律不再收消息——它没有任何上行控制资格。
       if (isChild) child.removeListener('message', onMessage);
@@ -348,6 +565,17 @@ export function createUtilityNodeWorkerProcess(
       controlListeners.forEach((listener) => listener(message));
     }
   };
+  try {
+    child.on('spawn', () => publishNativeSpawnObservation());
+  } catch {
+    // native spawn observer 安装失败不得影响 adapter 构造。
+  }
+  try {
+    const initialPid = readNativePid();
+    if (initialPid !== undefined) publishNativeSpawnObservation(initialPid);
+  } catch {
+    // PID 只用于诊断；getter 异常不得影响 adapter 构造。
+  }
   child.on('message', onMessage);
   child.on('exit', (code) => {
     destroyed = true;
@@ -373,6 +601,19 @@ export function createUtilityNodeWorkerProcess(
     },
     stdout,
     stderr,
+    readStartupState(): NodeWorkerStartupState {
+      return { messageCount, readySeen, adapterReady: ready };
+    },
+    onStartupObservation(listener: (observation: NodeWorkerStartupObservation) => void): void {
+      if (nativeSpawnObservation) {
+        try {
+          listener(nativeSpawnObservation);
+        } catch {
+          // native spawn 可能早于 broker 订阅；安全回放仍须 fail-open。
+        }
+      }
+      startupObservationListeners.add(listener);
+    },
     onControl(listener: (message: unknown) => void): void {
       controlListeners.add(listener);
     },
@@ -448,8 +689,74 @@ export class GhostNodeRuntimeBroker {
    * 安全相对路径的字符集都不含 ":",拼接无歧义)。
    */
   private readonly workers = new Map<string, WorkerEntry>();
+  private readonly appRunId: string;
 
-  constructor(private readonly deps: GhostNodeRuntimeBrokerDeps) {}
+  constructor(private readonly deps: GhostNodeRuntimeBrokerDeps) {
+    this.appRunId = /^[0-9a-f]{16,64}$/.test(deps.appRunId ?? '') ? deps.appRunId! : 'unknown';
+  }
+
+  private createStartAttemptDiagnostic(): StartAttemptDiagnostic {
+    const mainWindowStates: readonly NodeRuntimeObservedMainWindowState[] = [
+      'absent',
+      'hidden',
+      'minimized',
+      'visible-unfocused',
+      'focused',
+      'unknown',
+    ];
+    const screenStates: readonly NodeRuntimeObservedScreenState[] = [
+      'active',
+      'idle',
+      'locked',
+      'unknown',
+    ];
+    let observedMainWindowState: NodeRuntimeObservedMainWindowState = 'unknown';
+    let observedScreenState: NodeRuntimeObservedScreenState = 'unknown';
+    try {
+      const observed = this.deps.getStartAttemptContext?.();
+      if (observed && mainWindowStates.includes(observed.observedMainWindowState)) {
+        observedMainWindowState = observed.observedMainWindowState;
+      }
+      if (observed && screenStates.includes(observed.observedScreenState)) {
+        observedScreenState = observed.observedScreenState;
+      }
+    } catch {
+      // 诊断快照或其只读字段失败不能影响 fork。
+    }
+    let attemptId: string | undefined;
+    try {
+      const candidate = this.deps.createAttemptId?.();
+      if (candidate && /^[0-9a-f]{16,64}$/.test(candidate)) attemptId = candidate;
+    } catch {
+      // 测试注入异常同样不得影响启动。
+    }
+    return {
+      appRunId: this.appRunId,
+      attemptId: attemptId ?? randomDiagnosticId() ?? 'unknown',
+      observedMainWindowState,
+      observedScreenState,
+      observedStages: new Set(),
+    };
+  }
+
+  private startupSettlementMeta(
+    attempt: StartAttemptDiagnostic,
+    outcome: 'ready' | 'failed' | 'cancelled',
+  ): Record<string, unknown> {
+    return {
+      appRunId: attempt.appRunId,
+      attemptId: attempt.attemptId,
+      outcome,
+      ...(attempt.observedStagesAtDeadline
+        ? { observedStagesAtDeadline: attempt.observedStagesAtDeadline }
+        : {
+            observedStagesAtSettle: STARTUP_STAGE_ORDER.filter((stage) =>
+              attempt.observedStages.has(stage),
+            ),
+          }),
+      ...(attempt.pid !== undefined ? { pid: attempt.pid } : {}),
+    };
+  }
 
   private static keyOf(ghostId: string, entryRel: string): string {
     return `${ghostId}::${entryRel}`;
@@ -486,16 +793,28 @@ export class GhostNodeRuntimeBroker {
   /** main.js 的 node-request 入口。 */
   async handleRequest(ghostId: string, payload: unknown): Promise<GhostPipeNodeResult> {
     const ghost = this.deps.getGhost(ghostId);
-    if (!ghost?.enabled || !ghost.manifest.slots.includes('node') || !ghost.manifest.node) {
+    if (!ghost?.enabled || !ghost.manifest.node) {
       return errorResult('PERMISSION_DENIED', '插件未申请本地 Node 权限，或当前未启用');
     }
     // getGhost 确认插件当前已启用——这是按需插件的"后更新/重启边界",
     // 清除 stop() 留下的停止标记,使按需进程可以恢复启动。
     this.stoppedGhosts.delete(ghostId);
+    const requestGeneration = this.stopGeneration.get(ghostId) ?? 0;
+    const requestManifest = JSON.stringify(ghost.manifest);
+    const requestStillCurrent = (): boolean => {
+      const current = this.deps.getGhost(ghostId);
+      return !this.destroyed && current?.enabled === true
+        && (this.stopGeneration.get(ghostId) ?? 0) === requestGeneration
+        && JSON.stringify(current.manifest) === requestManifest;
+    };
     if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
       return errorResult('INVALID_REQUEST', 'node-request 载荷必须是对象');
     }
     const request = payload as Record<string, unknown>;
+    if (request.authAccount !== undefined &&
+      (typeof request.authAccount !== 'string' || request.authAccount.length === 0 || request.authAccount.length > 64)) {
+      return errorResult('INVALID_REQUEST', 'authAccount 必须是 1–64 字符的账号 id');
+    }
     if (request.type !== 'node-request') {
       return errorResult('INVALID_REQUEST', '请求类型必须是 node-request');
     }
@@ -582,7 +901,28 @@ export class GhostNodeRuntimeBroker {
             clearHostSecrets(hostSecrets);
             return errorResult('PERMISSION_DENIED', 'Plugin owner boundary is not stable');
           }
-          const value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+          let value: string | null;
+          if (binding.oauthSecret !== undefined) {
+            const source = ghost.manifest.network?.secrets?.find((s) => s.key === binding.oauthSecret);
+            if (source?.source !== 'oauth' || !source.oauth || !this.deps.resolveOauthSecret) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('PERMISSION_DENIED', 'Node OAuth 凭证声明无效或当前客户端不支持');
+            }
+            const resolved = await this.deps.resolveOauthSecret(
+              ghostId, binding.oauthSecret, request.authAccount as string | undefined,
+            );
+            if (!requestStillCurrent() || !this.ownerScopeUsable(ghostId, ownerScopeSnapshot)) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('PERMISSION_DENIED', 'Plugin owner boundary is not stable');
+            }
+            if (!resolved.ok) {
+              clearHostSecrets(hostSecrets);
+              return errorResult('PERMISSION_DENIED', '账号不可用，请在插件详情页检查授权');
+            }
+            value = resolved.accessToken;
+          } else {
+            value = this.deps.readSecret?.(ghostId, binding.key) ?? null;
+          }
           if (value === null) {
             clearHostSecrets(hostSecrets);
             return errorResult(
@@ -606,6 +946,10 @@ export class GhostNodeRuntimeBroker {
     try {
       entry = await this.ensureWorker(ghost, entryRel, ownerScopeSnapshot);
       this.assertOwnerScopeUsable(ghostId, ownerScopeSnapshot);
+      if (!requestStillCurrent()) {
+        clearHostSecrets(hostSecrets);
+        return errorResult('PERMISSION_DENIED', '插件已停止或更新，请重新发起调用');
+      }
     } catch (error) {
       clearHostSecrets(hostSecrets);
       if (error instanceof WorkerStartError && error.ownerBoundary) {
@@ -630,6 +974,7 @@ export class GhostNodeRuntimeBroker {
         }
       }
       if (hostSecrets) {
+        if (!requestStillCurrent()) return errorResult('PERMISSION_DENIED', '插件已停止或更新，请重新发起调用');
         for (const v of Object.values(hostSecrets)) {
           if (v) entry.exposedSecretValues.add(v);
         }
@@ -928,6 +1273,7 @@ export class GhostNodeRuntimeBroker {
 
   /** 停用、更新或卸载一个插件时立即停止其名下**全部** Node 进程。 */
   stop(ghostId: string): void {
+    this.stopGeneration.set(ghostId, (this.stopGeneration.get(ghostId) ?? 0) + 1);
     this.stoppedGhosts.add(ghostId);
     for (const starting of [...(this.startingChildren.get(ghostId) ?? [])]) {
       this.stopStartingChild(starting);
@@ -1062,14 +1408,35 @@ export class GhostNodeRuntimeBroker {
     }
     entry.pending.clear();
     entry.exposedSecretValues.clear();
+    // PID 是启动期已经捕获的只读 fact；停止关键路径前不再调用诊断 getter/logger。
+    const stopPid = entry.diagnosticPid;
+    let sigtermKillReturned = false;
     try {
-      entry.child.kill('SIGTERM');
+      sigtermKillReturned = entry.child.kill('SIGTERM');
       entry.hardKillTimer = this.setTimer(() => {
         entry.hardKillTimer = null;
         try {
-          entry.child.kill('SIGKILL');
+          const killReturned = entry.child.kill('SIGKILL');
+          debugDiagnostic(this.deps.log, 'ghost node process lifecycle', {
+            ghostId: entry.ghost.manifest.id,
+            entry: entry.entryRel,
+            appRunId: entry.appRunId,
+            attemptId: entry.attemptId,
+            ...(entry.diagnosticPid !== undefined ? { pid: entry.diagnosticPid } : {}),
+            stage: 'sigkill-requested',
+            killReturned,
+          });
         } catch {
           // already gone
+          debugDiagnostic(this.deps.log, 'ghost node process lifecycle', {
+            ghostId: entry.ghost.manifest.id,
+            entry: entry.entryRel,
+            appRunId: entry.appRunId,
+            attemptId: entry.attemptId,
+            ...(entry.diagnosticPid !== undefined ? { pid: entry.diagnosticPid } : {}),
+            stage: 'sigkill-requested',
+            killReturned: false,
+          });
         }
       }, PROCESS_STOP_GRACE_MS);
       entry.hardKillTimer.unref?.();
@@ -1077,6 +1444,17 @@ export class GhostNodeRuntimeBroker {
       // 已退出即视为停止成功。
     }
     this.sendStatus(entry.ghost, 'stopped', undefined, entry.entryRel);
+    // 诊断计时从 HEAD 停止动作全部完成后开始；不得推迟 signal/grace timer/status。
+    if (entry.stoppingStartedAt === undefined) entry.stoppingStartedAt = Date.now();
+    debugDiagnostic(this.deps.log, 'ghost node process lifecycle', {
+      ghostId: entry.ghost.manifest.id,
+      entry: entry.entryRel,
+      appRunId: entry.appRunId,
+      attemptId: entry.attemptId,
+      ...(stopPid !== undefined ? { pid: stopPid } : {}),
+      stage: 'sigterm-requested',
+      killReturned: sigtermKillReturned,
+    });
   }
 
   /** Cindy 退出时收掉全部随包 Node 进程。 */
@@ -1091,6 +1469,8 @@ export class GhostNodeRuntimeBroker {
 
   /** stop(ghostId) 置入:在途重试检测到后立即中止,不继续拉新进程。 */
   private readonly stoppedGhosts = new Set<string>();
+  /** 阻止刷新 OAuth 令牌期间跨停用/升级边界交付旧调用。 */
+  private readonly stopGeneration = new Map<string, number>();
 
   /** 每次 handleExit 递增,settleExit 仅在世代未推进时发布 crashed。 */
   private readonly exitGen = new Map<string, number>();
@@ -1156,17 +1536,64 @@ export class GhostNodeRuntimeBroker {
         if (!declaredEntries.includes(entryRel)) throw lastError;
         current = fresh;
       }
+      const attemptDiagnostic = this.createStartAttemptDiagnostic();
+      debugDiagnostic(this.deps.log, 'ghost node startup attempt', {
+        ghostId: ghost.manifest.id,
+        entry: entryRel,
+        attempt,
+        appRunId: attemptDiagnostic.appRunId,
+        attemptId: attemptDiagnostic.attemptId,
+        stage: 'begin',
+        observedMainWindowState: attemptDiagnostic.observedMainWindowState,
+        observedScreenState: attemptDiagnostic.observedScreenState,
+      });
       try {
-        return await this.startWorkerOnce(current, entryRel, key, ownerScopeSnapshot);
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        const retryable = error instanceof WorkerStartError ? error.retryable : true;
-        this.deps.log?.warn('ghost node start attempt failed', {
+        const entry = await this.startWorkerOnce(
+          current,
+          entryRel,
+          key,
+          ownerScopeSnapshot,
+          attemptDiagnostic,
+        );
+        debugDiagnostic(this.deps.log, 'ghost node startup settlement', {
           ghostId: ghost.manifest.id,
           entry: entryRel,
           attempt,
-          message: lastError.message,
+          ...this.startupSettlementMeta(attemptDiagnostic, 'ready'),
         });
+        return entry;
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error));
+        const retryable = error instanceof WorkerStartError ? error.retryable : true;
+        const diagnostic = error instanceof WorkerStartError ? error.diagnostic : undefined;
+        const cancelled = error instanceof WorkerStartError && error.silent;
+        const settlement = {
+          ghostId: ghost.manifest.id,
+          entry: entryRel,
+          attempt,
+          ...this.startupSettlementMeta(attemptDiagnostic, cancelled ? 'cancelled' : 'failed'),
+          error:
+            diagnostic?.error ??
+            (attemptDiagnostic.observedTimeoutClass ? 'startup-timeout' : 'worker-start-failed'),
+          ...(attemptDiagnostic.observedTimeoutClass
+            ? { observedTimeoutClass: attemptDiagnostic.observedTimeoutClass }
+            : {}),
+        };
+        if (cancelled) {
+          debugDiagnostic(this.deps.log, 'ghost node startup settlement', settlement);
+        } else {
+          warnDiagnostic(this.deps.log, 'ghost node start attempt failed', {
+            ...settlement,
+            ...(attemptDiagnostic.observedTimeoutClass
+              ? {
+                  messageCount: attemptDiagnostic.messageCount,
+                  readySeen: attemptDiagnostic.readySeen,
+                  adapterReady: attemptDiagnostic.adapterReady,
+                  adapterKilledAtDeadline: attemptDiagnostic.adapterKilledAtDeadline,
+                }
+              : {}),
+          });
+        }
         if (!retryable) break;
       }
     }
@@ -1181,6 +1608,7 @@ export class GhostNodeRuntimeBroker {
     entryRel: string,
     key: string,
     ownerScopeSnapshot: unknown,
+    attemptDiagnostic: StartAttemptDiagnostic,
   ): Promise<WorkerEntry> {
     this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
     const node = ghost.manifest.node;
@@ -1190,19 +1618,32 @@ export class GhostNodeRuntimeBroker {
     if (entryPath === root || !entryPath.startsWith(`${root}${path.sep}`)) {
       throw new WorkerStartError('node 入口越出插件安装目录', false);
     }
+    const forkStartedAt = this.diagnosticNow();
     let child: NodeWorkerProcess;
     try {
       child = (this.deps.spawnProcess ?? defaultSpawnProcess)(entryPath, root, ghost.manifest.id);
     } catch (error) {
-      throw new WorkerStartError(error instanceof Error ? error.message : String(error), true);
+      throw new WorkerStartError(
+        error instanceof Error ? error.message : String(error),
+        true,
+        false,
+        false,
+        { error: 'utility-process-fork-threw' },
+      );
     }
     this.trackLiveProcess(ghost.manifest.id, child);
+    const readChildDiagnosticPid = (): number | undefined => readDiagnosticPid(child);
+    attemptDiagnostic.pid = readChildDiagnosticPid();
     const entry: WorkerEntry = {
       ghost,
       ownerScopeSnapshot,
       entryRel,
       child,
       startupPhase: true,
+      startupStages: attemptDiagnostic.observedStages,
+      appRunId: attemptDiagnostic.appRunId,
+      attemptId: attemptDiagnostic.attemptId,
+      diagnosticPid: attemptDiagnostic.pid,
       startupStderr: '',
       stderrSegments: [],
       stderrTotalChars: 0,
@@ -1219,6 +1660,48 @@ export class GhostNodeRuntimeBroker {
       exposedSecretValues: new Set(),
       exitDrain: null,
     };
+    const recordStartupObservation = (observation: NodeWorkerStartupObservation): void => {
+      if (
+        observation.stage !== 'utility-process-spawned' &&
+        observation.stage !== 'parent-port-ready'
+      ) {
+        return;
+      }
+      if (entry.startupStages.has(observation.stage)) return;
+      entry.startupStages.add(observation.stage);
+      const observedPid =
+        typeof observation.pid === 'number' &&
+        Number.isInteger(observation.pid) &&
+        observation.pid > 0
+          ? observation.pid
+          : readChildDiagnosticPid();
+      if (observedPid !== undefined) {
+        attemptDiagnostic.pid = observedPid;
+        entry.diagnosticPid = observedPid;
+      }
+      const observedAt = this.diagnosticNow();
+      debugDiagnostic(this.deps.log, 'ghost node startup stage', {
+        ghostId: ghost.manifest.id,
+        entry: entryRel,
+        appRunId: attemptDiagnostic.appRunId,
+        attemptId: attemptDiagnostic.attemptId,
+        ...(observedPid !== undefined ? { pid: observedPid } : {}),
+        stage: observation.stage,
+        // main 从 fork 调用开始到观测该阶段的延迟；不是 worker 源侧阶段耗时。
+        ...(forkStartedAt !== undefined && observedAt !== undefined
+          ? { elapsedMs: observedAt - forkStartedAt }
+          : {}),
+      });
+    };
+    try {
+      child.onStartupObservation?.((observation) => {
+        if (observation.stage === 'utility-process-spawned') {
+          recordStartupObservation(observation);
+        }
+      });
+    } catch {
+      // 诊断订阅失败不能改变 ready / retry 语义。
+    }
     this.workers.set(key, entry);
     if (this.destroyed || this.stoppedGhosts.has(ghost.manifest.id)) {
       this.workers.delete(key);
@@ -1229,12 +1712,15 @@ export class GhostNodeRuntimeBroker {
     child.onControl?.((message) => this.handleWorkerControl(entry, message));
     child.stdout.on('data', (chunk) => this.handleStdout(entry, chunk));
     child.stderr.on('data', (chunk) => {
-      const decoded = entry.stderrDecoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+      // stop/排空结算已清掉令牌集合，不能把迟到输出当作无凭据的新进程日志。
+      if (entry.stopping || (this.workers.get(key) !== entry && !entry.exitDrain)) return;
+      const decoded = this.redactStderrChunk(entry,
+        entry.stderrDecoder.write(typeof chunk === 'string' ? Buffer.from(chunk) : chunk));
       if (entry.startupPhase && entry.startupStderr.length < STARTUP_STDERR_CAP) {
         entry.startupStderr = (entry.startupStderr + decoded).slice(0, STARTUP_STDERR_CAP);
       }
       // 按段带时间戳截存,退出时只取回看窗口内的段,不让老日志被新 chunk 携带。
-      entry.stderrSegments.push({ text: decoded, at: this.now() });
+      if (decoded) entry.stderrSegments.push({ text: decoded, at: this.now() });
       entry.stderrTotalChars += decoded.length;
       // 总量控制:保留尾部 EXIT_STDERR_CAP 字符——部分裁剪最老段的头部。
       if (entry.stderrTotalChars > EXIT_STDERR_CAP) {
@@ -1276,13 +1762,47 @@ export class GhostNodeRuntimeBroker {
           outcome();
         };
         startTimer = this.setTimer(
-          () => settle(() => reject(new WorkerStartError('Node 工作进程启动超时', false))),
+          () =>
+            settle(() => {
+              const observedTimeoutClass: NodeWorkerObservedTimeoutClass = entry.startupStages.has(
+                'utility-process-spawned',
+              )
+                ? 'native-observed-ready-not-observed'
+                : 'native-not-observed';
+              attemptDiagnostic.observedTimeoutClass = observedTimeoutClass;
+              attemptDiagnostic.observedStagesAtDeadline = STARTUP_STAGE_ORDER.filter((stage) =>
+                entry.startupStages.has(stage),
+              );
+              attemptDiagnostic.messageCount = 'unknown';
+              attemptDiagnostic.readySeen = 'unknown';
+              attemptDiagnostic.adapterReady = 'unknown';
+              const state = readDiagnosticStartupState(entry.child);
+              attemptDiagnostic.messageCount = state.messageCount;
+              attemptDiagnostic.readySeen = state.readySeen;
+              attemptDiagnostic.adapterReady = state.adapterReady;
+              attemptDiagnostic.adapterKilledAtDeadline = readDiagnosticAdapterKilled(entry.child);
+              reject(new WorkerStartError('Node 工作进程启动超时', false));
+            }),
           DEFAULT_START_TIMEOUT_MS,
         );
         startTimer.unref?.();
-        child.once('spawn', () => settle(resolve));
+        child.once('spawn', () => {
+          // HEAD 的 ready 结算必须先完成；PID/getter/clock/logger 都只能在其后旁路。
+          settle(resolve);
+          const pid = readChildDiagnosticPid();
+          recordStartupObservation({
+            stage: 'parent-port-ready',
+            ...(pid !== undefined ? { pid } : {}),
+          });
+        });
         child.once('error', (error) =>
-          settle(() => reject(new WorkerStartError(error.message, true))),
+          settle(() =>
+            reject(
+              new WorkerStartError(error.message, true, false, false, {
+                error: 'utility-process-error',
+              }),
+            ),
+          ),
         );
         child.once('exit', (code, signal) => {
           // stderr 管道字节可能晚于 exit 事件到达:给在途 chunk 一个极短的
@@ -1298,6 +1818,8 @@ export class GhostNodeRuntimeBroker {
                     `Node 工作进程启动前退出(code=${code}, signal=${signal ?? 'none'})${hint ? `:${hint}` : ''}`,
                     true,
                     false,
+                    false,
+                    { error: 'utility-process-exited-before-ready' },
                   ),
                 );
               }
@@ -1313,16 +1835,12 @@ export class GhostNodeRuntimeBroker {
       } catch {
         // no-op
       }
+      const failedPid = readChildDiagnosticPid();
+      if (failedPid !== undefined) attemptDiagnostic.pid = failedPid;
       throw error;
     }
     entry.startupPhase = false;
     this.assertOwnerScopeUsable(ghost.manifest.id, ownerScopeSnapshot);
-    this.deps.log?.info('ghost node process started', {
-      ghostId: ghost.manifest.id,
-      entry: entryRel,
-      pid: child.pid,
-      protocol: node.protocol,
-    });
     this.sendStatus(ghost, 'running', undefined, entryRel);
     this.scheduleIdleStop(entry);
     return entry;
@@ -1606,6 +2124,9 @@ export class GhostNodeRuntimeBroker {
         this.clearTimer(entry.hardKillTimer);
         entry.hardKillTimer = null;
       }
+      // stopWorker 或先到的 error 已完成业务收口；真实 exit 日志只能在其后。
+      // error 路径没有 stopping baseline，但仍须记录随后到达的真实进程退出。
+      if (!error) this.debugProcessExit(entry, code, signal, Date.now());
       return;
     }
     if (error && !entry.stopping && !entry.hardKillTimer) {
@@ -1643,7 +2164,15 @@ export class GhostNodeRuntimeBroker {
     const settle = () => this.settleExit(entry, code, signal, error);
     const timer = this.setTimer(settle, 500);
     timer.unref?.();
-    entry.exitDrain = { code, signal, error, timer, exitedAt: this.now(), gen };
+    entry.exitDrain = {
+      code,
+      signal,
+      error,
+      timer,
+      exitedAt: this.now(),
+      exitObservedAt: Date.now(),
+      gen,
+    };
     entry.child.stderr.once?.('end', settle);
   }
 
@@ -1654,18 +2183,18 @@ export class GhostNodeRuntimeBroker {
     error: Error | null,
   ): void {
     if (!entry.exitDrain) return;
-    const { exitedAt, gen } = entry.exitDrain;
+    const { exitedAt, exitObservedAt, gen } = entry.exitDrain;
     this.clearTimer(entry.exitDrain.timer);
     entry.exitDrain = null;
     // flush stderrDecoder 残留字节(多字节字符被切在最后一个 chunk 边界时)
-    const tail = entry.stderrDecoder.end();
+    const tail = this.redactStderrChunk(entry, entry.stderrDecoder.end());
     if (tail) {
       entry.stderrSegments.push({ text: tail, at: this.now() });
       entry.stderrTotalChars += tail.length;
     }
     const ghostId = entry.ghost.manifest.id;
     const exitHint = this.exitStderrHint(entry, exitedAt);
-    const detail = `${error?.message ?? `code=${code}, signal=${signal ?? 'none'}`}${
+    const detail = `${this.redactSecrets(entry, error?.message ?? `code=${code}, signal=${signal ?? 'none'}`)}${
       exitHint ? `:${exitHint}` : ''
     }`;
     for (const pending of entry.pending.values()) {
@@ -1686,6 +2215,31 @@ export class GhostNodeRuntimeBroker {
         this.sendStatus(entry.ghost, 'crashed', detail, entry.entryRel);
       }
     }
+    // pending reject、状态广播与所有 HEAD exit 收口完成后才允许诊断 logger 运行。
+    if (!error) this.debugProcessExit(entry, code, signal, exitObservedAt);
+  }
+
+  private debugProcessExit(
+    entry: WorkerEntry,
+    code: number | null,
+    signal: string | null,
+    exitObservedAt: number,
+  ): void {
+    const pid = entry.diagnosticPid;
+    debugDiagnostic(this.deps.log, 'ghost node process lifecycle', {
+      ghostId: entry.ghost.manifest.id,
+      entry: entry.entryRel,
+      appRunId: entry.appRunId,
+      attemptId: entry.attemptId,
+      ...(pid !== undefined ? { pid } : {}),
+      stage: 'exit',
+      code,
+      signal,
+      // 基线在 signal/grace/status 完成后建立；elapsed 不包含诊断 logger 自身耗时。
+      ...(entry.stoppingStartedAt !== undefined
+        ? { stoppingElapsedMs: exitObservedAt - entry.stoppingStartedAt }
+        : {}),
+    });
   }
 
   /**
@@ -1715,6 +2269,13 @@ export class GhostNodeRuntimeBroker {
     return text;
   }
 
+  private redactStderrChunk(entry: WorkerEntry, chunk: string): string {
+    // 接收过凭据的 Worker 可能打印截断、分块或编码后的令牌，字符串匹配
+    // 无法保证安全。整个 stderr 不落日志/诊断缓存，仅保留输出发生的标记；
+    // 未注入凭据的 Worker 保留原始诊断，RPC 返回结果不受影响。
+    return chunk && entry.exposedSecretValues.size > 0 ? '[REDACTED]' : chunk;
+  }
+
   private scheduleIdleStop(entry: WorkerEntry): void {
     const key = GhostNodeRuntimeBroker.keyOf(entry.ghost.manifest.id, entry.entryRel);
     if (this.workers.get(key) !== entry) return;
@@ -1726,7 +2287,19 @@ export class GhostNodeRuntimeBroker {
       (entry.ghost.manifest.node?.idleTimeoutSeconds ?? DEFAULT_IDLE_TIMEOUT_MS / 1_000) * 1_000;
     // 空闲只收本入口的进程,不牵连同插件其它入口。
     entry.idleTimer = this.setTimer(() => {
-      if (this.workers.get(key) === entry) this.stopWorker(key, entry);
+      if (this.workers.get(key) === entry) {
+        const pid = entry.diagnosticPid;
+        // 先执行 HEAD 的 stopWorker；idle reason 日志不能推迟 SIGTERM/grace timer。
+        this.stopWorker(key, entry);
+        debugDiagnostic(this.deps.log, 'ghost node process lifecycle', {
+          ghostId: entry.ghost.manifest.id,
+          entry: entry.entryRel,
+          appRunId: entry.appRunId,
+          attemptId: entry.attemptId,
+          ...(pid !== undefined ? { pid } : {}),
+          stage: 'idle-stop',
+        });
+      }
     }, timeoutMs);
     entry.idleTimer.unref?.();
   }
@@ -1757,6 +2330,14 @@ export class GhostNodeRuntimeBroker {
 
   private now(): number {
     return this.deps.now?.() ?? Date.now();
+  }
+
+  private diagnosticNow(): number | undefined {
+    try {
+      return this.deps.diagnosticNow?.() ?? Date.now();
+    } catch {
+      return undefined;
+    }
   }
 
   private setTimer(callback: () => void, delayMs: number): NodeJS.Timeout {

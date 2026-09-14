@@ -2,7 +2,22 @@ import { Copy, ExternalLink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { toast } from '@/lib/toast';
+import { Button } from '@/components/ui/button';
 import type { ProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
+
+/** Manual recovery only; the native CLI remains the sole automatic browser opener. */
+export function OAuthBrowserLink({ url }: { url: string }) {
+  const { t } = useTranslation();
+  return (
+    <Button variant="secondary" size="md" onClick={() => {
+      void window.electronAPI.openExternal(url).then((result) => {
+        if (!result.success) toast.error(t('settings.providers.wizard.verificationPageOpenFailed'));
+      }).catch(() => toast.error(t('settings.providers.wizard.verificationPageOpenFailed')));
+    }}>
+      {t('settings.providers.genericOAuth.reopenLoginPage')}
+    </Button>
+  );
+}
 
 export function OAuthDeviceCodeCard({
   deviceCode,

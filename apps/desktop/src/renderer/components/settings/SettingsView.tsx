@@ -13,6 +13,7 @@ import { UserProfileCard } from './UserProfileCard';
 import { VoiceInputSection } from './VoiceInputSection';
 import { AppearanceSection } from './AppearanceSection';
 import { SubagentModelSection } from './SubagentModelSection';
+import { AuxiliaryModelSection } from './AuxiliaryModelSection';
 import { VisionBridgeSection } from './VisionBridgeSection';
 import { ProvidersSection } from './ProvidersSection';
 import { McpServersSection } from './McpServersSection';
@@ -26,6 +27,7 @@ import { LanguageSection } from './LanguageSection';
 import { LogoutSection } from './LogoutSection';
 import { ImBotSection, isImBotSettingsGroup, type ImBotSettingsGroup } from './ImBotSection';
 import { AboutSection } from './AboutSection';
+import { StorageManagementCard } from './StorageManagementCard';
 import { UserPromptSection } from './UserPromptSection';
 import { MemorySection } from './MemorySection';
 import { CompactionSection } from './CompactionSection';
@@ -44,11 +46,16 @@ import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
 import { ComputerUseSection } from './ComputerUseSection';
+import { CindyMakeSection } from './CindyMakeSection';
 import { useAuth } from '@/contexts/AuthContext';
 import { SettingsCatalogPanel } from './SettingsCatalogPanel';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { BillingSettingsSection } from '@/features/billing/BillingPage';
+import { BotsGlobalSettingsSection } from '@/features/bots/BotsGlobalSettingsSection';
 import { canAccessBillingSettings } from './billingVisibility';
+import { canAccessUsageSettings } from './usageVisibility';
+import { canAccessCindyMakeSettings } from './cindyMakeVisibility';
+import { UsageHistorySection } from './usage/UsageHistorySection';
 
 const DEFAULT_SETTINGS_MENU_WIDTH = 260;
 
@@ -76,6 +83,10 @@ export function SettingsView() {
     membershipKind: user?.membershipKind ?? null,
   });
   const shouldRedirectLegacyPluginTabs = rawTab === 'api-keys' || rawTab === 'connections';
+  // 用量历史对所有**已登录**身份开放 (local / cloud personal / cloud org),
+  // 与 billing 的 canAccessBillingSettings 无关 —— #2785 维护者裁决。
+  const canAccessUsage = canAccessUsageSettings({ mode });
+  const canAccessCindyMake = canAccessCindyMakeSettings(import.meta.env.DEV);
 
   const activeTab = useMemo<SettingsTab>(() => {
     const raw = rawTab;
@@ -86,9 +97,11 @@ export function SettingsView() {
     // legacy 别名:旧独立「Tina」(tina) 已并入「IM 机器人」(im-bot)。
     if (raw === 'tina') return 'im-bot';
     if (raw === 'billing' && !canAccessBilling) return 'general';
+    if (raw === 'usage' && !canAccessUsage) return 'general';
+    if (raw === 'cindy-make' && !canAccessCindyMake) return 'general';
     if (raw === 'agent-island' && !isMac) return 'general';
     return isSettingsTab(raw) ? raw : 'general';
-  }, [canAccessBilling, isMac, rawTab]);
+  }, [canAccessBilling, canAccessCindyMake, canAccessUsage, isMac, rawTab]);
   const piExtensionsPanelOpen =
     activeTab === 'general' &&
     (rawTab === 'pi-extensions' || searchParams.get('openPanel') === 'pi-extensions');
@@ -113,7 +126,6 @@ export function SettingsView() {
     activeTab === 'im-bot'
       ? (activeImBotGroup ?? (searchParams.get('tab') === 'feishu-bot' ? 'personal' : null))
       : null;
-
   // 切分区后外层滚动容器回顶:滚动偏移是容器的、不随内层 key 重挂归零,
   // 长页滚到底再切短页会停在中段(review 反馈)。瞬时回顶,不做平滑。
   const contentScrollRef = useRef<HTMLDivElement | null>(null);
@@ -174,9 +186,13 @@ export function SettingsView() {
   const visibleTabIds = useMemo(
     () =>
       TAB_IDS.filter(
-        (tabId) => (isMac || tabId !== 'agent-island') && (canAccessBilling || tabId !== 'billing'),
+        (tabId) =>
+          (isMac || tabId !== 'agent-island') &&
+          (canAccessBilling || tabId !== 'billing') &&
+          (canAccessUsage || tabId !== 'usage') &&
+          (canAccessCindyMake || tabId !== 'cindy-make'),
       ),
-    [canAccessBilling, isMac],
+    [canAccessBilling, canAccessCindyMake, canAccessUsage, isMac],
   );
 
   // deep-link: ?section=... → scroll to a section inside the active tab.
@@ -250,7 +266,10 @@ export function SettingsView() {
           ref={contentScrollRef}
           className={cn(
             'flex h-full min-h-0 min-w-0 flex-1 flex-col pl-4 pr-6 [scrollbar-gutter:stable]',
-            activeTab === 'import' || activeTab === 'ghosts'
+            // providers 与 import / ghosts 同属「内部自己滚」:模型列表要贴着窗口底,
+            // 外层再滚一层会让卡片高度只能靠猜(原先卡片写 calc(100vh-14rem),
+            // 扣除量与真实 chrome 不符时下方就空出一条 —— 正是 pb-32 那 128px)。
+            activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
               ? 'overflow-hidden'
               : 'overflow-y-auto',
           )}
@@ -261,7 +280,9 @@ export function SettingsView() {
             key={`${activeTab}:${piExtensionsPanelOpen ? 'pi-extensions' : 'root'}`}
             className={cn(
               'mx-auto w-full min-w-0 max-w-[920px] px-1 animate-fade-in',
-              activeTab === 'import' || activeTab === 'ghosts' ? 'h-full min-h-0' : 'pb-32',
+              activeTab === 'import' || activeTab === 'ghosts' || activeTab === 'providers'
+                ? 'h-full min-h-0'
+                : 'pb-32',
               activeTab === 'ghosts' && 'max-w-none px-0',
             )}
           >
@@ -332,6 +353,17 @@ export function SettingsView() {
                     >
                       <NotificationSection />
                     </section>
+
+                    {/* Section — 伙伴（功能级设置：怎么提醒你 + 带走/接回一个伙伴）。
+                        单个伙伴的性格、记忆、能力与日程仍在 TA 自己的设置页里。 */}
+                    <section
+                      id="settings-bots"
+                      className="py-[18px]"
+                      aria-label={t('settings.sections.bots')}
+                    >
+                      <BotsGlobalSettingsSection />
+                    </section>
+
 
                     {/* Section — App Behavior(「应用行为」)
                         「保持电脑唤醒」跨平台生效,故 section 常驻;其中
@@ -406,6 +438,14 @@ export function SettingsView() {
               </div>
             )}
 
+            {activeTab === 'usage' && (
+              <div role="tabpanel" id="settings-panel-usage" aria-labelledby="settings-tab-usage">
+                <section aria-label={t('settings.tabs.usage')}>
+                  <UsageHistorySection />
+                </section>
+              </div>
+            )}
+
             {activeTab === 'personalization' && (
               <div
                 role="tabpanel"
@@ -420,6 +460,11 @@ export function SettingsView() {
                 </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.subagentModels')}>
                   <SubagentModelSection key={`subagent-models:${mode}:${dataOwnerId ?? 'none'}`} />
+                </section>
+                <section className="pb-[18px]" aria-label={t('settings.sections.auxiliaryModels')}>
+                  <AuxiliaryModelSection
+                    key={`auxiliary-models:${mode}:${dataOwnerId ?? 'none'}`}
+                  />
                 </section>
                 <section className="pb-[18px]" aria-label={t('settings.sections.visionBridge')}>
                   <VisionBridgeSection key={`vision-bridge:${mode}:${dataOwnerId ?? 'none'}`} />
@@ -486,8 +531,12 @@ export function SettingsView() {
                 role="tabpanel"
                 id="settings-panel-providers"
                 aria-labelledby="settings-tab-providers"
+                className="h-full min-h-0"
               >
-                <section className="pb-[18px]" aria-label={t('settings.sections.providers')}>
+                <section
+                  className="flex h-full min-h-0 flex-col pb-[18px]"
+                  aria-label={t('settings.sections.providers')}
+                >
                   <ProvidersSection />
                 </section>
               </div>
@@ -578,6 +627,16 @@ export function SettingsView() {
               </div>
             )}
 
+            {canAccessCindyMake && activeTab === 'cindy-make' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-cindy-make"
+                aria-labelledby="settings-tab-cindy-make"
+              >
+                <CindyMakeSection key={`cindy-make:${mode}:${dataOwnerId ?? 'none'}`} />
+              </div>
+            )}
+
             {activeTab === 'help' && (
               <div role="tabpanel" id="settings-panel-help" aria-labelledby="settings-tab-help">
                 <section aria-label={t('settings.sections.help')}>
@@ -590,6 +649,18 @@ export function SettingsView() {
               <div role="tabpanel" id="settings-panel-about" aria-labelledby="settings-tab-about">
                 <section aria-label={t('settings.sections.about')}>
                   <AboutSection />
+                </section>
+              </div>
+            )}
+
+            {activeTab === 'storage' && (
+              <div
+                role="tabpanel"
+                id="settings-panel-storage"
+                aria-labelledby="settings-tab-storage"
+              >
+                <section aria-label={t('settings.about.storage.title')}>
+                  <StorageManagementCard />
                 </section>
               </div>
             )}

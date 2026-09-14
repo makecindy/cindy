@@ -42,15 +42,19 @@ export function useSessionHardwareTaskActions({
       return;
     }
     const newPinnedAt = pinnedAt ? null : new Date().toISOString();
-    patchLocal?.(sessionId, { pinnedAt: newPinnedAt });
+    const oldSummary = session?.summary ?? null;
+    patchLocal?.(
+      sessionId,
+      pinnedAt ? { pinnedAt: null, summary: null } : { pinnedAt: newPinnedAt },
+    );
     try {
       await sessionService.patchMeta(sessionId, { pinnedAt: newPinnedAt });
     } catch (err) {
       log.error('[session pin]', err);
       toast.error(t('ccAgent.sidebar.pinFailed'));
-      patchLocal?.(sessionId, { pinnedAt });
+      patchLocal?.(sessionId, pinnedAt ? { pinnedAt, summary: oldSummary } : { pinnedAt });
     }
-  }, [onRemoteWriteBlocked, patchLocal, pinnedAt, remoteWritesBlocked, sessionId, t]);
+  }, [onRemoteWriteBlocked, patchLocal, pinnedAt, remoteWritesBlocked, session, sessionId, t]);
 
   const archive = useCallback(async () => {
     if (!sessionId) return;
@@ -76,7 +80,9 @@ export function useSessionHardwareTaskActions({
         title: t('ccAgent.sidebar.confirmArchive.title'),
         description:
           t('ccAgent.sidebar.confirmArchive.description') +
-          (preflight === 'dirty' ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning') : ''),
+          (preflight === 'dirty'
+            ? ' ' + t('ccAgent.sidebar.confirmArchive.dirtyWorktreeWarning')
+            : ''),
         confirmText: t('ccAgent.sidebar.confirmArchive.confirm'),
         cancelText: t('ccAgent.sidebar.confirmArchive.cancel'),
       });

@@ -37,23 +37,6 @@ export interface PrefsAgentCaps {
   permissionModes: Array<{ id: string }>;
 }
 
-/**
- * 换 agent 的联动 patch(next=null 即「跟随默认」)。
- *
- * **权限档一律原样保留, 绝不因「新 agent 不支持」而清空**(2026-07 安全修正):
- * 清空 = 回到「无显式偏好」= 派发侧的 bypassPermissions 历史默认, 于是用户选了
- * acceptEdits 再切一下 agent 就被静默放宽成完全访问 —— 正是原注释声称要防的那件事。
- * 保留原值后, 显示与派发都由同一个 resolveEffectivePermissionMode 校准到新 agent 的
- * **最严**档; 切回原 agent 时用户的原始选择还在, 意图不丢。
- */
-export function patchForAgentChange(next: string | null): HookPrefsPatch {
-  if (next === null) {
-    // 跟随默认: agent/model/effort 整组清空(model/effort 与 agent 强绑定, 换组必失效)
-    return { agentKind: null, model: null, effort: null };
-  }
-  return { agentKind: next, model: null, effort: null };
-}
-
 /** 换 model 的联动 patch(agentKind 随手配对写入 + effort 校准)。 */
 export function patchForModelChange(
   agentKind: string,

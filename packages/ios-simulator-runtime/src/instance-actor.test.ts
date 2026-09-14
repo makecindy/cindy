@@ -6,6 +6,7 @@ import {
   IOSSimulatorCreateCleanupRequiredError,
   type IOSSimulatorSimctlLifecycle,
 } from "./simctl-lifecycle.js";
+import type { IOSSimulatorInstance } from "./instance-types.js";
 import type { IOSSimulatorDevice } from "./types.js";
 
 const UDID = "1A9D41E0-E031-4AD0-A8B5-847480802E8E";
@@ -27,6 +28,7 @@ function createHarness(
     booted?: boolean;
     cindy?: boolean;
     onDetachCleanupError?: (error: unknown) => void;
+    onStoreChange?: (instances: IOSSimulatorInstance[]) => void;
   } = {},
 ) {
   let now = 1_000;
@@ -35,10 +37,11 @@ function createHarness(
     clock: { now: () => now },
     createId: () => `id-${++id}`,
     leaseDurationMs: 1_000_000,
+    onChange: options.onStoreChange,
   });
   const scheduled: Array<() => void | Promise<void>> = [];
   const lifecycle: IOSSimulatorSimctlLifecycle = {
-    findExact: vi.fn(),
+    findExact: vi.fn(async () => DEVICE),
     bootExact: vi.fn(async () => ({ ...DEVICE, state: "Booted" })),
     shutdownExact: vi.fn(async () => undefined),
     createExact: vi.fn(),
@@ -939,6 +942,37 @@ describe("IOSSimulatorInstanceActor", () => {
       UDID,
       expect.any(AbortSignal),
     );
+  });
+
+  it("releases ownership on retry when the Cindy simulator was already physically deleted", async () => {
+    let failOwnershipWrite = false;
+    let physicalDeviceExists = true;
+    const harness = createHarness({
+      cindy: true,
+      onStoreChange: () => {
+        if (failOwnershipWrite) throw new Error("registry write failed");
+      },
+    });
+    vi.mocked(harness.lifecycle.findExact).mockImplementation(async () =>
+      physicalDeviceExists ? DEVICE : null,
+    );
+    vi.mocked(harness.lifecycle.deleteExact).mockImplementation(async () => {
+      physicalDeviceExists = false;
+    });
+
+    failOwnershipWrite = true;
+    await expect(harness.actor.delete(harness.route())).rejects.toThrow(
+      "registry write failed",
+    );
+    expect(harness.lifecycle.deleteExact).toHaveBeenCalledTimes(1);
+    expect(harness.store.get(harness.instance.instanceId)).not.toBeNull();
+
+    failOwnershipWrite = false;
+    await harness.actor.delete(harness.route());
+
+    expect(harness.lifecycle.findExact).toHaveBeenCalledTimes(2);
+    expect(harness.lifecycle.deleteExact).toHaveBeenCalledTimes(1);
+    expect(harness.store.get(harness.instance.instanceId)).toBeNull();
   });
 
   it("creates a Cindy-owned simulator from an exact installed template", async () => {

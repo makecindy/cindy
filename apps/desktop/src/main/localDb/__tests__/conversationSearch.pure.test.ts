@@ -272,6 +272,16 @@ describe('conversationSearch.pure', () => {
     });
   });
 
+  it('preview / snippet 窗口按码点截，不把 emoji 切成半个代理对', () => {
+    const emoji = `${'😀'.repeat(90)}登录`;
+    const preview = normalizeConversationContentPreview('user', emoji, '登录', 180);
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    expect(lone.test(preview.preview)).toBe(false);
+    expect(preview.snippet && lone.test(preview.snippet)).toBe(false);
+    expect(preview.snippet).toContain('登录');
+    expect(preview.keywordMatchedVisibleText).toBe(true);
+  });
+
   it('extracts visible AskUser and plan review text for conversation search', () => {
     expect(visibleMessageTextForConversationSearch('ask_user', {
       questions: [{ question: 'Which branch should I use?' }],

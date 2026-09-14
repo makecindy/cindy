@@ -57,9 +57,8 @@ vi.mock('@/lib/customProviders', () => ({
 }));
 
 import {
-  CustomProviderDialog,
-  PiModelProtocolDropdown,
-} from '@/components/settings/CustomProviderDialog';
+  ProviderConnectionDialog,
+} from '@/components/settings/ProviderConnectionDialog';
 import { createCustomProvider } from '@/lib/customProviders';
 
 const localizedPreset: ProviderPreset = {
@@ -125,7 +124,7 @@ const legacyMissingPiProtocolPreset: ProviderPreset = {
 function renderDialog(onClose = vi.fn()) {
   return {
     onClose,
-    ...render(<CustomProviderDialog onSaved={vi.fn()} onClose={onClose} existingIds={[]} />),
+    ...render(<ProviderConnectionDialog onSaved={vi.fn()} onClose={onClose} existingIds={[]} />),
   };
 }
 
@@ -190,7 +189,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('CustomProviderDialog preset locale ownership', () => {
+describe('ProviderConnectionDialog preset locale ownership', () => {
   it.each([
     ['zh-TW', '繁體供應商'],
     ['en', 'English Provider'],
@@ -329,6 +328,8 @@ describe('CustomProviderDialog preset locale ownership', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+
+
   it('keeps an existing model route through fetch picker confirmation and save', async () => {
     i18nState.language = 'zh-TW';
     renderDialog();
@@ -355,6 +356,8 @@ describe('CustomProviderDialog preset locale ownership', () => {
 
     await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
     expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex?.models[0]).toEqual({
+      discoveredMetadata: {},
+      nameExplicit: false,
       id: 'local-model',
       name: 'Local Model',
       route: {
@@ -369,8 +372,8 @@ describe('CustomProviderDialog preset locale ownership', () => {
     ['settings.providers.custom.wireProtocol.piChat', 'openai-chat'],
     ['settings.providers.custom.wireProtocol.piAnthropic', 'anthropic-messages'],
   ] as const)(
-    'saves an explicit %s PI default without deleting the model override',
-    async (buttonName, wireProtocol) => {
+    'hides %s for a bound PI preset and preserves its model override',
+    async (buttonName, _wireProtocol) => {
       i18nState.language = 'en';
       renderDialog();
 
@@ -379,17 +382,13 @@ describe('CustomProviderDialog preset locale ownership', () => {
       const piTab = screen.getByRole('tab', { name: 'settings.providers.custom.protocol.pi' });
       fireEvent.click(piTab);
       await waitFor(() => expect(piTab.getAttribute('aria-selected')).toBe('true'));
-      fireEvent.click(screen.getByRole('button', { name: buttonName }));
-      await screen.findByText(
-        wireProtocol === 'anthropic-messages'
-          ? 'settings.providers.custom.wireProtocol.piAnthropicHelp'
-          : 'settings.providers.custom.wireProtocol.piChatHelp',
-      );
+      expect(screen.queryByRole('button', { name: buttonName })).toBeNull();
       fireEvent.click(screen.getByRole('button', { name: 'settings.providers.custom.save' }));
 
       await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
       expect(vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi).toMatchObject({
-        wireProtocol,
+        catalogPresetId: piProtocolPreset.id,
+        wireProtocol: 'openai-responses',
         models: [
           {
             id: 'deepseek-v4-pro',
@@ -401,88 +400,9 @@ describe('CustomProviderDialog preset locale ownership', () => {
     },
   );
 
-  it('offers all per-model PI protocols and maps Chat to openai-completions', async () => {
-    const onChange = vi.fn();
-    const onOpenChange = vi.fn();
-    render(
-      <PiModelProtocolDropdown
-        modelName="DeepSeek V4 Pro"
-        value="openai-responses"
-        open
-        onOpenChange={onOpenChange}
-        onChange={onChange}
-      />,
-    );
 
-    for (const optionName of [
-      'settings.providers.custom.modelProtocol.inherit',
-      'settings.providers.custom.modelProtocol.messages',
-      'settings.providers.custom.modelProtocol.chat',
-      'settings.providers.custom.modelProtocol.responses',
-      'settings.providers.custom.modelProtocol.google',
-    ]) {
-      expect(await screen.findByRole('menuitemradio', { name: optionName })).not.toBeNull();
-    }
-    const menu = screen.getByRole('menu');
-    expect(menu.className).toContain('--radix-dropdown-menu-trigger-width');
-    expect(menu.className).not.toContain('--radix-popover-trigger-width');
-    fireEvent.click(
-      screen.getByRole('menuitemradio', {
-        name: 'settings.providers.custom.modelProtocol.chat',
-      }),
-    );
-    expect(onChange).toHaveBeenCalledWith('openai-completions');
-    await waitFor(() => expect(onOpenChange).toHaveBeenCalledWith(false));
-  });
 
-  it('supports arrow-key selection, Escape, and focus return for the PI model protocol menu', async () => {
-    function Harness() {
-      const [open, setOpen] = React.useState(false);
-      const [value, setValue] = React.useState<PiModelApi | undefined>();
-      return (
-        <>
-          <PiModelProtocolDropdown
-            modelName="DeepSeek V4 Pro"
-            value={value}
-            open={open}
-            onOpenChange={setOpen}
-            onChange={setValue}
-          />
-          <output>{value ?? 'inherit'}</output>
-        </>
-      );
-    }
 
-    render(<Harness />);
-    const trigger = screen.getByRole('button', {
-      name: 'settings.providers.custom.modelProtocol.ariaLabel',
-    });
-    trigger.focus();
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-
-    const inherit = await screen.findByRole('menuitemradio', {
-      name: 'settings.providers.custom.modelProtocol.inherit',
-    });
-    await waitFor(() => expect(document.activeElement).toBe(inherit));
-    fireEvent.keyDown(inherit, { key: 'ArrowDown' });
-    const messages = screen.getByRole('menuitemradio', {
-      name: 'settings.providers.custom.modelProtocol.messages',
-    });
-    await waitFor(() => expect(document.activeElement).toBe(messages));
-
-    fireEvent.keyDown(messages, { key: 'Escape' });
-    await waitFor(() => {
-      expect(screen.queryByRole('menuitemradio')).toBeNull();
-      expect(document.activeElement).toBe(trigger);
-    });
-
-    fireEvent.keyDown(trigger, { key: 'ArrowDown' });
-    const reopenedMessages = await screen.findByRole('menuitemradio', {
-      name: 'settings.providers.custom.modelProtocol.messages',
-    });
-    fireEvent.keyDown(reopenedMessages, { key: 'Enter' });
-    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('anthropic-messages'));
-  });
 
   it.each([
     ['isComposing', { isComposing: true }],

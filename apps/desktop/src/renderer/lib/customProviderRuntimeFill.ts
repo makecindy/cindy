@@ -82,8 +82,8 @@ function effectiveWire(agent: RuntimeFillAgent, value: ProviderWireProtocol | un
   return value ?? defaultWire(agent);
 }
 
-function protocolSupported(agent: RuntimeFillAgent, wire: ProviderWireProtocol) {
-  return agent !== 'claude-code' || wire === 'anthropic-messages';
+function protocolSupported(_agent: RuntimeFillAgent, _wire: ProviderWireProtocol) {
+  return true;
 }
 
 /** Pi's native provider config does not consume the shared route-only request path. */

@@ -292,8 +292,10 @@ test("client CI keeps the complete two-shard unit gate on Windows", () => {
 	assert.match(shards, /^      fail-fast: false$/m);
 	assert.match(shards, /^        shard: \[1, 2\]$/m);
 	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
-	assert.match(shards, /^        run: pnpm test:unit$/m);
-	assert.doesNotMatch(shards, /pnpm test:unit\s+--/);
+	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
+	assert.doesNotMatch(shards, /pnpm test:unit(?:\s|$)/);
+	assert.equal([...shards.matchAll(/^        run: pnpm test:runner$/gm)].length, 1);
+	assert.match(shards, /^      - name: Run Windows test runner self-tests\r?\n        if: matrix\.shard == 1\r?\n        run: pnpm test:runner$/m);
 
 	const gate = workflowJob(workflow, "windows-unit");
 	assert.ok(gate, "client CI must preserve the stable Windows unit check");
@@ -319,8 +321,10 @@ test("client CI runs Linux checks and complete unit shards in parallel behind st
 	assert.match(shards, /^      fail-fast: false$/m);
 	assert.match(shards, /^        shard: \[1, 2\]$/m);
 	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
-	assert.match(shards, /^        run: pnpm exec node scripts\/test-workspaces\.mjs --tier unit$/m);
+	assert.match(shards, /^        run: pnpm run test:workspaces --tier unit$/m);
 	assert.doesNotMatch(shards, /pnpm test:(?:unit|runner)/);
+	assert.equal([...shards.matchAll(/--tier integration --workspace @cindy\/maker-pi-manager/g)].length, 1);
+	assert.match(shards, /^      - name: Run Pi manager integration tests\r?\n        if: matrix\.shard == 1\r?\n        run: pnpm run test:workspaces --tier integration --workspace @cindy\/maker-pi-manager$/m);
 
 	const gate = workflowJob(workflow, "verify");
 	assert.ok(gate, "client CI must preserve the stable verify check");

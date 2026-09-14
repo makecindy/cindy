@@ -123,7 +123,7 @@ describe('buildMobileModelSections', () => {
     expect(rows.map((r) => r.model.id)).toEqual(['gpt-5.4']);
   });
 
-  it('activeSourceId:显式选中 ∈ connected 用它,否则 nativeDefaultSourceId(codex→openai)', () => {
+  it('activeSourceId:显式来源失效时不替换账号；未指定时选择原生默认', () => {
     const providers = [
       provider('xd', { codex: [model('gpt-5.5')] }),
       provider('openai', { codex: [model('gpt-5.5')] }),
@@ -132,10 +132,10 @@ describe('buildMobileModelSections', () => {
     expect(
       buildMobileModelSections({ providers, agentKind: 'codex', selectedProviderId: 'xd' }).activeSourceId,
     ).toBe('xd');
-    // 选了未连接/不存在的来源 → 回退 nativeDefault。
+    // 选了未连接/不存在的来源，不回退另一个账号。
     expect(
       buildMobileModelSections({ providers, agentKind: 'codex', selectedProviderId: 'ghost' }).activeSourceId,
-    ).toBe('openai');
+    ).toBeNull();
   });
 
   it('cc agent 的 nativeDefault 优先 xd', () => {
@@ -146,9 +146,9 @@ describe('buildMobileModelSections', () => {
     expect(buildMobileModelSections({ providers, agentKind: 'claude-code' }).activeSourceId).toBe('xd');
   });
 
-  it('activeSourceId 按当前模型收窄:显式来源不提供该模型 → 回落真正提供它的来源', () => {
+  it('activeSourceId:显式来源不提供该模型时不改用另一账号', () => {
     // 会话粘着 providerId=anthropic(仍连接),但当前模型只有 xd 提供
-    // —— 修复前会显示 anthropic 图标(与实际路由分叉),修复后收窄到 xd。
+    // 不能将显式账号改为 xd。
     const providers = [
       provider('anthropic', { agents: ['claude-code'], cc: [model('claude-opus-4-8')] }),
       provider('xd', { agents: ['claude-code'], cc: [model('claude-opus-4-8'), model('claude-fable-5')] }),
@@ -160,7 +160,7 @@ describe('buildMobileModelSections', () => {
         selectedModelId: 'claude-fable-5',
         selectedProviderId: 'anthropic',
       }).activeSourceId,
-    ).toBe('xd');
+    ).toBeNull();
     // 显式来源确实提供该模型 → 尊重显式选择。
     expect(
       buildMobileModelSections({
@@ -187,9 +187,8 @@ describe('buildMobileModelSections', () => {
     ).toBeNull();
   });
 
-  it('activeSourceId 收窄后,选中行的可见性豁免跟着落在真正打 ✓ 的 (来源, 模型) 行上', () => {
-    // claude-fable-5 在 xd 下被用户隐藏;显式来源 anthropic 不提供它 → 生效来源收窄到 xd,
-    // 豁免必须保住 xd 行(否则勾选行从列表消失,出现空选态)。
+  it('失效的显式来源不会给另一个账号的同名模型可见性豁免', () => {
+    // anthropic 不提供这个模型，不能把 xd 的隐藏模型当作当前选择。
     const providers = [
       provider('anthropic', { agents: ['claude-code'], cc: [model('claude-opus-4-8')] }),
       provider('xd', { agents: ['claude-code'], cc: [model('claude-fable-5')] }),
@@ -202,7 +201,7 @@ describe('buildMobileModelSections', () => {
       visibilityOverrides: { 'claude-code:xd:claude-fable-5': false },
     });
     const rows = flattenProviderSections(sections);
-    expect(rows.map((r) => `${r.provider.id}:${r.model.id}`)).toContain('xd:claude-fable-5');
+    expect(rows.map((r) => `${r.provider.id}:${r.model.id}`)).not.toContain('xd:claude-fable-5');
   });
 });
 

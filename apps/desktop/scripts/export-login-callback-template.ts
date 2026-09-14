@@ -9,7 +9,8 @@
  * 产物特性:
  *  - 每份 HTML 自带 light / dark(不写 data-theme,页面用 prefers-color-scheme
  *    跟随系统),服务端不需要也不应该分主题挑文件;
- *  - 成功页完全静态;失败页留 `{{ERROR_DETAIL}}` 一个占位符给错误码;
+ *  - 成功页带 3 秒倒计时并在倒计时结束时自动关闭;失败页留 `{{ERROR_DETAIL}}`
+ *    一个占位符给错误码;
  *  - chibi 立绘等资源已是构建期 data URI,HTML 自包含,无外链依赖。
  *
  * 用法:
@@ -41,7 +42,7 @@ import {
  */
 const ERROR_DETAIL_PLACEHOLDER = '{{ERROR_DETAIL}}';
 
-/** 回到客户端的 CTA。与生产 buildFocusDeepLink('desktop-login') 同形。 */
+/** 失败页回到客户端的 CTA。与生产 buildFocusDeepLink('desktop-login') 同形。 */
 const FOCUS_DEEP_LINK = `${DEEP_LINK_URL_PREFIX}focus/desktop-login`;
 
 const DEFAULT_OUT_DIR = path.join(
@@ -77,8 +78,9 @@ function renderPage(
     variant,
     title: isError ? copy.errorTitle : copy.successTitle,
     body: isError ? copy.errorBody : copy.successBody,
+    closeCountdown: isError ? undefined : copy.closeCountdown,
     detail: isError ? ERROR_DETAIL_PLACEHOLDER : undefined,
-    action: { href: FOCUS_DEEP_LINK, label: copy.returnButton },
+    action: isError ? { href: FOCUS_DEEP_LINK, label: copy.returnButton } : undefined,
   });
 }
 
@@ -129,7 +131,7 @@ function main(): void {
       // 回调阶段已被消费,托管回调这一步拿不到 authorize 时传的 ui_locale。
       '语言按浏览器 Accept-Language 选择(托管回调阶段已取不到 ui_locale);缺省回落 en。',
       '模板随客户端文案变更需重新导出,不要在服务端侧手改 HTML。',
-      'pages[].scriptHashes 直接拼进结果页的 CSP script-src;该内联脚本是布局必需的(整卡等比缩放+水平居中),不要改成 unsafe-inline,也不要自行解析 HTML 重算。',
+      'pages[].scriptHashes 直接拼进结果页的 CSP script-src;该内联脚本负责布局、成功页 3 秒倒计时与自动关闭,不要改成 unsafe-inline,也不要自行解析 HTML 重算。',
     ],
     pages,
   };

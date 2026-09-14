@@ -6,7 +6,11 @@
  * handler 时拉起 Electron / runtime config 副作用。
  */
 
+import type { XaiSubscriptionUsageSnapshot } from '../../shared/xaiSubscriptionUsage.js';
 import { scryptSync } from 'node:crypto';
+import { readSubscriptionAccountUsage, triggerSubscriptionAccountUsage, syncSubscriptionAccountUsage, setSubscriptionAccountUsageBroadcaster } from '../usage/subscriptionAccountUsage.js';
+import { broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot } from '../usageBroadcaster.js';
+import { subscriptionAccountKind } from '../maker-host/subscription-account-auth.js';
 import path from 'node:path';
 
 import type { Maker } from '@cindy/maker-core';
@@ -49,6 +53,8 @@ import {
   recordCodexAccountUsageSnapshot,
   recordXaiSubscriptionUsageSnapshot,
 } from '../usageBroadcaster.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
+import { isOpenAiSubscriptionProviderId } from '../maker-host/codex-account-auth.js';
 import { desktopCodexAuthAdapter } from '../maker-host/auth-adapters.js';
 import { readClaudeAiOAuth } from '../maker-host/claude-credentials-store.js';
 import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
@@ -159,7 +165,8 @@ const claudeSubscriptionUsageReader = createClaudeSubscriptionUsageReader({
  * Claude turn done 后的订阅余量刷新钩子 (register.ts 消费) —— fire-and-forget,
  * 节流 / 429 退避在 reader 内部。未连订阅时 no-op。
  */
-export function triggerClaudeSubscriptionUsageRefresh(): void {
+export function triggerClaudeSubscriptionUsageRefresh(providerId?: string): void {
+  if (providerId && providerId !== 'anthropic') { triggerSubscriptionAccountUsage(providerId); return; }
   claudeSubscriptionUsageReader.triggerRefresh();
 }
 
@@ -171,7 +178,8 @@ export function triggerClaudeSubscriptionUsageRefresh(): void {
  *   - 登录 → 刷新指纹缓存 + 触发端点刷新。
  * renderer 不需要感知 auth 事件, 全靠既有 usage:claude-subscription-changed push。
  */
-export function syncClaudeSubscriptionUsageForAuthChange(): void {
+export function syncClaudeSubscriptionUsageForAuthChange(providerId?: string): void {
+  if (providerId && providerId !== 'anthropic') { void syncSubscriptionAccountUsage(providerId); return; }
   void claudeSubscriptionUsageReader.syncForCredentialChange().catch(() => {
     /* reader 内部已把错误交给 onRefreshError, 这里只兜底 promise 拒绝。 */
   });
@@ -209,24 +217,59 @@ const xaiSubscriptionUsageReader = createXaiSubscriptionUsageReader({
 });
 
 /** SuperGrok 周用量:turn-done 钩子,节流 / 退避 / 未登录 no-op 都在 reader 内。 */
-export function triggerXaiSubscriptionUsageRefresh(): void {
+export function triggerXaiSubscriptionUsageRefresh(providerId?: string): void {
+  if (providerId && providerId !== 'xai') { triggerSubscriptionAccountUsage(providerId); return; }
   xaiSubscriptionUsageReader.triggerRefresh();
 }
 
+/**
+ * device-link dispatch 专用的 xAI 订阅余量读取出口。ipcMain 面的
+ * USAGE_XAI_SUBSCRIPTION 挂了 assertTrustedSender(合成 event 必然不可信,那道闸
+ * 不为远程放宽)—— 与 device-link:telegram:* 同先例,被控端 dispatch 过三道 gate
+ * (被控开关 + 撤销黑名单 + allowlist)后直读本函数,不进 ipcMain。cached-first,
+ * 与本机 renderer 读到的快照同形。
+ */
+export async function readXaiSubscriptionUsageSnapshotForDeviceLink(providerId?: string): Promise<XaiSubscriptionUsageSnapshot | null> {
+  if (!providerId || providerId === 'xai') return xaiSubscriptionUsageReader.read();
+  if (subscriptionAccountKind(providerId) !== 'xai') return null;
+  return await readSubscriptionAccountUsage(providerId) as XaiSubscriptionUsageSnapshot | null;
+}
+
+export async function readClaudeSubscriptionUsageSnapshotForDeviceLink(providerId?: string): Promise<import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null> {
+  if (!providerId || providerId === 'anthropic') return claudeSubscriptionUsageReader.read();
+  if (subscriptionAccountKind(providerId) !== 'claude') return null;
+  return await readSubscriptionAccountUsage(providerId) as import('../../shared/claudeSubscriptionUsage.js').ClaudeSubscriptionUsageSnapshot | null;
+}
+
 /** SuperGrok 登录 / 登出 / 换号后强制同步(先清再拉)。调用方应 await 后再广播连接态。 */
-export function syncXaiSubscriptionUsageForAuthChange(): Promise<void> {
+export function syncXaiSubscriptionUsageForAuthChange(providerId?: string): Promise<void> {
+  if (providerId && providerId !== 'xai') return syncSubscriptionAccountUsage(providerId);
   return xaiSubscriptionUsageReader.syncForCredentialChange().catch(() => {
     /* reader 内部已把错误交给 onRefreshError */
   });
 }
 
-const readCodexAccountUsageSnapshotWithWebRefresh = createCodexAccountUsageSnapshotReader({
-  readAccessToken: () => desktopCodexAuthAdapter.getAccessToken(),
-  readAccountId: () => desktopCodexAuthAdapter.getAccountId(),
+function normalizeCodexUsageProvider(providerId?: string): string | undefined {
+  if (providerId === undefined || providerId === 'openai') return undefined;
+  if (!isOpenAiSubscriptionProviderId(providerId)) throw new Error('Unknown OpenAI account provider');
+  return providerId;
+}
+let codexReadersOwner = '';
+const codexUsageReaders = new Map<string, ReturnType<typeof createCodexAccountUsageSnapshotReader>>();
+function readCodexAccountUsageSnapshotWithWebRefresh(requestedProviderId?: string) {
+  const providerId = normalizeCodexUsageProvider(requestedProviderId);
+  const scope = activeOwnerScopeKey();
+  if (scope !== codexReadersOwner) { codexUsageReaders.clear(); codexReadersOwner = scope; }
+  const key = providerId ?? 'openai';
+  const existing = codexUsageReaders.get(key);
+  if (existing) return existing();
+const reader = createCodexAccountUsageSnapshotReader({
+  readAccessToken: () => scope === activeOwnerScopeKey() ? desktopCodexAuthAdapter.getAccessToken(providerId) : Promise.reject(new Error('Account scope changed')),
+  readAccountId: () => desktopCodexAuthAdapter.getAccountId(providerId),
   fetchWebUsageSnapshot: fetchCodexWebUsageSnapshot,
-  recordSnapshot: recordCodexAccountUsageSnapshot,
-  clearSnapshot: clearCodexAccountUsageSnapshot,
-  readCachedSnapshot: readCodexAccountUsageSnapshot,
+  recordSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
+  clearSnapshot: () => scope === activeOwnerScopeKey() ? clearCodexAccountUsageSnapshot(providerId) : Promise.resolve(),
+  readCachedSnapshot: () => scope === activeOwnerScopeKey() ? readCodexAccountUsageSnapshot(providerId) : Promise.resolve(null),
   now: () => Date.now(),
   isUnauthorizedError: (err) => err instanceof CodexWebUsageUnauthorizedError,
   onRefreshError: (err) => {
@@ -234,14 +277,18 @@ const readCodexAccountUsageSnapshotWithWebRefresh = createCodexAccountUsageSnaps
   },
 });
 
+  codexUsageReaders.set(key, reader);
+  return reader();
+}
+
 /**
  * 触发 ChatGPT 订阅额度(wham/usage)后台刷新 —— 复用带 web-refresh 的 reader:拉到新快照即
  * recordSnapshot → 广播 usage:codex-account-changed(reader 内部 10s 节流 + in-flight 去重)。
  * 供 claude-code 框架下 `chatgpt/` bridge 轮结束后调用,让底部 chip 的 ChatGPT 额度实时更新
  * (bridge 轮不产生 codex account_usage 事件,需主动触发)。fire-and-forget。
  */
-export function triggerCodexAccountUsageRefresh(): void {
-  void readCodexAccountUsageSnapshotWithWebRefresh().catch(() => {
+export function triggerCodexAccountUsageRefresh(providerId?: string): void {
+  void readCodexAccountUsageSnapshotWithWebRefresh(providerId).catch(() => {
     /* best-effort: 失败保留上一次快照, 不影响 turn 收尾 */
   });
 }
@@ -249,31 +296,64 @@ export function triggerCodexAccountUsageRefresh(): void {
 export function registerMakerUsageIpc(maker: Maker): void {
   log.info('registering maker:usage:* IPC handlers');
 
-  const codexRateLimitResetService = createCodexRateLimitResetService({
-    readRateLimits: () => maker.readAgentAccountRateLimits('codex'),
-    consumeResetCredit: (params) => maker.consumeAgentAccountRateLimitResetCredit('codex', params),
+  const resetServices = new Map<string, ReturnType<typeof createCodexRateLimitResetService>>();
+  let resetServicesOwner = '';
+  function getResetService(providerId?: string) {
+    providerId = normalizeCodexUsageProvider(providerId);
+    const scope = activeOwnerScopeKey();
+    if (scope !== resetServicesOwner) { resetServices.clear(); resetServicesOwner = scope; }
+    const key = providerId ?? 'openai';
+    const existing = resetServices.get(key);
+    if (existing) return existing;
+    const assertScope = () => {
+      if (isAppSessionBoundaryPending() || scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+    };
+  const service = createCodexRateLimitResetService({
+    readRateLimits: async () => { assertScope(); const result = await maker.readAgentAccountRateLimits('codex', providerId); assertScope(); return result; },
+    consumeResetCredit: async (params) => { assertScope(); const result = await maker.consumeAgentAccountRateLimitResetCredit('codex', params, providerId); assertScope(); return result; },
     readAccountIdentity: async () => {
-      const state = await maker.getAgentAuthState('codex');
+      assertScope();
+      const state = await desktopCodexAuthAdapter.getState({ providerId });
+      assertScope();
       const accountId =
-        state.authSource === 'oauth' ? await desktopCodexAuthAdapter.getAccountId() : null;
+        state.authSource === 'oauth' ? await desktopCodexAuthAdapter.getAccountId(providerId) : null;
       const identity =
         state.authSource === 'oauth' && state.identity?.includes('@') ? state.identity : null;
+      assertScope();
       return { email: identity, accountId };
     },
-    recordRateLimitSnapshot: recordCodexAccountUsageSnapshot,
+    recordRateLimitSnapshot: (snapshot) => scope === activeOwnerScopeKey() ? recordCodexAccountUsageSnapshot(snapshot, providerId) : Promise.resolve(),
   });
 
+    resetServices.set(key, service);
+    return service;
+  }
+
+  setSubscriptionAccountUsageBroadcaster(broadcastSubscriptionAccountUsage, clearXaiRateLimitSnapshot);
   registerMakerUsageHandlers(createElectronIpcHandlerRegistry(), {
     readAgentTodayUsage,
     readCodexAccountUsageSnapshot: readCodexAccountUsageSnapshotWithWebRefresh,
     // Bind recovery confirmation to the exact owner, marker and OAuth credential observed before
     // this account-level RPC. A stale response still returns its usage payload but cannot consume a
     // newer recovery state.
-    readCodexRateLimits: () =>
-      desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => codexRateLimitResetService.read()),
-    consumeCodexRateLimitReset: codexRateLimitResetService.consume,
-    readClaudeSubscriptionUsageSnapshot: () => claudeSubscriptionUsageReader.read(),
-    readXaiSubscriptionUsageSnapshot: () => xaiSubscriptionUsageReader.read(),
+    readCodexRateLimits: async (providerId) => {
+      const scope = activeOwnerScopeKey();
+      const service = getResetService(providerId);
+      const result = providerId && providerId !== 'openai'
+        ? await service.read()
+        : await desktopCodexAuthAdapter.verifyRecoveryWithAccountRpc(() => service.read());
+      if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+      return { ...result, providerId: providerId ?? 'openai' };
+    },
+    consumeCodexRateLimitReset: async (key, providerId) => {
+      const scope = activeOwnerScopeKey();
+      const result = await getResetService(providerId).consume(key);
+      if (scope !== activeOwnerScopeKey()) throw new Error('PRECONDITION_FAILED: Account scope changed');
+      return { ...result, providerId: providerId ?? 'openai',
+        rateLimits: result.rateLimits ? { ...result.rateLimits, providerId: providerId ?? 'openai' } : null };
+    },
+    readClaudeSubscriptionUsageSnapshot: readClaudeSubscriptionUsageSnapshotForDeviceLink,
+    readXaiSubscriptionUsageSnapshot: readXaiSubscriptionUsageSnapshotForDeviceLink,
     assertTrustedSender: (event) => {
       assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
     },
@@ -296,6 +376,9 @@ export function registerMakerUsageIpc(maker: Maker): void {
   // (冷启动首响应早于任何 read)时保守落一笔无指纹快照, 由随后端点刷新补齐归属。
   setClaudeRateLimitHeadersListener((snapshot, requestBearerToken) => {
     let currentToken = _currentClaudeToken;
+    // Cold responses must prove builtin ownership too; an independent account
+    // must never populate the builtin account's cache before its first read.
+    if (!_claudeCredentialsKnown) currentToken = readClaudeCredentialsInfo()?.accessToken ?? null;
     if (currentToken) {
       if (requestBearerToken !== currentToken) {
         currentToken = readClaudeCredentialsInfo()?.accessToken ?? null;
@@ -310,9 +393,7 @@ export function registerMakerUsageIpc(maker: Maker): void {
     // token 缓存为 null 且已读过凭证库 = 明确登出 —— 登出后的 in-flight 尾巴响应
     // 丢弃(auth 钩子已清快照, 落库会残留旧账号数据)。只有冷启动(从未读过凭证,
     // 首响应早于任何 read)才保守落一笔无指纹快照, 由随后端点刷新补齐归属。
-    if (_claudeCredentialsKnown) return false;
-    void recordClaudeSubscriptionUsageSnapshot(snapshot);
-    return true;
+    return false;
   });
 
   log.info('maker usage IPC handlers registered');

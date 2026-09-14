@@ -56,6 +56,8 @@ export interface ProcessMonitorSamplerDeps {
   log: SamplerLogger;
   /** OS 扫描的最小间隔;快 tick 之间复用缓存。 */
   osScanIntervalMs?: number;
+  /** Windows 激活采样的首帧先返回 Chromium 指标，OS 扫描由下一 tick 合并。 */
+  deferOsScan?: boolean;
   /** 注入时钟(测试用;生产缺省 Date.now)。 */
   now?: () => number;
 }
@@ -137,8 +139,12 @@ export function createProcessMonitorSampler(
           // 扫描失败降级为「本轮无 agent 条目」,Chromium 部分照常。缓存时间戳
           // 也推进,避免每个快 tick 都重试昂贵的失败扫描。
           onSnapshotRefreshed({ rows: [], childrenByParent: new Map() }, now());
+          const errno = err as NodeJS.ErrnoException;
           deps.log.warn('process monitor os scan failed', {
+            childProcessSource: 'process-monitor.os-process-scan',
             error: err instanceof Error ? err.message : String(err),
+            ...(typeof errno?.code === 'string' ? { code: errno.code } : {}),
+            ...(typeof errno?.syscall === 'string' ? { syscall: errno.syscall } : {}),
           });
         })
         .finally(() => {
@@ -240,7 +246,9 @@ export function createProcessMonitorSampler(
 
   return {
     async sample(): Promise<ProcessMonitorSample> {
-      await refreshSnapshotIfStale();
+      const refresh = refreshSnapshotIfStale();
+      if (deps.deferOsScan) void refresh;
+      else await refresh;
       const atMs = now();
       const agentEntries = collectAgentEntries();
       const agentPids = new Set<number>();

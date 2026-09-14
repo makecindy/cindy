@@ -37,5 +37,6 @@ describe('utility window appearance bootstrap registration', () => {
     expect(source).toContain('isAppearanceUtilityView');
     expect(source).toContain('appearanceSettings?.onChanged?.(applyFontSettings)');
     expect(source).toContain('import.meta.hot?.dispose(disposeUtilityAppearanceSettingsSync)');
+    expect(source.match(/<ThemeProvider syncWindowVibrancy=\{false\}>/g)).toHaveLength(4);
   });
 });

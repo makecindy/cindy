@@ -15,6 +15,16 @@ const base = {
 };
 
 describe('resolveConnectionBannerVisibility', () => {
+  it('normal connecting stays quiet, but real failures still surface during connecting', () => {
+    const connecting = { ...base, offline: true, connecting: true, offlineLongEnough: true };
+    expect(resolveConnectionBannerVisibility(connecting)).toBe(false);
+    expect(resolveConnectionBannerVisibility({ ...connecting, hasError: true })).toBe(true);
+    expect(resolveConnectionBannerVisibility({ ...connecting, hasIssue: true })).toBe(true);
+    expect(resolveConnectionBannerVisibility({ ...connecting, deviceUnresponsive: true })).toBe(true);
+    expect(resolveConnectionBannerVisibility({ ...connecting, hasUnstableIssue: true })).toBe(true);
+    expect(resolveConnectionBannerVisibility({ ...connecting, connecting: false })).toBe(true);
+    expect(resolveConnectionBannerVisibility(base)).toBe(false);
+  });
   it('连接正常且无错误时不显示(不渲染常驻状态条)', () => {
     expect(resolveConnectionBannerVisibility(base)).toBe(false);
   });

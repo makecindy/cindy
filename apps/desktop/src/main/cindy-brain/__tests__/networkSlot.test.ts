@@ -23,7 +23,6 @@ function fakeGhost(
   overrides: {
     id?: string;
     enabled?: boolean;
-    slots?: string[];
     trust?: InstalledGhost['trust'];
     /** null = 有槽无详单(老包语义);undefined = 默认 brave+tavily 双域名。 */
     network?: GhostNetworkNeeds | null;
@@ -52,7 +51,6 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['tool', 'network'],
       tools: [{ name: 'search_web', description: '搜索' }],
       ...(overrides.network === null ? {} : { network: overrides.network ?? defaultNetwork }),
     },
@@ -98,10 +96,15 @@ function toArrayBuffer(bytes: Uint8Array): ArrayBuffer {
 function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
   slot: GhostNetworkSlot;
   fetchImpl: ReturnType<typeof vi.fn>;
+  fetchPublicImpl: ReturnType<typeof vi.fn>;
   readSecret: ReturnType<typeof vi.fn>;
   saveGhostMedia: ReturnType<typeof vi.fn>;
 } {
   const fetchImpl = vi.fn(async () => fakeResponse());
+  const fetchPublicImpl = vi.fn(async () => ({
+    response: fakeResponse(),
+    release: async () => undefined,
+  }));
   const readSecret = vi.fn((_ghostId: string, key: string) =>
     key === 'brave_api_key' ? 'BSA-secret' : key === 'tavily_api_key' ? 'tvly-secret' : null,
   );
@@ -118,6 +121,7 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
     readSecret,
     getLoginEmail: () => 'dev@example.com',
     fetchImpl: fetchImpl as unknown as NetworkSlotDeps['fetchImpl'],
+    fetchPublicImpl: fetchPublicImpl as unknown as NetworkSlotDeps['fetchPublicImpl'],
     saveGhostMedia: saveGhostMedia as unknown as NetworkSlotDeps['saveGhostMedia'],
     isSupportedMediaMime,
     // 缺省"查无此媒体":上传套件按需覆盖。
@@ -128,7 +132,7 @@ function makeSlot(overrides: Partial<NetworkSlotDeps> = {}): {
     writeSaveDeposit: async () => null,
     ...overrides,
   };
-  return { slot: new GhostNetworkSlot(deps), fetchImpl, readSecret, saveGhostMedia };
+  return { slot: new GhostNetworkSlot(deps), fetchImpl, fetchPublicImpl, readSecret, saveGhostMedia };
 }
 
 const BRAVE_URL = 'https://api.search.brave.com/res/v1/web/search?q=hi';
@@ -182,23 +186,151 @@ describe('networkSlot · 载荷与 URL 校验', () => {
   });
 });
 
-describe('networkSlot · 资格审(槽 + 详单双闸)', () => {
-  it('意识不存在/停用/未声明 network 槽/有槽无详单一律拒', async () => {
+describe('networkSlot · 能力资格审', () => {
+  it('意识不存在/停用/未声明 network.hosts 一律拒', async () => {
     const gone = makeSlot({ getGhost: () => null });
     expect((await gone.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).ok).toBe(false);
 
     const disabled = makeSlot({ getGhost: () => fakeGhost({ enabled: false }) });
     expect((await disabled.slot.handleFetchRequest('web-search', { url: BRAVE_URL })).ok).toBe(false);
 
-    const noSlot = makeSlot({ getGhost: () => fakeGhost({ slots: ['tool'], network: null }) });
+    const noSlot = makeSlot({ getGhost: () => fakeGhost({ network: null }) });
     const r1 = await noSlot.slot.handleFetchRequest('web-search', { url: BRAVE_URL });
     expect(r1.ok).toBe(false);
-    if (!r1.ok) expect(r1.message).toContain('network 卡槽');
+    if (!r1.ok) expect(r1.message).toContain('network.hosts');
 
     const noNeeds = makeSlot({ getGhost: () => fakeGhost({ network: null }) });
     const r2 = await noNeeds.slot.handleFetchRequest('web-search', { url: BRAVE_URL });
     expect(r2.ok).toBe(false);
     if (!r2.ok) expect(r2.message).toContain('network.hosts');
+  });
+
+  it('Agent 在途调用可访问未预声明域名，同一 callId 不属于本插件则拒绝', async () => {
+    const allowed = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: (callId) =>
+        callId === 'call-agent'
+          ? { ghostId: 'web-search', sessionId: 'session-1', remoteHostId: null, channel: 'session' }
+          : null,
+    });
+    expect(
+      await allowed.slot.handleFetchRequest('web-search', {
+        url: 'https://example.com/data',
+        callId: 'call-agent',
+      }),
+    ).toMatchObject({ ok: true });
+    expect(allowed.fetchPublicImpl).toHaveBeenCalledTimes(1);
+    expect(allowed.fetchImpl).not.toHaveBeenCalled();
+
+    const wrongOwner = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () => ({ ghostId: 'another-plugin', sessionId: 'session-1', remoteHostId: null, channel: 'session' }),
+    });
+    expect(
+      await wrongOwner.slot.handleFetchRequest('web-search', {
+        url: 'https://example.com/data',
+        callId: 'call-agent',
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('脚本/后台通道不能冒充 Agent 授权访问未声明域名', async () => {
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () => ({ ghostId: 'web-search', sessionId: null, remoteHostId: undefined, channel: 'script' }),
+    });
+    expect(
+      await slot.handleFetchRequest('web-search', {
+        url: 'https://example.com/data',
+        callId: 'call-script',
+      }),
+    ).toMatchObject({ ok: false });
+  });
+
+  it('SSH remote Agent 不能借本机 Desktop 出口访问未声明域名', async () => {
+    const { slot, fetchImpl, fetchPublicImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () => ({
+        ghostId: 'web-search',
+        sessionId: 'session-remote',
+        remoteHostId: 'ssh-host-1',
+        channel: 'session',
+      }),
+    });
+
+    expect(
+      await slot.handleFetchRequest('web-search', {
+        url: 'https://example.com/data',
+        callId: 'call-agent',
+      }),
+    ).toMatchObject({ ok: false });
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(fetchPublicImpl).not.toHaveBeenCalled();
+  });
+
+  it('Agent 未声明目标的 SSRF 守门失败时不回退普通 fetch', async () => {
+    const guardedError = new Error('Blocked: resolves to private/internal/special-use IP address');
+    const guardedFetch = vi.fn(async () => { throw guardedError; });
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () => ({ ghostId: 'web-search', sessionId: 'session-1', remoteHostId: null, channel: 'session' }),
+      fetchPublicImpl: guardedFetch,
+    });
+
+    const result = await slot.handleFetchRequest('web-search', {
+      url: 'https://localhost/private',
+      callId: 'call-agent',
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    expect(guardedFetch).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('Agent 在 DNS 等待期间交卷时，dispatch 前最后一次复核会阻断请求', async () => {
+    let live = true;
+    const guardedFetch: NetworkSlotDeps['fetchPublicImpl'] = vi.fn(
+      async (_url, _init, beforeDispatch) => {
+        // 模拟代理选择 / DNS 守门 await 期间外层 ghost_call 已经交卷。
+        live = false;
+        await beforeDispatch();
+        throw new Error('unreachable');
+      },
+    );
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () =>
+        live
+          ? { ghostId: 'web-search', sessionId: 'session-1', remoteHostId: null, channel: 'session' }
+          : null,
+      fetchPublicImpl: guardedFetch,
+    });
+
+    const result = await slot.handleFetchRequest('web-search', {
+      url: 'https://example.com/data',
+      callId: 'call-agent',
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.message).toContain('Agent 调用已结束');
+    expect(guardedFetch).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('Agent 访问已声明目标仍使用声明边界，不额外阻断私有服务', async () => {
+    const { slot, fetchImpl, fetchPublicImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network: { hosts: ['127.0.0.1'], secrets: [] } }),
+      inFlightCallInfo: () => ({ ghostId: 'web-search', sessionId: 'session-1', remoteHostId: null, channel: 'session' }),
+    });
+
+    const result = await slot.handleFetchRequest('web-search', {
+      url: 'https://127.0.0.1/private',
+      callId: 'call-agent',
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(fetchPublicImpl).not.toHaveBeenCalled();
   });
 });
 
@@ -334,6 +466,72 @@ describe('networkSlot · 重定向逐跳守门', () => {
     const r = await slot.handleFetchRequest('web-search', { url: BRAVE_URL });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.message).toContain('次数过多');
+  });
+
+  it('Agent 未声明目标的每一跳都重新经过 SSRF 守门', async () => {
+    const release = vi.fn(async () => undefined);
+    const guardedFetch = vi.fn()
+      .mockResolvedValueOnce({
+        response: redirectTo('https://cdn.example.com/next'),
+        release,
+      })
+      .mockResolvedValueOnce({ response: fakeResponse(), release });
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo: () => ({ ghostId: 'web-search', sessionId: 'session-1', remoteHostId: null, channel: 'session' }),
+      fetchPublicImpl: guardedFetch,
+    });
+
+    const result = await slot.handleFetchRequest('web-search', {
+      url: 'https://example.com/start',
+      callId: 'call-agent',
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(guardedFetch.mock.calls.map(([target]) => target)).toEqual([
+      'https://example.com/start',
+      'https://cdn.example.com/next',
+    ]);
+    expect(release).toHaveBeenCalledTimes(2);
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('Agent 交卷后不再跟进未声明目标的后续重定向', async () => {
+    const liveCall = {
+      ghostId: 'web-search',
+      sessionId: 'session-1',
+      remoteHostId: null,
+      channel: 'session' as const,
+    };
+    const inFlightCallInfo = vi.fn()
+      // 入口资格、首跳资格与重定向目标预检仍在途。
+      .mockReturnValueOnce(liveCall)
+      .mockReturnValueOnce(liveCall)
+      .mockReturnValueOnce(liveCall)
+      .mockReturnValueOnce(liveCall)
+      // 真正发起第二跳前已经交卷。
+      .mockReturnValue(null);
+    const release = vi.fn(async () => undefined);
+    const guardedFetch = vi.fn(async () => ({
+      response: redirectTo('https://cdn.example.com/next'),
+      release,
+    }));
+    const { slot, fetchImpl } = makeSlot({
+      getGhost: () => fakeGhost({ network: null }),
+      inFlightCallInfo,
+      fetchPublicImpl: guardedFetch,
+    });
+
+    const result = await slot.handleFetchRequest('web-search', {
+      url: 'https://example.com/start',
+      callId: 'call-agent',
+    });
+
+    expect(result).toMatchObject({ ok: false });
+    if (!result.ok) expect(result.message).toContain('Agent 调用已结束');
+    expect(guardedFetch).toHaveBeenCalledTimes(1);
+    expect(release).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
   });
 });
 

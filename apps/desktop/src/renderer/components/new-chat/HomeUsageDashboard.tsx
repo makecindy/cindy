@@ -373,11 +373,13 @@ export function HomeUsageDashboard(): React.JSX.Element {
       {/* 展开区: 热力图 + 右栏 (按模型拆分; 拆分数据未积累出来前退化为每日总额柱状图) */}
       {!collapsed && (
         <div className="mt-3.5 flex items-start gap-5">
-          <UsageHeatmap
-            days={layoutHistory.days}
-            todayKey={layoutHistory.todayKey}
-            windowDays={HEATMAP_WINDOW_DAYS}
-          />
+          <div className="min-w-0 flex-1">
+            <UsageHeatmap
+              days={layoutHistory.days}
+              todayKey={layoutHistory.todayKey}
+              windowDays={HEATMAP_WINDOW_DAYS}
+            />
+          </div>
           <div className="min-w-0 flex-1 self-stretch border-l border-[var(--border-default)] pl-5">
             {/* 右栏: 每日堆叠柱状图 (高=日总额, 分段=模型构成)。不放图例 — 每日模型
                 明细全在柱子 hover tooltip 里 (省空间, 用户确认的取舍)。

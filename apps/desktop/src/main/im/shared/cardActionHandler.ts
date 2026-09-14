@@ -75,13 +75,19 @@ import {
 } from './sessionRepo';
 import { changeSessionPermissionMode } from './permissionModeControl';
 import type { ImCardBuilders } from './cardBuilders';
+import { enqueueAskCardPatch } from './askCardPatchQueue';
 import {
   buildAskAnswerDecision,
+  buildAskAnswersDecision,
+  buildAskNoAnswerDecision,
   buildPermissionAllowAlwaysDecision,
   buildPermissionAllowOnceDecision,
   buildPermissionDenyDecision,
   buildPlanApproveDecision,
   buildPlanDenyDecision,
+  encodeAskOptionAnswers,
+  formatAskAnswersForDisplay,
+  MAX_OPTIONS,
   PERMISSION_USER_DENIED_REASON,
   PLAN_USER_REJECTED_REASON,
 } from './interactionCardModel';
@@ -109,6 +115,9 @@ export function createCardActionHandler(
   const { ui, channel, threadScoped } = adapter;
   const log = createLogger(`im:${channel}:card`);
   const threadUi = ui.thread;
+
+  // Per-request patch serializer: toggle / 提交收口 / turn 作废都走
+  // enqueueAskCardPatch, 避免 in-flight 勾选覆盖终态。
 
   function requireThreadUi() {
     if (!threadUi)
@@ -1315,6 +1324,53 @@ export function createCardActionHandler(
     }
   }
 
+  /**
+   * 打勾卡的选项切换(ask:multi): 改写 pendingInteractions 里的勾选态并原地
+   * patch 整卡(✓ 前缀反馈)。不产生决策 — pending 仍由提交按钮 / 超时收口。
+   * patch 失败不回滚勾选态: 状态在服务端, 下一次任意按键的 patch 会带上它。
+   */
+  async function handleAskMultiToggle(im: ChannelIM, event: IMCardActionEvent): Promise<void> {
+    const requestId = String(event.payload.requestId ?? '');
+    const entry = requestId ? lookupPending(requestId) : null;
+    if (!entry?.askQuestions || !entry.askSelections) {
+      log.warn('ask:multi without live multi ask — ignoring (resolved or timed out?)');
+      return;
+    }
+    const qi = Number(event.payload.q);
+    const oi = Number(event.payload.o);
+    // 只接受打勾卡真正渲染过的选项下标(每问至多 MAX_OPTIONS)
+    if (!Number.isInteger(qi) || !Number.isInteger(oi) || qi < 0 || oi < 0 || oi >= MAX_OPTIONS) {
+      return;
+    }
+    const question = entry.askQuestions[qi];
+    if (!question || !question.options?.[oi]) return;
+    const selected = entry.askSelections.get(qi) ?? new Set<number>();
+    if (question.multiSelect) {
+      // 多选: 切换; 单选: 直接换选(清掉同问其它选项)
+      if (selected.has(oi)) selected.delete(oi);
+      else selected.add(oi);
+    } else {
+      selected.clear();
+      selected.add(oi);
+    }
+    entry.askSelections.set(qi, selected);
+    log.info(`ask:multi toggle q=${qi} o=${oi} multiSelect=${question.multiSelect === true}`);
+    const questions = entry.askQuestions;
+    const selections = entry.askSelections;
+    await enqueueAskCardPatch(requestId, async () => {
+      if (!lookupPending(requestId)) return;
+      try {
+        await im.updateInteractiveCard(
+          event.messageId,
+          cards.buildAskMultiCard({ requestId, questions, selections }),
+        );
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.warn(`ask:multi card patch failed (non-fatal): ${msg}`);
+      }
+    });
+  }
+
   // ── press → decision ──────────────────────────────────────────────────────
 
   function decisionFromPress(event: IMCardActionEvent): InteractionDecision | null {
@@ -1354,6 +1410,33 @@ export function createCardActionHandler(
         const label = String(p.optionLabel ?? '');
         return buildAskAnswerDecision(qKey, label);
       }
+      case 'ask:multi-submit': {
+        // 打勾卡提交: 从 pendingInteractions 登记的问题与勾选态合成 answers。
+        // 未作答的问题不写 key(与超时空 answers 同语义, agent 会追问);
+        // 多选编成 JSON 数组字符串, 单选仍是裸 label。
+        const requestId = String(p.requestId ?? '');
+        const entry = requestId ? lookupPending(requestId) : null;
+        if (!entry?.askQuestions || !entry.askSelections) {
+          // 非 multi 卡或交互已收口 — decision 交给 resolvePending 判空丢弃
+          return buildAskNoAnswerDecision();
+        }
+        const answers: Record<string, string> = {};
+        entry.askQuestions.forEach((question, qi) => {
+          const selected = entry.askSelections!.get(qi);
+          if (!selected || selected.size === 0) return;
+          const labels = [...selected]
+            .filter((oi) => oi < MAX_OPTIONS && question.options?.[oi] != null)
+            .sort((a, b) => a - b)
+            .map((oi) => question.options![oi]!.label);
+          if (labels.length > 0) {
+            answers[question.question] = encodeAskOptionAnswers(
+              question.multiSelect === true,
+              labels,
+            );
+          }
+        });
+        return buildAskAnswersDecision(answers);
+      }
       default:
         return null;
     }
@@ -1371,8 +1454,9 @@ export function createCardActionHandler(
           ? ui.cards.plan.resolvedApproved
           : ui.cards.plan.resolvedRejected;
       case 'ask_user_question': {
-        const first = Object.values(d.answers)[0];
-        return first ? ui.cards.ask.resolved(String(first)) : '✅ 已选择：继续';
+        // 协议层多选是 JSON 数组; 收口卡展示再解成逗号分隔, 多问用分号。
+        const joined = formatAskAnswersForDisplay(d.answers);
+        return joined ? ui.cards.ask.resolved(joined) : '✅ 已选择：继续';
       }
     }
   }
@@ -1414,6 +1498,15 @@ export function createCardActionHandler(
             await handlePermissionModeFixToAuto(im, event);
             return;
           }
+
+          // 打勾卡的选项切换 — 只改勾选态 + patch 卡片, 不走决策路径
+          if (event.buttonId === 'ask:multi') {
+            await handleAskMultiToggle(im, event);
+            return;
+          }
+          // ask:multi-submit 走通用决策路径(decisionFromPress 从勾选态合成
+          // answers → resolvePending); 收口 patch 仍排进 enqueueAskCardPatch,
+          // 与 toggle / 作废终态同队列, 避免 in-flight 勾选 patch 盖掉终态。
 
           // /ctr picker —
           //   pick (workspace) → 替换为 session picker
@@ -1494,14 +1587,22 @@ export function createCardActionHandler(
           // 授权卡保留原始正文(工具名 + 参数预览)再追加决策结果 — 用户要能
           // 回看自己批准的是什么; 其它交互卡维持整卡替换的旧形态。
           const resolvedLabel = describeDecision(decision);
-          try {
-            const spec = resolved.permissionCard
-              ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
-              : cards.buildResolvedCard(resolvedLabel);
-            await im.updateInteractiveCard(event.messageId, spec);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);
+          const spec = resolved.permissionCard
+            ? cards.buildResolvedPermissionCard(resolved.permissionCard, resolvedLabel)
+            : cards.buildResolvedCard(resolvedLabel);
+          const patchResolved = async () => {
+            try {
+              await im.updateInteractiveCard(event.messageId, spec);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              log.warn(`updateInteractiveCard failed (non-fatal): ${msg}`);
+            }
+          };
+          // 打勾卡提交必须与 toggle 同队列, 否则 in-flight 勾选 patch 会盖掉终态。
+          if (event.buttonId === 'ask:multi-submit') {
+            await enqueueAskCardPatch(requestId, patchResolved);
+          } else {
+            await patchResolved();
           }
         });
       } catch (err) {

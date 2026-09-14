@@ -45,7 +45,7 @@ describe('projectConversationShareMessage', () => {
     );
   });
 
-  it('按气泡顺序保留图片和文件名，不把附件字节或来源带入导出', () => {
+  it('保留图片读取地址和附件顺序，但不带入普通文件的本机路径', () => {
     const projected = projectConversationShareMessage('attachments', {
       attachments: [
         {
@@ -72,12 +72,10 @@ describe('projectConversationShareMessage', () => {
     });
 
     expect(projected?.attachments).toEqual([
-      { kind: 'image', name: 'inline.png' },
-      { kind: 'image', name: 'remote.png' },
+      { kind: 'image', name: 'inline.png', uri: 'data:image/png;base64,AA==' },
+      { kind: 'image', name: 'remote.png', uri: 'https://example.com/private.png' },
       { kind: 'file', name: 'notes.md' },
     ]);
-    expect(JSON.stringify(projected)).not.toContain('example.com');
     expect(JSON.stringify(projected)).not.toContain('/private/project');
-    expect(JSON.stringify(projected)).not.toContain('data:image');
   });
 });

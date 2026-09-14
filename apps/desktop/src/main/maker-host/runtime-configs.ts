@@ -19,6 +19,7 @@ import { getActiveCatalog } from './active-catalog.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { claudeBehaviorFlagsForSpawn } from './claude-behavior-flags.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
+import { readClaudeAccountOAuth } from './subscription-account-auth.js';
 import claudeSystemPrompt from './claude-system-prompt.md?raw';
 import codexSystemPrompt from './codex-system-prompt.md?raw';
 import hostSystemPrompt from './host-system-prompt.md?raw';
@@ -28,6 +29,10 @@ import { readMemorySettings } from './memory-settings-store.js';
 import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { shouldKeepSubagentOverrideForParent } from './subagent-override-route.js';
 import { toolchainThreadCapEnv } from './toolchain-thread-cap.js';
+import {
+  assessModelSwitchContext,
+  shouldHandoffAfterContextAssessment,
+} from '../../shared/modelSwitchAssessment.js';
 
 // Claude / Codex 的 host system prompt：产品身份 → Skill 来源优先级 → agent 专属段。
 // Skill 优先级不放 host-system-prompt.md，避免把 #1645 的 Claude/Codex 行为扩到 Pi。
@@ -166,7 +171,9 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
       ...claudeBehaviorFlagsForSpawn({
         credentialMode: ctx.credentialMode,
         providerId: ctx.sessionProviderId,
-        oauthConnected: hasClaudeAiOAuth,
+        nativeAuth: getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native,
+        oauthConnected: () => getActiveCatalog().providers.find(p => p.id === ctx.sessionProviderId)?.auth.native === 'claude'
+          ? Boolean(readClaudeAccountOAuth(ctx.sessionProviderId!)?.accessToken) : hasClaudeAiOAuth(),
       }),
       // 工具链限核 env(agent 资源占用治理):只对本机 spawn 注入 —— 值按本机
       // 核数算,远端机器的资源不归本设置管。设置关闭时为空对象,零影响。
@@ -200,6 +207,18 @@ export function buildDesktopClaudeRuntimeConfig(endpointFn: () => string): Agent
   });
   Object.defineProperty(config, 'autoCompactThresholdPct', {
     get: () => readCompactionPct(),
+    enumerable: true,
+    configurable: false,
+  });
+  Object.defineProperty(config, 'shouldHandoffAfterContextAssessment', {
+    value: (contextTokens: number, contextWindow: number) =>
+      shouldHandoffAfterContextAssessment(
+        assessModelSwitchContext({
+          contextTokens,
+          targetContextWindow: contextWindow,
+          autoCompactThresholdPct: readCompactionPct(),
+        }),
+      ),
     enumerable: true,
     configurable: false,
   });

@@ -13,7 +13,14 @@
  * Esc / ⌘A 都应生效。本组件只在选择模式挂载,所以无需额外的 active 判断。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from 'react';
 import { Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
@@ -39,18 +46,24 @@ const log = createLogger('ShareSelectionBar');
 
 interface ShareSelectionBarProps {
   sessionId: string;
-  /** 聊天内容宽度，透传给光栅化以保证换行与流里一致。 */
-  contentWidth: number;
+  /** 按下导出时读取最新聊天内容宽度，保证光栅化换行与流里一致。 */
+  getContentWidth: () => number;
   /** 操作条自身宽度，与 ChatInput 对齐。 */
-  barWidth: number;
+  barWidth: CSSProperties['width'];
 }
 
 type BusyKind = 'copy' | 'download';
 
-export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSelectionBarProps) {
+export function ShareSelectionBar({
+  sessionId,
+  getContentWidth,
+  barWidth,
+}: ShareSelectionBarProps) {
   const { t } = useTranslation();
   const count = useShareSelectionCount();
   const [busy, setBusy] = useState<BusyKind | null>(null);
+  const [compactLayout, setCompactLayout] = useState(false);
+  const barRef = useRef<HTMLDivElement | null>(null);
   const mountedRef = useRef(true);
   const selectionBeforeSelectAllRef = useRef<string[] | null>(null);
   // 页脚使用产品指定的 Cindy 主视觉；wordmark 仍跟随当前主题。
@@ -64,7 +77,18 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
     shareableMessageIds.length > 0 &&
     selectedVisibleCount === shareableMessageIds.length &&
     selectedVisibleCount === count;
-  const compactLayout = barWidth < 640;
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const update = () => {
+      const nextCompact = bar.getBoundingClientRect().width < 640;
+      setCompactLayout((current) => (current === nextCompact ? current : nextCompact));
+    };
+    update();
+    const observer = new ResizeObserver(update);
+    observer.observe(bar);
+    return () => observer.disconnect();
+  }, []);
 
   // 全选与产物顺序都以「已渲染的消息」为准(见 queryShareableMessageIds 注释:
   // render-window 外的消息克隆不到,按 messages 全集全选会静默丢内容)。
@@ -95,11 +119,11 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
     return buildShareImageBlob({
       sessionId,
       orderedSelectedIds,
-      contentWidth,
+      contentWidth: getContentWidth() || 880,
       logoSrc,
       characterSrc: shareCharacterSrc,
     });
-  }, [contentWidth, logoSrc, sessionId]);
+  }, [getContentWidth, logoSrc, sessionId]);
 
   const run = useCallback(
     async (kind: BusyKind) => {
@@ -172,6 +196,7 @@ export function ShareSelectionBar({ sessionId, contentWidth, barWidth }: ShareSe
 
   return (
     <div
+      ref={barRef}
       {...{ [SHARE_EXCLUDE_ATTR]: '' }}
       style={{ width: barWidth }}
       className={cn(

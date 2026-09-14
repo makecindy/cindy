@@ -1,28 +1,57 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
+import path from 'node:path';
 
+// getBase() 按 kind 缓存 provisioner 实例:全部测试共享同一个 cdndProvisioner,
+// 每测试重配它的行为(而不是 mockReturnValueOnce 换实例——缓存会让新实例永远不被使用)。
 const {
   appMock,
+  cdndProvisioner,
   createBinaryProvisioner,
+  findDevBinary,
   findCachedLinuxRuntimeFallbackBinary,
+  findUsableLinuxRuntimeFallbackBinary,
   prepareLinuxRuntimeFallback,
-} = vi.hoisted(() => ({
-  appMock: { isPackaged: true, getPath: vi.fn(() => '/tmp/xdt-userdata') },
-  createBinaryProvisioner: vi.fn(),
-  findCachedLinuxRuntimeFallbackBinary: vi.fn((): string | null => null),
-  prepareLinuxRuntimeFallback: vi.fn(),
-}));
+  probeBinaryVersion,
+  consumeStartupBinaryUpdateMarker,
+} = vi.hoisted(() => {
+  const cdndProvisioner = {
+    prepare: vi.fn(),
+    peekNeedsDownload: vi.fn(),
+    getState: vi.fn(async () => ({ status: 'not_installed' })),
+    cleanup: vi.fn(),
+  };
+  return {
+    appMock: { isPackaged: true, getPath: vi.fn(() => '/tmp/xdt-userdata'), getVersion: () => '1.0.0' },
+    cdndProvisioner,
+    createBinaryProvisioner: vi.fn(() => cdndProvisioner),
+    findDevBinary: vi.fn((): string | null => null),
+    findCachedLinuxRuntimeFallbackBinary: vi.fn((): string | null => null),
+    findUsableLinuxRuntimeFallbackBinary: vi.fn(async (): Promise<string | null> => null),
+    prepareLinuxRuntimeFallback: vi.fn(),
+    probeBinaryVersion: vi.fn(),
+    consumeStartupBinaryUpdateMarker: vi.fn(() => true),
+  };
+});
 
 vi.mock('electron', () => ({
   app: appMock,
   BrowserWindow: { getAllWindows: () => [] },
 }));
 vi.mock('../agent-binaries/factory.js', () => ({ createBinaryProvisioner }));
-vi.mock('../agent-binaries/dev-fallback.js', () => ({ findDevBinary: vi.fn(() => null) }));
+vi.mock('../agent-binaries/dev-fallback.js', () => ({ findDevBinary }));
+vi.mock('../agent-binaries/binary-version-probe.js', () => ({ probeBinaryVersion }));
+vi.mock('../agent-binaries/startup-update.js', () => ({ consumeStartupBinaryUpdateMarker }));
 vi.mock('../agent-binaries/linux-runtime-fallback.js', () => ({
   findCachedLinuxRuntimeFallbackBinary,
+  findUsableLinuxRuntimeFallbackBinary,
   prepareLinuxRuntimeFallback,
 }));
-vi.mock('../manifestService.js', () => ({ getPlatformKey: () => 'linux-x64' }));
+// CDN manifest 缺省不可用(无缓存、拉取也拿不到)。CDN 命中用例单独 stub。
+vi.mock('../manifestService.js', () => ({
+  getPlatformKey: () => 'linux-x64',
+  getCachedManifest: vi.fn((): unknown => null),
+  fetchManifest: vi.fn(async (): Promise<unknown> => null),
+}));
 vi.mock('../updateProgressNormalizer.js', () => ({
   ProgressNormalizer: class {
     handle(): void {}
@@ -33,21 +62,165 @@ vi.mock('../updateProgressNormalizer.js', () => ({
 
 const originalPlatform = process.platform;
 let binaries: typeof import('../agent-binaries/index');
+let manifestService: { getCachedManifest: ReturnType<typeof vi.fn>; fetchManifest: ReturnType<typeof vi.fn> };
 
 beforeAll(async () => {
   Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
-  binaries = await import('../agent-binaries/index');
 });
 
-beforeEach(() => {
+// peek 的 manifest 探测是模块级 single-flight + 负缓存:每测试 resetModules +
+// 重新 import,否则前一个用例的探测结果(memo)会泄漏进下一个用例。
+async function reloadBinaries(): Promise<void> {
+  vi.resetModules();
+  manifestService = (await import('../manifestService.js')) as never;
+  binaries = await import('../agent-binaries/index');
+}
+
+beforeEach(async () => {
+  await reloadBinaries();
   vi.clearAllMocks();
   appMock.isPackaged = true;
+  // 默认:CDN 链失败(asset_missing)→ 回落 fallback;fallback 命中私有安装。
+  cdndProvisioner.prepare.mockReset().mockResolvedValue({ ready: false, binaryPath: '', error: 'asset_missing' });
+  cdndProvisioner.peekNeedsDownload.mockReset().mockResolvedValue(true);
+  // manifestService 是 reloadBinaries 刚重建的 mock(工厂默认实现仍在):
+  // getCachedManifest → null / fetchManifest → Promise<null>。用例里覆盖时用
+  // mockReturnValue/mockResolvedValue,别 mockReset(会连默认实现一起清掉)。
+  manifestService.getCachedManifest.mockReturnValue(null);
+  manifestService.fetchManifest.mockResolvedValue(null);
+  findDevBinary.mockReset().mockReturnValue(null);
   findCachedLinuxRuntimeFallbackBinary.mockReturnValue(null);
+  findUsableLinuxRuntimeFallbackBinary.mockReset().mockResolvedValue(null);
+  consumeStartupBinaryUpdateMarker.mockReturnValue(true);
+  probeBinaryVersion.mockReset().mockResolvedValue('1.0.0');
   prepareLinuxRuntimeFallback.mockResolvedValue({
     ready: true,
     binaryPath: '/tmp/xdt-userdata/agent-runtime/claude-code/bin/claude',
     installed: true,
     source: 'installed',
+  });
+});
+
+describe('startup binary update policy forwarding', () => {
+  it.each([true, false])('passes checkForUpdates=false through prepare with broadcastProgress=%s', async (broadcastProgress) => {
+    const binaryPath = path.join('/tmp/xdt-userdata', 'claude-code', '1.0.0', 'claude');
+    manifestService.getCachedManifest.mockReturnValue({ app: {} });
+    cdndProvisioner.prepare.mockResolvedValue({ ready: true, binaryPath });
+    await expect(binaries.prepare('claude-code', { checkForUpdates: false, broadcastProgress }))
+      .resolves.toMatchObject({ ready: true, path: binaryPath });
+    expect(cdndProvisioner.prepare).toHaveBeenCalledWith(expect.objectContaining({ checkForUpdates: false }));
+    expect(binaries.getReadyBinaryPath('claude-code')).toBe(binaryPath);
+  });
+
+  it('still probes the manifest but keeps a cached Linux fallback instead of downloading a newer CDN asset', async () => {
+    const binaryPath = path.join('/tmp/xdt-userdata', 'agent-runtime', 'claude-code', 'bin', 'claude');
+    findCachedLinuxRuntimeFallbackBinary.mockReturnValue(binaryPath);
+    findUsableLinuxRuntimeFallbackBinary.mockResolvedValue(binaryPath);
+    const options = { checkForUpdates: false };
+    await expect(binaries.peekNeedsDownload('claude-code', options)).resolves.toBe(false);
+    await expect(binaries.prepare('claude-code', options)).resolves.toEqual({ ready: true, path: binaryPath, downloaded: false });
+    expect(manifestService.fetchManifest).toHaveBeenCalledOnce();
+    expect(findUsableLinuxRuntimeFallbackBinary).toHaveBeenCalledWith('claude-code', undefined);
+    expect(cdndProvisioner.prepare).not.toHaveBeenCalled();
+    expect(prepareLinuxRuntimeFallback).not.toHaveBeenCalled();
+    expect(binaries.getReadyBinaryPath('claude-code')).toBe(binaryPath);
+  });
+
+  it('does not skip the CDN version check after an update relaunch even with a local Linux fallback', async () => {
+    findCachedLinuxRuntimeFallbackBinary.mockReturnValue(path.join('/tmp/xdt-userdata', 'old-claude'));
+    const binaryPath = path.join('/tmp/xdt-userdata', 'new-claude');
+    manifestService.getCachedManifest.mockReturnValue({ app: {} });
+    cdndProvisioner.prepare.mockResolvedValue({ ready: true, binaryPath });
+    await expect(binaries.prepare('claude-code', { checkForUpdates: true }))
+      .resolves.toMatchObject({ ready: true, path: binaryPath });
+    expect(cdndProvisioner.prepare).toHaveBeenCalledWith(expect.objectContaining({ checkForUpdates: true }));
+  });
+
+  it('repairs a cached Linux fallback that is present but cannot run', async () => {
+    const brokenPath = path.join('/tmp/xdt-userdata', 'old-claude');
+    const repairedPath = path.join('/tmp/xdt-userdata', 'new-claude');
+    findCachedLinuxRuntimeFallbackBinary.mockReturnValue(brokenPath);
+    probeBinaryVersion.mockResolvedValue(null);
+    manifestService.getCachedManifest.mockReturnValue({ app: {} });
+    cdndProvisioner.prepare.mockResolvedValue({ ready: true, binaryPath: repairedPath });
+    await expect(binaries.prepare('claude-code', { checkForUpdates: false }))
+      .resolves.toMatchObject({ ready: true, path: repairedPath });
+    expect(findUsableLinuxRuntimeFallbackBinary).toHaveBeenCalledWith('claude-code', undefined);
+    expect(cdndProvisioner.prepare).toHaveBeenCalledOnce();
+  });
+
+  it('keeps the managed CDN runtime ahead of an older Linux fallback on ordinary startup', async () => {
+    findCachedLinuxRuntimeFallbackBinary.mockReturnValue(path.join('/tmp/xdt-userdata', 'old-claude'));
+    findUsableLinuxRuntimeFallbackBinary.mockResolvedValue(path.join('/tmp/xdt-userdata', 'old-claude'));
+    const binaryPath = path.join('/tmp/xdt-userdata', 'managed-claude');
+    manifestService.getCachedManifest.mockReturnValue({ app: {} });
+    cdndProvisioner.peekNeedsDownload.mockResolvedValue(false);
+    cdndProvisioner.prepare.mockResolvedValue({ ready: true, binaryPath });
+    await expect(binaries.prepare('claude-code', { checkForUpdates: false }))
+      .resolves.toMatchObject({ ready: true, path: binaryPath });
+    expect(cdndProvisioner.prepare).toHaveBeenCalledWith(expect.objectContaining({ checkForUpdates: false }));
+    expect(findUsableLinuxRuntimeFallbackBinary).not.toHaveBeenCalled();
+  });
+
+  it('keeps first-install fallback working when update checks are disabled and the CDN is unavailable', async () => {
+    await expect(binaries.prepare('claude-code', { checkForUpdates: false })).resolves.toMatchObject({ ready: true });
+    expect(prepareLinuxRuntimeFallback).toHaveBeenCalledOnce();
+  });
+
+  it.each(['darwin', 'win32'] as const)('forwards the ordinary startup policy for %s', async (platform) => {
+    Object.defineProperty(process, 'platform', { value: platform, configurable: true });
+    try {
+      cdndProvisioner.prepare.mockResolvedValue({ ready: true, binaryPath: path.join('/tmp/xdt-userdata', 'claude') });
+      await binaries.peekNeedsDownload('claude-code', { checkForUpdates: false });
+      await binaries.prepare('claude-code', { checkForUpdates: false });
+      expect(cdndProvisioner.peekNeedsDownload).toHaveBeenCalledWith({ checkForUpdates: false });
+      expect(cdndProvisioner.prepare).toHaveBeenCalledWith(expect.objectContaining({ checkForUpdates: false }));
+    } finally {
+      Object.defineProperty(process, 'platform', { value: 'linux', configurable: true });
+    }
+  });
+});
+
+describe('dev Codex package selection', () => {
+  it('starts Codex from the complete local package entrypoint', async () => {
+    appMock.isPackaged = false;
+    const expectedPath = '/repo/apps/codex-package-bin/linux-x64/bin/codex';
+    findDevBinary.mockReturnValue(expectedPath);
+
+    await expect(binaries.prepare('codex')).resolves.toEqual({
+      ready: true,
+      path: expectedPath,
+      downloaded: false,
+    });
+    expect(findDevBinary).toHaveBeenCalledWith({
+      vendorBinDir: 'codex-package-bin',
+      binaryName: path.join('bin', 'codex'),
+    });
+    expect(createBinaryProvisioner).not.toHaveBeenCalled();
+  });
+
+  it('starts the packaged release from the complete Codex package entrypoint', async () => {
+    const expectedPath = path.join(
+      '/tmp/xdt-userdata',
+      'codex-package',
+      '0.153.0',
+      'bin',
+      'codex',
+    );
+    cdndProvisioner.prepare.mockResolvedValueOnce({
+      ready: true,
+      binaryPath: expectedPath,
+    });
+
+    await expect(binaries.prepare('codex')).resolves.toMatchObject({
+      ready: true,
+      path: expectedPath,
+    });
+    expect(createBinaryProvisioner).toHaveBeenCalledWith(expect.objectContaining({
+      manifestField: 'codexPackage',
+      installSubdir: 'codex-package',
+      artifact: { kind: 'tar-gz-dir', binaryName: path.join('bin', 'codex') },
+    }));
   });
 });
 
@@ -64,7 +237,7 @@ describe('packaged Linux agent binary prepare', () => {
     expect(findCachedLinuxRuntimeFallbackBinary).toHaveBeenCalledWith('codex');
   });
 
-  it('reuses an existing runtime binary without private install or CDN work', async () => {
+  it('falls back to the runtime chain when the CDN chain reports asset_missing', async () => {
     prepareLinuxRuntimeFallback.mockResolvedValueOnce({
       ready: true,
       binaryPath: '/usr/local/bin/claude',
@@ -79,14 +252,15 @@ describe('packaged Linux agent binary prepare', () => {
       path: '/usr/local/bin/claude',
       downloaded: false,
     });
+    // CDN 链先试(manifest 无段 → asset_missing),失败后静默落到 fallback。
+    expect(cdndProvisioner.prepare).toHaveBeenCalled();
     expect(prepareLinuxRuntimeFallback).toHaveBeenCalledWith('claude-code', {
       signal: undefined,
       onProgress: expect.any(Function),
     });
-    expect(createBinaryProvisioner).not.toHaveBeenCalled();
   });
 
-  it('goes directly to the runtime fallback without creating or probing the CDN provisioner', async () => {
+  it('propagates signal and returns fallback install result when CDN misses', async () => {
     const controller = new AbortController();
     const result = await binaries.prepare('claude-code');
 
@@ -104,13 +278,116 @@ describe('packaged Linux agent binary prepare', () => {
       signal: controller.signal,
       onProgress: expect.any(Function),
     });
-    expect(createBinaryProvisioner).not.toHaveBeenCalled();
   });
 
-  it('reports a local miss as a private install need without fetching a manifest', async () => {
+  it('prefers the CDN chain when the manifest publishes a linux asset, without touching the fallback', async () => {
+    manifestService.getCachedManifest.mockReturnValue({
+      app: { version: '0.1.59' },
+      claudeCode: {
+        version: '2.1.219',
+        file: 'claude-code/2.1.219/linux-x64/claude.gz',
+        sha256: 'a'.repeat(64),
+        size: 1234,
+      },
+    });
+    cdndProvisioner.prepare.mockResolvedValueOnce({
+      ready: true,
+      binaryPath: '/tmp/xdt-userdata/claude-code/2.1.219/claude',
+    });
+
+    const result = await binaries.prepare('claude-code');
+
+    expect(result.ready).toBe(true);
+    expect(result.path).toBe('/tmp/xdt-userdata/claude-code/2.1.219/claude');
+    expect(prepareLinuxRuntimeFallback).not.toHaveBeenCalled();
+  });
+
+  it('survives a throwing CDN chain and still resolves via the fallback', async () => {
+    cdndProvisioner.prepare.mockReset().mockRejectedValue(new Error('disk exploded'));
+
+    const result = await binaries.prepare('claude-code');
+
+    expect(result.ready).toBe(true);
+    expect(result.path).toBe('/tmp/xdt-userdata/agent-runtime/claude-code/bin/claude');
+    expect(prepareLinuxRuntimeFallback).toHaveBeenCalled();
+  });
+
+  it('peek pulls a manifest when none is cached and falls back to the fs check on a miss', async () => {
+    // 无缓存 → peek 拉一次 manifest(与 prepare 同判据);拉取失败/null → fs 快查。
     await expect(binaries.peekNeedsDownload('codex')).resolves.toBe(true);
+    expect(manifestService.fetchManifest).toHaveBeenCalled();
     expect(findCachedLinuxRuntimeFallbackBinary).toHaveBeenCalledWith('codex');
-    expect(createBinaryProvisioner).not.toHaveBeenCalled();
+    expect(cdndProvisioner.peekNeedsDownload).not.toHaveBeenCalled();
+  });
+
+  it('peek probes the manifest once per splash round across vendors (single flight)', async () => {
+    // 同轮内:两个 vendor 的 peek 共享一次探测(第二个 peek 命中 memo)。
+    manifestService.fetchManifest.mockRejectedValue(new Error('offline'));
+    await expect(binaries.peekNeedsDownload('claude-code')).resolves.toBe(true);
+    await expect(binaries.peekNeedsDownload('codex')).resolves.toBe(true);
+    expect(manifestService.fetchManifest).toHaveBeenCalledTimes(1);
+    expect(findCachedLinuxRuntimeFallbackBinary).toHaveBeenCalledTimes(2);
+  });
+
+  it('prepare clears the probe memo so the next retry round re-probes the manifest', async () => {
+    // 模拟真实 retry 流程:peek(Phase 0)→ prepare(Phase 1)清 memo →
+    // 下一轮 peek 重新探测(网络恢复后进度标签与 prepare 行为对齐)。
+    manifestService.fetchManifest.mockRejectedValue(new Error('offline'));
+    await expect(binaries.peekNeedsDownload('codex')).resolves.toBe(true);
+    await expect(binaries.peekNeedsDownload('claude-code')).resolves.toBe(true);
+    expect(manifestService.fetchManifest).toHaveBeenCalledTimes(1);
+    // 本轮 prepare(默认 mock:CDN 失败 → fallback 成功)。
+    await expect(binaries.prepare('claude-code')).resolves.toMatchObject({ ready: true });
+    // 下一轮 peek:重新探测。
+    await expect(binaries.peekNeedsDownload('claude-code')).resolves.toBe(true);
+    expect(manifestService.fetchManifest).toHaveBeenCalledTimes(2);
+  });
+
+  it('skips the CDN leg when the round peek probe failed and goes straight to fallback', async () => {
+    // peek 失败 → 本轮 prepare 跳过 CDN 腿,直接 fallback(离线 + 本地已有
+    // runtime 的首启不再为两个 vendor 白等 2×30s manifest 拉取)。
+    manifestService.fetchManifest.mockRejectedValue(new Error('offline'));
+    await expect(binaries.peekNeedsDownload('codex')).resolves.toBe(true);
+    const result = await binaries.prepare('claude-code');
+    expect(result.ready).toBe(true);
+    expect(cdndProvisioner.prepare).not.toHaveBeenCalled();
+    expect(prepareLinuxRuntimeFallback).toHaveBeenCalled();
+  });
+
+  it('peek delegates to the CDN check when the manifest publishes a linux asset', async () => {
+    manifestService.getCachedManifest.mockReturnValue({
+      app: { version: '0.1.59' },
+      codexPackage: {
+        version: '0.153.0',
+        file: 'codex-package/0.153.0/linux-x64/codex-package.dist.tar.gz',
+        sha256: 'b'.repeat(64),
+        size: 5678,
+      },
+    });
+
+    await expect(binaries.peekNeedsDownload('codex')).resolves.toBe(true);
+    expect(cdndProvisioner.peekNeedsDownload).toHaveBeenCalled();
+    expect(findCachedLinuxRuntimeFallbackBinary).not.toHaveBeenCalled();
+  });
+
+  it('gives the CDN leg its own signal and preserves the original one for the fallback', async () => {
+    const controller = new AbortController();
+    // CDN 腿失败(模拟拖满自身预算),fallback 必须收到原始未中止的 signal,
+    // 否则官方源兜底会在共享 deadline 被耗尽时名存实亡。
+    cdndProvisioner.prepare.mockReset().mockRejectedValue(new Error('cdn leg timed out'));
+
+    const result = await binaries.prepare('claude-code', { signal: controller.signal });
+
+    expect(result.ready).toBe(true);
+    // CDN 腿收到的是包装后的独立 signal,不是调用方原始 signal。
+    const cdnArgs = cdndProvisioner.prepare.mock.calls[0][0];
+    expect(cdnArgs.signal).toBeInstanceOf(AbortSignal);
+    expect(cdnArgs.signal).not.toBe(controller.signal);
+    // fallback 收到的是原始 signal(未被 CDN 腿污染)。
+    expect(prepareLinuxRuntimeFallback).toHaveBeenCalledWith(
+      'claude-code',
+      expect.objectContaining({ signal: controller.signal }),
+    );
   });
 });
 

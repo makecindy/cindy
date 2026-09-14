@@ -1,11 +1,31 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  parseIssueEnvHarness,
+  parseIssueEnvModelId,
   parseIssueEnvRegion,
   parseOptionalGithubUserIdentity,
   parseIssueSuggestedPublicName,
   parseIssueSubmissionIdentity,
 } from '@/lib/issueConfirmPayload';
+
+describe('issue runtime metadata parsers', () => {
+  it('只接受三个公开 Harness 全名', () => {
+    expect(parseIssueEnvHarness('Claude Code')).toBe('Claude Code');
+    expect(parseIssueEnvHarness('Codex')).toBe('Codex');
+    expect(parseIssueEnvHarness('Pi')).toBe('Pi');
+    expect(parseIssueEnvHarness('cc')).toBeUndefined();
+    expect(parseIssueEnvHarness('cx')).toBeUndefined();
+    expect(parseIssueEnvHarness(undefined)).toBeUndefined();
+  });
+
+  it('把模型 ID 规范成有界单行值并兼容旧 Main 缺失字段', () => {
+    expect(parseIssueEnvModelId('  custom\nmodel  ')).toBe('custom model');
+    expect(parseIssueEnvModelId('x'.repeat(201))).toBe('x'.repeat(200));
+    expect(parseIssueEnvModelId('')).toBeUndefined();
+    expect(parseIssueEnvModelId(undefined)).toBeUndefined();
+  });
+});
 
 describe('parseIssueSubmissionIdentity', () => {
   it('保留 GitHub 用户和平台的实际 login', () => {

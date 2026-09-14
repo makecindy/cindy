@@ -9,6 +9,7 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { PassThrough } from 'node:stream';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn() }));
@@ -32,15 +33,18 @@ function makeChild(pid = 4321) {
   child.pid = pid;
   child.stdout = new EventEmitter();
   child.stderr = new EventEmitter();
-  child.stdin = { write: vi.fn() };
+  Object.assign(child.stdout, { destroy: vi.fn() });
+  Object.assign(child.stderr, { destroy: vi.fn() });
+  child.stdin = { write: vi.fn(), destroy: vi.fn() } as typeof child.stdin;
   child.kill = vi.fn();
   return child;
 }
 
-function makeTransport(): { transport: PiTransport; child: ReturnType<typeof makeChild> } {
+function makeTransport(onProcessSpawned?: (pid: number) => (() => void)): { transport: PiTransport; child: ReturnType<typeof makeChild> } {
   const child = makeChild();
   mocks.spawn.mockReturnValue(child);
   const transport = createPiStdioTransport({
+    onProcessSpawned,
     binaryPath: '/pi',
     args: ['--mode', 'rpc'],
     cwd: '/work',
@@ -158,6 +162,53 @@ describe('createPiStdioTransport', () => {
     }
   });
 
+  it.each(['event', 'throw'])('does not confirm termination when kill fails via %s', async (failure) => {
+    vi.useFakeTimers();
+    try {
+      const dispose = vi.fn();
+      const { transport, child } = makeTransport(() => dispose);
+      const onClose = vi.fn();
+      transport.onClose(onClose);
+      child.kill.mockImplementation(() => {
+        const error = new Error('kill EPERM');
+        if (failure === 'throw') throw error;
+        child.emit('error', error);
+        return false;
+      });
+      const closing = transport.close();
+      const rejected = expect(closing).rejects.toThrow(/did not confirm exit/);
+      await vi.advanceTimersByTimeAsync(8000);
+      await rejected;
+      expect(child.kill.mock.calls).toEqual([['SIGTERM'], ['SIGKILL']]);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(dispose).not.toHaveBeenCalled();
+      child.kill.mockImplementation(() => true);
+      const retry = transport.close();
+      child.emit('exit', 23, null);
+      await vi.advanceTimersByTimeAsync(250);
+      await retry;
+      expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ code: 23, signal: null }));
+      expect(dispose).toHaveBeenCalledTimes(1);
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([2999, 7999])('preserves confirmed exit while draining across the %i ms termination deadline', async (exitAt) => {
+    vi.useFakeTimers();
+    try {
+      const { transport, child } = makeTransport();
+      const onClose = vi.fn();
+      transport.onClose(onClose);
+      const closing = transport.close();
+      await vi.advanceTimersByTimeAsync(exitAt);
+      const signals = child.kill.mock.calls.map(([signal]) => signal);
+      child.emit('exit', 23, null);
+      await vi.advanceTimersByTimeAsync(250);
+      await closing;
+      expect(child.kill.mock.calls.map(([signal]) => signal)).toEqual(signals);
+      expect(onClose).toHaveBeenCalledWith(expect.objectContaining({ code: 23, signal: null }));
+    } finally { vi.useRealTimers(); }
+  });
+
   it('writeLine rejects when closed', async () => {
     const { transport, child } = makeTransport();
     child.emit('close', 0, null);
@@ -200,11 +251,58 @@ describe('createPiStdioTransport', () => {
     expect(handler).toHaveBeenCalledWith('line1');
     expect(handler).toHaveBeenCalledWith('line2');
   });
+
+  it('drains exit tail frames before notifying executor loss, even without pipe EOF', async () => {
+    vi.useFakeTimers();
+    try {
+      const { transport, child } = makeTransport();
+      const observed: string[] = [];
+      transport.onLine(line => observed.push(line));
+      transport.onClose(info => observed.push(`exit:${info.code}`));
+      child.emit('exit', 23, null);
+      await expect(transport.writeLine('{}')).rejects.toThrow(/closed/);
+      child.stdout.emit('data', '{"type":"message_end"}\n{"type":"agent_settled"}\n');
+      expect(observed).toEqual(['{"type":"message_end"}', '{"type":"agent_settled"}']);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(observed.at(-1)).toBe('exit:23');
+      child.stdout.emit('data', '{"type":"late-descendant-output"}\n');
+      child.emit('close', 23, null);
+      expect(observed).toHaveLength(3);
+      expect(child.kill).not.toHaveBeenCalled();
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([false, true])('close racing executor exit reuses the same drain (close first: %s)', async (closeFirst) => {
+    vi.useFakeTimers();
+    try {
+      const { transport, child } = makeTransport();
+      const onClose = vi.fn();
+      transport.onClose(onClose);
+      let closing: Promise<void>;
+      if (closeFirst) {
+        closing = transport.close();
+        child.emit('exit', null, 'SIGTERM');
+      } else {
+        child.emit('exit', 23, null);
+        closing = transport.close();
+      }
+      await vi.advanceTimersByTimeAsync(249);
+      expect(onClose).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(1);
+      await closing;
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onClose).toHaveBeenCalledWith(expect.objectContaining(closeFirst
+        ? { code: null, signal: 'SIGTERM' } : { code: 23, signal: null }));
+      expect(child.kill.mock.calls).toEqual(closeFirst ? [['SIGTERM']] : []);
+      await vi.advanceTimersByTimeAsync(8000);
+      expect(child.kill).not.toHaveBeenCalledWith('SIGKILL');
+    } finally { vi.useRealTimers(); }
+  });
 });
 
 describe('attachJsonlReader', () => {
   function makeStream() {
-    return new EventEmitter() as EventEmitter & { pipe(): void };
+    return new PassThrough();
   }
 
   it('splits lines across chunk boundaries (UTF-8 safe)', () => {

@@ -4,8 +4,26 @@ import {
   BREAKER_PROBE_BACKOFF_BASE_MS,
   BREAKER_PROBE_BACKOFF_MAX_MS,
   createDeviceResponsivenessBreaker,
+  isPresenceEligibleForRemoteRequest,
+  isPresenceValueEligible,
   type BreakerSendSlot,
 } from '../deviceResponsiveness';
+
+describe('automatic recovery presence eligibility', () => {
+  it('allows explicit availability and unknown, but blocks explicit unavailable', () => {
+    const availability = new Map<string, boolean>([
+      ['online', true],
+      ['offline', false],
+    ]);
+
+    expect(isPresenceValueEligible(true)).toBe(true);
+    expect(isPresenceValueEligible(undefined)).toBe(true);
+    expect(isPresenceValueEligible(false)).toBe(false);
+    expect(isPresenceEligibleForRemoteRequest(availability, 'online')).toBe(true);
+    expect(isPresenceEligibleForRemoteRequest(availability, 'unknown')).toBe(true);
+    expect(isPresenceEligibleForRemoteRequest(availability, 'offline')).toBe(false);
+  });
+});
 
 const DEV = 'dev-1';
 

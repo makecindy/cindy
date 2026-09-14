@@ -49,6 +49,7 @@ describe('拒绝：会打用户内容的来源', () => {
     ['session-search', '搜索关键词'],
     ['chat-history-search', '搜索关键词'],
     ['maker-ipc', 'agent 编排,带提示词'],
+    ['brain', '插件运行时诊断与第三方标识'],
     ['brain-runtime', '插件运行时,带用户内容'],
     ['skillhub:publishService', '用户内容'],
     ['secrets:builtin-api-key', '凭证相关'],

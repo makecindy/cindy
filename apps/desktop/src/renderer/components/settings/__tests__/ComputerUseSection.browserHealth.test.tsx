@@ -111,6 +111,7 @@ beforeEach(() => {
         getHealth: api.getBackendHealth,
         setKind: api.setBackendKind,
         recover: api.recoverBackend,
+        setUseRealProfile: vi.fn(async (enabled: boolean) => ({ ok: true, enabled })),
       },
     },
   });
@@ -126,9 +127,11 @@ describe('ComputerUseSection browser backend health loading', () => {
     render(<ComputerUseSection workingDir="/tmp/project" />);
 
     expect(await screen.findByText('settings.computerUse.title')).toBeTruthy();
-    expect(screen.getByRole('tab', {
-      name: 'settings.computerUse.browserBackend.rsbWebview.title',
-    })).toBeTruthy();
+    expect(
+      screen.getByRole('radio', {
+        name: 'settings.computerUse.browserBackend.rsbWebview.title',
+      }),
+    ).toBeTruthy();
     expect(screen.queryByRole('status')).toBeNull();
 
     await act(async () => {
@@ -154,19 +157,27 @@ describe('ComputerUseSection browser backend health loading', () => {
 
     render(<ComputerUseSection workingDir="/tmp/project" />);
 
-    fireEvent.click(await screen.findByRole('tab', {
-      name: 'settings.computerUse.browserBackend.external.title',
-    }));
-    await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('external'));
-    await waitFor(() => expect(
-      screen.getByRole('tab', {
+    fireEvent.click(
+      await screen.findByRole('radio', {
         name: 'settings.computerUse.browserBackend.external.title',
-      }).getAttribute('aria-selected'),
-    ).toBe('true'));
+      }),
+    );
+    await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('external'));
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('radio', {
+            name: 'settings.computerUse.browserBackend.external.title',
+          })
+          .getAttribute('aria-checked'),
+      ).toBe('true'),
+    );
 
-    fireEvent.click(screen.getByRole('tab', {
-      name: 'settings.computerUse.browserBackend.rsbWebview.title',
-    }));
+    fireEvent.click(
+      screen.getByRole('radio', {
+        name: 'settings.computerUse.browserBackend.rsbWebview.title',
+      }),
+    );
     await waitFor(() => expect(api.setBackendKind).toHaveBeenCalledWith('rsb-webview'));
     expect((await screen.findByRole('status')).textContent).toContain(
       'settings.computerUse.browserBackend.health.ready',

@@ -80,6 +80,17 @@ describe('buildLearnStartRequest(语义对齐桌面 builtins.ts 的 /learn)', ()
       input: '按我们团队习惯改',
       sourceKind: 'hub',
       hubSlug: 'deploy-checklist',
+      hubCatalogScope: 'market',
+      originSessionId: 's-1',
+    });
+  });
+
+  it('hub:<scope>:<slug> 保留目录作用域', () => {
+    expect(buildLearnStartRequest('hub:team:deploy-checklist 精简', 's-1')).toEqual({
+      input: '精简',
+      sourceKind: 'hub',
+      hubSlug: 'deploy-checklist',
+      hubCatalogScope: 'team',
       originSessionId: 's-1',
     });
   });

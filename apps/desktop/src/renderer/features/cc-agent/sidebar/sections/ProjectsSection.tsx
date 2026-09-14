@@ -39,6 +39,16 @@ import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import { useEffectiveSelectedMachineId } from '@/features/device-link/useMachineSwitcher';
 import { MACHINE_ALL } from '@/features/device-link/selectedMachineStore';
+import {
+  projectOrderWriteLedger,
+  resolveDisplayedProjectOrder,
+} from '@cindy/maker-shared/project-order-sync';
+import {
+  controllerManualOrderForDevice,
+  projectOrderWriteScopeForSelection,
+  useLocalHostProjectOrder,
+  useRemoteHostProjectOrders,
+} from '../../hooks/useRemoteHostProjectOrders';
 import { SortableList } from '@/components/sidebar/SortableList';
 import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useSidebarMainViewMode } from '@/hooks/useSidebarCardMode';
@@ -67,15 +77,19 @@ import {
   type MainListEntry,
   type ViewedPriorityHoldState,
 } from '../../lib/mainListModel';
+import { projectKeyComparisonKey, type BotGroupNode } from '../../lib/projectGrouping';
 import { buildSessionSourceLabelMap } from '../../lib/sessionSourceLabel';
 import { useSessionAttentionKinds } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgencySet } from '../../contexts/SessionAttentionUrgencyContext';
 import {
   getRemoteSessionActivity,
+  isRemoteSessionActivityActive,
   useRemoteSessionActivityRevision,
 } from '@/features/device-link/remoteSessionActivityStore';
+import { absorbSessionStarting } from '@/lib/sessionStartingStore';
 import type { DialogueDeviceTarget } from '../../lib/dialogueCreateTarget';
 import { MainListScopeHeader } from '../MainListScopeHeader';
+import { DeviceSectionHeader } from '../DeviceSectionHeader';
 import { SectionCollapse } from '../SectionCollapse';
 import { SessionEntryList, SessionEntryRows } from '../SessionEntryList';
 import { useCollapsibleShowAll } from '../hooks/useCollapsibleShowAll';
@@ -89,6 +103,7 @@ import type {
   AutomationSessionGroup,
 } from '../../lib/automationSidebarGrouping';
 import type { Session } from '@/lib/ccAgent.types';
+import { BotAvatar } from '@/features/bots/BotAvatar';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import { resolveCollapsedProjectAttentionTone } from '../projectCollapsedAttention';
@@ -146,6 +161,15 @@ export interface ProjectsSectionProps {
    * 与项目行按同一口径混排;「对话归为一组」开启时收进对话组行。
    */
   dialogues: Session[];
+  /**
+   * 按伙伴分的组(与项目行并列混排)。
+   *
+   * 伙伴的任务归伙伴,不按工作目录散进项目组 —— 一个伙伴可以在多个项目里干活,
+   * 按目录分只会把它的对话切碎到几个组里。
+   */
+  bots?: BotGroupNode[];
+  /** 点伙伴组头的新建入口:打开这个伙伴。不给则该按钮禁用(不摆一个点了没反应的入口)。 */
+  onOpenBot?: (botId: string) => void;
   /**
    * 未经过用户筛选、但已排除“从侧栏移除”项目的候选集。
    * 用于 SidebarFilterPopover 与来源标签；隐藏项目不能从这些入口泄漏。
@@ -226,6 +250,8 @@ export function ProjectsSection({
   unclassified,
   projects,
   dialogues,
+  bots = [],
+  onOpenBot,
   allKnownProjects,
   dialogueCount = 0,
   allProjectKeysForOrder,
@@ -264,13 +290,37 @@ export function ProjectsSection({
   isCreateDialogueDisabled = false,
 }: ProjectsSectionProps) {
   const { t } = useTranslation();
+  const localPlatform = window.electronAPI.platform;
+  const projectComparisonKey = useCallback(
+    (projectKey: string) => projectKeyComparisonKey(projectKey, localPlatform) ?? projectKey,
+    [localPlatform],
+  );
   const reducedMotion = useReducedMotion();
+  const selectedMachineForOrder = useEffectiveSelectedMachineId();
+  const localHostProjectOrder = useLocalHostProjectOrder();
+  const remoteHostProjectOrders = useRemoteHostProjectOrders(selectedMachineForOrder);
   // 主列表显示形态(B 期):text 紧凑行 / list 满宽两行卡。独立于置顶段的三态设置。
   const { mode: mainViewMode } = useSidebarMainViewMode();
   const mainSessionVariant: 'text' | 'list' = mainViewMode === 'list' ? 'list' : 'text';
   // SortableList 只在自定义项目顺序且按项目分组时挂载。
   // 折叠溢出且未点「显示全部」时禁用，避免只重排可见前缀。
-  const customProjectOrder = filter.groupBy === 'project' && filter.projectOrder === 'custom';
+  const projectOrderScope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
+  const hostSnapshotForDisplay = projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+    ? localHostProjectOrder.snapshot
+    : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+      ? remoteHostProjectOrders.orders.get(projectOrderScope.deviceId)
+      : undefined;
+  const displayedProjectOrder = resolveDisplayedProjectOrder(
+    projectOrderScope,
+    hostSnapshotForDisplay,
+    filter,
+    projectOrderScope.kind === 'host' && projectOrderScope.deviceId === null
+      ? localHostProjectOrder.snapshot.manualProjectOrder
+      : projectOrderScope.kind === 'host' && projectOrderScope.deviceId
+        ? controllerManualOrderForDevice(projectOrderScope.deviceId, hostSnapshotForDisplay) ?? []
+        : [],
+  );
+  const customProjectOrder = filter.groupBy === 'project' && displayedProjectOrder.projectOrder === 'custom';
   const projectDragEnabled = customProjectOrder;
   const projectKeysForOrderBaseline = allProjectKeysForOrder;
   // 段级收起已随「全部任务 = 范围下拉」取消(2026-08-13 用户定稿):标题的点击
@@ -290,16 +340,62 @@ export function ProjectsSection({
       // 不可见的 project(其它机器 / 被过滤掉的)必须**保持原位** —— 与置顶拖拽同一套「原位 merge」
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
       // 位置会被无关拖拽悄悄打乱)。做法:先取全量规范顺序作 baseline,再把可见新序原位填回。
-      // projectKeysForOrderBaseline 是未过滤全量 universe 的 key,因此 baseline 含
-      // 隐藏项;setManualProjectOrder 内部会再归一化一次(对已规范的 merged 结果幂等)。
-      const fullOrder = normalizeManualProjectOrder(
-        filter.manualProjectOrder,
-        projectKeysForOrderBaseline,
-      );
-      const merged = mergeVisibleReorder(fullOrder, visibleNewOrder);
-      filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
+      const scope = projectOrderWriteScopeForSelection(selectedMachineForOrder);
+      const hostSnapshot = scope.kind === 'host' && scope.deviceId === null
+        ? localHostProjectOrder.snapshot
+        : scope.kind === 'host' && scope.deviceId
+          ? remoteHostProjectOrders.orders.get(scope.deviceId)
+          : undefined;
+      const persistViewer = (order: readonly string[]) => {
+        const fullOrder = normalizeManualProjectOrder(filter.manualProjectOrder, projectKeysForOrderBaseline, localPlatform);
+        const merged = mergeVisibleReorder(fullOrder, order, projectComparisonKey);
+        filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
+        if (filter.projectOrder !== 'custom') filter.setProjectOrder('custom');
+      };
+      if (projectOrderWriteLedger(scope, hostSnapshot) === 'host' && scope.kind === 'host' && scope.deviceId === null) {
+        const localKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith('local:'));
+        const fullOrder = normalizeManualProjectOrder(
+          localHostProjectOrder.snapshot.manualProjectOrder,
+          localKeys,
+          localPlatform,
+        );
+        const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
+        void localHostProjectOrder.apply({
+          manualProjectOrder: next,
+          projectOrder: 'custom',
+        }).then((result) => {
+          if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+        });
+        return;
+      }
+      if (projectOrderWriteLedger(scope, hostSnapshot) === 'host' && scope.kind === 'host' && scope.deviceId) {
+        const deviceId = scope.deviceId;
+        const remoteKeys = projectKeysForOrderBaseline.filter((key) => key.startsWith(`device:${encodeURIComponent(deviceId)}:`));
+        const current = controllerManualOrderForDevice(
+          deviceId,
+          remoteHostProjectOrders.orders.get(deviceId),
+        ) ?? [];
+        const fullOrder = normalizeManualProjectOrder(current, remoteKeys, localPlatform);
+        const next = mergeVisibleReorder(fullOrder, visibleNewOrder, projectComparisonKey);
+        void remoteHostProjectOrders.apply(deviceId, {
+          manualProjectOrder: next,
+          projectOrder: 'custom',
+        }).then((result) => {
+          if (result.kind === 'unavailable') persistViewer(visibleNewOrder);
+        });
+        return;
+      }
+      persistViewer(visibleNewOrder);
     },
-    [filter, projectKeysForOrderBaseline],
+    [
+      filter,
+      localHostProjectOrder,
+      projectKeysForOrderBaseline,
+      remoteHostProjectOrders,
+      selectedMachineForOrder,
+      localPlatform,
+      projectComparisonKey,
+    ],
   );
 
   // toggleDisabled 用 allKnownProjects（不是过滤后的 projects），避免 filter 收窄到 0 时
@@ -392,6 +488,26 @@ export function ProjectsSection({
     viewedIdForSort,
   ]);
 
+  // starting 只让位给真实 in-flight:本地 isRunning(见 useStartingSessionIds),
+  // 远程 running / needs-interaction。终态 attention 不再吸收 —— 旧终态会误伤
+  // 新发送,新终态又要代次才能和旧的区分,两边补丁会来回打。没经过 running
+  // 的快完成靠 TTL。
+  useEffect(() => {
+    const settled = new Set<string>();
+    const considerRemote = (session: Session) => {
+      if (isRemoteSessionActivityActive(getRemoteSessionActivity(session.id))) {
+        settled.add(session.id);
+      }
+    };
+    for (const project of projects) {
+      for (const session of project.sessions) considerRemote(session);
+    }
+    for (const session of dialogues) considerRemote(session);
+    for (const session of unclassified) considerRemote(session);
+    absorbSessionStarting(settled);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remoteActivityRevision 代表 getRemoteSessionActivity 读到的整表内容
+  }, [projects, dialogues, unclassified, remoteActivityRevision]);
+
   // E 期「按设备分组」:有远程设备连接 + 开关开 → 按设备切段(本机在前,
   // 远程按设备切换栏顺序);其余情况单段直渲。切段后按当前排序重排本段。
   // 自定义项目顺序可以和设备分组叠加:每段内项目行按全局序的子集排,段内可拖。
@@ -414,12 +530,13 @@ export function ProjectsSection({
       buildMainListEntries({
         projects,
         dialogues,
+        bots,
         unclassified: deviceGroupingActive && !unclassifiedHidden ? unclassified : [],
         groupBy: filter.groupBy,
         groupDialogue: filter.groupDialogue,
         sortBy: filter.sortBy,
-        projectOrder: filter.projectOrder,
-        manualProjectOrder: filter.manualProjectOrder,
+        projectOrder: displayedProjectOrder.projectOrder,
+        manualProjectOrder: displayedProjectOrder.manualProjectOrder,
         priorityContext,
         notifications,
         scheduleSessionIndex,
@@ -427,14 +544,14 @@ export function ProjectsSection({
     [
       projects,
       dialogues,
+      bots,
       unclassified,
       unclassifiedHidden,
       deviceGroupingActive,
       filter.groupBy,
       filter.groupDialogue,
       filter.sortBy,
-      filter.projectOrder,
-      filter.manualProjectOrder,
+      displayedProjectOrder,
       priorityContext,
       notifications,
       scheduleSessionIndex,
@@ -502,10 +619,10 @@ export function ProjectsSection({
     const keys = preCustomVisualKeysRef.current;
     if (keys.length === 0) return;
     filter.setManualProjectOrder(
-      snapshotManualProjectOrder(keys, projectKeysForOrderBaseline),
+      snapshotManualProjectOrder(keys, projectKeysForOrderBaseline, localPlatform),
       projectKeysForOrderBaseline,
     );
-  }, [filter, projectKeysForOrderBaseline]);
+  }, [filter, projectKeysForOrderBaseline, localPlatform]);
 
   const deviceSections = useMemo<MainListDeviceSection[]>(() => {
     if (!deviceGroupingActive) return [{ deviceId: null, entries: [...visibleMixedEntries] }];
@@ -772,6 +889,50 @@ export function ProjectsSection({
         />
       );
     }
+    if (entry.kind === 'bot-group') {
+      const groupKey = `bot:${entry.bot.botId}`;
+      const isCollapsed = collapsedDialogueGroups.has(groupKey);
+      return (
+        <SessionGroupNode
+          key={`bot-group:${entry.bot.botId}`}
+          sessions={entry.bot.sessions}
+          groupIcon={
+            <BotAvatar
+              bot={{
+                name: entry.bot.displayName,
+                avatar: entry.bot.avatar,
+                avatarColor: entry.bot.avatarColor,
+              }}
+              // xs = 20px,与组头 15px 图标同一档视觉重量(头像是实心块,略小于线条图标会显轻)。
+              size="xs"
+              className="shrink-0"
+            />
+          }
+          groupTitle={entry.bot.displayName}
+          createLabel={t('bots.sidebar.newTaskWith', { name: entry.bot.displayName })}
+          collapsed={isCollapsed}
+          onToggle={() => setDialogueCollapsed([groupKey], !isCollapsed)}
+          onCreateDialogue={() => onOpenBot?.(entry.bot.botId)}
+          isCreateDisabled={!onOpenBot}
+          parentSectionCollapsed={false}
+          disableSessionCollapse={disableSessionCollapse}
+          activeSessionId={activeSessionId}
+          runningSessionIds={runningSessionIds}
+          attachedSessionIds={attachedSessionIds}
+          notifications={notifications}
+          scheduleSessionIndex={scheduleSessionIndex}
+          selectedSessionIds={selectedSessionIds}
+          onSessionClick={onSessionClick}
+          onAction={onAction}
+          onRename={onRename}
+          onTogglePin={onTogglePin}
+          onMoveSession={onMoveSession}
+          projectOptions={projectOptions}
+          onScheduleAction={onScheduleAction}
+          sessionVariant={mainSessionVariant}
+        />
+      );
+    }
     if (entry.kind === 'dialogue-group') {
       const isCollapsed = collapsedDialogueGroups.has(dialogueGroupKey);
       // 目标设备离线时不能在它上面新建(被控端才是真正的创建方)——与远程项目行的
@@ -784,7 +945,7 @@ export function ProjectsSection({
         (dialogueDeviceTarget === undefined ? isCreateDialogueDisabled : false) ||
         targetDeviceOffline;
       return (
-        <DialogueGroupNode
+        <SessionGroupNode
           key={`dialogue-group:${dialogueGroupKey}`}
           sessions={entry.sessions}
           collapsed={isCollapsed}
@@ -895,42 +1056,44 @@ export function ProjectsSection({
               return (
                 <div key={key} className="flex flex-col gap-1">
                   {/* 设备分组头:可折叠。在线设备不画状态点;离线设备保留灰点与文字提示。 */}
-                  <button
-                    type="button"
-                    onClick={() => toggleDeviceSection(key)}
-                    aria-expanded={!sectionCollapsed}
-                    aria-label={
-                      sectionCollapsed
-                        ? t('ccAgent.sidebar.deviceGroup.expand')
-                        : t('ccAgent.sidebar.deviceGroup.collapse')
-                    }
-                    className={cn(
-                      'flex h-6 w-full items-center gap-1.5 rounded-md px-1.5',
-                      'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
-                    )}
-                  >
-                    {sectionCollapsed ? (
-                      <ChevronRight size={12} strokeWidth={2} className="shrink-0" />
-                    ) : (
-                      <ChevronDown size={12} strokeWidth={2} className="shrink-0" />
-                    )}
-                    <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
-                    <span className="min-w-0 truncate text-xs font-medium">{name}</span>
-                    {!online && (
-                      <span
-                        aria-hidden
-                        className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
-                      />
-                    )}
-                    {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
-                          (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
-                          段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}
-                    {!online && (
-                      <span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
-                        {t('ccAgent.sidebar.deviceGroup.offline')}
-                      </span>
-                    )}
-                  </button>
+                  <DeviceSectionHeader deviceId={section.deviceId} name={name}>
+                    <button
+                      type="button"
+                      onClick={() => toggleDeviceSection(key)}
+                      aria-expanded={!sectionCollapsed}
+                      aria-label={
+                        sectionCollapsed
+                          ? t('ccAgent.sidebar.deviceGroup.expand')
+                          : t('ccAgent.sidebar.deviceGroup.collapse')
+                      }
+                      className={cn(
+                        'flex h-6 min-w-0 flex-1 items-center gap-1.5 rounded-full px-1.5',
+                        'text-[var(--sidebar-list-muted)] transition-colors hover:text-[var(--sidebar-nav-text)]',
+                      )}
+                    >
+                      {sectionCollapsed ? (
+                        <ChevronRight size={12} strokeWidth={2} className="shrink-0" />
+                      ) : (
+                        <ChevronDown size={12} strokeWidth={2} className="shrink-0" />
+                      )}
+                      <MonitorSmartphone size={13} strokeWidth={2} className="shrink-0" />
+                      <span className="min-w-0 truncate text-xs font-medium">{name}</span>
+                      {!online && (
+                        <span
+                          aria-hidden
+                          className="size-1.5 shrink-0 rounded-full bg-[var(--text-tertiary)]"
+                        />
+                      )}
+                      {/* 条数已去掉(2026-08-12 用户裁决):它数的是顶层条目
+                            (项目行 + 散排对话 + 对话组),不是任务数,读起来只会误导;
+                            段展开后内容本身就是答案。「离线」接手 ml-auto 保持靠右。 */}
+                      {!online && (
+                        <span className="ml-auto shrink-0 text-xs text-[var(--cmd-palette-item-meta)]">
+                          {t('ccAgent.sidebar.deviceGroup.offline')}
+                        </span>
+                      )}
+                    </button>
+                  </DeviceSectionHeader>
                   <SectionCollapse collapsed={sectionCollapsed}>
                     <div className="flex flex-col gap-1 pl-2">
                       {/* 折叠上限每段独立应用(切段在前,见 deviceSections 注释);
@@ -1018,7 +1181,11 @@ export function ProjectsSection({
 }
 
 /**
- * DialogueGroupNode — 「对话」组行(D 期,「对话归为一组」开启时)。
+ * SessionGroupNode — 一个带标题的会话组行。
+ *
+ * 两个用法共用它:「对话」组(D 期,「对话归为一组」开启时)与**伙伴组**。两者是
+ * 同一种东西,只差图标和标题 —— 所以参数化,不复制。默认值就是对话组的原始形态,
+ * 既有调用点行为逐字不变。
  * 视觉与交互与 ProjectNode 表头**同款**(2026-08-12 用户裁决:对话组的分组 UI、
  * 交互与自动收起逻辑都与项目分组一致):h-8 药丸 hover 行、15px 图标、meta 灰文字、
  * 标题右侧 hover 渐显展开箭头;组内会话折叠上限同项目内会话
@@ -1026,11 +1193,14 @@ export function ProjectsSection({
  * 「收起所有分组」的批量收起/展开。
  * 标题「对话」是归属分类名(task-and-conversation-naming §2.3)。
  */
-function DialogueGroupNode({
+function SessionGroupNode({
   sessions,
   collapsed,
   onToggle,
   onCreateDialogue,
+  groupIcon,
+  groupTitle,
+  createLabel,
   isCreateDisabled,
   createDisabledReason,
   parentSectionCollapsed,
@@ -1053,6 +1223,16 @@ function DialogueGroupNode({
   sessions: Session[];
   collapsed: boolean;
   onToggle: () => void;
+  /**
+   * 组头图标与标题。省略 = 「对话」组(本组件的原始形态)。
+   *
+   * 伙伴组与对话组是同一种东西 —— 一个带标题的会话组,只差图标和标题;所以参数化
+   * 而不是复制一份 100 行的组件出来。
+   */
+  groupIcon?: ReactNode;
+  groupTitle?: string;
+  /** 新建按钮的 tooltip / aria 文案。省略 = 「新建对话」。 */
+  createLabel?: string;
   /**
    * 组头右侧的新建入口(与项目行 SquarePen 等位):新建不绑项目的对话任务。
    * 目标设备由父层按所在设备段决定(闭包传入),本组件不关心。
@@ -1103,13 +1283,17 @@ function DialogueGroupNode({
           'transition-colors hover:bg-sidebar-item-hover',
         )}
       >
-        <MessagesSquare
-          size={15}
-          strokeWidth={1.8}
-          className="shrink-0 text-[var(--sidebar-list-muted)]"
-        />
+        {groupIcon ?? (
+          <MessagesSquare
+            size={15}
+            strokeWidth={1.8}
+            className="shrink-0 text-[var(--sidebar-list-muted)]"
+          />
+        )}
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
-          <span className="min-w-0 flex-1 truncate">{t('ccAgent.sidebar.dialogues')}</span>
+          <span className="min-w-0 flex-1 truncate">
+            {groupTitle ?? t('ccAgent.sidebar.dialogues')}
+          </span>
           <Chevron
             size={13}
             strokeWidth={2}
@@ -1125,10 +1309,10 @@ function DialogueGroupNode({
             'opacity-0 transition-opacity focus-within:opacity-100 group-hover:opacity-100',
           )}
         >
-          <Tip text={createDisabledReason ?? t('ccAgent.sidebar.newDialogue')}>
+          <Tip text={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}>
             <button
               type="button"
-              aria-label={createDisabledReason ?? t('ccAgent.sidebar.newDialogue')}
+              aria-label={createDisabledReason ?? createLabel ?? t('ccAgent.sidebar.newDialogue')}
               disabled={isCreateDisabled}
               onClick={(e) => {
                 e.stopPropagation();

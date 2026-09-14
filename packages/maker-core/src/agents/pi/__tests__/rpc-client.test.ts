@@ -32,7 +32,7 @@ function makeFakeTransport() {
     close: vi.fn(async () => { closeHandler?.({ code: 0, signal: null, reason: 'test close' }); }),
     isClosed: vi.fn(() => false),
     get pid() { return 1234; },
-  } as unknown as PiTransport;
+  } satisfies PiTransport;
   const emitLine = (line: string) => lineHandler?.(line);
   const drain = () => {
     for (const w of written.splice(0)) w.resolve();
@@ -42,7 +42,7 @@ function makeFakeTransport() {
 
 function makeProc(overrides: Partial<PiRpcSpawnOptions> = {}) {
   const logger = {
-    debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(),
+    trace: vi.fn(), debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn(), fatal: vi.fn(),
     child: () => logger,
   };
   const onEvent = vi.fn();
@@ -72,7 +72,7 @@ describe('PiRpcProcess response envelope validation', () => {
 
     const resp = await p;
     expect(resp.success).toBe(true);
-    expect(resp.data?.sessionFile).toBe('/sessions/abc.jsonl');
+    expect(resp.data).toMatchObject({ sessionFile: '/sessions/abc.jsonl' });
   });
 
   it('rejects when success is not a boolean (round 40-w4-t4 CRITICAL)', async () => {

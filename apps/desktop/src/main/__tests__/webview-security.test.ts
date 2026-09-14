@@ -49,6 +49,7 @@ import {
   applyGhostWebviewHardening,
   applyLoginCaptchaWebviewHardening,
   applyWebviewHardening,
+  authorizeGhostWebviewAttach,
   hardenLoginCaptchaSession,
   installGhostGuestNavigationHandlers,
   installBrowserGuestHandlers,
@@ -292,7 +293,7 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
     };
     const params: Record<string, string> = {
       src: 'cindy-ghost://art/panel.html',
-      partition: 'cindy-ghost-art',
+      partition: 'cindy-ghost-owner:cloud:0123456789abcdefabcd:art',
       disablewebsecurity: 'true',
       webpreferences: 'nodeIntegration=1',
       allowpopups: 'true',
@@ -311,10 +312,58 @@ describe('applyGhostWebviewHardening(意识面板 webview)', () => {
     expect(webPreferences.plugins).toBe(false);
     expect('preload' in webPreferences).toBe(false);
     // 与浏览器路径的两点差异:分区保留、popup 掐死
-    expect(params.partition).toBe('cindy-ghost-art');
+    expect(params.partition).toBe('cindy-ghost-owner:cloud:0123456789abcdefabcd:art');
     expect('allowpopups' in params).toBe(false);
     expect('disablewebsecurity' in params).toBe(false);
     expect('webpreferences' in params).toBe(false);
+  });
+
+  it('把 Renderer claim 覆盖为 Main 核准的 owner partition', () => {
+    // Electron 在 will-attach-webview 前会把 renderer claim 复制到这里，真实
+    // guest 创建时使用的是 webPreferences.partition，而不是后续的 params。
+    const webPreferences: Record<string, unknown> = {
+      nodeIntegration: true,
+      partition: 'cindy-ghost-same-ghost',
+    };
+    const params: Record<string, string> = {
+      src: 'cindy-ghost://same-ghost/panel.html',
+      partition: 'cindy-ghost-same-ghost',
+      allowpopups: 'true',
+    };
+    const resolver = vi.fn(() => ({
+      ghost: { manifest: { id: 'same-ghost' } },
+      partition: 'cindy-ghost-owner:cloud:opaque-owner-a:same-ghost',
+      owner: { mode: 'cloud', dataOwnerId: 'owner-a' },
+    })) as never;
+
+    expect(authorizeGhostWebviewAttach(webPreferences, params, resolver)).toEqual({
+      id: 'same-ghost',
+      owner: { mode: 'cloud', dataOwnerId: 'owner-a' },
+    });
+    expect(resolver).toHaveBeenCalledWith(
+      'cindy-ghost-same-ghost',
+      'cindy-ghost://same-ghost/panel.html',
+    );
+    expect(params.partition).toBe('cindy-ghost-owner:cloud:opaque-owner-a:same-ghost');
+    expect(webPreferences.partition).toBe(
+      'cindy-ghost-owner:cloud:opaque-owner-a:same-ghost',
+    );
+    expect(webPreferences.nodeIntegration).toBe(false);
+    expect('allowpopups' in params).toBe(false);
+  });
+
+  it('Main 解析或协议注册异常时不核准 attach', () => {
+    const params: Record<string, string> = {
+      src: 'cindy-ghost://same-ghost/panel.html',
+      partition: 'cindy-ghost-same-ghost',
+    };
+
+    expect(
+      authorizeGhostWebviewAttach({}, params, (() => {
+        throw new Error('protocol registration failed');
+      }) as never),
+    ).toBeNull();
+    expect(params.partition).toBe('cindy-ghost-same-ghost');
   });
 });
 
@@ -490,13 +539,28 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
       openHandler = handler;
     });
     const host = { id: 10 } as unknown as WebContents;
+    let ownerActive = true;
+    const gesture = vi.fn();
     const preview = vi.fn();
     const external = vi.fn();
-    installGhostGuestNavigationHandlers(host, guest as unknown as WebContents, 'xd-sites', {
+    installGhostGuestNavigationHandlers(
+      host,
+      guest as unknown as WebContents,
+      'xd-sites',
+      () => ownerActive,
+      { gesture, preview, external },
+    );
+    return {
+      guest,
+      host,
+      gesture,
       preview,
       external,
-    });
-    return { guest, host, preview, external, getOpenHandler: () => openHandler };
+      setOwnerActive: (active: boolean) => {
+        ownerActive = active;
+      },
+      getOpenHandler: () => openHandler,
+    };
   }
 
   it('普通 HTTPS <a> 的 will-navigate 被拦下并带真实 host/guest 交给外链处理', () => {
@@ -511,6 +575,7 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
       'https://workers.xd.team/workspace/published',
       harness.host,
       harness.guest,
+      expect.any(Function),
     );
     expect(harness.preview).not.toHaveBeenCalled();
   });
@@ -544,6 +609,24 @@ describe('installGhostGuestNavigationHandlers(Ghost settingsHtml / panel 共用�
 
     expect(harness.guest.setWindowOpenHandler).toHaveBeenCalledOnce();
     expect(harness.getOpenHandler()?.()).toEqual({ action: 'deny' });
+    expect(harness.external).not.toHaveBeenCalled();
+  });
+
+  it('owner 切换后旧 guest 的手势和导航全部被 Main 拒绝', () => {
+    const harness = makeHarness();
+    harness.setOwnerActive(false);
+    const externalEvent = { preventDefault: vi.fn() };
+    const sameOriginEvent = { preventDefault: vi.fn() };
+
+    harness.guest.emit('before-mouse-event', {}, { type: 'mouseDown' });
+    harness.guest.emit('before-input-event', {}, { type: 'keyDown' });
+    harness.guest.emit('will-navigate', externalEvent, 'https://workers.xd.team/owner-a-data');
+    harness.guest.emit('will-navigate', sameOriginEvent, 'cindy-ghost://xd-sites/panel.html');
+
+    expect(harness.gesture).not.toHaveBeenCalled();
+    expect(externalEvent.preventDefault).toHaveBeenCalledOnce();
+    expect(sameOriginEvent.preventDefault).toHaveBeenCalledOnce();
+    expect(harness.preview).not.toHaveBeenCalled();
     expect(harness.external).not.toHaveBeenCalled();
   });
 });

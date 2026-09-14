@@ -97,7 +97,6 @@ function ghost(id: string, opts: { enabled?: boolean; position?: 'left' | 'tab' 
     version: '1.0.0',
     kind: 'chip',
     entry: 'main.js',
-    slots: ['panel'],
     panel: {
       html: 'panel.html',
       ...(opts.position !== undefined ? { position: opts.position } : {}),
@@ -424,6 +423,55 @@ describe('closed event', () => {
     h.setQuitting(true);
     h.created[0].win.emitClosed();
     expect(h.entries().b).toEqual({ detached: true, lastOpen: true });
+  });
+});
+
+describe('owner change', () => {
+  it('destroys visible, hidden, pending, and prewarmed windows and returns entries to docked', () => {
+    const h = makeHarness(new Set(['visible', 'hidden', 'pending', 'prewarmed']));
+    h.controller.open('visible');
+    markReady(h.controller, h.created[0].win);
+    h.controller.open('hidden');
+    markReady(h.controller, h.created[1].win);
+    h.controller.close('hidden');
+    h.controller.open('pending');
+    h.controller.prewarm('prewarmed');
+
+    h.controller.closeForOwnerChange();
+
+    expect(h.created.map(({ win }) => win.isDestroyed())).toEqual([true, true, true, true]);
+    expect(h.created.every(({ win }) => win.destroy.mock.calls.length === 1)).toBe(true);
+    expect(h.created.every(({ win }) => win.close.mock.calls.length === 0)).toBe(true);
+    expect(h.entries()).toEqual({
+      visible: { detached: false, lastOpen: false },
+      hidden: { detached: false, lastOpen: false },
+      pending: { detached: false, lastOpen: false },
+    });
+    expect(h.controller.getState()).toEqual({
+      visible: { detached: false, lastOpen: false, open: false },
+      hidden: { detached: false, lastOpen: false, open: false },
+      pending: { detached: false, lastOpen: false, open: false },
+    });
+    expect(h.broadcasts.at(-1)).toEqual(h.controller.getState());
+  });
+
+  it('keeps the panel docked through reconcile and only creates a new slot on explicit detach', () => {
+    const h = makeHarness(new Set(['a']));
+    h.controller.setDetached('a', true);
+    const ownerAWindow = h.created[0].win;
+
+    h.controller.closeForOwnerChange();
+    h.controller.reconcile([ghost('a')]);
+
+    expect(ownerAWindow.isDestroyed()).toBe(true);
+    expect(h.created).toHaveLength(1);
+    expect(h.entries().a).toEqual({ detached: false, lastOpen: false });
+
+    const state = h.controller.setDetached('a', true);
+    expect(h.created).toHaveLength(2);
+    expect(h.created[1].win.isDestroyed()).toBe(false);
+    expect(h.entries().a).toEqual({ detached: true, lastOpen: true });
+    expect(state.a).toEqual({ detached: true, lastOpen: true, open: true });
   });
 });
 

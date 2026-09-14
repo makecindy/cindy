@@ -228,6 +228,63 @@ describe('remoteProjectsStore', () => {
       expect(getSessionDeviceId('s1')).toBe('dev-B'); // origin 标记不丢
     });
 
+    it('合并被控端运行时模型投影并同步有效设置轴', () => {
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1')]);
+      remoteProjectsStore.applyPatch('dev-B', 's1', {
+        model: 'gpt-runtime',
+        providerId: 'openai',
+        effort: 'xhigh',
+        fastMode: true,
+        runtimeGeneration: 3,
+        runtimeBaseline: {
+          agentKind: 'codex',
+          model: 'gpt-baseline',
+          providerId: 'xd',
+          effort: 'high',
+          fastMode: false,
+        },
+        runtimeEffective: {
+          agentKind: 'codex',
+          model: 'gpt-runtime',
+          providerId: 'openai',
+          effort: 'xhigh',
+          fastMode: true,
+        },
+        runtimePending: null,
+      });
+
+      expect(remoteProjectsStore.getMergedRemoteSessions()[0]).toMatchObject({
+        model: 'gpt-runtime',
+        providerId: 'openai',
+        effort: 'xhigh',
+        fastMode: true,
+        runtimeGeneration: 3,
+        runtimeEffective: { model: 'gpt-runtime', providerId: 'openai' },
+      });
+    });
+
+    it('固定强度运行时模型显式清除旧 effort', () => {
+      remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1', { effort: 'high' })]);
+      remoteProjectsStore.applyPatch('dev-B', 's1', {
+        model: 'fixed-strength-model',
+        providerId: 'openai',
+        effort: '',
+        runtimeEffective: {
+          agentKind: 'codex',
+          model: 'fixed-strength-model',
+          providerId: 'openai',
+          effort: null,
+          fastMode: false,
+        },
+      });
+
+      expect(remoteProjectsStore.getMergedRemoteSessions()[0]).toMatchObject({
+        model: 'fixed-strength-model',
+        effort: '',
+        runtimeEffective: { effort: null },
+      });
+    });
+
     it('status=deleted 移出分片，archived 保留完整行供归档筛选展示', () => {
       remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1'), mk('s2')]);
       remoteProjectsStore.applyPatch('dev-B', 's1', { status: 'deleted' });

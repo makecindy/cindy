@@ -1,5 +1,6 @@
 import {
   isPublicHttpResourceUrl,
+  parseBrowserProxyServer,
   type BrowserControlRequest,
   type BrowserControlRuntime,
 } from '@cindy/browser-control-runtime';
@@ -67,6 +68,7 @@ async function recipeRegistry(deps: BrowserMcpDeps): Promise<Map<string, MergedR
 const ACTIONS = [
   'doctor',
   'status',
+  'setBackend',
   'start',
   'stop',
   'profiles',
@@ -227,11 +229,22 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
     category: 'browser',
     description:
       '浏览器自动化统一入口。通过 action 选择 status/start/tabs/navigate/snapshot/screenshot/act 等操作; ' +
+      'status 返回实际浏览器模式; setBackend 切换并保存全局浏览器模式(内置 rsb-webview / 外置 external)。' +
       '优先使用 snapshot 返回的 ref 执行 click/type/press,不要猜测 CSS selector。' +
       '注意:直接调用本工具时,wait/evaluate/saveResource 不是顶层 action(会报 INVALID_ARGS),它们只能作为 act 的 request.kind 子操作(配方 steps 里仅 wait/evaluate 是合法 DSL action,saveResource 在配方中同样不可用)。',
     rules: ['browser-workflow', 'recipe-author'],
     inputShape: {
       action: z.enum(ACTIONS).describe('浏览器操作类型'),
+      backend: z
+        .enum(['external', 'rsb-webview'])
+        .optional()
+        .describe('仅 action=setBackend: 切换全局自动化目标并保存设置; 会影响其他任务,两种模式的登录态与标签页不互通'),
+      proxyServer: z.string().optional().describe(
+        'action=start 时使用的代理 URL（如 http://host:port）。**不支持带用户名/密码的认证代理**，带 userinfo 会被直接拒绝',
+      ),
+      proxyAllowedHostnames: z.array(z.string()).min(1).max(32).optional().describe(
+        'action=start 且启用代理时允许导航的公网 DNS 名称或 *.example.com 模式；代理模式默认禁止导航',
+      ),
       profile: z.string().optional().describe('浏览器 profile 名;省略则使用默认隔离 profile'),
       target: z.enum(['sandbox', 'host', 'node']).optional(),
       node: z.string().optional(),
@@ -323,8 +336,49 @@ export function registerBrowserTools(registry: BrowserToolRegistry, deps: Browse
         .describe('action=act 时的具体动作请求'),
     },
     handler: async (args) => {
-      const runtime = getRuntime(deps);
       try {
+        // Host configuration is not a vendored browser action. Await the same
+        // lifecycle transition as Settings before issuing any new page actions.
+        if (args.action === 'setBackend') {
+          if (!args.backend) {
+            return errorResult(args.action, 'setBackend requires backend: external or rsb-webview');
+          }
+          if (!deps.setBackend) return errorResult(args.action, '当前宿主不支持切换浏览器模式');
+          const backend = await deps.setBackend(args.backend);
+          const ok = backend === args.backend;
+          return {
+            content: [{
+              type: 'text',
+              text: resultText({
+                ok,
+                action: args.action,
+                data: { backend, scope: 'global', ...(ok ? { persisted: true } : {}) },
+                ...(!ok ? { message: '浏览器模式已发生变化,请重新查询 status' } : {}),
+              }),
+            }],
+            isError: !ok,
+          };
+        }
+        if (args.backend !== undefined) {
+          return errorResult(args.action, 'backend 仅用于 setBackend; 请先切换模式,再操作页面');
+        }
+        if (args.proxyServer !== undefined || args.proxyAllowedHostnames !== undefined) {
+          if (args.action !== 'start') {
+            return errorResult(
+              args.action,
+              'proxyServer 与 proxyAllowedHostnames 仅可用于 action=start；其他操作请省略这些字段',
+            );
+          }
+          try {
+            parseBrowserProxyServer(args.proxyServer, args.proxyAllowedHostnames);
+          } catch (err) {
+            return errorResult(
+              args.action,
+              err instanceof Error ? err.message : 'proxyServer 不合法',
+            );
+          }
+        }
+        const runtime = getRuntime(deps);
         // Block non-web schemes at the boundary: navigate/open to file:// /
         // chrome:// / data: would let the agent reach local files or browser
         // internals. Only the scheme is constrained — localhost/private HTTP

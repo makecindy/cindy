@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import fsSync from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
@@ -20,6 +21,19 @@ import {
 import { ReviewArtifactChangedDuringPreparationError } from '../reviewArtifactFingerprint.js';
 
 const tempDirs: string[] = [];
+const canLinkFile = (() => {
+  const root = fsSync.mkdtempSync(path.join(os.tmpdir(), 'review-snapshot-file-link-probe-'));
+  try {
+    const target = path.join(root, 'target');
+    fsSync.writeFileSync(target, 'probe');
+    fsSync.symlinkSync(target, path.join(root, 'link'), 'file');
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fsSync.rmSync(root, { recursive: true, force: true });
+  }
+})();
 const TEST_OWNER: ReviewRunOwner = {
   instanceId: 'snapshot-test-owner',
   processId: process.pid,
@@ -212,7 +226,7 @@ describe('materializeReviewArtifactSnapshots', () => {
   });
 
   it('rejects a symlink substituted after the original path was authorized', async () => {
-    if (process.platform === 'win32') return;
+    if (!canLinkFile) return;
     const workingDir = await tempDir();
     const externalDir = await tempDir();
     const sourcePath = path.join(externalDir, 'poster.png');
@@ -373,13 +387,16 @@ describe('materializeReviewArtifactSnapshots', () => {
   });
 
   it('does not follow a snapshot-shaped symlink while reaping orphans', async () => {
-    if (process.platform === 'win32') return;
     const scanRoot = await tempDir();
     const targetRoot = await tempDir();
     const targetFile = path.join(targetRoot, 'keep.txt');
     const linkPath = path.join(scanRoot, 'cindy-review-artifacts-v1-424242-Ij56Kl');
     await fs.writeFile(targetFile, 'keep');
-    await fs.symlink(targetRoot, linkPath);
+    await fs.symlink(
+      targetRoot,
+      linkPath,
+      process.platform === 'win32' ? 'junction' : 'dir',
+    );
 
     await cleanupOrphanedReviewArtifactSnapshots({
       currentOwner: TEST_OWNER,

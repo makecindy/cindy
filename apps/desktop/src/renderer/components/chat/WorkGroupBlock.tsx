@@ -19,6 +19,7 @@
  * 时长缺失(老历史数据没有 createdAt)时退化为「工作过程」文案,不显示时间。
  */
 
+import { CHAT_CHEVRON_TRANSITION_CLASS } from './chatChrome';
 import {
   Fragment,
   useCallback,
@@ -37,7 +38,14 @@ import type { ChatMessage } from '@/lib/makerChatStore';
 import { useExpandedBlockMemory } from '@/hooks/useExpandedBlockMemory';
 import { Collapse } from '@/components/ui/collapse';
 import { Spinner } from '@/components/ui/spinner';
+import { Button } from '@/components/ui/button';
 
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+  ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+  ACTIVITY_ROW_RADIUS_CLASS,
+} from './activityRowChrome';
 import { AgentActionRow } from './AgentActionRow';
 import { ThinkingCard, formatDuration } from './ThinkingCard';
 import { ThinkingText } from './ThinkingText';
@@ -67,6 +75,7 @@ export type WorkGroupChild =
       isStreaming: boolean;
       startedAtMs?: number;
       childItems: WorkGroupChild[];
+      deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
     }
   | { kind: 'rendered'; key: string; renderNode: () => ReactNode };
 
@@ -97,6 +106,7 @@ export function collectLiveWorkActivities(
 }
 
 export interface WorkGroupBlockProps {
+  deferred?: import('@cindy/maker-shared/message-window').DeferredHistoryWork;
   /** Stable persistence key:动作段 `work:<clientId>`,外层 `work:summary-<clientId>`. */
   blockId: string;
   /** Wall-clock span of the run; undefined when timestamps are unavailable. */
@@ -112,7 +122,7 @@ export interface WorkGroupBlockProps {
 
 function ToolActivityRow({ activity }: { activity: ProjectedToolActivity }) {
   return (
-    <div data-live-work-activity="tool" className="min-w-0">
+    <div data-live-work-activity="tool" className="w-full min-w-0">
       <AgentActionRow
         message={activity.message}
         toolResult={activity.toolResult}
@@ -160,12 +170,21 @@ function ThinkingActivityRow({
       data-live-work-activity="thinking"
       data-message-client-id={activity.key}
       data-work-thinking-expandable={canExpand ? 'true' : 'false'}
+      data-scroll-disclosure-header=""
       disabled={!canExpand}
       aria-expanded={canExpand ? expanded : undefined}
       onClick={() => setExpanded((value) => !value)}
       className={cn(
-        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        canExpand && 'cursor-pointer hover:opacity-80 transition-opacity',
+        'flex w-full min-w-0 gap-1.5 px-2 py-[3px] text-left outline-none',
+        ACTIVITY_ROW_RADIUS_CLASS,
+        expanded ? 'items-start' : 'items-center',
+        canExpand
+          ? [
+              'group cursor-pointer select-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+              ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+              ACTIVITY_ROW_HOVER_SURFACE_CLASS,
+            ]
+          : 'cursor-default',
       )}
     >
       <span
@@ -184,55 +203,25 @@ function ThinkingActivityRow({
       >
         <ThinkingText content={expanded ? rawContent : activity.content} />
       </span>
-      {canExpand && (
-        <span aria-hidden="true" className="inline-flex h-[18px] shrink-0 items-center text-[var(--msg-tool-card-chevron)]">
+      <span aria-hidden="true" className={ACTIVITY_ROW_CHEVRON_SLOT_CLASS}>
+        {canExpand ? (
           <ChevronRight
             size={13}
             className={cn(
-              'transition-transform duration-[var(--motion-fast,150ms)]',
+              CHAT_CHEVRON_TRANSITION_CLASS,
               expanded && 'rotate-90',
             )}
           />
-        </span>
-      )}
+        ) : null}
+      </span>
     </button>
   );
 }
 
-/** 展开动作段里的 thinking:默认直接露出一行;原文多行或视觉溢出时,
- *  允许再点该行查看完整原文。live preview 继续复用上面的固定单行版本。 */
+/** 展开动作段里的 thinking:与 live preview 共用 ThinkingActivityRow,
+ *  保证右侧三角槽同一套布局;redacted 仍走 ThinkingCard。 */
 function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
   const activity = thinkingActivityForMessage(message);
-  const rawContent = message.content.trim();
-  const hasExplicitLineBreak = /[\r\n]/.test(rawContent);
-  const textRef = useRef<HTMLSpanElement>(null);
-  const [canExpand, setCanExpand] = useState(hasExplicitLineBreak);
-  const { expanded, setExpanded } = useExpandedBlockMemory(`thinking:${message.clientId}`);
-
-  useLayoutEffect(() => {
-    if (!activity) return;
-    if (expanded) {
-      setCanExpand(true);
-      return;
-    }
-    const textElement = textRef.current;
-    if (!textElement) return;
-    const updateOverflow = () => {
-      setCanExpand(
-        hasExplicitLineBreak || textElement.scrollWidth > textElement.clientWidth + 1,
-      );
-    };
-    updateOverflow();
-    if (typeof ResizeObserver === 'undefined') return;
-    const observer = new ResizeObserver(updateOverflow);
-    observer.observe(textElement);
-    return () => observer.disconnect();
-  }, [activity?.content, expanded, hasExplicitLineBreak]);
-
-  const onToggle = useCallback(() => {
-    if (canExpand) setExpanded((value) => !value);
-  }, [canExpand, setExpanded]);
-
   if (!activity) {
     if (!message.thinkingRedacted) return null;
     return (
@@ -246,49 +235,7 @@ function ExpandedThinkingRow({ message }: { message: ChatMessage }) {
     );
   }
 
-  return (
-    <button
-      type="button"
-      data-live-work-activity="thinking"
-      data-message-client-id={message.clientId}
-      data-work-thinking-expandable={canExpand ? 'true' : 'false'}
-      onClick={onToggle}
-      disabled={!canExpand}
-      aria-expanded={canExpand ? expanded : undefined}
-      className={cn(
-        'flex w-full min-w-0 items-start gap-[6px] px-2 py-[3px] text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-        canExpand && 'cursor-pointer hover:opacity-80 transition-opacity',
-      )}
-    >
-      <span
-        aria-hidden="true"
-        className="inline-flex h-[18px] w-4 shrink-0 items-center justify-center text-[var(--msg-tool-card-chevron)]"
-      >
-        <Sparkles size={13} />
-      </span>
-      <span
-        ref={textRef}
-        className={cn(
-          'min-w-0 flex-1 text-14 italic text-[var(--thinking-body-text)]',
-          expanded ? 'whitespace-pre-wrap break-words' : 'truncate',
-        )}
-        title={expanded ? undefined : activity.content}
-      >
-        <ThinkingText content={expanded ? rawContent : activity.content} />
-      </span>
-      {canExpand && (
-        <span aria-hidden="true" className="inline-flex h-[18px] shrink-0 items-center text-[var(--msg-tool-card-chevron)]">
-          <ChevronRight
-            size={13}
-            className={cn(
-              'transition-transform duration-[var(--motion-fast,150ms)]',
-              expanded && 'rotate-90',
-            )}
-          />
-        </span>
-      )}
-    </button>
-  );
+  return <ThinkingActivityRow activity={activity} />;
 }
 
 /** 同一个子项渲染器递归服务运行态动作组、完成态内层动作组和外层文字时间线。 */
@@ -319,6 +266,7 @@ function ExpandedWorkGroupChild({
         isStreaming={child.isStreaming}
         startedAtMs={child.startedAtMs}
         childItems={child.childItems}
+        deferred={child.deferred}
       />
     );
   }
@@ -326,6 +274,7 @@ function ExpandedWorkGroupChild({
 }
 
 export function WorkGroupBlock({
+  deferred,
   blockId,
   durationMs,
   isStreaming = false,
@@ -333,7 +282,15 @@ export function WorkGroupBlock({
   childItems,
 }: WorkGroupBlockProps) {
   const { t } = useTranslation();
-  const { expanded, setExpanded } = useExpandedBlockMemory(blockId);
+  const { expanded: rememberedExpanded, setExpanded } = useExpandedBlockMemory(blockId);
+  const expanded = deferred?.setVisible ? rememberedExpanded : deferred?.expanded ?? rememberedExpanded;
+  const deferredRef = useRef(deferred);
+  deferredRef.current = deferred;
+  useEffect(() => {
+    const current = deferredRef.current;
+    current?.setVisible?.(expanded, isStreaming);
+    return () => current?.setVisible?.(false, false);
+  }, [deferred?.owner, deferred?.key, expanded, isStreaming]);
   const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
@@ -368,7 +325,7 @@ export function WorkGroupBlock({
   );
   // 运行中预览已经等于全部内容时，折叠/展开是视觉空操作 — 组头不提供交互。
   const canToggle =
-    !isStreaming
+    (!!deferred && !deferred.previewComplete) || !isStreaming
     || hasBeyondPreviewChild
     || recentActivities.length > MAX_LIVE_WORK_ACTIVITIES;
   const effectiveExpanded = expanded && canToggle;
@@ -387,10 +344,11 @@ export function WorkGroupBlock({
   // 外层完成态组展开成文字 + 内层动作组;内层动作组与运行态组复用本组件,
   // 展开后直接渲染 thinking /工具行,不再多套一层子卡摘要。
   const onToggle = useCallback(() => {
+    if (deferred && !deferred.setVisible) { deferred.toggle(); return; }
     setExpanded((v) => !v);
-  }, [setExpanded]);
+  }, [deferred, setExpanded]);
 
-  if (childItems.length === 0) return null;
+  if (childItems.length === 0 && !deferred) return null;
 
   // durationMs === 0(同毫秒时间戳的极短 run)也显示时长 — formatDuration
   // 自带最小 1s 钳制;只有时间戳缺失(undefined)才退化为无时长文案。
@@ -423,14 +381,15 @@ export function WorkGroupBlock({
     : baseSummaryText;
 
   return (
-    <div className="flex w-full justify-start">
-      <div className="w-full">
+    <div className="flex w-full min-w-0 justify-start">
+      <div className="w-full min-w-0">
         <button
           type="button"
           onClick={canToggle ? onToggle : undefined}
+          data-scroll-disclosure-header=""
           disabled={!canToggle}
           className={cn(
-            'flex w-full items-center gap-[6px] py-[2px]',
+            'flex w-full items-center gap-1.5 py-[2px]',
             'select-none',
             'text-left',
             canToggle && 'cursor-pointer hover:opacity-80 transition-opacity',
@@ -461,7 +420,7 @@ export function WorkGroupBlock({
               size={14}
               className={cn(
                 'shrink-0 text-[var(--msg-tool-card-chevron)]',
-                'transition-transform duration-[var(--motion-fast,150ms)]',
+                CHAT_CHEVRON_TRANSITION_CLASS,
                 effectiveExpanded && 'rotate-90',
               )}
             />
@@ -472,7 +431,7 @@ export function WorkGroupBlock({
           <div
             data-live-work-preview="true"
             className={cn(
-              'mt-1 border-l-2 border-[var(--agent-actions-rail)] py-[2px] pl-3',
+              'mt-1 min-w-0 border-l-2 border-[var(--agent-actions-rail)] py-[2px] pl-3',
               'flex flex-col',
             )}
           >
@@ -489,7 +448,7 @@ export function WorkGroupBlock({
         <Collapse open={effectiveExpanded}>
           <div
             className={cn(
-              'mt-1 pl-3 py-[2px]',
+              'mt-1 min-w-0 pl-3 py-[2px]',
               'border-l-2 border-[var(--agent-actions-rail)]',
               'flex flex-col gap-2',
             )}
@@ -506,6 +465,12 @@ export function WorkGroupBlock({
                 />
               </Fragment>
             ))}
+            {deferred?.loading && <Spinner size={14} />}
+            {deferred?.failed && (
+              <Button variant="secondary" disabled={deferred.loading} onClick={deferred.retry}>
+                {t('chat.errorBanner.retry')}
+              </Button>
+            )}
           </div>
         </Collapse>
       </div>

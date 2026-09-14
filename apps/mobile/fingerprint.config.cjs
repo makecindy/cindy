@@ -9,16 +9,41 @@
 // Expo version skip only for self-host commands (they set this env explicitly),
 // leaving EAS/TestFlight fingerprint semantics unchanged.
 const sourceSkips = [
-  'PackageJsonAndroidAndIosScriptsIfNotContainRun',
-  ...(process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST === '1'
-    ? ['ExpoConfigVersions']
+  "PackageJsonAndroidAndIosScriptsIfNotContainRun",
+  ...(process.env.EXPO_PUBLIC_XDT_OTA_SELFHOST === "1"
+    ? ["ExpoConfigVersions"]
     : []),
 ];
 
 module.exports = {
   sourceSkips,
+  // These images are compiled into the native catalog, not delivered by Metro.
+  extraSources: [
+    "cindy-message-square-plus",
+    "cindy-link-2",
+    "cindy-undo-2",
+    "cindy-trash-2",
+  ]
+    .map((name) => ({
+      type: "dir",
+      filePath: `assets/message-menu/${name}.imageset`,
+      reasons: ["native message menu assets"],
+    }))
+    .concat([
+      {
+        type: "dir",
+        filePath: "../../packages/remote-credentials-native/Sources",
+        reasons: ["remote credentials native core"],
+      },
+      {
+        type: "file",
+        filePath:
+          "../../packages/remote-credentials-native/CindyRemoteCredentials.podspec",
+        reasons: ["remote credentials native dependencies"],
+      },
+    ]),
   fileHookTransform(source, chunk, isEndOfFile) {
-    if (source.type !== 'file' || source.filePath !== 'eas.json') {
+    if (source.type !== "file" || source.filePath !== "eas.json") {
       return chunk;
     }
     return transformEasJson(chunk, isEndOfFile);
@@ -28,12 +53,12 @@ module.exports = {
 const easChunks = [];
 
 function transformEasJson(chunk, isEndOfFile) {
-  if (chunk != null) easChunks.push(Buffer.from(chunk).toString('utf8'));
+  if (chunk != null) easChunks.push(Buffer.from(chunk).toString("utf8"));
   if (!isEndOfFile) {
     return null;
   }
 
-  const eas = stripBetaProfiles(JSON.parse(easChunks.join('')));
+  const eas = stripBetaProfiles(JSON.parse(easChunks.join("")));
   easChunks.length = 0;
   return `${JSON.stringify(eas, null, 2)}\n`;
 }
@@ -41,7 +66,7 @@ function transformEasJson(chunk, isEndOfFile) {
 function stripBetaProfiles(eas) {
   if (!eas.build) return eas;
   for (const profileName of Object.keys(eas.build)) {
-    if (profileName === 'beta-base' || profileName.startsWith('beta-')) {
+    if (profileName === "beta-base" || profileName.startsWith("beta-")) {
       delete eas.build[profileName];
     }
   }

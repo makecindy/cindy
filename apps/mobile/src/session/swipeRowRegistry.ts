@@ -13,7 +13,7 @@ import {
 } from '@/session/sessionSelection';
 
 /** swipe / 选项菜单可触发的全部动作。rename 无补丁形态(走重命名弹窗),单独排除。 */
-export type SessionSwipeAction = 'pin' | 'unpin' | 'archive' | 'delete' | 'rename';
+export type SessionSwipeAction = 'pin' | 'unpin' | 'archive' | 'restore' | 'delete' | 'rename';
 
 export interface SwipeRowRegistry {
   /**
@@ -323,15 +323,26 @@ export interface SessionActionMenuItem {
   destructive?: boolean;
 }
 
-/** 「选项」菜单模型:重命名 → 置顶切换 → 归档 → 删除(文案与会话详情页菜单保持一致)。 */
+/** 左滑主按钮 / 菜单归档项:按当前状态在归档与恢复之间切换。 */
+export function statusToggleAction(
+  status: string | null | undefined,
+): { action: 'archive' | 'restore'; label: string } {
+  return status === 'archived'
+    ? { action: 'restore', label: i18n.t('session.menu.restore') }
+    : { action: 'archive', label: i18n.t('session.menu.archive') };
+}
+
+/** 「选项」菜单模型:重命名 → 置顶切换 → 归档/恢复 → 删除(文案与会话详情页菜单保持一致)。 */
 export function buildSessionActionMenu(
   pinnedAt: string | null | undefined,
+  status?: string | null,
 ): SessionActionMenuItem[] {
   const pinToggle = pinToggleAction(pinnedAt);
+  const statusToggle = statusToggleAction(status);
   return [
     { action: 'rename', label: i18n.t('session.menu.renameAction') },
     { action: pinToggle.action, label: pinToggle.label },
-    { action: 'archive', label: i18n.t('session.menu.archive') },
+    { action: statusToggle.action, label: statusToggle.label },
     { action: 'delete', label: i18n.t('session.menu.deleteConversation'), destructive: true },
   ];
 }

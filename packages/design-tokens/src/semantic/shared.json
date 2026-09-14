@@ -1,0 +1,14 @@
+{
+  "semantic": {
+    "windowBacking": {
+      "light": {
+        "$type": "color",
+        "$value": "{reference.windowBacking.light}"
+      },
+      "dark": {
+        "$type": "color",
+        "$value": "{reference.windowBacking.dark}"
+      }
+    }
+  }
+}

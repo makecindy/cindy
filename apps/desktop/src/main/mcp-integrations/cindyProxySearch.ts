@@ -3,6 +3,10 @@ import { createLogger } from '../logger.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
 import { getProviderSecretStore } from '../secrets/providerSecretStore.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import {
+  matchesDeterministicUsageExhaustionText,
+  redactSensitiveText,
+} from '@cindy/maker-shared/error-redaction';
 
 export const CINDY_SEARCH_MODEL_NAME = 'cindy/web-search';
 const CINDY_SEARCH_WEB_TOOL_TYPE = 'web_search_20250305';
@@ -101,13 +105,22 @@ function classifyHttpFailure(
       message: 'Cindy AI 搜索鉴权失败，请重新登录或稍后再试',
     };
   }
+  // 余额耗尽(#4024):网关的预算闸用 HTTP 429 + `ExceededBudget` 正文拒绝,与瞬时限流
+  // 共用状态码。先按仓库共享的严格判定(与对话 Error Banner / 终端限流重试同一 SSoT)
+  // 识别明确的额度耗尽,再落普通 429 —— 否则用户会被引导「稍后再试」而永远不会恢复。
+  // 429 只认严格信号:宽松措辞(quota/credit/balance…)留给非 429 状态,避免把
+  // 「rate limit exceeded, credits refill soon」这类瞬时限流误判成需要充值。
+  const deterministicExhaustion = matchesDeterministicUsageExhaustionText(body.slice(0, 1024));
   const looksLikeQuota =
-    status === 402 ||
-    /(?:quota|credit|balance|insufficient|exhausted|spend limit)/.test(normalized);
+    status === 429
+      ? deterministicExhaustion
+      : status === 402 ||
+        deterministicExhaustion ||
+        /(?:quota|credit|balance|insufficient|exhausted|spend limit)/.test(normalized);
   if (looksLikeQuota) {
     return {
       errorCode: 'QUOTA_EXHAUSTED',
-      message: 'Cindy AI 搜索额度不足，请稍后再试或在插件设置中改用自己的搜索渠道',
+      message: 'Cindy AI 余额不足，请充值后再试，或在插件设置中改用自己的搜索渠道',
     };
   }
   if (status === 404) {
@@ -149,6 +162,68 @@ function classifyHttpFailure(
     errorCode: 'INTERNAL',
     message: 'Cindy AI 搜索失败，请稍后再试',
   };
+}
+
+const DIGEST_TOKEN_MAX_CHARS = 64;
+const DIGEST_TOKEN_PATTERN = /^[A-Za-z0-9_.:-]{1,64}$/;
+
+/** 结构化诊断摘要:只收允许名单里的字段,绝不把任意上游正文落盘。 */
+export interface SearchResponseBodyDigest {
+  /** 正文是否为 JSON 对象;非 JSON 只记长度,不记内容。 */
+  json: boolean;
+  /** 原始正文字符数(用于判断是否被网关截断/是否为空)。 */
+  length: number;
+  /** 顶层 `error`(字符串或对象的 `code`/`type`)——仅当形如 `ExceededBudget` 的短标识才记录。 */
+  error?: string;
+  /** 顶层 / `error.` 下的 `code`、`type`,同样只收短标识。 */
+  code?: string;
+  type?: string;
+  /** 网关预算闸附带的数值,用于复盘「预算闸拒绝」而非「真限流」。 */
+  spend?: number;
+  budget?: number;
+}
+
+function digestToken(value: unknown): string | undefined {
+  if (typeof value !== 'string') return undefined;
+  const trimmed = value.trim();
+  if (!DIGEST_TOKEN_PATTERN.test(trimmed)) return undefined;
+  // 标识形态本不该含凭证,再过一遍共享脱敏兜底(例如 `key:...` 形态)。
+  return redactSensitiveText(trimmed).slice(0, DIGEST_TOKEN_MAX_CHARS);
+}
+
+function digestNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * 非 2xx 响应体的诊断摘要(#4024):区分「预算闸拒绝」与「真限流」靠的是正文,但上游
+ * 正文可能回显 query、以非标准字段携带凭证或含其他敏感内容,通用脱敏器不保证识别 ——
+ * 因此不记任意文本,只按允许名单抽取短标识与数值,其余只记长度。
+ */
+function responseBodyDigest(body: string): SearchResponseBodyDigest {
+  const digest: SearchResponseBodyDigest = { json: false, length: body.length };
+  let decoded: unknown;
+  try {
+    decoded = JSON.parse(body);
+  } catch {
+    return digest;
+  }
+  if (!isRecord(decoded)) return digest;
+  digest.json = true;
+  const errorField = decoded.error;
+  const errorRecord = isRecord(errorField) ? errorField : null;
+  const error =
+    digestToken(errorField) ?? digestToken(errorRecord?.code) ?? digestToken(errorRecord?.type);
+  const code = digestToken(decoded.code) ?? digestToken(errorRecord?.code);
+  const type = digestToken(decoded.type) ?? digestToken(errorRecord?.type);
+  const spend = digestNumber(decoded.spend) ?? digestNumber(errorRecord?.spend);
+  const budget = digestNumber(decoded.budget) ?? digestNumber(errorRecord?.budget);
+  if (error !== undefined) digest.error = error;
+  if (code !== undefined) digest.code = code;
+  if (type !== undefined) digest.type = type;
+  if (spend !== undefined) digest.spend = spend;
+  if (budget !== undefined) digest.budget = budget;
+  return digest;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -403,6 +478,9 @@ export function createCindyProxySearchService(deps: CindyProxySearchDeps): Cindy
           latencyMs,
           ...(requestId ? { requestId } : {}),
           errorCode: failure.errorCode,
+          // 允许名单式的结构化正文摘要,只进本机诊断日志(不回传插件 / 用户):
+          // 区分「预算闸拒绝」与「真限流」靠的正是正文,此前日志只有状态码无从复盘(#4024)。
+          bodyDigest: responseBodyDigest(body),
         });
         return {
           ok: false,

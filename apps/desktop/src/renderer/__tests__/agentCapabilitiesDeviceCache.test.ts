@@ -21,6 +21,7 @@ interface Caps {
   hasFastMode: boolean;
   effortLevels: unknown[];
   permissionModes: unknown[];
+  writableDirs?: { supported: boolean };
 }
 const caps = (label: string, ctx = 1): Caps => ({
   availableModels: [
@@ -232,6 +233,84 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     );
     // 本地缓存不受影响(没预热过)
     expect(mod.getCachedCapabilities('claude-code')).toBeNull();
+  });
+
+  it('旧被控端缺少 writableDirs 时安全降级，新端声明后保留能力', async () => {
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) =>
+      args[0] === 'codex'
+        ? { ...caps('dev-1:codex'), writableDirs: { supported: true } }
+        : caps(`dev-1:${String(args[0])}`),
+    );
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('claude-code', 'dev-1')?.writableDirs).toBeUndefined();
+    expect(mod.getCachedCapabilities('codex', 'dev-1')?.writableDirs).toEqual({
+      supported: true,
+    });
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('claude-code', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: { writableDirs: { supported: false } },
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('codex', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(true);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: { writableDirs: { supported: true } },
+        deviceId: null,
+        remoteHostId: 'ssh-host',
+      }),
+    ).toBe(false);
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: null,
+        deviceId: null,
+        remoteHostId: null,
+      }),
+    ).toBe(true);
+  });
+
+  it('拒绝畸形 writableDirs 能力而不开放远端入口', async () => {
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) => ({
+      ...caps(`dev-1:${String(args[0])}`),
+      writableDirs: true,
+    }));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('claude-code', 'dev-1')).toBeNull();
+    expect(
+      mod.canExposeWritableDirsChange({
+        capabilities: mod.getCachedCapabilities('claude-code', 'dev-1'),
+        deviceId: 'dev-1',
+        remoteHostId: null,
+      }),
+    ).toBe(false);
   });
 
   it('远程 Pi capabilities 原样保留 BYOM 显式 effort 子集', async () => {

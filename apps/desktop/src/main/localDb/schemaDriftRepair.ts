@@ -26,6 +26,7 @@ import type { SQLiteTableWithColumns, TableConfig } from 'drizzle-orm/sqlite-cor
 
 import * as schema from './schema';
 import { createLogger } from '../logger';
+import { repairMessagesFtsRows } from './messagesFtsRowsRepair';
 
 const log = createLogger('schema-drift-repair');
 
@@ -81,7 +82,7 @@ export interface RepairReport {
 /** 一条经只读反射确认需要执行的 schema 修复动作。 */
 export interface SchemaDriftRepairAction {
   table: string;
-  kind: 'add-column' | 'create-index' | 'create-table';
+  kind: 'add-column' | 'create-index' | 'create-table' | 'repair-messages-fts-rows';
   ddl: string;
   failureKind: ResidualMismatch['kind'];
   failureDetail: string;
@@ -368,6 +369,13 @@ export function planSchemaDriftRepair(db: Database.Database): SchemaDriftRepairP
       const tableName = getTableName(drizzleTable);
       try {
         if (!tableExists(db, tableName)) {
+          if (tableName === 'messages_fts_rows') {
+            actions.push({
+              ...planMissingTableRepair(tableName, drizzleTable),
+              kind: 'repair-messages-fts-rows',
+            });
+            continue;
+          }
           // CREATE TABLE 已包含全部列；只需额外计划 schema.ts 声明的索引。
           actions.push(planMissingTableRepair(tableName, drizzleTable));
           actions.push(...planIndexRepairs(db, tableName, drizzleTable, residual));
@@ -413,9 +421,16 @@ export function applySchemaDriftRepair(
 
   for (const action of plan.actions) {
     // CREATE TABLE 失败后，同表的索引动作没有执行意义，也不应制造一串重复 residual。
-    if (action.kind !== 'create-table' && !tableExists(db, action.table)) continue;
+    if (
+      action.kind !== 'create-table' &&
+      action.kind !== 'repair-messages-fts-rows' &&
+      !tableExists(db, action.table)
+    ) {
+      continue;
+    }
     try {
-      db.exec(action.ddl);
+      if (action.kind === 'repair-messages-fts-rows') repairMessagesFtsRows(db);
+      else db.exec(action.ddl);
       repaired.push(action.ddl);
     } catch (err) {
       log.error(

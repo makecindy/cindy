@@ -1,3 +1,25 @@
+import { alignModelApiRoute, providerInterfaceModelRoute, hasDeclaredProviderInterface, providerWireProtocolForApi, providerBaseUrlForApi } from './providerInterfaceRoutes.js';
+import { nativeModelAgents } from './modelProtocol.js';
+import { resolveCatalogModelNativeApi, resolveModelNativeApi } from './modelRegistry.js';
+import { providerEndpointBindings, bindProviderPresetRuntime } from './providerEndpointTemplate.js';
+import { PI_MODEL_APIS } from "./types.js";
+import { providerModelRecord, providerPresetModelRecord, providerModelMetadata } from "./providerModelCatalog.js";
+import { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
+import { providerMediaField } from "./providerMediaModels.js";
+import {
+  expandedRegistryEntries,
+  resolveModelMetadata,
+  applyModelMetadata,
+  mergeModelMetadata,
+  pickModelMetadata,
+  runtimeUserModelMetadata,
+  findBaseModel,
+  type ModelMetadata,
+} from "./modelMetadataLayers.js";
+import {
+  piNativeCatalogModelDefaults,
+  piNativeCatalogRouteMatches,
+} from "./piNativeCatalog.js";
 /**
  * 用户自定义供应商：把 `CustomProviderConfig` 展开成标准 `Provider`（纯逻辑，零依赖）。
  *
@@ -20,9 +42,14 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
   RoutingDescriptor,
-} from './types.js';
-import type { ModelRegistry } from './modelAccessBean.js';
-import { isLoopbackProviderUrl } from './provider-url.js';
+} from "./types.js";
+import type { ModelRegistry } from "./modelAccessBean.js";
+import { isLoopbackProviderUrl } from "./provider-url.js";
+import {
+  clampEffortToSupported,
+  modelDefaultEffort,
+  defaultEffortForCapabilities,
+} from "./effortResolution.js";
 
 /** 自定义模型缺省上下文窗口（用户不填元数据时的保守默认，仅用于展示）。 */
 export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
@@ -31,41 +58,169 @@ export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
  * Older releases allowed a user provider to occupy `xai`, which is now the built-in SuperGrok
  * source. Preserve the stored id, but project that legacy row under a collision-free runtime id.
  */
-export const LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID = 'custom:xai';
+export const LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID = "custom:xai";
+/** Official API-key preset for xAI; distinct from the built-in SuperGrok OAuth provider. */
+export const XAI_API_CUSTOM_PROVIDER_ID = "xai-api";
 
 export function runtimeCustomProviderId(providerId: string): string {
-  return providerId === 'xai' ? LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID : providerId;
+  return providerId === "xai"
+    ? LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID
+    : providerId;
 }
 
 export function storedCustomProviderId(providerId: string): string {
-  return providerId === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID ? 'xai' : providerId;
+  return providerId === LEGACY_XAI_CUSTOM_PROVIDER_RUNTIME_ID
+    ? "xai"
+    : providerId;
+}
+
+function withoutTrailingSlashes(value: string): string {
+  let end = value.length;
+  while (end > 0 && value[end - 1] === "/") end -= 1;
+  return value.slice(0, end);
+}
+
+function isOfficialXaiApiUpstream(upstream: string | undefined): boolean {
+  try {
+    const url = new URL(upstream ?? "");
+    return (
+      url.protocol === "https:" &&
+      url.hostname === "api.x.ai" &&
+      (url.pathname === "/v1" || url.pathname === "/v1/")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The chat-only xAI API preset uses the same public Imagine endpoints as the built-in
+ * OAuth source. Project those catalog entries onto the API-key source only after the
+ * official endpoint has been confirmed by the saved runtime routing.
+ */
+export function projectXaiApiImageModels(
+  providers: readonly Provider[],
+): readonly Provider[] {
+  const xaiSource = providers.find((provider) => provider.id === "xai");
+  if (
+    !xaiSource?.imageModels?.length ||
+    !providers.some((provider) => provider.id === XAI_API_CUSTOM_PROVIDER_ID)
+  ) {
+    return providers;
+  }
+  // 属性收窄无法跨越 map 回调边界，这里显式捕获非空清单。
+  const sourceImageModels = xaiSource.imageModels;
+  let changed = false;
+  const projected = providers.map((provider) => {
+    if (
+      provider.id !== XAI_API_CUSTOM_PROVIDER_ID ||
+      provider.source !== "user" ||
+      provider.auth.method !== "apiKey" ||
+      provider.imageModels?.length ||
+      !Object.values(provider.routing).some((routing) =>
+        isOfficialXaiApiUpstream(routing?.upstream),
+      )
+    ) {
+      return provider;
+    }
+    changed = true;
+    return { ...provider, imageModels: [...sourceImageModels] };
+  });
+  return changed ? projected : providers;
+}
+
+/**
+ * Official-API image credentials may only come from runtimes whose saved routing
+ * targets the official endpoint. Binding key reads to these agents prevents a
+ * proxy-configured runtime's key from being disclosed to api.x.ai. Agents are
+ * returned in fixed AGENT_ORDER so key selection stays deterministic when
+ * several runtimes are official.
+ */
+export function xaiApiOfficialRuntimeAgents(
+  provider: Provider | undefined,
+): readonly AgentKind[] {
+  if (!provider) return [];
+  return AGENT_ORDER.filter((agent) =>
+    isOfficialXaiApiUpstream(provider.routing[agent]?.upstream),
+  );
 }
 
 /**
  * 自定义模型的默认 effort 档位（「参考默认设置」）——与内置当代旗舰模型对齐：
  *   - claude-code：low/medium/high/xhigh/max（同 opus / fable）；
  *   - codex：low/medium/high/xhigh/max（gpt-5.x 同款五档，ultra 仍仅限已登记模型）。
- * 让自定义模型像内置模型一样能在选择器里切 reasoning/thinking 强度（默认 high）。
+ * 让自定义模型像内置模型一样能在选择器里切 reasoning/thinking 强度（默认 medium）。
  * 端点是否真支持由其后端决定：cc 经 `thinking`、codex 经 reasoning effort 透传，
  * anthropic-compat-proxy 仅对个别内置 model id strip 字段、对自定义 id 一律字节透传。
  * 未登记模型（Registry 无法确认能力）也放开到 max：第三方 Responses 兼容端点普遍
  * 接受与否只有端点方/用户知道，选到不支持的档位会被上游拒绝，用户改选即可；
- * 默认档保持 high，存量行为不变（见 #2964）。
+ * 默认中档；用户显式配置仍优先。
  */
 const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
-  'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
-  codex: ['low', 'medium', 'high', 'xhigh', 'max'],
+  "claude-code": ["low", "medium", "high", "xhigh", "max"],
+  codex: ["low", "medium", "high", "xhigh", "max"],
 };
-/** 自定义模型默认选中的 effort（与内置旗舰一致）。 */
-const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
 
 interface RegistryEffortMetadata {
   efforts: Effort[];
   defaultEffort: Effort | null;
 }
 
+function toRegistryEffortMetadata(
+  entry: {
+    efforts?: readonly Effort[];
+    defaultEffort?: Effort | null;
+    perAgent?: Partial<
+      Record<
+        string,
+        { efforts?: readonly Effort[]; defaultEffort?: Effort | null }
+      >
+    >;
+  },
+  agent: AgentKind,
+): RegistryEffortMetadata | undefined {
+  const perAgent = entry.perAgent?.[agent];
+  const efforts = perAgent?.efforts ?? entry.efforts;
+  if (!efforts) return undefined;
+  const declaredDefault = modelDefaultEffort(entry);
+  const defaultEffort =
+    efforts.length === 0 || declaredDefault === null
+      ? null
+      : declaredDefault !== undefined
+        ? (clampEffortToSupported(declaredDefault, efforts) as Effort)
+        : defaultEffortForCapabilities(efforts);
+  return { efforts: [...efforts], defaultEffort };
+}
+
+function consensusRegistryEffortMetadata(
+  entries: readonly ModelRegistry["models"][number][],
+  agent: AgentKind,
+): RegistryEffortMetadata | undefined {
+  const uniqueEntries = [
+    ...new Map(entries.map((entry) => [entry.id, entry])).values(),
+  ];
+  const metadata = uniqueEntries.map((entry) =>
+    toRegistryEffortMetadata(entry, agent),
+  );
+  const first = metadata[0];
+  if (
+    !first ||
+    metadata.some(
+      (value) =>
+        !value ||
+        value.defaultEffort !== first.defaultEffort ||
+        value.efforts.length !== first.efforts.length ||
+        value.efforts.some((effort, index) => effort !== first.efforts[index]),
+    )
+  ) {
+    return undefined;
+  }
+  return first;
+}
+
 /**
- * 仅在模型能由当前 agent 的 Registry route 唯一识别时复用 effort 元数据。
+ * 仅在模型能由当前 agent 的 Registry route 唯一识别，或所有匹配
+ * 条目的 effort 元数据完全一致时复用该能力。
  * 自定义 provider 的 id、model id 与路由保持原值；Pi 能力继续只认逐模型显式配置。
  */
 function registryEffortMetadata(
@@ -73,38 +228,68 @@ function registryEffortMetadata(
   modelId: string,
   agent: AgentKind,
 ): RegistryEffortMetadata | undefined {
-  if (agent === 'pi' || !registry) return undefined;
+  if (agent === "pi" || !registry) return undefined;
 
-  const candidates = new Set([modelId]);
-  if (modelId.startsWith('chatgpt/')) {
-    candidates.add(modelId.slice('chatgpt/'.length));
-  }
-  const matches = registry.models.filter((entry) =>
+  // Stage 1 — exact lookup: only the original modelId.
+  const exactMatches = expandedRegistryEntries(registry).filter((entry) =>
     entry.routes.some(
       (route) =>
         route.agents.includes(agent) &&
-        (candidates.has(entry.id) || candidates.has(route.modelId)),
+        (entry.id === modelId || route.modelId === modelId),
     ),
   );
-  const uniqueEntries = [...new Map(matches.map((entry) => [entry.id, entry])).values()];
-  if (uniqueEntries.length !== 1) return undefined;
+  if (exactMatches.length > 0) {
+    return consensusRegistryEffortMetadata(exactMatches, agent);
+  }
 
-  const entry = uniqueEntries[0]!;
-  const perAgent = entry.perAgent?.[agent];
-  const efforts = perAgent?.efforts ?? entry.efforts;
-  if (!efforts) return undefined;
-  const declaredDefault = perAgent?.defaultEffort ?? entry.defaultEffort;
-  const defaultEffort =
-    declaredDefault && efforts.includes(declaredDefault)
-      ? declaredDefault
-      : efforts.includes(DEFAULT_CUSTOM_EFFORT)
-        ? DEFAULT_CUSTOM_EFFORT
-        : (efforts[efforts.length - 1] ?? null);
-  return { efforts: [...efforts], defaultEffort };
+  // Stage 2 — prefix fallback: only when Stage 1 found nothing.
+  // Strip common provider prefixes so third-party custom API models
+  // (e.g. "openai/gpt-5.6-sol") can match registry entries whose
+  // route.modelId is just "gpt-5.6-sol".
+  const stripped = new Set<string>();
+  for (const prefix of ["openai/", "xd/", "chatgpt/"]) {
+    if (modelId.startsWith(prefix)) stripped.add(modelId.slice(prefix.length));
+  }
+  if (stripped.size === 0) return undefined;
+  const fallbackMatches = expandedRegistryEntries(registry).filter((entry) =>
+    entry.routes.some(
+      (route) =>
+        route.agents.includes(agent) &&
+        (stripped.has(entry.id) || stripped.has(route.modelId)),
+    ),
+  );
+  return consensusRegistryEffortMetadata(fallbackMatches, agent);
+}
+
+/**
+ * Fast mode is a Codex service-tier capability, so a user provider may inherit it only when the
+ * configured model id exactly matches a Registry route for Codex. Prefix fallback is intentionally
+ * excluded: aliases can point at gateways with different billing or service-tier behavior.
+ */
+function registrySupportsFastMode(
+  registry: ModelRegistry | null | undefined,
+  modelId: string,
+  agent: AgentKind,
+): boolean {
+  if (agent !== "codex" || !registry) return false;
+
+  const matches = expandedRegistryEntries(registry).filter((entry) =>
+    entry.routes.some(
+      (route) => route.agents.includes(agent) && route.modelId === modelId,
+    ),
+  );
+  return (
+    matches.length > 0 &&
+    matches.every(
+      (entry) =>
+        (entry.perAgent?.[agent]?.supportsFastMode ??
+          entry.supportsFastMode) === true,
+    )
+  );
 }
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
-const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+const AGENT_ORDER: readonly AgentKind[] = ["claude-code", "codex", "pi"];
 
 /** 单个用户填写的模型 → CatalogModel（补默认元数据；effort 按所属 agent 参考内置默认）。 */
 function toCatalogModel(
@@ -112,28 +297,43 @@ function toCatalogModel(
   providerId: string,
   agent: AgentKind,
   modelRegistry: ModelRegistry | null | undefined,
+  providerDefaults?: ModelMetadata,
+  metadataProviderId = providerId,
 ): CatalogModel {
-  // Pi BYOM 不从 runtime / 协议猜模型能力：只有用户逐模型明确确认后才向 catalog 暴露
-  // effort。这样 catalog/UI 与稍后写入 models.json 的能力保持同一份契约，旧配置安全关闭。
+  // 显式 runtime 能力优先：reasoning:true 才导出 efforts；false = 明确无思考档。
+  // 字段缺省才走历史 fallback（Pi 空档 / 其它自定义 Provider 的 CUSTOM_EFFORTS）。
   const efforts: Effort[] =
-    agent === 'pi'
-      ? m.reasoning === true
-        ? [...(m.reasoningEfforts ?? [])]
-        : []
-      : (CUSTOM_EFFORTS[agent] ?? []);
-  const registryEfforts = registryEffortMetadata(modelRegistry, m.id, agent);
+    m.reasoning === true
+      ? [...(m.reasoningEfforts ?? [])]
+      : m.reasoning === false
+        ? []
+        : agent === "pi"
+          ? []
+          : (CUSTOM_EFFORTS[agent] ?? []);
+  const registryEfforts =
+    m.reasoning !== undefined || (modelRegistry?.schemaVersion ?? 0) >= 4
+      ? undefined
+      : registryEffortMetadata(modelRegistry, m.id, agent);
+  const supportsFastMode =
+    (modelRegistry?.schemaVersion ?? 0) < 4 &&
+    registrySupportsFastMode(modelRegistry, m.id, agent);
   const effectiveEfforts = registryEfforts?.efforts ?? efforts;
   const defaultEffort =
-    registryEfforts?.defaultEffort ??
-    (agent === 'pi' && m.reasoningDefaultEffort && effectiveEfforts.includes(m.reasoningDefaultEffort)
-      ? m.reasoningDefaultEffort
-      : effectiveEfforts.includes(DEFAULT_CUSTOM_EFFORT)
-        ? DEFAULT_CUSTOM_EFFORT
-        : (effectiveEfforts[0] ?? null));
-  return {
+    registryEfforts !== undefined
+      ? registryEfforts.defaultEffort
+      : m.reasoning === true &&
+          m.reasoningDefaultEffort &&
+          effectiveEfforts.includes(m.reasoningDefaultEffort)
+        ? m.reasoningDefaultEffort
+        : defaultEffortForCapabilities(effectiveEfforts);
+  const model: CatalogModel = {
+    userModelConfig: { ...m },
     id: m.id,
+    discoveredMetadata: m.discoveredMetadata,
+    ...(m.discoveredCost ? { cost: m.discoveredCost } : {}),
+    nameExplicit: m.nameExplicit,
     name: m.name,
-    ...(agent === 'pi' && m.piApi ? { piApi: m.piApi } : {}),
+    ...(agent === "pi" && m.piApi ? { piApi: m.piApi } : {}),
     ...(m.route ? { route: { ...m.route } } : {}),
     contextWindow: m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
     // 用户自己填了才算显式声明;走 DEFAULT_CUSTOM_CONTEXT_WINDOW 兜底的不标记 ——
@@ -150,12 +350,34 @@ function toCatalogModel(
     defaultEnabled: m.defaultEnabled ?? true,
     // 图片能力必须由用户/预设明确确认；缺省不猜，防止 Pi 静默把截图降级成占位文本。
     ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+    ...(m.thinkingToggle === true ? { thinkingToggle: true } : {}),
+    ...(supportsFastMode ? { supportsFastMode: true } : {}),
   };
+  const user = runtimeUserModelMetadata(m);
+  const resolved =
+    (modelRegistry?.schemaVersion ?? 0) >= 4 ||
+    m.discoveredMetadata ||
+    providerDefaults
+      ? resolveModelMetadata(
+          modelRegistry ?? undefined,
+          metadataProviderId,
+          m.id,
+          m.discoveredMetadata,
+          pickModelMetadata(user),
+          agent,
+          providerDefaults,
+        )
+      : pickModelMetadata(user);
+  return applyModelMetadata(model, resolved);
 }
 
 function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
-  if (agent === 'claude-code') return 'anthropic-messages';
-  return 'openai-responses';
+  // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
+  // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
+  // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
+  if (agent === "claude-code") return "anthropic-messages";
+  if (agent === "pi") return "openai-chat";
+  return "openai-responses";
 }
 
 /** baseUrl + 自定义 headers → 路由描述符（**不含密钥**）。 */
@@ -164,30 +386,39 @@ function toRouting(
   baseUrl: string,
   requestPath: string | undefined,
   headers: Record<string, string> | undefined,
-  headersState: 'configured' | 'unknown' | undefined,
-  strategy: 'api-key-header' | 'oauth-token' | 'none',
+  headersState: "configured" | "unknown" | undefined,
+  strategy: "api-key-header" | "oauth-token" | "oauth-passthrough" | "provider-oauth-header" | "none",
   modelsUrl?: string,
-  wireProtocol?: 'anthropic-messages' | 'openai-responses' | 'openai-chat',
+  wireProtocol?: ProviderWireProtocol,
   piCatalogProviderId?: string,
+  supportsImageGeneration?: boolean,
 ): RoutingDescriptor {
   const r: RoutingDescriptor = {
     upstream: baseUrl,
     authStrategy: strategy,
-    ...(strategy === 'none'
-      && (!isLoopbackProviderUrl(baseUrl)
-        || (modelsUrl !== undefined && !isLoopbackProviderUrl(modelsUrl)))
+    ...(agent === "codex" && strategy !== "oauth-passthrough" &&
+    (wireProtocol ?? defaultWireProtocol(agent)) === "openai-responses"
+      ? { supportsResponsesCustomTools: false }
+      : {}),
+    ...(agent === "codex" && supportsImageGeneration === true
+      ? { supportsImageGeneration: true }
+      : {}),
+    ...(strategy === "none" &&
+    (!isLoopbackProviderUrl(baseUrl) ||
+      (modelsUrl !== undefined && !isLoopbackProviderUrl(modelsUrl)))
       ? { disabled: true }
       : {}),
     ...(requestPath ? { requestPath } : {}),
-    ...(wireProtocol && (agent === 'pi' || wireProtocol !== defaultWireProtocol(agent))
+    ...(wireProtocol &&
+    (agent === "pi" || wireProtocol !== defaultWireProtocol(agent))
       ? { wireProtocol }
       : {}),
   };
   if (headers && Object.keys(headers).length > 0) {
     r.headerOverride = { ...headers };
-    r.headerOverrideState = 'configured';
-  } else if (headersState === 'unknown') {
-    r.headerOverrideState = 'unknown';
+    r.headerOverrideState = "configured";
+  } else if (headersState === "unknown") {
+    r.headerOverrideState = "unknown";
   }
   // 列模型端点回带（编辑表单从 routing 重建配置时不丢；路由器不消费本字段）。
   if (modelsUrl) r.modelsUrl = modelsUrl;
@@ -202,6 +433,7 @@ function toRouting(
  */
 export interface BuildUserProviderOptions {
   modelRegistry?: ModelRegistry | null;
+  presets?: readonly import("./types.js").ProviderPreset[];
 }
 
 export function buildUserProvider(
@@ -210,10 +442,12 @@ export function buildUserProvider(
 ): Provider {
   const runtimeProviderId = runtimeCustomProviderId(config.id);
   // OAuth 形态路由走 Runner Bearer；none 明确走无鉴权且由 host 剥凭证；缺省保持历史 API key。
-  const oauth = config.auth?.method === 'oauth' ? config.auth.oauth : undefined;
-  const isOAuth = oauth !== undefined;
-  const noAuth = config.auth?.method === 'none';
-  const strategy = isOAuth ? 'oauth-token' : noAuth ? 'none' : 'api-key-header';
+  const oauth = config.auth?.method === "oauth" ? config.auth.oauth : undefined;
+  const nativeCodex = config.auth?.method === "oauth" && config.auth.native === "codex";
+  const native = config.auth?.method === "oauth" ? config.auth.native : undefined;
+  const isOAuth = oauth !== undefined || !!native;
+  const noAuth = config.auth?.method === "none";
+  const strategy = nativeCodex ? "oauth-passthrough" : native ? "provider-oauth-header" : isOAuth ? "oauth-token" : noAuth ? "none" : "api-key-header";
   const routing: Partial<Record<AgentKind, RoutingDescriptor>> = {};
   const models: Partial<Record<AgentKind, CatalogModel[]>> = {};
   const agents: AgentKind[] = [];
@@ -231,23 +465,213 @@ export function buildUserProvider(
       rt.modelsUrl,
       rt.wireProtocol,
       rt.piCatalogProviderId,
+      rt.supportsImageGeneration,
     );
-    models[agent] = rt.models.map((m) =>
-      toCatalogModel(m, config.id, agent, options.modelRegistry),
+    const preset = options.presets?.find(
+      (preset) => preset.id === rt.catalogPresetId,
     );
+    const presetRuntimeSource = preset?.runtimes[agent];
+    const presetRuntime = presetRuntimeSource && providerEndpointBindings(presetRuntimeSource.baseUrl, rt.baseUrl)
+      ? bindProviderPresetRuntime(presetRuntimeSource, rt.baseUrl) : presetRuntimeSource;
+    const followsPreset =
+      presetRuntime &&
+      withoutTrailingSlashes(rt.baseUrl) ===
+        withoutTrailingSlashes(presetRuntime.baseUrl) &&
+      (rt.wireProtocol ?? defaultWireProtocol(agent)) ===
+        (presetRuntime.wireProtocol ?? defaultWireProtocol(agent)) &&
+      (rt.requestPath ?? "") === (presetRuntime.requestPath ?? "");
+    // A bound single-API cloud connection keeps its language for new deployment IDs too.
+    // This lends only the endpoint protocol, never another model's window or capabilities.
+    const presetApis = new Set<ProviderRuntimeModelConfig['api']>(followsPreset ? presetRuntime.models.map(model => model.api ?? model.piApi) : []);
+    const presetApi = presetApis.size === 1 ? [...presetApis][0] : undefined;
+    models[agent] = rt.models.map((storedModel) => {
+      // Old ID-only imports must pick up newly known per-model interfaces too.
+      // An explicit model API/path remains a user choice, not a preset default.
+      const interfaceDefault = followsPreset && !storedModel.api && !storedModel.piApi && !storedModel.route
+        ? presetRuntime.models.find(model => model.id === storedModel.id) : undefined;
+      const configuredModel = interfaceDefault ? { ...storedModel,
+        ...(interfaceDefault.api ? { api: interfaceDefault.api } : {}),
+        ...(agent === 'pi' && interfaceDefault.piApi ? { piApi: interfaceDefault.piApi } : {}),
+        ...(interfaceDefault.route ? { route: { ...interfaceDefault.route } } : {}),
+      } : storedModel;
+      const m = rt.requestPath ? configuredModel : alignModelApiRoute(
+        providerInterfaceModelRoute(configuredModel, agent, rt.catalogPresetId, rt.baseUrl),
+        rt.baseUrl, rt.wireProtocol ?? defaultWireProtocol(agent),
+      );
+      const presetModel = followsPreset
+        ? presetRuntime.models.find((model) => model.id === m.id)
+        : undefined;
+      const sameRoute =
+        m.route?.baseUrl === presetModel?.route?.baseUrl &&
+        m.route?.wireProtocol === presetModel?.route?.wireProtocol &&
+        m.route?.requestPath === presetModel?.route?.requestPath;
+      const presetDefaults =
+        presetModel && sameRoute
+          ? mergeModelMetadata(presetModel.discoveredMetadata, pickModelMetadata({
+              ...presetModel,
+              efforts:
+                presetModel.reasoning === false
+                  ? []
+                  : presetModel.reasoningEfforts,
+              defaultEffort: presetModel.reasoningDefaultEffort,
+            }))
+          : undefined;
+      // Pi 来源带 piCatalogProviderId 且仍走官方路由时,pi-host 运行期会整条套用官方 Pi
+      // 目录;没有 catalogPresetId(#4108 之前创建)的存量来源在这里没有预设默认,存储
+      // 模型又缺 reasoning 字段,目录投影就成了空档位,Orca 创建 Worker 时把合法的
+      // max 拒成「valid: none」(#4295)。按同一份官方目录补默认:预设按字段覆盖官方
+      // 目录(预设只声明 context/image 时 reasoning 仍由目录补),用户显式配置仍优先。
+      const catalogDefaults =
+        agent === "pi" && rt.piCatalogProviderId && !m.route &&
+        piNativeCatalogRouteMatches(rt.piCatalogProviderId, rt.baseUrl, rt.wireProtocol)
+          ? piNativeCatalogModelDefaults(rt.piCatalogProviderId, m.id)
+          : undefined;
+      const wire = m.route?.wireProtocol ?? rt.wireProtocol ?? defaultWireProtocol(agent);
+      // Pi's model API overrides the runtime default. Match that actual API, rather than
+      // discarding all metadata when a Responses/Gemini model shares a Chat connection.
+      // With no explicit model route/API, an exact endpoint + unique ID supplies Pi's API.
+      const imported = !(m.route?.requestPath ?? rt.requestPath)
+        ? providerModelRecord(m.id, m.route?.baseUrl ?? rt.baseUrl,
+            m.api ?? (agent === 'pi' ? m.piApi ?? wire : wire),
+            !m.api && !m.piApi && !m.route)
+          ?? (hasDeclaredProviderInterface(m, agent, rt.catalogPresetId, rt.baseUrl)
+            ? providerPresetModelRecord(rt.catalogPresetId, m.id) : undefined)
+          ?? (followsPreset && sameRoute && m.api && presetModel?.api === m.api
+            ? providerPresetModelRecord(preset?.id, m.id, m.api) : undefined)
+        : undefined;
+      const importedApi = imported &&
+        PI_MODEL_APIS.some(api => api === imported.execution.pi.api)
+          ? imported.execution.pi.api as NonNullable<ProviderRuntimeModelConfig['piApi']>
+          : !m.route && presetApi ? presetApi
+          : wire === 'google-generative-ai' ? 'google-generative-ai' : undefined;
+      const defaults = imported || catalogDefaults || presetDefaults
+        ? mergeModelMetadata(imported ? providerModelMetadata(imported) : undefined, catalogDefaults, presetDefaults)
+        : undefined;
+      // A verified catalog identity can reuse the manufacturer's declaration.
+      // Execution protocols and prices still belong to this exact connection.
+      const registry = options.modelRegistry ?? undefined;
+      const resolveDeclaration = (source: ModelRegistry | undefined) => {
+        const baseModel = findBaseModel(source, m.id);
+        const routeNativeApi = resolveModelNativeApi(source, config.id, m.id);
+        return routeNativeApi !== undefined ? routeNativeApi
+          : imported || baseModel || (followsPreset && (presetModel || m.discoveredMetadata))
+            ? resolveCatalogModelNativeApi(source, baseModel?.id ?? m.id)
+            : undefined;
+      };
+      const currentDeclaration = resolveDeclaration(registry);
+      // Same fallback as Gateway: Server omissions use local native declarations;
+      // explicit corrections/unknowns win. Never backfill another route's capabilities.
+      const declaration = currentDeclaration !== undefined ? currentDeclaration
+        : resolveDeclaration(BUNDLED_CATALOG.modelRegistry);
+      const nativeApi = declaration === null || declaration === 'anthropic-messages'
+        || declaration === 'openai-responses' || declaration === 'openai-completions'
+        || declaration === 'google-generative-ai' ? declaration : undefined;
+      return {
+        ...(nativeApi !== undefined ? { nativeApi } : {}),
+        ...(imported?.cost ? { cost: imported.cost } : {}),
+        ...toCatalogModel(
+          m,
+          followsPreset && sameRoute ? preset!.id : config.id,
+          agent,
+          options.modelRegistry,
+          defaults,
+          nativeCodex ? 'openai' : undefined,
+        ),
+        // Projection is not a user edit. Save only the original configuration.
+        userModelConfig: structuredClone(storedModel),
+        ...(m.api ? { api: m.api, ...(agent === 'pi' ? { piApi: m.api } : {}) } : {}),
+        ...(importedApi && !m.piApi && !m.api ? {
+          api: importedApi, ...(agent === 'pi' ? { piApi: importedApi } : {}),
+          ...(!m.route && providerWireProtocolForApi(importedApi) && providerWireProtocolForApi(importedApi) !== wire ? { route: {
+            baseUrl: providerBaseUrlForApi(rt.baseUrl, importedApi),
+            wireProtocol: providerWireProtocolForApi(importedApi)!,
+          } } : {}),
+        } : {}),
+        ...(rt.catalogPresetId ? { catalogPresetId: rt.catalogPresetId } : {}),
+      };
+    });
+  }
+  if (native === 'claude' || native === 'xai') {
+    const identity = BUILTIN_PROVIDERS.find((provider) => provider.id === (native === 'claude' ? 'anthropic' : 'xai'))!;
+    return {
+      ...identity,
+      id: runtimeProviderId,
+      name: config.name,
+      source: 'user',
+      auth: { method: 'oauth', native },
+      routing: Object.fromEntries(Object.entries(identity.routing).map(([agent, route]) => [
+        agent, {
+          ...route,
+          authStrategy: 'provider-oauth-header',
+          // Claude subscription requests must not carry a CLI placeholder API key alongside OAuth.
+          ...(native === 'claude' && agent === 'claude-code'
+            ? { headerDelete: [...new Set([...(route.headerDelete ?? []), 'x-api-key'])] }
+            : {}),
+        },
+      ])),
+      // Media remains explicitly bound to the original provider until it supports account selection.
+      imageModels: undefined,
+      imageDefaults: undefined,
+      videoModels: undefined,
+      videoDefaults: undefined,
+    };
+  }
+  if (nativeCodex) {
+    const identity = BUILTIN_PROVIDERS.find((provider) => provider.id === 'openai')!;
+    return {
+      ...identity,
+      id: runtimeProviderId,
+      name: config.name,
+      source: 'user',
+      auth: { method: 'oauth', native: 'codex' },
+      models: { ...identity.models, codex: models.codex ?? [] },
+      imageModels: identity.imageModels?.map((model) => ({ ...model, id: model.id.replace(/^openai\//, `${runtimeProviderId}/`) })),
+    };
+  }
+  // Selection/import membership does not opt the user into compatibility harnesses.
+  // Keep explicit configuration defaults; visibility preferences remain a separate override.
+  for (const agent of agents) for (const model of models[agent] ?? []) {
+    if (!providerMediaField(model.mode) && model.userModelConfig?.defaultEnabled === undefined) {
+      model.defaultEnabled = nativeModelAgents({ id: config.id, routing, source: 'user' }, { [agent]: model }).includes(agent);
+    }
+  }
+  const mediaLists: Partial<
+    Pick<
+      Provider,
+      "imageModels" | "videoModels" | "audioModels" | "embeddingModels"
+    >
+  > = {};
+  for (const [agent, list] of Object.entries(models)) {
+    for (const model of list ?? []) {
+      const field = providerMediaField(model.mode);
+      if (!field) continue;
+      const items = (mediaLists[field] ??= []);
+      if (!items.some((item) => item.id === model.id))
+        items.push({
+          ...pickModelMetadata(model),
+          id: model.id,
+          name: model.name,
+          mode: model.mode,
+          discoveredMetadata: model.discoveredMetadata,
+          sourceAgent: agent as AgentKind,
+          ...(model.modalities ? { modalities: model.modalities } : {}),
+          ...(model.description ? { description: model.description } : {}),
+        });
+    }
   }
   return {
+    ...mediaLists,
     id: runtimeProviderId,
     name: config.name,
-    source: 'user',
+    source: "user",
     agents,
     auth: isOAuth
-      ? { method: 'oauth', oauth }
+      ? { method: "oauth", ...(nativeCodex ? { native: "codex" as const } : { oauth }) }
       : noAuth
-        ? { method: 'none' }
-        : { method: 'apiKey' },
+        ? { method: "none" }
+        : { method: "apiKey" },
     // API key / 无鉴权代理都属于用户自备接口；通用 OAuth 可能订阅也可能按量，未声明前不猜。
-    ...(isOAuth ? {} : { access: { kind: 'api' as const } }),
+    ...(isOAuth ? {} : { access: { kind: "api" as const } }),
     routing,
     models,
   };

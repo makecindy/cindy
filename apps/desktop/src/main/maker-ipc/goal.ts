@@ -20,6 +20,7 @@ import {
   GoalControllerInputError,
   GoalSessionRestoreError,
   GoalUpdateSupersededError,
+  GoalControllerDisposedError,
 } from '../goal-host/controller.js';
 import { getGoalController } from '../goal-host/index.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
@@ -36,7 +37,8 @@ function throwGoalControllerIpcError(error: unknown): never {
   }
   if (
     error instanceof GoalSessionRestoreError ||
-    error instanceof GoalUpdateSupersededError
+    error instanceof GoalUpdateSupersededError ||
+    error instanceof GoalControllerDisposedError
   ) {
     throwIpcError('PRECONDITION_FAILED', error.message);
   }

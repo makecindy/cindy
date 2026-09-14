@@ -142,7 +142,6 @@ export class GhostScheduleSlot {
     const ghost = this.deps.getGhost(ghostId);
     if (
       !ghost?.enabled ||
-      !ghost.manifest.slots.includes('agent') ||
       ghost.manifest.agent?.schedule !== true
     ) {
       return fail(
