@@ -139,14 +139,14 @@ async function mutationGuard(
 async function lateGuard(
   deps: SessionOperationsDeps,
   sessionId: string,
-  options: { allowArchived: boolean },
+  options: { allowArchived: boolean; checkRuntime?: boolean },
 ): Promise<string | null> {
   const [fresh] = await deps.loadSessions([sessionId]);
   if (!fresh) return '会话已不存在';
   if (fresh.status === 'deleted') return '会话已在此期间被删除';
   if (!options.allowArchived && fresh.status === 'archived') return '会话已在此期间被归档';
-  if (await isRunning(deps, fresh)) return '会话在写入前重新进入运行中';
-  if (deps.isImAttached(fresh.id)) return '会话在写入前被 IM 接管';
+  if (options.checkRuntime !== false && (await isRunning(deps, fresh))) return '会话在写入前重新进入运行中';
+  if (options.checkRuntime !== false && deps.isImAttached(fresh.id)) return '会话在写入前被 IM 接管';
   return null;
 }
 
@@ -227,7 +227,7 @@ export async function setSessionsPinned(
       // 终态 / 运行态 / IM 接管的复核放在 updateSessionInDb 写锁内(beforeWrite):预检后被并发
       // 归档或删除的会话不会再被写入 pinnedAt 并报成功。
       await deps.updateSession(row.id, { pinnedAt: params.pinned ? new Date().toISOString() : null }, {
-        beforeWrite: () => lateGuard(deps, row.id, { allowArchived: false }),
+        beforeWrite: () => lateGuard(deps, row.id, { allowArchived: false, checkRuntime: false }),
       });
       changed.push(toItem(row));
     } catch (e) {
