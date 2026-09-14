@@ -474,7 +474,7 @@ function assertValidSessionEventPayload(
     (p.channels !== undefined && (typeof p.channels !== 'object' || p.channels === null)) ||
     (p.channels?.sound !== undefined && typeof p.channels.sound !== 'boolean')
   ) {
-    throw new TypeError('invalid session event payload');
+    throwIpcError('INVALID_PARAMS', 'invalid session event payload');
   }
 }
 

@@ -743,7 +743,7 @@ describe('notificationService — channels 分发', () => {
         kind: 'done',
         channels: { desktop: true, sound: 'yes' },
       }),
-    ).rejects.toThrow('invalid session event payload');
+    ).rejects.toThrow('[INVALID_PARAMS] invalid session event payload');
     expect(notificationCtor).not.toHaveBeenCalled();
   });
 });
