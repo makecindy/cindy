@@ -236,13 +236,14 @@ export async function getSessionBranches(
 ): Promise<GetSessionBranchesResult> {
   const loaded = await loadAll(deps, [params.sessionId]);
   if (!Array.isArray(loaded)) return loaded;
+  if (loaded[0].status === 'deleted') return err('PRECONDITION_FAILED', `${loaded[0].id}: 会话已删除`);
   // 向上找根(源被删时 parentSessionId 已 SET NULL,链在此断开即视为根)。
   let root = loaded[0];
   const seen = new Set<string>([root.id]);
   while (root.parentSessionId && !seen.has(root.parentSessionId)) {
     const [parent] = await deps.loadSessions([root.parentSessionId]);
     // 源会话已软删除时链在此断开:GUI 分支树同样不展示 deleted 墓碑。
-    if (!parent || parent.status === 'deleted') break;
+    if (!parent || parent.status === 'deleted' || root.forkedAtMessageId == null) break;
     seen.add(parent.id);
     root = parent;
   }
@@ -253,7 +254,7 @@ export async function getSessionBranches(
   while (frontier.length > 0) {
     // 软删除的子会话及其后代整体不进家族(与 GUI includeArchived:'all' 列表排除 deleted 一致)。
     const children = (await deps.loadChildren(frontier)).filter(
-      (row) => !visited.has(row.id) && row.status !== 'deleted',
+      (row) => !visited.has(row.id) && row.status !== 'deleted' && row.forkedAtMessageId != null,
     );
     for (const child of children) visited.add(child.id);
     family.push(...children);
