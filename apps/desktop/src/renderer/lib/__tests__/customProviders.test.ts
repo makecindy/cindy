@@ -1,3 +1,4 @@
+import { buildUserProvider, BUNDLED_CATALOG } from '@cindy/model-providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
@@ -11,11 +12,6 @@ import {
   piCatalogProviderIdAfterRouteEdit,
   providerViewToCustomProviderConfig,
   readCustomProviderKey,
-  replaceCustomProviderModelId,
-  setCustomProviderModelPiApi,
-  setCustomProviderModelReasoning,
-  setCustomProviderModelReasoningEffort,
-  setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
 } from '../customProviders';
 import type {
@@ -212,106 +208,6 @@ describe('piCatalogProviderIdAfterRouteEdit', () => {
   });
 });
 
-describe('replaceCustomProviderModelId', () => {
-  it('drops hidden metadata when the model id changes', () => {
-    expect(
-      replaceCustomProviderModelId(
-        {
-          id: 'MiniMax-M3',
-          name: 'MiniMax M3',
-          contextWindow: 1_000_000,
-          supportsImageInput: true,
-          reasoning: true,
-          reasoningEfforts: ['low', 'high'],
-          reasoningDefaultEffort: 'high',
-        },
-        'another-model',
-      ),
-    ).toEqual({
-      id: 'another-model',
-      name: 'MiniMax M3',
-    });
-  });
-
-  it('preserves the original model when the id is unchanged', () => {
-    const model = {
-      id: 'MiniMax-M3',
-      name: 'MiniMax M3',
-      contextWindow: 1_000_000,
-    };
-    expect(replaceCustomProviderModelId(model, model.id)).toBe(model);
-  });
-});
-
-describe('PI custom-provider protocol overrides', () => {
-  it.each([
-    [undefined, undefined],
-    ['anthropic-messages', 'anthropic-messages'],
-    ['openai-completions', 'openai-completions'],
-    ['openai-responses', 'openai-responses'],
-  ] as const)('sets the selected model override to %s', (piApi, expected) => {
-    const models: ProviderRuntimeModelConfig[] = [
-      { id: 'unchanged', name: 'Unchanged', piApi: 'anthropic-messages' },
-      {
-        id: 'deepseek-v4-pro',
-        name: 'DeepSeek V4 Pro',
-        piApi: 'openai-responses',
-        contextWindow: 1_000_000,
-      },
-    ];
-
-    const updated = setCustomProviderModelPiApi(models, 1, piApi);
-    expect(updated[0]).toBe(models[0]);
-    expect(updated[1]).toEqual({
-      id: 'deepseek-v4-pro',
-      name: 'DeepSeek V4 Pro',
-      contextWindow: 1_000_000,
-      ...(expected ? { piApi: expected } : {}),
-    });
-  });
-
-  it.each([
-    [undefined, undefined],
-    ['openai-completions', 'openai-completions'],
-    ['openai-responses', 'openai-responses'],
-    ['google-generative-ai', 'google-generative-ai'],
-  ] as const)(
-    'drops a stale Messages route when switching the model override to %s',
-    (piApi, expected) => {
-      const models: ProviderRuntimeModelConfig[] = [
-        {
-          id: 'routed-model',
-          name: 'Routed model',
-          piApi: 'anthropic-messages',
-          route: {
-            baseUrl: 'https://provider.example/anthropic',
-            wireProtocol: 'anthropic-messages',
-          },
-        },
-      ];
-
-      expect(setCustomProviderModelPiApi(models, 0, piApi)[0]).toEqual({
-        id: 'routed-model',
-        name: 'Routed model',
-        ...(expected ? { piApi: expected } : {}),
-      });
-    },
-  );
-
-  it('retains a model route when the selected override still uses its protocol', () => {
-    const model: ProviderRuntimeModelConfig = {
-      id: 'routed-model',
-      name: 'Routed model',
-      piApi: 'anthropic-messages',
-      route: {
-        baseUrl: 'https://provider.example/anthropic',
-        wireProtocol: 'anthropic-messages',
-      },
-    };
-
-    expect(setCustomProviderModelPiApi([model], 0, 'anthropic-messages')[0]).toEqual(model);
-  });
-
   it('persists the Pi provider default without rewriting model overrides', () => {
     expect(customProviderWireProtocolForSave('pi', 'openai-chat', 'openai-chat')).toBe(
       'openai-chat',
@@ -322,56 +218,7 @@ describe('PI custom-provider protocol overrides', () => {
     expect(
       customProviderWireProtocolForSave('codex', 'openai-responses', 'openai-responses'),
     ).toBeUndefined();
-  });
-});
-
-describe('setCustomProviderModelSupportsImageInput', () => {
-  it('updates only the selected model row', () => {
-    const models = [
-      { id: 'text', name: 'Text' },
-      { id: 'vision', name: 'Vision' },
-    ];
-    expect(setCustomProviderModelSupportsImageInput(models, 1, true)).toEqual([
-      models[0],
-      { id: 'vision', name: 'Vision', supportsImageInput: true },
-    ]);
-  });
-});
-
-describe('Pi custom-provider reasoning controls', () => {
-  it('enables conservative default levels and removes the capability when disabled', () => {
-    const models = [{ id: 'reasoner', name: 'Reasoner' }];
-    const enabled = setCustomProviderModelReasoning(models, 0, true);
-    expect(enabled).toEqual([
-      {
-        id: 'reasoner',
-        name: 'Reasoner',
-        reasoning: true,
-        reasoningEfforts: ['minimal', 'low', 'medium', 'high'],
-      },
-    ]);
-    expect(setCustomProviderModelReasoning(enabled, 0, false)).toEqual(
-      models.map((model) => ({ ...model, reasoning: false })),
-    );
-  });
-
-  it('keeps canonical order and refuses to remove the final supported effort', () => {
-    const models: ProviderRuntimeModelConfig[] = [
-      {
-        id: 'reasoner',
-        name: 'Reasoner',
-        reasoning: true,
-        reasoningEfforts: ['high'],
-      },
-    ];
-    const withXhigh = setCustomProviderModelReasoningEffort(models, 0, 'xhigh', true);
-    expect(withXhigh[0]?.reasoningEfforts).toEqual(['high', 'xhigh']);
-    const highOnly = setCustomProviderModelReasoningEffort(withXhigh, 0, 'xhigh', false);
-    expect(setCustomProviderModelReasoningEffort(highOnly, 0, 'high', false)).toEqual(highOnly);
-  });
-});
-
-describe('customProviderModelConfigFromCatalogModel', () => {
+  });describe('customProviderModelConfigFromCatalogModel', () => {
   it('does not freeze the materialized custom-provider default into user config', () => {
     expect(
       customProviderModelConfigFromCatalogModel({
@@ -775,6 +622,24 @@ describe('providerViewToCustomProviderConfig', () => {
 });
 
 describe('appendDiscoveredCustomProviderModels', () => {
+  it('repairs confirmed OpenRouter discovery wrappers while preserving explicit model fields and manual IDs', () => {
+    const existing = [
+      { id: 'anthropic/openai/new[1m]', name: 'Wrong wrapper', discoveredMetadata: {}, contextWindow: 64000 },
+      { id: 'openai/new', name: 'Current', discoveredMetadata: {}, defaultEnabled: false },
+      { id: 'anthropic/manual/id', name: 'Manual', nameExplicit: true, discoveredMetadata: {} },
+    ];
+    const discovered = [{ id: 'openai/new', name: 'Official', discoveredMetadata: { contextWindow: 128000 } },
+      { id: 'manual/id', name: 'Other model' }];
+    const result = appendDiscoveredCustomProviderModels(existing, discovered, 'https://openrouter.ai/api/v1/models');
+    expect(result.models.map(model => model.id)).not.toContain('anthropic/openai/new[1m]');
+    expect(result.models.find(model => model.id === 'openai/new'))
+      .toMatchObject({ contextWindow: 64000, defaultEnabled: false });
+    expect(result.models.find(model => model.id === 'anthropic/manual/id'))
+      .toMatchObject({ name: 'Manual', nameExplicit: true });
+    expect(appendDiscoveredCustomProviderModels(existing, discovered, 'https://proxy.example/v1/models').models)
+      .toContainEqual(expect.objectContaining({ id: 'anthropic/openai/new[1m]' }));
+    expect(existing[0].id).toBe('anthropic/openai/new[1m]');
+  });
   it('only appends unknown models and defaults them to hidden', () => {
     const result = appendDiscoveredCustomProviderModels(
       [{ id: 'kept', name: 'Kept' }],
@@ -986,4 +851,27 @@ describe('custom provider credential lifecycle', () => {
       ),
     ).rejects.toThrow('credential rollback failed');
   });
+});
+
+
+it('roundtrips raw model choices without freezing projected protocols or limits', () => {
+  const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'google-gemini-api')!);
+  const modelId = 'gemini-3.6-flash';
+  const raw = { id: 'google-test', name: 'Google', runtimes: {
+    pi: { ...preset.runtimes.pi!, catalogPresetId: 'google-gemini-api', models: [
+      { id: modelId, name: 'Gemini' },
+      { id: 'manual', name: 'Manual', api: 'openai-completions' as const, contextWindow: 32000,
+        route: { baseUrl: 'https://custom.example/v1', wireProtocol: 'openai-chat' as const } },
+    ] },
+  } };
+  const view = { ...buildUserProvider(raw, { presets: [preset] }), connected: true } as ProviderView;
+  const saved = providerViewToCustomProviderConfig(view);
+  saved.name = 'Renamed';
+  expect(saved.runtimes.pi!.models).toEqual(raw.runtimes.pi.models);
+  const nextModel = preset.runtimes.pi!.models.find(m => m.id === modelId)!;
+  nextModel.api = 'openai-completions'; nextModel.piApi = 'openai-completions';
+  nextModel.route = { baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' };
+  const next = buildUserProvider(saved, { presets: [preset] });
+  expect(next.models.pi![0]).toMatchObject({ api: 'openai-completions', route: nextModel.route });
+  expect(next.models.pi![1].userModelConfig).toEqual(raw.runtimes.pi.models[1]);
 });

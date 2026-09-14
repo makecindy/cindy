@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * ModelLightbox
  * ---------------------------------------------------------------------------
@@ -166,7 +167,7 @@ export function ModelLightbox({ source, onClose }: ModelLightboxProps) {
           action === 'open'
             ? await window.electronAPI.openPath(source.absPath)
             : await window.electronAPI.showItemInFolder({ filePath: source.absPath });
-        if (!res.success) {
+        if (shouldShowOpenPathError(res)) {
           toast.error(
             res.error ??
               (action === 'open'

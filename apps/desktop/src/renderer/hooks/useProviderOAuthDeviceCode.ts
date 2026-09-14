@@ -75,7 +75,8 @@ export function useProviderOAuthDeviceCode(
             }
             return;
           }
-          if (progress.providerId !== providerId || progress.phase !== 'device-code') return;
+          const deviceProviderId = browserLoginRef.current?.providerId ?? providerId;
+          if (progress.providerId !== deviceProviderId || progress.phase !== 'device-code') return;
           setDeviceCode({
             verificationUrl: progress.verificationUrl,
             userCode: progress.userCode,

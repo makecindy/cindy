@@ -447,7 +447,10 @@ describe('cindy-bridge extension source', () => {
   it('adapts Astra API payloads without changing other models or subscription requests', () => {
     const start = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('function astraResponsesPayload(');
     const end = CINDY_BRIDGE_EXTENSION_SOURCE.indexOf('export default async function cindyBridge');
-    const adapt = new Function(`${CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end)}; return astraResponsesPayload;`)();
+    const helpers = ts.transpileModule(CINDY_BRIDGE_EXTENSION_SOURCE.slice(start, end), {
+      compilerOptions: { module: ts.ModuleKind.ESNext, target: ts.ScriptTarget.ES2022 },
+    }).outputText;
+    const adapt = new Function(`${helpers}; return astraResponsesPayload;`)();
     const original = {
       prompt_cache_retention: '24h',
       prompt_cache_options: { mode: 'explicit' },

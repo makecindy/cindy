@@ -20,6 +20,7 @@
  * 选择器分段顺序与 deriveAvailableModels 的 first-wins 去重优先级,不要改动。
  */
 
+import { appendPiProviderPresets } from './piProviderPresets.js';
 import { projectProviderMediaModels } from './providerMediaModels.js';
 import catalogJson from '../catalog/providers.json' with { type: 'json' };
 import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
@@ -269,5 +270,5 @@ export const BUNDLED_CATALOG: Catalog = {
   version: catalogFile.version,
   providers: BUILTIN_PROVIDERS,
   modelRegistry: bundledModelRegistry,
-  ...(catalogFile.presets && catalogFile.presets.length > 0 ? { presets: catalogFile.presets } : {}),
+  presets: appendPiProviderPresets(catalogFile.presets ?? []),
 };

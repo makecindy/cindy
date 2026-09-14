@@ -2159,6 +2159,9 @@ function rewindCommit(db: Database.Database, args: unknown): void {
   const sdkSessionId =
     typeof payload.sdkSessionId === 'string' && payload.sdkSessionId ? payload.sdkSessionId : null;
   const requireLatestUser = payload.requireLatestUser === true;
+  const nativeForkAnchorSessionMap = normalizeNativeForkAnchorSessionMap(
+    payload.nativeForkAnchorSessionMap,
+  );
   const now = expectNumber(payload.now, 'now');
   const rows = db
     .prepare(
@@ -2213,8 +2216,19 @@ function rewindCommit(db: Database.Database, args: unknown): void {
             AND started_at >= ?`,
       )
     : null;
+  const updateAgentMeta = db.prepare('UPDATE messages SET agent_meta = ? WHERE id = ?');
   const transaction = db.transaction(() => {
     for (const id of idsToRewind) updateMessage.run(now, id);
+    // 保留下来的消息若持有旧 thread 的原生 turn 锚点,随 thread 替换一起重映射
+    // (与 fork.session 复制消息时的处理一致),软删与重映射同一事务。
+    if (nativeForkAnchorSessionMap.size > 0) {
+      const rewoundIds = new Set(idsToRewind);
+      for (const row of rows) {
+        if (rewoundIds.has(row.id) || !row.agent_meta) continue;
+        const remapped = remapNativeForkAnchorSession(row.agent_meta, nativeForkAnchorSessionMap);
+        if (remapped !== row.agent_meta) updateAgentMeta.run(remapped, row.id);
+      }
+    }
     if (rewindSubagentByParent && rewindParentlessSubagentTail) {
       const rewoundIds = new Set(idsToRewind);
       const parentToolUseIds = new Set(
@@ -3441,6 +3455,29 @@ function remapForkedAgentMeta(
     if (mapped) next.nativeForkAnchor = { ...nativeForkAnchor, sdkSessionId: mapped };
   }
   return JSON.stringify(next);
+}
+
+/** 只重映射 nativeForkAnchor.sdkSessionId,不动 uuid / parent 链(rewind 不复制消息)。 */
+function remapNativeForkAnchorSession(raw: string, map: Map<string, string>): string {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (!isRecord(parsed)) return raw;
+  const nativeForkAnchor = parsed.nativeForkAnchor;
+  if (
+    !isRecord(nativeForkAnchor) ||
+    nativeForkAnchor.agentKind !== 'codex' ||
+    nativeForkAnchor.kind !== 'turn' ||
+    typeof nativeForkAnchor.sdkSessionId !== 'string'
+  ) {
+    return raw;
+  }
+  const mapped = map.get(nativeForkAnchor.sdkSessionId);
+  if (!mapped || mapped === nativeForkAnchor.sdkSessionId) return raw;
+  return JSON.stringify({ ...parsed, nativeForkAnchor: { ...nativeForkAnchor, sdkSessionId: mapped } });
 }
 
 function normalizeStringSet(value: unknown, label: string): Set<string> {

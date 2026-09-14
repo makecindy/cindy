@@ -6,8 +6,9 @@ import { EventEmitter } from "node:events";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import manifest, {
-	desktopUnitWorkerCount,
-	unitTestShardArgs,
+  desktopUnitWorkerCount,
+  desktopUnitPool,
+  unitTestShardArgs,
 } from "../test-workspaces.config.mjs";
 import { nodeWebstorageEnabled } from "../shared/node-webstorage.mjs";
 import {
@@ -197,7 +198,7 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"run",
 		// win32 pins forks: threads segfaults the desktop suite there, and the
 		// LaunchServices churn that threads exists to avoid is macOS-only.
-		`--pool=${nodeWebstorageEnabled() || process.platform === "win32" ? "forks" : "threads"}`,
+		`--pool=${desktopUnitPool()}`,
 		`--maxWorkers=${desktopUnitWorkerCount()}`,
 		...unitTestShardArgs(),
 	]);
@@ -283,9 +284,7 @@ test("unit tier pins an explicit vitest pool, forks only by documented exception
 	// finalizers crashing in isolate teardown) and no launchservicesd exists
 	// for the churn to hurt.
 	const forksByException = [
-		...(nodeWebstorageEnabled() || process.platform === "win32"
-			? ["apps/desktop"]
-			: []),
+		...(desktopUnitPool() === "forks" ? ["apps/desktop"] : []),
 		"packages/maker-core",
 	];
 	const unpinned = [];
@@ -314,6 +313,13 @@ test("nodeWebstorageEnabled detects the globals that force the webstorage flag",
 		nodeWebstorageEnabled({ localStorage: Object.create(null) }),
 		true,
 	);
+});
+
+test("desktop unit uses forks on Node 24+ to avoid native finalizer crashes", () => {
+	assert.equal(desktopUnitPool("darwin", "24.18.0", false), "forks");
+	assert.equal(desktopUnitPool("darwin", "22.23.0", false), "threads");
+	assert.equal(desktopUnitPool("win32", "22.23.0", false), "forks");
+	assert.equal(desktopUnitPool("darwin", "25.0.0", true), "forks");
 });
 
 test("normalizeRelPath makes path matching independent of host path separators", () => {

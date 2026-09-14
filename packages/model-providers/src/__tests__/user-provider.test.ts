@@ -292,7 +292,7 @@ describe("buildUserProvider (per-runtime)", () => {
       efforts: ["low", "medium", "high", "xhigh", "max"],
       defaultEffort: "medium",
       group: "custom:openrouter",
-      defaultEnabled: true,
+      defaultEnabled: false,
     });
   });
 
@@ -1587,6 +1587,41 @@ describe("official Pi catalog defaults for preset-marked sources (#4295)", () =>
     delete (unmarked as { piCatalogProviderId?: string }).piCatalogProviderId;
     expect(
       build({ id: "kimi-code", name: "Kimi Code", runtimes: { pi: unmarked } }).find((m) => m.id === "k3-256k"),
-    ).toMatchObject({ efforts: [] });
+    ).toMatchObject({ efforts: ["low", "high", "max"] });
+  });
+});
+
+
+describe('imported model native engine defaults', () => {
+  it.each([
+    ['anthropic-messages', [true, false, true]],
+    ['openai-responses', [false, true, true]],
+    ['openai-completions', [false, false, true]],
+    ['google-generative-ai', [false, false, true]],
+  ] as const)('%s only enables native engines', (api, expected) => {
+    const agents = ['claude-code', 'codex', 'pi'] as const;
+    const config: CustomProviderConfig = {
+      id: 'native-default-test', name: 'Test',
+      runtimes: Object.fromEntries(agents.map(agent => [agent, {
+        baseUrl: 'https://example.com/v1',
+        models: [{ id: 'test-model', name: 'Test', api }],
+      }])),
+    };
+    const provider = buildUserProvider(config, { modelRegistry: {
+      schemaVersion: 5, updatedAt: '2026-09-13T00:00:00Z',
+      models: [{ id: 'test-model', name: 'Test', nativeApi: api, routes: [{
+        providerId: config.id, modelId: 'test-model', agents: ['claude-code', 'codex'],
+      }] }],
+    } });
+    expect(agents.map(agent => provider.models[agent]?.[0]?.defaultEnabled)).toEqual(expected);
+  });
+
+  it('preserves explicit configuration defaults', () => {
+    const provider = buildUserProvider({ id: 'explicit-defaults', name: 'Test', runtimes: {
+      pi: { baseUrl: 'https://example.com/v1', models: [{ id: 'test', name: 'Test', api: 'anthropic-messages', defaultEnabled: false }] },
+      codex: { baseUrl: 'https://example.com/v1', models: [{ id: 'test', name: 'Test', api: 'anthropic-messages', defaultEnabled: true }] },
+    } });
+    expect(provider.models.pi?.[0]?.defaultEnabled).toBe(false);
+    expect(provider.models.codex?.[0]?.defaultEnabled).toBe(true);
   });
 });
