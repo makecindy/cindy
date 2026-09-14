@@ -63,19 +63,35 @@ function toRow(row: {
   };
 }
 
-/** 消息正文可能是纯文本或 JSON 编码的内容块数组:只取 text 块拼成作曲器可用的草稿。 */
+/**
+ * 消息正文在 DB 里是 JSON 编码的(user 消息形如 `'"hello"'`,见 main/__tests__/fork.test.ts),
+ * 直接回传会把引号一并带给作曲器。先解码再按块取文本;解不出 JSON 的按纯文本原样返回。
+ */
 export function messageTextForDraft(content: unknown): string {
   if (typeof content !== 'string') return '';
-  const trimmed = content.trim(); if (!trimmed) return '';
-  let parsed: unknown; try { parsed = JSON.parse(trimmed); } catch { return content; }
+  const trimmed = content.trim();
+  if (!trimmed) return '';
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(trimmed);
+  } catch {
+    return content;
+  }
   return draftBlocksToText(parsed);
 }
+
+/** 取文本的口径与 maker-ipc/sessionReferenceResolver 的 contentToText 一致。 */
 function draftBlocksToText(value: unknown): string {
   if (typeof value === 'string') return value;
   if (Array.isArray(value)) return value.map(draftBlocksToText).filter(Boolean).join('\n');
-  if (value && typeof value === 'object') { const r = value as Record<string, unknown>; if (typeof r.text === 'string') return r.text; if (typeof r.content === 'string') return r.content; }
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>;
+    if (typeof record.text === 'string') return record.text;
+    if (typeof record.content === 'string') return record.content;
+  }
   return '';
 }
+
 export function createSessionOperationsDeps(
   isTurnRunning: (sessionId: string) => boolean,
 ): SessionOperationsDeps {
