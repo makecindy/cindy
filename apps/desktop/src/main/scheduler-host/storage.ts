@@ -15,6 +15,7 @@
  */
 
 import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
@@ -370,6 +371,33 @@ function publicScheduleRunWhere() {
 export class DrizzleScheduleStorage implements ScheduleStorage {
   constructor(private readonly getDb: () => SchedulerDrizzleDb) {}
 
+  private sidebarIndexGeneration = 0;
+  private sidebarIndexCache: {
+    generation: number;
+    revision: string;
+    runs: ScheduleSidebarIndexRun[];
+  } | null = null;
+
+  private bumpSidebarIndexCache(): void {
+    this.sidebarIndexGeneration += 1;
+    this.sidebarIndexCache = null;
+  }
+
+  private async readSidebarIndexRevision(): Promise<string> {
+    const db = this.getDb();
+    const [latest] = await db
+      .select({ n: sql<number>`count(*)`.mapWith(Number) })
+      .from(scheduleSessionLatestRuns);
+    const [runStats] = await db
+      .select({
+        n: sql<number>`count(*)`.mapWith(Number),
+        maxFired: sql<number>`coalesce(max(${scheduleRuns.firedAt}), 0)`.mapWith(Number),
+        maxRead: sql<number>`coalesce(max(${scheduleRuns.readAt}), 0)`.mapWith(Number),
+      })
+      .from(scheduleRuns);
+    return `${latest?.n ?? 0}:${runStats?.n ?? 0}:${runStats?.maxFired ?? 0}:${runStats?.maxRead ?? 0}`;
+  }
+
   // ---------- Schedule CRUD ----------
 
   async list(filter?: ListFilter): Promise<Schedule[]> {
@@ -402,6 +430,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       // 理论上不可能：刚插完；防御性 throw 让上层立刻看到
       throw new Error(`DrizzleScheduleStorage: insert verify failed for id=${s.id}`);
     }
+    this.bumpSidebarIndexCache();
     return inserted;
   }
 
@@ -414,13 +443,16 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     }
     await db.update(schedules).set(setObj).where(eq(schedules.id, id));
     // drizzle update 不会 throw "not found"——主动 SELECT 验证
-    return this.get(id);
+    const updated = await this.get(id);
+    if (updated) this.bumpSidebarIndexCache();
+    return updated;
   }
 
   async delete(id: string): Promise<void> {
     const db = this.getDb();
     // schedule_runs.schedule_id ON DELETE CASCADE，相关 run 由 SQLite 自动清
     await db.delete(schedules).where(eq(schedules.id, id));
+    this.bumpSidebarIndexCache();
   }
 
   /**
@@ -456,6 +488,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       throw new Error('claimDueFire: sqlite driver did not report changes count');
     }
     if (changes === 0) return null;
+    this.bumpSidebarIndexCache();
     return this.get(id);
   }
 
@@ -468,6 +501,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     if (!row) {
       throw new Error(`DrizzleScheduleStorage: insertRun verify failed for id=${run.id}`);
     }
+    this.bumpSidebarIndexCache();
     return scheduleRunToCamel(row);
   }
 
@@ -498,6 +532,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         updatedAt: new Date(patch.finishedAt).toISOString(),
       });
     }
+    if (row) this.bumpSidebarIndexCache();
     return row ? scheduleRunToCamel(row) : null;
   }
 
@@ -640,6 +675,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * - 内部例行任务在 SQL 内排除，避免未读历史随运行次数累积到公共侧栏内存中。
    */
   async listSidebarIndexRuns(): Promise<ScheduleSidebarIndexRun[]> {
+    return runAsBackgroundDbRpc(async () => {
+    const revision = await this.readSidebarIndexRevision();
+    const cached = this.sidebarIndexCache;
+    if (cached && cached.revision === revision) return cached.runs;
+    const generation = this.sidebarIndexGeneration;
     const db = this.getDb();
     const projection = {
       runId: scheduleRuns.id,
@@ -778,7 +818,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       });
     }
 
-    return [...indexedRuns, ...legacyRuns].filter((run) => run.scheduleSource !== 'bot');
+    const runs = [...indexedRuns, ...legacyRuns].filter((run) => run.scheduleSource !== 'bot');
+    if (generation === this.sidebarIndexGeneration) {
+      this.sidebarIndexCache = { generation, revision, runs };
+    }
+    return runs;
+    });
   }
 
   /**
@@ -1098,6 +1143,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     const [row] = await db.select().from(scheduleRuns).where(condition).limit(1);
     if (!row) return null;
     await db.delete(scheduleRuns).where(condition);
+    this.bumpSidebarIndexCache();
     return scheduleRunToCamel(row);
   }
 
@@ -1275,6 +1321,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       return null;
     }
     await db.update(scheduleRuns).set({ readAt: Date.now() }).where(eq(scheduleRuns.id, runId));
+    this.bumpSidebarIndexCache();
     return row.scheduleId;
   }
 
@@ -1301,7 +1348,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
       .run();
     const changes = (result as unknown as { changes?: number }).changes;
-    return typeof changes === 'number' ? changes : 0;
+    const updated = typeof changes === 'number' ? changes : 0;
+    if (updated > 0) this.bumpSidebarIndexCache();
+    return updated;
   }
 
   async markAllRunsRead(scheduleId: string): Promise<number> {
@@ -1313,7 +1362,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .where(and(eq(scheduleRuns.scheduleId, scheduleId), unreadTerminalRunWhere()))
       .run();
     const changes = (result as unknown as { changes?: number }).changes;
-    return typeof changes === 'number' ? changes : 0;
+    const updated = typeof changes === 'number' ? changes : 0;
+    if (updated > 0) this.bumpSidebarIndexCache();
+    return updated;
   }
 
   /**

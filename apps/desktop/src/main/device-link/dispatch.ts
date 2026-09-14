@@ -84,6 +84,7 @@ import {
 } from './remoteBotSessionBoundary.js';
 import { getControllerPlatform } from './controllerPlatform';
 import { runDeviceLinkInvokeContext } from './invoke-context';
+import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import { fetchLocalMediaToOss } from './mediaFetch';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
@@ -3726,10 +3727,16 @@ export async function runInvoke(
         historyView,
       },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
-      () => dispatchLocalInvoke(
-        payload.channel,
-        payload.channel === 'maker:provider:list' ? [] : args,
-      ),
+      // 对账 listing 走后台读配额，不占满写入名额。
+      () => {
+        const invoke = () => dispatchLocalInvoke(
+          payload.channel,
+          payload.channel === 'maker:provider:list' ? [] : args,
+        );
+        return COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
+          ? runAsBackgroundDbRpc(invoke)
+          : invoke();
+      },
     );
     if (hasRemoteBotSessionLookup()) await assertRemoteBotInvocationAllowed(args, payload.channel);
     if (!broadcastTap.isDataOwnerBroadcastScopeCurrent(invocationOwner)) throw new Error('[NOT_FOUND] Session does not exist');

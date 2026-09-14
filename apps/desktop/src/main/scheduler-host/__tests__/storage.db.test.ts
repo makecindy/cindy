@@ -515,6 +515,34 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  it('reuses the sidebar index snapshot until runs change', async () => {
+    const harness = createStorageHarness();
+    try {
+      await harness.storage.insert(baseSchedule({ id: 'sch-cache' }));
+      await harness.storage.insertRun({
+        id: 'run-cache-1',
+        scheduleId: 'sch-cache',
+        status: 'success',
+        firedAt: 1,
+        readAt: 2,
+      });
+      const first = await harness.storage.listSidebarIndexRuns();
+      const second = await harness.storage.listSidebarIndexRuns();
+      expect(second).toBe(first);
+      await harness.storage.insertRun({
+        id: 'run-cache-2',
+        scheduleId: 'sch-cache',
+        status: 'failed',
+        firedAt: 3,
+      });
+      const third = await harness.storage.listSidebarIndexRuns();
+      expect(third).not.toBe(first);
+      expect(third.some((run) => run.runId === 'run-cache-2')).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
   it('recovers warnings per automation without erasing unread history; healthy skips only recover checks', async () => {
     const harness = createStorageHarness();
     try {
