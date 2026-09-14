@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   _resetPendingAlertAttentionForTests,
+  noteSessionTurnStartedForAlerts,
   refreshPendingAlerts,
   usePendingAlertAttention,
 } from '@/hooks/usePendingAlertAttention';
@@ -28,6 +29,9 @@ const clearMock = vi.mocked(clearSessionAttention);
 const kindMock = vi.mocked(getSessionAttentionKind);
 const errorTailPendingMock = vi.fn<() => Promise<string[]>>();
 const interruptedPendingMock = vi.fn<() => Promise<string[]>>();
+const createdListeners: Array<
+  (payload: { sessionId: string; message: { role?: string } }, ownerStamp?: unknown) => void
+> = [];
 
 /** 驱动一次错误尾行重算并等它收敛完成。 */
 async function reconcile(ids: string[]): Promise<void> {
@@ -38,11 +42,24 @@ async function reconcile(ids: string[]): Promise<void> {
 describe('usePendingAlertAttention (派生收敛)', () => {
   beforeEach(() => {
     _resetPendingAlertAttentionForTests();
+    createdListeners.length = 0;
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       localDb: {
         sessions: {
           errorTailPending: errorTailPendingMock,
           interruptedPending: interruptedPendingMock,
+        },
+        sessionsPush: {
+          onPatched: () => () => {},
+        },
+        messages: {
+          onErrorPersisted: () => () => {},
+          onCreated: (
+            cb: (payload: { sessionId: string; message: { role?: string } }, ownerStamp?: unknown) => void,
+          ) => {
+            createdListeners.push(cb);
+            return () => {};
+          },
         },
       },
     };
@@ -200,5 +217,66 @@ describe('usePendingAlertAttention (派生收敛)', () => {
     await Promise.resolve();
 
     expect(addMock).toHaveBeenCalledWith('s-boot-tail', 'error');
+  });
+
+  it('认领了错误尾行时,该会话的 user 行触发重算;告警已消失则 explicit 清点', async () => {
+    await reconcile(['s1']);
+    interruptedPendingMock.mockResolvedValue([]);
+    renderHook(() => usePendingAlertAttention());
+    expect(createdListeners.length).toBeGreaterThan(0);
+
+    addMock.mockClear();
+    clearMock.mockClear();
+    errorTailPendingMock.mockClear();
+    errorTailPendingMock.mockResolvedValue([]);
+
+    createdListeners[0]!({ sessionId: 's1', message: { role: 'user' } });
+    await refreshPendingAlerts();
+    expect(clearMock).toHaveBeenCalledWith('s1', { intent: 'explicit' });
+  });
+
+  it('未认领错误尾行时,user 行不打 IPC', async () => {
+    interruptedPendingMock.mockResolvedValue([]);
+    errorTailPendingMock.mockResolvedValue([]);
+    renderHook(() => usePendingAlertAttention());
+    expect(createdListeners.length).toBeGreaterThan(0);
+
+    await refreshPendingAlerts();
+    errorTailPendingMock.mockClear();
+    createdListeners[0]!({ sessionId: 's1', message: { role: 'user' } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(errorTailPendingMock).not.toHaveBeenCalled();
+  });
+
+  it('assistant 行不触发错误尾行重算', async () => {
+    await reconcile(['s1']);
+    interruptedPendingMock.mockResolvedValue([]);
+    renderHook(() => usePendingAlertAttention());
+    errorTailPendingMock.mockClear();
+
+    createdListeners[0]!({ sessionId: 's1', message: { role: 'assistant' } });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(errorTailPendingMock).not.toHaveBeenCalled();
+  });
+
+  it('新一轮启动时重算仍认领的错误尾行,告警消失则 explicit 清点', async () => {
+    await reconcile(['s1']);
+    clearMock.mockClear();
+    errorTailPendingMock.mockClear();
+    errorTailPendingMock.mockResolvedValue([]);
+
+    noteSessionTurnStartedForAlerts('s1');
+    await refreshPendingAlerts();
+    expect(clearMock).toHaveBeenCalledWith('s1', { intent: 'explicit' });
+  });
+
+  it('新一轮启动时未认领该会话则不打 IPC', async () => {
+    await reconcile(['s1']);
+    errorTailPendingMock.mockClear();
+    noteSessionTurnStartedForAlerts('other');
+    await Promise.resolve();
+    expect(errorTailPendingMock).not.toHaveBeenCalled();
   });
 });

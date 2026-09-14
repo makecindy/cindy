@@ -1,18 +1,22 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { AuxiliaryModelSettingsState } from '../../../../shared/auxiliaryModelSettings';
+import type {
+  AuxiliaryModelOption,
+  AuxiliaryModelSettingsState,
+} from '../../../../shared/auxiliaryModelSettings';
+import { AUTO_AUXILIARY_MODEL_CHAIN } from '../../../../shared/auxiliaryModelChain';
 
-const TITLE_PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
-const RECOMMENDATION_PIN = 'cat:anthropic:claude-code:claude-haiku-4-5';
+const PREFERRED_PIN = 'cat:openrouter:codex:openai/gpt-5-mini';
+const FALLBACK_PIN = 'cat:anthropic:claude-code:claude-haiku-4-5';
 
 const h = vi.hoisted(() => ({
   get: vi.fn(),
   set: vi.fn(),
   toastError: vi.fn(),
-  isModelEnabled: vi.fn(),
+  authMode: 'cloud' as 'signed-out' | 'local' | 'cloud',
 }));
 
 vi.mock('react-i18next', () => ({
@@ -27,43 +31,57 @@ vi.mock('@/lib/toast', () => ({
   toast: { error: h.toastError },
 }));
 
-vi.mock('@/state/modelVisibilityPrefs', () => ({
-  isModelEnabled: h.isModelEnabled,
-  useModelVisibilityVersion: () => 0,
+vi.mock('@/contexts/AuthContext', () => ({
+  useAuth: () => ({ mode: h.authMode }),
+}));
+
+vi.mock('@/components/ui/tooltip', () => ({
+  Tip: ({ children }: { children: React.ReactElement }) => children,
 }));
 
 vi.mock('@/cindy-brain/OneshotModelPinPicker', () => ({
   OneshotModelPinPicker: ({
     value,
+    disabled,
+    defaultOptionLabel,
+    groupByProvider,
+    options,
     onChange,
     ariaLabel,
-    disabled,
-    options,
   }: {
     value?: string;
-    onChange: (pin: string | null) => void;
     ariaLabel: string;
     disabled?: boolean;
-    options: Array<{ id: string; available?: boolean }>;
+    defaultOptionLabel?: string;
+    groupByProvider?: boolean;
+    options: readonly AuxiliaryModelOption[];
+    onChange: (pin: string | null) => void;
   }) => {
-    const titleRow = ariaLabel.includes('sessionTitle');
-    const pin = titleRow ? TITLE_PIN : RECOMMENDATION_PIN;
-    const displayedOptions = options.filter(
-      (option) => option.available !== false || option.id === value,
-    );
     return (
       <div>
-        <span>{`${ariaLabel}:${value ?? 'automatic'}`}</span>
-        <span data-testid={`${ariaLabel}:options`}>
-          {displayedOptions.map((option) => `${option.id}:${option.available !== false}`).join('|')}
+        <span>{`${ariaLabel}:${value ?? defaultOptionLabel ?? 'empty'}`}</span>
+        <span data-testid={`${ariaLabel}:value`}>{value ?? 'empty'}</span>
+        <span data-testid={`${ariaLabel}:panel`}>
+          {`${Boolean(groupByProvider)}:${options.map((option) => option.group).join(',')}`}
         </span>
+        {options.map((option) => (
+          <span key={option.id} data-testid={`${ariaLabel}:option:${option.id}`} />
+        ))}
         <button
           type="button"
           aria-label={`${ariaLabel}:select`}
           disabled={disabled}
-          onClick={() => onChange(pin)}
+          onClick={() => onChange(PREFERRED_PIN)}
         >
           select
+        </button>
+        <button
+          type="button"
+          aria-label={`${ariaLabel}:select-fallback`}
+          disabled={disabled}
+          onClick={() => onChange(FALLBACK_PIN)}
+        >
+          select fallback
         </button>
         <button
           type="button"
@@ -82,18 +100,61 @@ import { AuxiliaryModelSection } from '../AuxiliaryModelSection';
 
 function state(partial: Partial<AuxiliaryModelSettingsState> = {}): AuxiliaryModelSettingsState {
   return {
-    sessionTitleModel: null,
-    promptRecommendationModel: null,
+    models: [],
     isCustomized: false,
     customizedKeys: [],
-    defaults: {
-      sessionTitleModel: null,
-      promptRecommendationModel: null,
-    },
+    defaults: { models: [] },
     options: [],
     ...partial,
   };
 }
+
+const SUPPLIER_OPTIONS: AuxiliaryModelOption[] = [
+  {
+    id: PREFERRED_PIN,
+    label: 'GPT-5 mini · OpenRouter',
+    group: 'OpenRouter',
+    providerId: 'openrouter',
+    agentKind: 'codex',
+    modelId: 'openai/gpt-5-mini',
+    modelName: 'GPT-5 mini',
+    budget: false,
+    subscription: false,
+    agentSuffix: 'Codex',
+    available: true,
+  },
+  {
+    id: FALLBACK_PIN,
+    label: 'Claude Haiku 4.5 · Anthropic',
+    group: 'Anthropic',
+    providerId: 'anthropic',
+    agentKind: 'claude-code',
+    modelId: 'claude-haiku-4-5',
+    modelName: 'Claude Haiku 4.5',
+    budget: false,
+    subscription: false,
+    agentSuffix: 'Claude Code',
+    available: true,
+  },
+];
+
+const AUTOMATIC_OPTIONS: AuxiliaryModelOption[] = AUTO_AUXILIARY_MODEL_CHAIN.map(
+  (id, index) => ({
+    id,
+    label: ['DeepSeek V4 Flash', 'Hy3', 'Qwen3.8 Flash'][index]! + ' · Cindy AI',
+    group: 'Cindy AI',
+    providerId: 'xd',
+    agentKind: 'codex',
+    modelId: ['deepseek/deepseek-v4-flash', 'tencent/hy3', 'qwen/qwen3.8-flash'][index]!,
+    modelName: ['DeepSeek V4 Flash', 'Hy3', 'Qwen3.8 Flash'][index]!,
+    budget: false,
+    subscription: false,
+    agentSuffix: 'Codex',
+    available: true,
+  }),
+);
+
+const OPTIONS: AuxiliaryModelOption[] = [...AUTOMATIC_OPTIONS, ...SUPPLIER_OPTIONS];
 
 function installApi(): void {
   Object.defineProperty(window, 'electronAPI', {
@@ -107,147 +168,288 @@ function installApi(): void {
   });
 }
 
+async function selectMode(modeKey: string): Promise<void> {
+  fireEvent.click(
+    await screen.findByRole('combobox', { name: 'settings.auxiliaryModels.title' }),
+  );
+  const option = await screen.findByRole('option', { name: modeKey });
+  await act(async () => {
+    fireEvent.click(option);
+  });
+}
+
 describe('AuxiliaryModelSection', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    h.authMode = 'cloud';
+    Object.defineProperty(Element.prototype, 'scrollIntoView', {
+      configurable: true,
+      value: vi.fn(),
+    });
     installApi();
-    h.isModelEnabled.mockReturnValue(true);
-    h.get.mockResolvedValue(state());
-    h.set.mockImplementation(async (patch: Partial<AuxiliaryModelSettingsState>) => state(patch));
+    h.get.mockResolvedValue(state({ options: OPTIONS }));
+    h.set.mockImplementation(async (patch: { models?: string[] }) => {
+      const models = patch.models ?? [];
+      return state({
+        models,
+        isCustomized: models.length > 0,
+        customizedKeys: models.length > 0 ? ['models'] : [],
+        options: OPTIONS,
+      });
+    });
   });
 
-  it('renders separate controls for task naming and prompt recommendations', async () => {
+  it('renders a persistent automatic/custom mode selector above the automatic chain', async () => {
     render(<AuxiliaryModelSection />);
 
-    expect(await screen.findByText('settings.auxiliaryModels.sessionTitle.label')).toBeTruthy();
-    expect(screen.getByText('settings.auxiliaryModels.promptRecommendation.label')).toBeTruthy();
+    expect(
+      (await screen.findByRole('combobox', { name: 'settings.auxiliaryModels.title' })).textContent,
+    ).toContain('settings.auxiliaryModels.automatic');
+    expect(screen.getByText(/settings.auxiliaryModels.chain.cindyDeepseekV4Flash/)).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'settings.auxiliaryModels.customize' })).toBeNull();
+    expect(screen.queryByText('settings.auxiliaryModels.preferred.label')).toBeNull();
   });
 
-  it('writes each model choice to its own independent key', async () => {
+  it('treats a GET payload without models as automatic instead of crashing', async () => {
+    h.get.mockResolvedValue({
+      models: [],
+      isCustomized: false,
+      customizedKeys: [],
+      defaults: { models: [] },
+      options: [],
+    } as AuxiliaryModelSettingsState);
+
     render(<AuxiliaryModelSection />);
 
+    expect(
+      (await screen.findByRole('combobox', { name: 'settings.auxiliaryModels.title' })).textContent,
+    ).toContain('settings.auxiliaryModels.automatic');
+  });
+
+  it('opens the three custom slots without persisting and keeps the mode selector', async () => {
+    render(<AuxiliaryModelSection />);
+
+    await selectMode('settings.auxiliaryModels.customize');
+
+    expect(await screen.findByText('settings.auxiliaryModels.preferred.label')).toBeTruthy();
+    expect(screen.getByText('settings.auxiliaryModels.fallback1.label')).toBeTruthy();
+    expect(screen.getByText('settings.auxiliaryModels.fallback2.label')).toBeTruthy();
+    expect(
+      screen.getByRole('combobox', { name: 'settings.auxiliaryModels.title' }).textContent,
+    ).toContain('settings.auxiliaryModels.customize');
+    expect(screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:value').textContent).toBe(
+      'cat:xd:codex:deepseek/deepseek-v4-flash',
+    );
+    expect(screen.getByTestId('settings.auxiliaryModels.fallback1.ariaLabel:value').textContent).toBe(
+      'cat:xd:codex:tencent/hy3',
+    );
+    expect(screen.getByTestId('settings.auxiliaryModels.fallback2.ariaLabel:value').textContent).toBe(
+      'cat:xd:codex:qwen/qwen3.8-flash',
+    );
+    expect(screen.queryByText('settings.defaults.customizedBadge')).toBeNull();
+    const modeTrigger = screen.getByRole('combobox', { name: 'settings.auxiliaryModels.title' });
+    const restoreButton = screen.getByRole('button', { name: 'settings.defaults.restore' });
+    expect(restoreButton).toBeTruthy();
+    expect(
+      modeTrigger.compareDocumentPosition(restoreButton) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+    expect(screen.getAllByText('settings.auxiliaryModels.customize')).toHaveLength(1);
+    expect(
+      screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:panel').textContent,
+    ).toBe('true:Cindy AI,OpenRouter,Anthropic');
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('filters unavailable automatic routes from a first-time custom draft', async () => {
+    h.get.mockResolvedValue(
+      state({
+        options: OPTIONS.map((option) =>
+          option.id === AUTO_AUXILIARY_MODEL_CHAIN[0]
+            ? { ...option, available: false }
+            : option,
+        ),
+      }),
+    );
+    render(<AuxiliaryModelSection />);
+
+    await selectMode('settings.auxiliaryModels.customize');
+
+    expect(screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:value').textContent).toBe(
+      AUTO_AUXILIARY_MODEL_CHAIN[1],
+    );
+    expect(screen.getByTestId('settings.auxiliaryModels.fallback1.ariaLabel:value').textContent).toBe(
+      AUTO_AUXILIARY_MODEL_CHAIN[2],
+    );
+    expect(screen.getByTestId('settings.auxiliaryModels.fallback2.ariaLabel:value').textContent).toBe(
+      'empty',
+    );
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('does not seed Cindy AI defaults while signed out', async () => {
+    h.authMode = 'signed-out';
+    render(<AuxiliaryModelSection />);
+
+    await selectMode('settings.auxiliaryModels.customize');
+
+    expect(screen.getByTestId('settings.auxiliaryModels.preferred.ariaLabel:value').textContent).toBe(
+      'empty',
+    );
+    expect(screen.getByText('settings.auxiliaryModels.signInHint')).toBeTruthy();
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('returns to automatic without persisting when restore is used while drafting', async () => {
+    render(<AuxiliaryModelSection />);
+
+    await selectMode('settings.auxiliaryModels.customize');
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.defaults.restore' }));
+
+    expect(
+      (await screen.findByRole('combobox', { name: 'settings.auxiliaryModels.title' })).textContent,
+    ).toContain('settings.auxiliaryModels.automatic');
+    expect(screen.queryByText('settings.auxiliaryModels.preferred.label')).toBeNull();
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('persists the changed preferred pin while keeping the other automatic defaults', async () => {
+    render(<AuxiliaryModelSection />);
+
+    await selectMode('settings.auxiliaryModels.customize');
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'settings.auxiliaryModels.sessionTitle.ariaLabel:select',
+        name: 'settings.auxiliaryModels.preferred.ariaLabel:select',
       }),
     );
-    await waitFor(() => expect(h.set).toHaveBeenLastCalledWith({ sessionTitleModel: TITLE_PIN }));
 
-    fireEvent.click(
-      screen.getByRole('button', {
-        name: 'settings.auxiliaryModels.promptRecommendation.ariaLabel:select',
-      }),
-    );
     await waitFor(() =>
       expect(h.set).toHaveBeenLastCalledWith({
-        promptRecommendationModel: RECOMMENDATION_PIN,
+        models: [PREFERRED_PIN, 'cat:xd:codex:tencent/hy3', 'cat:xd:codex:qwen/qwen3.8-flash'],
       }),
     );
   });
 
-  it('restores automatic routing with a null override', async () => {
+  it('shows all supplier groups while keeping the exact selected catalog pin', async () => {
     h.get.mockResolvedValue(
       state({
-        sessionTitleModel: TITLE_PIN,
-        promptRecommendationModel: RECOMMENDATION_PIN,
+        models: [PREFERRED_PIN],
+        isCustomized: true,
+        customizedKeys: ['models'],
+        options: SUPPLIER_OPTIONS,
+      }),
+    );
+    render(<AuxiliaryModelSection />);
+
+    expect(
+      (await screen.findByTestId('settings.auxiliaryModels.preferred.ariaLabel:panel')).textContent,
+    ).toBe('true:OpenRouter,Anthropic');
+    expect(
+      screen.getByRole('combobox', { name: 'settings.auxiliaryModels.title' }).textContent,
+    ).toContain('settings.auxiliaryModels.customize');
+
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('disables a later slot until its preceding slot has a model', async () => {
+    h.get.mockResolvedValue(
+      state({
+        models: [PREFERRED_PIN],
+        isCustomized: true,
+        customizedKeys: ['models'],
+        options: OPTIONS,
+      }),
+    );
+    render(<AuxiliaryModelSection />);
+
+    const fallback2Select = await screen.findByRole('button', {
+      name: 'settings.auxiliaryModels.fallback2.ariaLabel:select',
+    });
+    expect((fallback2Select as HTMLButtonElement).disabled).toBe(true);
+
+    fireEvent.click(fallback2Select);
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('does not offer or persist a model already selected in another slot', async () => {
+    h.get.mockResolvedValue(
+      state({
+        models: [PREFERRED_PIN, FALLBACK_PIN],
+        isCustomized: true,
+        customizedKeys: ['models'],
+        options: OPTIONS,
+      }),
+    );
+    render(<AuxiliaryModelSection />);
+
+    expect(
+      screen.queryByTestId(
+        `settings.auxiliaryModels.preferred.ariaLabel:option:${FALLBACK_PIN}`,
+      ),
+    ).toBeNull();
+    expect(
+      screen.queryByTestId(
+        `settings.auxiliaryModels.fallback1.ariaLabel:option:${PREFERRED_PIN}`,
+      ),
+    ).toBeNull();
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.auxiliaryModels.fallback1.ariaLabel:select',
+      }),
+    );
+    expect(h.set).not.toHaveBeenCalled();
+  });
+
+  it('clears a saved custom chain when automatic is selected', async () => {
+    h.get.mockResolvedValue(
+      state({
+        models: [PREFERRED_PIN, FALLBACK_PIN],
+        isCustomized: true,
+        customizedKeys: ['models'],
+        options: OPTIONS,
+      }),
+    );
+    render(<AuxiliaryModelSection />);
+
+    await selectMode('settings.auxiliaryModels.automatic');
+
+    await waitFor(() => {
+      expect(h.set).toHaveBeenCalledWith({ models: [] });
+      expect(
+        screen.getByRole('combobox', { name: 'settings.auxiliaryModels.title' }).textContent,
+      ).toContain('settings.auxiliaryModels.automatic');
+    });
+  });
+
+  it('restores automatic routing when the preferred slot is cleared', async () => {
+    h.get.mockResolvedValue(
+      state({
+        models: [PREFERRED_PIN, FALLBACK_PIN],
+        isCustomized: true,
+        customizedKeys: ['models'],
       }),
     );
     render(<AuxiliaryModelSection />);
 
     fireEvent.click(
       await screen.findByRole('button', {
-        name: 'settings.auxiliaryModels.sessionTitle.ariaLabel:automatic',
+        name: 'settings.auxiliaryModels.preferred.ariaLabel:automatic',
       }),
     );
-    await waitFor(() => expect(h.set).toHaveBeenCalledWith({ sessionTitleModel: null }));
+    await waitFor(() => expect(h.set).toHaveBeenCalledWith({ models: [] }));
   });
 
-  it('does not offer models hidden from the regular model selector', async () => {
-    const hiddenPin = 'cat:xd:codex:claude-opus-5';
-    const visiblePin = 'cat:xd:codex:deepseek/deepseek-v4-flash';
-    h.isModelEnabled.mockImplementation(
-      (_agent: string, _providerId: string, model: { id: string }) =>
-        model.id !== 'claude-opus-5',
-    );
+  it('persists an empty list when restore is used on a saved custom chain', async () => {
     h.get.mockResolvedValue(
       state({
-        options: [
-          {
-            id: hiddenPin,
-            label: 'Claude Opus 5 · XD Gateway',
-            group: 'XD Gateway',
-            providerId: 'xd',
-            agentKind: 'codex',
-            modelId: 'claude-opus-5',
-            modelName: 'Claude Opus 5',
-            agentSuffix: 'Codex',
-            budget: false,
-            subscription: false,
-            available: true,
-          },
-          {
-            id: visiblePin,
-            label: 'DeepSeek V4 Flash · XD Gateway',
-            group: 'XD Gateway',
-            providerId: 'xd',
-            agentKind: 'codex',
-            modelId: 'deepseek/deepseek-v4-flash',
-            modelName: 'DeepSeek V4 Flash',
-            agentSuffix: 'Codex',
-            budget: false,
-            subscription: false,
-            available: true,
-          },
-        ],
+        models: [PREFERRED_PIN],
+        isCustomized: true,
+        customizedKeys: ['models'],
       }),
     );
-
     render(<AuxiliaryModelSection />);
 
-    const titleOptions = await screen.findByTestId(
-      'settings.auxiliaryModels.sessionTitle.ariaLabel:options',
-    );
-    const recommendationOptions = screen.getByTestId(
-      'settings.auxiliaryModels.promptRecommendation.ariaLabel:options',
-    );
-    expect(titleOptions.textContent).toBe(`${visiblePin}:true`);
-    expect(recommendationOptions.textContent).toBe(`${visiblePin}:true`);
-  });
-
-  it('keeps a selected hidden model visible only as an unavailable value', async () => {
-    const hiddenPin = 'cat:xd:codex:claude-opus-5';
-    h.isModelEnabled.mockReturnValue(false);
-    h.get.mockResolvedValue(
-      state({
-        sessionTitleModel: hiddenPin,
-        options: [
-          {
-            id: hiddenPin,
-            label: 'Claude Opus 5 · XD Gateway',
-            group: 'XD Gateway',
-            providerId: 'xd',
-            agentKind: 'codex',
-            modelId: 'claude-opus-5',
-            modelName: 'Claude Opus 5',
-            agentSuffix: 'Codex',
-            defaultEnabled: false,
-            budget: false,
-            subscription: false,
-            available: true,
-          },
-        ],
-      }),
-    );
-
-    render(<AuxiliaryModelSection />);
-
-    expect(
-      (await screen.findByTestId('settings.auxiliaryModels.sessionTitle.ariaLabel:options'))
-        .textContent,
-    ).toBe(`${hiddenPin}:false`);
-    expect(
-      screen.getByTestId('settings.auxiliaryModels.promptRecommendation.ariaLabel:options')
-        .textContent,
-    ).toBe('');
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.defaults.restore' }));
+    await waitFor(() => expect(h.set).toHaveBeenCalledWith({ models: [] }));
   });
 });

@@ -6,6 +6,8 @@
  */
 
 import apiErrors from './apiErrors.json';
+import remoteDesktop from './remoteDesktop.json';
+import chat from './chat.json';
 import composer from './composer.json';
 import deviceLink from './deviceLink.json';
 import devices from './devices.json';
@@ -21,7 +23,9 @@ import startup from './startup.json';
 import update from './update.json';
 
 export default {
+  remoteDesktop,
   apiErrors,
+  chat,
   composer,
   deviceLink,
   devices,

@@ -24,15 +24,30 @@
  */
 export type CindyCapabilityKind = 'image' | 'video' | 'embed';
 
+export type CindyCoreMediaType = 'image' | 'video';
+
+/**
+ * Core 媒体目录只按媒体类型与 Core 可执行性筛选。旧视频 alias Registry 属于
+ * `cindy-request` 执行器实现细节，不能参与这里的模型可见性判断。
+ */
+export function selectExecutableCoreMediaModels<T extends { mode?: string }>(
+  models: readonly T[],
+  type: CindyCoreMediaType,
+  isExecutable: (model: T) => boolean = () => true,
+): T[] {
+  const mode = type === 'image' ? 'image_generation' : 'video_generation';
+  return models.filter((model) => model.mode === mode && isExecutable(model));
+}
+
 /** 目录里与媒体能力相关的供应商字段(只取本模块用得到的那几个)。 */
 export interface CindyMediaProviderSlice {
   /** 供应商 id —— 停用过滤(isModelDisabled)按 (供应商, 模型) 定位 override。 */
   id: string;
-  imageModels?: { id: string; name: string }[];
+  imageModels?: { id: string; name: string; defaultEnabled?: boolean }[];
   imageDefaults?: { standard: string; draft?: string; best?: string };
-  videoModels?: { id: string; name: string }[];
+  videoModels?: { id: string; name: string; defaultEnabled?: boolean }[];
   videoDefaults?: { standard: string; draft?: string; best?: string };
-  embeddingModels?: { id: string; name: string }[];
+  embeddingModels?: { id: string; name: string; defaultEnabled?: boolean }[];
   embeddingDefaults?: { standard: string; draft?: string; best?: string };
 }
 
@@ -54,6 +69,29 @@ export interface CindyMediaCatalogConfig {
    * 非 null 时 standard / draft / best 三个值必定在 models 里。
    */
   defaults: { standard: string; draft: string; best: string } | null;
+}
+
+/**
+ * 仅在旧 cindy-request 入口收窄候选；失效默认随清单一起恢复，交给既有偏好
+ * 迁移逻辑持久化，不能只在执行时换型号而保留页面上的旧配置。
+ */
+export function filterLegacyCindyMediaConfig<T extends CindyMediaCatalogConfig['models'][number]>(
+  config: { models: T[]; defaults: CindyMediaCatalogConfig['defaults'] },
+  isExecutable: (model: T) => boolean,
+): { models: T[]; defaults: CindyMediaCatalogConfig['defaults'] } {
+  const models = config.models.filter(isExecutable);
+  if (models.length === 0) return { models, defaults: null };
+  const valid = (id: string | undefined) =>
+    id !== undefined && models.some((model) => model.id === id) ? id : null;
+  const standard = valid(config.defaults?.standard) ?? models[0]!.id;
+  return {
+    models,
+    defaults: {
+      standard,
+      draft: valid(config.defaults?.draft) ?? standard,
+      best: valid(config.defaults?.best) ?? standard,
+    },
+  };
 }
 
 /**
@@ -85,6 +123,11 @@ export function deriveCindyMediaConfig(
   isModelDisabled?: (providerId: string, modelId: string) => boolean,
   isProviderReady?: (providerId: string) => boolean,
   isProviderEditReady?: (providerId: string) => boolean,
+  isModelVisible?: (
+    providerId: string,
+    modelId: string,
+    defaultEnabled?: boolean,
+  ) => boolean,
 ): CindyMediaCatalogConfig {
   const models: Array<{ id: string; label: string; providerId: string; supportsEdit: boolean }> = [];
   const seen = new Set<string>();
@@ -104,6 +147,7 @@ export function deriveCindyMediaConfig(
     for (const m of list ?? []) {
       if (seen.has(m.id)) continue;
       if (isModelDisabled?.(p.id, m.id)) continue;
+      if (isModelVisible && !isModelVisible(p.id, m.id, m.defaultEnabled)) continue;
       seen.add(m.id);
       models.push({
         id: m.id,

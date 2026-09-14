@@ -12,6 +12,7 @@
 import { describe, it, expect } from 'vitest';
 import { buildRenderItems, type RenderItem } from '../components/chat/MessageStream';
 import type { ChatMessage } from '@/lib/makerChatStore';
+import { makerChatStore } from '@/lib/makerChatStore';
 import type { GhostCardSnapshot, GhostCardEntry, GhostLiveCard } from '@/cindy-brain/ghostCardStore';
 
 const GHOST_TOOL = 'mcp__cindy__ghost_call';
@@ -141,6 +142,28 @@ describe('ghost_card · in-flight 锚定', () => {
     toolUseId: null,
     receivedAt: 1,
     ...over,
+  });
+
+  it('renders a Pi card before its tool returns and restores the settled card from old history', () => {
+    const sessionId = 'pi-card-regression';
+    const content = { toolUseId: 'tu-pi', toolName: 'cindy_mcp_call_tool', input: {
+      server: 'cindy', tool: 'ghost_call', args: { ghost_id: 'cindy-art', tool: 'show_card' },
+    } };
+    try {
+      makerChatStore.__applyStreamEventForTest(sessionId, { sessionId, type: 'tool_use', data: content });
+      const messages = makerChatStore.getSnapshot(sessionId).messages;
+      const snap = snapshot({ 'call-pi': readyEntry() }, [live('call-pi')]);
+      expect(itemsOf(messages, snap).find(item => item.type === 'ghost_card')).toMatchObject({
+        callId: 'call-pi', tool: 'show_card', settled: false,
+      });
+      const history = makerChatStore.__mapServerMessagesForTest([{
+        id: 'persisted-pi', clientId: 'persisted-pi', sessionId, role: 'tool_use', content,
+        toolUseId: null, agentMeta: null,
+        createdAt: '2026-09-08T00:00:00.000Z',
+      }]);
+      expect(itemsOf([...history, mkResult('result-pi', 'tu-pi', { xdt_card_id: 'call-pi' })], snap)
+        .find(item => item.type === 'ghost_card')).toMatchObject({ callId: 'call-pi', settled: true });
+    } finally { makerChatStore.purgeSession(sessionId); }
   });
 
   it('claude:活卡带 toolUseId 时精确锚到对应行', () => {

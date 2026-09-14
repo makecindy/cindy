@@ -1,3 +1,11 @@
+import { retainProviderPresentationAfterAuthChange } from './maker-host/provider-presentation-store.js';
+import { codexAccountState } from './maker-host/codex-account-auth.js';
+import { syncSubscriptionAccountUsage } from './usage/subscriptionAccountUsage.js';
+import { clearSubscriptionAccountDiscoveredModels, setSubscriptionAccountInvalidatedHandler } from './maker-host/subscription-account-auth.js';
+import { startWorktreeRecycleMaintenance, stopWorktreeRecycleMaintenance, auditRegisteredWorktrees } from './worktree/recycleMaintenance';
+import { requestWorktreeRecycle } from './worktree/managedRecycle';
+import { recycleSessionWorktreeForStatusChange } from './localDb/ipc/sessions';
+import { tryGetDbClient } from './localDb/client/current';
 import {
   app,
   BrowserWindow,
@@ -18,6 +26,7 @@ import {
   type WebContents,
 } from 'electron';
 import { resolveVibrancyConfig } from './vibrancyConfig';
+import { getSessionThinkingSnapshots, getHistoryToolName } from './messagePersistBroadcaster';
 import { applyVibrancyToSecondaryWindows } from './secondary-windows';
 import {
   rememberResolvedAppTheme,
@@ -32,6 +41,7 @@ import {
   createWindowBackdropMaterialArgument,
   WINDOW_BACKDROP_MATERIAL_CHANGED_CHANNEL,
 } from '../shared/windowBackdrop.js';
+import { isAllowedBillingMailtoRequest } from '../shared/billing.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -54,14 +64,22 @@ import {
   readWindowFullscreenState,
   showMainWindowAndRestoreFullscreen,
 } from './mainWindowFullscreenStartup';
+import {
+  installMainWindowMaximizeRecovery,
+  installMainWindowNativeRestoreIntent,
+  readPersistedWindowMaximized,
+  type MainWindowMaximizeRecoveryController,
+} from './mainWindowMaximizeRecovery';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
 import { handleOpenChatGPTApp } from './chatgpt-app.js';
+import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import {
   waitForTurnChangeSetActions,
   waitForTurnChangeSetPersistence,
 } from './turn-change-set/store.js';
 
-const PROCESS_STARTED_AT_MS = Date.now();
+let retryPiRuntimeAfterNetworkRecovery: (() => void) | null = null;
+let disposePiRuntimeRecovery: (() => void) | null = null;
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
 // both downloads, but allow normal consumer connections to finish while the
 // splash displays real byte progress.
@@ -69,6 +87,27 @@ const LINUX_AGENT_INSTALL_STARTUP_DEADLINE_MS = 5 * 60_000;
 // Pi 是可选能力。首启可以给它一小段时间从 CDN 准备，但网络异常时不能让
 // 整个 Cindy 一直停在启动页；到期后取消本次下载并禁用本次 Pi。
 const PI_AGENT_INSTALL_STARTUP_DEADLINE_MS = 60_000;
+
+/** Preserve actionable saved-account failures across Electron serialization. */
+function throwAuthAccountIpcError(error: unknown): never {
+  const code =
+    error && typeof error === 'object' && typeof (error as { code?: unknown }).code === 'string'
+      ? (error as { code: string }).code
+      : null;
+  const message = error instanceof Error ? error.message : 'Saved account operation failed';
+  switch (code) {
+    case 'INVALID_AUTH_ACTION':
+    case 'PASSIVE_AUTH_MUTATION_BLOCKED':
+    case 'ACCOUNT_NOT_FOUND':
+    case 'ACCOUNT_REAUTH_REQUIRED':
+    case 'REGION_MISMATCH':
+    case 'CREDENTIAL_STORE_UNAVAILABLE':
+    case 'AUTH_FLOW_SUPERSEDED':
+      throwIpcError(code, message);
+    default:
+      throwIpcError('INTERNAL', 'Saved account operation failed');
+  }
+}
 
 if (
   process.platform === 'linux' &&
@@ -92,15 +131,13 @@ if (
 app.commandLine.appendSwitch('enable-features', 'SharedArrayBuffer');
 
 // agentManager 已在 vendor 大扫除时退役。app 退出 / 崩溃路径走 maker.shutdown()
-// 一刀切 — 它内部按 (Layer 1) 关所有 session → (Layer 2) dispose 所有 agent (Codex
-// shared app-server 子进程 SIGTERM, Claude no-op) 的固定顺序跑, 调用方不需要分两步。
-//
-// **必须 await**: m.shutdown() 内部的 kill 是异步串行的 — Layer 1 先 await 所有
-// session.close(), Layer 2 才在串行 dispose 里调 AppServerClient.close() 发 SIGTERM。
-// 如果在 sync 阶段 fire-and-forget, app.exit(0) 会在 kill 之前就把 Node 主进程掐掉,
+// 一刀切 — session detach 与 agent dispose 并发，避免某个 session 卡住其它进程收尾。
+// **必须 await**: Codex 会先通过 stdin EOF 保存并退出，超时才发信号。
+// 如果在 sync 阶段 fire-and-forget, app.exit(0) 会在收尾前把 Node 主进程掐掉,
 // Windows 上 codex app-server 子进程不会随父死 → 残留孤儿, 持有 binary 文件锁,
 // 用户下次启动时撞 EBUSY / 端口占用 (anthropic-compat-proxy 等)。
 async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
+  stopWorktreeRecycleMaintenance();
   // Do not terminate Main while one workspace patch command is settling.
   await waitForTurnChangeSetActions();
   // 退出前先把 onClose 重副作用(worktree stash/删除、临时附件清理)一刀切抑制掉:
@@ -109,11 +146,6 @@ async function shutdownMaker(): Promise<{ piSessionFailures: number }> {
   // 任何回收,worktree 原样留在磁盘,下次启动 recoverPool 对账(clean ephemeral 重新
   // 入池,dirty / 交互式的保留,session 重开可无缝续用)。
   rehydrateCloseSuppression.suppressAllForShutdown();
-  try {
-    await shutdownLspServerPool();
-  } catch (err) {
-    console.error('[main] lspPool.shutdown failed:', err);
-  }
   let piSessionFailures = 0;
   try {
     // splash 失败时 maker 未 init / getMakerCore() 抛错 —— 静默兜底, 没东西要清。
@@ -193,7 +225,6 @@ import {
   prepare as binaryPrepare,
   peekNeedsDownload as binaryPeekNeedsDownload,
   broadcastResetForStep as binaryBroadcastResetForStep,
-  getCachedBinaryStatus,
   type AgentBinaryKind,
   type PrepareResult,
 } from './agent-binaries';
@@ -213,7 +244,10 @@ import {
 import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
-import { warmStaleProcessProvenance } from './ownerNamespaceMigration.js';
+import {
+  hasExclusiveSharedLegacyUserDataAccess,
+  warmStaleProcessProvenance,
+} from './ownerNamespaceMigration.js';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
 import * as profileEdit from './profileEdit';
 import { uploadPublicAsset } from './ossPublicUpload';
@@ -256,12 +290,15 @@ import { createChatAttachmentStageHandler } from './chatAttachmentStage';
 import {
   cleanupOwnedUnpersistedStagedChatAttachments,
   getChatAttachmentCacheRoot,
+  getChatAttachmentOwnerCacheRoot,
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
-  sweepStagedChatAttachmentsOnStartup,
 } from './file-browser/remote-file-cache';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
-import { legacyDialogueUserDataDirNames } from '@cindy/maker-shared/brand-identity';
+import {
+  BRAND_IDENTITY,
+  legacyDialogueUserDataDirNames,
+} from '@cindy/maker-shared/brand-identity';
 import * as videoCacheStore from './videoCacheStore';
 import { imageSchemePrivilege, registerImageProtocolHandler } from './imageProtocol';
 import { videoSchemePrivilege, registerVideoProtocolHandler } from './videoProtocol';
@@ -272,7 +309,23 @@ import {
 } from './cindy-media/cindyMediaProtocol';
 import * as cindyMediaBlobStore from './cindy-media/blobStore';
 import * as cindyChatAttachments from './cindy-media/chatAttachments';
+import { getFixedDirectoryStats, openOrCreateFixedDirectory } from './cindy-media/fixedDirectory';
+import { openMakeSourceDirectory, openMakeToolsDirectory } from './cindy-make/toolsDirectory';
+import {
+  cancelCindySourcePreparation,
+  makeSourceRoot,
+  readCurrentCindySourceStatus,
+  subscribeCindySourceStatus,
+} from './cindy-make/sourcePreparation.js';
+import { broadcastCindyMakeSourceStatus } from './cindy-make/sourceStatusBroadcast.js';
+import { CINDY_MAKE_RUN_ID_PATTERN } from './cindy-make/sourcePaths.js';
+import { prepareCindyMakeWorkspace } from './cindy-make/taskWorkspace.js';
+import { createMakeToolchainEnvironment } from './cindy-make/toolchainEnvironment.js';
 import { createStorageIpcHandlers } from './cindy-media/storageIpc';
+import {
+  collectDatabaseSizeWarningStatus,
+  type DatabaseSizeWarningStatus,
+} from './database-size-warning-status';
 import {
   getAllRegisteredDraftUrls,
   reportDraftUrls as registerWindowDraftUrls,
@@ -298,7 +351,8 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
-import { listPersistedChatAttachmentPaths } from './localDb/ipc/messages';
+import { getActiveCatalog } from './maker-host/active-catalog';
+import { resolveSessionContextWindow } from '../shared/sessionContextWindow';
 import {
   getSessionRowSnapshot,
   resumeDeletedPiSubagentCleanup,
@@ -307,16 +361,45 @@ import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
 } from './legacyUserDataMigration';
+import {
+  adoptLocalProfileDatabase,
+  createProductionLocalProfileDataMigrationDeps,
+  inspectPassiveLocalProfileAdoption,
+} from './localProfileDataMigration';
+import { acquireWindowsPackagedInstanceBarrier } from './windowsPackagedInstanceBarrier';
 import { registerFsBrowseIpc } from './fsBrowse/ipc';
 import {
   ensureReady as localDbEnsureReady,
   getRawDb as localDbGetRawDb,
   closeDb as localDbCloseDb,
   getCurrentDbPath as localDbGetCurrentDbPath,
+  getDbPathForUser,
 } from './localDb/index';
 import { createDbClient, createInprocDbClient } from './localDb/client/DbClient';
 import { createLifecycleDbClientManager } from './localDb/client/lifecycleDbClient';
-import { clearCurrentDbClient, getDbClient, setCurrentDbClient } from './localDb/client/current';
+import {
+  clearCurrentDbClient,
+  getCurrentDbClientUserId,
+  getDbClient,
+  setCurrentDbClient,
+} from './localDb/client/current';
+import {
+  readDatabaseSizeWarningSettingsState,
+  parseDatabaseSizeWarningSettingsPatch,
+  writeDatabaseSizeWarningSettings,
+  resetDatabaseSizeWarningSettings,
+  DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+  getDatabaseSizeWarningSettingsFilePath,
+} from './database-size-warning-settings';
+import { createDatabaseSizeWarningSettingsWatcher } from './database-size-warning-settings-watcher.js';
+import { createLocalDbMaintenanceIpcHandlers } from './localDb/ipc/maintenance';
+import { writeDbSlimmingDevRelaunchSignal } from './localDb/devDbSlimmingRelaunch';
+import {
+  cancelDbSlimmingStartupProgress,
+  getDbSlimmingStartupProgress,
+  subscribeDbSlimmingStartupProgress,
+} from './localDb/dbSlimmingStartupState';
+import { DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL } from '../shared/localDbMaintenance';
 import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
@@ -384,7 +467,11 @@ import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { registerProcessMonitorIpc } from './process-monitor/ipc.js';
 import { disposeWindowsProcessScanWorkers } from './process-monitor/windowsProcessScanWorkerClient.js';
-import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
+import {
+  initAppBadgeService,
+  clearAllSessionAttention,
+  refreshWindowsAppBadge,
+} from './appBadgeService';
 import { initNotificationService } from './notificationService';
 import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
@@ -405,6 +492,7 @@ import {
 import {
   assertTrustedAppRendererEvent,
   isTrustedAppRendererEvent,
+  isTrustedCindyRendererWindow,
   isTrustedAppRendererWindow,
 } from './security/trustedAppRenderer.js';
 import { isMainShellWindowUrl } from './cindy-brain/scheduleSlot.js';
@@ -412,9 +500,11 @@ import { sanitizeGhostNoticeText } from './cindy-brain/notifySlot.js';
 import { isIpcError } from '../shared/ipc-errors';
 import { readFileBytesForPreview } from './fileReadBytes.js';
 import { initHeartbeatService } from './heartbeatService';
+import { registerRemoteDesktopIpc } from './remote-desktop';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { initLogUploadService, scheduleStartupBackfill } from './log-upload';
 import { WindowManualDragController } from './windowManualDrag';
+import { issueWritableDirectoryPickerGrant } from './maker-ipc/writableDirectoryPickerGrant.js';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
 import {
   initDeviceLinkService,
@@ -424,6 +514,7 @@ import {
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  setHistoryToolNameReader,
   pushSessionActivityToController,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
@@ -436,11 +527,11 @@ import {
 import { getMirrorCache, MirrorCachePurgeError } from './device-link/mirrorCacheStore';
 import { drainPurgeQueue, enqueuePurge } from './device-link/mirrorCachePurgeQueue';
 import { assertCaptureHealthy } from './device-link/invoke-registry';
+import { registerRemoteResourcesIpc } from './device-link/remoteResourcesIpc';
 // worktree-parallel-sessions: IPC 注册 + close-session 内的 fire-and-forget 删除钩子
 import {
   registerWorktreeIpc,
   WorktreePool,
-  reconcileWorktreesForDeletedSessions,
   reconcilePendingSafeDirectoryCleanups,
 } from './worktree';
 // shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
@@ -486,12 +577,15 @@ import {
   finalizeCodexAfterAuthModeChange,
   readCodexRuntimeRoute,
   broadcastClaudeAuthStateChanged,
+  refreshSelectableModelsAndBroadcast,
   broadcastXaiAuthStateChanged,
   refreshProviderAccessAfterAuthChange,
   setProviderAccessRuntimeRefreshListener,
   restartCodexAfterAuthModeChange,
   waitForInitialCustomMcpRefresh,
+  registerPiAgentIfAvailable,
 } from './maker-host/index.js';
+import { createPiRuntimeRecovery } from './agent-binaries/pi-runtime-recovery.js';
 import { createDynamicMaker } from './maker-host/dynamic-maker.js';
 import { ensureBundledRipgrepReady } from './maker-host/runtime-configs.js';
 import {
@@ -514,6 +608,7 @@ import {
   loadXaiModelsFromDiskCache,
   refreshXaiModelsFromHttp,
 } from './maker-host/model-discovery/xai.js';
+import { notifyOpenAiMediaCredentialChanged } from './maker-host/model-discovery/openai-media.js';
 import { refreshCustomMcpProviders } from './mcp-integrations/custom-mcp-registry.js';
 import {
   clearXaiRateLimitSnapshot,
@@ -543,6 +638,7 @@ import { RsbWindowController } from './right-sidebar-window/controller.js';
 import { resolveRsbHostContextFromSession } from './right-sidebar-window/resolveHostContext.js';
 import { createRightSidebarWindow } from './right-sidebar-window/window.js';
 import { registerRsbWindowIpc } from './right-sidebar-window/ipc.js';
+import { RemoteDesktopViewerWindows } from './remote-desktop-viewer/windows.js';
 import { ResourceUsageWindowController } from './resource-usage-window/controller.js';
 import { createResourceUsageWindow } from './resource-usage-window/window.js';
 import { registerResourceUsageWindowIpc } from './resource-usage-window/ipc.js';
@@ -565,10 +661,12 @@ import {
   anySessionInTurn,
   applyCodexSpawnConfigChangeWithRestart,
   clearDeferredCodexRestartForOwnerBoundary,
+  clearWorkingDirectoryRecoveryForOwnerBoundary,
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
   registerModelVisibilitySyncIpc,
   registerMakerIpc as registerMakerCoreIpc,
+  restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
@@ -617,8 +715,8 @@ import {
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
 import { hasClaudeAiOAuth } from './maker-host/claude-credentials-store.js';
-import { disconnectClaudeAiOAuth } from './maker-host/claude-oauth-refresh.js';
-import { runClaudeOAuthLogin, cancelClaudeOAuthLogin } from './maker-host/claude-oauth-login.js';
+import { disconnectClaudeAiOAuth, reconnectClaudeAiOAuth } from './maker-host/claude-oauth-refresh.js';
+import { beginClaudeLocalLogin, cancelClaudeOAuthLogin } from './maker-host/claude-oauth-login.js';
 import {
   runGrokOAuthLogin,
   cancelGrokOAuthLogin,
@@ -652,6 +750,7 @@ import {
   builtinApiKeyHas,
   builtinApiKeyRemove,
   builtinApiKeyStore,
+  builtinApiKeyPresentationId,
   type BuiltinApiKeyBridgeDeps,
 } from './secrets/builtinApiKeyBridge.js';
 import {
@@ -664,6 +763,10 @@ import {
   readCompactionState,
   resetCompactionPct,
   writeCompactionPct,
+  readPiCompactionPct,
+  readPiCompactionState,
+  resetPiCompactionPct,
+  writePiCompactionPct,
 } from './maker-host/compaction-settings-store.js';
 import {
   readSubagentModelSettings,
@@ -746,6 +849,7 @@ import {
 } from './sessionDragPreviewHtml.js';
 import {
   isGlobalVoiceInputOverlayVisible,
+  isGlobalVoiceInputOverlaySender,
   releaseActiveGlobalVoiceInputShortcut,
   registerGlobalVoiceInputIpc,
 } from './voice-input/global.js';
@@ -756,6 +860,7 @@ import {
   handleIncomingOpenFolder,
   handleIncomingShareFile,
   findDeepLinkInArgv,
+  redactConsumedDeepLinkInArgv,
   findOpenFolderInArgv,
   findOpenShareFileInArgv,
   setDeepLinkMainWindow,
@@ -766,23 +871,33 @@ import { healWindowsShortcuts } from './windowsShortcutSelfHeal.js';
 import { CURRENT_APP_ID, CURRENT_CINDY_REGION } from '../shared/brandRegion.js';
 import {
   readWindowBehaviorSettings,
+  writeLinuxCloseBehavior,
   writeSwallowActivationClick,
   writeWindowsCloseBehavior,
 } from './window-behavior-settings-store.js';
 import {
   hideWindowToWindowsTray,
   popUpWindowsTrayMenu,
-  requestWindowsCloseBehavior,
   requestWindowsTrayQuit,
 } from './windowsTrayLifecycle.js';
-import { createWindowsClosePromptFallbackController } from './windowsClosePromptFallback.js';
 import {
+  applyLinuxMainWindowCloseBehavior,
+  createCloseBehaviorPromptFallbackController,
+  requestMainWindowCloseBehavior,
+} from './mainWindowCloseBehavior.js';
+import {
+  isLinuxCloseBehavior,
   isWindowsCloseBehavior,
+  WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_GET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
+  WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
+  WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
+  WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
   WINDOW_BEHAVIOR_SET_WINDOWS_CLOSE_BEHAVIOR_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
   WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL,
+  type LinuxCloseBehavior,
   type WindowsCloseBehavior,
 } from '../shared/windowBehavior.js';
 import { getDesktopCommandRegistry, registerBuiltinDesktopCommands } from './commands/index.js';
@@ -796,8 +911,6 @@ import { parseImDefaultSettingsPatch } from './im/parseDefaultSettingsPatch.js';
 import {
   SUBAGENT_MODEL_SETTINGS_DEFAULTS,
   codexSpawnConfigChanged,
-  isCodexSubagentEffort,
-  isValidCodexSubagentConcurrencyInput,
   isValidSubagentModelIdInput,
   normalizeSubagentModelId,
   reconcileSubagentModelSettingsPatch,
@@ -863,6 +976,7 @@ import {
   refreshGhostLocalization,
   registerGhostIpc,
   runStableOwnerPostCommitTask,
+  setGhostNodeRuntimeStartAttemptContextReader,
   setGhostsChangedObserver,
   suspendAllGhosts,
   waitForGhostMutations,
@@ -878,6 +992,7 @@ import { findCindyFileInArgv } from './cindy-brain/argv.js';
 import { handleIncomingCindyFile } from './cindy-brain/openFileInstall.js';
 import { registerCindyFileAssociation } from './cindy-brain/fileAssociation.js';
 import { runPluginStorageSmoke } from './smoke/pluginStorageSmoke.js';
+import { runComputerUseSmokeIfRequested } from './smoke/computerUseSmoke.js';
 import { setMainLocale, t } from './i18n.js';
 import { requireObject, throwIpcError } from './utils/ipcValidate.js';
 import { pickNativeAtResource } from './nativeAtResourcePicker.js';
@@ -888,10 +1003,13 @@ import { pickNativeAtResource } from './nativeAtResourcePicker.js';
 import {
   startScheduler,
   resetScheduler,
+  getSchedulerIfInitialized,
   getScheduleStorage,
   getScheduleStorageIfInitialized,
   getProjectAutomationLoader,
 } from './scheduler-host/index.js';
+import { configureRoutineHost } from './routines/service.js';
+import { getBotRemoteResourceSource } from './localDb/ipc/bots.js';
 import {
   registerScheduleHandlers,
   attachSchedulerEventListeners,
@@ -939,6 +1057,9 @@ async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
     );
   }
 }
+
+// Live getters preserve account/scheduler replacement without loading Main modules at dispatch time.
+configureRoutineHost({ getBot: getBotRemoteResourceSource, getScheduler: getSchedulerIfInitialized, getScheduleStorage });
 
 /**
  * Phase 4: 不再用 `_schedulerStarted` flag —— `startScheduler()` 内部以 `_scheduler`
@@ -1067,7 +1188,7 @@ async function attemptStartSchedulerOnce(): Promise<void> {
     startLearnHost({
       maker,
       broadcast: broadcastLearnEvent,
-      fetchHubSkill: (slug) => fetchHubSkillReference(learnMarketService, slug),
+      fetchHubSkill: (slug, catalogScope) => fetchHubSkillReference(learnMarketService, slug, catalogScope),
       ...automationGitBaselineHooks,
     });
   } catch (err) {
@@ -1126,6 +1247,25 @@ function assertChatEmbeddingMutationOwner(raw: unknown): void {
     throwIpcError(
       'PRECONDITION_FAILED',
       'Chat embedding setting belongs to a stale account session.',
+    );
+  }
+}
+
+function assertCompactionMutationOwner(raw: unknown): void {
+  const expected = parseChatEmbeddingOwnerStamp(raw);
+  if (!expected) {
+    throwIpcError('INVALID_PARAMS', 'compaction owner stamp required');
+  }
+  if (
+    !isChatEmbeddingOwnerStampCurrent(
+      expected,
+      getActiveDataOwnerPushStamp(),
+      isAppSessionBoundaryPending(),
+    )
+  ) {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Compaction setting belongs to a stale account session.',
     );
   }
 }
@@ -1443,6 +1583,7 @@ function clearAccountBoundaryAbortMark(): void {
 }
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
+  remoteDesktopViewerWindows.reset();
   const blockingFailures: unknown[] = [];
   // Goal timers can dispatch through the outgoing Maker while launch-fence
   // acquisition waits behind queued filesystem work. Invalidate them before
@@ -1660,6 +1801,7 @@ async function teardownAuthAccountBoundary(reason: string): Promise<void> {
     // 的 Maker 上兑现旧 owner 的记忆设置重启(shutdown 触发的会话关闭事件也会
     // 撞上它,先清再关)。
     clearDeferredCodexRestartForOwnerBoundary();
+    clearWorkingDirectoryRecoveryForOwnerBoundary();
     // interrupted-turn-resume:shutdown 批量 close 会话会触发 close teardown 的
     // markSessionTurnEnded,把"边界时还在飞的 turn"伪装成正常收尾 —— 被切换打断的
     // 任务从此既无中断横幅也无红点,呈现为"卡住且无报错"(与 ⌘Q 的 quit freeze 同款
@@ -2185,11 +2327,11 @@ const ghostPanelWindowsController = new GhostPanelWindowsController({
 });
 registerGhostPanelWindowIpc(ghostPanelWindowsController);
 
-// ── 资源监视器独立窗口 ──────────────────────────────────────────────
-// 单实例轻量独立窗口:顶部菜单「资源监视器」→ open()。不需要 detach/attach 偏好、
+// ── 资源监视器辅助窗口 ──────────────────────────────────────────────
+// 单实例轻量辅助窗口:顶部菜单「资源监视器」→ open()。不需要 detach/attach 偏好、
 // 不需要 session 上下文转发。后台预热后常驻复用，普通关窗只隐藏。
-// macOS 全屏时监视器自己进新的 Space，不能挂 parent；其它平台仍挂主窗，
-// 这样最小化 / 关到托盘时监视器一起消失。
+// macOS 使用独立顶层窗口，打开时保留系统原生 Space / 全屏呈现，不再由 controller
+// 主动镜像 owner；Windows / Linux 保持 parent 关系。owner 最小化或关到托盘时仍一起收起。
 const resourceUsageWindowController = new ResourceUsageWindowController({
   createWindow: () => {
     const owner = mainWindowRef;
@@ -2211,6 +2353,10 @@ const resourceUsageWindowController = new ResourceUsageWindowController({
   },
 });
 registerResourceUsageWindowIpc({ controller: resourceUsageWindowController });
+const remoteDesktopViewerWindows = new RemoteDesktopViewerWindows(sender =>
+  isResourceUsageOpenSender({ sender, mainWindow: mainWindowRef, senderWindow: BrowserWindow.fromWebContents(sender), isSecondaryAppWindow }),
+);
+remoteDesktopViewerWindows.register();
 
 setGhostsChangedObserver((ghosts) => {
   ghostPanelWindowsController.reconcile(ghosts);
@@ -2296,6 +2442,7 @@ registerLayoutIpc();
 // 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
 // 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
 setCodexImageAuthBinding({
+  hasAuth: (providerId) => codexAccountState(providerId).authenticated,
   getAuth: getChatgptBridgeAuth,
   onAuthFailure: invalidateChatgptBridgeAuth,
 });
@@ -2303,6 +2450,9 @@ registerGhostIpc();
 registerPluginMarketIpc();
 registerPluginPublisherIpc();
 setAppSessionCommitBoundaryHook(() => {
+  clearAllSessionAttention();
+  remoteDesktopViewerWindows.reset();
+  ghostPanelWindowsController.closeForOwnerChange();
   clearAllSessionProviders();
   clearAllSessionRuntimeAxes();
   clearAllSessionRuntimeControlStates();
@@ -2355,6 +2505,10 @@ authManager.setStableOwnerPostCommitTask(async ({ reason, scopeKey, dataOwnerId 
 //   cindy-media:      媒体总仓字节仓取件窗口(内容寻址 blob;新写入媒体的
 //                     统一协议,历史 xdt-* 协议只读兼容)
 protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'cindy-desktop-capture',
+    privileges: { standard: true, secure: true, supportFetchAPI: true },
+  },
   imageSchemePrivilege,
   videoSchemePrivilege,
   localFileSchemePrivilege,
@@ -2488,6 +2642,9 @@ if (started) {
   if (process.platform === 'linux' && waitedForUpdateLock && lockCleared) {
     try {
       const exe = process.execPath;
+      // Imports are deliberately not carried across an update restart. The user
+      // can click the original link again; never copy its credentials to a child.
+      redactConsumedDeepLinkInArgv(process.argv);
       const args = process.argv.slice(1);
       spawn(exe, args, { stdio: 'inherit', detached: true }).unref();
     } catch {
@@ -2821,7 +2978,9 @@ ipcMain.handle('app-menu:set-locale', (_event, locale: unknown): { ok: true } =>
   );
   setSelectionContextMenuLocale(currentApplicationMenuLocale);
   setMainLocale(currentApplicationMenuLocale);
+  refreshWindowsAppBadge();
   resourceUsageWindowController.setLocale(currentApplicationMenuLocale);
+  remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale);
   rsbWindowController.setLocale(currentApplicationMenuLocale);
   ghostPanelWindowsController.setLocale(currentApplicationMenuLocale);
   refreshGhostLocalization();
@@ -2861,6 +3020,7 @@ function isPathAllowed(filePath: string): boolean {
 // BrowserWindow，[0] 拿到它再 .focus() 等于啥也没干，用户视觉上以为
 // "双击启动不了"。
 let mainWindowRef: BrowserWindow | null = null;
+let mainWindowMaximizeRecoveryController: MainWindowMaximizeRecoveryController | null = null;
 // 端点清单阻断门:ready 流程走到正常 createWindow() 前置 true。在此之前
 // second-instance / activate 一律不许建窗——阻断循环(错误框重试)期间用户
 // 双击图标 / 点 Dock 若能建窗,preload 的模块级 sendSync 会因 handler 未注册
@@ -2932,7 +3092,7 @@ let windowsTrayMenu: Menu | null = null;
 // 已弹出的菜单在 native callback 前必须保留,即使语言切换清掉了当前缓存。
 const activeWindowsTrayMenus = new Set<Menu>();
 const windowsTrayLog = createLogger('windows-tray');
-const WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS = 2_000;
+const CLOSE_BEHAVIOR_PROMPT_FALLBACK_DELAY_MS = 2_000;
 
 function buildWindowsTrayMenu(): Menu {
   return Menu.buildFromTemplate([
@@ -3095,13 +3255,35 @@ function showNativeWindowsCloseBehaviorPrompt(): WindowsCloseBehavior {
   return choice === 1 ? 'quit' : 'tray';
 }
 
-const windowsClosePromptFallback = createWindowsClosePromptFallbackController(
+function showNativeLinuxCloseBehaviorPrompt(): LinuxCloseBehavior {
+  const options = {
+    type: 'question' as const,
+    title: t('settings.windowBehavior.closePrompt.title'),
+    message: t('settings.windowBehavior.closePrompt.message'),
+    detail: t('settings.windowBehavior.closePrompt.linuxDetail'),
+    buttons: [
+      t('settings.windowBehavior.closeBehavior.minimize'),
+      t('settings.windowBehavior.closeBehavior.quit'),
+    ],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true,
+  };
+  const mainWindow = mainWindowRef;
+  const choice =
+    mainWindow && !mainWindow.isDestroyed()
+      ? dialog.showMessageBoxSync(mainWindow, options)
+      : dialog.showMessageBoxSync(options);
+  return choice === 1 ? 'quit' : 'minimize';
+}
+
+const windowsClosePromptFallback = createCloseBehaviorPromptFallbackController(
   {
     readBehavior: () => readWindowBehaviorSettings().windowsCloseBehavior,
     showRendererPrompt: () => {
       const mainWindow = mainWindowRef;
       if (!mainWindow) return;
-      requestWindowsCloseBehavior(
+      requestMainWindowCloseBehavior(
         mainWindow,
         WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
       );
@@ -3119,12 +3301,43 @@ const windowsClosePromptFallback = createWindowsClosePromptFallbackController(
     schedule: (callback, delayMs) => setTimeout(callback, delayMs),
     cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
   },
-  WINDOWS_CLOSE_PROMPT_FALLBACK_DELAY_MS,
+  CLOSE_BEHAVIOR_PROMPT_FALLBACK_DELAY_MS,
+);
+
+const linuxClosePromptFallback = createCloseBehaviorPromptFallbackController(
+  {
+    readBehavior: () => readWindowBehaviorSettings().linuxCloseBehavior,
+    showRendererPrompt: () => {
+      const mainWindow = mainWindowRef;
+      if (!mainWindow) return;
+      requestMainWindowCloseBehavior(
+        mainWindow,
+        WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_REQUESTED_CHANNEL,
+      );
+    },
+    showNativePrompt: showNativeLinuxCloseBehaviorPrompt,
+    persistBehavior: writeLinuxCloseBehavior,
+    applyBehavior: (behavior) => {
+      const mainWindow = mainWindowRef;
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
+      } else {
+        app.quit();
+      }
+    },
+    schedule: (callback, delayMs) => setTimeout(callback, delayMs),
+    cancel: (handle) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  },
+  CLOSE_BEHAVIOR_PROMPT_FALLBACK_DELAY_MS,
 );
 
 app.on('before-quit', () => {
   isQuitting = true;
+  disposePiRuntimeRecovery?.();
+  retryPiRuntimeAfterNetworkRecovery = null;
+  disposePiRuntimeRecovery = null;
   windowsClosePromptFallback.dispose();
+  linuxClosePromptFallback.dispose();
   destroyWindowsTray();
   disposeUpdatePresentationRecovery();
 });
@@ -3166,10 +3379,9 @@ function hasFocusedAppWindow(): boolean {
   return BrowserWindow.getAllWindows().some((win) => isFocusedAppContentWindow(win));
 }
 
-function syncAppFocusState(clearAttentionWhenFocused = false): void {
+function syncAppFocusState(): void {
   const appFocused = hasFocusedAppWindow();
   providerModelFocusRefreshTracker.sync(appFocused);
-  if (appFocused && clearAttentionWhenFocused) clearAllSessionAttention();
   getAgentIslandService()?.setAppFocused(appFocused);
 }
 
@@ -3182,13 +3394,14 @@ function scheduleAppFocusSync(): void {
 }
 
 app.on('browser-window-focus', (_event, win) => {
+  retryPiRuntimeAfterNetworkRecovery?.();
   if (win === mainWindowRef) updatePresentationRecovery?.onWindowFocused();
   if (appFocusSyncTimer) {
     clearTimeout(appFocusSyncTimer);
     appFocusSyncTimer = null;
   }
   const focusedAppContent = isAppContentWindow(win);
-  syncAppFocusState(focusedAppContent);
+  syncAppFocusState();
   if (focusedAppContent) {
     syncPluginMarketForActiveOwner(30_000);
     // OAuth and system settings may complete outside Cindy. Focus is a
@@ -3235,7 +3448,9 @@ if (process.platform === 'darwin') {
 function applyMainWindowBackgroundThrottling(): void {
   const win = mainWindowRef;
   if (!win || win.isDestroyed() || win.webContents.isDestroyed()) return;
-  win.webContents.setBackgroundThrottling(mainWindowBackgroundThrottlingAllowed);
+  win.webContents.setBackgroundThrottling(
+    mainWindowBackgroundThrottlingAllowed,
+  );
 }
 
 function setMainWindowBackgroundThrottlingForActiveTurn(hasRunningTurn: boolean): void {
@@ -3377,6 +3592,7 @@ if (
       // 的中间态。
       const url = findDeepLinkInArgv(argv);
       if (url) {
+        redactConsumedDeepLinkInArgv(argv, url);
         handleIncomingDeepLink(url, 'second-instance');
       } else {
         const openFolder = findOpenFolderInArgv(argv);
@@ -3413,6 +3629,7 @@ if (
 if (process.platform !== 'darwin') {
   const coldStartUrl = findDeepLinkInArgv(process.argv);
   if (coldStartUrl) {
+    redactConsumedDeepLinkInArgv(process.argv, coldStartUrl);
     handleIncomingDeepLink(coldStartUrl, 'cold-start-argv');
   } else {
     const coldStartOpenFolder = findOpenFolderInArgv(process.argv);
@@ -3488,7 +3705,15 @@ const createWindow = () => {
   // 改用顶层 import 而不是运行时 require —— Vite 才能 bundle 进 main 产物，
   // 否则 packaged app 因 pnpm hoisted 布局 + electron-packager 只扫
   // apps/desktop/node_modules 而拿不到这个包，运行时报 Cannot find module。
+  const mainWindowStateFile = 'window-state.json';
+  // Read the flag before the keeper validates bounds: it discards `isMaximized`
+  // along with off-screen bounds, which is exactly the lid-closed / monitor-asleep
+  // relaunch case where we still want to come back maximized.
+  const persistedMaximized = readPersistedWindowMaximized(
+    path.join(app.getPath('userData'), mainWindowStateFile),
+  );
   const mainWindowState = windowStateKeeper({
+    file: mainWindowStateFile,
     defaultWidth: 1280,
     defaultHeight: 800,
     // Applying fullscreen while a hidden macOS window is still starting can
@@ -3496,6 +3721,8 @@ const createWindow = () => {
     fullScreen: process.platform !== 'darwin',
   });
   const shouldRestoreMacFullscreen = process.platform === 'darwin' && mainWindowState.isFullScreen;
+  const shouldRestoreMaximized =
+    !shouldRestoreMacFullscreen && (persistedMaximized || Boolean(mainWindowState.isMaximized));
 
   const mainWindow = new BrowserWindow({
     x: mainWindowState.x,
@@ -3561,6 +3788,7 @@ const createWindow = () => {
       resourceUsagePrewarmTimer = null;
     }
     resourceUsageWindowController.destroyWindow();
+    remoteDesktopViewerWindows.reset();
     rsbWindowController.destroyWindow();
     ghostPanelWindowsController.destroyAllWindows();
     if (mainWindowRef === mainWindow) mainWindowRef = null;
@@ -3585,8 +3813,8 @@ const createWindow = () => {
       }
       return;
     }
-    // Windows: first close asks once, then either quits or keeps the main window
-    // alive in the system tray. Linux keeps the historical quit behavior.
+    // Windows and Linux ask once on first close, then reuse the persisted choice.
+    // The keep-running action follows each platform: tray on Windows, minimize on Linux.
     event.preventDefault();
     if (process.platform === 'win32') {
       const behavior = readWindowBehaviorSettings().windowsCloseBehavior;
@@ -3595,6 +3823,15 @@ const createWindow = () => {
         return;
       }
       applyWindowsCloseBehavior(mainWindow, behavior);
+      return;
+    }
+    if (process.platform === 'linux') {
+      const behavior = readWindowBehaviorSettings().linuxCloseBehavior;
+      if (!behavior) {
+        linuxClosePromptFallback.request();
+        return;
+      }
+      applyLinuxMainWindowCloseBehavior(mainWindow, behavior, () => app.quit());
       return;
     }
     app.quit();
@@ -3620,6 +3857,27 @@ const createWindow = () => {
   // Wire resize / move / maximize / fullscreen listeners that persist the
   // state to disk on `close`. Must run before any user resize event fires.
   mainWindowState.manage(mainWindow);
+  if (shouldRestoreMaximized && !mainWindow.isMaximized()) mainWindow.maximize();
+  // Windows can transiently unmaximize during display/DPI re-layout. macOS
+  // owns its native Zoom behavior, so do not install the Windows recovery
+  // state machine there.
+  if (process.platform === 'win32') {
+    const maximizeRecovery = installMainWindowMaximizeRecovery(mainWindow, screen, {
+      armed: shouldRestoreMaximized,
+      log: createSchedulerLogger('main-window-maximize-recovery'),
+    });
+    mainWindowMaximizeRecoveryController = maximizeRecovery;
+    const removeNativeRestoreIntent = installMainWindowNativeRestoreIntent(
+      mainWindow,
+      maximizeRecovery.notifyUserUnmaximizeIntent,
+    );
+    mainWindow.once('closed', () => {
+      removeNativeRestoreIntent();
+      if (mainWindowMaximizeRecoveryController === maximizeRecovery) {
+        mainWindowMaximizeRecoveryController = null;
+      }
+    });
+  }
 
   // dev-only:F12 切换 DevTools 的兜底通道。走 before-input-event 在 main 侧
   // 拦截,按键根本不进 renderer —— 不受页面内快捷键系统 / 输入焦点 / 菜单
@@ -3638,7 +3896,9 @@ const createWindow = () => {
     showMainWindowAndRestoreFullscreen(mainWindow, {
       restoreFullscreen: shouldRestoreMacFullscreen,
     });
+    refreshWindowsAppBadge();
     if (!app.isPackaged) markDesktopDevWindowReady();
+    void runComputerUseSmokeIfRequested();
     // 资源用量窗口不应与主窗口首帧争 CPU。主窗口可见后再后台完成 BrowserWindow、
     // renderer 和首份进程快照预热；回调绑定当代主窗口，重建/退出后不会创建孤儿窗。
     resourceUsagePrewarmTimer = setTimeout(() => {
@@ -3648,6 +3908,8 @@ const createWindow = () => {
         currentApplicationMenuLocale ?? getPreferredApplicationLocale(),
       );
       resourceUsageWindowController.prewarm();
+      remoteDesktopViewerWindows.setLocale(currentApplicationMenuLocale ?? getPreferredApplicationLocale());
+      remoteDesktopViewerWindows.prewarm();
       // 右侧栏子窗口预热:复刻资源用量窗口模式,主窗口可见后后台创建
       // 隐藏 BrowserWindow 并加载轻量 renderer,后续 detach 点击仅 show+focus。
       rsbWindowController.prewarm();
@@ -3672,16 +3934,34 @@ const createWindow = () => {
 
   // 装饰动画闸门的兜底信号。主窗在 running turn 期间会关掉 backgroundThrottling,
   // 那之后 Renderer 的 visibilityState 就不再反映真实可见性,细节见模块头注释。
+  setGhostNodeRuntimeStartAttemptContextReader(() => {
+    let observedMainWindowState:
+      'absent' | 'hidden' | 'minimized' | 'visible-unfocused' | 'focused' | 'unknown' = 'unknown';
+    try {
+      if (mainWindow.isDestroyed()) observedMainWindowState = 'absent';
+      else if (mainWindow.isMinimized()) observedMainWindowState = 'minimized';
+      else if (!mainWindow.isVisible()) observedMainWindowState = 'hidden';
+      else if (mainWindow.isFocused()) observedMainWindowState = 'focused';
+      else observedMainWindowState = 'visible-unfocused';
+    } catch {
+      observedMainWindowState = 'unknown';
+    }
+    let observedScreenState: 'active' | 'idle' | 'locked' | 'unknown' = 'unknown';
+    try {
+      const state = powerMonitor.getSystemIdleState(60);
+      if (state === 'active' || state === 'idle' || state === 'locked') {
+        observedScreenState = state;
+      }
+    } catch {
+      observedScreenState = 'unknown';
+    }
+    return { observedMainWindowState, observedScreenState };
+  });
   installWindowHiddenBroadcast(mainWindow);
   // Keyboard hello when the window comes back from hide / minimize / Dock.
   attachWorkLouderCodexWindowReveal(mainWindow);
 
-  // App badge: 用户把任意 Cindy 窗口点回前台(Dock 点击 / taskbar / alt-tab / 点窗口)即视为
-  // 「已查看」,直接清空整个 dock 红点。badge 是 app 级状态,不该依赖当前停在哪个
-  // 路由 / 开没开会话 —— 之前清除逻辑寄生在 cc-agent sidebar 且只清 activeSessionId,
-  // 离开会话页(设置 / skillhub)或红点属于后台会话时就清不掉。clearAllSessionAttention
-  // 只清 app 级 badge,不向 Agent Island 转发逐 session 已读;in-app 的会话小圆点仍由
-  // renderer 自行管理(点进会话才消),随后通过 clearSessionAttention 显式同步。
+  // App badge 投影当前任务关注总数；窗口聚焦不等于读完所有任务，不清总数。
   // Agent Island smart suppression 同样按 app 级焦点判断:主窗 blur 到「在新窗口打开」
   // 的会话副窗时,用户仍在 Cindy 内,不能把 appFocused 置 false。
 
@@ -3808,6 +4088,53 @@ let lastPluginMarketSyncAt = 0;
 let pluginMarketPeriodicSyncTimer: ReturnType<typeof setInterval> | null = null;
 const PLUGIN_MARKET_PERIODIC_SYNC_MS = 30 * 60 * 1000;
 
+let startupDatabaseSizeWarningStatus: DatabaseSizeWarningStatus = { databaseBytes: null };
+let startupDatabaseSizeWarningStatusChecked = false;
+let startupDatabaseSizeWarningOwnerScope: string | null = null;
+
+function collectCurrentDatabaseSizeWarningStatus(): DatabaseSizeWarningStatus {
+  return collectDatabaseSizeWarningStatus({
+    getCurrentDbPath: localDbGetCurrentDbPath,
+    getCurrentUserId: getCurrentDbClientUserId,
+    resolveDbPathForUser: getDbPathForUser,
+  });
+}
+
+function broadcastDatabaseSizeWarningChanged(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed() && !win.webContents.isDestroyed()) {
+      win.webContents.send('database-size-warning:changed');
+    }
+  }
+}
+
+const databaseSizeWarningSettingsWatcher = createDatabaseSizeWarningSettingsWatcher(() => {
+  broadcastDatabaseSizeWarningChanged();
+});
+
+app.once('will-quit', () => databaseSizeWarningSettingsWatcher.dispose());
+
+function rebindDatabaseSizeWarningSettingsWatcher(): void {
+  databaseSizeWarningSettingsWatcher.rebind(getDatabaseSizeWarningSettingsFilePath());
+}
+
+/** Capture the database size once after the first local DB startup completes. */
+function checkDatabaseSizeWarningAtStartup(): void {
+  const ownerScope = activeOwnerScopeKey();
+  if (
+    startupDatabaseSizeWarningStatusChecked &&
+    startupDatabaseSizeWarningOwnerScope === ownerScope
+  ) return;
+  startupDatabaseSizeWarningStatus = collectCurrentDatabaseSizeWarningStatus();
+  startupDatabaseSizeWarningStatusChecked = true;
+  startupDatabaseSizeWarningOwnerScope = ownerScope;
+  dbClientLog.info(
+    'database size warning startup check completed',
+    startupDatabaseSizeWarningStatus,
+  );
+  broadcastDatabaseSizeWarningChanged();
+}
+
 /** Run market discovery and automatic updates for the current stable owner. */
 function syncPluginMarketForActiveOwner(minIntervalMs = 0): void {
   const session = getActiveAppSession();
@@ -3843,6 +4170,48 @@ function parseOptionalDeviceLinkDeviceId(value: unknown): string | null | undefi
 }
 
 const registerIpcHandlers = () => {
+  ipcMain.handle('database-size-warning:get-settings', (event) => {
+    assertTrustedAppRendererEvent(event);
+    const state = readDatabaseSizeWarningSettingsState();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
+  });
+  ipcMain.handle('database-size-warning:set-settings', async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const parsed = parseDatabaseSizeWarningSettingsPatch(payload);
+    if ('error' in parsed) throwIpcError('INVALID_PARAMS', parsed.error);
+    await writeDatabaseSizeWarningSettings(parsed.patch);
+    const state = readDatabaseSizeWarningSettingsState();
+    broadcastDatabaseSizeWarningChanged();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
+  });
+  ipcMain.handle('database-size-warning:reset-settings', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    await resetDatabaseSizeWarningSettings();
+    const state = readDatabaseSizeWarningSettingsState();
+    broadcastDatabaseSizeWarningChanged();
+    return {
+      ...state.value,
+      isCustomized: state.isCustomized,
+      defaultThresholdGiB: DEFAULT_DATABASE_SIZE_WARNING_THRESHOLD_GIB,
+    };
+  });
+  ipcMain.handle('database-size-warning:get-status', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return startupDatabaseSizeWarningStatus;
+  });
+  ipcMain.handle('database-size-warning:measure', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return collectCurrentDatabaseSizeWarningStatus();
+  });
+
   // Find the primary app window, skipping transient utility BrowserWindows like
   // the voice-input overlay (minimizable:false, maximizable:false). Electron's
   // BrowserWindow.getAllWindows() ordering is not guaranteed to be stable across
@@ -4265,26 +4634,56 @@ const registerIpcHandlers = () => {
     return { ...sessionRuntimeFallbackWire(), effective: 'immediate' as const };
   });
 
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return readCompactionPct();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_STATE, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_GET_STATE, async (event) => {
+    assertTrustedAppRendererEvent(event);
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_RESET_PCT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_RESET_PCT, async (event, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    assertCompactionMutationOwner(owner);
     resetCompactionPct();
     return compactionWire();
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (_e, pct: unknown) => {
+  ipcMain.handle(MAKER_IPC_INVOKE.COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
     if (typeof pct !== 'number' || !Number.isFinite(pct)) {
       throwIpcError('INVALID_PARAMS', 'compaction pct required (number)');
     }
+    assertCompactionMutationOwner(owner);
     writeCompactionPct(pct);
     return compactionWire();
   });
 
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_PCT, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readPiCompactionPct();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_GET_STATE, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return piCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_RESET_PCT, async (event, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    assertCompactionMutationOwner(owner);
+    resetPiCompactionPct();
+    return piCompactionWire();
+  });
+  ipcMain.handle(MAKER_IPC_INVOKE.PI_COMPACTION_SET_PCT, async (event, pct: unknown, owner: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof pct !== 'number' || !Number.isFinite(pct)) {
+      throwIpcError('INVALID_PARAMS', 'pi compaction pct required (number)');
+    }
+    assertCompactionMutationOwner(owner);
+    writePiCompactionPct(pct);
+    return piCompactionWire();
+  });
+
   // Window behavior —— swallowActivationClick 保持 renderer 运行时事实标准;
-  // Windows close behavior 由 main 读写并执行。
+  // Windows / Linux close behavior 由 main 读写并执行。
   ipcMain.handle(
     WINDOW_BEHAVIOR_SET_SWALLOW_ACTIVATION_CLICK_CHANNEL,
     async (_e, enabled: unknown) => {
@@ -4313,6 +4712,28 @@ const registerIpcHandlers = () => {
   ipcMain.on(WINDOW_BEHAVIOR_WINDOWS_CLOSE_BEHAVIOR_SHOWN_CHANNEL, (event) => {
     if (BrowserWindow.fromWebContents(event.sender) === mainWindowRef) {
       windowsClosePromptFallback.acknowledge();
+    }
+  });
+  ipcMain.handle(WINDOW_BEHAVIOR_GET_LINUX_CLOSE_BEHAVIOR_CHANNEL, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readWindowBehaviorSettings().linuxCloseBehavior;
+  });
+  ipcMain.handle(
+    WINDOW_BEHAVIOR_SET_LINUX_CLOSE_BEHAVIOR_CHANNEL,
+    async (event, behavior: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      if (!isLinuxCloseBehavior(behavior)) {
+        throwIpcError('INVALID_PARAMS', 'Linux close behavior required (quit|minimize)');
+      }
+      linuxClosePromptFallback.acknowledge();
+      writeLinuxCloseBehavior(behavior);
+      return behavior;
+    },
+  );
+  ipcMain.on(WINDOW_BEHAVIOR_LINUX_CLOSE_BEHAVIOR_SHOWN_CHANNEL, (event) => {
+    assertTrustedAppRendererEvent(event);
+    if (BrowserWindow.fromWebContents(event.sender) === mainWindowRef) {
+      linuxClosePromptFallback.acknowledge();
     }
   });
   // LSP Beta 开关 IPC —— 同 compat-mode 模式:
@@ -4433,9 +4854,12 @@ const registerIpcHandlers = () => {
         /* no-op */
       }
     }
+    // device-link:payload 顶层 sessionId → session:<id> topic,打开该远程会话的
+    // 控制端据此实时切换订阅 / 网关显示形态(每会话生命周期通常仅一次,极低频)。
+    tapWindowBroadcast(MAKER_PUSH.CLAUDE_SESSION_ROUTE_CHANGED, { sessionId, route });
   });
 
-  // ── Claude.ai 订阅 OAuth 登录(浏览器流程,凭证落系统 ~/.claude) ────────────────
+  // ── 本机 Claude Code 订阅：只管理 Cindy 的使用许可 ─────────────────────────
   // 与鉴权模式开关正交:管理订阅凭证本身(像 Codex 的 OAuth 登录独立于 API 模式)。
   // Anthropic 模型清单动态发现接线(2026-07-19 统一重构):
   //   - active-catalog 统一收口 capabilities 刷新 + revision 广播;
@@ -4444,34 +4868,35 @@ const registerIpcHandlers = () => {
   ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_STATUS, async () => {
     return { authorized: hasClaudeAiOAuth() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGIN, async () => {
-    // 拉浏览器 OAuth;成功写凭证。失败 reason(cancelled/timeout/...)是 renderer 决定提示用的结构化
-    // 数据,不抛 throwIpcError(符合规则 13 查询型例外:renderer 需要 reason 做不同 UI)。
-    const result = await runClaudeOAuthLogin();
-    if (result.ok) {
-      resetProviderModelAutoRefreshCooldowns('anthropic');
-      // 登录可直接覆盖旧账号凭证,不一定先走登出。先跨授权世代清掉旧清单 / 缓存并
-      // 等待旧 SDK 持久化收尾;即使后续 proxy 初始化失败也绝不保留 A 账号清单。
-      await clearAnthropicDiscoveredModels();
-      // oauth 模式 per-model 路由依赖本地 proxy,确保 ready,再广播鉴权态让 Connections 行刷新。
-      await ensureAnthropicCompatProxyReady();
-      await broadcastClaudeAuthStateChanged();
-      // 订阅余量同步: 换号时清旧账号快照 + 拉新账号余量(内部指纹校验), chip 随 push 更新。
-      syncClaudeSubscriptionUsageForAuthChange();
-      // 模型清单动态发现:登录成功即后台拉 /v1/models(完成后经 active-catalog 广播刷新,
-      // 设置页无需等下次会话就能看到清单;失败保留现值,SDK 通道随后仍会精化)。
-      void refreshAnthropicModelsFromHttp();
-      return { ok: true, authorized: true };
-    }
-    return { ok: false, reason: result.reason ?? 'unknown', authorized: hasClaudeAiOAuth() };
+  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGIN, async (event, loginKey?: string) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = activeOwnerScopeKey();
+    if (isAppSessionBoundaryPending() || !getActiveAppSession().dataOwnerId) return { ok: false, reason: 'login_cancelled', authorized: false };
+    const signal = beginClaudeLocalLogin(loginKey);
+    resetProviderModelAutoRefreshCooldowns('anthropic');
+    await clearAnthropicDiscoveredModels();
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    await ensureAnthropicCompatProxyReady();
+    if (signal.aborted || owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
+    if (!reconnectClaudeAiOAuth()) return { ok: false, reason: 'local_unavailable', authorized: false };
+    // Binding is the commit point; auxiliary refresh must not prolong the cancellable login.
+    void broadcastClaudeAuthStateChanged();
+    syncClaudeSubscriptionUsageForAuthChange();
+    void refreshAnthropicModelsFromHttp();
+    return { ok: true, authorized: hasClaudeAiOAuth() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT, async () => {
-    // disconnect = 先失效 host 刷新器(在途刷新不写回、预续期撤销)再清凭证 —— 直接
-    // clearClaudeAiOAuth 会让「已断开」后的在途刷新回写复活凭证(review 2026-07-04 P2)。
-    // 清除自带写后校验:写入被截断 / 校验不过会抛 —— 此时**不**广播「已断开」假成功,
-    // 如实抛 IPC 错误让 renderer 提示失败(规则 13)。
+  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_LOGOUT, async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
+    assertTrustedAppRendererEvent(event);
+    const active = getActiveAppSession();
+    const owner = activeOwnerScopeKey();
+    if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) {
+      throwIpcError('INVALID_PARAMS', 'Provider owner changed');
+    }
+    // Cancel pending Cindy login/refresh before revoking the binding; keep native credentials.
     try {
-      disconnectClaudeAiOAuth();
+      cancelClaudeOAuthLogin();
+      await disconnectClaudeAiOAuth();
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { authorized: false };
       resetProviderModelAutoRefreshCooldowns('anthropic');
     } catch (err) {
       throwIpcError(
@@ -4480,20 +4905,36 @@ const registerIpcHandlers = () => {
       );
     }
     await broadcastClaudeAuthStateChanged();
-    // 订阅余量同步: 凭证已清, read() 会清快照并广播 null, chip 立即回占位态。
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { authorized: false };
+    // Binding revoked: read() clears the Cindy quota snapshot and broadcasts null.
     syncClaudeSubscriptionUsageForAuthChange();
     // 模型清单动态发现:登出完成前清空清单 + 删磁盘缓存,并等待旧 SDK 写盘收尾。
     await clearAnthropicDiscoveredModels();
     return { authorized: hasClaudeAiOAuth() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async () => {
-    cancelClaudeOAuthLogin();
+  ipcMain.handle(MAKER_IPC_INVOKE.CLAUDE_OAUTH_CANCEL, async (event, loginKey?: string) => {
+    assertTrustedAppRendererEvent(event);
+    cancelClaudeOAuthLogin(loginKey);
     return { authorized: hasClaudeAiOAuth() };
   });
 
   // 上游作废 xAI 凭证、收口自动登出后,走和手动登出完全一致的 UI 收尾(广播 + 清账号级
   // 限流快照),否则用户会停在「显示已连接、请求连环 403」的假状态。
-  setXaiAuthInvalidatedHandler(() => {
+  setSubscriptionAccountInvalidatedHandler((providerId) => {
+    const scope = activeOwnerScopeKey();
+    const broadcast = () => {
+      if (scope === activeOwnerScopeKey() && !isAppSessionBoundaryPending()) {
+        refreshSelectableModelsAndBroadcast({ providerId });
+      }
+    };
+    void syncSubscriptionAccountUsage(providerId).then(broadcast, broadcast);
+  });
+  setXaiAuthInvalidatedHandler((providerId) => {
+    if (providerId !== 'xai') {
+      void clearSubscriptionAccountDiscoveredModels(providerId);
+      void syncSubscriptionAccountUsage(providerId).then(broadcastXaiAuthStateChanged, broadcastXaiAuthStateChanged);
+      return;
+    }
     resetProviderModelAutoRefreshCooldowns('xai');
     clearXaiDiscoveredModels();
     clearXaiMediaModels();
@@ -4507,19 +4948,25 @@ const registerIpcHandlers = () => {
 
   // xAI(SuperGrok 订阅)OAuth —— 与 claude-oauth 同形态。登录成功后 bridge 的 xai provider 立即可用
   // (buildHeaders 每请求现取 token);连接态由 renderer refetch listProviders 时现读 hasGrokOAuthLogin。
-  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGIN, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGIN, async (event) => {
+    assertTrustedAppRendererEvent(event);
+    const owner = activeOwnerScopeKey();
     // reason 是 renderer 决定提示用的结构化数据,不抛 throwIpcError(规则 13 查询型例外)。
     // 登录成功即生效:订阅直连 handler 每请求经 buildHeaders 现取凭证,无需任何"就绪"步骤。
     const result = await runGrokOAuthLogin();
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
     if (result.ok) {
+      void retainProviderPresentationAfterAuthChange('xai');
       resetProviderModelAutoRefreshCooldowns('xai');
       // 新凭证在 runGrokOAuthLogin 返回前已经落盘。先同步关掉旧周用量读取窗口,
       // 再去做模型磁盘清理等 await,避免换号间隙里 IPC read 仍返回账号 A 的快照。
       await clearXaiSubscriptionUsageSnapshot();
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
       // 登录可直接覆盖旧 SuperGrok 账号：先清旧世代内存，再直接读新账号官方清单。
       // 这里不能先恢复同一 Cindy owner 的磁盘 LKG，否则 A→B 重登会短暂展示 A 的成员。
       clearXaiDiscoveredModels();
       await discardXaiModelsDiskCache();
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
       // 登录可直接覆盖旧账号凭证。先跨授权边界清掉旧账号发现快照，再补拉新账号；
       // 旧在途请求由 discovery generation + owner scope 双重守卫作废。
       clearXaiMediaModels();
@@ -4528,6 +4975,7 @@ const registerIpcHandlers = () => {
       // 限流快照是账号级的:重登可能换账号,旧快照一并清掉(等新账号首个 xai/ 轮自然补上)。
       clearXaiRateLimitSnapshot();
       await syncXaiSubscriptionUsageForAuthChange();
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
       broadcastXaiAuthStateChanged();
       void refreshXaiModelsFromHttp();
       void refreshProviderModelsManually('xai').catch((error) => {
@@ -4539,11 +4987,21 @@ const registerIpcHandlers = () => {
     }
     return { ok: false, reason: result.reason ?? 'unknown', authorized: hasGrokOAuthLogin() };
   });
-  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async () => {
+  ipcMain.handle(MAKER_IPC_INVOKE.XAI_OAUTH_LOGOUT, async (event, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }) => {
+    assertTrustedAppRendererEvent(event);
+    const active = getActiveAppSession();
+    const owner = activeOwnerScopeKey();
+    if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) {
+      throwIpcError('INVALID_PARAMS', 'Provider owner changed');
+    }
     try {
+      cancelGrokOAuthLogin();
       logoutGrok();
+      const presentation = retainProviderPresentationAfterAuthChange('xai');
       resetProviderModelAutoRefreshCooldowns('xai');
       await clearXaiSubscriptionUsageSnapshot();
+      await presentation;
+      if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
       clearXaiDiscoveredModels();
       clearXaiMediaModels();
     } catch (err) {
@@ -4556,6 +5014,7 @@ const registerIpcHandlers = () => {
     // 并清掉账号级限流快照 —— 登出后没有下一个成功响应来覆盖,不清会一直挂着旧账号余量。
     clearXaiRateLimitSnapshot();
     await syncXaiSubscriptionUsageForAuthChange();
+    if (owner !== activeOwnerScopeKey() || isAppSessionBoundaryPending()) return { ok: false, reason: 'login_cancelled', authorized: false };
     broadcastXaiAuthStateChanged();
     return { authorized: hasGrokOAuthLogin() };
   });
@@ -4574,6 +5033,9 @@ const registerIpcHandlers = () => {
     const win = BrowserWindow.fromWebContents(event.sender) ?? mainWindowRef;
     if (!win) return;
     if (win.isMaximized()) {
+      if (win === mainWindowRef) {
+        mainWindowMaximizeRecoveryController?.notifyUserUnmaximizeIntent();
+      }
       win.unmaximize();
     } else {
       win.maximize();
@@ -4957,6 +5419,9 @@ const registerIpcHandlers = () => {
       source: 'host_config',
       ref: `provider:${providerId}`,
     });
+    if (providerId === 'openai-images') {
+      notifyOpenAiMediaCredentialChanged();
+    }
     // 向所有窗口广播 PROVIDER_CHANGED:useProviders 依赖此消息刷新连接态快照(多窗口同步)。
     for (const win of BrowserWindow.getAllWindows()) {
       if (!win.isDestroyed()) {
@@ -5146,14 +5611,18 @@ const registerIpcHandlers = () => {
     ): Promise<void> => {
       assertTrustedAppRendererEvent(event);
       builtinApiKeyStore(builtinApiKeyDeps, providerId, value);
+      await retainProviderPresentationAfterAuthChange(builtinApiKeyPresentationId(providerId as string));
     },
   );
 
   ipcMain.handle(
     'builtin-api-key-remove',
-    async (event: Electron.IpcMainInvokeEvent, providerId: unknown): Promise<void> => {
+    async (event: Electron.IpcMainInvokeEvent, providerId: unknown, ownerScope?: { dataOwnerId: string | null; ownerGeneration: number }): Promise<void> => {
       assertTrustedAppRendererEvent(event);
+      const active = getActiveAppSession();
+      if (isAppSessionBoundaryPending() || (ownerScope && (ownerScope.dataOwnerId !== active.dataOwnerId || ownerScope.ownerGeneration !== active.generation))) throwIpcError('INVALID_PARAMS', 'Provider owner changed');
       builtinApiKeyRemove(builtinApiKeyDeps, providerId);
+      await retainProviderPresentationAfterAuthChange(builtinApiKeyPresentationId(providerId as string));
     },
   );
 
@@ -5212,6 +5681,43 @@ const registerIpcHandlers = () => {
 
   ipcMain.handle('auth:logout', async () => {
     await authManager.logout();
+  });
+
+  ipcMain.handle('auth:accounts:list', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return authManager.listSavedAccounts();
+  });
+
+  ipcMain.handle('auth:accounts:sync', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await authManager.syncSavedAccounts();
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:switch', async (event, accountKey: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      await authManager.switchSavedAccount(accountKey);
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:begin-add', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    try {
+      return await authManager.beginAddAccountLogin();
+    } catch (error) {
+      throwAuthAccountIpcError(error);
+    }
+  });
+
+  ipcMain.handle('auth:accounts:cancel-add', (event) => {
+    assertTrustedAppRendererEvent(event);
+    authManager.cancelAddAccountLogin();
   });
 
   ipcMain.handle('auth:enter-local', async () => {
@@ -5336,9 +5842,28 @@ const registerIpcHandlers = () => {
   // getMaker() 在构造期就读 binary path, 早于 splash 调用会抛错; 第一次 splash 成功后置 true,
   // 后续 retry 走 check-environment 不重复注册 (重复 ipcMain.handle 会覆盖同名 handler)。
   let makerIpcsRegistered = false;
-  // Pi 是“本次启动可选”的能力：一旦首次准备失败，就算后续清单/CDN恢复，
-  // 也不再把 Pi 动态塞回已经构造好的 Maker，避免返回状态与实际能力不一致。
-  let piDisabledForLaunch = false;
+  // Pi 是“本次启动可选”的能力：准备失败不阻塞主界面，交给 recovery 在网络恢复后
+  // 重新走 managed prepare，并在成功后动态注册到当前 Maker。
+  const piRuntimeRecovery = createPiRuntimeRecovery({
+    isOnline: () => net.isOnline(),
+    prepare: async () => {
+      const result = await binaryPrepare('pi', {
+        broadcastFailure: false,
+        broadcastProgress: false,
+        signal: AbortSignal.timeout(PI_AGENT_INSTALL_STARTUP_DEADLINE_MS),
+      });
+      return result;
+    },
+    register: () => registerPiAgentIfAvailable(),
+    onRegistered: () => {
+      console.info('[bootstrap-electron] Pi runtime recovered and agent registered');
+    },
+    logWarn: (message, error) => console.warn(`[bootstrap-electron] ${message}`, error ?? ''),
+  });
+  retryPiRuntimeAfterNetworkRecovery = () => {
+    void piRuntimeRecovery.retryNow('window-focus');
+  };
+  disposePiRuntimeRecovery = () => piRuntimeRecovery.dispose();
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
     // 模型供应商目录(providers.json)按「OSS 真源 / bundled 兜底」加载一次存内存:必须在第一次
@@ -5419,6 +5944,7 @@ const registerIpcHandlers = () => {
         return getMakerCore();
       });
       registerMakerCoreIpc(ipcMaker, {
+        builtinApiKeyDeps,
         onAnySessionTurnKeepaliveChange: (isRunning) => {
           setMainWindowBackgroundThrottlingForActiveTurn(isRunning);
           notifyUpdateAutoRelaunchBusyStateChanged();
@@ -5525,6 +6051,7 @@ const registerIpcHandlers = () => {
           .catch(() => {});
       });
       makerIpcsRegistered = true;
+      worktreeRuntimeCloseReady = true;
       // device-link 捕获自检放在这里(而非 bootstrap 线性段):maker:create-session / maker:send
       // 由上面的 registerMakerCoreIpc 注册,属 splash 后的延迟注册;若在线性段(initDeviceLinkService
       // 之后)就 assert,会误报这两个 sentinel「未捕获」。此刻所有 sentinel(含线性段已注册的
@@ -5536,16 +6063,7 @@ const registerIpcHandlers = () => {
       // 不阻塞启动 —— 老链路仍可用; 下次 splash retry 再尝试。
     }
 
-    // Phase 3 恢复上次退出时保留的 worktree pool（未被 session 引用的 clean ephemeral → 入池，dirty → 保留，stale → 清除）。
-    // 在 scheduler 之前恢复，确保首个 scheduler job 能命中池缓存。
-    await WorktreePool.recoverPool().catch((err) => {
-      console.error('[bootstrap-electron] recoverPool failed (non-fatal):', err);
-    });
-    // P0 重构对账:会话已删除(status='deleted' 或行已缺失)但 worktree 回收没跑完
-    // (崩溃窗口/回收失败)的孤儿,启动期补一次回收。fire-and-forget,不阻塞启动。
-    void reconcileWorktreesForDeletedSessions().catch((err) => {
-      console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
-    });
+    startReadyWorktreeMaintenance();
     // 删除 worktree 时因拿不到全局 safe.directory 锁而落盘的残留路径, 启动期补清。
     void reconcilePendingSafeDirectoryCleanups().catch((err) => {
       console.error('[bootstrap-electron] safe.directory cleanup reconcile failed (non-fatal):', err);
@@ -5699,41 +6217,26 @@ const registerIpcHandlers = () => {
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
     let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
-    // 轮 27 LOW-4:首次准备失败后账号切换(同一进程),二进制可能已由后台
-    // 下载/手动放置变得可用 —— 轻量重试:意外可用则清除标志继续准备。
-    if (piDisabledForLaunch) {
-      const cached = getCachedBinaryStatus('pi');
-      if (cached?.binaryPath && cached.binaryPath.length > 0) {
-        piDisabledForLaunch = false;
-      }
-    }
-    if (piDisabledForLaunch) {
+    try {
+      const piRes = await binaryPrepare('pi', {
+        ...stepOptsFor('pi'),
+        broadcastFailure: false,
+        signal: piInstallSignal,
+      });
+      piInfo =
+        piRes.ready && piRes.path
+          ? { status: 'passed' as const, path: piRes.path }
+          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
+    } catch (err: unknown) {
       piInfo = {
         status: 'failed' as const,
-        error: 'pi disabled for this launch after an earlier prepare failure',
+        error: err instanceof Error ? err.message : String(err),
       };
-    } else {
-      try {
-        const piRes = await binaryPrepare('pi', {
-          ...stepOptsFor('pi'),
-          broadcastFailure: false,
-          signal: piInstallSignal,
-        });
-        piInfo =
-          piRes.ready && piRes.path
-            ? { status: 'passed' as const, path: piRes.path }
-            : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
-      } catch (err: unknown) {
-        piInfo = {
-          status: 'failed' as const,
-          error: err instanceof Error ? err.message : String(err),
-        };
-      }
     }
     if (piInfo.status === 'failed') {
-      piDisabledForLaunch = true;
+      piRuntimeRecovery.markUnavailable(piInfo.error);
       console.warn(
-        `[bootstrap-electron] pi binary prepare failed (non-fatal, pi disabled for this launch): ${piInfo.error}`,
+        `[bootstrap-electron] pi binary prepare failed (non-fatal, recovery scheduled): ${piInfo.error}`,
       );
     }
 
@@ -5756,19 +6259,25 @@ const registerIpcHandlers = () => {
   const allowedSystemSettingsUrls = new Set([
     'x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility',
     'x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture',
+    'x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles',
   ]);
 
   // Open external URL in system default browser, plus a small allowlist of
   // macOS Privacy panes that Settings uses for permission onboarding.
   ipcMain.handle(
     'shell:open-external',
-    async (_event: Electron.IpcMainInvokeEvent, url: string): Promise<{ success: boolean }> => {
+    async (event: Electron.IpcMainInvokeEvent, url: string): Promise<{ success: boolean }> => {
       try {
         const parsed = new URL(url);
         const isWebUrl = parsed.protocol === 'http:' || parsed.protocol === 'https:';
+        // Mail links are restricted to the fixed billing inbox. Renderer content may
+        // provide the localized subject/body, but it must not choose a recipient or
+        // use mailto as a general-purpose external scheme.
+        const isBillingMailto =
+          isAllowedBillingMailtoRequest(url, isTrustedAppRendererEvent(event));
         const isAllowedSystemSettingsUrl =
           process.platform === 'darwin' && allowedSystemSettingsUrls.has(url);
-        if (!isWebUrl && !isAllowedSystemSettingsUrl) {
+        if (!isWebUrl && !isBillingMailto && !isAllowedSystemSettingsUrl) {
           return { success: false };
         }
         await shell.openExternal(url);
@@ -5784,7 +6293,18 @@ const registerIpcHandlers = () => {
   // 打开 renderer 提供的任意自定义 scheme / deep link。
   ipcMain.handle('shell:open-chatgpt-app', async (event): Promise<{ success: boolean }> =>
     handleOpenChatGPTApp(event, {
-      assertTrustedSender: assertTrustedAppRendererEvent,
+      assertTrustedSender: (candidate) => {
+        // The cached global overlay is a trusted Cindy renderer but deliberately
+        // not app-content: it needs this fixed, no-argument capability to keep
+        // auth recovery visible without activating the main window.
+        const overlayWindow = BrowserWindow.fromWebContents(candidate.sender);
+        if (
+          isGlobalVoiceInputOverlaySender(candidate.sender) &&
+          candidate.senderFrame === candidate.sender.mainFrame &&
+          isTrustedCindyRendererWindow(overlayWindow)
+        ) return;
+        assertTrustedAppRendererEvent(candidate);
+      },
       openExternal: (url) => shell.openExternal(url),
     }),
   );
@@ -6095,6 +6615,7 @@ const registerIpcHandlers = () => {
 
   registerSkillhubIpc({
     getMaker: getMakerCore,
+    getManagedSkillRoots: () => getGhostManager().managedRootDirs(),
     getAllowedProjectRoots: listAllowedSkillhubProjectRoots,
   });
   disposeSkillhubAutoSyncAuthListener = authManager.onAuthStateChange((state) => {
@@ -6121,7 +6642,19 @@ const registerIpcHandlers = () => {
   // ── Dialog: 目录选择器（v0.6 新增，与旧 show-open-directory-dialog 并存） ──
   ipcMain.handle(
     'dialog:show-open-directory',
-    async (_event, { defaultPath }: { defaultPath?: string } = {}) => {
+    async (
+      event,
+      {
+        defaultPath,
+        writableGrantScope,
+      }: { defaultPath?: string; writableGrantScope?: string } = {},
+    ) => {
+      if (writableGrantScope !== undefined) {
+        assertTrustedAppRendererEvent(event);
+        if (!writableGrantScope || writableGrantScope.length > 128) {
+          throw new Error('invalid writable directory grant scope');
+        }
+      }
       const targetWin = getWindow() ?? BrowserWindow.getFocusedWindow();
       if (!targetWin) return { success: true, path: null };
       const result = await dialog.showOpenDialog(targetWin, {
@@ -6133,7 +6666,15 @@ const registerIpcHandlers = () => {
       if (result.canceled || result.filePaths.length === 0) {
         return { success: true, path: null };
       }
-      return { success: true, path: result.filePaths[0] };
+      const selectedPath = result.filePaths[0];
+      if (writableGrantScope !== undefined) {
+        await issueWritableDirectoryPickerGrant({
+          scopeId: writableGrantScope,
+          senderId: event.sender.id,
+          directory: selectedPath,
+        });
+      }
+      return { success: true, path: selectedPath };
     },
   );
 
@@ -6763,14 +7304,12 @@ const registerIpcHandlers = () => {
     const ownerScopeKey = activeOwnerScopeKey();
     const ownerId = getActiveAppSession().dataOwnerId;
     if (!ownerId || isAppSessionBoundaryPending()) return;
-    const protectedPaths = await listPersistedChatAttachmentPaths();
     const isCurrentOwner = () =>
       activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
     if (!isCurrentOwner()) return;
     await cleanupOwnedUnpersistedStagedChatAttachments({
       ownerId,
       filePaths,
-      protectedPaths,
       canRemove: isCurrentOwner,
     });
   });
@@ -6794,6 +7333,70 @@ const registerIpcHandlers = () => {
       return { success: true };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
+    }
+  });
+
+  // Settings → Cindy Make: open Cindy's private managed-tool directory.
+  // The path is derived in main so the renderer cannot choose an arbitrary folder.
+  ipcMain.handle(
+    'app:open-cindy-make-tools-dir',
+    async (event): Promise<{ success: boolean }> => {
+      assertTrustedAppRendererEvent(event);
+      return openMakeToolsDirectory(app.getPath('userData'), {
+        openPath: (directory) => shell.openPath(directory),
+      });
+    },
+  );
+
+  ipcMain.handle('app:get-cindy-make-source-status', async (event) => {
+    assertTrustedAppRendererEvent(event);
+    return readCurrentCindySourceStatus(makeSourceRoot(app.getPath('userData')));
+  });
+  // 源码准备是全局单例:进度广播给所有窗口,任意窗口都能停止它。
+  subscribeCindySourceStatus(broadcastCindyMakeSourceStatus);
+  ipcMain.handle('app:cancel-cindy-make-source', async (event): Promise<{ success: boolean }> => {
+    assertTrustedAppRendererEvent(event);
+    return { success: cancelCindySourcePreparation() };
+  });
+
+  ipcMain.handle(
+    'app:open-cindy-make-source-dir',
+    async (event): Promise<{ success: boolean }> => {
+      assertTrustedAppRendererEvent(event);
+      return openMakeSourceDirectory(app.getPath('userData'), {
+        openPath: (directory) => shell.openPath(directory),
+      });
+    },
+  );
+
+  // 个人版制作任务的独立开发目录:从个人版基线建任务分支 + worktree 并安装依赖。
+  // 只认 runId 形状;路径全部由 main 从 userData 派生,renderer 只拿回结果。
+  ipcMain.handle('app:prepare-cindy-make-workspace', async (event, rawRunId: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    if (typeof rawRunId !== 'string' || !CINDY_MAKE_RUN_ID_PATTERN.test(rawRunId)) {
+      throwIpcError('INVALID_PARAMS', 'invalid Cindy Make run id');
+    }
+    const userData = app.getPath('userData');
+    const env = await createMakeToolchainEnvironment(userData);
+    try {
+      return await prepareCindyMakeWorkspace(userData, rawRunId, AbortSignal.timeout(20 * 60_000), {
+        processEnvironment: env.processEnvironment(),
+      });
+    } catch (error) {
+      const code = (error as { code?: unknown } | null)?.code;
+      createSchedulerLogger('cindy-make').warn('workspace preparation failed', {
+        runId: rawRunId,
+        code,
+        message: error instanceof Error ? error.message : String(error),
+      });
+      throwIpcError(
+        code === 'environmentNotReady' ? 'PRECONDITION_FAILED' : 'INTERNAL',
+        code === 'installFailed'
+          ? 'Cindy Make workspace dependency install failed'
+          : code === 'environmentNotReady'
+            ? 'Cindy Make source is not prepared'
+            : 'Cindy Make workspace preparation failed',
+      );
     }
   });
 
@@ -7165,6 +7768,91 @@ const registerIpcHandlers = () => {
   // ── 存储空间卡片(关于页)IPC:媒体总仓回收器 + 对账──
   // 业务体在 cindy-media/storageIpc.ts(依赖注入,规则 14),这里只做接线。
   {
+    const fixedDirectoryIpcLog = createLogger('fixed-directory-ipc');
+    const runFixedDirectoryIpcAction = async <T>(
+      actionName: string,
+      action: () => Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await action();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        fixedDirectoryIpcLog.warn('fixed directory IPC action failed', {
+          action: actionName,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError('INTERNAL', 'fixed cache directory action failed');
+      }
+    };
+    const openFixedDirectory = (
+      rootDir: string,
+      canOpen: () => boolean = () => true,
+    ): Promise<boolean> =>
+      openOrCreateFixedDirectory(rootDir, {
+        canOpen,
+        openPath: (filePath) => shell.openPath(filePath),
+      });
+    // These actions intentionally accept no renderer path. The frozen xdt-image
+    // cache has no owner metadata, so its confirmed cleanup applies to the whole
+    // profile-level legacy root. Chat attachments remain scoped to the active
+    // owner, but live drafts, message history, and the media ledger are not read:
+    // the explicitly confirmed cache is treated as disposable in full.
+    const clearFixedDirectory = async (
+      rootDir: string,
+      canClear: () => boolean = () => true,
+    ): Promise<void> => {
+      if (!canClear()) throw new Error('fixed directory owner changed before cleanup');
+      await fs.promises.rm(rootDir, { recursive: true, force: true });
+    };
+    const confirmFixedDirectoryClear = async (
+      event: Electron.IpcMainInvokeEvent,
+      labels: { title: string; message: string; confirmButton: string },
+    ): Promise<boolean> => {
+      const ownerWindow = BrowserWindow.fromWebContents(event.sender);
+      if (!ownerWindow || ownerWindow.isDestroyed()) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'fixed directory cleanup requires a live owner window',
+        );
+      }
+      const result = await dialog.showMessageBox(ownerWindow, {
+        type: 'warning',
+        title: labels.title,
+        message: labels.message,
+        buttons: [labels.confirmButton, t('settings.about.storage.cancelButton')],
+        defaultId: 1,
+        cancelId: 1,
+        noLink: true,
+      });
+      return result.response === 0 && !ownerWindow.isDestroyed() && !event.sender.isDestroyed();
+    };
+    const captureActiveChatAttachmentRoot = () => {
+      const ownerScopeKey = activeOwnerScopeKey();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId || isAppSessionBoundaryPending()) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'chat attachment directory requires a stable data owner',
+        );
+      }
+      return {
+        rootDir: getChatAttachmentOwnerCacheRoot(ownerId),
+        isCurrentOwner: () =>
+          activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending(),
+      };
+    };
+    const withActiveChatAttachmentRoot = async <T>(
+      action: (rootDir: string, isCurrentOwner: () => boolean) => Promise<T>,
+      options: { allowOwnerChangeAfterAction?: boolean } = {},
+    ): Promise<T> => {
+      const { rootDir, isCurrentOwner } = captureActiveChatAttachmentRoot();
+      const result = await action(rootDir, isCurrentOwner);
+      if (!options.allowOwnerChangeAfterAction && !isCurrentOwner()) {
+        throwIpcError('PRECONDITION_FAILED', 'chat attachment directory owner changed');
+      }
+      return result;
+    };
+
     // 各窗口草稿附件 URL 上报(composerDraftStore mutator 尾部推送;多窗口
     // 时清理取全窗口并集,防误删别的窗口的草稿图)。fire-and-forget send。
     ipcMain.on('cindy-media:report-draft-urls', (event, urls: string[]) => {
@@ -7175,19 +7863,22 @@ const registerIpcHandlers = () => {
       getQueueScanTexts: collectAgentInputQueueScanTexts,
       loadSnapshotPayloads: loadAllQueueSnapshotPayloads,
       getRegisteredDraftUrls: getAllRegisteredDraftUrls,
-      openLegacyImagesDir: async () => {
-        const rootDir = imageCacheStore.getCacheRoot();
-        try {
-          const stat = await fs.promises.lstat(rootDir);
-          if (!stat.isDirectory()) return false;
-        } catch (err) {
-          if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return false;
-          throw err;
-        }
-        const error = await shell.openPath(rootDir);
-        if (error) throw new Error(error);
-        return true;
-      },
+      openLegacyImagesDir: () => openFixedDirectory(imageCacheStore.getCacheRoot()),
+      clearLegacyImagesDir: () => clearFixedDirectory(imageCacheStore.getCacheRoot()),
+      getLegacyImagesDirStats: () => getFixedDirectoryStats(imageCacheStore.getCacheRoot()),
+      openChatAttachmentsDir: () =>
+        withActiveChatAttachmentRoot((rootDir, isCurrentOwner) =>
+          openFixedDirectory(rootDir, isCurrentOwner),
+        ),
+      clearChatAttachmentsDir: () =>
+        withActiveChatAttachmentRoot(
+          (rootDir, isCurrentOwner) => clearFixedDirectory(rootDir, isCurrentOwner),
+          { allowOwnerChangeAfterAction: true },
+        ),
+      getChatAttachmentsDirStats: () =>
+        !getActiveAppSession().dataOwnerId || isAppSessionBoundaryPending()
+          ? Promise.resolve({ bytes: 0, fileCount: 0 })
+          : withActiveChatAttachmentRoot((rootDir) => getFixedDirectoryStats(rootDir)),
     });
     ipcMain.handle('cindy-media:storage-stats', () => storageHandlers.stats());
     ipcMain.handle('cindy-media:storage-scan', (_event, params: { draftUrls: string[] }) =>
@@ -7210,6 +7901,206 @@ const registerIpcHandlers = () => {
     ipcMain.handle('cindy-media:legacy-images-open-dir', (event) => {
       assertTrustedAppRendererEvent(event);
       return storageHandlers.openLegacyImagesDir();
+    });
+    ipcMain.handle('cindy-media:legacy-images-clear', (event) =>
+      runFixedDirectoryIpcAction('legacy-images-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.about.storage.legacyImagesClearConfirmTitle'),
+          message: t('settings.about.storage.legacyImagesClearConfirmDescription'),
+          confirmButton: t('settings.about.storage.legacyImagesClearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        await storageHandlers.clearLegacyImagesDir();
+        return { cleared: true };
+      }),
+    );
+    ipcMain.handle('cindy-media:chat-attachments-open-dir', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return storageHandlers.openChatAttachmentsDir();
+    });
+    ipcMain.handle('cindy-media:chat-attachments-clear', (event) =>
+      runFixedDirectoryIpcAction('chat-attachments-clear', async () => {
+        assertTrustedAppRendererEvent(event);
+        const ownerScope = captureActiveChatAttachmentRoot();
+        const confirmed = await confirmFixedDirectoryClear(event, {
+          title: t('settings.about.storage.chatAttachmentsClearConfirmTitle'),
+          message: t('settings.about.storage.chatAttachmentsClearConfirmDescription'),
+          confirmButton: t('settings.about.storage.chatAttachmentsClearConfirmButton'),
+        });
+        if (!confirmed) return { cleared: false };
+        if (!ownerScope.isCurrentOwner()) {
+          throwIpcError(
+            'PRECONDITION_FAILED',
+            'chat attachment directory owner changed before cleanup',
+          );
+        }
+        await storageHandlers.clearChatAttachmentsDir();
+        return { cleared: true };
+      }),
+    );
+
+    const localDbMaintenanceHandlers = createLocalDbMaintenanceIpcHandlers({
+      captureOwner: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        if (!ownerId || isAppSessionBoundaryPending()) return null;
+        return { ownerId, scopeKey: activeOwnerScopeKey() };
+      },
+      isOwnerCurrent: ({ ownerId, scopeKey }) =>
+        !isAppSessionBoundaryPending() &&
+        getActiveAppSession().dataOwnerId === ownerId &&
+        activeOwnerScopeKey() === scopeKey,
+      getDbClient,
+      getDbClientOwnerId: getCurrentDbClientUserId,
+      getCurrentDbPath: () => {
+        const ownerId = getActiveAppSession().dataOwnerId;
+        return ownerId ? getDbPathForUser(ownerId) : null;
+      },
+      getUserDataDir: () => app.getPath('userData'),
+      canSchedule: () => process.env.XDT_PASSIVE_SHARED_USER_DATA !== '1',
+      selectBackupDirectory: async () => {
+        const options = {
+          title: t('settings.about.storage.dbSlimmingBackupDirectoryDialogTitle'),
+          properties: ['openDirectory', 'createDirectory'] as Array<
+            'openDirectory' | 'createDirectory'
+          >,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showOpenDialog(ownerWindow, options)
+          : await dialog.showOpenDialog(options);
+        return result.canceled ? null : result.filePaths[0] ?? null;
+      },
+      confirmActiveTaskCleanup: async ({ backupEnabled }) => {
+        const activeTaskWarning = t(
+          'settings.about.storage.dbSlimmingIncludeActiveConfirmDescription',
+        );
+        const detail = backupEnabled
+          ? activeTaskWarning
+          : `${activeTaskWarning}\n\n${t(
+              'settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup',
+            )}`;
+        const options: Electron.MessageBoxOptions = {
+          type: 'warning',
+          title: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+          message: t('settings.about.storage.dbSlimmingIncludeActiveConfirmTitle'),
+          detail,
+          buttons: [
+            t('settings.about.storage.dbSlimmingRestartButton'),
+            t('settings.about.storage.cancelButton'),
+          ],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showMessageBox(ownerWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 0;
+      },
+      confirmWithoutBackup: async () => {
+        const options: Electron.MessageBoxOptions = {
+          type: 'warning',
+          title: t('settings.about.storage.dbSlimmingConfirmTitle'),
+          message: t('settings.about.storage.dbSlimmingConfirmTitle'),
+          detail: t('settings.about.storage.dbSlimmingConfirmDescriptionWithoutBackup'),
+          buttons: [
+            t('settings.about.storage.dbSlimmingRestartButton'),
+            t('settings.about.storage.cancelButton'),
+          ],
+          defaultId: 1,
+          cancelId: 1,
+          noLink: true,
+        };
+        const ownerWindow = BrowserWindow.getFocusedWindow() ?? mainWindowRef;
+        const result = ownerWindow && !ownerWindow.isDestroyed()
+          ? await dialog.showMessageBox(ownerWindow, options)
+          : await dialog.showMessageBox(options);
+        return result.response === 0;
+      },
+      revealFile: async (filePath) => {
+        try {
+          if (!(await fs.promises.stat(filePath)).isFile()) return false;
+        } catch {
+          return false;
+        }
+        shell.showItemInFolder(path.normalize(filePath));
+        return true;
+      },
+      relaunch: (requestId) => {
+        dbClientLog.info('database slimming relaunch requested');
+        if (app.isPackaged) {
+          // Do not replay the native startup argv, which may contain an import Key.
+          app.relaunch({ args: process.argv.slice(1) });
+        } else {
+          // Forge owns the Vite server. A bare app.relaunch() outlives Forge,
+          // then opens a white window against a dead localhost renderer. The
+          // repository dev runner observes the durable cleanup marker and
+          // restarts the full Forge/Vite stack after this process exits.
+          const delegated = writeDbSlimmingDevRelaunchSignal(requestId);
+          dbClientLog.info('database slimming dev relaunch delegated to desktop dev runner', {
+            delegated,
+          });
+        }
+        app.quit();
+      },
+    });
+    const invokeLocalDbMaintenanceIpc = async <T>(
+      action: string,
+      operation: () => T | Promise<T>,
+    ): Promise<T> => {
+      try {
+        return await operation();
+      } catch (error) {
+        if (isIpcError(error)) throw error;
+        dbClientLog.error('database slimming IPC failed', {
+          action,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        throwIpcError('INTERNAL', 'database maintenance request failed');
+      }
+    };
+    ipcMain.handle('local-db:maintenance:scan', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('scan', () => localDbMaintenanceHandlers.scan(input));
+    });
+    ipcMain.handle('local-db:maintenance:choose-backup-directory', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('choose-backup-directory', () =>
+        localDbMaintenanceHandlers.chooseBackupDirectory(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:schedule', (event, input) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('schedule', () =>
+        localDbMaintenanceHandlers.schedule(input),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:last-result', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('last-result', () =>
+        localDbMaintenanceHandlers.getLastResult(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:open-last-backup-directory', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return invokeLocalDbMaintenanceIpc('open-last-backup-directory', () =>
+        localDbMaintenanceHandlers.openLastBackupDirectory(),
+      );
+    });
+    ipcMain.handle('local-db:maintenance:startup-progress', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return getDbSlimmingStartupProgress();
+    });
+    ipcMain.handle('local-db:maintenance:cancel-startup', (event) => {
+      assertTrustedAppRendererEvent(event);
+      return { cancelled: cancelDbSlimmingStartupProgress() };
+    });
+    subscribeDbSlimmingStartupProgress((progress) => {
+      const target = mainWindowRef;
+      if (!target || target.isDestroyed() || target.webContents.isDestroyed()) return;
+      target.webContents.send(DB_SLIMMING_STARTUP_PROGRESS_CHANGED_CHANNEL, progress);
     });
   }
 
@@ -7598,6 +8489,7 @@ app.on('ready', async () => {
   });
 
   registerIpcHandlers();
+  rebindDatabaseSizeWarningSettingsWatcher();
   startInputDeviceRuntime();
   startInputDevices();
   // 本机 FS 目录浏览(项目选择器「添加远程项目」逐级浏览;device-link 经隧道在被控端执行)。
@@ -7615,7 +8507,12 @@ app.on('ready', async () => {
   // 首登轻量数据迁移(mToc)的确认弹窗 IPC —— 必须先于 registerLocalDbIpc 注册,
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
+  setHistoryToolNameReader(getHistoryToolName);
   registerLocalDbIpc({
+    isSessionTurnPendingCompletion,
+    readHistoryLiveMessages: getSessionThinkingSnapshots,
+    resolveContextWindow: (session) => resolveSessionContextWindow(getActiveCatalog(), session),
+    requestWorktreeRecycle,
     cancelSessionOperations: cancelIOSSimulatorSessionOperations,
     cleanupRemovedSession: cleanupIOSSimulatorRemovedSession,
     closeIdleSessionForMove: async (sessionId) => {
@@ -7667,9 +8564,61 @@ app.on('ready', async () => {
       }
       const user = authManager.getAuthState().user;
       if (user == null || user.id !== userId) return;
+      if (authManager.isPassiveSharedUserDataInstance()) {
+        const passivePreflight = await inspectPassiveLocalProfileAdoption(
+          user.id,
+          createProductionLocalProfileDataMigrationDeps(
+            app.getPath('userData'),
+            BRAND_IDENTITY.dbFilePrefix,
+            () => hasExclusiveSharedLegacyUserDataAccess(),
+          ),
+        );
+        if (passivePreflight.status === 'required') {
+          throw new Error('local profile database adoption is pending in the primary instance');
+        }
+        if (passivePreflight.status === 'failed') {
+          throw new Error(
+            `local profile database adoption preflight failed: ${passivePreflight.error}`,
+          );
+        }
+        return;
+      }
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
       // 全量兜底,绝不 throw,失败不阻塞登录(ensureReady 照常建新库)。
       await runLegacyUserDataMigrationForUser(user.id);
+      // 登录前 local-v1 与登录后的 cloud owner 使用不同数据库文件。目标库不存在时
+      // 采用本地库，避免用户刚登录就看到空的任务/项目空间；目标库已存在则保持原样，
+      // 绝不覆盖账号已有内容。
+      const localProfileMigration = await adoptLocalProfileDatabase(
+        user.id,
+        createProductionLocalProfileDataMigrationDeps(
+          app.getPath('userData'),
+          BRAND_IDENTITY.dbFilePrefix,
+          () => hasExclusiveSharedLegacyUserDataAccess(),
+          process.platform === 'win32'
+            ? () =>
+                acquireWindowsPackagedInstanceBarrier({
+                  userDataDir: app.getPath('userData'),
+                  programName: BRAND_IDENTITY.executableName,
+                })
+            : undefined,
+        ),
+      );
+      if (localProfileMigration.status === 'failed') {
+        dbClientLog.error('local profile database adoption failed; blocking cloud database open', {
+          userId,
+          error: localProfileMigration.error,
+        });
+        throw new Error(`local profile database adoption failed: ${localProfileMigration.error}`);
+      } else if (localProfileMigration.status === 'claimed-by-other-owner') {
+        dbClientLog.warn('local profile database is already reserved for another cloud owner', {
+          userId,
+        });
+      } else if (localProfileMigration.status === 'adopted') {
+        dbClientLog.info('local profile database adopted for first cloud owner', {
+          userId,
+        });
+      }
     },
     onReady: async (userId) => {
       const startupHooksStartedAt = performance.now();
@@ -7698,6 +8647,12 @@ app.on('ready', async () => {
       const dbClientTakeover = await ensureLifecycleDbClient(userId);
       logStartupPhase('db-client-takeover');
       if (dbClientTakeover.mode === 'failed' || dbClientTakeover.mode === 'skipped') {
+        // Do not expose the previous owner's startup snapshot after a failed
+        // takeover. A later successful takeover will capture a fresh snapshot.
+        startupDatabaseSizeWarningStatus = { databaseBytes: null };
+        startupDatabaseSizeWarningStatusChecked = false;
+        startupDatabaseSizeWarningOwnerScope = null;
+        broadcastDatabaseSizeWarningChanged();
         dbClientLog.warn('[DbClient] lifecycle client unavailable; skip db-client startup hooks', {
           userId,
           mode: dbClientTakeover.mode,
@@ -7713,6 +8668,12 @@ app.on('ready', async () => {
         }
         return;
       }
+      checkDatabaseSizeWarningAtStartup();
+      // Bot recovery is owner-scoped and must start only after DbClient
+      // takeover. registerMakerIpc also invokes this once its services exist,
+      // covering both possible splash/login orderings without duplicate runs.
+      void restoreBotRuntimeForCurrentOwner();
+      startReadyWorktreeMaintenance();
       if (dbClientTakeover.mode === 'unchanged') {
         // 副窗口会再次走 localDb.ensureReady；同 owner 的 lifecycle client 已由首个
         // onReady 完整启动，因此这里只保留 DB 连接交接，不重复执行账号级启动维护。
@@ -7759,44 +8720,6 @@ app.on('ready', async () => {
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
-      //
-      // Staged-attachment bookkeeping is not first-paint readiness. The persisted-path
-      // lookup is a LIKE + json_tree scan over every retained message body; on a
-      // multi-GB owner DB that blocked LocalDbGate for ~24s after splash had already
-      // unmounted, leaving a white window. Sweep is fire-and-forget, only queries the
-      // DB when the owner cache already has stale files, and is delayed so the shared
-      // db worker can serve session-list / first-paint RPCs first. A stale-cache user
-      // would otherwise just move the 24s stall from the white screen onto the first
-      // task-list query (the db worker's better-sqlite3 .all() is synchronous).
-      const STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS = 5_000;
-      const stagedAttachmentSweepTimer = setTimeout(() => {
-        void sweepStagedChatAttachmentsOnStartup({
-          ownerId: userId,
-          createdBeforeMs: PROCESS_STARTED_AT_MS,
-          loadProtectedPaths: listPersistedChatAttachmentPaths,
-          canContinue: () =>
-            getActiveAppSession().dataOwnerId === userId && !isAppSessionBoundaryPending(),
-        })
-          .then((result) => {
-            if (result.removed > 0 || result.protected > 0) {
-              dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
-                ...result,
-                ownerId: userId,
-              });
-            }
-          })
-          .catch((err) => {
-            dbClientLog.warn(
-              '[ChatAttachment] startup staged attachment sweep failed (non-fatal)',
-              {
-                ownerId: userId,
-                error: err instanceof Error ? err.message : String(err),
-              },
-            );
-          });
-      }, STARTUP_STAGED_ATTACHMENT_SWEEP_DELAY_MS);
-      stagedAttachmentSweepTimer.unref?.();
-      logStartupPhase('chat-attachment-sweep');
       if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
         // 只把连接交给 worker，不能释放 shared-passive schema reader lease：worker
         // 还会长期持有同一 DB；lease 必须留到真正 logout / app quit 才释放。
@@ -8187,7 +9110,11 @@ app.on('ready', async () => {
   // renderer 就可能发起缓存读,而 gate 默认是"已放行"(review: copilot)。
   const startupPurgeDrain = drainPurgeQueue();
   setMirrorCacheReadGate(startupPurgeDrain);
+  // Stable module-neutral façade. Feature providers were registered with their
+  // owning modules above; future collections/actions do not add tunnel channels.
+  registerRemoteResourcesIpc();
   registerDeviceLinkIpc();
+  registerRemoteDesktopIpc(isGlobalVoiceInputOverlaySender);
   void startupPurgeDrain
     .then(({ purged, pending }) => {
       if (purged > 0 || pending > 0) {
@@ -8318,14 +9245,11 @@ onQuit(
   'sync',
 );
 // Async 阶段: 并发跑, 6s 超时兜底。
-//   - shutdown-maker:       Layer 1 关 sessions → Layer 2 dispose agents (Codex
-//                           shared app-server 子进程 SIGTERM)。**必须 await** —
-//                           kill 是 Layer 2 才发出, fire-and-forget 会让 app.exit
-//                           在 kill 之前就掐掉 Node, Windows 上子进程会变孤儿。
+//   - shutdown-maker:       并发 detach sessions 与 dispose agents，等待进程退出。
+//                           fire-and-forget 会让 app.exit 抢先结束 Node。
 //   - im.dispose:           wsClient.stop() 内部先发 announce offline (quit path waits 4.5s)
 //                           再 close WS。**整个改造的核心目标——必须 await。**
-//   - codex env shutdown:   关 MCP HTTP bridge。语义上要在 maker.shutdown() 杀完
-//                           codex 子进程之后, 这里并发跑最坏是 log noise。
+//   - Codex 环境、proxy 和 DB 在 post-async 收尾，正常退出时保留到 Maker 完成。
 // (clean-exit-snapshot 已移除 — 退出时不再做 db.backup, 容灾改由 SQLite WAL crash
 //  recovery 兜底, 详见 localDb/index.ts 文件头 ADR-FE7 修订说明。)
 /**
@@ -8470,9 +9394,10 @@ onQuit(
   'async',
 );
 onQuit('review-artifact-snapshots', cleanupActiveReviewArtifactSnapshots, 'async');
+// LSP 不占用 Agent 正常保存和退出的时间窗口。
+onQuit('lsp-pool', shutdownLspServerPool, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
-onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
 // 轮 27 MEDIUM-3:pi-env 挪到 post-async —— 若与 shutdown-maker 同 async 并发,
 // bridge 可能在 session close 的 disposeSessionRegistrations(unregisterSessionCtx/
 // Token)之前关闭, 产生「pi dispose session registration failed (non-fatal)」
@@ -8607,6 +9532,9 @@ onQuit(
   'post-async',
 );
 onQuit('pi-env', () => shutdownPiEnvironment(), 'post-async');
+// 正常退出时保留到 Agent 和 Session 收尾完成；async 超时后仍按退出预算尽力清理。
+onQuit('codex-env', () => shutdownCodexEnvironment(), 'post-async');
+onQuit('codex-proxy', () => disposeCodexProxy(), 'post-async');
 // embedding-host: abort 语义 —— 立刻让出 SQLite 写连接, 不等当前 tick (那批 job 保持
 // pending 下次续跑, 写事务同步原子无中断)。
 onQuit('embedding-host', () => stopEmbeddingHost(), 'async');
@@ -8619,7 +9547,6 @@ onQuit('anthropic-compat-proxy', () => disposeAnthropicCompatProxy(), 'async');
 // browser + locked user-data-dir would otherwise survive quit and force a stale
 // SingletonLock recovery next launch). `stop` is idempotent / no-op if never started.
 onQuit('browser-runtime', () => disposeBrowserRuntime(), 'async');
-onQuit('codex-proxy', () => disposeCodexProxy(), 'async');
 // Remote file-service clients: 先于 pool 关闭, 挂断远端 daemon 的 exec channel。
 onQuit('remote-file-browser', () => disposeRemoteFileBrowser(), 'async');
 // Remote SSH pool: 主动断开所有活动连接, 防止 ssh2 子句柄阻塞 Node 进程退出。
@@ -8636,11 +9563,11 @@ onQuit('ios-simulator-exit-abort', abortIOSSimulatorOperationsForExit, 'sync');
 onQuit('hook-control', () => disposeHookControl(), 'sync');
 // session-git-pr-context: 取消 .git HEAD 的 parcel watcher 订阅, 防原生句柄阻塞退出。
 onQuit('git-context', () => disposeGitContext(), 'async');
-onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'async');
 onQuit('ios-simulator-host', disposeIOSSimulatorHost, 'async');
 onQuit('ios-simulator-ownership-registry', flushIOSSimulatorOwnershipRegistry, 'async');
 
 // Post-async 阶段: 串行跑, 确保依赖 async 阶段产物的清理 (WAL checkpoint by close)。
+onQuit('db-client', () => lifecycleDbClientManager.dispose('quit'), 'post-async');
 onQuit('local-db-close', () => localDbCloseDb(), 'post-async');
 
 installQuitHandler(6000);
@@ -8784,7 +9711,7 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
   const input = raw as Record<string, unknown>;
   const patch: SubagentModelSettingsPatch = {};
   // providerId 与 model id 同约束(短标识串),共用同一套校验/归一化。
-  for (const key of ['claudeCode', 'claudeCodeProviderId', 'codex', 'codexProviderId'] as const) {
+  for (const key of ['claudeCode', 'claudeCodeProviderId'] as const) {
     if (!(key in input)) continue;
     const value = input[key];
     if (!isValidSubagentModelIdInput(value)) {
@@ -8792,39 +9719,11 @@ function parseSubagentModelSettingsPatch(raw: unknown): SubagentModelSettingsPat
     }
     patch[key] = normalizeSubagentModelId(value);
   }
-  // 护栏/effort 字段类型各异(enum / boolean / number|null),逐字段分支校验。
-  if ('codexEffort' in input) {
-    if (input.codexEffort !== null && !isCodexSubagentEffort(input.codexEffort)) {
-      throwIpcError('INVALID_PARAMS', 'subagent codexEffort must be a known effort or null');
+  if ('codexSmartSubagentRouting' in input) {
+    if (typeof input.codexSmartSubagentRouting !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'subagent codexSmartSubagentRouting must be boolean');
     }
-    patch.codexEffort = input.codexEffort as SubagentModelSettingsPatch['codexEffort'];
-  }
-  if ('codexSubagentsEnabled' in input) {
-    if (typeof input.codexSubagentsEnabled !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'subagent codexSubagentsEnabled must be boolean');
-    }
-    patch.codexSubagentsEnabled = input.codexSubagentsEnabled;
-  }
-  if ('codexUseCindySubagentPolicy' in input) {
-    if (typeof input.codexUseCindySubagentPolicy !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'subagent codexUseCindySubagentPolicy must be boolean');
-    }
-    patch.codexUseCindySubagentPolicy = input.codexUseCindySubagentPolicy;
-  }
-  if ('codexMaxConcurrentSubagents' in input) {
-    if (!isValidCodexSubagentConcurrencyInput(input.codexMaxConcurrentSubagents)) {
-      throwIpcError(
-        'INVALID_PARAMS',
-        'subagent codexMaxConcurrentSubagents must be an integer in range or null',
-      );
-    }
-    patch.codexMaxConcurrentSubagents = input.codexMaxConcurrentSubagents;
-  }
-  if ('codexAllowNestedSubagents' in input) {
-    if (typeof input.codexAllowNestedSubagents !== 'boolean') {
-      throwIpcError('INVALID_PARAMS', 'subagent codexAllowNestedSubagents must be boolean');
-    }
-    patch.codexAllowNestedSubagents = input.codexAllowNestedSubagents;
+    patch.codexSmartSubagentRouting = input.codexSmartSubagentRouting;
   }
   return patch;
 }
@@ -8853,6 +9752,15 @@ function compactionWire() {
     pct: state.value.claudeCodeAutoCompactPct,
     isCustomized: state.isCustomized,
     defaultPct: state.defaults.claudeCodeAutoCompactPct,
+  };
+}
+
+function piCompactionWire() {
+  const state = readPiCompactionState();
+  return {
+    pct: state.value.piAutoCompactPct,
+    isCustomized: state.isCustomized,
+    defaultPct: state.defaults.piAutoCompactPct,
   };
 }
 
@@ -8913,3 +9821,23 @@ if (
 ) {
   require.cache[__filename] = module;
 }
+
+let worktreeRuntimeCloseReady = false;
+let lastWorktreeMaintenanceDb: ReturnType<typeof tryGetDbClient> = null;
+
+/** Worktree maintenance needs both storage and runtime-close services. */
+function startReadyWorktreeMaintenance(): void {
+  startWorktreeRecycleMaintenance({
+    isReady: () => worktreeRuntimeCloseReady && getMakerIfReady() !== null && tryGetDbClient() !== null,
+    recycleCurrentSession: (sessionId, status) => recycleSessionWorktreeForStatusChange(sessionId, status),
+    onAttemptComplete: auditRegisteredWorktrees,
+  });
+  const db = tryGetDbClient();
+  if (worktreeRuntimeCloseReady && getMakerIfReady() && db && db !== lastWorktreeMaintenanceDb) {
+    lastWorktreeMaintenanceDb = db;
+    void auditRegisteredWorktrees().catch((error) => dbClientLog.warn('worktree audit postponed', error));
+    void WorktreePool.recoverPool().catch((error) => dbClientLog.warn('worktree pool recovery postponed', error));
+  }
+}
+
+onQuit('remote-desktop-viewer', () => remoteDesktopViewerWindows.reset(), 'sync');

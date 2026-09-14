@@ -261,6 +261,52 @@ describe('sanitizePresets', () => {
     }
   });
 
+  it.each(['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'])(
+    'strips credential-bearing modelsUrl without dropping the preset: %s',
+    (userinfo) => {
+      const preset = {
+        ...VALID_PRESET,
+        runtimes: {
+          codex: {
+            baseUrl: 'https://x.example/v1',
+            models: [{ id: 'm', name: 'M' }],
+            modelsUrl: `https://${userinfo}x.example/v1/models`,
+          },
+        },
+      };
+      const out = sanitizePresets([preset]);
+      expect(out).toHaveLength(1);
+      expect(out[0]?.runtimes.codex).toEqual({
+        baseUrl: 'https://x.example/v1',
+        models: [{ id: 'm', name: 'M' }],
+      });
+    },
+  );
+
+  it.each(
+    (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
+      ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({ field, userinfo })),
+    ),
+  )('removes only discovery sources with credentials in $field: $userinfo', ({ field, userinfo }) => {
+    const source = {
+      baseUrl: 'https://x.example/v1',
+      modelsUrl: 'https://x.example/v1/models',
+      wireProtocol: 'openai-responses',
+    };
+    const out = sanitizePresets([{
+      ...VALID_PRESET,
+      runtimes: {
+        codex: {
+          baseUrl: 'https://x.example/v1',
+          models: [{ id: 'm', name: 'M' }],
+          modelDiscovery: [source, { ...source, [field]: `https://${userinfo}x.example/v1/models` }],
+        },
+      },
+    }]);
+    expect(out).toHaveLength(1);
+    expect(out[0]?.runtimes.codex?.modelDiscovery).toEqual([source]);
+  });
+
   it('modelDiscovery 只保留同源且协议合法的附加目录', () => {
     const source = {
       baseUrl: 'https://x.example/api/v1',
@@ -370,6 +416,60 @@ describe('sanitizePresets', () => {
         },
       },
     }])).toEqual([]);
+  });
+
+  it('图片生成能力只接受显式布尔值', () => {
+    const imagegen = {
+      id: 'imagegen',
+      name: 'Imagegen',
+      runtimes: {
+        codex: {
+          baseUrl: 'https://images.example/v1',
+          wireProtocol: 'openai-responses',
+          supportsImageGeneration: true,
+          models: [{ id: 'image-chat', name: 'Image Chat' }],
+        },
+      },
+    };
+    expect(sanitizePresets([imagegen])).toEqual([imagegen]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            codex: {
+              ...imagegen.runtimes.codex,
+              supportsImageGeneration: 'yes',
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            codex: {
+              ...imagegen.runtimes.codex,
+              wireProtocol: 'openai-chat',
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...imagegen,
+          runtimes: {
+            pi: {
+              ...imagegen.runtimes.codex,
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
   });
 
   it('requestPath 合法时保留；跨主机、fragment 与 CRLF 形态剥字段但保留预设', () => {
@@ -786,7 +886,7 @@ describe('BUNDLED_CATALOG 首批预设自检', () => {
       expect(
         preset.runtimes.pi?.wireProtocol,
         `${preset.id} is missing the Pi default protocol`,
-      ).toMatch(/^(anthropic-messages|openai-chat|openai-responses)$/);
+      ).toMatch(/^(anthropic-messages|openai-chat|openai-responses|google-generative-ai)$/);
     }
   });
 });
@@ -807,11 +907,11 @@ describe('MiniMax OpenAI Responses 预设契约 (issue #345)', () => {
     const preset = BUNDLED_CATALOG.presets?.find((candidate) => candidate.id === id);
     expect(preset?.docsUrl).toBe(docsUrl);
     expect(preset?.runtimes['claude-code']?.baseUrl).toMatch(/\/anthropic$/);
-    expect(preset?.runtimes['claude-code']?.models).toEqual([
+    expect(preset?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false)).toEqual([
       { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
       { id: 'MiniMax-M2.5', name: 'MiniMax M2.5' },
     ]);
-    expect(preset?.runtimes.codex).toEqual({
+    expect({ ...preset?.runtimes.codex, models: preset?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
       baseUrl: codexBaseUrl,
       models: [
         { id: 'MiniMax-M3', name: 'MiniMax M3', contextWindow: 1_000_000 },
@@ -858,13 +958,13 @@ describe('官方渠道预设契约', () => {
     });
   });
 
-  it('llama.cpp 与 vLLM 提供 Codex Chat 与 Pi，不含 Claude Code', () => {
+  it('llama.cpp 与 vLLM 的 Chat 端点供三个引擎使用', () => {
     for (const [id, baseUrl] of [
       ['llamacpp', 'http://127.0.0.1:8080/v1'],
       ['vllm', 'http://127.0.0.1:8000/v1'],
     ] as const) {
       const local = preset(id);
-      expect(local?.runtimes['claude-code']).toBeUndefined();
+      expect(local?.runtimes['claude-code']).toEqual(local?.runtimes.codex);
       expect(local?.runtimes.codex).toEqual({
         baseUrl,
         wireProtocol: 'openai-chat',
@@ -890,7 +990,7 @@ describe('官方渠道预设契约', () => {
       codex: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
         modelsUrl: 'https://api.longcat.chat/openai/v1/models',
-        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000 }],
+        models: [{ id: 'LongCat-2.0', name: 'LongCat 2.0', contextWindow: 1_000_000, api: 'openai-completions', route: { baseUrl: 'https://api.longcat.chat/openai/v1', wireProtocol: 'openai-chat' } }],
       },
       pi: {
         baseUrl: 'https://api.longcat.chat/openai/v1',
@@ -1046,12 +1146,12 @@ describe('官方渠道预设契约', () => {
       [personalTokenPlan, personalTokenPlanModels],
       [teamTokenPlan, teamTokenPlanModels],
     ] as const) {
-      expect(tokenPlan?.runtimes['claude-code']).toEqual({
+      expect({ ...tokenPlan?.runtimes['claude-code'], models: tokenPlan?.runtimes['claude-code']?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/apps/anthropic',
         modelsUrl: tokenPlanModelsUrl,
         models,
       });
-      expect(tokenPlan?.runtimes.codex).toEqual({
+      expect({ ...tokenPlan?.runtimes.codex, models: tokenPlan?.runtimes.codex?.models.filter(model => model.defaultEnabled !== false) }).toEqual({
         baseUrl: 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1',
         wireProtocol: 'openai-chat',
         modelsUrl: tokenPlanModelsUrl,
@@ -1070,6 +1170,25 @@ describe('官方渠道预设契约', () => {
         name: 'GLM-5.2 (1M)',
         contextWindow: 1_000_000,
       });
+    },
+  );
+
+  it.each(['zhipu-coding-plan-cn', 'zai-coding-plan-global'])(
+    '%s 的 Claude Code 提供 GLM-5.3 1M 独立入口,与 Pi 列表的 glm-5.3 窗口一致 (#3883)',
+    (id) => {
+      const claudeModels = preset(id)?.runtimes['claude-code']?.models ?? [];
+      expect(claudeModels.find((model) => model.id === 'glm-5.3[1m]')).toEqual({
+        id: 'glm-5.3[1m]',
+        name: 'GLM-5.3 (1M)',
+        contextWindow: 1_000_000,
+      });
+      // 窗口来源:同一端点族的 Pi 列表已声明 glm-5.3 为 1M,Claude Code 的 [1m] 形态不得比它小。
+      expect(
+        preset(id)?.runtimes.pi?.models.find((model) => model.id === 'glm-5.3')?.contextWindow,
+      ).toBe(1_000_000);
+      // 只补独立 1M 条目:既有裸条目保持原样(留空仍按 200K 保守默认),不静默抬窗。
+      expect(claudeModels.find((model) => model.id === 'glm-5.2')).toEqual({ id: 'glm-5.2', name: 'GLM-5.2' });
+      expect(claudeModels.find((model) => model.id === 'glm-5.3')).toMatchObject({ api: 'anthropic-messages', defaultEnabled: false });
     },
   );
 
@@ -1093,9 +1212,7 @@ describe('官方渠道预设契约', () => {
       wireProtocol: 'openai-chat',
       modelsUrl: 'https://opencode.ai/zen/go/v1/models',
     });
-    expect(piModels.map((model) => model.id)).toEqual([
-      ...new Set([...claudeModels, ...codexModels].map((model) => model.id)),
-    ]);
+    expect(new Set(piModels.map((model) => model.id))).toEqual(new Set([...claudeModels, ...codexModels].map((model) => model.id)));
 
     const expectedOverrides = new Map([
       ['minimax-m3', 'anthropic-messages'],
@@ -1119,7 +1236,7 @@ describe('官方渠道预设契约', () => {
         },
       });
     }
-    for (const model of piModels.filter((candidate) => !expectedOverrides.has(candidate.id))) {
+    for (const model of piModels.filter((candidate) => !candidate.api && !expectedOverrides.has(candidate.id))) {
       expect(model.piApi, model.id).toBeUndefined();
     }
   });
@@ -1138,7 +1255,7 @@ describe('官方渠道预设契约', () => {
 
   it('Google Gemini API 走公开 OpenAI Chat 兼容端点，不依赖 Gemini CLI 私有接口', () => {
     const gemini = preset('google-gemini-api');
-    expect(gemini?.runtimes['claude-code']).toBeUndefined();
+    expect(gemini?.runtimes['claude-code']).toEqual(gemini?.runtimes.codex);
     expect(gemini?.runtimes.codex).toEqual(expect.objectContaining({
       baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
       wireProtocol: 'openai-chat',

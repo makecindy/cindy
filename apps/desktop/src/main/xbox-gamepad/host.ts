@@ -5,10 +5,7 @@ import { promisify } from 'node:util';
 import { app } from 'electron';
 
 import { createLogger } from '../logger.js';
-import {
-  isXboxGamepadHostMessage,
-  type XboxGamepadHostMessage,
-} from './protocol.js';
+import { isXboxGamepadHostMessage, type XboxGamepadHostMessage } from './protocol.js';
 
 const execFilePromise = promisify(execFile);
 const log = createLogger('xbox-gamepad-host');
@@ -23,6 +20,7 @@ export interface XboxGamepadHost {
   start(): void;
   probe(): void;
   stop(): void;
+  setSwitch2UsbWanted(wanted: boolean): void;
 }
 
 export interface XboxGamepadHostDeps {
@@ -41,6 +39,7 @@ export function createXboxGamepadHost(
   let child: ChildProcessWithoutNullStreams | null = null;
   let starting = false;
   let wanted = false;
+  let switch2UsbWanted = false;
   let buffer = '';
   let consecutiveFailures = 0;
   let crashAccounted = false;
@@ -102,6 +101,9 @@ export function createXboxGamepadHost(
     }
   };
 
+  const writeSwitch2UsbWanted = (): boolean =>
+    writeHelper(switch2UsbWanted ? 'switch2-usb on\n' : 'switch2-usb off\n');
+
   const attach = (next: ChildProcessWithoutNullStreams): void => {
     child = next;
     starting = false;
@@ -139,6 +141,7 @@ export function createXboxGamepadHost(
       reportHostFailure(`Xbox gamepad helper exited unexpectedly (${code ?? signal ?? 'unknown'})`);
       noteChildGone();
     });
+    writeSwitch2UsbWanted();
   };
 
   const reportHostFailure = (message: string): void => {
@@ -178,6 +181,11 @@ export function createXboxGamepadHost(
       if (writeHelper('probe\n')) return;
       void startChild();
     },
+    setSwitch2UsbWanted(next: boolean) {
+      if (switch2UsbWanted === next) return;
+      switch2UsbWanted = next;
+      writeSwitch2UsbWanted();
+    },
     stop() {
       wanted = false;
       clearRestart();
@@ -188,7 +196,8 @@ export function createXboxGamepadHost(
       try {
         if (!current.stdin.destroyed) {
           current.stdin.write('stop\n', (error) => {
-            if (error) log.debug('xbox gamepad helper stdin write failed', { error: error.message });
+            if (error)
+              log.debug('xbox gamepad helper stdin write failed', { error: error.message });
           });
           current.stdin.end();
         }
@@ -214,11 +223,22 @@ async function resolveMacHelperPath(): Promise<string> {
   if (app.isPackaged && fs.existsSync(packaged)) return packaged;
 
   const source = resolveMacHelperSource();
-  const binary = path.join(app.getPath('userData'), 'xbox-gamepad', 'cindy-macos-xbox-gamepad-helper');
+  const helperDir = path.dirname(source);
+  const switch2UsbC = path.join(helperDir, 'switch2_usb.c');
+  const switch2UsbH = path.join(helperDir, 'switch2_usb.h');
+  const binary = path.join(
+    app.getPath('userData'),
+    'xbox-gamepad',
+    'cindy-macos-xbox-gamepad-helper',
+  );
   if (!fs.existsSync(source)) {
     throw new Error(`Xbox gamepad helper source missing at ${source}`);
   }
-  const sourceMtime = fs.statSync(source).mtimeMs;
+  const sourceMtime = Math.max(
+    fs.statSync(source).mtimeMs,
+    fs.existsSync(switch2UsbC) ? fs.statSync(switch2UsbC).mtimeMs : 0,
+    fs.existsSync(switch2UsbH) ? fs.statSync(switch2UsbH).mtimeMs : 0,
+  );
   if (fs.existsSync(binary) && fs.statSync(binary).mtimeMs >= sourceMtime) {
     failedHelperSourceMtime = 0;
     return binary;
@@ -227,11 +247,16 @@ async function resolveMacHelperPath(): Promise<string> {
     throw new Error('Xbox gamepad helper compile failed; waiting for source change');
   }
   fs.mkdirSync(path.dirname(binary), { recursive: true });
+  const object = `${binary}.switch2_usb.o`;
   try {
+    await execFilePromise('clang', ['-c', switch2UsbC, '-o', object], { timeout: 30_000 });
     await execFilePromise(
       'swiftc',
       [
         source,
+        object,
+        '-import-objc-header',
+        switch2UsbH,
         '-O',
         '-framework',
         'Foundation',
@@ -242,7 +267,7 @@ async function resolveMacHelperPath(): Promise<string> {
         '-o',
         binary,
       ],
-      { timeout: 20_000 },
+      { timeout: 30_000 },
     );
   } catch (error) {
     failedHelperSourceMtime = sourceMtime;

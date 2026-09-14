@@ -1,7 +1,7 @@
 /**
  * rehypeStreamWordFade.test.ts
  * ---------------------------------------------------------------------------
- * 流式分段淡入插件的行为测试:切词、零 stagger、稳定 key(不重播)、结构
+ * 流式分段淡入插件的行为测试：切词、连续时间线、稳定 key（不重播）、结构
  * 变化下的 key 稳定性、render candidate 提交、inline-code 原子淡入、
  * pre/KaTeX 跳过,以及 CSS 侧动画本体的静态回归。
  */
@@ -19,6 +19,7 @@ import {
   getOrCreateWordFadeState,
   releaseWordFadeState,
   rehypeStreamWordFade,
+  scheduleWordFadeSegment,
   splitWords,
   type WordFadeState,
 } from '../rehypeStreamWordFade';
@@ -44,7 +45,7 @@ function root(...children: Root['children']): Root {
 }
 
 function run(tree: Root, state: WordFadeState, nowMs = 0): Root {
-  state.nowFn = () => nowMs;
+  state.timeline.nowFn = () => nowMs;
   const transformer = (rehypeStreamWordFade as (s: WordFadeState) => (t: Root) => void)(state);
   transformer(tree);
   return tree;
@@ -80,6 +81,20 @@ function collectWords(node: Root | Element): { text: string; delay: number; key:
   return out;
 }
 
+function schedule(state: WordFadeState, key: string): number {
+  let writtenDelay = '';
+  const element = {
+    style: {
+      setProperty(name: string, value: string) {
+        if (name === '--wf-delay') writtenDelay = value;
+      },
+    },
+  } as unknown as HTMLElement;
+  const delay = scheduleWordFadeSegment(state, key, element);
+  expect(writtenDelay).toBe(`${delay}ms`);
+  return delay;
+}
+
 describe('splitWords', () => {
   it('英文按空格切词,空白并入前一词', () => {
     expect(splitWords('hello world foo')).toEqual(['hello ', 'world ', 'foo']);
@@ -104,6 +119,7 @@ describe('rehypeStreamWordFade', () => {
     const tree1 = root(el('p', [textNode('one two')]));
     run(tree1, firstMount, 0);
     const firstKeys = collectWords(tree1).map((word) => word.key);
+    for (const key of firstKeys) schedule(firstMount, key);
 
     const remount = getOrCreateWordFadeState(cacheKey);
     const tree2 = root(el('p', [textNode('one two three')]));
@@ -111,9 +127,9 @@ describe('rehypeStreamWordFade', () => {
     const words = collectWords(tree2);
 
     expect(remount).toBe(firstMount);
-    expect(firstKeys.every((key) => remount.settled.has(key))).toBe(true);
+    expect(firstKeys.every((key) => remount.timeline.settled.has(key))).toBe(true);
     expect(words.map((word) => word.text)).toEqual(['three']);
-    expect(words[0].delay).toBe(0);
+    expect(schedule(remount, words[0].key)).toBe(0);
   });
 
   it('消息进入终态后释放 remount 状态', () => {
@@ -123,20 +139,29 @@ describe('rehypeStreamWordFade', () => {
     expect(getOrCreateWordFadeState(cacheKey)).not.toBe(active);
   });
 
-  it('普通聊天零 stagger:同 tick 新词全部从 0ms 开始淡入', () => {
+  it('首帧估值按 16ms 连续错峰，DOM commit 时间线与之对齐', () => {
     const state = createWordFadeState();
     const tree = root(el('p', [textNode('one two three')]));
     run(tree, state);
     const words = collectWords(tree);
     expect(words.map((w) => w.text)).toEqual(['one ', 'two ', 'three']);
-    expect(words.map((w) => w.delay)).toEqual([0, 0, 0]);
+    expect(words.map((w) => w.delay)).toEqual([0, 16, 32]);
+    expect(words.map((word) => schedule(state, word.key))).toEqual([0, 16, 32]);
   });
 
-  it('同一 state 重跑(流式 re-parse)已见词拿回同一 key,发剩余(负)delay 续播', () => {
+  it('积压到 96ms 后把新增段步长压缩为 4ms', () => {
+    const state = createWordFadeState();
+    state.timeline.nowFn = () => 0;
+    const delays = Array.from({ length: 10 }, (_, index) => schedule(state, `wf-${index}`));
+    expect(delays).toEqual([0, 16, 32, 48, 64, 80, 96, 100, 104, 108]);
+  });
+
+  it('同一 state 重跑时已见词恢复原进度，新词续接消息时间线', () => {
     const state = createWordFadeState();
     const tree1 = root(el('p', [textNode('one two')]));
     run(tree1, state);
     const keys1 = collectWords(tree1).map((w) => w.key);
+    expect(keys1.map((key) => schedule(state, key))).toEqual([0, 16]);
 
     // 下一个 tick(100ms 后):全文重建 + 新词到达。
     const tree2 = root(el('p', [textNode('one two three four')]));
@@ -147,30 +172,21 @@ describe('rehypeStreamWordFade', () => {
     expect(words[0].key).toBe(keys1[0]);
     expect(words[1].key).toBe(keys1[1]);
     expect(words[0].delay).toBe(-100);
-    expect(words[1].delay).toBe(-100);
-    // 所有新词都从本 tick 的 0 起播，不互相排队。
-    expect(words[2].delay).toBe(0);
-    expect(words[3].delay).toBe(0);
+    expect(words[1].delay).toBe(-84);
+    // 真实 ref 在 paint 前把新词接到当前时刻，不继承已经消化完的历史积压。
+    expect(words.slice(2).map((word) => schedule(state, word.key))).toEqual([0, 16]);
   });
 
-  it('跨 tick 没有历史积压:后到的新词仍立即开始', () => {
+  it('空闲后突发的新段从当前时刻重新起排', () => {
     const state = createWordFadeState();
-    run(root(el('p', [textNode('a b c d')])), state);
-    const tree2 = root(el('p', [textNode('a b c d e f')]));
-    run(tree2, state, 50);
-    const words = collectWords(tree2);
-    expect(words.slice(0, 4).map((word) => word.delay)).toEqual([-50, -50, -50, -50]);
-    expect(words.slice(4).map((word) => word.delay)).toEqual([0, 0]);
-  });
-
-  it('卡顿后突发的大段文字也整批立即开始，不产生新的可见积压', () => {
-    const state = createWordFadeState();
-    run(root(el('p', [textNode('a b')])), state);
+    const tree1 = root(el('p', [textNode('a b')]));
+    run(tree1, state);
+    for (const word of collectWords(tree1)) schedule(state, word.key);
     const tree2 = root(el('p', [textNode('a b x y z')]));
     run(tree2, state, 5000);
-    const words = collectWords(tree2);
-    expect(words.map((w) => w.text)).toEqual(['x ', 'y ', 'z']);
-    expect(words.map((w) => w.delay)).toEqual([0, 0, 0]);
+    const newWords = collectWords(tree2);
+    expect(newWords.map((w) => w.text)).toEqual(['x ', 'y ', 'z']);
+    expect(newWords.map((word) => schedule(state, word.key))).toEqual([0, 16, 32]);
   });
 
   it('chunk 边界半个词长成整词:前缀延续复用同一 key', () => {
@@ -224,14 +240,16 @@ describe('rehypeStreamWordFade', () => {
     expect(words2[0].key).toBe(keys1[0]);
   });
 
-  it('超大 tick 也不把尾部排到未来', () => {
+  it('超大 tick 在阈值后压缩步长，并把透明等待收敛到 160ms', () => {
     const state = createWordFadeState();
     const many = Array.from({ length: 500 }, (_, i) => `w${i}`).join(' ');
     const tree = root(el('p', [textNode(many)]));
     run(tree, state);
     const delays = collectWords(tree).map((w) => w.delay);
     expect(delays).toHaveLength(500);
-    expect(new Set(delays)).toEqual(new Set([0]));
+    expect(delays.slice(0, 10)).toEqual([0, 16, 32, 48, 64, 80, 96, 100, 104, 108]);
+    expect(Math.max(...delays)).toBe(160);
+    expect(delays.at(-1)).toBe(160);
   });
 
   it('被放弃的 render candidate 不污染 committed key 状态', () => {
@@ -241,7 +259,7 @@ describe('rehypeStreamWordFade', () => {
 
     expect(committed.nextId).toBe(0);
     expect(committed.previous).toEqual([]);
-    expect(committed.startAtByKey.size).toBe(0);
+    expect(committed.timeline.startAtByKey.size).toBe(0);
 
     const mounted = createWordFadeCandidate(committed);
     const tree = root(el('p', [textNode('mounted render')]));
@@ -256,15 +274,15 @@ describe('rehypeStreamWordFade', () => {
     run(tree, candidate, 0);
     const keys = collectWords(tree).map((word) => word.key);
 
-    committed.settled.add('older-frame');
+    committed.timeline.settled.add('older-frame');
     commitWordFadeCandidate(committed, candidate);
 
     expect(committed.previous.map((segment) => segment.key)).toEqual(keys);
-    expect(committed.startAtByKey.size).toBe(2);
-    expect(committed.settled.has('older-frame')).toBe(true);
+    expect(committed.timeline.startAtByKey.size).toBe(0);
+    expect(committed.timeline.settled.has('older-frame')).toBe(true);
   });
 
-  it('截图回归:前文与后到 inline code 同时开始淡入，code 不再抢先显示', () => {
+  it('inline code 与前文进入同一条连续时间线，不会抢先显示', () => {
     const state = createWordFadeState();
     const code = el('code', [textNode('meta.Disabled')]);
     const pre = el('pre', [el('code', [textNode('const a = 1')])]);
@@ -275,7 +293,9 @@ describe('rehypeStreamWordFade', () => {
     const codeSegment = paragraph.children.at(-1) as Element;
 
     expect(segments.at(-1)?.text).toBe('meta.Disabled');
-    expect(segments.every((segment) => segment.delay === 0)).toBe(true);
+    expect(segments.map((segment) => schedule(state, segment.key))).toEqual(
+      segments.map((_, index) => (index <= 6 ? index * 16 : 96 + (index - 6) * 4)),
+    );
     expect(codeSegment.tagName).toBe('span');
     expect(codeSegment.properties?.className).toContain('stream-word');
     expect(codeSegment.children).toEqual([code]);
@@ -289,6 +309,7 @@ describe('rehypeStreamWordFade', () => {
     const tree1 = root(el('p', [textNode('same '), el('code', [textNode('same')])]));
     run(tree1, state, 0);
     const first = collectWords(tree1);
+    for (const segment of first) schedule(state, segment.key);
 
     const tree2 = root(
       el('p', [textNode('same '), el('code', [textNode('same')]), textNode(' tail')]),
@@ -299,7 +320,7 @@ describe('rehypeStreamWordFade', () => {
     expect(first[0].key).not.toBe(first[1].key);
     expect(second[0].key).toBe(first[0].key);
     expect(second[1].key).toBe(first[1].key);
-    expect(second[1].delay).toBe(-100);
+    expect(second[1].delay).toBe(-84);
   });
 
   it('表格格内文字照常分段淡入,结构(table/tr/td)不打任何动画标', () => {
@@ -352,7 +373,7 @@ describe('rehypeStreamWordFade', () => {
     expect(li2.properties?.dataWfKey).toBe(words[0].key);
     expect(String(li2.properties?.style)).toContain(`--wf-delay:${words[0].delay}ms`);
     // tick 3:第一个词 settled 后圆点不再打标(remount 无从重播)。
-    state.settled.add(words[0].key);
+    state.timeline.settled.add(words[0].key);
     const li3 = el('li', [textNode('four')]);
     run(root(el('p', [textNode('one two three')]), el('ul', [li3])), state, 0);
     expect(li3.properties?.dataStreamMarker).toBeUndefined();
@@ -375,59 +396,67 @@ describe('rehypeStreamWordFade', () => {
     expect(words.map((w) => w.text)).toEqual(['a', 'b']);
   });
 
-  it('全 settled 的文本槽位不改树(原生文本节点,零 span)—— 流式长文档性能核心', () => {
+  it('全 settled 的文本槽位保留 span 身份，只摘动画 class', () => {
     const state = createWordFadeState();
     const tree1 = root(el('p', [textNode('one two three')]), el('p', [textNode('tail')]));
     run(tree1, state);
     const words1 = collectWords(tree1);
     // 第一段全部播完落袋;第二段仍在播。
-    state.settled.add(words1[0].key);
-    state.settled.add(words1[1].key);
-    state.settled.add(words1[2].key);
+    state.timeline.settled.add(words1[0].key);
+    state.timeline.settled.add(words1[1].key);
+    state.timeline.settled.add(words1[2].key);
 
     const tree2 = root(el('p', [textNode('one two three')]), el('p', [textNode('tail more')]));
     run(tree2, state, 100);
-    // 全 settled 槽位:文本节点原样保留,不包任何 span。
+    // settled 节点仍在原位，避免后续兄弟因包装拆除而换身份。
     const p1 = tree2.children[0] as Element;
-    expect(p1.children).toEqual([textNode('one two three')]);
+    expect(p1.children).toHaveLength(3);
+    expect(
+      p1.children.map((child) =>
+        child.type === 'element' ? child.properties?.className : undefined,
+      ),
+    ).toEqual([undefined, undefined, undefined]);
+    expect(nodeText(p1)).toBe('one two three');
     // 在播槽位照常:tail 保住原 key(续播),more 拿新 key。
     const words2 = collectWords(tree2);
     expect(words2.map((w) => w.text)).toEqual(['tail ', 'more']);
     expect(words2[0].key).toBe(words1[3].key);
   });
 
-  it('部分 settled 的槽位把 settled 前缀还原为纯文本,仅活动尾部保留 span', () => {
+  it('部分 settled 的槽位保留全部 span，只有活动段携带动画 class', () => {
     const state = createWordFadeState();
     const tree1 = root(el('p', [textNode('one two three')]));
     run(tree1, state);
     const words1 = collectWords(tree1);
-    // 只有 0 号播完:槽位未全 settled,但 settled 前缀不再保留 span。
-    state.settled.add(words1[0].key);
+    // 只有 0 号播完。
+    state.timeline.settled.add(words1[0].key);
 
     const tree2 = root(el('p', [textNode('one two three four')]));
-    run(tree2, state, 500);
+    run(tree2, state, 100);
     const words2 = collectWords(tree2);
-    expect(words2.map((w) => w.text)).toEqual(['four']);
+    expect(words2.map((w) => w.text)).toEqual(['two ', 'three ', 'four']);
     const p = tree2.children[0] as Element;
-    expect(p.children[0]).toEqual(textNode('one two three '));
-    // 即使 remount 丢了 animationend,超过 150ms 的旧词也会按开播时刻自动落袋。
-    expect(words1.every((word) => state.settled.has(word.key))).toBe(true);
-    expect(words2[0].delay).toBe(0);
+    expect(p.children).toHaveLength(4);
+    const settledSpan = p.children[0] as Element;
+    expect(settledSpan.properties?.dataWfKey).toBe(words1[0].key);
+    expect(settledSpan.properties?.className).toBeUndefined();
   });
 
-  it('长 settled 前缀只保留一个原生文本节点', () => {
+  it('长 settled 前缀保留稳定 span，增长尾部继续取得新 key', () => {
     const state = createWordFadeState();
     const prefix = Array.from({ length: 200 }, (_, i) => `w${i}`).join(' ');
     const tree1 = root(el('p', [textNode(`${prefix} tail`)]));
     run(tree1, state);
     const words1 = collectWords(tree1);
-    for (const word of words1.slice(0, 200)) state.settled.add(word.key);
+    for (const word of words1.slice(0, 200)) state.timeline.settled.add(word.key);
 
     const tree2 = root(el('p', [textNode(`${prefix} tail next`)]));
-    run(tree2, state, 500);
+    run(tree2, state, 100);
     const p = tree2.children[0] as Element;
-    expect(p.children[0]).toEqual(textNode(`${prefix} tail `));
-    expect(collectWords(tree2).map((w) => w.text)).toEqual(['next']);
+    expect(p.children).toHaveLength(202);
+    expect((p.children[0] as Element).properties?.className).toBeUndefined();
+    expect((p.children[199] as Element).properties?.className).toBeUndefined();
+    expect(collectWords(tree2).map((w) => w.text)).toEqual(['tail ', 'next']);
   });
 });
 
@@ -440,8 +469,10 @@ describe('globals.css 的 stream-word 动画本体', () => {
   it('引用 --motion-fast token + both 填充(delay 未到时保持透明)', () => {
     const rule = /\.stream-word\s*\{[\s\S]*?\}/.exec(css)?.[0] ?? '';
     expect(rule).toContain('var(--motion-fast)');
+    expect(rule).toContain('var(--motion-ease-out)');
     expect(rule).toContain('var(--wf-delay');
     expect(rule).toContain('both');
+    expect(css).not.toContain('--motion-ease-stream-word');
   });
 
   it('关键帧只动 opacity(compositor-only,一次性非 infinite)', () => {
@@ -455,6 +486,7 @@ describe('globals.css 的 stream-word 动画本体', () => {
     const rule = /\[data-stream-marker\]::marker\s*\{[\s\S]*?\}/.exec(css)?.[0] ?? '';
     expect(rule).toContain('stream-marker-in');
     expect(rule).toContain('var(--motion-fast)');
+    expect(rule).toContain('var(--motion-ease-out)');
     expect(rule).toContain('var(--wf-delay');
     expect(rule).toContain('both');
     // ::marker 只支持 color/font 系属性,关键帧必须动 color 而不是 opacity。

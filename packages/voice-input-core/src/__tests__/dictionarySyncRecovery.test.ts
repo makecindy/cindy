@@ -16,6 +16,7 @@ import {
   addManualEntry,
   createEmptySyncState,
   createHlcClock,
+  DEFAULT_MATERIALIZE_LIMITS,
   deleteTerms,
   materializeDictionary,
   mergeSyncStates,
@@ -142,7 +143,7 @@ describe('上限裁决', () => {
     const manual = addManualEntry(state, clock, { text: '内部代号', nowMs: 2_000 });
     state = manual.state;
 
-    const materialized = materializeDictionary(state, { maxEntries: 3 });
+    const materialized = materializeDictionary(state, { ...DEFAULT_MATERIALIZE_LIMITS, maxEntries: 3 });
     const texts = materialized.entries.map((entry) => entry.text);
     expect(texts).toContain('内部代号');
     expect(texts).toHaveLength(3);

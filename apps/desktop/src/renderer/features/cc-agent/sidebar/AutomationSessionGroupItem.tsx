@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, EllipsisVertical, Play } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
@@ -34,7 +34,7 @@ import {
   useSessionsAttentionUrgencyIdSet,
 } from '../contexts/SessionAttentionUrgencyContext';
 import { useSessionAttentionKind, useSessionsAttentionKindMap } from '@/lib/sessionAttentionStore';
-import { useRemoteSessionsPhaseMap } from '@/features/device-link/remoteSessionActivityStore';
+import { useRemoteSessionActivity, useRemoteSessionsPhaseMap } from '@/features/device-link/remoteSessionActivityStore';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import {
   projectSidebarSessionActivity,
@@ -96,7 +96,7 @@ function isAutomationGroupInlineAction(target: EventTarget | null): boolean {
   );
 }
 
-export function AutomationSessionGroupItem({
+export const AutomationSessionGroupItem = memo(function AutomationSessionGroupItem({
   group,
   activeSessionId,
   runningSessionIds,
@@ -222,7 +222,9 @@ export function AutomationSessionGroupItem({
   // 也都是"一组 id"的 primitive 快照 —— 别退回整组对象 / 整张表订阅(性能不变量)。
   const latestUrgentFromSchedule = useSessionAttentionUrgency(latestSessionId ?? '');
   const latestChatKind = useSessionAttentionKind(latestSessionId ?? '');
-  const latestLiveActivity = useAgentIslandActivity(latestSessionId ?? '');
+  const latestLocalActivity = useAgentIslandActivity(latestSessionId ?? '');
+  const latestRemoteActivity = useRemoteSessionActivity(latestSessionId ?? '');
+  const latestLiveActivity = latestRemoteActivity ?? latestLocalActivity;
   const scheduleId = group.scheduleId;
   // 「已停止」= paused(用户主动暂停)+ expired(计划到期不再触发);两者对用户体验
   // 而言都是「不会再自动跑」,视觉上都在 Timer chip 上叠 Pause 徽标,并在 tooltip
@@ -250,6 +252,7 @@ export function AutomationSessionGroupItem({
   // 只是档位改由整组决定。
   const latestHasNotification = latestSessionId != null && notifications.has(latestSessionId);
   const groupActivity = projectSidebarSessionActivity({
+    interruption: latestSession,
     sessionId: latestSessionId ?? '',
     title: latestSession?.title,
     recordStatus: latestSession?.status,
@@ -835,4 +838,4 @@ export function AutomationSessionGroupItem({
       )}
     </div>
   );
-}
+});

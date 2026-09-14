@@ -16,6 +16,8 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() },
   app: { getVersion: () => '1.0.0' },
 }));
+// This suite exercises dispatch authorization, not authenticated ICE HTTP setup.
+vi.mock('../remote-desktop/iceConfig', () => ({ loadDesktopIceServers: vi.fn(async () => []) }));
 // media:fetch 拦截走 mediaFetch.fetchLocalMediaToOss;mock 掉避免拉起 OSS/cache-store 真实依赖。
 const fetchLocalMediaToOssMock = vi.hoisted(() => vi.fn());
 vi.mock('../device-link/mediaFetch', () => ({ fetchLocalMediaToOss: fetchLocalMediaToOssMock }));
@@ -30,6 +32,8 @@ import {
   markRemoteSettingPersistedInsideHandler,
   runInvoke,
   setRemoteReviewInputGuard,
+  setRemoteClaudeSubscriptionUsageReader,
+  setRemoteXaiSubscriptionUsageReader,
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
   handleControllerOffline,
@@ -178,6 +182,20 @@ describe('runInvoke 双层校验', () => {
     expect(r).toMatchObject({
       ok: false,
       error: { code: 'IPC_ERROR', message: '[SESSION_RUNNING] busy' },
+    });
+  });
+
+  it('DB worker 队列打满时远程 listing 回 BACKPRESSURE', async () => {
+    registry.register('local-db:sessions:list', () => {
+      throw new Error('db worker RPC queue overloaded: op="rawAll" inFlight=128 queued=512');
+    });
+    const r = await runInvoke('ctrl', { channel: 'local-db:sessions:list', args: [1, 'all'] });
+    expect(r).toMatchObject({
+      ok: false,
+      error: {
+        code: 'BACKPRESSURE',
+        message: expect.stringContaining('db worker RPC queue overloaded'),
+      },
     });
   });
 
@@ -1104,6 +1122,148 @@ describe('被控端控制链路生命周期', () => {
     expect(payload.ok).toBe(true);
     expect(payload.result.some((message) => message.clientId === 'anchor')).toBe(true);
     expect(dispatchTesting.remoteInvokeResultOutboxSize()).toBe(0);
+  });
+
+  it('同一控制端相同 listing 并发只执行一次并把结果复用到各 requestId', async () => {
+    remoteControlEnabled = true;
+    let resolveList: ((value: unknown[]) => void) | undefined;
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolveList = resolve;
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = {
+      channel: 'local-db:sessions:list',
+      args: [20, 'all', { includePinned: true }],
+    };
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'list-1',
+      src: 'ctrl-a',
+      payload,
+    });
+    feed({
+      v: 1,
+      kind: 'invoke',
+      id: 'list-2',
+      src: 'ctrl-a',
+      payload,
+    });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    resolveList?.([{ id: 's1' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'list-1' || call.requestId === 'list-2',
+      )).toHaveLength(2);
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        requestId: 'list-1',
+        payload: { ok: true, result: [{ id: 's1' }] },
+      }),
+      expect.objectContaining({
+        requestId: 'list-2',
+        payload: { ok: true, result: [{ id: 's1' }] },
+      }),
+    ]));
+  });
+
+  it('listing 合并 waiter 仍计入 per-controller 准入上限', async () => {
+    remoteControlEnabled = true;
+    let resolveList: ((value: unknown[]) => void) | undefined;
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolveList = resolve;
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = { channel: 'local-db:sessions:list', args: [20, 'all'] };
+    const limit = dispatchTesting.remoteInvokeInFlightPerControllerLimit;
+    for (let index = 0; index < limit + 1; index += 1) {
+      feed({
+        v: 1,
+        kind: 'invoke',
+        id: `list-admit-${index}`,
+        src: 'ctrl-a',
+        payload,
+      });
+    }
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(calls.invokeResult).toContainEqual({
+      dst: 'ctrl-a',
+      requestId: `list-admit-${limit}`,
+      payload: {
+        ok: false,
+        error: {
+          code: 'BACKPRESSURE',
+          message: 'remote invoke execution queue is full',
+        },
+      },
+    }));
+    resolveList?.([{ id: 's1' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter((call) => call.payload && (call.payload as { ok?: boolean }).ok === true))
+        .toHaveLength(limit);
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('sessions:list fresh 请求不并入已有 listing 单飞', async () => {
+    remoteControlEnabled = true;
+    let resolvers: Array<(value: unknown[]) => void> = [];
+    const handler = vi.fn(() => new Promise<unknown[]>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    registry.register('local-db:sessions:list', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = {
+      channel: 'local-db:sessions:list',
+      args: [20, 'all', { includePinned: true, fresh: true }],
+    };
+    feed({ v: 1, kind: 'invoke', id: 'fresh-1', src: 'ctrl-a', payload });
+    feed({ v: 1, kind: 'invoke', id: 'fresh-2', src: 'ctrl-a', payload });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    resolvers[0]?.([{ id: 'old' }]);
+    resolvers[1]?.([{ id: 'new' }]);
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'fresh-1' || call.requestId === 'fresh-2',
+      )).toHaveLength(2);
+    });
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: 'fresh-1', payload: { ok: true, result: [{ id: 'old' }] } }),
+      expect.objectContaining({ requestId: 'fresh-2', payload: { ok: true, result: [{ id: 'new' }] } }),
+    ]));
+  });
+
+  it('sessions:get 写后回读不并入已有查询', async () => {
+    remoteControlEnabled = true;
+    const resolvers: Array<(value: unknown) => void> = [];
+    const handler = vi.fn(() => new Promise<unknown>((resolve) => {
+      resolvers.push(resolve);
+    }));
+    registry.register('local-db:sessions:get', handler);
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    const payload = { channel: 'local-db:sessions:get', args: ['sess-1'] };
+    feed({ v: 1, kind: 'invoke', id: 'get-stale', src: 'ctrl-a', payload });
+    feed({ v: 1, kind: 'invoke', id: 'get-after-write', src: 'ctrl-a', payload });
+    await vi.waitFor(() => expect(handler).toHaveBeenCalledTimes(2));
+    resolvers[0]?.({ id: 'sess-1', model: 'old' });
+    resolvers[1]?.({ id: 'sess-1', model: 'new' });
+    await vi.waitFor(() => {
+      expect(calls.invokeResult.filter(
+        (call) => call.requestId === 'get-stale' || call.requestId === 'get-after-write',
+      )).toHaveLength(2);
+    });
+    expect(calls.invokeResult).toEqual(expect.arrayContaining([
+      expect.objectContaining({ requestId: 'get-stale', payload: { ok: true, result: { id: 'sess-1', model: 'old' } } }),
+      expect.objectContaining({ requestId: 'get-after-write', payload: { ok: true, result: { id: 'sess-1', model: 'new' } } }),
+    ]));
   });
 
   it('显式 link-close 后丢弃旧世代晚到 IPC 结果，快速重开也不串进新链路', async () => {
@@ -2586,6 +2746,43 @@ describe('远程 set-* 持久化回流', () => {
     expect(persist).toHaveBeenCalledWith('sess-1', { model: 'claude-x' });
   });
 
+  it('set-model 最终窗口待确认时不提前持久化 model/provider', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const confirmation = {
+      deferred: false,
+      superseded: false,
+      contextWindowConfirmationRequired: 272_000,
+      contextTokensForConfirmation: 244_800,
+    };
+    registry.register('maker:set-model', () => confirmation);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'small-pi-model', 'pi-provider'],
+    });
+
+    expect(r).toEqual({ ok: true, result: confirmation });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ contextTokensForConfirmation: 244_800 }],
+    [{ contextWindowConfirmationRequired: '272000' }],
+  ])('set-model 最终窗口确认字段不完整时也不得提前持久化 %#', async (confirmation) => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    registry.register('maker:set-model', () => confirmation);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'small-pi-model', 'pi-provider'],
+    });
+
+    expect(r).toEqual({ ok: true, result: confirmation });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
   it('set-model 持久化 trim 后的 providerId', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
@@ -2620,8 +2817,12 @@ describe('远程 set-* 持久化回流', () => {
   it('set-model handler 已在 session 锁内持久化时 dispatch 不重复回流', async () => {
     const persist = vi.fn();
     setRemoteSettingsPersist(persist);
-    const handlerResult = { deferred: false, superseded: false };
-    markRemoteSettingPersistedInsideHandler(handlerResult);
+    const response = { deferred: false, superseded: false };
+    markRemoteSettingPersistedInsideHandler(response);
+    const handlerResult = Object.assign(response, {
+      generation: 2,
+      effectiveProviderId: 'anthropic',
+    });
     registry.register('maker:set-model', () => handlerResult);
 
     const r = await runInvoke('ctrl-a', {
@@ -2704,5 +2905,33 @@ describe('远程 set-* 持久化回流', () => {
     registry.register('maker:set-model', () => undefined);
     const r = await runInvoke('ctrl-a', { channel: 'maker:set-model', args: ['sess-1', 'm'] });
     expect(r).toMatchObject({ ok: true });
+  });
+});
+
+
+describe('remote subscription data reads', () => {
+  it.each([
+    ['maker:usage:claude-subscription', setRemoteClaudeSubscriptionUsageReader],
+    ['maker:usage:xai-subscription', setRemoteXaiSubscriptionUsageReader],
+  ] as const)('%s uses the local reader with the selected account after authorization', async (channel, setReader) => {
+    const reader = vi.fn(async () => ({ fiveHour: { utilization: 12 } }));
+    const ipcHandler = vi.fn(() => { throw new Error('Untrusted synthetic sender'); });
+    registry.register(channel, ipcHandler);
+    setReader(reader);
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toEqual({
+      ok: true, result: { providerId: 'account-2', fiveHour: { utilization: 12 } },
+    });
+    expect(reader).toHaveBeenCalledWith('account-2');
+    expect(ipcHandler).not.toHaveBeenCalled();
+    reader.mockClear();
+    await expect(runInvoke('ctrl', { channel, args: [42] })).resolves.toMatchObject({ ok: false, error: { code: 'IPC_ERROR', message: expect.stringContaining('[INVALID_PARAMS]') } });
+    expect(reader).not.toHaveBeenCalled();
+    remoteControlEnabled = false;
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toMatchObject({ ok: false, error: { code: 'REMOTE_DISABLED' } });
+    expect(reader).not.toHaveBeenCalled();
+    remoteControlEnabled = true;
+    revokedControllers = ['ctrl'];
+    await expect(runInvoke('ctrl', { channel, args: ['account-2'] })).resolves.toMatchObject({ ok: false, error: { code: 'ACCESS_REVOKED' } });
+    expect(reader).not.toHaveBeenCalled();
   });
 });

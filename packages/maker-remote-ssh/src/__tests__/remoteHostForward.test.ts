@@ -25,6 +25,7 @@ const HOST_CONFIG: HostConfig = {
   user: 'deploy',
   authMethod: 'agent',
   source: 'manual',
+  managedByCindy: false,
 };
 
 const noopLogger = {

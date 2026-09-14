@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  getSelectedNewMakerRoute,
   getRemoteNewMakerDefaults,
   getRemoteNewMakerDefaultsByVendor,
   getThinkingEnabledFromMemory,
   getWorkerDefaultsFromNewMaker,
   setNewMakerDraftCache,
+  syncNewMakerDraftCache,
+  getNewMakerModelTuning,
   setProviderModelMemoryCache,
   type NewMakerDraftSnapshot,
 } from '../newMakerDefaultsCache.js';
@@ -155,4 +158,57 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
       providerId: 'xd',
     });
   });
+});
+
+it('does not reuse the selected default route across owners or older snapshots', () => {
+  const selectedRoute = { harness: 'codex' as const, providerId: 'openai', model: 'luna', effort: 'medium', fastMode: false };
+  const snapshot = { selectedRoute, lastByVendor: {}, effortByModel: {}, fastModeByModel: {} };
+  setNewMakerDraftCache(snapshot, 'owner-a');
+  expect(getSelectedNewMakerRoute('owner-a')).toEqual(selectedRoute);
+  expect(getSelectedNewMakerRoute('owner-b')).toBeUndefined();
+  setNewMakerDraftCache({ lastByVendor: {}, effortByModel: {}, fastModeByModel: {} }, 'owner-a');
+  expect(getSelectedNewMakerRoute('owner-a')).toBeUndefined();
+});
+
+
+describe('owner-fenced new task and Bot default mirror', () => {
+  const owner = { dataOwnerId: 'B', ownerGeneration: 3 };
+  const route = { harness: 'codex', model: 'luna', providerId: 'openai', effort: 'medium', fastMode: false } as const;
+  const payload = { ownerStamp: owner, selectedRoute: route, lastByVendor: { codex: { model: 'luna' } }, fastModeByModel: {}, effortByModel: {} };
+  it('uses one accepted snapshot for ordinary task and Bot defaults', () => {
+    expect(syncNewMakerDraftCache(payload, owner, 'B:3', false)).toBe(true);
+    expect(getSelectedNewMakerRoute('B:3')).toEqual(route);
+    expect(getRemoteNewMakerDefaults('codex').model).toBe('luna');
+  });
+  it.each([undefined, { dataOwnerId: 'A', ownerGeneration: 3 }, { dataOwnerId: 'B', ownerGeneration: 2 }])('rejects unstamped or late account snapshots: %j', (stamp) => {
+    syncNewMakerDraftCache(payload, owner, 'B:3', false);
+    expect(syncNewMakerDraftCache({ ...payload, ownerStamp: stamp, selectedRoute: { ...route, model: 'sol' } }, owner, 'B:3', false)).toBe(false);
+    expect(getSelectedNewMakerRoute('B:3')).toEqual(route);
+  });
+  it('rejects a snapshot while the account boundary is pending', () => {
+    expect(syncNewMakerDraftCache(payload, owner, 'B:3', true)).toBe(false);
+  });
+  it('clears the selected route when the current owner clears the default', () => {
+    syncNewMakerDraftCache(payload, owner, 'B:3', false);
+    syncNewMakerDraftCache({ ...payload, selectedRoute: undefined }, owner, 'B:3', false);
+    expect(getSelectedNewMakerRoute('B:3')).toBeUndefined();
+  });
+});
+
+it('reads remembered tuning only from the matching owner snapshot, with source/engine and legacy fallbacks', () => {
+  const payload = { ownerStamp: { dataOwnerId: 'A', ownerGeneration: 4 }, lastByVendor: {},
+    effortByModel: { target: 'medium', old: 'low' }, fastModeByModel: { target: true, old: true },
+    providerModelMemory: {
+      'codex:provider': { effortByModel: { target: 'low' }, fastByModel: { target: false } },
+      'codex:*': { effortByModel: { target: 'high' }, fastByModel: { target: true } },
+      'pi:provider': { effortByModel: { target: 'minimal' }, fastByModel: {} },
+    } };
+  expect(syncNewMakerDraftCache(payload, payload.ownerStamp, 'A:4', false)).toBe(true);
+  expect(getNewMakerModelTuning('A:4', 'codex', 'provider', 'target')).toEqual({ effort: 'low', fastMode: false });
+  expect(getNewMakerModelTuning('A:4', 'codex', 'other', 'target')).toEqual({ effort: 'high', fastMode: true });
+  expect(getNewMakerModelTuning('A:4', 'pi', 'provider', 'target').effort).toBe('minimal');
+  expect(getNewMakerModelTuning('A:4', 'codex', 'provider', 'old')).toEqual({ effort: 'low', fastMode: true });
+  expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
+  expect(syncNewMakerDraftCache(payload, { dataOwnerId: 'B', ownerGeneration: 4 }, 'B:4', false)).toBe(false);
+  expect(getNewMakerModelTuning('B:4', 'codex', 'provider', 'target')).toEqual({});
 });

@@ -20,7 +20,6 @@ import type { Schedule, SchedulerRuntimeSnapshot } from '@cindy/maker-scheduler'
 
 import { TaskListCell } from './TaskListCell';
 import { TaskListFilterPopover, type StatusFilter } from './TaskListFilterPopover';
-import type { ScheduleCostSummary } from '../hooks/useScheduleCostSummaries';
 
 const COLLAPSE_KEY = 'xdt:scheduler.collapsedProjects';
 const OTHER_GROUP_KEY = 'other';
@@ -30,8 +29,6 @@ interface Props {
   schedules: Schedule[];
   selectedId: string | null;
   unreadRunCounts: ReadonlyMap<string, number>;
-  costSummaries: ReadonlyMap<string, ScheduleCostSummary>;
-  costSummariesLoaded: boolean;
   onSelect: (s: Schedule) => void;
   /** 当前 status 筛选值；默认 'active'。 */
   statusFilter: StatusFilter;
@@ -69,8 +66,6 @@ export function TaskListPane({
   schedules,
   selectedId,
   unreadRunCounts,
-  costSummaries,
-  costSummariesLoaded,
   onSelect,
   statusFilter,
   onStatusFilterChange,
@@ -236,21 +231,6 @@ export function TaskListPane({
                         schedule={s}
                         selected={s.id === selectedId}
                         unreadCount={unreadRunCounts.get(s.id) ?? 0}
-                        totalMoney={
-                          costSummariesLoaded
-                            ? costSummaries.get(s.id)?.totalMoney
-                            : undefined
-                        }
-                        totalEstimatedValueMoney={
-                          costSummariesLoaded
-                            ? costSummaries.get(s.id)?.totalEstimatedValueMoney
-                            : undefined
-                        }
-                        hasUnavailableCost={
-                          costSummariesLoaded
-                            ? costSummaries.get(s.id)?.hasUnavailableCost
-                            : undefined
-                        }
                         onSelect={onSelect}
                         onTogglePause={onTogglePause}
                         onDelete={s.source === 'project' ? undefined : onDelete}

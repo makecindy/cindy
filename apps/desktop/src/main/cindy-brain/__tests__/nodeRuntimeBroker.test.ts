@@ -10,16 +10,22 @@ import type { InstalledGhost } from '../../../shared/ghost';
 import {
   createUtilityNodeWorkerProcess,
   GhostNodeRuntimeBroker,
+  type NodeWorkerStartupObservation,
+  type NodeWorkerStartupState,
   type NodeWorkerProcess,
 } from '../nodeRuntimeBroker';
+
+const TEST_APP_RUN_ID = 'a'.repeat(16);
+const TEST_ATTEMPT_ID = 'b'.repeat(16);
 
 class FakeNodeProcess extends EventEmitter {
   stdin = new PassThrough();
   stdout = new PassThrough();
   stderr = new PassThrough();
-  pid = 1234;
+  pid: number | undefined = 1234;
   killed = false;
   received: Array<Record<string, unknown>> = [];
+  startupObservationListeners = new Set<(observation: NodeWorkerStartupObservation) => void>();
   private inputBuffer = '';
 
   constructor(
@@ -47,10 +53,76 @@ class FakeNodeProcess extends EventEmitter {
     this.stdout.write(`${JSON.stringify(message)}\n`);
   }
 
+  onStartupObservation(listener: (observation: NodeWorkerStartupObservation) => void): void {
+    this.startupObservationListeners.add(listener);
+  }
+
+  emitStartupObservation(observation: NodeWorkerStartupObservation): void {
+    this.startupObservationListeners.forEach((listener) => listener(observation));
+  }
+
   kill(signal?: NodeJS.Signals): boolean {
     this.killed = true;
     queueMicrotask(() => this.emit('exit', null, signal ?? 'SIGTERM'));
     return true;
+  }
+}
+
+class DiagnosticFakeNodeProcess extends FakeNodeProcess {
+  startupState: {
+    messageCount: number;
+    readySeen: boolean;
+    adapterReady: boolean;
+  } = { messageCount: 0, readySeen: false, adapterReady: false };
+
+  readStartupState() {
+    return this.startupState;
+  }
+}
+
+class ThrowingDiagnosticKilledProcess extends DiagnosticFakeNodeProcess {
+  constructor(
+    onMessage?: (message: Record<string, unknown>) => void,
+    emitSpawn = true,
+  ) {
+    super(onMessage, emitSpawn);
+    Object.defineProperty(this, 'killed', {
+      configurable: true,
+      get: () => {
+        throw new Error('adapter killed state unavailable');
+      },
+      set: () => undefined,
+    });
+  }
+}
+
+class ThrowingDiagnosticStateProcess extends FakeNodeProcess {
+  readStartupState(): never {
+    throw new Error('diagnostic state unavailable');
+  }
+}
+
+class ThrowingDiagnosticPropertyProcess extends FakeNodeProcess {
+  readStartupState(): NodeWorkerStartupState {
+    return {
+      get messageCount() {
+        throw new Error('message count unavailable');
+      },
+      readySeen: true,
+      get adapterReady() {
+        throw new Error('adapter ready unavailable');
+      },
+    } as unknown as NodeWorkerStartupState;
+  }
+}
+
+class InvalidDiagnosticStateProcess extends FakeNodeProcess {
+  readStartupState(): NodeWorkerStartupState {
+    return {
+      messageCount: -1,
+      readySeen: 'yes',
+      adapterReady: 1,
+    } as unknown as NodeWorkerStartupState;
   }
 }
 
@@ -95,9 +167,14 @@ describe('nodeRuntimeBroker owner boundary races', () => {
     const ghost = fakeGhost();
     const child = new FakeNodeProcess(undefined, false);
     const spawnProcess = vi.fn(() => child as unknown as NodeWorkerProcess);
+    const debug = vi.fn();
+    const warn = vi.fn();
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       spawnProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: { debug, info: vi.fn(), warn },
       ownerScope: {
         capture: () => generation,
         isCurrent: (scope) => scope === generation,
@@ -114,6 +191,16 @@ describe('nodeRuntimeBroker owner boundary races', () => {
     await expect(pending).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(child.killed).toBe(true);
     expect(invalidated).toHaveBeenCalledWith('node-ghost');
+    expect(debug).toHaveBeenCalledWith(
+      'ghost node startup settlement',
+      expect.objectContaining({
+        appRunId: TEST_APP_RUN_ID,
+        attemptId: TEST_ATTEMPT_ID,
+        outcome: 'cancelled',
+        observedStagesAtSettle: ['parent-port-ready'],
+      }),
+    );
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it('owner boundary change before a response discards the response and stops the worker', async () => {
@@ -182,7 +269,7 @@ describe('nodeRuntimeBroker owner boundary races', () => {
   });
 });
 
-function makeAutoReplyProcess(methods?: string[]) {
+function makeAutoReplyProcess(methods?: string[], emitSpawn = true) {
   const process = new FakeNodeProcess((message) => {
     if (typeof message.method === 'string') methods?.push(message.method);
     if (message.id !== undefined && typeof message.method === 'string') {
@@ -194,7 +281,7 @@ function makeAutoReplyProcess(methods?: string[]) {
         }),
       );
     }
-  });
+  }, emitSpawn);
   return process;
 }
 
@@ -250,10 +337,24 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
     expect(forkOptions.env.GH_CONFIG_DIR).toBe('D:\\gh-config');
     expect(forkOptions.env.XDG_CONFIG_HOME).toBe('D:\\xdg-config');
 
+    expect(worker.stderr).toBe(child.stderr);
+    expect(child.stderr.listenerCount('error')).toBe(0);
+    const stages: NodeWorkerStartupObservation[] = [];
+    worker.onStartupObservation?.(() => {
+      throw new Error('diagnostic listener failed');
+    });
+    worker.onStartupObservation?.((stage) => stages.push(stage));
+
     const spawned = vi.fn();
     worker.once('spawn', spawned);
     child.emit('message', { type: 'ready' });
     expect(spawned).toHaveBeenCalledTimes(1);
+    expect(stages.map(({ stage }) => stage)).toEqual(['utility-process-spawned']);
+    expect(worker.readStartupState?.()).toEqual({
+      messageCount: 1,
+      readySeen: true,
+      adapterReady: true,
+    });
     // 2026-07-23 起普通 worker 就绪后保留一条消息听筒——它只承载引导层的
     // 子进程控制帧(childSpawn),形状由 broker 严格把关;非控制帧仍然没有
     // 任何消费面(下面的 stdin 断言即证明正式通信面仍是 stdio)。
@@ -264,9 +365,53 @@ describe('nodeRuntimeBroker · Electron utilityProcess 适配', () => {
       type: 'stdin',
       chunk: '{"jsonrpc":"2.0"}\n',
     });
+    const processError = vi.fn();
+    worker.on('error', processError);
+    child.emit('error', 'crashed', 'service');
+    expect(processError).toHaveBeenCalledOnce();
+    expect(processError.mock.calls[0][0]).toEqual(
+      new Error('Node utilityProcess crashed at service'),
+    );
     expect(worker.kill('SIGTERM')).toBe(true);
     expect(child.kill).toHaveBeenCalledTimes(1);
   });
+
+  it('native observation 只在正整数 PID 回放或真实 spawn 时发布一次', () => {
+    const child = new FakeUtilityProcess();
+    child.pid = undefined;
+    const worker = createUtilityNodeWorkerProcess(
+      '/plugins/demo/node/worker.cjs',
+      '/plugins/demo',
+      'demo',
+      vi.fn(() => child) as never,
+    );
+    const stages: NodeWorkerStartupObservation[] = [];
+    worker.onStartupObservation?.((stage) => stages.push(stage));
+
+    expect(stages).toEqual([]);
+    child.emit('spawn');
+    child.pid = 4321;
+    child.emit('spawn');
+    child.emit('message', { type: 'ready' });
+    expect(stages).toEqual([{ stage: 'utility-process-spawned' }]);
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    '非法初始 PID %s 不会伪造 native spawn observation',
+    (pid) => {
+      const child = new FakeUtilityProcess();
+      child.pid = pid;
+      const worker = createUtilityNodeWorkerProcess(
+        '/plugins/demo/node/worker.cjs',
+        '/plugins/demo',
+        'demo',
+        vi.fn(() => child) as never,
+      );
+      const stages: NodeWorkerStartupObservation[] = [];
+      worker.onStartupObservation?.((stage) => stages.push(stage));
+      expect(stages).toEqual([]);
+    },
+  );
 });
 
 describe('nodeRuntimeBroker · 进程生命周期', () => {
@@ -446,24 +591,708 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     broker.destroyAll();
   });
 
-  it('工作进程一直不就绪时 10 秒后失败并强制关闭', async () => {
+  it('两级启动观测按 main 接收顺序记录，elapsedMs 是 main observation latency', async () => {
+    const ghost = fakeGhost();
+    const child = makeAutoReplyProcess(undefined, false);
+    let readyTimerCleared = false;
+    const debug = vi.fn((message: string, meta?: Record<string, unknown>) => {
+      if (message === 'ghost node startup stage' && meta?.stage === 'parent-port-ready') {
+        // 同步慢 logger 开始前，settle(resolve) 已经清掉 10s timer。
+        expect(readyTimerCleared).toBe(true);
+        for (let index = 0; index < 10_000; index += 1) Math.sqrt(index);
+      }
+    });
+    const info = vi.fn();
+    let observedAt = 1_000;
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      getStartAttemptContext: () => ({
+        observedMainWindowState: 'focused',
+        observedScreenState: 'active',
+      }),
+      log: { debug, info, warn: vi.fn() },
+      diagnosticNow: () => observedAt,
+      clearTimer: (timer) => {
+        readyTimerCleared = true;
+        clearTimeout(timer);
+      },
+    });
+
+    const pending = broker.handleRequest(
+      'node-ghost',
+      rpcRequest('stage-order', { forbiddenUserContent: 'sentinel-request-params' }),
+    );
+    await Promise.resolve();
+    observedAt = 1_007;
+    child.emitStartupObservation({
+      stage: 'utility-process-spawned',
+      pid: 1234,
+    });
+    observedAt = 1_013;
+    child.emit('spawn');
+    await expect(pending).resolves.toMatchObject({
+      ok: true,
+      result: { method: 'stage-order' },
+    });
+
+    const stages = debug.mock.calls
+      .filter(([message]) => message === 'ghost node startup stage')
+      .map(([, meta]) => meta as Record<string, unknown>);
+    expect(stages.map(({ stage }) => stage)).toEqual([
+      'utility-process-spawned',
+      'parent-port-ready',
+    ]);
+    expect(stages.map(({ elapsedMs }) => elapsedMs)).toEqual([7, 13]);
+    for (const meta of stages) {
+      expect(Object.keys(meta).sort()).toEqual(
+        ['appRunId', 'attemptId', 'elapsedMs', 'entry', 'ghostId', 'pid', 'stage'].sort(),
+      );
+      expect(meta).toMatchObject({
+        ghostId: 'node-ghost',
+        entry: 'node/worker.cjs',
+        appRunId: TEST_APP_RUN_ID,
+        attemptId: TEST_ATTEMPT_ID,
+        pid: 1234,
+      });
+    }
+    expect(JSON.stringify(stages)).not.toContain('/fake/node-ghost');
+    expect(JSON.stringify(stages)).not.toContain('stage-order');
+    expect(JSON.stringify(debug.mock.calls)).not.toContain('sentinel-request-params');
+    expect(debug).toHaveBeenCalledWith('ghost node startup settlement', {
+      ghostId: 'node-ghost',
+      entry: 'node/worker.cjs',
+      attempt: 1,
+      appRunId: TEST_APP_RUN_ID,
+      attemptId: TEST_ATTEMPT_ID,
+      outcome: 'ready',
+      observedStagesAtSettle: ['utility-process-spawned', 'parent-port-ready'],
+      pid: 1234,
+    });
+    expect(info).not.toHaveBeenCalled();
+    broker.destroyAll();
+  });
+
+  it('乱序或迟到的纯观测不会改写既有 ready settlement', async () => {
+    const ghost = fakeGhost();
+    const child = makeAutoReplyProcess(undefined, false);
+    const debug = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: { debug, info: vi.fn(), warn: vi.fn() },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest('out-of-order'));
+    await Promise.resolve();
+    child.emitStartupObservation({ stage: 'parent-port-ready', pid: 1234 });
+    child.emit('spawn');
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    child.emitStartupObservation({ stage: 'utility-process-spawned', pid: 1234 });
+
+    const settlements = debug.mock.calls.filter(
+      ([message]) => message === 'ghost node startup settlement',
+    );
+    expect(settlements).toHaveLength(1);
+    expect(settlements[0][1]).toMatchObject({
+      outcome: 'ready',
+      observedStagesAtSettle: ['parent-port-ready'],
+    });
+    broker.destroyAll();
+  });
+
+  it('native spawn 已观测但 ready 未观测时只记录两级 observed metadata', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new DiagnosticFakeNodeProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await Promise.resolve();
+    child.emitStartupObservation({
+      stage: 'utility-process-spawned',
+      pid: 1234,
+    });
+    child.startupState = { messageCount: 2, readySeen: false, adapterReady: false };
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    child.startupState = { messageCount: 99, readySeen: true, adapterReady: true };
+    child.emit('message', { type: 'ready' });
+    expect(warn).toHaveBeenCalledWith('ghost node start attempt failed', {
+      ghostId: 'node-ghost',
+      entry: 'node/worker.cjs',
+      attempt: 1,
+      appRunId: TEST_APP_RUN_ID,
+      attemptId: TEST_ATTEMPT_ID,
+      outcome: 'failed',
+      observedStagesAtDeadline: ['utility-process-spawned'],
+      pid: 1234,
+      error: 'startup-timeout',
+      observedTimeoutClass: 'native-observed-ready-not-observed',
+      messageCount: 2,
+      readySeen: false,
+      adapterReady: false,
+      adapterKilledAtDeadline: false,
+    });
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('/fake/node-ghost');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('echo');
+    expect(child.killed).toBe(true);
+    expect(broker.stateOf('node-ghost')).toBe('off');
+  });
+
+  it('空闲回收只在 debug 记录既有 signal/exit 顺序和固定字段', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = makeAutoReplyProcess();
+    const originalKill = child.kill.bind(child);
+    vi.spyOn(child, 'kill').mockImplementation((signal) => {
+      child.pid = undefined;
+      return originalKill(signal);
+    });
+    const setTimeoutSpy = vi.spyOn(globalThis, 'setTimeout');
+    const statuses: Array<Record<string, unknown>> = [];
+    const debug = vi.fn((message: string, meta?: Record<string, unknown>) => {
+      if (message !== 'ghost node process lifecycle') return;
+      if (meta?.stage === 'sigterm-requested') {
+        expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+        expect(setTimeoutSpy.mock.calls.some(([, delay]) => delay === 2_000)).toBe(true);
+        expect(statuses.some(({ state }) => state === 'stopped')).toBe(true);
+        for (let index = 0; index < 10_000; index += 1) Math.sqrt(index);
+      }
+      if (meta?.stage === 'idle-stop') {
+        expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+      }
+    });
+    const info = vi.fn();
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      sendToGhost: (_ghostId, payload) => statuses.push(payload as Record<string, unknown>),
+      log: { debug, info, warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.runAllTicks();
+    await expect(pending).resolves.toMatchObject({ ok: true });
+    await vi.advanceTimersByTimeAsync(120_000);
+    await vi.runAllTicks();
+
+    const lifecycle = debug.mock.calls
+      .filter(([message]) => message === 'ghost node process lifecycle')
+      .map(([, meta]) => meta as Record<string, unknown>);
+    expect(lifecycle.map(({ stage }) => stage)).toEqual(['sigterm-requested', 'idle-stop', 'exit']);
+    expect(lifecycle[0]).toEqual({
+      ghostId: 'node-ghost',
+      entry: 'node/worker.cjs',
+      appRunId: TEST_APP_RUN_ID,
+      attemptId: TEST_ATTEMPT_ID,
+      pid: 1234,
+      stage: 'sigterm-requested',
+      killReturned: true,
+    });
+    expect(lifecycle[1]).toEqual({
+      ghostId: 'node-ghost',
+      entry: 'node/worker.cjs',
+      appRunId: TEST_APP_RUN_ID,
+      attemptId: TEST_ATTEMPT_ID,
+      pid: 1234,
+      stage: 'idle-stop',
+    });
+    expect(lifecycle[2]).toEqual({
+      ghostId: 'node-ghost',
+      entry: 'node/worker.cjs',
+      appRunId: TEST_APP_RUN_ID,
+      attemptId: TEST_ATTEMPT_ID,
+      pid: 1234,
+      stage: 'exit',
+      code: null,
+      signal: 'SIGTERM',
+      stoppingElapsedMs: 0,
+    });
+    expect(info).not.toHaveBeenCalled();
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('既有强杀定时器触发时只追加 SIGKILL 返回值诊断', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = makeAutoReplyProcess();
+    const kill = vi.spyOn(child, 'kill').mockReturnValue(true);
+    const debug = vi.fn((message: string, meta?: Record<string, unknown>) => {
+      if (message === 'ghost node process lifecycle' && meta?.stage === 'sigkill-requested') {
+        expect(kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+      }
+    });
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: { debug, info: vi.fn(), warn: vi.fn() },
+    });
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.runAllTicks();
+    await expect(pending).resolves.toMatchObject({ ok: true });
+
+    broker.stop('node-ghost');
+    await vi.advanceTimersByTimeAsync(2_500);
+
+    expect(kill).toHaveBeenNthCalledWith(1, 'SIGTERM');
+    expect(kill).toHaveBeenNthCalledWith(2, 'SIGKILL');
+    expect(debug).toHaveBeenCalledWith('ghost node process lifecycle', {
+      ghostId: 'node-ghost',
+      entry: 'node/worker.cjs',
+      appRunId: TEST_APP_RUN_ID,
+      attemptId: TEST_ATTEMPT_ID,
+      pid: 1234,
+      stage: 'sigkill-requested',
+      killReturned: true,
+    });
+  });
+
+  it('真实 exit debug 只在 worker 状态与 pending 退出收口之后运行', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new FakeNodeProcess();
+    const statuses: Array<Record<string, unknown>> = [];
+    let broker!: GhostNodeRuntimeBroker;
+    const debug = vi.fn((message: string, meta?: Record<string, unknown>) => {
+      if (message === 'ghost node process lifecycle' && meta?.stage === 'exit') {
+        expect(broker.stateOf('node-ghost')).toBe('off');
+        expect(statuses.some(({ state }) => state === 'crashed')).toBe(true);
+      }
+    });
+    broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      sendToGhost: (_ghostId, payload) => statuses.push(payload as Record<string, unknown>),
+      log: { debug, info: vi.fn(), warn: vi.fn() },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest('will-exit'));
+    await vi.waitFor(() => expect(child.received).toHaveLength(1));
+    child.emit('exit', 1, null);
+    child.stderr.end();
+    await vi.runAllTicks();
+
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROCESS_EXITED',
+    });
+    expect(debug).toHaveBeenCalledWith(
+      'ghost node process lifecycle',
+      expect.objectContaining({ stage: 'exit', code: 1, signal: null }),
+    );
+  });
+
+  it('进程 error 后只在真实 exit 到达并完成既有清理后记录 exit', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost({ lifecycle: 'resident' });
+    const child = new FakeNodeProcess();
+    const kill = vi.spyOn(child, 'kill').mockImplementation(() => {
+      child.killed = true;
+      return true;
+    });
+    const statuses: Array<Record<string, unknown>> = [];
+    let requestSettled = false;
+    let broker!: GhostNodeRuntimeBroker;
+    const debug = vi.fn((message: string, meta?: Record<string, unknown>) => {
+      if (message === 'ghost node process lifecycle' && meta?.stage === 'exit') {
+        expect(requestSettled).toBe(true);
+        expect(broker.stateOf('node-ghost')).toBe('off');
+        expect(statuses.some(({ state }) => state === 'crashed')).toBe(true);
+        expect(vi.getTimerCount()).toBe(0);
+      }
+    });
+    broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      sendToGhost: (_ghostId, payload) => statuses.push(payload as Record<string, unknown>),
+      log: { debug, info: vi.fn(), warn: vi.fn() },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest('error-then-exit'));
+    await vi.waitFor(() => expect(child.received).toHaveLength(1));
+
+    child.emit('error', new Error('utility process channel broke'));
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(
+      debug.mock.calls.filter(
+        ([message, meta]) => message === 'ghost node process lifecycle' && meta?.stage === 'exit',
+      ),
+    ).toHaveLength(0);
+
+    child.stderr.end();
+    await expect(pending).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'PROCESS_EXITED',
+    });
+    requestSettled = true;
+    expect(broker.stateOf('node-ghost')).toBe('off');
+    expect(statuses.some(({ state }) => state === 'crashed')).toBe(true);
+    expect(vi.getTimerCount()).toBe(1);
+
+    child.emit('exit', 7, 'SIGTERM');
+
+    const exitLogs = debug.mock.calls.filter(
+      ([message, meta]) => message === 'ghost node process lifecycle' && meta?.stage === 'exit',
+    );
+    expect(exitLogs).toEqual([
+      [
+        'ghost node process lifecycle',
+        {
+          ghostId: 'node-ghost',
+          entry: 'node/worker.cjs',
+          appRunId: TEST_APP_RUN_ID,
+          attemptId: TEST_ATTEMPT_ID,
+          pid: 1234,
+          stage: 'exit',
+          code: 7,
+          signal: 'SIGTERM',
+        },
+      ],
+    ]);
+    expect(exitLogs[0]?.[1]).not.toHaveProperty('stoppingElapsedMs');
+  });
+
+  it('native spawn 未观测时不给出 UtilityProcess 未创建的因果结论', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new DiagnosticFakeNodeProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest(
+      'node-ghost',
+      rpcRequest('timeout', { forbiddenUserContent: 'timeout-request-sentinel' }),
+    );
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        error: 'startup-timeout',
+        observedTimeoutClass: 'native-not-observed',
+        observedStagesAtDeadline: [],
+        messageCount: 0,
+        readySeen: false,
+        adapterReady: false,
+        adapterKilledAtDeadline: false,
+      }),
+    );
+    const warningMeta = warn.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(Object.keys(warningMeta).sort()).toEqual(
+      [
+        'adapterReady',
+        'appRunId',
+        'attempt',
+        'attemptId',
+        'entry',
+        'error',
+        'ghostId',
+        'messageCount',
+        'observedStagesAtDeadline',
+        'observedTimeoutClass',
+        'outcome',
+        'pid',
+        'adapterKilledAtDeadline',
+        'readySeen',
+      ].sort(),
+    );
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('timeout-request-sentinel');
+    const attemptWarnings = warn.mock.calls.filter(
+      ([message]) => message === 'ghost node start attempt failed',
+    );
+    expect(JSON.stringify(attemptWarnings)).not.toMatch(/EPERM|nodeRuntimeWorkerProcess|C:\\app/);
+    expect(child.killed).toBe(true);
+  });
+
+  it('启动失败 settlement warn 抛错仍返回 HEAD 固定错误并走原 kill 路径', async () => {
     vi.useFakeTimers();
     const ghost = fakeGhost();
     const child = new FakeNodeProcess(undefined, false);
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       spawnProcess: () => child as unknown as NodeWorkerProcess,
+      log: {
+        info: vi.fn(),
+        warn: () => {
+          throw new Error('diagnostic warn failed');
+        },
+      },
     });
 
     const pending = broker.handleRequest('node-ghost', rpcRequest());
     await vi.advanceTimersByTimeAsync(10_000);
-    await expect(pending).resolves.toMatchObject({
+    await expect(pending).resolves.toEqual({
       ok: false,
       errorCode: 'PROCESS_START_FAILED',
-      message: expect.stringContaining('启动超时'),
+      message: 'Node 工作进程启动超时',
     });
     expect(child.killed).toBe(true);
-    expect(broker.stateOf('node-ghost')).toBe('off');
+  });
+
+  it('启动事实 getter 抛错时只降级未知，不影响超时收口', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new ThrowingDiagnosticStateProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        messageCount: 'unknown',
+        readySeen: 'unknown',
+        adapterReady: 'unknown',
+        adapterKilledAtDeadline: false,
+      }),
+    );
+    expect(child.killed).toBe(true);
+  });
+
+  it('启动事实属性 getter 抛错时各字段独立降级 unknown，仍精确超时收口', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new ThrowingDiagnosticPropertyProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        messageCount: 'unknown',
+        readySeen: true,
+        adapterReady: 'unknown',
+      }),
+    );
+  });
+
+  it('非法启动事实字段只记录 unknown，不影响原有超时收口', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new InvalidDiagnosticStateProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        messageCount: 'unknown',
+        readySeen: 'unknown',
+        adapterReady: 'unknown',
+      }),
+    );
+  });
+
+  it('adapter killed getter 抛错时只记录 unknown，不影响超时收口', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const child = new ThrowingDiagnosticKilledProcess(undefined, false);
+    const warn = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: { info: vi.fn(), warn },
+    });
+
+    const pending = broker.handleRequest('node-ghost', rpcRequest());
+    await vi.advanceTimersByTimeAsync(10_000);
+    await expect(pending).resolves.toEqual({
+      ok: false,
+      errorCode: 'PROCESS_START_FAILED',
+      message: 'Node 工作进程启动超时',
+    });
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        messageCount: 0,
+        readySeen: false,
+        adapterReady: false,
+        adapterKilledAtDeadline: 'unknown',
+      }),
+    );
+  });
+
+  it('每次 attempt 只读一次粗粒度上下文，getter 异常安全降级', async () => {
+    const ghost = fakeGhost();
+    const child = makeAutoReplyProcess();
+    const debug = vi.fn();
+    const getStartAttemptContext = vi.fn(() => ({
+      observedMainWindowState: 'focused' as const,
+      observedScreenState: 'locked' as const,
+    }));
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      getStartAttemptContext,
+      log: { debug, info: vi.fn(), warn: vi.fn() },
+    });
+
+    await expect(broker.handleRequest('node-ghost', rpcRequest())).resolves.toMatchObject({
+      ok: true,
+    });
+    const attemptContext = debug.mock.calls.find(
+      ([message]) => message === 'ghost node startup attempt',
+    )?.[1] as Record<string, unknown>;
+    expect(getStartAttemptContext).toHaveBeenCalledOnce();
+    expect(attemptContext).toEqual({
+      ghostId: 'node-ghost',
+      entry: 'node/worker.cjs',
+      attempt: 1,
+      appRunId: TEST_APP_RUN_ID,
+      attemptId: TEST_ATTEMPT_ID,
+      stage: 'begin',
+      observedMainWindowState: 'focused',
+      observedScreenState: 'locked',
+    });
+    broker.destroyAll();
+
+    const fallbackChild = makeAutoReplyProcess();
+    const fallbackDebug = vi.fn();
+    const fallbackBroker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => fallbackChild as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      getStartAttemptContext: () => {
+        throw new Error('diagnostic getter failed');
+      },
+      log: { debug: fallbackDebug, info: vi.fn(), warn: vi.fn() },
+    });
+    await expect(fallbackBroker.handleRequest('node-ghost', rpcRequest())).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(fallbackDebug).toHaveBeenCalledWith(
+      'ghost node startup attempt',
+      expect.objectContaining({
+        observedMainWindowState: 'unknown',
+        observedScreenState: 'unknown',
+      }),
+    );
+    fallbackBroker.destroyAll();
+  });
+
+  it('新增 diagnostic logger 抛错时不影响 ready 与请求成功', async () => {
+    const ghost = fakeGhost();
+    const child = makeAutoReplyProcess();
+    child.onStartupObservation = () => {
+      throw new Error('diagnostic subscription failed');
+    };
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => child as unknown as NodeWorkerProcess,
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => TEST_ATTEMPT_ID,
+      log: {
+        debug: () => {
+          throw new Error('diagnostic logger failed');
+        },
+        info: vi.fn(),
+        warn: vi.fn(),
+      },
+    });
+
+    await expect(
+      broker.handleRequest('node-ghost', rpcRequest('logger-fail-open')),
+    ).resolves.toMatchObject({ ok: true });
+    broker.destroyAll();
+  });
+
+  it('main 注入的 appRunId 跨 broker 稳定且 attemptId 每次唯一', async () => {
+    const ghost = fakeGhost();
+    const starts: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < 2; index += 1) {
+      const debug = vi.fn((message: string, meta?: Record<string, unknown>) => {
+        if (message === 'ghost node startup attempt' && meta) starts.push(meta);
+      });
+      const broker = new GhostNodeRuntimeBroker({
+        getGhost: () => ghost,
+        spawnProcess: () => makeAutoReplyProcess() as unknown as NodeWorkerProcess,
+        appRunId: TEST_APP_RUN_ID,
+        log: { debug, info: vi.fn(), warn: vi.fn() },
+      });
+      await expect(broker.handleRequest('node-ghost', rpcRequest())).resolves.toMatchObject({
+        ok: true,
+      });
+      broker.destroyAll();
+    }
+
+    expect(starts).toHaveLength(2);
+    expect(starts[0].appRunId).toBe(starts[1].appRunId);
+    expect(starts[0].appRunId).toBe(TEST_APP_RUN_ID);
+    expect(starts[0].attemptId).toMatch(/^[0-9a-f]{16,64}$/);
+    expect(starts[1].attemptId).toMatch(/^[0-9a-f]{16,64}$/);
+    expect(starts[0].attemptId).not.toBe(starts[1].attemptId);
   });
 });
 
@@ -485,9 +1314,20 @@ describe('nodeRuntimeBroker · 启动瞬时失败重试(2026-07-24)', () => {
     const ghost = fakeGhost();
     const pushes: Array<Record<string, unknown>> = [];
     let spawnCount = 0;
+    const attemptIds = ['1'.repeat(16), '2'.repeat(16)];
+    const getStartAttemptContext = vi.fn(() => ({
+      observedMainWindowState: 'hidden' as const,
+      observedScreenState: 'idle' as const,
+    }));
+    const debug = vi.fn();
+    const warn = vi.fn();
     const broker = new GhostNodeRuntimeBroker({
       getGhost: () => ghost,
       sendToGhost: (_id, payload) => pushes.push(payload as unknown as Record<string, unknown>),
+      appRunId: TEST_APP_RUN_ID,
+      createAttemptId: () => attemptIds.shift()!,
+      getStartAttemptContext,
+      log: { debug, info: vi.fn(), warn },
       spawnProcess: () => {
         spawnCount += 1;
         const child = spawnCount === 1 ? epermFailingProcess() : makeAutoReplyProcess();
@@ -501,8 +1341,43 @@ describe('nodeRuntimeBroker · 启动瞬时失败重试(2026-07-24)', () => {
     await expect(first).resolves.toMatchObject({ ok: true, result: { method: 'first' } });
     await expect(second).resolves.toMatchObject({ ok: true, result: { method: 'second' } });
     expect(spawnCount).toBe(2);
+    expect(getStartAttemptContext).toHaveBeenCalledTimes(2);
     const states = pushes.filter((p) => p.name === 'node-status').map((p) => p.state);
     expect(states).toEqual(['starting', 'running']);
+    expect(
+      debug.mock.calls
+        .filter(([message]) => message === 'ghost node startup attempt')
+        .map(([, meta]) => (meta as { attemptId: string }).attemptId),
+    ).toEqual(['1'.repeat(16), '2'.repeat(16)]);
+    expect(warn).toHaveBeenCalledWith(
+      'ghost node start attempt failed',
+      expect.objectContaining({
+        appRunId: TEST_APP_RUN_ID,
+        attemptId: '1'.repeat(16),
+        outcome: 'failed',
+      }),
+    );
+    const failedMeta = warn.mock.calls.find(
+      ([message]) => message === 'ghost node start attempt failed',
+    )?.[1] as Record<string, unknown> | undefined;
+    expect(failedMeta).not.toHaveProperty('messageCount');
+    expect(failedMeta).not.toHaveProperty('readySeen');
+    expect(failedMeta).not.toHaveProperty('adapterReady');
+    expect(failedMeta).not.toHaveProperty('adapterKilledAtDeadline');
+    const failedAttemptWarnings = warn.mock.calls.filter(
+      ([message]) => message === 'ghost node start attempt failed',
+    );
+    expect(JSON.stringify(failedAttemptWarnings)).not.toMatch(
+      /EPERM|nodeRuntimeWorkerProcess|C:\\app/,
+    );
+    expect(debug).toHaveBeenCalledWith(
+      'ghost node startup settlement',
+      expect.objectContaining({
+        appRunId: TEST_APP_RUN_ID,
+        attemptId: '2'.repeat(16),
+        outcome: 'ready',
+      }),
+    );
     broker.destroyAll();
   });
 
@@ -891,7 +1766,75 @@ describe('nodeRuntimeBroker · 意外死亡诊断(2026-07-26)', () => {
     const message = (result as { message?: string }).message ?? '';
     expect(message).toContain('[REDACTED]');
     expect(message).not.toContain('sk-secret-token-12345');
+    expect(JSON.stringify(warn.mock.calls)).not.toContain('sk-secret-token-12345');
   });
+
+  it.each([
+    'whole', 'split', 'truncated-log', 'partial-at-exit', 'after-stop', 'after-drain',
+    'partial-newline', 'partial-space', 'partial-single-chunk', 'ordinary-after-injection',
+  ] as const)(
+    'OAuth stderr %s 在主日志及退出诊断中都不泄露令牌', async (scenario) => {
+      const ghost = fakeGhost();
+      ghost.manifest.network = { hosts: ['example.test'], secrets: [{
+        key: 'mail_account', label: 'Mail', source: 'oauth',
+        inject: { header: 'Authorization', format: 'Bearer {value}' },
+        oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+      }] };
+      ghost.manifest.node!.secretBindings = [{ key: 'token', label: 'Mail', methods: ['slow'], oauthSecret: 'mail_account' }];
+      const tokens = ['ya29.fake-access-token-account-A-abcdefgh', 'ya29.fake-access-token-account-B-ijklmnop'];
+      let child!: FakeNodeProcess;
+      const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+      const sendToGhost = vi.fn();
+      const broker = new GhostNodeRuntimeBroker({
+        getGhost: () => ghost, log, sendToGhost,
+        resolveOauthSecret: async (_ghost, _key, account) => ({ ok: true, accessToken: tokens[account === 'b' ? 1 : 0] }),
+        spawnProcess: () => (child = new FakeNodeProcess()),
+      });
+      try {
+        const first = broker.handleRequest('node-ghost', { ...rpcRequest('slow'), authAccount: 'a' });
+        const second = broker.handleRequest('node-ghost', { ...rpcRequest('slow'), authAccount: 'b' });
+        await vi.waitFor(() => expect(child?.received).toHaveLength(2));
+        const token = tokens[0];
+        if (scenario === 'whole' || scenario === 'truncated-log') {
+          child.stderr.write(`${scenario === 'truncated-log' ? 'x'.repeat(4050) : ''}Error: ${token} ${tokens[1]}\n`);
+        } else if (scenario === 'partial-single-chunk') {
+          child.stderr.write(`Error: ${token.slice(0, 18)}\n`);
+        } else if (scenario === 'ordinary-after-injection') {
+          child.stderr.write('ordinary diagnostic after receiving credentials\n');
+        } else if (scenario === 'after-drain') {
+          child.emit('exit', 1, null);
+          // 不发 end，让生产的有界 drain 兜底先结算、清理令牌集合。
+          await Promise.all([first, second]);
+          child.stderr.write(`Error: ${token}\n`);
+        } else {
+          child.stderr.write(`Error: ${token.slice(0, 18)}`);
+          if (scenario === 'after-stop') broker.stop('node-ghost');
+          if (scenario === 'partial-newline' || scenario === 'partial-space') {
+            child.stderr.write(scenario === 'partial-newline' ? '\n' : ' ');
+          } else if (scenario !== 'partial-at-exit') {
+            child.stderr.write(`${token.slice(18)} ${tokens[1]}\n`);
+          }
+        }
+        if (scenario !== 'after-drain') child.emit('exit', 1, null);
+        child.stderr.end();
+        const results = await Promise.all([first, second]);
+        const allOutput = JSON.stringify([log.warn.mock.calls, log.info.mock.calls, log.debug.mock.calls, sendToGhost.mock.calls, results]);
+        // 同时检查 logger 真正收到的参数，不能只 stringify mock 函数本身。
+        const stderrText = log.warn.mock.calls
+          .filter(([message]) => message === 'ghost node stderr')
+          .map(([, meta]) => meta.text).join('');
+        for (const secret of tokens) {
+          expect(allOutput).not.toContain(secret);
+          expect(stderrText).not.toContain(secret);
+        }
+        expect(allOutput).not.toContain(token.slice(0, 18));
+        expect(allOutput).not.toContain('ordinary diagnostic after receiving credentials');
+        if (scenario !== 'after-stop' && scenario !== 'after-drain') expect(allOutput).toContain('[REDACTED]');
+      } finally {
+        broker.destroyAll();
+      }
+    },
+  );
 });
 
 describe('nodeRuntimeBroker · 权限与协议', () => {
@@ -906,6 +1849,86 @@ describe('nodeRuntimeBroker · 权限与协议', () => {
       errorCode: 'PERMISSION_DENIED',
     });
     expect(spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it('OAuth 注入按插件与显式账号解析，且不读取静态 Secret', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.network = { hosts: ['example.test'], secrets: [{
+      key: 'mail_account', label: 'Mail', source: 'oauth',
+      inject: { header: 'Authorization', format: 'Bearer {value}' },
+      oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+    }] };
+    ghost.manifest.node!.secretBindings = [{
+      key: 'access_token', label: 'Mail', methods: ['mail/run'], oauthSecret: 'mail_account',
+    }];
+    let child!: ReturnType<typeof makeAutoReplyProcess>;
+    const readSecret = vi.fn();
+    const resolveOauthSecret = vi.fn(async (_id: string, _key: string, account?: string) => ({
+      ok: true as const, accessToken: `fake-token-${account ?? 'default'}`,
+    }));
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost, readSecret, resolveOauthSecret,
+      // OAuth 解析先异步完成，再创建假进程，避免 spawn 在宿主监听前发出。
+      spawnProcess: () => (child = makeAutoReplyProcess()),
+    });
+    try {
+      await broker.handleRequest('node-ghost', { ...rpcRequest('mail/run'), authAccount: 'account-a' });
+      await broker.handleRequest('node-ghost', { ...rpcRequest('mail/run'), authAccount: 'account-b' });
+      await broker.handleRequest('node-ghost', rpcRequest('mail/run'));
+      await broker.handleRequest('node-ghost', rpcRequest('mail/schema'));
+      expect(resolveOauthSecret.mock.calls).toEqual([
+        ['node-ghost', 'mail_account', 'account-a'],
+        ['node-ghost', 'mail_account', 'account-b'],
+        ['node-ghost', 'mail_account', undefined],
+      ]);
+      expect(readSecret).not.toHaveBeenCalled();
+      expect(child.received[0]).toMatchObject({ cindy: { secrets: { access_token: 'fake-token-account-a' } } });
+      expect(child.received[1]).toMatchObject({ cindy: { secrets: { access_token: 'fake-token-account-b' } } });
+      expect(child.received[3]).not.toHaveProperty('cindy');
+    } finally { broker.destroyAll(); }
+  });
+
+  it('OAuth 无可用账号时不启动 Worker、不回退到静态凭据', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.network = { hosts: ['example.test'], secrets: [{
+      key: 'mail_account', label: 'Mail', source: 'oauth',
+      inject: { header: 'Authorization', format: 'Bearer {value}' },
+      oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+    }] };
+    ghost.manifest.node!.secretBindings = [{
+      key: 'access_token', label: 'Mail', methods: ['mail/run'], oauthSecret: 'mail_account',
+    }];
+    const spawnProcess = vi.fn();
+    const readSecret = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost, readSecret, spawnProcess,
+      resolveOauthSecret: async () => ({ ok: false, error: 'NO_ACCOUNT' }),
+    });
+    const result = await broker.handleRequest('node-ghost', rpcRequest('mail/run'));
+    expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(readSecret).not.toHaveBeenCalled();
+    expect(spawnProcess).not.toHaveBeenCalled();
+    broker.destroyAll();
+  });
+
+  it('OAuth 刷新跨越停用再启用时不把旧调用交给新 Worker', async () => {
+    const ghost = fakeGhost();
+    ghost.manifest.network = { hosts: ['example.test'], secrets: [{
+      key: 'mail_account', label: 'Mail', source: 'oauth',
+      inject: { header: 'Authorization', format: 'Bearer {value}' },
+      oauth: { authorizeUrl: 'https://example.test/auth', tokenUrl: 'https://example.test/token', scopes: ['mail'] },
+    }] };
+    ghost.manifest.node!.secretBindings = [{ key: 'access_token', label: 'Mail', methods: ['run'], oauthSecret: 'mail_account' }];
+    let finish!: (value: { ok: true; accessToken: string }) => void;
+    const token = new Promise<{ ok: true; accessToken: string }>((resolve) => { finish = resolve; });
+    const spawnProcess = vi.fn();
+    const broker = new GhostNodeRuntimeBroker({ getGhost: () => ghost, spawnProcess, resolveOauthSecret: () => token });
+    const request = broker.handleRequest('node-ghost', rpcRequest('run'));
+    broker.stop('node-ghost');
+    finish({ ok: true, accessToken: 'fake-token' });
+    expect(await request).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(spawnProcess).not.toHaveBeenCalled();
+    broker.destroyAll();
   });
 
   it('只在清单绑定的方法中把 safeStorage 凭证注入 Worker 保留字段', async () => {
@@ -1267,6 +2290,46 @@ describe('nodeRuntimeBroker · 长任务续命(maxTotalMs,2026-07-23)', () => {
     const requestId = child.received.at(-1)?.id ?? child.received[0]?.id;
     child.send({ jsonrpc: '2.0', id: requestId, result: { built: true } });
     await vi.runAllTicks();
+    await expect(pending).resolves.toMatchObject({ ok: true, result: { built: true } });
+    broker.destroyAll();
+  });
+
+  it('raw stderr 的“_”在 t=800ms 同 tick 到达 broker 并保持 HEAD 续命', async () => {
+    vi.useFakeTimers();
+    const ghost = fakeGhost();
+    const utilityChild = new FakeUtilityProcess();
+    const worker = createUtilityNodeWorkerProcess(
+      '/fake/node-ghost/node/worker.cjs',
+      '/fake/node-ghost',
+      'node-ghost',
+      vi.fn(() => utilityChild) as never,
+    );
+    const broker = new GhostNodeRuntimeBroker({
+      getGhost: () => ghost,
+      spawnProcess: () => worker,
+    });
+    const pending = broker.handleRequest('node-ghost', {
+      ...rpcRequest('build/run'),
+      timeoutMs: 1_000,
+      maxTotalMs: 10_000,
+    });
+    utilityChild.emit('message', { type: 'ready' });
+    await vi.runAllTicks();
+    expect(worker.stderr).toBe(utilityChild.stderr);
+    expect(utilityChild.stderr.listenerCount('error')).toBe(0);
+
+    await vi.advanceTimersByTimeAsync(800);
+    utilityChild.stderr.write('_');
+    await vi.advanceTimersByTimeAsync(800);
+    const stdinFrame = utilityChild.postMessage.mock.calls
+      .map(([message]) => message as { type?: string; chunk?: string })
+      .find(({ type }) => type === 'stdin');
+    const request = JSON.parse(String(stdinFrame?.chunk).trim()) as { id: string };
+    utilityChild.stdout.write(
+      `${JSON.stringify({ jsonrpc: '2.0', id: request.id, result: { built: true } })}\n`,
+    );
+    await vi.runAllTicks();
+
     await expect(pending).resolves.toMatchObject({ ok: true, result: { built: true } });
     broker.destroyAll();
   });

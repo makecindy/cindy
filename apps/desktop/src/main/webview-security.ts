@@ -33,6 +33,7 @@ import {
   LOGIN_CAPTCHA_PARTITION,
 } from '../shared/webviewPartition';
 import { GHOST_PARTITION_PREFIX } from '../shared/ghost';
+import { getActiveAppSession, type AppSessionMode } from './appSessionState.js';
 import {
   matchesElectronInput,
   type AppShortcutCombo,
@@ -164,6 +165,34 @@ export function applyGhostWebviewHardening(
   webPreferences.webviewTag = false;
   webPreferences.plugins = false;
   delete webPreferences.preload;
+}
+
+type GhostWebviewAttachResolver = typeof resolveGhostWebviewAttach;
+
+/**
+ * 把 Renderer 的 ghost-only claim 换成 Main 已核准的 owner partition，并同步
+ * 应用插件 WebView 安全锁。返回 null 时调用方必须拒绝 attach。
+ */
+export function authorizeGhostWebviewAttach(
+  webPreferences: Record<string, unknown>,
+  params: Record<string, string>,
+  resolver: GhostWebviewAttachResolver = resolveGhostWebviewAttach,
+): { id: string; owner: { mode: AppSessionMode; dataOwnerId: string } } | null {
+  let resolved: ReturnType<GhostWebviewAttachResolver> = null;
+  try {
+    resolved = resolver(params.partition, params.src);
+  } catch {
+    // session/protocol 注册失败也必须 fail closed。
+  }
+  if (!resolved) return null;
+
+  // Electron 在触发 will-attach-webview 前已经把 params.partition 复制进
+  // webPreferences.partition，之后创建 guest 时读取的是后者。两边都必须由
+  // Main 的核准结果覆盖，否则只改 attribute dict 不会改变真实 session。
+  params.partition = resolved.partition;
+  webPreferences.partition = resolved.partition;
+  applyGhostWebviewHardening(webPreferences, params);
+  return { id: resolved.ghost.manifest.id, owner: resolved.owner };
 }
 
 /**
@@ -776,8 +805,19 @@ export function installBrowserGuestHandlers(
 }
 
 interface GhostGuestNavigationHandlers {
+  gesture?: typeof noteGhostUserGesture;
   preview: typeof handleGhostPreviewNavigation;
   external: typeof handleGhostExternalLinkNavigation;
+}
+
+interface GhostGuestOwnerIdentity {
+  mode: AppSessionMode;
+  dataOwnerId: string;
+}
+
+function isGhostGuestOwnerActive(owner: GhostGuestOwnerIdentity): boolean {
+  const activeOwner = getActiveAppSession();
+  return activeOwner.mode === owner.mode && activeOwner.dataOwnerId === owner.dataOwnerId;
 }
 
 /**
@@ -789,13 +829,17 @@ export function installGhostGuestNavigationHandlers(
   hostContents: WebContents,
   guestContents: WebContents,
   ghostId: string,
+  isOwnerActive: () => boolean,
   handlers: GhostGuestNavigationHandlers = {
     preview: handleGhostPreviewNavigation,
     external: handleGhostExternalLinkNavigation,
   },
 ): void {
   guestContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-  const noteGesture = () => noteGhostUserGesture(ghostId);
+  const noteGesture = () => {
+    if (!isOwnerActive()) return;
+    (handlers.gesture ?? noteGhostUserGesture)(ghostId);
+  };
   guestContents.on('before-mouse-event', (_event, mouse) => {
     if (mouse.type === 'mouseDown') noteGesture();
   });
@@ -803,13 +847,19 @@ export function installGhostGuestNavigationHandlers(
     if (input.type === 'keyDown') noteGesture();
   });
   guestContents.on('will-navigate', (event, url) => {
+    // owner commit 后、Renderer 卸载旧 guest 前仍可能收到导航事件。旧页
+    // 不能借新 owner 的同名插件声明或授权代开外链。
+    if (!isOwnerActive()) {
+      event.preventDefault();
+      return;
+    }
     const nav = classifyGhostPanelNavigation(url, ghostId);
     if (nav === 'allow') return;
     event.preventDefault();
     if (nav === 'preview') {
-      handlers.preview(ghostId, url, hostContents, guestContents);
+      handlers.preview(ghostId, url, hostContents, guestContents, isOwnerActive);
     } else if (nav === 'external') {
-      handlers.external(ghostId, url, hostContents, guestContents);
+      handlers.external(ghostId, url, hostContents, guestContents, isOwnerActive);
     }
   });
 }
@@ -819,7 +869,7 @@ export function installWebviewHardener(): void {
     // will-attach → did-attach 对同一个 guest 同步成对触发;用闭包变量把
     // will 阶段的意识/captcha 判定带给 did 阶段(这两类 guest 走独立接线,
     // 不装浏览器的 popup 路由与快捷键转发)。
-    let pendingGhostAttach: { id: string } | null = null;
+    let pendingGhostAttach: ReturnType<typeof authorizeGhostWebviewAttach> = null;
     let pendingCaptchaAttach = false;
     contents.on('will-attach-webview', (e, webPreferences, params) => {
       pendingCaptchaAttach = false;
@@ -827,14 +877,16 @@ export function installWebviewHardener(): void {
       // 分区/地址/已装清单三对齐才放行并保留专属分区;验证失败直接拒附加
       // (绝不回落到浏览器分区,那会让 cindy-ghost:// 内容跑进错误 session)。
       if (typeof params.partition === 'string' && params.partition.startsWith(GHOST_PARTITION_PREFIX)) {
-        const ghost = resolveGhostWebviewAttach(params.partition, params.src);
-        if (!ghost) {
+        const authorized = authorizeGhostWebviewAttach(
+          webPreferences as unknown as Record<string, unknown>,
+          params,
+        );
+        if (!authorized) {
           e.preventDefault();
           pendingGhostAttach = null;
           return;
         }
-        applyGhostWebviewHardening(webPreferences as unknown as Record<string, unknown>, params);
-        pendingGhostAttach = { id: ghost.manifest.id };
+        pendingGhostAttach = authorized;
         return;
       }
       pendingGhostAttach = null;
@@ -879,7 +931,8 @@ export function installWebviewHardener(): void {
         return;
       }
       if (pendingGhostAttach) {
-        const ghostId = pendingGhostAttach.id;
+        const authorized = pendingGhostAttach;
+        const ghostId = authorized.id;
         pendingGhostAttach = null;
         // 崩溃豁免登记(lifecycle 的全局 render-process-gone 守卫据此放行,
         // 面板错误接管态负责用户侧收尾)。
@@ -888,7 +941,12 @@ export function installWebviewHardener(): void {
         // 两个声明式例外(都是拦下导航、主机代办,面板侧依旧零桥):
         //   - /preview/ 预览链接 → 主窗口弹 lightbox(cindy-brain/previewGate.ts);
         //   - https 外链 → 外链闸(声明/授信直开,其余二次确认)转系统浏览器。
-        installGhostGuestNavigationHandlers(contents, guestContents, ghostId);
+        installGhostGuestNavigationHandlers(
+          contents,
+          guestContents,
+          ghostId,
+          () => isGhostGuestOwnerActive(authorized.owner),
+        );
         return;
       }
       installBrowserGuestHandlers(contents, guestContents);

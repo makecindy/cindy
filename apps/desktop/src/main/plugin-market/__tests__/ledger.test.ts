@@ -43,17 +43,69 @@ function record(
 describe('PluginMarketLedger', () => {
   it('writes provenance atomically and reads it back', () => {
     const { filePath, ledger } = harness();
-    ledger.upsertInstallation(record());
+    ledger.upsertInstallation(record({
+      manifestDigest: 'c'.repeat(64),
+      rawManifestSha256: 'd'.repeat(64),
+    }));
 
     expect(ledger.installationForGhost('cindy-test')).toMatchObject({
       pluginId: `c${'a'.repeat(24)}`,
       installed: true,
       source: 'market',
+      manifestDigest: 'c'.repeat(64),
+      rawManifestSha256: 'd'.repeat(64),
     });
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toMatchObject({
+      kind: 'found',
+      record: { ghostId: 'cindy-test', installed: true },
+    });
+    expect(ledger.lookupInstallationForOidc('missing')).toEqual({ kind: 'absent' });
     expect(fs.existsSync(filePath)).toBe(true);
     expect(
       fs.readdirSync(path.dirname(filePath)).filter((name) => name.endsWith('.tmp')),
     ).toEqual([]);
+  });
+
+  it('backfills raw manifest identity without changing legacy routing fields', () => {
+    const { ledger } = harness();
+    const legacy = record({ manifestDigest: 'c'.repeat(64) });
+    ledger.upsertInstallation(legacy);
+
+    expect(ledger.backfillRawManifestSha256(legacy, 'd'.repeat(64))).toBe(true);
+    expect(ledger.installationForGhost(legacy.ghostId)).toEqual({
+      ...legacy,
+      rawManifestSha256: 'd'.repeat(64),
+    });
+    expect(ledger.backfillRawManifestSha256(legacy, 'e'.repeat(64))).toBe(false);
+  });
+
+  it('replaces both identities after a package commit without changing route metadata', () => {
+    const { ledger } = harness();
+    const previous = record({
+      manifestDigest: 'c'.repeat(64),
+      rawManifestSha256: 'd'.repeat(64),
+    });
+    ledger.upsertInstallation(previous);
+
+    expect(
+      ledger.replaceManifestIdentityAfterPackageCommit(
+        previous,
+        'e'.repeat(64),
+        'f'.repeat(64),
+      ),
+    ).toBe(true);
+    expect(ledger.installationForGhost(previous.ghostId)).toEqual({
+      ...previous,
+      manifestDigest: 'e'.repeat(64),
+      rawManifestSha256: 'f'.repeat(64),
+    });
+    expect(
+      ledger.replaceManifestIdentityAfterPackageCommit(
+        previous,
+        'a'.repeat(64),
+        'b'.repeat(64),
+      ),
+    ).toBe(false);
   });
 
   it('records defaultInstall opt-out per authenticated user on removal', () => {
@@ -70,16 +122,36 @@ describe('PluginMarketLedger', () => {
     ).toBe(false);
   });
 
-  it('atomically reconnects an unchanged server record and clears its false opt-out', () => {
+  it('detaches a replacement source without creating or clearing explicit opt-out', () => {
     const { ledger } = harness();
     ledger.upsertInstallation(record());
+    ledger.markRemoved('cindy-test', 'user-a');
+    ledger.restoreInstallation(record());
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(true);
+
+    ledger.markRemoved('cindy-test', null);
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: false });
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(true);
+    expect(ledger.isDefaultInstallSuppressed('user-b', `c${'a'.repeat(24)}`)).toBe(false);
+
+    ledger.restoreInstallation(record());
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: true });
+    expect(ledger.isDefaultInstallSuppressed('user-a', `c${'a'.repeat(24)}`)).toBe(true);
+  });
+
+  it('atomically reconnects an unchanged server record and clears its false opt-out', () => {
+    const { ledger } = harness();
+    ledger.upsertInstallation(record({ rawManifestSha256: 'd'.repeat(64) }));
     ledger.markRemoved('cindy-test', 'user-a');
     const disconnected = ledger.installationForGhost('cindy-test');
     expect(disconnected).not.toBeNull();
     if (!disconnected) return;
 
     expect(ledger.restoreDisconnectedInstallation(disconnected, 'user-a')).toBe(true);
-    expect(ledger.installationForGhost('cindy-test')).toMatchObject({ installed: true });
+    expect(ledger.installationForGhost('cindy-test')).toMatchObject({
+      installed: true,
+      rawManifestSha256: 'd'.repeat(64),
+    });
     expect(
       ledger.isDefaultInstallSuppressed('user-a', disconnected.pluginId),
     ).toBe(false);
@@ -127,6 +199,7 @@ describe('PluginMarketLedger', () => {
       installations: {},
       defaultInstallOptOuts: {},
     });
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toEqual({ kind: 'invalid' });
   });
 
   it('filters a schema-v1 installation record with required fields missing', () => {
@@ -149,6 +222,65 @@ describe('PluginMarketLedger', () => {
     );
 
     expect(ledger.installationForGhost('cindy-test')).toBeNull();
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toEqual({ kind: 'invalid' });
+  });
+
+  it('treats malformed ledger JSON as invalid for OIDC lookup', () => {
+    const { filePath, ledger } = harness();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, '{not-json');
+
+    expect(ledger.installationForGhost('cindy-test')).toBeNull();
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toEqual({ kind: 'invalid' });
+  });
+
+  it('treats a missing or non-object installations field as invalid for OIDC lookup', () => {
+    const { filePath, ledger } = harness();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, JSON.stringify({ schemaVersion: 1, installations: null }));
+
+    expect(ledger.installationForGhost('cindy-test')).toBeNull();
+    expect(ledger.lookupInstallationForOidc('cindy-test')).toEqual({ kind: 'invalid' });
+  });
+
+  it('treats a mistyped ghostId key as invalid for OIDC lookup', () => {
+    const { filePath, ledger } = harness();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        installations: {
+          other: {
+            ...record(),
+            ghostId: 'mivo-canvas',
+          },
+        },
+        defaultInstallOptOuts: {},
+      }),
+    );
+
+    expect(ledger.installationForGhost('mivo-canvas')).toBeNull();
+    expect(ledger.lookupInstallationForOidc('mivo-canvas')).toEqual({ kind: 'invalid' });
+  });
+
+  it('rejects malformed raw manifest identities while keeping legacy records valid', () => {
+    const { filePath, ledger } = harness();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(
+      filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        installations: {
+          valid: record({ ghostId: 'valid', rawManifestSha256: undefined }),
+          invalid: record({ ghostId: 'invalid', rawManifestSha256: 'ABC' }),
+        },
+        defaultInstallOptOuts: {},
+      }),
+    );
+
+    expect(ledger.installationForGhost('valid')).not.toBeNull();
+    expect(ledger.installationForGhost('invalid')).toBeNull();
   });
 
   it('resolves the owner-scoped path for every operation', () => {

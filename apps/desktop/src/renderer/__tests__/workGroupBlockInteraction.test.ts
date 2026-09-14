@@ -15,6 +15,11 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
+import {
+  ACTIVITY_ROW_CHEVRON_SLOT_CLASS,
+  ACTIVITY_ROW_COLOR_TRANSITION_CLASS,
+} from '../components/chat/activityRowChrome';
+import { CHAT_COLOR_TRANSITION_CLASS } from '../components/chat/chatChrome';
 
 describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
   const source = readFileSync(
@@ -65,8 +70,12 @@ describe('WorkGroupBlock — 嵌套工作组接线静态扫描', () => {
     expect(chrome).toMatch(/h-\[18px\] w-\[18px\]/);
     expect(chrome).toMatch(/ACTIVITY_ROW_RADIUS_CLASS = 'rounded-\[8px\]'/);
     expect(chrome).toMatch(/rounded-\[8px\]/);
-    expect(chrome).toMatch(/duration-\[var\(--motion-fast,150ms\)\]/);
-    expect(chrome).toMatch(/ease-\[var\(--motion-ease-out\)\]/);
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toBe(CHAT_COLOR_TRANSITION_CLASS);
+    expect(ACTIVITY_ROW_CHEVRON_SLOT_CLASS).toContain(ACTIVITY_ROW_COLOR_TRANSITION_CLASS);
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toContain('transition-colors');
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toContain('duration-[var(--motion-fast)]');
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toContain('ease-[var(--motion-ease-out)]');
+    expect(ACTIVITY_ROW_COLOR_TRANSITION_CLASS).toContain('motion-reduce:transition-none');
     expect(chrome).not.toMatch(/rounded-lg/);
     expect(chrome).not.toMatch(/var\(--radius\)/);
     expect(chrome).not.toMatch(/rounded-\[4px\]/);

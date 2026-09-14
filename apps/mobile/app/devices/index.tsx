@@ -1,8 +1,12 @@
-import { useFocusEffect } from 'expo-router';
-import { Fragment, memo, useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
+import { cacheRemoteResourceHome, readRemoteResourceSnapshot } from '@/device-link/remoteResourceCache';
+import { canBrowseMobileHomeDevice } from '@/session/mobileHome';
+import { useFocusEffect, useIsFocused } from 'expo-router';
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject, type ReactNode } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
+  AppState,
   Easing,
   Modal,
   type NativeScrollEvent,
@@ -18,7 +22,7 @@ import {
   type TextStyle,
   type ViewStyle,
 } from 'react-native';
-import { Text, TextInput } from '@/components/AppText';
+import { Text } from '@/components/AppText';
 import { DeviceLinkError, type DeviceView, type PresenceSnapshot } from '@cindy/device-link';
 import {
   Archive,
@@ -30,6 +34,7 @@ import {
   FolderOpen,
   LoaderCircle,
   Menu,
+  Monitor,
   MessagesSquare,
   Lock,
   Pencil,
@@ -41,14 +46,13 @@ import {
   X,
 } from 'lucide-react-native';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
-import Reanimated, { runOnJS, useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
+import Reanimated, { runOnJS, useAnimatedReaction, useAnimatedStyle, useSharedValue, type SharedValue } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useAuth } from '@/auth/AuthContext';
 import { configureCollapseAnimation } from '@/utils/collapseAnimation';
 import { useGuardedPush } from '@/utils/useGuardedPush';
-import { DEVICE_LINK_API_BASE_URL } from '@/config/env';
 import { MobileVendorIcon } from '@/components/MobileVendorIcon';
 import {
   MainWindowActionGroup,
@@ -57,14 +61,38 @@ import {
 } from '@/components/MobilePrimitives';
 import { RemoteAccessGuide } from '@/components/RemoteAccessGuide';
 import { HomeChromeDrawer } from '@/session/HomeChromeDrawer';
+import { AccountSwitcherSheet } from '@/session/AccountSwitcherSheet';
 import { HomeChromeFrost } from '@/session/HomeChromeFrost';
 import { HomeGlassMenuPanel, HomeMenuScrim } from '@/session/HomeGlassMenuPanel';
 import { HomeHeaderGlassButton } from '@/session/HomeHeaderGlassButton';
 import { HomeSearchBar } from '@/session/HomeSearchBar';
+import { HomeProjectMachineLabel } from '@/session/HomeProjectMachineLabel';
+import { buildHomeProjectMachineIdentities, type HomeProjectMachineIdentity } from '@/session/homeProjectMachineIdentity';
+import {
+  HomeNativeStackHeader,
+  NativePullDownMenu,
+  usesNativePullDownMenu,
+  usesNativeStackHeader,
+  usesSystemActionMenu,
+} from '@/platform/chrome';
+import {
+  buildHomeDisplayPullDownActions,
+  buildHomeScopePullDownActions,
+  parseHomeScopePullDownAction,
+  homeDisplayMenuPatch,
+  type HomeDisplayMenuKey,
+} from '@/session/homeChromeMenus';
+import { useConversationSearchFilterMenu } from '@/session/useConversationSearchFilterMenu';
 import { buildMainWindowLayout } from '@/components/mainWindowLayout';
 import { useScreenEdgePadding } from '@/components/screenEdgeInsets';
 import { isAccessRevokedError } from '@/device-link/accessRevoked';
 import { useDeviceLink } from '@/device-link/DeviceLinkContext';
+import {
+  discoverRemoteHomeCollections,
+  remoteResourceDiscoveryTargets,
+  serializeRemoteResourceTargets,
+  type RemoteHomeCollection,
+} from '@/device-link/remoteResources';
 import {
   createEmptyDeviceIdentityCache,
   loadDeviceIdentityCache,
@@ -87,6 +115,11 @@ import {
   formatRemoteError,
 } from '@/device-link/remoteStatus';
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
+import { ConnectionRecoveryProgress } from '@/components/ConnectionBanner';
+import { ConnectionNoticeOverlay, useDelayedConnectionNotice } from '@/components/ConnectionNoticeOverlay';
+import { resolveConnectionBannerVisibility, resolveConnectionBannerSyncActionVisibility, resolveHomeConnectionFeedback, type HomeConnectionError, type HomeDeviceFailure } from '@/components/connectionBannerVisibility';
+import { QuietSyncIndicator } from '@/components/QuietSyncIndicator';
+import { runIndependentSnapshotReads } from '@/device-link/sessionSnapshotSingleFlight';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
 import {
@@ -117,6 +150,12 @@ import {
   type HomeStatusFilter,
 } from '@/session/homeListPriority';
 import {
+  buildHomeProjectChildOffsets,
+  resolveHomeProjectChildAnchor,
+  resolveHomeProjectChildWindow,
+  shouldWindowHomeProjectChildren,
+} from '@/session/homeProjectChildWindow';
+import {
   projectDropIndexFromY,
   reorderVisibleProjectByDropIndex,
   resolveVirtualizedDropIndex,
@@ -139,17 +178,33 @@ import {
   UNAVAILABLE_PROJECT_ORDER_SNAPSHOT,
   type SyncedProjectOrderSnapshot,
 } from '@cindy/maker-shared/project-order-sync';
-import { buildHomeSections, homeRowBefore, isFolderHomeRow, type HomeRow, type HomeSection } from '@/session/homeSections';
-import { readHomeViewPreferences, saveHomeViewPreferences } from '@/session/homeViewPreferenceStore';
+import {
+  buildHomeSections,
+  homeRowsShareRenderData,
+  homeRowBefore,
+  isFolderHomeRow,
+  type HomeRow,
+  type HomeSection,
+} from '@/session/homeSections';
+import {
+  readHomeViewPreferences,
+  saveHomeViewPreferences,
+  type HomeViewPreferences,
+} from '@/session/homeViewPreferenceStore';
 import {
   getCachedHomeListSnapshot,
   scheduleHomeListSnapshotPersist,
 } from '@/session/mobileHomeListCache';
 import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
+import {
+  diffHomeDeviceSyncScope,
+  HomeDeviceSyncLimiter,
+  resolveHomeDeviceSyncIds,
+  runHomeDeviceSyncBatch,
+} from '@/session/homeDeviceSync';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
-  buildSessionMessagePreviewIndex,
   formatRemoteSessionSidebarTime,
   getRemoteSessionPreviewCollapse,
   type RemoteAutomationSessionGroup,
@@ -159,10 +214,12 @@ import {
   type RemoteSessionStatusFilter,
 } from '@/session/sessionList';
 import {
+  RemoteSessionStoreSubscriptionGate,
   remoteSessionStore,
+  useRemoteHomeStatusVersion,
   useRemoteMessageVersion,
+  useRemoteSessionMessagePreview,
   useRemoteSessions,
-  useRemoteSessionStoreVersion,
   useSessionRunning,
 } from '@/session/remoteSessionStore';
 import { dataPropsEqual, mapContentEqual } from '@/utils/valueEquality';
@@ -174,14 +231,13 @@ import {
   invalidateRunningSessionScheduleEntries,
   invalidateScheduleIndexForDevice,
   loadDeviceSessionScheduleIndex,
-  loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
 } from '@/session/scheduleIndex';
 import { createScheduleIndexDeferRegistry } from '@/session/scheduleIndexDefer';
-import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
+import { latestMobileSessionRow, resolveMobileSessionRowStatus } from '@/session/sessionRightStatus';
 import { AutomationTimerIcon } from '@/session/AutomationTimerIcon';
 import { RenameSessionModal } from '@/session/RenameSessionModal';
-import { SessionActionSheet } from '@/session/SessionActionSheet';
+import { SessionOptionsPresenter } from '@/session/SessionOptionsExpoSheet';
 import { SwipeableSessionRow, type SessionSwipeControls } from '@/session/SwipeableSessionRow';
 import { createSwipeRowRegistry } from '@/session/swipeRowRegistry';
 import { useSessionListActions } from '@/session/useSessionListActions';
@@ -191,9 +247,22 @@ import { useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { fontWeight, iconSize, iconStroke, lineHeight, radius, spacing, typeScale } from '@/theme/tokens';
 
 const LIST_LIMIT = 200;
-const DEVICE_LIST_TIMEOUT_MS = 12_000;
+const HOME_LIST_SUBSCRIPTION_OWNER = 'device-list';
+// Keep the device-link channel responsive while All Sessions hydrates several
+// computers. This does not change the 200-row server limit; it only bounds the
+// number of device snapshots processed at once.
+const HOME_DEVICE_HYDRATE_CONCURRENCY = 2;
 // 项目组与自动化组展开后的子列表共用同一个预览限量(设备详情页也 import 复用,避免两处漂移)。
 export const PROJECT_PREVIEW_LIMIT = 5;
+const PROJECT_CHILD_WINDOW_THRESHOLD = 20;
+const PROJECT_CHILD_WINDOW_SIZE = 15;
+const PROJECT_CHILD_WINDOW_OVERSCAN = 4;
+const PROJECT_CHILD_WINDOW_SHIFT = 4;
+const HOME_LIST_INITIAL_RENDER_COUNT = 12;
+const HOME_LIST_RENDER_BATCH_SIZE = 12;
+const HOME_LIST_WINDOW_SIZE = 5;
+const HOME_PROJECT_HEADER_HEIGHT = 56;
+const HOME_AUTOMATION_VIEW_ALL_ROW_HEIGHT = 54;
 const HOME_SESSION_ROW_HEIGHT = 78;
 const HOME_SESSION_SINGLE_LINE_ROW_HEIGHT = 60;
 const CINDY_LIST_GUTTER = 20;
@@ -201,6 +270,37 @@ const CINDY_LIST_FAB_SIZE = 55;
 const CINDY_LIST_FAB_BOTTOM = 45;
 const HOME_HEADER_MIN_HEIGHT = 48;
 const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+function estimateHomeSessionRowHeight(item: RemoteSessionListItem): number {
+  const running = remoteSessionStore.isSessionRunning(item.session.id)
+    || item.scheduleInfo?.running === true
+    || item.liveActivity?.phase === 'running';
+  const hasPreview = item.automationGroup != null
+    || !!buildRemoteSessionCardPreview(item, { running })?.trim()
+    || !!item.scheduleInfo
+    || !!item.session.pinnedAt;
+  return hasPreview ? HOME_SESSION_ROW_HEIGHT : HOME_SESSION_SINGLE_LINE_ROW_HEIGHT;
+}
+
+function estimateHomeProjectChildHeight(
+  item: RemoteSessionListItem,
+  expandedAutomationGroups: ReadonlySet<string>,
+): number {
+  const rowHeight = estimateHomeSessionRowHeight(item);
+  const group = item.automationGroup;
+  if (!group || !expandedAutomationGroups.has(group.key)) return rowHeight;
+  const { visibleItems, hiddenCount } = getRemoteSessionPreviewCollapse(group.items, {
+    limit: PROJECT_PREVIEW_LIMIT,
+    isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
+  });
+  const childrenHeight = visibleItems.reduce(
+    (height, child) => height + estimateHomeSessionRowHeight(child),
+    0,
+  );
+  return rowHeight
+    + childrenHeight
+    + (hiddenCount > 0 ? HOME_AUTOMATION_VIEW_ALL_ROW_HEIGHT : 0);
+}
 
 type RemoteListStatusFilter = Extract<RemoteSessionStatusFilter, 'active' | 'archived' | 'all'>;
 type HomeDeviceConnectionState = 'idle' | 'syncing' | 'failed';
@@ -220,11 +320,46 @@ type ProjectDragSession = {
   x: number;
 };
 type HydrateDeviceSessionsResult = {
-  failure: string | null;
+  failure: HomeDeviceFailure | null;
+  needsRerun?: boolean;
   offline: boolean;
+  superseded: boolean;
 };
 
+type HomeHydrateInFlightEntry = {
+  accountGeneration: number;
+  device: DeviceView;
+  homeSyncGeneration: number;
+  promise: Promise<HydrateDeviceSessionsResult>;
+  rerunRequested: boolean;
+};
+
+type HydrateDeviceSessions = (
+  device: DeviceView,
+  expectedAccountGeneration?: number,
+  options?: { trailingIfInFlight?: boolean },
+) => Promise<HydrateDeviceSessionsResult>;
+
+class HomeSyncScopeSupersededError extends Error {
+  constructor() {
+    super('Home sync scope superseded');
+    this.name = 'HomeSyncScopeSupersededError';
+  }
+}
+
 export default function HomeScreen() {
+  const screenFocused = useIsFocused();
+  return (
+    <RemoteSessionStoreSubscriptionGate enabled={screenFocused}>
+      <HomeScreenContent />
+    </RemoteSessionStoreSubscriptionGate>
+  );
+}
+
+function HomeScreenContent() {
+  const screenFocused = useIsFocused();
+  const screenFocusedRef = useRef(screenFocused);
+  screenFocusedRef.current = screenFocused;
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t, i18n: i18nInstance } = useTranslation();
@@ -232,22 +367,55 @@ export default function HomeScreen() {
   // 连点会各自触发一次裸 push,把同一页压进栈 N 层(返回也要 N 次)。
   const guardedPush = useGuardedPush();
   const { width: screenWidth, height: screenHeight } = useWindowDimensions();
-  const { apiFetch, deviceId: selfDeviceId, user } = useAuth();
+  const auth = useAuth();
+  const { accountGeneration, deviceId: selfDeviceId, user } = auth;
   // 首页列表持久缓存按账号键控(401 掉线换号不串数据);首页仅登录后可达,user 理应非空。
   const homeCacheUserId = user?.id ?? '';
-  const { connectionEpoch, connectionIssue, invoke, lastPresenceSnapshot, status, subscribe } = useDeviceLink();
+  const {
+    connectionEpoch,
+    connectionIssue,
+    invoke,
+    lastPresenceSnapshot,
+    recoveringDeviceIds,
+    readDeviceList,
+    status,
+    subscribe,
+    unsubscribe,
+  } = useDeviceLink();
   const revokedDevices = useRevokedDevices();
   const sessions = useRemoteSessions();
-  const messageVersion = useRemoteMessageVersion();
-  const storeVersion = useRemoteSessionStoreVersion();
   const syncInFlightRef = useRef<Promise<void> | null>(null);
   const syncQueuedRef = useRef<{ visible?: boolean } | null>(null);
   const loadHomeRef = useRef<(options?: { visible?: boolean }) => Promise<void>>(async () => undefined);
+  const homePendingCacheRef = useRef(new Map<string, { pending: readonly unknown[]; count: number }>());
+  const homeLiveActivityIndexRef = useRef(new Map<string, RemoteSessionLiveActivity>());
   const devicesRef = useRef<DeviceView[]>([]);
+  // HomeScreen stays mounted while switching saved accounts. Keep an owner generation beside every
+  // local projection so requests started by the previous account cannot repopulate the new screen.
+  const homeAccountGenerationRef = useRef(accountGeneration);
+  homeAccountGenerationRef.current = accountGeneration;
   // schedule-index hydration 延后任务登记表(按设备 id 索引):为同一设备注册新延后任务前取消上一轮
   // pending 的,避免 800ms 窗口内多次 hydrate 时较早回调用旧快照覆盖新状态(并发覆盖竞态);卸载时 cancelAll。
   const scheduleIndexDeferRegistryRef = useRef(createScheduleIndexDeferRegistry());
   const scheduleEventVersionsRef = useRef(new Map<string, number>());
+  // Home 只拥有当前显示范围内的 `sessions` topic。target 包含已领取但仍在共享
+  // 六路队列中等待的设备；owned 只包含已经真正调用 subscribe 的设备。两者必须
+  // 分开，否则切换范围会为尚未订阅的排队设备发出一批无意义 unsubscribe。
+  const homeSyncTargetDeviceIdsRef = useRef(new Set<string>());
+  const homeListOwnedDeviceIdsRef = useRef(new Set<string>());
+  // Per-device generation fences A → B → A scope switches. Membership alone is not
+  // sufficient: an old A request may settle after A has been reacquired and must not
+  // overwrite the newer snapshot or release the newer owner's subscription.
+  const homeSyncGenerationByDeviceRef = useRef(new Map<string, number>());
+  // Reconnect rehydrate, presence recovery and Home refresh can all request the same device
+  // at once. Share one authoritative list pull per device + scope generation.
+  const homeHydrateInFlightByDeviceRef = useRef(new Map<string, HomeHydrateInFlightEntry>());
+  const hydrateDeviceSessionsRef = useRef<HydrateDeviceSessions>(async () => ({
+    failure: null,
+    offline: false,
+    superseded: true,
+  }));
+  const homeDeviceSyncLimiterRef = useRef(new HomeDeviceSyncLimiter());
   const deviceIdentityCacheRef = useRef(createEmptyDeviceIdentityCache());
   // A timed-out SecureStore read may still complete. Do not persist an empty/rebuilt
   // cache until that read settles and its stored identities have been reapplied.
@@ -266,10 +434,18 @@ export default function HomeScreen() {
   // 首页列表缓存(设备+会话快照)是否已尝试种入:首次 loadHome 等它先落地,保证「先画缓存、
   // fresh 回来再覆盖」的顺序确定性(规则 7),缓存为空时该状态同样置 true、行为与现状一致。
   const [homeListCacheHydrated, setHomeListCacheHydrated] = useState(false);
+  // 首次网络同步必须等设备筛选偏好恢复，否则单机用户会先按默认“全部”拉一轮所有电脑。
+  const [homeViewPreferencesHydrated, setHomeViewPreferencesHydrated] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<HomeConnectionError>(null);
   const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | null>(null);
+  const [remoteHomeCollections, setRemoteHomeCollections] = useState<RemoteHomeCollection[]>([]);
+  const [resourceCacheAccount, setResourceCacheAccount] = useState<number | null>(null);
+  const remoteHomeCollectionsRef = useRef<RemoteHomeCollection[]>([]);
+  remoteHomeCollectionsRef.current = remoteHomeCollections;
+  const selectedDeviceIdRef = useRef<string | null>(selectedDeviceId);
+  selectedDeviceIdRef.current = selectedDeviceId;
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchFilterOpen, setSearchFilterOpen] = useState(false);
   // 恢复偏好时暂存的设备名:设备列表尚未同步回来前表头用它兜底,避免显示成占位文案。
@@ -282,14 +458,14 @@ export default function HomeScreen() {
   const [deviceMenuOpen, setDeviceMenuOpen] = useState(false);
   const [displaySettingsOpen, setDisplaySettingsOpen] = useState(false);
   const [chromeMenuOpen, setChromeMenuOpen] = useState(false);
+  const [accountSwitcherOpen, setAccountSwitcherOpen] = useState(false);
   const [chromeMenuCloseInstant, setChromeMenuCloseInstant] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
   // 菜单关闭动画完成(Modal 卸载)后要执行的动作。iOS 上两个兄弟 Modal 重叠时,第二个 Modal
   // 是叠在菜单 Modal 的 VC 上 present 的,菜单淡出后卸载会把它连带 dismiss 掉——所以从菜单里
-  // 打开重命名 / 撤销授权弹窗必须等菜单完全卸载(onClosed)后再挂载,不能同一帧直接 set。
+  // 打开账号切换 / 撤销授权弹窗必须等菜单完全卸载(onClosed)后再挂载,不能同一帧直接 set。
   const pendingMenuActionRef = useRef<(() => void) | null>(null);
-  const [renameTarget, setRenameTarget] = useState<MobileHomeDeviceFilterItem | null>(null);
-  const [renameDraft, setRenameDraft] = useState('');
-  const [renameSaving, setRenameSaving] = useState(false);
+  const pendingAccountSwitcherActionRef = useRef<(() => void) | null>(null);
   const {
     actionSheetSession,
     archiveSession,
@@ -323,6 +499,7 @@ export default function HomeScreen() {
   const projectDragEpochRef = useRef(0);
   const [projectDrag, setProjectDrag] = useState<ProjectDragSession | null>(null);
   const projectDragY = useSharedValue(0);
+  const homeScrollY = useSharedValue(0);
   const [dialogueShowAll, setDialogueShowAll] = useState(false);
   const [priorityHoldEpoch, setPriorityHoldEpoch] = useState(0);
   // deviceId of the revoked-access device whose explanation tip is open (null = closed).
@@ -349,9 +526,95 @@ export default function HomeScreen() {
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(() => new Map());
   const scheduleMirrorInvalidations = useRemoteScheduleMirrorInvalidations();
 
+  // Clear the entire account-owned Home projection before paint. The generation ref is already
+  // updated during render, so every older async continuation is fenced even before this reset runs.
+  useLayoutEffect(() => {
+    syncInFlightRef.current = null;
+    syncQueuedRef.current = null;
+    devicesRef.current = [];
+    homeSyncTargetDeviceIdsRef.current.clear();
+    homeListOwnedDeviceIdsRef.current.clear();
+    homeSyncGenerationByDeviceRef.current.clear();
+    homeHydrateInFlightByDeviceRef.current.clear();
+    scheduleIndexDeferRegistryRef.current.cancelAll();
+    scheduleEventVersionsRef.current.clear();
+    presenceFreshnessRef.current = createPresenceFreshnessTracker();
+    lastPresenceSnapshotProcessedRef.current = null;
+    lastSyncedAtRef.current = null;
+    restoredSelectionUnvalidatedRef.current = false;
+    retryingDeviceIdsRef.current.clear();
+    projectOrderFetchFenceRef.current = createProjectOrderFetchFence();
+    projectDragEpochRef.current += 1;
+    projectDragRef.current = null;
+
+    setDevices([]);
+    setHomeListCacheHydrated(false);
+    setRefreshing(false);
+    setError(null);
+    setLastSyncedAt(null);
+    setSelectedDeviceId(null);
+    setRestoredDeviceName(null);
+    setDeviceConnectionStates({});
+    setScheduleIndex(new Map());
+    setHostProjectOrders(new Map());
+    setRevokedTipDeviceId(null);
+    setRetryingDeviceIds(new Set());
+    setProjectDrag(null);
+  }, [accountGeneration]);
+
   const updateDeviceConnectionState = useCallback((deviceId: string, state: HomeDeviceConnectionState) => {
     setDeviceConnectionStates((current) => updateHomeDeviceConnectionState(current, deviceId, state));
   }, []);
+
+  const isCurrentHomeSyncTarget = useCallback((deviceId: string, generation?: number) => {
+    const selected = selectedDeviceIdRef.current;
+    return (
+      (!selected || selected === deviceId)
+      && homeSyncTargetDeviceIdsRef.current.has(deviceId)
+      && (
+        generation === undefined
+        || homeSyncGenerationByDeviceRef.current.get(deviceId) === generation
+      )
+    );
+  }, []);
+
+  const advanceHomeSyncGeneration = useCallback((deviceId: string) => {
+    const next = (homeSyncGenerationByDeviceRef.current.get(deviceId) ?? 0) + 1;
+    homeSyncGenerationByDeviceRef.current.set(deviceId, next);
+    return next;
+  }, []);
+
+  const releaseHomeListOwner = useCallback((deviceId: string) => {
+    if (!homeListOwnedDeviceIdsRef.current.delete(deviceId)) return;
+    updateDeviceConnectionState(deviceId, 'idle');
+    // unsubscribe 会同步先撤销 registry owner，再等待远端 ACK；即使弱网下 ACK 失败，
+    // 下一次重连也不会恢复这台已不可见设备。缓存刻意不删，切回来先画旧快照。
+    void unsubscribe(HOME_LIST_SUBSCRIPTION_OWNER, deviceId, ['sessions']).catch(() => undefined);
+  }, [unsubscribe, updateDeviceConnectionState]);
+
+  const reconcileHomeDeviceSyncScope = useCallback((desiredDeviceIds: readonly string[]) => {
+    const diff = diffHomeDeviceSyncScope(homeSyncTargetDeviceIdsRef.current, desiredDeviceIds);
+    homeSyncTargetDeviceIdsRef.current = new Set(desiredDeviceIds);
+
+    for (const deviceId of diff.release) {
+      advanceHomeSyncGeneration(deviceId);
+      releaseHomeListOwner(deviceId);
+    }
+    for (const deviceId of diff.acquire) {
+      advanceHomeSyncGeneration(deviceId);
+    }
+    return diff;
+  }, [advanceHomeSyncGeneration, releaseHomeListOwner]);
+
+  useEffect(() => () => {
+    const owned = [...homeListOwnedDeviceIdsRef.current];
+    homeListOwnedDeviceIdsRef.current.clear();
+    homeSyncTargetDeviceIdsRef.current.clear();
+    for (const deviceId of owned) advanceHomeSyncGeneration(deviceId);
+    for (const deviceId of owned) {
+      void unsubscribe(HOME_LIST_SUBSCRIPTION_OWNER, deviceId, ['sessions']).catch(() => undefined);
+    }
+  }, [advanceHomeSyncGeneration, unsubscribe]);
 
   const reconcileDeviceViews = useCallback((nextRawDevices: readonly DeviceView[]) => {
     const result = reconcileDeviceIdentities(nextRawDevices, deviceIdentityCacheRef.current);
@@ -363,15 +626,23 @@ export default function HomeScreen() {
     return result;
   }, []);
 
-  const softInvalidateDeviceMirror = useCallback((deviceId: string) => {
+  // 批量软失效:同一波(REST 快照整批 offline)只让两个 store 各 notify 一次。
+  // 逐台通知时设备数超过 React 嵌套更新上限即致命退出(2026-09-10 Android)。
+  const softInvalidateDeviceMirrors = useCallback((deviceIds: readonly string[]) => {
+    const idSet = new Set(deviceIds);
+    if (idSet.size === 0) return;
     const sessionIds = remoteSessionStore.getSessions()
-      .filter((session) => session.deviceLinkDeviceId === deviceId)
+      .filter((session) => !!session.deviceLinkDeviceId && idSet.has(session.deviceLinkDeviceId))
       .map((session) => session.id);
-    invalidateScheduleIndexForDevice(deviceId);
-    remoteScheduleEventStore.invalidateDeviceMirror(deviceId);
-    remoteSessionStore.markDeviceOffline(deviceId);
+    for (const deviceId of idSet) invalidateScheduleIndexForDevice(deviceId);
+    remoteScheduleEventStore.invalidateDeviceMirrors([...idSet]);
+    remoteSessionStore.markDevicesOffline([...idSet]);
     setScheduleIndex((current) => invalidateRunningSessionScheduleEntries(current, sessionIds));
   }, []);
+
+  const softInvalidateDeviceMirror = useCallback((deviceId: string) => {
+    softInvalidateDeviceMirrors([deviceId]);
+  }, [softInvalidateDeviceMirrors]);
 
   const markDeviceOffline = useCallback((deviceId: string) => {
     // 普通离线是可恢复的传输状态:保留 session/messages,只清 live 投影并失效
@@ -387,19 +658,36 @@ export default function HomeScreen() {
   const refreshDeviceScheduleIndex = useCallback((
     deviceId: string,
     sessionIds: readonly string[],
-    options?: { force?: boolean },
+    options?: { accountGeneration?: number; homeSyncGeneration?: number },
   ) => {
+    if (!screenFocusedRef.current || AppState.currentState !== 'active') return;
+    const expectedAccountGeneration = options?.accountGeneration ?? accountGeneration;
+    const expectedHomeSyncGeneration = options?.homeSyncGeneration
+      ?? homeSyncGenerationByDeviceRef.current.get(deviceId);
+    if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+    if (
+      expectedHomeSyncGeneration === undefined
+      || !isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)
+    ) return;
     // 节流(单飞 + 30s TTL):focus / hydrate / schedule 推送三个触发源高频交叠,每次都全量
     // 重放 1+N×listRuns 会拥塞 device-link 管道、拖慢会话打开的关键读(见 scheduleIndex 注释)。
-    // force = 已读类权威信号(read / all-read 推送),必须绕过 TTL 立即重拉——否则「看完
-    // 返回首页」这个最常见路径永远命中 30s 内的陈旧缓存,未读徽标清不掉(review P1)。
+    // Authoritative events invalidate the shared cache before notifying screens.
     const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
-    void loadSessionScheduleIndexThrottled(
-      deviceId,
-      () => loadDeviceSessionScheduleIndex(deviceId, invoke),
-      { force: options?.force },
-    )
+    void homeDeviceSyncLimiterRef.current.run(async () => {
+      if (
+        !screenFocusedRef.current || AppState.currentState !== 'active'
+        || homeAccountGenerationRef.current !== expectedAccountGeneration
+        || !isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)
+      ) return null;
+      return loadDeviceSessionScheduleIndex(deviceId, invoke,
+        () => screenFocusedRef.current && AppState.currentState === 'active'
+          && homeAccountGenerationRef.current === expectedAccountGeneration
+          && isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration));
+    })
       .then((nextIndex) => {
+        if (!nextIndex) return;
+        if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+        if (!isCurrentHomeSyncTarget(deviceId, expectedHomeSyncGeneration)) return;
         if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
         setScheduleIndex((current) => replaceSessionScheduleIndexEntries(
           current,
@@ -410,77 +698,228 @@ export default function HomeScreen() {
       .catch(() => {
         // 网络失败时保留旧数据,不清零已有徽标——数据清零只应由明确的"已读"事件触发。
       });
-  }, [invoke]);
+  }, [accountGeneration, invoke, isCurrentHomeSyncTarget]);
 
-  const hydrateDeviceSessions = useCallback(async (device: DeviceView): Promise<HydrateDeviceSessionsResult> => {
+  const hydrateDeviceSessionsOnce = useCallback((
+    device: DeviceView,
+    expectedAccountGeneration: number,
+    expectedHomeSyncGeneration: number,
+  ): Promise<HydrateDeviceSessionsResult> => homeDeviceSyncLimiterRef.current.run(async () => {
+    if (
+      homeAccountGenerationRef.current !== expectedAccountGeneration
+      || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
+    ) {
+      return { failure: null, offline: false, superseded: true };
+    }
     updateDeviceConnectionState(device.deviceId, 'syncing');
     try {
-      const [list, activeSessions, activeSessionSnapshotEpoch] = await withTransientRemoteRetry(async () => {
-        await subscribe('device-list', device.deviceId, ['sessions']);
-        // Capture inside the retry callback so every maker:list-active attempt gets its own
-        // fence. A newer retry push received while this request is in flight must survive
-        // the older snapshot, while progress predating this attempt can be cleared.
-        const activeSessionSnapshotEpoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
-        const [list, activeSessions] = await Promise.all([
-          invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
-            LIST_LIMIT,
-            remoteListStatusFilter(statusFilter),
-            { includePinned: true },
-          ]),
-          // `sessions` topic replay covers list-level Agent Island activity, but the authoritative
-          // "turn currently running" snapshot is maker:list-active. Pull it with the list so Home
-          // does not need a session-detail round trip before showing running rows.
-          invoke<unknown[]>(device.deviceId, 'maker:list-active', []).catch((err) => {
-            if (isOptionalActiveSessionSnapshotError(err)) return null;
-            throw err;
-          }),
-        ]);
-        return [list, activeSessions, activeSessionSnapshotEpoch] as const;
+      const assertCurrentScope = () => {
+        if (
+          homeAccountGenerationRef.current !== expectedAccountGeneration
+          || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
+        ) throw new HomeSyncScopeSupersededError();
+      };
+      await withTransientRemoteRetry(async () => {
+        assertCurrentScope();
+        homeListOwnedDeviceIdsRef.current.add(device.deviceId);
+        await subscribe(HOME_LIST_SUBSCRIPTION_OWNER, device.deviceId, ['sessions']);
+        assertCurrentScope();
       });
-      const nextSessions = Array.isArray(list) ? list : [];
-      remoteSessionStore.setDeviceSessions(
-        device.deviceId,
-        device.name,
-        nextSessions,
-      );
-      if (Array.isArray(activeSessions)) {
-        remoteSessionStore.setActiveSessionSnapshots(
-          device.deviceId,
-          activeSessions,
-          activeSessionSnapshotEpoch,
-        );
+      // A slow activity snapshot must not replay an already successful whole list.
+      // Each read captures its own authority fence again on every retry.
+      const [[list, sessionListMutationEpoch], [activeSessions, activeSessionSnapshotEpoch]] =
+        await runIndependentSnapshotReads([
+          async () => {
+            assertCurrentScope();
+            const epoch = remoteSessionStore.captureDeviceSessionListMutationEpoch(device.deviceId);
+            const list = await invoke<RemoteSession[]>(device.deviceId, 'local-db:sessions:list', [
+              LIST_LIMIT,
+              remoteListStatusFilter(statusFilter),
+              { includePinned: true, fresh: true },
+            ]);
+            return [list, epoch] as const;
+          },
+          async () => {
+            assertCurrentScope();
+            const epoch = remoteSessionStore.captureActiveSessionSnapshotEpoch();
+            // Old hosts ignore this optional projection and still return the full snapshot.
+            const active = await invoke<unknown[]>(device.deviceId, 'maker:list-active', [
+              { summary: true },
+            ]).catch((err) => {
+              if (isOptionalActiveSessionSnapshotError(err)) return null;
+              throw err;
+            });
+            return [active, epoch] as const;
+          },
+        ] as const, withTransientRemoteRetry);
+      if (
+        homeAccountGenerationRef.current !== expectedAccountGeneration
+        || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
+      ) {
+        return { failure: null, offline: false, superseded: true };
       }
+      if (!remoteSessionStore.isDeviceSessionListMutationEpochCurrent(
+        device.deviceId,
+        sessionListMutationEpoch,
+      )) {
+        // A list-level push landed after this snapshot started. Keep the live mutation and
+        // run one trailing authoritative pull; applying this older whole-list response would
+        // roll back sessions:patched or hide a just-created task.
+        return {
+          failure: null,
+          needsRerun: true,
+          offline: false,
+          superseded: true,
+        };
+      }
+      const nextSessions = Array.isArray(list) ? list : [];
+      remoteSessionStore.batch(() => {
+        remoteSessionStore.setDeviceSessions(
+          device.deviceId,
+          device.name,
+          nextSessions,
+        );
+        if (Array.isArray(activeSessions)) {
+          remoteSessionStore.setActiveSessionSnapshots(
+            device.deviceId,
+            activeSessions,
+            activeSessionSnapshotEpoch,
+          );
+        }
+      });
       // schedule-index(1+N 个 listRuns)是次要徽标数据,延后发,避开"开 app→立刻点会话"时和会话关键读
       // 抢同一条 WS 管道(见 scheduleIndexDefer / issue #324)。home 自动化分组与名称已由 fallbackScheduleInfo
       // 兜底,徽标晚半拍出现即可。
       // 按设备 id 登记:同设备上一轮还没执行的延后任务会被先取消,避免较早回调用旧 nextSessions 覆盖新状态。
       scheduleIndexDeferRegistryRef.current.schedule(device.deviceId, () => {
-        refreshDeviceScheduleIndex(device.deviceId, nextSessions.map((session) => session.id));
+        void (async () => {
+          while (syncInFlightRef.current) await syncInFlightRef.current;
+          if (
+            homeAccountGenerationRef.current !== expectedAccountGeneration
+            || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
+          ) return;
+          refreshDeviceScheduleIndex(device.deviceId, nextSessions.map((session) => session.id), {
+            accountGeneration: expectedAccountGeneration,
+            homeSyncGeneration: expectedHomeSyncGeneration,
+          });
+        })();
       });
       updateDeviceConnectionState(device.deviceId, 'idle');
       // hydrate 成功后去抖回写首页列表缓存(collect 在定时器触发时才读 store,拿届时最新快照;
       // 多设备并发 hydrate 只落盘一次)。不在 store 每次变更时写盘。缓存按账号键控。
       scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
-      return { failure: null, offline: false };
+      return { failure: null, offline: false, superseded: false };
     } catch (err) {
+      if (
+        err instanceof HomeSyncScopeSupersededError
+        || homeAccountGenerationRef.current !== expectedAccountGeneration
+        || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
+      ) {
+        return { failure: null, offline: false, superseded: true };
+      }
       const offline = isDeviceOfflineError(err);
       if (offline) markDeviceOffline(device.deviceId);
       updateDeviceConnectionState(device.deviceId, 'failed');
       return {
-        failure: `${device.name}: ${formatRemoteError(err)}`,
+        failure: { deviceId: device.deviceId, deviceName: device.name, error: formatRemoteError(err) },
         offline,
+        superseded: false,
       };
     }
-  }, [homeCacheUserId, invoke, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, subscribe, updateDeviceConnectionState]);
+  }, 'foreground'), [homeCacheUserId, invoke, isCurrentHomeSyncTarget, markDeviceOffline, refreshDeviceScheduleIndex, statusFilter, subscribe, updateDeviceConnectionState]);
+
+  const hydrateDeviceSessions = useCallback((
+    device: DeviceView,
+    expectedAccountGeneration = accountGeneration,
+    options: { trailingIfInFlight?: boolean } = {},
+  ): Promise<HydrateDeviceSessionsResult> => {
+    const expectedHomeSyncGeneration = homeSyncGenerationByDeviceRef.current.get(device.deviceId);
+    if (
+      expectedHomeSyncGeneration === undefined
+      || homeAccountGenerationRef.current !== expectedAccountGeneration
+      || !isCurrentHomeSyncTarget(device.deviceId, expectedHomeSyncGeneration)
+    ) {
+      return Promise.resolve({ failure: null, offline: false, superseded: true });
+    }
+
+    const existing = homeHydrateInFlightByDeviceRef.current.get(device.deviceId);
+    if (
+      existing
+      && existing.accountGeneration === expectedAccountGeneration
+      && existing.homeSyncGeneration === expectedHomeSyncGeneration
+    ) {
+      existing.device = device;
+      if (options.trailingIfInFlight) existing.rerunRequested = true;
+      return existing.promise;
+    }
+
+    // Mark the hand-off before entering the limiter: reseed can queue behind another peer.
+    updateDeviceConnectionState(device.deviceId, 'syncing');
+    const promise = hydrateDeviceSessionsOnce(
+      device,
+      expectedAccountGeneration,
+      expectedHomeSyncGeneration,
+    );
+    const entry: HomeHydrateInFlightEntry = {
+      accountGeneration: expectedAccountGeneration,
+      device,
+      homeSyncGeneration: expectedHomeSyncGeneration,
+      promise,
+      rerunRequested: false,
+    };
+    homeHydrateInFlightByDeviceRef.current.set(device.deviceId, entry);
+    const settle = (needsRerun: boolean) => {
+      if (homeHydrateInFlightByDeviceRef.current.get(device.deviceId) !== entry) return;
+      homeHydrateInFlightByDeviceRef.current.delete(device.deviceId);
+      if (
+        !needsRerun
+        && !entry.rerunRequested
+      ) return;
+      if (
+        homeAccountGenerationRef.current !== entry.accountGeneration
+        || !isCurrentHomeSyncTarget(device.deviceId, entry.homeSyncGeneration)
+      ) return;
+      void hydrateDeviceSessionsRef.current(entry.device, entry.accountGeneration);
+    };
+    void promise.then(
+      (result) => settle(result.needsRerun === true),
+      () => settle(false),
+    );
+    return promise;
+  }, [accountGeneration, hydrateDeviceSessionsOnce, isCurrentHomeSyncTarget, updateDeviceConnectionState]);
+  hydrateDeviceSessionsRef.current = hydrateDeviceSessions;
+
+  const probeRevokedDeviceAccess = useCallback(async (
+    deviceId: string,
+    expectedAccountGeneration = accountGeneration,
+  ): Promise<boolean> => {
+    if (homeAccountGenerationRef.current !== expectedAccountGeneration) return false;
+    try {
+      // sessions:list limit=1 是既有的最小被控端响应性探测；不要为了探测给不可见设备
+      // 持有 `sessions` topic，也不要把这一行写回完整列表缓存。
+      await withTransientRemoteRetry(() => invoke<unknown[]>(deviceId, 'local-db:sessions:list', [
+        1,
+        'active',
+        { includePinned: true, fresh: true },
+      ]), { maxAttempts: 3 });
+      return homeAccountGenerationRef.current === expectedAccountGeneration;
+    } catch {
+      return false;
+    }
+  }, [accountGeneration, invoke]);
 
   const loadHome = useCallback(async (options: { visible?: boolean } = {}) => {
+    const accountGenerationAtStart = accountGeneration;
+    if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
     if (!deviceIdentityCacheReady) return;
     const visible = options.visible === true;
     if (visible) setRefreshing(true);
     if (syncInFlightRef.current) {
       syncQueuedRef.current = options;
       return syncInFlightRef.current.finally(() => {
-        if (visible) setRefreshing(false);
+        if (visible && homeAccountGenerationRef.current === accountGenerationAtStart) {
+          setRefreshing(false);
+        }
       });
     }
 
@@ -502,25 +941,42 @@ export default function HomeScreen() {
       // 卡在「同步失败」等手动下拉。maxAttempts 收敛到 3:它前置于全部 hydrate,
       // 不值得为它烧满 6 次退避。
       const res = await withTransientRemoteRetry(
-        () => apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
-          baseUrl: DEVICE_LINK_API_BASE_URL,
-          timeoutMs: DEVICE_LIST_TIMEOUT_MS,
-        }),
+        () => {
+          if (homeAccountGenerationRef.current !== accountGenerationAtStart) {
+            throw new Error('Home account generation superseded');
+          }
+          return readDeviceList();
+        },
         { maxAttempts: 3 },
       );
+      if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
       const now = Date.now();
       const serverDevices = mergeFreshPresence(reconcileDeviceViews(res.devices).devices);
       const deviceRows = toDeviceListItems(serverDevices, now, revokedDevices);
       const availableRows = deviceRows.filter((item) => item.canOpen);
+      const syncDeviceIds = resolveHomeDeviceSyncIds(
+        availableRows.map((item) => ({ canOpen: true, deviceId: item.device.deviceId })),
+        selectedDeviceIdRef.current,
+      );
+      const syncDeviceIdSet = new Set(syncDeviceIds);
+      const syncRows = availableRows.filter((item) => syncDeviceIdSet.has(item.device.deviceId));
+      const selectedDeviceIdAtSyncStart = selectedDeviceIdRef.current;
+      reconcileHomeDeviceSyncScope(syncDeviceIds);
+      // 设备清单 / presence 不等列表 fan-out：先发布全量设备状态，再用最多 6 个 worker
+      // 补当前显示范围。scope effect 看到的 owner 已在上面领取，不会重复派发。
+      devicesRef.current = serverDevices;
+      setDevices(serverDevices);
       setDeviceConnectionStates((current) => pruneHomeDeviceConnectionStates(
         current,
         new Set(availableRows.map((item) => item.device.deviceId)),
       ));
       // 单次 REST 快照里的 offline 只是可恢复状态,不能硬删刚同步的会话/消息;
       // 显式关闭远控或撤权才是权限终态,继续清敏感镜像。
+      // soft 处先收拢成一批再失效:整批 offline 时逐台通知会击穿 React 嵌套上限。
+      const softInvalidateIds: string[] = [];
       for (const item of deviceRows) {
         const disposition = deviceMirrorCleanupDisposition(item.state);
-        if (disposition === 'soft') softInvalidateDeviceMirror(item.device.deviceId);
+        if (disposition === 'soft') softInvalidateIds.push(item.device.deviceId);
         if (disposition === 'hard') {
           invalidateScheduleIndexForDevice(item.device.deviceId);
           remoteScheduleEventStore.clearDevice(item.device.deviceId);
@@ -528,6 +984,7 @@ export default function HomeScreen() {
           remoteSessionStore.removeDevice(item.device.deviceId);
         }
       }
+      if (softInvalidateIds.length > 0) softInvalidateDeviceMirrors(softInvalidateIds);
       // 整表对账:REST 全量清单对“设备是否仍绑定”是权威。冷启动从缓存种入、
       // 随后被解绑(完全不在清单里)的设备不会出现在状态分类里,按差集硬清 shard;
       // 这与短暂 offline 不同,否则幽灵项会被快照回写无限续存。
@@ -544,21 +1001,26 @@ export default function HomeScreen() {
         remoteSessionStore.removeDevice(deviceId);
       }
 
-      const failures: string[] = [];
+      const failures: HomeDeviceFailure[] = [];
       const offlineDeviceIds = new Set<string>();
-      await Promise.all(availableRows.map(async (item) => {
-        const result = await hydrateDeviceSessions(item.device);
+      const hydrateResults = await runHomeDeviceSyncBatch(syncRows, async (item) => {
+        const result = await hydrateDeviceSessions(item.device, accountGenerationAtStart);
+        return { deviceId: item.device.deviceId, result };
+      }, HOME_DEVICE_HYDRATE_CONCURRENCY);
+      for (const { deviceId, result } of hydrateResults) {
+        if (result.superseded || homeAccountGenerationRef.current !== accountGenerationAtStart) continue;
         if (result.failure) failures.push(result.failure);
         if (result.offline) {
-          offlineDeviceIds.add(item.device.deviceId);
+          offlineDeviceIds.add(deviceId);
         } else if (!result.failure) {
           // REST + hydrate success is authoritative reachability evidence even when relay
           // presence was not replayed on this connection. Retire any prior offline marker
           // so unrelated device invalidations cannot re-clear this device's running badges.
-          remoteScheduleEventStore.clearDeviceMirrorInvalidation(item.device.deviceId);
-          invalidateOfflineScheduleIndexFailureFor(item.device.deviceId);
+          remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
+          invalidateOfflineScheduleIndexFailureFor(deviceId);
         }
-      }));
+      }
+      if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
 
       // 收尾再合并一次:hydrate 阶段(可能持续数秒)里新到的 presence 补丁同样不能被覆盖掉。
       const nextDevices = reconcileDeviceViews(
@@ -568,7 +1030,9 @@ export default function HomeScreen() {
       setDevices(nextDevices);
       lastSyncedAtRef.current = now;
       setLastSyncedAt(now);
-      setError(failures.length > 0 ? failures.slice(0, 2).join('；') : null);
+      if (selectedDeviceIdRef.current === selectedDeviceIdAtSyncStart) {
+        setError(failures.length > 0 ? failures : null);
+      }
       // loadHome 整轮成功后也回写一次:覆盖「设备全部下线 / 会话清空」的收敛场景——
       // 此时没有任何 hydrate 成功,只有这里能把缓存里的陈旧设备清掉。
       scheduleHomeListSnapshotPersist(homeCacheUserId, () => remoteSessionStore.getSessions());
@@ -576,10 +1040,12 @@ export default function HomeScreen() {
 
     const task = rawTask
       .catch((err) => {
+        if (homeAccountGenerationRef.current !== accountGenerationAtStart) return;
         setError(formatRemoteError(err));
       })
       .finally(() => {
-        if (syncInFlightRef.current === task) syncInFlightRef.current = null;
+        if (syncInFlightRef.current !== task) return;
+        syncInFlightRef.current = null;
         const queued = syncQueuedRef.current;
         if (queued) {
           syncQueuedRef.current = null;
@@ -589,9 +1055,9 @@ export default function HomeScreen() {
 
     syncInFlightRef.current = task;
     return task.finally(() => {
-      if (visible) setRefreshing(false);
+      if (visible && homeAccountGenerationRef.current === accountGenerationAtStart) setRefreshing(false);
     });
-  }, [apiFetch, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, revokedDevices, softInvalidateDeviceMirror]);
+  }, [accountGeneration, readDeviceList, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, reconcileHomeDeviceSyncScope, revokedDevices, softInvalidateDeviceMirror]);
   loadHomeRef.current = loadHome;
 
   // 冷启动先画缓存:上次 loadHome 成功的设备+会话快照种入 store,先把列表画出来(消除首屏强制
@@ -599,6 +1065,7 @@ export default function HomeScreen() {
   // 保持空、现有 spinner 行为不变。缓存画出的设备只标记「同步中」既有中间态(设备菜单脉冲点),
   // 不进入 devices state——它们不是 live 设备,新建对话的可用性判定仍以 live 数据为准。
   useEffect(() => {
+    const expectedAccountGeneration = accountGeneration;
     // 缓存按账号键控:userId 未就绪(理论上首页必已登录,防御性兜底)时不读,直接放行首帧。
     if (!homeCacheUserId) {
       setHomeListCacheHydrated(true);
@@ -611,10 +1078,13 @@ export default function HomeScreen() {
     );
     const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListSnapshot>>) => {
       await syncInFlightRef.current;
-      if (cancelled || lastSyncedAtRef.current !== null) return;
+      if (
+        cancelled
+        || homeAccountGenerationRef.current !== expectedAccountGeneration
+        || lastSyncedAtRef.current !== null
+      ) return;
       for (const device of snapshot) {
         remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
-        updateDeviceConnectionState(device.deviceId, 'syncing');
       }
     };
     void read.initial
@@ -626,12 +1096,14 @@ export default function HomeScreen() {
       })
       .catch(() => undefined)
       .finally(() => {
-        if (!cancelled) setHomeListCacheHydrated(true);
+        if (!cancelled && homeAccountGenerationRef.current === expectedAccountGeneration) {
+          setHomeListCacheHydrated(true);
+        }
       });
     return () => {
       cancelled = true;
     };
-  }, [homeCacheUserId, updateDeviceConnectionState]);
+  }, [accountGeneration, homeCacheUserId, updateDeviceConnectionState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -668,9 +1140,19 @@ export default function HomeScreen() {
 
   // 冷启动恢复上次的首页视图偏好(设备范围 + 显示菜单);用户已手动操作过则不覆盖。
   useEffect(() => {
+    const expectedAccountGeneration = homeAccountGenerationRef.current;
     let cancelled = false;
-    void readHomeViewPreferences().then((preferences) => {
-      if (cancelled || viewPrefsTouchedRef.current) return;
+    const read = startBoundedStartupRead<HomeViewPreferences | null>(
+      readHomeViewPreferences(),
+      null,
+    );
+    const applyPreferences = (preferences: HomeViewPreferences | null) => {
+      if (!preferences) return;
+      if (
+        cancelled
+        || homeAccountGenerationRef.current !== expectedAccountGeneration
+        || viewPrefsTouchedRef.current
+      ) return;
       setGroupByProject(preferences.groupByProject);
       setGroupDialogue(preferences.groupDialogue);
       setSortBy(preferences.sortBy);
@@ -682,7 +1164,26 @@ export default function HomeScreen() {
         setRestoredDeviceName(preferences.selectedDevice.name);
         restoredSelectionUnvalidatedRef.current = true;
       }
-    });
+    };
+    void read.initial
+      .then((initial) => {
+        applyPreferences(initial.value);
+        if (initial.timedOut) {
+          // Native storage can occasionally settle after the startup budget. Let Home start
+          // with its safe defaults, then narrow the live scope if the untouched preference
+          // eventually arrives; a permanently stuck read can no longer block networking.
+          void read.completion.then((late) => {
+            if (late.ok) applyPreferences(late.value);
+          });
+        }
+      })
+      .finally(() => {
+        // The preference values are generation-fenced above, but this startup gate belongs to
+        // the mounted Home screen rather than to one account. If the user switches accounts while
+        // the bounded read is settling, the old values must stay ignored while the new account is
+        // still allowed to start networking with safe defaults.
+        if (!cancelled) setHomeViewPreferencesHydrated(true);
+      });
     return () => {
       cancelled = true;
     };
@@ -713,6 +1214,7 @@ export default function HomeScreen() {
     }
 
     for (const deviceId of deviceIds) {
+      if (!homeSyncTargetDeviceIdsRef.current.has(deviceId)) continue;
       const snapshot = remoteScheduleEventStore.getSnapshot(deviceId);
       const version = snapshot.version;
       if (version === 0) {
@@ -736,14 +1238,7 @@ export default function HomeScreen() {
         remoteSessionStore.requestReseed(deviceId);
         continue;
       }
-      // schedule 列表变化(changed,含 pause / resume / 改绑)与 read / all-read 都是低频
-      // 权威信号,force 穿透节流保证状态即时更新;fired / running 等高频事件照常吃 TTL
-      // (全量 force 会把 listRuns 风暴请回来)。
-      refreshDeviceScheduleIndex(deviceId, sessionIds, {
-        force: projection.refresh.scheduleList === true
-          || projection.unreadImpact === 'may-clear-schedule'
-          || projection.unreadImpact === 'clear-all',
-      });
+      refreshDeviceScheduleIndex(deviceId, sessionIds);
     }
   }), [refreshDeviceScheduleIndex]);
 
@@ -755,6 +1250,7 @@ export default function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       for (const device of devicesRef.current) {
+        if (!homeSyncTargetDeviceIdsRef.current.has(device.deviceId)) continue;
         const sessionIds = remoteSessionStore.getSessions()
           .filter((session) => session.deviceLinkDeviceId === device.deviceId)
           .map((session) => session.id);
@@ -770,10 +1266,27 @@ export default function HomeScreen() {
   // syncInFlight 去重,冷启动时与上线瞬间的两次触发只会实际执行一次。
   // 首次触发同时等首页列表缓存种入完成(homeListCacheHydrated,AsyncStorage 读一个小 key,毫秒级):
   // 保证缓存先画、fresh 后覆盖的顺序确定,避免 loadHome 清理下线设备后缓存又把 stale shard 种回去。
-  useEffect(() => {
-    if (!deviceIdentityCacheReady || !homeListCacheHydrated) return;
+  const startSilentHomeSync = useCallback(() => {
+    if (!deviceIdentityCacheReady || !homeListCacheHydrated || !homeViewPreferencesHydrated) return;
     void loadHome({ visible: false });
-  }, [connectionEpoch, deviceIdentityCacheReady, homeListCacheHydrated, loadHome]);
+  }, [deviceIdentityCacheReady, homeListCacheHydrated, homeViewPreferencesHydrated, loadHome]);
+
+  // Android can recreate the activity or resume the JS runtime without a fresh React
+  // mount. Foreground is therefore an authoritative trigger alongside the initial mount
+  // and reconnect; loadHome single-flights these overlapping cold-start calls.
+  useFocusEffect(
+    useCallback(() => {
+      startSilentHomeSync();
+    }, [startSilentHomeSync]),
+  );
+
+  useEffect(() => {
+    startSilentHomeSync();
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') startSilentHomeSync();
+    });
+    return () => subscription.remove();
+  }, [connectionEpoch, startSilentHomeSync]);
 
   // 把当前权威设备列表注入 remoteSessionStore,让 store 给所有 useRemoteSessions 消费者(首页项目卡、
   // 设备详情页)统一算展示用 canonicalDeviceId:re-link 后残留的 stale shard 会话按设备名唯一匹配认领回
@@ -799,26 +1312,26 @@ export default function HomeScreen() {
     const hydratedDevice = result.device
       ? reconciled.devices.find((device) => device.deviceId === result.device?.deviceId) ?? result.device
       : null;
-    if (!hydratedDevice || !result.becameControllable) return;
+    if (!hydratedDevice || !result.becameControllable || !isCurrentHomeSyncTarget(hydratedDevice.deviceId)) return;
     void hydrateDeviceSessions(hydratedDevice).then((hydrateResult) => {
+      if (hydrateResult.superseded) return;
       if (hydrateResult.failure) setError(hydrateResult.failure);
       else setError(null);
     });
-  }, [deviceIdentityCacheReady, hydrateDeviceSessions, lastPresenceSnapshot, reconcileDeviceViews, selfDeviceId]);
+  }, [deviceIdentityCacheReady, hydrateDeviceSessions, isCurrentHomeSyncTarget, lastPresenceSnapshot, reconcileDeviceViews, selfDeviceId]);
 
   // Auto-heal revoked access: a host only signals a re-grant by accepting a fresh request, so on
-  // every (re)connect silently re-probe each revoked device. hydrateDeviceSessions' invoke clears
-  // the in-memory revoked mark on success (withAccessRevokedHandling), returning the device to the
-  // controllable list with no user action. Failures stay silent (the device is still revoked).
+  // every (re)connect silently re-probe each revoked device. The one-row invoke clears the
+  // in-memory revoked mark on success (withAccessRevokedHandling) without retaining a hidden
+  // list subscription. Scope reconciliation then hydrates it only when it is actually visible.
   useEffect(() => {
     if (status !== 'online') return;
     const revoked = revokedDevicesStore.getSnapshot();
     if (revoked.size === 0) return;
-    for (const deviceId of revoked) {
-      const device = devicesRef.current.find((item) => item.deviceId === deviceId);
-      if (device) void hydrateDeviceSessions(device).catch(() => undefined);
-    }
-  }, [connectionEpoch, status, hydrateDeviceSessions]);
+    void runHomeDeviceSyncBatch([...revoked], (deviceId) => (
+      homeDeviceSyncLimiterRef.current.run(() => probeRevokedDeviceAccess(deviceId))
+    ));
+  }, [connectionEpoch, probeRevokedDeviceAccess, status]);
 
   // Close the revoked tip automatically once access is restored (auto-heal or manual retry).
   useEffect(() => {
@@ -826,6 +1339,7 @@ export default function HomeScreen() {
   }, [revokedDevices, revokedTipDeviceId]);
 
   const retryRevokedDevice = useCallback(async (deviceId: string) => {
+    const expectedAccountGeneration = accountGeneration;
     const device = devicesRef.current.find((item) => item.deviceId === deviceId);
     if (!device) return;
     // 同设备重试仍在飞行中时直接忽略,防止连点/引导页重复触发叠加请求。
@@ -833,25 +1347,18 @@ export default function HomeScreen() {
     retryingDeviceIdsRef.current.add(deviceId);
     setRetryingDeviceIds(new Set(retryingDeviceIdsRef.current));
     try {
-      await hydrateDeviceSessions(device);
+      await homeDeviceSyncLimiterRef.current.run(
+        () => probeRevokedDeviceAccess(device.deviceId, expectedAccountGeneration),
+        'foreground',
+      );
     } finally {
+      if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
       // Retry state is scoped per device; only clear this request to avoid clearing another in-flight retry.
       retryingDeviceIdsRef.current.delete(deviceId);
       setRetryingDeviceIds(new Set(retryingDeviceIdsRef.current));
     }
-    // hydrate's invoke clears the revoked mark on success; the tip-close effect handles dismissal.
-  }, [hydrateDeviceSessions]);
-
-  const openRenameDevice = useCallback((item: MobileHomeDeviceFilterItem) => {
-    if (!item.deviceId) return;
-    // 不能在菜单还没卸载时直接挂重命名 Modal(见 pendingMenuActionRef 注释),先关菜单再延后打开。
-    pendingMenuActionRef.current = () => {
-      setRenameTarget(item);
-      setRenameDraft(item.label);
-      setError(null);
-    };
-    setDeviceMenuOpen(false);
-  }, []);
+    // probe invoke clears the revoked mark on success; the tip-close effect handles dismissal.
+  }, [accountGeneration, probeRevokedDeviceAccess]);
 
   // 菜单 Modal 完全关闭(淡出结束 + 卸载)后,执行延后的弹窗动作。
   const handleDeviceMenuClosed = useCallback(() => {
@@ -892,66 +1399,57 @@ export default function HomeScreen() {
   }, []);
 
   const onListScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    homeScrollY.value = event.nativeEvent.contentOffset.y;
     const next = event.nativeEvent.contentOffset.y > 8;
     setHeaderFrosted((current) => (current === next ? current : next));
-  }, []);
-
-  const closeRenameDevice = useCallback(() => {
-    if (renameSaving) return;
-    setRenameTarget(null);
-    setRenameDraft('');
-  }, [renameSaving]);
-
-  const confirmRenameDevice = useCallback(async () => {
-    const target = renameTarget;
-    const name = renameDraft.trim();
-    if (!target?.deviceId || !name || renameSaving) return;
-    if (name === target.label.trim()) {
-      setRenameTarget(null);
-      setRenameDraft('');
-      return;
-    }
-
-    setRenameSaving(true);
-    try {
-      const res = await apiFetch<{ deviceId: string; name: string }>(
-        `/api/device-link/devices/${encodeURIComponent(target.deviceId)}`,
-        {
-          baseUrl: DEVICE_LINK_API_BASE_URL,
-          body: { name },
-          method: 'PATCH',
-          timeoutMs: DEVICE_LIST_TIMEOUT_MS,
-        },
-      );
-      const nextName = res.name;
-      setDevices((current) => {
-        const nextRaw = current.map((device) =>
-          device.deviceId === target.deviceId ? { ...device, name: nextName } : device);
-        const next = reconcileDeviceViews(nextRaw).devices;
-        devicesRef.current = next;
-        return next;
-      });
-      remoteSessionStore.renameDevice(target.deviceId, nextName);
-      setRenameTarget(null);
-      setRenameDraft('');
-      void loadHome({ visible: false });
-    } catch (err) {
-      setError(formatRemoteError(err));
-    } finally {
-      setRenameSaving(false);
-    }
-  }, [apiFetch, loadHome, reconcileDeviceViews, renameDraft, renameSaving, renameTarget]);
+  }, [homeScrollY]);
 
   const deviceRows = useMemo(
     () => toDeviceListItems(devices, Date.now(), revokedDevices),
     [devices, i18nInstance.resolvedLanguage, revokedDevices],
   );
+  const homeSyncDeviceIds = useMemo(() => resolveHomeDeviceSyncIds(
+    deviceRows.map((item) => ({
+      canOpen: item.canOpen,
+      deviceId: item.device.deviceId,
+    })),
+    selectedDeviceId,
+  ), [deviceRows, selectedDeviceId]);
+  const homeSyncDeviceIdSet = useMemo(() => new Set(homeSyncDeviceIds), [homeSyncDeviceIds]);
+  const homeSyncRows = useMemo(
+    () => deviceRows.filter((item) => homeSyncDeviceIdSet.has(item.device.deviceId)),
+    [deviceRows, homeSyncDeviceIdSet],
+  );
 
   useEffect(() => {
-    const availableRows = deviceRows.filter((item) => item.canOpen);
-    const unregisters = availableRows.map((item) =>
+    const expectedAccountGeneration = accountGeneration;
+    const selectedDeviceIdAtStart = selectedDeviceId;
+    const diff = reconcileHomeDeviceSyncScope(homeSyncDeviceIds);
+    if (diff.acquire.length === 0) return;
+    const acquireIds = new Set(diff.acquire);
+    const rows = homeSyncRows.filter((item) => acquireIds.has(item.device.deviceId));
+    void runHomeDeviceSyncBatch(rows, async (item) => (
+      hydrateDeviceSessions(item.device, expectedAccountGeneration)
+    )).then((results) => {
+      if (
+        homeAccountGenerationRef.current !== expectedAccountGeneration
+        || selectedDeviceIdRef.current !== selectedDeviceIdAtStart
+      ) return;
+      const failures = results
+        .filter((result) => !result.superseded && result.failure)
+        .map((result) => result.failure as HomeDeviceFailure);
+      if (failures.length > 0) setError(failures);
+      else if (results.some((result) => !result.superseded)) setError(null);
+    });
+  }, [accountGeneration, homeSyncDeviceIds, homeSyncRows, hydrateDeviceSessions, reconcileHomeDeviceSyncScope, selectedDeviceId]);
+
+  useEffect(() => {
+    const unregisters = homeSyncRows.map((item) =>
       remoteSessionStore.registerReseedHandler(item.device.deviceId, () => {
-        void hydrateDeviceSessions(item.device).then((hydrateResult) => {
+        void hydrateDeviceSessions(item.device, accountGeneration, {
+          trailingIfInFlight: true,
+        }).then((hydrateResult) => {
+          if (hydrateResult.superseded) return;
           if (hydrateResult.failure) setError(hydrateResult.failure);
           else setError(null);
         });
@@ -960,7 +1458,7 @@ export default function HomeScreen() {
     return () => {
       for (const unregister of unregisters) unregister();
     };
-  }, [deviceRows, hydrateDeviceSessions]);
+  }, [accountGeneration, homeSyncRows, hydrateDeviceSessions]);
 
   const deviceModels = useMemo(() => deviceRows.map((item) => ({
     canOpen: item.canOpen,
@@ -970,6 +1468,57 @@ export default function HomeScreen() {
     statusDetail: item.statusDetail,
     statusLabel: item.statusLabel,
   })), [deviceRows]);
+  useEffect(() => {
+    let cancelled = false;
+    remoteHomeCollectionsRef.current = [];
+    setRemoteHomeCollections([]);
+    setResourceCacheAccount(null);
+    void readRemoteResourceSnapshot(homeCacheUserId).then((snapshot) => {
+      if (cancelled) return;
+      remoteHomeCollectionsRef.current = snapshot.home;
+      setRemoteHomeCollections(snapshot.home);
+      setResourceCacheAccount(accountGeneration);
+    });
+    return () => { cancelled = true; };
+  }, [accountGeneration, homeCacheUserId]);
+  useEffect(() => {
+    if (resourceCacheAccount !== accountGeneration || !homeListCacheHydrated || (deviceModels.length === 0 && lastSyncedAt === null)) return;
+    let cancelled = false;
+    const targets = remoteResourceDiscoveryTargets(deviceModels, remoteHomeCollectionsRef.current);
+    if (targets.length === 0) {
+      remoteHomeCollectionsRef.current = [];
+      setRemoteHomeCollections([]);
+      return () => { cancelled = true; };
+    }
+    void discoverRemoteHomeCollections(
+      invoke,
+      targets,
+      i18nInstance.language,
+      remoteHomeCollectionsRef.current,
+    )
+      .then((collections) => {
+        if (!cancelled && homeAccountGenerationRef.current === accountGeneration) {
+          remoteHomeCollectionsRef.current = collections;
+          setRemoteHomeCollections(collections);
+          void cacheRemoteResourceHome(homeCacheUserId, collections);
+        }
+      })
+      .catch(() => {
+        // Optional capability discovery must not turn a healthy Sessions home into an error page.
+        // Keep the last same-account manifest during transient link failures.
+      });
+    return () => { cancelled = true; };
+  }, [
+    accountGeneration,
+    connectionEpoch,
+    resourceCacheAccount,
+    lastSyncedAt,
+    homeListCacheHydrated,
+    homeCacheUserId,
+    deviceModels,
+    i18nInstance.language,
+    invoke,
+  ]);
   useEffect(() => {
     remoteSessionStore.setConversationSearchDeviceModels(deviceModels.map((item) => ({
       canOpen: item.canOpen,
@@ -998,6 +1547,9 @@ export default function HomeScreen() {
     projects: searchProjects,
   });
   const searchQuery = indexedSearch.query;
+  const normalizedSearchQuery = searchQuery.trim();
+  const messageSearchVersion = useRemoteMessageVersion(normalizedSearchQuery.length > 0);
+  const homeStatusVersion = useRemoteHomeStatusVersion();
   const searchFilterA11y = t('devices.list.search.filterAria', {
     agent: t(`devices.list.search.filter.agent.${indexedSearch.agentFilter}`),
     lastActivity: t(`devices.list.search.filter.lastActivity.${indexedSearch.lastActivityFilter}`),
@@ -1007,23 +1559,51 @@ export default function HomeScreen() {
     sort: t(`devices.list.search.filter.sort.${indexedSearch.sortBy}`),
     status: t(`devices.list.search.filter.status.${indexedSearch.statusFilter}`),
   });
+  const searchFilterMenu = useConversationSearchFilterMenu({
+    activeCount: indexedSearch.activeFilterCount,
+    agentKind: indexedSearch.agentFilter,
+    lastActivity: indexedSearch.lastActivityFilter,
+    lockedProjects: false,
+    onAgentKindChange: indexedSearch.setAgentFilter,
+    onLastActivityChange: indexedSearch.setLastActivityFilter,
+    onProjectsChange: indexedSearch.setProjectSelection,
+    onReset: indexedSearch.resetFilters,
+    onSortChange: indexedSearch.setSortBy,
+    onStatusChange: indexedSearch.setStatusFilter,
+    projectSelection: indexedSearch.projectSelection,
+    projects: searchProjects,
+    sortBy: indexedSearch.sortBy,
+    status: indexedSearch.statusFilter,
+  });
   useEffect(() => {
-    const ids = deviceModels.filter((item) => item.canOpen).map((item) => item.deviceId);
-    if (ids.length === 0) {
-      setHostProjectOrders(new Map());
-      return undefined;
-    }
+    const expectedAccountGeneration = accountGeneration;
+    const ids = homeSyncDeviceIds;
+    if (ids.length === 0) return undefined;
     let cancelled = false;
     let retryTimer: ReturnType<typeof setTimeout> | undefined;
     const fence = createProjectOrderFetchFence();
     projectOrderFetchFenceRef.current = fence;
     const load = async (attempt: number) => {
+      // Project ordering is secondary Home metadata. Let the bounded sessions-list batch
+      // finish first so cold start/reconnect does not create a second overlapping six-device
+      // fan-out. A queued refresh is included as well; live pushes remain fenced below.
+      while (syncInFlightRef.current) {
+        await syncInFlightRef.current;
+        if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
+      }
       const tokens = new Map(ids.map((deviceId) => [deviceId, fence.begin(deviceId)]));
-      const entries = await Promise.all(ids.map(async (deviceId) => {
-        const result = await fetchHostProjectOrder(invoke, deviceId);
+      const entries = await runHomeDeviceSyncBatch(ids, async (deviceId) => {
+        const result = await homeDeviceSyncLimiterRef.current.run(async () => {
+          if (
+            cancelled
+            || homeAccountGenerationRef.current !== expectedAccountGeneration
+            || !homeSyncTargetDeviceIdsRef.current.has(deviceId)
+          ) return { kind: 'transient' } as const;
+          return fetchHostProjectOrder(invoke, deviceId);
+        });
         return [deviceId, result] as const;
-      }));
-      if (cancelled) return;
+      });
+      if (cancelled || homeAccountGenerationRef.current !== expectedAccountGeneration) return;
       for (const [deviceId, result] of entries) {
         if (!fence.shouldApplyFetch(deviceId, tokens.get(deviceId) ?? 0)) continue;
         if (result.kind === 'ok') rememberRemoteProjectOrderStamp(deviceId, result.snapshot.ownerStamp);
@@ -1045,7 +1625,11 @@ export default function HomeScreen() {
     };
     void load(1);
     const unsubscribe = subscribeRemoteProjectOrderChanged((deviceId, snapshot) => {
-      if (cancelled || !ids.includes(deviceId)) return;
+      if (
+        cancelled
+        || homeAccountGenerationRef.current !== expectedAccountGeneration
+        || !ids.includes(deviceId)
+      ) return;
       fence.noteLiveUpdate(deviceId);
       setHostProjectOrders((current) => {
         const next = new Map(current);
@@ -1058,39 +1642,58 @@ export default function HomeScreen() {
       if (retryTimer) clearTimeout(retryTimer);
       unsubscribe();
     };
-  }, [deviceModels, invoke]);
+  }, [accountGeneration, homeSyncDeviceIds, invoke]);
   const revokedTipDeviceName = useMemo(
     () => revokedTipDeviceId
       ? deviceModels.find((item) => item.deviceId === revokedTipDeviceId)?.name ?? t('devices.list.thisComputer')
       : null,
     [deviceModels, revokedTipDeviceId, t],
   );
-  // 三个派生索引的依赖挂在全局 messageVersion / storeVersion 上,桌面端活跃期逐 emit
-  // 重建出内容相同的新 Map——若不做内容稳定化,home → sections → 全列表行整链每次
-  // emit 都重建(2026-07-18 重渲染风暴 trace 实锤)。useStableValue 在内容未变时保留
-  // 旧引用,下游 useMemo 依赖即可短路;内容真变(某会话预览/交互数/活动态变化)照常穿透。
-  const messagePreviewIndexRaw = useMemo(
-    () => buildSessionMessagePreviewIndex(
-      sessions.map((session) => session.id),
-      (sessionId) => remoteSessionStore.getMessages(sessionId),
-    ),
-    [messageVersion, sessions],
-  );
+  // 消息预览仅在搜索时构建全局索引；普通首页由行级 selector 消费。pending/live/running
+  // 共用低频 homeStatusVersion，普通文本 token 不再重建这些 Map 或 home → sections 链。
+  const messagePreviewIndexRaw = useMemo(() => {
+    // 普通首页的预览由可见行按 session 订阅。只有搜索需要跨全部任务建立消息索引。
+    if (!normalizedSearchQuery) return new Map<string, string>();
+    return remoteSessionStore.getSessionListMessagePreviewIndex(sessions);
+  }, [messageSearchVersion, normalizedSearchQuery, sessions]);
   const messagePreviewIndex = useStableValue(messagePreviewIndexRaw, mapContentEqual);
-  const pendingInteractionIndexRaw = useMemo(() => new Map(
-    sessions
-      .map((session) => [session.id, remoteSessionStore.getPendingInteractions(session.id).length] as const)
-      .filter(([, count]) => count > 0),
-  ), [sessions, storeVersion]);
+  const pendingInteractionIndexRaw = useMemo(() => {
+    const next = new Map<string, number>();
+    const activeIds = new Set<string>();
+    for (const session of sessions) {
+      activeIds.add(session.id);
+      const pending = remoteSessionStore.getPendingInteractions(session.id);
+      const cached = homePendingCacheRef.current.get(session.id);
+      const count = cached?.pending === pending ? cached.count : pending.length;
+      if (!cached || cached.pending !== pending) homePendingCacheRef.current.set(session.id, { pending, count });
+      if (count > 0) next.set(session.id, count);
+    }
+    for (const sessionId of homePendingCacheRef.current.keys()) {
+      if (!activeIds.has(sessionId)) homePendingCacheRef.current.delete(sessionId);
+    }
+    return next;
+  }, [homeStatusVersion, sessions]);
   const pendingInteractionIndex = useStableValue(pendingInteractionIndexRaw, mapContentEqual);
   const liveActivityIndexRaw = useMemo(() => {
-    const entries: Array<[string, RemoteSessionLiveActivity]> = [];
+    const next = new Map<string, RemoteSessionLiveActivity>();
     for (const session of sessions) {
       const liveActivity = remoteSessionStore.getSessionLiveActivity(session.id);
-      if (liveActivity) entries.push([session.id, liveActivity]);
+      if (liveActivity) next.set(session.id, liveActivity);
     }
-    return new Map(entries);
-  }, [sessions, storeVersion]);
+    const previous = homeLiveActivityIndexRef.current;
+    if (previous.size === next.size) {
+      let unchanged = true;
+      for (const [sessionId, value] of next) {
+        if (previous.get(sessionId) !== value) {
+          unchanged = false;
+          break;
+        }
+      }
+      if (unchanged) return previous;
+    }
+    homeLiveActivityIndexRef.current = next;
+    return next;
+  }, [homeStatusVersion, sessions]);
   const liveActivityIndex = useStableValue(liveActivityIndexRaw, mapContentEqual);
   // 列表隐藏 Orca worker 子会话(本期不支持进 worker 聊天);Lead + 普通会话保留。仅 mobile 侧过滤。
   const homeSessions = useMemo(() => excludeOrcaWorkerSessions(sessions), [sessions]);
@@ -1110,6 +1713,10 @@ export default function HomeScreen() {
     }),
     [deviceModels, liveActivityIndex, messagePreviewIndex, pendingInteractionIndex, scheduleIndex, searchQuery, selectedDeviceId, homeSessions, statusFilter, t],
   );
+  const projectMachineIdentities = useMemo(
+    () => buildHomeProjectMachineIdentities(home, deviceConnectionStates),
+    [home, deviceConnectionStates],
+  );
   const runningSessionIds = useMemo(() => {
     const ids = new Set<string>();
     for (const session of homeSessions) {
@@ -1118,7 +1725,7 @@ export default function HomeScreen() {
       if (scheduleIndex.get(session.id)?.running) ids.add(session.id);
     }
     return ids;
-  }, [homeSessions, liveActivityIndex, scheduleIndex, storeVersion]);
+  }, [homeSessions, homeStatusVersion, liveActivityIndex, scheduleIndex]);
   const homePriorityItems = useMemo(
     () => [...home.pinned, ...home.chats, ...home.projects.flatMap((project) => project.sessions)],
     [home],
@@ -1201,7 +1808,10 @@ export default function HomeScreen() {
     metricCount: 3,
     screenWidth,
   });
-  const connectionError = describeRemoteError(error);
+  const homeRecoveringDeviceIds = new Set(homeSyncDeviceIds.filter((id) => unresponsiveDevices.has(id)
+    || recoveringDeviceIds.has(id) || rawDeviceConnectionStates[id] === 'syncing'));
+  const homeDeviceUnresponsive = homeSyncDeviceIds.some((id) => unresponsiveDevices.has(id));
+  const { error: connectionError, deviceRecovery: homeDeviceRecovery } = resolveHomeConnectionFeedback(error, homeRecoveringDeviceIds, describeRemoteError);
   const initialHomeSettled = deviceIdentityCacheReady && lastSyncedAt !== null;
   const initialHomeLoading = !initialHomeSettled && !connectionError;
   const initialHomeError = !initialHomeSettled && !!connectionError;
@@ -1218,7 +1828,7 @@ export default function HomeScreen() {
     let restoredUnavailable = false;
     if (!missing && restoredSelectionUnvalidatedRef.current) {
       const filter = home.deviceFilters.find((item) => item.deviceId === selectedDeviceId);
-      restoredUnavailable = !!filter && !filter.available;
+      restoredUnavailable = !!filter && !canBrowseMobileHomeDevice(filter);
       restoredSelectionUnvalidatedRef.current = false;
     }
     if (!missing && !restoredUnavailable) return;
@@ -1228,16 +1838,42 @@ export default function HomeScreen() {
   }, [home.deviceFilters, home.selectedDeviceId, initialHomeSettled, selectedDeviceId]);
   // 连接层失败原因比请求级 error 更根因:unstable 在 online 时也需保持可见。
   const activeConnectionIssue = status !== 'online' || connectionIssue?.kind === 'unstable' ? connectionIssue : null;
-  const showConnectionRow = !!connectionError || status !== 'online' || connectionIssue?.kind === 'unstable';
+  const selectedDeviceDisconnected = status !== 'connecting' && home.deviceFilters.some((item) => item.deviceId !== null
+    && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.sessionCount > 0)
+    && !home.deviceFilters.some((item) => item.deviceId !== null
+      && (!selectedDeviceId || item.deviceId === selectedDeviceId) && item.available);
+  const showConnectionRow = selectedDeviceDisconnected || resolveConnectionBannerVisibility({
+    offline: status !== 'online',
+    connecting: status === 'connecting',
+    offlineLongEnough: true,
+    hasError: !!connectionError,
+    hasIssue: activeConnectionIssue !== null,
+    hasUnstableIssue: activeConnectionIssue?.kind === 'unstable',
+    deviceUnresponsive: homeDeviceUnresponsive,
+  });
+  const showConnectionNotice = useDelayedConnectionNotice(showConnectionRow);
+  const quietSyncing = !showConnectionRow && (refreshing || homeRecoveringDeviceIds.size > 0 || status === 'connecting');
+  const showHomeSyncAction = resolveConnectionBannerSyncActionVisibility({
+    online: status === 'online',
+    hasActiveIssue: activeConnectionIssue !== null,
+    deviceUnresponsive: homeDeviceRecovery,
+    hasRequestError: connectionError !== null,
+    // loadHome has no outer retry after its bounded REST retries are exhausted.
+    requestErrorAutoRecovering: false,
+  });
+  const showHomeRecoveryProgress = (!activeConnectionIssue
+    || activeConnectionIssue.kind === 'unstable' || activeConnectionIssue.kind === 'replaced')
+    && (status === 'connecting' || homeDeviceRecovery);
   const connectionTone = activeConnectionIssue
     ? 'off'
-    : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
+    : homeDeviceRecovery ? 'busy' : selectedDeviceDisconnected ? 'off' : connectionError ? 'muted' : status === 'online' ? 'ready' : status === 'connecting' ? 'busy' : 'off';
   const connectionTitle = activeConnectionIssue
     ? connectionIssueTitle(activeConnectionIssue.kind)
-    : connectionError ? t('devices.list.syncFailed') : homeConnectionTitle(status, t);
+    : homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveTitle' : 'deviceLink.recovery.syncing')
+      : selectedDeviceDisconnected ? t('deviceLink.cachedHistory.title') : connectionError ? t('devices.list.syncFailed') : homeConnectionTitle(status, t);
   const connectionCopy = activeConnectionIssue
     ? connectionIssueHint(activeConnectionIssue.kind)
-    : connectionError;
+    : homeDeviceRecovery ? t(homeDeviceUnresponsive ? 'deviceLink.deviceUnresponsiveHint' : 'deviceLink.recovery.syncingHint') : selectedDeviceDisconnected ? t('deviceLink.cachedHistory.hint') : connectionError;
   const emptyStateTitle = initialHomeError ? t('devices.list.syncFailed') : home.emptyTitle;
   const emptyStateCopy = initialHomeError ? (connectionError ?? t('devices.list.requestFailed')) : home.emptyCopy;
   // 无可控制电脑的引导态(landing)可见性,与 ListEmptyComponent 的分支同口径。
@@ -1322,6 +1958,18 @@ export default function HomeScreen() {
     });
   }, [guardedPush, home.primaryDevice, newSessionDeviceOptions, selectedDeviceId, t]);
 
+  const logout = useCallback(async () => {
+    if (loggingOut) return;
+    setLoggingOut(true);
+    try {
+      await auth.logout();
+    } catch (error) {
+      Alert.alert(t('devices.list.alert.actionFailed'), formatRemoteError(error));
+    } finally {
+      setLoggingOut(false);
+    }
+  }, [auth, loggingOut, t]);
+
   const toggleProject = useCallback((key: string) => {
     configureCollapseAnimation();
     setCollapsedProjectKeys((current) =>
@@ -1340,6 +1988,7 @@ export default function HomeScreen() {
     projectOrder?: HomeProjectOrder;
     manualProjectOrder?: string[];
   }) => {
+    const expectedAccountGeneration = accountGeneration;
     viewPrefsTouchedRef.current = true;
     let nextPatch = patch;
     if (
@@ -1378,6 +2027,7 @@ export default function HomeScreen() {
         ownerStamp: hostProjectOrders.get(selectedDeviceId)?.ownerStamp,
         projectOrder: nextPatch.projectOrder,
       }).then((result) => {
+        if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
         if (result.kind === 'unavailable') {
           projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
           setHostProjectOrders((current) => {
@@ -1407,7 +2057,7 @@ export default function HomeScreen() {
     if (nextPatch.projectOrder !== undefined) setProjectOrder(nextPatch.projectOrder);
     if (nextPatch.manualProjectOrder !== undefined) setManualProjectOrder(nextPatch.manualProjectOrder);
     void saveHomeViewPreferences(nextPatch);
-  }, [home.projects, hostManualProjectOrder, hostProjectOrders, invoke, manualProjectOrder.length, projectOrder, selectedDeviceId]);
+  }, [accountGeneration, home.projects, hostManualProjectOrder, hostProjectOrders, invoke, manualProjectOrder.length, projectOrder, selectedDeviceId]);
 
   const beginProjectDrag = useCallback((input: {
     absoluteY: number;
@@ -1415,13 +2065,18 @@ export default function HomeScreen() {
     key: string;
     title: string;
   }) => {
+    const expectedAccountGeneration = accountGeneration;
     const epoch = projectDragEpochRef.current + 1;
     projectDragEpochRef.current = epoch;
     const keys = visibleProjectKeys;
     const layouts: ProjectHeaderLayout[] = [];
     let pending = keys.length;
     const finish = () => {
-      if (projectDragEpochRef.current !== epoch || layouts.length === 0) return;
+      if (
+        homeAccountGenerationRef.current !== expectedAccountGeneration
+        || projectDragEpochRef.current !== epoch
+        || layouts.length === 0
+      ) return;
       layouts.sort((a, b) => a.y - b.y);
       const self = layouts.find((item) => item.key === input.key);
       if (!self) return;
@@ -1440,7 +2095,10 @@ export default function HomeScreen() {
       const header = projectHeaderRefs.current.get(input.key);
       header?.measureInWindow((x, _y, width) => {
         homeRootRef.current?.measureInWindow((_rootX, rootY) => {
-          if (projectDragEpochRef.current !== epoch) return;
+          if (
+            homeAccountGenerationRef.current !== expectedAccountGeneration
+            || projectDragEpochRef.current !== epoch
+          ) return;
           session.x = x;
           session.width = width;
           session.rootY = rootY;
@@ -1464,7 +2122,7 @@ export default function HomeScreen() {
         if (pending === 0) finish();
       });
     }
-  }, [projectDragY, visibleProjectKeys]);
+  }, [accountGeneration, projectDragY, visibleProjectKeys]);
 
   const moveProjectDrag = useCallback((absoluteY: number) => {
     const session = projectDragRef.current;
@@ -1482,6 +2140,7 @@ export default function HomeScreen() {
   }, [projectDragY]);
 
   const endProjectDrag = useCallback(() => {
+    const expectedAccountGeneration = accountGeneration;
     projectDragEpochRef.current += 1;
     const session = projectDragRef.current;
     projectDragRef.current = null;
@@ -1493,6 +2152,7 @@ export default function HomeScreen() {
       selectedDeviceId ? hostProjectOrders.get(selectedDeviceId) : undefined,
     );
     const persistViewer = (next: string[]) => {
+      if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
       viewPrefsTouchedRef.current = true;
       setProjectOrder('custom');
       setManualProjectOrder(next);
@@ -1529,6 +2189,7 @@ export default function HomeScreen() {
         ownerStamp: hostProjectOrders.get(selectedDeviceId)?.ownerStamp,
         projectOrder: 'custom',
       }).then((result) => {
+        if (homeAccountGenerationRef.current !== expectedAccountGeneration) return;
         if (result.kind === 'unavailable') {
           projectOrderFetchFenceRef.current.noteLiveUpdate(selectedDeviceId);
           setHostProjectOrders((current) => {
@@ -1564,7 +2225,7 @@ export default function HomeScreen() {
     );
     if (!next) return;
     persistViewer(next);
-  }, [home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys]);
+  }, [accountGeneration, home.projects, hostProjectOrders, invoke, manualProjectOrder, selectedDeviceId, visibleProjectKeys]);
   useEffect(() => {
     if (!groupDialogue) setDialogueShowAll(false);
   }, [groupDialogue]);
@@ -1644,6 +2305,7 @@ export default function HomeScreen() {
       expandedAutomationGroups={expandedAutomationGroups}
       isLastPinnedRow={section.key === 'pinned' && index === section.data.length - 1 && sections.length > 1}
       item={item}
+      machineIdentity={item.kind === 'project' ? projectMachineIdentities.get(item.project.key) : undefined}
       nextIsBlock={isBlockHomeRow(section.data[index + 1])}
       onArchive={archiveSession}
       onOpenAutomationGroup={openAutomationGroup}
@@ -1658,6 +2320,8 @@ export default function HomeScreen() {
       onToggleProject={toggleProject}
       projectDragging={projectDrag?.key === (item.kind === 'project' ? item.project.key : '')}
       projectHeaderRefs={projectHeaderRefs}
+      homeScrollY={homeScrollY}
+      viewportHeight={screenHeight}
       onTogglePin={toggleSessionPinned}
       prevIsBlock={isBlockHomeRow(homeRowBefore(sections, section.key, index))}
       projectCollapsed={isFolderHomeRow(item) && collapsedProjectKeys.includes(item.project.key)}
@@ -1688,6 +2352,9 @@ export default function HomeScreen() {
     toggleAutomationGroup,
     toggleProject,
     toggleSessionPinned,
+    homeScrollY,
+    screenHeight,
+    projectMachineIdentities,
   ]);
 
   // 底部边到边:列表填满到物理屏底(内容滚到 home indicator 下方),用 inset 兜底而非靠 SafeAreaView 留白带。
@@ -1700,19 +2367,131 @@ export default function HomeScreen() {
     windowWidth: screenWidth,
   });
 
-  const chromeHeight = headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT;
+  const selectHomeScope = useCallback((item: MobileHomeDeviceFilterItem) => {
+    if (item.deviceId && item.state === 'access_revoked') {
+      const deviceId = item.deviceId;
+      if (usesSystemActionMenu()) {
+        setRevokedTipDeviceId(deviceId);
+        return;
+      }
+      pendingMenuActionRef.current = () => setRevokedTipDeviceId(deviceId);
+      setDeviceMenuOpen(false);
+      return;
+    }
+    viewPrefsTouchedRef.current = true;
+    restoredSelectionUnvalidatedRef.current = false;
+    setSelectedDeviceId(item.deviceId);
+    setRestoredDeviceName(null);
+    setDeviceMenuOpen(false);
+    void saveHomeViewPreferences({
+      selectedDevice: item.deviceId ? { deviceId: item.deviceId, name: item.label } : null,
+    });
+  }, []);
+
+  const nativeHomeMenus = usesNativePullDownMenu();
+  const homeScopePullDownActions = useMemo(
+    () => buildHomeScopePullDownActions(
+      home.deviceFilters,
+      t('devices.list.allConversations'),
+      remoteHomeCollections.map((collection) => ({
+        id: collection.id,
+        title: collection.title,
+      })),
+    ),
+    [home.deviceFilters, remoteHomeCollections, t],
+  );
+  const handleHomeScopeAction = useCallback((id: string) => {
+    const parsed = parseHomeScopePullDownAction(id);
+    if (parsed.kind === 'collection') {
+      const collection = remoteHomeCollections.find((item) => item.id === parsed.collectionId);
+      if (!collection) return;
+      guardedPush({
+        pathname: '/resources/[collectionId]',
+        params: {
+          collectionId: collection.id,
+          title: collection.title,
+          targets: serializeRemoteResourceTargets(collection.targets),
+        },
+      });
+      return;
+    }
+    const item = home.deviceFilters.find((filter) => filter.id === parsed.filterId);
+    if (item) selectHomeScope(item);
+  }, [guardedPush, home.deviceFilters, remoteHomeCollections, selectHomeScope]);
+  const homeDisplayPullDownActions = useMemo(
+    () => buildHomeDisplayPullDownActions({
+      groupByProject,
+      groupByProjectLabel: t('devices.list.menu.groupByProject'),
+      groupDialogue,
+      groupDialogueLabel: t('devices.list.menu.groupDialogue'),
+      groupHeading: t('devices.list.menu.groupHeading'),
+      projectOrder: displayedProjectOrder,
+      projectOrderActivityLabel: t('devices.list.menu.projectOrderActivity'),
+      projectOrderCustomLabel: t('devices.list.menu.projectOrderManual'),
+      projectOrderHeading: t('devices.list.menu.projectOrderHeading'),
+      showProjectOrder: true,
+      sortBy,
+      sortByPriorityLabel: t('devices.list.menu.sortByPriority'),
+      sortByTimeLabel: t('devices.list.menu.sortByTime'),
+      sortHeading: t('devices.list.menu.sortHeading'),
+      statusActiveLabel: t('devices.list.menu.statusActive'),
+      statusAllLabel: t('devices.list.menu.statusAll'),
+      statusArchivedLabel: t('devices.list.menu.statusArchived'),
+      statusFilter,
+      statusHeading: t('devices.list.menu.statusHeading'),
+    }),
+    [displayedProjectOrder, groupByProject, groupDialogue, sortBy, statusFilter, t],
+  );
+  const openSelectedRemoteDesktop = useCallback(() => {
+    if (!selectedDeviceId) return;
+    const device = home.deviceFilters.find((item) => item.deviceId === selectedDeviceId);
+    guardedPush({
+      pathname: '/devices/desktop/[deviceId]',
+      params: { deviceId: selectedDeviceId, deviceName: device?.label ?? selectedDeviceLabel },
+    });
+  }, [guardedPush, home.deviceFilters, selectedDeviceId, selectedDeviceLabel]);
+
+  const nativeHomeHeader = usesNativeStackHeader();
+  const chromeHeight = nativeHomeHeader
+    ? (headerHeight ?? 0)
+    : (headerHeight ?? edgePadding.paddingTop + HOME_HEADER_MIN_HEIGHT);
   return (
     <View
       ref={homeRootRef}
       style={[styles.safeArea, { paddingLeft: edgePadding.paddingLeft, paddingRight: edgePadding.paddingRight }]}
       testID="devices.screen"
     >
+      {nativeHomeHeader ? (
+        <HomeNativeStackHeader
+          syncing={quietSyncing}
+          displayA11y={t('devices.list.a11y.openDisplaySettings')}
+          displayActions={homeDisplayPullDownActions}
+          menuA11y={t('devices.list.a11y.openMenu')}
+          onDisplayAction={(id) => {
+            applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, {
+              groupByProject,
+              groupDialogue,
+            }));
+          }}
+          onOpenDeviceMenu={openDeviceMenu}
+          onOpenDisplaySettings={openDisplaySettings}
+          onOpenMenu={openChromeMenu}
+          onOpenRemoteDesktop={selectedDeviceId ? openSelectedRemoteDesktop : undefined}
+          remoteDesktopA11y={t('remoteDesktop.title')}
+          onSelectScope={handleHomeScopeAction}
+          scopeActions={homeScopePullDownActions}
+          showRemoteGuide={showRemoteGuide}
+          title={selectedDeviceLabel}
+          titleA11y={t('devices.list.a11y.selectScope')}
+        />
+      ) : null}
       <View
         onLayout={(e) => setHeaderHeight(e.nativeEvent.layout.height)}
-        style={[styles.homeChrome, headerFrosted && styles.homeChromeFrosted]}
+        style={[styles.homeChrome, headerFrosted && !nativeHomeHeader && styles.homeChromeFrosted]}
       >
-        <HomeChromeFrost visible={headerFrosted} />
-        <View style={{ paddingTop: edgePadding.paddingTop }}>
+        <HomeChromeFrost disabled={nativeHomeHeader} visible={headerFrosted}>
+        <View style={{ paddingTop: nativeHomeHeader ? 0 : edgePadding.paddingTop }}>
+        {nativeHomeHeader ? null : (
         <View style={styles.homeHeader}>
         <HomeHeaderGlassButton
           accessibilityLabel={t('devices.list.a11y.openMenu')}
@@ -1727,45 +2506,65 @@ export default function HomeScreen() {
             <Text style={styles.headerTitle} numberOfLines={1}>Cindy</Text>
           </View>
         ) : (
-          <Pressable
-            accessibilityLabel={t('devices.list.a11y.selectScope')}
-            accessibilityRole="button"
-            onPress={openDeviceMenu}
-            onPressIn={openDeviceMenu}
-            style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
-            testID="devices.title"
+          <NativePullDownMenu
+            actions={homeScopePullDownActions}
+            onAction={handleHomeScopeAction}
           >
-            <View style={styles.headerTitleCluster}>
-              <Text style={styles.headerTitle} numberOfLines={1}>{selectedDeviceLabel}</Text>
-              <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
-            </View>
-          </Pressable>
+            <Pressable
+              accessibilityLabel={t('devices.list.a11y.selectScope')}
+              accessibilityRole="button"
+              onPress={nativeHomeMenus ? () => undefined : openDeviceMenu}
+              onPressIn={nativeHomeMenus ? undefined : openDeviceMenu}
+              style={({ pressed }) => [styles.headerTitleWrap, pressed && styles.pressed]}
+              testID="devices.title"
+            >
+              <View style={styles.headerTitleCluster}>
+                <Text style={styles.headerTitle} numberOfLines={1}>{selectedDeviceLabel}</Text>
+                <ChevronDown color={colors.textSecondary} size={iconSize.xs} strokeWidth={iconStroke.medium} />
+                <QuietSyncIndicator active={quietSyncing} />
+              </View>
+            </Pressable>
+          </NativePullDownMenu>
         )}
         {showRemoteGuide ? (
           <View style={styles.headerIconButton} />
         ) : (
-          <HomeHeaderGlassButton
-            accessibilityLabel={t('devices.list.a11y.openDisplaySettings')}
-            onPress={openDisplaySettings}
-            testID="home.displaySettingsButton"
-          >
-            <Ellipsis color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
-          </HomeHeaderGlassButton>
+          <View style={styles.headerActions}>
+            {selectedDeviceId ? (
+              <HomeHeaderGlassButton accessibilityLabel={t('remoteDesktop.title')} onPress={openSelectedRemoteDesktop} testID="home.remoteDesktopButton">
+                <Monitor color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+              </HomeHeaderGlassButton>
+            ) : null}
+            <NativePullDownMenu
+              actions={homeDisplayPullDownActions}
+              onAction={(id) => applyDisplayView(homeDisplayMenuPatch(id as HomeDisplayMenuKey, { groupByProject, groupDialogue }))}
+            >
+              <HomeHeaderGlassButton accessibilityLabel={t('devices.list.a11y.openDisplaySettings')} onPress={nativeHomeMenus ? () => undefined : openDisplaySettings} testID="home.displaySettingsButton">
+                <Ellipsis color={colors.textPrimary} size={iconSize.xl} strokeWidth={iconStroke.regular} />
+              </HomeHeaderGlassButton>
+            </NativePullDownMenu>
+          </View>
         )}
         </View>
+        )}
 
         {searchOpen || !!searchQuery.trim() ? (
           <HomeSearchBar
             autoFocus={searchOpen && !searchQuery}
             filterA11y={searchFilterA11y}
+            filterActions={searchFilterMenu.filterActions}
             filterActive={indexedSearch.activeFilterCount > 0}
             onChangeQuery={indexedSearch.setQuery}
+            onFilterAction={searchFilterMenu.onFilterAction}
             onOpenFilter={() => setSearchFilterOpen(true)}
             query={searchQuery}
           />
         ) : null}
 
-        {showConnectionRow ? (
+        </View>
+        </HomeChromeFrost>
+        {showConnectionNotice ? (
+        <ConnectionNoticeOverlay>
         <View
           style={[styles.connectionRow, (connectionError || activeConnectionIssue) && styles.connectionRowError]}
           testID="connection.banner"
@@ -1774,7 +2573,7 @@ export default function HomeScreen() {
           <Text ellipsizeMode="tail" numberOfLines={1} style={styles.connectionText} testID="connection.title">
             {connectionCopy ? `${connectionTitle} · ${connectionCopy}` : connectionTitle}
           </Text>
-          <Pressable
+          {showHomeSyncAction ? <Pressable
             accessibilityLabel={refreshing ? t('devices.list.a11y.syncing') : t('devices.list.a11y.sync')}
             accessibilityRole="button"
             accessibilityState={{ busy: refreshing || undefined, disabled: refreshing }}
@@ -1788,16 +2587,22 @@ export default function HomeScreen() {
             testID="connection.syncButton"
           >
             <RefreshCw color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
-          </Pressable>
+          </Pressable> : showHomeRecoveryProgress ? (
+            <ConnectionRecoveryProgress />
+          ) : null}
         </View>
+        </ConnectionNoticeOverlay>
         ) : null}
-        </View>
       </View>
 
       <SectionList
         sections={sections}
         style={styles.homeList}
         keyExtractor={(item) => item.key}
+        initialNumToRender={HOME_LIST_INITIAL_RENDER_COUNT}
+        maxToRenderPerBatch={HOME_LIST_RENDER_BATCH_SIZE}
+        updateCellsBatchingPeriod={32}
+        windowSize={HOME_LIST_WINDOW_SIZE}
         refreshControl={
           <RefreshControl
             progressViewOffset={chromeHeight}
@@ -1941,19 +2746,22 @@ export default function HomeScreen() {
         }}
       />
       <DeviceMenuModal
+        collections={remoteHomeCollections}
         connectionStates={deviceConnectionStates}
         filters={home.deviceFilters}
         onClose={() => setDeviceMenuOpen(false)}
         onClosed={handleDeviceMenuClosed}
-        onOpenDevice={(item) => {
-          if (!item.deviceId) return;
+        onSelectCollection={(collection) => {
           setDeviceMenuOpen(false);
           guardedPush({
-            pathname: '/devices/[deviceId]',
-            params: { deviceId: item.deviceId, name: item.label },
+            pathname: '/resources/[collectionId]',
+            params: {
+              collectionId: collection.id,
+              title: collection.title,
+              targets: serializeRemoteResourceTargets(collection.targets),
+            },
           });
         }}
-        onRenameDevice={openRenameDevice}
         onSelect={(item) => {
           if (item.deviceId && item.state === 'access_revoked') {
             // 撤销授权提示同样是兄弟 Modal,必须等菜单卸载后再挂(见 pendingMenuActionRef 注释)。
@@ -1976,6 +2784,7 @@ export default function HomeScreen() {
       />
       <HomeChromeDrawer
         closeInstant={chromeMenuCloseInstant}
+        loggingOut={loggingOut}
         onClose={() => {
           setChromeMenuCloseInstant(false);
           setChromeMenuOpen(false);
@@ -1989,14 +2798,43 @@ export default function HomeScreen() {
           setChromeMenuCloseInstant(false);
           setChromeMenuOpen(false);
         }}
+        onOpenAccounts={() => {
+          pendingMenuActionRef.current = () => setAccountSwitcherOpen(true);
+          setChromeMenuCloseInstant(false);
+          setChromeMenuOpen(false);
+        }}
+        onOpenDevices={() => {
+          pendingMenuActionRef.current = null;
+          guardedPush('/devices/manage');
+          setChromeMenuCloseInstant(true);
+          setChromeMenuOpen(false);
+        }}
         onOpenSettings={() => {
           pendingMenuActionRef.current = null;
           guardedPush('/settings');
           setChromeMenuCloseInstant(true);
           setChromeMenuOpen(false);
         }}
+        onLogout={() => void logout()}
         open={chromeMenuOpen}
         user={user}
+      />
+      <AccountSwitcherSheet
+        hasRunningTasks={runningSessionIds.size > 0}
+        onAddAccount={() => {
+          pendingAccountSwitcherActionRef.current = () => {
+            void auth.beginAddAccount();
+            guardedPush('/add-account');
+          };
+          setAccountSwitcherOpen(false);
+        }}
+        onClose={() => setAccountSwitcherOpen(false)}
+        onClosed={() => {
+          const action = pendingAccountSwitcherActionRef.current;
+          pendingAccountSwitcherActionRef.current = null;
+          action?.();
+        }}
+        visible={accountSwitcherOpen}
       />
       <ConversationSearchFilterSheet
         activeCount={indexedSearch.activeFilterCount}
@@ -2028,15 +2866,7 @@ export default function HomeScreen() {
         topOffset={chromeHeight}
         visible={displaySettingsOpen}
       />
-      <RenameDeviceModal
-        draft={renameDraft}
-        onCancel={closeRenameDevice}
-        onChangeDraft={setRenameDraft}
-        onConfirm={confirmRenameDevice}
-        saving={renameSaving}
-        visible={renameTarget !== null}
-      />
-      <SessionActionSheet
+      <SessionOptionsPresenter
         onAction={handleSessionSheetAction}
         onClose={() => setActionSheetSession(null)}
         onClosed={handleSessionSheetClosed}
@@ -2070,28 +2900,29 @@ function HomeInitialLoadingState({ style }: { style?: StyleProp<ViewStyle> }) {
 }
 
 function DeviceMenuModal({
+  collections,
   connectionStates,
   filters,
   onClose,
   onClosed,
-  onOpenDevice,
-  onRenameDevice,
   onSelect,
+  onSelectCollection,
   topOffset,
   visible,
 }: {
+  collections: readonly RemoteHomeCollection[];
   connectionStates: Record<string, HomeDeviceConnectionState>;
   filters: readonly MobileHomeDeviceFilterItem[];
   onClose(): void;
   /** 淡出动画完成、Modal 真正卸载后触发;父级用它把「打开第二个 Modal」延后到菜单卸载之后。 */
   onClosed?(): void;
-  onOpenDevice(item: MobileHomeDeviceFilterItem): void;
-  onRenameDevice(item: MobileHomeDeviceFilterItem): void;
   onSelect(item: MobileHomeDeviceFilterItem): void;
+  onSelectCollection(item: RemoteHomeCollection): void;
   topOffset: number;
   visible: boolean;
 }) {
   const styles = useThemedStyles(makeStyles);
+  const { colors } = useTheme();
   const { t } = useTranslation();
   const { height: screenHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -2106,9 +2937,8 @@ function DeviceMenuModal({
     onClosed,
   });
   const allFilter = filters.find((item) => item.deviceId === null) ?? null;
-  // 范围菜单只列当前能打开的电脑,对齐桌面机器切换器:离线 / 关远控 / 撤权的设备
-  // 不占菜单(灰行点不进去只会吵);空态引导另走 RemoteAccessGuide。
-  const deviceFilters = filters.filter((item) => item.deviceId !== null && item.available);
+  // 离线电脑保留缓存入口；关远控和撤权不由缓存恢复访问权限。
+  const deviceFilters = filters.filter((item) => item.deviceId !== null && canBrowseMobileHomeDevice(item));
   return (
     <HomeMenuScrim
       backdropTestID="home.deviceMenu.backdrop"
@@ -2131,15 +2961,25 @@ function DeviceMenuModal({
                 testID="home.deviceChip.all"
               />
             ) : null}
+            {collections.map((collection) => (
+              <DeviceMenuItem
+                icon={collection.iconName === 'users'
+                  ? <UsersRound color={colors.textSecondary} size={iconSize.md} strokeWidth={iconStroke.regular} />
+                  : undefined}
+                key={`collection:${collection.id}`}
+                label={collection.title}
+                onPress={() => onSelectCollection(collection)}
+                selected={false}
+                testID={`home.remoteCollection.${collection.id}`}
+              />
+            ))}
             {deviceFilters.map((item) => (
               <DeviceMenuItem
                 connectionState={item.deviceId ? connectionStates[item.deviceId] ?? 'idle' : 'idle'}
-                dimmed={!item.available && item.state !== 'access_revoked'}
+                dimmed={!canBrowseMobileHomeDevice(item)}
                 key={item.id}
                 label={item.label}
-                onLongPress={item.deviceId ? () => onOpenDevice(item) : undefined}
                 onPress={() => onSelect(item)}
-                onRename={item.deviceId ? () => onRenameDevice(item) : undefined}
                 selected={item.selected}
                 status={deviceMenuStatus(item)}
                 testID={item.deviceId ? `home.deviceChip.${sanitizeDeviceChipTestId(item.deviceId)}` : undefined}
@@ -2283,9 +3123,7 @@ function DeviceMenuItem({
   dimmed = false,
   icon,
   label,
-  onLongPress,
   onPress,
-  onRename,
   selected,
   status,
   testID,
@@ -2295,24 +3133,20 @@ function DeviceMenuItem({
   dimmed?: boolean;
   icon?: ReactNode;
   label: string;
-  onLongPress?: () => void;
   onPress(): void;
-  onRename?: () => void;
   selected: boolean;
   status?: 'online' | 'offline';
   testID?: string;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
-  const { t } = useTranslation();
   const rowDisabled = dimmed;
   return (
     <Pressable
       accessibilityLabel={label}
       accessibilityRole="button"
       accessibilityState={{ checked: checked || undefined, disabled: rowDisabled, selected: selected || undefined }}
-      disabled={rowDisabled && !onRename}
-      onLongPress={rowDisabled ? undefined : onLongPress}
+      disabled={rowDisabled}
       onPress={() => {
         if (rowDisabled) return;
         onPress();
@@ -2337,88 +3171,7 @@ function DeviceMenuItem({
           {connectionState === 'failed' ? <View style={styles.deviceConnectionFailedRing} /> : null}
         </View>
       ) : null}
-      {onRename ? (
-        <Pressable
-          accessibilityLabel={t('devices.list.a11y.renameDevice', { label })}
-          accessibilityRole="button"
-          hitSlop={8}
-          onPress={(event) => {
-            event.stopPropagation();
-            onRename();
-          }}
-          style={({ pressed }) => [styles.deviceMenuRenameButton, pressed && styles.pressed]}
-          testID={testID ? `${testID}.rename` : undefined}
-        >
-          <Pencil color={colors.textSecondary} size={iconSize.lg} strokeWidth={iconStroke.regular} />
-        </Pressable>
-      ) : null}
     </Pressable>
-  );
-}
-
-function RenameDeviceModal({
-  draft,
-  onCancel,
-  onChangeDraft,
-  onConfirm,
-  saving,
-  visible,
-}: {
-  draft: string;
-  onCancel(): void;
-  onChangeDraft(value: string): void;
-  onConfirm(): void;
-  saving: boolean;
-  visible: boolean;
-}) {
-  const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
-  const { t } = useTranslation();
-  const canSave = draft.trim().length > 0 && !saving;
-  return (
-    <Modal animationType="fade" transparent visible={visible} onRequestClose={onCancel}>
-      <Pressable style={styles.renameDeviceBackdrop} onPress={onCancel} testID="home.renameDevice.backdrop">
-        <Pressable style={styles.renameDeviceCard} onPress={() => undefined} testID="home.renameDevice.modal">
-          <Text style={styles.renameDeviceTitle}>{t('devices.list.renameDevice.title')}</Text>
-          <TextInput
-            autoFocus
-            editable={!saving}
-            maxLength={64}
-            onChangeText={onChangeDraft}
-            onSubmitEditing={() => {
-              if (canSave) onConfirm();
-            }}
-            placeholder={t('devices.list.renameDevice.placeholder')}
-            placeholderTextColor={colors.textTertiary}
-            returnKeyType="done"
-            selectTextOnFocus
-            style={styles.renameDeviceInput}
-            testID="home.renameDevice.input"
-            value={draft}
-          />
-          {/* 确认对统一规则:共享满宽纵排组(保存在上/取消居底),置于卡片底部。 */}
-          <MainWindowActionGroup
-            primaryActions={[{
-              accessibilityLabel: saving ? t('devices.list.renameDevice.savingA11y') : t('devices.list.renameDevice.saveA11y'),
-              busy: saving,
-              disabled: !canSave,
-              label: saving ? t('devices.common.saving') : t('devices.common.save'),
-              onPress: onConfirm,
-              testID: 'home.renameDevice.save',
-              tone: 'primary',
-            }]}
-            cancelAction={{
-              accessibilityLabel: t('devices.list.a11y.cancelRename'),
-              disabled: saving,
-              label: t('devices.common.cancel'),
-              onPress: onCancel,
-              testID: 'home.renameDevice.cancel',
-            }}
-            testID="home.renameDevice.actions"
-          />
-        </Pressable>
-      </Pressable>
-    </Modal>
   );
 }
 
@@ -2533,12 +3286,51 @@ function ProjectDragOverlay({
   );
 }
 
+function HomeProjectWindowAnchorTracker({
+  childOffsets,
+  onAnchorChange,
+  projectHeaderHeight,
+  projectLayoutReady,
+  projectTop,
+  scrollY,
+  viewportHeight,
+}: {
+  childOffsets: readonly number[];
+  onAnchorChange(anchor: number): void;
+  projectHeaderHeight: SharedValue<number>;
+  projectLayoutReady: SharedValue<boolean>;
+  projectTop: SharedValue<number>;
+  scrollY: SharedValue<number>;
+  viewportHeight: number;
+}) {
+  useAnimatedReaction(
+    () => {
+      if (!projectLayoutReady.value) return -1;
+      return resolveHomeProjectChildAnchor({
+        childOffsets,
+        projectHeaderHeight: projectHeaderHeight.value,
+        projectTop: projectTop.value,
+        shift: PROJECT_CHILD_WINDOW_SHIFT,
+        viewportHeight,
+        viewportTop: scrollY.value,
+      });
+    },
+    (next, previous) => {
+      if (next === previous) return;
+      runOnJS(onAnchorChange)(next);
+    },
+    [childOffsets, onAnchorChange, projectHeaderHeight, projectLayoutReady, projectTop, scrollY, viewportHeight],
+  );
+  return null;
+}
+
 function ProjectRow({
   collapsed,
   dragging = false,
   expandedAutomationGroups,
   headerRefs,
   kind = 'project',
+  machineIdentity,
   onDragEnd,
   onDragMove,
   onDragStart,
@@ -2548,6 +3340,8 @@ function ProjectRow({
   onToggle,
   onToggleAutomationGroup,
   project,
+  homeScrollY,
+  viewportHeight,
   showAll = false,
   suppressTopBorder = false,
   swipe,
@@ -2557,6 +3351,7 @@ function ProjectRow({
   expandedAutomationGroups: readonly string[];
   headerRefs?: MutableRefObject<Map<string, View>>;
   kind?: 'project' | 'dialogue';
+  machineIdentity?: HomeProjectMachineIdentity;
   onDragEnd?: () => void;
   onDragMove?: (absoluteY: number) => void;
   onDragStart?: (input: { absoluteY: number; count: number; key: string; title: string }) => void;
@@ -2566,6 +3361,8 @@ function ProjectRow({
   onToggle(): void;
   onToggleAutomationGroup(key: string): void;
   project: MobileHomeProjectGroup;
+  homeScrollY?: SharedValue<number>;
+  viewportHeight: number;
   /** 对话组「查看全部」在原地展开,不跳设备详情。 */
   showAll?: boolean;
   /** 前一行也是块(项目组 / 自动化组)时不画顶线:前块底线已是这根分割线。 */
@@ -2577,9 +3374,9 @@ function ProjectRow({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读会话运行态,而派生链稳定化后本组件不再逐 emit 重渲染(cell 经
-  // PureComponent bail)——以 storeVersion 订阅兜底感知运行态变化,与 AutomationGroup-
+  // PureComponent bail)——以低频首页状态版本兜底感知运行态变化,与 AutomationGroup-
   // Children 同款(否则折叠线以下转入 running 的会话不会被豁免展开,review P1)。
-  useRemoteSessionStoreVersion();
+  const homeStatusVersion = useRemoteHomeStatusVersion();
   // 与桌面侧栏项目组同一套折叠策略:前 N 条之外豁免最近 24h 活动 / 需关注 / 运行中的条目
   // (豁免语义见共享层 getRemoteSessionPreviewCollapse 注释)。
   // 自动化折叠后 sessions 是"行"(组行代表多条会话):按钮显隐看隐藏行数(hiddenCount),
@@ -2591,9 +3388,63 @@ function ProjectRow({
       isSessionRunning: (sessionId) => remoteSessionStore.isSessionRunning(sessionId),
     },
   );
+  const projectTop = useSharedValue(0);
+  const projectHeaderHeight = useSharedValue(HOME_PROJECT_HEADER_HEIGHT);
+  const projectRef = useRef<View>(null);
+  const [windowAnchor, setWindowAnchor] = useState(-1);
+  const projectLayoutReady = useSharedValue(false);
+  const estimatedChildHeights = useMemo(() => {
+    const expandedKeys = new Set(expandedAutomationGroups);
+    return visibleSessions.map((item) => estimateHomeProjectChildHeight(item, expandedKeys));
+  }, [expandedAutomationGroups, homeStatusVersion, visibleSessions]);
+  const estimatedChildOffsets = useMemo(
+    () => buildHomeProjectChildOffsets(estimatedChildHeights),
+    [estimatedChildHeights],
+  );
+  // Keep the common five-row preview unchanged. A large expanded group keeps
+  // its complete estimated height as a spacer until native layout establishes
+  // that its child area intersects the viewport. This avoids mounting an
+  // off-screen child window just because the folder header entered the outer
+  // SectionList render window.
+  const windowingEnabled = shouldWindowHomeProjectChildren({
+    collapsed,
+    itemCount: visibleSessions.length,
+    scrollTrackingAvailable: !!homeScrollY,
+    threshold: PROJECT_CHILD_WINDOW_THRESHOLD,
+  });
+  const scrollY = homeScrollY;
+  const childContentHeight = estimatedChildOffsets[estimatedChildOffsets.length - 1] ?? 0;
+  const childWindow = windowingEnabled
+    ? windowAnchor >= 0
+      ? resolveHomeProjectChildWindow({
+        anchor: windowAnchor,
+        childOffsets: estimatedChildOffsets,
+        overscan: PROJECT_CHILD_WINDOW_OVERSCAN,
+        windowSize: PROJECT_CHILD_WINDOW_SIZE,
+      })
+      : {
+          end: 0,
+          leadingSpacerHeight: 0,
+          start: 0,
+          trailingSpacerHeight: childContentHeight,
+        }
+    : {
+        end: visibleSessions.length,
+        leadingSpacerHeight: 0,
+        start: 0,
+        trailingSpacerHeight: 0,
+      };
+  const windowStart = childWindow.start;
+  const windowEnd = childWindow.end;
+  const renderedSessions = windowingEnabled ? visibleSessions.slice(windowStart, windowEnd) : visibleSessions;
+  const leadingSpacerHeight = childWindow.leadingSpacerHeight;
+  const trailingSpacerHeight = childWindow.trailingSpacerHeight;
   const groupTestID = kind === 'dialogue' ? 'home.dialogueGroup' : 'home.projectGroup';
   const rowTestID = kind === 'dialogue' ? 'home.dialogueRow' : 'home.projectRow';
   const childTestID = kind === 'dialogue' ? 'home.chatRow' : 'home.projectSessionRow';
+  const displayTitle = machineIdentity && !machineIdentity.hideLabel
+    ? `${project.title} (${machineIdentity.displayLabel})`
+    : project.title;
   const reorderable = kind === 'project' && !!onDragStart && !!onDragMove && !!onDragEnd;
   const dragGesture = useMemo(() => {
     if (!onDragStart || !onDragMove || !onDragEnd || kind !== 'project') return null;
@@ -2607,7 +3458,7 @@ function ProjectRow({
           absoluteY: event.absoluteY,
           count: project.sessionCount,
           key: project.key,
-          title: project.title,
+          title: displayTitle,
         });
       })
       .onUpdate((event) => {
@@ -2616,15 +3467,19 @@ function ProjectRow({
       .onFinalize(() => {
         runOnJS(finish)();
       });
-  }, [kind, onDragEnd, onDragMove, onDragStart, project.key, project.sessionCount, project.title]);
+  }, [displayTitle, kind, onDragEnd, onDragMove, onDragStart, project.key, project.sessionCount]);
   const header = (
     <Pressable
       accessibilityHint={reorderable ? t('devices.list.menu.projectOrderManualTip') : undefined}
       accessibilityLabel={kind === 'dialogue'
         ? t('devices.list.a11y.dialogue')
-        : t('devices.list.a11y.project', { title: project.title })}
+        : t('devices.list.a11y.project', { title: displayTitle })}
       accessibilityRole="button"
       accessibilityState={{ expanded: !collapsed }}
+      onLayout={(event) => {
+        const height = event.nativeEvent.layout.height;
+        if (Number.isFinite(height) && height > 0) projectHeaderHeight.value = height;
+      }}
       onPress={dragging ? undefined : onToggle}
       ref={(node) => {
         if (!headerRefs || kind !== 'project') return;
@@ -2650,20 +3505,66 @@ function ProjectRow({
       ) : (
         <FolderOpen color={colors.textSecondary} size={iconSize.xl} strokeWidth={iconStroke.thin} />
       )}
-      <Text style={styles.projectTitle} numberOfLines={1}>{project.title}</Text>
+      <View style={styles.projectLabel}>
+        <Text style={[styles.projectTitle, styles.projectFolderTitle]} numberOfLines={1}>{project.title}</Text>
+        {machineIdentity ? <HomeProjectMachineLabel identity={machineIdentity} /> : null}
+      </View>
       <Text style={styles.projectCount} numberOfLines={1}>{project.sessionCount}</Text>
     </Pressable>
   );
   return (
     <View
+      onLayout={(event) => {
+        if (!windowingEnabled) return;
+        projectLayoutReady.value = false;
+        const fallbackY = event.nativeEvent.layout.y;
+        projectRef.current?.measureInWindow((_x, screenY) => {
+          projectTop.value = screenY + (homeScrollY?.value ?? 0);
+          projectLayoutReady.value = true;
+        });
+        // A native measure can be unavailable in shallow/unit renderers. Keep
+        // the local layout as a safe fallback; the real device measurement
+        // above is used whenever the row is mounted in a ScrollView.
+        if (!projectRef.current) {
+          projectTop.value = fallbackY;
+          projectLayoutReady.value = true;
+        }
+      }}
+      ref={projectRef}
       style={[styles.projectGroup, suppressTopBorder && styles.projectGroupNoTop]}
       testID={groupTestID}
     >
+      {windowingEnabled && scrollY ? (
+        <HomeProjectWindowAnchorTracker
+          childOffsets={estimatedChildOffsets}
+          onAnchorChange={setWindowAnchor}
+          projectHeaderHeight={projectHeaderHeight}
+          projectLayoutReady={projectLayoutReady}
+          projectTop={projectTop}
+          scrollY={scrollY}
+          viewportHeight={viewportHeight}
+        />
+      ) : null}
       {dragGesture ? <GestureDetector gesture={dragGesture}>{header}</GestureDetector> : header}
 
       {collapsed ? null : (
         <View style={styles.projectChildren} testID="home.projectChildren">
-          {visibleSessions.map((item, index) => {
+          {leadingSpacerHeight > 0 ? <View pointerEvents="none" style={{ height: leadingSpacerHeight }} /> : null}
+          {renderedSessions.map((item, renderedIndex) => {
+            const index = windowStart + renderedIndex;
+            const itemKey = item.automationGroup?.key ?? item.session.id;
+            const swipeable = !!swipe
+              && !item.automationGroup
+              && conversationSearchAllowsLocalWrites(item);
+            // Window shifts used to key rows by session id, so crossing one
+            // four-row boundary destroyed and recreated four complete native
+            // swipe trees in the same frame. Keep a stable pool of render
+            // slots while windowing; the row receives new data without paying
+            // the native mount/unmount cost. Preserve identity keys outside the
+            // windowed path, and remount a slot when its outer shell changes.
+            const reactKey = windowingEnabled
+              ? `${project.key}:window:${renderedIndex}:${swipeable ? 'swipe' : 'plain'}`
+              : itemKey;
             const row = (
               <HomeSessionRow
                 expandedAutomationGroups={expandedAutomationGroups}
@@ -2680,12 +3581,12 @@ function ProjectRow({
             );
             // 与顶层同一条规则:普通会话子行挂滑动,自动化组行不挂(组行语义含混,
             // 其展开子行由 AutomationGroupChildren 内的透传包裹)。
-            if (!swipe || item.automationGroup || !conversationSearchAllowsLocalWrites(item)) {
-              return <Fragment key={item.automationGroup?.key ?? item.session.id}>{row}</Fragment>;
+            if (!swipeable) {
+              return <Fragment key={reactKey}>{row}</Fragment>;
             }
             return (
               <SwipeableSessionRow
-                key={item.session.id}
+                key={reactKey}
                 onArchive={swipe.onArchive}
                 onShowOptions={swipe.onShowOptions}
                 onTogglePin={swipe.onTogglePin}
@@ -2697,6 +3598,7 @@ function ProjectRow({
               </SwipeableSessionRow>
             );
           })}
+          {trailingSpacerHeight > 0 ? <View pointerEvents="none" style={{ height: trailingSpacerHeight }} /> : null}
           {hiddenRowCount > 0 ? (
             <Pressable
               accessibilityLabel={t('devices.list.viewAllConversations', { count: project.sessionCount })}
@@ -2733,12 +3635,28 @@ function ProjectRow({
  * useMemo 单例。给本组件新增函数 prop 时必须复审闭包稳定性。projectCollapsed /
  * prevIsBlock 等邻接派生位由 renderItem 计算成标量传入,天然参与比较。
  */
-const HomeListRow = memo(HomeListRowInner, dataPropsEqual);
+const HomeListRow = memo(HomeListRowInner, homeListRowPropsEqual);
+
+function homeListRowPropsEqual(
+  previous: Readonly<Record<string, unknown>>,
+  next: Readonly<Record<string, unknown>>,
+): boolean {
+  const previousItem = previous.item as HomeRow;
+  const nextItem = next.item as HomeRow;
+  if (!homeRowsShareRenderData(previousItem, nextItem)) {
+    return dataPropsEqual(previous, next);
+  }
+  // dataPropsEqual retains the existing semantics for every other prop. Point
+  // the previous row at the already-proven-equivalent next item so the
+  // generic comparator takes its Object.is path instead of JSON.stringify.
+  return dataPropsEqual({ ...previous, item: nextItem }, next);
+}
 
 function HomeListRowInner({
   expandedAutomationGroups,
   isLastPinnedRow,
   item,
+  machineIdentity,
   nextIsBlock,
   onArchive,
   onOpenAutomationGroup,
@@ -2756,6 +3674,8 @@ function HomeListRowInner({
   projectCollapsed,
   projectDragging,
   projectHeaderRefs,
+  homeScrollY,
+  viewportHeight,
   registry,
   showAllDialogue,
   swipe,
@@ -2764,6 +3684,7 @@ function HomeListRowInner({
   /** 置顶组展开态:行进入置顶卡片内的缩进/描边形态(CINDY list 视觉)。 */
   isLastPinnedRow: boolean;
   item: HomeRow;
+  machineIdentity?: HomeProjectMachineIdentity;
   nextIsBlock: boolean;
   onArchive(session: RemoteSession): void;
   onOpenAutomationGroup(group: RemoteAutomationSessionGroup): void;
@@ -2781,6 +3702,8 @@ function HomeListRowInner({
   projectCollapsed: boolean;
   projectDragging: boolean;
   projectHeaderRefs: MutableRefObject<Map<string, View>>;
+  homeScrollY?: SharedValue<number>;
+  viewportHeight: number;
   registry: ReturnType<typeof createSwipeRowRegistry>;
   showAllDialogue: boolean;
   swipe: SessionSwipeControls;
@@ -2793,6 +3716,7 @@ function HomeListRowInner({
         expandedAutomationGroups={expandedAutomationGroups}
         headerRefs={projectHeaderRefs}
         kind={item.kind}
+        machineIdentity={machineIdentity}
         onDragEnd={item.kind === 'project' ? onProjectDragEnd : undefined}
         onDragMove={item.kind === 'project' ? onProjectDragMove : undefined}
         onDragStart={item.kind === 'project' ? onProjectDragStart : undefined}
@@ -2802,6 +3726,8 @@ function HomeListRowInner({
         onToggle={() => onToggleProject(item.project.key)}
         onToggleAutomationGroup={onToggleAutomationGroup}
         project={item.project}
+        homeScrollY={homeScrollY}
+        viewportHeight={viewportHeight}
         showAll={item.kind === 'dialogue' && showAllDialogue}
         suppressTopBorder={prevIsBlock}
         swipe={swipe}
@@ -2921,21 +3847,21 @@ function HomeSessionRowInner({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 运行态走订阅而非命令式读取:行已 memo 化,父层不再逐 emit 重渲染,命令式读取会 stale。
-  const sessionIsRunning = useSessionRunning(item.session.id);
-  const running = sessionIsRunning || !!item.scheduleInfo?.running;
+  const latestItem = latestMobileSessionRow(item);
+  const sessionIsRunning = useSessionRunning(latestItem.session.id);
+  // 已加载消息的预览按 session 订阅。普通流式 token 只让对应的可见行更新，首页根层、
+  // sections 和其它任务行都保持原引用。
+  const loadedMessagePreview = useRemoteSessionMessagePreview(item.session.id);
+  const running = sessionIsRunning || !!latestItem.scheduleInfo?.running;
   // attention 合并 main 的 #368:liveActivity.attention 也点亮关注态(组行直开 primary 的判定沿用)。
   const attention = item.pendingInteractionCount > 0
     || (item.scheduleInfo?.unreadCount ?? 0) > 0
     || item.liveActivity?.attention === true;
   // 右侧状态槽(替代时间位):与桌面侧栏同一套五档优先级与色表
   // (error 红 > awaiting TapTap 蓝 > running spinner > 完成未读绿 > 时间)。
-  const rightStatus = resolveMobileSessionRightStatus({
-    liveAttention: item.liveActivity?.attention === true,
-    livePhase: item.liveActivity?.phase,
-    pendingInteractionCount: item.pendingInteractionCount,
-    running,
-    scheduleUnreadCount: item.scheduleInfo?.unreadCount ?? 0,
-  });
+  const group = onToggleAutomationGroup ? item.automationGroup : undefined;
+  const groupExpanded = !!group && !!expandedAutomationGroups?.includes(group.key);
+  const { status: rightStatus, target: statusTarget } = resolveMobileSessionRowStatus(item, sessionIsRunning, groupExpanded);
   const showDraftIndicator = readBooleanField(item.session, 'hasDraft')
     || readBooleanField(item.session, 'hasPausedQueue')
     || readBooleanField(item.session, 'composerDraft');
@@ -2946,8 +3872,6 @@ function HomeSessionRowInner({
   const showPinned = !!item.session.pinnedAt;
   // 自动化组行:同一任务的多次运行折叠而成(共享层 groupAutomationListItems 产出)。
   // 没接展开回调的调用点退化为普通行为(点击打开 primary 会话)。
-  const group = onToggleAutomationGroup ? item.automationGroup : undefined;
-  const groupExpanded = !!group && !!expandedAutomationGroups?.includes(group.key);
   // 块模式:组行 + 展开的子行整体包在一个上下全宽线的块里;组行自身不再画缩进分割线
   // (收起时块底线紧贴行底,展开时组头与子行之间保持连续无线,均与项目组语义一致)。
   const blockMode = asBlock && !!group;
@@ -2955,7 +3879,12 @@ function HomeSessionRowInner({
   // 组行的预览位改为任务态摘要(需关注数 / 执行中 / 共 N 次运行),对齐桌面版组头 meta。
   const preview = group
     ? automationGroupPreview(item, group.sessionCount, t)
-    : buildRemoteSessionCardPreview(item, { running });
+    : buildRemoteSessionCardPreview(
+        loadedMessagePreview === undefined || loadedMessagePreview === item.messagePreview
+          ? item
+          : { ...item, messagePreview: loadedMessagePreview },
+        { running },
+      );
   // 零消息会话没有摘要。此时不要保留双行列表的空白第二行；但定时任务与置顶
   // 标记仍占用右下状态槽，因此继续使用双行布局。
   const showPreviewLine = !!preview?.trim() || showSchedule || showPinned;
@@ -2964,10 +3893,10 @@ function HomeSessionRowInner({
   // 无需关注内容或已展开时,点行仍是展开 / 收起。
   const openGroupPrimary = () => {
     if (!group) return;
-    const primary = group.items.find((child) => child.session.id === group.primarySessionId) ?? group.items[0];
+    const primary = statusTarget;
     if (primary) onOpenSession(primary);
   };
-  const groupRowOpensPrimary = !!group && attention && !groupExpanded;
+  const groupRowOpensPrimary = !!group && (attention || rightStatus === 'error') && !groupExpanded;
   const handlePress = selectionMode && onPressSelection
     ? onPressSelection
     : group
@@ -3173,8 +4102,8 @@ function AutomationGroupChildren({
   const { colors } = useTheme();
   const { t } = useTranslation();
   // 折叠豁免要命令式读子会话运行态,而父行(HomeSessionRow)已 memo 化、不再逐 emit
-  // 重渲染——这里以 storeVersion 订阅兜底感知运行态变化。仅组展开时挂载,量小成本可忽略。
-  useRemoteSessionStoreVersion();
+  // 重渲染——只订阅首页状态版本感知运行态变化,普通文本 token 不再惊动整组。
+  useRemoteHomeStatusVersion();
   // 与项目组同一套折叠豁免(24h 活动 / 需关注 / 运行中),见共享层注释。
   const { visibleItems, hiddenCount } = getRemoteSessionPreviewCollapse(group.items, {
     limit: PROJECT_PREVIEW_LIMIT,
@@ -3500,6 +4429,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'center',
     width: 44,
   },
+  headerActions: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: spacing.xs,
+  },
   headerTitleWrap: {
     alignItems: 'center',
     flex: 1,
@@ -3530,6 +4464,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     alignSelf: 'flex-end',
   },
   connectionRow: {
+    backgroundColor: colors.surfaceElevated,
+    borderColor: colors.border,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderRadius: radius.container,
     alignItems: 'center',
     borderBottomColor: colors.border,
     borderBottomWidth: StyleSheet.hairlineWidth,
@@ -3628,52 +4566,11 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     position: 'relative',
     width: 20,
   },
-  deviceMenuRenameButton: {
-    alignItems: 'center',
-    borderRadius: radius.pill,
-    height: 34,
-    justifyContent: 'center',
-    width: 34,
-  },
   deviceMenuDivider: {
     backgroundColor: colors.border,
     height: StyleSheet.hairlineWidth,
     marginHorizontal: spacing.sm,
     marginVertical: spacing.sm,
-  },
-  renameDeviceBackdrop: {
-    alignItems: 'center',
-    backgroundColor: colors.overlay,
-    flex: 1,
-    justifyContent: 'center',
-    paddingHorizontal: spacing.xl,
-  },
-  renameDeviceCard: {
-    backgroundColor: colors.surfaceElevated,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    gap: spacing.md,
-    maxWidth: 360,
-    padding: spacing.lg,
-    width: '100%',
-  },
-  renameDeviceTitle: {
-    color: colors.textPrimary,
-    fontSize: typeScale.title,
-    fontWeight: fontWeight.medium,
-    lineHeight: lineHeight.subtitle,
-  },
-  renameDeviceInput: {
-    backgroundColor: colors.surface,
-    borderColor: colors.border,
-    borderRadius: radius.container,
-    borderWidth: StyleSheet.hairlineWidth,
-    color: colors.textPrimary,
-    fontSize: typeScale.body,
-    minHeight: 48,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
   },
   revokedTipBackdrop: {
     alignItems: 'center',
@@ -3783,6 +4680,13 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     paddingRight: spacing.lg,
     paddingVertical: spacing.sm,
   },
+  projectLabel: {
+    alignItems: 'center',
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6, // Desktop ProjectNode name / remote icon / machine label gap-1.5.
+    minWidth: 0,
+  },
   projectTitle: {
     color: colors.textPrimary,
     flex: 1,
@@ -3790,6 +4694,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     fontWeight: fontWeight.medium,
     lineHeight: lineHeight.listTitle,
     minWidth: 0,
+  },
+  projectFolderTitle: {
+    flex: 0,
+    flexShrink: 1,
   },
   projectCount: {
     color: colors.textTertiary,

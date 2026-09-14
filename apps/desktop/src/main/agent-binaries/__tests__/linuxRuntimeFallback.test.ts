@@ -14,9 +14,17 @@ import {
   runtimeVersionMatchesPin,
   systemRuntimeVersionSupportsPin,
 } from '../linux-runtime-fallback';
+import {
+  newerStableVersion,
+  olderStableVersion,
+  PINNED_CLAUDE_VERSION,
+  PINNED_CODEX_VERSION,
+  prereleaseAtPinnedCore,
+} from './runtimeVersionFixtures';
 
 const tempDirs: string[] = [];
 const describeOnLinuxFileSystem = process.platform === 'win32' ? describe.skip : describe;
+const SAMPLE_ASSET_VERSION = '1.2.3';
 
 afterEach(() => {
   for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
@@ -39,10 +47,17 @@ function singleFileTar(name: string, content: Buffer): Buffer {
 
 describe('runtimeVersionMatchesPin', () => {
   it('requires Cindy-managed Claude and Codex binaries to match their pins exactly', () => {
-    expect(runtimeVersionMatchesPin('claude-code', '2.1.219 (Claude Code)')).toBe(true);
-    expect(runtimeVersionMatchesPin('claude-code', '2.1.218 (Claude Code)')).toBe(false);
-    expect(runtimeVersionMatchesPin('codex', 'codex-cli 0.145.0')).toBe(true);
-    expect(runtimeVersionMatchesPin('codex', 'codex-cli 0.144.6')).toBe(false);
+    expect(runtimeVersionMatchesPin('claude-code', `${PINNED_CLAUDE_VERSION} (Claude Code)`)).toBe(true);
+    expect(
+      runtimeVersionMatchesPin(
+        'claude-code',
+        `${olderStableVersion(PINNED_CLAUDE_VERSION)} (Claude Code)`,
+      ),
+    ).toBe(false);
+    expect(runtimeVersionMatchesPin('codex', `codex-cli ${PINNED_CODEX_VERSION}`)).toBe(true);
+    expect(
+      runtimeVersionMatchesPin('codex', `codex-cli ${olderStableVersion(PINNED_CODEX_VERSION)}`),
+    ).toBe(false);
   });
 
   it('rejects empty or unparsable version output', () => {
@@ -53,11 +68,21 @@ describe('runtimeVersionMatchesPin', () => {
 
 describe('systemRuntimeVersionSupportsPin', () => {
   it('accepts the pinned or newer Claude runtime and rejects older or prerelease-equivalent builds', () => {
-    expect(systemRuntimeVersionSupportsPin('claude-code', '2.1.219 (Claude Code)')).toBe(true);
-    expect(systemRuntimeVersionSupportsPin('claude-code', '2.2.0 (Claude Code)')).toBe(true);
-    expect(systemRuntimeVersionSupportsPin('claude-code', '2.1.218 (Claude Code)')).toBe(false);
-    expect(systemRuntimeVersionSupportsPin('claude-code', '2.1.219-beta.1')).toBe(false);
-    expect(systemRuntimeVersionSupportsPin('claude-code', '2.2.0-beta.1')).toBe(false);
+    const newerVersion = newerStableVersion(PINNED_CLAUDE_VERSION);
+    expect(
+      systemRuntimeVersionSupportsPin('claude-code', `${PINNED_CLAUDE_VERSION} (Claude Code)`),
+    ).toBe(true);
+    expect(systemRuntimeVersionSupportsPin('claude-code', `${newerVersion} (Claude Code)`)).toBe(true);
+    expect(
+      systemRuntimeVersionSupportsPin(
+        'claude-code',
+        `${olderStableVersion(PINNED_CLAUDE_VERSION)} (Claude Code)`,
+      ),
+    ).toBe(false);
+    expect(
+      systemRuntimeVersionSupportsPin('claude-code', prereleaseAtPinnedCore(PINNED_CLAUDE_VERSION)),
+    ).toBe(false);
+    expect(systemRuntimeVersionSupportsPin('claude-code', `${newerVersion}-beta.1`)).toBe(false);
   });
 });
 
@@ -77,10 +102,10 @@ describeOnLinuxFileSystem('install path helpers', () => {
 
   it('resolves the exact legacy CDN cache path for migration', () => {
     expect(legacyManagedBinaryPath('/userdata', 'claude-code')).toBe(
-      path.join('/userdata', 'claude-code', '2.1.219', 'claude'),
+      path.join('/userdata', 'claude-code', PINNED_CLAUDE_VERSION, 'claude'),
     );
     expect(legacyManagedBinaryPath('/userdata', 'codex')).toBe(
-      path.join('/userdata', 'codex', '0.145.0', 'codex'),
+      path.join('/userdata', 'codex', PINNED_CODEX_VERSION, 'codex'),
     );
   });
 
@@ -99,8 +124,8 @@ describe('official asset descriptors', () => {
     ['arm64', 'linux-arm64'],
   ])('uses the trusted Claude %s asset committed with the version pin', (arch, platformKey) => {
     const sha256 = 'a'.repeat(64);
-    const url = `https://downloads.claude.ai/claude-code-releases/2.1.219/${platformKey}/claude`;
-    expect(pinnedOfficialAssetDescriptor('claude-code', '2.1.219', {
+    const url = `https://downloads.claude.ai/claude-code-releases/${SAMPLE_ASSET_VERSION}/${platformKey}/claude`;
+    expect(pinnedOfficialAssetDescriptor('claude-code', SAMPLE_ASSET_VERSION, {
       runtimeAssets: { [platformKey]: { url, sha256, size: 123 } },
     }, arch)).toEqual({ url, sha256, size: 123 });
   });
@@ -110,11 +135,11 @@ describe('official asset descriptors', () => {
     ['arm64', 'linux-arm64', 'aarch64'],
   ])('uses the pinned Codex %s asset and rejects unexpected metadata', (arch, platformKey, rustArch) => {
     const sha256 = 'b'.repeat(64);
-    const url = `https://github.com/openai/codex/releases/download/rust-v0.144.6/codex-${rustArch}-unknown-linux-musl.tar.gz`;
-    expect(pinnedOfficialAssetDescriptor('codex', '0.144.6', {
+    const url = `https://github.com/openai/codex/releases/download/rust-v${SAMPLE_ASSET_VERSION}/codex-${rustArch}-unknown-linux-musl.tar.gz`;
+    expect(pinnedOfficialAssetDescriptor('codex', SAMPLE_ASSET_VERSION, {
       runtimeAssets: { [platformKey]: { url, sha256, size: 456 } },
     }, arch)).toEqual({ url, sha256, size: 456 });
-    expect(() => pinnedOfficialAssetDescriptor('codex', '0.144.6', {
+    expect(() => pinnedOfficialAssetDescriptor('codex', SAMPLE_ASSET_VERSION, {
       runtimeAssets: { [platformKey]: { url: 'https://example.test/codex.tar.gz', sha256 } },
     }, arch)).toThrow(
       new RegExp(`pin lacks a trusted ${platformKey} asset`),
@@ -129,12 +154,12 @@ describe('official asset descriptors', () => {
     const x64Pin = {
       runtimeAssets: {
         'linux-x64': {
-          url: 'https://downloads.claude.ai/claude-code-releases/2.1.219/linux-x64/claude',
+          url: `https://downloads.claude.ai/claude-code-releases/${SAMPLE_ASSET_VERSION}/linux-x64/claude`,
           sha256,
         },
       },
     };
-    expect(() => pinnedOfficialAssetDescriptor('claude-code', '2.1.219', x64Pin, 'arm64')).toThrow(
+    expect(() => pinnedOfficialAssetDescriptor('claude-code', SAMPLE_ASSET_VERSION, x64Pin, 'arm64')).toThrow(
       /pin lacks a trusted linux-arm64 asset/,
     );
   });
@@ -142,7 +167,7 @@ describe('official asset descriptors', () => {
   // 未知 arch 走 fail closed:URL 拼出来必然与 pin 不等,不做兜底猜测。
   it('rejects an unsupported architecture instead of guessing', () => {
     const sha256 = 'd'.repeat(64);
-    expect(() => pinnedOfficialAssetDescriptor('codex', '0.144.6', {
+    expect(() => pinnedOfficialAssetDescriptor('codex', SAMPLE_ASSET_VERSION, {
       runtimeAssets: { 'linux-armv7l': { url: 'https://example.test/codex.tar.gz', sha256 } },
     }, 'armv7l')).toThrow(
       /pin lacks a trusted linux-armv7l asset/,

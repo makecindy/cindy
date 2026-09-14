@@ -68,9 +68,8 @@ export interface DraftFavoriteAnchor {
    * 所以这里恒为 string(与会话槽同口径)。
    *
    * ★ 深度 / Fast **刻意不进锚点记录**:锚点只存**身份**快照(哪个 uid、指向哪个
-   * wire model / 来源 / 引擎)。收藏是独立选中项(Chris 2026-08-20)——勾选只认 uid
-   * 还在不在,不拿正在跑的思维/加速去对副本。把 effort/Fast 抄进锚点会造出第二份
-   * 会过期的副本。
+   * wire model / 来源 / 引擎)。展示选中态时，统一面板用当前收藏与实时配置比对
+   * 全部字段。这里不复制 effort/Fast，避免新增一份会过期的配置。
    */
   providerId: string;
 }

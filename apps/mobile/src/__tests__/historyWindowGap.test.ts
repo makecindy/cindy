@@ -138,6 +138,24 @@ describe('backfillHistoryWindowGap', () => {
     expect(merge).not.toHaveBeenCalled();
   });
 
+  it('fills a 400-row gap using small network pages within the bounded request budget', async () => {
+    const history = Array.from({ length: 400 }, (_, i) => row(`m${399 - i}`, 399 - i));
+    const merged: string[] = [];
+    const listPage = vi.fn(async (before: string, limit: number) => {
+      const start = before === 'tail' ? 0 : history.findIndex((r) => r.id === before) + 1;
+      return history.slice(start, start + limit);
+    });
+    const outcome = await backfillHistoryWindowGap({
+      newerId: 'tail', olderId: 'm0', newerMs: BASE_MS + 401 * 60_000,
+      olderMs: BASE_MS, gapMs: 401 * 60_000,
+    }, { listPage, merge: (rows) => merged.push(...rows.map((r) => r.id)), isCancelled: () => false });
+    expect(outcome).toBe('covered');
+    expect(merged).toEqual(history.map((r) => r.id));
+    expect(listPage.mock.calls[0][1]).toBe(1);
+    expect(listPage.mock.calls.slice(1).every(([, limit]) => limit === 20)).toBe(true);
+    expect(listPage.mock.calls.length).toBeLessThanOrEqual(HISTORY_BACKFILL_MAX_REQUESTS);
+  });
+
   it('探测发现别的行 → 继续翻页直到取回目标行', async () => {
     const merged: string[] = [];
     // 每页按服务端契约排列:最新在前、页尾最旧(见 nextPageCursor)。

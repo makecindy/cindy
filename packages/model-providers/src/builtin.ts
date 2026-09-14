@@ -2,15 +2,14 @@
  * builtin.ts —— 内置供应商身份卡(TS 常量)+ bundled 目录组装。
  *
  * 2026-07-19 模型列表统一重构定案:**清单来源唯一化**——
- *   - anthropic:清单来自 Agent SDK(会话 init 捕获)+ 登录时 HTTP `/v1/models`,
- *     由 host 注入(active-catalog setAnthropicDiscoveredModels);本文件只有身份卡,零模型。
- *   - openai:清单来自 codex 模型注册表(models_cache.json,codex-model-discovery 派生),
- *     经 active-catalog 注入 codex 并投影 claude-code bridge;本文件零模型。
+ *   - anthropic:Claude/Codex 清单来自 Agent SDK(会话 init 捕获)+ 登录时 HTTP `/v1/models`,
+ *     由 host 注入；Pi 清单来自随客户端发布的 Pi 原生目录快照。
+ *   - openai:Codex 清单来自 models_cache.json，经 active-catalog 注入并投影 Claude bridge；
+ *     Pi 清单来自随客户端发布的 Pi 原生目录快照，不经过 Codex 投影。
  *   - xd(Cindy AI 网关):清单来自 model-access-server GET /models(网关权威,
  *     元数据由服务端 modelRegistry 下发);本文件零模型。
- *   - xai:SuperGrok 订阅 OAuth 没有任何列模型通道(官方未提供),清单是唯一
- *     必须静态维护的——活在 `catalog/providers.json`(仓内正本 = OSS 发布物 = dev 直读),
- *     此处从 json 引入作 bundled 兜底。
+ *   - xai:Claude/Codex 静态清单活在 `catalog/providers.json`；Pi 同样只读 Pi 原生目录，
+ *     两边不互相复制成员关系。
  *
  * 身份卡(id / auth / access / routing / titleModel)是随代码走的事实:
  * 改它们必然伴随发版(SDK 集成 / 翻译桥 / 网关协议都是代码),所以写死在这里,
@@ -21,10 +20,13 @@
  * 选择器分段顺序与 deriveAvailableModels 的 first-wins 去重优先级,不要改动。
  */
 
+import { appendPiProviderPresets } from './piProviderPresets.js';
+import { projectProviderMediaModels } from './providerMediaModels.js';
 import catalogJson from '../catalog/providers.json' with { type: 'json' };
 import modelRegistryJson from '../catalog/model-registry.json' with { type: 'json' };
 
 import type { ModelRegistry } from './modelAccessBean.js';
+import { piNativeCatalogModels } from './piNativeCatalog.js';
 import type { Catalog, CatalogModel, Provider } from './types.js';
 
 /** 仓内 v2 目录文件(xai 清单 + presets;同一文件发布到 OSS `cfg/providers.json`)。 */
@@ -75,8 +77,21 @@ const withoutPiApi = (model: CatalogModel): CatalogModel => {
 };
 const xaiClaudeModels = xaiFromCatalog.models['claude-code'] ?? [];
 const xaiCodexModels = xaiFromCatalog.models.codex ?? [];
+const xaiPiOverrides = new Map((xaiFromCatalog.models.pi ?? []).map((model) => [model.id, model]));
+const xaiPiModels = piNativeCatalogModels('xai', { group: 'grok' }).map((model) => ({
+  ...model,
+  ...xaiPiOverrides.get(model.id),
+  id: model.id,
+}));
+const anthropicPiModels = piNativeCatalogModels('anthropic', {
+  group: 'anthropic',
+});
+const openAiPiModels = piNativeCatalogModels('openai-codex', {
+  idPrefix: 'chatgpt/',
+  group: 'gpt',
+});
 
-/** xAI 静态清单同时供 Claude bridge、Codex 与 Pi bridge 使用。 */
+/** xAI 的 Claude/Codex 静态根；Pi 清单来自独立的 Pi 原生快照。 */
 const XAI_PROVIDER: Provider = {
   ...xaiFromCatalog,
   agents: xaiFromCatalog.agents.includes('pi')
@@ -90,13 +105,11 @@ const XAI_PROVIDER: Provider = {
     ...xaiFromCatalog.models,
     'claude-code': xaiClaudeModels.map(withoutPiApi),
     codex: xaiCodexModels.map(withoutPiApi),
-    // providers.json 的 piApi 只属于 Pi；源文件仍与 xAI 静态根同表维护，
-    // bundled 投影在这里拆开，避免协议注解污染 Claude/Codex 快照契约。
-    pi: xaiFromCatalog.models.pi ?? xaiClaudeModels,
+    pi: xaiPiModels,
   },
 };
 
-/** Anthropic(Claude.ai 订阅 OAuth)。模型清单运行时动态注入,此处恒为空。 */
+/** Anthropic(Claude.ai 订阅 OAuth)。Claude/Codex 动态发现，Pi 使用独立原生快照。 */
 const ANTHROPIC_PROVIDER: Provider = {
   id: 'anthropic',
   name: 'Anthropic',
@@ -126,17 +139,18 @@ const ANTHROPIC_PROVIDER: Provider = {
       upstream: 'https://api.anthropic.com',
       wireProtocol: 'anthropic-messages',
       authStrategy: 'provider-oauth-header',
-      headerOverride: {
-        'anthropic-version': '2023-06-01',
-        'anthropic-beta': 'oauth-2025-04-20',
-      },
+      // Pi 拿的是 `sk-ant-oat` 形态占位 token(pi-host),自己就按原生订阅方式发请求:
+      // `anthropic-beta` 由 Pi 按模型拼好(oauth / claude-code / server-side-fallback 等),
+      // 这里只换 authorization,不得覆盖 beta 头——覆盖会让 body 里 Pi 注入的 `fallbacks`
+      // 失去 beta 声明,官方端点 400 `fallbacks: Extra inputs are not permitted`。
+      headerOverride: { 'anthropic-version': '2023-06-01' },
       headerDelete: ['x-api-key'],
     },
   },
-  models: { 'claude-code': [], codex: [], pi: [] },
+  models: { 'claude-code': [], codex: [], pi: anthropicPiModels },
 };
 
-/** OpenAI(ChatGPT 订阅 OAuth)。模型清单来自 codex 注册表,此处恒为空。 */
+/** OpenAI(ChatGPT 订阅 OAuth)。Codex/Claude 动态发现，Pi 使用独立原生快照。 */
 const OPENAI_PROVIDER: Provider = {
   id: 'openai',
   name: 'OpenAI',
@@ -149,14 +163,6 @@ const OPENAI_PROVIDER: Provider = {
   // image_generation tool;用户另配 `openai-images` Platform key 时优先走 public
   // Images API。id 带 openai/ 前缀(跨供应商数据契约,防 first-wins 归属漂移);
   // 不声明 imageDefaults(xd 默认地位不动)。
-  imageModels: [
-    {
-      id: 'openai/gpt-image-2',
-      name: 'GPT Image 2',
-      modalities: { input: ['text', 'image'], output: ['image'] },
-      officialDocs: 'https://platform.openai.com/docs/guides/image-generation',
-    },
-  ],
   routing: {
     codex: {
       upstream: 'https://chatgpt.com/backend-api/codex',
@@ -175,7 +181,7 @@ const OPENAI_PROVIDER: Provider = {
       modelPrefixes: ['chatgpt/'],
     },
   },
-  models: { codex: [], 'claude-code': [], pi: [] },
+  models: { codex: [], 'claude-code': [], pi: openAiPiModels },
 };
 
 /** XD / Cindy AI 网关(账号体系托管 key)。模型清单来自网关实时下发,此处恒为空。 */
@@ -246,10 +252,6 @@ const GEMINI_PROVIDER: Provider = {
   agents: [],
   auth: { method: 'apiKey' },
   access: { kind: 'api' },
-  imageModels: [
-    { id: 'gemini/gemini-3-pro-image', name: 'Gemini 3 Pro Image' },
-    { id: 'gemini/gemini-3.1-flash-image', name: 'Gemini 3.1 Flash Image' },
-  ],
   routing: {},
   models: {},
 };
@@ -261,12 +263,12 @@ export const BUILTIN_PROVIDERS: Provider[] = [
   XAI_PROVIDER,
   XD_PROVIDER,
   GEMINI_PROVIDER,
-];
+].map((provider) => projectProviderMediaModels(provider, bundledModelRegistry, { addDeclared: true }));
 
 /** 打包进 App 的内置目录(离线兜底 / 远端拉取失败时使用)。 */
 export const BUNDLED_CATALOG: Catalog = {
   version: catalogFile.version,
   providers: BUILTIN_PROVIDERS,
   modelRegistry: bundledModelRegistry,
-  ...(catalogFile.presets && catalogFile.presets.length > 0 ? { presets: catalogFile.presets } : {}),
+  presets: appendPiProviderPresets(catalogFile.presets ?? []),
 };

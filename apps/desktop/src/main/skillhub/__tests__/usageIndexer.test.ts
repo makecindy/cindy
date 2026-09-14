@@ -3,7 +3,18 @@ import os from 'node:os';
 import path from 'node:path';
 
 import Database from 'better-sqlite3';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { DbClient } from '../../localDb/client/DbClient';
+
+const currentDbClientMocks = vi.hoisted(() => ({
+  getDbClient: vi.fn(),
+  getCurrentDbClientSnapshot: vi.fn(),
+}));
+
+vi.mock('../../localDb/client/current', () => ({
+  getDbClient: currentDbClientMocks.getDbClient,
+  getCurrentDbClientSnapshot: currentDbClientMocks.getCurrentDbClientSnapshot,
+}));
 
 import { discoverTranscriptSources, refreshLocalSkillUsageAnalytics } from '../usageIndexer';
 
@@ -143,15 +154,139 @@ function insertUsageExposure(
       'codex_skill_file_read', NULL, ?,
       0, 0, 0, 0, 0
     )
-  `).run(`${analyzerVersion}:stale`, analyzerVersion, rawFilePath, options.seenAt ?? nowMs - dayMs);
+  `).run(`${analyzerVersion}:${rawFilePath}`, analyzerVersion, rawFilePath, options.seenAt ?? nowMs - dayMs);
 }
 
 describe('discoverTranscriptSources', () => {
   afterEach(async () => {
+    currentDbClientMocks.getDbClient.mockReset();
+    currentDbClientMocks.getCurrentDbClientSnapshot.mockReset();
     await Promise.all(
       tempRoots.map((dir) => rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })),
     );
     tempRoots = [];
+  });
+
+  it('coalesces refreshes per database without reusing another owner refresh', async () => {
+    const root = await makeTempRoot();
+    const firstDb = createUsageDb();
+    const secondDb = createUsageDb();
+    const options = {
+      homeDir: path.join(root, 'home'),
+      appDataDir: path.join(root, 'app-data'),
+      userDataDir: path.join(root, 'user-data'),
+      env: {},
+      platform: 'win32' as const,
+      nowMs,
+    };
+
+    try {
+      const firstRefresh = refreshLocalSkillUsageAnalytics(firstDb, options);
+      const coalescedRefresh = refreshLocalSkillUsageAnalytics(firstDb, options);
+      const secondRefresh = refreshLocalSkillUsageAnalytics(secondDb, options);
+
+      expect(coalescedRefresh).toBe(firstRefresh);
+      expect(secondRefresh).not.toBe(firstRefresh);
+      await Promise.all([firstRefresh, secondRefresh]);
+    } finally {
+      firstDb.close();
+      secondDb.close();
+    }
+  });
+
+  it('uses the current DbClient and batches freshness lookup for multiple transcripts', async () => {
+    const root = await makeTempRoot();
+    const db = createUsageDb();
+    const firstPath = path.join(root, 'first.jsonl');
+    const secondPath = path.join(root, 'second.jsonl');
+    insertUsageExposure(db, firstPath, { sourceMtimeMs: 100 });
+    insertUsageExposure(db, secondPath, { sourceMtimeMs: 200 });
+    db.prepare(
+      "INSERT INTO migration_meta (key, value) VALUES ('skill_usage_analyzer_version', '6')",
+    ).run();
+
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => (
+      db.prepare(sql).all(...params) as unknown[]
+    ));
+    const client = {
+      query,
+      queryOne: vi.fn(async (sql: string, params: unknown[] = []) => db.prepare(sql).get(...params)),
+      exec: vi.fn(async (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params)),
+      tx: vi.fn(async () => undefined),
+    } as unknown as DbClient;
+    currentDbClientMocks.getDbClient.mockReturnValue(client);
+    currentDbClientMocks.getCurrentDbClientSnapshot.mockReturnValue({
+      client,
+      userId: 'owner-a',
+      clientEpoch: 1,
+    });
+
+    try {
+      await refreshLocalSkillUsageAnalytics(undefined, {
+        homeDir: path.join(root, 'home'),
+        appDataDir: path.join(root, 'app-data'),
+        userDataDir: path.join(root, 'user-data'),
+        env: {},
+        platform: 'win32',
+        nowMs,
+        statSource: async (file) => {
+          if (file === firstPath) return { mtimeMs: 100, sizeBytes: 1 };
+          if (file === secondPath) return { mtimeMs: 200, sizeBytes: 1 };
+          return null;
+        },
+      });
+
+      const freshnessCalls = query.mock.calls.filter(([sql]) => (
+        typeof sql === 'string' && sql.includes('FROM json_each(?) wanted')
+      ));
+      expect(currentDbClientMocks.getDbClient).toHaveBeenCalledTimes(1);
+      expect(freshnessCalls).toHaveLength(1);
+      expect(JSON.parse(String(freshnessCalls[0][1]?.[0]))).toEqual([secondPath, firstPath]);
+    } finally {
+      db.close();
+    }
+  });
+
+  it('cancels an in-flight client refresh when the database owner changes', async () => {
+    const root = await makeTempRoot();
+    const db = createUsageDb();
+    const file = path.join(root, 'switch.jsonl');
+    await writeJsonl(file);
+    insertUsageExposure(db, file, { sourceMtimeMs: 100 });
+    let switched = false;
+    const query = vi.fn(async (sql: string, params: unknown[] = []) => (
+      db.prepare(sql).all(...params) as unknown[]
+    ));
+    const client = {
+      query,
+      queryOne: vi.fn(async (sql: string, params: unknown[] = []) => db.prepare(sql).get(...params)),
+      exec: vi.fn(async (sql: string, params: unknown[] = []) => db.prepare(sql).run(...params)),
+      tx: vi.fn(async () => undefined),
+    } as unknown as DbClient;
+    currentDbClientMocks.getDbClient.mockReturnValue(client);
+    currentDbClientMocks.getCurrentDbClientSnapshot.mockImplementation(() => switched
+      ? { client, userId: 'owner-b', clientEpoch: 2 }
+      : { client, userId: 'owner-a', clientEpoch: 1 });
+
+    try {
+      await refreshLocalSkillUsageAnalytics(undefined, {
+        homeDir: path.join(root, 'home'),
+        appDataDir: path.join(root, 'app-data'),
+        userDataDir: path.join(root, 'user-data'),
+        env: {},
+        platform: 'win32',
+        nowMs,
+        statSource: async () => ({ mtimeMs: 101, sizeBytes: 1 }),
+        readTranscriptFile: async () => {
+          switched = true;
+          return '{}\n';
+        },
+      });
+
+      expect(client.tx).not.toHaveBeenCalled();
+    } finally {
+      db.close();
+    }
   });
 
   it('discovers default, XDMaker and configured transcript homes without dropping subagent files', async () => {

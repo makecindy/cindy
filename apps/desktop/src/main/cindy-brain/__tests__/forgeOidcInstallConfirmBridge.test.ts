@@ -55,12 +55,12 @@ describe('createForgeOidcInstallMainWindowSender', () => {
   });
 
   it('只有受信辅助窗口、没有主 App 窗口时失败关闭', () => {
-    const trustedAuxiliaryWindow = { kind: 'resource-usage' };
-    const isTrustedMainWindow = vi.fn((window: typeof trustedAuxiliaryWindow) =>
+    type TrustedAuxiliaryWindow = { kind: string };
+    const isTrustedMainWindow = vi.fn((window: TrustedAuxiliaryWindow) =>
       Boolean(window),
     );
     const send = vi.fn();
-    const sender = createForgeOidcInstallMainWindowSender<typeof trustedAuxiliaryWindow>({
+    const sender = createForgeOidcInstallMainWindowSender<TrustedAuxiliaryWindow>({
       getMainWindow: () => null,
       isTrustedMainWindow,
       send,
@@ -73,9 +73,9 @@ describe('createForgeOidcInstallMainWindowSender', () => {
 });
 
 describe('forgeInstallOriginForMembership', () => {
-  it('只给本次企业身份的 Forge 安装写作者自测来源', () => {
+  it('给个人和企业身份的明确 Forge 安装都写作者自测来源', () => {
     expect(forgeInstallOriginForMembership('org')).toBe('agent-forge');
-    expect(forgeInstallOriginForMembership('personal')).toBeUndefined();
+    expect(forgeInstallOriginForMembership('personal')).toBe('agent-forge');
   });
 });
 

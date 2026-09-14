@@ -39,6 +39,7 @@ import {
   withGhostSkillProjectionOwnerCommit,
   withGhostSkillProjectionReadOnlyOwner,
   withGhostSkillProjectionReconcile,
+  withStableOwnerBoundaryMutation,
 } from '../authBoundaryQuarantine.js';
 
 function readPersistedState(): unknown {
@@ -104,8 +105,8 @@ describe('Ghost skill projection boundary state', () => {
       previousOwnerId: 'owner-a',
       nextOwnerId: null,
       transitionId: 'transition-b',
-        updatedAt: 124,
-      });
+      updatedAt: 124,
+    });
     expect(
       __testing.normalizeRecord({
         version: 1,
@@ -241,6 +242,54 @@ describe('Ghost skill projection boundary state', () => {
     });
   });
 
+  it('runs owner-commit rollback before publishing the failed pending state', async () => {
+    const rollbackStates: Array<{ phase: string; commitApplied: boolean }> = [];
+    await expect(
+      withGhostSkillProjectionOwnerCommit({
+        previousOwnerId: null,
+        nextOwnerId: 'owner-a',
+        prepareTransition: async () => {},
+        commit: () => {
+          throw new Error('local commit failed');
+        },
+        onCommitFailure: ({ commitApplied }) => {
+          rollbackStates.push({
+            phase: (readPersistedState() as { phase: string }).phase,
+            commitApplied,
+          });
+        },
+      }),
+    ).rejects.toThrow('local commit failed');
+
+    expect(rollbackStates).toEqual([{ phase: 'pending', commitApplied: false }]);
+  });
+
+  it('reports a durable commit when stable-state publication fails afterward', async () => {
+    const originalFsync = fs.fsyncSync.bind(fs);
+    let fsyncCalls = 0;
+    const stableFileFsyncCall = process.platform === 'win32' ? 3 : 5;
+    vi.spyOn(fs, 'fsyncSync').mockImplementation((fd) => {
+      fsyncCalls += 1;
+      if (fsyncCalls === stableFileFsyncCall) throw new Error('stable fsync failed');
+      return originalFsync(fd);
+    });
+    const failures: boolean[] = [];
+
+    await expect(
+      withGhostSkillProjectionOwnerCommit({
+        previousOwnerId: null,
+        nextOwnerId: 'owner-a',
+        prepareTransition: async () => {},
+        commit: () => undefined,
+        onCommitFailure: ({ commitApplied }) => {
+          failures.push(commitApplied);
+        },
+      }),
+    ).rejects.toThrow('stable fsync failed');
+
+    expect(failures).toEqual([true]);
+  });
+
   it('requires a teardown hook whenever owner state is missing or mismatched', async () => {
     await expect(
       withGhostSkillProjectionOwnerCommit({
@@ -276,9 +325,9 @@ describe('Ghost skill projection boundary state', () => {
     });
 
     await expect(withGhostSkillProjectionReconcile('owner-a', async () => 42)).resolves.toBe(42);
-    await expect(
-      withGhostSkillProjectionReconcile('owner-b', async () => 42),
-    ).rejects.toThrow('not stable');
+    await expect(withGhostSkillProjectionReconcile('owner-b', async () => 42)).rejects.toThrow(
+      'not stable',
+    );
   });
 
   it('fails closed when the durable quarantine record is malformed', async () => {
@@ -291,9 +340,9 @@ describe('Ghost skill projection boundary state', () => {
     fs.writeFileSync(__testing.quarantinePath(), '{not-json', 'utf8');
 
     expect(isGhostSkillProjectionBoundaryStableForOwner('owner-a')).toBe(false);
-    await expect(
-      withGhostSkillProjectionReconcile('owner-a', async () => 42),
-    ).rejects.toThrow('quarantined');
+    await expect(withGhostSkillProjectionReconcile('owner-a', async () => 42)).rejects.toThrow(
+      'quarantined',
+    );
   });
 
   it('skips teardown for an exact stable same-owner commit', async () => {
@@ -345,10 +394,12 @@ describe('Ghost skill projection boundary state', () => {
     const before = fs.readFileSync(__testing.filePath(), 'utf8');
     process.env.XDT_PASSIVE_SHARED_USER_DATA = '1';
 
-    await expect(withGhostSkillProjectionReadOnlyOwner('owner-a', async () => 42)).resolves.toBe(42);
-    await expect(
-      withGhostSkillProjectionReadOnlyOwner('owner-b', async () => 42),
-    ).rejects.toThrow('another active session');
+    await expect(withGhostSkillProjectionReadOnlyOwner('owner-a', async () => 42)).resolves.toBe(
+      42,
+    );
+    await expect(withGhostSkillProjectionReadOnlyOwner('owner-b', async () => 42)).rejects.toThrow(
+      'another active session',
+    );
     await expect(
       withGhostSkillProjectionOwnerCommit({
         previousOwnerId: 'owner-a',
@@ -384,6 +435,41 @@ describe('Ghost skill projection boundary state', () => {
     releaseCommit();
     await ownerCommit;
     await expect(reconcileResult).resolves.toBe(42);
+  });
+
+  it('rejects a stable-owner mutation after a concurrent owner replacement wins', async () => {
+    await withGhostSkillProjectionOwnerCommit({
+      previousOwnerId: null,
+      nextOwnerId: 'owner-a',
+      prepareTransition: async () => {},
+      commit: () => undefined,
+    });
+    let releaseCommit!: () => void;
+    const commitBlocked = new Promise<void>((resolve) => {
+      releaseCommit = resolve;
+    });
+    const commitStarted = vi.fn();
+    const ownerCommit = withGhostSkillProjectionOwnerCommit({
+      previousOwnerId: 'owner-a',
+      nextOwnerId: 'owner-b',
+      prepareTransition: async () => {},
+      commit: async () => {
+        commitStarted();
+        await commitBlocked;
+      },
+    });
+    await vi.waitFor(() => expect(commitStarted).toHaveBeenCalledOnce());
+    const mutation = vi.fn(async () => 42);
+    const staleOwnerMutation = withStableOwnerBoundaryMutation('owner-a', mutation);
+    await Promise.resolve();
+    expect(mutation).not.toHaveBeenCalled();
+
+    releaseCommit();
+    await ownerCommit;
+    await expect(staleOwnerMutation).rejects.toThrow(
+      'Ghost skill projection is not stable for the active owner',
+    );
+    expect(mutation).not.toHaveBeenCalled();
   });
 
   it('keeps a sticky process quarantine when stable publication is uncertain', async () => {

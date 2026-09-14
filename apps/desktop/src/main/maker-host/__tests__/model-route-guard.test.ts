@@ -11,6 +11,7 @@ import { buildRegistry, type Catalog, type CatalogModel, type Provider } from '@
 
 import {
   checkModelRoute,
+  describeModelRouteRejection,
   materializeExclusiveProviderRoute,
   pickEnabledFallbackModel,
   resolveCurrentSetModelProviderId,
@@ -19,6 +20,26 @@ import {
   resolveSetModelGuardProviderId,
   shouldApplyExclusiveProviderReroute,
 } from '../model-route-guard.js';
+
+describe('describeModelRouteRejection', () => {
+  it('exclusive-source-unavailable 说清缺 SuperGrok/自定义源,不再冒充「设置里停用」(#3884)', () => {
+    const text = describeModelRouteRejection('exclusive-source-unavailable', 'grok-4.6', null);
+    expect(text).toContain('requires SuperGrok (xAI) or an explicitly selected custom source');
+    expect(text).not.toContain('disabled in settings');
+  });
+
+  it('其余 reason 保持既有措辞', () => {
+    expect(describeModelRouteRejection('model-disabled', 'm', null)).toBe(
+      'model "m" is disabled in settings',
+    );
+    expect(describeModelRouteRejection('explicit-source-disabled', 'm', 'p')).toBe(
+      'provider "p" is disabled for model "m" in settings',
+    );
+    expect(describeModelRouteRejection('capability-model', 'm', null)).toContain('not an agent chat model');
+    expect(describeModelRouteRejection('model-retired', 'm', null)).toContain('retired from the catalog');
+    expect(describeModelRouteRejection('payment-required', 'm', null)).toContain('requires paid access');
+  });
+});
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };
@@ -61,23 +82,32 @@ describe('checkModelRoute', () => {
     expect(checkModelRoute(views(), 'claude-code', 'unknown-model', null)).toEqual({ kind: 'pass' });
   });
 
-  it('显式点名:停用的来源 reject;启用的来源 pass;未知来源按隐式口径裁决', () => {
+  it('显式点名:停用或已删除的来源 reject;启用的来源 pass', () => {
     const v = views({ disabledModels: { 'xd:claude-opus-5': true } });
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'xd')).toEqual({
       kind: 'reject',
       reason: 'explicit-source-disabled',
     });
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'anthropic')).toEqual({ kind: 'pass' });
-    // 未知/陈旧的显式来源:实际路由层查不到 routing 会回退原生默认(xd,已停用)——
-    // 不 pass-through,按隐式口径裁决 ⇒ 改道到启用替代拷贝(R23)。
+    // 已删除的连接不得借用同模型的其它账号，无论默认来源是否启用。
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'nonexistent')).toEqual({
-      kind: 'reroute',
-      providerId: 'anthropic',
+      kind: 'reject',
+      reason: 'explicit-source-unavailable',
     });
-    // 未知显式来源 + 原生默认未停用 ⇒ 隐式口径 pass(不新增拒绝面)。
     expect(checkModelRoute(views(), 'claude-code', 'claude-opus-5', 'nonexistent')).toEqual({
-      kind: 'pass',
+      kind: 'reject',
+      reason: 'explicit-source-unavailable',
     });
+  });
+
+  it('删除账号后未知模型、空目录和宽松入口也不能回退其它账号', () => {
+    for (const v of [views(), []]) {
+      expect(checkModelRoute(v, 'claude-code', 'unknown-model', 'deleted-account'))
+        .toEqual({ kind: 'reject', reason: 'explicit-source-unavailable' });
+      expect(resolveLenientRoute(v, 'claude-code', 'claude-opus-5', 'deleted-account', { fallbackModel: 'unknown-model' }))
+        .toEqual({ model: undefined, providerId: 'deleted-account', degraded: true });
+    }
+    expect(checkModelRoute(views(), 'claude-code', 'unknown-model', 'anthropic')).toEqual({ kind: 'pass' });
   });
 
   it('隐式来源:原生默认落点(xd)被停用且替代拷贝已连接启用 ⇒ reroute 到替代来源', () => {
@@ -112,6 +142,51 @@ describe('checkModelRoute', () => {
       { xd: false, anthropic: false },
     );
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', null)).toEqual({ kind: 'pass' });
+  });
+
+  it('付费模型实体与刷新失败后 tombstone 都拒绝 XD，且不阻断显式他源', () => {
+    const locked = buildRegistry(
+      {
+        providers: [
+          provider('xd', [model('paid-model', { availability: 'requires_payment' })]),
+          provider('anthropic', [model('paid-model')]),
+        ],
+      } as Catalog,
+      { xd: true, anthropic: true },
+      {},
+    );
+    expect(checkModelRoute(locked, 'claude-code', 'paid-model', 'xd')).toEqual({
+      kind: 'reject',
+      reason: 'payment-required',
+    });
+    expect(checkModelRoute(locked, 'claude-code', 'paid-model', null)).toEqual({
+      kind: 'reroute',
+      providerId: 'anthropic',
+      reason: 'payment-required',
+    });
+
+    const isPaymentRequiredTombstone = (providerId: string | null, modelId: string) =>
+      (providerId === null || providerId === 'xd') && modelId === 'paid-model';
+    const otherSourceOnly = buildRegistry(
+      { providers: [provider('anthropic', [model('paid-model')])] } as Catalog,
+      { anthropic: true },
+      {},
+    );
+    expect(
+      checkModelRoute(otherSourceOnly, 'claude-code', 'paid-model', 'xd', {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'reject', reason: 'payment-required' });
+    expect(
+      checkModelRoute(otherSourceOnly, 'claude-code', 'paid-model', 'anthropic', {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'pass' });
+    expect(
+      checkModelRoute([], 'claude-code', 'paid-model', null, {
+        isPaymentRequiredTombstone,
+      }),
+    ).toEqual({ kind: 'reject', reason: 'payment-required' });
   });
 
   it('能力模型(图像/视频等分组)⇒ reject capability-model(隐式与显式点名同判)', () => {

@@ -78,7 +78,7 @@ export function executeGhostSetupInlineSubmission(
       secret.source !== 'gh-cli' &&
       secret.source !== 'oidc-token',
   );
-  const nodeDecl = manifest.node?.secretBindings?.find((secret) => secret.key === secretKey);
+  const nodeDecl = manifest.node?.secretBindings?.find((secret) => secret.key === secretKey && !secret.oauthSecret);
   const decl = networkDecl ?? nodeDecl;
   if (!decl) {
     return {

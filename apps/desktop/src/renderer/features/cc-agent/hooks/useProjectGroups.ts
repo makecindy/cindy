@@ -12,7 +12,13 @@ import { useMemo } from 'react';
 
 import type { Session } from '@/lib/ccAgent.types';
 import { useRemoteSshHosts } from '@/hooks/useRemoteSshHosts';
-import { groupSessions, type ProjectGroupsResult } from '../lib/projectGrouping';
+import { buildBotSessionOwners } from '@/features/bots/botSessionOwners';
+import { useBotProfiles } from '@/features/bots/botStore';
+import {
+  groupSessions,
+  type PersistentLocalProject,
+  type ProjectGroupsResult,
+} from '../lib/projectGrouping';
 import {
   collectAmbiguousDeviceNames,
   resolveRemoteProjectMachineIdentity,
@@ -22,11 +28,25 @@ export function useProjectGroups(
   sessions: readonly Session[],
   projectAliases?: ReadonlyMap<string, string>,
   includePinnedInProjects: boolean = false,
+  persistentLocalProjects?: readonly PersistentLocalProject[],
+  localPlatform: string = '',
 ): ProjectGroupsResult {
   const sshHosts = useRemoteSshHosts();
+  /*
+    伙伴归属表。会话行本身不带 botId,归属只有伙伴档案知道 —— 档案还没加载完的
+    那一瞬间这张表是空的,伙伴任务就走原来的分组落到别处,**不会消失**。
+  */
+  const botProfiles = useBotProfiles();
+  const botOwnerBySessionId = useMemo(() => buildBotSessionOwners(botProfiles), [botProfiles]);
 
   return useMemo(() => {
-    const groups = groupSessions(sessions, { projectAliases, includePinnedInProjects });
+    const groups = groupSessions(sessions, {
+      projectAliases,
+      includePinnedInProjects,
+      botOwnerBySessionId,
+      persistentLocalProjects,
+      localPlatform,
+    });
     // 撞名判定要看全量项目(哪些设备名对应了多个 deviceId),所以先扫一遍再逐个富化。
     const ambiguousDeviceNames = collectAmbiguousDeviceNames(groups.projects);
     return {
@@ -38,5 +58,13 @@ export function useProjectGroups(
         }),
       })),
     };
-  }, [sessions, projectAliases, includePinnedInProjects, sshHosts]);
+  }, [
+    sessions,
+    projectAliases,
+    includePinnedInProjects,
+    persistentLocalProjects,
+    localPlatform,
+    sshHosts,
+    botOwnerBySessionId,
+  ]);
 }

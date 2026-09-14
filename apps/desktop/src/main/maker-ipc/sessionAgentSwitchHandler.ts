@@ -1,5 +1,5 @@
 /**
- * session-agent-switch:同一会话在 Claude Code / Codex 引擎间切换的 IPC handler。
+ * session-agent-switch:同一会话的引擎／模型选择与发送时应用。
  *
  * 意图制(2026-07-20):外部调用(IPC)只登记切换意图并返回 deferred——用户在
  * 选择器里反复改选零成本;renderer 乐观呈现意图。真切换在下一条消息发送时刻由
@@ -74,6 +74,9 @@ export interface AgentSwitchBoundaryContent {
   toAgentKind: DbAgentKind;
   fromModel: string | null;
   toModel: string | null;
+  /** 离场引擎与目标引擎各自的 provider 快照；缺失表示旧版边界。 */
+  fromProviderId?: string | null;
+  toProviderId?: string | null;
   /**
    * 旧引擎的原生 session id 快照 = 它的停泊绑定:Phase 2 切回该引擎时由
    * findParkedEngineSession 从最近一条"它离场"的边界行读回,resume 续接。
@@ -96,6 +99,7 @@ export interface AgentSwitchSessionRow {
   id: string;
   agentKind: string;
   model: string | null;
+  providerId: string | null;
   status: string;
   remoteHostId: string | null;
   orcaRole: string | null;
@@ -104,6 +108,13 @@ export interface AgentSwitchSessionRow {
 }
 
 export interface MakerSessionAgentSwitchHandlerDeps {
+  /** Same-engine choices use SET_MODEL validation; only the send boundary applies them. Caller owns the session lock. */
+  selectSameAgentModel?(
+    sessionId: string,
+    intent: PendingAgentSwitchIntent,
+    applyNow: boolean,
+    assertSelectionCurrent?: () => void,
+  ): Promise<{ deferred: boolean; superseded?: boolean }>;
   /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
   withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
   /**
@@ -230,6 +241,10 @@ export interface SessionAgentSwitchResult {
 
 /** 登记的切换意图(下一条消息发送时刻执行;effort/fastMode 由 renderer 按目标引擎解析好带入)。 */
 export interface PendingAgentSwitchIntent {
+  /** Agent-requested complete selection, exposed by the runtime control query. */
+  runtimeSource?: 'agent';
+  /** SET_MODEL intent: apply the route without a cross-engine handoff. */
+  sameAgentSelection?: boolean;
   targetAgentKind: AgentKind;
   model: string;
   providerId: string | null | undefined;
@@ -260,8 +275,8 @@ export interface PublicAgentSwitchIntent {
 
 /**
  * pending 切换意图注册表(内存;重启丢失可接受——与凭证 deferred 同级的轻量意图,
- * 用户重开后重新选择即可)。同 session 重复登记 = 覆盖(用户改主意);SET_MODEL /
- * 同引擎 no-op 切换会清除(用户选回当前引擎)。
+ * 用户重开后重新选择即可)。同 session 重复登记 = 覆盖(用户改主意)；同引擎
+ * 模型选择同样暂存，实际发送才应用，不提前改变原生线程或持久路由。
  */
 export interface PendingAgentSwitchRegistry {
   set(sessionId: string, intent: PendingAgentSwitchIntent): void;
@@ -353,6 +368,9 @@ export async function performSessionAgentSwitch(
     applyNow?: boolean;
     /** Abort signal for direct scheduler/IM sends; checked at side-effect boundaries. */
     signal?: AbortSignal;
+    runtimeSource?: 'agent';
+    /** Recheck caller CAS after asynchronous validation, before staging any intent. */
+    assertSelectionCurrent?: () => void;
   },
 ): Promise<SessionAgentSwitchResult> {
   const { sessionId, targetAgentKind, model, providerId, signal } = params;
@@ -393,6 +411,9 @@ export async function performSessionAgentSwitch(
   if (!row || row.status === 'deleted') {
     throwIpcError('NOT_FOUND', `Session ${sessionId} not found`);
   }
+  if (params.runtimeSource === 'agent' && row.status === 'archived') {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'archived task cannot change harness');
+  }
   if (row.source === 'review') {
     throwIpcError('UNSUPPORTED_CAPABILITY', 'Review task settings are fixed to the source task');
   }
@@ -405,9 +426,32 @@ export async function performSessionAgentSwitch(
     throwIpcError('UNSUPPORTED_CAPABILITY', 'agent switch is not supported for Orca sessions');
   }
 
+  params.assertSelectionCurrent?.();
+
   const fromDbKind: DbAgentKind = normalizeDbAgentKind(row.agentKind);
   const toDbKind: DbAgentKind = makerToDbAgentKind(targetAgentKind);
   if (fromDbKind === toDbKind) {
+    // Only picker calls stage a model choice here. Internal cross-engine apply/recovery
+    // callers retain the existing same-engine no-op; send consumes staged choices below.
+    if (deps.selectSameAgentModel && !params.applyNow) {
+      const result = await deps.selectSameAgentModel(sessionId, {
+        targetAgentKind,
+        model,
+        providerId: normalizedProviderId,
+        ...(typeof params.effort === 'string' ? { effort: params.effort } : {}),
+        ...(typeof params.fastMode === 'boolean' ? { fastMode: params.fastMode } : {}),
+        sameAgentSelection: true,
+        ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
+      }, false, params.assertSelectionCurrent);
+      return {
+        switched: false,
+        agentKind: targetAgentKind,
+        model,
+        engineReady: true,
+        deferred: result.deferred,
+        ...(result.superseded ? { sameEngineSuperseded: true } : {}),
+      };
+    }
     // 同引擎 = 纯模型切换,调用方应走 SET_MODEL;这里按 no-op 成功返回。
     // 顺带清 pending:用户先登记了跨引擎切换、又选回当前引擎 = 改主意取消。
     let sameEngineRevision: number | undefined;
@@ -449,6 +493,7 @@ export async function performSessionAgentSwitch(
   // 重复登记 = 覆盖(同一意图的最新表达)。
   if (!params.applyNow && deps.pendingSwitches) {
     const intent: PendingAgentSwitchIntent = {
+      ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
       targetAgentKind,
       model,
       providerId: normalizedProviderId,
@@ -542,6 +587,9 @@ export async function performSessionAgentSwitch(
       toAgentKind: toDbKind,
       fromModel: row.model,
       toModel: model,
+      fromProviderId: row.providerId,
+      toProviderId:
+        normalizedProviderId === undefined ? row.providerId : normalizedProviderId,
       fromSdkSessionId: row.sdkSessionId,
       handoff,
       resumed: !!parked,
@@ -599,6 +647,7 @@ export async function performSessionAgentSwitch(
               // 清 id 与改边界必须同成同败。失败后重新登记完整意图与恢复载荷,
               // 下一条消息先重试原子恢复尾段,而不是带半状态继续 lazy-create。
               deps.pendingSwitches?.set(sessionId, {
+                ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
                 targetAgentKind,
                 model,
                 providerId: normalizedProviderId,
@@ -622,6 +671,7 @@ export async function performSessionAgentSwitch(
             // 边界插入失败时无法原子保证“清 id + 改边界”。保留意图自愈,
             // 避免只清 sdk id 后 DB pending 与实际注入内容分叉。
             deps.pendingSwitches?.set(sessionId, {
+              ...(params.runtimeSource ? { runtimeSource: params.runtimeSource } : {}),
               targetAgentKind,
               model,
               providerId: normalizedProviderId,
@@ -695,7 +745,8 @@ export async function performSessionAgentSwitch(
  *    send 事务既有的 SESSION_RUNNING guard / coordinator 重试;
  *  - 空闲 → 执行完整切换事务(skipBootstrap:随后的 lazy-create 会按 DB 新值
  *    spawn),成功后才以 CAS 清 pending;
- *  - 执行失败不阻塞发送,但保留原意图,下一条消息自动重试。resume 回落事务
+ *  - 完整 Agent 选择或同引擎模型选择失败时阻止发送并保留意图；旧跨引擎选择器
+ *    保留原有失败后继续发送的行为。resume 回落事务
  *    已进入 commit point 后若失败,则只重试其原子恢复尾段。
  */
 const pendingAgentSwitchApplyInFlight = new Map<string, Promise<void>>();
@@ -718,6 +769,22 @@ export function applyPendingAgentSwitchIfIdle(
     const live = deps.getLiveSession(sessionId);
     if (live?.isTurnRunning()) return;
     try {
+      if (intent.sameAgentSelection) {
+        if (!deps.selectSameAgentModel) throw new Error('model selection apply is unavailable');
+        const result = await deps.selectSameAgentModel(sessionId, intent, true);
+        if (result.deferred || result.superseded) {
+          throw new Error('model selection could not be applied before send');
+        }
+        if (deps.pendingSwitches?.get(sessionId) === intent) {
+          deps.pendingSwitches.clear(sessionId);
+          deps.onPendingSwitchChanged?.(sessionId, null);
+        }
+        throwIfAgentSwitchAborted(opts?.signal);
+        if (opts?.bootstrapAfterSwitch && !deps.getLiveSession(sessionId)) {
+          await deps.bootstrapSwitchedSession(sessionId);
+        }
+        return;
+      }
       if (intent.resumeFallbackRecovery) {
         const recovery = intent.resumeFallbackRecovery;
         throwIfAgentSwitchAborted(opts?.signal);
@@ -744,6 +811,7 @@ export function applyPendingAgentSwitchIfIdle(
       const result = await performSessionAgentSwitch(deps, {
         sessionId,
         targetAgentKind: intent.targetAgentKind,
+        runtimeSource: intent.runtimeSource,
         model: intent.model,
         providerId: intent.providerId,
         effort: intent.effort,
@@ -755,6 +823,9 @@ export function applyPendingAgentSwitchIfIdle(
         applyNow: true,
         signal: opts?.signal,
       });
+      if (result.retryPending && intent.runtimeSource === 'agent') {
+        throw new Error('Harness switch recovery is pending; retry the send after recovery');
+      }
       // CAS 语义:执行期间用户可能又选了另一个目标,不能把新意图一起清掉。
       if (!result.retryPending && deps.pendingSwitches?.get(sessionId) === intent) {
         deps.pendingSwitches.clear(sessionId);
@@ -771,6 +842,8 @@ export function applyPendingAgentSwitchIfIdle(
         targetAgentKind: intent.targetAgentKind,
         err: err instanceof Error ? err.message : String(err),
       });
+      // Never send on the old model after the user's selected route failed preparation.
+      if (intent.sameAgentSelection || intent.runtimeSource === 'agent') throw err;
     }
   })().finally(() => {
     if (pendingAgentSwitchApplyInFlight.get(sessionId) === run) {

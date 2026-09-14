@@ -71,6 +71,11 @@ function createHarness(overrides: Partial<OrcaInterAgentDispatcherDeps<TestSessi
     enqueueQueuedMessage: vi.fn((_sessionId, item) => {
       queuedItems.push(item);
     }),
+    reserveNextQueuedMessage: vi.fn(async (_sessionId, item, onReserved) => {
+      queuedItems.unshift(item);
+      onReserved?.();
+      return true;
+    }),
     sendToSessionInternal: vi.fn(async () => ({
       ok: true,
       targetSessionId: 'target-session',
@@ -113,6 +118,7 @@ beforeEach(() => {
 describe('Orca lead/worker dispatcher', () => {
   it('runs direct accepted side effects after DB persistence and before vendor turn release', async () => {
     const h = createHarness();
+    const commit = vi.fn();
 
     const result = await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
       targetSessionId: 'target-session',
@@ -124,6 +130,7 @@ describe('Orca lead/worker dispatcher', () => {
       onAccepted: async () => {
         h.order.push('accepted');
       },
+      onAcceptedCommit: commit,
     });
 
     expect(result).toMatchObject({
@@ -135,6 +142,7 @@ describe('Orca lead/worker dispatcher', () => {
       targetLastUserSendAt: '2026-06-12T01:02:03.000Z',
     });
     expect(h.order).toEqual(['send-called', 'db', 'change-set', 'accepted', 'vendor-released']);
+    expect(commit).toHaveBeenCalledTimes(1);
     expect(h.deps.beginDirectTurnChangeSet).toHaveBeenCalledWith('target-session', 'client-1');
     expect(h.deps.abortDirectTurnChangeSet).not.toHaveBeenCalled();
     expect(h.deps.createDbMessage).toHaveBeenCalledWith('target-session', {
@@ -427,6 +435,7 @@ describe('Orca lead/worker dispatcher', () => {
   it('rolls back queued accepted side effects when dispatch settles as not dispatched', async () => {
     const accepted = vi.fn();
     const rollback = vi.fn();
+    const commit = vi.fn();
     const h = createHarness({
       shouldQueueNewTurn: vi.fn(() => true),
     });
@@ -439,6 +448,7 @@ describe('Orca lead/worker dispatcher', () => {
       meta: { source: 'orca', context: 'queued-rollback-test' },
       onAccepted: accepted,
       onAcceptedRollback: rollback,
+      onAcceptedCommit: commit,
     });
 
     const queued = firstQueuedItem(h.queuedItems);
@@ -464,6 +474,144 @@ describe('Orca lead/worker dispatcher', () => {
 
     expect(accepted).toHaveBeenCalledTimes(1);
     expect(rollback).toHaveBeenCalledTimes(1);
+    expect(commit).not.toHaveBeenCalled();
+  });
+
+  it('rolls back a live accepted race before queueing and accepts it again on drain', async () => {
+    const accepted = vi.fn();
+    const rollback = vi.fn();
+    const commit = vi.fn();
+    const liveSession = createLiveSession(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      throw Object.assign(new Error('already running'), { code: 'SESSION_RUNNING' });
+    });
+    const h = createHarness({ getLiveSession: vi.fn(() => liveSession) });
+
+    await expect(
+      h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+        targetSessionId: 'target-session',
+        rawContent: 'Queue after live race',
+        source: 'lead',
+        senderLabel: 'Lead',
+        meta: { source: 'orca', context: 'live-requeue-test' },
+        onAccepted: accepted,
+        onAcceptedRollback: rollback,
+        onAcceptedCommit: commit,
+      }),
+    ).resolves.toMatchObject({ ok: true, mode: 'queued' });
+
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(rollback).toHaveBeenCalledTimes(1);
+    expect(commit).not.toHaveBeenCalled();
+    const queued = firstQueuedItem(h.queuedItems);
+    await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', queued);
+    await h.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
+      'target-session',
+      {
+        persistUserMessage: {
+          clientId: queued.clientId,
+          content: queued.persistedContent,
+          delivery: 'turn',
+        },
+      },
+      { kind: 'session-dispatch', source: 'maker-ipc', dispatched: true },
+    );
+    expect(accepted).toHaveBeenCalledTimes(2);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('rolls back a resumed accepted race before queueing and accepts it again on drain', async () => {
+    const accepted = vi.fn();
+    const rollback = vi.fn();
+    const commit = vi.fn();
+    const h = createHarness({ getLiveSession: vi.fn(() => null) });
+    vi.mocked(h.deps.sendToSessionInternal).mockImplementation(async (params) => {
+      await params.onAccepted?.();
+      h.dispatcher.registerQueuedOrcaInterAgentAcceptedCallback(
+        params.clientId,
+        params.onAccepted!,
+        params.onAcceptedRollback,
+        params.onAcceptedCommit,
+      );
+      return {
+        ok: true,
+        targetSessionId: 'target-session',
+        agentKind: 'codex',
+        wakeKind: 'queued',
+        targetTitle: 'Target Session',
+        targetLastUserSendAt: null,
+      };
+    });
+
+    await expect(
+      h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+        targetSessionId: 'target-session',
+        rawContent: 'Queue after resume race',
+        source: 'lead',
+        senderLabel: 'Lead',
+        meta: { source: 'orca', context: 'resume-requeue-test' },
+        onAccepted: accepted,
+        onAcceptedRollback: rollback,
+        onAcceptedCommit: commit,
+      }),
+    ).resolves.toMatchObject({ ok: true, mode: 'queued' });
+
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(rollback).toHaveBeenCalledTimes(1);
+    const queued = { clientId: 'client-1' } as AgentInputQueuedMessage;
+    await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', queued);
+    await h.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
+      'target-session',
+      {
+        persistUserMessage: {
+          clientId: queued.clientId,
+          content: 'persisted',
+          delivery: 'turn',
+        },
+      },
+      { kind: 'session-dispatch', source: 'maker-ipc', dispatched: true },
+    );
+    expect(accepted).toHaveBeenCalledTimes(2);
+    expect(commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('commits queued accepted side effects only after vendor dispatch succeeds', async () => {
+    const accepted = vi.fn();
+    const rollback = vi.fn();
+    const commit = vi.fn();
+    const h = createHarness({
+      shouldQueueNewTurn: vi.fn(() => true),
+    });
+
+    await h.dispatcher.dispatchOrEnqueueOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Queued success',
+      source: 'lead',
+      senderLabel: 'Lead',
+      meta: { source: 'orca', context: 'queued-commit-test' },
+      onAccepted: accepted,
+      onAcceptedRollback: rollback,
+      onAcceptedCommit: commit,
+    });
+
+    const queued = firstQueuedItem(h.queuedItems);
+    await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', queued);
+    expect(accepted).toHaveBeenCalledTimes(1);
+    expect(commit).not.toHaveBeenCalled();
+    await h.dispatcher.settleQueuedOrcaInterAgentAcceptedCallback(
+      'target-session',
+      {
+        persistUserMessage: {
+          clientId: queued.clientId,
+          content: queued.persistedContent,
+          delivery: 'turn',
+        },
+      },
+      { kind: 'session-dispatch', source: 'maker-ipc', dispatched: true },
+    );
+
+    expect(commit).toHaveBeenCalledTimes(1);
+    expect(rollback).not.toHaveBeenCalled();
   });
 
   it('returns receipt fields and preserves queued Orca origin metadata', async () => {
@@ -504,5 +652,61 @@ describe('Orca lead/worker dispatcher', () => {
         displayText: 'Done',
       },
     });
+  });
+  it('builds the standard Orca queue item and runs the reserve hook at the head boundary', async () => {
+    const order: string[] = [];
+    const reserveNextQueuedMessage = vi.fn(async (_sessionId, item, onReserved) => {
+      order.push(`reserved:${item.clientId}`);
+      onReserved?.();
+      order.push('after-hook');
+      return true;
+    });
+    const h = createHarness({ reserveNextQueuedMessage });
+
+    const result = await h.dispatcher.reserveNextOrcaInterAgentMessage({
+      targetSessionId: 'target-session',
+      rawContent: 'Replace current task',
+      source: 'lead',
+      senderLabel: 'Lead',
+      workerId: 'worker-1',
+      meta: { source: 'orca', context: 'interrupt-test' },
+      onReserved: () => order.push('stop-requested'),
+    });
+
+    expect(result).toMatchObject({ ok: true, mode: 'queued', clientId: 'client-1' });
+    expect(order).toEqual(['reserved:client-1', 'stop-requested', 'after-hook']);
+    expect(reserveNextQueuedMessage).toHaveBeenCalledWith(
+      'target-session',
+      expect.objectContaining({
+        clientId: 'client-1',
+        origin: { kind: 'orca', senderLabel: 'Lead', displayText: 'Replace current task' },
+      }),
+      expect.any(Function),
+    );
+  });
+
+  it('discards the accepted callback when priority reservation throws', async () => {
+    const accepted = vi.fn();
+    const h = createHarness({
+      reserveNextQueuedMessage: vi.fn(async () => {
+        throw new Error('restore failed');
+      }),
+    });
+
+    await expect(
+      h.dispatcher.reserveNextOrcaInterAgentMessage({
+        targetSessionId: 'target-session',
+        rawContent: 'replacement',
+        source: 'lead',
+        senderLabel: 'Lead',
+        meta: { source: 'orca', context: 'reserve-throw-test' },
+        onAccepted: accepted,
+      }),
+    ).resolves.toMatchObject({ ok: false });
+
+    await h.dispatcher.runQueuedOrcaInterAgentAcceptedCallback('target-session', {
+      clientId: 'client-1',
+    } as AgentInputQueuedMessage);
+    expect(accepted).not.toHaveBeenCalled();
   });
 });

@@ -1,0 +1,319 @@
+import { useEffect, useRef, useState } from "react";
+import { Alert } from "react-native";
+import { useTranslation } from "react-i18next";
+import { REMOTE_DESKTOP_CHANNEL } from "@cindy/device-link";
+import { useAuth } from "@/auth/AuthContext";
+import { ensureDeviceId } from "@/auth/deviceId";
+import {
+  getMobileAuthOwner,
+  isMobileAuthOwnerCurrent,
+} from "@/auth/authOwnerGeneration";
+import { getActiveMobileSessionRealm } from "@/config/env";
+import { useTheme } from "@/theme";
+import { useDeviceLink } from "@/device-link/DeviceLinkContext";
+import { remoteCredentials as native } from "../../modules/cindy-remote-credentials/src";
+import { configureCredentialIdentity } from "./credentialIdentity";
+import { credentialStep } from "./credentialDiagnostics";
+import { supportsAutoUnlock } from "./autoUnlockSupport";
+import {
+  credentialErrorKey,
+  RemoteDesktopCredentialSession,
+} from "./credentialSession";
+
+const defaults = {
+  autoUnlock: false,
+  biometricVerification: false,
+  biometricAvailable: true,
+  biometricPreferred: true,
+};
+
+export function useAutoUnlockSettings(
+  target: string,
+  active: boolean,
+  getHostPlatform: () => string | undefined,
+) {
+  const auth = useAuth(),
+    link = useDeviceLink();
+  const { t, i18n } = useTranslation(),
+    { mode } = useTheme();
+  const [settings, setSettings] = useState(defaults);
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+  const available = Boolean(
+    native?.savedUnlockSettings &&
+    native.beginUnlock &&
+    native.forgetSavedUnlock &&
+    native.setSavedUnlockBiometric,
+  );
+  const activeRef = useRef(active);
+  activeRef.current = active;
+  const activeTarget = useRef(target);
+  activeTarget.current = target;
+  const mounted = useRef(true),
+    pending = useRef(false),
+    attempted = useRef(false);
+  const epoch = useRef(0);
+  const changeSettled = useRef<Promise<void>>(Promise.resolve());
+  const transaction = useRef<RemoteDesktopCredentialSession | null>(null);
+  const owner = getMobileAuthOwner();
+  useEffect(() => {
+    mounted.current = true;
+    epoch.current++;
+    pending.current = false;
+    setBusy(false);
+    attempted.current = false;
+    setSettings(defaults);
+    setNotice(null);
+    if (active)
+      void read().catch(() => {
+        if (mounted.current)
+          setNotice(t("remoteDesktop.autoUnlockUnavailable"));
+      });
+    return () => {
+      mounted.current = false;
+      epoch.current++;
+      transaction.current?.close();
+    };
+  }, [target, owner.generation, available, active]);
+
+  async function scope() {
+    const generation = epoch.current;
+    const currentOwner = getMobileAuthOwner(),
+      realm = getActiveMobileSessionRealm();
+    const check = () => {
+      if (
+        !activeRef.current ||
+        !supportsAutoUnlock(getHostPlatform()) ||
+        !mounted.current ||
+        generation !== epoch.current ||
+        activeTarget.current !== target ||
+        !isMobileAuthOwnerCurrent(currentOwner)
+      )
+        throw new Error("CREDENTIAL_CANCELLED");
+    };
+    const device = await ensureDeviceId();
+    check();
+    return {
+      args: [realm, currentOwner.accountId, device, target] as const,
+      check,
+    };
+  }
+  async function read() {
+    if (!available || !supportsAutoUnlock(getHostPlatform())) return defaults;
+    const current = await scope();
+    const value = await credentialStep("read-settings", () =>
+      native!.savedUnlockSettings!(...current.args),
+    );
+    current.check();
+    const confirmed = { ...defaults, ...value };
+    setSettings(confirmed);
+    return confirmed;
+  }
+  async function authenticate(
+    setup: boolean,
+    biometric: boolean,
+    requestBiometric = false,
+    beforeAuthentication?: () => Promise<void>,
+  ) {
+    const current = await credentialStep("scope", scope),
+      token = await credentialStep("access-token", () => auth.getAccessToken());
+    current.check();
+    if (!token) throw new Error("CREDENTIAL_INVALID_IDENTITY");
+    const invoke: typeof link.invoke = (...args) => {
+      current.check();
+      return link.invoke(...args);
+    };
+    await credentialStep("open-link", () => link.openLink(target));
+    current.check();
+    // Both preparations must settle before allowing another authentication attempt.
+    // In particular, a host failure must not leave native configure running behind it.
+    const [hostPreparation, phonePreparation] = await Promise.allSettled([
+      credentialStep("host-prepare", () =>
+        invoke<{ version: number; ready: boolean; descriptor: string }>(
+          target,
+          REMOTE_DESKTOP_CHANNEL,
+          [{ op: "credential", version: 1, kind: "prepare", setup }],
+          { preSend: current.check },
+        ),
+      ),
+      credentialStep("phone-configure", () =>
+        configureCredentialIdentity(token),
+      ),
+    ]);
+    current.check();
+    if (hostPreparation.status === "rejected") throw hostPreparation.reason;
+    if (phonePreparation.status === "rejected") throw phonePreparation.reason;
+    const ready = hostPreparation.value;
+    if (
+      ready?.version !== 1 ||
+      !ready.ready ||
+      typeof ready.descriptor !== "string"
+    )
+      throw new Error("CREDENTIAL_UNAVAILABLE");
+    const session = new RemoteDesktopCredentialSession();
+    transaction.current = session;
+    try {
+      await session.ensure(target, invoke, i18n.language, mode, {
+        setup,
+        biometric,
+        descriptor: ready.descriptor,
+        ...(beforeAuthentication
+          ? {
+              beforeAuthentication: async () => {
+                await beforeAuthentication();
+                current.check();
+              },
+            }
+          : {}),
+      });
+      current.check();
+      if (setup) {
+        // Password validation and storage must finish before asking for Face ID.
+        const saved = await read();
+        current.check();
+        if (
+          requestBiometric &&
+          saved.autoUnlock &&
+          !saved.biometricVerification &&
+          saved.biometricAvailable
+        ) {
+          await credentialStep("enable-face-id", () =>
+            native!.setSavedUnlockBiometric!(
+              ...current.args,
+              true,
+              i18n.language,
+            ),
+          );
+          current.check();
+        }
+      }
+    } finally {
+      session.close();
+      if (transaction.current === session) transaction.current = null;
+    }
+  }
+  async function change(action: () => Promise<void>, alertTitle?: string) {
+    if (pending.current || !supportsAutoUnlock(getHostPlatform())) return;
+    const generation = epoch.current;
+    const actionOwner = getMobileAuthOwner();
+    pending.current = true;
+    let settle!: () => void;
+    changeSettled.current = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    setBusy(true);
+    setNotice(null);
+    try {
+      await action();
+      await read();
+    } catch (error) {
+      if (
+        mounted.current &&
+        activeRef.current &&
+        isMobileAuthOwnerCurrent(actionOwner) &&
+        generation === epoch.current &&
+        activeTarget.current === target
+      ) {
+        const key = credentialErrorKey(error);
+        const message = t(
+          `remoteDesktop.${key === "credentialRequired" ? "autoUnlockUnavailable" : key}`,
+        );
+        setNotice(message);
+        // Explicit settings actions must not hide failures below the fold.
+        // Automatic connection attempts retain non-modal feedback.
+        if (alertTitle && key !== "credentialCancelled")
+          Alert.alert(alertTitle, message);
+      }
+    } finally {
+      if (generation === epoch.current) {
+        pending.current = false;
+        if (mounted.current) setBusy(false);
+      }
+      settle();
+    }
+  }
+  return {
+    ...settings,
+    busy,
+    available,
+    notice,
+    onAutoUnlock: (enabled: boolean) => {
+      void change(async () => {
+        if (enabled) {
+          if (settings.autoUnlock) return;
+          const previous = await read();
+          await authenticate(true, false, previous.biometricPreferred);
+        } else {
+          const current = await scope();
+          await native!.forgetSavedUnlock!(...current.args);
+          current.check();
+        }
+      }, t("remoteDesktop.autoUnlock"));
+    },
+    onBiometricVerification: (enabled: boolean) => {
+      void change(async () => {
+        const current = await scope();
+        await credentialStep("change-face-id", () =>
+          native!.setSavedUnlockBiometric!(
+            ...current.args,
+            enabled,
+            i18n.language,
+          ),
+        );
+        current.check();
+      }, t("remoteDesktop.faceIdVerification"));
+    },
+    // A deliberate new connection may try again; media retries and iOS
+    // inactive transitions (including Face ID) retain attempt suppression.
+    resetConnectionAttempt: () => {
+      attempted.current = false;
+    },
+    maybeUnlock: async (beforeAuthentication?: () => Promise<void>) => {
+      const requestEpoch = epoch.current;
+      // A reconnect may arrive while its cancelled preparation is unwinding.
+      // Wait for cleanup instead of skipping that connection or overlapping native sessions.
+      if (pending.current) await changeSettled.current;
+      if (
+        requestEpoch !== epoch.current ||
+        !available ||
+        !supportsAutoUnlock(getHostPlatform()) ||
+        attempted.current ||
+        pending.current
+      )
+        return;
+      try {
+        const saved = await read();
+        if (!saved.autoUnlock) return;
+        const current = await scope();
+        const status = await link.invoke<{ version: number; state: string }>(
+          target,
+          REMOTE_DESKTOP_CHANNEL,
+          [{ op: "credential", version: 1, kind: "status" }],
+          { preSend: current.check },
+        );
+        current.check();
+        if (status?.version !== 1 || status.state !== "locked") return;
+        if (!beforeAuthentication) attempted.current = true;
+        await change(() =>
+          authenticate(
+            false,
+            saved.biometricVerification,
+            false,
+            beforeAuthentication
+              ? async () => {
+                  await beforeAuthentication();
+                  current.check();
+                  // Preparation cancelled before the first frame must not consume
+                  // the one automatic prompt allowed for this connection attempt.
+                  attempted.current = true;
+                }
+              : undefined,
+          ),
+        );
+      } catch {
+        if (mounted.current)
+          setNotice(t("remoteDesktop.autoUnlockUnavailable"));
+      }
+    },
+  };
+}

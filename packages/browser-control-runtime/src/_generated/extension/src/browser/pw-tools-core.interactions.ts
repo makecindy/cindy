@@ -23,17 +23,20 @@ import { normalizeBrowserEvaluateFunctionSource } from "./evaluate-source.js";
 import { DEFAULT_FILL_FIELD_TYPE } from "./form-fields.js";
 import {
   assertBrowserNavigationResultAllowed,
+  type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
 import { resolveStrictExistingUploadPaths } from "./paths.js";
 import {
   assertPageNavigationCompletedSafely,
+  closeBlockedNavigationTarget,
   createObservedDialogAbortSignalForPage,
   ensurePageState,
   forceDisconnectPlaywrightForTarget,
   getPageForTargetId,
   isBrowserObservedDialogBlockedError,
   markObservedDialogsHandledRemotelyForPage,
+  quarantineTargetWithoutClosing,
   refLocator,
   restoreRoleRefsForTarget,
 } from "./pw-session.js";
@@ -60,6 +63,24 @@ type TargetOpts = {
 };
 
 const INTERACTION_NAVIGATION_GRACE_MS = 250;
+
+// Bounds for draining the popup chain after an interaction. The queue is
+// adversarial — validating a popup can append another — so it needs a ceiling
+// on both count and wall-clock, or a page that opens one popup per grace
+// window keeps the action (and every serialized call behind it) alive forever.
+const POPUP_CHAIN_MAX_VALIDATIONS = 32;
+const POPUP_CHAIN_DRAIN_BUDGET_MS = 5_000;
+// Quarantining the overflow needs its own bounds: an unresponsive close() must
+// not keep the action pending any more than an endless popup chain may.
+const POPUP_CHAIN_MAX_CLOSES = 256;
+const POPUP_CHAIN_CLOSE_BUDGET_MS = 2_000;
+
+// The one message the host matches on to distrust the whole route
+// (`mentionsUntornDownBrowser` in external-chrome-backend.ts). Every path that
+// fails to contain a page must report exactly this, or the host keeps serving
+// a route whose pages are still live.
+const UNTORN_DOWN_BROWSER_MESSAGE =
+  "Navigation blocked: popup chain exceeded the validation budget and the browser could not be torn down; unvalidated pages may still be live";
 
 type NavigationObservablePage = Pick<Page, "url"> & {
   mainFrame?: () => Frame;
@@ -157,8 +178,12 @@ function isMainFrameNavigation(page: NavigationObservablePage, frame: Frame): bo
 async function assertSubframeNavigationAllowed(
   frameUrl: string,
   ssrfPolicy?: SsrFPolicy,
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"],
 ): Promise<void> {
-  if (!ssrfPolicy || (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))) {
+  if (
+    (!ssrfPolicy && !browserProxyMode) ||
+    (!frameUrl.startsWith("http://") && !frameUrl.startsWith("https://"))
+  ) {
     // Non-network frame URLs like about:blank and about:srcdoc do not cross the
     // browser SSRF boundary, so they should not trigger the navigation policy.
     return;
@@ -166,7 +191,7 @@ async function assertSubframeNavigationAllowed(
 
   await assertBrowserNavigationResultAllowed({
     url: frameUrl,
-    ...withBrowserNavigationPolicy(ssrfPolicy),
+    ...withBrowserNavigationPolicy(ssrfPolicy, { browserProxyMode }),
   });
 }
 
@@ -188,13 +213,18 @@ async function assertObservedDelayedNavigations(opts: {
   cdpUrl: string;
   page: Page;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   targetId?: string;
   observed: ObservedDelayedNavigations;
 }): Promise<void> {
   let subframeError: unknown;
   try {
     for (const frameUrl of opts.observed.subframes) {
-      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+      await assertSubframeNavigationAllowed(
+        frameUrl,
+        opts.ssrfPolicy,
+        opts.browserProxyMode,
+      );
     }
   } catch (err) {
     subframeError = err;
@@ -205,6 +235,7 @@ async function assertObservedDelayedNavigations(opts: {
       page: opts.page,
       response: null,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   }
@@ -268,9 +299,10 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
   page: Page;
   previousUrl: string;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   targetId?: string;
 }): Promise<void> {
-  if (!opts.ssrfPolicy) {
+  if (!opts.ssrfPolicy && !opts.browserProxyMode) {
     return Promise.resolve();
   }
   const page = opts.page as unknown as NavigationObservablePage;
@@ -280,6 +312,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
       page: opts.page,
       response: null,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   }
@@ -318,6 +351,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
         observed: { mainFrameNavigated: true, subframes },
       }).then(() => settle(), settle);
@@ -328,6 +362,7 @@ function scheduleDelayedInteractionNavigationGuard(opts: {
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
         observed: {
           mainFrameNavigated: didCrossDocumentUrlChange(page, opts.previousUrl),
@@ -354,9 +389,10 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   page: Page;
   previousUrl: string;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   targetId?: string;
 }): Promise<T> {
-  if (!opts.ssrfPolicy) {
+  if (!opts.ssrfPolicy && !opts.browserProxyMode) {
     return await opts.action();
   }
   // Phase 1: keep a framenavigated listener alive for the entire duration of the
@@ -364,6 +400,93 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   // Using a fixed pre-action timer would expire before the action finishes for
   // slow interactions, silently bypassing the SSRF guard.
   const navPage = opts.page as unknown as NavigationObservablePage;
+  const pageContext = (
+    opts.page as unknown as {
+      context?: () => { on?: (event: string, listener: (page: Page) => void) => void; off?: (event: string, listener: (page: Page) => void) => void; close?: () => Promise<void>; browser?: () => { close?: () => Promise<void> } | undefined };
+    }
+  ).context?.();
+  const popupsDuringAction: Page[] = [];
+  // The context is PERSISTENT and shared with the user, who can open tabs at
+  // any moment — as can any unrelated producer. The page event fires for all of
+  // them, so tracking every new page would let the drain below validate, and on
+  // denial CLOSE, a tab the user opened themselves; a busy stream of them could
+  // even escalate to tearing down the whole context. Only pages that descend
+  // from the page being acted on are ours to police.
+  //
+  // opener() is async and this listener must stay synchronous (an await here
+  // would drop events), so kick the probe off on arrival and record the answer;
+  // consumers below wait for the probe of the page they are about to touch.
+  const openerOfPopup = new Map<unknown, unknown>();
+  const popupOwnershipProbe = new Map<unknown, Promise<void>>();
+  const popupOwnershipPending = new Set<unknown>();
+  const onContextPage = (newPage: Page) => {
+    popupsDuringAction.push(newPage);
+    const opener = (newPage as unknown as { opener?: () => Promise<Page | null> }).opener;
+    if (typeof opener !== "function") return;
+    popupOwnershipPending.add(newPage);
+    popupOwnershipProbe.set(
+      newPage,
+      Promise.resolve()
+        .then(() => opener.call(newPage))
+        .then(
+          (parent) => {
+            if (parent) openerOfPopup.set(newPage, parent);
+          },
+          () => undefined,
+        )
+        .then(() => {
+          popupOwnershipPending.delete(newPage);
+        }),
+    );
+  };
+  /**
+   * Whether this page's lineage question has been ANSWERED yet. A pending probe
+   * is not the same as "not ours": treating it that way would let a popup the
+   * action opened slip past the cleanup below, unvalidated and still live.
+   */
+  const ownershipAnswered = (page: unknown): boolean => !popupOwnershipPending.has(page);
+  /**
+   * Settle outstanding lineage probes, re-checking after every round: a popup
+   * can open a child while we await, and that child's probe is registered after
+   * any snapshot we took, so a single allSettled would never wait for it.
+   * Bounded by the caller's deadline so an unresponsive page cannot hold the
+   * action — and the serialized stop/quit behind it — open.
+   */
+  const settleOwnershipProbes = async (deadline: Promise<void>): Promise<void> => {
+    let expired = false;
+    void deadline.then(() => {
+      expired = true;
+    });
+    while (!expired && popupOwnershipPending.size > 0) {
+      const outstanding = [...popupOwnershipPending]
+        .map((page) => popupOwnershipProbe.get(page))
+        .filter((probe): probe is Promise<void> => probe !== undefined);
+      if (outstanding.length === 0) return;
+      await Promise.race([Promise.allSettled(outstanding), deadline]);
+    }
+  };
+  /**
+   * Whether a page's opener chain reaches the page being acted on. Walks the
+   * chain so a popup opened BY a popup still counts as ours, and is bounded so
+   * a cycle or an absurdly deep chain cannot hang the drain.
+   *
+   * Fails closed toward the USER's data: a page whose lineage we could not
+   * establish is treated as not ours, so it is never validated and never
+   * closed. Anything the action itself opened does report an opener.
+   */
+  const descendsFromActedPage = (page: unknown): boolean => {
+    let cursor = page;
+    for (let hops = 0; hops < POPUP_CHAIN_MAX_VALIDATIONS; hops += 1) {
+      const parent = openerOfPopup.get(cursor);
+      if (parent === undefined) return false;
+      if (parent === opts.page) return true;
+      cursor = parent;
+    }
+    return false;
+  };
+  if (pageContext && typeof pageContext.on === "function") {
+    pageContext.on("page", onContextPage);
+  }
   let navigatedDuringAction = false;
   const subframeNavigationsDuringAction: string[] = [];
   const onFrameNavigated = (frame: Frame) => {
@@ -403,18 +526,25 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
   let subframeError: unknown;
   try {
     for (const frameUrl of subframeNavigationsDuringAction) {
-      await assertSubframeNavigationAllowed(frameUrl, opts.ssrfPolicy);
+      await assertSubframeNavigationAllowed(
+        frameUrl,
+        opts.ssrfPolicy,
+        opts.browserProxyMode,
+      );
     }
   } catch (err) {
     subframeError = err;
   }
 
+  let navigationError: unknown;
+  try {
   if (navigationObserved) {
     await assertPageNavigationCompletedSafely({
       cdpUrl: opts.cdpUrl,
       page: opts.page,
       response: null,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   } else if (actionError) {
@@ -427,6 +557,7 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
         cdpUrl: opts.cdpUrl,
         page: opts.page,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
         observed,
       });
@@ -440,12 +571,334 @@ async function assertInteractionNavigationCompletedSafely<T>(opts: {
       page: opts.page,
       previousUrl: opts.previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   }
 
+  } catch (err) {
+    navigationError = err;
+  }
+  // NOTE: the context listener stays attached across popup validation below —
+  // a popup can open a further popup inside its own grace window, and
+  // detaching here would leave that second-generation tab uncollected and
+  // unvalidated (in direct mode nothing else would catch it).
+  let popupError: unknown;
+  // Shared last-resort teardown for pages we could not contain individually.
+  // Both the per-popup close failure and the overflow path escalate through
+  // this, so a stuck page has exactly one ladder: context close, then browser
+  // close.
+  //
+  // Only a resolved CONTEXT close proves containment from in here: its pages
+  // are gone with it. A resolved BROWSER close proves only that the call
+  // returned — the process can still be alive with pages running, and nothing
+  // in this runtime can observe process exit. So browser close reports
+  // "unproven" and the caller raises the untorn-down signal, which is what
+  // makes the host run its own verified process teardown.
+  const tearDownUncontainedPages = async (
+    deadline?: Promise<void>,
+  ): Promise<"contained" | "unproven"> => {
+    const closeContext = (
+      pageContext as unknown as { close?: () => Promise<void> } | undefined
+    )?.close;
+    if (typeof closeContext === "function") {
+      const contextClosed = await Promise.race([
+        Promise.resolve()
+          .then(() => closeContext.call(pageContext))
+          .then(
+            () => true,
+            () => false,
+          ),
+        // A caller that already burned its budget passes no deadline: racing a
+        // fired one would resolve instantly and prove nothing.
+        deadline
+          ? deadline.then(() => false)
+          : new Promise<boolean>((resolve) => {
+              const timer = setTimeout(() => resolve(false), POPUP_CHAIN_CLOSE_BUDGET_MS);
+              (timer as unknown as { unref?: () => void }).unref?.();
+            }),
+      ]);
+      if (contextClosed) return "contained";
+    }
+    // The context would not close (rejected, or still not settled at the
+    // deadline), so live pages that were never validated survive and the
+    // listener is about to detach. Every per-page and per-context remedy has
+    // now failed, so try the browser. Give this its own budget.
+    const browserOf = (
+      pageContext as unknown as { browser?: () => { close?: () => Promise<void> } | undefined }
+        | undefined
+    )?.browser;
+    const browser = typeof browserOf === "function" ? browserOf.call(pageContext) : undefined;
+    if (!browser || typeof browser.close !== "function") return "unproven";
+    await Promise.race([
+      Promise.resolve()
+        .then(() => browser.close?.())
+        .then(
+          () => undefined,
+          () => undefined,
+        ),
+      new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, POPUP_CHAIN_CLOSE_BUDGET_MS);
+        (timer as unknown as { unref?: () => void }).unref?.();
+      }),
+    ]);
+    // Deliberately NOT reporting success on a resolved close: the host owns
+    // process teardown and must verify the exit itself.
+    return "unproven";
+  };
+  try {
+    // Drain the chain rather than a snapshot: validating a popup can append
+    // more entries to popupsDuringAction, so index forward as it grows.
+    //
+    // BOUNDED, because the queue is adversarial: each iteration awaits a
+    // ~250ms grace window, so a page that opens one popup per window appends
+    // at least as fast as this drains and the loop never empties. That would
+    // hang the action forever — and the backend serializes every browser call,
+    // so a later stop (and dispose at quit) would queue behind it indefinitely.
+    // On overrun, stop validating and CLOSE the remainder: leaving them live
+    // would be the unvalidated-tab bug this drain exists to prevent.
+    const drainDeadline = Date.now() + POPUP_CHAIN_DRAIN_BUDGET_MS;
+    let popupIndex = 0;
+    for (
+      ;
+      popupIndex < popupsDuringAction.length
+      && popupIndex < POPUP_CHAIN_MAX_VALIDATIONS
+      && Date.now() < drainDeadline;
+      popupIndex += 1
+    ) {
+      const popupPage = popupsDuringAction[popupIndex]!;
+      // Wait for this page's lineage answer, then skip anything PROVEN not to
+      // be ours: validating it could quarantine or close one of the user's own
+      // tabs, which is strictly worse than not policing a page we never opened.
+      // A page that never answered is not proven either way, so it stays in
+      // scope here and the overflow cleanup below decides its fate.
+      await popupOwnershipProbe.get(popupPage);
+      if (ownershipAnswered(popupPage) && !descendsFromActedPage(popupPage)) continue;
+      // Per popup, not around the loop: a denial on the first popup must not
+      // leave later ones unvalidated and selectable on a denied URL. Keep the
+      // first error and keep going.
+      try {
+        // A popup starts at about:blank; reuse the delayed-navigation observer
+        // so a still-loading popup gets the same grace window before
+        // validation, and a policy deny quarantines/closes the popup target
+        // like any other block.
+        const observedPopup = await observeDelayedInteractionNavigation(
+          popupPage as unknown as NavigationObservablePage,
+          "about:blank",
+        );
+        await assertObservedDelayedNavigations({
+          cdpUrl: opts.cdpUrl,
+          page: popupPage,
+          ssrfPolicy: opts.ssrfPolicy,
+          browserProxyMode: opts.browserProxyMode,
+          observed: observedPopup,
+        });
+      } catch (err) {
+        if (popupError === undefined) popupError = err;
+        // Fail closed on the rejected popup itself. A policy deny above only
+        // quarantines — assertPageNavigationCompletedSafely never closes; that
+        // step belongs to callers that own the navigation lifecycle — and this
+        // popup was created BY the action, not by the user, so it is ours to
+        // tear down. Left open, the denied page keeps executing after the
+        // context listener detaches (in direct mode no lifetime request gate
+        // remains to catch it).
+        //
+        // Bounded, because close() can hang forever on an adversarial page.
+        // But a timeout is NOT success: the page is still live and scriptable.
+        // Escalate exactly like the overflow path — context, then browser —
+        // and if none of that works, report the untorn-down browser so the
+        // host distrusts the route instead of returning an ordinary denial.
+        await Promise.race([
+          closeBlockedNavigationTarget({
+            cdpUrl: opts.cdpUrl,
+            page: popupPage as Page,
+          }).then(
+            () => undefined,
+            () => undefined,
+          ),
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, POPUP_CHAIN_CLOSE_BUDGET_MS);
+            (timer as unknown as { unref?: () => void }).unref?.();
+          }),
+        ]);
+        // Ask the PAGE whether it closed, rather than trusting the call to have
+        // reported it. closeBlockedNavigationTarget swallows page.close()
+        // rejections internally (pw-session.ts), so it resolves even when the
+        // page refused to go — reading its resolution as success would silently
+        // skip the escalation for exactly the pages that need it. A page that
+        // cannot answer isClosed() has not proven anything either, so it counts
+        // as uncontained too.
+        const isClosed = (popupPage as { isClosed?: () => boolean }).isClosed;
+        const popupClosed = typeof isClosed === "function" && isClosed.call(popupPage) === true;
+        if (!popupClosed && (await tearDownUncontainedPages()) !== "contained") {
+          popupError = new Error(UNTORN_DOWN_BROWSER_MESSAGE);
+          break;
+        }
+      }
+    }
+    // Settle outstanding lineage probes before the sweep below: it runs
+    // synchronously (so pending page events can still enqueue) and must be able
+    // to tell our popups from the user's without awaiting per page. Bounded on
+    // its own budget, and repeated internally so a child popup that arrives
+    // mid-await is waited on too.
+    const ownershipDeadline = new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, POPUP_CHAIN_CLOSE_BUDGET_MS);
+      (timer as unknown as { unref?: () => void }).unref?.();
+    });
+    await settleOwnershipProbes(ownershipDeadline);
+    // A page whose probe never answered counts as OURS. Once the budget above
+    // is spent the browser is already failing to answer, and dropping such a
+    // page would mean the listener detaches with an unvalidated, never-closed
+    // popup and no untorn-down signal for the host — silently
+    // losing containment. The user's genuinely own tabs answer opener() with
+    // null promptly, so they are still excluded.
+    const isOursOrUnanswered = (page: unknown): boolean =>
+      descendsFromActedPage(page) || !ownershipAnswered(page);
+    const ownedPagesRemain = (): boolean => {
+      for (let i = popupIndex; i < popupsDuringAction.length; i += 1) {
+        if (isOursOrUnanswered(popupsDuringAction[i]!)) return true;
+      }
+      return false;
+    };
+    if (ownedPagesRemain()) {
+      // Quarantine must be bounded too, for the same reason the drain above is:
+      // a burst of popups, or one unresponsive close(), would otherwise keep
+      // this action — and the serialized stop/quit cleanup behind it — pending
+      // indefinitely. Close concurrently under a single deadline rather than
+      // serially awaiting each one, and re-read the queue (not a snapshot) so
+      // popups appended while these closes run are quarantined too.
+      const closeDeadline = new Promise<void>((resolve) => {
+        const timer = setTimeout(resolve, POPUP_CHAIN_CLOSE_BUDGET_MS);
+        // Do not hold the process open on this timer.
+        (timer as unknown as { unref?: () => void }).unref?.();
+      });
+      const closing: Array<Promise<void>> = [];
+      let deadlineReached = false;
+      void closeDeadline.then(() => { deadlineReached = true; });
+      // Outer loop so newly-arrived popups are picked up: the inner loop never
+      // awaits, so on its own it drains the queue as it stands and returns
+      // before the event loop can deliver another page event. Yielding
+      // between sweeps is what actually lets the queue grow and be re-read;
+      // without it a popup created during cleanup would be left live,
+      // unvalidated and unquarantined once the listener detaches.
+      while (
+        !deadlineReached
+        && popupIndex < popupsDuringAction.length
+        && closing.length < POPUP_CHAIN_MAX_CLOSES
+      ) {
+        for (
+          ;
+          popupIndex < popupsDuringAction.length
+          && closing.length < POPUP_CHAIN_MAX_CLOSES;
+          popupIndex += 1
+        ) {
+          const unvalidated = popupsDuringAction[popupIndex]!;
+          // A page that arrived mid-sweep may not have answered opener() yet.
+          // Do NOT advance past it: this index only moves forward, so skipping
+          // it here would strand an action-created popup that proves ours a
+          // moment later — unvalidated, unquarantined, and invisible to
+          // ownedPagesRemain(). Stop the sweep instead; the yield below lets
+          // the probe settle and the outer loop retries the same page, all
+          // still under closeDeadline.
+          if (!ownershipAnswered(unvalidated)) break;
+          // Same boundary as the drain: the user's own tabs are not ours to
+          // quarantine or close, however far behind this cleanup falls.
+          if (!descendsFromActedPage(unvalidated)) continue;
+          // Quarantine BEFORE closing, and do not make it conditional on the
+          // close succeeding: close() can hang forever on an adversarial page,
+          // and when the deadline below fires we would otherwise leave a live,
+          // never-validated popup selectable — in direct mode there is no
+          // lifetime CDP request gate to catch it afterwards. Marking is
+          // synchronous bookkeeping, so it completes regardless.
+          closing.push(
+            quarantineTargetWithoutClosing({
+              cdpUrl: opts.cdpUrl,
+              page: unvalidated as Page,
+            })
+              .catch(() => undefined)
+              .then(() => (unvalidated as { close?: () => Promise<void> }).close?.())
+              .then(
+                () => undefined,
+                () => undefined,
+              ),
+          );
+        }
+        // Hand control back so pending page events can enqueue, then re-check.
+        // Racing the deadline keeps this bounded even against a page that
+        // appends a new popup on every turn.
+        await Promise.race([
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, 0);
+            (timer as unknown as { unref?: () => void }).unref?.();
+          }),
+          closeDeadline,
+        ]);
+      }
+      // Never await a popup's close() unbounded: a hung page must not outrank
+      // returning from the interaction.
+      //
+      // Track whether they actually finished. popupIndex only records that a
+      // close was ISSUED, and quarantine is bookkeeping that never closes a
+      // page (see quarantineTargetWithoutClosing), so a fully-drained queue
+      // whose closes all hang would otherwise look fully handled while every
+      // one of those popups is still live and scriptable.
+      const allClosesSettled = await Promise.race([
+        Promise.all(closing).then(() => true),
+        closeDeadline.then(() => false),
+      ]);
+      // If the bounds cut us off with popups still unaccounted for, they were
+      // neither validated nor quarantined and the listener is about to detach —
+      // in direct mode nothing else would ever check them. Per-page cleanup has
+      // already failed to keep up here, so fail closed on the whole context
+      // rather than leaving live, never-validated pages behind.
+      if (ownedPagesRemain() || !allClosesSettled) {
+        // Nothing reachable from this process can shut the browser down, and a
+        // resolved close() would only prove the call returned, not that the
+        // process exited. Say so explicitly rather than reporting a generic
+        // policy denial: the host owns process teardown and must treat this
+        // route as untrusted until it verifies an exit itself.
+        if ((await tearDownUncontainedPages(closeDeadline)) !== "contained") {
+          popupError = new Error(UNTORN_DOWN_BROWSER_MESSAGE);
+        }
+      }
+      if (popupError === undefined) {
+        popupError = new Error(
+          "Navigation blocked: popup chain exceeded the validation budget; remaining popups were closed",
+        );
+      }
+    }
+  } finally {
+    // Always detach: a throw here would otherwise leak the listener, retaining
+    // every tab opened afterwards for the life of the context.
+    if (pageContext && typeof pageContext.off === "function") {
+      pageContext.off("page", onContextPage);
+    }
+  }
+
+  // A containment failure outranks EVERYTHING. Ordinary denials describe a
+  // request that was refused — the safe outcome. This one says pages we never
+  // validated are still live and could not be torn down, and it is the only
+  // signal the host uses to distrust the route. If a denied main-frame
+  // navigation happened in the same interaction (easy for an adversarial page
+  // to arrange), reporting that instead would leave the route usable while
+  // those pages keep running.
+  if (popupError && /could not be torn down/.test(String((popupError as Error)?.message ?? ""))) {
+    throw toLintErrorObject(popupError, "Non-Error thrown");
+  }
+
+  // Otherwise policy denials outrank the action's own error, and the main-frame
+  // denial outranks subframe/popup denials, so the caller sees the navigation it
+  // asked for being refused. All were still evaluated above.
+  if (navigationError) {
+    throw toLintErrorObject(navigationError, "Non-Error thrown");
+  }
+
   if (subframeError) {
     throw toLintErrorObject(subframeError, "Non-Error thrown");
+  }
+
+  if (popupError) {
+    throw toLintErrorObject(popupError, "Non-Error thrown");
   }
 
   if (actionError) {
@@ -544,6 +997,7 @@ export async function clickViaPlaywright(opts: {
   delayMs?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -633,6 +1087,7 @@ export async function clickViaPlaywright(opts: {
       page,
       previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   } catch (err) {
@@ -655,6 +1110,7 @@ export async function clickCoordsViaPlaywright(opts: {
   delayMs?: number;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
@@ -677,6 +1133,7 @@ export async function clickCoordsViaPlaywright(opts: {
     page,
     previousUrl,
     ssrfPolicy: opts.ssrfPolicy,
+    browserProxyMode: opts.browserProxyMode,
     targetId: opts.targetId,
   }).finally(cleanup);
 }
@@ -688,6 +1145,8 @@ export async function hoverViaPlaywright(opts: {
   ref?: string;
   selector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -696,16 +1155,27 @@ export async function hoverViaPlaywright(opts: {
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
+  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      locator.hover({
-        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-      }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    await assertInteractionNavigationCompletedSafely({
+      action: async () => {
+        await awaitActionWithAbort(
+          locator.hover({
+            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        );
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -722,6 +1192,8 @@ export async function dragViaPlaywright(opts: {
   endRef?: string;
   endSelector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolvedStart = requireRefOrSelector(opts.startRef, opts.startSelector);
@@ -735,16 +1207,27 @@ export async function dragViaPlaywright(opts: {
     : page.locator(resolvedEnd.selector!);
   const startLabel = resolvedStart.ref ?? resolvedStart.selector!;
   const endLabel = resolvedEnd.ref ?? resolvedEnd.selector!;
+  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      startLocator.dragTo(endLocator, {
-        timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
-      }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    await assertInteractionNavigationCompletedSafely({
+      action: async () => {
+        await awaitActionWithAbort(
+          startLocator.dragTo(endLocator, {
+            timeout: resolveInteractionTimeoutMs(opts.timeoutMs),
+          }),
+          abortPromise,
+          reconcileRemoteDialog,
+        );
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, `${startLabel} -> ${endLabel}`);
   } finally {
@@ -761,6 +1244,7 @@ export async function selectOptionViaPlaywright(opts: {
   values: string[];
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -790,6 +1274,7 @@ export async function selectOptionViaPlaywright(opts: {
       page,
       previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   } catch (err) {
@@ -806,6 +1291,7 @@ export async function pressKeyViaPlaywright(opts: {
   key: string;
   delayMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const key = normalizeOptionalString(opts.key) ?? "";
@@ -832,6 +1318,7 @@ export async function pressKeyViaPlaywright(opts: {
       page,
       previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
   } finally {
@@ -850,6 +1337,7 @@ export async function typeViaPlaywright(opts: {
   slowly?: boolean;
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -889,6 +1377,7 @@ export async function typeViaPlaywright(opts: {
         page,
         previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
       });
     } else {
@@ -911,6 +1400,7 @@ export async function typeViaPlaywright(opts: {
         page,
         previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
       });
     }
@@ -928,6 +1418,7 @@ export async function fillFormViaPlaywright(opts: {
   fields: BrowserFormField[];
   timeoutMs?: number;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getRestoredPageForTarget(opts);
@@ -966,6 +1457,7 @@ export async function fillFormViaPlaywright(opts: {
             page,
             previousUrl,
             ssrfPolicy: opts.ssrfPolicy,
+            browserProxyMode: opts.browserProxyMode,
             targetId: opts.targetId,
           });
         } catch (err) {
@@ -987,6 +1479,7 @@ export async function fillFormViaPlaywright(opts: {
           page,
           previousUrl,
           ssrfPolicy: opts.ssrfPolicy,
+          browserProxyMode: opts.browserProxyMode,
           targetId: opts.targetId,
         });
       } catch (err) {
@@ -1003,6 +1496,7 @@ export async function evaluateViaPlaywright(opts: {
   cdpUrl: string;
   targetId?: string;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   fn: string;
   ref?: string;
   timeoutMs?: number;
@@ -1048,12 +1542,13 @@ export async function evaluateViaPlaywright(opts: {
 
   try {
     const previousUrl = page.url();
-    if (opts.ssrfPolicy) {
+    if (opts.ssrfPolicy || opts.browserProxyMode) {
       await assertPageNavigationCompletedSafely({
         cdpUrl: opts.cdpUrl,
         page,
         response: null,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
       });
     }
@@ -1098,6 +1593,7 @@ export async function evaluateViaPlaywright(opts: {
         page,
         previousUrl,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         targetId: opts.targetId,
       });
       return result;
@@ -1140,6 +1636,7 @@ export async function evaluateViaPlaywright(opts: {
       page,
       previousUrl,
       ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
       targetId: opts.targetId,
     });
     return result;
@@ -1155,6 +1652,8 @@ export async function scrollIntoViewViaPlaywright(opts: {
   ref?: string;
   selector?: string;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const resolved = requireRefOrSelector(opts.ref, opts.selector);
@@ -1165,14 +1664,25 @@ export async function scrollIntoViewViaPlaywright(opts: {
   const locator = resolved.ref
     ? refLocator(page, requireRef(resolved.ref))
     : page.locator(resolved.selector!);
+  const previousUrl = page.url();
   const { abortPromise, cleanup } = createAbortPromise(opts.signal);
   const reconcileRemoteDialog = () => reconcileRemoteDialogAfterActionSettled(page, opts.signal);
   try {
-    await awaitActionWithAbort(
-      locator.scrollIntoViewIfNeeded({ timeout }),
-      abortPromise,
-      reconcileRemoteDialog,
-    );
+    await assertInteractionNavigationCompletedSafely({
+      action: async () => {
+        await awaitActionWithAbort(
+          locator.scrollIntoViewIfNeeded({ timeout }),
+          abortPromise,
+          reconcileRemoteDialog,
+        );
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
   } catch (err) {
     throw toFriendlyInteractionError(err, label);
   } finally {
@@ -1192,6 +1702,8 @@ export async function waitForViaPlaywright(opts: {
   loadState?: "load" | "domcontentloaded" | "networkidle";
   fn?: string;
   timeoutMs?: number;
+  ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
@@ -1203,7 +1715,10 @@ export async function waitForViaPlaywright(opts: {
     await awaitActionWithAbort(stepPromise, abortPromise, reconcileRemoteDialog);
   };
 
+  const previousUrl = page.url();
   try {
+    await assertInteractionNavigationCompletedSafely({
+      action: async () => {
     if (typeof opts.timeMs === "number" && Number.isFinite(opts.timeMs)) {
       await waitForStep(
         page.waitForTimeout(
@@ -1248,6 +1763,14 @@ export async function waitForViaPlaywright(opts: {
         await waitForStep(page.waitForFunction(fn, { timeout }));
       }
     }
+      },
+      cdpUrl: opts.cdpUrl,
+      page,
+      previousUrl,
+      ssrfPolicy: opts.ssrfPolicy,
+      browserProxyMode: opts.browserProxyMode,
+      targetId: opts.targetId,
+    });
   } finally {
     cleanup();
   }
@@ -1467,6 +1990,8 @@ export async function setInputFilesViaPlaywright(opts: {
   inputRef?: string;
   element?: string;
   paths: string[];
+  ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
 }): Promise<void> {
   const page = await getPageForTargetId(opts);
   ensurePageState(page);
@@ -1490,22 +2015,33 @@ export async function setInputFilesViaPlaywright(opts: {
   }
   const resolvedPaths = resolvedResult.paths;
 
-  try {
-    await locator.setInputFiles(resolvedPaths);
-  } catch (err) {
-    throw toFriendlyInteractionError(err, inputRef || element);
-  }
-  try {
-    const handle = await locator.elementHandle();
-    if (handle) {
-      await handle.evaluate((el) => {
-        el.dispatchEvent(new Event("input", { bubbles: true }));
-        el.dispatchEvent(new Event("change", { bubbles: true }));
-      });
-    }
-  } catch {
-    // Best-effort for sites that don't react to setInputFiles alone.
-  }
+  const previousUrl = page.url();
+  await assertInteractionNavigationCompletedSafely({
+    action: async () => {
+      try {
+        await locator.setInputFiles(resolvedPaths);
+      } catch (err) {
+        throw toFriendlyInteractionError(err, inputRef || element);
+      }
+      try {
+        const handle = await locator.elementHandle();
+        if (handle) {
+          await handle.evaluate((el) => {
+            el.dispatchEvent(new Event("input", { bubbles: true }));
+            el.dispatchEvent(new Event("change", { bubbles: true }));
+          });
+        }
+      } catch {
+        // Best-effort for sites that don't react to setInputFiles alone.
+      }
+    },
+    cdpUrl: opts.cdpUrl,
+    page,
+    previousUrl,
+    ssrfPolicy: opts.ssrfPolicy,
+    browserProxyMode: opts.browserProxyMode,
+    targetId: opts.targetId,
+  });
 }
 
 async function executeSingleAction(
@@ -1514,6 +2050,7 @@ async function executeSingleAction(
   targetId?: string,
   evaluateEnabled?: boolean,
   ssrfPolicy?: SsrFPolicy,
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"],
   depth = 0,
   signal?: AbortSignal,
 ): Promise<unknown> {
@@ -1536,6 +2073,7 @@ async function executeSingleAction(
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1550,6 +2088,7 @@ async function executeSingleAction(
         delayMs: action.delayMs,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1564,6 +2103,7 @@ async function executeSingleAction(
         slowly: action.slowly,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1574,6 +2114,7 @@ async function executeSingleAction(
         key: action.key,
         delayMs: action.delayMs,
         ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1584,6 +2125,8 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1594,6 +2137,8 @@ async function executeSingleAction(
         ref: action.ref,
         selector: action.selector,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1606,6 +2151,8 @@ async function executeSingleAction(
         endRef: action.endRef,
         endSelector: action.endSelector,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1618,6 +2165,7 @@ async function executeSingleAction(
         values: action.values,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1628,17 +2176,32 @@ async function executeSingleAction(
         fields: action.fields,
         timeoutMs: action.timeoutMs,
         ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
-    case "resize":
-      await resizeViewportViaPlaywright({
+    case "resize": {
+      const resizePage = await getPageForTargetId({ cdpUrl, targetId: effectiveTargetId });
+      ensurePageState(resizePage);
+      const resizePreviousUrl = resizePage.url();
+      await assertInteractionNavigationCompletedSafely({
+        action: async () => {
+          await resizeViewportViaPlaywright({
+            cdpUrl,
+            targetId: effectiveTargetId,
+            width: action.width,
+            height: action.height,
+          });
+        },
         cdpUrl,
+        page: resizePage,
+        previousUrl: resizePreviousUrl,
+        ssrfPolicy,
+        browserProxyMode,
         targetId: effectiveTargetId,
-        width: action.width,
-        height: action.height,
       });
       break;
+    }
     case "wait":
       if (action.fn && !evaluateEnabled) {
         throw new Error("wait --fn is disabled by config (browser.evaluateEnabled=false)");
@@ -1654,6 +2217,8 @@ async function executeSingleAction(
         loadState: action.loadState,
         fn: action.fn,
         timeoutMs: action.timeoutMs,
+        ssrfPolicy,
+        browserProxyMode,
         signal,
       });
       break;
@@ -1665,6 +2230,7 @@ async function executeSingleAction(
         cdpUrl,
         targetId: effectiveTargetId,
         ssrfPolicy,
+        browserProxyMode,
         fn: action.fn,
         ref: action.ref,
         timeoutMs: action.timeoutMs,
@@ -1681,6 +2247,7 @@ async function executeSingleAction(
         cdpUrl,
         targetId: effectiveTargetId,
         ssrfPolicy,
+        browserProxyMode,
         actions: action.actions,
         stopOnError: action.stopOnError,
         evaluateEnabled,
@@ -1701,6 +2268,7 @@ export async function executeActViaPlaywright(opts: {
   targetId?: string;
   evaluateEnabled?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   signal?: AbortSignal;
 }): Promise<{
   result?: unknown;
@@ -1723,6 +2291,7 @@ export async function executeActViaPlaywright(opts: {
         cdpUrl: opts.cdpUrl,
         targetId: opts.targetId,
         ssrfPolicy: opts.ssrfPolicy,
+        browserProxyMode: opts.browserProxyMode,
         actions: opts.action.actions,
         stopOnError: opts.action.stopOnError,
         evaluateEnabled: opts.evaluateEnabled,
@@ -1736,6 +2305,7 @@ export async function executeActViaPlaywright(opts: {
       opts.targetId,
       opts.evaluateEnabled,
       opts.ssrfPolicy,
+      opts.browserProxyMode,
       0,
       dialogAbort.signal,
     );
@@ -1761,6 +2331,7 @@ export async function batchViaPlaywright(opts: {
   stopOnError?: boolean;
   evaluateEnabled?: boolean;
   ssrfPolicy?: SsrFPolicy;
+  browserProxyMode?: BrowserNavigationPolicyOptions["browserProxyMode"];
   depth?: number;
   signal?: AbortSignal;
 }): Promise<{ results: Array<{ ok: boolean; error?: string }> }> {
@@ -1783,6 +2354,7 @@ export async function batchViaPlaywright(opts: {
         opts.targetId,
         opts.evaluateEnabled,
         opts.ssrfPolicy,
+        opts.browserProxyMode,
         depth,
         opts.signal,
       );

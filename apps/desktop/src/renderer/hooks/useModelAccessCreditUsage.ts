@@ -23,7 +23,7 @@
  * module-local cache 让切换会话时 chip 不闪空 (与 useClaudeAccountUsage 同做法)。
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
 import type { ModelAccessCreditUsage } from '../../shared/modelAccess';
 import { billingApi } from '../features/billing/api';
@@ -45,6 +45,7 @@ const REFRESH_INTERVAL_MS = 60_000;
  */
 interface CreditUsageSnapshot {
   accountId: string;
+  cachedAt: number;
   usage: ModelAccessCreditUsage;
 }
 
@@ -76,9 +77,7 @@ function isCreditUsage(v: unknown): v is ModelAccessCreditUsage {
   );
 }
 
-export function useModelAccessCreditUsage(
-  enabled: boolean,
-): ModelAccessCreditUsage | null {
+export function useModelAccessCreditUsageResult(enabled: boolean) {
   const { dataOwnerId, mode, user } = useAuth();
   const creditEnabled = enabled && mode === 'cloud' && user?.membershipKind === 'personal';
   // state 连账号 id 一起存，隔离在**渲染期**完成而不是 effect 里:effect 要等本轮渲染
@@ -87,33 +86,58 @@ export function useModelAccessCreditUsage(
     readCache(dataOwnerId),
   );
 
+  const [revision, setRevision] = useState(0);
+  const refresh = useCallback(() => setRevision((value) => value + 1), []);
+  const [request, setRequest] = useState<{ accountId: string; loading: boolean } | null>(null);
   useEffect(() => {
     if (!creditEnabled || !dataOwnerId) return;
+    const cached = readCache(dataOwnerId);
+    if (cached) setSnapshot(cached);
     let cancelled = false;
 
     const load = () => {
+      setRequest({ accountId: dataOwnerId, loading: true });
       void billingApi
         .getCreditUsage()
         .then((res) => {
           if (cancelled) return;
           if (!isCreditUsage(res)) return;
-          cache = { accountId: dataOwnerId, usage: res };
+          cache = { accountId: dataOwnerId, cachedAt: Date.now(), usage: res };
           setSnapshot(cache);
         })
         .catch(() => {
-          /* 租户不提供该查询 / 未开户 / 上游不可用 → 保持本账号上一次值, 不清空 */
+          /* Preserve this account’s last successful value, never invent zero. */
+        })
+        .finally(() => {
+          if (!cancelled) setRequest({ accountId: dataOwnerId, loading: false });
         });
     };
 
-    load();
+    if (revision > 0 || !cached || Date.now() - cached.cachedAt >= REFRESH_INTERVAL_MS) load();
+    else setRequest({ accountId: dataOwnerId, loading: false });
     const timer = setInterval(load, REFRESH_INTERVAL_MS);
     return () => {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [creditEnabled, dataOwnerId]);
+  }, [creditEnabled, dataOwnerId, revision]);
 
   // 账号不匹配 / 未启用 → 当作没有数据。切号当帧即生效。
-  if (!creditEnabled || !dataOwnerId || snapshot?.accountId !== dataOwnerId) return null;
-  return snapshot.usage;
+  const currentSnapshot = readCache(dataOwnerId) ?? snapshot;
+  const usage =
+    creditEnabled && dataOwnerId && currentSnapshot?.accountId === dataOwnerId
+      ? currentSnapshot.usage
+      : null;
+  return {
+    usage,
+    refresh,
+    loading: Boolean(
+      creditEnabled && dataOwnerId && (request?.accountId !== dataOwnerId || request.loading),
+    ),
+  };
+}
+
+/** Existing consumers only need the last account-scoped value. */
+export function useModelAccessCreditUsage(enabled: boolean): ModelAccessCreditUsage | null {
+  return useModelAccessCreditUsageResult(enabled).usage;
 }

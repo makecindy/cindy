@@ -8,8 +8,10 @@ import test from 'node:test';
 import {
   assertPinnedRuntimeAsset,
   assetDigestMatchesUpstream,
+  ensurePiThemeAssets,
   extractArchive,
   flattenExtractedDir,
+  hasPiThemeAssets,
   readCachedAssetDigest,
 } from '../../tools/pi/update.mjs';
 
@@ -37,6 +39,19 @@ test('Pi updater still flattens the nested Unix release layout', (t) => {
   assert.equal(flattenExtractedDir(dir, 'pi'), path.join(dir, 'pi'));
   assert.ok(fs.statSync(path.join(dir, 'pi')).isFile());
   assert.ok(fs.statSync(path.join(dir, 'theme')).isDirectory());
+});
+
+test('Pi updater supplies fallback themes when an archive omits them', () => {
+  const dir = tempDir();
+  assert.equal(hasPiThemeAssets(dir), false);
+  ensurePiThemeAssets(dir);
+  assert.equal(hasPiThemeAssets(dir), true);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'theme', 'dark.json'), 'utf8')).name, 'dark');
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'theme', 'light.json'), 'utf8')).name, 'light');
+
+  fs.writeFileSync(path.join(dir, 'theme', 'dark.json'), '{"name":"custom"}');
+  ensurePiThemeAssets(dir);
+  assert.equal(JSON.parse(fs.readFileSync(path.join(dir, 'theme', 'dark.json'), 'utf8')).name, 'custom');
 });
 
 test('Pi updater extracts tar.gz archives streamed to the system tar', async (t) => {

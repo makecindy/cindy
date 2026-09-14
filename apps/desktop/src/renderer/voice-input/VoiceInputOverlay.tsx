@@ -25,6 +25,8 @@ import {
   isCodexSessionExpiredError,
   useCodexSessionExpiredPrompt,
 } from '@/hooks/useCodexSessionExpiredPrompt';
+import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
+import { codexRecoveryActionKey, type CodexCredentialScope } from '@/hooks/codexAuthRecovery';
 import {
   recordVoiceInputHistory,
   updateVoiceInputHistoryEntry,
@@ -96,11 +98,20 @@ type StartReadyState = {
 };
 type GlobalOverlayCommand = { type: 'start' | 'submit' | 'cancel' };
 type CloseOverlayOptions = { preservePasteTarget?: boolean };
+type CodexRecoveryPromptAttempt = { attemptId: number; reason: string };
 // 'retained' is not a paste failure: the dictation session itself died and the
 // recognized text was kept for copying. It reuses the paste-error layout but
 // carries the session's own error text instead of a paste hint.
 type PasteErrorCode = 'empty' | 'unavailable' | 'unconfirmed' | 'permission' | 'failed' | 'retained';
 type PermissionPromptKind = 'microphone' | 'accessibility';
+
+export function isCurrentCodexRecoveryPromptAttempt(
+  pending: CodexRecoveryPromptAttempt | null,
+  attemptId: number,
+  reason: string,
+): boolean {
+  return pending?.attemptId === attemptId && pending.reason === reason;
+}
 
 function resetOverlayFocus(): void {
   const activeElement = document.activeElement;
@@ -156,10 +167,58 @@ function getPasteErrorHintKey(errorCode: PasteErrorCode | null): string {
 
 export function VoiceInputOverlay() {
   const { t, i18n } = useTranslation();
+  const [codexRecovery, setCodexRecovery] = useState<{
+    reason: string;
+    scope: CodexCredentialScope;
+  } | null>(null);
+  const [codexRecoveryPromptPending, setCodexRecoveryPromptPending] = useState(false);
   const codexSessionPromptActiveRef = useRef(false);
+  const codexRecoveryPromptAttemptRef = useRef<CodexRecoveryPromptAttempt | null>(null);
+  const codexPromptCloseTimerRef = useRef<number | null>(null);
+  const invalidateCodexRecoveryPrompt = useCallback(() => {
+    if (codexPromptCloseTimerRef.current !== null) {
+      window.clearTimeout(codexPromptCloseTimerRef.current);
+      codexPromptCloseTimerRef.current = null;
+    }
+    codexRecoveryPromptAttemptRef.current = null;
+    codexSessionPromptActiveRef.current = false;
+    setCodexRecoveryPromptPending(false);
+  }, []);
   const promptCodexSessionExpired = useCodexSessionExpiredPrompt({
+    onPromptStarted: (reason) => {
+      codexRecoveryPromptAttemptRef.current = {
+        attemptId: startAttemptIdRef.current,
+        reason,
+      };
+      setCodexRecoveryPromptPending(true);
+    },
     onPromptClosed: () => {
       codexSessionPromptActiveRef.current = false;
+      if (codexPromptCloseTimerRef.current !== null) {
+        window.clearTimeout(codexPromptCloseTimerRef.current);
+      }
+      codexPromptCloseTimerRef.current = window.setTimeout(() => {
+        codexPromptCloseTimerRef.current = null;
+        codexRecoveryPromptAttemptRef.current = null;
+        setCodexRecoveryPromptPending(false);
+      }, 0);
+    },
+    onInlineRecoveryRequired: (reason, scope) => {
+      // The prompt hook closes its own de-duplication lease before handing off.
+      // Keep the voice flow gated separately until useCodexAuth verifies recovery.
+      if (codexPromptCloseTimerRef.current !== null) {
+        window.clearTimeout(codexPromptCloseTimerRef.current);
+        codexPromptCloseTimerRef.current = null;
+      }
+      if (!isCurrentCodexRecoveryPromptAttempt(
+        codexRecoveryPromptAttemptRef.current,
+        startAttemptIdRef.current,
+        reason,
+      )) return;
+      codexRecoveryPromptAttemptRef.current = null;
+      setCodexRecoveryPromptPending(false);
+      codexSessionPromptActiveRef.current = true;
+      setCodexRecovery({ reason, scope });
     },
   });
   const [state, setState] = useState<VoiceInputState>('idle');
@@ -211,6 +270,23 @@ export function VoiceInputOverlay() {
   const settingsRecoveryTabRef = useRef<VoiceInputRecoverySettingsTab | null>(null);
   const openSettingsInFlightRef = useRef(false);
 
+  const {
+    state: codexAuthState,
+    reconnectCredentialScope,
+    recoveryCheck: codexRecoveryCheck,
+    refresh: refreshCodexAuth,
+    triggerLogin: triggerCodexLogin,
+  } = useCodexAuth({
+    enabled: Boolean(codexRecovery),
+    recoveryHint: codexRecovery
+      ? { reason: codexRecovery.reason, credentialScope: codexRecovery.scope }
+      : undefined,
+  });
+
+  const requestCodexSessionExpiredPrompt = useCallback((reason: string) => {
+    return promptCodexSessionExpired(reason);
+  }, [promptCodexSessionExpired]);
+
   const setVoiceState = useCallback((next: VoiceInputState) => {
     stateRef.current = next;
     if (next === 'error') terminalOutcomeRef.current = 'failed';
@@ -233,6 +309,8 @@ export function VoiceInputOverlay() {
 
   const resetHiddenOverlaySession = useCallback(() => {
     setError(null);
+    setCodexRecovery(null);
+    invalidateCodexRecoveryPrompt();
     setMicrophoneNotice(null);
     setHasPasteError(false);
     setPasteErrorCode(null);
@@ -259,7 +337,7 @@ export function VoiceInputOverlay() {
     setStopInFlight(false);
     setVoiceState('idle');
     resetOverlayInteraction();
-  }, [clearErrorCloseTimer, resetOverlayInteraction, setVoiceState]);
+  }, [clearErrorCloseTimer, invalidateCodexRecoveryPrompt, resetOverlayInteraction, setVoiceState]);
 
   const enableActionTips = useCallback(() => {
     setActionTipsDisabled(false);
@@ -532,7 +610,7 @@ export function VoiceInputOverlay() {
       : null;
     if (startAttemptIdRef.current !== failureAttemptId) return;
     const promptReason = authErrorReason ?? message;
-    const shouldPromptCodexSessionExpired = promptCodexSessionExpired(promptReason);
+    const shouldPromptCodexSessionExpired = requestCodexSessionExpiredPrompt(promptReason);
     if (shouldPromptCodexSessionExpired) {
       codexSessionPromptActiveRef.current = true;
     }
@@ -555,7 +633,7 @@ export function VoiceInputOverlay() {
   }, [
     closeOverlay,
     formatVoiceInputStartError,
-    promptCodexSessionExpired,
+    requestCodexSessionExpiredPrompt,
     resetOverlayInteraction,
     restoreSystemAudioForRecording,
     scheduleErrorClose,
@@ -589,6 +667,7 @@ export function VoiceInputOverlay() {
     // commits to a paste (i.e. throughout submitting + refining). The user
     // expects cancel to remain available until the overlay is actually gone.
     if (cancelRequestedRef.current) return;
+    invalidateCodexRecoveryPrompt();
     cancelRequestedRef.current = true;
     suppressedStartErrorAttemptsRef.current.add(startAttemptIdRef.current);
     closingRef.current = true;
@@ -614,6 +693,7 @@ export function VoiceInputOverlay() {
     resolveDoneWaiters,
     restoreSystemAudioForRecording,
     stopEngine,
+    invalidateCodexRecoveryPrompt,
   ]);
 
   const failRecording = useCallback(async (message: string) => {
@@ -703,6 +783,7 @@ export function VoiceInputOverlay() {
     if (stateRef.current === 'listening' || stateRef.current === 'submitting' || stateRef.current === 'refining') {
       return;
     }
+    invalidateCodexRecoveryPrompt();
     clearErrorCloseTimer();
     resetOverlayInteraction();
     const attemptId = startAttemptIdRef.current + 1;
@@ -718,6 +799,7 @@ export function VoiceInputOverlay() {
     const elapsedMs = () => Math.round(performance.now() - bootstrapStartedAt);
 
     setError(null);
+    setCodexRecovery(null);
     setMicrophoneNotice(null);
     setHasPasteError(false);
     setPasteErrorCode(null);
@@ -752,7 +834,7 @@ export function VoiceInputOverlay() {
     // async path so newly granted permission / freshly completed Codex login
     // can be picked up immediately. Main verifies readiness again in start().
     const guards = await resolveVoiceInputStartGuards({ requireAccessibility: true });
-    log.debug('global voice input start guards checked', {
+    log.info('global voice input start guards checked', {
       ok: guards.ok,
       failed: guards.ok ? undefined : guards.failed,
       permissionSource: guards.permissionSource,
@@ -860,6 +942,16 @@ export function VoiceInputOverlay() {
       cancelStartedRun(startResultPromise);
       suppressedStartErrorAttemptsRef.current.delete(attemptId);
       await restoreSystemAudioForRecording();
+      // Permission revoked after the start guard trusted a positive cache:
+      // show the same recovery prompt as a guard-time denial so the user gets
+      // the fix on this attempt instead of a raw capture error.
+      if (captureStart.permissionDenied) {
+        setError(t('voiceInputOverlay.permissionPrompts.microphone.message'));
+        setPermissionPrompt('microphone');
+        setVoiceState('done');
+        closingRef.current = false;
+        return;
+      }
       setError(captureStart.error);
       setVoiceState('error');
       scheduleErrorClose();
@@ -913,16 +1005,50 @@ export function VoiceInputOverlay() {
     formatMicrophoneStartError,
     showStartFailure,
     isActiveStartAttempt,
+    invalidateCodexRecoveryPrompt,
     muteSystemAudioForRecording,
-    promptCodexSessionExpired,
+    requestCodexSessionExpiredPrompt,
     resetOverlayInteraction,
     resolveStartReadyState,
     restoreSystemAudioForRecording,
     scheduleErrorClose,
+    setCodexRecovery,
     setVoiceState,
     stopEngine,
     t,
   ]);
+
+  const codexRecoveryScope = codexAuthState.kind === 'reconnect-required'
+    ? (codexAuthState.credentialScope ?? 'unknown')
+    : (reconnectCredentialScope ?? codexRecovery?.scope ?? 'unknown');
+  const codexRecoveryRecovered = Boolean(codexRecovery) && isChatGptConnectionConnected(codexAuthState, false);
+  const codexRecoveryBusy =
+    codexAuthState.kind === 'loading' ||
+    codexAuthState.kind === 'login-pending' ||
+    codexRecoveryCheck === 'checking';
+  const handleCodexRecovery = useCallback(async () => {
+    if (codexRecoveryBusy) return;
+    if (codexRecoveryRecovered) {
+      codexSessionPromptActiveRef.current = false;
+      setCodexRecovery(null);
+      void startRecording();
+      return;
+    }
+    if (codexRecoveryCheck === 'failed') {
+      await refreshCodexAuth();
+      return;
+    }
+    if (codexRecoveryScope === 'system-shared') {
+      try {
+        const opened = await window.electronAPI.openChatGPTApp();
+        if (!opened.success) setError(t('chatgptAuthRecovery.openAppFailed'));
+      } catch {
+        setError(t('chatgptAuthRecovery.openAppFailed'));
+      }
+      return;
+    }
+    await triggerCodexLogin();
+  }, [codexRecoveryBusy, codexRecoveryCheck, codexRecoveryRecovered, codexRecoveryScope, refreshCodexAuth, startRecording, t, triggerCodexLogin]);
 
   const waitForDone = useCallback(() => {
     return new Promise<void>((resolve) => {
@@ -1200,7 +1326,7 @@ export function VoiceInputOverlay() {
       )) return;
       switch (event.type) {
         case 'auth-required':
-          codexSessionPromptActiveRef.current = promptCodexSessionExpired(event.reason);
+          codexSessionPromptActiveRef.current = requestCodexSessionExpiredPrompt(event.reason);
           break;
         case 'state':
           if (event.outcome) terminalOutcomeRef.current = event.outcome;
@@ -1267,7 +1393,7 @@ export function VoiceInputOverlay() {
           log.warn('global voice input error:', event.message);
           terminalOutcomeRef.current = 'failed';
           const formattedMessage = formatVoiceInputError(event.message, event.code, event.transcriptKept);
-          if (promptCodexSessionExpired(formattedMessage)) {
+          if (requestCodexSessionExpiredPrompt(formattedMessage)) {
             codexSessionPromptActiveRef.current = true;
           }
           // Preserve already-recognized text for the user to copy, reusing the
@@ -1319,12 +1445,12 @@ export function VoiceInputOverlay() {
             event.event.type === 'refine_rejected' &&
             isCodexSessionExpiredError(event.event.reason)
           ) {
-            codexSessionPromptActiveRef.current = promptCodexSessionExpired(event.event.reason);
+            codexSessionPromptActiveRef.current = requestCodexSessionExpiredPrompt(event.event.reason);
           }
           break;
       }
     });
-  }, [formatVoiceInputError, promptCodexSessionExpired, resolveDoneWaiters, setVoiceState]);
+  }, [formatVoiceInputError, requestCodexSessionExpiredPrompt, resolveDoneWaiters, setVoiceState]);
 
   useEffect(() => {
     const unsubscribe = window.electronAPI.voiceInput.onGlobalOverlayCommand((command: GlobalOverlayCommand) => {
@@ -1335,6 +1461,12 @@ export function VoiceInputOverlay() {
       if (command.type === 'submit') {
         if (stateRef.current === 'error') {
           if (stopInFlightRef.current) return;
+          if (codexRecoveryPromptPending) return;
+          if (codexRecovery) {
+            void handleCodexRecovery();
+            return;
+          }
+          codexSessionPromptActiveRef.current = false;
           void startRecording();
           return;
         }
@@ -1347,7 +1479,7 @@ export function VoiceInputOverlay() {
     });
     window.electronAPI.voiceInput.notifyGlobalOverlayReady();
     return unsubscribe;
-  }, [cancelAndClose, startRecording, stopAndPaste]);
+  }, [cancelAndClose, codexRecovery, codexRecoveryPromptPending, handleCodexRecovery, startRecording, stopAndPaste]);
 
   // Mount-time prewarm. The overlay is now pre-created at app idle (see
   // prewarmGlobalVoiceInputOverlay in main/voice-input/global.ts) so this
@@ -1530,12 +1662,21 @@ export function VoiceInputOverlay() {
                 onFocus={preventOverlayButtonFocus}
                 onPointerDown={(event) => {
                   beginOverlayButtonAction(event);
-                  void startRecording();
+                  void (codexRecovery ? handleCodexRecovery() : startRecording());
                 }}
                 onClick={suppressOverlayButtonClick}
-                disabled={stopInFlight}
+                // The stop IPC gate remains the primary retry guard (disabled={stopInFlight});
+                // auth recovery adds its own busy state while focus/visibility rechecks run.
+                disabled={stopInFlight || codexRecoveryBusy || codexRecoveryPromptPending}
               >
-                {t('voiceInputOverlay.retry')}
+                {codexRecovery
+                  ? codexRecoveryRecovered
+                    ? t('voiceInputOverlay.retry')
+                    : t(codexRecoveryActionKey(
+                        codexRecoveryScope,
+                        codexRecoveryBusy ? 'checking' : codexRecoveryCheck,
+                      ))
+                  : t('voiceInputOverlay.retry')}
               </button>
             </div>
           ) : displayText ? (

@@ -26,6 +26,7 @@
  *    会被 dedup 静默吞掉,丢消息比双发更糟)。
  */
 import { useSyncExternalStore } from 'react';
+import type { SlowSendPhase } from '@/session/SlowSendNotice';
 import * as ExpoCrypto from 'expo-crypto';
 import { isPreconditionFailedRemoteError } from '@cindy/maker-shared/device-link-contract';
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
@@ -70,6 +71,8 @@ export interface NewSessionCreationTransport {
 }
 
 export interface NewSessionCreationParams {
+  /** 从按下发送起计时，跨页面交接不重置慢发送提示。 */
+  startedAt?: number;
   sessionId: string;
   deviceId: string;
   deviceName: string;
@@ -118,6 +121,8 @@ export interface NewSessionCreationParams {
 }
 
 export interface NewSessionCreationTask {
+  readonly startedAt: number;
+  readonly phase: SlowSendPhase;
   readonly sessionId: string;
   readonly deviceId: string;
   readonly deviceName: string;
@@ -135,6 +140,8 @@ export interface NewSessionCreationTask {
 }
 
 interface InternalTask extends NewSessionCreationTask {
+  startedAt: number;
+  phase: SlowSendPhase;
   status: NewSessionCreationStatus;
   error: string | null;
   firstMessageSessionRefs: MobileSessionReference[];
@@ -281,6 +288,8 @@ export function startNewSessionCreation(params: NewSessionCreationParams): void 
   ), firstMessageSessionRefs);
   remoteSessionStore.setInputProjectionOptimistically(params.sessionId, buildOptimisticProjection(params.sessionId, queued));
   const task: InternalTask = {
+    startedAt: params.startedAt ?? Date.now(),
+    phase: 'connecting',
     sessionId: params.sessionId,
     deviceId: params.deviceId,
     deviceName: params.deviceName,
@@ -312,6 +321,8 @@ export function retryNewSessionCreation(sessionId: string): void {
     return;
   }
   task.status = 'running';
+  task.startedAt = Date.now();
+  task.phase = 'connecting';
   task.error = null;
   // 重试前把乐观行 / 气泡恢复(返回编辑路径可能没走,行一般还在,upsert 幂等)。
   const session = synthesizeSession(task.params);
@@ -876,6 +887,10 @@ function cancelStaleOwnerTask(task: InternalTask): void {
 }
 
 async function runPipeline(task: InternalTask): Promise<void> {
+  const phase = (value: SlowSendPhase) => {
+    task.phase = value;
+    emit();
+  };
   const { params } = task;
   const { maker, openLink, subscribe } = params.transport;
   const sessionId = task.sessionId;
@@ -904,6 +919,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
     // 刷新放到建链和订阅之后)——与建链并行启动时,listProviders 可能在建链完成
     // 前就返回旧目录快照(来源 A),而建链期间工作站已替换为 B,后续拿旧 A 快照
     // 重验仍会向已删除来源创建。改为建链后拉取,终检目录是「建链后最新」。
+    phase('checkingModel');
     const freshUnauthenticated = (async (): Promise<{ unauthenticated: boolean; fresh: DeviceProvidersPayload | null } | null> => {
       if (!isTaskOwnerCurrent(task)) return null;
       try {
@@ -933,6 +949,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
     }
     const finalDraft: NewSessionDraft = draftPatch ? { ...task.draft, ...draftPatch } : task.draft;
 
+    phase('creating');
     const createOutcome = await createSessionIdempotent(task, finalDraft);
     // started 写盘后二次重验可能修正草稿(codex review P2:将 started 后修正的
     // 草稿传给排队消息)——createOpts 用修正版创建,排队消息合成也必须用同一
@@ -948,6 +965,7 @@ async function runPipeline(task: InternalTask): Promise<void> {
 
     // 权威会话刷新(dialogue 会话此刻才拿到被控端分配的 workingDir);失败不阻断,
     // 排队 createOpts 用合成行兜底(project 会话字段本就齐全)。
+    phase('sending');
     let freshSession: RemoteSession | null = null;
     try {
       assertTaskOwnerCurrent(task);

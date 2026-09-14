@@ -36,12 +36,14 @@ import {
   type AutomationScheduleSessionInfo,
   type SidebarSessionEntry,
 } from './automationSidebarGrouping';
-import { sessionActivityMs } from './dateSessionGrouping';
-import type { ProjectNode } from './projectGrouping';
+import { sessionActivityMs, sessionCreatedMs } from './dateSessionGrouping';
+import type { BotGroupNode, ProjectNode } from './projectGrouping';
 
 export type MainListEntry =
   | { kind: 'project'; project: ProjectNode }
   | { kind: 'dialogue-group'; sessions: Session[] }
+  /** 一个伙伴名下的全部任务。与项目行并列 —— 项目是实体目录,伙伴名是用户起的。 */
+  | { kind: 'bot-group'; bot: BotGroupNode }
   | SidebarSessionEntry;
 
 /** 优先级排序的运行时上下文(组装层的运行中 / 需关注集合)。 */
@@ -182,15 +184,16 @@ export function sessionPriorityRecencyMs(session: Session, ctx: MainListPriority
 export function getMainListEntrySessions(entry: MainListEntry): readonly Session[] {
   if (entry.kind === 'project') return entry.project.sessions;
   if (entry.kind === 'dialogue-group') return entry.sessions;
+  if (entry.kind === 'bot-group') return entry.bot.sessions;
   if (entry.kind === 'automation-group') return entry.group.sessions;
   return [entry.session];
 }
 
-function entryActivityMs(entry: MainListEntry): number {
+function entryTimeMs(entry: MainListEntry, sortBy: FilterSortBy = 'recency'): number {
   const sessions = getMainListEntrySessions(entry);
   let max = 0;
   for (const s of sessions) {
-    const ms = sessionActivityMs(s);
+    const ms = sortBy === 'created' ? sessionCreatedMs(s) : sessionActivityMs(s);
     if (ms > max) max = ms;
   }
   return max;
@@ -221,6 +224,7 @@ function entryPriorityRank(entry: MainListEntry, ctx: MainListPriorityContext): 
  * 组内(项目 / 对话组)会话排序的唯一入口。
  *   - priority:分档 + 同档 recency
  *   - recency:一律按最近活动倒序
+ *   - created:按创建时间倒序,消息和状态更新不改序
  * 自定义项目顺序只影响顶层项目行,组内仍走当前 sortBy。不得沿用 groupSessions 的
  * active-first 入参序——状态=全部时,刚归档的任务必须能排在陈旧活跃任务前面。
  */
@@ -238,6 +242,11 @@ export function sortSessionsForMainList(
           sessionPriorityRecencyMs(b, ctx) - sessionPriorityRecencyMs(a, ctx),
       );
   }
+  if (sortBy === 'created') {
+    return sessions.slice().sort((a, b) =>
+      sessionCreatedMs(b) - sessionCreatedMs(a) || a.id.localeCompare(b.id),
+    );
+  }
   return sessions.slice().sort((a, b) => sessionActivityMs(b) - sessionActivityMs(a));
 }
 
@@ -246,6 +255,8 @@ export interface BuildMainListEntriesInput {
   projects: readonly ProjectNode[];
   /** 无项目归属(workspaceKind dialogue)的可见会话。 */
   dialogues: readonly Session[];
+  /** 按伙伴分的组。平铺模式下与项目内会话一样摊成顶层条目。 */
+  bots?: readonly BotGroupNode[];
   /** 未绑定目录的草稿。按设备分组时随条目进对应设备段。 */
   unclassified?: readonly Session[];
   /** 'project' = 项目行;'flat' = 项目内会话平铺为顶层条目。 */
@@ -277,6 +288,7 @@ function buildFlatSessionEntries(
 export function buildMainListEntries({
   projects,
   dialogues,
+  bots = [],
   unclassified = [],
   groupBy,
   groupDialogue,
@@ -292,7 +304,12 @@ export function buildMainListEntries({
 
   if (groupBy === 'flat') {
     const flatEntries = buildFlatSessionEntries(
-      [...projects.flatMap((project) => project.sessions), ...dialogues, ...unclassified],
+      [
+        ...projects.flatMap((project) => project.sessions),
+        ...bots.flatMap((bot) => bot.sessions),
+        ...dialogues,
+        ...unclassified,
+      ],
       sortBy,
       ctx,
       notifications,
@@ -328,6 +345,13 @@ export function buildMainListEntries({
     });
   }
 
+  for (const bot of bots) {
+    entries.push({
+      kind: 'bot-group',
+      bot: { ...bot, sessions: sortSessionsForMainList(bot.sessions, sortBy, ctx) },
+    });
+  }
+
   if (groupDialogue) {
     if (dialogues.length > 0) {
       entries.push({
@@ -360,7 +384,11 @@ function compareEntriesBySortBy(
       entryPriorityRecencyMs(b, ctx) - entryPriorityRecencyMs(a, ctx)
     );
   }
-  return entryActivityMs(b) - entryActivityMs(a);
+  const timeDifference = entryTimeMs(b, sortBy) - entryTimeMs(a, sortBy);
+  if (timeDifference !== 0 || sortBy !== 'created') return timeDifference;
+  return (getMainListEntrySessions(a)[0]?.id ?? '').localeCompare(
+    getMainListEntrySessions(b)[0]?.id ?? '',
+  );
 }
 
 function sortMainListEntries(
@@ -413,6 +441,11 @@ function entryDeviceId(entry: MainListEntry): string | null {
   if (entry.kind === 'session') return entry.session.deviceLinkDeviceId ?? null;
   if (entry.kind === 'automation-group') {
     return entry.group.sessions[0]?.deviceLinkDeviceId ?? null;
+  }
+  // 伙伴组:同样按组内首条会话归属。伙伴本身不绑设备 —— 它的任务可以分布在
+  // 本机与远端,设备切段只看会话自己在哪。
+  if (entry.kind === 'bot-group') {
+    return entry.bot.sessions[0]?.deviceLinkDeviceId ?? null;
   }
   // 对话组条目:按组内首条会话归属(散排对话在设备分组下由调用方按设备切分后
   // 再分别成组,这里只是兜底)。
@@ -485,7 +518,8 @@ export function splitEntriesByDevice(
     }))
     .sort(
       (a, b) =>
-        Math.max(...b.entries.map(entryActivityMs)) - Math.max(...a.entries.map(entryActivityMs)),
+        Math.max(...b.entries.map((entry) => entryTimeMs(entry, options.sortBy))) -
+        Math.max(...a.entries.map((entry) => entryTimeMs(entry, options.sortBy))),
     );
   result.push(...rest);
   return result;

@@ -29,9 +29,14 @@ const h = vi.hoisted(() => ({
   cleanupRemovedSession: vi.fn(),
   runtimeCleanup: vi.fn(),
   removeSessionRefs: vi.fn(),
+  hasRegisteredWorktreeForSession: vi.fn(),
   recycleWorktreeForRemovedSession: vi.fn(),
   isOwnerScopeCurrent: vi.fn(),
+  upsertRecentWorkdir: vi.fn(async () => true),
+  captureOwnerScope: false,
   drizzle: {},
+  readBindings: vi.fn(),
+  requestRecycle: vi.fn(),
   userDataPath: '',
   agentIslandService: {
     handleSessionMetadataPatch: vi.fn(),
@@ -56,9 +61,13 @@ vi.mock('../cindy-media/ledger', () => ({
 }));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
 vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn() }));
-vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
+vi.mock('../localDb/ipc/recentWorkdirs', () => ({
+  upsertRecentWorkdir: h.upsertRecentWorkdir,
+}));
 vi.mock('../device-link/broadcast-tap', () => ({
-  captureDataOwnerBroadcastScope: vi.fn(() => null),
+  captureDataOwnerBroadcastScope: vi.fn(() =>
+    h.captureOwnerScope ? { ownerStamp: { dataOwnerId: 'owner-a', generation: 1 } } : null,
+  ),
   getSafeDataOwnerPushStamp: vi.fn(() => undefined),
   isDataOwnerBroadcastScopeCurrent: h.isOwnerScopeCurrent,
   tapWindowBroadcast: h.tapWindowBroadcast,
@@ -75,16 +84,19 @@ vi.mock('../maker-ipc/register.js', () => ({
 }));
 vi.mock('../worktree/sessionRemovalRecycle.js', () => ({
   isSessionStillRemovable: h.isSessionStillRemovable,
+  hasRegisteredWorktreeForSession: h.hasRegisteredWorktreeForSession,
   recycleWorktreeForRemovedSession: h.recycleWorktreeForRemovedSession,
 }));
 import {
   recycleSessionWorktreeForStatusChange,
   setSessionRemovalCancelOperations,
   setSessionRemovalCleanup,
+  setSessionWorktreeRecycle,
   setSessionRuntimeCleanup,
   setSessionsStatusInDb,
 } from '../localDb/ipc/sessions.js';
 import { setSessionRouteLockImplementation } from '../localDb/sessionRouteLock.js';
+import { queueSessionWorktreeRecycle } from '../worktree/recycleQueue';
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -95,23 +107,102 @@ beforeEach(() => {
   h.cancelSessionOperations.mockResolvedValue(undefined);
   h.cleanupRemovedSession.mockResolvedValue(undefined);
   h.removeSessionRefs.mockResolvedValue(0);
+  h.hasRegisteredWorktreeForSession.mockReturnValue(true);
   h.recycleWorktreeForRemovedSession.mockResolvedValue(undefined);
   h.isOwnerScopeCurrent.mockReturnValue(true);
+  h.upsertRecentWorkdir.mockResolvedValue(true);
+  h.captureOwnerScope = false;
+  h.readBindings.mockReset().mockResolvedValue([]);
+  h.requestRecycle.mockReset().mockResolvedValue(undefined);
+  Object.assign(h.drizzle, { select: () => ({ from: () => ({ where: () => ({ limit: h.readBindings }) }) }) });
   setSessionRemovalCancelOperations(h.cancelSessionOperations);
   setSessionRemovalCleanup(h.cleanupRemovedSession);
+  setSessionWorktreeRecycle(h.requestRecycle);
   setSessionRuntimeCleanup(h.runtimeCleanup);
   setSessionRouteLockImplementation(h.withSendToSessionLock);
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // Finish queued cleanup before removing its hooks or resetting the next test's mocks.
+  await queueSessionWorktreeRecycle(async () => {});
   setSessionRemovalCancelOperations(null);
   setSessionRemovalCleanup(null);
+  setSessionWorktreeRecycle(null);
   setSessionRuntimeCleanup(null);
   setSessionRouteLockImplementation(null);
   fs.rmSync(h.userDataPath, { recursive: true, force: true });
 });
 
 describe('setSessionsStatusInDb', () => {
+  it('returns batch status changes promptly and serializes their cleanup chains', async () => {
+    const ids = ['one', 'two', 'three'];
+    h.tx.mockResolvedValueOnce(ids.map((sessionId) => ({ sessionId, status: 'archived', workingDir: null })));
+    let finish!: () => void;
+    h.recycleWorktreeForRemovedSession.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    await setSessionsStatusInDb(ids, 'archived');
+    try {
+      await vi.waitFor(() => expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledOnce());
+      expect(h.closeSession).toHaveBeenCalledExactlyOnceWith('one');
+      for (const sessionId of ids) expect(h.webContentsSend).toHaveBeenCalledWith(
+        'local-db:sessions:patched', { sessionId, patch: { status: 'archived' } },
+      );
+    } finally { finish?.(); }
+    await queueSessionWorktreeRecycle(async () => {});
+    expect(h.recycleWorktreeForRemovedSession.mock.calls.map(([id]) => id)).toEqual(ids);
+  });
+
+  it('rechecks a queued task restored to active while an earlier cleanup runs', async () => {
+    let finish!: () => void;
+    h.recycleWorktreeForRemovedSession.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const first = recycleSessionWorktreeForStatusChange('one', 'archived');
+    const second = recycleSessionWorktreeForStatusChange('two', 'archived');
+    try {
+      await vi.waitFor(() => expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledOnce());
+      h.isSessionStillRemovable.mockImplementation(async (id) => id !== 'two');
+    } finally { finish?.(); }
+    await Promise.all([first, second]);
+    expect(h.closeSession).toHaveBeenCalledExactlyOnceWith('one');
+  });
+
+  it('retains the captured database while cleanup waits in the queue', async () => {
+    let finish!: () => void;
+    const savedDb = h.drizzle;
+    h.recycleWorktreeForRemovedSession.mockImplementationOnce(() => new Promise<void>((resolve) => { finish = resolve; }));
+    const first = recycleSessionWorktreeForStatusChange('one', 'archived');
+    const second = recycleSessionWorktreeForStatusChange('two', 'archived');
+    try {
+      await vi.waitFor(() => expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledOnce());
+      h.drizzle = {};
+      finish(); await Promise.all([first, second]);
+      expect(h.closeSession).toHaveBeenCalledExactlyOnceWith('one');
+    } finally { finish?.(); h.drizzle = savedDb; }
+  });
+
+  it('persists shared resource intent before the terminal transaction', async () => {
+    const worktree = path.join(h.userDataPath, 'repo', '.cindy-worktrees', 'one');
+    h.readBindings.mockResolvedValue([{ workingDir: path.join(worktree, 'src'), worktreePath: null, remoteHostId: null }]);
+    const order: string[] = [];
+    h.requestRecycle.mockImplementation(async (_id, resources) => {
+      expect(resources).toEqual([worktree]);
+      order.push('request');
+    });
+    h.tx.mockImplementationOnce(async () => { order.push('status'); return []; });
+    await setSessionsStatusInDb(['borrower'], 'archived');
+    expect(order).toEqual(['request', 'status']);
+  });
+
+  it('preserves task status when recovery intent cannot be persisted', async () => {
+    h.requestRecycle.mockRejectedValue(new Error('private internal path'));
+    await expect(setSessionsStatusInDb(['owner'], 'archived')).rejects.toThrow('PRECONDITION_FAILED');
+    expect(h.tx).not.toHaveBeenCalled();
+    expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
+  });
+
+  it('does not treat an unreadable reference query as an empty binding', async () => {
+    h.readBindings.mockRejectedValue(new Error('database unavailable'));
+    await expect(setSessionsStatusInDb(['owner'], 'archived')).rejects.toThrow('PRECONDITION_FAILED');
+    expect(h.tx).not.toHaveBeenCalled();
+  });
   it('runs one sessions.setStatus tx and broadcasts per session after commit', async () => {
     h.tx.mockResolvedValueOnce([
       {
@@ -182,6 +273,112 @@ describe('setSessionsStatusInDb', () => {
 
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+  });
+
+  it.each(['desktop', 'plugin'] as const)(
+    'touches retained local %s projects when batch archiving and broadcasts the refresh',
+    async (source) => {
+      h.tx.mockResolvedValueOnce([
+        {
+          sessionId: 's1',
+          title: 'T1',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          remoteHostId: null,
+          source,
+          status: 'archived',
+        },
+      ]);
+      const now = vi.spyOn(Date, 'now').mockReturnValue(1_786_500_200_000);
+
+      try {
+        await setSessionsStatusInDb(['s1'], 'archived');
+      } finally {
+        now.mockRestore();
+      }
+
+      expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+        '/repo',
+        1_786_500_200_000,
+        process.platform,
+        expect.objectContaining({ tx: h.tx, drizzle: h.drizzle }),
+      );
+      expect(h.webContentsSend).toHaveBeenCalledWith('local-db:recent-workdirs:changed', {
+        path: '/repo',
+      });
+    },
+  );
+
+  it('does not retain remote, dialogue, or scheduler workdirs during batch archive', async () => {
+    h.tx.mockResolvedValueOnce([
+      {
+        sessionId: 'remote',
+        title: 'Remote',
+        workingDir: '/remote/repo',
+        workspaceKind: 'project',
+        remoteHostId: 'host-a',
+        source: 'desktop',
+        status: 'archived',
+      },
+      {
+        sessionId: 'dialogue',
+        title: 'Dialogue',
+        workingDir: '/managed/dialogue',
+        workspaceKind: 'dialogue',
+        remoteHostId: null,
+        source: 'desktop',
+        status: 'archived',
+      },
+      {
+        sessionId: 'scheduled',
+        title: 'Scheduled',
+        workingDir: '/scheduled/repo',
+        workspaceKind: 'project',
+        remoteHostId: null,
+        source: 'scheduler',
+        status: 'archived',
+      },
+    ]);
+
+    await setSessionsStatusInDb(['remote', 'dialogue', 'scheduled'], 'archived');
+
+    expect(h.upsertRecentWorkdir).not.toHaveBeenCalled();
+    expect(h.webContentsSend).not.toHaveBeenCalledWith(
+      'local-db:recent-workdirs:changed',
+      expect.anything(),
+    );
+  });
+
+  it('touches the entry database but suppresses the batch refresh after an owner switch', async () => {
+    h.captureOwnerScope = true;
+    h.tx.mockImplementationOnce(async () => {
+      h.isOwnerScopeCurrent.mockReturnValue(false);
+      return [
+        {
+          sessionId: 's1',
+          title: 'T1',
+          workingDir: '/repo',
+          workspaceKind: 'project',
+          remoteHostId: null,
+          source: 'desktop',
+          status: 'archived',
+        },
+      ];
+    });
+
+    await setSessionsStatusInDb(['s1'], 'archived');
+
+    expect(h.upsertRecentWorkdir).toHaveBeenCalledWith(
+      '/repo',
+      expect.any(Number),
+      process.platform,
+      expect.objectContaining({ tx: h.tx, drizzle: h.drizzle }),
+    );
+    expect(h.webContentsSend).not.toHaveBeenCalledWith(
+      'local-db:recent-workdirs:changed',
+      expect.anything(),
+    );
   });
 
   it('acquires overlapping batch route locks once in stable order', async () => {
@@ -287,8 +484,8 @@ describe('setSessionsStatusInDb', () => {
   });
 
   it('broadcasts worktree:changed only after the recycle chain finishes', async () => {
-    // renderer 的 WorktreeContext 靠这条推送才能拿到回收后的快照 —— 回收是异步链,
-    // 状态 IPC 返回时 store 条目还在,归档动作里那次「顺手 refresh」必然是旧的。
+    // renderer 靠这条推送按 sessionId 查询回收后的真实状态；状态 IPC 返回时
+    // store 条目仍可能存在，不能提前发送。
     h.tx.mockResolvedValueOnce([
       {
         sessionId: 's1',
@@ -329,7 +526,7 @@ describe('setSessionsStatusInDb', () => {
   });
 
   it('still broadcasts worktree:changed when the recycle chain fails', async () => {
-    // 回收失败/跳过时条目仍在 store 里，重拉拿到「徽标还在」也是真实状态。
+    // 回收失败时条目仍在 store 里，单条查询拿到「徽标还在」也是真实状态。
     h.tx.mockResolvedValueOnce([
       {
         sessionId: 's1',
@@ -348,6 +545,18 @@ describe('setSessionsStatusInDb', () => {
     await vi.waitFor(() => {
       expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
     });
+  });
+
+  it('does not broadcast worktree:changed for a session without a registered worktree', async () => {
+    h.hasRegisteredWorktreeForSession.mockReturnValue(false);
+
+    await recycleSessionWorktreeForStatusChange('notification', 'archived');
+
+    expect(h.recycleWorktreeForRemovedSession).toHaveBeenCalledWith(
+      'notification',
+      expect.objectContaining({ scanOwners: true }),
+    );
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
   });
 
   it('does not broadcast worktree:changed when restoring to active', async () => {
@@ -484,6 +693,9 @@ describe('recycleSessionWorktreeForStatusChange', () => {
         if (sessionId === 'shared') await options?.recycleOwner?.('owner');
       },
     );
+    h.hasRegisteredWorktreeForSession.mockImplementation(
+      (sessionId: string) => sessionId === 'owner',
+    );
 
     await recycleSessionWorktreeForStatusChange('shared', 'archived');
 
@@ -506,6 +718,12 @@ describe('recycleSessionWorktreeForStatusChange', () => {
         recycleOwner: expect.any(Function),
       }),
     );
+    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', {
+      sessionId: 'owner',
+    });
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', {
+      sessionId: 'shared',
+    });
   });
 
   it('passes current Maker runtime liveness into the low-level live-reference guard', async () => {
@@ -559,7 +777,7 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.isSessionStillRemovable).not.toHaveBeenCalled();
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
-    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
   });
 
   it('does not remove media or recycle the worktree when Simulator cleanup fails', async () => {
@@ -572,7 +790,7 @@ describe('recycleSessionWorktreeForStatusChange', () => {
     expect(h.closeSession).not.toHaveBeenCalled();
     expect(h.removeSessionRefs).not.toHaveBeenCalled();
     expect(h.recycleWorktreeForRemovedSession).not.toHaveBeenCalled();
-    expect(h.webContentsSend).toHaveBeenCalledWith('worktree:changed', { sessionId: 's1' });
+    expect(h.webContentsSend).not.toHaveBeenCalledWith('worktree:changed', expect.anything());
   });
 
   it('does not dynamically import the Simulator Host from the recycle path', () => {

@@ -9,7 +9,7 @@
 import type { AuthState } from '../types/common.js';
 
 export type AgentCredentialMode = 'gateway-key' | 'oauth-bearer' | 'provider-oauth';
-export type AgentLoginMode = 'browser' | 'device-code';
+export type AgentLoginMode = 'browser' | 'device-code' | 'local';
 
 export interface AuthLoginOptions {
   mode?: AgentLoginMode;
@@ -76,7 +76,7 @@ export interface AuthAdapter {
    *   实现侧凭它区分「凭证库早已换代(直接返回库值,不消耗刷新轮换)」与「库值就是
    *   失效的那枚(才真正刷新)」—— 防多个长会话对同一枚旧 token 群体 401 时连环旋转。
    */
-  getFreshSubscriptionToken?(staleToken?: string): Promise<string | null>;
+  getFreshSubscriptionToken?(staleToken?: string, providerId?: string): Promise<string | null>;
 
   /**
    * 取消正在进行的登录流程（可选）。
@@ -90,6 +90,12 @@ export interface AuthAdapter {
   cancelLogin?(): void;
 
   /**
+   * Capture an opaque credential generation at agent-host spawn time. The runtime must only carry
+   * this value back to invalidate(); it must not inspect or persist its contents.
+   */
+  captureCredentialGeneration?(): string | null;
+
+  /**
    * agent runtime 检测到当前凭证已被服务端作废 (e.g. OAuth refresh token 已被旋转,
    * 401 reauth_required 等) 时调用一次。实现侧应等价于 logout() + 通知 UI 重登,
    * 让用户立刻能感知到状态变化, 而不是任由 agent 持续撞失败。
@@ -97,5 +103,13 @@ export interface AuthAdapter {
    * 可选 — 没实现时 runtime 至少会自己 dispose 当前 agent host 防御性收尾,
    * 但 UI 端不会自动跳出 "请重新登录" 的提示。
    */
-  invalidate?(reason: string): Promise<void>;
+  invalidate?(
+    reason: string,
+    context?: {
+      providerId?: string;
+      credentialGeneration?: string | null;
+      /** The child reported auth failure, but the protocol did not identify its credential. */
+      credentialAttribution?: 'unproven';
+    },
+  ): Promise<void>;
 }

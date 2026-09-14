@@ -81,7 +81,9 @@ vi.mock('../logger', () => ({
 }));
 // 被 sessions.ts 顶层 import 但与本测试无关的副作用模块,全部 stub 掉避免触碰 electron app 路径。
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
-vi.mock('../git-context/prRefsStore', () => ({ recomputePrRefsForSession: vi.fn(() => Promise.resolve()) }));
+vi.mock('../git-context/prRefsStore', () => ({
+  recomputePrRefsForSession: vi.fn(() => Promise.resolve()),
+}));
 vi.mock('../localDb/ipc/recentWorkdirs', () => ({ upsertRecentWorkdir: vi.fn() }));
 vi.mock('../device-link/broadcast-tap', () => ({
   captureDataOwnerBroadcastScope: vi.fn(() => null),
@@ -98,7 +100,11 @@ vi.mock('../localDb/ipc/subagentRuns.js', () => ({
 }));
 
 import { notifyAgentIslandSessionPatch } from '../localDb/agentIslandSessionPatch.js';
-import { clearSessionContextInDb, touchUserSendInDb, persistSessionFields } from '../localDb/ipc/sessions.js';
+import {
+  clearSessionContextInDb,
+  touchUserSendInDb,
+  persistSessionFields,
+} from '../localDb/ipc/sessions.js';
 import {
   backgroundTurnPredatesSessionClear,
   noteSessionClearBoundary,
@@ -149,7 +155,7 @@ describe('touchUserSendInDb 广播 sessions:patched(device-link 项目归属收�
     const payload = tapArg?.[1] as { sessionId: string; patch: Record<string, unknown> };
     expect(payload.sessionId).toBe('sess-2');
     expect(typeof payload.patch.userSendAt).toBe('string'); // ISO
-    expect(typeof payload.patch.updatedAt).toBe('string');  // ISO
+    expect(typeof payload.patch.updatedAt).toBe('string'); // ISO
   });
 
   it('atomic guard: UPDATE no-op 时（验证 SELECT 返回空）跳过广播，不向 renderer 发送过时值', async () => {
@@ -196,11 +202,11 @@ describe('clearSessionContextInDb 广播 sessions:patched(device-link /clear 收
     const iso = new Date(atMs).toISOString();
     expect(h.webContentsSend).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'sess-clear',
-      patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso },
+      patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso, preview: null },
     });
     expect(h.tapWindowBroadcast).toHaveBeenCalledWith('local-db:sessions:patched', {
       sessionId: 'sess-clear',
-      patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso },
+      patch: { sdkSessionId: null, clearedAt: iso, updatedAt: iso, preview: null },
     });
     expect(h.broadcastSubagentRunsInvalidated).toHaveBeenCalledWith('sess-clear', null);
   });
@@ -270,7 +276,10 @@ describe('persistSessionFields(远程 set-* 回流:字段白名单 + 广播)', (
     } as Record<string, unknown>);
 
     expect(h.updateSetCalls).toHaveLength(1);
-    expect(h.updateSetCalls[0]).toMatchObject({ model: 'claude-opus-4-8', providerId: 'anthropic' });
+    expect(h.updateSetCalls[0]).toMatchObject({
+      model: 'claude-opus-4-8',
+      providerId: 'anthropic',
+    });
     expect(lastTapPatch()!.patch).toEqual({ model: 'claude-opus-4-8', providerId: 'anthropic' });
   });
 
@@ -288,11 +297,18 @@ describe('persistSessionFields(远程 set-* 回流:字段白名单 + 广播)', (
       extraDirs: ['/a', '/b'],
       permissionMode: 'plan',
     } as Record<string, unknown>);
-    expect(lastTapPatch()!.patch).toEqual({ fastMode: true, extraDirs: ['/a', '/b'], permissionMode: 'plan' });
+    expect(lastTapPatch()!.patch).toEqual({
+      fastMode: true,
+      extraDirs: ['/a', '/b'],
+      permissionMode: 'plan',
+    });
   });
 
   it('patch 不含任何白名单字段 → 早退:不写库、不广播', async () => {
-    await persistSessionFields('sess-2', { title: 'x', status: 'archived' } as Record<string, unknown>);
+    await persistSessionFields('sess-2', { title: 'x', status: 'archived' } as Record<
+      string,
+      unknown
+    >);
     expect(h.updateSetCalls).toHaveLength(0);
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });

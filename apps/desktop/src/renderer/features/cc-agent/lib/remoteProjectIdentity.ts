@@ -102,11 +102,15 @@ export function resolveRemoteProjectMachineIdentity(
   const endpoint = `${host.config.user}@${host.config.hostname}${
     host.config.port === 22 ? '' : `:${host.config.port}`
   }`;
+  const displayName = host.config.displayName?.trim() || host.config.id;
+  const label = displayName === host.config.id
+    ? host.config.id
+    : `${displayName} (${host.config.id})`;
   return {
     kind: 'ssh',
-    label: host.config.id,
+    label,
     detail: endpoint,
-    displayLabel: joinIdentity(host.config.id, endpoint),
+    displayLabel: joinIdentity(label, endpoint),
   };
 }
 

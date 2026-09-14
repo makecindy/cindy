@@ -1,3 +1,4 @@
+import type { ImContextSnapshot } from '../../../shared/imMessageSource';
 /**
  * main/im/shared/types.ts
  * ---------------------------------------------------------------------------
@@ -68,6 +69,15 @@ export interface ImSessionNamespace {
    * (feishu)忽略 scopeKey, 同一 (botContextId, userId) 恒同一 id。
    */
   sessionIdFor(botContextId: string, userId: string, scopeKey?: string): string;
+  /**
+   * `/new` creates a separate Cindy task instead of clearing the SDK context on
+   * the deterministic legacy row. The active task is then resolved by the
+   * channel identity columns rather than by `sessionIdFor`.
+   *
+   * Telegram enables this. Other adapters keep their existing single-row
+   * semantics until their routing contracts are migrated deliberately.
+   */
+  createTaskOnNew?: boolean;
   /** 新建 session 行的初始 title。 */
   defaultTitle(userId: string): string;
   /**
@@ -128,6 +138,8 @@ export interface ImSessionNamespace {
  */
 export interface ImChannelAdapter {
   channel: ImChannelName;
+  /** Selected display service; defaults to channel without changing routing identity. */
+  messageSourceIm?(): string;
   /** 所有渠道共有的文本收发能力；富卡片能力由 output.kind 显式收窄。 */
   im: TextChannelIM;
   /** Terminal output strategy; existing channels use rich-card. */
@@ -201,6 +213,10 @@ export interface ImChannelAdapter {
    * 游标推进的时机锚点; 受理前失败不调用, 这批上下文下次仍会进入 prompt。
    * 返回 null = 不改写。钩子抛错按"不改写"降级, 不阻断消息。
    *
+   * contextSnapshot: 从本次实际使用的、过滤后的前缀提取的可展示文本。
+   * 共享 runner 保存到用户消息元数据；不要传入 persona、渠道指令或过滤前原文。
+   * 不提供就表示没有附带上下文，不从用户正文或实时历史反推。
+   *
    * contextAttachments: 上下文附带的附件(群历史里的图片/文件) —— 只拼进
    * 模型消息(buildImUserMessage 的 image/file block), **不落库、不进
    * transcript**(它们不是触发用户发的)。与用户自己 attachments 的语义边界
@@ -208,6 +224,7 @@ export interface ImChannelAdapter {
    */
   prepareAgentTurnText?(event: IMMessageEvent): Promise<{
     agentText: string;
+    contextSnapshot?: ImContextSnapshot;
     contextAttachments?: IMAttachment[];
     commit?: () => void | Promise<void>;
   } | null>;
@@ -219,13 +236,16 @@ export interface ImChannelAdapter {
    */
   turnPermissionPolicyFor?(event: IMMessageEvent): TurnPermissionPolicy | undefined;
   /**
-   * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 返回 true 的档位在
-   * dispatch 时不挂 turnPermissionPolicy(maker 不再 fail-closed, 按用户显式
-   * 选择直接执行)。飞书用它在用户于渠道设置中显式选择「完全访问」后取缔
-   * 群护栏; 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道
-   * 不实现即保持 fail-closed。
+   * 群轮次强确认策略对指定权限档「可选」的渠道判定 — 同时传入本轮 policy，
+   * 让渠道能把会话档位授权限定到具体触发者。返回 true 时 dispatch 不挂
+   * turnPermissionPolicy(maker 不再 fail-closed, 按用户显式选择直接执行)。
+   * 群上下文的防注入过滤/包裹独立于权限档, 照常生效。其它渠道不实现即保持
+   * fail-closed。
    */
-  turnPolicyOptionalForMode?(permissionMode: PermissionMode): boolean;
+  turnPolicyOptionalForMode?(
+    permissionMode: PermissionMode,
+    turnPermissionPolicy: TurnPermissionPolicy,
+  ): boolean;
   /** Telegram 每轮的群历史检索授权；其它渠道不实现即 fail closed。 */
   groupHistoryAccessFor?(event: IMMessageEvent): GroupHistoryAccessScope | undefined;
 }

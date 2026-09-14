@@ -25,6 +25,8 @@ export interface BuiltinAutoReviewContext {
   input: unknown;
   /** 会话的工作区根:cwd + additionalDirectories,绝对路径。远端会话是远端路径(纯字符串判定)。 */
   workspaceRoots: string[];
+  /** 明确可写根；缺省时仅 workspaceRoots[0]。 */
+  writableRoots?: string[];
   /** 会话所在平台(决定是否抹平 macOS firmlink /private)。缺省用本进程 process.platform;远端会话应传远端 OS。 */
   platform?: NodeJS.Platform;
 }
@@ -228,7 +230,9 @@ export function classifyBuiltinToolForAutoReview(
   ctx: BuiltinAutoReviewContext,
 ): BuiltinAutoReviewVerdict {
   const action = normalizeBuiltinToolForAutoReview(ctx.toolName, ctx.input);
-  const opts = ctx.platform ? { platform: ctx.platform } : undefined;
+  const opts = ctx.platform || ctx.writableRoots
+    ? { platform: ctx.platform, writableRoots: ctx.writableRoots }
+    : undefined;
   return reviewAction(action, ctx.workspaceRoots, opts);
 }
 
@@ -241,7 +245,14 @@ export function normalizeBuiltinToolForAutoReview(
     // Read/NotebookRead 读单个具名文件(scope='file');Grep/Glob/LS 是目录级递归读(scope='tree'),
     // 根在工作区外时能遍历进区外凭证子路径 → 由 core 按边界升级(见 reviewAction 的 read 分支)。
     const scope: 'file' | 'tree' = toolName === 'Read' || toolName === 'NotebookRead' ? 'file' : 'tree';
-    return { kind: 'read', path: extractReadPath(toolName, input), scope };
+    return {
+      kind: 'read',
+      path: extractReadPath(toolName, input),
+      scope,
+      // Claude Query 的 additionalDirectories 是创建时快照；运行时撤权后必须由
+      // Cindy 用最新 roots 拦住旧 Query 的读取，不能继续信任 SDK 的旧 allowlist。
+      requireWorkspaceBoundary: true,
+    };
   }
   if (SAFE_STATEFUL_TOOLS.has(toolName)) return { kind: 'session-state' };
   if (FILE_WRITE_TOOLS.has(toolName)) {

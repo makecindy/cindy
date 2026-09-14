@@ -1,28 +1,39 @@
-export type ConversationShareFooterAsset = "character" | "logo";
-
-export interface ConversationShareFooterAssetGate {
-  markReady(asset: ConversationShareFooterAsset): void;
-  waitUntilReady(): Promise<void>;
+export interface ConversationShareAssetGate {
+  markReady(asset: string): void;
+  markFailed(asset: string): void;
+  waitUntilSettled(): Promise<void>;
+  finish(): ReadonlySet<string>;
 }
 
 /**
- * The SVG footer contains two independently decoded bundled images. Keep the
- * readiness latch separate from React so export can wait for both assets and
- * the ordering/duplicate-load behavior stays unit-testable.
+ * One prepared export owns this latch. The first result for each asset wins;
+ * finish freezes the successful subset, including when the decode deadline
+ * expires. Late native callbacks cannot change the capture layout.
  */
-export function createConversationShareFooterAssetGate(): ConversationShareFooterAssetGate {
-  const pending = new Set<ConversationShareFooterAsset>(["character", "logo"]);
-  let resolveReady = () => {};
-  const ready = new Promise<void>((resolve) => {
-    resolveReady = resolve;
+export function createConversationShareAssetGate(
+  keys: readonly string[],
+): ConversationShareAssetGate {
+  const pending = new Set(keys);
+  const ready = new Set<string>();
+  let finished = false;
+  let resolveSettled = () => {};
+  const settled = new Promise<void>((resolve) => {
+    resolveSettled = resolve;
   });
+  const mark = (asset: string, success: boolean) => {
+    if (finished || !pending.delete(asset)) return;
+    if (success) ready.add(asset);
+    if (pending.size === 0) resolveSettled();
+  };
+  if (pending.size === 0) resolveSettled();
 
   return {
-    markReady(asset) {
-      pending.delete(asset);
-      if (pending.size === 0) resolveReady();
-    },
-    waitUntilReady() {
+    markReady: (asset) => mark(asset, true),
+    markFailed: (asset) => mark(asset, false),
+    waitUntilSettled: () => settled,
+    finish() {
+      finished = true;
+      resolveSettled();
       return ready;
     },
   };

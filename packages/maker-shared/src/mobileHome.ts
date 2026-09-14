@@ -9,6 +9,7 @@ import {
   type RemoteSessionScheduleInfo,
   type RemoteSessionStatusFilter,
 } from './sessionList.js';
+import type { PresentationLocalizer } from './presentationLocalization.js';
 import { stripTrailingPathSeparators } from './pathText.js';
 import { normalizeProjectOrderPath } from './projectOrderSync.js';
 import { collapseWorktreeDirForGrouping } from './worktreePaths.js';
@@ -42,6 +43,11 @@ export interface MobileHomeDeviceFilterItem {
   state: string;
   statusLabel: string;
   waitingCount: number;
+}
+
+/** Cached history is readable offline; it never grants permission to control a device. */
+export function canBrowseMobileHomeDevice(item: MobileHomeDeviceFilterItem): boolean {
+  return item.available || (item.sessionCount > 0 && (item.state === 'offline' || item.state === 'unknown'));
 }
 
 export interface MobileHomeProjectGroup {
@@ -123,6 +129,7 @@ export interface MobileHomeOptions {
    * 共享层刻意不兜中文串,见 sessionList 的 remoteSessionDisplayTitle。
    */
   unnamedLabel?: string;
+  localizer?: PresentationLocalizer;
 }
 
 export function buildMobileHomePresentation({
@@ -137,6 +144,7 @@ export function buildMobileHomePresentation({
   sessions,
   statusFilter = 'active',
   unnamedLabel,
+  localizer,
 }: MobileHomeOptions): MobileHomePresentation {
   // 设备身份归一化在管线源头对每个会话算出 canonicalDeviceId(写入字段,不改 deviceLinkDeviceId):
   // 后续设备筛选统计、matchesSelectedDevice 过滤、项目分组、概览、卡片 deviceId 全部按 canonicalDeviceId
@@ -173,6 +181,7 @@ export function buildMobileHomePresentation({
     messagePreviewIndex?.get(session.id) ?? sessionRowMessagePreview(session),
     liveActivityIndex?.get(session.id) ?? null,
     unnamedLabel,
+    localizer,
   ));
   const pinned = items.filter((item) => !!item.session.pinnedAt);
   const rest = items.filter((item) => !item.session.pinnedAt);
@@ -187,6 +196,7 @@ export function buildMobileHomePresentation({
     now,
     true,
     (item) => sessionDeviceKey(item.session as MobileHomeSessionLike),
+    localizer,
   );
   const projects = buildProjectGroups(
     groupAutomationListItems(
@@ -194,6 +204,7 @@ export function buildMobileHomePresentation({
       now,
       true,
       (item) => projectGroupKey(item.session),
+      localizer,
     ),
     devices,
   );
@@ -272,14 +283,14 @@ function buildDeviceFilters(
     if (!deviceId || deviceById.has(deviceId) || filters.some((item) => item.deviceId === deviceId)) continue;
     const stats = statsByDevice.get(deviceId) ?? { sessionCount: 0, waitingCount: 0 };
     filters.push({
-      available: true,
+      available: false,
       deviceId,
       id: deviceId,
       label: session.deviceLinkDeviceName || deviceId,
       selected: selectedDeviceId === deviceId,
       sessionCount: stats.sessionCount,
-      state: 'ready',
-      statusLabel: stats.waitingCount > 0 ? `${stats.waitingCount} 待处理` : '已同步',
+      state: 'unknown',
+      statusLabel: '',
       waitingCount: stats.waitingCount,
     });
   }

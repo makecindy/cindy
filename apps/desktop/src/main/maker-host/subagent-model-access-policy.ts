@@ -24,16 +24,22 @@ function modelMatches(requested: string, candidate: string): boolean {
 interface XdAccessModel {
   id: string;
   agents?: readonly string[];
+  availability?: 'available' | 'requires_payment';
 }
 
 interface XdAccessSnapshot {
   authoritative: boolean;
   models: readonly XdAccessModel[];
+  paymentRequiredModelIds: readonly string[];
 }
 
 function xdClaudeCodeModels(models: readonly XdAccessModel[]): readonly string[] {
   return models
-    .filter((model) => model.agents?.includes('claude-code'))
+    .filter(
+      (model) =>
+        model.availability !== 'requires_payment'
+        && model.agents?.includes('claude-code'),
+    )
     .map((model) => model.id);
 }
 
@@ -55,6 +61,13 @@ export function classifyClaudeSubagentModelAccess(input: {
     || (!providerId && input.gatewayKeyAvailable);
 
   if (usesXdGateway) {
+    // A retained payment tombstone is stronger than snapshot freshness. In
+    // particular, aliases may drift to any matching paid generation, so one
+    // known paid candidate must deny the alias before an older free match can
+    // allow it.
+    if (input.xdSnapshot.paymentRequiredModelIds.some(
+      (id) => modelMatches(requested, id),
+    )) return { status: 'denied' };
     if (!input.xdSnapshot.authoritative) return { status: 'unknown' };
     return xdClaudeCodeModels(input.xdSnapshot.models).some((id) => modelMatches(requested, id))
       ? { status: 'allowed' }

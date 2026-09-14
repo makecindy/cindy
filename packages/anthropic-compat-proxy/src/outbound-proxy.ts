@@ -350,7 +350,8 @@ export class TunnelingHttpsAgent extends HttpsAgent {
       connectReq.destroy(new Error(`outbound proxy ${this.proxy.url} CONNECT ${authority} timed out`));
     });
     connectReq.on('error', (err) => {
-      settle(new Error(`outbound proxy ${this.proxy.url} unreachable: ${err.message}`));
+      // 保留底层 errno(cause):server.ts 的 502 分类要沿错误链找 ECONNREFUSED + 回环地址。
+      settle(new Error(`outbound proxy ${this.proxy.url} unreachable: ${err.message}`, { cause: err }));
     });
     connectReq.end();
     // socket 走异步 callback 交付;返回 undefined 告知调用方等 callback。

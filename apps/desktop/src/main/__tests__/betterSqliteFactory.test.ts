@@ -10,6 +10,7 @@ import {
   resolveBetterSqliteNativeBinding,
   restrictDbFilePermissions,
 } from '../localDb/betterSqliteFactory';
+import { CJK_SEG_SQL_FN } from '../localDb/cjkSeg';
 import { backupDb, restrictLegacyBackupPermissions } from '../localDb/backup';
 
 // chmod / POSIX mode 位在 Windows(NTFS)上是 near-noop,权限模型不同,断言无意义;
@@ -194,6 +195,18 @@ describe('createBetterSqliteDatabase 文件权限', () => {
     } finally {
       db.close();
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('createBetterSqliteDatabase 注册 cjk_seg', () => {
+  it('打开连接后即可调用 cjk_seg', () => {
+    const db = createBetterSqliteDatabase(':memory:');
+    try {
+      const row = db.prepare(`SELECT ${CJK_SEG_SQL_FN}(?) AS v`).get('边界') as { v: string };
+      expect(row.v).toBe('边 界');
+    } finally {
+      db.close();
     }
   });
 });

@@ -93,7 +93,12 @@ async function realmConfirmationState(targetRegion: 'cn' | 'global') {
   });
 }
 
-function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.value>) {
+function mount(
+  state: AuthFlowState | null,
+  extra?: Partial<typeof loginHook.value>,
+  intent: 'sign-in' | 'add-account' = 'sign-in',
+  onClose?: () => void,
+) {
   loginHook.value = {
     isLoading: false,
     errorCode: null,
@@ -109,7 +114,7 @@ function mount(state: AuthFlowState | null, extra?: Partial<typeof loginHook.val
   return render(
     <>
       <LoginBrandStage />
-      <LoginPage />
+      <LoginPage intent={intent} onClose={onClose} />
     </>,
   );
 }
@@ -133,6 +138,23 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
+});
+
+describe('error screen recovery', () => {
+  const errorState: AuthFlowState = {
+    step: 'error',
+    code: 'REGION_MISMATCH',
+    recoverTo: 'identifier',
+  };
+
+  it('does not dispatch a second reset while sign-in is loading', () => {
+    mount(errorState, { isLoading: true });
+
+    const back = screen.getByRole('button', { name: 'login.back' }) as HTMLButtonElement;
+    expect(back.disabled).toBe(true);
+    fireEvent.click(back);
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
 });
 
 /* ── wave4 视觉五维(brand-background / panel-border / wordmark / slogan) ── */
@@ -221,6 +243,61 @@ describe('identifier 态(附录 A providers 场景)', () => {
     expect(screen.queryByTestId('login-social-guest')).toBeNull();
     expect(screen.queryByTestId('login-stage-footer')).toBeNull();
     expect(screen.queryByTestId('login-local-mode')).toBeNull();
+  });
+
+  it('登录更多账号流程不提供跳过登录入口', async () => {
+    mount(await identifierState('providers:both'), undefined, 'add-account');
+    expect(screen.queryByTestId('login-skip-entry')).toBeNull();
+    expect(screen.queryByTestId('login-local-mode')).toBeNull();
+  });
+
+  it.each([false, true])('登录更多账号首屏返回会退出流程（loading=%s）', async (isLoading) => {
+    const onClose = vi.fn();
+    mount(await identifierState('providers:both'), { isLoading }, 'add-account', onClose);
+
+    const back = screen.getByRole('button', { name: 'login.back' });
+    expect(screen.getByTestId('login-panel-identifier').contains(back)).toBe(true);
+    expect((back as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(back);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('普通登录首屏不提供退出流程的返回按钮', async () => {
+    mount(await identifierState('providers:both'));
+    expect(screen.queryByRole('button', { name: 'login.back' })).toBeNull();
+  });
+
+  it.each(['darwin', 'win32'])('登录更多账号在 %s 仅保留面板返回入口', async (platform) => {
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: { platform, acceptPrivacyConsent: async () => ({ allowed: true }) },
+    });
+    mount(await identifierState('providers:both'), undefined, 'add-account', vi.fn());
+
+    expect(screen.queryByTestId('add-account-close')).toBeNull();
+    expect(screen.getAllByTestId('login-back-button')).toHaveLength(1);
+    expect(
+      screen.getByTestId('login-drag-bar').contains(screen.getByTestId('login-back-button')),
+    ).toBe(false);
+  });
+
+  it('添加账号准备时可以返回原页面', () => {
+    const onClose = vi.fn();
+    mount(null, { isLoading: true }, 'add-account', onClose);
+    const back = screen.getByTestId('login-back-button');
+    expect(screen.getByTestId('login-panel-preparing').contains(back)).toBe(true);
+    fireEvent.click(back);
+    expect(onClose).toHaveBeenCalledOnce();
+    expect(loginHook.value.dispatch).not.toHaveBeenCalled();
+  });
+
+  it('添加账号后续步骤返回仍重置登录而不退出', async () => {
+    const onClose = vi.fn();
+    mount(await methodChoiceState('sso:single'), undefined, 'add-account', onClose);
+    fireEvent.click(screen.getByTestId('login-back-button'));
+    expect(loginHook.value.dispatch).toHaveBeenCalledWith({ type: 'reset' });
+    expect(onClose).not.toHaveBeenCalled();
   });
 
   it('「跳过登录」槽与错误提示槽首尾相接且不重叠(error 出现不推移跳过入口)', async () => {
@@ -392,20 +469,14 @@ describe('ssoOrgMode 子视图', () => {
     const historyList = screen.getByTestId('login-sso-org-history-list');
     const panel = screen.getByTestId('login-panel-sso-org');
     expect(panel.contains(historyList)).toBe(false);
-    expect(Number.parseFloat(historyList.style.left)).toBe(
-      Number.parseFloat(input.style.left),
-    );
-    expect(Number.parseFloat(historyList.style.width)).toBe(
-      Number.parseFloat(input.style.width),
-    );
+    expect(Number.parseFloat(historyList.style.left)).toBe(Number.parseFloat(input.style.left));
+    expect(Number.parseFloat(historyList.style.width)).toBe(Number.parseFloat(input.style.width));
     expect(Number.parseFloat(historyList.style.top)).toBe(
       Number.parseFloat(input.style.top) + Number.parseFloat(input.style.height) + 8,
     );
     expect(
       Number.parseFloat(historyList.style.top) + Number.parseFloat(historyList.style.maxHeight),
-    ).toBeLessThanOrEqual(
-      Number.parseFloat(panel.style.height),
-    );
+    ).toBeLessThanOrEqual(Number.parseFloat(panel.style.height));
     expect(historyList.className).toContain('overflow-y-auto');
     expect(historyList.className).toContain('[scrollbar-width:none]');
     expect(historyList.className).toContain('[&::-webkit-scrollbar]:hidden');
@@ -433,9 +504,7 @@ describe('ssoOrgMode 子视图', () => {
     fireEvent.click(screen.getByTestId('login-sso-org-continue'));
     await waitFor(() => {
       fireEvent.focus(screen.getByTestId('login-sso-org-input'));
-      expect(screen.getByTestId('login-sso-org-history-option-0').textContent).toBe(
-        'Example-Corp',
-      );
+      expect(screen.getByTestId('login-sso-org-history-option-0').textContent).toBe('Example-Corp');
     });
   });
 
@@ -528,6 +597,7 @@ describe('method-choice(附录 A sso 场景)', () => {
 describe('preparing 伪态', () => {
   it('loginState 未就绪 → preparing 面板 + 64 loading 环 @(308,193)', () => {
     mount(null);
+    expect(screen.queryByTestId('login-back-button')).toBeNull();
     expect(screen.getByTestId('login-panel-preparing')).toBeTruthy();
     expect(screen.getByText('login.preparing')).toBeTruthy();
     expect(screen.getByText('login.preparingSubtitle')).toBeTruthy();

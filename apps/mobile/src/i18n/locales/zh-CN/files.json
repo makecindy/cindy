@@ -48,8 +48,13 @@
   },
   "presentation": {
     "grid": {
-      "today": "今天 {{time}}", "yesterday": "昨天 {{time}}", "empty": "文件夹为空",
-      "summaryMixed": "{{dirs}} 个文件夹、{{files}} 个文件", "summaryDirs": "{{count}} 个文件夹", "summaryFiles": "{{count}} 个文件", "workdir": "工作目录"
+      "today": "今天 {{time}}",
+      "yesterday": "昨天 {{time}}",
+      "empty": "文件夹为空",
+      "summaryMixed": "{{dirs}} 个文件夹、{{files}} 个文件",
+      "summaryDirs": "{{count}} 个文件夹",
+      "summaryFiles": "{{count}} 个文件",
+      "workdir": "工作目录"
     },
     "preview": {
       "nonText": {
@@ -66,8 +71,8 @@
       "idle": "按需读取远程文本预览，不会在消息列表里批量拉取文件内容。",
       "failure": {
         "oversize": "文件超过远程预览上限 · {{limit}} · 当前 {{size}}",
-        "forbidden": "被控电脑拒绝读取这个路径。",
-        "notFound": "被控电脑上没有找到这个文件。",
+        "forbidden": "远程电脑拒绝读取这个路径。",
+        "notFound": "远程电脑上没有找到这个文件。",
         "readFailed": "读取失败。",
         "readFailedWithError": "读取失败：{{error}}",
         "default": "当前文件无法预览。"

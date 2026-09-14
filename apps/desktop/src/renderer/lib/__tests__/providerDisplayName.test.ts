@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
-import { providerDisplayNameById } from '../providerDisplayName';
+import { providerDisplayName, providerDisplayNameById } from '../providerDisplayName';
 
 const t = (key: string) =>
   ({
@@ -26,4 +26,10 @@ describe('providerDisplayNameById', () => {
   it('目录里查不到时才回退裸 id（用户删过该供应商 / 目录未加载）', () => {
     expect(providerDisplayNameById('gone', catalog, t)).toBe('gone');
   });
+});
+
+it('uses the renamed connection in both selector and history display', () => {
+  const provider = { id: 'openai', name: 'Personal ChatGPT' } as ProviderView;
+  expect(providerDisplayName(provider, t)).toBe('Personal ChatGPT');
+  expect(providerDisplayNameById('openai', [provider], t)).toBe('Personal ChatGPT');
 });

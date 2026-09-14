@@ -58,8 +58,8 @@ function getStore(): Store<WorktreesStoreShape> {
     schema: {
       worktrees: { type: 'object' },
     },
-    // 文件被外部破坏时 reset 为 defaults, 避免反复抛 SyntaxError
-    clearInvalidConfig: true,
+    // 损坏记录必须保留，不能重置为空后把未知资源当作无引用目录。
+    clearInvalidConfig: false,
   });
   return storeInstance;
 }
@@ -86,7 +86,7 @@ export function _setStoreForTests(s: Store<WorktreesStoreShape> | null): void {
 function readMap(): Record<string, WorktreeMeta> {
   const raw = getStore().get('worktrees', {});
   // 防御: 历史/损坏数据可能不是 object
-  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('invalid worktree registry');
   return raw as Record<string, WorktreeMeta>;
 }
 
@@ -189,9 +189,7 @@ export async function removePendingSafeDirectoryCleanups(paths: readonly string[
  */
 export async function set(sessionId: string, meta: WorktreeMeta): Promise<void> {
   if (!sessionId) throw new Error('worktreeStore.set: sessionId is required');
-  const map = readMap();
-  map[sessionId] = meta;
-  writeMap(map);
+  await mutateRegistry((map) => { map[sessionId] = meta; });
   try {
     await setWorktreePathInDb(sessionId, meta.path);
   } catch (err) {
@@ -205,10 +203,44 @@ export async function set(sessionId: string, meta: WorktreeMeta): Promise<void> 
 /**
  * 删除 store 条目。**不**清 sessions.worktree_path(保留历史值, 徽标按 store 判)。
  */
-export function del(sessionId: string): void {
+export async function del(sessionId: string): Promise<void> {
   if (!sessionId) return;
-  const map = readMap();
-  if (!(sessionId in map)) return;
-  delete map[sessionId];
-  writeMap(map);
+  await mutateRegistry((map) => { delete map[sessionId]; });
+}
+
+/** Atomically replace a pooled registration under the registry lock. */
+export async function replace(
+  previousSessionId: string,
+  sessionId: string,
+  meta: WorktreeMeta,
+  expected?: WorktreeMeta,
+): Promise<void> {
+  if (!sessionId) throw new Error('worktreeStore.replace: sessionId is required');
+  await mutateRegistry((map) => {
+    if (expected && (JSON.stringify(map[previousSessionId]) !== JSON.stringify(expected)
+      || (previousSessionId !== sessionId && map[sessionId]))) {
+      throw new Error('Worktree ownership changed during transfer');
+    }
+    if (previousSessionId && previousSessionId !== sessionId) delete map[previousSessionId];
+    map[sessionId] = meta;
+  });
+  try {
+    await setWorktreePathInDb(sessionId, meta.path);
+  } catch (err) {
+    log.warn(
+      `[worktreeStore] DB sync failed for session ${sessionId}:`,
+      err instanceof Error ? err.message : String(err),
+    );
+  }
+}
+
+async function mutateRegistry(mutate: (map: Record<string, WorktreeMeta>) => void): Promise<void> {
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 0;
+  await withCrossProcessLock(path.join(os.tmpdir(), `cindy-worktree-registry-${uid}.lock`),
+    { label: 'worktree-registry' }, async (status) => {
+      if (!status.held) throw new Error('worktree registry is busy');
+      const map = readMap();
+      mutate(map);
+      writeMap(map);
+    });
 }

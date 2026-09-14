@@ -2,10 +2,9 @@
  * live-session 引用判定（WorktreePool 与 WorktreeManager 删除路径共用）。
  *
  * 语义：某 worktree 路径若仍被其它会话的 workingDir / worktreePath 指向，就视为"在用"，
- * 删除/淘汰路径必须保留它。显式归档/删除回收可提供运行态观察器：archived/deleted 只在确认
- * 对应 runtime 已关闭后才不再阻挡；其它调用方没有观察器时保守保留 archived，但继续忽略
- * deleted。查询失败时返回 null，消费方按"无法确认 → 视为在用"的保守方向处理。未知或 NULL
- * status 同样按在用处理。
+ * 删除/淘汰路径必须保留它。引用来自全部本地任务数据库和跨实例运行时租约；
+ * archived/deleted 只有在完整租约视图里无占用时才不阻挡，当前实例观察器可额外保留。
+ * 任一来源不可读、旧实例不支持租约、未知或 NULL status 均按在用处理。
  *
  * 原实现内联在 WorktreePool.ts（MR1），P0 重构把它抽出来给
  * removeWorktreeForSession 的删除守卫复用，并支持排除会话自身
@@ -13,10 +12,13 @@
  */
 
 import path from 'node:path';
-import { sql } from 'drizzle-orm';
+import fs from 'node:fs';
 
 import { getDbClient } from '../localDb/client/current';
-import { sessions } from '../localDb/schema';
+import { physicalWorktreeKey } from './resourceLock';
+import { readWorktreeRuntimePaths } from './runtimeLeases';
+import { readPiSubagentWorktreeReferences } from './piSubagentReferences';
+import * as store from './worktreeStore';
 import { createLogger } from '../logger';
 
 import type { WorktreeMeta } from './types';
@@ -52,7 +54,7 @@ export interface LoadLiveSessionPathKeysOptions {
    * 不构成"仍在用"；显式回收观察器存在时，其它终态会话仍需运行态证明才能排除。
    */
   excludeSessionId?: string;
-  /** 终态会话只有在该观察器明确返回 false 时才不再视为 live。 */
+  /** 对当前实例的额外占用证据；跨实例租约始终必须完整可读。 */
   isSessionRuntimeAlive?: (sessionId: string) => boolean | undefined;
 }
 
@@ -60,35 +62,46 @@ export async function loadLiveSessionPathKeys(
   opts: LoadLiveSessionPathKeysOptions = {},
 ): Promise<LiveSessionPathKeys> {
   try {
-    const db = getDbClient().drizzle;
-    const rows = await db
-      .select({
-        id: sessions.id,
-        status: sessions.status,
-        workingDir: sessions.workingDir,
-        worktreePath: sessions.worktreePath,
-      })
-      .from(sessions)
-      .where(
-        opts.isSessionRuntimeAlive
-          ? sql`${sessions.workingDir} IS NOT NULL OR ${sessions.worktreePath} IS NOT NULL`
-          : sql`${sessions.status} != 'deleted' OR ${sessions.status} IS NULL`,
-      );
-
-    const keys = new Set<string>();
-    for (const row of rows) {
-      if (opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
-      const isTerminal = row.status === 'archived' || row.status === 'deleted';
-      if (!opts.isSessionRuntimeAlive && row.status === 'deleted') {
-        continue;
+    const db = getDbClient();
+    if (!db.readLocalWorktreeReferences) return null;
+    const rows = await db.readLocalWorktreeReferences();
+    const runtimePaths = await readWorktreeRuntimePaths();
+    if (!runtimePaths) return null;
+    const subagentReferences = await readPiSubagentWorktreeReferences();
+    if (!subagentReferences) return null;
+    const keys = new Set(runtimePaths);
+    // Config cwd can refer to an earlier workdir or a child-specific directory,
+    // even after the parent row changes or disappears from the task database.
+    for (const paths of subagentReferences.values()) {
+      for (const value of paths) {
+        keys.add(pathKey(value)!);
+        keys.add(await physicalWorktreeKey(value));
       }
-      if (isTerminal && opts.isSessionRuntimeAlive?.(row.id) === false) {
+    }
+    const knownSessionIds = new Set(rows.map((row) => row.id));
+    for (const meta of store.getAll()) {
+      if (subagentReferences.has(meta.sessionId)
+        || (meta.sessionId !== opts.excludeSessionId && !knownSessionIds.has(meta.sessionId))) {
+        const metaPathKey = pathKey(meta.path);
+        if (metaPathKey) keys.add(metaPathKey);
+        keys.add(await physicalWorktreeKey(meta.path));
+      }
+    }
+    for (const row of rows) {
+      const hasSubagentRuns = subagentReferences.has(row.id);
+      // The same id in another database is not the row the caller just closed.
+      if (!hasSubagentRuns && row.currentDatabase && opts.excludeSessionId && row.id === opts.excludeSessionId) continue;
+      const isTerminal = row.status === 'archived' || row.status === 'deleted';
+      if (!hasSubagentRuns && row.source !== 'bot' && isTerminal && (!row.currentDatabase || opts.isSessionRuntimeAlive?.(row.id) !== true)) {
         continue;
       }
       const workingDirKey = pathKey(row.workingDir);
       const worktreePathKey = pathKey(row.worktreePath);
       if (workingDirKey) keys.add(workingDirKey);
       if (worktreePathKey) keys.add(worktreePathKey);
+      for (const value of [row.workingDir, row.worktreePath]) {
+        if (value) keys.add(await physicalWorktreeKey(value));
+      }
     }
     return keys;
   } catch (err) {
@@ -102,13 +115,21 @@ export async function loadLiveSessionPathKeys(
 }
 
 export function hasLiveSessionReference(
-  meta: WorktreeMeta,
+  meta: Pick<WorktreeMeta, 'path' | 'quarantinePath'>,
   liveSessionPathKeys: LiveSessionPathKeys,
 ): boolean {
   if (!liveSessionPathKeys) return true;
   const targets = [meta.path, meta.quarantinePath]
     .map((value) => pathKey(value))
     .filter((value): value is string => value !== null);
+  for (const value of [...targets]) {
+    try {
+      const real = pathKey(fs.realpathSync(value));
+      if (real && !targets.includes(real)) targets.push(real);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return true;
+    }
+  }
   if (targets.length === 0) return true;
   for (const target of targets) {
     for (const candidate of liveSessionPathKeys) {

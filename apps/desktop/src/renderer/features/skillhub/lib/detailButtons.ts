@@ -17,6 +17,8 @@ export interface DetailState {
   origin: 'installed' | 'published' | 'learned' | 'imported' | null;
   /** server 确认的管理权。null = server 不可用（404/error/loading） */
   isMine: boolean | null;
+  /** 当前成员对这一条 Skill 的逐项管理权限。 */
+  canManage: boolean | null;
   /** registryEntry 里记录的本地版本。null = 无 registryEntry */
   localVersion: string | null;
   /** server 上最新版本。null = server 不可用或市场上不存在 */
@@ -60,6 +62,7 @@ export function deriveDetailState(
     return {
       origin: null,
       isMine: infoResult?.isMine ?? null,
+      canManage: infoResult?.canManage ?? null,
       localVersion: null,
       latestVersion: infoResult?.latestVersion ?? null,
       marketDeleted,
@@ -75,6 +78,7 @@ export function deriveDetailState(
     return {
       origin: explicitOrigin,
       isMine: null,
+      canManage: null,
       localVersion: reg.version,
       latestVersion: null,
       marketDeleted,
@@ -87,6 +91,7 @@ export function deriveDetailState(
   return {
     origin,
     isMine: infoResult.isMine,
+    canManage: infoResult.canManage,
     localVersion: reg.version,
     latestVersion: infoResult.latestVersion ?? null,
     marketDeleted: false,
@@ -119,6 +124,8 @@ export function deriveDetailActionState(
   registryEntry: StoredInstall | null | undefined,
   localFolderHash: string | null,
   publishedStatus?: string | null,
+  canPublish = true,
+  publishTargetState: DetailState | null = detailState,
 ): DetailActionState | null {
   if (!detailState) return null;
 
@@ -127,59 +134,59 @@ export function deriveDetailActionState(
     detailState.latestVersion !== null &&
     semverCompare(detailState.latestVersion, detailState.localVersion) > 0
   );
-  const isLocalAhead = !!(
+  const publishState = publishTargetState ?? detailState;
+  const isPublishLocalAhead = !!(
     detailState.localVersion !== null &&
-    detailState.latestVersion !== null &&
-    semverCompare(detailState.localVersion, detailState.latestVersion) > 0
+    publishState.latestVersion !== null &&
+    semverCompare(detailState.localVersion, publishState.latestVersion) > 0
   );
   const localChanged = hasLocalChanges(registryEntry, localFolderHash);
-  const isMineDirty = !!(detailState.isMine === true && localChanged);
+  const isMineDirty = !!(publishState.canManage === true && localChanged);
   const showForeignDirtyBanner = !!(
     detailState.origin === 'installed' &&
     detailState.localVersion !== null &&
     !detailState.marketDeleted &&
-    detailState.isMine !== true &&
+    publishState.canManage !== true &&
     localChanged
   );
   let status: DetailActionStatus = { kind: 'none' };
 
-  if (detailState.isMine === true && publishedStatus === 'rejected') {
+  if (publishState.canManage === true && publishedStatus === 'rejected') {
     status = { kind: 'publish-new-version' };
-  } else if (isLocalAhead && detailState.isMine === true) {
+  } else if (isPublishLocalAhead && publishState.canManage === true) {
     status = { kind: 'publish-new-version' };
   } else if (
-    isOutdated &&
-    detailState.latestVersion !== null &&
-    detailState.isMine === true &&
+    publishState.canManage === true &&
     localChanged
   ) {
     status = { kind: 'publish-new-version' };
+  } else if (publishState.latestVersion !== null && publishState.canManage === true) {
+    status = (detailState.origin === 'learned' || detailState.origin === 'imported')
+      ? { kind: 'publish-new-version' }
+      : { kind: 'published-tag', version: publishState.latestVersion };
   } else if (isOutdated && detailState.latestVersion !== null && detailState.origin !== 'learned' && detailState.origin !== 'imported') {
     // learned / imported 不进市场更新路径:用市场包覆盖会丢掉本地创作 / 导入内容。
     status = { kind: 'update', latestVersion: detailState.latestVersion };
-  } else if (detailState.latestVersion !== null) {
-    // Server confirms the skill exists; never offer first-publish in this branch.
-    if (
-      (detailState.origin === 'learned' || detailState.origin === 'imported') &&
-      detailState.isMine === true
-    ) {
-      // learned / imported 的 registry hash 对应本地内容,不是 server 已发布版本。
-      // 即使 localChanged=false 也不能显示 published-tag;若用户确实拥有同名
-      // 市场 skill,应走发布新版本路径。
-      status = { kind: 'publish-new-version' };
-    } else if (detailState.isMine === true) {
-      status = isMineDirty
-        ? { kind: 'publish-new-version' }
-        : { kind: 'published-tag', version: detailState.latestVersion };
-    } else if (detailState.origin === 'installed' && detailState.localVersion !== null) {
-      status = { kind: 'installed-tag', version: detailState.localVersion };
-    }
-  } else if (detailState.marketDeleted || detailState.isMine === false) {
+  } else if (
+    publishState.latestVersion === null &&
+    (publishState.marketDeleted || publishState.isMine === false) &&
+    (detailState.origin !== 'installed' || localChanged || detailState.isMine === true)
+  ) {
     // Server explicitly says "not found", or returns no record for this user.
     status = { kind: 'publish-to-market' };
   } else if (detailState.origin === 'installed' && detailState.localVersion !== null) {
     // Server unavailable: preserve the local installed signal, but do not invent market actions.
     status = { kind: 'installed-tag', version: detailState.localVersion };
+  }
+
+  if (!canPublish) {
+    if (status.kind === 'publish-to-market') status = { kind: 'none' };
+    if (status.kind === 'publish-new-version') {
+      status = publishState.latestVersion
+        ? { kind: 'published-tag', version: publishState.latestVersion }
+        : { kind: 'none' };
+    }
+    if (status.kind === 'update') status = { kind: 'none' };
   }
 
   return {

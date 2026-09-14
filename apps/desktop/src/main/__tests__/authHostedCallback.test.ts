@@ -267,13 +267,42 @@ describe('openSystemBrowserAuthorization 分流', () => {
     expect(start).toBeGreaterThan(-1);
     const body = source.slice(start, source.indexOf('\n}', start));
 
-    expect(body).toContain('pendingAuthRealm ?? activeAuthRealm');
+    expect(body).toContain('client: CindyAuthClient');
+    expect(body).toContain('loginRealm: AuthRegion');
+    expect(body).not.toContain('pendingAuthRealm ?? activeAuthRealm');
     expect(body).toContain(
       "getClientEndpointForRealm(loginRealm, 'authDesktopCallbackUrl')",
     );
     // 三元方向:非空 → hosted,空 → loopback。写反即所有存量用户登录中断。
     expect(body).toContain('? openHostedBrowserAuthorization(');
     expect(body).toContain(': openLoopbackBrowserAuthorization(');
+  });
+
+  it('authorize、callback 与轮询复用 action 冻结的 auth client', () => {
+    const hostedStart = source.indexOf('async function openHostedBrowserAuthorization(');
+    const hostedBody = source.slice(hostedStart, source.indexOf('\n}\n', hostedStart));
+    const loopbackStart = source.indexOf('async function openLoopbackBrowserAuthorization(');
+    const loopbackBody = source.slice(
+      loopbackStart,
+      source.indexOf('\n}\n\n// ── Refresh scheduling', loopbackStart),
+    );
+    const actionStart = source.indexOf('async function runLoginAction(action: DesktopLoginAction)');
+    const actionBody = source.slice(
+      actionStart,
+      source.indexOf('\n}\n\nexport async function dispatchLoginAction', actionStart),
+    );
+
+    expect(hostedBody).toContain('client: CindyAuthClient');
+    expect(hostedBody).toContain('client.buildAuthorizeUrl(');
+    expect(hostedBody).not.toContain('createAuthClient()');
+    expect(loopbackBody).toContain('client: CindyAuthClient');
+    expect(loopbackBody).toContain('client.buildAuthorizeUrl(');
+    expect(loopbackBody).not.toContain('createAuthClient()');
+    expect(actionBody).toContain('const client = createAuthClient(loginRealm);');
+    expect(actionBody).toContain(
+      'openSystemBrowserAuthorization(\n          client,\n          loginRealm,',
+    );
+    expect(actionBody).toContain('client.exchangeAuthorizationCode(');
   });
 
   /**

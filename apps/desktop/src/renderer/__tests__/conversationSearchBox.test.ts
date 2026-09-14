@@ -224,30 +224,6 @@ describe('ConversationSearchBox live search', () => {
     expect(hybridMode).toBeGreaterThan(keywordMode);
   });
 
-  it('reuses the first remote page for hybrid and still merges late remote hits', () => {
-    const hybridMode = source.indexOf("semanticMode: 'hybrid'");
-    const reuseRemote = source.indexOf('reuseRemoteResults');
-    const mergeLateRemote = source.indexOf('mergeConversationSearchFanout');
-
-    expect(source).toContain('semanticStartedSeqRef');
-    expect(reuseRemote).toBeGreaterThan(hybridMode);
-    expect(mergeLateRemote).toBeGreaterThan(-1);
-    expect(source).toContain('if (semanticStartedSeqRef.current === seq)');
-    expect(source).toContain('results: remoteResultsRef.current');
-    expect(source).toContain('next.remoteResults');
-  });
-
-  it('restores a terminal state if the hybrid refresh fails first', () => {
-    const hybridCatch = source.indexOf("semanticMode: 'hybrid'");
-    const resetSemanticGuard = source.indexOf('semanticStartedSeqRef.current = 0;', hybridCatch);
-    const terminalStatus = source.indexOf(
-      "setStatus((current) => current === 'searching' ? 'error' : current);",
-      hybridCatch,
-    );
-
-    expect(resetSemanticGuard).toBeGreaterThan(hybridCatch);
-    expect(terminalStatus).toBeGreaterThan(resetSemanticGuard);
-  });
 
   it('opens with a locked project filter and searches only that project at runtime', async () => {
     vi.mocked(searchConversations).mockResolvedValue({

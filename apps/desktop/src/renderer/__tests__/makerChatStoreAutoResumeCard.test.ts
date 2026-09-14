@@ -335,6 +335,22 @@ describe('applyInputProjection 自愈进行中提示', () => {
     ).toBe(false);
   });
 
+  it('Pi 的 Reconnecting 进度也走同一条原生重连活动行', () => {
+    makerEventCb?.({
+      sessionId: SID,
+      event: {
+        type: 'error',
+        source: 'pi',
+        data: { message: 'Reconnecting... 2/6', isTerminal: false, willRetry: true },
+      },
+    });
+    expect(
+      makerChatStore
+        .getSnapshot(SID)
+        .messages.some((m) => m.clientId === '__codex_reconnect_pending__'),
+    ).toBe(true);
+  });
+
   it('无关 projection 不误删原生重连行,接管 projection 到达时才交棒', () => {
     makerEventCb?.({
       sessionId: SID,

@@ -1,3 +1,4 @@
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -34,6 +35,7 @@ const runtime = vi.hoisted(() => ({
   pendingCalls: false,
   runningErrand: false,
   cindyWork: false,
+  generatedInstallDirs: [] as string[],
   boundaryPending: false,
   pluginApiBaseUrl: 'https://plugin.test.invalid' as string | null,
   session: {
@@ -89,11 +91,41 @@ vi.mock('../../cindy-brain/index.js', () => ({
   installOrUpdateMarketGhostPackage: async (
     filePath: string,
     options: {
-      afterCommitInLock?: (installed: unknown) => void | Promise<void>;
+      afterCommitInLock?: (
+        installed: { manifest: Record<string, unknown>; dir: string },
+        evidence: {
+          rawManifestSha256: string;
+          legacyManifestDigest: string;
+          canonicalManifest: Record<string, unknown>;
+        },
+      ) => void | Promise<void>;
     },
   ) => {
     const installed = await runtime.install(filePath, options);
-    await options.afterCommitInLock?.(installed);
+    let bytes: Buffer;
+    try {
+      bytes = fs.readFileSync(path.join(installed.dir, 'ghost.json'));
+    } catch {
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-installed-'));
+      runtime.generatedInstallDirs.push(dir);
+      bytes = Buffer.from(JSON.stringify(installed.manifest));
+      fs.writeFileSync(path.join(dir, 'ghost.json'), bytes);
+      installed.dir = dir;
+      const runtimeGhost = runtime.ghosts.find(
+        (ghost) => ghost.manifest.id === installed.manifest.id,
+      );
+      if (runtimeGhost) runtimeGhost.dir = dir;
+    }
+    await options.afterCommitInLock?.(installed, {
+      rawManifestSha256: crypto.createHash('sha256').update(bytes).digest('hex'),
+      legacyManifestDigest: ghostManifestDigest(
+        ghostManifestToLegacyV2DigestFormat(
+          installed.manifest,
+          JSON.parse(bytes.toString('utf8')) as unknown,
+        ),
+      ),
+      canonicalManifest: installed.manifest,
+    });
     return installed;
   },
   hasPendingGhostCalls: vi.fn(() => runtime.pendingCalls),
@@ -110,7 +142,11 @@ vi.mock('../download.js', () => ({
 import { downloadVerifiedPlugin } from '../download.js';
 import type { VisiblePluginDetail, VisiblePluginSummary } from '@cindy/plugin-protocol';
 
-import { GHOST_ICON_MAX_BYTES, type GhostManifest } from '../../../shared/ghost';
+import {
+  GHOST_ICON_MAX_BYTES,
+  ghostManifestToLegacyV2DigestFormat,
+  type GhostManifest,
+} from '../../../shared/ghost';
 import {
   customMarketPluginId,
   customMarketReleaseId,
@@ -144,6 +180,9 @@ afterEach(() => {
   runtime.pendingCalls = false;
   runtime.runningErrand = false;
   runtime.cindyWork = false;
+  for (const dir of runtime.generatedInstallDirs.splice(0)) {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
   runtime.boundaryPending = false;
   runtime.pluginApiBaseUrl = 'https://plugin.test.invalid';
   runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
@@ -2197,9 +2236,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
         allowSourceReplacement: true,
       }),
     ).resolves.toMatchObject({ ghost: { manifest: { id: 'server-plugin' } } });
-    expect(runtime.install.mock.calls[0]?.[1]).toMatchObject({
-      manifestCap: ghostManifest('server-plugin'),
-    });
+    expect(runtime.install.mock.calls[0]?.[1]).not.toHaveProperty('manifestCap');
     expect(h.ledger.installationForGhost('server-plugin')).toMatchObject({
       pluginId: item.id,
       source: 'market',
@@ -2314,5 +2351,51 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(source).not.toMatch(/fs\.promises\.readFile\(/);
     expect(source).not.toMatch(/readFileSync\(/);
     expect(source).toMatch(/readInstalledGhostManifest/);
+  });
+});
+
+describe('Agent custom marketplace boundaries', () => {
+  it.each([false, true])('discoveryOnly does not update a tracked custom plugin with server unavailable=%s', async (unavailable) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-agent-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha', version: '2.0.0' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    if (unavailable) h.api.listAll.mockRejectedValue(new Error('offline'));
+    runtime.ghosts = [installedGhost(root, 'alpha', '1.0.0')];
+    h.ledger.upsertInstallation({
+      pluginId: customMarketPluginId('team-lib', 'alpha'), ghostId: 'alpha',
+      releaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      version: '1.0.0', sha256: 'custom-unverified', scope: 'public', organizationId: null,
+      source: 'local-market', installed: true, updatedAt: '2026-09-11T00:00:00.000Z',
+      sourceKey: marketSourceKey({ type: 'local', path: dir }),
+      manifestDigest: ghostManifestDigest(ghostManifest('alpha', '1.0.0')),
+    });
+    const before = h.ledger.read();
+    const result = await h.service.snapshot({ discoveryOnly: true });
+    expect(result.items).toHaveLength(1);
+    expect(result.items[0]).toMatchObject({ ghostId: 'alpha', installState: 'update-available' });
+    expect(runtime.install).not.toHaveBeenCalled();
+    expect(h.ledger.read()).toEqual(before);
+  });
+
+  it('forwards live authority to custom package placement after packaging', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-agent-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const selected = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    let current = true;
+    const place = vi.fn();
+    runtime.install.mockImplementation(async (_file, options) => {
+      current = false;
+      options.beforeCommitInLock?.();
+      place();
+      throw new Error('unreachable');
+    });
+    await expect(h.service.install(selected.pluginId, {
+      expectedReleaseId: selected.releaseId, expectedManifest: selected.manifest,
+    }, () => { if (!current) throw new Error('authority expired'); })).rejects.toThrow('authority expired');
+    expect(place).not.toHaveBeenCalled();
+    expect(h.ledger.installationForGhost('alpha')).toBeNull();
   });
 });

@@ -11,6 +11,7 @@ import {
   unregisterCodexMcpThreadContext,
 } from '../codexEnvironment.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
+import { CINDY_MAKE_VENDOR_OPTION_KEY } from '../../../shared/cindyMakeSession.js';
 
 function noopLogger(): Logger {
   const logger: Logger = {
@@ -120,6 +121,33 @@ describe('codexEnvironment', () => {
     );
     expect(replacementUrl.searchParams.get('instance')).toBe('instance-2');
     expect(replacementUrl.toString()).not.toBe(boundUrl.toString());
+  });
+
+  it('disables cindy_make per thread unless the Session carries the Cindy Make marker', async () => {
+    const cindyMake: McpProvider = {
+      name: 'cindy_make',
+      toClaudeSdkConfig: () => ({
+        type: 'sdk',
+        name: 'cindy_make',
+        instance: new McpServer({ name: 'cindy_make', version: '1.0.0' }),
+      }),
+    };
+    const config = await getCodexExtraSpawnConfig({
+      mcpProviders: [testProvider(), cindyMake],
+      logger: noopLogger(),
+    });
+    expect(config.extraArgs.some((arg) => arg.startsWith('mcp_servers.cindy_make.url='))).toBe(true);
+
+    const ordinary = config.buildSessionMcpConfig!('instance-plain', { vendorOptions: {} });
+    expect(ordinary['mcp_servers.cindy_make.enabled']).toBe(false);
+    expect(ordinary['mcp_servers.cindy_test.enabled']).toBeUndefined();
+    expect(config.buildSessionMcpConfig!('instance-legacy')['mcp_servers.cindy_make.enabled']).toBe(false);
+
+    const make = config.buildSessionMcpConfig!('instance-make', {
+      vendorOptions: { [CINDY_MAKE_VENDOR_OPTION_KEY]: true },
+    });
+    expect(make['mcp_servers.cindy_make.enabled']).toBeUndefined();
+    expect(make['mcp_servers.cindy_make.url']).toEqual(expect.stringContaining('/mcp/cindy_make'));
   });
 
   it('freezes policy within one session instance but replaces it on thread rebinding', async () => {

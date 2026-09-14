@@ -1,0 +1,692 @@
+{
+  "version": 1,
+  "id": "voice-vocabulary-v1",
+  "labelPolicy": "Analyst authored synthetic cases; aliases optional but any unlisted pair is wrong. dev cases appear in prompt; regression is frozen before first run. Ambiguous and gate_limit reported separately.",
+  "cases": [
+    {
+      "id": "slack",
+      "split": "dev",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "检查 Slate 机器人。",
+        "afterText": "检查 Slack 机器人。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Slack"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Slack",
+          "alias": "Slate",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "added-name",
+      "split": "dev",
+      "category": "addition",
+      "rationale": "addition",
+      "input": {
+        "beforeText": "检查一下机器人。",
+        "afterText": "检查一下 Slack 机器人。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Slack"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "warmup",
+      "split": "dev",
+      "category": "addition",
+      "rationale": "addition",
+      "input": {
+        "beforeText": "每次都会慢吗？",
+        "afterText": "warmup 每次都会慢吗？"
+      },
+      "terms": [
+        {
+          "accept": [
+            "warmup"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "pop-up",
+      "split": "dev",
+      "category": "contextual_phrase",
+      "rationale": "contextual_phrase",
+      "input": {
+        "beforeText": "提示已经谈过一次，不要再提醒。",
+        "afterText": "提示已经弹过一次，不要再提醒。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "弹过一次"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "弹过一次",
+          "alias": "谈过一次",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "untouched",
+      "split": "dev",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "CPU 和 Cindy 都没问题，帮我看看。",
+        "afterText": "CPU 和 Cindy 都没问题，请帮我看看。",
+        "existingEntries": [
+          {
+            "term": "Cindy",
+            "aliases": [
+              {
+                "text": "CPU",
+                "count": 20
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "vibe",
+      "split": "dev",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "试一下 web coding。",
+        "afterText": "试一下 Vibe Coding。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Vibe Coding"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Vibe Coding",
+          "alias": "web coding",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "notion",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "我在 motion 里面写笔记。",
+        "afterText": "我在 Notion 里面写笔记。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Notion"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Notion",
+          "alias": "motion",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "kubernetes",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "库伯奈特集群要升级。",
+        "afterText": "Kubernetes 集群要升级。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Kubernetes"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Kubernetes",
+          "alias": "库伯奈特",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "postgres",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "检查 post grass 数据库。",
+        "afterText": "检查 PostgreSQL 数据库。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "PostgreSQL"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "PostgreSQL",
+          "alias": "post grass",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "full-name",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "用 visual studio coat 打开。",
+        "afterText": "用 Visual Studio Code 打开。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Visual Studio Code"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Visual Studio Code",
+          "alias": "visual studio coat",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "new-project",
+      "split": "regression",
+      "category": "addition",
+      "rationale": "addition",
+      "input": {
+        "beforeText": "先跑一下测试。",
+        "afterText": "先跑一下 Aurora-7 的测试。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Aurora-7"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "new-tech",
+      "split": "regression",
+      "category": "addition",
+      "rationale": "addition",
+      "input": {
+        "beforeText": "看一下缓存。",
+        "afterText": "看一下 Redis 缓存。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Redis"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "new-command",
+      "split": "regression",
+      "category": "addition",
+      "rationale": "addition",
+      "input": {
+        "beforeText": "检查这个命令的返回值。",
+        "afterText": "检查 git worktree 的返回值。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "git worktree",
+            "worktree"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "new-api",
+      "split": "regression",
+      "category": "addition",
+      "rationale": "addition",
+      "input": {
+        "beforeText": "需要再看一下协议。",
+        "afterText": "需要再看一下 WebSocket 协议。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "WebSocket"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "spacing",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "今天试了 Chat GPT。",
+        "afterText": "今天试了 ChatGPT。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "ChatGPT"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "ChatGPT",
+          "alias": "Chat GPT",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "raw-asr",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "打开 no shun。",
+        "afterText": "打开 Notion。",
+        "rawTranscriptText": "打开 motion。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Notion"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Notion",
+          "alias": "no shun",
+          "required": false
+        },
+        {
+          "term": "Notion",
+          "alias": "motion",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "two-corrections",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "motion 和 post grass 都要更新。",
+        "afterText": "Notion 和 PostgreSQL 都要更新。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Notion"
+          ],
+          "required": true
+        },
+        {
+          "accept": [
+            "PostgreSQL"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Notion",
+          "alias": "motion",
+          "required": false
+        },
+        {
+          "term": "PostgreSQL",
+          "alias": "post grass",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "candidate",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "帮我部署 Aurora 7。",
+        "afterText": "帮我部署 Aurora-7。",
+        "existingCandidates": [
+          {
+            "term": "Aurora-7",
+            "evidenceCount": 2,
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Aurora-7"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Aurora-7",
+          "alias": "Aurora 7",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "existing",
+      "split": "regression",
+      "category": "correction",
+      "rationale": "correction",
+      "input": {
+        "beforeText": "再检查一下 motion。",
+        "afterText": "再检查一下 Notion。",
+        "existingEntries": [
+          {
+            "term": "Notion",
+            "source": "automatic",
+            "frequency": 2,
+            "aliases": []
+          }
+        ]
+      },
+      "terms": [
+        {
+          "accept": [
+            "Notion"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Notion",
+          "alias": "motion",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "politeness",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "你检查一下 Notion。",
+        "afterText": "请你检查一下 Notion。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "synonym",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "这里展示当前用户。",
+        "afterText": "这里显示当前用户。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "factual-number",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "先给五个人开权限。",
+        "afterText": "先给六个人开权限。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "common-word",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "现在只有当前的人可以看。",
+        "afterText": "现在只有当前在线的人可以看。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "app-switch",
+      "split": "regression",
+      "category": "addition",
+      "rationale": "Discussion object changes; new name useful but Notion is not an ASR alias",
+      "input": {
+        "beforeText": "我们用 Notion 来处理这件事。",
+        "afterText": "我们改用 Obsidian 来处理这件事。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Obsidian"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": []
+    },
+    {
+      "id": "context-only",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "今天帮我检查一下。",
+        "afterText": "今天请帮我检查一下。",
+        "context": {
+          "selectedText": "Kubernetes PostgreSQL Aurora-7"
+        }
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "punctuation",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "Notion 可以用",
+        "afterText": "Notion 可以用。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "same",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "打开 Notion。",
+        "afterText": "打开 Notion。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "unfinished",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "我们再看看这",
+        "afterText": "我们再看看这个"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "dirty-alias",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "CPU 温度高，Notion 已启动，检查一下。",
+        "afterText": "CPU 温度高，Notion 已启动，马上检查一下。",
+        "existingEntries": [
+          {
+            "term": "Notion",
+            "frequency": 99,
+            "aliases": [
+              {
+                "text": "CPU",
+                "count": 99
+              }
+            ]
+          }
+        ]
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "delete-content",
+      "split": "regression",
+      "category": "negative",
+      "rationale": "negative",
+      "input": {
+        "beforeText": "Notion 可以用，但是先别提交。",
+        "afterText": "Notion 可以用。"
+      },
+      "terms": [],
+      "aliases": []
+    },
+    {
+      "id": "ordinary-homophone",
+      "split": "regression",
+      "category": "ambiguous",
+      "rationale": "Meaning is ambiguous; omission or contextual phrase allowed, bare character forbidden",
+      "input": {
+        "beforeText": "今天想谈一下这个提示。",
+        "afterText": "今天想弹一下这个提示。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "弹一下"
+          ],
+          "required": false
+        }
+      ],
+      "aliases": [
+        {
+          "term": "弹一下",
+          "alias": "谈一下",
+          "required": false
+        }
+      ]
+    },
+    {
+      "id": "distributed-edit",
+      "split": "regression",
+      "category": "gate_limit",
+      "rationale": "Two small edits enclose long unchanged text; exposes existing broad-rewrite gate",
+      "input": {
+        "beforeText": "motion 的配置请先保留，完成更新以后我们还需要依次验证界面、日志、网络连接和缓存，最后检查 post grass。",
+        "afterText": "Notion 的配置请先保留，完成更新以后我们还需要依次验证界面、日志、网络连接和缓存，最后检查 PostgreSQL。"
+      },
+      "terms": [
+        {
+          "accept": [
+            "Notion"
+          ],
+          "required": true
+        },
+        {
+          "accept": [
+            "PostgreSQL"
+          ],
+          "required": true
+        }
+      ],
+      "aliases": [
+        {
+          "term": "Notion",
+          "alias": "motion",
+          "required": false
+        },
+        {
+          "term": "PostgreSQL",
+          "alias": "post grass",
+          "required": false
+        }
+      ]
+    }
+  ]
+}

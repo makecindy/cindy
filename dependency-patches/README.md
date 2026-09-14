@@ -10,6 +10,7 @@
 
 | 依赖 | 用途 |
 | --- | --- |
+| `expo-image-manipulator@57.0.14` | 修复 iOS HDR / 10-bit HEIC 图片在方向归一化时因原生 `CGContext` 参数不兼容而抛出 `ERR_IMAGE_CONTEXT_LOST`；正常方向直接复用原图，其余方向交给 `UIGraphicsImageRenderer`。同类问题与真机验证见 [`tloncorp/tlon-apps#5951`](https://github.com/tloncorp/tlon-apps/pull/5951)，待 Expo 上游提供等价修复后移除。 |
 | `expo-paste-input@0.2.2` | 优化移动端粘贴图片的处理时序，将耗时的解码、压缩和写盘移出 UI 线程，并补充加载中与失败事件。 |
 | `harmonyos-sans-sc-webfont-splitted` | 移除依赖按语言全局覆盖 `font-family` 的规则，由 Cindy 自己决定界面字体。 |
 | `react-native@0.85.3` | 回移 Yoga 对 `display: none` 与 `display: contents` 测量过程的布局状态修复，避免 Fabric 布局阶段因错误的 owner 关系触发断言崩溃（上游 `6fa330693fba313a2fe1121545c1efd558b60983`、`2546ce4d8219050fcd1bf432c7c830c9fd70c9af`）。移动端 iOS 通过 `expo-build-properties` 的 `buildReactNativeFromSource` 编译该补丁，不能改回预编译 RN Core。 |
