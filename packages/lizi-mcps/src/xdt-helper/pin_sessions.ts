@@ -33,13 +33,15 @@ export interface PinSessionsDeps {
 }
 
 const PIN_DESCRIPTION =
-  `批量置顶 ${BRAND_NAME} 历史对话/session(侧栏置顶区)。可逆,要取消用 unpin_sessions。` +
+  `批量置顶 ${BRAND_NAME} 历史任务(session,侧栏置顶区)。可逆,要取消用 unpin_sessions。` +
   '已归档 / 已删除、伙伴(Bot)与协同 worker 会话不能置顶;SSH 远程会话可以。建议先用 history/list_sessions 找到目标 session_id。' +
-  '失败码: NOT_FOUND(某些 id 不存在,整批不写) / PRECONDITION_FAILED(已归档或已删除,整批不写) / ' +
-  'INVALID_ARGS / NO_SESSION_CONTEXT / HOST_NOT_READY / INTERNAL。';
+  '失败码: NOT_FOUND(某些 id 不存在) / PRECONDITION_FAILED(已归档或已删除) / ' +
+  'INVALID_ARGS / NO_SESSION_CONTEXT / HOST_NOT_READY / INTERNAL。' +
+  '**部分成功**:批量预检不过时一条都不会写(data.changed 为空);预检通过后逐个应用,' +
+  '若中途某个任务被并发归档或删除,data.changed 是**已经置顶成功**的部分,请按它如实汇报,不要整批重试。';
 
 const UNPIN_DESCRIPTION =
-  `批量取消置顶 ${BRAND_NAME} 历史对话/session。是 pin_sessions 的逆操作。` +
+  `批量取消置顶 ${BRAND_NAME} 历史任务(session)。是 pin_sessions 的逆操作。` +
   '失败码: NOT_FOUND / PRECONDITION_FAILED / INVALID_ARGS / NO_SESSION_CONTEXT / HOST_NOT_READY / INTERNAL。';
 
 function registerPinnedTool(
@@ -73,7 +75,13 @@ function registerPinnedTool(
         );
       }
       const result = await deps.setSessionsPinned({ sessionIds: ids, pinned: config.pinned });
-      if (!result.ok) return hostErrorPayload(result, BRAND_NAME);
+      if (!result.ok) {
+        // 与 move_sessions 同口径:逐个应用途中失败时前面的已经落库,把 changed 一并带回,
+        // 否则模型会把整批当作未执行。
+        return hostErrorPayload(result, BRAND_NAME, {
+          changed: (result as { changed?: SessionOpItem[] }).changed?.map(sessionOpItemToPayload) ?? [],
+        });
+      }
       return okPayload({
         pinned: config.pinned,
         count: result.changed.length,
