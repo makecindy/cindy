@@ -2242,6 +2242,29 @@ describe('PiAgent.startSession failure cleanup (mocked pi process)', () => {
     await reviewHandle.close();
   });
 
+  it('still loads project resources when a local root session resumes a fork jsonl', async () => {
+    const skillDir = path.join(cwd, '.pi', 'skills', 'demo');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path.join(skillDir, 'SKILL.md'), '# demo\n');
+    mkdirSync(path.join(cwd, '.pi', 'extensions'), { recursive: true });
+    writeFileSync(path.join(cwd, '.pi', 'extensions', 'hook.ts'), 'export default () => {};\n');
+    const resumeFile = path.join(cwd, 'forked.jsonl');
+    writeFileSync(resumeFile, '{}');
+
+    const handle = await new PiAgent(buildDeps()).startSession({
+      ...opts(),
+      sessionId: 'resume-fork',
+      resumeSessionId: resumeFile,
+    });
+    const args = knobs.spawnedArgs[0]!;
+    expect(args).toContain('--no-approve');
+    expect(repeatedArgValues(args, '--skill')).toEqual([realpathSync(skillDir)]);
+    expect(repeatedArgValues(args, '--extension')).toContain(
+      realpathSync(path.join(cwd, '.pi', 'extensions', 'hook.ts')),
+    );
+    await handle.close();
+  });
+
   it('freezes approval per new session and fails closed after revocation', async () => {
     const skillPath = path.join(cwd, '.pi', 'skills', 'approved-skill');
     mkdirSync(skillPath, { recursive: true });
