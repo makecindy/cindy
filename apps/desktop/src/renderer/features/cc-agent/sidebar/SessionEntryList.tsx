@@ -87,6 +87,8 @@ export interface SessionEntryListProps {
   manualOrder?: readonly string[];
   /** Initial full order used to merge the first drag before a manual order exists. */
   initialOrder?: readonly string[];
+  /** Marks the row/header that owns project-session sorting. */
+  sessionOrderHandle?: boolean;
   onReorder?: (orderedIds: string[]) => void;
 }
 
@@ -118,6 +120,7 @@ export function SessionEntryRows({
   sourceLabelMap,
   sessionVariant = 'text',
   showFirstDivider = true,
+  sessionOrderHandle = false,
   automationGroupCollapsed,
   onAutomationGroupCollapsedChange,
 }: SessionEntryRowsProps) {
@@ -155,12 +158,14 @@ export function SessionEntryRows({
               isFirst={showFirstDivider && index === 0}
               hideBottomDivider={nextHighlighted}
               sourceLabel={sourceLabelMap?.get(entry.session.id)}
+              sessionOrderHandle={sessionOrderHandle}
             />
           ) : (
             <SessionItem
               key={entry.session.id}
               {...commonProps}
               sourceLabel={sourceLabelMap?.get(entry.session.id)}
+              sessionOrderHandle={sessionOrderHandle}
             />
           );
         }
@@ -191,6 +196,7 @@ export function SessionEntryRows({
             matchMap={matchMap}
             sourceLabelMap={sourceLabelMap}
             sessionVariant={sessionVariant}
+            sessionOrderHandle={sessionOrderHandle}
           />
         );
       })}
@@ -268,14 +274,21 @@ export function SessionEntryList({
             onReorder(mergeVisibleSessionReorder(baseOrder, visibleOrder));
           }}
           reducedMotion={reducedMotion}
-          handle="[data-sidebar-session-row]"
+          handle="[data-sidebar-session-order-handle]"
           dragClass="cc-agent-session-sortable-drag"
           fallbackOnBody={false}
           constrainToBounds
           filter="button, input, textarea, select, a, [data-no-drag]"
           className="flex flex-col gap-0.5 session-order"
           rowClassName="cc-agent-session-sortable-row"
-          renderItem={(entry) => <SessionEntryRows entries={[entry]} notifications={notifications} {...props} />}
+          renderItem={(entry) => (
+            <SessionEntryRows
+              entries={[entry]}
+              notifications={notifications}
+              sessionOrderHandle
+              {...props}
+            />
+          )}
         />
         {isOverflowing && (
           <button

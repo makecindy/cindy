@@ -350,6 +350,9 @@ describe('SessionCard review regressions', () => {
     expect(sortableStylesSource).toMatch(
       /\.cc-agent-session-sortable-row\.cc-agent-session-sortable-drag\s*\{[\s\S]*background-color:\s*transparent;[\s\S]*box-shadow:\s*none;/,
     );
+    expect(sortableStylesSource).toMatch(
+      /\.cc-agent-session-sortable-row\.cc-agent-session-sortable-drag\s*\{[\s\S]*opacity:\s*1\s*!important;/,
+    );
   });
 
   it('lets the title truncate with an in-flow spacer while actions stay focusable', () => {

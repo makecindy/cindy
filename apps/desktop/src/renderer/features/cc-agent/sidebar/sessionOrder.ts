@@ -51,9 +51,8 @@ export function reconcileManualSessionOrder(
   sessions: readonly Session[],
 ): string[] {
   const ids = sessions.map((session) => session.id);
-  const active = new Set(ids);
   const seen = new Set<string>();
-  const next = previous.filter((id) => active.has(id) && !seen.has(id));
+  const next = previous.filter((id) => !seen.has(id));
   next.forEach((id) => seen.add(id));
   ids.forEach((id) => {
     if (!seen.has(id)) next.push(id);

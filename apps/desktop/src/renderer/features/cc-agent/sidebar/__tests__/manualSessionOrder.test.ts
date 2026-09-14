@@ -5,6 +5,7 @@ import { resolve } from 'node:path';
 
 import { beforeEach, describe, expect, it } from 'vitest';
 
+import type { Session } from '@/lib/ccAgent.types';
 import { getSessionListCollapseView } from '../../lib/sessionListCollapse';
 import type { SidebarSessionEntry } from '../../lib/automationSidebarGrouping';
 import {
@@ -12,6 +13,7 @@ import {
   mergeVisibleSessionReorder,
   orderManualSidebarEntries,
   persistManualSessionOrder,
+  reconcileManualSessionOrder,
 } from '../sessionOrder';
 
 const sessionEntryListSource = readFileSync(
@@ -34,6 +36,12 @@ describe('manual project session ordering', () => {
         ['visible-c', 'visible-a', 'visible-b'],
       ),
     ).toEqual(['visible-c', 'hidden', 'visible-a', 'visible-b']);
+  });
+
+  it('keeps saved IDs while remote status buckets are incomplete', () => {
+    expect(
+      reconcileManualSessionOrder(['archived-1', 'active-1'], [{ id: 'active-1' } as Session]),
+    ).toEqual(['archived-1', 'active-1']);
   });
 
   it('keeps manual ordering behind the existing collapse view and footer', () => {
@@ -86,6 +94,7 @@ describe('manual project session ordering', () => {
     expect(sessionEntryListSource).toContain('initialOrder?: readonly string[];');
     expect(sessionEntryListSource).toContain('const baseOrder = manualOrder?.length');
     expect(sessionEntryListSource).toContain('a, [data-no-drag]');
+    expect(sessionEntryListSource).toContain('handle="[data-sidebar-session-order-handle]"');
   });
 
   it('exposes automation group headers as session-order drag handles', () => {
@@ -94,6 +103,8 @@ describe('manual project session ordering', () => {
       'utf8',
     );
     expect(automationGroupSource).toContain('data-sidebar-session-row="true"');
+    expect(automationGroupSource).toContain('data-sidebar-session-order-handle');
+    expect(automationGroupSource).toContain('sessionOrderHandle={false}');
   });
 
   it('isolates saved order by data owner', () => {

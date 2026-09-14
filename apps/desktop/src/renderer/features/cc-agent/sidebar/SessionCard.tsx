@@ -156,6 +156,7 @@ export const SessionCard = memo(function SessionCard({
   projectOptions = [],
   matchIndices,
   sourceLabel,
+  sessionOrderHandle = false,
   variant = 'card',
   isFirst = false,
   hideBottomDivider = false,
@@ -631,6 +632,7 @@ export const SessionCard = memo(function SessionCard({
       // 多选范围选取靠 getVisibleSidebarSessionIds 扫 [data-sidebar-session-row][data-session-id];
       // 卡片也打这个标记,shift 范围选才能把卡片纳入"可见行"。
       data-sidebar-session-row="true"
+      data-sidebar-session-order-handle={sessionOrderHandle ? 'true' : undefined}
       data-split-group-drag-source={splitDragEnabled ? 'true' : undefined}
       draggable={splitDragEnabled && (dragContainerState.nativeSortable || !needsSplitDragHandle)}
       role="button"

@@ -82,6 +82,7 @@
 .cc-agent-session-sortable-row.cc-agent-session-sortable-drag {
   background-color: transparent;
   box-shadow: none;
+  opacity: 1 !important;
 }
 
 /* PendingQueuePanel 复用 SortableList 的 fallback 拖拽机制，但它不在 sidebar
