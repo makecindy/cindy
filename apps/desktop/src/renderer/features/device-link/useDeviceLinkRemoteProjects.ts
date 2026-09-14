@@ -673,6 +673,7 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
         const result = await refreshRemoteDeviceSessions(deviceId, name, {
+          scope: 'both',
           snapshotMode: 'merge',
           coalescingMode: 'weak',
         });
@@ -741,6 +742,10 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
       if (disposed || !eligible.has(push.deviceId)) return;
       if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       if (push.channel === 'maker:schedule:event') {
+        // 推送照收；闲着不跟事件去拉整份自动化索引。人回来 wake/10s 用 scope both 补上。
+        const watching =
+          periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true);
+        if (!watching) return;
         void refreshRemoteDeviceSessions(push.deviceId, eligible.get(push.deviceId), { scope: 'schedule' }).then((result) => {
           if (result === 'revoked' && !disposed) handleRevoked(push.deviceId);
         });
