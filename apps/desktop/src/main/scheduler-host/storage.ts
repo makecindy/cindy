@@ -1283,6 +1283,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         ),
       )
       .run();
+    this.bumpSidebarIndexCache();
     return [...new Set(staleRows.map((r) => r.scheduleId))];
   }
 

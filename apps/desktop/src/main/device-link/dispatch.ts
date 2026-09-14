@@ -512,7 +512,7 @@ function capScheduleSidebarIndexForTunnel(result: unknown): unknown {
   // 存储层把未读旧 run 放前面、最新映射放最后。超限时保尾部，侧栏归属仍在。
   let lo = 1;
   let hi = record.runs.length;
-  let keep = 1;
+  let keep = 0;
   while (lo <= hi) {
     const mid = Math.floor((lo + hi) / 2);
     if (fits(record.runs.slice(record.runs.length - mid))) {
@@ -522,6 +522,7 @@ function capScheduleSidebarIndexForTunnel(result: unknown): unknown {
       hi = mid - 1;
     }
   }
+  if (keep === 0) return pack([]);
   return pack(record.runs.slice(record.runs.length - keep));
 }
 

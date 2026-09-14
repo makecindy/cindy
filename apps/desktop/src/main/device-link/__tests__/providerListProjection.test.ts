@@ -410,4 +410,18 @@ describe('schedule sidebar index tunnel cap', () => {
       result,
     )).toBe(result);
   });
+
+  it('returns an empty snapshot when a single run still exceeds the tunnel budget', () => {
+    const result = {
+      runs: [{
+        runId: 'run-fat',
+        scheduleName: 'x'.repeat(__testing.remoteScheduleIndexMaxBytes),
+        status: 'failed',
+      }],
+    };
+    expect(__testing.projectInvokeResultForTunnel(
+      'maker:schedule:list-sidebar-index-runs',
+      result,
+    )).toEqual({ runs: [] });
+  });
 });
