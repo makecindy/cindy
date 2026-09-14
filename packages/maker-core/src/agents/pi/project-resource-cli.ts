@@ -161,19 +161,27 @@ export function comparePiResourcePaths(left: string, right: string): number {
 
 /** Conservative CreateProcess command-line budget; the hard Windows cap is 32767. */
 export const PI_WINDOWS_SPAWN_ARGV_BUDGET = 30_000;
+/** Leave headroom under typical macOS/Linux ARG_MAX, which is shared with env. */
+export const PI_POSIX_SPAWN_ARGV_BUDGET = 128_000;
 
-export function estimateWin32CommandLineLength(args: readonly string[]): number {
+export function estimateSpawnArgvLength(args: readonly string[]): number {
   return args.reduce((total, arg) => total + arg.length + 3, 0);
+}
+
+export function piSpawnArgvBudget(platform: NodeJS.Platform): number | null {
+  if (platform === 'win32') return PI_WINDOWS_SPAWN_ARGV_BUDGET;
+  if (platform === 'darwin' || platform === 'linux') return PI_POSIX_SPAWN_ARGV_BUDGET;
+  return null;
 }
 
 export function assertPiSpawnArgvFitsPlatform(
   args: readonly string[],
   platform: NodeJS.Platform = process.platform,
 ): void {
-  if (platform !== 'win32') return;
-  if (estimateWin32CommandLineLength(args) <= PI_WINDOWS_SPAWN_ARGV_BUDGET) return;
+  const budget = piSpawnArgvBudget(platform);
+  if (budget === null || estimateSpawnArgvLength(args) <= budget) return;
   throw new Error(
-    'This project has too many Pi skills, prompts, or extensions to start a task on Windows. Remove some and try again.',
+    'This project has too many Pi skills, prompts, or extensions to start a task. Remove some and try again.',
   );
 }
 

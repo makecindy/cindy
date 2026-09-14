@@ -7,8 +7,9 @@ import {
   assertPiSpawnArgvFitsPlatform,
   collectPiProjectResourceCliPaths,
   comparePiResourcePaths,
-  estimateWin32CommandLineLength,
+  estimateSpawnArgvLength,
   filterPiProjectCliSkills,
+  PI_POSIX_SPAWN_ARGV_BUDGET,
   PI_WINDOWS_SPAWN_ARGV_BUDGET,
   piProjectResourceCliArgs,
 } from '../project-resource-cli.js';
@@ -112,7 +113,7 @@ describe('collectPiProjectResourceCliPaths', () => {
   });
 });
 
-describe('pi project resource path order and Windows argv budget', () => {
+describe('pi project resource path order and spawn argv budget', () => {
   it('orders paths by code units so locale cannot change Skill precedence', () => {
     expect(['b', 'A'].sort(comparePiResourcePaths)).toEqual(['A', 'b']);
   });
@@ -122,8 +123,19 @@ describe('pi project resource path order and Windows argv budget', () => {
       { length: 400 },
       (_, index) => `C:\\Users\\very\\long\\cindy\\project\\.pi\\skills\\skill-${String(index).padStart(3, '0')}\\with\\nested\\folders`,
     );
-    expect(estimateWin32CommandLineLength(args)).toBeGreaterThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(estimateSpawnArgvLength(args)).toBeGreaterThan(PI_WINDOWS_SPAWN_ARGV_BUDGET);
+    expect(estimateSpawnArgvLength(args)).toBeLessThan(PI_POSIX_SPAWN_ARGV_BUDGET);
     expect(() => assertPiSpawnArgvFitsPlatform(args, 'win32')).toThrow(/too many Pi skills/);
     expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).not.toThrow();
+  });
+
+  it('rejects an oversized POSIX command line before spawn', () => {
+    const args = Array.from(
+      { length: 2_000 },
+      (_, index) => `/Users/very/long/cindy/project/.pi/skills/skill-${String(index).padStart(4, '0')}/with/nested/folders`,
+    );
+    expect(estimateSpawnArgvLength(args)).toBeGreaterThan(PI_POSIX_SPAWN_ARGV_BUDGET);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'darwin')).toThrow(/too many Pi skills/);
+    expect(() => assertPiSpawnArgvFitsPlatform(args, 'linux')).toThrow(/too many Pi skills/);
   });
 });

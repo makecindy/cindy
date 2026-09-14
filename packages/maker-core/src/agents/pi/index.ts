@@ -3731,7 +3731,19 @@ export class PiAgent extends BaseAgent {
         ? piProjectResourceCliArgs(projectResourceCli)
         : botSkillSelection.explicitSkillPaths.flatMap((skillPath) => ['--skill', skillPath])),
     ];
-    assertPiSpawnArgvFitsPlatform(args);
+    try {
+      assertPiSpawnArgvFitsPlatform(args);
+    } catch (error) {
+      try {
+        disposeSessionCtx?.();
+      } catch {
+        /* best-effort: cleanup failure must not mask argv budget failure */
+      }
+      disposeSessionCtx = undefined;
+      cleanupConfigHome();
+      cleanupRuntimeFiles();
+      throw error;
+    }
 
     const queue: AsyncQueue<AgentEvent> = createAsyncQueue<AgentEvent>();
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
