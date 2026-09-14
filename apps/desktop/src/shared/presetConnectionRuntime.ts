@@ -16,7 +16,12 @@ export function presetConnectionRuntime(
   return {
     catalogPresetId: preset.id,
     baseUrl,
-    models,
+    models: models.map(model => {
+      // Import-time interface defaults remain references, not manual overrides.
+      if (!rt.models.some(candidate => candidate.id === model.id)) return model;
+      const { api: _api, piApi: _piApi, route: _route, ...stored } = model;
+      return stored;
+    }),
     ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
     ...(rt.requestPath ? { requestPath: rt.requestPath } : {}),
     ...(agent === 'codex' && rt.supportsImageGeneration === true

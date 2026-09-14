@@ -45,7 +45,7 @@ import {
   settleNotificationSound,
   type NotificationSoundKind,
 } from './notificationSoundCoordinator';
-import { requireBoolean, requireEnum, requireString } from './utils/ipcValidate';
+import { requireBoolean, requireEnum, requireString, throwIpcError } from './utils/ipcValidate';
 import {
   getSessionExternalNotificationText,
   getSessionNotificationBody,
@@ -146,11 +146,19 @@ function cleanupSessionEventDeliveries(now: number): void {
   }
 }
 
-function suppressPendingSessionEventDeliveries(now = performance.now()): void {
-  for (const key of pendingSessionEventDeliveries.keys()) {
-    recentSessionEventDeliveries.set(key, now);
-  }
+function suppressPendingSessionEventDeliveries(): void {
   pendingSessionEventDeliveries.clear();
+}
+
+function cancelSessionEventDelivery(
+  sessionId: string,
+  kind: SessionEventKind,
+  token: string | undefined,
+): void {
+  if (token === undefined) return;
+  const key = sessionEventDeliveryKey(sessionId, kind);
+  const reservation = pendingSessionEventDeliveries.get(key);
+  if (reservation?.token === token) pendingSessionEventDeliveries.delete(key);
 }
 
 function claimSessionEventDelivery(
@@ -305,15 +313,9 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       const safeSessionId = requireString(sessionId, 'notification session id');
       const safeKind = requireEnum(kind, SESSION_EVENT_SOUND_KINDS, 'notification event kind');
       if (safeSessionId.length === 0 || safeSessionId.length > SESSION_ID_MAX_LENGTH) {
-        throw new TypeError('invalid notification session id');
+        throwIpcError('INVALID_PARAMS', 'invalid notification session id');
       }
-      if (isAppFocused()) {
-        recentSessionEventDeliveries.set(
-          sessionEventDeliveryKey(safeSessionId, safeKind),
-          performance.now(),
-        );
-        return { status: 'suppressed' as const };
-      }
+      if (isAppFocused()) return { status: 'suppressed' as const };
       return claimSessionEventDelivery(safeSessionId, safeKind);
     },
   );
@@ -380,7 +382,7 @@ export function initNotificationService(deps: NotificationServiceDeps): void {
       assertValidSessionEventPayload(payload);
       const { sessionId, title, kind, channels, deliveryToken } = payload;
       if (isAppFocused()) {
-        recentSessionEventDeliveries.set(sessionEventDeliveryKey(sessionId, kind), performance.now());
+        cancelSessionEventDelivery(sessionId, kind, deliveryToken);
         return;
       }
       if (

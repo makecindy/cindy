@@ -1,3 +1,4 @@
+import { shouldShowOpenPathError } from '../../../shared/openPathResult';
 /**
  * TextLightbox
  * ---------------------------------------------------------------------------
@@ -343,7 +344,7 @@ export function TextLightbox({ filePath, fileName, initialLine, triggerRef, onCl
     const target = remoteOrigin ? remoteCopy?.cachePath : filePath;
     if (!target) return;
     const res = await window.electronAPI.openPath(target);
-    if (!res.success) {
+    if (shouldShowOpenPathError(res)) {
       toast.error(res.error || t('chat.textLightbox.openSystemFailed'));
     }
   }

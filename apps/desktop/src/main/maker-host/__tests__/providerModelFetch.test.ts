@@ -58,6 +58,24 @@ describe('import discovery limits', () => {
 });
 
 describe('buildModelsFetchRequest', () => {
+  it.each(['claude-code', 'codex', 'pi'] as const)('uses the complete OpenRouter catalog for %s without Anthropic ID rewriting', async (agent) => {
+    const request = buildModelsFetchRequest(spec({
+      agent,
+      baseUrl: agent === 'claude-code' ? 'https://openrouter.ai/api' : 'https://openrouter.ai/api/v1',
+      headers: { 'anthropic-version': '2023-06-01', 'x-api-key': 'old-test-key' },
+    }));
+    expect(request.url).toBe('https://openrouter.ai/api/v1/models');
+    expect(request.init.headers).toEqual({ authorization: 'Bearer sk-test' });
+    const result = await fetchProviderModels(spec({ agent, baseUrl: 'https://openrouter.ai/api' }),
+      async (_url, init) => {
+        const headers = init?.headers as Record<string, string>;
+        return fakeResponse(200, JSON.stringify({ data: headers['anthropic-version']
+          ? [{ id: 'anthropic/openai/model[1m]' }]
+          : [{ id: 'openai/model', architecture: { input_modalities: ['text', 'image'], output_modalities: ['text'] }, pricing: { prompt: '0.000001', completion: '0.000002' } }] }));
+      });
+    expect(result.models?.[0]).toMatchObject({ id: 'openai/model', discoveredCost: { input: 1, output: 2 },
+      discoveredMetadata: { supportsImageInput: true } });
+  });
   it.each(
     (['baseUrl', 'modelsUrl'] as const).flatMap((field) =>
       ['user@', ':secret@', 'user:secret@', 'us%65r:s%65cret@'].map((userinfo) => ({
@@ -357,4 +375,69 @@ describe('fetchProviderModels', () => {
     expect(seenHeaders.authorization).toBe('Bearer sk-test');
     expect(seenHeaders['anthropic-version']).toBe('2023-06-01');
   });
+});
+
+
+it('discovers native Google models with Google auth and exact declared limits', async () => {
+  const result = await fetchProviderModels(spec({ agent: 'pi', wireProtocol: 'google-generative-ai',
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
+    headers: { authorization: 'Bearer stale', 'x-goog-api-key': 'stale' },
+  }), async (url, init) => {
+    expect(url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(init?.headers).toEqual({ 'x-goog-api-key': 'sk-test' });
+    return fakeResponse(200, JSON.stringify({ models: [{ name: 'models/new-gemini', displayName: 'New Gemini',
+      supportedGenerationMethods: ['generateContent'], inputTokenLimit: 1048576, outputTokenLimit: 65536 }] }));
+  });
+  expect(result).toMatchObject({ ok: true, models: [{ id: 'new-gemini', name: 'New Gemini', contextWindow: 1048576,
+    discoveredMetadata: { contextWindow: 1048576, maxOutputTokens: 65536 } }] });
+});
+
+
+it('uses Bearer discovery for LongCat Messages without moving its inference endpoint', () => {
+  const result = buildModelsFetchRequest(spec({ baseUrl: 'https://api.longcat.chat/anthropic',
+    modelsUrl: 'https://api.longcat.chat/openai/v1/models', wireProtocol: 'anthropic-messages',
+    headers: { 'anthropic-version': '2023-06-01', 'anthropic-beta': 'fixture-beta' } }));
+  expect(result.url).toBe('https://api.longcat.chat/openai/v1/models');
+  const headers = new Headers(result.init.headers);
+  expect(headers.get('authorization')).toBe('Bearer sk-test');
+  expect(headers.has('anthropic-version')).toBe(false);
+  expect(headers.has('x-api-key')).toBe(false);
+});
+
+
+it('retains LongCat legacy header-only credentials when selecting its Bearer catalog', () => {
+  const result = buildModelsFetchRequest(spec({ baseUrl: 'https://api.longcat.chat/anthropic',
+    modelsUrl: 'https://api.longcat.chat/openai/v1/models', wireProtocol: 'anthropic-messages',
+    apiKey: null, headers: { 'x-api-key': 'fixture-legacy-key' } }));
+  const headers = new Headers(result.init.headers);
+  expect(headers.get('authorization')).toBe('Bearer fixture-legacy-key');
+  expect(headers.has('x-api-key')).toBe(false);
+});
+
+it.each(['claude-code', 'codex', 'pi'] as const)('discovers Google native catalog from a saved compatibility entry (%s)', agent => {
+  const request = buildModelsFetchRequest(spec({ agent,
+    baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai', wireProtocol: 'openai-chat' }));
+  expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+  expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'sk-test' });
+  expect(request.init.headers).not.toHaveProperty('anthropic-version');
+});
+
+it('does not rewrite private Google-compatible discovery or an explicit catalog', () => {
+  expect(buildModelsFetchRequest(spec({ baseUrl: 'https://private.example/v1beta/openai', wireProtocol: 'openai-chat' })).url)
+    .toBe('https://private.example/v1beta/openai/v1/models');
+  expect(buildModelsFetchRequest(spec({ baseUrl: 'https://generativelanguage.googleapis.com/v1beta/openai',
+    modelsUrl: 'https://generativelanguage.googleapis.com/custom/models', wireProtocol: 'openai-chat' })).url)
+    .toBe('https://generativelanguage.googleapis.com/custom/models');
+});
+
+ it('normalizes the real bundled Google discovery URL for all generated harnesses', async () => {
+  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+  const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
+  for (const agent of ['claude-code', 'codex', 'pi'] as const) {
+    const runtime = preset.runtimes[agent]!;
+    const request = buildModelsFetchRequest(spec({ agent, baseUrl: runtime.baseUrl,
+      modelsUrl: runtime.modelsUrl, wireProtocol: runtime.wireProtocol }));
+    expect(request.url).toBe('https://generativelanguage.googleapis.com/v1beta/models');
+    expect(request.init.headers).toMatchObject({ 'x-goog-api-key': 'sk-test' });
+  }
 });

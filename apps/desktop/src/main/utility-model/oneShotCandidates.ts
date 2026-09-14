@@ -905,7 +905,7 @@ async function requestExplicitProviderText(
     };
   }
   const authStrategy: 'api-key-header' | 'oauth-token' | 'none' = routing.authStrategy;
-  if (!routing?.upstream) {
+  if (!routing?.upstream || routing.wireProtocol === 'google-generative-ai') {
     return {
       ok: false,
       reason: 'no_candidate',
@@ -913,6 +913,7 @@ async function requestExplicitProviderText(
     };
   }
   const isOAuth = authStrategy === 'oauth-token';
+  const wireProtocol = routing.wireProtocol;
   const noAuth = authStrategy === 'none';
   const credential = isOAuth
     ? readCachedGenericOAuthAccessToken(storedCustomProviderId(provider.id), provider.auth.oauth)
@@ -961,7 +962,7 @@ async function requestExplicitProviderText(
       agentKind,
       baseUrl: routing.upstream,
       requestPath: routing.requestPath,
-      wireProtocol: routing.wireProtocol,
+      wireProtocol,
       isOllama,
       headers: routing.headerOverride,
       credential: credential ?? '',

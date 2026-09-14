@@ -65,7 +65,8 @@ function isProviderWireProtocol(value: unknown): boolean {
     value === undefined ||
     value === 'anthropic-messages' ||
     value === 'openai-responses' ||
-    value === 'openai-chat'
+    value === 'openai-chat' ||
+    value === 'google-generative-ai'
   );
 }
 

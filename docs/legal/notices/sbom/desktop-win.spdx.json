@@ -3,10 +3,12 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-win",
-  "documentNamespace": "https://cindy.app/spdx/desktop-win/68ba748a0dbf03435636111e284ced5231d7391f7af08ddea098ffcbd1fd7f3a",
+  "documentNamespace": "https://cindy.app/spdx/desktop-win/e0a370868f475a14ac16cb7ddb7a86e3c60bd63bfbb560c019d2208bda4b9682",
   "creationInfo": {
-    "created": "2026-09-08T11:11:04Z",
-    "creators": ["Tool: scripts/generate-third-party-notices.mjs"]
+    "created": "2026-09-13T03:14:43Z",
+    "creators": [
+      "Tool: scripts/generate-third-party-notices.mjs"
+    ]
   },
   "packages": [
     {
@@ -100,9 +102,19 @@
       "copyrightText": "NOASSERTION"
     },
     {
+      "name": "OpenCodex compatibility sources (vendored)",
+      "SPDXID": "SPDXRef-Package-fa0d2644b7f5bf42",
+      "versionInfo": "c155cc7923dbc0102e27d79185505a85d4357b2c",
+      "downloadLocation": "https://github.com/lidge-jun/opencodex/tree/c155cc7923dbc0102e27d79185505a85d4357b2c",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION"
+    },
+    {
       "name": "pi coding agent (runtime-downloaded binary)",
-      "SPDXID": "SPDXRef-Package-a3cbdbce86e6fdc7",
-      "versionInfo": "0.84.4",
+      "SPDXID": "SPDXRef-Package-e7ecfd34000fcb76",
+      "versionInfo": "0.85.1",
       "downloadLocation": "https://github.com/earendil-works/pi",
       "filesAnalyzed": false,
       "licenseConcluded": "MIT",
@@ -5124,6 +5136,431 @@
       ]
     },
     {
+      "name": "@aws-crypto/sha256-browser",
+      "SPDXID": "SPDXRef-Package-2dcd3d7adca9e186",
+      "versionInfo": "5.2.0",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-crypto-helpers",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-crypto/sha256-browser@5.2.0"
+        }
+      ]
+    },
+    {
+      "name": "@aws-crypto/sha256-js",
+      "SPDXID": "SPDXRef-Package-a6e4c85924388a4c",
+      "versionInfo": "5.2.0",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-crypto-helpers",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-crypto/sha256-js@5.2.0"
+        }
+      ]
+    },
+    {
+      "name": "@aws-crypto/supports-web-crypto",
+      "SPDXID": "SPDXRef-Package-9450bcd42e679021",
+      "versionInfo": "5.2.0",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-crypto-helpers",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-crypto/supports-web-crypto@5.2.0"
+        }
+      ]
+    },
+    {
+      "name": "@aws-crypto/util",
+      "SPDXID": "SPDXRef-Package-28596bd661566b53",
+      "versionInfo": "5.2.0",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-crypto-helpers",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-crypto/util@5.2.0"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/client-bedrock-runtime",
+      "SPDXID": "SPDXRef-Package-e130a276d9b887a2",
+      "versionInfo": "3.1048.0",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/client-bedrock-runtime@3.1048.0"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/core",
+      "SPDXID": "SPDXRef-Package-e2c68d09b96768c2",
+      "versionInfo": "3.978.0",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/core@3.978.0"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/credential-provider-env",
+      "SPDXID": "SPDXRef-Package-d0c6e5e24b56924e",
+      "versionInfo": "3.972.71",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/credential-provider-env@3.972.71"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/credential-provider-http",
+      "SPDXID": "SPDXRef-Package-964fb992ad40f572",
+      "versionInfo": "3.972.73",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/credential-provider-http@3.972.73"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/credential-provider-ini",
+      "SPDXID": "SPDXRef-Package-40b24a6e36da78dc",
+      "versionInfo": "3.973.16",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/credential-provider-ini@3.973.16"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/credential-provider-login",
+      "SPDXID": "SPDXRef-Package-4d67d40621a41289",
+      "versionInfo": "3.972.78",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/credential-provider-login@3.972.78"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/credential-provider-node",
+      "SPDXID": "SPDXRef-Package-c8d032de9cf9f27f",
+      "versionInfo": "3.972.83",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/credential-provider-node@3.972.83"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/credential-provider-process",
+      "SPDXID": "SPDXRef-Package-c396a6cd6de76f7c",
+      "versionInfo": "3.972.71",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/credential-provider-process@3.972.71"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/credential-provider-sso",
+      "SPDXID": "SPDXRef-Package-ba97f5e05dbe1f2c",
+      "versionInfo": "3.973.15",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/credential-provider-sso@3.973.15"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/credential-provider-web-identity",
+      "SPDXID": "SPDXRef-Package-91d8a02f7b5d2e5d",
+      "versionInfo": "3.972.77",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/credential-provider-web-identity@3.972.77"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/eventstream-handler-node",
+      "SPDXID": "SPDXRef-Package-12cfb8b7601c4f3a",
+      "versionInfo": "3.972.34",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/eventstream-handler-node@3.972.34"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/middleware-eventstream",
+      "SPDXID": "SPDXRef-Package-0b766bec495c9dc3",
+      "versionInfo": "3.972.29",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/middleware-eventstream@3.972.29"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/middleware-websocket",
+      "SPDXID": "SPDXRef-Package-b4c5bf50b4cd1c78",
+      "versionInfo": "3.972.53",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/middleware-websocket@3.972.53"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/nested-clients",
+      "SPDXID": "SPDXRef-Package-88d120b46c33f3c9",
+      "versionInfo": "3.997.45",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/nested-clients@3.997.45"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/signature-v4-multi-region",
+      "SPDXID": "SPDXRef-Package-522e7d476f961b3a",
+      "versionInfo": "3.996.46",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/signature-v4-multi-region@3.996.46"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/token-providers",
+      "SPDXID": "SPDXRef-Package-7ea77e439655afe7",
+      "versionInfo": "3.1048.0",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/token-providers@3.1048.0"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/token-providers",
+      "SPDXID": "SPDXRef-Package-5bad20ef5ce547f9",
+      "versionInfo": "3.1129.0",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/token-providers@3.1129.0"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/types",
+      "SPDXID": "SPDXRef-Package-a06e336afd0c90fb",
+      "versionInfo": "3.974.5",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/types@3.974.5"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/util-locate-window",
+      "SPDXID": "SPDXRef-Package-93043c6bda8a0115",
+      "versionInfo": "3.965.10",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/util-locate-window@3.965.10"
+        }
+      ]
+    },
+    {
+      "name": "@aws-sdk/xml-builder",
+      "SPDXID": "SPDXRef-Package-cf09823d84d8b90f",
+      "versionInfo": "3.972.40",
+      "downloadLocation": "https://github.com/aws/aws-sdk-js-v3",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws-sdk/xml-builder@3.972.40"
+        }
+      ]
+    },
+    {
+      "name": "@aws/lambda-invoke-store",
+      "SPDXID": "SPDXRef-Package-3d1ae508173f8545",
+      "versionInfo": "0.3.0",
+      "downloadLocation": "https://github.com/awslabs/aws-lambda-invoke-store",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40aws/lambda-invoke-store@0.3.0"
+        }
+      ]
+    },
+    {
       "name": "@babel/helper-string-parser",
       "SPDXID": "SPDXRef-Package-2d6a4b723df29496",
       "versionInfo": "7.29.7",
@@ -5753,6 +6190,40 @@
       ]
     },
     {
+      "name": "@earendil-works/pi-ai",
+      "SPDXID": "SPDXRef-Package-73261f5af56014d7",
+      "versionInfo": "0.85.1",
+      "downloadLocation": "https://github.com/earendil-works/pi",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40earendil-works/pi-ai@0.85.1"
+        }
+      ]
+    },
+    {
+      "name": "@earendil-works/pi-telemetry",
+      "SPDXID": "SPDXRef-Package-e4e27c00d52e5458",
+      "versionInfo": "0.85.1",
+      "downloadLocation": "https://github.com/earendil-works/pi",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40earendil-works/pi-telemetry@0.85.1"
+        }
+      ]
+    },
+    {
       "name": "@fast-csv/format",
       "SPDXID": "SPDXRef-Package-ef09030156acbe49",
       "versionInfo": "4.3.5",
@@ -5885,6 +6356,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40fontsource-variable/jetbrains-mono@5.2.8"
+        }
+      ]
+    },
+    {
+      "name": "@google/genai",
+      "SPDXID": "SPDXRef-Package-606d0d178caea22b",
+      "versionInfo": "1.52.0",
+      "downloadLocation": "https://github.com/googleapis/js-genai",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40google/genai@1.52.0"
         }
       ]
     },
@@ -7504,6 +7992,176 @@
       ]
     },
     {
+      "name": "@smithy/core",
+      "SPDXID": "SPDXRef-Package-49b4383465adb1f9",
+      "versionInfo": "3.34.1",
+      "downloadLocation": "https://github.com/smithy-lang/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/core@3.34.1"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/credential-provider-imds",
+      "SPDXID": "SPDXRef-Package-4aa7e06ac8931481",
+      "versionInfo": "4.5.2",
+      "downloadLocation": "https://github.com/smithy-lang/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/credential-provider-imds@4.5.2"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/fetch-http-handler",
+      "SPDXID": "SPDXRef-Package-38d2beeb422232ff",
+      "versionInfo": "5.8.0",
+      "downloadLocation": "https://github.com/smithy-lang/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/fetch-http-handler@5.8.0"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/is-array-buffer",
+      "SPDXID": "SPDXRef-Package-e63514a065a4b866",
+      "versionInfo": "2.2.0",
+      "downloadLocation": "https://github.com/awslabs/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/is-array-buffer@2.2.0"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/node-http-handler",
+      "SPDXID": "SPDXRef-Package-29278aeec889f3c5",
+      "versionInfo": "4.12.1",
+      "downloadLocation": "https://github.com/smithy-lang/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/node-http-handler@4.12.1"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/node-http-handler",
+      "SPDXID": "SPDXRef-Package-abc210ce429bf639",
+      "versionInfo": "4.7.3",
+      "downloadLocation": "https://github.com/smithy-lang/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/node-http-handler@4.7.3"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/signature-v4",
+      "SPDXID": "SPDXRef-Package-6a8a4f065f8c3efc",
+      "versionInfo": "5.7.3",
+      "downloadLocation": "https://github.com/smithy-lang/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/signature-v4@5.7.3"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/types",
+      "SPDXID": "SPDXRef-Package-b41e8da069778293",
+      "versionInfo": "4.18.0",
+      "downloadLocation": "https://github.com/smithy-lang/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/types@4.18.0"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/util-buffer-from",
+      "SPDXID": "SPDXRef-Package-c1c672d932cdec67",
+      "versionInfo": "2.2.0",
+      "downloadLocation": "https://github.com/awslabs/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/util-buffer-from@2.2.0"
+        }
+      ]
+    },
+    {
+      "name": "@smithy/util-utf8",
+      "SPDXID": "SPDXRef-Package-1bdd35301f7ae8c9",
+      "versionInfo": "2.3.0",
+      "downloadLocation": "https://github.com/awslabs/smithy-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40smithy/util-utf8@2.3.0"
+        }
+      ]
+    },
+    {
       "name": "@tanstack/react-virtual",
       "SPDXID": "SPDXRef-Package-cfdd1fd9bfdde403",
       "versionInfo": "3.14.6",
@@ -8439,6 +9097,23 @@
       ]
     },
     {
+      "name": "@types/retry",
+      "SPDXID": "SPDXRef-Package-89d9ca68273af769",
+      "versionInfo": "0.12.0",
+      "downloadLocation": "https://github.com/DefinitelyTyped/DefinitelyTyped",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40types/retry@0.12.0"
+        }
+      ]
+    },
+    {
       "name": "@types/trusted-types",
       "SPDXID": "SPDXRef-Package-60f6d041aafc69de",
       "versionInfo": "2.0.7",
@@ -9234,6 +9909,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/body-parser@2.3.0"
+        }
+      ]
+    },
+    {
+      "name": "bowser",
+      "SPDXID": "SPDXRef-Package-e6dc4c803635e83c",
+      "versionInfo": "2.14.1",
+      "downloadLocation": "https://github.com/bowser-js/bowser",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/bowser@2.14.1"
         }
       ]
     },
@@ -12944,6 +13636,23 @@
       ]
     },
     {
+      "name": "http-proxy-agent",
+      "SPDXID": "SPDXRef-Package-3d6cfce85807f5f3",
+      "versionInfo": "7.0.2",
+      "downloadLocation": "https://github.com/TooTallNate/proxy-agents",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/http-proxy-agent@7.0.2"
+        }
+      ]
+    },
+    {
       "name": "https",
       "SPDXID": "SPDXRef-Package-a6138fed56d8e05e",
       "versionInfo": "1.0.0",
@@ -16123,6 +16832,23 @@
       ]
     },
     {
+      "name": "openai",
+      "SPDXID": "SPDXRef-Package-81506e2125344c89",
+      "versionInfo": "6.40.0",
+      "downloadLocation": "https://github.com/openai/openai-node",
+      "filesAnalyzed": false,
+      "licenseConcluded": "Apache-2.0",
+      "licenseDeclared": "Apache-2.0",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/openai@6.40.0"
+        }
+      ]
+    },
+    {
       "name": "orderedmap",
       "SPDXID": "SPDXRef-Package-0dc40e926cda2457",
       "versionInfo": "2.1.1",
@@ -16204,6 +16930,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/p-locate@4.1.0"
+        }
+      ]
+    },
+    {
+      "name": "p-retry",
+      "SPDXID": "SPDXRef-Package-4c83f82e1f98c31b",
+      "versionInfo": "4.6.2",
+      "downloadLocation": "https://github.com/sindresorhus/p-retry",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/p-retry@4.6.2"
         }
       ]
     },
@@ -16323,6 +17066,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/parseurl@1.3.3"
+        }
+      ]
+    },
+    {
+      "name": "partial-json",
+      "SPDXID": "SPDXRef-Package-62291c24ece7d435",
+      "versionInfo": "0.1.7",
+      "downloadLocation": "https://github.com/promplate/partial-json-parser-js",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/partial-json@0.1.7"
         }
       ]
     },
@@ -17479,6 +18239,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/require-main-filename@2.0.0"
+        }
+      ]
+    },
+    {
+      "name": "retry",
+      "SPDXID": "SPDXRef-Package-0a3fe084675d4031",
+      "versionInfo": "0.13.1",
+      "downloadLocation": "https://github.com/tim-kos/node-retry",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/retry@0.13.1"
         }
       ]
     },
@@ -18792,6 +19569,23 @@
       ]
     },
     {
+      "name": "typebox",
+      "SPDXID": "SPDXRef-Package-0c5500deb90551bd",
+      "versionInfo": "1.3.7",
+      "downloadLocation": "https://github.com/sinclairzx81/typebox",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/typebox@1.3.7"
+        }
+      ]
+    },
+    {
       "name": "undici",
       "SPDXID": "SPDXRef-Package-ab79753110170e63",
       "versionInfo": "6.27.0",
@@ -19691,7 +20485,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-a3cbdbce86e6fdc7"
+      "relatedSpdxElement": "SPDXRef-Package-fa0d2644b7f5bf42"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -21181,6 +21975,131 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-2dcd3d7adca9e186"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-a6e4c85924388a4c"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-9450bcd42e679021"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-28596bd661566b53"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e130a276d9b887a2"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e2c68d09b96768c2"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-d0c6e5e24b56924e"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-964fb992ad40f572"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-40b24a6e36da78dc"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4d67d40621a41289"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-c8d032de9cf9f27f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-c396a6cd6de76f7c"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-ba97f5e05dbe1f2c"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-91d8a02f7b5d2e5d"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-12cfb8b7601c4f3a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-0b766bec495c9dc3"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-b4c5bf50b4cd1c78"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-88d120b46c33f3c9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-522e7d476f961b3a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-7ea77e439655afe7"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-5bad20ef5ce547f9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-a06e336afd0c90fb"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-93043c6bda8a0115"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-cf09823d84d8b90f"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-3d1ae508173f8545"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-2d6a4b723df29496"
     },
     {
@@ -21366,6 +22285,16 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-73261f5af56014d7"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e4e27c00d52e5458"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-ef09030156acbe49"
     },
     {
@@ -21402,6 +22331,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-3c08ae5a9d3713c9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-606d0d178caea22b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -21881,6 +22815,56 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-49b4383465adb1f9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4aa7e06ac8931481"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-38d2beeb422232ff"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e63514a065a4b866"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-29278aeec889f3c5"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-abc210ce429bf639"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-6a8a4f065f8c3efc"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-b41e8da069778293"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-c1c672d932cdec67"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-1bdd35301f7ae8c9"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-cfdd1fd9bfdde403"
     },
     {
@@ -22156,6 +23140,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-89d9ca68273af769"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-60f6d041aafc69de"
     },
     {
@@ -22387,6 +23376,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-603bfb1d8a6cd096"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e6dc4c803635e83c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -23481,6 +24475,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-3d6cfce85807f5f3"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-a6138fed56d8e05e"
     },
     {
@@ -24416,6 +25415,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-81506e2125344c89"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-0dc40e926cda2457"
     },
     {
@@ -24437,6 +25441,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-49c671786b573608"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-4c83f82e1f98c31b"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -24472,6 +25481,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-590a5dc3c4c3fee0"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-62291c24ece7d435"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -24812,6 +25826,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-d75f51a041fca2f7"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-0a3fe084675d4031"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -25201,6 +26220,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-0c5500deb90551bd"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-ab79753110170e63"
     },
     {
@@ -25447,6 +26471,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-0f1fa15d8e8fb256"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
     }
   ],
   "hasExtractedLicensingInfos": [

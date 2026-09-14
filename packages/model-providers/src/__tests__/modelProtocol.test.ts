@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { modelProtocolComparison } from '../modelProtocol.js';
+import { modelProtocolComparison, nativeModelAgents } from '../modelProtocol.js';
 import { pickRecommendedAgent, resolveAgentCapability } from '../unifiedSelection.js';
 import type { CatalogModel, PiModelApi, Provider } from '../types.js';
 
@@ -88,8 +88,8 @@ describe('per-model protocol comparison', () => {
     };
     expect(pickRecommendedAgent(provider, model.id, provider.agents)).toBe('pi');
     byAgent.pi.nativeApi = 'google-generative-ai';
-    expect(modelProtocolComparison(provider, byAgent).forAgent('pi')?.mode).toBe('compatibility');
-    expect(pickRecommendedAgent(provider, model.id, provider.agents)).toBe('claude-code');
+    expect(modelProtocolComparison(provider, byAgent).forAgent('pi')?.mode).toBe('matching');
+    expect(pickRecommendedAgent(provider, model.id, provider.agents)).toBe('pi');
   });
 
   it('uses model route overrides for local conversion, ignoring obsolete compatibility annotations', () => {
@@ -162,7 +162,7 @@ describe('per-model protocol comparison', () => {
     const { provider, byAgent } = fixture();
     const result = modelProtocolComparison(provider, byAgent);
     expect(result.reference).toBeNull();
-    expect(result.forAgent('pi')?.mode).toBe('unknown');
+    expect(result.forAgent('pi')?.mode).toBe('matching');
     expect(
       modelProtocolComparison(
         { id: 'xd', routing: { codex: {} } as Provider['routing'] },
@@ -170,5 +170,38 @@ describe('per-model protocol comparison', () => {
       ).forAgent('codex')?.outbound,
     ).toBeNull();
     expect(modelProtocolComparison(provider, {}).forAgent('pi')).toBeNull();
+  });
+});
+
+
+describe('custom supplier transport ownership', () => {
+  it.each(['anthropic-messages', 'openai-responses', 'openai-completions', 'google-generative-ai', 'bedrock-converse-stream', 'azure-openai-responses', 'google-vertex', 'mistral-conversations'] as const)(
+    'Pi uses %s directly; only mismatching fixed-protocol harnesses require conversion', api => {
+      const { provider, byAgent } = fixture('google-generative-ai');
+      provider.source = 'user';
+      for (const model of Object.values(byAgent)) { model.api = api; model.nativeApi = api; }
+      const result = modelProtocolComparison(provider, byAgent);
+      expect(result.forAgent('pi')).toMatchObject({ outbound: api, mode: 'matching', localConversion: false });
+      expect(result.forAgent('claude-code')?.mode).toBe(api === 'anthropic-messages' ? 'matching' : 'compatibility');
+      expect(result.forAgent('codex')?.mode).toBe(['openai-responses', 'azure-openai-responses'].includes(api) ? 'matching' : 'compatibility');
+    },
+  );
+
+  it.each(['builtin', 'user'] as const)('applies Gateway compatibility defaults to %s supplier front doors', source => {
+    const { provider, byAgent } = fixture('google-generative-ai');
+    provider.source = source;
+    byAgent.pi.api = 'openai-completions';
+    const comparison = modelProtocolComparison(provider, byAgent);
+    expect(comparison.forAgent('claude-code')).toMatchObject({ mode: 'compatibility', localConversion: false });
+    expect(comparison.forAgent('codex')).toMatchObject({ mode: 'compatibility', localConversion: false });
+    expect(comparison.forAgent('pi')).toMatchObject({ mode: 'matching', outbound: 'openai-completions' });
+    expect(nativeModelAgents(provider, byAgent)).toEqual(['pi']);
+  });
+
+  it('does not advertise or automatically enable unverified fixed-protocol engines', () => {
+    const { provider, byAgent } = fixture();
+    provider.source = 'user';
+    expect(modelProtocolComparison(provider, byAgent).forAgent('codex')?.mode).toBe('unknown');
+    expect(nativeModelAgents(provider, byAgent)).toEqual(['pi']);
   });
 });

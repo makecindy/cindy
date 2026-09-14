@@ -270,18 +270,56 @@ describe('notificationService — channels 分发', () => {
     expect(notificationCtor).not.toHaveBeenCalled();
     expect(markSessionNeedsAttention).not.toHaveBeenCalled();
     expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+    expect(claimEvent?.({}, 'session-focus', 'done')).toMatchObject({ status: 'deliver' });
   });
 
   it('suppresses claims immediately while another Cindy window is focused', async () => {
     const { initNotificationService } = await freshService();
-    initNotificationService(baseDeps(makeFeishuIm('ou_owner'), vi.fn(), vi.fn(() => true)));
+    const isAppFocused = vi.fn(() => true);
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner'), vi.fn(), isAppFocused));
+    const claimEvent = registeredHandlers.get('notification:claim-session-event');
 
-    expect(
-      registeredHandlers.get('notification:claim-session-event')?.({}, 'session-focused', 'error'),
-    ).toEqual({ status: 'suppressed' });
+    expect(claimEvent?.({}, 'session-focused', 'error')).toEqual({ status: 'suppressed' });
     expect(
       registeredHandlers.get('notification:claim-session-event-sound')?.({}, 'error'),
     ).toEqual({ status: 'suppressed' });
+
+    isAppFocused.mockReturnValue(false);
+    expect(claimEvent?.({}, 'session-focused', 'error')).toMatchObject({ status: 'deliver' });
+  });
+
+  it('cancels a pending delivery without deduping the next event when focus wins the race', async () => {
+    const { initNotificationService } = await freshService();
+    const isAppFocused = vi.fn(() => false);
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner'), vi.fn(), isAppFocused));
+    const claimEvent = registeredHandlers.get('notification:claim-session-event');
+    const delivery = claimEvent?.({}, 'session-race', 'needs-reply') as {
+      status: 'deliver';
+      token: string;
+    };
+
+    isAppFocused.mockReturnValue(true);
+    await invokeHandler({
+      sessionId: 'session-race',
+      title: 'Focused before delivery',
+      kind: 'needs-reply',
+      deliveryToken: delivery.token,
+      channels: { desktop: true },
+    });
+
+    isAppFocused.mockReturnValue(false);
+    expect(claimEvent?.({}, 'session-race', 'needs-reply')).toMatchObject({ status: 'deliver' });
+    expect(notificationCtor).not.toHaveBeenCalled();
+  });
+
+  it('rejects an overlong notification session id with the shared IPC error protocol', async () => {
+    const { initNotificationService } = await freshService();
+    initNotificationService(baseDeps(makeFeishuIm('ou_owner')));
+    const claimEvent = registeredHandlers.get('notification:claim-session-event');
+
+    expect(() => claimEvent?.({}, 'x'.repeat(257), 'done')).toThrow(
+      '[INVALID_PARAMS] invalid notification session id',
+    );
   });
 
   it('payload.channels 缺省 → 仅桌面 toast (默认契约,防御漏传)', async () => {
