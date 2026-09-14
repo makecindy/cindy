@@ -87,7 +87,10 @@ function collectSkillDirs(repoRoot: string, skillsDir: string, bucket: Set<strin
     if (entry.name.startsWith('.')) continue;
     const realFolder = realpathOrNull(path.join(resolvedDir, entry.name));
     if (!realFolder || !isDir(realFolder) || !isWithinRoot(repoRoot, realFolder)) continue;
-    const skillMd = path.join(realFolder, 'SKILL.md');
+    const upper = path.join(realFolder, 'SKILL.md');
+    const lower = path.join(realFolder, 'skill.md');
+    const skillMd = isFile(upper) ? upper : isFile(lower) ? lower : null;
+    if (!skillMd) continue;
     const realMd = realpathOrNull(skillMd);
     if (!realMd || !isFile(realMd) || !isWithinRoot(repoRoot, realMd)) continue;
     bucket.add(realFolder);
@@ -159,7 +162,7 @@ export function filterPiProjectCliSkills(
   for (const disabled of disabledSkillPaths) {
     const real = realpathOrNull(disabled) ?? path.resolve(disabled);
     denied.add(real);
-    if (path.basename(real) === 'SKILL.md') denied.add(path.dirname(real));
+    if (path.basename(real).toLowerCase() === 'skill.md') denied.add(path.dirname(real));
   }
   return Object.freeze(skills.filter((skillPath) => !denied.has(skillPath)));
 }

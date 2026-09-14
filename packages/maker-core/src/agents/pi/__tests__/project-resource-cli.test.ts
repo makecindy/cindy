@@ -54,6 +54,14 @@ describe('collectPiProjectResourceCliPaths', () => {
     ]);
   });
 
+  it('collects skills whose entry file is skill.md', () => {
+    const repo = makeRepo();
+    const skillDir = path.join(repo, '.pi', 'skills', 'lower');
+    mkdirSync(skillDir, { recursive: true });
+    writeFileSync(path.join(skillDir, 'skill.md'), '# lower\n');
+    expect(collectPiProjectResourceCliPaths(repo).skills).toEqual([realpathSync(skillDir)]);
+  });
+
   it('skips escaped symlinks and settings files', () => {
     const repo = makeRepo();
     const outside = realpathSync.native(mkdtempSync(path.join(tmpdir(), 'pi-project-cli-out-')));

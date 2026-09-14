@@ -3568,6 +3568,7 @@ export class PiAgent extends BaseAgent {
       ? [] : [...(this.deps.getDisabledSkillPaths?.() ?? [])];
     let disabledSkillLaunch = snapshotDisabledSkillLaunch(disabledSkillPaths);
     const disabledSkillSnapshot = disabledSkillLaunch.identities;
+    const loadProjectResourcesInPlace = !reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId;
     let projectResourceAssembly = unavailablePiProjectResourceAssembly(
       reviewMode ? 'review-mode-project-resources-disabled' : 'approval-resolver-unavailable',
     );
@@ -3580,7 +3581,11 @@ export class PiAgent extends BaseAgent {
         });
         projectResourceAssembly = await assembleApprovedPiProjectResources(trustInput, opts.workingDir);
         projectResourceAssembly = filterPiDisabledProjectSkills(projectResourceAssembly, currentDisabledSkillLaunchPaths(disabledSkillLaunch));
-        projectResourceAssembly = await stageApprovedPiProjectResources(projectResourceAssembly, configHome);
+        // In-place CLI loading uses original repo paths. Staging copies are unused
+        // there and would recopy every Skill asset on each startSession.
+        if (!loadProjectResourcesInPlace) {
+          projectResourceAssembly = await stageApprovedPiProjectResources(projectResourceAssembly, configHome);
+        }
       } catch {
         projectResourceAssembly = unavailablePiProjectResourceAssembly('approval-resolver-failed');
         this.deps.logger.warn('pi project approval resolver failed closed', {
@@ -3677,7 +3682,6 @@ export class PiAgent extends BaseAgent {
 
     // Local root tasks load project skills/prompts/extensions in place via
     // explicit CLI flags. Keep --no-approve so `.pi/settings.json` is unread.
-    const loadProjectResourcesInPlace = !reviewMode && !opts.botRuntimeProfile && !opts.remoteHostId;
     const collectedProjectResources = loadProjectResourcesInPlace
       ? collectPiProjectResourceCliPaths(opts.workingDir)
       : emptyPiProjectResourceCliPaths();
