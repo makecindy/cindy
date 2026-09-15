@@ -1,6 +1,7 @@
 import { mobileCostMarks, quotaCountdown } from "./mobileModelRowPresentation";
 import { useMobileModelQuotas } from "./useMobileModelQuotas";
 import { useEffect, useMemo, useRef, useState } from "react";
+import * as ExpoCrypto from "expo-crypto";
 import { useTranslation } from "react-i18next";
 import type { MobileProviderMarkProps } from "./MobileProviderMark";
 import type { AgentKind } from "@cindy/model-providers/types";
@@ -23,6 +24,18 @@ import { useDraftModelMemoryVersion } from "./draftModelMemory";
 import { useSessionModelMirrorVersion } from "./sessionModelMirror";
 import { UnifiedModelPickerView } from "./UnifiedModelPickerView";
 import { budgetRowDisabled, presentPickerPrice } from "./modelPickerRows";
+
+function createFavoriteUid(): string {
+  const cryptoWithUuid = globalThis.crypto as Crypto | undefined;
+  if (typeof cryptoWithUuid?.randomUUID === "function") return cryptoWithUuid.randomUUID();
+  const expoWithUuid = ExpoCrypto as typeof ExpoCrypto & { randomUUID?: () => string };
+  if (typeof expoWithUuid.randomUUID === "function") return expoWithUuid.randomUUID();
+  const bytes = ExpoCrypto.getRandomBytes(16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+}
 
 export interface UnifiedMobilePickerOptions {
   currentSelection?: Pick<
@@ -536,7 +549,7 @@ export function UnifiedModelPickerSheet(
                       addModelFavorite(
                         prefs.value,
                         { ...row.config, modelId: row.entry.modelId },
-                        `${Date.now()}-${Math.random().toString(36).slice(2)}`,
+                        createFavoriteUid(),
                       ),
                     );
                 });

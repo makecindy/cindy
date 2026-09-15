@@ -2500,7 +2500,13 @@ export default function SessionScreen() {
     [maker, sessionId],
   );
   useEffect(() => () => clearSessionMirror(sessionId), [sessionId]);
-  const modelSheetUsesIntent = agentSwitchIntent?.targetAgentKind === modelSheetAgentKind;
+  // 打开选择器时先展示待生效的跨 Harness 配置；setState 更新 agentKind 前，
+  // 也不能让当前运行模型覆盖这份 intent。
+  const modelSheetUsesIntent = Boolean(
+    agentSwitchIntent?.targetAgentKind
+      && (agentSwitchIntent.targetAgentKind === modelSheetAgentKind || modelSheetOpen),
+  );
+  const modelSheetIntent = modelSheetUsesIntent ? agentSwitchIntent : null;
   const modelSheetCapabilities = modelSheetAgentKind === sessionAgentKind
     ? capabilities
     : alternateCapabilitiesAgentKind === modelSheetAgentKind
@@ -2514,16 +2520,16 @@ export default function SessionScreen() {
     : alternateCapabilitiesError;
   const modelSheetSelection = currentSession
     ? {
-        model: modelSheetUsesIntent ? agentSwitchIntent.model : (
+        model: modelSheetIntent ? modelSheetIntent.model : (
           modelSheetAgentKind === sessionAgentKind ? currentSession.model : ''
         ),
-        providerId: modelSheetUsesIntent ? agentSwitchIntent.providerId : (
+        providerId: modelSheetIntent ? modelSheetIntent.providerId : (
           modelSheetAgentKind === sessionAgentKind ? currentSession.providerId ?? null : null
         ),
-        effort: modelSheetUsesIntent ? agentSwitchIntent.effort ?? '' : (
+        effort: modelSheetIntent ? modelSheetIntent.effort ?? '' : (
           modelSheetAgentKind === sessionAgentKind ? currentSession.effort : ''
         ),
-        fastMode: modelSheetUsesIntent ? agentSwitchIntent.fastMode ?? false : (
+        fastMode: modelSheetIntent ? modelSheetIntent.fastMode ?? false : (
           modelSheetAgentKind === sessionAgentKind ? currentSession.fastMode : false
         ),
       }
