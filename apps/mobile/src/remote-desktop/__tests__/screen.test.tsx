@@ -303,6 +303,7 @@ const visibleInputHint = () =>
 const button = (key: string) =>
   host.querySelector<HTMLButtonElement>(`[aria-label="remoteDesktop.${key}"]`)!;
 beforeEach(() => {
+  window.localStorage.removeItem("cindy.mobile.remote-desktop.show-mouse-buttons.v1");
   (globalThis as any).IS_REACT_ACT_ENVIRONMENT = true;
   vi.clearAllMocks();
   fixture.platform = "ios";
@@ -1931,7 +1932,8 @@ describe("remote desktop controls", () => {
     await connect();
     act(() => button("operations").click());
     expect(button("rightClick")).toBeNull();
-    act(() => button("showMouseButtons").click());
+    expect(button("showMouseButtons").getAttribute("aria-checked")).toBe("false");
+    await act(async () => button("showMouseButtons").click());
     expect(button("showMouseButtons").getAttribute("aria-checked")).toBe(
       "true",
     );

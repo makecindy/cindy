@@ -3095,9 +3095,11 @@ describe('CodexAgent reference directories', () => {
       turn: { id: 'turn-1', status: 'completed' },
     });
 
-    await handle.setExtraDirs?.(['/shared-b']);
+    await handle.setExtraDirs?.(['/shared-b'], '/shared-b');
     await handle.send({ type: 'user', content: 'use the replacement reference' });
     const [, secondTurn] = turnCalls()[1] as [string, Record<string, unknown>];
+    expect(JSON.stringify(secondTurn.input)).toContain('libraryRoot');
+    expect(JSON.stringify(secondTurn.input)).toContain('/shared-b');
     expect(secondTurn.runtimeWorkspaceRoots).toEqual(['/repo', '/shared-b']);
     expect('permissions' in secondTurn).toBe(false);
     expect('sandboxPolicy' in secondTurn).toBe(false);
@@ -3118,9 +3120,11 @@ describe('CodexAgent reference directories', () => {
     });
 
     await handle.setPermissionMode?.('ask');
-    await handle.setExtraDirs?.([]);
+    await handle.setExtraDirs?.([], null);
     await handle.send({ type: 'user', content: 'continue without references' });
     const [, noReferencesTurn] = turnCalls()[3] as [string, Record<string, unknown>];
+    expect(JSON.stringify(noReferencesTurn.input)).toContain('No library root is currently authorized');
+    expect(JSON.stringify(noReferencesTurn.input)).not.toContain('/shared-b');
     expect(noReferencesTurn.runtimeWorkspaceRoots).toEqual(['/repo']);
     expect('permissions' in noReferencesTurn).toBe(false);
     expect(noReferencesTurn.sandboxPolicy).toEqual({

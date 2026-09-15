@@ -254,7 +254,7 @@ describe('session runtime control wiring', () => {
     expect(registerSource).toContain('const persistOnly = !sess');
     expect(registerSource).toContain('await applyLibraryReadonlyExtraDir(sessionId, nextRoot)');
     expect(registerSource).toContain(
-      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId))',
+      'const storedExtraDirs = await readSessionExtraDirsFromDb(target.sessionId)',
     );
     const applyLibrary = handlerBody(
       registerSource,

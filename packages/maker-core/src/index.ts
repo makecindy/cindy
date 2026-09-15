@@ -126,3 +126,5 @@ export {
   type MakerContactsManagerDeps,
   type ContactsSqliteFactory,
 } from './contacts/manager.js';
+
+export { LIBRARY_READ_ROOT, parseLibraryAssetRef, resolveLibraryAssetPath } from './agents/shared/library-native-read.js';

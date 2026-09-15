@@ -746,16 +746,16 @@ describe('sendToSession ordering', () => {
     );
 
     expect(resumeBranch).toContain(
-      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId));',
+      'const storedExtraDirs = await readSessionExtraDirsFromDb(target.sessionId);',
     );
     expect(resumeBranch).toContain('permissionMode: permissionModeOrAsk(row.permissionMode),');
-    expect(resumeBranch).toContain('...(extraDirs.length > 0 ? { extraDirs } : {}),');
+    expect(resumeBranch).toContain('...directoryGrantsForRuntime(storedExtraDirs),');
     expectOrder(
       resumeBranch,
-      'const extraDirs = extraDirsForRuntime(await readSessionExtraDirsFromDb(target.sessionId));',
+      'const storedExtraDirs = await readSessionExtraDirsFromDb(target.sessionId);',
       'const opts = buildCreateOptsWithStderr({',
     );
-    expectOrder(resumeBranch, '...(extraDirs.length > 0 ? { extraDirs } : {}),', 'await bootstrapSession(opts);');
+    expectOrder(resumeBranch, '...directoryGrantsForRuntime(storedExtraDirs),', 'await bootstrapSession(opts);');
     expect(serviceDepsBlock).toContain('resumeWorkerSession: async (target) => {');
     expect(serviceDepsBlock).toContain('await resumeOrcaWorkerSessionIfMissing(target);');
     expect(switchFocusIpcBlock).toContain('const didResume = await resumeOrcaWorkerSessionIfMissing(target);');

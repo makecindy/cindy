@@ -1,3 +1,5 @@
+import { LIBRARY_READ_ROOT } from '@cindy/maker-core';
+import { directoryGrantsForRuntime, libraryExtraDirSlot } from '../extraDirsValidator';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -43,6 +45,28 @@ function createOpts(
 }
 
 describe('prepareDirectoryGrantsForBootstrap', () => {
+  it('preserves the library slot with ten user roots through bootstrap and narrowed persistence', async () => {
+    const { root, workspace, shared } = makeGrantTree();
+    const users = Array.from({ length: 10 }, (_, i) => {
+      const dir = path.join(root, `user-${i}`);
+      mkdirSync(dir);
+      return dir;
+    });
+    const slots = [...users, libraryExtraDirSlot(shared)];
+    const opts = { ...createOpts(workspace, [], []), ...directoryGrantsForRuntime(slots) };
+    const persistExistingSession = vi.fn(async () => {});
+    await prepareDirectoryGrantsForBootstrap(opts, {
+      readPersistedWritableDirs: async () => [shared], persistExistingSession,
+    });
+    expect(opts.extraDirs).toEqual([...users, shared]);
+    expect(opts[LIBRARY_READ_ROOT]).toBe(shared);
+    expect(opts.writableDirs).toEqual([]);
+    expect(persistExistingSession).toHaveBeenCalledWith('session-1', { extraDirs: slots, writableDirs: [] });
+    const wire = JSON.parse(JSON.stringify(directoryGrantsForRuntime(slots)));
+    expect(wire[LIBRARY_READ_ROOT]).toBeUndefined();
+    expect(directoryGrantsForRuntime(users)[LIBRARY_READ_ROOT]).toBeNull();
+  });
+
   it.each(['readonly', 'writable'])('does not grant writes when %s canonicalization times out during fallback', async (failed) => {
     const { workspace, specs, output } = makeGrantTree();
     const opts = createOpts(workspace, [specs], [output]);

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 
+import { transferableAbortController } from 'node:util';
+
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -13,7 +15,19 @@ beforeEach(() => vi.stubGlobal('AbortController', NativeAbortController));
 afterEach(() => vi.unstubAllGlobals());
 
 const guard = vi.hoisted(() => vi.fn(async () => true));
-beforeEach(() => guard.mockReset().mockResolvedValue(true));
+const nativeAbortController = transferableAbortController();
+beforeEach(() => {
+  guard.mockReset().mockResolvedValue(true);
+  // React Router uses Node Request; its signal must come from the same realm.
+  vi.stubGlobal('AbortController', nativeAbortController.constructor);
+  vi.stubGlobal('AbortSignal', nativeAbortController.signal.constructor);
+  const controller = new AbortController();
+  const request = new Request('https://example.invalid', { signal: controller.signal });
+  expect(request.signal.aborted).toBe(false);
+  controller.abort('realm-probe');
+  expect(request.signal.aborted).toBe(true);
+  expect(request.signal.reason).toBe('realm-probe');
+});
 
 vi.mock('../botPronounContext', () => ({
   useBotTranslation: () => ({ t: (key: string) => key }),
@@ -63,7 +77,13 @@ function LocationProbe() {
   return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  try {
+    cleanup();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
 
 describe('BotSettingsDrawer', () => {
   it.each(['query', 'sidebar', 'back'])(

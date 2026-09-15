@@ -178,7 +178,7 @@ describe('Claude extraDirs mid-session rebuild', () => {
     });
 
     const libraryRoot = '/Users/example/libraries/xd-mivo';
-    await handle.setExtraDirs?.([libraryRoot]);
+    await handle.setExtraDirs?.([libraryRoot], libraryRoot);
 
     const secondQuery = createFakeQuery();
     sdkMock.query.mockReturnValue(secondQuery);
@@ -194,11 +194,18 @@ describe('Claude extraDirs mid-session rebuild', () => {
     expect(rebuildArgs.options.resumeSessionAt).toBeUndefined();
     expect(rebuildArgs.options).not.toHaveProperty('fresh');
     expect(firstQuery.close).toHaveBeenCalled();
+    const wire = sdkMock.query.mock.calls[1][0].prompt as AsyncIterable<{ message: { content: unknown } }>;
+    const next = await wire[Symbol.asyncIterator]().next();
+    expect(JSON.stringify(next.value.message.content)).toContain('libraryRoot');
+    expect(JSON.stringify(next.value.message.content)).toContain(libraryRoot);
+
 
     const source = await fs.readFile(new URL('../index.ts', import.meta.url), 'utf8');
     expect(source).toContain('pendingRewindTo = sdkSessionId');
     expect(source).toContain('directoryGrantRebuild ? {} : { resumeSessionAt: resumeAt }');
     expect(source).toContain('extraDirsCopyFallbackEnabled = false');
+    expect(source).toContain('下一 turn 生效,不用 fresh:true');
+    expect(source).not.toContain('每 turn 读最新值传给 SDK options.additionalDirectories — 即时生效');
 
     await handle.close();
   });
