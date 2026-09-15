@@ -1663,6 +1663,39 @@ describe('pi translator', () => {
     expect(done2!.data).toMatchObject({ silentStop: true });
   });
 
+  it.each([
+    ['empty', []],
+    ['thinking-only', [{ type: 'thinking', thinking: 'Considering the result' }]],
+  ])('does not let earlier progress hide a final %s response', (_name, content) => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const { queue, events } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'toolUse',
+      content: [{ type: 'text', text: 'I will inspect the files.' }, { type: 'toolCall', id: 't1', name: 'read', arguments: {} }],
+      usage: { input: 10, output: 2 },
+    } }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_start', toolCallId: 't1', toolName: 'read', args: {} }), queue, ctx);
+    translatePiEvent(ev({ type: 'tool_execution_end', toolCallId: 't1', toolName: 'read', result: { content: [{ type: 'text', text: 'file contents' }] }, isError: false }), queue, ctx);
+    translatePiEvent(ev({ type: 'message_end', message: {
+      role: 'assistant', stopReason: 'stop', content, usage: { input: 20, output: 0 },
+    } }), queue, ctx);
+    // Native agent_end alone must not terminate a run that may still recover.
+    translatePiEvent(ev({ type: 'agent_end' }), queue, ctx);
+    expect(events.filter((event) => event.type === 'done')).toHaveLength(0);
+    translatePiEvent(ev({ type: 'agent_settled' }), queue, ctx);
+    expect(events.find((event) => event.type === 'done')?.data).toMatchObject({
+      result: '', status: 'completed', silentStop: true,
+      usage: { inputTokens: 30, outputTokens: 2 },
+    });
+    // Preserve the already-delivered progress and tool events; only the terminal latch changes.
+    expect(events.filter((event) => event.type === 'text').some((event) =>
+      (event.data as { text?: string }).text === 'I will inspect the files.')).toBe(true);
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    expect(events.filter((event) => event.type === 'error')).toHaveLength(0);
+    disposePiTranslateContext(ctx);
+  });
+
   it('resets turn usage counters on the next agent_start', () => {
     const ctx = createPiTranslateContext(noopLogger);
     const { queue } = makeQueue();
