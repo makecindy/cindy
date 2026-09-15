@@ -247,9 +247,10 @@ describe('ModelPriceOverrideDialog', () => {
         onOpenChange={onOpenChangeA}
       />,
     );
-    const save = await waitFor(() =>
-      first.getByRole('button', { name: 'settings.providers.models.priceOverride.save' }),
-    );
+    const save = first.getByRole('button', {
+      name: 'settings.providers.models.priceOverride.save',
+    });
+    await waitFor(() => expect(save.hasAttribute('disabled')).toBe(false));
     fireEvent.click(save);
     await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledOnce());
 
@@ -293,9 +294,10 @@ describe('ModelPriceOverrideDialog', () => {
         onOpenChange={onOpenChange}
       />,
     );
-    const save = await waitFor(() =>
-      getByRole('button', { name: 'settings.providers.models.priceOverride.save' }),
-    );
+    const save = getByRole('button', {
+      name: 'settings.providers.models.priceOverride.save',
+    });
+    await waitFor(() => expect(save.hasAttribute('disabled')).toBe(false));
     fireEvent.click(save);
     await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledOnce());
 
