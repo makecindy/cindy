@@ -3212,6 +3212,10 @@ export class PiAgent extends BaseAgent {
       runtimeDir,
       `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
     );
+    // Existence is the gate: unlike JSON, a concurrent permission write cannot
+    // expose a partially parsed text-only policy. Changed only at idle turn boundaries.
+    const toolsDisabledFile = `${permissionFile}.tools-disabled`;
+    let activeToolsDisabled = false;
     // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
     // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
     // 本地 provider 不一起传还会让同名模型落到错误 endpoint(codex P2,pi-harness §3 要求
@@ -3229,6 +3233,7 @@ export class PiAgent extends BaseAgent {
       if (runtimeFilesCleaned) return;
       runtimeFilesCleaned = true;
       void rmPath(permissionFile);
+      void rmPath(toolsDisabledFile);
       void rmPath(subagentRuntimeFile);
     };
     // 权限档写入串行化 + 代际跳过。并发/连续切档(本地与远程控制端同时切,或用户快速连点)时,
@@ -6476,6 +6481,9 @@ export class PiAgent extends BaseAgent {
       // Full Access 下 fail-closed 拒绝带策略的 send(与 capability
       // turnPermissionPolicy.unsupportedPermissionModes 一致,也与 CC/Codex 同口径)。
       validateSendOptions(sendOpts: SendOptions) {
+        if (sendOpts.toolsDisabled && remote) {
+          throw new Error('Host text-only Pi turns require a local runtime, not a shared remote daemon.');
+        }
         if (sendOpts.turnPermissionPolicy && permissionMode === 'bypassPermissions') {
           throw new TurnPermissionPolicyUnsupportedError('pi', permissionMode);
         }
@@ -6495,6 +6503,16 @@ export class PiAgent extends BaseAgent {
         let promptRequestStarted = false;
         let reviewIntentUpdated = false;
         try {
+          const nextToolsDisabled = sendOpts?.toolsDisabled === true;
+          if ((ctx.isStreaming || ctx.pendingHostTurnStartToken) && activeToolsDisabled !== nextToolsDisabled) {
+            throw new Error('Cannot change the tool policy while a Pi turn is active.');
+          }
+          if (activeToolsDisabled !== nextToolsDisabled) {
+            if (nextToolsDisabled) await writeFile(toolsDisabledFile, 'disabled\n');
+            else await rmPath(toolsDisabledFile, undefined, true);
+            activeToolsDisabled = nextToolsDisabled;
+          }
+          rejectIfCancelled(sendOpts, 'send');
           if (reviewMode) {
             await assertReviewMessageContentPaths(message.content, opts.workingDir, reviewReadGrants);
           }

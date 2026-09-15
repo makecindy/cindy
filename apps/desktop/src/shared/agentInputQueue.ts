@@ -220,6 +220,8 @@ export interface RecoveryCheckpoint {
 export interface AgentInputQueuedMessage {
   /** Host-captured authored text before plugin/reference decoration; omitted from wire projections. */
   autoReviewUserText?: string;
+  /** Host-owned text-only input; retained by queue persistence and retry. */
+  toolsDisabled?: boolean;
   clientId: string;
   text: string;
   /**

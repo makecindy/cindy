@@ -71,6 +71,18 @@ describe('AgentInputCoordinator Orca priority queue transactions', () => {
     expect(h.sendToAgent.mock.calls[0]?.[1]).toMatchObject({ content: 'first' });
   });
 
+  it('preserves a text-only restriction across persisted queue restore and dispatch', async () => {
+    const h = createHarness();
+    h.setLoadQueueSnapshot(async () => [makeItem('welcome', 'Say hello.', { toolsDisabled: true })]);
+    await h.coordinator.ensureQueueRestored('welcome-session');
+    h.coordinator.resume('welcome-session');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      'welcome-session', expect.anything(), expect.anything(),
+      expect.objectContaining({ toolsDisabled: true }),
+    );
+  });
+
   it('forwards main-stamped device-link provenance from enqueue to send', async () => {
     const h = createHarness();
     const sid = 'device-link-lead';

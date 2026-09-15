@@ -47,6 +47,7 @@ type WelcomeDispatch = (input: {
   message: string;
   persistedContent: string;
   clientId: string;
+  toolsDisabled: true;
 }) => Promise<{ ok: boolean }>;
 let welcomeDispatch: WelcomeDispatch | undefined;
 export function setBotInvitationWelcomeDispatch(dispatch: WelcomeDispatch): void {
@@ -281,6 +282,7 @@ export function queueBotInvitation(
       const accepted = await welcomeDispatch({
         targetSessionId: canonical.canonicalSessionId,
         clientId: `bot-welcome:${botId}`,
+        toolsDisabled: true,
         message,
         persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${message}`,
       });

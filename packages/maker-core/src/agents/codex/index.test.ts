@@ -3130,6 +3130,41 @@ describe('CodexAgent reference directories', () => {
     await handle.close();
   });
 
+  it.each(['ask', 'auto', 'bypassPermissions'] as const)(
+    'installs a native deny-all hook for a %s text-only turn and cold-restores ordinary tools',
+    async (permissionMode) => {
+      const agent = new CodexAgent(createDeps());
+      let sequence = 0;
+      const host = installFakeHost(agent, (method, params) => {
+        if (method === Method.ThreadStart) return { thread: { id: `text-only-${++sequence}` }, model: 'gpt-5.4', modelProvider: 'openai' };
+        if (method === Method.ThreadResume) return { thread: { id: (params as { threadId: string }).threadId }, model: 'gpt-5.4', modelProvider: 'openai' };
+        if (method === Method.TurnStart) return { turn: { id: 'text-turn' } };
+        return undefined;
+      }, { userAgent: 'codex/0.145.0' });
+      const handle = await agent.startSession({ sessionId: 'text-only', model: 'gpt-5.4', workingDir: '/repo', permissionMode });
+      try {
+        await handle.send({ type: 'user', content: 'Say hello.' }, { toolsDisabled: true, throwOnStartFailure: true });
+        const starts = host.request.mock.calls.filter(([method]) => method === Method.ThreadStart);
+        expect(starts).toHaveLength(2);
+        const restricted = starts[1]![1] as { config: Record<string, unknown> };
+        expect(restricted.config).toMatchObject({
+          web_search: 'disabled', 'features.hooks': true,
+          hooks: { PreToolUse: [{ hooks: [{ type: 'command', command: 'echo text-only-turn >&2; exit 2' }] }] },
+        });
+        await expect(handle.send({ type: 'user', content: 'Premature next turn.' })).rejects.toThrow('tool policy');
+        const handlers = host.subscribeThread.mock.calls.at(-1)![1];
+        const restrictedSubscription = host.subscribeThread.mock.results.at(-1)!.value;
+        handlers.turnCompleted?.({ threadId: handle.id, turn: { id: 'text-turn', status: 'completed' } } as never);
+        await handle.send({ type: 'user', content: 'Now do normal work.' }, { throwOnStartFailure: true });
+        expect(restrictedSubscription.release).toHaveBeenCalledOnce();
+        const resume = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)![1] as { config: Record<string, unknown> };
+        expect(resume.config.hooks).toBeUndefined();
+        expect(resume.config['features.hooks']).toBeUndefined();
+        expect(resume.config.web_search).toBeUndefined();
+      } finally { await handle.close(); }
+    },
+  );
+
   it('replaces an unused thread instead of resuming before its first rollout exists', async () => {
     const agent = new CodexAgent(createDeps());
     let threadStartSeq = 0;
@@ -20285,7 +20320,7 @@ describe('CodexAgent yield continuation', () => {
     await handle.close();
   });
 
-  it('inherits the origin turnPermissionPolicy on the yield continuation turn', async () => {
+  it.each([false, true])('inherits the origin policies on yield continuation (text-only=%s)', async (toolsDisabled) => {
     const agent = new CodexAgent(createDeps());
     let turnSeq = 0;
     const host = installFakeHost(agent, (method) => {
@@ -20294,7 +20329,7 @@ describe('CodexAgent yield continuation', () => {
         return { turn: { id: `turn-${turnSeq}` } };
       }
       return undefined;
-    });
+    }, { userAgent: 'codex/0.145.0' });
     const handle = await agent.startSession({
       sessionId: 'session-yield-permission-policy',
       model: 'gpt-5.4',
@@ -20311,7 +20346,10 @@ describe('CodexAgent yield continuation', () => {
       confirmationSurface: 'desktop',
       forceConfirmToolCall: (_toolName, input) => JSON.stringify(input).includes('rm -rf'),
     };
-    await handle.send({ type: 'user', content: 'run typecheck' }, { turnPermissionPolicy: policy });
+    // The fake notification exercises continuation policy even though a real
+    // text-only tool would have been denied before producing this output.
+    await handle.send({ type: 'user', content: 'run typecheck' }, { turnPermissionPolicy: policy, toolsDisabled });
+    const resumesBeforeContinuation = host.request.mock.calls.filter(([method]) => method === Method.ThreadResume).length;
     handlers.itemCompleted({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
@@ -20336,6 +20374,7 @@ describe('CodexAgent yield continuation', () => {
       sandboxPolicy: { type: 'readOnly' },
     });
     expect(continuationParams).not.toHaveProperty('approvalsReviewer');
+    expect(host.request.mock.calls.filter(([method]) => method === Method.ThreadResume)).toHaveLength(resumesBeforeContinuation);
     expect(events.some((event) => event.type === 'done' && event.turnContinuationId != null)).toBe(true);
     await handle.close();
   });

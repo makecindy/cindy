@@ -28,6 +28,39 @@ import {
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
 
+it('blocks every tool in text-only turns before permission shortcuts and restores normal turns', async () => {
+  const root = mkdtempSync(path.join(tmpdir(), 'cindy-text-only-'));
+  const permissionFile = path.join(root, 'permission.json');
+  const source = CINDY_BRIDGE_EXTENSION_SOURCE;
+  const helperStart = source.indexOf('function toolsDisabledForTurn');
+  const helperEnd = source.indexOf('function currentPermissionState', helperStart);
+  const handlerStart = source.indexOf("  pi.on('tool_call'");
+  const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
+  let handler!: (event: { toolName: string }, ctx: object) => Promise<unknown>;
+  let permissionReads = 0;
+  const compiled = ts.transpileModule(
+    source.slice(helperStart, helperEnd) + source.slice(handlerStart, handlerEnd),
+    { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
+  ).outputText;
+  runInNewContext(compiled, {
+    process: { env: { CINDY_PI_PERMISSION_FILE: permissionFile } }, statSync,
+    currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
+    pi: { on: (_event: string, callback: typeof handler) => { handler = callback; } },
+  });
+  try {
+    writeFileSync(permissionFile + '.tools-disabled', '');
+    for (const toolName of ['read', 'bash', 'write', 'ask_user_question', 'cindy_mcp_call_tool', 'future_tool']) {
+      expect(await handler({ toolName }, {})).toMatchObject({ block: true });
+    }
+    expect(permissionReads).toBe(0);
+    unlinkSync(permissionFile + '.tools-disabled');
+    expect(await handler({ toolName: 'ask_user_question' }, {})).toBeUndefined();
+    expect(permissionReads).toBe(1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 const canLinkFile = (() => {
   const root = mkdtempSync(path.join(tmpdir(), 'cindy-bridge-file-link-probe-'));
   try {

@@ -221,7 +221,7 @@ describe('companion invitation with SQLite and real skill files', () => {
       }
       await vi.advanceTimersByTimeAsync(0);
       expect(h.welcome).toHaveBeenCalledOnce();
-      expect(h.welcome).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'bot-welcome:bot-3' }));
+      expect(h.welcome).toHaveBeenCalledWith(expect.objectContaining({ clientId: 'bot-welcome:bot-3', toolsDisabled: true }));
       sqlite.prepare("UPDATE bot_profiles SET status='archived' WHERE id != 'bot-3'").run();
       await vi.advanceTimersByTimeAsync(5000);
       expect(h.welcome).toHaveBeenCalledOnce();

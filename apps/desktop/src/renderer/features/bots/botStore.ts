@@ -1,5 +1,6 @@
 import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue';
 import { readCachedBotWelcomeContext } from './botWelcomeContext';
+import { getEffectiveLocale } from '@/lib/localePreference';
 import { isModelEnabled, getModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation';
 import { useSyncExternalStore } from 'react';
@@ -755,7 +756,7 @@ async function hydrateFromDatabase(): Promise<void> {
       }
     }
     if (!isCurrent()) return;
-    const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap(), welcomeContext: readCachedBotWelcomeContext() });
+    const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap(), welcomeContext: readCachedBotWelcomeContext(), locale: getEffectiveLocale() });
     if (!isCurrent()) return;
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     profiles = dbProfiles;
@@ -909,6 +910,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
   const owner = getDataOwnerGeneration();
   // Capture before async model preparation or creation broadcasts invalidate the caches.
   const welcomeContext = input.prepareInvitation || input.welcomeMessage ? readCachedBotWelcomeContext() : undefined;
+  const locale = input.prepareInvitation || input.welcomeMessage ? getEffectiveLocale() : undefined;
   const harness = normalizeBotHarness(input.capabilities?.harness ?? NEW_BOT_DEFAULT_HARNESS);
   const needsPiDefault = harness === 'pi' && input.capabilities?.model === undefined;
   if (needsPiDefault && getCachedProvidersSnapshot() === null && typeof window !== 'undefined') {
@@ -953,6 +955,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         ...(input.creationDraftToken ? { creationDraftToken: input.creationDraftToken } : {}),
         ...(input.prepareInvitation ? { prepareInvitation: true } : {}),
         ...(welcomeContext ? { welcomeContext } : {}),
+        ...(locale ? { locale } : {}),
         ...(input.welcomeMessage ? { welcomeMessage: input.welcomeMessage } : {}),
       }),
     );

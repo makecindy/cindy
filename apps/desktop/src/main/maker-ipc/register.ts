@@ -9218,6 +9218,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     targetSessionId: string;
     dispatcherSessionId?: string;
     authorizationGuard?: BotAuthorizationInputGuard;
+    toolsDisabled?: boolean;
     message: string;
     persistedContent?: string;
     clientId?: string;
@@ -9261,7 +9262,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
     }
-    if (params.files?.length) {
+    if (params.files?.length || params.toolsDisabled === true) {
       const [meta, dbRow] = await Promise.all([
         maker.getSessionMeta(params.targetSessionId).catch(() => null),
         getSessionRowSnapshot(params.targetSessionId),
@@ -9289,6 +9290,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         clientId,
         meta,
         files: params.files,
+        ...(params.toolsDisabled === true ? { toolsDisabled: true } : {}),
       });
       inputCoordinator.enqueue(params.targetSessionId, queued, {
         resumeRestorePausedQueue: true,
@@ -9937,6 +9939,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
     files?: AgentInputQueuedMessage['files'];
     origin?: AgentInputQueuedMessage['origin'];
+    toolsDisabled?: boolean;
   }): Promise<AgentInputQueuedMessage> {
     const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta, params.inheritTargetPlanMode);
     const imageAttachments: NonNullable<AgentInputQueuedMessage['chatMessage']['images']> = [];
@@ -9970,6 +9973,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return {
       clientId: params.clientId,
       text: params.message,
+      ...(params.toolsDisabled === true ? { toolsDisabled: true } : {}),
       persistedContent,
       model: createOpts.model,
       effort: createOpts.effort ?? '',

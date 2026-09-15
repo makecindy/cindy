@@ -73,6 +73,7 @@ describe('maker session SEND IPC handler', () => {
 
     await harness.invoke(MAKER_INVOKE.SEND, 'session-1', 'pi install npm:context-mode', undefined, {
       messageUuid: 'msg-1',
+      toolsDisabled: true,
       turnPermissionPolicy: {
         origin: { kind: 'im', channel: 'telegram' },
         confirmationSurface: 'channel',

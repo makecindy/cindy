@@ -90,6 +90,7 @@ import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botI
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
 import { getResolvedMainLocale } from '../../i18n.js';
+import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../shared/locale.js';
 import { normalizeBotWelcomeContext, type BotWelcomeContext } from '../../../shared/botWelcomeContext';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 
@@ -763,11 +764,18 @@ async function readBotRemoteResourceSource(
   };
 }
 
+function readBotInvitationLocale(value: unknown): SupportedLocale {
+  return typeof value === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(value)
+    ? value as SupportedLocale
+    : getResolvedMainLocale();
+}
+
 /** Desktop, device-link and resource discovery share the same owner-bound receipt. */
 async function provisionDefaultBotForList(
   client: ReturnType<typeof getDbClient>,
   owner: ReturnType<typeof captureBotOperationOwner>,
   welcomeContext?: BotWelcomeContext,
+  locale?: SupportedLocale,
 ): Promise<void> {
   try {
     await provisionDefaultBot({
@@ -780,7 +788,7 @@ async function provisionDefaultBotForList(
       },
       create: () => createBotProfile({ id: 'cindy-default', name: 'Cindy', templateId: 'cindy',
         avatar: BOT_TEMPLATE_PRESET_AVATARS.cindy, identitySource: CINDY_DEFAULT_IDENTITY,
-        prepareInvitation: true, welcomeContext }),
+        prepareInvitation: true, welcomeContext, locale }),
     });
   } catch (error) {
     log.warn('initial companion deferred', { error: error instanceof Error ? error.name : typeof error });
@@ -973,7 +981,7 @@ export async function createBotProfile(raw: unknown) {
   delete persistedCapabilities.templateId;
   if (templateId) persistedCapabilities.templateId = templateId;
   if (prepareInvitation) persistedCapabilities.invitation = {
-    id: randomUUID(), stage: 'skills', locale: getResolvedMainLocale(),
+    id: randomUUID(), stage: 'skills', locale: readBotInvitationLocale(body.locale),
     avatarRequested: body.generateAvatar === true && !avatarImage,
     welcomeContext: normalizeBotWelcomeContext(body.welcomeContext),
     ...(draftEntry ? { draft: { ...draftEntry.draft, background: `${draftEntry.draft.background}\n\nCurrent profile (use this name and introduction):\n${name}\n${description}` } } : {}),
@@ -1273,7 +1281,9 @@ export function registerBotIpc(): void {
     const owner = captureBotOperationOwner();
     const welcomeContext = !remote && raw && typeof raw === 'object'
       ? normalizeBotWelcomeContext((raw as Record<string, unknown>).welcomeContext) : undefined;
-    await provisionDefaultBotForList(client, owner, welcomeContext);
+    const locale = !remote && raw && typeof raw === 'object'
+      ? readBotInvitationLocale((raw as Record<string, unknown>).locale) : undefined;
+    await provisionDefaultBotForList(client, owner, welcomeContext, locale);
     const db = client.drizzle;
     // Unread accounting is opt-in: the read position lives in the renderer, so
     // a caller that has none (device-link, first boot) simply gets zeros.

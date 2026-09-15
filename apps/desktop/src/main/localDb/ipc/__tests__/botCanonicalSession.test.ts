@@ -1,5 +1,6 @@
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../../maker-host/newMakerDefaultsCache';
 import { setModelVisibilityMirror } from '../../../maker-host/model-visibility-mirror';
+import { setMainLocale } from '../../../i18n';
 import Database from 'better-sqlite3';
 import { AgentInputCoordinator } from '../../../maker-ipc/agent-input-coordinator';
 import { createSessionQueueControlService } from '../../../maker-ipc/sessionQueueControl';
@@ -658,6 +659,37 @@ describe('Bot canonical Session lifecycle', () => {
     expect(row.identity_source).not.toContain('Puzzle Studio');
     expect(created.invitation.welcomeContext).toBeUndefined();
   });
+
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])(
+    'persists explicit %s for default provisioning before Main locale synchronization',
+    async (locale) => {
+      setMainLocale('en');
+      vi.mocked(provisionDefaultBot).mockImplementationOnce(async input => { await input.create(); });
+      await invoke('local-db:bots:list', { locale });
+      const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('cindy-default') as { capabilities_json: string };
+      expect(JSON.parse(row.capabilities_json).invitation.locale).toBe(locale);
+    },
+  );
+
+  it.each(['zh-CN', 'zh-TW', 'en', 'ja', 'ko'])(
+    'persists explicit %s for manual creation before Main locale synchronization',
+    async (locale) => {
+      setMainLocale('en');
+      await invoke('local-db:bots:create', { id: 'locale-bot', name: 'Locale test', prepareInvitation: true, locale });
+      const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('locale-bot') as { capabilities_json: string };
+      expect(JSON.parse(row.capabilities_json).invitation.locale).toBe(locale);
+    },
+  );
+
+  it.each([undefined, 'unsupported', 'system', { locale: 'ja' }])(
+    'keeps legacy or invalid locale requests on the Main fallback: %j',
+    async (locale) => {
+      setMainLocale('en');
+      await invoke('local-db:bots:create', { id: 'locale-bot', name: 'Locale test', prepareInvitation: true, locale });
+      const row = h.sqlite!.prepare('SELECT capabilities_json FROM bot_profile_versions WHERE bot_id = ? AND version = 1').get('locale-bot') as { capabilities_json: string };
+      expect(JSON.parse(row.capabilities_json).invitation.locale).toBe('en');
+    },
+  );
 
   it('passes the cached background into first-time default Cindy provisioning', async () => {
     vi.mocked(provisionDefaultBot).mockImplementationOnce(async input => { await input.create(); });

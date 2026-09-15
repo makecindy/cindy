@@ -211,6 +211,7 @@ export function revokeTrustedDesktopQueuedOrigin(item: AgentInputQueuedMessage):
 }
 
 type MakerSendOptions = {
+  toolsDisabled?: boolean;
   readonly [AUTO_REVIEW_SOURCE_CONTENT]?: UserMessage['content'];
   /** Main-only continuation: a restored intent is not an authored user turn. */
   readonly [AUTO_REVIEW_USER_INTENT]?: string;
@@ -1323,6 +1324,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           messageUuid: so.messageUuid,
           userName: so.userName,
           throwOnStartFailure: so.throwOnStartFailure,
+          ...(so.toolsDisabled === true ? { toolsDisabled: true } : {}),
           turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
           ...(so.onVendorTurnReserved ? { onTurnReserved: so.onVendorTurnReserved } : {}),
