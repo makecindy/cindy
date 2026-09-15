@@ -601,6 +601,8 @@ function removalNoticeKey(owner: ActiveAppSession): string {
  */
 export class PluginMarketService {
   private readonly mutations = new Map<string, Promise<unknown>>();
+  /** Process-local retry budget; source incarnation and owner generation cannot share it. */
+  private readonly customGitRefreshRetries = new Map<string, { failures: number; retryAfter: number }>();
   private ledgerMutation: Promise<void> = Promise.resolve();
   private readonly pendingRemovalNotices = new Map<string, PluginRemovalUserNotice>();
   /**
@@ -1279,7 +1281,11 @@ export class PluginMarketService {
     return this.runForOwner((owner) =>
       this.withMutation(SOURCE_MUTATION_KEY, async () => {
         requireSameMarketOwner(owner);
-        return this.sourceManagerForOwner(owner).removeSource(name);
+        const store = this.sourceStore.bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json'));
+        const config = store.get(name);
+        const result = await this.sourceManagerForOwner(owner).removeSource(name);
+        if (config) this.customGitRefreshRetries.delete(this.customGitRefreshRetryKey(owner, config));
+        return result;
       }),
     );
   }
@@ -1288,9 +1294,71 @@ export class PluginMarketService {
     return this.runForOwner((owner) =>
       this.withMutation(SOURCE_MUTATION_KEY, async () => {
         requireSameMarketOwner(owner);
-        return this.sourceManagerForOwner(owner).refreshSource(name);
+        const store = this.sourceStore.bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json'));
+        const config = store.get(name);
+        const result = await this.sourceManagerForOwner(owner).refreshSource(name);
+        // A successful explicit retry starts a fresh normal refresh interval.
+        if (config) this.customGitRefreshRetries.delete(this.customGitRefreshRetryKey(owner, config));
+        return result;
       }),
     );
+  }
+
+  private customGitRefreshRetryKey(owner: ActiveAppSession, config: MarketSourceConfig): string {
+    return JSON.stringify([owner.mode, owner.dataOwnerId, owner.generation,
+      config.name, config.addedAt, marketSourceKey(config.source)]);
+  }
+
+  /** Background-only network refresh; ordinary snapshots keep reading the existing cache. */
+  async refreshCustomGitSourcesForBackground(
+    options: PluginMarketSnapshotOptions = {},
+  ): Promise<PluginMarketSnapshot | null> {
+    const owner = captureMarketOwner();
+    const store = this.sourceStore.bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json'));
+    const configs = store.list().filter(config => config.source.type === 'git');
+    // Retain only this owner's current source incarnations. Repeated switches or
+    // replacements cannot accumulate unreachable entries in this process singleton.
+    const liveRetryKeys = new Set(configs.map(config => this.customGitRefreshRetryKey(owner, config)));
+    for (const key of this.customGitRefreshRetries.keys()) {
+      if (!liveRetryKeys.has(key)) this.customGitRefreshRetries.delete(key);
+    }
+    const refreshIntervalMs = 30 * 60 * 1000;
+    let refreshed = false;
+    for (const config of configs) {
+      requireSameMarketOwner(owner);
+      const sourceKey = marketSourceKey(config.source);
+      const retryKey = this.customGitRefreshRetryKey(owner, config);
+      await this.withMutation(SOURCE_MUTATION_KEY, async () => {
+        requireSameMarketOwner(owner);
+        // A manual refresh/removal may have won while we waited for the source lock.
+        const current = store.get(config.name);
+        if (!current || current.addedAt !== config.addedAt ||
+            marketSourceKey(current.source) !== sourceKey) return;
+        const now = Date.now();
+        const syncedAt = Date.parse(current.lastSyncedAt ?? '');
+        if (Number.isFinite(syncedAt) && now - syncedAt < refreshIntervalMs) return;
+        const retry = this.customGitRefreshRetries.get(retryKey);
+        if (retry && now < retry.retryAfter) return;
+        try {
+          await this.sourceManagerForOwner(owner).refreshSource(config.name);
+          requireSameMarketOwner(owner);
+          this.customGitRefreshRetries.delete(retryKey);
+          refreshed = true;
+        } catch (error) {
+          requireSameMarketOwner(owner);
+          const failures = (retry?.failures ?? 0) + 1;
+          const retryAfter = Date.now() + Math.min(refreshIntervalMs * 2 ** Math.min(failures - 1, 4), 6 * 60 * 60 * 1000);
+          this.customGitRefreshRetries.set(retryKey, { failures, retryAfter });
+          // Do not log Git URLs, stderr or credentials. The old cache remains usable.
+          log.warn('custom marketplace background refresh failed', {
+            code: isIpcError(error) ? error.code : 'INTERNAL', failures, retryAfter,
+          });
+        }
+      });
+    }
+    requireSameMarketOwner(owner);
+    // Reconcile the newly discovered versions through the existing install policy.
+    return refreshed ? this.snapshot(options) : null;
   }
 
   async gitPreflight(): Promise<GitPreflightResult> {

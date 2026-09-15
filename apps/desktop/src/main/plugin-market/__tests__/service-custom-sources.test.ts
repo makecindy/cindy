@@ -347,6 +347,159 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
 }
 
 describe('PluginMarketService 自定义市场聚合', () => {
+  function gitSource(h: ReturnType<typeof harness>, name: string, addedAt = '2026-07-30T00:00:00.000Z') {
+    h.sourceStore.add({ name, addedAt, lastSyncedAt: null, lastRevision: null,
+      source: { type: 'git', url: `https://example.invalid/${name}.git`, sparsePaths: [] } });
+  }
+
+  it('refreshes due Git sources once across overlapping background syncs, then reconciles new contents', async () => {
+    const h = harness([], []);
+    gitSource(h, 'team');
+    h.sourceStore.add({ name: 'local', addedAt: '2026-07-30T00:00:00.000Z',
+      lastSyncedAt: null, lastRevision: null, source: { type: 'local', path: '/unused-fixture' } });
+    const snapshot = vi.spyOn(h.service, 'snapshot').mockResolvedValue({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    const refresh = vi.spyOn(MarketSourceManager.prototype, 'refreshSource').mockImplementation(async name => {
+      h.sourceStore.update(name, { lastSyncedAt: new Date().toISOString(), lastRevision: 'new-revision' });
+      return {} as never;
+    });
+    try {
+      await Promise.all([h.service.refreshCustomGitSourcesForBackground(), h.service.refreshCustomGitSourcesForBackground()]);
+      expect(refresh).toHaveBeenCalledExactlyOnceWith('team');
+      expect(snapshot).toHaveBeenCalledOnce();
+      expect(snapshot.mock.invocationCallOrder[0]).toBeGreaterThan(refresh.mock.invocationCallOrder[0]!);
+      expect(h.sourceStore.get('team')?.lastRevision).toBe('new-revision');
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally { refresh.mockRestore(); snapshot.mockRestore(); }
+  });
+
+  it('backs off a failed source while refreshing healthy sources and keeps manual retries available', async () => {
+    const h = harness([], []);
+    gitSource(h, 'broken'); gitSource(h, 'healthy');
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const snapshot = vi.spyOn(h.service, 'snapshot').mockResolvedValue({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    const refresh = vi.spyOn(MarketSourceManager.prototype, 'refreshSource').mockImplementation(async name => {
+      if (name === 'broken') throw new Error('fixture network failure');
+      h.sourceStore.update(name, { lastSyncedAt: new Date(now).toISOString() });
+      return {} as never;
+    });
+    try {
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh.mock.calls.map(call => call[0])).toEqual(['broken', 'healthy']);
+      expect(h.sourceStore.get('broken')?.lastSyncedAt).toBeNull();
+      expect(snapshot).toHaveBeenCalledOnce();
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh).toHaveBeenCalledTimes(2);
+      await expect(h.service.refreshSource('broken')).rejects.toThrow('fixture network failure');
+      expect(refresh).toHaveBeenCalledTimes(3);
+      now += 30 * 60 * 1000;
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh.mock.calls.filter(call => call[0] === 'broken')).toHaveLength(3);
+      now += 30 * 60 * 1000;
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh.mock.calls.filter(call => call[0] === 'broken')).toHaveLength(3);
+      // Removing/re-adding is a new source incarnation, not the failed attempt.
+      gitSource(h, 'broken', new Date(now).toISOString());
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh.mock.calls.filter(call => call[0] === 'broken')).toHaveLength(4);
+    } finally { refresh.mockRestore(); snapshot.mockRestore(); clock.mockRestore(); }
+  });
+
+  it('resumes the normal interval after a successful manual retry clears a long backoff', async () => {
+    const h = harness([], []);
+    gitSource(h, 'team');
+    let now = Date.now();
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    const snapshot = vi.spyOn(h.service, 'snapshot').mockResolvedValue({ items: [], unavailableReason: null, customSourceNames: [], unavailableCustomSourceNames: [] });
+    const refresh = vi.spyOn(MarketSourceManager.prototype, 'refreshSource').mockRejectedValue(new Error('offline'));
+    try {
+      await h.service.refreshCustomGitSourcesForBackground();
+      now += 30 * 60 * 1000;
+      await h.service.refreshCustomGitSourcesForBackground(); // retry now waits 60 minutes
+      refresh.mockImplementation(async () => {
+        h.sourceStore.update('team', { lastSyncedAt: new Date(now).toISOString() });
+        return {} as never;
+      });
+      await h.service.refreshSource('team');
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh).toHaveBeenCalledTimes(3);
+      now += 30 * 60 * 1000;
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh).toHaveBeenCalledTimes(4);
+    } finally { refresh.mockRestore(); snapshot.mockRestore(); clock.mockRestore(); }
+  });
+
+  it('prunes retry entries across source replacement, owner generations and removal', async () => {
+    const h = harness([], []);
+    gitSource(h, 'team');
+    const retries = (h.service as unknown as { customGitRefreshRetries: Map<string, unknown> }).customGitRefreshRetries;
+    const refresh = vi.spyOn(MarketSourceManager.prototype, 'refreshSource').mockRejectedValue(new Error('offline'));
+    const remove = vi.spyOn(MarketSourceManager.prototype, 'removeSource').mockImplementation(async name => {
+      h.sourceStore.remove(name); return { ok: true };
+    });
+    try {
+      for (let generation = 1; generation <= 8; generation += 1) {
+        runtime.session = { ...runtime.session, generation };
+        gitSource(h, 'team', `2026-09-15T12:00:0${generation}.000Z`);
+        await h.service.refreshCustomGitSourcesForBackground();
+        expect(retries.size).toBe(1);
+      }
+      expect(refresh).toHaveBeenCalledTimes(8);
+      await h.service.removeSource('team');
+      expect(retries.size).toBe(0);
+      await h.service.refreshCustomGitSourcesForBackground();
+      expect(refresh).toHaveBeenCalledTimes(8);
+    } finally { refresh.mockRestore(); remove.mockRestore(); }
+  });
+
+  it('does not reconcile or start another source after the owner changes during refresh', async () => {
+    const h = harness([], []);
+    gitSource(h, 'first'); gitSource(h, 'second');
+    const snapshot = vi.spyOn(h.service, 'snapshot');
+    const refresh = vi.spyOn(MarketSourceManager.prototype, 'refreshSource').mockImplementation(async () => {
+      runtime.session = { mode: 'cloud', dataOwnerId: 'user-2', generation: 2 };
+      return {} as never;
+    });
+    try {
+      await expect(h.service.refreshCustomGitSourcesForBackground()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+      expect(refresh).toHaveBeenCalledExactlyOnceWith('first');
+      expect(snapshot).not.toHaveBeenCalled();
+    } finally { refresh.mockRestore(); snapshot.mockRestore(); }
+  });
+
+  it('does not refresh a removed/replaced source captured before waiting for the mutation lock', async () => {
+    const h = harness([], []);
+    gitSource(h, 'team');
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const refresh = vi.spyOn(MarketSourceManager.prototype, 'refreshSource').mockImplementation(async () => {
+      await blocked;
+      return {} as never;
+    });
+    try {
+      const manual = h.service.refreshSource('team');
+      await vi.waitFor(() => expect(refresh).toHaveBeenCalledOnce());
+      const background = h.service.refreshCustomGitSourcesForBackground();
+      h.sourceStore.remove('team');
+      gitSource(h, 'team', '2026-09-15T12:00:00.000Z');
+      release();
+      await manual;
+      expect(await background).toBeNull();
+      expect(refresh).toHaveBeenCalledOnce();
+    } finally { release(); refresh.mockRestore(); }
+  });
+
+  it('never starts Git refresh from ordinary or discovery-only snapshots', async () => {
+    const h = harness([], []);
+    const refresh = vi.spyOn(MarketSourceManager.prototype, 'refreshSource');
+    try {
+      await h.service.snapshot();
+      await h.service.snapshot({ discoveryOnly: true });
+      expect(refresh).not.toHaveBeenCalled();
+    } finally { refresh.mockRestore(); }
+  });
+
   it('appends custom market items after server items with source identity', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);
