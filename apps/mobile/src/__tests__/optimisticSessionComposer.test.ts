@@ -112,24 +112,13 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('setPresenceVersion((n) => n + 1);\n      const presence = updatePresenceAvailability(');
   });
 
-  it('blocks outbox dispatch until the session row can actually be sent with', () => {
-    const source = readSource(SCREEN);
-
-    expect(source).toContain('const outboxDispatchBlockedNow = () => {');
-    expect(source).toContain('if (outboxConnectionBlockedNow()) return true;');
-    // 「会话在被控端还不存在」走共用判据(见下方的入口收敛测试);派发还额外要求字段
-    // 权威(cacheSeeded 行被瘦身截断过)与创建管线已收口。
-    expect(source).toContain('if (isRemoteSessionMissing(row)) return true;');
-    expect(source).toContain('if (row?.cacheSeeded) return true;');
-    expect(source).toContain('return getNewSessionCreationTask(sessionId) !== null;');
-    // pump 循环每轮都看当下真相,blocked 时留住条目(不标失败)。
-    expect(source).toContain('if (outboxDispatchBlockedNow()) return;');
-    // 解禁那一帧重新 pump。
-    expect(source).toContain('const outboxDispatchBlocked = !currentSession');
-    expect(source).toContain('|| outboxConnectionDispatchBlocked;');
-    expect(source).toContain('if (outboxDispatchBlocked) return;\n    void pumpOutbox();');
-    // 即使 blocked boolean 恰好没变化，新的连接 epoch 也要重新唤醒一次。
-    expect(source).toContain('}, [connectionEpoch, outboxDispatchBlocked]);');
+  it('lets the app owner obtain authoritative parameters before dispatch, independently of the page', () => {
+    const bridge = readSource('src/session/MobileOutboxBridge.tsx');
+    expect(bridge).toContain('getNewSessionCreationTask(r.item.sessionId) === null');
+    expect(bridge).toContain('!isDurableOutboxCreationHeld(r.item.sessionId)');
+    expect(bridge).toContain('const session = await maker(r).getSession(r.item.sessionId)');
+    expect(bridge).toContain('if (!session?.workingDir)');
+    expect(bridge).toContain('}, [link.status, link.connectionEpoch])');
   });
 
   it('latches every connection recovery edge until authoritative sync succeeds', () => {
@@ -181,29 +170,26 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(syncCatch).not.toContain('? null : current');
   });
 
-  it('routes sends through the outbox while blocked and defers the workingDir check', () => {
+  it('routes ordinary online and offline messages through durable acceptance before clearing the composer', () => {
     const source = readSource(SCREEN);
-
-    expect(source).toContain('const dispatchBlockedAtSend = outboxDispatchBlockedNow();');
-    expect(source).toContain('sessionRefsAtSend.length > 0 || uploadsInFlight > 0');
-    expect(source).toContain('|| outboxPumpBusyRef.current || dispatchBlockedAtSend');
-    // dialogue 会话的 workingDir 由被控端在创建时分配,合成行此刻为空 —— 校验推迟到
-    // dispatch(那时会重读 store 拿权威值),否则新建对话发消息会被误判成缺工作目录。
+    expect(source).toContain('const useDurableOutbox = outboxEligible && !earlyLocalCommand && !earlyDesktopCommand && !legacyPlanRequiresLiveDispatch');
     expect(source).toContain('if (!dispatchBlockedAtSend && !currentSession.workingDir) {');
+    const branch = source.slice(source.indexOf('if (useLocalOutbox) {'));
+    expect(branch.indexOf('await mobileDurableOutbox.add(record)')).toBeLessThan(branch.indexOf('applyComposerDocument(documentAfterOptimisticClear)'));
   });
 
   it('keeps legacy Plan out of deferred delivery without affecting the modern Plan path', () => {
     const source = readSource(SCREEN);
     const guardStart = source.indexOf('const legacyPlanRequiresLiveDispatch =');
-    const optimisticClearStart = source.indexOf('if (text) applyComposerDocument(documentAfterOptimisticClear);');
+    const optimisticClearStart = source.indexOf('if (text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
     const outboxStart = source.indexOf('if (useLocalOutbox) {', guardStart);
     const guard = source.slice(guardStart, outboxStart);
 
     expect(guardStart).toBeGreaterThan(-1);
     expect(guardStart).toBeLessThan(optimisticClearStart);
     expect(guard).toContain("runtimeOptions?.planModeSupported !== true");
-    expect(guard).toContain('const useLocalOutbox = shouldUseLocalOutbox && !legacyPlanRequiresLiveDispatch;');
-    expect(guard).toContain('dispatchBlockedAtSend || outboxRef.current.length > 0 || outboxPumpBusyRef.current');
+    expect(guard).toContain('const useLocalOutbox = useDurableOutbox;');
+    expect(guard).toContain('dispatchBlockedAtSend || outboxRef.current.length > 0');
     expect(guard).not.toContain("setError(t('session.menu.aiRenameOffline'));");
     expect(source).toContain(
       'const recovery = recoverOutboxItemsToComposerDraft([capturedDraftRecoveryItem()], {',
@@ -227,33 +213,15 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain("setError(t('session.menu.aiRenameOffline'));");
   });
 
-  it('keeps the page outbox on the pre-write side of the enqueue ownership boundary', () => {
+  it('keeps uncertain enqueue ownership in the persistent app ledger', () => {
     const source = readSource(SCREEN);
-    const outboxStart = source.indexOf('const dispatchOutboxItem = async (item: MobileOutboxItem) => {');
-    const directStart = source.indexOf('const queuedDraft = buildQueuedTextMessage(');
-    const directEnd = source.indexOf('// 消息已由 A 路径落定', directStart);
-    const outboxDispatch = source.slice(outboxStart, directStart);
-    const directRecovery = source.slice(directStart, directEnd);
-
-    expect(source).toContain('const waitForConnection = (');
-    expect(source).toContain('const waiting = outboxItemWaitingForConnection(item);');
-    expect(source).toContain("if (result === 'deferred' || result === 'stopped') return;");
-    expect(source).toContain("return 'stopped' as const;");
-    expect(source).toContain('const safeToRetry = isSafelyUnsentOutboxEnqueueError(err);');
-    expect(source).toContain('if (safeToRetry) {\n          waitForConnection(err);');
-    // 只有权威 projection / 已持久 user 行能证明已接收。没有权威证据时，outbox
-    // 回到既有失败/重试 owner，直发恢复草稿，不能留下无持久 owner 的转圈行。
-    expect(source).toContain('const accepted = fresh.pendingQueue.some(');
-    expect(outboxDispatch).toContain('failItem(formatRemoteError(err));');
-    expect(outboxDispatch).not.toContain('acceptanceUnknown');
-    expect(source).not.toContain('shouldWaitForOutboxEnqueueRecovery');
-    expect(source).toContain('isAutoRecoveringSessionReferencePreparationError(err)');
-    expect(directRecovery).not.toContain('buildOutboxItem({');
-    expect(directRecovery).not.toContain('salvageOutboxItem(');
-    expect(directRecovery).not.toContain('updateOutbox(');
-    expect(directRecovery).not.toContain('acceptanceUnknown');
-    expect(directRecovery).toContain('restoreDirectSendDraftAfterFailure();');
-    expect(directRecovery).toContain('在线直发一旦开始 enqueue 就不再转入本 PR 的页面 outbox');
+    const bridge = readSource('src/session/MobileOutboxBridge.tsx');
+    const delivery = readSource('src/session/durableOutboxDelivery.ts');
+    expect(source).not.toContain('const dispatchOutboxItem =');
+    expect(bridge).toContain('preSend: guardRecord');
+    expect(delivery).toMatch(/await update\(\{\s*state: ["']sending["'],\s*error: undefined\s*\}\)/);
+    expect(delivery).toContain('record.retrySafe && projection.inputDeliveryVersion === 1');
+    expect(delivery).not.toContain('createOutboxClientId');
   });
 
   it('keeps retrying authoritative recovery syncs with bounded backoff', () => {
@@ -302,41 +270,27 @@ describe('mobile optimistic composer while session is not ready', () => {
     expect(source).toContain('if (!sendScopeStillAlive()) {\n      recoverCapturedDraftForScopeExit();');
     expect(source).toContain('await waitForPastePlaceholdersSettled();\n          if (!sendScopeStillAlive()) {');
     expect(source).toContain('const { failedCount } = await waitForPendingUploads();\n      if (!sendScopeStillAlive()) {');
-    expect(source).toContain('if (outboxSessionAliveRef.current !== item.sessionId) return \'stopped\' as const;');
+    expect(source).toContain('if (!sendScopeStillAlive() || !isMobileAuthOwnerCurrent(ownerAtSend)) return;');
   });
 
-  it('recovers the first message and the follow-ups together, in order', () => {
-    // 「首条回输入框 + 后续留在 outbox」是不可恢复的:重试失败的 outbox 条目会把后续消息
-    // 发到首条前面,重发首条又会追加到失败条目之后被挡住,原顺序拼不回来(review P1)。
-    // 两者必须一起、按序进同一份草稿,首条在前。
-    const source = readSource(SCREEN);
-    const branchStart = source.indexOf("if (status === 'enqueue-failed') {");
-    const branchEnd = source.indexOf('void load();', branchStart);
-    const branch = source.slice(branchStart, branchEnd);
-
-    expect(branch).toContain("takeOutboxForSession(sessionId, 'release-to-tray')");
-    expect(branch).toContain('restoreRecoverableItemsToDraft(sessionId, recoverables)');
-    // 首条排在后续消息之前。
-    expect(branch.indexOf('text: restoredText,')).toBeLessThan(branch.indexOf('...followUps,'));
-    // 取走 outbox 必须发生在 dismiss 之前:dismiss 会解禁派发门。
-    expect(branch.indexOf('takeOutboxForSession'))
-      .toBeLessThan(branch.indexOf('dismissNewSessionCreation(sessionId)'));
-    // 附件走统一收尾;task 已被消费的竞态分支同样要恢复附件(原先只恢复了文本)。
-    expect(branch).toContain('adoptRecoveredAttachments(creationTask.attachments, followUps)');
-    expect(branch).toContain('adoptRecoveredAttachments([], followUps)');
+  it('persists the creation head before allowing follow-ups, preserving message identities on failure', () => {
+    const creation = readSource('app/sessions/new.tsx');
+    const pipeline = readSource('src/session/newSessionCreation.ts');
+    expect(creation.indexOf('await mobileDurableOutbox.add(firstRecord)')).toBeLessThan(creation.indexOf('startNewSessionCreation({'));
+    expect(creation).toContain('firstMessageClientId,');
+    expect(pipeline).toContain('const firstMessageClientId = params.firstMessageClientId ?? createUuid()');
+    const handoff = pipeline.slice(pipeline.indexOf('if (params.transport.handoffFirstMessage) {'), pipeline.indexOf('let queued = queuedDraft'));
+    expect(handoff.indexOf('await params.transport.handoffFirstMessage(queuedDraft)')).toBeLessThan(handoff.indexOf('finishTask(task)'));
+    expect(handoff).not.toContain('input.enqueue');
   });
 
-  it('hands in-flight uploads back to the tray instead of cancelling them', () => {
-    // 留在本页时,在途 / 失败的上传任务必须交还 composer 托盘:取消重传是错的——用户已经
-    // 等过一次上传,粘贴来源的本地文件此时可能已被回收,连重选都做不到(review P1)。
+  it('copies attachment bytes before committing the ownership handoff', () => {
     const source = readSource(SCREEN);
-    const fnStart = source.indexOf('const takeOutboxForSession = (');
-    const fnEnd = source.indexOf('\n  };', fnStart);
-    const fn = source.slice(fnStart, fnEnd);
-    expect(fn).toContain("uploads: 'release-to-tray' | 'cancel',");
-    expect(fn).toContain('releaseClaimedUploads(pendingLocalIds);');
-    // cancel 分支必须把「没能保住多少」报给调用方,不能悄悄取消。
-    expect(fn).toContain('cancelledUploadCount: pendingLocalIds.length');
+    const branch = source.slice(source.indexOf('const handoff = await beginOutboxAttachmentHandoff()'));
+    expect(branch.indexOf('await handoff.prepare()')).toBeLessThan(branch.indexOf('await retainOutboxFile'));
+    expect(branch.indexOf('await retainOutboxFile')).toBeLessThan(branch.indexOf('await mobileDurableOutbox.add(record)'));
+    expect(branch.indexOf('await mobileDurableOutbox.add(record)')).toBeLessThan(branch.indexOf('handoff.release(true)'));
+    expect(branch).toContain('handoff.release(committed)');
   });
 
   it('carries follow-ups back to the new-session screen when creation itself failed', () => {
@@ -469,7 +423,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     // 2) 会话设置 RPC 的硬门(统一入口,覆盖全部 runControlAction 调用点)。
     expect(source).toContain('if (!canUseRemoteSessionControls) return;\n    setControlBusy(true);');
     // 3) 消息派发:复合判据,「不存在」是它的子集。
-    expect(source).toContain('if (isRemoteSessionMissing(row)) return true;');
+    expect(source).toContain('outboxConnectionBlockedNow() || isRemoteSessionMissing(row)');
     expect(source).not.toContain('const sessionSettingsLocked = currentSession?.pendingLocalCreation === true;');
   });
 
@@ -480,7 +434,7 @@ describe('mobile optimistic composer while session is not ready', () => {
     const source = readSource(SCREEN);
     const gate = source.indexOf('commandNeedsRemoteSession(earlyLocalCommand, earlyDesktopCommand)');
     expect(gate).toBeGreaterThan(-1);
-    const clear = source.indexOf('if (text) applyComposerDocument(documentAfterOptimisticClear);');
+    const clear = source.indexOf('if (text && !useDurableOutbox) applyComposerDocument(documentAfterOptimisticClear);');
     expect(gate).toBeLessThan(clear);
     const branch = source.slice(gate, clear);
     expect(branch).toContain('isRemoteSessionMissing(readSessionRowNow())');

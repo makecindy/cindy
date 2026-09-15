@@ -17,6 +17,7 @@ import { parseAttachmentOssRef } from '@/session/attachmentOssRef';
 import { textComposerDocument } from '@/session/composerDocument';
 import { localizeAgentError } from '@/session/agentErrorI18n';
 import type { RemoteSession } from '@/session/types';
+import { buildOutboxItem } from '@/session/sessionOutbox';
 
 const ATTACHMENT_SHA256 = 'a'.repeat(64);
 
@@ -41,6 +42,17 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 }
 
 describe('inputProjection', () => {
+  it.each([true, false, undefined])('keeps the stored Plan snapshot %s across a later host toggle and serialization', (planModeAtSend) => {
+    const original = buildOutboxItem({ clientId: 'plan-id', sessionId: 's1', text: 'plan snapshot',
+      permissionModeAtSend: 'ask', planModeAtSend, readyAttachments: [], claimedUploads: [] });
+    const recovered = JSON.parse(JSON.stringify(original));
+    const queued = buildQueuedTextMessage(session({ planModeEnabled: !planModeAtSend }), recovered.text,
+      new Date(), recovered.clientId, { planMode: recovered.planModeAtSend });
+    expect(queued.createOpts.planMode).toBe(planModeAtSend);
+    expect(queued.permissionMode).toBe('ask');
+    if (planModeAtSend === undefined) expect(queued.createOpts).not.toHaveProperty('planMode');
+  });
+
   beforeAll(async () => {
     await i18n.changeLanguage('zh-CN');
   });

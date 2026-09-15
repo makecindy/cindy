@@ -1546,8 +1546,8 @@ describe('new session composer surface', () => {
     const atStart = slashEnd;
     const atEnd = newSource.indexOf('const removeAttachment = useCallback', atStart);
     const atSource = newSource.slice(atStart, atEnd);
-    const restoreStart = newSource.indexOf('firstMessageRef.current = stashed.draft.firstMessage;');
-    const restoreEnd = newSource.indexOf('setDraft(stashed.draft);', restoreStart);
+    const restoreStart = newSource.indexOf('const restoreCreationDraft = useCallback');
+    const restoreEnd = newSource.indexOf('setDraft(recovered);', restoreStart);
     const restoreSource = newSource.slice(restoreStart, restoreEnd);
 
     for (const source of [slashSource, atSource]) {
@@ -1557,9 +1557,11 @@ describe('new session composer surface', () => {
         source.indexOf('setFirstMessageSelection(selection)'),
       );
     }
-    expect(restoreSource).toContain('firstMessageRef.current = stashed.draft.firstMessage;');
-    expect(restoreSource).toContain('firstMessageSelectionRef.current = restoredSelection;');
-    expect(restoreSource).toContain('setFirstMessageSelection(restoredSelection);');
+    expect(restoreSource).toContain('firstMessageRef.current = recovered.firstMessage;');
+    expect(restoreSource).toContain('firstMessageSelectionRef.current = selection;');
+    expect(restoreSource).toContain('setFirstMessageSelection(selection);');
+    expect(newSource).toContain('restoreCreationDraft(stashed.draft, [...stashed.attachments]);');
+    expect(newSource).toContain('restoreCreationDraft(record.creation.draft,');
   });
 
   it('does not double-apply the Android safe-area inset to the top navigation', () => {
@@ -1935,7 +1937,7 @@ describe('new session worktree wiring (source locks)', () => {
       recovery,
     );
     const sessionId = newSource.indexOf(
-      'const sessionId = createNewSessionId();',
+      'const sessionId = recovering?.item.sessionId ?? createNewSessionId();',
       pendingGuard,
     );
     const worktreeCreate = newSource.indexOf(

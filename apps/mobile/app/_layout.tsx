@@ -1,4 +1,5 @@
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
+import { MobileOutboxBridge } from '@/session/MobileOutboxBridge';
 import {
   DarkTheme as NavigationDarkTheme,
   DefaultTheme as NavigationLightTheme,
@@ -332,6 +333,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
       <PushNotificationsBridge />
       <DeviceLinkProvider>
         <PrecreatedWorktreeRecoveryBridge />
+        <MobileOutboxBridge />
         <NavigationGate />
       </DeviceLinkProvider>
     </AuthProvider>

@@ -1,3 +1,7 @@
+import { mobileDurableOutbox, holdDurableOutboxCreation, getCurrentMobileOutboxRecords } from '@/session/mobileDurableOutbox';
+import { retainOutboxFile, durableOutboxUploadUri, removeRetainedOutboxFiles, outboxAttachmentNeedsLocalBytes } from '@/session/durableOutboxFiles';
+import { buildOutboxItem, createOutboxClientId } from '@/session/sessionOutbox';
+import type { DurableOutboxRecord } from '@/session/durableOutbox';
 import { stripTrailingPathSeparators } from '@cindy/maker-shared/path-text';
 import { takeRefinementContextTail } from '@cindy/voice-input-core';
 import { useLocalSearchParams, useRouter } from 'expo-router';
@@ -11,6 +15,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   type ReactNode,
   type SetStateAction,
 } from 'react';
@@ -172,6 +177,7 @@ import { newSessionText } from '@/session/newSessionMessages';
 import { i18n } from '@/i18n';
 import {
   getMobileAuthOwner,
+  subscribeMobileAuthOwner,
   isMobileAuthOwnerCurrent,
 } from '@/auth/authOwnerGeneration';
 import { useTranslation } from 'react-i18next';
@@ -416,6 +422,7 @@ export default function NewRemoteSessionScreen() {
     deviceExplicit?: string;
     visualFocusComposer?: string;
     visualDraft?: string;
+    recoverySessionId?: string;
   }>();
   const routeDeviceId = String(params.deviceId ?? '');
   const routeDeviceName = String(params.deviceName ?? routeDeviceId);
@@ -424,6 +431,7 @@ export default function NewRemoteSessionScreen() {
   const visualInitialDraft = MOBILE_VISUAL_MOCK_ENABLED ? readRouteString(params.visualDraft) : null;
   const router = useRouter();
   const auth = useAuth();
+  const outboxOwner = useSyncExternalStore(subscribeMobileAuthOwner, getMobileAuthOwner, getMobileAuthOwner);
   const {
     getPresenceAvailability,
     invoke,
@@ -495,6 +503,8 @@ export default function NewRemoteSessionScreen() {
     workingDir: initialWorkingDir ?? '',
   });
   const firstMessageRef = useRef(draft.firstMessage);
+  const [planModeDraftOn, setPlanModeDraftOn] = useState(false);
+  const prePlanPermissionModeRef = useRef<string | null>(null);
   const firstMessageSelectionRef = useRef({ start: draft.firstMessage.length, end: draft.firstMessage.length });
   const [firstMessageSelection, setFirstMessageSelection] = useState(firstMessageSelectionRef.current);
   const [creating, setCreating] = useState(false);
@@ -609,20 +619,58 @@ export default function NewRemoteSessionScreen() {
   // 附件是已上传完成的引用,原样回列即可继续使用;notice 是「有内容没能带回」的告知
   // (创建期间发出的消息可能超出单条上限,装不下的只能丢,但不能静默丢,review P1)。
   // 声明在 attachmentError 之后:notice 就落在附件错误行上。
+  const outboxRecoveryRef = useRef<DurableOutboxRecord | null>(null);
+  const restoreCreationDraft = useCallback((recovered: NewSessionDraft, files: RemoteSerializedAttachment[], plan?: { enabled: boolean; restorePermissionMode: string | null }) => {
+    userTouchedWorkspaceRef.current = true;
+    userTouchedRuntimeRef.current = true;
+    appliedPermissionMemoryRef.current = true;
+    runtimeActionSeqRef.current += 1;
+    firstMessageRef.current = recovered.firstMessage;
+    const selection = { start: recovered.firstMessage.length, end: recovered.firstMessage.length };
+    firstMessageSelectionRef.current = selection;
+    setFirstMessageSelection(selection);
+    attachmentsRef.current = files;
+    setAttachments(files);
+    if (plan) {
+      setPlanModeDraftOn(plan.enabled);
+      prePlanPermissionModeRef.current = plan.restorePermissionMode;
+    }
+    setDraft(recovered);
+  }, []);
+  const leaveForeignOutboxRecovery = useCallback(() => {
+    const record = outboxRecoveryRef.current;
+    if (!record || record.accountId === getMobileAuthOwner().accountKey) return false;
+    router.replace('/devices');
+    return true;
+  }, [router]);
+  useEffect(() => {
+    const owner = outboxOwner;
+    if (leaveForeignOutboxRecovery()) return;
+    const sid = String(params.recoverySessionId ?? '');
+    if (!sid) return;
+    let active = true;
+    let restored = false;
+    const restore = () => {
+      if (!active || restored || !isMobileAuthOwnerCurrent(owner)) return;
+      const record = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sid && r.creation);
+      if (!record?.creation || record.prepared) return;
+      restored = true;
+      outboxRecoveryRef.current = record;
+      userTouchedDeviceRef.current = true;
+      restoreCreationDraft(record.creation.draft,
+        record.item.attachmentSlots.filter((a): a is RemoteSerializedAttachment => a !== null),
+        { enabled: record.creation.planModeArm, restorePermissionMode: record.creation.restorePermissionMode });
+      setSelectedDeviceId(record.deviceId);
+      setSelectedDeviceName(record.creation.deviceName);
+    };
+    const unsubscribe = mobileDurableOutbox.subscribe(restore);
+    void mobileDurableOutbox.ready().then(restore);
+    return () => { active = false; unsubscribe(); };
+  }, [params.recoverySessionId, outboxOwner, leaveForeignOutboxRecovery, restoreCreationDraft]);
   useEffect(() => {
     const stashed = drainStashedNewSessionDraft();
     if (!stashed) return;
-    // 返回编辑沿用草稿的工作区，不能被随后加载的全局默认覆盖。
-    userTouchedWorkspaceRef.current = true;
-    firstMessageRef.current = stashed.draft.firstMessage;
-    const restoredSelection = {
-      start: stashed.draft.firstMessage.length,
-      end: stashed.draft.firstMessage.length,
-    };
-    firstMessageSelectionRef.current = restoredSelection;
-    setFirstMessageSelection(restoredSelection);
-    setDraft(stashed.draft);
-    setAttachments([...stashed.attachments]);
+    restoreCreationDraft(stashed.draft, [...stashed.attachments]);
     if (stashed.notice) setAttachmentError(stashed.notice);
     if (stashed.deviceId) {
       userTouchedDeviceRef.current = true;
@@ -649,6 +697,8 @@ export default function NewRemoteSessionScreen() {
     discardAllPendingUploads,
     waitForPendingUploads,
     getPendingUploadCount,
+    getUploadedSource,
+    releaseUploadedSources,
   } = useMobileLocalAttachments({
     getAccessToken: () => auth.getAccessToken(),
     getAttachmentCount: () => attachmentsRef.current.length,
@@ -903,6 +953,7 @@ export default function NewRemoteSessionScreen() {
   useEffect(() => {
     const storedAgentKind = newSessionPreferences?.agentKind;
     if (!newSessionPreferencesLoaded || !storedAgentKind) return;
+    if (userTouchedRuntimeRef.current) return;
     if (appliedStoredAgentRef.current === storedAgentKind) return;
     const expectedDeviceId = preferredDefaultDevice?.deviceId ?? '';
     if (expectedDeviceId && selectedDeviceId !== expectedDeviceId) return;
@@ -991,10 +1042,11 @@ export default function NewRemoteSessionScreen() {
     const remembered = newSessionPreferences?.permissionModeByAgent[draft.agentKind];
     if (!remembered || remembered === draft.permissionMode) return;
     let cancelled = false;
+    const seqAtTrigger = runtimeActionSeqRef.current;
     void confirmFullAccessChange(draft.permissionMode, remembered, {
       restoringRememberedChoice: true,
     }).then((confirmed) => {
-      if (cancelled || !confirmed) return;
+      if (cancelled || !confirmed || seqAtTrigger !== runtimeActionSeqRef.current) return;
       setDraft((current) => ({ ...current, permissionMode: remembered }));
     });
     return () => {
@@ -1107,7 +1159,6 @@ export default function NewRemoteSessionScreen() {
   );
   // 权限按钮 / 权限下拉不体现 plan(对齐桌面 PR#494 / Cursor):计划模式激活时展示
   // 进入前的底层权限档(无记录时回退首个非 plan 档),激活态由 composer 的 PlanModeChip 表达。
-  const prePlanPermissionModeRef = useRef<string | null>(null);
   const displayPermissionMode = draft.permissionMode === 'plan'
     ? ((prePlanPermissionModeRef.current && prePlanPermissionModeRef.current !== 'plan')
       ? prePlanPermissionModeRef.current
@@ -1670,6 +1721,7 @@ export default function NewRemoteSessionScreen() {
     // 在途上传同样作废(codex review R10):不取消的话它们完成后会经 onUploaded 把
     // 上一台电脑期间选的附件塞进新电脑的草稿;丢弃后由控制器在完成时回收 OSS 对象。
     discardAllPendingUploads();
+    releaseUploadedSources(attachments.map((attachment) => attachment.id));
     setAttachments([]);
     setMediaAssetAttachments({});
     setAttachmentPreviews({});
@@ -3785,6 +3837,7 @@ export default function NewRemoteSessionScreen() {
     });
     // 标注附件退场时同步清「矢量笔迹 + 原图副本」的再编辑真相。
     composerAnnotationsRef.current?.forgetAttachment(id);
+    releaseUploadedSources([id]);
   }, [attachments, auth]);
 
   // 圈点标注(托盘再编辑)与附件管线的接线(新建会话页无聊天场景,chat 配置不用)。
@@ -3992,11 +4045,10 @@ export default function NewRemoteSessionScreen() {
   //  - 新协议(capabilities.planMode.supported):本地布尔草稿态,创建会话后经
   //    maker:set-plan-mode 武装首条消息,消耗由被控端执行;不污染 draft.permissionMode。
   //  - 老被控端兼容(permissionModes 仍含 'plan'):沿用草稿 permissionMode 切换 + 创建后恢复。
-  // prePlanPermissionModeRef 声明在 displayPermissionMode 计算处(权限按钮展示需要)。
+  // Plan 草稿与底层权限快照由恢复入口一并回填。
   const planModeCapability = runtimeOptions.planModeSupported;
   const legacyPlanSupported = runtimeOptions.permissionOptions.some((option) => option.id === 'plan');
   const planModeSupported = planModeCapability || legacyPlanSupported;
-  const [planModeDraftOn, setPlanModeDraftOn] = useState(false);
   const planModeOn = planModeCapability ? planModeDraftOn : draft.permissionMode === 'plan';
   const togglePlanMode = useCallback((next: boolean) => {
     if (planModeCapability) {
@@ -4014,6 +4066,7 @@ export default function NewRemoteSessionScreen() {
   }, [draft.permissionMode, patchDraft, planModeCapability, runtimeOptions.permissionOptions]);
 
   const create = useCallback(async () => {
+    if (leaveForeignOutboxRecovery()) return;
     if (
       creatingRef.current
       || voicePermissionRequestInFlightRef.current
@@ -4056,6 +4109,7 @@ export default function NewRemoteSessionScreen() {
     // 回来的是新 mount,creatingRef 天然复位。
     let handedOff = false;
     let releasePrecreatedRegistration: (() => void) | null = null;
+    let releaseDurableCreation: (() => void) | null = null;
     const accountIdAtCreate = auth.user?.id?.trim() ?? '';
     const authOwnerAtCreate = getMobileAuthOwner();
     const isCurrentOwner = () => (
@@ -4161,7 +4215,25 @@ export default function NewRemoteSessionScreen() {
       // 幂等),点创建**立即**进入会话页;openLink / 鉴权 revalidate / createSession
       // / 首条消息 enqueue 全部由 newSessionCreation 模块级后台管线完成(本页
       // unmount 不终止),失败重试面在会话页(横幅:重试 / 返回编辑)。
-      const sessionId = createNewSessionId();
+      const recovering = outboxRecoveryRef.current;
+      if (recovering && recovering.deviceId !== selectedDeviceId) {
+        throw new Error(t('session.outbox.recoveryTarget'));
+      }
+      const sessionId = recovering?.item.sessionId ?? createNewSessionId();
+      if (recovering) {
+        // Editing creation parameters is allowed only after the original task is proven absent.
+        let found = false;
+        try { found = !!(await maker.getSession(sessionId)); }
+        catch (error) {
+          if (!formatRemoteError(error).includes('NOT_FOUND')) throw error;
+        }
+        if (!isCurrentOwner()) return;
+        if (found) {
+          const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === recovering.item.clientId && r.item.sessionId === sessionId);
+          if (latest && !latest.prepared) await mobileDurableOutbox.update(latest, { suspended: false, state: 'queued' });
+          throw new Error(t('session.outbox.taskAlreadyCreated'));
+        }
+      }
       let precreatedWorktree: {
         path: string;
         recoveryKey: string;
@@ -4320,6 +4392,63 @@ export default function NewRemoteSessionScreen() {
           return;
         }
       }
+      const agentKindSnapshot = effectiveDraft.agentKind;
+      const deviceIdSnapshot = selectedDeviceId;
+      // 老协议 plan 一次性语义(对齐桌面 PR#494):入队后恢复进入前的底层权限档。
+      const legacyPlanRestore = effectiveDraft.permissionMode === 'plan'
+        ? (() => {
+          const fallback = runtimeOptions.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
+          const remembered = prePlanPermissionModeRef.current;
+          return remembered && remembered !== 'plan' ? remembered : fallback;
+        })()
+        : null;
+      if (!isCurrentOwner()) return;
+      releaseDurableCreation = holdDurableOutboxCreation(sessionId);
+      const firstMessageClientId = recovering?.item.clientId ?? createOutboxClientId();
+      // Legacy Plan requires a live session-wide permission change. Keep its existing
+      // online creation pipeline instead of introducing deferred permission mutations.
+      const useDurableCreation = legacyPlanRestore === null;
+      if (recovering && !useDurableCreation) throw new Error(t('session.outbox.legacyPlanRecovery'));
+      if (useDurableCreation) {
+        const firstRecord: DurableOutboxRecord = {
+          version: 1, accountId: authOwnerAtCreate.accountKey, deviceId: deviceIdSnapshot,
+          createdAt: recovering?.createdAt ?? Date.now(), state: 'queued', suspended: false, uploads: [], clearBoundaryMs: null,
+          creation: { draft: effectiveDraft, deviceName: selectedDeviceName,
+            planModeArm: planModeCapability && planModeDraftOn, restorePermissionMode: legacyPlanRestore },
+          item: buildOutboxItem({
+            clientId: firstMessageClientId, sessionId, text: effectiveDraft.firstMessage,
+            quotesEncoded: false, agentReferences: [], pastedTextRanges: [], slashCommandRanges: [],
+            permissionModeAtSend: effectiveDraft.permissionMode, readyAttachments: sendAttachments,
+            readyPreviews: sendAttachments.map((a) => attachmentPreviews[a.id] ?? null), claimedUploads: [],
+          }),
+        };
+        let filesCommitted = false;
+        try {
+          for (let slot = 0; slot < sendAttachments.length; slot++) {
+            const attachment = sendAttachments[slot];
+            const source = getUploadedSource(attachment.id);
+            const oldSlot = recovering?.item.attachmentSlots.findIndex((a) => a?.id === attachment.id);
+            const oldUpload = recovering?.uploads.find((u) => u.slot === oldSlot);
+            if (source) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, source));
+            else if (recovering && oldUpload) firstRecord.uploads.push(await retainOutboxFile(firstRecord, slot, {
+              ...oldUpload, uri: durableOutboxUploadUri(recovering, oldUpload),
+            }));
+            else if (outboxAttachmentNeedsLocalBytes(attachment)) throw new Error(t('session.screen.attachmentsNotCarriedBack', { count: 1 }));
+          }
+          if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+          if (recovering) {
+            const latest = getCurrentMobileOutboxRecords().find((r) => r.item.clientId === firstMessageClientId && r.item.sessionId === sessionId);
+            if (!latest || latest.prepared) throw new Error('OUTBOX_STALE_WRITE');
+            await mobileDurableOutbox.update(latest, firstRecord);
+          } else await mobileDurableOutbox.add(firstRecord);
+          filesCommitted = true;
+        } finally {
+          if (!filesCommitted) await removeRetainedOutboxFiles(firstRecord).catch(() => undefined);
+        }
+        outboxRecoveryRef.current = firstRecord;
+        if (!isCurrentOwner() || !ensureDeviceAlive()) return;
+        releaseUploadedSources(sendAttachments.map((a) => a.id));
+      }
       // 提交点联合终检(Greptile/Codex review P1):目录就绪后的清理 effect 跑在渲染后,
       // 用户可能在清理生效前点创建——创建路径自身必须守卫;来源失效时 model 随之一并
       // 回退(其他来源顶替 / 首项 / 内置默认),并同步校准 effort、组合变化时 fastMode
@@ -4410,20 +4539,10 @@ export default function NewRemoteSessionScreen() {
         if (!ensureDeviceAlive()) return;
         applyGuard(guardResult);
       }
-      const agentKindSnapshot = effectiveDraft.agentKind;
-      const deviceIdSnapshot = selectedDeviceId;
-      // 老协议 plan 一次性语义(对齐桌面 PR#494):入队后恢复进入前的底层权限档。
-      const legacyPlanRestore = effectiveDraft.permissionMode === 'plan'
-        ? (() => {
-          const fallback = runtimeOptions.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask';
-          const remembered = prePlanPermissionModeRef.current;
-          return remembered && remembered !== 'plan' ? remembered : fallback;
-        })()
-        : null;
-      if (!isCurrentOwner()) return;
       startNewSessionCreation({
         startedAt,
         sessionId,
+        firstMessageClientId,
         deviceId: deviceIdSnapshot,
         deviceName: selectedDeviceName,
         draft: effectiveDraft,
@@ -4480,6 +4599,12 @@ export default function NewRemoteSessionScreen() {
         isCurrentOwner,
         transport: {
           maker,
+          handoffFirstMessage: useDurableCreation ? async (item) => {
+            if (!isCurrentOwner()) throw new Error('OUTBOX_OWNER_CHANGED');
+            const record = getCurrentMobileOutboxRecords().find((r) => r.item.sessionId === sessionId && r.item.clientId === firstMessageClientId);
+            if (!record) throw new Error('OUTBOX_STALE_WRITE');
+            await mobileDurableOutbox.update(record, { template: item, state: 'queued', suspended: false, error: undefined });
+          } : undefined,
           openLink,
           subscribe,
           prepareQueuedMessage: (item) => prepareMobileQueuedSessionReferences(
@@ -4513,6 +4638,7 @@ export default function NewRemoteSessionScreen() {
       setError(raw);
     } finally {
       releasePrecreatedRegistration?.();
+      releaseDurableCreation?.();
       if (!handedOff) {
         creatingRef.current = false;
         setCreating(false);
@@ -4528,6 +4654,7 @@ export default function NewRemoteSessionScreen() {
     selectedDeviceName,
     draft,
     finishVoiceRecording,
+    leaveForeignOutboxRecovery,
     getPresenceAvailability,
     maker,
     openLink,
@@ -4557,6 +4684,7 @@ export default function NewRemoteSessionScreen() {
   // composer 附件不随目标带入(与桌面一致)。goal.set 失败时报错留在面板,会话已创建,
   // 用户可进会话重设目标,重试本表单会新建会话。
   const createGoalSession = useCallback(async (input: { objective: string; limits?: MobileGoalLimitsInput }) => {
+    if (leaveForeignOutboxRecovery()) return;
     if (creatingRef.current || goalBusy) return;
     if (!selectedDeviceId) {
       setGoalError(t('session.new.selectDeviceError'));
@@ -5272,6 +5400,7 @@ export default function NewRemoteSessionScreen() {
     confirmAgentUnauthenticated,
     draft,
     goalBusy,
+    leaveForeignOutboxRecovery,
     maker,
     openLink,
     patchDraft,
