@@ -11,6 +11,10 @@ Desktop 已接管设计数值的 DTCG 编辑源。Terrazzo **2.7.1** 在构建�
 
 `src/{build-layers,snapshot,dtcg}.ts` 保留 DS-3 历史导入/测试 oracle；不在生产生成器依赖图中。`classification.json` 是冻结基线的历史分类，不再把其中“候选/未建模”误读为当前接管状态；当前逐项范围以 `desktop-bindings.json` 为准。
 
+生成保护已由本包 `production.test.ts` 纳入 required unit workspace，在 Linux/Windows 单测分片执行；未单列快速 CI 步骤不表示没有保护。只需快速定位过期产物时运行 `pnpm --filter @cindy/design-tokens check:generated`。合法改值仍要按上面的生成、独立预期与设计裁决路径，不直接编辑产物。
+
+间距尺度的事实源是 `src/desktop-bindings.json` 的 foundations.spacing 与 foundations.css 映射；例如 `p-4` 消费 `--space-4`。审计也从同一绑定读取，不维护第二份变量白名单；合法源引用不代替具体组件用途判断。
+
 ## 源与消费者
 
 | 唯一编辑源 | 生成输出 | 实际消费者 |
@@ -45,7 +49,7 @@ Effort/price 静态表也由 colors.ts 生成并导出，`effortTierColors.ts` i
 
 SC-01—12、实机证据、未测平台和人工审核状态持续登记在桌面唯一主计划；截图不入 Git。DS-8 已合并 [#4268](https://github.com/makecindy/cindy/pull/4268)（merge `2e74488d21`）；DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)，合并提交 `4f03ea9a7b5f6425e517acd91071df6d397c6079`。旧 DS-6/7 附件不能充当本版本证据。
 
-回退须整体恢复 DS-8 源/生成物/消费者及过渡守卫，保留上游工作；不回写用户数据或只抽掉生成源。G1 仅完成 Desktop 阶段；DS-9 已获授权实施桌面核心呈现，Mobile 新方案明确后再定消费接口。原影子层 2026-11-01 复查改为检查实际维护与消费情况，不取消维护责任。
+回退须整体恢复 DS-8 源/生成物/消费者及过渡守卫，保留上游工作；不回写用户数据或只抽掉生成源。G1 仅完成 Desktop 阶段；DS-9 已合并 #4300，桌面最终演练与交接由 DS-10 收尾，Mobile 新方案明确后再定消费接口。原影子层 2026-11-01 复查改为检查实际维护与消费情况，不取消维护责任。
 
 ## DS-5 历史双端样本（非未来 Mobile 合同）
 

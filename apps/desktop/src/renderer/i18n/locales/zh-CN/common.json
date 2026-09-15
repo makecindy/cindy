@@ -2151,7 +2151,7 @@
         "endpointLabel": "{{agent}} 基础 URL",
         "noAuthNote": "此 Proxy 无需客户端密钥；Cindy 会在转发前移除 CLI 的订阅凭证。",
         "signIn": "登录",
-        "setupLink": {"apiKey": "获取 API Key", "account": "注册或登录", "setup": "设置帮助"},
+        "setupLink": { "apiKey": "获取 API Key", "account": "注册或登录", "setup": "设置帮助" },
         "fetching": "正在验证连接并获取模型列表…",
         "fetchFailed": "模型列表获取失败——可先按预设推荐模型完成添加，稍后在详情里刷新",
         "manualModelHint": "未发现可用模型，请填写此 Proxy 实际提供的模型 ID。",
@@ -5843,6 +5843,11 @@
     "ssoOrgHint": "不知道企业登录标识？请联系企业管理员",
     "ssoOrgDetected": "选择企业「{{org}}」的单点登录方式",
     "realmConsent": {
+      "personalTitle": "发现企业登录",
+      "personalBodyCn": "邮箱对应企业位于中国大陆区。\n可使用企业 SSO，或继续个人登录。",
+      "personalBodyGlobal": "邮箱对应企业位于国际区。\n可使用企业 SSO，或继续个人登录。",
+      "enterpriseLogin": "企业 SSO",
+      "continuePersonal": "继续个人登录",
       "title": "连接企业所在区域",
       "bodyCn": "你的企业位于中国大陆区。\n继续后，Cindy 会连接该区域。",
       "bodyGlobal": "你的企业位于国际区。\n继续后，Cindy 会连接该区域。",
@@ -9526,10 +9531,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "按项目",
+        "project": "项目",
         "flat": "平铺",
-        "device": "按设备",
-        "dialogue": "按对话"
+        "device": "设备",
+        "dialogue": "对话"
       },
       "filterGroupByDeviceManualTip": "手动排序时按设备分组暂不可用",
       "deviceGroup": {
@@ -9829,9 +9834,9 @@
         "all": "全部"
       },
       "sortTaskBy": {
-        "priority": "按优先级",
-        "activity": "按最近活动",
-        "created": "按创建时间"
+        "priority": "优先级",
+        "activity": "最近活动",
+        "created": "创建时间"
       }
     },
     "rename": {
@@ -10907,6 +10912,7 @@
       "titleLabel": "标题",
       "bodyLabel": "正文(Markdown)",
       "privacyHint": "Issue 的标题和正文将公开显示，并可能被搜索或缓存。系统只能隐藏部分常见敏感信息，无法识别所有语义隐私。",
+      "relatedLogsHint": "本次提交包含上方显示的相关客户端日志；日志在公开前已经过来源和字段筛选、脱敏及长度限制。",
       "privacyConfirm": "我已检查以上公开内容，不包含不应公开的个人、对话或业务信息",
       "submissionMethodLabel": "提交身份",
       "identityGithubUser": "我的 GitHub 账号 @{{login}}",

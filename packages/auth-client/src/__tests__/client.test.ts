@@ -21,7 +21,7 @@ function response(status: number, data: unknown): AuthFetchResponse {
   return { ok: status >= 200 && status < 300, status, json: async () => data };
 }
 
-function client(fetch = vi.fn(async () => response(200, {}))) {
+function client(fetch: AuthFetch = vi.fn(async () => response(200, {}))) {
   return new CindyAuthClient({
     baseUrl: "https://auth.example.com/",
     region: "cn",
@@ -151,7 +151,7 @@ describe("CindyAuthClient", () => {
   });
 
   it("carries captchaToken in the email request-code body only when provided", async () => {
-    const fetch = vi.fn(async () => response(200, { status: "sent" }));
+    const fetch = vi.fn<AuthFetch>(async () => response(200, { status: "sent" }));
     await client(fetch).requestCode("email", "user@example.com");
     const bare = JSON.parse(
       (fetch.mock.calls[0]?.[1] as { body: string }).body,

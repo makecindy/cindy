@@ -2152,7 +2152,11 @@
         "endpointLabel": "{{agent}} base URL",
         "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
         "signIn": "Sign in",
-        "setupLink": {"apiKey": "Get an API key", "account": "Sign up or sign in", "setup": "Setup help"},
+        "setupLink": {
+          "apiKey": "Get an API key",
+          "account": "Sign up or sign in",
+          "setup": "Setup help"
+        },
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",
         "manualModelHint": "No models were discovered. Enter the exact model ID exposed by this proxy.",
@@ -5845,6 +5849,11 @@
     "ssoOrgHint": "Don't know your enterprise sign-in identifier? Ask your admin",
     "ssoOrgDetected": "Choose a single sign-on connection for \"{{org}}\"",
     "realmConsent": {
+      "personalTitle": "Enterprise sign-in available",
+      "personalBodyCn": "Enterprise found in Mainland China.\nUse SSO or continue with your account.",
+      "personalBodyGlobal": "Enterprise found in the Global region.\nUse SSO or continue with your account.",
+      "enterpriseLogin": "Enterprise SSO",
+      "continuePersonal": "Continue personal",
       "title": "Connect to your enterprise region",
       "bodyCn": "Your enterprise is in Mainland China.\nContinue to connect Cindy to this region.",
       "bodyGlobal": "Your enterprise is in the Global region.\nContinue to connect Cindy to this region.",
@@ -9541,10 +9550,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "By project",
+        "project": "Project",
         "flat": "Flat list",
-        "device": "By device",
-        "dialogue": "By chat"
+        "device": "Device",
+        "dialogue": "Chat"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -9567,7 +9576,7 @@
         "all": "All"
       },
       "filterSortBy": {
-        "created": "Created Time",
+        "created": "Creation Time",
         "activity": "Recent Activity",
         "recency": "By time",
         "manual": "Manual",
@@ -9844,9 +9853,9 @@
         "all": "All"
       },
       "sortTaskBy": {
-        "priority": "By priority",
-        "activity": "By recent activity",
-        "created": "By creation time"
+        "priority": "Priority",
+        "activity": "Recent Activity",
+        "created": "Creation Time"
       }
     },
     "rename": {
@@ -10923,6 +10932,7 @@
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
       "privacyHint": "The Issue title and body will be public and may be searchable or cached. Automatic redaction only covers some common patterns and cannot detect all sensitive context.",
+      "relatedLogsHint": "This submission includes the related client logs shown above. They are filtered, redacted, and length-limited before publication.",
       "privacyConfirm": "I reviewed the public content above and it contains no personal, conversation, or business information that should remain private",
       "submissionMethodLabel": "Submission Identity",
       "identityGithubUser": "My GitHub account @{{login}}",

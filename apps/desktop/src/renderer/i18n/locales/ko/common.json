@@ -2151,7 +2151,11 @@
         "endpointLabel": "{{agent}} 기본 URL",
         "noAuthNote": "이 프록시는 클라이언트 키가 필요하지 않습니다. Cindy는 전달 전에 CLI 구독 자격 증명을 제거합니다.",
         "signIn": "로그인",
-        "setupLink": {"apiKey": "API 키 받기", "account": "가입 또는 로그인", "setup": "설정 도움말"},
+        "setupLink": {
+          "apiKey": "API 키 받기",
+          "account": "가입 또는 로그인",
+          "setup": "설정 도움말"
+        },
         "fetching": "연결을 확인하고 모델 목록을 가져오는 중…",
         "fetchFailed": "모델 목록을 가져오지 못했습니다. 프리셋 추천 모델로 추가를 완료한 뒤 나중에 상세에서 새로고침할 수 있습니다",
         "manualModelHint": "검색된 모델이 없습니다. 이 프록시가 제공하는 정확한 모델 ID를 입력하세요.",
@@ -5843,6 +5847,11 @@
     "ssoOrgHint": "기업 로그인 식별자를 모르시나요? 관리자에게 문의하세요",
     "ssoOrgDetected": "\"{{org}}\"의 통합 로그인 방식을 선택하세요",
     "realmConsent": {
+      "personalTitle": "기업 로그인 발견",
+      "personalBodyCn": "중국 본토의 기업을 찾았습니다.\n기업 SSO 또는 개인 로그인을 선택하세요.",
+      "personalBodyGlobal": "글로벌 지역의 기업을 찾았습니다.\n기업 SSO 또는 개인 로그인을 선택하세요.",
+      "enterpriseLogin": "기업 SSO",
+      "continuePersonal": "개인 로그인 계속",
       "title": "기업 지역에 연결",
       "bodyCn": "이 기업은 중국 본토 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
       "bodyGlobal": "이 기업은 글로벌 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
@@ -9526,10 +9535,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "프로젝트별",
+        "project": "프로젝트",
         "flat": "평면 목록",
-        "device": "기기별",
-        "dialogue": "대화별"
+        "device": "기기",
+        "dialogue": "대화"
       },
       "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
       "deviceGroup": {
@@ -9829,9 +9838,9 @@
         "all": "전체"
       },
       "sortTaskBy": {
-        "priority": "우선순위순",
-        "activity": "최근 활동순",
-        "created": "생성 시간순"
+        "priority": "우선순위",
+        "activity": "최근 활동",
+        "created": "생성 시간"
       }
     },
     "rename": {
@@ -10907,6 +10916,7 @@
       "titleLabel": "제목",
       "bodyLabel": "본문(Markdown)",
       "privacyHint": "Issue 제목과 본문은 공개되며 검색되거나 캐시될 수 있습니다. 자동 가림은 일부 일반적인 형식만 처리하며 문맥상 민감한 정보를 모두 감지할 수는 없습니다.",
+      "relatedLogsHint": "이 제출에는 위에 표시된 관련 클라이언트 로그가 포함됩니다. 공개 전에 출처 및 필드 필터링, 가림, 길이 제한이 적용됩니다.",
       "privacyConfirm": "위 공개 내용을 검토했으며 비공개로 유지해야 할 개인, 대화 또는 업무 정보가 포함되지 않았음을 확인했습니다",
       "submissionMethodLabel": "제출 계정",
       "identityGithubUser": "내 GitHub 계정 @{{login}}",

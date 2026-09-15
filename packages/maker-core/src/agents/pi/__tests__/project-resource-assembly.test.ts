@@ -785,6 +785,23 @@ describe('Pi approved project resource assembly', () => {
         },
       }],
     })).toMatchObject({
+      reason: 'runtime-skills-confirmed',
+      loadedSkillCount: 1,
+    });
+
+    expect(reconcilePiProjectResourceRuntime(runtimeAssembly, {
+      ...baseManifest,
+      commands: [{
+        name: 'skill:demo',
+        source: 'skill',
+        sourceInfo: {
+          scope: 'temporary',
+          source: 'local',
+          baseDir: skillPath,
+          path: `${skillPath}/README.md`,
+        },
+      }],
+    })).toMatchObject({
       reason: 'runtime-skills-missing',
       loadedSkillCount: 0,
     });
