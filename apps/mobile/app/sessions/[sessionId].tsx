@@ -255,6 +255,7 @@ import {
   type ContextSheetMediaAsset,
 } from '@/session/useContextSheetMediaAssets';
 import {
+  canResumeOrcaLeadGoalOnMobile,
   sessionCollaborationComposerReadOnlyReason,
   sessionCollaborationLabel,
   sessionCollaborationReadOnlyReason,
@@ -9177,6 +9178,10 @@ export default function SessionScreen() {
               onClearGoal={handleClearGoal}
               onPauseGoal={handlePauseGoal}
               onResumeGoal={handleResumeGoal}
+              resumeDisabled={Boolean(
+                collaborationReadOnlyReason
+                && !canResumeOrcaLeadGoalOnMobile(currentSession, goalStatus),
+              )}
               onSetGoal={handleSetGoal}
               testID="session.contextSheetGoalView"
             />

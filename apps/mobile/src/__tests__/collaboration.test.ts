@@ -1,6 +1,7 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 import { i18n } from '@/i18n';
 import {
+  canResumeOrcaLeadGoalOnMobile,
   isCollaborationSession,
   sessionCollaborationComposerReadOnlyReason,
   sessionCollaborationLabel,
@@ -75,5 +76,13 @@ describe('mobile collaboration session fallback', () => {
     expect(sessionCollaborationLabel(session({ orcaRole: null }))).toBeNull();
     expect(isCollaborationSession(session({ orcaRole: null }))).toBe(false);
     expect(sessionCollaborationReadOnlyReason(session({ orcaRole: null }))).toBeNull();
+  });
+
+  it('only allows recoverable goal resume for an Orca Lead', () => {
+    expect(canResumeOrcaLeadGoalOnMobile(session({ orcaRole: 'lead' }), { status: 'usageLimited' })).toBe(true);
+    expect(canResumeOrcaLeadGoalOnMobile(session({ orcaRole: 'worker' }), { status: 'usageLimited' })).toBe(false);
+    expect(canResumeOrcaLeadGoalOnMobile(session({ orcaRole: 'lead' }), { status: 'paused' })).toBe(true);
+    expect(canResumeOrcaLeadGoalOnMobile(session({ orcaRole: 'lead' }), { status: 'blocked' })).toBe(true);
+    expect(canResumeOrcaLeadGoalOnMobile(session({ orcaRole: null }), { status: 'usageLimited' })).toBe(false);
   });
 });
