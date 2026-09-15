@@ -2781,15 +2781,46 @@ interface ElectronAPI {
     sessionId: string;
     title: string;
     kind: 'done' | 'error' | 'needs-reply';
+    /** Main-issued ownership token; prevents duplicate delivery across windows. */
+    deliveryToken?: string;
     /**
      * 选择性走哪些通知通道; 缺省 / 未传 → 兼容旧行为(仅桌面)。
      * renderer 侧 gate(localStorage notifications.enabled /
      * notifications.feishuEnabled)后填入。
      * mobile = 手机推送:桌面侧无独立开关(手机端注册/注销 token 决定接收),
      * 发送侧防打扰在 main 的 device-link 模块收口,renderer 恒传 true。
+     * sound = 应用级提示音通道(#3177):true 时 main 把本条 toast 置为静音,
+     * 提示音已由 renderer 本地播放,OS 通知音不再叠加。
      */
-    channels?: { desktop?: boolean; feishu?: boolean; mobile?: boolean };
+    channels?: {
+      desktop?: boolean;
+      feishu?: boolean;
+      mobile?: boolean;
+      sound?: boolean;
+    };
   }) => Promise<void>;
+  /** Claim sole delivery ownership for a broadcast session event. */
+  notificationClaimSessionEvent?: (
+    sessionId: string,
+    kind: 'done' | 'error' | 'needs-reply',
+  ) => Promise<{ status: 'deliver'; token: string } | { status: 'suppressed' }>;
+  /** Main-owned cross-Renderer sound cooldown coordinator. */
+  notificationClaimSessionEventSound?: (
+    kind: 'done' | 'error' | 'needs-reply',
+    deliveryToken?: string,
+  ) => Promise<
+    { status: 'play'; token: string } | { status: 'covered' } | { status: 'suppressed' }
+  >;
+  /** Resolves true when any Cindy content window focuses during this sound claim. */
+  notificationWaitForSessionEventSoundFocus?: (
+    kind: 'done' | 'error' | 'needs-reply',
+    token: string,
+  ) => Promise<boolean>;
+  notificationSettleSessionEventSound?: (
+    kind: 'done' | 'error' | 'needs-reply',
+    token: string,
+    started: boolean,
+  ) => Promise<void>;
   /** Sync the renderer-owned global desktop-notification preference to main. */
   notificationSetDesktopEnabled?: (enabled: boolean) => Promise<{ ok: true }>;
   wecomGroupNotification: {

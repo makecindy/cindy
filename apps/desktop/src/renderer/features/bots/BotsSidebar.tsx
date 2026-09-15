@@ -29,6 +29,7 @@ import { useAgentIslandActivityMap } from '@/state/agentIslandActivity';
 import { useSessionRunningStatus } from '@/hooks/useSessionRunningStatus';
 import { useActiveMainView } from '@/hooks/useActiveMainView';
 import { sendSessionEventNotification } from '@/lib/sessionEventNotification';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { useSidebarCollapsedState, useRegisterSidebarUpper } from '../feature-context';
 import { SidebarIconButton } from '@/components/sidebar/SidebarIconButton';
 import { useRemoteBots } from './useRemoteBots';
@@ -144,13 +145,14 @@ function BotsSidebarContent() {
   }, [botId, bots, sessionId]);
   const fireSessionNotification = useCallback(
     (targetSessionId: string, kind: 'done' | 'error' | 'needs-reply') => {
+      const dataOwnerAtNotification = getDataOwnerGeneration();
       const owner = sessionOwners.get(targetSessionId);
       if (owner) {
         const title =
           owner.title.trim() && owner.title !== owner.bot.name
             ? `${owner.bot.name} · ${owner.title}`
             : owner.bot.name;
-        sendSessionEventNotification(targetSessionId, title, kind);
+        void sendSessionEventNotification(targetSessionId, title, kind, dataOwnerAtNotification);
         return;
       }
       // useSessionRunningStatus observes the shared runtime map, so it also
@@ -160,17 +162,19 @@ function BotsSidebarContent() {
         .get(targetSessionId)
         .then((session) => {
           if (isOrcaWorkerSession(session)) return;
-          sendSessionEventNotification(
+          void sendSessionEventNotification(
             targetSessionId,
             projectDraftSessionTitle(session.title, t('ccAgent.common.unnamedSession')),
             kind,
+            dataOwnerAtNotification,
           );
         })
         .catch(() => {
-          sendSessionEventNotification(
+          void sendSessionEventNotification(
             targetSessionId,
             t('ccAgent.common.unnamedSession'),
             kind,
+            dataOwnerAtNotification,
           );
         });
     },
