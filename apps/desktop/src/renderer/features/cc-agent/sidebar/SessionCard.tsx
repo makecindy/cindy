@@ -171,17 +171,17 @@ export const SessionCard = memo(function SessionCard({
   // 本地 attention 链路，与 SessionItem 完全一致。
   const attentionKind = useSessionAttentionKind(session.id);
   const isUrgentFromContext = useSessionAttentionUrgency(session.id);
-  const remoteActivity = useRemoteSessionActivity(session.id);
+  const remoteActivity = useRemoteSessionActivity(session.id, session.deviceLinkDeviceId);
   const remoteSchedule = useRemoteSessionScheduleInfo(session.id);
   const sessionActivity = projectSidebarSessionActivity({
     interruption: session,
     sessionId: session.id,
     title: session.title,
     recordStatus: session.status,
-    liveActivity: remoteActivity ?? islandActivity,
+    liveActivity: session.deviceLinkDeviceId ? remoteActivity : islandActivity,
     attentionKind,
     isUrgentFromContext: isUrgentFromContext || remoteSchedule?.hasUnreadFailedRun === true,
-    isRunning,
+    isRunning: session.deviceLinkDeviceId ? remoteActivity?.phase === 'running' : isRunning,
     hasAttentionNotification: hasAttentionNotification || remoteSchedule?.hasUnreadRun === true,
   });
   const leftIconRunning = sessionActivity.currentTurnActive === true;

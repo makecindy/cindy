@@ -369,7 +369,7 @@ async function probeMissingSessionStatuses(
     if (result.errorCode === 'NOT_FOUND') {
       terminalIds.add(result.sessionId);
       remoteProjectsStore.applyPatch(deviceId, result.sessionId, { status: 'deleted' });
-      removeRemoteSessionActivityEntry(result.sessionId);
+      removeRemoteSessionActivityEntry(result.sessionId, deviceId);
       continue;
     }
     if (!result.value || typeof result.value !== 'object') continue;
@@ -381,7 +381,7 @@ async function probeMissingSessionStatuses(
         status: session.status,
         updatedAt: session.updatedAt,
       });
-      removeRemoteSessionActivityEntry(result.sessionId);
+      removeRemoteSessionActivityEntry(result.sessionId, deviceId);
       continue;
     }
     // sessions:get 返回缺席行时同样是权威快照，回填 title / pinnedAt / model 等
@@ -452,7 +452,8 @@ async function runRefreshRemoteDeviceSessions(
           if (status === 'archived' || sessions.length < LIST_LIMIT) {
             if (status === 'active') {
               for (const session of missingSessions) {
-                if (session.source !== 'bot') removeRemoteSessionActivityEntry(session.id);
+                if (session.source !== 'bot')
+                  removeRemoteSessionActivityEntry(session.id, deviceId);
               }
             }
             remoteProjectsStore.setDeviceSessions(deviceId, deviceName, sessions, status);
