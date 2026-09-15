@@ -1127,8 +1127,10 @@ function ExpandedView({
     },
     [scheduleSessionIndex, remoteScheduleIndex],
   );
-  const { effectiveRunningSessionIds, displayRunningSessionIds } =
-    useSessionDisplayRunningState(sessions, runningSessionIds);
+  const { effectiveRunningSessionIds, displayRunningSessionIds } = useSessionDisplayRunningState(
+    sessions,
+    runningSessionIds,
+  );
   const collapsedAttentionToneFor = useCallback(
     (sessions: readonly Session[]) =>
       resolveCollapsedProjectAttentionTone({
@@ -1371,22 +1373,6 @@ function ExpandedView({
     visiblePersistentLocalProjects,
     localPlatform,
   );
-  const groups = useProjectGroups(
-    activityFilteredSessions,
-    projectAliases.aliases,
-    false,
-    activityFilteredPersistentLocalProjects,
-    localPlatform,
-  );
-  // 普通项目目录也需要保留「所有会话都已单独置顶」的项目身份，供用户继续
-  // 从 ProjectNode 菜单置顶整个项目；实际项目子行在渲染前仍会排除已置顶会话。
-  const groupsWithPinnedProjects = useProjectGroups(
-    activityFilteredSessions,
-    projectAliases.aliases,
-    true,
-    activityFilteredPersistentLocalProjects,
-    localPlatform,
-  );
   // Project pinning is independent from conversation pinning. This catalogue
   // keeps pinned conversations inside their project solely for project identity
   // and project-level actions; the normal project tree above remains deduped.
@@ -1396,6 +1382,30 @@ function ExpandedView({
     true,
     visiblePersistentLocalProjects,
     localPlatform,
+  );
+  const groups = useProjectGroups(
+    activityFilteredSessions,
+    projectAliases.aliases,
+    false,
+    activityFilteredPersistentLocalProjects,
+    localPlatform,
+    activityFilteredSessions === sidebarSessions &&
+      activityFilteredPersistentLocalProjects === visiblePersistentLocalProjects
+      ? allGroups
+      : undefined,
+  );
+  // 普通项目目录也需要保留「所有会话都已单独置顶」的项目身份，供用户继续
+  // 从 ProjectNode 菜单置顶整个项目；实际项目子行在渲染前仍会排除已置顶会话。
+  const groupsWithPinnedProjects = useProjectGroups(
+    activityFilteredSessions,
+    projectAliases.aliases,
+    true,
+    activityFilteredPersistentLocalProjects,
+    localPlatform,
+    activityFilteredSessions === sidebarSessions &&
+      activityFilteredPersistentLocalProjects === visiblePersistentLocalProjects
+      ? allProjectGroups
+      : undefined,
   );
   const activeWorkingDirs = useMemo(
     () => allProjectGroups.projects.map((p) => p.projectKey),
@@ -2678,6 +2688,12 @@ function ExpandedView({
     [filter, t],
   );
 
+  // Event-only state: metadata updates recreate the collapsed Set even when
+  // membership is unchanged. Do not propagate that identity to every task row.
+  const collapsedProjectsForMoveRef = useRef(collapse.collapsed);
+  useLayoutEffect(() => {
+    collapsedProjectsForMoveRef.current = collapse.collapsed;
+  }, [collapse.collapsed]);
   const handleMoveSession = useCallback(
     async (sessionId: string, target: SessionMoveTarget) => {
       const session = sessionsByIdRef.current.get(sessionId);
@@ -2729,7 +2745,7 @@ function ExpandedView({
         const normalized = normalizeWorkingDir(targetWorkingDir);
         if (normalized) {
           expandedProjectKey = projectIdentityKey('local', normalized, null);
-          wasExpandedProjectCollapsed = collapse.collapsed.has(expandedProjectKey);
+          wasExpandedProjectCollapsed = collapsedProjectsForMoveRef.current.has(expandedProjectKey);
           collapse.expand(expandedProjectKey);
         }
       }
@@ -2760,16 +2776,7 @@ function ExpandedView({
         );
       }
     },
-    // 同理只依赖用到的三个成员,不要整个 collapse —— useCollapsedProjects 也返回
-    // 新对象字面量。collapsed 是 Set,仅用户手动折叠/展开时换引用,频率可忽略。
-    [
-      collapse.collapsed,
-      collapse.expand,
-      collapse.setCollapsed,
-      effectiveRunningSessionIds,
-      patchLocal,
-      t,
-    ],
+    [collapse.expand, collapse.setCollapsed, effectiveRunningSessionIds, patchLocal, t],
   );
 
   /* ---- Delete / Archive / Unarchive action handlers ----
@@ -3840,8 +3847,10 @@ function CollapsedView({
   // → lead 点亮)——与展开态 displayRunningSessionIds 同口径。RailNav 会滤掉
   // worker 行、只聚合 lead,不晋升会出现「面板里 lead 在跑、段灯与置顶瓷砖
   // 却不亮」(codex review)。
-  const { displayRunningSessionIds: railRunningIds } =
-    useSessionDisplayRunningState(sessions, runningSessionIds);
+  const { displayRunningSessionIds: railRunningIds } = useSessionDisplayRunningState(
+    sessions,
+    runningSessionIds,
+  );
 
   return (
     <div

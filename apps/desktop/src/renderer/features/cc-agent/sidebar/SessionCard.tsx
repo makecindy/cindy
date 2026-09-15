@@ -30,12 +30,11 @@ import type {
 } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Undo } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { useNavigate } from 'react-router-dom';
 
 import { cn } from '@/lib/utils';
 import { SessionStatusIcon } from './SessionStatusIcon';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
-import { AutomationTimerIcon } from './AutomationTimerIcon';
+import { AutomationSessionButton } from './AutomationSessionButton';
 import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -85,14 +84,7 @@ import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProjectsStore';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
-import {
-  useSessionBoundSchedules,
-  scheduleFocusPath,
-} from '@/features/scheduler/lib/scheduleSessionBinding';
-import {
-  findLatestSidebarIndexRunForSession,
-  loadScheduleSidebarIndexRuns,
-} from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
+import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
 import { Tip } from '@/components/ui/tooltip';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
@@ -161,7 +153,6 @@ export const SessionCard = memo(function SessionCard({
   hideBottomDivider = false,
 }: SessionCardProps) {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅,非按住态恒为 null。
   const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   // 灵动岛同源的 per-session 实时活动(执行中逐步活动 + 等待交互态)。
@@ -493,20 +484,6 @@ export const SessionCard = memo(function SessionCard({
     setShareExportOpen(true);
   }, []);
 
-  const handleAutomationIconClick = useCallback(
-    async (e: React.MouseEvent) => {
-      e.stopPropagation();
-      try {
-        const runs = await loadScheduleSidebarIndexRuns();
-        const hit = findLatestSidebarIndexRunForSession(runs, session.id);
-        navigate(hit ? scheduleFocusPath(hit.scheduleId) : '/cc-agent/scheduled');
-      } catch {
-        navigate('/cc-agent/scheduled');
-      }
-    },
-    [session.id, navigate],
-  );
-
   // 远程会话把归属设备冻进 `?device=`:发送时的引用解析不再依赖被控端此刻在线。
   const handleCopyDeepLinkSelect = useCallback(async () => {
     const link = buildSessionDeepLink(session.id, { deviceId: session.deviceLinkDeviceId });
@@ -593,18 +570,12 @@ export const SessionCard = memo(function SessionCard({
         activeForeground={isActive}
       />
     ) : showAutomationTimer ? (
-      <Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}>
-        <button
-          type="button"
-          className="inline-flex shrink-0 cursor-pointer items-center justify-center focus:outline-none"
-          aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-          onClick={(e) => void handleAutomationIconClick(e)}
-          onKeyDown={(e) => e.stopPropagation()}
-          onPointerDown={(e) => e.stopPropagation()}
-        >
-          <AutomationTimerIcon size={iconSize} activeForeground={isActive} />
-        </button>
-      </Tip>
+      <AutomationSessionButton
+        sessionId={session.id}
+        size={iconSize}
+        activeForeground={isActive}
+        centered
+      />
     ) : null;
 
   // list 变体标题前缀:状态图标 + 自动化徽章 + 间隔(保持 main 既有行为不变)。

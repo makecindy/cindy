@@ -32,7 +32,6 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { DragEvent as ReactDragEvent, MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
-import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -80,7 +79,6 @@ import {
   type ScheduleSidebarIndexRun,
 } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
-import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
 import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
@@ -97,7 +95,7 @@ import { useRemoteSessionScheduleInfo } from '@/features/device-link/remoteProje
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { useAgentIslandActivity } from '@/state/agentIslandActivity';
 import { projectSidebarSessionActivity, resolveSidebarRightStatus } from './sidebarRightStatus';
-import { AutomationTimerIcon } from './AutomationTimerIcon';
+import { AutomationSessionButton } from './AutomationSessionButton';
 import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 import {
   finishSessionDrag,
@@ -431,19 +429,6 @@ export const SessionItem = memo(function SessionItem({
   // schedulesStore 'changed' 刷新 → 列表为空 → 徽章消失。
   const boundSchedules = useSessionBoundSchedules(session.id);
   const hasAutomationMeta = boundSchedules.length > 0 || isAutomationGenerated;
-  const navigate = useNavigate();
-  // 自动化创建(非绑定)会话的 Timer 点击:scheduleId 不在 Session 上,点击时查
-  // sidebar index runs(sessionId → scheduleId)再跳;查不到(run 已删等)退化为
-  // 直接打开自动化页。一次性点击查询,不在渲染路径上常驻拉数据。
-  const handleAutomationIconClick = useCallback(async () => {
-    try {
-      const runs = await loadScheduleSidebarIndexRuns();
-      const hit = findLatestSidebarIndexRunForSession(runs, session.id);
-      navigate(hit ? scheduleFocusPath(hit.scheduleId) : '/cc-agent/scheduled');
-    } catch {
-      navigate('/cc-agent/scheduled');
-    }
-  }, [session.id, navigate]);
   // 单个 automation-generated 会话行的「schedule 反查」:sessionId → scheduleId 走
   // sidebar-index-runs(Session 上没有 scheduleId 字段)。用于两处:
   //   1. 门控 Run 按钮的可见性 —— schedule 已被删除但会话保留(disposition
@@ -1027,20 +1012,7 @@ export const SessionItem = memo(function SessionItem({
           {boundSchedules.length > 0 ? (
             <ScheduleBindingBadge schedules={boundSchedules} activeForeground={isActive} />
           ) : isAutomationGenerated ? (
-            <Tip text={t('ccAgent.sidebar.scheduleBinding.viewTask')}>
-              <button
-                type="button"
-                className="inline-flex shrink-0 cursor-pointer focus:outline-none"
-                aria-label={t('ccAgent.sidebar.scheduleBinding.viewTask')}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  void handleAutomationIconClick();
-                }}
-                onPointerDown={(e) => e.stopPropagation()}
-              >
-                <AutomationTimerIcon size={10} activeForeground={isActive} />
-              </button>
-            </Tip>
+            <AutomationSessionButton sessionId={session.id} size={10} activeForeground={isActive} />
           ) : null}
           <SidebarTitleMarquee
             title={displayTitle}
