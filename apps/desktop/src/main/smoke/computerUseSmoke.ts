@@ -13,8 +13,11 @@ import { createLogger } from '../logger.js';
 
 const logger = createLogger('computer-use-smoke');
 let started = false;
+const cursorGoalDemo = process.env.CINDY_CUA_SMOKE === 'cursor-goal';
 const requested =
-  !app.isPackaged && process.env.XDT_ISOLATED === '1' && process.env.CINDY_CUA_SMOKE === '1';
+  !app.isPackaged &&
+  process.env.XDT_ISOLATED === '1' &&
+  (process.env.CINDY_CUA_SMOKE === '1' || cursorGoalDemo);
 
 /** Explicit, isolated, real-driver smoke. It operates only on its own disposable window. */
 export async function runComputerUseSmokeIfRequested(): Promise<void> {
@@ -100,7 +103,46 @@ export async function runComputerUseSmokeIfRequested(): Promise<void> {
       if (name === 'verify_state') report.verification = payload.data;
       return payload;
     };
-    const catalog = await call('list_windows', { pid: process.pid });
+    if (cursorGoalDemo) {
+      // Exercise the real MCP -> host -> native driver path, without clicks or typing.
+      // Closing the disposable fixture ends the demo; otherwise it lasts two minutes.
+      let previousSession: unknown;
+      for (let step = 0; step < 12 && !window.isDestroyed(); step += 1) {
+        const bounds = window.getContentBounds();
+        const moved = await call('move_cursor', {
+          x: bounds.x + 160 + (step % 3) * 140,
+          y: bounds.y + 220,
+          ...(step === 0 ? { session_goal: 'Test cursor goal' } : {}),
+        });
+        check(moved.ok, `cursor demo move ${step + 1} succeeded`);
+        const state = await call('get_agent_cursor_state', {});
+        check(state.ok, `cursor demo state ${step + 1} available`);
+        report.cursorState = state.data;
+        if (step === 0) {
+          previousSession = state.data?.session;
+          check(
+            typeof previousSession === 'string' && previousSession.startsWith('Test cursor goal'),
+            'native cursor session starts with the run goal',
+          );
+        } else check(state.data?.session === previousSession, 'cursor session remains stable');
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            window?.removeListener('closed', done);
+            resolve();
+          };
+          const timer = setTimeout(done, 10_000);
+          window!.once('closed', done);
+          if (window!.isDestroyed()) done();
+        });
+      }
+      report.ok = true;
+      return;
+    }
+    const catalog = await call('list_windows', {
+      pid: process.pid,
+      session_goal: 'Test computer controls',
+    });
     const target = catalog.data?.windows?.find(
       (item: { title?: string }) => item.title === 'Cindy Computer Use Smoke',
     );

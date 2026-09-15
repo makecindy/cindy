@@ -1066,6 +1066,63 @@ describe('computer mcp integration', () => {
     expect(mcpConnectMock).toHaveBeenCalledTimes(1);
   });
 
+  it('names the run after its first goal and ignores later step descriptions', async () => {
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    await callComputerDriverTool('list_windows', { session_goal: '提交报销申请' }, { sessionId: 'goal-a' });
+    await callComputerDriverTool('type_text', { pid: 1, text: 'x'.repeat(850), session_goal: '输入文字' }, { sessionId: 'goal-a' });
+    const calls = mcpCallToolMock.mock.calls.map(([call]) => call)
+      .filter((call) => ['list_windows', 'type_text'].includes(call.name));
+    expect(calls).toHaveLength(4);
+    const driverSession = calls[0].arguments.session;
+    expect(driverSession).toMatch(/^提交报销申请 · \d+-cua-[a-f0-9]{12}-0$/);
+    expect(calls.every((call) => call.arguments.session === driverSession)).toBe(true);
+    expect(calls.every((call) => !('session_goal' in call.arguments))).toBe(true);
+    await cleanupComputerDriverSession('goal-a');
+    expect(mcpCallToolMock.mock.lastCall![0]).toEqual({ name: 'end_session', arguments: { session: driverSession } });
+    await callComputerDriverTool('list_windows', { session_goal: '调整通知设置' }, { sessionId: 'goal-a' });
+    expect(mcpCallToolMock.mock.lastCall![0].arguments.session).toMatch(/^调整通知设置 · \d+-cua-[a-f0-9]{12}-1$/);
+  });
+
+  it('claims the first goal before asynchronous startup and isolates identical goals', async () => {
+    const startup = createDeferred<void>();
+    mcpConnectMock.mockReturnValueOnce(startup.promise);
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    const first = callComputerDriverTool('list_windows', { session_goal: 'Configure notifications' }, { sessionId: 'goal-a' });
+    const second = callComputerDriverTool('list_windows', { session_goal: 'Click button' }, { sessionId: 'goal-a' });
+    startup.resolve();
+    await Promise.all([first, second]);
+    await callComputerDriverTool('list_windows', { session_goal: 'Configure notifications' }, { sessionId: 'goal-b' });
+    const ids = mcpCallToolMock.mock.calls.map(([call]) => call.arguments.session);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[0]).toMatch(/^Configure notifications · /);
+    expect(ids[2]).toMatch(/^Configure notifications · /);
+    expect(ids[2]).not.toBe(ids[0]);
+  });
+
+  it('preserves the goal through transport recovery and only rotates the generation', async () => {
+    mcpCallToolMock.mockImplementation(async (call) => {
+      if (call.name === 'list_windows' && call.arguments.session.endsWith('-0')) {
+        return { content: [{ type: 'text', text: '"session ended; tool call ignored"' }] };
+      }
+      return { content: [{ type: 'text', text: '{"ok":true}' }] };
+    });
+    await callComputerDriverTool('list_windows', { session_goal: 'Submit report' }, { sessionId: 'goal-retry' });
+    const ids = mcpCallToolMock.mock.calls.map(([call]) => call)
+      .filter((call) => call.name === 'list_windows').map((call) => call.arguments.session);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).toMatch(/^Submit report · /);
+    expect(ids[1]).toBe(ids[0].replace(/-0$/, '-1'));
+  });
+
+  it('keeps legacy identity when the first call omits a goal and strips host metadata on old drivers', async () => {
+    mcpCallToolMock.mockResolvedValue({ content: [{ type: 'text', text: '{"ok":true}' }] });
+    await callComputerDriverTool('list_windows', {}, { sessionId: 'legacy' });
+    await callComputerDriverTool('list_windows', { session_goal: 'Late name' }, { sessionId: 'legacy' });
+    const calls = mcpCallToolMock.mock.calls.map(([call]) => call.arguments);
+    expectDriverSessionGenerations(calls.map((args) => args.session), 'legacy', [0, 0]);
+    expect(calls.every((args) => !('session_goal' in args))).toBe(true);
+  });
+
   it('retries Cindy cursor styling after a transient styling failure', async () => {
     mcpCallToolMock
       .mockRejectedValueOnce(new Error('motion unavailable'))
