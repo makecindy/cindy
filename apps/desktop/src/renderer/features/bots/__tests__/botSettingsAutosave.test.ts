@@ -6,6 +6,7 @@ import {
   botSettingsPayloadEqual,
   createBotSettingsAutosave,
   normalizeBotSettingsPayload,
+  reconcileBotSettingsDraft,
   type BotAutosaveStatus,
   type BotSettingsPayload,
 } from '../botSettingsAutosave';
@@ -159,6 +160,60 @@ describe('normalizeBotSettingsPayload', () => {
   });
 });
 
+describe('reconcileBotSettingsDraft style echo',
+  () => {
+    it('keeps trailing spaces and newlines in the local style draft on a self-save echo',
+      () => {
+        const baseline = payload({ style: { addressUserAs: 'Chris', languageHabits: '先结论\n后解释' } });
+        const draft = payload({
+          style: { addressUserAs: 'Chris ', languageHabits: '先结论\n后解释\n' },
+        });
+        const incoming = payload({ style: { addressUserAs: 'Chris', languageHabits: '先结论\n后解释' } });
+        expect(reconcileBotSettingsDraft(baseline, draft, incoming).style).toEqual({
+          addressUserAs: 'Chris ',
+          languageHabits: '先结论\n后解释\n',
+        });
+      });
+
+    it('keeps a real in-flight style edit that has not been saved yet', () => {
+      const baseline = payload({ style: { addressUserAs: 'Chris' } });
+      const draft = payload({ style: { addressUserAs: 'Chris Smith' } });
+      const incoming = payload({ style: { addressUserAs: 'Chris' } });
+      expect(reconcileBotSettingsDraft(baseline, draft, incoming).style).toEqual({
+        addressUserAs: 'Chris Smith',
+      });
+    });
+
+    it('adopts a true external style update instead of the local whitespace draft', () => {
+      const baseline = payload({ style: { addressUserAs: 'Chris' } });
+      const draft = payload({ style: { addressUserAs: 'Chris ' } });
+      const incoming = payload({ style: { addressUserAs: 'Pat' } });
+      expect(reconcileBotSettingsDraft(baseline, draft, incoming).style).toEqual({
+        addressUserAs: 'Pat',
+      });
+    });
+
+    it('keeps both windows when each edited a different style subfield', () => {
+      const baseline = payload({ style: { tone: 'warm', addressUserAs: 'Chris' } });
+      const draft = payload({ style: { tone: 'warm', addressUserAs: 'Pat' } });
+      const incoming = payload({ style: { tone: 'concise', addressUserAs: 'Chris' } });
+      expect(reconcileBotSettingsDraft(baseline, draft, incoming).style).toEqual({
+        tone: 'concise',
+        addressUserAs: 'Pat',
+      });
+    });
+
+    it('keeps an in-flight local subfield together with a concurrent remote subfield', () => {
+      const baseline = payload({ style: { tone: 'warm', addressUserAs: 'Chris' } });
+      const draft = payload({ style: { tone: 'warm', addressUserAs: 'Pat ' } });
+      const incoming = payload({ style: { tone: 'concise', addressUserAs: 'Chris' } });
+      expect(reconcileBotSettingsDraft(baseline, draft, incoming).style).toEqual({
+        tone: 'concise',
+        addressUserAs: 'Pat ',
+      });
+    });
+  });
+
 describe('botSettingsPayloadEqual', () => {
   it('detects changes in every persisted field', () => {
     const base = payload();
@@ -177,6 +232,19 @@ describe('botSettingsPayloadEqual', () => {
         payload({ capabilities: capabilities({ mcpServers: ['a'] }) }),
       ),
     ).toBe(false);
+    expect(botSettingsPayloadEqual(base, payload({ style: { tone: 'warm' } }))).toBe(false);
+    expect(
+      botSettingsPayloadEqual(
+        payload({ style: { tone: 'warm', customTone: '  ' } }),
+        payload({ style: { tone: 'warm' } }),
+      ),
+    ).toBe(true);
+    expect(
+      botSettingsPayloadEqual(
+        payload({ style: { tone: undefined, replyLength: undefined, emojiDensity: undefined } }),
+        payload({ style: null }),
+      ),
+    ).toBe(true);
   });
 
   it('treats a null and an undefined providerId as the same "none"', () => {
@@ -385,6 +453,15 @@ describe('settings changes preserve independently joined capabilities', () => {
   it('does not resend capability selections when only the name changes', () => {
     expect(botSettingsChanges(payload(), payload({ name: 'Updated' }))).toEqual({ name: 'Updated' });
   });
+  it('does not send style:null when an unset style is still unset', () => {
+    expect(botSettingsChanges(payload({ style: null }), payload({ name: 'Updated', style: null }), true)).toEqual({
+      name: 'Updated',
+    });
+    expect(botSettingsChanges(payload(), payload({ name: 'Updated', style: null }), true)).toEqual({ name: 'Updated' });
+    expect(botSettingsChanges(payload({ style: { tone: 'warm' } }), payload({ name: 'Updated', style: { tone: 'warm' } }), true)).toEqual({
+      name: 'Updated',
+    });
+  });
   it('updates only the selected capability group', () => {
     expect(botSettingsChanges(payload(), payload({ capabilities: capabilities({ mcpServers: ['docs'] }) }))).toEqual({ capabilities: { mcpServers: ['docs'] } });
   });
@@ -399,5 +476,28 @@ describe('settings changes preserve independently joined capabilities', () => {
       skills: [], capabilityBaseline: { skills: ['new'] },
     });
     expect(botSettingsChanges(after, { ...after, name: 'Updated' }, true)).toEqual({ name: 'Updated' });
+  });
+  it('carries a style editing baseline so concurrent subfields can merge', () => {
+    const before = payload({ style: { tone: 'warm', addressUserAs: 'Chris' } });
+    const after = payload({ style: { tone: 'warm', addressUserAs: 'Pat' } });
+    expect(botSettingsChanges(before, after, true)).toEqual({
+      style: { tone: 'warm', addressUserAs: 'Pat' },
+      styleBaseline: { tone: 'warm', addressUserAs: 'Chris' },
+    });
+    expect(botSettingsChanges(payload(), payload({ style: { tone: 'warm' } }), true)).toEqual({
+      style: { tone: 'warm' },
+      styleBaseline: null,
+    });
+    expect(botSettingsChanges(before, payload({ name: 'Updated' }), true)).toEqual({ name: 'Updated' });
+  });
+  it('omits styleBaseline when restoring the whole style override to default', () => {
+    expect(botSettingsChanges(
+      payload({ style: { tone: 'warm', addressUserAs: 'Chris' } }),
+      payload({ style: null }),
+      true,
+    )).toEqual({ style: null });
+    expect(botSettingsChanges(payload({ style: { selfName: '小满' } }), payload({ style: null }), true)).toEqual({
+      style: null,
+    });
   });
 });

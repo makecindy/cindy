@@ -147,6 +147,7 @@ async function syncBotProfileFolder(
   }
 }
 import { buildDefaultBotIdentity } from '../../../shared/botProfileDefaults.js';
+import { normalizeBotStyle, reconcileBotStyle } from '../../../shared/botStyle.js';
 import { coordinateBotCanonicalReplacement } from '../../maker-ipc/botCanonicalReplacementCoordinator.js';
 import { searchConversations } from '../conversationSearch.js';
 import {
@@ -334,6 +335,10 @@ function readText(value: unknown, field: string, max = MAX_TEXT, required = fals
  */
 function readBotGender(value: unknown): 'female' | 'male' | undefined {
   return value === 'female' || value === 'male' ? value : undefined;
+}
+
+function readBotStyle(value: unknown) {
+  return normalizeBotStyle(value);
 }
 
 function parseJson(value: string, fallback: Record<string, unknown> = {}): Record<string, unknown> {
@@ -552,6 +557,7 @@ async function readProfile(
     // 与 userContextSource 同款:存在档案 JSON 里,投影成顶层字段。老档案没有这
     // 个键 → undefined → 界面回落「用名字称呼」,与升级前行为一致。
     ...(readBotGender(config.gender) ? { gender: readBotGender(config.gender) } : {}),
+    ...(readBotStyle(config.style) ? { style: readBotStyle(config.style) } : {}),
     avatar: profile.avatar,
     avatarColor: profile.avatarColor,
     enabled: profile.status === 'active',
@@ -934,6 +940,7 @@ export async function createBotProfile(raw: unknown) {
     : {};
   const userContextSource = readText(body.userContextSource, 'userContextSource', 12000);
   const gender = readBotGender(body.gender);
+  const style = readBotStyle(body.style);
   // Old clients may still submit retired template ids with a complete profile.
   // Accept those as ordinary teammates, without installing or reconstructing a template.
   const retiredTemplate = body.templateId === 'dash' || body.templateId === 'lizi';
@@ -965,6 +972,7 @@ export async function createBotProfile(raw: unknown) {
     ...(draftEntry ? { skillMode: 'allowlist', mcpMode: 'allowlist', mcpServers: draftEntry.draft.mcpRefs, toolsetMode: 'allowlist', toolsets: draftEntry.draft.toolsetRefs } : {}),
     userContextSource,
     ...(gender ? { gender } : {}),
+    ...(style ? { style } : {}),
   });
   // Progress is main-owned; callers can request an invitation, never supply its result.
   delete persistedCapabilities.invitation;
@@ -1119,7 +1127,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const previous = parseJson(version?.capabilitiesJson ?? '{}');
   const preparation = botInvitationProgress(previous.invitation);
   const retryingPortrait = preparation?.stage === 'avatar' && current.canonicalSessionId;
-  if (preparation && preparation.stage !== 'ready' && !retryingPortrait && (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined)) {
+  if (preparation && preparation.stage !== 'ready' && !retryingPortrait && (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined || Object.prototype.hasOwnProperty.call(body, 'style'))) {
     throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面，请完成准备后再编辑资料');
   }
   const nextConfig = mergeBotProfileCapabilities({
@@ -1150,6 +1158,26 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     const nextGender = readBotGender(body.gender);
     if (nextGender) nextConfig.gender = nextGender;
     else delete nextConfig.gender;
+  }
+  if (Object.prototype.hasOwnProperty.call(body, 'style')) {
+    const nextStyle = readBotStyle(body.style);
+    if (Object.prototype.hasOwnProperty.call(body, 'styleBaseline')) {
+      const baselineRaw = body.styleBaseline;
+      if (baselineRaw != null && (typeof baselineRaw !== 'object' || Array.isArray(baselineRaw))) {
+        throwIpcError('INVALID_PARAMS', 'styleBaseline must be an object');
+      }
+      const merged = reconcileBotStyle(
+        readBotStyle(baselineRaw),
+        nextStyle,
+        readBotStyle(previous.style),
+      );
+      if (merged) nextConfig.style = merged;
+      else delete nextConfig.style;
+    } else if (nextStyle) {
+      nextConfig.style = nextStyle;
+    } else {
+      delete nextConfig.style;
+    }
   }
   const normalizedNextConfig = normalizeBotModelCapabilitiesOrThrow(nextConfig);
   const nextIdentitySource =

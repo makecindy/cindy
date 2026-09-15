@@ -24,6 +24,13 @@
 
 import type { BotCapabilities, BotProfileUpdatePatch } from './botStore';
 import { reconcileBotCapabilityList } from '../../../shared/botCapabilitySelection';
+import {
+  BOT_STYLE_KEYS,
+  botStyleEqual,
+  normalizeBotStyle,
+  reconcileBotStyle,
+  type BotCommunicationStyle,
+} from '../../../shared/botStyle';
 
 /** 提交给 `updateBotProfile` 的字段集合(与手动保存时的载荷完全一致)。 */
 export interface BotSettingsPayload {
@@ -31,6 +38,8 @@ export interface BotSettingsPayload {
   description: string;
   identitySource: string;
   userContextSource: string;
+  /** 空配置用 null，便 IPC hasOwnProperty 能清掉原值。 */
+  style?: BotCommunicationStyle | null;
   avatar: string;
   avatarColor: string;
   capabilities: BotCapabilities;
@@ -43,6 +52,8 @@ export interface BotSettingsDraft {
   description: string;
   identitySource: string;
   userContextSource: string;
+  /** 与 payload 对齐:未设置 undefined,显式清空 null。 */
+  style?: BotCommunicationStyle | null;
   avatar: string;
   avatarColor: string;
   capabilities: BotCapabilities;
@@ -65,6 +76,7 @@ export function normalizeBotSettingsPayload(
     description: draft.description.trim(),
     identitySource: draft.identitySource,
     userContextSource: draft.userContextSource,
+    style: normalizeBotStyle(draft.style) ?? null,
     avatar: draft.avatar,
     avatarColor: draft.avatarColor,
     capabilities: draft.capabilities,
@@ -124,6 +136,7 @@ export function botSettingsPayloadEqual(a: BotSettingsPayload, b: BotSettingsPay
     a.description === b.description &&
     a.identitySource === b.identitySource &&
     a.userContextSource === b.userContextSource &&
+    botStyleEqual(a.style, b.style) &&
     a.avatar === b.avatar &&
     a.avatarColor === b.avatarColor &&
     stringListEqual(a.skills, b.skills) &&
@@ -147,6 +160,12 @@ export function botSettingsChanges(previous: BotSettingsPayload, next: BotSettin
     ...changed,
     ...(Object.keys(capabilityChanges).length ? { capabilities: capabilityChanges } : {}),
     ...(includeCapabilityBaseline && Object.keys(capabilityBaseline).length ? { capabilityBaseline } : {}),
+    // Group restore-default sends style:null to delete the whole override.
+    // A field-merge baseline would keep concurrent remote keys that were unset
+    // in this window (e.g. another window just added selfName).
+    ...(includeCapabilityBaseline && 'style' in changed && changed.style != null
+      ? { styleBaseline: previous.style ?? null }
+      : {}),
   };
 }
 
@@ -158,10 +177,10 @@ export function reconcileBotSettingsDraft(
 ): BotSettingsDraft {
   const normalized = normalizeBotSettingsPayload(draft, baseline.name);
   const changes = botSettingsChanges(baseline, normalized);
-  return {
+  const next: BotSettingsDraft = {
     ...incoming,
     ...Object.fromEntries(Object.keys(changes)
-      .filter((key) => key !== 'capabilities')
+      .filter((key) => key !== 'capabilities' && key !== 'style')
       .map((key) => [key, draft[key as keyof BotSettingsDraft]])),
     skills: reconcileBotCapabilityList(baseline.skills, draft.skills, incoming.skills),
     capabilities: {
@@ -170,7 +189,36 @@ export function reconcileBotSettingsDraft(
       mcpServers: reconcileBotCapabilityList(baseline.capabilities.mcpServers, draft.capabilities.mcpServers, incoming.capabilities.mcpServers),
       toolsets: reconcileBotCapabilityList(baseline.capabilities.toolsets, draft.capabilities.toolsets, incoming.capabilities.toolsets),
     },
+    style: reconcileAutosaveStyle(baseline.style, draft.style, incoming.style),
   };
+  return next;
+}
+
+/**
+ * Merge incoming style by field against this window's draft, using the same
+ * three-way rule as IPC `reconcileBotStyle`. Untrimmed local text that still
+ * matches after normalize is kept so a focused "Chris " is not replaced by the
+ * saved "Chris" (or a concurrent sibling field) mid-keystroke.
+ */
+function reconcileAutosaveStyle(
+  previous: BotCommunicationStyle | null | undefined,
+  local: BotCommunicationStyle | null | undefined,
+  remote: BotCommunicationStyle | null | undefined,
+): BotCommunicationStyle | null {
+  const merged = reconcileBotStyle(previous, local, remote);
+  if (!merged) {
+    return botStyleEqual(local, remote) ? local ?? null : null;
+  }
+  const raw = local && typeof local === 'object' && !Array.isArray(local) ? local : {};
+  const next: Partial<Record<keyof BotCommunicationStyle, string>> = { ...merged };
+  for (const key of BOT_STYLE_KEYS) {
+    const draftValue = raw[key];
+    if (typeof draftValue !== 'string') continue;
+    if (botStyleEqual({ [key]: draftValue }, { [key]: next[key] })) {
+      next[key] = draftValue;
+    }
+  }
+  return next as BotCommunicationStyle;
 }
 
 /** 自动保存对用户可见的状态。`saved` 由 UI 侧短暂显示后淡出,不常驻。 */

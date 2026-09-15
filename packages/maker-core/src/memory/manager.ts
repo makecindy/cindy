@@ -27,6 +27,7 @@ import * as fsSync from 'node:fs';
 import type Database from 'better-sqlite3';
 
 import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
+import { parseBotMemoryScopeKey } from './storage.js';
 import {
   MemoryError,
   type MemoryConfig,
@@ -587,6 +588,10 @@ export class MakerMemoryManager {
       storageDir,
       absWorkdir,
       db,
+      // bot scope 判定 (#4124): bot: 前缀 = 伙伴 Bot Home 的独立记忆 store ——
+      // 允许 bot-only 类型 (moment) 写入 + MEMORY.md 渲染 moment 分区; 其余 scope
+      // (本地 workdir / ssh 远端) 为全局 Maker Memory 语义, 完全不感知 moment。
+      botScope: parseBotMemoryScopeKey(absWorkdir) !== null,
       logger: this.logger.child(`memory:${sanitized}`),
       ...(this.deps.config ? { config: this.deps.config } : {}),
       // store 级 mutation 前置守卫 (review #2388 Codex 5th P1): 裸 store 在
