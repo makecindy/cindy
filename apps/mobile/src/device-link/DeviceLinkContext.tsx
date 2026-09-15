@@ -163,7 +163,11 @@ export interface DeviceLinkContextValue {
   lastPresenceSnapshot: PresenceSnapshot | null;
   /** 当前 relay 连接代内的逐设备 availability；null = 本代尚无权威 verdict。 */
   getPresenceAvailability(deviceId: string): boolean | null;
-  readDeviceList(): Promise<{ devices: DeviceView[] }>;
+  /**
+   * Read the account device roster. `fresh` starts a new REST snapshot instead of
+   * joining a request that may have started before the caller's reconciliation fence.
+   */
+  readDeviceList(options?: { fresh?: boolean }): Promise<{ devices: DeviceView[] }>;
   openLink(deviceId: string): Promise<LinkAcceptPayload>;
   /** 丢弃已结算的开链缓存并真正重开；并发重开仍按设备单飞。 */
   reopenLink(deviceId: string): Promise<LinkAcceptPayload>;
@@ -372,6 +376,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const presenceAvailableByDeviceRef = useRef(new Map<string, boolean>());
   const rosterConsumerRef = useRef<(() => (devices: DeviceView[]) => void) | null>(null);
   const rosterRequestRef = useRef<{ client: DeviceLinkClient | null; epoch: number; promise: Promise<{ devices: DeviceView[] }> } | null>(null);
+  const rosterRequestGenerationRef = useRef(0);
   const presenceAvailabilityEpochsRef = useRef(createPresenceAvailabilityEpochs());
   const presencePendingRecoveryDeviceIdsRef = useRef(new Set<string>());
   const presenceUnavailableVerdictsRef = useRef(
@@ -395,15 +400,21 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
 
   // Home and direct task entry share the same in-flight roster read. Evidence
   // belongs to the connection that started it, not whichever one finishes it.
-  const readDeviceList = useCallback((): Promise<{ devices: DeviceView[] }> => {
+  const readDeviceList = useCallback((options: { fresh?: boolean } = {}): Promise<{ devices: DeviceView[] }> => {
     const client = clientRef.current;
     const epoch = connectionEpochRef.current;
     const pending = rosterRequestRef.current;
-    if (pending?.client === client && pending.epoch === epoch) return pending.promise;
+    if (!options.fresh && pending?.client === client && pending.epoch === epoch) return pending.promise;
+    const generation = ++rosterRequestGenerationRef.current;
     const apply = rosterConsumerRef.current?.();
     const promise = auth.apiFetch<{ devices: DeviceView[] }>('/api/device-link/devices', {
       baseUrl: DEVICE_LINK_API_BASE_URL, timeoutMs: 12_000,
-    }).then((result) => { apply?.(result.devices); return result; });
+    }).then((result) => {
+      // A fresh read supersedes every older roster consumer, even when the older
+      // response arrives first and would otherwise outrank the new snapshot.
+      if (rosterRequestGenerationRef.current === generation) apply?.(result.devices);
+      return result;
+    });
     rosterRequestRef.current = { client, epoch, promise };
     void promise.finally(() => {
       if (rosterRequestRef.current?.promise === promise) rosterRequestRef.current = null;
