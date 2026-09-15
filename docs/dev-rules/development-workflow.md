@@ -94,6 +94,51 @@ worktree 会话契约、直推 `main` 的额外门禁与 review 严重度口径�
     互不影响。`guard` tier 和 CI／GitHub Actions 不参与。等待超过 15 分钟以退出码 `75`
     结束，表示测试尚未运行，不得当作测试失败排查；排队是正常状态，不要 kill 后重跑。
     只有明确确认资源足够且需要有意重叠时，才可追加 `--no-lock` 作为逃生口。
+  - **最终门禁必须绑定冻结快照**：准备提交或提 PR 时，先完成实现与用于快速反馈的定向测试；
+    由 agent／自动化主持且已安排独立 review 的工作，还必须先将 review 的 P0／P1 清零。随后
+    显式暂存完整待提交集合（包括新增文件），确认没有混入无关用户改动，并以 `git write-tree`
+    生成的 index tree ID 冻结快照。最终有效的受影响 package typecheck、专项数据库门禁与根
+    `pnpm test:unit` 必须在由该 tree（或由它生成的临时 commit）物化出的同一干净 checkout 中
+    执行；冻结前跑过的同名检查只作为快速反馈，不能充当最终凭证。未跟踪但不属于本次提交的
+    用户文件可以留在作者 worktree，但不得出现在门禁 checkout，也不得在不重跑门禁的情况下
+    随后加入提交。门禁启动后，任何 `git add`／`git reset` 或 index tree ID 变化都会使旧结果
+    立即失效。旧快照、无退出码、被调用端终止、只看到「暂无失败输出」都不算通过，唯一有效
+    凭证是该 tree ID 的全部强制检查都取得退出码 `0`。通过后再次确认待提交 index tree ID 与
+    受测 tree 一致；提交时不得使用会从工作树重新选取内容的 `-a`／`--all`、`--include`／
+    `--only` 或 pathspec，只按已验证 index 执行 DCO commit。commit 后、push 前还必须以
+    `git rev-parse "HEAD^{tree}"` 取得最终 commit tree 并与受测 tree 精确比对；提交命令或本地 hook
+    导致不一致时不得 push，回到相应 review 与门禁阶段。普通 PR 仍可按仓库既有流程先提交，再
+    接受 GitHub 自动 review；本条不为所有贡献者新增提交前独立 review 硬门。
+  - **最终门禁环境要可复现且与产品故障分层**：同一批并行任务可将冻结快照依次物化到一个
+    已验证、无已知路径污染的专用门禁 checkout，重型门禁严格串行，不让多个 agent／worktree
+    同时争抢共享锁。复用该 checkout 已安装的依赖前，当前仓库的依赖指纹必须完全一致：根及
+    所有 workspace 的 `package.json`、本地 `file:` 依赖 `apps/mobile/modules/**`、
+    `pnpm-lock.yaml`、`pnpm-workspace.yaml`、根 `.npmrc`、`dependency-patches/**`，
+    Node／pnpm 版本与平台／架构／libc，以及根 `postinstall` 当前调用的
+    `scripts/ensure-agent-binaries.mjs`、`scripts/agent-binary-cdn-fallback.mjs`、
+    `scripts/shared/client-endpoint-build-env.mjs`、`scripts/fix-node-pty-perms.mjs`、
+    `tools/{claude,codex,ripgrep,pi}/update.mjs`、`tools/shared/**`、各
+    `tools/<kind>/latest.json` 与 `config/endpoint*.json`；还要保持会改变 postinstall 结果的
+    `XDT_SKIP_AGENT_BIN_INSTALL`、`XDT_CDN_BASE_URL`、`CINDY_AUTH_REGION`，以及上游下载所用的
+    `XDT_AGENTBIN_CONNECT_TIMEOUT_MS`、`XDT_AGENTBIN_STALL_TIMEOUT_MS`、
+    `XDT_AGENTBIN_TOTAL_TIMEOUT_MS`、`XDT_AGENTBIN_MIN_THROUGHPUT_BPS`、
+    `XDT_AGENTBIN_THROUGHPUT_WINDOW_MS`，以及 GitHub 下载认证输入 `GITHUB_TOKEN` 的有无与有效
+    权限上下文一致，并确认已安装 runtime 的版本标记与对应 pin 相符。认证输入只能在进程内核验
+    等价上下文，不得把 token 原文、可复用摘要或其他秘密写入指纹、日志或仓库。任一输入变化、
+    无法在不泄密的前提下证明一致，或 runtime 状态无法验证，都必须重新执行
+    `pnpm install`，不得复用现有 `node_modules`。普通独立 worktree 仍遵守第 1 节的独立安装
+    原则。安装或运行异常必须记录它发生在
+    测试启动前、fixture／worker 启动期还是断言阶段；只有取得指向具体外部原因的环境归因证据
+    （如明确的外部下载失败、共享锁 holder 或资源耗尽记录）时，才能标为基础设施故障。失败用例
+    在同一冻结快照的隔离复核中通过，只是继续调查顺序依赖、共享状态泄漏或环境问题的线索，
+    不能单独作为基础设施归因。`beforeAll` 超时、SQLite `database is locked` 等无法证明来自环境
+    的问题，仍按产品／测试失败处理。基础设施失败不得用定向测试替代根门禁；修复环境后只重跑
+    冻结的最终快照，避免在尚未收口的中间版本上反复消耗全量门禁。
+  - **终止外层命令后先核验进程树与锁**：调用工具返回 terminated／timeout 不等于 pnpm、
+    runner 与 Vitest 子进程都已退出。不得看到外层结束就立即重跑；先按输出中的 holder PID
+    和 worktree 路径核对进程树与共享锁，确认没有本任务遗留的 runner／worker 后再启动下一轮。
+    若遗留进程仍在推进，应继续等待或只终止经过路径与 PID 校验的本任务进程；不得按模糊进程名
+    批量结束，以免杀掉其它 agent／worktree 的测试。
 - **在门禁之上按风险追加验证**：跨模块、高风险或基础设施改动追加更广泛验证（如仓库根
   `pnpm test:all`），**最终以 CI 门禁为准**。不得通过 skip、删除或弱化测试制造通过；
   PR「怎么验证的」一节必须**如实**填写，没跑不许写已跑。
