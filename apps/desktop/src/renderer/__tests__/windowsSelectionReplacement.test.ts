@@ -4,6 +4,7 @@ import { EditorState, TextSelection, type Transaction } from '@tiptap/pm/state';
 import type { EditorProps, EditorView } from '@tiptap/pm/view';
 
 import { handleWindowsSelectedTextInput } from '../components/new-chat/WindowsSelectionReplacement';
+import { handlePairedSelectionInput } from '../components/new-chat/SelectionPairing';
 
 const schema = new Schema({
   nodes: {
@@ -72,6 +73,18 @@ function inputEvent(data: string, inputType = 'insertText') {
 }
 
 describe('Windows chat composer selection replacement', () => {
+  it('lets the shared text-input rule wrap a selected range', () => {
+    const initial = selectedPrefixState('hardBreak');
+    const { view, getState } = makeView(initial, false, handlePairedSelectionInput);
+    const event = inputEvent('(');
+
+    expect(handleWindowsSelectedTextInput(view, event)).toBe(true);
+
+    expect(documentText(getState())).toBe('(GPT5.5)啊啊啊啊\n');
+    expect(getState().selection.from).toBe(2);
+    expect(getState().selection.to).toBe(8);
+  });
+
   it.each(['hardBreak', 'emptyParagraph'] as const)(
     'replaces a selected prefix before a trailing %s and leaves the caret after the new text',
     (trailingKind) => {
