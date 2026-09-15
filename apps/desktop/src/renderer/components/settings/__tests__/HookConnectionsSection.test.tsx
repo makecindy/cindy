@@ -10,6 +10,7 @@ const ipc = vi.hoisted(() => ({
   onStatusChanged: vi.fn<(listener: (view: SlackHookView) => void) => () => void>(() => () => {}),
   setEnabled: vi.fn(),
   setLifecycleAnnouncement: vi.fn(),
+  setSlackCommunications: vi.fn(),
   providerBindStart: vi.fn(),
   providerBindCancel: vi.fn(),
   providerBindRevoke: vi.fn(),
@@ -182,6 +183,7 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
         onStatusChanged: ipc.onStatusChanged,
         setEnabled: ipc.setEnabled,
         setLifecycleAnnouncement: ipc.setLifecycleAnnouncement,
+        setSlackCommunications: ipc.setSlackCommunications,
         providerBindStart: ipc.providerBindStart,
         providerBindCancel: ipc.providerBindCancel,
         providerBindRevoke: ipc.providerBindRevoke,
@@ -250,6 +252,39 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     expect(workspacePrefsEditor.render).toHaveBeenCalledWith(
       expect.objectContaining({ alias: 'chat', maxVisibleModelRows: undefined }),
     );
+  });
+
+  it.each([true, false])('displaced workspace communications toggle (%s) never invokes Bot rebind or revoke', async (enabled) => {
+    const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester', displaced: true, communicationsEnabled: enabled };
+    const view: SlackHookView = { ...BASE_HOOK, enabled: true, status: 'connected', serverMultiTeam: true, serverSlackCommunications: true, bindings: [row] };
+    ipc.get.mockResolvedValue({ hook: view });
+    ipc.setSlackCommunications.mockResolvedValue({ hook: { ...view, bindings: [{ ...row, communicationsEnabled: !enabled }] } });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+    const toggle = await screen.findByRole('switch', { name: 'settings.remoteControl.hook.multi.localCommunications' });
+    const masterToggle = screen.getByRole('switch', { name: 'settings.remoteControl.hook.toggleAria' });
+    expect(masterToggle.getAttribute('aria-checked')).toBe('true');
+    expect(toggle.getAttribute('aria-checked')).toBe(String(enabled));
+    fireEvent.click(toggle);
+    await waitFor(() => expect(ipc.setSlackCommunications).toHaveBeenCalledWith('T1', !enabled));
+    expect(masterToggle.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(masterToggle);
+    await waitFor(() => expect(ipc.setEnabled).toHaveBeenCalledWith(false));
+    expect(ipc.rebindTeam).not.toHaveBeenCalled();
+    expect(ipc.revokeTeam).not.toHaveBeenCalled();
+  });
+
+  it.each([true, false])('workspace removal confirmation reflects device communications support (%s)', async (supported) => {
+    const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester', displaced: true, communicationsEnabled: true };
+    ipc.get.mockResolvedValue({ hook: { ...BASE_HOOK, enabled: true, status: 'connected', serverMultiTeam: true, serverSlackCommunications: supported, bindings: [row] } });
+    dialog.confirm.mockResolvedValue(false);
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.remoteControl.hook.multi.removeAria' }));
+    expect(dialog.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      description: supported ? 'settings.remoteControl.hook.multi.removeCommunicationsConfirmDescription' : 'settings.remoteControl.hook.multi.removeDisplacedConfirmDescription',
+    }));
+    expect(ipc.revokeTeam).not.toHaveBeenCalled();
   });
 
   it('shows the lifecycle notification switch only after Slack is bound and persists changes', async () => {
