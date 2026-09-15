@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/68695d7f78c769833226e68feee24a7d1c1ce323254b364dde22586ed717e07b",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/f133b92ea156af8808a851bdd4fc375d9b0cc1c83dee3e165e1b6fe43d781542",
   "creationInfo": {
-    "created": "2026-09-13T03:14:43Z",
+    "created": "2026-09-10T10:12:32Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -15713,6 +15713,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-616963e2fc3a9428"
     },
     {
@@ -20289,11 +20294,6 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-0f1fa15d8e8fb256"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-e7ecfd34000fcb76"
     }
   ],
   "hasExtractedLicensingInfos": [
