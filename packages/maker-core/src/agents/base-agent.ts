@@ -671,6 +671,15 @@ export interface PiSubagentRunnerLaunchRequest {
 export interface AgentDeps {
   /** Cindy-only local Skill overrides. Freeze at native runtime startup; never apply to SSH. */
   getDisabledSkillPaths?: () => readonly string[];
+  /**
+   * Attests a local Claude Code session to the Desktop loopback proxy before
+   * the SDK has emitted its own session id. The token is host-owned and never
+   * reaches an upstream provider.
+   */
+  getClaudeProxySessionAuth?: (
+    sessionId: string,
+    sessionInstanceId?: string,
+  ) => { sessionId: string; token: string; dispose: () => void } | null;
   /** Optional low-I/O, provider-neutral turn change recorder supplied by the host. */
   turnChangeCapture?: TurnChangeCaptureHooks;
   auth: AuthAdapter;
