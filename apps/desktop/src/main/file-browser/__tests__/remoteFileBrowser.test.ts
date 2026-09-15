@@ -128,6 +128,22 @@ describe('RemoteFileBrowserManager', () => {
     await mgr.disposeAll();
   });
 
+  // Codex P1 (#4264 round 24): callers with private payloads re-check authorization at the
+  // real send boundary — after the connection is built, before the frame goes out.
+  it('runs beforeSend after the connection is built and before the frame is sent', async () => {
+    const { deps, calls } = makeDeps({ probeResults: [READY_PROBE] });
+    const mgr = new RemoteFileBrowserManager(deps);
+    const seen: string[] = [];
+    const beforeSend = vi.fn(async () => { seen.push(`beforeSend:spawn=${calls.spawn}`); });
+    await mgr.request('h1', 'stat', { workdir, relPath: 'hello.txt' }, { beforeSend });
+    expect(beforeSend).toHaveBeenCalledOnce();
+    expect(seen).toEqual(['beforeSend:spawn=1']); // connection already built when it ran
+    await expect(
+      mgr.request('h1', 'readFile', { workdir, relPath: 'hello.txt' }, { beforeSend: async () => { throw new Error('instance ended'); } }),
+    ).rejects.toThrow('instance ended');
+    await mgr.disposeAll();
+  });
+
   it('concurrent first requests share one connection build', async () => {
     const { deps, calls } = makeDeps({ probeResults: [READY_PROBE] });
     const mgr = new RemoteFileBrowserManager(deps);

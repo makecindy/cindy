@@ -331,22 +331,33 @@ describe('removeSessionRefs(会话删除钩子)', () => {
       },
       db,
     );
+    // 外置工具结果:refId 是文件路径,按出生会话连坐删
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-tool-result', refId: 'tool-results/ghost-1.json', originSessionId: 'sess-1', originKind: 'tool' },
+      db,
+    );
     // 无关会话 sess-2 的引用
     await ledger.addRef({ hash: HASH_B, refKind: 'session-attachment', refId: 'sess-2' }, db);
+    await ledger.addRef(
+      { hash: HASH_B, refKind: 'ghost-tool-result', refId: 'tool-results/ghost-2.json', originSessionId: 'sess-2', originKind: 'tool' },
+      db,
+    );
     await ledger.addRef(
       { hash: HASH_B, refKind: 'message', refId: 'msg-9', originSessionId: 'sess-2' },
       db,
     );
 
-    await expect(ledger.removeSessionRefs('sess-1', db)).resolves.toBe(4);
+    await expect(ledger.removeSessionRefs('sess-1', db)).resolves.toBe(5);
 
     const left = db.select().from(schema.mediaRefs).all();
     expect(left.map((r) => r.refKind).sort()).toEqual([
       'ghost-gallery',
       'ghost-grant',
+      'ghost-tool-result',
       'message',
       'session-attachment',
     ]);
+    expect(left.find((r) => r.refKind === 'ghost-tool-result')?.originSessionId).toBe('sess-2');
     // 幸存的 message/session-attachment 都是 sess-2 的
     expect(
       left.filter((r) => r.refKind === 'session-attachment').every((r) => r.refId === 'sess-2'),

@@ -62,4 +62,5 @@ export type {
   InspectPdfFn,
   RenderHtmlToPdfFn,
   WriteDocsOutputFn,
+  WriteDocsOutputOutcome,
 } from './types.js';

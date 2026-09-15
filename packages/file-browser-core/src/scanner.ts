@@ -13,8 +13,10 @@
  * `assertInsideWorkdir` — renderer cannot ask for `../../etc/passwd`.
  */
 
-import { promises as fs, type Stats, type Dirent } from 'node:fs';
+import { promises as fs, constants as fsConstants, type Stats, type Dirent } from 'node:fs';
+import type { FileHandle } from 'node:fs/promises';
 import path from 'node:path';
+import { createHash, randomUUID } from 'node:crypto';
 
 import { scopedLogger } from './logging.js';
 import { loadIgnoreMatcher, type Matcher } from './ignore.js';
@@ -542,6 +544,421 @@ export async function createFile(
 }
 
 /**
+ * Create a new file inside workdir and write its full content in one exclusive
+ * step. `wx` (O_CREAT|O_EXCL) fails when anything already exists at the target,
+ * including a symlink, and never follows a final-component link, so a watcher
+ * cannot swap the path between "create" and "write" (the TOCTOU that a
+ * createFile → writeFile pair leaves open). Parent dir must already exist and
+ * must resolve inside workdir. Refuses content >MAX_FILE_BYTES like writeFile.
+ */
+export interface NewFileIdentity {
+  size: number;
+  mtimeMs: number;
+  /** Inode identity of the published file; lets the caller verify or delete only this file. */
+  /** Decimal strings: Windows file IDs are 64-bit and lose low bits as JS numbers. */
+  dev: string;
+  ino: string;
+  /**
+   * Daemon-side descriptor capability (present when a hold registry was supplied): lets
+   * `eraseIfSame` zero exactly this inode without a pathname; closed by `releaseNewFile`
+   * or after the registry's TTL.
+   */
+  holdId?: string;
+  /** writeNewFile only: whether the staging removal reached disk (false = withdraw via the hold). */
+  durable?: boolean;
+}
+
+/** Identity from bigint stats, serialised without precision loss. */
+export function identityOf(st: { dev: bigint; ino: bigint }): { dev: string; ino: string } {
+  return { dev: st.dev.toString(), ino: st.ino.toString() };
+}
+export function sameIdentity(st: { dev: bigint; ino: bigint }, dev: string, ino: string): boolean {
+  return st.dev.toString() === dev && st.ino.toString() === ino;
+}
+
+/**
+ * Make a directory entry change (link / mkdir) durable: fsync the directory itself.
+ * Byte durability of a file (`handle.sync()`) says nothing about whether its name survives
+ * a crash; that needs the parent directory synced. Platforms that cannot fsync a directory
+ * handle (Windows) report EPERM/EINVAL/EISDIR/ENOTSUP/EBADF and are skipped; a real I/O
+ * error (EIO etc.) propagates so the caller does not report a durable publish.
+ */
+async function syncDirectory(dirPath: string): Promise<void> {
+  let dir: FileHandle;
+  try {
+    dir = await fs.open(dirPath, 'r');
+  } catch (err) {
+    if (DIR_SYNC_UNSUPPORTED.has((err as NodeJS.ErrnoException)?.code ?? '')) return;
+    throw err;
+  }
+  try {
+    await dir.sync();
+  } catch (err) {
+    if (!DIR_SYNC_UNSUPPORTED.has((err as NodeJS.ErrnoException)?.code ?? '')) throw err;
+  } finally {
+    await dir.close().catch(() => undefined);
+  }
+}
+const DIR_SYNC_UNSUPPORTED = new Set(['EPERM', 'EINVAL', 'EISDIR', 'ENOTSUP', 'EOPNOTSUPP', 'EBADF', 'EACCES']);
+
+export async function writeNewFile(
+  workdir: string,
+  relPath: string,
+  content: string,
+  holds?: NewFileHoldRegistry,
+): Promise<NewFileIdentity & { durable: boolean }> {
+  const sub = assertInsideWorkdir(workdir, relPath);
+  if (sub === '') throw new Error('cannot write workdir root');
+  const abs = path.join(workdir, sub);
+  await assertRealParentInsideWorkdir(workdir, abs);
+  const buf = Buffer.from(content, 'utf8');
+  if (buf.length > MAX_FILE_BYTES) {
+    throw new Error(`content too large (>${MAX_FILE_BYTES} bytes)`);
+  }
+  // Root-staged publish. Node has no openat / root-anchored write, so instead of
+  // writing through a path whose parent a workdir-level watcher could swap for a
+  // symlink or move away mid-write, the bytes are written to a private (0600,
+  // exclusive) staging file directly under the workdir root — a parent that content
+  // inside the workdir cannot relocate — and only then published to the target with
+  // `link` (atomic; EEXIST keeps the `wx` semantics; never overwrites). After the
+  // publish the target is anchored: the entry of that name inside the re-resolved
+  // real parent must be our inode and that parent must still be inside workdir. If
+  // the parent was swapped in the tiny link→check interval, the published entry is
+  // unlinked (only if it is still our inode) and the content is zeroed through the
+  // handle. No private byte is ever written through a swappable path.
+  const wdReal = await fs.realpath(workdir);
+  // Cross-device (round 29): `link` / `rename` cannot cross filesystems. When the output
+  // directory is a nested mount, staging at the workdir root would fail with EXDEV, so the
+  // staging inode is placed on the *target's* filesystem instead (inside the verified
+  // parent). The inode capability is the daemon-held descriptor (see the hold registry),
+  // which is independent of where the staging name lived.
+  const parentReal = await fs.realpath(path.dirname(abs));
+  const [wdStat, parentStat] = await Promise.all([
+    fs.lstat(wdReal, { bigint: true }),
+    fs.lstat(parentReal, { bigint: true }),
+  ]);
+  const stagingDir = chooseStagingDir(wdStat.dev, wdReal, parentStat.dev, parentReal);
+  const stagingAbs = path.join(stagingDir, `.${path.basename(abs)}.${randomUUID()}.staging`);
+  const handle = await fs.open(stagingAbs, 'wx', 0o600);
+  let published = false;
+  const escape = () => new Error(`path escapes workdir via symlink: ${sub}`);
+  const isOurs = async (candidate: string): Promise<boolean> => {
+    const [own, current] = await Promise.all([
+      handle.stat({ bigint: true }).catch(() => null),
+      fs.lstat(candidate, { bigint: true }).catch(() => null),
+    ]);
+    return !!own && !!current && current.isFile() && current.ino === own.ino && current.dev === own.dev;
+  };
+  try {
+    await handle.writeFile(buf);
+    // Durability before publication: a host that loses power right after the RPC
+    // succeeded must not come back with an empty or partial published file.
+    await handle.sync();
+    // Publish: parent is re-validated right before, then link (never follows a final
+    // symlink at `abs`; an existing entry of any kind fails with EEXIST).
+    await assertRealParentInsideWorkdir(workdir, abs);
+    await fs.link(stagingAbs, abs);
+    published = true;
+    const parentReal = await fs.realpath(path.dirname(abs)).catch(() => null);
+    if (
+      !parentReal ||
+      (parentReal !== wdReal && !parentReal.startsWith(wdReal + path.sep)) ||
+      !(await isOurs(path.join(parentReal, path.basename(abs))))
+    ) {
+      throw escape();
+    }
+    // Name durability: the link above is a directory-entry change; without syncing the
+    // parent directory a crash right after "success" could bring the host back with the
+    // bytes durable but the advertised path gone.
+    await syncDirectory(parentReal);
+    // The directory sync was another await: re-anchor after it. The parent must still
+    // resolve inside workdir and the entry of that name must still be our inode.
+    const parentAfterSync = await fs.realpath(path.dirname(abs)).catch(() => null);
+    if (
+      !parentAfterSync ||
+      (parentAfterSync !== wdReal && !parentAfterSync.startsWith(wdReal + path.sep)) ||
+      !(await isOurs(path.join(parentAfterSync, path.basename(abs))))
+    ) {
+      throw escape();
+    }
+    // The staging entry is a second hard link to the private content. Its removal is part
+    // of a successful publish (not best-effort); it is also the server-side completion
+    // marker verifyNewFile keys on: while `.<name>.<uuid>.staging` exists, the write is
+    // still in flight and may yet be withdrawn.
+    // The name is unlinked only if it still carries our inode: a workdir process may have
+    // renamed the staging link away (an untracked private copy) and put an unrelated file
+    // at that name. Then the publish is withdrawn (the handle zeroes the moved copy too).
+    const stagingEntry = await fs.lstat(stagingAbs, { bigint: true }).catch(() => null);
+    if (stagingEntry) {
+      const own = await handle.stat({ bigint: true });
+      if (!stagingEntry.isFile() || stagingEntry.dev !== own.dev || stagingEntry.ino !== own.ino) {
+        throw new Error(`staging link was replaced or moved: ${sub}`);
+      }
+      await fs.unlink(stagingAbs);
+      // Close the lstat→unlink gap after the fact: our link count must have dropped by one,
+      // otherwise the name was swapped in between and our link still exists elsewhere.
+      const after = await handle.stat({ bigint: true });
+      if (after.nlink !== own.nlink - 1n) throw new Error(`staging link was replaced or moved: ${sub}`);
+    }
+    // Whether the staging name was removed by us or is already absent (a bare rename by a
+    // workdir process), the inode must now be reachable through the published target only.
+    // Any extra link is a private copy outside the ledger lifecycle: withdraw and zero.
+    const links = await handle.stat({ bigint: true });
+    if (links.nlink !== 1n) throw new Error(`staging link was replaced or moved: ${sub}`);
+  } catch (err) {
+    // Fail closed without leaving content anywhere: zero through the handle (follows the
+    // inode wherever a directory went). The pathnames (published entry, staging link) are
+    // left alone: a check-then-unlink on a mutable path can delete an unrelated entry that
+    // a workdir process placed there in between, and the content is already gone. Empty
+    // names are the conservative residue; a leftover staging name also keeps verifyNewFile
+    // from ever accepting this withdrawn publish.
+    await handle.truncate(0).catch(() => undefined);
+    await handle.close().catch(() => undefined);
+    throw err;
+  }
+  // Past this point the publish is complete and is never withdrawn *by this call* (a recovery
+  // caller may already have accepted it): make the staging removal durable, retrying once.
+  // A persistent fsync failure is reported as `durable: false` rather than swallowed (round
+  // 30): the caller that receives this response is the only party that accepted the publish
+  // and still holds the inode capability below, so it can withdraw through the hold. A crash
+  // before the removal reached disk would otherwise bring the hidden hard link back with the
+  // full private content outside the ledger lifecycle.
+  let durable = true;
+  try {
+    await syncDirectory(stagingDir);
+  } catch {
+    durable = await syncDirectory(stagingDir).then(() => true, () => false);
+  }
+  const st = await handle.stat({ bigint: true });
+  const identity = { size: Number(st.size), mtimeMs: Number(st.mtimeMs), ...identityOf(st), durable };
+  if (!holds) {
+    await handle.close();
+    return identity;
+  }
+  // Inode-bound capability (round 29/30): the daemon keeps the writer's own descriptor open
+  // for the caller's bookkeeping window. `eraseIfSame` with this hold zeroes the content
+  // through the descriptor wherever the directory went; `releaseNewFile` closes it. Nothing
+  // is ever deleted by pathname after the fact — no marker, no finalize unlink.
+  return { ...identity, holdId: holds.register(handle, st) };
+}
+
+/**
+ * Where the private staging inode goes: the workdir root (a parent that content inside the
+ * workdir cannot relocate) whenever the target directory is on the same filesystem, else
+ * the target's own directory — hard links and renames never cross devices (EXDEV).
+ */
+export function chooseStagingDir(rootDev: bigint, rootDir: string, parentDev: bigint, parentDir: string): string {
+  return rootDev === parentDev ? rootDir : parentDir;
+}
+
+export interface NewFileHold { handle: FileHandle; dev: bigint; ino: bigint }
+
+/**
+ * Open descriptors of freshly published files, kept for the caller's bookkeeping window so
+ * that a withdrawal can target the inode itself instead of a mutable pathname. Bounded in
+ * count and lifetime: an abandoned hold (client gone) is closed after `ttlMs`, which leaves
+ * the published file exactly as a plain `writeNewFile` would have.
+ */
+export class NewFileHoldRegistry {
+  private readonly holds = new Map<string, NewFileHold & { timer: NodeJS.Timeout }>();
+  constructor(private readonly opts: { ttlMs?: number; max?: number } = {}) {}
+
+  register(handle: FileHandle, st: { dev: bigint; ino: bigint }): string {
+    const max = this.opts.max ?? 64;
+    while (this.holds.size >= max) {
+      const oldest = this.holds.keys().next().value;
+      if (oldest === undefined) break;
+      void this.release(oldest);
+    }
+    const id = randomUUID();
+    const timer = setTimeout(() => { void this.release(id); }, this.opts.ttlMs ?? 120_000);
+    timer.unref?.();
+    this.holds.set(id, { handle, dev: st.dev, ino: st.ino, timer });
+    return id;
+  }
+
+  get(id: string): NewFileHold | null {
+    const hold = this.holds.get(id);
+    return hold ? { handle: hold.handle, dev: hold.dev, ino: hold.ino } : null;
+  }
+
+  async release(id: string): Promise<boolean> {
+    const hold = this.holds.get(id);
+    if (!hold) return false;
+    this.holds.delete(id);
+    clearTimeout(hold.timer);
+    await hold.handle.close().catch(() => undefined);
+    return true;
+  }
+
+  async closeAll(): Promise<void> {
+    await Promise.all([...this.holds.keys()].map((id) => this.release(id)));
+  }
+
+  get size(): number {
+    return this.holds.size;
+  }
+}
+
+/** Second phase of `writeNewFile` / `verifyNewFile`: drop the daemon-side descriptor. */
+export async function releaseNewFile(holds: NewFileHoldRegistry, holdId: string): Promise<{ released: boolean }> {
+  return { released: await holds.release(holdId) };
+}
+
+/**
+ * True while a writeNewFile staging link for `name` still exists in one of the directories
+ * a write may have staged in (the workdir root; the target's own directory for
+ * cross-device targets). A scan failure is not "no marker": it propagates so the caller
+ * retries instead of accepting a publish the original writer may still withdraw.
+ */
+async function hasStagingSibling(dirs: string[], name: string): Promise<boolean> {
+  const prefix = `.${name}.`;
+  for (const dir of [...new Set(dirs)]) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch (err) {
+      throw new Error(`cannot scan completion marker: ${(err as NodeJS.ErrnoException)?.code ?? 'unknown'}`);
+    }
+    if (entries.some((entry) => entry.startsWith(prefix) && entry.endsWith('.staging'))) return true;
+  }
+  return false;
+}
+
+/**
+ * Prove that the entry at `relPath` is the regular file this host wrote: not a symlink,
+ * parent still inside workdir, exact size and SHA-256 of the content. Used after a lost
+ * `writeNewFile` response, where size/mtime alone can be spoofed by a workdir-level
+ * process. Returns the inode identity so a later cleanup can target only this file; with a
+ * hold registry the verified descriptor is retained as the caller's inode capability.
+ */
+export async function verifyNewFile(
+  workdir: string,
+  relPath: string,
+  expectedSha256: string,
+  expectedSize: number,
+  holds?: NewFileHoldRegistry,
+): Promise<NewFileIdentity> {
+  const sub = assertInsideWorkdir(workdir, relPath);
+  if (sub === '') throw new Error('cannot verify workdir root');
+  const abs = path.join(workdir, sub);
+  await assertRealParentInsideWorkdir(workdir, abs);
+  const entry = await fs.lstat(abs, { bigint: true });
+  if (!entry.isFile()) throw new Error(`not a regular file: ${sub}`);
+  if (Number(entry.size) !== expectedSize) throw new Error(`size mismatch: ${sub}`);
+  // Never follow a final symlink (a link to the renamed original must not pass). Read/write
+  // so the retained descriptor can later zero the content.
+  const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  const handle = await fs.open(abs, fsConstants.O_RDWR | O_NOFOLLOW);
+  let retained = false;
+  try {
+    const opened = await handle.stat({ bigint: true });
+    // The opened inode must be the very entry lstat saw (no swap in between).
+    if (opened.dev !== entry.dev || opened.ino !== entry.ino) throw new Error(`identity mismatch: ${sub}`);
+    // A finished publish has exactly one link (the target). A second link means either
+    // the writer is still in flight (its staging link) or the staging link was renamed
+    // away — in both cases the writer may still withdraw (zero) this inode, so recovery
+    // must not accept it. This holds even when the staging marker name is gone.
+    if (opened.nlink !== 1n) throw new Error(`write still in flight: ${sub}`);
+    const buf = await handle.readFile();
+    if (buf.length !== expectedSize) throw new Error(`size mismatch: ${sub}`);
+    const actual = createHash('sha256').update(buf).digest('hex');
+    if (actual !== expectedSha256) throw new Error(`content mismatch: ${sub}`);
+    // Server-side completion: a matching published file is not enough while its staging
+    // link still exists — the original writeNewFile may still withdraw the publish on a
+    // later failure. Only after the staging link is gone is the publish final.
+    const wdReal = await fs.realpath(workdir);
+    if (await hasStagingSibling([wdReal, await fs.realpath(path.dirname(abs))], path.basename(abs))) {
+      throw new Error(`write still in flight: ${sub}`);
+    }
+    // Reading was an await: the pathname must still name the inode whose content was
+    // hashed, and its parent must still be inside workdir, or the recovery is void.
+    await assertRealParentInsideWorkdir(workdir, abs);
+    const after = await fs.lstat(abs, { bigint: true }).catch(() => null);
+    if (!after || !after.isFile() || after.dev !== opened.dev || after.ino !== opened.ino) {
+      throw new Error(`identity mismatch after read: ${sub}`);
+    }
+    const identity = { size: Number(opened.size), mtimeMs: Number(opened.mtimeMs), ...identityOf(opened) };
+    if (!holds) return identity;
+    retained = true;
+    return { ...identity, holdId: holds.register(handle, opened) };
+  } finally {
+    if (!retained) await handle.close();
+  }
+}
+
+/**
+ * Erase the private content at `relPath` only if it is still the regular file with the given
+ * inode identity — and leave the pathname alone.
+ *
+ * POSIX has no "unlink by inode" primitive: any pathname unlink after a check is a TOCTOU
+ * that can delete an unrelated entry placed at that name in between. The sensitive part is
+ * the content, and that can be handled without the race: open with O_NOFOLLOW, fstat must
+ * match dev/ino, truncate through that descriptor (bound to the inode, not to the pathname).
+ * A zero-byte name may remain; that is the conservative outcome. Returns whether our inode
+ * was erased.
+ *
+ * With a hold (the descriptor retained by writeNewFile / verifyNewFile) the erase goes
+ * through that descriptor and needs no pathname at all — the directory may have been moved
+ * out of workdir since. The hold is released afterwards.
+ */
+export async function eraseIfSame(
+  workdir: string,
+  relPath: string,
+  dev: string,
+  ino: string,
+  holds?: NewFileHoldRegistry,
+  holdId?: string,
+): Promise<{ erased: boolean }> {
+  const sub = assertInsideWorkdir(workdir, relPath);
+  if (sub === '') throw new Error('cannot delete workdir root');
+  if (holdId !== undefined && holds) {
+    const hold = holds.get(holdId);
+    if (hold && sameIdentity(hold, dev, ino)) {
+      try {
+        await hold.handle.truncate(0);
+        return { erased: true };
+      } finally {
+        await holds.release(holdId);
+      }
+    }
+  }
+  const abs = path.join(workdir, sub);
+  // A vanished parent (the directory was moved out of workdir) is not an escape: the
+  // published name simply no longer reaches our inode.
+  const parentGone = await assertRealParentInsideWorkdir(workdir, abs).then(
+    () => false,
+    (err: NodeJS.ErrnoException) => {
+      if (err?.code === 'ENOENT' || err?.code === 'ENOTDIR') return true;
+      throw err;
+    },
+  );
+  if (parentGone) return { erased: false };
+  return { erased: await truncateByIdentity(abs, dev, ino) };
+}
+
+async function truncateByIdentity(abs: string, dev: string, ino: string): Promise<boolean> {
+  const O_NOFOLLOW = (fsConstants as { O_NOFOLLOW?: number }).O_NOFOLLOW ?? 0;
+  let handle: FileHandle;
+  try {
+    handle = await fs.open(abs, fsConstants.O_RDWR | O_NOFOLLOW);
+  } catch (err) {
+    // Missing, or a symlink refused by O_NOFOLLOW (ELOOP): not our inode, nothing to do.
+    const code = (err as NodeJS.ErrnoException)?.code;
+    if (code === 'ENOENT' || code === 'ELOOP') return false;
+    throw err;
+  }
+  try {
+    const opened = await handle.stat({ bigint: true });
+    if (!opened.isFile() || !sameIdentity(opened, dev, ino)) return false;
+    await handle.truncate(0);
+    return true;
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
  * Create a folder inside workdir. Errors if anything already exists at the
  * target path. Parent dir must already exist (same rationale as createFile).
  */
@@ -555,6 +972,8 @@ export async function createFolder(
   await assertRealParentInsideWorkdir(workdir, abs);
   // recursive:false — fail if parent missing or target exists.
   await fs.mkdir(abs, { recursive: false });
+  // The new entry must survive a crash as well (writeNewFile's parent may be this folder).
+  await syncDirectory(await fs.realpath(path.dirname(abs)));
   const st = await fs.stat(abs);
   return { relPath: sub, type: 'directory', size: 0, mtimeMs: st.mtimeMs };
 }

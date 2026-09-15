@@ -69,6 +69,8 @@ export type MediaRefKind =
   | 'ghost-grant'
   | 'ghost-tool-grant'
   | 'ghost-deposit'
+  /** 外置的超大工具结果文件(refId = workdir 内相对路径,originSessionId = 会话)。 */
+  | 'ghost-tool-result'
   | 'import'
   | 'integration-cache'
   | 'profile-avatar'
@@ -255,6 +257,7 @@ export async function hasGhostToolGrant(
  *   - import:refId 就是会话 id,直接删;
  *   - message:refId 是消息 id,按出生会话(originSessionId)连坐删——
  *     会话没了,它名下消息的引用自然一起走;
+ *   - ghost-tool-result:refId 是外置结果文件路径,同样按出生会话连坐删;
  *   - **绝不**碰 ghost-gallery / ghost-grant / ghost-tool-grant /
  *     ghost-deposit:画廊/引渡/工具交接/寄存是跨会话的持久引用,
  *     "删会话作品不陪葬"正是靠这几类 ref 存活
@@ -269,6 +272,8 @@ function sessionOwnedRefCondition(sessionId: string) {
     ),
     and(eq(mediaRefs.refKind, 'import'), eq(mediaRefs.refId, sessionId)),
     and(eq(mediaRefs.refKind, 'message'), eq(mediaRefs.originSessionId, sessionId)),
+    // ghost-tool-result:refId 是结果文件路径,按出生会话连坐删(文件随会话 workdir 失效)。
+    and(eq(mediaRefs.refKind, 'ghost-tool-result'), eq(mediaRefs.originSessionId, sessionId)),
   );
 }
 
