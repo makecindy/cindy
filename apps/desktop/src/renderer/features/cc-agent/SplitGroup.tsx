@@ -9,6 +9,7 @@ import {
   memo,
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -38,10 +39,13 @@ import { getSessionDisplayTitle } from './lib/sessionDisplayTitle';
 import { CCAgentSessionView } from './CCAgentSessionView';
 import { mergeSessionSources } from './lib/mergeSessionSources';
 import {
+  SPLIT_GROUP_PANE_MIME,
   SPLIT_GROUP_SESSION_MIME,
+  hasSplitGroupPaneType,
   hasSplitGroupSessionType,
   isSplitGroupComposerDropTarget,
   resolveSplitDropSide,
+  writeSplitGroupPaneDragData,
 } from './splitGroupDnd';
 import {
   getSplitPanes,
@@ -52,6 +56,7 @@ import {
   type DropSide,
   type SplitGroupAddBlockReason,
   type SplitBranchNode,
+  type SplitPaneDropGeometry,
   type SplitNode,
   type SplitPaneNode,
 } from './splitGroupStore';
@@ -62,6 +67,107 @@ const MIN_SPLIT_PANE_WIDTH_PX = 280;
 const MIN_SPLIT_PANE_HEIGHT_PX = 220;
 const DEFAULT_SPLIT_VIEWPORT_WIDTH_PX = 800;
 const DEFAULT_SPLIT_VIEWPORT_HEIGHT_PX = 600;
+
+function getRenderedSplitPaneDropGeometry(
+  sourceSessionId: string,
+  anchorSessionId: string,
+): SplitPaneDropGeometry | null {
+  if (typeof document === 'undefined') return null;
+  const paneElements = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-split-pane-session-id]'),
+  );
+  const sourceElement = paneElements.find(
+    (element) => element.dataset.splitPaneSessionId === sourceSessionId,
+  );
+  const anchorElement = paneElements.find(
+    (element) => element.dataset.splitPaneSessionId === anchorSessionId,
+  );
+  if (!sourceElement || !anchorElement) return null;
+
+  const toRect = (element: HTMLElement) => {
+    const { left, top, width, height } = element.getBoundingClientRect();
+    return { left, top, width, height };
+  };
+  return {
+    source: toRect(sourceElement),
+    anchor: toRect(anchorElement),
+    gutterPx: GUTTER_PX,
+  };
+}
+
+function getKeyboardMoveTarget(
+  sourceSessionId: string,
+  side: DropSide,
+): { anchorSessionId: string; geometry: SplitPaneDropGeometry } | null {
+  if (typeof document === 'undefined') return null;
+  const paneElements = Array.from(
+    document.querySelectorAll<HTMLElement>('[data-split-pane-session-id]'),
+  );
+  const sourceElement = paneElements.find(
+    (element) => element.dataset.splitPaneSessionId === sourceSessionId,
+  );
+  if (!sourceElement) return null;
+
+  const toRect = (element: HTMLElement) => {
+    const { left, top, width, height } = element.getBoundingClientRect();
+    return { left, top, width, height };
+  };
+  const source = toRect(sourceElement);
+  const sourceRight = source.left + source.width;
+  const sourceBottom = source.top + source.height;
+  const sourceCenter = {
+    x: source.left + source.width / 2,
+    y: source.top + source.height / 2,
+  };
+
+  const candidates = paneElements
+    .filter((element) => element !== sourceElement)
+    .map((element) => {
+      const rect = toRect(element);
+      const right = rect.left + rect.width;
+      const bottom = rect.top + rect.height;
+      const crossOverlap =
+        side === 'left' || side === 'right'
+          ? Math.max(0, Math.min(sourceBottom, bottom) - Math.max(source.top, rect.top))
+          : Math.max(0, Math.min(sourceRight, right) - Math.max(source.left, rect.left));
+      const axisGap =
+        side === 'left'
+          ? source.left - right
+          : side === 'right'
+            ? rect.left - sourceRight
+            : side === 'top'
+              ? source.top - bottom
+              : rect.top - sourceBottom;
+      const crossDistance =
+        side === 'left' || side === 'right'
+          ? Math.abs(sourceCenter.y - (rect.top + rect.height / 2))
+          : Math.abs(sourceCenter.x - (rect.left + rect.width / 2));
+      return { element, rect, axisGap, crossOverlap, crossDistance };
+    })
+    .filter(({ axisGap }) => axisGap >= -1)
+    .sort(
+      (first, second) =>
+        Number(second.crossOverlap > 0) - Number(first.crossOverlap > 0) ||
+        first.axisGap - second.axisGap ||
+        first.crossDistance - second.crossDistance,
+    );
+  const target = candidates[0];
+  const anchorSessionId = target?.element.dataset.splitPaneSessionId;
+  if (!target || !anchorSessionId) return null;
+
+  return {
+    anchorSessionId,
+    geometry: { source, anchor: target.rect, gutterPx: GUTTER_PX },
+  };
+}
+
+function getKeyboardMoveSide(key: string): DropSide | null {
+  if (key === 'ArrowLeft') return 'left';
+  if (key === 'ArrowRight') return 'right';
+  if (key === 'ArrowUp') return 'top';
+  if (key === 'ArrowDown') return 'bottom';
+  return null;
+}
 
 function isSplitPaneNoFocusTarget(target: EventTarget | null): boolean {
   const element = target instanceof Element ? target : null;
@@ -824,6 +930,8 @@ const SplitPaneView = memo(function SplitPaneView({
   const viewSessionId = pane.sessionId;
   const session = sessionsById.get(viewSessionId) ?? null;
   const title = session ? getSessionDisplayTitle(session, unnamedTitle) : loadingTitle;
+  const dragDescriptionId = useId();
+  const keyboardMoveDescriptionId = useId();
 
   return (
     <SplitDropTarget
@@ -836,6 +944,9 @@ const SplitPaneView = memo(function SplitPaneView({
         } else {
           showSplitAddBlocked(t, splitGroupStore.getAddBlockReason(sessionId, pane.sessionId));
         }
+      }}
+      onPaneDropped={(sessionId, side, geometry) => {
+        splitGroupStore.moveSession(sessionId, pane.sessionId, side, geometry);
       }}
     >
       <div
@@ -870,18 +981,47 @@ const SplitPaneView = memo(function SplitPaneView({
         <div className="flex h-8 shrink-0 items-center gap-1.5 border-b border-border/40 px-2">
           <button
             type="button"
+            data-split-pane-drag-handle
+            draggable
+            aria-describedby={[dragDescriptionId, keyboardMoveDescriptionId].join(' ')}
+            aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight Alt+ArrowUp Alt+ArrowDown"
+            onDragStart={(event) => {
+              if (!writeSplitGroupPaneDragData(event.dataTransfer, viewSessionId)) {
+                event.preventDefault();
+              }
+            }}
+            onKeyDown={(event) => {
+              if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return;
+              const side = getKeyboardMoveSide(event.key);
+              if (!side) return;
+              event.preventDefault();
+              const target = getKeyboardMoveTarget(viewSessionId, side);
+              if (!target) return;
+              splitGroupStore.moveSession(
+                viewSessionId,
+                target.anchorSessionId,
+                side,
+                target.geometry,
+              );
+            }}
             onClick={() => focusSession(viewSessionId)}
             className={cn(
               'min-w-0 flex-1 truncate rounded-full px-2 py-1 text-left text-xs transition-colors',
               isOwner
                 ? 'font-medium text-foreground'
                 : 'text-muted-foreground hover:bg-muted/60 hover:text-foreground',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
+              'cursor-grab active:cursor-grabbing focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]',
             )}
             title={title}
           >
             {title}
           </button>
+          <span id={dragDescriptionId} className="sr-only">
+            {t('splitGroup.dragPaneAria', { title })}
+          </span>
+          <span id={keyboardMoveDescriptionId} className="sr-only">
+            {t('splitGroup.movePaneKeyboardAria')}
+          </span>
           <button
             type="button"
             data-split-pane-no-focus
@@ -949,6 +1089,11 @@ interface SplitDropTargetProps {
   className?: string;
   dataAttribute: 'single' | 'pane';
   onSessionDropped: (sessionId: string, side: DropSide) => void;
+  onPaneDropped?: (
+    sessionId: string,
+    side: DropSide,
+    geometry: SplitPaneDropGeometry | null,
+  ) => void;
 }
 
 function SplitDropTarget({
@@ -957,26 +1102,35 @@ function SplitDropTarget({
   className,
   dataAttribute,
   onSessionDropped,
+  onPaneDropped,
 }: SplitDropTargetProps) {
   const { t } = useTranslation();
   const [dropSide, setDropSide] = useState<DropSide | null>(null);
 
   const handleDragOver = useCallback((event: DragEvent<HTMLDivElement>) => {
-    if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
+    const isPaneDrag = hasSplitGroupPaneType(event.dataTransfer.types);
+    const isSessionDrag = hasSplitGroupSessionType(event.dataTransfer.types);
+    if (!isPaneDrag && !isSessionDrag) return;
+    if (isPaneDrag && !onPaneDropped) {
+      setDropSide(null);
+      return;
+    }
     if (isSplitGroupComposerDropTarget(event.target)) {
       setDropSide(null);
       return;
     }
     event.preventDefault();
     event.stopPropagation();
-    event.dataTransfer.dropEffect = 'move';
+    // A pane drag removes the pane from its source layout, while a session drag
+    // creates an additional pane and leaves the source session untouched.
+    event.dataTransfer.dropEffect = isPaneDrag ? 'move' : 'copy';
     const nextSide = resolveSplitDropSide(
       event.currentTarget.getBoundingClientRect(),
       event.clientX,
       event.clientY,
     );
     setDropSide((currentSide) => (currentSide === nextSide ? currentSide : nextSide));
-  }, []);
+  }, [onPaneDropped]);
 
   const handleDragLeave = useCallback((event: DragEvent<HTMLDivElement>) => {
     if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
@@ -985,14 +1139,22 @@ function SplitDropTarget({
 
   const handleDrop = useCallback(
     (event: DragEvent<HTMLDivElement>) => {
-      if (!hasSplitGroupSessionType(event.dataTransfer.types)) return;
+      const isPaneDrag = hasSplitGroupPaneType(event.dataTransfer.types);
+      const isSessionDrag = hasSplitGroupSessionType(event.dataTransfer.types);
+      if (!isPaneDrag && !isSessionDrag) return;
+      if (isPaneDrag && !onPaneDropped) {
+        setDropSide(null);
+        return;
+      }
       if (isSplitGroupComposerDropTarget(event.target)) {
         setDropSide(null);
         return;
       }
       event.preventDefault();
       event.stopPropagation();
-      const sessionId = event.dataTransfer.getData(SPLIT_GROUP_SESSION_MIME).trim();
+      const sessionId = event.dataTransfer
+        .getData(isPaneDrag ? SPLIT_GROUP_PANE_MIME : SPLIT_GROUP_SESSION_MIME)
+        .trim();
       const side =
         dropSide ??
         resolveSplitDropSide(
@@ -1002,9 +1164,15 @@ function SplitDropTarget({
         );
       setDropSide(null);
       if (!sessionId || !side || sessionId === anchorSessionId) return;
-      onSessionDropped(sessionId, side);
+      if (isPaneDrag) {
+        onPaneDropped?.(
+          sessionId,
+          side,
+          getRenderedSplitPaneDropGeometry(sessionId, anchorSessionId),
+        );
+      } else onSessionDropped(sessionId, side);
     },
-    [anchorSessionId, dropSide, onSessionDropped],
+    [anchorSessionId, dropSide, onPaneDropped, onSessionDropped],
   );
 
   return (
