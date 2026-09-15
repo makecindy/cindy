@@ -18,6 +18,8 @@ const mocks = vi.hoisted(() => ({
   ),
   writeCredentials: vi.fn(() => true),
   writeOwnerOpenId: vi.fn(() => true),
+  writeAllowStrangerChats: vi.fn(() => true),
+  setAllowStrangerChats: vi.fn(),
   clearAll: vi.fn(),
   clearOwner: vi.fn(),
   loadOwner: vi.fn(),
@@ -29,6 +31,7 @@ vi.mock('../wsClient.js', () => ({
   QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS: 4500,
   getCurrentStatus: mocks.getCurrentStatus,
   setLifecycleAnnouncement: vi.fn(),
+  setAllowStrangerChats: mocks.setAllowStrangerChats,
   clearOrphanRetriesForCredentialClear: vi.fn(),
   stop: mocks.stop,
   start: mocks.start,
@@ -41,6 +44,7 @@ vi.mock('../storage.js', () => ({
   writeLifecycleAnnouncement: vi.fn(),
   writeCredentials: mocks.writeCredentials,
   writeOwnerOpenId: mocks.writeOwnerOpenId,
+  writeAllowStrangerChats: mocks.writeAllowStrangerChats,
   clearAll: mocks.clearAll,
 }));
 
@@ -138,6 +142,7 @@ beforeEach(() => {
   mocks.start.mockResolvedValue('connected');
   mocks.writeCredentials.mockReturnValue(true);
   mocks.writeOwnerOpenId.mockReturnValue(true);
+  mocks.writeAllowStrangerChats.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -590,5 +595,27 @@ describe('Feishu credential connection semantics', () => {
 
     expect(mocks.stop).not.toHaveBeenCalled();
     expect(mocks.start).not.toHaveBeenCalled();
+  });
+});
+
+describe('Feishu guest-access switch persistence', () => {
+  it('persists the switch before the runtime policy changes', async () => {
+    const handler = handlers.get('feishuBot:set-allow-stranger-chats')!;
+
+    await expect(handler({ enabled: true })).resolves.toEqual({ ok: true });
+
+    expect(mocks.writeAllowStrangerChats).toHaveBeenCalledWith(true);
+    expect(mocks.setAllowStrangerChats).toHaveBeenCalledWith(true);
+  });
+
+  it('leaves the runtime policy untouched when the switch cannot be persisted', async () => {
+    mocks.writeAllowStrangerChats.mockReturnValue(false);
+    const handler = handlers.get('feishuBot:set-allow-stranger-chats')!;
+
+    // 关掉的开关如果只在内存里生效, 重启后 init() 会读回旧的 true 静默重开
+    // 访客访问 —— 写失败时必须既不改运行时, 也不报告成功。
+    await expect(handler({ enabled: false })).resolves.toMatchObject({ ok: false });
+
+    expect(mocks.setAllowStrangerChats).not.toHaveBeenCalled();
   });
 });

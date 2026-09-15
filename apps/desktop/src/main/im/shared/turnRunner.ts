@@ -46,6 +46,17 @@ import { bindRuntimeRecoveryNotice } from './runtimeRecoveryNotice';
 const GROUP_APPROVAL_OWNER_DM_NOTE =
   '🔐 群聊里的任务需要你授权。授权卡不会发到群里，在这里确认即可。';
 
+/**
+ * 访客私聊轮次的交互卡改投 owner 私聊时的说明。
+ *
+ * 卡片回调只认 owner 点击(@cindy/im 的 cardActionParser 与 telegram
+ * handleCallbackQuery 都按白名单拦非 owner), 而访客私聊 lane 里只有访客看得到卡 ——
+ * 问答卡 / 计划审阅卡留在那儿等于没人能接, 轮次会一直挂在 await 上。群 lane
+ * 不在此列: 群里 owner 点得到那两种卡, 只有授权卡需要转。
+ */
+const GUEST_DM_INTERACTION_OWNER_DM_NOTE =
+  '💬 其他人私聊里发起的一轮在等你的回应，回答后它才会继续。';
+
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import {
@@ -294,6 +305,8 @@ interface QueuedSend {
   /** Durable route side effects run only after provider acceptance, never on enqueue. */
   onRouteResolved?: (sessionId: string) => void | Promise<void>;
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** 触发者是非 owner(访客)的轮次 —— 卡片路由用, 见 ImRunAgentTurnArgs.guestTurn。 */
+  guestTurn?: boolean;
   /** 触发消息来自受保护群 —— 正文与附件不进会话存档(见 ImRunAgentTurnArgs)。 */
   protectedContent?: boolean;
   groupHistoryAccess?: GroupHistoryAccessScope;
@@ -419,6 +432,15 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /**
+   * 触发这条消息的是非 owner(访客)。
+   *
+   * 只有 telegram / feishu 会传 —— 那两家的入站事件带 speaker 身份。访客私聊
+   * lane 的交互卡没有 owner 之外的点击人, 卡片路由据此改投 owner 私聊(见
+   * handleInteractionFor 的 guestDmRedirect); 会话级档位授权仍由
+   * turnPolicyOptionalForMode 按 policy 身份判, 两者互不代替。
+   */
+  guestTurn?: boolean;
   /**
    * 这一轮的触发消息来自「禁止保存内容」的群。
    *
@@ -951,6 +973,7 @@ export function createTurnRunner(
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
       ...(args.onRouteResolved ? { onRouteResolved: args.onRouteResolved } : {}),
       ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      ...(args.guestTurn === true ? { guestTurn: true } : {}),
       ...(args.onEarlyReject ? { onEarlyReject: args.onEarlyReject } : {}),
       ...(args.protectedContent === true ? { protectedContent: true } : {}),
       ...(args.groupHistoryAccess ? { groupHistoryAccess: args.groupHistoryAccess } : {}),
@@ -1194,6 +1217,7 @@ export function createTurnRunner(
                     userId,
                     item.turn.scopeKey,
                     effectiveTurnPolicy?.confirmationTimeoutMs,
+                    item.guestTurn === true,
                   ),
                   // 文本渠道自己认领掉的不动卡片(它本来就没有卡);其余走
                   // dropInteractionCard —— 作废 pending 的同时把那张卡收口。
@@ -3184,6 +3208,7 @@ export function createTurnRunner(
     userId: string,
     scopeKey?: string,
     confirmationTimeoutMs?: number,
+    guestTurn?: boolean,
   ) {
     return async (rawReq: InteractionRequest): Promise<InteractionDecision> => {
       // Redact BEFORE anything channel-facing sees the request. This listener
@@ -3299,15 +3324,22 @@ export function createTurnRunner(
         sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
       await finalizeActiveStream(localSessionId);
 
+      // 访客私聊 lane: 卡片留在原地没人能点(回调白名单只认 owner), 该轮会永远
+      // 挂着 —— 三种卡都改投 owner 私聊。群 lane 里 owner 点得到问答 / 计划审阅卡,
+      // 保持不转(群里看得见是合理的), 只有授权卡转。
+      const guestDmRedirect = guestTurn === true && !userId.startsWith('g/');
+      const redirectToOwnerDm = req.kind === 'permission' || guestDmRedirect;
       let messageId: string;
       try {
         const result = await output.im.sendInteractiveCard(userId, spec, {
           threadTs: scopeKey,
-          // 同上: 只有 permission 卡转宿主私聊
-          ...(req.kind === 'permission'
+          ...(redirectToOwnerDm
             ? {
                 deliverToOwnerDm: true,
-                ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+                ownerDmNote:
+                  req.kind === 'permission'
+                    ? GROUP_APPROVAL_OWNER_DM_NOTE
+                    : GUEST_DM_INTERACTION_OWNER_DM_NOTE,
                 ...(ownerDmSourceMessageId !== undefined ? { ownerDmSourceMessageId } : {}),
               }
             : {}),

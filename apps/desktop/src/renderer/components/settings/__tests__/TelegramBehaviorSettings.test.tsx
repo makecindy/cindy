@@ -68,6 +68,38 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
+describe('personal Telegram behavior settings', () => {
+  it('writes the non-owner access switch through the personal bot API', async () => {
+    const telegramBot = {
+      getBehavior: vi.fn(async () => ({ ...behavior, allowNonOwnerMessages: false })),
+      setBehavior: vi.fn(async (patch: { allowNonOwnerMessages?: boolean }) => ({
+        ...behavior,
+        ...patch,
+      })),
+    };
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      hookControl: api,
+      telegramBot,
+    };
+    render(<TelegramBehaviorSettings source="personal" />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.telegramBot.behavior.accessOption.on',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(telegramBot.setBehavior).toHaveBeenCalledWith({ allowNonOwnerMessages: true }),
+    );
+    expect(
+      screen
+        .getByRole('button', { name: 'settings.telegramBot.behavior.accessOption.on' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+});
+
 describe('official Telegram behavior settings', () => {
   it('从 hook-control 读取并写入 emoji / 引用设置', async () => {
     render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);

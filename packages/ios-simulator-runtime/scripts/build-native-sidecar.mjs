@@ -1,5 +1,6 @@
 import { execFile } from "node:child_process";
 import {
+  access,
   chmod,
   copyFile,
   mkdir,
@@ -95,6 +96,11 @@ const simulatorKitBinary = path.join(
 );
 
 async function inspectSimulatorKitArchitectures() {
+  try {
+    await access(simulatorKitBinary);
+  } catch {
+    return [];
+  }
   const { stdout } = await execFileAsync(
     "xcrun",
     ["lipo", "-archs", simulatorKitBinary],
