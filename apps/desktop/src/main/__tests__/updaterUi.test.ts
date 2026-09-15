@@ -169,4 +169,46 @@ describe('updater failure retry UI', () => {
     await pending;
     expect(button.hidden).toBe(true);
   });
+
+  it('hides retry after the archive is gone and keeps the check-for-updates guidance', async () => {
+    const ui = createUi();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    ui.status({ phase: 'failed', can_retry: true });
+    const button = ui.elements.get('btn-retry')!;
+    const pending = button.click!();
+    ui.rejectRetry('archive_unavailable');
+    await pending;
+    expect(button.hidden).toBe(true);
+    expect(ui.elements.get('error-text')!.textContent).toBe(
+      'The update file is missing or unreadable. Please check for updates again',
+    );
+    await button.click!();
+    expect(ui.retryCalls()).toBe(1);
+  });
+
+  it('hides retry when Rust reports the failure is no longer retryable', async () => {
+    const ui = createUi();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    ui.status({ phase: 'failed', can_retry: true });
+    const button = ui.elements.get('btn-retry')!;
+    const pending = button.click!();
+    ui.rejectRetry('unavailable');
+    await pending;
+    expect(button.hidden).toBe(true);
+    expect(ui.elements.get('error-text')!.textContent).toBe(
+      'This update failure cannot be retried',
+    );
+  });
+
+  it('sizes updater actions as standard secondary pills', () => {
+    const css = fs.readFileSync(
+      new URL('../../../cindy-updater/ui/style.css', import.meta.url),
+      'utf8',
+    );
+    const btnBlock = css.match(/\.btn\s*\{[^}]+\}/)?.[0] ?? '';
+    expect(btnBlock).toContain('height: 32px');
+    expect(btnBlock).toContain('padding: 0 24px');
+    expect(btnBlock).toContain('font-size: 13px');
+    expect(css).toMatch(/\.btn:active:not\(:disabled\)/);
+  });
 });

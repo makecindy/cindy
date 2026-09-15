@@ -89,7 +89,9 @@ prevents the restored app from automatically applying the same failed archive.
 If the move fails, Retry is unavailable.
 
 Retry is never automatic: Rust rechecks the failure state and readable archive,
-then starts a new updater using trusted Rust-owned arguments. Only the archive
+then starts a new updater using trusted Rust-owned arguments. If the isolated
+archive is later missing or unreadable, Retry stays hidden and the failure
+window only keeps the check-for-updates guidance. Only the archive
 path and PID change: the retry uses the isolated zip and does not wait on the
 original, potentially stale PID. The WebView cannot supply paths or commands.
 Both the retry command and child check for processes running from the install

@@ -90,10 +90,14 @@ els.btnRetry.addEventListener("click", async () => {
     await invoke("retry_update");
   } catch (err) {
     retrying = false;
+    const code = String(err?.message || err);
+    if (code === "archive_unavailable" || code === "unavailable") {
+      canRetry = false;
+    }
     els.btnRetry.hidden = !canRetry;
     els.btnRetry.disabled = false;
     els.errorBar.hidden = false;
-    els.errorText.textContent = retryCopy[String(err?.message || err)] || retryCopy.spawn_failed;
+    els.errorText.textContent = retryCopy[code] || retryCopy.spawn_failed;
   }
 });
 
