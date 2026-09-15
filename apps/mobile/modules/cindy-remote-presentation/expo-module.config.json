@@ -1,11 +1,10 @@
 {
-  "platforms": [
-    "apple"
-  ],
+  "platforms": ["apple", "android"],
   "apple": {
     "podspecPath": "./ios/CindyRemotePresentation.podspec",
-    "modules": [
-      "CindyRemotePresentationModule"
-    ]
+    "modules": ["CindyRemotePresentationModule"]
+  },
+  "android": {
+    "modules": ["com.cindy.remotepresentation.CindyRemotePresentationModule"]
   }
 }

@@ -135,6 +135,11 @@ export interface RemoteDesktopCapabilities {
   cursorOverlay?: boolean;
   clipboardText?: boolean;
   clipboardContent?: boolean;
+  clipboardSync?: boolean;
+  /** Bounded single-message clipboard payloads, with legacy chunk fallback. */
+  clipboardInline?: boolean;
+  privacyScreen?: boolean;
+  hostMute?: boolean;
 }
 export type DesktopPermission = "screenRecording" | "accessibility";
 export type DesktopPermissionStatus =
@@ -159,6 +164,15 @@ export interface RemoteDesktopLease {
   controlling: boolean;
 }
 export type RemoteDesktopRequest =
+  | {
+      op: "privacyScreen";
+      lease: string;
+      enabled: boolean;
+      lockOnExit?: boolean;
+    }
+  | { op: "hostMute"; lease: string; enabled: boolean }
+  | { op: "clipboardSync"; lease: string; enabled: boolean }
+  | { op: "clipboardVersion"; lease: string }
   | RemoteDesktopIceRequest
   | ClipboardContentRequest
   | { op: "capabilities" }
@@ -198,8 +212,10 @@ export function parseRemoteDesktopRequest(
   ) {
     if (v.resume !== undefined && typeof v.resume !== "boolean")
       throw new Error("INVALID_REQUEST");
-    if (v.takeover !== undefined && typeof v.takeover !== "boolean") throw new Error("INVALID_REQUEST");
-    if (v.takeover === true && v.resume === true) throw new Error("INVALID_REQUEST");
+    if (v.takeover !== undefined && typeof v.takeover !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    if (v.takeover === true && v.resume === true)
+      throw new Error("INVALID_REQUEST");
     return {
       op: v.op,
       displayId: v.displayId,
@@ -210,6 +226,26 @@ export function parseRemoteDesktopRequest(
   if (typeof v.lease !== "string" || v.lease.length > 128 || !v.lease)
     throw new Error("INVALID_LEASE");
   const lease = v.lease;
+  if (v.op === "privacyScreen" && typeof v.enabled === "boolean") {
+    if (v.lockOnExit !== undefined && typeof v.lockOnExit !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      enabled: v.enabled,
+      ...(typeof v.lockOnExit === "boolean"
+        ? { lockOnExit: v.lockOnExit }
+        : {}),
+    };
+  }
+  if (
+    (v.op === "privacyScreen" ||
+      v.op === "clipboardSync" ||
+      v.op === "hostMute") &&
+    typeof v.enabled === "boolean"
+  )
+    return { op: v.op, lease, enabled: v.enabled };
+  if (v.op === "clipboardVersion") return { op: v.op, lease };
   if (v.op === "ice") {
     if (!isDesktopAttemptId(v.attemptId) || !isDesktopIceCursor(v.after))
       throw new Error("INVALID_REQUEST");
@@ -225,20 +261,34 @@ export function parseRemoteDesktopRequest(
     return parseClipboardContentRequest(v, lease);
   if (v.op === "clipboard") {
     if (v.action === "copy") return { op: v.op, lease, action: "copy" };
-    if (v.action === "paste" && typeof v.text === "string" && v.text.length > 0 && v.text.length <= REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS)
+    if (
+      v.action === "paste" &&
+      typeof v.text === "string" &&
+      v.text.length > 0 &&
+      v.text.length <= REMOTE_DESKTOP_MAX_CLIPBOARD_CHARS
+    )
       return { op: v.op, lease, action: "paste", text: v.text };
     throw new Error("INVALID_REQUEST");
   }
   if (v.op === "frame") {
-    if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean") throw new Error("INVALID_REQUEST");
-    return { op: v.op, lease, ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}) };
+    if (v.cursorOverlay !== undefined && typeof v.cursorOverlay !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      ...(v.cursorOverlay === true ? { cursorOverlay: true } : {}),
+    };
   }
   if (v.op === "stop") {
-    if (v.lockScreen !== undefined && typeof v.lockScreen !== "boolean") throw new Error("INVALID_REQUEST");
-    return { op: v.op, lease, ...(v.lockScreen === true ? { lockScreen: true } : {}) };
+    if (v.lockScreen !== undefined && typeof v.lockScreen !== "boolean")
+      throw new Error("INVALID_REQUEST");
+    return {
+      op: v.op,
+      lease,
+      ...(v.lockScreen === true ? { lockScreen: true } : {}),
+    };
   }
-  if (v.op === "heartbeat")
-    return { op: v.op, lease };
+  if (v.op === "heartbeat") return { op: v.op, lease };
   if (
     (v.op === "control" || v.op === "presentation") &&
     typeof v.enabled === "boolean"

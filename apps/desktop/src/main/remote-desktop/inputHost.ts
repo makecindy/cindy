@@ -48,6 +48,7 @@ async function resolveBinary(): Promise<string> {
     if (process.platform === 'darwin') digest.update(process.execPath).update('dev-caller-v1');
     if (process.platform === 'win32') {
       digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'desktop.rs')));
+      digest.update(await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'privacy.rs')));
       digest.update(
         await fs.readFile(path.join(sourceRoot, 'windows-input', 'src', 'selection.rs')),
       );
@@ -107,6 +108,8 @@ async function resolveBinary(): Promise<string> {
   });
   return build;
 }
+
+export { resolveBinary as resolveDesktopInputBinary };
 
 /** Probe the actual input process, never CuaDriver's or Electron's AX grant. */
 export async function readDesktopLockState(): Promise<'locked' | 'unlocked' | 'unavailable'> {
@@ -192,6 +195,7 @@ export class DesktopInputHost {
   private generation = 0;
   private heartbeat: ReturnType<typeof setInterval> | null = null;
   private stopping: Promise<void> = Promise.resolve();
+  private privacyPaused = false;
   constructor(
     private readonly onFailure: () => void,
     private readonly runtime: {
@@ -266,11 +270,13 @@ export class DesktopInputHost {
       });
       this.heartbeat = setInterval(() => this.write([]), 2000);
     } catch (error) {
-      if (generation === this.generation) this.stop();
+      if (generation !== this.generation) throw new Error('DESKTOP_LEASE_EXPIRED');
+      this.stop();
       throw error;
     }
   }
   input(events: DesktopInput[]): void {
+    if (this.privacyPaused) return;
     const display = screen.getAllDisplays().find((item) => String(item.id) === this.displayId);
     if (!display || (!this.child && !this.windows)) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
     this.write(
@@ -325,8 +331,33 @@ export class DesktopInputHost {
     this.stop();
     await this.stopping;
   }
+  /** Drain/release native input before a local-only confirmation gains focus.
+   * Restart only this input helper on cancel, never the media session or lease.
+   */
+  async pauseForPrivacy(): Promise<() => Promise<void>> {
+    if (!this.child && !this.windows) throw new Error('DESKTOP_INPUT_UNAVAILABLE');
+    const displayId = this.displayId;
+    const release = this.releaseOwnership;
+    this.releaseOwnership = null;
+    this.stop();
+    // Keep Agent input excluded for the entire local confirmation.
+    this.releaseOwnership = release;
+    this.privacyPaused = true;
+    const generation = this.generation;
+    await this.stopping;
+    return async () => {
+      if (generation !== this.generation) return;
+      try {
+        await this.start(displayId);
+      } catch (error) {
+        if (!(error instanceof Error && error.message === 'DESKTOP_LEASE_EXPIRED'))
+          this.onFailure();
+      }
+    };
+  }
   stop(): void {
     this.generation++;
+    this.privacyPaused = false;
     const windows = this.windows;
     windows?.close();
     this.windows = null;

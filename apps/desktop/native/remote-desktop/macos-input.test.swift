@@ -27,3 +27,17 @@ for down in [true, false] {
   precondition(!control.flags.contains(.maskSecondaryFn), "Control must not inherit F11's Fn state")
 }
 print("native keyboard flags passed")
+
+for press: Int64 in [36, 100000] {
+  var gate = PrivacyInputGate()
+  precondition(gate.consume(physical: false, press: press, down: true, trigger: true) == (false, false))
+  precondition(gate.consume(physical: true, press: press, down: true, trigger: true) == (true, true))
+  precondition(gate.consume(physical: false, press: press, down: false, trigger: false) == (false, false))
+  gate.phase = 2
+  precondition(gate.consume(physical: false, press: press, down: true, trigger: true) == (true, false))
+  precondition(gate.consume(physical: true, press: press, down: true, trigger: true) == (true, false))
+  precondition(gate.consume(physical: true, press: press, down: false, trigger: false) == (true, false))
+  precondition(gate.consume(physical: true, press: press, down: true, trigger: true) == (false, false))
+  gate.phase = 0
+  precondition(gate.consume(physical: false, press: press, down: true, trigger: true) == (false, false))
+}
