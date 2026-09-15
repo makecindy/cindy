@@ -407,7 +407,7 @@ export interface AgentInputProjection {
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /**
    * 中断自动续跑接管中:上游把「已经干到一半」的 turn 打断了,main 守卫已决定自动
-   * 续跑,正在退避窗口里(见 main/maker-ipc/interruptedTurnAutoResume.ts)。
+   * 续跑,正在退避或出队后的派发准备阶段(见 main/maker-ipc/interruptedTurnAutoResume.ts)。
    *
    * 此时 `error` 刻意保持 null —— 自愈过程不该弹红色横幅,只在聊天流里显示一条低调
    * 的「正在自动继续」分隔条(renderer 据本字段插 ephemeral system card)。真正救不

@@ -3829,6 +3829,15 @@ export class AgentInputCoordinator {
 
   private toProjection(sessionId: string, state: SessionInputState): AgentInputProjection {
     const pendingQueue = state.pendingQueue.map((item) => this.toProjectedItem(item));
+    // Draining removes the queue row before asynchronous preparation starts.
+    // Keep the existing recovery projection until dispatch settles; derive it
+    // from the active owner so cancellation/failure cannot leave a stale flag.
+    const autoResumePending = state.autoResumePending ?? (
+      state.activeTurn?.item?.autoResume &&
+      state.activeTurn.dispatchLifecycle !== 'dispatched'
+        ? state.activeTurn.item.autoResumeInfo
+        : undefined
+    );
     const recovery: AgentInputRecovery =
       state.recovery?.kind === 'active-turn'
         ? { ...state.recovery, item: this.toProjectedItem(state.recovery.item) }
@@ -3856,7 +3865,7 @@ export class AgentInputCoordinator {
       ...(state.error && state.errorReason ? { errorReason: state.errorReason } : {}),
       ...(state.error && state.toolLoop ? { toolLoop: state.toolLoop } : {}),
       recovery,
-      ...(state.autoResumePending ? { autoResumePending: state.autoResumePending } : {}),
+      ...(autoResumePending ? { autoResumePending } : {}),
       errorRetryText: projectionRetryText(state.pendingQueue, state.recovery),
       credentialSwitchWait: state.credentialSwitchWait
         ? {

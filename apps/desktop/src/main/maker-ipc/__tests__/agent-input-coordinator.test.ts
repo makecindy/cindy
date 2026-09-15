@@ -11981,6 +11981,32 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.error).toBeNull();
   });
 
+  it.each(['allow', 'reject', 'close'] as const)(
+    'keeps recovery projected through drained preparation and settles on %s', async (outcome) => {
+      const h = createHarness();
+      const sid = `takeover-preparing-${outcome}`;
+      h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+      h.setHasAssistantProgressAfter(async () => true);
+      await failAfterDispatch(h, sid);
+      const screen = deferred<{ action: 'allow' }>();
+      h.setScreenUserMessage(() => screen.promise);
+      await h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal);
+      await flush();
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+      expect(h.coordinator.getProjection(sid).autoResumePending).toEqual(TAKEOVER_INFO);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      if (outcome === 'close') {
+        h.coordinator.onSessionClosed(sid);
+        expect(h.coordinator.getProjection(sid).autoResumePending).toBeUndefined();
+      }
+      if (outcome === 'reject') screen.reject(new Error('preparation failed'));
+      else screen.resolve({ action: 'allow' });
+      await flush();
+      expect(h.coordinator.getProjection(sid).autoResumePending).toBeUndefined();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(outcome === 'allow' ? 2 : 1);
+    },
+  );
+
   it('abandonAutoResume 带 message → 错误回落成横幅', async () => {
     const h = createHarness();
     const sid = 'abandon-surfaces-banner';
