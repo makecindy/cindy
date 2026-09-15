@@ -397,6 +397,7 @@ export interface MobileMakerTransport {
     modelVisibilityOverrides?: Record<string, boolean>;
   }>;
   getSession(sessionId: string): Promise<RemoteSession>;
+  listOrcaWorkersByLead(leadSessionId: string): Promise<unknown>;
   searchConversations(request: ConversationSearchRequest): Promise<ConversationSearchResponse>;
   patchSessionMeta(sessionId: string, patch: SessionMetaPatch): Promise<RemoteSession>;
   /**
@@ -679,6 +680,8 @@ export function createMobileMakerTransport({
       capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
     }]),
     getSession: (sessionId) => call('local-db:sessions:get', [sessionId]),
+    listOrcaWorkersByLead: (leadSessionId) =>
+      call('local-db:orca-workflows:list-workers-by-lead', [leadSessionId]),
     searchConversations: (request) => call('local-db:conversations:search', [request]),
     patchSessionMeta: (sessionId, patch) => call('local-db:sessions:patch-meta', [sessionId, patch]),
     dismissErrorMessage: (sessionId, clientId) =>

@@ -169,6 +169,7 @@ import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
 import { PiSessionTreeSheet } from '@/session/PiSessionTreeSheet';
+import { OrcaWorkerStatusCard } from '@/session/OrcaWorkerStatusCard';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
@@ -2718,6 +2719,15 @@ export default function SessionScreen() {
       guardedPush({ pathname: '/sessions/new', params: { deviceId, deviceName } });
     });
   }, [deviceId, deviceName, guardedPush, queueDrawerNavigation]);
+  // Lead 的 Worker 卡点行进入该 Worker 会话;只读口径由 collaboration.ts 按 orcaRole
+  // 自行判定,这里不额外传状态。沿用当前页的 deviceId/deviceName:Worker 与 Lead 同在
+  // 这台被控设备上。
+  const openWorkerSession = useCallback((workerSessionId: string) => {
+    guardedPush({
+      pathname: '/sessions/[sessionId]',
+      params: { sessionId: workerSessionId, deviceId, deviceName },
+    });
+  }, [deviceId, deviceName, guardedPush]);
   // 抽屉「主页」是显式的去处承诺,不是「返回」:从设备详情/自动化页进来时 back 只退一层,
   // 会落在中间页。dismissTo 沿当前栈一路退到根页,栈里没有根页(深链冷启动)则推入。
   const handleDrawerGoHome = useCallback(() => {
@@ -8961,6 +8971,13 @@ export default function SessionScreen() {
                 status={status}
                 recovery={contentRecoveryState}
                 variant="inline"
+              />
+            ) : null}
+            {currentSession?.orcaRole === 'lead' ? (
+              <OrcaWorkerStatusCard
+                leadSessionId={sessionId}
+                maker={maker}
+                onOpenWorker={openWorkerSession}
               />
             ) : null}
           </View>
