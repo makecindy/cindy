@@ -1198,6 +1198,7 @@
         "desktop:settings.memory.agent.toast.takesEffectSuffix",
         "desktop:settings.sessionImport.description",
         "desktop:settings.sessionImport.summary.filteredHint",
+        "desktop:settings.sessionImport.summary.reasonInternal",
         "desktop:settings.mcp.dialog.desc",
         "desktop:settings.mcp.deleteConfirm.message",
         "desktop:settings.memory.description",

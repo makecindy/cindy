@@ -1418,7 +1418,20 @@
         "dialogue": "對話",
         "dialogueHint": "Codex 標記為不屬於專案的任務",
         "filtered": "已跳過",
-        "filteredHint": "內部 Agent 會話或已在應用內"
+        "filteredHint": "內部 Agent 會話、格式無效或超出掃描窗口，不會展示也不會匯入",
+        "existing": "已在應用內",
+        "existingHint": "同 SDK 任務已在應用中，不會重複匯入",
+        "managedDialogue": "內部對話",
+        "managedDialogueHint": "Cindy 管理目錄下的孤兒/內部對話，不展示也不匯入",
+        "reasonListOpen": "（",
+        "reasonListSep": " · ",
+        "reasonListClose": "）",
+        "reasonListSource": "Claude：",
+        "reasonInternal": "內部 Agent 會話",
+        "reasonNoEvents": "無有效內容",
+        "reasonWindowLimit": "超出掃描窗口",
+        "reasonInvalidId": "ID 格式無效",
+        "reasonUnreadable": "檔案不可讀"
       },
       "filters": {
         "source": "來源",
