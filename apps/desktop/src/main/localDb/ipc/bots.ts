@@ -4,7 +4,10 @@
  * 不维护第二份资料或决定 canonical Session。
  */
 import { provisionDefaultBot } from '../../maker-ipc/botDefaultProvisioning.js';
-import { BOT_TEMPLATE_PRESET_AVATARS, CINDY_DEFAULT_IDENTITY } from '../../../shared/botTemplatePreset.js';
+import {
+  BOT_TEMPLATE_PRESET_AVATARS,
+  CINDY_DEFAULT_IDENTITY,
+} from '../../../shared/botTemplatePreset.js';
 import fs from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 
@@ -30,7 +33,10 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context.js';
 import { requireString, throwIpcError } from '../../utils/ipcValidate.js';
 import { isBotVisibleRemotely } from './botRemoteVisibility.js';
-import { readRemoteBotSessionAccess } from './botRemoteSessionAccess.js';
+import {
+  readRemoteBotSessionAccess,
+  readRemoteBotSessionAccessBatch,
+} from './botRemoteSessionAccess.js';
 import { setRemoteBotSessionLookup } from '../../device-link/remoteBotSessionBoundary.js';
 import { resolveBusinessSessionId } from '../../sessionIds.js';
 import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap.js';
@@ -76,7 +82,12 @@ import {
 } from '../../../shared/botAvatarValue.js';
 import { migrateLegacyTeammateAvatar } from './legacyTeammateAvatar.js';
 import { MAKER_PUSH } from '../../maker-ipc/channels.js';
-import { decodeBotAvatarImage, validateBotAvatarBuffer, storeTeammateAvatarImage, readDefaultTeammatePortrait } from './botAvatarSelection.js';
+import {
+  decodeBotAvatarImage,
+  validateBotAvatarBuffer,
+  storeTeammateAvatarImage,
+  readDefaultTeammatePortrait,
+} from './botAvatarSelection.js';
 import {
   inferBotTemplatePresetId,
   isBotTemplatePresetId,
@@ -84,7 +95,11 @@ import {
 import { createMessage } from './messages.js';
 import { BOT_DELEGATION_CLIENT_ID } from '../../../shared/botCollaboration.js';
 
-import { generateBotCreationDraft, readBotCreationDraft, generateBotCreationAvatar } from '../../maker-ipc/botCreationDraft.js';
+import {
+  generateBotCreationDraft,
+  readBotCreationDraft,
+  generateBotCreationAvatar,
+} from '../../maker-ipc/botCreationDraft.js';
 import { botInvitationProgress } from '../../../shared/botInvitation.js';
 import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botInvitation.js';
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
@@ -97,8 +112,11 @@ const log = createLogger('bots');
 function queueBotInvitation(botId: string, retry = false): void {
   enqueueBotInvitation(
     botId,
-    { createCanonicalSession: createBotCanonicalSession, broadcastProfileChanged: broadcastBotProfileChanged,
-      canStartWelcome: async config => (await readEffectiveBotModelChain(config)).length > 0 },
+    {
+      createCanonicalSession: createBotCanonicalSession,
+      broadcastProfileChanged: broadcastBotProfileChanged,
+      canStartWelcome: async (config) => (await readEffectiveBotModelChain(config)).length > 0,
+    },
     retry,
   );
 }
@@ -313,8 +331,14 @@ function defaultBotModelForConfig(config: Record<string, unknown>): string {
   return botSessionAgentKind(config) === 'pi' ? NEW_BOT_DEFAULT_PI_MODEL : 'claude-sonnet-4-6';
 }
 
-function botSessionPermissionMode(config: Record<string, unknown>): 'ask' | 'auto' | 'bypassPermissions' {
-  return config.permissions === 'trusted' ? 'bypassPermissions' : config.permissions === 'auto' ? 'auto' : 'ask';
+function botSessionPermissionMode(
+  config: Record<string, unknown>,
+): 'ask' | 'auto' | 'bypassPermissions' {
+  return config.permissions === 'trusted'
+    ? 'bypassPermissions'
+    : config.permissions === 'auto'
+      ? 'auto'
+      : 'ask';
 }
 
 function readText(value: unknown, field: string, max = MAX_TEXT, required = false): string {
@@ -401,7 +425,9 @@ async function readCanonicalChatPreview(
     .where(
       and(
         eq(messages.sessionId, canonicalSessionId),
-        repliesOnly ? eq(messages.role, 'assistant') : inArray(messages.role, ['user', 'assistant']),
+        repliesOnly
+          ? eq(messages.role, 'assistant')
+          : inArray(messages.role, ['user', 'assistant']),
         isNull(messages.rewindAt),
         sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
         sql`(${messages.agentMeta} IS NULL OR json_type(${messages.agentMeta}, '$.botDirectMessage') IS NULL)`,
@@ -500,13 +526,18 @@ async function readProfile(
   const byId = new Map(sessionRows.map((row) => [row.id, row]));
   // Runtime snapshots are durable history. The list needs only the latest per
   // task; fetching every frozen capability JSON grows with months of restarts.
-  const runtimeRows = (await Promise.all(links.map((link) => db
-    .select()
-    .from(botRuntimeSnapshots)
-    .where(eq(botRuntimeSnapshots.sessionId, link.sessionId))
-    .orderBy(desc(botRuntimeSnapshots.preparedAt), desc(botRuntimeSnapshots.appliedAt))
-    .limit(1),
-  ))).flat();
+  const runtimeRows = (
+    await Promise.all(
+      links.map((link) =>
+        db
+          .select()
+          .from(botRuntimeSnapshots)
+          .where(eq(botRuntimeSnapshots.sessionId, link.sessionId))
+          .orderBy(desc(botRuntimeSnapshots.preparedAt), desc(botRuntimeSnapshots.appliedAt))
+          .limit(1),
+      ),
+    )
+  ).flat();
   const runtimeBySession = new Map<string, (typeof runtimeRows)[number]>();
   for (const row of runtimeRows) {
     if (!runtimeBySession.has(row.sessionId)) runtimeBySession.set(row.sessionId, row);
@@ -560,7 +591,10 @@ async function readProfile(
     failureReason,
     needsAttention,
     status: profile.status,
-    templateId: typeof config.templateId === 'string' ? config.templateId : inferBotTemplatePresetId(version?.identitySource ?? '') ?? undefined,
+    templateId:
+      typeof config.templateId === 'string'
+        ? config.templateId
+        : (inferBotTemplatePresetId(version?.identitySource ?? '') ?? undefined),
     currentVersion: profile.currentVersion,
     canonicalSessionId: canonicalSessionId ?? undefined,
     /*
@@ -622,7 +656,10 @@ async function readProfile(
         ? config.mcpServers.filter((item): item is string => typeof item === 'string')
         : [],
       memory: config.memory !== false,
-      permissions: config.permissions === 'trusted' || config.permissions === 'auto' ? config.permissions : 'ask',
+      permissions:
+        config.permissions === 'trusted' || config.permissions === 'auto'
+          ? config.permissions
+          : 'ask',
     },
     sessions: links.flatMap((link) => {
       const row = byId.get(link.sessionId);
@@ -733,11 +770,22 @@ async function readBotRemoteResourceSource(
   if (!profile) throwIpcError('NOT_FOUND', 'Bot 不存在');
   const { canonicalSessionId } = await reconcileCanonicalLink(botId, client);
   owner.assertCurrent();
-  const [canonical] = canonicalSessionId ? await db
-    .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
-    .from(sessions).where(eq(sessions.id, canonicalSessionId)).limit(1) : [];
-  const latest = await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null);
-  const reply = latest.role === 'assistant' ? latest : await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null, true);
+  const [canonical] = canonicalSessionId
+    ? await db
+        .select({ clearedAt: sessions.clearedAt, updatedAt: sessions.updatedAt })
+        .from(sessions)
+        .where(eq(sessions.id, canonicalSessionId))
+        .limit(1)
+    : [];
+  const latest = await readCanonicalChatPreview(
+    db,
+    canonicalSessionId,
+    canonical?.clearedAt ?? null,
+  );
+  const reply =
+    latest.role === 'assistant'
+      ? latest
+      : await readCanonicalChatPreview(db, canonicalSessionId, canonical?.clearedAt ?? null, true);
   owner.assertCurrent();
   return {
     id: profile.id,
@@ -751,7 +799,8 @@ async function readBotRemoteResourceSource(
     lastMessageAt: latest.createdAt,
     lastMessageRole: latest.role,
     lastReplyAt: reply.createdAt ?? 0,
-    needsAttention: profile.attentionAt !== null &&
+    needsAttention:
+      profile.attentionAt !== null &&
       BOT_FAILURE_REASONS.includes(profile.attentionReason as BotFailureReason) &&
       isBotFailureAttentionWorthy(profile.attentionReason as BotFailureReason),
     hiddenAt: profile.hiddenAt,
@@ -769,19 +818,35 @@ async function provisionDefaultBotForList(
 ): Promise<void> {
   try {
     await provisionDefaultBot({
-      ownerRoot: owner.userDataDir, assertOwner: owner.assertCurrent,
+      ownerRoot: owner.userDataDir,
+      assertOwner: owner.assertCurrent,
       hasBotHistory: async () => {
-        const profiles = await client.drizzle.select({ id: botProfiles.id }).from(botProfiles).limit(1);
+        const profiles = await client.drizzle
+          .select({ id: botProfiles.id })
+          .from(botProfiles)
+          .limit(1);
         if (profiles.length) return true;
-        const history = await client.drizzle.select({ id: sessions.id }).from(sessions).where(eq(sessions.source, 'bot')).limit(1);
+        const history = await client.drizzle
+          .select({ id: sessions.id })
+          .from(sessions)
+          .where(eq(sessions.source, 'bot'))
+          .limit(1);
         return history.length > 0;
       },
-      create: () => createBotProfile({ id: 'cindy-default', name: 'Cindy', templateId: 'cindy',
-        avatar: BOT_TEMPLATE_PRESET_AVATARS.cindy, identitySource: CINDY_DEFAULT_IDENTITY,
-        prepareInvitation: true }),
+      create: () =>
+        createBotProfile({
+          id: 'cindy-default',
+          name: 'Cindy',
+          templateId: 'cindy',
+          avatar: BOT_TEMPLATE_PRESET_AVATARS.cindy,
+          identitySource: CINDY_DEFAULT_IDENTITY,
+          prepareInvitation: true,
+        }),
     });
   } catch (error) {
-    log.warn('initial companion deferred', { error: error instanceof Error ? error.name : typeof error });
+    log.warn('initial companion deferred', {
+      error: error instanceof Error ? error.name : typeof error,
+    });
   }
   owner.assertCurrent();
 }
@@ -790,12 +855,17 @@ export async function listBotRemoteResourceSources(): Promise<BotRemoteResourceS
   const owner = captureBotOperationOwner();
   const client = getDbClient();
   await provisionDefaultBotForList(client, owner);
-  const profiles = await client.drizzle.select({ id: botProfiles.id }).from(botProfiles)
-    .where(isNull(botProfiles.hiddenAt)).orderBy(desc(botProfiles.updatedAt));
+  const profiles = await client.drizzle
+    .select({ id: botProfiles.id })
+    .from(botProfiles)
+    .where(isNull(botProfiles.hiddenAt))
+    .orderBy(desc(botProfiles.updatedAt));
   owner.assertCurrent();
   // The roster reads only identity + canonical preview, never runtime snapshots
   // or every historical task attached to a long-lived companion.
-  const sources = await Promise.all(profiles.map(({ id }) => readBotRemoteResourceSource(client, id)));
+  const sources = await Promise.all(
+    profiles.map(({ id }) => readBotRemoteResourceSource(client, id)),
+  );
   owner.assertCurrent();
   return sources;
 }
@@ -903,11 +973,15 @@ export async function recoverActiveTeammateInvitations(): Promise<void> {
 export async function createBotProfile(raw: unknown) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
-  const draftEntry = body.creationDraftToken ? readBotCreationDraft(body.creationDraftToken) : undefined;
+  const draftEntry = body.creationDraftToken
+    ? readBotCreationDraft(body.creationDraftToken)
+    : undefined;
   const name = readText(body.name ?? body.displayName, 'name', 200, true);
   const description = readText(body.description, 'description', draftEntry ? 2000 : 12000);
   const id =
-    draftEntry?.botId || readText(body.id, 'id', 128) || `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    draftEntry?.botId ||
+    readText(body.id, 'id', 128) ||
+    `bot_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   // New identities must map one-to-one to portable directory names. Keep the
   // legacy directory resolver unchanged so existing profiles still open.
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(id) || /^(con|prn|aux|nul|com[0-9]|lpt[0-9])$/.test(id)) {
@@ -921,12 +995,18 @@ export async function createBotProfile(raw: unknown) {
   const avatarImage = decodeBotAvatarImage(body.avatarImageBase64);
   const avatarColor = readText(body.avatarColor, 'avatarColor', 32) || 'violet';
   const identitySource =
-    (draftEntry ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}` : readText(body.identitySource, 'identitySource', 12000)) || buildDefaultBotIdentity(name, description);
-  const skills = draftEntry ? draftEntry.draft.skillRefs : Array.isArray(body.skills)
-    ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
-    : [];
+    (draftEntry
+      ? `${draftEntry.draft.background}\n\n${draftEntry.draft.conversationStyle}\n\nCurrent profile:\n${name}\n${description}`
+      : readText(body.identitySource, 'identitySource', 12000)) ||
+    buildDefaultBotIdentity(name, description);
+  const skills = draftEntry
+    ? draftEntry.draft.skillRefs
+    : Array.isArray(body.skills)
+      ? body.skills.filter((item): item is string => typeof item === 'string').slice(0, 100)
+      : [];
   // Older clients may request a welcome; its supplied text is never an assistant message.
-  const prepareInvitation = body.prepareInvitation === true || Boolean(readText(body.welcomeMessage, 'welcomeMessage'));
+  const prepareInvitation =
+    body.prepareInvitation === true || Boolean(readText(body.welcomeMessage, 'welcomeMessage'));
   const hasRequestedCapabilities =
     body.capabilities && typeof body.capabilities === 'object' && !Array.isArray(body.capabilities);
   const requestedCapabilities = hasRequestedCapabilities
@@ -938,7 +1018,8 @@ export async function createBotProfile(raw: unknown) {
   // Accept those as ordinary teammates, without installing or reconstructing a template.
   const retiredTemplate = body.templateId === 'dash' || body.templateId === 'lizi';
   const templateId = retiredTemplate ? undefined : body.templateId;
-  if (draftEntry && templateId !== undefined) throwIpcError('INVALID_PARAMS', '请选择创建伙伴或预设伙伴');
+  if (draftEntry && templateId !== undefined)
+    throwIpcError('INVALID_PARAMS', '请选择创建伙伴或预设伙伴');
   if (templateId !== undefined && !isBotTemplatePresetId(templateId)) {
     throwIpcError('INVALID_PARAMS', '未知的伙伴模板');
   }
@@ -947,10 +1028,7 @@ export async function createBotProfile(raw: unknown) {
     userDataDir: ownerScopedUserDataPath(),
   };
   const assertCreationOwnerStillCurrent = () => {
-    if (
-      isAppSessionBoundaryPending() ||
-      activeOwnerScopeKey() !== creationOwnerBoundary.scopeKey
-    ) {
+    if (isAppSessionBoundaryPending() || activeOwnerScopeKey() !== creationOwnerBoundary.scopeKey) {
       throwIpcError('PRECONDITION_FAILED', '账号已切换，请在当前账号重新创建伙伴');
     }
   };
@@ -962,7 +1040,15 @@ export async function createBotProfile(raw: unknown) {
     ...(hasRequestedCapabilities ? {} : await defaultNewBotCapabilities()),
     ...requestedCapabilities,
     skills,
-    ...(draftEntry ? { skillMode: 'allowlist', mcpMode: 'allowlist', mcpServers: draftEntry.draft.mcpRefs, toolsetMode: 'allowlist', toolsets: draftEntry.draft.toolsetRefs } : {}),
+    ...(draftEntry
+      ? {
+          skillMode: 'allowlist',
+          mcpMode: 'allowlist',
+          mcpServers: draftEntry.draft.mcpRefs,
+          toolsetMode: 'allowlist',
+          toolsets: draftEntry.draft.toolsetRefs,
+        }
+      : {}),
     userContextSource,
     ...(gender ? { gender } : {}),
   });
@@ -970,55 +1056,79 @@ export async function createBotProfile(raw: unknown) {
   delete persistedCapabilities.invitation;
   delete persistedCapabilities.templateId;
   if (templateId) persistedCapabilities.templateId = templateId;
-  if (prepareInvitation) persistedCapabilities.invitation = {
-    id: randomUUID(), stage: 'skills', locale: getResolvedMainLocale(),
-    avatarRequested: body.generateAvatar === true && !avatarImage,
-    ...(draftEntry ? { draft: { ...draftEntry.draft, background: `${draftEntry.draft.background}\n\nCurrent profile (use this name and introduction):\n${name}\n${description}` } } : {}),
-  };
+  if (prepareInvitation)
+    persistedCapabilities.invitation = {
+      id: randomUUID(),
+      stage: 'skills',
+      locale: getResolvedMainLocale(),
+      avatarRequested: body.generateAvatar === true && !avatarImage,
+      ...(draftEntry
+        ? {
+            draft: {
+              ...draftEntry.draft,
+              background: `${draftEntry.draft.background}\n\nCurrent profile (use this name and introduction):\n${name}\n${description}`,
+            },
+          }
+        : {}),
+    };
   const now = Date.now();
   const client = getDbClient();
   const db = client.drizzle;
   let botAvatarRef: { id: string; hash: string; createdAt: number } | undefined;
   const existingIds = await db.select({ id: botProfiles.id }).from(botProfiles);
   assertCreationOwnerStillCurrent();
-  if (draftEntry && existingIds.some(p => p.id === id)) return readProfile(client, id);
+  if (draftEntry && existingIds.some((p) => p.id === id)) return readProfile(client, id);
   if (templateId === 'cindy') {
     const existingCindy = await findExistingCindy(client);
     assertCreationOwnerStillCurrent();
-    if (existingCindy?.status === 'deleting') throwIpcError('PRECONDITION_FAILED', 'Cindy 正在删除，请稍后重试');
+    if (existingCindy?.status === 'deleting')
+      throwIpcError('PRECONDITION_FAILED', 'Cindy 正在删除，请稍后重试');
     if (existingCindy) return existingCindy;
   }
   assertCreationOwnerStillCurrent();
   const newHome = botProfileDir(creationOwnerBoundary.userDataDir, id).toLowerCase();
-  if (existingIds.some((profile) => botProfileDir(creationOwnerBoundary.userDataDir, profile.id).toLowerCase() === newHome)) {
+  if (
+    existingIds.some(
+      (profile) =>
+        botProfileDir(creationOwnerBoundary.userDataDir, profile.id).toLowerCase() === newHome,
+    )
+  ) {
     throwIpcError('ALREADY_EXISTS', 'Bot home already belongs to another profile');
   }
-  const selectedImage = avatarImage ?? (!requestedAvatar ? await readDefaultTeammatePortrait(existingIds.length) : null);
+  const selectedImage =
+    avatarImage ??
+    (!requestedAvatar ? await readDefaultTeammatePortrait(existingIds.length) : null);
   if (selectedImage) {
-    const written = await storeTeammateAvatarImage(selectedImage, db, assertCreationOwnerStillCurrent);
+    const written = await storeTeammateAvatarImage(
+      selectedImage,
+      db,
+      assertCreationOwnerStillCurrent,
+    );
     avatar = written.url;
     botAvatarRef = { id: randomUUID(), hash: written.hash, createdAt: now };
   }
   try {
-  await client.tx('bots.createProfile', {
-    id,
-    ...(botAvatarRef ? { botAvatarRef } : {}),
-    displayName: name,
-    description,
-    avatar,
-    avatarColor,
-    identitySource,
-    capabilitiesJson: safeJson(persistedCapabilities),
-    now,
-  });
+    await client.tx('bots.createProfile', {
+      id,
+      ...(botAvatarRef ? { botAvatarRef } : {}),
+      displayName: name,
+      description,
+      avatar,
+      avatarColor,
+      identitySource,
+      capabilitiesJson: safeJson(persistedCapabilities),
+      now,
+    });
   } catch (error) {
     assertCreationOwnerStillCurrent();
     if (templateId === 'cindy' && (error as { code?: string }).code === 'ALREADY_EXISTS') {
       const existing = await findExistingCindy(client);
-      if (existing?.status === 'deleting') throwIpcError('PRECONDITION_FAILED', 'Cindy 正在删除，请稍后重试');
+      if (existing?.status === 'deleting')
+        throwIpcError('PRECONDITION_FAILED', 'Cindy 正在删除，请稍后重试');
       if (existing) return existing;
     }
-    if ((error as { code?: string }).code === 'ALREADY_EXISTS') throwIpcError('ALREADY_EXISTS', '已有同名伙伴，请换一个名字');
+    if ((error as { code?: string }).code === 'ALREADY_EXISTS')
+      throwIpcError('ALREADY_EXISTS', '已有同名伙伴，请换一个名字');
     throw error;
   }
   assertCreationOwnerStillCurrent();
@@ -1044,8 +1154,11 @@ export async function createBotProfile(raw: unknown) {
 }
 
 /** Shared profile mutation for trusted settings and owner-bound capability selection. */
-export async function updateBotProfile(raw: unknown, expectedVersion?: number,
-  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>) {
+export async function updateBotProfile(
+  raw: unknown,
+  expectedVersion?: number,
+  validateAdditions?: (update: BotCapabilityUpdate) => Promise<void>,
+) {
   const body =
     raw && typeof raw === 'object' && !Array.isArray(raw) ? (raw as Record<string, unknown>) : {};
   const id = readText(body.id, 'botId', 128, true);
@@ -1065,8 +1178,7 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const patch: Partial<typeof botProfiles.$inferInsert> = { updatedAt: now };
   if (body.name !== undefined || body.displayName !== undefined)
     patch.displayName = readText(body.name ?? body.displayName, 'name', 200, true);
-  if (body.description !== undefined)
-    patch.description = readText(body.description, 'description');
+  if (body.description !== undefined) patch.description = readText(body.description, 'description');
 
   const expectedAvatar =
     body.avatar !== undefined && body.expectedAvatar !== undefined
@@ -1110,16 +1222,18 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     .select()
     .from(botProfileVersions)
     .where(
-      and(
-        eq(botProfileVersions.botId, id),
-        eq(botProfileVersions.version, current.currentVersion),
-      ),
+      and(eq(botProfileVersions.botId, id), eq(botProfileVersions.version, current.currentVersion)),
     )
     .limit(1);
   const previous = parseJson(version?.capabilitiesJson ?? '{}');
   const preparation = botInvitationProgress(previous.invitation);
   const retryingPortrait = preparation?.stage === 'avatar' && current.canonicalSessionId;
-  if (preparation && preparation.stage !== 'ready' && !retryingPortrait && (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined)) {
+  if (
+    preparation &&
+    preparation.stage !== 'ready' &&
+    !retryingPortrait &&
+    (body.name !== undefined || body.description !== undefined || body.identitySource !== undefined)
+  ) {
     throwIpcError('PRECONDITION_FAILED', '伙伴正在准备见面，请完成准备后再编辑资料');
   }
   const nextConfig = mergeBotProfileCapabilities({
@@ -1135,7 +1249,10 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
     capabilityBaseline: body.capabilityBaseline,
   });
   // Template identity survives renames and cannot be replaced through settings.
-  const retainedTemplate = typeof previous.templateId === 'string' ? previous.templateId : inferBotTemplatePresetId(version?.identitySource ?? '');
+  const retainedTemplate =
+    typeof previous.templateId === 'string'
+      ? previous.templateId
+      : inferBotTemplatePresetId(version?.identitySource ?? '');
   if (retainedTemplate) nextConfig.templateId = retainedTemplate;
   else delete nextConfig.templateId;
   // Keep preparation checkpoints outside caller-editable capabilities.
@@ -1155,19 +1272,28 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
   const nextIdentitySource =
     body.identitySource !== undefined
       ? readText(body.identitySource, 'identitySource', 12000) ||
-        buildDefaultBotIdentity(patch.displayName ?? current.displayName, patch.description ?? current.description)
+        buildDefaultBotIdentity(
+          patch.displayName ?? current.displayName,
+          patch.description ?? current.description,
+        )
       : (version?.identitySource ?? '');
-  const profileContentChanged = botProfileContentChanged({
-    previousCapabilities: previous,
-    nextCapabilities: normalizedNextConfig,
-    previousIdentitySource: version?.identitySource ?? '',
-    nextIdentitySource,
-  }) || (patch.displayName !== undefined && patch.displayName !== current.displayName)
-    || (patch.description !== undefined && patch.description !== current.description);
+  const profileContentChanged =
+    botProfileContentChanged({
+      previousCapabilities: previous,
+      nextCapabilities: normalizedNextConfig,
+      previousIdentitySource: version?.identitySource ?? '',
+      nextIdentitySource,
+    }) ||
+    (patch.displayName !== undefined && patch.displayName !== current.displayName) ||
+    (patch.description !== undefined && patch.description !== current.description);
   // Only the renderer save boundary needs this hook; model-side selections already validate
   // before calling this function. Both paths retain the transaction's profile-version CAS.
-  await validateAdditions?.({ botId: id, canonicalSessionId: current.canonicalSessionId,
-    previous, next: normalizedNextConfig });
+  await validateAdditions?.({
+    botId: id,
+    canonicalSessionId: current.canonicalSessionId,
+    previous,
+    next: normalizedNextConfig,
+  });
   owner.assertCurrent();
   await client.tx('bots.updateProfile', {
     id,
@@ -1202,10 +1328,13 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
           isNull(botSessionLinks.archivedAt),
         ),
       )
-    .limit(1);
+      .limit(1);
     owner.assertCurrent();
-    if (canonical) requestBotRuntimeEpochRefresh(canonical.sessionId,
-      botProfileModelSelectionChanged(previous, normalizedNextConfig) ? 'model' : 'profile');
+    if (canonical)
+      requestBotRuntimeEpochRefresh(
+        canonical.sessionId,
+        botProfileModelSelectionChanged(previous, normalizedNextConfig) ? 'model' : 'profile',
+      );
   }
   const profile = await readProfile(client, id);
   owner.assertCurrent();
@@ -1214,8 +1343,27 @@ export async function updateBotProfile(raw: unknown, expectedVersion?: number,
 }
 
 async function findExistingCindy(client: ReturnType<typeof getDbClient>) {
-  const rows = await client.drizzle.select({ id: botProfiles.id, config: botProfileVersions.capabilitiesJson, identity: botProfileVersions.identitySource }).from(botProfiles).innerJoin(botProfileVersions, and(eq(botProfileVersions.botId, botProfiles.id), eq(botProfileVersions.version, botProfiles.currentVersion))).where(ne(botProfiles.status, 'archived')).orderBy(botProfiles.createdAt);
-  const existing = rows.find(row => parseJson(row.config).templateId === 'cindy' || inferBotTemplatePresetId(row.identity) === 'cindy');
+  const rows = await client.drizzle
+    .select({
+      id: botProfiles.id,
+      config: botProfileVersions.capabilitiesJson,
+      identity: botProfileVersions.identitySource,
+    })
+    .from(botProfiles)
+    .innerJoin(
+      botProfileVersions,
+      and(
+        eq(botProfileVersions.botId, botProfiles.id),
+        eq(botProfileVersions.version, botProfiles.currentVersion),
+      ),
+    )
+    .where(ne(botProfiles.status, 'archived'))
+    .orderBy(botProfiles.createdAt);
+  const existing = rows.find(
+    (row) =>
+      parseJson(row.config).templateId === 'cindy' ||
+      inferBotTemplatePresetId(row.identity) === 'cindy',
+  );
   return existing ? readProfile(client, existing.id) : null;
 }
 
@@ -1223,17 +1371,26 @@ export function registerBotIpc(): void {
   ipcMain.handle('local-db:bots:generate-avatar', async (event, token: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof token !== 'string') throwIpcError('INVALID_PARAMS', 'Invalid draft');
-    try { return await generateBotCreationAvatar(token); }
-    catch { throwIpcError('INTERNAL', '头像生成失败，可以继续使用当前头像'); }
+    try {
+      return await generateBotCreationAvatar(token);
+    } catch {
+      throwIpcError('INTERNAL', '头像生成失败，可以继续使用当前头像');
+    }
   });
   ipcMain.handle('local-db:bots:generate-draft', async (event, raw: unknown) => {
     assertTrustedAppRendererEvent(event);
     const owner = captureBotOperationOwner();
-    const profiles = await getDbClient().drizzle.select({ name: botProfiles.displayName }).from(botProfiles).where(ne(botProfiles.status, 'archived'));
+    const profiles = await getDbClient()
+      .drizzle.select({ name: botProfiles.displayName })
+      .from(botProfiles)
+      .where(ne(botProfiles.status, 'archived'));
     owner.assertCurrent();
-    return generateBotCreationDraft(raw, profiles.map(p => p.name));
+    return generateBotCreationDraft(
+      raw,
+      profiles.map((p) => p.name),
+    );
   });
-  setRemoteBotSessionLookup(readRemoteBotSessionAccess);
+  setRemoteBotSessionLookup(readRemoteBotSessionAccess, readRemoteBotSessionAccessBatch);
   ipcMain.handle('local-db:bots:model-chain-settings-get', async (event) => {
     assertTrustedAppRendererEvent(event);
     const state = await readBotModelChainSettingsState();
@@ -1361,7 +1518,11 @@ export function registerBotIpc(): void {
     // reference move together in one SQLite transaction. If the transaction
     // loses a race, the unreferenced content-addressed blob is recycler-safe.
     ownerBoundary.assertCurrent();
-    const written = await storeTeammateAvatarImage({ buffer, mimeType }, db, ownerBoundary.assertCurrent);
+    const written = await storeTeammateAvatarImage(
+      { buffer, mimeType },
+      db,
+      ownerBoundary.assertCurrent,
+    );
     const now = Date.now();
     await client.tx('bots.updateProfile', {
       id: botId,
