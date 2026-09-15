@@ -136,6 +136,8 @@ function flattenChildren(children: ReactNode): ReactNode[] {
 }
 
 export interface ContextSheetRowProps {
+  /** Dismiss the iOS sheet before presenting a system picker. */
+  dismissBeforePress?: boolean;
   icon: ReactNode;
   label: string;
   onPress: () => void;

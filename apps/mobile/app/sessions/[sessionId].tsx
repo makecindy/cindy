@@ -1,3 +1,5 @@
+import { ComposerExpandButton } from '@/session/ComposerExpandButton';
+import { nativeComposerAvailable } from '@/session/ComposerNativeInput';
 import { getActiveMobileSessionRealm } from '@/config/env';
 import { FailedScheduleNotice } from '@/session/FailedScheduleNotice';
 import { shouldShowFailedScheduleNotice, type FailedScheduleRunSnapshot } from '@cindy/maker-shared/schedule-model';
@@ -168,6 +170,7 @@ import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
+import { NativePermissionSheet } from '@/session/NativePermissionSheet';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
 import { PiSessionTreeSheet } from '@/session/PiSessionTreeSheet';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
@@ -6822,6 +6825,7 @@ export default function SessionScreen() {
             testID="session.composerModelButton"
           />
         ) : null}
+      {Platform.OS === 'ios' && nativeComposerAvailable && (composerDocumentRef.current.nodes.reduce((count, node) => count + (node.type === 'text' ? node.text.length : 0), 0) > 300 || composerDocumentRef.current.nodes.some((node) => node.type === 'text' && node.text.split('\n').length > 4)) ? <ComposerExpandButton onPress={() => composerInputRef.current?.expand?.()} /> : null}
       </ComposerToolbarLeftGroup>
       <ComposerToolbarSpacer />
       {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边(对齐桌面),
@@ -9100,7 +9104,47 @@ export default function SessionScreen() {
                   testID="session.contextSheetPhotos"
                 />
               ) : null}
-              {!sessionManagedByHost ? <ContextSheetGroup label={t('session.common.groupMode')}>
+
+              <ContextSheetGroup label={t('session.common.groupAdd')}>
+                <ContextSheetRow
+                  accessibilityHint={composerSendUnavailableReason ?? undefined}
+                  disabled={!canUseComposer}
+                  icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.common.photo')}
+                  onPress={() => void addLocalImageAttachments('library')}
+                  dismissBeforePress
+                  testID="session.contextSheetPhotoRow"
+                />
+                {contextSheetMediaLibraryEnabled ? (
+                  <ContextSheetRow
+                    disabled={!canUseComposer}
+                    icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                    label={t('session.common.screenshot')}
+                    onPress={() => setContextSheetView('screenshots')}
+                    testID="session.contextSheetScreenshotsRow"
+                    trailing="chevron"
+                  />
+                ) : null}
+                <ContextSheetRow
+                  accessibilityHint={composerSendUnavailableReason ?? undefined}
+                  disabled={!canUseComposer}
+                  icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.common.takePhoto')}
+                  onPress={() => void addLocalImageAttachments('camera')}
+                  dismissBeforePress
+                  testID="session.contextSheetCameraRow"
+                />
+                <ContextSheetRow
+                  accessibilityHint={composerSendUnavailableReason ?? undefined}
+                  disabled={!canUseComposer}
+                  icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.common.file')}
+                  onPress={() => void addLocalFileAttachment()}
+                  dismissBeforePress
+                  testID="session.contextSheetFileRow"
+                />
+              </ContextSheetGroup>
+{!sessionManagedByHost ? <ContextSheetGroup label={t('session.common.groupMode')}>
                 {planModeSupported ? (
                   // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
                   <ContextSheetRow
@@ -9131,42 +9175,6 @@ export default function SessionScreen() {
                   ) : 'chevron'}
                 />
               </ContextSheetGroup> : null}
-              <ContextSheetGroup label={t('session.common.groupAdd')}>
-                <ContextSheetRow
-                  accessibilityHint={composerSendUnavailableReason ?? undefined}
-                  disabled={!canUseComposer}
-                  icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label={t('session.common.photo')}
-                  onPress={() => void addLocalImageAttachments('library')}
-                  testID="session.contextSheetPhotoRow"
-                />
-                {contextSheetMediaLibraryEnabled ? (
-                  <ContextSheetRow
-                    disabled={!canUseComposer}
-                    icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                    label={t('session.common.screenshot')}
-                    onPress={() => setContextSheetView('screenshots')}
-                    testID="session.contextSheetScreenshotsRow"
-                    trailing="chevron"
-                  />
-                ) : null}
-                <ContextSheetRow
-                  accessibilityHint={composerSendUnavailableReason ?? undefined}
-                  disabled={!canUseComposer}
-                  icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label={t('session.common.takePhoto')}
-                  onPress={() => void addLocalImageAttachments('camera')}
-                  testID="session.contextSheetCameraRow"
-                />
-                <ContextSheetRow
-                  accessibilityHint={composerSendUnavailableReason ?? undefined}
-                  disabled={!canUseComposer}
-                  icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label={t('session.common.file')}
-                  onPress={() => void addLocalFileAttachment()}
-                  testID="session.contextSheetFileRow"
-                />
-              </ContextSheetGroup>
               {attachmentError ? (
                 <Text style={{ color: colors.errorText, fontSize: typeScale.footnote, paddingTop: 12 }}>
                   {attachmentError}
@@ -9255,7 +9263,9 @@ export default function SessionScreen() {
         {/* 权限模式独立浮窗(composer 权限图标钮点开;列表复用 MobilePermissionPickerList,
             选择走 confirmFullAccessChange + maker:set-permission-mode 后关浮窗)。 */}
         {currentSession && runtimeOptions ? (
-          <SheetModal
+          Platform.OS === 'ios' ? (<NativePermissionSheet visible={permissionSheetOpen && canUseRemoteSessionControls} onClose={() => setPermissionSheetOpen(false)}
+ activeMode={displayPermissionMode} disabled={controlBusy || !canUseRemoteSessionControls} onSelect={selectSessionPermissionMode}
+ options={runtimeOptions.permissionOptions} testID="session.permissionSheet" />) : (<SheetModal
             backdropTestID="session.permissionSheet.backdrop"
             onBackdropPress={() => setPermissionSheetOpen(false)}
             onRequestClose={() => setPermissionSheetOpen(false)}
@@ -9281,7 +9291,7 @@ export default function SessionScreen() {
                 testID="session.permissionSheet.option"
               />
             </SheetSurface>
-          </SheetModal>
+          </SheetModal>)
         ) : null}
         {composerPreviewUrl && composerGalleryImages.length > 0 ? (
           // composer 托盘图片的全屏查看(沿用聊天消息同款 ImageLightbox;本地图无需远端取件)。
@@ -10439,7 +10449,8 @@ function SessionComposerInput({
     && !voiceStartPending;
   // 只有确定性不可用(撤权 / 关闭远控等)才禁发送；普通断线与自动恢复状态仍可发，
   // 消息进入本地 outbox 等连接恢复。输入框在两类状态下都保持可编辑与持久化。
-  const composerSendDisabled = composerLayout.send.disabled;
+  const composerSendDisabled = composerLayout.send.disabled
+    || (Platform.OS === 'ios' && !composerLayout.send.visible && !voiceStartPending);
   const composerStopDisabled = composerLayout.stop.disabled || !canUseRemoteSessionControls;
   const composerStopDisabledReason = !canUseRemoteSessionControls
     ? remoteUnavailableReason ?? t('session.menu.aiRenameOffline')
@@ -10520,7 +10531,7 @@ function SessionComposerInput({
     // 简洁态一律收到单行(下拉收起和点别处收键盘的结果一致);
     // auto / manual 记忆保留,重新聚焦后恢复。
     collapsed: !composerCardActive,
-    minFrameHeight: voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined,
+    minFrameHeight: Platform.OS !== 'ios' && voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined,
     composerChromeHeight,
     contentHeight: composerEffectiveContentHeight,
     keyboardHeight: keyboardState.visible ? keyboardState.height : 0,
@@ -10600,7 +10611,9 @@ function SessionComposerInput({
   );
 
   const voiceDraftInsertionEnd = composerInputRef.current?.getSelection(draft).end ?? draft.length;
-  const renderComposerInputOverlay = () => voiceIsListening ? (
+  const renderComposerInputOverlay = () => voiceIsListening && nativeComposerAvailable ? (
+    <Pressable accessibilityLabel={t('session.common.voiceStopRecording')} accessibilityRole="button" onPress={handleComposerInputPressIn} onPressIn={handleComposerInputPressIn} style={styles.voiceDraftOverlay} testID="session.voiceDraftOverlay" />
+  ) : voiceIsListening ? (
     // 「点输入区 = 想打字 → 停止听写」由这层 RN 覆盖层承接。听写期间真正盖在输入区上的
     // 就是它;底下的富文本 WebView 此刻是 hidden(opacity 0),iOS hitTest 会跳过 alpha≈0
     // 的 view,它根本收不到触摸——把停听写挂在 WebView 的 focus / touch 上都不成立
@@ -10745,7 +10758,7 @@ function SessionComposerInput({
                     inputFrameAnimatedStyle={composerResize.frameStyle}
                     // 听写期间把输入区撑到 44pt 触控目标:命中层盖在 inputFrame 上,
                     // hitSlop 越不过父边界(见常量注释)。
-                    inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                    inputFrameMinHeight={Platform.OS !== 'ios' && voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
                     inputElement={(
                       <ComposerRichInput
                         ref={composerInputRef}
@@ -10755,7 +10768,8 @@ function SessionComposerInput({
                         editable={!composerLayout.input.disabled}
                         height={composerInputVisibleHeight}
                         animatedHeight={composerResize.contentHeight}
-                        hidden={voiceIsListening}
+                        hidden={voiceIsListening && !nativeComposerAvailable}
+                        caretHidden={voiceIsListening}
                         maxHeight={composerResize.inputMaxHeight}
                         opticalPadding={composerCardActive}
                         onBlur={() => {

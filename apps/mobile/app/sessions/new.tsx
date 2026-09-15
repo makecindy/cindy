@@ -298,6 +298,7 @@ import {
 } from '@/session/providerModelSections';
 import { ModelPickerSheet } from '@/session/ModelPickerSheet';
 import { MobileChoicePickerList } from '@/session/MobileChoicePickerList';
+import { NativePermissionSheet } from '@/session/NativePermissionSheet';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
@@ -3553,7 +3554,7 @@ export default function NewRemoteSessionScreen() {
       {composerShowCreateButton ? renderCreateButton() : null}
     </>
   );
-  const renderComposerInputOverlay = () => voiceIsListening ? (
+  const renderComposerInputOverlay = () => voiceIsListening && Platform.OS !== 'ios' ? (
     <ScrollView
       ref={voiceDraftScrollRef}
       contentContainerStyle={[
@@ -5790,9 +5791,9 @@ export default function NewRemoteSessionScreen() {
                   inputFrameAnimatedStyle={composerResize.frameStyle}
                   // 听写期间把输入区撑到 44pt 触控目标:此时「点输入区停止听写」的命中层
                   // 是这层输入区自身(TextInput 的 onPressIn),单行时只有 28pt。
-                  inputFrameMinHeight={voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
+                  inputFrameMinHeight={Platform.OS !== 'ios' && voiceIsListening ? MOBILE_COMPOSER_MIN_TOUCH_TARGET : undefined}
                   inputOverlay={renderComposerInputOverlay()}
-                  inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
+                  inputStyle={voiceIsListening && Platform.OS !== 'ios' ? styles.inputVoiceHidden : undefined}
                   inputTestID="newSession.firstMessageInput"
                   maxHeight={composerResize.inputMaxHeight}
                   multilineShape={!composerCardActive && composerInputIsMultiline}
@@ -5905,7 +5906,44 @@ export default function NewRemoteSessionScreen() {
                 testID="newSession.contextSheetPhotos"
               />
             ) : null}
-            <ContextSheetGroup label={t('session.common.groupMode')}>
+
+            <ContextSheetGroup label={t('session.common.groupAdd')}>
+              <ContextSheetRow
+                disabled={creating}
+                icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                label={t('session.common.photo')}
+                onPress={() => void addLocalImageAttachments('library')}
+                dismissBeforePress
+                  testID="newSession.contextSheetPhotoRow"
+              />
+              {contextSheetMediaLibraryEnabled ? (
+                <ContextSheetRow
+                  disabled={creating}
+                  icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                  label={t('session.common.screenshot')}
+                  onPress={() => setContextSheetView('screenshots')}
+                  testID="newSession.contextSheetScreenshotsRow"
+                  trailing="chevron"
+                />
+              ) : null}
+              <ContextSheetRow
+                disabled={creating}
+                icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                label={t('session.common.takePhoto')}
+                onPress={() => void addLocalImageAttachments('camera')}
+                dismissBeforePress
+                  testID="newSession.contextSheetCameraRow"
+              />
+              <ContextSheetRow
+                disabled={creating}
+                icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
+                label={t('session.common.file')}
+                onPress={() => void addLocalFileAttachment()}
+                dismissBeforePress
+                  testID="newSession.contextSheetFileRow"
+              />
+            </ContextSheetGroup>
+<ContextSheetGroup label={t('session.common.groupMode')}>
               {planModeSupported ? (
                 // 点击即切换计划模式并关面板(产品决策,不做开关);已开启时显示 ✓,再点退出。
                 <ContextSheetRow
@@ -5927,39 +5965,6 @@ export default function NewRemoteSessionScreen() {
                 onPress={() => setContextSheetView('goal')}
                 testID="newSession.contextSheetGoalRow"
                 trailing="chevron"
-              />
-            </ContextSheetGroup>
-            <ContextSheetGroup label={t('session.common.groupAdd')}>
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Image color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.photo')}
-                onPress={() => void addLocalImageAttachments('library')}
-                testID="newSession.contextSheetPhotoRow"
-              />
-              {contextSheetMediaLibraryEnabled ? (
-                <ContextSheetRow
-                  disabled={creating}
-                  icon={<Scan color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                  label={t('session.common.screenshot')}
-                  onPress={() => setContextSheetView('screenshots')}
-                  testID="newSession.contextSheetScreenshotsRow"
-                  trailing="chevron"
-                />
-              ) : null}
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Camera color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.takePhoto')}
-                onPress={() => void addLocalImageAttachments('camera')}
-                testID="newSession.contextSheetCameraRow"
-              />
-              <ContextSheetRow
-                disabled={creating}
-                icon={<Folder color={colors.textPrimary} size={iconSize.lg} strokeWidth={iconStroke.regular} />}
-                label={t('session.common.file')}
-                onPress={() => void addLocalFileAttachment()}
-                testID="newSession.contextSheetFileRow"
               />
             </ContextSheetGroup>
             {attachmentError ? (
@@ -6077,7 +6082,9 @@ export default function NewRemoteSessionScreen() {
       />
       {/* 权限模式独立浮窗:composer 权限药丸点开;列表复用 MobilePermissionPickerList,
           选择走 selectPermissionMode(含 Full access 确认弹层 + per-agent 记忆)后关浮窗。 */}
-      <SheetModal
+      {Platform.OS === 'ios' ? (<NativePermissionSheet visible={permissionSheetOpen} onClose={() => setPermissionSheetOpen(false)}
+ activeMode={displayPermissionMode} disabled={creating} onSelect={selectPermissionMode}
+ options={runtimeOptions.permissionOptions} testID="newSession.permissionSheet" />) : (<SheetModal
         backdropTestID="newSession.permissionSheet.backdrop"
         onBackdropPress={() => setPermissionSheetOpen(false)}
         onRequestClose={() => setPermissionSheetOpen(false)}
@@ -6103,7 +6110,7 @@ export default function NewRemoteSessionScreen() {
             testID="newSession.permissionSheet.option"
           />
         </SheetSurface>
-      </SheetModal>
+      </SheetModal>)}
       {composerPreviewUrl && composerGalleryImages.length > 0 ? (
         // composer 托盘图片的全屏查看(沿用聊天消息同款 ImageLightbox;本地图无需远端取件)。
         // annotation:托盘图可圈点标注 / 再编辑,保存后烧录替换附件重新上传。

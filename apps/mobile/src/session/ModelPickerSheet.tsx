@@ -1,17 +1,8 @@
 /**
- * ModelPickerSheet —— 模型 + 权限的可拖动底部浮窗(新建会话页与会话页 composer 共用)。
- *
- * 形态对齐「+ 号」Context 面板:SheetModal 外壳(背板淡入淡出 + 面板滑入滑出)+
- * SheetSurface(把手 half/full/下拉 dismiss)。**单 Modal 双 Surface 叠层**:
- * 一级 = 搜索(pinnedTop)+ 模型列表 + 权限行(footer);
- * 点行内配置图标 / 权限行 → 二级 SheetSurface(「模型选项」或「权限」)以 translateY 滑入,
- * 叠在一级之上并自带一层加深 backdrop,返回键 / backdrop / 把手下拉先回一级再关浮窗
- * (settleModelPickerSheetBack)。刻意**不用嵌套 Modal**:iOS 同级双 Modal 第二个不显示、
- * Android 每个 Modal 是独立原生 Dialog(返回键派发不可控),且 Fabric 下 Modal 内手势协商
- * 已有坑(见 useContextSheetDrag);单 Modal 内叠 JS 层全部行为可控、可单测。
- *
- * 数据语义与旧 drop-up 完全同源:选行 = 调用方 onSelectProviderRow/onSelectFlatModel(由其
- * 关浮窗);选中行 effort/Fast 改 live,非选中行写注入记忆(见 ModelOptionsSheetView)。
+ * Shared model and permission selection for new and existing tasks.
+ * iOS presents native Form pages inside one system sheet; options and permissions
+ * replace its content. Android retains the existing layered SheetSurface flow.
+ * Selected-model options apply live; other models retain their remembered options.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -38,6 +29,8 @@ import { MobileModelPickerList, type ModelOptionsOpenTarget } from '@/session/Mo
 import { MobileAgentSwitcher } from '@/session/MobileAgentSwitcher';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
 import { ModelOptionsSheetView } from '@/session/ModelOptionsSheetView';
+import { ComposerSheet } from './ComposerSheet';
+import { ModelPickerNativeHeader } from './ModelPickerNativeHeader';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetSurface } from '@/session/SheetSurface';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
@@ -249,6 +242,7 @@ export function ModelPickerSheet({
   // —— 二级视图开合(translateY 滑入滑出,动画期间锁重复触发) ——
   const openSecondary = useCallback(
     (next: ModelPickerSheetView) => {
+      if (Platform.OS === 'ios') { setView(next); return; }
       if (secondaryAnimatingRef.current) return;
       secondaryAnimatingRef.current = true;
       setSecondarySnap('half');
@@ -272,6 +266,7 @@ export function ModelPickerSheet({
     [openSecondary],
   );
   const backToModels = useCallback(() => {
+    if (Platform.OS === 'ios') { setView({ kind: 'models' }); return; }
     if (secondaryAnimatingRef.current) return;
     secondaryAnimatingRef.current = true;
     Animated.timing(secondaryTranslate, {
@@ -355,9 +350,7 @@ export function ModelPickerSheet({
     </View>
   );
 
-  const primaryPinnedTop = (
-    <View style={styles.pinnedTop}>
-      {agentSwitch ? (
+  const agentContent = (agentSwitch ? (
         <>
           <MobileAgentSwitcher
             disabled={disabled || agentSwitch.disabled}
@@ -376,7 +369,11 @@ export function ModelPickerSheet({
             </Text>
           ) : null}
         </>
-      ) : null}
+      ) : null);
+
+  const primaryPinnedTop = (
+    <View style={styles.pinnedTop}>
+      {agentContent}
       {searchRow}
     </View>
   );
@@ -411,31 +408,7 @@ export function ModelPickerSheet({
     </Pressable>
   );
 
-  return (
-    <SheetModal
-      backdropTestID={`${testID}.backdrop`}
-      keyboardAvoiding
-      keyboardAvoidingBehavior={keyboardAvoidingBehavior}
-      onBackdropPress={onClose}
-      onRequestClose={handleRequestClose}
-      visible={visible}
-    >
-      <SheetSurface
-        bottomInset={insets.bottom}
-        headerTrailing={hidePermissionTrigger ? undefined : permissionTrigger}
-        heights={heights}
-        onClose={onClose}
-        onSnapChange={handlePrimarySnapChange}
-        pinnedTop={primaryPinnedTop}
-        scrollRef={scrollRef}
-        snap={primarySnap}
-        testID={testID}
-        title={t('models.picker.title')}
-      >
-        {noResults ? (
-          <Text style={styles.noResults} testID={`${testID}.noResults`}>{t('models.picker.noResults')}</Text>
-        ) : (
-          <MobileModelPickerList
+  const modelList = (          <MobileModelPickerList
             activeModelId={activeModelId}
             activeSourceId={sections.activeSourceId}
             agentKind={agentKind}
@@ -457,33 +430,8 @@ export function ModelPickerSheet({
             selectedEffort={selectedEffort}
             selectedFastMode={selectedFastMode}
             testID={`${testID}.option`}
-          />
-        )}
-      </SheetSurface>
-      {view.kind !== 'models' ? (
-        <Animated.View
-          style={[styles.secondaryLayer, { transform: [{ translateY: secondaryTranslate }] }]}
-          testID={`${testID}.secondaryLayer`}
-        >
-          <Pressable
-            accessibilityLabel={t('models.picker.backToModels')}
-            accessibilityRole="button"
-            onPress={backToModels}
-            style={styles.secondaryBackdrop}
-            testID={`${testID}.secondaryBackdrop`}
-          />
-          <SheetSurface
-            backAccessibilityLabel={t('models.picker.backToModels')}
-            bottomInset={insets.bottom}
-            heights={heights}
-            onBack={backToModels}
-            onClose={backToModels}
-            onSnapChange={setSecondarySnap}
-            snap={secondarySnap}
-            testID={view.kind === 'permission' ? `${testID}.permissionSheet` : `${testID}.optionsSheet`}
-            title={secondaryTitle}
-          >
-            {view.kind === 'permission' ? (
+          />);
+  const secondaryContent = (view.kind === 'permission' ? (
               <MobilePermissionPickerList
                 activeMode={activePermissionMode}
                 disabled={permissionDisabled}
@@ -528,7 +476,75 @@ export function ModelPickerSheet({
                 selectedFastMode={selectedFastMode}
                 testID={`${testID}.options`}
               />
-            ) : null}
+            ) : null);
+  if (Platform.OS === 'ios') {
+    return (
+      <ComposerSheet nativeContent visible={visible} onClose={onClose} backLabel={t('models.picker.backToModels')}
+        title={view.kind === 'models' ? t('models.picker.title') : secondaryTitle}
+        onBack={view.kind === 'models' ? undefined : backToModels} testID={testID}>
+        {view.kind === 'models' ? <>
+          <ModelPickerNativeHeader query={query} onChangeQuery={setQuery}
+            agentContent={agentContent} noResults={noResults} permissionLabel={permissionLabel}
+            permissionDisabled={permissionDisabled || browsingOtherAgent}
+            onPermission={hidePermissionTrigger ? undefined : () => openSecondary({ kind: 'permission' })}
+            testID={testID} />
+          {!noResults ? modelList : null}
+        </> : secondaryContent}
+      </ComposerSheet>
+    );
+  }
+
+  return (
+    <SheetModal
+      backdropTestID={`${testID}.backdrop`}
+      keyboardAvoiding
+      keyboardAvoidingBehavior={keyboardAvoidingBehavior}
+      onBackdropPress={onClose}
+      onRequestClose={handleRequestClose}
+      visible={visible}
+    >
+      <SheetSurface
+        bottomInset={insets.bottom}
+        headerTrailing={hidePermissionTrigger ? undefined : permissionTrigger}
+        heights={heights}
+        onClose={onClose}
+        onSnapChange={handlePrimarySnapChange}
+        pinnedTop={primaryPinnedTop}
+        scrollRef={scrollRef}
+        snap={primarySnap}
+        testID={testID}
+        title={t('models.picker.title')}
+      >
+        {noResults ? (
+          <Text style={styles.noResults} testID={`${testID}.noResults`}>{t('models.picker.noResults')}</Text>
+        ) : (
+          modelList
+        )}
+      </SheetSurface>
+      {view.kind !== 'models' ? (
+        <Animated.View
+          style={[styles.secondaryLayer, { transform: [{ translateY: secondaryTranslate }] }]}
+          testID={`${testID}.secondaryLayer`}
+        >
+          <Pressable
+            accessibilityLabel={t('models.picker.backToModels')}
+            accessibilityRole="button"
+            onPress={backToModels}
+            style={styles.secondaryBackdrop}
+            testID={`${testID}.secondaryBackdrop`}
+          />
+          <SheetSurface
+            backAccessibilityLabel={t('models.picker.backToModels')}
+            bottomInset={insets.bottom}
+            heights={heights}
+            onBack={backToModels}
+            onClose={backToModels}
+            onSnapChange={setSecondarySnap}
+            snap={secondarySnap}
+            testID={view.kind === 'permission' ? `${testID}.permissionSheet` : `${testID}.optionsSheet`}
+            title={secondaryTitle}
+          >
+            {secondaryContent}
           </SheetSurface>
         </Animated.View>
       ) : null}

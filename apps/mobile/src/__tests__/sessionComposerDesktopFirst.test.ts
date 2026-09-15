@@ -254,9 +254,9 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('color: colors.statusAccent');
     expect(source).not.toContain("import { BlurView } from 'expo-blur';");
     expect(source).toContain("import { BlurBackdrop } from '@/session/BlurBackdrop';");
-    expect(source).toContain("function TranslucentBackdrop()");
-    expect(source).toContain("<TranslucentBackdrop />");
-    expect(source).toContain('return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;');
+    expect(source).toContain('<SessionHeaderNativeBlur height=');
+    expect(source).toContain('<SessionHeaderNativeTitle title={title} />');
+    expect(source).toContain('<SessionHeaderNativeActions');
     expect(source).toContain("sessionHeaderBar: {\n    alignItems: 'center',\n    backgroundColor: 'transparent'");
     expect(source).toContain('sessionBottomLayer: {\n    backgroundColor: colors.surface');
     expect(source).not.toContain("colors.glassTint");

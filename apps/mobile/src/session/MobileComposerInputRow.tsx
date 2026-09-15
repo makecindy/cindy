@@ -1,5 +1,7 @@
+import { GlassView, isLiquidGlassAvailable } from 'expo-glass-effect';
 import {
   Animated,
+  Platform,
   Easing,
   StyleSheet,
   View,
@@ -19,7 +21,7 @@ import { TextInputWrapper, type PasteEventPayload } from 'expo-paste-input';
 import { Mic } from 'lucide-react-native';
 import { useCallback, useEffect, useRef, type ReactNode, type Ref } from 'react';
 import { useTranslation } from 'react-i18next';
-import { iconSize, iconStroke, useThemedStyles, type ThemeColors } from '@/theme';
+import { iconSize, iconStroke, useTheme, useThemedStyles, type ThemeColors } from '@/theme';
 import { radius, spacing } from '@/theme/tokens';
 import {
   COMPOSER_SINGLE_LINE_HEIGHT,
@@ -230,6 +232,8 @@ export function MobileComposerInputRow({
   voicePlacement,
 }: MobileComposerInputRowProps) {
   const styles = useThemedStyles(makeMobileComposerInputRowStyles);
+  const { mode } = useTheme();
+  const nativeGlass = Platform.OS === 'ios' && isLiquidGlassAvailable();
   const cardLayout = cardActive === true;
   // 几何居中只看当前是不是收起展示态。resize 在 collapsed 下会把可见高度钉成单行,
   // 但 mode/manual 与多行草稿判定仍会让 multilineShape 为 true;若据此关掉几何居中,
@@ -296,10 +300,13 @@ export function MobileComposerInputRow({
         geometricSingleLine && styles.rowCollapsedTouch,
         !geometricSingleLine && multilineShape && styles.rowMultiline,
         cardLayout && styles.rowCard,
+        Platform.OS === 'ios' && cardLayout && styles.rowNativeCard,
+        nativeGlass && { backgroundColor: 'transparent', borderWidth: 0 },
         rowStyle,
       ]}
       testID={testID}
     >
+      {nativeGlass ? <GlassView pointerEvents="none" colorScheme={mode} glassEffectStyle="regular" isInteractive={false} style={[StyleSheet.absoluteFill, styles.nativeGlass]} /> : null}
       {resizeHandle}
       {cardLayout ? accessoryAbove : null}
       <View
@@ -574,6 +581,9 @@ const makeMobileComposerInputRowStyles = (colors: ThemeColors) => ({
     paddingBottom: MOBILE_COMPOSER_VOICE_ANCHOR_CARD_BOTTOM,
     paddingTop: 26,
   },
+  // iOS composer uses the existing 30pt multiline geometry with a native glass surface.
+  rowNativeCard: { borderRadius: 30, paddingTop: spacing.md },
+  nativeGlass: { borderRadius: 30 },
   // 水平输入行：简洁态装 [输入][发送]，card 态只剩全宽输入区；
   // 语音按钮不在流内（absolute 锚点），简洁态无发送时给它留出右侧空间。
   mainRow: {
