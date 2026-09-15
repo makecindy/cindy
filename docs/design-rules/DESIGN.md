@@ -82,6 +82,8 @@ Small interactive chips (button backgrounds, tag pills, avatar fills, selected-n
 
 ### Semantic & Accent
 
+Toast loading is neutral: use the shared 16×16 Spinner in `--text-secondary`, with polite status semantics. Keep it visible until the operation settles and explicitly dismiss it; only failures use the error variant.
+
 The grayscale rule is near-absolute. The following are the **only** sanctioned non-gray colors in the system — each tightly scoped to a specific surface. New semantic colors must not be introduced without being recorded here first.
 
 - **Focus Blue** (`#417CDD` at 50%; tokens `--focus-ring` / `--focus-ring-soft`): the keyboard-accessibility focus ring, finalized 2026-07-17 (replaces Tailwind's default `#3b82f6`). Never visible in normal interaction flow.

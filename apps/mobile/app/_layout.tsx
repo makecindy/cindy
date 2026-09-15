@@ -1,3 +1,4 @@
+import { PeerFileTransport } from '@/device-link/peerFileTransport';
 import { startLocalDiagnostics } from '@/debug/localDiagnostics';
 import {
   DarkTheme as NavigationDarkTheme,
@@ -331,6 +332,7 @@ function RootAfterUpdateChannel({ channel }: { channel: UpdateChannel }) {
       {/* 任务完成推送:注册同步 + 通知点击路由 + 前台横幅压制(不渲染 UI) */}
       <PushNotificationsBridge />
       <DeviceLinkProvider>
+        <PeerFileTransport />
         <PrecreatedWorktreeRecoveryBridge />
         <NavigationGate />
       </DeviceLinkProvider>

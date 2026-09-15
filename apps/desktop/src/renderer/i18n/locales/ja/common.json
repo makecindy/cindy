@@ -8789,6 +8789,11 @@
       "closeHint": "または背景をクリックして閉じる"
     },
     "remoteFile": {
+      "previewFailed": "Web プレビューを準備できませんでした。ディレクトリと接続を確認して再試行してください。",
+      "previewNotFound": "HTML ファイルが見つかりません。ファイルが存在するか確認してください。",
+      "previewFetching": "Web プレビューを準備しています…",
+      "previewTooLarge": "準備中のプレビューが多すぎます。しばらくしてから再試行してください。",
+      "previewUnsupported": "ディレクトリをプレビューするには、リモート端末の Cindy を更新してください。",
       "fetching": "リモートからファイルを取得しています…",
       "fetchFailed": "リモートからのファイル取得に失敗しました",
       "notFound": "リモートにファイルが見つかりません",

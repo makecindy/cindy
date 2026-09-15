@@ -220,3 +220,19 @@ it('capture CSP forbids arbitrary network, application frames and inline/eval sc
   expect(csp).toContain("frame-src 'none'");
   expect(csp).not.toMatch(/https:|wss:|unsafe-inline|unsafe-eval/);
 });
+
+it('keeps file transport separate and denies capture permissions', async () => {
+  const owner = new DesktopCaptureWindow(vi.fn(), 'files');
+  const ready = owner.start();
+  const win = fake.windows[0], ses = fake.sessions[0];
+  expect(win.webContents.mainFrame.url).toBe('http://localhost:9988/index.html?mode=files');
+  owner.registered(event(win));
+  await ready;
+  const check = ses.setPermissionCheckHandler.mock.calls[0][0];
+  expect(check(win.webContents, 'media', '', {})).toBe(false);
+  expect(check(win.webContents, 'display-capture', '', {})).toBe(false);
+  const result = vi.fn();
+  ses.setPermissionRequestHandler.mock.calls[0][0](win.webContents, 'media', result, {});
+  expect(result).toHaveBeenCalledWith(false);
+  owner.dispose();
+});

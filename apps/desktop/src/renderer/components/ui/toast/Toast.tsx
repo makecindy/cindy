@@ -1,6 +1,7 @@
-import { CircleCheck, CircleX, Info, TriangleAlert, type LucideIcon } from 'lucide-react';
+import { CircleCheck, CircleX, Info, LoaderCircle, TriangleAlert, type LucideIcon } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { Spinner } from '@/components/ui/spinner';
 import { toast, type ToastItem, type ToastVariant } from '@/lib/toast';
 
 interface VariantMeta {
@@ -12,6 +13,12 @@ interface VariantMeta {
 
 export const VARIANT_MAP: Record<ToastVariant, VariantMeta> = {
   // E5D 定稿 2026-07-17(Toast 豁免解除):info/success/warning/error 四色定稿,跨主题一致
+  loading: {
+    icon: LoaderCircle,
+    color: 'var(--text-secondary)',
+    role: 'status',
+    ariaLive: 'polite',
+  },
   info: {
     icon: Info,
     color: '#417CDD',
@@ -63,13 +70,16 @@ export function Toast({ item }: ToastProps) {
         'px-4 py-[10px]',
       )}
     >
-      {/* Icon 16×16（彩色，硬编码内联 style） */}
-      <Icon
-        aria-hidden
-        className="h-4 w-4 shrink-0"
-        style={{ color: meta.color }}
-        strokeWidth={2}
-      />
+      {item.variant === 'loading' ? (
+        <Spinner size={16} strokeWidth={2} aria-hidden style={{ color: meta.color }} />
+      ) : (
+        <Icon
+          aria-hidden
+          className="h-4 w-4 shrink-0"
+          style={{ color: meta.color }}
+          strokeWidth={2}
+        />
+      )}
 
       {/* 来源身份头（第三方供文案时宿主画:图标+名字,内容是谁说的一眼可辨） */}
       {item.source && (
