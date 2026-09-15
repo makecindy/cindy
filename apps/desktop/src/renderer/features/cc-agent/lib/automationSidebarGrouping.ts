@@ -219,6 +219,12 @@ export interface AutomationGroupChildViewOptions {
    * —— 与组头红点、项目折叠头红点同一份判据。
    */
   alertSessionIds?: ReadonlySet<string>;
+  /**
+   * 展开态折叠的追加豁免集合(只影响折叠),语义同 SessionEntryList 的同名 prop:
+   * 父层把 device-link 远程活动镜像并进来,保证项目行 / 对话组 / 设备段头聚合灯
+   * 为之点亮的远程子运行不会藏在「显示全部」后(review P2)。
+   */
+  foldExemptSessionIds?: ReadonlySet<string>;
 }
 
 /**
@@ -296,7 +302,8 @@ export function getAutomationGroupChildView(
     isActiveEntry: (session) => session.id === options.activeSessionId,
     hasAttentionEntry: (session) =>
       options.notifications.has(session.id) ||
-      (options.runningSessionIds?.has(session.id) ?? false),
+      (options.runningSessionIds?.has(session.id) ?? false) ||
+      (options.foldExemptSessionIds?.has(session.id) ?? false),
   });
   return {
     visibleSessions: [...view.visibleEntries],

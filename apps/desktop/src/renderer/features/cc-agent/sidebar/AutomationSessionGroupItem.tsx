@@ -68,6 +68,8 @@ export interface AutomationSessionGroupItemProps {
   /** 平铺列表由段头批量折叠状态机控制时传入；其它场景继续使用组件自身持久化状态。 */
   collapsed?: boolean;
   onCollapsedChange?: (collapsed: boolean) => void;
+  /** 展开态子运行折叠的追加豁免集合(远程活动镜像),语义同 SessionEntryList 同名 prop。 */
+  foldExemptSessionIds?: ReadonlySet<string>;
   indented?: boolean;
   /**
    * 展开的子 SessionItem 行 hover 时右侧浮层展示的"项目来源"标签映射(sessionId →
@@ -112,6 +114,7 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
   onScheduleAction,
   collapsed: controlledCollapsed,
   onCollapsedChange,
+  foldExemptSessionIds,
   indented = false,
   sourceLabelMap,
   matchMap,
@@ -204,6 +207,7 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
     nowMs: Date.now(),
     collapsed,
     alertSessionIds,
+    foldExemptSessionIds,
   });
   // 轴 1 收起时只留组头 + 被提上来的告警行;展开时交给轴 2 的「前 5 / 显示全部」。
   // 两种形态都由 getAutomationGroupChildView 一处决定(见该函数的 ⚠️)。

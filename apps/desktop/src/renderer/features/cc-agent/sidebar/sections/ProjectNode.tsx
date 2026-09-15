@@ -49,6 +49,7 @@ import type {
   AutomationSessionGroup,
 } from '../../lib/automationSidebarGrouping';
 import { getProjectSessionCollapseLimit } from '../../lib/sidebarCollapseConfig';
+import type { SessionLampAggregate } from '../../lib/sessionLampAggregation';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import type { SessionMoveTarget } from '../sessionMoveTarget';
 import type { FilterStatus } from '../../hooks/useSidebarFilter';
@@ -91,6 +92,13 @@ export interface ProjectNodeProps {
    * 不重复归属信息。置顶区不受分组影响,照常显示。
    */
   hideRemoteMachineLabel?: boolean;
+  /**
+   * 项目行运行灯:文件夹图标呼吸橙。未读仍走上游既定的 collapsedAttentionTone
+   * 右侧状态槽,不在标题旁重复显示。聚合集合由父层按实际渲染的会话提供。
+   */
+  lamp?: SessionLampAggregate;
+  /** 透传给项目内 SessionEntryList 的折叠豁免追加集合(语义见其 prop 注释)。 */
+  foldExemptSessionIds?: ReadonlySet<string>;
   onToggle: (projectKey: string) => void;
   /** Project pin is independent from conversation pin state. */
   isProjectPinned: boolean;
@@ -137,6 +145,8 @@ export const ProjectNode = memo(function ProjectNode({
   selectedSessionIds,
   disableSessionCollapse,
   hideRemoteMachineLabel = false,
+  lamp,
+  foldExemptSessionIds,
   onToggle,
   isProjectPinned,
   onToggleProjectPin,
@@ -308,11 +318,17 @@ export const ProjectNode = memo(function ProjectNode({
           !isEditingName && 'hover:bg-sidebar-item-hover',
         )}
       >
-        <FolderIcon
-          size={15}
-          strokeWidth={1.8}
-          className="shrink-0 text-[var(--sidebar-list-muted)]"
-        />
+        {/* 灯语与 rail 浮层面板项目行同款:running → 呼吸橙(动画挂 wrapper)。 */}
+        <span
+          className={cn(
+            'inline-flex shrink-0',
+            lamp?.running
+              ? 'text-[var(--status-bar-accent)] session-status-breathing'
+              : 'text-[var(--sidebar-list-muted)]',
+          )}
+        >
+          <FolderIcon size={15} strokeWidth={1.8} aria-hidden />
+        </span>
         {/* 名字 + remote identity 同组占据 flex-1。远程项目常态展示机器身份,
             避免相同 workingDir 的项目只能靠 hover 才能区分。 */}
         <div className="flex min-w-0 flex-1 items-center gap-1.5">
@@ -606,6 +622,7 @@ export const ProjectNode = memo(function ProjectNode({
             collapsible
             collapseLimit={getProjectSessionCollapseLimit()}
             disableCollapse={disableSessionCollapse}
+            foldExemptSessionIds={foldExemptSessionIds}
             sectionCollapsed={isCollapsed || parentSectionCollapsed}
             onSessionClick={onSessionClick}
             onAction={onAction}

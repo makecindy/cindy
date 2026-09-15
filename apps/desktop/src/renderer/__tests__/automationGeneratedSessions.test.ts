@@ -595,6 +595,33 @@ describe('automation-generated sessions', () => {
     ).toEqual(['jira-3', 'jira-2', 'jira-1']);
   });
 
+  // review P2(#2938):上层聚合灯为远程活动点亮的子运行,不能藏在「显示全部」后。
+  // 远程 running / 未读不在本地 notifications / runningSessionIds 里,父层通过
+  // foldExemptSessionIds 并入,自动化组的展开态折叠也要认这份豁免。
+  it('keeps remote-lamp exempt automation children visible in the expanded fold', () => {
+    const sessions = Array.from({ length: 7 }, (_, index) =>
+      makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),
+    );
+    const group = { id: 'schedule:sched-remote', title: 'Remote', sessions, attentionSessionIds: [] };
+
+    const withoutExempt = getAutomationGroupChildView(group, {
+      notifications: new Set(),
+      runningSessionIds: new Set(),
+      showAll: false,
+    });
+    expect(withoutExempt.visibleSessions.map((session) => session.id)).not.toContain('run-6');
+
+    const view = getAutomationGroupChildView(group, {
+      notifications: new Set(),
+      runningSessionIds: new Set(),
+      foldExemptSessionIds: new Set(['run-6']),
+      showAll: false,
+    });
+    expect(view.visibleSessions.map((session) => session.id)).toContain('run-6');
+    expect(view.isOverflowing).toBe(true);
+    expect(view.hiddenCount).toBe(1);
+  });
+
   it('caps collapsed automation children at five and overflows the rest like the dialogue list', () => {
     const sessions = Array.from({ length: 7 }, (_, index) =>
       makeSession({ id: `run-${index}`, title: `RUN-${index}`, source: 'scheduler' }),

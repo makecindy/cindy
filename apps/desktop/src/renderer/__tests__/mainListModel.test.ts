@@ -1026,3 +1026,42 @@ it('keeps manual project order while creation-time tasks stay stable inside each
   expect(labels(activityOrder)).toEqual(['p:beta', 'p:alpha']);
   expect(getMainListEntrySessions(activityOrder[1]).map((s) => s.id)).toEqual(['old', 'recent']);
 });
+
+describe('splitEntriesByDevice — Bot ownership', () => {
+  it('partitions local, known and cached devices without mutating Bot identity or task order', () => {
+    const sessions = [
+      session({ id: 'b-new', deviceLinkDeviceId: 'b', updatedAt: '2026-09-09T12:00:00Z' }),
+      session({ id: 'local', updatedAt: '2026-09-09T10:00:00Z' }),
+      session({ id: 'cached', deviceLinkDeviceId: 'cached', updatedAt: '2026-09-09T09:00:00Z' }),
+      session({ id: 'a', deviceLinkDeviceId: 'a', updatedAt: '2026-09-09T08:00:00Z' }),
+      session({ id: 'b-old', deviceLinkDeviceId: 'b', updatedAt: '2026-09-09T07:00:00Z' }),
+    ];
+    const bot = { botId: 'demo', displayName: 'Demo', avatar: 'avatar', avatarColor: 'color', sessions, latestActivityAt: sessions[0].updatedAt };
+    const result = splitEntriesByDevice([{ kind: 'bot-group', bot }], ['a', 'b'], { sortBy: 'recency' });
+    expect(result.map((section) => section.deviceId)).toEqual([null, 'a', 'b', 'cached']);
+    expect(result.map((section) => section.entries.flatMap((entry) => getMainListEntrySessions(entry).map((s) => s.id))))
+      .toEqual([['local'], ['a'], ['b-new', 'b-old'], ['cached']]);
+    for (const section of result) {
+      expect(section.entries).toHaveLength(1);
+      expect(section.entries[0]).toMatchObject({ kind: 'bot-group', bot: { botId: 'demo', displayName: 'Demo', avatar: 'avatar', avatarColor: 'color' } });
+    }
+    expect(bot.sessions).toBe(sessions);
+    expect(bot.sessions.map((s) => s.id)).toEqual(['b-new', 'local', 'cached', 'a', 'b-old']);
+  });
+
+  it('ranks each device fragment from its own sessions alongside dialogue groups', () => {
+    const local = session({ id: 'local', updatedAt: '2026-09-09T01:00:00Z' });
+    const remote = session({ id: 'remote', deviceLinkDeviceId: 'remote', updatedAt: '2026-09-09T12:00:00Z' });
+    const entries: MainListEntry[] = [
+      { kind: 'bot-group', bot: { botId: 'demo', displayName: 'Demo', avatar: '', avatarColor: '', sessions: [remote, local], latestActivityAt: remote.updatedAt } },
+      { kind: 'dialogue-group', sessions: [
+        session({ id: 'dlg-local', updatedAt: '2026-09-09T06:00:00Z' }),
+        session({ id: 'dlg-remote', deviceLinkDeviceId: 'remote', updatedAt: '2026-09-09T06:00:00Z' }),
+      ] },
+    ];
+    const result = splitEntriesByDevice(entries, ['remote'], { sortBy: 'recency' });
+    expect(result.map((section) => labels(section.entries))).toEqual([
+      ['dlg-group', 'bot:Demo'], ['bot:Demo', 'dlg-group'],
+    ]);
+  });
+});
