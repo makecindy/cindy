@@ -2085,7 +2085,7 @@ describe('new session worktree wiring (source locks)', () => {
     expect(newSource).not.toContain('return false;\n            }\n          },\n          shouldDefer:');
   });
 
-  it('applies the protocol timeout override map to mobile invokes (worktree:create needs 60s)', () => {
+  it('applies the protocol timeout override map to mobile invokes (worktree:create needs 60s)', async () => {
     // 2026-07-29 与 main 合并后,移动端逐通道超时统一走 invokeTimeouts 的
     // resolveMobileInvokeTimeoutMs(mobile 专属表 → 协议契约表 INVOKE_TIMEOUT_OVERRIDES_MS
     // 兜底),worktree:create 的 60s 预算经协议表兜底生效——两层缺一都会让
@@ -2095,11 +2095,8 @@ describe('new session worktree wiring (source locks)', () => {
       'utf8',
     );
     expect(contextSource).toContain('resolveMobileInvokeTimeoutMs(channel, args)');
-    const timeoutsSource = readTextLf(
-      resolve(process.cwd(), 'src/device-link/invokeTimeouts.ts'),
-      'utf8',
-    );
-    expect(timeoutsSource).toContain('INVOKE_TIMEOUT_OVERRIDES_MS[channel]');
+    const { resolveMobileInvokeTimeoutMs } = await import('@/device-link/invokeTimeouts');
+    expect(resolveMobileInvokeTimeoutMs('worktree:create')).toBe(60_000);
   });
 });
 

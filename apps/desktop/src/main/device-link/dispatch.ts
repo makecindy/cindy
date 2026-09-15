@@ -21,6 +21,7 @@
 
 import {
   computeAllowlistHash,
+  canCoalesceRemoteListing,
   INVOKE_TIMEOUT_OVERRIDES_MS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
@@ -638,19 +639,12 @@ type RemoteInvokeBusyChangedListener = (busy: boolean) => void;
 let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
 let inFlightRemoteInvokeCount = 0;
 const REMOTE_INVOKE_IN_FLIGHT_LIMIT = 64;
-/**
- * 控制端周期对账 / 熔断探测会用新 requestId 连打相同 listing。按 requestId 去重
- * 拦不住，16 条并发 sessions:list 会把单线程 DB worker 打到 128/512 硬顶。
- * 同一控制端、同一 channel+args 的只读 listing 合并成一次执行。
- */
-const COALESCE_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
+/** Host DB admission is independent of whether a read can share an in-flight snapshot. */
+const BACKGROUND_REMOTE_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
   'local-db:sessions:list',
-  // sessions:get 是写后权威回读（mobile 设置失败恢复会复用同一参数），
-  // 不能并进仍停在投影 await 的写前查询。
   'maker:get-capabilities',
   'maker:provider:list',
   'maker:git-safety:get',
-  // Studio/手机周期对账会连打这条；不合并就会把单线程 DB worker 打满。
   'maker:schedule:list-sidebar-index-runs',
 ]);
 /** 隧道回包必须低于 4MB 传输上限与 per-controller 4MB 准入；2MB 给 envelope 留余量。 */
@@ -2668,19 +2662,6 @@ function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload |
   return null;
 }
 
-function isFreshSessionListInvoke(payload: InvokePayload): boolean {
-  if (payload.channel !== 'local-db:sessions:list') return false;
-  const options = payload.args?.[2];
-  return !!(options && typeof options === 'object' && !Array.isArray(options)
-    && (options as { fresh?: unknown }).fresh === true);
-}
-
-function canCoalesceRemoteListing(payload: InvokePayload | undefined): payload is InvokePayload {
-  return !!payload
-    && COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
-    && !isFreshSessionListInvoke(payload);
-}
-
 function remoteListingFlightKey(src: string, payload: InvokePayload): string {
   return `${src}\u0000${payload.channel}\u0000${JSON.stringify(payload.args ?? [])}`;
 }
@@ -3734,7 +3715,7 @@ export async function runInvoke(
           payload.channel,
           payload.channel === 'maker:provider:list' ? [] : args,
         );
-        return COALESCE_REMOTE_INVOKE_CHANNELS.has(payload.channel)
+        return BACKGROUND_REMOTE_INVOKE_CHANNELS.has(payload.channel)
           ? runAsBackgroundDbRpc(invoke)
           : invoke();
       },
@@ -3878,7 +3859,7 @@ export const __testing = {
   projectInvokeResultForTunnel,
   capScheduleSidebarIndexForTunnel,
   remoteScheduleIndexMaxBytes: REMOTE_SCHEDULE_INDEX_MAX_BYTES,
-  coalesceRemoteInvokeChannels: COALESCE_REMOTE_INVOKE_CHANNELS,
+  canCoalesceRemoteListing,
   remoteInvokeInFlightLimit: REMOTE_INVOKE_IN_FLIGHT_LIMIT,
   remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
   remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,

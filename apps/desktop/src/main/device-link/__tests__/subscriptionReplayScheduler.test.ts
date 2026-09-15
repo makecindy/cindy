@@ -219,7 +219,7 @@ describe('subscription replay scheduler', () => {
     expect(calls).toEqual([['session:one'], ['session:one', 'session:two']]);
   });
 
-  it('does not let an old request clear a new generation after teardown and reacquire', async () => {
+  it('serializes reacquired work behind the cancelled request without losing the new generation', async () => {
     const deviceId = 'device-a';
     const first = deferred<unknown>();
     const second = deferred<unknown>();
@@ -242,7 +242,7 @@ describe('subscription replay scheduler', () => {
     scheduler.replay('ws-online');
     scheduler.teardown();
     scheduler.replay('ws-online-reacquire');
-    expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+    expect(remoteSubscribe).toHaveBeenCalledTimes(1);
 
     first.resolve(undefined);
     await Promise.resolve();
@@ -253,6 +253,32 @@ describe('subscription replay scheduler', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(remoteSubscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds reconnect replay and rechecks subscriptions when queued peers get a slot', async () => {
+    let refs = Array.from({ length: 8 }, (_, index) => ({ deviceId: `peer-${index}`, topics: ['sessions'] }));
+    const pending = deferred<unknown>();
+    const remoteSubscribe = vi.fn().mockReturnValue(pending.promise);
+    const scheduler = createSubscriptionReplayScheduler({
+      snapshotSubscriptions: (id) => refs.filter((ref) => !id || id === ref.deviceId),
+      remoteSubscribe,
+      isLinkTornDown: () => false,
+      isRelayOnline: () => true,
+      isDeviceUnresponsive: () => false,
+      getPresenceAvailability: () => true,
+      isPermanentError: () => false,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+    scheduler.replay('ws-online');
+    expect(remoteSubscribe).toHaveBeenCalledTimes(6);
+    refs = refs.filter((ref) => ref.deviceId !== 'peer-6');
+    refs.find((ref) => ref.deviceId === 'peer-7')!.topics = ['session:new'];
+    pending.resolve(undefined);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(remoteSubscribe).toHaveBeenCalledTimes(7);
+    expect(remoteSubscribe).toHaveBeenLastCalledWith('peer-7', ['session:new']);
+    scheduler.teardown();
   });
 
   it('invalidates retry timers from an old generation', async () => {

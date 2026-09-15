@@ -68,6 +68,23 @@ relay 以 close 1013 `inbound backpressure` 主动断连，此时任何「立即
 一起打掉线，由 #1405 收窄止损半径修复。协议兼容、allowlist、单测三层防线对这类问题
 全部免疫，只有 review 时点名问「半径」才拦得住。
 
+## 共享恢复与请求策略
+
+Desktop 和 Mobile 的按设备排队、并发上限、退避、取消代次由
+`packages/device-link/src/peerRecoveryScheduler.ts` 统一维护。Desktop 的订阅快照与
+在线判断、Mobile 的后台生命周期与页面恢复仍由各端适配器负责。同一设备取消后重新
+请求恢复，须等待旧请求结算；旧结果不能取消新请求，也不能恢复已取消的重试。
+
+`packages/device-link/src/invokePolicy.ts` 集中维护请求策略，三个边界独立判断：
+
+- 通道执行预算：保留 Desktop / Mobile 的超时差异，超时不代表主机操作未执行。
+- peer reset 后可重试的读取：显式列举，不按名字推断写操作可以重试。
+- 可共享在途结果的 listing：不能从“可重试”推导。`sessions:get` 与要求 `fresh` 的
+  `sessions:list` 必须重新读取，避免复用写入之前开始的快照。
+
+主机数据库后台准入是独立的资源分配策略，不能直接复用上述 listing 集合作为分类依据。
+这些策略不改变 wire 格式或通道权限；权限仍以 allowlist 为准。
+
 ## 模块通过 Remote Resource 接入移动端
 
 面向移动端新增独立产品入口时，默认通过 `@cindy/device-link` 的 Remote Resource
