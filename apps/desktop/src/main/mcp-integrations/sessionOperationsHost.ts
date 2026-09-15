@@ -34,6 +34,7 @@ const ROW_COLUMNS = {
   orcaRole: sessions.orcaRole,
   parentSessionId: sessions.parentSessionId,
   forkedAtMessageId: sessions.forkedAtMessageId,
+  pinnedAt: sessions.pinnedAt,
   createdAt: sessions.createdAt,
   messageCount: sql<number>`(select count(*) from messages where messages.session_id = ${sessions.id})`,
 };
@@ -49,6 +50,7 @@ function toRow(row: {
   orcaRole: string | null;
   parentSessionId: string | null;
   forkedAtMessageId: string | null;
+  pinnedAt: number | null;
   createdAt: number;
   messageCount: number;
 }): SessionOpsRow {

@@ -24,6 +24,7 @@ function row(id: string, patch: Partial<SessionOpsRow> = {}): SessionOpsRow {
     orcaRole: null,
     parentSessionId: null,
     forkedAtMessageId: null,
+    pinnedAt: null,
     createdAt: 1,
     messageCount: 3,
     ...patch,
@@ -211,8 +212,22 @@ describe('setSessionsPinned', () => {
     const { deps, updateSession } = makeDeps([row('a')]);
     await setSessionsPinned(deps, { sessionIds: ['a'], pinned: true });
     expect(typeof updateSession.mock.calls[0][1].pinnedAt).toBe('string');
-    await setSessionsPinned(deps, { sessionIds: ['a'], pinned: false });
-    expect(updateSession.mock.calls[1][1]).toEqual({ pinnedAt: null });
+    const pinned = makeDeps([row('a', { pinnedAt: 1767225600000 })]);
+    await setSessionsPinned(pinned.deps, { sessionIds: ['a'], pinned: false });
+    expect(pinned.updateSession.mock.calls[0][1]).toEqual({ pinnedAt: null });
+  });
+
+  it('skips sessions already in the requested pin state', async () => {
+    // 重复写 pinnedAt 会打乱置顶排序并再次触发强制摘要生成;未变化的不计入 changed。
+    const already = makeDeps([row('a', { pinnedAt: 1767225600000 })]);
+    const res = await setSessionsPinned(already.deps, { sessionIds: ['a'], pinned: true });
+    expect(res).toMatchObject({ ok: true, changed: [] });
+    expect(already.updateSession).not.toHaveBeenCalled();
+
+    const notPinned = makeDeps([row('b')]);
+    const res2 = await setSessionsPinned(notPinned.deps, { sessionIds: ['b'], pinned: false });
+    expect(res2).toMatchObject({ ok: true, changed: [] });
+    expect(notPinned.updateSession).not.toHaveBeenCalled();
   });
 
   it('rechecks terminal state inside the write lock and preserves changed items', async () => {

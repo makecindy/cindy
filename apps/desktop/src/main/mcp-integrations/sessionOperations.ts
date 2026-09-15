@@ -33,6 +33,7 @@ export interface SessionOpsRow {
   orcaRole: 'lead' | 'worker' | null;
   parentSessionId: string | null;
   forkedAtMessageId: string | null;
+  pinnedAt: number | null;
   createdAt: number;
   messageCount: number;
 }
@@ -223,6 +224,10 @@ export async function setSessionsPinned(
   }
   const changed: SessionOpItem[] = [];
   for (const row of loaded) {
+    // 已经处于目标状态的跳过:重复写 pinnedAt 会打乱置顶排序,还会再触发一次强制摘要生成
+    // (updateSessionInDb 在 pinnedAt 落非空时 force 生成)。与 GUI 的「置顶/取消置顶」一致,
+    // 也让重试保持幂等 —— 未发生变化的不计入 changed。
+    if ((row.pinnedAt != null) === params.pinned) continue;
     try {
       // 终态 / 运行态 / IM 接管的复核放在 updateSessionInDb 写锁内(beforeWrite):预检后被并发
       // 归档或删除的会话不会再被写入 pinnedAt 并报成功。
