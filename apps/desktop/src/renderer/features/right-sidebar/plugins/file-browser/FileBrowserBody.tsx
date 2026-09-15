@@ -297,22 +297,15 @@ function FileBrowserBodyWithWorkdir({
     // state/ctx/tree 引用变化不该重放已消费的请求。
   }, [revealFilePath, revealFileNonce]);
 
-  // 文件名筛选结果点击 → 选中文件 + 清空 query + 展开父目录 + 滚动到该行
-  // (回到正常文件树视图,跟用户直觉一致:"我找到这个文件了,接下来就在看它")。
-  // 展开 + 滚动逻辑封在 useRevealFileInTree,doc 模式 sidebar 共用同一份(以后
-  // 优化 reveal 行为只改 hook 一处)。
+  // 文件名筛选结果点击 → 只选中文件,保留筛选 query 和结果列表。
   const handleSelectFromFilter = useCallback(
     async (relPath: string) => {
       const ok = await confirmSwitchAway(state.selectedFilePath, relPath);
       if (!ok) return;
       setExternalFile(null);
       ctx.patchState({ selectedFilePath: relPath });
-      setFilterQuery('');
-      // 等 filterQuery 清空 → tree 视图重新可见,然后 reveal 内部再两次 rAF
-      // 等 React commit / layout 稳定 → scroll。
-      void revealFileInTree(relPath);
     },
-    [confirmSwitchAway, ctx, revealFileInTree, state.selectedFilePath],
+    [confirmSwitchAway, ctx, state.selectedFilePath],
   );
 
   // refresh 按钮:文件树 + 项目文件索引一起 invalidate。
