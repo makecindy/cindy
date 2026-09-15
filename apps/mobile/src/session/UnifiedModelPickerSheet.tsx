@@ -24,6 +24,7 @@ import { useDraftModelMemoryVersion } from "./draftModelMemory";
 import { useSessionModelMirrorVersion } from "./sessionModelMirror";
 import { UnifiedModelPickerView } from "./UnifiedModelPickerView";
 import { budgetRowDisabled, presentPickerPrice } from "./modelPickerRows";
+import { mobileWeeklyQuota } from "./mobileModelRowPresentation";
 
 function createFavoriteUid(): string {
   const cryptoWithUuid = globalThis.crypto as Crypto | undefined;
@@ -258,10 +259,11 @@ export function UnifiedModelPickerSheet(
       ),
       quotaLabel: (() => {
         const q = quotas[entry.providerId];
-        return q
+        const modelQuota = q ? mobileWeeklyQuota(q.source, q.raw, now, entry.modelId) : null;
+        return modelQuota
           ? [
-              q.resetsAt ? countdown(q.resetsAt, now) : null,
-              `${q.remaining}%`,
+              modelQuota.resetsAt ? countdown(modelQuota.resetsAt, now) : null,
+              `${modelQuota.remaining}%`,
             ]
               .filter(Boolean)
               .join(" · ")
@@ -459,9 +461,9 @@ export function UnifiedModelPickerSheet(
           .map((provider) => ({
             id: provider.id,
             label: providerName(provider.id),
-            quota: quotas[provider.id]
+            quota: quotas[provider.id]?.remaining !== undefined
               ? {
-                  remaining: quotas[provider.id]!.remaining,
+                  remaining: quotas[provider.id]!.remaining!,
                   label: [
                     t("session.menu.usage.week"),
                     t("session.menu.usage.remaining", {

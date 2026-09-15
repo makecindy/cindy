@@ -82,7 +82,11 @@ export function useMobileModelQuotas(
         }),
       );
       if (active) {
-        setState({ binding, values });
+        setState((previous) => ({
+          binding,
+          // 短暂的 IPC/网络失败不应抹掉同一 binding 下最近一次成功额度。
+          values: previous?.binding === binding ? { ...previous.values, ...values } : values,
+        }));
         setNow(Date.now());
       }
       pending = false;
@@ -105,7 +109,7 @@ export function useMobileModelQuotas(
   }, [binding, invoke]);
   const quotas = Object.fromEntries(
     Object.entries(state?.binding === binding ? state.values : {}).map(
-      ([id, v]) => [id, mobileWeeklyQuota(v.source, v.raw, now)],
+      ([id, v]) => [id, { ...mobileWeeklyQuota(v.source, v.raw, now), source: v.source, raw: v.raw }],
     ),
   );
   return { quotas, now };

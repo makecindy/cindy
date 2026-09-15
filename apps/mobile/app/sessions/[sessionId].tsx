@@ -2504,7 +2504,8 @@ export default function SessionScreen() {
   // 也不能让当前运行模型覆盖这份 intent。
   const modelSheetUsesIntent = Boolean(
     agentSwitchIntent?.targetAgentKind
-      && (agentSwitchIntent.targetAgentKind === modelSheetAgentKind || modelSheetOpen),
+      && (agentSwitchIntent.targetAgentKind === modelSheetAgentKind
+        || (modelSheetOpen && modelSheetAgentKind === sessionAgentKind)),
   );
   const modelSheetIntent = modelSheetUsesIntent ? agentSwitchIntent : null;
   const modelSheetCapabilities = modelSheetAgentKind === sessionAgentKind

@@ -48,6 +48,7 @@ export function mobileWeeklyQuota(
   source: QuotaSource,
   raw: unknown,
   now: number,
+  modelId?: string,
 ): MobileWeeklyQuota | null {
   const data = object(raw);
   let used: unknown;
@@ -57,9 +58,9 @@ export function mobileWeeklyQuota(
     if (!snapshot.rateLimits) return null;
     const bucket = matchCodexBucketForModel(
       snapshot.rateLimitsByLimitId ?? {
-        [snapshot.rateLimits.limitId ?? "codex"]: snapshot.rateLimits,
+      [snapshot.rateLimits.limitId ?? "codex"]: snapshot.rateLimits,
       },
-      undefined,
+      modelId,
       now,
     );
     const window = [bucket?.primary, bucket?.secondary].find(
