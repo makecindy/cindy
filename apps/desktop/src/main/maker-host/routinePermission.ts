@@ -15,7 +15,7 @@ function permissionMode(mode: unknown): PermissionMode | null {
 
 /** Never fall back from an unstable live session or a missing/incomplete durable snapshot. */
 export function routinePermissionSnapshot(
-  live: Pick<Session, 'stablePermissionModeState'> | undefined,
+  live: Partial<Pick<Session, 'stablePermissionModeState' | 'stablePlanModeState'>> | undefined,
   stored: { permissionMode: unknown; planModeEnabled: unknown } | null,
 ): { permissionMode: PermissionMode; planMode: boolean } | null {
   if (!stored || typeof stored.planModeEnabled !== 'boolean') return null;
@@ -25,6 +25,8 @@ export function routinePermissionSnapshot(
     const stable = live.stablePermissionModeState;
     // A persistence/runtime mismatch may be a partially applied user change; wait for it to settle.
     if (!stable || stable.mode !== mode) return null;
+    const plan = live.stablePlanModeState;
+    if (!plan || plan.enabled !== stored.planModeEnabled) return null;
   }
   return { permissionMode: mode, planMode: stored.planModeEnabled };
 }

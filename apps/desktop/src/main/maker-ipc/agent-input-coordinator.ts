@@ -4510,7 +4510,9 @@ export class AgentInputCoordinator {
       if (this.discardOnStaleActiveTurn(sessionId, active, isSendDispatched(result))) return;
       active.persisting = false;
       if (!isSendDispatched(result)) {
-        this.handleSendNotDispatched(sessionId, active, head, result);
+        const rewound = await this.rewindSchedulerPreparationFailure(sessionId, active, head, result);
+        if (this.discardOnStaleActiveTurn(sessionId, active)) return;
+        this.handleSendNotDispatched(sessionId, active, head, result, rewound);
         return;
       }
       this.markActiveTurnDispatched(sessionId, active);
@@ -4610,7 +4612,9 @@ export class AgentInputCoordinator {
         this.settlePersistedAutoResumeSendFailure(sessionId, latest, head, err);
         return;
       }
-      latest.error = errorMessage(err);
+      const rewound = await this.rewindSchedulerPreparationFailure(sessionId, active, head, err);
+      if (this.discardOnStaleActiveTurn(sessionId, active)) return;
+      latest.error = rewound ? null : errorMessage(err);
       clearErrorProjectionSignals(latest);
       latest.stickyError = null;
       // 同 handleSendNotDispatched:调度来源的 prompt 不留可被人手动 Retry 的 recovery
@@ -4621,8 +4625,10 @@ export class AgentInputCoordinator {
       latest.activeTurn = null;
       this.notifyRejectedUserTurn(sessionId, head);
       this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
-      this.persistTerminalSendError(sessionId, latest.error);
-      this.notifyPersistedSendRejected(sessionId, latest.error);
+      if (!rewound) {
+        this.persistTerminalSendError(sessionId, latest.error!);
+        this.notifyPersistedSendRejected(sessionId, latest.error!);
+      }
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
       // scheduler 这条没有人点,必须自己唤一次。
@@ -4634,11 +4640,45 @@ export class AgentInputCoordinator {
     }
   }
 
+  /** Only proven preparation rejection can erase a scheduled continuation row.
+   * The coordinator owns its clientId even when dispatch beats enqueue's return.
+   * Unknown vendor outcomes and interactive messages keep their existing history.
+   */
+  private async rewindSchedulerPreparationFailure(
+    sessionId: string,
+    active: ActiveTurn,
+    item: AgentInputQueuedMessage,
+    outcome: unknown,
+  ): Promise<boolean> {
+    if (!active.persisted || item.origin?.kind !== 'scheduler'
+      || !this.deps.rewindPersistedUserMessageAfterClear
+      || isTurnDispatchUnconfirmedError(outcome)) return false;
+    const failure = outcome as { kind?: string; reason?: string; code?: string; message?: string } | null;
+    const cancelled = failure?.kind === 'session-dispatch'
+      && failure.reason === 'cancelled-before-dispatch';
+    const message = failure?.message ?? errorMessage(outcome);
+    const preparationRejected = cancelled
+      || message.startsWith('[SEND_CANCELLED_BEFORE_DISPATCH]')
+      || (message.includes('Scheduled task modes changed before vendor dispatch')
+        && (failure?.code === 'PRECONDITION_FAILED' || message.includes('[PRECONDITION_FAILED]')));
+    if (!preparationRejected) return false;
+    try {
+      await this.deps.rewindPersistedUserMessageAfterClear(sessionId, item.clientId);
+      return true;
+    } catch (err) {
+      log.warn('scheduled preparation rollback failed; retaining failure presentation', {
+        sessionId, clientId: item.clientId, error: errorMessage(err),
+      });
+      return false;
+    }
+  }
+
   private handleSendNotDispatched(
     sessionId: string,
     active: ActiveTurn,
     item: AgentInputQueuedMessage,
     result: AgentInputSendFailure,
+    rewoundScheduler = false,
   ): void {
     if (!this.isActiveTurnCurrent(sessionId, active)) return;
     // 这条 turn 没派出去 → 暂存的 error 候选不会再有接管决策(settle 只挂在已派发那条路上),
@@ -4701,7 +4741,7 @@ export class AgentInputCoordinator {
     }
 
     latest.activeTurn = null;
-    latest.error = message;
+    latest.error = rewoundScheduler ? null : message;
     clearErrorProjectionSignals(latest);
     latest.stickyError = null;
     // 调度来源的 prompt **不留 active-turn recovery**。它的 Retry 走的是普通用户 turn:
@@ -4738,7 +4778,7 @@ export class AgentInputCoordinator {
         ...logFields,
       },
     );
-    if (!cancelledByUserBoundary) {
+    if (!cancelledByUserBoundary && !rewoundScheduler) {
       this.persistTerminalSendError(sessionId, message);
       this.notifyPersistedSendRejected(sessionId, message);
     }

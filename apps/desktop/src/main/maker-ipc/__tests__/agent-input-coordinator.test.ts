@@ -792,7 +792,9 @@ function createHarness(opts?: {
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
+  const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    rewindPersistedUserMessageAfterClear,
     sendToAgent,
     steerToAgent,
     abortSession,
@@ -867,6 +869,7 @@ function createHarness(opts?: {
   });
 
   return {
+    rewindPersistedUserMessageAfterClear,
     coordinator,
     sendToAgent,
     steerToAgent,
@@ -10286,6 +10289,44 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     expect(bySchedule(false)).toBe(false);
     expect(h.coordinator.hasQueuedItemWhere(sid, (item) => item.clientId === 'c1')).toBe(false);
   });
+
+  it.each(['cancel-result', 'cancel-throw', 'mode-throw'])(
+    'rewinds the scheduler row after persisted preparation rejection: %s', async (path) => {
+      const h = createHarness();
+      const sid = 'scheduler-preparation-rejected';
+      h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        if (path === 'mode-throw') throw Object.assign(
+          new Error('Scheduled task modes changed before vendor dispatch'), { code: 'PRECONDITION_FAILED' },
+        );
+        if (path === 'cancel-throw') throw new Error('[SEND_CANCELLED_BEFORE_DISPATCH] cancelled');
+        return { kind: 'session-dispatch', source: 'test', dispatched: false, reason: 'cancelled-before-dispatch' } as never;
+      });
+      h.coordinator.enqueue(sid, makeItem('scheduled-row', 'heartbeat', { origin: schedOrigin }));
+      await flush();
+      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(sid, 'scheduled-row');
+      expect(h.persistTerminalSendError).not.toHaveBeenCalled();
+      expect(latestProjection(h.projections).error).toBeNull();
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(h.coordinator.hasQueuedItemWhere(sid, item => item.clientId === 'scheduled-row')).toBe(false);
+    },
+  );
+
+  it.each(['interactive', 'uncertain', 'rollback-failed'])(
+    'preserves failure history when preparation rollback is unsafe or fails: %s', async (path) => {
+      const h = createHarness();
+      if (path === 'rollback-failed') h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('disk unavailable'));
+      h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        throw Object.assign(new Error(path === 'uncertain' ? 'delivery uncertain' : 'Scheduled task modes changed before vendor dispatch'),
+          { code: path === 'uncertain' ? 'TURN_DISPATCH_UNCONFIRMED' : 'PRECONDITION_FAILED' });
+      });
+      h.coordinator.enqueue('preserve-row', makeItem('row', 'prompt', path === 'interactive' ? {} : { origin: schedOrigin }));
+      await flush();
+      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(path === 'rollback-failed' ? 1 : 0);
+      expect(h.persistTerminalSendError).toHaveBeenCalled();
+    },
+  );
 
   it('onAccepted 抛错取消 scheduler 项:放掉 activeTurn 并唤醒队列(不把会话钉死)', async () => {
     // runner 在拿不到 live 会话时会从 onAcceptedQueuedMessage 抛错让 coordinator 回滚,

@@ -40,6 +40,19 @@ describe('maker session SEND IPC handler', () => {
     expect(sendToAgentAccepted).toHaveBeenCalledWith('session-1', message, createOpts, sendOpts);
   });
 
+  it('does not let a renderer impersonate a scheduler continuation', async () => {
+    const harness = new IpcHarness();
+    const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });
+    registerMakerSessionSendHandler(harness, { sendToAgentAccepted });
+    await harness.invoke(MAKER_INVOKE.SEND, 'session-1', 'New user request', undefined, {
+      messageUuid: 'forged-row',
+      origin: { kind: 'scheduler', scheduleId: 'forged-schedule' },
+    });
+    expect(sendToAgentAccepted).toHaveBeenCalledExactlyOnceWith(
+      'session-1', 'New user request', undefined, { messageUuid: 'forged-row' },
+    );
+  });
+
   it('runs the clear-boundary fence before a legacy direct send', async () => {
     const harness = new IpcHarness();
     const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });
