@@ -23,7 +23,15 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { ArrowLeft, Check, ChevronDown, ChevronsDownUp, RefreshCw, Search, X as XIcon } from 'lucide-react';
+import {
+  ArrowLeft,
+  Check,
+  ChevronDown,
+  ChevronsDownUp,
+  RefreshCw,
+  Search,
+  X as XIcon,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -47,7 +55,7 @@ import { FileTreeView, type FileTreeViewHandle, type PendingCreate } from './Fil
 import { useRevealFileInTree } from './hooks/useRevealFileInTree';
 import { FileFilterInput } from './FileFilterInput';
 import { FilterResultList } from './FilterResultList';
-import { FILTER_RESULT_LIMIT, filterFiles } from './lib/filterFiles';
+import { filterFilesWithMeta } from './lib/filterFiles';
 import { loadSelectedFile, saveSelectedFile } from './lib/selectedFileStore';
 import { loadExpandedSet, saveExpandedSet } from './lib/expandedStore';
 import { clearFileScroll } from './lib/fileScrollStore';
@@ -181,9 +189,7 @@ export function WorkdirBrowseSidebar({
     const onOpen = () => {
       setMode('search');
       setTimeout(() => {
-        const input = document.querySelector<HTMLInputElement>(
-          'input[data-workdir-search-input]',
-        );
+        const input = document.querySelector<HTMLInputElement>('input[data-workdir-search-input]');
         input?.focus();
         input?.select();
       }, 0);
@@ -217,7 +223,13 @@ export function WorkdirBrowseSidebar({
   // 要递归扫一遍判断 "有没有 doc 文件"(即使 sibling 已经并行,顶层走完一轮
   // 仍然有感知)。先放开让用户看全部文件,等 hasDocDescendant 加缓存或换成
   // 流式增量返回再启用。scanner.ts 的过滤逻辑保留,改回 true 即可恢复。
-  const tree = useFileTree({ workdir, remoteHostId, deviceId, hideMetaFiles: true, docMode: false });
+  const tree = useFileTree({
+    workdir,
+    remoteHostId,
+    deviceId,
+    hideMetaFiles: true,
+    docMode: false,
+  });
 
   // 文件名筛选 query —— tree 模式下用,独立于内容搜索。空 query 显示文件树,有
   // 内容显示筛选结果列表。workdir 切换时自动清空(下方 useEffect)。
@@ -230,8 +242,8 @@ export function WorkdirBrowseSidebar({
   const projectFiles = useProjectFileList(workdir, remoteHostId, deviceId, {
     enabled: filterQuery.trim() !== '',
   });
-  const filteredFiles = useMemo(
-    () => filterFiles(filterQuery, projectFiles.files),
+  const filteredFileResults = useMemo(
+    () => filterFilesWithMeta(filterQuery, projectFiles.files),
     [filterQuery, projectFiles.files],
   );
 
@@ -260,11 +272,7 @@ export function WorkdirBrowseSidebar({
 
   const confirmSwitchAway = useConfirmSwitchAwayIfDirty();
   const currentSelectedFile = searchParams.get('file');
-  const canSwitchProject = hasSwitchableDocModeProject(
-    switchProjects,
-    projectKey,
-    sessionId,
-  );
+  const canSwitchProject = hasSwitchableDocModeProject(switchProjects, projectKey, sessionId);
 
   const handleBack = useCallback(async () => {
     // 离开整个 doc 模式回到 chat 视图。如果当前文件处于 dirty 编辑状态,
@@ -297,10 +305,7 @@ export function WorkdirBrowseSidebar({
       // setSearchParams(updater) form keeps unrelated params if any exist;
       // 但 search/line 是 search panel 跳转专用,从文件树切文件时要清掉,否则
       // 上次跳转过的 highlight 会黏在新文件上。
-      setSearchParams(
-        (prev) => buildNormalFileSelectionParams(prev, relPath),
-        { replace: true },
-      );
+      setSearchParams((prev) => buildNormalFileSelectionParams(prev, relPath), { replace: true });
       // 同步落地到 localStorage,下次切回该 workdir 时自动恢复。
       saveSelectedFile(workdir, relPath);
       // 同步加到 tab 列表。已存在 = 切换已打开文档,保留阅读位置;
@@ -359,10 +364,7 @@ export function WorkdirBrowseSidebar({
     async (relPath: string) => {
       const ok = await confirmSwitchAway(currentSelectedFile, relPath);
       if (!ok) return;
-      setSearchParams(
-        (prev) => buildNormalFileSelectionParams(prev, relPath),
-        { replace: true },
-      );
+      setSearchParams((prev) => buildNormalFileSelectionParams(prev, relPath), { replace: true });
       saveSelectedFile(workdir, relPath);
       const openedNow = storeAddTab(workdir, relPath);
       if (openedNow) clearFileScroll(workdir, relPath);
@@ -413,9 +415,10 @@ export function WorkdirBrowseSidebar({
       const newRel = parentRel === '' ? name : `${parentRel}/${name}`;
       setPendingCreate(null);
       const api = fileBrowserApiFor(deviceId);
-      const res = kind === 'file'
-        ? await api.createFile({ workdir, remoteHostId, relPath: newRel })
-        : await api.createFolder({ workdir, remoteHostId, relPath: newRel });
+      const res =
+        kind === 'file'
+          ? await api.createFile({ workdir, remoteHostId, relPath: newRel })
+          : await api.createFolder({ workdir, remoteHostId, relPath: newRel });
       if (!res.ok) {
         log.warn(`create ${kind} failed`, { newRel, message: res.message });
         toast.error(t('ccAgent.workdirBrowse.createFailed', { message: res.message }));
@@ -481,7 +484,11 @@ export function WorkdirBrowseSidebar({
       const res = await window.electronAPI.showItemInFolder({ filePath: abs });
       if (!res.success) {
         log.warn('reveal in folder failed', { relPath: entry.relPath, error: res.error });
-        toast.error(t('ccAgent.workdirBrowse.revealFailed', { error: res.error ?? t('ccAgent.common.unknownError') }));
+        toast.error(
+          t('ccAgent.workdirBrowse.revealFailed', {
+            error: res.error ?? t('ccAgent.common.unknownError'),
+          }),
+        );
       }
     },
     [workdir, t],
@@ -545,9 +552,7 @@ export function WorkdirBrowseSidebar({
   //     v1 接受;chokidar add/unlink 会自然刷父目录 listing。
   const handleRenameSubmit = useCallback(
     async (newName: string) => {
-      const entry = renamingPath
-        ? findEntryByRelPath(tree.entries, renamingPath)
-        : null;
+      const entry = renamingPath ? findEntryByRelPath(tree.entries, renamingPath) : null;
       if (!renamingPath || !entry) {
         setRenamingPath(null);
         return;
@@ -585,13 +590,10 @@ export function WorkdirBrowseSidebar({
 
       // 当前 active 文件命中 → 重新指向新路径。
       const isActiveHit =
-        selectedPath !== null &&
-        (selectedPath === oldRel || selectedPath.startsWith(`${oldRel}/`));
+        selectedPath !== null && (selectedPath === oldRel || selectedPath.startsWith(`${oldRel}/`));
       if (isActiveHit) {
         const newSelected =
-          selectedPath === oldRel
-            ? newRel
-            : `${newRel}/${selectedPath.slice(oldRel.length + 1)}`;
+          selectedPath === oldRel ? newRel : `${newRel}/${selectedPath.slice(oldRel.length + 1)}`;
         saveSelectedFile(workdir, newSelected);
         setSearchParams(
           (prev) => {
@@ -674,10 +676,10 @@ export function WorkdirBrowseSidebar({
       <div className="flex items-center justify-between pt-2 pb-1 pl-6 pr-3">
         {mode === 'search' ? (
           <div className="flex min-w-0 items-center gap-2">
-            <span className="text-sm font-semibold text-foreground">{t('ccAgent.workdirBrowse.searchPanel.headingSearch')}</span>
-            <span className="min-w-0 truncate text-11 text-sidebar-muted">
-              {displayName}
+            <span className="text-sm font-semibold text-foreground">
+              {t('ccAgent.workdirBrowse.searchPanel.headingSearch')}
             </span>
+            <span className="min-w-0 truncate text-11 text-sidebar-muted">{displayName}</span>
           </div>
         ) : canSwitchProject ? (
           <DropdownMenu>
@@ -694,7 +696,11 @@ export function WorkdirBrowseSidebar({
                   )}
                 >
                   <span className="min-w-0 truncate">{displayName}</span>
-                  <ChevronDown size={14} strokeWidth={2} className="shrink-0 text-sidebar-action-icon" />
+                  <ChevronDown
+                    size={14}
+                    strokeWidth={2}
+                    className="shrink-0 text-sidebar-action-icon"
+                  />
                 </button>
               </Tip>
             </DropdownMenuTrigger>
@@ -722,16 +728,16 @@ export function WorkdirBrowseSidebar({
                         count: project.activeSessionCount,
                       })}
                     </span>
-                    {active && <Check size={14} strokeWidth={2} className="ml-2 shrink-0 text-foreground" />}
+                    {active && (
+                      <Check size={14} strokeWidth={2} className="ml-2 shrink-0 text-foreground" />
+                    )}
                   </DropdownMenuItem>
                 );
               })}
             </DropdownMenuContent>
           </DropdownMenu>
         ) : (
-          <span className="truncate text-sm font-semibold text-foreground">
-            {displayName}
-          </span>
+          <span className="truncate text-sm font-semibold text-foreground">{displayName}</span>
         )}
         <div className="flex shrink-0 items-center gap-1.5">
           {mode === 'search' ? (
@@ -795,10 +801,8 @@ export function WorkdirBrowseSidebar({
           <FileFilterInput value={filterQuery} onChange={setFilterQuery} />
           {filterQuery ? (
             <FilterResultList
-              files={filteredFiles}
-              truncated={
-                projectFiles.truncated || filteredFiles.length >= FILTER_RESULT_LIMIT
-              }
+              files={filteredFileResults.files}
+              truncated={filteredFileResults.truncated}
               isLoading={projectFiles.isLoading}
               indexError={projectFiles.error}
               selectedPath={selectedPath}
@@ -815,7 +819,9 @@ export function WorkdirBrowseSidebar({
               onDeleteFile={handleDeleteFile}
               onCopyFilePath={handleCopyFilePath}
               onRevealInFolder={remoteHostId || deviceId ? undefined : handleRevealInFolder}
-              onOpenInSidebarBrowser={remoteHostId || deviceId ? undefined : handleOpenInSidebarBrowser}
+              onOpenInSidebarBrowser={
+                remoteHostId || deviceId ? undefined : handleOpenInSidebarBrowser
+              }
               onOpenInBrowser={remoteHostId || deviceId ? undefined : handleOpenInBrowser}
               onRename={handleRename}
               pendingCreate={pendingCreate}
