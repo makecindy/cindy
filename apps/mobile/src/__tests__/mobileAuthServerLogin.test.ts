@@ -517,6 +517,17 @@ describe('mobile auth-server login', () => {
     expect(switchBody).not.toContain('const oldSession = initialVault');
   });
 
+  it('distinguishes reversible switch invalidation from committed logout before async cleanup', () => {
+    const source = readFileSync(resolve(process.cwd(), 'src/auth/AuthContext.tsx'), 'utf8');
+    const switchStart = source.indexOf('const clearAccountScopedRuntimeForSwitch = useCallback');
+    const switchBody = source.slice(switchStart, source.indexOf('const clearAuthError', switchStart));
+    expect(switchBody.indexOf('invalidateMobileAuthOwnerForSwitch();')).toBeGreaterThan(-1);
+    expect(switchBody.indexOf('invalidateMobileAuthOwnerForSwitch();')).toBeLessThan(switchBody.indexOf('await Promise.all'));
+    const logoutStart = source.indexOf('const clearLocalSession = useCallback');
+    const logout = source.slice(logoutStart);
+    expect(logout.indexOf('setMobileAuthOwner(null);')).toBeLessThan(logout.indexOf('await unregisterPushTokenBestEffort'));
+  });
+
   it('clears the previous identity deletion receipt inside saved-account activation', () => {
     const authSource = readFileSync(
       resolve(process.cwd(), 'src/auth/AuthContext.tsx'),
