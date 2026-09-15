@@ -7,6 +7,7 @@ import {
 import { tokenizeCode } from '@/session/codeHighlight';
 import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
+import { buildMermaidLoaderJs } from '@/session/mermaidWebViewHtml';
 import { repairMermaidSource } from '@cindy/maker-shared/mermaid-autofix';
 // lineHeight 取别名:本模块内 `lineHeight` 是正文行高的局部变量(来自 options)。
 import { lightColors, lineHeight as lineHeightScale, typeScale } from '@/theme/tokens';
@@ -24,6 +25,8 @@ export interface SelectableMarkdownHtmlOptions {
   bodyGap?: number;
   borderColor?: string;
   chipColor?: string;
+  /** Mermaid follows the containing WebView theme. */
+  dark?: boolean;
   fontSize?: number;
   /** 行内 code 文字色(压暗档,不是底色;见 css 里的说明)。 */
   inlineCodeColor?: string;
@@ -75,6 +78,7 @@ export function buildSelectableMarkdownHtml(
   // CSS/JS 一律由 loader 动态注入,不放静态 <link>/<script src>:阻塞式外链在
   // 资源请求挂起时会让 WebView 永久白屏(见 mathWebViewHtml.ts 的硬约束说明)。
   const hasMath = blocksContainMath(blocks);
+  const hasMermaid = blocks.some((block) => block.type === 'mermaid');
   return [
     '<!doctype html>',
     '<html>',
@@ -88,10 +92,79 @@ export function buildSelectableMarkdownHtml(
     renderBlocks(blocks, { sessionLinkTitles: options.sessionLinkTitles, imageSources: options.imageSources }),
     '</main>',
     hasMath ? buildMathRuntimeScript() : '',
+    hasMermaid ? buildMermaidRuntimeScript(options.dark === true) : '',
     buildTargetLineScript(options.targetLine),
     '</body>',
     '</html>',
   ].join('');
+}
+
+/**
+ * Mermaid 原位渲染脚本：随包资源就绪后逐个把源码占位升级为 SVG。
+ * parse/render 任一步失败都不替换原节点，因此源码、行定位容器和正文选择保持可用。
+ */
+function buildMermaidRuntimeScript(dark: boolean): string {
+  const theme = dark ? 'dark' : 'default';
+  const renderAllJs = `
+function renderMermaidNodes() {
+  try {
+    window.mermaid.initialize({
+      startOnLoad: false,
+      securityLevel: 'strict',
+      theme: '${theme}',
+      fontFamily: 'inherit',
+      flowchart: { useMaxWidth: false, htmlLabels: false },
+      sequence: { useMaxWidth: false },
+      class: { useMaxWidth: false },
+      state: { useMaxWidth: false },
+      er: { useMaxWidth: false },
+      gantt: { useMaxWidth: false, useWidth: 760 },
+      journey: { useMaxWidth: false },
+      pie: { useMaxWidth: false }
+    });
+  } catch (error) { return; }
+
+  var nodes = document.querySelectorAll('[data-mermaid-source]');
+  Array.prototype.forEach.call(nodes, function (node, index) {
+    var source = node.getAttribute('data-mermaid-source') || '';
+    var repaired = node.getAttribute('data-mermaid-repaired-source') || '';
+    function renderSource(value, suffix) {
+      return window.mermaid.parse(value).then(function () {
+        return window.mermaid.render('cindy-file-mermaid-' + index + suffix, value);
+      });
+    }
+    renderSource(source, '').catch(function () {
+      return repaired
+        ? renderSource(repaired, '-fixed')
+        : Promise.reject(new Error('mermaid-render-failed'));
+    }).then(function (rendered) {
+      var replacement = document.createElement('div');
+      replacement.className = 'xdt-mermaid';
+      replacement.innerHTML = rendered.svg;
+      // Several Mermaid diagram families ignore the per-family useMaxWidth
+      // options above and emit width="100%" plus an inline max-width. Restore
+      // the viewBox's intrinsic width so every wide diagram can overflow this
+      // container instead of being compressed to the phone viewport.
+      var svg = replacement.querySelector('svg');
+      if (svg) {
+        var viewBox = svg.getAttribute('viewBox') || '';
+        var viewBoxParts = viewBox.trim().split(/[\\s,]+/);
+        var intrinsicWidth = Number(viewBoxParts[2]);
+        if (viewBoxParts.length === 4 && isFinite(intrinsicWidth) && intrinsicWidth > 0) {
+          svg.setAttribute('width', String(intrinsicWidth));
+          svg.style.width = 'auto';
+          svg.style.maxWidth = 'none';
+        }
+      }
+      var pre = node.closest('pre');
+      if (pre) pre.replaceWith(replacement);
+    }).catch(function () { /* 保留源码占位 */ }).then(function () {
+      document.dispatchEvent(new Event('cindy-mermaid-settled'));
+    });
+  });
+}
+renderMermaidNodes();`;
+  return `<script>${buildMermaidLoaderJs(renderAllJs)}</script>`;
 }
 
 export function buildSelectableMarkdownFragmentHtml(
@@ -159,6 +232,7 @@ if(!best)return;
 var scroll=function(){best.scrollIntoView({block:'center'});};
 scroll();
 window.addEventListener('load',function(){setTimeout(scroll,50);});
+document.addEventListener('cindy-mermaid-settled',scroll);
 best.classList.add('xdt-line-flash');
 best.addEventListener('animationend',function(){best.classList.remove('xdt-line-flash');},{once:true});
 })();</script>`;
@@ -403,6 +477,17 @@ export function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOption
     }
     .xdt-math-block pre {
       text-align: left;
+    }
+    .xdt-mermaid {
+      max-width: 100%;
+      overflow-x: auto;
+    }
+    .xdt-mermaid svg {
+      display: block;
+      height: auto;
+      max-width: none;
+      min-width: 100%;
+      width: auto;
     }
   `;
 }
