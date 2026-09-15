@@ -1065,6 +1065,19 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).not.toHaveBeenCalled();
   });
 
+  it('allows moving between subdirectories of the same managed worktree', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    const from = path.join(worktreeDir, 'src');
+    const to = path.join(worktreeDir, 'tests');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(from, 'cc-local');
+
+    // 归属根相同（都是 steady-goodall）:不是跨 worktree 移动,与注释里的「子目录归到根」一致。
+    await invokeUpdate('cc-local', { workingDir: to });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: to.replace(/\\/g, '/') });
+  });
+
   it('refuses the same move through the shared entry point used by the MCP tools', async () => {
     const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
     h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'codex-local');

@@ -5,19 +5,48 @@
  * (目录、分支、store 归属与回收义务)不会跟着走:一旦允许改到别处,侧栏按新项目归组,
  * 聊天框底部路径、Git 上下文与 worktree 徽标却仍指旧 worktree,形成「半移动」。
  * 完整的 worktree → Local Handoff 是独立特性(#2190 / #2585,需显式处置未提交改动),
- * 在它落地前 GUI 与 Main(`local-db:sessions:update`)同口径拒绝。
+ * 在它落地前 GUI 与 Main(`updateSessionInDb`)同口径拒绝。
  *
  * 判据只认 **Cindy 托管 worktree**(`.cindy-worktrees` / `.xdt-worktrees`)——用户自建的
- * `.worktrees` 不在 Cindy 生命周期内,移动它不构成归属分裂。含 worktree 的子目录。
+ * `.worktrees` 不在 Cindy 生命周期内,移动它不构成归属分裂。
+ *
+ * 比的是**归属根**,不是前缀:同一 worktree 根内的目录调整(`<wt>/src` → `<wt>/tests`)
+ * 在共享写路径里本来就允许,GUI 预检不得更严——规则以 Main 的 `managedWorktreeRoot`
+ * 为准,这里的纯字符串版本只求口径一致。
  */
 
 import { managedWorktreeBaseRepo } from '@cindy/maker-shared/worktree-paths';
 
+/** 反斜杠是否算分隔符:只有盘符路径(`C:\`)与反斜杠 UNC(`\\server\share`)才算。 */
+function usesBackslashSeparator(value: string): boolean {
+  return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
+}
+
 /**
- * 该 workingDir 是否落在 Cindy 托管 worktree 内(Cindy 托管根本身或其子目录)。
- * 只做纯字符串判定,不碰文件系统;`working_dir` 缺失时返回 false。
+ * 纯字符串版的 Main `managedWorktreeRoot`:返回 `<base>/<容器>/<worktree 名>`,worktree
+ * 内的子目录一律归到该根;不是托管 worktree 路径时返回 null。不碰文件系统。
  */
-export function isManagedWorktreeWorkingDir(workingDir: string | null | undefined): boolean {
-  if (typeof workingDir !== 'string' || workingDir.length === 0) return false;
-  return managedWorktreeBaseRepo(workingDir) !== null;
+export function managedWorktreeRootOf(value: string | null | undefined): string | null {
+  if (typeof value !== 'string' || value.length === 0) return null;
+  const base = managedWorktreeBaseRepo(value);
+  if (base === null) return null;
+  const allowBackslash = usesBackslashSeparator(value);
+  const segments: Array<{ start: number; end: number }> = [];
+  let segmentStart = -1;
+  // base 是原串的前缀(共享模块按下标切片),从 base 末尾开始取前两段:
+  // 容器目录 + worktree 名;再深的子目录不影响根。
+  for (let i = base.length; i <= value.length && segments.length < 2; i += 1) {
+    const atEnd = i === value.length;
+    const isSeparator = !atEnd && (value[i] === '/' || (allowBackslash && value[i] === '\\'));
+    if (!atEnd && !isSeparator) {
+      if (segmentStart < 0) segmentStart = i;
+      continue;
+    }
+    if (segmentStart >= 0) {
+      segments.push({ start: segmentStart, end: i });
+      segmentStart = -1;
+    }
+  }
+  if (segments.length < 2) return null;
+  return value.slice(0, segments[1].end);
 }

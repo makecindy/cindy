@@ -76,7 +76,7 @@ import {
   MENU_SUB_CONTENT_CLASS,
 } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
-import { isManagedWorktreeWorkingDir } from './lib/sessionMoveGuard';
+import { managedWorktreeRootOf } from './lib/sessionMoveGuard';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
@@ -313,9 +313,12 @@ export function SessionContentHeader({
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
         return;
       }
-      // 与 CCAgentSidebarUpper 同款:worktree 会话不能改 workingDir(半移动),
-      // 移到对话不改目录、仍允许。
-      if (target.kind !== 'dialogue' && isManagedWorktreeWorkingDir(session.workingDir)) {
+      // 与 CCAgentSidebarUpper 同款:worktree 会话不能改到它绑定 worktree 之外的目录
+      // (半移动);比归属根,同一 worktree 根内的目录调整仍放行,移到对话不改目录。
+      const currentWorktreeRoot = managedWorktreeRootOf(session.workingDir);
+      const targetWorktreeRoot =
+        target.kind === 'project' ? managedWorktreeRootOf(target.workingDir) : null;
+      if (currentWorktreeRoot && currentWorktreeRoot !== targetWorktreeRoot) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
         return;
       }
