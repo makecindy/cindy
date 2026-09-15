@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { describe, expect, it, vi } from 'vitest';
-import { PROVIDER_MODEL_CATALOG, BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { PROVIDER_MODEL_CATALOG, buildUserProvider } from '@cindy/model-providers';
 import { createPiProviderFetch, invocationModelRecord, nativeBridgeApiKey, NATIVE_ADAPTER_ERROR_BODY_LIMIT, readBoundedResponseText } from '../pi-provider-transport.js';
 
 const reply = [

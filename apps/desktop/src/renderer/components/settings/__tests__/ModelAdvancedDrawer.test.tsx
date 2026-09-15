@@ -1,7 +1,8 @@
+import { BUNDLED_CATALOG } from '../../../../../../../packages/model-providers/test/catalog-fixture.js';
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { buildUserProvider } from '@cindy/model-providers';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 const mocks = vi.hoisted(() => ({

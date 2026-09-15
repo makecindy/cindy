@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { buildUserProvider } from '../user-provider.js';
 import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 /**
@@ -16,7 +17,7 @@ import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 
 import { describe, it, expect } from "vitest";
 
-import { BUNDLED_CATALOG, parseCatalog } from "../catalog.js";
+import { parseCatalog } from '../catalog.js';
 import {
   buildRegistry,
   sourcesForModel,

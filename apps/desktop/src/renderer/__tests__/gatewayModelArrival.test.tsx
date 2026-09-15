@@ -1,7 +1,8 @@
+import { BUNDLED_CATALOG } from '../../../../../packages/model-providers/test/catalog-fixture.js';
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, unifiedModelEntries, modelProtocolComparison, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
+import { unifiedModelEntries, modelProtocolComparison, pickRecommendedAgent, type ProviderView } from '@cindy/model-providers';
 import { parseModelsSyncPayload } from '../../main/model-access/modelsSyncRefresh';
 import {
   getActiveCatalog,

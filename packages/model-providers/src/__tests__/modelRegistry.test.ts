@@ -1,6 +1,7 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from "vitest";
 
-import { BUNDLED_CATALOG } from "../builtin.js";
+
 import { expandedRegistryEntries } from "../modelMetadataLayers.js";
 import {
   compareModelRegistryRevisions,

@@ -23,6 +23,7 @@ import {
   runtimeCustomProviderId,
   storedCustomProviderId,
   type AgentKind,
+  type Catalog,
   type CustomProviderConfig,
   type ProviderModelDiscoveryFailure,
   type ProviderPreset,
@@ -294,6 +295,8 @@ export interface ProviderHandlerDeps {
   getProviderOrder(): string[];
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
   listPresets(): ProviderPreset[];
+  /** Public server publication only; never an active catalog containing user connections. */
+  getServerCatalog?(): Catalog;
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
   testConnection(input: ProviderTestInput): Promise<ProviderTestResult>;
   /** 获取模型列表（生产 = fetchProviderModels；单测注入 stub 不联网）。 */
@@ -2187,7 +2190,10 @@ export function registerProviderHandlers(
   // 只读：目录 presets 段（创建对话框「从模板创建」消费）。
   registry.handle(
     MAKER_INVOKE.PROVIDER_PRESETS_LIST,
-    async (): Promise<{ presets: ProviderPreset[] }> => ({ presets: deps.listPresets() }),
+    async (): Promise<{ presets: ProviderPreset[]; catalog?: Catalog }> => ({
+      presets: deps.listPresets(),
+      ...(deps.getServerCatalog ? { catalog: deps.getServerCatalog() } : {}),
+    }),
   );
 
   // 测试连接：查询型结构化返回（规则 13 例外条款——renderer 需要 code 渲染分类文案）。

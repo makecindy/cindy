@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../packages/model-providers/test/catalog-fixture.js';
 // @vitest-environment jsdom
 
 /**
@@ -13,7 +14,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { buildUserProvider, BUNDLED_CATALOG, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
+import { buildUserProvider, parseModelsListResponse, modelProtocolComparison, type ProviderView } from '@cindy/model-providers';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
@@ -53,8 +54,10 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
   ProviderLogoMark: () => null,
 }));
 
-import { AddProviderWizard, OFFICIAL_API_PRESETS } from '@/components/settings/AddProviderWizard';
+import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
+import { OFFICIAL_API_PRESETS } from './fixtures/officialApiPresets';
 import { createCustomProvider, updateCustomProvider, deleteCustomProvider } from '@/lib/customProviders';
+import { setDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 
 const anthropicProvider = {
   id: 'anthropic',
@@ -261,6 +264,7 @@ it.each(['openrouter', 'minimax-cn', 'minimax-global', 'moonshot-kimi-code', 'gi
 );
 
 beforeEach(() => {
+  setDataOwnerGeneration('wizard-test-owner');
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       onProviderOAuthProgress: vi.fn(() => () => undefined),
@@ -272,6 +276,7 @@ beforeEach(() => {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       listProviderPresets: vi.fn(async () => ({
         presets: [
+          ...Object.values(OFFICIAL_API_PRESETS),
           deepseekPreset,
           liteLlmPreset,
           unsafeNoAuthDiscoveryPreset,
@@ -291,18 +296,32 @@ beforeEach(() => {
   };
 });
 
+it.each(['before-fetch', 'before-save', 'rerender'])('closes a fulfilled catalog wizard after owner change (%s)', async stage => {
+  const onClose = vi.fn();
+  const props = { providers: [], entry: { kind: 'preset' as const, presetId: 'opencode-go' }, onOpenCustomForm: vi.fn(), onClose, onDone: vi.fn() };
+  const view = render(<AddProviderWizard {...props} />);
+  await screen.findByDisplayValue('OpenCode Go');
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'test-key' } });
+  if (stage === 'before-save') {
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await screen.findByText('settings.providers.wizard.fetchFailed');
+    vi.mocked(window.electronAPI.maker.fetchProviderModels).mockClear();
+  }
+  setDataOwnerGeneration('wizard-next-owner');
+  if (stage === 'rerender') view.rerender(<AddProviderWizard {...props} />);
+  else fireEvent.click(screen.getByText(stage === 'before-save' ? 'settings.providers.wizard.finish' : 'settings.providers.wizard.next'));
+  await waitFor(() => expect(onClose).toHaveBeenCalled());
+  expect(window.electronAPI.maker.fetchProviderModels).not.toHaveBeenCalled();
+  expect(createCustomProvider).not.toHaveBeenCalled();
+  expect(updateCustomProvider).not.toHaveBeenCalled();
+});
+
 afterEach(() => {
   cleanup();
   vi.clearAllMocks();
 });
 
 describe('AddProviderWizard — preset 直达', () => {
-  it('官方 API 入口逐一显式声明 Pi 协议，不依赖 Claude runtime 派生', () => {
-    expect(OFFICIAL_API_PRESETS.anthropic?.runtimes.pi?.wireProtocol).toBe('anthropic-messages');
-    expect(OFFICIAL_API_PRESETS.openai?.runtimes.pi?.wireProtocol).toBe('openai-responses');
-    expect(OFFICIAL_API_PRESETS.xai?.runtimes.pi?.wireProtocol).toBe('openai-chat');
-  });
-
   it('presets 载入后直达表单步:名称预填预设名,出现 API Key 输入', async () => {
     renderWizard('deepseek');
 
@@ -1274,4 +1293,30 @@ it('keeps legacy curated recommendations selected and newly discovered models un
   await waitFor(() => expect(createCustomProvider).toHaveBeenCalledOnce());
   const models = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.pi!.models;
   expect(models.filter(model => model.defaultEnabled !== false).map(model => model.id)).toEqual(['recommended']);
+});
+
+it('waits for server publication before offering the official API entry, and uses its models and parameters', async () => {
+  let resolve!: (value: Awaited<ReturnType<typeof window.electronAPI.maker.listProviderPresets>>) => void;
+  vi.mocked(window.electronAPI.maker.listProviderPresets).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
+  render(<AddProviderWizard providers={[anthropicProvider]} entry={{ kind: 'builtin', providerId: 'anthropic' }} onOpenCustomForm={vi.fn()} onClose={vi.fn()} onDone={vi.fn()} />);
+  expect(screen.queryByText('settings.providers.wizard.useApiKey')).toBeNull();
+  const preset = { id: 'anthropic-api', name: 'Server API', runtimes: { 'claude-code': {
+    baseUrl: 'https://api.anthropic.com', models: [{ id: 'server-model', name: 'Server Model', contextWindow: 123456, defaultEnabled: true }],
+  } } };
+  resolve({ presets: [preset], catalog: { ...BUNDLED_CATALOG, providerModelCatalog: { ...BUNDLED_CATALOG.providerModelCatalog!, providers: {} }, presets: [preset] } });
+  fireEvent.click(await screen.findByText('settings.providers.wizard.useApiKey'));
+  expect(screen.getByDisplayValue('Server API')).toBeTruthy();
+  fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'test-key' } });
+  fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+  expect(await screen.findByText('Server Model')).toBeTruthy();
+  expect(screen.queryByText('Claude Opus 5')).toBeNull();
+  await screen.findByText('settings.providers.wizard.fetchFailed');
+  fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+  await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+  const config = vi.mocked(createCustomProvider).mock.calls[0][0];
+  expect(config.runtimes['claude-code']?.catalogPresetId).toBe('anthropic-api');
+  expect(config.runtimes['claude-code']?.models[0].contextWindow).toBeUndefined();
+  expect(buildUserProvider(config, { presets: [preset] }).models['claude-code']?.[0].contextWindow).toBe(123456);
+  preset.runtimes['claude-code'].models[0].contextWindow = 654321;
+  expect(buildUserProvider(config, { presets: [preset] }).models['claude-code']?.[0].contextWindow).toBe(654321);
 });

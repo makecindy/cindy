@@ -12,6 +12,7 @@ import {
   getModelPriceQuote,
   modelPricingKey,
   registryPricingCatalog,
+  setModelPriceQuote,
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelPriceQuote, ModelPricingCatalog } from '../../shared/regionalMoney.js';
@@ -42,13 +43,13 @@ export function getReferenceModelPricing(): ModelPricingCatalog {
           const cost = model.cost;
           if (cost?.input === undefined || cost.output === undefined) continue;
           if (![cost.input, cost.output].every(value => Number.isFinite(value) && value >= 0)) continue;
-          (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = {
+          setModelPriceQuote(pricing, provider.id, modelPricingKey(model.id, agent as AgentKind), {
             providerId: provider.id, modelId: model.id, currency: 'USD',
             source: 'provider-reference', approximate: true,
             inputPerMtok: cost.input, outputPerMtok: cost.output,
             ...(cost.cacheRead !== undefined ? { cacheReadPerMtok: cost.cacheRead } : {}),
             ...(cost.cacheWrite !== undefined ? { cacheCreatePerMtok: cost.cacheWrite } : {}),
-          };
+          });
         }
       }
     }
@@ -56,7 +57,7 @@ export function getReferenceModelPricing(): ModelPricingCatalog {
     for (const [agent, models] of Object.entries(provider.models)) {
       for (const model of models ?? []) {
         const quote = providerReferencePriceQuote(provider.id, model.id, registry, { agent: agent as AgentKind, officialOnly: true });
-        if (quote) (pricing[provider.id] ??= {})[modelPricingKey(model.id, agent as AgentKind)] = quote;
+        if (quote) setModelPriceQuote(pricing, provider.id, modelPricingKey(model.id, agent as AgentKind), quote);
       }
     }
   }

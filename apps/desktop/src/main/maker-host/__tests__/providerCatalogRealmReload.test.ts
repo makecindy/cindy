@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import os from 'node:os';
@@ -40,6 +41,7 @@ vi.mock('@cindy/model-providers', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/model-providers')>();
   return {
     ...actual,
+    get SERVER_CATALOG() { return actual.SERVER_CATALOG; },
     loadCatalog: vi.fn(
       (source: Record<string, unknown>, _io: unknown, onResolved?: (result: unknown) => void) =>
         new Promise((resolve) => {
@@ -181,7 +183,6 @@ vi.mock('../custom-provider-store.js', () => ({
 }));
 
 import {
-  BUNDLED_CATALOG,
   buildUserProvider,
   type Catalog,
   type CustomProviderConfig,
@@ -697,7 +698,6 @@ describe('provider catalog realm reload', () => {
     const initial = ensureActiveCatalogLoaded();
     expect(h.loads[0]?.source).toMatchObject({
       baseUrl: 'https://model.cn.example',
-      fallbackBaseUrl: 'https://legacy-build-cdn.example',
     });
     h.loads[0]!.resolve(catalogNamed('catalog-cn-initial'), 'current', ['embedding']);
     await initial;
@@ -745,13 +745,11 @@ describe('provider catalog realm reload', () => {
     h.endpoint = 'https://model.cn-fallback.example';
     const fallbackReload = reloadActiveCatalogForEndpointChange();
 
-    // The endpoint-switch window uses bundled data, but it cannot advertise Global XD media.
+    // The endpoint-switch window has no public directory until the new source resolves.
     const waitingXd = getDesktopSelectableCatalog().providers.find(
       (provider) => provider.id === 'xd',
     );
-    expect(waitingXd?.imageModels).toEqual([]);
-    expect(waitingXd?.embeddingModels).toEqual([]);
-    expect(waitingXd?.videoModels?.map((model) => model.id)).not.toContain('happyhorse');
+    expect(waitingXd).toBeUndefined();
 
     h.loads.at(-1)!.resolve(catalogWithXaiMedia, 'fallback');
     await fallbackReload;
@@ -779,7 +777,7 @@ describe('provider catalog realm reload', () => {
     expect(
       getDesktopSelectableCatalog()
         .providers.find((provider) => provider.id === 'xd')
-        ?.videoModels?.map((model) => model.id),
+        ?.videoModels?.map((model) => model.id) ?? [],
     ).not.toContain('happyhorse');
     const currentCatalogWithExplicitXd = structuredClone(catalogWithXaiMedia);
     const explicitXd = currentCatalogWithExplicitXd.providers.find(

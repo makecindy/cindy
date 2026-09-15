@@ -171,6 +171,14 @@ export default {
             '**/*.bench.ts',
           ],
         },
+        integration: {
+          status: 'manual',
+          reason: 'The real Windows PowerShell mutex smoke runs without unit-worker contention; Windows CI requires this tier after the unit sweep.',
+          execution: 'exclusive',
+          coverage: 'allowlist',
+          command: vitestBin('run', '--pool=forks', '--maxWorkers=1'),
+          include: ['src/main/__tests__/windowsPackagedInstanceBarrier.integration.test.ts'],
+        },
         'git-integration': {
           status: 'manual',
           reason: 'Full real-Git coverage is explicit because it spawns hundreds of local subprocesses and is coordinated across worktrees.',

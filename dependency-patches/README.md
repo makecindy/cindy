@@ -16,6 +16,7 @@
 | `react-native@0.85.3` | 回移 Yoga 对 `display: none` 与 `display: contents` 测量过程的布局状态修复，避免 Fabric 布局阶段因错误的 owner 关系触发断言崩溃（上游 `6fa330693fba313a2fe1121545c1efd558b60983`、`2546ce4d8219050fcd1bf432c7c830c9fd70c9af`）。移动端 iOS 通过 `expo-build-properties` 的 `buildReactNativeFromSource` 编译该补丁，不能改回预编译 RN Core。 |
 | `react-native-uitextview@2.2.0` | 修复 iOS 长文本渲染闪烁、布局性能、文本选择与选择手柄滚动等问题，并支持自定义选择菜单操作。 |
 | `react-native-webview@13.16.1` | 将 Cindy 的文本引用操作并入 iOS 系统选择菜单，同时保留复制、翻译等系统操作。 |
+| `rollup@4.62.2` | 保留开发模式 sourcemap 缓存复用，降低重复构建的内存峰值；修复 CommonJS namespace 包装枚举到继承属性时读取空 descriptor 的崩溃。Google SDK 的 `ws` 导入在 macOS Desktop 启动时触发此问题，补丁同时覆盖 Rollup 的 ESM / CommonJS 构建并保留动态导出绑定；Windows 实机待验证。回归见 Desktop `rollupNamespaceInterop.test.ts`，上游提供等价修复后移除对应补丁。 |
 
 ## 维护方式
 

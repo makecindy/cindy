@@ -9,7 +9,7 @@
  */
 
 import {
-  BUNDLED_CATALOG,
+  SERVER_CATALOG,
   parseLocalModelCatalog,
   type LocalModelCatalog,
   type LocalCatalogModel,
@@ -254,7 +254,7 @@ export interface LocalModelRecommendInput {
 
 const GIB = 1024 * 1024 * 1024;
 
-const BUNDLED_CURATED_CATALOG = BUNDLED_CATALOG.modelRegistry!.localModels!;
+
 
 function recommendedFromTag(
   id: string,
@@ -397,7 +397,7 @@ export function isCuratedQwen38Tag(name: string): boolean {
 }
 
 export function resolveCuratedCatalogSpec(remote?: unknown): LocalModelCatalog {
-  return parseLocalModelCatalog(remote) ?? BUNDLED_CURATED_CATALOG;
+  return parseLocalModelCatalog(remote) ?? SERVER_CATALOG.modelRegistry?.localModels ?? { version: 1, models: [], featuredIds: [] };
 }
 
 export function findCuratedOllamaModel(

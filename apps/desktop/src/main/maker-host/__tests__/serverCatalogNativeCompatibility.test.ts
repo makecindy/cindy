@@ -1,7 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  BUNDLED_CATALOG,
-  mergeWithBundled,
   modelProtocolComparison,
   parseCatalog,
   type Catalog,
@@ -34,11 +33,13 @@ function serverCatalog(): Catalog {
     ],
   });
   raw.modelRegistry = {
-    schemaVersion: 2,
+    schemaVersion: 3,
+    nativeApiRules: structuredClone(BUNDLED_CATALOG.modelRegistry!.nativeApiRules),
     updatedAt: '2099-09-05T00:00:00.000Z',
     models: [
       {
         id: 'openai/gpt-6-astra',
+        nativeApi: 'openai-responses',
         name: 'GPT-6 Astra',
         status: 'active',
         contextWindow: 272000,
@@ -56,7 +57,7 @@ function serverCatalog(): Catalog {
 }
 
 function accept(incoming: Catalog) {
-  setActiveCatalog(mergeWithBundled(incoming), { authorityCatalog: incoming });
+  setActiveCatalog(incoming, { authorityCatalog: incoming });
 }
 
 afterEach(() => {
@@ -65,7 +66,7 @@ afterEach(() => {
 });
 
 describe('Server catalog updates with independent Cindy native protocols', () => {
-  it('preserves each harness effort contract and local native metadata through an older schema', () => {
+  it('preserves each harness effort contract and server-declared native metadata through an older schema', () => {
     accept(serverCatalog());
     const active = getActiveCatalog();
     const openai = active.providers.find((provider) => provider.id === 'openai')!;

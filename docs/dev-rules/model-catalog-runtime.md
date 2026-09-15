@@ -133,7 +133,7 @@ Registry 的全部模型及其 routes，防止只翻译当前默认启用的几�
 ### 本地模型目录
 
 本地模型筛选与更新遵循 [`local-model-selection.md`](../product-rules/local-model-selection.md)。
-Server 维护 Registry V4 的 `localModels`，本仓 `model-registry.json` 仅作离线副本；
+Server 数据库发布 Registry 的 `localModels`，客户端离线只读最后有效发布缓存；
 不得重新增加独立的硬编码推荐名单。更新时协调完整 Registry revision 和服务端覆盖源，
 保持旧客户端的版本投影与显式空推荐语义。
 

@@ -60,6 +60,7 @@ vi.mock('@/components/icons/ProviderLogoMark', () => ({
 }));
 
 import { AddProviderWizard } from '@/components/settings/AddProviderWizard';
+import { OFFICIAL_API_PRESETS } from './fixtures/officialApiPresets';
 
 const anthropicProvider = {
   id: 'anthropic',
@@ -97,7 +98,7 @@ beforeEach(() => {
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
       auth: { triggerLogin: vi.fn(async () => ({ authenticated: true, authSource: 'oauth', credentialScope: 'system-shared' })) },
-      listProviderPresets: vi.fn(async () => ({ presets: [] })),
+      listProviderPresets: vi.fn(async () => ({ presets: Object.values(OFFICIAL_API_PRESETS) })),
       localModelList: vi.fn(async () => ({
         status: { runtime: 'ollama', kind: 'absent', appInstalled: false },
         models: [],
@@ -142,13 +143,13 @@ describe('AddProviderWizard — OpenAI 检测建议直达', () => {
     { connected: true },
     { connected: true, suspended: true },
     { connected: false, openAiAccount: { source: 'local' as const, reconnectRequired: true } },
-  ])('本机连接已添加时隐藏重复入口（%j）', state => {
+  ])('本机连接已添加时隐藏重复入口（%j）', async state => {
     const onDone = vi.fn();
     const { rerender } = renderWizard('openai', onDone, { ...openaiProvider, ...state });
     expect(screen.queryByText('settings.providers.openai.useLocalAccount')).toBeNull();
     expect(screen.getByText('settings.providers.openai.independentAccountDescription')).not.toBeNull();
     expect(screen.getByText('settings.providers.openai.addIndependentAccount')).not.toBeNull();
-    expect(screen.getByText('settings.providers.wizard.useApiKey')).not.toBeNull();
+    expect(await screen.findByText('settings.providers.wizard.useApiKey')).not.toBeNull();
     // A provider update must also restore the option when the local binding is removed.
     rerender(<AddProviderWizard providers={[anthropicProvider, openaiProvider]} entry={{ kind: 'builtin', providerId: 'openai' }} onDone={onDone} onClose={vi.fn()} onOpenCustomForm={vi.fn()} />);
     expect(screen.getByText('settings.providers.openai.useLocalAccount')).not.toBeNull();

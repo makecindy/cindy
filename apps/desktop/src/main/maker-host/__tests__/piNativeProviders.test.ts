@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * BYOM host 解析 —— 自定义 provider(pi runtime)→ pi 原生 provider spec + env。
  * 覆盖:wire protocol → pi api 映射、apiKey/none/oauth 三态、缺 key 跳过、env key 名。
@@ -7,7 +8,7 @@ import { existsSync } from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 
-import { BUNDLED_CATALOG, PROVIDER_MODEL_CATALOG, providerModelRecord, buildUserProvider, providerPresetOAuth, type Catalog } from '@cindy/model-providers';
+import { installServerCatalog, PROVIDER_MODEL_CATALOG, providerModelRecord, buildUserProvider, providerPresetOAuth, type Catalog } from '@cindy/model-providers';
 
 // Account discovery persistence is outside this runtime/route fixture.
 vi.mock('../model-discovery/xai.js', () => ({
@@ -50,6 +51,20 @@ import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGate
 import { deriveAvailableModels } from '../catalog-to-descriptors.js';
 
 type Cfg = Parameters<typeof buildPiNativeProvidersFromConfigs>[0][number];
+
+it('refreshes subscription adapter parameters after a new server publication and honors removal', () => {
+  const catalog = structuredClone(BUNDLED_CATALOG);
+  const row = catalog.providerModelCatalog!.providers['openai-codex'].find(model => model.id === 'gpt-5.6-sol')!;
+  row.execution.pi.samplingParams = { temperature: 0.25 };
+  installServerCatalog(catalog);
+  const projected = () => buildPiSubscriptionNativeProviders(catalog, 'http://127.0.0.1:18765')
+    .providers.find(provider => provider.sourceProviderId === 'openai')!.models.find(model => model.id === 'chatgpt/gpt-5.6-sol');
+  expect(projected()?.samplingParams).toEqual({ temperature: 0.25 });
+  const next = structuredClone(catalog);
+  delete next.providerModelCatalog!.providers['openai-codex'].find(model => model.id === row.id)!.execution.pi.samplingParams;
+  installServerCatalog(next);
+  expect(projected()?.samplingParams).toBeUndefined();
+});
 
 it.each([
   ['anthropic', 'claude', 'anthropic-messages'],

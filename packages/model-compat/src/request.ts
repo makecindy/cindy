@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from './url';
 import { mapReasoningEffort, REASONING_EFFORT_OMIT_SENTINEL } from './upstream/reasoning-effort';
 import type { OcxProviderConfig } from './upstream/types/provider';
 import { backfillWebSearchQueries, normalizeResponsesToolResultAdjacency, annotateEmptyResponsesToolOutputs } from './upstream/adapters/openai-responses';
@@ -107,7 +108,7 @@ export function normalizeProviderRequest(body: unknown, route: CompatibilityRout
   if (route.protocol !== 'openai-responses') return next;
   const normalized = normalizeXaiResponsesWebSearch(next, { baseUrl: route.upstreamBase });
   if (isPlainObject(normalized)) next = normalized;
-  const promoted = normalizeOpenCodeGoAdditionalTools(next, route.upstreamBase.replace(/\/+$/, '') + '/responses');
+  const promoted = normalizeOpenCodeGoAdditionalTools(next, trimTrailingSlashes(route.upstreamBase) + '/responses');
   if (isPlainObject(promoted)) next = promoted;
   if (isXaiSchemaTarget({ baseUrl: route.upstreamBase })) {
     const rewriteTools = (tools: unknown[]): unknown[] => tools.map(tool => {

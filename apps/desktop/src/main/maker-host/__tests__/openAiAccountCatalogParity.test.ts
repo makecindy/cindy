@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, buildUserProvider, type CatalogModel } from '@cindy/model-providers';
+import { buildUserProvider, type CatalogModel } from '@cindy/model-providers';
 import {
   getActiveCatalog, setActiveCatalog, setCustomProviders, setDiscoveredCodexModels,
   setLocalCatalogOverrides,
@@ -139,7 +140,7 @@ describe('OpenAI account catalog identity', () => {
 });
 
 
-it('applies server Pi replacement, removal and missing-field fallback equally to both accounts', () => {
+it('applies server Pi replacement, removal and missing-field withdrawal equally to both accounts', () => {
   setCustomProviders([account()]);
   const catalog = structuredClone(BUNDLED_CATALOG);
   const openai = catalog.providers.find(p => p.id === 'openai')!;
@@ -160,7 +161,7 @@ it('applies server Pi replacement, removal and missing-field fallback equally to
   delete openai.models.pi;
   setActiveCatalog(structuredClone(catalog), { authorityCatalog: structuredClone(catalog) });
   for (const providerId of ['openai', accountId]) {
-    expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.pi?.length).toBeGreaterThan(0);
+    expect(getActiveCatalog().providers.find(p => p.id === providerId)!.models.pi).toEqual([]);
   }
 });
 

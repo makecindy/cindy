@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -512,7 +513,7 @@ it('invalidates a connection test when the actual SDK changes under the same dis
 });
 
 it.each(['claude-code', 'codex', 'pi'] as const)('projects ID-only template models before an edited %s probe', async agent => {
-  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+
   const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
   const runtime = preset.runtimes[agent]!;
   for (const id of [runtime.models[0].id, 'gemini-future-deployment']) {

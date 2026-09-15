@@ -1,10 +1,11 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from "vitest";
 import {
   providerCatalogForPi,
   providerModelRecord,
 } from "../providerModelCatalog.js";
 import { buildUserProvider } from "../user-provider.js";
-import { BUNDLED_CATALOG } from '../builtin.js';
+
 import { modelProtocolComparison } from '../modelProtocol.js';
 
 describe("standard provider catalog", () => {

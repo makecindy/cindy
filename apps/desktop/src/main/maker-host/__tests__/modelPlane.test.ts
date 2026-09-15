@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * modelPlane.test.ts —— 模型平面收敛(2026-08-02)的 invariant 矩阵:
  * registry presence 实体化 / 生命周期(retired tombstone + keepSelected 豁免)/
@@ -8,7 +9,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  BUNDLED_CATALOG,
   buildRegistry,
   deriveModelList,
   resolveModelNativeApi,
@@ -97,7 +97,7 @@ function withNativeMetadataAndDefaults(
     ],
   };
   return models.map((model) => {
-    const nativeApi = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, providerId, model.id);
+    const nativeApi = resolveModelNativeApi(getActiveCatalog().modelRegistry, providerId, model.id);
     return {
       ...model,
       ...(nativeApi === null ||

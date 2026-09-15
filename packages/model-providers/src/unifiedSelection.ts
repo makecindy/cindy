@@ -90,7 +90,7 @@ const FALLBACK_LAST_AGENT: AgentKind = 'pi';
  * **bridge 命名空间前缀** —— 同一个逻辑模型被投影进非 root 引擎时套的壳。
  *   - `chatgpt/`:OpenAI codex root → cc / pi bridge(modelPlanePolicy.ts `toChatgptBridgeModel`,
  *     builtin.ts OPENAI routing 的 `modelPrefixes`);
- *   - `xai/`:xAI 订阅直连 bridge(catalog/providers.json 两个 runtime 都声明了 `modelPrefixes`)。
+ *   - `xai/`:xAI 订阅直连 bridge(服务端 providers 两个 runtime 都声明了 `modelPrefixes`)。
  * 与 classification.ts 的 `SUBSCRIPTION_DIRECT_MODEL_PREFIXES` 同源(直接引用其常量,
  * 不另抄字面量)。**`codex/` 不在此列** —— 它是折扣路由的商品命名空间,不是同一模型的壳。
  */

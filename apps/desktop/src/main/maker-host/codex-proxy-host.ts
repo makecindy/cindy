@@ -1,3 +1,4 @@
+import { trimTrailingSlashes } from '@cindy/model-compat/url';
 import { resolveConversationSessionHeaders, withChatBridgeUserAgent, overrideHeadersCaseInsensitive } from '@cindy/responses-chat-bridge';
 import { providerModelRecord } from '@cindy/model-providers';
 import { createPiProviderFetch, handlePiProviderRequest, invocationModelRecord, nativeBridgeApiKey, readBoundedResponseText, requiresNativeProviderAuth } from './pi-provider-transport.js';
@@ -2056,8 +2057,8 @@ function isMiniMaxResponsesSession(ctx: RequestTransformCtx, requestModel: strin
   const providerId = providerContextForRequest(ctx.headers, requestModel).providerId;
   if (!providerId) return false;
   const upstream = getActiveCatalog().providers.find((provider) => provider.id === providerId)
-    ?.routing.codex?.upstream.replace(/\/+$/, '');
-  return upstream !== undefined && MINIMAX_RESPONSES_UPSTREAMS.has(upstream);
+    ?.routing.codex?.upstream;
+  return upstream !== undefined && MINIMAX_RESPONSES_UPSTREAMS.has(trimTrailingSlashes(upstream));
 }
 
 /** MiniMax Responses 不接受 xhigh 或 reasoning summary，路由前收敛到官方支持字段。 */

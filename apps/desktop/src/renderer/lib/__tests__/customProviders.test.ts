@@ -1,4 +1,5 @@
-import { buildUserProvider, BUNDLED_CATALOG } from '@cindy/model-providers';
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
+import { buildUserProvider} from '@cindy/model-providers';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';

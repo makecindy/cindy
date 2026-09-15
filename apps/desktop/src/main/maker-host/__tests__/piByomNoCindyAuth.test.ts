@@ -1,3 +1,4 @@
+import '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({ loggedIn: false, proxyReady: true, sharedSkillRefreshes: 0 }));

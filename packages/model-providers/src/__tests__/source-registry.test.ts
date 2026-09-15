@@ -1,3 +1,6 @@
+import { parseCatalog } from '../catalog.js';
+import { EMPTY_CATALOG } from '../builtin.js';
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 /**
  * source（目录加载/兜底/合并）与 registry（可见性/来源/路由解析）的纯逻辑测试。
  *
@@ -9,14 +12,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { modelRegistryCanonicalJson } from "../modelRegistryCanonical.js";
 
-import { BUNDLED_CATALOG } from "../catalog.js";
+
 import {
   loadCatalog,
   loadCatalogWithSource,
   resolveCatalogUrl,
-  resolveFallbackCatalogUrl,
-  mergeWithBundled,
-  CATALOG_CFG_PATH,
   type CatalogIO,
 } from "../source.js";
 import {
@@ -106,6 +106,12 @@ function runtimeCatalog(): Catalog {
 }
 
 describe("resolveCatalogUrl", () => {
+  it("negotiates only the existing API and leaves explicit files and OSS URLs intact", () => {
+    expect(resolveCatalogUrl({ url: "https://api.example.test/api/model-catalog/catalog?extra=yes&registrySchemaVersion=2" }))
+      .toBe("https://api.example.test/api/model-catalog/catalog?extra=yes&registrySchemaVersion=5&catalogCapabilities=server-managed-catalog");
+    expect(resolveCatalogUrl({ url: "https://cdn.example.test/cfg/providers.json?version=1" }))
+      .toBe("https://cdn.example.test/cfg/providers.json?version=1");
+  });
   it("prefers explicit url", () => {
     expect(
       resolveCatalogUrl({ url: "https://x/y.json", baseUrl: "https://b" }),
@@ -115,555 +121,105 @@ describe("resolveCatalogUrl", () => {
     expect(
       resolveCatalogUrl({ baseUrl: "https://model-access.example.com/" }),
     ).toBe(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
+      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5&catalogCapabilities=server-managed-catalog",
     );
-  });
-  it("builds the migration OSS fallback URL", () => {
-    expect(
-      resolveFallbackCatalogUrl({
-        fallbackBaseUrl: "https://cdn.example.com/base/",
-      }),
-    ).toBe(`https://cdn.example.com/base${CATALOG_CFG_PATH}`);
   });
   it("returns null when neither given", () => {
     expect(resolveCatalogUrl({})).toBeNull();
   });
 });
 
-describe("mergeWithBundled", () => {
-  it("keeps primary providers and fills missing bundled ones by id", () => {
-    const merged = mergeWithBundled(MINIMAL);
-    const ids = merged.providers.map((p) => p.id);
-    expect(ids).toContain("anthropic");
-    expect(ids).toContain("openai");
-    expect(ids).toContain("xd");
-    // primary's anthropic wins (only 1 cc model in MINIMAL)
-    expect(
-      merged.providers.find((p) => p.id === "anthropic")!.models["claude-code"]!
-        .length,
-    ).toBe(1);
-  });
-
-  it("keeps a newer bundled Registry without replacing the independent xAI fallback provider", () => {
-    const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
-    const bundledXai = BUNDLED_CATALOG.providers.find(
-      (provider) => provider.id === "xai",
-    );
-    if (!bundledRegistry) throw new Error("missing bundled modelRegistry");
-    if (!bundledXai) throw new Error("missing bundled xAI provider");
-    const staleRegistry = {
-      ...bundledRegistry,
-      updatedAt: "2026-01-01T00:00:00.000Z",
-      models: [bundledRegistry.models[0]!],
-    };
-    const staleXai = { ...bundledXai, name: "STALE-XAI" };
-
-    const merged = mergeWithBundled({
-      ...MINIMAL,
-      providers: [...MINIMAL.providers, staleXai],
-      modelRegistry: staleRegistry,
-    });
-
-    expect(merged.modelRegistry).toBe(bundledRegistry);
-    expect(merged.modelRegistry?.models.length).toBeGreaterThan(
-      staleRegistry.models.length,
-    );
-    expect(
-      merged.providers.find((provider) => provider.id === "xai")?.name,
-    ).toBe("STALE-XAI");
-  });
-
-  it("uses a newer primary modelRegistry as one complete snapshot, including retirements", () => {
-    const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
-    const bundledXai = BUNDLED_CATALOG.providers.find(
-      (provider) => provider.id === "xai",
-    );
-    if (!bundledRegistry) throw new Error("missing bundled modelRegistry");
-    if (!bundledXai) throw new Error("missing bundled xAI provider");
-    const newerRegistry = {
-      ...bundledRegistry,
-      updatedAt: "2099-01-01T00:00:00.000Z",
-      models: [{ ...bundledRegistry.models[0]!, status: "retired" as const }],
-    };
-    const newerXai = { ...bundledXai, name: "NEWER-XAI" };
-
-    const merged = mergeWithBundled({
-      ...MINIMAL,
-      providers: [...MINIMAL.providers, newerXai],
-      modelRegistry: newerRegistry,
-    });
-
-    expect(merged.modelRegistry).toBe(newerRegistry);
-    expect(merged.modelRegistry?.models).toHaveLength(1);
-    expect(merged.modelRegistry?.models[0]?.status).toBe("retired");
-    const mergedXai = merged.providers.find(
-      (provider) => provider.id === "xai",
-    );
-    expect(mergedXai).toMatchObject({
-      ...newerXai,
-      agents: expect.arrayContaining(["claude-code", "codex", "pi"]),
-      routing: expect.objectContaining({ pi: bundledXai.routing.pi }),
-      models: expect.objectContaining({ pi: bundledXai.models.pi }),
-    });
-  });
-
-  it("orders result by bundled provider order (v2 远端只带 xai 时不得窜位)", () => {
-    const v2Remote: Catalog = {
-      version: "2",
-      providers: [
-        JSON.parse(
-          JSON.stringify(BUNDLED_CATALOG.providers.find((p) => p.id === "xai")),
-        ),
-      ],
-    };
-    const merged = mergeWithBundled(v2Remote);
-    expect(merged.providers.map((p) => p.id)).toEqual([
-      "anthropic",
-      "openai",
-      "xai",
-      "xd",
-      "gemini",
-    ]);
-    // 远端独有的新供应商追加在 bundled 之后。
-    const withExtra: Catalog = {
-      version: "2",
-      providers: [
-        ...v2Remote.providers,
-        { ...MINIMAL.providers[0], id: "newvendor", name: "NewVendor" },
-      ],
-    };
-    expect(mergeWithBundled(withExtra).providers.map((p) => p.id)).toEqual([
-      "anthropic",
-      "openai",
-      "xai",
-      "xd",
-      "gemini",
-      "newvendor",
-    ]);
-  });
-
-  it("backfills the bundled SuperGrok Pi runtime when a legacy v2 xAI block masks it", () => {
-    const bundledXai = structuredClone(
-      BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!,
-    );
-    const legacyXai = structuredClone(bundledXai);
-    legacyXai.agents = legacyXai.agents.filter((agent) => agent !== "pi");
-    delete legacyXai.routing.pi;
-    delete legacyXai.models.pi;
-
-    const merged = mergeWithBundled({ version: "2", providers: [legacyXai] });
-    const xai = merged.providers.find((provider) => provider.id === "xai");
-
-    expect(xai?.agents).toContain("pi");
-    expect(xai?.routing.pi).toEqual(bundledXai.routing.pi);
-    expect(xai?.models.pi).toEqual(bundledXai.models.pi);
-  });
-
-  it("does not invent a SuperGrok Pi runtime for current or differently routed xAI providers", () => {
-    const bundledXai = structuredClone(
-      BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!,
-    );
-    const withoutPi = structuredClone(bundledXai);
-    withoutPi.agents = withoutPi.agents.filter((agent) => agent !== "pi");
-    delete withoutPi.routing.pi;
-    delete withoutPi.models.pi;
-
-    const current = mergeWithBundled({
-      version: BUNDLED_CATALOG.version,
-      providers: [withoutPi],
-    }).providers.find((provider) => provider.id === "xai");
-    expect(current?.agents).not.toContain("pi");
-    expect(current?.routing.pi).toBeUndefined();
-    expect(current?.models.pi).toBeUndefined();
-
-    const rerouted = mergeWithBundled({
-      version: "2",
-      providers: [
-        {
-          ...withoutPi,
-          routing: {
-            ...withoutPi.routing,
-            codex: {
-              ...withoutPi.routing.codex!,
-              upstream: "https://different.example.test/v1",
-            },
-          },
-        },
-      ],
-    }).providers.find((provider) => provider.id === "xai");
-    expect(rerouted?.agents).not.toContain("pi");
-    expect(rerouted?.routing.pi).toBeUndefined();
-    expect(rerouted?.models.pi).toBeUndefined();
-  });
-
-  it.each([
-    { label: "api access", access: { kind: "api" } as const },
-    { label: "managed access", access: { kind: "managed" } as const },
-    {
-      label: "different subscription",
-      access: { kind: "subscription", product: "OtherGrok" } as const,
-    },
-  ])("does not backfill SuperGrok Pi for explicit $label", ({ access }) => {
-    const bundledXai = structuredClone(
-      BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!,
-    );
-    const legacyXai = structuredClone(bundledXai);
-    legacyXai.access = access;
-    legacyXai.agents = legacyXai.agents.filter((agent) => agent !== "pi");
-    delete legacyXai.routing.pi;
-    delete legacyXai.models.pi;
-
-    const merged = mergeWithBundled({ version: "2", providers: [legacyXai] });
-    const xai = merged.providers.find((provider) => provider.id === "xai");
-
-    expect(xai?.access).toEqual(access);
-    expect(xai?.agents).not.toContain("pi");
-    expect(xai?.routing.pi).toBeUndefined();
-    expect(xai?.models.pi).toBeUndefined();
-  });
-
-  it("keeps the SuperGrok Pi backfill when an old catalog explicitly repeats the same access", () => {
-    const bundledXai = structuredClone(
-      BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!,
-    );
-    const legacyXai = structuredClone(bundledXai);
-    legacyXai.access = { kind: "subscription", product: "SuperGrok" };
-    legacyXai.agents = legacyXai.agents.filter((agent) => agent !== "pi");
-    delete legacyXai.routing.pi;
-    delete legacyXai.models.pi;
-
-    const merged = mergeWithBundled({ version: "2", providers: [legacyXai] });
-    const xai = merged.providers.find((provider) => provider.id === "xai");
-
-    expect(xai?.agents).toContain("pi");
-    expect(xai?.routing.pi).toEqual(bundledXai.routing.pi);
-    expect(xai?.models.pi).toEqual(bundledXai.models.pi);
-  });
-
-  it("backfills access for an old primary catalog without mutating it", () => {
-    const merged = mergeWithBundled(MINIMAL);
-    expect(MINIMAL.providers[0].access).toBeUndefined();
-    expect(merged.providers.find((p) => p.id === "anthropic")?.access).toEqual({
-      kind: "subscription",
-      product: "Claude.ai",
-    });
-  });
-
-  it("preserves access explicitly supplied by the primary catalog", () => {
-    const primary: Catalog = {
-      ...MINIMAL,
-      providers: MINIMAL.providers.map((p) => ({
-        ...p,
-        access: { kind: "api" },
-      })),
-    };
-    expect(
-      mergeWithBundled(primary).providers.find((p) => p.id === "anthropic")
-        ?.access,
-    ).toEqual({ kind: "api" });
-  });
-
-  it("同 updatedAt 异 Registry 内容在首次启动合并时保留 bundled 不可变快照", () => {
-    const bundledRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
-    const mutatedRegistry = structuredClone(bundledRegistry);
-    mutatedRegistry.models[0] = {
-      ...mutatedRegistry.models[0]!,
-      name: "Mutated in place",
-    };
-    const primary: Catalog = { ...MINIMAL, modelRegistry: mutatedRegistry };
-
-    const merged = mergeWithBundled(primary);
-    expect(modelRegistryCanonicalJson(merged.modelRegistry!)).toBe(
-      modelRegistryCanonicalJson(bundledRegistry),
-    );
-  });
-
-  it("首次启动合并把等价时区表示视为同一 Registry revision", () => {
-    const bundledRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
-    const shifted = new Date(
-      Date.parse(bundledRegistry.updatedAt) + 8 * 60 * 60 * 1_000,
-    )
-      .toISOString()
-      .replace("Z", "+08:00");
-    const remoteXai = structuredClone(
-      BUNDLED_CATALOG.providers.find((provider) => provider.id === "xai")!,
-    );
-    remoteXai.name = "REMOTE-XAI";
-    const primary: Catalog = {
-      ...MINIMAL,
-      providers: [...MINIMAL.providers, remoteXai],
-      modelRegistry: { ...bundledRegistry, updatedAt: shifted },
-    };
-
-    const merged = mergeWithBundled(primary);
-    expect(merged.modelRegistry?.updatedAt).toBe(shifted);
-    expect(
-      merged.providers.find((provider) => provider.id === "xai")?.name,
-    ).toBe("REMOTE-XAI");
-  });
-
-  it("旧远端未声明 xAI 媒体能力时继承 bundled;显式空清单仍可停用", () => {
-    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === "xai")!;
-    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
-    delete oldRemoteXai.imageModels;
-    delete oldRemoteXai.videoModels;
-    const inherited = mergeWithBundled({
-      version: "2",
-      providers: [oldRemoteXai],
-    });
-    expect(
-      inherited.providers.find((p) => p.id === "xai")?.imageModels,
-    ).toEqual(bundledXai.imageModels);
-    expect(
-      inherited.providers.find((p) => p.id === "xai")?.videoModels,
-    ).toEqual(bundledXai.videoModels);
-
-    const explicitlyDisabled = mergeWithBundled({
-      version: "2",
-      providers: [{ ...oldRemoteXai, imageModels: [], videoModels: [] }],
-    });
-    expect(
-      explicitlyDisabled.providers.find((p) => p.id === "xai")?.imageModels,
-    ).toEqual([]);
-    expect(
-      explicitlyDisabled.providers.find((p) => p.id === "xai")?.videoModels,
-    ).toEqual([]);
-  });
-
-  it("旧远端未声明向量清单时继承 bundled;显式空清单仍是停用语义", () => {
-    // 与 xai 图像清单同一个道理(PR #1707 review):向量清单是客户端新增的 bundled
-    // 元数据,远端 / 本地目录里同 id 的 xd 可能还是升级前的结构。primary 整体优先
-    // 会让旧结构把新字段整段遮掉 → 目录派生空清单 → 设置页"无可用模型"、所有
-    // embed_text 直接 NO_CANDIDATE,能力等于没上线。
-    const bundledXd = BUNDLED_CATALOG.providers.find((p) => p.id === "xd")!;
-    const oldRemoteXd = JSON.parse(JSON.stringify(bundledXd)) as Provider;
-    delete oldRemoteXd.embeddingModels;
-    delete oldRemoteXd.embeddingDefaults;
-    const inherited = mergeWithBundled({
-      version: "2",
-      providers: [oldRemoteXd],
-    });
-    const inheritedXd = inherited.providers.find((p) => p.id === "xd");
-    expect(inheritedXd?.embeddingModels).toEqual(bundledXd.embeddingModels);
-    expect(inheritedXd?.embeddingDefaults).toEqual(bundledXd.embeddingDefaults);
-
-    // 显式 `[]` = "这个供应商不提供向量",不能被 bundled 顶回来。
-    const explicitlyDisabled = mergeWithBundled({
-      version: "2",
-      providers: [{ ...oldRemoteXd, embeddingModels: [] }],
-    });
-    expect(
-      explicitlyDisabled.providers.find((p) => p.id === "xd")?.embeddingModels,
-    ).toEqual([]);
-  });
-
-  it("旧远端改变鉴权或路由形状时不继承 bundled 图像能力", () => {
-    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === "xai")!;
-    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
-    delete oldRemoteXai.imageModels;
-    delete oldRemoteXai.videoModels;
-
-    const apiKeyXai: Provider = {
-      ...oldRemoteXai,
-      auth: { method: "apiKey" },
-    };
-    const alternateRouteXai: Provider = {
-      ...oldRemoteXai,
-      routing: {
-        ...oldRemoteXai.routing,
-        codex: {
-          ...oldRemoteXai.routing.codex!,
-          upstream: "https://oauth-proxy.example.test",
-        },
-      },
-    };
-
-    expect(
-      mergeWithBundled({ version: "2", providers: [apiKeyXai] }).providers.find(
-        (p) => p.id === "xai",
-      )?.imageModels,
-    ).toBeUndefined();
-    expect(
-      mergeWithBundled({ version: "2", providers: [apiKeyXai] }).providers.find(
-        (p) => p.id === "xai",
-      )?.videoModels,
-    ).toBeUndefined();
-    expect(
-      mergeWithBundled({
-        version: "2",
-        providers: [alternateRouteXai],
-      }).providers.find((p) => p.id === "xai")?.imageModels,
-    ).toBeUndefined();
-    expect(
-      mergeWithBundled({
-        version: "2",
-        providers: [alternateRouteXai],
-      }).providers.find((p) => p.id === "xai")?.videoModels,
-    ).toBeUndefined();
-  });
-
-  it("旧 xAI 条目仅在 access 缺省或仍为同一订阅时继承 bundled 图像能力", () => {
-    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === "xai")!;
-    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
-    delete oldRemoteXai.imageModels;
-    delete oldRemoteXai.videoModels;
-
-    for (const access of [
-      { kind: "api" as const },
-      { kind: "managed" as const },
-      { kind: "subscription" as const, product: "Another subscription" },
-    ]) {
-      expect(
-        mergeWithBundled({
-          version: "2",
-          providers: [{ ...oldRemoteXai, access }],
-        }).providers.find((p) => p.id === "xai")?.imageModels,
-      ).toBeUndefined();
-      expect(
-        mergeWithBundled({
-          version: "2",
-          providers: [{ ...oldRemoteXai, access }],
-        }).providers.find((p) => p.id === "xai")?.videoModels,
-      ).toBeUndefined();
+describe("catalog capability cache migration", () => {
+  const baseUrl = "https://catalog.example.test";
+  const modern = baseUrl + "/api/model-catalog/catalog?registrySchemaVersion=5&catalogCapabilities=server-managed-catalog";
+  const previousQueries = [
+    "registrySchemaVersion=5&catalogCapabilities=registry-v4-media",
+    "registrySchemaVersion=5",
+    "registrySchemaVersion=4&catalogCapabilities=registry-v4-media",
+    "registrySchemaVersion=4",
+  ];
+  it.each([false, true])('selects the newest complete same-source cache across all valid scopes (online=%s)', async online => {
+    const snapshot = (version: string, day: number) => ({ ...MINIMAL, version, modelRegistry: {
+      schemaVersion: 4, updatedAt: `2099-01-${String(day).padStart(2, '0')}T00:00:00.000Z`, models: [],
+    } });
+    const scopes = [modern, ...previousQueries.map(query => baseUrl + '/api/model-catalog/catalog?' + query)];
+    for (const newestScope of scopes) {
+      const readCache = vi.fn(async (scope: string) => JSON.stringify(snapshot(scope === newestScope ? 'newest' : 'old', scope === newestScope ? 3 : 1)));
+      const writeCache = vi.fn();
+      const result = await loadCatalogWithSource({ baseUrl }, {
+        fetchText: async () => { if (!online) throw new Error('offline'); return JSON.stringify(snapshot('remote', 2)); },
+        readCache, writeCache,
+      });
+      expect(result.catalog.version).toBe('newest');
+      expect(new Set(readCache.mock.calls.map(([scope]) => scope))).toEqual(new Set(scopes));
+      if (online) {
+        expect(writeCache).toHaveBeenCalledOnce();
+        expect(writeCache.mock.calls[0][0]).toBe(modern);
+        expect(JSON.parse(writeCache.mock.calls[0][1]).version).toBe('newest');
+      } else expect(writeCache).not.toHaveBeenCalled();
     }
-
-    expect(
-      mergeWithBundled({
-        version: "2",
-        providers: [{ ...oldRemoteXai, access: bundledXai.access }],
-      }).providers.find((p) => p.id === "xai")?.imageModels,
-    ).toEqual(bundledXai.imageModels);
-    expect(
-      mergeWithBundled({
-        version: "2",
-        providers: [{ ...oldRemoteXai, access: bundledXai.access }],
-      }).providers.find((p) => p.id === "xai")?.videoModels,
-    ).toEqual(bundledXai.videoModels);
   });
-
-  it("非 xAI 远端条目缺少媒体字段时不从 bundled 恢复已撤下能力", () => {
-    const bundledOpenai = BUNDLED_CATALOG.providers.find(
-      (p) => p.id === "openai",
-    )!;
-    const remoteOpenai = JSON.parse(JSON.stringify(bundledOpenai)) as Provider;
-    delete remoteOpenai.imageModels;
-
-    expect(
-      mergeWithBundled({
-        version: "2",
-        providers: [remoteOpenai],
-      }).providers.find((p) => p.id === "openai")?.imageModels,
-    ).toBeUndefined();
-  });
-
-  it("旧目录在官方 Codex 路由未声明 custom tool 能力时继承 bundled 能力", () => {
-    const oldProviders = BUNDLED_CATALOG.providers.map((provider) => {
-      const oldProvider = structuredClone(provider);
-      if (oldProvider.routing.codex) {
-        delete oldProvider.routing.codex.supportsResponsesCustomTools;
-      }
-      return oldProvider;
+  it.each(previousQueries)("reads the old %s scope after upgrade while offline, without writing or deleting it", async (query) => {
+    const legacy = baseUrl + "/api/model-catalog/catalog?" + query;
+    const readCache = vi.fn(async (scope: string) => scope === legacy ? JSON.stringify(MINIMAL) : null);
+    const writeCache = vi.fn();
+    const result = await loadCatalogWithSource({ baseUrl }, {
+      fetchText: async () => { throw new Error("offline"); }, readCache, writeCache,
     });
-
-    const merged = mergeWithBundled({ version: "2", providers: oldProviders });
-
-    expect(
-      merged.providers.find((provider) => provider.id === "openai")?.routing
-        .codex?.supportsResponsesCustomTools,
-    ).toBe(true);
-    expect(
-      merged.providers.find((provider) => provider.id === "xai")?.routing.codex
-        ?.supportsResponsesCustomTools,
-    ).toBe(false);
-    expect(
-      merged.providers.find((provider) => provider.id === "xd")?.routing.codex
-        ?.supportsResponsesCustomTools,
-    ).toBe(false);
-
-    const explicitOpenai = structuredClone(
-      oldProviders.find((provider) => provider.id === "openai")!,
-    );
-    explicitOpenai.routing.codex!.supportsResponsesCustomTools = false;
-    expect(
-      mergeWithBundled({
-        version: "2",
-        providers: [explicitOpenai],
-      }).providers.find((provider) => provider.id === "openai")?.routing.codex
-        ?.supportsResponsesCustomTools,
-    ).toBe(false);
+    expect(result.source).toBe("cache");
+    expect(readCache.mock.calls.map(call => call[0])).toEqual([
+      modern,
+      ...previousQueries
+        .map(previous => baseUrl + "/api/model-catalog/catalog?" + previous),
+    ]);
+    expect(writeCache).not.toHaveBeenCalled();
   });
-
-  it("不为改变鉴权或 upstream 的同名 Provider 猜测 custom tool 能力", () => {
-    const bundledOpenai = structuredClone(
-      BUNDLED_CATALOG.providers.find((provider) => provider.id === "openai")!,
-    );
-    delete bundledOpenai.routing.codex!.supportsResponsesCustomTools;
-    const apiKeyOpenai: Provider = {
-      ...bundledOpenai,
-      auth: { method: "apiKey" },
-    };
-    const reroutedOpenai: Provider = {
-      ...bundledOpenai,
-      routing: {
-        ...bundledOpenai.routing,
-        codex: {
-          ...bundledOpenai.routing.codex!,
-          upstream: "https://responses.example.test/v1",
-        },
-      },
-    };
-
-    expect(
-      mergeWithBundled({
-        version: "2",
-        providers: [apiKeyOpenai],
-      }).providers.find((provider) => provider.id === "openai")?.routing.codex
-        ?.supportsResponsesCustomTools,
-    ).toBeUndefined();
-    expect(
-      mergeWithBundled({
-        version: "2",
-        providers: [reroutedOpenai],
-      }).providers.find((provider) => provider.id === "openai")?.routing.codex
-        ?.supportsResponsesCustomTools,
-    ).toBeUndefined();
+  it.each(['invalid-json', 'invalid-schema', 'read-error'])("skips a corrupt current and intermediate cache (%s) and reads the next valid same-source snapshot", async failure => {
+    const readCache = vi.fn(async (scope: string) => {
+      if (scope.endsWith('registrySchemaVersion=4')) return JSON.stringify(MINIMAL);
+      if (failure === 'read-error') throw new Error('unreadable');
+      return failure === 'invalid-json' ? '{broken' : JSON.stringify({ version: 'bad', providers: 'invalid' });
+    });
+    const result = await loadCatalogWithSource({ baseUrl }, {
+      fetchText: async () => { throw new Error('offline'); }, readCache,
+    });
+    expect(result.source).toBe('cache');
+    expect(result.catalog.version).toBe('test');
+    expect(readCache.mock.calls.every(([scope]) => scope.startsWith(baseUrl + '/api/model-catalog/catalog?'))).toBe(true);
   });
-
-  it("does not infer bundled billing when a same-id primary changes auth or upstream", () => {
-    const apiKeyPrimary: Catalog = {
-      ...MINIMAL,
-      providers: MINIMAL.providers.map((p) => ({
-        ...p,
-        auth: { method: "apiKey" as const },
-        routing: {
-          "claude-code": {
-            ...p.routing["claude-code"]!,
-            authStrategy: "api-key-header" as const,
-          },
-        },
-      })),
+  it("prefers the capable scope and writes successful responses only to that scope", async () => {
+    const readCache = vi.fn(async (scope: string) => scope === modern ? JSON.stringify(MINIMAL) : null);
+    await loadCatalogWithSource({ baseUrl }, { fetchText: async () => { throw new Error("offline"); }, readCache });
+    expect(readCache).toHaveBeenCalledTimes(5);
+    const writeCache = vi.fn(async () => undefined);
+    await loadCatalogWithSource({ baseUrl }, { fetchText: async () => JSON.stringify(MINIMAL), readCache: async () => null, writeCache });
+    expect(writeCache).toHaveBeenCalledWith(modern, expect.any(String));
+  });
+  it.each(previousQueries)("accepts the current projection at the same revision as %s", async (query) => {
+    const registry: NonNullable<Catalog['modelRegistry']> = {
+      schemaVersion: 5, updatedAt: '2099-01-01T00:00:00.000Z', models: [],
+      baseModels: [{ id: 'media', aliases: [], defaults: { mode: 'image_generation' } }],
     };
-    const alternateOAuthPrimary: Catalog = {
-      ...MINIMAL,
-      providers: MINIMAL.providers.map((p) => ({
-        ...p,
-        routing: {
-          "claude-code": {
-            ...p.routing["claude-code"]!,
-            upstream: "https://oauth-proxy.example.test",
-          },
-        },
-      })),
-    };
-
-    const apiKeyMerged = mergeWithBundled(apiKeyPrimary).providers.find(
-      (p) => p.id === "anthropic",
-    );
-    const altMerged = mergeWithBundled(alternateOAuthPrimary).providers.find(
-      (p) => p.id === "anthropic",
-    );
-    expect(apiKeyMerged?.access).toBeUndefined();
-    expect(altMerged?.access).toBeUndefined();
+    const remote = { ...MINIMAL, version: 'current-projection', modelRegistry: registry };
+    const cached = { ...MINIMAL, version: 'previous-projection', modelRegistry: {
+      ...registry, schemaVersion: query.startsWith('registrySchemaVersion=4') ? 4 : 5,
+      baseModels: [{ id: 'media', aliases: [], defaults: {} }],
+    } };
+    const result = await loadCatalogWithSource({ baseUrl }, {
+      fetchText: async () => JSON.stringify(remote),
+      readCache: async scope => scope === baseUrl + '/api/model-catalog/catalog?' + query ? JSON.stringify(cached) : null,
+    });
+    expect(result.authorityCatalog?.version).toBe('current-projection');
+    expect(result.catalog.modelRegistry).toEqual(registry);
+  });
+  it('preserves a strictly newer previous projection during upgrade', async () => {
+    const remote = { ...MINIMAL, modelRegistry: { schemaVersion: 5, updatedAt: '2099-01-01T00:00:00.000Z', models: [] } };
+    const cached = { ...MINIMAL, version: 'newer-cache', modelRegistry: { schemaVersion: 4, updatedAt: '2099-02-01T00:00:00.000Z', models: [] } };
+    const result = await loadCatalogWithSource({ baseUrl }, {
+      fetchText: async () => JSON.stringify(remote),
+      readCache: async scope => scope.endsWith('registrySchemaVersion=4') ? JSON.stringify(cached) : null,
+    });
+    expect(result.authorityCatalog?.version).toBe('newer-cache');
   });
 });
 
@@ -701,105 +257,36 @@ describe("loadCatalog", () => {
       authorityCatalog: { version: "test" },
     });
     expect(bundled).toEqual({
-      source: "bundled",
+      source: "empty",
       capabilityEvidence: "fallback",
       unverifiedXdMediaKinds: ["image", "video", "embedding"],
-      catalog: BUNDLED_CATALOG,
+      catalog: EMPTY_CATALOG,
       authorityCatalog: null,
     });
   });
 
-  it("tracks only XD media fields inherited from bundled in a current snapshot", async () => {
-    const bundledXd = BUNDLED_CATALOG.providers.find(
-      (provider) => provider.id === "xd",
-    );
-    if (!bundledXd) throw new Error("missing bundled XD provider");
-    const oldXd = structuredClone(bundledXd);
-    delete oldXd.embeddingModels;
-    delete oldXd.embeddingDefaults;
-
-    const inherited = await loadCatalogWithSource(
-      { url: "https://catalog.example.test/providers.json" },
-      {
-        fetchText: vi.fn(async () =>
-          JSON.stringify({ version: "2", providers: [oldXd] }),
-        ),
-      },
-    );
-    expect(inherited.capabilityEvidence).toBe("current");
-    expect(inherited.unverifiedXdMediaKinds).toEqual(["embedding"]);
-    expect(
-      inherited.catalog.providers.find((provider) => provider.id === "xd")
-        ?.embeddingModels,
-    ).toEqual(bundledXd.embeddingModels);
-
-    const explicitlyDisabled = await loadCatalogWithSource(
-      { url: "https://catalog.example.test/providers.json" },
-      {
-        fetchText: vi.fn(async () =>
-          JSON.stringify({
-            version: "2",
-            providers: [{ ...oldXd, embeddingModels: [] }],
-          }),
-        ),
-      },
-    );
-    expect(explicitlyDisabled.unverifiedXdMediaKinds).toEqual([]);
-    expect(
-      explicitlyDisabled.catalog.providers.find(
-        (provider) => provider.id === "xd",
-      )?.embeddingModels,
-    ).toEqual([]);
+  it.each(['local', 'remote', 'cache'] as const)('preserves complete server intent from %s without adding providers, templates or Pi runtimes', async (source) => {
+    const preset = structuredClone(BUNDLED_CATALOG.presets!.find(p => p.id === 'deepseek')!);
+    delete preset.runtimes.pi;
+    const input = { ...MINIMAL, presets: [preset] };
+    const text = JSON.stringify(input);
+    const loaded = await loadCatalogWithSource(source === 'local' ? { localPath: '/fixture' } : { url: 'https://catalog.example.test/catalog' }, {
+      readFile: async () => text,
+      fetchText: async () => { if (source === 'cache') throw new Error('offline'); return text; },
+      readCache: async () => source === 'cache' ? text : null,
+    });
+    expect(loaded.catalog).toEqual(parseCatalog(structuredClone(input)));
+    expect(loaded.catalog.providers.map(p => p.id)).toEqual(input.providers.map(p => p.id));
+    expect(loaded.catalog.presets).toHaveLength(1);
+    expect(loaded.catalog.presets![0].runtimes.pi).toBeUndefined();
+    expect(loaded.catalog.modelRegistry).toBeUndefined();
   });
 
-  it("only backfills Pi metadata for proven legacy snapshots across local, remote, and cache", async () => {
-    const bundledPreset = BUNDLED_CATALOG.presets?.find(
-      (preset) => preset.id === "deepseek",
-    );
-    if (!bundledPreset) throw new Error("missing bundled DeepSeek preset");
-    const { pi: _missing, ...legacyRuntimes } = bundledPreset.runtimes;
-    const legacy = JSON.stringify({
-      version: "2",
-      providers: MINIMAL.providers,
-      presets: [{ ...bundledPreset, runtimes: legacyRuntimes }],
-    });
-    const current = JSON.stringify({
-      version: BUNDLED_CATALOG.version,
-      providers: MINIMAL.providers,
-      presets: [{ ...bundledPreset, runtimes: legacyRuntimes }],
-    });
-    const local = await loadCatalogWithSource(
-      { localPath: "/repo/providers.json" },
-      { readFile: vi.fn(async () => legacy) },
-    );
-    const remote = await loadCatalogWithSource(
-      { url: "https://catalog.example.test/providers.json" },
-      { fetchText: vi.fn(async () => legacy) },
-    );
-    const cache = await loadCatalogWithSource(
-      { url: "https://catalog.example.test/providers.json", remoteBudgetMs: 0 },
-      { readCache: vi.fn(async () => legacy) },
-    );
-    for (const loaded of [local, remote, cache]) {
-      expect(
-        loaded.catalog.presets?.find((preset) => preset.id === "deepseek")
-          ?.runtimes.pi,
-      ).toEqual(bundledPreset.runtimes.pi);
-      expect(
-        loaded.authorityCatalog?.presets?.find(
-          (preset) => preset.id === "deepseek",
-        )?.runtimes.pi,
-      ).toBeUndefined();
-    }
-
-    const currentLoaded = await loadCatalogWithSource(
-      { url: "https://catalog.example.test/providers.json" },
-      { fetchText: vi.fn(async () => current) },
-    );
-    expect(
-      currentLoaded.catalog.presets?.find((preset) => preset.id === "deepseek")
-        ?.runtimes.pi,
-    ).toBeUndefined();
+  it('keeps explicit empty server lists even when a previous publication had entries', async () => {
+    const input = { ...MINIMAL, presets: [] };
+    const loaded = await loadCatalog({ url: 'https://catalog.example.test/catalog' }, { fetchText: async () => JSON.stringify(input) });
+    expect(loaded.presets ?? []).toEqual([]);
+    expect(loaded.providers).toEqual(parseCatalog(MINIMAL).providers);
   });
 
   it("persists a valid remote snapshot and uses its source-scoped LKG after failure", async () => {
@@ -996,10 +483,10 @@ describe("loadCatalog", () => {
       },
     );
     expect(invalid).toEqual({
-      source: "bundled",
+      source: "empty",
       capabilityEvidence: "fallback",
       unverifiedXdMediaKinds: ["image", "video", "embedding"],
-      catalog: BUNDLED_CATALOG,
+      catalog: EMPTY_CATALOG,
       authorityCatalog: null,
     });
   });
@@ -1013,207 +500,18 @@ describe("loadCatalog", () => {
     const cat = await loadCatalog({ localPath: "/repo/providers.json" }, io);
     expect(io.readFile).toHaveBeenCalledWith("/repo/providers.json");
     expect(fetchText).not.toHaveBeenCalled();
-    expect(cat.providers.find((p) => p.id === "anthropic")).toBeTruthy();
+    expect(cat.providers).toEqual(parseCatalog(MINIMAL).providers);
   });
 
-  it("falls back from public API to legacy OSS before bundled", async () => {
-    const writeCache = vi.fn(
-      async (_scope: string, _text: string) => undefined,
-    );
-    const fetchText = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("api unavailable"))
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          ...MINIMAL,
-          cindyModelMeta: {
-            version: 1,
-            models: { retired: { contextWindow: 1 } },
-          },
-        }),
-      );
-    const cat = await loadCatalog(
-      {
-        baseUrl: "https://model-access.example.com",
-        fallbackBaseUrl: "https://cdn.example.com/cindy",
-        now: () => 0,
-      },
-      { fetchText, writeCache },
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
-      15_000,
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      2,
-      "https://cdn.example.com/cindy/cfg/providers.json",
-      expect.any(Number),
-    );
-    expect(cat.version).toBe("test");
-    expect(cat).not.toHaveProperty("cindyModelMeta");
-    expect(writeCache).toHaveBeenCalledWith(
-      "https://cdn.example.com/cindy/cfg/providers.json",
-      expect.any(String),
-    );
-    expect(JSON.parse(writeCache.mock.calls[0]![1])).not.toHaveProperty(
-      "cindyModelMeta",
-    );
-  });
-
-  it("marks legacy OSS as fallback evidence even when its HTTP request succeeds", async () => {
-    const fetchText = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("api unavailable"))
-      .mockResolvedValueOnce(JSON.stringify(MINIMAL));
-    const result = await loadCatalogWithSource(
-      {
-        baseUrl: "https://model-access.example.com",
-        fallbackBaseUrl: "https://cdn.example.com/cindy",
-        now: () => 0,
-      },
-      { fetchText },
-    );
-
-    expect(result).toMatchObject({
-      source: "remote",
-      capabilityEvidence: "fallback",
-      catalog: { version: "test" },
-      authorityCatalog: null,
-    });
-  });
-  it("falls back from invalid public API payload to legacy OSS before bundled", async () => {
-    const fetchText = vi
-      .fn()
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          ...MINIMAL,
-          cindyModelMeta: { version: 1, models: {} },
-        }),
-      )
-      .mockResolvedValueOnce(JSON.stringify(MINIMAL));
-    const cat = await loadCatalog(
-      {
-        baseUrl: "https://model-access.example.com",
-        fallbackBaseUrl: "https://cdn.example.com/cindy",
-        now: () => 0,
-      },
-      { fetchText },
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
-      15_000,
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      2,
-      "https://cdn.example.com/cindy/cfg/providers.json",
-      expect.any(Number),
-    );
-    expect(cat.version).toBe("test");
-  });
-
-  it("loads a legacy OSS LKG after removing its retired metadata block", async () => {
-    const legacyUrl = "https://cdn.example.com/cindy/cfg/providers.json";
-    const fetchText = vi.fn().mockRejectedValue(new Error("offline"));
-    const readCache = vi.fn(async (scope: string) =>
-      scope === legacyUrl
-        ? JSON.stringify({
-            ...MINIMAL,
-            cindyModelMeta: { version: 1, models: {} },
-          })
-        : null,
-    );
-    const result = await loadCatalogWithSource(
-      {
-        baseUrl: "https://model-access.example.com",
-        fallbackBaseUrl: "https://cdn.example.com/cindy",
-        now: () => 0,
-      },
-      { fetchText, readCache },
-    );
-    expect(result.source).toBe("cache");
-    expect(result.capabilityEvidence).toBe("fallback");
-    expect(result.catalog.version).toBe("test");
-    expect(result.catalog).not.toHaveProperty("cindyModelMeta");
-    expect(result.authorityCatalog).toBeNull();
-  });
-
-  it("shares one remote budget across the public API and legacy OSS fallback", async () => {
-    const now = vi
-      .fn()
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(11_000);
-    const fetchText = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("api timeout"))
-      .mockResolvedValueOnce(JSON.stringify(MINIMAL));
-    const cat = await loadCatalog(
-      {
-        baseUrl: "https://model-access.example.com",
-        fallbackBaseUrl: "https://cdn.example.com/cindy",
-        remoteBudgetMs: 15_000,
-        now,
-      },
-      { fetchText },
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      1,
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
-      15_000,
-    );
-    expect(fetchText).toHaveBeenNthCalledWith(
-      2,
-      "https://cdn.example.com/cindy/cfg/providers.json",
-      5_000,
-    );
-    expect(cat.version).toBe("test");
-  });
-
-  it("does not start legacy OSS after the shared remote budget is exhausted", async () => {
-    const now = vi
-      .fn()
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(1_000)
-      .mockReturnValueOnce(16_000);
-    const fetchText = vi.fn().mockRejectedValueOnce(new Error("api timeout"));
-    const cat = await loadCatalog(
-      {
-        baseUrl: "https://model-access.example.com",
-        fallbackBaseUrl: "https://cdn.example.com/cindy",
-        remoteBudgetMs: 15_000,
-        now,
-      },
-      { fetchText },
-    );
-    expect(fetchText).toHaveBeenCalledTimes(1);
-    expect(fetchText).toHaveBeenCalledWith(
-      "https://model-access.example.com/api/model-catalog/catalog?registrySchemaVersion=5",
-      15_000,
-    );
-    expect(cat.version).toBe(BUNDLED_CATALOG.version);
-  });
-
-  it("uses explicit URL without also retrying the legacy OSS fallback", async () => {
-    const fetchText = vi
-      .fn()
-      .mockRejectedValue(new Error("override unavailable"));
-    const cat = await loadCatalog(
-      {
-        url: "https://override.example.com/providers.json",
-        baseUrl: "https://model-access.example.com",
-        fallbackBaseUrl: "https://cdn.example.com/cindy",
-        now: () => 0,
-      },
-      { fetchText },
-    );
-    expect(fetchText).toHaveBeenCalledTimes(1);
-    expect(fetchText).toHaveBeenCalledWith(
-      "https://override.example.com/providers.json",
-      15_000,
-    );
-    expect(cat.version).toBe(BUNDLED_CATALOG.version);
+  it('never fetches retired OSS configuration, including when the server fails or returns invalid data', async () => {
+    for (const response of [null, '{"invalid":true}']) {
+      const fetchText = vi.fn(async (_url: string, _timeout: number) => { if (response === null) throw new Error('offline'); return response; });
+      const result = await loadCatalogWithSource({ baseUrl: 'https://catalog.example.test', fallbackBaseUrl: 'https://retired.example.test' }, { fetchText });
+      expect(result.source).toBe('empty');
+      expect(result.catalog).toEqual(EMPTY_CATALOG);
+      expect(fetchText).toHaveBeenCalledTimes(1);
+      expect(fetchText.mock.calls[0][0]).toContain('/api/model-catalog/catalog');
+    }
   });
 
   it("redacts credentials, query, and hash from remote URL diagnostics", async () => {
@@ -1237,62 +535,24 @@ describe("loadCatalog", () => {
     expect(diagnostics).not.toContain("#private");
   });
 
-  it("keeps special legacy JSON keys inert and lets strict parsing reject them", async () => {
-    const legacyPayload = JSON.stringify(MINIMAL).replace(
-      "{",
-      '{"__proto__":{"polluted":true},"cindyModelMeta":{"version":1},',
-    );
-    const fetchText = vi
-      .fn()
-      .mockRejectedValueOnce(new Error("api unavailable"))
-      .mockResolvedValueOnce(legacyPayload);
-
-    const result = await loadCatalogWithSource(
-      {
-        baseUrl: "https://model-access.example.com",
-        fallbackBaseUrl: "https://cdn.example.com/cindy",
-        now: () => 0,
-      },
-      { fetchText },
-    );
-
-    expect(result).toEqual({
-      source: "bundled",
-      capabilityEvidence: "fallback",
-      unverifiedXdMediaKinds: ["image", "video", "embedding"],
-      catalog: BUNDLED_CATALOG,
-      authorityCatalog: null,
-    });
-    expect(
-      (Object.prototype as { polluted?: unknown }).polluted,
-    ).toBeUndefined();
-  });
-
-  it("falls back to bundled when fetch fails", async () => {
+  it("returns an empty catalog when neither server nor cache is available", async () => {
     const io: CatalogIO = {
       fetchText: vi.fn(async () => {
         throw new Error("network down");
       }),
     };
     const cat = await loadCatalog({ url: "https://x/y.json" }, io);
-    expect(cat.version).toBe(BUNDLED_CATALOG.version);
-    expect(cat.providers.map((p) => p.id).sort()).toEqual([
-      "anthropic",
-      "gemini",
-      "openai",
-      "xai",
-      "xd",
-    ]);
+    expect(cat).toEqual(EMPTY_CATALOG);
   });
 
-  it("disableFetch → bundled (no network)", async () => {
+  it("disableFetch without a cache leaves catalog empty (no network)", async () => {
     const fetchText = vi.fn();
     const cat = await loadCatalog(
       { url: "https://x/y.json", disableFetch: true },
       { fetchText },
     );
     expect(fetchText).not.toHaveBeenCalled();
-    expect(cat.providers.length).toBe(BUNDLED_CATALOG.providers.length);
+    expect(cat).toEqual(EMPTY_CATALOG);
   });
 });
 

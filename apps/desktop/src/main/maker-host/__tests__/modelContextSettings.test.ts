@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, type AgentKind, type Catalog } from '@cindy/model-providers';
+import { type AgentKind, type Catalog } from '@cindy/model-providers';
 
 const state = vi.hoisted(() => ({
   claudeOAuth: false, codexOAuth: false, gateway: true,

@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 it('isolates excess additions and duplicate tags without discarding valid local overrides', () => {
@@ -36,7 +37,6 @@ it('isolates excess additions and duplicate tags without discarding valid local 
 });
 
 import {
-  BUNDLED_CATALOG,
   buildUserProvider,
   type Catalog,
   type ModelRegistry,

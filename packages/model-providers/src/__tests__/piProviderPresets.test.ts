@@ -1,81 +1,37 @@
-import { sourceProviderForPreset } from '../providerPresetIdentity.js';
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
-import { appendPiProviderPresets } from '../piProviderPresets.js';
-import { PROVIDER_MODEL_CATALOG } from '../providerModelCatalog.js';
+import { SERVER_CATALOG, installServerCatalog } from '../builtin.js';
 import { buildUserProvider } from '../user-provider.js';
 import { modelProtocolComparison } from '../modelProtocol.js';
+import { parseCatalog } from '../catalog.js';
+import type { ProviderPreset } from '../types.js';
 
-const nativeApis: Record<string, Record<string, string>> = {
-  openrouter: { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
-  deepseek: { 'claude-code': 'anthropic-messages' },
-  'moonshot-kimi-code': { codex: 'openai-completions' },
-  'minimax-global': { codex: 'openai-responses' },
-  'minimax-cn': { codex: 'openai-responses' },
-  'moonshot-kimi-global': { 'claude-code': 'anthropic-messages' },
-  'moonshot-kimi-cn': { 'claude-code': 'anthropic-messages' },
-  'aliyun-bailian-token-plan-cn': { 'claude-code': 'anthropic-messages' },
-  'vercel-ai-gateway': { codex: 'openai-responses' },
-  'xiaomi-mimo-api-cn': { 'claude-code': 'anthropic-messages' },
-  'xiaomi-mimo-token-plan-cn': { 'claude-code': 'anthropic-messages' },
-  'zai-coding-plan-global': { 'claude-code': 'anthropic-messages' },
-  'zhipu-coding-plan-cn': { 'claude-code': 'anthropic-messages' },
-  baseten: { 'claude-code': 'anthropic-messages' },
-  groq: { codex: 'openai-responses' },
-  huggingface: { codex: 'openai-responses' },
-  fireworks: { 'claude-code': 'anthropic-messages', codex: 'openai-responses' },
-};
-const generated = appendPiProviderPresets([]);
-describe('Pi supplier connection import', () => {
-  it('projects every generated model into all three harnesses with its actual API and metadata', () => {
-    for (const preset of generated.filter(p => p.id !== 'nous')) {
-      const provider = buildUserProvider({ id: preset.id, name: preset.name, runtimes: Object.fromEntries(Object.entries(preset.runtimes).map(([agent, runtime]) => [agent, { ...runtime, catalogPresetId: preset.id }])) }, { presets: generated });
-      const source = sourceProviderForPreset(preset.id);
-      const rows = PROVIDER_MODEL_CATALOG.providers[source].filter(row => preset.runtimes.pi!.models.some(model => model.id === row.id));
+describe('server-published supplier presets', () => {
+  it('preserves all published connection templates and each Harness member list', () => {
+    const catalog = parseCatalog(JSON.stringify(BUNDLED_CATALOG));
+    expect(catalog.presets).toHaveLength(52);
+    for (const preset of catalog.presets!) {
+      const provider = buildUserProvider({ id: preset.id, name: preset.name, runtimes: preset.runtimes }, { presets: catalog.presets });
       for (const agent of ['claude-code', 'codex', 'pi'] as const) {
-        expect(provider.models[agent], `${preset.id}/${agent}`).toHaveLength(rows.length);
-        rows.forEach((row, index) => {
-          expect(provider.models[agent]![index], `${preset.id}/${agent}/${row.id}`).toMatchObject({
-            id: row.id, api: nativeApis[preset.id]?.[agent] ?? row.execution.pi.api,
-            ...(agent === 'pi' ? { piApi: row.execution.pi.api } : {}),
-            ...(row.contextWindow === undefined ? {} : { contextWindow: row.contextWindow }),
-            ...(row.maxOutput === undefined ? {} : { maxOutput: row.maxOutput }),
-            ...(row.supportsImageInput === undefined ? {} : { supportsImageInput: row.supportsImageInput }),
-          });
-        });
+        expect(provider.models[agent]?.map(model => model.id), `${preset.id}/${agent}`).toEqual(preset.runtimes[agent]?.models.map(model => model.id));
       }
     }
   });
-  it('keeps the model-specific routes of mixed-protocol suppliers', () => {
-    const preset = generated.find(p => p.id === 'fireworks')!;
-    const rows = PROVIDER_MODEL_CATALOG.providers.fireworks;
-    for (const row of rows) {
-      const model = preset.runtimes.pi!.models.find(m => m.id === row.id)!;
-      expect(model.route?.baseUrl ?? preset.runtimes.pi!.baseUrl).toBe(row.upstream);
-      expect(model.piApi).toBe(row.execution.pi.api);
-    }
-    expect(preset.runtimes['claude-code']!.models.every(m => rows.some(r => r.id === m.id && ['anthropic-messages', 'openai-completions', 'openai-responses'].includes(r.execution.pi.api)))).toBe(true);
-  });
-  it('does not turn the standard catalog into automatic recommendations', () => {
-    expect(generated.length).toBeGreaterThan(10);
-    for (const preset of generated) for (const runtime of Object.values(preset.runtimes)) {
-      expect(runtime!.models.every(m => m.defaultEnabled === false)).toBe(true);
-    }
-  });
-  it('preserves maintained connections and distinct regional subscriptions', () => {
-    const original = generated.find(p => p.id === 'groq')!;
-    expect(appendPiProviderPresets([original]).filter(p => p.id === 'groq')).toEqual([original]);
-    const individual = generated.find(p => p.id === 'qwen-token-plan-individual')!;
-    expect(individual.runtimes.pi!.baseUrl).toContain('ap-southeast-1');
-    expect(individual.runtimes.pi!.models).toHaveLength(PROVIDER_MODEL_CATALOG.providers['qwen-token-plan-individual'].length);
+  it('does not regenerate deleted templates from adapter metadata', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.presets = [];
+    installServerCatalog(parseCatalog(catalog));
+    expect(Object.keys(SERVER_CATALOG.providerModelCatalog!.providers)).toHaveLength(39);
+    expect(SERVER_CATALOG.presets).toEqual([]);
   });
 });
 
-it('selects a direct Messages endpoint for a Messages model and carries its context limit', () => {
-  const presets = appendPiProviderPresets([{ id: 'test-gateway', name: 'Test', runtimes: {
-    'claude-code': { baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-chat', models: [{ id: 'model', name: 'Model', contextWindow: 32000 }] },
+it('consumes a server-declared direct Messages endpoint with its context limit', () => {
+  const presets: ProviderPreset[] = [{ id: 'test-gateway', name: 'Test', runtimes: {
+    'claude-code': { baseUrl: 'https://gateway.example/anthropic', wireProtocol: 'anthropic-messages', models: [{ id: 'model', name: 'Model', api: 'anthropic-messages', contextWindow: 128000, route: { baseUrl: 'https://gateway.example/anthropic', wireProtocol: 'anthropic-messages' } }] },
     codex: { baseUrl: 'https://gateway.example/v1', wireProtocol: 'openai-responses', models: [{ id: 'model', name: 'Model', contextWindow: 64000 }] },
     pi: { baseUrl: 'https://gateway.example/anthropic', wireProtocol: 'anthropic-messages', models: [{ id: 'model', name: 'Model', contextWindow: 128000 }] },
-  } }]);
+  } }];
   const preset = presets.find(p => p.id === 'test-gateway')!;
   const provider = buildUserProvider({ id: 'test', name: 'Test', runtimes: preset.runtimes }, { modelRegistry: {
     schemaVersion: 5, updatedAt: '2026-09-13T00:00:00Z', models: [{

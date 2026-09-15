@@ -1,3 +1,4 @@
+import '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * claudeSessionRouteObservation.test.ts
  * ---------------------------------------------------------------------------

@@ -1016,7 +1016,8 @@ interface PiCatalogModel extends PiNativeModelSpec {
   baseUrl: string;
 }
 
-const piModelCatalog = providerCatalogForPi() as unknown as {
+// Read the accepted publication when assembling a runtime, including updates after module import.
+const piModelCatalog = () => providerCatalogForPi() as unknown as {
   generatedAt: string;
   providers: Record<string, PiCatalogModel[]>;
 };
@@ -1086,7 +1087,7 @@ function xaiOfficialCapabilityCorrection(
 }
 
 function officialPiModels(providerId: string): PiNativeModelSpec[] | null {
-  const models = piModelCatalog.providers[providerId];
+  const models = piModelCatalog().providers[providerId];
   if (!models) return null;
   return models.map((model) => ({
     id: model.id,
@@ -1109,7 +1110,7 @@ function officialPiRouteMatches(
   baseUrl: string,
   wireProtocol: ProviderWireProtocol | undefined,
 ): boolean {
-  const models = piModelCatalog.providers[providerId];
+  const models = piModelCatalog().providers[providerId];
   if (!models?.length) return false;
   const baseUrls = new Set(models.map((model) => model.baseUrl.replace(/\/+$/, '')));
   const apis = new Set(models.map((model) => model.api));

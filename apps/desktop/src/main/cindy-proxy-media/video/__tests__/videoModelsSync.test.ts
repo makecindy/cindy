@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * videoModelsSync.test.ts
  * ---------------------------------------------------------------------------
@@ -10,7 +11,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+
 
 import {
   GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE,

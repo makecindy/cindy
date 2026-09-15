@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 /**
  * presets 段（自定义供应商创建模板）的解析容错 + 合并兜底。
  *
@@ -9,8 +10,7 @@
 
 import { describe, it, expect } from 'vitest';
 
-import { BUNDLED_CATALOG, parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from '../catalog.js';
-import { mergeWithBundled } from '../source.js';
+import { parseCatalog, presetDisplayName, sanitizePresets, sortPresetsForRegion } from '../catalog.js';
 import type { AgentKind, Catalog } from '../types.js';
 
 /** 最小合法目录（单 provider）。 */
@@ -502,162 +502,6 @@ describe('parseCatalog presets 容错', () => {
   it('presets 全坏 / 缺省时不产出空数组字段', () => {
     expect(parseCatalog(minimalCatalog()).presets).toBeUndefined();
     expect(parseCatalog(minimalCatalog({ presets: [{ broken: true }] as never })).presets).toBeUndefined();
-  });
-});
-
-describe('mergeWithBundled presets 兜底', () => {
-  it('远端 xAI 目录缺少 Pi 时不在 bundled 合并层复活静态成员', () => {
-    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!;
-    const remoteXai = {
-      ...bundledXai,
-      agents: ['claude-code', 'codex'] as AgentKind[],
-      routing: {
-        'claude-code': bundledXai.routing['claude-code']!,
-        codex: bundledXai.routing.codex!,
-      },
-      models: {
-        'claude-code': bundledXai.models['claude-code']!,
-        codex: bundledXai.models.codex!,
-      },
-    };
-    const merged = mergeWithBundled(minimalCatalog({ providers: [remoteXai] }));
-    const xai = merged.providers.find((provider) => provider.id === 'xai');
-    expect(xai?.agents).not.toContain('pi');
-    expect(xai?.routing.pi).toBeUndefined();
-    expect(xai?.models.pi).toBeUndefined();
-  });
-
-  it('远端 presets 与 bundled 按 id 合并：远端同 id 优先，bundled 缺项不丢', () => {
-    const merged = mergeWithBundled(minimalCatalog({ presets: [VALID_PRESET] }));
-    expect(merged.presets?.find((preset) => preset.id === 'openrouter')).toEqual(VALID_PRESET);
-    expect(merged.presets?.map((preset) => preset.id)).toEqual(
-      BUNDLED_CATALOG.presets?.map((preset) => preset.id),
-    );
-    expect(merged.presets?.map((preset) => preset.id)).toEqual(
-      expect.arrayContaining(['zhipu-coding-plan-cn', 'zai-coding-plan-global']),
-    );
-  });
-
-  it('远端没带 presets → 回落 bundled 的', () => {
-    const merged = mergeWithBundled(minimalCatalog());
-    expect(merged.presets).toEqual(BUNDLED_CATALOG.presets);
-    expect(merged.presets?.length ?? 0).toBeGreaterThan(0);
-  });
-
-  it('远端独有 preset 按远端原序追加在 bundled 之后', () => {
-    const remoteOnly = { ...VALID_PRESET, id: 'remote-only' };
-    const merged = mergeWithBundled(minimalCatalog({ presets: [remoteOnly] }));
-    expect(merged.presets?.at(-1)).toEqual(remoteOnly);
-  });
-
-  it('同 id 远端保留 runtime/model 时回填 bundled contextWindow，不复活被移除的 runtime/model', () => {
-    const remoteMiniMax = {
-      id: 'minimax-global',
-      name: 'Remote MiniMax',
-      runtimes: {
-        'claude-code': {
-          baseUrl: 'https://remote.example/anthropic',
-          models: [{ id: 'MiniMax-M3', name: 'Remote M3' }],
-        },
-      },
-    };
-    const merged = mergeWithBundled(minimalCatalog({ presets: [remoteMiniMax] }));
-    const preset = merged.presets?.find((candidate) => candidate.id === 'minimax-global');
-    expect(preset).toEqual({
-      ...remoteMiniMax,
-      runtimes: {
-        'claude-code': {
-          ...remoteMiniMax.runtimes['claude-code'],
-          models: [{ id: 'MiniMax-M3', name: 'Remote M3', contextWindow: 1_000_000 }],
-        },
-      },
-    });
-    expect(preset?.runtimes.codex).toBeUndefined();
-  });
-
-  it('远端显式 contextWindow 优先于 bundled', () => {
-    const remoteMiniMax = {
-      id: 'minimax-global',
-      name: 'Remote MiniMax',
-      runtimes: {
-        'claude-code': {
-          baseUrl: 'https://remote.example/anthropic',
-          models: [{ id: 'MiniMax-M3', name: 'Remote M3', contextWindow: 512_000 }],
-        },
-      },
-    };
-    const merged = mergeWithBundled(minimalCatalog({ presets: [remoteMiniMax] }));
-    expect(
-      merged.presets
-        ?.find((candidate) => candidate.id === 'minimax-global')
-        ?.runtimes['claude-code']
-        ?.models[0]
-        ?.contextWindow,
-    ).toBe(512_000);
-  });
-
-  it.each(['deepseek', 'moonshot-kimi-cn', 'moonshot-kimi-global'])(
-    '旧远端 %s 缺少 Pi runtime 时从 bundled 回填已核实的 Pi 元数据',
-    (id) => {
-      const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === id);
-      expect(bundled?.runtimes.pi).toBeDefined();
-      const { pi: _missing, ...remoteRuntimes } = bundled!.runtimes;
-      const remote = { ...bundled!, name: `Remote ${id}`, runtimes: remoteRuntimes };
-      const merged = mergeWithBundled(minimalCatalog({ version: '2', presets: [remote] }));
-      const resolved = merged.presets?.find((preset) => preset.id === id);
-      expect(resolved?.name).toBe(`Remote ${id}`);
-      expect(resolved?.runtimes.pi).toEqual(bundled?.runtimes.pi);
-    },
-  );
-
-  it('远端已有 Pi runtime 时完整优先，不与 bundled 模型级混合', () => {
-    const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
-    const remotePi = {
-      baseUrl: 'https://remote.example/v1',
-      models: [{ id: 'remote-model', name: 'Remote Model' }],
-    };
-    const merged = mergeWithBundled(minimalCatalog({
-      presets: [{ ...bundled!, runtimes: { ...bundled!.runtimes, pi: remotePi } }],
-    }));
-    expect(merged.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi).toEqual(remotePi);
-  });
-
-  it('当前或未知目录版本缺少 Pi runtime 时保持缺失，不静默复活 bundled runtime', () => {
-    const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'deepseek');
-    const { pi: _missing, ...remoteRuntimes } = bundled!.runtimes;
-    for (const version of ['3', '4', 'test']) {
-      const merged = mergeWithBundled(minimalCatalog({
-        version,
-        presets: [{ ...bundled!, runtimes: remoteRuntimes }],
-      }));
-      expect(merged.presets?.find((preset) => preset.id === 'deepseek')?.runtimes.pi)
-        .toBeUndefined();
-    }
-  });
-
-  it('旧远端同 id preset 缺少 nameZhTW 时从 bundled 回填，显式远端值仍优先', () => {
-    const bundled = BUNDLED_CATALOG.presets?.find((preset) => preset.id === 'zhipu-glm-cn');
-    expect(bundled?.nameZhTW).toBe('智譜 GLM（中國大陸）');
-
-    const remoteBase = {
-      ...bundled!,
-      name: 'Remote GLM',
-      nameEn: 'Remote GLM',
-    };
-    const { nameZhTW: _missing, ...remoteWithoutZhTW } = remoteBase;
-    const backfilled = mergeWithBundled(minimalCatalog({ presets: [remoteWithoutZhTW] }));
-    expect(backfilled.presets?.find((preset) => preset.id === 'zhipu-glm-cn')).toMatchObject({
-      name: 'Remote GLM',
-      nameEn: 'Remote GLM',
-      nameZhTW: '智譜 GLM（中國大陸）',
-    });
-
-    const explicit = mergeWithBundled(
-      minimalCatalog({ presets: [{ ...remoteWithoutZhTW, nameZhTW: '遠端繁中名稱' }] }),
-    );
-    expect(explicit.presets?.find((preset) => preset.id === 'zhipu-glm-cn')?.nameZhTW).toBe(
-      '遠端繁中名稱',
-    );
   });
 });
 

@@ -238,6 +238,10 @@ jobs:
         # npm_execpath，避免 Windows 子进程退回 PATH 上的 pnpm.cmd。
         run: pnpm run test:workspaces --tier unit
 
+      - name: Run Windows native integration tests
+        if: matrix.shard == 1
+        run: pnpm run test:workspaces --tier integration --workspace desktop
+
       # localDb suites are outside the unit tier; exercise these DB boundaries on both OSes.
       - name: Run companion database regressions
         if: matrix.shard == 1

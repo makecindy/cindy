@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG } from '../catalog.js';
+
 import { providerSetupLink } from '../providerSetupLinks.js';
 import { providerPresetOAuth } from '../providerPresetOAuth.js';
 

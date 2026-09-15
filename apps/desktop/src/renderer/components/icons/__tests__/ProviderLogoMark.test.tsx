@@ -1,9 +1,10 @@
+import { BUNDLED_CATALOG } from '../../../../../../../packages/model-providers/test/catalog-fixture.js';
 // @vitest-environment jsdom
 
 import { render } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+
 import { hasProviderLogo, ProviderLogoMark } from '../ProviderLogoMark';
 
 /** 供应商目录里的每张预设卡都必须有真实 Logo，不能静默退回首字母。 */

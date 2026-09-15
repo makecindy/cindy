@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * active-catalog 的 discovered augment 单测 —— 验证同一份 Codex 快照同时投影原生 Codex 与
  * Claude bridge:新 id 被加入、名称/排序同源、legacy 静态 id first-wins、空/清空安全。
@@ -9,7 +10,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  BUNDLED_CATALOG,
   buildUserProvider,
   type AgentKind,
   type Catalog,
@@ -254,12 +254,11 @@ describe('active-catalog discovered augment', () => {
     expect(openaiIds('pi')).not.toContain('chatgpt/gpt-5.7');
   });
 
-  it('missing Pi declarations use fallback but explicit empty lists remove public Pi membership', () => {
-    const expected = openaiIds('pi');
+  it('missing and explicitly empty Pi declarations do not resurrect public members', () => {
     const omitted = bundledWithoutRegistry();
     delete omitted.providers.find((provider) => provider.id === 'openai')!.models.pi;
     setActiveCatalog(omitted, { authorityCatalog: omitted });
-    expect(openaiIds('pi')).toEqual(expected);
+    expect(openaiIds('pi')).toEqual([]);
 
     const empty = bundledWithoutRegistry();
     empty.providers.find((provider) => provider.id === 'openai')!.models.pi = [];

@@ -210,7 +210,7 @@ export function gatewayPricingCatalog(
   if (declared.size > 1) return {};
   const declaredCurrency = declared.values().next().value;
   const fallbackCurrency = declaredCurrency ?? ledgerCurrency;
-  const xd: Record<string, ModelPriceQuote> = {};
+  const xd: Record<string, ModelPriceQuote> = Object.create(null);
   for (const model of models) {
     const quote = gatewayModelPriceQuote(model, fallbackCurrency, declaredCurrency === undefined);
     if (quote) xd[quote.modelId] = quote;
@@ -331,6 +331,23 @@ function referencePriceQuoteForVariant(
   });
 }
 
+/** IDs are data: never follow inherited keys or invoke the __proto__ setter. */
+export function setModelPriceQuote(
+  catalog: ModelPricingCatalog,
+  providerId: string,
+  key: string,
+  quote: ModelPriceQuote,
+): void {
+  if (!Object.hasOwn(catalog, providerId)) {
+    Object.defineProperty(catalog, providerId, {
+      value: {}, enumerable: true, configurable: true, writable: true,
+    });
+  }
+  Object.defineProperty(catalog[providerId], key, {
+    value: quote, enumerable: true, configurable: true, writable: true,
+  });
+}
+
 export function registryPricingCatalog(
   registry: ModelRegistry | null | undefined,
 ): ModelPricingCatalog {
@@ -343,7 +360,7 @@ export function registryPricingCatalog(
       if (route.providerId === 'xd') continue;
       const quote = providerReferencePriceQuote(route.providerId, route.modelId, registry);
       if (!quote) continue;
-      (catalog[route.providerId] ??= {})[route.modelId] = quote;
+      setModelPriceQuote(catalog, route.providerId, route.modelId, quote);
     }
   }
   return catalog;

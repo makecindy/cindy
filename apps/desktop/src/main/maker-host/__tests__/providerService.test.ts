@@ -1,6 +1,7 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { describe, it, expect, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider, connectedProvidersForAgent, providerMediaField } from '@cindy/model-providers';
+import { buildUserProvider, connectedProvidersForAgent, providerMediaField } from '@cindy/model-providers';
 
 import { checkModelRoute } from '../model-route-guard.js';
 import { createProviderService } from '../provider-service.js';

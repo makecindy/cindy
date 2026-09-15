@@ -1,6 +1,7 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
 import { bindProviderPresetRuntime, providerEndpointBindings } from '../providerEndpointTemplate.js';
-import { BUNDLED_CATALOG } from '../builtin.js';
+
 import { buildUserProvider } from '../user-provider.js';
 
 describe('cloud account endpoint setup', () => {

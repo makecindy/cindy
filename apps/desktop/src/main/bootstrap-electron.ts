@@ -5866,10 +5866,8 @@ const registerIpcHandlers = () => {
   disposePiRuntimeRecovery = () => piRuntimeRecovery.dispose();
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
-    // 模型供应商目录(providers.json)按「OSS 真源 / bundled 兜底」加载一次存内存:必须在第一次
-    // getMakerCore()(下面构造 Maker、同步从 getActiveCatalog() 派生 availableModels)之前完成,
-    // 否则首个进程会用内置兜底目录派生模型清单。ensureActiveCatalogLoaded 幂等且永不抛
-    // (失败回落 bundled),拉取走 splash 期、被进度条盖住。
+    // 在首次构造 Maker 前安装服务端发布，失败使用同源 LKG；首次离线且无缓存时保持空目录。
+    // ensureActiveCatalogLoaded 幂等且不抛出，避免模型清单在异步目录到达前从空状态派生。
     await ensureActiveCatalogLoaded();
     // Anthropic-compat 本地代理在 splash 期恒启动 —— 退役兼容模式开关后 proxy 恒在链路里
     // (per-model / per-session 供应商路由都活在 proxy 的 routingTransform 里, 绕过即失效)。

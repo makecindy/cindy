@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, it, expect, vi } from 'vitest';
 
 const { mockGetAppCapabilities } = vi.hoisted(() => ({
@@ -9,7 +10,6 @@ vi.mock('../../appCapabilities.js', () => ({
 }));
 
 import {
-  BUNDLED_CATALOG,
   buildRegistry,
   buildUserProvider,
   type AgentKind,

@@ -5,13 +5,11 @@ import { subscriptionAccountKind, subscriptionAccountState, isXaiSubscriptionPro
  * createDesktopProviderService —— 桌面端目录加载落地 + provider-service 接线。
  *
  * 两块职责：
- *   1. 目录加载器 `ensureActiveCatalogLoaded`：用 electron net.request 拉公共 Catalog、node fs 读 dev
- *      本地文件，把结果写进 active-catalog 单例（getActiveCatalog 同步读）。
- *        - release / dev：都从区域化 Model Access 公共接口加载，失败时回退旧 OSS 目录。
- *        - dev 可由 XDT_MODELS_PATH 指向本地文件即时生效（本地文件优先于远端）。
- *        - env 兜底：XDT_MODELS_URL（完整覆盖 URL）/ XDT_DISABLE_MODELS_FETCH（强制不联网）。
- *      **每进程拉一次、存内存、无 TTL**：启动总是先拉远端；失败时才读按端点隔离的
- *      last-known-good 快照，最后回退 bundled。
+ *   1. 目录加载器 `ensureActiveCatalogLoaded`：用 electron net.request 拉公共 Catalog，
+ *      写进 active-catalog 单例（getActiveCatalog 同步读）。release / dev 都从区域化
+ *      Model Access 接口加载；XDT_MODELS_URL 可覆盖 URL，XDT_DISABLE_MODELS_FETCH 关闭请求。
+ *      启动先拉服务端；失败时才读按端点隔离的 last-known-good 快照，无快照则保持空目录。
+ *      不再读取随包目录、旧 OSS 目录或 XDT_MODELS_PATH。
  *      启动期（splash）由 bootstrap-electron 在构造 Maker 前 await 一次（见 registerMakerIpcsAfterSplash）。
  *   2. `getDesktopProviderService`：把 active-catalog + 连接状态读取器注入 provider-service。
  *      连接状态直接复用现有凭证存储——XD = 托管 gateway key 是否存在、
@@ -25,7 +23,7 @@ import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
 import {
-  BUNDLED_CATALOG,
+  EMPTY_CATALOG,
   compareModelRegistryRevisions,
   decideModelRegistrySnapshot,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
@@ -370,12 +368,9 @@ const io: CatalogIO = {
 function buildSource(): CatalogSourceConfig {
   const explicitUrl = process.env.XDT_MODELS_URL;
   const baseUrl = getClientEndpoint('modelAccessApiBaseUrl');
-  const usesBuildRealm = baseUrl === getBuildClientEndpoint('modelAccessApiBaseUrl');
   return {
     url: explicitUrl,
-    localPath: process.env.XDT_MODELS_PATH,
     baseUrl,
-    fallbackBaseUrl: !usesBuildRealm ? undefined : getBaseUrl(),
     remoteBudgetMs: DEFAULT_REMOTE_CATALOG_BUDGET_MS,
     disableFetch: process.env.XDT_DISABLE_MODELS_FETCH === '1',
   };
@@ -592,7 +587,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   const generation = ++endpointReloadGeneration;
   activeCatalogSourceKey = null;
   // 必须在网络 await 前失效：登录提交后 renderer/agent 可能立即读取目录。
-  setActiveCatalog(BUNDLED_CATALOG, { capabilityEvidence: 'fallback' });
+  setActiveCatalog(EMPTY_CATALOG, { capabilityEvidence: 'fallback' });
   broadcastReferenceModelPricing();
 
   let authorityCatalog: CatalogLoadResult['authorityCatalog'] = null;
@@ -656,7 +651,7 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   const generation = endpointReloadGeneration;
   const flight = loadCatalogWithSource(sourceConfig, io)
     .then(({ catalog, authorityCatalog, source, capabilityEvidence, unverifiedXdMediaKinds }) => {
-      if (source === 'bundled') {
+      if (source === 'empty') {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
       }
       if (

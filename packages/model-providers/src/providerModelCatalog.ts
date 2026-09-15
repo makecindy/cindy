@@ -1,8 +1,7 @@
+import { trimTrailingSlashes } from '@cindy/model-compat/url';
 import { sourceProviderForPreset } from './providerPresetIdentity.js';
 import { providerEndpointBindings } from './providerEndpointTemplate.js';
-import { declaredModelInterface } from './providerInterfaceRoutes.js';
-import interfaceModels from "../catalog/provider-interface-models.json" with { type: "json" };
-import generated from "../catalog/provider-models.json" with { type: "json" };
+import { SERVER_CATALOG } from './builtin.js';
 import type { ModelMetadata } from "./modelMetadataLayers.js";
 import type { ModelCost, PiModelApi, ProviderWireProtocol } from "./types.js";
 
@@ -29,44 +28,37 @@ export interface ProviderModelRecord {
   };
 }
 
-const sourceCatalog = generated as unknown as {
-  schemaVersion: number;
-  generatedAt: string;
-  providers: Record<string, ProviderModelRecord[]>;
+const empty: NonNullable<import('./types.js').Catalog['providerModelCatalog']> = { schemaVersion: 1, generatedAt: '', providers: {} };
+/** Public metadata installed by the host, never an independently bundled snapshot. */
+export const PROVIDER_MODEL_CATALOG = {
+  get schemaVersion() { return (SERVER_CATALOG.providerModelCatalog ?? empty).schemaVersion; },
+  get generatedAt() { return (SERVER_CATALOG.providerModelCatalog ?? empty).generatedAt; },
+  get providers() { return (SERVER_CATALOG.providerModelCatalog ?? empty).providers; },
 };
-
-export const PROVIDER_MODEL_CATALOG = { ...sourceCatalog, providers: { ...sourceCatalog.providers } };
-
-// Official per-model contracts override the pinned Pi serializer choice, without
-// borrowing another supplier's metadata or adding unlisted models to an account.
-for (const [provider, declaration] of Object.entries(interfaceModels)) {
-  const interfaces = declaration.models as Record<string, { api: string; endpoint: string }>;
-  const rows = PROVIDER_MODEL_CATALOG.providers[provider];
-  if (!rows) continue;
-  PROVIDER_MODEL_CATALOG.providers[provider] = rows.map(row => {
-    const declared = interfaces[row.id];
-    if (!declared || new URL(declared.endpoint).origin !== new URL(row.upstream).origin) return row;
-    return { ...row, upstream: declaredModelInterface(provider, row.id)!.baseUrl, execution: { ...row.execution, pi: { ...row.execution.pi, api: declared.api } } };
-  });
-}
-
+let indexed: typeof empty | undefined;
 const byEndpointAndId = new Map<string, ProviderModelRecord[]>();
 const apisByEndpoint = new Map<string, Set<string>>();
-const normalize = (url: string) => url.trim().replace(/\/+$/, "");
-for (const rows of Object.values(PROVIDER_MODEL_CATALOG.providers)) {
-  for (const row of rows) {
-    const endpoint = normalize(row.upstream);
-    const apis = apisByEndpoint.get(endpoint) ?? new Set<string>();
-    apis.add(row.execution.pi.api);
-    apisByEndpoint.set(endpoint, apis);
-    const key = `${endpoint}\n${row.id}`;
-    const existing = byEndpointAndId.get(key) ?? [];
-    // Upstream may publish the exact same record in several subscription catalogs.
-    // Duplicate evidence is not a conflict; differing records must stay ambiguous.
-    if (!existing.some(candidate => JSON.stringify(candidate) === JSON.stringify(row))) {
-      byEndpointAndId.set(key, [...existing, row]);
+const normalize = (url: string) => trimTrailingSlashes(url.trim());
+function ensureIndexes(): void {
+  const source = SERVER_CATALOG.providerModelCatalog ?? empty;
+  if (indexed === source) return;
+  byEndpointAndId.clear(); apisByEndpoint.clear();
+  for (const rows of Object.values(PROVIDER_MODEL_CATALOG.providers)) {
+    for (const row of rows) {
+      const endpoint = normalize(row.upstream);
+      const apis = apisByEndpoint.get(endpoint) ?? new Set<string>();
+      apis.add(row.execution.pi.api);
+      apisByEndpoint.set(endpoint, apis);
+      const key = `${endpoint}\n${row.id}`;
+      const existing = byEndpointAndId.get(key) ?? [];
+      // Upstream may publish the exact same record in several subscription catalogs.
+      // Duplicate evidence is not a conflict; differing records must stay ambiguous.
+      if (!existing.some(candidate => JSON.stringify(candidate) === JSON.stringify(row))) {
+        byEndpointAndId.set(key, [...existing, row]);
+      }
     }
   }
+  indexed = source;
 }
 
 /** Exact route identity, shared by every harness. No fuzzy names or cross-proxy borrowing. */
@@ -76,6 +68,7 @@ export function providerModelRecord(
   protocol?: ProviderWireProtocol | PiModelApi,
   allowMixedProtocol = false,
 ): ProviderModelRecord | undefined {
+  ensureIndexes();
   const api = protocol === "openai-chat" ? "openai-completions" : protocol;
   // A mixed catalog declares per-model APIs. A single-protocol endpoint does not
   // override a caller's explicitly selected transport.
@@ -119,7 +112,7 @@ export function providerModelMetadata(row: ProviderModelRecord): ModelMetadata {
 }
 
 /** Adapter only: reconstruct Pi's wire names from the same standard catalog used by UI/Codex. */
-export function providerCatalogForPi() {
+function buildPiCatalog() {
   return {
     generatedAt: PROVIDER_MODEL_CATALOG.generatedAt,
     providers: Object.fromEntries(
@@ -144,7 +137,19 @@ export function providerCatalogForPi() {
   };
 }
 
-/** Offline membership for an exact, supported endpoint; never infer a proxy's inventory. */
+let piSource: typeof empty | undefined;
+let piProjection: ReturnType<typeof buildPiCatalog> | undefined;
+/** Rebuild only when the host installs a different publication. */
+export function providerCatalogForPi(): ReturnType<typeof buildPiCatalog> {
+  const source = SERVER_CATALOG.providerModelCatalog ?? empty;
+  if (source !== piSource || !piProjection) {
+    piProjection = buildPiCatalog();
+    piSource = source;
+  }
+  return piProjection;
+}
+
+/** Server-published membership for an exact endpoint; never infer a proxy's inventory. */
 export function providerModelsForRoute(
   upstream: string,
   protocol?: ProviderWireProtocol | PiModelApi,

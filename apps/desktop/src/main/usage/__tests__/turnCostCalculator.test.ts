@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+
 import { subscriptionDirectPriceQuote } from '../../../shared/modelPriceQuote';
 
 import type { ModelUsageDeltaEntry } from '../modelUsageDelta';

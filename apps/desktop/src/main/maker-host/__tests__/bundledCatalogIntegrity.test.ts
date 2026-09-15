@@ -1,5 +1,6 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
+import { type Catalog } from '@cindy/model-providers';
 import { getActiveCatalog, setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
 
 import { filterLegacyGptContextProfiles } from '../legacy-context-profiles.js';

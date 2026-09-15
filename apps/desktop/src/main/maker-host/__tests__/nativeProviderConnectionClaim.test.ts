@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * 连接态读取路径上的 native provider 绑定自愈(anthropic / xai)。
  *
@@ -11,7 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
+import { type Catalog } from '@cindy/model-providers';
 
 const h = vi.hoisted(() => ({
   userDataDir: '',

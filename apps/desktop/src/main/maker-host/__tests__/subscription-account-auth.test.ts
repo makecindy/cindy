@@ -1,8 +1,9 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { BUNDLED_CATALOG, buildUserProvider } from '@cindy/model-providers';
+import { buildUserProvider } from '@cindy/model-providers';
 import { getActiveCatalog, setActiveCatalog, clearDiscoveredProviderModels } from '../active-catalog.js';
 import { refreshSubscriptionAccountModels } from '../subscription-account-models.js';
 import { waitForXaiDiscoveryIdleForTest } from '../model-discovery/xai.js';

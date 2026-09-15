@@ -1,7 +1,8 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /** XD 媒体成员只由运行时 Gateway `/models` 投影，不能再回落打包目录。 */
 
 import { describe, expect, it } from 'vitest';
-import { BUNDLED_CATALOG } from '@cindy/model-providers';
+
 
 describe('媒体模型目录来源守卫', () => {
   it('bundled XD 只保留 provider 身份，不携带图片或视频成员', () => {

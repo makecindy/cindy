@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../packages/model-providers/test/catalog-fixture.js';
 /**
  * provider-diagnostics（测试连接探测）+ shared/providerErrors（结构化分类器）单测。
  *
@@ -11,7 +12,7 @@
 
 import { describe, it, expect, afterEach, vi } from 'vitest';
 
-import { BUNDLED_CATALOG, buildUserProvider, PROVIDER_MODEL_CATALOG, providerPresetOAuth } from '@cindy/model-providers';
+import { buildUserProvider, PROVIDER_MODEL_CATALOG, providerPresetOAuth } from '@cindy/model-providers';
 
 import { classifyProviderError } from '../../../shared/providerErrors.js';
 import {

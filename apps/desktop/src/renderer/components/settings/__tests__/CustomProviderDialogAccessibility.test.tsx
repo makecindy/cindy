@@ -1,3 +1,4 @@
+import { BUNDLED_CATALOG } from '../../../../../../../packages/model-providers/test/catalog-fixture.js';
 // @vitest-environment jsdom
 import { useRef, useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -1517,7 +1518,7 @@ it('preserves preset media metadata through probing and saving', async () => {
 });
 
 it('keeps a template connection editable without offering protocol or path switches', async () => {
-  const { BUNDLED_CATALOG } = await import('@cindy/model-providers');
+
   const preset = (BUNDLED_CATALOG.presets ?? []).find(p => p.id === 'google-gemini-api')!;
   vi.mocked(window.electronAPI.maker.listProviderPresets).mockResolvedValue({ presets: [preset] });
   customProviderMocks.readCustomProviderKey.mockResolvedValue(null);

@@ -5190,6 +5190,8 @@ interface ElectronAPI {
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
     listProviderPresets: () => Promise<{
       presets: import('@cindy/model-providers').ProviderPreset[];
+      /** Validated public server publication, excluding user connections and credentials. */
+      catalog?: import('@cindy/model-providers').Catalog;
     }>;
     /** 供应商「测试连接」—— 与真实会话同路由口径的最小探测请求（结构化结果，code 走 providerError.* i18n）。 */
     testProviderConnection: (

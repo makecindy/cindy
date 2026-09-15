@@ -1,7 +1,8 @@
+import { BUNDLED_CATALOG } from '../../test/catalog-fixture.js';
 import { describe, expect, it } from 'vitest';
 import { buildUserProvider } from '../user-provider.js';
 import { alignModelApiRoute, providerInterfaceModelRoute } from '../providerInterfaceRoutes.js';
-import { BUNDLED_CATALOG } from '../catalog.js';
+
 
 describe('documented supplier interfaces', () => {
   it('imports OpenCode Go DeepSeek 4.1 Flash capabilities for every engine', () => {

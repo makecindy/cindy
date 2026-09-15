@@ -1,4 +1,4 @@
-import { BUNDLED_CATALOG, resolveModelNativeApi } from '@cindy/model-providers';
+import { SERVER_CATALOG, resolveModelNativeApi } from '@cindy/model-providers';
 import type {
   Catalog,
   PiModelApi,
@@ -19,10 +19,10 @@ interface PiCatalogRow extends BundledPiGatewayModelProfile {
   provider: string;
 }
 
-const catalog = providerCatalogForPi() as unknown as {
+const catalog = () => providerCatalogForPi() as unknown as {
   providers: Record<string, PiCatalogRow[]>;
 };
-const rows = Object.values(catalog.providers).flat();
+const catalogRows = () => Object.values(catalog().providers).flat();
 
 function normalizeModelId(modelId: string): string {
   return modelId.replace(/\[1m\]$/, '');
@@ -157,39 +157,36 @@ const gatewayCatalogIdentityOverrides = new Map<string, { provider: string; mode
   ]),
 ]);
 
-/** Preferred exact provider/model identity in Pi's complete bundled catalog. */
+/** Preferred exact provider/model identity in the server-published Pi catalog. */
 export function resolveBundledPiGatewayCatalogIdentity(
   modelId: string,
 ): { provider: string; modelId: string } | undefined {
   const normalized = normalizeModelId(modelId);
   if (
-    resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, 'xd', normalized) ===
+    resolveModelNativeApi(SERVER_CATALOG.modelRegistry, 'xd', normalized) ===
     'google-generative-ai'
   ) {
     return { provider: 'google', modelId: normalized.replace(/^google\//, '') };
   }
   const explicit = gatewayCatalogIdentityOverrides.get(normalized);
   if (explicit) return explicit;
-  const direct = rows.find((row) => `${row.provider}/${row.id}` === normalized);
+  const direct = catalogRows().find((row) => `${row.provider}/${row.id}` === normalized);
   return direct ? { provider: direct.provider, modelId: direct.id } : undefined;
 }
 
 /**
- * Resolve the current Gateway model through Cindy's version-matched Pi table.
- *
- * Cindy Server's downloaded Catalog is checked before this function. This local table is the
- * second authority: canonical APIs and route rules in model-registry.json. Gateway metadata
- * is a last-resort hint after both higher-priority sources are absent. Unknown identities fail
- * closed instead of guessing a provider or protocol.
+ * Resolve the current Gateway model through the accepted publication's Registry and Pi table.
+ * Canonical Registry APIs take priority over adapter parameters; Gateway metadata is a final
+ * execution hint. Unknown identities do not invent a provider or protocol.
  */
 export function resolveBundledPiGatewayModelProfile(
   modelId: string,
 ): BundledPiGatewayModelProfile | undefined {
   const identity = resolveBundledPiGatewayCatalogIdentity(modelId);
   const matched = identity
-    ? rows.find((row) => row.provider === identity.provider && row.id === identity.modelId)
+    ? catalogRows().find((row) => row.provider === identity.provider && row.id === identity.modelId)
     : undefined;
-  const canonical = resolveModelNativeApi(BUNDLED_CATALOG.modelRegistry, 'xd', modelId);
+  const canonical = resolveModelNativeApi(SERVER_CATALOG.modelRegistry, 'xd', modelId);
   const api = canonical !== undefined ? canonical : matched?.api;
   if (
     api !== 'anthropic-messages' &&
