@@ -58,6 +58,7 @@ import {
   parseFsWatchTopic,
   type PushOwnerStamp,
 } from '@cindy/device-link';
+import { REVEALABLE_IGNORE_DIR_NAMES } from '../../shared/ignoreNames';
 import { WorkdirWatchManager } from '@cindy/remote-file-service';
 
 import { createLogger } from '../logger.js';
@@ -156,6 +157,13 @@ interface RemoteOpArgs {
   acceptGzip?: boolean;
   hideMetaFiles?: boolean;
   docMode?: boolean;
+  /**
+   * 「显示被忽略的目录」开关(控制端下发的视图偏好)。listDir 生效;
+   * device-link 的 watch 不走本 op(控制端订阅 topic 触发),那边仍是
+   * hideMetaFiles:true 的默认过滤 —— 打开开关后这些目录在被控端可见，
+   * 但内部改动不会有实时事件(手动刷新可见)。
+   */
+  showIgnoredDirs?: boolean;
   cap?: number;
   query?: string;
   caseSensitive?: boolean;
@@ -363,9 +371,12 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
   }
   // 能力探测:与 workdir 无关、零 fs 访问,放在 guard 之前。老被控端没有
   // 这个分支,会走到 default 返回 `unknown op: caps`——控制端把它当确定性
-  // 的"不支持压缩"信号(见 fileBrowserTransport 的 caps 缓存)。
+  // 的"能力全无"信号(见 fileBrowserTransport 的 caps 缓存)。
+  //
+  // showIgnoredDirs:listDir 支持「显示被忽略的目录」开关(控制端据此决定
+  // 标题行的开关是可点还是禁用+升级提示;老端会静默忽略该字段)。
   if (args.op === 'caps') {
-    return { ok: true as const, gzip: true as const };
+    return { ok: true as const, gzip: true as const, showIgnoredDirs: true as const };
   }
   const guardResult = await checkRemoteWorkingDir(args.workdir);
   if (!guardResult.allowed && guardResult.reason === 'invalid') {
@@ -427,6 +438,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
           relPath: args.relPath ?? '',
           hideMetaFiles: args.hideMetaFiles ?? true,
           docMode: args.docMode,
+          showIgnoredDirs: args.showIgnoredDirs === true,
         });
         return entries;
       }
@@ -495,6 +507,7 @@ async function handleRemoteOp(args: RemoteOpArgs): Promise<unknown> {
       const matcher = await loadIgnoreMatcher(workdir, {
         hideMetaFiles: args.hideMetaFiles ?? true,
         honorVcsIgnore: false,
+        showIgnoredDirs: args.showIgnoredDirs === true,
       });
       return listDir(workdir, args.relPath ?? '', matcher, { docMode: args.docMode });
     }
@@ -704,6 +717,27 @@ async function startFsWatchIfDesired(workdir: string): Promise<void> {
   }
 }
 
+/** relPath 是否落在「隐藏态不可见、只有开着『显示被忽略的目录』才看得见」的
+ *  目录**内部**。用于 device-link 转发前按自己的可见性过滤 daemon 的并集事件流。
+ *
+ *  只判**祖先段**：忽略名单是**目录**规则，同名普通文件（`dist` / `build` /
+ *  `.cache` 这种没有扩展名的构建脚本、配置文件）在 listDir 里是照常显示的 ——
+ *  把叶子段也判进去会让这些文件的 add/change/unlink 事件被丢掉，行陈旧到手动
+ *  刷新（评审 P1）。
+ *
+ *  代价：被忽略目录**自身**的事件（`relPath='node_modules'`）也会转发给隐藏态
+ *  客户端。事件流不携带类型、同名普通文件必须放行，两者无法从路径区分；转发后
+ *  在隐藏态树里是 no-op（该目录不在 entries），只是每次目录级变更多一条无效 IPC。
+ *  这层本来就是粗粒度预过滤，精确判据在 renderer（queueEventRefresh）。
+ *
+ *  段比较折叠大小写：matcher 用的 `ignore` 包默认 `ignorecase=true`（大小写不敏感
+ *  卷上 `DIST` 与 `dist` 是同一个目录），不折叠会把变体目录内部的事件继续推过
+ *  relay（评审 P2）。 */
+function isInsideRevealableIgnoreDir(relPath: string): boolean {
+  const segments = relPath.split('/');
+  return segments.slice(0, -1).some((segment) => REVEALABLE_IGNORE_DIR_NAMES.has(segment.toLowerCase()));
+}
+
 function scheduleFsWatchReconcile(workdir: string): void {
   const timer = setTimeout(() => {
     // timer 排队后可能再次 release；reconcile 只消费当前意图，绝不重新
@@ -782,9 +816,18 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   const hostId = exec.hostId;
   const offEvent = mgr.onHostEvent(hostId, (evt) => {
     if (evt.event !== 'fileTree') return;
-    const data = evt.data as { workdir: string };
+    const data = evt.data as { workdir: string; relPath?: string };
     if (data.workdir !== workdir) return;
     if (!fsWatchDesired.has(workdir)) return;
+    // device-link 订阅的是**隐藏态**视图,而 daemon 侧的 watcher 用的是与 desktop
+    // 文件树(可能开着「显示被忽略的目录」)并集后的 matcher —— dist / build / Temp
+    // 这类目录内部的事件也会发过来。不在这里按 device-link 自己的可见性再滤一道,
+    // 一次构建就会把成千上万条控制器根本不会显示的事件推过共享 relay(聚合背压
+    // → 断连)(评审 P1)。
+    // 注:恒真忽略(BUILTIN_IGNORE_ALWAYS)与「不 watch 内部」(node_modules /
+    // Library)两层 daemon 自己就不发;`.gitignore` 自定义条目要在 daemon 侧才有
+    // matcher,这里判不了,不在本层职责。
+    if (typeof data.relPath === 'string' && isInsideRevealableIgnoreDir(data.relPath)) return;
     pushToTopicSubscribers(FILE_BROWSER_EVENT_CHANNEL, evt.data, ownerStamp);
   });
   let listenersDisposed = false;
@@ -797,7 +840,9 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
   };
   const stopWatch = (): void => {
     disposeListeners();
-    void mgr.request(hostId, 'watchStop', { workdir }).catch(() => undefined);
+    void mgr
+      .request(hostId, 'watchStop', { workdir, consumerId: 'device-link' })
+      .catch(() => undefined);
   };
   const isRegistered = (): boolean => sshWatchOffs.get(workdir) === stopWatch;
   const disposeStaleWatch = (): void => {
@@ -828,7 +873,14 @@ async function onFsWatchSubscribedInner(workdir: string, token: symbol): Promise
       return false;
     }
     try {
-      await mgr.request(hostId, 'watchStart', { workdir, hideMetaFiles: true });
+      // consumerId:daemon 把这里的隐藏态需求与 desktop 文件树(可能开着「显示
+      // 被忽略的目录」)的需求分开登记、取可见性并集 —— 否则后到的一方会把对方
+      // 的 matcher 覆盖掉,desktop 仍列着 build / dist 却收不到它们的事件。
+      await mgr.request(hostId, 'watchStart', {
+        workdir,
+        hideMetaFiles: true,
+        consumerId: 'device-link',
+      });
     } catch (err) {
       if (!isCurrent()) disposeStaleWatch();
       throw err;

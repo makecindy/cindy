@@ -66,6 +66,93 @@ function deviceSupportsGzip(deviceId: string, workdir: string): Promise<boolean>
   return probe;
 }
 
+/**
+ * 被控端 listDir 是否支持 `showIgnoredDirs`(「显示被忽略的目录」)。
+ *
+ * **三态**:`true` / `false` = 已探定的结论;`null` = 未知(瞬态失败) —— 调用方据此
+ * 保持「还没结论」，不要把一次网络抖动落定成「对方版本过旧」并用它把开关禁用掉。
+ *
+ * 区分确定性「不支持」与瞬态失败：老被控端根本没有 `file-browser:remote-op`
+ * channel，invoke 会被快速拒回 `CHANNEL_NOT_ALLOWED`（确定性）；隧道不可达 /
+ * 重连中的 reject 与之不同，属于瞬态。
+ *
+ * 缓存：**只缓存肯定结论 `true`**,且带**进程级重连代次**(见下)。`false`（老端）
+ * 不留在缓存里 —— 被控端在一次掉线期间升级是真实场景，缓存会把它钉在「不支持」
+ * 直到重启；重探一次只是一个被快速拒绝的 invoke，代价可忽略。瞬态 `null` 同样
+ * 不缓存，由调用方在连接恢复后重探。
+ *
+ * 与 gzip 那份缓存分开：后者带着「用出空写就永久降级」的自愈语义，两件事互不牵连。
+ */
+
+/**
+ * 进程级重连代次。
+ *
+ * 不能拿 hook 局的 `useDeviceLinkReconnectEpoch` 当缓存依据:它是 `useState(0)`
+ * 起步的 hook 局部计数器,只观察**挂载期间**的事件 —— 面板卸载 →(此时设备重连 /
+ * 被回滚,没有任何 hook 看得到)→ 面板重挂载时新实例又从 0 开始,进程内的缓存却
+ * 还留着上一代的肯定结论,于是跳过 caps RPC、开关一直可按。
+ *
+ * 所以缓存自己订阅全局 reconnect 流:模块级订阅不随面板生命周期起落(惰性建立
+ * 于首次调用;测试环境没有 deviceLink 时静默跳过,代次恒 0)。任何设备恢复 online
+ * 或 relay 恢复 online 都让整表代次作废 —— 重探一次 caps 很便宜,不值得按 deviceId
+ * 精细区分。订阅故意常驻:它本身就是「面板不在时也要记账」的那只耳朵。
+ */
+let reconnectGeneration = 0;
+let reconnectSubscribed = false;
+
+function ensureReconnectSubscription(): void {
+  if (reconnectSubscribed) return;
+  const api = window.electronAPI?.deviceLink;
+  if (!api?.onPresenceChanged || !api.onStatusChanged) return;
+  reconnectSubscribed = true;
+  const bump = (): void => {
+    reconnectGeneration += 1;
+  };
+  api.onPresenceChanged((snapshot) => {
+    if (snapshot.online) bump();
+  });
+  api.onStatusChanged(({ status }) => {
+    if (status === 'online') bump();
+  });
+}
+
+const deviceRevealCaps = new Map<
+  string,
+  { generation: number; probe: Promise<boolean | null> }
+>();
+
+/** 只回收「本次探测装上的那条」:同 deviceId 可能已因更新的代次换上新的 probe。 */
+function evictRevealCapsIfCurrent(deviceId: string, generation: number): void {
+  if (deviceRevealCaps.get(deviceId)?.generation === generation) {
+    deviceRevealCaps.delete(deviceId);
+  }
+}
+
+export function deviceSupportsRevealIgnoredDirs(
+  deviceId: string,
+  workdir: string,
+): Promise<boolean | null> {
+  ensureReconnectSubscription();
+  const cached = deviceRevealCaps.get(deviceId);
+  if (cached && cached.generation === reconnectGeneration) return cached.probe;
+  const probeGeneration = reconnectGeneration;
+  const probe = Promise.resolve()
+    .then(() => invokeOp<{ ok: boolean; showIgnoredDirs?: boolean }>(deviceId, 'caps', { workdir }))
+    .then((r) => {
+      const supported = r?.ok === true && r.showIgnoredDirs === true;
+      // 只留肯定结论；「不支持」下次重新问（被控端可能已升级）。
+      if (!supported) evictRevealCapsIfCurrent(deviceId, probeGeneration);
+      return supported;
+    })
+    .catch((err: unknown) => {
+      evictRevealCapsIfCurrent(deviceId, probeGeneration);
+      if (isDeviceTooOldError(err)) return false; // 老端：确定性不支持
+      return null; // 瞬态：不落定，等连接恢复重探
+    });
+  deviceRevealCaps.set(deviceId, { generation: probeGeneration, probe });
+  return probe;
+}
+
 export interface FileTreeEventPayload {
   workdir: string;
   type: 'add' | 'change' | 'unlink' | 'addDir' | 'unlinkDir';
@@ -202,7 +289,18 @@ export function deviceSearchCollect(
  */
 export async function startWatchFor(
   deviceId: string | null | undefined,
-  params: { workdir: string; remoteHostId?: string | null; hideMetaFiles?: boolean },
+  params: {
+    workdir: string;
+    remoteHostId?: string | null;
+    hideMetaFiles?: boolean;
+    /**
+     * 「显示被忽略的目录」:本地 / SSH 分支下发到 matcher 与 watcher;
+     * **device 分支不传**——被控端的 watch 由 `fs-watch:<workdir>` topic
+     * 订阅驱动,订阅载荷里没有过滤开关(与 hideMetaFiles 同款限制),
+     * 所以被控端 watcher 仍用默认过滤:目录能列出、内部改动不推事件。
+     */
+    showIgnoredDirs?: boolean;
+  },
 ): Promise<void> {
   if (!deviceId) {
     await window.electronAPI.fileBrowser.startWatch(params);
