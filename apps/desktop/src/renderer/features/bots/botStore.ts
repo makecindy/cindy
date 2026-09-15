@@ -1,4 +1,5 @@
 import { isManagedBotAvatarUrl } from '../../../shared/botAvatarValue';
+import { readCachedBotWelcomeContext } from './botWelcomeContext';
 import { isModelEnabled, getModelVisibilityVersion } from '@/state/modelVisibilityPrefs';
 import { botInvitationProgress, type BotInvitationProgress } from '../../../shared/botInvitation';
 import { useSyncExternalStore } from 'react';
@@ -754,7 +755,7 @@ async function hydrateFromDatabase(): Promise<void> {
       }
     }
     if (!isCurrent()) return;
-    const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap() });
+    const rows = await api.list({ lastReadAtByBotId: getBotLastReadAtMap(), welcomeContext: readCachedBotWelcomeContext() });
     if (!isCurrent()) return;
     const dbProfiles = rows.map(normalizeDbProfile).filter((item): item is BotProfile => !!item);
     profiles = dbProfiles;
@@ -785,12 +786,12 @@ export function refreshBotProfiles(): void {
   trackHydration();
 }
 
-/** Opens the host-owned image picker and replaces one teammate avatar. */
-export async function chooseBotAvatar(botId: string): Promise<BotProfile | null> {
+/** Replaces an avatar using gallery bytes, or the host file chooser when omitted. */
+export async function chooseBotAvatar(botId: string, avatarImageBase64?: string): Promise<BotProfile | null> {
   const api = botsApi();
   if (!api) throw new Error('Bot storage is not ready');
   const owner = getDataOwnerGeneration();
-  const result = await api.chooseAvatar({ botId });
+  const result = await api.chooseAvatar({ botId, ...(avatarImageBase64 !== undefined ? { avatarImageBase64 } : {}) });
   assertCurrentOwner(owner);
   if (result.canceled) return null;
   const next = normalizeDbProfile(result.profile);
@@ -906,6 +907,8 @@ export class BotModelSelectionRequiredError extends Error {}
 /** Create the local projection and wait until main/SQLite owns the profile. */
 export async function addBotProfileAndWait(input: CreateBotProfileInput): Promise<BotProfile> {
   const owner = getDataOwnerGeneration();
+  // Capture before async model preparation or creation broadcasts invalidate the caches.
+  const welcomeContext = input.prepareInvitation || input.welcomeMessage ? readCachedBotWelcomeContext() : undefined;
   const harness = normalizeBotHarness(input.capabilities?.harness ?? NEW_BOT_DEFAULT_HARNESS);
   const needsPiDefault = harness === 'pi' && input.capabilities?.model === undefined;
   if (needsPiDefault && getCachedProvidersSnapshot() === null && typeof window !== 'undefined') {
@@ -949,6 +952,7 @@ export async function addBotProfileAndWait(input: CreateBotProfileInput): Promis
         ...(input.templateId ? { templateId: input.templateId } : {}),
         ...(input.creationDraftToken ? { creationDraftToken: input.creationDraftToken } : {}),
         ...(input.prepareInvitation ? { prepareInvitation: true } : {}),
+        ...(welcomeContext ? { welcomeContext } : {}),
         ...(input.welcomeMessage ? { welcomeMessage: input.welcomeMessage } : {}),
       }),
     );
