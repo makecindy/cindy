@@ -86,7 +86,8 @@ describe("buildUserProvider (per-runtime)", () => {
     expect(a.agents).toEqual(['codex', 'claude-code', 'pi']);
     expect(a.titleModel).toBeTruthy();
     expect(a.models.pi?.length).toBeGreaterThan(0);
-    expect(a.imageModels?.every((model) => model.id.startsWith('openai-a/'))).toBe(true);
+    expect(a.imageModels).toBeUndefined(); // bound from the current public catalog by the host
+    expect(a.imageDefaults).toBeUndefined();
     expect(a.routing.codex?.authStrategy).toBe('oauth-passthrough');
     expect(a.routing.codex?.supportsResponsesCustomTools).not.toBe(false);
     expect(a.id).not.toBe(b.id);
