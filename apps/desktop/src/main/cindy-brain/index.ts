@@ -4862,7 +4862,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
       // (2026-07 apiBaseUrl 清理:旧"编译期注入可能为空 → 回退"的分支随
       // 清单机制成为死代码;配错清单时明确 404 暴露,不静默落主 server)。
       broker: createGhostOauthBrokerClient({
-        apiPost: (path, body) => {
+        apiPost: (path, body, options) => {
           requireAppCapability(
             'canUseCindyOAuthBroker',
             'Cindy OAuth broker requires a Cindy account.',
@@ -4870,6 +4870,7 @@ function getGhostOauthAccountManager(): GhostOauthAccountManager {
           return serverApiFetch(path, {
             method: 'POST',
             body,
+            timeoutMs: options?.timeoutMs,
             baseUrl: () => getClientEndpoint('oauthBrokerApiBaseUrl'),
           });
         },
@@ -5607,7 +5608,7 @@ function rejectReservedGhostId(id: string): void {
   if (!isUserInstallReservedGhostId(id)) return;
   throwIpcError(
     'GHOST_ID_RESERVED',
-    `id "${id}" 使用了官方保留前缀(cindy- / filo- / xd-),用户通道不可装入`,
+    `id "${id}" 使用了官方保留命名空间或 ID,用户通道不可装入`,
   );
 }
 

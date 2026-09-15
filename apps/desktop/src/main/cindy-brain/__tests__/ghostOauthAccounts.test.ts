@@ -1780,15 +1780,15 @@ describe('tokenBroker 模式', () => {
     expect(fetchImpl.mock.calls.map((c) => String(c[0]))).not.toContain(BROKER_DECL.tokenUrl);
   });
 
-  it('clientConfigured:brokered + 内置 clientId 恒 true,与保险库无关', () => {
+  it('clientConfigured:brokered 无需内置 clientId,与保险库无关', () => {
     const mgr = new GhostOauthAccountManager({
       vault: memoryVault(),
       fetchImpl: vi.fn() as unknown as typeof fetch,
       openExternal: vi.fn(),
     });
     expect(mgr.clientConfigured(GHOST, KEY, BROKER_DECL)).toBe(true);
-    // brokered 但清单没内置 clientId → false(没有可用的授权身份)。
-    expect(mgr.clientConfigured(GHOST, KEY, { ...BROKER_DECL, clientId: undefined })).toBe(false);
+    // 动态 broker 会在授权开始时下发 clientId，模板无需内置企业 AppID。
+    expect(mgr.clientConfigured(GHOST, KEY, { ...BROKER_DECL, clientId: undefined })).toBe(true);
   });
 
   it('connect 可选清单内备用 clientId;未声明值防御性拒绝', async () => {

@@ -29,6 +29,19 @@ import { readAtomicFileSync } from './utils/atomicWriteFile.js';
 const CLAIM_MARKER = '.owner-namespace-claim-v1.json';
 const LEGACY_GHOST_RECOVERY_MARKER = '.legacy-ghost-recovery-v1.json';
 const BUILTIN_PROVISIONING_STATE_FILE = '.builtin-provisioning.json';
+// `haoplay-feishu` was already shipped before the reserved-id gate existed.
+// Recovery is the only trusted legacy path that may preserve this exact id;
+// fresh user install/import validation still uses isOfficialGhostId directly.
+const LEGACY_OFFICIAL_RECOVERY_IDS = new Set(['haoplay-feishu']);
+
+function isBlockedLegacyRecoveryId(id: string, rejectReservedIds?: boolean): boolean {
+  return Boolean(
+    rejectReservedIds &&
+    isOfficialGhostId(id) &&
+    !LEGACY_OFFICIAL_RECOVERY_IDS.has(id),
+  );
+}
+
 const LEGACY_PATHS = [
   'ghost-kv',
   'ghost-fs',
@@ -1216,7 +1229,8 @@ export function getLegacyGhostRecoveryStatus(
   const sharedLegacyGhosts = sharedDiscovery.ghosts;
   const scopedLegacyGhosts = scopedDiscovery.ghosts;
   const legacyGhosts = options.rejectReservedIds
-    ? [...sharedLegacyGhosts, ...scopedLegacyGhosts].filter((ghost) => !isOfficialGhostId(ghost.id))
+    ? [...sharedLegacyGhosts, ...scopedLegacyGhosts]
+      .filter((ghost) => !isBlockedLegacyRecoveryId(ghost.id, true))
     : [...sharedLegacyGhosts, ...scopedLegacyGhosts];
   const recoveryMarkerRead = readLegacyGhostRecoveryMarkerSync(root, ownerKey);
   const recoveryMarker = recoveryMarkerRead.kind === 'ready'
@@ -1238,12 +1252,13 @@ export function getLegacyGhostRecoveryStatus(
       ...sharedDiscovery.invalidIds,
       ...scopedDiscovery.deferredIds,
       ...scopedDiscovery.invalidIds,
-    ].filter((id) => !options.rejectReservedIds || !isOfficialGhostId(id)),
+    ].filter((id) => !isBlockedLegacyRecoveryId(id, options.rejectReservedIds)),
   );
   // Filter reserved IDs from pending marker ids so they don't inflate
   // status counts in packaged builds (P2, PRRT_kwDOTgdRUs6YbtXr).
   const visiblePendingIds = options.rejectReservedIds
-    ? (recoveryMarker?.pendingIds ?? []).filter((id) => !isOfficialGhostId(id))
+    ? (recoveryMarker?.pendingIds ?? [])
+      .filter((id) => !isBlockedLegacyRecoveryId(id, true))
     : (recoveryMarker?.pendingIds ?? []);
   // A marker containing only reserved ids has no applicable recovery
   // whitelist in packaged builds; treat it as empty for fresh legacy sources.
@@ -1257,7 +1272,7 @@ export function getLegacyGhostRecoveryStatus(
   // and can't be id-filtered.
   const sourceDeferredIds = options.rejectReservedIds
     ? [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds]
-      .filter((id) => !isOfficialGhostId(id))
+      .filter((id) => !isBlockedLegacyRecoveryId(id, true))
     : [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds];
   // Filter target deferred IDs by pendingIds so an unrelated installed
   // plugin's transient read error doesn't make the status report deferred
@@ -1305,7 +1320,7 @@ export function getLegacyGhostRecoveryStatus(
     installedTargetIds.has(id) &&
     !legacySourceIds.has(id) &&
     recoveryMarker?.approvalProjectionSha256ById?.[id] !== undefined &&
-    (!options.rejectReservedIds || !isOfficialGhostId(id)),
+    !isBlockedLegacyRecoveryId(id, options.rejectReservedIds),
   );
   const unexpectedFrozenIds = recoveryMarker
     ? (hasVisibleFrozenWhitelist
@@ -1453,9 +1468,9 @@ export async function recoverLegacyGhostPlugins(
     scopedDiscovery.deferredRoots.length > 0 ||
     targetDiscovery.deferredRoots.length > 0 ||
     [...sharedDiscovery.deferredIds, ...scopedDiscovery.deferredIds]
-      .some((id) => !options.rejectReservedIds || !isOfficialGhostId(id)) ||
+      .some((id) => !isBlockedLegacyRecoveryId(id, options.rejectReservedIds)) ||
     targetDiscovery.deferredIds.some((id) =>
-      (!options.rejectReservedIds || !isOfficialGhostId(id)) &&
+      !isBlockedLegacyRecoveryId(id, options.rejectReservedIds) &&
       (earlyRecoveryMarkerRead.kind === 'ready' &&
         earlyRecoveryMarkerRead.marker?.pendingIds?.includes(id)),
     );
@@ -1542,7 +1557,7 @@ export async function recoverLegacyGhostPlugins(
   // boundary so neither fresh discovery nor an older dirty marker can retain
   // an official namespace id for later recovery.
   const isRecoverableId = (id: string): boolean =>
-    !options.rejectReservedIds || !isOfficialGhostId(id);
+    !isBlockedLegacyRecoveryId(id, options.rejectReservedIds);
   const sourceDiscoveryIds = new Set([...discoveredSourceIds].filter(isRecoverableId));
   const targetDiscoveryIds = new Set(targetDiscovery.ghosts.map((ghost) => ghost.id));
   const visiblePendingIds = (recoveryMarker?.pendingIds ?? []).filter(isRecoverableId);
@@ -1622,7 +1637,7 @@ export async function recoverLegacyGhostPlugins(
     discoveryInvalidCount + unexpectedFrozenIds.length;
   const movableById = new Map<string, ReturnType<typeof listLegacyGhostDirs>>();
   for (const legacy of [...eligibleSharedGhosts, ...scopedLegacyGhosts]) {
-    if (options.rejectReservedIds && isOfficialGhostId(legacy.id)) {
+    if (isBlockedLegacyRecoveryId(legacy.id, options.rejectReservedIds)) {
       conflicts += 1;
       continue;
     }
