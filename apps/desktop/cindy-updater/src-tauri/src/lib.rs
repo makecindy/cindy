@@ -72,7 +72,9 @@ fn retry_update(state: State<'_, AppState>) -> Result<(), String> {
         if !can_retry {
             return Err("unavailable".into());
         }
-        if !installer::retry_available(&installer::retry_archive(&state.args)) {
+        let archive = installer::retry_archive(&state.args);
+        let digest = state.args.zip_sha256.as_deref().unwrap_or("");
+        if digest.is_empty() || !installer::archive_matches_digest(&archive, digest) {
             return Err("archive_unavailable".into());
         }
         installer::ensure_retry_processes_closed(&state.args)?;

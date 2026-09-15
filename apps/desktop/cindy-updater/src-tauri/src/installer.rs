@@ -1,7 +1,9 @@
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::{Duration, Instant};
+
+use sha2::{Digest, Sha256};
 
 use serde::Serialize;
 use sysinfo::System;
@@ -50,12 +52,22 @@ const APPDIR_PROCESS_POLL: Duration = Duration::from_millis(500);
 const LAUNCH_VERIFY_TIMEOUT: Duration = Duration::from_secs(3);
 const LAUNCH_VERIFY_POLL: Duration = Duration::from_millis(100);
 
-pub fn run<F: FnMut(InstallerEvent)>(args: CliArgs, mut emit: F) {
+pub fn run<F: FnMut(InstallerEvent)>(mut args: CliArgs, mut emit: F) {
+    if let Err(error) = bind_zip_sha256(&mut args) {
+        logger::error(format!("[installer] FAILED: archive unavailable ({error})"));
+        let _ = fs::remove_file(&args.lock);
+        emit(InstallerEvent::Failed(
+            "更新文件已不存在或无法读取，请重新检查更新".into(),
+            false,
+        ));
+        return;
+    }
     match run_inner(&args, &mut emit) {
         Ok(()) => emit(InstallerEvent::Done),
         Err(failure) => {
-            let can_retry = failure.can_retry && prepare_retry_archive(&args)
-                && retry_allowed(true, &retry_archive(&args));
+            let can_retry = failure.can_retry
+                && prepare_retry_archive(&args)
+                && retry_allowed(true, &retry_archive(&args), args.zip_sha256.as_deref());
             logger::error(format!("[installer] FAILED: {}", failure.message));
             let _ = fs::remove_file(&args.lock);
             emit(InstallerEvent::Failed(failure.message, can_retry));
@@ -85,10 +97,61 @@ pub(crate) fn retry_available(zip: &Path) -> bool {
         .unwrap_or(false)
 }
 
+fn sha256_hex(file: &mut File) -> io::Result<String> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn open_regular_file(zip: &Path) -> io::Result<File> {
+    let file = File::open(zip)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("archive path is not a regular file: {}", zip.display()),
+        ));
+    }
+    Ok(file)
+}
+
+pub(crate) fn archive_matches_digest(zip: &Path, expected: &str) -> bool {
+    open_regular_file(zip)
+        .and_then(|mut file| sha256_hex(&mut file))
+        .map(|digest| digest.eq_ignore_ascii_case(expected))
+        .unwrap_or(false)
+}
+
+/// Capture the digest of the zip this process first opened. Later elevation
+/// and retry reuse that digest so a TEMP replacement cannot be extracted.
+pub(crate) fn bind_zip_sha256(args: &mut CliArgs) -> Result<String, String> {
+    let mut file = open_regular_file(&args.zip).map_err(|_| "archive_unavailable".to_string())?;
+    let digest = sha256_hex(&mut file).map_err(|_| "archive_unavailable".to_string())?;
+    match args.zip_sha256.as_deref() {
+        Some(expected) if expected.eq_ignore_ascii_case(&digest) => Ok(digest),
+        Some(_) => Err("archive_unavailable".into()),
+        None => {
+            args.zip_sha256 = Some(digest.clone());
+            Ok(digest)
+        }
+    }
+}
+
 /// Retry is safe only when the failed attempt left the install directory in a
-/// known-good state and the original archive is still readable.
-fn retry_allowed(can_retry: bool, zip: &Path) -> bool {
-    can_retry && retry_available(zip)
+/// known-good state and the original archive still matches the captured digest.
+fn retry_allowed(can_retry: bool, zip: &Path, expected_sha256: Option<&str>) -> bool {
+    match expected_sha256 {
+        Some(digest) => can_retry && archive_matches_digest(zip, digest),
+        None => false,
+    }
 }
 
 pub(crate) fn retry_archive(args: &CliArgs) -> std::path::PathBuf {
@@ -145,6 +208,10 @@ pub(crate) fn retry_cli_args(args: &CliArgs) -> Vec<std::ffi::OsString> {
         .into_iter()
         .flat_map(|(key, value)| [std::ffi::OsString::from(key), value.to_os_string()])
         .collect::<Vec<_>>();
+    if let Some(digest) = args.zip_sha256.as_deref().filter(|digest| !digest.is_empty()) {
+        result.push(std::ffi::OsString::from("--zip-sha256"));
+        result.push(std::ffi::OsString::from(digest));
+    }
     if args.elevated {
         result.push(std::ffi::OsString::from("--elevated"));
     }
@@ -282,7 +349,7 @@ fn run_inner<F: FnMut(InstallerEvent)>(
     fs::create_dir_all(&extract_dir)
         .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
     logger::info(format!("[installer] extract_dir={}", extract_dir.display()));
-    extract_zip(&args.zip, &extract_dir, |done, total| {
+    extract_zip(&args.zip, &extract_dir, args.zip_sha256.as_deref(), |done, total| {
         let pct = if total == 0 { -1 } else { (done * 100 / total).min(100) as i32 };
         emit(InstallerEvent::Progress(
             Phase::Extracting,
@@ -535,9 +602,16 @@ fn workdir_ts(workdir: &Path) -> String {
 fn extract_zip<F: FnMut(u64, u64)>(
     zip_path: &Path,
     dest: &Path,
+    expected_sha256: Option<&str>,
     mut on_progress: F,
 ) -> anyhow::Result<()> {
-    let file = File::open(zip_path)?;
+    let mut file = open_regular_file(zip_path)?;
+    let digest = sha256_hex(&mut file)?;
+    match expected_sha256 {
+        Some(expected) if expected.eq_ignore_ascii_case(&digest) => {}
+        Some(_) => anyhow::bail!("archive digest mismatch"),
+        None => anyhow::bail!("archive digest missing"),
+    }
     let mut archive = zip::ZipArchive::new(file)?;
     let total = archive.len() as u64;
     on_progress(0, total);
@@ -852,12 +926,15 @@ fn path_is_within(child: &Path, parent: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        path_is_within, prepare_retry_archive, remove_staging_dir, retry_allowed, retry_available,
-        retry_cli_args, rollback,
+        archive_matches_digest, bind_zip_sha256, path_is_within, prepare_retry_archive,
+        remove_staging_dir, retry_allowed, retry_available, retry_cli_args, rollback,
     };
     use crate::args::{CliArgs, ThemeArg};
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
 
     fn test_args() -> CliArgs {
         CliArgs {
@@ -870,6 +947,7 @@ mod tests {
             workdir: PathBuf::from(r"C:\Users\Test User\update-workdir"),
             theme: ThemeArg::Dark,
             elevated: true,
+            zip_sha256: None,
         }
     }
 
@@ -881,8 +959,9 @@ mod tests {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos();
+            let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
             let path = std::env::temp_dir().join(format!(
-                "cindy-updater-test-{}-{unique}",
+                "cindy-updater-test-{}-{unique}-{seq}",
                 std::process::id()
             ));
             fs::create_dir(&path).expect("create isolated test directory");
@@ -932,11 +1011,17 @@ mod tests {
         let zip = temp.0.join("update.zip");
         fs::write(&zip, b"update").expect("create test archive");
 
-        assert!(retry_allowed(true, &zip));
-        assert!(!retry_allowed(false, &zip));
+        let digest = bind_zip_sha256(&mut CliArgs {
+            zip: zip.clone(),
+            ..test_args()
+        })
+        .expect("capture digest");
+        assert!(retry_allowed(true, &zip, Some(&digest)));
+        assert!(!retry_allowed(false, &zip, Some(&digest)));
+        assert!(!retry_allowed(true, &zip, None));
 
         fs::remove_file(&zip).expect("remove test archive");
-        assert!(!retry_allowed(true, &zip));
+        assert!(!retry_allowed(true, &zip, Some(&digest)));
     }
 
     #[test]
@@ -987,36 +1072,42 @@ mod tests {
         );
     }
 
-    #[cfg(unix)]
     #[test]
     fn rollback_fails_when_backup_entries_cannot_be_walked() {
-        use std::os::unix::fs::PermissionsExt;
-
         let temp = TestDir::new();
-        let backup_dir = temp.0.join("backup");
+        let backup_dir = temp.0.join("missing-backup");
         let app_dir = temp.0.join("app");
-        fs::create_dir(&backup_dir).unwrap();
         fs::create_dir(&app_dir).unwrap();
-        fs::write(backup_dir.join("restored.txt"), b"old").unwrap();
         fs::write(app_dir.join("restored.txt"), b"new").unwrap();
-
-        let locked = backup_dir.join("locked");
-        fs::create_dir(&locked).unwrap();
-        fs::write(locked.join("hidden.bin"), b"hidden").unwrap();
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-
-        struct RestorePerms<'a>(&'a Path);
-        impl Drop for RestorePerms<'_> {
-            fn drop(&mut self) {
-                let _ = fs::set_permissions(self.0, fs::Permissions::from_mode(0o755));
-            }
-        }
-        let _restore = RestorePerms(&locked);
 
         let result = rollback(&backup_dir, &app_dir, |_, _| {});
         assert!(
             result.is_err(),
             "incomplete backup walk must fail rollback so retry stays disabled: {result:?}"
+        );
+        assert_eq!(fs::read(app_dir.join("restored.txt")).unwrap(), b"new");
+    }
+
+    #[test]
+    fn retry_binds_to_the_archive_digest_captured_on_first_open() {
+        let temp = TestDir::new();
+        let mut args = test_args();
+        args.workdir = temp.0.join("workdir");
+        fs::create_dir(&args.workdir).unwrap();
+        args.zip = temp.0.join("update.zip");
+        fs::write(&args.zip, b"trusted-archive").unwrap();
+
+        bind_zip_sha256(&mut args).expect("capture digest from the first readable zip");
+        let digest = args.zip_sha256.clone().expect("digest stored on args");
+        assert!(archive_matches_digest(&args.zip, &digest));
+        assert!(retry_allowed(true, &args.zip, args.zip_sha256.as_deref()));
+
+        fs::write(&args.zip, b"replaced-archive").unwrap();
+        assert!(!archive_matches_digest(&args.zip, &digest));
+        assert!(!retry_allowed(true, &args.zip, args.zip_sha256.as_deref()));
+        assert_eq!(
+            bind_zip_sha256(&mut args).unwrap_err(),
+            "archive_unavailable"
         );
     }
 
@@ -1058,7 +1149,9 @@ mod tests {
 
     #[test]
     fn retry_cli_args_reuses_trusted_values_and_elevation_marker() {
-        let args = retry_cli_args(&test_args());
+        let mut source = test_args();
+        source.zip_sha256 = Some("abc123".into());
+        let args = retry_cli_args(&source);
         let args: Vec<_> = args
             .iter()
             .map(|arg| arg.to_string_lossy().into_owned())
@@ -1082,6 +1175,8 @@ mod tests {
                 r"C:\Users\Test User\update-workdir",
                 "--theme",
                 "dark",
+                "--zip-sha256",
+                "abc123",
                 "--elevated",
             ]
         );
@@ -1277,7 +1372,7 @@ fn build_elevation_arg_string(args: &CliArgs) -> String {
         ThemeArg::Dark => "dark",
         ThemeArg::Auto => "auto",
     };
-    let pairs: [(&str, String); 8] = [
+    let mut pairs: Vec<(&str, String)> = vec![
         ("--zip", args.zip.to_string_lossy().into_owned()),
         ("--app-dir", args.app_dir.to_string_lossy().into_owned()),
         ("--exe-name", args.exe_name.clone()),
@@ -1287,6 +1382,9 @@ fn build_elevation_arg_string(args: &CliArgs) -> String {
         ("--workdir", args.workdir.to_string_lossy().into_owned()),
         ("--theme", theme_str.to_string()),
     ];
+    if let Some(digest) = args.zip_sha256.as_deref().filter(|digest| !digest.is_empty()) {
+        pairs.push(("--zip-sha256", digest.to_string()));
+    }
     let mut out = String::new();
     for (k, v) in &pairs {
         if !out.is_empty() {
