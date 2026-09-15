@@ -202,6 +202,20 @@ describe('BrowserTabBody navigation', () => {
     browserState = makeBrowserState();
   });
 
+  it.each([false, true])('routes hard reload to the active tab backend (native=%s)', (native) => {
+    const reload = vi.fn();
+    const inactiveReload = vi.fn();
+    browserState = makeBrowserState({ reload: native ? inactiveReload : reload });
+    if (native) {
+      registerNativePopupTab('tab-browser', 'session-a', 'surface-hard-reload');
+      nativePopupHook.mockReturnValue({ ...makeBrowserState({ reload }), closed: false });
+    }
+    render(renderBrowserTab('https://example.com/'));
+    fireEvent.click(screen.getByRole('button', { name: 'rightSidebar.browser.hardReload' }));
+    expect(reload).toHaveBeenCalledExactlyOnceWith({ ignoreCache: true });
+    expect(inactiveReload).not.toHaveBeenCalled();
+  });
+
   it('recovers a live native popup surface after plugin hydration strips its id', () => {
     registerNativePopupTab('tab-browser', 'session-a', 'surface-oauth');
     browserState = makeBrowserState({ wrapper: sharedWrapper, url: 'about:blank' });

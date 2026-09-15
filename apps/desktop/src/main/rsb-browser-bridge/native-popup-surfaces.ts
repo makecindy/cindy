@@ -340,7 +340,8 @@ function runCommand(record: SurfaceRecord, command: RsbNativePopupCommand): void
   } else if (command.command === 'reload') {
     record.crash = null;
     applyVisibility(record);
-    wc.reload();
+    if (command.ignoreCache) wc.reloadIgnoringCache();
+    else wc.reload();
   } else if (command.command === 'go-back') {
     if (wc.canGoBack()) wc.goBack();
   } else if (command.command === 'go-forward') {
@@ -419,8 +420,15 @@ export function registerRsbNativePopupSurfaceIpc(tabRegistry: TabRegistry): void
       ['navigate', 'reload', 'go-back', 'go-forward', 'stop'] as const,
       'command',
     );
+    if (command === 'reload' && raw.ignoreCache !== undefined && typeof raw.ignoreCache !== 'boolean') {
+      throwIpcError('INVALID_PARAMS', 'ignoreCache must be a boolean');
+    }
     const parsed: RsbNativePopupCommand =
-      command === 'navigate' ? { command, url: requireString(raw.url, 'url') } : { command };
+      command === 'navigate'
+        ? { command, url: requireString(raw.url, 'url') }
+        : command === 'reload'
+          ? { command, ignoreCache: raw.ignoreCache === true }
+          : { command };
     runCommand(record, parsed);
     return { ok: true };
   });
