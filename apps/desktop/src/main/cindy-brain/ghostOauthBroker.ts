@@ -82,11 +82,17 @@ export interface GhostOauthBrokerApiError {
 
 export interface GhostOauthBrokerDeps {
   /** POST JSON 到 XDT server(生产注入 serverApiFetch;失败 throw ServerApiError)。 */
-  apiPost(path: string, body: Record<string, unknown>): Promise<unknown>;
+  apiPost(
+    path: string,
+    body: Record<string, unknown>,
+    options?: { timeoutMs?: number },
+  ): Promise<unknown>;
   /** 当前是否有登录态(生产 = authManager.getAccessToken() 非空)。 */
   hasLoginToken(): boolean;
   logger?: GhostOauthLogger;
 }
+
+export const BROKER_REQUEST_TIMEOUT_MS = 10_000;
 
 function toBundle(raw: unknown): GhostOauthTokenBundle | null {
   if (typeof raw !== 'object' || raw === null) return null;
@@ -127,10 +133,14 @@ export function createGhostOauthBrokerClient(deps: GhostOauthBrokerDeps): GhostO
     }
     let raw: unknown;
     try {
-      raw = await deps.apiPost(`/api/integrations/${slug}/oauth/bootstrap`, {
-        redirectUri: params.redirectUri,
-        scopes: [...params.scopes],
-      });
+      raw = await deps.apiPost(
+        `/api/integrations/${slug}/oauth/bootstrap`,
+        {
+          redirectUri: params.redirectUri,
+          scopes: [...params.scopes],
+        },
+        { timeoutMs: BROKER_REQUEST_TIMEOUT_MS },
+      );
     } catch (err) {
       if (isApiError(err)) {
         if (err.statusCode === 0 || err.code === 'NETWORK_ERROR') {
@@ -184,7 +194,11 @@ export function createGhostOauthBrokerClient(deps: GhostOauthBrokerDeps): GhostO
     }
     let raw: unknown;
     try {
-      raw = await deps.apiPost(`/api/integrations/${slug}/oauth/${action}`, body);
+      raw = await deps.apiPost(
+        `/api/integrations/${slug}/oauth/${action}`,
+        body,
+        { timeoutMs: BROKER_REQUEST_TIMEOUT_MS },
+      );
     } catch (err) {
       if (isApiError(err)) {
         if (err.statusCode === 0 || err.code === 'NETWORK_ERROR') {

@@ -44,6 +44,7 @@ import {
   type GhostOauthFlowError,
   type GhostOauthLogger,
 } from './ghostOauthFlow.js';
+import { SUPPORTED_TOKEN_BROKERS } from './ghostOauthBroker.js';
 import {
   changedBuiltinOauthClientSecretKeys,
   isBrokerEligibleGhostId,
@@ -385,7 +386,7 @@ export class GhostOauthAccountManager {
   /** client 凭证是否可用(用户自填或清单内置任一即可;设置页状态展示,不回明文)。 */
   clientConfigured(ghostId: string, secretKey: string, decl?: GhostOauthDecl): boolean {
     // broker 模式:secret 与 clientId 均由服务端授权事务提供，插件无需内置配置。
-    if (decl?.tokenBroker) return true;
+    if (decl?.tokenBroker) return SUPPORTED_TOKEN_BROKERS.has(decl.tokenBroker);
     if (this.clientCustomized(ghostId, secretKey)) return true;
     return typeof decl?.clientId === 'string' && decl.clientId.length > 0;
   }

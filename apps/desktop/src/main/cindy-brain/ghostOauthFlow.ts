@@ -594,6 +594,9 @@ async function runGhostOauthFlow(
   }
   const { server, port } = listener;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<'timeout'>((resolve) => {
+    timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs);
+  });
 
   try {
   // 双地址模型:服务商侧 redirect_uri 用公网弹跳地址(声明了才有),浏览器
@@ -612,10 +615,14 @@ async function runGhostOauthFlow(
         detail: 'tokenBroker 未提供动态授权配置通道',
       };
     }
-    const bootstrap = await opts.broker.bootstrap(config.tokenBroker, {
-      redirectUri,
-      scopes: config.scopes,
-    });
+    const bootstrap = await Promise.race([
+      opts.broker.bootstrap(config.tokenBroker, {
+        redirectUri,
+        scopes: config.scopes,
+      }),
+      timeout,
+    ]);
+    if (bootstrap === 'timeout') return { ok: false, error: 'TIMEOUT' };
     if (!bootstrap.ok) {
       logger?.warn('ghost oauth broker 获取动态授权配置失败', {
         slug: config.tokenBroker,
@@ -737,10 +744,6 @@ async function runGhostOauthFlow(
         finish({ kind: 'invalid', detail: `callback 处理异常 ${String(err2)}` });
       }
     });
-  });
-
-  const timeout = new Promise<'timeout'>((resolve) => {
-    timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs);
   });
 
     // listen / 回收期间已被顶掉或取消:别再拉浏览器弹无主的授权页。
