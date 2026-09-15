@@ -80,6 +80,31 @@ The Electron main process owns argument construction; see
 5. `done`       — `pgrep`-style verification passed; updater self-cleans.
 6. `failed`     — any step bubbled an error; lock file dropped, UI sticks.
 
+### Manual retry after failure
+
+The failure window offers Retry only if the installation was not modified, or
+rollback succeeded, and the update zip can be isolated as `retry.zip` in this
+attempt's temporary workdir. Moving it out of Electron's staged-patch location
+prevents the restored app from automatically applying the same failed archive.
+If the move fails, Retry is unavailable.
+
+Retry is never automatic: Rust rechecks the failure state and readable archive,
+then starts a new updater using trusted Rust-owned arguments. Only the archive
+path and PID change: the retry uses the isolated zip and does not wait on the
+original, potentially stale PID. The WebView cannot supply paths or commands.
+Both the retry command and child check for processes running from the install
+directory and ask the user to close them; manual retry never force-terminates
+those processes. UAC elevation follows the existing flow again when needed.
+
+A successful rollback retains the isolated zip for retry and still attempts to
+relaunch the restored app; close that app before retrying. A successful update
+still removes its zip. If rollback fails, Retry is unavailable and the backup
+directory is preserved for manual recovery. Stale temporary directories retain
+the existing seven-day cleanup policy.
+
+Only the newly added retry copy has a five-language catalog, selected from the
+WebView language with English fallback. Existing updater text remains unchanged.
+
 ## Build
 
 ```

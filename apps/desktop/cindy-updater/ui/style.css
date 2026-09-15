@@ -234,3 +234,8 @@ body {
   outline: 2px solid rgba(59, 130, 246, 0.5);
   outline-offset: 1px;
 }
+
+.btn:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
