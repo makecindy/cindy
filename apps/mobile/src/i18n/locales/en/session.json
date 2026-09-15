@@ -360,6 +360,7 @@
     "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again."
   },
   "menu": {
+    "details": "Session details",
     "chipPinned": "Pinned",
     "chipArchived": "Archived",
     "chipReadOnly": "Read-only",
@@ -422,7 +423,6 @@
       "today": "Used today",
       "unavailable": "Unavailable",
       "quotaUnavailable": "Account quota unavailable",
-      "accountOnly": "ChatGPT account quota; this task's use of this plan is unconfirmed",
       "lastUpdated": "Last updated {{time}}",
       "taskUsage": "Task usage",
       "taskValue": "Task value",

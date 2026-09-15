@@ -71,6 +71,7 @@ import { Text, TextInput } from '@/components/AppText';
 import Reanimated, { useAnimatedStyle } from 'react-native-reanimated';
 import { GestureDetector } from '@/platform/gestureHandler';
 import { MobileAgentMark } from '@/components/MobileAgentMark';
+import { SessionHeaderNativeBack, SessionHeaderNativeActions, SessionHeaderNativeTitle, SessionHeaderNativeBlur } from '@/session/SessionHeaderNativeControls';
 import type { TextInput as NativeTextInput } from 'react-native';
 import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -176,6 +177,7 @@ import {
   type SessionExtraDirBrowserState,
 } from '@/session/SessionMenuSheet';
 import type { SessionMenuView } from '@/session/sessionMenu';
+import { SessionSearchNative } from '@/session/SessionSearchNative';
 import { isHostManagedSession } from '@/session/hostManagedSession';
 import {
   interactionKind,
@@ -1398,6 +1400,7 @@ export default function SessionScreen() {
   const [menuInitialView, setMenuInitialView] = useState<SessionMenuView>('menu');
   const [sessionTreeOpen, setSessionTreeOpen] = useState(false);
   const [sessionTreePendingOpen, setSessionTreePendingOpen] = useState(false);
+  const [sessionSearchPendingOpen, setSessionSearchPendingOpen] = useState(false);
   // inline 排队区:展开操作行的条目(同时只展开一条;null=全收起)。
   const [queueSelectedClientId, setQueueSelectedClientId] = useState<string | null>(null);
   // 排队消息「复用 composer 编辑」态:进入时把队列条目的文本/附件载入 composer,
@@ -1995,6 +1998,13 @@ export default function SessionScreen() {
   const accountProvider = composerDeviceProviders.ready
     ? composerDeviceProviders.providers.find((provider) => provider.id === currentSession?.providerId)
     : undefined;
+  const providerAccountIdentity = accountProvider?.openAiAccount?.identity?.trim()
+    || accountProvider?.subscriptionAccount?.identity?.trim();
+  const providerDisplayName = accountProvider?.name?.trim();
+  const providerAccountLabel = providerDisplayName && providerAccountIdentity
+    && !providerDisplayName.includes(providerAccountIdentity)
+    ? `${providerDisplayName} · ${providerAccountIdentity}`
+    : providerDisplayName;
   const localCodexRateLimitControl = canUseLocalCodexRateLimitControl(currentSession, accountProvider);
   const accountProviderId = currentSession?.providerId ?? 'openai';
   const accountControlScope = `${deviceId}\0${sessionId}\0${accountProviderId}`;
@@ -2737,10 +2747,14 @@ export default function SessionScreen() {
     setSettingsOpen(false);
   }, []);
   const handleSessionMenuClosed = useCallback(() => {
+    if (sessionSearchPendingOpen) {
+      setSessionSearchPendingOpen(false);
+      setSearchOpen(true);
+    }
     if (!sessionTreePendingOpen) return;
     setSessionTreePendingOpen(false);
     setSessionTreeOpen(true);
-  }, [sessionTreePendingOpen]);
+  }, [sessionTreePendingOpen, sessionSearchPendingOpen]);
   const measureSendButtonTarget = useCallback(() => {
     sendButtonRef.current?.measureInWindow((x, y, width, height) => {
       sendButtonFrameRef.current = { x, y, width, height };
@@ -2864,6 +2878,7 @@ export default function SessionScreen() {
   useEffect(() => {
     if (resetForSessionIdRef.current === sessionId) return;
     resetForSessionIdRef.current = sessionId;
+    setSessionSearchPendingOpen(false);
     setSettingsOpen(false);
     setQueueSelectedClientId(null);
     // ref 与 state 同步清:解锁已由下方 cleanup effect(旧 sessionId 闭包)在本
@@ -8890,8 +8905,10 @@ export default function SessionScreen() {
         keyboardVerticalOffset={nativeShellLayout.keyboardVerticalOffset}
         style={styles.keyboard}
       >
+        {Platform.OS === 'ios' ? (
+          <SessionHeaderNativeBlur height={Math.max(topOverlayHeight, insets.top + 44) + spacing.xxl} />
+        ) : null}
         <View ref={topOverlayRef} onLayout={handleTopOverlayLayout} pointerEvents="box-none" style={styles.sessionChrome} testID="session.chrome">
-          <TranslucentBackdrop />
           <View style={[styles.sessionChromeContent, { paddingTop: insets.top }]}>
             <SessionHeaderBar
               currentSession={currentSession}
@@ -8965,8 +8982,14 @@ export default function SessionScreen() {
             ) : null}
           </View>
         </View>
-        {currentSession && !sessionManagedByHost ? (
+        {currentSession ? (
           <SessionMenuSheet
+            providerName={providerAccountLabel}
+            messageOnly={sessionManagedByHost}
+            onOpenSearch={() => {
+              setSessionSearchPendingOpen(true);
+              setSettingsOpen(false);
+            }}
             usageReader={maker}
             accountProvider={accountProvider}
             accountUsage={localCodexRateLimitControl ? accountUsage : null}
@@ -9692,12 +9715,6 @@ export default function SessionScreen() {
 
 type SessionHeaderIcon = typeof Folder;
 
-function TranslucentBackdrop() {
-  const styles = useThemedStyles(makeStyles);
-  const { colors } = useTheme();
-  return <BlurBackdrop intensity={40} overlayColor={colors.chatHeaderSurface} style={styles.translucentBackdrop} />;
-}
-
 function SessionHeaderBar({
   currentSession,
   diffCount,
@@ -9790,6 +9807,7 @@ function SessionHeaderBar({
     readOnlyReason,
     session: currentSession,
   });
+  const nativeHeader = Platform.OS === 'ios';
 
   // 分享选择模式只保留全选；底部关闭按钮负责退出。
   if (shareSelectAllNode) {
@@ -9797,6 +9815,7 @@ function SessionHeaderBar({
       <View
         style={[
           styles.sessionHeaderBar,
+          nativeHeader && styles.sessionHeaderBarNative,
           { paddingLeft: shareSelectionLeadingInset + spacing.sm },
         ]}
         testID="session.summary"
@@ -9806,7 +9825,7 @@ function SessionHeaderBar({
     );
   }
   return (
-    <View style={styles.sessionHeaderBar} testID="session.summary">
+    <View style={[styles.sessionHeaderBar, nativeHeader && styles.sessionHeaderBarNative]} testID="session.summary">
       {onOpenSessionList ? (
         // 宽屏(iPad / 折叠屏展开 / 横屏手机):三条杠拉任务列表抽屉,返回语义由抽屉里的
         // 「主页」项与系统返回手势承担。
@@ -9819,6 +9838,8 @@ function SessionHeaderBar({
           onPress={onOpenSessionList}
           testID="session.sessionListButton"
         />
+      ) : nativeHeader ? (
+        <SessionHeaderNativeBack label={t('shared.back')} onPress={onBack} />
       ) : (
         <ScreenBackButton
           hitSlop={4}
@@ -9828,6 +9849,7 @@ function SessionHeaderBar({
         />
       )}
 
+      {nativeHeader ? <SessionHeaderNativeTitle title={title} /> : (
       <View style={styles.sessionHeaderTextBlock}>
         <View style={styles.sessionHeaderTitleRow}>
           {!messageOnly && currentSession?.pinnedAt ? (
@@ -9848,8 +9870,20 @@ function SessionHeaderBar({
           </Text>
         ) : null}
       </View>
+      )}
 
-      <View style={styles.sessionHeaderActions}>
+      {nativeHeader ? (
+        <SessionHeaderNativeActions
+          available={!!currentSession}
+          desktopLabel={t('remoteDesktop.title')}
+          filesLabel={t('session.presentation.overview.actions.files.a11y')}
+          moreLabel={t('session.menu.details')}
+          files={overview?.actions.find(action => action.id === 'files')}
+          onDetails={onOpenSettings}
+          onDesktop={onOpenRemoteDesktop}
+          onAction={id => actionHandlers[id]()}
+        />
+      ) : <View style={styles.sessionHeaderActions}>
         <SessionHeaderIconButton
           accessibilityLabel={t('remoteDesktop.title')}
           active={false}
@@ -9879,7 +9913,7 @@ function SessionHeaderBar({
           onPress={currentSession ? onOpenSettings : undefined}
           testID="session.controlsToggle"
         /> : null}
-      </View>
+      </View>}
     </View>
   );
 }
@@ -10828,6 +10862,19 @@ function SessionSearchSheet({
     loading: loadingEarlier,
     query,
   });
+  if (Platform.OS === 'ios') {
+    return <SessionSearchNative
+      visible={visible}
+      query={query}
+      counter={normalizedQuery ? hasHits ? `${activeIndex + 1} / ${hitCount}` : '0 / 0' : t('session.screen.searchEnterKeyword')}
+      hasHits={hasHits}
+      loadEarlier={loadEarlierAction}
+      onChangeQuery={onChangeQuery}
+      onClose={onClose}
+      onMove={onMove}
+      onLoadEarlier={onLoadEarlier}
+    />;
+  }
   return (
     <SheetModal
       backdropTestID="search.backdrop"
@@ -11382,6 +11429,7 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     right: 0,
     top: 0,
     zIndex: 10,
+    backgroundColor: Platform.OS === 'ios' ? 'transparent' : colors.surface,
   },
   sessionChromeContent: {
     width: '100%',
@@ -11402,9 +11450,6 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   sessionBottomContent: {
     alignSelf: 'center',
     width: '100%',
-  },
-  translucentBackdrop: {
-    ...StyleSheet.absoluteFill,
   },
   // 排队消息编辑提示条(composer 上方):✎ + 「正在编辑第 N 条排队消息」 + × 放弃。
   queueEditBar: {
@@ -11446,6 +11491,15 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
   },
   sessionHeaderBackButton: {
     flexShrink: 0,
+  },
+  sessionHeaderBarNative: {
+    borderBottomWidth: 0,
+    gap: spacing.sm,
+    // Match the home UINavigationBar's compact row, below the existing safe area.
+    // Keep 44pt touch targets; larger text may still grow the row naturally.
+    minHeight: Platform.OS === 'ios' && Platform.isPad ? 50 : 44,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: 0,
   },
   sessionHeaderTextBlock: {
     flex: 1,

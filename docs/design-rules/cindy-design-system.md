@@ -17,6 +17,7 @@ DS-7 已合并 [#4215](https://github.com/makecindy/cindy/pull/4215)。入口：
 | [`DESIGN.md`](./DESIGN.md) | 权威视觉规范全文：视觉语言（§1）、颜色（§2）、排版（§3）、组件（§4）、布局（§5）、交互约定与 Motion token（§14）、主题系统与 Token 参考（§10）、CINDY 皮肤族（§15）、登录链路（§16） | **权威正本**（原仓库根文件，根目录 `DESIGN.md` 保留为跳转入口） |
 | [`design-governance.md`](./design-governance.md) | 设计系统治理合同：管道与记账（§1.1）、四种真相边界、Token 层级与现行 §10 三档的映射、兼容红线、工具单选、两级证据合同、PR 风险分类、治理接线纪律、待裁决登记、存量门禁处置表、实施路线图、已知边界（§13） | **治理正本**（管流程；视觉规则仍以 `DESIGN.md` 为准） |
 | [`design-inventory.md`](./design-inventory.md) | Cindy Desktop / Mobile 生产可达 UI 台账：GENERATED 机器事实（稳定 ID / 入口 / 组件 / 样式来源 / Token 与裸值统计）+ 人工迁移状态 | **台账正本**（schema 见 [`design-governance.md`](./design-governance.md) §2.1；生成 `pnpm design:inventory`，校验 `pnpm check:design-inventory`） |
+| [`ios-native-design.md`](./ios-native-design.md) | iOS 导航、原生面板与分组、玻璃材质、任务详情、紧凑搜索及触控验收；附当前迁移审查 | 平台补充（由 DESIGN Mobile 节授权） |
 | [Token README](../../packages/design-tokens/README.md) | Desktop DTCG 生产生成、维护/回退、实际接管与保留项，Mobile 待新方案共同确认 | **Token 合同入口**（构建期接管 Desktop，运行时只读生成子集） |
 | [`figma-component-spec.md`](./figma-component-spec.md) | 登录链路 Figma 组件与色彩速查手册：全组件逐态参数、nodeId 溯源、wave1–wave6 读取记录 | 权威（登录域逐参数） |
 | [`token-decision-table.md`](./token-decision-table.md) | 登录链路色值 / 尺寸 → token 决策记录（新增 / 复用 / 豁免的判定理由 + 各 wave 增补台账） | 决策记录（现行 token 清单与值以 `DESIGN.md §16.1` + `colors.ts` 为准） |
