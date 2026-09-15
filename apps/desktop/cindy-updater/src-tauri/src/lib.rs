@@ -26,12 +26,14 @@ struct StatusPayload {
     /// 0..=100, only meaningful for `Extracting`/`Replacing`. -1 = indeterminate.
     progress: i32,
     error: Option<String>,
+    can_retry: bool,
     log_path: String,
 }
 
 struct AppState {
     args: CliArgs,
     last_status: Arc<Mutex<StatusPayload>>,
+    retry_started: Arc<Mutex<bool>>,
 }
 
 #[tauri::command]
@@ -56,6 +58,55 @@ fn quit_now(app: AppHandle) {
     app.exit(0);
 }
 
+#[tauri::command]
+fn retry_update(state: State<'_, AppState>) -> Result<(), String> {
+    {
+        let mut started = state.retry_started.lock().unwrap();
+        if *started {
+            return Err("in_progress".into());
+        }
+        let can_retry = {
+            let status = state.last_status.lock().unwrap();
+            status.phase == Phase::Failed && status.can_retry
+        };
+        if !can_retry {
+            return Err("unavailable".into());
+        }
+        let archive = installer::retry_archive(&state.args);
+        let digest = state.args.zip_sha256.as_deref().unwrap_or("");
+        if digest.is_empty() || !installer::archive_matches_digest(&archive, digest) {
+            return Err("archive_unavailable".into());
+        }
+        installer::ensure_retry_processes_closed(&state.args)?;
+        *started = true;
+    }
+
+    let args = state.args.clone();
+    let updater = std::env::current_exe().map_err(|error| {
+        *state.retry_started.lock().unwrap() = false;
+        error.to_string()
+    })?;
+    let mut command = std::process::Command::new(&updater);
+    command
+        .args(installer::retry_cli_args(&args))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const FLAGS: u32 = 0x00000008 | 0x00000200;
+        command.creation_flags(FLAGS);
+    }
+    let child = command.spawn().map_err(|error| {
+        *state.retry_started.lock().unwrap() = false;
+        logger::error(format!("[command] retry_update spawn failed: {error}"));
+        error.to_string()
+    })?;
+    logger::info(format!("[command] retry_update spawned pid={}", child.id()));
+    std::process::exit(0);
+}
+
 pub fn run() {
     let args = CliArgs::parse();
     logger::init(&args.log);
@@ -74,17 +125,25 @@ pub fn run() {
         message: "等待主程序退出…".into(),
         progress: -1,
         error: None,
+        can_retry: false,
         log_path: args.log.to_string_lossy().into(),
     };
     let last_status = Arc::new(Mutex::new(initial_status));
+    let retry_started = Arc::new(Mutex::new(false));
     let state = AppState {
         args: args.clone(),
         last_status: last_status.clone(),
+        retry_started,
     };
 
     tauri::Builder::default()
         .manage(state)
-        .invoke_handler(tauri::generate_handler![get_status, open_log_dir, quit_now])
+        .invoke_handler(tauri::generate_handler![
+            get_status,
+            open_log_dir,
+            quit_now,
+            retry_update
+        ])
         .setup(move |app| {
             let win = app.get_webview_window("main");
 
@@ -157,6 +216,7 @@ fn event_to_payload(event: InstallerEvent, handle: &AppHandle) -> StatusPayload 
             message,
             progress: -1,
             error: None,
+            can_retry: false,
             log_path,
         },
         InstallerEvent::Progress(phase, message, progress) => StatusPayload {
@@ -164,6 +224,7 @@ fn event_to_payload(event: InstallerEvent, handle: &AppHandle) -> StatusPayload 
             message,
             progress,
             error: None,
+            can_retry: false,
             log_path,
         },
         InstallerEvent::Done => StatusPayload {
@@ -171,13 +232,15 @@ fn event_to_payload(event: InstallerEvent, handle: &AppHandle) -> StatusPayload 
             message: "更新完成，正在启动新版本…".into(),
             progress: 100,
             error: None,
+            can_retry: false,
             log_path,
         },
-        InstallerEvent::Failed(err) => StatusPayload {
+        InstallerEvent::Failed(err, can_retry) => StatusPayload {
             phase: Phase::Failed,
             message: "更新失败".into(),
             progress: -1,
             error: Some(err),
+            can_retry,
             log_path,
         },
     }

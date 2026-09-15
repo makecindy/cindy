@@ -15,6 +15,7 @@ const PHASE_LABEL = {
 };
 
 const INDETERMINATE_PHASES = new Set(["waiting", "launching", "requesting_elevation"]);
+const retryCopy = window.retryCopy(navigator.language);
 
 const els = {
   chip: document.getElementById("phase-chip"),
@@ -23,9 +24,15 @@ const els = {
   track: document.getElementById("progress-track"),
   errorBar: document.getElementById("error-bar"),
   errorText: document.getElementById("error-text"),
+  btnRetry: document.getElementById("btn-retry"),
   btnLog: document.getElementById("btn-log"),
   btnQuit: document.getElementById("btn-quit"),
 };
+
+els.btnRetry.textContent = retryCopy.retry;
+
+let retrying = false;
+let canRetry = false;
 
 function applyStatus(payload) {
   const phase = payload.phase || "waiting";
@@ -36,7 +43,7 @@ function applyStatus(payload) {
   if (phase === "failed") {
     els.track.hidden = true;
     els.errorBar.hidden = !payload.error;
-    els.errorText.textContent = payload.error || "";
+    els.errorText.textContent = retryCopy[payload.error] || payload.error || "";
   } else {
     els.track.hidden = false;
     els.errorBar.hidden = true;
@@ -67,7 +74,32 @@ function applyStatus(payload) {
   // Close button only appears in terminal states — there's nothing to abort
   // mid-update without leaving the install dir half-rewritten.
   els.btnQuit.hidden = phase !== "done" && phase !== "failed";
+  canRetry = phase === "failed" && payload.can_retry === true;
+  els.btnRetry.hidden = !canRetry || retrying;
+  els.btnRetry.disabled = retrying;
 }
+
+els.btnRetry.addEventListener("click", async () => {
+  if (retrying || !canRetry) return;
+
+  retrying = true;
+  els.btnRetry.hidden = true;
+  els.btnRetry.disabled = true;
+
+  try {
+    await invoke("retry_update");
+  } catch (err) {
+    retrying = false;
+    const code = String(err?.message || err);
+    if (code === "archive_unavailable" || code === "unavailable") {
+      canRetry = false;
+    }
+    els.btnRetry.hidden = !canRetry;
+    els.btnRetry.disabled = false;
+    els.errorBar.hidden = false;
+    els.errorText.textContent = retryCopy[code] || retryCopy.spawn_failed;
+  }
+});
 
 els.btnLog.addEventListener("click", () => {
   invoke("open_log_dir").catch((err) => {

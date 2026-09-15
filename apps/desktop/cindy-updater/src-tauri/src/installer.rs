@@ -1,7 +1,9 @@
 use std::fs::{self, File};
-use std::io;
+use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;
 use std::time::{Duration, Instant};
+
+use sha2::{Digest, Sha256};
 
 use serde::Serialize;
 use sysinfo::System;
@@ -32,7 +34,7 @@ pub enum InstallerEvent {
     Phase(Phase, String),
     Progress(Phase, String, i32),
     Done,
-    Failed(String),
+    Failed(String, bool),
 }
 
 const PID_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
@@ -50,21 +52,176 @@ const APPDIR_PROCESS_POLL: Duration = Duration::from_millis(500);
 const LAUNCH_VERIFY_TIMEOUT: Duration = Duration::from_secs(3);
 const LAUNCH_VERIFY_POLL: Duration = Duration::from_millis(100);
 
-pub fn run<F: FnMut(InstallerEvent)>(args: CliArgs, mut emit: F) {
+pub fn run<F: FnMut(InstallerEvent)>(mut args: CliArgs, mut emit: F) {
+    if let Err(error) = bind_zip_sha256(&mut args) {
+        logger::error(format!("[installer] FAILED: archive unavailable ({error})"));
+        let _ = fs::remove_file(&args.lock);
+        emit(InstallerEvent::Failed(
+            "更新文件已不存在或无法读取，请重新检查更新".into(),
+            false,
+        ));
+        return;
+    }
     match run_inner(&args, &mut emit) {
         Ok(()) => emit(InstallerEvent::Done),
-        Err(err) => {
-            logger::error(format!("[installer] FAILED: {err}"));
+        Err(failure) => {
+            let can_retry = failure.can_retry
+                && prepare_retry_archive(&args)
+                && retry_allowed(true, &retry_archive(&args), args.zip_sha256.as_deref());
+            logger::error(format!("[installer] FAILED: {}", failure.message));
             let _ = fs::remove_file(&args.lock);
-            emit(InstallerEvent::Failed(err.to_string()));
+            emit(InstallerEvent::Failed(failure.message, can_retry));
         }
     }
+}
+
+#[derive(Debug)]
+struct InstallerFailure {
+    message: String,
+    can_retry: bool,
+}
+
+impl InstallerFailure {
+    fn new(message: impl Into<String>, can_retry: bool) -> Self {
+        Self {
+            message: message.into(),
+            can_retry,
+        }
+    }
+}
+
+pub(crate) fn retry_available(zip: &Path) -> bool {
+    File::open(zip)
+        .and_then(|file| file.metadata())
+        .map(|metadata| metadata.is_file())
+        .unwrap_or(false)
+}
+
+fn sha256_hex(file: &mut File) -> io::Result<String> {
+    file.seek(SeekFrom::Start(0))?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
+    file.seek(SeekFrom::Start(0))?;
+    Ok(format!("{:x}", hasher.finalize()))
+}
+
+fn open_regular_file(zip: &Path) -> io::Result<File> {
+    let file = File::open(zip)?;
+    if !file.metadata()?.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("archive path is not a regular file: {}", zip.display()),
+        ));
+    }
+    Ok(file)
+}
+
+pub(crate) fn archive_matches_digest(zip: &Path, expected: &str) -> bool {
+    open_regular_file(zip)
+        .and_then(|mut file| sha256_hex(&mut file))
+        .map(|digest| digest.eq_ignore_ascii_case(expected))
+        .unwrap_or(false)
+}
+
+/// Capture the digest of the zip this process first opened. Later elevation
+/// and retry reuse that digest so a TEMP replacement cannot be extracted.
+pub(crate) fn bind_zip_sha256(args: &mut CliArgs) -> Result<String, String> {
+    let mut file = open_regular_file(&args.zip).map_err(|_| "archive_unavailable".to_string())?;
+    let digest = sha256_hex(&mut file).map_err(|_| "archive_unavailable".to_string())?;
+    match args.zip_sha256.as_deref() {
+        Some(expected) if expected.eq_ignore_ascii_case(&digest) => Ok(digest),
+        Some(_) => Err("archive_unavailable".into()),
+        None => {
+            args.zip_sha256 = Some(digest.clone());
+            Ok(digest)
+        }
+    }
+}
+
+/// Retry is safe only when the failed attempt left the install directory in a
+/// known-good state and the original archive still matches the captured digest.
+fn retry_allowed(can_retry: bool, zip: &Path, expected_sha256: Option<&str>) -> bool {
+    match expected_sha256 {
+        Some(digest) => can_retry && archive_matches_digest(zip, digest),
+        None => false,
+    }
+}
+
+pub(crate) fn retry_archive(args: &CliArgs) -> std::path::PathBuf {
+    args.workdir.join("retry.zip")
+}
+
+fn prepare_retry_archive(args: &CliArgs) -> bool {
+    let target = retry_archive(args);
+    if args.zip == target || !args.zip.exists() {
+        return retry_available(&target);
+    }
+    if target.exists() {
+        return false;
+    }
+    match fs::rename(&args.zip, &target) {
+        Ok(()) => retry_available(&target),
+        Err(error) => {
+            logger::warn(format!("[retry] could not isolate archive: {error}"));
+            false
+        }
+    }
+}
+
+pub(crate) fn ensure_retry_processes_closed(args: &CliArgs) -> Result<(), String> {
+    let mut sys = System::new();
+    if collect_appdir_processes(&mut sys, &args.app_dir, std::process::id()).is_empty() {
+        Ok(())
+    } else {
+        Err("processes_running".into())
+    }
+}
+
+/// Recreate the original updater arguments from trusted Rust state for a user-initiated retry.
+/// An elevated updater keeps its internal marker so a retry does not accidentally start an
+/// elevated process as if it were unelevated; the original process omits it and follows UAC again.
+pub(crate) fn retry_cli_args(args: &CliArgs) -> Vec<std::ffi::OsString> {
+    let theme = match args.theme {
+        ThemeArg::Light => "light",
+        ThemeArg::Dark => "dark",
+        ThemeArg::Auto => "auto",
+    };
+    let zip = retry_archive(args);
+    let values = [
+        ("--zip", zip.as_os_str()),
+        ("--app-dir", args.app_dir.as_os_str()),
+        ("--exe-name", std::ffi::OsStr::new(&args.exe_name)),
+        ("--pid", std::ffi::OsStr::new("0")),
+        ("--log", args.log.as_os_str()),
+        ("--lock", args.lock.as_os_str()),
+        ("--workdir", args.workdir.as_os_str()),
+        ("--theme", std::ffi::OsStr::new(theme)),
+    ];
+    let mut result = values
+        .into_iter()
+        .flat_map(|(key, value)| [std::ffi::OsString::from(key), value.to_os_string()])
+        .collect::<Vec<_>>();
+    if let Some(digest) = args.zip_sha256.as_deref().filter(|digest| !digest.is_empty()) {
+        result.push(std::ffi::OsString::from("--zip-sha256"));
+        result.push(std::ffi::OsString::from(digest));
+    }
+    if args.elevated {
+        result.push(std::ffi::OsString::from("--elevated"));
+    }
+    result
 }
 
 fn run_inner<F: FnMut(InstallerEvent)>(
     args: &CliArgs,
     emit: &mut F,
-) -> anyhow::Result<()> {
+) -> Result<(), InstallerFailure> {
     logger::info(format!(
         "[installer] zip={} app_dir={} exe_name={} pid={}",
         args.zip.display(),
@@ -78,9 +235,13 @@ fn run_inner<F: FnMut(InstallerEvent)>(
         Phase::Waiting,
         format!("等待 PID {} 退出…", args.pid),
     ));
-    let exited = pid_wait::wait_for_exit(args.pid, PID_WAIT_TIMEOUT);
+    let is_retry = args.zip == retry_archive(args);
+    let exited = is_retry || pid_wait::wait_for_exit(args.pid, PID_WAIT_TIMEOUT);
     if !exited {
-        anyhow::bail!("主程序在 60 秒内没有退出，更新中止");
+        return Err(InstallerFailure::new(
+            "主程序在 60 秒内没有退出，更新中止",
+            true,
+        ));
     }
     std::thread::sleep(FS_SETTLE_DELAY);
 
@@ -92,7 +253,13 @@ fn run_inner<F: FnMut(InstallerEvent)>(
     //      that survives app exit and made both the replace AND the rollback
     //      fail with os error 32 (sharing violation). Windows never allows
     //      overwriting a running executable, so these must be gone first.
-    terminate_appdir_processes(&args.app_dir, emit)?;
+    if is_retry {
+        ensure_retry_processes_closed(args)
+            .map_err(|error| InstallerFailure::new(error, true))?;
+    } else {
+        terminate_appdir_processes(&args.app_dir, emit)
+            .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
+    }
 
     // 1.5. Permission probe → optional self-elevation. Run BEFORE the lock
     //      write so cancelling UAC leaves zero on-disk state. If app_dir is
@@ -121,10 +288,16 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                     std::process::exit(0);
                 }
                 Err(ElevateError::UserCancelled) => {
-                    anyhow::bail!("用户取消了管理员授权，更新已取消");
+                    return Err(InstallerFailure::new(
+                        "用户取消了管理员授权，更新已取消",
+                        true,
+                    ));
                 }
                 Err(ElevateError::Other(e)) => {
-                    anyhow::bail!("请求管理员权限失败：{}", e);
+                    return Err(InstallerFailure::new(
+                        format!("请求管理员权限失败：{}", e),
+                        true,
+                    ));
                 }
             }
         }
@@ -132,10 +305,13 @@ fn run_inner<F: FnMut(InstallerEvent)>(
             // Already elevated and STILL can't write — not a permission
             // problem. Most likely an antivirus / EDR holds a file open.
             // Bail with a directive error rather than looping UAC.
-            anyhow::bail!(
-                "无法写入安装目录 {} (已使用管理员权限)。可能被杀软或其他进程锁定，请将该目录加入杀软白名单后重试",
-                args.app_dir.display()
-            );
+            return Err(InstallerFailure::new(
+                format!(
+                    "无法写入安装目录 {} (已使用管理员权限)。可能被杀软或其他进程锁定，请将该目录加入杀软白名单后重试",
+                    args.app_dir.display()
+                ),
+                true,
+            ));
         }
         Ok(false) => {
             // Writable; continue normal flow.
@@ -155,23 +331,33 @@ fn run_inner<F: FnMut(InstallerEvent)>(
     if let Some(parent) = args.lock.parent() {
         let _ = fs::create_dir_all(parent);
     }
-    fs::write(&args.lock, b"updating")?;
+    fs::write(&args.lock, b"updating")
+        .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
 
     // 3. Extract zip into a subdir of workdir. Child dirs preserve the
     //    parent's `{ts}` suffix so a copy-out for support still carries the
     //    attempt timestamp regardless of whether the parent context survives.
+    //    A user retry reuses this workdir, so discard any partial staging from
+    //    the previous attempt before rebuilding it.
     let ts = workdir_ts(&args.workdir);
     let extract_dir = args.workdir.join(format!("cindy-update-extract-{ts}"));
-    fs::create_dir_all(&extract_dir)?;
+    let backup_dir = args.workdir.join(format!("cindy-update-rollback-{ts}"));
+    remove_staging_dir(&extract_dir)
+        .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
+    remove_staging_dir(&backup_dir)
+        .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
+    fs::create_dir_all(&extract_dir)
+        .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
     logger::info(format!("[installer] extract_dir={}", extract_dir.display()));
-    extract_zip(&args.zip, &extract_dir, |done, total| {
+    extract_zip(&args.zip, &extract_dir, args.zip_sha256.as_deref(), |done, total| {
         let pct = if total == 0 { -1 } else { (done * 100 / total).min(100) as i32 };
         emit(InstallerEvent::Progress(
             Phase::Extracting,
             format!("解压中 {}/{}", done, total),
             pct,
         ));
-    })?;
+    })
+    .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
 
     // 3.5. Selective backup: copy *only* the files in app_dir that the new
     //      release is about to overwrite. Files that exist in the old version
@@ -182,8 +368,8 @@ fn run_inner<F: FnMut(InstallerEvent)>(
         Phase::BackingUp,
         "备份当前版本…".into(),
     ));
-    let backup_dir = args.workdir.join(format!("cindy-update-rollback-{ts}"));
-    fs::create_dir_all(&backup_dir)?;
+    fs::create_dir_all(&backup_dir)
+        .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
     logger::info(format!("[installer] backup_dir={}", backup_dir.display()));
     snapshot_overwritten_files(&extract_dir, &args.app_dir, &backup_dir, |done, total| {
         let pct = if total == 0 { -1 } else { (done * 100 / total).min(100) as i32 };
@@ -192,7 +378,8 @@ fn run_inner<F: FnMut(InstallerEvent)>(
             format!("备份 {}/{}", done, total),
             pct,
         ));
-    })?;
+    })
+    .map_err(|error| InstallerFailure::new(error.to_string(), true))?;
 
     // 4–6. The risky window: replace files, drop lock, launch, verify.
     //      Wrapped so any failure triggers rollback before bubbling out.
@@ -233,12 +420,13 @@ fn run_inner<F: FnMut(InstallerEvent)>(
         Ok(())
     })();
 
-    // Staging dirs (extract + zip) are ALWAYS cleaned regardless of outcome —
-    // they're never useful for recovery. The backup dir survives only if the
-    // rollback itself failed (last-resort manual recovery).
-    let cleanup_staging = || {
+    // Always clean extracted files. Keep the zip only after a successful
+    // rollback so the user can retry; retain the backup if rollback failed.
+    let cleanup_staging = |remove_zip: bool| {
         let _ = fs::remove_dir_all(&extract_dir);
-        let _ = fs::remove_file(&args.zip);
+        if remove_zip {
+            let _ = fs::remove_file(&args.zip);
+        }
     };
 
     match install_result {
@@ -248,7 +436,7 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                 args.exe_name
             ));
             let _ = fs::remove_dir_all(&backup_dir);
-            cleanup_staging();
+            cleanup_staging(true);
             Ok(())
         }
         Err(install_err) => {
@@ -268,7 +456,16 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                 Ok(()) => {
                     logger::info("[installer] rollback succeeded");
                     let _ = fs::remove_dir_all(&backup_dir);
-                    cleanup_staging();
+                    // Keep the archive so the user can retry after a failed
+                    // replacement/launch once rollback restored the old app.
+                    cleanup_staging(false);
+                    // Remove the archive from Electron's auto-apply path BEFORE
+                    // restarting the restored app. If isolation fails, retain
+                    // the original no-retry cleanup behavior.
+                    let can_retry = prepare_retry_archive(args);
+                    if !can_retry {
+                        let _ = fs::remove_file(&args.zip);
+                    }
                     // Best-effort relaunch of the (now restored) old exe so
                     // the user isn't left without the app after a failed
                     // update. If it fails to start, the Failed UI still
@@ -287,7 +484,10 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                         }
                     }
                     let _ = fs::remove_file(&args.lock);
-                    anyhow::bail!("{} (已回滚到旧版本)", install_err)
+                    return Err(InstallerFailure::new(
+                        format!("{} (已回滚到旧版本)", install_err),
+                        can_retry,
+                    ));
                 }
                 Err(rb_err) => {
                     logger::error(format!(
@@ -297,16 +497,34 @@ fn run_inner<F: FnMut(InstallerEvent)>(
                     // KEEP backup_dir — user / support may need to manually
                     // restore. Staging is still cleaned (it's never useful
                     // for recovery, only the backup is).
-                    cleanup_staging();
-                    anyhow::bail!(
-                        "{} (回滚也失败：{}；备份保留在 {} 供手动恢复)",
-                        install_err,
-                        rb_err,
-                        backup_dir.display()
-                    )
+                    cleanup_staging(true);
+                    return Err(InstallerFailure::new(
+                        format!(
+                            "{} (回滚也失败：{}；备份保留在 {} 供手动恢复)",
+                            install_err,
+                            rb_err,
+                            backup_dir.display()
+                        ),
+                        false,
+                    ));
                 }
             }
         }
+    }
+}
+
+/// Remove a staging directory before reusing its path. A missing path is
+/// already clean; a file at the directory path is an error rather than a
+/// silently ignored collision.
+fn remove_staging_dir(path: &Path) -> io::Result<()> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            format!("staging path is not a directory: {}", path.display()),
+        )),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(error),
     }
 }
 
@@ -384,9 +602,16 @@ fn workdir_ts(workdir: &Path) -> String {
 fn extract_zip<F: FnMut(u64, u64)>(
     zip_path: &Path,
     dest: &Path,
+    expected_sha256: Option<&str>,
     mut on_progress: F,
 ) -> anyhow::Result<()> {
-    let file = File::open(zip_path)?;
+    let mut file = open_regular_file(zip_path)?;
+    let digest = sha256_hex(&mut file)?;
+    match expected_sha256 {
+        Some(expected) if expected.eq_ignore_ascii_case(&digest) => {}
+        Some(_) => anyhow::bail!("archive digest mismatch"),
+        None => anyhow::bail!("archive digest missing"),
+    }
     let mut archive = zip::ZipArchive::new(file)?;
     let total = archive.len() as u64;
     on_progress(0, total);
@@ -447,17 +672,20 @@ fn snapshot_overwritten_files<F: FnMut(u64, u64)>(
 /// Reverse of `snapshot_overwritten_files`: copy every file in `backup_dir`
 /// back over `app_dir`. Any new files added by the failed install remain as
 /// orphans in app_dir — harmless, the next clean install would remove them
-/// — but the originals are restored so the old version still works.
+/// — but the originals are restored so the old version still works. Backup
+/// walk errors fail this function so callers keep the backup and disable retry.
 fn rollback<F: FnMut(u64, u64)>(
     backup_dir: &Path,
     app_dir: &Path,
     mut on_progress: F,
 ) -> anyhow::Result<()> {
-    let entries: Vec<_> = walkdir::WalkDir::new(backup_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .collect();
+    let mut entries = Vec::new();
+    for entry in walkdir::WalkDir::new(backup_dir) {
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            entries.push(entry);
+        }
+    }
     let total = entries.len() as u64;
     on_progress(0, total);
 
@@ -697,8 +925,268 @@ fn path_is_within(child: &Path, parent: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::path_is_within;
-    use std::path::Path;
+    use super::{
+        archive_matches_digest, bind_zip_sha256, path_is_within, prepare_retry_archive,
+        remove_staging_dir, retry_allowed, retry_available, retry_cli_args, rollback,
+    };
+    use crate::args::{CliArgs, ThemeArg};
+    use std::fs;
+    use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static TEST_DIR_SEQ: AtomicU64 = AtomicU64::new(0);
+
+    fn test_args() -> CliArgs {
+        CliArgs {
+            zip: PathBuf::from(r"C:\Users\Test User\update.zip"),
+            app_dir: PathBuf::from(r"C:\Program Files\Cindy"),
+            exe_name: "cindy.exe".into(),
+            pid: 42,
+            log: PathBuf::from(r"C:\Users\Test User\update.log"),
+            lock: PathBuf::from(r"C:\Users\Test User\update.lock"),
+            workdir: PathBuf::from(r"C:\Users\Test User\update-workdir"),
+            theme: ThemeArg::Dark,
+            elevated: true,
+            zip_sha256: None,
+        }
+    }
+
+    struct TestDir(PathBuf);
+
+    impl TestDir {
+        fn new() -> Self {
+            let unique = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos();
+            let seq = TEST_DIR_SEQ.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "cindy-updater-test-{}-{unique}-{seq}",
+                std::process::id()
+            ));
+            fs::create_dir(&path).expect("create isolated test directory");
+            Self(path)
+        }
+    }
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn remove_staging_dir_is_idempotent_and_rejects_files() {
+        let temp = TestDir::new();
+        let missing = temp.0.join("missing");
+        remove_staging_dir(&missing).expect("missing staging dir is already clean");
+
+        let directory = temp.0.join("directory");
+        fs::create_dir(&directory).expect("create staging directory");
+        fs::write(directory.join("partial.txt"), b"partial").expect("create partial file");
+        remove_staging_dir(&directory).expect("remove partial staging directory");
+        assert!(!directory.exists());
+
+        let file = temp.0.join("file");
+        fs::write(&file, b"not a directory").expect("create conflicting staging file");
+        assert!(remove_staging_dir(&file).is_err());
+        assert!(file.exists());
+    }
+
+    #[test]
+    fn retry_requires_a_readable_archive() {
+        let temp = TestDir::new();
+        let zip = temp.0.join("update.zip");
+        fs::write(&zip, b"update").expect("create test archive");
+        assert!(retry_available(&zip));
+        fs::remove_file(&zip).expect("remove test archive");
+        assert!(!retry_available(&zip));
+        fs::create_dir(&zip).expect("create directory at archive path");
+        assert!(!retry_available(&zip));
+    }
+
+    #[test]
+    fn retry_is_allowed_only_when_failure_is_safe_and_archive_is_readable() {
+        let temp = TestDir::new();
+        let zip = temp.0.join("update.zip");
+        fs::write(&zip, b"update").expect("create test archive");
+
+        let digest = bind_zip_sha256(&mut CliArgs {
+            zip: zip.clone(),
+            ..test_args()
+        })
+        .expect("capture digest");
+        assert!(retry_allowed(true, &zip, Some(&digest)));
+        assert!(!retry_allowed(false, &zip, Some(&digest)));
+        assert!(!retry_allowed(true, &zip, None));
+
+        fs::remove_file(&zip).expect("remove test archive");
+        assert!(!retry_allowed(true, &zip, Some(&digest)));
+    }
+
+    #[test]
+    fn failed_archive_is_removed_from_electron_auto_apply_path() {
+        let temp = TestDir::new();
+        let mut args = test_args();
+        args.workdir = temp.0.join("workdir");
+        fs::create_dir(&args.workdir).unwrap();
+        args.zip = temp.0.join("update.zip");
+        fs::write(&args.zip, b"archive").unwrap();
+        let retry_zip = args.workdir.join("retry.zip");
+        assert!(prepare_retry_archive(&args));
+        assert!(!args.zip.exists());
+        assert_eq!(fs::read(&retry_zip).unwrap(), b"archive");
+        assert!(prepare_retry_archive(&args));
+    }
+
+    #[test]
+    fn archive_isolation_does_not_overwrite_an_existing_retry_file() {
+        let temp = TestDir::new();
+        let mut args = test_args();
+        args.workdir = temp.0.clone();
+        args.zip = temp.0.join("update.zip");
+        fs::write(&args.zip, b"original").unwrap();
+        fs::write(super::retry_archive(&args), b"existing").unwrap();
+        assert!(!prepare_retry_archive(&args));
+        assert_eq!(fs::read(&args.zip).unwrap(), b"original");
+        assert_eq!(fs::read(super::retry_archive(&args)).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn rollback_restores_backed_up_files() {
+        let temp = TestDir::new();
+        let backup_dir = temp.0.join("backup");
+        let app_dir = temp.0.join("app");
+        fs::create_dir_all(backup_dir.join("nested")).unwrap();
+        fs::create_dir_all(app_dir.join("nested")).unwrap();
+        fs::write(backup_dir.join("root.txt"), b"old-root").unwrap();
+        fs::write(backup_dir.join("nested").join("file.txt"), b"old-nested").unwrap();
+        fs::write(app_dir.join("root.txt"), b"new-root").unwrap();
+        fs::write(app_dir.join("nested").join("file.txt"), b"new-nested").unwrap();
+
+        rollback(&backup_dir, &app_dir, |_, _| {}).expect("complete backup walk succeeds");
+        assert_eq!(fs::read(app_dir.join("root.txt")).unwrap(), b"old-root");
+        assert_eq!(
+            fs::read(app_dir.join("nested").join("file.txt")).unwrap(),
+            b"old-nested"
+        );
+    }
+
+    #[test]
+    fn rollback_fails_when_backup_entries_cannot_be_walked() {
+        let temp = TestDir::new();
+        let backup_dir = temp.0.join("missing-backup");
+        let app_dir = temp.0.join("app");
+        fs::create_dir(&app_dir).unwrap();
+        fs::write(app_dir.join("restored.txt"), b"new").unwrap();
+
+        let result = rollback(&backup_dir, &app_dir, |_, _| {});
+        assert!(
+            result.is_err(),
+            "incomplete backup walk must fail rollback so retry stays disabled: {result:?}"
+        );
+        assert_eq!(fs::read(app_dir.join("restored.txt")).unwrap(), b"new");
+    }
+
+    #[test]
+    fn retry_binds_to_the_archive_digest_captured_on_first_open() {
+        let temp = TestDir::new();
+        let mut args = test_args();
+        args.workdir = temp.0.join("workdir");
+        fs::create_dir(&args.workdir).unwrap();
+        args.zip = temp.0.join("update.zip");
+        fs::write(&args.zip, b"trusted-archive").unwrap();
+
+        bind_zip_sha256(&mut args).expect("capture digest from the first readable zip");
+        let digest = args.zip_sha256.clone().expect("digest stored on args");
+        assert!(archive_matches_digest(&args.zip, &digest));
+        assert!(retry_allowed(true, &args.zip, args.zip_sha256.as_deref()));
+
+        fs::write(&args.zip, b"replaced-archive").unwrap();
+        assert!(!archive_matches_digest(&args.zip, &digest));
+        assert!(!retry_allowed(true, &args.zip, args.zip_sha256.as_deref()));
+        assert_eq!(
+            bind_zip_sha256(&mut args).unwrap_err(),
+            "archive_unavailable"
+        );
+    }
+
+    #[test]
+    fn retry_rejects_running_processes_without_terminating_them() {
+        let temp = TestDir::new();
+        let executable = temp.0.join("retry-process-fixture.exe");
+        fs::copy(std::env::current_exe().unwrap(), &executable).unwrap();
+        struct Child(std::process::Child);
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+        let mut child = Child(std::process::Command::new(&executable)
+            .args(["--exact", "installer::tests::retry_process_fixture", "--ignored"])
+            .stdout(std::process::Stdio::null())
+            .spawn().unwrap());
+        let mut args = test_args();
+        args.app_dir = temp.0.clone();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while super::ensure_retry_processes_closed(&args).is_ok() {
+            assert!(std::time::Instant::now() < deadline, "fixture did not appear");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        assert_eq!(super::ensure_retry_processes_closed(&args), Err("processes_running".into()));
+        assert!(child.0.try_wait().unwrap().is_none(), "retry must not kill the process");
+        child.0.kill().unwrap();
+        child.0.wait().unwrap();
+        assert!(super::ensure_retry_processes_closed(&args).is_ok());
+    }
+
+    #[test]
+    #[ignore = "child process fixture, invoked only by the retry process test"]
+    fn retry_process_fixture() {
+        std::thread::sleep(std::time::Duration::from_secs(30));
+    }
+
+    #[test]
+    fn retry_cli_args_reuses_trusted_values_and_elevation_marker() {
+        let mut source = test_args();
+        source.zip_sha256 = Some("abc123".into());
+        let args = retry_cli_args(&source);
+        let args: Vec<_> = args
+            .iter()
+            .map(|arg| arg.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            args,
+            vec![
+                "--zip",
+                &test_args().workdir.join("retry.zip").to_string_lossy(),
+                "--app-dir",
+                r"C:\Program Files\Cindy",
+                "--exe-name",
+                "cindy.exe",
+                "--pid",
+                "0",
+                "--log",
+                r"C:\Users\Test User\update.log",
+                "--lock",
+                r"C:\Users\Test User\update.lock",
+                "--workdir",
+                r"C:\Users\Test User\update-workdir",
+                "--theme",
+                "dark",
+                "--zip-sha256",
+                "abc123",
+                "--elevated",
+            ]
+        );
+
+        let mut unelevated = test_args();
+        unelevated.elevated = false;
+        assert!(!retry_cli_args(&unelevated)
+            .iter()
+            .any(|arg| arg == "--elevated"));
+    }
 
     #[cfg(target_os = "windows")]
     #[test]
@@ -884,7 +1372,7 @@ fn build_elevation_arg_string(args: &CliArgs) -> String {
         ThemeArg::Dark => "dark",
         ThemeArg::Auto => "auto",
     };
-    let pairs: [(&str, String); 8] = [
+    let mut pairs: Vec<(&str, String)> = vec![
         ("--zip", args.zip.to_string_lossy().into_owned()),
         ("--app-dir", args.app_dir.to_string_lossy().into_owned()),
         ("--exe-name", args.exe_name.clone()),
@@ -894,6 +1382,9 @@ fn build_elevation_arg_string(args: &CliArgs) -> String {
         ("--workdir", args.workdir.to_string_lossy().into_owned()),
         ("--theme", theme_str.to_string()),
     ];
+    if let Some(digest) = args.zip_sha256.as_deref().filter(|digest| !digest.is_empty()) {
+        pairs.push(("--zip-sha256", digest.to_string()));
+    }
     let mut out = String::new();
     for (k, v) in &pairs {
         if !out.is_empty() {
