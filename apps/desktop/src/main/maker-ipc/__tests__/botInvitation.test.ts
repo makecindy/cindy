@@ -261,7 +261,8 @@ describe('companion invitation with SQLite and real skill files', () => {
     expect(message).toContain('coding, making games, automating repetitive work');
     expect(message).toContain('where your memory settings allow');
     expect(message).toContain('do not call tools, inspect history or start work');
-    expect(persistedContent).toContain(message);
+    expect(message.startsWith('[UI_ACTION_TRIGGER]')).toBe(true);
+    expect(persistedContent).toBe(message);
   });
 
   it('uses bounded usage hints in the existing welcome turn and clears the invitation checkpoint', async () => {

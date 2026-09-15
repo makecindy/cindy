@@ -288,7 +288,7 @@ export function queueBotInvitation(
         toolsDisabled: true,
         retry,
         onQueued: async (clientId) => { await save({ welcomeClientId: clientId }); },
-        message,
+        message: `${UI_ACTION_TRIGGER_PREFIX}${message}`,
         persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${message}`,
       });
       if (!accepted.ok) throw new Error('INVITATION_WELCOME_NOT_ACCEPTED');
