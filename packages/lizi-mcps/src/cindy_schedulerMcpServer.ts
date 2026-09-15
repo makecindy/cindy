@@ -20,6 +20,7 @@
  *  - 读 tool（list/get/list_runs）payload 与 maker.schedule.list() 同形透传
  */
 
+import { registerTelegramDeliveryTools } from './scheduler/telegramDelivery.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { z } from 'zod';
 import { jsonObjectArg } from './json-object-arg.js';
@@ -178,6 +179,7 @@ export function createSchedulerMcpServer(
     resolveLiziMcpSessionContext(fallbackCtx);
 
   // 注册顺序 = list_tools 里的位次。读优先 → 写次之 → 危险写在最后。
+  registerTelegramDeliveryTools(registry, deps);
   registerScheduleListTool(registry, deps);
   registerScheduleGetTool(registry, deps);
   registerScheduleListRunsTool(registry, deps);

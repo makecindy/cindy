@@ -89,6 +89,7 @@ import {
 } from './manager.js';
 import { createHookTransport } from './transport.js';
 import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolBridge.js';
+import { createTelegramDeliveryBridge, registerTelegramDeliveryBridge, type TelegramDeliveryBridge } from './telegramDelivery.js';
 import { createHookBindingStore } from './bindings.js';
 import { createHookRequestLedger } from './requestLedger.js';
 import {
@@ -430,6 +431,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     });
   }
   if (!manager) {
+    let telegramDelivery: TelegramDeliveryBridge | null = null;
+    const deliveryBindings = createHookBindingStore({
+      filePath: ownerScopedUserDataPath('hook-bindings.json'), log,
+    });
     const dispatcher = createHookDispatcher({
       // 两个 provider 复用 dispatcher，但连接身份和服务地址彼此隔离。
       getConnection: (connectionId) => {
@@ -553,6 +558,8 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     manager = createHookControlManager({
       store,
       isAvailable: hookControlAvailable,
+      onTelegramDeliveryResult: (result) => telegramDelivery?.onResult(result),
+      listTelegramDeliveryKeys: (connectionId) => deliveryBindings.listKeys?.(connectionId) ?? [],
       createTransport: createHookTransport,
       getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
       getXUrl: () => getClientEndpoint('xHookWsUrl'),
@@ -646,6 +653,12 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
     // Slack 网关工具桥: lizi_slack provider 经叶子注册表取用(不直接 import
     // 本模块, 避免 mcp-providers <-> ipc 的静态引用闭环)
     const m = manager;
+    telegramDelivery = createTelegramDeliveryBridge({
+      directory: ownerScopedUserDataPath('telegram-delivery-receipts'),
+      status: () => m.telegramDeliveryStatus(),
+      send: (payload) => m.sendTelegramDelivery(payload),
+    });
+    registerTelegramDeliveryBridge(telegramDelivery);
     registerSlackToolBridge({
       availability: () =>
         hookControlAvailable()
@@ -1198,6 +1211,7 @@ export async function stopHookControlAccount(): Promise<void> {
 export function resetHookControlOwnerBoundary(options?: { clearPersisted?: boolean }): void {
   mirrorWorkspacePrefs.invalidateOwnerBoundary();
   unregisterSlackToolBridge();
+  registerTelegramDeliveryBridge(null);
   resetGroupContextCursorsSafely(options);
   resetTelegramSpeakerRegistrationCache();
   manager?.dispose();
