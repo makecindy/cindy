@@ -1065,6 +1065,19 @@ describe('local-db:sessions:update handler wiring', () => {
     expect(h.relocate).not.toHaveBeenCalled();
   });
 
+  it('still allows moving a worktree session back to a dialogue', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
+
+    // 「移到对话」的 patch 不带 workingDir:归属根本不参与判定,只改 workspaceKind,
+    // 目录仍停在 worktree 里(与 renderer 预检、与 Main 的 beforeMove 门控同口径)。
+    await invokeUpdate('cc-local', { workspaceKind: 'dialogue' });
+
+    expect(
+      h.sqlite!.prepare('SELECT working_dir, workspace_kind FROM sessions WHERE id = ?').get('cc-local'),
+    ).toEqual({ working_dir: worktreeDir, workspace_kind: 'dialogue' });
+  });
+
   it('allows moving between subdirectories of the same managed worktree', async () => {
     const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
     const from = path.join(worktreeDir, 'src');
