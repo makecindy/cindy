@@ -262,9 +262,14 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     render(<HookConnectionsSection />);
     await expandChannelCard(SLACK_CARD);
     const toggle = await screen.findByRole('switch', { name: 'settings.remoteControl.hook.multi.localCommunications' });
+    const masterToggle = screen.getByRole('switch', { name: 'settings.remoteControl.hook.toggleAria' });
+    expect(masterToggle.getAttribute('aria-checked')).toBe('true');
     expect(toggle.getAttribute('aria-checked')).toBe(String(enabled));
     fireEvent.click(toggle);
     await waitFor(() => expect(ipc.setSlackCommunications).toHaveBeenCalledWith('T1', !enabled));
+    expect(masterToggle.getAttribute('aria-checked')).toBe('true');
+    fireEvent.click(masterToggle);
+    await waitFor(() => expect(ipc.setEnabled).toHaveBeenCalledWith(false));
     expect(ipc.rebindTeam).not.toHaveBeenCalled();
     expect(ipc.revokeTeam).not.toHaveBeenCalled();
   });

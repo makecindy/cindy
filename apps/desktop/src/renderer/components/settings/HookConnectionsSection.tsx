@@ -964,13 +964,13 @@ export function HookConnectionsSection() {
    * toggle 视觉开态:
    *   - 单绑定(老 server): 绑定已确认(连接 + 绑定齐备才算"开") —— enabled 只是
    *     持久化的意图, 连接中 / 授权中 / 待安装期间开关显示为关;
-   *   - multi-team: 有可用绑定即算"开"(不再要求单一 confirmed); 首次 0 绑定
-   *     授权中仍显示关+「授权中…」, 与现状一致。
+   *   - multi-team: 有 Bot 绑定或通讯授权（含显式关闭）即算"开"；仅有展示缓存
+   *     不算稳定连接，首次授权中仍显示关+「授权中…」。
    * 两种模式都用绑定快照而非连接态承载开态 —— 断线重连的瞬时抖动不弹开关
    * (连接状态由左侧状态点与状态行表达, 规则 7 不跳变)。
    */
   const toggleChecked = multiUi
-    ? hook.enabled && activeTeams.length > 0
+    ? hook.enabled && (activeTeams.length > 0 || communicationTeams.length > 0)
     : hook.enabled && hook.binding?.state === 'confirmed';
   /** 在途态(意图已开但尚无可用绑定): 此时再点 toggle = 取消本轮流程(关回)。 */
   const toggleInProgress = hook.enabled && !toggleChecked;
