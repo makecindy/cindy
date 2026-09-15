@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "リモートデスクトップ接続を終了します。コンピュータ上のアプリは動作を続けます。",
       "disconnectFailed": "切断できませんでした。もう一度お試しください。",
       "clipboardShortcutHint": "画面内で {{modifier}}+C / {{modifier}}+V を使うと、コンピュータ間でテキストをコピーして貼り付けられます。画像とファイルにはまだ対応していません。",
+      "fitViewerDisplay": "現在の画面比率に合わせる",
+      "fitViewerDisplayHint": "デスクトップの内容を保ったまま、パソコンの画面比率を一時的に変更します。切断すると元の解像度に戻ります。",
       "resolutionHint": "解像度の変更はリモートの実際のモニターに反映されます。"
     }
   },

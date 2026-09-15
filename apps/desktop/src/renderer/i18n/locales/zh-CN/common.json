@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "将结束远程桌面连接，电脑上的应用仍会继续运行。",
       "disconnectFailed": "未能断开连接，请重试。",
       "clipboardShortcutHint": "在画面内使用 {{modifier}}+C / {{modifier}}+V，即可在两台电脑之间复制粘贴文字。暂不支持图片和文件。",
+      "fitViewerDisplay": "按当前画面比例调整",
+      "fitViewerDisplayHint": "临时调整电脑桌面比例，保留当前桌面内容。退出连接后恢复原分辨率。",
       "resolutionHint": "分辨率修改会影响远端的实际显示器。"
     }
   },

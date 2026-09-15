@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "將結束遠端桌面連線，電腦上的應用程式仍會繼續執行。",
       "disconnectFailed": "無法中斷連線，請重試。",
       "clipboardShortcutHint": "在畫面內使用 {{modifier}}+C / {{modifier}}+V，即可在兩台電腦之間複製貼上文字。暫不支援圖片和檔案。",
+      "fitViewerDisplay": "依目前畫面比例調整",
+      "fitViewerDisplayHint": "暫時調整電腦桌面比例，保留目前桌面內容。離開連線後恢復原解析度。",
       "resolutionHint": "解析度修改會影響遠端的實際顯示器。"
     }
   },

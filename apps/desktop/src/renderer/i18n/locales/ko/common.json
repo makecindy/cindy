@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "원격 데스크톱 연결이 종료됩니다. 컴퓨터의 앱은 계속 실행됩니다.",
       "disconnectFailed": "연결을 끊지 못했습니다. 다시 시도하세요.",
       "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 컴퓨터 간에 텍스트를 복사하고 붙여넣으세요. 이미지와 파일은 아직 지원하지 않습니다.",
+      "fitViewerDisplay": "현재 화면 비율에 맞추기",
+      "fitViewerDisplayHint": "데스크톱 내용을 유지하면서 컴퓨터 화면 비율을 일시적으로 변경합니다. 연결을 종료하면 원래 해상도로 돌아갑니다.",
       "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
     }
   },

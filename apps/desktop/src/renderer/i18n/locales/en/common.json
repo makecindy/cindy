@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "The remote desktop connection will end. Apps on the computer will keep running.",
       "disconnectFailed": "Could not disconnect. Try again.",
       "clipboardShortcutHint": "Use {{modifier}}+C / {{modifier}}+V in the picture to copy and paste text between computers. Images and files are not supported yet.",
+      "fitViewerDisplay": "Match Current View",
+      "fitViewerDisplayHint": "Temporarily adjusts the computer desktop to this view’s aspect ratio, keeping its contents. Disconnect to restore the original resolution.",
       "resolutionHint": "Resolution changes affect the actual remote monitor."
     }
   },

@@ -561,6 +561,268 @@ describe("remote desktop controls", () => {
     act(() => host.querySelector("button")!.click());
     expect(onChange).toHaveBeenCalledTimes(2);
   });
+
+  it("offers viewer sizing only with host support and active control", () => {
+    const onFitDisplay = vi.fn();
+    const renderSettings = (
+      supported: boolean,
+      controlling: boolean,
+      busy = false,
+    ) => {
+      act(() =>
+        root.render(
+          <RemoteDesktopDisplaySettings
+            connected
+            controlling={controlling}
+            displayControl={null}
+            video={{
+              supported: true,
+              busy,
+              modesSupported: false,
+              viewerDisplaySupported: supported,
+              onFitDisplay,
+              settings: { fps: 30, bitrate: 0, audio: false },
+              onChange: vi.fn(),
+              readModes: async () => [],
+              onResolution: async () => {},
+            }}
+          />,
+        ),
+      );
+    };
+    const button = () =>
+      host.querySelector<HTMLButtonElement>(
+        '[aria-label="remoteDesktop.fitViewerDisplay"]',
+      );
+    renderSettings(false, true);
+    expect(button()).toBeNull();
+    renderSettings(true, false);
+    expect(button()?.disabled).toBe(true);
+    renderSettings(true, true, true);
+    expect(button()?.disabled).toBe(true);
+    renderSettings(true, true);
+    act(() => button()?.click());
+    expect(onFitDisplay).toHaveBeenCalledOnce();
+  });
+  it("keeps 4K system resolution selectable on viewer-display hosts", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const request = args[2][0];
+      if (request.op === "capabilities")
+        return {
+          ...(await original(...args)),
+          viewerDisplay: true,
+          viewerDisplayRestore: true,
+          videoSettings: true,
+          displayModes: true,
+        };
+      if (request.op === "displayModes")
+        return [{ id: "4k", width: 3840, height: 2160, current: false }];
+      return original(...args);
+    });
+    await connect();
+    act(() => button("operations").click());
+    await act(async () => button("displaySettings").click());
+    act(() => button("resolution").click());
+    const mode = Array.from(
+      host.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((item) => item.textContent === "3840 × 2160")!;
+    expect(mode).toBeDefined();
+    await act(async () => mode.click());
+    expect(requests()).toContainEqual({
+      op: "resolution",
+      lease: "lease",
+      modeId: "4k",
+    });
+    expect(requests().some((request) => request.op === "viewerDisplay")).toBe(
+      false,
+    );
+  });
+
+  it("changes portrait resolution without stopping the temporary display and stops it on exit", async () => {
+    const original = fixture.invoke.getMockImplementation()!;
+    fixture.invoke.mockImplementation(async (...args) => {
+      const request = args[2][0];
+      if (request.op === "capabilities")
+        return {
+          ...(await original(...args)),
+          viewerDisplay: true,
+          viewerDisplayRestore: true,
+          videoSettings: true,
+          displayModes: true,
+        };
+      if (request.op === "displayModes")
+        return [{ id: "640", width: 640, height: 1242, current: false }];
+      if (request.op === "viewerDisplay")
+        return {
+          lease: "lease",
+          controlling: false,
+          display: {
+            ...display,
+            id: "virtual",
+            width: request.width,
+            height: request.height,
+          },
+        };
+      return original(...args);
+    });
+    await connect();
+    act(() => button("operations").click());
+    act(() => button("displaySettings").click());
+    await act(async () =>
+      fixture.message!({
+        nativeEvent: {
+          data: JSON.stringify({
+            type: "viewportSize",
+            epoch: "lease",
+            width: 390,
+            height: 760,
+          }),
+        },
+      }),
+    );
+    act(() => button("resolution").click());
+    const mode = Array.from(
+      host.querySelectorAll<HTMLButtonElement>("button"),
+    ).find((item) => item.textContent === "640 × 1242")!;
+    expect(mode).toBeDefined();
+    await act(async () => mode.click());
+    expect(
+      requests()
+        .filter((request) => request.op === "viewerDisplay")
+        .at(-1),
+    ).toEqual({
+      op: "viewerDisplay",
+      lease: "lease",
+      width: 640,
+      height: 1242,
+    });
+    expect(
+      requests().filter(
+        (request) =>
+          request.op === "resolution" ||
+          request.op === "restoreViewerDisplay" ||
+          request.op === "stop",
+      ),
+    ).toHaveLength(0);
+    expect(requests().filter((request) => request.op === "start")).toHaveLength(
+      1,
+    );
+    expect(host.textContent).not.toContain(
+      "remoteDesktop.resolutionControlHint",
+    );
+    await act(async () => root.unmount());
+    mounted = false;
+    expect(requests().filter((request) => request.op === "stop")).toHaveLength(
+      1,
+    );
+  });
+  it.each([true, false])(
+    "keeps matching after rotation and supports restore when advertised: %s",
+    async (canRestore) => {
+      const original = fixture.invoke.getMockImplementation()!;
+      fixture.invoke.mockImplementation(async (...args) => {
+        const request = args[2][0];
+        if (request.op === "capabilities")
+          return {
+            ...(await original(...args)),
+            viewerDisplay: true,
+            viewerDisplayRestore: canRestore,
+            videoSettings: true,
+            displayModes: true,
+          };
+        if (request.op === "viewerDisplay")
+          return {
+            lease: "lease",
+            controlling: false,
+            display: {
+              ...display,
+              id: "virtual",
+              width: request.width,
+              height: request.height,
+            },
+          };
+        if (request.op === "restoreViewerDisplay")
+          return { lease: "lease", controlling: false, display };
+        if (request.op === "displayModes") return [];
+        return original(...args);
+      });
+      await connect();
+      act(() => button("operations").click());
+      act(() => button("displaySettings").click());
+      for (const [width, height] of [
+        [390, 760],
+        [760, 390],
+      ]) {
+        await act(async () =>
+          fixture.message!({
+            nativeEvent: {
+              data: JSON.stringify({
+                type: "viewportChanged",
+                epoch: "lease",
+                width,
+                height,
+              }),
+            },
+          }),
+        );
+        expect(button("fitViewerDisplay").disabled).toBe(false);
+        act(() => button("fitViewerDisplay").click());
+        expect(sent()).toContainEqual({ type: "measureViewport" });
+        await act(async () => {
+          fixture.message!({
+            nativeEvent: {
+              data: JSON.stringify({
+                type: "viewportSize",
+                epoch: "lease",
+                width,
+                height,
+              }),
+            },
+          });
+        });
+        expect(
+          button(canRestore ? "restoreViewerDisplay" : "fitViewerDisplay")
+            .disabled,
+        ).toBe(false);
+        expect(host.textContent).not.toContain(
+          "remoteDesktop.resolutionControlHint",
+        );
+      }
+      const matches = requests().filter(
+        (request) => request.op === "viewerDisplay",
+      );
+      expect(matches).toHaveLength(2);
+      expect(matches[0].height).toBeGreaterThan(matches[0].width);
+      expect(matches[1].width).toBeGreaterThan(matches[1].height);
+      if (canRestore) {
+        act(() => button("restoreViewerDisplay").click());
+        await act(async () =>
+          fixture.message!({
+            nativeEvent: {
+              data: JSON.stringify({
+                type: "viewportSize",
+                epoch: "lease",
+                width: 760,
+                height: 390,
+              }),
+            },
+          }),
+        );
+        expect(
+          requests().filter((request) => request.op === "restoreViewerDisplay"),
+        ).toHaveLength(1);
+        expect(button("fitViewerDisplay").disabled).toBe(false);
+        expect(sent()).toContainEqual(
+          expect.objectContaining({
+            type: "videoSettings",
+            width: display.width,
+            height: display.height,
+          }),
+        );
+      }
+    },
+  );
   it.each(["streaming", "fallback"])(
     "coalesces continuous quality choices until %s",
     async (terminal) => {
@@ -1727,7 +1989,9 @@ describe("remote desktop controls", () => {
     const original = fixture.invoke.getMockImplementation()!;
     fixture.invoke.mockImplementation((...args) =>
       args[2][0].op === "input"
-        ? Promise.reject(Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }))
+        ? Promise.reject(
+            Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
+          )
         : original(...args),
     );
     await act(async () => {
@@ -1792,8 +2056,7 @@ describe("remote desktop controls", () => {
         return Promise.reject(
           Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
         );
-      if (req.op === "heartbeat")
-        return Promise.resolve({ controlling: true });
+      if (req.op === "heartbeat") return Promise.resolve({ controlling: true });
       return original(...args);
     });
     await act(async () => {
@@ -1831,8 +2094,7 @@ describe("remote desktop controls", () => {
           );
         return Promise.resolve({ controlling: false });
       }
-      if (req.op === "heartbeat")
-        return Promise.resolve({ controlling: true });
+      if (req.op === "heartbeat") return Promise.resolve({ controlling: true });
       return original(...args);
     });
     await act(async () => {
@@ -1853,7 +2115,11 @@ describe("remote desktop controls", () => {
     // Overflow timed out with pending release. Take control must finish that
     // release (host stopInput) before asking to enable, so the helper restarts.
     expect(controlOps).toEqual([true, false, false, true]);
-    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+    expect(
+      sent()
+        .filter((m) => m.type === "control")
+        .at(-1),
+    ).toEqual({
       type: "control",
       enabled: true,
     });
@@ -1871,17 +2137,24 @@ describe("remote desktop controls", () => {
         return Promise.reject(
           Object.assign(new Error("timeout"), { code: "INVOKE_TIMEOUT" }),
         );
-      if (req.op === "heartbeat")
-        return Promise.resolve({ controlling: true });
+      if (req.op === "heartbeat") return Promise.resolve({ controlling: true });
       return original(...args);
     });
     await act(async () => button("viewOnly").click());
-    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+    expect(
+      sent()
+        .filter((m) => m.type === "control")
+        .at(-1),
+    ).toEqual({
       type: "control",
       enabled: false,
     });
     await act(async () => vi.advanceTimersByTimeAsync(3000));
-    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+    expect(
+      sent()
+        .filter((m) => m.type === "control")
+        .at(-1),
+    ).toEqual({
       type: "control",
       enabled: true,
     });
@@ -1920,7 +2193,11 @@ describe("remote desktop controls", () => {
     await act(async () => vi.advanceTimersByTimeAsync(3000));
     // A heartbeat issued while startInput was settling must not consume the
     // pending take-control; after the reply is lost, host-true still restores.
-    expect(sent().filter((m) => m.type === "control").at(-1)).toEqual({
+    expect(
+      sent()
+        .filter((m) => m.type === "control")
+        .at(-1),
+    ).toEqual({
       type: "control",
       enabled: true,
     });

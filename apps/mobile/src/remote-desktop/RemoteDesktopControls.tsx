@@ -89,6 +89,10 @@ export function RemoteDesktopControls({
     settings: RemoteDesktopVideoSettings;
     busy: boolean;
     modesSupported: boolean;
+    displayGeometry?: string;
+    viewerDisplaySupported?: boolean;
+    viewerDisplayMatched?: boolean;
+    onFitDisplay?(): void;
     notice: string | null;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;

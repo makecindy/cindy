@@ -14,6 +14,7 @@ import type {
   RemoteDesktopVideoSettings,
 } from "@cindy/device-link";
 import { Text } from "@/components/AppText";
+import { RemoteDesktopActionButton } from "./RemoteDesktopActionButton";
 import {
   NativePullDownMenu,
   usesNativePullDownMenu,
@@ -33,6 +34,10 @@ type Props = {
     settings: RemoteDesktopVideoSettings;
     busy: boolean;
     modesSupported: boolean;
+    displayGeometry?: string;
+    viewerDisplaySupported?: boolean;
+    viewerDisplayMatched?: boolean;
+    onFitDisplay?(): void;
     onChange(settings: Partial<RemoteDesktopVideoSettings>): void;
     readModes(): Promise<RemoteDesktopDisplayMode[]>;
     onResolution(id: string): Promise<void>;
@@ -73,7 +78,7 @@ export function RemoteDesktopDisplaySettings({
     return () => {
       active = false;
     };
-  }, [connected, video.modesSupported, reload]);
+  }, [connected, video.modesSupported, video.displayGeometry, reload]);
   const disabled = !connected || !video.supported;
   const title = { color: colors.textPrimary, fontSize: typeScale.body };
   const hint = { color: colors.textTertiary, fontSize: typeScale.caption };
@@ -242,6 +247,33 @@ export function RemoteDesktopDisplaySettings({
         }}
       >
         {displayControl}
+        {video.viewerDisplaySupported && (
+          <View style={{ gap: spacing.xs }}>
+            <RemoteDesktopActionButton
+              accessibilityRole="button"
+              accessibilityLabel={t(
+                video.viewerDisplayMatched
+                  ? "remoteDesktop.restoreViewerDisplay"
+                  : "remoteDesktop.fitViewerDisplay",
+              )}
+              disabled={!connected || !controlling || video.busy}
+              onPress={() => video.onFitDisplay?.()}
+              style={[
+                styles.row,
+                { opacity: !connected || !controlling || video.busy ? 0.6 : 1 },
+              ]}
+            >
+              <Text style={title}>
+                {t(
+                  video.viewerDisplayMatched
+                    ? "remoteDesktop.restoreViewerDisplay"
+                    : "remoteDesktop.fitViewerDisplay",
+                )}
+              </Text>
+            </RemoteDesktopActionButton>
+            <Text style={hint}>{t("remoteDesktop.fitViewerDisplayHint")}</Text>
+          </View>
+        )}
         <View
           style={{
             height: StyleSheet.hairlineWidth,
