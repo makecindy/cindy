@@ -970,6 +970,15 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     return multiBindings.filter((b) => !b.displaced);
   }
 
+  /** 自动绑定/授权终态只认实际连接：Bot 绑定或权威通讯授权（含显式关闭）。
+   * displaced 展示缓存不算连接；旧 multi-team 服务端保持只认 Bot 绑定的语义。 */
+  function hasRetainedSlackConnection(): boolean {
+    const communicationsSupported = serverFeatures.includes('slack-communications');
+    return multiBindings.some((row) =>
+      !row.displaced || (communicationsSupported && row.communicationsEnabled !== undefined),
+    );
+  }
+
   function communicationBindings(): HookTeamBindingView[] {
     return serverFeatures.includes('slack-communications')
       ? multiBindings.filter((b) => b.communicationsEnabled === true)
@@ -1727,7 +1736,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         autoBindIntent = false;
         openAuthorizeOnNextPending = false;
-        if (multiBindings.length > 0) {
+        if (hasRetainedSlackConnection()) {
           if (transport !== null && status === 'connected') {
             transport.send(makeBindRevoke({ pendingOnly: true }));
           }
@@ -1766,7 +1775,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         if (pendingBind?.state !== 'pending') return;
         autoBindIntent = false;
         openAuthorizeOnNextPending = false;
-        if (multiBindings.length > 0) {
+        if (hasRetainedSlackConnection()) {
           // 已有可用绑定: 只作废这次"添加/重绑"授权(server 侧登记顺手作废),
           // 总开关与既有绑定不受影响
           if (transport !== null && status === 'connected') {
@@ -2058,7 +2067,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     if (terminal) {
       autoBindIntent = false;
       clearAutoBindDefer();
-      if (multiBindings.length === 0 && store.get().enabled) {
+      if (!hasRetainedSlackConnection() && store.get().enabled) {
         store.setEnabled(false);
         stopSlack();
         log.info(`slack hook auto-disabled on first-bind ${state} (multi-team)`);
@@ -2168,6 +2177,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         slackUserId: e.slackUserId,
         slackUserName: e.slackUserName,
         displaced: false,
+        // 单 workspace 卡代表单一身份；异常跨身份快照 fail closed，不把 U2 权限授予 U1。
         communicationsEnabled: grants.get(e.teamId)?.slackUserId === e.slackUserId ? grants.get(e.teamId)?.enabled : undefined,
       }));
       for (const grant of communications) {
@@ -2186,8 +2196,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 先让它走「pending + 意图 → 重新发起」路径签新链接; 短窗内没有任何
       // bind.update 才由计时器发空 bind.start(见 autoBindDefer 声明注释)。
       if (autoBindIntent) {
-        if (multiBindings.length > 0) {
-          autoBindIntent = false; // 已有绑定, 秒恢复, 无需发起授权
+        if (hasRetainedSlackConnection()) {
+          autoBindIntent = false; // 已有绑定或通讯授权, 秒恢复, 无需发起授权
         } else if (autoBindDefer === null) {
           autoBindDefer = setTimeout(() => {
             autoBindDefer = null;
@@ -3093,7 +3103,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           // 幂等重复开启已连接的 Slack 时不会收到新的状态回放，直接消费
           // armAutoBind 意图；首次开启走上面的 startSlack + 服务端回放路径。
           if (serverMultiTeam()) {
-            if (multiBindings.length > 0) autoBindIntent = false;
+            if (hasRetainedSlackConnection()) autoBindIntent = false;
             else if (initiateMultiBind(null)) autoBindIntent = false;
           } else if (binding?.state === 'confirmed') {
             autoBindIntent = false;

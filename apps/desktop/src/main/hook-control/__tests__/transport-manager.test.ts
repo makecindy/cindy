@@ -3375,6 +3375,45 @@ describe('Slack 本机通讯与 Bot 设备分离', () => {
   }
   const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester' };
 
+  it.each(['snapshot', 'connected'] as const)('旧 multi-team 的缓存行不阻断自动绑定：%s', async (entry) => {
+    const { manager, frames, receive } = communicationsHarness(['slack-tools', 'multi-team']);
+    receive(makeBindState({ bindings: [row] }));
+    if (entry === 'snapshot') manager.armAutoBind();
+    receive(makeBindState({ bindings: [] }));
+    expect(manager.snapshot().bindings).toEqual([expect.objectContaining({ displaced: true })]);
+    if (entry === 'connected') {
+      manager.armAutoBind();
+      manager.setProviderEnabled('slack', true);
+    }
+    await vi.waitFor(() => expect(frames.filter((frame) => frame.type === 'bind.start')).toHaveLength(1));
+  });
+
+  it('旧 multi-team 只剩缓存行时，首次授权失败仍关闭总连接', () => {
+    const { manager, receive } = communicationsHarness(['slack-tools', 'multi-team']);
+    receive(makeBindState({ bindings: [row] }));
+    receive(makeBindState({ bindings: [] }));
+    receive(makeBindUpdate({ state: 'denied', slackUserId: null, slackUserName: null, message: null }));
+    expect(manager.snapshot().enabled).toBe(false);
+  });
+
+  it.each([true, false])('权威通讯授权 enabled=%s 时，自动恢复与重复开启均不抢 Bot', async (enabled) => {
+    const { manager, frames, receive } = communicationsHarness();
+    manager.armAutoBind();
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled }] }));
+    manager.armAutoBind();
+    manager.setProviderEnabled('slack', true);
+    receive(makeBindUpdate({ state: 'denied', slackUserId: null, slackUserName: null, message: null }));
+    expect(manager.snapshot().enabled).toBe(true);
+    expect(frames.some((frame) => frame.type === 'bind.start')).toBe(false);
+  });
+
+  it('同 workspace 的异常跨身份快照不得把 U2 通讯权限授予 U1 Bot 卡片', () => {
+    const { manager, receive } = communicationsHarness();
+    receive(makeBindState({ bindings: [row], communications: [{ ...row, slackUserId: 'U2', enabled: true }] }));
+    expect(manager.snapshot().bindings).toEqual([expect.objectContaining({ slackUserId: 'U1', displaced: false, communicationsEnabled: undefined })]);
+    expect(manager.getSlackToolAvailability().bound).toBe(false);
+  });
+
   it('权威快照恢复被顶设备通讯；关闭再开启只发通讯请求，不发换绑', async () => {
     const { manager, frames, receive } = communicationsHarness();
     receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: true }] }));
