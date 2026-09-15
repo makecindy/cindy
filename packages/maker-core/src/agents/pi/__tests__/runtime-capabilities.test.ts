@@ -84,6 +84,48 @@ describe('Pi runtime capability parsing', () => {
     ], ['/private/cindy/pi-packages/sample'])).toEqual([]);
   });
 
+  it('authorizes project prompt and extension commands from explicit launch paths', () => {
+    const promptFile = '/repo/.pi/prompts/review.md';
+    const extensionFile = '/repo/.pi/extensions/hook.ts';
+    expect(identifyManagedPiPackageCommandNames([
+      {
+        ...command,
+        name: 'review',
+        source: 'prompt',
+        sourceInfo: { path: promptFile, source: 'prompt' },
+      },
+      {
+        ...command,
+        name: 'hook-cmd',
+        source: 'extension',
+        sourceInfo: { path: extensionFile, source: 'extension' },
+      },
+      {
+        ...command,
+        name: 'plan',
+        source: 'extension',
+        sourceInfo: { path: '/cindy/internal/plan-mode.ts', source: 'extension' },
+      },
+    ], [promptFile, extensionFile]).sort()).toEqual(['hook-cmd', 'review']);
+  });
+
+  it('authorizes a colliding name when every catalog entry is in package or project roots', () => {
+    expect(identifyManagedPiPackageCommandNames([
+      {
+        ...command,
+        name: 'foo',
+        source: 'extension',
+        sourceInfo: { path: '/private/cindy/pi-packages/sample/index.ts' },
+      },
+      {
+        ...command,
+        name: 'foo',
+        source: 'prompt',
+        sourceInfo: { path: '/repo/.pi/prompts/foo.md' },
+      },
+    ], ['/private/cindy/pi-packages/sample', '/repo/.pi/prompts/foo.md'])).toEqual(['foo']);
+  });
+
   it('snapshots managed skills and marks only unambiguous runtime-proven commands loaded', () => {
     const packageRoot = path.resolve('managed-package-fixture');
     const loadedSkill = path.join(packageRoot, 'skills', 'loaded', 'SKILL.md');

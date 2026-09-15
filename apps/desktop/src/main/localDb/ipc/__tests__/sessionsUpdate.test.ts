@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } fr
 
 import { messages, recentWorkdirs, sessions } from '../../schema';
 import type { SessionRouteLock } from '../../sessionRouteLock';
+import { normalizeWorkingDirForStorage } from '../../../../shared/workingDir';
 
 type SessionRouteLockMock = SessionRouteLock &
   MockInstance<(sessionId: string, task: () => Promise<unknown>) => Promise<unknown>>;
@@ -149,6 +150,7 @@ import {
   resumeDeletedPiSubagentCleanup,
   setSessionRuntimeCleanup,
   setSessionWorktreeRecycle,
+  updateSessionInDb,
 } from '../sessions';
 import { retireDeletedPiSubagentState } from '../piSubagentDeletion';
 import { setSessionRouteLockImplementation } from '../../sessionRouteLock';
@@ -981,6 +983,35 @@ describe('local-db:sessions:update handler wiring', () => {
     await invokeUpdate('codex-local', { workingDir: '/new/dir' });
     expect(h.relocate).not.toHaveBeenCalled();
     expect(h.closeSession).toHaveBeenCalledWith('codex-local');
+  });
+
+  it.each(['codex-local', 'pi-local'])(
+    'uses registered move dependencies when updating %s directly without opts',
+    async (sessionId) => {
+      const workingDir = path.join(os.tmpdir(), 'moved-session');
+      const storedWorkingDir = normalizeWorkingDirForStorage(workingDir);
+
+      const updated = await updateSessionInDb(sessionId, { workingDir });
+
+      expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith(sessionId);
+      expect(updated.workingDir).toBe(storedWorkingDir);
+      expect(
+        h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get(sessionId),
+      ).toEqual({ working_dir: storedWorkingDir });
+    },
+  );
+
+  it('honors the registered busy-runtime result when updating directly without opts', async () => {
+    h.closeIdleSessionForMove.mockResolvedValueOnce(false);
+
+    await expect(
+      updateSessionInDb('codex-local', { workingDir: path.join(os.tmpdir(), 'moved-session') }),
+    ).rejects.toThrow('[PRECONDITION_FAILED]');
+
+    expect(h.closeIdleSessionForMove).toHaveBeenCalledExactlyOnceWith('codex-local');
+    expect(
+      h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'),
+    ).toEqual({ working_dir: '/old/dir' });
   });
 
   it('closes a local Pi runtime before moving its working directory', async () => {

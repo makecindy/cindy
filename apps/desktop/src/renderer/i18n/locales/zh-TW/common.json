@@ -2151,7 +2151,7 @@
         "endpointLabel": "{{agent}} 基礎 URL",
         "noAuthNote": "此 Proxy 無需客戶端金鑰；Cindy 會在轉發前移除 CLI 的訂閱憑證。",
         "signIn": "登入",
-        "setupLink": {"apiKey": "取得 API Key", "account": "註冊或登入", "setup": "設定說明"},
+        "setupLink": { "apiKey": "取得 API Key", "account": "註冊或登入", "setup": "設定說明" },
         "fetching": "正在驗證連線並獲取模型列表…",
         "fetchFailed": "模型列表獲取失敗——可先按預設推薦模型完成新增，稍後在詳情裡重新整理",
         "manualModelHint": "未發現可用模型，請填寫此 Proxy 實際提供的模型 ID。",
@@ -9525,10 +9525,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "按專案",
+        "project": "專案",
         "flat": "平鋪",
-        "device": "按裝置",
-        "dialogue": "按對話"
+        "device": "裝置",
+        "dialogue": "對話"
       },
       "filterGroupByDeviceManualTip": "手動排序時按裝置分組暫不可用",
       "deviceGroup": {
@@ -9828,9 +9828,9 @@
         "all": "全部"
       },
       "sortTaskBy": {
-        "priority": "按優先級",
-        "activity": "按最近活動",
-        "created": "按建立時間"
+        "priority": "優先級",
+        "activity": "最近活動",
+        "created": "建立時間"
       }
     },
     "rename": {

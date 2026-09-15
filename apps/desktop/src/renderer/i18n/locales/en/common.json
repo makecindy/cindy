@@ -2152,7 +2152,11 @@
         "endpointLabel": "{{agent}} base URL",
         "noAuthNote": "This proxy needs no client key; Cindy removes CLI subscription credentials before forwarding.",
         "signIn": "Sign in",
-        "setupLink": {"apiKey": "Get an API key", "account": "Sign up or sign in", "setup": "Setup help"},
+        "setupLink": {
+          "apiKey": "Get an API key",
+          "account": "Sign up or sign in",
+          "setup": "Setup help"
+        },
         "fetching": "Verifying connection and fetching models…",
         "fetchFailed": "Couldn't fetch the model list — you can finish with the preset's recommended models and refresh later in details",
         "manualModelHint": "No models were discovered. Enter the exact model ID exposed by this proxy.",
@@ -9540,10 +9544,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "By project",
+        "project": "Project",
         "flat": "Flat list",
-        "device": "By device",
-        "dialogue": "By chat"
+        "device": "Device",
+        "dialogue": "Chat"
       },
       "filterGroupByDeviceManualTip": "Group by device is unavailable while sorting manually",
       "deviceGroup": {
@@ -9566,7 +9570,7 @@
         "all": "All"
       },
       "filterSortBy": {
-        "created": "Created Time",
+        "created": "Creation Time",
         "activity": "Recent Activity",
         "recency": "By time",
         "manual": "Manual",
@@ -9843,9 +9847,9 @@
         "all": "All"
       },
       "sortTaskBy": {
-        "priority": "By priority",
-        "activity": "By recent activity",
-        "created": "By creation time"
+        "priority": "Priority",
+        "activity": "Recent Activity",
+        "created": "Creation Time"
       }
     },
     "rename": {

@@ -173,9 +173,11 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 2. **凭证路径判定三处同步**:`shared/auto-review.ts CREDENTIAL_PATH_PATTERNS`、
    `cindy-bridge-source.ts touchesCredentialPath`、`auto-review-policy.ts` 只读分支全字段扫描
    必须同口径。bridge 自包含不能 import,改一处记得改三处。
-3. **斜杠命令转义**:`escapeLeadingSlashCommand` 对 `/` 开头用户输入前置空格转字面(仅放行
-   `/skill:`)—— pi RPC prompt 会执行扩展命令(`/plan` 被 plan-mode 吃掉且不留痕),不转义会让
-   Cindy 状态镜像脱同步并暴露未来扩展命令攻击面。
+3. **斜杠命令转义**:`escapeLeadingSlashCommand` 对 `/` 开头用户输入前置空格转字面。仅放行
+   `/skill:`、本次 `get_commands` 证明 provenance 落在 Cindy-managed package 根内的命令，以及
+   本次显式传入的项目 Skill/prompt/extension 路径所证明的命令。`/` 面板用同一套
+   `authorizedSlashCommandNames`，不单看 managed package。其余扩展命令(如 `/plan`)
+   转义成字面，避免 Cindy 状态镜像脱同步，也堵住未装配来源的命令攻击面。
 4. **auto 档 dispatcher fail-closed**:分类抛错 / 无 resolver 一律不放行。
 5. **成本计量**:models.json 的 cost 来自 host 模型目录(`ModelDescriptor.cost`),缺省按 0;
    派生链 `catalog-to-descriptors.ts` → `capabilities.availableModels` → `writeModelsJson`。
@@ -187,19 +189,18 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 8. **项目资源显式装配**:root、只读 subagent 与离线 fork 启动 Pi 时都必须显式传
    `--no-approve`;没有 Cindy-managed 本机用户包根时同时传 `--no-extensions`。本机普通 runtime
    存在明确安装且未停用的用户包根时，为保留 Pi 原生 package discovery 可以只省略
-   `--no-extensions`：包根只能来自 Main 生成的 runtime `settings.json`，`--no-approve` 仍是项目
-   `.pi/extensions` / `.pi/settings.json` 的硬门，不得因此传 `--approve` 或读取项目设置。root
-   仅用重复 `--extension` 回装 Cindy 自有 bridge/subagent 与 pinned plan-mode，并仅用重复
-   `--skill` 装配 host 从 PR3 approval snapshot 判定 eligible
-   的项目 skill 目录。eligible canonical 目录必须先完整物化到当前会话 `configHome` 的非自动
-   扫描目录，再把隔离快照路径交给 Pi；不得把仍可变化的项目原路径直接放进 argv。复制期间
-   任一越界 symlink、特殊文件或路径替换会使整组 skills fail closed。不得读取/复制项目
-   `.pi/settings.json`，不得传 `--approve`，
-   不得依赖 `PI_OFFLINE=1` 代替 packages/extensions 硬门。root 不传 `--no-skills`，以保留现有
-   user/global skill 行为；项目 skill 的 `loaded` 只能由当前会话 `get_commands` 对隔离快照路径
-   的 exact temporary/local provenance 证明。approval 真源缺失、异常、撤销、失效、路径消失
-   或快照失败时，新会话
-   一律不带项目 `--skill`，并在 per-session runtime manifest 记录诊断原因。
+   `--no-extensions`：包根只能来自 Main 生成的 runtime `settings.json`，`--no-approve` 仍禁止
+   读取项目 `.pi/settings.json` 与自动安装项目 packages，不得因此传 `--approve`。
+   本地非 Review、非 Bot、非 SSH 的 root 任务用重复 `--skill` / `--prompt-template` /
+   `--extension` 把仓库原路径交给 Pi：`.pi/skills` 与 cwd→git root 内 `.agents/skills`
+   的目录型 Skill、`.pi/prompts/*.md`、`.pi/extensions/*.ts` 与 `*/index.ts`。越界 symlink
+   不传入。root 仍回装 Cindy 自有 bridge/subagent 与 pinned plan-mode。Review、Bot、子代理、
+   离线 `forkSdkSession` 克隆进程与远端会话不带这些项目资源。随后以 `resumeSessionId`
+   恢复的本地根任务（含 fork 之后的恢复）与普通本地任务相同，加载项目资源。
+   不得读取/复制项目 `.pi/settings.json`，不得传 `--approve`，
+   不得依赖 `PI_OFFLINE=1` 代替该 settings 硬门。root 不传 `--no-skills`，以保留现有
+   user/global skill 行为；项目 skill 的 `loaded` 由当前会话 `get_commands` 对原路径 provenance
+   证明。
 9. **Pi bash bounded timeout**:Cindy 覆盖的模型可调 `bash` 在 execute 入口强制默认
    `300s`、上限 `1800s`。缺省或非正数用默认;大于上限或非有限数字 fail-fast(参数错误,
    不是 `Command timed out`);合法秒数原样交给 Pi 原生执行器。不另起 timer / AbortController。
@@ -278,9 +279,9 @@ Pi CLI 管理入口、内核自更新与旧工具兼容的执行边界见
 - 自动化安全网:maker-core PI 定向 + 端到端集成(真 pi 二进制 + 真 bridge + 假模型工具调用)
   覆盖安全命令静默执行 / 危险命令升级并 deny 拦截 / 区内写落盘 / 凭证读升级 / 普通读直通 /
   斜杠转义 / models.json 计费透传。
-- PR4 项目资源桥:只装配 Cindy 明确批准的 `.pi/skills` 与 cwd→git root 范围内
-  `.agents/skills`；真实 pinned Pi RPC 夹具覆盖未批准/显式 skills、重复名、并发隔离，以及
-  项目声明 npm/git/local packages 与 extensions 时零 install/clone/第三方执行。
+- PR4 项目资源桥(2026-07,已废止):当时只装配 Cindy 明确批准的 Skill，项目 packages/extensions
+  不执行。现行口径见 §8：本地根任务用 `--skill` / `--prompt-template` / `--extension` 原地加载
+  仓库原路径，不走批准快照；项目 `.pi/extensions` 会进入该会话。项目 packages 仍不自动安装。
 
 ### SSH 远端能力(2026-08 里程碑,轮 39 补记)
 

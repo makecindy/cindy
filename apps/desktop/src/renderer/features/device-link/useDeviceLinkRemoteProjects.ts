@@ -131,6 +131,44 @@ const RECONCILE_INTERVAL_MS = 10_000;
 /** 连续失败退避封顶:失败设备最低仍保持约 2 分钟一次的对账,恢复靠 push / 熔断探测先行。 */
 const RECONCILE_BACKOFF_MAX_MS = 120_000;
 
+/** 主窗口无人输入超过此时长则停周期对账；连接与 push 进度仍在。 */
+export const REMOTE_RECONCILE_USER_IDLE_MS = 5 * 60_000;
+
+/**
+ * 主窗口周期对账闸：页面不可见或用户离开电脑后停拉全量列表。
+ * 独立侧栏仍走 windowVisible（#4205），不要把这套 idle 叠上去。
+ */
+export function createRemoteReconcilePresence(opts?: {
+  idleMs?: number;
+  now?: () => number;
+}): {
+  isActive(): boolean;
+  /** @returns 是否从闲置变为在用，调用方应立刻对账一次。 */
+  setVisible(visible: boolean): boolean;
+  /** @returns 是否从闲置变为在用，调用方应立刻对账一次。 */
+  noteActivity(): boolean;
+} {
+  const idleMs = opts?.idleMs ?? REMOTE_RECONCILE_USER_IDLE_MS;
+  const now = opts?.now ?? Date.now;
+  let visible = true;
+  let lastActivityAt = now();
+  const isActive = () => visible && now() - lastActivityAt < idleMs;
+  return {
+    isActive,
+    setVisible(next) {
+      const wasActive = isActive();
+      visible = next;
+      if (next) lastActivityAt = now();
+      return !wasActive && isActive();
+    },
+    noteActivity() {
+      const wasActive = isActive();
+      lastActivityAt = now();
+      return !wasActive && isActive();
+    },
+  };
+}
+
 type RemoteSessionsRefresh = (deviceId: string, name?: string) => Promise<unknown>;
 
 /**
@@ -197,18 +235,19 @@ export function startRemoteSessionsReconciler(
   intervalMs = RECONCILE_INTERVAL_MS,
   backoff: ReconcileBackoff = createReconcileBackoff({ baseMs: intervalMs }),
   isActive: () => boolean = () => true,
-): () => void {
+): { stop: () => void; wake: () => void } {
   // 单次刷新可能横跨多个 tick(弱网下超时链 >10s);weak coalescing 会让后续 tick 拿到
   // 同一个在途 Promise,若每个 tick 都挂 then,一次 gave-up 会被重复记账、退避直接跳档
   // (review P2)。per-device 在途标记保证一次合并请求只记一次。
   const inFlight = new Set<string>();
-  const timer = setInterval(() => {
+  const runPass = (opts?: { ignoreBackoff?: boolean }) => {
     // Hidden auxiliary windows retain their push mirror and failure backoff, but do no polling.
     if (!isActive()) return;
     const seen = new Set<string>();
     for (const [deviceId, name] of getEligibleDevices()) {
       seen.add(deviceId);
-      if (inFlight.has(deviceId) || !backoff.shouldAttempt(deviceId)) continue;
+      if (inFlight.has(deviceId)) continue;
+      if (!opts?.ignoreBackoff && !backoff.shouldAttempt(deviceId)) continue;
       inFlight.add(deviceId);
       void refresh(deviceId, name)
         .then((result) => {
@@ -226,10 +265,17 @@ export function startRemoteSessionsReconciler(
         });
     }
     backoff.retainOnly(seen);
-  }, intervalMs);
-  return () => {
-    clearInterval(timer);
-    inFlight.clear();
+  };
+  const timer = setInterval(runPass, intervalMs);
+  return {
+    stop() {
+      clearInterval(timer);
+      inFlight.clear();
+    },
+    // 从闲置回到在用：立刻对账，不等下一拍 10 秒，也不吃失败退避。闲着不加 30 分钟兜底。
+    wake() {
+      runPass({ ignoreBackoff: true });
+    },
   };
 }
 
@@ -256,6 +302,29 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
   const { isAuthenticated, deviceId: selfDeviceId, dataOwnerId } = useAuth();
   const periodicReconcileActiveRef = useRef(periodicReconcileActive);
   periodicReconcileActiveRef.current = periodicReconcileActive;
+  const mainPresenceRef = useRef(
+    windowRole === 'main' ? createRemoteReconcilePresence() : null,
+  );
+  const wakeRemoteReconcileRef = useRef<() => void>(() => undefined);
+  useEffect(() => {
+    const gate = mainPresenceRef.current;
+    if (windowRole !== 'main' || !gate) return undefined;
+    const syncVisible = () => {
+      if (gate.setVisible(document.visibilityState === 'visible')) wakeRemoteReconcileRef.current();
+    };
+    const note = () => {
+      if (gate.noteActivity()) wakeRemoteReconcileRef.current();
+    };
+    syncVisible();
+    document.addEventListener('visibilitychange', syncVisible);
+    window.addEventListener('pointerdown', note);
+    window.addEventListener('keydown', note);
+    return () => {
+      document.removeEventListener('visibilitychange', syncVisible);
+      window.removeEventListener('pointerdown', note);
+      window.removeEventListener('keydown', note);
+    };
+  }, [windowRole]);
 
   // 账号边界真正由 dataOwnerId 界定:登出 / 切账号都必然改变它。**不能只靠 !isAuthenticated** ——
   // 运行时替换刷新路径可以在不经过 signed-out 的情况下直接把新 owner 发布出来,那时本 effect
@@ -597,13 +666,14 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
         }, RESEED_DEBOUNCE_MS),
       );
     });
-    const stopPeriodicReconcile = startRemoteSessionsReconciler(
+    const periodicReconcile = startRemoteSessionsReconciler(
       () => (linkOnline ? eligible : []),
       async (deviceId, name) => {
         log.debug(`sessions refresh trigger=periodic window=${windowRole} peer=${deviceId.slice(0, 8)} visible=${periodicReconcileActiveRef.current}`);
         // sessions:list 是 200 条有界窗口；refresh 层会保留窗口外 active 行，并有界补查
         // 缺席缓存 id 的终态，不能直接把响应缺席解释成删除。
         const result = await refreshRemoteDeviceSessions(deviceId, name, {
+          scope: 'both',
           snapshotMode: 'merge',
           coalescingMode: 'weak',
         });
@@ -613,8 +683,9 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
       },
       RECONCILE_INTERVAL_MS,
       undefined,
-      () => periodicReconcileActiveRef.current,
+      () => periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true),
     );
+    wakeRemoteReconcileRef.current = periodicReconcile.wake;
 
     // 目标设备「无响应」熔断翻转(main 权威):镜像给 UI;恢复时重跑 subscribe+bootstrap
     // ——熔断 open 期间的订阅 / 首拉都被快速失败挡掉了,恢复必须主动补,不能等用户手点。
@@ -671,6 +742,10 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
       if (disposed || !eligible.has(push.deviceId)) return;
       if (!isDeviceLinkRemotePushCurrent(push, localOwnerStamp)) return;
       if (push.channel === 'maker:schedule:event') {
+        // 推送照收；闲着不跟事件去拉整份自动化索引。人回来 wake/10s 用 scope both 补上。
+        const watching =
+          periodicReconcileActiveRef.current && (mainPresenceRef.current?.isActive() ?? true);
+        if (!watching) return;
         void refreshRemoteDeviceSessions(push.deviceId, eligible.get(push.deviceId), { scope: 'schedule' }).then((result) => {
           if (result === 'revoked' && !disposed) handleRevoked(push.deviceId);
         });
@@ -768,7 +843,8 @@ export function useDeviceLinkRemoteProjects(periodicReconcileActive = true, wind
       disposed = true;
       setRemoteReseedImpl(null);
       setRemoteSessionBootstrapRetryImpl(null);
-      stopPeriodicReconcile();
+      wakeRemoteReconcileRef.current = () => undefined;
+      periodicReconcile.stop();
       for (const t of reseedTimers.values()) clearTimeout(t);
       reseedTimers.clear();
       clearAllArchivedSessionRetries();

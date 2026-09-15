@@ -10,6 +10,7 @@ import {
   type LogEvent,
   type VecStatusEvent,
 } from '../DbTransport.js';
+import { runAsBackgroundDbRpc } from '../rpcAdmission.js';
 import { WorkerThreadTransport } from '../WorkerThreadTransport.js';
 
 describe('WorkerThreadTransport', () => {
@@ -72,6 +73,28 @@ describe('WorkerThreadTransport', () => {
       code: DB_TRANSPORT_OUTCOME_UNKNOWN,
       message: expect.stringMatching(/db worker exited|terminated/i),
     });
+  });
+
+  it('keeps interactive writes moving when background listing is capped', async () => {
+    const transport = new WorkerThreadTransport({
+      useInlineWorker: true,
+      maxInFlightRpcs: 4,
+      maxQueuedRpcs: 4,
+      maxBackgroundInFlightRpcs: 1,
+      maxBackgroundQueuedRpcs: 1,
+    });
+    try {
+      const backgroundBusy = runAsBackgroundDbRpc(() => transport.send('sleep', { ms: 80 }));
+      const backgroundQueued = runAsBackgroundDbRpc(() => transport.send('sleep', { ms: 80 }));
+      await expect(
+        runAsBackgroundDbRpc(() => transport.send('sleep', { ms: 80 })),
+      ).rejects.toThrow(/overloaded/);
+      await expect(transport.send('query', { sql: 'SELECT 1 AS n' })).resolves.toEqual([{ n: 1 }]);
+      await expect(backgroundBusy).resolves.toEqual({ slept: 80 });
+      await expect(backgroundQueued).resolves.toEqual({ slept: 80 });
+    } finally {
+      await transport.close();
+    }
   });
 
   it('applies bounded backpressure before posting more RPCs to the worker', async () => {

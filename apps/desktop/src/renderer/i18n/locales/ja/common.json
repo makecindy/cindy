@@ -2151,7 +2151,11 @@
         "endpointLabel": "{{agent}} ベース URL",
         "noAuthNote": "このプロキシにクライアントキーは不要です。Cindy は転送前に CLI のサブスクリプション認証情報を削除します。",
         "signIn": "ログイン",
-        "setupLink": {"apiKey": "API キーを取得", "account": "登録・ログイン", "setup": "設定ガイド"},
+        "setupLink": {
+          "apiKey": "API キーを取得",
+          "account": "登録・ログイン",
+          "setup": "設定ガイド"
+        },
         "fetching": "接続を確認してモデル一覧を取得しています…",
         "fetchFailed": "モデル一覧を取得できませんでした。プリセットの推奨モデルで追加を完了し、あとで詳細から更新できます",
         "manualModelHint": "モデルを検出できませんでした。このプロキシが提供する正確なモデル ID を入力してください。",
@@ -9525,10 +9529,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "プロジェクト別",
+        "project": "プロジェクト",
         "flat": "フラット表示",
-        "device": "デバイス別",
-        "dialogue": "チャット別"
+        "device": "デバイス",
+        "dialogue": "チャット"
       },
       "filterGroupByDeviceManualTip": "手動並び替え中はデバイスグループを使えません",
       "deviceGroup": {
@@ -9828,9 +9832,9 @@
         "all": "すべて"
       },
       "sortTaskBy": {
-        "priority": "優先度順",
-        "activity": "最近のアクティビティ順",
-        "created": "作成日時順"
+        "priority": "優先度",
+        "activity": "最近のアクティビティ",
+        "created": "作成日時"
       }
     },
     "rename": {

@@ -15,6 +15,7 @@
  */
 
 import { eq, desc, and, isNull, isNotNull, inArray, notInArray, or, sql } from 'drizzle-orm';
+import { runAsBackgroundDbRpc } from '../localDb/client/rpcAdmission.js';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { broadcastSessionPatched } from '../localDb/ipc/sessions.js';
 
@@ -206,6 +207,9 @@ const LEGACY_SESSION_RUN_ID_PREFIX = 'legacy-session:';
 const unreadTerminalRunWhere = () =>
   sql`${scheduleRuns.readAt} IS NULL AND ${scheduleRuns.status} IN ('success', 'failed', 'aborted', 'interrupted')`;
 
+/** 侧栏未读终态硬上限：红点累计用最近失败，避免随空打次数把远程回包顶过 4MB。 */
+const SIDEBAR_UNREAD_RUN_LIMIT = 200;
+
 function toScheduleSource(value: string | null): Schedule['source'] | undefined {
   if (value === 'user' || value === 'project' || value === 'bot') return value;
   return undefined;
@@ -367,6 +371,56 @@ function publicScheduleRunWhere() {
 export class DrizzleScheduleStorage implements ScheduleStorage {
   constructor(private readonly getDb: () => SchedulerDrizzleDb) {}
 
+  private sidebarIndexGeneration = 0;
+  private sidebarIndexCache: {
+    generation: number;
+    revision: string;
+    runs: ScheduleSidebarIndexRun[];
+  } | null = null;
+
+  private bumpSidebarIndexCache(): void {
+    this.sidebarIndexGeneration += 1;
+    this.sidebarIndexCache = null;
+  }
+
+  private async readSidebarIndexRevision(): Promise<string> {
+    const db = this.getDb();
+    const [latest] = await db
+      .select({ n: sql<number>`count(*)`.mapWith(Number) })
+      .from(scheduleSessionLatestRuns);
+    const [runStats] = await db
+      .select({
+        n: sql<number>`count(*)`.mapWith(Number),
+        maxFired: sql<number>`coalesce(max(${scheduleRuns.firedAt}), 0)`.mapWith(Number),
+        maxRead: sql<number>`coalesce(max(${scheduleRuns.readAt}), 0)`.mapWith(Number),
+        maxFinished: sql<number>`coalesce(max(${scheduleRuns.finishedAt}), 0)`.mapWith(Number),
+        running: sql<number>`coalesce(sum(case when ${scheduleRuns.status} = 'running' then 1 else 0 end), 0)`.mapWith(Number),
+      })
+      .from(scheduleRuns);
+    // nextFireAt / status 会被另一 Cindy 进程改（dev/release 双开共用 DB，见 claimDueFire），
+    // 本进程 generation 不会 bump。行数和 max(firedAt/readAt) 覆盖不到这些 UPDATE。
+    const [scheduleStats] = await db
+      .select({
+        n: sql<number>`count(*)`.mapWith(Number),
+        nextFireSum: sql<number>`coalesce(sum(${schedules.nextFireAt}), 0)`.mapWith(Number),
+        nextFireN: sql<number>`coalesce(sum(case when ${schedules.nextFireAt} is not null then 1 else 0 end), 0)`.mapWith(Number),
+        activeN: sql<number>`coalesce(sum(case when ${schedules.status} = 'active' then 1 else 0 end), 0)`.mapWith(Number),
+      })
+      .from(schedules);
+    return [
+      latest?.n ?? 0,
+      runStats?.n ?? 0,
+      runStats?.maxFired ?? 0,
+      runStats?.maxRead ?? 0,
+      runStats?.maxFinished ?? 0,
+      runStats?.running ?? 0,
+      scheduleStats?.n ?? 0,
+      scheduleStats?.nextFireSum ?? 0,
+      scheduleStats?.nextFireN ?? 0,
+      scheduleStats?.activeN ?? 0,
+    ].join(':');
+  }
+
   // ---------- Schedule CRUD ----------
 
   async list(filter?: ListFilter): Promise<Schedule[]> {
@@ -399,6 +453,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       // 理论上不可能：刚插完；防御性 throw 让上层立刻看到
       throw new Error(`DrizzleScheduleStorage: insert verify failed for id=${s.id}`);
     }
+    this.bumpSidebarIndexCache();
     return inserted;
   }
 
@@ -411,13 +466,16 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     }
     await db.update(schedules).set(setObj).where(eq(schedules.id, id));
     // drizzle update 不会 throw "not found"——主动 SELECT 验证
-    return this.get(id);
+    const updated = await this.get(id);
+    if (updated) this.bumpSidebarIndexCache();
+    return updated;
   }
 
   async delete(id: string): Promise<void> {
     const db = this.getDb();
     // schedule_runs.schedule_id ON DELETE CASCADE，相关 run 由 SQLite 自动清
     await db.delete(schedules).where(eq(schedules.id, id));
+    this.bumpSidebarIndexCache();
   }
 
   /**
@@ -453,6 +511,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       throw new Error('claimDueFire: sqlite driver did not report changes count');
     }
     if (changes === 0) return null;
+    this.bumpSidebarIndexCache();
     return this.get(id);
   }
 
@@ -465,6 +524,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     if (!row) {
       throw new Error(`DrizzleScheduleStorage: insertRun verify failed for id=${run.id}`);
     }
+    this.bumpSidebarIndexCache();
     return scheduleRunToCamel(row);
   }
 
@@ -495,6 +555,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         updatedAt: new Date(patch.finishedAt).toISOString(),
       });
     }
+    if (row) this.bumpSidebarIndexCache();
     return row ? scheduleRunToCamel(row) : null;
   }
 
@@ -637,6 +698,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
    * - 内部例行任务在 SQL 内排除，避免未读历史随运行次数累积到公共侧栏内存中。
    */
   async listSidebarIndexRuns(): Promise<ScheduleSidebarIndexRun[]> {
+    return runAsBackgroundDbRpc(async () => {
+    const revision = await this.readSidebarIndexRevision();
+    const cached = this.sidebarIndexCache;
+    if (cached && cached.revision === revision) return cached.runs;
+    const generation = this.sidebarIndexGeneration;
     const db = this.getDb();
     const projection = {
       runId: scheduleRuns.id,
@@ -665,7 +731,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .select(projection)
         .from(scheduleRuns)
         .innerJoin(schedules, eq(scheduleRuns.scheduleId, schedules.id))
-        .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere())),
+        .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
+        .orderBy(desc(scheduleRuns.firedAt), desc(scheduleRuns.id))
+        .limit(SIDEBAR_UNREAD_RUN_LIMIT),
       db
         .select(projection)
         .from(scheduleRuns)
@@ -691,9 +759,11 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         .where(publicScheduleRunWhere()),
     ]);
     const latestRunIds = new Set(latestSessionRows.map((row) => row.runId));
-    const unreadRunIds = new Set(unreadRows.map((row) => row.runId));
+    // SQL 按 fired_at 新→旧截 200 条；组装仍把其中较旧的未读放前面，红点累计后再用尾部最新映射裁决归属。
+    const unreadOldestFirst = unreadRows.slice().reverse();
+    const unreadRunIds = new Set(unreadOldestFirst.map((row) => row.runId));
     const rows = [
-      ...unreadRows.filter((row) => !latestRunIds.has(row.runId)),
+      ...unreadOldestFirst.filter((row) => !latestRunIds.has(row.runId)),
       ...latestFailedRows.filter(
         (row) => !latestRunIds.has(row.runId) && !unreadRunIds.has(row.runId),
       ),
@@ -771,7 +841,12 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       });
     }
 
-    return [...indexedRuns, ...legacyRuns].filter((run) => run.scheduleSource !== 'bot');
+    const runs = [...indexedRuns, ...legacyRuns].filter((run) => run.scheduleSource !== 'bot');
+    if (generation === this.sidebarIndexGeneration) {
+      this.sidebarIndexCache = { generation, revision, runs };
+    }
+    return runs;
+    });
   }
 
   /**
@@ -1091,6 +1166,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
     const [row] = await db.select().from(scheduleRuns).where(condition).limit(1);
     if (!row) return null;
     await db.delete(scheduleRuns).where(condition);
+    this.bumpSidebarIndexCache();
     return scheduleRunToCamel(row);
   }
 
@@ -1207,6 +1283,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
         ),
       )
       .run();
+    this.bumpSidebarIndexCache();
     return [...new Set(staleRows.map((r) => r.scheduleId))];
   }
 
@@ -1268,6 +1345,7 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       return null;
     }
     await db.update(scheduleRuns).set({ readAt: Date.now() }).where(eq(scheduleRuns.id, runId));
+    this.bumpSidebarIndexCache();
     return row.scheduleId;
   }
 
@@ -1294,7 +1372,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .where(and(unreadTerminalRunWhere(), publicScheduleRunWhere()))
       .run();
     const changes = (result as unknown as { changes?: number }).changes;
-    return typeof changes === 'number' ? changes : 0;
+    const updated = typeof changes === 'number' ? changes : 0;
+    if (updated > 0) this.bumpSidebarIndexCache();
+    return updated;
   }
 
   async markAllRunsRead(scheduleId: string): Promise<number> {
@@ -1306,7 +1386,9 @@ export class DrizzleScheduleStorage implements ScheduleStorage {
       .where(and(eq(scheduleRuns.scheduleId, scheduleId), unreadTerminalRunWhere()))
       .run();
     const changes = (result as unknown as { changes?: number }).changes;
-    return typeof changes === 'number' ? changes : 0;
+    const updated = typeof changes === 'number' ? changes : 0;
+    if (updated > 0) this.bumpSidebarIndexCache();
+    return updated;
   }
 
   /**

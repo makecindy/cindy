@@ -2151,7 +2151,11 @@
         "endpointLabel": "{{agent}} 기본 URL",
         "noAuthNote": "이 프록시는 클라이언트 키가 필요하지 않습니다. Cindy는 전달 전에 CLI 구독 자격 증명을 제거합니다.",
         "signIn": "로그인",
-        "setupLink": {"apiKey": "API 키 받기", "account": "가입 또는 로그인", "setup": "설정 도움말"},
+        "setupLink": {
+          "apiKey": "API 키 받기",
+          "account": "가입 또는 로그인",
+          "setup": "설정 도움말"
+        },
         "fetching": "연결을 확인하고 모델 목록을 가져오는 중…",
         "fetchFailed": "모델 목록을 가져오지 못했습니다. 프리셋 추천 모델로 추가를 완료한 뒤 나중에 상세에서 새로고침할 수 있습니다",
         "manualModelHint": "검색된 모델이 없습니다. 이 프록시가 제공하는 정확한 모델 ID를 입력하세요.",
@@ -9525,10 +9529,10 @@
         "pi": "Pi"
       },
       "filterGroupBy": {
-        "project": "프로젝트별",
+        "project": "프로젝트",
         "flat": "평면 목록",
-        "device": "기기별",
-        "dialogue": "대화별"
+        "device": "기기",
+        "dialogue": "대화"
       },
       "filterGroupByDeviceManualTip": "수동 정렬 중에는 기기별 그룹을 사용할 수 없습니다",
       "deviceGroup": {
@@ -9828,9 +9832,9 @@
         "all": "전체"
       },
       "sortTaskBy": {
-        "priority": "우선순위순",
-        "activity": "최근 활동순",
-        "created": "생성 시간순"
+        "priority": "우선순위",
+        "activity": "최근 활동",
+        "created": "생성 시간"
       }
     },
     "rename": {

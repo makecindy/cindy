@@ -309,7 +309,13 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
   const isFolderMenu = menu?.entry.type === 'directory';
 
   return (
-    <div ref={containerRef} className="flex h-full w-full flex-col gap-px overflow-y-auto py-2">
+    // 横向溢出契约:行宽由内容决定(行 min-w-max:深层缩进 + 完整文件名/输入框),
+    // 容器显式 overflow-auto 承接横向滚动;tree-hscroll 让横条常显(见 globals.css)——
+    // 横向溢出没有"被截断"的视觉线索,thumb 默认透明时会被当成"没有滚动条"。
+    <div
+      ref={containerRef}
+      className="tree-hscroll flex h-full w-full flex-col gap-px overflow-auto py-2"
+    >
       {rows.map((row) => {
         if (row.kind === 'pending') {
           return (
@@ -623,7 +629,9 @@ function FileTreeRow({
       // 未来要"展开到某个文件夹"也能直接复用。
       data-relpath={entry.relPath}
       className={cn(
-        'group/file-row flex h-7 w-full shrink-0 items-center rounded-md pr-2',
+        // min-w-max:行宽由内容决定(缩进 + 完整名字),深层级/长名字撑出横向滚动区,
+        // 而不是把名字 truncate 到 0 宽;内容比容器窄时 w-full 仍撑满整行。
+        'group/file-row flex h-7 w-full min-w-max shrink-0 items-center rounded-md pr-2',
         'cursor-pointer text-13 transition-colors',
         selected
           ? 'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground'
@@ -786,7 +794,8 @@ function RenamingInputRow({ entry, depth, onSubmit, onCancel }: RenamingInputRow
     <div
       style={{ paddingLeft }}
       className={cn(
-        'flex h-7 w-full shrink-0 items-center gap-1.5 rounded-md pr-2',
+        // 同 FileTreeRow:深层重命名输入框不能被缩进挤没,行宽跟随输入框自身宽度。
+        'flex h-7 w-full min-w-max shrink-0 items-center gap-1.5 rounded-md pr-2',
         'bg-sidebar-item-active text-sidebar-item-active-foreground',
       )}
     >
@@ -856,7 +865,8 @@ function PendingInputRow({ pending, depth, onSubmit, onCancel }: PendingInputRow
     <div
       style={{ paddingLeft }}
       className={cn(
-        'flex h-7 w-full shrink-0 items-center gap-1.5 rounded-md pr-2',
+        // 同 FileTreeRow:深层的新建输入框不能被缩进挤没,行宽由输入框自身宽度决定。
+        'flex h-7 w-full min-w-max shrink-0 items-center gap-1.5 rounded-md pr-2',
         'bg-sidebar-item-active text-sidebar-item-active-foreground',
       )}
     >

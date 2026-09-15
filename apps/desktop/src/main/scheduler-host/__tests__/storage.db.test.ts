@@ -481,6 +481,101 @@ describe('DrizzleScheduleStorage (in-memory)', () => {
     }
   });
 
+  it('caps unread terminal runs so the sidebar index stays bounded', async () => {
+    const harness = createStorageHarness();
+    try {
+      harness.db.run(sql`
+        INSERT INTO sessions (id, title, source, workspace_kind, created_at, updated_at)
+        VALUES ('sess-unread-cap', 'Unread cap', 'desktop', 'dialogue', 1, 1)
+      `);
+      await harness.storage.insert(baseSchedule({ id: 'sch-unread-cap' }));
+      for (let i = 0; i < 250; i += 1) {
+        await harness.storage.insertRun({
+          id: `unread-${i}`,
+          scheduleId: 'sch-unread-cap',
+          sessionId: 'sess-unread-cap',
+          status: 'failed',
+          firedAt: i,
+        });
+      }
+      await harness.storage.insertRun({
+        id: 'latest-read',
+        scheduleId: 'sch-unread-cap',
+        sessionId: 'sess-unread-cap',
+        status: 'success',
+        firedAt: 1000,
+        readAt: 1001,
+      });
+      const runs = await harness.storage.listSidebarIndexRuns();
+      expect(runs.some((run) => run.runId === 'latest-read')).toBe(true);
+      expect(runs.filter((run) => run.runId.startsWith('unread-'))).toHaveLength(200);
+      expect(runs).toHaveLength(201);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('reuses the sidebar index snapshot until runs change', async () => {
+    const harness = createStorageHarness();
+    try {
+      await harness.storage.insert(baseSchedule({ id: 'sch-cache' }));
+      await harness.storage.insertRun({
+        id: 'run-cache-1',
+        scheduleId: 'sch-cache',
+        status: 'success',
+        firedAt: 1,
+        readAt: 2,
+      });
+      const first = await harness.storage.listSidebarIndexRuns();
+      const second = await harness.storage.listSidebarIndexRuns();
+      expect(second).toBe(first);
+      await harness.storage.insertRun({
+        id: 'run-cache-2',
+        scheduleId: 'sch-cache',
+        status: 'failed',
+        firedAt: 3,
+      });
+      const third = await harness.storage.listSidebarIndexRuns();
+      expect(third).not.toBe(first);
+      expect(third.some((run) => run.runId === 'run-cache-2')).toBe(true);
+    } finally {
+      harness.close();
+    }
+  });
+
+  it('rebuilds sidebar index when another writer changes run status or nextFireAt', async () => {
+    const harness = createStorageHarness();
+    try {
+      await harness.storage.insert(baseSchedule({ id: 'sch-ext', nextFireAt: 9_000 }));
+      await harness.storage.insertRun({
+        id: 'run-ext',
+        scheduleId: 'sch-ext',
+        status: 'running',
+        firedAt: 1,
+      });
+      const cached = await harness.storage.listSidebarIndexRuns();
+      expect(cached.find((run) => run.runId === 'run-ext')).toMatchObject({
+        status: 'running',
+        nextFireAt: 9_000,
+      });
+      expect(await harness.storage.listSidebarIndexRuns()).toBe(cached);
+
+      harness.db.run(sql`
+        UPDATE schedule_runs SET status = 'success', finished_at = 2 WHERE id = 'run-ext'
+      `);
+      const afterFinish = await harness.storage.listSidebarIndexRuns();
+      expect(afterFinish).not.toBe(cached);
+      expect(afterFinish.find((run) => run.runId === 'run-ext')?.status).toBe('success');
+
+      harness.db.run(sql`UPDATE schedules SET next_fire_at = 12000 WHERE id = 'sch-ext'`);
+      const afterReschedule = await harness.storage.listSidebarIndexRuns();
+      expect(afterReschedule).not.toBe(afterFinish);
+      expect(afterReschedule.find((run) => run.runId === 'run-ext')?.nextFireAt).toBe(12_000);
+    } finally {
+      harness.close();
+    }
+  });
+
   it('recovers warnings per automation without erasing unread history; healthy skips only recover checks', async () => {
     const harness = createStorageHarness();
     try {

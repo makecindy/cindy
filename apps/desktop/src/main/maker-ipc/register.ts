@@ -558,6 +558,7 @@ import { ClaudeOutputLagTimingGuard, type ModelUsageCumulative } from '../usage/
 import { type RegionalMoney } from '../../shared/regionalMoney.js';
 import { currentLedgerCurrency } from '../usage/ledgerCurrency.js';
 import {
+  listPiRuntimePaletteCommands,
   mergePiPackageCommands,
   shouldListPiPackageCommands,
   type PiPackageMutationRequest,
@@ -5926,17 +5927,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 : manifest?.status === 'unknown'
                   ? 'unknown'
                   : 'pending';
-          const managedNames = new Set(manifest?.managedPackageCommandNames ?? []);
           if (manifest?.status === 'loaded') {
-            packageCommands = manifest.commands.flatMap((command) =>
-              managedNames.has(command.name) && !command.name.startsWith('skill:')
-                ? [
-                    {
-                      name: command.name,
-                      description: command.description ?? `Pi extension command: ${command.name}`,
-                    },
-                  ]
-                : [],
+            packageCommands = listPiRuntimePaletteCommands(
+              manifest.commands,
+              manifest.authorizedSlashCommandNames ?? manifest.managedPackageCommandNames,
             );
           } else if (!manifest) {
             // An empty local Pi task may have a persisted session row before its

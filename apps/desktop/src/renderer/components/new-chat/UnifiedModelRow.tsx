@@ -8,9 +8,12 @@ import type { ProviderView, UnifiedModelEntry } from '@cindy/model-providers';
 
 import type { AgentKind } from '@/hooks/useAgentCapabilities';
 import { cn } from '@/lib/utils';
+import { providerAccountLabel } from '@/lib/providerDisplayName';
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { PriceFreeBadge, PriceTierMarks, type UnifiedRowPriceDisplay } from './priceTierMarks';
+
+import { ModelSourceDetails } from './ModelSourceDetails';
 
 import { agentOptionOf } from './agentOptions';
 // 图标规则(模型条目 icon 优先、缺省回落来源供应商标)只有一份实现,复用它而不是抄一份。
@@ -48,7 +51,10 @@ export function UnifiedModelRow({
   paymentRequiredLabel,
   paymentRequiredUnlockLabel,
   onPaymentRequired,
+  sourceLabel,
 }: {
+  /** Supplied only in the combined All / Favorites views. */
+  sourceLabel?: string;
   entry: UnifiedModelEntry;
   anchor: UnifiedAnchor;
   config: UnifiedRowConfig;
@@ -284,7 +290,17 @@ export function UnifiedModelRow({
         {/* 行尾不放 ✅(Chris 2026-08-13 裁决:选中已有整行底色,再加勾是重复信号,
             还平白吃掉一列宽度);选中态语义由 aria-selected 承载。 */}
       </div>
-      {description && (
+      {sourceLabel && entry.providerId !== 'xd' ? (
+        <ModelSourceDetails
+          providerId={entry.providerId}
+          label={providerAccountLabel(
+            sourceLabel,
+            provider?.openAiAccount?.identity?.trim() ||
+              provider?.subscriptionAccount?.identity?.trim(),
+          )}
+          modelId={config.wireModelId ?? entry.modelId}
+        />
+      ) : description ? (
         // 单行截断 + title 全文;宽度上限收紧到约等于最长模型名的量级(~30ch)——
         // 描述是辅助信息,不该比模型名更长地占据视线(2026-08-13 实测反馈)。
         // 颜色按旧选择器恢复用 --text-secondary(同日裁决:tertiary 太淡看不清;
@@ -295,7 +311,7 @@ export function UnifiedModelRow({
         >
           {description}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
