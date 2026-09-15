@@ -234,10 +234,29 @@ const GOOGLE_CONFIG = resolveMobileGoogleConfig(
 export const GOOGLE_WEB_CLIENT_ID = GOOGLE_CONFIG.webClientId;
 export const GOOGLE_IOS_CLIENT_ID = GOOGLE_CONFIG.iosClientId;
 export const GOOGLE_IOS_URL_SCHEME = GOOGLE_CONFIG.iosUrlScheme;
-export const WECHAT_APP_ID =
-  process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID?.trim() || '';
-export const WECHAT_UNIVERSAL_LINK =
-  process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?.trim() || '';
+/** 微信配置只属于国内构建；与原生插件选择同源，不受登录后的组织区域影响。 */
+export function resolveMobileWechatConfig(
+  region: CindyAuthRegion,
+  env: {
+    EXPO_PUBLIC_CINDY_WECHAT_APP_ID?: string;
+    EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?: string;
+  },
+): { appId: string; universalLink: string } {
+  if (region === 'global') return { appId: '', universalLink: '' };
+  return {
+    appId: env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID?.trim() || '',
+    universalLink: env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK?.trim() || '',
+  };
+}
+
+const WECHAT_CONFIG = resolveMobileWechatConfig(AUTH_REGION, {
+  // Metro 只内联静态 process.env.KEY，不能改为动态键或直接传 process.env。
+  EXPO_PUBLIC_CINDY_WECHAT_APP_ID: process.env.EXPO_PUBLIC_CINDY_WECHAT_APP_ID,
+  EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK:
+    process.env.EXPO_PUBLIC_CINDY_WECHAT_UNIVERSAL_LINK,
+});
+export const WECHAT_APP_ID = WECHAT_CONFIG.appId;
+export const WECHAT_UNIVERSAL_LINK = WECHAT_CONFIG.universalLink;
 
 export let DEVICE_LINK_API_BASE_URL = resolveDeviceLinkApiBaseUrl(
   configuredValue('EXPO_PUBLIC_XDT_DEVICE_LINK_API_BASE_URL'),
