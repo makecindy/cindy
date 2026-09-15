@@ -30,6 +30,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListToolsRequestSchema, type Tool } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { registerBotRoutineTools, type BotRoutineCallbacks } from './xdt-helper/botRoutineTools.js';
+import { registerBotSessionDeliveryTools, type BotSessionDeliveryCallbacks } from './xdt-helper/botSessionDeliveryTools.js';
 import { jsonObjectArg } from './json-object-arg.js';
 
 import { XdtHelperToolRegistry } from './lizi_xdtHelperToolRegistry.js';
@@ -594,6 +595,8 @@ export interface XdtHelperMcpDeps {
   /** Cindy Bot-only background Session-task controls. Host validates the caller Session. */
   sessionTasks?: SessionTaskCallbacks;
   botRoutines?: BotRoutineCallbacks;
+  /** Narrow existing-Session delivery; never fall back to unrestricted sendToSession. */
+  botSessionDelivery?: BotSessionDeliveryCallbacks;
   /** Direct Bot-to-Bot messages over each partner's canonical Cindy Session. */
   botMessaging?: BotMessagingCallbacks;
   /** Direct lightweight Bot creation for a Bot-bound session. */
@@ -756,6 +759,10 @@ export function createXdtHelperMcpServer(
   }
 
   registerStartSessionTaskEntry(registry, deps, sessionCtx);
+  if (deps.botSessionDelivery) {
+    registerBotSessionDeliveryTools(registry, deps.botSessionDelivery,
+      () => resolveLiziMcpSessionContext(sessionCtx).sessionId);
+  }
   registerSendToAgentEntry(registry, deps, sessionCtx);
   registerSessionTaskControlEntries(registry, deps, sessionCtx);
   if (deps.botProfiles) {

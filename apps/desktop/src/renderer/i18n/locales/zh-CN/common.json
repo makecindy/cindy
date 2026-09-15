@@ -1,4 +1,10 @@
 {
+  "botExistingSessionDelivery": {
+    "title": "向已有任务发送消息",
+    "description": "将下方消息发送到指定任务。发送前请确认其执行位置、模型和权限。",
+    "localTarget": "当前电脑",
+    "remoteTarget": "远程主机：{{hostId}}"
+  },
   "appBadge": {
     "attentionCount": "需要关注的任务：{{count}}"
   },

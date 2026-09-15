@@ -1,3 +1,4 @@
+import { createBotExistingSessionDelivery } from '../botExistingSessionDelivery.js';
 import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT, appendAutoReviewUserIntent } from '@cindy/maker-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
@@ -12304,5 +12305,53 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect.objectContaining({ surfaceError: true, owner: expect.any(Object) }),
     );
     expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
+  });
+});
+
+
+describe('Bot existing-target delivery with the real input coordinator', () => {
+  it.each([false, true])('keeps the original Session and execution settings (execution paused=%s)', async paused => {
+    const h = createHarness();
+    const target = 'original-fable-target';
+    await h.coordinator.ensureQueueRestored(target);
+    if (paused) h.coordinator.setExecutionPaused(target, true);
+    const message = 'Confirm receipt only.';
+    const request = { callerSessionId: 'bot-main', targetSessionId: target, message, idempotencyKey: 'one' };
+    const service = createBotExistingSessionDelivery({
+      capture: async () => ({ ownerScope: 'owner', assertCurrent: () => {}, validate: async () => {}, confirm: async () => true, dispose: () => {} }),
+      withTargetLock: async (_id, action) => action(),
+      readAccepted: async (id, clientId) => {
+        const item = h.coordinator.getQueueInspection(id).find(row => row.queuedMessageId === clientId);
+        if (item) return { message: item.content };
+        const persisted = mocks.createMessage.mock.calls.find(([sid, row]) =>
+          sid === id && (row as { clientId?: string }).clientId === clientId)?.[1] as { content: string } | undefined;
+        return persisted ? { message: persisted.content } : null;
+      },
+      prepare: async (input, clientId) => {
+        const queued = makeItem(clientId, input.message, {
+          model: 'claude-fable-5-1', permissionMode: 'ask',
+          origin: { kind: 'session', senderSessionId: input.callerSessionId, displayText: input.message },
+          createOpts: { agentKind: 'claude-code', workingDir: '/original-project', model: 'claude-fable-5-1', permissionMode: 'ask', planMode: true },
+        });
+        return () => { h.coordinator.enqueue(input.targetSessionId, queued); };
+      },
+      flush: async () => { await flush(); },
+    });
+    expect(await service.send(request)).toMatchObject({ ok: true, targetSessionId: target, wakeKind: 'queued' });
+    expect(await service.send(request)).toMatchObject({ ok: true, reused: true });
+    await flush();
+    if (paused) {
+      expect(h.sendToAgent).not.toHaveBeenCalled();
+      expect(h.coordinator.getQueueControlSnapshot(target).pendingQueue).toHaveLength(1);
+      expect(h.coordinator.isExecutionPaused(target)).toBe(true);
+    } else {
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(h.sendToAgent.mock.calls[0]?.slice(0,3)).toEqual([
+        target, expect.objectContaining({ content: message }),
+        expect.objectContaining({ agentKind: 'claude-code', model: 'claude-fable-5-1', workingDir: '/original-project', permissionMode: 'ask', planMode: true }),
+      ]);
+    }
+    expect(h.abortSession).not.toHaveBeenCalled();
+    expect(h.steerToAgent).not.toHaveBeenCalled();
   });
 });
