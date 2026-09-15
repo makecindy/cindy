@@ -1829,17 +1829,23 @@ export async function updateSessionInDb(
     // working_dir 在普通项目、绑定仍在旧 worktree 的状态,只看 cwd 会漏掉这类存量行;
     // 反过来,DB 的 worktree_path 快照在回收后仍保留历史值,也不能当活绑定用。
     const requestedWorkingDir = typeof p.workingDir === 'string' ? p.workingDir : null;
+    // 显式清空(`workingDir: null`,或空串/空白串经上面的归一化变成 null)也是改归属:
+    // 字符串判据放它过去的话,worktree 会话会被摘掉工作目录,留下同一类归属分裂。
+    // 只当键真的出现且归一化后为 null 时才算清空(未传该键的 update 不落库,不能算)。
+    const clearsWorkingDir = Object.prototype.hasOwnProperty.call(p, 'workingDir') && p.workingDir === null;
     if (
       beforeMove &&
       !beforeMove.remoteHostId &&
-      requestedWorkingDir &&
-      !workingDirEquals(requestedWorkingDir, beforeMove.workingDir)
+      (requestedWorkingDir !== null || clearsWorkingDir) &&
+      (clearsWorkingDir || !workingDirEquals(requestedWorkingDir, beforeMove.workingDir))
     ) {
       const boundWorktreePath = sessionWorktreeBindingLookup?.(sid) ?? null;
       const ownedWorktreeRoot =
         (boundWorktreePath ? managedWorktreeRoot(boundWorktreePath) : null) ??
         (beforeMove.workingDir ? managedWorktreeRoot(beforeMove.workingDir) : null);
-      const targetWorktreeRoot = managedWorktreeRoot(requestedWorkingDir);
+      const targetWorktreeRoot = requestedWorkingDir
+        ? managedWorktreeRoot(requestedWorkingDir)
+        : null;
       if (ownedWorktreeRoot && !workingDirEquals(ownedWorktreeRoot, targetWorktreeRoot)) {
         throwIpcError(
           'PRECONDITION_FAILED',

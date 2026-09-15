@@ -1094,6 +1094,24 @@ describe('local-db:sessions:update handler wiring', () => {
       .toEqual({ working_dir: to.replace(/\\/g, '/') });
   });
 
+  it('refuses clearing the working directory of a worktree session', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ? WHERE id = ?').run(worktreeDir, 'cc-local');
+
+    // 显式清空同样是改归属:不能因为「不是字符串」就放过。
+    await expect(invokeUpdate('cc-local', { workingDir: null }))
+      .rejects.toThrow(/cannot be moved outside its worktree/i);
+    await expect(invokeUpdate('cc-local', { workingDir: '  ' }))
+      .rejects.toThrow(/cannot be moved outside its worktree/i);
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir });
+
+    // 普通会话不受影响;未传该键的 update(如移到对话)也照旧。
+    await invokeUpdate('codex-local', { workingDir: null });
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('codex-local'))
+      .toEqual({ working_dir: null });
+  });
+
   it('refuses further moves for a session still bound to a worktree after an earlier half-move', async () => {
     const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
     // 旧版允许过的半移动存量行:cwd 已经落在普通项目,worktree 绑定还在旧 worktree。
