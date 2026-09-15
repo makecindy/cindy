@@ -147,6 +147,7 @@
   "devDependencies": {
     "spdx-expression-parse": "3.0.1",
     "@types/ws": "^8.18.1",
+    "tsx": "^4.19.0",
     "vitest": "^3.2.4",
     "ws": "^8.18.3"
   }
