@@ -2889,16 +2889,18 @@ describe('ghost · launch 启动模式(2026-07-12)', () => {
   });
 });
 
-describe('ghost · 官方保留 id 前缀', () => {
-  it('isOfficialGhostId:三类完整前缀命中,近似形态不命中', () => {
+describe('ghost · 官方保留 id', () => {
+  it('isOfficialGhostId:官方前缀和精确 id 命中,近似形态不命中', () => {
     expect(isOfficialGhostId('cindy-web-search')).toBe(true);
     expect(isOfficialGhostId('cindy-art')).toBe(true);
     expect(isOfficialGhostId('filo-google')).toBe(true);
     expect(isOfficialGhostId('xd-mivo')).toBe(true);
+    expect(isOfficialGhostId('haoplay-feishu')).toBe(true);
     // 前缀必须完整命中:cindyart 无连字符、my-cindy- 前缀不在最左都不算官方。
     expect(isOfficialGhostId('cindyart')).toBe(false);
     expect(isOfficialGhostId('my-cindy-tool')).toBe(false);
     expect(isOfficialGhostId('web-search')).toBe(false);
+    expect(isOfficialGhostId('haoplay-feishu-extra')).toBe(false);
   });
 
   it('四个官方 id 谓词对本阶段同一组输入返回完全相同的结果', () => {
@@ -2906,10 +2908,12 @@ describe('ghost · 官方保留 id 前缀', () => {
       ['cindy-art', true],
       ['filo-google', true],
       ['xd-mivo', true],
+      ['haoplay-feishu', true],
       ['acme-feishu', false],
       ['my-plugin', false],
       ['cindyart', false],
       ['my-cindy-tool', false],
+      ['haoplay-feishu-extra', false],
       ['', false],
     ];
     const predicates = [

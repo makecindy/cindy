@@ -2,9 +2,9 @@
  * ghostOauthFlow.ts — 意识 OAuth 凭证形态的主机侧授权引擎(通用声明式)。
  * ---------------------------------------------------------------------------
  * 设计定案(2026-07-13 与 Lizi):平台不预设 provider 名单——意识在 ghost.json
- * 里声明"去哪授权、要什么 scope"(authorizeUrl / tokenUrl / scopes / pkce),
- * clientId / clientSecret 由用户在意识设置页自填(input:'ghost' 只写通道同款
- * 纪律),插件详情全量展示。
+ * 里声明"去哪授权、要什么 scope"(authorizeUrl / tokenUrl / scopes / pkce)；
+ * 非 broker 模式可由意识声明 clientId / clientSecret，企业 broker 模式则只声明
+ * provider，由服务端在授权开始时动态下发公开 clientId，插件详情不携带企业应用身份。
  *
  * 本模块声明化的是**参数**,不是**代码**:授权流程本身(拉浏览器、loopback
  * 回调、state / PKCE 校验、code 换 token、refresh)永远是这份主机可信代码在
@@ -42,7 +42,7 @@ import {
   type OAuthResultPageLang,
 } from '../oauthResultPage.js';
 
-/** 授权流程 / 刷新共用的声明参数(源自 ghost.json 的 oauth 声明 + 用户自填 client 凭证)。 */
+/** 授权流程 / 刷新共用的声明参数(源自 ghost.json 的 oauth 声明 + 可选 client 凭证)。 */
 export interface GhostOauthClientConfig {
   /** 授权页地址(https;装入校验保证,这里防御性重验)。 */
   authorizeUrl: string;
@@ -52,8 +52,8 @@ export interface GhostOauthClientConfig {
   scopes: readonly string[];
   /** scope 参数拼接分隔符(缺省空格 = OAuth 标准;Slack 这类逗号分隔的服务商传 ','). */
   scopeDelimiter?: string;
-  /** 用户在意识设置页自填的 OAuth 客户端 ID。 */
-  clientId: string;
+  /** 非 broker 模式由意识声明的 OAuth 客户端 ID；broker 模式可省略。 */
+  clientId?: string;
   /** 可选:客户端 secret(桌面应用的 installed-app secret 本非机密,但仍按凭证纪律保管)。 */
   clientSecret?: string;
   /** PKCE(S256)开关,缺省 true;个别老服务商不支持时意识可显式声明关闭。 */
@@ -216,17 +216,44 @@ export type GhostOauthBrokerResult =
   | { ok: true; bundle: GhostOauthTokenBundle }
   | { ok: false; error: 'EXCHANGE_FAILED' | 'SERVICE_UNAVAILABLE' | 'NETWORK'; invalidGrant: boolean; detail?: string };
 
+export type GhostOauthBrokerBootstrapResult =
+  | {
+      ok: true;
+      clientId: string;
+      transactionId: string;
+      redirectUri: string;
+      expiresAt: string;
+    }
+  | {
+      ok: false;
+      error: 'EXCHANGE_FAILED' | 'SERVICE_UNAVAILABLE' | 'NETWORK';
+      detail?: string;
+    };
+
 /**
  * XDT server token broker 调用器(tokenBroker 声明的执行通道)。实现方负责
  * 带登录 JWT 调 server 端 `/api/integrations/<slug>/oauth/exchange|refresh`
  * 并把响应映射成 bundle;本引擎不感知 HTTP 细节。
  */
 export interface GhostOauthBrokerClient {
+  bootstrap?(
+    slug: string,
+    params: { redirectUri: string; scopes: readonly string[] },
+  ): Promise<GhostOauthBrokerBootstrapResult>;
   exchange(
     slug: string,
-    params: { code: string; redirectUri: string; codeVerifier?: string },
+    params: {
+      code: string;
+      redirectUri: string;
+      codeVerifier?: string;
+      transactionId?: string;
+      clientId?: string;
+    },
   ): Promise<GhostOauthBrokerResult>;
-  refresh(slug: string, params: { refreshToken: string }): Promise<GhostOauthBrokerResult>;
+  refresh(
+    slug: string,
+    params: { refreshToken: string; clientId?: string },
+  ): Promise<GhostOauthBrokerResult>;
 }
 
 export interface GhostOauthLogger {
@@ -416,7 +443,9 @@ export async function startGhostOauthFlow(
 ): Promise<GhostOauthFlowResult> {
   const { config } = opts;
 
-  if (!config.clientId) return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+  if (!config.clientId && !config.tokenBroker) {
+    return { ok: false, error: 'INVALID_CONFIG', detail: 'clientId 未配置' };
+  }
   if (!isSafeHttpsUrl(config.authorizeUrl)) {
     return {
       ok: false,
@@ -564,16 +593,53 @@ async function runGhostOauthFlow(
     return { ok: false, error: 'LISTEN_FAILED', detail };
   }
   const { server, port } = listener;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
 
+  try {
   // 双地址模型:服务商侧 redirect_uri 用公网弹跳地址(声明了才有),浏览器
   // 由弹跳路由 302 回本机 loopback;单地址模型两者同一。code 交换(直连与
   // broker)带的 redirect_uri 必须与 authorize 时一致,恒用 redirectUri。
   const callbackPath = config.callbackPath ?? CALLBACK_PATH;
   const redirectUri = config.publicRedirectUri ?? `http://127.0.0.1:${port}${callbackPath}`;
 
+  let clientId = config.clientId;
+  let transactionId: string | undefined;
+  if (!clientId && config.tokenBroker) {
+    if (!opts.broker?.bootstrap) {
+      return {
+        ok: false,
+        error: 'INVALID_CONFIG',
+        detail: 'tokenBroker 未提供动态授权配置通道',
+      };
+    }
+    const bootstrap = await opts.broker.bootstrap(config.tokenBroker, {
+      redirectUri,
+      scopes: config.scopes,
+    });
+    if (!bootstrap.ok) {
+      logger?.warn('ghost oauth broker 获取动态授权配置失败', {
+        slug: config.tokenBroker,
+        error: bootstrap.error,
+      });
+      return { ok: false, error: bootstrap.error, detail: bootstrap.detail };
+    }
+    if (bootstrap.redirectUri !== redirectUri) {
+      return {
+        ok: false,
+        error: 'EXCHANGE_FAILED',
+        detail: 'broker 返回的 redirectUri 与本机授权事务不一致',
+      };
+    }
+    clientId = bootstrap.clientId;
+    transactionId = bootstrap.transactionId;
+  }
+  if (!clientId) {
+    return { ok: false, error: 'INVALID_CONFIG', detail: 'broker 未返回 clientId' };
+  }
+
   const authorizeUrl = new URL(config.authorizeUrl);
   authorizeUrl.searchParams.set('response_type', 'code');
-  authorizeUrl.searchParams.set('client_id', config.clientId);
+  authorizeUrl.searchParams.set('client_id', clientId);
   authorizeUrl.searchParams.set('redirect_uri', redirectUri);
   authorizeUrl.searchParams.set('state', state);
   if (config.scopes.length > 0) {
@@ -673,12 +739,10 @@ async function runGhostOauthFlow(
     });
   });
 
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<'timeout'>((resolve) => {
     timeoutHandle = setTimeout(() => resolve('timeout'), timeoutMs);
   });
 
-  try {
     // listen / 回收期间已被顶掉或取消:别再拉浏览器弹无主的授权页。
     if (cancellation.isCancelled()) return { ok: false, error: 'CANCELLED' };
     await openExternal(authorizeUrl.toString());
@@ -697,6 +761,10 @@ async function runGhostOauthFlow(
         code: outcome.code,
         redirectUri,
         ...(verifier !== null ? { codeVerifier: verifier } : {}),
+        ...(transactionId !== undefined ? { transactionId } : {}),
+        ...(config.tokenBroker === 'feishu' && config.clientId !== undefined
+          ? { clientId: config.clientId }
+          : {}),
       });
       if (!brokered.ok) {
         logger?.warn('ghost oauth broker 交换失败', {
@@ -722,7 +790,7 @@ async function runGhostOauthFlow(
     form.set('grant_type', 'authorization_code');
     form.set('code', outcome.code);
     form.set('redirect_uri', redirectUri);
-    form.set('client_id', config.clientId);
+    form.set('client_id', clientId);
     if (config.clientSecret) form.set('client_secret', config.clientSecret);
     if (verifier) form.set('code_verifier', verifier);
 
@@ -814,7 +882,12 @@ export async function refreshGhostOauthToken(
         detail: 'tokenBroker 已声明但主机未接线 broker 通道',
       };
     }
-    const brokered = await opts.broker.refresh(config.tokenBroker, { refreshToken });
+    const brokered = await opts.broker.refresh(config.tokenBroker, {
+      refreshToken,
+      ...(config.tokenBroker === 'feishu' && config.clientId !== undefined
+        ? { clientId: config.clientId }
+        : {}),
+    });
     if (!brokered.ok) {
       logger?.warn('ghost oauth broker 刷新失败', {
         slug: config.tokenBroker,
@@ -834,6 +907,14 @@ export async function refreshGhostOauthToken(
   const form = new URLSearchParams();
   form.set('grant_type', 'refresh_token');
   form.set('refresh_token', refreshToken);
+  if (!config.clientId) {
+    return {
+      ok: false,
+      error: 'EXCHANGE_FAILED',
+      invalidGrant: false,
+      detail: '非 broker OAuth 缺少 clientId',
+    };
+  }
   form.set('client_id', config.clientId);
   if (config.clientSecret) form.set('client_secret', config.clientSecret);
 

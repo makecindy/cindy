@@ -5607,7 +5607,7 @@ function rejectReservedGhostId(id: string): void {
   if (!isUserInstallReservedGhostId(id)) return;
   throwIpcError(
     'GHOST_ID_RESERVED',
-    `id "${id}" 使用了官方保留前缀(cindy- / filo- / xd-),用户通道不可装入`,
+    `id "${id}" 使用了官方保留命名空间或 ID,用户通道不可装入`,
   );
 }
 

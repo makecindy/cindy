@@ -1698,9 +1698,21 @@ export const GHOST_OFFICIAL_ID_PREFIXES: readonly string[] = [
   'xd-',
 ];
 
-/** id 是否属于官方保留命名空间。静态命名空间与不可逆恢复能力继续用这个。 */
+/**
+ * 不适合扩成整段前缀、但仍需保护历史身份的官方插件 id。
+ * `haoplay-feishu` 是已存在的官方企业插件；只保护精确 id，避免未来
+ * 误把其它 `haoplay-*` 插件纳入不可逆恢复/凭证别名保护。
+ */
+export const GHOST_OFFICIAL_ID_EXACT_IDS: ReadonlySet<string> = new Set([
+  'haoplay-feishu',
+]);
+
+/** id 是否属于官方保留命名空间或官方精确身份。 */
 export function isOfficialGhostId(id: string): boolean {
-  return GHOST_OFFICIAL_ID_PREFIXES.some((prefix) => id.startsWith(prefix));
+  return (
+    GHOST_OFFICIAL_ID_EXACT_IDS.has(id) ||
+    GHOST_OFFICIAL_ID_PREFIXES.some((prefix) => id.startsWith(prefix))
+  );
 }
 
 /**

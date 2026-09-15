@@ -16,6 +16,33 @@ function apiError(code: string, statusCode: number, message = 'x'): Error {
 }
 
 describe('createGhostOauthBrokerClient', () => {
+  it('bootstrap:POST 到动态授权配置端点并返回 transaction', async () => {
+    const apiPost = vi.fn(async (path: string, body: Record<string, unknown>) => {
+      expect(path).toBe('/api/integrations/feishu/oauth/bootstrap');
+      expect(body).toEqual({
+        redirectUri: 'http://127.0.0.1:53684/callback',
+        scopes: ['offline_access'],
+      });
+      return {
+        clientId: 'cli-server-issued',
+        transactionId: 'tx-1',
+        redirectUri: 'http://127.0.0.1:53684/callback',
+        expiresAt: '2026-09-11T00:00:00.000Z',
+      };
+    });
+    const client = createGhostOauthBrokerClient({ apiPost, hasLoginToken: () => true });
+    await expect(client.bootstrap?.('feishu', {
+      redirectUri: 'http://127.0.0.1:53684/callback',
+      scopes: ['offline_access'],
+    })).resolves.toEqual({
+      ok: true,
+      clientId: 'cli-server-issued',
+      transactionId: 'tx-1',
+      redirectUri: 'http://127.0.0.1:53684/callback',
+      expiresAt: '2026-09-11T00:00:00.000Z',
+    });
+  });
+
   it('exchange:POST 到 /api/integrations/<slug>/oauth/exchange 并映射 bundle', async () => {
     const apiPost = vi.fn(async (path: string, body: Record<string, unknown>) => {
       expect(path).toBe('/api/integrations/jira/oauth/exchange');
@@ -31,6 +58,37 @@ describe('createGhostOauthBrokerClient', () => {
       expect(result.bundle.grantedScope).toBe('read:jira-work');
       expect(result.bundle.expiresAt).toBeGreaterThan(Date.now());
     }
+  });
+
+  it('feishu 旧插件可回传公开 clientId，供服务端选择历史 App 版本', async () => {
+    const apiPost = vi.fn(async (path: string, body: Record<string, unknown>) => {
+      expect(path).toBe('/api/integrations/feishu/oauth/exchange');
+      expect(body).toEqual({
+        code: 'legacy-code',
+        redirectUri: 'http://127.0.0.1:53684/callback',
+        clientId: 'cli-legacy',
+      });
+      return { accessToken: 'at-legacy', refreshToken: 'rt-legacy', expiresIn: 3600 };
+    });
+    const client = createGhostOauthBrokerClient({ apiPost, hasLoginToken: () => true });
+    await expect(client.exchange('feishu', {
+      code: 'legacy-code',
+      redirectUri: 'http://127.0.0.1:53684/callback',
+      clientId: 'cli-legacy',
+    })).resolves.toMatchObject({ ok: true });
+  });
+
+  it('feishu 旧插件刷新时同样回传公开 clientId', async () => {
+    const apiPost = vi.fn(async (path: string, body: Record<string, unknown>) => {
+      expect(path).toBe('/api/integrations/feishu/oauth/refresh');
+      expect(body).toEqual({ refreshToken: 'rt-legacy', clientId: 'cli-legacy' });
+      return { accessToken: 'at-legacy', refreshToken: 'rt-legacy-2', expiresIn: 3600 };
+    });
+    const client = createGhostOauthBrokerClient({ apiPost, hasLoginToken: () => true });
+    await expect(client.refresh('feishu', {
+      refreshToken: 'rt-legacy',
+      clientId: 'cli-legacy',
+    })).resolves.toMatchObject({ ok: true });
   });
 
   it('refresh:server 401 + 业务错误码(上游拒绝)→ invalidGrant:true', async () => {

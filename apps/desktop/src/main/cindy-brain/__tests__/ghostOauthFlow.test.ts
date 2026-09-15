@@ -608,6 +608,54 @@ describe('startGhostOauthFlow', () => {
     expect(result).toEqual({ ok: false, error: 'SERVICE_UNAVAILABLE', detail: undefined });
   });
 
+  it('tokenBroker 无 clientId 时先向 broker 获取授权事务，再把 transactionId 交给 exchange', async () => {
+    let authorizeClientId: string | null = null;
+    let transactionId: string | undefined;
+    const broker: GhostOauthBrokerClient = {
+      bootstrap: vi.fn(async (_slug, params) => {
+        expect(params.redirectUri).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/callback$/);
+        return {
+          ok: true as const,
+          clientId: 'cli-server-issued',
+          transactionId: 'oauth-tx-1',
+          redirectUri: params.redirectUri,
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        };
+      }),
+      exchange: vi.fn(async (_slug, params) => {
+        transactionId = params.transactionId;
+        return {
+          ok: true as const,
+          bundle: {
+            accessToken: 'at-dynamic',
+            refreshToken: 'rt-dynamic',
+            expiresAt: Date.now() + 1000,
+            grantedScope: null,
+          },
+        };
+      }),
+      refresh: vi.fn(),
+    };
+    const result = await startGhostOauthFlow({
+      config: { ...BASE_CONFIG, clientId: undefined, tokenBroker: 'feishu' },
+      fetchImpl: vi.fn() as unknown as typeof fetch,
+      broker,
+      openExternal: (url) => {
+        authorizeClientId = new URL(url).searchParams.get('client_id');
+        return browserRedirect(url, (au) => ({
+          code: 'c-dynamic',
+          state: au.searchParams.get('state') ?? '',
+        }));
+      },
+    });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(authorizeClientId).toBe('cli-server-issued');
+    expect(transactionId).toBe('oauth-tx-1');
+    expect(broker.bootstrap).toHaveBeenCalledOnce();
+    expect(broker.exchange).toHaveBeenCalledOnce();
+  });
+
   it('tokenBroker + pkce:false(jira/slack 形态):授权页无 challenge,broker 不收 verifier', async () => {
     const broker: GhostOauthBrokerClient = {
       exchange: vi.fn(
