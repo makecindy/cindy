@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({
   sessions: ['a', 'b', 'c'].map((id) => ({ id, status: 'active' })),
   history: null as { id: string; status: string }[] | null,
-  remoteSessions: [] as { id: string; status: string }[],
+  remoteSessions: [] as { id: string; status: string; deviceLinkDeviceId?: string }[],
   attention: new Map<string, string>([
     ['a', 'done'],
     ['b', 'done'],
@@ -41,14 +41,9 @@ vi.mock('@/hooks/useCCSessions', () => ({
 }));
 vi.mock('@/features/device-link/remoteProjectsStore', () => ({
   useRemoteProjectSessions: () => state.remoteSessions,
-  useRemoteScheduleIndex: () => state.empty,
 }));
 vi.mock('@/features/cc-agent/hooks/useAutomationScheduleSessionIndex', () => ({
   usePublishedAutomationScheduleSessionIndex: () => state.empty,
-}));
-vi.mock('@/features/device-link/remoteSessionActivityStore', () => ({
-  getRemoteSessionActivity: () => undefined,
-  useRemoteSessionActivityRevision: () => 0,
 }));
 vi.mock('@/lib/makerChatStore', () => ({
   makerChatStore: { subscribeAll: () => () => {}, getRunningSnapshot: () => state.running },
@@ -93,9 +88,11 @@ describe('app badge projection lifecycle', () => {
     expect(projection.sessionIds).toEqual(expect.arrayContaining(['a', 'b', 'c', 'archived-0']));
   });
 
-  it('includes remote leads when projecting active workers', () => {
+  it('keeps remote IDs in the inventory but excludes remote attention from the badge', () => {
     vi.stubGlobal('electronAPI', { notificationSetAppAttentionCount: state.publish });
-    state.remoteSessions = [{ id: 'remote-lead', status: 'active' }];
+    state.remoteSessions = [
+      { id: 'remote-lead', status: 'active', deviceLinkDeviceId: 'device-a' },
+    ];
     state.attention.set('remote-lead', 'done');
     state.workers = new Map([['remote-lead', new Set(['remote-worker'])]]);
     state.starting = new Set(['remote-worker']);
@@ -105,7 +102,7 @@ describe('app badge projection lifecycle', () => {
     );
     state.starting = new Set();
     view.rerender(<AppBadgeAttentionSync />);
-    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 4 }));
+    expect(state.publish).toHaveBeenLastCalledWith(expect.objectContaining({ count: 3 }));
   });
 
   it('tracks starting, background and worker activity through their transitions', () => {

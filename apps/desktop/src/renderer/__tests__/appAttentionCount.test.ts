@@ -16,9 +16,7 @@ function input(overrides: Partial<AppAttentionCountInput> = {}): AppAttentionCou
     attentionKinds: new Map(),
     runningSessionIds: new Set(),
     localActivities: new Map(),
-    getRemoteActivity: () => undefined,
     localSchedules: new Map(),
-    remoteSchedules: new Map(),
     ...overrides,
   };
 }
@@ -35,22 +33,49 @@ describe('app attention total', () => {
     expect(countAppAttention(input({ attentionKinds }))).toBe(2);
   });
 
-  it('restores scheduled unread results without in-memory notification events', () => {
+  it('keeps local scheduled unread on an ordinary task but drops automation tasks', () => {
     const unread = { hasUnreadRun: true, hasUnreadFailedRun: false };
     expect(
       countAppAttention(
         input({
+          sessions: [
+            session('a'),
+            session('scheduler-task', { source: 'scheduler' }),
+            session('legacy-task', { title: '[Schedule] daily' }),
+            session('learn-task', { source: 'learn' }),
+          ],
           localSchedules: new Map([
             ['a', unread],
-            ['b', unread],
+            ['scheduler-task', unread],
           ]),
-          remoteSchedules: new Map([['c', unread]]),
         }),
       ),
-    ).toBe(3);
+    ).toBe(1);
   });
 
-  it('deduplicates the same task across activity, notifications and schedule history', () => {
+  it('drops device-link remote tasks from the system badge', () => {
+    expect(
+      countAppAttention(
+        input({
+          sessions: [
+            session('a'),
+            session('remote', { deviceLinkDeviceId: 'device-a' }),
+            session('remote-scheduler', { deviceLinkDeviceId: 'device-b', source: 'scheduler' }),
+          ],
+          attentionKinds: new Map([
+            ['a', 'done'],
+            ['remote', 'error'],
+            ['remote-scheduler', 'awaiting'],
+          ]),
+          localSchedules: new Map([
+            ['remote', { hasUnreadRun: true, hasUnreadFailedRun: true }],
+          ]),
+        }),
+      ),
+    ).toBe(1);
+  });
+
+  it('deduplicates the same task across activity and notifications', () => {
     expect(
       countAppAttention(
         input({
@@ -78,20 +103,14 @@ describe('app attention total', () => {
     ).toBe(2);
   });
 
-  it('includes remote live attention with the same precedence as task rows', () => {
+  it('does not promote live activity that carries no attention signal', () => {
     expect(
       countAppAttention(
         input({
           localActivities: new Map([['a', { phase: 'running' }]]),
-          getRemoteActivity: (id) =>
-            id === 'a'
-              ? { phase: 'completed', attention: true }
-              : id === 'b'
-                ? { phase: 'needs-interaction' }
-                : undefined,
         }),
       ),
-    ).toBe(2);
+    ).toBe(0);
   });
 
   it('excludes archived, deleted, worker and missing task records', () => {
