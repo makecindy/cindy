@@ -9,8 +9,12 @@ import { rewriteContextModeDoctorPath } from '../context-mode-doctor-path.js';
 import {
   createPiTranslateContext,
   disposePiTranslateContext,
+  isCurrentTurnHostAbortRequested,
+  isHostAbortRequestedAtExit,
+  isPendingTurnHostAbortRequested,
   markPiHostAbortRequested,
   markPiHostTurnStartPending,
+  rollbackPiHostAbortRequest,
   rollbackPiHostTurnStart,
   translatePiEvent,
   usageSnapshotOf,
@@ -2178,5 +2182,53 @@ describe('pi translator', () => {
       expect(events.some((e) => e.type === 'agent_task_update')).toBe(true);
       expect(usageSnapshotOf(ctx).tokenUsage).toBe(0);
     });
+  });
+});
+
+// #4354: a Stop accepted after the prompt RPC was confirmed but before `agent_start`
+// is booked on the pending generation; exit settlement must see it as the user's
+// cancellation, while a rolled-back prompt or a rejected Stop leaves nothing behind.
+describe('pi translator exit-time host abort classification (#4354)', () => {
+  it('recognises a Stop booked on the confirmed, not yet started turn', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    expect(isHostAbortRequestedAtExit(ctx)).toBe(false);
+    markPiHostTurnStartPending(ctx);
+    markPiHostAbortRequested(ctx);
+    expect(isCurrentTurnHostAbortRequested(ctx)).toBe(false);
+    expect(isPendingTurnHostAbortRequested(ctx)).toBe(true);
+    expect(isHostAbortRequestedAtExit(ctx)).toBe(true);
+    // The pending Stop is carried into the turn once it actually starts.
+    const { queue } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(isPendingTurnHostAbortRequested(ctx)).toBe(false);
+    expect(isCurrentTurnHostAbortRequested(ctx)).toBe(true);
+    expect(isHostAbortRequestedAtExit(ctx)).toBe(true);
+    disposePiTranslateContext(ctx);
+  });
+
+  it('is not fooled by a rejected prompt or a rolled-back Stop', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    const start = markPiHostTurnStartPending(ctx);
+    const stop = markPiHostAbortRequested(ctx);
+    // Stop RPC rejected: nothing remains for exit settlement.
+    rollbackPiHostAbortRequest(ctx, stop);
+    expect(isHostAbortRequestedAtExit(ctx)).toBe(false);
+    // Stop accepted, then the prompt itself is rejected: the pending generation never
+    // exists, so its Stop must not classify a later exit (or the next turn) as cancelled.
+    markPiHostAbortRequested(ctx);
+    rollbackPiHostTurnStart(ctx, start);
+    expect(isHostAbortRequestedAtExit(ctx)).toBe(false);
+    const { queue } = makeQueue();
+    translatePiEvent(ev({ type: 'agent_start' }), queue, ctx);
+    expect(isCurrentTurnHostAbortRequested(ctx)).toBe(false);
+    disposePiTranslateContext(ctx);
+  });
+
+  it('never reports a pending Stop without a pending turn start', () => {
+    const ctx = createPiTranslateContext(noopLogger);
+    markPiHostAbortRequested(ctx); // no prompt in flight: books the current generation
+    expect(isPendingTurnHostAbortRequested(ctx)).toBe(false);
+    expect(isCurrentTurnHostAbortRequested(ctx)).toBe(true);
+    disposePiTranslateContext(ctx);
   });
 });
