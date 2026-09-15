@@ -36,6 +36,7 @@ import { parseBotInvitationDraft, botInvitationPrompt } from '../botInvitationDr
 import { getSelectedNewMakerRoute, setNewMakerDraftCache } from '../../maker-host/newMakerDefaultsCache.js';
 import { createIpcError } from '../../../shared/ipc-errors.js';
 import { SUPPORTED_LOCALES } from '../../../shared/locale.js';
+import { createQueuedDispatchReceipts } from '../queuedDispatchReceipts.js';
 
 function queueBotInvitation(botId: string, retry = false): void {
   enqueueBotInvitation(botId, {
@@ -334,6 +335,35 @@ describe('companion invitation with SQLite and real skill files', () => {
     expect((await readBotSkill(h.root, 'bot-1', 'develop-characters'))?.body).toBe(
       '用户自己的方法',
     );
+  });
+
+  it('keeps the retry checkpoint until the queued welcome is accepted by the runtime', async () => {
+    const welcomeContext = { projects: ['Puzzle'], tasks: [], automations: [] };
+    seed({ draft, welcomeContext });
+    const receipts = createQueuedDispatchReceipts();
+    const enqueued = vi.fn();
+    let attempt = 0;
+    h.welcome.mockImplementation(async input => {
+      const clientId = `welcome-attempt-${++attempt}`;
+      await input.onQueued(clientId);
+      return { ok: await receipts.dispatch(input.targetSessionId, clientId, enqueued) };
+    });
+    queueBotInvitation('bot-1');
+    await vi.waitFor(() => expect(enqueued).toHaveBeenCalledOnce());
+    expect(state()).toMatchObject({ stage: 'welcome', draft, welcomeContext, welcomeClientId: 'welcome-attempt-1' });
+    receipts.settle('chat-1', 'welcome-attempt-1', false);
+    await vi.waitFor(() => expect(state().stage).toBe('failed'));
+    expect(state()).toMatchObject({ draft, welcomeContext, welcomeClientId: 'welcome-attempt-1' });
+
+    queueBotInvitation('bot-1', true);
+    await vi.waitFor(() => expect(enqueued).toHaveBeenCalledTimes(2));
+    expect(h.welcome.mock.calls[1][0]).toMatchObject({ clientId: 'welcome-attempt-1', retry: true });
+    receipts.settle('chat-1', 'welcome-attempt-2', true);
+    await vi.waitFor(() => expect(state().stage).toBe('ready'));
+    expect(state().draft).toBeUndefined();
+    expect(state().welcomeContext).toBeUndefined();
+    expect(state().welcomeClientId).toBeUndefined();
+    expect(sqlite.prepare('SELECT count(*) AS n FROM bot_profiles').get()).toEqual({ n: 1 });
   });
 
   it('keeps a failed invitation and retries without creating another profile', async () => {

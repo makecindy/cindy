@@ -40,6 +40,7 @@ interface Invitation extends BotInvitationProgress {
   avatarInvocationId?: string;
   avatarPrompt?: string;
   welcomeContext?: BotWelcomeContext;
+  welcomeClientId?: string;
 }
 
 type WelcomeDispatch = (input: {
@@ -48,6 +49,8 @@ type WelcomeDispatch = (input: {
   persistedContent: string;
   clientId: string;
   toolsDisabled: true;
+  retry: boolean;
+  onQueued(clientId: string): Promise<void>;
 }) => Promise<{ ok: boolean }>;
 let welcomeDispatch: WelcomeDispatch | undefined;
 export function setBotInvitationWelcomeDispatch(dispatch: WelcomeDispatch): void {
@@ -281,15 +284,17 @@ export function queueBotInvitation(
       ].join('\n');
       const accepted = await welcomeDispatch({
         targetSessionId: canonical.canonicalSessionId,
-        clientId: `bot-welcome:${botId}`,
+        clientId: current.invitation?.welcomeClientId ?? `bot-welcome:${botId}`,
         toolsDisabled: true,
+        retry,
+        onQueued: async (clientId) => { await save({ welcomeClientId: clientId }); },
         message,
         persistedContent: `${UI_ACTION_TRIGGER_PREFIX}${message}`,
       });
       if (!accepted.ok) throw new Error('INVITATION_WELCOME_NOT_ACCEPTED');
       assertOwner();
       // Draft skills are now real SKILL.md files; do not duplicate their bodies forever.
-      await save({ stage: 'ready', draft: undefined, welcomeContext: undefined });
+      await save({ stage: 'ready', draft: undefined, welcomeContext: undefined, welcomeClientId: undefined });
     } catch (error) {
       log.warn('companion preparation paused', {
         botId,
