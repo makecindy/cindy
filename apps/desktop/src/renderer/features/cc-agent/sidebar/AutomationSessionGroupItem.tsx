@@ -79,6 +79,7 @@ export interface AutomationSessionGroupItemProps {
   matchMap?: ReadonlyMap<string, readonly number[]>;
   /** 项目置顶列表模式下，展开的自动化运行也使用同一套列表行。 */
   sessionVariant?: 'text' | 'list';
+  sessionOrderHandle?: boolean;
 }
 
 interface FrozenGroupState {
@@ -116,6 +117,7 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
   sourceLabelMap,
   matchMap,
   sessionVariant = 'text',
+  sessionOrderHandle = false,
 }: AutomationSessionGroupItemProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
@@ -442,6 +444,8 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
             会冒泡穿过内部按钮的 stopPropagation(click 语义)造成双触发。键盘可达性由内部
             标题 <button>(Tab focus + Enter/Space)天然提供。 */}
         <div
+          data-sidebar-session-row="true"
+          data-sidebar-session-order-handle={sessionOrderHandle ? 'true' : undefined}
           onClick={openLatestSession}
           onContextMenu={(event) => {
             // 整行右键 = 打开「更多操作」同一份菜单(不再另做一份隐形锚点菜单)。
@@ -814,11 +818,17 @@ export const AutomationSessionGroupItem = memo(function AutomationSessionGroupIt
                 key={session.id}
                 {...commonProps}
                 variant="list"
+                sessionOrderHandle={false}
                 isFirst={index === 0}
                 hideBottomDivider={nextHighlighted}
               />
             ) : (
-              <SessionItem key={session.id} {...commonProps} insideAutomationGroup />
+              <SessionItem
+                key={session.id}
+                {...commonProps}
+                insideAutomationGroup
+                sessionOrderHandle={false}
+              />
             );
           })}
           {!showAll && childView.isOverflowing && (
