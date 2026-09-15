@@ -146,10 +146,10 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('PaperPlaneIcon');
     expect(source).toContain('Camera');
     expect(source).toContain('Settings');
-    // Context 面板「添加」分组的四个入口 icon(照片 / 截图 / 拍照 / 文件)。
+    // 「添加」保留照片 / 拍照 / 文件，不再提供单独截图入口。
     expect(source).toContain('<Image color={colors.textPrimary}');
     expect(source).toContain('<Camera color={colors.textPrimary}');
-    expect(source).toContain('<Scan color={colors.textPrimary}');
+    expect(source).not.toContain('session.contextSheetScreenshotsRow');
     expect(source).toContain('<Folder color={colors.textPrimary}');
     expect(composerInputSource).toContain('cardActive={composerCardActive}');
     expect(composerInputSource).toContain('leading={controls.leading}');
@@ -205,7 +205,7 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('testID="session.contextSheet"');
     expect(attachmentButtonSource).toContain('setContextSheetOpen(true)');
     expect(source).toContain("<ContextSheetGroup label={t('session.common.groupMode')}>");
-    expect(source).toContain("<ContextSheetGroup label={t('session.common.groupAdd')}>");
+    expect(source).toContain("<ContextSheetGroup label={Platform.OS === 'ios' && contextSheetMediaLibraryEnabled ? '' : t('session.common.groupAdd')}>");
     expect(source).not.toContain('testID="session.attachmentPathPanel"');
     expect(source).not.toContain('被控电脑上的文件路径');
     expect(source).toContain('testID="session.composerActivityStatus"');

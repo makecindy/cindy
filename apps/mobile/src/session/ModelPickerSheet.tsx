@@ -4,6 +4,7 @@
  * replace its content. Android retains the existing layered SheetSurface flow.
  * Selected-model options apply live; other models retain their remembered options.
  */
+import { UnifiedModelPickerSheet, type UnifiedMobilePickerOptions } from './UnifiedModelPickerSheet';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ChevronDown, Search } from 'lucide-react-native';
@@ -64,6 +65,7 @@ const SECONDARY_SLIDE_DURATION_MS = 180;
 const EMPTY_FLAT_OPTIONS: readonly MobileModelOption[] = [];
 
 export interface ModelPickerSheetProps {
+  unified?: UnifiedMobilePickerOptions;
   visible: boolean;
   onClose(): void;
   // —— 模型目录(与旧 drop-up 面板同口径) ——
@@ -119,7 +121,11 @@ export interface ModelPickerSheetProps {
   testID?: string;
 }
 
-export function ModelPickerSheet({
+export function ModelPickerSheet(props: ModelPickerSheetProps) {
+  if (props.unified && !props.providersUnsupported) return <UnifiedModelPickerSheet {...props} {...props.unified.currentSelection} unified={props.unified} />;
+  return <LegacyModelPickerSheet {...props} />;
+}
+function LegacyModelPickerSheet({
   visible,
   onClose,
   providers,

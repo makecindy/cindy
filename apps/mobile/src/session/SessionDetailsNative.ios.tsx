@@ -25,6 +25,7 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import { ScrollView, View } from "react-native";
 import { useState } from "react";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { radius, spacing, useTheme } from "@/theme";
 import type {
   SessionDetailsAction,
@@ -42,6 +43,7 @@ export function SessionDetailsNative({
   footer,
 }: SessionDetailsNativeProps) {
   const { colors, mode } = useTheme();
+  const { bottom: bottomInset } = useSafeAreaInsets();
   return (
     <Host
       colorScheme={mode}
@@ -62,7 +64,10 @@ export function SessionDetailsNative({
             presentationDragIndicator("visible"),
           ]}
         >
-          <VStack spacing={0}>
+          <VStack
+            spacing={0}
+            modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}
+          >
             <HStack
               modifiers={[
                 padding({
@@ -92,22 +97,26 @@ export function SessionDetailsNative({
               <Spacer />
               <Spacer modifiers={[frame({ width: 44, height: 44 })]} />
             </HStack>
-            <RNHostView>
-              <View style={{ flex: 1 }}>
-                <ScrollView
-                  keyboardShouldPersistTaps="handled"
-                  contentContainerStyle={{
-                    padding: spacing.lg,
-                    paddingBottom: spacing.xxl,
-                  }}
-                >
-                  {children}
-                </ScrollView>
-                {footer ? (
-                  <View style={{ padding: spacing.lg }}>{footer}</View>
-                ) : null}
-              </View>
-            </RNHostView>
+            {/* Extend the viewport through the sheet's bottom safe area. Keep the
+                inset inside scroll content, not as an empty strip below its clip. */}
+            <Group modifiers={[padding({ bottom: footer ? 0 : -bottomInset })]}>
+              <RNHostView>
+                <View style={{ flex: 1 }}>
+                  <ScrollView
+                    keyboardShouldPersistTaps="handled"
+                    contentContainerStyle={{
+                      padding: spacing.lg,
+                      paddingBottom: spacing.xxl + (footer ? 0 : bottomInset),
+                    }}
+                  >
+                    {children}
+                  </ScrollView>
+                  {footer ? (
+                    <View style={{ padding: spacing.lg }}>{footer}</View>
+                  ) : null}
+                </View>
+              </RNHostView>
+            </Group>
           </VStack>
         </Group>
       </BottomSheet>

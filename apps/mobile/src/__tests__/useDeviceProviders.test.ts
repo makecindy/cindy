@@ -440,3 +440,14 @@ describe('provider catalog error classification', () => {
     expect(mod.isDeviceProvidersUnsupportedError(error)).toBe(expected);
   });
 });
+
+it('uses host display order in cached and fresh reads without mutating the wire catalog', async () => {
+  const mod = await import('@/device-link/deviceProvidersCache');
+  const providers = ['a','b','c'].map(id => ({id})) as ProviderView[];
+  const first = await mod.fetchDeviceProviders('order-host', async()=>({providers,providerOrder:['b','missing','b','a']}));
+  expect(first.providers.map(p=>p.id)).toEqual(['b','a','c']);
+  expect(providers.map(p=>p.id)).toEqual(['a','b','c']);
+  const fresh = await mod.fetchDeviceProvidersFresh('order-host', async()=>({providers,providerOrder:['c']}));
+  expect(fresh.providers.map(p=>p.id)).toEqual(['c','a','b']);
+  expect(mod.getCachedDeviceProviders('order-host')?.providers.map(p=>p.id)).toEqual(['c','a','b']);
+});

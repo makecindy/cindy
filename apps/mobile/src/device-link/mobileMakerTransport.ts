@@ -394,6 +394,7 @@ export interface MobileMakerTransport {
    */
   listProviders(): Promise<{
     providers: ProviderView[];
+    providerOrder?: string[];
     modelVisibilityOverrides?: Record<string, boolean>;
   }>;
   getSession(sessionId: string): Promise<RemoteSession>;

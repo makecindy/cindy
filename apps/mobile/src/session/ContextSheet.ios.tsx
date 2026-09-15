@@ -1,10 +1,7 @@
-import { iconSize } from '@/theme';
+import { iconSize, useTheme } from '@/theme';
 import { ComposerNativeSection as Section } from './ComposerNativeSection';
 import {
-  Children,
-  Fragment,
   createContext,
-  isValidElement,
   useContext,
   useRef,
   type ReactNode,
@@ -16,8 +13,11 @@ import {
   contentShape,
   disabled as disable,
   frame,
+  foregroundStyle,
+  listRowInsets,
   shapes,
 } from "@expo/ui/swift-ui/modifiers";
+import { useTranslation } from "react-i18next";
 import { View } from "react-native";
 import type {
   ContextSheetProps,
@@ -29,25 +29,10 @@ const DismissAction = createContext<(action: () => void) => void>((action) =>
   action(),
 );
 
-function nativeChildren(children: ReactNode): ReactNode {
-  return Children.map(children, (child) => {
-    if (!isValidElement<{ children?: ReactNode }>(child)) return null;
-    if (child.type === Fragment) return nativeChildren(child.props.children);
-    if (
-      child.type === ContextSheetGroup ||
-      child.type === ContextSheetRow ||
-      child.type === ContextSheetFooterButton
-    )
-      return child;
-    return (
-      <RNHostView matchContents>
-        <View>{child}</View>
-      </RNHostView>
-    );
-  });
-}
 export function ContextSheet(props: ContextSheetProps) {
+  const { t } = useTranslation();
   const pending = useRef<(() => void) | null>(null);
+  const { colors } = useTheme();
   return (
     <DismissAction.Provider
       value={(action) => {
@@ -57,6 +42,9 @@ export function ContextSheet(props: ContextSheetProps) {
     >
       <ComposerSheet
         {...props}
+        title={props.onBack ? props.title : ''}
+        aboveContent={props.media}
+        aboveContentTitle={t("session.common.groupAdd")}
         nativeContent
         onClosed={() => {
           const action = pending.current;
@@ -65,7 +53,12 @@ export function ContextSheet(props: ContextSheetProps) {
         }}
         footer={props.footer}
       >
-        {nativeChildren(props.children)}
+        {props.children}
+        {props.error ? (
+          <Section>
+            <Text modifiers={[foregroundStyle(colors.errorText)]}>{props.error}</Text>
+          </Section>
+        ) : null}
       </ComposerSheet>
     </DismissAction.Provider>
   );
@@ -77,7 +70,7 @@ export function ContextSheetGroup({
   label: string;
   children: ReactNode;
 }) {
-  return <Section title={label}>{nativeChildren(children)}</Section>;
+  return <Section title={label || undefined}>{children}</Section>;
 }
 export function ContextSheetRow(props: ContextSheetRowProps) {
   const dismiss = useContext(DismissAction);
@@ -89,6 +82,7 @@ export function ContextSheetRow(props: ContextSheetRowProps) {
       testID={props.testID}
       modifiers={[
         buttonStyle("plain"),
+        listRowInsets({ top: 4, bottom: 4, leading: 16, trailing: 16 }),
         disable(!!props.disabled || !!props.busy),
         ...(props.accessibilityHint
           ? [accessibilityHint(props.accessibilityHint)]

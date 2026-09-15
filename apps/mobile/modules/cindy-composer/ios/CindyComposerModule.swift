@@ -57,8 +57,18 @@ final class ComposerTextView: UITextView {
   private let history = UndoManager()
   override var undoManager: UndoManager? { history }
   weak var owner: CindyComposerView?
+  override func canPerformAction(_ action: Selector, withSender sender: Any?) -> Bool {
+    if action == #selector(UIResponderStandardEditActions.paste(_:)) {
+      guard isEditable, isSelectable, isUserInteractionEnabled, !isHidden, alpha > 0.01 else { return false }
+      // UITextView's default validation only considers its own supported paste
+      // types. Images are handled as attachments below, not as inline text.
+      // hasImages checks availability without reading clipboard contents.
+      if owner != nil && UIPasteboard.general.hasImages { return true }
+    }
+    return super.canPerformAction(action, withSender: sender)
+  }
   override func paste(_ sender: Any?) {
-    guard let owner else { return }
+    guard isEditable, let owner else { return }
     // Read clipboard only from the explicit system Paste action.
     if let images = UIPasteboard.general.images, !images.isEmpty {
       var payload: [String] = []

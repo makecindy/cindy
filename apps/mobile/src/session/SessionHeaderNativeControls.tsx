@@ -9,7 +9,7 @@ export function SessionHeaderNativeTitle(_props: { title: string }) {
   return null;
 }
 
-export function SessionHeaderNativeBlur(_props: { height: number }) {
+export function SessionHeaderNativeBlur(_props: { height: number; edge?: 'top' | 'bottom'; inset?: number }) {
   return null;
 }
 

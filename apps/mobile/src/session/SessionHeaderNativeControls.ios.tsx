@@ -8,8 +8,7 @@ import {
   VStack,
 } from "@expo/ui/swift-ui";
 import { Folder, Monitor, type LucideIcon } from "lucide-react-native";
-import { StyleSheet, View } from "react-native";
-import { GlassView } from "expo-glass-effect";
+import { View } from "react-native";
 import { Text } from "@/components/AppText";
 import {
   accessibilityHint,
@@ -44,7 +43,7 @@ import type {
 } from "./SessionHeaderNativeControls";
 
 /** A stationary, feathered backdrop: scrolling content passes beneath it. */
-export function SessionHeaderNativeBlur({ height }: { height: number }) {
+export function SessionHeaderNativeBlur({ height, edge = 'top', inset = 0 }: { height: number; edge?: 'top' | 'bottom'; inset?: number }) {
   const { mode } = useTheme();
   return (
     <View
@@ -52,7 +51,7 @@ export function SessionHeaderNativeBlur({ height }: { height: number }) {
       accessibilityElementsHidden
       style={{
         position: "absolute",
-        top: 0,
+        ...(edge === 'top' ? { top: inset } : { bottom: inset }),
         left: 0,
         right: 0,
         height,
@@ -72,7 +71,7 @@ export function SessionHeaderNativeBlur({ height }: { height: number }) {
                 foregroundStyle({
                   type: "linearGradient",
                   // Mask colors encode alpha only; they never tint the content.
-                  colors: ["black", "transparent"],
+                  colors: edge === 'top' ? ["black", "transparent"] : ["transparent", "black"],
                   startPoint: { x: 0.5, y: 0 },
                   endPoint: { x: 0.5, y: 1 },
                 }),
@@ -86,8 +85,7 @@ export function SessionHeaderNativeBlur({ height }: { height: number }) {
 }
 
 export function SessionHeaderNativeTitle({ title }: { title: string }) {
-  const { colors, mode } = useTheme();
-  const glass = useLiquidGlassAvailable();
+  const { colors } = useTheme();
   const style = {
     borderRadius: radius.pill,
     minHeight: 44,
@@ -112,19 +110,8 @@ export function SessionHeaderNativeTitle({ title }: { title: string }) {
   );
   return (
     <View style={{ flex: 1, minWidth: 0 }}>
-      <View style={[style, { backgroundColor: colors.surfaceChip }]}>
-        {glass ? (
-          <GlassView
-            pointerEvents="none"
-            colorScheme={mode}
-            glassEffectStyle="clear"
-            isInteractive={false}
-            style={[
-              StyleSheet.absoluteFill,
-              { borderRadius: radius.pill, opacity: 0.25 },
-            ]}
-          />
-        ) : null}
+      <View style={style}>
+        <BlurBackdrop intensity={20} overlayColor={colors.surfaceTranslucent} />
         {label}
       </View>
     </View>

@@ -18,6 +18,7 @@ import {
   shapes,
   buttonStyle,
   font,
+  foregroundStyle,
   frame,
   padding,
   presentationDetents,
@@ -38,9 +39,12 @@ export function ComposerSheet({
   onBack,
   backLabel,
   children,
+  aboveContent,
+  aboveContentTitle,
   footer,
   testID,
   nativeContent,
+  nativeHeader,
 }: ComposerSheetProps) {
   const { mode, colors } = useTheme();
   const { t } = useTranslation();
@@ -68,7 +72,7 @@ export function ComposerSheet({
             spacing={0}
             modifiers={[frame({ maxWidth: Infinity, maxHeight: Infinity })]}
           >
-            <HStack
+            {title || onBack ? <HStack
               modifiers={[
                 padding({ top: 12, leading: 20, trailing: 20, bottom: 8 }),
                 frame({ minHeight: 52 }),
@@ -83,9 +87,28 @@ export function ComposerSheet({
               <Text modifiers={[font({ textStyle: "headline" })]}>{title}</Text>
               <Spacer />
               {onBack ? <Spacer modifiers={[frame({ width: 44 })]} /> : null}
-            </HStack>
+            </HStack> : null}
+            {nativeHeader}
+            {aboveContent && aboveContentTitle ? (
+              <Text modifiers={[
+                font({ textStyle: "subheadline" }),
+                foregroundStyle(colors.textSecondary),
+                frame({ maxWidth: Infinity, alignment: "leading" }),
+                padding({ top: 24, leading: 36, trailing: 36, bottom: 12 }),
+              ]}>{aboveContentTitle}</Text>
+            ) : null}
+            {aboveContent ? (
+              <RNHostView matchContents>
+                <View style={{ paddingHorizontal: 20, paddingTop: aboveContentTitle ? 0 : 24 }}>
+                  {aboveContent}
+                </View>
+              </RNHostView>
+            ) : null}
             {nativeContent ? (
-              <Form testID={testID} modifiers={[scrollContentBackground("hidden")]}>
+              <Form testID={testID} modifiers={[
+                scrollContentBackground("hidden"),
+                ...(aboveContent ? [padding({ top: -12 })] : []),
+              ]}>
                 {children}
               </Form>
             ) : (

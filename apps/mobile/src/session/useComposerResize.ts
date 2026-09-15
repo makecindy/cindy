@@ -7,6 +7,7 @@ import { COMPOSER_TEXT_LINE_HEIGHT, COMPOSER_TEXT_VERTICAL_PADDING } from '@/ses
 import {
   COMPOSER_RESIZE_DRAG_ACTIVATION_THRESHOLD,
   applyComposerResizeDrag,
+  composerCollapseProgress,
   buildComposerResizeGestureConfig,
   buildComposerResizeTouchHandlers,
   computeComposerResizeBounds,
@@ -43,19 +44,25 @@ export function useComposerResize(input: UseComposerResizeInput) {
   const model = resolveComposerInputHeight({ ...input, bounds, userContentHeight });
   const geometry = useSharedValue({ bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0, autoMaxHeight: input.autoMaxContentHeight });
   const active = useSharedValue(false);
+  const awaitingCollapse = useSharedValue(false);
   const gestureId = useSharedValue(0);
   const startHeight = useSharedValue(model.visibleContentHeight);
   const dragHeight = useSharedValue(model.visibleContentHeight);
+  const dragTranslation = useSharedValue(0);
+  const startAbsoluteY = useSharedValue(0);
   useLayoutEffect(() => {
-    const nextGeometry = { bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0, autoMaxHeight: input.autoMaxContentHeight };
+    const nextGeometry = { collapsed: input.collapsed === true, bounds, visibleHeight: model.visibleContentHeight, explicit: input.collapsed === true || model.mode === 'manual', minFrameHeight: input.minFrameHeight ?? 0, autoMaxHeight: input.autoMaxContentHeight };
     // Check the generation and publish together on UI: another gesture may
     // begin between React's commit and delivery of this geometry update.
     runOnUI((next: typeof nextGeometry, completed: number) => {
       'worklet';
       geometry.value = next;
-      if (completed === gestureId.value) active.value = false;
+      if (completed === gestureId.value && (!awaitingCollapse.value || next.collapsed)) {
+        active.value = false;
+        awaitingCollapse.value = false;
+      }
     })(nextGeometry, completedGesture);
-  }, [active, bounds.minContentHeight, bounds.maxContentHeight, completedGesture, gestureId, input.autoMaxContentHeight, input.collapsed, input.minFrameHeight, model.mode, model.visibleContentHeight, geometry]);
+  }, [active, awaitingCollapse, bounds.minContentHeight, bounds.maxContentHeight, completedGesture, gestureId, input.autoMaxContentHeight, input.collapsed, input.minFrameHeight, model.mode, model.visibleContentHeight, geometry]);
 
   const begin = useCallback((id: number) => {
     if (!mounted.current || id !== gestureId.value) return;
@@ -71,31 +78,38 @@ export function useComposerResize(input: UseComposerResizeInput) {
         setUserContentHeight(settleComposerResizeDrag({ bounds: currentBounds, contentHeight: current.contentHeight, draggedContentHeight: height }));
       }
       if (shouldDismissComposerOnRelease({ bounds: currentBounds, draggedContentHeight: height, translationY })) {
+        awaitingCollapse.value = !!current.onSnapToAuto;
         current.onSnapToAuto?.();
       }
     }
     setDragging(false);
     setCompletedGesture(id);
     current.onGrabberTouchActiveChange?.(false);
-  }, [gestureId]);
+  }, [awaitingCollapse, gestureId]);
 
   const scrollGesture = useMemo(() => Gesture.Native(), []);
   const gesture = useMemo(() => Gesture.Pan()
     // Dedicated grabber: own the touch before the keyboard's ancestor ScrollView.
     .minDistance(0)
     .blocksExternalGesture(scrollGesture)
-    .onBegin(() => {
+    .onBegin((event) => {
       'worklet';
+      startAbsoluteY.value = event.absoluteY;
+      awaitingCollapse.value = false;
       gestureId.value += 1;
       // A second drag can begin before the first JS completion is delivered.
       startHeight.value = active.value ? dragHeight.value : geometry.value.visibleHeight;
       active.value = true;
       dragHeight.value = startHeight.value;
+      dragTranslation.value = 0;
       runOnJS(begin)(gestureId.value);
     })
     .onUpdate((event) => {
       'worklet';
-      dragHeight.value = applyComposerResizeDrag({ bounds: geometry.value.bounds, startContentHeight: startHeight.value, translationY: event.translationY });
+      // The grabber itself moves with the resizing frame. Use screen coordinates
+      // so its changing origin cannot feed back into the drag distance.
+      dragTranslation.value = event.absoluteY - startAbsoluteY.value;
+      dragHeight.value = applyComposerResizeDrag({ bounds: geometry.value.bounds, startContentHeight: startHeight.value, translationY: dragTranslation.value });
     })
     .onFinalize((event, successful) => {
       'worklet';
@@ -105,8 +119,8 @@ export function useComposerResize(input: UseComposerResizeInput) {
         dragHeight.value = geometry.value.visibleHeight;
         active.value = false;
       }
-      runOnJS(finish)(dragHeight.value, startHeight.value, event.translationY, successful, gestureId.value);
-    }), [active, begin, dragHeight, finish, geometry, gestureId, scrollGesture, startHeight]);
+      runOnJS(finish)(dragHeight.value, startHeight.value, event.absoluteY - startAbsoluteY.value, successful, gestureId.value);
+    }), [active, awaitingCollapse, begin, dragHeight, dragTranslation, finish, geometry, gestureId, scrollGesture, startAbsoluteY, startHeight]);
 
   useLayoutEffect(() => {
     mounted.current = true;
@@ -125,7 +139,10 @@ export function useComposerResize(input: UseComposerResizeInput) {
     let id = 0;
     const responder = PanResponder.create(buildComposerResizeGestureConfig({
       onGrant: () => {
+        awaitingCollapse.value = false;
         initial = geometry.value.visibleHeight;
+        startHeight.value = initial;
+        dragTranslation.value = 0;
         height = initial;
         dragHeight.value = height;
         active.value = true;
@@ -133,6 +150,7 @@ export function useComposerResize(input: UseComposerResizeInput) {
         begin(id);
       },
       onMove: (translationY) => {
+        dragTranslation.value = translationY;
         height = applyComposerResizeDrag({ bounds: geometry.value.bounds, startContentHeight: initial, translationY });
         dragHeight.value = height;
       },
@@ -144,7 +162,11 @@ export function useComposerResize(input: UseComposerResizeInput) {
       finish(height, initial, 0, false, id);
     };
     return { ...responder.panHandlers, ...buildComposerResizeTouchHandlers((value) => latest.current.onGrabberTouchActiveChange?.(value)) };
-  }, [active, begin, dragHeight, finish, geometry, gestureId]);
+  }, [active, awaitingCollapse, begin, dragHeight, dragTranslation, finish, geometry, gestureId, startHeight]);
+
+  const collapseProgress = useDerivedValue(() => active.value
+    ? composerCollapseProgress({ bounds: geometry.value.bounds, startContentHeight: startHeight.value, translationY: dragTranslation.value })
+    : 0);
 
   const contentHeight = useDerivedValue(() => active.value
     ? Math.max(geometry.value.bounds.minContentHeight, Math.min(dragHeight.value, geometry.value.bounds.maxContentHeight))
@@ -172,6 +194,7 @@ export function useComposerResize(input: UseComposerResizeInput) {
     adjustByLine,
     active,
     contentHeight,
+    collapseProgress,
     dragging,
     frameStyle,
     gesture,

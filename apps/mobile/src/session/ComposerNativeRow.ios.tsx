@@ -1,4 +1,4 @@
-import { iconSize } from '@/theme';
+import { iconSize } from "@/theme";
 import { Button, HStack, Image, Spacer, Text, VStack } from "@expo/ui/swift-ui";
 import {
   accessibilityAddTraits,
@@ -13,7 +13,13 @@ import {
 } from "@expo/ui/swift-ui/modifiers";
 import type { ComposerNativeRowProps } from "./ComposerNativeRow";
 export function ComposerNativeRow({
+  leading,
+  accessory,
+  optionsIcon,
+  selectionIcon,
   title,
+  titleAccessory,
+  subtitleContent,
   subtitle,
   selected,
   onPress,
@@ -41,27 +47,56 @@ export function ComposerNativeRow({
             contentShape(shapes.rectangle()),
           ]}
         >
+          {leading}
           <VStack alignment="leading" spacing={3}>
-            <Text modifiers={[font({ textStyle: "body" })]}>{title}</Text>
-            {subtitle ? (
-              <Text
-                modifiers={[
-                  font({ textStyle: "caption" }),
-                  foregroundStyle({ type: "hierarchical", style: "secondary" }),
-                ]}
-              >
-                {subtitle}
-              </Text>
-            ) : null}
+            <HStack spacing={6}>
+              <Text modifiers={[font({ textStyle: "body" })]}>{title}</Text>
+              {titleAccessory}
+            </HStack>
+            {subtitleContent ??
+              (subtitle ? (
+                <Text
+                  modifiers={[
+                    font({ textStyle: "caption" }),
+                    foregroundStyle({
+                      type: "hierarchical",
+                      style: "secondary",
+                    }),
+                  ]}
+                >
+                  {subtitle}
+                </Text>
+              ) : null)}
           </VStack>
           <Spacer />
-          {selected ? <Image size={iconSize.lg} systemName="checkmark" /> : null}
+          {accessory}
+          {selected
+            ? (selectionIcon ?? (
+                <Image size={iconSize.lg} systemName="checkmark" />
+              ))
+            : null}
         </HStack>
       </Button>
       {onOptions ? (
-        <Button onPress={onOptions} testID={`${testID}.optionsButton`}
-          modifiers={[buttonStyle("borderless"), disabled(!!unavailable), accessibilityLabel(optionsLabel ?? title)]}>
-          <Image size={iconSize.lg} systemName="slider.horizontal.3" modifiers={[frame({ width: 44, height: 44 }), contentShape(shapes.rectangle())]} />
+        <Button
+          onPress={onOptions}
+          testID={`${testID}.optionsButton`}
+          modifiers={[
+            buttonStyle("borderless"),
+            disabled(!!unavailable),
+            accessibilityLabel(optionsLabel ?? title),
+          ]}
+        >
+          <HStack
+            modifiers={[
+              frame({ width: 44, height: 44 }),
+              contentShape(shapes.rectangle()),
+            ]}
+          >
+            {optionsIcon ?? (
+              <Image size={iconSize.lg} systemName="slider.horizontal.3" />
+            )}
+          </HStack>
         </Button>
       ) : null}
     </HStack>
