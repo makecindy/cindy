@@ -621,8 +621,10 @@ async function runGhostOauthFlow(
         scopes: config.scopes,
       }),
       timeout,
+      cancellation.cancelledPromise,
     ]);
     if (bootstrap === 'timeout') return { ok: false, error: 'TIMEOUT' };
+    if (bootstrap === 'cancelled') return { ok: false, error: 'CANCELLED' };
     if (!bootstrap.ok) {
       logger?.warn('ghost oauth broker 获取动态授权配置失败', {
         slug: config.tokenBroker,

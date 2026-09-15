@@ -2903,7 +2903,7 @@ describe('ghost · 官方保留 id', () => {
     expect(isOfficialGhostId('haoplay-feishu-extra')).toBe(false);
   });
 
-  it('四个官方 id 谓词对本阶段同一组输入返回完全相同的结果', () => {
+  it('保留 id 与 first-party privilege 谓词分离，避免历史同名目录直接获得权限', () => {
     const cases: ReadonlyArray<readonly [id: string, expected: boolean]> = [
       ['cindy-art', true],
       ['filo-google', true],
@@ -2916,17 +2916,17 @@ describe('ghost · 官方保留 id', () => {
       ['haoplay-feishu-extra', false],
       ['', false],
     ];
-    const predicates = [
-      isOfficialGhostId,
-      isUserInstallReservedGhostId,
-      isBrokerEligibleGhostId,
-      isFirstPartyHostPrivilegeGhostId,
-    ];
-    // 期望值写死,避免用任一被测谓词或同一前缀表反推 expected 后让错误实现自证正确。
     for (const [id, expected] of cases) {
-      for (const predicate of predicates) {
-        expect(predicate(id), `${predicate.name}(${JSON.stringify(id)})`).toBe(expected);
-      }
+      expect(isOfficialGhostId(id), `isOfficialGhostId(${JSON.stringify(id)})`).toBe(expected);
+      expect(isUserInstallReservedGhostId(id), `isUserInstallReservedGhostId(${JSON.stringify(id)})`)
+        .toBe(expected);
+      const privilegeExpected = id === 'haoplay-feishu' ? false : expected;
+      expect(isBrokerEligibleGhostId(id), `isBrokerEligibleGhostId(${JSON.stringify(id)})`)
+        .toBe(privilegeExpected);
+      expect(
+        isFirstPartyHostPrivilegeGhostId(id),
+        `isFirstPartyHostPrivilegeGhostId(${JSON.stringify(id)})`,
+      ).toBe(privilegeExpected);
     }
   });
 });
