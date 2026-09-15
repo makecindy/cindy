@@ -52,4 +52,31 @@ describe('crossesWorktreeBoundary', () => {
     expect(crossesWorktreeBoundary(null, '/elsewhere')).toBe(false);
     expect(crossesWorktreeBoundary('/repo/.worktrees/user-made', '/elsewhere')).toBe(false);
   });
+
+  it('treats separator and Windows case variants of the same root as the same worktree', () => {
+    // 目录选择器给原生 `\` 拼写,而 working_dir 落库时是 `/`:不能因此误拦。
+    expect(
+      crossesWorktreeBoundary('D:/repo/.cindy-worktrees/steady-goodall', 'D:\\repo\\.cindy-worktrees\\steady-goodall\\tests'),
+    ).toBe(false);
+    expect(
+      crossesWorktreeBoundary('D:\\repo\\.xdt-worktrees\\legacy', 'D:/repo/.xdt-worktrees/legacy/src'),
+    ).toBe(false);
+
+    // Windows 盘符/UNC 大小写差异也不算跨根(平台显式伪造,非 Windows CI 同样执行)。
+    const host = globalThis as { electronAPI?: { platform?: string } };
+    const previous = host.electronAPI;
+    try {
+      host.electronAPI = { platform: 'win32' };
+      expect(
+        crossesWorktreeBoundary('D:/repo/.cindy-worktrees/steady-goodall', 'd:/REPO/.cindy-worktrees/steady-goodall/src'),
+      ).toBe(false);
+      // POSIX 路径大小写敏感:盘符规则不能把两个真实存在的不同目录当成同一个。
+      expect(
+        crossesWorktreeBoundary('/repo/.cindy-worktrees/steady-goodall', '/REPO/.cindy-worktrees/steady-goodall/src'),
+      ).toBe(true);
+    } finally {
+      if (previous === undefined) delete host.electronAPI;
+      else host.electronAPI = previous;
+    }
+  });
 });

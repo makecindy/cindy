@@ -149,6 +149,7 @@ import {
   registerSessionIpc,
   resumeDeletedPiSubagentCleanup,
   setSessionRuntimeCleanup,
+  setSessionWorktreeBindingLookup,
   setSessionWorktreeRecycle,
   updateSessionInDb,
 } from '../sessions';
@@ -307,11 +308,13 @@ beforeEach(() => {
   setSessionRouteLockImplementation(h.routeLock);
   setSessionRuntimeCleanup(h.runtimeCleanup);
   setSessionWorktreeRecycle(h.requestRecycle);
+  setSessionWorktreeBindingLookup(null);
   registerSessionIpc(undefined, { closeIdleSessionForMove: h.closeIdleSessionForMove });
 });
 
 afterEach(async () => {
   setSessionRuntimeCleanup(null);
+  setSessionWorktreeBindingLookup(null);
   setSessionWorktreeRecycle(null);
   setSessionRouteLockImplementation(null);
   const dir = h.userDataDir;
@@ -1089,6 +1092,38 @@ describe('local-db:sessions:update handler wiring', () => {
 
     expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
       .toEqual({ working_dir: to.replace(/\\/g, '/') });
+  });
+
+  it('refuses further moves for a session still bound to a worktree after an earlier half-move', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'steady-goodall');
+    // 旧版允许过的半移动存量行:cwd 已经落在普通项目,worktree 绑定还在旧 worktree。
+    // 只看 cwd 会漏掉这类行,归属必须问 worktreeStore(组合层注入)。
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ?, worktree_path = ? WHERE id = ?')
+      .run('/other/project', worktreeDir, 'cc-local');
+    setSessionWorktreeBindingLookup((sessionId) => (sessionId === 'cc-local' ? worktreeDir : null));
+
+    await expect(invokeUpdate('cc-local', { workingDir: '/another/project' }))
+      .rejects.toThrow(/cannot be moved outside its worktree/i);
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: '/other/project' });
+
+    // 移回它自己的 worktree 是修复而不是跨根,应当放行。
+    await invokeUpdate('cc-local', { workingDir: worktreeDir });
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: worktreeDir.replace(/\\/g, '/') });
+  });
+
+  it('does not treat a recycled worktree snapshot as a live binding', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'recycled-name');
+    // 回收后 worktreeStore 删条目但保留 DB 快照(徽标以 store 为准):这类行不应被拦住。
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ?, worktree_path = ? WHERE id = ?')
+      .run('/other/project', worktreeDir, 'cc-local');
+    setSessionWorktreeBindingLookup(() => null);
+
+    await invokeUpdate('cc-local', { workingDir: '/another/project' });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: '/another/project' });
   });
 
   it('refuses the same move through the shared entry point used by the MCP tools', async () => {

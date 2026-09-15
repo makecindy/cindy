@@ -17,6 +17,15 @@
 
 import { managedWorktreeBaseRepo } from '@cindy/maker-shared/worktree-paths';
 
+import { workingDirEquals } from '../../../../shared/workingDir';
+
+/** renderer 里判断宿主平台:优先问 bridge,单测(node 环境)回落 `process`。 */
+function isWindowsHost(): boolean {
+  const bridged = (globalThis as { electronAPI?: { platform?: string } }).electronAPI?.platform;
+  if (typeof bridged === 'string') return bridged === 'win32';
+  return typeof process !== 'undefined' && process.platform === 'win32';
+}
+
 /** 反斜杠是否算分隔符:只有盘符路径(`C:\`)与反斜杠 UNC(`\\server\share`)才算。 */
 function usesBackslashSeparator(value: string): boolean {
   return /^[A-Za-z]:[\\/]/.test(value) || value.startsWith('\\\\');
@@ -64,5 +73,8 @@ export function crossesWorktreeBoundary(
 ): boolean {
   const currentRoot = managedWorktreeRootOf(currentWorkingDir);
   if (currentRoot === null) return false;
-  return currentRoot !== managedWorktreeRootOf(targetWorkingDir);
+  const targetRoot = managedWorktreeRootOf(targetWorkingDir);
+  // 比的是同一物理目录:分隔符风格(目录选择器给 `\`、库里存 `/`)与 Windows 盘符/
+  // UNC 大小写差异都不算跨根,比较口径与 Main 的守卫一致。
+  return targetRoot === null || !workingDirEquals(currentRoot, targetRoot, { windows: isWindowsHost() });
 }

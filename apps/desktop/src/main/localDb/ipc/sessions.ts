@@ -66,7 +66,7 @@ import {
   DESKTOP_VISIBLE_SESSION_SOURCES,
   isRetainableProjectSessionSource,
 } from '../../../shared/sessionSource.js';
-import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import { normalizeWorkingDirForStorage, workingDirEquals } from '../../../shared/workingDir.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
@@ -148,6 +148,21 @@ export interface RegisterSessionIpcOpts {
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
 let sessionRemovalCleanup: SessionRemovalCleanup | null = null;
 let sessionWorktreeRecycle: SessionWorktreeRecycle | null = null;
+
+/**
+ * 会话当前 worktree 绑定的查询口。source of truth 是 worktreeStore（electron-store）：
+ * `sessions.worktree_path` 只是反范式快照，且回收后刻意保留历史值（徽标看 store
+ * 是否存在），所以不能用它当「是否仍持有 worktree」的判据。
+ */
+type SessionWorktreeBindingLookup = (sessionId: string) => string | null;
+let sessionWorktreeBindingLookup: SessionWorktreeBindingLookup | null = null;
+
+/** Composition-root injection keeps the localDb IPC layer independent of worktree implementation modules. */
+export function setSessionWorktreeBindingLookup(
+  lookup: SessionWorktreeBindingLookup | null,
+): void {
+  sessionWorktreeBindingLookup = lookup;
+}
 
 /** Composition-root injection for Host-owned operations that must stop before worktree recycle. */
 export function setSessionRemovalCancelOperations(
@@ -1809,19 +1824,28 @@ export async function updateSessionInDb(
     // 特性(#2190/#2585,需显式处置未提交改动与 worktree 归属),落地前这里拒绝把会话
     // 移出 worktree;worktree 创建流程(基线目录 → 自己的 worktree)与同 worktree 内的
     // no-op 不受影响。拦截发生在关 runtime / 写库 / 转录迁移之前,拒绝不留部分写入。
-    const currentWorktreeRoot =
-      beforeMove && !beforeMove.remoteHostId && beforeMove.workingDir
-        ? managedWorktreeRoot(beforeMove.workingDir)
-        : null;
-    const targetWorktreeRoot =
-      typeof p.workingDir === 'string' && p.workingDir
-        ? managedWorktreeRoot(p.workingDir)
-        : null;
-    if (currentWorktreeRoot && currentWorktreeRoot !== targetWorktreeRoot) {
-      throwIpcError(
-        'PRECONDITION_FAILED',
-        'A worktree session cannot be moved outside its worktree; worktree handoff is required',
-      );
+    //
+    // 归属以 worktreeStore(组合层注入)为真源:旧版允许过的「半移动」会给会话留下
+    // working_dir 在普通项目、绑定仍在旧 worktree 的状态,只看 cwd 会漏掉这类存量行;
+    // 反过来,DB 的 worktree_path 快照在回收后仍保留历史值,也不能当活绑定用。
+    const requestedWorkingDir = typeof p.workingDir === 'string' ? p.workingDir : null;
+    if (
+      beforeMove &&
+      !beforeMove.remoteHostId &&
+      requestedWorkingDir &&
+      !workingDirEquals(requestedWorkingDir, beforeMove.workingDir)
+    ) {
+      const boundWorktreePath = sessionWorktreeBindingLookup?.(sid) ?? null;
+      const ownedWorktreeRoot =
+        (boundWorktreePath ? managedWorktreeRoot(boundWorktreePath) : null) ??
+        (beforeMove.workingDir ? managedWorktreeRoot(beforeMove.workingDir) : null);
+      const targetWorktreeRoot = managedWorktreeRoot(requestedWorkingDir);
+      if (ownedWorktreeRoot && !workingDirEquals(ownedWorktreeRoot, targetWorktreeRoot)) {
+        throwIpcError(
+          'PRECONDITION_FAILED',
+          'A worktree session cannot be moved outside its worktree; worktree handoff is required',
+        );
+      }
     }
     const movingLocalNonClaudeSession =
       beforeMove &&

@@ -13,7 +13,7 @@ import {
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
 import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
-import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
+import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
 
 import {
   createHostSendFailure,
@@ -58,21 +58,6 @@ export interface BootstrapDirectoryGrantDeps {
 
 function sameDirectoryList(left: readonly string[], right: readonly string[]): boolean {
   return left.length === right.length && left.every((value, index) => value === right[index]);
-}
-
-/**
- * 同一物理目录的不同拼写(分隔符、尾斜杠、Windows 盘符/UNC 大小写)不算目录漂移。
- * 会话移动的漂移判定必须用它 —— 纯字符串比较会在仅拼写不同时白白关掉并重建活
- * runtime。POSIX 路径保持大小写敏感(与 `projectKeys` 的 local 比较口径一致)。
- */
-function sameWorkingDir(left: string, right: string): boolean {
-  const a = normalizeWorkingDirForStorage(left) ?? left;
-  const b = normalizeWorkingDirForStorage(right) ?? right;
-  if (a === b) return true;
-  const caseFoldable = (value: string): boolean => /^[A-Za-z]:\//.test(value) || value.startsWith('//');
-  return process.platform === 'win32' && caseFoldable(a) && caseFoldable(b)
-    ? a.toLowerCase() === b.toLowerCase()
-    : false;
 }
 
 /**
@@ -1018,7 +1003,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           ((sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
           !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir));
         const persistedDirReady =
-          ok && !liveDirNeedsRecovery && fallbackDir && !sameWorkingDir(fallbackDir, sess.workDir)
+          ok && !liveDirNeedsRecovery && fallbackDir && !workingDirEquals(fallbackDir, sess.workDir)
             ? await isUsablePersistedWorkingDir(
                 sessionId,
                 fallbackDir,
