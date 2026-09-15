@@ -221,6 +221,12 @@ export async function openSessionInNewWindow(
   if (!Array.isArray(loaded)) return loaded;
   const [row] = loaded;
   if (row.status === 'deleted') return err('PRECONDITION_FAILED', `${row.id}: 会话已删除`);
+  // 伙伴(Bot)会话必须走 /bots/ 或伙伴历史路由(botRouteForOwnedSession);副窗的
+  // SecondaryWindowBootGate 只经 resolveSessionRoute 解析 Orca 身份,不认伙伴身份,
+  // 放行会把隐藏的伙伴任务开成缺少伙伴身份与门禁的普通任务界面。
+  if (row.source === 'bot') {
+    return err('PRECONDITION_FAILED', `${row.id}: 伙伴(Bot)会话要从伙伴页面打开,不能开成普通任务窗口`);
+  }
   try {
     deps.openInNewWindow(row.id);
   } catch (e) {

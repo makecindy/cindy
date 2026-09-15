@@ -215,6 +215,16 @@ describe('openSessionInNewWindow', () => {
     expect(await openSessionInNewWindow(deps, { sessionId: 'd' })).toMatchObject({ ok: false, errorCode: 'PRECONDITION_FAILED' });
     expect(await openSessionInNewWindow(deps, { sessionId: 'x' })).toMatchObject({ ok: false, errorCode: 'NOT_FOUND' });
   });
+
+  it('refuses to open a Bot session as an ordinary task window', async () => {
+    // 副窗只经 resolveSessionRoute 解析 Orca 身份,伙伴会话会落到 /cc-agent/ 而非 /bots/。
+    const { deps } = makeDeps([row('b', { source: 'bot' })]);
+    expect(await openSessionInNewWindow(deps, { sessionId: 'b' })).toMatchObject({
+      ok: false,
+      errorCode: 'PRECONDITION_FAILED',
+    });
+    expect(deps.openInNewWindow).not.toHaveBeenCalled();
+  });
 });
 
 describe('getSessionBranches', () => {
