@@ -35,7 +35,7 @@ Effort/price 静态表也由 colors.ts 生成并导出，`effortTierColors.ts` i
 
 ## 已接管与保留
 
-基线为 **541 ID / 11 内置主题**。当前 522 注册项接管，19 项原位保留：7 个 Markdown `inherit`、2 个登录背景 `none`、7 个 color-mix 运行期表达式，以及 annotation-accent / login-brand-accent / login-brand-accent-pressed 三个 register-only 保护 singleton。静态阴影、透明度、radius 和 splash 动效已建模，不能统称动态值漏掉。
+基线为 **542 ID / 11 内置主题**(DS-8 接管时 541,#3169 新增 region-capture-selection-border 后 542)。当前 523 注册项接管，19 项原位保留：7 个 Markdown `inherit`、2 个登录背景 `none`、7 个 color-mix 运行期表达式，以及 annotation-accent / login-brand-accent / login-brand-accent-pressed 三个 register-only 保护 singleton。静态阴影、透明度、radius 和 splash 动效已建模，不能统称动态值漏掉。
 
 动态模型 OKLCH 配色、effort 插值、字体选择/缩放/compact、reduced-motion、Diff 测量/Worker/缓存、数据几何及业务计时继续留在原代码。通用 Tailwind 尺度已接源，不代表所有局部任意值、第三方编辑器/终端/登录画布几何或各业务组件已完成设计迁移；这些保持现有登记与后续批次边界，不新增标准档位。
 

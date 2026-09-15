@@ -1,9 +1,9 @@
 {
   "source": "apps/desktop/src/renderer/themes/colors.ts",
   "generatedBy": "packages/design-tokens/src/classify.ts",
-  "snapshotCount": 541,
+  "snapshotCount": 542,
   "categories": {
-    "literal": 265,
+    "literal": 266,
     "alias": 240,
     "hsl-triplet": 6,
     "runtime-derived-or-protected": 30
@@ -4872,6 +4872,14 @@
     },
     {
       "id": "lightbox-toolbar-hover-bg",
+      "category": "literal",
+      "destination": "reference-candidate",
+      "lightKind": "rgb",
+      "darkKind": "rgb",
+      "modeledAsSemantic": false
+    },
+    {
+      "id": "region-capture-selection-border",
       "category": "literal",
       "destination": "reference-candidate",
       "lightKind": "rgb",
