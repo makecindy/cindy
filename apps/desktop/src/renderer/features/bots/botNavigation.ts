@@ -1,4 +1,17 @@
 import { extractIpcError } from '@/utils/ipcError';
+import type { BotProfile } from './botStore';
+
+/** Navigation is by stable profile ID, never by the display name or portrait. */
+export function botEntryTarget(bots: readonly BotProfile[], lastBotId?: string): BotProfile | null {
+  const available = bots.filter(bot => bot.status !== 'archived' && bot.status !== 'deleting');
+  const remembered = available.find(bot => bot.id === lastBotId);
+  if (remembered) return remembered;
+  const byCreation = [...available].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id));
+  return byCreation.find(bot => bot.templateId === 'cindy')
+    ?? byCreation.find(bot => bot.status === 'active')
+    ?? byCreation[0]
+    ?? null;
+}
 
 /**
  * 打开一个伙伴默认就是打开 TA 的对话，但有两种时候不能抢跑：

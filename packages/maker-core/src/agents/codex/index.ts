@@ -187,6 +187,7 @@ import {
 import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
+import { codexTextOnlyTurnConfig } from './text-only-turn.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
@@ -4282,6 +4283,7 @@ export class CodexAgent extends BaseAgent {
     // Kept across the internal plan implementation/revision turns. A later
     // explicit Session.send replaces it before turn/start.
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    let activeToolsDisabled = false;
     // Capability source choice belongs to the server-accepted turn that
     // carried it. A global "last send text" can be poisoned by a turn/start
     // that later fails, and can then unlock an unrelated surviving turn.
@@ -5850,6 +5852,7 @@ export class CodexAgent extends BaseAgent {
       return contextLimit ?? customWindow;
     };
     let appliedContextLimit = currentContextLimit();
+    let appliedToolsDisabled = false;
     activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
 
     function currentThreadWorkspaceConfig(contextLimit = currentContextLimit()): Pick<
@@ -5903,6 +5906,9 @@ export class CodexAgent extends BaseAgent {
               ),
             }
           : {}),
+        // Native pre-execution hooks deny local/MCP tools even in Full access;
+        // hosted tools must also be omitted before the model request is sent.
+        ...(activeToolsDisabled ? codexTextOnlyTurnConfig() : {}),
       };
       const shared = {
         approvalPolicy,
@@ -6788,7 +6794,8 @@ export class CodexAgent extends BaseAgent {
     // then cold-resume its intact rollout before accepting another turn.
     const ensureContextLimitForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
       const desired = currentContextLimit();
-      if (desired === appliedContextLimit) return null;
+      const desiredToolsDisabled = activeToolsDisabled;
+      if (desired === appliedContextLimit && desiredToolsDisabled === appliedToolsDisabled) return null;
       return (async () => {
         if (signal?.aborted || closed) throw new Error('Codex context settings update cancelled');
         if (!threadMayHaveRollout) {
@@ -6833,6 +6840,7 @@ export class CodexAgent extends BaseAgent {
           }
         }
         appliedContextLimit = desired;
+        appliedToolsDisabled = desiredToolsDisabled;
         hasActivatedRootTurn = false;
         lastNativeContextWindow = null;
         usageTracker.setContextWindow(0);
@@ -12422,6 +12430,9 @@ export class CodexAgent extends BaseAgent {
       get codexProductPromptDelivery() { return codexProductPromptDelivery; },
 
       validateSendOptions(sendOpts: SendOptions) {
+        if (sendOpts.toolsDisabled && !codexUserAgentAtLeast(initResp.userAgent, [0, 145, 0])) {
+          throw new Error('Host text-only turns require Codex 0.145.0 or newer for native PreToolUse enforcement.');
+        }
         if (
           sendOpts.turnPermissionPolicy &&
           mutablePermissionMode === 'bypassPermissions'
@@ -12439,6 +12450,12 @@ export class CodexAgent extends BaseAgent {
         }
         const internalOpts = sendOpts as CodexInternalSendOptions | undefined;
         const yieldAttempt = internalOpts?.[CODEX_YIELD_CONTINUATION];
+        const isContinuation = internalOpts?.[CODEX_INTERNAL_CONTINUATION] === true
+          || internalOpts?.[CODEX_INTERACTION_CONTINUATION] === true;
+        const nextToolsDisabled = isContinuation ? activeToolsDisabled : sendOpts?.toolsDisabled === true;
+        if (handle.isTurnRunning?.() && activeToolsDisabled !== nextToolsDisabled) {
+          throw new Error('Cannot change the tool policy while a Codex turn is active.');
+        }
         if (yieldAttempt == null && internalOpts?.[CODEX_INTERNAL_CONTINUATION] !== true) {
           cancelActiveYieldContinuation('new send');
           yieldContinuationProductFailed = false;
@@ -12447,6 +12464,7 @@ export class CodexAgent extends BaseAgent {
         clearReconnectStall();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        activeToolsDisabled = nextToolsDisabled;
         const capabilitySelectionText =
           (sendOpts as CodexInternalSendOptions | undefined)?.[
             CODEX_INHERITED_CAPABILITY_SELECTION

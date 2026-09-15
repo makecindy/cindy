@@ -1872,6 +1872,61 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     }
   }
 
+  it.each(['ask', 'auto', 'bypassPermissions'] as const)(
+    'host text-only turn blocks tools in %s and restores the next ordinary turn',
+    { timeout: 60_000 },
+    async (permissionMode) => {
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-text-only-'));
+      let handle: AgentSessionHandle | undefined;
+      const target = path.join(workingDir, 'written.txt');
+      writeFileSync(path.join(workingDir, 'private.txt'), 'fixture-read-secret');
+      try {
+        handle = await new PiAgent(buildDeps()).startSession({
+          sessionId: `pi-text-only-${permissionMode}`, workingDir, model: 'pi-test-model', permissionMode,
+        });
+        const resolver = vi.fn(async (request: { requestId: string }) => ({
+          kind: 'permission', requestId: request.requestId, behavior: 'allow',
+        }));
+        handle.setInteractionResolver?.(resolver as never);
+        const collectTurn = async () => {
+          for await (const event of handle!.events()) if (event.type === 'done') return;
+        };
+        const blockedTools: Array<[string, Record<string, unknown>]> = [
+          ['read', { path: 'private.txt' }],
+          ['write', { path: target, content: 'test' }],
+          ['ask_user_question', { questions: [{ question: 'Continue?', options: ['Yes', 'No'] }] }],
+        ];
+        scriptedResponses.length = 0;
+        scriptedResponses.push(...blockedTools.map(([name, input], index) =>
+          anthropicToolUseBody(name, input).replaceAll('toolu_itest_1', `toolu_blocked_${index}`)),
+        anthropicStreamBody('Hello.'));
+        const requestStart = seenRequests.length;
+        const done = collectTurn();
+        await handle.send({ type: 'user', content: 'Welcome.' }, { toolsDisabled: true });
+        await done;
+        const lastRequest = JSON.parse(seenRequests.at(-1)!.body);
+        const results = lastRequest.messages.flatMap((message: { content: unknown }) =>
+          Array.isArray(message.content) ? message.content : []).filter((block: { type: string }) => block.type === 'tool_result');
+        expect(seenRequests.length - requestStart).toBe(4);
+        expect(results).toHaveLength(3);
+        for (const result of results) expect(JSON.stringify(result)).toContain('Tools are disabled for this host-owned text-only turn');
+        expect(seenRequests.at(-1)!.body).not.toContain('fixture-read-secret');
+        expect(existsSync(target)).toBe(false);
+        expect(resolver).not.toHaveBeenCalled();
+
+        scriptedResponses.push(anthropicToolUseBody('write', { path: target, content: 'test' }), anthropicStreamBody('Done.'));
+        const normalDone = collectTurn();
+        await handle.send({ type: 'user', content: 'Now write the file.' });
+        await normalDone;
+        expect(readFileSync(target, 'utf8')).toBe('test');
+      } finally {
+        await handle?.close();
+        scriptedResponses.length = 0;
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it(
     'offline grep uses the host-managed ripgrep instead of falling back to bash',
     { timeout: 60_000 },

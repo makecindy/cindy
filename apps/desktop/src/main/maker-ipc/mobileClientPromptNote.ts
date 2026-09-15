@@ -160,7 +160,8 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     !('expectedTurnGeneration' in opts) &&
     !('inputAbortSignal' in opts) &&
     !('signal' in opts) &&
-    !('turnPermissionPolicy' in opts)
+    !('turnPermissionPolicy' in opts) &&
+    !('toolsDisabled' in opts)
   ) {
     return sendOpts;
   }
@@ -173,6 +174,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     inputAbortSignal: _ignoredAbortSignal,
     signal: _ignoredSignal,
     turnPermissionPolicy: _ignoredTurnPermissionPolicy,
+    toolsDisabled: _ignoredToolsDisabled,
     ...rest
   } = opts;
   return rest;

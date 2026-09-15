@@ -1995,6 +1995,8 @@ export interface SendOptions {
    * approval boundary, before MCP auto-approval or permission-mode bypasses.
    */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** Host-owned text-only turn. Block every tool before execution, including reads and Full access. */
+  toolsDisabled?: boolean;
 }
 
 export type TurnPermissionOrigin =

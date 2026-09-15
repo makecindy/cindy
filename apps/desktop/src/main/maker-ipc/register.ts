@@ -2,6 +2,7 @@ import { advanceRuntimeRecoveryNotice } from '../im/shared/runtimeRecoveryNotice
 import { configureAppDefaultModelSelection } from './appDefaultModelControl.js';
 import type { BuiltinApiKeyBridgeDeps } from '../secrets/builtinApiKeyBridge.js';
 import { setBotInvitationWelcomeDispatch } from './botInvitation.js';
+import { createQueuedDispatchReceipts } from './queuedDispatchReceipts.js';
 import type { TurnUsageContext } from './turnUsageContext.js';
 import { retainProviderPresentationAfterAuthChange } from '../maker-host/provider-presentation-store.js';
 import { registerPluginListHandler } from './pluginListHandler.js';
@@ -9214,10 +9215,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return trackSendToSessionLockRun(targetSessionId, run, () => lockStage);
   }
 
+  const welcomeDispatchReceipts = createQueuedDispatchReceipts();
   const dispatchBotSessionMessage = async (params: {
     targetSessionId: string;
     dispatcherSessionId?: string;
     authorizationGuard?: BotAuthorizationInputGuard;
+    toolsDisabled?: boolean;
+    retry?: boolean;
+    onQueued?: (clientId: string) => Promise<void>;
     message: string;
     persistedContent?: string;
     clientId?: string;
@@ -9252,7 +9257,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ),
         )
         .limit(1);
-      if (persisted) {
+      // A user row is written BEFORE provider acceptance. After an interrupted
+      // attempt it cannot prove delivery; retain the invitation for explicit retry.
+      if (persisted && params.toolsDisabled && !params.retry) {
+        return { ok: false as const, errorCode: 'AGENT_NOT_READY' as const, message: 'Previous welcome acceptance is unconfirmed; retry is required.' };
+      }
+      if (persisted && !params.toolsDisabled) {
         await params.onAccepted?.();
         return {
           ok: true as const,
@@ -9261,7 +9271,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         };
       }
     }
-    if (params.files?.length) {
+    if (params.files?.length || params.toolsDisabled === true) {
       const [meta, dbRow] = await Promise.all([
         maker.getSessionMeta(params.targetSessionId).catch(() => null),
         getSessionRowSnapshot(params.targetSessionId),
@@ -9280,8 +9290,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           message: `session ${params.targetSessionId} is archived`,
         };
       }
-      const clientId = params.clientId ?? createId();
       await inputCoordinator.ensureQueueRestored(params.targetSessionId).catch(() => undefined);
+      if (params.toolsDisabled && !inputCoordinator.isQueueRestored(params.targetSessionId)) {
+        throw new Error('INVITATION_QUEUE_UNAVAILABLE');
+      }
+      // An explicit retry must not hit the failed attempt's recent-client dedupe.
+      // Checkpoint the new id before enqueue, and retire only the prior hidden
+      // welcome's pending item (never an active turn or another user's input).
+      const clientId = params.toolsDisabled ? createId() : params.clientId ?? createId();
+      if (params.toolsDisabled) await params.onQueued?.(clientId);
+      if (params.toolsDisabled && params.clientId && inputCoordinator.hasPendingQueueItem(params.targetSessionId, params.clientId)
+        && inputCoordinator.hasQueuedItemWhere(params.targetSessionId, item => item.clientId === params.clientId && item.toolsDisabled === true)) {
+        inputCoordinator.remove(params.targetSessionId, params.clientId);
+      }
       const queued = await buildSessionControlInputItem({
         targetSessionId: params.targetSessionId,
         message: params.message,
@@ -9289,10 +9310,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         clientId,
         meta,
         files: params.files,
+        ...(params.toolsDisabled === true ? { toolsDisabled: true } : {}),
       });
-      inputCoordinator.enqueue(params.targetSessionId, queued, {
+      const enqueue = () => inputCoordinator.enqueue(params.targetSessionId, queued, {
         resumeRestorePausedQueue: true,
       });
+      if (params.toolsDisabled) {
+        if (!await welcomeDispatchReceipts.dispatch(params.targetSessionId, clientId, enqueue)) {
+          return { ok: false as const, errorCode: 'AGENT_NOT_READY' as const, message: 'Welcome turn was not accepted by the runtime.' };
+        }
+      } else {
+        enqueue();
+      }
       await params.onAccepted?.();
       return {
         ok: true as const,
@@ -9937,6 +9966,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     meta: NonNullable<Awaited<ReturnType<typeof maker.getSessionMeta>>>;
     files?: AgentInputQueuedMessage['files'];
     origin?: AgentInputQueuedMessage['origin'];
+    toolsDisabled?: boolean;
   }): Promise<AgentInputQueuedMessage> {
     const createOpts = await buildCreateOptsForQueuedSession(params.targetSessionId, params.meta, params.inheritTargetPlanMode);
     const imageAttachments: NonNullable<AgentInputQueuedMessage['chatMessage']['images']> = [];
@@ -9970,6 +10000,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return {
       clientId: params.clientId,
       text: params.message,
+      ...(params.toolsDisabled === true ? { toolsDisabled: true } : {}),
       persistedContent,
       model: createOpts.model,
       effort: createOpts.effort ?? '',
@@ -13646,6 +13677,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       settleQueuedAttachmentPersistenceFailure(sessionId, item.clientId, opts.retainForRetry);
     },
     onDispatchedUserTurn: async (sessionId, item, preVendorDispatchAt): Promise<void> => {
+      welcomeDispatchReceipts.settle(sessionId, item.clientId, true);
       const attemptToken = autoResumeAttemptToken(item);
       if (
         attemptToken !== null &&
@@ -13733,6 +13765,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiSessionIntervention(sessionId);
     },
     onRejectedUserTurn: (sessionId, item) => {
+      welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'rejected');
       // Auto-resume items have an exact-token cleanup boundary below. Keep
       // their attempt lease until that boundary can restore recovery and
@@ -13772,6 +13805,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
+      welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       rollbackAgentIslandUserPrompt(sessionId, item.clientId, 'discarded');
       discardQueuedAttachmentOwnership(sessionId, item.clientId);
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
@@ -13846,6 +13880,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await gitSnapshotCoordinator?.onTurnStart(sessionId);
     },
     onUndispatchedUserTurn: (sessionId, item, disposition) => {
+      welcomeDispatchReceipts.settle(sessionId, item.clientId, false);
       // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。
       publishUiTurnUndispatched(sessionId, item.clientId);
       clearPendingTurnChangeSets(sessionId);

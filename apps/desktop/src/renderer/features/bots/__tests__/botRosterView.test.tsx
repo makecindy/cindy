@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const translate = (key: string, opts?: Record<string, unknown>) =>
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   BotModelSelectionRequiredError: class extends Error {},
   addBotProfileAndWait: vi.fn(),
   generateDraft: vi.fn(),
+  galleryPortrait: vi.fn(async (_index: number) => 'data:image/png;base64,cG9ydHJhaXQ='),
   defaultModel: 'cindy-selected-model',
   navigate: vi.fn(),
   onboarding: false,
@@ -92,13 +93,15 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
 vi.mock('react-router-dom', () => ({ useNavigate: () => mocks.navigate }));
 
 vi.mock('../BotPortraitPicker', () => ({
-  BotPortraitPicker: () => <div>Portrait picker</div>,
-  galleryPortrait: async () => 'data:image/png;base64,cG9ydHJhaXQ=',
+  BOT_PORTRAIT_COUNT: 17,
+  BotPortraitPicker: ({ value, onChange }: { value?: string; onChange: (value: string) => void }) => <button type="button" data-testid="portrait" onClick={() => onChange('data:image/png;base64,bWFudWFs')}>{value}</button>,
+  galleryPortrait: mocks.galleryPortrait,
 }));
 
 import { BotRosterView } from '../BotRosterView';
 
 beforeEach(() => {
+  mocks.galleryPortrait.mockClear();
   mocks.defaultModel = 'cindy-selected-model';
   mocks.generateDraft.mockReset();
   mocks.generateDraft.mockResolvedValue({
@@ -119,9 +122,34 @@ beforeEach(() => {
   mocks.availableVendors = new Set(['cc', 'codex', 'pi']);
 });
 
-afterEach(() => cleanup());
+afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
 describe('name-only creation', () => {
+  it('randomizes across all 17 portraits per new form, not by roster length', async () => {
+    const random = vi.spyOn(Math, 'random').mockReturnValue(0);
+    const first = render(<BotRosterView inline />);
+    await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenCalledWith(0));
+    random.mockReturnValue(0.9999);
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Cindy' } });
+    first.rerender(<BotRosterView inline />);
+    expect(mocks.galleryPortrait).toHaveBeenCalledTimes(1);
+    first.unmount();
+    render(<BotRosterView inline />);
+    await waitFor(() => expect(mocks.galleryPortrait).toHaveBeenLastCalledWith(16));
+  });
+
+  it('does not replace a manual choice when the initial random image arrives late', async () => {
+    let complete!: (value: string) => void;
+    mocks.galleryPortrait.mockImplementationOnce(() => new Promise(resolve => { complete = resolve; }));
+    render(<BotRosterView inline />);
+    fireEvent.click(screen.getByTestId('portrait'));
+    await act(async () => complete('data:image/png;base64,cmFuZG9t'));
+    expect(screen.getByTestId('portrait').textContent).toBe('data:image/png;base64,bWFudWFs');
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Cindy' } });
+    fireEvent.click(screen.getByRole('button', { name: 'bots.guided.generate' }));
+    await waitFor(() => expect(mocks.addBotProfileAndWait).toHaveBeenCalledWith({ name: 'Cindy', description: '', avatarImageBase64: 'bWFudWFs', prepareInvitation: true }));
+  });
+
   it('creates immediately with the chosen portrait and without a draft/model override', async () => {
     render(<BotRosterView />);
     fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Mika' } });

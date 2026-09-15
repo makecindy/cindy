@@ -90,6 +90,8 @@ import { queueBotInvitation as enqueueBotInvitation } from '../../maker-ipc/botI
 import { getMakerIfReady, validateBotCapabilityAdditions } from '../../maker-host/index.js';
 import type { BotCapabilityUpdate } from '../../maker-ipc/botCapabilityService.js';
 import { getResolvedMainLocale } from '../../i18n.js';
+import { SUPPORTED_LOCALES, type SupportedLocale } from '../../../shared/locale.js';
+import { normalizeBotWelcomeContext, type BotWelcomeContext } from '../../../shared/botWelcomeContext';
 import { broadcastBotRemoteResourceChanged } from '../../maker-ipc/botRemoteResourceInvalidation.js';
 
 const log = createLogger('bots');
@@ -762,10 +764,18 @@ async function readBotRemoteResourceSource(
   };
 }
 
+function readBotInvitationLocale(value: unknown): SupportedLocale {
+  return typeof value === 'string' && (SUPPORTED_LOCALES as readonly string[]).includes(value)
+    ? value as SupportedLocale
+    : getResolvedMainLocale();
+}
+
 /** Desktop, device-link and resource discovery share the same owner-bound receipt. */
 async function provisionDefaultBotForList(
   client: ReturnType<typeof getDbClient>,
   owner: ReturnType<typeof captureBotOperationOwner>,
+  welcomeContext?: BotWelcomeContext,
+  locale?: SupportedLocale,
 ): Promise<void> {
   try {
     await provisionDefaultBot({
@@ -778,7 +788,7 @@ async function provisionDefaultBotForList(
       },
       create: () => createBotProfile({ id: 'cindy-default', name: 'Cindy', templateId: 'cindy',
         avatar: BOT_TEMPLATE_PRESET_AVATARS.cindy, identitySource: CINDY_DEFAULT_IDENTITY,
-        prepareInvitation: true }),
+        prepareInvitation: true, welcomeContext, locale }),
     });
   } catch (error) {
     log.warn('initial companion deferred', { error: error instanceof Error ? error.name : typeof error });
@@ -971,8 +981,9 @@ export async function createBotProfile(raw: unknown) {
   delete persistedCapabilities.templateId;
   if (templateId) persistedCapabilities.templateId = templateId;
   if (prepareInvitation) persistedCapabilities.invitation = {
-    id: randomUUID(), stage: 'skills', locale: getResolvedMainLocale(),
+    id: randomUUID(), stage: 'skills', locale: readBotInvitationLocale(body.locale),
     avatarRequested: body.generateAvatar === true && !avatarImage,
+    welcomeContext: normalizeBotWelcomeContext(body.welcomeContext),
     ...(draftEntry ? { draft: { ...draftEntry.draft, background: `${draftEntry.draft.background}\n\nCurrent profile (use this name and introduction):\n${name}\n${description}` } } : {}),
   };
   const now = Date.now();
@@ -1268,7 +1279,11 @@ export function registerBotIpc(): void {
     const client = tryGetDbClient();
     if (!client) return [];
     const owner = captureBotOperationOwner();
-    await provisionDefaultBotForList(client, owner);
+    const welcomeContext = !remote && raw && typeof raw === 'object'
+      ? normalizeBotWelcomeContext((raw as Record<string, unknown>).welcomeContext) : undefined;
+    const locale = !remote && raw && typeof raw === 'object'
+      ? readBotInvitationLocale((raw as Record<string, unknown>).locale) : undefined;
+    await provisionDefaultBotForList(client, owner, welcomeContext, locale);
     const db = client.drizzle;
     // Unread accounting is opt-in: the read position lives in the renderer, so
     // a caller that has none (device-link, first boot) simply gets zeros.
@@ -1321,24 +1336,30 @@ export function registerBotIpc(): void {
     if (initial.status === 'archived') {
       throwIpcError('PRECONDITION_FAILED', '已停止的 Bot 不能修改头像');
     }
-    const owner = BrowserWindow.fromWebContents(event.sender);
-    const options: OpenDialogOptions = {
-      properties: ['openFile'],
-      filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
-    };
-    const selection = owner
-      ? await dialog.showOpenDialog(owner, options)
-      : await dialog.showOpenDialog(options);
-    ownerBoundary.assertCurrent();
-    if (selection.canceled || !selection.filePaths[0]) return { canceled: true };
+    // Gallery selections use the same bounded byte validation as creation.
+    // Omitted bytes retain the native file chooser for existing callers.
+    let image = decodeBotAvatarImage(body.avatarImageBase64);
+    if (!image) {
+      const owner = BrowserWindow.fromWebContents(event.sender);
+      const options: OpenDialogOptions = {
+        properties: ['openFile'],
+        filters: [{ name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
+      };
+      const selection = owner
+        ? await dialog.showOpenDialog(owner, options)
+        : await dialog.showOpenDialog(options);
+      ownerBoundary.assertCurrent();
+      if (selection.canceled || !selection.filePaths[0]) return { canceled: true };
 
-    let buffer: Buffer;
-    try {
-      buffer = await fs.readFile(selection.filePaths[0]);
-    } catch {
-      throwIpcError('INVALID_PARAMS', '头像文件无法读取');
+      let buffer: Buffer;
+      try {
+        buffer = await fs.readFile(selection.filePaths[0]);
+      } catch {
+        throwIpcError('INVALID_PARAMS', '头像文件无法读取');
+      }
+      image = { buffer, mimeType: validateBotAvatarBuffer(buffer) };
     }
-    const mimeType = validateBotAvatarBuffer(buffer);
+    ownerBoundary.assertCurrent();
 
     const [current] = await db.select().from(botProfiles).where(eq(botProfiles.id, botId)).limit(1);
     if (!current) throwIpcError('NOT_FOUND', 'Bot 不存在');
@@ -1361,7 +1382,7 @@ export function registerBotIpc(): void {
     // reference move together in one SQLite transaction. If the transaction
     // loses a race, the unreferenced content-addressed blob is recycler-safe.
     ownerBoundary.assertCurrent();
-    const written = await storeTeammateAvatarImage({ buffer, mimeType }, db, ownerBoundary.assertCurrent);
+    const written = await storeTeammateAvatarImage(image, db, ownerBoundary.assertCurrent);
     const now = Date.now();
     await client.tx('bots.updateProfile', {
       id: botId,

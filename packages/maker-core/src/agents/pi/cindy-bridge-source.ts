@@ -1768,6 +1768,18 @@ function commandReadsProcessEnviron(command: unknown): boolean {
   return typeof command === 'string' && PROC_ENVIRON_READ_RE.test(command);
 }
 
+function toolsDisabledForTurn(): boolean {
+  const file = process.env.CINDY_PI_PERMISSION_FILE;
+  if (!file) return false;
+  try {
+    statSync(file + '.tools-disabled');
+    return true;
+  } catch (error) {
+    // Only an absent marker authorizes the normal tool path.
+    return (error as NodeJS.ErrnoException).code !== 'ENOENT';
+  }
+}
+
 function currentPermissionState(): {
   mode: 'ask' | 'bypassPermissions';
   readOnlyRoots: string[];
@@ -3888,6 +3900,9 @@ export default async function cindyBridge(pi: any) {
 
   // ── 权限门 ────────────────────────────────────────────────────────────────
   pi.on('tool_call', async (event: any, ctx: any) => {
+    if (toolsDisabledForTurn()) {
+      return { block: true, reason: 'Tools are disabled for this host-owned text-only turn.' };
+    }
     const permission = currentPermissionState();
     if (permission.reviewOnly) {
       if (
