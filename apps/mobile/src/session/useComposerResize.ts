@@ -108,7 +108,9 @@ export function useComposerResize(input: UseComposerResizeInput) {
       'worklet';
       // The grabber itself moves with the resizing frame. Use screen coordinates
       // so its changing origin cannot feed back into the drag distance.
-      dragTranslation.value = event.absoluteY - startAbsoluteY.value;
+      dragTranslation.value = Number.isFinite(event.absoluteY)
+        ? event.absoluteY - startAbsoluteY.value
+        : event.translationY;
       dragHeight.value = applyComposerResizeDrag({ bounds: geometry.value.bounds, startContentHeight: startHeight.value, translationY: dragTranslation.value });
     })
     .onFinalize((event, successful) => {
@@ -119,7 +121,10 @@ export function useComposerResize(input: UseComposerResizeInput) {
         dragHeight.value = geometry.value.visibleHeight;
         active.value = false;
       }
-      runOnJS(finish)(dragHeight.value, startHeight.value, event.absoluteY - startAbsoluteY.value, successful, gestureId.value);
+      const translationY = Number.isFinite(event.absoluteY)
+        ? event.absoluteY - startAbsoluteY.value
+        : event.translationY;
+      runOnJS(finish)(dragHeight.value, startHeight.value, translationY, successful, gestureId.value);
     }), [active, awaitingCollapse, begin, dragHeight, dragTranslation, finish, geometry, gestureId, scrollGesture, startAbsoluteY, startHeight]);
 
   useLayoutEffect(() => {
