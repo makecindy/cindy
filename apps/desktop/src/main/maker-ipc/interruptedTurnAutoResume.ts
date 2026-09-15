@@ -28,6 +28,7 @@ import { hasUserVisibleText } from '../../shared/visibleText.js';
 import type { AgentInputToolLoopDetails } from '../../shared/agentInputQueue.js';
 
 import {
+  CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON,
   isNetworkishErrorMessage,
   isOverloadErrorMessage,
   UPSTREAM_OVERLOAD_REASON,
@@ -118,7 +119,8 @@ export function isAcceptedTurnContinuationOnlyReason(reason: unknown): boolean {
   return (
     reason === 'turn_no_event_timeout' ||
     reason === 'upstream_response_idle_timeout' ||
-    reason === 'codex_reconnect_stalled'
+    reason === 'codex_reconnect_stalled' ||
+    reason === CODEX_COMPACTION_TRANSPORT_INTERRUPTED_REASON
   );
 }
 
@@ -172,7 +174,8 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   // 续跑——两种形态都有安全动作可执行。连续空响应仍由同一份连续失败上限 / 人工介入周期
   // 硬上限 / 退避止损，预算耗尽后横幅交还用户，不会无界重试。
   //
-  // stall / idle / reconnect-stalled 也放行，但 coordinator 对它们是 **CONTINUE-only**：
+  // stall / idle / reconnect-stalled / compact transport interruption 也放行，但 coordinator
+  // 对它们是 **CONTINUE-only**：
   // 见 `isAcceptedTurnContinuationOnlyReason`。
   if (
     reason === UPSTREAM_OVERLOAD_REASON ||
