@@ -239,6 +239,20 @@ describe('forkSession', () => {
     expect(await forkSession(noMsg, { sessionId: 'a', messageId: 'm' })).toMatchObject({ errorCode: 'NOT_FOUND' });
   });
 
+  it('refuses to fork at a rewound message instead of silently anchoring earlier', async () => {
+    // fork.ts 复制历史时过滤 rewindAt 非空的行,放行会建出不含该消息的新任务。
+    const { deps } = makeDeps([row('a')], {
+      resolveMessageClientId: async () => ({ clientId: 'c1', role: 'user', text: 'x', rewound: true }),
+      forkAtMessage: async () => {
+        throw new Error('forkAtMessage must not run for a rewound anchor');
+      },
+    });
+    expect(await forkSession(deps, { sessionId: 'a', messageId: 'm' })).toMatchObject({
+      ok: false,
+      errorCode: 'PRECONDITION_FAILED',
+    });
+  });
+
   it('refuses to fork a source deleted inside the session lock', async () => {
     // forkSessionAtMessage 只校验源行存在,软删除会保留行 —— 预检通过后被并发删除时
     // 必须在锁内复核拦下,否则会从已删除任务派生出 active 子任务。

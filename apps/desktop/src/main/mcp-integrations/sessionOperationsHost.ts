@@ -155,12 +155,25 @@ export function createSessionOperationsDeps(
         : updateSessionInDb(sessionId, patch, undefined, hooks),
     resolveMessageClientId: async (sessionId, messageId) => {
       const [row] = await getDbClient()
-        .drizzle.select({ clientId: messages.clientId, role: messages.role, content: messages.content })
+        .drizzle.select({
+          clientId: messages.clientId,
+          role: messages.role,
+          content: messages.content,
+          rewindAt: messages.rewindAt,
+        })
         .from(messages)
         .where(and(eq(messages.sessionId, sessionId), eq(messages.id, messageId)))
         .limit(1);
       if (!row) return null;
-      return { clientId: row.clientId, role: row.role, text: messageTextForDraft(row.content) };
+      return {
+        clientId: row.clientId,
+        role: row.role,
+        text: messageTextForDraft(row.content),
+        // get_chat_history(include_rewound=true) 能取到已 Rewind 的消息 id,但
+        // forkSessionAtMessage 复制历史时会过滤 rewindAt 非空的行(fork.ts 的
+        // isNull(messages.rewindAt)),放行会分叉出不含该消息、锚点更早的新任务。
+        rewound: row.rewindAt != null,
+      };
     },
     forkAtMessage: async (sessionId, messageClientId) => {
       const session = await forkSessionAtMessage(sessionId, messageClientId);

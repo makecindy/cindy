@@ -72,7 +72,7 @@ export interface SessionOperationsDeps {
   resolveMessageClientId(
     sessionId: string,
     messageId: string,
-  ): Promise<{ clientId: string; role: string; text: string } | null>;
+  ): Promise<{ clientId: string; role: string; text: string; rewound?: boolean } | null>;
   /** maker-orchestration/fork 的 forkSessionAtMessage + 新会话广播。 */
   forkAtMessage(sessionId: string, messageClientId: string): Promise<{ id: string }>;
 }
@@ -251,6 +251,10 @@ async function forkSessionLocked(
 ): Promise<ForkSessionResult> {
   const target = await deps.resolveMessageClientId(row.id, messageId);
   if (!target) return err('NOT_FOUND', `消息 ${messageId} 不存在于 ${row.id}`);
+  // 已 Rewind 的消息不会被复制进新任务,分叉会静默锚到更早的 turn —— 明确拒绝而不是假成功。
+  if (target.rewound) {
+    return err('PRECONDITION_FAILED', `消息 ${messageId} 已被 Rewind,不能作为分叉点`);
+  }
   let forkedId: string;
   try {
     forkedId = (await deps.forkAtMessage(row.id, target.clientId)).id;
