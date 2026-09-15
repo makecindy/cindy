@@ -131,11 +131,11 @@ it('records final usage and appends the next turn on a continuous generation tim
   const next = recordRunningTokenRate(newTurn, {
     ...input,
     startedAt: 2,
-    outputTokens: 20,
-    generationDurationMs: 500,
+    outputTokens: 40,
+    generationDurationMs: 1000,
   });
   expect(next.samples.map((sample) => sample.rate)).toEqual([100, 50, 40]);
-  expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000, 2000, 2500]);
+  expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000, 2000, 3000]);
   expect(next.latestRate).toBe(40);
 });
 
@@ -164,5 +164,125 @@ it('retains the chart while hidden or unreliable, then measures only new paired 
     generationDurationMs: 11000,
   });
   expect(next.samples.map((sample) => sample.rate)).toEqual([100, 50]);
+  expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000, 2000]);
+});
+
+it('does not publish the 21 tokens / 1 ms spike, including at completion', () => {
+  const first = recordRunningTokenRate(emptyRateHistory(null), {
+    ...input,
+    outputTokens: 3879,
+    generationDurationMs: 102361,
+  });
+  const correction = recordRunningTokenRate(first, {
+    ...input,
+    outputTokens: 3900,
+    generationDurationMs: 102362,
+  });
+  expect(correction.samples).toEqual([]);
+  expect(correction.peak).toBe(0);
+  const terminal = recordRunningTokenRate(correction, {
+    ...input,
+    startedAt: null,
+    outputTokens: 3900,
+    generationDurationMs: 102362,
+  });
+  expect(terminal.samples).toEqual([]);
+  expect(terminal.peak).toBe(0);
+});
+
+it('accumulates frequent reports into a full window without losing tokens', () => {
+  let history = begin();
+  for (let n = 1; n < 10; n++) {
+    history = recordRunningTokenRate(history, {
+      ...input,
+      outputTokens: n * 10,
+      generationDurationMs: n * 100,
+    });
+    expect(history.samples).toEqual([]);
+  }
+  history = recordRunningTokenRate(history, {
+    ...input,
+    outputTokens: 100,
+    generationDurationMs: 1000,
+  });
+  expect(history.samples.map((sample) => sample.rate)).toEqual([100]);
+  const pending = recordRunningTokenRate(history, {
+    ...input,
+    outputTokens: 121,
+    generationDurationMs: 1001,
+  });
+  expect(pending.samples).toEqual(history.samples);
+  expect(pending.peak).toBe(100);
+  const next = recordRunningTokenRate(pending, {
+    ...input,
+    outputTokens: 150,
+    generationDurationMs: 2000,
+  });
+  expect(next.samples.map((sample) => sample.rate)).toEqual([100, 50]);
+  expect(next.peak).toBe(100);
+});
+
+it('does not consume generation time before the matching output arrives', () => {
+  const first = recordRunningTokenRate(begin(), {
+    ...input,
+    outputTokens: 100,
+    generationDurationMs: 1000,
+  });
+  const timeOnly = recordRunningTokenRate(first, {
+    ...input,
+    outputTokens: 100,
+    generationDurationMs: 2999,
+  });
+  expect(timeOnly.samples).toEqual(first.samples);
+  const output = recordRunningTokenRate(timeOnly, {
+    ...input,
+    outputTokens: 200,
+    generationDurationMs: 3000,
+  });
+  expect(output.samples.map((sample) => sample.rate)).toEqual([100, 50]);
+  expect(output.peak).toBe(100);
+});
+
+it('detects a counter rollback within an unfinished sampling window', () => {
+  const pending = recordRunningTokenRate(begin(), {
+    ...input,
+    outputTokens: 90,
+    generationDurationMs: 900,
+  });
+  const reset = recordRunningTokenRate(pending, {
+    ...input,
+    outputTokens: 50,
+    generationDurationMs: 500,
+  });
+  expect(reset.samples).toEqual([]);
+  const next = recordRunningTokenRate(reset, {
+    ...input,
+    outputTokens: 100,
+    generationDurationMs: 1500,
+  });
+  expect(next.samples.map((sample) => sample.rate)).toEqual([50]);
+});
+
+it('re-establishes the same report after reliability returns and preserves completed history', () => {
+  const report = { ...input, outputTokens: 100, generationDurationMs: 1000 };
+  const active = recordRunningTokenRate(begin(), report);
+  const hidden = recordRunningTokenRate(active, { ...report, generationReliable: false });
+  expect(hidden.lastReport).toBeNull();
+  const resumed = recordRunningTokenRate(hidden, report);
+  expect(resumed.baseline).toEqual(active.baseline);
+  const short = recordRunningTokenRate(resumed, {
+    ...report,
+    outputTokens: 121,
+    generationDurationMs: 1001,
+  });
+  expect(short.latestRate).toBeNull();
+  expect(short.samples).toEqual(active.samples);
+  expect(short.peak).toBe(100);
+  const next = recordRunningTokenRate(short, {
+    ...report,
+    outputTokens: 150,
+    generationDurationMs: 2000,
+  });
+  expect(next.latestRate).toBe(50);
   expect(next.samples.map((sample) => sample.durationMs)).toEqual([1000, 2000]);
 });
