@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Eye, EyeOff, Trash2, Check, RefreshCw } from 'lucide-react';
+import { Eye, EyeOff, Trash2, Check, RefreshCw, FolderOpen } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useFeishuBot, type FeishuBotService, type FeishuBotStatus } from '@/hooks/useFeishuBot';
@@ -80,6 +80,10 @@ export function FeishuBotSection({
     save,
     reconnect,
     clear,
+    channelSettings,
+    isUpdatingWorkingDir,
+    chooseWorkingDirectory,
+    resetWorkingDirectory,
   } = useFeishuBot();
 
   const [showSecret, setShowSecret] = useState(false);
@@ -154,6 +158,13 @@ export function FeishuBotSection({
     >
       <ImDefaultSettingsSection channel="feishu" embedded onSummaryChange={setRouteSummary} />
       <div className="h-px w-full bg-[var(--border-default)]" />
+      <FeishuWorkingDirectory
+        settings={channelSettings}
+        pending={isUpdatingWorkingDir}
+        onChoose={() => void chooseWorkingDirectory()}
+        onReset={() => void resetWorkingDirectory()}
+      />
+      <div className="h-px w-full bg-[var(--border-default)]" />
       {showSavedCredentialsCard ? (
         <SavedCredentialsCard
           appId={appId}
@@ -191,6 +202,66 @@ export function FeishuBotSection({
         </>
       )}
     </ImChannelSettingsCard>
+  );
+}
+
+function FeishuWorkingDirectory({
+  settings,
+  pending,
+  onChoose,
+  onReset,
+}: {
+  settings: FeishuChannelSettingsState | null;
+  pending: boolean;
+  onChoose: () => void;
+  onReset: () => void;
+}) {
+  const { t } = useTranslation();
+  const configured = settings?.workingDir ?? null;
+  return (
+    <section className="flex flex-col gap-3" aria-label={t('settings.feishuBot.workingDir.title')}>
+      <div>
+        <h3 className="text-13 font-medium text-[var(--settings-section-title)]">
+          {t('settings.feishuBot.workingDir.title')}
+        </h3>
+        <p className="mt-1 text-12 leading-[1.55] text-[var(--settings-section-desc)]">
+          {t('settings.feishuBot.workingDir.hint')}
+        </p>
+      </div>
+      <div className="flex min-w-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={onChoose}
+          disabled={pending}
+          className={cn(
+            'flex h-10 min-w-0 flex-1 items-center gap-2 rounded-full px-3 text-left',
+            'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
+            'text-12 text-[var(--settings-input-text)]',
+            pending && 'cursor-not-allowed opacity-50',
+          )}
+        >
+          <FolderOpen size={15} className="shrink-0 text-[var(--text-tertiary)]" />
+          <span className="truncate" title={configured ?? undefined} dir="auto">
+            {configured ?? t('settings.feishuBot.workingDir.managed')}
+          </span>
+        </button>
+        {configured && (
+          <button
+            type="button"
+            onClick={onReset}
+            disabled={pending}
+            className="h-10 shrink-0 rounded-full border border-[var(--settings-btn-secondary-border)] bg-[var(--settings-btn-secondary-bg)] px-4 text-12 font-medium text-[var(--settings-btn-secondary-text)] disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {t('settings.feishuBot.workingDir.reset')}
+          </button>
+        )}
+      </div>
+      {settings && !settings.workingDirAvailable && (
+        <p className="text-12 text-[var(--settings-error-text)]" role="alert">
+          {t('settings.feishuBot.workingDir.unavailable')}
+        </p>
+      )}
+    </section>
   );
 }
 
