@@ -406,9 +406,7 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                       >
                         {row.quotaLabel}
                       </Text>
-                    ) : (
-                      false
-                    )
+                    ) : null
                   }
                   leading={
                     <RNHostView matchContents>
