@@ -3355,6 +3355,103 @@ describe('内置 chat 伪目录的清单注入', () => {
   });
 });
 
+describe('Slack 本机通讯与 Bot 设备分离', () => {
+  function communicationsHarness(features = ['slack-tools', 'multi-team', 'slack-communications']) {
+    const frames: HookMessage[] = [];
+    const transports: HookTransportOpts[] = [];
+    const manager = makeManager(memoryStore({ url: 'wss://hook.example.test' }), {
+      createTransport: (opts) => {
+        transports.push(opts);
+        return { send: (msg) => { frames.push(msg); return true; }, dispose: () => {} };
+      },
+    });
+    cleanups.push(() => manager.dispose());
+    manager.sync();
+    const opts = transports[0];
+    opts.onWelcome?.({ serverName: 'mock', features });
+    opts.onStatus('connected', null);
+    const receive = (msg: HookMessage) => opts.onMessage(msg, () => true);
+    return { manager, frames, receive };
+  }
+  const row = { teamId: 'T1', teamName: 'Workspace', slackUserId: 'U1', slackUserName: 'tester' };
+
+  it('权威快照恢复被顶设备通讯；关闭再开启只发通讯请求，不发换绑', async () => {
+    const { manager, frames, receive } = communicationsHarness();
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: true }] }));
+    expect(manager.snapshot().bindings).toEqual([expect.objectContaining({ displaced: true, communicationsEnabled: true })]);
+    expect(manager.getSlackToolAvailability().bound).toBe(true);
+    manager.setProviderEnabled('slack', true); // 重复开启总连接也不能发起 Bot 授权。
+    const off = manager.setSlackCommunications('T1', false);
+    const request = frames.at(-1)!;
+    expect(request).toMatchObject({ type: 'tool.request', payload: { tool: 'communications.set', teamId: 'T1', args: { enabled: false } } });
+    if (request.type !== 'tool.request') throw new Error('unreachable');
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: false }] }));
+    receive(makeToolResponse({ replyTo: request.payload.requestId, ok: true, result: { enabled: false } }));
+    expect((await off).ok).toBe(true);
+    expect(manager.getSlackToolAvailability().bound).toBe(false);
+    const on = manager.setSlackCommunications('T1', true);
+    const enable = frames.at(-1)!;
+    if (enable.type !== 'tool.request') throw new Error('unreachable');
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: true }] }));
+    receive(makeToolResponse({ replyTo: enable.payload.requestId, ok: true, result: { enabled: true } }));
+    expect((await on).ok).toBe(true);
+    expect(manager.getSlackToolAvailability().bound).toBe(true);
+    expect(frames.some((f) => f.type === 'bind.start' || f.type === 'bind.revoke')).toBe(false);
+    receive(makeBindState({ bindings: [], communications: [] }));
+    expect(manager.getSlackToolAvailability().bound).toBe(false);
+  });
+
+  it('存量被顶设备需重新 OAuth 时显式只授权通讯，confirmed 不恢复 Bot 绑定', async () => {
+    const { manager, frames, receive } = communicationsHarness();
+    receive(makeBindState({ bindings: [row], communications: [] }));
+    receive(makeBindState({ bindings: [], communications: [] }));
+    const enable = manager.setSlackCommunications('T1', true);
+    const request = frames.at(-1)!;
+    if (request.type !== 'tool.request') throw new Error('unreachable');
+    receive(makeToolResponse({ replyTo: request.payload.requestId, ok: false, error: { code: 'NOT_BOUND', message: 'no grant' } }));
+    expect((await enable).ok).toBe(true);
+    expect(frames.at(-1)).toMatchObject({ type: 'bind.start', payload: { teamId: 'T1', purpose: 'communications' } });
+    receive(makeBindUpdate({ state: 'pending', purpose: 'communications', authorizeUrl: 'https://example.test/oauth', slackUserId: null, slackUserName: null, message: null }));
+    expect(manager.snapshot().pendingBind?.purpose).toBe('communications');
+    receive(makeBindUpdate({ ...row, state: 'confirmed', purpose: 'communications', message: null }));
+    expect(manager.snapshot().bindings[0].displaced).toBe(true);
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: true }] }));
+    expect(manager.getSlackToolAvailability().bound).toBe(true);
+  });
+
+  it('迟到的删除回包不能移除已经恢复的 Bot 接收行', async () => {
+    const { manager, frames, receive } = communicationsHarness();
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: true }] }));
+    const removal = manager.revokeTeam('T1');
+    const request = frames.at(-1)!;
+    if (request.type !== 'tool.request') throw new Error('unreachable');
+    receive(makeBindState({ bindings: [row], communications: [{ ...row, enabled: true }] }));
+    receive(makeToolResponse({ replyTo: request.payload.requestId, ok: true, result: { removed: true } }));
+    expect(await removal).toBe(true);
+    expect(manager.snapshot().bindings[0]).toMatchObject({ ...row, displaced: false });
+  });
+
+  it('旧身份的迟到失败不能给新身份打开 OAuth', async () => {
+    const { manager, frames, receive } = communicationsHarness();
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: false }] }));
+    const enabling = manager.setSlackCommunications('T1', true);
+    const request = frames.at(-1)!;
+    if (request.type !== 'tool.request') throw new Error('unreachable');
+    receive(makeBindState({ bindings: [], communications: [{ ...row, slackUserId: 'U2', enabled: true }] }));
+    receive(makeToolResponse({ replyTo: request.payload.requestId, ok: false, error: { code: 'NOT_BOUND', message: 'changed' } }));
+    expect((await enabling).ok).toBe(false);
+    expect(frames.some((f) => f.type === 'bind.start')).toBe(false);
+  });
+
+  it('旧 server 不可开启通讯模式，也不相信多余的通讯快照字段', async () => {
+    const { manager, frames, receive } = communicationsHarness(['slack-tools', 'multi-team']);
+    receive(makeBindState({ bindings: [], communications: [{ ...row, enabled: true }] }));
+    expect(manager.getSlackToolAvailability().bound).toBe(false);
+    expect(await manager.setSlackCommunications('T1', true)).toMatchObject({ ok: false, error: { code: 'SERVER_TOO_OLD' } });
+    expect(frames.some((f) => f.type === 'bind.start')).toBe(false);
+  });
+});
+
 describe('Slack 网关工具代理(tool.request/tool.response)', () => {
   /** 建连 -> welcome(带/不带 slack-tools)-> 绑定 confirmed 的通用起手。 */
   async function connectWithTools(opts: {
