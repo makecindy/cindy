@@ -485,12 +485,14 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
      * `null` = 这一维没有同引擎实时通道(引擎编辑),直接走下面两条链路。
      */
     live: (() => Promise<boolean>) | null;
+    rollback?: () => void | Promise<void>;
     /** 落收藏 store 的这次编辑。 */
     commit: () => void | Promise<void>;
   }): ActionResult => {
     if (args.live && isLiveRow(args.entry, args.config)) {
       return args.live().then((applied) => {
         if (applied) return args.commit();
+        if (args.rollback) return args.rollback();
       });
     }
     const wireModelId = args.target.wireModelId ?? args.anchor.modelId;
@@ -649,6 +651,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 只动深度这一格,引擎 / wire id / Fast 沿用这条收藏当前的解析结果。
         target: { ...config, effort },
         live: () => runLive(() => onEffortChangeLive(effort)),
+        rollback: async () => { await onEffortChangeLive(config.effort ?? ''); },
         commit,
       });
     }
@@ -697,6 +700,7 @@ export function useUnifiedRowActions(options: UnifiedRowActionsOptions): Unified
         // 只动 Fast 这一格。
         target: { ...config, fast: enabled },
         live: () => runLive(() => onFastModeChangeLive(enabled)),
+        rollback: async () => { await onFastModeChangeLive(config.fast ?? false); },
         commit,
       });
     }

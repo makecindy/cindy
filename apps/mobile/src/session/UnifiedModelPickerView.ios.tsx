@@ -397,16 +397,26 @@ export function UnifiedModelPickerView(p: UnifiedMobilePickerViewProps) {
                     </HStack>
                   }
                   subtitleContent={
-                    row.quotaLabel ? (
+                    <VStack alignment="leading" spacing={2}>
                       <Text
                         modifiers={[
                           font({ textStyle: "caption" }),
                           foregroundStyle(colors.textSecondary),
                         ]}
                       >
-                        {row.quotaLabel}
+                        {row.subtitle}
                       </Text>
-                    ) : null
+                      {row.quotaLabel ? (
+                        <Text
+                          modifiers={[
+                            font({ textStyle: "caption2" }),
+                            foregroundStyle(colors.textTertiary),
+                          ]}
+                        >
+                          {row.quotaLabel}
+                        </Text>
+                      ) : null}
+                    </VStack>
                   }
                   leading={
                     <RNHostView matchContents>
