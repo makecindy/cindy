@@ -880,6 +880,7 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     // A long-lived Terminal can retain a previous smoke run's environment.
     // Override its value even when this invocation did not request the smoke.
     ['CINDY_CUA_SMOKE', env.CINDY_CUA_SMOKE === '1' ? '1' : '0'],
+    ['CINDY_PASSPORT_BLE', env.CINDY_PASSPORT_BLE === '1' ? '1' : '0'],
     // 一次性 Grok wire 归因探针(dev-only;正常环境不设置,不产生额外日志)。
     ['XDT_WIRE_DIAGNOSTICS', env.XDT_WIRE_DIAGNOSTICS],
     // 一次性 Grok strict tool spike(dev-only;必须与 wire probe 一起显式开启)。

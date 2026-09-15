@@ -1944,6 +1944,8 @@ interface ElectronAPI {
     ) => () => void;
   };
 
+  passport: import('../shared/passport').PassportApi;
+
   xboxGamepad: {
     getState: () => Promise<import('../shared/xboxGamepad').GamepadAccessoriesState>;
     setSettings: (

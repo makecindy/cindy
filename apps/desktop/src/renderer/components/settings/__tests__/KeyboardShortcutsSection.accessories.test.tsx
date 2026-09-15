@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -142,6 +142,7 @@ describe('KeyboardShortcutsSection accessories', () => {
       configurable: true,
       value: {
         onAuthStateChange: vi.fn(() => () => {}),
+        passport: { getState: vi.fn(async () => ({ enabled: false, supported: true, connected: false, devices: [], voice: 'idle', bluetooth: 5 })) },
       },
     });
   });
@@ -150,7 +151,7 @@ describe('KeyboardShortcutsSection accessories', () => {
     Reflect.deleteProperty(window, 'electronAPI');
   });
 
-  it('keeps undetected hardware behind a single Accessories entry', () => {
+  it('keeps undetected hardware behind a single Accessories entry', async () => {
     render(<KeyboardShortcutsSection />);
 
     expect(screen.getByTestId('settings-shortcuts-accessories')).toBeTruthy();
@@ -158,7 +159,7 @@ describe('KeyboardShortcutsSection accessories', () => {
     expect(screen.queryByRole('button', { name: WORKLOUDER_OPEN['creator-micro-2'] })).toBeNull();
     expect(screen.queryByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' })); });
     expect(screen.getByRole('button', { name: WORKLOUDER_OPEN['codex-micro'] })).toBeTruthy();
     expect(screen.getByRole('button', { name: WORKLOUDER_OPEN['creator-micro-2'] })).toBeTruthy();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
@@ -167,7 +168,7 @@ describe('KeyboardShortcutsSection accessories', () => {
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.generic })).toBeTruthy();
   });
 
-  it('shows a detected device here and still lists it inside Accessories', () => {
+  it('shows a detected device here and still lists it inside Accessories', async () => {
     mocks.present.xbox = true;
     render(<KeyboardShortcutsSection />);
 
@@ -175,7 +176,7 @@ describe('KeyboardShortcutsSection accessories', () => {
     expect(screen.queryByRole('button', { name: WORKLOUDER_OPEN['codex-micro'] })).toBeNull();
     expect(screen.queryByRole('button', { name: WORKLOUDER_OPEN['creator-micro-2'] })).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' }));
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'settings.shortcuts.accessories.openAria' })); });
     expect(screen.getByRole('button', { name: WORKLOUDER_OPEN['codex-micro'] })).toBeTruthy();
     expect(screen.getByRole('button', { name: WORKLOUDER_OPEN['creator-micro-2'] })).toBeTruthy();
     expect(screen.getByRole('button', { name: GAMEPAD_OPEN.xbox })).toBeTruthy();
