@@ -66,6 +66,8 @@ function trackingSqlite() {
 }
 
 describe('MakerMemoryManager · owner scope guard (#2341)', () => {
+  // Windows runner: dispose + reopen SQLite then copy legacy Bot Home files can
+  // exceed the default 5s when Defender holds the just-closed db.
   it('keeps an independent Bot store available in Bot Home and copies legacy data', async () => {
     const botScope = buildBotMemoryScopeKey('bot-a');
     const legacyManager = new MakerMemoryManager({
@@ -110,7 +112,7 @@ describe('MakerMemoryManager · owner scope guard (#2341)', () => {
     expect(existsSync(path.join(rootA, 'maker-memory', memoryScopeDirName(botScope)))).toBe(true);
     expect(manager.getState()).toEqual({ enabled: false, activeWorkdirs: [] });
     manager.dispose();
-  });
+  }, 20_000);
 
   it('global reset leaves an open Bot store and its Home memory intact', async () => {
     const botScope = buildBotMemoryScopeKey('bot-a');

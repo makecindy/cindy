@@ -996,6 +996,10 @@
       "light": "semantic.defaults.engine-badge-pi.light",
       "dark": "semantic.defaults.engine-badge-pi.dark"
     },
+    "engine-badge-grok-build": {
+      "light": "semantic.defaults.engine-badge-grok-build.light",
+      "dark": "semantic.defaults.engine-badge-grok-build.dark"
+    },
     "perm-item-selected-bg": {
       "light": "semantic.defaults.perm-item-selected-bg.light",
       "dark": "semantic.defaults.perm-item-selected-bg.dark"

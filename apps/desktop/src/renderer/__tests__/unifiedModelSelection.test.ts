@@ -502,8 +502,8 @@ describe('会话内形态(同引擎过滤 / pinnedEngine)', () => {
   describe('同引擎视图:生效引擎是排序优先级,不是隐藏条件', () => {
     /** 注入侧的真实形态:调用方给的是 resolveUnifiedRowConfig / resolveFavoriteRowConfig 的 engine。 */
     const engineOfRow = (
-      overrides: Record<string, 'cc' | 'codex' | 'pi'> = {},
-      pinnedEngine: 'cc' | 'codex' | 'pi' = 'cc',
+      overrides: Record<string, 'cc' | 'codex' | 'pi' | 'grok-build'> = {},
+      pinnedEngine: 'cc' | 'codex' | 'pi' | 'grok-build' = 'cc',
     ) => (entry: UnifiedModelEntry, favorite?: ModelFavoriteItem) =>
       favorite
         ? resolveFavoriteRowConfig({ entry, item: favorite }).engine
@@ -743,8 +743,28 @@ describe('buildUnifiedRail', () => {
       { kind: 'all' },
       { kind: 'provider', providerId: 'xd' },
     ]);
-    // 草稿场景不出现这一格。
+    // 草稿场景、且没有 grok-build 行时不出现引擎格。
     expect(buildUnifiedRail(entries).some((item) => item.kind === 'engine')).toBe(false);
+  });
+
+  it('Grok catalog rows with a grok-build chip expose the harness engine rail, not a grok-build provider', () => {
+    const entries = [
+      entryOf({
+        providerId: 'xai',
+        modelId: 'grok-4.6',
+        candidates: ['claude-code', 'codex', 'pi', 'grok-build'],
+        recommended: 'claude-code',
+      }),
+    ];
+    expect(buildUnifiedRail(entries)).toEqual([
+      { kind: 'favorites' },
+      { kind: 'engine', agent: 'grok-build' },
+      { kind: 'all' },
+      { kind: 'provider', providerId: 'xai' },
+    ]);
+    expect(buildUnifiedRail(entries).some((item) => item.kind === 'provider' && item.providerId === 'grok-build')).toBe(
+      false,
+    );
   });
 
   it('传 providerOrder 时供应商图标按设置页拖动序排,未收录供应商按首见序追加', () => {

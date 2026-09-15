@@ -2,8 +2,9 @@ import { createPortal } from 'react-dom';
 import { useEffect, useState, type ReactNode, type RefObject } from 'react';
 import { DismissableLayer, DismissableLayerBranch } from '@radix-ui/react-dismissable-layer';
 
-import type { ProviderView } from '@cindy/model-providers';
+import { GROK_BUILD_HARNESS_PROVIDER_ID, type ProviderView } from '@cindy/model-providers';
 
+import { GrokBuildMark } from '@/components/icons/GrokBuildMark';
 import { WINDOW_NO_DRAG_STYLE } from '@/components/layout/windowDrag';
 import { cn } from '@/lib/utils';
 
@@ -24,6 +25,9 @@ export function ProviderRailMark({
   providerId: string;
   providers: readonly ProviderView[];
 }) {
+  if (providerId === GROK_BUILD_HARNESS_PROVIDER_ID) {
+    return <GrokBuildMark size={14} className="shrink-0" />;
+  }
   const provider = providers.find((entry) => entry.id === providerId);
   return (
     <ProviderMark

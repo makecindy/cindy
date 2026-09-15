@@ -31,7 +31,12 @@ import { describe, expect, it, vi } from 'vitest';
 
 import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { AGENT_OPTIONS } from '@/components/new-chat/agentOptions';
-import { SELECTABLE_VENDORS, isSelectableVendor } from '@/lib/agentVendors';
+import {
+  SELECTABLE_AGENT_KINDS,
+  SELECTABLE_VENDORS,
+  agentKindOfVendor,
+  isSelectableVendor,
+} from '@/lib/agentVendors';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -103,6 +108,7 @@ describe('AgentSelect', () => {
     const options = screen.getAllByRole('option');
     expect(options).toHaveLength(AGENT_OPTIONS.length);
     expect(options.map((o) => o.textContent)).toEqual(AGENT_OPTIONS.map((o) => o.label));
+    expect(options.map((o) => o.textContent)).toContain('Grok Build');
 
     const selected = options.filter((o) => o.getAttribute('aria-selected') === 'true');
     expect(selected).toHaveLength(1);
@@ -429,5 +435,10 @@ describe('引擎选项表(单一来源)', () => {
     for (const v of ['orca', '', 'claude-code', 42, null, undefined]) {
       expect(isSelectableVendor(v)).toBe(false);
     }
+  });
+
+  it('SELECTABLE_AGENT_KINDS 是 SELECTABLE_VENDORS 的 AgentKind 投影且含 grok-build', () => {
+    expect(SELECTABLE_AGENT_KINDS).toEqual(['claude-code', 'codex', 'pi', 'grok-build']);
+    expect([...SELECTABLE_AGENT_KINDS]).toEqual(SELECTABLE_VENDORS.map(agentKindOfVendor));
   });
 });

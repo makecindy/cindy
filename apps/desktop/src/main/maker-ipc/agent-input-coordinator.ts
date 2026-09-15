@@ -25,6 +25,7 @@ import { AUTO_REVIEW_SOURCE_CONTENT, AUTO_REVIEW_USER_INTENT } from '@cindy/make
  * 它只提交 intent payload；排序、投递模式、回滚和持久化由本模块决定。
  */
 
+import type { AgentKind } from '@cindy/maker-core';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
@@ -325,7 +326,8 @@ export interface AgentInputCoordinatorDeps {
    */
   reconcileTurnIdle?: (sessionId: string) => boolean;
   hasPendingInteraction: (sessionId: string) => boolean;
-  getAgentKind: (sessionId: string) => AgentInputCreateOpts['agentKind'] | null;
+  /** 活跃 session 的 agent;读的是实时会话,可能是队列 createOpts 之外的 agent。 */
+  getAgentKind: (sessionId: string) => AgentKind | null;
   getSdkSessionId: (sessionId: string) => Promise<string | undefined>;
   /** Read a bounded, durable progress snapshot before a retry is re-enqueued. */
   getRecoveryContextSnapshot?: (
@@ -5505,7 +5507,7 @@ export class AgentInputCoordinator {
       return;
     }
 
-    let agentKind: AgentInputCreateOpts['agentKind'] | null = null;
+    let agentKind: AgentKind | null = null;
     try {
       agentKind = this.deps.getAgentKind(sessionId);
     } catch (err) {

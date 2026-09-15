@@ -5890,7 +5890,7 @@ function formatTokenCount(n: number): string {
  */
 function getModelContextWindow(
   model: string,
-  vendorKey: 'cc' | 'codex' | 'pi',
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build',
   deviceId?: string,
 ): number | undefined {
   const found = getModelsForVendor(vendorKey, deviceId).find((m) => m.id === model);
@@ -5914,7 +5914,7 @@ function ContextCapacityRing({
   providerId?: string | null;
   contextTokens: number;
   model: string;
-  vendorKey: 'cc' | 'codex' | 'pi';
+  vendorKey: 'cc' | 'codex' | 'pi' | 'grok-build';
   /** SDK-reported context window; 0 = not yet known → use hardcoded fallback. */
   sdkContextWindow: number;
   verifiedContextWindow?: number | null;

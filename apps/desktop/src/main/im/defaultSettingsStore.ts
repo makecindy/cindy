@@ -10,6 +10,7 @@ import path from 'node:path';
 import { app } from 'electron';
 
 import {
+  IM_DEFAULT_AGENT_KINDS,
   IM_DEFAULT_SETTINGS,
   IM_DEFAULT_SETTINGS_CHANNELS,
   type ImDefaultAgentKind,
@@ -80,6 +81,10 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
       pi: normalizeAgentSettings(
         'pi',
         rawAgentOrLegacy(rawAgents, 'pi', agentKind, legacySettings),
+      ),
+      'grok-build': normalizeAgentSettings(
+        'grok-build',
+        rawAgentOrLegacy(rawAgents, 'grok-build', agentKind, legacySettings),
       ),
     },
   };
@@ -348,9 +353,10 @@ function settingsOverrides(
     overrides.groupPermissionMode = value.groupPermissionMode;
   }
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings>> = {};
-  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
-    if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
-      agents[agentKind] = value.agents[agentKind];
+  for (const agentKind of IM_DEFAULT_AGENT_KINDS) {
+    const current = value.agents[agentKind] ?? defaults.agents[agentKind];
+    if (!agentSettingsEqual(current, defaults.agents[agentKind])) {
+      agents[agentKind] = current;
     }
   }
   if (Object.keys(agents).length > 0) overrides.agents = agents;
@@ -364,8 +370,9 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   if (value.groupPermissionMode !== defaults.groupPermissionMode) {
     keys.push('groupPermissionMode');
   }
-  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
-    if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
+  for (const agentKind of IM_DEFAULT_AGENT_KINDS) {
+    const current = value.agents[agentKind] ?? defaults.agents[agentKind];
+    if (!agentSettingsEqual(current, defaults.agents[agentKind])) {
       keys.push(`agents.${agentKind}`);
     }
   }
@@ -385,6 +392,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },
       pi: { ...settings.agents.pi },
+      'grok-build': { ...settings.agents['grok-build'] },
     },
   };
 }

@@ -68,6 +68,7 @@ import {
   XAI_MODEL_PREFIX,
   groupOf,
   isBudgetModel,
+  isExclusiveXaiModelId,
 } from './classification.js';
 import type { AgentKind, CatalogModel, Effort, PiModelApi, Provider } from './types.js';
 
@@ -79,6 +80,39 @@ import type { AgentKind, CatalogModel, Effort, PiModelApi, Provider } from './ty
  * `AGENT_ORDER` 一致 —— 三处同序不是巧合:cc 是覆盖面最广的运行时,pi 是通用兜底。
  */
 export const UNIFIED_AGENT_PRIORITY: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
+
+/** Grok Build 是 harness,不是目录供应商 / 模型行。legacy favorite 的 providerId 仍可能是这个值。 */
+export const GROK_BUILD_HARNESS_PROVIDER_ID = 'grok-build';
+/** @deprecated sentinel only — not a catalog model. startSession still accepts it as "no -m". */
+export const GROK_BUILD_HARNESS_MODEL_ID = 'grok-build';
+
+/** Grok Build hosted loop 用裸 slug(`grok-4.6`),不是 SuperGrok 的 `xai/grok-4.6`。 */
+export function grokBuildCliModelId(modelId: string): string {
+  return modelId.startsWith(XAI_MODEL_PREFIX) ? modelId.slice(XAI_MODEL_PREFIX.length) : modelId;
+}
+
+/**
+ * 把 Grok Build 接到已有的 Grok 目录行上:同一行多出第四个引擎芯片,
+ * wire id 是 hosted loop 能吃的裸 slug。推荐引擎不改(仍是目录里原来的 cc/codex/pi)。
+ */
+export function attachGrokBuildHarnessToGrokEntries(entries: UnifiedModelEntry[]): void {
+  for (const entry of entries) {
+    if (!isExclusiveXaiModelId(entry.modelId)) continue;
+    if (entry.candidates.includes('grok-build')) continue;
+    const baseline = entry.capabilities[entry.recommended];
+    entry.candidates.push('grok-build');
+    entry.capabilities['grok-build'] = {
+      agent: 'grok-build',
+      wireModelId: grokBuildCliModelId(entry.modelId),
+      efforts: [],
+      defaultEffort: null,
+      defaultEffortSource: 'none',
+      supportsFastMode: false,
+      contextWindow: baseline?.contextWindow ?? 0,
+      contextWindowVerified: baseline?.contextWindowVerified ?? false,
+    };
+  }
+}
 
 /**
  * 已有协议或原生底座暂不可用时，保留历史兼容回落序。
@@ -825,6 +859,10 @@ export function unifiedModelEntries(opts: UnifiedModelEntriesOptions): UnifiedMo
       nativeAgent: nativeAgentForProviderModel(provider, draft.keyModelId),
       capabilities,
     });
+  }
+  // Grok Build 是第四个 harness 芯片,不是目录里的一种模型。只把芯片挂到独占 Grok 行上。
+  if (agents?.includes('grok-build')) {
+    attachGrokBuildHarnessToGrokEntries(out);
   }
   return out;
 }

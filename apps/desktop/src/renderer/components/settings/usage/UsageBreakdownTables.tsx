@@ -20,6 +20,7 @@ import { usageHistoryAgentColor, usageHistoryModelColor } from './usageHistoryCo
 import { formatUsagePercent } from './formatUsagePercent';
 
 const UNKNOWN_VALUE = '—';
+
 const TH_CLASS =
   'whitespace-nowrap border-b border-[var(--border-default)] pb-2 pl-3 text-right text-12 font-medium text-[var(--text-secondary)]';
 const TD_CLASS =

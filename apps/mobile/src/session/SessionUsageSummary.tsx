@@ -16,6 +16,7 @@ import {
   spacing,
   typeScale,
 } from "@/theme/tokens";
+import { mobileAgentLabelFromUnknown } from "./sessionAgentSwitch";
 import type { RemoteSession } from "./types";
 import type { useSessionMenuUsage } from "./useSessionMenuUsage";
 import {
@@ -49,8 +50,7 @@ export function SessionUsageSummary({
     source !== "api" &&
     source !== "unavailable"
       ? t(`session.menu.usage.source.${source}`)
-      : (session.providerId ??
-        { cc: "Claude Code", codex: "Codex", pi: "Pi" }[session.agentKind]);
+      : (session.providerId ?? mobileAgentLabelFromUnknown(session.agentKind));
   // Overall and model-specific limits both constrain the task; never hide an exhausted one.
   const rows = accountUsageRows(account, t, i18n.language);
   const rawContext =

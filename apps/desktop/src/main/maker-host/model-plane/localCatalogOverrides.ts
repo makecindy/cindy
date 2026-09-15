@@ -241,11 +241,11 @@ function sanitizeEntry(raw: unknown): ModelCatalogOverrideEntry | null {
       if (
         !Array.isArray(v) ||
         v.length === 0 ||
-        v.some((a) => a !== 'claude-code' && a !== 'codex' && a !== 'pi') ||
+        v.some((a) => a !== 'claude-code' && a !== 'codex' && a !== 'pi' && a !== 'grok-build') ||
         new Set(v).size !== v.length
       )
         return null;
-      out.agents = v as RootAgentKind[];
+      out.agents = v as AgentKind[];
     } else if (k === 'base') {
       const fields = sanitizeFields(v);
       if (!fields) return null;
@@ -254,7 +254,7 @@ function sanitizeEntry(raw: unknown): ModelCatalogOverrideEntry | null {
       if (!isPlainObject(v)) return null;
       const perAgent: ModelCatalogOverrideEntry['perAgent'] = {};
       for (const [agent, fields] of Object.entries(v)) {
-        if (agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi') return null;
+        if (agent !== 'claude-code' && agent !== 'codex' && agent !== 'pi' && agent !== 'grok-build') return null;
         const sanitized = sanitizeFields(fields, 'perAgent');
         if (!sanitized) return null;
         perAgent[agent] = sanitized;
@@ -264,7 +264,7 @@ function sanitizeEntry(raw: unknown): ModelCatalogOverrideEntry | null {
       return null;
     }
   }
-  const perAgentKeys = Object.keys(out.perAgent ?? {}) as RootAgentKind[];
+  const perAgentKeys = Object.keys(out.perAgent ?? {}) as AgentKind[];
   if (out.agents && perAgentKeys.some((agent) => !out.agents!.includes(agent))) return null;
   if (out.agents === undefined && out.base === undefined && perAgentKeys.length === 0) return null;
   return out;
@@ -413,7 +413,7 @@ function entryMembershipAgents(
   const policy = MODEL_PLANE_POLICIES.get(providerId);
   if (!policy) return [];
   return (
-    entry.agents?.filter((agent): agent is RootAgentKind => agent !== 'pi') ?? [
+    entry.agents?.filter((agent): agent is RootAgentKind => agent === 'claude-code' || agent === 'codex') ?? [
       ...new Set([...policy.roots, ...policy.membershipGatedBridges]),
     ]
   );
@@ -595,10 +595,10 @@ export function hasLocalContextWindowOverride(
     const entry = overrides[section][`${encodeURIComponent(providerId)}:${modelId}`];
     return (
       entry &&
-      (agent === 'pi'
-        // Pi has an independent catalog: only existing-model patches apply to it.
-        // Additions materialize provider roots, even when their membership lists Pi.
-        ? section === 'patches' && (!entry.agents || entry.agents.includes('pi'))
+      (agent === 'pi' || agent === 'grok-build'
+        // Pi / Grok Build use independent hosted catalogs: only existing-model
+        // patches apply. Additions materialize provider roots for membership lists.
+        ? section === 'patches' && (!entry.agents || entry.agents.includes(agent))
         : entryMembershipAgents(entry, policyProviderId).includes(agent)) &&
       effectiveFields(entry, agent).contextWindow !== undefined
     );

@@ -87,6 +87,18 @@ describe('deriveRemoteReadiness（被控端就绪推导）', () => {
     ).toBe('binary-missing');
   });
 
+  it('grok-build:sourceReady 是唯一真相,不再走 grok CLI authReady', () => {
+    expect(
+      deriveRemoteReadiness('grok-build', { binaryReady: true, sourceReady: true, authReady: false }),
+    ).toBe('ready');
+    expect(
+      deriveRemoteReadiness('grok-build', { binaryReady: true, sourceReady: false, authReady: true }),
+    ).toBe('unauthenticated');
+    expect(
+      deriveRemoteReadiness('grok-build', { binaryReady: false, sourceReady: true, authReady: true }),
+    ).toBe('binary-missing');
+  });
+
   it('cc:binary 随包,binaryReady 不参与判定', () => {
     expect(
       deriveRemoteReadiness('cc', { binaryReady: false, sourceReady: true, authReady: null }),
@@ -118,6 +130,22 @@ describe('sourceReadyFromProviderList（隧道 provider:list 响应解析）', (
     expect(
       sourceReadyFromProviderList({ providers: [provider({ agents: ['claude-code'] })] }, 'codex'),
     ).toBe(false);
+  });
+
+  it('grok-build 以 SuperGrok/xAI 已连接为准,不要求目录声明 grok-build', () => {
+    expect(
+      sourceReadyFromProviderList(
+        { providers: [provider({ id: 'xai', agents: ['pi'], connected: true })] },
+        'grok-build',
+      ),
+    ).toBe(true);
+    expect(
+      sourceReadyFromProviderList(
+        { providers: [provider({ id: 'xai', agents: ['pi'], connected: false })] },
+        'grok-build',
+      ),
+    ).toBe(false);
+    expect(sourceReadyFromProviderList({ providers: [provider({})] }, 'grok-build')).toBe(false);
   });
 
   it('协议异常(providers 缺失 / 非数组 / 响应为 null)→ null(判定不可用,回退旧口径)', () => {
@@ -166,6 +194,8 @@ describe('pickVoiceInputDialogCopy（语音输入缺认证文案）', () => {
     'codex-voice-unauth': { title: 'codex', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
     'codex-binary-missing': { title: 'binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
     'pi-binary-missing': { title: 'pi-binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
+    'grok-build-binary-missing': { title: 'grok-build-binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
+    'grok-build-unauth': { title: 'grok-build-unauth', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
   };
 
   it('api-key + providers 使用 XD Gateway 文案', () => {

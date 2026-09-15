@@ -25,7 +25,7 @@ import type {
 
 const SORT_OPTIONS: ConversationSearchSortBy[] = ['relevance', 'activityDesc', 'activityAsc'];
 const STATUS_OPTIONS: ConversationSearchStatusFilter[] = ['active', 'archived', 'all'];
-const AGENT_OPTIONS: ConversationSearchAgentFilter[] = ['all', 'cc', 'codex', 'pi'];
+const AGENT_OPTIONS: ConversationSearchAgentFilter[] = ['all', 'cc', 'codex', 'pi', 'grok-build'];
 const LAST_ACTIVITY_OPTIONS: ConversationSearchLastActivityFilter[] = ['1d', '3d', '7d', '30d', 'all'];
 
 export function ConversationSearchFilterSheet({

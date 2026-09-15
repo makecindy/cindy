@@ -114,6 +114,11 @@ type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 
 const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi'];
 
+/** grok-build 不在本面板:它是本机 CLI,没有自定义 provider / baseUrl 可配。 */
+function isDialogAgentKind(value: string): value is DialogAgentKind {
+  return (AGENTS as string[]).includes(value);
+}
+
 const VISIBLE_AGENTS: DialogAgentKind[] = AGENTS;
 
 const DIALOG_FOCUSABLE_SELECTOR = [
@@ -876,11 +881,7 @@ export function ProviderConnectionDialog({
         return next;
       });
       setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
-      // 预设整体替换所有 runtime 的 models 数组(含清空未声明的 runtime),旧行号
-      // 全部失效——不清空的话陈旧草稿(如 -5)会挂在无关的新行、或挂在被预设清空
-      // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
-      // 卡死报错却找不到对应输入框(review P1)。
-      const first = configuredPresetAgents(p)[0];
+      const first = configuredPresetAgents(p).find(isDialogAgentKind);
       if (first) setActiveTab(first);
       // 预设整体替换名称/鉴权/全部 runtime:任何既有字段错误的指向(字段值、
       // 行结构、tab)都已失效。程序化赋值不触发输入的 change,须在此显式清除

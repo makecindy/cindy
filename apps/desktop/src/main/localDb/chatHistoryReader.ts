@@ -29,7 +29,8 @@ const messageRowid = sql<number>`"messages"."rowid"`;
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type HistoryOrder = 'asc' | 'desc';
-export type HistoryAgentKind = 'cc' | 'codex' | 'pi';
+/** sessions.agent_kind 的历史筛选取值;'cc' 是 Claude Code 的历史存储形态。 */
+export type HistoryAgentKind = 'cc' | 'codex' | 'pi' | 'grok-build';
 
 export interface HistoryCursor {
   createdAt: number; // unix ms

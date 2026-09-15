@@ -40,6 +40,24 @@ describe('maker session SEND IPC handler', () => {
     expect(sendToAgentAccepted).toHaveBeenCalledWith('session-1', message, createOpts, sendOpts);
   });
 
+  it('forwards Grok Build create opts unchanged', async () => {
+    const harness = new IpcHarness();
+    const result = { accepted: true };
+    const sendToAgentAccepted = vi.fn().mockResolvedValue(result);
+    const createOpts = {
+      agentKind: 'grok-build',
+      workingDir: 'C:\\repo',
+      model: 'grok-code-fast-1',
+    };
+
+    registerMakerSessionSendHandler(harness, { sendToAgentAccepted });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.SEND, 'session-1', 'hello', createOpts, undefined),
+    ).resolves.toBe(result);
+    expect(sendToAgentAccepted).toHaveBeenCalledWith('session-1', 'hello', createOpts, undefined);
+  });
+
   it('runs the clear-boundary fence before a legacy direct send', async () => {
     const harness = new IpcHarness();
     const sendToAgentAccepted = vi.fn().mockResolvedValue({ accepted: true });

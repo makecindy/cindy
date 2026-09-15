@@ -31,6 +31,7 @@ import type { AgentKind } from '@cindy/maker-core';
 import { MAKER_INVOKE } from './channels.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
 import {
+  agentEngineLabel,
   buildHandoffText,
   type DbAgentKind,
   type HandoffSourceMessage,
@@ -61,12 +62,8 @@ export function toMakerAgentKind(dbKind: string): AgentKind {
   return dbToMakerAgentKind(dbKind);
 }
 
-/** 交接 framing 与边界卡展示用的引擎名。 */
-export function agentEngineLabel(dbKind: DbAgentKind): string {
-  if (dbKind === 'codex') return 'Codex';
-  if (dbKind === 'pi') return 'Pi';
-  return 'Claude Code';
-}
+/** 交接 framing 与边界卡展示用的引擎名(正本在 agentHandoff.ts)。 */
+export { agentEngineLabel };
 
 /** role='agent_switch' 边界行的 content 结构(与 renderer AgentSwitchContent 对齐)。 */
 export interface AgentSwitchBoundaryContent {
@@ -126,7 +123,7 @@ export interface MakerSessionAgentSwitchHandlerDeps {
    * (测试最小 harness)。
    */
   assertModelRouteUsable?(
-    agent: 'claude-code' | 'codex' | 'pi',
+    agent: AgentKind,
     model: string,
     providerId: string | null,
   ): Promise<string | undefined>;
@@ -378,8 +375,13 @@ export async function performSessionAgentSwitch(
   if (typeof sessionId !== 'string' || sessionId.length === 0) {
     throwIpcError('INVALID_PARAMS', 'sessionId required');
   }
-  if (targetAgentKind !== 'claude-code' && targetAgentKind !== 'codex' && targetAgentKind !== 'pi') {
-    throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi');
+  if (
+    targetAgentKind !== 'claude-code'
+    && targetAgentKind !== 'codex'
+    && targetAgentKind !== 'pi'
+    && targetAgentKind !== 'grok-build'
+  ) {
+    throwIpcError('INVALID_PARAMS', 'targetAgentKind must be claude-code | codex | pi | grok-build');
   }
   if (typeof model !== 'string' || model.length === 0) {
     throwIpcError('INVALID_PARAMS', 'model required');

@@ -239,7 +239,7 @@ export function basenameOf(p?: string | null): string | null {
  * 'claude-code' → 'Claude'（agent 标识对齐草稿界面 vendor 切换；provider 分离后
  * cc agent 统一以 Claude 品牌呈现，路由到哪个供应商由来源选择器单独控制）。
  * 'codex' → 'Codex'（保持 OpenAI 原品牌名）。
- * 'pi' → 'Pi'。三种合法 AgentKind 各自显式映射——之前只区分 codex、其余一律回落
+ * 'pi' → 'Pi'。各合法 AgentKind（含 grok-build）各自显式映射——之前只区分 codex、其余一律回落
  * Claude，导致 Pi 自动化的详情摘要显示成 Claude（issue 4418）。仅影响展示文案，不改
  * 执行路由。
  */
@@ -251,6 +251,8 @@ export function humanizeAgentKind(k: AgentKind): string {
       return 'Codex';
     case 'pi':
       return 'Pi';
+    case 'grok-build':
+      return 'Grok Build';
     default: {
       // 穷尽性检查：AgentKind 新增引擎时这里编译报错，避免再次静默回落成 Claude。
       const unreachable: never = k;

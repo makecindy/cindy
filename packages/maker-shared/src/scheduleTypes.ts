@@ -1,5 +1,5 @@
 export type RemoteScheduleStatus = 'active' | 'paused' | 'expired';
-export type RemoteScheduleAgentKind = 'claude-code' | 'codex' | 'pi';
+export type RemoteScheduleAgentKind = 'claude-code' | 'codex' | 'pi' | 'grok-build';
 export type RemoteScheduleWorkspaceKind = 'project' | 'dialogue';
 export type RemoteScheduleRunStatus = 'running' | 'success' | 'failed' | 'aborted' | 'interrupted' | 'skipped';
 export type RemoteScheduleExecutionMode = 'agent' | 'script';

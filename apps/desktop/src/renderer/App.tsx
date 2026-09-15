@@ -74,6 +74,7 @@ import {
 import type { Effort } from '@/lib/userPreferences.types';
 
 import { router } from './router';
+import { botHarnessFromMakerVendor } from '../shared/botModelChain';
 
 /**
  * LoginHandoffProvider 的 auth 接线壳:LoginHandoffContext 模块本身不 import
@@ -125,7 +126,7 @@ function syncNewMakerPrefs(appDefaultModelRequestId?: string) {
     ...(appDefaultModelRequestId ? { appDefaultModelRequestId } : {}),
     ownerStamp: { dataOwnerId: owner.dataOwnerId, ownerGeneration: owner.generation },
     selectedRoute: {
-      harness: draft.vendor === 'cc' || draft.vendor === 'orca' ? 'claude' : draft.vendor,
+      harness: botHarnessFromMakerVendor(draft.vendor),
       providerId: selected.providerId ?? null,
       model: selected.model,
       effort: selected.effort ?? '',

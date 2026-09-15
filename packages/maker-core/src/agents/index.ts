@@ -19,6 +19,10 @@ export {
 // finalizeCodexCitationText = 剥截断残尾 + 归一化(与流式 completed 完全同口径)。
 export { finalizeCodexCitationText, normalizeCodexFileCitations } from './codex/translator.js';
 export { PiAgent } from './pi/index.js';
+// grok-build is optional and still has leftover ACP modules. Do not re-export
+// it from this barrel: every `@cindy/maker-core` consumer (Codex proxy host
+// included) would then load the ACP client + stdio transport. Host imports
+// `@cindy/maker-core/grok-build`.
 export {
   canReuseCodexHostForCredentialMode,
   canReuseHostForCredentialMode,

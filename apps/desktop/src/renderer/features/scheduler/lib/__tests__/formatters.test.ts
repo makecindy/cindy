@@ -27,5 +27,6 @@ describe('scheduler formatters', () => {
     expect(humanizeAgentKind('claude-code')).toBe('Claude');
     expect(humanizeAgentKind('codex')).toBe('Codex');
     expect(humanizeAgentKind('pi')).toBe('Pi');
+    expect(humanizeAgentKind('grok-build')).toBe('Grok Build');
   });
 });

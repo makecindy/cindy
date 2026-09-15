@@ -103,6 +103,21 @@ describe('newSessionPreferenceStore', () => {
     expect(source.match(/const worktreeAccountId = authOwnerAtCreate.accountId;/g)).toHaveLength(2);
   });
 
+  it('persists grok-build as the last selected new-session harness', async () => {
+    const { readNewSessionPreferences, saveNewSessionPreferences } = await import(
+      '@/session/newSessionPreferenceStore'
+    );
+
+    await saveNewSessionPreferences({ agentKind: 'grok-build' });
+    await expect(readNewSessionPreferences()).resolves.toEqual({
+      agentKind: 'grok-build',
+      device: null,
+      workspaceKind: null,
+      permissionModeByAgent: {},
+      workingDirByDevice: {},
+    });
+  });
+
   it('stores the last selected device and agent for new sessions', async () => {
     const {
       __testing,
