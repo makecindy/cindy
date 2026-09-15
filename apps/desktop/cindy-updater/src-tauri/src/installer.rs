@@ -598,17 +598,20 @@ fn snapshot_overwritten_files<F: FnMut(u64, u64)>(
 /// Reverse of `snapshot_overwritten_files`: copy every file in `backup_dir`
 /// back over `app_dir`. Any new files added by the failed install remain as
 /// orphans in app_dir — harmless, the next clean install would remove them
-/// — but the originals are restored so the old version still works.
+/// — but the originals are restored so the old version still works. Backup
+/// walk errors fail this function so callers keep the backup and disable retry.
 fn rollback<F: FnMut(u64, u64)>(
     backup_dir: &Path,
     app_dir: &Path,
     mut on_progress: F,
 ) -> anyhow::Result<()> {
-    let entries: Vec<_> = walkdir::WalkDir::new(backup_dir)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.file_type().is_file())
-        .collect();
+    let mut entries = Vec::new();
+    for entry in walkdir::WalkDir::new(backup_dir) {
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            entries.push(entry);
+        }
+    }
     let total = entries.len() as u64;
     on_progress(0, total);
 
@@ -850,7 +853,7 @@ fn path_is_within(child: &Path, parent: &Path) -> bool {
 mod tests {
     use super::{
         path_is_within, prepare_retry_archive, remove_staging_dir, retry_allowed, retry_available,
-        retry_cli_args,
+        retry_cli_args, rollback,
     };
     use crate::args::{CliArgs, ThemeArg};
     use std::fs;
@@ -962,6 +965,59 @@ mod tests {
         assert!(!prepare_retry_archive(&args));
         assert_eq!(fs::read(&args.zip).unwrap(), b"original");
         assert_eq!(fs::read(super::retry_archive(&args)).unwrap(), b"existing");
+    }
+
+    #[test]
+    fn rollback_restores_backed_up_files() {
+        let temp = TestDir::new();
+        let backup_dir = temp.0.join("backup");
+        let app_dir = temp.0.join("app");
+        fs::create_dir_all(backup_dir.join("nested")).unwrap();
+        fs::create_dir_all(app_dir.join("nested")).unwrap();
+        fs::write(backup_dir.join("root.txt"), b"old-root").unwrap();
+        fs::write(backup_dir.join("nested").join("file.txt"), b"old-nested").unwrap();
+        fs::write(app_dir.join("root.txt"), b"new-root").unwrap();
+        fs::write(app_dir.join("nested").join("file.txt"), b"new-nested").unwrap();
+
+        rollback(&backup_dir, &app_dir, |_, _| {}).expect("complete backup walk succeeds");
+        assert_eq!(fs::read(app_dir.join("root.txt")).unwrap(), b"old-root");
+        assert_eq!(
+            fs::read(app_dir.join("nested").join("file.txt")).unwrap(),
+            b"old-nested"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rollback_fails_when_backup_entries_cannot_be_walked() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = TestDir::new();
+        let backup_dir = temp.0.join("backup");
+        let app_dir = temp.0.join("app");
+        fs::create_dir(&backup_dir).unwrap();
+        fs::create_dir(&app_dir).unwrap();
+        fs::write(backup_dir.join("restored.txt"), b"old").unwrap();
+        fs::write(app_dir.join("restored.txt"), b"new").unwrap();
+
+        let locked = backup_dir.join("locked");
+        fs::create_dir(&locked).unwrap();
+        fs::write(locked.join("hidden.bin"), b"hidden").unwrap();
+        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+
+        struct RestorePerms<'a>(&'a Path);
+        impl Drop for RestorePerms<'_> {
+            fn drop(&mut self) {
+                let _ = fs::set_permissions(self.0, fs::Permissions::from_mode(0o755));
+            }
+        }
+        let _restore = RestorePerms(&locked);
+
+        let result = rollback(&backup_dir, &app_dir, |_, _| {});
+        assert!(
+            result.is_err(),
+            "incomplete backup walk must fail rollback so retry stays disabled: {result:?}"
+        );
     }
 
     #[test]
