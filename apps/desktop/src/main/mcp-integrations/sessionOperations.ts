@@ -250,6 +250,11 @@ export async function getSessionBranches(
   const loaded = await loadAll(deps, [params.sessionId]);
   if (!Array.isArray(loaded)) return loaded;
   if (loaded[0].status === 'deleted') return err('PRECONDITION_FAILED', `${loaded[0].id}: 会话已删除`);
+  // 入口也要过同一把可见性判据:不然传入伙伴 / worker 会话时,有可见祖先的会被下面的 BFS
+  // 过滤掉(成功结果里反而没有请求的那个 id),没有可见父节点的又会自己当根混进家族。
+  if (!isBranchVisible(loaded[0])) {
+    return err('PRECONDITION_FAILED', `${loaded[0].id}: 伙伴(Bot)会话与协同 worker 不在分叉家族中`);
+  }
   // 向上找根(源被删时 parentSessionId 已 SET NULL,链在此断开即视为根)。
   let root = loaded[0];
   const seen = new Set<string>([root.id]);

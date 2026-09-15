@@ -253,6 +253,24 @@ describe('getSessionBranches', () => {
     }
   });
 
+  it('refuses a Bot or worker session as the family entry point', async () => {
+    // 否则:有可见祖先时入口会被 BFS 过滤掉(成功结果里没有请求的 id);
+    // 没有可见父节点时入口又会自己当根混进家族 —— 两种都与契约矛盾。
+    const { deps } = makeDeps([
+      row('root'),
+      row('botChild', { parentSessionId: 'root', source: 'bot' }),
+      row('lonelyWorker', { orcaRole: 'worker' }),
+    ]);
+    expect(await getSessionBranches(deps, { sessionId: 'botChild' })).toMatchObject({
+      ok: false,
+      errorCode: 'PRECONDITION_FAILED',
+    });
+    expect(await getSessionBranches(deps, { sessionId: 'lonelyWorker' })).toMatchObject({
+      ok: false,
+      errorCode: 'PRECONDITION_FAILED',
+    });
+  });
+
   it('refuses a soft-deleted session as the family entry point', async () => {
     const { deps } = makeDeps([row('gone', { status: 'deleted' })]);
     expect(await getSessionBranches(deps, { sessionId: 'gone' })).toMatchObject({
