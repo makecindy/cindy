@@ -222,7 +222,7 @@ import {
 } from './lib/sidebarCollapseConfig';
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
 import { hasSessionSelectionModifier, type SessionClickModifiers } from './sidebar/SessionItem';
-import { managedWorktreeRootOf } from './lib/sessionMoveGuard';
+import { crossesWorktreeBoundary } from './lib/sessionMoveGuard';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
   DIALOGUE_FILTER_KEY,
@@ -2687,17 +2687,6 @@ function ExpandedView({
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRemoteUnsupported'));
         return;
       }
-      // worktree 会话的工作区就是它自己的 worktree：只改 workingDir 会造成半移动
-      // （侧栏按新项目归组，聊天框底部路径仍指旧 worktree）。判定与 Main 的
-      // `managedWorktreeRoot` 同口径——比归属根，同一 worktree 根内的目录调整照过；
-      // 移到对话不改目录，不受影响。
-      const currentWorktreeRoot = managedWorktreeRootOf(session.workingDir);
-      const targetWorktreeRoot =
-        target.kind === 'project' ? managedWorktreeRootOf(target.workingDir) : null;
-      if (currentWorktreeRoot && currentWorktreeRoot !== targetWorktreeRoot) {
-        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
-        return;
-      }
       if (effectiveRunningSessionIds.has(sessionId)) {
         toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRunningBlocked'));
         return;
@@ -2723,6 +2712,15 @@ function ExpandedView({
           toast.error(t('ccAgent.sidebar.sessionMenu.moveToProjectFailed'));
           return;
         }
+      }
+
+      // worktree 会话的工作区就是它自己的 worktree：只改 workingDir 会造成半移动
+      // （侧栏按新项目归组，聊天框底部路径仍指旧 worktree）。判定放在目标目录确定**之后**：
+      // browseProject 选同一 worktree 根内的子目录仍然放行，跨根才拦；口径与 Main 的
+      // `managedWorktreeRoot` 一致，「移到对话」不改目录、不经过这里。
+      if (targetWorkingDir && crossesWorktreeBoundary(session.workingDir, targetWorkingDir)) {
+        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
+        return;
       }
 
       const oldPatch = {

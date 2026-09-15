@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { managedWorktreeRootOf } from '../sessionMoveGuard';
+import { crossesWorktreeBoundary, managedWorktreeRootOf } from '../sessionMoveGuard';
 
 describe('managedWorktreeRootOf', () => {
   it('folds roots and their descendants to the same managed worktree root', () => {
@@ -28,5 +28,28 @@ describe('managedWorktreeRootOf', () => {
     expect(managedWorktreeRootOf(null)).toBeNull();
     expect(managedWorktreeRootOf(undefined)).toBeNull();
     expect(managedWorktreeRootOf('')).toBeNull();
+  });
+});
+
+describe('crossesWorktreeBoundary', () => {
+  const worktree = '/repo/.cindy-worktrees/steady-goodall';
+
+  it('blocks only targets outside the session\'s own worktree root', () => {
+    // 跨到别的项目（含它所属的 base repo）→ 拦。
+    expect(crossesWorktreeBoundary(worktree, '/repo/other-project')).toBe(true);
+    expect(crossesWorktreeBoundary(worktree, '/repo')).toBe(true);
+    expect(crossesWorktreeBoundary(worktree, '/repo/.cindy-worktrees/another-name')).toBe(true);
+  });
+
+  it('allows targets inside the same worktree root', () => {
+    expect(crossesWorktreeBoundary(worktree, worktree)).toBe(false);
+    expect(crossesWorktreeBoundary(worktree, `${worktree}/src`)).toBe(false);
+    expect(crossesWorktreeBoundary(`${worktree}/src`, `${worktree}/tests`)).toBe(false);
+  });
+
+  it('never blocks sessions that are not bound to a managed worktree', () => {
+    expect(crossesWorktreeBoundary('/repo', '/elsewhere')).toBe(false);
+    expect(crossesWorktreeBoundary(null, '/elsewhere')).toBe(false);
+    expect(crossesWorktreeBoundary('/repo/.worktrees/user-made', '/elsewhere')).toBe(false);
   });
 });

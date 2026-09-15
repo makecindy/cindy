@@ -50,3 +50,19 @@ export function managedWorktreeRootOf(value: string | null | undefined): string 
   if (segments.length < 2) return null;
   return value.slice(0, segments[1].end);
 }
+
+/**
+ * 该会话改到某个**已解析出的项目目录**时,是否跨出了它的 worktree 归属。
+ *
+ * 只对具体目录比较,不看 target 种类——调用方必须在目标目录确定之后调用
+ * (browseProject 要等选完目录);目标目录为空的情形(尤其是「移到对话」)
+ * 根本不改 workingDir,不要拿到这里。
+ */
+export function crossesWorktreeBoundary(
+  currentWorkingDir: string | null | undefined,
+  targetWorkingDir: string,
+): boolean {
+  const currentRoot = managedWorktreeRootOf(currentWorkingDir);
+  if (currentRoot === null) return false;
+  return currentRoot !== managedWorktreeRootOf(targetWorkingDir);
+}
