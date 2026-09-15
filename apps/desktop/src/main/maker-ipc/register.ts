@@ -403,6 +403,8 @@ import {
   writeAgentResourceSetting,
 } from '../maker-host/agent-resource-settings-store.js';
 import { createAgentResourceSettingsIpc } from './agent-resource-settings-ipc.js';
+import { readClaudeIdleMinutes } from '../maker-host/claude-idle-release-settings.js';
+import { createClaudeIdleReleaseWatcher, ORDINARY_CLAUDE_TASK_SQL } from './claudeIdleReleaseWatcher.js';
 import {
   createBotDelegationService,
   type BotDelegationService,
@@ -2142,6 +2144,7 @@ export async function dispatchInterAgentMessage(
 
 /** 模块级 idle watcher；停止后不再持有可能已经失效的 maker 引用。 */
 let idleReleaseWatcher: OrcaIdleReleaseWatcher | null = null;
+let claudeIdleReleaseWatcher: ReturnType<typeof createClaudeIdleReleaseWatcher> | null = null;
 
 /**
  * 取 Orca collab service, ready 前返 null。registerMakerIpc 执行完成后 holder
@@ -2182,6 +2185,8 @@ function createBridgeWorkerLabel(task: string): string {
 
 /** 停止 idle watcher setInterval (app quit 时调, maker 可能已 shutdown)。 */
 export function stopOrcaIdleWatcher(): void {
+  claudeIdleReleaseWatcher?.stop();
+  claudeIdleReleaseWatcher = null;
   idleReleaseWatcher?.stop();
   idleReleaseWatcher = null;
 }
@@ -10901,6 +10906,34 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     log,
   });
   idleReleaseWatcher.start();
+
+  claudeIdleReleaseWatcher?.stop();
+  claudeIdleReleaseWatcher = createClaudeIdleReleaseWatcher({
+    listSessions: () => maker.listActiveSessions(),
+    getSession: (id) => maker.getSession(id),
+    readMinutes: readClaudeIdleMinutes,
+    isOrdinaryTask: async (id, sdkSessionId) => Boolean(
+      await getDbClient().queryOne(ORDINARY_CLAUDE_TASK_SQL, [id, sdkSessionId]),
+    ),
+    hasPendingInput: hasPendingIdleReleaseInput,
+    isHostBusy: (id) => isSessionTurnPendingCompletion(id)
+      || hasPendingAgentInteractionForSession(id)
+      || Boolean(getClaudeSessionBackgroundActivity(id))
+      || inputCoordinator.hasPendingQueuedWork(id)
+      || inputCoordinator.hasQueuedItemWhere(id, () => true, { includeRecovery: true })
+      || Boolean(inputCoordinator.getAutoResumeAttemptToken(id))
+      || pendingCredentialSwitchHolder?.has(id) === true,
+    withLock: withSendToSessionLock,
+    // Preserve attachments/workspace and queue boundaries just as a lazy runtime rebuild does.
+    close: (session, retryFailedClose) => withRehydrateCloseSuppressed(session.id, () =>
+      retryFailedClose && session.getStatus() === 'error'
+        ? session.close().then(() => true)
+        : session.closeIfIdle(),
+    ),
+    now: () => performance.now(),
+    warn: (message) => log.warn(message),
+  });
+  claudeIdleReleaseWatcher.start();
 
   type InternalRuntimeSelectionOptions = {
     source: 'user' | SessionRuntimeMutationSource;
