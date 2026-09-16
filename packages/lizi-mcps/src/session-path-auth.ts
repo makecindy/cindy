@@ -140,6 +140,23 @@ export function grantedSessionPathAncestorsStillMatch(
 }
 
 /**
+ * Write targets may create missing parents after the grant card. Those new
+ * components are allowed only when every granted ancestor is still the same
+ * path and inode; a parent rename or regular-dir swap must not inherit allow.
+ */
+export function grantedSessionPathAncestorsStillPresent(
+  granted: readonly SessionPathAncestorIdentity[],
+  current: readonly SessionPathAncestorIdentity[],
+): boolean {
+  if (granted.length === 0 || current.length === 0) return false;
+  const byPath = new Map(current.map((item) => [item.path, item]));
+  return granted.every((item) => {
+    const now = byPath.get(item.path);
+    return Boolean(now && now.dev === item.dev && now.ino === item.ino);
+  });
+}
+
+/**
  * Pin the path identity before the Host confirm card, then require the same
  * ancestors after the wait. A regular file/dir swap during the prompt must
  * not inherit the allow.

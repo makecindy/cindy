@@ -11,6 +11,7 @@
  *    所以这两个函数都由 desktop main 在 mcp-providers.ts 闭包注入。
  */
 
+import type { SessionPathAncestorIdentity } from '../session-path-auth.js';
 import type { LiziMcpLogger, LiziMcpSessionContext } from '../types.js';
 
 /** render_pdf 支持的纸张。与 Electron printToPDF 的 pageSize 取值对齐。 */
@@ -78,6 +79,8 @@ export type WriteDocsOutputFn = (input: {
   authorizedOutsideWorkdir?: boolean;
   /** Recheck immediately before the final write; stale grants must not commit. */
   isCurrent?: () => boolean;
+  /** Grant-time ancestor identity; rechecked immediately before the final write. */
+  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
 }) => Promise<void>;
 
 /** 单页结构快照。宽高单位是 PDF point(1/72 英寸)。 */

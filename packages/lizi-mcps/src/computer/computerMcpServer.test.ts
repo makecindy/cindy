@@ -1093,6 +1093,50 @@ describe('createComputerMcpServer', () => {
     await fs.rm(grantedParent, { recursive: true, force: true });
   });
 
+  it('does not dispatch an authorized screenshot after the parent is replaced by another directory', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const grantedParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-shot-dir-')));
+    const evilParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-shot-dir-evil-')));
+    const granted = path.join(grantedParent, 'out.png');
+    await fs.writeFile(path.join(evilParent, 'out.png'), 'evil');
+    setSessionPathAuthorizer(async () => {
+      await fs.rm(grantedParent, { recursive: true, force: true });
+      await fs.rename(evilParent, grantedParent);
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({
+        agentKind: 'claude-code',
+        workingDir: root,
+        sessionId: 'screenshot-dir-swapped',
+      }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'get_window_state',
+        args: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: granted,
+        },
+      },
+    })) as { ok: boolean; errorCode?: string };
+
+    expect(payload.ok).toBe(false);
+    expect(payload.errorCode).toBe('PATH_NOT_ALLOWED');
+    expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(grantedParent, { recursive: true, force: true });
+  });
+
   it('authorizes a workdir symlink screenshot path as the real target', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),

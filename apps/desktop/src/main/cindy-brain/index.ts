@@ -5899,7 +5899,7 @@ async function updateLocalGhostPackageLocked(
  */
 export async function installOrUpdateLocalGhostPackageFromForge(
   cindyFilePath: string,
-  expected: { ghostId: string; packageSha256: string },
+  expected: { ghostId: string; packageSha256: string; isCurrent?: () => boolean },
 ): Promise<{ ghost: InstalledGhost; action: 'installed' | 'updated' }> {
   const manager = getGhostManager();
   const inspected = await manager.inspect(cindyFilePath);
@@ -5933,8 +5933,14 @@ export async function installOrUpdateLocalGhostPackageFromForge(
       throwIpcError('MUTATION_CANCELLED', '用户取消了企业身份插件安装');
     }
   }
+  if (expected.isCurrent?.() === false) {
+    throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
+  }
 
   return withGhostInstallLock(inspected.manifest.id, async () => {
+    if (expected.isCurrent?.() === false) {
+      throwIpcError('PRECONDITION_FAILED', '任务权限已变化，这次插件安装授权已失效。请用当前任务权限重试。');
+    }
     const installed = manager.list().find((ghost) => ghost.manifest.id === inspected.manifest.id);
     if (!installed) {
       return {

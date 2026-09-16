@@ -809,6 +809,9 @@ describe('Forge workdir-out permission path', () => {
       }),
     );
     expect(packGhostDirMock.mock.calls[0]?.[1]?.isCurrent?.()).toBe(true);
+    expect(packGhostDirMock.mock.calls[0]?.[1]?.authorizedAncestors).toEqual([
+      { path: fs.realpathSync.native(sourceDir), dev: 1n, ino: 1n },
+    ]);
   });
 
   it('Auto-review allow packs an outside source', async () => {
@@ -962,6 +965,26 @@ describe('Forge workdir-out permission path', () => {
     const result = await makeDeps('pi', 'forge-install-stale').forgeInstall({ dir: sourceDir });
     expect(result).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
     expect(forgeInstallPackageMock).not.toHaveBeenCalled();
+  });
+
+  it('passes the live grant into the Forge install transaction', async () => {
+    const isCurrent = () => true;
+    liveGrantStateMock.mockReturnValue({
+      permissionMode: 'bypassPermissions',
+      remoteHostId: null,
+      isCurrent,
+    });
+    packGhostDirMock.mockResolvedValueOnce(packedOk());
+    await expect(
+      makeDeps('pi', 'forge-install-current').forgeInstall({ dir: sourceDir }),
+    ).resolves.toMatchObject({ ok: true });
+    expect(forgeInstallPackageMock).toHaveBeenCalledWith(
+      packedOk().cindyPath,
+      expect.objectContaining({
+        ghostId: 'demo',
+        isCurrent,
+      }),
+    );
   });
 
   it('does not stage a publish pack after the live grant expires', async () => {

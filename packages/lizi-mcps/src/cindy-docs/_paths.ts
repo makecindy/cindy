@@ -71,6 +71,7 @@ export async function commitDocsOutput(
     overwrite,
     authorizedOutsideWorkdir: prepared.authorizedOutsideWorkdir,
     ...(prepared.isCurrent ? { isCurrent: prepared.isCurrent } : {}),
+    ...(prepared.authorizedAncestors ? { authorizedAncestors: prepared.authorizedAncestors } : {}),
   });
 }
 

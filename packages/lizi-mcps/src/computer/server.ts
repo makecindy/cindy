@@ -324,7 +324,7 @@ async function authorizedPathStillBound(
   authorized: AuthorizedOutsidePath,
 ): Promise<boolean> {
   if (!await authorizedSessionPathStillBound(workingDir, authorized.path)) return false;
-  if (!authorized.authorizedAncestors) return true;
+  if (!authorized.authorizedAncestors?.length) return false;
   const current = await captureSessionPathAncestors(authorized.path);
   return Boolean(
     current

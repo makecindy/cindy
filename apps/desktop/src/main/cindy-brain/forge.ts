@@ -22,6 +22,13 @@ import { promisify } from 'node:util';
 import JSZip from 'jszip';
 
 import {
+  captureSessionPathAncestors,
+  grantedSessionPathAncestorsStillMatch,
+  SESSION_PATH_IDENTITY_CHANGED_REASON,
+  SESSION_PATH_IDENTITY_UNPINNABLE_REASON,
+  type SessionPathAncestorIdentity,
+} from '@cindy/mcps';
+import {
   PLUGIN_MEMBER_UPLOAD_MAX_ARCHIVE_BYTES,
   PLUGIN_MEMBER_UPLOAD_MAX_UNCOMPRESSED_BYTES,
   PLUGIN_MEMBER_UPLOAD_MAX_ZIP_ENTRIES,
@@ -238,12 +245,36 @@ export type ForgeScaffoldWriter = (
 const FORGE_OUTSIDE_GRANT_STALE_MESSAGE =
   'Task or Plan permissions changed; retry with the current scope.';
 
+type ForgeOutsideGrantOptions = {
+  allowOutsideWorkdir?: boolean;
+  authorizedDir?: string;
+  isCurrent?: () => boolean;
+  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
+};
+
 function staleOutsideForgeGrant(
-  options?: { allowOutsideWorkdir?: boolean; authorizedDir?: string; isCurrent?: () => boolean },
+  options?: ForgeOutsideGrantOptions,
 ): { ok: false; errorCode: 'PERMISSION_DENIED'; message: string } | null {
   if (!options?.allowOutsideWorkdir || !options.authorizedDir) return null;
   if (options.isCurrent?.() === true) return null;
   return { ok: false, errorCode: 'PERMISSION_DENIED', message: FORGE_OUTSIDE_GRANT_STALE_MESSAGE };
+}
+
+async function staleOutsideForgeIdentity(
+  options?: ForgeOutsideGrantOptions,
+): Promise<{ ok: false; errorCode: 'PERMISSION_DENIED'; message: string } | null> {
+  if (!options?.allowOutsideWorkdir || !options.authorizedDir) return null;
+  if (!options.authorizedAncestors?.length) {
+    return { ok: false, errorCode: 'PERMISSION_DENIED', message: SESSION_PATH_IDENTITY_UNPINNABLE_REASON };
+  }
+  const current = await captureSessionPathAncestors(options.authorizedDir);
+  if (
+    !current
+    || !grantedSessionPathAncestorsStillMatch(options.authorizedAncestors, current, options.authorizedDir)
+  ) {
+    return { ok: false, errorCode: 'PERMISSION_DENIED', message: SESSION_PATH_IDENTITY_CHANGED_REASON };
+  }
+  return null;
 }
 
 /** 生成插件清单；先走正式校验，再允许任何文件落盘。 */
@@ -573,6 +604,7 @@ export async function scaffoldGhostDir(
     allowOutsideWorkdir?: boolean;
     authorizedDir?: string;
     isCurrent?: () => boolean;
+    authorizedAncestors?: readonly SessionPathAncestorIdentity[];
   },
 ): Promise<ForgeScaffoldResult> {
   const template = input.template;
@@ -631,6 +663,8 @@ export async function scaffoldGhostDir(
     ) {
       return { ok: false, errorCode: 'INVALID_INPUT', message: 'dir 必须在当前会话工作目录内' };
     }
+    const identity = await staleOutsideForgeIdentity(options);
+    if (identity) return identity;
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     let resolvedForbiddenRoot: string;
@@ -749,6 +783,8 @@ export async function scaffoldGhostDir(
   }
   const staleBeforeWrite = staleOutsideForgeGrant(options);
   if (staleBeforeWrite) return staleBeforeWrite;
+  const identityBeforeWrite = await staleOutsideForgeIdentity(options);
+  if (identityBeforeWrite) return identityBeforeWrite;
   const writeResult = await options.writeScaffold({
     parentDir,
     targetName: path.basename(targetDir),
@@ -1362,6 +1398,8 @@ export async function packGhostDir(
      * long pack and immediately before the `.cindy` write.
      */
     isCurrent?: () => boolean;
+    /** Grant-time ancestor identity; rechecked before read and write. */
+    authorizedAncestors?: readonly SessionPathAncestorIdentity[];
   },
 ): Promise<ForgePackResult> {
   // Forge 打包出口专属安全门(C-4 + #7):source 默认必须在会话 workdir 内;Host 已按
@@ -1407,6 +1445,8 @@ export async function packGhostDir(
         message: 'Forge source must be inside the current session workdir',
       };
     }
+    const identity = await staleOutsideForgeIdentity(options);
+    if (identity) return identity;
   }
   for (const forbiddenRoot of options?.forbiddenRootDirs ?? []) {
     const resolvedForbiddenRoot = await resolveThroughExistingAncestor(forbiddenRoot);
@@ -1445,6 +1485,8 @@ export async function packGhostDir(
   );
   const staleBeforeWrite = staleOutsideForgeGrant(options);
   if (staleBeforeWrite) return staleBeforeWrite;
+  const identityBeforeWrite = await staleOutsideForgeIdentity(options);
+  if (identityBeforeWrite) return identityBeforeWrite;
   try {
     await fs.promises.writeFile(cindyPath, built.buf);
   } catch (err) {

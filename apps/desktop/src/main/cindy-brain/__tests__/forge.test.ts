@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { captureSessionPathAncestors, resolveCanonicalSessionPath } from '@cindy/mcps';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GHOST_MANIFEST_SUMMARY_MAX_CHARS,
@@ -114,6 +115,18 @@ function packGhostDir(
   options: Omit<NonNullable<Parameters<typeof packGhostDirRaw>[1]>, 'sessionWorkdir'> = {},
 ) {
   return packGhostDirRaw(dir, { sessionWorkdir: workDir, ...options });
+}
+
+async function hostAuthorizedOutside(dir: string, isCurrent: () => boolean = () => true) {
+  const authorizedDir = await resolveCanonicalSessionPath(path.parse(path.resolve(dir)).root, dir);
+  const authorizedAncestors = await captureSessionPathAncestors(authorizedDir);
+  expect(authorizedAncestors).not.toBeNull();
+  return {
+    allowOutsideWorkdir: true as const,
+    authorizedDir,
+    authorizedAncestors: authorizedAncestors ?? [],
+    isCurrent,
+  };
 }
 
 async function expectSameExistingRealPath(actual: string, expected: string): Promise<void> {
@@ -381,9 +394,7 @@ describe('packGhostDir', () => {
       await fs.promises.cp(dir, outsideDir, { recursive: true });
       const packed = await packGhostDirRaw(outsideDir, {
         sessionWorkdir: workDir,
-        allowOutsideWorkdir: true,
-        authorizedDir: await fs.promises.realpath(outsideDir),
-        isCurrent: () => true,
+        ...(await hostAuthorizedOutside(outsideDir)),
       });
       expect(packed).toMatchObject({ ok: true });
       if (!packed.ok) return;
@@ -418,9 +429,7 @@ describe('packGhostDir', () => {
         packGhostDirRaw(installedDir, {
           sessionWorkdir: workDir,
           forbiddenRootDirs: [managedRoot],
-          allowOutsideWorkdir: true,
-          authorizedDir: await fs.promises.realpath(installedDir),
-          isCurrent: () => true,
+          ...(await hostAuthorizedOutside(installedDir)),
         }),
       ).resolves.toMatchObject({
         ok: false,
@@ -440,25 +449,47 @@ describe('packGhostDir', () => {
     try {
       const outsideDir = path.join(outsideRoot, 'src');
       await fs.promises.cp(dir, outsideDir, { recursive: true });
-      const authorizedDir = await fs.promises.realpath(outsideDir);
       await expect(packGhostDirRaw(outsideDir, {
         sessionWorkdir: workDir,
-        allowOutsideWorkdir: true,
-        authorizedDir,
-        isCurrent: () => false,
+        ...(await hostAuthorizedOutside(outsideDir, () => false)),
       })).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
       expect(fs.existsSync(path.join(outsideDir, 'demo-1.0.0.cindy'))).toBe(false);
 
       let remaining = 1;
       await expect(packGhostDirRaw(outsideDir, {
         sessionWorkdir: workDir,
-        allowOutsideWorkdir: true,
-        authorizedDir,
-        isCurrent: () => remaining-- > 0,
+        ...(await hostAuthorizedOutside(outsideDir, () => remaining-- > 0)),
       })).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
       expect(fs.existsSync(path.join(outsideDir, 'demo-1.0.0.cindy'))).toBe(false);
     } finally {
       await fs.promises.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not pack after the authorized parent directory is replaced', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {}',
+    });
+    const grantRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-parent-swap-'));
+    try {
+      const grantedParent = path.join(grantRoot, 'granted');
+      const evilParent = path.join(grantRoot, 'evil');
+      const outsideDir = path.join(grantedParent, 'src');
+      await fs.promises.mkdir(grantedParent, { recursive: true });
+      await fs.promises.mkdir(evilParent, { recursive: true });
+      await fs.promises.cp(dir, outsideDir, { recursive: true });
+      await fs.promises.cp(dir, path.join(evilParent, 'src'), { recursive: true });
+      const grant = await hostAuthorizedOutside(outsideDir);
+      await fs.promises.rm(grantedParent, { recursive: true, force: true });
+      await fs.promises.rename(evilParent, grantedParent);
+      await expect(packGhostDirRaw(outsideDir, {
+        sessionWorkdir: workDir,
+        ...grant,
+      })).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(fs.existsSync(path.join(outsideDir, 'demo-1.0.0.cindy'))).toBe(false);
+    } finally {
+      await fs.promises.rm(grantRoot, { recursive: true, force: true });
     }
   });
 
@@ -1610,7 +1641,7 @@ describe('scaffoldGhostDir', () => {
       await expect(
         scaffoldGhostDir(
           { dir, template: 'plain', id: 'out-plugin', name: 'Out plugin' },
-          { sessionWorkdir: workDir, allowOutsideWorkdir: true, authorizedDir, isCurrent: () => true },
+          { sessionWorkdir: workDir, ...(await hostAuthorizedOutside(authorizedDir)) },
         ),
       ).resolves.toMatchObject({ ok: true, dir: authorizedDir });
       expect(fs.existsSync(path.join(authorizedDir, 'ghost.json'))).toBe(true);
@@ -1637,9 +1668,7 @@ describe('scaffoldGhostDir', () => {
           },
           {
             sessionWorkdir: workDir,
-            allowOutsideWorkdir: true,
-            authorizedDir: path.join(await fs.promises.realpath(outsideRoot), 'stale-plugin'),
-            isCurrent: () => false,
+            ...(await hostAuthorizedOutside(staleDir, () => false)),
             writeScaffold,
           },
         ),

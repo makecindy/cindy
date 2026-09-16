@@ -45,6 +45,7 @@ import {
   SESSION_PATH_IDENTITY_CHANGED_REASON,
   SESSION_PATH_IDENTITY_UNPINNABLE_REASON,
   type LiziMcpSessionContext,
+  type SessionPathAncestorIdentity,
   type SessionPathAuthorization,
   type SessionPathAuthorizationRequest,
 } from '@cindy/mcps';
@@ -184,18 +185,26 @@ function resolveCanonicalForgeDir(source: string): string {
 
 type ForgeOutsideAccess =
   | { ok: true; allowOutsideWorkdir: false }
-  | { ok: true; allowOutsideWorkdir: true; authorizedDir: string; isCurrent?: () => boolean }
+  | {
+      ok: true;
+      allowOutsideWorkdir: true;
+      authorizedDir: string;
+      isCurrent?: () => boolean;
+      authorizedAncestors: SessionPathAncestorIdentity[];
+    }
   | { ok: false; errorCode: 'PERMISSION_DENIED'; message: string };
 
 function forgeOutsidePackFlags(access: Extract<ForgeOutsideAccess, { ok: true }>): {
   allowOutsideWorkdir?: boolean;
   authorizedDir?: string;
   isCurrent?: () => boolean;
+  authorizedAncestors?: SessionPathAncestorIdentity[];
 } {
   return access.allowOutsideWorkdir
     ? {
         allowOutsideWorkdir: true,
         authorizedDir: access.authorizedDir,
+        authorizedAncestors: access.authorizedAncestors,
         ...(access.isCurrent ? { isCurrent: access.isCurrent } : {}),
       }
     : {};
@@ -291,7 +300,13 @@ async function authorizeForgeOutsideWorkdir(params: {
   ) {
     return { ok: false, errorCode: 'PERMISSION_DENIED', message: SESSION_PATH_IDENTITY_CHANGED_REASON };
   }
-  return { ok: true, allowOutsideWorkdir: true, authorizedDir, isCurrent: granted.isCurrent };
+  return {
+    ok: true,
+    allowOutsideWorkdir: true,
+    authorizedDir,
+    authorizedAncestors: currentIdentity,
+    isCurrent: granted.isCurrent,
+  };
 }
 
 function assertForgeGrantCurrent(access: Extract<ForgeOutsideAccess, { ok: true }>): ForgeOutsideAccess {
@@ -365,7 +380,12 @@ async function packForgeSource(
   dir: string,
   sessionWorkdir: string,
   iconSource?: string,
-  packFlags: { allowOutsideWorkdir?: boolean; authorizedDir?: string; isCurrent?: () => boolean } = {},
+  packFlags: {
+    allowOutsideWorkdir?: boolean;
+    authorizedDir?: string;
+    isCurrent?: () => boolean;
+    authorizedAncestors?: SessionPathAncestorIdentity[];
+  } = {},
 ) {
   let iconPng: Buffer | undefined;
   let iconNote = '';
@@ -402,6 +422,7 @@ async function packForgeSource(
       ? {
           allowOutsideWorkdir: true,
           authorizedDir: packFlags.authorizedDir,
+          authorizedAncestors: packFlags.authorizedAncestors,
           ...(packFlags.isCurrent ? { isCurrent: packFlags.isCurrent } : {}),
         }
       : {}),
@@ -2416,6 +2437,9 @@ export function getCindyGhostsMcpDeps(
             {
               ghostId: packed.manifest.id,
               packageSha256: createHash('sha256').update(packed.buf).digest('hex'),
+              ...(stillGranted.allowOutsideWorkdir && stillGranted.isCurrent
+                ? { isCurrent: stillGranted.isCurrent }
+                : {}),
             },
           );
           log.info('ghost forge install completed', {

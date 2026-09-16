@@ -9,6 +9,7 @@ import {
   authorizedSessionPathStillBound,
   captureSessionPathAncestors,
   grantedSessionPathAncestorsStillMatch,
+  grantedSessionPathAncestorsStillPresent,
   resolveCanonicalSessionPath,
   sameSessionPathAncestors,
   setSessionPathAuthorizer,
@@ -144,6 +145,26 @@ describe('authorized session path ancestors', () => {
     expect(result.allowed).toBe(true);
     if (result.allowed) {
       expect(grantedSessionPathAncestorsStillMatch(before ?? [], result.authorizedAncestors, file)).toBe(true);
+      expect(grantedSessionPathAncestorsStillPresent(before ?? [], result.authorizedAncestors)).toBe(true);
     }
+  });
+
+  it('stillPresent allows a newly created leaf and rejects a parent inode swap', async () => {
+    const root = await makeTempDir('cindy-path-auth-present-');
+    const grantedDir = path.join(root, 'granted');
+    const evilDir = path.join(root, 'evil');
+    await fs.mkdir(grantedDir);
+    await fs.mkdir(evilDir);
+    const missing = path.join(grantedDir, 'new.txt');
+    const before = await captureSessionPathAncestors(missing);
+    expect(before?.[0]?.path).toBe(grantedDir);
+    await fs.writeFile(missing, 'now-exists');
+    const afterCreate = await captureSessionPathAncestors(missing);
+    expect(grantedSessionPathAncestorsStillPresent(before ?? [], afterCreate ?? [])).toBe(true);
+
+    await fs.rm(grantedDir, { recursive: true, force: true });
+    await fs.rename(evilDir, grantedDir);
+    const afterSwap = await captureSessionPathAncestors(path.join(grantedDir, 'new.txt'));
+    expect(grantedSessionPathAncestorsStillPresent(before ?? [], afterSwap ?? [])).toBe(false);
   });
 });
