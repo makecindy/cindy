@@ -1200,9 +1200,10 @@ describe('maker SEND transaction', () => {
     expect(rebuiltSession.send).toHaveBeenCalled();
   });
 
-  it('keeps the live runtime when the persisted directory is not actually on disk', async () => {
+  it('refuses to send in the live cwd when the persisted directory is not actually on disk', async () => {
     // 只有 DB 目录真实存在才迁移：不存在时不能走 recovery/mkdir 把不存在的项目
-    // "恢复"成空文件夹，也不能丢掉活 runtime 的上下文。
+    // "恢复"成空文件夹。但也不能反过来在旧 cwd 里执行 —— UI 显示的是新项目,消息却会
+    // 改旧项目的代码(正是本 PR 要消灭的半移动),所以这里明确失败。
     const movedSession = createSession({ workDir: '/data/old-project' });
     const { deps } = createDeps({
       getSession: () => movedSession,
@@ -1212,16 +1213,17 @@ describe('maker SEND transaction', () => {
 
     await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
       agentKind: 'claude-code', workingDir: '/data/old-project',
-    })).resolves.toMatchObject({ accepted: true });
+    })).resolves.toMatchObject({ accepted: false, reason: 'WORKDIR_MISSING' });
 
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
-    expect(movedSession.send).toHaveBeenCalled();
+    expect(movedSession.send).not.toHaveBeenCalled();
   });
 
-  it('keeps the recovery fallback instead of switching a live runtime to the raw persisted path', async () => {
+  it('never switches a live runtime to the raw persisted path that recovery took over', async () => {
     // DB 目录已被 workingDirectoryRecovery 接管(resolve 返回 fallback)：文件在
-    // fallback 里，不能因为原路径"存在"就把 session 拉回去。
+    // fallback 里，不能因为原路径"存在"就把 session 拉回去；live 又不在那个 fallback
+    // 里,所以这次也不能拿 live 的目录顶替 —— 两边都不是会话现在的目录。
     const movedSession = createSession({ workDir: '/data/old-project' });
     const { deps } = createDeps({
       getSession: () => movedSession,
@@ -1233,16 +1235,36 @@ describe('maker SEND transaction', () => {
 
     await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
       agentKind: 'codex', workingDir: '/data/old-project',
-    })).resolves.toMatchObject({ accepted: true });
+    })).resolves.toMatchObject({ accepted: false, reason: 'WORKDIR_MISSING' });
 
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
-    expect(movedSession.send).toHaveBeenCalled();
+    expect(movedSession.send).not.toHaveBeenCalled();
   });
 
-  it('keeps the live runtime while the persisted managed worktree is not ready yet', async () => {
+  it('keeps sending when the live runtime already sits in the recovery fallback', async () => {
+    // 恢复流程的正常形态:DB 仍写着原路径,但 live 已经重建在 fallback 里 —— 会话就在
+    // 这个目录,不能因为 DB 路径不可用就拒绝发消息。
+    const recoveredSession = createSession({ workDir: '/userData/fallback' });
+    const { deps } = createDeps({
+      getSession: () => recoveredSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => '/mnt/disk/project'),
+      resolveRecoveredWorkingDir: (_id, dir) =>
+        (dir === '/mnt/disk/project' ? '/userData/fallback' : dir),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => false })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/userData/fallback',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(recoveredSession.send).toHaveBeenCalled();
+  });
+
+  it('refuses to send while the persisted managed worktree is not ready yet', async () => {
     // 托管 worktree 的"存在"不等于 ready(快照 apply 未完成 / 上一轮 apply 冲突会留
-    // 目录并阻塞):此时不能先关掉旧 runtime 再在重建时报 WORKDIR_MISSING。
+    // 目录并阻塞):这时既不能先关掉旧 runtime 再在重建时报 WORKDIR_MISSING,也不能
+    // 在旧 cwd(主仓)里执行 —— 会话属于那个 worktree,消息不该落到别处。
     const liveSession = createSession({ workDir: '/data/old-project' });
     const worktreeDir = '/repo/.cindy-worktrees/steady-goodall';
     const { deps } = createDeps({
@@ -1255,12 +1277,12 @@ describe('maker SEND transaction', () => {
 
     await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
       agentKind: 'codex', workingDir: '/data/old-project',
-    })).resolves.toMatchObject({ accepted: true });
+    })).resolves.toMatchObject({ accepted: false, reason: 'WORKDIR_MISSING' });
 
     expect(deps.statDirectory).not.toHaveBeenCalledWith(worktreeDir);
     expect(deps.closeSession).not.toHaveBeenCalled();
     expect(deps.bootstrapSession).not.toHaveBeenCalled();
-    expect(liveSession.send).toHaveBeenCalled();
+    expect(liveSession.send).not.toHaveBeenCalled();
   });
 
   it('rebuilds into a ready persisted managed worktree after cwd drift', async () => {

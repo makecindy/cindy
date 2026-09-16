@@ -1002,11 +1002,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           recoveredDir !== sess.workDir ||
           ((sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
           !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir));
+        // 判漂移比的是「会话现在到底在哪个目录」:DB 值被 workingDirectoryRecovery
+        // 接管时文件在 fallback 里,resolve 出来的才是它,而 live 已经就在 fallback
+        // 里就不算漂移 —— 否则恢复中的会话会被下面的「目录不可用」判成不能发消息。
+        const persistedDir = fallbackDir && !sess.remoteHostId
+          ? deps.resolveRecoveredWorkingDir?.(sessionId, fallbackDir) ?? fallbackDir
+          : null;
+        const persistedDirDrifted =
+          !!persistedDir && !workingDirEquals(persistedDir, sess.workDir);
         const persistedDirReady =
-          ok && !liveDirNeedsRecovery && fallbackDir && !workingDirEquals(fallbackDir, sess.workDir)
+          ok && !liveDirNeedsRecovery && persistedDirDrifted
             ? await isUsablePersistedWorkingDir(
                 sessionId,
-                fallbackDir,
+                fallbackDir!,
                 sess.agentKind,
                 sess.remoteHostId,
               )
@@ -1038,6 +1046,23 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           if (recovered.kind === 'failure') return recovered.result;
           sess = recovered.session;
         } else if (!ok) {
+          return toCompatibleMakerSendResult(
+            createHostSendFailure(
+              'WORKDIR_MISSING',
+              `working directory is missing for session ${sessionId}`,
+            ),
+          );
+        } else if (persistedDirDrifted) {
+          // 会话已经被移到别的目录(DB 是权威),但那个目录当前不可用,而旧 runtime 还活
+          // 着:绝不能在旧 cwd 里执行 —— UI 显示新项目、消息却改旧项目,正是本 PR 要消灭的
+          // 半移动(2026-09-13 实报的同一类问题)。明确失败,由用户把目录找回来、或再移动
+          // 一次会话后重发;这条分支也覆盖「托管 worktree 尚未就绪」与「DB 目录已被
+          // recovery 接管但 live 不在 fallback」——两者都不能拿旧目录顶替。
+          deps.log.warn('send: persisted working dir unavailable, refusing to send in the live cwd', {
+            sessionId,
+            liveWorkingDir: sess.workDir,
+            persistedWorkingDir: fallbackDir,
+          });
           return toCompatibleMakerSendResult(
             createHostSendFailure(
               'WORKDIR_MISSING',
