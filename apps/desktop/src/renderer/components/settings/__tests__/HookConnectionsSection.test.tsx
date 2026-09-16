@@ -1574,6 +1574,55 @@ describe('HookConnectionsSection binding actions (Telegram / X)', () => {
     expect(ipc.revokeTeam).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { name: 'server capability lost', supported: false, enabled: true, removes: false },
+    { name: 'communication disabled', supported: true, enabled: false, removes: false },
+    { name: 'communication grant removed', supported: true, enabled: undefined, removes: false },
+    { name: 'unchanged grant', supported: true, enabled: true, removes: true },
+  ])('rechecks Slack removal confirmation: $name', async ({ supported, enabled, removes }) => {
+    let pushStatus: ((view: SlackHookView) => void) | undefined;
+    let resolveConfirm: ((value: boolean) => void) | undefined;
+    dialog.confirm.mockReturnValue(new Promise<boolean>((resolve) => { resolveConfirm = resolve; }));
+    ipc.onStatusChanged.mockImplementation((listener: (view: SlackHookView) => void) => {
+      pushStatus = listener;
+      return () => {};
+    });
+    const initial: SlackHookView = {
+      ...BASE_HOOK,
+      enabled: true,
+      status: 'connected',
+      serverMultiTeam: true,
+      serverSlackCommunications: true,
+      bindings: [{
+        teamId: 'team-1', teamName: 'Cindy Team', slackUserId: 'user-1',
+        slackUserName: 'Cindy User', displaced: true, communicationsEnabled: true,
+      }],
+    };
+    ipc.get.mockResolvedValue({ hook: initial });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+    fireEvent.click(await screen.findByRole('button', {
+      name: 'settings.remoteControl.hook.multi.removeAria',
+    }));
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalledOnce());
+    expect(dialog.confirm).toHaveBeenCalledWith(expect.objectContaining({
+      description: 'settings.remoteControl.hook.multi.removeCommunicationsConfirmDescription',
+    }));
+    act(() => {
+      pushStatus?.({
+        ...initial,
+        serverSlackCommunications: supported,
+        bindings: [{ ...initial.bindings[0], communicationsEnabled: enabled }],
+      });
+    });
+    await act(async () => { resolveConfirm?.(true); });
+    if (removes) {
+      expect(ipc.revokeTeam).toHaveBeenCalledExactlyOnceWith('team-1');
+    } else {
+      expect(ipc.revokeTeam).not.toHaveBeenCalled();
+    }
+  });
+
   it('X 卡是 chip 形态, Telegram 卡是目录行内的选中态单选', async () => {
     // X 一次交互只有一条公开推文, 没有目录选择面板的位置; Telegram 虽能在会话里
     // /workspace, 但那是每会话各自设的 —— 设置页绑好目录后进新群仍会落「对话」。

@@ -934,6 +934,8 @@ export function HookConnectionsSection() {
       teamId: b.teamId,
       slackUserId: b.slackUserId,
       displaced: b.displaced,
+      communicationsEnabled: b.communicationsEnabled,
+      serverSlackCommunications: hook?.serverSlackCommunications,
     };
     const teamLabel = b.teamName ?? b.teamId;
     const ok = await confirm({
@@ -946,12 +948,17 @@ export function HookConnectionsSection() {
       confirmText: t('settings.remoteControl.hook.multi.removeConfirm'),
       cancelText: t('settings.remoteControl.hook.notInstalled.confirmCancel'),
     });
-    const stillSameBinding = hookRef.current?.bindings.some(
-      (current) =>
-        current.teamId === target.teamId &&
-        current.slackUserId === target.slackUserId &&
-        current.displaced === target.displaced,
-    );
+    // 确认授权撤销后不能因重连旧节点而降级为仅删除本地缓存。
+    const currentHook = hookRef.current;
+    const stillSameBinding =
+      currentHook?.serverSlackCommunications === target.serverSlackCommunications &&
+      currentHook?.bindings.some(
+        (current) =>
+          current.teamId === target.teamId &&
+          current.slackUserId === target.slackUserId &&
+          current.displaced === target.displaced &&
+          current.communicationsEnabled === target.communicationsEnabled,
+      );
     if (!ok || !mountedRef.current || !stillSameBinding) return;
     runHookAction(() => window.electronAPI.hookControl.revokeTeam(target.teamId));
   };
