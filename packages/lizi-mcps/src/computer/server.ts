@@ -284,6 +284,37 @@ function isInsideDir(parent: string, child: string): boolean {
   return rel.length > 0 && !rel.startsWith('..') && !path.isAbsolute(rel);
 }
 
+type AuthorizedOutsidePath = {
+  path: string;
+  isCurrent?: () => boolean;
+};
+
+function authorizedDirPath(
+  authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
+  key = 'dir',
+): string | undefined {
+  return authorizedOutsidePaths.get(key)?.path;
+}
+
+function outsideGrantExpired(grant?: AuthorizedOutsidePath): boolean {
+  return grant?.isCurrent?.() === false;
+}
+
+function staleOutsideGrantResult(tool: string, arg: string) {
+  return textResult(
+    {
+      ok: false,
+      errorCode: 'PATH_NOT_ALLOWED',
+      data: {
+        tool,
+        arg,
+        message: '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。',
+      },
+    },
+    true,
+  );
+}
+
 async function authorizedPathStillBound(
   workingDir: string,
   authorized: string,
@@ -389,7 +420,7 @@ export function createComputerMcpServer(
     // trajectory inspection must never follow a model-supplied path outside
     // the current task working directory. Keep the grant map on this call so
     // concurrent Codex HTTP dispatches cannot steal each other's authorized root.
-    const authorizedOutsidePaths = new Map<string, string>();
+    const authorizedOutsidePaths = new Map<string, AuthorizedOutsidePath>();
     const pathGuardError = await guardPathArgs(
       name as ComputerMcpToolName,
       parsedData,
@@ -424,7 +455,10 @@ export function createComputerMcpServer(
       ?? options.getSessionContext?.().workingDir
       ?? '';
     for (const [key, authorized] of authorizedOutsidePaths) {
-      if (!workingDir || !await authorizedPathStillBound(workingDir, authorized)) {
+      if (outsideGrantExpired(authorized)) {
+        return staleOutsideGrantResult(name, key);
+      }
+      if (!workingDir || !await authorizedPathStillBound(workingDir, authorized.path)) {
         return textResult(
           {
             ok: false,
@@ -594,7 +628,7 @@ export function createComputerMcpServer(
   async function prepareReplayTrajectory(
     parsedData: Record<string, unknown>,
     signal: AbortSignal | undefined,
-    authorizedOutsidePaths: Map<string, string>,
+    authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
   ): Promise<ReplayTrajectoryPreparation> {
     const directory = parsedData.dir;
     const workingDir = options.getSessionContext?.().workingDir ?? '';
@@ -616,8 +650,11 @@ export function createComputerMcpServer(
       // a legitimate symlinked workspace (including macOS /var -> /private/var)
       // is not rejected by a lexical alias mismatch.
       trajectoryRoot = await fs.realpath(directory);
-      const authorizedRoot = authorizedOutsidePaths.get('dir');
+      const authorizedRoot = authorizedDirPath(authorizedOutsidePaths);
       if (authorizedRoot) {
+        if (outsideGrantExpired(authorizedOutsidePaths.get('dir'))) {
+          return { error: staleOutsideGrantResult('replay_trajectory', 'dir') };
+        }
         if (!isInsideDir(authorizedRoot, trajectoryRoot)) {
           throw new PathBoundaryError('回放目录不再匹配已授权路径');
         }
@@ -666,10 +703,13 @@ export function createComputerMcpServer(
     for (const turn of candidates) {
       try {
         if (signal?.aborted) return { error: replayCancelledResult() };
+        if (outsideGrantExpired(authorizedOutsidePaths.get('dir'))) {
+          return { error: staleOutsideGrantResult('replay_trajectory', 'dir') };
+        }
         const turnPath = await resolveReplayBoundPath(
           workingRoot,
           path.join(trajectoryRoot, turn),
-          authorizedOutsidePaths.get('dir'),
+          authorizedDirPath(authorizedOutsidePaths),
         );
         if (!(await fs.lstat(turnPath)).isDirectory()) {
           return {
@@ -683,7 +723,7 @@ export function createComputerMcpServer(
         const actionPath = await resolveReplayBoundPath(
           workingRoot,
           path.join(turnPath, 'action.json'),
-          authorizedOutsidePaths.get('dir'),
+          authorizedDirPath(authorizedOutsidePaths),
         );
         if ((await fs.lstat(actionPath)).isSymbolicLink()) {
           return {
@@ -697,7 +737,7 @@ export function createComputerMcpServer(
         await resolveReplayBoundPath(
           workingRoot,
           canonicalActionPath,
-          authorizedOutsidePaths.get('dir'),
+          authorizedDirPath(authorizedOutsidePaths),
         );
         const actionFile = await fs.open(actionPath, REPLAY_READ_FLAGS);
         let actionText: string;
@@ -715,7 +755,7 @@ export function createComputerMcpServer(
           await resolveReplayBoundPath(
             workingRoot,
             currentCanonicalPath,
-            authorizedOutsidePaths.get('dir'),
+            authorizedDirPath(authorizedOutsidePaths),
           );
           const currentStat = await fs.stat(currentCanonicalPath);
           if (currentStat.dev !== stat.dev || currentStat.ino !== stat.ino) {
@@ -886,7 +926,7 @@ export function createComputerMcpServer(
   async function replayTrajectoryWithGuards(
     parsedData: Record<string, unknown>,
     signal: AbortSignal | undefined,
-    authorizedOutsidePaths: Map<string, string>,
+    authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
   ) {
     const prepared = await prepareReplayTrajectory(parsedData, signal, authorizedOutsidePaths);
     if ('error' in prepared) return prepared.error;
@@ -906,6 +946,9 @@ export function createComputerMcpServer(
 
     for (const [index, action] of prepared.actions.entries()) {
       if (signal?.aborted) return replayCancelledResult();
+      if (outsideGrantExpired(authorizedOutsidePaths.get('dir'))) {
+        return staleOutsideGrantResult('replay_trajectory', 'dir');
+      }
       if (Date.now() - startedAt >= MAX_REPLAY_WALL_CLOCK_MS) {
         return replayBudgetExceededResult();
       }
@@ -980,7 +1023,7 @@ export function createComputerMcpServer(
     name: ComputerMcpToolName,
     parsedData: Record<string, unknown>,
     workingDirOverride: string | undefined,
-    authorizedOutsidePaths: Map<string, string>,
+    authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
   ) {
     const argNames = COMPUTER_PATH_ARGS[name];
     if (!argNames) return null;
@@ -1035,7 +1078,10 @@ export function createComputerMcpServer(
               );
             }
             parsedData[key] = abs;
-            authorizedOutsidePaths.set(key, abs);
+            authorizedOutsidePaths.set(key, {
+              path: abs,
+              ...(auth.isCurrent ? { isCurrent: auth.isCurrent } : {}),
+            });
             continue;
           }
           return textResult(
