@@ -187,7 +187,6 @@ import {
 import { hasCurrentTeammateInstructions, teammateRuntimeInstructionItem } from './teammate-runtime-instructions.js';
 import { CodexHistoryRecoveryRequiredError, isCodexHistoryRecoveryRequired } from './history-recovery.js';
 import { CodexForkError, type CodexForkStage } from './fork-error.js';
-import { codexTextOnlyTurnConfig } from './text-only-turn.js';
 import { resolveForkTurnAnchor } from './fork-turn-anchor.js';
 import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
@@ -5311,6 +5310,7 @@ export class CodexAgent extends BaseAgent {
       }
     }
 
+    const textOnlyPolicyCleanups = new Map<string, () => void>();
     const registerCodexMcpContext = (
       threadId: string,
       mcpCallerKind: 'root' | 'descendant',
@@ -5318,6 +5318,10 @@ export class CodexAgent extends BaseAgent {
       // remoteHostId 不再跳过:远端 daemon 经 SSH remote-forward 直连本机
       // HTTP MCP bridge 后,tool call 同样按 params._meta.threadId 路由,
       // 需要这条注册让 CodexMcpThreadContextStore 能解析 remote thread。
+      if (!textOnlyPolicyCleanups.has(threadId) && !opts.remoteHostId && host.isCodexProxyActive()
+        && this.deps.registerCodexTextOnlyPolicy) {
+        textOnlyPolicyCleanups.set(threadId, this.deps.registerCodexTextOnlyPolicy(threadId, () => activeToolsDisabled));
+      }
       if (!sid || reviewMode) return;
       try {
         const register = this.deps.registerCodexMcpThreadContext;
@@ -5346,6 +5350,8 @@ export class CodexAgent extends BaseAgent {
       }
     };
     const unregisterCodexMcpContext = (threadId: string): void => {
+      textOnlyPolicyCleanups.get(threadId)?.();
+      textOnlyPolicyCleanups.delete(threadId);
       // 与 register 对齐:remote thread 同样注册过 context,close 时同样注销。
       if (!sid) return;
       try {
@@ -5868,7 +5874,6 @@ export class CodexAgent extends BaseAgent {
       return contextLimit ?? customWindow;
     };
     let appliedContextLimit = currentContextLimit();
-    let appliedToolsDisabled = false;
     activeTurnContextLimit = effectiveThreadContextWindow(appliedContextLimit);
 
     function currentThreadWorkspaceConfig(contextLimit = currentContextLimit()): Pick<
@@ -5925,9 +5930,6 @@ export class CodexAgent extends BaseAgent {
               ),
             }
           : {}),
-        // Native pre-execution hooks deny local/MCP tools even in Full access;
-        // hosted tools must also be omitted before the model request is sent.
-        ...(activeToolsDisabled ? codexTextOnlyTurnConfig() : {}),
       };
       const shared = {
         approvalPolicy,
@@ -6813,8 +6815,7 @@ export class CodexAgent extends BaseAgent {
     // then cold-resume its intact rollout before accepting another turn.
     const ensureContextLimitForNextTurn = (signal?: AbortSignal): Promise<void> | null => {
       const desired = currentContextLimit();
-      const desiredToolsDisabled = activeToolsDisabled;
-      if (desired === appliedContextLimit && desiredToolsDisabled === appliedToolsDisabled) return null;
+      if (desired === appliedContextLimit) return null;
       return (async () => {
         if (signal?.aborted || closed) throw new Error('Codex context settings update cancelled');
         if (!threadMayHaveRollout) {
@@ -6859,7 +6860,6 @@ export class CodexAgent extends BaseAgent {
           }
         }
         appliedContextLimit = desired;
-        appliedToolsDisabled = desiredToolsDisabled;
         hasActivatedRootTurn = false;
         lastNativeContextWindow = null;
         usageTracker.setContextWindow(0);
@@ -12449,8 +12449,8 @@ export class CodexAgent extends BaseAgent {
       get codexProductPromptDelivery() { return codexProductPromptDelivery; },
 
       validateSendOptions(sendOpts: SendOptions) {
-        if (sendOpts.toolsDisabled && !codexUserAgentAtLeast(initResp.userAgent, [0, 145, 0])) {
-          throw new Error('Host text-only turns require Codex 0.145.0 or newer for native PreToolUse enforcement.');
+        if (sendOpts.toolsDisabled && (!host.isCodexProxyActive() || !textOnlyPolicyCleanups.has(threadId))) {
+          throw new Error('Host text-only turns require an active Codex request policy proxy.');
         }
         if (
           sendOpts.turnPermissionPolicy &&

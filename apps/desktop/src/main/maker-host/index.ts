@@ -1,3 +1,4 @@
+import { registerCodexTextOnlyPolicy } from './codex-text-only-policy.js';
 import { readDisabledSkillPaths } from '../skillhub/activationPreferences';
 import { clearCodexAccountUsageSnapshot } from '../usageBroadcaster.js';
 /**
@@ -1861,6 +1862,7 @@ export function getMaker(): Maker {
       },
       withCodexMcpDiscoveryContext: (ctx, run) =>
         withCodexMcpDiscoveryContext({ ...ctx, agentKind: 'codex' }, run),
+      registerCodexTextOnlyPolicy,
       registerCodexMcpThreadContext: ({
         threadId,
         sessionId,
