@@ -116,10 +116,12 @@ interface ReplayTrajectoryAction {
   turn: string;
   tool: ComputerMcpToolName;
   args: Record<string, unknown>;
+  authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>;
 }
 
 interface ComputerDispatchOptions {
   pathWorkingDirOverride?: string;
+  preAuthorizedOutsidePaths?: Map<string, AuthorizedOutsidePath>;
 }
 
 type ComputerMcpTextResult = ReturnType<typeof textResult>;
@@ -434,7 +436,7 @@ export function createComputerMcpServer(
     // trajectory inspection must never follow a model-supplied path outside
     // the current task working directory. Keep the grant map on this call so
     // concurrent Codex HTTP dispatches cannot steal each other's authorized root.
-    const authorizedOutsidePaths = new Map<string, AuthorizedOutsidePath>();
+    const authorizedOutsidePaths = new Map(dispatchOptions?.preAuthorizedOutsidePaths);
     const pathGuardError = await guardPathArgs(
       name as ComputerMcpToolName,
       parsedData,
@@ -869,9 +871,10 @@ export function createComputerMcpServer(
           };
         }
         const args = parsed.data as Record<string, unknown>;
-        const nestedPathError = await guardPathArgs(toolName, args, workingRoot, new Map());
+        const nestedGrants = new Map<string, AuthorizedOutsidePath>();
+        const nestedPathError = await guardPathArgs(toolName, args, workingRoot, nestedGrants);
         if (nestedPathError) return { error: nestedPathError };
-        actions.push({ turn, tool: toolName, args });
+        actions.push({ turn, tool: toolName, args, authorizedOutsidePaths: nestedGrants });
       } catch (error) {
         if (signal?.aborted) return { error: replayCancelledResult() };
         deps.logger?.warn('failed to validate Computer Use trajectory action', {
@@ -992,6 +995,7 @@ export function createComputerMcpServer(
         // root. Reuse it so a symlink spelling of the session workingDir does
         // not make those immutable absolute paths look lexically out of scope.
         pathWorkingDirOverride: prepared.workingRoot,
+        preAuthorizedOutsidePaths: action.authorizedOutsidePaths,
       });
       if (signal?.aborted) return replayCancelledResult();
       const payload = JSON.parse(result.content[0].text) as { outcome?: { status?: string }; data?: { outcome_unknown?: boolean } };
@@ -1084,6 +1088,16 @@ export function createComputerMcpServer(
         if (e instanceof PathBoundaryError) {
           const sessionContext = options.getSessionContext?.();
           const abs = await resolveCanonicalSessionPath(workingDir, value);
+          const existing = authorizedOutsidePaths.get(key);
+          if (
+            existing
+            && existing.path === abs
+            && existing.isCurrent?.() !== false
+            && await authorizedPathStillBound(workingDir, existing)
+          ) {
+            parsedData[key] = abs;
+            continue;
+          }
           const auth = await authorizeSessionPathWithPinnedAncestors({
             sessionId: sessionContext?.sessionId,
             sessionInstanceId: sessionContext?.sessionInstanceId,

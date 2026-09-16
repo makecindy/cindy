@@ -93,7 +93,7 @@ export function registerMakeDocxTool(
       try {
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.docx');
-        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx);
+        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx, 'make_docx');
         const abs = prepared.abs;
         const trimmedTitle = title?.trim() ?? '';
         const useCover = trimmedTitle.length > 0 && (cover ?? true);

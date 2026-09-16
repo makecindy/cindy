@@ -425,7 +425,7 @@ export function registerReadSheetTool(
     handler: async ({ path: inputPath, sheet, startRow, maxRows, startColumn, maxColumns }) => {
       try {
         const root = resolveSessionRoot(sessionCtx);
-        const prepared = await prepareInputPath(root, inputPath, sessionCtx);
+        const prepared = await prepareInputPath(root, inputPath, sessionCtx, 'read_sheet');
         const abs = prepared.abs;
         const ext = path.extname(abs).toLowerCase();
 

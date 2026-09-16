@@ -487,7 +487,7 @@ export function registerMakePptxTool(
       try {
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.pptx');
-        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx);
+        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx, 'make_pptx');
         const abs = prepared.abs;
         const palette = resolveDocsTheme(theme as DocsThemeName);
 
@@ -498,7 +498,7 @@ export function registerMakePptxTool(
         let totalImageBytes = 0;
         for (const [index, slide] of slides.entries()) {
           if (!slide.imagePath) continue;
-          const imagePrepared = await prepareInputPath(root, slide.imagePath, sessionCtx);
+          const imagePrepared = await prepareInputPath(root, slide.imagePath, sessionCtx, 'make_pptx');
           const imageAbs = imagePrepared.abs;
           // pptxgenjs 只按扩展名决定内嵌的 content-type,喂个 .webp 进去会生成一个
           // PowerPoint 打不开的坏包 —— 那正是「看着成功、其实交了坏文件」,必须先拦。

@@ -1225,6 +1225,55 @@ describe('createComputerMcpServer', () => {
     await fs.rm(outside, { recursive: true, force: true });
   });
 
+  it('authorizes a recorded outside screenshot path once before replay dispatch', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-shot-')));
+    const screenshot = path.join(outside, 'frame.png');
+    const directory = await writeTrajectory(root, [
+      {
+        tool: 'get_window_state',
+        arguments: {
+          pid: 123,
+          window_id: 7,
+          capture_mode: 'vision',
+          screenshot_out_file: screenshot,
+        },
+      },
+    ]);
+    const authorizer = vi.fn(async (request: { path: string; toolName?: string }) => {
+      expect(request.path).toBe(screenshot);
+      expect(request.toolName).toBe('cindy-computer:get_window_state');
+      return { allowed: true, isCurrent: () => true };
+    });
+    setSessionPathAuthorizer(authorizer);
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: root }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'replay_trajectory',
+        args: { dir: directory, delay_ms: 0, stop_on_error: false },
+      },
+    })) as { ok: boolean; data: { attempted: number; succeeded: number } };
+
+    expect(payload).toMatchObject({ ok: true, data: { attempted: 1, succeeded: 1 } });
+    expect(authorizer).toHaveBeenCalledOnce();
+    expect(deps.callTool).toHaveBeenCalledWith(
+      'get_window_state',
+      expect.objectContaining({ screenshot_out_file: screenshot }),
+      expect.anything(),
+    );
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
   it('does not replay an outside trajectory after the live grant expires', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),

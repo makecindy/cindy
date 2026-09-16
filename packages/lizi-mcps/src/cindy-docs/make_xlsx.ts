@@ -342,7 +342,7 @@ export function registerMakeXlsxTool(
         assertXlsxAggregateBounds(sheets);
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.xlsx');
-        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx);
+        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx, 'make_xlsx');
         const abs = prepared.abs;
         const palette = resolveDocsTheme((theme ?? DEFAULT_DOCS_THEME) as DocsThemeName);
 

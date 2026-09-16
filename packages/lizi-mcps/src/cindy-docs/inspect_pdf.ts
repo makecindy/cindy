@@ -149,7 +149,7 @@ export function registerInspectPdfTool(
         }
         const carriedVerdict = previousVerdict ?? 'incomplete';
         const root = resolveSessionRoot(sessionCtx);
-        const prepared = await prepareInputPath(root, inputPath, sessionCtx);
+        const prepared = await prepareInputPath(root, inputPath, sessionCtx, 'inspect_pdf');
         const abs = prepared.abs;
         if (path.extname(abs).toLowerCase() !== '.pdf') {
           return errorPayload(

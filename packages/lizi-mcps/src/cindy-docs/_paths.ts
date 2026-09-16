@@ -141,6 +141,7 @@ async function resolveDocsPath(
   inputPath: string,
   operation: 'read' | 'write',
   sessionCtx?: DocsMcpSessionCtx,
+  toolName = 'cindy-docs',
 ): Promise<PreparedDocsPath> {
   try {
     return {
@@ -159,7 +160,7 @@ async function resolveDocsPath(
       workingDir: root,
       remoteHostId: ctx?.remoteHostId,
       path: abs,
-      toolName: 'cindy-docs',
+      toolName,
       operation,
     });
     if (!auth.allowed) toPathError(err, inputPath, auth.reason);
@@ -181,8 +182,9 @@ export async function prepareOutputPath(
   outPath: string,
   overwrite: boolean,
   sessionCtx?: DocsMcpSessionCtx,
+  toolName = 'cindy-docs',
 ): Promise<PreparedDocsPath> {
-  const prepared = await resolveDocsPath(root, outPath, 'write', sessionCtx);
+  const prepared = await resolveDocsPath(root, outPath, 'write', sessionCtx, toolName);
   const abs = prepared.abs;
 
   let exists = true;
@@ -219,8 +221,9 @@ export async function prepareInputPath(
   root: string,
   inPath: string,
   sessionCtx?: DocsMcpSessionCtx,
+  toolName = 'cindy-docs',
 ): Promise<PreparedDocsPath> {
-  const prepared = await resolveDocsPath(root, inPath, 'read', sessionCtx);
+  const prepared = await resolveDocsPath(root, inPath, 'read', sessionCtx, toolName);
   const abs = prepared.abs;
   let isFile = false;
   try {

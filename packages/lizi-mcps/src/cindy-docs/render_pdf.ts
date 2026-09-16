@@ -807,7 +807,7 @@ async function snapshotLocalResource(
   const lexicalCacheKey = `${path.resolve(absPath)}\0${mimeOverride ?? ''}`;
   const lexicalCached = context.lexicalCache.get(lexicalCacheKey);
   if (lexicalCached) return `${lexicalCached}${fragment}`;
-  const prepared = await prepareInputPath(context.root, absPath, context.sessionCtx);
+  const prepared = await prepareInputPath(context.root, absPath, context.sessionCtx, 'render_pdf');
   const preparedPath = prepared.abs;
   const cacheKey = `${path.resolve(preparedPath)}\0${mimeOverride ?? ''}`;
   const cached = context.cache.get(cacheKey);
@@ -1074,9 +1074,9 @@ export function registerRenderPdfTool(
       try {
         const root = resolveSessionRoot(sessionCtx);
         assertOutputExtension(outPath, '.pdf');
-        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx);
+        const prepared = await prepareOutputPath(root, outPath, overwrite, sessionCtx, 'render_pdf');
         const abs = prepared.abs;
-        const sourcePrepared = hasPath ? await prepareInputPath(root, htmlPath!, sessionCtx) : undefined;
+        const sourcePrepared = hasPath ? await prepareInputPath(root, htmlPath!, sessionCtx, 'render_pdf') : undefined;
         const sourcePath = sourcePrepared?.abs;
         const sourceDirectory = sourcePath
           ? await captureDirectorySnapshot(path.dirname(sourcePath))

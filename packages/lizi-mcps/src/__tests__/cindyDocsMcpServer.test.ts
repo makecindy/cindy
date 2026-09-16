@@ -1224,6 +1224,7 @@ describe('路径边界与覆盖语义', () => {
     setSessionPathAuthorizer(async (request) => {
       expect(request.path).toBe(outPath);
       expect(request.operation).toBe('write');
+      expect(request.toolName).toBe('make_docx');
       return { allowed: true, isCurrent: () => true };
     });
     const client = await connect();
