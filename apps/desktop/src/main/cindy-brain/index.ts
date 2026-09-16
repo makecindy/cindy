@@ -338,6 +338,7 @@ import {
 } from '../plugin-market/ledger.js';
 import {
   installedMarketManifestIdentity,
+  verifyInstalledMarketManifest,
   type InstalledMarketManifestIdentity,
 } from '../plugin-market/installedManifestIdentity.js';
 import { createOrganizationPrefixStore } from '../plugin-market/organizationPrefixStore.js';
@@ -712,6 +713,7 @@ function getLegacyGhostRecoveryStatusForActiveSession(): LegacyGhostRecoveryStat
     {
       reservedCommands: reservedBuiltinCommands,
       rejectReservedIds: shouldRejectReservedGhostIds(app.isPackaged),
+      verifyLegacyOfficialProvenance: hasLegacyOfficialMarketProvenance,
     },
   );
 }
@@ -829,6 +831,7 @@ async function retryLegacyGhostRecoveryForActiveSession(): Promise<LegacyGhostRe
           shouldAbort,
           reservedCommands: reservedBuiltinCommands,
           rejectReservedIds: shouldRejectReservedGhostIds(app.isPackaged),
+          verifyLegacyOfficialProvenance: hasLegacyOfficialMarketProvenance,
         },
       );
     } catch (error) {
@@ -2641,6 +2644,23 @@ function readInstalledGhostManifestIdentity(
     GHOST_INSTALL_MANIFEST_MAX_BYTES,
   );
   return result.ok ? installedMarketManifestIdentity(result.snapshot) : null;
+}
+
+function hasLegacyOfficialMarketProvenance(ghostId: string, dir: string): boolean {
+  const lookup = getPluginMarketLedger().lookupInstallationForOidc(ghostId);
+  if (
+    lookup.kind !== 'found' ||
+    !lookup.record.installed ||
+    (lookup.record.source !== 'market' && lookup.record.source !== 'legacy-adopted')
+  ) {
+    return false;
+  }
+  const result = readInstalledGhostManifestSnapshot(dir, GHOST_INSTALL_MANIFEST_MAX_BYTES);
+  return result.ok &&
+    verifyInstalledMarketManifest(
+      lookup.record,
+      installedMarketManifestIdentity(result.snapshot),
+    );
 }
 
 /** Resolve Connection metadata from trusted organization installs or explicit Forge receipts. */
