@@ -28,37 +28,42 @@ import {
   CINDY_PI_BASH_MAX_TIMEOUT_SECONDS,
 } from '../cindy-bridge-source.js';
 
-it('blocks every tool in text-only turns before permission shortcuts and restores normal turns', async () => {
+it('keeps text-only policy local and ordinary tools independent of host UI failures', async () => {
   const source = CINDY_BRIDGE_EXTENSION_SOURCE;
-  const helperStart = source.indexOf('async function toolsDisabledForTurn');
+  const helperStart = source.indexOf('let textOnlyTurnActive = false');
   const helperEnd = source.indexOf('function currentPermissionState', helperStart);
   const handlerStart = source.indexOf("  pi.on('tool_call'");
   const handlerEnd = source.indexOf('\n  });', handlerStart) + '\n  });'.length;
-  let handler!: (event: { toolName: string }, ctx: object) => Promise<unknown>;
+  const handlers = new Map<string, (event: any, ctx: any) => any>();
   let permissionReads = 0;
   const compiled = ts.transpileModule(
-    source.slice(helperStart, helperEnd) + source.slice(handlerStart, handlerEnd),
+    source.slice(helperStart, helperEnd) + '\ninstallTextOnlyTurnPolicy(pi);\n' + source.slice(handlerStart, handlerEnd),
     { compilerOptions: { target: ts.ScriptTarget.ES2022 } },
   ).outputText;
   runInNewContext(compiled, {
-    process: { env: { CINDY_PI_TURN_TOOL_POLICY: '1' } },
+    process: { env: { CINDY_PI_TURN_TOOL_POLICY: 'runtime-token' } },
     currentPermissionState: () => { permissionReads++; return { reviewOnly: false, mode: 'bypassPermissions' }; },
-    pi: { on: (_event: string, callback: typeof handler) => { handler = callback; } },
+    pi: { on: (event: string, callback: (event: any, ctx: any) => any) => { handlers.set(event, callback); } },
   });
-  let enabled: unknown = false;
-  const ctx = { ui: { confirm: async () => enabled } };
+  const ctx = { ui: { confirm: () => { throw new Error('UI unavailable'); } }, isIdle: () => true };
+  const tool = handlers.get('tool_call')!;
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  const prefix = '[CINDY_TEXT_ONLY_INPUT]:runtime-token\n';
+  expect(handlers.get('input')!({ source: 'rpc', text: '[CINDY_TEXT_ONLY_INPUT]:forged\nHello' }, ctx)).toBeUndefined();
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
+  const images = [{ type: 'image', data: 'fixture' }];
+  expect(handlers.get('input')!({ source: 'rpc', text: prefix + 'Hello', images }, ctx))
+    .toEqual({ action: 'transform', text: 'Hello', images });
+  const readsBefore = permissionReads;
   for (const toolName of ['read', 'bash', 'write', 'ask_user_question', 'cindy_mcp_call_tool', 'future_tool']) {
-    expect(await handler({ toolName }, ctx)).toMatchObject({ block: true });
+    expect(await tool({ toolName }, ctx)).toMatchObject({ block: true });
   }
-  expect(permissionReads).toBe(0);
-  for (const response of [undefined, 'true', null]) {
-    enabled = response;
-    expect(await handler({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
-  }
-  expect(await handler({ toolName: 'read' }, { ui: { confirm: async () => { throw new Error('closed'); } } })).toMatchObject({ block: true });
-  enabled = true;
-  expect(await handler({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
-  expect(permissionReads).toBe(1);
+  expect(permissionReads).toBe(readsBefore);
+  expect(handlers.has('agent_end')).toBe(false); // Intermediate retry/compaction boundaries retain the policy.
+  handlers.get('agent_settled')!({}, { ...ctx, isIdle: () => false });
+  expect(await tool({ toolName: 'read' }, ctx)).toMatchObject({ block: true });
+  handlers.get('agent_settled')!({}, ctx);
+  expect(await tool({ toolName: 'ask_user_question' }, ctx)).toBeUndefined();
 });
 
 const canLinkFile = (() => {

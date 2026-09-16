@@ -1916,7 +1916,8 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(existsSync(target)).toBe(false);
         expect(resolver).not.toHaveBeenCalled();
 
-        scriptedResponses.push(anthropicToolUseBody('write', { path: target, content: 'test' }), anthropicStreamBody('Done.'));
+        scriptedResponses.push(anthropicToolUseBody('read', { path: 'private.txt' }),
+          anthropicToolUseBody('write', { path: target, content: 'test' }), anthropicStreamBody('Done.'));
         const normalDone = collectTurn();
         const ordinaryStart = performance.now();
         await handle.send({ type: 'user', content: 'Now write the file.' });
@@ -1925,6 +1926,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(readFileSync(target, 'utf8')).toBe('test');
         const welcomeRequest = JSON.parse(seenRequests[requestStart]!.body);
         const ordinaryRequest = JSON.parse(seenRequests.at(-1)!.body);
+        expect(seenRequests.at(-1)!.body).toContain('fixture-read-secret');
+        expect(readFileSync(handle.id, 'utf8')).not.toContain('[CINDY_TEXT_ONLY_INPUT]');
+        expect(seenRequests.slice(requestStart).every(request => !request.body.includes('[CINDY_TEXT_ONLY_INPUT]'))).toBe(true);
         expect(ordinaryRequest.system).toEqual(welcomeRequest.system);
         expect(ordinaryRequest.tools).toEqual(welcomeRequest.tools);
         expect(ordinaryRequest.model).toBe(welcomeRequest.model);

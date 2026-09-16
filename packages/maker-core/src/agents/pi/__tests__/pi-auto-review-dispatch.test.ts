@@ -443,23 +443,20 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   it('toggles welcome policy without filesystem writes or extra prompt RPCs', async () => {
     const handle = await start('bypassPermissions');
+    const token = captured.env.CINDY_PI_TURN_TOOL_POLICY;
+    captured.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:text-only-ready:' + token });
     const write = vi.spyOn(fs, 'writeFile').mockRejectedValue(new Error('storage unavailable'));
     const remove = vi.spyOn(fs, 'rm').mockRejectedValue(new Error('storage unavailable'));
     const begin = captured.requests.length;
-    const query = (id: string) => {
-      captured.onEvent?.({ type: 'extension_ui_request', method: 'confirm', id, title: 'cindy:turn-tools-enabled' });
-      return captured.sent.find((frame) => frame.id === id)?.confirmed;
-    };
     try {
       await handle.send({ type: 'user', content: 'Welcome.' }, { toolsDisabled: true });
-      expect(query('welcome')).toBe(false);
+      expect(captured.requests.at(-1)?.message).toBe('[CINDY_TEXT_ONLY_INPUT]:' + token + '\nWelcome.');
       await expect(handle.send({ type: 'user', content: 'Too soon.' })).rejects.toThrow('tool policy');
-      expect(query('still-welcome')).toBe(false);
       captured.onEvent?.({ type: 'agent_start' });
       captured.onEvent?.({ type: 'agent_end', messages: [] });
       captured.onEvent?.({ type: 'agent_settled' });
       await handle.send({ type: 'user', content: 'Ordinary.' });
-      expect(query('ordinary')).toBe(true);
+      expect(captured.requests.at(-1)?.message).toBe('Ordinary.');
       expect(captured.requests.slice(begin).map(frame => frame.type)).toEqual(['prompt', 'prompt']);
       expect(write).not.toHaveBeenCalled();
       expect(remove).not.toHaveBeenCalled();
@@ -467,7 +464,22 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       write.mockRestore(); remove.mockRestore();
       await handle.close();
     }
-    expect(query('closed')).toBeUndefined(); // Closed transports do not answer; the bridge denies on timeout.
+  });
+
+  it.each(['missing', 'closed'] as const)('rejects only welcome input when the policy boundary is %s', async (state) => {
+    const handle = await start('bypassPermissions');
+    const token = captured.env.CINDY_PI_TURN_TOOL_POLICY;
+    if (state === 'closed') {
+      captured.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:text-only-ready:' + token });
+      captured.onEvent?.({ type: 'extension_ui_request', method: 'notify', message: 'cindy:text-only-unavailable:' + token });
+    }
+    const begin = captured.requests.length;
+    try {
+      await expect(handle.send({ type: 'user', content: 'Welcome.' }, { toolsDisabled: true })).rejects.toThrow('policy is unavailable');
+      expect(captured.requests).toHaveLength(begin);
+      await handle.send({ type: 'user', content: 'Ordinary.' });
+      expect(captured.requests.slice(begin)).toEqual([expect.objectContaining({ type: 'prompt', message: 'Ordinary.' })]);
+    } finally { await handle.close(); }
   });
 
   /**

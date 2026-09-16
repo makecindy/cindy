@@ -90,6 +90,9 @@ import {
 } from '../base-agent.js';
 import {
   CINDY_BRIDGE_EXTENSION_FILENAME,
+  CINDY_PI_TEXT_ONLY_INPUT_PREFIX,
+  CINDY_PI_TEXT_ONLY_READY_PREFIX,
+  CINDY_PI_TEXT_ONLY_CLOSED_PREFIX,
   CINDY_BRIDGE_EXTENSION_SOURCE } from './cindy-bridge-source.js';
 import { nativeProviderAdapterAliases } from './native-provider-adapter-source.js';
 import {
@@ -3212,8 +3215,13 @@ export class PiAgent extends BaseAgent {
       runtimeDir,
       `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}-${runtimeInstanceId}${remote ? `-${permissionSnapshotHash}` : ''}.json`,
     );
-    // The preinstalled bridge queries this local state over its existing control channel.
     let activeToolsDisabled = false;
+    let textOnlyPolicyReady = false;
+    const textOnlyInput = (text: string): string => {
+      if (!activeToolsDisabled) return text;
+      if (!textOnlyPolicyReady) throw new Error('Pi text-only input policy is unavailable.');
+      return `${CINDY_PI_TEXT_ONLY_INPUT_PREFIX}${runtimeInstanceId}\n${text}`;
+    };
     // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
     // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
     // 本地 provider 不一起传还会让同名模型落到错误 endpoint(codex P2,pi-harness §3 要求
@@ -5070,7 +5078,7 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         [PI_BASH_PACKAGE_HOME_ENV]: bashPackageHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
-        CINDY_PI_TURN_TOOL_POLICY: remote ? '' : '1',
+        CINDY_PI_TURN_TOOL_POLICY: remote ? '' : runtimeInstanceId,
         ...(allowPiPackageManagement ? { [PI_PACKAGE_MANAGEMENT_ENV]: piPackageManagementToken } : {}),
         // 轮 40-w4-t12 HIGH-1:review-only 启动标记 —— 独立于权限文件(文件损坏/
         // 缺失时 bridge 仍保留 reviewOnly 语义, 不降级成普通 ask;见
@@ -5151,11 +5159,20 @@ export class PiAgent extends BaseAgent {
           if (event.type === 'agent_start' || event.type === 'agent_settled') {
             piAgentLifecycleSequence += 1;
           }
+          if (!remote && event.type === 'extension_ui_request' && event.method === 'notify') {
+            if (event.message === `${CINDY_PI_TEXT_ONLY_READY_PREFIX}${runtimeInstanceId}`) {
+              textOnlyPolicyReady = true;
+              return;
+            }
+            if (event.message === `${CINDY_PI_TEXT_ONLY_CLOSED_PREFIX}${runtimeInstanceId}`) {
+              textOnlyPolicyReady = false;
+              return;
+            }
+          }
           if (event.type === 'extension_ui_request') {
             this.handleExtensionUiRequest(event, proc, () => ({
               resolver: interactionResolver,
               permissionMode,
-              toolsDisabled: activeToolsDisabled,
               currentModelIds: [mutableModel, mutableWireModel],
               workspaceRoots: [opts.workingDir],
               readRoots: [opts.workingDir, ...mutableExtraDirs, ...mutableWritableDirs],
@@ -6483,6 +6500,9 @@ export class PiAgent extends BaseAgent {
         if (sendOpts.toolsDisabled && remote) {
           throw new Error('Host text-only Pi turns require a local runtime, not a shared remote daemon.');
         }
+        if (sendOpts.toolsDisabled && !textOnlyPolicyReady) {
+          throw new Error('Pi text-only input policy is unavailable.');
+        }
         if (sendOpts.turnPermissionPolicy && permissionMode === 'bypassPermissions') {
           throw new TurnPermissionPolicyUnsupportedError('pi', permissionMode);
         }
@@ -6549,7 +6569,7 @@ export class PiAgent extends BaseAgent {
           }
           const command: Record<string, unknown> = {
             type: 'prompt',
-            message: escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest),
+            message: textOnlyInput(escapeLeadingSlashCommand(promptText, runtimeCapabilityManifest)),
           };
           if (images.length > 0) command.images = images;
           // send 语义 = 排队开新 turn;pi streaming 中裸 prompt 会被拒,补 followUp。
@@ -7653,7 +7673,6 @@ export class PiAgent extends BaseAgent {
     getPermissionCtx: () => {
       resolver: InteractionResolver | null;
       permissionMode: 'ask' | 'auto' | 'bypassPermissions';
-      toolsDisabled?: boolean;
       currentModelIds: readonly string[];
       workspaceRoots: string[];
       readRoots: string[];
@@ -7710,16 +7729,6 @@ export class PiAgent extends BaseAgent {
     const method = typeof event.method === 'string' ? event.method : '';
     const id = typeof event.id === 'string' ? event.id : undefined;
     if (!id) return;
-
-    if (method === 'confirm' && event.title === 'cindy:turn-tools-enabled') {
-      const context = getPermissionCtx();
-      if (context.isAccountBoundaryTornDown()) return;
-      proc.send({
-        type: 'extension_ui_response', id,
-        confirmed: !context.isPermissionContextClosed() && context.toolsDisabled === false,
-      });
-      return;
-    }
 
     if (getPiExtensionUiCapability(method)?.handling === 'notification') {
       const message = typeof event.message === 'string' ? event.message.trim() : '';
