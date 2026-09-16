@@ -14,6 +14,7 @@
  * 同一套清单/真实包校验；安装动作本身不另设能力确认弹窗。
  */
 
+import { randomBytes } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
@@ -169,6 +170,41 @@ function shouldSkip(name: string): boolean {
   if (name.toLowerCase() === 'node_modules') return true;
   if (name.toLowerCase().endsWith('.cindy')) return true; // 上次打包产物,防套娃
   return false;
+}
+
+/**
+ * 把 .cindy 写进规范源码目录,且绝不跟随已有产物符号链接。
+ * `writeFile` 会穿过同名链接覆盖授权目录外的目标;这里先拒链接,再经同目录
+ * 点文件临时名 + rename 发布,覆盖时删的也是链接自身而不是它的真实目标。
+ */
+async function writeForgePackageWithoutFollowing(destPath: string, buf: Buffer): Promise<void> {
+  try {
+    if ((await fs.promises.lstat(destPath)).isSymbolicLink()) {
+      throw Object.assign(new Error('打包产物路径是符号链接，已停止写入'), { code: 'ELOOP' });
+    }
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  const tmpPath = path.join(
+    path.dirname(destPath),
+    `.${path.basename(destPath)}.${randomBytes(8).toString('hex')}.tmp`,
+  );
+  await fs.promises.writeFile(tmpPath, buf, { flag: 'wx' });
+  try {
+    try {
+      const listed = await fs.promises.lstat(destPath);
+      if (listed.isSymbolicLink()) {
+        throw Object.assign(new Error('打包产物路径是符号链接，已停止写入'), { code: 'ELOOP' });
+      }
+      await fs.promises.unlink(destPath);
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+    }
+    await fs.promises.rename(tmpPath, destPath);
+  } catch (err) {
+    await fs.promises.unlink(tmpPath).catch(() => undefined);
+    throw err;
+  }
 }
 
 export type ForgePackResult =
@@ -1488,7 +1524,7 @@ export async function packGhostDir(
   const identityBeforeWrite = await staleOutsideForgeIdentity(options);
   if (identityBeforeWrite) return identityBeforeWrite;
   try {
-    await fs.promises.writeFile(cindyPath, built.buf);
+    await writeForgePackageWithoutFollowing(cindyPath, built.buf);
   } catch (err) {
     return {
       ok: false,

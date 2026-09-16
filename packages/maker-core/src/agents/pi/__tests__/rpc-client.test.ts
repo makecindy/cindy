@@ -256,4 +256,20 @@ describe('PiRpcProcess close semantics (bridge-disconnect vs explicit close)', (
       error: PI_RPC_OVERSIZED_FRAME_ERROR,
     });
   });
+
+  it('does not fail a lone pending steer when an oversized event frame is dropped', async () => {
+    const { transport, emitLine, emitOversized, drain } = makeFakeTransport();
+    const { proc } = makeProc({ transport });
+    const pending = proc.request({ type: 'steer', message: 'keep going' });
+    drain();
+    emitOversized();
+    const sentFrame = JSON.parse(transport.writeLine.mock.calls[0][0] as string) as { id: string };
+    emitLine(JSON.stringify({
+      type: 'response', id: sentFrame.id, command: 'steer', success: true,
+    }));
+    await expect(pending).resolves.toMatchObject({
+      success: true,
+      command: 'steer',
+    });
+  });
 });

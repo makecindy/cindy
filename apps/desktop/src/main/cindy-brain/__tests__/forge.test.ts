@@ -493,6 +493,30 @@ describe('packGhostDir', () => {
     }
   });
 
+  it('does not follow a pre-existing package symlink when writing the pack', async () => {
+    if (!canSymlink) return;
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {}',
+    });
+    const outsideRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-pkg-link-'));
+    try {
+      const outsideDir = path.join(outsideRoot, 'src');
+      await fs.promises.cp(dir, outsideDir, { recursive: true });
+      const leaked = path.join(outsideRoot, 'leaked.cindy');
+      await fs.promises.writeFile(leaked, 'keep-me');
+      await fs.promises.symlink(leaked, path.join(outsideDir, 'demo-1.0.0.cindy'));
+      await expect(packGhostDirRaw(outsideDir, {
+        sessionWorkdir: workDir,
+        ...(await hostAuthorizedOutside(outsideDir)),
+      })).resolves.toMatchObject({ ok: false, errorCode: 'INTERNAL' });
+      expect(await fs.promises.readFile(leaked, 'utf8')).toBe('keep-me');
+      expect((await fs.promises.lstat(path.join(outsideDir, 'demo-1.0.0.cindy'))).isSymbolicLink()).toBe(true);
+    } finally {
+      await fs.promises.rm(outsideRoot, { recursive: true, force: true });
+    }
+  });
+
   it('rejects Host-managed roots, descendants, case aliases, and junction aliases', async () => {
     const managedRoot = path.join(workDir, 'managed');
     const installedDir = path.join(managedRoot, 'demo');

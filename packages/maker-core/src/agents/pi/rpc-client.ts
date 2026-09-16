@@ -383,13 +383,14 @@ export class PiRpcProcess {
   }
 
   private failOversizedPending(): void {
+    // 超限通知不带帧 type / 响应 id。事件帧(如 message_end)也可能超限;
+    // 只能结束能确定归属的 get_entries,不能把唯一 pending 的 steer/abort 猜成受害者。
     const victims = [...this.pending.entries()].filter(([, entry]) => entry.commandType === 'get_entries');
-    const targets = victims.length > 0 ? victims : this.pending.size === 1 ? [...this.pending.entries()] : [];
-    if (targets.length === 0) {
-      this.logger.warn('pi rpc: discarded oversized JSONL frame with no matching pending request');
+    if (victims.length === 0) {
+      this.logger.warn('pi rpc: discarded oversized JSONL frame with no matching pending get_entries');
       return;
     }
-    for (const [id, entry] of targets) {
+    for (const [id, entry] of victims) {
       clearTimeout(entry.timer);
       this.pending.delete(id);
       entry.resolve({
