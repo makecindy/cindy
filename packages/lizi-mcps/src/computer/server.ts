@@ -321,6 +321,34 @@ function staleOutsideGrantResult(tool: string, arg: string) {
   );
 }
 
+function reboundOutsideGrantResult(tool: string, arg: string) {
+  return textResult(
+    {
+      ok: false,
+      errorCode: 'PATH_NOT_ALLOWED',
+      data: {
+        tool,
+        arg,
+        message: '已授权路径在回放前发生变化，已停止读取。请用当前任务权限重试。',
+      },
+    },
+    true,
+  );
+}
+
+async function replayDirGrantStillBound(
+  workingDir: string,
+  authorizedOutsidePaths: Map<string, AuthorizedOutsidePath>,
+): Promise<ComputerMcpTextResult | null> {
+  const dirGrant = authorizedOutsidePaths.get('dir');
+  if (!dirGrant) return null;
+  if (outsideGrantExpired(dirGrant)) return staleOutsideGrantResult('replay_trajectory', 'dir');
+  if (!await authorizedPathStillBound(workingDir, dirGrant)) {
+    return reboundOutsideGrantResult('replay_trajectory', 'dir');
+  }
+  return null;
+}
+
 async function authorizedPathStillBound(
   workingDir: string,
   authorized: AuthorizedOutsidePath,
@@ -667,27 +695,9 @@ export function createComputerMcpServer(
       // is not rejected by a lexical alias mismatch.
       trajectoryRoot = await fs.realpath(directory);
       const authorizedRoot = authorizedDirPath(authorizedOutsidePaths);
-      const dirGrant = authorizedOutsidePaths.get('dir');
       if (authorizedRoot) {
-        if (outsideGrantExpired(dirGrant)) {
-          return { error: staleOutsideGrantResult('replay_trajectory', 'dir') };
-        }
-        if (dirGrant && !await authorizedPathStillBound(workingDir, dirGrant)) {
-          return {
-            error: textResult(
-              {
-                ok: false,
-                errorCode: 'PATH_NOT_ALLOWED',
-                data: {
-                  tool: 'replay_trajectory',
-                  arg: 'dir',
-                  message: '已授权路径在回放前发生变化，已停止读取。请用当前任务权限重试。',
-                },
-              },
-              true,
-            ),
-          };
-        }
+        const rebound = await replayDirGrantStillBound(workingDir, authorizedOutsidePaths);
+        if (rebound) return { error: rebound };
         if (!isInsideDir(authorizedRoot, trajectoryRoot)) {
           throw new PathBoundaryError('回放目录不再匹配已授权路径');
         }
@@ -736,9 +746,8 @@ export function createComputerMcpServer(
     for (const turn of candidates) {
       try {
         if (signal?.aborted) return { error: replayCancelledResult() };
-        if (outsideGrantExpired(authorizedOutsidePaths.get('dir'))) {
-          return { error: staleOutsideGrantResult('replay_trajectory', 'dir') };
-        }
+        const rebound = await replayDirGrantStillBound(workingDir, authorizedOutsidePaths);
+        if (rebound) return { error: rebound };
         const turnPath = await resolveReplayBoundPath(
           workingRoot,
           path.join(trajectoryRoot, turn),
@@ -980,9 +989,11 @@ export function createComputerMcpServer(
 
     for (const [index, action] of prepared.actions.entries()) {
       if (signal?.aborted) return replayCancelledResult();
-      if (outsideGrantExpired(authorizedOutsidePaths.get('dir'))) {
-        return staleOutsideGrantResult('replay_trajectory', 'dir');
-      }
+      const rebound = await replayDirGrantStillBound(
+        options.getSessionContext?.().workingDir ?? '',
+        authorizedOutsidePaths,
+      );
+      if (rebound) return rebound;
       if (Date.now() - startedAt >= MAX_REPLAY_WALL_CLOCK_MS) {
         return replayBudgetExceededResult();
       }
