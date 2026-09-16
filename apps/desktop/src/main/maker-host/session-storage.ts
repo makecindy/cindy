@@ -212,6 +212,29 @@ export async function readSessionWorkingDirFromDb(id: string): Promise<string | 
  * SEND lazy-create handler 用它兜底 (renderer 不走 createOpts 透传 extraDirs)。
  * 失败 / 空 / 不是数组 → 返回 []，不抛错。
  */
+/**
+ * 读 working_dir 时同时报告「行是否存在」。lazy-create 必须区分两种 null：
+ * 「没有这一行」(首次建 runtime,沿用 caller 快照)与「行在、但 working_dir 已被
+ * 显式清空」(DB 明确说这个会话没有目录,不能让排队/重试快照里的旧目录把它复活)。
+ */
+export async function readSessionWorkingDirRow(
+  id: string,
+): Promise<{ exists: boolean; workingDir: string | null }> {
+  const db = getDbClient().drizzle;
+  const rows = await db
+    .select({ workingDir: sessions.workingDir })
+    .from(sessions)
+    .where(eq(sessions.id, id))
+    .limit(1);
+  const row = rows[0];
+  if (!row) return { exists: false, workingDir: null };
+  const raw = row.workingDir;
+  return {
+    exists: true,
+    workingDir: typeof raw === 'string' && raw.trim() !== '' ? raw : null,
+  };
+}
+
 export async function readSessionExtraDirsFromDb(id: string): Promise<string[]> {
   const db = getDbClient().drizzle;
   const rows = await db

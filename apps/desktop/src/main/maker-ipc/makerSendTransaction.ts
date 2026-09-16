@@ -351,6 +351,13 @@ export interface MakerSendTransactionDeps {
    * 输入队列崩溃快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
    */
   readSessionWorkingDirFromDb(sessionId: string): Promise<string | null>;
+  /**
+   * 区分「没有这一行」与「行在但 working_dir 被显式清空」：DB 返回空目录时,
+   * lazy-create 用它判断能不能沿用 caller 快照（行在=DB 说这个会话没有目录）。
+   */
+  readSessionWorkingDirState?(
+    sessionId: string,
+  ): Promise<{ exists: boolean; workingDir: string | null }>;
   isOrcaMcpHydrated(sessionId: string): boolean;
   buildCreateOptsWithStderr(opts: CreateOpts): CreateOpts;
   synthesizeOrcaVendorOptionsFromDb(sessionId: string, opts: CreateOpts): Promise<boolean>;
@@ -665,6 +672,25 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     opts?: { preferDbWorkingDir?: boolean },
   ): Promise<boolean> {
     const dbDir = await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null);
+    if (
+      opts?.preferDbWorkingDir &&
+      !dbDir &&
+      !createOpts.remoteHostId &&
+      createOpts.workingDir &&
+      deps.readSessionWorkingDirState
+    ) {
+      // DB 行存在但 working_dir 已被清空：DB 明确说这个会话没有目录，排队/重试快照
+      // 里的旧目录不能把它复活 —— 否则又是「库里没有目录、runtime 却在旧项目里跑」。
+      // 行不存在（首次 lazy-create）时才沿用 caller 快照。
+      const state = await deps.readSessionWorkingDirState(sessionId).catch(() => null);
+      if (state?.exists) {
+        deps.log.warn('send: lazy-create dropped stale caller workingDir because DB row has none', {
+          sessionId,
+          staleWorkingDir: createOpts.workingDir,
+        });
+        return false;
+      }
+    }
     if (opts?.preferDbWorkingDir && dbDir && dbDir !== createOpts.workingDir) {
       const adopted = createOpts.remoteHostId
         ? dbDir

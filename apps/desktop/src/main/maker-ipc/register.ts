@@ -498,6 +498,7 @@ import {
   readSessionExtraDirsFromDb,
   readSessionWritableDirsFromDb,
   readSessionWorkingDirFromDb,
+  readSessionWorkingDirRow,
   listVisibleActiveSessionDirectoryGrants,
 } from '../maker-host/session-storage.js';
 import { libraryExtraDirSyncTargets } from './libraryExtraDirSyncTargets.js';
@@ -12139,6 +12140,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     readSessionExtraDirsFromDb,
     readSessionWritableDirsFromDb,
     readSessionWorkingDirFromDb,
+    readSessionWorkingDirState: readSessionWorkingDirRow,
     withRehydrateCloseSuppressed,
     bootstrapSession,
     markOrcaRoleIfNeeded,

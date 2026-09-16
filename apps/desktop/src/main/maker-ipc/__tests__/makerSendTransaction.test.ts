@@ -63,6 +63,8 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => false),
     readSessionExtraDirsFromDb: vi.fn(async () => []),
     readSessionWorkingDirFromDb: vi.fn(async () => null),
+    // 默认「DB 没有这一行」:lazy-create 沿用 caller 快照的既有语义不变。
+    readSessionWorkingDirState: vi.fn(async () => ({ exists: false, workingDir: null })),
     readWorkingDirectoryRecoveryCreateOpts: vi.fn(async (): Promise<MakerSessionCreateOpts> => ({
       agentKind: 'codex', workingDir: 'C:\\repo', model: 'gpt-5.4',
     })),
@@ -1610,6 +1612,57 @@ describe('maker SEND transaction', () => {
     );
     expect(deps.bootstrapSession).toHaveBeenCalledWith(
       expect.objectContaining({ workingDir: dbDir }),
+    );
+  });
+
+  it('lazy-create refuses the stale snapshot when the DB row exists with no working_dir', async () => {
+    // working_dir 被显式清空(null)后 DB 明确说这个会话没有目录;排队/重试快照里
+    // 内嵌的旧目录不能把它复活,否则 runtime 又会在库里已经不认的项目里跑。
+    const staleDir = '/data/old-project';
+    const checkWorkDirExists = vi.fn(async () => true);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      checkWorkDirExists,
+      readSessionWorkingDirFromDb: vi.fn(async () => null),
+      readSessionWorkingDirState: vi.fn(async () => ({ exists: true, workingDir: null })),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('cleared-session', 'hello', {
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-7',
+        workingDir: staleDir,
+      }),
+    ).resolves.toMatchObject({ accepted: false, reason: 'WORKDIR_MISSING' });
+
+    expect(checkWorkDirExists).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+  });
+
+  it('lazy-create keeps the caller snapshot when the DB has no row yet', async () => {
+    // 行不存在(首次 lazy-create)不是「被清空」:caller 快照仍是唯一可用的目录。
+    const callerDir = '/data/fresh-project';
+    const checkWorkDirExists = vi.fn(async () => true);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      checkWorkDirExists,
+      readSessionWorkingDirFromDb: vi.fn(async () => null),
+      readSessionWorkingDirState: vi.fn(async () => ({ exists: false, workingDir: null })),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('fresh-session', 'hello', {
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-7',
+        workingDir: callerDir,
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(checkWorkDirExists).toHaveBeenCalledWith(
+      'fresh-session', callerDir, 'claude-code', undefined,
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: callerDir }),
     );
   });
 
