@@ -1131,6 +1131,20 @@ describe('local-db:sessions:update handler wiring', () => {
       .toEqual({ working_dir: worktreeDir.replace(/\\/g, '/') });
   });
 
+  it('allows moving a session whose worktree was already recycled', async () => {
+    const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'recycled-name');
+    // 回收后 store 里没有绑定(注入查询返回 null),但 cwd 与快照仍留着历史 worktree 路径:
+    // 归属以 store 为准,这类会话不能被永久拦死。
+    h.sqlite!.prepare('UPDATE sessions SET working_dir = ?, worktree_path = ? WHERE id = ?')
+      .run(worktreeDir, worktreeDir, 'cc-local');
+    setSessionWorktreeBindingLookup(() => null);
+
+    await invokeUpdate('cc-local', { workingDir: '/another/project' });
+
+    expect(h.sqlite!.prepare('SELECT working_dir FROM sessions WHERE id = ?').get('cc-local'))
+      .toEqual({ working_dir: '/another/project' });
+  });
+
   it('does not treat a recycled worktree snapshot as a live binding', async () => {
     const worktreeDir = path.join(h.userDataDir!, '.cindy-worktrees', 'recycled-name');
     // 回收后 worktreeStore 删条目但保留 DB 快照(徽标以 store 为准):这类行不应被拦住。

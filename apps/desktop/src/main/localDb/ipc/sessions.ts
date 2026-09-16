@@ -1839,10 +1839,16 @@ export async function updateSessionInDb(
       (requestedWorkingDir !== null || clearsWorkingDir) &&
       (clearsWorkingDir || !workingDirEquals(requestedWorkingDir, beforeMove.workingDir))
     ) {
-      const boundWorktreePath = sessionWorktreeBindingLookup?.(sid) ?? null;
-      const ownedWorktreeRoot =
-        (boundWorktreePath ? managedWorktreeRoot(boundWorktreePath) : null) ??
-        (beforeMove.workingDir ? managedWorktreeRoot(beforeMove.workingDir) : null);
+      // 归属真源:装了绑定查询(生产路径)就以 store 的答案为唯一依据 —— 返回 null 就是
+      // **没有活绑定**(worktree 已被回收的会话仍会留着历史 worktree 路径),此时不能再
+      // 从 cwd 反推,否则这些会话会被永久拦死;未装查询的场景(单测/裁剪引导)才退回 cwd。
+      let ownedWorktreeRoot: string | null = null;
+      if (sessionWorktreeBindingLookup) {
+        const liveWorktreePath = sessionWorktreeBindingLookup(sid);
+        ownedWorktreeRoot = liveWorktreePath ? managedWorktreeRoot(liveWorktreePath) : null;
+      } else if (beforeMove.workingDir) {
+        ownedWorktreeRoot = managedWorktreeRoot(beforeMove.workingDir);
+      }
       const targetWorktreeRoot = requestedWorkingDir
         ? managedWorktreeRoot(requestedWorkingDir)
         : null;
