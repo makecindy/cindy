@@ -30,8 +30,8 @@ import { createDesktopOnlyConfirmationRequestId } from './desktopOnlyConfirmatio
  * 意识每次写入前弹卡;同目录本会话批一次,记忆在 fsSlot);workspace =
  * workspace 槽在会话 workdir 外的目录下创建/复用会话入口(2026-07-25,
  * 不过户字节,只授权"以此目录为工作区建会话");
- * forge_source = Forge 打包/骨架的源码目录在会话 workdir 外(会写入
- * .cindy 产物或骨架文件,不是过户票据);
+ * forge_source = Forge 打包/骨架/安装的源码目录在会话 workdir 外(会写入
+ * .cindy 产物、骨架文件,或接着安装启用插件,不是过户票据);
  * outside_workdir = 文档/电脑等内置工具读写会话 workdir 外的路径。
  */
 export type GhostGrantLane =
@@ -66,6 +66,10 @@ export interface GhostGrantConfirmPayload {
   ghostName: string;
   lane: GhostGrantLane;
   items: GhostGrantFileItem[];
+  /** 发起这次确认的工具名,确认卡用来写清具体副作用。 */
+  sourceTool?: string;
+  /** 这次授权对应的读写方向。 */
+  operation?: 'read' | 'write';
 }
 
 export type GhostGrantConfirmDecision =

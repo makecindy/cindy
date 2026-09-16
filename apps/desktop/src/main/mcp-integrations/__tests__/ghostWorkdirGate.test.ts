@@ -891,6 +891,8 @@ describe('Forge workdir-out permission path', () => {
         ghostId: 'cindy-forge',
         ghostName: 'Forge',
         lane: 'forge_source',
+        sourceTool: 'ghost_forge_pack',
+        operation: 'write',
       }),
     );
     expect(packGhostDirMock).toHaveBeenCalledWith(
@@ -1100,6 +1102,14 @@ describe('session path authorization for docs/computer', () => {
       operation: 'write',
     }, liveGrantStateMock)).resolves.toEqual({ allowed: true, isCurrent });
     expect(confirmRequestMock).toHaveBeenCalledOnce();
+    expect(confirmRequestMock).toHaveBeenCalledWith(
+      's1',
+      expect.objectContaining({
+        lane: 'outside_workdir',
+        sourceTool: 'cindy-docs',
+        operation: 'write',
+      }),
+    );
 
     await expect(authorizeDesktopSessionPath({
       sessionId: 's1',

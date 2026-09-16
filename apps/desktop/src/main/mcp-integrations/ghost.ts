@@ -740,6 +740,8 @@ async function requestGrantConfirm(params: {
     ghostName: ghostDisplayName(params.ghostId),
     lane: params.lane,
     items: params.items,
+    ...(params.toolName ? { sourceTool: params.toolName } : {}),
+    ...(params.operation ? { operation: params.operation } : {}),
   });
   if (expired()) return denied;
   if (decision.confirmed) {
