@@ -1,6 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { GHOST_MANIFEST_SUMMARY_MAX_CHARS } from "@cindy/plugin-protocol";
 import { z } from "zod";
+import { boundGhostResult } from "./largeResult.js";
 
 import type {
   CindyForgeScaffoldTemplate,
@@ -878,7 +879,7 @@ export function extractAgentToolUseId(extra: unknown): string | undefined {
 
 /** ghost_call 的 handler 主体(导出供单测)。 */
 export async function handleGhostCall(
-  deps: CindyGhostsMcpDeps,
+  deps: Pick<CindyGhostsMcpDeps, "callGhostTool" | "saveLargeGhostResult" | "logger">,
   input: {
     ghost_id: string;
     tool: string;
@@ -926,7 +927,7 @@ export async function handleGhostCall(
         result.errorCode === "SETUP_REQUIRED"
           ? sanitizeGhostSetupAssessment(unsafeSetup)
           : null;
-      return textResult(
+      return boundGhostResult(deps,
         {
           ...safeResult,
           ...(setup ? { setup } : {}),
@@ -981,7 +982,7 @@ export async function handleGhostCall(
                 hint: "xdt_media_produced 是主机记账的送达通道:这些媒体已自动送达用户(桌面/IM),不要在回复文本里用 markdown 嵌入这些地址,也不要复述它们。",
               }
           : {};
-    return textResult({
+    return boundGhostResult(deps, {
       ...resultForModel,
       ...advisory,
       ...hoisted,
@@ -989,14 +990,15 @@ export async function handleGhostCall(
       ...mediaHint,
     });
   } catch (err) {
-    return textResult(
-      {
-        ok: false,
-        errorCode: "INTERNAL",
-        message: err instanceof Error ? err.message : String(err),
-      },
-      true,
-    );
+    // Thrown errors (start-up / transport failures) can embed provider-sized
+    // diagnostics: they go through the same bound as every other envelope.
+    const message = err instanceof Error ? err.message : String(err);
+    try {
+      return await boundGhostResult(deps, { ok: false, errorCode: "INTERNAL", message }, true);
+    } catch {
+      // The bounding helper itself failed: still never return an unbounded envelope.
+      return textResult({ ok: false, errorCode: "INTERNAL", message: message.slice(0, 1024), truncated: true }, true);
+    }
   }
 }
 
