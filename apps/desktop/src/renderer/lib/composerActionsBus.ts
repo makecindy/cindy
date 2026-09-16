@@ -99,8 +99,8 @@ export function insertPromptIntoEditor(
 /**
  * A request to insert one file mention chip into a composer. The composer
  * only inserts and focuses; the user still decides whether to send.
- * Mirrors the session-scoped prompt insert contract: returns true when at
- * least one subscriber for the target session accepted the insert.
+ * Subscribers are tried in registration order until one accepts the insert.
+ * Returning true claims the request and prevents writes to other composers.
  */
 export interface InsertFileMentionDetail {
   targetSessionId: string;
@@ -120,11 +120,10 @@ const fileMentionInsertHandlersBySession = new Map<string, Set<FileMentionInsert
 export function insertFileMentionIntoComposer(detail: InsertFileMentionDetail): boolean {
   const handlers = fileMentionInsertHandlersBySession.get(detail.targetSessionId);
   if (!handlers) return false;
-  let accepted = false;
   for (const handler of handlers) {
-    if (handler(detail)) accepted = true;
+    if (handler(detail)) return true;
   }
-  return accepted;
+  return false;
 }
 
 export function subscribeFileMentionInsert(

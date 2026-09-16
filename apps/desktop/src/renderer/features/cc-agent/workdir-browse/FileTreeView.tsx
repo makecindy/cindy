@@ -467,7 +467,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
                     close();
                     onAddToChat(entry);
                   }}
-                  className="h-7 px-2.5 rounded-md text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
+                  className="h-7 px-2.5 rounded-lg text-13 leading-none text-[var(--msg-assistant-text)] focus:bg-[var(--cmd-palette-item-hover)]"
                 >
                   <MessageSquarePlus className="mr-2 h-3.5 w-3.5 shrink-0" />
                   <span className="relative top-px">{t('chat.quote.addToChat')}</span>

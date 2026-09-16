@@ -46,6 +46,42 @@ describe('composerActionsBus', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 
+  it.each([true, false])(
+    'stops after the first accepting composer (first accepts: %s)',
+    (firstAccepts) => {
+      const first = vi.fn().mockReturnValue(firstAccepts);
+      const second = vi.fn().mockReturnValue(true);
+      const third = vi.fn().mockReturnValue(true);
+      const otherSession = vi.fn().mockReturnValue(true);
+      const unsubscribes = [
+        subscribeFileMentionInsert('session-a', first),
+        subscribeFileMentionInsert('session-a', second),
+        subscribeFileMentionInsert('session-a', third),
+        subscribeFileMentionInsert('session-b', otherSession),
+      ];
+      const detail = {
+        targetSessionId: 'session-a',
+        type: 'file' as const,
+        relPath: 'src/main.ts',
+        name: 'main.ts',
+      };
+
+      try {
+        expect(insertFileMentionIntoComposer(detail)).toBe(true);
+        expect(first).toHaveBeenCalledExactlyOnceWith(detail);
+        if (firstAccepts) {
+          expect(second).not.toHaveBeenCalled();
+        } else {
+          expect(second).toHaveBeenCalledExactlyOnceWith(detail);
+        }
+        expect(third).not.toHaveBeenCalled();
+        expect(otherSession).not.toHaveBeenCalled();
+      } finally {
+        unsubscribes.forEach((unsubscribe) => unsubscribe());
+      }
+    },
+  );
+
   it('rejects file mention insert when no handler accepts', () => {
     const handler = vi.fn().mockReturnValue(false);
     const unsubscribe = subscribeFileMentionInsert('session-b', handler);
