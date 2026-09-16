@@ -36,6 +36,8 @@ import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { toast } from '@/lib/toast';
 import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
+import { insertFileMentionIntoComposer } from '@/lib/composerActionsBus';
+import { isSidebarWindow } from '@/lib/sidebarWindow';
 import { Tip } from '@/components/ui/tooltip';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import {
@@ -137,6 +139,9 @@ function FileBrowserBodyWithWorkdir({
   );
   const remoteHostId = deviceId ? null : ctx.remoteHostId;
   const isRemote = Boolean(remoteHostId) || Boolean(deviceId);
+  // 独立侧栏没有 ChatInput,且动作总线只在当前 Renderer 内分发。
+  // 与浏览器评论入口一致,仅在带输入框的主窗/副窗口中提供此动作。
+  const addToChatSupported = !isSidebarWindow() && Boolean(ctx.sessionId);
   const tree = useFileTree({ workdir, hideMetaFiles: true, remoteHostId, deviceId });
   const fileContent = useFileContent(workdir, state.selectedFilePath, remoteHostId, deviceId);
   const [externalFile, setExternalFile] = useState<ExternalFileSelection | null>(null);
@@ -360,6 +365,25 @@ function FileBrowserBodyWithWorkdir({
       }
     },
     [workdir, t],
+  );
+
+  // 文件树右键「添加到对话」:把目标会话的文件引用 chip 插入输入框,只填不发。
+  // 输入框未挂载 / 任务切换 / 输入锁期间返回 false,此时提示用户稍后重试,
+  // 不静默缓存到可能写入其它任务的全局待办。
+  const handleAddToChat = useCallback(
+    (entry: DirEntry) => {
+      if (!ctx.sessionId) return;
+      const accepted = insertFileMentionIntoComposer({
+        targetSessionId: ctx.sessionId,
+        type: 'file',
+        relPath: entry.relPath,
+        name: entry.name,
+      });
+      if (!accepted) {
+        toast.warning(t('ccAgent.workdirBrowse.treeMenu.addToChatUnavailable'));
+      }
+    },
+    [ctx.sessionId, t],
   );
 
   const handleOpenInSidebarBrowser = useCallback(
@@ -677,6 +701,7 @@ function FileBrowserBodyWithWorkdir({
                 onCopyFilePath={!isRemote ? handleCopyFilePath : undefined}
                 onRevealInFolder={!isRemote ? handleRevealInFolder : undefined}
                 onOpenInFileBrowser={ctx.sessionId ? handleOpenInFileBrowser : undefined}
+                onAddToChat={addToChatSupported ? handleAddToChat : undefined}
                 onOpenInSidebarBrowser={!isRemote && ctx.sessionId ? handleOpenInSidebarBrowser : undefined}
                 onOpenInBrowser={!isRemote ? handleOpenInBrowser : undefined}
               />
