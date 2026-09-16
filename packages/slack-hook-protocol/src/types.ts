@@ -651,6 +651,8 @@ export interface TurnReopenPayload {
  * 提示升级, 不再执行邮箱定位。
  */
 export interface BindStartPayload {
+  /** 仅授权本机通讯，绝不修改 Bot 接收设备。只能在 slack-communications 协商后发送。 */
+  purpose?: 'communications';
   /** @deprecated 旧版邮箱绑定流字段; 新端不再发送, 仅用于 server 识别老客户端。 */
   email?: string;
   /**
@@ -689,6 +691,8 @@ export type BindUpdateState = (typeof BIND_UPDATE_STATES)[number];
  * authorizeUrl 非空(OIDC 授权链接); failed 时 message 非空。
  */
 export interface BindUpdatePayload {
+  /** 回放授权意图，防重连/重试将通讯授权误升级为 Bot 换绑。 */
+  purpose?: 'communications';
   state: BindUpdateState;
   slackUserId: string | null;
   /** Slack 显示名(设置页展示「已绑定 @xxx」用), 拿不到可为 null。 */
@@ -765,6 +769,8 @@ export interface BindStateEntry {
 
 export interface BindStatePayload {
   bindings: BindStateEntry[];
+  /** 设备通讯授权快照；缺省表示旧 server，不可由本地缓存推断授权。 */
+  communications?: (BindStateEntry & { enabled: boolean })[];
 }
 
 // ── Provider-neutral binding (append-only v1) ───────────────────────────────
@@ -1269,6 +1275,8 @@ export interface ProviderBehaviorStatePayload
  * 为 SERVER_TOO_OLD, 不打空炮。
  */
 export const HOOK_FEATURE_SLACK_TOOLS = 'slack-tools';
+/** 工具权限独立于 Bot 接收设备，支持 communications.set。 */
+export const HOOK_FEATURE_SLACK_COMMUNICATIONS = 'slack-communications';
 
 /**
  * 双向能力标识: 多 workspace 绑定(见文件头第 13 条)。desktop 在

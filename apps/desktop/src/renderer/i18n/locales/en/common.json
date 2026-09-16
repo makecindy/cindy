@@ -680,6 +680,15 @@
       "wecomGroupClearFailed": "Could not remove the Webhook"
     },
     "windowBehavior": {
+      "loginItem": {
+        "label": "Start Cindy at Login",
+        "hint": "Open Cindy automatically when you sign in to your computer. Off by default.",
+        "requiresApproval": "Allow Cindy in Login Items in macOS System Settings to finish enabling startup.",
+        "loading": "Reading system settings…",
+        "loadFailed": "Could not read startup settings. Reopen this settings page to retry.",
+        "saveFailed": "Could not save startup settings. Retry or check your system startup items.",
+        "notApplied": "The system did not apply this setting. Check your system startup items and retry."
+      },
       "title": "App Behavior",
       "closeBehavior": {
         "label": "When closing the main window",
@@ -3760,6 +3769,12 @@
           "statusPendingSuffix_other": " ({{count}} pending)",
           "statusOffKept_one": "Off · {{count}} workspace binding kept",
           "statusOffKept_other": "Off · {{count}} workspace bindings kept",
+          "removeCommunicationsConfirmDescription": "Remove this device's communications access to this workspace. Other devices and Bot reception settings are not affected.",
+          "localCommunications": "Slack Communications on This Device",
+          "communicationsActive": "Slack Communications On",
+          "communicationsInactive": "Slack Communications Off",
+          "botNotReceiving": "Not Receiving Bot Chats",
+          "receiveBot": "Receive Bot Chats",
           "displaced": "Bound on another device",
           "rebind": "Rebind",
           "removeAria": "Unlink this workspace",

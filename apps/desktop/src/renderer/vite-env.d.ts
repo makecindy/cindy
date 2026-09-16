@@ -1901,6 +1901,8 @@ interface ElectronAPI {
   };
 
   windowBehavior: {
+    getLoginItem: () => Promise<import('../shared/loginItem').LoginItemState>;
+    setLoginItem: (enabled: boolean) => Promise<import('../shared/loginItem').LoginItemState>;
     setSwallowActivationClick: (enabled: boolean) => Promise<{ ok: true }>;
     getWindowsCloseBehavior: () => Promise<'quit' | 'tray' | null>;
     setWindowsCloseBehavior: (behavior: 'quit' | 'tray') => Promise<'quit' | 'tray'>;
@@ -4147,6 +4149,10 @@ interface ElectronAPI {
     addBinding: () => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     rebindTeam: (
       teamId: string,
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    setSlackCommunications: (
+      teamId: string,
+      enabled: boolean,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     revokeTeam: (
       teamId: string,

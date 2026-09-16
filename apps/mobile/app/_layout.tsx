@@ -73,6 +73,7 @@ import {
   isPrecreatedWorktreeRegistrationInFlight,
   recoverPendingPrecreatedWorktrees,
 } from '@/session/precreatedWorktreeRecovery';
+import { IncomingShareBridge } from '@/session/IncomingShareBridge';
 
 function NavigationGate() {
   const auth = useAuth();
@@ -139,6 +140,7 @@ function NavigationGate() {
 
   return (
     <NavigationThemeProvider value={navigationTheme}>
+      <IncomingShareBridge />
       {/* Android 专用:splash 覆盖层仍在时状态栏保持浅色;淡出开始后切回主题样式 */}
       {Platform.OS === 'android' ? (
         <StatusBar

@@ -6,7 +6,7 @@ summary: Supported external services — FeiShu, Slack, Telegram, Discord, Googl
 At a glance, Cindy integrates with:
 
 - **FeiShu (Lark)** — DM-style bot notifications and interaction (Settings > IM bots). See the FeiShu bot topic. (FeiShu is no longer a sign-in method for Cindy itself.)
-- **Slack** — one binding (Settings > IM bots, the "Cindy" tab) powers both directions: the Slack channel bot for receiving tasks, and agent Slack tools (search / read history / post as the bound user) available in every session.
+- **Slack** — Settings > IM bots (the "Cindy" tab) manages workspace connections. With a compatible server, **Slack Communications on This Device** enables agent tools (search / read history / post as the authorized user) independently on multiple devices; Bot chats and tasks still go to a single receiving device. Enabling communications does not change that receiver.
 - **Telegram** — link your Telegram account to the official Cindy bot under Settings > IM bots (the "Cindy" tab). No bot token is required. Telegram tasks use the same local projects and Cindy sessions as Slack, while keeping channel-specific project and model preferences separate.
 - **Discord** — a Discord bot you bring yourself (your own Discord App + bot token) under Settings > IM bots.
 - **Google** — Gmail / Calendar / Drive / Sheets, via the Filo Google plugin (Plugins > Filo Google).

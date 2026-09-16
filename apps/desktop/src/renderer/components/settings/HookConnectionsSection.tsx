@@ -582,7 +582,8 @@ export function HookConnectionsSection() {
   // 缓存行, multiUi 自然回落。
   const multiUi = hook !== null && (hook.serverMultiTeam || hook.bindings.length > 0);
   const activeTeams = hook?.bindings.filter((b) => !b.displaced) ?? [];
-  const displacedCount = (hook?.bindings.length ?? 0) - activeTeams.length;
+  const communicationTeams = hook?.serverSlackCommunications ? hook.bindings.filter((b) => b.communicationsEnabled !== undefined) : [];
+  const displacedCount = hook?.bindings.filter((b) => b.displaced && b.communicationsEnabled === undefined).length ?? 0;
   /** 状态行「(M 个待处理)」= 在途/终止态授权 + displaced 行。 */
   const pendingIssueCount = (hook !== null && hook.pendingBind !== null ? 1 : 0) + displacedCount;
 
@@ -611,9 +612,11 @@ export function HookConnectionsSection() {
 
   /** Terminal Slack authorization states restart through the matching main-process flow. */
   const handleReauthorize = useCallback(
-    (mode: 'enable' | 'add' | 'rebind', teamId?: string) => {
+    (mode: 'enable' | 'add' | 'rebind' | 'communications', teamId?: string) => {
       const action =
-        mode === 'enable'
+        mode === 'communications' && teamId
+          ? () => window.electronAPI.hookControl.setSlackCommunications(teamId, true)
+          : mode === 'enable'
           ? () => window.electronAPI.hookControl.setEnabled(true)
           : mode === 'rebind' && teamId
             ? () => window.electronAPI.hookControl.rebindTeam(teamId)
@@ -923,30 +926,39 @@ export function HookConnectionsSection() {
 
   /**
    * (multi-team)解绑某 workspace: 走确认弹窗(危险操作文案)。displaced 行的
-   * "删除"同一入口 —— main 侧按行状态区分(活跃行发 bind.revoke, displaced 行
-   * 仅清本地缓存), 文案按行状态取。
+   * "删除"同一入口 —— main 区分 Bot 解绑、通讯专用授权撤销与旧 server 缓存。
+   * 确认文案按行状态和服务端能力取。
    */
   const handleRemoveBinding = async (b: HookTeamBindingView) => {
     const target = {
       teamId: b.teamId,
       slackUserId: b.slackUserId,
       displaced: b.displaced,
+      communicationsEnabled: b.communicationsEnabled,
+      serverSlackCommunications: hook?.serverSlackCommunications,
     };
     const teamLabel = b.teamName ?? b.teamId;
     const ok = await confirm({
       title: t('settings.remoteControl.hook.multi.removeConfirmTitle', { team: teamLabel }),
       description: b.displaced
-        ? t('settings.remoteControl.hook.multi.removeDisplacedConfirmDescription')
+        ? t(hook?.serverSlackCommunications
+            ? 'settings.remoteControl.hook.multi.removeCommunicationsConfirmDescription'
+            : 'settings.remoteControl.hook.multi.removeDisplacedConfirmDescription')
         : t('settings.remoteControl.hook.multi.removeConfirmDescription', { team: teamLabel }),
       confirmText: t('settings.remoteControl.hook.multi.removeConfirm'),
       cancelText: t('settings.remoteControl.hook.notInstalled.confirmCancel'),
     });
-    const stillSameBinding = hookRef.current?.bindings.some(
-      (current) =>
-        current.teamId === target.teamId &&
-        current.slackUserId === target.slackUserId &&
-        current.displaced === target.displaced,
-    );
+    // 确认授权撤销后不能因重连旧节点而降级为仅删除本地缓存。
+    const currentHook = hookRef.current;
+    const stillSameBinding =
+      currentHook?.serverSlackCommunications === target.serverSlackCommunications &&
+      currentHook?.bindings.some(
+        (current) =>
+          current.teamId === target.teamId &&
+          current.slackUserId === target.slackUserId &&
+          current.displaced === target.displaced &&
+          current.communicationsEnabled === target.communicationsEnabled,
+      );
     if (!ok || !mountedRef.current || !stillSameBinding) return;
     runHookAction(() => window.electronAPI.hookControl.revokeTeam(target.teamId));
   };
@@ -959,13 +971,13 @@ export function HookConnectionsSection() {
    * toggle 视觉开态:
    *   - 单绑定(老 server): 绑定已确认(连接 + 绑定齐备才算"开") —— enabled 只是
    *     持久化的意图, 连接中 / 授权中 / 待安装期间开关显示为关;
-   *   - multi-team: 有可用绑定即算"开"(不再要求单一 confirmed); 首次 0 绑定
-   *     授权中仍显示关+「授权中…」, 与现状一致。
+   *   - multi-team: 有 Bot 绑定或通讯授权（含显式关闭）即算"开"；仅有展示缓存
+   *     不算稳定连接，首次授权中仍显示关+「授权中…」。
    * 两种模式都用绑定快照而非连接态承载开态 —— 断线重连的瞬时抖动不弹开关
    * (连接状态由左侧状态点与状态行表达, 规则 7 不跳变)。
    */
   const toggleChecked = multiUi
-    ? hook.enabled && activeTeams.length > 0
+    ? hook.enabled && (activeTeams.length > 0 || communicationTeams.length > 0)
     : hook.enabled && hook.binding?.state === 'confirmed';
   /** 在途态(意图已开但尚无可用绑定): 此时再点 toggle = 取消本轮流程(关回)。 */
   const toggleInProgress = hook.enabled && !toggleChecked;
@@ -1000,7 +1012,11 @@ export function HookConnectionsSection() {
           ? t('settings.remoteControl.hook.authorizing')
           : isNotInstalled
             ? t('settings.remoteControl.hook.notInstalled.status')
-            : t('settings.remoteControl.hook.statusUnbound')
+            : communicationTeams.length > 0
+              ? t(communicationTeams.some((b) => b.communicationsEnabled)
+                  ? 'settings.remoteControl.hook.multi.communicationsActive'
+                  : 'settings.remoteControl.hook.multi.communicationsInactive')
+              : t('settings.remoteControl.hook.statusUnbound')
     : bindingState === 'confirmed'
       ? hook.binding?.teamName
         ? t('settings.remoteControl.hook.statusBoundTeam', {
@@ -1730,7 +1746,7 @@ export function HookConnectionsSection() {
               {hook.bindings.map((b) => (
                 <div
                   key={b.teamId}
-                  className="flex items-center gap-2 rounded-xl border border-[var(--border-default)] px-2.5 py-2"
+                  className="flex flex-wrap items-center gap-2 rounded-xl border border-[var(--border-default)] px-2.5 py-2"
                 >
                   <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                     <span className="truncate text-13 font-medium text-[var(--text-primary)]">
@@ -1743,8 +1759,8 @@ export function HookConnectionsSection() {
                   {b.displaced ? (
                     <>
                       {/* 被另一台设备顶掉: 标注 + 重新绑定(pin 到该 team 的授权页) */}
-                      <span className="shrink-0 text-11 text-[var(--error-fg)]">
-                        {t('settings.remoteControl.hook.multi.displaced')}
+                      <span className={`shrink-0 text-11 ${b.communicationsEnabled !== undefined ? 'text-[var(--text-tertiary)]' : 'text-[var(--error-fg)]'}`}>
+                        {t(b.communicationsEnabled !== undefined ? 'settings.remoteControl.hook.multi.botNotReceiving' : 'settings.remoteControl.hook.multi.displaced')}
                       </span>
                       <button
                         type="button"
@@ -1758,7 +1774,7 @@ export function HookConnectionsSection() {
                         disabled={slackAuthActionPending}
                         className={pillBtn}
                       >
-                        {t('settings.remoteControl.hook.multi.rebind')}
+                        {t(b.communicationsEnabled !== undefined ? 'settings.remoteControl.hook.multi.receiveBot' : 'settings.remoteControl.hook.multi.rebind')}
                       </button>
                     </>
                   ) : null}
@@ -1770,6 +1786,21 @@ export function HookConnectionsSection() {
                   >
                     <Trash2 size={13} />
                   </button>
+                  {hook.serverSlackCommunications ? (
+                    <label className="flex basis-full items-center justify-between gap-2 text-12 text-[var(--text-secondary)]">
+                      {t('settings.remoteControl.hook.multi.localCommunications')}
+                      <Switch
+                        checked={b.communicationsEnabled === true}
+                        disabled={hook.status !== 'connected' || slackAuthActionPending || hook.pendingBind?.state === 'pending'}
+                        onCheckedChange={(enabled) => runSlackAuthAction(
+                          () => window.electronAPI.hookControl.setSlackCommunications(b.teamId, enabled),
+                          'settings.remoteControl.hook.toast.actionFailed',
+                          true,
+                        )}
+                        aria-label={t('settings.remoteControl.hook.multi.localCommunications')}
+                      />
+                    </label>
+                  ) : null}
                 </div>
               ))}
               {hook.pendingBind?.state === 'pending' ? (
@@ -1866,6 +1897,10 @@ export function HookConnectionsSection() {
                       // (denied/expired/failed/already-bound)即使 server 回显 teamId
                       // 也是「新增」失败, 重试必须回 add 流程让授权页可切换 workspace;
                       // 只有发起时就 pin 到 team 的定向重绑才走 rebindTeam。
+                      if (pending?.purpose === 'communications' && pending.teamId) {
+                        handleReauthorize('communications', pending.teamId);
+                        return;
+                      }
                       const rebindIntent = pending?.intent === 'rebind';
                       handleReauthorize(
                         rebindIntent ? 'rebind' : 'add',
