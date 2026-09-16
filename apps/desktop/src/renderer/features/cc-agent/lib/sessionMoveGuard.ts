@@ -83,3 +83,20 @@ export function crossesWorktreeBoundary(
   // UNC 大小写差异都不算跨根,比较口径与 Main 的守卫一致。
   return targetRoot === null || !workingDirEquals(ownedRoot, targetRoot, { windows: isWindowsHost() });
 }
+
+/**
+ * 移动预检的最终判定：缓存说要拦时，再向 main 复核一次活绑定。
+ *
+ * renderer 的绑定表是 main store 的异步镜像（回收后由 `worktree:changed` 触发刷新），
+ * 事件落地的间隙里缓存可能还持有已回收的绑定 —— 直接拦会把 Main 本会放行的移动挡在
+ * 请求之前。所以只在「缓存判定为拦」时多花一次查询，用复核结果定论（复核也拦才弹
+ * toast；复核无绑定则放行，由共享写路径做最终权威判定）。
+ */
+export async function shouldBlockWorktreeMove(
+  cachedBoundWorktreePath: string | null | undefined,
+  targetWorkingDir: string,
+  revalidateBinding: () => Promise<string | null>,
+): Promise<boolean> {
+  if (!crossesWorktreeBoundary(cachedBoundWorktreePath, targetWorkingDir)) return false;
+  return crossesWorktreeBoundary(await revalidateBinding(), targetWorkingDir);
+}

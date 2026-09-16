@@ -1,6 +1,10 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { crossesWorktreeBoundary, managedWorktreeRootOf } from '../sessionMoveGuard';
+import {
+  crossesWorktreeBoundary,
+  managedWorktreeRootOf,
+  shouldBlockWorktreeMove,
+} from '../sessionMoveGuard';
 
 describe('managedWorktreeRootOf', () => {
   it('folds roots and their descendants to the same managed worktree root', () => {
@@ -48,12 +52,30 @@ describe('crossesWorktreeBoundary', () => {
     expect(crossesWorktreeBoundary(`${worktree}/src`, `${worktree}/tests`)).toBe(false);
   });
 
-  it('never blocks sessions without a live worktree binding', () => {
-    // 没有绑定(普通任务,或 store 里已回收掉登记的会话)一律放行——归属真源是
+  it('never blocks sessions without a live worktree binding', () => {    // 没有绑定(普通任务,或 store 里已回收掉登记的会话)一律放行——归属真源是
     // worktreeStore,cwd 只是历史路径,不能反过来把它拦死。
     expect(crossesWorktreeBoundary(null, '/elsewhere')).toBe(false);
     expect(crossesWorktreeBoundary(undefined, '/elsewhere')).toBe(false);
     expect(crossesWorktreeBoundary('/repo/.worktrees/user-made', '/elsewhere')).toBe(false);
+  });
+
+  it('revalidates with Main before blocking a cached binding', async () => {
+    const revalidate = vi.fn(async () => null);
+    // 缓存里还有已回收的绑定:复核回来说没有活绑定,就不该拦(否则请求根本发不出去,
+    // 而共享写路径本来会放行)。
+    await expect(shouldBlockWorktreeMove(worktree, '/elsewhere', revalidate)).resolves.toBe(false);
+    expect(revalidate).toHaveBeenCalledTimes(1);
+
+    // 复核确认仍绑定同一个 worktree → 拦。
+    await expect(
+      shouldBlockWorktreeMove(worktree, '/elsewhere', async () => worktree),
+    ).resolves.toBe(true);
+
+    // 缓存判定就不拦时不做多余查询。
+    const unused = vi.fn(async () => null);
+    await expect(shouldBlockWorktreeMove(null, '/elsewhere', unused)).resolves.toBe(false);
+    await expect(shouldBlockWorktreeMove(worktree, `${worktree}/src`, unused)).resolves.toBe(false);
+    expect(unused).not.toHaveBeenCalled();
   });
 
   it('treats separator and Windows case variants of the same root as the same worktree', () => {
