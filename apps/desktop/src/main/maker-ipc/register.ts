@@ -12106,6 +12106,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     checkWorkDirExists,
     resolveRecoveredWorkingDir: (sessionId, dir) => workingDirectoryRecovery.resolve(sessionId, dir),
+    statDirectory: (dir) => statWorkingDirectory(dir),
     preflightBotRuntimeResources: async (opts) => { await preflightBotRuntimeResources(opts); },
     readWorkingDirectoryRecoveryCreateOpts: async (sessionId) => {
       const [row] = await getDbClient().drizzle.select().from(sessions)

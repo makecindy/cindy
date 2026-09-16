@@ -9749,6 +9749,7 @@
         "moveToProjectRunningBlocked": "任務正在執行，結束後再移動",
         "moveToProjectAttachedBlocked": "任務正在被接管，結束接管後再移動",
         "moveToProjectRemoteUnsupported": "暫不支援移動遠端任務",
+        "moveToProjectWorktreeBlocked": "此任務的工作目錄是 worktree，暫不支援移動到其他專案",
         "openInNewWindow": "在新視窗開啟",
         "exportShare": "匯出任務…",
         "exportHtml": "匯出為 HTML…",

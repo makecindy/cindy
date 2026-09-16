@@ -12,6 +12,8 @@ import {
 } from '@cindy/maker-core';
 import { CODEX_RESUME_NOT_READY_WIRE_MESSAGE } from '@cindy/maker-shared/agent-input-projection';
 import type { AgentInputQueuedMessage } from '../../shared/agentInputQueue.js';
+import { getManagedWorktreeBasePath } from '../../shared/managedWorktreePaths.js';
+import { normalizeWorkingDirForStorage, workingDirEquals } from '../../shared/workingDir.js';
 
 import {
   createHostSendFailure,
@@ -338,9 +340,15 @@ export interface MakerSendTransactionDeps {
   ): Promise<boolean>;
   resolveRecoveredWorkingDir?(sessionId: string, workingDir: string): string;
   /**
-   * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create /
-   * rehydrate 在 caller 传入的 workingDir 校验失败时用它兜底——输入队列崩溃
-   * 快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
+   * 纯文件系统探测(不做 recovery / mkdir / 广播)。判断 DB 里的 working_dir 是否
+   * **真实存在** —— 会话移动后 runtime cwd 与 DB 漂移时,只有确认 DB 目录真实存在
+   * 才重建 runtime,不能把不存在的目录"恢复"成空文件夹。
+   */
+  statDirectory(dir: string): Promise<{ isDirectory(): boolean }>;
+  /**
+   * 读 DB 里既有会话的权威 working_dir(行不存在 → null)。lazy-create 把它当唯一
+   * 真源直接采纳；rehydrate 只在 caller 传入的 workingDir 校验失败时用它兜底——
+   * 输入队列崩溃快照等缓存的 createOpts 可能内嵌已被启动 sweep 改写掉的老路径。
    */
   readSessionWorkingDirFromDb(sessionId: string): Promise<string | null>;
   isOrcaMcpHydrated(sessionId: string): boolean;
@@ -634,17 +642,42 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
   }
 
   /**
-   * workDir 校验 + DB 权威值兜底。caller 传入的 createOpts.workingDir 可能是
-   * 缓存的陈旧值(典型:输入队列崩溃快照在启动 sweep 改写 DB 之前入的库,
-   * 回放时仍内嵌老路径,2026-07-20 实报)——校验失败时读 DB 行的 working_dir
-   * 重试,通过则就地采纳进 createOpts(后续 bootstrap 用新 cwd spawn)。
+   * workDir 校验 + DB 权威值兜底。caller 传入的 createOpts.workingDir 可能是缓存的
+   * 陈旧值(典型:输入队列崩溃快照在启动 sweep 改写 DB 之前入的库,回放时仍内嵌老
+   * 路径,2026-07-20 实报;用户把任务移动到别的项目后,排队/重试项里内嵌的还是旧
+   * 目录,2026-09-13 实报)。两条调用路径的权威不同:
+   *   - lazy-create(preferDbWorkingDir=true):没有活 runtime,DB 行是唯一真源 ——
+   *     快照与 DB 不一致时**无条件**采纳 DB 值再校验。只在旧目录缺失时才回退不够:
+   *     用户移动到别的项目后旧目录通常还在,校验会通过,新 runtime 就在旧 cwd 启动,
+   *     与「移动时关闭 runtime、下一次 send 以新目录 lazy resume」的契约矛盾。
+   *   - rehydrate(默认):调用方(recovery / orca)已显式决定目标目录(可能是
+   *     workingDirectoryRecovery 选定的 fallback),DB 只在 caller 目录不可用时兜底,
+   *     不能无条件改回 DB。
+   * 采纳是 fail-closed 的:lazy-create 采纳 DB 值后,caller 快照不再作为回退腿 ——
+   * DB 目录不可用时走 checkWorkDirExists 的恢复流程(worktree restore / recovery
+   * fallback / 必要时 mkdir 普通目录),都失败才报 WORKDIR_MISSING,不允许因为
+   * "caller 快照里那个目录还在"就把会话留在旧 cwd。
    * 存在兜底候选时首检静默,避免"先弹错误横幅再静默成功"的假错误。
    */
   async function ensureWorkDirWithDbFallback(
     sessionId: string,
     createOpts: CreateOpts,
+    opts?: { preferDbWorkingDir?: boolean },
   ): Promise<boolean> {
     const dbDir = await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null);
+    if (opts?.preferDbWorkingDir && dbDir && dbDir !== createOpts.workingDir) {
+      const adopted = createOpts.remoteHostId
+        ? dbDir
+        : deps.resolveRecoveredWorkingDir?.(sessionId, dbDir) ?? dbDir;
+      if (adopted !== createOpts.workingDir) {
+        deps.log.info('send: lazy-create adopted DB working_dir over stale caller snapshot', {
+          sessionId,
+          staleWorkingDir: createOpts.workingDir,
+          workingDir: adopted,
+        });
+        createOpts.workingDir = adopted;
+      }
+    }
     const fallbackDir = dbDir && dbDir !== createOpts.workingDir ? dbDir : null;
     const ok = fallbackDir
       ? await deps.checkWorkDirExists(
@@ -682,6 +715,36 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     createOpts.workingDir = createOpts.remoteHostId ? fallbackDir :
       deps.resolveRecoveredWorkingDir?.(sessionId, fallbackDir) ?? fallbackDir;
     return true;
+  }
+
+  /**
+   * 持久化 working_dir 是否真实可用。普通目录用纯 stat(不做 recovery / mkdir / 广播);
+   * 托管 worktree 用 send 侧同一套就绪判定 —— "目录存在"不等于 ready(git worktree add
+   * 后快照 apply 未完成、上一轮 apply 冲突会故意留目录并阻塞),普通 stat 会把这种目录
+   * 当可用,先关掉旧 runtime 再在重建时报 WORKDIR_MISSING。就绪检查只做 worktree
+   * restore / liveness,不会为普通目录 mkdir。
+   * 已被 workingDirectoryRecovery 接管的目录(resolve 返回 fallback)一律不算 ——
+   * session 的文件在 fallback 里,继续留在那里才符合恢复语义。
+   */
+  async function isUsablePersistedWorkingDir(
+    sessionId: string,
+    workingDir: string,
+    agentKind: AgentKind,
+    remoteHostId: string | null | undefined,
+  ): Promise<boolean> {
+    const resolved = deps.resolveRecoveredWorkingDir?.(sessionId, workingDir) ?? workingDir;
+    if (resolved !== workingDir) return false;
+    const normalized = normalizeWorkingDirForStorage(workingDir) ?? workingDir;
+    if (getManagedWorktreeBasePath(normalized) !== null) {
+      return deps.checkWorkDirExists(sessionId, workingDir, agentKind, remoteHostId, {
+        suppressMissingBroadcast: true,
+      });
+    }
+    try {
+      return (await deps.statDirectory(workingDir)).isDirectory();
+    } catch {
+      return false;
+    }
   }
 
   async function rehydrateActiveSession(
@@ -801,7 +864,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
     sessionId: string,
     createOpts: CreateOpts,
   ): Promise<ResolveSessionResult> {
-    const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts);
+    const okLazy = await ensureWorkDirWithDbFallback(sessionId, createOpts, {
+      preferDbWorkingDir: true,
+    });
     if (!okLazy) {
       return {
         kind: 'failure',
@@ -901,9 +966,12 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       await deps.ensureRemoteReadyForSessionStart({ session: sess, createOpts });
 
       if (sess) {
-        // Startup migration or a directory relocation may repair SQLite while a
-        // live SDK still owns the old cwd. Only use that persisted replacement;
-        // recreating an arbitrary project as an empty folder would lose its context.
+        // SQLite 里的 working_dir 才是持久真源(启动迁移 / 目录重定位 / 用户移动
+        // 会话都会改写它),而活 SDK 可能仍占着旧 cwd。漂移时按下面的规则切到持久
+        // 目录:普通目录必须**真实存在**(纯 stat,绝不为它 mkdir 空文件夹 —— 那会丢
+        // 掉活 runtime 的上下文);托管 worktree 必须**就绪**(走 send 侧的 restore /
+        // liveness 判定,可能补齐/恢复 worktree,但不会丢已有代码与快照)。被
+        // workingDirectoryRecovery 的 fallback 接管的目录一律不迁移。
         const dbDir = !sess.remoteHostId
           ? await deps.readSessionWorkingDirFromDb(sessionId).catch(() => null)
           : null;
@@ -915,15 +983,36 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           sess.remoteHostId,
           ...(fallbackDir ? [{ suppressMissingBroadcast: true }] : []),
         );
+        // 会话移动(移动到项目 / worktree 变更)后旧 runtime 可能仍然活着 —— cc 的
+        // 转录迁移 close 是 best-effort,close 失败时移动照常完成。此时 DB 的
+        // working_dir 才是任务现在的目录:它**真实存在**(托管 worktree 则要求就绪)
+        // 且与 runtime cwd 不一致时,关闭旧 runtime 并按 DB 目录重建;不能等旧目录
+        // 消失 —— 旧目录通常还在(2026-09-13 实报:移动后消息仍在旧目录执行)。
+        // 仅拼写差异(分隔符 / 尾斜杠 / Windows 大小写)不算漂移,不重建。
         // Claude/Pi keep a process whose cwd can still reference the deleted inode.
         // The pending note also covers recovery performed by an earlier preflight.
         const recoveredDir = !sess.remoteHostId
           ? deps.resolveRecoveredWorkingDir?.(sessionId, sess.workDir) ?? sess.workDir
           : sess.workDir;
-        const needsCwdRefresh = ok && !sess.remoteHostId && (
+        // recovery 语义优先:live 目录已被 fallback 接管(或带 note)时按 fallback
+        // 重建,不做 DB 迁移 —— 那批文件在 fallback 里,不能把 session 拉回 DB 路径。
+        // 此时也不探测 DB 目录:结果用不上,而托管 worktree 的就绪探测可能触发一次
+        // 真实的 worktree restore。
+        const liveDirNeedsRecovery =
           recoveredDir !== sess.workDir ||
           ((sess.agentKind === 'claude-code' || sess.agentKind === 'pi') &&
-          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir)));
+          !!deps.peekWorkingDirectoryRecoveryNote?.(sessionId, sess.workDir));
+        const persistedDirReady =
+          ok && !liveDirNeedsRecovery && fallbackDir && !workingDirEquals(fallbackDir, sess.workDir)
+            ? await isUsablePersistedWorkingDir(
+                sessionId,
+                fallbackDir,
+                sess.agentKind,
+                sess.remoteHostId,
+              )
+            : false;
+        const needsCwdRefresh = ok && !sess.remoteHostId &&
+          (liveDirNeedsRecovery || persistedDirReady);
         if ((!ok && fallbackDir) || needsCwdRefresh) {
           const supplied = (createOpts as CreateOpts | undefined) ??
             await deps.readWorkingDirectoryRecoveryCreateOpts(sessionId);
@@ -934,7 +1023,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             ...supplied,
             ...preferences,
             id: sessionId,
-            workingDir: needsCwdRefresh ? recoveredDir : fallbackDir!,
+            workingDir: needsCwdRefresh
+              ? (liveDirNeedsRecovery ? recoveredDir : fallbackDir!)
+              : fallbackDir!,
             agentKind: sess.agentKind,
             remoteHostId: sess.remoteHostId ?? undefined,
           });

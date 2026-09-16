@@ -56,6 +56,8 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     getSessionMeta: vi.fn(async () => ({ title: '现有会话' })),
     ensureRemoteReadyForSessionStart: vi.fn(async () => {}),
     checkWorkDirExists: vi.fn(async () => true),
+    // 默认"DB 目录不可用":不命中移动漂移重建,既有用例保持原语义。
+    statDirectory: vi.fn(async () => ({ isDirectory: () => false })),
     isOrcaMcpHydrated: vi.fn(() => true),
     buildCreateOptsWithStderr: vi.fn((opts: MakerSessionCreateOpts) => opts),
     synthesizeOrcaVendorOptionsFromDb: vi.fn(async () => false),
@@ -1165,6 +1167,210 @@ describe('maker SEND transaction', () => {
     expect(session.send).not.toHaveBeenCalled();
   });
 
+  it('rebuilds a live runtime in the persisted directory when the runtime cwd drifted', async () => {
+    // 会话移动后旧 runtime 可能仍活着(cc 转录迁移 close 是 best-effort),且旧目录
+    // 通常还在:DB 目录真实存在时必须关旧 runtime 并按 DB 目录重建,否则下一轮消息
+    // 仍在旧 cwd 执行(2026-09-13 实报)。
+    const movedSession = createSession({ workDir: '/data/old-project' });
+    const rebuiltSession = createSession({ workDir: '/data/new-project' });
+    const { deps } = createDeps({
+      getSession: () => movedSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => '/data/new-project'),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+      bootstrapSession: vi.fn(async () => ({
+        session: rebuiltSession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'claude-code', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.checkWorkDirExists).toHaveBeenNthCalledWith(
+      1, 'session-1', '/data/old-project', 'codex', null, { suppressMissingBroadcast: true },
+    );
+    expect(deps.statDirectory).toHaveBeenCalledWith('/data/new-project');
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: '/data/new-project' }),
+    );
+    expect(movedSession.send).not.toHaveBeenCalled();
+    expect(rebuiltSession.send).toHaveBeenCalled();
+  });
+
+  it('keeps the live runtime when the persisted directory is not actually on disk', async () => {
+    // 只有 DB 目录真实存在才迁移：不存在时不能走 recovery/mkdir 把不存在的项目
+    // "恢复"成空文件夹，也不能丢掉活 runtime 的上下文。
+    const movedSession = createSession({ workDir: '/data/old-project' });
+    const { deps } = createDeps({
+      getSession: () => movedSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => '/data/new-project'),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => false })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'claude-code', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(movedSession.send).toHaveBeenCalled();
+  });
+
+  it('keeps the recovery fallback instead of switching a live runtime to the raw persisted path', async () => {
+    // DB 目录已被 workingDirectoryRecovery 接管(resolve 返回 fallback)：文件在
+    // fallback 里，不能因为原路径"存在"就把 session 拉回去。
+    const movedSession = createSession({ workDir: '/data/old-project' });
+    const { deps } = createDeps({
+      getSession: () => movedSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => '/mnt/disk/project'),
+      resolveRecoveredWorkingDir: (_id, dir) =>
+        (dir === '/mnt/disk/project' ? '/userData/fallback' : dir),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(movedSession.send).toHaveBeenCalled();
+  });
+
+  it('keeps the live runtime while the persisted managed worktree is not ready yet', async () => {
+    // 托管 worktree 的"存在"不等于 ready(快照 apply 未完成 / 上一轮 apply 冲突会留
+    // 目录并阻塞):此时不能先关掉旧 runtime 再在重建时报 WORKDIR_MISSING。
+    const liveSession = createSession({ workDir: '/data/old-project' });
+    const worktreeDir = '/repo/.cindy-worktrees/steady-goodall';
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => worktreeDir),
+      // stat 说"存在",但就绪检查(同 send 侧口径)说不 ready。
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+      checkWorkDirExists: vi.fn(async (_sid, dir) => dir !== worktreeDir),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.statDirectory).not.toHaveBeenCalledWith(worktreeDir);
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).not.toHaveBeenCalled();
+    expect(liveSession.send).toHaveBeenCalled();
+  });
+
+  it('rebuilds into a ready persisted managed worktree after cwd drift', async () => {
+    // stat 说不存在、就绪检查说 ready —— 证明走的是 worktree 就绪口径而非纯 stat。
+    const liveSession = createSession({ workDir: '/data/old-project' });
+    const worktreeDir = '/repo/.cindy-worktrees/steady-goodall';
+    const rebuilt = createSession({ workDir: worktreeDir });
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => worktreeDir),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => false })),
+      checkWorkDirExists: vi.fn(async () => true),
+      bootstrapSession: vi.fn(async () => ({
+        session: rebuilt,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: worktreeDir }),
+    );
+    expect(liveSession.send).not.toHaveBeenCalled();
+    expect(rebuilt.send).toHaveBeenCalled();
+  });
+
+  it('skips DB-dir probing while the live directory is under recovery', async () => {
+    // live 目录已被 workingDirectoryRecovery 接管时重建目标只能是 recoveredDir:
+    // 探测 DB 目录的结果用不上,而托管 worktree 的就绪探测可能触发一次真实 restore。
+    const liveSession = createSession({ workDir: '/data/old-project' });
+    const recoveredDir = '/userData/dialogues/recovered';
+    const worktreeDir = '/repo/.cindy-worktrees/steady-goodall';
+    const rebuilt = createSession({ workDir: recoveredDir });
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => worktreeDir),
+      resolveRecoveredWorkingDir: (_id, dir) =>
+        (dir === '/data/old-project' ? recoveredDir : dir),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+      checkWorkDirExists: vi.fn(async (_sid, dir) => dir !== worktreeDir),
+      bootstrapSession: vi.fn(async () => ({
+        session: rebuilt,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: '/data/old-project',
+    })).resolves.toMatchObject({ accepted: true });
+
+    // 只探过 live 目录与 recovery 目标,DB 的 managed worktree 根本没被探测。
+    expect(vi.mocked(deps.checkWorkDirExists).mock.calls.map((call) => call[1])).toEqual([
+      '/data/old-project',
+      recoveredDir,
+    ]);
+    expect(deps.statDirectory).not.toHaveBeenCalled();
+    expect(deps.closeSession).toHaveBeenCalledOnce();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: recoveredDir }),
+    );
+    expect(liveSession.send).not.toHaveBeenCalled();
+    expect(rebuilt.send).toHaveBeenCalled();
+  });
+
+  it('does not rebuild a live runtime for a path that only differs in spelling', async () => {
+    // 仅分隔符 / 尾斜杠差异不是目录漂移:否则白白关掉并重建一次 runtime。
+    const liveSession = createSession({ workDir: 'C:\\repo\\PROJECT' });
+    const { deps } = createDeps({
+      getSession: () => liveSession,
+      readSessionWorkingDirFromDb: vi.fn(async () => 'C:/repo/PROJECT/'),
+      statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+    });
+
+    await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+      agentKind: 'codex', workingDir: 'C:\\repo\\PROJECT',
+    })).resolves.toMatchObject({ accepted: true });
+
+    expect(deps.closeSession).not.toHaveBeenCalled();
+    expect(liveSession.send).toHaveBeenCalled();
+  });
+
+  it('does not rebuild for a case-only Windows path difference', async () => {
+    // 大小写折叠只在 win32 生效 —— 在任意平台把 platform 伪造成 win32,避免这条
+    // 分支在非 Windows CI 上永远不被执行(伪造只影响 sameWorkingDir 的判定)。
+    const platform = vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
+    try {
+      const liveSession = createSession({ workDir: 'C:\\repo\\PROJECT' });
+      const { deps } = createDeps({
+        getSession: () => liveSession,
+        readSessionWorkingDirFromDb: vi.fn(async () => 'C:/repo/project'),
+        statDirectory: vi.fn(async () => ({ isDirectory: () => true })),
+      });
+
+      await expect(createMakerSendTransaction(deps).sendToAgentAccepted('session-1', 'hello', {
+        agentKind: 'codex', workingDir: 'C:\\repo\\PROJECT',
+      })).resolves.toMatchObject({ accepted: true });
+
+      expect(deps.closeSession).not.toHaveBeenCalled();
+      expect(liveSession.send).toHaveBeenCalled();
+    } finally {
+      platform.mockRestore();
+    }
+  });
+
   it.each(['claude-code', 'pi'] as const)('refreshes a live %s process after same-path recovery and preserves its note', async (agentKind) => {
     const oldSession = createSession({ agentKind, hostStartupPreferences: {
       userPrompt: 'Keep the caller preference', makerMemoryEnabled: true,
@@ -1344,13 +1550,81 @@ describe('maker SEND transaction', () => {
       }),
     ).resolves.toMatchObject({ accepted: true });
 
-    // 首检拿 caller 值且静默(有 DB 兜底候选);兜底检拿 DB 值正常广播语义。
-    expect(checkWorkDirExists).toHaveBeenNthCalledWith(1, 'lazy-1', staleDir, 'codex', undefined, {
-      suppressMissingBroadcast: true,
-    });
-    expect(checkWorkDirExists).toHaveBeenNthCalledWith(2, 'lazy-1', dbDir, 'codex', undefined);
+    // lazy-create 直接采纳 DB 值,不再先校验 caller 快照(旧目录也是 caller 值时
+    // 会误判为可用)。
+    expect(checkWorkDirExists).toHaveBeenCalledTimes(1);
+    expect(checkWorkDirExists).toHaveBeenNthCalledWith(1, 'lazy-1', dbDir, 'codex', undefined);
     // bootstrap 用采纳后的 DB 路径 spawn。
     expect(deps.bootstrapSession).toHaveBeenCalledWith(expect.objectContaining({ workingDir: dbDir }));
+  });
+
+  it('lazy-create prefers the DB working_dir even when the stale caller directory still exists', async () => {
+    // 用户把任务移动到别的项目后,排队/重试项里内嵌的还是旧目录;旧目录通常还在,
+    // 必须仍然以 DB 为准,否则 runtime 会在旧 cwd 启动(与移动语义矛盾)。
+    const staleDir = '/data/old-project';
+    const dbDir = '/data/new-project';
+    const checkWorkDirExists = vi.fn(async () => true);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      checkWorkDirExists,
+      readSessionWorkingDirFromDb: vi.fn(async () => dbDir),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('lazy-moved', 'hello', {
+        agentKind: 'claude-code',
+        model: 'claude-opus-4-7',
+        workingDir: staleDir,
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(checkWorkDirExists).toHaveBeenCalledTimes(1);
+    expect(checkWorkDirExists).toHaveBeenNthCalledWith(
+      1,
+      'lazy-moved',
+      dbDir,
+      'claude-code',
+      undefined,
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: dbDir }),
+    );
+  });
+
+  it('lazy-create resolves the DB working_dir through the recovery fallback', async () => {
+    // 数据库里还是原始挂载路径,workingDirectoryRecovery 已为它登记临时目录:
+    // 采用 DB 值时必须过 resolve(),不能把 runtime 拉回不可用的原路径。
+    const staleDir = '/data/stale-project';
+    const dbDir = '/mnt/disk/project';
+    const fallbackDir = '/userData/dialogues/fallback';
+    const checkWorkDirExists = vi.fn(async (_sid: string, dir: string | undefined | null) => dir === fallbackDir);
+    const { deps } = createDeps({
+      getSession: vi.fn(() => undefined),
+      checkWorkDirExists,
+      readSessionWorkingDirFromDb: vi.fn(async () => dbDir),
+      resolveRecoveredWorkingDir: (_sid, dir) => (dir === dbDir ? fallbackDir : dir),
+    });
+
+    await expect(
+      createMakerSendTransaction(deps).sendToAgentAccepted('lazy-fallback', 'hello', {
+        agentKind: 'codex',
+        model: 'gpt-5.5',
+        workingDir: staleDir,
+      }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(checkWorkDirExists).toHaveBeenCalledTimes(1);
+    expect(checkWorkDirExists).toHaveBeenNthCalledWith(
+      1,
+      'lazy-fallback',
+      fallbackDir,
+      'codex',
+      undefined,
+      { suppressMissingBroadcast: true },
+    );
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(
+      expect.objectContaining({ workingDir: fallbackDir }),
+    );
   });
 
   it('lazy-create still fails with WORKDIR_MISSING when caller and DB workdirs are both gone', async () => {

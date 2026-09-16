@@ -76,6 +76,8 @@ import {
   MENU_SUB_CONTENT_CLASS,
 } from './sidebar/menuStyles';
 import { SessionProjectMoveSubmenu } from './sidebar/SessionProjectMoveSubmenu';
+import { crossesWorktreeBoundary, shouldBlockWorktreeMove } from './lib/sessionMoveGuard';
+import { useRefreshWorktreeForSession, useWorktreeForSession } from '@/contexts/WorktreeContext';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import { SessionShareExportDialog } from './sidebar/SessionShareExportDialog';
 import { SessionBranchTreeDialog } from './SessionBranchTreeDialog';
@@ -148,6 +150,10 @@ export function SessionContentHeader({
   // active 桶里的会话。
   const session = routeSessionById.get(sessionProp.id) ?? sessionProp;
   const { runningSessionIds } = useSessionRunningStatus(session.id);
+  // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）：回收后仍留历史路径、
+  // 或存量半移动行的会话，不能靠 cwd 猜归属。
+  const worktreeBinding = useWorktreeForSession(session.id, { includeInvalid: true });
+  const refreshWorktreeBinding = useRefreshWorktreeForSession();
   const { confirm: confirmDialog } = useConfirmDialog();
   const { runSessionAction, unarchiveSession } = useSessionLifecycleActions();
 
@@ -351,6 +357,22 @@ export function SessionContentHeader({
           toast.error(t('ccAgent.sidebar.sessionMenu.moveToProjectFailed'));
           return;
         }
+      }
+
+      // 与 CCAgentSidebarUpper 同款:worktree 会话不能改到它绑定 worktree 之外的目录
+      // (半移动)。同样放在目标目录确定之后,同一 worktree 根内的目录调整仍放行,
+      // 归属取活绑定;缓存判定要拦时再向 main 复核一次(回收事件落地有间隙)。
+      // 「移到对话」不改目录、不经过这里。
+      if (
+        targetWorkingDir &&
+        (await shouldBlockWorktreeMove(
+          worktreeBinding?.path ?? null,
+          targetWorkingDir,
+          async () => (await refreshWorktreeBinding(session.id))?.path ?? null,
+        ))
+      ) {
+        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
+        return;
       }
 
       const oldPatch = {

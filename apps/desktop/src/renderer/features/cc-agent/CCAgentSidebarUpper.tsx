@@ -49,6 +49,7 @@ import { projectDraftSessionTitle } from '@cindy/maker-shared/session-title';
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
 import { isDataOwnerPushCurrent } from '@/contexts/dataOwnerGeneration';
+import { useRawWorktrees, useRefreshWorktreeForSession } from '@/contexts/WorktreeContext';
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { useRecentWorkdirs } from '@/hooks/useRecentWorkdirs';
 import { refreshPendingAlerts } from '@/hooks/usePendingAlertAttention';
@@ -222,6 +223,7 @@ import {
 } from './lib/sidebarCollapseConfig';
 import { getSessionListCollapseView } from './lib/sessionListCollapse';
 import { hasSessionSelectionModifier, type SessionClickModifiers } from './sidebar/SessionItem';
+import { crossesWorktreeBoundary, shouldBlockWorktreeMove } from './lib/sessionMoveGuard';
 import type { SessionMoveTarget } from './sidebar/sessionMoveTarget';
 import {
   DIALOGUE_FILTER_KEY,
@@ -827,6 +829,10 @@ function ExpandedView({
 }: ExpandedProps) {
   const { t, i18n } = useTranslation();
   const localPlatform = window.electronAPI.platform;
+  // worktree 归属取 store 镜像（与 main 的 worktreeStore 同源）:回收后仍留历史路径、
+  // 或存量半移动行的会话，不能靠 cwd 猜归属。
+  const worktreeBindings = useRawWorktrees();
+  const refreshWorktreeBinding = useRefreshWorktreeForSession();
   const { sessions, refreshSessions, patchLocal, effectiveIncludeArchived } = sessionsHook;
   const {
     hiddenProjectKeys,
@@ -2713,6 +2719,23 @@ function ExpandedView({
         }
       }
 
+      // worktree 会话的工作区就是它绑定的 worktree：只改 workingDir 会造成半移动
+      // （侧栏按新项目归组，聊天框底部路径仍指旧 worktree）。判定放在目标目录确定**之后**：
+      // browseProject 选同一 worktree 根内的子目录仍然放行，跨根才拦；归属取活绑定
+      // （worktreeStore 镜像），口径与 Main 的守卫一致；「移到对话」不改目录、不经过这里。
+      // 缓存判定要拦时再向 main 复核一次，避免拿已被回收的旧绑定误拦。
+      if (
+        targetWorkingDir &&
+        (await shouldBlockWorktreeMove(
+          worktreeBindings[sessionId]?.path ?? null,
+          targetWorkingDir,
+          async () => (await refreshWorktreeBinding(sessionId))?.path ?? null,
+        ))
+      ) {
+        toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectWorktreeBlocked'));
+        return;
+      }
+
       const oldPatch = {
         workingDir: session.workingDir,
         workspaceKind: session.workspaceKind,
@@ -2768,7 +2791,9 @@ function ExpandedView({
       collapse.setCollapsed,
       effectiveRunningSessionIds,
       patchLocal,
+      refreshWorktreeBinding,
       t,
+      worktreeBindings,
     ],
   );
 
