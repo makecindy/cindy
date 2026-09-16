@@ -911,7 +911,9 @@ function createHarness(opts?: {
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
+  const rewindPersistedUserMessageAfterClear = vi.fn(async (_sessionId: string, _clientId: string) => {});
   const coordinator = new AgentInputCoordinator({
+    rewindPersistedUserMessageAfterClear,
     sendToAgent,
     steerToAgent,
     abortSession,
@@ -986,6 +988,7 @@ function createHarness(opts?: {
   });
 
   return {
+    rewindPersistedUserMessageAfterClear,
     coordinator,
     sendToAgent,
     steerToAgent,
@@ -10406,6 +10409,44 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     expect(h.coordinator.hasQueuedItemWhere(sid, (item) => item.clientId === 'c1')).toBe(false);
   });
 
+  it.each(['cancel-result', 'cancel-throw', 'mode-throw'])(
+    'rewinds the scheduler row after persisted preparation rejection: %s', async (path) => {
+      const h = createHarness();
+      const sid = 'scheduler-preparation-rejected';
+      h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        if (path === 'mode-throw') throw Object.assign(
+          new Error('Scheduled task modes changed before vendor dispatch'), { code: 'PRECONDITION_FAILED' },
+        );
+        if (path === 'cancel-throw') throw new Error('[SEND_CANCELLED_BEFORE_DISPATCH] cancelled');
+        return { kind: 'session-dispatch', source: 'test', dispatched: false, reason: 'cancelled-before-dispatch' } as never;
+      });
+      h.coordinator.enqueue(sid, makeItem('scheduled-row', 'heartbeat', { origin: schedOrigin }));
+      await flush();
+      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledExactlyOnceWith(sid, 'scheduled-row');
+      expect(h.persistTerminalSendError).not.toHaveBeenCalled();
+      expect(latestProjection(h.projections).error).toBeNull();
+      expect(latestProjection(h.projections).recovery).toBeNull();
+      expect(h.coordinator.hasQueuedItemWhere(sid, item => item.clientId === 'scheduled-row')).toBe(false);
+    },
+  );
+
+  it.each(['interactive', 'uncertain', 'rollback-failed'])(
+    'preserves failure history when preparation rollback is unsafe or fails: %s', async (path) => {
+      const h = createHarness();
+      if (path === 'rollback-failed') h.rewindPersistedUserMessageAfterClear.mockRejectedValueOnce(new Error('disk unavailable'));
+      h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _opts, sendOpts) => {
+        await persistQueuedUserMessage(sessionId, sendOpts);
+        throw Object.assign(new Error(path === 'uncertain' ? 'delivery uncertain' : 'Scheduled task modes changed before vendor dispatch'),
+          { code: path === 'uncertain' ? 'TURN_DISPATCH_UNCONFIRMED' : 'PRECONDITION_FAILED' });
+      });
+      h.coordinator.enqueue('preserve-row', makeItem('row', 'prompt', path === 'interactive' ? {} : { origin: schedOrigin }));
+      await flush();
+      expect(h.rewindPersistedUserMessageAfterClear).toHaveBeenCalledTimes(path === 'rollback-failed' ? 1 : 0);
+      expect(h.persistTerminalSendError).toHaveBeenCalled();
+    },
+  );
+
   it('onAccepted 抛错取消 scheduler 项:放掉 activeTurn 并唤醒队列(不把会话钉死)', async () => {
     // runner 在拿不到 live 会话时会从 onAcceptedQueuedMessage 抛错让 coordinator 回滚,
     // 于是走 persisted-error 分支。摘掉 scheduler recovery 之后,若不一并放掉 activeTurn,
@@ -12099,6 +12140,32 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.autoResumePending).toBeUndefined();
     expect(projection.error).toBeNull();
   });
+
+  it.each(['allow', 'reject', 'close'] as const)(
+    'keeps recovery projected through drained preparation and settles on %s', async (outcome) => {
+      const h = createHarness();
+      const sid = `takeover-preparing-${outcome}`;
+      h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+      h.setHasAssistantProgressAfter(async () => true);
+      await failAfterDispatch(h, sid);
+      const screen = deferred<{ action: 'allow' }>();
+      h.setScreenUserMessage(() => screen.promise);
+      await h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal);
+      await flush();
+      expect(h.coordinator.getProjection(sid).pendingQueue).toEqual([]);
+      expect(h.coordinator.getProjection(sid).autoResumePending).toEqual(TAKEOVER_INFO);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      if (outcome === 'close') {
+        h.coordinator.onSessionClosed(sid);
+        expect(h.coordinator.getProjection(sid).autoResumePending).toBeUndefined();
+      }
+      if (outcome === 'reject') screen.reject(new Error('preparation failed'));
+      else screen.resolve({ action: 'allow' });
+      await flush();
+      expect(h.coordinator.getProjection(sid).autoResumePending).toBeUndefined();
+      expect(h.sendToAgent).toHaveBeenCalledTimes(outcome === 'allow' ? 2 : 1);
+    },
+  );
 
   it('abandonAutoResume 带 message → 错误回落成横幅', async () => {
     const h = createHarness();

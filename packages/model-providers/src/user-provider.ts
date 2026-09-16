@@ -625,7 +625,10 @@ export function buildUserProvider(
       source: 'user',
       auth: { method: 'oauth', native: 'codex' },
       models: { ...identity.models, codex: models.codex ?? [] },
-      imageModels: identity.imageModels?.map((model) => ({ ...model, id: model.id.replace(/^openai\//, `${runtimeProviderId}/`) })),
+      // The active catalog binds the current public image definition to each connection.
+      // Do not freeze bundled membership when an independent account is constructed.
+      imageModels: undefined,
+      imageDefaults: undefined,
     };
   }
   // Selection/import membership does not opt the user into compatibility harnesses.

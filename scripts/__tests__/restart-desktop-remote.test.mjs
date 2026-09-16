@@ -935,7 +935,7 @@ test("devEnvPrefix passes harness envs through on Windows cmd with quote strippi
 });
 
 test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell", () => {
-	for (const value of [undefined, "", "0", "1"]) {
+	for (const value of [undefined, "", "0", "1", "cursor-goal", "invalid"]) {
 		const env = value === undefined ? {} : { CINDY_CUA_SMOKE: value };
 		const node = process.platform === "win32" ? "%CINDY_TEST_NODE%" : "$CINDY_TEST_NODE";
 		const result = spawnSync(
@@ -948,7 +948,7 @@ test("devEnvPrefix overrides a stale Computer Use smoke flag in the target shell
 			},
 		);
 		assert.equal(result.status, 0, result.stderr);
-		assert.equal(result.stdout.trim(), value === "1" ? "1" : "0", `caller value: ${value}`);
+		assert.equal(result.stdout.trim(), ["1", "cursor-goal"].includes(value) ? value : "0", `caller value: ${value}`);
 	}
 });
 

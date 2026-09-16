@@ -280,6 +280,7 @@ import {
 import { shouldFallbackVendorModel } from './lib/vendorModelFallback';
 import { localizeAgentStatus } from './lib/localizeAgentStatus';
 import { createSessionRefreshSequence } from './lib/sessionRefreshSequence';
+import { hasInlineOverloadRetry } from './lib/inlineRetryError';
 import { createSessionSnapshotPatchBuffer } from './lib/sessionSnapshotPatchBuffer';
 import { readPanelCollapsedRecord } from '@/layout/collapsePrefs';
 import {
@@ -4905,7 +4906,14 @@ export function CCAgentSessionView({
                 />
               )}
 
-            {!readOnly && error && (
+            {/* 只隐藏已有同一错误活动行的过载重试；认证、额度等操作入口照常保留。 */}
+            {!readOnly && error && !hasInlineOverloadRetry({
+              error,
+              errorReason,
+              isRecoverable: errorIsRecoverable,
+              messages,
+              continuationTurnClientId,
+            }) && (
               <ErrorBanner
                 error={error}
                 errorReason={errorReason}

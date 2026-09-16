@@ -107,6 +107,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     cursor = find("cursor");
   let dw = 1920,
     dh = 1080,
+    viewerSized = false,
     zoom = 1,
     fx = 0.5,
     fy = 0.5,
@@ -232,6 +233,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   // Insets guide centering and pan limits without clipping the full-screen
   // video surface or adding an opaque strip beside the Dynamic Island.
   const viewportLeft = () => (fillHeight ? viewportLeftInset : 0);
+  const viewportHeight = () =>
+    Math.max(1, stage.clientHeight - (viewerSized ? viewportBottomInset : 0));
   const viewportWidth = () =>
     Math.max(
       1,
@@ -242,23 +245,23 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   const layout = () => {
     const r = transform(
       viewportWidth(),
-      stage.clientHeight,
+      viewportHeight(),
       dw,
       dh,
       zoom,
       fx,
       fy,
-      fillHeight,
+      fillHeight && !viewerSized,
     );
     return {
       ...r,
       x: viewportLeft() + viewportWidth() / 2 - fx * r.width,
-      y: stage.clientHeight / 2 - fy * r.height,
+      y: viewportHeight() / 2 - fy * r.height,
     };
   };
   function panBounds(r) {
     const vw = viewportWidth(),
-      vh = stage.clientHeight;
+      vh = viewportHeight();
     // Grow extra resting travel continuously from zero at fit to 180 screen
     // points at maximum zoom. Never count the unused space of a fitting axis.
     const clearance = (180 * (Math.max(1, Math.min(5, zoom)) - 1)) / 4;
@@ -308,7 +311,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
   }
   function place(x, y, r) {
     fx = (viewportLeft() + viewportWidth() / 2 - x) / r.width;
-    fy = (stage.clientHeight / 2 - y) / r.height;
+    fy = (viewportHeight() / 2 - y) / r.height;
   }
   function cursorViewport() {
     const hotX = remoteCursor?.hotX ?? 9,
@@ -429,7 +432,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       cursor.style.left = r.x + cursorX * r.width + "px";
       cursor.style.top = r.y + cursorY * r.height + "px";
       cursor.style.display =
-        !config.desktop && control && (mode === "pointer" || mode === "touch") ? "block" : "none";
+        !config.desktop && control && (mode === "pointer" || mode === "touch")
+          ? "block"
+          : "none";
     }
     if (config.desktop) stage.style.cursor = control ? "none" : "default";
   }
@@ -770,7 +775,7 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       fx =
         multi.anchor.x +
         (viewportLeft() + viewportWidth() / 2 - next.x) / r.width;
-      fy = multi.anchor.y + (stage.clientHeight / 2 - next.y) / r.height;
+      fy = multi.anchor.y + (viewportHeight() / 2 - next.y) / r.height;
       const moved = layout(),
         b = panBounds(moved);
       place(
@@ -994,7 +999,8 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       if (
         control &&
         clipboardShortcuts &&
-        normalizedKey(e.code) === (clipboardModifier === "meta" ? "MetaLeft" : "ControlLeft")
+        normalizedKey(e.code) ===
+          (clipboardModifier === "meta" ? "MetaLeft" : "ControlLeft")
       ) {
         e.preventDefault();
         if (!hardwareKeys.has(normalizedKey(e.code)))
@@ -1004,7 +1010,9 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       if (
         control &&
         clipboardShortcuts &&
-        (clipboardModifier === "meta" ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) &&
+        (clipboardModifier === "meta"
+          ? e.metaKey && !e.ctrlKey
+          : e.ctrlKey && !e.metaKey) &&
         !e.altKey &&
         !e.shiftKey &&
         (e.code === "KeyC" || e.code === "KeyV")
@@ -1013,7 +1021,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         if (!e.repeat) {
           release();
           hardwareKeys.clear();
-          post({ type: "clipboard", action: e.code === "KeyC" ? "copy" : "paste" });
+          post({
+            type: "clipboard",
+            action: e.code === "KeyC" ? "copy" : "paste",
+          });
         }
         return;
       }
@@ -1052,7 +1063,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
     release();
     settlePan();
   });
+  function reportViewport() {
+    post({
+      type: "viewportChanged",
+      width: viewportWidth(),
+      height: Math.max(1, stage.clientHeight - viewportBottomInset),
+    });
+  }
   const observer = new ResizeObserver(() => {
+    reportViewport();
     release();
     settlePan();
     render();
@@ -1493,6 +1512,13 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
       return;
     }
     switch (message.type) {
+      case "measureViewport":
+        post({
+          type: "viewportSize",
+          width: viewportWidth(),
+          height: Math.max(1, stage.clientHeight - viewportBottomInset),
+        });
+        break;
       case "presentation":
         try {
           if (message.enabled) {
@@ -1514,6 +1540,24 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         }
         break;
       case "videoSettings":
+        if (
+          Number.isInteger(message.width) &&
+          Number.isInteger(message.height) &&
+          message.width >= 320 &&
+          message.height >= 320 &&
+          (message.restore === true ||
+            (message.width <= 2560 && message.height <= 2560))
+        ) {
+          release();
+          stopPanAnimation();
+          viewerSized = message.restore !== true;
+          zoom = 1;
+          fx = fy = 0.5;
+          followRest = null;
+          dw = message.width;
+          dh = message.height;
+          render();
+        }
         video.muted = !message.audio;
         retries = 0;
         connect();
@@ -1546,8 +1590,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         break;
       case "mouseButtons": {
         const before = layout(),
+          previousBottomInset = viewportBottomInset,
           keyboardOpen = fillHeight && message.keyboardOpen === true;
-        const keepHorizontal = fillHeight && (keyboardOpen || keyboardViewportOpen);
+        const keepHorizontal =
+          fillHeight && (keyboardOpen || keyboardViewportOpen);
         // Opening is observable before the native keyboard has a measured height.
         keyboardViewportOpen = keyboardOpen;
         let sideInsetsChanged = false;
@@ -1601,10 +1647,14 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
           }
           followRest = { fx, fy, zoom };
           render();
-        } else if (sideInsetsChanged) {
+        } else if (
+          sideInsetsChanged ||
+          (viewerSized && previousBottomInset !== viewportBottomInset)
+        ) {
           settlePan();
           render();
         }
+        reportViewport();
         if (!message.enabled) {
           for (const button of heldMouse.keys())
             queue({ kind: "button", button, down: false, x: cx, y: cy });
@@ -1621,11 +1671,15 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         showMouseButtons = message.enabled === true;
         for (const name of ["left", "right", "wheel"])
           if (typeof message.labels?.[name] === "string")
-            find("mouse-" + name).setAttribute("aria-label", message.labels[name]);
+            find("mouse-" + name).setAttribute(
+              "aria-label",
+              message.labels[name],
+            );
         updateMouseButtons();
         break;
       }
       case "init":
+        viewerSized = false;
         followRest = null;
         cursorNeedsEntry = true;
         stopPanAnimation();
@@ -1636,8 +1690,10 @@ export function mountRemoteDesktopViewer(root, postMessage, config) {
         sending = false;
         seq = 0;
         epoch = message.epoch;
-        clipboardShortcuts = config.desktop && message.clipboardShortcuts === true;
-        clipboardModifier = message.clipboardModifier === "meta" ? "meta" : "control";
+        clipboardShortcuts =
+          config.desktop && message.clipboardShortcuts === true;
+        clipboardModifier =
+          message.clipboardModifier === "meta" ? "meta" : "control";
         dw = message.width;
         dh = message.height;
         fillHeight = message.fillHeight === true;

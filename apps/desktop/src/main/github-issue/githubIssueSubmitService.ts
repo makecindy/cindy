@@ -22,6 +22,7 @@ import {
 import type { SubmittedIssueRecord } from '../../shared/myIssues.js';
 import { myIssueUrl } from '../../shared/myIssues.js';
 import { redactSensitive } from '../learn-host/redaction';
+import { RELATED_LOG_SECTION_MARKER } from './issueDiagnostics';
 import type {
   IssueConfirmDecision,
   IssueDraft,
@@ -60,6 +61,8 @@ export interface SubmitIssueRequest {
   title: string;
   body: string;
   type: 'bug' | 'feature';
+  /** 只有 Agent 已取得用户同意时才采集并附加安全日志摘要。 */
+  includeRelatedLogs?: boolean;
 }
 
 /** github-server 的 issue 创建 payload；userName 缺失时由服务端按 membership id 回退。 */
@@ -100,6 +103,8 @@ export interface GithubIssueSubmitServiceDeps {
   getFallbackLocale: () => string;
   /** 当前 Cindy membership 的展示名,仅用于 issue 正文标记提交人。 */
   getSubmitterName: () => string | undefined;
+  /** 只返回已经过日志采集安全管道的 Markdown 区块。 */
+  collectRelatedLogs?: () => Promise<{ section: string; recordCount: number }>;
   /**
    * 提交成功后记账(「我的 Issue」列表靠它认出平台代发的那一半)。
    * 只在 postIssue 真正成功后调用一次,抛错由本模块吞掉 —— 记账失败绝不能把一次
@@ -149,7 +154,19 @@ export async function submitGithubIssueWithConfirm(
   }
 
   const suggestedPublicName = normalizeIssuePublicName(deps.getSubmitterName()) ?? undefined;
-  const preparedDraft = redactIssueDraft(req);
+  let draftBody = req.body;
+  if (req.includeRelatedLogs === true && deps.collectRelatedLogs) {
+    try {
+      draftBody += (await deps.collectRelatedLogs()).section;
+    } catch {
+      // 日志只是反馈上下文，采集失败不能阻断用户提交正文反馈。
+      draftBody += '\n\n---\n## 相关日志\n\n未能读取本机相关日志。';
+    }
+  }
+  const preparedDraft = redactIssueDraft({ ...req, body: draftBody });
+  if (req.includeRelatedLogs === true) {
+    preparedDraft.draft.body = fitIssueBody(preparedDraft.draft.body, 4000);
+  }
   const decision = await deps.confirm(
     req.sessionId,
     preparedDraft.draft,
@@ -206,9 +223,9 @@ export async function submitGithubIssueWithConfirm(
     `**Model ID**: ${markdownCodeSpan(env.modelId)}`,
     `**界面语言**: ${uiLanguage}`,
   ].join('\n');
-  // env 块必须完整保留,clamp 只裁用户正文部分。
-  const bodyBudget = SERVER_DESC_MAX - envBlock.length;
-  const description = decision.body.slice(0, Math.max(0, bodyBudget)) + envBlock;
+  // 环境块必须完整保留；相关日志是独立模块，正文超限时优先保留它而不是让前面的
+  // 用户正文把整个诊断区块挤掉。
+  const description = buildIssueDescription(decision.body, envBlock);
 
   try {
     const result = await deps.postIssue(submissionIdentity, () => ({
@@ -235,6 +252,26 @@ export async function submitGithubIssueWithConfirm(
   } catch (err) {
     return mapSubmitError(err);
   }
+}
+
+function buildIssueDescription(body: string, envBlock: string): string {
+  const bodyBudget = Math.max(0, SERVER_DESC_MAX - envBlock.length);
+  return fitIssueBody(body, bodyBudget) + envBlock;
+}
+
+function fitIssueBody(body: string, bodyBudget: number): string {
+  if (body.length <= bodyBudget) return body;
+  const relatedLogsAt = body.lastIndexOf(RELATED_LOG_SECTION_MARKER);
+  if (relatedLogsAt < 0) return body.slice(0, bodyBudget);
+
+  const userBody = body.slice(0, relatedLogsAt);
+  const section = body.slice(relatedLogsAt);
+  const logs = section.length <= bodyBudget
+    ? section
+    : RELATED_LOG_SECTION_MARKER + '\n\n日志区块超过正文长度限制，未附带。';
+  const note = '\n…（正文因长度限制省略）\n';
+  const userBodyBudget = Math.max(0, bodyBudget - logs.length - note.length);
+  return userBody.slice(0, userBodyBudget) + note + logs;
 }
 
 /**

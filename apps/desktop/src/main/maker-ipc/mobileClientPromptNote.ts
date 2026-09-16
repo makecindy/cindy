@@ -147,6 +147,9 @@ export function attachMainOwnedInputBoundary(
  * `turnPermissionPolicy` 同样只能由 Main 的 IM dispatcher 创建；Renderer/device-link
  * 即使伪造相同字段形状，也不能把普通文本升级成已认证 IM 指令。
  *
+ * `origin` 只能由宿主 dispatcher / coordinator 构造，wire 不能自报 scheduler
+ * 来源并借此恢复历史授权。
+ *
  * 非对象输入原样返回(事务自己会按 `?? {}` 兜底)。
  */
 export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
@@ -161,7 +164,8 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     !('inputAbortSignal' in opts) &&
     !('signal' in opts) &&
     !('turnPermissionPolicy' in opts) &&
-    !('toolsDisabled' in opts)
+    !('toolsDisabled' in opts) &&
+    !('origin' in opts)
   ) {
     return sendOpts;
   }
@@ -175,6 +179,7 @@ export function stripMainOnlySendOpts(sendOpts: unknown): unknown {
     signal: _ignoredSignal,
     turnPermissionPolicy: _ignoredTurnPermissionPolicy,
     toolsDisabled: _ignoredToolsDisabled,
+    origin: _ignoredOrigin,
     ...rest
   } = opts;
   return rest;

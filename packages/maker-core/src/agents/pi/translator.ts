@@ -137,7 +137,7 @@ export interface PiTranslateContext {
    */
   streamStopTokenByIndex: Map<number, StandaloneStopTokenHold>;
   /**
-   * 本 turn 最后一条 assistant 消息的全文(每次非空 message_end 覆盖;agent_start 重置)。
+   * 本 turn 最后一条 assistant 回复全文（正常 stop 即使无文字也覆盖；agent_start 重置）。
    * 用于 agent_settled 的 done.data.result —— 与 CC/Codex 对齐:register.ts 的
    * will-assistant-message 出口钩子与 Orca worker 终态 finalText 都读 done.data.result,
    * 不带上就会对 Pi 静默跳过这些钩子(codex review P1)。
@@ -755,6 +755,11 @@ export function translatePiEvent(
       } else {
         // A normal assistant message proves an earlier provider failure recovered.
         ctx.pendingAssistantError = null;
+      }
+      // A successful but empty final request must not inherit progress from an
+      // earlier tool round; settlement needs to see it for bounded silent-stop recovery.
+      if (!transientAssistantFailure && message.stopReason === 'stop') {
+        ctx.finalAssistantText = fullText;
       }
       if (!transientAssistantFailure && fullText.length > 0) {
         // 覆盖为本 turn 最新一条有文本的 assistant 回复,agent_settled 作 done.result 上报。

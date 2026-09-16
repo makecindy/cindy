@@ -14518,6 +14518,34 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it.each([undefined, '11111111-1111-1111-1111-111111111111'].flatMap(resumeSessionId =>
+    (['auto', 'ask', 'bypassPermissions'] as const).map(permissionMode => ({ resumeSessionId, permissionMode }))))(
+    'preinstalls scoped follow-up policy on start/resume ($permissionMode, $resumeSessionId)', async ({ resumeSessionId, permissionMode }) => {
+      const agent = new CodexAgent(createDeps());
+      const host = installFakeHost(agent, method => method === Method.TurnStart
+        ? { turn: { id: 'turn-followup-policy' } } : undefined, { userAgent: 'codex_cli_rs/0.145.0' });
+      const handle = await agent.startSession({
+        sessionId: 'session-followup-policy', model: 'gpt-5.5', providerId: 'openai',
+        workingDir: '/repo', permissionMode, ...(resumeSessionId ? { resumeSessionId } : {}),
+      });
+      const method = resumeSessionId ? Method.ThreadResume : Method.ThreadStart;
+      const params = host.request.mock.calls.find(([name]) => name === method)?.[1] as {
+        config?: Record<string, unknown>; approvalsReviewer?: string; approvalPolicy?: string;
+      };
+      expect(params.approvalsReviewer).toBe(permissionMode === 'auto' ? 'auto_review'
+        : permissionMode === 'ask' ? 'user' : undefined);
+      expect(params.approvalPolicy).toBe(permissionMode === 'bypassPermissions' ? 'never' : 'on-request');
+      expect(params.config?.['auto_review.policy']).toContain('authorization to complete work');
+      expect(params.config?.['auto_review.policy']).toContain('### Data Exfiltration');
+      await handle.setPermissionMode?.('auto');
+      await handle.send({ type: 'user', content: 'continue' });
+      expect(host.request.mock.calls.find(([name]) => name === Method.TurnStart)?.[1]).toMatchObject({
+        approvalPolicy: 'on-request', approvalsReviewer: 'auto_review',
+      });
+      await handle.close();
+    },
+  );
+
   it('maps auto permission mode to Codex built-in automatic approval review', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {

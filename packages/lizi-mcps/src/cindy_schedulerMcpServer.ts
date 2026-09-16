@@ -66,7 +66,8 @@ export interface SchedulerMcpSessionCtx {
 // 不需要。
 
 const D_LIST_TOOLS =
-  '探索 cindy_scheduler 可用工具（渐进式发现入口）。不传 category → 返回所有类目+每个类目工具数量。' +
+  '只读查询 cindy_scheduler 的工具元数据，不创建或运行调度、不发送通知。工具发现本身不需要创建调度的授权。' +
+  '不传 category → 返回所有类目+每个类目工具数量。' +
   '传 category=scheduler → 返回该类目下所有工具的名称和简介。' +
   '获取工具名后用 call_tool({name, args}) 执行；参数错误会返回完整 JSON Schema。';
 
@@ -94,6 +95,7 @@ function registerListToolsEntry(
         .optional()
         .describe('工具类目。不传时返回所有类目概览。'),
     },
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async ({ category }) => {
       if (category) {
         const tools = registry.list(category);

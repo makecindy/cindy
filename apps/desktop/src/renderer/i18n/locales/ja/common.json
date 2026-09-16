@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "リモートデスクトップ接続を終了します。コンピュータ上のアプリは動作を続けます。",
       "disconnectFailed": "切断できませんでした。もう一度お試しください。",
       "clipboardShortcutHint": "画面内で {{modifier}}+C / {{modifier}}+V を使うと、コンピュータ間でテキストをコピーして貼り付けられます。画像とファイルにはまだ対応していません。",
+      "fitViewerDisplay": "現在の画面比率に合わせる",
+      "fitViewerDisplayHint": "デスクトップの内容を保ったまま、パソコンの画面比率を一時的に変更します。切断すると元の解像度に戻ります。",
       "resolutionHint": "解像度の変更はリモートの実際のモニターに反映されます。"
     }
   },
@@ -5847,6 +5849,11 @@
     "ssoOrgHint": "企業のログイン識別子が不明な場合は、管理者にお問い合わせください",
     "ssoOrgDetected": "「{{org}}」のシングルサインオン方法を選択してください",
     "realmConsent": {
+      "personalTitle": "企業ログインが見つかりました",
+      "personalBodyCn": "メールに対応する企業は中国本土です。\n企業 SSO または個人ログインを選べます。",
+      "personalBodyGlobal": "メールに対応する企業は国際地域です。\n企業 SSO または個人ログインを選べます。",
+      "enterpriseLogin": "企業 SSO",
+      "continuePersonal": "個人で続ける",
       "title": "企業のリージョンに接続",
       "bodyCn": "この企業は中国本土リージョンにあります。\n続行すると Cindy はこの地域に接続します。",
       "bodyGlobal": "この企業はグローバルリージョンにあります。\n続行すると Cindy はこの地域に接続します。",
@@ -10910,6 +10917,7 @@
       "titleLabel": "タイトル",
       "bodyLabel": "本文(Markdown)",
       "privacyHint": "Issue のタイトルと本文は公開され、検索やキャッシュの対象になる場合があります。自動マスキングで検出できるのは一部の一般的な形式だけで、文脈上の機密情報をすべて判別することはできません。",
+      "relatedLogsHint": "この送信には、上に表示された関連するクライアントログが含まれます。公開前にフィルタリング、マスキング、長さ制限が適用されます。",
       "privacyConfirm": "上記の公開内容を確認し、非公開にすべき個人情報、会話内容、業務情報が含まれていないことを確認しました",
       "submissionMethodLabel": "送信元",
       "identityGithubUser": "自分の GitHub アカウント @{{login}}",

@@ -280,6 +280,24 @@ export function RemoteDesktopViewerWindow() {
                 </FormField>
               </>
             )}
+            {state?.caps?.viewerDisplay && (
+              <div className="remote-viewer-field">
+                <Button
+                  variant="secondary"
+                  disabled={!state.controlling || state.controlPending}
+                  onClick={() => {
+                    if (!root.current) return;
+                    void controller.current
+                      ?.fitDisplay(root.current.clientWidth, root.current.clientHeight)
+                      .then(() => setModes([]))
+                      .catch(() => setNotice(t('remoteDesktop.viewer.settingsFailed')));
+                  }}
+                >
+                  {t('remoteDesktop.viewer.fitViewerDisplay')}
+                </Button>
+                <p>{t('remoteDesktop.viewer.fitViewerDisplayHint')}</p>
+              </div>
+            )}
             {modes.length > 0 && (
               <FormField
                 label={t('remoteDesktop.viewer.resolution')}

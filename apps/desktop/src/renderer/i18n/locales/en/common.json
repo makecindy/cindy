@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "The remote desktop connection will end. Apps on the computer will keep running.",
       "disconnectFailed": "Could not disconnect. Try again.",
       "clipboardShortcutHint": "Use {{modifier}}+C / {{modifier}}+V in the picture to copy and paste text between computers. Images and files are not supported yet.",
+      "fitViewerDisplay": "Match Current View",
+      "fitViewerDisplayHint": "Temporarily adjusts the computer desktop to this view’s aspect ratio, keeping its contents. Disconnect to restore the original resolution.",
       "resolutionHint": "Resolution changes affect the actual remote monitor."
     }
   },
@@ -5849,6 +5851,11 @@
     "ssoOrgHint": "Don't know your enterprise sign-in identifier? Ask your admin",
     "ssoOrgDetected": "Choose a single sign-on connection for \"{{org}}\"",
     "realmConsent": {
+      "personalTitle": "Enterprise sign-in available",
+      "personalBodyCn": "Enterprise found in Mainland China.\nUse SSO or continue with your account.",
+      "personalBodyGlobal": "Enterprise found in the Global region.\nUse SSO or continue with your account.",
+      "enterpriseLogin": "Enterprise SSO",
+      "continuePersonal": "Continue personal",
       "title": "Connect to your enterprise region",
       "bodyCn": "Your enterprise is in Mainland China.\nContinue to connect Cindy to this region.",
       "bodyGlobal": "Your enterprise is in the Global region.\nContinue to connect Cindy to this region.",
@@ -10926,6 +10933,7 @@
       "titleLabel": "Title",
       "bodyLabel": "Body (Markdown)",
       "privacyHint": "The Issue title and body will be public and may be searchable or cached. Automatic redaction only covers some common patterns and cannot detect all sensitive context.",
+      "relatedLogsHint": "This submission includes the related client logs shown above. They are filtered, redacted, and length-limited before publication.",
       "privacyConfirm": "I reviewed the public content above and it contains no personal, conversation, or business information that should remain private",
       "submissionMethodLabel": "Submission Identity",
       "identityGithubUser": "My GitHub account @{{login}}",

@@ -69,6 +69,22 @@ async function makeHarness(
 }
 
 describe('createComputerMcpServer', () => {
+  it('advertises a first-call goal and keeps host session routing independent of it', async () => {
+    const deps: ComputerMcpDeps = { getStatus: vi.fn(), callTool: vi.fn(async () => ({ windows: [] })) };
+    const h = await makeHarness(deps, { sessionId: 'stable-task' });
+    try {
+      const listed = textPayload(await h.client.callTool({ name: 'list_tools', arguments: {} })) as {
+        tools: Array<{ name: string; inputSchema: { properties: Record<string, unknown> } }>;
+      };
+      expect(listed.tools.find((tool) => tool.name === 'list_windows')?.inputSchema.properties).toHaveProperty('session_goal');
+      await h.client.callTool({ name: 'call_tool', arguments: {
+        name: 'list_windows', args: { session_goal: '提交报销申请' },
+      } });
+      expect(deps.callTool).toHaveBeenLastCalledWith('list_windows', {
+        session: 'stable-task', session_goal: '提交报销申请',
+      }, { sessionId: 'stable-task', signal: expect.any(AbortSignal) });
+    } finally { await h.cleanup(); }
+  });
   it('halts replay after an unknown action effect even with stop_on_error false', async () => {
     const root = await makeWorkingDir();
     const h = await makeHarness({ getStatus: vi.fn(), callTool: vi.fn(async () => ({ effect: 'unverifiable' })) }, {

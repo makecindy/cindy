@@ -18,6 +18,7 @@ interface MockTransitionInput {
 }
 
 const mocks = vi.hoisted(() => ({
+  localMode: false,
   currentUserId: 'media-user-0',
   ownerGeneration: 1,
   models: vi.fn(),
@@ -50,13 +51,14 @@ vi.mock('../../authManager.js', () => ({
   getCurrentUserId: () => mocks.currentUserId,
   getActiveAuthRealm: () => 'cn',
   getAuthState: () => ({
-    user: mocks.currentUserId ? { id: mocks.currentUserId } : null,
-    dataOwnerId: mocks.currentUserId,
+    mode: mocks.localMode ? 'local' : 'cloud',
+    user: !mocks.localMode && mocks.currentUserId ? { id: mocks.currentUserId } : null,
+    dataOwnerId: mocks.localMode ? mocks.dbOwnerId : mocks.currentUserId,
     ownerGeneration: mocks.ownerGeneration,
   }),
 }));
 vi.mock('../../appCapabilities.js', () => ({
-  getAppCapabilities: () => ({ canUseCindyGateway: true }),
+  getAppCapabilities: () => ({ canUseCindyGateway: !mocks.localMode }),
 }));
 vi.mock('../../model-access/effectiveEndpoint.js', () => ({
   effectiveXdGatewayBaseUrl: () => 'https://gateway.example.com',
@@ -236,6 +238,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
   beforeEach(() => {
     mocks.confirm.mockReset().mockResolvedValue(true);
     mocks.currentUserId = `media-user-${crypto.randomUUID()}`;
+    mocks.localMode = false;
     mocks.ownerGeneration += 1;
     mocks.dbOwnerId = mocks.currentUserId;
     mocks.db = {
@@ -394,11 +397,14 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(JSON.parse(init.body)).toMatchObject({ model: fullModelId });
   });
 
-  it('同名媒体模型按 providerId 精确准备并调用第三方来源', async () => {
+  it.each([
+    [false, 'openai'], [true, 'openai'], [true, 'openai-independent'],
+  ] as const)('同名媒体模型按 providerId 精确准备并调用第三方来源 (local=%s, provider=%s)', async (localMode, providerId) => {
+    mocks.localMode = localMode;
     const providerModel = {
-      id: 'openai/gpt-image-2',
+      id: `${providerId}/gpt-image-2`,
       name: 'GPT Image 2',
-      providerId: 'openai',
+      providerId,
       mode: 'image_generation',
       modalities: { input: ['text', 'image'], output: ['image'] },
       officialDocs: 'https://platform.openai.com/docs/guides/image-generation',
@@ -412,7 +418,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
 
     const prepared = await callCindyMedia({
       action: 'prepare',
-      providerId: 'openai',
+      providerId,
       modelId: providerModel.id,
       capability: 'image.generate',
     });
@@ -420,7 +426,7 @@ describe('Cindy Core media invocation state and security boundary', () => {
     expect(prepared).toMatchObject({
       ok: true,
       status: 'prepared',
-      provider_id: 'openai',
+      provider_id: providerId,
       model_id: providerModel.id,
     });
     expect(mocks.guide).not.toHaveBeenCalled();
@@ -437,13 +443,41 @@ describe('Cindy Core media invocation state and security boundary', () => {
       xdt_image_urls: [`cindy-media://blobs/${'a'.repeat(64)}.png`],
     });
     expect(mocks.providerInvoke).toHaveBeenCalledWith({
-      providerId: 'openai',
+      providerId,
       modelId: providerModel.id,
       capability: 'image.generate',
       prompt: 'cat',
       imagePaths: [],
       signal: expect.any(AbortSignal),
     });
+    expect(mocks.rows.get(prepared.invocation_id as string)?.owner).toBe(
+      localMode ? `local:${mocks.dbOwnerId}` : `cn:${mocks.currentUserId}`,
+    );
+    mocks.localMode = !localMode;
+    mocks.ownerGeneration += 1;
+    await expect(callCindyMedia({ action: 'poll', invocationId: prepared.invocation_id as string }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'INVOCATION_NOT_FOUND' });
+    expect(mocks.providerInvoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('本机准备期间同 owner 代次变化时不保存调用', async () => {
+    mocks.localMode = true;
+    mocks.models.mockImplementationOnce(async () => {
+      mocks.ownerGeneration += 1;
+      return [];
+    });
+    await expect(callCindyMedia({ action: 'prepare', providerId: 'openai', modelId: 'openai/gpt-image-2', capability: 'image.generate' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'ACCOUNT_CHANGED' });
+    expect(mocks.rows.size).toBe(0);
+    expect(mocks.providerInvoke).not.toHaveBeenCalled();
+  });
+
+  it('本机模式不向 Cindy 网关申请 Guide', async () => {
+    mocks.localMode = true;
+    await expect(callCindyMedia({ action: 'prepare', providerId: 'xd', modelId: 'image-model', capability: 'image.generate' }))
+      .resolves.toMatchObject({ ok: false, errorCode: 'CONNECTION_UNAVAILABLE' });
+    expect(mocks.guide).not.toHaveBeenCalled();
+    expect(mocks.outboundFetch).not.toHaveBeenCalled();
   });
 
   it('旧调用未传 providerId 时裸 ID 唯一升级且同名来源优先 Cindy AI', async () => {

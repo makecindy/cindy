@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "원격 데스크톱 연결이 종료됩니다. 컴퓨터의 앱은 계속 실행됩니다.",
       "disconnectFailed": "연결을 끊지 못했습니다. 다시 시도하세요.",
       "clipboardShortcutHint": "화면 안에서 {{modifier}}+C / {{modifier}}+V로 컴퓨터 간에 텍스트를 복사하고 붙여넣으세요. 이미지와 파일은 아직 지원하지 않습니다.",
+      "fitViewerDisplay": "현재 화면 비율에 맞추기",
+      "fitViewerDisplayHint": "데스크톱 내용을 유지하면서 컴퓨터 화면 비율을 일시적으로 변경합니다. 연결을 종료하면 원래 해상도로 돌아갑니다.",
       "resolutionHint": "해상도를 변경하면 원격 컴퓨터의 실제 모니터에 적용됩니다."
     }
   },
@@ -5847,6 +5849,11 @@
     "ssoOrgHint": "기업 로그인 식별자를 모르시나요? 관리자에게 문의하세요",
     "ssoOrgDetected": "\"{{org}}\"의 통합 로그인 방식을 선택하세요",
     "realmConsent": {
+      "personalTitle": "기업 로그인 발견",
+      "personalBodyCn": "중국 본토의 기업을 찾았습니다.\n기업 SSO 또는 개인 로그인을 선택하세요.",
+      "personalBodyGlobal": "글로벌 지역의 기업을 찾았습니다.\n기업 SSO 또는 개인 로그인을 선택하세요.",
+      "enterpriseLogin": "기업 SSO",
+      "continuePersonal": "개인 로그인 계속",
       "title": "기업 지역에 연결",
       "bodyCn": "이 기업은 중국 본토 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
       "bodyGlobal": "이 기업은 글로벌 지역에 있습니다.\n계속하면 Cindy가 해당 지역에 연결됩니다.",
@@ -10910,6 +10917,7 @@
       "titleLabel": "제목",
       "bodyLabel": "본문(Markdown)",
       "privacyHint": "Issue 제목과 본문은 공개되며 검색되거나 캐시될 수 있습니다. 자동 가림은 일부 일반적인 형식만 처리하며 문맥상 민감한 정보를 모두 감지할 수는 없습니다.",
+      "relatedLogsHint": "이 제출에는 위에 표시된 관련 클라이언트 로그가 포함됩니다. 공개 전에 출처 및 필드 필터링, 가림, 길이 제한이 적용됩니다.",
       "privacyConfirm": "위 공개 내용을 검토했으며 비공개로 유지해야 할 개인, 대화 또는 업무 정보가 포함되지 않았음을 확인했습니다",
       "submissionMethodLabel": "제출 계정",
       "identityGithubUser": "내 GitHub 계정 @{{login}}",

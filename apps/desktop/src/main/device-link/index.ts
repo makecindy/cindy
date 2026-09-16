@@ -38,7 +38,7 @@ import {
   type Envelope,
   type PushPayload,
   DeviceLinkError,
-  INVOKE_TIMEOUT_OVERRIDES_MS,
+  resolveRemoteInvokeTimeoutMs,
 } from '@cindy/device-link';
 import { DEVICE_LINK_VOICE_DICTIONARY_SNAPSHOT_CHANNEL } from '@cindy/maker-shared/device-link-contract';
 import * as authManager from '../authManager';
@@ -700,7 +700,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     probeInvoke: (deviceId, channel, args) => {
       if (!client)
         throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-      return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+      return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'));
     },
     onUnresponsiveChanged: (deviceId, unresponsive) => {
       broadcast(DEVICE_LINK_PUSH.RESPONSIVENESS_CHANGED, { deviceId, unresponsive });
@@ -1703,7 +1703,7 @@ export async function remoteInvoke(
     assertLinkNotClosedSinceStart();
     options?.preSend?.();
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-    return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+    return client.invoke(deviceId, { channel, args }, resolveRemoteInvokeTimeoutMs(channel, args, 'desktop'));
   };
   const run = (): Promise<InvokeResultPayload> =>
     invokeWithClosedLinkRecovery(

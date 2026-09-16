@@ -328,6 +328,7 @@ import {
   clearSessionContextInDb,
   createSessionRemoteHostIdReader,
   getSessionRowSnapshot,
+  getSessionFsSnapshot,
   getSessionRowSnapshotStrict,
   persistSessionFields,
   recycleSessionWorktreeForStatusChange,
@@ -839,7 +840,7 @@ import {
   refreshAnthropicModelsFromHttp,
 } from '../maker-host/model-discovery/anthropic.js';
 import { refreshXaiModelsFromHttp } from '../maker-host/model-discovery/xai.js';
-import { refreshBuiltinProviderModels } from '../maker-host/provider-model-refresh.js';
+import { refreshBuiltinProviderModels, refreshModelsWithCatalog } from '../maker-host/provider-model-refresh.js';
 import {
   configureProviderModelAutoRefresh,
   refreshProviderModelsManually,
@@ -5483,10 +5484,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return { ok: await refreshSubscriptionAccountModels(spec.savedProviderId), models: [] };
       }
       if (isCodexAccountProvider(spec.savedProviderId)) {
-        const owner = getActiveAppSession();
         if (spec.agent !== 'codex') throw new Error('Codex account model discovery requires Codex');
-        const applied = await maker.refreshAgentLocalModels('codex', { credentialMode: 'oauth-bearer', providerId: spec.savedProviderId! });
-        if (getActiveAppSession().generation !== owner.generation) throw new Error('Account changed during model discovery');
+        const applied = await refreshModelsWithCatalog({
+          refreshCatalog: refreshActiveCatalogFromSource,
+          refreshModels: () => maker.refreshAgentLocalModels('codex', {
+            credentialMode: 'oauth-bearer', providerId: spec.savedProviderId!,
+          }),
+          getScopeKey: () => getActiveAppSession().generation,
+        });
         return { ok: applied, models: [] };
       }
       if (spec.authMethod === 'oauth') {
@@ -12129,6 +12134,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   };
   const { sendToAgentAccepted: sendToAgentAcceptedUnlocked } = createMakerSendTransaction({
     readAutoReviewHistory,
+    readScheduledPermissions: getSessionFsSnapshot,
     getSession: (sessionId) => maker.getSession(sessionId),
     closeSession: (sessionId) => maker.closeSession(sessionId),
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),

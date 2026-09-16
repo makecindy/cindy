@@ -9502,7 +9502,10 @@ function computeRunningSnapshot(): Map<string, SessionStatusInfo> {
     // (远程会话豁免,见 hasBackgroundAgentWork 注释。)
     const bgTaskRunning = hasBackgroundAgentWork(id, state);
 
-    if (state.agentStatus.isRunning || bgTaskRunning) {
+    // Recovery is still unfinished work. Keep the existing running edge alive
+    // so a dispatch failure can settle as error without another vendor turn.
+    const recoveryPending = !state.error && hasSessionRecoveryPending(id);
+    if (state.agentStatus.isRunning || bgTaskRunning || recoveryPending) {
       // Currently running — always include.
       next.set(id, {
         isRunning: true,
@@ -9620,6 +9623,18 @@ function hasSessionTerminalError(sessionId: string): boolean {
   // side-task 结束保留的旧 error 不算「本次 run 的终态失败」(与 transition
   // snapshot 的豁免同口径, 见 lastStopWasSideTask)。
   return !!s?.error && !s.lastStopWasSideTask;
+}
+
+/** Non-creating read: recovery can outlive the one-generation stop snapshot. */
+function hasSessionRecoveryPending(sessionId: string): boolean {
+  const state = sessions.get(sessionId);
+  return !!state && (
+    state.messages.some((message) =>
+      message.clientId === AUTO_RESUME_PENDING_CLIENT_ID ||
+      message.clientId === CODEX_RECONNECT_PENDING_CLIENT_ID,
+    ) ||
+    (!state.queuePaused && state.pendingQueue.some((item) => item.autoResume === true))
+  );
 }
 
 // 远程回执 error 免疫的兜底探针:活动镜像缺条目(推送丢失 / 未达)时,
@@ -16308,6 +16323,7 @@ export const makerChatStore = {
   getRunningSnapshot,
   /** F-SB-7: Authoritative terminal-error read, immune to snapshot-generation races. */
   hasSessionTerminalError,
+  hasSessionRecoveryPending,
   wasLastStopSideTask,
   wasLastStopPrivateReply: (sessionId: string): boolean =>
     sessions.get(sessionId)?.lastStopWasPrivateReply === true,

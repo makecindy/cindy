@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "將結束遠端桌面連線，電腦上的應用程式仍會繼續執行。",
       "disconnectFailed": "無法中斷連線，請重試。",
       "clipboardShortcutHint": "在畫面內使用 {{modifier}}+C / {{modifier}}+V，即可在兩台電腦之間複製貼上文字。暫不支援圖片和檔案。",
+      "fitViewerDisplay": "依目前畫面比例調整",
+      "fitViewerDisplayHint": "暫時調整電腦桌面比例，保留目前桌面內容。離開連線後恢復原解析度。",
       "resolutionHint": "解析度修改會影響遠端的實際顯示器。"
     }
   },
@@ -5843,6 +5845,11 @@
     "ssoOrgHint": "不知道企業登入標識？請聯絡企業管理員",
     "ssoOrgDetected": "選擇企業「{{org}}」的單點登入方式",
     "realmConsent": {
+      "personalTitle": "發現企業登入",
+      "personalBodyCn": "信箱對應企業位於中國大陸區。\n可使用企業 SSO，或繼續個人登入。",
+      "personalBodyGlobal": "信箱對應企業位於國際區。\n可使用企業 SSO，或繼續個人登入。",
+      "enterpriseLogin": "企業 SSO",
+      "continuePersonal": "繼續個人登入",
       "title": "連線企業所在區域",
       "bodyCn": "你的企業位於中國大陸區。\n繼續後，Cindy 會連線該區域。",
       "bodyGlobal": "你的企業位於國際區。\n繼續後，Cindy 會連線該區域。",
@@ -10906,6 +10913,7 @@
       "titleLabel": "標題",
       "bodyLabel": "正文(Markdown)",
       "privacyHint": "Issue 的標題與正文將公開顯示，且可能被搜尋或快取。系統只能遮蔽部分常見敏感資訊，無法辨識所有語意隱私。",
+      "relatedLogsHint": "本次提交包含上方顯示的相關客戶端日誌；日誌在公開前已經過來源與欄位篩選、脫敏及長度限制。",
       "privacyConfirm": "我已檢查以上公開內容，不包含不應公開的個人、對話或業務資訊",
       "submissionMethodLabel": "釋出方式",
       "identityGithubUser": "GitHub 帳號 @{{login}} 直接釋出",

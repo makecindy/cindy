@@ -105,6 +105,8 @@
       "confirmDisconnectHint": "将结束远程桌面连接，电脑上的应用仍会继续运行。",
       "disconnectFailed": "未能断开连接，请重试。",
       "clipboardShortcutHint": "在画面内使用 {{modifier}}+C / {{modifier}}+V，即可在两台电脑之间复制粘贴文字。暂不支持图片和文件。",
+      "fitViewerDisplay": "按当前画面比例调整",
+      "fitViewerDisplayHint": "临时调整电脑桌面比例，保留当前桌面内容。退出连接后恢复原分辨率。",
       "resolutionHint": "分辨率修改会影响远端的实际显示器。"
     }
   },
@@ -5843,6 +5845,11 @@
     "ssoOrgHint": "不知道企业登录标识？请联系企业管理员",
     "ssoOrgDetected": "选择企业「{{org}}」的单点登录方式",
     "realmConsent": {
+      "personalTitle": "发现企业登录",
+      "personalBodyCn": "邮箱对应企业位于中国大陆区。\n可使用企业 SSO，或继续个人登录。",
+      "personalBodyGlobal": "邮箱对应企业位于国际区。\n可使用企业 SSO，或继续个人登录。",
+      "enterpriseLogin": "企业 SSO",
+      "continuePersonal": "继续个人登录",
       "title": "连接企业所在区域",
       "bodyCn": "你的企业位于中国大陆区。\n继续后，Cindy 会连接该区域。",
       "bodyGlobal": "你的企业位于国际区。\n继续后，Cindy 会连接该区域。",
@@ -10906,6 +10913,7 @@
       "titleLabel": "标题",
       "bodyLabel": "正文(Markdown)",
       "privacyHint": "Issue 的标题和正文将公开显示，并可能被搜索或缓存。系统只能隐藏部分常见敏感信息，无法识别所有语义隐私。",
+      "relatedLogsHint": "本次提交包含上方显示的相关客户端日志；日志在公开前已经过来源和字段筛选、脱敏及长度限制。",
       "privacyConfirm": "我已检查以上公开内容，不包含不应公开的个人、对话或业务信息",
       "submissionMethodLabel": "提交身份",
       "identityGithubUser": "我的 GitHub 账号 @{{login}}",

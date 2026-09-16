@@ -202,6 +202,7 @@ import {
 import { createStdioTransport } from './app-server/stdioTransport.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
+import { nativeAutoReviewContinuationConfig } from './native-auto-review-policy.js';
 import { MAKER_MEMORY_RULES } from '../../memory/system-prompt.js';
 import {
   CONTACTS_RULES_DISABLED,
@@ -5121,6 +5122,21 @@ export class CodexAgent extends BaseAgent {
     let nativeAutoReviewUnavailable = false;
     let nativeApprovalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
     let approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+    let nativeContinuationConfig: Record<string, unknown> = {};
+    if (!reviewMode && nativeApprovalsReviewerRouteSupported) {
+      try {
+        const response = await host.request<{ config?: Record<string, unknown> }>(
+          Method.ConfigRead, { cwd: opts.workingDir, includeLayers: false },
+          { timeoutMs: CRITICAL_THREAD_RPC_TIMEOUT_MS },
+        );
+        assertCurrentHost('Native auto-review policy');
+        if (response.config) nativeContinuationConfig = nativeAutoReviewContinuationConfig(initResp.userAgent, response.config);
+      } catch {
+        // Failure to inspect policy must preserve native behavior, not replace an
+        // unseen custom policy or disable review. No user config file is written.
+        log.warn('Native auto-review continuation policy unavailable; preserving native policy');
+      }
+    }
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
     if (reviewMode && !readonlyReferenceDirsSupported) {
@@ -5871,6 +5887,9 @@ export class CodexAgent extends BaseAgent {
         ...(reviewMode ? {} : readSessionMcpConfig()),
         ...capabilityRoutingConfig,
         ...customProviderThreadConfig,
+        // Install while the thread is created/resumed: a later switch to Auto
+        // changes the turn reviewer without rebuilding this thread config.
+        ...nativeContinuationConfig,
         // Bot memory and delegation belong to its Cindy Profile and Session
         // tasks, not the shared native home or hidden harness child threads.
         ...(opts.botRuntimeProfile ? {

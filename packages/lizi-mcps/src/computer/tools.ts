@@ -24,7 +24,7 @@ const ELEMENT_TOKEN_ARG = z.string().min(1).optional().describe(
   'Opaque element_token from the latest get_window_state. Prefer this over element_index; never invent or reuse it after another observation.',
 );
 
-export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
+const COMPUTER_TOOL_DEFINITIONS: readonly ComputerToolDef[] = [
   {
     name: 'status',
     description: 'Check whether the local computer-use driver is installed and callable.',
@@ -342,6 +342,19 @@ export const COMPUTER_TOOLS: readonly ComputerToolDef[] = [
     },
   },
 ];
+
+/** Name the whole computer-use objective once; the host owns stable routing. */
+export const COMPUTER_TOOLS: readonly ComputerToolDef[] = COMPUTER_TOOL_DEFINITIONS.map((tool) => ({
+  ...tool,
+  inputShape: !['status', 'check_permissions', 'replay_trajectory'].includes(tool.name)
+    ? {
+      ...tool.inputShape,
+      session_goal: z.string().trim().min(1).max(80).optional().describe(
+        'On your FIRST computer-use call, provide a short English name for the overall goal of this run (e.g. "Submit expense report" or "Configure notifications"), not the current click or typing step. Use English because the native cursor font does not support CJK text. The host sets the driver session name once and keeps it for the run; omit this field on later calls. Never include credentials or internal IDs.',
+      ),
+    }
+    : tool.inputShape,
+}));
 
 export const COMPUTER_TOOL_NAMES = COMPUTER_TOOLS.map((tool) => tool.name) as [
   ComputerMcpToolName,
