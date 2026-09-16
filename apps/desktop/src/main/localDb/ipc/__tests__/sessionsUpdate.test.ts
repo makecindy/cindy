@@ -173,6 +173,7 @@ function createDb(): void {
       total_cost_usd REAL NOT NULL DEFAULT 0,
       total_cost_amount REAL NOT NULL DEFAULT 0,
       total_cost_currency TEXT,
+      context_window_budget INTEGER,
       total_cost_is_approximate INTEGER NOT NULL DEFAULT 0,
       context_tokens INTEGER NOT NULL DEFAULT 0,
       context_window INTEGER NOT NULL DEFAULT 0,
@@ -586,6 +587,34 @@ describe('local-db:sessions:update handler wiring', () => {
       effort: 'high',
       fast_mode: 0,
     });
+  });
+
+  it('rejects an out-of-range task context window budget instead of silently clearing it', async () => {
+    // 与隧道入口同口径：<1000 会被 normalize 变成 null（等于静默清掉用户预算），
+    // 超大值会被静默夹到上限；调用方却收到成功回包。宁可显式拒绝。
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 999 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 300_000.5 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+    await expect(invokeUpdate('cc-local', { contextWindowBudget: 100_000_001 })).rejects.toThrow(
+      /contextWindowBudget must be null or an integer/,
+    );
+  });
+
+  it('persists null and an in-range task context window budget', async () => {
+    await invokeUpdate('cc-local', { contextWindowBudget: 300_000 });
+    let persisted = h.sqlite!
+      .prepare('SELECT context_window_budget FROM sessions WHERE id = ?')
+      .get('cc-local') as { context_window_budget: number | null };
+    expect(persisted.context_window_budget).toBe(300_000);
+
+    await invokeUpdate('cc-local', { contextWindowBudget: null });
+    persisted = h.sqlite!
+      .prepare('SELECT context_window_budget FROM sessions WHERE id = ?')
+      .get('cc-local') as { context_window_budget: number | null };
+    expect(persisted.context_window_budget).toBeNull();
   });
 
   it('rejects setting drift for retained Review tasks while preserving metadata edits', async () => {

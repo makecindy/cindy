@@ -9302,6 +9302,18 @@
     "sessionLoading": "載入任務中"
   },
   "ccAgent": {
+    "contextWindowBudget": {
+      "menuTitle": "任務上下文視窗",
+      "triggerLabel": "任務上下文視窗，目前 {{window}}",
+      "menuHint": "只影響本任務，下一則訊息生效。",
+      "optionDefault": "模型預設",
+      "optionPercent": "{{percent}}%",
+      "inputPrice": "輸入 {{price}}/M",
+      "remoteUnsupported": "被控裝置版本不支援調整任務上下文視窗",
+      "remoteTightenOnly": "被控裝置的上限無法讀取，這裡只提供調小檔。",
+      "shrinkWarning": "目前已用 {{used}}，換到更小檔位會先觸發壓縮或換窗。",
+      "saveFailed": "儲存上下文視窗檔位失敗"
+    },
     "agentStatus": {
       "thinking": "正在思考…",
       "generating": "正在生成…",

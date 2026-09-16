@@ -5404,6 +5404,12 @@ interface ElectronAPI {
     getModelContextLimit: (
       target: import('../shared/modelContextLimit').ModelContextLimitTarget,
     ) => Promise<import('../shared/modelContextLimit').ModelContextLimitView>;
+    /** 任务窗口档位表的权威边界（与 device-link 的 maker:get-context-window-bounds 同一 handler）。 */
+    getSessionContextWindowBounds: (
+      sessionId: string,
+      // 界面上正在显示的路由：延迟切换期间会话行还是旧路由，带上它才能按显示路由回答。
+      route?: import('../shared/sessionContextWindowBounds').SessionContextWindowBoundsRoute,
+    ) => Promise<import('../shared/sessionContextWindowBounds').SessionContextWindowBounds | null>;
     setModelContextLimit: (
       target: import('../shared/modelContextLimit').ModelContextLimitTarget,
       limit: number | null,
@@ -5925,6 +5931,8 @@ interface ElectronAPI {
     setThinkingEnabled: (sessionId: string, enabled: boolean) => Promise<void>;
     /** 计划模式一级开关(与 permissionMode 正交); DB 持久化由调用方另调 sessionService.update({ planModeEnabled }) */
     setPlanMode: (sessionId: string, enabled: boolean) => Promise<void>;
+    /** 任务级工作上下文窗口档位（tokens；null = 跟随模型默认） */
+    setContextWindowBudget: (sessionId: string, budget: number | null) => Promise<void>;
     /** 会话导出 HTML(pi 原生); 主进程弹保存对话框 + 导出 + 在文件管理器显示; 返回路径或 null(取消/不支持) */
     exportSessionHtml: (sessionId: string) => Promise<string | null>;
     /** 手动压缩会话上下文(pi 原生, 可带聚焦指令); 返回压缩前后 token 数 / {noop} / null(会话不在/不支持) */

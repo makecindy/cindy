@@ -9321,6 +9321,18 @@
     }
   },
   "ccAgent": {
+    "contextWindowBudget": {
+      "menuTitle": "Task context window",
+      "triggerLabel": "Task context window, currently {{window}}",
+      "menuHint": "Affects this task only. Applies from the next message.",
+      "optionDefault": "Model default",
+      "optionPercent": "{{percent}}%",
+      "inputPrice": "input {{price}}/M",
+      "remoteUnsupported": "The controlled device does not support changing this task's context window",
+      "remoteTightenOnly": "The controlled device ceiling is unavailable, so only smaller tiers are offered here.",
+      "shrinkWarning": "{{used}} already in use — a smaller window compacts or rolls over first.",
+      "saveFailed": "Failed to save the context window tier"
+    },
     "agentStatus": {
       "thinking": "Thinking…",
       "generating": "Generating…",

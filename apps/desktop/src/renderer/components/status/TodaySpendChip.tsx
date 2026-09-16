@@ -25,6 +25,11 @@ import {
   formatTurnCostUsd,
 } from '@/lib/usageFormat';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  registerStatusBarCard,
+  releaseStatusBarCard,
+  requestStatusBarCard,
+} from '@/lib/statusBarCards';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
 import { useClaudeSessionRoute } from '@/hooks/useClaudeSessionRoute';
@@ -1074,6 +1079,21 @@ export function TodaySpendChip({
     quotaPopoverPointerInsideRef.current = true;
     scheduleQuotaPopoverOpen();
   }, [scheduleQuotaPopoverOpen]);
+
+  // 底栏状态卡片互斥（用户要求"该窗体为唯一窗体"）：本卡展开时请求独占（另一张立刻收起），
+  // 收起时让位；另一张卡展开时由协调器回调到这里立刻收起。
+  React.useEffect(() => {
+    if (quotaPopoverOpen) requestStatusBarCard('quota');
+    else releaseStatusBarCard('quota');
+  }, [quotaPopoverOpen]);
+  React.useEffect(
+    () => registerStatusBarCard('quota', () => {
+      keepQuotaPopoverOpen();
+      setQuotaPopoverOpen(false);
+      restoreQuotaPopoverFocus();
+    }),
+    [keepQuotaPopoverOpen, restoreQuotaPopoverFocus],
+  );
 
   const quotaPopoverContextRef = React.useRef({
     identity: JSON.stringify([

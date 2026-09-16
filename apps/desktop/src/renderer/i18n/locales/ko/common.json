@@ -9306,6 +9306,18 @@
     }
   },
   "ccAgent": {
+    "contextWindowBudget": {
+      "menuTitle": "이 작업의 컨텍스트 창",
+      "triggerLabel": "작업 컨텍스트 창, 현재 {{window}}",
+      "menuHint": "이 작업에만 적용됩니다. 다음 메시지부터 적용됩니다.",
+      "optionDefault": "모델 기본값",
+      "optionPercent": "{{percent}}%",
+      "inputPrice": "입력 {{price}}/M",
+      "remoteUnsupported": "피제어 기기 버전에서는 이 작업의 컨텍스트 창을 변경할 수 없습니다",
+      "remoteTightenOnly": "피제어 기기 상한을 읽을 수 없어 축소 방향만 제공합니다.",
+      "shrinkWarning": "현재 {{used}} 사용 중 — 더 작은 창은 먼저 압축하거나 새 창으로 전환합니다.",
+      "saveFailed": "컨텍스트 창 저장에 실패했습니다"
+    },
     "agentStatus": {
       "thinking": "생각 중…",
       "generating": "생성 중…",

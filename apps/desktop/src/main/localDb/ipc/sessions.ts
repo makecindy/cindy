@@ -67,6 +67,11 @@ import {
   isRetainableProjectSessionSource,
 } from '../../../shared/sessionSource.js';
 import { normalizeWorkingDirForStorage } from '../../../shared/workingDir.js';
+import {
+  MAX_CONTEXT_WINDOW_BUDGET,
+  MIN_CONTEXT_WINDOW_BUDGET,
+  normalizeContextWindowBudget,
+} from '../../../shared/sessionContextWindowBudget.js';
 import { assertRendererSessionSourceAllowed } from './sessionSourceGuard.js';
 import type { SessionReference } from '../../../shared/sessionReference.js';
 import * as broadcastTap from '../../device-link/broadcast-tap.js';
@@ -143,6 +148,18 @@ export interface RegisterSessionIpcOpts {
   resolveContextWindow?: (session: ContextWindowSession) => number | null;
   /** Close a local Pi/Codex runtime only if its current turn is idle. */
   closeIdleSessionForMove?: (sessionId: string) => Promise<boolean>;
+  /**
+   * 任务级上下文窗口预算（tokens）变化后，把新值应用到**活着的**运行实例上
+   * （空闲关 handle 冷重建；回合中登记 pending，回合结束后生效）。
+   *
+   * 调用时机：本函数已把新值写进 DB（本函数是唯一写入链路）。回调失败只记录、
+   * 不阻断设置保存 —— 新值仍会在下一次启动/恢复时通过 start options 生效。
+   * 入参 previous/next 是用户显式值（null = 跟随模型默认），由 host 换算有效窗口。
+   */
+  applyContextWindowBudget?: (
+    sessionId: string,
+    change: { previous: number | null; next: number | null },
+  ) => Promise<void>;
 }
 
 let sessionRemovalCancelOperations: SessionRemovalCancelOperations | null = null;
@@ -566,6 +583,9 @@ const REMOTE_PERSIST_FIELDS = new Set([
   'planModeEnabled',
   'extraDirs',
   'writableDirs',
+  // 任务级窗口预算：device-link 控制端改档位后，被控端需落库并广播，否则控制端
+  // 会拿旧值回滚自己的乐观 UI。
+  'contextWindowBudget',
 ]);
 
 /**
@@ -714,14 +734,50 @@ export async function persistSessionFields(
     if (persistableEffort === undefined) delete clean.effort;
     else clean.effort = persistableEffort;
   }
+  if (Object.prototype.hasOwnProperty.call(clean, 'contextWindowBudget')) {
+    // 镜像回流（被控端 → 本机）的值可能是旧版 peer / 手改 DB 留下的越界值：
+    // 直接交给 sessionPatchToRow 会被静默收敛成 null（等于把本机预算清掉且没人知道），
+    // 这里显式归一化并留痕；非法值**跳过该字段**，不写库也不触发应用钩子。
+    const normalized = normalizeContextWindowBudget(clean.contextWindowBudget);
+    if (normalized === null && clean.contextWindowBudget !== null) {
+      console.warn('[sessions] dropping invalid mirrored context window budget', {
+        sessionId,
+        value: clean.contextWindowBudget,
+      });
+      delete clean.contextWindowBudget;
+    } else {
+      clean.contextWindowBudget = normalized;
+    }
+  }
   if (Object.keys(clean).length === 0) return;
   const db = getDbClient().drizzle;
+  const previousContextWindowBudget: number | null = clean.contextWindowBudget !== undefined
+    ? (await db
+        .select({ contextWindowBudget: sessions.contextWindowBudget })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1))[0]?.contextWindowBudget ?? null
+    : null;
   const setObj = sessionPatchToRow(clean as Parameters<typeof sessionPatchToRow>[0], {
     bumpUpdatedAt: false,
   });
   if (Object.keys(setObj).length === 0) return;
   await db.update(sessions).set(setObj).where(eq(sessions.id, sessionId));
   if (isOwnerScopeCurrent(ownerScope)) broadcastSessionPatched(sessionId, clean, ownerScope);
+  // 远程 set-* 落库后同样要把新预算应用到被控端活实例（语义与 updateSessionInDb 一致）。
+  if (clean.contextWindowBudget !== undefined && registeredSessionIpcOpts.applyContextWindowBudget) {
+    try {
+      await registeredSessionIpcOpts.applyContextWindowBudget(sessionId, {
+        previous: previousContextWindowBudget,
+        next: (setObj.contextWindowBudget as number | null | undefined) ?? null,
+      });
+    } catch (error) {
+      console.warn('[sessions] remote context window budget apply failed; takes effect on next start', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 }
 
 const MAX_LIMIT = 1000;
@@ -1754,6 +1810,21 @@ export async function updateSessionInDb(
     ) {
       throwIpcError('INVALID_PARAMS', `invalid orcaRole: ${String(p.orcaRole)}`);
     }
+    // 任务窗口预算：非法值不能静默 converge（normalize 会把 <1000 变成 null = 静默清预算、
+    // 把超大值静默夹到上限），而调用方收到的是成功回包。隧道入口与本地入口必须同口径拒绝。
+    if (
+      p.contextWindowBudget !== undefined &&
+      p.contextWindowBudget !== null &&
+      (typeof p.contextWindowBudget !== 'number' ||
+        !Number.isInteger(p.contextWindowBudget) ||
+        p.contextWindowBudget < MIN_CONTEXT_WINDOW_BUDGET ||
+        p.contextWindowBudget > MAX_CONTEXT_WINDOW_BUDGET)
+    ) {
+      throwIpcError(
+        'INVALID_PARAMS',
+        `contextWindowBudget must be null or an integer within [${MIN_CONTEXT_WINDOW_BUDGET}, ${MAX_CONTEXT_WINDOW_BUDGET}]`,
+      );
+    }
     if (typeof p.workingDir === 'string') {
       p.workingDir = normalizeWorkingDirForStorage(p.workingDir) ?? null;
     }
@@ -1762,6 +1833,7 @@ export async function updateSessionInDb(
       'workspaceKind',
       'model',
       'providerId',
+      'contextWindowBudget',
       'effort',
       'permissionMode',
       'fastMode',
@@ -1829,6 +1901,7 @@ export async function updateSessionInDb(
       'fastMode',
       'planModeEnabled',
       'providerId',
+      'contextWindowBudget',
       'orcaRole',
       'extraDirs',
       'writableDirs',
@@ -1853,6 +1926,15 @@ export async function updateSessionInDb(
     // 先记号后写库,代价只是写库失败时该会话本进程内不再自动起名 —— 用户毕竟确实
     // 按下过保存,这个方向的偏差是安全的。
     if (typeof p.title === 'string') noteUserTitleWritten(sid);
+    // 窗口预算的旧值必须在 UPDATE 之前读：下面的应用回调靠它判断「有效窗口是否真的变了」
+    // （已重新展开为同一值时不必关掉活实例）。
+    const previousContextWindowBudget: number | null = p.contextWindowBudget !== undefined
+      ? (await db
+          .select({ contextWindowBudget: sessions.contextWindowBudget })
+          .from(sessions)
+          .where(eq(sessions.id, sid))
+          .limit(1))[0]?.contextWindowBudget ?? null
+      : null;
     await withStatusWriteLock(
       db,
       sid,
@@ -1987,6 +2069,22 @@ export async function updateSessionInDb(
     });
     scheduleWorktreeRecycleForStatusChange(sid, p.status, { ownerScope, mediaDb: db });
     notifyGhostSessionStatusChange(sid, p.status, updated.workingDir);
+    // 广播之后再把新预算应用到活实例：UI 先看到新选择，重建/延迟登记失败也不回滚设置。
+    // 只有本函数会写这一列，不存在平行写入链路；回调缺失（宿主未注入）时静默跳过，
+    // 新值在下次启动/恢复时按 start options 生效。
+    if (p.contextWindowBudget !== undefined && opts.applyContextWindowBudget) {
+      try {
+        await opts.applyContextWindowBudget(sid, {
+          previous: previousContextWindowBudget,
+          next: updated.contextWindowBudget ?? null,
+        });
+      } catch (error) {
+        console.warn('[sessions] apply context window budget failed; takes effect on next start', {
+          sessionId: sid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
     cleanupSessionTerminalArtifacts(sid, p.status);
     compactTerminalSessionToolResults(dbClient, sid, p.status);
     return updated;

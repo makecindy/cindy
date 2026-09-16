@@ -669,6 +669,7 @@ import {
   restoreBotRuntimeForCurrentOwner,
   isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
+  applySessionContextWindowBudgetChange,
   setGoalClearObserver,
   setGoalDeferredResumeCancelObserver,
   setGoalIdleObserver,
@@ -8525,6 +8526,9 @@ app.on('ready', async () => {
       }
       return true;
     },
+    // 任务级窗口预算落库后的运行时应用：与模型级上限编辑同一套「关 handle
+    // 冷重建 / 回合中登记 pending」语义。
+    applyContextWindowBudget: applySessionContextWindowBudgetChange,
     reconcilePersistedSessionRuntimes: reconcilePersistedIOSSimulatorOwnership,
     withSessionLock: withSendToSessionLock,
     // Mirrors exactly what the resume handler requires (`maker-ipc/register.ts`):

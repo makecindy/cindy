@@ -29,7 +29,8 @@ import { projectRemoteBotDelegations } from './remoteBotDelegations.js';
 import { readCodexContextWindowInfo } from '../maker-host/codex-context-window.js';
 import { prepareCodexCustomContextCatalog } from '../maker-host/codex-custom-context-catalog.js';
 import { inferProviderIdForModel } from '../maker-host/provider-route.js';
-import { resolveConfiguredContextWindow, resolveDesktopModelContextProviderId } from '../maker-host/model-context-settings.js';
+import { resolveConfiguredContextWindow, contextWindowBudgetChangesEffectiveWindow, resolveDesktopModelContextProviderId, resolveSessionContextWindowBounds, readStoredSessionContextWindowBudget } from '../maker-host/model-context-settings.js';
+import { MAX_CONTEXT_WINDOW_BUDGET, MIN_CONTEXT_WINDOW_BUDGET } from '../../shared/sessionContextWindowBudget.js';
 import { getCodexHome } from '../maker-host/auth-adapters.js';
 import { getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -591,6 +592,7 @@ import {
   runPiPackageMutationIpcBoundary,
 } from './piPackageMutationIpc.js';
 import { dbToMakerAgentKind, makerToDbAgentKind } from '../../shared/agentKindConversion.js';
+import { normalizeSessionContextWindowBoundsRoute } from '../../shared/sessionContextWindowBounds.js';
 import { readWorkflowProgressForSession } from '../workflow-progress/reader.js';
 import { AgentInputCoordinator } from './agent-input-coordinator.js';
 import { notePromptPredictionSessionStopped } from './promptPredictionStopLedger.js';
@@ -927,6 +929,7 @@ import {
   closeRejectedRuntimeAndRestoreControlStores,
   isRemoteModelSwitchRouteChangeError,
 } from './runtimeSetModel.js';
+import { updateSessionInDb } from '../localDb/ipc/sessions.js';
 import {
   codexCustomProviderConfigSignature,
   hasCodexAppliedCustomProviderCapability,
@@ -2921,6 +2924,13 @@ function unpricedSubscriptionValueMarker(): RegionalMoney {
  * (日/会话总额不受影响,PR #485 review)。turn start 清残留,防错配到下一轮。
  */
 const pendingFailedTurnAssistantPersistId = new Map<string, string>();
+/**
+ * 已按某个预算值重建过活实例的会话：并发通知（双窗口/连点）会带着**同一个终值**进来，
+ * 没有这层去重就会对同一值连续冷重建两次。会话关闭（含删除/归档/取消切换）时清理 ——
+ * 否则条目常驻内存，且「关掉期间改了预算、重开后再改回旧值」会被旧条目挡掉一次。
+ * 模块级而非闭包内：会话关闭的清理在 registerMakerIpc 之外。
+ */
+const appliedContextWindowBudgets = new Map<string, number | null>();
 
 /**
  * 跟踪每个 session 的逻辑 turn 与后台节流 keepalive。外部 running guard
@@ -3177,6 +3187,24 @@ async function syncLibraryReadonlyExtraDir(
 
 let agentInputCoordinatorHolder: AgentInputCoordinator | null = null;
 let contextOverflowRolloverHolder: ReturnType<typeof createContextOverflowRollover> | null = null;
+
+/**
+ * 任务级窗口预算落库后的运行时应用入口（由 localDb 层的 sessions:update 钩子调用）。
+ *
+ * 与 `refreshActiveModelContextSettings` 同一套语义：空闲立即关 handle、下一次发消息
+ * 冷重建；回合中登记 pending，回合结束后生效。maker 未就绪 / 无活实例 / 有效窗口未变
+ * 时 no-op —— 预算已落库，下一次启动或恢复同样会按新值启动。
+ */
+let sessionContextWindowBudgetApplier:
+  | ((sessionId: string, change: { previous: number | null; next: number | null }) => Promise<void>)
+  | null = null;
+
+export async function applySessionContextWindowBudgetChange(
+  sessionId: string,
+  change: { previous: number | null; next: number | null },
+): Promise<void> {
+  await sessionContextWindowBudgetApplier?.(sessionId, change);
+}
 const overflowSuppressedBroadcasts = new Map<
   string,
   { sessionId: string; event: AgentEvent; persistId?: string; resolvedContent?: unknown }
@@ -4413,6 +4441,7 @@ function cleanupClosedSessionRuntime(session: WiredSession): void {
   gitSnapshotCoordinator?.onSessionClosed(session.id);
   clearOrcaMcpHydrated(session.id);
   knownNonOrcaSessionIds.delete(session.id);
+  appliedContextWindowBudgets.delete(session.id);
   lastReportedCostUsdBySession.delete(session.id);
   lastReportedModelUsageBySession.delete(session.id);
   turnModelPromiseBySession.delete(session.id);
@@ -4743,31 +4772,126 @@ export function registerModelVisibilitySyncIpc(): void {
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
   // Catalog updates and explicit budget edits share one serial refresh boundary.
   let contextRefresh = Promise.resolve();
+  /**
+   * 运行时路由/窗口变更的共享依赖：切模重建、目录刷新、任务级预算应用三条路径共用，
+   * codexAuthInjection 每次调用重读（凭证形态可能在两次调用之间变化）。
+   */
+  /**
+   * 该任务是否已有「尚未兑现的运行时选择」（跨引擎切换意图 / 显式路由变更 / 凭证切换）。
+   * 预算应用与目录刷新共用：待定目标的重建会自己读最新设置，别人不得以旧目标抢先登记。
+   */
+  const hasPendingRuntimeSelection = (sessionId: string): boolean => {
+    const pending = getPendingSessionRuntimeMutation(sessionId);
+    return !!agentSwitchPending.get(sessionId) ||
+      !!getPendingCredentialSwitchTarget(sessionId) ||
+      (!!pending && isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation));
+  };
+  const runtimeMutationDeps = () => ({
+    maker, isSessionInTurn,
+    registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
+    clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
+    wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
+    getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
+    codexAuthInjection: getCodexProxyAuthInjectionState(), logger: log,
+  });
   const refreshContextSettings = (targets?: readonly { agent: AgentKind; providerId: string; modelId: string }[]) => {
     const owner = getActiveAppSession();
     const next = contextRefresh.then(() => refreshActiveModelContextSettings({
       targets, inferProviderId: (model, agent) => resolveDesktopModelContextProviderId(getActiveCatalog(), agent, null, model),
       withSessionLock: withSendToSessionLock,
-      hasPendingSelection: (sessionId) => {
-        const pending = getPendingSessionRuntimeMutation(sessionId);
-        return !!agentSwitchPending.get(sessionId) ||
-          (!!pending && isPendingSessionRuntimeRouteExplicit(sessionId, pending.generation));
-      },
+      hasPendingSelection: hasPendingRuntimeSelection,
       assertCurrent: () => {
         if (getActiveAppSession().generation !== owner.generation) throw new Error('Account changed during context configuration');
       },
-      runtime: {
-        maker, isSessionInTurn,
-        registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
-        clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,
-        wakeSessionInputQueue: wakeSessionInputAfterCredentialSwitch,
-        getPendingCredentialSwitch: getPendingCredentialSwitchTarget,
-        codexAuthInjection: getCodexProxyAuthInjectionState(), logger: log,
-      },
+      runtime: runtimeMutationDeps(),
     }));
     contextRefresh = next.catch(() => {});
     return next;
   };
+  sessionContextWindowBudgetApplier = async (sessionId, change) => {
+    const activeMaker = getMakerIfReady();
+    if (!activeMaker || !activeMaker.getSession(sessionId)) return;
+    await withSendToSessionLock(sessionId, async () => {
+      const live = getMakerIfReady()?.getSession(sessionId);
+      if (!live) {
+        appliedContextWindowBudgets.delete(sessionId);
+        return;
+      }
+      // 会话行（路由快照）必须在**锁内**重读：锁外读到的是「加锁前」的路由，若期间用户切了模，
+      // 有效窗口判定会按旧路由算成「没变」而漏掉一次必需的重建（第 1 轮的洞在这条窄路径的复发）。
+      const [row] = await getDbClient()
+        .drizzle.select({
+          agentKind: sessions.agentKind,
+          model: sessions.model,
+          providerId: sessions.providerId,
+        })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      if (!row?.model) return;
+      const agent = dbToMakerAgentKind(row.agentKind);
+      const providerId = getSessionProvider(sessionId) ?? row.providerId;
+      const catalog = getActiveCatalog();
+      // 并发改档位（双窗口、连点）时两条通知会乱序到达：以**当下 DB 里的值**为 `next`，
+      // 让 live 与落库终值对齐（否则后执行的旧通知会把活实例重建回旧窗口）。
+      const latestBudget = await readStoredSessionContextWindowBudget(sessionId);
+      // 同一终值已在锁内处理过一次（两次通知读到同一个最新值）→ 不再重复重建。
+      if (appliedContextWindowBudgets.has(sessionId)
+        && appliedContextWindowBudgets.get(sessionId) === latestBudget) {
+        log.debug('session context window budget already applied', {
+          sessionId, budget: latestBudget,
+        });
+        return;
+      }
+      // 有效窗口（预算与模型级上限取更紧者）没变就不重建：避免每次改档位都关活实例。
+      if (!contextWindowBudgetChangesEffectiveWindow({
+        catalog, agent, providerId, modelId: row.model,
+        previous: change.previous, next: latestBudget,
+      })) {
+        log.debug('session context window budget does not change the effective window', {
+          sessionId, previous: change.previous, next: latestBudget,
+        });
+        return;
+      }
+      // 待定选择是**更晚的意图**，而 pending 是整体替换：读-改-写必须在同一把锁里，
+      // 否则会在 await 窗口把用户期间新选的模型/引擎冲掉（SET_MODEL 持锁登记，我们必须在锁内对齐）。
+      const pendingTarget = getPendingCredentialSwitchTarget(sessionId);
+      if (pendingTarget) {
+        // 已登记的凭证 pending（目标模型就是用户选的 B）：**原样保留其 model/provider**，
+        // 只补 forceSessionRebuild；跨引擎意图在另一套 store，不在这里动。
+        // 绝不能以「当前 live 路由」重登记 —— 那会把用户的模型选择冲掉且不报错。
+        // 这里**不**记 dedup：真正的重建发生在收口时，pending 被取消/超车的话什么都没做，
+        // 记了就会把后续同值通知全部挡掉，活实例永久停在旧窗口。
+        await registerPendingCredentialSwitchForSession(sessionId, {
+          ...pendingTarget,
+          forceSessionRebuild: true,
+        });
+        log.info('session context window budget merged into the pending route switch', {
+          sessionId, previous: change.previous,
+          next: latestBudget, targetModel: pendingTarget.model,
+        });
+        return;
+      }
+      // 无凭证 pending 时（含仅轴 pending / runtime-control 显式路由 pending / 跨引擎切换）：
+      // 以**当前 live 路由**补一个 forceSessionRebuild。取舍说明：这几套意图各自存在别的 store，
+      // 这里不会覆盖它们，但确实会多登记一条「当前引擎」的凭证 pending —— 它与跨引擎意图在同一个
+      // 收口边界先后生效，最坏是多一次关会话/重建（写入的路由就等于 live 路由，不会复活旧路由）；
+      // 换来的是「跨引擎切换被取消时预算仍会生效」这个更强保证（第 3 轮 review 的反向要求）。
+      // 少登记一条会反过来丢掉那个保证，所以这里选择保留登记。
+      await applyRuntimeSetModelChange({
+        ...runtimeMutationDeps(),
+        sessionId,
+        model: live.model,
+        providerId: getSessionProvider(sessionId),
+        forceSessionRebuild: true,
+      });
+      appliedContextWindowBudgets.set(sessionId, latestBudget);
+      log.info('session context window budget applied via runtime rebuild', {
+        sessionId, previous: change.previous, next: latestBudget,
+      });
+    });
+  };
+
   setModelContextRuntimeRefreshListener(() => {
     if (!getMakerIfReady()) return;
     void refreshContextSettings().catch((error) => log.warn('model default context refresh failed', {
@@ -8023,6 +8147,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     sessionRuntimeGenerationMatches(sessionId, expectedGeneration);
   cancelPendingAgentSwitchHolder = (sessionId) => {
     agentSwitchPending.clear(sessionId);
+    appliedContextWindowBudgets.delete(sessionId);
     broadcastSessionPatched(sessionId, {
       agentSwitchIntent: null,
       agentSwitchIntentCanceled: true,
@@ -15967,11 +16092,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       let targetContextWindow: number | undefined;
       let currentContextWindow: number | undefined;
       let verifiedCurrentWindow: number | undefined;
+      /** 目录侧（已按当前路由 + 预算收敛）的当前窗口；Pi 未上报 live 窗口时拿它做比较基准。 */
+      let budgetCompareWindow: number | undefined;
       let modelWindowContextNeedsProtection = false;
       let modelWindowRebuilt = false;
+      // 任务级窗口预算（用户显式值，null = 跟随默认）：切模/校验统一按目标路由
+      // 重新收敛（min(预算, 目标路由模型级上限, 目录物理上限)），否则预算会被目录
+      // 默认值顶掉或被目标窗口校验抹平。
+      const sessionContextWindowBudget = await readStoredSessionContextWindowBudget(sessionId);
+      const resolveWindowForRoute = (
+        agentKind: AgentKind,
+        routeModelId: string,
+        pid: string | null,
+      ): number | null => resolveConfiguredContextWindow(
+        getActiveCatalog(), agentKind, pid, routeModelId, sessionContextWindowBudget,
+      );
       if (runtimeAgentKind && (runtimeRouteChanged || confirmedContextWindow !== undefined)) {
         const resolveRouteWindow = (_agentKind: string, modelId: string, pid: string | null) =>
-          resolveConfiguredContextWindow(getActiveCatalog(), runtimeAgentKind, pid, modelId);
+          resolveWindowForRoute(runtimeAgentKind, modelId, pid);
         const verifiedTargetWindow = lookupVerifiedContextWindow(
           resolveRouteWindow,
           model,
@@ -16021,6 +16159,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               ? liveCurrentWindow
               : undefined
             : catalogCurrentWindow;
+        // 切模必须重建的**比较基准**：优先取被验证的当前窗口，其次取「运行时上报/目录收敛出的
+        // 有效窗口」，再退到「同一收敛函数解出的当前路由窗口」（与建 live env 用的是同一个
+        // resolveWindowForRoute，因此未核实但声明了 max 的路由也解得出）。
+        // 三者都不可知时**不**强制重建（fail-safe）：否那么 undefined 恒不等会把无辜的同窗切模
+        // 也变成一次破坏性重建；预算本身的应用走 applier 通道，不依赖这里的判定。
+        const resolvedCurrentWindow = currentRuntimeModel
+          ? resolveWindowForRoute(runtimeAgentKind, currentRuntimeModel, currentProviderId ?? null)
+          : null;
+        budgetCompareWindow = verifiedCurrentWindow
+          ?? (typeof currentContextWindow === 'number' && Number.isFinite(currentContextWindow)
+            && currentContextWindow > 0
+            ? currentContextWindow
+            : undefined)
+          ?? (typeof resolvedCurrentWindow === 'number' && Number.isFinite(resolvedCurrentWindow)
+            && resolvedCurrentWindow > 0
+            ? resolvedCurrentWindow
+            : undefined);
         const targetDoesNotShrink =
           typeof verifiedCurrentWindow === 'number' &&
           typeof verifiedTargetWindow === 'number' &&
@@ -16307,7 +16462,24 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 : {}),
               forceSessionRebuild:
                 rebuildLiveOrcaWorker ||
-                (atomicSelection?.effort === null && runtimeAgentKind !== 'pi'),
+                (atomicSelection?.effort === null && runtimeAgentKind !== 'pi') ||
+                // 任务级预算：目标路由的**收敛后**窗口与当前不同就必须重建。
+                // 引擎侧的 requiresModelSwitchRebuild 在预算模式下对任意目标模型都返回
+                // 「预算 == live env」（它只知道当前预算），探测不到这次失配；
+                // 若不在这里拦截，热切后 CC 子进程 env 仍停在旧窗口（如预算 300K 切到
+                // 200K 上限的模型），压缩线会越过目标窗口。
+                // Pi 的 live 窗口只信运行时上报；未上报时依次用「运行时/目录收敛出的有效窗口」
+                // 与「当前路由的收敛值」做比较基准；三者都不可知时按 fail-closed 处理（无法证明
+                // 「当前窗口 == 目标窗口」就重建）—— 否则第 1 轮的洞（CC env 停在过大窗口、
+                // 压缩线越过目标窗口）会在这条窄路径上复发；误重建的代价只是一次冷重建。
+                (sessionContextWindowBudget !== null &&
+                  targetContextWindow !== undefined &&
+                  targetContextWindow !== budgetCompareWindow),
+              // 任务级预算：路由变了且已有显式预算时，把按**目标路由**重新收敛后的
+              // 窗口随热切下发给引擎（否则引擎会继续沿用旧模型的收敛值）。
+              ...(sessionContextWindowBudget !== null && targetContextWindow !== undefined
+                ? { contextWindowBudget: targetContextWindow }
+                : {}),
               ...(runtimeAgentKind === 'pi' && runtimeRouteChanged
                 ? {
                     assertSessionCloseSupported: () => {
@@ -16369,9 +16541,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           }
           // Pi reports the configured native budget, which may exceed the route
           // ceiling. Final verification must not undo the history safety cap.
-          const verifiedPiWindow = resolveConfiguredContextWindow(
-            getActiveCatalog(), 'pi', targetRouteProviderId, model,
-          );
+          const verifiedPiWindow = resolveWindowForRoute('pi', model, targetRouteProviderId);
           const finalPiWindow = verifiedPiWindow === null
             ? reportedPiWindow : Math.min(reportedPiWindow, verifiedPiWindow);
           targetContextWindow = finalPiWindow;
@@ -16631,12 +16801,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               dbToMakerAgentKind(getSessionDbAgentKind(sessionId));
             const verifiedWindow = lookupVerifiedContextWindow(
               (agentKind, modelId, pid) =>
-                resolveConfiguredContextWindow(
-                  getActiveCatalog(),
-                  dbToMakerAgentKind(agentKind),
-                  pid,
-                  modelId,
-                ),
+                resolveWindowForRoute(dbToMakerAgentKind(agentKind), modelId, pid),
               model,
               targetRouteProviderId,
               currentAgentKind,
@@ -16950,6 +17115,83 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         return;
       }
       await sess.setPlanMode(enabled);
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_INVOKE.SET_CONTEXT_WINDOW_BUDGET,
+    async (event, sessionId: unknown, budget: unknown) => {
+      // 会话变更型 IPC 统一 sender 校验（对齐 SET_PLAN_MODE）；device-link 远程
+      // 控制端已由 remoteControlEnabled + revoke + allowlist 授权。
+      if (!isDeviceLinkInvoke()) {
+        assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+      }
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'sessionId required');
+      }
+      if (
+        budget !== null &&
+        (typeof budget !== 'number' ||
+          !Number.isFinite(budget) ||
+          !Number.isInteger(budget) ||
+          budget < MIN_CONTEXT_WINDOW_BUDGET ||
+          budget > MAX_CONTEXT_WINDOW_BUDGET)
+      ) {
+        // 非法值不能静默收敛：normalize 会把 <1000 变成 null（等于静默清掉用户预算）、
+        // 把超大值静默夹到上限，调用方却收到成功回包。宁可选边拒绝。
+        throwIpcError(
+          'INVALID_PARAMS',
+          `context window budget must be null or an integer within [${MIN_CONTEXT_WINDOW_BUDGET}, ${MAX_CONTEXT_WINDOW_BUDGET}]`,
+        );
+      }
+      await assertReviewSettingsUnlocked(sessionId);
+      // 走唯一写入链路：落库 + sessions:patched 镜像 + 运行时应用钩子都在
+      // updateSessionInDb 里，不另起平行写入。
+      await updateSessionInDb(sessionId, { contextWindowBudget: budget });
+    },
+  );
+
+  ipcMain.handle(
+    MAKER_INVOKE.GET_CONTEXT_WINDOW_BOUNDS,
+    async (event, sessionId: unknown, route: unknown) => {
+      // 只读查询：不写库、不动活实例，因此不需要 review 设置锁；sender 校验与其它会话型
+      // IPC 一致（device-link 远程控制端已由 remoteControlEnabled + revoke + allowlist 授权）。
+      if (!isDeviceLinkInvoke()) {
+        assertTrustedAppRendererEvent(event as Parameters<typeof assertTrustedAppRendererEvent>[0]);
+      }
+      if (typeof sessionId !== 'string' || sessionId.length === 0) {
+        throwIpcError('INVALID_PARAMS', 'sessionId required');
+      }
+      // 调用方可携带**界面上正在显示的路由**：延迟切换（同一引擎换模型/来源，发送边界
+      // 才落库）期间 DB 行还是旧路由，按旧行回答会让档位表与 chip 显示值一起停在旧模型上。
+      // 没携带（老调用方/畸形值）则退回会话行，与旧行为逐字节一致。
+      const requestedRoute = normalizeSessionContextWindowBoundsRoute(route);
+      const [row] = await getDbClient()
+        .drizzle.select({
+          agentKind: sessions.agentKind,
+          model: sessions.model,
+          providerId: sessions.providerId,
+        })
+        .from(sessions)
+        .where(eq(sessions.id, sessionId))
+        .limit(1);
+      const agent = requestedRoute
+        ? requestedRoute.agent!
+        : dbToMakerAgentKind(row?.agentKind);
+      // 携带路由时整份照用（含 providerId: null = 未显式指定，由目录隐式解析）；
+      // 不带时保留内存态覆盖优先（deferred 切来源期间 DB 还没落）。
+      const providerId = requestedRoute
+        ? (requestedRoute.providerId ?? null)
+        : (getSessionProvider(sessionId) ?? row?.providerId ?? null);
+      const modelId = requestedRoute?.model ?? row?.model ?? null;
+      if (!modelId) return null;
+      // 事实来自**本机**（被控端）目录与该路由的模型级上限，与运行期收敛同一套口径。
+      return resolveSessionContextWindowBounds({
+        catalog: getActiveCatalog(),
+        agent,
+        providerId,
+        modelId,
+      });
     },
   );
 
