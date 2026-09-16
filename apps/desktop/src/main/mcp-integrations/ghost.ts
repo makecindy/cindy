@@ -269,6 +269,8 @@ export async function authorizeDesktopSessionPath(
       size,
       isDirectory,
     }],
+    toolName: request.toolName,
+    operation: request.operation,
     getLiveSessionGrantState,
   });
   if (!granted.ok) return { allowed: false, reason: granted.message };
@@ -553,6 +555,8 @@ async function requestGrantConfirm(params: {
   sessionInstanceId: string | null;
   lane: GhostGrantLane;
   items: GhostGrantFileItem[];
+  toolName?: string;
+  operation?: 'read' | 'write';
   getLiveSessionGrantState?: CindyGhostsHostDeps['getLiveSessionGrantState'];
 }): Promise<
   | { ok: true; approvalSource: GhostGrantApprovalSource; allowDirs?: boolean; isCurrent?: () => boolean }
@@ -581,6 +585,8 @@ async function requestGrantConfirm(params: {
         const decision = await live.reviewAction(toolAutoReviewAction('plugin_file_handoff', {
           ghostId: params.ghostId,
           lane: params.lane,
+          ...(params.toolName ? { sourceTool: params.toolName } : {}),
+          ...(params.operation ? { operation: params.operation } : {}),
           files: params.items.map(({ absPath, size, mimeType, isDirectory }) => ({ absPath, size, mimeType, isDirectory })),
         }, live.remoteHostId ? 'These are files on the controller, NOT the remote task filesystem.' : undefined));
         if (expired()) return denied;

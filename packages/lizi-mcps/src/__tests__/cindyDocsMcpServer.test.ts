@@ -1297,6 +1297,32 @@ describe('路径边界与覆盖语义', () => {
     expect(await unzip(forced.path as string, 'word/document.xml')).toContain('第二版');
   });
 
+  it('获批的外部输入被换成符号链接后不再跟读', async () => {
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-granted-read-'));
+    created.push(outsideDir);
+    const granted = path.join(await fs.realpath(outsideDir), 'granted.txt');
+    const other = path.join(await fs.realpath(outsideDir), 'other.txt');
+    await fs.writeFile(granted, 'granted-bytes');
+    await fs.writeFile(other, 'other-bytes');
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true },
+    )).resolves.toEqual(Buffer.from('granted-bytes'));
+
+    await fs.rm(granted);
+    await fs.symlink(other, granted);
+    await expect(readInputFileWithinLimit(
+      workdir,
+      granted,
+      1024,
+      (bytes) => new DocsPathError('FILE_TOO_LARGE', String(bytes), 'too large'),
+      { allowOutsideRoot: true },
+    )).rejects.toMatchObject({ code: 'PATH_NOT_ALLOWED' });
+  });
+
   it('输入读取只接受与边界校验相同的已打开文件身份', async () => {
     const inside = path.join(workdir, 'inside.txt');
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), 'cindy-docs-outside-'));

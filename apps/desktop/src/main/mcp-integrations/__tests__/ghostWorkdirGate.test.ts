@@ -928,7 +928,7 @@ describe('session path authorization for docs/computer', () => {
   });
 
   it('Auto review can allow or block an outside path', async () => {
-    const reviewAction = vi.fn(async (): Promise<{ verdict: 'allow' | 'block'; reason?: string }> => ({
+    const reviewAction = vi.fn(async (_action: { description?: string }): Promise<{ verdict: 'allow' | 'block'; reason?: string }> => ({
       verdict: 'allow',
     }));
     liveGrantStateMock.mockReturnValue({
@@ -945,6 +945,9 @@ describe('session path authorization for docs/computer', () => {
       operation: 'write',
     }, liveGrantStateMock)).resolves.toEqual({ allowed: true });
     expect(reviewAction).toHaveBeenCalledOnce();
+    const reviewed = reviewAction.mock.calls[0]?.[0];
+    expect(reviewed?.description).toContain('cindy-docs');
+    expect(reviewed?.description).toContain('"operation":"write"');
     expect(confirmRequestMock).not.toHaveBeenCalled();
 
     reviewAction.mockResolvedValueOnce({ verdict: 'block', reason: 'not this path' });

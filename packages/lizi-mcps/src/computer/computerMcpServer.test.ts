@@ -1054,6 +1054,88 @@ describe('createComputerMcpServer', () => {
     await fs.rm(outsideDir, { recursive: true, force: true });
   });
 
+  it('replays an outside trajectory after host authorization', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const outside = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-out-')));
+    const directory = await writeTrajectory(outside, [
+      { tool: 'click', arguments: { pid: 123, window_id: 7, x: 10, y: 20 } },
+    ]);
+    setSessionPathAuthorizer(async (request) => {
+      expect(request.path).toBe(directory);
+      expect(request.operation).toBe('read');
+      expect(request.toolName).toBe('cindy-computer:replay_trajectory');
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: root }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'replay_trajectory',
+        args: { dir: directory, delay_ms: 0, stop_on_error: false },
+      },
+    })) as { ok: boolean; data: { attempted: number; succeeded: number } };
+
+    expect(payload).toMatchObject({ ok: true, data: { attempted: 1, succeeded: 1 } });
+    expect(deps.callTool).toHaveBeenCalledWith(
+      'click',
+      { pid: 123, window_id: 7, x: 10, y: 20 },
+      expect.anything(),
+    );
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(outside, { recursive: true, force: true });
+  });
+
+  it('does not follow a granted replay directory after it is replaced by a symlink', async () => {
+    const deps: ComputerMcpDeps = {
+      getStatus: vi.fn(),
+      callTool: vi.fn(async () => ({ ok: true })),
+    };
+    const root = await makeWorkingDir();
+    const grantedParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-grant-')));
+    const evilParent = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'computer-replay-evil-')));
+    const grantedDir = await writeTrajectory(grantedParent, [
+      { tool: 'click', arguments: { pid: 1, window_id: 1, x: 1, y: 1 } },
+    ]);
+    await writeTrajectory(evilParent, [
+      { tool: 'click', arguments: { pid: 999, window_id: 999, x: 9, y: 9 } },
+    ]);
+    setSessionPathAuthorizer(async () => {
+      await fs.rm(grantedDir, { recursive: true, force: true });
+      await fs.symlink(
+        path.join(evilParent, 'rec'),
+        grantedDir,
+        process.platform === 'win32' ? 'junction' : 'dir',
+      );
+      return { allowed: true };
+    });
+    const h = await makeHarness(deps, {
+      getSessionContext: () => ({ agentKind: 'claude-code', workingDir: root }),
+    });
+
+    const payload = textPayload(await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'replay_trajectory',
+        args: { dir: grantedDir, delay_ms: 0, stop_on_error: false },
+      },
+    })) as { ok: boolean };
+
+    expect(payload.ok).toBe(false);
+    expect(deps.callTool).not.toHaveBeenCalled();
+    await h.cleanup();
+    await fs.rm(root, { recursive: true, force: true });
+    await fs.rm(grantedParent, { recursive: true, force: true });
+    await fs.rm(evilParent, { recursive: true, force: true });
+  });
+
   it('suggests omitting screenshot_out_file when the session has no workingDir', async () => {
     const deps: ComputerMcpDeps = {
       getStatus: vi.fn(),

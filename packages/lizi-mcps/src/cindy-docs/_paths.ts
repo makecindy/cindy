@@ -175,8 +175,10 @@ export async function prepareInputPath(
   const abs = prepared.abs;
   let isFile = false;
   try {
-    const st = await fs.stat(abs);
-    isFile = st.isFile();
+    const st = prepared.authorizedOutsideWorkdir
+      ? await fs.lstat(abs)
+      : await fs.stat(abs);
+    isFile = st.isFile() && !st.isSymbolicLink();
   } catch {
     isFile = false;
   }
@@ -259,9 +261,16 @@ export async function readInputFileWithinLimit(
   let canonicalPath: string;
   let realRoot: string;
   try {
-    [canonicalPath, realRoot] = await Promise.all([fs.realpath(abs), fs.realpath(root)]);
-    if (!options?.allowOutsideRoot && !isInsideRealRoot(realRoot, canonicalPath)) {
-      throw changedInputPath(abs);
+    if (options?.allowOutsideRoot) {
+      const listed = await fs.lstat(abs, { bigint: true });
+      if (!listed.isFile() || listed.isSymbolicLink()) throw changedInputPath(abs);
+      canonicalPath = abs;
+      realRoot = abs;
+    } else {
+      [canonicalPath, realRoot] = await Promise.all([fs.realpath(abs), fs.realpath(root)]);
+      if (!isInsideRealRoot(realRoot, canonicalPath)) {
+        throw changedInputPath(abs);
+      }
     }
   } catch (err) {
     if (err instanceof DocsPathError) throw err;
