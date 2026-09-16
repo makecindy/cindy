@@ -383,6 +383,7 @@ describe('packGhostDir', () => {
         sessionWorkdir: workDir,
         allowOutsideWorkdir: true,
         authorizedDir: await fs.promises.realpath(outsideDir),
+        isCurrent: () => true,
       });
       expect(packed).toMatchObject({ ok: true });
       if (!packed.ok) return;
@@ -396,6 +397,7 @@ describe('packGhostDir', () => {
         sessionWorkdir: workDir,
         allowOutsideWorkdir: true,
         authorizedDir: path.join(outsideRoot, 'other-src'),
+        isCurrent: () => true,
       })).resolves.toMatchObject({ ok: false, errorCode: 'SOURCE_OUTSIDE_WORKDIR' });
     } finally {
       await fs.promises.rm(outsideRoot, { recursive: true, force: true });
@@ -418,6 +420,7 @@ describe('packGhostDir', () => {
           forbiddenRootDirs: [managedRoot],
           allowOutsideWorkdir: true,
           authorizedDir: await fs.promises.realpath(installedDir),
+          isCurrent: () => true,
         }),
       ).resolves.toMatchObject({
         ok: false,
@@ -425,6 +428,37 @@ describe('packGhostDir', () => {
       });
     } finally {
       await fs.promises.rm(managedRoot, { recursive: true, force: true });
+    }
+  });
+
+  it('does not write a package after the outside grant expires', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': 'export default {}',
+    });
+    const outsideRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-forge-stale-grant-'));
+    try {
+      const outsideDir = path.join(outsideRoot, 'src');
+      await fs.promises.cp(dir, outsideDir, { recursive: true });
+      const authorizedDir = await fs.promises.realpath(outsideDir);
+      await expect(packGhostDirRaw(outsideDir, {
+        sessionWorkdir: workDir,
+        allowOutsideWorkdir: true,
+        authorizedDir,
+        isCurrent: () => false,
+      })).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(fs.existsSync(path.join(outsideDir, 'demo-1.0.0.cindy'))).toBe(false);
+
+      let remaining = 1;
+      await expect(packGhostDirRaw(outsideDir, {
+        sessionWorkdir: workDir,
+        allowOutsideWorkdir: true,
+        authorizedDir,
+        isCurrent: () => remaining-- > 0,
+      })).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(fs.existsSync(path.join(outsideDir, 'demo-1.0.0.cindy'))).toBe(false);
+    } finally {
+      await fs.promises.rm(outsideRoot, { recursive: true, force: true });
     }
   });
 
@@ -1576,7 +1610,7 @@ describe('scaffoldGhostDir', () => {
       await expect(
         scaffoldGhostDir(
           { dir, template: 'plain', id: 'out-plugin', name: 'Out plugin' },
-          { sessionWorkdir: workDir, allowOutsideWorkdir: true, authorizedDir },
+          { sessionWorkdir: workDir, allowOutsideWorkdir: true, authorizedDir, isCurrent: () => true },
         ),
       ).resolves.toMatchObject({ ok: true, dir: authorizedDir });
       expect(fs.existsSync(path.join(authorizedDir, 'ghost.json'))).toBe(true);
@@ -1585,10 +1619,33 @@ describe('scaffoldGhostDir', () => {
       await expect(
         scaffoldGhostDir(
           { dir: swapped, template: 'plain', id: 'swap-plugin', name: 'Swap plugin' },
-          { sessionWorkdir: workDir, allowOutsideWorkdir: true, authorizedDir },
+          { sessionWorkdir: workDir, allowOutsideWorkdir: true, authorizedDir, isCurrent: () => true },
         ),
       ).resolves.toMatchObject({ ok: false, errorCode: 'INVALID_INPUT' });
       expect(fs.existsSync(swapped)).toBe(false);
+
+      const staleDir = path.join(outsideRoot, 'stale-plugin');
+      const writeScaffold = vi.fn(testScaffoldWriter);
+      await expect(
+        scaffoldGhostDirRaw(
+          {
+            dir: staleDir,
+            template: 'plain',
+            id: 'stale-plugin',
+            name: 'Stale plugin',
+            minCindyVersion: '1.2.3',
+          },
+          {
+            sessionWorkdir: workDir,
+            allowOutsideWorkdir: true,
+            authorizedDir: path.join(await fs.promises.realpath(outsideRoot), 'stale-plugin'),
+            isCurrent: () => false,
+            writeScaffold,
+          },
+        ),
+      ).resolves.toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+      expect(writeScaffold).not.toHaveBeenCalled();
+      expect(fs.existsSync(staleDir)).toBe(false);
     } finally {
       await fs.promises.rm(outsideRoot, { recursive: true, force: true });
     }

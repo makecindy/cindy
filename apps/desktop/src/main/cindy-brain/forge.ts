@@ -176,7 +176,8 @@ export type ForgePackResult =
         | 'INTERNAL'
         // Forge 打包出口的会话 workdir 门 + 受管根禁区(C-4 + #7)。
         | 'SOURCE_OUTSIDE_WORKDIR'
-        | 'SOURCE_IS_INSTALLED_PLUGIN';
+        | 'SOURCE_IS_INSTALLED_PLUGIN'
+        | 'PERMISSION_DENIED';
       message: string;
     };
 
@@ -199,7 +200,7 @@ export type ForgeScaffoldResult =
     }
   | {
       ok: false;
-      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'INTERNAL';
+      errorCode: 'INVALID_INPUT' | 'TARGET_EXISTS' | 'PERMISSION_DENIED' | 'INTERNAL';
       message: string;
     };
 
@@ -233,6 +234,17 @@ export type ForgeScaffoldWriteResult =
 export type ForgeScaffoldWriter = (
   request: ForgeScaffoldWriteRequest,
 ) => Promise<ForgeScaffoldWriteResult>;
+
+const FORGE_OUTSIDE_GRANT_STALE_MESSAGE =
+  'Task or Plan permissions changed; retry with the current scope.';
+
+function staleOutsideForgeGrant(
+  options?: { allowOutsideWorkdir?: boolean; authorizedDir?: string; isCurrent?: () => boolean },
+): { ok: false; errorCode: 'PERMISSION_DENIED'; message: string } | null {
+  if (!options?.allowOutsideWorkdir || !options.authorizedDir) return null;
+  if (options.isCurrent?.() === true) return null;
+  return { ok: false, errorCode: 'PERMISSION_DENIED', message: FORGE_OUTSIDE_GRANT_STALE_MESSAGE };
+}
 
 /** 生成插件清单；先走正式校验，再允许任何文件落盘。 */
 function scaffoldManifest(input: ForgeScaffoldInput): Record<string, unknown> {
@@ -560,6 +572,7 @@ export async function scaffoldGhostDir(
     writeScaffold?: ForgeScaffoldWriter;
     allowOutsideWorkdir?: boolean;
     authorizedDir?: string;
+    isCurrent?: () => boolean;
   },
 ): Promise<ForgeScaffoldResult> {
   const template = input.template;
@@ -594,6 +607,8 @@ export async function scaffoldGhostDir(
       message: '会话工作目录不存在,无法确定骨架输出位置',
     };
   }
+  const staleGrant = staleOutsideForgeGrant(options);
+  if (staleGrant) return staleGrant;
   let realTarget: string;
   try {
     realTarget = await resolveThroughExistingAncestor(resolved);
@@ -732,6 +747,8 @@ export async function scaffoldGhostDir(
       message: 'Forge scaffold stable-directory capability is unavailable',
     };
   }
+  const staleBeforeWrite = staleOutsideForgeGrant(options);
+  if (staleBeforeWrite) return staleBeforeWrite;
   const writeResult = await options.writeScaffold({
     parentDir,
     targetName: path.basename(targetDir),
@@ -1339,6 +1356,12 @@ export async function packGhostDir(
      */
     allowOutsideWorkdir?: boolean;
     authorizedDir?: string;
+    /**
+     * Host grant generation captured at authorize time. Required whenever
+     * `allowOutsideWorkdir` is used with `authorizedDir`; rechecked after the
+     * long pack and immediately before the `.cindy` write.
+     */
+    isCurrent?: () => boolean;
   },
 ): Promise<ForgePackResult> {
   // Forge 打包出口专属安全门(C-4 + #7):source 默认必须在会话 workdir 内;Host 已按
@@ -1363,6 +1386,8 @@ export async function packGhostDir(
       message: 'The current session workdir does not exist',
     };
   }
+  const staleGrant = staleOutsideForgeGrant(options);
+  if (staleGrant) return staleGrant;
   let realSourceDir: string;
   try {
     realSourceDir = await realpathNative(dir);
@@ -1418,6 +1443,8 @@ export async function packGhostDir(
     realSourceDir,
     `${built.manifest.id}-${built.manifest.version}.cindy`,
   );
+  const staleBeforeWrite = staleOutsideForgeGrant(options);
+  if (staleBeforeWrite) return staleBeforeWrite;
   try {
     await fs.promises.writeFile(cindyPath, built.buf);
   } catch (err) {

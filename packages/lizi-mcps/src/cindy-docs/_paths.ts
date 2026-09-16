@@ -18,7 +18,11 @@ import path from 'node:path';
 import { resolveLiziMcpSessionContext, getLiziMcpSessionContext } from '../session-context.js';
 import {
   authorizeSessionPathOutsideWorkdir,
+  authorizedSessionPathStillBound,
+  captureSessionPathAncestors,
   resolveCanonicalSessionPath,
+  sameSessionPathAncestors,
+  type SessionPathAncestorIdentity,
 } from '../session-path-auth.js';
 import { PathBoundaryError, resolvePathInsideRoot } from '../shared/assertInsidePath.js';
 import type { DocsMcpSessionCtx, WriteDocsOutputFn } from './types.js';
@@ -27,6 +31,7 @@ export type PreparedDocsPath = {
   abs: string;
   authorizedOutsideWorkdir: boolean;
   isCurrent?: () => boolean;
+  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
 };
 
 export function assertDocsGrantCurrent(isCurrent?: () => boolean): void {
@@ -42,10 +47,12 @@ export function assertDocsGrantCurrent(isCurrent?: () => boolean): void {
 export function docsReadOptions(prepared: PreparedDocsPath): {
   allowOutsideRoot?: boolean;
   isCurrent?: () => boolean;
+  authorizedAncestors?: readonly SessionPathAncestorIdentity[];
 } {
   return {
     allowOutsideRoot: prepared.authorizedOutsideWorkdir,
     ...(prepared.isCurrent ? { isCurrent: prepared.isCurrent } : {}),
+    ...(prepared.authorizedAncestors ? { authorizedAncestors: prepared.authorizedAncestors } : {}),
   };
 }
 
@@ -158,9 +165,14 @@ async function resolveDocsPath(
     if (auth.isCurrent?.() === false) {
       toPathError(err, inputPath, '任务权限已变化，这次越界路径授权已失效。请用当前任务权限重试。');
     }
+    const authorizedAncestors = await captureSessionPathAncestors(abs);
+    if (!authorizedAncestors) {
+      toPathError(err, inputPath, '路径在确认时无法钉住已授权身份。请确认文件仍是普通路径后重试。');
+    }
     return {
       abs,
       authorizedOutsideWorkdir: true,
+      authorizedAncestors,
       ...(auth.isCurrent ? { isCurrent: auth.isCurrent } : {}),
     };
   }
@@ -292,22 +304,50 @@ async function verifyOpenedInputStillInsideRoot(
   }
 }
 
+async function pinAuthorizedOutsideInput(
+  root: string,
+  abs: string,
+  expectedAncestors?: readonly SessionPathAncestorIdentity[],
+): Promise<SessionPathAncestorIdentity[]> {
+  if (!await authorizedSessionPathStillBound(root, abs)) throw changedInputPath(abs);
+  const ancestors = await captureSessionPathAncestors(abs);
+  if (!ancestors || ancestors[0]?.path !== path.resolve(abs)) throw changedInputPath(abs);
+  if (expectedAncestors && !sameSessionPathAncestors(expectedAncestors, ancestors)) {
+    throw changedInputPath(abs);
+  }
+  const listed = await fs.lstat(abs, { bigint: true });
+  const leaf = ancestors[0]!;
+  if (
+    !listed.isFile()
+    || listed.isSymbolicLink()
+    || listed.dev !== leaf.dev
+    || listed.ino !== leaf.ino
+  ) {
+    throw changedInputPath(abs);
+  }
+  return ancestors;
+}
+
 export async function readInputFileWithinLimit(
   root: string,
   abs: string,
   maxBytes: number,
   tooLarge: (bytes: number) => DocsPathError,
-  options?: { allowOutsideRoot?: boolean; isCurrent?: () => boolean },
+  options?: {
+    allowOutsideRoot?: boolean;
+    isCurrent?: () => boolean;
+    authorizedAncestors?: readonly SessionPathAncestorIdentity[];
+  },
 ): Promise<Buffer> {
   assertDocsGrantCurrent(options?.isCurrent);
   // 校验与读取绑定到同一个已打开文件身份，封住路径检查后父目录被换成根外
   // symlink 的窗口；身份不可用的网络盘 fail closed，不拿 0 === 0 放行。
   let canonicalPath: string;
   let realRoot: string;
+  let outsideAncestors: SessionPathAncestorIdentity[] | undefined;
   try {
     if (options?.allowOutsideRoot) {
-      const listed = await fs.lstat(abs, { bigint: true });
-      if (!listed.isFile() || listed.isSymbolicLink()) throw changedInputPath(abs);
+      outsideAncestors = await pinAuthorizedOutsideInput(root, abs, options.authorizedAncestors);
       canonicalPath = abs;
       realRoot = abs;
     } else {
@@ -331,7 +371,12 @@ export async function readInputFileWithinLimit(
     if (!stat.isFile() || !sameFileIdentity(expectedStat, stat)) {
       throw changedInputPath(canonicalPath);
     }
-    if (!options?.allowOutsideRoot) {
+    if (outsideAncestors) {
+      await pinAuthorizedOutsideInput(root, abs, outsideAncestors);
+      if (stat.dev !== outsideAncestors[0]!.dev || stat.ino !== outsideAncestors[0]!.ino) {
+        throw changedInputPath(canonicalPath);
+      }
+    } else {
       await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, stat);
     }
     if (stat.size > BigInt(maxBytes)) throw tooLarge(Number(stat.size));
@@ -352,7 +397,12 @@ export async function readInputFileWithinLimit(
     if (offset !== data.length || !sameFileVersion(stat, after)) {
       throw changedInputPath(canonicalPath);
     }
-    if (!options?.allowOutsideRoot) {
+    if (outsideAncestors) {
+      await pinAuthorizedOutsideInput(root, abs, outsideAncestors);
+      if (after.dev !== outsideAncestors[0]!.dev || after.ino !== outsideAncestors[0]!.ino) {
+        throw changedInputPath(canonicalPath);
+      }
+    } else {
       await verifyOpenedInputStillInsideRoot(realRoot, canonicalPath, after);
     }
     return data;

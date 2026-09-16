@@ -186,9 +186,14 @@ type ForgeOutsideAccess =
 function forgeOutsidePackFlags(access: Extract<ForgeOutsideAccess, { ok: true }>): {
   allowOutsideWorkdir?: boolean;
   authorizedDir?: string;
+  isCurrent?: () => boolean;
 } {
   return access.allowOutsideWorkdir
-    ? { allowOutsideWorkdir: true, authorizedDir: access.authorizedDir }
+    ? {
+        allowOutsideWorkdir: true,
+        authorizedDir: access.authorizedDir,
+        ...(access.isCurrent ? { isCurrent: access.isCurrent } : {}),
+      }
     : {};
 }
 
@@ -336,7 +341,7 @@ async function packForgeSource(
   dir: string,
   sessionWorkdir: string,
   iconSource?: string,
-  packFlags: { allowOutsideWorkdir?: boolean; authorizedDir?: string } = {},
+  packFlags: { allowOutsideWorkdir?: boolean; authorizedDir?: string; isCurrent?: () => boolean } = {},
 ) {
   let iconPng: Buffer | undefined;
   let iconNote = '';
@@ -360,11 +365,21 @@ async function packForgeSource(
       });
     }
   }
+  if (packFlags.allowOutsideWorkdir && packFlags.authorizedDir && packFlags.isCurrent?.() !== true) {
+    return {
+      ok: false as const,
+      result: { ok: false as const, errorCode: 'PERMISSION_DENIED' as const, message: GRANT_AUTHORIZATION_CHANGED_MESSAGE },
+    };
+  }
   const packOptions = {
     sessionWorkdir,
     forbiddenRootDirs: ghostForgeForbiddenRootDirs(),
     ...(packFlags.allowOutsideWorkdir
-      ? { allowOutsideWorkdir: true, authorizedDir: packFlags.authorizedDir }
+      ? {
+          allowOutsideWorkdir: true,
+          authorizedDir: packFlags.authorizedDir,
+          ...(packFlags.isCurrent ? { isCurrent: packFlags.isCurrent } : {}),
+        }
       : {}),
   };
   let packed = await packGhostDir(dir, iconPng ? { ...packOptions, iconPng } : packOptions);
@@ -2307,6 +2322,8 @@ export function getCindyGhostsMcpDeps(
         if (!currentAccess.ok) return currentAccess;
         const attempt = await packForgeSource(dir, gate.workingDir, iconSource, forgeOutsidePackFlags(currentAccess));
         if (!attempt.ok) return attempt.result;
+        const stillGranted = assertForgeGrantCurrent(currentAccess);
+        if (!stillGranted.ok) return stillGranted;
         const { packed, iconNote } = attempt;
         if (intent === 'publish') {
           const alreadyInstalled = getGhostManager()
@@ -2366,6 +2383,8 @@ export function getCindyGhostsMcpDeps(
         if (!currentAccess.ok) return currentAccess;
         const attempt = await packForgeSource(dir, gate.workingDir, iconSource, forgeOutsidePackFlags(currentAccess));
         if (!attempt.ok) return attempt.result;
+        const stillGranted = assertForgeGrantCurrent(currentAccess);
+        if (!stillGranted.ok) return stillGranted;
         const { packed, iconNote } = attempt;
         try {
           const installed = await installOrUpdateLocalGhostPackageFromForge(

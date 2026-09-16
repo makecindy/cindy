@@ -6,6 +6,7 @@ import { jsonObjectArg } from '../json-object-arg.js';
 import { resolvePathInsideRoot, PathBoundaryError } from '../shared/assertInsidePath.js';
 import {
   authorizeSessionPathOutsideWorkdir,
+  authorizedSessionPathStillBound,
   resolveCanonicalSessionPath,
 } from '../session-path-auth.js';
 import type {
@@ -287,19 +288,7 @@ async function authorizedPathStillBound(
   workingDir: string,
   authorized: string,
 ): Promise<boolean> {
-  const rebound = await resolveCanonicalSessionPath(workingDir, authorized);
-  if (rebound !== authorized) return false;
-  try {
-    if ((await fs.lstat(authorized)).isSymbolicLink()) return false;
-  } catch {
-    const parent = path.dirname(authorized);
-    try {
-      if ((await fs.lstat(parent)).isSymbolicLink()) return false;
-    } catch {
-      /* target and parent may not exist yet; canonical ancestor already matched */
-    }
-  }
-  return true;
+  return authorizedSessionPathStillBound(workingDir, authorized);
 }
 
 async function resolveReplayBoundPath(

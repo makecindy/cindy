@@ -61,6 +61,85 @@ export async function resolveCanonicalSessionPath(root: string, inputPath: strin
   }
 }
 
+export type SessionPathAncestorIdentity = {
+  path: string;
+  dev: bigint;
+  ino: bigint;
+};
+
+/**
+ * Identity of every existing path component from `target` up to the root.
+ * Used to pin a granted outside path so a later parent-dir rename+symlink
+ * cannot open a file the confirm card never showed.
+ *
+ * Missing leafs are skipped so a write target can be granted before it
+ * exists. Fail-closed when any existing ancestor is a symlink, or the
+ * filesystem reports a zero device/inode (those equalities are meaningless).
+ */
+export async function captureSessionPathAncestors(
+  target: string,
+): Promise<SessionPathAncestorIdentity[] | null> {
+  const identities: SessionPathAncestorIdentity[] = [];
+  let cursor = path.resolve(target);
+  const { root } = path.parse(cursor);
+  for (;;) {
+    try {
+      const listed = await fs.lstat(cursor, { bigint: true });
+      if (listed.isSymbolicLink() || listed.dev === 0n || listed.ino === 0n) return null;
+      identities.push({ path: cursor, dev: listed.dev, ino: listed.ino });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+    }
+    if (cursor === root) break;
+    const parent = path.dirname(cursor);
+    if (parent === cursor) break;
+    cursor = parent;
+  }
+  return identities.length > 0 ? identities : null;
+}
+
+export function sameSessionPathAncestors(
+  expected: readonly SessionPathAncestorIdentity[],
+  actual: readonly SessionPathAncestorIdentity[],
+): boolean {
+  if (expected.length === 0 || expected.length !== actual.length) return false;
+  return expected.every((left, index) => {
+    const right = actual[index];
+    return Boolean(
+      right
+      && left.path === right.path
+      && left.dev === right.dev
+      && left.ino === right.ino,
+    );
+  });
+}
+
+/**
+ * Re-resolve the granted path and reject any symlink in the remaining
+ * ancestor chain. Missing leaf/parent is allowed so write targets can be
+ * bound before they exist; a swapped parent still fails as a symlink or a
+ * different canonical identity.
+ */
+export async function authorizedSessionPathStillBound(
+  workingDir: string,
+  authorized: string,
+): Promise<boolean> {
+  if (await resolveCanonicalSessionPath(workingDir, authorized) !== authorized) return false;
+  let cursor = path.resolve(authorized);
+  const { root } = path.parse(cursor);
+  for (;;) {
+    try {
+      if ((await fs.lstat(cursor)).isSymbolicLink()) return false;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return false;
+    }
+    if (cursor === root) return true;
+    const parent = path.dirname(cursor);
+    if (parent === cursor) return true;
+    cursor = parent;
+  }
+}
+
 export async function authorizeSessionPathOutsideWorkdir(
   request: SessionPathAuthorizationRequest,
 ): Promise<SessionPathAuthorization> {
